@@ -462,6 +462,73 @@ void main() {
       expect(sized['h']!.diameter.inMillimeters, closeTo(300, 1e-9));
       expect(sized['h']!.overCapacity, isTrue);
     });
+
+    // Residual — the collector carries the Manning sizer's self-cleansing
+    // verdict (M5 mirror); the downpipe keeps `true` (no Manning velocity).
+    //   v_full = (1/n)·R^(2/3)·√S, R = D/4, n = 0.010; floor 0.6 m/s.
+    test('1 L/s at S = 0.01: DN75 at 0.706 m/s self-cleanses', () {
+      // DN50 half-full: 100 × 1.9635e-3 × 0.0125^(2/3) × 0.1 / 2 = 0.529 L/s ✗
+      // DN75 half-full: 100 × 4.418e-3 × 0.01875^(2/3) × 0.1 / 2 = 1.559 L/s ✓
+      //   v = 100 × 0.01875^(2/3) × 0.1 = 0.706 m/s ≥ 0.6 ⇒ OK.
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.rainwater: FlowRate(0.001)},
+      );
+      final v = 100 * math.pow(0.075 / 4, 2 / 3) * math.sqrt(0.01);
+      expect(v, closeTo(0.706, 1e-3));
+      expect(sized['h']!.diameter.inMillimeters, closeTo(75, 1e-9));
+      expect(sized['h']!.velocity.metersPerSecond, closeTo(v, 1e-9));
+      expect(sized['h']!.selfCleansingOk, isTrue);
+      expect(sized['dp']!.selfCleansingOk, isTrue);
+    });
+
+    test('1 L/s laid flat (S = 0.002): DN100 at 0.382 m/s is flagged', () {
+      // √0.002 = 0.044721:
+      //   DN75  half-full: 3.118 × 0.44721 / 2 = 0.697 L/s ✗
+      //   DN100 half-full: 100 × 7.854e-3 × 0.025^(2/3) × 0.044721 / 2
+      //                    = 1.50 L/s ✓ ⇒ DN100,
+      //   v = 100 × 0.025^(2/3) × 0.044721 = 0.382 m/s < 0.6 ⇒ NOT OK.
+      const flat = SizingContext(drainageSlope: 0.002);
+      final sized = autoSizeNetwork(
+        net,
+        flat,
+        leafDemand: const {ServiceType.rainwater: FlowRate(0.001)},
+      );
+      final v = 100 * math.pow(0.1 / 4, 2 / 3) * math.sqrt(0.002);
+      expect(v, closeTo(0.382, 1e-3));
+      expect(sized['h']!.diameter.inMillimeters, closeTo(100, 1e-9));
+      expect(sized['h']!.selfCleansingOk, isFalse);
+      // Same verdict as the gravity sizer it came from.
+      expect(
+          drain
+              .sizeForFlow(flow: const FlowRate(0.001), slope: 0.002)
+              .selfCleansing,
+          isFalse);
+      // The vertical downpipe still forms no self-cleansing verdict.
+      expect(sized['dp']!.selfCleansingOk, isTrue);
+    });
+
+    test('a collector override is re-judged on the Manning basis', () {
+      // DN150 at S = 0.002: v = 100 × 0.0375^(2/3) × 0.044721 = 0.501 m/s ✗;
+      // at the default S = 0.01: v = 100 × 0.0375^(2/3) × 0.1 = 1.120 m/s ✓.
+      final v002 = 100 * math.pow(0.15 / 4, 2 / 3) * math.sqrt(0.002);
+      final flat = autoSizeNetwork(
+        net,
+        const SizingContext(drainageSlope: 0.002),
+        leafDemand: const {ServiceType.rainwater: FlowRate(0.001)},
+        sizeOverrides: {'h': Diameter.mm(150)},
+      );
+      expect(flat['h']!.velocity.metersPerSecond, closeTo(v002, 1e-9));
+      expect(flat['h']!.selfCleansingOk, isFalse);
+      final steep = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.rainwater: FlowRate(0.001)},
+        sizeOverrides: {'h': Diameter.mm(150)},
+      );
+      expect(steep['h']!.selfCleansingOk, isTrue);
+    });
   });
 
   // ── water-drainage-3 + fire-1 — inline terminals bear demand ──────────────
@@ -615,6 +682,98 @@ void main() {
       );
       // a carries only lav's 1 DFU → DN40.
       expect(sized['a']!.diameter.inMillimeters, closeTo(40, 1e-9));
+    });
+  });
+
+  // ── water-drainage-3 residual — UNTYPED air terminals bear the default ────
+  // Decided deliberately: an air terminal (supply diffuser / return grille)
+  // with no assigned airflow carries the flat per-terminal default
+  // (`kDefaultLeafDemand` in the app, the `leafDemand` map here) WHEREVER it
+  // sits — a leaf already did, and an inline (degree-2) one now does too, so a
+  // duct through three diffusers carries three diffusers' air. An explicit
+  // airflow (`nodeFlowDemand`) always wins.
+  group('water-drainage-3 residual · untyped air terminals', () {
+    NetNode term(String id, double x, NodeComponent c) => NetNode(
+        id: id,
+        sheetId: 's1',
+        x: x,
+        y: 0,
+        floorIndex: 0,
+        role: NodeRole.fixture,
+        component: c);
+    const ahu = NetNode(
+        id: 'ahu',
+        sheetId: 's1',
+        x: 0,
+        y: 0,
+        floorIndex: 0,
+        role: NodeRole.plant,
+        component: NodeComponent.ahu);
+
+    test('ahu → d1 (inline) → d2 (leaf), no airflow: a = 2q, b = q', () {
+      final net = Network(
+        nodes: [
+          ahu,
+          term('d1', 100, NodeComponent.supplyDiffuser),
+          term('d2', 200, NodeComponent.supplyDiffuser),
+        ],
+        edges: [
+          _run('a', 'ahu', 'd1', ServiceType.duct),
+          _run('b', 'd1', 'd2', ServiceType.duct),
+        ],
+      );
+      // q = 50 L/s (the app's kDefaultLeafDemand for ServiceType.duct).
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.duct: FlowRate(0.05)},
+      );
+      expect(sized['b']!.flow.inLitersPerSecond, closeTo(50, 1e-9)); // leaf
+      expect(sized['a']!.flow.inLitersPerSecond, closeTo(100, 1e-9)); // +inline
+    });
+
+    test('inline return grille, no airflow, also bears the default', () {
+      final net = Network(
+        nodes: [
+          ahu,
+          term('g1', 100, NodeComponent.returnGrille),
+          term('g2', 200, NodeComponent.returnGrille),
+        ],
+        edges: [
+          _run('a', 'ahu', 'g1', ServiceType.returnAir),
+          _run('b', 'g1', 'g2', ServiceType.returnAir),
+        ],
+      );
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.returnAir: FlowRate(0.05)},
+      );
+      expect(sized['b']!.flow.inLitersPerSecond, closeTo(50, 1e-9));
+      expect(sized['a']!.flow.inLitersPerSecond, closeTo(100, 1e-9));
+    });
+
+    test('an explicit inline airflow wins over the default', () {
+      final net = Network(
+        nodes: [
+          ahu,
+          term('d1', 100, NodeComponent.supplyDiffuser),
+          term('d2', 200, NodeComponent.supplyDiffuser),
+        ],
+        edges: [
+          _run('a', 'ahu', 'd1', ServiceType.duct),
+          _run('b', 'd1', 'd2', ServiceType.duct),
+        ],
+      );
+      // d1 = 120 L/s explicit, d2 = default 50 ⇒ a = 170, b = 50.
+      final sized = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.duct: FlowRate(0.05)},
+        nodeFlowDemand: const {'d1': FlowRate(0.12)},
+      );
+      expect(sized['b']!.flow.inLitersPerSecond, closeTo(50, 1e-9));
+      expect(sized['a']!.flow.inLitersPerSecond, closeTo(170, 1e-9));
     });
   });
 
@@ -874,6 +1033,50 @@ void main() {
       expect(sized['stack']!.diameter.inMillimeters, closeTo(75, 1e-9));
       // The floor IS the code minimum (G1): no not-self-cleansing verdict.
       expect(sized['branch']!.selfCleansingOk, isTrue);
+    });
+
+    // Residual — a CUSTOM fixture flagged isWaterCloset (no built-in WC type
+    // on the node) reaches the engine as a waterClosetNodeIds entry and gets
+    // the same DN75 floor: 4 DFU alone ⇒ branch DN65 / stack DN50 (premises).
+    test('a custom WC (waterClosetNodeIds) is floored at DN75 too', () {
+      final net = Network(
+        nodes: const [
+          NetNode(id: 'out', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+          NetNode(id: 'j', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+          NetNode(
+              id: 'fx',
+              sheetId: 's1',
+              x: 100,
+              y: 0,
+              floorIndex: 1,
+              role: NodeRole.fixture,
+              customFixtureId: 'squat'),
+        ],
+        edges: [
+          _riser('stack', 'out', 'j', ServiceType.drainage),
+          _run('branch', 'j', 'fx', ServiceType.drainage),
+        ],
+      );
+      final flagged = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.drainage: FlowRate(0)},
+        nodeDrainageUnits: const {'fx': 4.0},
+        waterClosetNodeIds: const {'fx'},
+      );
+      expect(flagged['branch']!.diameter.inMillimeters, closeTo(75, 1e-9));
+      expect(flagged['stack']!.diameter.inMillimeters, closeTo(75, 1e-9));
+      // Unflagged (default) ⇒ the bare DFU tables: DN65 branch; the stack's
+      // table DN50 is then raised to its branch's DN65 (N17 stack ≥ branch).
+      final bare = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.drainage: FlowRate(0)},
+        nodeDrainageUnits: const {'fx': 4.0},
+      );
+      expect(bare['branch']!.diameter.inMillimeters, closeTo(65, 1e-9));
+      expect(bare['stack']!.diameter.inMillimeters, closeTo(65, 1e-9));
+      expect(bare['stack']!.stackRaisedForBranch, isTrue);
     });
 
     test('a lavatory-only branch still sizes at DN40', () {

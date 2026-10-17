@@ -56,5 +56,34 @@ void main() {
       expect(cleared.defaultMountingHeight, isNull);
       expect(cleared.name, 'Sink'); // other fields survive
     });
+
+    // Audit water-drainage-7 residual — additive WC flag.
+    test('isWaterCloset round-trips and is omitted when false', () {
+      const wc = CustomFixture(
+          id: 'cf9', name: 'Squat WC', drainageUnits: 4, isWaterCloset: true);
+      final json = wc.toJson();
+      expect(json['isWaterCloset'], isTrue);
+      expect(CustomFixture.fromJson(json)!.isWaterCloset, isTrue);
+      // Default false ⇒ the key is absent (legacy libraries byte-identical).
+      const plain = CustomFixture(id: 'cf10', name: 'Sink');
+      expect(plain.toJson().containsKey('isWaterCloset'), isFalse);
+      expect(CustomFixture.fromJson(plain.toJson())!.isWaterCloset, isFalse);
+    });
+
+    test('isWaterCloset decode is tolerant (absent / non-bool ⇒ false)', () {
+      expect(
+          CustomFixture.fromJson({'id': 'a', 'name': 'A'})!.isWaterCloset,
+          isFalse);
+      expect(
+          CustomFixture.fromJson(
+                  {'id': 'a', 'name': 'A', 'isWaterCloset': 'yes'})!
+              .isWaterCloset,
+          isFalse);
+      expect(
+          const CustomFixture(id: 'a', name: 'A')
+              .copyWith(isWaterCloset: true)
+              .isWaterCloset,
+          isTrue);
+    });
   });
 }

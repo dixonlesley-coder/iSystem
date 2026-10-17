@@ -1030,6 +1030,7 @@ final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
+      mounting: project.mounting,
     );
     if (len.meters <= 0) count++;
   }
@@ -1062,6 +1063,7 @@ final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
+      mounting: project.mounting,
     );
     if (len.meters > 0) continue;
     final sheetId = net.nodeById(e.fromId)?.sheetId;

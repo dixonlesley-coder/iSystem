@@ -831,12 +831,7 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     sheetId: sheet.id,
     floorIndex: floorIndex,
     // The same §10 lengths the plan PDF prints, so the DXF labels match it.
-    edgeLengths: {
-      for (final e in net.edges)
-        e.id: edgeLength(e, net,
-            calibrationBySheet: project.calibrations,
-            building: project.building),
-    },
+    edgeLengths: projectEdgeLengths(net, project),
     chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
     // A2: the sheet calibration lets the DXF emit true-scale mm world units
     // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
@@ -945,15 +940,7 @@ Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
 
   // Real length per edge from the §10 sources of truth (run via calibration,
   // riser via the elevation delta).
-  final edgeLengths = <String, Length>{
-    for (final e in net.edges)
-      e.id: edgeLength(
-        e,
-        net,
-        calibrationBySheet: project.calibrations,
-        building: project.building,
-      ),
-  };
+  final edgeLengths = projectEdgeLengths(net, project);
 
   final bytes = planToPdf(
     net: net,
@@ -1324,15 +1311,7 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
           issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex);
       final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
       final underlay = await buildPlanUnderlay(sheet);
-      final edgeLengths = <String, Length>{
-        for (final e in net.edges)
-          e.id: edgeLength(
-            e,
-            net,
-            calibrationBySheet: project.calibrations,
-            building: project.building,
-          ),
-      };
+      final edgeLengths = projectEdgeLengths(net, project);
       // N5: the §10 centreline-height token folded into each run's size label.
       final elevationLabels = planEdgeElevationLabels(net, project.building,
         mounting: ref.read(mountingProvider));
@@ -3668,6 +3647,7 @@ class _ResultsSection extends ConsumerWidget {
             sizing: ref.read(sizingProvider),
             calibrationBySheet: project.calibrations,
             building: project.building,
+            mounting: project.mounting,
             groupByFloor: true,
           );
           final cutPlan = ref.read(pipeCutPlanProvider);
@@ -4280,7 +4260,8 @@ class _SelectionSection extends ConsumerWidget {
   Widget _nodeEditor(BuildContext context, WidgetRef ref, NetNode node,
       NetworkController ctrl, SelectionController selCtrl) {
     final project = ref.watch(projectControllerProvider);
-    final elev = nodeElevation(node, project.building).meters;
+    final elev =
+        nodeElevation(node, project.building, project.mounting).meters;
 
     // Scope the fixture field groups to the node's ACTUAL discipline, derived
     // from its connected edges — a WC must not offer a diffuser-airflow
@@ -4720,12 +4701,7 @@ class _SelectionSection extends ConsumerWidget {
       Network net, NetworkController ctrl, SelectionController selCtrl) {
     final project = ref.watch(projectControllerProvider);
     final sizing = ref.watch(sizingProvider)[edge.id];
-    final len = edgeLength(
-      edge,
-      net,
-      calibrationBySheet: project.calibrations,
-      building: project.building,
-    ).meters;
+    final len = projectEdgeLength(edge, net, project).meters;
     final kind = edge.kind == EdgeKind.riser ? 'Riser / drop' : 'Run';
     final sizeStr = sizing == null
         ? '—'

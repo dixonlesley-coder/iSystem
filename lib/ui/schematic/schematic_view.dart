@@ -1679,6 +1679,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       network: network,
                       sizing: sizing,
                       building: building,
+                      mounting: ref.watch(mountingProvider),
                       colors: colors,
                       transform: vt,
                       selectedEdgeIds: selection.edgeIds,
@@ -3669,11 +3670,16 @@ class _EditSchematicPainter extends CustomPainter {
     required this.schematicX,
     this.highlightFloor,
     this.marquee,
+    this.mounting = const MountingHeights(),
   });
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
   final BuildingLevels building;
+
+  /// The project mounting heights — the SAME value the solve sizes on, so the
+  /// riser length label equals the solved length (audit water-drainage-8).
+  final MountingHeights mounting;
   final MechXColors colors;
   final ViewportTransform transform;
 
@@ -3830,8 +3836,8 @@ class _EditSchematicPainter extends CustomPainter {
         _drawArrow(canvas, mid, goingUp, color);
 
         // Length (elevation delta) + sized diameter label.
-        final lengthM = (nodeElevation(b, building).meters -
-                nodeElevation(a, building).meters)
+        final lengthM = (nodeElevation(b, building, mounting).meters -
+                nodeElevation(a, building, mounting).meters)
             .abs();
         final s = sizing[edge.id];
         final lenStr = '${lengthM.toStringAsFixed(1)} m';
@@ -4017,6 +4023,7 @@ class _EditSchematicPainter extends CustomPainter {
       old.network != network ||
       old.sizing != sizing ||
       old.building != building ||
+      old.mounting != mounting ||
       old.colors != colors ||
       old.transform != transform ||
       old.selectedEdgeIds.length != selectedEdgeIds.length ||
@@ -4406,6 +4413,7 @@ class RiserSystemSummary extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final network = ref.watch(networkControllerProvider).network;
     final building = ref.watch(projectControllerProvider).building;
+    final mounting = ref.watch(mountingProvider);
     final vs = ref.watch(schematicViewProvider);
     // The Auto diagram is focus-filtered; Edit always draws the whole network.
     final focus = vs.mode == SchematicMode.auto ? vs.autoFocus : null;
@@ -4441,8 +4449,8 @@ class RiserSystemSummary extends ConsumerWidget {
       final b = network.nodeById(e.toId);
       if (a == null || b == null) continue;
       riserEdgeCount++;
-      totalRiserM += (nodeElevation(b, building).meters -
-              nodeElevation(a, building).meters)
+      totalRiserM += (nodeElevation(b, building, mounting).meters -
+              nodeElevation(a, building, mounting).meters)
           .abs();
     }
 

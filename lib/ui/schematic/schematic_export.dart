@@ -165,6 +165,7 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
         network,
         calibrationBySheet: project.calibrations,
         building: building,
+        mounting: project.mounting,
       ),
   };
   return buildMechanicalRiserSld(
