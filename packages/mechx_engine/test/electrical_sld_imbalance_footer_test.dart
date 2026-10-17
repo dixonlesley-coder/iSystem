@@ -13,7 +13,7 @@ import 'package:test/test.dart';
 // MDP -> LP-1 / PP-1 / EMG project the WORKFLOW-GOLDENS-REVIEW export audit
 // exercises) so the imbalance figure is hand-verifiable against a real,
 // already-reviewed project rather than a one-off test fixture.
-import '../tool/generate_export_samples.dart' show buildElectrical;
+import '../tool/generate_export_samples.dart' show buildSampleElectrical;
 
 void main() {
   const profile = PuilProfile();
@@ -24,7 +24,7 @@ void main() {
   test(
       '3-phase board — TOTAL footer prints "imbalance N%" matching a hand '
       'derivation from the printed R/S/T amps', () {
-    final project = buildElectrical();
+    final project = buildSampleElectrical();
     final result = computeSystem(profile, project);
     final mdp = result.panels['MDP']!;
 
@@ -34,34 +34,39 @@ void main() {
     final l1 = mdp.phaseBalance.l1;
     final l2 = mdp.phaseBalance.l2;
     final l3 = mdp.phaseBalance.l3;
-    // Sample-project fixture values (Menara Contoh MDP): R=134.4A S=75.3A
-    // T=75.3A.
+    // Sample-project fixture values (Menara Contoh MDP): R=198.3A S=139.2A
+    // T=139.2A.
     //
-    // Re-derived 2026-07-30 (audit E8a): LP-1 is a SINGLE-PHASE 220 V board, and
-    // its feeder now takes the FED board's voltage as its base instead of the
-    // 3φ parent's 231 V phase voltage. The feeder carries LP-1's 11 050 W
-    // diversified demand at the feeder default cosφ 0.85, so
-    //   Ib = 11 050 / (220 × 0.85) = 59.09 A -> 59.1 A   (was 11 050 /
-    //        (231 × 0.85) = 56.28 -> 56.3 A), i.e. +2.8 A on line R.
-    // R therefore reads 131.6 + 2.8 = 134.4 A; S and T are untouched.
-    expect(l1, closeTo(134.4, 0.05));
-    expect(l2, closeTo(75.3, 0.05));
-    expect(l3, closeTo(75.3, 0.05));
+    // Re-derived 2026-10-17 (R3 reports-7): the harness fixture's motor ways
+    // are no longer hand-typed — the booster pump + AHU fan (on PP-1) and the
+    // fire pump (on EMG) are projected from the SOLVED duties via
+    // `buildEquipmentCircuits`. MDP's ways, at 400 V 3φ, cosφ 0.85
+    // (√3 × 400 × 0.85 = 588.9 V·):
+    //   Feeder to PP-1   13 120 W / 588.9 = 22.3 A  (3φ)
+    //   Feeder to EMG    48 334 W / 588.9 = 82.1 A  (3φ; EMG = the standpipe
+    //                    fire pump's 47.33 kW shaft ÷ η 0.90 + 1 kW em. light)
+    //   Lift motor       11 kW ÷ 0.88 / 588.9 = 21.2 A  (3φ)
+    //   General power    8 000 W / 588.9 = 13.6 A  (3φ)
+    //   Feeder to LP-1   11 050 W / (220 × 0.85) = 59.1 A  (1φ, line R)
+    // S = T = 22.3 + 82.1 + 21.2 + 13.6 = 139.2 A; R = 139.2 + 59.1 = 198.3 A.
+    expect(l1, closeTo(198.3, 0.05));
+    expect(l2, closeTo(139.2, 0.05));
+    expect(l3, closeTo(139.2, 0.05));
 
     // Hand derivation of the imbalance the engine must have computed:
-    //   avg   = (134.4 + 75.3 + 75.3) / 3       = 285.0 / 3   = 95.0 A
-    //   imbal = (max - min) / avg * 100         = (134.4 - 75.3) / 95.0 * 100
-    //         = 59.1 / 95.0 * 100               = 62.2105...%
-    //   rounded to 1 dp (the engine's own `roundTo(_, 1)`)   -> 62.2%
+    //   avg   = (198.3 + 139.2 + 139.2) / 3     = 476.7 / 3   = 158.9 A
+    //   imbal = (max - min) / avg * 100         = (198.3 - 139.2) / 158.9 * 100
+    //         = 59.1 / 158.9 * 100              = 37.193...%
+    //   rounded to 1 dp (the engine's own `roundTo(_, 1)`)   -> 37.2%
     final avg = (l1 + l2 + l3) / 3;
     final handImbalance = (l1 - l3) / avg * 100; // max=l1, min=l3(==l2)
-    expect(handImbalance, closeTo(62.2, 0.05));
-    expect(mdp.imbalancePercent, closeTo(62.2, 0.05));
+    expect(handImbalance, closeTo(37.2, 0.05));
+    expect(mdp.imbalancePercent, closeTo(37.2, 0.05));
 
     final sheet =
         buildElectricalPanelDetail(project: project, result: result, panelId: 'MDP');
     final total = sheetLabels(sheet).firstWhere((t) => t.startsWith('TOTAL'));
-    expect(total, contains('imbalance 62.2%'),
+    expect(total, contains('imbalance 37.2%'),
         reason: 'the printed TOTAL footer must carry the same imbalance % '
             'the engine computed, not a re-derived or rounded-differently one');
   });
@@ -69,7 +74,7 @@ void main() {
   test(
       'single-phase board — TOTAL footer carries NO imbalance token '
       '(byte-identical to the pre-H7 footer)', () {
-    final project = buildElectrical();
+    final project = buildSampleElectrical();
     final result = computeSystem(profile, project);
     final lp1 = result.panels['LP1']!;
     expect(lp1.system.isThreePhase, isFalse);

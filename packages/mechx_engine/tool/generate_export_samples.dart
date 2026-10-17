@@ -401,6 +401,13 @@ MechDuties deriveDuties(Network net, Map<String, EdgeSizing> sizing) {
   );
 }
 
+/// The sample electrical project built on the duties DERIVED from the sample
+/// network's own solve — the entry point tests share with the harness.
+ElectricalProject buildSampleElectrical() {
+  final net = buildNetwork();
+  return buildElectrical(deriveDuties(net, sizeNetwork(net)));
+}
+
 // ── Electrical model: MDP -> LP-1 / PP-1 / EMG ───────────────────────────────
 // The motor ways for the booster pump, the AHU fan and the fire pump are the
 // SAME `buildEquipmentCircuits` projection of the solved duties the app's
