@@ -28,6 +28,8 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart';
+import 'air_velocity.dart'
+    show kReturnFaceVelocityMax, kSupplyFaceVelocityMax;
 import 'duct_sizing.dart' as duct;
 import 'fan.dart';
 import 'grille_sizing.dart';
@@ -225,9 +227,18 @@ RoomAirResult sizeRoomAir({
   );
 
   // 2 + 3 — air terminals (supply diffusers, return grilles).
-  final faceVelocity = recommendedFaceVelocity(grilleApplication);
-  final supply = _autoTerminals(airflow, faceVelocity, freeAreaRatio);
-  final return_ = _autoTerminals(airflow, faceVelocity, freeAreaRatio);
+  // The application's noise-driven limit is capped at the SAME face-velocity
+  // band the air-velocity checker judges placed terminals against (supply
+  // 3.0 m/s, return 4.0 m/s, `air_velocity.dart`) — otherwise a retail
+  // (3.5 m/s) or industrial (5.0 m/s) room's auto-placed terminals were
+  // flagged 'too high' by the engine's own checker. One limit, two readers.
+  final appFace = recommendedFaceVelocity(grilleApplication).metersPerSecond;
+  final supplyFace = Velocity(
+      math.min(appFace, kSupplyFaceVelocityMax.metersPerSecond));
+  final returnFace = Velocity(
+      math.min(appFace, kReturnFaceVelocityMax.metersPerSecond));
+  final supply = _autoTerminals(airflow, supplyFace, freeAreaRatio);
+  final return_ = _autoTerminals(airflow, returnFace, freeAreaRatio);
 
   // 4 — supply trunk duct (carries the whole room airflow).
   duct.DuctSizingResult? round;
@@ -239,6 +250,9 @@ RoomAirResult sizeRoomAir({
             airflow: airflow,
             targetPaPerMetre: ductEqualFrictionPa,
             aspectRatio: ductAspectRatio,
+            // M2 parity with network_sizing — equal friction alone does not
+            // bound velocity, so the room trunk honours the same cap.
+            maxVelocity: maxDuctVelocity,
           )
         : duct.sizeRectangularByVelocity(
             airflow: airflow,
@@ -250,6 +264,7 @@ RoomAirResult sizeRoomAir({
     round = duct.sizeByEqualFriction(
       airflow: airflow,
       targetPaPerMetre: ductEqualFrictionPa,
+      maxVelocity: maxDuctVelocity,
     );
     frictionPerMetre = round.frictionPerMetrePa;
   } else {
