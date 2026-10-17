@@ -248,6 +248,20 @@ String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
   return '$family ${n}x${_num(csaMm2)}';
 }
 
+/// The full PENGHANTAR conductor label WITH its unit and parallel-run count:
+/// `NYY 5x16 mm2` for a single cable, `2x(NYY 5x185 mm2)` when the sizer
+/// paralleled [runs] cables per phase ([CableResult.runsPerPhase]). A paralleled
+/// way pulls N complete cables (and the containment issues N conduits), so a
+/// label naming ONE cable under-states the take-off by N. The ONE notation the
+/// board schedule, the overview/riser feeder labels, the live canvas feeder
+/// label and the inspector all print, so the formats can never disagree.
+/// Null / <= 1 [runs] ⇒ exactly `${cableLabel(...)} mm2` (byte-identical).
+String cableRunLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
+    {int? cores, int? runs}) {
+  final single = '${cableLabel(circuit, csaMm2, threePhase, cores: cores)} mm2';
+  return (runs != null && runs > 1) ? '${runs}x($single)' : single;
+}
+
 /// The cable family a circuit's label/legend should show: its explicit
 /// `cableType` when set, else the convention default for its load kind.
 String resolvedCableFamily(ElectricalCircuit? circuit) =>
@@ -591,8 +605,8 @@ SldSheet buildElectricalSld({
       // `mm` conduit token.
       final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
       final cable =
-          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores)} '
-          'mm2$earth$conduit$length';
+          '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase)}'
+          '$earth$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
@@ -1020,7 +1034,7 @@ String? _feederConnLabel(
   final poles = cr.threePhase ? 3 : 1;
   final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
   final twoPole = parentThreePhase && !cr.threePhase;
-  return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores)} mm2 · '
+  return '${cableRunLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase)} · '
       '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
 }
 

@@ -21,7 +21,7 @@ import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, PhaseAssignment;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
-    show breakerScheduleLabel, cableLabel;
+    show breakerScheduleLabel, cableRunLabel;
 import 'package:mechx_engine/standards/puil.dart' show BreakerClass, PuilProfile;
 import 'package:mechx_engine/units.dart';
 
@@ -823,7 +823,8 @@ class ElectricalCircuitInspector extends StatelessWidget {
         // G5: the REAL core count from the sized grounding, matching the
         // schedule's PENGHANTAR cell exactly.
         value:
-            '${cableLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores)} mm2',
+            cableRunLabel(circuit, c.cable.csaMm2, c.threePhase,
+                cores: c.grounding.cores, runs: c.cable.runsPerPhase),
       ));
       final vd = c.voltageDrop;
       rows.add(ElectricalResultRow(
