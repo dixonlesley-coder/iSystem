@@ -1010,4 +1010,49 @@ void main() {
       expect(noHw, isNot(contains('HWR')));
     });
   });
+
+  group('drafting-2 — rectangular duct tags', () {
+    // A supply-air trunk sized 400 x 200 mm: its circular EQUIVALENT diameter
+    // (Huebscher) is 1.30·(a·b)^0.625/(a+b)^0.25 = 1.30·(80000)^0.625/600^0.25
+    //   = 1.30·1155.4/4.949 ≈ 303.5 ⇒ ~305 mm — a round duct that does not
+    // exist. The riser must print the real 400x200, like the plan + BOM.
+    Network airNet() => Network(
+          nodes: [
+            _n('ahu', 200, 1,
+                role: NodeRole.plant, component: NodeComponent.ahu),
+            _n('m', 200, 0),
+            _n('d1', 120, 0),
+          ],
+          edges: [
+            _e('trunk', 'ahu', 'm', ServiceType.duct,
+                kind: EdgeKind.riser),
+            _e('br', 'm', 'd1', ServiceType.duct),
+          ],
+        );
+
+    test('a rectangular duct prints WxH, never its equivalent O<d>', () {
+      final sheet = buildMechanicalRiserSld(
+        network: airNet(),
+        sizing: {
+          'trunk': EdgeSizing(
+            edgeId: 'trunk',
+            service: ServiceType.duct,
+            flow: const FlowRate(0.6),
+            diameter: Diameter.mm(305),
+            velocity: const Velocity(7.5),
+            width: Length.mm(400),
+            height: Length.mm(200),
+          ),
+          'br': _sz('br', ServiceType.duct, 200),
+        },
+      );
+      final texts =
+          sheet.prims.whereType<SldLabel>().map((l) => l.text).toList();
+      expect(texts.where((t) => t.startsWith('400x200')), isNotEmpty,
+          reason: '$texts');
+      expect(texts.where((t) => t.contains('O305')), isEmpty);
+      // A ROUND duct keeps its O<mm> tag.
+      expect(texts.where((t) => t.startsWith('O200')), isNotEmpty);
+    });
+  });
 }

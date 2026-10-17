@@ -1250,8 +1250,12 @@ void main() {
       }
       // Each feeder annotation carries the real cable + breaker + length. The
       // heaviest feeder (EP-1) is now an MCCB 80 A on 50 mm² — under the old
-      // copper-inflating floor this read `MCCB 160A 3ph` on 150 mm².
-      expect(texts.where((t) => t.contains('NYY 5x50 mm2 · MCCB 80A 3ph')),
+      // copper-inflating floor this read `MCCB 160A 3ph` on 150 mm². The PE
+      // prints as a separate earth (`+ BC 25 mm2`), so the cable is 5 - 1 = 4
+      // cores (3L + N) — the earth is never specified twice.
+      expect(
+          texts.where(
+              (t) => t.contains('NYY 4x50 mm2 + BC 25 mm2 · MCCB 80A 3ph')),
           isNotEmpty);
     });
 
@@ -1348,16 +1352,18 @@ void main() {
         for (final cc in advanced.containment['mdp']!.conduits)
           cc.name: cc.conduit,
       };
+      // (The PE prints as a separate `+ NYA/BC` earth, so the printed cable
+      // core count is the sized count minus the PE: 3L+N = 4x, L+N = 2x.)
       // 6 mm2 3φ feeder: schedule says PVC 32 mm, containment says 25 mm.
-      expect(cables.where((c) => c.contains('5x6 mm2')).first,
+      expect(cables.where((c) => c.contains('4x6 mm2 + NYA 6')).first,
           contains('PVC 32mm'));
       expect(byName['Feeder LP-1']!.conduitSizeMm, 25.0);
       // 25 mm2 feeder: schedule says PVC 50 mm, containment says 40 mm.
-      expect(cables.where((c) => c.contains('5x25 mm2')).first,
+      expect(cables.where((c) => c.contains('4x25 mm2 + BC 16')).first,
           contains('PVC 50mm'));
       expect(byName['Feeder PP-1']!.conduitSizeMm, 40.0);
       // The two only happen to agree on the single-phase LP-3 run (32 mm).
-      expect(cables.where((c) => c.contains('3x16 mm2')).first,
+      expect(cables.where((c) => c.contains('2x16 mm2 + BC 16')).first,
           contains('PVC 32mm'));
       expect(byName['Feeder LP-3']!.conduitSizeMm, 32.0);
       // And the ampacity that sized the cable used the CONDUIT reference

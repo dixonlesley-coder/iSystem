@@ -462,12 +462,14 @@ void main() {
       expect(spec.conduitSizeMm, 63.0);
 
       // G5: the probe way is a MOTOR — motor-like ⇒ no neutral ⇒ the sized
-      // grounding is 3L + PE = 4 cores, so the cable cell reads `4x70` (the
-      // conduit basis is unchanged: the fallback ladder still sizes the
-      // conservative 5-core bundle).
+      // grounding is 3L + PE = 4 cores. The schedule prints the PE as a
+      // SEPARATE earth conductor (`+ NYA/BC <csa> mm2`, the BRI convention),
+      // so the cable itself is 4 - 1 = 3 cores: `3x70 mm2 + BC ..` (the PE is
+      // never specified twice). The conduit basis is unchanged: the fallback
+      // ladder still sizes the conservative 5-core bundle.
       final sheet = _scheduleForCsa(puil, 70, threePhase: true);
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('4x70 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('3x70 mm2 + '), orElse: () => '');
       expect(cable, isNotEmpty, reason: 'the 70 mm2 run must be on the sheet');
       expect(cable, isNot(contains('PVC 50mm')));
       expect(cable, contains('PVC 63mm'));
@@ -479,9 +481,10 @@ void main() {
       // not shift.
       expect(sizeConduit(16, 5).conduitSizeMm, 32.0);
       final sheet = _scheduleForCsa(puil, 16, threePhase: true);
-      // G5: the motor probe has no neutral ⇒ `4x16` (see above).
+      // G5: the motor probe has no neutral ⇒ 4 cores incl. PE ⇒ `3x16` + the
+      // separate earth token (see above).
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('4x16 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('3x16 mm2 + '), orElse: () => '');
       expect(cable, contains('PVC 40mm'));
     });
 
@@ -506,10 +509,13 @@ void main() {
         final want = spec.fillPct > conduitFillSingle * 100
             ? ' · tray'
             : ' · PVC ${spec.conduitSizeMm.round()}mm';
-        // G5: the schedule prints the REAL core count the sizing resolved
-        // (3L+PE for a motor, 3L+N+PE otherwise) — the same count the
-        // containment study sizes its conduit from.
-        final cores = c.grounding.cores;
+        // G5: the sizing resolves the REAL core count (3L+PE for a motor,
+        // 3L+N+PE otherwise) — the count the containment study sizes its
+        // conduit from. The schedule prints the PE as a separate earth token,
+        // so the cable's printed core count is that count minus the PE.
+        final cores = c.grounding.peCsaMm2 > 0
+            ? (c.grounding.cores - 1 < 2 ? 2 : c.grounding.cores - 1)
+            : c.grounding.cores;
         final cell = _cableCells(sheet).firstWhere(
             (t) => t.contains('${cores}x${_numText(c.cable.csaMm2)} mm2'),
             orElse: () => '');
@@ -527,10 +533,69 @@ void main() {
       expect(spec.conduitSizeMm, 63.0);
       expect(spec.fillPct, greaterThan(conduitFillSingle * 100));
       final sheet = _scheduleForCsa(puil, 150, threePhase: true);
-      // G5: the motor probe has no neutral ⇒ `4x150` (see above).
+      // G5: the motor probe has no neutral ⇒ `3x150` + earth (see above).
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('4x150 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('3x150 mm2 + '), orElse: () => '');
       expect(cable, contains(' · tray'));
+    });
+  });
+
+  // ── drafting-1 — the protective earth is specified ONCE ───────────────────
+  group('drafting-1 — the PE is never specified twice', () {
+    // `sizeGrounding` counts the PE INSIDE `grounding.cores` (live + N + PE).
+    // The schedule prints the PE as a SEPARATE conductor (`+ NYA/BC <csa>`), so
+    // the printed cable must carry cores - 1: a 1-phase way is L+N+PE = 3 ⇒
+    // `2x` + earth; a 3-phase way with N is 3L+N+PE = 5 ⇒ `4x` + earth; a
+    // motor (no N) is 3L+PE = 4 ⇒ `3x` + earth.
+    const puil = PuilProfile();
+    final result = computeSystem(puil, _mixedProject);
+    final sheet = buildElectricalPanelDetail(
+        project: _mixedProject, result: result, panelId: 'MDP');
+    final cells = _cableCells(sheet);
+
+    test('every way prints cores - 1 beside its separate earth token', () {
+      final mdp = result.panels['MDP']!;
+      expect(mdp.circuits, isNotEmpty);
+      for (final c in mdp.circuits) {
+        expect(c.grounding.peCsaMm2, greaterThan(0));
+        final csa = _numText(c.cable.csaMm2);
+        final pe = _numText(c.grounding.peCsaMm2);
+        final cable = c.grounding.cores - 1;
+        expect(
+            cells.where((t) =>
+                RegExp('^[A-Z]+ ${cable}x$csa mm2 \\+ (NYA|BC) $pe mm2')
+                    .hasMatch(t)),
+            isNotEmpty,
+            reason: 'way ${c.circuitId}: ${c.grounding.cores} conductors '
+                'incl. PE ⇒ ${cable}x$csa + earth $pe; got $cells');
+      }
+    });
+
+    test('no cell carries the full PE-inclusive count AND an earth token', () {
+      // The 55 kW chiller is a 3-phase motor: 3L + PE = 4 conductors, so the
+      // double-counted form would read `4x<csa> mm2 + BC` — it must not.
+      final chiller = result.panels['MDP']!.circuits
+          .firstWhere((c) => c.circuitId == 'm-big');
+      expect(chiller.grounding.cores, 4);
+      final csa = _numText(chiller.cable.csaMm2);
+      expect(cells.where((t) => t.contains('NYY 4x$csa mm2 + ')), isEmpty);
+      expect(cells.where((t) => t.startsWith('NYY 3x$csa mm2 + ')),
+          isNotEmpty);
+    });
+
+    test('the overview feeder label reads exactly as its schedule row', () {
+      final overview = buildElectricalOverview(
+          project: _mixedProject, result: result);
+      final feeder = result.panels['MDP']!.circuits
+          .firstWhere((c) => c.circuitId == 'f-lp1');
+      final rowCable = cells
+          .firstWhere((t) => t.contains('${_numText(feeder.cable.csaMm2)} mm2 + '))
+          .split(' · ')
+          .first;
+      expect(rowCable, contains(' + '));
+      expect(_labelTexts(overview).where((t) => t.startsWith('$rowCable · ')),
+          isNotEmpty,
+          reason: 'overview feeder label must carry "$rowCable"');
     });
   });
 

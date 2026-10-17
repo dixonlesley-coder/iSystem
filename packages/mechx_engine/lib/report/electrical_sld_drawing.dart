@@ -241,11 +241,34 @@ int? _conduitFromSpec(ConduitSpec spec) =>
 ///
 /// Null [cores] keeps the drawing convention (3 for 1-phase, 5 for 3-phase) for
 /// callers with no sized grounding to hand ⇒ byte-identical.
+///
+/// CONVENTION: this label is the earth-IN-the-cable form. Where the drawing
+/// prints the protective earth as a SEPARATE conductor (`+ NYA/BC <csa> mm2`,
+/// the BRI schedule convention), callers go through [_cableSpecWithEarth],
+/// which passes `cores - 1` so the PE is never specified twice.
 String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
     {int? cores}) {
   final family = resolvedCableFamily(circuit);
   final n = (cores != null && cores > 0) ? cores : (threePhase ? 5 : 3);
   return '$family ${n}x${_num(csaMm2)}';
+}
+
+/// The PENGHANTAR cable spec in the BRI separate-earth convention: the cable's
+/// core count EXCLUDING the protective earth, plus the earth as its own
+/// conductor token (`NYY 4x6 mm2 + NYA 6 mm2`, never `NYY 5x6 + NYA 6` — that
+/// would specify the PE twice). `grounding.cores` (earthing.dart) counts the PE
+/// INSIDE the cable (live + neutral + PE), so when a separate earth is printed
+/// the PE is subtracted from the printed core count (guarded at ≥ 2 — a cable
+/// always carries at least L + N or L + L). With no PE CSA to print the full
+/// [cores] stay in the cable (earth in the cable). Shared by the schedule rows
+/// and the overview/riser feeder labels so the two read identically. The
+/// conduit/containment basis keeps the FULL conductor count (it is the real
+/// conductor set in the containment).
+String _cableSpecWithEarth(ElectricalCircuit? circuit, double csaMm2,
+    bool threePhase, int cores, double peCsaMm2) {
+  final earth = peCsaMm2 > 0 ? _earthConductor(peCsaMm2) : '';
+  final printed = earth.isEmpty ? cores : math.max(2, cores - 1);
+  return '${cableLabel(circuit, csaMm2, threePhase, cores: printed)} mm2$earth';
 }
 
 /// The cable family a circuit's label/legend should show: its explicit
@@ -560,9 +583,6 @@ SldSheet buildElectricalSld({
           ? ' · no-OL trip (fire)'
           : '';
       final vd = c.voltageDrop.withinLimit ? '' : '  VD!';
-      final earth = c.grounding.peCsaMm2 > 0
-          ? _earthConductor(c.grounding.peCsaMm2)
-          : '';
       // E2: the containment STUDY's own result for this run wins when supplied
       // (one containment source for the schedule + the take-off); else the
       // fill-aware ladder. Both return null for a cable no standard conduit
@@ -583,9 +603,8 @@ SldSheet buildElectricalSld({
       // exists (never fabricated); the ` m` suffix disambiguates it from the
       // `mm` conduit token.
       final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
-      final cable =
-          '${cableLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores)} '
-          'mm2$earth$conduit$length';
+      final cable = '${_cableSpecWithEarth(circuit, c.cable.csaMm2, c.threePhase,
+          c.grounding.cores, c.grounding.peCsaMm2)}$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
@@ -995,7 +1014,8 @@ String? _feederConnLabel(
   final poles = cr.threePhase ? 3 : 1;
   final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
   final twoPole = parentThreePhase && !cr.threePhase;
-  return '${cableLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores)} mm2 · '
+  return '${_cableSpecWithEarth(circ, cr.cable.csaMm2, cr.threePhase,
+          cr.grounding.cores, cr.grounding.peCsaMm2)} · '
       '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
 }
 
