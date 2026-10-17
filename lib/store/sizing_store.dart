@@ -33,7 +33,8 @@ const Map<ServiceType, FlowRate> kDefaultLeafDemand = {
   ServiceType.drainage: FlowRate(0.0008), // 0.8 L/s per fixture
   ServiceType.vent: FlowRate(0.0004),
   ServiceType.rainwater: FlowRate(0.001),
-  ServiceType.fireSprinkler: FlowRate(0.0005),
+  // (No fireSprinkler entry: sizingProvider always supplies the hazard's own
+  // remote-head flow from sprinklerRemoteAreaProvider instead.)
   ServiceType.fireHydrant: FlowRate(0.005),
 };
 

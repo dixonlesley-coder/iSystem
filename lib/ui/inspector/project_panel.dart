@@ -333,7 +333,7 @@ String bomCsvWithCutPlan(List<BomLine> bom, List<PipeCutGroup> cutPlan) {
       key = (service: line.service, mm: line.diameterMm, mat: ''); // legacy
     }
     final g = planByKey[key];
-    // The cut plan is a per-(service, DN) property (all runs of a size share
+    // The cut plan is a (service, DN, material) property (all runs of a size share
     // stock bars), so it is emitted ONCE per group — sum-safe — and left empty
     // on the rest, and empty when the plan has no entry (a riser-only DN, an
     // air duct: never invented).

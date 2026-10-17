@@ -225,8 +225,10 @@ void main() {
     test('the confirmed false positive is clean (1200 × 900 at 4.56 m/s)', () {
       // Q = 4.92 m³/s, cap 5.0, aspect 1.5.
       //   A_req = 4.92 / 5.0        = 0.984 m²
-      //   H_ideal = √(0.984 / 1.5)  = 0.80994 m → 810 mm → rounds up to 900
+      //   H_ideal = √(0.984 / 1.5)  = 0.80994 m
       //   W_ideal = 1.5 × 0.80994   = 1.21491 m → 1215 mm → clamps to 1200
+      //   W clamped ⇒ H is re-solved against it: H = A_req / W = 0.984 / 1.2
+      //     = 0.820 m → 820 mm → rounds up to 900
       // The IDEAL width exceeds the largest standard side, which is what the
       // old test flagged — but the DELIVERED section is
       //   A = 1.200 × 0.900 = 1.08 m² → v = 4.92 / 1.08 = 4.5556 m/s ≤ 5.0.
@@ -243,8 +245,9 @@ void main() {
 
     test('a genuinely over-velocity clamped section still flags', () {
       // Q = 8.0 m³/s, cap 5.0, aspect 1.5.
-      //   A_req = 1.6 m²; H_ideal = √(1.6/1.5) = 1.0328 m → clamps to 1200
-      //   W_ideal = 1.5492 m → clamps to 1200
+      //   A_req = 1.6 m²; W_ideal = 1.5 × √(1.6/1.5) = 1.5492 m → clamps to 1200
+      //   W clamped ⇒ H = A_req / W = 1.6 / 1.2 = 1.333 m → 1333 mm, past the
+      //     largest side → clamps to 1200
       //   A = 1.2 × 1.2 = 1.44 m² → v = 8.0 / 1.44 = 5.5556 m/s > 5.0
       final r = sizeRectangularByVelocity(
         airflow: const FlowRate(8.0),

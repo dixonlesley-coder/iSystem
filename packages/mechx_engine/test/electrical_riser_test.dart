@@ -489,8 +489,7 @@ void main() {
       }
     });
 
-    test('a displaced annotation is leadered back to ITS branch; the tag that '
-        'never collided keeps the legacy anchor', () {
+    test('every displaced annotation is leadered back to ITS branch', () {
       final labels = feederLabels(sheet);
       // The legacy anchor of a fed board: its box right edge + 6, on the branch
       // (the box centre-line) less 4. Boards are 168 x 46 packed from x = 174
@@ -505,22 +504,30 @@ void main() {
           labels.where((l) => anchors.contains((l.x, l.y))).toList();
       final moved =
           labels.where((l) => !anchors.contains((l.x, l.y))).toList();
-      // The RIGHTMOST board has nothing beyond it, so its own tag never
-      // collided and must be untouched; the two behind it had to escape.
-      expect(kept.length, 1, reason: 'kept: ${kept.map((l) => l.text)}');
-      expect(kept.single.x, 924.0);
-      expect(kept.single.y, 319.0);
-      expect(moved, isNotEmpty);
+      // The two tags behind the rightmost board collide with it and escape.
+      // The RIGHTMOST board's own tag collides with no board, but its default
+      // slot runs PAST the feeder channel: each tag is 32 chars x 6.5 x 0.6 =
+      // 124.8 wide, so from x 924 it reaches 1048.8, while the channel sits at
+      // sheetMaxX + 40 = (174 + 4 x 192) + 40 = 982 — and that feeder's own
+      // riser leg spans the channel from the MDP bus row (300 - 12 = 288) down
+      // to the branch (323), right through the glyph box [312.5, 319]. The
+      // channel vertical is an obstacle (drawing-output residual), so that tag
+      // escapes to the first channel-column slot: (982 + 10, 323 - 4).
+      expect(kept, isEmpty, reason: 'kept: ${kept.map((l) => l.text)}');
+      expect(moved.length, 3);
+      expect(labels.any((l) => l.x == 992.0 && l.y == 319.0), isTrue);
 
       // Every moved tag gets a THIN leader ending exactly on it, starting on a
       // board's branch line: a box centre-line, or — when a sibling sits
       // between that board and the channel (audit 2026-10 drawing-output-1) —
-      // the band's BUS ROW the branch jogs to, 12 above the box tops
-      // (300 - 12 = 288 here), so the branch never runs through the sibling.
+      // a band BUS TRACK the branch jogs to, so the branch never runs through
+      // the sibling. Each jogged leg owns a track: the first 12 above the box
+      // tops, then 17 / 22 / 7 / 27 (5 apart) — here the MDP leg takes 288
+      // (300 - 12) and the two jogged child legs 283 and 278.
       final branchYs = {
         for (final r in sheet.prims.whereType<SldRect>()) ...{
           r.y + r.h / 2,
-          r.y - 12,
+          for (final off in const [12.0, 17.0, 22.0, 7.0, 27.0]) r.y - off,
         }
       };
       for (final l in moved) {
@@ -537,8 +544,8 @@ void main() {
       }
     });
 
-    test('a single-board-per-band riser keeps EXACTLY the legacy anchors '
-        '(byte-identity guard)', () {
+    test('a single-board-per-band riser keeps the legacy anchor unless the '
+        'riser channel strikes the tag', () {
       // MDP (band 0) -> LP-1 (band 1) -> LP-2 (band 2): one board per band, so
       // no branch ever crosses a sibling and nothing may move.
       const chain = ElectricalProject(
@@ -580,28 +587,38 @@ void main() {
           project: chain, result: r, building: building);
       final labels = feederLabels(s);
       expect(labels.length, chain.panels.length - 1);
-      final anchors = {
-        for (final rc in s.prims.whereType<SldRect>())
-          (rc.x + rc.w + 6, rc.y + rc.h / 2 - 4)
-      };
       for (final l in labels) {
-        expect(anchors.contains((l.x, l.y)), isTrue,
-            reason: '"${l.text}" moved to ${l.x},${l.y}');
         expect(l.size, 6.5);
       }
       // Hand-derived: the sole board of each band sits at x = 174 (gutter 150 +
       // gap 24), box 168 wide ⇒ right edge 342 ⇒ anchor x 342 + 6 = 348; the
       // TOP band starts at y 0 and the branch is the box centre-line 46 / 2 =
-      // 23 ⇒ anchor y = 23 - 4 = 19.
-      expect(labels.any((l) => l.x == 348.0 && l.y == 19.0), isTrue);
-      // Nothing was displaced ⇒ no leader ends on any annotation.
-      for (final l in labels) {
-        expect(
-            s.prims.whereType<SldLine>().any((ln) =>
-                ln.weight == SldWeight.thin && ln.x2 == l.x && ln.y2 == l.y),
-            isFalse,
-            reason: 'unexpected leader for "${l.text}"');
-      }
+      // 23 ⇒ anchor y = 23 - 4 = 19. No board and no riser leg reaches that
+      // tag (the LP-1 -> LP-2 leg ends at y 23, below its glyph box), so it
+      // keeps the legacy anchor with no leader.
+      final top = labels.where((l) => l.x == 348.0 && l.y == 19.0).toList();
+      expect(top, hasLength(1));
+      bool leadered(SldLabel l) => s.prims.whereType<SldLine>().any((ln) =>
+          ln.weight == SldWeight.thin && ln.x2 == l.x && ln.y2 == l.y);
+      expect(leadered(top.single), isFalse);
+      // The MIDDLE band's tag (LP-1, branch y 150 + 23 = 173, anchor (348,
+      // 169)) is 32 x 6.5 x 0.6 = 124.8 wide ⇒ it would reach 472.8, past the
+      // channel at sheetMaxX + 40 = 366 + 40 = 406, where the LP-1 -> LP-2
+      // riser leg (y 23 .. 173) strikes through its glyph box [162.5, 169]. The
+      // channel vertical is an obstacle (drawing-output residual), so the tag
+      // takes the first channel-column slot (406 + 10, 173 - 4) and gets a
+      // thin leader from its branch end on the channel (406, 173).
+      final mid = labels.where((l) => l.x == 416.0 && l.y == 169.0).toList();
+      expect(mid, hasLength(1),
+          reason: labels.map((l) => '${l.x},${l.y}').join(' '));
+      expect(
+          s.prims.whereType<SldLine>().any((ln) =>
+              ln.weight == SldWeight.thin &&
+              ln.x1 == 406.0 &&
+              ln.y1 == 173.0 &&
+              ln.x2 == 416.0 &&
+              ln.y2 == 169.0),
+          isTrue);
     });
   });
 }

@@ -2033,6 +2033,29 @@ const double _riserPanelGap = 24;
 /// board is routed instead. A drafting choice, not a standard.
 const double _riserBusOffset = 12;
 
+/// Several legs can need a band's bus row at once (a parent leg AND a child leg
+/// of DIFFERENT feeders, say). Sharing one row would draw them collinear —
+/// reading as one connected bus, a false topology — so every leg gets its OWN
+/// TRACK in the 31-unit gap: the first claimant keeps the legacy row
+/// ([_riserBusOffset] above the boxes ⇒ a single-jog band is byte-identical),
+/// later ones step [_riserBusTrackPitch] apart in the order of
+/// [_riserBusTrackSteps] (12, 17, 22, 7, 27 above the box tops — all clear of
+/// the box tops and of the grid line 31 above them); a sixth+ claimant keeps
+/// stepping upward. Legs leaving ONE parent board share that board's track
+/// (one source bus — a truthful common connection). A drafting choice, not a
+/// standard.
+const double _riserBusTrackPitch = 5;
+const List<int> _riserBusTrackSteps = [0, 1, 2, -1, 3];
+
+/// Offset above the box tops of a band's [k]-th bus track (k = 0 ⇒ the legacy
+/// [_riserBusOffset] row).
+double _riserBusTrackOffset(int k) {
+  final step = k < _riserBusTrackSteps.length
+      ? _riserBusTrackSteps[k]
+      : k - 1; // 5 → 4 (32), 6 → 5 (37), … keep climbing
+  return _riserBusOffset + step * _riserBusTrackPitch;
+}
+
 /// Per-floor branch fan-out: how many outgoing LOAD ways a riser panel shows as
 /// labelled stubs before collapsing the remainder to a `+N more` summary, the
 /// pitch of each stub row, and the reserved column height that the floor grid
@@ -2406,6 +2429,19 @@ SldSheet buildElectricalRiser({
     return false;
   }
 
+  // Per-band bus TRACKS (see [_riserBusTrackSteps]): each leg that must jog
+  // claims its own row in the band's clear gap, keyed so legs leaving ONE parent
+  // board share that board's track. The first claimant per band keeps the
+  // legacy row ⇒ a band with a single jog is byte-identical.
+  final busTrackCount = <int, int>{};
+  final busTrackOf = <String, double>{};
+  double busTrackY(int band, double boxTop, String key) =>
+      busTrackOf.putIfAbsent(key, () {
+        final k = busTrackCount[band] ?? 0;
+        busTrackCount[band] = k + 1;
+        return boxTop - _riserBusTrackOffset(k);
+      });
+
   // One record per drawn feeder, in the deterministic parent-map order.
   final feeders = <_RiserFeeder>[];
   for (final entry in parentOf.entries) {
@@ -2431,20 +2467,30 @@ SldSheet buildElectricalRiser({
       // band's bus row (the clear gap above the boxes). One board per band ⇒
       // nothing blocks ⇒ the straight legacy geometry, byte-identical.
       parentBusY: hBlocked(pyy, pxx, channelX)
-          ? panelY[parent]! - _riserBusOffset
+          ? busTrackY(floorOf(parent), panelY[parent]!, 'p:$parent')
           : null,
       childBusY: hBlocked(cyy, channelX, cxx)
-          ? panelY[child]! - _riserBusOffset
+          ? busTrackY(floorOf(child), panelY[child]!, 'c:$child')
           : null,
     ));
   }
   // Pass 1 — every annotation whose DEFAULT anchor is clear keeps it (so a riser
   // whose bands hold one board each is unchanged); pass 2 walks the escape
   // ladder for the rest, stacking them without mutual overlap.
+  // Obstacles: every board box, plus every feeder's CHANNEL VERTICAL (a 1-unit
+  // wide strip at channelX over the span that feeder's riser leg occupies) — a
+  // long tag whose default slot runs past channelX would otherwise be struck
+  // through by the riser line.
   final placer = _RiserLabelPlacer([
     for (final id in panelX.keys)
       _RiserBox(panelX[id]!, panelY[id]!, panelX[id]! + _ovW,
           panelY[id]! + _ovH),
+    for (final f in feeders)
+      _RiserBox(
+          channelX - 0.5,
+          math.min(f.parentBusY ?? f.py, f.branchY),
+          channelX + 0.5,
+          math.max(f.parentBusY ?? f.py, f.branchY)),
   ], gutterX: _riserGutterW);
   final needsEscape = <_RiserFeeder>[];
   for (final f in feeders) {
@@ -2559,8 +2605,11 @@ SldSheet buildElectricalRiser({
       // clear bus row above the top band, and enter the root from its own
       // band's bus row.
       const trunkX = _riserGutterW + _riserPanelGap / 2;
-      final topRowY = contentOffsetY - _riserBusOffset;
-      final rootRowY = zy - _riserBusOffset;
+      final topRowY = busTrackY(topIndex, contentOffsetY, 'top');
+      // A root on the TOP band rides the same source row (one continuous path).
+      final rootRowY = floorOf(id) == topIndex
+          ? topRowY
+          : busTrackY(floorOf(id), zy, 's:$id');
       prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, topRowY,
           weight: SldWeight.medium, role: SldRole.source));
       prims.add(SldLine(spine.feedX, topRowY, trunkX, topRowY,

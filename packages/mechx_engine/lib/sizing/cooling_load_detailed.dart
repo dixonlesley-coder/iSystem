@@ -280,7 +280,11 @@ final class DetailedCoolingLoad {
   /// Ventilation/infiltration latent gain (W).
   final double ventilationLatentW;
 
-  /// Number of occupants used for the people gains.
+  /// Occupant count for DISPLAY (the explicit count, else density × floor
+  /// area ROUNDED — [DetailedCoolingInputs.resolvedOccupants]). The people
+  /// gains are NOT computed from this integer: they use the fractional
+  /// [DetailedCoolingInputs.resolvedOccupantsExact], so a small room's gain is
+  /// never rounded away.
   final int occupants;
 
   /// Ventilation/infiltration airflow used (m³/s).
