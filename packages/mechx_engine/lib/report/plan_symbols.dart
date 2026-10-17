@@ -580,8 +580,18 @@ LeaderedLabelPlacement placeEdgeLabelLeadered({
   // Axis-aligned bounds of the rotated w × textSize text rect at that anchor.
   LabelBox boxAt(double cx, double cy, double d) {
     final (x0, y0) = anchorFor(cx, cy, d);
-    final xs = [x0, x0 + ca * w, x0 - sa * textSize, x0 + ca * w - sa * textSize];
-    final ys = [y0, y0 + sa * w, y0 + ca * textSize, y0 + sa * w + ca * textSize];
+    final xs = [
+      x0,
+      x0 + ca * w,
+      x0 - sa * textSize,
+      x0 + ca * w - sa * textSize
+    ];
+    final ys = [
+      y0,
+      y0 + sa * w,
+      y0 + ca * textSize,
+      y0 + sa * w + ca * textSize
+    ];
     return (
       minX: xs.reduce(math.min),
       minY: ys.reduce(math.min),
@@ -741,32 +751,35 @@ String? composePlanEdgeLabel({
 // ── N5: per-run centreline SETTING-OUT elevation labels ─────────────────────
 //
 // The plan prints `CL +2.70` on each horizontal run — the height a foreman
-// hangs the pipe/duct at, above that run's floor FFL. The §10 `nodeElevation`
-// puts every PLANT node (tank, pump, AHU …) at ROOF level when it carries no
-// explicit elevation / mount height: a deliberate simplification for the
-// static-lift solve, but a ground-floor tank-to-pump run averaged from it
-// printed `CL +12.00` on a 4 m storey — a physically impossible setting-out
-// height (audit 2026-10 drawing-output-2). The solve keeps its datum; this
-// printed-label consumer resolves a datum-less plant to its own floor's
-// distribution (ceiling) level instead, and never prints a CL outside the
-// storey.
+// hangs the pipe/duct at, above that run's floor FFL. The label is a RENDER of
+// the solve's §10 [nodeElevation] (golden rule 5): a floor-standing pump /
+// ground tank / AHU sits on its own floor surface there (audit 2026-10
+// water-drainage-1), so its runs print the same height the static lift uses.
+// The one plant the solve still parks at the ROOF datum when it carries no
+// explicit elevation / mount height is a roof tank (or a plant with no
+// component); a run from it averaged with a ground-floor node printed
+// `CL +12.00` on a 4 m storey (audit 2026-10 drawing-output-2), so the label
+// resolves that roof-parked plant to its own floor's ceiling main level instead
+// and never prints a CL outside the storey.
 
-/// The elevation a PLAN label uses for [node]: [nodeElevation] for every node,
-/// EXCEPT a [NodeRole.plant] node with neither an explicit `elevation` nor a
-/// `mountHeight` — that one sits at its own floor's ceiling main level
-/// ([BuildingLevels.ceilingElevationOf]) rather than the roof datum the solve
-/// uses. Pure.
+/// The elevation a PLAN label uses for [node]: [nodeElevation], EXCEPT a
+/// datum-less [NodeRole.plant] node that [nodeElevation] parks at the roof
+/// (a roof tank or a component-less plant on a lower sheet) — that one sits at
+/// its own floor's ceiling main level ([BuildingLevels.ceilingElevationOf]).
+/// Pure.
 Length planSettingOutElevation(
   NetNode node,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
 ]) {
+  final solved = nodeElevation(node, building, mounting);
   if (node.role == NodeRole.plant &&
       node.elevation == null &&
-      node.mountHeight == null) {
+      node.mountHeight == null &&
+      solved.meters == building.roofElevation.meters) {
     return building.ceilingElevationOf(node.floorIndex, mounting);
   }
-  return nodeElevation(node, building, mounting);
+  return solved;
 }
 
 /// Per-RUN centreline-elevation labels (`CL +2.70`) keyed by edge id: the mean

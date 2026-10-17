@@ -128,7 +128,8 @@ void main() {
       expect(w!.faultKa, closeTo(13.37, 0.01));
     });
 
-    test('a 1-phase ROOT board refers its source Z to the 400 V line basis', () {
+    test('a 1-phase ROOT board refers its source Z to the 400 V line basis',
+        () {
       const root = ElectricalPanel(
         id: 'R',
         name: 'House',
@@ -358,8 +359,8 @@ void main() {
       // Origin 60 kA: top MCCB rung 70 kA ⇒ Ics 52.5 kA < 60 kA.
       final project = feederProject();
       final sys = computeSystem(p, project);
-      final fs = faultStudy(sys, project, p,
-          originFaultLevel: const Current(60000));
+      final fs =
+          faultStudy(sys, project, p, originFaultLevel: const Current(60000));
       expect(fs.circuits['f1']!.breakerKa, 70);
       expect(fs.selectivity.single.icsAdequate, isFalse);
       expect(fs.warnings.map((w) => w.code),
@@ -506,23 +507,25 @@ void main() {
     final mdp = sys.panels['MDP']!;
     final feeder = mdp.circuits.single;
 
-    test('fixture: the 400 kW feeder sizes as 2 parallel runs of 185 mm²', () {
+    test('fixture: the 400 kW feeder sizes as 2 parallel runs of 300 mm²', () {
       expect(feeder.cable.runsPerPhase, 2);
-      expect(feeder.cable.csaMm2, 185);
+      // Ib = 400 kW / (√3·400·1) = 577 A → In 800 A. Two parallel runs laid
+      // together are group-derated (elec-core-3): gf(2) = 0.8, so each run needs
+      // a table Iz ≥ 800 / 2 / 0.8 = 500 A → 300 mm² (2 × 500 × 0.8 = 800 A).
+      expect(feeder.cable.csaMm2, 300);
       expect(feeder.grounding.cableSpec, startsWith('2× '));
     });
 
     test('BOM: 2 runs × 40 m = 80 m of the SINGLE cable; lugs on every run',
         () {
       final lines = buildPanelBom(mdp);
-      final cable =
-          lines.where((l) => l.category == PartCategory.cable).single;
+      final cable = lines.where((l) => l.category == PartCategory.cable).single;
       // 40 m run × 2 parallel runs = 80 m to buy (was 40 m).
       expect(cable.qty, 80);
       expect(cable.runs, 2);
       // The description names the single cable, so 80 m reads unambiguously.
       expect(cable.description, isNot(contains('2×')));
-      expect(cable.description, contains('4×185'));
+      expect(cable.description, contains('4×300'));
       // Skun: 5 conductors (3L+N+PE) × 2 ends × 2 runs = 20 lugs.
       final lugs = lines.where((l) => l.description.contains('skun')).single;
       expect(lugs.qty, 20);
@@ -532,8 +535,8 @@ void main() {
       final tray = sizeCableTray(mdp);
       expect(tray.cableCount, 2);
       // Width = 2·OD × packing factor (one OD per run).
-      final od = cableOuterDiameterMm(
-          feeder.cable.csaMm2, feeder.grounding.cores);
+      final od =
+          cableOuterDiameterMm(feeder.cable.csaMm2, feeder.grounding.cores);
       final required = 2 * od * trayPackingFactor;
       expect(tray.fillPct, closeTo(required / tray.widthMm * 100, 0.06));
     });

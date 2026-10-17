@@ -26,79 +26,79 @@ import 'package:test/test.dart';
 // MDP (ground, first column) feeds LP-1 (L1), EMG (ground, second column) and
 // PP-1 (L2). An ordinary layout — two boards sharing one floor.
 ElectricalProject _riserProject() => const ElectricalProject(
-      id: 'p',
-      name: 'P',
-      transformerKva: ApparentPower(630000),
-      panels: [
-        ElectricalPanel(
-            id: 'MDP',
-            name: 'MDP',
-            layoutPos: LayoutPos(sheetId: 's0', floorIndex: 0, x: 0, y: 0),
-            circuits: [
-              ElectricalCircuit(
-                  id: 'f1',
-                  name: 'F LP',
-                  loadKind: LoadKind.feeder,
-                  feedsPanelId: 'LP',
-                  length: Length(18)),
-              ElectricalCircuit(
-                  id: 'f2',
-                  name: 'F EMG',
-                  loadKind: LoadKind.feeder,
-                  feedsPanelId: 'EMG',
-                  length: Length(20)),
-              ElectricalCircuit(
-                  id: 'f3',
-                  name: 'F PP',
-                  loadKind: LoadKind.feeder,
-                  feedsPanelId: 'PP',
-                  length: Length(24)),
-            ]),
-        ElectricalPanel(
-            id: 'LP',
-            name: 'LP-1',
-            sourceType: PanelSource.feeder,
-            fedByCircuitId: 'f1',
-            layoutPos: LayoutPos(sheetId: 's1', floorIndex: 1, x: 0, y: 0),
-            circuits: [
-              ElectricalCircuit(
-                  id: 'l1',
-                  name: 'Light',
-                  loadKind: LoadKind.lighting,
-                  isLighting: true,
-                  loadW: 1200,
-                  length: Length(20))
-            ]),
-        ElectricalPanel(
-            id: 'PP',
-            name: 'PP-1',
-            sourceType: PanelSource.feeder,
-            fedByCircuitId: 'f3',
-            layoutPos: LayoutPos(sheetId: 's2', floorIndex: 2, x: 0, y: 0),
-            circuits: [
-              ElectricalCircuit(
-                  id: 'p1',
-                  name: 'Gen',
-                  loadKind: LoadKind.general,
-                  loadW: 3000,
-                  length: Length(20))
-            ]),
-        ElectricalPanel(
-            id: 'EMG',
-            name: 'EMG',
-            sourceType: PanelSource.feeder,
-            fedByCircuitId: 'f2',
-            layoutPos: LayoutPos(sheetId: 's0', floorIndex: 0, x: 5, y: 0),
-            circuits: [
-              ElectricalCircuit(
-                  id: 'e1',
-                  name: 'EL',
-                  loadKind: LoadKind.lighting,
-                  isLighting: true,
-                  loadW: 800,
-                  length: Length(20))
-            ]),
-      ]);
+        id: 'p',
+        name: 'P',
+        transformerKva: ApparentPower(630000),
+        panels: [
+          ElectricalPanel(
+              id: 'MDP',
+              name: 'MDP',
+              layoutPos: LayoutPos(sheetId: 's0', floorIndex: 0, x: 0, y: 0),
+              circuits: [
+                ElectricalCircuit(
+                    id: 'f1',
+                    name: 'F LP',
+                    loadKind: LoadKind.feeder,
+                    feedsPanelId: 'LP',
+                    length: Length(18)),
+                ElectricalCircuit(
+                    id: 'f2',
+                    name: 'F EMG',
+                    loadKind: LoadKind.feeder,
+                    feedsPanelId: 'EMG',
+                    length: Length(20)),
+                ElectricalCircuit(
+                    id: 'f3',
+                    name: 'F PP',
+                    loadKind: LoadKind.feeder,
+                    feedsPanelId: 'PP',
+                    length: Length(24)),
+              ]),
+          ElectricalPanel(
+              id: 'LP',
+              name: 'LP-1',
+              sourceType: PanelSource.feeder,
+              fedByCircuitId: 'f1',
+              layoutPos: LayoutPos(sheetId: 's1', floorIndex: 1, x: 0, y: 0),
+              circuits: [
+                ElectricalCircuit(
+                    id: 'l1',
+                    name: 'Light',
+                    loadKind: LoadKind.lighting,
+                    isLighting: true,
+                    loadW: 1200,
+                    length: Length(20))
+              ]),
+          ElectricalPanel(
+              id: 'PP',
+              name: 'PP-1',
+              sourceType: PanelSource.feeder,
+              fedByCircuitId: 'f3',
+              layoutPos: LayoutPos(sheetId: 's2', floorIndex: 2, x: 0, y: 0),
+              circuits: [
+                ElectricalCircuit(
+                    id: 'p1',
+                    name: 'Gen',
+                    loadKind: LoadKind.general,
+                    loadW: 3000,
+                    length: Length(20))
+              ]),
+          ElectricalPanel(
+              id: 'EMG',
+              name: 'EMG',
+              sourceType: PanelSource.feeder,
+              fedByCircuitId: 'f2',
+              layoutPos: LayoutPos(sheetId: 's0', floorIndex: 0, x: 5, y: 0),
+              circuits: [
+                ElectricalCircuit(
+                    id: 'e1',
+                    name: 'EL',
+                    loadKind: LoadKind.lighting,
+                    isLighting: true,
+                    loadW: 800,
+                    length: Length(20))
+              ]),
+        ]);
 
 const _threeStoreys = BuildingLevels(
     [Floor('G', Length(4)), Floor('L1', Length(4)), Floor('L2', Length(4))]);
@@ -192,8 +192,11 @@ void main() {
           .where((l) => l.weight == SldWeight.medium)
           .map((l) => '${l.x1},${l.y1},${l.x2},${l.y2}')
           .toList();
-      expect(medium, ['342.0,173.0,406.0,173.0', '406.0,173.0,406.0,23.0',
-          '406.0,23.0,342.0,23.0']);
+      expect(medium, [
+        '342.0,173.0,406.0,173.0',
+        '406.0,173.0,406.0,23.0',
+        '406.0,23.0,342.0,23.0'
+      ]);
     });
   });
 
@@ -263,17 +266,24 @@ void main() {
           component: NodeComponent.pump,
           elevation: Length(12)),
     ], edges: [
-      NetEdge(id: 'tp', fromId: 'tk', toId: 'pu', service: ServiceType.coldWater),
-      NetEdge(id: 'pm', fromId: 'pu', toId: 'm', service: ServiceType.coldWater),
-      NetEdge(id: 'hm', fromId: 'hi', toId: 'm', service: ServiceType.coldWater),
+      NetEdge(
+          id: 'tp', fromId: 'tk', toId: 'pu', service: ServiceType.coldWater),
+      NetEdge(
+          id: 'pm', fromId: 'pu', toId: 'm', service: ServiceType.coldWater),
+      NetEdge(
+          id: 'hm', fromId: 'hi', toId: 'm', service: ServiceType.coldWater),
     ]);
 
-    test('a datum-less plant sits at its floor ceiling, not the roof', () {
+    test(
+        'a floor-standing plant prints its solved floor height, never the roof',
+        () {
       final labels = planEdgeElevationLabels(net, _threeStoreys);
-      // tank->pump: (3.70 + 3.70)/2 - 0 = +3.70 (was (12 + 12)/2 = +12.00).
-      expect(labels['tp'], 'CL +3.70');
-      // pump->main: (3.70 + 3.70)/2 - 0 = +3.70 (was (12 + 3.7)/2 = +7.85).
-      expect(labels['pm'], 'CL +3.70');
+      // The solve puts a datum-less pump / ground tank on its floor surface
+      // (water-drainage-1): FFL 0.00. The label renders that same elevation.
+      // tank->pump: (0.00 + 0.00)/2 - 0 = +0.00 (was (12 + 12)/2 = +12.00).
+      expect(labels['tp'], 'CL +0.00');
+      // pump->main: (0.00 + 3.70)/2 - 0 = +1.85 (was (12 + 3.7)/2 = +7.85).
+      expect(labels['pm'], 'CL +1.85');
       for (final v in labels.values) {
         final h = double.parse(v.substring(4)); // 'CL +x.xx'
         expect(h, inInclusiveRange(0, 4.0), reason: v);
@@ -287,8 +297,27 @@ void main() {
       expect(labels.containsKey('hm'), isFalse);
     });
 
-    test('the solve datum is untouched (nodeElevation still roof)', () {
-      expect(nodeElevation(net.nodeById('pu')!, _threeStoreys).meters, 12.0);
+    test('the label equals the solve datum for a floor-standing plant', () {
+      // One elevation source (golden rule 5): label == nodeElevation == FFL 0.
+      expect(nodeElevation(net.nodeById('pu')!, _threeStoreys).meters, 0.0);
+      expect(planSettingOutElevation(net.nodeById('pu')!, _threeStoreys).meters,
+          0.0);
+    });
+
+    test('a datum-less ROOF tank on a lower sheet falls back to its ceiling',
+        () {
+      const rt = NetNode(
+          id: 'rt',
+          sheetId: 's',
+          x: 0,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.plant,
+          component: NodeComponent.roofTank);
+      // Solve: roof datum 12.0 m; the plan label uses floor 0's ceiling 3.70 m.
+      expect(nodeElevation(rt, _threeStoreys).meters, 12.0);
+      expect(planSettingOutElevation(rt, _threeStoreys).meters,
+          closeTo(3.70, 1e-9));
     });
   });
 
@@ -320,7 +349,8 @@ void main() {
     NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
     NetEdge(id: 'e2', fromId: 'b', toId: 'c', service: ServiceType.coldWater),
   ]);
-  EdgeSizing dn(String id, double mm, {ServiceType s = ServiceType.coldWater}) =>
+  EdgeSizing dn(String id, double mm,
+          {ServiceType s = ServiceType.coldWater}) =>
       EdgeSizing(
           edgeId: id,
           service: s,
@@ -380,7 +410,8 @@ void main() {
         // Column line top / row line left end + the 20 pt bubble strip
         // (centre r + 2 = 11 off the end, radius 9) stays in the frame too.
         if (x1 == x2) expect(math.max(y1, y2) + 20, lessThanOrEqualTo(frameT));
-        if (y1 == y2) expect(math.min(x1, x2) - 20, greaterThanOrEqualTo(frameL));
+        if (y1 == y2)
+          expect(math.min(x1, x2) - 20, greaterThanOrEqualTo(frameL));
       }
       for (final r in rows) {
         for (final cx in cols) {
@@ -398,13 +429,15 @@ void main() {
           metersPerPixel: 0.02,
           grid: planGrid);
       final ents = _dxfEntities(dxf);
-      final grid = ents.where((e) =>
-          e['0']!.first == 'LINE' && e['8']?.first == 'G-ANNO-GRID');
+      final grid = ents.where(
+          (e) => e['0']!.first == 'LINE' && e['8']?.first == 'G-ANNO-GRID');
       // mm world, Y negated: rows at -230/-300/-500 px x 20 = -4600 / -6000 /
       // -10000 mm; columns at 2000 / 7000 / 12000 / 22000 mm.
       for (final l in grid) {
-        final x1 = double.parse(l['10']!.first), y1 = double.parse(l['20']!.first);
-        final x2 = double.parse(l['11']!.first), y2 = double.parse(l['21']!.first);
+        final x1 = double.parse(l['10']!.first),
+            y1 = double.parse(l['20']!.first);
+        final x2 = double.parse(l['11']!.first),
+            y2 = double.parse(l['21']!.first);
         if (x1 == x2) {
           expect({math.min(y1, y2), math.max(y1, y2)}, {-10000.0, -4600.0});
         } else {
@@ -431,22 +464,25 @@ void main() {
             legendServices: [ServiceType.coldWater]),
       );
       final ents = _dxfEntities(dxf);
-      final gridLines = ents.where((e) =>
-          e['0']!.first == 'LINE' && e['8']?.first == 'G-ANNO-GRID');
-      final bubbles = ents.where((e) =>
-          e['0']!.first == 'CIRCLE' && e['8']?.first == 'G-ANNO-GRID');
+      final gridLines = ents.where(
+          (e) => e['0']!.first == 'LINE' && e['8']?.first == 'G-ANNO-GRID');
+      final bubbles = ents.where(
+          (e) => e['0']!.first == 'CIRCLE' && e['8']?.first == 'G-ANNO-GRID');
       final chromeText = ents.where((e) =>
           e['0']!.first == 'TEXT' &&
           const {'title', 'legend', 'scale', 'north'}.contains(e['8']?.first));
       expect(chromeText, isNotEmpty);
       for (final t in chromeText) {
-        final tx = double.parse(t['10']!.first), ty = double.parse(t['20']!.first);
+        final tx = double.parse(t['10']!.first),
+            ty = double.parse(t['20']!.first);
         final h = double.parse(t['40']!.first);
         final w = t['1']!.first.length * h * 0.6;
         // TEXT box: x tx..tx+w, y ty..ty+h (baseline at ty).
         for (final l in gridLines) {
-          final x1 = double.parse(l['10']!.first), y1 = double.parse(l['20']!.first);
-          final x2 = double.parse(l['11']!.first), y2 = double.parse(l['21']!.first);
+          final x1 = double.parse(l['10']!.first),
+              y1 = double.parse(l['20']!.first);
+          final x2 = double.parse(l['11']!.first),
+              y2 = double.parse(l['21']!.first);
           final hitsBox = math.max(x1, x2) >= tx &&
               math.min(x1, x2) <= tx + w &&
               math.max(y1, y2) >= ty &&
@@ -454,9 +490,12 @@ void main() {
           expect(hitsBox, isFalse, reason: '"${t['1']!.first}" on grid line');
         }
         for (final c in bubbles) {
-          final cx = double.parse(c['10']!.first), cy = double.parse(c['20']!.first);
+          final cx = double.parse(c['10']!.first),
+              cy = double.parse(c['20']!.first);
           final r = double.parse(c['40']!.first);
-          final hitsBox = cx + r >= tx && cx - r <= tx + w && cy + r >= ty &&
+          final hitsBox = cx + r >= tx &&
+              cx - r <= tx + w &&
+              cy + r >= ty &&
               cy - r <= ty + h;
           expect(hitsBox, isFalse, reason: '"${t['1']!.first}" on a bubble');
         }
@@ -533,7 +572,8 @@ void main() {
       NetNode(id: 'b', sheetId: 's', x: 320, y: 300, floorIndex: 0),
       NetNode(id: 'up', sheetId: 's', x: 320, y: 300, floorIndex: 1),
     ], edges: [
-      NetEdge(id: 'run', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+      NetEdge(
+          id: 'run', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
       NetEdge(
           id: 'ris',
           fromId: 'b',
