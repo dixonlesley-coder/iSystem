@@ -382,19 +382,36 @@ class PuilProfile implements ElectricalStandardsProfile {
     1.5: 20, 2.5: 28, 4: 37, 6: 48, 10: 66, 16: 88, 25: 117, 35: 144,
     50: 175, 70: 222, 95: 269, 120: 312, 150: 358, 185: 408, 240: 481, 300: 553,
   };
-  // Copper/PVC by method C/E (== B1 "in air") and D (buried, "in ground").
+  // Copper/PVC by method C/E (== B1 "in air") and D (buried).
+  //
+  // D is IEC 60364-5-52 Table B.52.2 column D1 (in duct in the ground,
+  // 20 °C ground, 2.5 K·m/W soil), THREE loaded conductors — the SAME basis as
+  // [_khaCuXlpeD] (Table B.52.5 D1, 3-loaded) and as the soil-thermal table
+  // (2.5 K·m/W = 1.0). The previous direct-in-ground catalogue figures
+  // (300 mm² = 465 A) sat on a different installation basis, which made 70 °C
+  // PVC read 16–27 % ABOVE 90 °C XLPE when buried — physically impossible on
+  // one basis — and pushed a buried FRC run up 1–2 copper sizes (2026-10 audit
+  // elec-core-5). // VERIFY — secondarySource (IEC table, not a PUIL clause).
   static final Map<double, double> _khaCuPvcD = {
-    1.5: 24, 2.5: 32, 4: 41, 6: 52, 10: 69, 16: 89, 25: 116, 35: 138,
-    50: 165, 70: 205, 95: 245, 120: 285, 150: 315, 185: 355, 240: 415, 300: 465,
+    1.5: 18, 2.5: 24, 4: 30, 6: 38, 10: 50, 16: 64, 25: 82, 35: 98,
+    50: 116, 70: 143, 95: 169, 120: 192, 150: 217, 185: 243, 240: 280, 300: 316,
   };
-  // Copper/XLPE by method.
+  // Copper/XLPE by method — every column THREE loaded conductors, matching
+  // [_khaCuXlpeB1] and [_khaCuXlpeD]: `ampacity()` has no loaded-conductor
+  // argument and the circuits sized here are overwhelmingly 3φ, so a 2-loaded
+  // column overrates every 3φ run (~15–19 %, NOT conservative). C is Table
+  // B.52.5 column C, 3-loaded; E is Table B.52.12 method E multicore, 3-loaded
+  // (the previous figures, 300 mm² C = 693 / E = 741, were the 2-loaded
+  // columns — 2026-10 audit elec-core-6). A single-phase run reads the 3-loaded
+  // figure too (conservative, as B1/D already do).
+  // VERIFY — secondarySource (IEC tables, not a PUIL clause).
   static final Map<double, double> _khaCuXlpeC = {
-    1.5: 24, 2.5: 33, 4: 45, 6: 58, 10: 80, 16: 107, 25: 138, 35: 171,
-    50: 209, 70: 269, 95: 328, 120: 382, 150: 441, 185: 506, 240: 599, 300: 693,
+    1.5: 22, 2.5: 30, 4: 40, 6: 52, 10: 71, 16: 96, 25: 119, 35: 147,
+    50: 179, 70: 229, 95: 278, 120: 322, 150: 371, 185: 424, 240: 500, 300: 576,
   };
   static final Map<double, double> _khaCuXlpeE = {
-    1.5: 26, 2.5: 36, 4: 49, 6: 63, 10: 86, 16: 115, 25: 149, 35: 185,
-    50: 225, 70: 289, 95: 352, 120: 410, 150: 473, 185: 542, 240: 641, 300: 741,
+    1.5: 23, 2.5: 32, 4: 42, 6: 54, 10: 75, 16: 100, 25: 127, 35: 158,
+    50: 192, 70: 246, 95: 298, 120: 346, 150: 399, 185: 456, 240: 538, 300: 621,
   };
   static final Map<double, double> _khaCuXlpeD = {
     1.5: 21, 2.5: 28, 4: 36, 6: 44, 10: 58, 16: 75, 25: 96, 35: 115,
@@ -701,7 +718,11 @@ class PuilProfile implements ElectricalStandardsProfile {
               'insulations was checked (every document host was blocked by '
               'this environment\'s network egress policy that session); the '
               'full matrix still needs the manufacturer datasheet and the '
-              'PUIL ampacity table for the specific construction.',
+              'PUIL ampacity table for the specific construction. 2026-10 '
+              'audit: the buried (D) PVC column and the XLPE C/E columns were '
+              'moved onto the IEC 60364-5-52 three-loaded-conductor basis '
+              '(B.52.2 D1, B.52.5 C, B.52.12 E) so every method compares like '
+              'with like (XLPE >= PVC; 3-loaded for 3-phase circuits).',
         ),
         const StandardValue<Object?>(
           'ambient / grouping / soil-thermal derating factors',

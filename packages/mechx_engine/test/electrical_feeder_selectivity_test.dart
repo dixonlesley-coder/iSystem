@@ -414,17 +414,22 @@ void main() {
 
   // ── (5) a floor past the ladder top clamps, and says so honestly ──────────
   group('(5) a floor beyond the largest frame clamps to the ladder top', () {
-    // SP: 3φ heater 830 kW at cosφ 1.0 ⇒ Ib = 830 000/(√3·400) = 1198.0018 A
-    //   → 1198.0 A ⇒ SP incomer = first rung ≥ 1198.0 = 1250 A.
-    // Feeder f1 carries the same 830 kW at cosφ 1.0 ⇒ Ib = 1198.0 A ⇒ pass 1
+    // Re-derived 2026-10 (audit elec-core-3): n parallel runs of one circuit
+    // derate as a GROUP (groupingFactor(n): 2→0.8, 3→0.7, 4→0.65), so the old
+    // 830 kW furnace (Iz ≥ 1497.5 A) no longer fits even 4×300 (1300 A); the
+    // fixture moves to a load 4×300 can carry.
+    // SP: 3φ heater 706 kW at cosφ 1.0 ⇒ Ib = 706 000/(√3·400) = 1019.02 A
+    //   → 1019.0 A ⇒ SP incomer = first rung ≥ 1019.0 = 1250 A.
+    // Feeder f1 carries the same 706 kW at cosφ 1.0 ⇒ Ib = 1019.0 A ⇒ pass 1
     //   picks 1250 A, the child incomer's own rung (non-selective).
     // FLOOR = 1.6 × 1250 = 2000 A — beyond the 1600 A ladder top, so the floor
     //   itself clamps to 1600 A (never a throw).
-    // CABLE (load-sized, derating 1.00): Iz ≥ max(1250, 1.25 × 1198.0018 =
-    //   1497.5) = 1497.5 A. One run tops out at 300 mm² (500 A) and two runs at
-    //   1000 A, so it takes 3 parallel runs: 1497.5 / 3 = 499.2 A per run ⇒
-    //   300 mm² (500 A) ⇒ Iz = 3 × 500 = 1500 A.
-    // CAP = 1500 A ⇒ the largest rung ≤ 1500 is 1250 A: the clamped floor is
+    // CABLE (load-sized, single-run derating 1.00): Iz ≥ max(1250, 1.25 ×
+    //   1019.02 = 1273.8) = 1273.8 A. One run tops out at 300 mm² (500 A);
+    //   2 runs need 1273.8/2/0.8 = 796 A per run ✗; 3 runs 1273.8/3/0.7 =
+    //   606.6 A ✗; 4 runs 1273.8/4/0.65 = 489.9 A ⇒ 300 mm² (500 A)
+    //   ⇒ Iz = 4 × 500 × 0.65 = 1300 A.
+    // CAP = 1300 A ⇒ the largest rung ≤ 1300 is 1250 A: the clamped floor is
     //   ALSO out of the conductor's reach, so the device does not move at all
     //   and the residual non-selectivity (1250 / 1250 = 1.0) is left for the
     //   fault study. (The old policy grew the cable to 4 × 240 mm² to carry a
@@ -441,7 +446,7 @@ void main() {
           id: 's1',
           name: 'Furnace',
           loadKind: LoadKind.heating,
-          loadW: 830000,
+          loadW: 706000,
           cosPhi: 1.0,
           phases: 3,
           length: Length(10),
@@ -473,17 +478,18 @@ void main() {
     final sys = computeSystem(p, project);
 
     test('premise: the child incomer sits two rungs below the top', () {
-      expect(sys.panels['SP']!.demandCurrent.amperes, closeTo(1198.0, 1e-9));
+      expect(sys.panels['SP']!.demandCurrent.amperes, closeTo(1019.0, 1e-9));
       expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 1250);
     });
 
     test('the feeder holds at the rung its load-sized conductor protects', () {
       final feeder = _way(sys.panels['MDP']!, 'f1');
       expect(feeder.breaker.ratingA.amperes, 1250);
-      // A real, protected conductor: 3× 300 mm² (500 A each) ⇒ Iz 1500 A.
+      // A real, protected conductor: 4× 300 mm² (500 A each, grouped at 0.65)
+      // ⇒ Iz 1300 A.
       expect(feeder.cable.csaMm2, 300);
-      expect(feeder.cable.runsPerPhase, 3);
-      expect(feeder.cable.deratedIz.amperes, closeTo(1500, 0.1));
+      expect(feeder.cable.runsPerPhase, 4);
+      expect(feeder.cable.deratedIz.amperes, closeTo(1300, 0.1));
       expect(feeder.cable.ampacityReached, isTrue);
       expect(feeder.cable.deratedIz.amperes,
           greaterThanOrEqualTo(feeder.breaker.ratingA.amperes));

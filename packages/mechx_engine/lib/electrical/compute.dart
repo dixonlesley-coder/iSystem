@@ -32,7 +32,7 @@ import 'earthing.dart';
 // anything that reaches it (puil/units/earthing/load_kind/model/panel_results
 // only), so taking `selectivityRatio` from it introduces no import cycle.
 import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
-    selectivityRatio, sourceImpedanceFromIsc;
+    selectivityRatio, solvedRunLengthM, sourceImpedanceFromIsc;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -621,10 +621,18 @@ double effectiveDemandFactor(
   );
 }
 
-/// A leaf circuit's connected demand (W): motor kW ×1000 for motors, else
-/// connected W, times the demand factor. Ported from `computePanel.ts
-/// circuitConnectedW`. With no diversity library/id the factor is the circuit's
-/// own [ElectricalCircuit.demandFactor] ⇒ byte-identical to the original.
+/// A leaf circuit's connected demand (W) — the ELECTRICAL INPUT power the way
+/// draws from the bus — times the demand factor:
+///   * an A5 MEP-derived way (`flaOverrideA` set) → `loadW`, which A5 sets to the
+///     equipment's electrical input power (the same figure its FLA derives from);
+///   * a hand-entered motor/pump way → shaft `motorKw` ×1000 ÷ the assumed motor
+///     efficiency, the SAME electrical-input basis its Ib uses (`_computeCircuit`),
+///     so a feeder/panel/supply demand never under-counts the current the motor
+///     way itself draws;
+///   * anything else → connected `loadW`.
+/// Ported from `computePanel.ts circuitConnectedW` (which summed shaft kW). With
+/// no diversity library/id the factor is the circuit's own
+/// [ElectricalCircuit.demandFactor].
 double circuitConnectedW(
   ElectricalCircuit c, {
   DiversityLibrary? library,
@@ -633,7 +641,15 @@ double circuitConnectedW(
   final isMotor =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
-  final baseW = isMotor ? c.motorKw! * 1000 : c.loadW;
+  final double baseW;
+  if (c.flaOverrideA != null) {
+    baseW = c.loadW;
+  } else if (isMotor) {
+    // Shaft kW → electrical input W via the assumed efficiency (// VERIFY).
+    baseW = c.motorKw! * 1000 / _assumedMotorEfficiency;
+  } else {
+    baseW = c.loadW;
+  }
   return baseW *
       effectiveDemandFactor(c,
           library: library, diversityLibraryId: diversityLibraryId);
@@ -849,6 +865,9 @@ _CircuitComputation _computeCircuit(
     material: panel.material,
     method: installMethod,
     threePhase: threePhase,
+    // Parallel runs of this circuit group with its neighbours (the same count
+    // `dfFor` folded into `df`).
+    groupingCount: c.groupingCountOverride ?? panel.groupingCount,
     vd: CableVoltageDropConstraint(
       length: effectiveLength,
       cosPhi: c.cosPhi,
@@ -1619,9 +1638,12 @@ ElectricalSystemResult computeSystem(
           final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
               ? feederResult!.cable.runsPerPhase!
               : 1;
-          final lengthM = feederModel?.length.meters ?? 0;
+          // The run the feeder was SIZED on (geo when placed) and the PARENT's
+          // conductor material (the parent sized this feeder cable).
+          final lengthM = solvedRunLengthM(feederResult, feederModel);
+          final feederMaterial = byId[parentId]?.material ?? panel.material;
           final single =
-              conductorImpedance(profile, csa, lengthM, panel.material);
+              conductorImpedance(profile, csa, lengthM, feederMaterial);
           final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
           sourceZ = upstreamSourceZ + feederZ;
           faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);

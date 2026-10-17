@@ -703,8 +703,12 @@ FaultStudyResult faultStudy(
       final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
           ? feederResult!.cable.runsPerPhase!
           : 1;
-      final lengthM = feederModel?.length.meters ?? 0;
-      final single = conductorImpedance(profile, csa, lengthM, panelModel.material);
+      // The run the cable was SIZED on (geo when placed, else manual) and the
+      // PARENT's conductor material (the parent sized this feeder).
+      final lengthM = solvedRunLengthM(feederResult, feederModel);
+      final feederMaterial =
+          modelById[parentId]?.material ?? panelModel.material;
+      final single = conductorImpedance(profile, csa, lengthM, feederMaterial);
       final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
       sourceZ = upstreamSourceZ + feederZ;
       faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
@@ -768,7 +772,9 @@ FaultStudyResult faultStudy(
       bool? adsOk;
       if (isTn) {
         final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
-        final lengthM = cModel?.length.meters ?? 0;
+        // Zs on the run the cable + Vd were sized on (geo-derived when placed),
+        // never the stale manual length.
+        final lengthM = solvedRunLengthM(c, cModel);
         final phaseZ0 =
             conductorImpedance(profile, c.cable.csaMm2, lengthM, panelModel.material);
         final peZ0 = conductorImpedance(
@@ -979,6 +985,19 @@ FaultStudyResult faultStudy(
     warnings: warnings,
     verifyItems: faultStudyVerifyItems,
   );
+}
+
+/// The run length (m) a circuit's impedance must be computed on: the SOLVED
+/// [ElectricalCircuitResult.lengthM] — the same run its cable + Vd were sized
+/// on (geo-derived when the panel and load are placed, else the manual length)
+/// — falling back to the model's manual length when the result carries none
+/// (0, e.g. a hand-built result). Using the manual length on a placed layout
+/// computed Zs/ADS and the downstream fault on a stale run (a 50 m placed run
+/// checked as the 10 m default ⇒ a failing ADS reported as a pass).
+double solvedRunLengthM(
+    ElectricalCircuitResult? result, ElectricalCircuit? model) {
+  if (result != null && result.lengthM > 0) return result.lengthM;
+  return model?.length.meters ?? 0;
 }
 
 ElectricalCircuitResult? _circuitById(ElectricalPanelResult? panel, String id) {
