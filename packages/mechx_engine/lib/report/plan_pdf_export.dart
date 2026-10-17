@@ -691,14 +691,19 @@ Uint8List planToPdf({
             titleTextOverride: blockTitle,
             dateTextOverride: blockDate)
         .ops);
-    cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
+    cs.write(pdfLegend(chrome,
+        originX: margin + kLegendFrameInset, originY: margin + 28));
     cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
   // The honest divided scale bar rides the calibration (A3): drawn ONLY when a
   // real points-per-metre exists — never at an arbitrary auto-fit ratio.
   if (pointsPerMeter != null) {
+    // drafting-9: on a framed (chrome) sheet the bar sits kScaleBarFrameInset
+    // above the frame line so its figures print INSIDE the frame.
     cs.write(pdfScaleBarReal(
-        pointsPerMeter: pointsPerMeter, centerX: pageW / 2, baseY: margin));
+        pointsPerMeter: pointsPerMeter,
+        centerX: pageW / 2,
+        baseY: hasChrome ? margin + kScaleBarFrameInset : margin));
   }
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────

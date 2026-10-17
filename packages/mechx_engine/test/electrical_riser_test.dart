@@ -531,8 +531,8 @@ void main() {
       final labels = feederLabels(sheet);
       // The legacy anchor of a fed board: its box right edge + 6, on the branch
       // (the box centre-line) less 4. Boards are 168 x 46 packed from x = 174
-      // (gutter 150 + gap 24) at a 192 pitch, band 0 top y = 300 (two bands
-      // above it at 150 each) ⇒ branch y = 300 + 23 = 323, anchors y = 319 and
+      // (gutter 150 + gap 24) at a 192 pitch, band 0 top y = 320 (two bands
+      // above it at 160 each) ⇒ branch y = 320 + 23 = 343, anchors y = 339 and
       // x in {540, 732, 924} for the boards at x = 366 / 558 / 750.
       final anchors = {
         for (final r in sheet.prims.whereType<SldRect>())
@@ -547,13 +547,13 @@ void main() {
       // slot runs PAST the feeder channel: each tag is 32 chars x 6.5 x 0.6 =
       // 124.8 wide, so from x 924 it reaches 1048.8, while the channel sits at
       // sheetMaxX + 40 = (174 + 4 x 192) + 40 = 982 — and that feeder's own
-      // riser leg spans the channel from the MDP bus row (300 - 12 = 288) down
-      // to the branch (323), right through the glyph box [312.5, 319]. The
+      // riser leg spans the channel from the MDP bus row (320 - 12 = 308) down
+      // to the branch (343), right through the glyph box [332.5, 339]. The
       // channel vertical is an obstacle (drawing-output residual), so that tag
-      // escapes to the first channel-column slot: (982 + 10, 323 - 4).
+      // escapes to the first channel-column slot: (982 + 10, 343 - 4).
       expect(kept, isEmpty, reason: 'kept: ${kept.map((l) => l.text)}');
       expect(moved.length, 3);
-      expect(labels.any((l) => l.x == 992.0 && l.y == 319.0), isTrue);
+      expect(labels.any((l) => l.x == 992.0 && l.y == 339.0), isTrue);
 
       // Every moved tag gets a THIN leader ending exactly on it, starting on a
       // board's branch line: a box centre-line, or — when a sibling sits
@@ -639,23 +639,23 @@ void main() {
       bool leadered(SldLabel l) => s.prims.whereType<SldLine>().any((ln) =>
           ln.weight == SldWeight.thin && ln.x2 == l.x && ln.y2 == l.y);
       expect(leadered(top.single), isFalse);
-      // The MIDDLE band's tag (LP-1, branch y 150 + 23 = 173, anchor (348,
-      // 169)) is 32 x 6.5 x 0.6 = 124.8 wide ⇒ it would reach 472.8, past the
+      // The MIDDLE band's tag (LP-1, branch y 160 + 23 = 183, anchor (348,
+      // 179)) is 32 x 6.5 x 0.6 = 124.8 wide ⇒ it would reach 472.8, past the
       // channel at sheetMaxX + 40 = 366 + 40 = 406, where the LP-1 -> LP-2
-      // riser leg (y 23 .. 173) strikes through its glyph box [162.5, 169]. The
+      // riser leg (y 23 .. 183) strikes through its glyph box [172.5, 179]. The
       // channel vertical is an obstacle (drawing-output residual), so the tag
-      // takes the first channel-column slot (406 + 10, 173 - 4) and gets a
-      // thin leader from its branch end on the channel (406, 173).
-      final mid = labels.where((l) => l.x == 416.0 && l.y == 169.0).toList();
+      // takes the first channel-column slot (406 + 10, 183 - 4) and gets a
+      // thin leader from its branch end on the channel (406, 183).
+      final mid = labels.where((l) => l.x == 416.0 && l.y == 179.0).toList();
       expect(mid, hasLength(1),
           reason: labels.map((l) => '${l.x},${l.y}').join(' '));
       expect(
           s.prims.whereType<SldLine>().any((ln) =>
               ln.weight == SldWeight.thin &&
               ln.x1 == 406.0 &&
-              ln.y1 == 173.0 &&
+              ln.y1 == 183.0 &&
               ln.x2 == 416.0 &&
-              ln.y2 == 169.0),
+              ln.y2 == 179.0),
           isTrue);
     });
   });

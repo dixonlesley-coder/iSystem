@@ -277,11 +277,15 @@ void main() {
       expect(s.isEmpty, isFalse);
       expect(s.maxX, greaterThan(s.minX));
       expect(s.maxY, greaterThan(s.minY));
-      // KETERANGAN device legend carries the reference fitting glossary.
+      // drafting-8: the KETERANGAN keys what the sheet DRAWS. This bare riser
+      // prints its service code and a riser id, so those are keyed; it draws
+      // no valve or meter, so no fitting code is listed for it.
       final codes = s.legend.map((e) => e.code).toSet();
-      expect(codes, containsAll(<String>{'GV', 'CV', 'STR', 'PRV', 'WM'}));
-      // The cold-water service present is keyed too.
       expect(codes, contains('CW'));
+      expect(codes, contains('CW-R1'));
+      expect(codes, isNot(contains('PRV')));
+      expect(codes, isNot(contains('WM')));
+      expect(codes, isNot(contains('AAV')));
     });
 
     test('a sized cold-water riser carries the SIZE-CW-PPR tag + a riser id', () {
@@ -338,7 +342,10 @@ void main() {
       // The mechanical diagram title + the KETERANGAN legend ride the export.
       expect(pdf, contains('DIAGRAM SISTEM AIR BERSIH'));
       expect(pdf, contains('LEGEND'));
-      expect(pdf, contains('Gate valve')); // a fitting-legend meaning
+      // drafting-8: the legend keys the tag's own codes — the riser prints
+      // 50-CW-PPR-GRAVITASI, so its material + function codes are explained.
+      expect(pdf, contains('Gravity feed from the roof tank'));
+      expect(pdf, isNot(contains('Water meter'))); // no meter is drawn
     });
 
     test('the riser sheet exports to a DXF carrying the legend + mech title',
@@ -939,6 +946,53 @@ void main() {
       expect(noPump, isNot(contains('STR')));
       expect(noPump, isNot(contains('CV')));
       expect(noPump, isNot(contains('FJ')));
+    });
+
+    // ── drafting-8: the legend keys exactly the codes the sheet prints ────────
+    test('drafting-8: the KETERANGAN keys every drawn code and no undrawn one',
+        () {
+      // The pump-set detail draws GV / STR / FJ / CV: each is keyed; PRV, WM
+      // and AAV appear nowhere on the sheet, so they are not.
+      final s = buildMechanicalRiserSld(
+        network: _riserNetWithPump(),
+        building: _levels,
+        detailCallouts: true,
+        equipmentDetailByNodeId: const {'p': '2.2 kW'},
+      );
+      final codes = s.legend.map((e) => e.code).toSet();
+      expect(codes, containsAll(<String>{'GV', 'STR', 'FJ', 'CV'}));
+      expect(codes, isNot(contains('PRV')));
+      expect(codes, isNot(contains('WM')));
+      expect(codes, isNot(contains('AAV')));
+      // Every printed label token that is a glossary code is keyed (no drawn
+      // abbreviation is left unexplained).
+      final tokens = {
+        for (final l in s.prims.whereType<SldLabel>())
+          ...l.text.split(RegExp(r'[\s\-\u00B7/()]+'))
+      };
+      for (final c in const ['GV', 'CV', 'STR', 'FJ', 'PRV', 'WM', 'AAV',
+          'HWR', 'PPR', 'PVC', 'BOOSTER', 'TRANSFER', 'GRAVITASI']) {
+        expect(codes.contains(c), tokens.contains(c), reason: c);
+      }
+      // A sized riser's tag material + function codes are keyed.
+      final sized = buildMechanicalRiserSld(
+        network: _riserNet(),
+        sizing: {'riser': _sz('riser', ServiceType.coldWater, 50)},
+        building: _levels,
+        downfeed: true,
+      );
+      final sizedCodes = sized.legend.map((e) => e.code).toSet();
+      expect(sizedCodes, containsAll(<String>{'PPR', 'GRAVITASI'}));
+      // The HWR return (dashed) is keyed when the recirc leg is drawn.
+      final hwr = buildMechanicalRiserSld(
+        network: _hwRiserNet(),
+        building: _levels,
+        hotWaterRecirc: true,
+      );
+      expect(hwr.legend.map((e) => e.code), contains('HWR'));
+      final noHwr =
+          buildMechanicalRiserSld(network: _hwRiserNet(), building: _levels);
+      expect(noHwr.legend.map((e) => e.code), isNot(contains('HWR')));
     });
 
     // ── G4: drainage reference details + the sewer/STP terminus ───────────────

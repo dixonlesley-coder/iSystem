@@ -105,11 +105,18 @@ class MasterLegendEntry {
   final NodeComponent? component;
   final String code;
   final String meaning;
+
+  /// The service a SERVICES row keys (drafting-8). Its swatch line is drawn on
+  /// that service's riser-code layer, so the PDF strokes it in the service's
+  /// plan colour and the DXF puts it on the service's AIA layer: the key reads
+  /// the same as the coloured runs it explains. Null for non-service rows.
+  final ServiceType? service;
   const MasterLegendEntry({
     required this.kind,
     required this.code,
     required this.meaning,
     this.component,
+    this.service,
   });
 }
 
@@ -169,6 +176,7 @@ List<MasterLegendSection> buildMasterLegendSections({
               : LegendGlyphKind.line,
           code: riserServiceCode(s),
           meaning: serviceChromeLabel(s),
+          service: s,
         ),
   ];
   if (svcRows.isNotEmpty) {
@@ -512,12 +520,16 @@ void _addLegendGlyph(
   required double cx,
   required double cy,
 }) {
+  // drafting-8: a service swatch rides its riser-code layer, which both
+  // renderers colour as that service (PDF stroke colour, DXF service layer).
+  final swatchLayer = e.service == null ? null : riserServiceCode(e.service!);
   switch (e.kind) {
     case LegendGlyphKind.line:
-      prims.add(SldLine(cx - 16, cy, cx + 16, cy, weight: SldWeight.medium));
+      prims.add(SldLine(cx - 16, cy, cx + 16, cy,
+          weight: SldWeight.thick, layer: swatchLayer));
     case LegendGlyphKind.lineDashed:
       prims.add(SldLine(cx - 16, cy, cx + 16, cy,
-          weight: SldWeight.medium, dashed: true));
+          weight: SldWeight.thick, layer: swatchLayer, dashed: true));
     case LegendGlyphKind.component:
       if (e.component != null) {
         prims.addAll(planComponentPrims(e.component!, cx: cx, cy: cy, size: 15));

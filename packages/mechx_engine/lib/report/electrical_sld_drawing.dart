@@ -116,6 +116,17 @@ String _starterCode(StarterType s) => switch (s) {
       StarterType.pump => 'pump',
     };
 
+/// The KETERANGAN meaning of a [_starterCode] token (drafting-8).
+String _starterMeaning(StarterType s) => switch (s) {
+      StarterType.dol => 'Direct-on-line starter',
+      StarterType.starDelta => 'Star-delta starter',
+      StarterType.reversing => 'Reversing starter',
+      StarterType.softStarter => 'Soft starter',
+      StarterType.vfd => 'Variable-frequency drive',
+      StarterType.ats => 'Automatic transfer switch',
+      StarterType.pump => 'Pump control panel',
+    };
+
 String _curveCode(BreakerCurve c) => switch (c) {
       BreakerCurve.b => 'B',
       BreakerCurve.c => 'C',
@@ -391,6 +402,12 @@ SldSheet buildElectricalSld({
   // metering cluster (N11) — drives the matching KETERANGAN legend entries.
   var anyIcuKa = false;
   var anyMetering = false;
+  // drafting-8: the row tokens actually printed (starter / RCD / conduit /
+  // tray), so the KETERANGAN keys every abbreviation the schedule uses.
+  final usedStarters = <StarterType>{};
+  var anyRcd = false;
+  var anyConduit = false;
+  var anyTray = false;
 
   // Lay panels top-to-bottom (root-first), indented by depth. Record each box +
   // each way's anchor so feeders can be routed afterward.
@@ -598,6 +615,11 @@ SldSheet buildElectricalSld({
       final conduit = conduitMm != null
           ? ' · ${conduitCount}PVC ${conduitMm}mm'
           : ' · tray';
+      if (conduitMm != null) {
+        anyConduit = true;
+      } else {
+        anyTray = true;
+      }
       // The run LENGTH the solve already used for this way (geo-derived when
       // placed, else the manual circuit length) — the cable-takeoff figure that
       // also drove the printed Vdrop (N8). Printed ONLY when a real length
@@ -613,6 +635,8 @@ SldSheet buildElectricalSld({
       // star-delta) APPENDED only when the way carries a real starterType —
       // most final lighting/socket ways have none, so the cell stays bare.
       final starter = circuit?.starterType;
+      if (starter != null) usedStarters.add(starter);
+      if (c.rcd.required) anyRcd = true;
       // The RCD / RCBO protection token (N10) — the SAME `RcdSpec` the calc
       // report prints (schedule + report agree), appended only when the way
       // actually carries an RCD (most sockets / TT finals). e.g. `RCD 30mA A`.
@@ -800,6 +824,33 @@ SldSheet buildElectricalSld({
     legend
       ..add(const SldLegendEntry('V / A / Hz', 'Panel metering instruments'))
       ..add(const SldLegendEntry('CT', 'Metering current transformer (x/5A)'));
+  }
+  // drafting-8: every remaining row abbreviation, keyed only when printed.
+  if (anyRcd) {
+    legend.add(const SldLegendEntry(
+        'RCD', 'Residual current device (rated mA, RCD type)'));
+  }
+  if (anyConduit) {
+    legend.add(const SldLegendEntry('PVC', 'PVC conduit, outer diameter mm'));
+  }
+  if (anyTray) {
+    legend.add(const SldLegendEntry('tray', 'Run on cable tray / ladder'));
+  }
+  for (final st in StarterType.values) {
+    if (usedStarters.contains(st)) {
+      legend.add(SldLegendEntry(_starterCode(st), _starterMeaning(st)));
+    }
+  }
+  // A separately-run earth conductor family (`NYA` / `BC`) when any label
+  // prints one that is not already keyed as a way's cable family.
+  final rowTokens = <String>{
+    for (final pr in prims)
+      if (pr is SldLabel) ...pr.text.split(RegExp(r'[\s\u00B7/+()]+')),
+  };
+  for (final f in const ['NYA', 'BC']) {
+    if (rowTokens.contains(f) && !usedFamilies.contains(f)) {
+      legend.add(SldLegendEntry(f, cableFamilyDescription(f)));
+    }
   }
 
   final s = result.supply;
@@ -1413,8 +1464,11 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
         // tier sub below it.
         _emitPanelBox(prims, centreX, midY, _ovW, _ovH - 8, node.name, role);
         if (node.sub != null) {
+          // drafting-9: baseline 7 below the band so the caption's capitals
+          // clear the box's bottom edge (at y + _ovH - 4) even after the plot
+          // fit grows the caption to the minimum plotted size.
           prims.add(
-              SldLabel(nodeX, y + _ovH + 1, node.sub!, size: 7.5, role: role));
+              SldLabel(nodeX, y + _ovH + 7, node.sub!, size: 7.5, role: role));
         }
     }
     prevBottom = y + _ovH;
@@ -1580,7 +1634,11 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   prims.add(SldLine(isMv ? nodeX : centreX - 12, lvMidY, earthX, lvMidY,
       weight: SldWeight.medium, role: SldRole.source));
   _emitEarth(prims, earthX, lvMidY, SldRole.source);
-  prims.add(SldLabel(earthX - 16, lvMidY + 30, project.earthingSystem.label,
+  // drafting-9: the designation hangs below the earth bars, starting 40 to the
+  // LEFT of the mark, so it reads under the symbol and keeps clear of the
+  // board's tier caption ('LV main') to its right, with room to grow to the
+  // minimum plotted size on a scaled-down sheet.
+  prims.add(SldLabel(earthX - 40, lvMidY + 28, project.earthingSystem.label,
       size: 7.5, bold: true, role: SldRole.source));
 
   return (
@@ -2021,8 +2079,10 @@ SldSheet buildElectricalOverview({
           maxX = math.max(maxX, math.max(pr.x1, pr.x2));
           maxY = math.max(maxY, math.max(pr.y1, pr.y2));
         case SldLabel():
+          // drafting-9: a label's glyphs rise ABOVE its baseline, so its top
+          // (y - size) bounds the sheet, not the baseline.
           minX = math.min(minX, pr.x);
-          minY = math.min(minY, pr.y);
+          minY = math.min(minY, pr.y - pr.size);
         case SldCircle():
           minX = math.min(minX, pr.cx - pr.r);
           minY = math.min(minY, pr.cy - pr.r);
@@ -2070,12 +2130,12 @@ SldSheet buildElectricalOverview({
 
 /// Gutter + band geometry for the riser.
 const double _riserGutterW = 150;
-const double _riserBandH = 150;
+const double _riserBandH = 160;
 const double _riserPanelGap = 24;
 
 /// How far above a band's boxes its BUS ROW runs — the clear gap between the
 /// previous band's floor grid line (31 units above the boxes:
-/// `_riserBandH − _ovH − _fanColH − _riserPanelGap/2` = 150 − 46 − 61 − 12)
+/// `_riserBandH − _ovH − _fanColH − _riserPanelGap/2` = 160 − 46 − 71 − 12)
 /// and the box tops, where a feeder / supply leg that would otherwise cross a
 /// board is routed instead. A drafting choice, not a standard.
 const double _riserBusOffset = 12;
@@ -2150,8 +2210,14 @@ typedef _RiserLeg = ({
 /// labelled stubs before collapsing the remainder to a `+N more` summary, the
 /// pitch of each stub row, and the reserved column height that the floor grid
 /// line clears (so the densest board never overruns the next band).
+///
+/// drafting-6: the 13-unit pitch and the 6-unit gap under the box leave room
+/// for the plot fit (`sld_plot_fit.dart`) to grow each stub label to the
+/// minimum plotted size on a scaled-down sheet without touching the box or the
+/// next row (was an 11 pitch with a 4 gap, which boxed the labels in).
 const int kRiserFanMax = 4;
-const double _fanRowH = 11;
+const double _fanRowH = 13;
+const double _fanTopGap = 6;
 const double _fanColH = (kRiserFanMax + 1) * _fanRowH + 6;
 
 /// Drawn size of a fan-out stub label — also the font-size term in its
@@ -2975,7 +3041,7 @@ SldSheet buildElectricalRiser({
     final fanTotalBudget = fanCharW <= 0 ? 14 : (fanAvailX / fanCharW).floor();
     var row = 0;
     for (final cr in shown) {
-      final sy = y + _ovH + 4 + row * _fanRowH;
+      final sy = y + _ovH + _fanTopGap + row * _fanRowH;
       prims.add(
           SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
       final ph = cr.threePhase ? ' 3ph' : '';
@@ -2988,7 +3054,7 @@ SldSheet buildElectricalRiser({
     }
     if (loadWays.length > kRiserFanMax) {
       final more = loadWays.length - kRiserFanMax;
-      final sy = y + _ovH + 4 + row * _fanRowH;
+      final sy = y + _ovH + _fanTopGap + row * _fanRowH;
       prims.add(
           SldLine(x + 8, sy, x + 22, sy, weight: SldWeight.thin, role: role));
       prims.add(SldLabel(x + 26, sy + 3, '+$more more',
@@ -3012,7 +3078,8 @@ SldSheet buildElectricalRiser({
         maxY = math.max(maxY, math.max(pr.y1, pr.y2));
         maxX = math.max(maxX, math.max(pr.x1, pr.x2));
       case SldLabel():
-        minY = math.min(minY, pr.y);
+        // drafting-9: the label's top (y - size), not its baseline.
+        minY = math.min(minY, pr.y - pr.size);
       case SldCircle():
         minY = math.min(minY, pr.cy - pr.r);
         maxY = math.max(maxY, pr.cy + pr.r);

@@ -133,13 +133,18 @@ void main() {
         margin: 24,
         projectName: 'Tower A',
       );
-      // Present rows: PROJECT, TITLE, DWG NO, DRAWN, CHECKED, APPROVED ->
-      // 6 rows * 13pt = 78 (the sign-off trio is always ruled).
-      expect(tb.height, closeTo(78.0, 1e-9));
+      // Present rows: PROJECT, TITLE, DWG NO, DRAWN, CHECKED, APPROVED (the
+      // sign-off trio is always ruled). Five 13 pt rows = 65, plus the TITLE
+      // row: 'GROUND FLOOR PLUMBING' at 14 pt wraps in the 130 pt cell to
+      // 'GROUND FLOOR' (8167 AFM units x 14 / 1000 = 114.3 pt) + 'PLUMBING',
+      // two lines at a 1.15 x 14 pt pitch + 4 pt = 36.2 (drafting-6). 101.2.
+      expect(tb.height, closeTo(65.0 + 2 * 14 * 1.15 + 4, 1e-9));
       expect(tb.ops, contains('(PROJECT) Tj'));
       expect(tb.ops, contains('(Tower A) Tj'));
       expect(tb.ops, contains('(TITLE) Tj'));
-      expect(tb.ops, contains('(GROUND FLOOR PLUMBING) Tj'));
+      // The 14 pt title wraps in the cell (drafting-6).
+      expect(tb.ops, contains('(GROUND FLOOR) Tj'));
+      expect(tb.ops, contains('(PLUMBING) Tj'));
       // The whole sign-off block rules a cell even when only DRAWN has a name.
       expect(tb.ops, contains('(DRAWN) Tj'));
       expect(tb.ops, contains('(AB) Tj'));
@@ -234,7 +239,7 @@ void main() {
       expect(size, 5.0);
     });
 
-    test('the title-block TITLE cell shrinks a long title, keeps a short one',
+    test('the title-block TITLE cell wraps a long title at 14 pt (drafting-6)',
         () {
       final long = pdfTitleBlock(
         const DrawingChrome(),
@@ -244,11 +249,19 @@ void main() {
         projectName: 'P',
         titleTextOverride: 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR',
       );
-      // The TITLE value is emitted at a reduced font (a fractional Tf), never the
-      // fixed 8 pt that would bleed past the cell.
-      expect(long.ops, contains('DIAGRAM SISTEM AIR BERSIH & AIR KOTOR'));
-      expect(RegExp(r'/F1 [0-7]\.\d+ Tf').hasMatch(long.ops), isTrue);
-      // A short title still renders at the literal 8 pt (byte-identical path).
+      // drafting-6: the TITLE value no longer shrinks — it prints at the 14 pt
+      // sheet-title size and WRAPS, every line within the 130 pt cell, the
+      // lines rejoining to the full title.
+      final lines = RegExp(r'/F1 14\.00 Tf 0 0 0 rg [0-9.]+ [0-9.]+ Td \((.*?)\) Tj')
+          .allMatches(long.ops)
+          .map((m) => m.group(1)!)
+          .toList();
+      expect(lines.join(' '), 'DIAGRAM SISTEM AIR BERSIH & AIR KOTOR');
+      expect(lines.length, greaterThan(1));
+      for (final l in lines) {
+        expect(_helvWidth(l, 14), lessThanOrEqualTo(130.0));
+      }
+      // A short title prints on one line at the same 14 pt.
       final short = pdfTitleBlock(
         const DrawingChrome(drawingTitle: 'PLAN'),
         pageW: 842,
@@ -256,7 +269,7 @@ void main() {
         margin: 24,
         projectName: 'P',
       );
-      expect(short.ops, contains('/F1 8 Tf 0 0 0 rg'));
+      expect(short.ops, contains('/F1 14.00 Tf 0 0 0 rg'));
       expect(short.ops, contains('(PLAN) Tj'));
     });
   });
@@ -574,7 +587,10 @@ void main() {
       expect(s, contains('Rev. A'));
       expect(s, contains('(SHEET) Tj'));
       expect(s, contains('(1 of 3) Tj'));
-      expect(s, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
+      // The 14 pt TITLE wraps one word a line in the 130 pt cell (drafting-6).
+      expect(s, contains('(ELECTRICAL) Tj'));
+      expect(s, contains('(SINGLE-LINE) Tj'));
+      expect(s, contains('(DIAGRAM) Tj'));
       expect(s.trimRight().endsWith('%%EOF'), isTrue);
     });
   });

@@ -430,12 +430,15 @@ Uint8List electricalPlanToPdf({
       cs.writeln('${_n(px - w / 2)} ${_n(py - h / 2)} m '
           '${_n(px + w / 2)} ${_n(py + h / 2)} l S');
       label(px + w / 2 + 4, py + 1, nd.tag, size: 9);
-      if (nd.sub != null) label(px + w / 2 + 4, py - 8, nd.sub!, size: 6);
+      // drafting-6: sub-labels at the minimum plotted size.
+      if (nd.sub != null) {
+        label(px + w / 2 + 4, py - 9, nd.sub!, size: kMinPlotLabelPt);
+      }
     } else {
       // A load / outlet: a small circle.
       circle(px, py, 5);
       label(px + 8, py + 1, nd.tag, size: 7);
-      if (nd.sub != null) label(px + 8, py - 7, nd.sub!, size: 6);
+      if (nd.sub != null) label(px + 8, py - 8, nd.sub!, size: kMinPlotLabelPt);
     }
   }
 
@@ -489,8 +492,12 @@ Uint8List electricalPlanToPdf({
         pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
   if (pointsPerMeter != null) {
+    // drafting-9: on a framed (chrome) sheet the bar sits kScaleBarFrameInset
+    // above the frame line so its figures print INSIDE the frame.
     cs.write(pdfScaleBarReal(
-        pointsPerMeter: pointsPerMeter, centerX: pageW / 2, baseY: margin));
+        pointsPerMeter: pointsPerMeter,
+        centerX: pageW / 2,
+        baseY: hasChrome ? margin + kScaleBarFrameInset : margin));
   }
 
   return assemblePlanPdfDocument(
