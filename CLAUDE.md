@@ -1470,6 +1470,11 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   sizes that cable and the BOM procures it, so every schedule / feeder label
   prints that count with no separate `+ NYA/BC` earth token
   (`NYY 3x4 mm2`); parallel runs print `Nx(...)`.
+- **Plan labels: one placer, gravity runs carry no CL**: the plan PDF and DXF
+  place every run/riser/equipment tag through `placePlanLabel` (beside its own
+  run first, then a two-line split, then a capped leader); round sizes print `Ø`
+  in PDFs / `%%c` in DXF; gravity (drainage/vent/rainwater) runs print size +
+  length + `1:N` fall but never a `CL` (no sub-slab/invert model exists).
 - **Every DXF string goes through `dxfText`** (drawing_chrome.dart): R12/AC1009
   with ASCII-only text (`·`→`-`, Ø→`%%c`, °→`%%d`), so AutoCAD never shows `Â·`.
   Compare PDF==DXF label parity THROUGH the encoder.
