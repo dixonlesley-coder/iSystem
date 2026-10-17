@@ -31,8 +31,9 @@ import 'earthing.dart';
 // `fault.dart` is a pure post-processing pass that imports neither this file nor
 // anything that reaches it (puil/units/earthing/load_kind/model/panel_results
 // only), so taking `selectivityRatio` from it introduces no import cycle.
-import 'fault.dart' show Impedance, conductorImpedance, downstreamFaultA,
-    selectivityRatio, sourceImpedanceFromIsc;
+import 'fault.dart' show Impedance, conductorImpedance, faultBasisLineVoltageV,
+    feederNeutralImpedance, selectivityRatio, sourceImpedanceFromIsc,
+    subPanelBusFaultA;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -1586,6 +1587,7 @@ ElectricalSystemResult computeSystem(
     final warnings = <ElectricalWarning>[...baseWarnings];
     final panelFaultA = <String, double>{};
     final panelSourceZ = <String, Impedance>{};
+    final panelNeutralZ = <String, Impedance>{};
 
     // Size every panel (root-first is fine for the core; demand is precomputed).
     final results = <String, ElectricalPanelResult>{};
@@ -1596,15 +1598,19 @@ ElectricalSystemResult computeSystem(
       // Prospective fault + source impedance at this bus (FOLD 1), when enabled.
       Current? faultLevelA;
       if (applyWithstand) {
-        final lineVoltageV = panel.voltage.volts;
+        // Source Z on the LV network LINE basis (a 1-phase board stores its
+        // 220 V phase voltage — same voltage basis as `faultStudy`).
+        final lineVoltageV = faultBasisLineVoltageV(panel);
         final parentId = parentOf[id];
         final feederId = feederCircuitOf[id];
         final double faultA;
         final Impedance sourceZ;
+        final Impedance neutralZ;
         if (parentId == null || feederId == null) {
           // Root / utility-fed panel — the full origin fault.
           faultA = originIscA;
           sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
+          neutralZ = const Impedance(0, 0);
         } else {
           final upstreamIscA = panelFaultA[parentId] ?? originIscA;
           final upstreamSourceZ = panelSourceZ[parentId] ??
@@ -1624,10 +1630,17 @@ ElectricalSystemResult computeSystem(
               conductorImpedance(profile, csa, lengthM, panel.material);
           final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
           sourceZ = upstreamSourceZ + feederZ;
-          faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+          neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
+              feederNeutralImpedance(profile, csa,
+                  feederResult?.grounding.neutralCsaMm2 ?? 0, lengthM,
+                  panel.material, runs);
+          // 3-phase board: V_LL/(√3·|Z|); 1-phase board: the L-N fault
+          // U0/|Z_phase + Z_neutral| (never 220 V in the 3-phase formula).
+          faultA = subPanelBusFaultA(panel, sourceZ, neutralZ, upstreamIscA);
         }
         panelFaultA[id] = faultA;
         panelSourceZ[id] = sourceZ;
+        panelNeutralZ[id] = neutralZ;
         faultLevelA = Current(faultA);
       }
 
