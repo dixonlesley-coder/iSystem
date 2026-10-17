@@ -62,11 +62,16 @@ class _Command {
   final String shortcut;
   final VoidCallback run;
 
+  /// Extra titles matched like [title] but never shown — keeps a merged
+  /// command findable under its former names (e.g. 'Sources').
+  final List<String> aliases;
+
   const _Command({
     required this.id,
     required this.title,
     this.subtitle = '',
     this.shortcut = '',
+    this.aliases = const [],
     required this.run,
   });
 }
@@ -121,6 +126,25 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Design view',
       shortcut: 'Ctrl+3',
       run: () => openDesign(WorkspaceView.electrical),
+    ),
+    // The ONE electrical Supply inspector (utility / earthing / backup /
+    // advanced). The former 'Service & Earthing' and 'Sources' editors were
+    // merged into it, so their titles stay as search aliases.
+    _Command(
+      id: 'electrical.supply',
+      title: context.strings(StringKey.paletteElectricalSupply),
+      subtitle: context.strings(StringKey.paletteElectricalSupplySubtitle),
+      aliases: [
+        context.strings(StringKey.electricalSupply),
+        context.strings(StringKey.electricalServiceEarthing),
+        context.strings(StringKey.electricalSources),
+        'Service & Earthing',
+        'Sources',
+      ],
+      run: () {
+        openDesign(WorkspaceView.electrical);
+        ref.read(electricalInspectorTargetProvider.notifier).showSupply();
+      },
     ),
     _Command(
       id: 'view.review',
@@ -561,7 +585,11 @@ class _PaletteCardState extends ConsumerState<_PaletteCard> {
     // by recency (a recently-run command wins an equal-score tie).
     final scored = <(int, int, _Command)>[];
     for (final c in all) {
-      final s = commandMatchScore(_query, c.title, c.subtitle);
+      var s = commandMatchScore(_query, c.title, c.subtitle);
+      for (final alias in c.aliases) {
+        final a = commandMatchScore(_query, alias);
+        if (a != null && (s == null || a > s)) s = a;
+      }
       if (s != null) scored.add((s, recencyRank(c), c));
     }
     scored.sort((a, b) {

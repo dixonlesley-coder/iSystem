@@ -521,12 +521,10 @@ Widget? buildElectricalInlineEditor(
         onPinPhases: () => pinPanelPhasesTo(ref, context, panel.id),
       );
     }
-  } else if (target is ElectricalServiceTarget) {
-    // C1: the project-wide Service & Earthing / Sources / Advanced editors now
-    // render INLINE here (was a floating drawer over the canvas).
-    editor = ElectricalServiceInspector(onClose: clear);
-  } else if (target is ElectricalSourcesTarget) {
-    editor = ElectricalSourcesInspector(onClose: clear);
+  } else if (target is ElectricalSupplyTarget) {
+    // C1: the project-wide Supply / Advanced editors render INLINE here (was a
+    // floating drawer over the canvas).
+    editor = ElectricalSupplyInspector(onClose: clear);
   } else if (target is ElectricalAdvancedTarget) {
     editor = ElectricalAdvancedInspector(onClose: clear);
   }

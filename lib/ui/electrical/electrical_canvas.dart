@@ -267,11 +267,9 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
   /// Way / load right-click context menu.
   final CircuitMenu onCircuitMenu;
 
-  /// Open the Service & Earthing editor (double-click the PLN grid node).
-  final VoidCallback onRequestService;
-
-  /// Open the Sources editor (double-click the source-spine strip).
-  final VoidCallback onRequestSources;
+  /// Open the Supply inspector (tap / double-click the supply chain or the
+  /// bare PLN grid head).
+  final VoidCallback onRequestSupply;
 
   /// Published each frame with the live transform + viewport size so the host's
   /// minimap (I8) tracks the real view. Optional; null ⇒ nothing published.
@@ -283,8 +281,7 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
     required this.onEditCircuit,
     required this.onPanelMenu,
     required this.onCircuitMenu,
-    required this.onRequestService,
-    required this.onRequestSources,
+    required this.onRequestSupply,
     this.viewport,
   });
 
@@ -1280,8 +1277,8 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // transformer kVA / dual-tx) draws PLN -> MVMDP -> TRAFO -> LVMDP; an LV
     // direct service draws only the honest supply head (+ genset / capacitor /
     // solar / battery / earth). A bare project shows the PLN grid head
-    // (byte-identical). Double-click either to open the Sources / Service
-    // editor.
+    // (byte-identical). Tap / double-click either to open the Supply
+    // inspector.
     if (isRoot) {
       final spine = buildElectricalSourceSpine(
           project: project, result: result, horizontal: true);
@@ -1309,9 +1306,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             child: _ScaledTap(
               // The supply chain is the project's SUPPLY NODE — one tap opens
               // its editor (source kind / capacity / genset / solar /
-              // battery), the same surface the toolbar Sources button opens.
-              onTap: widget.onRequestSources,
-              onDoubleTap: widget.onRequestSources,
+              // battery), the same surface the toolbar Supply button opens.
+              onTap: widget.onRequestSupply,
+              onDoubleTap: widget.onRequestSupply,
               child: CustomPaint(
                 painter: _SourceSpinePainter(
                   sheet: spine,
@@ -1340,11 +1337,10 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
             width: kGridSrcW * scale,
             height: kGridSrcH * scale,
             child: _ScaledTap(
-              // One tap = the supply node's editor (add a genset / solar /
-              // battery, set the source kind + capacity); double-tap keeps
-              // the historic Service & Earthing shortcut.
-              onTap: widget.onRequestSources,
-              onDoubleTap: widget.onRequestService,
+              // Tap or double-tap = the ONE Supply inspector (source kind +
+              // capacity, earthing, genset / solar / battery, fault level).
+              onTap: widget.onRequestSupply,
+              onDoubleTap: widget.onRequestSupply,
               child: _ScaledChild(
                 scale: scale,
                 width: kGridSrcW,

@@ -232,27 +232,18 @@ class ElectricalPanelTarget extends ElectricalInspectorTarget {
   int get hashCode => panelId.hashCode;
 }
 
-/// Show the project-wide Service & Earthing settings — earthing system, origin
-/// fault level, busbar clearing time + the MEP-duty feed (C1: was a floating
-/// `_AnimatedDrawerShell`, now an inline section in the shared inspector column).
+/// Show the ONE project-wide Supply inspector — utility (supply kind,
+/// connection capacity, transformer), earthing, backup & on-site sources
+/// (genset / capacitor / solar / battery) and the advanced fault-level inputs.
+/// Merges the former Service & Earthing + Sources targets (C1: an inline
+/// section in the shared inspector column, never a floating drawer).
 @immutable
-class ElectricalServiceTarget extends ElectricalInspectorTarget {
-  const ElectricalServiceTarget();
+class ElectricalSupplyTarget extends ElectricalInspectorTarget {
+  const ElectricalSupplyTarget();
   @override
-  bool operator ==(Object other) => other is ElectricalServiceTarget;
+  bool operator ==(Object other) => other is ElectricalSupplyTarget;
   @override
-  int get hashCode => (ElectricalServiceTarget).hashCode;
-}
-
-/// Show the SOURCE-chain editor — genset / transformer / capacitor / dual-tx
-/// (C1: was a floating drawer, now an inline section in the shared column).
-@immutable
-class ElectricalSourcesTarget extends ElectricalInspectorTarget {
-  const ElectricalSourcesTarget();
-  @override
-  bool operator ==(Object other) => other is ElectricalSourcesTarget;
-  @override
-  int get hashCode => (ElectricalSourcesTarget).hashCode;
+  int get hashCode => (ElectricalSupplyTarget).hashCode;
 }
 
 /// Show the read-only Issues & advanced-study review (C1: was a 420-px floating
@@ -289,16 +280,10 @@ class ElectricalInspectorTargetController
     state = ElectricalPanelTarget(panelId);
   }
 
-  /// Open the Service & Earthing inline section (C1).
-  void showService() {
+  /// Open the Supply inline section (utility / earthing / backup / advanced).
+  void showSupply() {
     _revealInspector();
-    state = const ElectricalServiceTarget();
-  }
-
-  /// Open the Sources inline section (C1).
-  void showSources() {
-    _revealInspector();
-    state = const ElectricalSourcesTarget();
+    state = const ElectricalSupplyTarget();
   }
 
   /// Toggle the Issues & advanced-study inline section (C1) — the toolbar's

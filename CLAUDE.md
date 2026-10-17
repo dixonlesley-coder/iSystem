@@ -1005,7 +1005,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   so the deep view reads as the clean left-to-right CAD board schedule — no redundant loads below it, no
   duplicated panel-name header. Regression-covered by golden **11_electrical_schedule.png** (the canvas
   `focusPanelSchedule(panelId)` frames one panel past the threshold). **Sources are
-  now first-class + editable:** a **Sources** toolbar button opens a `_SourcesEditor` drawer (genset
+  now first-class + editable:** (2026-10-17: the Sources + Service & Earthing editors are now ONE toolbar
+  **Supply** button → `ElectricalSupplyInspector` [`showSupply`; disclosures Utility · Earthing · Backup &
+  on-site · Advanced (collapsed)], also opened by the canvas supply-chain tap) a Sources editor (genset
   present/kVA[0=auto]/mode/transfer · capacitor kvar · transformer kVA · dual-transformer) wired through
   new store intents (`setGenerator`/`setGeneratorKva`/`setGeneratorMode`/`setGeneratorTransfer`/
   `setCapacitorBankKvar`/`setTransformerKva`/`setDualTransformer`) on the field-preserving `_withProject`
