@@ -513,9 +513,15 @@ void main() {
       expect(moved, isNotEmpty);
 
       // Every moved tag gets a THIN leader ending exactly on it, starting on a
-      // board's branch line (a box centre-line).
+      // board's branch line: a box centre-line, or — when a sibling sits
+      // between that board and the channel (audit 2026-10 drawing-output-1) —
+      // the band's BUS ROW the branch jogs to, 12 above the box tops
+      // (300 - 12 = 288 here), so the branch never runs through the sibling.
       final branchYs = {
-        for (final r in sheet.prims.whereType<SldRect>()) r.y + r.h / 2
+        for (final r in sheet.prims.whereType<SldRect>()) ...{
+          r.y + r.h / 2,
+          r.y - 12,
+        }
       };
       for (final l in moved) {
         final leaders = sheet.prims.whereType<SldLine>().where((s) =>
