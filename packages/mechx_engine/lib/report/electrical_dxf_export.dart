@@ -35,6 +35,7 @@ import 'drawing_chrome.dart'
         serviceAciColorFor;
 import 'electrical_sld_drawing.dart';
 import 'riser_tags.dart' show riserServiceCode;
+import 'sld_plot_fit.dart';
 
 /// Box footprint (DXF units) for an auto-laid panel / node.
 const double _boxW = 200;
@@ -293,11 +294,17 @@ String electricalSldToDxf({
   // A prebuilt [sheet] wins; else `overview` = the ZOOMED-OUT building
   // single-line (compact panel tree, optional source spine); default = the
   // per-panel detail single-line.
-  final sheetResolved = sheet ??
+  final built = sheet ??
       (overview
           ? buildElectricalOverview(
               project: project!, result: result!, sourceChain: sourceChain)
           : buildElectricalSld(project: project!, result: result!));
+  // drafting-6: the SAME plot fit the PDF applies — labels grown in place to
+  // the minimum plotted size for an A3 fit-to-sheet plot, bounds covering each
+  // label's text — so the DXF and the PDF print the same label sizes.
+  final sheetResolved = fitSldSheetForPlot(built,
+          availW: kSldA3PlotAvailW, availH: kSldA3PlotAvailH)
+      .sheet;
 
   // Essential prims are drawn ACI red (1); source MV-chain blue (5); normal
   // inherits the layer colour (null). Phase-bearing schedule cells carry the

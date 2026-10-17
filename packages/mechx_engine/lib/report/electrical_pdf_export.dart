@@ -26,8 +26,11 @@ import 'dart:typed_data';
 
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
+import '../network/network.dart' show ServiceType;
 import 'drawing_chrome.dart';
 import 'electrical_sld_drawing.dart';
+import 'riser_tags.dart' show riserServiceCode;
+import 'sld_plot_fit.dart';
 
 /// WinAnsi (Latin-1) code points the single-line labels legitimately emit,
 /// passed through as their own byte (code point == WinAnsi byte at these
@@ -66,6 +69,29 @@ const String _phaseRRg = '0.79 0.16 0.16'; // R — red    (canvas 0xC92A2A)
 const String _phaseSRg = '0.80 0.50 0.03'; // S — amber  (canvas 0xE8990C)
 const String _phaseTRg = '0.10 0.44 0.76'; // T — blue   (canvas 0x1971C2)
 
+/// The service an [SldLine.layer] names when it is a riser SERVICE code (`CW`,
+/// `D`, `V`…), or null. The mechanical riser and the master legend tag their
+/// pipe lines this way; the DXF renderer already maps the same code to the
+/// service's AIA layer and colour.
+ServiceType? _serviceForLayer(String? layer) {
+  if (layer == null) return null;
+  for (final s in ServiceType.values) {
+    if (riserServiceCode(s) == layer) return s;
+  }
+  return null;
+}
+
+/// Stroke colour for an [SldLine]: a NORMAL-role line on a riser service-code
+/// layer prints in that service's plan colour (drafting-8), the SAME colour the
+/// plan PDFs and the DXF layer use, so a legend swatch and the runs it keys
+/// match. Every other line keeps its role colour.
+String _strokeRgForLine(SldLine l) {
+  final s = l.role == SldRole.normal ? _serviceForLayer(l.layer) : null;
+  if (s == null) return _strokeRgForRole(l.role);
+  final (r, g, b) = serviceChromeColor(s);
+  return '${_n(r)} ${_n(g)} ${_n(b)}';
+}
+
 String _strokeRgForRole(SldRole r) => switch (r) {
       SldRole.normal => '0.12 0.12 0.12',
       SldRole.essential => '0.80 0.13 0.13',
@@ -97,6 +123,10 @@ String _textRgForRole(SldRole r) => switch (r) {
 const double _pageW = 1190.55; // A3 landscape, points (420 mm)
 const double _pageH = 841.89; // 297 mm
 const double _margin = 40.0;
+
+/// Clear space (points) kept between the sheet frame and the auto-fitted
+/// drawing on every side (drafting-9).
+const double _drawInset = 12.0;
 
 /// Build one page's content stream: the auto-fitted drawing + sheet border +
 /// title block + device legend. WITH a non-empty [chrome] the title block is
@@ -141,20 +171,23 @@ String _sldPageContent({
       hasChrome ? math.max(tb!.height, legendH) + 24.0 : 96.0;
 
   // ── Auto-fit the drawing into the area above the title block ────────────────
-  final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
-  final spanY = math.max(1e-6, sheet.maxY - sheet.minY);
-  const availW = _pageW - 2 * _margin;
-  final availH = _pageH - 2 * _margin - titleBlockH;
-  var scale = math.min(availW / spanX, availH / spanY);
-  if (!scale.isFinite || scale <= 0) scale = 1.0;
-  scale = math.min(scale, 1.0); // never blow a tiny drawing up past 1:1
-  final drawnW = spanX * scale;
-  final drawnH = spanY * scale;
-  final offX = _margin + (availW - drawnW) / 2;
-  // Top of the drawing area (PDF y-up): just under the top margin.
-  final topY = _pageH - _margin - (availH - drawnH) / 2;
-  double tx(double x) => offX + (x - sheet.minX) * scale;
-  double ty(double y) => topY - (y - sheet.minY) * scale; // flip y-down→y-up
+  // drafting-9: the drawing sits a [_drawInset] inside the frame on every side,
+  // so a height-limited sheet's top label (the source-spine head) no longer
+  // prints on the frame line. drafting-6: [fitSldSheetForPlot] keeps every
+  // label at or above the minimum plotted size (kMinPlotLabelPt) where there is
+  // clear space, and its bounds cover each label's real text extent.
+  const availW = _pageW - 2 * _margin - 2 * _drawInset;
+  final availH = _pageH - 2 * _margin - titleBlockH - 2 * _drawInset;
+  final fit = fitSldSheetForPlot(sheet, availW: availW, availH: availH);
+  final plot = fit.sheet;
+  final scale = fit.scale;
+  final drawnW = (plot.maxX - plot.minX) * scale;
+  final drawnH = (plot.maxY - plot.minY) * scale;
+  final offX = _margin + _drawInset + (availW - drawnW) / 2;
+  // Top of the drawing area (PDF y-up): just under the top margin + inset.
+  final topY = _pageH - _margin - _drawInset - (availH - drawnH) / 2;
+  double tx(double x) => offX + (x - plot.minX) * scale;
+  double ty(double y) => topY - (y - plot.minY) * scale; // flip y-down→y-up
 
   final cs = StringBuffer();
 
@@ -164,10 +197,10 @@ String _sldPageContent({
       '${_n(_pageW - 2 * _margin)} ${_n(_pageH - 2 * _margin)} re S');
 
   // ── Drawing content (panels / busbars / ways / feeders) ─────────────────────
-  for (final p in sheet.prims) {
+  for (final p in plot.prims) {
     switch (p) {
       case SldLine():
-        cs.writeln('${_strokeRgForRole(p.role)} RG '
+        cs.writeln('${_strokeRgForLine(p)} RG '
             '${_n(_weightPt(p.weight) * scale + 0.3)} w');
         // A dashed prim strokes inside a dash pattern, reset straight after so
         // the following prims stay solid. Default solid ⇒ byte-identical.

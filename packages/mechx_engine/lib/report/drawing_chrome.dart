@@ -385,7 +385,13 @@ const List<int> _helveticaWidths = [
 ];
 
 /// Width of [s] at [size] pt in Helvetica (the title block's `/F1` font).
-double _helveticaTextWidth(String s, double size) {
+double _helveticaTextWidth(String s, double size) => helveticaTextWidth(s, size);
+
+/// Width of [s] at [size] (points, or any drawing unit — it is linear) in
+/// base-14 Helvetica, the `/F1` font every vector PDF sheet prints with. Public
+/// so the single-line plot fit (`sld_plot_fit.dart`) can measure a label's real
+/// extent instead of guessing a per-character advance. Pure.
+double helveticaTextWidth(String s, double size) {
   var units = 0;
   for (final c in s.codeUnits) {
     units += (c >= 0x20 && c <= 0x7e) ? _helveticaWidths[c - 0x20] : 556;
@@ -394,11 +400,11 @@ double _helveticaTextWidth(String s, double size) {
 }
 
 /// The largest font size (<= [maxSize], floored at [minSize]) at which [text]
-/// fits within [cellW] points in Helvetica — used to auto-shrink the title
-/// block's TITLE cell so a long drawing title (e.g.
-/// `DIAGRAM SISTEM AIR BERSIH & AIR KOTOR`) never bleeds past the fixed cell
-/// (Wave-7 residual). Returns [maxSize] VERBATIM when the text already fits, so
-/// a short/absent title keeps the 8 pt rendering byte-for-byte. Pure.
+/// fits within [cellW] points in Helvetica. The title block's TITLE cell now
+/// WRAPS a long title at 14 pt ([wrapTitleLines], drafting-6); this fit is its
+/// last resort for a single word too wide for the cell even at the 12 pt title
+/// minimum (Wave-7 residual: never bleed past the cell). Returns [maxSize]
+/// VERBATIM when the text already fits. Pure.
 double fitTitleFontSize(String text, double cellW,
     {double maxSize = 8, double minSize = 5}) {
   if (text.isEmpty || cellW <= 0) return maxSize;
@@ -406,6 +412,70 @@ double fitTitleFontSize(String text, double cellW,
   if (wMax <= cellW) return maxSize;
   final scaled = maxSize * cellW / wMax;
   return scaled < minSize ? minSize : scaled;
+}
+
+// ── Plotted text minimums (drafting-6) ──────────────────────────────────────
+//
+// ISO 3098 sets 2.5 mm as the minimum nominal lettering height on a drawing.
+// The vector sheets print Helvetica, and these minimums apply that 2.5 mm to the
+// text BODY (the em height): 2.5 mm = 7.09 pt, rounded to 7.0 pt, which puts the
+// capitals at about 0.716 × 7 pt = 1.77 mm. That is ISO 3098's smallest standard
+// h step (1.8 mm) and matches the AutoCAD "2.5" annotation text style the
+// Indonesian issue sets are drafted with. It is a drafting STYLE convention, not
+// an engineering value, so there is no `// VERIFY` flag.
+
+/// Minimum plotted size (points) of any label on an issued A3 vector sheet. The
+/// single-line auto-fit (`sld_plot_fit.dart`) never lets a label plot below
+/// this when there is clear space for it, and the fixed page chrome (title-block
+/// field names, plan sub-labels) is set at this size or larger.
+const double kMinPlotLabelPt = 7.0;
+
+/// Plotted size (points) of the drawing TITLE in the [pdfTitleBlock]. ISO 7200
+/// asks for a sheet title noticeably larger than the body text. 14 pt is about
+/// 3.5 mm, and a long title WRAPS onto extra lines instead of shrinking.
+const double kTitleBlockTitlePt = 14.0;
+
+/// The smallest size the title-block TITLE may shrink to. A title only shrinks
+/// when ONE word is too wide for the cell at [kTitleBlockTitlePt], which is
+/// rare. Below this size the title is fitted to the cell (the
+/// [fitTitleFontSize] floor) so it never runs past the cell edge.
+const double kTitleBlockTitleMinPt = 12.0;
+
+/// Word-wrap [text] into lines that each fit within [cellW] points in Helvetica
+/// at [maxSize]. When a single word is wider than [cellW], the font is reduced
+/// just enough for that word, down to [minSize]; if the word still does not fit
+/// there, it is fitted to the cell ([fitTitleFontSize] floor, 5 pt). Returns the
+/// font size and the lines. Empty text ⇒ (`maxSize`, []). Pure.
+({double size, List<String> lines}) wrapTitleLines(String text, double cellW,
+    {double maxSize = kTitleBlockTitlePt,
+    double minSize = kTitleBlockTitleMinPt}) {
+  final words =
+      text.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  if (words.isEmpty || cellW <= 0) return (size: maxSize, lines: const []);
+  var size = maxSize;
+  for (final w in words) {
+    final ww = _helveticaTextWidth(w, size);
+    if (ww > cellW) size = size * cellW / ww;
+  }
+  if (size < minSize) {
+    // One word does not fit even at the minimum: fit the widest word.
+    final widest = words.reduce((a, b) =>
+        _helveticaTextWidth(a, 1) >= _helveticaTextWidth(b, 1) ? a : b);
+    size = fitTitleFontSize(widest, cellW, maxSize: minSize);
+  }
+  final lines = <String>[];
+  var cur = '';
+  for (final w in words) {
+    final cand = cur.isEmpty ? w : '$cur $w';
+    if (cur.isNotEmpty && _helveticaTextWidth(cand, size) > cellW + 1e-9) {
+      lines.add(cur);
+      cur = w;
+    } else {
+      cur = cand;
+    }
+  }
+  if (cur.isNotEmpty) lines.add(cur);
+  return (size: size, lines: lines);
 }
 
 /// Width (points) of the [pdfTitleBlock] box, anchored at the bottom-right
@@ -434,7 +504,23 @@ const double kPdfTitleBlockWidth = 190.0;
   const rowH = 13.0;
   const blockW = kPdfTitleBlockWidth; // ~ ISO-7200 width in points
   const labelW = 52.0; // the muted label cell width
-  final height = rows.length * rowH;
+  // drafting-6: the TITLE row carries the drawing title at kTitleBlockTitlePt
+  // (14 pt, ~3.5 mm), WRAPPED across as many lines as it needs, so that row
+  // grows taller. Every other row keeps the 13 pt pitch.
+  const titleCellW = blockW - labelW - 8;
+  const titleLineGap = 1.15; // line pitch as a multiple of the font size
+  final rowHeights = <double>[];
+  ({double size, List<String> lines})? titleWrap;
+  for (final (label, value) in rows) {
+    if (label == 'TITLE' && value.trim().isNotEmpty) {
+      final w = wrapTitleLines(value, titleCellW);
+      titleWrap = w;
+      rowHeights.add(math.max(rowH, w.lines.length * w.size * titleLineGap + 4));
+    } else {
+      rowHeights.add(rowH);
+    }
+  }
+  final height = rowHeights.fold(0.0, (a, b) => a + b);
   final x0 = pageW - margin - blockW;
   final yBottom = margin;
 
@@ -443,10 +529,10 @@ const double kPdfTitleBlockWidth = 190.0;
   // Outer box.
   cs.writeln('${_n(x0)} ${_n(yBottom)} ${_n(blockW)} ${_n(height)} re S');
   // Rows top-to-bottom (first present row at the top of the block).
+  var rowTop = yBottom + height;
   for (var i = 0; i < rows.length; i++) {
     final (label, value) = rows[i];
-    final rowTop = yBottom + height - i * rowH;
-    final rowBot = rowTop - rowH;
+    final rowBot = rowTop - rowHeights[i];
     // Horizontal rule between rows (the outer box already draws top + bottom).
     if (i > 0) {
       cs.writeln('${_n(x0)} ${_n(rowTop)} m ${_n(x0 + blockW)} ${_n(rowTop)} l S');
@@ -454,28 +540,42 @@ const double kPdfTitleBlockWidth = 190.0;
     // Vertical divider between the label + value cells.
     cs.writeln('${_n(x0 + labelW)} ${_n(rowBot)} m '
         '${_n(x0 + labelW)} ${_n(rowTop)} l S');
-    final ty = rowBot + 3.5;
-    // Muted label cell (grey, small).
-    cs.writeln('BT /F1 6 Tf 0.4 0.4 0.4 rg '
+    // The label sits at the TOP of its row (for a 13 pt row this is the same
+    // baseline as before, rowBot + 3.5).
+    final ty = rowTop - rowH + 3.5;
+    // Muted label cell (grey), at the minimum plotted size.
+    cs.writeln('BT /F1 ${_n(kMinPlotLabelPt)} Tf 0.4 0.4 0.4 rg '
         '${_n(x0 + 3)} ${_n(ty)} Td (${_pdfText(label)}) Tj ET');
     // Value cell (black). A blank sign-off cell (DRAWN/CHECKED/APPROVED with no
     // name) is a ruled cell for hand completion (N20) — its rules + label stay,
     // only the (empty) value TEXT is omitted.
     if (value.trim().isNotEmpty) {
-      // Wave-7 residual: a long TITLE would bleed past the fixed value cell —
-      // auto-shrink JUST the TITLE row's font to fit it. Every other row (and a
-      // title that already fits) stays at 8 pt, so the output is byte-identical
-      // for the common case.
-      final vsize = label == 'TITLE'
-          ? fitTitleFontSize(value, blockW - labelW - 8)
-          : 8.0;
-      final vsizeStr = vsize == 8.0 ? '8' : _n(vsize);
-      cs.writeln('BT /F1 $vsizeStr Tf 0 0 0 rg '
-          '${_n(x0 + labelW + 4)} ${_n(ty)} Td (${_pdfText(value)}) Tj ET');
+      if (label == 'TITLE' && titleWrap != null) {
+        final fs = titleWrap.size;
+        for (var k = 0; k < titleWrap.lines.length; k++) {
+          final by = rowTop - 2 - 0.9 * fs - k * fs * titleLineGap;
+          cs.writeln('BT /F1 ${_n(fs)} Tf 0 0 0 rg '
+              '${_n(x0 + labelW + 4)} ${_n(by)} Td '
+              '(${_pdfText(titleWrap.lines[k])}) Tj ET');
+        }
+      } else {
+        cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+            '${_n(x0 + labelW + 4)} ${_n(ty)} Td (${_pdfText(value)}) Tj ET');
+      }
     }
+    rowTop = rowBot;
   }
   return (ops: cs.toString(), height: height);
 }
+
+/// Height (points) above the sheet frame line at which a framed plan sheet
+/// draws its [pdfScaleBarReal]. The bar's figures print 10 pt BELOW its base,
+/// so this keeps them inside the frame (drafting-9).
+const double kScaleBarFrameInset = 16.0;
+
+/// Gap (points) between the left frame line and a framed sheet's [pdfLegend],
+/// so the legend title and swatches don't sit on the frame (drafting-9).
+const double kLegendFrameInset = 8.0;
 
 /// The ladder of "nice" real scale-bar lengths, in metres, for
 /// [pdfScaleBarReal] — a drafting-office convention (not an SNI clause).
@@ -1009,6 +1109,32 @@ PlottedScale snapPlottedScale({
     // else: too large even for 1:1000 — keep the honest auto-fit, stay NTS.
   }
   return PlottedScale(scale, 'NTS', null);
+}
+
+/// The plotted text height (paper millimetres) a calibrated DXF plan writes
+/// its annotation at: ISO 3098's 2.5 mm minimum. A DXF TEXT height is the
+/// capital height, so this is 2.5 mm capitals on paper (drafting-6).
+const double kMinPlotTextMm = 2.5;
+
+/// The paper-millimetre drawing area of an A3 plan sheet: the page less the
+/// 40 pt frame margins, and less a 160 pt strip for the title block (the
+/// typical height of the [pdfTitleBlock] the plan PDFs reserve) on the height.
+const double _kA3PlanAvailWmm = (1190.55 - 2 * 40) * 25.4 / 72;
+const double _kA3PlanAvailHmm = (841.89 - 2 * 40 - 160) * 25.4 / 72;
+
+/// The standard plotted-scale denominator ([kPlanScaleLadder]) a plan whose
+/// world extent is [spanXmm] × [spanYmm] millimetres plots at on A3: the
+/// smallest rung that fits the extent into the A3 drawing area, the same
+/// snapping rule [snapPlottedScale] applies to the plan PDF. Null when the
+/// extent is empty or too large even for 1:1000 (then no honest scale exists).
+/// Pure.
+int? a3PlottedScaleDenominatorFor(double spanXmm, double spanYmm) {
+  if (!(spanXmm > 0 || spanYmm > 0)) return null;
+  final rawN = math.max(spanXmm / _kA3PlanAvailWmm, spanYmm / _kA3PlanAvailHmm);
+  for (final n in kPlanScaleLadder) {
+    if (n >= rawN - 1e-9) return n;
+  }
+  return null;
 }
 
 /// PDF stroke widths in points for the three A6 line-weight bands

@@ -419,9 +419,13 @@ String _professionalDxf({
     maxY = 1;
   }
   final span = math.max(math.max(maxX - minX, maxY - minY), 1.0);
-  // Annotation text height ~ the larger drawing span / 80 — plots at roughly
-  // 2.5 mm when the sheet is fitted to the drawing (the drafting norm).
-  final textH = span / 80;
+  // drafting-6: annotation text is kMinPlotTextMm (2.5 mm) on PAPER at the
+  // standard scale this extent plots at on A3 (the ladder the plan PDF snaps
+  // to), e.g. 250 mm model height at 1 : 100. Only when no ladder scale fits
+  // (a plan too large even for 1 : 1000) does it fall back to the span/80
+  // estimate.
+  final plotN = a3PlottedScaleDenominatorFor(maxX - minX, maxY - minY);
+  final textH = plotN != null ? kMinPlotTextMm * plotN : span / 80;
 
   // ── HEADER: millimetre drawing units, metric measurement ────────────────────
   g(0, 'SECTION');
@@ -469,7 +473,7 @@ String _professionalDxf({
   // N4: the reference setting-out grid — chain column/row LINEs + bubble
   // CIRCLE/TEXT on the grey grid layer, spanning the drawing extent (mm).
   if (grid != null && !grid.isEmpty && maxX.isFinite) {
-    final bubbleR = span / 80;
+    final bubbleR = textH;
     for (final ax in grid.columns) {
       final gx = ax.position * mmPerPx;
       g(0, 'LINE');
@@ -783,7 +787,8 @@ String _professionalDxf({
       g(8, kDxfLayerDims);
       g(10, (dax + dbx) / 2);
       g(20, (day + dby) / 2 + textH * 0.2);
-      g(40, textH * 0.8);
+      // drafting-6: the tie figure at the full minimum text height.
+      g(40, textH);
       g(1, label);
     }
 
@@ -804,10 +809,10 @@ String _professionalDxf({
 
   // ── Issuable-document chrome (opt-in), anchored to the mm extent ────────────
   // With a grid, the extent already spans every axis; the column bubbles hang
-  // a further 2 × bubbleR (= span/40) above it and the row bubbles the same
+  // a further 2 × bubbleR (= 2 × textH) above it and the row bubbles the same
   // to its left, so the chrome anchor clears those too.
   if (hasChrome) {
-    final bubblePad = hasGrid ? 2 * (span / 80) : 0.0;
+    final bubblePad = hasGrid ? 2 * textH : 0.0;
     b.write(dxfChrome(chrome,
         minX: minX - bubblePad,
         minY: minY,

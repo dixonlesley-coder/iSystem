@@ -151,7 +151,7 @@ SldSheet buildMechanicalRiserSld({
       minY: 0,
       maxX: _gutterW + _drawW,
       maxY: _topPad + _bandH,
-      legend: _fittingLegend(network, focus),
+      legend: _fittingLegend(network, focus, const []),
       supplyNote: supplyNote,
     );
   }
@@ -611,7 +611,7 @@ SldSheet buildMechanicalRiserSld({
     minY: 0,
     maxX: maxX,
     maxY: maxY,
-    legend: _fittingLegend(network, focus),
+    legend: _fittingLegend(network, focus, prims),
     supplyNote: supplyNote,
   );
 }
@@ -740,10 +740,45 @@ SldRole _edgeRole(Network net, NetEdge e) {
   return plant(a) || plant(b) ? SldRole.source : SldRole.normal;
 }
 
-/// The KETERANGAN device legend — the reference fitting glossary plus the
-/// service codes actually present on the (focused) network. Mirrors the
-/// schematic painter's on-canvas legend so the export carries the same key.
-List<SldLegendEntry> _fittingLegend(Network network, ServiceType? focus) {
+/// The riser drawing's own ABBREVIATIONS, keyed only when a label on the sheet
+/// actually uses them (drafting-8). Drafting-office vocabulary, not engineering
+/// values, so no `// VERIFY`. Listed in the order the legend prints them.
+const List<(String, String)> _kRiserTagGlossary = [
+  // Line codes beyond the service codes.
+  ('HWR', 'Hot water return (sirkulasi), dashed'),
+  // Pipe MATERIAL codes (the third token of a SIZE-SERVICE-MATERIAL tag).
+  ('PPR', 'Pipa PPR (polypropylene random)'),
+  ('PVC', 'Pipa PVC'),
+  ('CI', 'Pipa besi tuang (cast iron)'),
+  ('HDPE', 'Pipa HDPE'),
+  ('BS', 'Pipa baja hitam (black steel)'),
+  ('GI', 'Pipa baja galvanis (galvanised iron)'),
+  // Riser FUNCTION codes (the tag suffix).
+  ('GRAVITASI', 'Gravity feed from the roof tank'),
+  ('BOOSTER', 'Booster-pumped supply'),
+  ('TRANSFER', 'Transfer pumping, ground tank to roof tank'),
+  // Fittings, valves and terminals drawn with a code.
+  ('GV', 'Gate valve'),
+  ('CV', 'Check valve'),
+  ('STR', 'Strainer'),
+  ('PRV', 'Pressure reducing valve'),
+  ('WM', 'Water meter'),
+  ('AAV', 'Auto air vent'),
+  ('FJ', 'Flexible joint'),
+  ('FD', 'Floor drain'),
+  ('CO', 'Cleanout'),
+  ('VTR', 'Vent through roof'),
+];
+
+/// The KETERANGAN device legend, built from what the sheet DRAWS (drafting-8):
+/// the service codes present on the (focused) network, then each abbreviation
+/// of [_kRiserTagGlossary] that some label on the sheet uses (a pipe tag's
+/// material and function codes, the HWR return, the fitting codes of the
+/// detail callouts…), then a riser-tag key when riser ids (`CW-R1`) are drawn.
+/// A code the sheet never prints is not keyed, and nothing it prints is left
+/// unexplained.
+List<SldLegendEntry> _fittingLegend(
+    Network network, ServiceType? focus, List<SldPrim> prims) {
   final out = <SldLegendEntry>[];
   // Service codes present (the focus, or every service that has an edge).
   final services = <ServiceType>{
@@ -755,15 +790,26 @@ List<SldLegendEntry> _fittingLegend(Network network, ServiceType? focus) {
       out.add(SldLegendEntry(riserServiceCode(s), _serviceMeaning(s)));
     }
   }
-  // Reference fitting glossary (general drawing convention).
-  out
-    ..add(const SldLegendEntry('GV', 'Gate valve'))
-    ..add(const SldLegendEntry('CV', 'Check valve'))
-    ..add(const SldLegendEntry('STR', 'Strainer'))
-    ..add(const SldLegendEntry('PRV', 'Pressure reducing valve'))
-    ..add(const SldLegendEntry('WM', 'Water meter'))
-    ..add(const SldLegendEntry('AAV', 'Auto air vent'))
-    ..add(const SldLegendEntry('FJ', 'Flexible joint'));
+  // Every token any label prints (split on spaces, hyphens, the middle dot and
+  // brackets — a tag `32-CW-PPR-BOOSTER - 4.0 m` yields CW / PPR / BOOSTER).
+  final tokens = <String>{
+    for (final p in prims)
+      if (p is SldLabel) ...p.text.split(RegExp(r'[\s\-\u00B7/()]+')),
+  };
+  final keyed = {for (final e in out) e.code};
+  for (final (code, meaning) in _kRiserTagGlossary) {
+    if (tokens.contains(code) && keyed.add(code)) {
+      out.add(SldLegendEntry(code, meaning));
+    }
+  }
+  // A riser id (`CW-R1`) keys with the first one the sheet prints.
+  final riserId = RegExp(r'^[A-Z]+-R\d+$');
+  for (final p in prims) {
+    if (p is SldLabel && riserId.hasMatch(p.text)) {
+      out.add(SldLegendEntry(p.text, 'Riser tag: service code + riser no.'));
+      break;
+    }
+  }
   return out;
 }
 
