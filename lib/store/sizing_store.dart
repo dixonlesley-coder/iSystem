@@ -154,6 +154,9 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     // edge lengths — runs via calibration, risers via the §10 elevation delta.
     building: project.building,
     calibrationBySheet: project.calibrations,
+    // Audit 2026-10 water-drainage-8 — the project's mounting heights (F8)
+    // set the riser lengths of the ring-split basis, as on the drawings.
+    mounting: project.mounting,
   );
 });
 
