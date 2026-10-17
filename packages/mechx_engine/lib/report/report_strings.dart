@@ -141,6 +141,9 @@ enum RptStringKey {
   hvacTrunkAirflow,
   hvacFanStatic,
   hvacFanMotor,
+  hvacExhaustAirflow,
+  hvacExhaustStatic,
+  hvacExhaustMotor,
   hvacOperatingPoint,
   hvacOperatingPointValue, // {lps} {pa} {pct} {match} {shutoff}
   hvacAirBalance,
@@ -418,6 +421,9 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.hvacTrunkAirflow: 'Trunk airflow:',
   RptStringKey.hvacFanStatic: 'Fan total static:',
   RptStringKey.hvacFanMotor: 'Fan motor:',
+  RptStringKey.hvacExhaustAirflow: 'Exhaust airflow:',
+  RptStringKey.hvacExhaustStatic: 'Exhaust fan total static:',
+  RptStringKey.hvacExhaustMotor: 'Exhaust fan motor:',
   RptStringKey.hvacOperatingPoint: 'Operating point (system × fan curve):',
   RptStringKey.hvacOperatingPointValue:
       '**{lps} L/s** @ **{pa} Pa** ({pct} % of design flow) · {match} · '
@@ -702,6 +708,9 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.hvacTrunkAirflow: 'Aliran udara utama:',
   RptStringKey.hvacFanStatic: 'Statis total kipas:',
   RptStringKey.hvacFanMotor: 'Motor kipas:',
+  RptStringKey.hvacExhaustAirflow: 'Aliran udara buang:',
+  RptStringKey.hvacExhaustStatic: 'Statis total kipas buang:',
+  RptStringKey.hvacExhaustMotor: 'Motor kipas buang:',
   RptStringKey.hvacOperatingPoint: 'Titik operasi (sistem × kurva kipas):',
   RptStringKey.hvacOperatingPointValue:
       '**{lps} L/s** @ **{pa} Pa** ({pct} % dari aliran desain) · {match} · '

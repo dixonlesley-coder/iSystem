@@ -38,7 +38,6 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
-import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
@@ -111,6 +110,25 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   final downfeed = ref.read(downfeedProvider);
   final balance = ref.read(airBalanceProvider);
   const profile = SniProfile();
+  // N16: the per-run sizing-basis schedule ('why DN32 not DN25') over the SAME
+  // network the sizer solved, with real §10 lengths (runs via calibration,
+  // risers via the project-mounting elevation delta).
+  final net = ref.read(sizingNetworkProvider);
+  final mounting = ref.read(mountingProvider);
+  final runSchedule = buildRunSchedule(
+    net: net,
+    sizing: ref.read(sizingProvider),
+    edgeLengths: {
+      for (final e in net.edges)
+        e.id: edgeLength(
+          e,
+          net,
+          calibrationBySheet: project.calibrations,
+          building: project.building,
+          mounting: mounting,
+        ),
+    },
+  );
 
   return CalcReportData(
     projectName: project.name,
@@ -119,7 +137,8 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     standardsRevision: profile.revision,
     verifyItems: profile.verifyChecklist,
     building: project.building,
-    mounting: ref.read(mountingProvider),
+    mounting: mounting,
+    runSchedule: runSchedule,
     feedStrategy:
         strategy == FeedStrategy.upfeed ? 'Upfeed pump' : 'Roof-tank downfeed',
     targetResidual:
@@ -134,6 +153,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     sprinklerRemoteArea: ref.read(sprinklerRemoteAreaProvider),
     firePumpRating: ref.read(firePumpRatingProvider),
     fan: ref.read(ductFanProvider),
+    exhaustFan: ref.read(exhaustFanProvider),
     supplyAirflowLps: balance?.supplyLps ?? 0,
     returnAirflowLps: balance?.returnLps ?? 0,
     rainfallMmPerHr: ref.read(rainfallIntensityProvider),
@@ -582,21 +602,19 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       modelSpec: specs[tag],
     ));
   }
-  final standpipe = ref.read(standpipeDesignProvider);
-  if (standpipe.requiredFlow.cubicMetersPerSecond > 0) {
+  // The ONE fire-pump duty (NFPA 20 motor) shared with the electrical feed.
+  final firePump = ref.read(firePumpDutyProvider);
+  if (firePump != null) {
     const tag = 'FP-01';
     pumps.add(PumpScheduleItem(
-      duty: sizePump(
-        flow: standpipe.requiredFlow,
-        head: standpipe.pumpHead,
-      ),
+      duty: firePump,
       service: 'Fire standpipe pump',
       tag: tag,
       modelSpec: specs[tag],
     ));
   }
 
-  // Fans: the drawn supply/exhaust duct fan.
+  // Fans: the drawn supply/return duct fan + the separate exhaust fan.
   final fans = <FanScheduleItem>[];
   final ductFan = ref.read(ductFanProvider);
   if (ductFan != null) {
@@ -604,6 +622,16 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     fans.add(FanScheduleItem(
       duty: ductFan,
       service: 'Mechanical ventilation',
+      tag: tag,
+      modelSpec: specs[tag],
+    ));
+  }
+  final exhaustFan = ref.read(exhaustFanProvider);
+  if (exhaustFan != null) {
+    const tag = 'EF-01';
+    fans.add(FanScheduleItem(
+      duty: exhaustFan,
+      service: 'Exhaust ventilation',
       tag: tag,
       modelSpec: specs[tag],
     ));
@@ -4878,6 +4906,7 @@ class _HvacSection extends ConsumerWidget {
     final type = context.type;
     final settings = ref.watch(ductSettingsProvider);
     final fan = ref.watch(ductFanProvider);
+    final exhaust = ref.watch(exhaustFanProvider);
     final balance = ref.watch(airBalanceProvider);
 
     // The shared value-wins row (L1) — the label yields, the figure never
@@ -4889,7 +4918,7 @@ class _HvacSection extends ConsumerWidget {
       // E1: expand only when air elements exist (a sized fan, or a supply/return
       // balance). A plumbing-only launch keeps a quiet collapsed header rather
       // than opening on a "Draw a duct network…" empty prompt.
-      defaultExpanded: fan != null || balance != null,
+      defaultExpanded: fan != null || exhaust != null || balance != null,
       child: Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -4928,10 +4957,10 @@ class _HvacSection extends ConsumerWidget {
           ],
         ),
         const SizedBox(height: MechXSpacing.sm),
-        if (fan == null)
+        if (fan == null && exhaust == null)
           Text('Draw a duct network and assign diffuser airflows.',
               style: type.caption.copyWith(color: colors.textMuted))
-        else ...[
+        else if (fan != null) ...[
           // Promoted headline: fan total static + selected motor. Only rendered
           // once a fan exists, so the blank/golden launch is byte-identical.
           // M11: a duty past the largest standard frame prints the clamp
@@ -4954,6 +4983,25 @@ class _HvacSection extends ConsumerWidget {
           kv('Fan power',
               '${fan.shaftPower.inKiloWatts.toStringAsFixed(2)} kW'),
         ],
+        if (exhaust != null) ...[
+          if (fan != null) const SizedBox(height: MechXSpacing.xs),
+          // The separate exhaust system's own fan (its own index run).
+          ResultCard(
+            headline:
+                '${exhaust.totalStaticPressure.pascals.toStringAsFixed(0)} Pa',
+            label: context.strings.format(
+                    StringKey.inspectorExhaustFanLabelTemplate, {
+                  'kw': exhaust.selectedMotor.inKiloWatts.toStringAsFixed(2),
+                }) +
+                (exhaust.motorOversized ? ' · above standard frame' : ''),
+            verdict: exhaust.motorOversized ? 'over frame' : 'sized',
+            verdictColor:
+                exhaust.motorOversized ? colors.danger : colors.success,
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          kv(context.strings(StringKey.inspectorExhaustAirflow),
+              '${exhaust.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s'),
+        ],
         if (balance != null) ...[
           const SizedBox(height: MechXSpacing.xs),
           kv('Supply air', '${balance.supplyLps.toStringAsFixed(0)} L/s'),
@@ -4968,7 +5016,7 @@ class _HvacSection extends ConsumerWidget {
 
 String _balanceLabel(double supplyLps, double returnLps) {
   if (returnLps <= 0) return 'no return drawn';
-  if (supplyLps <= 0) return 'exhaust only';
+  if (supplyLps <= 0) return 'return only';
   final deltaPct = (supplyLps - returnLps) / supplyLps * 100;
   if (deltaPct.abs() < 1) return 'balanced';
   final sign = deltaPct > 0 ? '+' : '';

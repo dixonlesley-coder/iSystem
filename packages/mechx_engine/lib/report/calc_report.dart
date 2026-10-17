@@ -60,6 +60,11 @@ class CalcReportData {
   final FirePumpRatingResult? firePumpRating;
 
   final FanDuty? fan;
+
+  /// The separate EXHAUST fan duty (toilet / kitchen extract system) — its own
+  /// trunk airflow against its own index-run static. Null ⇒ no exhaust rows
+  /// (byte-identical for a project without a sized exhaust system).
+  final FanDuty? exhaustFan;
   final double supplyAirflowLps;
   final double returnAirflowLps;
 
@@ -123,6 +128,7 @@ class CalcReportData {
     this.sprinklerRemoteArea,
     this.firePumpRating,
     this.fan,
+    this.exhaustFan,
     this.supplyAirflowLps = 0,
     this.returnAirflowLps = 0,
     this.pumpOperatingPoint,
@@ -689,6 +695,26 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             })
           ),
       ]));
+  }
+  final exFan = d.exhaustFan;
+  if (exFan != null) {
+    if (fan == null) {
+      blocks.add(RptHeading(2, strings(RptStringKey.headingHvac)));
+    }
+    blocks.add(RptKeyValue([
+      (
+        strings(RptStringKey.hvacExhaustAirflow),
+        '**${exFan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
+      ),
+      (
+        strings(RptStringKey.hvacExhaustStatic),
+        '**${exFan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
+      ),
+      (
+        strings(RptStringKey.hvacExhaustMotor),
+        '**${exFan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
+      ),
+    ]));
   }
 
   // ── Storm / rainwater ───────────────────────────────────────────────────────

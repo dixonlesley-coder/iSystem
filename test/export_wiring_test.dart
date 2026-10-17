@@ -15,8 +15,10 @@ import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/equipment_spec_store.dart';
+import 'package:mechx/store/fire_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/ui/electrical/electrical_export.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
@@ -128,6 +130,41 @@ void main() {
     expect(data.revisions.first.description, 'First issue');
     expect(data.revisions.last, isA<Revision>());
     expect(data.revisions.last.date, '2026-07-02');
+  });
+
+  testWidgets(
+      'wiring-6: the calc-report data carries the per-run sizing-basis '
+      'schedule (one row per sized edge, real length)', (tester) async {
+    final (ref, container) = await harness(tester);
+    container
+        .read(projectControllerProvider.notifier)
+        .setCalibration('s1', const ScaleCalibration(0.02));
+    final n = container.read(networkControllerProvider.notifier);
+    n.setService(ServiceType.coldWater);
+    n.setTool(DrawTool.drawRun);
+    n.placeRunPoint('s1', 0, const Offset(0, 0));
+    n.placeRunPoint('s1', 0, const Offset(1000, 0)); // 1000 px × 0.02 = 20 m
+
+    final sized = container.read(sizingProvider);
+    expect(sized, hasLength(1));
+    final data = buildMechanicalReportData(ref);
+    expect(data.runSchedule, hasLength(sized.length));
+    expect(data.runSchedule.single.service, ServiceType.coldWater);
+    // The MD and PDF share ONE block list, so both carry the section.
+    final blocks = buildCalcReportBlocks(data);
+    expect(
+        blocks.whereType<RptHeading>().map((h) => h.text).join('|'),
+        contains('Run / riser schedule'));
+  });
+
+  testWidgets(
+      'wiring-2: the schedule FP-01 motor is the NFPA 20 selected motor',
+      (tester) async {
+    final (ref, container) = await harness(tester);
+    final rating = container.read(firePumpRatingProvider);
+    final rows = gatherEquipmentScheduleData(ref).pumps;
+    final fp = rows.singleWhere((p) => p.tag == 'FP-01');
+    expect(fp.duty.selectedMotor.watts, rating.selectedMotor.watts);
   });
 
   testWidgets(

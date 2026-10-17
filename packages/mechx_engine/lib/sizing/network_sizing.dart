@@ -560,6 +560,91 @@ Map<String, EdgeSizing> sizeNetwork(
   return result;
 }
 
+/// The root-choice ladder [autoSizeNetwork] applies to one connected component
+/// (see the inline note there): plant → non-fixture demand-free leaf → busiest
+/// demand-free hub → any leaf → any node. Shared by [serviceComponentRoots] so
+/// downstream consumers (e.g. the fan index-run static) root a system at the
+/// SAME source the sizer accumulated from.
+String _pickComponentRoot({
+  required List<String> component,
+  required List<String> leaves,
+  required int Function(String) degree,
+  required NodeRole? Function(String) roleOf,
+  required Set<String> demandKeys,
+}) {
+  for (final id in component) {
+    if (roleOf(id) == NodeRole.plant) return id;
+  }
+  for (final id in leaves) {
+    if (roleOf(id) != NodeRole.fixture && !demandKeys.contains(id)) {
+      return id;
+    }
+  }
+  String? hub;
+  var hubDegree = 1;
+  for (final id in component) {
+    final d = degree(id);
+    if (d > hubDegree &&
+        roleOf(id) != NodeRole.fixture &&
+        !demandKeys.contains(id)) {
+      hub = id;
+      hubDegree = d;
+    }
+  }
+  if (hub != null) return hub;
+  return leaves.isNotEmpty ? leaves.first : component.first;
+}
+
+/// The source ROOT of every connected component of [service], keyed by each
+/// member node id → its component's root — the exact root [autoSizeNetwork]
+/// accumulates from (same component traversal, same [_pickComponentRoot]
+/// ladder). [demandNodeIds] are the nodes carrying an explicit demand for this
+/// service (for air: the nodes with an `airflow`), which must never be chosen
+/// as the root. Pure; empty when the service has no edges.
+Map<String, String> serviceComponentRoots(
+  Network net,
+  ServiceType service, {
+  Set<String> demandNodeIds = const {},
+}) {
+  final adjacency = <String, List<String>>{};
+  final nodes = <String>{};
+  for (final e in net.edges) {
+    if (e.service != service) continue;
+    nodes..add(e.fromId)..add(e.toId);
+    (adjacency[e.fromId] ??= []).add(e.toId);
+    (adjacency[e.toId] ??= []).add(e.fromId);
+  }
+  int degree(String n) => adjacency[n]?.length ?? 0;
+  NodeRole? roleOf(String n) => net.nodeById(n)?.role;
+
+  final out = <String, String>{};
+  final seen = <String>{};
+  for (final start in nodes) {
+    if (seen.contains(start)) continue;
+    final component = <String>[];
+    final stack = [start];
+    seen.add(start);
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      component.add(n);
+      for (final other in adjacency[n] ?? const <String>[]) {
+        if (seen.add(other)) stack.add(other);
+      }
+    }
+    final root = _pickComponentRoot(
+      component: component,
+      leaves: component.where((n) => degree(n) == 1).toList(),
+      degree: degree,
+      roleOf: roleOf,
+      demandKeys: demandNodeIds,
+    );
+    for (final n in component) {
+      out[n] = root;
+    }
+  }
+  return out;
+}
+
 /// Auto-size the whole drawn network with a default demand policy: per service,
 /// split into connected components, root each at its SOURCE (a plant, else a
 /// non-demand entry leaf), apply demand at every other demand-bearing node
@@ -702,30 +787,14 @@ Map<String, EdgeSizing> autoSizeNetwork(
     //      hub — rooting here keeps EVERY terminal's load, whereas falling back
     //      to a fixture leaf would drop that fixture's demand);
     //   4. any leaf, else any node (degenerate component).
-    String pickRoot(List<String> component, List<String> leaves) {
-      for (final id in component) {
-        if (roleOf(id) == NodeRole.plant) return id;
-      }
-      for (final id in leaves) {
-        if (roleOf(id) != NodeRole.fixture &&
-            !explicitDemandKeys.contains(id)) {
-          return id;
-        }
-      }
-      String? hub;
-      var hubDegree = 1;
-      for (final id in component) {
-        final d = degree(id);
-        if (d > hubDegree &&
-            roleOf(id) != NodeRole.fixture &&
-            !explicitDemandKeys.contains(id)) {
-          hub = id;
-          hubDegree = d;
-        }
-      }
-      if (hub != null) return hub;
-      return leaves.isNotEmpty ? leaves.first : component.first;
-    }
+    String pickRoot(List<String> component, List<String> leaves) =>
+        _pickComponentRoot(
+          component: component,
+          leaves: leaves,
+          degree: degree,
+          roleOf: roleOf,
+          demandKeys: explicitDemandKeys,
+        );
 
     // Build the terminal-demand map over EVERY demand-bearing node except the
     // root: a node with an explicit entry contributes it (even mid-run — an
