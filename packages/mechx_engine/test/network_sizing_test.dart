@@ -654,9 +654,18 @@ void main() {
         NetEdge(id: 'e', fromId: 'r', toId: 'd', service: ServiceType.duct),
       ],
     );
+    // Audit 2026-10 (air-hvac-4): at the default 1.0 Pa/m target BOTH methods
+    // now land on 600 × 400 (velocity: H = √(0.24/1.5) = 0.4 → 400, W = 600 —
+    // the old 700 × 400 velocity pick was floating-point noise, 1.5·0.4·1000 =
+    // 600.0000000000001 stepping past 600). The two only GENUINELY diverge
+    // when friction governs, so the fixture uses a 0.5 Pa/m target: 600 × 400
+    // carries ≈ 0.555 Pa/m (> 0.5) so equal friction steps to H = 450,
+    // W = roundUp(1.5·450 = 675) = 700 ⇒ 700 × 450 (≈ 0.286 Pa/m, 3.81 m/s),
+    // while velocity stays at the exact-fit 600 × 400.
     const ctx = SizingContext(
       ductShape: DuctShape.rectangular,
       ductMethod: DuctSizingMethod.equalFriction,
+      ductEqualFrictionPa: 0.5,
     );
     final sized = autoSizeNetwork(
       ductNet,
