@@ -335,7 +335,11 @@ void main() {
           floorIndex: 0,
           metersPerPixel: 0.05,
           edgeElevationLabels: const {'e': 'CL +2.70'});
-      expect(dxf, contains('DN50 - CL +2.70'));
+      // Audit 2026-10 drawing-output-7: the professional label is composed
+      // like the plan PDF's, so it now carries the run length too — the run is
+      // 100 px x 0.05 m/px = 5.0 m (no edgeLengths map ⇒ the calibrated
+      // horizontal fallback), printed '5 m', between the size and the CL.
+      expect(dxf, contains('DN50 - 5 m - CL +2.70'));
     });
 
     test('N4: the setting-out grid + a riser tie dimension are emitted', () {
@@ -408,7 +412,10 @@ void main() {
           floorIndex: 0,
           metersPerPixel: 0.05,
           edgeTags: tags);
-      expect(dxf, contains('CW-F1 - DN50'));
+      // Audit 2026-10 drawing-output-7: the same `<tag> · <size> - <length>`
+      // composition as the plan PDF (100 px x 0.05 m/px = 5 m). The riser 'r'
+      // has no sizing and no length map entry, so its TEXT is the bare tag.
+      expect(dxf, contains('CW-F1 · DN50 - 5 m'));
       expect(dxf, contains('\n1\nCW-R1\n'));
     });
 

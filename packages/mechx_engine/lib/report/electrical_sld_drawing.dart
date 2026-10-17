@@ -919,18 +919,36 @@ const double _ovFeederLabelSize = 6.5;
 const double _kOvLabelStackH = 9;
 const int _kOvStackSlots = 10;
 
+/// Clearance between a BELOW-line overview annotation's glyph top and the
+/// branch line it hangs under (drawing units).
+const double _kOvBelowClearance = 2.5;
+
 /// The escape ladder for one overview feeder annotation whose default anchor
 /// [def] collides: stagger vertically about the default (down, then up,
 /// growing) — the tag stays over its own mid segment and never drifts into a
 /// neighbouring tier. // VERIFY: a drafting declutter heuristic, not a standard.
-List<(double, double)> _ovLabelLadder((double, double) def) => [
-      def,
-      for (var k = 0; k < _kOvStackSlots; k++)
-        (
-          def.$1,
-          def.$2 + (k.isOdd ? -1 : 1) * ((k + 2) ~/ 2) * _kOvLabelStackH,
-        ),
-    ];
+///
+/// [def] sits 4 units ABOVE the shared mid horizontal (baseline `midY − 4`), so
+/// that line is at `def.y + 4`. A below-line slot must hang its whole glyph box
+/// (`baseline − size .. baseline`) UNDER the line, else the branch strikes
+/// through the text: the first below slot's baseline is therefore
+/// `midY + size + clearance` = `def.y + 4 + 6.5 + 2.5` = `midY + 9` (the old
+/// `midY + 5` put the box at `[midY − 1.5, midY + 5]`, straddling the line).
+/// Further below slots step down by the stack pitch; the above slots stack up
+/// from the default by the same pitch.
+List<(double, double)> _ovLabelLadder((double, double) def) {
+  const firstBelow = 4 + _ovFeederLabelSize + _kOvBelowClearance;
+  return [
+    def,
+    for (var k = 0; k < _kOvStackSlots; k++)
+      (
+        def.$1,
+        k.isEven
+            ? def.$2 + firstBelow + (k ~/ 2) * _kOvLabelStackH
+            : def.$2 - ((k + 1) ~/ 2) * _kOvLabelStackH,
+      ),
+  ];
+}
 
 /// Assumed building power factor for the per-panel compact-node kVA sub-line —
 /// mirrors `compute.dart`'s `assumedBuildingPf` but inlined to keep this pure
@@ -2008,6 +2026,13 @@ const double _riserGutterW = 150;
 const double _riserBandH = 150;
 const double _riserPanelGap = 24;
 
+/// How far above a band's boxes its BUS ROW runs — the clear gap between the
+/// previous band's floor grid line (31 units above the boxes:
+/// `_riserBandH − _ovH − _fanColH − _riserPanelGap/2` = 150 − 46 − 61 − 12)
+/// and the box tops, where a feeder / supply leg that would otherwise cross a
+/// board is routed instead. A drafting choice, not a standard.
+const double _riserBusOffset = 12;
+
 /// Per-floor branch fan-out: how many outgoing LOAD ways a riser panel shows as
 /// labelled stubs before collapsing the remainder to a `+N more` summary, the
 /// pitch of each stub row, and the reserved column height that the floor grid
@@ -2170,6 +2195,18 @@ class _RiserFeeder {
   final double cx, cy; // child box right edge / the branch line
   final double bandRight; // rightmost board edge on the CHILD's band
   final String? label;
+
+  /// Bus-row y of the PARENT leg when a board in the parent's band sits between
+  /// the parent's right edge and the channel: the leg jogs up into the band's
+  /// clear gap above the boxes instead of running THROUGH that board (which read
+  /// as if the far board were on this feeder's path). Null ⇒ the straight
+  /// legacy leg at [py].
+  final double? parentBusY;
+
+  /// Bus-row y of the CHILD leg when a board sits between the channel and the
+  /// child's right edge (the same jog, on the child's band). Null ⇒ the
+  /// straight legacy branch at [cy].
+  final double? childBusY;
   (double, double) slot = (0, 0);
   bool cleared = true; // false ⇒ nothing cleared; always leadered
   _RiserFeeder({
@@ -2180,7 +2217,17 @@ class _RiserFeeder {
     required this.cy,
     required this.bandRight,
     required this.label,
+    this.parentBusY,
+    this.childBusY,
   });
+
+  /// The y the branch runs at OUTSIDE the band's boxes (right of the band, up
+  /// to the channel): the bus row when the child leg jogs, else [cy].
+  double get branchY => childBusY ?? cy;
+
+  /// The x where a jogged leg turns between its bus row and the box centre-line
+  /// — the middle of the inter-board gap just right of the box edge [edgeX].
+  static double jogX(double edgeX) => edgeX + _riserPanelGap / 2;
 
   /// The legacy anchor: on the branch, just right of the child's box.
   (double, double) defaultSlot(double channelX) =>
@@ -2197,14 +2244,18 @@ class _RiserFeeder {
   List<(double, double)> ladder(double channelX, double size) {
     final w = _riserLabelWidth(label!, size);
     final spanFits = bandRight + 8 + w <= channelX - 4;
+    // A jogged branch runs at its bus row right of the band, so the clear-span
+    // and annotation-column slots ride THAT line (else a tag would float beside
+    // a branch segment that is no longer drawn).
+    final by = branchY;
     return [
       defaultSlot(channelX),
-      if (spanFits) (bandRight + 8, cy - 4),
-      if (spanFits) (bandRight + 8, cy + 12),
+      if (spanFits) (bandRight + 8, by - 4),
+      if (spanFits) (bandRight + 8, by + 12),
       for (var k = 0; k < _kRiserStackSlots; k++)
         (
           channelX + 10,
-          cy - 4 + (k.isOdd ? 1 : -1) * ((k + 1) ~/ 2) * _kRiserLabelStackH,
+          by - 4 + (k.isOdd ? 1 : -1) * ((k + 1) ~/ 2) * _kRiserLabelStackH,
         ),
     ];
   }
@@ -2331,6 +2382,30 @@ SldSheet buildElectricalRiser({
     }
     bandRightEdge[entry.key] = right;
   }
+  // Topology honesty: a feeder / supply segment must never run THROUGH a board
+  // box it does not connect to (it would read as if that board were on its
+  // path). These test an axis-aligned segment against every board's INTERIOR
+  // (0.5 pt inset, so touching an edge is fine).
+  bool hBlocked(double y, double xa, double xb) {
+    final lo = math.min(xa, xb), hi = math.max(xa, xb);
+    for (final id in panelX.keys) {
+      final x0 = panelX[id]! + 0.5, x1 = panelX[id]! + _ovW - 0.5;
+      final y0 = panelY[id]! + 0.5, y1 = panelY[id]! + _ovH - 0.5;
+      if (y > y0 && y < y1 && lo < x1 && hi > x0) return true;
+    }
+    return false;
+  }
+
+  bool vBlocked(double x, double ya, double yb) {
+    final lo = math.min(ya, yb), hi = math.max(ya, yb);
+    for (final id in panelX.keys) {
+      final x0 = panelX[id]! + 0.5, x1 = panelX[id]! + _ovW - 0.5;
+      final y0 = panelY[id]! + 0.5, y1 = panelY[id]! + _ovH - 0.5;
+      if (x > x0 && x < x1 && lo < y1 && hi > y0) return true;
+    }
+    return false;
+  }
+
   // One record per drawn feeder, in the deterministic parent-map order.
   final feeders = <_RiserFeeder>[];
   for (final entry in parentOf.entries) {
@@ -2338,17 +2413,29 @@ SldSheet buildElectricalRiser({
     final parent = entry.value;
     if (!panelX.containsKey(child) || !panelX.containsKey(parent)) continue;
     final cxx = panelX[child]! + _ovW; // child right edge
+    final pxx = panelX[parent]! + _ovW; // parent right edge
+    final pyy = panelY[parent]! + _ovH / 2;
+    final cyy = panelY[child]! + _ovH / 2;
     feeders.add(_RiserFeeder(
       role: essential.contains(child) ? SldRole.essential : SldRole.normal,
-      px: panelX[parent]! + _ovW, // parent right edge
-      py: panelY[parent]! + _ovH / 2,
+      px: pxx,
+      py: pyy,
       cx: cxx,
-      cy: panelY[child]! + _ovH / 2,
+      cy: cyy,
       bandRight: bandRightEdge[floorOf(child)] ?? cxx,
       // Feeder annotation (cable + breaker); null when the feeding circuit
       // can't resolve ⇒ that run is left unlabelled (never fabricated).
       label: _feederConnLabel(feederCircuitOf, feederResultOf, child,
           parentThreePhase: _parentIsThreePhase(parentOf, result, child)),
+      // A board between a leg's box and the channel ⇒ that leg jogs to its
+      // band's bus row (the clear gap above the boxes). One board per band ⇒
+      // nothing blocks ⇒ the straight legacy geometry, byte-identical.
+      parentBusY: hBlocked(pyy, pxx, channelX)
+          ? panelY[parent]! - _riserBusOffset
+          : null,
+      childBusY: hBlocked(cyy, channelX, cxx)
+          ? panelY[child]! - _riserBusOffset
+          : null,
     ));
   }
   // Pass 1 — every annotation whose DEFAULT anchor is clear keeps it (so a riser
@@ -2380,13 +2467,39 @@ SldSheet buildElectricalRiser({
   var displacedMaxX = double.negativeInfinity;
   for (final f in feeders) {
     // parent right -> channel; channel vertical riser (length ∝ elevation
-    // delta); channel -> child right.
-    prims.add(
-        SldLine(f.px, f.py, channelX, f.py, weight: SldWeight.medium, role: f.role));
-    prims.add(SldLine(channelX, f.py, channelX, f.cy,
+    // delta); channel -> child right. A leg with a board in its way jogs up
+    // into its band's bus row (above the boxes) so it never crosses that board.
+    final pBus = f.parentBusY;
+    final double channelTopY;
+    if (pBus == null) {
+      prims.add(SldLine(f.px, f.py, channelX, f.py,
+          weight: SldWeight.medium, role: f.role));
+      channelTopY = f.py;
+    } else {
+      final jx = _RiserFeeder.jogX(f.px);
+      prims.add(SldLine(f.px, f.py, jx, f.py,
+          weight: SldWeight.medium, role: f.role));
+      prims.add(
+          SldLine(jx, f.py, jx, pBus, weight: SldWeight.medium, role: f.role));
+      prims.add(SldLine(jx, pBus, channelX, pBus,
+          weight: SldWeight.medium, role: f.role));
+      channelTopY = pBus;
+    }
+    prims.add(SldLine(channelX, channelTopY, channelX, f.branchY,
         weight: SldWeight.medium, role: f.role));
-    prims.add(SldLine(channelX, f.cy, f.cx, f.cy,
-        weight: SldWeight.medium, role: f.role));
+    final cBus = f.childBusY;
+    if (cBus == null) {
+      prims.add(SldLine(channelX, f.cy, f.cx, f.cy,
+          weight: SldWeight.medium, role: f.role));
+    } else {
+      final jx = _RiserFeeder.jogX(f.cx);
+      prims.add(SldLine(channelX, cBus, jx, cBus,
+          weight: SldWeight.medium, role: f.role));
+      prims.add(
+          SldLine(jx, cBus, jx, f.cy, weight: SldWeight.medium, role: f.role));
+      prims.add(SldLine(jx, f.cy, f.cx, f.cy,
+          weight: SldWeight.medium, role: f.role));
+    }
     final lbl = f.label;
     if (lbl == null) continue;
     final (lx, ly) = f.slot;
@@ -2401,14 +2514,17 @@ SldSheet buildElectricalRiser({
     // reads as this feeder's spec.
     if (!f.cleared ||
         math.sqrt(dx * dx + dy * dy) > _kRiserLeaderThreshold) {
-      final bx = math.min(math.max(lx, math.min(f.cx, channelX)),
-          math.max(f.cx, channelX));
+      // The branch segment the leader lands on: the bus row (jog x .. channel)
+      // for a jogged child leg, else the straight branch (child .. channel).
+      final segL = cBus == null ? math.min(f.cx, channelX) : _RiserFeeder.jogX(f.cx);
+      final segR = cBus == null ? math.max(f.cx, channelX) : channelX;
+      final bx = math.min(math.max(lx, segL), segR);
       // Land the leader on the NEAR end of the text, so a tag diverted LEFT of
       // its branch is not crossed by the leader that points at it.
       final rx = lx + _riserLabelWidth(lbl, _riserFeederLabelSize);
       final endX = rx < bx ? rx : lx;
-      prims.add(
-          SldLine(bx, f.cy, endX, ly, weight: SldWeight.thin, role: f.role));
+      prims.add(SldLine(bx, f.branchY, endX, ly,
+          weight: SldWeight.thin, role: f.role));
     }
     prims.add(
         SldLabel(lx, ly, lbl, size: _riserFeederLabelSize, role: f.role));
@@ -2422,11 +2538,38 @@ SldSheet buildElectricalRiser({
       final zx = panelX[id]! + _ovW / 2;
       final zy = panelY[id]!;
       final midY = (spine.feedY + zy) / 2;
-      prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, midY,
+      final straightBlocked = vBlocked(spine.feedX, spine.feedY, midY) ||
+          hBlocked(midY, spine.feedX, zx) ||
+          vBlocked(zx, midY, zy);
+      if (!straightBlocked) {
+        // The root sits on (or the drop clears) every band above it: the
+        // legacy three-leg drop, byte-identical.
+        prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, midY,
+            weight: SldWeight.medium, role: SldRole.source));
+        prims.add(SldLine(spine.feedX, midY, zx, midY,
+            weight: SldWeight.medium, role: SldRole.source));
+        prims.add(SldLine(zx, midY, zx, zy,
+            weight: SldWeight.medium, role: SldRole.source));
+        continue;
+      }
+      // A root below other bands: the drop at the root's centre column would
+      // run straight through the first board of every band in between (reading
+      // as if that board were on the main supply path). Route it down a
+      // DEDICATED trunk in the gap left of the first column instead, along the
+      // clear bus row above the top band, and enter the root from its own
+      // band's bus row.
+      const trunkX = _riserGutterW + _riserPanelGap / 2;
+      final topRowY = contentOffsetY - _riserBusOffset;
+      final rootRowY = zy - _riserBusOffset;
+      prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, topRowY,
           weight: SldWeight.medium, role: SldRole.source));
-      prims.add(SldLine(spine.feedX, midY, zx, midY,
+      prims.add(SldLine(spine.feedX, topRowY, trunkX, topRowY,
           weight: SldWeight.medium, role: SldRole.source));
-      prims.add(SldLine(zx, midY, zx, zy,
+      prims.add(SldLine(trunkX, topRowY, trunkX, rootRowY,
+          weight: SldWeight.medium, role: SldRole.source));
+      prims.add(SldLine(trunkX, rootRowY, zx, rootRowY,
+          weight: SldWeight.medium, role: SldRole.source));
+      prims.add(SldLine(zx, rootRowY, zx, zy,
           weight: SldWeight.medium, role: SldRole.source));
     }
   }

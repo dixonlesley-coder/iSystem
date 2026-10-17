@@ -56,13 +56,6 @@ int _strokeBand(EdgeSizing s) {
       sizeMm: s.diameter.inMillimeters, isDuct: s.service.isAir);
 }
 
-/// A human metres string for a length label: `3.5 m` (one decimal, trimmed).
-String _lengthLabel(Length l) {
-  final m = l.meters;
-  final txt = m == m.roundToDouble() ? m.toInt().toString() : m.toStringAsFixed(1);
-  return '$txt m';
-}
-
 /// WinAnsi (Latin-1) code points the drawing labels legitimately emit, passed
 /// through as their own byte (code point == WinAnsi byte at these positions) so
 /// a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`: U+00B7
@@ -87,6 +80,12 @@ String _pdfText(String raw) {
 }
 
 String _n(double v) => v.toStringAsFixed(2);
+
+/// N4 grid bubble radius (points) and the strip it occupies beyond the fitted
+/// extent: the bubble centre sits `r + 2` off the line end, so its far edge is
+/// `2r + 2` = 20 pt out.
+const double _kGridBubbleR = 9.0;
+const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
 
 /// Axis-aligned overlap test for two [LabelBox]es (y-up output space) — the N3
 /// riser-base collision pass uses it to stagger the tie-dimension text and to
@@ -182,8 +181,27 @@ Uint8List planToPdf({
 
   // ── Bounds of everything we'll draw, in screen pixels (A1: incl. underlay) ──
   final fit = planFitBounds(net, sheetId, floorIndex, underlay);
-  final minX = fit.minX, minY = fit.minY, maxX = fit.maxX, maxY = fit.maxY;
+  var minX = fit.minX, minY = fit.minY, maxX = fit.maxX, maxY = fit.maxY;
   final hasContent = fit.hasContent;
+  // N4 grid fit (audit 2026-10 drawing-output-3): a setting-out grid normally
+  // spans the whole building while one service's network covers part of it, so
+  // EVERY axis joins the fit (else an axis beyond the network lands off the
+  // sheet, and row/column lines — drawn across the fitted extent — stop short
+  // of the axes they should cross). Its bubbles hang [_kGridBubblePad] points
+  // above / left of the extent, reserved from the fit area below. No grid ⇒
+  // byte-identical.
+  final hasGrid = grid != null && !grid.isEmpty && hasContent;
+  if (hasGrid) {
+    for (final ax in grid.columns) {
+      minX = math.min(minX, ax.position);
+      maxX = math.max(maxX, ax.position);
+    }
+    for (final ay in grid.rows) {
+      minY = math.min(minY, ay.position);
+      maxY = math.max(maxY, ay.position);
+    }
+  }
+  final gridPad = hasGrid ? _kGridBubblePad : 0.0;
   final hasChrome = chrome != null && !chrome.isEmpty;
   // The title block's TITLE/DATE rows fall back to this function's own
   // sheet-name/date params, so the issued sheet never loses them.
@@ -206,10 +224,10 @@ Uint8List planToPdf({
       : 0.0;
   final spanX = maxX - minX;
   final spanY = maxY - minY;
-  final availW = pageW - 2 * margin;
+  final availW = pageW - 2 * margin - gridPad;
   // Reserve the title-block strip (chrome) or a little headroom for the
-  // legacy two-line top-left title.
-  final availH = pageH - 2 * margin - (hasChrome ? blockH : 24.0);
+  // legacy two-line top-left title (and the grid bubbles' strip on top).
+  final availH = pageH - 2 * margin - (hasChrome ? blockH : 24.0) - gridPad;
   var scale = 1.0;
   if (spanX > 0 || spanY > 0) {
     final sx = spanX > 0 ? availW / spanX : double.infinity;
@@ -231,8 +249,9 @@ Uint8List planToPdf({
 
   final drawnW = spanX * scale;
   final drawnH = spanY * scale;
-  final offX = margin + (availW - drawnW) / 2;
-  final offY = margin + (availH - drawnH) / 2;
+  // The grid-bubble strip sits LEFT of and ABOVE the fitted extent.
+  final offX = margin + gridPad + (availW - drawnW) / 2;
+  final offY = margin + gridPad + (availH - drawnH) / 2;
   double tx(double x) => offX + (x - minX) * scale;
   double ty(double y) => (pageH - offY) - (y - minY) * scale; // flip y
 
@@ -342,7 +361,28 @@ Uint8List planToPdf({
   // offset to the consistent upper side; when a dense branch can't clear, the
   // tag ESCAPES further out and is tied back to its run with a thin leader —
   // never dropped, never fused (see `placeEdgeLabelLeadered`).
-  final placedLabels = <LabelBox>[];
+  //
+  // Frame discipline (audit 2026-10 drawing-output-5): the placer only dodged
+  // other boxes, so a run at the sheet's extreme edge hung its rotated tag past
+  // the frame — off the printed page. The placer is SEEDED with the whole
+  // region outside the frame (four strips) plus the title-block box as occupied
+  // space, so the greedy/escape ladder picks an in-frame slot (leadered back
+  // when pulled off the run). A tag whose first slot was already in-frame and
+  // clear keeps it ⇒ in-frame labels are byte-identical.
+  const far = 1e5;
+  final placedLabels = <LabelBox>[
+    (minX: -far, minY: -far, maxX: margin, maxY: far), // left of the frame
+    (minX: pageW - margin, minY: -far, maxX: far, maxY: far), // right
+    (minX: -far, minY: -far, maxX: far, maxY: margin), // below
+    (minX: -far, minY: pageH - margin, maxX: far, maxY: far), // above
+    if (hasChrome && blockH > 0)
+      (
+        minX: pageW - margin - kPdfTitleBlockWidth,
+        minY: margin,
+        maxX: pageW - margin,
+        maxY: margin + blockH,
+      ),
+  ];
   void edgeLabel(double ax, double ay, double bx, double by, String text) {
     const size = 9.0;
     final p = placeEdgeLabelLeadered(
@@ -369,8 +409,8 @@ Uint8List planToPdf({
   // N4: the reference setting-out grid — thin chain column/row lines with bubble
   // labels — is drawn BENEATH the network (the MEP strokes overprint it) when
   // present. The per-riser tie dimensions ride ON TOP (after the nodes).
-  if (grid != null && !grid.isEmpty && hasContent) {
-    const bubbleR = 9.0;
+  if (hasGrid) {
+    const bubbleR = _kGridBubbleR;
     cs.writeln('0.55 0.55 0.55 RG 0.4 w');
     cs.writeln('[8 3 2 3] 0 d'); // chain linetype for a setting-out grid
     for (final ax in grid.columns) {
@@ -412,7 +452,8 @@ Uint8List planToPdf({
     final len = edgeLengths[e.id];
     final elev = edgeElevationLabels?[e.id];
     final sizeText = s != null ? _sizeLabel(e, s) : null;
-    final lenText = (len != null && len.meters > 0) ? _lengthLabel(len) : null;
+    final lenText =
+        (len != null && len.meters > 0) ? planLengthLabel(len) : null;
     // G5: the laid fall (`1:100`) for a gravity-regime RUN, from the real ctx
     // gradient the caller passes (never a hardcoded default) — a foreman reads
     // the required fall off the soil/waste run itself.
@@ -421,23 +462,18 @@ Uint8List planToPdf({
             gravitySlope != null)
         ? gravitySlopeLabel(gravitySlope)
         : null;
-    // N5: append the centreline-elevation token to the size/length label.
-    final parts = <String>[
-      if (sizeText != null) sizeText,
-      if (lenText != null) lenText,
-      if (elev != null && elev.isNotEmpty) elev,
-      if (slopeText != null) slopeText,
-    ];
-    final core = parts.isEmpty ? null : parts.join(' - ');
+    // N5: append the centreline-elevation token to the size/length label;
     // N13: prepend the stable element tag (`CW-R1 · DN50 - 3.5 m`). U+00B7 is
     // WinAnsi pass-through, so the separator survives the PDF text encoder.
-    final tag = edgeTags?[e.id];
-    final String? label;
-    if (tag != null && tag.isNotEmpty) {
-      label = core == null ? tag : '$tag · $core';
-    } else {
-      label = core;
-    }
+    // ONE composer shared with the plan DXF, so both formats print the same
+    // label for the same edge.
+    final label = composePlanEdgeLabel(
+      tag: edgeTags?[e.id],
+      size: sizeText,
+      length: lenText,
+      elevation: elev,
+      slope: slopeText,
+    );
 
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;

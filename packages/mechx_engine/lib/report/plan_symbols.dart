@@ -15,7 +15,9 @@ library;
 
 import 'dart:math' as math;
 
+import '../geometry/building.dart';
 import '../network/network.dart';
+import '../units.dart';
 import 'drawing_chrome.dart' show LabelBox;
 import 'sld_sheet.dart';
 
@@ -693,4 +695,107 @@ String? formatTieOffsetMm(double offsetPx, double? metersPerPixel) {
   final mm = offsetPx * metersPerPixel * 1000;
   if (mm < 1) return null;
   return mm.round().toString();
+}
+
+// ── Shared plan run/riser label composition (PDF == DXF) ────────────────────
+//
+// The annotated plan PDF and the professional plan DXF print the SAME label for
+// the same edge — `<tag> · <size> - <length> - <CL> - <fall>` — so a contractor
+// working from either format reads identical take-off data. Both exporters
+// compose through these two pure helpers (audit 2026-10 drawing-output-7/-8).
+
+/// A human metres string for a run/riser length label: `3.5 m`, or `4 m` for a
+/// whole number of metres. The value is ROUNDED to the printed 0.1 m before the
+/// whole-number test, so floating-point noise in a §10 elevation delta
+/// (11.7 − 7.7 = 3.999999999999999) prints the same `4 m` as an exact 4.0
+/// rather than `4.0 m` beside it on the same sheet. Pure.
+String planLengthLabel(Length l) {
+  final r = (l.meters * 10).round() / 10;
+  final txt =
+      r == r.truncateToDouble() ? r.toInt().toString() : r.toStringAsFixed(1);
+  return '$txt m';
+}
+
+/// Compose a plan edge label from its parts: the present tokens of [size],
+/// [length], [elevation] and [slope] joined with ` - `, prefixed by the stable
+/// element [tag] as `<tag> · <core>` (U+00B7, WinAnsi pass-through in the PDF).
+/// Null/empty parts are skipped; returns null when nothing is left. Pure.
+String? composePlanEdgeLabel({
+  String? tag,
+  String? size,
+  String? length,
+  String? elevation,
+  String? slope,
+}) {
+  final parts = <String>[
+    for (final p in [size, length, elevation, slope])
+      if (p != null && p.isNotEmpty) p,
+  ];
+  final core = parts.isEmpty ? null : parts.join(' - ');
+  if (tag != null && tag.isNotEmpty) {
+    return core == null ? tag : '$tag · $core';
+  }
+  return core;
+}
+
+// ── N5: per-run centreline SETTING-OUT elevation labels ─────────────────────
+//
+// The plan prints `CL +2.70` on each horizontal run — the height a foreman
+// hangs the pipe/duct at, above that run's floor FFL. The §10 `nodeElevation`
+// puts every PLANT node (tank, pump, AHU …) at ROOF level when it carries no
+// explicit elevation / mount height: a deliberate simplification for the
+// static-lift solve, but a ground-floor tank-to-pump run averaged from it
+// printed `CL +12.00` on a 4 m storey — a physically impossible setting-out
+// height (audit 2026-10 drawing-output-2). The solve keeps its datum; this
+// printed-label consumer resolves a datum-less plant to its own floor's
+// distribution (ceiling) level instead, and never prints a CL outside the
+// storey.
+
+/// The elevation a PLAN label uses for [node]: [nodeElevation] for every node,
+/// EXCEPT a [NodeRole.plant] node with neither an explicit `elevation` nor a
+/// `mountHeight` — that one sits at its own floor's ceiling main level
+/// ([BuildingLevels.ceilingElevationOf]) rather than the roof datum the solve
+/// uses. Pure.
+Length planSettingOutElevation(
+  NetNode node,
+  BuildingLevels building, [
+  MountingHeights mounting = const MountingHeights(),
+]) {
+  if (node.role == NodeRole.plant &&
+      node.elevation == null &&
+      node.mountHeight == null) {
+    return building.ceilingElevationOf(node.floorIndex, mounting);
+  }
+  return nodeElevation(node, building, mounting);
+}
+
+/// Per-RUN centreline-elevation labels (`CL +2.70`) keyed by edge id: the mean
+/// of the two endpoints' [planSettingOutElevation] less the run floor's FFL
+/// (the `from` node's floor). Risers get no entry (the riser sheet carries the
+/// FFL gutter). A centreline outside `[0, floor height]` of its storey cannot be
+/// a real setting-out height (e.g. an explicit plant datum on another level),
+/// so it is OMITTED rather than printed. Pure; the exporters receive the
+/// finished strings.
+Map<String, String> planEdgeElevationLabels(
+  Network net,
+  BuildingLevels building, {
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  final out = <String, String>{};
+  if (building.levelCount == 0) return out;
+  const eps = 0.005; // half the printed 0.01 m resolution
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final ea = planSettingOutElevation(a, building, mounting).meters;
+    final eb = planSettingOutElevation(b, building, mounting).meters;
+    final aboveFfl = (ea + eb) / 2 - building.elevationOf(a.floorIndex).meters;
+    final storey = building.floorHeightOf(a.floorIndex).meters;
+    if (aboveFfl < -eps || aboveFfl > storey + eps) continue;
+    final sign = aboveFfl >= 0 ? '+' : '-';
+    out[e.id] = 'CL $sign${aboveFfl.abs().toStringAsFixed(2)}';
+  }
+  return out;
 }

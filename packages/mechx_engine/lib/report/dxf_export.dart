@@ -16,6 +16,7 @@ import 'dart:math' as math;
 
 import '../network/network.dart';
 import '../sizing/network_sizing.dart';
+import '../units.dart';
 import 'drawing_chrome.dart';
 import 'plan_symbols.dart';
 import 'sld_sheet.dart';
@@ -77,6 +78,15 @@ int _strokeBand(EdgeSizing s) {
 /// [gravitySlope] present (G5) each gravity run's size TEXT gains the laid fall
 /// `1:N` from that real `SizingContext.drainageSlope`. Both null ⇒
 /// byte-identical.
+///
+/// On the professional (calibrated) path every sized run/riser label is
+/// composed by the SAME `composePlanEdgeLabel` the annotated plan PDF uses —
+/// `<tag> · <size> - <length> - <CL> - <fall>` — so the two formats of one
+/// sheet carry identical take-off data (audit 2026-10 drawing-output-7).
+/// [edgeLengths] supplies the real §10 lengths (the same map the caller passes
+/// to `planToPdf`); a RUN absent from it falls back to its calibrated
+/// horizontal length (pixel length × [metersPerPixel]), while a riser needs
+/// the elevation delta and so prints a length only from the map.
 String networkToDxf({
   required Network net,
   required Map<String, EdgeSizing> sizing,
@@ -90,6 +100,7 @@ String networkToDxf({
   Map<String, String>? edgeTags,
   Map<String, String>? nodeTags,
   double? gravitySlope,
+  Map<String, Length>? edgeLengths,
 }) {
   if (metersPerPixel != null && metersPerPixel > 0) {
     return _professionalDxf(
@@ -105,6 +116,7 @@ String networkToDxf({
       edgeTags: edgeTags,
       nodeTags: nodeTags,
       gravitySlope: gravitySlope,
+      edgeLengths: edgeLengths,
     );
   }
 
@@ -338,6 +350,7 @@ String _professionalDxf({
   required Map<String, String>? edgeTags,
   required Map<String, String>? nodeTags,
   required double? gravitySlope,
+  required Map<String, Length>? edgeLengths,
 }) {
   final b = StringBuffer();
   void g(int code, Object value) {
@@ -381,6 +394,21 @@ String _professionalDxf({
   if (underlay != null) {
     include(0, 0);
     include(underlay.sheetWidthPx * mmPerPx, -underlay.sheetHeightPx * mmPerPx);
+  }
+  // N4 (audit 2026-10 drawing-output-3/-4): every setting-out axis joins the
+  // extent, so column lines span every row axis (and vice versa) instead of
+  // stopping at the network's own extent, and the chrome anchored to this
+  // extent is placed OUTSIDE the grid rather than over it. Only when there is
+  // drawn content to grid (as the grid itself is only drawn then); no grid ⇒
+  // byte-identical.
+  final hasGrid = grid != null && !grid.isEmpty && minX.isFinite;
+  if (hasGrid) {
+    for (final ax in grid.columns) {
+      include(ax.position * mmPerPx, maxY);
+    }
+    for (final ay in grid.rows) {
+      include(minX, -ay.position * mmPerPx);
+    }
   }
   if (!minX.isFinite) {
     minX = 0;
@@ -560,14 +588,22 @@ String _professionalDxf({
                 gravitySlope != null)
             ? gravitySlopeLabel(gravitySlope)
             : null;
-        final size = [
-          _sizeLabel(e, s),
-          if (elev != null && elev.isNotEmpty) elev,
-          if (slope != null) slope,
-        ].join(' - ');
-        // N13: prepend the stable element tag (`CW-F2 - DN50 - CL +2.70`).
-        final tag = edgeTags?[e.id];
-        final labelText = tag != null && tag.isNotEmpty ? '$tag - $size' : size;
+        // The run's real length: the caller's §10 map, else its calibrated
+        // horizontal length (pixel length × m/px) — this path is always
+        // calibrated, so the take-off length is never fabricated.
+        final len = edgeLengths?[e.id] ??
+            Length(math.sqrt((c.x - a.x) * (c.x - a.x) +
+                    (c.y - a.y) * (c.y - a.y)) *
+                metersPerPixel);
+        // N13 + N5 + G5 through the ONE composer the plan PDF uses
+        // (`CW-F2 · DN50 - 4.4 m - CL +2.70`), so PDF == DXF.
+        final labelText = composePlanEdgeLabel(
+          tag: edgeTags?[e.id],
+          size: _sizeLabel(e, s),
+          length: len.meters > 0 ? planLengthLabel(len) : null,
+          elevation: elev,
+          slope: slope,
+        )!;
         // A7/N3 label discipline: rotated to the edge bearing on the ANNO layer,
         // offset to the upper side; a dense tag ESCAPES + is tied back with a
         // leader (never dropped, never fused) — see `placeEdgeLabelLeadered`.
@@ -609,7 +645,14 @@ String _professionalDxf({
       // Riser/drop: a marker circle at whichever endpoint is on this floor
       // (the legacy 8 px marker, scaled to real millimetres), now tagged with
       // its UP/DN sense on the ANNO layer (A5) + its stable element tag (N13).
-      final riserTag = edgeTags?[e.id];
+      final rs = sizing[e.id];
+      final rLen = edgeLengths?[e.id];
+      final riserLabel = composePlanEdgeLabel(
+        tag: edgeTags?[e.id],
+        size: rs != null ? _sizeLabel(e, rs) : null,
+        length: (rLen != null && rLen.meters > 0) ? planLengthLabel(rLen) : null,
+        elevation: edgeElevationLabels?[e.id],
+      );
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
         g(0, 'CIRCLE');
@@ -631,14 +674,15 @@ String _professionalDxf({
         }
         // N13: the riser stack tag (`CW-R1`) below the marker on the ANNO
         // layer, so the plan DXF carries the same riser id the single-line +
-        // BOM do.
-        if (riserTag != null && riserTag.isNotEmpty) {
+        // BOM do — now with its size + §10 length, composed exactly like the
+        // plan PDF's riser label (`CW-R1 · DN32 - 4 m`; drawing-output-7).
+        if (riserLabel != null) {
           g(0, 'TEXT');
           g(8, kDxfLayerAnno);
           g(10, n.x * mmPerPx + 12 * mmPerPx);
           g(20, -n.y * mmPerPx - textH * 1.4);
           g(40, textH);
-          g(1, riserTag);
+          g(1, riserLabel);
         }
       }
     }
@@ -725,8 +769,16 @@ String _professionalDxf({
   }
 
   // ── Issuable-document chrome (opt-in), anchored to the mm extent ────────────
+  // With a grid, the extent already spans every axis; the column bubbles hang
+  // a further 2 × bubbleR (= span/40) above it and the row bubbles the same
+  // to its left, so the chrome anchor clears those too.
   if (hasChrome) {
-    b.write(dxfChrome(chrome, minX: minX, minY: minY, maxX: maxX, maxY: maxY));
+    final bubblePad = hasGrid ? 2 * (span / 80) : 0.0;
+    b.write(dxfChrome(chrome,
+        minX: minX - bubblePad,
+        minY: minY,
+        maxX: maxX,
+        maxY: maxY + bubblePad));
   }
 
   g(0, 'ENDSEC');
