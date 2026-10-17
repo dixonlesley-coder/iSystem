@@ -226,23 +226,31 @@ void main() {
   // M19 — the fire-pump verdict names the MOTOR FRAME limit, not the curve.
   // ══════════════════════════════════════════════════════════════════════════
   //
-  // Rated 100 L/s @ 50 m (the healthy case):
-  //   overload point = 150 L/s @ 32.5 m
-  //   shaft = ρ·g·Q·H/η = 1000·9.81·0.15·32.5 / 0.70 = 47823.75/0.70
-  //         = 68 319.642857 W = 68.32 kW ⇒ the 75 kW standard frame covers it.
+  // Rated 80 L/s @ 50 m (the healthy case). Audit 2026-10 fire-4 derates the
+  // pump efficiency at 150 % flow (η × 0.85), so the former 100 L/s @ 50 m
+  // example now governs at 80.38 kW and saturates the ladder; 80 L/s is the
+  // healthy duty under the corrected model:
+  //   overload point = 120 L/s @ 32.5 m
+  //   shaft = ρ·g·Q·H/(η·0.85) = 1000·9.81·0.12·32.5 / 0.595 = 38259/0.595
+  //         = 64 300.840336 W = 64.30 kW ⇒ the 75 kW standard frame covers it
+  //   (rated shaft = 9810·0.08·50/0.70 = 56.06 kW < overload ⇒ overload governs).
   group('M19 — motor within the standard frame range', () {
     late FirePumpRatingResult r;
     setUpAll(() {
       r = checkFirePumpRating(
-        ratedFlow: FlowRate.litersPerSecond(100),
+        ratedFlow: FlowRate.litersPerSecond(80),
         ratedHead: const Head(50),
       );
     });
-    test('governing shaft ≈ 68.32 kW (hand-arithmetic)', () {
-      const expected =
-          defaultWaterDensity * standardGravity * 0.15 * 32.5 / 0.70;
-      expect(expected, closeTo(68319.642857, 1e-4));
+    test('governing shaft ≈ 64.30 kW (hand-arithmetic)', () {
+      const expected = defaultWaterDensity *
+          standardGravity *
+          0.12 *
+          32.5 /
+          (0.70 * 0.85);
+      expect(expected, closeTo(64300.840336, 1e-4));
       expect(r.overload.shaftPower.watts, closeTo(expected, 1e-6));
+      expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
     });
     test('not flagged, and the verdict speaks of the MOTOR', () {
       expect(r.oversized, isFalse);
@@ -252,9 +260,9 @@ void main() {
 
   // Rated 1250 gpm ≈ 78.87 L/s @ 80 m (the saturating case):
   //   overload = 150 % flow @ 65 % head = 0.1183 m³/s @ 52 m
-  //   shaft(overload) = 1000·9.81·0.118305·52/0.70 = 60 355.0.../0.70 ≈ 86.2 kW
-  //   shaft(rated)    = 1000·9.81·0.078870·80/0.70 ≈ 88.4 kW  ← governs
-  //   88.4 kW > the largest standard 75 kW frame ⇒ the ladder saturates.
+  //   shaft(overload) = 1000·9.81·0.118305·52/(0.70·0.85) ≈ 101.4 kW ← governs
+  //   shaft(rated)    = 1000·9.81·0.078870·80/0.70 ≈ 88.4 kW
+  //   both > the largest standard 75 kW frame ⇒ the ladder saturates.
   group('M19 — motor above the standard frame range', () {
     late FirePumpRatingResult r;
     setUpAll(() {

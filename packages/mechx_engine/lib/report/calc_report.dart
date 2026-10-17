@@ -568,7 +568,16 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             strings.format(
                 RptStringKey.fireSprinklerKey, {'hazard': sp.hazard.name}),
             strings.format(RptStringKey.fireSprinklerValue, {
-              'lps': sp.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+              // The issued system demand is the remote-area demand at the
+              // flow each head ACTUALLY discharges: when the head minimum
+              // pressure governs (always for light hazard), the head is
+              // uplifted to K·√Pmin and the area demand rises above
+              // density × area (LH: 4.71 vs 3.15 L/s). Density-governed
+              // designs are equal either way; without the hydraulic check the
+              // density × area figure stands.
+              'lps': (ra?.remoteAreaDemand ?? sp.requiredFlow)
+                  .inLitersPerSecond
+                  .toStringAsFixed(1),
               'count': sp.sprinklerCount,
             })
           ),

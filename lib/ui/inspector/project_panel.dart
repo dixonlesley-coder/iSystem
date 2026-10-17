@@ -3775,7 +3775,7 @@ class _FireSection extends ConsumerWidget {
         ),
         const SizedBox(height: MechXSpacing.xs),
         kv('Sprinkler flow',
-            '${sprinkler.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),
+            '${ref.watch(sprinklerRemoteAreaProvider).remoteAreaDemand.inLitersPerSecond.toStringAsFixed(1)} L/s'),
         kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
         kv('Standpipe flow',
             '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s'),

@@ -460,5 +460,47 @@ class SniProfile implements StandardsProfile {
               'outlet/return; cold < 20 °C (Legionella proliferates 20–45 °C). '
               'Confirmed against WHO / HSE ACoP L8 / ASHRAE 188 guidance.',
         ),
+        // Fire-network sizing floors + fire-pump model (audit 2026-10, C1).
+        // Values mirror kMinSprinklerPipeDiameterMm / kMinHydrantBranchDiameterMm
+        // / kHoseOutletHeightM / kOverloadEfficiencyFactor (pinned equal by
+        // test/audit_2026_10_fire_test.dart).
+        const StandardValue<Object?>(
+          25.0,
+          unit: 'mm',
+          citation: 'NFPA 13 — minimum steel sprinkler pipe size (1 in.)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Every drawn sprinkler pipe is sized no smaller than 25 mm (1 in). '
+              'General practice (NFPA 13), not an SNI 03-3989-2000 clause.',
+        ),
+        const StandardValue<Object?>(
+          65.0,
+          unit: 'mm',
+          citation: 'Hydrant run minimum = Class I 65 mm landing-valve size',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A horizontal hydrant run feeding a 65 mm (2-1/2 in) Class I hose '
+              'connection is sized no smaller than 65 mm. Follows from the '
+              'outlet size (general practice), not an SNI 03-1745-2000 clause. '
+              'The vertical standpipe takes the SNI 100 mm minimum.',
+        ),
+        const StandardValue<Object?>(
+          1.2,
+          unit: 'm',
+          citation: 'Hydrant-box landing valve height above finished floor',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Standpipe static lift = top-floor elevation - pump-datum floor '
+              '+ 1.2 m outlet height (typical 0.9-1.5 m). General practice, not '
+              'an SNI clause.',
+        ),
+        const StandardValue<Object?>(
+          0.85,
+          unit: 'x eta',
+          citation: 'Fire-pump efficiency at 150 % flow relative to rated',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A centrifugal pump at 150 % flow runs past its best-efficiency '
+              'point; the overload-point shaft power uses eta x 0.85, so the '
+              'motor is checked against the overload point (NFPA 20: no motor '
+              'overload anywhere on the curve). Representative, not a certified '
+              'pump curve.',
+        ),
       ].where((v) => v.isUnverified).toList();
 }

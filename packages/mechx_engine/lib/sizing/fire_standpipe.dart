@@ -18,6 +18,7 @@
 /// Pure Dart; zero Flutter imports (§12: engine is framework-free).
 library;
 
+import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -80,6 +81,25 @@ const double kResidualPressureClassIIKpa = 450.0;
 /// (4"). (Class II systems may use smaller risers.)
 const double kMinRiserDiameterMm = 100.0;
 
+/// Minimum nominal diameter (mm) of a drawn HORIZONTAL hydrant run (the pipe
+/// feeding a hose cabinet / landing valve) in the network sizer.
+///
+/// A Class I hose connection is 65 mm (2½"), so the pipe serving it is never
+/// smaller than the valve it feeds. The vertical standpipe itself takes the
+/// SNI 100 mm minimum ([kMinRiserDiameterMm]).
+///
+/// // VERIFY — follows from the 65 mm Class I outlet size (general practice),
+/// NOT an explicit SNI 03-1745-2000 pipe-size clause. Surfaced via
+/// `SniProfile.verifyChecklist` (status `notAnSniClause`).
+const double kMinHydrantBranchDiameterMm = 65.0;
+
+/// Height of a hose-cabinet landing valve above its own finished floor (m).
+///
+/// // VERIFY — representative Indonesian hydrant-box mounting (≈ 0.9–1.5 m,
+/// 1.2 m typical), general practice NOT an SNI clause. Surfaced via
+/// `SniProfile.verifyChecklist` (status `notAnSniClause`).
+const double kHoseOutletHeightM = 1.2;
+
 /// Minimum residual pressure required at the topmost outlet for [cls], in kPa.
 double residualPressureKpa(StandpipeClass cls) {
   switch (cls) {
@@ -111,6 +131,34 @@ FlowRate standpipeFlow(int risers) {
   final lpm = (kFirstRiserFlowLpm + kAdditionalRiserFlowLpm * (risers - 1))
       .clamp(kFirstRiserFlowLpm, kMaxStandpipeFlowLpm);
   return FlowRate.litersPerMinute(lpm);
+}
+
+// ── Static lift from the building geometry ───────────────────────────────────
+
+/// The static lift [designStandpipe] expects as its `buildingHeight`: the
+/// elevation from the PUMP DATUM to the TOPMOST HOSE OUTLET (§10 — vertical
+/// length from true floor elevations, never the PDF).
+///
+///   lift = elevation(top floor) − elevation(lowest floor) + [hoseOutletHeight]
+///
+/// The fire pump + ground reservoir sit on the LOWEST level (a basement when
+/// there is one), so the datum is floor 0's surface — the delta is the same in
+/// any datum frame (`groundIndex` only offsets every elevation equally). The
+/// topmost outlet is a landing valve on the TOP floor, [hoseOutletHeight] above
+/// that floor's surface — NOT the roof slab: passing `building.totalHeight`
+/// (the roof) overstated the lift by `topFloorHeight − hoseOutletHeight`
+/// (2.8 m on a 4 m top floor).
+///
+/// An empty building yields 0 (nothing to lift to).
+Length standpipeStaticLift(
+  BuildingLevels building, {
+  Length hoseOutletHeight = const Length(kHoseOutletHeightM),
+}) {
+  if (building.floors.isEmpty) return const Length(0);
+  final top = building.floors.length - 1;
+  return Length(building.elevationOf(top).meters -
+      building.elevationOf(0).meters +
+      hoseOutletHeight.meters);
 }
 
 // ── Design result ─────────────────────────────────────────────────────────────

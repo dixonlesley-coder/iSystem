@@ -20,8 +20,12 @@
 /// We MODEL the as-built curve with the three points at exactly the limiting
 /// ratios (churn 140 %, overload 65 %) — i.e. a representative compliant pump.
 /// The shaft power is then computed at each point from the engine's
-/// [shaftPower] primitive. The 150 % point usually governs the *motor* selection
-/// (power ∝ Q·H rises even though head falls), so the motor is sized on it.
+/// [shaftPower] primitive. At the 150 % point the pump runs well past its
+/// best-efficiency point, so its efficiency is DERATED by
+/// [kOverloadEfficiencyFactor]: with one constant η the overload shaft power
+/// would be (1.5 × 0.65) = 0.975 × rated and could never govern, whereas NFPA 20
+/// requires the motor not to overload ANYWHERE on the curve. With the derate the
+/// overload point governs the motor selection (0.975 / 0.85 ≈ 1.147 × rated).
 ///
 /// // VERIFY — the 140 % churn ceiling and 65 % overload floor are the NFPA 20
 /// acceptance *limits*, not a specific pump's curve. A real selected pump's
@@ -48,6 +52,16 @@ const double kOverloadHeadRatio = 0.65;
 
 /// The overload flow point as a fraction of rated flow (NFPA 20: 150 %).
 const double kOverloadFlowRatio = 1.50;
+
+/// Pump efficiency at the 150 % overload point as a fraction of the rated-point
+/// efficiency. A centrifugal pump at 150 % flow runs past its best-efficiency
+/// point (typically η ≈ 0.55–0.62 against ≈ 0.70 at rated), so the overload
+/// shaft power is computed at `pumpEfficiency × 0.85`.
+///
+/// // VERIFY — representative (`secondarySource`), NOT a certified pump curve;
+/// a selected pump's published 150 % power governs. Surfaced via
+/// `SniProfile.verifyChecklist`.
+const double kOverloadEfficiencyFactor = 0.85;
 
 /// Default jockey (pressure-maintenance) pump flow as a fraction of the main
 /// pump's rated flow. 1 % is the customary lower bound (NFPA 20 sizes the jockey
@@ -179,9 +193,11 @@ final class FirePumpRatingResult {
 /// 2. Rated point: Q = ratedFlow, H = ratedHead.
 /// 3. Overload point: Q = [kOverloadFlowRatio] · ratedFlow,
 ///    H = [kOverloadHeadRatio] · ratedHead.
-/// 4. Each point's shaft power = [shaftPower] at [pumpEfficiency].
+/// 4. Each point's shaft power = [shaftPower] at [pumpEfficiency]; the
+///    overload point at `pumpEfficiency × overloadEfficiencyFactor` (the pump
+///    is past its best-efficiency point at 150 % flow).
 /// 5. The motor is selected (via [selectMotor]) on the *largest* shaft power
-///    across the points — normally the overload point.
+///    across the points — the overload point whenever the derate is < 0.975.
 /// 6. The jockey pump is [kJockeyFlowFraction] of rated flow at the churn head.
 /// 7. A standby pump of equal duty is recommended (the [designation] of *this*
 ///    result is the duty pump unless [designation] is overridden).
@@ -191,6 +207,8 @@ final class FirePumpRatingResult {
 ///   [designStandpipe]).
 /// * [pumpEfficiency] — overall pump efficiency η (default 0.70). // VERIFY
 ///   against the certified curve per SNI 03-6570-2001.
+/// * [overloadEfficiencyFactor] — efficiency at 150 % flow relative to
+///   [pumpEfficiency] (default [kOverloadEfficiencyFactor]). // VERIFY.
 /// * [jockeyFlowFraction] — jockey flow as a fraction of rated flow
 ///   (default [kJockeyFlowFraction]).
 /// * [designation] — designation of the main pump (default
@@ -201,6 +219,7 @@ FirePumpRatingResult checkFirePumpRating({
   required FlowRate ratedFlow,
   required Head ratedHead,
   double pumpEfficiency = 0.70,
+  double overloadEfficiencyFactor = kOverloadEfficiencyFactor,
   double jockeyFlowFraction = kJockeyFlowFraction,
   PumpDesignation designation = PumpDesignation.duty,
   bool standbyRecommended = true,
@@ -210,10 +229,16 @@ FirePumpRatingResult checkFirePumpRating({
     'pumpEfficiency must be in (0, 1]',
   );
   assert(jockeyFlowFraction > 0, 'jockeyFlowFraction must be positive');
+  assert(
+    overloadEfficiencyFactor > 0 && overloadEfficiencyFactor <= 1,
+    'overloadEfficiencyFactor must be in (0, 1]',
+  );
 
-  PumpCurvePoint point(String label, FlowRate q, Head h) {
+  PumpCurvePoint point(String label, FlowRate q, Head h,
+      {double efficiency = 1.0}) {
     final hyd = hydraulicPower(flow: q, head: h);
-    final shaft = shaftPower(flow: q, head: h, efficiency: pumpEfficiency);
+    final shaft = shaftPower(
+        flow: q, head: h, efficiency: pumpEfficiency * efficiency);
     return PumpCurvePoint(
       label: label,
       flow: q,
@@ -233,14 +258,17 @@ FirePumpRatingResult checkFirePumpRating({
   // 2. Rated (100 % flow, 100 % head).
   final rated = point('rated', ratedFlow, ratedHead);
 
-  // 3. Overload (150 % flow, 65 % head floor).
+  // 3. Overload (150 % flow, 65 % head floor), past the best-efficiency point:
+  //    efficiency derated by [overloadEfficiencyFactor].
   final overload = point(
     'overload',
     FlowRate(ratedFlow.cubicMetersPerSecond * kOverloadFlowRatio),
     Head(ratedHead.meters * kOverloadHeadRatio),
+    efficiency: overloadEfficiencyFactor,
   );
 
-  // Governing shaft power for motor selection (overload usually wins; take max).
+  // Governing shaft power for motor selection (the overload point with the
+  // default derate; take max so a caller passing factor 1.0 still gets rated).
   final governingShaftW = [
     churn.shaftPower.watts,
     rated.shaftPower.watts,
