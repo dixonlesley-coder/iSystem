@@ -10,6 +10,9 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/sources.dart';
+import 'package:mechx_engine/report/equipment_schedule.dart';
+import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -20,10 +23,19 @@ import 'package:test/test.dart';
 /// The feeder is long enough to drop ~1-2 % and the lighting run ~2 %, so the
 /// way is inside the 3 % lighting limit on its OWN drop but over it
 /// CUMULATIVELY — exactly the case the schedule used to call fine.
-ElectricalProject _twoLevel({double feederM = 60, double lightingM = 30}) =>
+ElectricalProject _twoLevel({
+  double feederM = 60,
+  double lightingM = 30,
+  ApparentPower? transformerKva,
+  double? capacitorBankKvar,
+  ElectricalSources? sources,
+}) =>
     ElectricalProject(
       id: 'p-vd',
       name: 'Cumulative VD',
+      transformerKva: transformerKva,
+      capacitorBankKvar: capacitorBankKvar,
+      sources: sources,
       panels: [
         ElectricalPanel(
           id: 'MDP',
@@ -316,6 +328,95 @@ void main() {
       final text = _rowText(untyped, 'MDP');
       expect(text, contains('NYM 5x${_csa(mdp['g']!.cable.csaMm2)} mm2'));
       expect(text, contains('NYY 3x${_csa(mdp['f']!.cable.csaMm2)} mm2'));
+    });
+  });
+
+  group('reports-6 — ID report bodies localize the procurement/calc cells', () {
+    final project = _twoLevel(
+      transformerKva: const ApparentPower(630000),
+      capacitorBankKvar: 100,
+      sources: const ElectricalSources(
+          generator: GeneratorSource(kva: ApparentPower(250000))),
+    );
+    final result = computeSystem(const PuilProfile(), project);
+    final data = EquipmentScheduleData(
+      projectName: 'p',
+      date: '2026-10-17',
+      electrical: result,
+      electricalProject: project,
+    );
+
+    test('equipment schedule: ID cells, EN unchanged', () {
+      final en = buildEquipmentScheduleMarkdown(data);
+      for (final lit in [
+        '3-phase distribution',
+        'kW demand',
+        'A incomer',
+        'Distribution transformer',
+        'Standby generator',
+        'PF-correction bank',
+      ]) {
+        expect(en, contains(lit), reason: 'EN keeps $lit');
+      }
+      final id = buildEquipmentScheduleMarkdown(data, const ReportStrings.id());
+      for (final lit in [
+        'distribution',
+        'kW demand',
+        'A incomer',
+        'Distribution transformer',
+        'Standby generator',
+        'PF-correction bank',
+      ]) {
+        expect(id, isNot(contains(lit)), reason: 'ID must not print "$lit"');
+      }
+      expect(id, contains('Distribusi 3 fasa'));
+      expect(id, contains('Distribusi 1 fasa'));
+      expect(id, contains('Transformator distribusi'));
+      expect(id, contains('Genset cadangan'));
+      // The same incomer rating, localized wording.
+      final mdp = result.panels['MDP']!;
+      expect(id,
+          contains('Pemutus masuk ${mdp.incomer.breaker.ratingA.amperes.round()} A'));
+    });
+
+    test('electrical calc report: ID prefixes + earthing note', () {
+      ElectricalCalcReportData d() => ElectricalCalcReportData(
+            projectName: 'p',
+            date: '2026-10-17',
+            standardsName: 'PUIL',
+            standardsRevision: '2011',
+            project: project,
+            result: result,
+          );
+      final en = buildElectricalCalcReport(d());
+      expect(en, contains('- Incomer:'));
+      expect(en, contains('ampacity'));
+      expect(en, contains('3-phase, 400 V'));
+      expect(en, contains(result.earthing.note));
+      final id = buildElectricalCalcReport(d(), const ReportStrings.id());
+      expect(id, isNot(contains('- Incomer:')));
+      expect(id, isNot(contains('ampacity')));
+      expect(id, isNot(contains('3-phase')));
+      expect(id, isNot(contains(result.earthing.note)));
+      expect(id, contains('3 fasa, 400 V'));
+      expect(id, contains('- Pemutus masuk:'));
+      expect(id, contains('KHA'));
+      expect(id, contains('PEN gabungan dari sumber'));
+    });
+
+    test('mechanical ID rainfall templates carry no EN fragments', () {
+      const id = ReportStrings.id();
+      final basis = id.format(
+          RptStringKey.dbDesignRainfallValue, {'mm': 120, 'c': '0.90'});
+      expect(basis, isNot(contains('runoff')));
+      expect(basis, isNot(contains('mm/hr')));
+      expect(id.format(RptStringKey.stormRainfallValue, {'mm': 120}),
+          '**120 mm/jam**');
+      // EN template is the legacy literal, byte for byte.
+      expect(
+          const ReportStrings.en()
+              .format(RptStringKey.stormRainfallValue, {'mm': 120}),
+          '**120 mm/hr**');
     });
   });
 }

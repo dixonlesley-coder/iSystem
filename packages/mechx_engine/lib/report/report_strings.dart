@@ -274,6 +274,23 @@ enum RptStringKey {
   tblModelSpec,
   tblQty,
   esClosingNote,
+
+  // ── Report CELLS / values (R3 reports-6: the procurement + calc bodies) ──────
+  sysThreePhase,
+  sysSinglePhase,
+  esPanelService, // {system}
+  esPanelDuty, // {kw}
+  esPanelSize, // {a}
+  esMotorSize, // {kw}
+  esTransformerService,
+  esGeneratorService,
+  esCapBankService,
+  earthNoteTnCs,
+  earthNoteTnS,
+  earthNoteTt,
+  earthTailRcd,
+  earthTailOcpd,
+  stormRainfallValue, // {mm}
 }
 
 /// English — the source language. Every value MUST match the inline literal it
@@ -561,6 +578,31 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '_Model / spec is a placeholder for the engineer to complete from '
           'the selected manufacturer datasheet; iSystem sizes the duty, not the '
           'catalogue model._',
+  // Report cells / values (R3 reports-6) — EN byte-identical to the literals.
+  RptStringKey.sysThreePhase: '3-phase',
+  RptStringKey.sysSinglePhase: '1-phase',
+  RptStringKey.esPanelService: '{system} distribution',
+  RptStringKey.esPanelDuty: '{kw} kW demand',
+  RptStringKey.esPanelSize: '{a} A incomer',
+  RptStringKey.esMotorSize: '{kw} kW motor',
+  RptStringKey.esTransformerService: 'Distribution transformer',
+  RptStringKey.esGeneratorService: 'Standby generator',
+  RptStringKey.esCapBankService: 'PF-correction bank',
+  RptStringKey.earthNoteTnCs:
+      'Combined PEN from the source, split into separate N and PE at the '
+          'origin. Common PLN practice.',
+  RptStringKey.earthNoteTnS:
+      'Separate neutral and protective conductors throughout the installation.',
+  RptStringKey.earthNoteTt:
+      'Installation earthed via a local electrode; requires RCD protection. '
+          'Common for standalone/rural sites.',
+  RptStringKey.earthTailRcd:
+      ' Earth-fault loop impedance is high, so an RCD provides fault '
+          'protection on every final circuit.',
+  RptStringKey.earthTailOcpd:
+      ' Overcurrent devices clear earth faults; RCDs are still required for '
+          'socket-outlets and special locations.',
+  RptStringKey.stormRainfallValue: '**{mm} mm/hr**',
 };
 
 /// Bahasa Indonesia — natural consulting-report phrasing, reusing the
@@ -604,7 +646,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.dbTargetResidual: 'Target tekanan sisa fikstur:',
   RptStringKey.dbDesignRainfall: 'Curah hujan desain:',
   RptStringKey.dbDesignRainfallValue:
-      '**{mm} mm/hr** · runoff C **{c}** (metode rasional)',
+      '**{mm} mm/jam** · koefisien limpasan C **{c}** (metode rasional)',
   RptStringKey.dbFireProtection: 'Proteksi kebakaran:',
   RptStringKey.dbFireNoneModelled: 'tidak dimodelkan',
   RptStringKey.dbFireSprinkler: 'sprinkler',
@@ -766,9 +808,9 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.ssOriginDemand: 'Permintaan terdiversifikasi sumber:',
 
   RptStringKey.headingPanels: 'Panel',
-  RptStringKey.panelIncomer: '- Incomer: {rating} {class} {poles}P',
+  RptStringKey.panelIncomer: '- Pemutus masuk: {rating} {class} {poles}P',
   RptStringKey.panelMainBusbar:
-      '- Busbar utama: {geom}, ampacity {amp} — diatur oleh {reason}',
+      '- Busbar utama: {geom}, KHA {amp} — diatur oleh {reason}',
   RptStringKey.busbarReasonWithstand: 'ketahanan hubung-singkat',
   RptStringKey.busbarReasonContinuous: 'arus kontinu',
   RptStringKey.panelWithstand:
@@ -847,6 +889,31 @@ const Map<RptStringKey, String> kReportStringsId = {
       '_Model / spesifikasi adalah tempat isian bagi insinyur untuk dilengkapi '
           'dari lembar data produsen terpilih; iSystem mengukur kapasitas, bukan '
           'model katalog._',
+  // Nilai / sel laporan (R3 reports-6).
+  RptStringKey.sysThreePhase: '3 fasa',
+  RptStringKey.sysSinglePhase: '1 fasa',
+  RptStringKey.esPanelService: 'Distribusi {system}',
+  RptStringKey.esPanelDuty: 'Permintaan {kw} kW',
+  RptStringKey.esPanelSize: 'Pemutus masuk {a} A',
+  RptStringKey.esMotorSize: 'Motor {kw} kW',
+  RptStringKey.esTransformerService: 'Transformator distribusi',
+  RptStringKey.esGeneratorService: 'Genset cadangan',
+  RptStringKey.esCapBankService: 'Bank kapasitor perbaikan faktor daya',
+  RptStringKey.earthNoteTnCs:
+      'PEN gabungan dari sumber, dipisah menjadi N dan PE terpisah di titik '
+          'asal. Praktik umum PLN.',
+  RptStringKey.earthNoteTnS:
+      'Konduktor netral dan proteksi terpisah di seluruh instalasi.',
+  RptStringKey.earthNoteTt:
+      'Instalasi dibumikan melalui elektroda lokal; memerlukan proteksi RCD. '
+          'Umum untuk lokasi mandiri/pedesaan.',
+  RptStringKey.earthTailRcd:
+      ' Impedansi lingkar gangguan tanah tinggi, sehingga RCD memberikan '
+          'proteksi gangguan pada setiap sirkit akhir.',
+  RptStringKey.earthTailOcpd:
+      ' Gawai arus lebih memutus gangguan tanah; RCD tetap diperlukan untuk '
+          'kotak-kontak dan lokasi khusus.',
+  RptStringKey.stormRainfallValue: '**{mm} mm/jam**',
 };
 
 /// Resolves a [RptStringKey] against a [ReportLocale], mirroring the app's
