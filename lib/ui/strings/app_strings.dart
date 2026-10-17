@@ -229,6 +229,8 @@ enum StringKey {
   inspectorNetwork,
   inspectorFire,
   inspectorHvacDucting,
+  inspectorExhaustFanLabelTemplate,
+  inspectorExhaustAirflow,
   inspectorSheet,
   inspectorScale,
   inspectorSelection,
@@ -1248,6 +1250,9 @@ const Map<StringKey, String> _en = {
   StringKey.inspectorNetwork: 'Network',
   StringKey.inspectorFire: 'Fire',
   StringKey.inspectorHvacDucting: 'HVAC · ducting',
+  StringKey.inspectorExhaustFanLabelTemplate:
+      'Exhaust fan static · {kw} kW motor',
+  StringKey.inspectorExhaustAirflow: 'Exhaust airflow',
   StringKey.inspectorSheet: 'Sheet',
   StringKey.inspectorScale: 'Scale',
   StringKey.inspectorSelection: 'Selection',
@@ -2319,6 +2324,9 @@ const Map<StringKey, String> _id = {
   StringKey.inspectorNetwork: 'Jaringan',
   StringKey.inspectorFire: 'Kebakaran',
   StringKey.inspectorHvacDucting: 'HVAC · saluran',
+  StringKey.inspectorExhaustFanLabelTemplate:
+      'Statis kipas buang · motor {kw} kW',
+  StringKey.inspectorExhaustAirflow: 'Aliran udara buang',
   StringKey.inspectorSheet: 'Lembar',
   StringKey.inspectorScale: 'Skala',
   StringKey.inspectorSelection: 'Pilihan',

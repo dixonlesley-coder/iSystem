@@ -3,6 +3,7 @@ import 'package:mechx_engine/sizing/fire_pump_rating.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
+import 'package:mechx_engine/sizing/pump.dart';
 
 import 'project_store.dart';
 
@@ -64,5 +65,28 @@ final firePumpRatingProvider = Provider<FirePumpRatingResult>((ref) {
   return checkFirePumpRating(
     ratedFlow: st.requiredFlow,
     ratedHead: st.pumpHead,
+  );
+});
+
+/// The ONE fire-pump duty every downstream surface uses — the equipment
+/// schedule's FP-01 row AND the MEP→electrical auto-feed. The hydraulic duty is
+/// the standpipe rated point ([sizePump] on the required flow / pump head), but
+/// the MOTOR is the NFPA 20 selection from [firePumpRatingProvider] (the
+/// smallest standard frame covering the OVERLOAD shaft power) — so the schedule,
+/// the Fire ResultCard's motor and the board-schedule circuit all name the same
+/// kW. Null when no standpipe flow is required.
+final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
+  final st = ref.watch(standpipeDesignProvider);
+  if (st.requiredFlow.cubicMetersPerSecond <= 0) return null;
+  final rating = ref.watch(firePumpRatingProvider);
+  final base = sizePump(flow: st.requiredFlow, head: st.pumpHead);
+  return PumpDuty(
+    flow: base.flow,
+    head: base.head,
+    hydraulicPower: base.hydraulicPower,
+    shaftPower: base.shaftPower,
+    motorInputPower: base.motorInputPower,
+    selectedMotor: rating.selectedMotor,
+    motorOversized: rating.oversized,
   );
 });

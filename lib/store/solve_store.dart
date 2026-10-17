@@ -238,6 +238,7 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   if (edges.isEmpty) return (trunk: const FlowRate(0), stat: const Pressure(0));
 
   var trunk = const FlowRate(0);
+  NetEdge? trunkEdge;
   final flows = <String, FlowRate>{};
   for (final e in edges) {
     final s = sizing[e.id];
@@ -245,22 +246,26 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
     flows[e.id] = s.flow;
     if (s.flow.cubicMetersPerSecond > trunk.cubicMetersPerSecond) {
       trunk = s.flow;
+      trunkEdge = e;
     }
   }
-  if (trunk.cubicMetersPerSecond <= 0) {
+  if (trunk.cubicMetersPerSecond <= 0 || trunkEdge == null) {
     return (trunk: const FlowRate(0), stat: const Pressure(0));
   }
 
-  final ids = <String>{
-    for (final e in edges) ...[e.fromId, e.toId],
-  };
-  var fan = ids.reduce((a, b) => a.compareTo(b) < 0 ? a : b);
-  for (final id in ids) {
-    if (net.nodeById(id)?.role == NodeRole.plant) {
-      fan = id;
-      break;
-    }
-  }
+  // Seed the fan at the SAME source the sizer accumulated from (plant → demand-
+  // free entry leaf → demand-free hub), for the component carrying the trunk —
+  // never at an arbitrary (e.g. lexicographically smallest) node, which could
+  // be a diffuser and drop the trunk out of the index run.
+  final roots = serviceComponentRoots(
+    net,
+    service,
+    demandNodeIds: {
+      for (final n in net.nodes)
+        if (n.airflow != null) n.id,
+    },
+  );
+  final fan = roots[trunkEdge.fromId]!;
   final s = solveDuctStatic(
     net: net,
     service: service,
@@ -294,6 +299,19 @@ final ductFanProvider = Provider<FanDuty?>((ref) {
   );
 });
 
+/// Fan duty for a drawn EXHAUST system (toilet / kitchen extract): its own
+/// trunk airflow against its OWN index-run static — a separate fan, so it is
+/// never folded into [ductFanProvider]'s supply + return sum. Null when no
+/// exhaust duct is sized.
+final exhaustFanProvider = Provider<FanDuty?>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final ex = _airSystem(net, sizing, project, ServiceType.exhaust);
+  if (ex.trunk.cubicMetersPerSecond <= 0) return null;
+  return sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat);
+});
+
 /// Supply vs return trunk airflow (L/s) for the air-balance readout. Null when
 /// there's no sized air network.
 final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
@@ -319,21 +337,28 @@ final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
 /// the target residual at the zone top — i.e. the effective span ceiling is
 /// (max-fixture − target-residual).
 final zonesProvider = Provider<List<PressureZone>>((ref) {
-  final building = ref.watch(projectControllerProvider).building;
+  final project = ref.watch(projectControllerProvider);
   final maxFix = const SniProfile().maxFixtureStaticPressure.value;
   final effective = Pressure(
     (maxFix.pascals - _targetResidual.pascals).clamp(1.0, double.infinity),
   );
-  return computeDownfeedZones(building: building, maxStaticPressure: effective);
+  // The span is ceiling(top) − fixture(bottom), so it must use the PROJECT
+  // mounting heights (F8) — the same ones the solves/BOM/report use.
+  return computeDownfeedZones(
+    building: project.building,
+    mounting: project.mounting,
+    maxStaticPressure: effective,
+  );
 });
 
 /// Per-zone PRV static profile (top residual → bottom static, within-limit) for
 /// a downfeed system holding [_targetResidual] at each zone top.
 final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
-  final building = ref.watch(projectControllerProvider).building;
+  final project = ref.watch(projectControllerProvider);
   final zones = ref.watch(zonesProvider);
   return downfeedZoneStatics(
-    building: building,
+    building: project.building,
+    mounting: project.mounting,
     zones: zones,
     prvSetpoint: _targetResidual,
     maxStatic: const SniProfile().maxFixtureStaticPressure.value,

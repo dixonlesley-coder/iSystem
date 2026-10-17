@@ -27,16 +27,17 @@ import 'solve_store.dart';
 /// is computed against this; equipment phases come from the descriptor.
 const Voltage mepPanelVoltage = Voltage(400);
 
-/// The machine-supplied names of the three SOLVED-DUTY equipment loads. Named
+/// The machine-supplied names of the SOLVED-DUTY equipment loads. Named
 /// constants (not inline literals) so [mepMintedCircuitNames] can enumerate
 /// exactly what the app itself mints — see that set's contract.
 const String kSupplyPumpLoadName = 'Supply / booster pump';
 const String kSupplyFanLoadName = 'Supply air fan';
 const String kFirePumpLoadName = 'Fire pump';
+const String kExhaustFanLoadName = 'Exhaust air fan';
 
 /// Every circuit NAME the MEP auto-feed can itself mint: the placed-equipment
 /// path names a way after its [NodeComponent.label], the solved-duty path after
-/// the three constants above, and [MepLoadSource.label] is A5's own fallback.
+/// the constants above, and [MepLoadSource.label] is A5's own fallback.
 ///
 /// Used by `syncMepEquipment` (C1) to tell an UNTOUCHED derived way from one the
 /// engineer has made their own: a way still carrying a minted name (and no
@@ -53,6 +54,7 @@ final Set<String> mepMintedCircuitNames = {
   kSupplyPumpLoadName,
   kSupplyFanLoadName,
   kFirePumpLoadName,
+  kExhaustFanLoadName,
 };
 
 /// The MEP equipment the mechanical engine has sized, assembled from the live
@@ -80,13 +82,28 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     ));
   }
 
-  final standpipe = ref.watch(standpipeDesignProvider);
-  if (standpipe.pumpShaftPower.watts > 0) {
+  // The drawn EXHAUST system's own fan (separate from the supply/return AHU).
+  final exhaust = ref.watch(exhaustFanProvider);
+  if (exhaust != null && exhaust.selectedMotor.watts > 0) {
+    loads.add(MepEquipmentLoad.fromFanDuty(
+      exhaust,
+      id: 'exhaust-fan',
+      name: kExhaustFanLoadName,
+      source: MepLoadSource.exhaustFan,
+    ));
+  }
+
+  // The fire-pump way is sized on the SELECTED NFPA 20 motor frame (the same
+  // kW the equipment schedule tells the contractor to buy — it must carry the
+  // overload point), not the raw rated-point shaft power. Electrical input is
+  // derived by A5 as motor / η so the breaker + cable cover the nameplate.
+  final firePump = ref.watch(firePumpDutyProvider);
+  if (firePump != null && firePump.selectedMotor.watts > 0) {
     loads.add(MepEquipmentLoad(
       id: 'fire-pump',
       name: kFirePumpLoadName,
       source: MepLoadSource.firePump,
-      mechanicalPower: standpipe.pumpShaftPower,
+      mechanicalPower: firePump.selectedMotor,
     ));
   }
 
@@ -172,13 +189,19 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
         ? _acRoomWatts(net, rooms, mppFor, n,
             method: ref.watch(coolingLoadMethodProvider))
         : null;
-    final watts = n.electricalLoadW ?? acWatts ?? c.defaultMotorKw * 1000;
+    // An explicit `electricalLoadW` ('Electrical load (feeds the panel)') and
+    // an AC's cooling ÷ COP are ALREADY electrical input power — pass them as
+    // the input verbatim so A5 does not divide by motor efficiency a second
+    // time. Only the component's `defaultMotorKw` is a SHAFT rating (÷ η).
+    final input = n.electricalLoadW ?? acWatts;
+    final watts = input ?? c.defaultMotorKw * 1000;
     if (watts <= 0) continue;
     loads.add(MepEquipmentLoad(
       id: 'node-${n.id}',
       name: c.label,
       source: _sourceFor(c),
       mechanicalPower: Power(watts),
+      electricalInputPower: input == null ? null : Power(input),
       phases: _phasesFor(c),
       loadPos: LayoutPos(
         sheetId: n.sheetId,
