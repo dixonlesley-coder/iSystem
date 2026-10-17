@@ -97,63 +97,64 @@ class _ExportBar extends ConsumerWidget {
       children: [
         MechXButton(
           label: context.strings(StringKey.commercialExportBomCsv),
-          onPressed: () => _exportBomCsv(ref),
+          onPressed: () => exportMepBomCsv(ref),
         ),
         MechXButton(
           label: context.strings(StringKey.commercialExportProposalMd),
           primary: true,
-          onPressed: () => _exportProposalMarkdown(ref),
+          onPressed: () => exportMepProposalMarkdown(ref),
         ),
       ],
     );
   }
-
-  // Both commercial exports route through the shared export guard (H3): the
-  // zero-length completeness gate, cancel ⇒ no pill, success ⇒ the "Exported
-  // ..." confirmation, and an IO failure surfaces instead of no-oping.
-  Future<void> _exportBomCsv(WidgetRef ref) => runExportGuarded(
-        ref,
-        name: 'MEP BOM',
-        write: () async {
-          final name = ref.read(projectControllerProvider).name;
-          // The unified M+E+P BOM (mechanical pipe/duct + fittings, then the
-          // electrical catalogue lines) in ONE CSV.
-          final csv = mepBomToCsv(
-            ref.read(mechanicalCostProvider),
-            ref.read(electricalCostProvider),
-          );
-          final full = await pickExportSave(ref,
-              dialogTitle: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleElectricalBom),
-              fileName: '$name-mep-bom.csv',
-              ext: 'csv');
-          if (full == null) return false;
-          await File(full).writeAsString(csv);
-          return true;
-        },
-      );
-
-  Future<void> _exportProposalMarkdown(WidgetRef ref) => runExportGuarded(
-        ref,
-        name: 'quotation proposal',
-        write: () async {
-          final name = ref.read(projectControllerProvider).name;
-          // The unified M+E+P proposal — per-discipline BOM tables + the combined
-          // costed roll-up.
-          final md = mepQuotationToMarkdown(
-            ref.read(mepQuotationProvider),
-            mechanical: ref.read(mechanicalCostProvider),
-            electrical: ref.read(electricalCostProvider),
-            projectName: name,
-          );
-          final full = await pickExportSave(ref,
-              dialogTitle: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleElectricalProposal),
-              fileName: '$name-mep-proposal.md',
-              ext: 'md');
-          if (full == null) return false;
-          await File(full).writeAsString(md);
-          return true;
-        },
-      );
 }
+
+// Both commercial exports route through the shared export guard (H3): the
+// zero-length completeness gate, cancel ⇒ no pill, success ⇒ the "Exported
+// ..." confirmation, and an IO failure surfaces instead of no-oping.
+// Public so the Export sheet (Ctrl/Cmd+E) lists the same two rows.
+Future<void> exportMepBomCsv(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'MEP BOM',
+      write: () async {
+        final name = ref.read(projectControllerProvider).name;
+        // The unified M+E+P BOM (mechanical pipe/duct + fittings, then the
+        // electrical catalogue lines) in ONE CSV.
+        final csv = mepBomToCsv(
+          ref.read(mechanicalCostProvider),
+          ref.read(electricalCostProvider),
+        );
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleElectricalBom),
+            fileName: '$name-mep-bom.csv',
+            ext: 'csv');
+        if (full == null) return false;
+        await File(full).writeAsString(csv);
+        return true;
+      },
+    );
+
+Future<void> exportMepProposalMarkdown(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'quotation proposal',
+      write: () async {
+        final name = ref.read(projectControllerProvider).name;
+        // The unified M+E+P proposal — per-discipline BOM tables + the combined
+        // costed roll-up.
+        final md = mepQuotationToMarkdown(
+          ref.read(mepQuotationProvider),
+          mechanical: ref.read(mechanicalCostProvider),
+          electrical: ref.read(electricalCostProvider),
+          projectName: name,
+        );
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleElectricalProposal),
+            fileName: '$name-mep-proposal.md',
+            ext: 'md');
+        if (full == null) return false;
+        await File(full).writeAsString(md);
+        return true;
+      },
+    );

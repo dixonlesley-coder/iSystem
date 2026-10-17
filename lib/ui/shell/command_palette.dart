@@ -370,7 +370,17 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
         ref.read(calibrationControllerProvider.notifier).start();
       },
     ),
-    // — Deliverable exports —
+    // — Deliverable exports — the ONE Export sheet first (every deliverable,
+    // grouped), then the individual exports for type-to-run.
+    _Command(
+      id: 'export.sheet',
+      title: context.strings(StringKey.exportSheetPaletteCommand),
+      subtitle: context.strings(StringKey.exportSheetPaletteSubtitle),
+      shortcut: 'Ctrl+E',
+      // Runs AFTER the palette closes; opening the sheet would close the
+      // palette anyway (one scrim at a time).
+      run: () => ref.read(exportSheetProvider.notifier).open(),
+    ),
     _Command(
       id: 'export.calc',
       title: 'Export calc report',

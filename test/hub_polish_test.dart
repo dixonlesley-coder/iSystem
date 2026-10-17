@@ -12,6 +12,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart' show AppLocale;
+import 'package:mechx/store/command_store.dart' show ExportGroup;
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/sheets_store.dart';
@@ -19,6 +20,7 @@ import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/commercial/electrical_bom_view.dart';
 import 'package:mechx/ui/review/issues_card.dart';
 import 'package:mechx/ui/review/review_hub.dart';
+import 'package:mechx/ui/shell/export_sheet.dart';
 import 'package:mechx/ui/shell/preferences_screen.dart';
 import 'package:mechx/ui/shell/projects_screen.dart';
 import 'package:mechx/ui/strings/app_strings.dart' show MechXStringsData, StringKey;
@@ -214,19 +216,30 @@ void main() {
     });
   });
 
-  group('P1 — Projects export groups name their inventory', () {
+  group('P1 — export groups name their inventory', () {
     testWidgets(
-        'each group header carries a (N) count matching its real action list',
+        'each Export-sheet group header carries a (N) count matching its real '
+        'row list (work item 8: the groups moved off Projects)',
         (tester) async {
       setDesktopSurface(tester);
-      await tester.pumpWidget(_themed(const ProjectsScreen()));
+      await tester.pumpWidget(_themed(const Stack(
+          children: [ProjectsScreen(), ExportSheetOverlay()])));
       await tester.pump();
+      expect(find.text('DRAWINGS (3)'), findsNothing);
 
-      // MechXSectionLabel renders UPPERCASE. Drawings=3, Reports=2, Data=2 —
-      // matching the buttons those disclosures actually hold.
-      expect(find.text('DRAWINGS (3)'), findsOneWidget);
-      expect(find.text('REPORTS (2)'), findsOneWidget);
-      expect(find.text('DATA (2)'), findsOneWidget);
+      await tester.tap(find.text('All exports...'));
+      await tester.pump();
+      for (final (label, group) in const [
+        ('DRAWINGS', ExportGroup.drawings),
+        ('REPORTS', ExportGroup.reports),
+        ('DATA', ExportGroup.data),
+        ('ELECTRICAL', ExportGroup.electrical),
+        ('COMMERCIAL', ExportGroup.commercial),
+      ]) {
+        expect(find.text('$label (${exportSheetRowCount(group)})'),
+            findsOneWidget,
+            reason: label);
+      }
     });
   });
 

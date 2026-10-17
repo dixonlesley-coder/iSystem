@@ -778,6 +778,23 @@ enum StringKey {
   projectsExportDrawingPdfHint,
   projectsExportAnnotatedPlanPdfHint,
 
+  // Work item 8 — the ONE Export sheet (Ctrl/Cmd+E): the top-bar button, the
+  // 'All exports...' link on Review / Projects, the palette command, and the
+  // sheet's own group / row / hint copy.
+  exportSheetButton,
+  exportSheetAllExports,
+  exportSheetPaletteCommand,
+  exportSheetPaletteSubtitle,
+  exportSheetGroupElectrical,
+  exportSheetGroupCommercial,
+  exportSheetRiserSld,
+  exportSheetBomFittings,
+  exportSheetBomFittingsSub,
+  exportSheetEquipmentCsv,
+  exportSheetEquipmentCsvSub,
+  exportSheetHint,
+  exportSheetClose,
+
   // B17 — the ortho two-click route-mode chip shown at the rubber-band head
   // while drawing (Tab cycles the leg order).
   drawRouteModeAuto,
@@ -1608,8 +1625,8 @@ const Map<StringKey, String> _en = {
   StringKey.reviewSubmittalHint:
       'The submittal package above bundles the drawings too (the current '
           "sheet's annotated plan, the mechanical riser, and the electrical "
-          'single-line). For a single per-sheet drawing, use the Export '
-          'buttons on the Projects screen or the Riser view.',
+          'single-line). For a single drawing, report or data file, open '
+          'All exports... (Ctrl E).',
   StringKey.reviewVerdictPass: 'PASS',
   StringKey.reviewVerdictReviewRequired: 'REVIEW REQUIRED',
   StringKey.reviewDesignSignoff: 'design sign-off',
@@ -1904,6 +1921,22 @@ const Map<StringKey, String> _en = {
       'Plain plan — no calibrated run/riser lengths on size labels.',
   StringKey.projectsExportAnnotatedPlanPdfHint:
       'Annotated plan — includes real run/riser lengths on every size label.',
+
+  // Work item 8 — the Export sheet.
+  StringKey.exportSheetButton: 'Export',
+  StringKey.exportSheetAllExports: 'All exports...',
+  StringKey.exportSheetPaletteCommand: 'Export...',
+  StringKey.exportSheetPaletteSubtitle: 'Every deliverable, grouped',
+  StringKey.exportSheetGroupElectrical: 'Electrical',
+  StringKey.exportSheetGroupCommercial: 'Commercial',
+  StringKey.exportSheetRiserSld: 'Riser single-line',
+  StringKey.exportSheetBomFittings: 'Mechanical BOM + fittings',
+  StringKey.exportSheetBomFittingsSub: 'CSV (two files: -bom + -fittings)',
+  StringKey.exportSheetEquipmentCsv: 'Equipment schedule',
+  StringKey.exportSheetEquipmentCsvSub: 'CSV (written with the MD schedule)',
+  StringKey.exportSheetHint:
+      'Up / Down to move, Enter to export, Esc to close.',
+  StringKey.exportSheetClose: 'Close',
 
   // B17 — ortho route-mode chip.
   StringKey.drawRouteModeAuto: 'Auto route · Tab',
@@ -2707,8 +2740,7 @@ const Map<StringKey, String> _id = {
   StringKey.reviewSubmittalHint:
       'Paket serah di atas juga menyertakan gambar (denah beranotasi lembar '
           'saat ini, riser mekanikal, dan satu-garis kelistrikan). Untuk satu '
-          'gambar per lembar, gunakan tombol Ekspor di layar Proyek atau '
-          'tampilan Riser.',
+          'gambar, laporan, atau berkas data, buka Semua ekspor... (Ctrl E).',
   StringKey.reviewVerdictPass: 'LULUS',
   StringKey.reviewVerdictReviewRequired: 'PERLU TINJAUAN',
   StringKey.reviewDesignSignoff: 'pengesahan desain',
@@ -3018,6 +3050,22 @@ const Map<StringKey, String> _id = {
   StringKey.projectsExportAnnotatedPlanPdfHint:
       'Denah beranotasi — menyertakan panjang jalur/riser sebenarnya pada '
           'setiap label ukuran.',
+
+  // Work item 8 — lembar Ekspor.
+  StringKey.exportSheetButton: 'Ekspor',
+  StringKey.exportSheetAllExports: 'Semua ekspor...',
+  StringKey.exportSheetPaletteCommand: 'Ekspor...',
+  StringKey.exportSheetPaletteSubtitle: 'Semua dokumen serah, dikelompokkan',
+  StringKey.exportSheetGroupElectrical: 'Kelistrikan',
+  StringKey.exportSheetGroupCommercial: 'Komersial',
+  StringKey.exportSheetRiserSld: 'Satu-garis riser',
+  StringKey.exportSheetBomFittings: 'BOM mekanikal + fiting',
+  StringKey.exportSheetBomFittingsSub: 'CSV (dua berkas: -bom + -fittings)',
+  StringKey.exportSheetEquipmentCsv: 'Jadwal peralatan',
+  StringKey.exportSheetEquipmentCsvSub: 'CSV (ditulis bersama jadwal MD)',
+  StringKey.exportSheetHint:
+      'Atas / Bawah untuk berpindah, Enter untuk ekspor, Esc untuk menutup.',
+  StringKey.exportSheetClose: 'Tutup',
 
   // B17 — ortho route-mode chip.
   StringKey.drawRouteModeAuto: 'Rute otomatis · Tab',

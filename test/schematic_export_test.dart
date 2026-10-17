@@ -8,8 +8,11 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
+import 'package:mechx/ui/shell/export_sheet.dart';
+import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 
@@ -93,6 +96,50 @@ void main() {
     expect(err, contains('zero length'));
     expect(err, contains('riser single-line (PDF)'));
     expect(container.read(statusMessageProvider), isNull);
+  });
+
+  testWidgets(
+      'Work item 8: the riser exports are reached through the ONE Export '
+      "sheet's Drawings group and run the same guarded functions",
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MechXTheme(
+          data: MechXThemeData.dark,
+          child: const Directionality(
+            textDirection: TextDirection.ltr,
+            child: Stack(children: [ExportSheetOverlay()]),
+          ),
+        ),
+      ),
+    );
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ExportSheetOverlay)),
+      listen: false,
+    );
+    container
+        .read(networkControllerProvider.notifier)
+        .loadNetwork(_zeroLengthNetwork);
+    for (final (sub, name) in const [
+      ('PDF (vector)', 'riser single-line (PDF)'),
+      ('DXF (CAD)', 'riser single-line (DXF)'),
+    ]) {
+      container.read(loadErrorProvider.notifier).clear();
+      // The Riser toolbar's opener: Drawings pre-expanded.
+      container.read(exportSheetProvider.notifier).open(ExportGroup.drawings);
+      await tester.pump();
+      final row = find.ancestor(
+        of: find.text(sub),
+        matching: find.ancestor(
+            of: find.text('Riser single-line'),
+            matching: find.byType(Row)),
+      );
+      await tester.tap(row.first);
+      await tester.pump();
+      await tester.pump();
+      expect(container.read(exportSheetProvider), isNull);
+      expect(container.read(loadErrorProvider), contains(name));
+    }
   });
 
   testWidgets(

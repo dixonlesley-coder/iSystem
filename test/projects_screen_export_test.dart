@@ -4,13 +4,18 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/document_control_store.dart';
 import 'package:mechx/store/inspector_store.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/ui/shell/document_control_card.dart';
+import 'package:mechx/ui/shell/export_sheet.dart';
 import 'package:mechx/ui/shell/projects_screen.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx/ui/widgets/mechx_button.dart';
 import 'package:mechx/ui/widgets/mechx_text_field.dart';
+import 'package:mechx_engine/network/network.dart';
 
 import 'test_util.dart';
 
@@ -32,9 +37,11 @@ Future<void> _pump(WidgetTester tester) async {
     ProviderScope(
       child: MechXTheme(
         data: MechXThemeData.dark,
+        // The Export sheet overlay rides beside the page (the app shell hosts
+        // it at top level), so the 'All exports...' link has a sheet to open.
         child: const Directionality(
           textDirection: TextDirection.ltr,
-          child: ProjectsScreen(),
+          child: Stack(children: [ProjectsScreen(), ExportSheetOverlay()]),
         ),
       ),
     ),
@@ -49,12 +56,12 @@ void main() {
   setUpAll(_loadFonts);
 
   testWidgets(
-      'A6: New project carries the accent, Export submittal package does not',
-      (tester) async {
+      'A6: New project carries the page accent; the quiet All exports... link '
+      'replaces the export buttons', (tester) async {
     await _pump(tester);
 
     expect(_primary(tester, 'New project'), isTrue);
-    expect(_primary(tester, 'Export submittal package...'), isFalse);
+    expect(_primary(tester, 'All exports...'), isFalse);
   });
 
   testWidgets(
@@ -73,40 +80,61 @@ void main() {
   });
 
   testWidgets(
-      'A5: a leading Export deliverables group is always visible; the '
-      'per-artifact rows are grouped under collapsed Drawings/Reports/Data '
-      'disclosures', (tester) async {
+      'Work item 8: the deliverables buttons + Drawings/Reports/Data '
+      'disclosures are gone; All exports... opens the ONE Export sheet and its '
+      'rows run the same guarded export functions', (tester) async {
     await _pump(tester);
 
-    // The primary group — always visible, never behind a disclosure.
-    expect(find.text('Export deliverables'), findsOneWidget);
-    expect(find.text('Export submittal package...'), findsOneWidget);
-    expect(find.text('Export unified MEP report (MD)'), findsOneWidget);
-    expect(find.text('Export unified MEP report (PDF)'), findsOneWidget);
+    expect(find.text('Export deliverables'), findsNothing);
+    expect(find.text('Export unified MEP report (MD)'), findsNothing);
+    expect(find.text('DRAWINGS (3)'), findsNothing);
+    expect(find.text('REPORTS (2)'), findsNothing);
 
-    // The three labelled groups exist (MechXSectionLabel renders UPPERCASE),
-    // each header naming its own inventory count (P1) — 3 drawing exports, 2
-    // report exports, 2 data exports.
-    expect(find.text('DRAWINGS (3)'), findsOneWidget);
-    expect(find.text('REPORTS (2)'), findsOneWidget);
-    expect(find.text('DATA (2)'), findsOneWidget);
-    // ...but default COLLAPSED — their buttons aren't in the tree yet.
-    expect(find.text('Export drawing (DXF)'), findsNothing);
-    expect(find.text('Export calc report (MD)'), findsNothing);
-    expect(find.text('Export equipment schedule (MD)'), findsNothing);
-
-    // Expanding Drawings reveals its three rows plus the two disambiguating
-    // subtitles that tell the plain plan-PDF apart from the annotated one.
-    await tester.tap(find.text('DRAWINGS (3)'));
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ProjectsScreen)),
+      listen: false,
+    );
+    // A zero-length run: every guarded export refuses BEFORE any file dialog
+    // and names itself in loadError — proof the row ran that export.
+    container.read(networkControllerProvider.notifier).loadNetwork(
+          const Network(
+            nodes: [
+              NetNode(id: 'na', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+              NetNode(id: 'nb', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+            ],
+            edges: [
+              NetEdge(
+                  id: 'e1',
+                  fromId: 'na',
+                  toId: 'nb',
+                  service: ServiceType.coldWater),
+            ],
+          ),
+        );
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
-    expect(find.text('Export drawing (DXF)'), findsOneWidget);
-    expect(find.text('Export drawing (PDF)'), findsOneWidget);
-    expect(find.text('Export annotated plan (PDF)'), findsOneWidget);
-    expect(
-        find.textContaining('Plain plan — no calibrated'), findsOneWidget);
+
+    await tester.tap(find.text('All exports...'));
+    await tester.pump();
+    expect(container.read(exportSheetProvider), ExportGroup.submittal);
+    // Default opening: groups collapsed, counted.
+    expect(find.text('DRAWINGS (7)'), findsOneWidget);
+    expect(find.text('Export annotated plan (PDF)'), findsNothing);
+
+    await tester.tap(find.text('DRAWINGS (7)'));
+    await tester.pump();
+    // The two near-identical plan PDFs keep their clarifying subtitles.
+    expect(find.textContaining('Plain plan — no calibrated'), findsOneWidget);
     expect(find.textContaining('Annotated plan — includes real'),
         findsOneWidget);
+    await tester.tap(find.text('Export annotated plan (PDF)'));
+    await tester.pump();
+    await tester.pump();
+
+    expect(container.read(exportSheetProvider), isNull,
+        reason: 'running an export closes the sheet');
+    final err = container.read(loadErrorProvider);
+    expect(err, isNotNull);
+    expect(err, contains('annotated plan PDF'));
   });
 
   testWidgets(

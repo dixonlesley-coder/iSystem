@@ -36,9 +36,16 @@ class CommandPaletteController extends Notifier<bool> {
   @override
   bool build() => false;
 
-  void open() => state = true;
+  void open() {
+    _closeExportSheet(ref);
+    state = true;
+  }
+
   void close() => state = false;
-  void toggle() => state = !state;
+  void toggle() {
+    if (!state) _closeExportSheet(ref);
+    state = !state;
+  }
 }
 
 /// Whether the Keyboard-shortcuts reference sheet (F1) is open. Like the
@@ -53,9 +60,57 @@ class ShortcutsSheetController extends Notifier<bool> {
   @override
   bool build() => false;
 
-  void open() => state = true;
+  void open() {
+    _closeExportSheet(ref);
+    state = true;
+  }
+
   void close() => state = false;
-  void toggle() => state = !state;
+  void toggle() {
+    if (!state) _closeExportSheet(ref);
+    state = !state;
+  }
+}
+
+/// Closes the Export sheet when another shell overlay opens, so two scrims can
+/// never stack (the same exclusivity the palette and shortcuts sheet share).
+void _closeExportSheet(Ref ref) {
+  if (ref.read(exportSheetProvider) != null) {
+    ref.read(exportSheetProvider.notifier).close();
+  }
+}
+
+/// The groups of the ONE Export sheet (Ctrl/Cmd+E). [submittal] is the
+/// "no particular group" opening: the primary submittal-package action is
+/// focused and every group starts collapsed. The others pre-expand + focus
+/// that group — how each workspace's own Export button lands on its rows.
+enum ExportGroup { submittal, drawings, reports, data, electrical, commercial }
+
+/// Whether the Export sheet is open, and with which group preselected.
+/// `null` = closed (the default, so a fresh launch and the goldens render
+/// nothing). Transient UI state — never persisted.
+final exportSheetProvider =
+    NotifierProvider<ExportSheetController, ExportGroup?>(
+  ExportSheetController.new,
+);
+
+class ExportSheetController extends Notifier<ExportGroup?> {
+  @override
+  ExportGroup? build() => null;
+
+  /// Open the sheet with [group] pre-expanded (default: the submittal
+  /// action focused, groups collapsed). Closes the command palette and the
+  /// shortcuts sheet first.
+  void open([ExportGroup group = ExportGroup.submittal]) {
+    ref.read(commandPaletteOpenProvider.notifier).close();
+    ref.read(shortcutsSheetOpenProvider.notifier).close();
+    state = group;
+  }
+
+  void close() => state = null;
+
+  /// Ctrl/Cmd+E: open on the default group, or close when already open.
+  void toggle() => state == null ? open() : close();
 }
 
 /// The stable ids of recently-run palette commands, most-recent first, capped

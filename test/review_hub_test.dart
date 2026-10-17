@@ -5,12 +5,14 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/review/issues_card.dart';
 import 'package:mechx/ui/review/review_hub.dart';
+import 'package:mechx/ui/shell/export_sheet.dart';
 import 'package:mechx/ui/strings/app_strings.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
@@ -69,19 +71,79 @@ void main() {
     expect(find.text('REVIEW'), findsWidgets);
 
     // J3: the hub ends in an 'Export deliverables' card leading with the
-    // verdict (the "check, then issue" pairing), followed by the reused
-    // export buttons — no new export path, just the existing Projects-screen
-    // functions surfaced here too.
+    // verdict (the "check, then issue" pairing). Work item 8: it keeps ONLY
+    // the primary submittal-package action + an 'All exports...' link to the
+    // ONE Export sheet — the single-export buttons live there now.
     expect(find.text('Export deliverables'), findsOneWidget);
     expect(
       find.text('REVIEW REQUIRED — you decide whether to issue'),
       findsOneWidget,
     );
-    expect(find.text('Export calc report (MD)'), findsOneWidget);
-    expect(find.text('Export unified MEP report (MD)'), findsOneWidget);
-    // H8: the MD equipment-schedule export also writes a CSV sibling — the
-    // button says so.
-    expect(find.text('Export equipment schedule (MD + CSV)'), findsOneWidget);
+    expect(find.text('Export submittal package...'), findsOneWidget);
+    expect(find.text('All exports...'), findsOneWidget);
+    expect(find.text('Export calc report (MD)'), findsNothing);
+    expect(find.text('Export unified MEP report (MD)'), findsNothing);
+  });
+
+  testWidgets(
+      'Work item 8: All exports... opens the Export sheet; its Reports rows run '
+      'the same guarded calc / MEP / equipment-schedule exports',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MechXTheme(
+          data: MechXThemeData.dark,
+          child: const Directionality(
+            textDirection: TextDirection.ltr,
+            child: Stack(children: [ReviewHub(), ExportSheetOverlay()]),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ReviewHub)),
+      listen: false,
+    );
+    // A zero-length run makes every guarded export refuse BEFORE any file
+    // dialog and name itself in loadError.
+    container.read(networkControllerProvider.notifier).loadNetwork(
+          const Network(
+            nodes: [
+              NetNode(id: 'na', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+              NetNode(id: 'nb', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+            ],
+            edges: [
+              NetEdge(
+                  id: 'e1',
+                  fromId: 'na',
+                  toId: 'nb',
+                  service: ServiceType.coldWater),
+            ],
+          ),
+        );
+    await tester.pump();
+
+    for (final (row, name) in const [
+      ('Export calc report (MD)', 'calc report'),
+      ('Export unified MEP report (MD)', 'MEP report'),
+      // H8: the MD equipment-schedule export also writes a CSV sibling — the
+      // row says so.
+      ('Export equipment schedule (MD + CSV)', 'equipment schedule'),
+    ]) {
+      container.read(loadErrorProvider.notifier).set(null);
+      await tester.ensureVisible(find.text('All exports...'));
+      await tester.tap(find.text('All exports...'));
+      await tester.pump();
+      await tester.tap(find.text('REPORTS (6)'));
+      await tester.pump();
+      await tester.tap(find.text(row));
+      await tester.pump();
+      await tester.pump();
+      expect(container.read(exportSheetProvider), isNull);
+      expect(container.read(loadErrorProvider), contains(name), reason: row);
+    }
   });
 
   testWidgets(

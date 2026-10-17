@@ -9,15 +9,8 @@ import '../../store/electrical_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
 import '../inspector/project_panel.dart'
-    show
-        ExportIdentityBar,
-        exportCalcReport,
-        exportCalcReportPdf,
-        exportEquipmentSchedule,
-        exportEquipmentSchedulePdf,
-        exportMepUnifiedReport,
-        exportMepUnifiedReportPdf,
-        exportSubmittalPackage;
+    show ExportIdentityBar, exportSubmittalPackage;
+import '../shell/export_sheet.dart' show AllExportsLink;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -176,38 +169,9 @@ class _ExportDeliverablesCard extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: MechXSpacing.sm),
-          Wrap(
-            spacing: MechXSpacing.xs,
-            runSpacing: MechXSpacing.xs,
-            children: [
-              MechXButton(
-                label: s(StringKey.inspectorExportCalcReportMd),
-                onPressed: () => exportCalcReport(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportCalcReportPdfBtn),
-                onPressed: () => exportCalcReportPdf(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportMepReportMd),
-                onPressed: () => exportMepUnifiedReport(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportMepReportPdfBtn),
-                onPressed: () => exportMepUnifiedReportPdf(ref),
-              ),
-              MechXButton(
-                // H8: the MD export writes a spreadsheet CSV sibling too —
-                // the label says so.
-                label: s(StringKey.inspectorExportEquipmentScheduleMd),
-                onPressed: () => exportEquipmentSchedule(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportEquipmentSchedulePdfBtn),
-                onPressed: () => exportEquipmentSchedulePdf(ref),
-              ),
-            ],
-          ),
+          // Work item 8: every single export lives in the ONE Export sheet —
+          // this card keeps only the primary package action + a link to it.
+          const AllExportsLink(),
           const SizedBox(height: MechXSpacing.sm),
           Text(
             s(StringKey.reviewSubmittalHint),

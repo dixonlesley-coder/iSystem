@@ -232,7 +232,7 @@ a PURE, unit-tested accelerator TABLE: `matchShellShortcut(key, {mod, shift, alt
 `switch` that runs the SAME entry points the top bar / nav rail / palette use, so an accelerator
 can never diverge from its clicked equivalent). Bindings: **Ctrl/Cmd+N** new · **O** open ·
 **S** / **Shift+S** save / save-as · **I** import plan · **P** export the annotated plan PDF
-(the app's "print", `runExportGuarded`) · **Z** / **Y** / **Shift+Z** undo/redo on the ONE
+(the app's "print", `runExportGuarded`) · **E** the ONE Export sheet · **Z** / **Y** / **Shift+Z** undo/redo on the ONE
 `historyProvider` timeline (now global, so undo works on the hub screens where nothing holds
 focus) · **K** / **Shift+P** command palette · **1..8** (+ numpad) the nav-rail destinations in
 rail order [Layout · Riser · Electrical · Building · Review · Commercial · Projects ·
@@ -250,6 +250,12 @@ byte-identical): the global bindings beside the CANVAS ones (tools V/R/E/M/K/B, 
 closes it pre-focus (it has no text field, so the bubble listener never sees the key on a hub
 screen) and opening either overlay closes the other. The palette carries matching keycaps + a
 'Keyboard shortcuts' command.
+**ONE Export sheet (Ctrl/Cmd+E, 2026-10-17)** (`ui/shell/export_sheet.dart` over the transient
+`exportSheetProvider`, closed ⇒ renders nothing): identity bar + the primary submittal package +
+counted Drawings/Reports/Data/Electrical/Commercial groups, every row an existing guarded
+`exportXxx(ref)`. Opened from the top-bar 'Export', Ctrl+E, the palette, Review/Projects 'All
+exports...' and the Riser/Electrical toolbar Export buttons (which pre-expand their group) — the
+per-page export menus/button walls are gone.
 **Inspector clarity — collapsible sections + promoted headline results** (`ui/inspector/
 disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
 `sectionVisibilityProvider`): the dense `ProjectPanel`'s major sections (Draw / Tanks / Rooms /

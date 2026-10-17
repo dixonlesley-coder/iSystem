@@ -47,6 +47,7 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
+import '../../store/command_store.dart' show ExportGroup, exportSheetProvider;
 import '../../store/electrical_feed.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
@@ -70,7 +71,6 @@ import '../widgets/section_label.dart';
 import '../widgets/severity_glyph.dart';
 import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
-import 'electrical_export.dart';
 import 'electrical_format.dart';
 import 'electrical_inspector.dart'
     show
@@ -136,9 +136,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   /// Whether the gesture-help popover is open.
   bool _showHelp = false;
 
-  /// Whether the Export menu (SLD / report / power one-line) is open.
-  bool _showExportMenu = false;
-
   /// The single-line canvas's live viewport (transform + size), published by
   /// the canvas so the minimap (I8) can draw a truthful viewport rectangle and
   /// pan-to-tap. A [ValueNotifier] so a pan repaints only the minimap, not the
@@ -164,16 +161,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     }
   }
 
-  /// Close the export menu and run the chosen export action against the live
-  /// providers (the file dialog + IO live in `electrical_export.dart`).
-  void _runExport(Future<void> Function(WidgetRef) action) {
-    setState(() => _showExportMenu = false);
-    action(ref);
-  }
-
   /// G4 — the electrical-workspace Esc ladder. Bubbles up from the canvas's own
   /// Focus (which clears any canvas selection first), then closes the topmost
-  /// open overlay: a context menu → the export popover → an open inspector /
+  /// open overlay: a context menu → an open inspector /
   /// drawer → the gesture-help popover. Every close path already exists as a
   /// `setState`; this just gives them a keyboard exit (they previously closed
   /// only by scrim / button). Non-Esc keys / an all-closed workspace bubble on.
@@ -187,10 +177,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         _panelMenu = null;
         _circuitMenu = null;
       });
-      return KeyEventResult.handled;
-    }
-    if (_showExportMenu) {
-      setState(() => _showExportMenu = false);
       return KeyEventResult.handled;
     }
     // Any open inline inspector section (circuit / panel / Supply /
@@ -249,7 +235,11 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           onTab: (t) => ref.read(electricalTabProvider.notifier).set(t),
           onSupply: _openSupply,
           onAddPanel: _addPanel,
-          onExport: () => setState(() => _showExportMenu = !_showExportMenu),
+          // Work item 8: Export opens the ONE Export sheet with its
+          // Electrical group pre-expanded.
+          onExport: () => ref
+              .read(exportSheetProvider.notifier)
+              .open(ExportGroup.electrical),
           onToggleAdvanced: () =>
               ref.read(electricalInspectorTargetProvider.notifier)
                   .toggleAdvanced(),
@@ -282,35 +272,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         // Tap-away scrim behind any open menu / export popover. (The circuit /
         // panel editors no longer float here — they live in the sibling inline
         // inspector column, closed via its Close button or Esc.)
-        if (_panelMenu != null || _circuitMenu != null || _showExportMenu)
+        if (_panelMenu != null || _circuitMenu != null)
           Positioned.fill(
             child: Listener(
-              onPointerDown: (_) {
-                _closeOverlays();
-                if (_showExportMenu) setState(() => _showExportMenu = false);
-              },
+              onPointerDown: (_) => _closeOverlays(),
               behavior: HitTestBehavior.translucent,
               child: const SizedBox.expand(),
-            ),
-          ),
-        if (_showExportMenu)
-          Positioned(
-            top: 48,
-            right: MechXSpacing.md,
-            child: _ExportMenu(
-              onSld: () => _runExport(exportElectricalSldDxf),
-              onSldPdf: () => _runExport(exportElectricalSldPdf),
-              onSchedulesPdf: () =>
-                  _runExport(exportElectricalPanelSchedulesPdf),
-              onOverviewPdf: () => _runExport(exportElectricalOverviewPdf),
-              onOverviewDxf: () => _runExport(exportElectricalOverviewDxf),
-              onRiserPdf: () => _runExport(exportElectricalRiserPdf),
-              onRiserDxf: () => _runExport(exportElectricalRiserDxf),
-              onReport: () => _runExport(exportElectricalCalcReport),
-              onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
-              onPowerOneLinePdf: () => _runExport(exportPowerOneLinePdf),
-              onPlanPdf: () => _runExport(exportElectricalPlanPdf),
-              onPlanDxf: () => _runExport(exportElectricalPlanDxf),
             ),
           ),
         if (_circuitMenu != null) _buildCircuitMenu(),
@@ -1012,201 +979,6 @@ class _Toolbar extends StatelessWidget {
 }
 
 // ── Canvas chrome (zoom, minimap, help) ─────────────────────────────────────
-
-/// The Export popover (anchored under the toolbar's Export button) — single-line
-/// DXF, electrical report (Markdown) and power one-line DXF.
-class _ExportMenu extends StatelessWidget {
-  final VoidCallback onSld;
-  final VoidCallback onSldPdf;
-  final VoidCallback onSchedulesPdf;
-  final VoidCallback onOverviewPdf;
-  final VoidCallback onOverviewDxf;
-  final VoidCallback onRiserPdf;
-  final VoidCallback onRiserDxf;
-  final VoidCallback onReport;
-  final VoidCallback onPowerOneLine;
-  final VoidCallback onPowerOneLinePdf;
-  final VoidCallback onPlanPdf;
-  final VoidCallback onPlanDxf;
-  const _ExportMenu({
-    required this.onSld,
-    required this.onSldPdf,
-    required this.onSchedulesPdf,
-    required this.onOverviewPdf,
-    required this.onOverviewDxf,
-    required this.onRiserPdf,
-    required this.onRiserDxf,
-    required this.onReport,
-    required this.onPowerOneLine,
-    required this.onPowerOneLinePdf,
-    required this.onPlanPdf,
-    required this.onPlanDxf,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Pop-in: a brief scale-from-95% + fade, anchored at the top-right corner
-    // (under the Export button), so the popover feels like it grows from there.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.95 + 0.05 * t,
-          alignment: Alignment.topRight,
-          child: child,
-        ),
-      ),
-      child: SizedBox(
-        width: 260,
-        child: GlassSurface(
-          borderRadius: MechXRadii.card,
-          blurSigma: MechXGlass.blurSigmaLight,
-          shadow: MechXShadow.popover,
-          child: Padding(
-            padding: const EdgeInsets.all(MechXSpacing.xs),
-            child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // H1 — the plan-accurate installation layout (denah instalasi
-            // listrik): panels + loads at their real placed positions on the
-            // floor plan, the drawing an Indonesian building-permit set requires.
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPlan),
-              sub: context.strings(StringKey.electricalExportSldPdf),
-              onTap: onPlanPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPlan),
-              sub: context.strings(StringKey.electricalExportSldDxf),
-              onTap: onPlanDxf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportSld),
-              sub: context.strings(StringKey.electricalExportSldDxf),
-              onTap: onSld,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportSld),
-              sub: context.strings(StringKey.electricalExportSldPdf),
-              onTap: onSldPdf,
-            ),
-            // The issuable schedule SET — one board schedule per page, real
-            // `Sheet i of t` counters (C1 pagination).
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportSchedules),
-              sub: context.strings(StringKey.electricalExportSchedulesPdf),
-              onTap: onSchedulesPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportOverview),
-              sub: context.strings(StringKey.electricalExportOverviewPdf),
-              onTap: onOverviewPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportOverview),
-              sub: context.strings(StringKey.electricalExportOverviewDxf),
-              onTap: onOverviewDxf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportRiser),
-              sub: context.strings(StringKey.electricalExportRiserPdf),
-              onTap: onRiserPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportRiser),
-              sub: context.strings(StringKey.electricalExportRiserDxf),
-              onTap: onRiserDxf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportReport),
-              sub: context.strings(StringKey.electricalExportReportSub),
-              onTap: onReport,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPowerOneLine),
-              sub: context.strings(StringKey.electricalExportPowerOneLineSub),
-              onTap: onPowerOneLine,
-            ),
-            // C7 — the PDF companion (same shared SldSheet geometry as the DXF).
-            // Reuses the generic 'PDF (vector)' string; a dedicated
-            // power-one-line-PDF key is owned by app_strings.dart (see followUps).
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPowerOneLine),
-              sub: context.strings(StringKey.electricalExportSldPdf),
-              onTap: onPowerOneLinePdf,
-            ),
-          ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ExportRow extends StatefulWidget {
-  final String label;
-  final String sub;
-  final VoidCallback onTap;
-  const _ExportRow({
-    required this.label,
-    required this.sub,
-    required this.onTap,
-  });
-
-  @override
-  State<_ExportRow> createState() => _ExportRowState();
-}
-
-class _ExportRowState extends State<_ExportRow> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.sm,
-          ),
-          decoration: BoxDecoration(
-            color: _hover ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                widget.label,
-                style: type.label.copyWith(color: colors.textPrimary),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                widget.sub,
-                style: type.caption.copyWith(color: colors.textMuted),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// J6 — the electrical panel layout's padded world bounds, expressed as the
 /// shared [CanvasMinimap]'s CONTENT rectangle: the world point that maps to

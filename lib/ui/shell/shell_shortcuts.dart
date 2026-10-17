@@ -29,6 +29,7 @@ enum ShellCommand {
   saveAs,
   importPlan,
   printPlan,
+  exportSheet,
   // — Edit —
   undo,
   redo,
@@ -126,6 +127,7 @@ ShellCommand? matchShellShortcut(
   if (key == LogicalKeyboardKey.keyS) return ShellCommand.save;
   if (key == LogicalKeyboardKey.keyI) return ShellCommand.importPlan;
   if (key == LogicalKeyboardKey.keyP) return ShellCommand.printPlan;
+  if (key == LogicalKeyboardKey.keyE) return ShellCommand.exportSheet;
   if (key == LogicalKeyboardKey.keyZ) return ShellCommand.undo;
   if (key == LogicalKeyboardKey.keyY) return ShellCommand.redo;
   if (key == LogicalKeyboardKey.keyK) return ShellCommand.commandPalette;
@@ -180,6 +182,8 @@ const List<ShortcutGroup> kShellShortcutGroups = [
     ShortcutDoc('Ctrl I', 'Import plan (PDF / DXF / DWG)',
         ShellCommand.importPlan),
     ShortcutDoc('Ctrl P', 'Export the plan as PDF', ShellCommand.printPlan),
+    ShortcutDoc('Ctrl E', 'Export... (every deliverable)',
+        ShellCommand.exportSheet),
   ]),
   ShortcutGroup('Edit', [
     ShortcutDoc('Ctrl Z', 'Undo', ShellCommand.undo),

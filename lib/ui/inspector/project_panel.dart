@@ -3437,66 +3437,63 @@ class _ResultsSection extends ConsumerWidget {
             if (fittings.isNotEmpty)
               _kvRow(context, 'Fittings (est.)',
                   '${fittings.fold<int>(0, (s, f) => s + f.count)}'),
-            const SizedBox(height: MechXSpacing.sm),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: MechXButton(
-                label: 'Export BOM (CSV)',
-                onPressed: () => _exportBom(ref, fittings,
-                    MechXStringsData(ref.read(localeProvider))(
-                        StringKey.exportTitleBom)),
-              ),
-            ),
+            // Work item 8: 'Export BOM (CSV)' now lives in the Export sheet's
+            // Data group (Ctrl/Cmd+E) — one door for every deliverable.
           ],
         ],
       ],
     ),
     );
   }
+}
 
-  Future<void> _exportBom(WidgetRef ref, List<FittingLine> fittings,
-          String dialogTitle) =>
-      runExportGuarded(
-        ref,
-        // Two clean single-schema files (Excel-aligned) instead of one mixed CSV.
-        name: 'BOM (-bom.csv + -fittings.csv)',
-        write: () async {
-          // H8: the default name carries the PROJECT name like every other
-          // export — never the internal 'mechx' codename.
-          final projectName = ref.read(projectControllerProvider).name;
-          final defaultBase = projectName.isEmpty ? 'project' : projectName;
-          final full = await pickExportSave(ref,
-              dialogTitle: dialogTitle,
-              fileName: '$defaultBase-bom.csv',
-              ext: 'csv');
-          if (full == null) return false;
-          // Derive a base by stripping a trailing .csv (and a trailing '-bom',
-          // so accepting the suggested name yields '<name>-bom.csv', not
-          // '<name>-bom-bom.csv'), then write the two aligned files:
-          // <base>-bom.csv + <base>-fittings.csv.
-          var base = full.substring(0, full.length - 4);
-          if (base.endsWith('-bom')) {
-            base = base.substring(0, base.length - 4);
-          }
-          // Rebuild the BOM grouped by floor (bomProvider is un-grouped) and
-          // join the live stock-bar cut plan onto the CSV.
-          final project = ref.read(projectControllerProvider);
-          final floorBom = buildBom(
-            net: ref.read(networkControllerProvider).network,
-            sizing: ref.read(sizingProvider),
-            calibrationBySheet: project.calibrations,
-            building: project.building,
-            groupByFloor: true,
-          );
-          final cutPlan = ref.read(pipeCutPlanProvider);
-          await File('$base-bom.csv')
-              .writeAsString(bomCsvWithCutPlan(floorBom, cutPlan));
-          await File('$base-fittings.csv')
-              .writeAsString(fittingsToCsv(fittings));
-          return true;
-        },
-      );
-
+/// The mechanical BOM export — `<base>-bom.csv` (floor-grouped, with the
+/// stock-bar cut plan joined) + `<base>-fittings.csv`. Listed in the Export
+/// sheet's Data group (work item 8; was the Results-section button).
+Future<void> exportBomCsv(WidgetRef ref) {
+  final fittings = ref.read(fittingsProvider);
+  final dialogTitle =
+      MechXStringsData(ref.read(localeProvider))(StringKey.exportTitleBom);
+  return runExportGuarded(
+      ref,
+      // Two clean single-schema files (Excel-aligned) instead of one mixed CSV.
+      name: 'BOM (-bom.csv + -fittings.csv)',
+      write: () async {
+        // H8: the default name carries the PROJECT name like every other
+        // export — never the internal 'mechx' codename.
+        final projectName = ref.read(projectControllerProvider).name;
+        final defaultBase = projectName.isEmpty ? 'project' : projectName;
+        final full = await pickExportSave(ref,
+            dialogTitle: dialogTitle,
+            fileName: '$defaultBase-bom.csv',
+            ext: 'csv');
+        if (full == null) return false;
+        // Derive a base by stripping a trailing .csv (and a trailing '-bom',
+        // so accepting the suggested name yields '<name>-bom.csv', not
+        // '<name>-bom-bom.csv'), then write the two aligned files:
+        // <base>-bom.csv + <base>-fittings.csv.
+        var base = full.substring(0, full.length - 4);
+        if (base.endsWith('-bom')) {
+          base = base.substring(0, base.length - 4);
+        }
+        // Rebuild the BOM grouped by floor (bomProvider is un-grouped) and
+        // join the live stock-bar cut plan onto the CSV.
+        final project = ref.read(projectControllerProvider);
+        final floorBom = buildBom(
+          net: ref.read(networkControllerProvider).network,
+          sizing: ref.read(sizingProvider),
+          calibrationBySheet: project.calibrations,
+          building: project.building,
+          groupByFloor: true,
+        );
+        final cutPlan = ref.read(pipeCutPlanProvider);
+        await File('$base-bom.csv')
+            .writeAsString(bomCsvWithCutPlan(floorBom, cutPlan));
+        await File('$base-fittings.csv')
+            .writeAsString(fittingsToCsv(fittings));
+        return true;
+      },
+    );
 }
 
 class _FireSection extends ConsumerWidget {

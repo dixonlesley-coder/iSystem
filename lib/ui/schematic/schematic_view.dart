@@ -35,6 +35,7 @@ import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 
 import '../../store/app_state.dart';
+import '../../store/command_store.dart' show ExportGroup, exportSheetProvider;
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
 import '../../store/history_store.dart';
 import '../../store/layer_store.dart'
@@ -66,7 +67,6 @@ import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_segment.dart';
 import '../widgets/section_label.dart';
 import 'riser_tags.dart';
-import 'schematic_export.dart';
 
 // `equipmentDetail` was lifted into the engine (`report/riser_tags.dart`) so
 // the riser single-line EXPORT builds the same per-node capacity/duty suffixes
@@ -93,13 +93,8 @@ class SchematicView extends ConsumerStatefulWidget {
 }
 
 class _SchematicViewState extends ConsumerState<SchematicView> {
-  /// Whether the Export menu (riser single-line PDF / DXF) is open. Ephemeral
-  /// popover interaction state — deliberately NOT sticky (a fresh hop starts
-  /// with it closed).
-  bool _showExportMenu = false;
-
-  /// Whether the 'Show' display-toggles popover is open. Ephemeral, like the
-  /// Export menu (never sticky; a fresh hop starts closed).
+  /// Whether the 'Show' display-toggles popover is open. Ephemeral popover
+  /// interaction state (never sticky; a fresh hop starts closed).
   bool _showDisplayMenu = false;
 
   /// Anchors the 'Show' popover under its toolbar button.
@@ -113,18 +108,6 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
         _showButtonKey.currentContext?.findRenderObject() as RenderBox?;
     if (box == null || !box.hasSize) return false;
     return (box.localToGlobal(Offset.zero) & box.size).contains(global);
-  }
-
-  /// Close the export menu and run the chosen export against the live providers
-  /// (the file dialog + IO live in `schematic_export.dart`). Awaited so the
-  /// guarded export's success/failure feedback completes as part of this call
-  /// (every riser export routes through `runExportGuarded`, which owns the
-  /// pill/error reporting).
-  Future<void> _runExport(
-      Future<void> Function(WidgetRef, ServiceType?) action) async {
-    final focus = ref.read(schematicViewProvider).autoFocus;
-    setState(() => _showExportMenu = false);
-    await action(ref, focus);
   }
 
   @override
@@ -154,14 +137,14 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
           onInferRisers: ctrl.setInferRisers,
           showLink: _showLink,
           showButtonKey: _showButtonKey,
-          onShow: () => setState(() {
-            _showDisplayMenu = !_showDisplayMenu;
-            _showExportMenu = false;
-          }),
-          onExport: () => setState(() {
-            _showExportMenu = !_showExportMenu;
-            _showDisplayMenu = false;
-          }),
+          onShow: () => setState(() => _showDisplayMenu = !_showDisplayMenu),
+          // Work item 8: Export opens the ONE Export sheet with its Drawings
+          // group pre-expanded (the riser PDF/DXF + 'all systems' set rows
+          // export the current Auto focus, as the old menu did).
+          onExport: () {
+            setState(() => _showDisplayMenu = false);
+            ref.read(exportSheetProvider.notifier).open(ExportGroup.drawings);
+          },
         ),
         Container(height: 1, color: colors.border),
         Expanded(
@@ -189,39 +172,6 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
     return Stack(
       children: [
         Positioned.fill(child: ColoredBox(color: colors.canvas, child: body)),
-        // Tap-away scrim behind the open export menu.
-        if (_showExportMenu)
-          Positioned.fill(
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerDown: (_) => setState(() => _showExportMenu = false),
-              child: const SizedBox.expand(),
-            ),
-          ),
-        if (_showExportMenu)
-          Positioned(
-            top: 48,
-            right: MechXSpacing.md,
-            // F4: the export menu autofocuses so Esc closes it (it previously
-            // closed only by scrim/button).
-            child: Focus(
-              autofocus: true,
-              onKeyEvent: (node, event) {
-                if (event is KeyDownEvent &&
-                    event.logicalKey == LogicalKeyboardKey.escape) {
-                  setState(() => _showExportMenu = false);
-                  return KeyEventResult.handled;
-                }
-                return KeyEventResult.ignored;
-              },
-              child: _RiserExportMenu(
-                onPdf: () => _runExport(exportMechanicalRiserPdf),
-                onDxf: () => _runExport(exportMechanicalRiserDxf),
-                onSetPdf: () => _runExport(exportMechanicalRiserSetPdf),
-                onSetDxf: () => _runExport(exportMechanicalRiserSetDxf),
-              ),
-            ),
-          ),
         // Tap-away scrim behind the open 'Show' popover. A press on the Show
         // button itself is left to the button's toggle.
         if (displayMenuOpen)
@@ -272,84 +222,11 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
   }
 }
 
-/// The riser single-line Export popover — a vector PDF or DXF of the current
-/// (focused) Auto riser diagram, with the KETERANGAN legend + title block on the
-/// sheet. Mirrors the electrical `_ExportMenu` look.
-class _RiserExportMenu extends StatelessWidget {
-  final VoidCallback onPdf;
-  final VoidCallback onDxf;
-  final VoidCallback onSetPdf;
-  final VoidCallback onSetDxf;
-  const _RiserExportMenu({
-    required this.onPdf,
-    required this.onDxf,
-    required this.onSetPdf,
-    required this.onSetDxf,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.95 + 0.05 * t,
-          alignment: Alignment.topRight,
-          child: child,
-        ),
-      ),
-      child: SizedBox(
-        width: 240,
-        child: GlassSurface(
-          borderRadius: MechXRadii.card,
-          blurSigma: MechXGlass.blurSigmaLight,
-          shadow: MechXShadow.popover,
-          child: Padding(
-            padding: const EdgeInsets.all(MechXSpacing.xs),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _RiserExportRow(
-                  label: context.strings(StringKey.electricalExportSld),
-                  sub: context.strings(StringKey.electricalExportSldPdf),
-                  onTap: onPdf,
-                ),
-                _RiserExportRow(
-                  label: context.strings(StringKey.electricalExportSld),
-                  sub: context.strings(StringKey.electricalExportSldDxf),
-                  onTap: onDxf,
-                ),
-                // The issuable drawing SET — every present service + the
-                // combined sheet, numbered `Sheet i of t` (one multi-page PDF /
-                // a per-service DXF series).
-                _RiserExportRow(
-                  label: context.strings(StringKey.mechExportAllSystems),
-                  sub: context.strings(StringKey.mechExportAllSystemsPdf),
-                  onTap: onSetPdf,
-                ),
-                _RiserExportRow(
-                  label: context.strings(StringKey.mechExportAllSystems),
-                  sub: context.strings(StringKey.mechExportAllSystemsDxf),
-                  onTap: onSetDxf,
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// The riser 'Show' popover — the four DISPLAY toggles that only change what
 /// the Auto diagram shows (never the design): Details + Notes (working-canvas
 /// annotations, default on), then under an 'Export preview' caption the Legend
-/// + Title block drawing chrome that rides the export (default off). Same
-/// anchored glass-card idiom as [_RiserExportMenu]; rows reuse the
+/// + Title block drawing chrome that rides the export (default off). Anchored
+/// glass-card idiom; rows reuse the
 /// [_ToggleChip] checkbox visual.
 class _RiserDisplayMenu extends StatelessWidget {
   final bool showDetails;
@@ -436,37 +313,6 @@ class _RiserDisplayMenu extends StatelessWidget {
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _RiserExportRow extends StatelessWidget {
-  final String label;
-  final String sub;
-  final VoidCallback onTap;
-  const _RiserExportRow(
-      {required this.label, required this.sub, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm, vertical: MechXSpacing.sm),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(label,
-                  style: type.body.copyWith(color: colors.textPrimary)),
-            ),
-            Text(sub, style: type.caption.copyWith(color: colors.textMuted)),
-          ],
         ),
       ),
     );

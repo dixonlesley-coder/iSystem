@@ -40,6 +40,7 @@ import 'shell/preferences_screen.dart';
 import 'shell/project_io.dart';
 import 'shell/projects_screen.dart';
 import 'shell/shell_shortcuts.dart';
+import 'shell/export_sheet.dart';
 import 'shell/shortcuts_sheet.dart';
 import 'sheets/sheet_rail.dart';
 import 'strings/app_strings.dart';
@@ -97,7 +98,8 @@ class _AppShellState extends ConsumerState<AppShell> {
     // screen (the I1 dead spot). Close it here instead — pre-focus, but ONLY
     // while it is open, so Esc otherwise reaches the canvases untouched.
     final closingSheet = event.logicalKey == LogicalKeyboardKey.escape &&
-        ref.read(shortcutsSheetOpenProvider);
+        (ref.read(shortcutsSheetOpenProvider) ||
+            ref.read(exportSheetProvider) != null);
     final command = closingSheet
         ? null
         : matchShellShortcut(
@@ -116,6 +118,7 @@ class _AppShellState extends ConsumerState<AppShell> {
     if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
     if (closingSheet) {
       ref.read(shortcutsSheetOpenProvider.notifier).close();
+      ref.read(exportSheetProvider.notifier).close();
       return true;
     }
     // A focused text field owns its own editing keys: Ctrl+Z/Y inside a field
@@ -156,6 +159,10 @@ class _AppShellState extends ConsumerState<AppShell> {
       // writing an empty drawing.
       case ShellCommand.printPlan:
         exportAnnotatedPlanPdf(ref);
+      // The ONE Export sheet — every deliverable, grouped (opening it closes
+      // the palette / shortcuts sheet, so scrims never stack).
+      case ShellCommand.exportSheet:
+        ref.read(exportSheetProvider.notifier).toggle();
       // — Edit — the ONE global timeline, so Ctrl+Z reverts the genuinely most
       // recent edit across mechanical / electrical / annotation domains.
       case ShellCommand.undo:
@@ -270,6 +277,7 @@ class _AppShellState extends ConsumerState<AppShell> {
           const UpdateBannerOverlay(),
           const CommandPaletteOverlay(),
           const ShortcutsSheetOverlay(),
+          const ExportSheetOverlay(),
           const CopilotOverlay(),
         ],
       ),
@@ -851,6 +859,14 @@ class _TopBar extends ConsumerWidget {
               // quiet gray button once the work matches the last clean save.
               primary: dirty,
               onPressed: () => saveProject(ref),
+            ),
+            const SizedBox(width: MechXSpacing.xs),
+            // Work item 8: the ONE Export sheet (Ctrl/Cmd+E) — a quiet button
+            // beside Save, the single door to every deliverable.
+            MechXButton(
+              label: context.strings(StringKey.exportSheetButton),
+              onPressed: () =>
+                  ref.read(exportSheetProvider.notifier).open(),
             ),
             const SizedBox(width: MechXSpacing.sm),
             MechXButton(
