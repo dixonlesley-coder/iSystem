@@ -1,10 +1,10 @@
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
 import '../../data/dxf_import.dart' show dxfContentSize;
+import '../../data/dxf_text.dart';
 import '../../store/models/sheet.dart';
 
 /// Renders a DXF-backed [Sheet] as static vector linework filling its content
@@ -40,7 +40,7 @@ class DxfSheetPage extends StatefulWidget {
     if (_cache.containsKey(path)) return _cache[path];
     DxfDrawing? drawing;
     try {
-      drawing = parseDxf(File(path).readAsStringSync());
+      drawing = parseDxf(readDxfTextSync(path));
     } catch (_) {
       drawing = null;
     }

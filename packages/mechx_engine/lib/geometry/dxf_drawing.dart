@@ -6,7 +6,15 @@
 ///
 /// Scope: the geometry an architectural floor plan is actually made of — `LINE`,
 /// `LWPOLYLINE`, the old `POLYLINE`/`VERTEX` pair, `CIRCLE`, `ARC`, and `INSERT`
-/// (translate · rotate · scale of a block). Text, dimensions, hatches, splines
+/// (translate · rotate · scale of a block, including the `70/71/44/45`
+/// column/row ARRAY form a DWG MINSERT is written as). Entities carry their
+/// Object Coordinate System: an extrusion of (0,0,-1) — what AutoCAD writes for
+/// MIRRORed ARC/CIRCLE/LWPOLYLINE/INSERT — is honoured as an X flip; any other
+/// (truly 3D) extrusion falls back to reading the coordinates as world XY.
+/// Paper-space entities (group `67 = 1`: the layout's title block / viewport
+/// frame) are skipped — only model space is the plan. A block that (directly or
+/// indirectly) inserts itself is not re-expanded, and INSERT expansion is
+/// budgeted, so a malformed file cannot hang the parse. Text, dimensions, hatches, splines
 /// and 3D entities are skipped (a background plan doesn't need them, and the
 /// engineer calibrates + redraws MEP on top). It is a DISPLAY substrate, never a
 /// source of calculation — like the PDF page it stands in for, real-world length
@@ -120,6 +128,19 @@ class _Xform {
 
   /// Rotation contributed by the linear part, in degrees, for arc angles.
   double get rotationDeg => math.atan2(b, a) * 180.0 / math.pi;
+
+  /// Determinant of the linear part — negative for a MIRRORING transform
+  /// (which reverses an arc's sweep direction).
+  double get det => a * d - b * c;
+
+  /// True when the linear part is a pure rotation + uniform scale (no mirror,
+  /// no shear) — arc angles then simply shift by [rotationDeg].
+  bool get isConformal =>
+      (a - d).abs() <= 1e-12 * (a.abs() + d.abs() + 1) &&
+      (b + c).abs() <= 1e-12 * (b.abs() + c.abs() + 1);
+
+  /// X flip `(x, y) → (−x, y)`: the OCS → WCS map for extrusion (0,0,−1).
+  static const _Xform flipX = _Xform(-1, 0, 0, 1, 0, 0);
 }
 
 /// A block definition: its base point + the raw entity-pair slice (parsed lazily
@@ -141,9 +162,16 @@ class _Acc {
   double minX = 0, minY = 0, maxX = 0, maxY = 0;
   int count = 0;
 
+  /// INSERT instances expanded so far (each array cell counts). Budgeted
+  /// separately from [count]: a geometry-free fan-out (A inserts B ×1000, B
+  /// inserts C ×1000) emits nothing, so the primitive cap alone never trips.
+  int inserts = 0;
+
   static const int _maxPrimitives = 400000;
+  static const int maxInserts = 100000;
 
   bool get full => count >= _maxPrimitives;
+  bool get insertsSpent => inserts >= maxInserts;
 
   void _grow(double x, double y) {
     if (!_has) {
@@ -198,12 +226,14 @@ DxfDrawing? parseDxf(String contents) {
   // Walk the top-level ENTITIES section (identity transform).
   final ent = _sectionRange(pairs, 'ENTITIES');
   if (ent != null) {
-    _parseEntities(pairs, ent.start, ent.end, _Xform.identity, blocks, 0, acc);
+    _parseEntities(
+        pairs, ent.start, ent.end, _Xform.identity, blocks, 0, acc, const {});
   } else {
     // Some exporters omit the section wrapper — parse the whole stream as a
     // best-effort fallback (block defs are still skipped via the depth/zero
     // base handling below).
-    _parseEntities(pairs, 0, pairs.length, _Xform.identity, blocks, 0, acc);
+    _parseEntities(
+        pairs, 0, pairs.length, _Xform.identity, blocks, 0, acc, const {});
   }
 
   if (acc.polylines.isEmpty && acc.circles.isEmpty && acc.arcs.isEmpty) {
@@ -313,6 +343,7 @@ const int _maxInsertDepth = 8;
 
 /// Walk an entity-pair slice [start, end), emitting transformed primitives into
 /// [acc]. Each entity is the code-0 marker plus the pairs up to the next code 0.
+/// [ancestors] is the active block-expansion stack (cycle guard).
 void _parseEntities(
   List<_Pair> pairs,
   int start,
@@ -321,6 +352,7 @@ void _parseEntities(
   Map<String, _Block> blocks,
   int depth,
   _Acc acc,
+  Set<String> ancestors,
 ) {
   var i = start;
   while (i < end && !acc.full) {
@@ -336,27 +368,38 @@ void _parseEntities(
     }
     final body = pairs.sublist(i + 1, j);
 
+    // Paper space (67 = 1) lives in ENTITIES beside model space in R2000+ —
+    // the layout's frame / title block, not the plan. Only checked at the top
+    // level: block contents inherit the space of the INSERT that places them.
+    final paper = depth == 0 && _first(body, 67) == 1;
+
     switch (type) {
       case 'LINE':
-        _emitLine(body, xform, acc);
+        if (!paper) _emitLine(body, xform, acc);
         break;
       case 'LWPOLYLINE':
-        _emitLwPolyline(body, xform, acc);
+        if (!paper) _emitLwPolyline(body, xform.compose(_ocs(body)), acc);
         break;
       case 'POLYLINE':
         // Old-style polyline: vertices follow as VERTEX entities until SEQEND.
+        // Its extrusion sits on the POLYLINE header and applies to the run.
         final closed = _flagBit(body, 70, 1);
-        final vEnd = _emitOldPolyline(pairs, j, end, xform, closed, acc);
+        final vEnd = _emitOldPolyline(
+            pairs, j, end, xform.compose(_ocs(body)), closed, acc,
+            emit: !paper);
         j = vEnd; // resume after SEQEND
         break;
       case 'CIRCLE':
-        _emitCircle(body, xform, acc);
+        if (!paper) _emitCircle(body, xform.compose(_ocs(body)), acc);
         break;
       case 'ARC':
-        _emitArc(body, xform, acc);
+        if (!paper) _emitArc(body, xform.compose(_ocs(body)), acc);
         break;
       case 'INSERT':
-        _emitInsert(body, xform, blocks, depth, acc);
+        if (!paper) {
+          _emitInsert(body, xform.compose(_ocs(body)), blocks, depth, acc,
+              ancestors);
+        }
         break;
       default:
         break; // TEXT, DIMENSION, HATCH, SPLINE, 3D… skipped
@@ -377,6 +420,18 @@ String? _firstStr(List<_Pair> body, int code) {
     if (p.code == code) return p.value.trim();
   }
   return null;
+}
+
+/// The entity's OCS → WCS map in the plane: an extrusion of (0,0,−1) (group
+/// 230 < 0 with 210/220 absent or ~0) is an X flip; the default (0,0,1) or any
+/// other (truly 3D) normal is treated as identity — the previous behaviour.
+_Xform _ocs(List<_Pair> body) {
+  final nz = _first(body, 230);
+  if (nz == null || nz >= 0) return _Xform.identity;
+  final nx = _first(body, 210) ?? 0.0;
+  final ny = _first(body, 220) ?? 0.0;
+  if (nx.abs() > 1e-9 || ny.abs() > 1e-9) return _Xform.identity;
+  return _Xform.flipX;
 }
 
 bool _flagBit(List<_Pair> body, int code, int bit) {
@@ -415,8 +470,9 @@ int _emitOldPolyline(
   int end,
   _Xform x,
   bool closed,
-  _Acc acc,
-) {
+  _Acc acc, {
+  bool emit = true,
+}) {
   final pts = <DxfPoint>[];
   var i = start;
   while (i < end) {
@@ -443,7 +499,9 @@ int _emitOldPolyline(
       break; // unexpected — stop the vertex run
     }
   }
-  if (pts.isNotEmpty) acc.addPolyline(DxfPolyline(pts, closed: closed));
+  if (emit && pts.isNotEmpty) {
+    acc.addPolyline(DxfPolyline(pts, closed: closed));
+  }
   return i;
 }
 
@@ -457,9 +515,40 @@ void _emitArc(List<_Pair> body, _Xform x, _Acc acc) {
   final cx = _first(body, 10), cy = _first(body, 20), r = _first(body, 40);
   final a0 = _first(body, 50), a1 = _first(body, 51);
   if (cx == null || cy == null || r == null || a0 == null || a1 == null) return;
-  final rot = x.rotationDeg;
-  acc.addArc(DxfArc(x.apply(cx, cy), r * x.scale, a0 + rot, a1 + rot));
+  if (x.isConformal) {
+    // Rotation + uniform scale: the angles just shift (exact, the old path).
+    final rot = x.rotationDeg;
+    acc.addArc(DxfArc(x.apply(cx, cy), r * x.scale, a0 + rot, a1 + rot));
+    return;
+  }
+  // Mirror / non-uniform scale: map the arc's ENDPOINTS and read the angles
+  // back, so a mirrored door swing lands in the mirrored quadrant. A mirroring
+  // transform (det < 0) reverses the sweep, so swap start/end to keep the
+  // stored arc CCW (DxfArc's convention).
+  final c = x.apply(cx, cy);
+  double angleOf(double deg) {
+    final rad = deg * math.pi / 180.0;
+    final p = x.apply(cx + r * math.cos(rad), cy + r * math.sin(rad));
+    return math.atan2(p.y - c.y, p.x - c.x) * 180.0 / math.pi;
+  }
+
+  var s = angleOf(a0);
+  var e = angleOf(a1);
+  if (x.det < 0) {
+    final t = s;
+    s = e;
+    e = t;
+  }
+  s = ((s % 360) + 360) % 360;
+  var sweep = (((e - s) % 360) + 360) % 360;
+  // A full-circle arc (start ≡ end, distinct values) stays a full sweep.
+  if (sweep < 1e-9 && (a1 - a0).abs() > 1e-9) sweep = 360;
+  acc.addArc(DxfArc(c, r * x.scale, s, s + sweep));
 }
+
+/// Largest column × row ARRAY expanded from one INSERT (the rest is dropped —
+/// the instances also count against the [_Acc.maxInserts] budget).
+const int _maxArrayInstances = 10000;
 
 void _emitInsert(
   List<_Pair> body,
@@ -467,10 +556,14 @@ void _emitInsert(
   Map<String, _Block> blocks,
   int depth,
   _Acc acc,
+  Set<String> ancestors,
 ) {
-  if (depth >= _maxInsertDepth) return;
+  if (depth >= _maxInsertDepth || acc.insertsSpent) return;
   final name = _firstStr(body, 2);
   if (name == null) return;
+  // A block already on the active expansion stack would recurse into itself
+  // (AutoCAD refuses to save one; only a corrupt / hand-made file has it).
+  if (ancestors.contains(name)) return;
   final block = blocks[name];
   if (block == null) return;
 
@@ -490,9 +583,30 @@ void _emitInsert(
   // translate(-base) folded into e/f.
   final ex = ix - (ax * block.baseX + cx * block.baseY);
   final fy = iy - (bx * block.baseX + dy * block.baseY);
-  final insert = _Xform(ax, bx, cx, dy, ex, fy);
-  final child = x.compose(insert);
 
-  _parseEntities(block.pairs, 0, block.pairs.length, child, blocks, depth + 1,
-      acc);
+  // Array form (DWG MINSERT): 70/71 column/row counts, 44/45 spacing. The
+  // spacing runs along the INSERT's ROTATED axes in drawing units (not scaled
+  // by 41/42 — AutoCAD's MINSERT semantics). A plain INSERT is 1 × 1.
+  final cols = math.max(1, (_first(body, 70) ?? 1).toInt());
+  final rows = math.max(1, (_first(body, 71) ?? 1).toInt());
+  final colDx = _first(body, 44) ?? 0.0;
+  final rowDy = _first(body, 45) ?? 0.0;
+  final nested = {...ancestors, name};
+
+  var instances = 0;
+  for (var r = 0; r < rows; r++) {
+    for (var c = 0; c < cols; c++) {
+      if (instances >= _maxArrayInstances || acc.insertsSpent || acc.full) {
+        return;
+      }
+      instances++;
+      acc.inserts++;
+      final ox = c * colDx, oy = r * rowDy;
+      final insert = _Xform(ax, bx, cx, dy, ex + cos * ox - sin * oy,
+          fy + sin * ox + cos * oy);
+      final child = x.compose(insert);
+      _parseEntities(block.pairs, 0, block.pairs.length, child, blocks,
+          depth + 1, acc, nested);
+    }
+  }
 }

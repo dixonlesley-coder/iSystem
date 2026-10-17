@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
 import '../store/models/sheet.dart';
+import 'dxf_text.dart';
 
 /// The longest side a DXF is normalised to, in content pixels. DXF coordinates
 /// are in arbitrary CAD units (often millimetres → tens of thousands), so the
@@ -29,7 +30,7 @@ Future<List<Sheet>> importDxf(String filePath) async {
       ? basename.substring(0, basename.length - 4)
       : basename;
 
-  final contents = await file.readAsString();
+  final contents = await readDxfText(filePath);
   final drawing = parseDxf(contents);
   if (drawing == null || drawing.isEmpty) {
     throw StateError('DXF "$basename" has no importable geometry.');
