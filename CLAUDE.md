@@ -1456,8 +1456,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 ## Sizing-engine invariants (don't regress)
 
 - **A run's length includes its vertical leg (`network.dart` `runVerticalLeg` /
-  `edgeLength`)**: a RUN between nodes at different solved elevations (pump →
-  ceiling main, main → WC) is its calibrated horizontal span PLUS the elevation
+  `edgeLength`)**: a RUN between nodes at different CONNECTION elevations
+  (`runConnectionElevation`: ceiling air terminals + sprinkler heads at the
+  ceiling, plumbing fixtures at fixture height; gravity drainage/vent/rainwater
+  runs carry no leg) is its calibrated horizontal span PLUS that elevation
   delta — pipe the installer buys and friction the water sees (the static lift
   stays a separate solve term, never double counted). The plan `CL` label
   (`runCentrelineLabels` = `planEdgeElevationLabels`) states the hanging height
