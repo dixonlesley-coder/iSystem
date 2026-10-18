@@ -649,6 +649,9 @@ enum StringKey {
   issueGravityLoopMessage,
   issueMotorOversizedTitle,
   issuePumpMotorOversizedMessage,
+  issueFirePumpMotorOversizedMessage,
+  issueFireJockeyAssumedTitle,
+  issueFireJockeyAssumedMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1912,7 +1915,19 @@ const Map<StringKey, String> _en = {
       'iteration budget. The flow still satisfies continuity, but the split — '
       'and every size derived from it — is provisional. Simplify the ring or '
       'check for a near-zero-resistance leg.',
+  StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
+  StringKey.issueFireJockeyAssumedMessage:
+      'Three or more identical fire pumps are drawn in parallel and nothing '
+      'tells them apart, so {tag} (the last drawn) was taken as the jockey '
+      'pump and fed a small pressure-maintenance duty. Confirm it, or draw '
+      'the jockey on its own smaller pipe.',
   StringKey.issueMotorOversizedTitle: 'Duty past the largest motor frame',
+  StringKey.issueFirePumpMotorOversizedMessage:
+      'The fire pump\'s governing NFPA 20 point exceeds the largest standard '
+      'motor frame (315 kW), so the printed motor is the top of the ladder, '
+      'not a selection; its panel way is sized on the governing duty. Split '
+      'the duty across parallel fire pumps, or procure a motor outside the '
+      'standard ladder.',
   StringKey.issuePumpMotorOversizedMessage:
       'The pump duty exceeds the largest standard motor frame, so the printed '
       'motor is the top of the ladder, not a selection — the duty and the '
@@ -3242,8 +3257,20 @@ const Map<StringKey, String> _id = {
       'pembagiannya — dan setiap ukuran yang diturunkan darinya — bersifat '
       'sementara. Sederhanakan ring atau periksa kaki dengan resistansi '
       'mendekati nol.',
+  StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
+  StringKey.issueFireJockeyAssumedMessage:
+      'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '
+      'sehingga {tag} (yang terakhir digambar) dianggap sebagai pompa jockey '
+      'dan diberi duti kecil penjaga tekanan. Konfirmasikan, atau gambar '
+      'pompa jockey pada pipanya sendiri yang lebih kecil.',
   StringKey.issueMotorOversizedTitle:
       'Duti melebihi rangka motor standar terbesar',
+  StringKey.issueFirePumpMotorOversizedMessage:
+      'Titik NFPA 20 yang menentukan pada pompa kebakaran melebihi rangka motor '
+      'standar terbesar (315 kW), sehingga motor yang tercetak adalah puncak '
+      'tangga standar, bukan hasil pemilihan; jalur panelnya diukur pada duti '
+      'yang menentukan. Bagi dutinya ke pompa kebakaran paralel, atau adakan '
+      'motor di luar tangga standar.',
   StringKey.issuePumpMotorOversizedMessage:
       'Duti pompa melebihi rangka motor standar terbesar, sehingga motor yang '
       'tercetak adalah puncak tangga standar, bukan hasil pemilihan — duti dan '

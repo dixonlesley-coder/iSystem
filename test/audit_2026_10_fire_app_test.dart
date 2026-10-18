@@ -29,7 +29,8 @@ void main() {
 
   // fire-2: one drawn sprinkler head on a plant source sizes on the hazard's
   // per-head flow (OH1 default: 360 L/min / 6 = 1.0 L/s), floored at DN25:
-  //   DN25 v = 1e-3 / 4.9087e-4 = 2.037 > 2 ⇒ DN32 (v = 1e-3/8.0425e-4 = 1.243).
+  //   DN25 v = 1e-3 / 4.9087e-4 = 2.037 m/s — within the Round 21 6 m/s fire
+  //   cap (was > the 2 m/s domestic cap ⇒ DN32) ⇒ the DN25 sprinkler floor.
   test('fire-2: sprinkler leaf demand = the remote-head design flow', () {
     final c = ProviderContainer();
     addTearDown(c.dispose);
@@ -44,7 +45,7 @@ void main() {
     ]));
     final s = c.read(sizingProvider)['e']!;
     expect(s.flow.inLitersPerSecond, closeTo(1.0, 1e-9));
-    expect(s.diameter.inMillimeters, closeTo(32, 1e-9));
+    expect(s.diameter.inMillimeters, closeTo(25, 1e-9));
   });
 
   // fire-5: a PPR and a PVC DN50 run each carry their OWN bar count.

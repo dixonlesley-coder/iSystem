@@ -377,8 +377,8 @@ void main() {
     test('fittingsToCsv has a header and one row per line', () {
       final csv = fittingsToCsv(buildFittings(net: _net, sizing: _sizing));
       final lines = csv.trim().split('\n');
-      // N18: neutral column name (was nominal_dn_mm).
-      expect(lines.first, 'service,fitting,nominal_size_mm,count');
+      // N18: neutral column name (was nominal_dn_mm); Round 21: + material.
+      expect(lines.first, 'service,fitting,nominal_size_mm,material,count');
       expect(lines.length, greaterThan(1));
     });
   });

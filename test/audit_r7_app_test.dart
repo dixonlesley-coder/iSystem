@@ -27,6 +27,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/duct_static.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/fire_standpipe.dart' show kMaxFireVelocityMps;
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -257,14 +258,15 @@ void main() {
     final sizing = c.read(sizingProvider);
     // One system, one flow: the riser + trunk carry what the pump delivers
     // (was 10 × 5 L/s = 50 L/s at the riser base), and the riser velocity at
-    // that flow stays inside the sizer's 2.0 m/s cap.
+    // that flow stays inside the sizer's FIRE cap (Round 21: 6 m/s).
     for (final id in ['feed', for (var f = 0; f < 9; f++) 'h$f']) {
       expect(
         sizing[id]!.flow.cubicMetersPerSecond,
         closeTo(design.cubicMetersPerSecond, 1e-12),
         reason: id,
       );
-      expect(sizing[id]!.velocity.metersPerSecond, lessThanOrEqualTo(2.0));
+      expect(sizing[id]!.velocity.metersPerSecond,
+          lessThanOrEqualTo(kMaxFireVelocityMps));
     }
     // A branch to ONE box keeps its per-box flow.
     expect(

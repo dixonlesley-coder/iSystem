@@ -20,6 +20,7 @@ library;
 
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart';
+import 'package:mechx_engine/network/network.dart' show EdgeKind, Network, ServiceType;
 import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
@@ -105,6 +106,16 @@ const double kMinHydrantBranchDiameterMm = 65.0;
 /// `SniProfile.verifyChecklist` (status `notAnSniClause`).
 const double kHoseOutletHeightM = 1.2;
 
+/// Round 21 (fire-3-fire-pipe-sized-on-domestic-velocity-cap) — the velocity
+/// cap the FIRE services (sprinkler + hydrant) are sized against, in m/s.
+/// The domestic SNI 03-7065 2.0 m/s limit is a water-hammer / noise limit for
+/// a system that runs daily; a fire system runs only in a fire. EN 12845
+/// caps 6 m/s at valves / flow switches (10 m/s elsewhere) and NFPA 13 sets
+/// no velocity cap at all, so 6 m/s is the conservative fire figure.
+/// `// VERIFY` notAnSniClause (general fire-engineering practice); the code
+/// minimum diameters still floor every fire pipe.
+const double kMaxFireVelocityMps = 6.0;
+
 /// Minimum residual pressure required at the topmost outlet for [cls], in kPa.
 double residualPressureKpa(StandpipeClass cls) {
   switch (cls) {
@@ -137,6 +148,44 @@ FlowRate standpipeFlow(int risers) {
   final lpm = (kFirstRiserFlowLpm + kAdditionalRiserFlowLpm * (risers - 1))
       .clamp(kFirstRiserFlowLpm, kMaxStandpipeFlowLpm);
   return FlowRate.litersPerMinute(lpm);
+}
+
+/// Round 21 (fire-3-standpipe-riser-count-fixed-at-one) — the number of
+/// distinct STANDPIPE RISERS drawn in [net]: the connected components of its
+/// fire-hydrant RISER edges ([EdgeKind.riser] on [ServiceType.fireHydrant]),
+/// joined only through riser edges (a common pump header or a floor run does
+/// not merge two stacks). At least 1 — with no hydrant riser drawn the draft
+/// single-riser basis stands. Feeds [standpipeFlow] (500 gpm + 250 gpm per
+/// additional riser), so two drawn stacks rate the fire pump at 750 gpm, not
+/// 500. Pure.
+int drawnStandpipeRiserCount(Network net) {
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while (parent[r] != r) {
+      r = parent[r]!;
+    }
+    var c = x;
+    while (parent[c] != r) {
+      final next = parent[c]!;
+      parent[c] = r;
+      c = next;
+    }
+    return r;
+  }
+
+  for (final e in net.edges) {
+    if (e.service != ServiceType.fireHydrant || e.kind != EdgeKind.riser) {
+      continue;
+    }
+    parent.putIfAbsent(e.fromId, () => e.fromId);
+    parent.putIfAbsent(e.toId, () => e.toId);
+    final a = find(e.fromId);
+    final b = find(e.toId);
+    if (a != b) parent[a] = b;
+  }
+  final roots = {for (final k in parent.keys) find(k)};
+  return roots.isEmpty ? 1 : roots.length;
 }
 
 // ── Static lift from the building geometry ───────────────────────────────────
@@ -289,7 +338,32 @@ FireStandpipeDesign designStandpipe({
 /// constants behind the PRINTED standpipe line (flow / pump head / shaft
 /// power), so the calc report's Unverified section lists what the figure
 /// rests on (golden rule 6). Defaults of [designStandpipe].
+///
+/// Round 21 — split: [firePumpBasisVerifyChecklist] holds the two items a
+/// SPRINKLER-ONLY fire pump also uses (the 15 m friction allowance and η);
+/// the 690 kPa Class I residual applies only when a standpipe is drawn.
 const List<StandardValue<Object?>> standpipeVerifyChecklist = [
+  ...firePumpBasisVerifyChecklist,
+  StandardValue<Object?>(kResidualPressureClassIKpa,
+      unit: 'kPa',
+      citation: 'SNI 03-1745-2000 — Class I topmost-outlet residual',
+      note: '690 kPa (100 psi) residual at the topmost Class I hose outlet; '
+          'secondary source pending the official clause.'),
+];
+
+/// The fire-system basis items every drawn fire system uses (the standpipe
+/// AND the sprinkler-only rated point): the 15 m friction allowance, the
+/// representative η and (Round 21) the 6 m/s fire-pipe velocity cap. See
+/// [standpipeVerifyChecklist].
+const List<StandardValue<Object?>> firePumpBasisVerifyChecklist = [
+  StandardValue<Object?>(kMaxFireVelocityMps,
+      unit: 'm/s',
+      citation: 'Fire-pipe velocity cap (EN 12845 valves 6 m/s; NFPA 13 none)',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Sprinkler + hydrant pipes are sized to 6 m/s, not the 2.0 m/s '
+          'domestic SNI 03-7065 limit (a fire system runs only in a fire); '
+          'the code-minimum diameters still apply. General fire-engineering '
+          'practice — confirm vs SNI 03-3989 / 03-1745.'),
   StandardValue<Object?>(15.0,
       unit: 'm',
       citation: 'Standpipe friction allowance (designStandpipe default)',
@@ -303,9 +377,4 @@ const List<StandardValue<Object?>> standpipeVerifyChecklist = [
       status: VerificationStatus.notAnSniClause,
       note: 'Representative pump + motor efficiency 0.70 — verify against the '
           "selected pump's certified curve (SNI 03-6570-2001)."),
-  StandardValue<Object?>(kResidualPressureClassIKpa,
-      unit: 'kPa',
-      citation: 'SNI 03-1745-2000 — Class I topmost-outlet residual',
-      note: '690 kPa (100 psi) residual at the topmost Class I hose outlet; '
-          'secondary source pending the official clause.'),
 ];

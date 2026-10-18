@@ -65,6 +65,10 @@ const double _calloutW = 170; // valve-assembly reference detail box width
 const double _calloutH = 64; // valve-assembly reference detail box height
 const double _calloutGlyph = 15; // glyph box inside a callout row
 const double _plantW = 240; // pump-set plant detail box width (holds the train)
+const double _roofBandH = 40; // Round 21 — the ATAP datum band above the top storey
+const double _roofLineInset = 8; // the roof line sits this far above the top band
+const double _kFanPitchSingle = 12; // Round 21 — branch fan pitch, one service
+const double _kFanPitchCombined = 4; // … a sub-lane gap on a combined sheet
 const double _plantH = 150; // pump-set plant detail box height (roof + train)
 const double _notesW = 240; // KETERANGAN system-notes block width
 const double _notesLineH = 11; // per-note line pitch
@@ -180,6 +184,7 @@ SldSheet buildMechanicalRiserSld({
   bool hotWaterRecirc = false,
   Map<String, String> nodeTags = const {},
   Set<String> transferPumpNodeIds = const {},
+  ({int lo, int hi})? floorRange,
 }) {
   final prims = <SldPrim>[];
   // Round 16 — the solve's flow direction drives the FUNCTION suffix.
@@ -189,8 +194,15 @@ SldSheet buildMechanicalRiserSld({
   final Set<String>? visible = _focusedNodeIds(network, focus);
   bool nodeVisible(NetNode n) => visible == null || visible.contains(n.id);
 
-  final nodes = network.nodes.where(nodeVisible).toList(growable: false);
-  if (nodes.isEmpty) {
+  // Round 21 (riser-drafting-2-2) — a PAGE of a paginated riser draws only
+  // the floors in [floorRange]; a riser crossing the page edge ends in a
+  // 'LANJUT KE <floor>' match stub (below).
+  bool onPage(NetNode n) =>
+      floorRange == null ||
+      (n.floorIndex >= floorRange.lo && n.floorIndex <= floorRange.hi);
+  final allVisible = network.nodes.where(nodeVisible).toList(growable: false);
+  final nodes = allVisible.where(onPage).toList(growable: false);
+  if (allVisible.isEmpty) {
     return SldSheet(
       prims: const [],
       minX: 0,
@@ -203,21 +215,45 @@ SldSheet buildMechanicalRiserSld({
   }
 
   // Floor range: every building level when known, else the node floor span.
-  final floorsPresent = nodes.map((n) => n.floorIndex).toSet();
-  final int loFloor;
-  final int hiFloor;
+  final floorsPresent = allVisible.map((n) => n.floorIndex).toSet();
+  final int fullLo;
+  final int fullHi;
   if (building != null && building.levelCount > 0) {
-    loFloor = 0;
-    hiFloor = building.levelCount - 1;
+    fullLo = 0;
+    fullHi = building.levelCount - 1;
   } else {
-    loFloor = floorsPresent.reduce(math.min);
-    hiFloor = floorsPresent.reduce(math.max);
+    fullLo = floorsPresent.reduce(math.min);
+    fullHi = floorsPresent.reduce(math.max);
   }
+  final loFloor =
+      floorRange == null ? fullLo : math.max(fullLo, floorRange.lo);
+  final hiFloor =
+      floorRange == null ? fullHi : math.min(fullHi, floorRange.hi);
+  // The building's real top storey (the VTR / roof gating never reads a
+  // page's own top floor).
+  final topFloor = fullHi;
   final bandCount = (hiFloor - loFloor + 1).clamp(1, 999);
+  // Round 21 (riser-drafting-2-7) — an ATAP (roof) datum band above the top
+  // storey whenever this sheet shows it and the building is known: roof
+  // tanks / roof drains park on the roof line, never inside the top floor.
+  final roofBand = building != null &&
+      building.levelCount > 0 &&
+      hiFloor == building.levelCount - 1;
+  final roofH = roofBand ? _roofBandH : 0.0;
+  // The extras (plant detail, reference callouts, notes) ride the page that
+  // carries the building's LOWEST floor (the last page of a set).
+  final drawExtras = floorRange == null || loFloor == fullLo;
 
   // Band centre y for a floor index — highest floor at the TOP.
-  double bandTop(int floorIndex) => _topPad + (hiFloor - floorIndex) * _bandH;
+  double bandTop(int floorIndex) =>
+      _topPad + roofH + (hiFloor - floorIndex) * _bandH;
   double bandCentreY(int floorIndex) => bandTop(floorIndex) + _bandH / 2;
+  final roofLineY = _topPad + roofH - _roofLineInset;
+  bool parksOnRoof(NetNode n) =>
+      roofBand &&
+      n.floorIndex == hiFloor &&
+      (n.component == NodeComponent.roofTank ||
+          n.component == NodeComponent.roofDrain);
 
   // Map a node's x into the placement band via the SHARED layout helper (B7):
   // a normalized column position in [0,1] — the SAME geometry the on-canvas Auto
@@ -232,8 +268,11 @@ SldSheet buildMechanicalRiserSld({
   // floor band (the shared [riserServiceLanes], mirrored by the canvas Auto
   // painter), so CW / HW and drainage / vent branches no longer overdraw.
   final lanes = riserServiceLanes(network, focus: focus);
-  Offset posOf(NetNode n) => Offset(placeX(n.id),
-      bandCentreY(n.floorIndex) + (lanes[n.id] ?? 0) * kRiserLanePitch);
+  Offset posOf(NetNode n) => Offset(
+      placeX(n.id),
+      parksOnRoof(n)
+          ? roofLineY - _symbolSize / 2
+          : bandCentreY(n.floorIndex) + (lanes[n.id] ?? 0) * kRiserLanePitch);
 
   final posById = <String, Offset>{
     for (final n in nodes) n.id: posOf(n),
@@ -243,8 +282,11 @@ SldSheet buildMechanicalRiserSld({
   // horizontal leg sits at `a.dy + delta × pitch` with vertical drops into the
   // endpoints, so a vent run no longer overdraws the drainage run.
   final edgeLanes = riserEdgeLaneOffsets(network, focus: focus);
+  // Round 21 (riser-drafting-2-4) — sibling runs leaving ONE node on ONE
+  // lane fan out to distinct y offsets (filled below, after the B5 spread).
+  final fanOff = <String, double>{};
   double runY(NetEdge e, Offset a) =>
-      a.dy + (edgeLanes[e.id] ?? 0) * kRiserLanePitch;
+      a.dy + (edgeLanes[e.id] ?? 0) * kRiserLanePitch + (fanOff[e.id] ?? 0);
 
   // ── Spread coincident node positions minimally in x (B5) ─────────────────────
   // Two fixtures at the same world x land on the same band point and stack their
@@ -266,6 +308,86 @@ SldSheet buildMechanicalRiserSld({
     }
   }
 
+  // ── Round 21 (riser-drafting-2-4) — branch fan-out from one header ─────────
+  // Runs out of one node on the same lane were collinear (WC / lavatory /
+  // shower overprinting as one line with three tags). Each sibling run now
+  // gets its own offset — ordered as the fixtures are spread (far-end x, then
+  // id), the first on the lane itself — away from the band centre. A
+  // single-service sheet has the whole band, a combined one only a sub-lane
+  // gap so a fan never lands on a neighbouring service lane.
+  final siblings = <String, List<NetEdge>>{};
+  for (final e in network.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    if (focus != null && e.service != focus) continue;
+    if (posById[e.fromId] == null || posById[e.toId] == null) continue;
+    final lane = edgeLanes[e.id] ?? 0;
+    (siblings['${e.fromId}|${e.service.index}|$lane'] ??= <NetEdge>[]).add(e);
+  }
+  final singleService = focus != null ||
+      network.edges.map((e) => e.service).toSet().length < 2;
+  final fanPitch = singleService ? _kFanPitchSingle : _kFanPitchCombined;
+  // Each fan group is (the shared header node, its runs); the far end of a
+  // run is the endpoint that is NOT the header.
+  final fanGroups = <(String, List<NetEdge>)>[];
+  for (final entry in siblings.entries) {
+    if (entry.value.length < 2) continue;
+    fanGroups.add((entry.key.split('|').first, entry.value));
+  }
+  // Round 21 review — runs drawn INTO the header (fixture -> header, the
+  // header as `toId`) were never grouped and stayed collinear. Every run not
+  // already fanned above is registered under BOTH its ends, keyed by the
+  // shared node + service + lane + the SIDE (left / right) its far end lies
+  // on — a series chain (A -> B -> C, far ends on opposite sides of B) never
+  // groups — and joins the to-end group when that group has siblings, else
+  // the from-end group.
+  final fanned = {for (final g in fanGroups) ...g.$2.map((e) => e.id)};
+  String endKey(NetEdge e, String nodeId) {
+    final other = nodeId == e.fromId ? e.toId : e.fromId;
+    final side = posById[other]!.dx < posById[nodeId]!.dx ? 'L' : 'R';
+    return '$nodeId|${e.service.index}|${edgeLanes[e.id] ?? 0}|$side';
+  }
+
+  final byEnd = <String, List<NetEdge>>{};
+  final loose = <NetEdge>[
+    for (final group in siblings.values)
+      for (final e in group)
+        if (!fanned.contains(e.id)) e,
+  ];
+  for (final e in loose) {
+    (byEnd[endKey(e, e.fromId)] ??= <NetEdge>[]).add(e);
+    (byEnd[endKey(e, e.toId)] ??= <NetEdge>[]).add(e);
+  }
+  final headerGroups = <String, List<NetEdge>>{};
+  for (final e in loose) {
+    final toKey = endKey(e, e.toId);
+    final fromKey = endKey(e, e.fromId);
+    final key = byEnd[toKey]!.length >= 2
+        ? toKey
+        : byEnd[fromKey]!.length >= 2
+            ? fromKey
+            : null;
+    if (key != null) (headerGroups[key] ??= <NetEdge>[]).add(e);
+  }
+  final headerKeys = headerGroups.keys.toList()..sort();
+  for (final k in headerKeys) {
+    final group = headerGroups[k]!;
+    if (group.length < 2) continue;
+    fanGroups.add((k.split('|').first, group));
+  }
+  for (final (header, group) in fanGroups) {
+    double farX(NetEdge e) =>
+        posById[e.fromId == header ? e.toId : e.fromId]!.dx;
+    group.sort((x, y) {
+      final d = farX(x).compareTo(farX(y));
+      return d != 0 ? d : x.id.compareTo(y.id);
+    });
+    final lane = riserServiceLane(group.first.service);
+    final dir = lane < 0 ? -1.0 : 1.0;
+    for (var i = 1; i < group.length; i++) {
+      fanOff[group[i].id] = dir * i * fanPitch;
+    }
+  }
+
   // The greedy label placer tracks every emitted label rect and diverts a
   // colliding tag along an offset ladder, adding a leader when pulled far off
   // its anchor (B5). Fixed labels (gutter, fan-out) are reserved FIRST so the
@@ -275,6 +397,16 @@ SldSheet buildMechanicalRiserSld({
   // ── Floor bands: a baseline hairline + the FFL gutter label ─────────────────
   // Datum baselines stay THIN so a pipe run/riser (medium, below) reads as
   // distinct ink from the floor line (B4).
+  // Round 21 (riser-drafting-2-7) — the ATAP datum line + its elevation.
+  if (roofBand) {
+    prims.add(SldLine(_gutterW, roofLineY, _gutterW + _drawW, roofLineY,
+        weight: SldWeight.thin, dashed: true));
+    placer.reserveLine(_gutterW, roofLineY, _gutterW + _drawW, roofLineY);
+    placer.reserve(SldLabel(8, roofLineY - 10, 'ATAP', size: 10, bold: true));
+    placer.reserve(SldLabel(8, roofLineY + 4,
+        fflLabel(building.roofElevation.meters),
+        size: 8, role: SldRole.source));
+  }
   for (var f = loFloor; f <= hiFloor; f++) {
     final top = bandTop(f);
     final yBase = top + _bandH - 1;
@@ -330,7 +462,7 @@ SldSheet buildMechanicalRiserSld({
   // label placer can reserve those blocks before it places any movable tag;
   // the blocks themselves are still EMITTED further down, unchanged.
   const contentMaxX = _gutterW + _drawW + _fanColW;
-  final extrasTop = _topPad + bandCount * _bandH + 12.0;
+  final extrasTop = _topPad + roofH + bandCount * _bandH + 12.0;
   bool hasComponent(NodeComponent c) =>
       network.nodes.any((n) => n.component == c);
   final waterFocus = focus == null ||
@@ -343,12 +475,13 @@ SldSheet buildMechanicalRiserSld({
       focus == ServiceType.vent ||
       focus == ServiceType.rainwater;
   final plantWillDraw = detailCallouts &&
+      drawExtras &&
       waterFocus &&
       (hasComponent(NodeComponent.roofTank) ||
           hasComponent(NodeComponent.groundTank) ||
           hasComponent(NodeComponent.pump) ||
           hasComponent(NodeComponent.boosterSet));
-  final detailBoxes = !detailCallouts
+  final detailBoxes = !detailCallouts || !drawExtras
       ? const <(String, List<(NodeComponent?, String)>)>[]
       : <(String, List<(NodeComponent?, String)>)>[
           if (waterFocus && hasComponent(NodeComponent.waterMeter))
@@ -384,7 +517,7 @@ SldSheet buildMechanicalRiserSld({
             ),
           // G4: DETAIL VTR — only when a vent riser actually reaches the roof.
           if (drainageFocus &&
-              ventTopTerminalIds(network, topFloor: hiFloor).isNotEmpty)
+              ventTopTerminalIds(network, topFloor: topFloor).isNotEmpty)
             (
               'DETAIL VTR',
               const [
@@ -392,7 +525,29 @@ SldSheet buildMechanicalRiserSld({
               ]
             ),
         ];
-  final notesH = notes.isEmpty ? 0.0 : 20 + notes.length * _notesLineH + 6;
+  final showNotes = notes.isNotEmpty && drawExtras;
+  final notesH = !showNotes ? 0.0 : 20 + notes.length * _notesLineH + 6;
+  // Round 21 (riser-drafting-2-5) — the reference callout row and the
+  // KETERANGAN block share the strip below the bands: the row is centred in
+  // the drawing band but never runs past the notes' left edge (minus a gap);
+  // if it still cannot fit (or would start inside the gutter) the notes stack
+  // BELOW the callouts instead. One geometry for reserve + emit.
+  final calloutTotalW = detailBoxes.isEmpty
+      ? 0.0
+      : detailBoxes.length * _calloutW + (detailBoxes.length - 1) * 16;
+  const notesLeft = contentMaxX - _notesW;
+  var calloutX0 = _gutterW + (_drawW - calloutTotalW) / 2;
+  var notesTop = extrasTop;
+  if (detailBoxes.isNotEmpty &&
+      showNotes &&
+      calloutX0 + calloutTotalW > notesLeft - 16) {
+    final shifted = notesLeft - 16 - calloutTotalW;
+    if (shifted >= _gutterW) {
+      calloutX0 = shifted;
+    } else {
+      notesTop = extrasTop + _calloutH + 12;
+    }
+  }
 
   // ── X1: seed the occupied list with the sheet's non-label INK ───────────────
   // The placer used to know only about other LABELS, so a tag could still be
@@ -425,17 +580,14 @@ SldSheet buildMechanicalRiserSld({
         _topPad + _plantDetailH(network));
   }
   if (detailBoxes.isNotEmpty) {
-    final totalW =
-        detailBoxes.length * _calloutW + (detailBoxes.length - 1) * 16;
-    var bx = _gutterW + (_drawW - totalW) / 2;
+    var bx = calloutX0;
     for (var i = 0; i < detailBoxes.length; i++) {
       placer.reserveBox(bx, extrasTop, bx + _calloutW, extrasTop + _calloutH);
       bx += _calloutW + 16;
     }
   }
   if (notesH > 0) {
-    placer.reserveBox(
-        contentMaxX - _notesW, extrasTop, contentMaxX, extrasTop + notesH);
+    placer.reserveBox(notesLeft, notesTop, contentMaxX, notesTop + notesH);
   }
 
   // ── B2 STACK DETAIL: cleanouts, the vent tee, VTR terminations ──────────────
@@ -445,10 +597,10 @@ SldSheet buildMechanicalRiserSld({
   if (focus == null || focus == ServiceType.vent) {
     // A vent riser reaching the TOP floor terminates through the roof: a short
     // dashed stub above the band + the 'VTR' code.
-    for (final id in ventTopTerminalIds(network, topFloor: hiFloor)) {
+    for (final id in ventTopTerminalIds(network, topFloor: topFloor)) {
       final p = posById[id];
       if (p == null) continue;
-      final stubTop = bandTop(hiFloor) - 10;
+      final stubTop = roofBand ? roofLineY - 10 : bandTop(hiFloor) - 10;
       prims.add(SldLine(p.dx, p.dy, p.dx, stubTop,
           weight: SldWeight.medium,
           layer: riserServiceCode(ServiceType.vent),
@@ -521,6 +673,41 @@ SldSheet buildMechanicalRiserSld({
   // water riser ⇒ nothing drawn (byte-identical).
   if (hotWaterRecirc) {
     _emitHotWaterReturn(prims, network, posById, placer, focus);
+  }
+
+  // ── Round 21 (riser-drafting-2-2) — page-edge MATCH stubs ───────────────────
+  // A riser whose far end sits on another page of a paginated set runs to the
+  // page's band edge and names the floor it continues to.
+  if (floorRange != null) {
+    final byId = {for (final n in allVisible) n.id: n};
+    for (final e in network.edges) {
+      if (focus != null && e.service != focus) continue;
+      final a = posById[e.fromId];
+      final b = posById[e.toId];
+      if ((a == null) == (b == null)) continue;
+      final here = a ?? b!;
+      final farNode = byId[a == null ? e.fromId : e.toId];
+      if (farNode == null) continue;
+      final up = farNode.floorIndex > hiFloor;
+      final edgeY = up ? bandTop(hiFloor) + 2 : bandTop(loFloor) + _bandH - 2;
+      final layer = riserServiceCode(e.service);
+      prims.add(SldLine(here.dx, here.dy, here.dx, edgeY,
+          weight: SldWeight.medium,
+          role: _edgeRole(network, e),
+          layer: layer,
+          dashed: e.service == ServiceType.vent));
+      placer.reserveLine(here.dx, here.dy, here.dx, edgeY);
+      final fname = (building != null && farNode.floorIndex < building.levelCount)
+          ? building.floors[farNode.floorIndex].name
+          : 'Level ${farNode.floorIndex + 1}';
+      final text = 'LANJUT KE $fname';
+      placer.place(here.dx + 6, up ? edgeY + 9 : edgeY - 3, text,
+          size: 8,
+          bold: true,
+          anchorX: here.dx,
+          anchorY: edgeY,
+          candidates: _riserLadder(text));
+    }
   }
 
   // ── Edges: runs + risers with the SIZE-SERVICE-MATERIAL[-FUNCTION] tag ───────
@@ -656,7 +843,7 @@ SldSheet buildMechanicalRiserSld({
   var maxX = contentMaxX;
   var extrasBottom = extrasTop;
 
-  if (detailCallouts) {
+  if (detailCallouts && drawExtras) {
     if (waterFocus &&
         _emitPlantDetail(prims, network, contentMaxX + 12, _topPad,
             equipmentDetailByNodeId: equipmentDetailByNodeId,
@@ -673,9 +860,7 @@ SldSheet buildMechanicalRiserSld({
     // lone detail still reads balanced; the combined view shows every applicable
     // box in one row. (The rects were computed + reserved above.)
     if (detailBoxes.isNotEmpty) {
-      final totalW =
-          detailBoxes.length * _calloutW + (detailBoxes.length - 1) * 16;
-      var bx = _gutterW + (_drawW - totalW) / 2;
+      var bx = calloutX0;
       for (final (title, items) in detailBoxes) {
         _emitDetailBox(prims, bx, extrasTop, title, items);
         bx += _calloutW + 16;
@@ -683,20 +868,20 @@ SldSheet buildMechanicalRiserSld({
       extrasBottom = math.max(extrasBottom, extrasTop + _calloutH);
     }
   }
-  if (notes.isNotEmpty) {
+  if (showNotes) {
     // The KETERANGAN system-notes block, bottom-RIGHT (the renderers stamp the
     // page-fixed title block below/beside it in page space).
-    const left = contentMaxX - _notesW;
+    const left = notesLeft;
     prims
-        .add(SldRect(left, extrasTop, _notesW, notesH, weight: SldWeight.thin));
+        .add(SldRect(left, notesTop, _notesW, notesH, weight: SldWeight.thin));
     prims.add(
-        SldLabel(left + 6, extrasTop + 12, 'KETERANGAN', size: 7, bold: true));
-    var y = extrasTop + 24.0;
+        SldLabel(left + 6, notesTop + 12, 'KETERANGAN', size: 7, bold: true));
+    var y = notesTop + 24.0;
     for (final line in notes) {
       prims.add(SldLabel(left + 6, y, line, size: 7));
       y += _notesLineH;
     }
-    extrasBottom = math.max(extrasBottom, extrasTop + notesH);
+    extrasBottom = math.max(extrasBottom, notesTop + notesH);
   }
 
   // ── Bounds ──────────────────────────────────────────────────────────────────
@@ -1097,11 +1282,36 @@ bool _emitPlantDetail(
         m3 != null ? 'ROOF TANK $m3' : 'ROOF TANK',
         size: 7, role: SldRole.source));
     if (downfeed) {
-      prims.add(SldLabel(cx - glyph / 2 - 2, y + glyph + 10, 'GRAVITASI',
-          size: 7, bold: true, role: SldRole.source));
+      // Round 21 (riser-drafting-2-3) — GRAVITASI names the tank's gravity
+      // OUTLET to the building, drawn as its OWN stub off the tank's left side
+      // (out, then down) with the word beside it at the box edge — never on
+      // the pump-to-tank leg at cx (that leg is the TRANSFER / booster
+      // discharge, and it used to strike through the word).
+      final outY = y + glyph / 2;
+      final stubX = left + 24;
+      prims
+        ..add(SldLine(cx - glyph / 2, outY, stubX, outY,
+            weight: SldWeight.thin, role: SldRole.source))
+        ..add(SldLine(stubX, outY, stubX, y + glyph + 2,
+            weight: SldWeight.thin, role: SldRole.source))
+        ..add(SldLabel(left + 6, y + glyph + 12, 'GRAVITASI',
+            size: 7, bold: true, role: SldRole.source));
     }
     roofBottom = y + glyph;
     y += glyph + 26;
+  }
+
+  // Round 21 (riser-drafting-2-7) — the GROUND TANK and its real capacity:
+  // the H-101 pump-set detail shows the GWT -> pump -> (RT) chain.
+  void groundTankRow(double gx, double gy) {
+    prims.addAll(_withRole(
+        planComponentPrims(NodeComponent.groundTank,
+            cx: gx, cy: gy + glyph / 2, size: glyph),
+        SldRole.source));
+    final m3 = detailOf(NodeComponent.groundTank);
+    prims.add(SldLabel(gx + glyph / 2 + 8, gy + glyph / 2 + 3,
+        m3 != null ? 'GROUND TANK $m3' : 'GROUND TANK',
+        size: 7, role: SldRole.source));
   }
 
   // ── PUMP row with the suction / discharge VALVE TRAIN (G3) ───────────────────
@@ -1163,7 +1373,19 @@ bool _emitPlantDetail(
     if (leg != null) {
       prims.add(SldLabel(cx - _labelWidth(leg, 7) / 2, capY, leg,
           size: 7, bold: true, role: SldRole.source));
+      capY += 12;
     }
+    if (hasGround) {
+      // The suction leg drops from the train's inlet end to the tank below
+      // the captions (left of them, so it crosses no text).
+      final inletX = firstCx - gl / 2;
+      final gy = capY - 2;
+      prims.add(SldLine(inletX, trainCy, inletX, gy,
+          weight: SldWeight.thin, role: SldRole.source));
+      groundTankRow(inletX, gy);
+    }
+  } else if (hasGround) {
+    groundTankRow(cx, y);
   }
   return true;
 }
@@ -1220,8 +1442,16 @@ List<String> plantMoverCaptions(
 
 /// The plant-detail box height: [_plantH], grown one caption row per mover
 /// beyond the second (Round 17 — one duty caption per mover).
-double _plantDetailH(Network network) =>
-    _plantH + math.max(0, _plantMovers(network).length - 2) * 12.0;
+///
+/// Round 21 — plus one tank row when a ground tank sits below the pump train.
+double _plantDetailH(Network network) {
+  bool has(NodeComponent c) => network.nodes.any((n) => n.component == c);
+  final groundBelowTrain = has(NodeComponent.groundTank) &&
+      (has(NodeComponent.pump) || has(NodeComponent.boosterSet));
+  return _plantH +
+      math.max(0, _plantMovers(network).length - 2) * 12.0 +
+      (groundBelowTrain ? 36.0 : 0.0);
+}
 
 /// The glyph for one device in the pump-set valve TRAIN (G3): GV / STR / CV
 /// reuse the plan-symbol library; FJ (flexible joint) is a standalone glyph.

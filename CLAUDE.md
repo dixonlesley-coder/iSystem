@@ -1458,6 +1458,41 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 21 — nested rooms, fire pumps + pipe, family-true BOM, legible
+  risers, a gravity datum (2026-10-18)**: the generating-room tag
+  (`roomTerminalOwnerOf`) wins only outside a smaller same-kind room — a
+  terminal a later-drawn nested room contains is that room's, so the outer
+  room goes stale rather than silently doubling the air; Auto-place keeps the
+  legacy grid and substitutes only a blocked cell by the nearest free cell of
+  the first denser grid. `standardMotorKw` runs to 315 kW (IEC frames); a
+  fire-pump way sizes on `max(nameplate / η, governing input)` and a clamp
+  raises `fire-pump-motor-oversized`. The standpipe flow counts the DRAWN
+  hydrant riser stacks (`drawnStandpipeRiserCount`, ≥ 1) off the throttled
+  sizing network. Parallel fire pumps are duty / standby / jockey
+  (`parallelFirePumpRoles`): standby ways carry demand factor 0, the jockey
+  its own `fireJockeyDutyProvider` duty, one schedule row per drawn pump.
+  Fire pipe sizes on `maxFireVelocity` (6 m/s, `// VERIFY`) with the code
+  floors; domestic water keeps 2 m/s. A cable FAMILY never falls back to
+  another family's SKU (unmatched ⇒ `elec:cable:<family>:<n>x<csa>`);
+  enclosures price per W x H x D; `advancedBomLines` takes off control gear,
+  genset + ATS, SPDs, rods and the BC conductor. A mechanical BOM line counts
+  its `unmeasuredSegments` (any > 0 ⇒ flagged, never a measured total);
+  drawn components are taken off (`buildComponentTakeoff`), an inline
+  terminal sits on a tee, rect fittings key / print W x H. A riser PDF that
+  prints below 7 pt paginates (`paginatedRiserSheets` /
+  `buildMechanicalRiserSld(floorRange:)`, `LANJUT KE <floor>` stubs); the
+  issued riser carries the HWR leg whenever the canvas does. A GRAVITY riser
+  reads a bare stack junction under its floor's slab
+  (`gravityRiserEndElevation`: ceiling of the floor below; on the lowest
+  level the lowest SLAB — grade with no basement, the lowest basement slab
+  when `groundIndex > 0`); pressurized risers keep `nodeElevation`. Every
+  riser length — `edgeLength`, the Riser canvas label, the Riser summary
+  Σ, the node inspector elevation — goes through ONE `riserEndElevation` /
+  `riserElevationDelta` (canvas == BOM == export). A fire pipe's velocity
+  verdict uses the SAME `maxFireVelocity` the sizer used (never the 2.0 m/s
+  domestic cap); a fan group in the riser drawing is keyed by the shared
+  header whichever way its runs are drawn; an ASSUMED jockey fire pump
+  (≥ 3 identical pumps) raises the info `fire-jockey-assumed:<id>`.
 - **Round 20 — generating-room tags, owner rooms, undiversified phase,
   drawn feed, verdict-backing figures (2026-10-18)**: an Auto-placed terminal
   carries `NetNode.autoPlacedRoomId`; ownership is `roomTerminalOwnerOf`

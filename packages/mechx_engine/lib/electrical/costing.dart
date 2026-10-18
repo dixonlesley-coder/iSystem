@@ -73,7 +73,17 @@ CostEstimate estimateCost(
     // unmatched enclosure/busbar/RCD/accessory's `elec:` key — audit r8), with
     // a read-time fallback to the bare SKU so a saved pricelist still applies.
     final byKey = line.priceKey == null ? null : priceList[line.priceKey];
-    final unit = byKey ?? (line.sku == null ? null : priceList[line.sku]);
+    // Round 21 (bom-quote-4) — a sized enclosure key
+    // (`elec:enclosure:<W>x<H>x<D>`) falls back to a legacy bare
+    // `elec:enclosure` price, so a pricelist saved before still prices it.
+    final legacyEnclosure = byKey == null &&
+            (line.priceKey?.startsWith('${kElecPriceKeyPrefix}enclosure:') ??
+                false)
+        ? priceList['${kElecPriceKeyPrefix}enclosure']
+        : null;
+    final unit = byKey ??
+        legacyEnclosure ??
+        (line.sku == null ? null : priceList[line.sku]);
     if (unit == null) {
       unmatched += 1;
       out.add(CostLine(line: line, matched: false));

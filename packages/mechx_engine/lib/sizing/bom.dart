@@ -65,6 +65,14 @@ class BomLine {
   /// risers (they span floors) and for the default un-grouped-by-floor build.
   final int? floorIndex;
 
+  /// Round 21 (bom-quote-2) — how many of this line's [segmentCount] edges are
+  /// RUNS on an UNCALIBRATED sheet: they add a segment but contribute 0 m to
+  /// [totalLength] (`edgeLength` cannot measure them), so the metres — and
+  /// any quantity / price read off them — are UNDERSTATED. The app's
+  /// 'unmeasured' marker, the mechanical cost line and the quotation read
+  /// `unmeasuredSegments > 0`, never only an all-zero total. Default 0.
+  final int unmeasuredSegments;
+
   const BomLine({
     required this.service,
     required this.kind,
@@ -77,7 +85,11 @@ class BomLine {
     this.widthMm,
     this.heightMm,
     this.floorIndex,
+    this.unmeasuredSegments = 0,
   });
+
+  /// True when at least one edge of this line could not be measured.
+  bool get hasUnmeasured => unmeasuredSegments > 0;
 
   /// The set-wide size notation (N18): a rectangular duct as `W x H` (mm), a
   /// round air duct as `Ø<mm>`, a pipe as `DN<mm>` — the ONE notation the report
@@ -183,7 +195,13 @@ List<BomLine> buildBom({
     int? widthMm,
     int? heightMm,
     int? floorIndex
-  }), ({double meters, int count, Set<String> riserTags, bool manual})>{};
+  }), ({
+    double meters,
+    int count,
+    Set<String> riserTags,
+    bool manual,
+    int unmeasured
+  })>{};
 
   for (final edge in net.edges) {
     final es = sizing[edge.id];
@@ -222,6 +240,13 @@ List<BomLine> buildBom({
     final rt = edge.kind == EdgeKind.riser ? riserTagByEdge[edge.id] : null;
     // I5: a line is "manual" when any of its edges carried a size override.
     final manual = edge.sizeOverride != null;
+    // Round 21 — a RUN on an uncalibrated sheet measures 0 m (a riser's
+    // length is the elevation delta, always measurable).
+    final from = net.nodeById(edge.fromId);
+    final unmeasured = edge.kind == EdgeKind.run &&
+            (from == null || calibrationBySheet[from.sheetId] == null)
+        ? 1
+        : 0;
 
     final prev = acc[key];
     if (prev == null) {
@@ -230,6 +255,7 @@ List<BomLine> buildBom({
         count: 1,
         riserTags: {if (rt != null) rt},
         manual: manual,
+        unmeasured: unmeasured,
       );
     } else {
       if (rt != null) prev.riserTags.add(rt);
@@ -238,6 +264,7 @@ List<BomLine> buildBom({
         count: prev.count + 1,
         riserTags: prev.riserTags,
         manual: prev.manual || manual,
+        unmeasured: prev.unmeasured + unmeasured,
       );
     }
   }
@@ -279,6 +306,7 @@ List<BomLine> buildBom({
         totalLength: Length(entry.value.meters),
         segmentCount: entry.value.count,
         floorIndex: entry.key.floorIndex,
+        unmeasuredSegments: entry.value.unmeasured,
       ),
   ];
 
@@ -316,13 +344,34 @@ class FittingLine {
   final int count;
   final String material;
 
+  /// Round 21 (bom-quote-6) — a RECTANGULAR duct fitting's W×H (mm, the
+  /// largest incident duct's); null for a round duct / pipe. [diameterMm] is
+  /// then only the circular equivalent (kept for ordering), never printed or
+  /// keyed: a `Ø457` elbow is not a purchasable size.
+  final int? widthMm;
+  final int? heightMm;
+
   const FittingLine({
     required this.service,
     required this.type,
     required this.diameterMm,
     required this.count,
     this.material = '',
+    this.widthMm,
+    this.heightMm,
   });
+
+  /// The set-wide size notation (N18), shared with [BomLine.sizeLabel]:
+  /// `W x H` for a rectangular duct, `Ø<mm>` round duct, `DN<mm>` pipe.
+  String get sizeLabel {
+    if (widthMm != null && heightMm != null) return '${widthMm}x$heightMm';
+    return service.isAir ? 'Ø$diameterMm' : 'DN$diameterMm';
+  }
+
+  /// The CSV size cell: `WxH` for a rectangular duct, else the plain mm.
+  String get csvSize => (widthMm != null && heightMm != null)
+      ? '${widthMm}x$heightMm'
+      : '$diameterMm';
 }
 
 /// Cosine below which two runs meeting at a vertex count as a straight
@@ -347,15 +396,40 @@ List<FittingLine> buildFittings({
 }) {
   // node → service → incident (diameter mm, edge), sized edges only.
   final byNode = <String, Map<ServiceType, List<(int, NetEdge)>>>{};
+  // Round 21 — each sized edge's printed size: W×H for a rectangular duct
+  // (its `diameter` is only the circular equivalent), else the round mm.
+  final rectOf = <String, (int, int)>{};
   for (final edge in net.edges) {
     final es = sizing[edge.id];
     if (es == null) continue;
     final mm = es.diameter.inMillimeters.round();
+    if (es.isRectangular) {
+      rectOf[edge.id] = (
+        es.width!.inMillimeters.round(),
+        es.height!.inMillimeters.round()
+      );
+    }
     for (final nodeId in [edge.fromId, edge.toId]) {
       (byNode[nodeId] ??= {})
           .putIfAbsent(edge.service, () => [])
           .add((mm, edge));
     }
+  }
+  String sizeKey((int, NetEdge) e) {
+    final r = rectOf[e.$2.id];
+    return r == null ? '${e.$1}' : '${r.$1}x${r.$2}';
+  }
+
+  // Round 21 (bom-quote-3) — an INLINE fixture-role terminal (a sprinkler
+  // head / hydrant box / diffuser on a straight branch) sits on a reducing
+  // TEE outlet, not a plain pass-through.
+  bool inlineTerminal(String nodeId) {
+    final c = net.nodeById(nodeId)?.component;
+    return c != null &&
+        c.role == NodeRole.fixture &&
+        c != NodeComponent.cleanout &&
+        c != NodeComponent.airVent &&
+        c != NodeComponent.fireExtinguisher;
   }
 
   // Unit plan direction from [nodeId] toward [edge]'s far end, or null when
@@ -378,10 +452,18 @@ List<FittingLine> buildFittings({
     return da.dx * db.dx + da.dy * db.dy <= _kPassThroughCos;
   }
 
-  final acc =
-      <({ServiceType service, FittingType type, int mm, String mat}), int>{};
-  void add(ServiceType s, FittingType t, int mm, String mat, int n) {
-    final key = (service: s, type: t, mm: mm, mat: mat);
+  final acc = <({
+    ServiceType service,
+    FittingType type,
+    int mm,
+    String mat,
+    int? w,
+    int? h
+  }), int>{};
+  void add(ServiceType s, FittingType t, int mm, String mat, int n,
+      (int, int)? rect) {
+    final key =
+        (service: s, type: t, mm: mm, mat: mat, w: rect?.$1, h: rect?.$2);
     acc[key] = (acc[key] ?? 0) + n;
   }
 
@@ -400,20 +482,25 @@ List<FittingLine> buildFittings({
       }
       final mm = best.$1;
       final mat = bomMaterialFor(best.$2);
+      final rect = rectOf[best.$2.id];
       if (k == 2) {
-        if (!isPassThrough(nodeId, incident[0].$2, incident[1].$2)) {
-          add(service, FittingType.elbow, mm, mat, 1);
+        if (inlineTerminal(nodeId)) {
+          add(service, FittingType.tee, mm, mat, 1, rect);
+        } else if (!isPassThrough(nodeId, incident[0].$2, incident[1].$2)) {
+          add(service, FittingType.elbow, mm, mat, 1, rect);
         }
       } else if (k == 3) {
-        add(service, FittingType.tee, mm, mat, 1);
+        add(service, FittingType.tee, mm, mat, 1, rect);
       } else if (k == 4) {
-        add(service, FittingType.cross, mm, mat, 1);
+        add(service, FittingType.cross, mm, mat, 1, rect);
       } else if (k > 4) {
-        add(service, FittingType.tee, mm, mat, k - 2);
+        add(service, FittingType.tee, mm, mat, k - 2, rect);
       }
-      final distinct = incident.map((e) => e.$1).toSet().length;
+      // Round 21 — distinct by the PRINTED size (a 600x300 -> 500x350
+      // transition is a transition even at one equivalent diameter).
+      final distinct = incident.map(sizeKey).toSet().length;
       if (distinct > 1) {
-        add(service, FittingType.reducer, mm, mat, distinct - 1);
+        add(service, FittingType.reducer, mm, mat, distinct - 1, rect);
       }
     });
   });
@@ -426,6 +513,8 @@ List<FittingLine> buildFittings({
         diameterMm: e.key.mm,
         count: e.value,
         material: e.key.mat,
+        widthMm: e.key.w,
+        heightMm: e.key.h,
       ),
   ];
   lines.sort((a, b) {
@@ -435,29 +524,175 @@ List<FittingLine> buildFittings({
     if (t != 0) return t;
     final d = a.diameterMm.compareTo(b.diameterMm);
     if (d != 0) return d;
-    return a.material.compareTo(b.material);
+    final m = a.material.compareTo(b.material);
+    if (m != 0) return m;
+    final w = (a.widthMm ?? -1).compareTo(b.widthMm ?? -1);
+    if (w != 0) return w;
+    return (a.heightMm ?? -1).compareTo(b.heightMm ?? -1);
   });
   return lines;
 }
 
 /// Render [fittings] as CSV (header + one row per line). The size column is the
 /// neutral `nominal_size_mm` (matching [bomToCsv]) — an air-duct fitting and a
-/// pipe fitting both quote a nominal mm; the report FITTINGS table carries the
-/// Ø/DN notation.
+/// pipe fitting both quote a nominal mm, a rectangular duct fitting its `WxH`;
+/// the report FITTINGS table carries the Ø/DN notation. Round 21 — a
+/// `material` column, so a PPR and a PVC DN50 tee are two DISTINCT rows.
 String fittingsToCsv(List<FittingLine> fittings) {
-  final buffer = StringBuffer('service,fitting,nominal_size_mm,count\n');
+  final buffer =
+      StringBuffer('service,fitting,nominal_size_mm,material,count\n');
   for (final f in fittings) {
     buffer
       ..write(f.service.name)
       ..write(',')
       ..write(f.type.name)
       ..write(',')
-      ..write(f.diameterMm)
+      ..write(f.csvSize)
+      ..write(',')
+      ..write(f.material)
       ..write(',')
       ..write(f.count)
       ..write('\n');
   }
   return buffer.toString();
+}
+
+// ── Drawn components (valves, heads, terminals, drains, dampers) ─────────────
+
+/// Round 21 (bom-quote-3) — the drawn COMPONENTS a take-off buys per piece:
+/// valves, strainers, meters, air vents, drains / cleanouts, taps, sprinkler
+/// heads, hydrant boxes / hose reels / FDCs / extinguishers, diffusers /
+/// grilles, dampers and VAV boxes. Plant (pumps, tanks, boosters, AHU / FCU,
+/// fans, AC units) is scheduled EQUIPMENT and the riser marker is not a part,
+/// so neither is listed here.
+const Set<NodeComponent> kTakeoffComponents = {
+  NodeComponent.gateValve,
+  NodeComponent.checkValve,
+  NodeComponent.prv,
+  NodeComponent.balancingValve,
+  NodeComponent.strainer,
+  NodeComponent.waterMeter,
+  NodeComponent.airVent,
+  NodeComponent.expansionTank,
+  NodeComponent.roofDrain,
+  NodeComponent.floorDrain,
+  NodeComponent.cleanout,
+  NodeComponent.waterOutlet,
+  NodeComponent.sprinklerHead,
+  NodeComponent.fireExtinguisher,
+  NodeComponent.hydrantBox,
+  NodeComponent.hoseReel,
+  NodeComponent.fireDeptConnection,
+  NodeComponent.supplyDiffuser,
+  NodeComponent.returnGrille,
+  NodeComponent.exhaustGrille,
+  NodeComponent.linearDiffuser,
+  NodeComponent.volumeDamper,
+  NodeComponent.fireDamper,
+  NodeComponent.motorizedDamper,
+  NodeComponent.vavBox,
+};
+
+/// The service an UNPIPED component belongs to (an auto-placed diffuser not
+/// yet ducted is still bought) — its conventional service.
+ServiceType _componentDefaultService(NodeComponent c) => switch (c) {
+      NodeComponent.supplyDiffuser ||
+      NodeComponent.linearDiffuser ||
+      NodeComponent.vavBox ||
+      NodeComponent.volumeDamper ||
+      NodeComponent.fireDamper ||
+      NodeComponent.motorizedDamper =>
+        ServiceType.duct,
+      NodeComponent.returnGrille => ServiceType.returnAir,
+      NodeComponent.exhaustGrille => ServiceType.exhaust,
+      NodeComponent.sprinklerHead => ServiceType.fireSprinkler,
+      NodeComponent.hydrantBox ||
+      NodeComponent.hoseReel ||
+      NodeComponent.fireDeptConnection ||
+      NodeComponent.fireExtinguisher =>
+        ServiceType.fireHydrant,
+      NodeComponent.roofDrain => ServiceType.rainwater,
+      NodeComponent.floorDrain ||
+      NodeComponent.cleanout =>
+        ServiceType.drainage,
+      _ => ServiceType.coldWater,
+    };
+
+/// One grouped drawn-component row: [count] × [component] on [service] at
+/// [sizeLabel] (a valve / head / drain at its largest incident `DN<mm>`, an
+/// air terminal at its chosen face `W x H`, else its largest incident duct;
+/// '' when nothing sizes it).
+class ComponentLine {
+  final ServiceType service;
+  final NodeComponent component;
+  final String sizeLabel;
+  final int count;
+
+  const ComponentLine({
+    required this.service,
+    required this.component,
+    required this.sizeLabel,
+    required this.count,
+  });
+}
+
+/// Round 21 (bom-quote-3) — the per-piece take-off of every drawn component
+/// in [kTakeoffComponents], grouped by (service, component, size). Service =
+/// the component's incident edge service (lowest enum index when several),
+/// else its conventional service. Pure; sorted by service, component, size.
+List<ComponentLine> buildComponentTakeoff({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+}) {
+  final acc = <(ServiceType, NodeComponent, String), int>{};
+  for (final n in net.nodes) {
+    final c = n.component;
+    if (c == null || !kTakeoffComponents.contains(c)) continue;
+    final incident = net.edgesAt(n.id).toList()
+      ..sort((a, b) => a.service.index.compareTo(b.service.index));
+    final service =
+        incident.isEmpty ? _componentDefaultService(c) : incident.first.service;
+    var size = '';
+    final fw = n.faceWidthMm, fh = n.faceHeightMm;
+    if (fw != null && fh != null && fw > 0 && fh > 0) {
+      size = '${fw.round()}x${fh.round()}';
+    } else {
+      EdgeSizing? best;
+      for (final e in incident) {
+        final es = sizing[e.id];
+        if (es == null) continue;
+        if (best == null ||
+            es.diameter.inMillimeters > best.diameter.inMillimeters) {
+          best = es;
+        }
+      }
+      if (best != null) {
+        size = best.isRectangular
+            ? '${best.width!.inMillimeters.round()}x'
+                '${best.height!.inMillimeters.round()}'
+            : service.isAir
+                ? 'Ø${best.diameter.inMillimeters.round()}'
+                : 'DN${best.diameter.inMillimeters.round()}';
+      }
+    }
+    final key = (service, c, size);
+    acc[key] = (acc[key] ?? 0) + 1;
+  }
+  final lines = [
+    for (final e in acc.entries)
+      ComponentLine(
+          service: e.key.$1,
+          component: e.key.$2,
+          sizeLabel: e.key.$3,
+          count: e.value),
+  ]..sort((a, b) {
+      final s = a.service.index.compareTo(b.service.index);
+      if (s != 0) return s;
+      final c = a.component.index.compareTo(b.component.index);
+      if (c != 0) return c;
+      return a.sizeLabel.compareTo(b.sizeLabel);
+    });
+  return lines;
 }
 
 /// Convenience: sums [BomLine.totalLength] for all lines belonging to [service].

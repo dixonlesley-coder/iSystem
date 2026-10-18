@@ -19,6 +19,7 @@ library;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/advanced_bom.dart';
 import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/catalog.dart';
 import 'package:mechx_engine/electrical/costing.dart';
@@ -131,15 +132,26 @@ class CommercialController extends Notifier<CommercialSettings> {
 /// prospective fault (the same fault study the schedule's kA tokens read —
 /// audit r8 costing-4), so the quote never prices a 6 kA MCB at an 18 kA bus.
 final electricalBomProvider = Provider<Bom>((ref) {
-  final fault = ref.watch(electricalAdvancedProvider).fault;
+  final adv = ref.watch(electricalAdvancedProvider);
+  final sys = ref.watch(electricalResultProvider);
   // Round 15 — each device matches the SPECIFIED kA the schedule prints.
-  final ka = faultSpecifiedKa(fault);
+  final ka = faultSpecifiedKa(adv.fault);
   return buildBom(
-    ref.watch(electricalResultProvider),
+    sys,
     parts: fullCatalog(),
     requiredIcuKaByPanelId: ka.bus,
     incomerKaByPanelId: ka.incomers,
     breakerKaByCircuitId: ka.breakers,
+    // Round 21 (bom-quote-4/-5) — each enclosure at its sized W x H x D, and
+    // the designed control gear / genset + ATS / SPDs / earthing taken off.
+    enclosureByPanelId: adv.enclosure,
+    extraLines: advancedBomLines(
+      project: ref.watch(electricalProjectProvider),
+      sys: sys,
+      controlAssemblies: adv.controlAssemblies,
+      spd: adv.spd,
+      electrode: adv.electrode,
+    ),
   );
 });
 
@@ -177,6 +189,7 @@ final mechanicalCostProvider = Provider<MechCostEstimate>((ref) {
   return estimateMechanicalCost(
     pipes: ref.watch(bomProvider),
     fittings: ref.watch(fittingsProvider),
+    components: ref.watch(componentTakeoffProvider),
     priceList: ref.watch(commercialSettingsProvider).priceList,
     cutPlan: ref.watch(pipeCutPlanProvider),
   );
@@ -196,6 +209,7 @@ final mepQuotationProvider = Provider<MepQuotation>((ref) {
     electricalBom: ref.watch(electricalBomProvider),
     mechanicalPipes: ref.watch(bomProvider),
     mechanicalFittings: ref.watch(fittingsProvider),
+    mechanicalComponents: ref.watch(componentTakeoffProvider),
     labourRate: settings.labourRatePerHour,
     overheadPct: settings.overheadPct,
     contingencyPct: settings.contingencyPct,

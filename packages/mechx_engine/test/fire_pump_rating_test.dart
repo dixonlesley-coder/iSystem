@@ -42,8 +42,9 @@ void main() {
   //          η_overload = 0.70 × 0.85 (kOverloadEfficiencyFactor) = 0.595
   //          shaft = 47 823.75 / 0.595 = 80 376.05 W
   //   churn  hydraulic = 0 (no flow) ; shaft = 0
-  //   governing shaft = max = OVERLOAD 80 376.05 W ≈ 80.38 kW > the largest
-  //   standard 75 kW frame → the ladder saturates (oversized).
+  //   governing shaft = max = OVERLOAD 80 376.05 W ≈ 80.38 kW → the next IEC
+  //   frame above 75 kW is 90 kW (Round 21: the ladder runs to 315 kW), so
+  //   the motor is SELECTED at 90 kW, not clamped.
   //   (Audit 2026-10 fire-4: with one constant η the overload shaft was
   //   0.975 × rated = 68.32 kW and could never govern; the pump runs past its
   //   best-efficiency point at 150 % flow, so its η is derated.)
@@ -86,20 +87,14 @@ void main() {
     });
 
     // Q·H/η: rated 0.1 × 50 / 0.70 = 7.143 vs overload 0.15 × 32.5 / 0.595
-    // = 8.193 ⇒ the OVERLOAD point governs at ≈ 80.38 kW, above the largest
-    // standard 75 kW frame ⇒ selectMotor saturates at 75 kW and flags it.
-    test('motor selected on governing (overload) shaft → 75 kW, saturated', () {
+    // = 8.193 ⇒ the OVERLOAD point governs at ≈ 80.38 kW; 75 < 80.38 ≤ 90
+    // ⇒ selectMotor picks the 90 kW IEC frame (Round 21 ladder) — in range.
+    test('motor selected on governing (overload) shaft → 90 kW frame', () {
       expect(r.overload.shaftPower.watts,
           greaterThan(r.rated.shaftPower.watts));
-      expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
-      expect(r.oversized, isTrue);
-      // M19 — the verdict names the MOTOR FRAME (the condition the flag really
-      // reads), not the pump curve, which is compliant by construction here.
-      expect(
-        r.verdict,
-        'Motor above standard frame range - specify a custom motor or '
-        'duty pairs',
-      );
+      expect(r.selectedMotor.inKiloWatts, closeTo(90.0, 1e-9));
+      expect(r.oversized, isFalse);
+      expect(r.verdict, 'Motor within standard frame range');
     });
 
     // Jockey: 1 % of 100 L/s = 1 L/s; head = churn 70 m + 5 m margin = 75 m.
@@ -134,9 +129,9 @@ void main() {
   //   rated shaft = 9810 × 0.07887 × 80 / 0.7 ≈ 88 411 W ≈ 88.4 kW
   //   overload shaft = 9810 × (1.5×0.07887) × (0.65×80) / (0.7 × 0.85)
   //                  = 9810 × 0.118305 × 52 / 0.595 ≈ 101 428 W ≈ 101.4 kW
-  //   governing = overload ≈ 101.4 kW > largest standard frame 75 kW →
-  //   oversized.
-  group('checkFirePumpRating — oversized (tall building, 1250 gpm @ 80 m)', () {
+  //   governing = overload ≈ 101.4 kW → 90 < 101.4 ≤ 110 ⇒ the 110 kW IEC
+  //   frame (Round 21 ladder) — no longer clamped.
+  group('checkFirePumpRating — tall building, 1250 gpm @ 80 m', () {
     late FirePumpRatingResult r;
 
     setUp(() {
@@ -146,13 +141,27 @@ void main() {
       );
     });
 
-    test('governing shaft exceeds the 75 kW frame → oversized', () {
-      expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9)); // saturated
-      expect(r.oversized, isTrue);
+    test('governing shaft 101.4 kW → the 110 kW frame, in range', () {
+      expect(r.selectedMotor.inKiloWatts, closeTo(110.0, 1e-9));
+      expect(r.oversized, isFalse);
+    });
+
+    // Oversized boundary moved to the top of the IEC ladder (315 kW):
+    // rated 250 L/s @ 100 m ⇒ overload shaft = 9810 × 0.375 × 65 / 0.595
+    // = 401 890 W ≈ 401.9 kW > 315 kW ⇒ selectMotor clamps and flags it.
+    test('a governing shaft above 315 kW clamps → oversized', () {
+      final big = checkFirePumpRating(
+        ratedFlow: FlowRate.litersPerSecond(250),
+        ratedHead: const Head(100),
+      );
+      expect(big.overload.shaftPower.watts,
+          closeTo(rhoG * 0.375 * 65 / 0.595, 1e-3));
+      expect(big.selectedMotor.inKiloWatts, closeTo(315.0, 1e-9));
+      expect(big.oversized, isTrue);
       // M19 — reworded to name the true condition (the standard MOTOR ladder
       // saturated) and the action, instead of blaming the pump curve.
       expect(
-        r.verdict,
+        big.verdict,
         'Motor above standard frame range - specify a custom motor or '
         'duty pairs',
       );

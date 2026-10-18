@@ -192,9 +192,15 @@ final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
     // value at the laid slope, physically meaningless for a riser, so no
     // verdict is formed (the engine forms none either).
     if (gravity && e.kind == EdgeKind.riser) continue;
+    // Round 21 review — a FIRE pipe (sprinkler / hydrant) is judged against
+    // the SAME fire velocity cap the sizer used ([SizingContext.maxFireVelocity],
+    // [kMaxFireVelocityMps]); the domestic 2.0 m/s supply cap would flag every
+    // auto-sized fire pipe between 2 and 6 m/s as "too high".
     final max = gravity
         ? profile.maxDrainVelocity.value
-        : profile.maxSupplyVelocity.value;
+        : fireMinimumDiameter(e) != null
+            ? const SizingContext().maxFireVelocity
+            : profile.maxSupplyVelocity.value;
     // The drainage floor REPEATS the engine verdict instead of re-deriving it:
     // at the code-minimum size no smaller pipe is allowed (G1), so a run the
     // engine judged self-cleansing-OK is never shown LOW here.
@@ -1738,6 +1744,13 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
     ductSealMetres: sealM,
     threadedJoints: threaded,
   );
+});
+
+/// Round 21 (bom-quote-3) — the drawn components (valves, heads, terminals,
+/// drains, dampers) taken off per piece for the mechanical quotation.
+final componentTakeoffProvider = Provider<List<ComponentLine>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  return buildComponentTakeoff(net: net, sizing: ref.watch(sizingProvider));
 });
 
 /// Estimated fittings (elbows/tees/crosses/reducers) for the sized network.

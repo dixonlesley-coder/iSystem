@@ -75,16 +75,35 @@ String mechPipeKeyFor(BomLine p) => mechPipeKey(p.service, p.kind, p.diameterMm,
 /// The stable pricelist key for a mechanical fitting line (per service, type,
 /// MATERIAL and nominal DN in mm). Without a [material] the legacy
 /// `mech:fitting:<svc>:<type>:<mm>` key is returned (also the read fallback).
+///
+/// Round 21 (bom-quote-6) — a RECTANGULAR duct fitting keys on its W×H
+/// (`mech:fitting:<svc>:<type>:<mat>:<W>x<H>`), never the circular
+/// equivalent.
 String mechFittingKey(
   ServiceType service,
   FittingType type,
   int diameterMm, {
   String material = '',
-}) =>
-    material.isEmpty
-        ? '${kMechPriceKeyPrefix}fitting:${service.name}:${type.name}:$diameterMm'
-        : '${kMechPriceKeyPrefix}fitting:${service.name}:${type.name}:'
-            '$material:$diameterMm';
+  int? widthMm,
+  int? heightMm,
+}) {
+  final rect = widthMm != null && heightMm != null;
+  if (material.isEmpty && !rect) {
+    return '${kMechPriceKeyPrefix}fitting:${service.name}:${type.name}:'
+        '$diameterMm';
+  }
+  final size = rect ? '${widthMm}x$heightMm' : '$diameterMm';
+  final mat = material.isEmpty ? '-' : material;
+  return '${kMechPriceKeyPrefix}fitting:${service.name}:${type.name}:'
+      '$mat:$size';
+}
+
+/// Round 21 (bom-quote-3) — the stable pricelist key for a drawn COMPONENT
+/// (`mech:component:<svc>:<component>:<size>`, size '-' when unsized).
+String mechComponentKey(
+        ServiceType service, NodeComponent component, String sizeLabel) =>
+    '${kMechPriceKeyPrefix}component:${service.name}:${component.name}:'
+    '${sizeLabel.isEmpty ? '-' : sizeLabel}';
 
 /// True when [key] addresses a mechanical price (vs an electrical catalogue SKU).
 bool isMechPriceKey(String key) => key.startsWith(kMechPriceKeyPrefix);
@@ -112,8 +131,25 @@ String _fittingLabel(FittingType t) => switch (t) {
 
 // ── mechanical material costing ───────────────────────────────────────────────
 
-/// Whether a mechanical cost line is a length of pipe/duct or a fitting.
-enum MechItemCategory { pipe, fitting }
+/// The quotation description of a drawn [component] on [service]: the
+/// service label then the component label, with a word the two share at the
+/// seam said once ('Cold water' + 'Water outlet' -> 'Cold water outlet', not
+/// 'Cold water Water outlet'). Pure.
+String mechComponentDescription(ServiceType service, NodeComponent component) {
+  final svc = mechServiceLabel(service);
+  final comp = component.label;
+  final svcWords = svc.split(' ');
+  final compWords = comp.split(' ');
+  if (compWords.length > 1 &&
+      svcWords.last.toLowerCase() == compWords.first.toLowerCase()) {
+    return '$svc ${compWords.skip(1).join(' ')}';
+  }
+  return '$svc $comp';
+}
+
+/// Whether a mechanical cost line is a length of pipe/duct, a fitting, or
+/// (Round 21) a drawn component (valve, head, terminal, drain, damper).
+enum MechItemCategory { pipe, fitting, component }
 
 /// One priced mechanical BOM line — a pipe/duct length (priced per metre) or a
 /// fitting (priced per piece). [unitPrice] / [lineTotal] are null when the key
@@ -147,6 +183,11 @@ class MechCostLine {
   /// Cut-plan waste for this (service, DN), % of purchased stock, or null.
   final double? wastePercent;
 
+  /// Round 21 (bom-quote-2) — runs of this pipe/duct line on an UNCALIBRATED
+  /// sheet: measured at 0 m, so [qty] (and the price) is understated. The
+  /// description carries an 'unmeasured' note and the quotation a caveat.
+  final int unmeasuredSegments;
+
   const MechCostLine({
     required this.key,
     required this.description,
@@ -159,6 +200,7 @@ class MechCostLine {
     this.lineTotal,
     this.stockBars,
     this.wastePercent,
+    this.unmeasuredSegments = 0,
   });
 }
 
@@ -172,6 +214,10 @@ class MechCostEstimate {
 
   /// Count of lines with no price.
   final int unpricedCount;
+
+  /// Round 21 — lines carrying unmeasured runs (understated metres).
+  int get unmeasuredLineCount =>
+      lines.where((l) => l.unmeasuredSegments > 0).length;
 
   const MechCostEstimate({
     required this.lines,
@@ -192,6 +238,8 @@ MechCostEstimate estimateMechanicalCost({
   required List<BomLine> pipes,
   required List<FittingLine> fittings,
   required Map<String, double> priceList,
+  // Round 21 (bom-quote-3) — the drawn components, priced per piece.
+  List<ComponentLine> components = const [],
   List<PipeCutGroup> cutPlan = const [],
   String currency = 'IDR',
 }) {
@@ -229,6 +277,7 @@ MechCostEstimate estimateMechanicalCost({
     required String unit,
     int? stockBars,
     double? wastePercent,
+    int unmeasuredSegments = 0,
   }) {
     // Read-time fallback to the legacy (material-less) key so a pricelist
     // saved before the material split still applies (no version bump).
@@ -246,6 +295,7 @@ MechCostEstimate estimateMechanicalCost({
         priced: false,
         stockBars: stockBars,
         wastePercent: wastePercent,
+        unmeasuredSegments: unmeasuredSegments,
       ));
       return;
     }
@@ -263,6 +313,7 @@ MechCostEstimate estimateMechanicalCost({
       lineTotal: lineTotal,
       stockBars: stockBars,
       wastePercent: wastePercent,
+      unmeasuredSegments: unmeasuredSegments,
     ));
   }
 
@@ -279,11 +330,15 @@ MechCostEstimate estimateMechanicalCost({
       key: mechPipeKeyFor(p),
       legacyKey: mechPipeKey(p.service, p.kind, p.diameterMm),
       description: '${mechServiceLabel(p.service)} $kindWord ${p.sizeLabel}'
-          '${p.material.isEmpty ? '' : ' ${p.material}'}',
+          '${p.material.isEmpty ? '' : ' ${p.material}'}'
+          // Round 21 — never a measured-looking total over unmeasured runs.
+          '${p.hasUnmeasured ? ' (${p.unmeasuredSegments} of '
+              '${p.segmentCount} runs unmeasured - calibrate the sheet)' : ''}',
       category: MechItemCategory.pipe,
       service: p.service,
       qty: _round2(p.totalLength.meters),
       unit: 'm',
+      unmeasuredSegments: p.unmeasuredSegments,
       stockBars: plan?.bars,
       wastePercent: plan == null || plan.purchased <= 0
           ? null
@@ -292,16 +347,29 @@ MechCostEstimate estimateMechanicalCost({
   }
 
   for (final f in fittings) {
-    final size = f.service.isAir ? 'Ø${f.diameterMm}' : 'DN${f.diameterMm}';
+    final rect = f.widthMm != null && f.heightMm != null;
     priceLine(
       key: mechFittingKey(f.service, f.type, f.diameterMm,
-          material: f.material),
-      legacyKey: mechFittingKey(f.service, f.type, f.diameterMm),
+          material: f.material, widthMm: f.widthMm, heightMm: f.heightMm),
+      // A rectangular fitting has no legacy (equivalent-Ø) price to inherit.
+      legacyKey: rect ? null : mechFittingKey(f.service, f.type, f.diameterMm),
       description: '${mechServiceLabel(f.service)} ${_fittingLabel(f.type)} '
-          '$size${f.material.isEmpty ? '' : ' ${f.material}'}',
+          '${f.sizeLabel}${f.material.isEmpty ? '' : ' ${f.material}'}',
       category: MechItemCategory.fitting,
       service: f.service,
       qty: f.count.toDouble(),
+      unit: 'ea',
+    );
+  }
+
+  for (final c in components) {
+    priceLine(
+      key: mechComponentKey(c.service, c.component, c.sizeLabel),
+      description: '${mechComponentDescription(c.service, c.component)}'
+          '${c.sizeLabel.isEmpty ? '' : ' ${c.sizeLabel}'}',
+      category: MechItemCategory.component,
+      service: c.service,
+      qty: c.count.toDouble(),
       unit: 'ea',
     );
   }
@@ -327,11 +395,16 @@ const double mechInstallHoursPerMetreDuct = 0.3; // VERIFY
 /// Install man-hours to make up one pipe/duct fitting.
 const double mechInstallHoursPerFitting = 0.3; // VERIFY
 
+/// Round 21 — install man-hours to set one drawn component (valve, head,
+/// terminal, drain, damper). // VERIFY: a trade figure, not an SNI clause.
+const double mechInstallHoursPerComponent = 0.5; // VERIFY
+
 /// Total mechanical install man-hours implied by the pipe/duct lengths + the
 /// fitting count. Air services use the (heavier) duct rate.
 double mechanicalLabourHours({
   required List<BomLine> pipes,
   required List<FittingLine> fittings,
+  List<ComponentLine> components = const [],
 }) {
   var h = 0.0;
   for (final p in pipes) {
@@ -342,6 +415,9 @@ double mechanicalLabourHours({
   }
   for (final f in fittings) {
     h += f.count * mechInstallHoursPerFitting;
+  }
+  for (final c in components) {
+    h += c.count * mechInstallHoursPerComponent;
   }
   return h;
 }
@@ -421,6 +497,7 @@ MepQuotation buildMepQuotation({
   elec.Bom? electricalBom,
   List<BomLine> mechanicalPipes = const [],
   List<FittingLine> mechanicalFittings = const [],
+  List<ComponentLine> mechanicalComponents = const [],
   double? labourHours,
   double labourRate = defaultLabourRatePerHour,
   double overheadPct = 10,
@@ -434,6 +511,7 @@ MepQuotation buildMepQuotation({
   final mechHoursRaw = mechanicalLabourHours(
     pipes: mechanicalPipes,
     fittings: mechanicalFittings,
+    components: mechanicalComponents,
   );
   final elecHoursRaw =
       electricalBom != null ? labourHoursForBom(electricalBom) : 0.0;
@@ -618,6 +696,15 @@ String mepQuotationToMarkdown(
     ..writeln('| Margin | ${m(quotation.margin)} |')
     ..writeln('| **Grand total** | **${m(quotation.grandTotal)}** |');
 
+  // Round 21 (bom-quote-2) — runs on an uncalibrated sheet are in no total.
+  if (mechanical.unmeasuredLineCount > 0) {
+    b
+      ..writeln()
+      ..writeln('> ${mechanical.unmeasuredLineCount} mechanical line(s) '
+          'include runs on an uncalibrated sheet, measured at 0 m: their '
+          'metres, material and labour are understated until the sheet is '
+          'calibrated.');
+  }
   if (quotation.unpricedCount > 0) {
     b
       ..writeln()

@@ -33,9 +33,9 @@ import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
-import '../units.dart';
 import 'drawing_chrome.dart';
 import 'electrical_dxf_export.dart' show SldDxfLayers;
+import 'plan_symbols.dart' show planLengthLabel;
 
 /// Whether a plan node is a distribution panel (a stroked box) or a load / meter
 /// (a small circle) — drives the glyph the renderers draw.
@@ -104,13 +104,6 @@ class ElectricalPlanData {
   bool get isEmpty => nodes.isEmpty && routes.isEmpty;
 }
 
-String _lenLabel(Length l) {
-  final m = l.meters;
-  return m == m.roundToDouble()
-      ? '${m.toInt()} m'
-      : '${m.toStringAsFixed(1)} m';
-}
-
 /// Build the drawable [ElectricalPlanData] for the [sheetId] / [floorIndex]
 /// slice of [project]. Pure — reads only the model + the (optional) solved
 /// [result] (for panel/load rating labels) + the (optional) [building] /
@@ -138,7 +131,9 @@ ElectricalPlanData buildElectricalPlanData({
     if (building == null) return null;
     final l = electricalCableLength(a, b,
         calibrationBySheet: calibrations, building: building);
-    return l.meters > 0 ? _lenLabel(l) : null;
+    // Round 21 — the ONE 0.1 m length format the board schedule, riser and
+    // report print ('6.0 m', never '6 m'; float noise rounds away first).
+    return l.meters > 0 ? planLengthLabel(l) : null;
   }
 
   final nodes = <ElectricalPlanNode>[];

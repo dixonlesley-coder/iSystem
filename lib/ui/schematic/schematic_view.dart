@@ -3906,9 +3906,11 @@ class _EditSchematicPainter extends CustomPainter {
         _drawArrow(canvas, mid, goingUp, color);
 
         // Length (elevation delta) + sized diameter label.
-        final lengthM = (nodeElevation(b, building, mounting).meters -
-                nodeElevation(a, building, mounting).meters)
-            .abs();
+        // Round 21 review — the SAME riser-end datum as `edgeLength` (the
+        // BOM / report / exported riser), so a gravity stack never prints
+        // its old ceiling-datum length here.
+        final lengthM =
+            riserElevationDelta(edge, a, b, building, mounting).meters;
         final s = sizing[edge.id];
         final lenStr = '${lengthM.toStringAsFixed(1)} m';
         final label = s != null ? '${_sizeLabel(s)} · $lenStr' : lenStr;
@@ -4488,7 +4490,8 @@ class _SystemNotes extends ConsumerWidget {
 ///     one stack tag, so the count is vertical STACKS (how a drafter counts
 ///     risers), not edges.
 ///   * **Total riser length** — the sum over riser edges of the §10
-///     TRUE-ELEVATION delta of their endpoints ([nodeElevation]), exactly the
+///     TRUE-ELEVATION delta of their riser ends ([riserElevationDelta] — the
+///     same datum as `edgeLength`, so canvas == BOM == export), exactly the
 ///     per-riser length the Edit painter prints beside each riser. NEVER a
 ///     pixel distance (geometry-is-truth).
 ///
@@ -4543,9 +4546,7 @@ class RiserSystemSummary extends ConsumerWidget {
       final b = network.nodeById(e.toId);
       if (a == null || b == null) continue;
       riserEdgeCount++;
-      totalRiserM += (nodeElevation(b, building, mounting).meters -
-              nodeElevation(a, building, mounting).meters)
-          .abs();
+      totalRiserM += riserElevationDelta(e, a, b, building, mounting).meters;
     }
 
     return Column(

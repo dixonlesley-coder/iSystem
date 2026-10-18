@@ -39,7 +39,11 @@ import 'package:mechx_engine/sizing/duct_sizing.dart'
     show standardDuctDiametersMm;
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
-import 'package:mechx_engine/sizing/fire_standpipe.dart' show standpipeVerifyChecklist;
+import 'package:mechx_engine/sizing/fire_standpipe.dart'
+    show
+        drawnStandpipeRiserCount,
+        firePumpBasisVerifyChecklist,
+        standpipeVerifyChecklist;
 import 'package:mechx_engine/sizing/hot_water.dart' show hotWaterRecircVerifyChecklist;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -97,7 +101,7 @@ import '../electrical/electrical_export.dart'
 import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart'
-    show buildLiveRiserSheet;
+    show buildLiveRiserPages, buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
@@ -226,7 +230,12 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       ...profile.verifyChecklist,
       ...pipeProductsVerifyChecklist,
       ...ductProductsVerifyChecklist,
-      if (fireDrawn) ...standpipeVerifyChecklist,
+      // Round 21 — the Class I residual only when a standpipe is drawn; a
+      // sprinkler-only pump still prints its allowance + η basis.
+      if (hydrantDrawn)
+        ...standpipeVerifyChecklist
+      else if (fireDrawn)
+        ...firePumpBasisVerifyChecklist,
       if (hwRecirc != null) ...hotWaterRecircVerifyChecklist,
     ],
     supplyFans: [
@@ -865,20 +874,43 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // The ONE fire-pump duty (NFPA 20 motor) shared with the electrical feed.
   final firePump = ref.read(firePumpDutyProvider);
   if (firePump != null) {
-    final tag = tagOfFirst((n) => isPumpNode(n) && onFire(n)) ?? 'FP-01';
-    pumps.add(
-      PumpScheduleItem(
+    // Round 17 follow-up — a sprinkler-rated pump (no hydrant drawn) is a
+    // SPRINKLER pump, never 'Pompa hidran kebakaran'.
+    final fireService = reportStringsFor(ref)(
+        ref.read(fireRatedPointProvider).sprinklerOnly
+            ? RptStringKey.esSvcFireSprinkler
+            : RptStringKey.esSvcFireStandpipe);
+    // Round 21 (fire-3-parallel-fire-pumps-each-full-duty) — ONE row per
+    // DRAWN fire pump, each under its own plan tag and the duty its panel way
+    // is fed on (the standby at the full motor, the jockey at its pressure-
+    // maintenance duty), so the schedule and the MDP agree on the count.
+    final drawn = [
+      for (final n in net.nodes)
+        if (isPumpNode(n) && onFire(n) && nodeTags[n.id] != null) n.id,
+    ]..sort();
+    if (drawn.isEmpty) {
+      pumps.add(PumpScheduleItem(
         duty: firePump,
-        // Round 17 follow-up — a sprinkler-rated pump (no hydrant drawn) is a
-        // SPRINKLER pump, never 'Pompa hidran kebakaran'.
-        service: reportStringsFor(ref)(
-            ref.read(fireRatedPointProvider).sprinklerOnly
-                ? RptStringKey.esSvcFireSprinkler
-                : RptStringKey.esSvcFireStandpipe),
+        service: fireService,
+        tag: 'FP-01',
+        modelSpec: specs['FP-01'],
+      ));
+    }
+    final jockeyDuty = ref.read(fireJockeyDutyProvider);
+    for (final id in drawn) {
+      final tag = nodeTags[id]!;
+      final jockey = binding.fireJockeyPumpNodeIds.contains(id);
+      pumps.add(PumpScheduleItem(
+        duty: jockey ? (jockeyDuty ?? firePump) : firePump,
+        service: jockey
+            ? reportStringsFor(ref)(RptStringKey.esSvcFireJockeyPump)
+            : binding.fireStandbyPumpNodeIds.contains(id)
+                ? reportStringsFor(ref)(RptStringKey.esSvcFireStandbyPump)
+                : fireService,
         tag: tag,
         modelSpec: specs[tag],
-      ),
-    );
+      ));
+    }
   }
 
   // Fans: the drawn supply/return duct fan + the separate exhaust fan.
@@ -1915,14 +1947,25 @@ Future<bool> writeSubmittalPackageToDir(
       ? null
       : project.name.trim();
   final riserSheet = buildLiveRiserSheet(ref, null);
+  // Round 21 (riser-drafting-2-2) — the issued PDF paginates a tall riser to
+  // legible pages; the DXF below stays one sheet.
+  final riserPages = buildLiveRiserPages(ref, null);
   await File(out('riser-sld.pdf')).writeAsBytes(
-    sldSheetToPdf(
-      sheet: riserSheet,
-      title: 'iSystem mechanical single-line',
-      diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
-      chrome: sldChrome(DrawingSeries.mechanicalRiser),
-      projectName: titleProjectName,
-    ),
+    riserPages.length == 1
+        ? sldSheetToPdf(
+            sheet: riserPages.single,
+            title: 'iSystem mechanical single-line',
+            diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
+            chrome: sldChrome(DrawingSeries.mechanicalRiser),
+            projectName: titleProjectName,
+          )
+        : sldSheetsToPdf(
+            riserPages,
+            title: 'iSystem mechanical single-line',
+            diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
+            chrome: sldChrome(DrawingSeries.mechanicalRiser),
+            projectName: titleProjectName,
+          ),
   );
   await File(out('riser-sld.dxf')).writeAsString(
     sldSheetToDxf(
@@ -4217,12 +4260,13 @@ class _ResultsSection extends ConsumerWidget {
     // line totals an exact 0 — that must never read as a MEASURED zero. Any
     // such line flips the totals row to an honest "measured + unmeasured"
     // split instead of implying the whole BOM was 0.0 m.
-    bool isUnmeasured(BomLine line) =>
-        line.totalLength.meters == 0 && line.segmentCount > 0;
+    // Round 21 (bom-quote-2) — ANY unmeasured run marks its line, not only an
+    // all-zero total: a 50 m calibrated run merged with an uncalibrated one
+    // used to pass as a measured 50 m.
+    bool isUnmeasured(BomLine line) => line.unmeasuredSegments > 0;
     final hasUnmeasuredBomLine = bom.any(isUnmeasured);
-    final unmeasuredRunCount = bom
-        .where(isUnmeasured)
-        .fold<int>(0, (sum, line) => sum + line.segmentCount);
+    final unmeasuredRunCount = bom.fold<int>(
+        0, (sum, line) => sum + line.unmeasuredSegments);
     final notMeasured = context.strings(StringKey.bomNotMeasured);
 
     // L1: keep the BOM row leader short enough that it never fights the
@@ -4400,9 +4444,13 @@ class _ResultsSection extends ConsumerWidget {
                 _kvRow(
                   context,
                   bomLeader(line),
-                  isUnmeasured(line)
-                      ? '$notMeasured ×${line.segmentCount}'
-                      : '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}',
+                  !isUnmeasured(line)
+                      ? '${line.totalLength.meters.toStringAsFixed(1)} m ×${line.segmentCount}'
+                      : line.unmeasuredSegments >= line.segmentCount
+                          ? '$notMeasured ×${line.segmentCount}'
+                          : '${line.totalLength.meters.toStringAsFixed(1)} m '
+                              '×${line.segmentCount - line.unmeasuredSegments}'
+                              ' + $notMeasured ×${line.unmeasuredSegments}',
                 ),
               if (bom.length > _kBomInlineCap)
                 _kvRow(
@@ -4502,6 +4550,13 @@ class _FireSection extends ConsumerWidget {
         .network
         .edges
         .any((e) => e.service == ServiceType.fireHydrant);
+    final hasSprinklerEdges = ref
+        .watch(networkControllerProvider)
+        .network
+        .edges
+        .any((e) => e.service == ServiceType.fireSprinkler);
+    final standpipeRisers = drawnStandpipeRiserCount(
+        ref.watch(networkControllerProvider).network);
     // E11: the whole fire design derives from occupancy/height/hazard alone, so
     // it computes even with NO fire pipework drawn. Detect real sprinkler/
     // hydrant edges so the verdict is honest — a preliminary 'draft' from
@@ -4585,11 +4640,16 @@ class _FireSection extends ConsumerWidget {
                 : (rating.oversized ? colors.warning : colors.success),
           ),
           const SizedBox(height: MechXSpacing.xs),
-          kv(
-            'Sprinkler flow',
-            '${ref.watch(sprinklerRemoteAreaProvider).remoteAreaDemand.inLitersPerSecond.toStringAsFixed(1)} L/s',
-          ),
-          kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
+          // Round 21 — only when a sprinkler system is drawn (or nothing is —
+          // the draft basis), mirroring the report's sprinklerDrawn gate: a
+          // hydrant-only building has no sprinkler flow to print.
+          if (hasSprinklerEdges || !hasFireEdges) ...[
+            kv(
+              'Sprinkler flow',
+              '${ref.watch(sprinklerRemoteAreaProvider).remoteAreaDemand.inLitersPerSecond.toStringAsFixed(1)} L/s',
+            ),
+            kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
+          ],
           // Only when a standpipe is drawn (or nothing is — the draft basis).
           if (hasHydrantEdges || !hasFireEdges)
             kv(
@@ -4611,7 +4671,10 @@ class _FireSection extends ConsumerWidget {
               Expanded(
                 child: Text(
                   hasFireEdges
-                      ? 'SNI 03-3989 / 1745 / 6570 · single-riser draft demand'
+                      ? (hasHydrantEdges
+                          ? 'SNI 03-3989 / 1745 / 6570 · '
+                              '$standpipeRisers-riser standpipe demand'
+                          : 'SNI 03-3989 / 6570 · sprinkler remote-area demand')
                       : 'Draft demand from building defaults — draw '
                             'sprinkler/hydrant runs to validate.',
                   style: type.caption.copyWith(color: colors.textMuted),
@@ -5184,7 +5247,24 @@ class _SelectionSection extends ConsumerWidget {
     SelectionController selCtrl,
   ) {
     final project = ref.watch(projectControllerProvider);
-    final elev = nodeElevation(node, project.building, project.mounting).meters;
+    final net = ref.watch(networkControllerProvider).network;
+    // Round 21 review — a node on a GRAVITY riser reads the same riser-end
+    // datum its riser length is measured from (`riserEndElevation`: a bare
+    // stack junction sits under its floor's slab, not at its own ceiling).
+    NetEdge? gravityRiser;
+    for (final e in net.edges) {
+      if (e.kind == EdgeKind.riser &&
+          e.service.regime == FlowRegime.gravity &&
+          (e.fromId == node.id || e.toId == node.id)) {
+        gravityRiser = e;
+        break;
+      }
+    }
+    final elev = (gravityRiser != null
+            ? riserEndElevation(
+                gravityRiser, node, project.building, project.mounting)
+            : nodeElevation(node, project.building, project.mounting))
+        .meters;
 
     // Scope the fixture field groups to the node's ACTUAL discipline, derived
     // from its connected edges — a WC must not offer a diffuser-airflow
@@ -5192,7 +5272,6 @@ class _SelectionSection extends ConsumerWidget {
     // falls back to showing a group (nothing becomes unreachable before its
     // pipes are drawn) unless its component already rules the group out; a
     // group with a value set always shows so it stays editable/clearable.
-    final net = ref.watch(networkControllerProvider).network;
     final touching = <ServiceType>{
       for (final e in net.edges)
         if (e.fromId == node.id || e.toId == node.id) e.service,

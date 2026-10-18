@@ -23,6 +23,7 @@ import 'dart:math' as math;
 import '../standards/puil.dart' show BreakerClass, BreakerCurve;
 import 'catalog.dart';
 import 'earthing.dart' show RcdType, rcdTypeRank;
+import 'enclosure.dart' show EnclosureResult;
 import 'fault.dart' show FaultStudyResult;
 import 'load_kind.dart' show LoadKind;
 import 'model.dart' show ElectricalSystemInfo;
@@ -234,23 +235,26 @@ String? matchRcdSku(
   return c.isEmpty ? null : c.first.sku;
 }
 
-/// Pick a catalogue cable SKU whose section is ≥ the sized section, preferring
-/// parts of the circuit's construction (`type`, e.g. NYM vs NYY). When the
-/// catalogue has no part of that type, fall back to section-only matching so a
-/// brand stocking one construction still prices the run. Returns null when no
-/// section covers it.
+/// Pick a catalogue cable SKU whose section is ≥ the sized section, of the
+/// circuit's construction (`cableType`, e.g. NYM vs NYY vs FRC). With no
+/// [cableType] any family matches (section only). Returns null when no part
+/// covers it.
+///
+/// Round 21 (bom-quote-1) — a given family NEVER falls back to another
+/// family's part: the catalogue carries FRC only to 95 mm² and NYM only to
+/// 10 mm², so the old section-only fallback bought and priced a fire-rated
+/// FRC 3x300 life-safety run (or an NYM 3x16) as plain NYY with no flag. Such
+/// a line now stays unmatched and is priced on a deterministic family key
+/// (`elec:cable:<family>:<cores>x<csa>`, see the BOM builder).
 String? matchCableSku(double csaMm2, List<Part> parts, {String? cableType}) {
-  final candidates = parts
+  final pool = parts
       .where((p) =>
           p.category == PartCategory.cable &&
           p.csaMm2 != null &&
-          p.csaMm2! >= csaMm2)
+          p.csaMm2! >= csaMm2 &&
+          (cableType == null || p.cableType == cableType))
       .toList();
-  if (candidates.isEmpty) return null;
-
-  final sameType =
-      cableType == null ? const <Part>[] : candidates.where((p) => p.cableType == cableType).toList();
-  final pool = sameType.isNotEmpty ? sameType : candidates;
+  if (pool.isEmpty) return null;
   pool.sort((a, b) => a.csaMm2!.compareTo(b.csaMm2!));
   return pool.first.sku;
 }
@@ -343,6 +347,7 @@ List<BomLine> _panelLines(
   double? minBreakingKa,
   double? incomerKa,
   Map<String, double> breakerKaByCircuitId = const {},
+  EnclosureResult? enclosure,
 }) {
   final lines = <BomLine>[];
   final pname = panel.name;
@@ -392,12 +397,27 @@ List<BomLine> _panelLines(
 
   // Enclosure — one per panel (the panel box itself; un-matched without an
   // enclosure catalogue, but carrying a pricelist key so it CAN be priced).
-  lines.add(BomLine(
-    description: 'Enclosure / panel board — $pname',
-    qty: 1,
-    category: PartCategory.enclosure,
-    priceKey: '${kElecPriceKeyPrefix}enclosure',
-  ));
+  // Round 21 (bom-quote-4) — with the advanced study's SIZED enclosure the
+  // line names its W x H x D and is priced per size, so a 2 m MDP cubicle and
+  // a 12-way LP box never consolidate onto one line at one price.
+  if (enclosure != null) {
+    final dims = '${_fmt(enclosure.widthMm.roundToDouble())}x'
+        '${_fmt(enclosure.heightMm.roundToDouble())}x'
+        '${_fmt(enclosure.depthMm.roundToDouble())}';
+    lines.add(BomLine(
+      description: 'Enclosure $dims mm ${enclosure.ip} — $pname',
+      qty: 1,
+      category: PartCategory.enclosure,
+      priceKey: '${kElecPriceKeyPrefix}enclosure:$dims',
+    ));
+  } else {
+    lines.add(BomLine(
+      description: 'Enclosure / panel board — $pname',
+      qty: 1,
+      category: PartCategory.enclosure,
+      priceKey: '${kElecPriceKeyPrefix}enclosure',
+    ));
+  }
 
   // Busbar set + neutral/PE bars — one per panel.
   lines.add(_busbarLine(panel.busbar, pname, threePhase: inc.poles >= 3));
@@ -484,7 +504,12 @@ List<BomLine> _panelLines(
           category: PartCategory.cable,
           sku: cableSku,
           runs: runs,
-          priceKey: cableSku == null ? null : '$cableSku:${cores}C',
+          // Round 21 — an unmatched run keeps its OWN family on a
+          // deterministic key (never another family's SKU).
+          priceKey: cableSku == null
+              ? '${kElecPriceKeyPrefix}cable:$family:'
+                  '${cores}x${_fmt(c.cable.csaMm2)}'
+              : '$cableSku:${cores}C',
         ));
       }
 
@@ -637,6 +662,8 @@ Bom buildBom(
   Map<String, double> requiredIcuKaByPanelId = const {},
   Map<String, double> incomerKaByPanelId = const {},
   Map<String, double> breakerKaByCircuitId = const {},
+  Map<String, EnclosureResult> enclosureByPanelId = const {},
+  List<BomLine> extraLines = const [],
 }) {
   final flat = <BomLine>[];
   for (final id in sys.order) {
@@ -645,9 +672,14 @@ Bom buildBom(
       flat.addAll(_panelLines(panel, parts,
           minBreakingKa: requiredIcuKaByPanelId[id],
           incomerKa: incomerKaByPanelId[id],
-          breakerKaByCircuitId: breakerKaByCircuitId));
+          breakerKaByCircuitId: breakerKaByCircuitId,
+          enclosure: enclosureByPanelId[id]));
     }
   }
+  // Round 21 (bom-quote-5) — the advanced study's designed gear (starter
+  // control devices, genset + ATS, SPDs, earth rods, main earthing
+  // conductor; `advancedBomLines`) is consolidated with the panel lines.
+  flat.addAll(extraLines);
   return Bom(_consolidate(flat));
 }
 

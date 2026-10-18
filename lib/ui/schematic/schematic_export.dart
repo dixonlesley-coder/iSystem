@@ -19,6 +19,8 @@ import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldSheetsToPdf;
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
+import 'package:mechx_engine/report/riser_pagination.dart'
+    show paginatedRiserSheets;
 import 'package:mechx_engine/report/riser_tags.dart'
     show equipmentDetail, riserFeedNote, riserServiceCode;
 import 'package:mechx_engine/report/sld_export.dart';
@@ -153,7 +155,11 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
 /// equipment detail suffixes (tank m3 / pump-fan kW), the KETERANGAN system
 /// notes, and the H101 detail callouts — so the issued sheet is always >= the
 /// preview. Public for the export wiring test.
-SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
+///
+/// Round 21 (riser-drafting-2-2) — [floorRange] builds one PAGE of a
+/// paginated riser ([buildLiveRiserPages]).
+SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
+    {({int lo, int hi})? floorRange}) {
   final project = ref.read(projectControllerProvider);
   final network = ref.read(networkControllerProvider).network;
   final sizing = ref.read(sizingProvider);
@@ -192,6 +198,26 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
     nodeTags: equipmentNodeTags(network),
     // Round 17 — the transfer pump is captioned TRANSFER PUMP on the sheet.
     transferPumpNodeIds: ref.read(transferPumpNodeIdsProvider),
+    // Round 21 (riser-drafting-2-1) — the HWR recirculation return leg the
+    // canvas draws rides the issued sheet too (issued >= preview).
+    hotWaterRecirc: ref.read(hotWaterRecircProvider) != null,
+    floorRange: floorRange,
+  );
+}
+
+/// Round 21 (riser-drafting-2-2) — the riser for [focus] as issuable PDF
+/// PAGES: one sheet when it prints at the 7 pt legibility floor, else the
+/// fewest floor-range pages that print as large as the sheet allows
+/// ([paginatedRiserSheets]; `LANJUT KE <floor>` match stubs at each break,
+/// the extras on the lowest-floor page). The DXF stays one sheet (CAD zooms).
+List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus) {
+  final project = ref.read(projectControllerProvider);
+  return paginatedRiserSheets(
+    build: (r) => buildLiveRiserSheet(ref, focus, floorRange: r),
+    levelCount: project.building.levelCount,
+    chrome: _riserChrome(ref, index: 1, total: 1),
+    projectName: project.name.isEmpty ? 'Untitled project' : project.name,
+    diagramTitle: riserDiagramTitle(focus),
   );
 }
 
@@ -233,17 +259,29 @@ Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) =>
       ref,
       name: 'riser single-line (PDF)',
       write: () async {
-        final sheet = buildLiveRiserSheet(ref, focus);
+        final pages = buildLiveRiserPages(ref, focus);
         final project = ref.read(projectControllerProvider);
-        final bytes = sldSheetToPdf(
-          sheet: sheet,
-          title: 'iSystem mechanical single-line',
-          diagramTitle: riserDiagramTitle(focus),
-          chrome: _riserChrome(ref, index: 1, total: 1),
-          // N2: the live project name stamps the title-block PROJECT row
-          // (no more 'Untitled project' on the flagship riser sheet).
-          projectName: project.name.isEmpty ? null : project.name,
-        );
+        final bytes = pages.length == 1
+            ? sldSheetToPdf(
+                sheet: pages.single,
+                title: 'iSystem mechanical single-line',
+                diagramTitle: riserDiagramTitle(focus),
+                chrome: _riserChrome(ref, index: 1, total: 1),
+                // N2: the live project name stamps the title-block PROJECT
+                // row (no more 'Untitled project' on the flagship riser).
+                projectName: project.name.isEmpty ? null : project.name,
+              )
+            // Round 21 — a tall riser issues as a numbered page set.
+            : electricalSldSheetsToPdf(
+                sheets: pages,
+                title: 'iSystem mechanical single-line',
+                diagramTitles: [
+                  for (final _ in pages) riserDiagramTitle(focus),
+                ],
+                chrome: _riserChrome(ref, index: 1, total: pages.length),
+                projectName:
+                    project.name.isEmpty ? 'Untitled project' : project.name,
+              );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
         final full = await pickExportSave(ref,
             dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -317,11 +355,16 @@ Future<void> exportMechanicalRiserSetPdf(
       write: () async {
         final foci = _riserSetFoci(ref);
         final project = ref.read(projectControllerProvider);
+        // Round 21 — each system's riser paginated to legible pages.
+        final paged = [
+          for (final f in foci)
+            for (final page in buildLiveRiserPages(ref, f)) (f, page),
+        ];
         final bytes = electricalSldSheetsToPdf(
-          sheets: [for (final f in foci) buildLiveRiserSheet(ref, f)],
+          sheets: [for (final p in paged) p.$2],
           title: 'iSystem mechanical riser drawing set',
-          diagramTitles: [for (final f in foci) riserDiagramTitle(f)],
-          chrome: _riserChrome(ref, index: 1, total: foci.length),
+          diagramTitles: [for (final p in paged) riserDiagramTitle(p.$1)],
+          chrome: _riserChrome(ref, index: 1, total: paged.length),
           projectName:
               project.name.isEmpty ? 'Untitled project' : project.name,
         );

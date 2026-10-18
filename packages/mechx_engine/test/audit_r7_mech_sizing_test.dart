@@ -647,8 +647,11 @@ void main() {
           expect(sized[id]!.flow.cubicMetersPerSecond,
               closeTo(design.cubicMetersPerSecond, 1e-15),
               reason: id);
-          // The pipe the pump pushes its flow through stays inside the cap.
-          expect(sized[id]!.velocity.metersPerSecond, lessThanOrEqualTo(2.0));
+          // The pipe the pump pushes its flow through stays inside the FIRE
+          // cap (Round 21: 6 m/s; 31.54 L/s in DN100 = 4.02 m/s).
+          expect(sized[id]!.velocity.metersPerSecond,
+              lessThanOrEqualTo(kMaxFireVelocityMps));
+          expect(sized[id]!.diameter.inMillimeters, closeTo(100, 1e-9));
         }
         expect(sized['box0']!.flow.cubicMetersPerSecond, closeTo(0.005, 1e-15));
         // Without the design flow the legacy Σ-boxes accumulation is unchanged.

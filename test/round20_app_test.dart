@@ -154,16 +154,21 @@ void main() {
       expect(stale(c, 'meeting'), isFalse);
     });
 
-    test('a tagged terminal stays its room even when it lands in a nested one',
+    test('the generating-room tag wins only outside a nested same-kind room',
         () {
-      // The office's tag wins while the terminal is inside the office; a
-      // hand-placed (untagged) one in the meeting room is the meeting room's.
+      // Round 21 — a tagged office terminal still inside the office (and in
+      // no nested room) stays the office's; one that a LATER-drawn meeting
+      // room now contains is the meeting room's (so the meeting room's
+      // Auto-place replaces it and the office goes stale), exactly like a
+      // hand-placed (untagged) one.
       const rooms = [office, meeting];
       final tagged = _n('t', 500, 500, c: NodeComponent.supplyDiffuser)
           .copyWith(autoPlacedRoomId: 'office');
       final hand = _n('h', 500, 500, c: NodeComponent.supplyDiffuser);
-      expect(roomTerminalOwnerOf(tagged, rooms), 'office');
+      expect(roomTerminalOwnerOf(tagged, rooms), 'meeting');
       expect(roomTerminalOwnerOf(hand, rooms), 'meeting');
+      final outside = tagged.copyWith(x: 1500);
+      expect(roomTerminalOwnerOf(outside, rooms), 'office');
       // Dragged OUT of its generating room ⇒ the geometric owner again.
       final moved = tagged.copyWith(x: 2500);
       expect(roomTerminalOwnerOf(moved, rooms), isNull);
