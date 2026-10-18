@@ -3044,7 +3044,7 @@ class _AutoSchematicPainter extends CustomPainter {
   void _drawDetailGlyphRow(
     Canvas canvas,
     Offset origin,
-    List<(NodeComponent, String)> items,
+    List<(NodeComponent?, String)> items,
     Color color, {
     double glyph = 16.0,
     double gap = 26.0,
@@ -3068,10 +3068,25 @@ class _AutoSchematicPainter extends CustomPainter {
       // Halo so the glyph reads over the run line.
       canvas.drawCircle(
           Offset(left + glyph / 2, cy), glyph * 0.62, Paint()..color = colors.canvas);
-      canvas.save();
-      canvas.translate(left, origin.dy);
-      paintComponentSymbol(canvas, Size(glyph, glyph), component, color);
-      canvas.restore();
+      if (component == null) {
+        // Round 15 — a UNION: two short bars across the run (the export's
+        // `unionMarkPrims` convention).
+        final p = Paint()
+          ..color = color
+          ..strokeWidth = 1.4
+          ..style = PaintingStyle.stroke;
+        final cx = left + glyph / 2;
+        final half = glyph * 0.38;
+        for (final dx in const [-2.0, 2.0]) {
+          canvas.drawLine(
+              Offset(cx + dx, cy - half), Offset(cx + dx, cy + half), p);
+        }
+      } else {
+        canvas.save();
+        canvas.translate(left, origin.dy);
+        paintComponentSymbol(canvas, Size(glyph, glyph), component, color);
+        canvas.restore();
+      }
       _drawText(
         canvas,
         abbrev,
@@ -3346,7 +3361,7 @@ class _AutoSchematicPainter extends CustomPainter {
 
   /// The gated valve/drainage detail boxes (title, glyph row, colour) — one
   /// source shared by [_valveCalloutRects] and [_paintValveCallouts].
-  List<(String, List<(NodeComponent, String)>, Color)> _valveCalloutDetails() {
+  List<(String, List<(NodeComponent?, String)>, Color)> _valveCalloutDetails() {
     final cwColor = serviceColor(ServiceType.coldWater);
     final drColor = serviceColor(ServiceType.drainage);
     final topFloor = building.levelCount - 1;
@@ -3354,13 +3369,14 @@ class _AutoSchematicPainter extends CustomPainter {
     // Each box is drawn ONLY when the network carries its key device (G7/G4):
     // WATER METER / PRV SET (clean water), FLOOR DRAIN / VTR (drainage/vent). The
     // combined view shows every applicable box in one centred row.
-    final details = <(String, List<(NodeComponent, String)>, Color)>[
+    final details = <(String, List<(NodeComponent?, String)>, Color)>[
       if (_waterFocus && _hasComponent(NodeComponent.waterMeter))
         ('DETAIL WATER METER', const [
           (NodeComponent.gateValve, 'GV'),
           (NodeComponent.waterMeter, 'WM'),
           (NodeComponent.gateValve, 'GV'),
-          (NodeComponent.gateValve, 'U'),
+          // Round 15 — the UNION mark (null), never a gate-valve bow-tie.
+          (null, 'U'),
         ], cwColor),
       if (_waterFocus && _hasComponent(NodeComponent.prv))
         ('DETAIL PRV SET', const [
@@ -4077,6 +4093,7 @@ class _AutoLegend extends StatelessWidget {
     ('CW', 'Air bersih'),
     ('AAV', 'Auto air vent'),
     ('GV', 'Gate valve'),
+    ('U', 'Union'),
     ('CV', 'Check valve'),
     ('STR', 'Strainer'),
     ('PRV', 'Pressure reducing'),

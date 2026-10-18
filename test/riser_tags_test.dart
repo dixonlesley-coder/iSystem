@@ -99,15 +99,32 @@ void main() {
       );
     });
 
-    test('(c2) downfeed distribution main, no pump, water => GRAVITASI', () {
+    test('(c2) downfeed distribution main fed by a roof tank => GRAVITASI', () {
+      // Round 15 (drafting-visual-2-2) — the downfeed fallback needs a REAL
+      // roof tank in the system; the setting alone no longer stamps it.
+      final net = Network(
+        nodes: [
+          _n('rt', 0, 2, role: NodeRole.plant, component: NodeComponent.roofTank),
+          _n('a', 100, 2),
+          _n('b', 200, 2),
+        ],
+        edges: [
+          _e('t', 'rt', 'a', ServiceType.coldWater),
+          _e('e', 'a', 'b', ServiceType.coldWater),
+        ],
+      );
+      expect(
+        riserFunctionFor(net, net.edgeById('e')!, downfeed: true),
+        RiserFunction.gravitasi,
+      );
+    });
+
+    test('(c3) downfeed main with NO roof tank (meter-fed) => null', () {
       final net = Network(
         nodes: [_n('a', 100, 2), _n('b', 200, 2)],
         edges: [_e('e', 'a', 'b', ServiceType.coldWater)],
       );
-      expect(
-        riserFunctionFor(net, net.edges.first, downfeed: true),
-        RiserFunction.gravitasi,
-      );
+      expect(riserFunctionFor(net, net.edges.first, downfeed: true), isNull);
     });
 
     test('(d) air duct edge => null (no suffix on air)', () {

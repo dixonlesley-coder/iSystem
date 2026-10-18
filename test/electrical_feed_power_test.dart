@@ -12,6 +12,8 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'test_util.dart';
+
 /// 3-phase FLA at the MEP panel voltage: I = P / (√3·V·cosφ).
 double _fla3(double inputW) =>
     inputW / (math.sqrt(3) * mepPanelVoltage.volts * defaultMotorCosPhi);
@@ -24,6 +26,8 @@ void main() {
       c.read(projectControllerProvider.notifier).setFloors([
         for (var i = 0; i < 8; i++) Floor('L$i', const Length(4)),
       ]);
+      // Round 15 — the fire pump exists only once a fire service is drawn.
+      drawFireHydrantRun(c);
 
       final st = c.read(standpipeDesignProvider);
       final rating = c.read(firePumpRatingProvider);

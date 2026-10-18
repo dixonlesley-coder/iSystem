@@ -71,6 +71,28 @@ bool _serviceHasPump(Network net, ServiceType service) {
   return false;
 }
 
+/// Round 15 (drafting-visual-2-2) — true when [edge]'s connected component of
+/// its own service contains a ROOF TANK (the source a gravity downfeed hangs
+/// from). Pure BFS over the service's edges.
+bool _componentHasRoofTank(Network net, NetEdge edge) {
+  final adj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != edge.service) continue;
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final seen = <String>{edge.fromId};
+  final stack = [edge.fromId];
+  while (stack.isNotEmpty) {
+    final n = stack.removeLast();
+    if (net.nodeById(n)?.component == NodeComponent.roofTank) return true;
+    for (final m in adj[n] ?? const <String>[]) {
+      if (seen.add(m)) stack.add(m);
+    }
+  }
+  return false;
+}
+
 /// Best-effort FUNCTION classification for [edge] on the single-line.
 ///
 /// Returns null for air services and for any case that is NOT confidently
@@ -161,9 +183,15 @@ RiserFunction? riserFunctionFor(Network net, NetEdge edge,
   }
 
   // Under DOWNFEED, a distribution main / riser that is NOT downstream of a pump
-  // and the service is water => gravity from the roof tank.
+  // and the service is water => gravity from the roof tank — ONLY when a roof
+  // tank actually feeds that system (Round 15, drafting-visual-2-2: the
+  // feed-strategy SETTING alone used to stamp a meter-fed mains run of the
+  // bundled sample 'GRAVITASI — gravity feed from the roof tank').
   // VERIFY: downfeed distribution main fed from the roof tank.
-  if (downfeed && isWater && !_serviceHasPump(net, edge.service)) {
+  if (downfeed &&
+      isWater &&
+      !_serviceHasPump(net, edge.service) &&
+      _componentHasRoofTank(net, edge)) {
     return RiserFunction.gravitasi;
   }
 

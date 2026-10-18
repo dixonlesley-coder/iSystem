@@ -5,6 +5,8 @@ import 'package:mechx_engine/sizing/fire_pump_rating.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 
+import 'test_util.dart';
+
 void main() {
   test('sprinkler + standpipe designs derive sane values', () {
     final c = ProviderContainer();
@@ -72,6 +74,8 @@ void main() {
       'larger of the rated / overload shaft powers / eta', () {
     final c = ProviderContainer();
     addTearDown(c.dispose);
+    // Round 15 — the fire pump exists only once a fire service is drawn.
+    drawFireHydrantRun(c);
     final duty = c.read(firePumpDutyProvider)!;
     final rating = c.read(firePumpRatingProvider);
     // eta_motor = input / shaft at the rated point (the duty's own ratio).

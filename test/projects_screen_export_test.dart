@@ -152,16 +152,31 @@ void main() {
     // Collapsed by default: header only.
     expect(find.text('SIGN-OFF AND REVISIONS'), findsOneWidget);
     expect(find.text('Prepared by'), findsNothing);
-    // The default building's standpipe fire pump (FP-01) is tagged
-    // mechanical equipment, so the collapsed model/spec disclosure shows with
-    // its live count (the same gate the old inspector section used).
-    expect(find.textContaining('EQUIPMENT MODEL/SPEC ('), findsOneWidget);
-    expect(find.text('FP-01 · Fire standpipe pump'), findsNothing);
-
     final container = ProviderScope.containerOf(
       tester.element(find.byType(ProjectsScreen)),
       listen: false,
     );
+    // Round 15 (drafting-visual-2-5) — a blank project draws no fire service,
+    // so no standpipe fire pump (FP-01) is scheduled and the equipment
+    // disclosure (gated on the live count) is absent ...
+    expect(find.textContaining('EQUIPMENT MODEL/SPEC ('), findsNothing);
+    // ... until a hydrant run is drawn: then FP-01 is tagged mechanical
+    // equipment and the collapsed model/spec disclosure shows with its count.
+    container.read(networkControllerProvider.notifier).loadNetwork(
+          const Network(nodes: [
+            NetNode(id: 'h0', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+            NetNode(id: 'h1', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+          ], edges: [
+            NetEdge(
+                id: 'fh',
+                fromId: 'h0',
+                toId: 'h1',
+                service: ServiceType.fireHydrant),
+          ]),
+        );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('EQUIPMENT MODEL/SPEC ('), findsOneWidget);
+    expect(find.text('FP-01 · Fire standpipe pump'), findsNothing);
     container
         .read(sectionVisibilityProvider.notifier)
         .set(kSignOffSectionKey, true);

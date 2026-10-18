@@ -86,6 +86,16 @@ const double _kLeaderThreshold = 14;
 // declutter heuristic, not a standard.
 const double _kEscapeStep = 12;
 const int _kEscapeSteps = 6;
+
+/// Round 15 — the sideways escape (drafting-visual-2-1): horizontal steps
+/// past a stack channel when the vertical escape stays on ink.
+const double _kSideEscapeStep = 24;
+const int _kSideEscapeSteps = 8;
+
+/// Round 15 — how much worse a box over reserved INK (or a leader) is than
+/// the same area over another label: a pipe through a tag's text makes it
+/// unreadable, two touching tags merely crowd.
+const double _kInkWeight = 1000;
 // Minimal x nudge per coincident node so two fixtures at the same world x don't
 // stack their markers/labels.
 const double _kSpreadStep = 18;
@@ -306,8 +316,8 @@ SldSheet buildMechanicalRiserSld({
           hasComponent(NodeComponent.pump) ||
           hasComponent(NodeComponent.boosterSet));
   final detailBoxes = !detailCallouts
-      ? const <(String, List<(NodeComponent, String)>)>[]
-      : <(String, List<(NodeComponent, String)>)>[
+      ? const <(String, List<(NodeComponent?, String)>)>[]
+      : <(String, List<(NodeComponent?, String)>)>[
           if (waterFocus && hasComponent(NodeComponent.waterMeter))
             (
               'DETAIL WATER METER',
@@ -315,7 +325,9 @@ SldSheet buildMechanicalRiserSld({
                 (NodeComponent.gateValve, 'GV'),
                 (NodeComponent.waterMeter, 'WM'),
                 (NodeComponent.gateValve, 'GV'),
-                (NodeComponent.gateValve, 'U'),
+                // Round 15 (drafting-visual-2-6) — a UNION, drawn as its own
+                // mark (null component), never a fourth gate-valve bow-tie.
+                (null, 'U'),
               ]
             ),
           if (waterFocus && hasComponent(NodeComponent.prv))
@@ -458,6 +470,9 @@ SldSheet buildMechanicalRiserSld({
     if (p != null) {
       final gy = p.dy + _symbolSize;
       prims.addAll(planSewerTerminusPrims(cx: p.dx, cy: gy, size: _symbolSize));
+      // Round 15 — the terminus glyph is ink a node tag must not print over.
+      placer.reserveBox(p.dx - _symbolSize / 2, gy - _symbolSize / 2,
+          p.dx + _symbolSize / 2, gy + _symbolSize / 2);
       placer.reserve(SldLabel(
           p.dx + _symbolSize / 2 + 4, gy + 3, 'KE SALURAN PEMBUANGAN',
           size: 7, bold: true));
@@ -796,6 +811,7 @@ const List<(String, String)> _kRiserTagGlossary = [
   ('TRANSFER', 'Transfer pumping, ground tank to roof tank'),
   // Fittings, valves and terminals drawn with a code.
   ('GV', 'Gate valve'),
+  ('U', 'Union'),
   ('CV', 'Check valve'),
   ('STR', 'Strainer'),
   ('PRV', 'Pressure reducing valve'),
@@ -945,7 +961,7 @@ void _addFlowChevron(
 /// analogue of the canvas `_drawDetailGlyphRow`. A generic REFERENCE assembly
 /// (the abbrev names the real device; no claim about a specific drawn valve).
 void _emitDetailBox(List<SldPrim> prims, double left, double top, String title,
-    List<(NodeComponent, String)> items) {
+    List<(NodeComponent?, String)> items) {
   prims.add(SldRect(left, top, _calloutW, _calloutH, weight: SldWeight.thin));
   prims.add(SldLabel(left + 6, top + 12, title, size: 7, bold: true));
   const gap = 36.0;
@@ -959,12 +975,29 @@ void _emitDetailBox(List<SldPrim> prims, double left, double top, String title,
   for (var i = 0; i < items.length; i++) {
     final (component, abbrev) = items[i];
     final cx = firstCx + i * gap;
-    prims.addAll(
-        planComponentPrims(component, cx: cx, cy: cy, size: _calloutGlyph));
+    if (component == null) {
+      prims.addAll(unionMarkPrims(cx: cx, cy: cy, size: _calloutGlyph));
+    } else {
+      prims.addAll(
+          planComponentPrims(component, cx: cx, cy: cy, size: _calloutGlyph));
+    }
     prims.add(SldLabel(
         cx - _labelWidth(abbrev, 7) / 2, cy + _calloutGlyph / 2 + 10, abbrev,
         size: 7));
   }
+}
+
+/// Round 15 (drafting-visual-2-6) — the pipe UNION mark: two short parallel
+/// bars ACROSS the run (the drafting convention for a union / coupling), pure
+/// [SldLine] prims so PDF / DXF / canvas draw it alike. Never a valve glyph.
+List<SldPrim> unionMarkPrims(
+    {required double cx, required double cy, required double size}) {
+  final half = size * 0.38;
+  const dx = 2.0;
+  return [
+    SldLine(cx - dx, cy - half, cx - dx, cy + half, weight: SldWeight.medium),
+    SldLine(cx + dx, cy - half, cx + dx, cy + half, weight: SldWeight.medium),
+  ];
 }
 
 /// The PUMP-SET / ROOF-TANK plant detail (H101 top-right convention), emitted
@@ -1200,6 +1233,8 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
     final px = lp.dx + off;
     prims.addAll(planComponentPrims(NodeComponent.pump,
         cx: px, cy: lp.dy, size: _nodeBox + 4));
+    const half = (_nodeBox + 4) / 2;
+    placer.reserveBox(px - half, lp.dy - half, px + half, lp.dy + half);
     placer.place(px + (_nodeBox + 4) / 2 + 4, lp.dy + 3, 'HWR PUMP',
         size: 7,
         anchorX: px,
@@ -1237,18 +1272,49 @@ class _LabelRect {
 /// stable emission order.
 class _LabelPlacer {
   final List<SldPrim> prims;
-  final List<_LabelRect> _placed = <_LabelRect>[];
+
+  /// Boxes of LABELS already on the sheet (fixed + placed movable tags).
+  final List<_LabelRect> _labels = <_LabelRect>[];
+
+  /// Boxes of reserved INK — pipe legs, equipment glyphs, bordered blocks.
+  final List<_LabelRect> _ink = <_LabelRect>[];
+
+  /// Leader segments already drawn (x1, y1, x2, y2) — Round 15: reserved so a
+  /// later tag never lands on an earlier leader.
+  final List<(double, double, double, double)> _leaders = [];
   _LabelPlacer(this.prims);
 
   _LabelRect _rectFor(double x, double y, String text, double size) =>
       _LabelRect(x, y - size, x + _labelWidth(text, size), y);
 
-  /// Total overlap AREA of a label box at ([x], [y]) against every placed box.
-  double _overlapAt(double x, double y, String text, double size) {
+  /// Round 15 (drafting-visual-2-1) — the COST of a label box at ([x], [y]):
+  /// its overlap with other labels, plus [_kInkWeight] × its overlap with
+  /// reserved ink and with drawn leaders, plus the same weight when the
+  /// leader it would need (from ([anchorX], [anchorY])) would strike through
+  /// a placed label. A tag over ink (a pipe through its text) is far worse
+  /// than two tags touching, so the least-cost fallback never prefers it.
+  double _costAt(double x, double y, String text, double size,
+      {required double anchorX,
+      required double anchorY,
+      required bool withLeader}) {
     final r = _rectFor(x, y, text, size);
     var total = 0.0;
-    for (final p in _placed) {
+    for (final p in _labels) {
       total += p.overlap(r);
+    }
+    for (final p in _ink) {
+      total += _kInkWeight * p.overlap(r);
+    }
+    for (final (x1, y1, x2, y2) in _leaders) {
+      if (_segmentHitsRect(x1, y1, x2, y2, r)) total += _kInkWeight * size;
+    }
+    if (withLeader) {
+      final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
+      for (final p in _labels) {
+        if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) {
+          total += _kInkWeight * size;
+        }
+      }
     }
     return total;
   }
@@ -1256,7 +1322,7 @@ class _LabelPlacer {
   /// Emit a FIXED-position label (gutter / fan-out) and record its box so
   /// movable tags divert around it.
   void reserve(SldLabel label) {
-    _placed.add(_rectFor(label.x, label.y, label.text, label.size));
+    _labels.add(_rectFor(label.x, label.y, label.text, label.size));
     prims.add(label);
   }
 
@@ -1267,7 +1333,7 @@ class _LabelPlacer {
   /// moves. Zero-area regions are ignored.
   void reserveBox(double minX, double minY, double maxX, double maxY) {
     if (maxX <= minX || maxY <= minY) return;
-    _placed.add(_LabelRect(minX, minY, maxX, maxY));
+    _ink.add(_LabelRect(minX, minY, maxX, maxY));
   }
 
   /// Record a drawn LINE as a thin occupied strip so a label is never struck
@@ -1283,15 +1349,17 @@ class _LabelPlacer {
 
   /// Place a MOVABLE tag at its default ([defaultX], [defaultY]) trying the
   /// [candidates] offsets (candidates[0] == the default) in order; the first
-  /// slot clearing every placed box wins, else the least-overlapping. When NO
+  /// slot clearing every placed box wins, else the least-costly. When NO
   /// ladder slot clears — two short branch tags sharing a midpoint (N3) — the
-  /// placer ESCAPES further out (growing vertical steps, down then up) until it
-  /// clears, so tags never overprint into one fused token. A tag is the
-  /// drawing's content and is never dropped: if even the escape can't fully
-  /// clear, the least-overlapping escape slot is used. Any slot displaced more
-  /// than [_kLeaderThreshold] from the default — or that could not be fully
+  /// placer ESCAPES further out (growing vertical steps, down then up) and,
+  /// Round 15, then SIDEWAYS past the stack channel, until it clears, so tags
+  /// never overprint into one fused token nor print through a pipe. A tag is
+  /// the drawing's content and is never dropped: if even the escape can't
+  /// fully clear, the least-costly slot is used. Any slot displaced more than
+  /// [_kLeaderThreshold] from the default — or that could not be fully
   /// cleared — gets a thin leader from ([anchorX], [anchorY]), the element the
-  /// tag names, to the label.
+  /// tag names, to the NEAREST point of the label's box (so it never runs
+  /// through its own text), and that leader is reserved.
   void place(
     double defaultX,
     double defaultY,
@@ -1303,21 +1371,27 @@ class _LabelPlacer {
     required double anchorY,
     List<Offset> candidates = const [Offset(0, 0)],
   }) {
+    bool needsLeader(Offset c) =>
+        math.sqrt(c.dx * c.dx + c.dy * c.dy) > _kLeaderThreshold;
+    double cost(Offset c) => _costAt(
+        defaultX + c.dx, defaultY + c.dy, text, size,
+        anchorX: anchorX, anchorY: anchorY, withLeader: needsLeader(c));
     Offset best = candidates.isEmpty ? const Offset(0, 0) : candidates.first;
-    var bestOverlap = double.infinity;
+    var bestCost = double.infinity;
     var cleared = false;
+    void consider(Offset c) {
+      if (cleared) return;
+      final total = cost(c);
+      if (total < bestCost) {
+        bestCost = total;
+        best = c;
+      }
+      if (total <= 0) cleared = true;
+    }
+
     for (final c in candidates) {
-      final total = _overlapAt(defaultX + c.dx, defaultY + c.dy, text, size);
-      if (total <= 0) {
-        best = c;
-        bestOverlap = 0;
-        cleared = true;
-        break;
-      }
-      if (total < bestOverlap) {
-        bestOverlap = total;
-        best = c;
-      }
+      consider(c);
+      if (cleared) break;
     }
     // No ladder slot cleared → escape vertically (down then up, growing) from
     // the least-bad column until a clear slot appears.
@@ -1325,36 +1399,81 @@ class _LabelPlacer {
       final baseDx = best.dx;
       for (var k = 1; k <= _kEscapeSteps && !cleared; k++) {
         for (final dy in [_kEscapeStep * k, -_kEscapeStep * k]) {
-          final total =
-              _overlapAt(defaultX + baseDx, defaultY + dy, text, size);
-          if (total < bestOverlap) {
-            bestOverlap = total;
-            best = Offset(baseDx, dy);
+          consider(Offset(baseDx, dy));
+          if (cleared) break;
+        }
+      }
+    }
+    // Round 15 — still on ink or another tag: widen SIDEWAYS (right, then
+    // left, growing), at the default row and a few rows either side.
+    if (!cleared) {
+      final w = _labelWidth(text, size);
+      for (var k = 1; k <= _kSideEscapeSteps && !cleared; k++) {
+        for (final dx in [_kSideEscapeStep * k, -_kSideEscapeStep * k - w]) {
+          for (final dy in const [0.0, _kEscapeStep, -_kEscapeStep,
+              2 * _kEscapeStep, -2 * _kEscapeStep]) {
+            consider(Offset(dx, dy));
+            if (cleared) break;
           }
-          if (total <= 0) {
-            cleared = true;
-            break;
-          }
+          if (cleared) break;
         }
       }
     }
     final lx = defaultX + best.dx;
     final ly = defaultY + best.dy;
-    _placed.add(_rectFor(lx, ly, text, size));
+    final rect = _rectFor(lx, ly, text, size);
+    _labels.add(rect);
     // A tag pulled well off its default anchor — or one that could not be fully
     // cleared — gets a leader so its element stays legible / unfused.
-    if (!cleared ||
-        math.sqrt(best.dx * best.dx + best.dy * best.dy) > _kLeaderThreshold) {
-      // X1: land the leader on the NEAR end of the text. A tag diverted to the
-      // LEFT of its anchor used to be leadered to its own left origin, so the
-      // leader ran straight THROUGH the tag it was pointing at.
-      final rx = lx + _labelWidth(text, size);
-      final endX = rx < anchorX ? rx : lx;
-      prims.add(SldLine(anchorX, anchorY, endX, ly,
-          weight: SldWeight.thin, role: role));
+    if (!cleared || needsLeader(best)) {
+      final (ex, ey) = _leaderEnd(rect, anchorX, anchorY);
+      if (ex != anchorX || ey != anchorY) {
+        prims.add(SldLine(anchorX, anchorY, ex, ey,
+            weight: SldWeight.thin, role: role));
+        _leaders.add((anchorX, anchorY, ex, ey));
+      }
     }
     prims.add(SldLabel(lx, ly, text, size: size, bold: bold, role: role));
   }
+}
+
+/// Round 15 — where a leader from ([ax], [ay]) lands on label box [r]: the
+/// NEAREST point of the box (the anchor clamped into it). The box is convex,
+/// so the leader never crosses its own text. X1's near-end rule falls out:
+/// an anchor beside the tag lands on that end.
+(double, double) _leaderEnd(_LabelRect r, double ax, double ay) =>
+    (ax.clamp(r.minX, r.maxX).toDouble(), ay.clamp(r.minY, r.maxY).toDouble());
+
+/// Round 15 — does segment (x1,y1)-(x2,y2) pass through the open interior of
+/// [r] (Liang–Barsky; touching an edge does not count)?
+bool _segmentHitsRect(
+    double x1, double y1, double x2, double y2, _LabelRect r) {
+  const inset = 0.5;
+  final minX = r.minX + inset, maxX = r.maxX - inset;
+  final minY = r.minY + inset, maxY = r.maxY - inset;
+  if (minX >= maxX || minY >= maxY) return false;
+  var t0 = 0.0, t1 = 1.0;
+  final dx = x2 - x1, dy = y2 - y1;
+  for (final (p, q) in [
+    (-dx, x1 - minX),
+    (dx, maxX - x1),
+    (-dy, y1 - minY),
+    (dy, maxY - y1),
+  ]) {
+    if (p == 0) {
+      if (q < 0) return false;
+    } else {
+      final t = q / p;
+      if (p < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
+    }
+  }
+  return t0 < t1;
 }
 
 /// Offset ladder for a RUN tag (default centred above the run): try below the

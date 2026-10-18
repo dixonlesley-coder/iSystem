@@ -48,6 +48,8 @@ import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/standards/sni.dart' show Revision;
 import 'package:mechx_engine/units.dart';
 
+import 'test_util.dart';
+
 void main() {
   /// Pump a minimal ProviderScope and capture a live [WidgetRef] + its
   /// container (the same harness as the export-gate test — the export helpers
@@ -170,6 +172,8 @@ void main() {
     'wiring-2: the schedule FP-01 motor is the NFPA 20 selected motor',
     (tester) async {
       final (ref, container) = await harness(tester);
+      // Round 15 — the fire pump exists only once a fire service is drawn.
+      drawFireHydrantRun(container);
       final rating = container.read(firePumpRatingProvider);
       final rows = gatherEquipmentScheduleData(ref).pumps;
       final fp = rows.singleWhere((p) => p.tag == 'FP-01');
@@ -273,7 +277,11 @@ void main() {
       container
           .read(projectControllerProvider.notifier)
           .setCalibration('s1', const ScaleCalibration(0.02));
-      container.read(networkControllerProvider.notifier).loadNetwork(net);
+      // Round 15 — a (separate) hydrant run so the standpipe fire pump row
+      // exists; the drawn fire pump `pf` stays UNPIPED.
+      container
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(withFireHydrantRun(net));
       final tags = equipmentNodeTags(net);
       final pumps = gatherEquipmentScheduleData(ref).pumps;
       final domestic = pumps.singleWhere(

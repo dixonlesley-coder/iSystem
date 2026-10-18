@@ -14,6 +14,8 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 
+import 'test_util.dart';
+
 void main() {
   // designStandpipe / duty providers touch no platform channels, but the golden
   // fonts loader isn't needed here — ensure a binding for any widget-free deps.
@@ -24,6 +26,8 @@ void main() {
         () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      // Round 15 — the fire pump exists only once a fire service is drawn.
+      drawFireHydrantRun(c);
 
       // Default OFF: the auto-feed is placed-only (nothing placed ⇒ empty), so
       // an untouched project is byte-identical to the prior wiring.
@@ -40,10 +44,16 @@ void main() {
     test('the always-on fire-pump duty maps to a LIFE-SAFETY source circuit', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      // Round 15 — no fire service drawn ⇒ no fire-pump duty at all.
+      expect(
+          c.read(mepEquipmentLoadsProvider)
+              .any((l) => l.source == MepLoadSource.firePump),
+          isFalse);
+      drawFireHydrantRun(c);
 
       final loads = c.read(mepEquipmentLoadsProvider);
       expect(loads.any((l) => l.source == MepLoadSource.firePump), isTrue,
-          reason: 'a standpipe fire pump is derived from the building height');
+          reason: 'a drawn hydrant service gets a standpipe fire pump');
 
       final circuits = c.read(mepEquipmentCircuitsProvider);
       final fire =
@@ -56,6 +66,8 @@ void main() {
         () async {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      // Round 15 — the fire pump exists only once a fire service is drawn.
+      drawFireHydrantRun(c);
       // Keep the electrical project (and its reactive sync) alive.
       final sub = c.listen(electricalProjectProvider, (_, _) {},
           fireImmediately: true);
