@@ -131,6 +131,22 @@ String _fittingLabel(FittingType t) => switch (t) {
 
 // ── mechanical material costing ───────────────────────────────────────────────
 
+/// The quotation description of a drawn [component] on [service]: the
+/// service label then the component label, with a word the two share at the
+/// seam said once ('Cold water' + 'Water outlet' -> 'Cold water outlet', not
+/// 'Cold water Water outlet'). Pure.
+String mechComponentDescription(ServiceType service, NodeComponent component) {
+  final svc = mechServiceLabel(service);
+  final comp = component.label;
+  final svcWords = svc.split(' ');
+  final compWords = comp.split(' ');
+  if (compWords.length > 1 &&
+      svcWords.last.toLowerCase() == compWords.first.toLowerCase()) {
+    return '$svc ${compWords.skip(1).join(' ')}';
+  }
+  return '$svc $comp';
+}
+
 /// Whether a mechanical cost line is a length of pipe/duct, a fitting, or
 /// (Round 21) a drawn component (valve, head, terminal, drain, damper).
 enum MechItemCategory { pipe, fitting, component }
@@ -349,7 +365,7 @@ MechCostEstimate estimateMechanicalCost({
   for (final c in components) {
     priceLine(
       key: mechComponentKey(c.service, c.component, c.sizeLabel),
-      description: '${mechServiceLabel(c.service)} ${c.component.label}'
+      description: '${mechComponentDescription(c.service, c.component)}'
           '${c.sizeLabel.isEmpty ? '' : ' ${c.sizeLabel}'}',
       category: MechItemCategory.component,
       service: c.service,

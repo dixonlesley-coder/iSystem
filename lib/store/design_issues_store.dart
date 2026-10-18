@@ -16,6 +16,7 @@ import 'package:mechx_engine/electrical/connectivity.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/riser_tags.dart'
     show drainageStackBasesLackingCleanout;
 import 'package:mechx_engine/sizing/air_velocity.dart'
@@ -33,6 +34,7 @@ import 'air_warnings_store.dart';
 import 'annotation_store.dart' show roomAreasProvider, roomTerminalOwnerOf;
 import 'app_state.dart';
 import 'document_control_store.dart';
+import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
 import 'fire_store.dart' show firePumpDutyProvider, sprinklerPumpCheckProvider;
 import 'models/sheet.dart';
@@ -586,6 +588,28 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       title: str(StringKey.issueMotorOversizedTitle),
       message: str(StringKey.issueFirePumpMotorOversizedMessage),
     ));
+  }
+  // Round 21 review (fire-3-parallel-fire-pumps) — three or more identical
+  // fire pumps: the last-drawn one was ASSUMED to be the jockey (fed a small
+  // pressure-maintenance duty). Name it so the engineer can confirm or draw
+  // the jockey on its own smaller leg.
+  final assumedJockeys =
+      ref.watch(mepDutyBindingProvider).fireAssumedJockeyPumpNodeIds.toList()
+        ..sort();
+  if (assumedJockeys.isNotEmpty) {
+    final tags = equipmentNodeTags(net);
+    for (final id in assumedJockeys) {
+      final n = net.nodeById(id);
+      if (n == null) continue;
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'fire-jockey-assumed:$id',
+        title: str(StringKey.issueFireJockeyAssumedTitle),
+        message: str.format(StringKey.issueFireJockeyAssumedMessage,
+            {'tag': tags[id] ?? id}),
+        locate: IssueLocation(n.sheetId, nodeId: id),
+      ));
+    }
   }
   if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
     infos.add(DesignIssue(

@@ -107,6 +107,12 @@ class MepDutyBinding {
   /// + 5 m), never the 55-75 kW main motor. A subset of [firePumpNodeIds].
   final Set<String> fireJockeyPumpNodeIds;
 
+  /// Round 21 review — the jockey pumps in [fireJockeyPumpNodeIds] that were
+  /// ASSUMED (three or more identical pumps, no smaller bore to tell them
+  /// apart, so the last-drawn one was taken as the jockey). Surfaced as an
+  /// info Design Issue naming the pump, never silent.
+  final Set<String> fireAssumedJockeyPumpNodeIds;
+
   const MepDutyBinding({
     this.firePumpNodeIds = const {},
     this.supplyPumpNodeId,
@@ -115,6 +121,7 @@ class MepDutyBinding {
     this.hwRecircPumpNodeIds = const {},
     this.fireStandbyPumpNodeIds = const {},
     this.fireJockeyPumpNodeIds = const {},
+    this.fireAssumedJockeyPumpNodeIds = const {},
   });
 }
 
@@ -161,7 +168,11 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
                 orElse: () => supplyPumps.first);
   }
   final roles = fire.length < 2
-      ? (standby: const <String>{}, jockey: const <String>{})
+      ? (
+          standby: const <String>{},
+          jockey: const <String>{},
+          assumedJockey: const <String>{},
+        )
       : parallelFirePumpRoles(
           net,
           fire,
@@ -184,6 +195,7 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     hwRecircPumpNodeIds: hwPumps,
     fireStandbyPumpNodeIds: roles.standby,
     fireJockeyPumpNodeIds: roles.jockey,
+    fireAssumedJockeyPumpNodeIds: roles.assumedJockey,
   );
 });
 
@@ -199,10 +211,13 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
 ///    smaller than the duty pump's (a pressure-maintenance pump sits on a
 ///    small leg); with three or more pumps and no smaller leg, the
 ///    smallest-bore remaining pump (tie: the HIGHEST id — the last drawn) is
-///    the jockey (the classic duty + standby + jockey pump room);
+///    the jockey (the classic duty + standby + jockey pump room) — that pick
+///    is an ASSUMPTION (nothing drawn tells the pumps apart), so it is also
+///    returned in `assumedJockey` for the Review advisory;
 ///  * every other pump is a STANDBY.
 /// A single fire pump in its network is the duty pump (both sets empty).
-({Set<String> standby, Set<String> jockey}) parallelFirePumpRoles(
+({Set<String> standby, Set<String> jockey, Set<String> assumedJockey})
+    parallelFirePumpRoles(
   Network net,
   Set<String> firePumps, {
   required double? Function(String edgeId) bore,
@@ -250,6 +265,7 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
 
   final standby = <String>{};
   final jockey = <String>{};
+  final assumed = <String>{};
   for (final g in groups.values) {
     if (g.length < 2) continue;
     final ranked = [...g]..sort((a, b) {
@@ -274,11 +290,12 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
           return b.compareTo(a);
         });
       small.add(byBore.first);
+      assumed.add(byBore.first);
     }
     jockey.addAll(small);
     standby.addAll(rest.where((id) => !small.contains(id)));
   }
-  return (standby: standby, jockey: jockey);
+  return (standby: standby, jockey: jockey, assumedJockey: assumed);
 }
 
 /// The MEP equipment the mechanical engine has sized, assembled from the live

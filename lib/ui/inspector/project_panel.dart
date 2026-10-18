@@ -5247,7 +5247,24 @@ class _SelectionSection extends ConsumerWidget {
     SelectionController selCtrl,
   ) {
     final project = ref.watch(projectControllerProvider);
-    final elev = nodeElevation(node, project.building, project.mounting).meters;
+    final net = ref.watch(networkControllerProvider).network;
+    // Round 21 review — a node on a GRAVITY riser reads the same riser-end
+    // datum its riser length is measured from (`riserEndElevation`: a bare
+    // stack junction sits under its floor's slab, not at its own ceiling).
+    NetEdge? gravityRiser;
+    for (final e in net.edges) {
+      if (e.kind == EdgeKind.riser &&
+          e.service.regime == FlowRegime.gravity &&
+          (e.fromId == node.id || e.toId == node.id)) {
+        gravityRiser = e;
+        break;
+      }
+    }
+    final elev = (gravityRiser != null
+            ? riserEndElevation(
+                gravityRiser, node, project.building, project.mounting)
+            : nodeElevation(node, project.building, project.mounting))
+        .meters;
 
     // Scope the fixture field groups to the node's ACTUAL discipline, derived
     // from its connected edges — a WC must not offer a diffuser-airflow
@@ -5255,7 +5272,6 @@ class _SelectionSection extends ConsumerWidget {
     // falls back to showing a group (nothing becomes unreachable before its
     // pipes are drawn) unless its component already rules the group out; a
     // group with a value set always shows so it stays editable/clearable.
-    final net = ref.watch(networkControllerProvider).network;
     final touching = <ServiceType>{
       for (final e in net.edges)
         if (e.fromId == node.id || e.toId == node.id) e.service,

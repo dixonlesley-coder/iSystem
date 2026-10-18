@@ -143,6 +143,54 @@ void main() {
       // tank run; never one collinear line per header.
       expect(ys.length, greaterThanOrEqualTo(4));
     });
+
+    test('runs drawn fixture -> header fan out exactly like header -> fixture',
+        () {
+      Set<String> ys(Network net) {
+        final s = buildMechanicalRiserSld(
+            network: net, building: _building(2), focus: ServiceType.coldWater);
+        return {
+          for (final l in _lines(s))
+            if ((l.y1 - l.y2).abs() < 1e-9 && (l.x1 - l.x2).abs() > 1)
+              l.y1.toStringAsFixed(1),
+        };
+      }
+
+      final fwd = _riser(2);
+      // The same network with every fixture branch drawn INTO its header.
+      final rev = Network(nodes: fwd.nodes, edges: [
+        for (final e in fwd.edges)
+          if (e.id.startsWith('w') || e.id.startsWith('l'))
+            _e(e.id, e.toId, e.fromId)
+          else
+            e,
+      ]);
+      final revYs = ys(rev);
+      // Two (w, l) pairs on distinct lines + the tank run, never collinear.
+      expect(revYs.length, greaterThanOrEqualTo(4));
+      expect(revYs.length, ys(fwd).length);
+    });
+
+    test('a series chain A -> B -> C on one lane never fans', () {
+      final net = Network(nodes: [
+        _n('A', 100, 0),
+        _n('B', 200, 0),
+        _n('C', 300, 0),
+      ], edges: [
+        _e('ab', 'A', 'B'),
+        _e('bc', 'B', 'C'),
+      ]);
+      final s = buildMechanicalRiserSld(
+          network: net, building: _building(1), focus: ServiceType.coldWater);
+      final ys = {
+        for (final l in _lines(s))
+          if ((l.y1 - l.y2).abs() < 1e-9 &&
+              (l.x1 - l.x2).abs() > 1 &&
+              l.layer == 'CW')
+            l.y1.toStringAsFixed(1),
+      };
+      expect(ys, hasLength(1));
+    });
   });
 
   group('2-7 ATAP datum + ground tank', () {

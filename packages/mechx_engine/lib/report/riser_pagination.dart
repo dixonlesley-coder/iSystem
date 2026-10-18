@@ -23,8 +23,9 @@ import 'electrical_pdf_export.dart' show sldSinglePageMinLabelPt;
 import 'sld_sheet.dart';
 
 /// The floor ranges a riser of [levelCount] storeys splits into at
-/// [floorsPerPage] floors each, TOP page first (the bottom page may hold
-/// fewer floors). Pure.
+/// [floorsPerPage] floors each, TOP page first. Chunks are cut from floor 0
+/// upward, so the TOP page (listed first) is the one that may hold fewer
+/// floors — 12 floors at 5 per page ⇒ (10..11), (5..9), (0..4). Pure.
 List<({int lo, int hi})> riserFloorChunks(int levelCount, int floorsPerPage) {
   final k = floorsPerPage < 1 ? 1 : floorsPerPage;
   final out = <({int lo, int hi})>[];

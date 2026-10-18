@@ -326,10 +326,59 @@ SldSheet buildMechanicalRiserSld({
   final singleService = focus != null ||
       network.edges.map((e) => e.service).toSet().length < 2;
   final fanPitch = singleService ? _kFanPitchSingle : _kFanPitchCombined;
-  for (final group in siblings.values) {
+  // Each fan group is (the shared header node, its runs); the far end of a
+  // run is the endpoint that is NOT the header.
+  final fanGroups = <(String, List<NetEdge>)>[];
+  for (final entry in siblings.entries) {
+    if (entry.value.length < 2) continue;
+    fanGroups.add((entry.key.split('|').first, entry.value));
+  }
+  // Round 21 review — runs drawn INTO the header (fixture -> header, the
+  // header as `toId`) were never grouped and stayed collinear. Every run not
+  // already fanned above is registered under BOTH its ends, keyed by the
+  // shared node + service + lane + the SIDE (left / right) its far end lies
+  // on — a series chain (A -> B -> C, far ends on opposite sides of B) never
+  // groups — and joins the to-end group when that group has siblings, else
+  // the from-end group.
+  final fanned = {for (final g in fanGroups) ...g.$2.map((e) => e.id)};
+  String endKey(NetEdge e, String nodeId) {
+    final other = nodeId == e.fromId ? e.toId : e.fromId;
+    final side = posById[other]!.dx < posById[nodeId]!.dx ? 'L' : 'R';
+    return '$nodeId|${e.service.index}|${edgeLanes[e.id] ?? 0}|$side';
+  }
+
+  final byEnd = <String, List<NetEdge>>{};
+  final loose = <NetEdge>[
+    for (final group in siblings.values)
+      for (final e in group)
+        if (!fanned.contains(e.id)) e,
+  ];
+  for (final e in loose) {
+    (byEnd[endKey(e, e.fromId)] ??= <NetEdge>[]).add(e);
+    (byEnd[endKey(e, e.toId)] ??= <NetEdge>[]).add(e);
+  }
+  final headerGroups = <String, List<NetEdge>>{};
+  for (final e in loose) {
+    final toKey = endKey(e, e.toId);
+    final fromKey = endKey(e, e.fromId);
+    final key = byEnd[toKey]!.length >= 2
+        ? toKey
+        : byEnd[fromKey]!.length >= 2
+            ? fromKey
+            : null;
+    if (key != null) (headerGroups[key] ??= <NetEdge>[]).add(e);
+  }
+  final headerKeys = headerGroups.keys.toList()..sort();
+  for (final k in headerKeys) {
+    final group = headerGroups[k]!;
     if (group.length < 2) continue;
+    fanGroups.add((k.split('|').first, group));
+  }
+  for (final (header, group) in fanGroups) {
+    double farX(NetEdge e) =>
+        posById[e.fromId == header ? e.toId : e.fromId]!.dx;
     group.sort((x, y) {
-      final d = posById[x.toId]!.dx.compareTo(posById[y.toId]!.dx);
+      final d = farX(x).compareTo(farX(y));
       return d != 0 ? d : x.id.compareTo(y.id);
     });
     final lane = riserServiceLane(group.first.service);

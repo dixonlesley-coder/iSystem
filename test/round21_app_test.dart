@@ -24,9 +24,12 @@ import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/fire_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
+import 'package:mechx/ui/schematic/schematic_view.dart' show RiserSystemSummary;
+import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -195,6 +198,91 @@ void main() {
         closeTo(750 * 3.785411784 / 60, 1e-9));
   });
 
+  // ── fire-velocity verdict (round-21 review) ───────────────────────────────
+  test('a fire pipe sized inside the fire velocity cap raises no velocity issue',
+      () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    _seed(c, floors: 4);
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+      _n('P', 0, 0, role: NodeRole.plant, c: NodeComponent.pump),
+      _n('H', 50, 0),
+      for (var f = 0; f < 4; f++) _n('A$f', 100, 0, floor: f),
+    ], edges: [
+      _e('p', 'P', 'H'),
+      _e('hA', 'H', 'A0'),
+      for (var f = 0; f < 3; f++) _e('A$f', 'A$f', 'A${f + 1}', k: EdgeKind.riser),
+    ]));
+    // Build the electrical controller (and its MEP sync) up front.
+    c.read(electricalProjectProvider);
+    final sizing = c.read(sizingProvider);
+    // Precondition: the sizer runs the riser ABOVE the domestic 2.0 m/s cap
+    // and inside the 6 m/s fire cap — the case the judge used to flag.
+    final v = sizing['A0']!.velocity.metersPerSecond;
+    expect(v, greaterThan(2.0));
+    expect(v, lessThanOrEqualTo(kMaxFireVelocityMps));
+    final checks = c.read(waterVelocityChecksProvider);
+    for (final id in ['p', 'hA', 'A0', 'A1', 'A2']) {
+      expect(checks[id]?.isWarning ?? false, isFalse, reason: id);
+    }
+    expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.kind.startsWith('water-velocity')),
+        isEmpty);
+  });
+
+  // ── riser cross-surface contract (round-21 review) ────────────────────────
+  testWidgets('the Riser summary prints the same gravity riser length as edgeLength',
+      (tester) async {
+    final (_, c) = await _harness(tester);
+    _seed(c, floors: 3);
+    // A rainwater downpipe between BARE junctions L0 → L1 → L2 (no fixture,
+    // no component): the gravity riser-end datum puts the L1 / L2 junctions
+    // under their own slab (the ceiling of the floor below) and the L0 foot
+    // on the lowest slab.
+    final net = Network(nodes: [
+      for (var f = 0; f < 3; f++) _n('J$f', 100, 0, floor: f),
+    ], edges: [
+      for (var f = 0; f < 2; f++)
+        _e('R$f', 'J$f', 'J${f + 1}',
+            s: ServiceType.rainwater, k: EdgeKind.riser),
+    ]);
+    c.read(networkControllerProvider.notifier).loadNetwork(net);
+    final project = c.read(projectControllerProvider);
+    final expected = net.edges.fold(
+        0.0,
+        (sum, e) =>
+            sum +
+            edgeLength(e, net,
+                    calibrationBySheet: project.calibrations,
+                    building: project.building,
+                    mounting: project.mounting)
+                .meters);
+    // Guard: the old ceiling-to-ceiling (nodeElevation) basis differs, so the
+    // test can tell the two datums apart.
+    final legacy = (nodeElevation(net.nodes[2], project.building,
+                    project.mounting)
+                .meters -
+            nodeElevation(net.nodes[0], project.building, project.mounting)
+                .meters)
+        .abs();
+    expect((legacy - expected).abs(), greaterThan(0.05));
+
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: MechXTheme(
+          data: MechXThemeData.dark,
+          child: const SizedBox(width: 320, child: RiserSystemSummary()),
+        ),
+      ),
+    ));
+    await tester.pump();
+    expect(find.text('${expected.toStringAsFixed(1)} m'), findsOneWidget);
+  });
+
   // ── parallel-fire-pumps ───────────────────────────────────────────────────
   group('a duty + standby + jockey fire pump room', () {
     // GT → suction header S → FP1 / FP2 / FP3 → discharge header D → riser.
@@ -248,6 +336,32 @@ void main() {
       };
       expect(circuits['node-FP2']!.demandFactor, 0);
       expect(circuits['node-FP1']!.demandFactor, 1);
+    });
+
+    test('an ASSUMED jockey is named in an info Design Issue', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      _seed(c, floors: 3);
+      c.read(networkControllerProvider.notifier).loadNetwork(room());
+      c.read(electricalProjectProvider);
+      // Nothing drawn tells the three pumps apart ⇒ FP3 is an assumption.
+      expect(c.read(mepDutyBindingProvider).fireAssumedJockeyPumpNodeIds,
+          {'FP3'});
+      final issues = c
+          .read(designIssuesProvider)
+          .where((i) => i.kind.startsWith('fire-jockey-assumed'))
+          .toList();
+      expect(issues, hasLength(1));
+      expect(issues.single.kind, 'fire-jockey-assumed:FP3');
+      expect(issues.single.locate?.nodeId, 'FP3');
+    });
+
+    test('a jockey on a smaller drawn bore is not an assumption', () {
+      final net = room();
+      final roles = parallelFirePumpRoles(net, {'FP1', 'FP2', 'FP3'},
+          bore: (id) => (id == 's3' || id == 'd3') ? 25.0 : 100.0);
+      expect(roles.jockey, {'FP3'});
+      expect(roles.assumedJockey, isEmpty);
     });
 
     testWidgets('the schedule lists every drawn fire pump', (tester) async {

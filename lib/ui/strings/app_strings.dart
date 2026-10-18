@@ -650,6 +650,8 @@ enum StringKey {
   issueMotorOversizedTitle,
   issuePumpMotorOversizedMessage,
   issueFirePumpMotorOversizedMessage,
+  issueFireJockeyAssumedTitle,
+  issueFireJockeyAssumedMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1913,6 +1915,12 @@ const Map<StringKey, String> _en = {
       'iteration budget. The flow still satisfies continuity, but the split — '
       'and every size derived from it — is provisional. Simplify the ring or '
       'check for a near-zero-resistance leg.',
+  StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
+  StringKey.issueFireJockeyAssumedMessage:
+      'Three or more identical fire pumps are drawn in parallel and nothing '
+      'tells them apart, so {tag} (the last drawn) was taken as the jockey '
+      'pump and fed a small pressure-maintenance duty. Confirm it, or draw '
+      'the jockey on its own smaller pipe.',
   StringKey.issueMotorOversizedTitle: 'Duty past the largest motor frame',
   StringKey.issueFirePumpMotorOversizedMessage:
       'The fire pump\'s governing NFPA 20 point exceeds the largest standard '
@@ -3249,6 +3257,12 @@ const Map<StringKey, String> _id = {
       'pembagiannya — dan setiap ukuran yang diturunkan darinya — bersifat '
       'sementara. Sederhanakan ring atau periksa kaki dengan resistansi '
       'mendekati nol.',
+  StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
+  StringKey.issueFireJockeyAssumedMessage:
+      'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '
+      'sehingga {tag} (yang terakhir digambar) dianggap sebagai pompa jockey '
+      'dan diberi duti kecil penjaga tekanan. Konfirmasikan, atau gambar '
+      'pompa jockey pada pipanya sendiri yang lebih kecil.',
   StringKey.issueMotorOversizedTitle:
       'Duti melebihi rangka motor standar terbesar',
   StringKey.issueFirePumpMotorOversizedMessage:

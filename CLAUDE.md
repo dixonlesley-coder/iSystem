@@ -1483,8 +1483,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `buildMechanicalRiserSld(floorRange:)`, `LANJUT KE <floor>` stubs); the
   issued riser carries the HWR leg whenever the canvas does. A GRAVITY riser
   reads a bare stack junction under its floor's slab
-  (`gravityRiserEndElevation`: ceiling of the floor below, grade on the
-  lowest floor); pressurized risers keep `nodeElevation`.
+  (`gravityRiserEndElevation`: ceiling of the floor below; on the lowest
+  level the lowest SLAB — grade with no basement, the lowest basement slab
+  when `groundIndex > 0`); pressurized risers keep `nodeElevation`. Every
+  riser length — `edgeLength`, the Riser canvas label, the Riser summary
+  Σ, the node inspector elevation — goes through ONE `riserEndElevation` /
+  `riserElevationDelta` (canvas == BOM == export). A fire pipe's velocity
+  verdict uses the SAME `maxFireVelocity` the sizer used (never the 2.0 m/s
+  domestic cap); a fan group in the riser drawing is keyed by the shared
+  header whichever way its runs are drawn; an ASSUMED jockey fire pump
+  (≥ 3 identical pumps) raises the info `fire-jockey-assumed:<id>`.
 - **Round 20 — generating-room tags, owner rooms, undiversified phase,
   drawn feed, verdict-backing figures (2026-10-18)**: an Auto-placed terminal
   carries `NetNode.autoPlacedRoomId`; ownership is `roomTerminalOwnerOf`

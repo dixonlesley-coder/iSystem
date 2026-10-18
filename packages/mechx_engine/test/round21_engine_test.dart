@@ -486,4 +486,31 @@ void main() {
       expect(len(foot, r1, ServiceType.rainwater).meters, closeTo(3.3, 1e-9));
     });
   });
+
+  test('a component description never repeats the service word', () {
+    expect(mechComponentDescription(
+            ServiceType.coldWater, NodeComponent.waterOutlet),
+        'Cold water outlet');
+    // No shared word at the seam: both labels print in full.
+    expect(
+        mechComponentDescription(ServiceType.coldWater, NodeComponent.gateValve),
+        'Cold water ${NodeComponent.gateValve.label}');
+  });
+
+  test('a riser length reads the same datum as edgeLength', () {
+    final b = BuildingLevels(
+        [for (var i = 0; i < 3; i++) Floor('L$i', const Length(3.6))]);
+    const a = NetNode(id: 'a', sheetId: 's', x: 0, y: 0, floorIndex: 0);
+    const c = NetNode(id: 'c', sheetId: 's', x: 0, y: 0, floorIndex: 2);
+    for (final svc in [ServiceType.drainage, ServiceType.coldWater]) {
+      final e = NetEdge(
+          id: 'r', fromId: 'a', toId: 'c', service: svc, kind: EdgeKind.riser);
+      final net = Network(nodes: [a, c], edges: [e]);
+      expect(
+          riserElevationDelta(e, a, c, b).meters,
+          edgeLength(e, net, calibrationBySheet: const {}, building: b)
+              .meters,
+          reason: svc.name);
+    }
+  });
 }
