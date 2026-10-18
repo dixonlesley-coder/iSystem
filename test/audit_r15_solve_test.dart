@@ -244,6 +244,87 @@ void main() {
     });
   });
 
+  group('booster PAIR — a duty/standby booster set is still a booster (r3)',
+      () {
+    // As the hybrid network, but the top-floor booster is drawn as the
+    // Round-13/14 duty/standby idiom: T → B1 → CV1 → J and T → B2 → CV2 → J,
+    // J → the 2 top-floor WCs. The served set must follow the solved flow
+    // direction (and skip the mirrored standby leg) so the pair never walks
+    // back to the roof tank through the standby leg and is misread as a
+    // transfer pump.
+    NetNode cv(String id, double x, double y) => _n(id, x, y,
+        floor: 2, component: NodeComponent.checkValve);
+    Network build() => Network(nodes: [
+          _n('RT', 0, 0,
+              floor: 2, role: NodeRole.plant, component: NodeComponent.roofTank),
+          _n('T', 100, 0, floor: 2),
+          _n('B1', 200, 0,
+              floor: 2, role: NodeRole.plant, component: NodeComponent.boosterSet),
+          _n('B2', 200, 100,
+              floor: 2, role: NodeRole.plant, component: NodeComponent.boosterSet),
+          cv('C1', 250, 0),
+          cv('C2', 250, 100),
+          _n('J', 300, 50, floor: 2),
+          _wc('U0', 400, 0, 2),
+          _wc('U1', 400, 200, 2),
+          _n('D1', 100, 0, floor: 1),
+          _n('D0', 100, 0),
+          for (var f = 0; f < 2; f++)
+            for (var i = 0; i < 2; i++) _wc('L${f}_$i', 300, i * 200.0, f),
+        ], edges: [
+          _e('rt', 'RT', 'T'),
+          _e('tb1', 'T', 'B1'),
+          _e('b1', 'B1', 'C1'),
+          _e('c1', 'C1', 'J'),
+          _e('tb2', 'T', 'B2'),
+          _e('b2', 'B2', 'C2'),
+          _e('c2', 'C2', 'J'),
+          _e('ju0', 'J', 'U0'),
+          _e('ju1', 'J', 'U1'),
+          _e('d1', 'T', 'D1', kind: EdgeKind.riser),
+          _e('d0', 'D1', 'D0', kind: EdgeKind.riser),
+          _e('l1a', 'D1', 'L1_0'),
+          _e('l1b', 'D1', 'L1_1'),
+          _e('l0a', 'D0', 'L0_0'),
+          _e('l0b', 'D0', 'L0_1'),
+        ]);
+
+    test('downfeed: the pair gets a booster duty on its shortfall head', () {
+      final c = _container(build(), FeedStrategy.downfeed);
+      addTearDown(c.dispose);
+      final booster = c.read(supplyBoosterProvider);
+      expect(booster, isNotNull,
+          reason: 'a duty/standby booster pair must not read as a transfer');
+      final down = c.read(downfeedProvider)!;
+      final target = c.read(targetResidualProvider);
+      var worst = double.negativeInfinity;
+      for (final id in ['U0', 'U1']) {
+        worst = math.max(
+            worst, target.pascals - down.residualPressure[id]!.pascals);
+      }
+      final duty = c.read(pumpDutyProvider)!;
+      expect(duty.head.meters,
+          closeTo(headFromPressure(Pressure(worst)).meters, 1e-9));
+      // ONE pump runs: the set flow is the curve of the 2 WCs it serves.
+      final units = c.read(edgeFixtureUnitsProvider);
+      final setFlow = const SniProfile()
+          .probableFlowForFixtureUnits(units['ju0']! + units['ju1']!)
+          .cubicMetersPerSecond;
+      expect(duty.flow.cubicMetersPerSecond, closeTo(setFlow, 1e-9));
+    });
+
+    test('upfeed: the duty flow is the set flow, never the building trunk',
+        () {
+      final c = _container(build(), FeedStrategy.upfeed);
+      addTearDown(c.dispose);
+      final sizing = c.read(sizingProvider);
+      final duty = c.read(pumpDutyProvider)!;
+      expect(c.read(supplyBoosterProvider), isNotNull);
+      expect(duty.flow.cubicMetersPerSecond,
+          lessThan(sizing['rt']!.flow.cubicMetersPerSecond));
+    });
+  });
+
   group('transfer pump — GT -> TP -> RT downfeed is not a booster (r2)', () {
     // The standard Indonesian downfeed: ground tank → TRANSFER pump → roof
     // tank (floor 2) → gravity riser, 2 flush-tank WCs per floor. The

@@ -303,10 +303,26 @@ final supplyBoosterProvider = Provider<SupplyBooster?>((ref) {
 
 /// Every supply node reached from [nodeId] without crossing [inEdgeId] (the
 /// mover itself excluded) — what an inline mover SERVES.
-Set<String> boosterServedNodes(Network net, String nodeId, String inEdgeId) {
+///
+/// With [sizing], the walk follows the SOLVED flow direction (an edge is
+/// crossed only when its `flowFromId` is the node being left) and skips the
+/// mirrored standby legs in [excludeEdgeIds]: a booster drawn as a
+/// duty/standby PAIR (T → B1 → CV1 → J and T → B2 → CV2 → J) must not reach
+/// back to its source tank through the standby leg and be misread as a
+/// transfer pump, while a genuine transfer pump still reaches the tank it
+/// fills (its discharge pipe flows away from the pump). Without [sizing] the
+/// walk is undirected (legacy).
+Set<String> boosterServedNodes(
+  Network net,
+  String nodeId,
+  String inEdgeId, {
+  Map<String, EdgeSizing>? sizing,
+  Set<String> excludeEdgeIds = const {},
+}) {
   final adj = <String, List<({String edgeId, String other})>>{};
   for (final e in net.edges) {
     if (e.service != kSupplyService) continue;
+    if (excludeEdgeIds.contains(e.id)) continue;
     (adj[e.fromId] ??= []).add((edgeId: e.id, other: e.toId));
     (adj[e.toId] ??= []).add((edgeId: e.id, other: e.fromId));
   }
@@ -316,6 +332,10 @@ Set<String> boosterServedNodes(Network net, String nodeId, String inEdgeId) {
     final n = stack.removeLast();
     for (final l in adj[n] ?? const <({String edgeId, String other})>[]) {
       if (l.edgeId == inEdgeId) continue;
+      if (sizing != null) {
+        final from = sizing[l.edgeId]?.flowFromId;
+        if (from == null || from != n) continue;
+      }
       if (served.add(l.other)) stack.add(l.other);
     }
   }
@@ -360,7 +380,8 @@ SupplyBooster? inlineSupplyBooster(
       final q = sz.flow.cubicMetersPerSecond;
       if (q <= 0) continue;
       // Round 15 r2 — a transfer pump (it fills a tank) is not a booster.
-      if (boosterServedNodes(net, n.id, e.id)
+      if (boosterServedNodes(net, n.id, e.id,
+              sizing: sizing, excludeEdgeIds: excludeEdgeIds)
           .any((id) => _isStorageTank(net.nodeById(id)))) {
         continue;
       }
@@ -387,8 +408,11 @@ Head boosterShortfallHead({
   required SupplyBooster booster,
   required Map<String, Pressure> residual,
   required Pressure target,
+  Map<String, EdgeSizing>? sizing,
+  Set<String> excludeEdgeIds = const {},
 }) {
-  final served = boosterServedNodes(net, booster.nodeId, booster.inEdgeId);
+  final served = boosterServedNodes(net, booster.nodeId, booster.inEdgeId,
+      sizing: sizing, excludeEdgeIds: excludeEdgeIds);
   final degree = <String, int>{};
   for (final e in net.edges) {
     if (e.service != kSupplyService) continue;
@@ -505,6 +529,8 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
       booster: booster,
       residual: unboosted,
       target: _targetResidual,
+      sizing: ref.watch(sizingProvider),
+      excludeEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
     );
     if (head.meters <= 0) return null;
     return sizePump(flow: booster.flow, head: head);
