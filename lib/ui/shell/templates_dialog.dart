@@ -14,12 +14,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/app_state.dart';
 import '../../store/network_store.dart';
+import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/templates.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
+import 'building_screen.dart' show showDeleteLevelDialog;
 import 'project_io.dart';
 
 /// Open the template picker as a modal over the current [MechXTheme].
@@ -135,6 +137,23 @@ class _TemplatesDialog extends ConsumerWidget {
                     // (no forced import).
                     final hadNoSheets =
                         ref.read(sheetsControllerProvider).sheets.isEmpty;
+                    // Round 9 (mech-store-fuzz-4) — a template with FEWER
+                    // floors deletes the work drawn on the dropped top floors
+                    // (like removing a level, C2) instead of fusing it onto
+                    // the new top: confirm with the real count first.
+                    final dropped = ref
+                        .read(networkControllerProvider.notifier)
+                        .elementsAboveFloor(t.floors.length);
+                    if (dropped > 0) {
+                      final floors = ref.read(projectControllerProvider).floors;
+                      final names = [
+                        for (var i = t.floors.length; i < floors.length; i++)
+                          floors[i].name,
+                      ].join(', ');
+                      final ok = await showDeleteLevelDialog(context,
+                          level: names, count: dropped);
+                      if (ok != true || !context.mounted) return;
+                    }
                     applyTemplate(ref, t);
                     if (hadNoSheets) {
                       final imported =

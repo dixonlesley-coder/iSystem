@@ -1848,7 +1848,7 @@ const Map<StringKey, String> _en = {
   StringKey.issueNetworkIslandTitle: 'Network branch not connected',
   StringKey.issueNetworkNoSourceTitle: 'Network has no source',
   StringKey.issueDrainageSlopeTitle: 'Drainage slope below self-cleansing',
-  StringKey.issueDrainageLengthTitle: 'Drainage branch too long',
+  StringKey.issueDrainageLengthTitle: 'Trap arm too long',
   StringKey.issueDrainageCleanoutTitle: 'Drainage stack cleanout',
   StringKey.issueLegionellaTitle: 'Hot-water return temperature low',
   StringKey.issueCoolingInternalOnlyTitle:
@@ -3088,7 +3088,7 @@ const Map<StringKey, String> _id = {
   StringKey.issueNetworkIslandTitle: 'Cabang jaringan tidak terhubung',
   StringKey.issueNetworkNoSourceTitle: 'Jaringan tidak memiliki sumber',
   StringKey.issueDrainageSlopeTitle: 'Kemiringan drainase di bawah swa-bersih',
-  StringKey.issueDrainageLengthTitle: 'Cabang drainase terlalu panjang',
+  StringKey.issueDrainageLengthTitle: 'Lengan perangkap terlalu panjang',
   StringKey.issueDrainageCleanoutTitle: 'Cleanout tegak drainase',
   StringKey.issueLegionellaTitle: 'Suhu balik air panas rendah',
   StringKey.issueCoolingInternalOnlyTitle:

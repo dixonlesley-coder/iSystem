@@ -13,6 +13,8 @@
 /// stores (`solve_store.dart`).
 library;
 
+import 'dart:convert' show jsonEncode;
+
 import 'package:flutter/widgets.dart' show immutable, Offset;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -684,9 +686,18 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   }
 
   /// Commit a rebuilt sources map (null collapses to a cleared field).
-  void _commitSources(ElectricalSources? next) => _commit(next == null
-      ? _withProject(clearSources: true)
-      : _withProject(sources: next));
+  void _commitSources(ElectricalSources? next) {
+    final project = next == null
+        ? _withProject(clearSources: true)
+        : _withProject(sources: next);
+    // Round 9 (elec-store-fuzz-6) — clearing an absent genset (or re-setting
+    // the same source) changes nothing: no phantom undo step / dirty flag.
+    if (jsonEncode(project.toJson()['sources']) ==
+        jsonEncode(state.toJson()['sources'])) {
+      return;
+    }
+    _commit(project);
+  }
 
   /// Set (or clear) the standby/prime generator on the source spine.
   void setGenerator(GeneratorSource? gen) => _commitSources(
@@ -711,6 +722,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the declared supply connection capacity (daya tersambung / plant
   /// rating). Null / non-positive ⇒ clear (no capacity printed).
   void setSupplyCapacityVa(ApparentPower? capacity) {
+    // Round 9 (elec-store-fuzz-6) — no-op when unchanged (incl. clearing a
+    // capacity that was never declared).
+    final clear = capacity == null || capacity.voltAmperes <= 0;
+    if (clear && state.supplyCapacityVa == null) return;
+    if (!clear && state.supplyCapacityVa == capacity) return;
     _commit((capacity == null || capacity.voltAmperes <= 0)
         ? _withProject(clearSupplyCapacityVa: true)
         : _withProject(supplyCapacityVa: capacity));
@@ -875,10 +891,28 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       {bool record = true}) {
     _replacePanel(
       panelId,
-      (p) => p.copyWith(circuits: [
-        for (final c in p.circuits)
-          if (c.id == circuitId) f(c) else c,
-      ]),
+      (p) {
+        // Round 9 (elec-store-fuzz-6) — a transform that changes nothing (e.g.
+        // clearing an override the way never had) returns the SAME panel, so
+        // [_replacePanel]'s identity guard records no phantom undo step.
+        var changed = false;
+        final circuits = <ElectricalCircuit>[
+          for (final c in p.circuits)
+            if (c.id == circuitId)
+              () {
+                final n = f(c);
+                if (!identical(n, c) &&
+                    jsonEncode(n.toJson()) != jsonEncode(c.toJson())) {
+                  changed = true;
+                  return n;
+                }
+                return c;
+              }()
+            else
+              c,
+        ];
+        return changed ? p.copyWith(circuits: circuits) : p;
+      },
       record: record,
     );
   }
@@ -1087,6 +1121,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
             id: _freshId('c'),
             name: '${c.name} (copy)',
             clearFeedsPanelId: true,
+            // Round 9 (elec-store-fuzz-4) — the copy is a user-owned way: two
+            // ways claiming one machine would both be refreshed every sync.
+            clearSourceEquipmentId: true,
+            clearFlaOverrideA: true,
           ));
         }
       }
@@ -1112,7 +1150,19 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     }
     if (circuit == null) return;
     if (circuit.feedsPanelId == toPanelId) return; // would feed itself
-    final moved = circuit;
+    // Round 9 (elec-store-fuzz-5) — moving a FEEDER way re-parents the board
+    // it feeds: refuse a move that would make a feeder cycle (the same rule
+    // `connectFeeder` enforces).
+    final fed = circuit.feedsPanelId;
+    if (fed != null && feederRefusalReason(toPanelId, fed) != null) {
+      return;
+    }
+    // A way moved OFF the MEP board becomes user-owned (the sync would
+    // otherwise re-mint a second 'mep-<src>' way for the same machine).
+    final moved = fromPanelId == kMepEquipmentPanelId
+        ? circuit.copyWith(
+            clearSourceEquipmentId: true, clearFlaOverrideA: true)
+        : circuit;
     final panels = [
       for (final p in state.panels)
         if (p.id == fromPanelId)
@@ -1259,6 +1309,13 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           // Drop a feeder's target (mirrors duplicateCircuit) — a genuine
           // non-feeder, not a `''`-targeted stub.
           clearFeedsPanelId: true,
+          // Round 9 (elec-store-fuzz-3) — a copied MEP-derived way is a
+          // USER-owned way seeded from the original's figures: the MEP sync
+          // only ever touches the MEP board, so a copy keeping the source id
+          // would double-count the machine and survive its deletion as a
+          // phantom load.
+          clearSourceEquipmentId: true,
+          clearFlaOverrideA: true,
         ),
     ];
     final copy = src.copyWith(
@@ -1839,9 +1896,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// nuking the engineer's work every time the plan changes:
   ///
   ///   * a derived way whose source equipment still exists is REFRESHED in place
-  ///     — only the machine-owned load fields (`flaOverrideA`, `loadW`, `motorKw`)
-  ///     are re-derived; the user-set name / cableType / length / starterType /
-  ///     phases / life-safety are PRESERVED;
+  ///     — the machine-owned fields (`flaOverrideA`, `loadW`, `motorKw`,
+  ///     `loadPos`, `lifeSafety`, and a still-minted cable family) are
+  ///     re-derived ([_refreshedMepWay]); the user-set name / typed cableType /
+  ///     length / starterType / phases are PRESERVED;
   ///   * a derived way whose source equipment is GONE is **PARKED, not deleted**
   ///     (C1) — see below;
   ///   * a user-ADDED way on the panel (no `sourceEquipmentId`) is preserved;
@@ -1933,11 +1991,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         }
         // Source still present → refresh ONLY the derived load fields, keeping
         // the user's name / cableType / length / starterType / phases / flags.
-        merged.add(c.copyWith(
-          loadW: fresh.loadW,
-          motorKw: fresh.motorKw,
-          flaOverrideA: fresh.flaOverrideA,
-        ));
+        merged.add(_refreshedMepWay(c, fresh));
         refreshed.add(src);
       }
     }
@@ -2222,16 +2276,46 @@ ElectricalCircuit _readoptedMepWay(
   ElectricalCircuit parked,
   ElectricalCircuit fresh,
 ) =>
-    parked.copyWith(
-      name: parked.name.endsWith(kMepParkedSuffix)
-          ? parked.name
-              .substring(0, parked.name.length - kMepParkedSuffix.length)
-          : parked.name,
-      sourceEquipmentId: fresh.sourceEquipmentId,
-      loadW: fresh.loadW,
-      motorKw: fresh.motorKw,
-      flaOverrideA: fresh.flaOverrideA,
+    _refreshedMepWay(
+      parked.copyWith(
+        name: parked.name.endsWith(kMepParkedSuffix)
+            ? parked.name
+                .substring(0, parked.name.length - kMepParkedSuffix.length)
+            : parked.name,
+        sourceEquipmentId: fresh.sourceEquipmentId,
+      ),
+      fresh,
     );
+
+/// Round 9 (elec-store-fuzz-1/-2) — refresh an existing derived way [c] from
+/// the [fresh] mint for the same source: EVERY machine-derived field is
+/// re-derived — the load (`loadW` / `motorKw` / `flaOverrideA`), the plan
+/// position `loadPos` (it drives the geometric cable LENGTH: a pump moved on
+/// the plan used to keep its mint-time run, so Vd and the cable sized on a
+/// 1 m run instead of 31 m) and `lifeSafety` (a pump piped to the fire
+/// service AFTER it was minted as a supply pump is re-derived as a fire pump
+/// under the same source id). The cable family follows the mint ('FRC' for a
+/// life-safety way, none otherwise) ONLY while it is still a minted value
+/// (null, or FRC on a way that was life-safety); a family the engineer typed
+/// is kept. Name / length / starter / laying / overrides stay the engineer's.
+ElectricalCircuit _refreshedMepWay(
+  ElectricalCircuit c,
+  ElectricalCircuit fresh,
+) {
+  final mintedCable =
+      c.cableType == null || (c.lifeSafety && c.cableType == 'FRC');
+  return c.copyWith(
+    loadW: fresh.loadW,
+    motorKw: fresh.motorKw,
+    flaOverrideA: fresh.flaOverrideA,
+    clearFlaOverrideA: fresh.flaOverrideA == null,
+    lifeSafety: fresh.lifeSafety,
+    loadPos: fresh.loadPos,
+    clearLoadPos: fresh.loadPos == null,
+    cableType: mintedCable ? fresh.cableType : null,
+    clearCableType: mintedCable && fresh.cableType == null,
+  );
+}
 
 /// True when [c] is still EXACTLY as the MEP auto-feed minted it — the engineer
 /// has not renamed it and has set no override of any kind — so re-minting it

@@ -208,7 +208,9 @@ class ElectricalCircuit {
     String? feedsPanelId,
     bool clearFeedsPanelId = false,
     String? sourceEquipmentId,
+    bool clearSourceEquipmentId = false,
     Current? flaOverrideA,
+    bool clearFlaOverrideA = false,
     StarterType? starterType,
     bool clearStarterType = false,
     LayoutPos? loadPos,
@@ -244,8 +246,11 @@ class ElectricalCircuit {
         busbarBreakBefore: busbarBreakBefore ?? this.busbarBreakBefore,
         feedsPanelId:
             clearFeedsPanelId ? null : (feedsPanelId ?? this.feedsPanelId),
-        sourceEquipmentId: sourceEquipmentId ?? this.sourceEquipmentId,
-        flaOverrideA: flaOverrideA ?? this.flaOverrideA,
+        sourceEquipmentId: clearSourceEquipmentId
+            ? null
+            : (sourceEquipmentId ?? this.sourceEquipmentId),
+        flaOverrideA:
+            clearFlaOverrideA ? null : (flaOverrideA ?? this.flaOverrideA),
         starterType:
             clearStarterType ? null : (starterType ?? this.starterType),
         loadPos: clearLoadPos ? null : (loadPos ?? this.loadPos),

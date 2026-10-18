@@ -554,6 +554,18 @@ Map<String, EdgeSizing> sizeNetwork(
   for (final edge in net.edges) {
     final flow = edgeFlows[edge.id];
     if (flow == null) continue;
+    // Round 9 (mech-store-fuzz-3) — an AIR edge carrying ZERO flow (a duct
+    // joining two plant nodes — AHU→fan, AHU→AHU — drawn before any terminal,
+    // since a non-root plant leaf carries no phantom demand) is left unsized
+    // exactly like an unreached edge: the duct sizers require a positive
+    // airflow (a debug assert aborted the whole solve) and a release build
+    // printed a 0 L/s Ø100 duct into the BOM. Water / gravity sizers take a
+    // zero flow to their minimum size without asserting (a transfer leg with
+    // no modelled demand keeps its minimum-size tag), so only air is gated.
+    if (edge.service.regime == FlowRegime.air &&
+        flow.cubicMetersPerSecond <= 0) {
+      continue;
+    }
     final sized = sizeEdge(edge, flow, ctx);
     final override = sizeOverrides[edge.id];
     result[edge.id] =
@@ -784,6 +796,13 @@ Map<String, String> serviceComponentRoots(
 /// library; the engine never reads it). A drainage edge carrying one is floored
 /// at [drain.kMinWcDrainMm] exactly like a built-in WC (water-drainage-7).
 /// Default empty ⇒ byte-identical.
+///
+/// FIXTURE-UNIT RECORD ([fixtureUnitsOut], Round 9): when given, every TREE
+/// edge sized by accumulated fixture units — water supply by UBAP, drainage /
+/// vent by DFU — writes its accumulated units here (edgeId → units), the SAME
+/// numbers the sizer turned into a size, so the calc report's run schedule
+/// can print the basis ('why DN100') without re-deriving it. Ring edges of a
+/// looped water component are split by Hardy–Cross and are not recorded.
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
@@ -800,6 +819,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Map<String, ScaleCalibration> calibrationBySheet = const {},
   MountingHeights mounting = const MountingHeights(),
   Set<String> waterClosetNodeIds = const {},
+  Map<String, double>? fixtureUnitsOut,
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -1202,13 +1222,30 @@ Map<String, EdgeSizing> autoSizeNetwork(
                 rootId: root,
                 terminalUnits: wcTerminals,
               );
+        // Round 9 (plumbing-rules-floor-drain-dn40-stack) — which edges carry
+        // a DN50-trap terminal (floor drain / shower / urinal): every edge
+        // downstream is floored at the trap size, counted down the same tree.
+        final trapTerminals = <String, double>{
+          for (final n in component)
+            if (n != root && _isDn50TrapNode(net.nodeById(n))) n: 1.0,
+        };
+        final edgeTrapCount = trapTerminals.isEmpty
+            ? const <String, double>{}
+            : accumulateFixtureUnits(
+                net: net,
+                service: service,
+                rootId: root,
+                terminalUnits: trapTerminals,
+              );
+        fixtureUnitsOut?.addAll(edgeUnits);
         for (final entry in edgeUnits.entries) {
           final edge = net.edges.firstWhere((e) => e.id == entry.key);
           sanitary[entry.key] = _sizeSanitaryEdge(
             edge,
             entry.value,
             ctx,
-            carriesWaterCloset: (edgeWcCount[entry.key] ?? 0) > 0,
+            waterClosetCount: (edgeWcCount[entry.key] ?? 0).round(),
+            carriesDn50Trap: (edgeTrapCount[entry.key] ?? 0) > 0,
           );
           // Drainage flows DOWNHILL toward the collection root, so it comes FROM
           // the away-from-root (demand) endpoint. A vent carries no flow → skip.
@@ -1319,6 +1356,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
           terminalUnits: terminalUnits,
           edgeParent: edgeParents,
         );
+        fixtureUnitsOut?.addAll(edgeUnits);
         for (final entry in edgeUnits.entries) {
           allFlows[entry.key] = profile.probableFlowForFixtureUnits(
             entry.value,
@@ -1426,25 +1464,38 @@ Map<String, EdgeSizing> autoSizeNetwork(
 /// using the code capacity tables. Drainage edges report a reference full-bore
 /// Manning velocity (for self-cleansing); vents have no flow velocity.
 ///
-/// A DRAINAGE (not vent) edge that [carriesWaterCloset] is floored at
-/// [drain.kMinWcDrainMm] whatever its DFU (water-drainage-7), and an edge whose
-/// DFU exceeds the top row of its table is flagged [EdgeSizing.overCapacity]
-/// (water-drainage-4) — the printed size is then the table limit, not a size
-/// that carries the load.
+/// A DRAINAGE (not vent) edge carrying [waterClosetCount] > 0 water closets
+/// is floored at [drain.kMinWcDrainMm] whatever its DFU (water-drainage-7),
+/// and at [drain.kWcRowDrainMm] once the count exceeds the DN75 branch/stack
+/// limit (Round 9, [drain.minDrainMmForWcCount]); one carrying a DN50-trap
+/// terminal ([carriesDn50Trap]) is floored at [drain.kMinTrapDrainMm]. An edge
+/// whose DFU exceeds the top row of its table is flagged
+/// [EdgeSizing.overCapacity] (water-drainage-4) — the printed size is then the
+/// table limit, not a size that carries the load.
+///
+/// A VENT edge is sized from the vent table AND floored at half the drain
+/// diameter its load requires (the same DFU + WC/trap floors, Round 9 —
+/// [drain.ventDiameterForDfu] `servedDrainMm`).
 EdgeSizing _sizeSanitaryEdge(
   NetEdge edge,
   double dfu,
   SizingContext ctx, {
-  bool carriesWaterCloset = false,
+  int waterClosetCount = 0,
+  bool carriesDn50Trap = false,
 }) {
   final isStack = edge.kind == EdgeKind.riser;
   final isVent = edge.service == ServiceType.vent;
-  var d = isVent
-      ? drain.ventDiameterForDfu(dfu)
-      : drain.drainDiameterForDfu(dfu, isStack: isStack);
-  if (!isVent && carriesWaterCloset && d.inMillimeters < drain.kMinWcDrainMm) {
-    d = Diameter.mm(drain.kMinWcDrainMm);
+  // The drain this load needs: the DFU table, floored by the WC count and the
+  // DN50-trap rule. Drain edges take it directly; vents take half of it.
+  var drainMm = drain.drainDiameterForDfu(dfu, isStack: isStack).inMillimeters;
+  final wcFloor = drain.minDrainMmForWcCount(waterClosetCount, isStack: isStack);
+  if (wcFloor > drainMm) drainMm = wcFloor;
+  if (carriesDn50Trap && drainMm < drain.kMinTrapDrainMm) {
+    drainMm = drain.kMinTrapDrainMm;
   }
+  final d = isVent
+      ? drain.ventDiameterForDfu(dfu, servedDrainMm: drainMm)
+      : Diameter.mm(drainMm);
   final overloaded = isVent
       ? drain.ventDfuExceedsTable(dfu)
       : drain.drainDfuExceedsTable(dfu, isStack: isStack);
@@ -1453,6 +1504,15 @@ EdgeSizing _sizeSanitaryEdge(
   // (G1) — there is no smaller compliant pipe to move to.
   return _sanitaryEdgeSizing(edge, d, ctx,
       codeMinimum: d, overCapacity: overloaded);
+}
+
+/// True when [node] is a terminal whose trap is DN50 minimum — a floor drain
+/// component, or a shower / urinal fixture (Round 9).
+bool _isDn50TrapNode(NetNode? node) {
+  if (node == null) return false;
+  if (node.component == NodeComponent.floorDrain) return true;
+  final f = node.fixture;
+  return f != null && drain.isDn50TrapFixture(f);
 }
 
 /// True when [node] carries a water-closet fixture type (water-drainage-7).

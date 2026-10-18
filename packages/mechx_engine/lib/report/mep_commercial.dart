@@ -581,7 +581,7 @@ String mepQuotationToMarkdown(
       ..writeln('| Qty | Unit | Item | Unit ($cur) | Total ($cur) |')
       ..writeln('| ---: | --- | --- | ---: | ---: |');
     for (final l in mechanical.lines) {
-      b.writeln('| ${_qty(l.qty)} | ${l.unit} | ${_md(l.description)} | '
+      b.writeln('| ${quantity(l.qty)} | ${l.unit} | ${_md(l.description)} | '
           '${l.unitPrice == null ? '-' : m(l.unitPrice!)} | '
           '${l.lineTotal == null ? '(unpriced)' : m(l.lineTotal!)} |');
     }
@@ -595,7 +595,7 @@ String mepQuotationToMarkdown(
       ..writeln('| Qty | Category | Description | SKU | Unit ($cur) | Total ($cur) |')
       ..writeln('| ---: | --- | --- | --- | ---: | ---: |');
     for (final l in electrical.lines) {
-      b.writeln('| ${_qty(l.line.qty)} | ${l.line.category.name} | '
+      b.writeln('| ${quantity(l.line.qty)} | ${l.line.category.name} | '
           '${_md(l.line.description)} | ${_md(l.line.sku ?? '-')} | '
           '${l.unitPrice == null ? '-' : m(l.unitPrice!)} | '
           '${l.lineTotal == null ? '(unpriced)' : m(l.lineTotal!)} |');
@@ -611,7 +611,7 @@ String mepQuotationToMarkdown(
     ..writeln('| Mechanical material | ${m(quotation.mechanicalMaterial)} |')
     ..writeln('| Electrical material | ${m(quotation.electricalMaterial)} |')
     ..writeln('| Material subtotal | ${m(quotation.materialSubtotal)} |')
-    ..writeln('| Labour (${_qty(quotation.labourHours)} h) | '
+    ..writeln('| Labour (${quantity(quotation.labourHours)} h) | '
         '${m(quotation.labourSubtotal)} |')
     ..writeln('| Overhead | ${m(quotation.overhead)} |')
     ..writeln('| Contingency | ${m(quotation.contingency)} |')

@@ -467,6 +467,7 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               date: DateTime.now().toIso8601String().split('T').first,
               standardsName: profile.name,
               standardsRevision: profile.revision,
+              standardsProvenance: profile.provenanceNote,
               project: project,
               result: result,
               powerOneLine: advanced.powerOneLine,

@@ -619,11 +619,19 @@ void main() {
           ));
     }
 
-    test('at the 1:100 default the advisory is silent (its threshold is 1:200)',
-        () {
+    // Round 9 (plumbing-rules-min-slope-threshold) — the floor is per pipe
+    // size: the 1-DFU lavatory branch sizes DN40 (branch table), and a branch
+    // ≤ DN65 needs 2 % (1:50), so the 1:100 project default now FLAGS it;
+    // laying it at 1:50 clears it.
+    test('a DN40 branch at the 1:100 default flags; at 1:50 it is silent', () {
       final c = _container();
       seedDrainage(c);
       expect(c.read(drainageSlopeProvider), 0.01);
+      expect(c.read(sizingProvider)['br']!.diameter.inMillimeters, 40);
+      expect(
+          c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
+          hasLength(1));
+      c.read(drainageSlopeProvider.notifier).set(0.02);
       expect(
           c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
           isEmpty);
@@ -635,7 +643,7 @@ void main() {
       seedDrainage(c);
       final vBefore = c.read(sizingProvider)['br']!.velocity.metersPerSecond;
 
-      // 1:250 = 0.004 m/m, under the engine's 0.005 minimum-slope threshold.
+      // 1:250 = 0.004 m/m, under every per-DN minimum-slope threshold.
       c.read(drainageSlopeProvider.notifier).set(0.004);
       expect(c.read(drainageSlopeProvider), 0.004);
 

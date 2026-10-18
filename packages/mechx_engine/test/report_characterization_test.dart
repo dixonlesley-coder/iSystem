@@ -109,8 +109,13 @@ void main() {
       // shaft 0.975·63.9/0.85 = 73.3 kW ≤ the 75 kW frame ⇒ 'Motor within
       // standard frame range'); the jockey 1 % = 0.47 L/s. Line count
       // unchanged.
+      // Re-baselined 2026-10-18 (Round 9 report-parity-enum-names-leak): the
+      // sprinkler line prints the hazard LABEL ('OH1 ordinary hazard group 1')
+      // instead of the raw Dart identifier 'ordinaryHazard1'. Verified as the
+      // SOLE delta: substituting the identifier back reproduces 0x4cc8f1a3.
+      // Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0x4cc8f1a3);
+      expect(fnv1a32(md), 0x63072abe);
     });
   });
 
@@ -164,7 +169,7 @@ void main() {
       // the irreducible figure as a note. No `- _WARN_:` bullet survives.
       expect(md, contains('## Warnings'));
       expect(md, isNot(contains('- _WARN_')));
-      expect(md, contains('- _INFO_: Phase loading is unbalanced by '));
+      expect(md, contains('- _INFO_: [phase-imbalance-inherent] Phase loading is unbalanced by '));
       expect(md, contains('inherent to the single-phase load set'));
       // Interlock bullet under its own sub-heading.
       expect(md,
@@ -201,8 +206,14 @@ void main() {
       // — 2 panel bullets + their 2 bullet-group lines, the restored
       // '## Warnings' heading + its blank line, and 2 system bullets + 1 blank
       // line (+9 lines: 78 -> 87).
+      // Re-baselined 2026-10-18 (Round 9): (a) the 'Standard:' line carries
+      // the short PUIL edition label — the ~80-word provenance paragraph moved
+      // to `PuilProfile.provenanceNote` (honesty surface); (b) the way table's
+      // Type cell prints the LoadKind label ('HVAC', not 'hvac'); (c) each
+      // warning names its code ('[phase-imbalance-inherent] '). Verified as the
+      // SOLE deltas: reverting (a)-(c) reproduces 0x775ce2e6. Lines unchanged.
       expect(md.split('\n').length, 87);
-      expect(fnv1a32(md), 0x775ce2e6);
+      expect(fnv1a32(md), 0xf53d8f);
     });
   });
 
@@ -296,8 +307,12 @@ void main() {
       // Re-baselined 2026-10-18 (audit r8 fire-hvac-2): the embedded
       // mechanical body's three fire lines move with the 500 gpm riser flow
       // (see the mechanical pin above). Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 9): the embedded bodies carry the
+      // standalone pins' deltas (hazard label; short PUIL edition label, incl.
+      // the design-basis 'Electrical standard' row; HVAC Type label; coded
+      // warnings). Reverting them reproduces 0xed1f728e. Lines unchanged.
       expect(md.split('\n').length, 228);
-      expect(fnv1a32(md), 0xed1f728e);
+      expect(fnv1a32(md), 0xa4c41871);
     });
   });
 

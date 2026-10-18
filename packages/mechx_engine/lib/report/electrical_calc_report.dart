@@ -70,6 +70,15 @@ class ElectricalCalcReportData {
   /// Null ⇒ the legacy behaviour (core warnings only) ⇒ byte-identical.
   final List<ElectricalWarning>? allWarnings;
 
+  /// Round 9 (report-parity-engine-messages-english) — the standards
+  /// PROVENANCE note (e.g. `PuilProfile.provenanceNote`: how the values were
+  /// sourced and what remains unconfirmed). It belongs with the honesty
+  /// surface, so it prints as the first row of the 'Unverified values'
+  /// section — never as the report head's / PDF cover's 'Standard:' line,
+  /// which carries only the short [standardsRevision] edition label. Null ⇒
+  /// omitted.
+  final String? standardsProvenance;
+
   const ElectricalCalcReportData({
     required this.projectName,
     required this.date,
@@ -83,6 +92,7 @@ class ElectricalCalcReportData {
     this.busbarClearingTimeS,
     this.revisions = const [],
     this.allWarnings,
+    this.standardsProvenance,
   });
 }
 
@@ -338,7 +348,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
           for (final c in branches)
             [
               _md(c.name),
-              c.loadKind.name,
+              loadKindLabel(c.loadKind, strings),
               _a(c.designCurrent.amperes),
               c.phase.label,
               // An MCCB has no B/C/D trip characteristic — print the curve
@@ -380,7 +390,8 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     if (panelWarnings.isNotEmpty) {
       blocks.add(RptKeyValue([
         for (final w in panelWarnings)
-          ('', '_${_severityTag(w.severity)}_: ${w.message}'),
+          ('',
+              '_${_severityTag(w.severity)}_: ${strings.format(RptStringKey.warnLeadIn, {'code': w.code})}${w.message}'),
       ]));
     }
   }
@@ -409,7 +420,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         for (final node in ol.nodes)
           (
             '',
-            '${node.label} (${node.kind.name})'
+            '${node.label} (${powerNodeKindLabel(node.kind, strings)})'
                 '${node.sub != null ? ' — ${node.sub}' : ''}'
           ),
       ]));
@@ -418,7 +429,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         ..add(RptHeading(3, strings(RptStringKey.headingSourceInterlocks)))
         ..add(RptKeyValue([
           for (final il in ol.interlocks)
-            ('', '_${il.kind.name}_: ${il.note}'),
+            ('', '_${interlockKindLabel(il.kind, strings)}_: ${il.note}'),
         ]));
     }
   }
@@ -432,16 +443,21 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
       ..add(RptHeading(2, strings(RptStringKey.headingWarnings)))
       ..add(RptKeyValue([
         for (final w in systemWarnings)
-          ('', '_${_severityTag(w.severity)}_: ${w.message}'),
+          ('',
+              '_${_severityTag(w.severity)}_: ${strings.format(RptStringKey.warnLeadIn, {'code': w.code})}${w.message}'),
       ]));
   }
 
   // ── Unverified values ──────────────────────────────────────────────────────
-  if (data.verifyItems.isNotEmpty) {
+  final provenance = data.standardsProvenance;
+  if (data.verifyItems.isNotEmpty || provenance != null) {
     blocks
       ..add(RptHeading(2, strings(RptStringKey.headingUnverifiedElec)))
       ..add(RptParagraph(strings(RptStringKey.unverifiedElecIntro)))
-      ..add(RptKeyValue([for (final v in data.verifyItems) ('', v)]));
+      ..add(RptKeyValue([
+        if (provenance != null) ('', provenance),
+        for (final v in data.verifyItems) ('', v),
+      ]));
   }
 
   return blocks;

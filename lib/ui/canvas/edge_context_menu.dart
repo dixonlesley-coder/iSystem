@@ -115,6 +115,11 @@ String? cornerJoinPartner(Network net, String nodeId,
     }
     final oe = soleDanglingRunEdge(net, other.id);
     if (oe == null || oe.id == edge.id || oe.service != edge.service) continue;
+    // Round 9 (mech-store-fuzz-6) — two stubs off the SAME tee meet at that
+    // tee: 'Fix corner' would collapse both, so never offer it.
+    final anchor = edge.fromId == nodeId ? edge.toId : edge.fromId;
+    final otherAnchor = oe.fromId == other.id ? oe.toId : oe.fromId;
+    if (anchor == otherAnchor) continue;
     final dx = other.x - node.x;
     final dy = other.y - node.y;
     final d2 = dx * dx + dy * dy;

@@ -251,7 +251,8 @@ Network buildNetwork() {
 }
 
 // ── Sizing (mirrors lib/store/sizing_store.dart) ─────────────────────────────
-Map<String, EdgeSizing> sizeNetwork(Network net) {
+Map<String, EdgeSizing> sizeNetwork(Network net,
+    {Map<String, double>? fixtureUnitsOut}) {
   const profile = SniProfile();
   const occupancy = Occupancy.public;
   final nodeFixtureUnits = <String, double>{
@@ -296,36 +297,8 @@ Map<String, EdgeSizing> sizeNetwork(Network net) {
     flushSystem: anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
     building: building,
     calibrationBySheet: calibrations,
+    fixtureUnitsOut: fixtureUnitsOut,
   );
-}
-
-// N16: per-edge accumulated fixture units for the calc-report run/riser
-// schedule — cold-water UBAP (rooted at the ground tank) + drainage DFU (rooted
-// at the ground exit), the same node loads the sizing uses.
-Map<String, double> buildEdgeFixtureUnits(Network net) {
-  const profile = SniProfile();
-  const occupancy = Occupancy.public;
-  final cwUnits = <String, double>{
-    for (final n in net.nodes)
-      if (n.fixture != null)
-        n.id: profile.fixtureUnitLoad(n.fixture!, occupancy: occupancy),
-  };
-  final drUnits = <String, double>{
-    for (final n in net.nodes)
-      if (n.fixture != null) n.id: drainageFixtureUnit(n.fixture!),
-  };
-  return <String, double>{
-    ...accumulateFixtureUnits(
-        net: net,
-        service: ServiceType.coldWater,
-        rootId: 'cw-gtank',
-        terminalUnits: cwUnits),
-    ...accumulateFixtureUnits(
-        net: net,
-        service: ServiceType.drainage,
-        rootId: 'dr-exit',
-        terminalUnits: drUnits),
-  };
 }
 
 // ── Mechanical duties: DERIVED from the one solve (mirrors solve_store) ──────
@@ -595,7 +568,11 @@ void main(List<String> args) {
   if (args.isNotEmpty) outDir = args.first;
   Directory(outDir).createSync(recursive: true);
   final net = buildNetwork();
-  final sizing = sizeNetwork(net);
+  // Round 9 — the run schedule's UBAP/DFU column comes from the SAME
+  // accumulation the sizer used (`autoSizeNetwork(fixtureUnitsOut:)`), as the
+  // app does — the harness no longer hand-roots its own copy.
+  final edgeFixtureUnits = <String, double>{};
+  final sizing = sizeNetwork(net, fixtureUnitsOut: edgeFixtureUnits);
   // R3 reports-7: ONE solve feeds every duty (calc report, equipment schedule,
   // riser notes, electrical motor ways).
   final duties = deriveDuties(net, sizing);
@@ -1064,7 +1041,7 @@ void main(List<String> args) {
         net: net,
         sizing: sizing,
         edgeLengths: edgeLengths,
-        edgeFixtureUnits: buildEdgeFixtureUnits(net),
+        edgeFixtureUnits: edgeFixtureUnits,
       ),
       revisions: const [
         Revision('2026-07-06', 'Issued for construction (Rev. 0)'),

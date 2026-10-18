@@ -120,6 +120,9 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   final runSchedule = buildRunSchedule(
     net: net,
     sizing: ref.read(sizingProvider),
+    // Round 9 — the UBAP/DFU basis the sizer accumulated (was never passed,
+    // so the issued schedule printed '—' in every FU cell).
+    edgeFixtureUnits: ref.read(edgeFixtureUnitsProvider),
     edgeLengths: {
       for (final e in net.edges)
         e.id: edgeLength(
@@ -142,8 +145,8 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     mounting: mounting,
     runSchedule: runSchedule,
     feedStrategy: strategy == FeedStrategy.upfeed
-        ? 'Upfeed pump'
-        : 'Roof-tank downfeed',
+        ? reportStringsFor(ref)(RptStringKey.feedUpfeed)
+        : reportStringsFor(ref)(RptStringKey.feedDownfeed),
     targetResidual:
         SupplyDesignCriteria.recommended().targetFixtureResidualPressure,
     pump: ref.read(pumpDutyProvider),
@@ -188,6 +191,7 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
     date: DateTime.now().toIso8601String().split('T').first,
     standardsName: eProfile.name,
     standardsRevision: eProfile.revision,
+    standardsProvenance: eProfile.provenanceNote,
     project: eProject,
     result: eResult,
     powerOneLine: eAdvanced.powerOneLine,
@@ -432,13 +436,15 @@ Future<void> exportCalcReportPdf(WidgetRef ref) => runExportGuarded(
       ...buildCalcReportBlocks(data, reportStringsFor(ref)),
       RptFigure(
         buildLiveRiserSheet(ref, null),
-        caption: 'Mechanical riser single-line diagram',
+        caption: reportStringsFor(ref)(RptStringKey.capMechRiser),
       ),
     ];
     final bytes = reportBlocksToPdf(
       blocks,
-      docTitle: 'MEP Calculation Report',
-      projectName: project.name.isEmpty ? 'Untitled project' : project.name,
+      docTitle: reportStringsFor(ref)(RptStringKey.docCalcReport),
+      projectName: project.name.isEmpty
+          ? reportStringsFor(ref)(RptStringKey.untitledProject)
+          : project.name,
       documentNumber: doc.documentNumber,
       revisionTag: doc.revisionTag,
       dateString: data.date,
@@ -446,6 +452,7 @@ Future<void> exportCalcReportPdf(WidgetRef ref) => runExportGuarded(
       preparedBy: doc.preparedBy,
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
+      strings: reportStringsFor(ref),
     );
     final base = project.name.isEmpty ? 'project' : project.name;
     final full = await pickExportSave(
@@ -525,10 +532,10 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
         compliance: buildComplianceSummary(ref),
         strings: reportStringsFor(ref),
       ),
-      const RptHeading(1, 'Drawings'),
+      RptHeading(1, reportStringsFor(ref)(RptStringKey.headingDrawings)),
       RptFigure(
         buildLiveRiserSheet(ref, null),
-        caption: 'Mechanical riser single-line diagram',
+        caption: reportStringsFor(ref)(RptStringKey.capMechRiser),
       ),
       RptFigure(
         buildElectricalSld(
@@ -536,13 +543,15 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
           result: ref.read(electricalResultProvider),
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
         ),
-        caption: 'Electrical single-line diagram',
+        caption: reportStringsFor(ref)(RptStringKey.capElecSld),
       ),
     ];
     final bytes = reportBlocksToPdf(
       blocks,
-      docTitle: 'MEP Building-Services Report',
-      projectName: project.name.isEmpty ? 'Untitled project' : project.name,
+      docTitle: reportStringsFor(ref)(RptStringKey.docMepReport),
+      projectName: project.name.isEmpty
+          ? reportStringsFor(ref)(RptStringKey.untitledProject)
+          : project.name,
       documentNumber: doc.documentNumber,
       revisionTag: doc.revisionTag,
       dateString: mechanical.date,
@@ -552,6 +561,7 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
       preparedBy: doc.preparedBy,
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
+      strings: reportStringsFor(ref),
     );
 
     final base = project.name.isEmpty ? 'project' : project.name;
@@ -676,7 +686,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     pumps.add(
       PumpScheduleItem(
         duty: supplyPump,
-        service: 'Domestic water supply',
+        service: reportStringsFor(ref)(RptStringKey.esSvcDomesticWater),
         tag: tag,
         modelSpec: specs[tag],
       ),
@@ -689,7 +699,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     pumps.add(
       PumpScheduleItem(
         duty: firePump,
-        service: 'Fire standpipe pump',
+        service: reportStringsFor(ref)(RptStringKey.esSvcFireStandpipe),
         tag: tag,
         modelSpec: specs[tag],
       ),
@@ -716,7 +726,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     fans.add(
       FanScheduleItem(
         duty: ductFan,
-        service: 'Mechanical ventilation',
+        service: reportStringsFor(ref)(RptStringKey.esSvcMechVent),
         tag: tag,
         modelSpec: specs[tag],
       ),
@@ -733,7 +743,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     fans.add(
       FanScheduleItem(
         duty: exhaustFan,
-        service: 'Exhaust ventilation',
+        service: reportStringsFor(ref)(RptStringKey.esSvcExhaustVent),
         tag: tag,
         modelSpec: specs[tag],
       ),
@@ -926,7 +936,8 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
   ).writeAsString(buildEquipmentScheduleMarkdown(data, reportStringsFor(ref)));
   await File(
     '$stem.csv',
-  ).writeAsString(equipmentScheduleToCsv(buildEquipmentScheduleRows(data)));
+  ).writeAsString(equipmentScheduleToCsv(
+        buildEquipmentScheduleRows(data, reportStringsFor(ref))));
   return true;
 }
 
@@ -942,14 +953,17 @@ Future<void> exportEquipmentSchedulePdf(WidgetRef ref) => runExportGuarded(
     final doc = ref.read(documentControlProvider);
     final bytes = reportBlocksToPdf(
       buildEquipmentScheduleBlocks(data, reportStringsFor(ref)),
-      docTitle: 'Equipment Schedule',
-      projectName: project.name.isEmpty ? 'Untitled project' : project.name,
+      docTitle: reportStringsFor(ref)(RptStringKey.docEquipSchedule),
+      projectName: project.name.isEmpty
+          ? reportStringsFor(ref)(RptStringKey.untitledProject)
+          : project.name,
       documentNumber: doc.documentNumber,
       revisionTag: doc.revisionTag,
       dateString: data.date,
       preparedBy: doc.preparedBy,
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
+      strings: reportStringsFor(ref),
     );
     final base = project.name.isEmpty ? 'project' : project.name;
     final full = await pickExportSave(
@@ -1461,10 +1475,10 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
         ...buildCalcReportBlocks(mech, strings),
         RptFigure(
           buildLiveRiserSheet(ref, null),
-          caption: 'Mechanical riser single-line diagram',
+          caption: reportStringsFor(ref)(RptStringKey.capMechRiser),
         ),
       ],
-      docTitle: 'MEP Calculation Report',
+      docTitle: reportStringsFor(ref)(RptStringKey.docCalcReport),
       projectName: base,
       documentNumber: doc.documentNumber,
       revisionTag: doc.revisionTag,
@@ -1473,6 +1487,7 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       preparedBy: doc.preparedBy,
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
+      strings: reportStringsFor(ref),
     ),
   );
 
@@ -1493,10 +1508,10 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
           compliance: compliance,
           strings: strings,
         ),
-        const RptHeading(1, 'Drawings'),
+        RptHeading(1, reportStringsFor(ref)(RptStringKey.headingDrawings)),
         RptFigure(
           buildLiveRiserSheet(ref, null),
-          caption: 'Mechanical riser single-line diagram',
+          caption: reportStringsFor(ref)(RptStringKey.capMechRiser),
         ),
         RptFigure(
           buildElectricalSld(
@@ -1504,10 +1519,10 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
             result: ref.read(electricalResultProvider),
             breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           ),
-          caption: 'Electrical single-line diagram',
+          caption: reportStringsFor(ref)(RptStringKey.capElecSld),
         ),
       ],
-      docTitle: 'MEP Building-Services Report',
+      docTitle: reportStringsFor(ref)(RptStringKey.docMepReport),
       projectName: base,
       documentNumber: doc.documentNumber,
       revisionTag: doc.revisionTag,
@@ -1518,6 +1533,7 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       preparedBy: doc.preparedBy,
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
+      strings: reportStringsFor(ref),
     ),
   );
 
@@ -1528,11 +1544,12 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
   ).writeAsString(buildEquipmentScheduleMarkdown(sched, strings));
   await File(
     out('equipment-schedule.csv'),
-  ).writeAsString(equipmentScheduleToCsv(buildEquipmentScheduleRows(sched)));
+  ).writeAsString(equipmentScheduleToCsv(
+        buildEquipmentScheduleRows(sched, strings)));
   await File(out('equipment-schedule.pdf')).writeAsBytes(
     reportBlocksToPdf(
       buildEquipmentScheduleBlocks(sched, strings),
-      docTitle: 'Equipment Schedule',
+      docTitle: reportStringsFor(ref)(RptStringKey.docEquipSchedule),
       projectName: base,
       documentNumber: doc.documentNumber,
       revisionTag: doc.revisionTag,
@@ -1540,6 +1557,7 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       preparedBy: doc.preparedBy,
       checkedBy: doc.checkedBy,
       approvedBy: doc.approvedBy,
+      strings: reportStringsFor(ref),
     ),
   );
 
