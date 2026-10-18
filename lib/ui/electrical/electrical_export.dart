@@ -526,8 +526,12 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
                 for (final v in profile.verifyChecklist)
                   '${v.citation}${v.note == null ? '' : ' — ${v.note}'}',
               ],
-              originFaultLevelA: effectiveOriginFaultLevel(project).amperes,
-              faultLevelBasis: effectiveOriginFaultLevel(project).basis,
+              originFaultLevelA: effectiveOriginFaultLevel(project,
+                      demand: result.supply.demandVa)
+                  .amperes,
+              faultLevelBasis: effectiveOriginFaultLevel(project,
+                      demand: result.supply.demandVa)
+                  .basis,
               busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
               revisions: ref.read(documentControlProvider).revisions,
               // R1 — the issued report prints the SAME combined warning

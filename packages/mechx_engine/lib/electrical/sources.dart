@@ -594,14 +594,28 @@ GensetStartResult assessGensetStart(
 ///
 /// [backupDemand] is the apparent power the genset must back (the essential bus,
 /// or `backupFraction` × the building demand — resolved by the caller).
+///
+/// Round 16 (supply-sources-genset-kw-limit-ignored) — [backupPower] is the
+/// REAL power of that backup load. A set rated S kVA delivers only
+/// [kGeneratorPf] × S kW, so the rating must cover BOTH:
+/// `required = max(S_backup, P_backup / 0.8)` (× 1.25 for prime). A load at
+/// cos φ 0.95 (90 kW, 94.7 kVA) needs 112.5 kVA (the 125 kVA rung), not the
+/// 100 kVA / 80 kW set the kVA alone selected. The fuel / day-tank figures
+/// burn at the real kW. Null ⇒ the load is taken at 0.8 (byte-identical).
 GeneratorResult sizeGenerator(
   ApparentPower backupDemand, {
   GeneratorMode mode = GeneratorMode.standby,
   GeneratorTransfer transfer = GeneratorTransfer.ats,
   ApparentPower? forcedKva,
+  Power? backupPower,
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
-  final required = mode == GeneratorMode.prime ? backupKva * 1.25 : backupKva;
+  final backupKw = backupPower?.inKiloWatts;
+  final governingKva = backupKw != null && backupKw / kGeneratorPf > backupKva
+      ? backupKw / kGeneratorPf
+      : backupKva;
+  final required =
+      mode == GeneratorMode.prime ? governingKva * 1.25 : governingKva;
   final sel = forcedKva != null
       ? (unitKva: forcedKva, units: 1)
       : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));
@@ -615,7 +629,7 @@ GeneratorResult sizeGenerator(
 
   // Fuel & runtime: diesel burns ~0.25 l/kWh; size a day-tank for the standard
   // runtime so the standby deliverable carries autonomy like the battery does.
-  final loadKw = backupKva * kGeneratorPf;
+  final loadKw = backupKw ?? backupKva * kGeneratorPf;
   final fuelLph = _round(loadKw * kGensetSfcLPerKwh, 1);
   const runtimeHours = kGensetDayTankHours;
   // Round the day-tank up to the next 10 L, with a 10 L floor.
@@ -635,7 +649,8 @@ GeneratorResult sizeGenerator(
     dayTankL: dayTankL,
     runtimeHours: runtimeHours,
     units: units,
-    note: '${mode.label} genset backing ${_round(backupKva, 1)} kVA → '
+    note: '${mode.label} genset backing ${_round(backupKva, 1)} kVA'
+        '${backupKw != null ? ' / ${_round(backupKw, 1)} kW' : ''} → '
         '${units > 1 ? '$units x ' : ''}${_fmt(ratingKva.inKilovoltAmperes)} kVA'
         '${units > 1 ? ' (exceeds the largest standard genset — paralleled '
             'sets with synchronising panel)' : ''}. $transferText$fuelText',

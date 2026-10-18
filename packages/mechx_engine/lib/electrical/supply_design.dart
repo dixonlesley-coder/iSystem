@@ -21,7 +21,7 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart';
-import 'model.dart' show ElectricalSystem;
+import 'model.dart' show ElectricalProject, ElectricalSystem;
 
 // ── Local reference constants (`// VERIFY`) ─────────────────────────────────
 
@@ -109,6 +109,15 @@ class SupplyDesign {
   /// unit at 120 %+ loading against the 80 % design basis).
   final bool ladderExceeded;
 
+  /// Round 16 — true when the arrangement is the DECLARED transformer
+  /// ([determineSupply] `declaredKva`) and that rating, loaded to
+  /// [transformerLoadingFactor], is below the demand it carries.
+  final bool declaredBelowDemand;
+
+  /// Round 16 — true when [transformerKva] is the engineer's declared rating
+  /// rather than a ladder selection.
+  final bool declared;
+
   /// Transformer short-circuit impedance (%) — null on an LV service.
   final double? impedancePct;
 
@@ -132,6 +141,8 @@ class SupplyDesign {
     this.transformerKva,
     required this.units,
     this.ladderExceeded = false,
+    this.declaredBelowDemand = false,
+    this.declared = false,
     this.impedancePct,
     this.primaryFlc,
     this.secondaryFlc,
@@ -176,15 +187,58 @@ double _round1(double x) => (x * 10).round() / 10;
 /// units each sized for HALF the demand, on split bus sections behind a
 /// normally-open coupler — the boards' fault level is one unit's (the coupler
 /// never parallels them).
+///
+/// Round 16 (supply-sources-declared-tx-ignored-by-study) — a DECLARED
+/// customer transformer ([declaredKva], `ElectricalProject.transformerKva`)
+/// IS the arrangement: the service is MV whatever the demand, the declared
+/// rating is reported (one unit, or two on a [dualTransformer] service), no
+/// ladder pick is made, and [SupplyDesign.declaredBelowDemand] flags a unit
+/// whose 80 %-loaded rating is below the demand it carries (each section's
+/// half on a dual service). The study used to ignore it and print 'LV
+/// direct · daya 164 kVA' beside drawings showing a 630 kVA substation.
 SupplyDesign determineSupply(
   ApparentPower demand, {
   Voltage lvVoltage = const Voltage(400),
   bool dualTransformer = false,
+  ApparentPower? declaredKva,
 }) {
   final demandKva = _round1(demand.inKilovoltAmperes);
   final verify = <String>[
     'LV/MV threshold $lvSupplyLimitKva kVA — secondary source (verify vs PLN LV practice).',
   ];
+
+  final declared = declaredKva?.inKilovoltAmperes;
+  if (declared != null && declared > 0) {
+    const mvV = Voltage(mvVoltageV);
+    verify.add('Transformer loading factor $transformerLoadingFactor and Z% '
+        '$transformerImpedancePct — secondary source (design practice).');
+    final carried = dualTransformer
+        ? demand.inKilovoltAmperes / 2
+        : demand.inKilovoltAmperes;
+    final below = declared * transformerLoadingFactor < carried - 1e-9;
+    final unitsText = dualTransformer ? '2 × ' : '';
+    return SupplyDesign(
+      lvOrMv: SupplyLevel.mv,
+      demandKva: demandKva,
+      lvVoltage: lvVoltage,
+      mvVoltage: mvV,
+      transformerKva: declared,
+      units: dualTransformer ? 2 : 1,
+      declared: true,
+      declaredBelowDemand: below,
+      impedancePct: transformerImpedancePct,
+      primaryFlc: Current(_round1(_transformerFlc(declared, mvV).amperes)),
+      secondaryFlc:
+          Current(_transformerFlc(declared, lvVoltage).amperes.roundToDouble()),
+      note: 'Declared customer transformer: $unitsText${_fmtKva(declared)} kVA '
+          'MV supply (20 kV) for the $demandKva kVA demand.'
+          '${below ? ' At ${(transformerLoadingFactor * 100).round()} % '
+              'loading it carries ${_fmtKva(_round1(declared * transformerLoadingFactor))} kVA '
+              '— below the ${_fmtKva(_round1(carried))} kVA ${dualTransformer ? 'each section carries' : 'demand'}; '
+              'raise the rating.' : ''}',
+      verifyItems: verify,
+    );
+  }
 
   if (!dualTransformer && demand.inKilovoltAmperes <= lvSupplyLimitKva) {
     return SupplyDesign(
@@ -315,4 +369,26 @@ String _thousands(double va) {
     buf.write(digits[i]);
   }
   return buf.toString();
+}
+
+/// Round 16 (supply-sources-dual-tx-spine-genset-ladder) — the service
+/// transformer the DRAWINGS and the equipment schedule print, from the SAME
+/// [determineSupply] the study reports: the declared rating when one is set
+/// (one unit, or two on a dual service), else — on an undeclared
+/// dual-transformer service — the study's own `2 × (demand / 2 / 0.8)` pick
+/// on the IEC [transformerKvaLadder] (never the genset ladder at 100 % of the
+/// whole demand). Null when the project declares no MV service, or an
+/// undeclared one has no demand to size from.
+({double kva, int units})? serviceTransformer(
+    ElectricalProject project, ApparentPower demand) {
+  final declared = project.transformerKva;
+  final hasDeclared = declared != null && declared.inKilovoltAmperes > 0;
+  if (!hasDeclared && !project.dualTransformer) return null;
+  if (!hasDeclared && demand.voltAmperes <= 0) return null;
+  final s = determineSupply(demand,
+      dualTransformer: project.dualTransformer,
+      declaredKva: hasDeclared ? declared : null);
+  final kva = s.transformerKva;
+  if (kva == null || kva <= 0) return null;
+  return (kva: kva, units: s.units);
 }

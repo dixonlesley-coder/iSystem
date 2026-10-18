@@ -687,6 +687,9 @@ enum StringKey {
   issueUpfeedOverPressureTitle,
   issueUpfeedOverReliefTitle,
   issueUpfeedOverPressureMessage, // {floor} {flowing} {static} {limit} {relief}
+  issueDownfeedOverPressureTitle,
+  issueDownfeedOverReliefTitle,
+  issueDownfeedOverPressureMessage, // {floor} {flowing} {static} {limit} {relief}
 
   // I6 — document-control revision inconsistency (revision history logged but
   // the title-block Revision left blank).
@@ -1946,6 +1949,15 @@ const Map<StringKey, String> _en = {
       'no flow from the upfeed pump, above the SNI max fixture pressure of '
       '{limit} kPa (pressure relief is mandatory from {relief} kPa). Zone the '
       'riser with PRVs on the lower floors.',
+  StringKey.issueDownfeedOverPressureTitle:
+      'Downfeed fixture over the pressure limit',
+  StringKey.issueDownfeedOverReliefTitle:
+      'Downfeed fixture over the pressure-relief limit',
+  StringKey.issueDownfeedOverPressureMessage:
+      'A fixture on "{floor}" sees {flowing} kPa flowing and {static} kPa at '
+      'no flow from the roof tank, above the SNI max fixture pressure of '
+      '{limit} kPa (pressure relief is mandatory from {relief} kPa). Draw a '
+      'PRV on the riser above this zone.',
   StringKey.issueRevisionTagMissingTitle: 'Revision not set for logged history',
   StringKey.issueRevisionTagMissingMessage:
       'The revision history has entries but the title-block Revision is blank, '
@@ -3225,6 +3237,15 @@ const Map<StringKey, String> _id = {
       '{static} kPa saat tanpa aliran dari pompa upfeed, di atas tekanan '
       'fikstur maksimum SNI {limit} kPa (pelepas tekanan wajib mulai {relief} '
       'kPa). Bagi riser dengan PRV di lantai bawah.',
+  StringKey.issueDownfeedOverPressureTitle:
+      'Fikstur downfeed melebihi batas tekanan',
+  StringKey.issueDownfeedOverReliefTitle:
+      'Fikstur downfeed melebihi batas pelepas tekanan',
+  StringKey.issueDownfeedOverPressureMessage:
+      'Sebuah fikstur di "{floor}" menerima {flowing} kPa saat mengalir dan '
+      '{static} kPa saat tanpa aliran dari tangki atap, di atas tekanan '
+      'fikstur maksimum SNI {limit} kPa (pelepas tekanan wajib mulai {relief} '
+      'kPa). Pasang PRV pada riser di atas zona ini.',
   StringKey.issueRevisionTagMissingTitle:
       'Revisi belum diisi untuk riwayat yang tercatat',
   StringKey.issueRevisionTagMissingMessage:

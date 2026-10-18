@@ -75,8 +75,21 @@ class PowerFactorResult {
   /// Aggregate reactive demand (kvar) over the leaf loads.
   final double totalKvar;
 
-  /// Existing (uncorrected) power factor (3 dp).
+  /// Existing power factor (3 dp) — Round 16: AFTER the compensation already
+  /// installed ([installedKvar]); equal to [uncorrectedPf] when none is.
   final double existingPf;
+
+  /// Round 16 — the load's own power factor before any installed bank (3 dp).
+  final double uncorrectedPf;
+
+  /// Round 16 — compensation already installed (kvar, as delivered at the
+  /// worst panel ambient): the capacitor ways' ratings, else the project's
+  /// declared `capacitorBankKvar`. 0 when none.
+  final double installedKvar;
+
+  /// Round 16 — true when the installed compensation exceeds the reactive
+  /// demand (the bus runs LEADING).
+  final bool leading;
 
   /// Correction target power factor.
   final double targetPf;
@@ -115,6 +128,9 @@ class PowerFactorResult {
     required this.totalKw,
     required this.totalKvar,
     required this.existingPf,
+    this.uncorrectedPf = 1.0,
+    this.installedKvar = 0,
+    this.leading = false,
     required this.targetPf,
     required this.needed,
     required this.requiredKvar,
@@ -228,10 +244,6 @@ PowerFactorResult powerFactorCorrection(
     }
   }
 
-  final kva = _hypot(kw, kvar);
-  final existingPf = kva > 0 ? kw / kva : 1.0;
-  final needed = existingPf < pfPenaltyThreshold;
-
   // Capacitor output falls with ambient (IEC 60831, ~0.6 %/°C above a 30 °C
   // reference). At an Indonesian PFC-room 45–50 °C the delivered kvar is
   // ~10–15 % low, so the NAMEPLATE bank is oversized to still deliver the
@@ -243,12 +255,40 @@ PowerFactorResult powerFactorCorrection(
   final tempDerate =
       ambientC > 30 ? math.max(0.85, 1 - 0.006 * (ambientC - 30)) : 1.0;
 
+  // Round 16 (supply-sources-installed-pfc-ignored) — compensation ALREADY
+  // installed: every capacitor way's rating (a capacitor way's `loadW` is its
+  // kvar), else the project's declared `capacitorBankKvar` when no way models
+  // it — as delivered hot (× the same ambient derate the new bank is
+  // oversized for). An automatic bank switches up to its rating, so no load
+  // diversity applies to it. The study used to drop the bank from the
+  // aggregate without subtracting it, so an installed 75 kvar bank still read
+  // pf 0.75 and was told to fit a SECOND 75 kvar bank (150 kvar against
+  // 105.8 kvar of demand — a leading bus).
+  var installedRated = 0.0;
+  for (final panel in project.panels) {
+    for (final c in panel.circuits) {
+      if (c.loadKind == LoadKind.capacitor && c.loadW > 0) {
+        installedRated += c.loadW / 1000.0;
+      }
+    }
+  }
+  if (installedRated <= 0) installedRated = project.capacitorBankKvar ?? 0;
+  final installedKvar = installedRated * tempDerate;
+  final uncorrectedKva = _hypot(kw, kvar);
+  final uncorrectedPf = uncorrectedKva > 0 ? kw / uncorrectedKva : 1.0;
+  final residualKvar = kvar - installedKvar;
+  final leading = installedKvar > 0 && residualKvar < 0;
+  final kva = _hypot(kw, residualKvar);
+  final existingPf = kva > 0 ? kw / kva : 1.0;
+  // A leading bus is not corrected further (more capacitance only worsens it).
+  final needed = !leading && existingPf < pfPenaltyThreshold;
+
   var requiredKvar = 0.0;
   var bankKvar = 0.0;
   var stepKvar = 0.0;
   var steps = 0;
   var banks = 1;
-  if (existingPf < targetPf && kw > 0) {
+  if (!leading && existingPf < targetPf && kw > 0) {
     final phi1 = math.acos(_clampPf(existingPf));
     final phi2 = math.acos(_clampPf(targetPf));
     requiredKvar = kw * (math.tan(phi1) - math.tan(phi2));
@@ -266,7 +306,15 @@ PowerFactorResult powerFactorCorrection(
   final detuned = harmonicRich && bankKvar > 0;
 
   final existingPfR = _round(existingPf, 2);
-  var note = needed
+  final installedText = installedKvar > 0
+      ? 'With the installed ${_fmt(installedRated)} kVAR of compensation '
+          '(load pf ${_round(uncorrectedPf, 2)}), '
+      : '';
+  var note = leading
+      ? '${installedText}the bus runs LEADING at pf $existingPfR — the '
+          'installed compensation exceeds the ${_round(kvar, 1)} kvar reactive '
+          'demand; reduce the bank (or its automatic steps).'
+      : installedText + (needed
       ? 'Power factor $existingPfR is below the $pfPenaltyThreshold PLN penalty '
           'threshold — fit ${banks > 1 ? '$banks x ${_fmt(bankKvar / banks)} kVAR '
               'automatic banks (exceeds the largest standard bank), total '
@@ -277,7 +325,7 @@ PowerFactorResult powerFactorCorrection(
               '${_fmt(bankKvar)} kVAR bank would raise it to $targetPf and cut '
               'losses.'
           : 'Power factor $existingPfR is already at/above target — no '
-              'correction needed.';
+              '${installedKvar > 0 ? 'further ' : ''}correction needed.');
   if (detuned) {
     note += ' The installation carries significant harmonic distortion — '
         'specify a DETUNED bank (~7% reactors) so the capacitors do not '
@@ -293,6 +341,9 @@ PowerFactorResult powerFactorCorrection(
     totalKw: _round(kw, 1),
     totalKvar: _round(kvar, 1),
     existingPf: _round(existingPf, 3),
+    uncorrectedPf: _round(uncorrectedPf, 3),
+    installedKvar: _round(installedKvar, 1),
+    leading: leading,
     targetPf: targetPf,
     needed: needed,
     requiredKvar: _round(requiredKvar, 1),

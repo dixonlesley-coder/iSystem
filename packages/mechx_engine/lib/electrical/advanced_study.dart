@@ -48,7 +48,11 @@ import 'fault.dart'
         serviceFaultEstimateVerifyItems,
         solvedRunLengthM;
 import 'genset_backup.dart'
-    show gensetBackedPanelIds, gensetBackupDemandVa, gensetBackupWarnings;
+    show
+        gensetBackedPanelIds,
+        gensetBackupDemandVa,
+        gensetBackupDemandW,
+        gensetBackupWarnings;
 import 'harmonics.dart' show HarmonicsResult, ThdBand, estimateHarmonics;
 import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
@@ -238,7 +242,11 @@ AdvancedStudy computeAdvancedStudy(
   // estimate's provenance debt belong on the printed honesty surface below; a
   // project that declares its fault level, or one that falls through to the
   // flat default, adds nothing ⇒ byte-identical.
-  final serviceEstimate = estimatedServiceFaultLevelA(project);
+  // Round 16 — with nothing declared, a demand that needs an MV service
+  // resolves to the transformer the supply study selects (the store's Fold-1
+  // chain resolves the same way, so the device kA and the bus agree).
+  final serviceEstimate = estimatedServiceFaultLevelA(project) ??
+      estimatedServiceFaultLevelA(project, demand: sys.supply.demandVa);
   final serviceEstimateGoverns = originFaultLevel == null &&
       project.originFaultLevelA == null &&
       serviceEstimate != null;
@@ -325,11 +333,16 @@ AdvancedStudy computeAdvancedStudy(
   }
 
   // 5 ── Project-level passes.
+  // Round 16 — a declared transformer IS the arrangement (MV), so no LV daya
+  // is recommended for a service not taken at LV.
   final supply = determineSupply(
     sys.supply.demandVa,
     dualTransformer: project.dualTransformer,
+    declaredKva: project.transformerKva,
   );
-  final daya = recommendedDaya(sys.supply.demandVa, sys.supply.system);
+  final daya = supply.declared
+      ? null
+      : recommendedDaya(sys.supply.demandVa, sys.supply.system);
   final powerFactor = powerFactorCorrection(
     sys,
     project,
@@ -367,6 +380,9 @@ AdvancedStudy computeAdvancedStudy(
       // Round 13 — the genset backs max(fraction × demand, the essential
       // sub-tree's demand), the same basis the spine + schedule print.
       backupDemand: gensetBackupDemandVa(project, sys),
+      // Round 16 — the genset's kW limit + the battery's real critical load.
+      backupPower: gensetBackupDemandW(project, sys),
+      demandPower: Power(sys.supply.demandW),
       voltage: sys.supply.voltage,
       motors: gensetStartMotors(project),
     );

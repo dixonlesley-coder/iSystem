@@ -128,6 +128,8 @@ PowerOneLine buildPowerOneLine(
   Voltage voltage = const Voltage(400),
   List<GensetMotor> motors = const <GensetMotor>[],
   ApparentPower? backupDemand,
+  Power? backupPower,
+  Power? demandPower,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -164,7 +166,7 @@ PowerOneLine buildPowerOneLine(
   // Pre-size the configured sources.
   final gen = sources.generator;
   final genResult =
-      gen == null ? null : _sizeGen(gen, demand, backupDemand);
+      gen == null ? null : _sizeGen(gen, demand, backupDemand, backupPower);
   // Motor-start voltage-dip screen for the sized genset — annotated onto the
   // generator node so the one-line carries the load-acceptance verdict.
   final gensetStart = genResult == null
@@ -183,10 +185,16 @@ PowerOneLine buildPowerOneLine(
 
   final batt = sources.battery;
   // The battery backs the building demand × (1 − genset fraction is not applied
-  // here); its critical load is the demand at the assumed PF for sizing.
+  // here). Round 16 (supply-sources-battery-critical-load-pf) — its critical
+  // load is the REAL demand W ([demandPower]) when known: since Round 14
+  // demandVa is Σ W/cos φ per circuit, so demandVa × 0.8 no longer recovers
+  // the watts (a 90 kW load at cos φ 0.95 read as 75.8 kW — an 80 kW
+  // inverter islanding a 90 kW load). The assumed-PF conversion stays only
+  // as the fallback when no W figure is supplied.
   final batteryResult = batt == null
       ? null
-      : sizeBattery(_demandToPower(demand), autonomyHours: batt.autonomyHours, chemistry: batt.chemistry);
+      : sizeBattery(demandPower ?? _demandToPower(demand),
+          autonomyHours: batt.autonomyHours, chemistry: batt.chemistry);
 
   final solarOn = solarResult != null;
   final battOn = batteryResult != null;
@@ -400,8 +408,8 @@ PowerOneLine buildPowerOneLine(
 /// Size the generator for the one-line: a forced kVA wins, else the resolved
 /// [backupDemand] (Round 13 — `max(fraction × demand, essential demand)` from
 /// `gensetBackupDemandVa`), else the demand × backupFraction.
-GeneratorResult _sizeGen(
-    GeneratorSource gen, ApparentPower demand, ApparentPower? backupDemand) {
+GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
+    ApparentPower? backupDemand, Power? backupPower) {
   final backup = gen.kva ??
       backupDemand ??
       ApparentPower(demand.voltAmperes * gen.backupFraction);
@@ -410,6 +418,7 @@ GeneratorResult _sizeGen(
     mode: gen.mode,
     transfer: gen.transfer,
     forcedKva: gen.kva,
+    backupPower: backupPower,
   );
 }
 

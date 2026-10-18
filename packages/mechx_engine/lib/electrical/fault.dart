@@ -51,6 +51,7 @@ import 'model.dart'
 import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
         ElectricalWarning, WarningSeverity;
+import 'supply_design.dart' show determineSupply, transformerImpedancePct;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Local standards constants (all // VERIFY — define here to stay file-disjoint
@@ -73,11 +74,17 @@ const double serviceFaultLineVoltageV = 400;
 /// an MV/LV distribution transformer, used to estimate the LV-side prospective
 /// fault when a customer transformer rating is declared but its nameplate Z% is
 /// not modelled. 4–6 % covers the common 100…2000 kVA distribution range, so 5 %
-/// is the representative middle; the REAL nameplate Z% governs (a 4 % unit
-/// delivers ~25 % MORE fault current than this estimate).
+/// is the representative middle; the REAL nameplate Z% governs.
+///
+/// Round 16 (supply-sources-undeclared-mv-fault-16ka) — ONE impedance for one
+/// transformer: this is now the supply study's own
+/// [transformerImpedancePct] (4 %), not a separate 5 %. The two used to
+/// disagree, and the 5 % estimate under-stated the fault the study's own 4 %
+/// unit delivers by 20 % — the unsafe direction for a breaking-capacity check
+/// (the LOWER impedance is the conservative one there).
 // VERIFY — secondarySource (representative distribution-transformer impedance;
 // the transformer test certificate governs. Not a PUIL/SNI clause).
-const double representativeTransformerZpu = 0.05;
+const double representativeTransformerZpu = transformerImpedancePct / 100;
 
 /// Upper clamp (kA) on the service-size fault estimate — the top of the device
 /// ladder a specifier realistically lands on for an LV board (see
@@ -272,8 +279,17 @@ const List<String> serviceFaultEstimateVerifyItems = [
 ///    above the PLN TR ceiling with no declared transformer ⇒
 ///    [defaultLvUtilityFaultKa] (no better claim available).
 ///
-/// 3. **Nothing declared** ⇒ `null`. [ElectricalProject.dualTransformer] alone
-///    carries no rating to compute from, so it does NOT count as declared.
+/// 3. **Nothing declared, but the [demand] needs an MV service** (Round 16,
+///    supply-sources-undeclared-mv-fault-16ka) — when the caller passes the
+///    solved building demand and [determineSupply] selects a transformer for
+///    it (above the LV ceiling, or a [ElectricalProject.dualTransformer]
+///    service), the fault is that unit's, by the same formula: one SECTION's
+///    units (a dual service's coupler is normally open), e.g. an 800 kVA
+///    demand ⇒ 1000 kVA at 4 %: 1e6 / (1.732050808·400·0.04) = 36084.4 A —
+///    not the flat 16 kA, which specified every device kA token at under half
+///    the fault the study's own transformer delivers.
+///
+/// 4. **Nothing declared, LV demand** ⇒ `null`.
 ///
 /// A declared value that is zero or negative is treated as undeclared (it falls
 /// through to the next step). The returned current is rounded to 0.1 A.
@@ -288,7 +304,8 @@ const List<String> serviceFaultEstimateVerifyItems = [
 /// secondary-source distribution practice, none of it an SNI/PUIL clause. The
 /// debt is carried in [serviceFaultEstimateVerifyItems] pending the follow-up
 /// that wires it into the honesty surfaces.
-Current? estimatedServiceFaultLevelA(ElectricalProject project) {
+Current? estimatedServiceFaultLevelA(ElectricalProject project,
+    {ApparentPower? demand}) {
   // 1. Customer transformer declared ⇒ transformer-impedance-limited fault.
   final txVa = project.transformerKva?.voltAmperes;
   if (txVa != null && txVa > 0) {
@@ -314,8 +331,30 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project) {
     return Current.kiloamperes(defaultLvUtilityFaultKa);
   }
 
-  // 3. Nothing declared (dualTransformer alone has no rating) ⇒ no claim; the
-  //    caller keeps its flat default.
+  // 3. Nothing declared, but the demand needs a transformer ⇒ the unit the
+  //    supply study itself selects (one section's units: coupler N.O.).
+  if (demand != null && demand.voltAmperes > 0) {
+    final supply =
+        determineSupply(demand, dualTransformer: project.dualTransformer);
+    final kva = supply.transformerKva;
+    if (supply.isMv && kva != null && kva > 0) {
+      final perSection =
+          project.dualTransformer ? supply.units ~/ 2 : supply.units;
+      final va = kva * 1000 * math.max(1, perSection);
+      final iscA = va /
+          (math.sqrt(3) *
+              serviceFaultLineVoltageV *
+              (supply.impedancePct ?? transformerImpedancePct) /
+              100);
+      return Current(_round(
+        math.min(iscA, maxEstimatedServiceFaultKa * 1000.0),
+        1,
+      ));
+    }
+  }
+
+  // 4. Nothing declared, LV demand (dualTransformer alone has no rating) ⇒
+  //    no claim; the caller keeps its flat default.
   return null;
 }
 

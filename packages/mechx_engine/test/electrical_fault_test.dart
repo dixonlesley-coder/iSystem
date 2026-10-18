@@ -356,20 +356,21 @@ void main() {
     );
 
     test('declared transformer ⇒ Isc = S/(√3·U·Zpu)', () {
-      // 630 kVA at the representative 5 % p.u., referred to 400 V:
-      //   √3·400·0.05 = 1.732050808·400·0.05 = 34.641016151
-      //   Isc = 630000 / 34.641016151 = 18186.5335 A → rounded to 0.1 A.
+      // 630 kVA at the representative 4 % p.u. (Round 16: the supply study's
+      // own transformerImpedancePct — one Z for one transformer), at 400 V:
+      //   √3·400·0.04 = 1.732050808·400·0.04 = 27.712812921
+      //   Isc = 630000 / 27.712812921 = 22733.1668 A → rounded to 0.1 A.
       const project = ElectricalProject(
         id: 'e1',
         name: 'Tx',
         panels: [mdp],
         transformerKva: ApparentPower(630000),
       );
-      expect(estimatedServiceFaultLevelA(project)!.amperes, 18186.5);
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 22733.2);
     });
 
     test('a huge transformer clamps at the 50 kA ceiling', () {
-      // 5000 kVA: 5000000 / 34.641016151 = 144337.6 A — far past any LV device
+      // 5000 kVA: 5000000 / 27.712812921 = 180422.0 A — far past any LV device
       // ladder, so the estimate is clamped to maxEstimatedServiceFaultKa.
       const project = ElectricalProject(
         id: 'e2',
@@ -436,8 +437,8 @@ void main() {
         transformerKva: ApparentPower(630000),
         supplyCapacityVa: ApparentPower(5500),
       );
-      // The transformer branch (18186.5 A), not the 6 kA capacity rung.
-      expect(estimatedServiceFaultLevelA(project)!.amperes, 18186.5);
+      // The transformer branch (22733.2 A), not the 6 kA capacity rung.
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 22733.2);
     });
 
     test('a non-positive declaration falls through to the next step', () {

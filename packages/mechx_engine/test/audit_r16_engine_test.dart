@@ -9,7 +9,15 @@
 //                                   intake: no phantom 50 L/s supply load,
 //                                   sized on the unit's delivered airflow,
 //                                   flowing INTO the unit.
+//   downfeed-prv                    a drawn PRV holds its setpoint below it
+//                                   in the gravity solve, and the downfeed
+//                                   delivery nodes are judged for fixture
+//                                   over-pressure.
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/report/riser_tags.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -166,8 +174,8 @@ void main() {
         ], edges: [
           NetEdge(id: 'oa1', fromId: oaId, toId: ahuId, service: ServiceType.duct),
           NetEdge(id: 'aj', fromId: ahuId, toId: 'j', service: ServiceType.duct),
-          NetEdge(id: 'j1', fromId: 'j', toId: 'd1', service: ServiceType.duct),
-          NetEdge(id: 'j2', fromId: 'j', toId: 'd2', service: ServiceType.duct),
+          const NetEdge(id: 'j1', fromId: 'j', toId: 'd1', service: ServiceType.duct),
+          const NetEdge(id: 'j2', fromId: 'j', toId: 'd2', service: ServiceType.duct),
         ]);
 
     test('intake carries the delivered 0.3 + 0.3 = 0.6 m³/s INTO the AHU', () {
@@ -192,6 +200,145 @@ void main() {
         ].fold<double>(0, (a, b) => a + b);
         expect(leaving, closeTo(0.6, 1e-12));
       }
+    });
+  });
+
+  group('downfeed-prv', () {
+    // 20 floors × 3.5 m; roof tank at the roof (70 m). A gravity riser of
+    // ceiling mains m_i (3.5·i + 3.2 m) with one fixture f_i per floor at
+    // 3.5·i + 1.1 m. FRICTIONLESS (no sizing) so every figure is exact:
+    // head(f_i) = 70 − (3.5·i + 1.1).
+    final building = BuildingLevels(
+        [for (var i = 0; i < 20; i++) Floor('L$i', const Length(3.5))]);
+    const target = Pressure(225000);
+    final targetHead = headFromPressure(target).meters;
+
+    Network build(Set<int> prvFloors) {
+      final nodes = <NetNode>[
+        const NetNode(
+            id: 'RT',
+            sheetId: 's',
+            x: 0,
+            y: 0,
+            floorIndex: 19,
+            role: NodeRole.plant,
+            component: NodeComponent.roofTank),
+      ];
+      final edges = <NetEdge>[];
+      var above = 'RT';
+      for (var i = 19; i >= 0; i--) {
+        if (prvFloors.contains(i)) {
+          nodes.add(NetNode(
+              id: 'P$i',
+              sheetId: 's',
+              x: 0,
+              y: 0,
+              floorIndex: i,
+              component: NodeComponent.prv));
+          edges.add(NetEdge(
+              id: 'rp$i',
+              fromId: above,
+              toId: 'P$i',
+              service: ServiceType.coldWater,
+              kind: EdgeKind.riser));
+          above = 'P$i';
+          nodes.add(NetNode(id: 'm$i', sheetId: 's', x: 0, y: 0, floorIndex: i));
+          edges.add(NetEdge(
+              id: 'pm$i',
+              fromId: above,
+              toId: 'm$i',
+              service: ServiceType.coldWater));
+        } else {
+          nodes.add(NetNode(id: 'm$i', sheetId: 's', x: 0, y: 0, floorIndex: i));
+          edges.add(NetEdge(
+              id: 'r$i',
+              fromId: above,
+              toId: 'm$i',
+              service: ServiceType.coldWater,
+              kind: EdgeKind.riser));
+        }
+        nodes.add(NetNode(
+            id: 'f$i',
+            sheetId: 's',
+            x: 40,
+            y: 0,
+            floorIndex: i,
+            role: NodeRole.fixture));
+        edges.add(NetEdge(
+            id: 'b$i',
+            fromId: 'm$i',
+            toId: 'f$i',
+            service: ServiceType.coldWater));
+        above = 'm$i';
+      }
+      return Network(nodes: nodes, edges: edges);
+    }
+
+    DownfeedSolution solve(Set<int> prvs) => solveDownfeed(
+          net: build(prvs),
+          service: ServiceType.coldWater,
+          tankId: 'RT',
+          edgeFlows: const {},
+          sizing: const {},
+          calibrationBySheet: const {'s': ScaleCalibration(0.01)},
+          building: building,
+          targetResidual: target,
+        );
+
+    double kpa(double head) => pressureFromHead(Head(head)).inKiloPascals;
+
+    test('no PRV: the ground fixture reads 70 − 1.1 = 68.9 m, over relief', () {
+      final s = solve(const {});
+      expect(s.residualPressure['f0']!.inKiloPascals, closeTo(kpa(68.9), 1e-6));
+      final over = downfeedOverPressure(s);
+      // Over the 392.3 kPa (40 m) fixture max: 70 − 3.5·i − 1.1 > 40.0 ⇒
+      // i ≤ 8 (i = 8 gives 40.9 m).
+      expect({for (final o in over) o.nodeId},
+          {for (var i = 0; i <= 8; i++) 'f$i'});
+      final f0 = over.firstWhere((o) => o.nodeId == 'f0');
+      expect(f0.overRelief, isTrue); // 675.7 kPa ≥ 490.3 kPa
+    });
+
+    test('one PRV on L9 holds the setpoint: head below = H_set + drop', () {
+      final s = solve(const {9});
+      // P9 sits at the L9 ceiling (34.7 m) and arrives with 70 − 34.7 =
+      // 35.3 m > H_set, so it outputs H_set.
+      expect(s.residualPressure['P9']!.inKiloPascals,
+          closeTo(kpa(targetHead), 1e-6));
+      // f0: H_set + (34.7 − 1.1) = H_set + 33.6 m.
+      expect(s.residualPressure['f0']!.inKiloPascals,
+          closeTo(kpa(targetHead + 33.6), 1e-6));
+      expect(s.noFlowStaticPressure['f0']!.inKiloPascals,
+          closeTo(kpa(targetHead + 33.6), 1e-6));
+      // Above the PRV, unchanged: f12 = 70 − 43.1 = 26.9 m.
+      expect(s.residualPressure['f12']!.inKiloPascals,
+          closeTo(kpa(26.9), 1e-6));
+    });
+
+    test('PRVs on L14 / L9 / L4 zone the riser: no fixture over the limit',
+        () {
+      final s = solve(const {14, 9, 4});
+      // P14 arrives with only 70 − 52.2 = 17.8 m < H_set: it passes the flow
+      // through, so f10 reads plain gravity 70 − 36.1 = 33.9 m. P9 (35.3 m
+      // in) and P4 (H_set + 17.5 m in) reduce, so each of their zone bottoms
+      // reads H_set + (3.5·k + 3.2 − (3.5·(k−4) + 1.1)) = H_set + 16.1 m.
+      expect(s.residualPressure['f10']!.inKiloPascals,
+          closeTo(kpa(33.9), 1e-6));
+      for (final f in ['f5', 'f0']) {
+        expect(s.residualPressure[f]!.inKiloPascals,
+            closeTo(kpa(targetHead + 16.1), 1e-6),
+            reason: f);
+      }
+      expect(kpa(targetHead + 16.1), lessThan(392.3));
+      expect(downfeedOverPressure(s), isEmpty);
+    });
+
+    test('a PRV arriving BELOW its setpoint passes the flow through', () {
+      // A PRV on L18 arrives with 70 − (63 + 3.2) = 3.8 m < H_set: no change.
+      final a = solve(const {18});
+      final b = solve(const {});
+      expect(a.residualPressure['f0']!.pascals,
+          closeTo(b.residualPressure['f0']!.pascals, 1e-6));
     });
   });
 }

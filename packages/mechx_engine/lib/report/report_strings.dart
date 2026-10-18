@@ -211,6 +211,7 @@ enum RptStringKey {
   edbFaultBasisExplicit,
   edbFaultBasisEstimate,
   edbFaultBasisDefault,
+  edbFaultBasisSupplyStudy,
   headingSupplySummary,
   ssSystem,
   ssDiversifiedDemand,
@@ -573,6 +574,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.edbFaultBasisEstimate:
       ' · _estimated from the declared service size (// VERIFY)_',
   RptStringKey.edbFaultBasisDefault: ' · _default — no service declared_',
+  RptStringKey.edbFaultBasisSupplyStudy:
+      ' · _estimated from the transformer the supply study selects for the demand (// VERIFY)_',
   RptStringKey.headingSupplySummary: 'Supply summary',
   RptStringKey.ssSystem: 'System:',
   RptStringKey.ssDiversifiedDemand: 'Diversified demand:',
@@ -949,6 +952,8 @@ const Map<RptStringKey, String> kReportStringsId = {
       ' · _perkiraan dari ukuran sambungan yang dideklarasikan (// VERIFY)_',
   RptStringKey.edbFaultBasisDefault:
       ' · _bawaan — sambungan tidak dideklarasikan_',
+  RptStringKey.edbFaultBasisSupplyStudy:
+      ' · _perkiraan dari trafo yang dipilih studi pasokan untuk beban (// VERIFY)_',
   RptStringKey.headingSupplySummary: 'Ringkasan pasokan',
   RptStringKey.ssSystem: 'Sistem:',
   RptStringKey.ssDiversifiedDemand: 'Permintaan terdiversifikasi:',

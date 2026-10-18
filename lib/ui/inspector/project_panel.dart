@@ -223,7 +223,8 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
   final eResult = ref.read(electricalResultProvider);
   final eAdvanced = ref.read(electricalAdvancedProvider);
   const eProfile = PuilProfile();
-  final effectiveFault = effectiveOriginFaultLevel(eProject);
+  final effectiveFault = effectiveOriginFaultLevel(eProject,
+      demand: eResult.supply.demandVa);
   return ElectricalCalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,

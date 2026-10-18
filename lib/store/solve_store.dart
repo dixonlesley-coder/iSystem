@@ -88,6 +88,18 @@ final upfeedOverPressureProvider = Provider<List<UpfeedOverPressure>>((ref) {
   return upfeedOverPressure(solution);
 });
 
+/// Round 16 (plumbing-plant-downfeed-prv-unmodelled) — DOWNFEED delivery
+/// nodes over the SNI fixture pressure limits, on the gravity solve in which
+/// every DRAWN PRV holds its setpoint (the engine's [downfeedOverPressure]).
+/// The PRV zone table is a design intent (it assumes a PRV at every zone top);
+/// this is the check of what is actually drawn. Empty on upfeed.
+final downfeedOverPressureProvider =
+    Provider<List<UpfeedOverPressure>>((ref) {
+  final solution = ref.watch(downfeedProvider);
+  if (solution == null) return const [];
+  return downfeedOverPressure(solution);
+});
+
 /// DOWNFEED gravity solve (roof tank distributing down). Null when the strategy
 /// is upfeed or there is no supply network.
 final downfeedProvider = Provider<DownfeedSolution?>((ref) {

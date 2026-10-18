@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
@@ -10,6 +11,8 @@ import 'package:mechx_engine/electrical/metering.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/electrical/sources.dart';
+import 'package:mechx_engine/electrical/supply_design.dart'
+    show transformerKvaLadder;
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
@@ -572,9 +575,12 @@ void main() {
       const dual = ElectricalProject(
           id: 'd', name: 'Dual', dualTransformer: true, panels: basePanels);
       final r = computeSystem(profile, dual);
-      final kva = selectGeneratorKva(r.supply.demandVa).inKilovoltAmperes;
-      final kvaText =
-          kva == kva.roundToDouble() ? '${kva.toInt()}' : kva.toStringAsFixed(1);
+      // Round 16 — the supply study's OWN pick: two units, each the smallest
+      // IEC-ladder rating >= (demand / 2) / 0.8 (never the genset ladder at
+      // 100 % of the whole demand).
+      final perUnit = r.supply.demandVa.inKilovoltAmperes / 2 / 0.8;
+      final kva = transformerKvaLadder.firstWhere((k) => k >= perUnit);
+      final kvaText = '2 x ${kva == kva.roundToDouble() ? '${kva.toInt()}' : kva.toStringAsFixed(1)}';
       final joined = buildElectricalSourceSpine(project: dual, result: r)
           .prims
           .whereType<SldLabel>()
@@ -682,7 +688,11 @@ void main() {
       final r = computeSystem(profile, small);
       final demandKva = r.supply.demandVa.inKilovoltAmperes;
       expect(demandKva, greaterThan(5)); // the premise: undersized set
-      final pct = (5 / demandKva * 100).round();
+      // Round 16 — the LESSER of the kVA ratio and the kW ratio (the set's
+      // kW rating is 0.8 × 5 kVA = 4 kW against the demand W).
+      final demandKw = r.supply.demandW / 1000;
+      final pct = (math.min(5 / demandKva, 5 * kGeneratorPf / demandKw) * 100)
+          .round();
       final v = labels(
           buildElectricalOverview(project: small, result: r, sourceChain: true));
       expect(v, contains('backs $pct% of load'));
@@ -706,7 +716,7 @@ void main() {
     });
 
     test('a battery source draws a BATTERY node sized on the power one-line '
-        'basis (demand at the genset PF)', () {
+        'basis (the real demand W)', () {
       const p = ElectricalProject(
         id: 's', name: 'S',
         sources:
@@ -716,8 +726,9 @@ void main() {
       final r = computeSystem(profile, p);
       // The SAME sizing call `buildPowerOneLine` makes, so the two surfaces
       // can never print different bank sizes.
+      // Round 16 — on the REAL demand W (not demandVa × 0.8).
       final sized = sizeBattery(
-        Power(r.supply.demandVa.voltAmperes * kGeneratorPf),
+        Power(r.supply.demandW),
         autonomyHours: 2,
       );
       final expected =
