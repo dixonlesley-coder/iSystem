@@ -22,6 +22,7 @@ import '../electrical/containment.dart'
     show ConduitSpec, conduitFillSingle, sizeConduit;
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
+import '../electrical/genset_backup.dart' show gensetBackupDemandVa;
 import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
@@ -1530,7 +1531,7 @@ const double _sideNodeBottom = 14;
     // (historic coordinates — declared-MV projects are byte-identical).
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
-      final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
+      final backupVa = gensetBackupDemandVa(project, result);
       final genFig = _gensetKva(backupVa, gen);
       final genKva = genFig.totalKva;
       final gy = lvMidY - _ovH - 8;
@@ -1623,8 +1624,7 @@ const double _sideNodeBottom = 14;
 
       if (project.sources?.generator != null) {
         final gen = project.sources!.generator!;
-        final backupVa =
-            ApparentPower(demandVa.voltAmperes * gen.backupFraction);
+        final backupVa = gensetBackupDemandVa(project, result);
         final genFig = _gensetKva(backupVa, gen);
         final genKva = genFig.totalKva;
         connectTo(13, 13);
@@ -1792,7 +1792,7 @@ const double _sideNodeBottom = 14;
   var prevBottom = isMv ? yMid + 17 : yMid + 10;
   if (hasGen) {
     final gen = project.sources!.generator!;
-    final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
+    final backupVa = gensetBackupDemandVa(project, result);
     final genFig = _gensetKva(backupVa, gen);
     final genKva = genFig.totalKva;
     final gcy = nextCy;

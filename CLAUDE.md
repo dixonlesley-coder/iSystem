@@ -1819,6 +1819,43 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   and raises the judge-only `service-capacity-below-demand` warning (the
   utility limiter would trip under full demand). Null capacity (the default)
   ⇒ byte-identical. Seed suite: `electrical_service_capacity_test.dart`.
+- **Capacitor ways floor their board + feeder (`electrical/compute.dart`, Round 13)**:
+  a capacitor bank adds NO demand W and NO balance current (Round 11 — its
+  leading current offsets the load, so for a mixed board bank-off governs), but
+  a board's incomer + busbar floor at `panelCapacitorFloorA` — the worst-line
+  sum of its own banks' rated current (Q/(√3·U) 3φ, Q/U0 1φ) × 1.43
+  (`kCapacitorSwitchingFactor`) plus every fed board's figure — and the feeder
+  supplying such a board floors its device + cable at the same current
+  (`ComputePanelOptions.feederCapacitorFloorA`, bottom-up in `computeSystem`).
+  No capacitor anywhere below ⇒ 0 ⇒ byte-identical.
+- **Motor / FLA design current is diversified; final-way Vd is not (Round 13)**:
+  a motor / A5-FLA way's `designCurrent` (balance, demand current, incomer) is
+  FLC × `effectiveDemandFactor` — the same basis `circuitConnectedW` feeds
+  upstream — while its own device + cable size on the undiversified FLC. Every
+  FINAL way's printed / cumulative voltage drop is computed on its
+  UNDIVERSIFIED running current (the current that flows when the machine runs);
+  a feeder keeps its aggregated Ib.
+- **Several utility roots: one governing service, every root an SPD origin
+  (Round 13)**: supply system / voltage, the main cable and the main earthing +
+  bonding conductors follow `governingRootPanel` (largest incomer rating, then
+  worst-phase demand current, then lowest id) — never panel list order; every
+  root (`originPanelIdsOf`) gets the origin SPD recommendation.
+- **Genset backs the essential sub-tree (`electrical/genset_backup.dart`, Round
+  13)**: the backup demand is `max(backupFraction × supply demandVa, the
+  topmost essential boards' demand W × the supply VA/W)` — ONE helper
+  (`gensetBackupDemandVa`) for the power one-line, both source-spine builders and
+  the G-01 schedule row. A forced nameplate wins but below the essential demand
+  raises the judge-only `genset-below-essential-demand` (`AdvancedStudy.warnings`
+  → `electricalAllWarningsProvider`). The PFC bank (`power_factor.dart`) sizes on
+  the DIVERSIFIED kW (library-aware demand factor × every upstream board's
+  diversity), the same demand the supply summary reports.
+- **Check valves cut by DIRECTION (`sizing/network_sizing.dart`, Round 13)**:
+  only cycle check valves count, classified by their drawn in → out edge
+  (`_classifyLoopCheckValves`): all RETURN valves ⇒ the Round-12 tree cut; all
+  PARALLEL DISCHARGE valves (duty/standby legs onto a header) ⇒ the tree runs
+  through the first leg and every standby leg carries the same full set flow;
+  anything else ⇒ Hardy–Cross as if no valve were drawn. A ground tank roots a
+  pressurized component at ANY degree.
 - **ONE electrical warning surface (`electricalAllWarningsProvider`)**: the
   fault study's warnings (`non-selective` / `selectivity-partial` /
   `breaking-capacity-inadequate` / `busbar-withstand-inadequate` /

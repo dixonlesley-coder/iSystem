@@ -32,25 +32,9 @@ import 'electrical_sld_drawing.dart';
 import 'riser_tags.dart' show riserServiceCode;
 import 'sld_plot_fit.dart';
 
-/// WinAnsi (Latin-1) code points the single-line labels legitimately emit,
-/// passed through as their own byte (code point == WinAnsi byte at these
-/// positions) so a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`:
-/// U+00B7 middle-dot separator (device·starter / cable·conduit), U+00B0 degree,
-/// U+00B1 plus-minus, U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
-const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
-
-String _pdfText(String raw) {
-  final b = StringBuffer();
-  for (final code in raw.runes) {
-    final c =
-        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
-            ? code
-            : 0x3f /* ? */;
-    if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
-    b.writeCharCode(c);
-  }
-  return b.toString();
-}
+/// One WinAnsi text rule for every vector PDF (Round 13): see
+/// [pdfWinAnsiText] in `drawing_chrome.dart`.
+String _pdfText(String raw) => pdfWinAnsiText(raw);
 
 String _n(double v) => v.toStringAsFixed(2);
 

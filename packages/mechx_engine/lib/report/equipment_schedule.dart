@@ -18,6 +18,7 @@
 /// flag // VERIFY — a tag and a quantity are bookkeeping, not engineering claims.
 library;
 
+import '../electrical/genset_backup.dart' show gensetBackupDemandVa;
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
 import '../electrical/sources.dart' show sizeGenerator;
@@ -368,8 +369,12 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
           ? (unitKva: gen.kva!, units: 1)
           : (demandVa != null && demandVa.inKilovoltAmperes > 0
               ? (() {
+                  // Round 13 — max(fraction × demand, essential demand).
                   final r = sizeGenerator(
-                      ApparentPower(demandVa.voltAmperes * gen.backupFraction),
+                      data.electrical != null
+                          ? gensetBackupDemandVa(ep, data.electrical!)
+                          : ApparentPower(
+                              demandVa.voltAmperes * gen.backupFraction),
                       mode: gen.mode);
                   return (unitKva: r.ratingKva, units: r.units);
                 })()

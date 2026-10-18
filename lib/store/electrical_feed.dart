@@ -8,6 +8,7 @@
 /// electrical current is derived here (A5 `load_list.dart`), never re-entered.
 library;
 
+import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
@@ -374,55 +375,101 @@ final riserEquipmentDetailsProvider = Provider<Map<String, String>>((ref) {
   };
 });
 
-/// Motorised equipment NODES the engineer has placed on the plan (pumps, fans,
-/// AHUs, FCUs…) surfaced as electrical loads — so a pump drawn on the PLUMBING
-/// layer is INTER-RELATED with the electrical model and appears as its own
-/// circuit on the panel. Each node's load is its explicit `electricalLoadW`
-/// override, else the component's representative `defaultMotorKw`. Keyed by the
-/// node id, so editing/moving the node updates its circuit in place.
-final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
+/// Where a placed equipment node's FED electrical load comes from (Round 13,
+/// ui-journey-2): the engineer's explicit override, the solved pump/fan duty
+/// the node roots, the room cooling PK (an AC in a scaled room), or the
+/// component's representative default.
+enum NodeLoadSource { explicit, solvedDuty, roomPk, componentDefault }
+
+/// The electrical load a placed equipment node actually FEEDS to the panel —
+/// [watts] (the figure the panel way is sized from), the electrical [input]
+/// when it is already an input power, and its [source].
+@immutable
+class NodeFedLoad {
+  final double watts;
+  final double? input;
+  final NodeLoadSource source;
+  const NodeFedLoad(this.watts, this.input, this.source);
+}
+
+/// The ONE resolution of each electrical-load node's fed watts — the panel
+/// feed ([placedEquipmentLoadsProvider]) AND the node inspector's 'Electrical
+/// load' field read it, so the inspector can never show the generic component
+/// default while the panel carries the room-PK or solved-duty load (it used
+/// to, and a look-and-leave then pinned that default as an override).
+final nodeFedLoadsProvider = Provider<Map<String, NodeFedLoad>>((ref) {
   final net = ref.watch(networkControllerProvider).network;
   final rooms = ref.watch(roomAreasProvider);
   final project = ref.watch(projectControllerProvider);
-  final bind = ref.watch(mepDutyBindingProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
   double? mppFor(String sheetId) =>
       project.calibrationFor(sheetId)?.metersPerPixel;
-
-  // The solved duty a drawn node carries (null when none / not solved).
-  ({Power motor, Power input})? dutyFor(NetNode n) => duties[n.id];
-
-  final loads = <MepEquipmentLoad>[];
+  final out = <String, NodeFedLoad>{};
   for (final n in net.nodes) {
     final c = n.component;
     if (c == null || !c.isElectricalLoad) continue;
-    final fire = bind.firePumpNodeIds.contains(n.id);
     // An AC unit's load tracks its room's cooling PK when it sits in a scaled
-    // room; an explicit per-node override still wins, else the component default.
+    // room; an explicit per-node override still wins, else the component
+    // default.
     final acWatts = RoomArea.isAcComponent(c)
         ? _acRoomWatts(net, rooms, mppFor, n,
             method: ref.watch(coolingLoadMethodProvider))
         : null;
     // A drawn plant node that roots a solved duty is fed FROM that duty, so the
     // schedule's kW and the panel way describe one machine (coupling-2).
-    final duty = dutyFor(n);
+    final duty = duties[n.id];
     // An explicit `electricalLoadW` ('Electrical load (feeds the panel)') and
     // an AC's cooling ÷ COP are ALREADY electrical input power — pass them as
     // the input verbatim so A5 does not divide by motor efficiency a second
     // time. Only the component's `defaultMotorKw` is a SHAFT rating (÷ η).
     final input = n.electricalLoadW ?? duty?.input.watts ?? acWatts;
-    final watts = n.electricalLoadW ??
-        duty?.motor.watts ??
-        acWatts ??
-        c.defaultMotorKw * 1000;
-    if (watts <= 0) continue;
+    final NodeLoadSource source;
+    final double watts;
+    if (n.electricalLoadW != null) {
+      source = NodeLoadSource.explicit;
+      watts = n.electricalLoadW!;
+    } else if (duty != null) {
+      source = NodeLoadSource.solvedDuty;
+      watts = duty.motor.watts;
+    } else if (acWatts != null) {
+      source = NodeLoadSource.roomPk;
+      watts = acWatts;
+    } else {
+      source = NodeLoadSource.componentDefault;
+      watts = c.defaultMotorKw * 1000;
+    }
+    out[n.id] = NodeFedLoad(watts, input, source);
+  }
+  return out;
+});
+
+/// Motorised equipment NODES the engineer has placed on the plan (pumps, fans,
+/// AHUs, FCUs…) surfaced as electrical loads — so a pump drawn on the PLUMBING
+/// layer is INTER-RELATED with the electrical model and appears as its own
+/// circuit on the panel. Each node's load is resolved ONCE by
+/// [nodeFedLoadsProvider] (explicit override → solved duty → room PK →
+/// component default). Keyed by the node id, so editing/moving the node
+/// updates its circuit in place.
+final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final bind = ref.watch(mepDutyBindingProvider);
+  final fed = ref.watch(nodeFedLoadsProvider);
+
+  final loads = <MepEquipmentLoad>[];
+  for (final n in net.nodes) {
+    final c = n.component;
+    if (c == null || !c.isElectricalLoad) continue;
+    final f = fed[n.id];
+    if (f == null || f.watts <= 0) continue;
+    final fire = bind.firePumpNodeIds.contains(n.id);
+    final input = f.input;
     loads.add(MepEquipmentLoad(
       id: 'node-${n.id}',
       name: c.label,
       // A pump piped to a fire service is a FIRE pump (life-safety), never an
       // ordinary 1.5 kW supply pump (audit r8 coupling-1).
       source: fire ? MepLoadSource.firePump : _sourceFor(c),
-      mechanicalPower: Power(watts),
+      mechanicalPower: Power(f.watts),
       electricalInputPower: input == null ? null : Power(input),
       phases: _phasesFor(c),
       loadPos: LayoutPos(

@@ -147,9 +147,25 @@ void main() {
         expect(plus.phaseBalance.l1, base.phaseBalance.l1, reason: why);
         expect(plus.phaseBalance.l2, base.phaseBalance.l2, reason: why);
         expect(plus.phaseBalance.l3, base.phaseBalance.l3, reason: why);
-        expect(plus.incomer.breaker.ratingA.amperes,
-            base.incomer.breaker.ratingA.amperes,
+        // Round 13 — the incomer is now floored at the bank's own switching
+        // current (a dedicated PFC board must carry its bank): it never drops
+        // below the load-only incomer, always carries 1.43 × Q/(√3·U), and is
+        // EXACTLY the load-only incomer whenever the load current governs.
+        final capSwitchA = roundTo(
+            kCapacitorSwitchingFactor * kvar / (math.sqrt(3) * 400), 1);
+        expect(plus.capacitorCurrentA, closeTo(capSwitchA, 0.11),
             reason: why);
+        expect(plus.incomer.breaker.ratingA.amperes,
+            greaterThanOrEqualTo(base.incomer.breaker.ratingA.amperes),
+            reason: why);
+        expect(plus.incomer.breaker.ratingA.amperes,
+            greaterThanOrEqualTo(plus.capacitorCurrentA),
+            reason: why);
+        if (base.demandCurrent.amperes >= plus.capacitorCurrentA) {
+          expect(plus.incomer.breaker.ratingA.amperes,
+              base.incomer.breaker.ratingA.amperes,
+              reason: why);
+        }
         final c = _way(plus, 'cap');
         expect(c.breaker.ratingA.amperes,
             greaterThanOrEqualTo(

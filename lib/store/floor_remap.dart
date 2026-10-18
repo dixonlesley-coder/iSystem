@@ -173,3 +173,50 @@ Set<String> sheetIdsWithState(ProviderReader read) {
   }
   return ids;
 }
+
+/// The FLOOR-PLACED work (beyond the drawn network) a floor-stack change would
+/// take with it (Round 13, ui-journey-2): the rooms, tanks and measurements
+/// that are DELETED with their floor, and the electrical placements (panel
+/// `layoutPos` / load `loadPos`) that are UN-PLACED (they drop to the unplaced
+/// tray — the model rows survive).
+class FloorPlacedWorkCount {
+  final int rooms;
+  final int tanks;
+  final int measurements;
+  final int electrical;
+  const FloorPlacedWorkCount({
+    this.rooms = 0,
+    this.tanks = 0,
+    this.measurements = 0,
+    this.electrical = 0,
+  });
+
+  int get total => rooms + tanks + measurements + electrical;
+  bool get isEmpty => total == 0;
+}
+
+/// Count the floor-placed work whose floor index passes [test] — the SAME
+/// records [remapFloorPlacedWork] deletes / un-places when [test]'s floors
+/// lose their home (a removed level, the levels a shorter template drops), so
+/// the delete confirmation names everything that goes, not just the network.
+FloorPlacedWorkCount floorPlacedWorkCount(
+  ProviderReader read,
+  bool Function(int floorIndex) test,
+) {
+  var electrical = 0;
+  for (final p in read(electricalProjectProvider).panels) {
+    final lp = p.layoutPos;
+    if (lp != null && test(lp.floorIndex)) electrical++;
+    for (final c in p.circuits) {
+      final pos = c.loadPos;
+      if (pos != null && test(pos.floorIndex)) electrical++;
+    }
+  }
+  return FloorPlacedWorkCount(
+    rooms: read(roomAreasProvider).where((r) => test(r.floorIndex)).length,
+    tanks: read(tankAreasProvider).where((t) => test(t.floorIndex)).length,
+    measurements:
+        read(measurementsProvider).where((m) => test(m.floorIndex)).length,
+    electrical: electrical,
+  );
+}

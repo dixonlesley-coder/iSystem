@@ -409,4 +409,151 @@ void main() {
       expect(out['r1'], closeTo(2.0, 1e-12));
     });
   });
+
+  // ── Round 13 — check-valve DIRECTION + the degree-2 ground-tank root ──────
+  group('r13 checkvalve-direction — a supply-side CV is not a return cut', () {
+    // Probe A — the recirc ring with the CV on the HEATER OUTLET
+    // (H → CV → S0) and a PLAIN return R0 → H. With `cvNode: false` the CV
+    // is a plain junction at the same point, so pixel lengths are identical.
+    Network build({required bool cvNode}) {
+      final nodes = <NetNode>[
+        _n('H', 0, 0, role: NodeRole.plant, component: NodeComponent.pump),
+        _n('CV', 50, 0, component: cvNode ? NodeComponent.checkValve : null),
+        for (var f = 0; f <= 4; f++) _n('S$f', 100, 0, floor: f),
+        for (var f = 1; f <= 4; f++)
+          _n('fx$f', 200, 0, floor: f, role: NodeRole.fixture),
+        for (var f = 0; f <= 4; f++) _n('R$f', 50, 40, floor: f),
+      ];
+      final edges = <NetEdge>[
+        _e('hc', 'H', 'CV', ServiceType.hotWater),
+        _e('cs', 'CV', 'S0', ServiceType.hotWater),
+        for (var f = 1; f <= 4; f++) ...[
+          _e('s$f', 'S${f - 1}', 'S$f', ServiceType.hotWater,
+              kind: EdgeKind.riser),
+          _e('b$f', 'S$f', 'fx$f', ServiceType.hotWater),
+        ],
+        _e('top', 'S4', 'R4', ServiceType.hotWater),
+        for (var f = 4; f >= 1; f--)
+          _e('r$f', 'R$f', 'R${f - 1}', ServiceType.hotWater,
+              kind: EdgeKind.riser),
+        _e('rh', 'R0', 'H', ServiceType.hotWater),
+      ];
+      return Network(nodes: nodes, edges: edges);
+    }
+
+    Map<String, EdgeSizing> size(Network net) => autoSizeNetwork(
+          net,
+          const SizingContext(),
+          leafDemand: const {ServiceType.hotWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.hotWater: 2.0},
+        );
+
+    test('CV on the supply == no valve: the supply main is sized', () {
+      final withCv = size(build(cvNode: true));
+      final plain = size(build(cvNode: false));
+      // Was: hc = cs = s1 = 0 L/s (DN15) with the whole draw-off routed up
+      // the return. A discharge valve is no return cut — Hardy–Cross, exactly
+      // as if no valve were drawn.
+      expect(withCv['hc']!.flow.inLitersPerSecond, greaterThan(0));
+      for (final id in plain.keys) {
+        expect(withCv[id]!.flow.inLitersPerSecond,
+            closeTo(plain[id]!.flow.inLitersPerSecond, 1e-12),
+            reason: id);
+        expect(withCv[id]!.diameter.inMillimeters,
+            plain[id]!.diameter.inMillimeters,
+            reason: id);
+      }
+    });
+  });
+
+  group('r13 duty/standby — both pump legs carry the full set flow', () {
+    // Probe B — ground tank T → P1 → CV1 → HDR and T → P2 → CV2 → HDR,
+    // HDR → 4 fixtures × 20 UBAP. Set flow = curve(80 UBAP).
+    Network build({bool cvs = true, Map<String, String> rename = const {}}) {
+      String r(String id) => rename[id] ?? id;
+      final nodes = <NetNode>[
+        _n(r('T'), 0, 0, role: NodeRole.plant,
+            component: NodeComponent.groundTank),
+        _n(r('P1'), 40, -20, role: NodeRole.plant,
+            component: NodeComponent.pump),
+        _n(r('P2'), 40, 20, role: NodeRole.plant,
+            component: NodeComponent.pump),
+        _n(r('CV1'), 80, -20,
+            component: cvs ? NodeComponent.checkValve : null),
+        _n(r('CV2'), 80, 20,
+            component: cvs ? NodeComponent.checkValve : null),
+        _n(r('HDR'), 120, 0),
+        for (var i = 0; i < 4; i++)
+          _n(r('fx$i'), 200, i * 30.0, role: NodeRole.fixture),
+      ];
+      final edges = <NetEdge>[
+        _e('t1', r('T'), r('P1'), ServiceType.coldWater),
+        _e('t2', r('T'), r('P2'), ServiceType.coldWater),
+        _e('p1', r('P1'), r('CV1'), ServiceType.coldWater),
+        _e('p2', r('P2'), r('CV2'), ServiceType.coldWater),
+        _e('c1', r('CV1'), r('HDR'), ServiceType.coldWater),
+        _e('c2', r('CV2'), r('HDR'), ServiceType.coldWater),
+        for (var i = 0; i < 4; i++)
+          _e('b$i', r('HDR'), r('fx$i'), ServiceType.coldWater),
+      ];
+      return Network(nodes: nodes, edges: edges);
+    }
+
+    Map<String, EdgeSizing> size(Network net) => autoSizeNetwork(
+          net,
+          const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 20.0},
+        );
+
+    test('every leg edge carries curve(80 UBAP), identical diameters', () {
+      final set = const SniProfile().probableFlowForFixtureUnits(80);
+      final s = size(build());
+      // Was: P1 leg 2.553 L/s DN50 and the whole P2 (standby) leg 0 L/s DN15;
+      // the suction legs t1/t2 were 0 too (rooted at a pump, not the tank).
+      for (final id in ['t1', 'p1', 'c1', 't2', 'p2', 'c2']) {
+        expect(s[id]!.flow.inLitersPerSecond,
+            closeTo(set.inLitersPerSecond, 1e-9),
+            reason: id);
+        expect(s[id]!.diameter.inMillimeters, s['p1']!.diameter.inMillimeters,
+            reason: id);
+      }
+      // Flow runs tank → pump → valve → header on BOTH legs.
+      expect(s['t1']!.flowFromId, 'T');
+      expect(s['t2']!.flowFromId, 'T');
+      expect(s['p2']!.flowFromId, 'P2');
+      expect(s['c2']!.flowFromId, 'CV2');
+    });
+
+    test('property: node ids / edge order never change a size (seeded)', () {
+      final ref = size(build());
+      final refPlain = size(build(cvs: false));
+      // Without valves the tank roots too: both suction legs flow FROM T.
+      expect(refPlain['t1']!.flowFromId, 'T');
+      expect(refPlain['t2']!.flowFromId, 'T');
+      const ids = ['T', 'P1', 'P2', 'CV1', 'CV2', 'HDR', 'fx0', 'fx1', 'fx2',
+          'fx3'];
+      for (var seed = 0; seed < 25; seed++) {
+        final rnd = math.Random(seed);
+        final names = [for (var i = 0; i < ids.length; i++) 'n${rnd.nextInt(90) + 10}$i']
+          ..shuffle(rnd);
+        final rename = {for (var i = 0; i < ids.length; i++) ids[i]: names[i]};
+        for (final cvs in [true, false]) {
+          final net = build(cvs: cvs, rename: rename);
+          final s = size(
+              Network(nodes: net.nodes, edges: _shuffled(net.edges, seed)));
+          final base = cvs ? ref : refPlain;
+          for (final id in base.keys) {
+            expect(s[id]!.flow.inLitersPerSecond,
+                closeTo(base[id]!.flow.inLitersPerSecond, 1e-9),
+                reason: 'seed $seed cvs $cvs edge $id');
+            expect(s[id]!.diameter.inMillimeters,
+                base[id]!.diameter.inMillimeters,
+                reason: 'seed $seed cvs $cvs edge $id');
+          }
+          expect(s['t1']!.flowFromId, rename['T'], reason: 'seed $seed');
+        }
+      }
+    });
+  });
 }

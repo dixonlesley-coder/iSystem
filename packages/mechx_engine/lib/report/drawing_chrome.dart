@@ -165,25 +165,28 @@ enum DrawingSeries {
 }
 
 /// Derive a UNIQUE per-sheet drawing number so an issued set never stamps one
-/// number on every sheet (N19). When [base] (the manual `documentNumber`) is
-/// non-empty the user has named the sheet explicitly, so it is honoured VERBATIM
-/// (the override). When [base] is blank the number is DERIVED from the sheet's
+/// number on every sheet (N19). The number is DERIVED from the sheet's
 /// [series] + a 1-based [index] within that band — `<prefix>-<hundreds><index2>`
-/// (`M-101`, `M-102`, `M-201`, `E-201`, `E-301`, `E-401`) — so a set left on the
-/// defaults still numbers every sheet uniquely by discipline/role/position
-/// instead of blank-on-every-sheet. Pure — the caller supplies the running
-/// index (a plan's rail position, a set sheet's ordinal). Indices past 99 keep
-/// the discipline band (`M-1100`), never bleeding into the next hundreds.
+/// (`M-101`, `M-102`, `M-201`, `E-201`, `E-301`, `E-401`). When [base] (the
+/// PROJECT-wide `documentNumber`) is non-empty it is a PREFIX —
+/// `<base>-<prefix>-<hundreds><index2>` (`BRI-MEP-01-M-101`) — never the
+/// verbatim number: Round 13 (export-files-4) — the field is ONE per project,
+/// so honouring it verbatim stamped the same number on every plan, riser and
+/// electrical sheet and on every Daftar Gambar row, the N19 defect returning
+/// as soon as the field was filled. The cover sheet keeps the bare base as
+/// its own number. Pure — the caller supplies the running index (a plan's rail
+/// position, a set sheet's ordinal). Indices past 99 keep the discipline band
+/// (`M-1100`), never bleeding into the next hundreds.
 String sheetDrawingNumber({
   String? base,
   required DrawingSeries series,
   int index = 1,
 }) {
   final b = base?.trim() ?? '';
-  if (b.isNotEmpty) return b;
   final i = index < 1 ? 1 : index;
-  return '${series.disciplinePrefix}-${series.hundreds}'
+  final own = '${series.disciplinePrefix}-${series.hundreds}'
       '${i.toString().padLeft(2, '0')}';
+  return b.isEmpty ? own : '$b-$own';
 }
 
 /// A named LANDSCAPE sheet size for the plan PDF exporters — ISO A-series,
@@ -255,28 +258,68 @@ String serviceChromeLabel(ServiceType s) => switch (s) {
 
 String _n(double v) => v.toStringAsFixed(2);
 
-/// WinAnsi (Latin-1) code points the chrome text (title block / legend / scale)
-/// legitimately emits, passed through as their own byte (code point == WinAnsi
-/// byte at these positions) so a `/WinAnsiEncoding` Helvetica renders the real
-/// glyph, not `?`: U+00B7 middle dot, U+00B0 degree, U+00B1 plus-minus,
-/// U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
-const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
+/// The WinAnsiEncoding byte for a Unicode code point, or null when the glyph
+/// is outside WinAnsi. Round 13 (export-files-7): the whole Latin-1 block
+/// U+00A0-U+00FF passes through as its own byte (é, ü, ×, ², °, ·, Ø …), and
+/// the Windows-1252 0x80-0x9F typographic slots map from their Unicode code
+/// points — en/em dash, curly quotes, bullet, ellipsis, euro … — so a client
+/// / project / sheet name pasted from Word no longer prints `?` on every
+/// issued title block. Printable ASCII is itself.
+int? winAnsiByte(int code) {
+  if (code >= 0x20 && code <= 0x7e) return code;
+  if (code >= 0xa0 && code <= 0xff) return code;
+  return _cp1252High[code];
+}
 
-/// Keep PDF text to WinAnsi-encodable characters (printable ASCII + the few
-/// Latin-1 glyphs above) and escape the three PDF string metacharacters — same
-/// rule the exporters use for their own text; anything else falls back to `?`.
-String _pdfText(String raw) {
+/// Windows-1252 0x80-0x9F: Unicode code point -> WinAnsi byte.
+const Map<int, int> _cp1252High = {
+  0x20AC: 0x80, // euro
+  0x201A: 0x82, // single low-9 quote
+  0x0192: 0x83, // f hook
+  0x201E: 0x84, // double low-9 quote
+  0x2026: 0x85, // ellipsis
+  0x2020: 0x86, // dagger
+  0x2021: 0x87, // double dagger
+  0x02C6: 0x88, // circumflex
+  0x2030: 0x89, // per mille
+  0x0160: 0x8A, // S caron
+  0x2039: 0x8B, // single left angle quote
+  0x0152: 0x8C, // OE
+  0x017D: 0x8E, // Z caron
+  0x2018: 0x91, // left single quote
+  0x2019: 0x92, // right single quote
+  0x201C: 0x93, // left double quote
+  0x201D: 0x94, // right double quote
+  0x2022: 0x95, // bullet
+  0x2013: 0x96, // en dash
+  0x2014: 0x97, // em dash
+  0x02DC: 0x98, // small tilde
+  0x2122: 0x99, // trade mark
+  0x0161: 0x9A, // s caron
+  0x203A: 0x9B, // single right angle quote
+  0x0153: 0x9C, // oe
+  0x017E: 0x9E, // z caron
+  0x0178: 0x9F, // Y diaeresis
+};
+
+/// Keep PDF text to WinAnsi-encodable characters ([winAnsiByte]) and escape
+/// the three PDF string metacharacters — ONE rule shared by every vector PDF
+/// exporter (chrome, plan, network, electrical single-line, electrical plan);
+/// only a character outside WinAnsi falls back to `?`. The returned string
+/// holds one char per output byte (code unit == WinAnsi byte), so the
+/// exporters' `latin1.encode` writes it verbatim. Printable ASCII input is
+/// unchanged (byte-identical).
+String pdfWinAnsiText(String raw) {
   final b = StringBuffer();
   for (final code in raw.runes) {
-    final c =
-        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
-            ? code
-            : 0x3f /* ? */;
+    final c = winAnsiByte(code) ?? 0x3f /* ? */;
     if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
     b.writeCharCode(c);
   }
   return b.toString();
 }
+
+String _pdfText(String raw) => pdfWinAnsiText(raw);
 
 // ── PDF chrome (content-stream fragments, page space y-up, points) ──────────
 

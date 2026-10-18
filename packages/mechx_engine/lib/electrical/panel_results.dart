@@ -255,6 +255,12 @@ class ElectricalPanelResult {
   /// (default 0).
   final int spareWaysReserved;
 
+  /// Round 13 — the worst line current (A) this board's CAPACITOR ways (own +
+  /// fed downstream) draw at the switching multiple; it floors the incomer +
+  /// busbar so a dedicated PFC board is rated for its bank. 0 (the default)
+  /// when the board holds no capacitor way.
+  final double capacitorCurrentA;
+
   final PhaseBalanceResult phaseBalance;
 
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
@@ -278,6 +284,7 @@ class ElectricalPanelResult {
     this.futureLoadW = 0,
     this.headroomApplied = false,
     this.spareWaysReserved = 0,
+    this.capacitorCurrentA = 0,
     required this.phaseBalance,
     required this.warnings,
   });

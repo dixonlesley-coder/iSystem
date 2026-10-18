@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
 import 'package:mechx_engine/report/mep_commercial.dart';
 
 import '../../store/app_state.dart';
@@ -130,7 +131,7 @@ Future<void> exportMepBomCsv(WidgetRef ref) => runExportGuarded(
             fileName: '$name-mep-bom.csv',
             ext: 'csv');
         if (full == null) return false;
-        await File(full).writeAsString(csv);
+        await File(full).writeAsString(excelCsv(csv));
         return true;
       },
     );

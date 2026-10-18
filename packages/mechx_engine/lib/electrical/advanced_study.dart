@@ -47,6 +47,8 @@ import 'fault.dart'
         faultStudy,
         serviceFaultEstimateVerifyItems,
         solvedRunLengthM;
+import 'genset_backup.dart'
+    show gensetBackedPanelIds, gensetBackupDemandVa, gensetBackupWarnings;
 import 'harmonics.dart' show HarmonicsResult, ThdBand, estimateHarmonics;
 import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
@@ -54,13 +56,19 @@ import 'metering.dart' show MeteringSpec, meterFor;
 import 'model.dart'
     show ElectricalCircuit, ElectricalPanel, ElectricalProject, ElectricalSystem;
 import 'panel_results.dart'
-    show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult;
+    show
+        ElectricalCircuitResult,
+        ElectricalPanelResult,
+        ElectricalSystemResult,
+        ElectricalWarning;
 import 'power_factor.dart' show PowerFactorResult, powerFactorCorrection;
 import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
     show SupplyDesign, determineSupply, recommendedDaya;
+
+export 'genset_backup.dart' show gensetBackedPanelIds;
 
 /// A representative MCB clearing (arcing) time for the arc-flash screen (s) —
 /// fast magnetic/thermal trip on a miniature device.
@@ -137,6 +145,11 @@ class AdvancedStudy {
   /// de-duplicated and order-preserving.
   final List<String> verifyItems;
 
+  /// Round 13 — JUDGE-ONLY project-level warnings this layer raises (today: a
+  /// forced genset nameplate below the essential boards' demand). Fanned into
+  /// the ONE electrical warning surface by the app. Empty by default.
+  final List<ElectricalWarning> warnings;
+
   const AdvancedStudy({
     required this.fault,
     required this.supply,
@@ -155,6 +168,7 @@ class AdvancedStudy {
     this.powerOneLine,
     required this.bom,
     required this.verifyItems,
+    this.warnings = const [],
   });
 }
 
@@ -238,8 +252,9 @@ AdvancedStudy computeAdvancedStudy(
         const Current(defaultLvUtilityFaultKa * 1000),
   );
 
-  // Origin / service-root panel (first root-first id that is utility-fed).
-  final originPanelId = _originPanelId(sys, modelById);
+  // Origin / service-root panels — EVERY utility-fed root (Round 13: one
+  // origin per service entrance, not just the first listed).
+  final originPanelIds = originPanelIdsOf(sys, project);
   // Feeder distance (m) from the origin SPD to each sub-board (the cumulative
   // feeder-cable run on the path to the panel).
   final feederDistanceM = _feederDistances(sys, project);
@@ -299,7 +314,7 @@ AdvancedStudy computeAdvancedStudy(
     metering[id] = meterFor(panelResult.demandCurrent);
 
     // SPD — origin board at the service entrance; sub-boards by feeder distance.
-    final atOrigin = id == originPanelId;
+    final atOrigin = originPanelIds.contains(id);
     spd[id] = recommendSpd(
       atOrigin: atOrigin,
       feederDistanceM: feederDistanceM[id] ?? 0,
@@ -349,6 +364,9 @@ AdvancedStudy computeAdvancedStudy(
     powerOneLine = buildPowerOneLine(
       project.sources!,
       demand: sys.supply.demandVa,
+      // Round 13 — the genset backs max(fraction × demand, the essential
+      // sub-tree's demand), the same basis the spine + schedule print.
+      backupDemand: gensetBackupDemandVa(project, sys),
       voltage: sys.supply.voltage,
       motors: gensetStartMotors(project),
     );
@@ -409,6 +427,7 @@ AdvancedStudy computeAdvancedStudy(
     powerOneLine: powerOneLine,
     bom: bom,
     verifyItems: verify,
+    warnings: gensetBackupWarnings(project, sys),
   );
 }
 
@@ -427,17 +446,31 @@ bool _isMotorLike(ElectricalCircuit c) =>
 double _motorKw(ElectricalCircuit c) =>
     c.motorKw ?? (c.loadW > 0 ? c.loadW / 1000.0 : 0);
 
-/// The origin / service-root panel id: the first root-first panel that takes its
-/// supply directly from the utility, else the first id in the solve order.
-String? _originPanelId(
+/// The origin / service-entrance panel ids: EVERY panel that takes its supply
+/// directly from the utility — no feeder way points at it and it carries no
+/// `fedByCircuitId`. Round 13 (elec-props-2-multiroot-spd-single-origin): it
+/// used to return ONE id (the first root in the solve order), so a second
+/// service-entrance board on an external-LPS building was treated as a
+/// sub-board at 0 m and told an SPD was not recommended — and the verdict
+/// flipped with panel list order. Falls back to the first id in the solve
+/// order when no panel qualifies (a cyclic topology).
+Set<String> originPanelIdsOf(
   ElectricalSystemResult sys,
-  Map<String, ElectricalPanel> modelById,
+  ElectricalProject project,
 ) {
-  for (final id in sys.order) {
-    final m = modelById[id];
-    if (m != null && m.fedByCircuitId == null) return id;
-  }
-  return sys.order.isNotEmpty ? sys.order.first : null;
+  final fed = <String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
+          c.feedsPanelId!,
+  };
+  final modelById = {for (final p in project.panels) p.id: p};
+  final out = <String>{
+    for (final id in sys.order)
+      if (!fed.contains(id) && modelById[id]?.fedByCircuitId == null) id,
+  };
+  if (out.isEmpty && sys.order.isNotEmpty) out.add(sys.order.first);
+  return out;
 }
 
 /// Cumulative feeder-cable run length (m) from the origin to each panel, walking
@@ -519,38 +552,6 @@ bool _hasFloorGear(
     }
   }
   return false;
-}
-
-/// The ESSENTIAL (genset-backed) panel ids (Round 11): a panel flagged
-/// [ElectricalPanel.essential], or named EMERGENCY / ESSENTIAL / DARURAT, plus
-/// every board it feeds (the property propagates DOWN the emergency sub-tree) —
-/// the same rule the single-line's normal / essential colour split uses.
-Set<String> gensetBackedPanelIds(ElectricalProject project) {
-  final children = <String, List<String>>{};
-  for (final p in project.panels) {
-    for (final c in p.circuits) {
-      final fed = c.feedsPanelId;
-      if (fed != null && fed.isNotEmpty) {
-        (children[p.id] ??= <String>[]).add(fed);
-      }
-    }
-  }
-  bool own(ElectricalPanel p) {
-    final n = p.name.toUpperCase();
-    return p.essential ||
-        n.contains('EMERGENCY') ||
-        n.contains('ESSENTIAL') ||
-        n.contains('DARURAT');
-  }
-
-  final out = <String>{};
-  final stack = [for (final p in project.panels) if (own(p)) p.id];
-  while (stack.isNotEmpty) {
-    final id = stack.removeLast();
-    if (!out.add(id)) continue; // also guards a (sanitized-away) cycle
-    stack.addAll(children[id] ?? const <String>[]);
-  }
-  return out;
 }
 
 /// The motors (for the genset-start voltage-dip screen), with their starter

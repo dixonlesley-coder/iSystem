@@ -5,6 +5,7 @@
 /// data.
 library;
 
+import 'dart:convert' show jsonEncode;
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show immutable;
@@ -378,9 +379,15 @@ class TankAreaController extends Notifier<List<TankArea>> {
   }
 
   void _update(String id, TankArea Function(TankArea) f) {
-    if (!state.any((t) => t.id == id)) return;
+    final cur = state.where((t) => t.id == id).firstOrNull;
+    if (cur == null) return;
+    // Round 13 (ui-journey-2) — a pick that changes nothing (re-tapping the
+    // selected material, '-' at the depth floor) records NO undo step; it used
+    // to spend one, so the engineer's real last edit needed a second Ctrl+Z.
+    final next = f(cur);
+    if (_sameAnnotation(cur.toJson(), next.toJson())) return;
     ref.read(annotationHistoryProvider.notifier).record();
-    state = [for (final t in state) if (t.id == id) f(t) else t];
+    state = [for (final t in state) if (t.id == id) next else t];
   }
 
   void removeById(String id) {
@@ -781,9 +788,14 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
   }
 
   void _update(String id, RoomArea Function(RoomArea) f) {
-    if (!state.any((r) => r.id == id)) return;
+    final cur = state.where((r) => r.id == id).firstOrNull;
+    if (cur == null) return;
+    // Round 13 — a no-op edit (same room type, a clamp boundary) records no
+    // undo step (see [TankAreaController._update]).
+    final next = f(cur);
+    if (_sameAnnotation(cur.toJson(), next.toJson())) return;
     ref.read(annotationHistoryProvider.notifier).record();
-    state = [for (final r in state) if (r.id == id) f(r) else r];
+    state = [for (final r in state) if (r.id == id) next else r];
   }
 
   void removeById(String id) {
@@ -981,3 +993,9 @@ class AnnotationHistoryController extends Notifier<int> {
     state++;
   }
 }
+
+/// Two annotation records are the same edit-wise when their persisted form is
+/// identical (every field the `.mechx` file stores) — the no-op test for the
+/// tank/room `_update` (Round 13).
+bool _sameAnnotation(Map<String, dynamic> a, Map<String, dynamic> b) =>
+    jsonEncode(a) == jsonEncode(b);

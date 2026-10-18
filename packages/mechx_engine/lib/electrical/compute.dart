@@ -657,7 +657,17 @@ class ComputePanelOptions {
   /// callers ⇒ byte-identical).
   final Map<String, double> feederPowerFactor;
 
+  /// Round 13 — the CAPACITOR switching current (A, per line, already × the
+  /// [kCapacitorSwitchingFactor]) each fed board's capacitor ways — its own and
+  /// any further down its feeder tree — draw, keyed by the child panel id a
+  /// feeder serves. A bank adds no demand W, so without this floor a feeder to
+  /// a dedicated PFC board sized on 0 A (a 10 A / 4 mm² feeder protecting a
+  /// 144 A bank). Derived by `computeSystem`; empty (the default) ⇒ no floor ⇒
+  /// byte-identical.
+  final Map<String, double> feederCapacitorFloorA;
+
   const ComputePanelOptions({
+    this.feederCapacitorFloorA = const {},
     this.feederLoadW = const {},
     this.panelSystems = const {},
     this.earthingSystem = EarthingSystem.tnCs,
@@ -789,6 +799,123 @@ double _singlePhaseNonLinearFraction(List<_CircuitComputation> comps) {
 double _balanceCurrentA(ElectricalCircuitResult r) =>
     r.loadKind == LoadKind.capacitor ? 0.0 : r.designCurrent.amperes;
 
+/// Round 13 (regression-capacitor-panel-feeder-zero) — the worst LINE current
+/// (A) a board must carry for its CAPACITOR ways alone: each bank way's rated
+/// current (`Q / (√3·U_LL)` 3φ, `Q / U0` 1φ, from its kvar rating) × the
+/// [kCapacitorSwitchingFactor], plus — through each feeder way — the same
+/// figure of the board it feeds ([childFloorA], child panel id → A). A bank
+/// adds no demand W and no balance current (its leading current offsets the
+/// load in phasor, so for a MIXED board the bank-off case governs), but a
+/// DEDICATED PFC board's only current IS the bank: its incomer, and the feeder
+/// supplying it, must carry that current whenever the bank switches in. A
+/// 3φ way loads every line; a 1φ way loads its [assignment] line (else its
+/// pin, else the lightest line so far). 0 when the board holds no capacitor
+/// way, directly or downstream.
+double panelCapacitorFloorA(
+  ElectricalPanel panel, {
+  Map<String, double> childFloorA = const {},
+  Map<String, ElectricalSystem> panelSystems = const {},
+  Map<String, PhaseAssignment> assignment = const {},
+}) {
+  final lines = [0.0, 0.0, 0.0];
+  final threePhasePanel = panel.system == ElectricalSystem.threePhase;
+  void add(String id, bool threePhase, PhaseLine? pin, double a) {
+    if (a <= 0) return;
+    if (!threePhasePanel) {
+      lines[0] += a;
+      return;
+    }
+    if (threePhase) {
+      for (var i = 0; i < 3; i++) {
+        lines[i] += a;
+      }
+      return;
+    }
+    final assigned = assignment[id];
+    int idx;
+    if (assigned == PhaseAssignment.l1) {
+      idx = 0;
+    } else if (assigned == PhaseAssignment.l2) {
+      idx = 1;
+    } else if (assigned == PhaseAssignment.l3) {
+      idx = 2;
+    } else if (pin != null) {
+      idx = pin.index;
+    } else {
+      idx = 0;
+      for (var i = 1; i < 3; i++) {
+        if (lines[i] < lines[idx]) idx = i;
+      }
+    }
+    lines[idx] += a;
+  }
+
+  for (final c in panel.circuits) {
+    if (c.role != CircuitRole.branch) continue;
+    if (c.feedsPanelId != null) {
+      final f = childFloorA[c.feedsPanelId];
+      if (f == null) continue;
+      final threePhase =
+          panelSystems[c.feedsPanelId] != ElectricalSystem.singlePhase &&
+              threePhasePanel;
+      add(c.id, threePhase, c.phaseOverride, f);
+      continue;
+    }
+    if (c.loadKind != LoadKind.capacitor) continue;
+    final threePhase = circuitIsThreePhase(
+      panelSystem: panel.system,
+      kind: c.loadKind,
+      loadW: c.loadW,
+      phases: c.phases,
+    );
+    final phaseV = threePhasePanel
+        ? roundTo(panel.voltage.volts / math.sqrt(3), 0)
+        : panel.voltage.volts;
+    final rated = loadCurrent(
+      power: Power(c.loadW),
+      voltage: Voltage(threePhase ? panel.voltage.volts : phaseV),
+      cosPhi: c.cosPhi,
+      threePhase: threePhase,
+    ).amperes;
+    add(c.id, threePhase, c.phaseOverride, rated * kCapacitorSwitchingFactor);
+  }
+  final worst = math.max(lines[0], math.max(lines[1], lines[2]));
+  return roundTo(worst, 1);
+}
+
+/// Round 13 — the root (utility-fed) panel that GOVERNS the service: the
+/// largest incomer rating, then the largest worst-phase demand current, then
+/// the lowest id — so the supply summary and the main earthing / bonding
+/// conductors never depend on panel list order. Null when [roots] is empty.
+ElectricalPanel? governingRootPanel(
+  List<ElectricalPanel> roots,
+  Map<String, ElectricalPanelResult> results,
+) {
+  ElectricalPanel? best;
+  for (final r in roots) {
+    if (best == null) {
+      best = r;
+      continue;
+    }
+    final a = results[r.id];
+    final b = results[best.id];
+    final ra = a?.incomer.breaker.ratingA.amperes ?? 0;
+    final rb = b?.incomer.breaker.ratingA.amperes ?? 0;
+    if (ra != rb) {
+      if (ra > rb) best = r;
+      continue;
+    }
+    final da = a?.demandCurrent.amperes ?? 0;
+    final db = b?.demandCurrent.amperes ?? 0;
+    if (da != db) {
+      if (da > db) best = r;
+      continue;
+    }
+    if (r.id.compareTo(best.id) < 0) best = r;
+  }
+  return best;
+}
+
 /// Format a double without a trailing `.0` for whole numbers (warning text only).
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
@@ -890,16 +1017,34 @@ _CircuitComputation _computeCircuit(
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
   final Current ib;
+  // Round 13 (elec-props-2-motor-ib-undiversified) — the UNDIVERSIFIED full-
+  // load current of a motor / A5-FLA way. Its own device + conductor size on
+  // this (one machine does not diversify against itself), while its DESIGN
+  // current — the figure that feeds the phase balance, the board's demand
+  // current and the incomer — carries the same demand factor
+  // [circuitConnectedW] applies to the way's watts. Before, the design current
+  // was the undiversified FLC while the feeder / upstream demand W was
+  // diversified, so a df-0.5 duty/standby pump pair put a 125 A incomer on a
+  // sub-board fed by an 80 A feeder under a 63 A main incomer.
+  Current? undiversifiedFlc;
   if (c.flaOverrideA != null) {
-    ib = c.flaOverrideA!;
+    undiversifiedFlc = c.flaOverrideA!;
   } else if (motorLike) {
     // Shaft kW → electrical input kW via the assumed efficiency (// VERIFY).
-    ib = loadCurrent(
+    undiversifiedFlc = loadCurrent(
       power: Power.kiloWatts(c.motorKw! / kAssumedMotorEfficiency),
       voltage: Voltage(useVoltageV),
       cosPhi: cosPhi,
       threePhase: threePhase,
     );
+  }
+  if (undiversifiedFlc != null) {
+    final dfEff = isFeeder
+        ? 1.0
+        : effectiveDemandFactor(c,
+            library: opts.diversityLibrary,
+            diversityLibraryId: panel.diversityLibraryId);
+    ib = Current(undiversifiedFlc.amperes * dfEff);
   } else {
     ib = loadCurrent(
       // A capacitor way carries no demand W (see [circuitConnectedW]) but its
@@ -935,7 +1080,12 @@ _CircuitComputation _computeCircuit(
   // aggregation, so both keep `ib`.
   final sizeOnUndiversifiedLoad = !isFeeder;
   Current sizingCurrent;
-  if (sizeOnUndiversifiedLoad && c.flaOverrideA == null && !motorLike) {
+  if (undiversifiedFlc != null) {
+    // Motor / A5-FLA: device + conductor on the undiversified FLC (never below
+    // the design current, so a demand factor above 1 cannot under-size it).
+    sizingCurrent =
+        Current(math.max(ib.amperes, undiversifiedFlc.amperes));
+  } else if (sizeOnUndiversifiedLoad) {
     final undiversified = loadCurrent(
       power: Power(c.loadW),
       voltage: Voltage(useVoltageV),
@@ -948,11 +1098,33 @@ _CircuitComputation _computeCircuit(
   } else {
     sizingCurrent = ib;
   }
+  // Round 13 (elec-props-2-final-vd-on-diversified-ib) — the current the run
+  // REALLY carries when its machine runs: the undiversified current for a
+  // final way (the same basis its cable was sized on), the aggregated Ib for a
+  // feeder. The printed / cumulative voltage drop uses this, so a demand factor
+  // can no longer understate a final way's drop (and hide a cumulative-limit
+  // breach). Taken BEFORE the capacitor switching multiple — that factor is a
+  // thermal allowance for the device, not the current that flows.
+  final runCurrent = isFeeder ? ib : sizingCurrent;
   // Round 11 — a capacitor bank's switching device + conductor carry 1.43 ×
   // its rated current ([kCapacitorSwitchingFactor], IEC 60831-1 1.3 × 1.1).
   if (c.loadKind == LoadKind.capacitor) {
     sizingCurrent =
         Current(sizingCurrent.amperes * kCapacitorSwitchingFactor);
+  }
+  // Round 13 (regression-capacitor-panel-feeder-zero) — a feeder to a board
+  // holding capacitor ways carries that bank's current whenever it is switched
+  // in, even though the bank adds no demand W (and so nothing to `ib`). The
+  // feeder's device + conductor floor at the fed board's capacitor switching
+  // current ([ComputePanelOptions.feederCapacitorFloorA]); its voltage drop
+  // uses the bank's rated current. Absent ⇒ byte-identical.
+  var feederRunCurrent = runCurrent;
+  final capFloorA =
+      isFeeder ? opts.feederCapacitorFloorA[c.feedsPanelId] : null;
+  if (capFloorA != null && capFloorA > sizingCurrent.amperes) {
+    sizingCurrent = Current(capFloorA);
+    final rated = capFloorA / kCapacitorSwitchingFactor;
+    if (rated > feederRunCurrent.amperes) feederRunCurrent = Current(rated);
   }
 
   // THE LOAD-SIZED DEVICE. Deliberately floor-free: the conductor below is sized
@@ -1055,7 +1227,7 @@ _CircuitComputation _computeCircuit(
   final runsPerPhase = cable.runsPerPhase ?? 1;
   final vd = voltageDrop(
     profile,
-    current: Current(ib.amperes / runsPerPhase),
+    current: Current(feederRunCurrent.amperes / runsPerPhase),
     length: effectiveLength,
     csaMm2: cable.csaMm2,
     cosPhi: cosPhi,
@@ -1391,9 +1563,24 @@ ElectricalPanelResult computePanel(
   // Null / smaller floor ⇒ exactly the demand-based current ⇒ byte-identical.
   final futureDemandCurrentA = roundTo(demandCurrentA * headroomMultiplier, 1);
   final serviceFloorA = opts.serviceMinCurrentA ?? 0;
-  final serviceGoverns = serviceFloorA > futureDemandCurrentA;
-  final incomerSizingCurrentA =
-      serviceGoverns ? roundTo(serviceFloorA, 1) : futureDemandCurrentA;
+  // Round 13 — the board's capacitor switching current (its own banks + any
+  // fed downstream) floors the incomer + busbar: a dedicated PFC board whose
+  // only current is the bank no longer gets a 6 A incomer. 0 ⇒ byte-identical.
+  final capacitorFloorA = panelCapacitorFloorA(
+    panel,
+    childFloorA: opts.feederCapacitorFloorA,
+    panelSystems: opts.panelSystems,
+    assignment: balance.assignment,
+  );
+  final serviceGoverns = serviceFloorA > futureDemandCurrentA &&
+      serviceFloorA >= capacitorFloorA;
+  final capacitorGoverns = !serviceGoverns &&
+      capacitorFloorA > futureDemandCurrentA;
+  final incomerSizingCurrentA = serviceGoverns
+      ? roundTo(serviceFloorA, 1)
+      : capacitorGoverns
+          ? capacitorFloorA
+          : futureDemandCurrentA;
 
   final incomerBreaker = selectBreaker(
     profile,
@@ -1407,7 +1594,9 @@ ElectricalPanelResult computePanel(
   if (incomerBreaker.ratingA.amperes + 1e-9 < incomerSizingCurrentA) {
     final basis = serviceGoverns
         ? 'declared service capacity'
-        : '${headroomApplied ? 'future ' : ''}demand';
+        : capacitorGoverns
+            ? 'capacitor-bank switching current'
+            : '${headroomApplied ? 'future ' : ''}demand';
     warnings.add(ElectricalWarning(
       code: 'incomer-exceeds-range',
       severity: WarningSeverity.error,
@@ -1557,6 +1746,7 @@ ElectricalPanelResult computePanel(
     futureLoadW: roundTo(futureLoadW, 0),
     headroomApplied: headroomApplied,
     spareWaysReserved: spareWaysReserved,
+    capacitorCurrentA: capacitorFloorA,
     phaseBalance: PhaseBalanceResult(
       l1: balance.l1,
       l2: balance.l2,
@@ -1753,6 +1943,19 @@ ElectricalSystemResult computeSystem(
     }
   }
 
+  // Round 13 — bottom-up capacitor switching current per board (its own banks
+  // + every board it feeds), so a feeder to a PFC board floors at the bank's
+  // current (see [ComputePanelOptions.feederCapacitorFloorA]). Boards with no
+  // capacitor way anywhere below are absent ⇒ byte-identical.
+  final capacitorFloorByPanel = <String, double>{};
+  for (final id in postOrder) {
+    final panel = byId[id];
+    if (panel == null) continue;
+    final f = panelCapacitorFloorA(panel,
+        childFloorA: capacitorFloorByPanel, panelSystems: panelSystems);
+    if (f > 0) capacitorFloorByPanel[id] = f;
+  }
+
   // True building connected load = leaf loads only (feeders are aggregations).
   var connectedLoadW = 0.0;
   for (final p in panels) {
@@ -1868,6 +2071,7 @@ ElectricalSystemResult computeSystem(
         opts: ComputePanelOptions(
           feederLoadW: feederLoadWByPanel[id] ?? const {},
           feederPowerFactor: panelPowerFactor,
+          feederCapacitorFloorA: capacitorFloorByPanel,
           panelSystems: panelSystems,
           earthingSystem: project.earthingSystem,
           faultLevelA: faultLevelA,
@@ -1951,6 +2155,7 @@ ElectricalSystemResult computeSystem(
         futureLoadW: pr.futureLoadW,
         headroomApplied: pr.headroomApplied,
         spareWaysReserved: pr.spareWaysReserved,
+        capacitorCurrentA: pr.capacitorCurrentA,
         phaseBalance: pr.phaseBalance,
         warnings: pr.warnings,
       );
@@ -2081,9 +2286,18 @@ ElectricalSystemResult computeSystem(
     // Supply summary from the diversified demand presented by the root panel(s).
     final rootDemandW =
         roots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0));
+    // Round 13 (elec-props-2-multiroot-earthing-first-root) — with several
+    // utility-fed roots the SERVICE (supply system / voltage, main cable,
+    // main earthing + bonding conductors) is governed by the LARGEST root, not
+    // whichever happened to be listed first: largest incomer rating, then
+    // largest worst-phase demand current, then the lowest id (deterministic).
+    // A 250 A 3φ root listed after a 1φ lighting board used to print a 16 mm²
+    // main earthing conductor and a single-phase 230 V supply. One root ⇒ that
+    // root ⇒ byte-identical.
+    final governingRoot = governingRootPanel(roots, results);
     final supplySystem =
-        roots.firstOrNull?.system ?? ElectricalSystem.threePhase;
-    final supplyVoltage = roots.firstOrNull?.voltage ?? const Voltage(400);
+        governingRoot?.system ?? ElectricalSystem.threePhase;
+    final supplyVoltage = governingRoot?.voltage ?? const Voltage(400);
     final supply = SupplySummary(
       connectedW: roundTo(connectedLoadW, 0),
       demandW: roundTo(rootDemandW, 0),
@@ -2096,7 +2310,7 @@ ElectricalSystemResult computeSystem(
     // service-capacity floor rides along (when it governs), so the service PE
     // tracks the entrance device the same floor sized.
     final mainResult =
-        roots.firstOrNull != null ? results[roots.first.id] : null;
+        governingRoot != null ? results[governingRoot.id] : null;
     // Round 12 (report-recompute-earthing-ignores-headroom) — with a future-
     // load HEADROOM on the root, the incomer is rated for the future load
     // (demand × multiplier), so the service cable — and the main earthing /
@@ -2108,7 +2322,7 @@ ElectricalSystemResult computeSystem(
     // demand basis below ⇒ byte-identical.
     final mainDemandIb = mainResult?.demandCurrent ?? const Current(0);
     final rootHeadroomActive =
-        (roots.firstOrNull?.headroom ?? HeadroomSpec.none).isActive;
+        (governingRoot?.headroom ?? HeadroomSpec.none).isActive;
     final incomerRating = mainResult?.incomer.breaker.ratingA;
     final mainIb = rootHeadroomActive && incomerRating != null
         ? incomerRating

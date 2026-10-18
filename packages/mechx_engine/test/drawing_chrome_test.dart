@@ -627,19 +627,30 @@ void main() {
       expect(nums.toSet().length, 3);
     });
 
-    test('a non-empty base is the verbatim override (trimmed)', () {
+    test('a non-empty base is a PREFIX, never one number on every sheet', () {
+      // Round 13 (export-files-4) — the project-wide document number used to
+      // be returned verbatim, so filling it collapsed the whole set onto ONE
+      // number. It now prefixes the derived per-sheet code (trimmed).
       expect(
           sheetDrawingNumber(
-              base: 'ME-2024-001', series: DrawingSeries.mechanicalPlan),
-          'ME-2024-001');
-      // Whitespace-only counts as blank ⇒ still derives.
+              base: 'BRI-MEP-01', series: DrawingSeries.mechanicalPlan),
+          'BRI-MEP-01-M-101');
+      // Whitespace-only counts as blank ⇒ the bare derived code.
       expect(
           sheetDrawingNumber(base: '   ', series: DrawingSeries.electricalRiser),
           'E-401');
       expect(
           sheetDrawingNumber(
               base: '  E-9  ', series: DrawingSeries.electricalDetail),
-          'E-9');
+          'E-9-E-201');
+      // Property: for any base, every (series, index) pair stays distinct.
+      final nums = <String>{
+        for (final series in DrawingSeries.values)
+          for (var i = 1; i <= 5; i++)
+            sheetDrawingNumber(base: 'P-7', series: series, index: i),
+      };
+      // M-1xx/M-2xx and E-1xx..E-5xx — 7 bands × 5 indices, all unique.
+      expect(nums.length, DrawingSeries.values.length * 5);
     });
 
     test('an index past the band is padded, never bleeding to the next band',
