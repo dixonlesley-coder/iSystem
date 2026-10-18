@@ -263,6 +263,108 @@ void main() {
       }
     });
 
+    test('costing-2: a large NYA run (beyond the 95 mm² single-core parts) '
+        'is still bought per conductor and never as a multi-core NYY SKU', () {
+      final s = sys(const [
+        ElectricalCircuit(
+          id: 'f1',
+          name: 'Feeder',
+          loadKind: LoadKind.motor,
+          motorKw: 30,
+          phases: 3,
+          length: Length(12),
+          cableType: 'NYA',
+          cableOverrideMm2: 150,
+        ),
+      ]);
+      final pr = s.panels['mdp']!;
+      final c = pr.circuits.single;
+      expect(c.cable.csaMm2, greaterThanOrEqualTo(150)); // the premise
+      // The catalogue's largest single-core NYA is below the run's section, so
+      // the family (not the matched part) must trigger the single-core path.
+      final ncore = parts.where((p) => p.cores == 1 && p.cableType == 'NYA');
+      expect(ncore.every((p) => p.csaMm2! < c.cable.csaMm2), isTrue);
+      final lines = elec.buildPanelBom(pr, parts: parts)
+          .where((l) => l.category == PartCategory.cable)
+          .toList();
+      final runs = c.cable.runsPerPhase ?? 1;
+      // Live conductors + the separate PE line = grounding.cores pulls.
+      final total = lines.fold(0.0, (a, l) => a + l.qty);
+      expect(total, 12.0 * runs * c.grounding.cores);
+      for (final l in lines) {
+        // Never a multi-core part, never a core-count NYY key.
+        if (l.sku != null) {
+          expect(parts.firstWhere((p) => p.sku == l.sku).cores, 1);
+        }
+        expect(l.priceKey, isNotNull);
+        expect(l.priceKey, isNot(contains('NYY')));
+      }
+      final live = lines.first;
+      expect(live.sku, isNull);
+      expect(live.priceKey,
+          '${elec.kElecPriceKeyPrefix}cable:NYA:1x${c.cable.csaMm2.toInt()}');
+    });
+
+    test('consolidation never drops a breaking-capacity shortfall', () {
+      // ONE breaker part (6 kA) serves every way on two boards: board A needs
+      // 3 kA (adequate), board B 10 kA (short). The shortfall must survive
+      // consolidation as its own flagged line naming the missed 10 kA.
+      const only = Part(
+        sku: 'MCB-X',
+        manufacturer: 'Generic',
+        category: PartCategory.breaker,
+        series: 'X',
+        model: 'X',
+        attributes: {
+          'ratingA': 1000,
+          'poles': 3,
+          'curve': 'C',
+          'deviceClass': 'MCB',
+          'breakingKa': 6,
+        },
+      );
+      ElectricalPanel board(String id) => ElectricalPanel(
+            id: id,
+            name: id.toUpperCase(),
+            voltage: const Voltage(400),
+            circuits: [
+              ElectricalCircuit(
+                id: '$id-l',
+                name: 'Lighting',
+                loadKind: LoadKind.lighting,
+                isLighting: true,
+                loadW: 1100,
+                cosPhi: 0.9,
+                length: const Length(20),
+              ),
+            ],
+          );
+      final s = computeSystem(
+        _profile,
+        ElectricalProject(
+          id: 'p',
+          name: 'p',
+          earthingSystem: EarthingSystem.tnCs,
+          panels: [board('a'), board('b')],
+        ),
+      );
+      final bom = elec.buildBom(s,
+          parts: const [only], requiredIcuKaByPanelId: {'a': 3, 'b': 10});
+      final breakers =
+          bom.lines.where((l) => l.category == PartCategory.breaker).toList();
+      final short = breakers.where((l) => l.breakingCapacityShort).toList();
+      final ok = breakers.where((l) => !l.breakingCapacityShort).toList();
+      expect(short, isNotEmpty);
+      expect(ok, isNotEmpty);
+      for (final l in short) {
+        expect(l.sku, 'MCB-X');
+        expect(l.description, contains('no catalogue part reaches 10kA'));
+      }
+      // Board B's 2 breakers (incomer + way) are all short; A's are all ok.
+      expect(short.fold(0.0, (a, l) => a + l.qty), 2);
+      expect(ok.fold(0.0, (a, l) => a + l.qty), 2);
+    });
+
     test('costing-2: multi-core NYY keys its price by core count', () {
       final s = sys(const [
         ElectricalCircuit(

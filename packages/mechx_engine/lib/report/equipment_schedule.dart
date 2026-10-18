@@ -20,7 +20,7 @@ library;
 
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
-import '../electrical/sources.dart' show selectGeneratorKva;
+import '../electrical/sources.dart' show selectGeneratorUnits;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
 import '../units.dart' show ApparentPower;
@@ -359,19 +359,24 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       // (backupFraction × diversified demand), exactly as the source spine does.
       // No result / no demand and no forced kVA ⇒ can't size ⇒ no row.
       final demandVa = data.electrical?.supply.demandVa;
-      final ApparentPower? genKva = gen.kva ??
-          (demandVa != null && demandVa.inKilovoltAmperes > 0
-              ? selectGeneratorKva(
+      // Past the top rung the requirement is n PARALLELED sets of the largest
+      // genset (audit r8-5) — the row carries the per-set kVA with qty = n,
+      // never one set silently below the requirement.
+      final sel = gen.kva != null
+          ? (unitKva: gen.kva!, units: 1)
+          : (demandVa != null && demandVa.inKilovoltAmperes > 0
+              ? selectGeneratorUnits(
                   ApparentPower(demandVa.voltAmperes * gen.backupFraction))
               : null);
-      if (genKva != null && genKva.inKilovoltAmperes > 0) {
+      final genKva = sel?.unitKva;
+      if (sel != null && genKva != null && genKva.inKilovoltAmperes > 0) {
         rows.add(EquipmentScheduleRow(
           tag: 'G-01',
           service: strings(RptStringKey.esGeneratorService),
           duty: '${_fmt(genKva.inKilovoltAmperes, dp: 0)} kVA',
           size: '',
           modelSpec: specFor('G-01'),
-          qty: 1,
+          qty: sel.units,
           category: EquipmentCategory.generator,
         ));
       }

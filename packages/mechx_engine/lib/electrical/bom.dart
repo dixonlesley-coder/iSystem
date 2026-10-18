@@ -175,6 +175,13 @@ String? matchCableSku(double csaMm2, List<Part> parts, {String? cableType}) {
   return pool.first.sku;
 }
 
+/// True for a SINGLE-CORE cable family (NYA / NYAF — one conductor per
+/// cable, so a way needs one pull per conductor). Case-insensitive.
+bool isSingleCoreCableFamily(String? cableType) {
+  final t = cableType?.trim().toUpperCase();
+  return t == 'NYA' || t == 'NYAF';
+}
+
 // ── BOM line + bill ──────────────────────────────────────────────────────────
 
 /// One aggregated bill-of-materials line.
@@ -256,10 +263,16 @@ List<BomLine> _panelLines(
     final part = _matchBreaker(b, parts,
         poles: poles, minBreakingKa: minBreakingKa);
     final short = _kaShort(part, minBreakingKa);
+    // The shortfall note goes BEFORE the trailing " — <location>" suffix, so
+    // consolidation (which strips that suffix) keeps it on the merged line.
+    String withNote(String d) {
+      final note = ' (no catalogue part reaches$kaTag)';
+      final i = d.lastIndexOf(' — ');
+      return i < 0 ? '$d$note' : '${d.substring(0, i)}$note${d.substring(i)}';
+    }
+
     return BomLine(
-      description: short
-          ? '$description (no catalogue part reaches$kaTag)'
-          : description,
+      description: short ? withNote(description) : description,
       qty: 1,
       category: PartCategory.breaker,
       sku: part?.sku,
@@ -319,30 +332,43 @@ List<BomLine> _panelLines(
           matchCableSku(c.cable.csaMm2, parts, cableType: c.grounding.cableType);
       final cablePart = cableSku == null ? null : partBySku[cableSku];
       final cores = c.grounding.cores;
-      if (cablePart?.cores == 1) {
+      final family = c.grounding.cableType;
+      if (isSingleCoreCableFamily(family) || cablePart?.cores == 1) {
         // SINGLE-CORE construction (NYA / NYAF): every conductor is its own
         // pull, so the metres are run × conductors (audit r8 — buying one run
         // length bought 1/3–1/4 of the copper). The PE (when it has its own
-        // section) is listed as its own single-core line.
+        // section) is listed as its own single-core line. The trigger is the
+        // way's cable FAMILY, not only the matched part: the catalogue carries
+        // single-core NYA only up to 95 mm², so a larger NYA run used to fall
+        // through to a multi-core NYY SKU and be bought as ONE run length. A
+        // matched part that is not single-core is never used for a single-core
+        // run — the line goes unmatched with a deterministic `elec:` price key.
+        String? singleCoreSku(String? sku) =>
+            (sku != null && partBySku[sku]?.cores == 1) ? sku : null;
+        String singleCoreKey(double csa) =>
+            '${kElecPriceKeyPrefix}cable:$family:1x${_fmt(csa)}';
         final hasPe = c.grounding.peCsaMm2 > 0;
         final live = hasPe ? math.max(1, cores - 1) : cores;
+        final liveSku = singleCoreSku(cableSku);
         lines.add(BomLine(
           description: 'Cable $spec ($live × 1C) — ${c.name}',
           qty: runLengthM * runs * live,
           category: PartCategory.cable,
-          sku: cableSku,
+          sku: liveSku,
           runs: runs,
+          priceKey: liveSku ?? singleCoreKey(c.cable.csaMm2),
         ));
         if (hasPe) {
-          final peSku = matchCableSku(c.grounding.peCsaMm2, parts,
-              cableType: c.grounding.cableType);
+          final peSku = singleCoreSku(
+              matchCableSku(c.grounding.peCsaMm2, parts, cableType: family));
           lines.add(BomLine(
-            description: 'Cable ${c.grounding.cableType} 1×'
+            description: 'Cable $family 1×'
                 '${_fmt(c.grounding.peCsaMm2)} mm² PE — ${c.name}',
             qty: runLengthM * runs,
             category: PartCategory.cable,
             sku: peSku,
             runs: runs,
+            priceKey: peSku ?? singleCoreKey(c.grounding.peCsaMm2),
           ));
         }
       } else {
@@ -499,11 +525,17 @@ List<BomLine> _consolidate(List<BomLine> lines) {
     // first line's description. Cable lines therefore key on the SKU AND the
     // full stripped spec (family · cores · make-up), staying separate orderable
     // lines; every other category keeps the plain SKU key.
+    // A breaker SKU that is adequate on one board but SHORT of another board's
+    // prospective fault keys apart (`::kA-short::<desc>`, the desc carrying
+    // the kA it misses), so consolidation can never
+    // fold the shortfall into an adequate line and drop the flag.
     final key = line.sku == null
         ? '${line.category.name}::$desc'
         : line.category == PartCategory.cable
             ? '${line.sku}::$desc'
-            : line.sku!;
+            : line.breakingCapacityShort
+                ? '${line.sku}::kA-short::$desc'
+                : line.sku!;
     final existing = byKey[key];
     if (existing == null) {
       byKey[key] = BomLine(

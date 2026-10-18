@@ -31,6 +31,10 @@ double? parseMoneyInput(String input, {required bool indonesian}) {
     if (decimal.allMatches(s).length > 1) return null;
     // The grouping mark must not appear after the decimal mark.
     if (s.lastIndexOf(group) > s.indexOf(decimal)) return null;
+    // The integer part must be well-formed thousands grouping (`1.250` ok,
+    // `1.25` / `.250` not) — the same rule as the single-kind path, so
+    // `1.25,5` is rejected instead of silently read as 125.5.
+    if (!_wellGrouped(s.substring(0, s.indexOf(decimal)), group)) return null;
     s = s.replaceAll(group, '');
   } else if (dots + commas > 0) {
     final sep = dots > 0 ? '.' : ',';
@@ -38,11 +42,7 @@ double? parseMoneyInput(String input, {required bool indonesian}) {
     if (count > 1) {
       // Several marks of one kind ⇒ thousands grouping; every group after the
       // first must be exactly three digits.
-      final parts = s.split(sep);
-      if (parts.first.isEmpty ||
-          parts.skip(1).any((p) => p.length != 3)) {
-        return null;
-      }
+      if (!_wellGrouped(s, sep)) return null;
       s = s.replaceAll(sep, '');
     } else {
       final tail = s.substring(s.indexOf(sep) + 1);
@@ -57,4 +57,14 @@ double? parseMoneyInput(String input, {required bool indonesian}) {
   if (decimal != null) s = s.replaceAll(decimal, '.');
   if (s.startsWith('.') || s.endsWith('.')) return null;
   return double.tryParse(s);
+}
+
+/// True when [intPart] is valid thousands grouping on [sep]: a non-empty
+/// leading group of at most three digits, then groups of exactly three.
+bool _wellGrouped(String intPart, String sep) {
+  final parts = intPart.split(sep);
+  if (parts.first.isEmpty || parts.first.length > 3 && parts.length > 1) {
+    return false;
+  }
+  return parts.skip(1).every((p) => p.length == 3);
 }

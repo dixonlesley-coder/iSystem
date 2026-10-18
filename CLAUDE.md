@@ -277,6 +277,8 @@ success/warning/danger verdict (Network: pump motor kW, or PRV-zones worst-kPa O
 static + motor), demoting the supporting key/value rows beneath; each card renders only when its
 result exists, so a blank launch is byte-identical (goldens shift only by the small chevron glyph).
 
+**Audit round 8 (2026-10-18) — fire/HVAC, advanced electrical, costing, MEP coupling**: judge-only sprinkler-vs-fire-pump Review warnings (`sprinkler-flow-exceeds-fire-pump` / `sprinkler-head-exceeds-fire-pump` via `sprinklerPumpCheckProvider`), the AC-load basis relabelled 'Internal gains (no envelope)' + a `cooling-internal-gains-only` advisory, life-safety electrical checks (`life-safety-cable`, `life-safety-not-essential`), the drawn plant node and its solved duty bound to ONE electrical way (`mepDutyBindingProvider`), material/W×H-aware mechanical price keys + `elec:` price keys for every electrical BOM line, and a locale-aware money input (`ui/commercial/money_input.dart` `parseMoneyInput`). See the §15 row for the full list + recorded residuals.
+
 ## Conventions
 
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for
@@ -1805,6 +1807,26 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   before ⇒ **byte-identical**. Every factor is `secondarySource` `// VERIFY` (IEC
   60364-1 / NEC 220 practice, not a PUIL clause), surfaced via `diversityLibraryVerifyItems`
   (added to `AdvancedStudy.verifyItems` only when a panel references the library).
+- **Audit round 8 invariants (don't regress)**: the most-remote standpipe riser
+  is **500 gpm** (SNI 03-1745 / NFPA 14 — corrected from 550). The genset ladder
+  NEVER saturates silently: `sizeGenerator` / `selectGeneratorUnits` return
+  `n × 2500 kVA` past the top rung (`GeneratorResult.ratingKva` is then the
+  PER-SET rating), and every printed surface goes through them — the SLD
+  GENSET/TRANSFORMER nodes print `n x 2500 kVA` (coverage % on the paralleled
+  total), the schedule G-01 row prints the per-set kVA with qty = n, and the power
+  one-line screens the motor-start dip on the PARALLELED kVA; never print
+  `selectGeneratorKva` alone. Inverters, capacitor banks, transformers and CTs
+  flag saturation the same way. A solved MEP motor way sizes on
+  `max(operating, nameplate)` input. The sprinkler-vs-fire-pump check is
+  JUDGE-ONLY and its head is a LOWER BOUND (static lift + branch-base pressure,
+  no friction). Electrical BOM: a single-core cable family (NYA/NYAF,
+  `isSingleCoreCableFamily`) is bought per CONDUCTOR whatever part matched — it
+  never takes a non-single-core part (unmatched ⇒ `elec:cable:<family>:1x<csa>`);
+  multi-core cable prices on `SKU:nC`; every non-catalogue line carries an `elec:`
+  key; a breaker short of its board's prospective kA is flagged
+  `breakingCapacityShort` and consolidation keys it APART from an adequate line of
+  the same SKU (the flag can never be merged away). `parseMoneyInput` validates
+  thousands grouping on both the single- and mixed-separator paths.
 - **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save

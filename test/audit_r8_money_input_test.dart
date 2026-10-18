@@ -31,6 +31,16 @@ void main() {
       expect(id(''), isNull);
       expect(id('1.250,000.5'), isNull);
     });
+    test('mixed separators validate the thousands grouping too', () {
+      expect(id('1.25,5'), isNull); // was 125.5
+      expect(id('.250,5'), isNull);
+      expect(id('1250.000,5'), isNull);
+      expect(id('1.250,5'), 1250.5);
+      expect(id('12.250.000,75'), 12250000.75);
+      expect(id('1250,5'), 1250.5); // no grouping mark at all
+      expect(parseMoneyInput('1,25.5', indonesian: false), isNull);
+      expect(parseMoneyInput('1,250.5', indonesian: false), 1250.5);
+    });
   });
 
   group('parseMoneyInput — English locale', () {

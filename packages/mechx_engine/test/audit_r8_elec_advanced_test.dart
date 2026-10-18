@@ -27,6 +27,8 @@ import 'package:mechx_engine/electrical/power_factor.dart';
 import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/supply_design.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
+import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -312,6 +314,110 @@ void main() {
       expect(r.bankKvar, 2000);
       expect(r.bankKvar, greaterThanOrEqualTo(r.requiredKvar));
       expect(r.note, contains('2 x 1000 kVAR'));
+    });
+  });
+
+  group('r8-5 genset saturation reaches every printed surface', () {
+    // 40 × 100 kW welding ways at pf 0.8 — a demand far beyond the 2500 kVA top
+    // genset rung. n = ceil(demandKva / 2500) is derived from the SOLVED
+    // demand, so the test pins the rule, not a magic diversity figure.
+    ElectricalProject big({GeneratorSource? gen}) => ElectricalProject(
+          id: 'P',
+          name: 'Big',
+          earthingSystem: EarthingSystem.tnCs,
+          sources: ElectricalSources(
+              generator: gen ?? const GeneratorSource()),
+          panels: [
+            ElectricalPanel(
+              id: 'MDP',
+              name: 'MDP',
+              voltage: const Voltage(400),
+              circuits: [
+                for (var i = 0; i < 40; i++)
+                  ElectricalCircuit(
+                    id: 'w$i',
+                    name: 'Welder $i',
+                    loadKind: LoadKind.welding,
+                    loadW: 100000,
+                    cosPhi: 0.8,
+                    phases: 3,
+                    length: const Length(10),
+                  ),
+              ],
+            ),
+          ],
+        );
+    String labels(SldSheet s) =>
+        s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
+
+    test('SLD genset node prints "n x 2500 kVA" (overview + canvas spine)', () {
+      final p = big();
+      final r = computeSystem(_profile, p);
+      final demandKva = r.supply.demandVa.inKilovoltAmperes;
+      expect(demandKva, greaterThan(2500)); // the premise
+      final n = (demandKva / 2500).ceil();
+      final v = labels(
+          buildElectricalOverview(project: p, result: r, sourceChain: true));
+      final h = labels(buildElectricalSourceSpine(
+          project: p, result: r, horizontal: true));
+      for (final j in [v, h]) {
+        expect(j, contains('GENSET $n x 2500 kVA'));
+        expect(j, isNot(contains('GENSET 2500 kVA')));
+        // n × 2500 ≥ demand ⇒ the paralleled sets back the whole load.
+        expect(j, contains('backs 100% of load'));
+      }
+    });
+
+    test('a forced genset kVA is printed verbatim as one set', () {
+      final p = big(gen: const GeneratorSource(kva: ApparentPower(500000)));
+      final r = computeSystem(_profile, p);
+      final v = labels(
+          buildElectricalOverview(project: p, result: r, sourceChain: true));
+      expect(v, contains('GENSET 500 kVA'));
+      expect(v, isNot(contains(' x 2500')));
+    });
+
+    test('schedule G-01: per-set 2500 kVA with qty n', () {
+      final p = big();
+      final r = computeSystem(_profile, p);
+      final n = (r.supply.demandVa.inKilovoltAmperes / 2500).ceil();
+      final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
+        projectName: 'Big',
+        date: 'd',
+        electrical: r,
+        electricalProject: p,
+      ));
+      final g = rows.firstWhere((row) => row.tag == 'G-01');
+      expect(g.duty, '2500 kVA');
+      expect(g.qty, n);
+    });
+
+    test('power one-line: "n x 2500 kVA" + start dip screened on n × 2500', () {
+      // 3200 kVA standby ⇒ ceil(3200/2500) = 2 sets; the start-dip screen runs
+      // on the paralleled 5000 kVA, not one 2500 kVA set. Pick (by search over
+      // the engine's own screen) a DOL motor that FAILS on one 2500 kVA set but
+      // PASSES on the pair — the one-line must not tag it 'start dip … over'.
+      GensetMotor? motor;
+      for (var kw = 50.0; kw <= 3000; kw += 25) {
+        final m = GensetMotor(name: 'Chiller', shaftPower: Power.kiloWatts(kw));
+        final one = assessGensetStart(ApparentPower.kilovoltAmperes(2500),
+            motors: [m]);
+        final two = assessGensetStart(ApparentPower.kilovoltAmperes(5000),
+            motors: [m]);
+        if (!one.acceptable && two.acceptable) {
+          motor = m;
+          break;
+        }
+      }
+      expect(motor, isNotNull);
+      final ol = buildPowerOneLine(
+        const ElectricalSources(generator: GeneratorSource()),
+        demand: ApparentPower.kilovoltAmperes(3200),
+        motors: [motor!],
+      );
+      final gen = ol.nodes.firstWhere((node) => node.id == 'gen');
+      expect(gen.sub, startsWith('2 x 2500 kVA'));
+      expect(gen.sub, isNot(contains('start dip')));
     });
   });
 
