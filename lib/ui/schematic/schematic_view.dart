@@ -30,7 +30,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart'
-    show kPumpSetValveTrain;
+    show flowFromBySizing, kPumpSetValveTrain;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -2662,7 +2662,9 @@ class _AutoSchematicPainter extends CustomPainter {
       final s = sizing[e.id];
       if (s == null) continue;
       runTagOf[e.id] =
-          _pipeTag(s, e, function: riserFunctionFor(network, e, downfeed: downfeed));
+          _pipeTag(s, e,
+              function: riserFunctionFor(network, e,
+                  downfeed: downfeed, flowFrom: flowFromBySizing(sizing)));
     }
     final runLabelEdgeIds = _dedupRunLabels(nodePos, runTagOf);
 
@@ -2680,7 +2682,8 @@ class _AutoSchematicPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round;
 
       // FUNCTION suffix — appended only when confidently derivable (else null).
-      final fn = riserFunctionFor(network, edge, downfeed: downfeed);
+      final fn = riserFunctionFor(network, edge,
+          downfeed: downfeed, flowFrom: flowFromBySizing(sizing));
 
       if (edge.kind == EdgeKind.riser) {
         final midX = (from.dx + to.dx) / 2;

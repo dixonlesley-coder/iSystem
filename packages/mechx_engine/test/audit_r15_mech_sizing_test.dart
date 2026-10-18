@@ -291,9 +291,11 @@ void main() {
       final rnd = math.Random(15);
       for (var trial = 0; trial < 60; trial++) {
         // Each valve: 0 = drawn in→out, 1 = in-edge reversed (both out),
-        // 2 = out-edge reversed (both in). Plus random flips of the rest.
-        final v1 = trial == 0 ? 0 : rnd.nextInt(3);
-        final v2 = trial == 0 ? 2 : rnd.nextInt(3);
+        // 2 = out-edge reversed (both in), 3 = BOTH reversed (Round 16: a
+        // leg drawn header -> valve -> pump, consistently backwards). Plus
+        // random flips of the rest.
+        final v1 = trial == 0 ? 0 : (trial == 1 ? 3 : rnd.nextInt(4));
+        final v2 = trial == 0 ? 2 : (trial == 1 ? 3 : rnd.nextInt(4));
         bool flip() => trial > 1 && rnd.nextBool();
         NetEdge e(String id, String a, String b, bool rev) =>
             rev ? _e(id, b, a, ServiceType.coldWater)
@@ -315,10 +317,10 @@ void main() {
           e('gs', 'GT', 'S', flip()),
           e('s1', 'S', 'P1', flip()),
           e('s2', 'S', 'P2', flip()),
-          e('pc1', 'P1', 'C1', v1 == 1),
-          e('ch1', 'C1', 'H', v1 == 2),
-          e('pc2', 'P2', 'C2', v2 == 1),
-          e('ch2', 'C2', 'H', v2 == 2),
+          e('pc1', 'P1', 'C1', v1 == 1 || v1 == 3),
+          e('ch1', 'C1', 'H', v1 == 2 || v1 == 3),
+          e('pc2', 'P2', 'C2', v2 == 1 || v2 == 3),
+          e('ch2', 'C2', 'H', v2 == 2 || v2 == 3),
           for (var i = 0; i < 4; i++) e('b$i', 'H', 'f$i', flip()),
         ]);
         final legs = <String>{};
