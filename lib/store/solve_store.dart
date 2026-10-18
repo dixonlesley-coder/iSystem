@@ -199,7 +199,7 @@ final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
     final max = gravity
         ? profile.maxDrainVelocity.value
         : fireMinimumDiameter(e) != null
-            ? const SizingContext().maxFireVelocity
+            ? ref.watch(sizingContextProvider).maxFireVelocity
             : profile.maxSupplyVelocity.value;
     // The drainage floor REPEATS the engine verdict instead of re-deriving it:
     // at the code-minimum size no smaller pipe is allowed (G1), so a run the

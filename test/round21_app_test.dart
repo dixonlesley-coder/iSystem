@@ -13,7 +13,7 @@
 //                          advisory and its way sizes on the governing input
 //   riser-hwr-export       the issued riser carries the HWR return leg
 //   fire-verify-items      the 690 kPa residual only with a standpipe drawn
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide Velocity;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/annotation_store.dart';
@@ -35,6 +35,8 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show SizingContext;
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/sni.dart' show PlumbingFixture;
 import 'package:mechx_engine/standards/ventilation.dart';
@@ -230,6 +232,38 @@ void main() {
             .read(designIssuesProvider)
             .where((i) => i.kind.startsWith('water-velocity')),
         isEmpty);
+  });
+
+  // Round 21 follow-up: the judge reads the SIZER's own context
+  // (sizingContextProvider), never a fresh default — so a project whose sizing
+  // context carries a tighter fire cap is judged against that same cap.
+  test('the fire velocity judge reads the sizer context cap', () {
+    final c = ProviderContainer(overrides: [
+      sizingContextProvider.overrideWith(
+          (ref) => const SizingContext(maxFireVelocity: Velocity(3.0))),
+    ]);
+    addTearDown(c.dispose);
+    _seed(c, floors: 2);
+    // A manual DN100 on the hydrant riser: the standpipe flow runs it at
+    // ~4 m/s — inside the default 6 m/s fire cap, over this context's 3 m/s.
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+      _n('P', 0, 0, role: NodeRole.plant, c: NodeComponent.pump),
+      _n('A0', 100, 0),
+      _n('A1', 100, 0, floor: 1),
+    ], edges: [
+      _e('p', 'P', 'A0'),
+      NetEdge(
+          id: 'r',
+          fromId: 'A0',
+          toId: 'A1',
+          service: ServiceType.fireHydrant,
+          kind: EdgeKind.riser,
+          sizeOverride: Diameter.mm(100)),
+    ]));
+    final v = c.read(sizingProvider)['r']!.velocity.metersPerSecond;
+    expect(v, greaterThan(3.0));
+    expect(v, lessThan(kMaxFireVelocityMps));
+    expect(c.read(waterVelocityChecksProvider)['r']!.isWarning, isTrue);
   });
 
   // ── riser cross-surface contract (round-21 review) ────────────────────────

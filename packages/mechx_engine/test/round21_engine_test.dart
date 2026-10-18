@@ -485,6 +485,27 @@ void main() {
       expect(gravityRiserEndElevation(foot, b).meters, 0.0);
       expect(len(foot, r1, ServiceType.rainwater).meters, closeTo(3.3, 1e-9));
     });
+
+    // Round 21 follow-up: the inspector readout and the hover FFL chip share
+    // ONE helper, so a bare stack junction shows the datum its riser is
+    // measured from, and a node on no gravity riser keeps nodeElevation.
+    test('displayedNodeElevation follows the gravity riser datum', () {
+      final s1 = _n('s1', 0, 0, floor: 1);
+      final s2 = _n('s2', 0, 0, floor: 2);
+      final net = Network(nodes: [s1, s2], edges: const [
+        NetEdge(id: 'st', fromId: 's1', toId: 's2',
+            service: ServiceType.drainage, kind: EdgeKind.riser),
+      ]);
+      expect(displayedNodeElevation(net, s1, b).meters,
+          gravityRiserEndElevation(s1, b).meters);
+      expect(displayedNodeElevation(net, s1, b).meters, closeTo(3.3, 1e-9));
+      final cw = Network(nodes: [s1, s2], edges: const [
+        NetEdge(id: 'c', fromId: 's1', toId: 's2',
+            service: ServiceType.coldWater, kind: EdgeKind.riser),
+      ]);
+      expect(displayedNodeElevation(cw, s1, b).meters,
+          nodeElevation(s1, b).meters);
+    });
   });
 
   test('a component description never repeats the service word', () {

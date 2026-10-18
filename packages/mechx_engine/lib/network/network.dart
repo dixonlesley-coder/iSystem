@@ -633,6 +633,27 @@ Length riserEndElevation(
         ? gravityRiserEndElevation(node, building, mounting)
         : nodeElevation(node, building, mounting);
 
+/// The elevation a node is SHOWN at (inspector readout, hover FFL chip): a
+/// node on a GRAVITY riser reads the same riser-end datum its riser length is
+/// measured from ([riserEndElevation] — a bare stack junction sits under its
+/// floor's slab, not at its own ceiling); every other node reads
+/// [nodeElevation]. One helper so the two readouts can never disagree.
+Length displayedNodeElevation(
+  Network net,
+  NetNode node,
+  BuildingLevels building, [
+  MountingHeights mounting = const MountingHeights(),
+]) {
+  for (final e in net.edges) {
+    if (e.kind == EdgeKind.riser &&
+        e.service.regime == FlowRegime.gravity &&
+        (e.fromId == node.id || e.toId == node.id)) {
+      return riserEndElevation(e, node, building, mounting);
+    }
+  }
+  return nodeElevation(node, building, mounting);
+}
+
 /// The vertical length of a riser [edge] between its ends [a] and [b]
 /// (`|Δ` [riserEndElevation]`|`) — never measured from the PDF.
 Length riserElevationDelta(

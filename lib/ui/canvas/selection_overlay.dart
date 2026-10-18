@@ -515,8 +515,10 @@ class _NetworkSelectionOverlayState
     if (_hoverChipDue && !gestureActive && trimArmed == null && brushArmed == null) {
       final hoveredNode = hover?.nodeId == null ? null : net.nodeById(hover!.nodeId!);
       if (hoveredNode != null && _onFloor(hoveredNode)) {
-        final elev = nodeElevation(
-            hoveredNode, project.building, ref.watch(mountingProvider));
+        // Same datum as the node inspector (Round 21 follow-up): a bare
+        // gravity-stack junction reads its riser-end elevation.
+        final elev = displayedNodeElevation(
+            net, hoveredNode, project.building, ref.watch(mountingProvider));
         hoverChip = _HoverMeasurementChip(
           screen: transform.worldToScreen(Offset(hoveredNode.x, hoveredNode.y)),
           text: fflLabel(elev.meters),

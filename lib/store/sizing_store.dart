@@ -52,6 +52,23 @@ const Map<ServiceType, double> kDefaultLeafFixtureUnits = {
 /// Each edge is routed to the correct §7 path and sized for its accumulated
 /// (per-branch) demand: water supply via accumulated fixture units → Hunter
 /// curve; other services via accumulated flows.
+/// The ONE [SizingContext] the network sizer runs with (Round 21 follow-up):
+/// every judge that re-checks a sized edge (e.g. the fire velocity cap in
+/// `waterVelocityChecksProvider`) reads its limits from HERE, so a judge can
+/// never apply a different cap than the sizer used.
+final sizingContextProvider = Provider<SizingContext>((ref) {
+  final ducts = ref.watch(ductSettingsProvider);
+  return SizingContext(
+    ductShape: ducts.shape,
+    ductMethod: ducts.method,
+    // M13 — the laid drainage slope is a real design input
+    // (drainageSlopeProvider): it sets the Manning full-bore velocity behind
+    // every gravity size AND the self-cleansing verdict. Default 0.01 ⇒
+    // byte-identical.
+    drainageSlope: ref.watch(drainageSlopeProvider),
+  );
+});
+
 final sizingProvider = Provider<Map<String, EdgeSizing>>(
     (ref) => ref.watch(sizingDetailProvider).sizing);
 
@@ -89,7 +106,6 @@ final sizingDetailProvider = Provider<
     );
   }
   final occupancy = ref.watch(occupancyProvider);
-  final ducts = ref.watch(ductSettingsProvider);
   final project = ref.watch(projectControllerProvider);
   const profile = SniProfile();
 
@@ -179,15 +195,8 @@ final sizingDetailProvider = Provider<
   final parallelLegs = <String>{};
   final sizing = autoSizeNetwork(
     net,
-    // M13 — the laid drainage slope is a real design input now
-    // (drainageSlopeProvider), not the dark const default: it sets the Manning
-    // full-bore velocity behind every gravity size AND the self-cleansing
-    // verdict. Default 0.01 ⇒ byte-identical.
-    SizingContext(
-      ductShape: ducts.shape,
-      ductMethod: ducts.method,
-      drainageSlope: ref.watch(drainageSlopeProvider),
-    ),
+    // The one sizing context (duct settings + the laid drainage slope).
+    ref.watch(sizingContextProvider),
     leafDemand: leafDemand,
     leafFixtureUnits: kDefaultLeafFixtureUnits,
     nodeFixtureUnits: nodeFixtureUnits,

@@ -5249,21 +5249,10 @@ class _SelectionSection extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final net = ref.watch(networkControllerProvider).network;
     // Round 21 review — a node on a GRAVITY riser reads the same riser-end
-    // datum its riser length is measured from (`riserEndElevation`: a bare
-    // stack junction sits under its floor's slab, not at its own ceiling).
-    NetEdge? gravityRiser;
-    for (final e in net.edges) {
-      if (e.kind == EdgeKind.riser &&
-          e.service.regime == FlowRegime.gravity &&
-          (e.fromId == node.id || e.toId == node.id)) {
-        gravityRiser = e;
-        break;
-      }
-    }
-    final elev = (gravityRiser != null
-            ? riserEndElevation(
-                gravityRiser, node, project.building, project.mounting)
-            : nodeElevation(node, project.building, project.mounting))
+    // datum its riser length is measured from (one engine helper, shared
+    // with the Layout hover FFL chip).
+    final elev = displayedNodeElevation(
+            net, node, project.building, project.mounting)
         .meters;
 
     // Scope the fixture field groups to the node's ACTUAL discipline, derived
