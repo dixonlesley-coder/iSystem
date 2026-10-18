@@ -478,17 +478,27 @@ void main() {
 
   // ── M11 — the clamped motor frame is flagged ───────────────────────────────
 
-  group('M11 · a clamped 75 kW motor is flagged on the duty', () {
-    test('a 90 kW-class pump duty reports motorOversized', () {
+  group('M11 · a clamped (largest-frame) motor is flagged on the duty', () {
+    test('an 84 kW pump duty selects the 90 kW IEC frame (Round 21)', () {
       // Q = 0.5 m³/s at H = 12 m, η_pump = 0.70:
       //   P_hyd   = ρ·g·Q·H = 1000 × 9.81 × 0.5 × 12 = 58 860 W
       //   P_shaft = 58 860 / 0.70                    = 84 085.714 W = 84.09 kW
-      // The largest standard frame is 75 kW ⇒ selectMotor CLAMPS.
+      // 75 < 84.09 ≤ 90 ⇒ the 90 kW frame, a real selection (no clamp).
       final duty = sizePump(flow: const FlowRate(0.5), head: const Head(12.0));
       expect(duty.hydraulicPower.watts, closeTo(58860.0, 1e-6));
       expect(duty.shaftPower.watts, closeTo(58860.0 / 0.70, 1e-6));
+      expect(duty.selectedMotor.inKiloWatts, closeTo(90.0, 1e-9));
+      expect(duty.motorOversized, isFalse);
+    });
+
+    test('a 336 kW pump duty reports motorOversized', () {
+      // Q = 2.0 m³/s at H = 12 m: P_hyd = 1000 × 9.81 × 2.0 × 12 = 235 440 W;
+      // P_shaft = 235 440 / 0.70 = 336 342.857 W > the largest 315 kW frame
+      // ⇒ selectMotor CLAMPS.
+      final duty = sizePump(flow: const FlowRate(2.0), head: const Head(12.0));
+      expect(duty.shaftPower.watts, closeTo(235440.0 / 0.70, 1e-6));
       expect(duty.shaftPower.inKiloWatts, greaterThan(standardMotorKw.last));
-      expect(duty.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
+      expect(duty.selectedMotor.inKiloWatts, closeTo(315.0, 1e-9));
       expect(duty.motorOversized, isTrue);
     });
 
@@ -501,18 +511,25 @@ void main() {
       expect(duty.motorOversized, isFalse);
     });
 
-    test('a 92 kW-class fan duty reports motorOversized', () {
+    test('a 92 kW fan duty selects the 110 kW frame; 369 kW clamps', () {
       // Q = 20 m³/s at Δp = 3000 Pa, η_fan = 0.65:
       //   P_air   = 20 × 3000       = 60 000 W
-      //   P_shaft = 60 000 / 0.65   = 92 307.692 W = 92.31 kW  > 75 kW
+      //   P_shaft = 60 000 / 0.65   = 92 307.692 W = 92.31 kW ⇒ 110 kW frame
       final duty = sizeFan(
         airflow: const FlowRate(20.0),
         totalStaticPressure: const Pressure(3000.0),
       );
       expect(duty.airPower.watts, closeTo(60000.0, 1e-6));
       expect(duty.shaftPower.watts, closeTo(60000.0 / 0.65, 1e-6));
-      expect(duty.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
-      expect(duty.motorOversized, isTrue);
+      expect(duty.selectedMotor.inKiloWatts, closeTo(110.0, 1e-9));
+      expect(duty.motorOversized, isFalse);
+      // Q = 80 m³/s: P_shaft = 240 000 / 0.65 = 369 230.8 W > 315 kW ⇒ clamp.
+      final big = sizeFan(
+        airflow: const FlowRate(80.0),
+        totalStaticPressure: const Pressure(3000.0),
+      );
+      expect(big.selectedMotor.inKiloWatts, closeTo(315.0, 1e-9));
+      expect(big.motorOversized, isTrue);
     });
 
     test('an in-ladder fan duty does NOT', () {
@@ -528,10 +545,10 @@ void main() {
     });
 
     test('a duty landing exactly ON the largest frame is not oversized', () {
-      // The comparison is strict: 75.0 kW of shaft power selects the 75 kW
+      // The comparison is strict: 315.0 kW of shaft power selects the 315 kW
       // frame, which is a valid selection, not a clamp.
-      expect(motorOversizedFor(Power.kiloWatts(75.0)), isFalse);
-      expect(motorOversizedFor(Power.kiloWatts(75.0000001)), isTrue);
+      expect(motorOversizedFor(Power.kiloWatts(315.0)), isFalse);
+      expect(motorOversizedFor(Power.kiloWatts(315.0000001)), isTrue);
     });
   });
 

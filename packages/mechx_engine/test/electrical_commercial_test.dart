@@ -285,8 +285,11 @@ void main() {
     test('cable section match prefers the construction type', () {
       // Need 2.5 mm² NYM → NYM-2.5 (same type) over the NYY ladder.
       expect(matchCableSku(2.5, seedCatalog, cableType: 'NYM'), 'NYM-2.5');
-      // Need 6 mm² with no NYM at 6 mm² → falls back to section-only = NYY-6.
-      expect(matchCableSku(6, seedCatalog, cableType: 'NYM'), 'NYY-6');
+      // Need 6 mm² with no NYM at 6 mm² → Round 21: NEVER another family's
+      // part (an NYM run is not bought as NYY) ⇒ unmatched (null).
+      expect(matchCableSku(6, seedCatalog, cableType: 'NYM'), isNull);
+      // With no family given, section-only matching still applies.
+      expect(matchCableSku(6, seedCatalog), 'NYY-6');
     });
   });
 

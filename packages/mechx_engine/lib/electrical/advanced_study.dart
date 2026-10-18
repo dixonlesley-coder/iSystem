@@ -30,6 +30,7 @@ library;
 
 import '../standards/puil.dart' show ElectricalStandardsProfile;
 import '../units.dart';
+import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
 import 'containment.dart' show ContainmentResult, containmentFor;
@@ -394,10 +395,20 @@ AdvancedStudy computeAdvancedStudy(
   // prospective fault — the same fault study the schedule's kA tokens use.
   // Round 15 — each device matches its SPECIFIED kA (the schedule's figure).
   final faultKa = faultSpecifiedKa(fault);
+  // Round 21 (bom-quote-4/-5) — each enclosure priced at its sized W x H x D,
+  // and the designed control gear / genset / SPDs / earthing taken off too.
   final bom = buildBom(sys,
       requiredIcuKaByPanelId: faultKa.bus,
       incomerKaByPanelId: faultKa.incomers,
-      breakerKaByCircuitId: faultKa.breakers);
+      breakerKaByCircuitId: faultKa.breakers,
+      enclosureByPanelId: enclosure,
+      extraLines: advancedBomLines(
+        project: project,
+        sys: sys,
+        controlAssemblies: controlAssemblies,
+        spd: spd,
+        electrode: electrode,
+      ));
 
   // Aggregate every sub-result's provenance honesty surface.
   final verify = _aggregateVerify([

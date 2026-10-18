@@ -32,6 +32,7 @@ import 'app_state.dart'
 import 'fire_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
+import 'sizing_store.dart' show parallelLegEdgeIdsProvider, sizingProvider;
 import 'solve_store.dart';
 
 /// Nominal voltage the MEP equipment panel is fed at (3-phase). The derived FLA
@@ -94,12 +95,26 @@ class MepDutyBinding {
   /// recirculation duty.
   final Set<String> hwRecircPumpNodeIds;
 
+  /// Round 21 (fire-3-parallel-fire-pumps-each-full-duty) — the fire pumps
+  /// drawn IN PARALLEL with the duty fire pump (same connected fire network)
+  /// that are STANDBY units: wired at the full fire-pump motor, but never
+  /// coincident with the duty pump, so their way carries demand factor 0.
+  /// A subset of [firePumpNodeIds].
+  final Set<String> fireStandbyPumpNodeIds;
+
+  /// Round 21 — the parallel fire pump that is the JOCKEY (pressure
+  /// maintenance): fed the rating's jockey duty (1 % rated flow at churn
+  /// + 5 m), never the 55-75 kW main motor. A subset of [firePumpNodeIds].
+  final Set<String> fireJockeyPumpNodeIds;
+
   const MepDutyBinding({
     this.firePumpNodeIds = const {},
     this.supplyPumpNodeId,
     this.supplyFanNodeId,
     this.exhaustFanNodeId,
     this.hwRecircPumpNodeIds = const {},
+    this.fireStandbyPumpNodeIds = const {},
+    this.fireJockeyPumpNodeIds = const {},
   });
 }
 
@@ -145,6 +160,15 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
             : supplyPumps.firstWhere(roots.contains,
                 orElse: () => supplyPumps.first);
   }
+  final roles = fire.length < 2
+      ? (standby: const <String>{}, jockey: const <String>{})
+      : parallelFirePumpRoles(
+          net,
+          fire,
+          bore: (edgeId) =>
+              ref.watch(sizingProvider)[edgeId]?.diameter.inMillimeters,
+          parallelLegEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
+        );
   final units = ref.watch(airSystemRootNodesProvider);
   String? electricalLoad(String? id) {
     if (id == null) return null;
@@ -158,8 +182,104 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     supplyFanNodeId: electricalLoad(units.supply),
     exhaustFanNodeId: electricalLoad(units.exhaust),
     hwRecircPumpNodeIds: hwPumps,
+    fireStandbyPumpNodeIds: roles.standby,
+    fireJockeyPumpNodeIds: roles.jockey,
   );
 });
+
+/// Round 21 (fire-3-parallel-fire-pumps-each-full-duty) — classify the fire
+/// pumps [firePumps] drawn in ONE connected fire network (hydrant + sprinkler
+/// edges) as duty / standby / jockey. Pure.
+///
+/// Per group of two or more pumps:
+///  * the DUTY pump is the one NOT on a mirrored parallel standby leg
+///    ([parallelLegEdgeIds], the sizer's record), then the LARGEST incident
+///    bore ([bore], mm), then the lowest id;
+///  * a JOCKEY is any other pump whose largest incident bore is strictly
+///    smaller than the duty pump's (a pressure-maintenance pump sits on a
+///    small leg); with three or more pumps and no smaller leg, the
+///    smallest-bore remaining pump (tie: the HIGHEST id — the last drawn) is
+///    the jockey (the classic duty + standby + jockey pump room);
+///  * every other pump is a STANDBY.
+/// A single fire pump in its network is the duty pump (both sets empty).
+({Set<String> standby, Set<String> jockey}) parallelFirePumpRoles(
+  Network net,
+  Set<String> firePumps, {
+  required double? Function(String edgeId) bore,
+  Set<String> parallelLegEdgeIds = const {},
+}) {
+  bool isFire(NetEdge e) =>
+      e.service == ServiceType.fireHydrant ||
+      e.service == ServiceType.fireSprinkler;
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while (parent[r] != null && parent[r] != r) {
+      r = parent[r]!;
+    }
+    return r;
+  }
+
+  for (final e in net.edges) {
+    if (!isFire(e)) continue;
+    parent.putIfAbsent(e.fromId, () => e.fromId);
+    parent.putIfAbsent(e.toId, () => e.toId);
+    final a = find(e.fromId);
+    final b = find(e.toId);
+    if (a != b) parent[a] = b;
+  }
+  final groups = <String, List<String>>{};
+  for (final id in firePumps) {
+    if (!parent.containsKey(id)) continue;
+    groups.putIfAbsent(find(id), () => []).add(id);
+  }
+  double boreOf(String id) {
+    var best = 0.0;
+    for (final e in net.edges) {
+      if (!isFire(e) || (e.fromId != id && e.toId != id)) continue;
+      final d = bore(e.id) ?? 0.0;
+      if (d > best) best = d;
+    }
+    return best;
+  }
+
+  bool onLeg(String id) => net.edges.any((e) =>
+      isFire(e) &&
+      (e.fromId == id || e.toId == id) &&
+      parallelLegEdgeIds.contains(e.id));
+
+  final standby = <String>{};
+  final jockey = <String>{};
+  for (final g in groups.values) {
+    if (g.length < 2) continue;
+    final ranked = [...g]..sort((a, b) {
+        final la = onLeg(a) ? 1 : 0;
+        final lb = onLeg(b) ? 1 : 0;
+        if (la != lb) return la - lb;
+        final d = boreOf(b).compareTo(boreOf(a));
+        if (d != 0) return d;
+        return a.compareTo(b);
+      });
+    final duty = ranked.first;
+    final rest = ranked.skip(1).toList();
+    final dutyBore = boreOf(duty);
+    final small = {
+      for (final id in rest)
+        if (boreOf(id) < dutyBore - 1e-6) id,
+    };
+    if (small.isEmpty && g.length >= 3) {
+      final byBore = [...rest]..sort((a, b) {
+          final d = boreOf(a).compareTo(boreOf(b));
+          if (d != 0) return d;
+          return b.compareTo(a);
+        });
+      small.add(byBore.first);
+    }
+    jockey.addAll(small);
+    standby.addAll(rest.where((id) => !small.contains(id)));
+  }
+  return (standby: standby, jockey: jockey);
+}
 
 /// The MEP equipment the mechanical engine has sized, assembled from the live
 /// duty providers. A duty with no selected motor / zero power is skipped, and so
@@ -263,6 +383,11 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
       name: kFirePumpLoadName,
       source: MepLoadSource.firePump,
       mechanicalPower: firePump.selectedMotor,
+      // Round 21 — max(nameplate, governing-point input), as the drawn way.
+      electricalInputPower: MepEquipmentLoad.nameplateInput(
+          firePump.motorInputPower,
+          firePump.selectedMotor,
+          defaultMotorEfficiency),
     ));
   }
 
@@ -369,12 +494,18 @@ final equipmentNodeDutiesProvider =
     PumpDuty? p;
     FanDuty? f;
     if (bind.firePumpNodeIds.contains(n.id)) {
-      p = ref.watch(firePumpDutyProvider);
-      // NFPA 20 selected frame; A5 derives the input as motor / η.
+      // Round 21 — a JOCKEY is fed its own pressure-maintenance duty.
+      p = bind.fireJockeyPumpNodeIds.contains(n.id)
+          ? ref.watch(fireJockeyDutyProvider)
+          : ref.watch(firePumpDutyProvider);
       if (p == null || p.selectedMotor.watts <= 0) return null;
+      // NFPA 20 selected frame; Round 21 — the input is the larger of the
+      // nameplate (motor / η) and the governing-point input, so a frame
+      // clamped at the top of the ladder still sizes the way on the duty.
       return (
         motor: p.selectedMotor,
-        input: Power(p.selectedMotor.watts / defaultMotorEfficiency),
+        input: MepEquipmentLoad.nameplateInput(
+            p.motorInputPower, p.selectedMotor, defaultMotorEfficiency),
       );
     }
     // Round 16 — every drawn supply mover carries its OWN series / transfer
@@ -596,6 +727,9 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
               : _sourceFor(c),
       mechanicalPower: Power(f.watts),
       electricalInputPower: input == null ? null : Power(input),
+      // Round 21 — a STANDBY fire pump is wired at full size but never runs
+      // with the duty pump: it adds no demand to the board.
+      demandFactor: bind.fireStandbyPumpNodeIds.contains(n.id) ? 0 : null,
       phases: _phasesFor(c),
       loadPos: LayoutPos(
         sheetId: n.sheetId,

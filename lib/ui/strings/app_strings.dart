@@ -649,6 +649,7 @@ enum StringKey {
   issueGravityLoopMessage,
   issueMotorOversizedTitle,
   issuePumpMotorOversizedMessage,
+  issueFirePumpMotorOversizedMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1913,6 +1914,12 @@ const Map<StringKey, String> _en = {
       'and every size derived from it — is provisional. Simplify the ring or '
       'check for a near-zero-resistance leg.',
   StringKey.issueMotorOversizedTitle: 'Duty past the largest motor frame',
+  StringKey.issueFirePumpMotorOversizedMessage:
+      'The fire pump\'s governing NFPA 20 point exceeds the largest standard '
+      'motor frame (315 kW), so the printed motor is the top of the ladder, '
+      'not a selection; its panel way is sized on the governing duty. Split '
+      'the duty across parallel fire pumps, or procure a motor outside the '
+      'standard ladder.',
   StringKey.issuePumpMotorOversizedMessage:
       'The pump duty exceeds the largest standard motor frame, so the printed '
       'motor is the top of the ladder, not a selection — the duty and the '
@@ -3244,6 +3251,12 @@ const Map<StringKey, String> _id = {
       'mendekati nol.',
   StringKey.issueMotorOversizedTitle:
       'Duti melebihi rangka motor standar terbesar',
+  StringKey.issueFirePumpMotorOversizedMessage:
+      'Titik NFPA 20 yang menentukan pada pompa kebakaran melebihi rangka motor '
+      'standar terbesar (315 kW), sehingga motor yang tercetak adalah puncak '
+      'tangga standar, bukan hasil pemilihan; jalur panelnya diukur pada duti '
+      'yang menentukan. Bagi dutinya ke pompa kebakaran paralel, atau adakan '
+      'motor di luar tangga standar.',
   StringKey.issuePumpMotorOversizedMessage:
       'Duti pompa melebihi rangka motor standar terbesar, sehingga motor yang '
       'tercetak adalah puncak tangga standar, bukan hasil pemilihan — duti dan '

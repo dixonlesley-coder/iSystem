@@ -192,7 +192,8 @@ void main() {
           closeTo(3.5 + 1.1, 1e-9));
     });
 
-    test('downpipe from the roof drain to the L1 ceiling main is 3.8 m', () {
+    test('downpipe from the roof drain to the L1 stack junction is 7.3 m',
+        () {
       final net = Network(nodes: [
         n('rd', 2, NodeComponent.roofDrain),
         n('m1', 1, null, role: NodeRole.main),
@@ -204,11 +205,13 @@ void main() {
             service: ServiceType.rainwater,
             kind: EdgeKind.riser),
       ]);
-      // roof 10.5 − L1 ceiling (3.5 + 3.5 − 0.3 = 6.7) = 3.8 m (was 1.4 m from
-      // the roof drain parked at 7.0 + 1.1 = 8.1 m).
+      // Round 21 (riser-drafting-2-6) — a bare GRAVITY stack junction sits
+      // where its floor's branch joins: UNDER the L1 slab, in L0's ceiling
+      // space = 3.5 − 0.3 = 3.2 m (it used to read L1's own ceiling, 6.7 m).
+      // roof 10.5 − 3.2 = 7.3 m: the downpipe through L2 and L1.
       final len = edgeLength(net.edges.single, net,
           calibrationBySheet: const {}, building: building);
-      expect(len.meters, closeTo(3.8, 1e-9));
+      expect(len.meters, closeTo(7.3, 1e-9));
     });
   });
 

@@ -97,9 +97,12 @@ void main() {
       expect(s['run']!.velocity.metersPerSecond, closeTo(0.3014, 1e-4));
     });
 
-    // The floor is a FLOOR, not a fixed size: 12 L/s on a hydrant riser
-    //   DN100: v = 0.012/7.854e-3 = 1.528 m/s ≤ 2 ⇒ stays DN100;
-    //   18 L/s: DN100 v = 2.292 > 2, DN125 v = 0.018/0.012272 = 1.467 ⇒ DN125.
+    // The floor is a FLOOR, not a fixed size. Round 21 — fire pipe is sized
+    // on the 6 m/s fire cap (kMaxFireVelocityMps), not the 2 m/s domestic one:
+    //   12 L/s: DN100 v = 0.012/7.854e-3 = 1.528 m/s ≤ 6 ⇒ stays DN100;
+    //   18 L/s: DN100 v = 2.292 ≤ 6 ⇒ STILL DN100 (was DN125 at 2 m/s);
+    //   50 L/s: DN100 v = 0.05/7.854e-3 = 6.366 > 6,
+    //           DN125 v = 0.05/0.012272 = 4.074 ≤ 6 ⇒ DN125.
     test('the velocity sizer still raises a fire pipe above its floor', () {
       NetEdge riser() => const NetEdge(
           id: 'r',
@@ -107,16 +110,13 @@ void main() {
           toId: 'b',
           service: ServiceType.fireHydrant,
           kind: EdgeKind.riser);
-      expect(
-          sizeEdge(riser(), FlowRate.litersPerSecond(12), const SizingContext())
+      double dn(double lps) =>
+          sizeEdge(riser(), FlowRate.litersPerSecond(lps), const SizingContext())
               .diameter
-              .inMillimeters,
-          closeTo(100, 1e-9));
-      expect(
-          sizeEdge(riser(), FlowRate.litersPerSecond(18), const SizingContext())
-              .diameter
-              .inMillimeters,
-          closeTo(125, 1e-9));
+              .inMillimeters;
+      expect(dn(12), closeTo(100, 1e-9));
+      expect(dn(18), closeTo(100, 1e-9));
+      expect(dn(50), closeTo(125, 1e-9));
     });
 
     // Domestic water is untouched: 0.2 L/s at DN15 → v = 2e-4/1.7671e-4 =
@@ -139,11 +139,14 @@ void main() {
     // 360 L/min over ceil(72/12) = 6 heads ⇒ 60 L/min/head = 1.0 L/s; head
     // pressure (60/80)² = 0.5625 bar ≥ 0.5 ⇒ density-governed, so
     //   remoteHeadFlow   = 1.0 L/s,  remoteAreaDemand = 6 × 1.0 = 6.0 L/s.
-    // A 60-head star (plant → hub → 60 heads):
-    //   uncapped main = 60 × 1.0 = 60 L/s → DN200 (v = 0.06/0.031416 = 1.91);
-    //   capped main   = 6.0 L/s: DN50 v = 0.006/1.9635e-3 = 3.06 > 2,
-    //                   DN65 v = 0.006/3.3183e-3 = 1.808 ≤ 2 ⇒ DN65.
-    //   each head branch = 1.0 L/s: DN25 v = 2.037 > 2 ⇒ DN32 (v = 1.243).
+    // A 60-head star (plant → hub → 60 heads), sized on the Round 21 fire
+    // velocity cap of 6 m/s:
+    //   uncapped main = 60 × 1.0 = 60 L/s: DN100 v = 0.06/7.854e-3 = 7.64 > 6,
+    //                   DN125 v = 0.06/0.012272 = 4.889 ≤ 6 ⇒ DN125;
+    //   capped main   = 6.0 L/s: DN32 v = 0.006/8.0425e-4 = 7.46 > 6,
+    //                   DN40 v = 0.006/1.2566e-3 = 4.775 ≤ 6 ⇒ DN40.
+    //   each head branch = 1.0 L/s: DN25 v = 0.001/4.9087e-4 = 2.037 ≤ 6
+    //                   ⇒ the DN25 sprinkler floor.
     test('a 60-head tree: main flow capped at the remote-area demand', () {
       final ra = remoteAreaHydraulics(
           design: designSprinklerSystem(hazard: FireHazardClass.ordinaryHazard1));
@@ -175,16 +178,16 @@ void main() {
       final uncapped =
           autoSizeNetwork(net, const SizingContext(), leafDemand: leaf);
       expect(uncapped['main']!.flow.inLitersPerSecond, closeTo(60.0, 1e-9));
-      expect(uncapped['main']!.diameter.inMillimeters, closeTo(200, 1e-9));
+      expect(uncapped['main']!.diameter.inMillimeters, closeTo(125, 1e-9));
 
       final capped = autoSizeNetwork(net, const SizingContext(),
           leafDemand: leaf, sprinklerDemandCap: ra.remoteAreaDemand);
       expect(capped['main']!.flow.cubicMetersPerSecond,
           lessThanOrEqualTo(ra.remoteAreaDemand.cubicMetersPerSecond + 1e-15));
       expect(capped['main']!.flow.inLitersPerSecond, closeTo(6.0, 1e-9));
-      expect(capped['main']!.diameter.inMillimeters, closeTo(65, 1e-9));
+      expect(capped['main']!.diameter.inMillimeters, closeTo(40, 1e-9));
       expect(capped['b0']!.flow.inLitersPerSecond, closeTo(1.0, 1e-9));
-      expect(capped['b0']!.diameter.inMillimeters, closeTo(32, 1e-9));
+      expect(capped['b0']!.diameter.inMillimeters, closeTo(25, 1e-9));
     });
 
     // The per-head share the app now feeds the sizer is at or above the old

@@ -163,12 +163,19 @@ class MepEquipmentLoad {
   /// unplaced ⇒ the produced circuit carries no `loadPos` ⇒ byte-identical.
   final LayoutPos? loadPos;
 
+  /// Round 21 — this equipment's own demand factor, overriding the builder's
+  /// ([equipmentToCircuit] `demandFactor`): a STANDBY fire pump is wired at
+  /// full size but never coincident with its duty pump (0). Null ⇒ the
+  /// builder's factor ⇒ byte-identical.
+  final double? demandFactor;
+
   const MepEquipmentLoad({
     required this.id,
     required this.name,
     required this.source,
     required this.mechanicalPower,
     this.electricalInputPower,
+    this.demandFactor,
     this.phases = 3,
     this.cosPhi = defaultMotorCosPhi,
     this.motorEfficiency = defaultMotorEfficiency,
@@ -343,7 +350,7 @@ ElectricalCircuit equipmentToCircuit(
     cosPhi: e.cosPhi,
     length: Length(math.max(0, lengthM)),
     loadKind: e.source.circuitLoadKind,
-    demandFactor: demandFactor,
+    demandFactor: e.demandFactor ?? demandFactor,
     motorKw: e.mechanicalPower.inKiloWatts,
     phases: e.phases,
     lifeSafety: e.source.isLifeSafety,

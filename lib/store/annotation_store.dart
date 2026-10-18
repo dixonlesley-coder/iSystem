@@ -746,12 +746,21 @@ String? roomTerminalOwnerId(NodeComponent? component, String sheetId,
 /// meeting room, so re-running the office's Auto-place neither deleted nor
 /// avoided it and stacked a second generation on top (+50 % air), and the
 /// stale judge under-counted the office / over-counted the meeting room.
+/// Round 21: the tag wins only OUTSIDE every nested same-kind room of the
+/// tagged room ([insideNestedSameKindRoom]); inside one the geometric owner
+/// (the nested room) takes it.
 String? roomTerminalOwnerOf(NetNode node, Iterable<RoomArea> rooms) {
   final tag = node.autoPlacedRoomId;
   if (tag != null) {
     for (final r in rooms) {
       if (r.id == tag &&
-          r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
+          r.containsNode(node.sheetId, node.floorIndex, node.x, node.y) &&
+          // Round 21 — the tag never hides a terminal that now sits inside a
+          // smaller same-kind room drawn AFTER the generating room's
+          // Auto-place: that point is the nested room's, so its own Auto-place
+          // replaces the terminal and the outer room goes stale (re-run it to
+          // move the terminal out) instead of silently doubling the air.
+          !insideNestedSameKindRoom(r, node.x, node.y, rooms)) {
         return r.id;
       }
     }

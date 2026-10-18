@@ -29,7 +29,7 @@ import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
-    show kMinHydrantBranchDiameterMm, kMinRiserDiameterMm;
+    show kMaxFireVelocityMps, kMinHydrantBranchDiameterMm, kMinRiserDiameterMm;
 import 'storm_sizing.dart' as storm;
 import 'water_supply_sizing.dart' as water;
 
@@ -45,6 +45,11 @@ enum DuctSizingMethod { velocity, equalFriction }
 /// Design parameters shared across a sizing run.
 class SizingContext {
   final Velocity maxSupplyVelocity;
+
+  /// Round 21 — the velocity cap for the FIRE services (sprinkler / hydrant),
+  /// [kMaxFireVelocityMps] by default; the domestic [maxSupplyVelocity] no
+  /// longer sizes fire pipe 1-2 DN up. `// VERIFY` notAnSniClause.
+  final Velocity maxFireVelocity;
   final Velocity maxDuctVelocity;
   final double drainageSlope; // m/m
   final double drainageFillRatio;
@@ -73,6 +78,7 @@ class SizingContext {
 
   const SizingContext({
     this.maxSupplyVelocity = const Velocity(2.0),
+    this.maxFireVelocity = const Velocity(kMaxFireVelocityMps),
     this.maxDuctVelocity = const Velocity(5.0),
     this.drainageSlope = 0.01,
     this.drainageFillRatio = 0.5,
@@ -459,7 +465,11 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
     case FlowRegime.pressurized:
       final r = water.sizeForFlow(
         flow: flow,
-        maxVelocity: ctx.maxSupplyVelocity,
+        // Round 21 — fire pipe on the fire velocity cap, domestic water on
+        // the SNI 03-7065 supply cap.
+        maxVelocity: fireMinimumDiameter(edge) != null
+            ? ctx.maxFireVelocity
+            : ctx.maxSupplyVelocity,
         material: ctx.pipeMaterial,
         // Fire services floor at their code-minimum DN (null for water).
         minDiameter: fireMinimumDiameter(edge),

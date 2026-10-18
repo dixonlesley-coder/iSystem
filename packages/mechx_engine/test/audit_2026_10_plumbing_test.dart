@@ -834,13 +834,16 @@ void main() {
         expect(
             sized['e$i']!.flow.inLitersPerSecond, closeTo((6 - i) * 0.5, 1e-9));
       }
-      // e1 = 2.5 L/s at the 2.0 m/s cap needs d ≥ √(4Q/πv)
-      //   = √(4 × 0.0025 / (π × 2)) = 39.9 mm — larger than e5 (0.5 L/s).
+      // e1 = 2.5 L/s at the Round 21 6 m/s fire cap needs d ≥ √(4Q/πv)
+      //   = √(4 × 0.0025 / (π × 6)) = 23.0 mm ⇒ the DN25 sprinkler floor
+      // governs (DN25 v = 0.0025/4.9087e-4 = 5.09 ≤ 6) — never smaller than
+      // e5 (0.5 L/s, also on the floor).
       final e1 = sized['e1']!;
       expect(e1.diameter.inMillimeters,
-          greaterThan(sized['e5']!.diameter.inMillimeters));
+          greaterThanOrEqualTo(sized['e5']!.diameter.inMillimeters));
+      expect(e1.diameter.inMillimeters, closeTo(25, 1e-9));
       expect(e1.diameter.inMillimeters,
-          greaterThanOrEqualTo(math.sqrt(4 * 0.0025 / (math.pi * 2)) * 1000));
+          greaterThanOrEqualTo(math.sqrt(4 * 0.0025 / (math.pi * 6)) * 1000));
       expect(e1.diameter.inMillimeters,
           sizeEdge(net.edgeById('e1')!, e1.flow, ctx).diameter.inMillimeters);
     });

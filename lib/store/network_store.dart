@@ -1809,9 +1809,13 @@ class NetworkController extends Notifier<DrawingState> {
     // Round 20 — the grid positions of a bank of [count] terminals: the
     // near-square grid's cell centres in row-major order, SKIPPING any cell
     // inside a nested room of the same kind (that room places its own
-    // terminals). With no nested room this is exactly the legacy grid; when
-    // cells are skipped the grid densifies (one more column + row per step)
-    // until [count] free cells exist, else the skipped cells fill the rest.
+    // terminals). With no nested room this is exactly the legacy grid.
+    // Round 21 (regression-gridcells-densify-clusters-diffusers) — the legacy
+    // grid is KEPT and only a blocked cell is substituted, by the NEAREST free
+    // cell of the denser grids (one more column + row per step, row-major tie
+    // break, never a cell already used), so the bank stays spread across the
+    // room instead of crowding a row-major prefix into its top-left. With no
+    // free substitute the blocked cell itself is kept.
     List<Offset> gridCells(int count) {
       final cols0 = math.max(1, math.sqrt(count).ceil());
       final rows0 = (count / cols0).ceil();
@@ -1822,15 +1826,32 @@ class NetworkController extends Notifier<DrawingState> {
           ];
       bool free(Offset p) =>
           !insideNestedSameKindRoom(room, p.dx, p.dy, allRooms);
-      for (var k = 0; k <= 6; k++) {
-        final cells = raw(cols0 + k, rows0 + k).where(free).toList();
-        if (cells.length >= count) return cells.take(count).toList();
+      final legacy = raw(cols0, rows0).take(count).toList();
+      final used = <Offset>{for (final p in legacy) if (free(p)) p};
+      // The nearest unused free cell of the FIRST denser grid that has one.
+      Offset substitute(Offset p) {
+        for (var k = 1; k <= 6; k++) {
+          Offset? best;
+          var bestD = double.infinity;
+          for (final q in raw(cols0 + k, rows0 + k)) {
+            if (!free(q) || used.contains(q)) continue;
+            final d = (q - p).distanceSquared;
+            if (d < bestD - 1e-9) {
+              bestD = d;
+              best = q;
+            }
+          }
+          if (best != null) {
+            used.add(best);
+            return best;
+          }
+        }
+        return p;
       }
-      final base = raw(cols0, rows0);
+
       return [
-        ...base.where(free),
-        ...base.where((p) => !free(p)),
-      ].take(count).toList();
+        for (final p in legacy) free(p) ? p : substitute(p),
+      ];
     }
 
     final nodes = [

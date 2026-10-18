@@ -37,10 +37,21 @@ final sprinklerDesignProvider = Provider<SprinklerDesign>(
 /// the top floor ([standpipeStaticLift]), per `designStandpipe`'s contract —
 /// not the roof (`building.totalHeight`), which overstated it by the top
 /// floor's height less the outlet height.
+///
+/// Round 21 (fire-3-standpipe-riser-count-fixed-at-one) — the riser count is
+/// the DRAWN one ([drawnStandpipeRiserCount]: distinct fire-hydrant riser
+/// stacks, at least 1), so two drawn stacks rate the pump, schedule,
+/// electrical way and hydrant sizing at 750 gpm (SNI 03-1745 / NFPA 14),
+/// never the single-riser 500 gpm.
 final standpipeDesignProvider = Provider<FireStandpipeDesign>((ref) {
   final building = ref.watch(projectControllerProvider).building;
+  // The throttled sizing network (frozen during a node drag) — this design
+  // feeds the hydrant sizing, so it must not re-run the heavy chain per
+  // drag frame (K1).
+  final net = ref.watch(sizingNetworkProvider);
   return designStandpipe(
-      risers: 1, buildingHeight: standpipeStaticLift(building));
+      risers: drawnStandpipeRiserCount(net),
+      buildingHeight: standpipeStaticLift(building));
 });
 
 /// Nominal per-head K-factor for the sprinkler remote-area check (L/min/bar^0.5).
@@ -148,6 +159,19 @@ final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
     ratedHead: rp.head,
     rating: ref.watch(firePumpRatingProvider),
   );
+});
+
+/// Round 21 (fire-3-parallel-fire-pumps-each-full-duty) — the JOCKEY pump's
+/// duty: the rating's pressure-maintenance point ([FirePumpRatingResult.
+/// jockeyFlow] = 1 % rated flow at [FirePumpRatingResult.jockeyHead] = churn
+/// + 5 m), sized by [sizePump] on the standard ladder. Fed to a drawn jockey
+/// pump's way and its schedule row — never the 55-75 kW main motor. Null
+/// whenever [firePumpDutyProvider] is (no fire service drawn).
+final fireJockeyDutyProvider = Provider<PumpDuty?>((ref) {
+  if (ref.watch(firePumpDutyProvider) == null) return null;
+  final r = ref.watch(firePumpRatingProvider);
+  if (r.jockeyFlow.cubicMetersPerSecond <= 0) return null;
+  return sizePump(flow: r.jockeyFlow, head: r.jockeyHead);
 });
 
 /// Sprinkler-vs-fire-pump coverage check (audit r8 fire-hvac-3) — JUDGE-ONLY.

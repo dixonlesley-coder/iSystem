@@ -1740,6 +1740,13 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
   );
 });
 
+/// Round 21 (bom-quote-3) — the drawn components (valves, heads, terminals,
+/// drains, dampers) taken off per piece for the mechanical quotation.
+final componentTakeoffProvider = Provider<List<ComponentLine>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  return buildComponentTakeoff(net: net, sizing: ref.watch(sizingProvider));
+});
+
 /// Estimated fittings (elbows/tees/crosses/reducers) for the sized network.
 final fittingsProvider = Provider<List<FittingLine>>((ref) {
   final net = ref.watch(sizingNetworkProvider);

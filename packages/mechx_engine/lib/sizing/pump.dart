@@ -21,6 +21,12 @@ import 'package:mechx_engine/units.dart';
 /// IEC / NEMA standard motor rated outputs in kilowatts, ascending.
 ///
 /// Callers select the smallest entry whose value is ≥ the required shaft power.
+///
+/// Round 21 (fire-3-motor-ladder-clamp-feeds-electrical) — the ladder runs to
+/// the IEC 60072 frames 90 / 110 / 132 / 160 / 200 / 250 / 315 kW. Stopping
+/// at 75 kW clamped an ordinary 20-storey standpipe fire pump (82.4 kW at the
+/// NFPA 20 overload point) BELOW its own duty, and the clamped nameplate fed
+/// the schedule, the electrical way and its breaker.
 const List<double> standardMotorKw = <double>[
   0.37,
   0.55,
@@ -41,6 +47,13 @@ const List<double> standardMotorKw = <double>[
   45,
   55,
   75,
+  90,
+  110,
+  132,
+  160,
+  200,
+  250,
+  315,
 ];
 
 // ── Result ─────────────────────────────────────────────────────────────────
@@ -64,7 +77,7 @@ class PumpDuty {
 
   /// M11 — true when [shaftPower] exceeds the largest frame in
   /// [standardMotorKw] and [selectMotor] therefore CLAMPED: [selectedMotor] is
-  /// then SMALLER than the duty needs and the printed 75 kW is a table limit,
+  /// then SMALLER than the duty needs and the printed 315 kW is a table limit,
   /// not a selection. Mirrors `FirePumpRatingResult.oversized`; the caller must
   /// surface it (the duty is not deliverable off this standard ladder).
   /// Default false ⇒ every in-range duty is byte-identical.

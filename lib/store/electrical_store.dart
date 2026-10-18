@@ -2410,7 +2410,13 @@ ElectricalCircuit _refreshedMepWay(
 ) {
   final mintedCable =
       c.cableType == null || (c.lifeSafety && c.cableType == 'FRC');
+  // Round 21 — a fire pump's 1 (duty) / 0 (standby) factor is machine-derived
+  // (re-derived when the duty/standby roles change); any other value is the
+  // engineer's and is kept.
+  final mintedDemand = c.lifeSafety &&
+      ((c.demandFactor - 1).abs() < 1e-9 || c.demandFactor.abs() < 1e-9);
   return c.copyWith(
+    demandFactor: mintedDemand ? fresh.demandFactor : null,
     loadW: fresh.loadW,
     motorKw: fresh.motorKw,
     flaOverrideA: fresh.flaOverrideA,
@@ -2448,7 +2454,9 @@ bool _isPristineDerivedWay(ElectricalCircuit c) =>
     c.points == 1 &&
     (c.cosPhi - defaultMotorCosPhi).abs() < 1e-9 &&
     !c.isLighting &&
-    (c.demandFactor - 1).abs() < 1e-9 &&
+    ((c.demandFactor - 1).abs() < 1e-9 ||
+        // Round 21 — a standby fire pump is MINTED at demand factor 0.
+        (c.lifeSafety && c.demandFactor.abs() < 1e-9)) &&
     !c.busbarBreakBefore &&
     (c.length.meters - kDefaultCircuitLength.meters).abs() < 1e-9 &&
     // A life-safety way is MINTED on FRC (audit r8 coupling-5), so FRC there

@@ -588,6 +588,35 @@ Length nodeElevation(
   }
 }
 
+/// Round 21 (riser-drafting-2-6) — the elevation a GRAVITY riser
+/// (drainage / vent / rainwater) reads at [node]. A bare stack junction
+/// (`main` role, no component, no explicit elevation / mount height) is where
+/// that floor's soil / waste / rain branch joins the stack — UNDER the
+/// floor's own slab, i.e. in the ceiling space of the floor below
+/// (`ceilingElevationOf(floor - 1)`); on the lowest floor the stack foot /
+/// downpipe exit sits AT GRADE (`elevationOf(0)`). Every other node (a drain
+/// or cleanout on its surface, plant, a fixture, an explicit datum) keeps
+/// [nodeElevation]. Mixing the two datums (a cleanout on its surface beside a
+/// junction at its own floor's CEILING) printed a 6.9 m single-storey base
+/// riser, a stack top ~3.6 m long and a downpipe stopping 3.3 m above grade.
+/// `// VERIFY` notAnSniClause (a modelling datum, no invert model; set the
+/// node elevation for a real invert).
+Length gravityRiserEndElevation(
+  NetNode node,
+  BuildingLevels building, [
+  MountingHeights mounting = const MountingHeights(),
+]) {
+  final bareJunction = node.elevation == null &&
+      node.mountHeight == null &&
+      node.component == null &&
+      node.role == NodeRole.main &&
+      building.levelCount > 0;
+  if (!bareJunction) return nodeElevation(node, building, mounting);
+  final f = node.floorIndex.clamp(0, building.levelCount - 1);
+  if (f == 0) return building.elevationOf(0);
+  return building.ceilingElevationOf(f - 1, mounting);
+}
+
 /// A pipe/duct/riser segment between two nodes, carrying one [service].
 class NetEdge {
   final String id;
@@ -775,8 +804,13 @@ Length edgeLength(
   final b = net.nodeById(edge.toId);
   if (a == null || b == null) return const Length(0);
   if (edge.kind == EdgeKind.riser) {
-    final ea = nodeElevation(a, building, mounting);
-    final eb = nodeElevation(b, building, mounting);
+    final gravity = edge.service.regime == FlowRegime.gravity;
+    final ea = gravity
+        ? gravityRiserEndElevation(a, building, mounting)
+        : nodeElevation(a, building, mounting);
+    final eb = gravity
+        ? gravityRiserEndElevation(b, building, mounting)
+        : nodeElevation(b, building, mounting);
     return Length((eb.meters - ea.meters).abs());
   }
   final cal = calibrationBySheet[a.sheetId];

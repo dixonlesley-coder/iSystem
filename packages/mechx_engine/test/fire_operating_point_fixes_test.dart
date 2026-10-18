@@ -258,23 +258,24 @@ void main() {
     });
   });
 
-  // Rated 1250 gpm ≈ 78.87 L/s @ 80 m (the saturating case):
-  //   overload = 150 % flow @ 65 % head = 0.1183 m³/s @ 52 m
-  //   shaft(overload) = 1000·9.81·0.118305·52/(0.70·0.85) ≈ 101.4 kW ← governs
-  //   shaft(rated)    = 1000·9.81·0.078870·80/0.70 ≈ 88.4 kW
-  //   both > the largest standard 75 kW frame ⇒ the ladder saturates.
+  // Rated 250 L/s @ 100 m (the saturating case — Round 21 extended the IEC
+  // ladder to 315 kW, so the former 1250 gpm @ 80 m case now selects 110 kW):
+  //   overload = 150 % flow @ 65 % head = 0.375 m³/s @ 65 m
+  //   shaft(overload) = 1000·9.81·0.375·65/(0.70·0.85) ≈ 401.9 kW ← governs
+  //   shaft(rated)    = 1000·9.81·0.250·100/0.70 ≈ 350.4 kW
+  //   both > the largest standard 315 kW frame ⇒ the ladder saturates.
   group('M19 — motor above the standard frame range', () {
     late FirePumpRatingResult r;
     setUpAll(() {
       r = checkFirePumpRating(
-        ratedFlow: FlowRate.litersPerSecond(78.87),
-        ratedHead: const Head(80),
+        ratedFlow: FlowRate.litersPerSecond(250),
+        ratedHead: const Head(100),
       );
     });
-    test('the standard ladder saturated at 75 kW below the duty', () {
+    test('the standard ladder saturated at 315 kW below the duty', () {
       expect(r.oversized, isTrue);
-      expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
-      expect(r.rated.shaftPower.inKiloWatts, greaterThan(75.0));
+      expect(r.selectedMotor.inKiloWatts, closeTo(315.0, 1e-9));
+      expect(r.rated.shaftPower.inKiloWatts, greaterThan(315.0));
     });
     test('verdict names the true condition + the action (ASCII)', () {
       expect(
