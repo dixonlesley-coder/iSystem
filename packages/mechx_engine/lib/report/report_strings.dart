@@ -327,6 +327,8 @@ enum RptStringKey {
   esSvcFireStandpipe,
   esSvcMechVent,
   esSvcExhaustVent,
+  esSvcTransferPump,
+  esSvcHwRecirc,
   warnLeadIn,
   lkGeneral,
   lkLighting,
@@ -458,8 +460,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.wsDownfeedGravity: '**gravity sufficient**',
   RptStringKey.wsDownfeedBooster: 'booster **+{m} m**',
   RptStringKey.wsHotWaterRecirc:
-      '- Hot-water recirculation: **{lps} L/s** · loop {loop} m · '
-          'pump {kw} kW · return {c} °C',
+      '- Hot-water recirculation: **{lps} L/s** · return loop {len} m · '
+          'head {head} m · pump {kw} kW · return {c} °C',
   RptStringKey.wsLegionella:
       '  - ⚠ Modelled return temperature {c} °C is below the anti-Legionella '
           'floor (~55 °C). Reduce the loop temperature drop or add trace '
@@ -706,6 +708,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esSvcFireStandpipe: 'Fire standpipe pump',
   RptStringKey.esSvcMechVent: 'Mechanical ventilation',
   RptStringKey.esSvcExhaustVent: 'Exhaust ventilation',
+  RptStringKey.esSvcTransferPump: 'Transfer pump (ground tank to roof tank)',
+  RptStringKey.esSvcHwRecirc: 'Hot-water recirculation',
   RptStringKey.warnLeadIn: '[{code}] ',
   RptStringKey.lkGeneral: 'general',
   RptStringKey.lkLighting: 'lighting',
@@ -835,8 +839,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.wsDownfeedGravity: '**gravitasi mencukupi**',
   RptStringKey.wsDownfeedBooster: 'booster **+{m} m**',
   RptStringKey.wsHotWaterRecirc:
-      '- Resirkulasi air panas: **{lps} L/s** · loop {loop} m · '
-          'pompa {kw} kW · balik {c} °C',
+      '- Resirkulasi air panas: **{lps} L/s** · loop balik {len} m · '
+          'tinggi tekan {head} m · pompa {kw} kW · balik {c} °C',
   RptStringKey.wsLegionella:
       '  - ⚠ Suhu balik termodelkan {c} °C berada di bawah ambang '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '
@@ -1085,6 +1089,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esSvcFireStandpipe: 'Pompa hidran kebakaran',
   RptStringKey.esSvcMechVent: 'Ventilasi mekanis',
   RptStringKey.esSvcExhaustVent: 'Ventilasi udara buang',
+  RptStringKey.esSvcTransferPump: 'Pompa transfer (tangki bawah ke tangki atap)',
+  RptStringKey.esSvcHwRecirc: 'Resirkulasi air panas',
   RptStringKey.warnLeadIn: '[{code}] (pesan dalam bahasa Inggris) ',
   RptStringKey.lkGeneral: 'umum',
   RptStringKey.lkLighting: 'penerangan',

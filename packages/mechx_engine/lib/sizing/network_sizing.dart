@@ -957,6 +957,10 @@ bool _isTerminalAirUnit(NodeComponent? comp) => switch (comp) {
       _ => false,
     };
 
+/// Public view of [_isTerminalAirUnit] (Round 16) — the app's air-system
+/// unit choice excludes the same delivery units the sizer never roots at.
+bool isTerminalAirUnit(NodeComponent? comp) => _isTerminalAirUnit(comp);
+
 /// The source ROOT of every connected component of [service], keyed by each
 /// member node id → its component's root — the exact root [autoSizeNetwork]
 /// accumulates from (same component traversal, same [_pickComponentRoot]

@@ -64,6 +64,12 @@ class HotWaterRecircDesign {
   /// the return loop.
   final Head loopHead;
 
+  /// Round 16 — the RETURN-leg length the loop head was computed over (the
+  /// [sizeHotWaterRecirculation] `loopLength`), reported separately from the
+  /// head so the report never prints a head in metres of water as if it were
+  /// a pipe length.
+  final Length loopLength;
+
   /// Pump/motor selection for the recirculation duty point.
   final PumpDuty pump;
 
@@ -78,6 +84,7 @@ class HotWaterRecircDesign {
     required this.loopHead,
     required this.pump,
     required this.returnTempC,
+    this.loopLength = const Length(0),
   });
 
   /// `true` when the modelled [returnTempC] falls below the anti-Legionella
@@ -112,6 +119,7 @@ HotWaterRecircDesign sizeHotWaterRecirculation({
   double flowTempC = kHotWaterFlowTempC,
   double hazenWilliamsC = 150.0,
   double density = 1000.0,
+  List<({Length length, Diameter diameter})> supplyPath = const [],
 }) {
   assert(heatLoss.watts >= 0, 'heatLoss must be non-negative');
   assert(allowableDropK > 0, 'allowableDropK must be positive');
@@ -126,12 +134,28 @@ HotWaterRecircDesign sizeHotWaterRecirculation({
 
   // Friction of driving that flow once around the return loop. Hazen–Williams
   // is the conventional plumbing friction law and folds roughness into C.
-  final loopHead = headLossHazenWilliams(
+  //
+  // Round 16 (plumbing-plant-hw-recirc-loop-head) — the circulating flow also
+  // passes OUT along the circulated supply pipework ([supplyPath], the index
+  // run from the heater, each segment at its OWN sized bore) before the return
+  // leg brings it back, so the loop head is Σ over those segments plus the
+  // return leg. Empty [supplyPath] ⇒ the return leg alone (byte-identical).
+  var loopHeadM = headLossHazenWilliams(
     flow: recircFlow,
     length: loopLength,
     diameter: returnDiameter,
     hazenWilliamsC: hazenWilliamsC,
-  );
+  ).meters;
+  for (final seg in supplyPath) {
+    if (seg.length.meters <= 0 || seg.diameter.meters <= 0) continue;
+    loopHeadM += headLossHazenWilliams(
+      flow: recircFlow,
+      length: seg.length,
+      diameter: seg.diameter,
+      hazenWilliamsC: hazenWilliamsC,
+    ).meters;
+  }
+  final loopHead = Head(loopHeadM);
 
   // Select the recirc pump for this (flow, head) duty point using the §8 pump
   // path's default pump/motor efficiencies.
@@ -149,6 +173,7 @@ HotWaterRecircDesign sizeHotWaterRecirculation({
     loopHead: loopHead,
     pump: pump,
     returnTempC: returnTempC,
+    loopLength: loopLength,
   );
 }
 
@@ -161,6 +186,11 @@ Power heatLossFromLength({
   double lossPerMetreW = 25.0, // W/m for insulated DN pipe // VERIFY
 }) =>
     Power(loopLength.meters * lossPerMetreW);
+
+/// Round 16 — the default inside diameter of an UNDRAWN recirculation return
+/// leg (a DN20 return is the common minimum). // VERIFY — confirm against the
+/// drawn return pipe when one is modelled.
+const Diameter kDefaultRecircReturnDiameter = Diameter(0.020);
 
 /// Round 12 (report-recompute-verify-items-incomplete) — the unverified
 /// constants behind the PRINTED hot-water recirculation line (loop heat loss →
