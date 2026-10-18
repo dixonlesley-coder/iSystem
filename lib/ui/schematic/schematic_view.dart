@@ -2747,6 +2747,13 @@ class _AutoSchematicPainter extends CustomPainter {
   /// pipe tag. The representative is the edge whose midpoint is nearest the run's
   /// centroid (so the single label sits mid-run). [runTagOf] holds the tag of
   /// every labelable run edge.
+  ///
+  /// The union never crosses a PLANT/equipment node (tank, pump, booster, AHU):
+  /// a suction pipe and a discharge pipe meeting at a pump or tank are DISTINCT
+  /// runs on an issued riser even when their tags read the same, so each keeps
+  /// its own size tag (Round 12 review — dropping the BOOSTER suffix had merged
+  /// the pump->ground-tank suction into the tank's discharge, leaving it
+  /// untagged in golden 09).
   Set<String> _dedupRunLabels(
       Map<String, Offset> nodePos, Map<String, String> runTagOf) {
     if (runTagOf.isEmpty) return const {};
@@ -2776,7 +2783,14 @@ class _AutoSchematicPainter extends CustomPainter {
       (byNode[e.fromId] ??= []).add(e);
       (byNode[e.toId] ??= []).add(e);
     }
-    for (final list in byNode.values) {
+    for (final entry in byNode.entries) {
+      final node = network.nodeById(entry.key);
+      if (node != null &&
+          (node.role == NodeRole.plant ||
+              node.component?.role == NodeRole.plant)) {
+        continue;
+      }
+      final list = entry.value;
       for (var i = 0; i < list.length; i++) {
         for (var j = i + 1; j < list.length; j++) {
           if (runTagOf[list[i].id] == runTagOf[list[j].id]) {

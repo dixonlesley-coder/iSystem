@@ -1571,8 +1571,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `network_sizing.dart`)**: `accumulateFlows`/`accumulateFixtureUnits` run on
   the deterministic BFS `serviceSpanningTree` (links sorted by edge id) — never
   a recursive DFS whose drawing order decides the tree. A GRAVITY component is
-  rooted only at a SINK plant (ground tank / component-less plant): a sump
-  pump / booster / air unit on a drainage net is pass-through. A gravity
+  rooted only at a SINK plant (ground tank / component-less plant, or a
+  DEGREE-1 pump/booster — an ejector pit IS the sink): an INLINE (degree ≥ 2)
+  sump pump / booster / air unit on a drainage net is pass-through. A gravity
   loop's CLOSING edge is sized on the larger adjacent load and flagged
   `loopUnbalanced` (never left unsized). A CHECK VALVE is a directional cut: a
   looped pressurized component acyclic once its check-valve edges are cut

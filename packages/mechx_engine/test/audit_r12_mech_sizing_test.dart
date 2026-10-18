@@ -113,6 +113,68 @@ void main() {
     });
   });
 
+  group('gravity-pump-root — a degree-1 sump pump IS the sink (ejector pit)',
+      () {
+    // Review r2 regression: a drainage branch that TERMINATES at a degree-1
+    // sump pump (the ejector pit) must root there — the pump is the gravity
+    // sink — never at the hub or a fixture (a fixture root drops its load).
+    Map<String, EdgeSizing> size(Network net, Map<String, double> dfu,
+            Map<String, double> out) =>
+        autoSizeNetwork(net, const SizingContext(),
+            leafDemand: const {},
+            nodeDrainageUnits: dfu,
+            fixtureUnitsOut: out);
+
+    test('lav(1) + wc(4) → J → sump: J→sump carries 5 DFU toward the pit',
+        () {
+      final nodes = [
+        _n('lav', 0, 0, role: NodeRole.fixture),
+        _n('wc', 0, 50, role: NodeRole.fixture),
+        _n('J', 100, 0),
+        _n('sump', 200, 0,
+            role: NodeRole.plant, component: NodeComponent.pump),
+      ];
+      final edges = [
+        _e('a', 'lav', 'J', ServiceType.drainage),
+        _e('b', 'wc', 'J', ServiceType.drainage),
+        _e('c', 'J', 'sump', ServiceType.drainage),
+      ];
+      const dfu = {'lav': 1.0, 'wc': 4.0};
+      final out = <String, double>{};
+      final ref = size(Network(nodes: nodes, edges: edges), dfu, out);
+      expect(out['c'], closeTo(5.0, 1e-12));
+      expect(ref['c']!.flowFromId, 'J');
+      expect(ref['c']!.diameter.inMillimeters,
+          drain.drainDiameterForDfu(5, isStack: false).inMillimeters);
+      // Order/direction-free (seeded).
+      for (var seed = 0; seed < 20; seed++) {
+        final r = math.Random(seed);
+        final shuffled = [
+          for (final e in _shuffled(edges, seed)) r.nextBool() ? _flip(e) : e,
+        ];
+        final o = <String, double>{};
+        final s = size(Network(nodes: nodes, edges: shuffled), dfu, o);
+        expect(o['c'], closeTo(5.0, 1e-12), reason: 'seed $seed');
+        expect(s['c']!.flowFromId, 'J', reason: 'seed $seed');
+      }
+    });
+
+    test('two-node lav → sump roots at the pump, never at the fixture', () {
+      final net = Network(
+        nodes: [
+          _n('lav', 0, 0, role: NodeRole.fixture),
+          _n('sump', 100, 0,
+              role: NodeRole.plant, component: NodeComponent.pump),
+        ],
+        edges: [_e('a', 'sump', 'lav', ServiceType.drainage)],
+      );
+      final out = <String, double>{};
+      final s = size(net, const {'lav': 1.0}, out);
+      expect(out['a'], closeTo(1.0, 1e-12));
+      expect(s['a']!.flowFromId, 'lav');
+    });
+  });
+
   group('gravity-loop-unsized — a two-downpipe gutter is fully sized', () {
     // Roof drains on C0..C3 (floor 3, 1.5 L/s each), downpipes dpA (C0→G0)
     // and dpB (C3→G3), ground run gg (G3→G0) → go (G0→out).

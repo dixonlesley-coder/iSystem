@@ -645,7 +645,8 @@ Map<String, EdgeSizing> sizeNetwork(
 ///  • plants — on a pressurized/air service a degree-1 GROUND tank (the
 ///    suction source), then any degree-1 tank, then the lowest plant; on a
 ///    gravity service the lowest SINK plant (a ground tank / component-less
-///    plant — a sump pump or booster is pass-through, Round 12); the VENT the
+///    plant, or a degree-1 pump/booster = an ejector pit; an INLINE sump pump or
+///    booster is pass-through, Round 12); the VENT the
 ///    highest (the atmosphere);
 ///  • demand-free leaves — on a supply (pressurized/air) service the leaf the
 ///    run was DRAWN FROM (the `fromId` of its edge — a property of the drawn
@@ -695,12 +696,16 @@ String _pickComponentRoot({
   // Round 12 (mech-props-2 gravity-pump-root) — on a GRAVITY service only a
   // SINK plant may root the component: a ground tank (sump / STP / holding
   // tank) or a component-less plant. A sump/ejector PUMP, booster set, roof
-  // tank or air unit drawn on a drainage network is a node the flow passes
-  // THROUGH, never the outfall — rooting there sized the real building drain
-  // for the outfall leaf's phantom 2 DFU, with its flow arrow reversed.
+  // tank or air unit drawn INLINE (degree >= 2) on a drainage network is a
+  // node the flow passes THROUGH, never the outfall — rooting there sized the
+  // real building drain for the outfall leaf's phantom 2 DFU, with its flow
+  // arrow reversed. A degree-1 plant is a TERMINUS: a branch that ends at a
+  // sump pump (the ejector pit — the pump IS the gravity sink) roots there,
+  // exactly like a ground tank, so its fixtures' load reaches the pit.
   final gravity = service.regime == FlowRegime.gravity;
   bool isPassThroughPlant(String id) {
     if (!gravity || roleOf(id) != NodeRole.plant) return false;
+    if (degree(id) < 2) return false;
     final comp = nodeOf(id)?.component;
     return comp != null && comp != NodeComponent.groundTank;
   }
@@ -1509,6 +1514,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
         }
         // Round 12 — a downpipe never necks down below the collector that
         // discharges into it (the N17 clamp, parameterised for storm).
+        // VERIFY: this is a NECKING (no-reducer-in-flow-direction) rule, NOT a
+        // capacity rule — a vertical downpipe hydraulically needs less bore
+        // than a part-full Manning-sized horizontal collector, so the raise is
+        // conservative (flagged `stackRaisedForBranch`, general practice,
+        // notAnSniClause) and may print a larger downpipe than the table.
         _clampDrainageStacksToBranches(
           net: net,
           sanitary: stormSizing,

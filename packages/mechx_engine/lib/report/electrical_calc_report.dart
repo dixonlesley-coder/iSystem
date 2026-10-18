@@ -142,9 +142,6 @@ String _severityTag(WarningSeverity s) => switch (s) {
       WarningSeverity.info => 'INFO',
     };
 
-/// The electrical **Design Basis / Inputs & Assumptions** register as a
-/// key-value block — supply system/voltage, connected/diversified load,
-/// earthing system, and (when set) the Fold-1 fault target + clearing time.
 /// Provenance of the origin fault level printed in the Design Basis.
 enum FaultLevelBasis {
   /// The engineer's explicit project setting.
@@ -157,6 +154,9 @@ enum FaultLevelBasis {
   defaultValue,
 }
 
+/// The electrical **Design Basis / Inputs & Assumptions** register as a
+/// key-value block — supply system/voltage, connected/diversified load,
+/// earthing system, and (when set) the Fold-1 fault target + clearing time.
 /// Shared with the unified MEP report. Caller adds the `##` heading.
 RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
     [ReportStrings strings = const ReportStrings.en()]) {

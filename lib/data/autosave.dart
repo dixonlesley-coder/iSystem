@@ -17,7 +17,7 @@ import '../store/assemblies_store.dart';
 import '../store/calibration_store.dart';
 import '../store/command_store.dart' show reportExportedProvider;
 import '../store/snap_settings_store.dart' show refLineModeProvider;
-import '../ui/canvas/segment_palette.dart' show armedPlacementProvider;
+import '../store/palette_placement_store.dart' show armedPlacementProvider;
 import '../store/fixture_library_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
