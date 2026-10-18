@@ -241,6 +241,20 @@ class ElectricalPanelResult {
   /// Demand line current (A) — the worst-loaded phase on a 3-phase board.
   final Current demandCurrent;
 
+  /// Round 15 (regression-essential-genset-uses-building-pf /
+  /// drafting-visual-2-3) — the board's diversified APPARENT-power demand
+  /// (VA): each leaf way's W ÷ its OWN cos φ, each feeder at its fed board's
+  /// VA, × diversity — the per-board basis `computeSystem` aggregates the
+  /// supply kVA from, never below [demandW]. 0 = not recorded (a bare
+  /// `computePanel` result); read [demandVaOrEstimate] for a figure.
+  final double demandVa;
+
+  /// [demandVa] when recorded, else [demandW] ÷ [fallbackPf] (the flat
+  /// building power factor, `// VERIFY`).
+  double demandVaOrEstimate({double fallbackPf = 0.85}) => demandVa > 0
+      ? demandVa
+      : (fallbackPf > 0 ? demandW / fallbackPf : demandW);
+
   /// Round 14 (elec-building-sim-4) — the line current the board's METERING
   /// (CT primary, meter range) must cover: the larger of today's demand and
   /// the current the incomer + busbar were SIZED for (`busbar.totalCurrentA`
@@ -293,6 +307,7 @@ class ElectricalPanelResult {
     required this.connectedW,
     required this.demandW,
     required this.demandCurrent,
+    this.demandVa = 0,
     this.futureLoadW = 0,
     this.headroomApplied = false,
     this.spareWaysReserved = 0,

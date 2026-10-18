@@ -132,15 +132,14 @@ class CommercialController extends Notifier<CommercialSettings> {
 /// audit r8 costing-4), so the quote never prices a 6 kA MCB at an 18 kA bus.
 final electricalBomProvider = Provider<Bom>((ref) {
   final fault = ref.watch(electricalAdvancedProvider).fault;
+  // Round 15 — each device matches the SPECIFIED kA the schedule prints.
+  final ka = faultSpecifiedKa(fault);
   return buildBom(
     ref.watch(electricalResultProvider),
     parts: fullCatalog(),
-    requiredIcuKaByPanelId: {
-      for (final e in fault.panels.entries)
-        if (e.value.prospectiveFaultkA.isFinite &&
-            e.value.prospectiveFaultkA > 0)
-          e.key: e.value.prospectiveFaultkA,
-    },
+    requiredIcuKaByPanelId: ka.bus,
+    incomerKaByPanelId: ka.incomers,
+    breakerKaByCircuitId: ka.breakers,
   );
 });
 

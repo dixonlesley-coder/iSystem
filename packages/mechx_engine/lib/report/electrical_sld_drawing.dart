@@ -24,6 +24,7 @@ import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
 import '../electrical/genset_backup.dart' show gensetBackupDemandVa;
 import '../electrical/load_kind.dart' show LoadKind;
+import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
@@ -39,7 +40,7 @@ import '../electrical/sources.dart'
         sizeBattery;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
-import '../units.dart' show ApparentPower, Power;
+import '../units.dart' show ApparentPower, Current, Power;
 import 'drawing_chrome.dart' show helveticaTextWidth;
 import 'number_format.dart' show groupThousands;
 import 'sld_sheet.dart';
@@ -282,30 +283,16 @@ String resolvedCableFamily(ElectricalCircuit? circuit) =>
         ? circuit.cableType!
         : defaultCableFamily(circuit?.loadKind);
 
-/// Standard metering CT primary ratings (A) — the IEC 61869-2 / 60044-1
-/// preferred-value series. The metering CT primary is the smallest standard
-/// rating at or above the panel demand (line) current, over a 5 A secondary.
-/// // VERIFY — the preferred-value ladder + the metering accuracy class are a
-/// representative selection, not a specific SNI/PUIL clause.
-const List<int> _ctPrimaryLadder = [
-  5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, 400, //
-  500, 600, 750, 800, 1000, 1250, 1500, 1600, 2000, 2500, 3000, 4000, 5000, //
-  6300,
-];
-
-/// The metering-CT label for a board carrying [demandA] line current:
-/// `CT <primary>/5A cl.1` — the smallest standard primary at or above the demand
-/// current, 5 A secondary, class 1 metering accuracy. Clamps to the top of the
-/// ladder for very large demands (never fabricates a non-standard ratio). N11.
-String _ctLabel(double demandA) {
-  var primary = _ctPrimaryLadder.last;
-  for (final p in _ctPrimaryLadder) {
-    if (p >= demandA) {
-      primary = p;
-      break;
-    }
-  }
-  return 'CT $primary/5A cl.1';
+/// The board's METERING token on the schedule header (N11, Round 15
+/// elec-props-3-ct-token-two-ladders): driven by the ONE metering spec the
+/// advanced study prints ([meterFor] — its CT primary ladder, its revenue
+/// accuracy class, its direct-metering limit), so the schedule and the study
+/// can never name two different CT ratios / classes for the same board:
+/// `CT <ratio>A cl.<class>` when CT-operated, else `kWh direct`.
+String _ctLabel(double meteringA) {
+  final spec = meterFor(Current(meteringA));
+  if (spec.metering == MeteringKind.direct) return 'kWh direct';
+  return 'CT ${spec.ctRatio}A cl.${spec.ctClass}';
 }
 
 /// Resolve the per-device breaking-capacity figure (Icu, kA) to print on a
@@ -1049,10 +1036,11 @@ List<(double, double)> _ovLabelLadder((double, double) def) {
   ];
 }
 
-/// Assumed building power factor for the per-panel compact-node kVA sub-line —
-/// mirrors `compute.dart`'s `assumedBuildingPf` but inlined to keep this pure
-/// drawing file free of the compute dependency. A representative estimate, NOT
-/// an SNI/PUIL clause. // VERIFY
+/// Assumed building power factor — only the FALLBACK for a panel result with
+/// no recorded per-board VA ([ElectricalPanelResult.demandVa]); mirrors
+/// `compute.dart`'s `assumedBuildingPf` but inlined to keep this pure drawing
+/// file free of the compute dependency. A representative estimate, NOT an
+/// SNI/PUIL clause. // VERIFY
 const double _assumedPanelPf = 0.85;
 
 /// Resolve, per CHILD panel id, the PARENT'S feeding circuit (project model, for
@@ -1132,10 +1120,15 @@ bool _parentIsThreePhase(
 /// The compact-node sub-line: `<In>A <poles>P · <kW>kW / <kVA>kVA` (the panel's
 /// incomer rating + diversified demand in both kW and kVA). Shared by the
 /// overview + riser so they read identically. ASCII-safe.
+///
+/// Round 15 (drafting-visual-2-3) — the kVA is the board's OWN per-circuit VA
+/// (the basis `computeSystem` sums into the supply note), so a single-root
+/// sheet prints ONE apparent power for one demand (the node used W / 0.85 =
+/// 44.9 kVA beside a 44.1 kVA supply note). The flat PF is the fallback only.
 String _compactNodeSubLine(ElectricalPanelResult p) =>
     '${_num(p.incomer.breaker.ratingA.amperes)}A ${p.incomer.poles}P · '
     '${_num(p.demandW / 1000)}kW / '
-    '${_num(p.demandW / _assumedPanelPf / 1000)}kVA';
+    '${_num(p.demandVaOrEstimate(fallbackPf: _assumedPanelPf) / 1000)}kVA';
 
 /// Parent-of map over the feeder graph (childPanelId -> parentPanelId), limited
 /// to children that have a result. Shared by the overview + riser layouts.
@@ -1263,12 +1256,45 @@ void _emitBowtie(
 
 /// A small labelled PANEL BOX (MVMDP / LVMDP) centred on the baseline — the DXF
 /// draws each distribution board as a rectangle, not a busbar.
+///
+/// Round 15 (drafting-visual-2-7) — a label that would not clear the box once
+/// the plot fit grows it to the minimum plotted size (allowance
+/// [_kPanelBoxLabelGrowth] over the 8-unit size, bold ≈ [_kBoldWidthFactor] ×
+/// Helvetica) WRAPS onto two centred lines at the space nearest its middle
+/// ('PANEL UTAMA' / 'TEGANGAN MENENGAH') instead of running into the right
+/// border. A label that fits keeps the original left-anchored single line.
 void _emitPanelBox(List<SldPrim> out, double cx, double cy, double w, double h,
     String label, SldRole role) {
+  const pad = 5.0;
   out.add(SldRect(cx - w / 2, cy - h / 2, w, h, role: role));
-  out.add(
-      SldLabel(cx - w / 2 + 5, cy + 3, label, size: 8, bold: true, role: role));
+  double grownW(String s) =>
+      helveticaTextWidth(s, 8) * _kBoldWidthFactor * _kPanelBoxLabelGrowth;
+  final spaces = [
+    for (var i = 0; i < label.length; i++)
+      if (label[i] == ' ') i,
+  ];
+  if (grownW(label) <= w - 2 * pad || spaces.isEmpty || h < 24) {
+    out.add(SldLabel(cx - w / 2 + pad, cy + 3, label,
+        size: 8, bold: true, role: role));
+    return;
+  }
+  final mid = label.length / 2;
+  final cut = spaces.reduce((a, b) => (a - mid).abs() <= (b - mid).abs() ? a : b);
+  final lines = [label.substring(0, cut), label.substring(cut + 1)];
+  for (var i = 0; i < 2; i++) {
+    final lw = helveticaTextWidth(lines[i], 8) * _kBoldWidthFactor;
+    out.add(SldLabel(cx - lw / 2, cy - 2 + i * 10, lines[i],
+        size: 8, bold: true, role: role));
+  }
 }
+
+/// Helvetica-Bold is ~10 % wider than the regular AFM widths
+/// [helveticaTextWidth] measures. // drafting estimate, not a standard value.
+const double _kBoldWidthFactor = 1.1;
+
+/// Allowance for the plot fit growing an 8-unit label to the minimum plotted
+/// size (8 → ~8.5 on an A3 riser; 25 % covers the denser sheets).
+const double _kPanelBoxLabelGrowth = 1.25;
 
 /// GENERATOR (genset): a circle with a centred "G".
 void _emitGenerator(
@@ -2589,7 +2615,8 @@ List<SldLine> _mergeFeederSegments(List<_FeederSeg> segs,
 /// column carries each floor's name + FFL elevation and a hairline grid line.
 ///
 /// Floor assignment precedence: (1) `panel.layoutPos.floorIndex` when set and in
-/// range; (2) ELSE feeder-depth tier (root at the highest tier); (3) clamp any
+/// range; (2) ELSE feeder-depth tier rising from the GROUND (entrance) floor —
+/// root at ground, each depth one floor up (Round 15); (3) clamp any
 /// out-of-range index. When [building] is null / has no levels it degrades to
 /// pure feeder-depth TIERS (gutter shows `Tier n`, no elevation) — never throws.
 ///
@@ -2642,9 +2669,13 @@ SldSheet buildElectricalRiser({
       if (lp != null) {
         return lp.floorIndex.clamp(0, levelCount - 1);
       }
-      // Unplaced ⇒ a depth tier, root at the TOP floor, descending by depth.
+      // Round 15 (drafting-visual-2-4) — unplaced ⇒ a depth tier RISING from
+      // the service-entrance (GROUND) floor: the PLN-fed root sits at the
+      // entrance and each feeder depth climbs one floor (riser convention).
+      // It used to land the root on the TOP floor stamped with that floor's
+      // real FFL (+7.50) — a fabricated location — with Ground left empty.
       final d = depth[id] ?? 0;
-      return (levelCount - 1 - d).clamp(0, levelCount - 1);
+      return (building.groundIndex + d).clamp(0, levelCount - 1);
     }
     // No floors ⇒ tier mode: root (depth 0) at the top band (highest index).
     final d = depth[id] ?? 0;

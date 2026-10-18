@@ -121,7 +121,14 @@ DuctStaticSolution solveDuctStatic({
   final staticPa = orientedPathCost(
     sourceId: fanNodeId,
     adjacency: adjacency,
-    flowFromOf: (e) => sizing[e.id]?.flowFromId,
+    // Round 15 — the sizer records EXTRACT air (return / exhaust) in its
+    // physical direction (grilles → fan); this walk runs OUTWARD from the
+    // fan, so flip it back to the fan-outward orientation.
+    flowFromOf: (e) {
+      final f = sizing[e.id]?.flowFromId;
+      if (f == null || !e.service.isExtractAir) return f;
+      return f == e.fromId ? e.toId : (f == e.toId ? e.fromId : null);
+    },
     edgeCost: edgePaArriving,
   );
 

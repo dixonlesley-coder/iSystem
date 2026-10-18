@@ -45,6 +45,11 @@ extension ServiceRegime on ServiceType {
 
   /// True for the HVAC air services (supply / return / exhaust).
   bool get isAir => regime == FlowRegime.air;
+
+  /// True for the EXTRACT air services (return + exhaust): air that travels
+  /// from the grilles TOWARD the fan / AHU, the reverse of supply air.
+  bool get isExtractAir =>
+      this == ServiceType.returnAir || this == ServiceType.exhaust;
 }
 
 /// The default duct PRODUCT for an air [service] when the engineer hasn't picked

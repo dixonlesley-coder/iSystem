@@ -83,7 +83,20 @@ final firePumpRatingProvider = Provider<FirePumpRatingResult>((ref) {
 /// smallest standard frame covering the OVERLOAD shaft power) — so the schedule,
 /// the Fire ResultCard's motor and the board-schedule circuit all name the same
 /// kW. Null when no standpipe flow is required.
+///
+/// Round 15 (drafting-visual-2-5) — also null unless the project actually
+/// DRAWS a fire service (a sprinkler or hydrant edge): the standpipe design is
+/// advisory (it always exists from the building height and stays in the Fire
+/// inspector), but a 55 kW / 94 m FP-01 on the procurement schedule and a
+/// 55 kW life-safety way on the MDP of a building with no fire system is a
+/// wrong deliverable.
 final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  if (!net.edges.any((e) =>
+      e.service == ServiceType.fireSprinkler ||
+      e.service == ServiceType.fireHydrant)) {
+    return null;
+  }
   final st = ref.watch(standpipeDesignProvider);
   if (st.requiredFlow.cubicMetersPerSecond <= 0) return null;
   // Round 12 — the engine's shared `firePumpDuty` (the export harness calls

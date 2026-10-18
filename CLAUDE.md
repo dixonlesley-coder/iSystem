@@ -1655,6 +1655,33 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   so a fixture must never be chosen as root or its load vanishes. Demand is
   collected from *every* demand-bearing node (including inline degree-2
   fixtures/diffusers), not just leaves.
+  **Round 15 refinements:** a TERMINAL air unit (FCU / AC cassette / split /
+  ducted AC, `_isTerminalAirUnit`, supply rank 4) and any demand-bearing plant
+  never root a supply component while a source exists — they rank below free
+  entry leaves and inline movers (a stand-alone FCU still roots its own
+  diffuser run) and are never parallel-source peers. A DRAINAGE / RAINWATER
+  component with several riser-foot outfalls tied at the root's height
+  (`_gravityOutfalls`, ordered by plan position) seeds a multi-root tree
+  (`serviceSpanningTree(extraRootIds:)`): nearest-outfall split, no phantom
+  outfall load, the divide edge a flagged closing edge. A pressurized component
+  rooted at an inline GROUND TANK treats its mover-free, demand-free branch as
+  the FILL line (no default load, oriented into the tank). A cycle CHECK VALVE
+  whose two pipes are drawn ambiguously is oriented topologically (root-
+  reachable side with every cycle valve cut, else the adjacent pump) — drawing
+  direction is not geometry. RETURN / EXHAUST air record `flowFromId` in their
+  physical direction (grilles → fan); `duct_static` flips it back for its
+  fan-outward walk, and `sourceDeliveredFlow` counts only edges whose flow
+  leaves (supply) / arrives at (extract) the source. The app's upfeed solve
+  sources at the sizer's root when it is a plant (else the best `supplyPlantRank`
+  plant, else the sizer's entry — never a fixture), and an INLINE booster's duty
+  is sized on the flow THROUGH it (`supplyBoosterProvider`; head = the residual
+  shortfall at the fixtures it serves with no pump in the system — the gravity
+  solve on downfeed, the upfeed solve shifted to zero source head). A mover
+  whose served set (beyond its inlet pipe) holds a storage TANK is a TRANSFER
+  pump (GT -> TP -> RT downfeed), never a booster — no duty is fabricated.
+  `pumpDutyProvider` is the one drawn pump's duty (trunk, or the booster);
+  the KETERANGAN 'Peak design flow' reads the building trunk via
+  `supplyPeakFlowProvider` (upfeed-only), never the booster's partial flow.
 - **Units in reports**: typed quantities store SI base units (Pressure in Pa);
   a `StandardValue.unit` is a display label (e.g. "kPa"). Never print
   `value`+`unit` together — surface the human-readable `note`. (See
@@ -1929,6 +1956,24 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   incomer/busbar/section count **byte-identical**. `ElectricalPanelResult` carries
   read-only `futureLoadW`/`headroomApplied`/`spareWaysReserved` for reporting. A spare
   allowance is the engineer's design input, not a PUIL clause (no standards table).
+  Round 15: the FEEDER and the boards upstream deliberately keep sizing on TODAY's
+  demand; when a feeder breaker is below its fed board's future worst-phase current
+  (`demandCurrent × diversity × multiplier`) the judge-only
+  `feeder-below-fed-headroom` warning says the reservation cannot be drawn.
+- **Per-board VA + capacitor current (Round 15, `electrical/compute.dart`)**:
+  `ElectricalPanelResult.demandVa` is each board's own diversified VA (Σ leaf W ÷ its
+  cos φ, feeders at their fed board's VA, × diversity, ≥ W; 0 on a bare `computePanel`
+  result — read `demandVaOrEstimate`). The genset's essential demand sums it over the
+  topmost backed boards and the overview/riser compact nodes print it, so a single-root
+  sheet shows ONE kVA. A CAPACITOR way's current is always Q/(√3·U) / Q/U0 (cos φ forced
+  to 1, also in `panelCapacitorFloorA`); a busbar SECTION carries a bank at its switching
+  current (× 1.43) and a feeder to a capacitor board at least that board's floor;
+  unpinned 1φ banks on a 3φ board are spread by switching current (largest-first, lowest
+  line) after the load balance. The BOM matches each breaker at the fault study's
+  SPECIFIED kA (`faultSpecifiedKa` → `incomerKaByPanelId` / `breakerKaByCircuitId`), and
+  the schedule's CT token is `meterFor(meteringCurrent)` (one ladder + 0.5S, `kWh direct`
+  ≤ 100 A). The fire-pump duty exists only when a fire service (sprinkler / hydrant
+  edge) is drawn.
 - **Electrical selectivity refinement (`electrical/fault.dart`)**: a coarse
   rating-ratio time-current ZONE model (`classifySelectivity`: non-selective <1.6× ≤
   partial <2.5× ≤ total) — a documented SIMPLIFIED stand-in for manufacturer

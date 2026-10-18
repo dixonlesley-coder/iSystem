@@ -31,7 +31,7 @@ library;
 import '../standards/puil.dart' show ElectricalStandardsProfile;
 import '../units.dart';
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
-import 'bom.dart' show Bom, buildBom;
+import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
 import 'containment.dart' show ContainmentResult, containmentFor;
 import 'control/starter.dart'
     show ControlAssembly, StarterType, applyStarterTemplate;
@@ -374,12 +374,12 @@ AdvancedStudy computeAdvancedStudy(
 
   // Breakers match parts whose breaking capacity covers the board's
   // prospective fault — the same fault study the schedule's kA tokens use.
-  final bom = buildBom(sys, requiredIcuKaByPanelId: {
-    for (final e in fault.panels.entries)
-      if (e.value.prospectiveFaultkA.isFinite &&
-          e.value.prospectiveFaultkA > 0)
-        e.key: e.value.prospectiveFaultkA,
-  });
+  // Round 15 — each device matches its SPECIFIED kA (the schedule's figure).
+  final faultKa = faultSpecifiedKa(fault);
+  final bom = buildBom(sys,
+      requiredIcuKaByPanelId: faultKa.bus,
+      incomerKaByPanelId: faultKa.incomers,
+      breakerKaByCircuitId: faultKa.breakers);
 
   // Aggregate every sub-result's provenance honesty surface.
   final verify = _aggregateVerify([
