@@ -351,11 +351,14 @@ void main() {
       final issues = c.read(designIssuesProvider);
       expect(issues.where((i) => i.kind == 'drainage-self-cleansing'), isEmpty);
       // …and the gravity TOO-LOW velocity must not leak out as the other row
-      // either: the edge inspector still reports it honestly, but neither
-      // Review row can name an action here.
+      // either. Round 17 follow-up (gravity-3-5): the edge inspector now
+      // REPEATS the engine verdict instead of re-deriving it — at the code
+      // minimum no smaller pipe is allowed, so the 0.46 m/s figure prints as
+      // OK there too (it used to show a LOW defect Review and the report did
+      // not, pointing the wrong way: a bigger pipe would run slower).
       expect(issues.where((i) => i.kind.startsWith('water-velocity:')), isEmpty);
       expect(c.read(waterVelocityChecksProvider)['br']!.verdict,
-          VelocityBandVerdict.tooLow);
+          VelocityBandVerdict.ok);
     });
 
     test('a drainage branch hand-sized ABOVE the DFU minimum IS a locatable '

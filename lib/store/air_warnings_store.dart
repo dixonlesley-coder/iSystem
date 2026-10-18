@@ -177,6 +177,23 @@ final overCapacityEdgesProvider = Provider<Set<String>>((ref) {
   return out;
 });
 
+/// Round 17 (gravity-3-1) — GRAVITY edges (drain / vent / rainwater) whose
+/// HAND-PICKED size is smaller than the smallest size the code tables allow for
+/// their load ([EdgeSizing.belowCodeMinimum]). The override path used to keep
+/// the auto pick's flags, so a DN75 stack carrying 32 WCs or a DN65 downpipe
+/// at 10 L/s issued silently. Empty when nothing is under-sized by hand ⇒
+/// byte-identical.
+final belowCodeMinimumEdgesProvider = Provider<Set<String>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>{};
+  for (final e in net.edges) {
+    final s = sizing[e.id];
+    if (s != null && s.belowCodeMinimum) out.add(e.id);
+  }
+  return out;
+});
+
 /// Gravity DRAINAGE edges the sizer judged BELOW the self-cleansing velocity
 /// ([EdgeSizing.selfCleansingOk] false, i.e. full-bore Manning < 0.6 m/s at the
 /// design slope) — solids drop out of suspension and the branch silts up. The

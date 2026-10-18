@@ -81,6 +81,13 @@ const List<(double, double)> _branchDfuTable = [
   (160, 100),
   (360, 125),
   (620, 150),
+  // Round 17 (gravity-3-2) — IPC Table 710.1(2) continues past DN150, so a
+  // mid-rise building drain (≈ 840 DFU for a 12-storey office) sizes DN200
+  // instead of clamping at DN150 with an unactionable "split the load"
+  // message. // VERIFY against SNI 8153 (`notAnSniClause`).
+  (1400, 200),
+  (2500, 250),
+  (3900, 300),
 ];
 const List<(double, double)> _stackDfuTable = [
   (2, 40),
@@ -90,6 +97,10 @@ const List<(double, double)> _stackDfuTable = [
   (240, 100),
   (540, 125),
   (960, 150),
+  // Round 17 (gravity-3-2) — IPC Table 710.1(2) stack rows. // VERIFY.
+  (2200, 200),
+  (3800, 250),
+  (6000, 300),
 ];
 // Round 9 (plumbing-rules-vent-table-shifted) — UPC Table 703.2 vent maximum
 // units, paired with the RIGHT diameters: 1¼ in (DN32) carries 1 DFU, 1½ in

@@ -15,7 +15,8 @@ import '../store/equipment_spec_store.dart';
 import '../store/fire_store.dart';
 import '../store/assemblies_store.dart';
 import '../store/calibration_store.dart';
-import '../store/command_store.dart' show reportExportedProvider;
+import '../store/command_store.dart'
+    show buildingVisitedProvider, reportExportedProvider;
 import '../store/snap_settings_store.dart' show refLineModeProvider;
 import '../store/palette_placement_store.dart' show armedPlacementProvider;
 import '../store/fixture_library_store.dart';
@@ -248,6 +249,9 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // target survives (the next imported plan used to open straight into a
   // calibration the user never started).
   read(reportExportedProvider.notifier).reset();
+  // Round 17 follow-up — nor does the previous project's Building visit tick
+  // the Floors stage of this one.
+  read(buildingVisitedProvider.notifier).reset();
   read(calibrationControllerProvider.notifier).cancel();
   read(measureModeProvider.notifier).set(false);
   read(tankModeProvider.notifier).set(false);

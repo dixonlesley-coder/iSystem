@@ -10,6 +10,32 @@ import 'model.dart';
 import 'panel_results.dart';
 import 'sources.dart' show kGeneratorPf;
 
+/// The name words that mark a board ESSENTIAL (on the genset-backed bus) in
+/// either UI language: EN EMERGENCY / ESSENTIAL, ID DARURAT / ESENSIAL (the ID
+/// UI's own word for the toggle) / EMERGENSI (the other common Indonesian
+/// spelling). Round 17 follow-up (i18n-residuals-essential-name) — the ID
+/// spellings were missed, so a board an ID user named 'LP-ESENSIAL' dropped out
+/// of the genset sizing, the motor-start screen and the red colour split.
+const List<String> kEssentialNameWords = [
+  'EMERGENCY',
+  'ESSENTIAL',
+  'DARURAT',
+  'ESENSIAL',
+  'EMERGENSI',
+];
+
+/// True when [name] marks a board essential ([kEssentialNameWords],
+/// case-insensitive). The ONE name heuristic shared by [gensetBackedPanelIds]
+/// and the single-line colour split, so they can never diverge. The explicit
+/// [ElectricalPanel.essential] flag stays the authority; this is the fallback.
+bool isEssentialByName(String name) {
+  final n = name.toUpperCase();
+  for (final w in kEssentialNameWords) {
+    if (n.contains(w)) return true;
+  }
+  return false;
+}
+
 /// The ESSENTIAL (genset-backed) panel ids (Round 11): a panel flagged
 /// [ElectricalPanel.essential], or named EMERGENCY / ESSENTIAL / DARURAT, plus
 /// every board it feeds (the property propagates DOWN the emergency sub-tree) —
@@ -24,13 +50,7 @@ Set<String> gensetBackedPanelIds(ElectricalProject project) {
       }
     }
   }
-  bool own(ElectricalPanel p) {
-    final n = p.name.toUpperCase();
-    return p.essential ||
-        n.contains('EMERGENCY') ||
-        n.contains('ESSENTIAL') ||
-        n.contains('DARURAT');
-  }
+  bool own(ElectricalPanel p) => p.essential || isEssentialByName(p.name);
 
   final out = <String>{};
   final stack = [for (final p in project.panels) if (own(p)) p.id];

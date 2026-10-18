@@ -906,20 +906,30 @@ void main() {
           nodeDrainageUnits: {'d': dfu},
         )['e']!;
 
-    test('stack: 1200 DFU > 960 top row ⇒ DN150 flagged; 900 not', () {
-      final over = size(ServiceType.drainage, EdgeKind.riser, 1200);
-      expect(over.diameter.inMillimeters, closeTo(150, 1e-9));
+    // Round 17 (gravity-3-2) — the tables continue to the IPC DN300 rows
+    // (stack top 6000 DFU, branch top 3900 DFU); 1200 DFU on a stack is the
+    // DN200 row (960 < 1200 ≤ 2200), only past the DN300 row is it a clamp.
+    test('stack: 7000 DFU > 6000 top row ⇒ DN300 flagged; 1200 → DN200', () {
+      final over = size(ServiceType.drainage, EdgeKind.riser, 7000);
+      expect(over.diameter.inMillimeters, closeTo(300, 1e-9));
       expect(over.overCapacity, isTrue);
-      final ok = size(ServiceType.drainage, EdgeKind.riser, 900);
-      expect(ok.diameter.inMillimeters, closeTo(150, 1e-9));
+      final ok = size(ServiceType.drainage, EdgeKind.riser, 1200);
+      expect(ok.diameter.inMillimeters, closeTo(200, 1e-9));
       expect(ok.overCapacity, isFalse);
+      final ok900 = size(ServiceType.drainage, EdgeKind.riser, 900);
+      expect(ok900.diameter.inMillimeters, closeTo(150, 1e-9));
     });
 
-    test('branch: 2000 DFU > 620 top row ⇒ flagged; 600 not', () {
+    test('branch: 5000 DFU > 3900 top row ⇒ flagged; 2000 → DN250', () {
       expect(
-          size(ServiceType.drainage, EdgeKind.run, 2000).overCapacity, isTrue);
-      expect(
-          size(ServiceType.drainage, EdgeKind.run, 600).overCapacity, isFalse);
+          size(ServiceType.drainage, EdgeKind.run, 5000).overCapacity, isTrue);
+      final b = size(ServiceType.drainage, EdgeKind.run, 2000);
+      expect(b.overCapacity, isFalse);
+      expect(b.diameter.inMillimeters, closeTo(250, 1e-9));
+      // 840 DFU (12-storey office building drain): 620 < 840 ≤ 1400 ⇒ DN200.
+      final bd = size(ServiceType.drainage, EdgeKind.run, 840);
+      expect(bd.diameter.inMillimeters, closeTo(200, 1e-9));
+      expect(bd.overCapacity, isFalse);
     });
 
     // Round 9 — the vent table is UPC 703.2 (top row 1380 DFU → DN150).
@@ -931,10 +941,10 @@ void main() {
     });
 
     test('pure predicates', () {
-      expect(drain.drainDfuExceedsTable(960, isStack: true), isFalse);
-      expect(drain.drainDfuExceedsTable(960.5, isStack: true), isTrue);
-      expect(drain.drainDfuExceedsTable(620, isStack: false), isFalse);
-      expect(drain.drainDfuExceedsTable(621, isStack: false), isTrue);
+      expect(drain.drainDfuExceedsTable(6000, isStack: true), isFalse);
+      expect(drain.drainDfuExceedsTable(6000.5, isStack: true), isTrue);
+      expect(drain.drainDfuExceedsTable(3900, isStack: false), isFalse);
+      expect(drain.drainDfuExceedsTable(3901, isStack: false), isTrue);
       expect(drain.ventDfuExceedsTable(1380), isFalse);
       expect(drain.ventDfuExceedsTable(1381), isTrue);
     });

@@ -172,6 +172,17 @@ class EdgeSizing {
   /// flag. Default false ⇒ every in-range edge is byte-identical.
   final bool demandCurveExtrapolated;
 
+  /// Round 17 (gravity-3-1) — true when a HAND-PICKED size ([applySizeOverride]
+  /// with a `minimumCompliant` diameter) on a GRAVITY edge (drain / vent / storm)
+  /// is SMALLER than the smallest size the code tables allow for its load: the
+  /// DFU / WC-count / trap floor for a sanitary edge, the downpipe-table or
+  /// usable part-full Manning capacity for a rainwater edge. The auto pick IS
+  /// that minimum, so the hand pick under-sizes a code-governed pipe. A
+  /// distinct flag from [overCapacity] (whose action — split the load — would
+  /// be wrong here; the action is "pick a larger size or clear the override").
+  /// Default false ⇒ every auto-sized / up-sized edge is byte-identical.
+  final bool belowCodeMinimum;
+
   const EdgeSizing({
     required this.edgeId,
     required this.service,
@@ -186,6 +197,7 @@ class EdgeSizing {
     this.selfCleansingOk = true,
     this.loopUnbalanced = false,
     this.demandCurveExtrapolated = false,
+    this.belowCodeMinimum = false,
   });
 
   /// True when this edge is a rectangular duct (carries W×H).
@@ -208,6 +220,7 @@ class EdgeSizing {
         selfCleansingOk: selfCleansingOk,
         loopUnbalanced: loopUnbalanced,
         demandCurveExtrapolated: demandCurveExtrapolated,
+        belowCodeMinimum: belowCodeMinimum,
       );
 
   /// A copy carrying the given [loopUnbalanced] verdict; all sizing fields and
@@ -226,6 +239,7 @@ class EdgeSizing {
         selfCleansingOk: selfCleansingOk,
         loopUnbalanced: value,
         demandCurveExtrapolated: demandCurveExtrapolated,
+        belowCodeMinimum: belowCodeMinimum,
       );
 
   /// A copy carrying the given [demandCurveExtrapolated] verdict; every other
@@ -244,6 +258,7 @@ class EdgeSizing {
         selfCleansingOk: selfCleansingOk,
         loopUnbalanced: loopUnbalanced,
         demandCurveExtrapolated: value,
+        belowCodeMinimum: belowCodeMinimum,
       );
 }
 
@@ -568,6 +583,7 @@ EdgeSizing applySizeOverride(
   Diameter override, {
   SizingContext? ctx,
   Diameter? codeMinimum,
+  Diameter? minimumCompliant,
   bool manningRun = false,
 }) {
   final isDrainage = sizing.service == ServiceType.drainage;
@@ -610,6 +626,12 @@ EdgeSizing applySizeOverride(
         : sizing.selfCleansingOk,
     loopUnbalanced: sizing.loopUnbalanced,
     demandCurveExtrapolated: sizing.demandCurveExtrapolated,
+    // Round 17 (gravity-3-1) — an override strictly SMALLER than the smallest
+    // compliant size for this load is a code violation the hand pick creates.
+    belowCodeMinimum: sizing.belowCodeMinimum ||
+        (minimumCompliant != null &&
+            override.meters > 0 &&
+            override.meters < minimumCompliant.meters - _kDiameterEpsM),
   );
 }
 
@@ -2163,7 +2185,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // hand pick at or below it keeps the (unactionable-by-pipe) verdict
         // true; only an OVERSIZED pick is judged on velocity alone.
         : applySizeOverride(entry.value, override,
-            ctx: ctx, codeMinimum: entry.value.diameter);
+            ctx: ctx,
+            codeMinimum: entry.value.diameter,
+            // Round 17 (gravity-3-1) — the auto pick is the DFU / WC-count /
+            // trap / stack≥branch floor, so a smaller hand pick is flagged.
+            minimumCompliant: entry.value.diameter);
   }
   for (final entry in stormSizing.entries) {
     final override = sizeOverrides[entry.key];
@@ -2173,7 +2199,12 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // override stays on that basis; a downpipe keeps continuity.
         : applySizeOverride(entry.value, override,
             ctx: ctx,
-            manningRun: net.edgeById(entry.key)?.kind != EdgeKind.riser);
+            manningRun: net.edgeById(entry.key)?.kind != EdgeKind.riser,
+            // Round 17 (gravity-3-1) — the auto pick is the smallest downpipe
+            // whose tabulated capacity / the smallest collector whose usable
+            // part-full Manning capacity carries the flow (or the N17
+            // stack ≥ collector clamp), so any smaller pick cannot carry it.
+            minimumCompliant: entry.value.diameter);
   }
   // M17 — a ring/grid whose Hardy–Cross balance never settled: every edge of
   // that component carries a PROVISIONAL split, so mark them all (after the

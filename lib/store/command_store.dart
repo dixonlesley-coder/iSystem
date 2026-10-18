@@ -19,6 +19,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../ui/strings/app_strings.dart';
+import 'design_issues_store.dart' show zeroLengthSizedEdgeCountProvider;
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -215,6 +216,13 @@ class BuildingVisitedController extends Notifier<bool> {
   void markVisited() {
     if (!state) state = true;
   }
+
+  /// Round 17 follow-up (ui-journeys-3-new-project-keeps-floors-tick) — a
+  /// document swap (File > New / Open) starts unvisited, like a cold launch:
+  /// the previous project's Building visit must not tick Floors for this one.
+  void reset() {
+    if (state) state = false;
+  }
 }
 
 /// The default floor stack seeded by `ProjectController.build()` — a fresh,
@@ -243,8 +251,26 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   final edges = ref.watch(networkControllerProvider).network.edges;
   final sizing = ref.watch(sizingProvider);
 
-  final calibrated =
-      sheets.any((s) => project.calibrationFor(s.id) != null);
+  // Round 17 follow-up (ui-journeys-3-stepper-size-ticked-on-zero-length) —
+  // with drawn work, Calibrate is done only when EVERY sheet carrying a drawn
+  // edge is calibrated (one calibrated page beside an uncalibrated page holding
+  // the whole network used to tick it); with no edges, any calibrated sheet.
+  // The SAME edge-bearing rule the Review's critical 'Sheet not calibrated'
+  // uses (a sheet holding any node with an incident edge), so the stepper can
+  // never tick Calibrate while Review shows that blocker.
+  final net = ref.watch(networkControllerProvider).network;
+  final liveSheetIds = {for (final s in sheets) s.id};
+  final edgeNodeIds = {
+    for (final e in edges) ...[e.fromId, e.toId],
+  };
+  final drawnSheets = {
+    for (final n in net.nodes)
+      if (edgeNodeIds.contains(n.id) && liveSheetIds.contains(n.sheetId))
+        n.sheetId,
+  };
+  final calibrated = drawnSheets.isEmpty
+      ? sheets.any((s) => project.calibrationFor(s.id) != null)
+      : drawnSheets.every((sid) => project.calibrationFor(sid) != null);
   final hasNetwork = edges.isNotEmpty;
   final sized = sizing.isNotEmpty;
   // A fresh project ships with the default 3-floor seed, so the old
@@ -274,7 +300,12 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
     // stage off `sized` alone told the engineer a step was finished that the
     // deliverable itself contradicts — the same honesty class the Floors tick
     // was fixed for (A2).
-    WorkflowStage.size: sized && calibrated,
+    //
+    // Round 17 follow-up — and no SIZED run may still be 0.0 m (the export
+    // gate's own blocker).
+    WorkflowStage.size: sized &&
+        calibrated &&
+        ref.watch(zeroLengthSizedEdgeCountProvider) == 0,
     WorkflowStage.report: ref.watch(reportExportedProvider),
   });
 });

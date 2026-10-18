@@ -235,6 +235,11 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     returnAirflowLps: balance?.returnLps ?? 0,
     rainfallMmPerHr: ref.read(rainfallIntensityProvider),
     runoffCoefficient: ref.read(runoffCoefficientProvider),
+    // Round 17 follow-up (gravity-3-6) — the laid slope + Manning basis every
+    // collector size and drainage velocity in this report was sized on.
+    drainageSlope: ref.read(drainageSlopeProvider),
+    drainageManningN: const SizingContext().drainageManningN,
+    drainageFillRatio: const SizingContext().drainageFillRatio,
     bom: ref.read(bomProvider),
     fittings: ref.read(fittingsProvider),
     occupancy: ref.read(occupancyProvider),
@@ -827,7 +832,12 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     pumps.add(
       PumpScheduleItem(
         duty: firePump,
-        service: reportStringsFor(ref)(RptStringKey.esSvcFireStandpipe),
+        // Round 17 follow-up — a sprinkler-rated pump (no hydrant drawn) is a
+        // SPRINKLER pump, never 'Pompa hidran kebakaran'.
+        service: reportStringsFor(ref)(
+            ref.read(fireRatedPointProvider).sprinklerOnly
+                ? RptStringKey.esSvcFireSprinkler
+                : RptStringKey.esSvcFireStandpipe),
         tag: tag,
         modelSpec: specs[tag],
       ),
@@ -4007,7 +4017,14 @@ class _RoomsSection extends ConsumerWidget {
                                           ? context.strings.format(
                                               StringKey.roomExtractGrilleCount,
                                               {'n': s.return_.count})
-                                          : '${s.supply.count} + 1',
+                                          // Round 17 follow-up — the button
+                                          // places return_.count grilles (M10),
+                                          // never a fixed one.
+                                          : context.strings.format(
+                                              StringKey.roomAutoPlaceCaption, {
+                                              'supply': s.supply.count,
+                                              'return': s.return_.count,
+                                            }),
                                       textAlign: TextAlign.end,
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
@@ -4413,6 +4430,12 @@ class _FireSection extends ConsumerWidget {
     final sprinkler = ref.watch(sprinklerDesignProvider);
     final standpipe = ref.watch(standpipeDesignProvider);
     final rating = ref.watch(firePumpRatingProvider);
+    final ratedPoint = ref.watch(fireRatedPointProvider);
+    final hasHydrantEdges = ref
+        .watch(networkControllerProvider)
+        .network
+        .edges
+        .any((e) => e.service == ServiceType.fireHydrant);
     // E11: the whole fire design derives from occupancy/height/hazard alone, so
     // it computes even with NO fire pipework drawn. Detect real sprinkler/
     // hydrant edges so the verdict is honest — a preliminary 'draft' from
@@ -4478,8 +4501,13 @@ class _FireSection extends ConsumerWidget {
                 // The SELECTED NFPA 20 motor frame (it carries the overload
                 // point) — the same kW the equipment schedule's FP-01 and the
                 // electrical feed use, never the raw rated-point shaft power.
-                '${standpipe.pumpHead.meters.toStringAsFixed(0)} m · ${_motorKw(rating.selectedMotor)} kW motor',
-            label: 'Fire pump (standpipe)',
+                //
+                // Round 17 follow-up — the head is the SAME governing rated
+                // point the motor was sized on (`fireRatedPointProvider`): the
+                // sprinkler remote-area duty on a sprinkler-only network, never
+                // the standpipe head of a system that is not drawn.
+                fireHeadlineText(ratedPoint.head, rating.selectedMotor),
+            label: fireHeadlineLabel(sprinklerOnly: ratedPoint.sprinklerOnly),
             // Neutral 'draft' (not a green 'rated') until sprinkler/hydrant runs
             // are drawn — the duty is a building-defaults preliminary, not a
             // validated design.
@@ -4496,10 +4524,12 @@ class _FireSection extends ConsumerWidget {
             '${ref.watch(sprinklerRemoteAreaProvider).remoteAreaDemand.inLitersPerSecond.toStringAsFixed(1)} L/s',
           ),
           kv('Sprinkler heads', '${sprinkler.sprinklerCount}'),
-          kv(
-            'Standpipe flow',
-            '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s',
-          ),
+          // Only when a standpipe is drawn (or nothing is — the draft basis).
+          if (hasHydrantEdges || !hasFireEdges)
+            kv(
+              'Standpipe flow',
+              '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s',
+            ),
           const SizedBox(height: MechXSpacing.xs),
           Row(
             children: [
@@ -5290,7 +5320,7 @@ class _SelectionSection extends ConsumerWidget {
               };
               return SteppedValueField(
                 display: '${(fedW / 1000).toStringAsFixed(2)} kW$suffix',
-                label: 'Electrical load',
+                label: strings(StringKey.nodeElectricalLoadLabel),
                 editSeed: node.electricalLoadW == null
                     ? ''
                     : (node.electricalLoadW! / 1000).toStringAsFixed(2),
@@ -6183,6 +6213,17 @@ class _Pill extends StatelessWidget {
 
 /// A motor-frame kW figure as a schedule prints it: whole frames bare (`75`),
 /// fractional frames trimmed (`0.55`, `5.5`).
+/// Round 17 follow-up — the Fire inspector headline: the governing rated
+/// point's HEAD (`fireRatedPointProvider`) beside the NFPA 20 motor sized on
+/// that same point, so the card can never pair a standpipe head with a
+/// sprinkler-rated motor. Public for the regression test.
+String fireHeadlineText(Head head, Power motor) =>
+    '${head.meters.toStringAsFixed(0)} m · ${_motorKw(motor)} kW motor';
+
+/// The headline label names the system the pump is rated on.
+String fireHeadlineLabel({required bool sprinklerOnly}) =>
+    sprinklerOnly ? 'Fire pump (sprinkler)' : 'Fire pump (standpipe)';
+
 String _motorKw(Power p) {
   final v = p.inKiloWatts;
   if (v == v.roundToDouble()) return v.toStringAsFixed(0);

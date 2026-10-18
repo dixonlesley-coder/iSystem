@@ -4346,11 +4346,14 @@ class _SystemNotes extends ConsumerWidget {
   final Network network;
   const _SystemNotes({required this.focus, required this.network});
 
-  String _occupancyLabel(Occupancy o) => switch (o) {
-        Occupancy.private => 'Private',
-        Occupancy.public => 'Public',
-        Occupancy.assembly => 'Assembly',
-      };
+  // Round 17 follow-up (i18n-residuals-riser-notes-card-english) — every row
+  // localizes like the heading; EN byte-identical.
+  String _occupancyLabel(BuildContext context, Occupancy o) =>
+      context.strings(switch (o) {
+        Occupancy.private => StringKey.schematicNotesOccPrivate,
+        Occupancy.public => StringKey.schematicNotesOccPublic,
+        Occupancy.assembly => StringKey.schematicNotesOccAssembly,
+      });
 
   /// Capacity (m3, ASCII) of the first node with [component] with a stored
   /// capacity, or null.
@@ -4380,29 +4383,42 @@ class _SystemNotes extends ConsumerWidget {
     final hasRoofTank =
         network.nodes.any((n) => n.component == NodeComponent.roofTank);
     // Round 17 — the SAME equipment-gated feed note the export prints.
-    final lines = <String>[
-      riserFeedNote(
-          downfeed: feed == FeedStrategy.downfeed,
-          hasRoofTank: hasRoofTank,
-          hasPump: network.nodes.any((n) =>
-              n.component == NodeComponent.pump ||
-              n.component == NodeComponent.boosterSet),
-          hasWaterMeter: network.nodes
-              .any((n) => n.component == NodeComponent.waterMeter),
-          detailed: true),
-    ];
+    final str = context.strings;
+    final hasPump = network.nodes.any((n) =>
+        n.component == NodeComponent.pump ||
+        n.component == NodeComponent.boosterSet);
+    final hasMeter =
+        network.nodes.any((n) => n.component == NodeComponent.waterMeter);
+    // The feed line follows the SAME equipment gates as `riserFeedNote`
+    // (detailed form), each outcome localized.
+    final feedKey = feed != FeedStrategy.downfeed
+        ? StringKey.schematicNotesFeedUpfeed
+        : hasRoofTank
+            ? StringKey.schematicNotesFeedRoofTank
+            : hasPump
+                ? StringKey.schematicNotesFeedBooster
+                : hasMeter
+                    ? StringKey.schematicNotesFeedMainsMeter
+                    : StringKey.schematicNotesFeedMains;
+    final lines = <String>[str(feedKey)];
     final roofM3 = _tankM3(NodeComponent.roofTank);
-    if (roofM3 != null) lines.add('Roof tank: $roofM3 m3');
+    if (roofM3 != null) {
+      lines.add(str.format(StringKey.schematicNotesRoofTank, {'m3': roofM3}));
+    }
     final groundM3 = _tankM3(NodeComponent.groundTank);
-    if (groundM3 != null) lines.add('Ground tank: $groundM3 m3');
-    lines.add('Occupancy: ${_occupancyLabel(occupancy)}');
+    if (groundM3 != null) {
+      lines.add(
+          str.format(StringKey.schematicNotesGroundTank, {'m3': groundM3}));
+    }
+    lines.add(str.format(StringKey.schematicNotesOccupancy,
+        {'label': _occupancyLabel(context, occupancy)}));
     // Peak design flow is upfeed-only (supplyPeakFlowProvider null on
     // downfeed) and is the BUILDING trunk flow, never an inline booster's
     // partial flow (Round 15 r2). Never
     // fabricate a m3/day figure when no pump flow exists.
     if (peakFlow != null) {
-      lines.add(
-          'Peak design flow: ${peakFlow.inLitersPerSecond.toStringAsFixed(1)} L/s');
+      lines.add(str.format(StringKey.schematicNotesPeakFlow,
+          {'lps': peakFlow.inLitersPerSecond.toStringAsFixed(1)}));
     }
 
     // D8: the SAME flat/opaque/hairline treatment `_detailBox` paints for the

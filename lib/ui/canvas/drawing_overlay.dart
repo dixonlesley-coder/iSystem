@@ -100,9 +100,8 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
             const ViewportTransform();
     final project = ref.watch(projectControllerProvider);
     final calibration = project.calibrationFor(widget.sheetId);
-    final building = project.building;
     // H5 — the LAID drainage design slope the sizer + calc report use (the
-    // Building-page input), feeding the live invert readout below.
+    // Building-page input), feeding the live fall readout below.
     final drainageSlope = ref.watch(drainageSlopeProvider);
     // E1 — the services currently INERT to canvas interaction (a locked
     // discipline layer's services + the individually hidden ones). Threaded into
@@ -274,23 +273,22 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     String? ilText;
     if (pending != null && endHover != null) {
       polarText = polarLabel(pending, endHover, calibration);
-      // B29 — a live invert-level readout on a gravity service, only when the
-      // sheet is calibrated AND the run starts on a known node (honest omission
-      // otherwise: the invert can't be derived without a start elevation).
+      // B29, reworked Round 17 follow-up (gravity-3-4) — a live FALL readout
+      // on a gravity service when the sheet is calibrated: the drop this leg
+      // needs at the laid design slope. It used to print an 'IL' invert made
+      // up from the start node's WATER-SUPPLY elevation (a main at its
+      // ceiling, a fixture at +1.1 m) and always subtracted from the drawn
+      // start, so a run drawn from the stack outward showed inverts falling
+      // upstream. No invert / sub-slab datum exists (gravity plan labels carry
+      // no CL), so only the datum-free fall is stated.
       if (drawing.service.regime == FlowRegime.gravity && calibration != null) {
-        final startNode = _nodeNear(drawing.network, widget.sheetId,
-            widget.floorIndex, pending, snapWorld);
-        if (startNode != null) {
-          final startElev =
-              nodeElevation(startNode, building, project.mounting).meters;
-          final devLenM =
-              calibration.lengthForPixels((endHover - pending).distance).meters;
-          // H5 — the LAID design slope from `drainageSlopeProvider`, never the
-          // dark `SizingContext` default: the live invert readout must agree
-          // with the fall stamped on the issued sheet. // VERIFY the gradient.
-          final slope = drainageSlope; // m/m // VERIFY
-          ilText = invertLevelLabel(startElev, devLenM, slope);
-        }
+        final devLenM =
+            calibration.lengthForPixels((endHover - pending).distance).meters;
+        // H5 — the LAID design slope from `drainageSlopeProvider`, never the
+        // dark `SizingContext` default: the live readout must agree with the
+        // fall stamped on the issued sheet. // VERIFY the gradient.
+        final slope = drainageSlope; // m/m // VERIFY
+        ilText = fallLabel(devLenM, slope);
       }
     }
 
@@ -535,33 +533,15 @@ class DrawParallelMark {
   return best;
 }
 
-/// The nearest network node to [world] within [radius], on [sheetId]/[floor], or
-/// null (B29 — the pending run's start node, for its elevation).
-NetNode? _nodeNear(
-  Network net,
-  String sheetId,
-  int floor,
-  Offset world,
-  double radius,
-) {
-  NetNode? best;
-  var bestD2 = radius * radius;
-  for (final n in net.nodes) {
-    if (n.sheetId != sheetId || n.floorIndex != floor) continue;
-    final d2 = (Offset(n.x, n.y) - world).distanceSquared;
-    if (d2 <= bestD2) {
-      bestD2 = d2;
-      best = n;
-    }
-  }
-  return best;
-}
-
-/// The B29 invert-level readout: the start node elevation minus the drop over
-/// the developed length so far (slope × length). Formatted 'IL -0.42'.
-String invertLevelLabel(double startElevM, double devLenM, double slope) {
-  final il = startElevM - slope * devLenM;
-  return 'IL ${il.toStringAsFixed(2)}';
+/// The B29 gravity FALL readout (Round 17 follow-up): the drop a leg of
+/// [devLenM] metres needs at [slope] (m/m), with the slope as `1:N`.
+/// Datum-free by design — e.g. 'fall 0.03 m @ 1:100'.
+String fallLabel(double devLenM, double slope) {
+  final fall = slope * devLenM;
+  final n = slope > 0 ? (1.0 / slope).round() : 0;
+  return n > 0
+      ? 'fall ${fall.toStringAsFixed(2)} m @ 1:$n'
+      : 'fall ${fall.toStringAsFixed(2)} m';
 }
 
 /// The B21 polar readout for the rubber band [pending]→[head]: calibrated

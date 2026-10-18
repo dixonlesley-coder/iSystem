@@ -7,6 +7,8 @@ import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'mechx_focus_ring.dart';
+import '../../store/app_state.dart' show AppLocale;
+import 'locale_number.dart';
 
 /// A shared numeric stepper: a `−` / `+` glyph-button pair flanking a mono
 /// value, with two ergonomics the hand-rolled inspector rows lacked —
@@ -126,13 +128,19 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
   /// ElectricalNumInput's wording when both bounds exist; a one-sided bound
   /// names the side it violated rather than pretending there is a range.
   String _rangeMessage() {
+    // Round 17 follow-up — the SAME localized numInput* templates the
+    // electrical fields use (EN degrades safely without a provider).
+    final strings = MechXStrings.of(context);
     final min = widget.min;
     final max = widget.max;
     if (min != null && max != null) {
-      return 'Enter a value between ${_fmt(min)} and ${_fmt(max)}';
+      return strings.format(
+          StringKey.numInputRange, {'min': _fmt(min), 'max': _fmt(max)});
     }
-    if (min != null) return 'Enter a value of ${_fmt(min)} or more';
-    return 'Enter a value of ${_fmt(max!)} or less';
+    if (min != null) {
+      return strings.format(StringKey.numInputMin, {'min': _fmt(min)});
+    }
+    return strings.format(StringKey.numInputMax, {'max': _fmt(max!)});
   }
 
   @override
@@ -195,13 +203,16 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
       widget.onSubmit(null);
       return;
     }
-    final parsed = double.tryParse(raw);
+    // Round 17 follow-up — locale-aware (ID `1.500` L is 1500, `2,5` is 2.5).
+    final strings = MechXStrings.of(context);
+    final parsed =
+        parseLocaleNumber(raw, indonesian: strings.locale == AppLocale.id);
     // Unparseable OR non-finite ⇒ REJECT with a message (G7); it used to revert
     // silently, so a typo read as "the app ate my number". double.tryParse
     // accepts 'NaN'/'Infinity'/'1e999', and NaN slips through a `< min / > max`
     // comparison (both are false) — it must never reach a store.
     if (parsed == null || !parsed.isFinite) {
-      setState(() => _error = 'Enter a number');
+      setState(() => _error = strings(StringKey.numInputNotANumber));
       return;
     }
     // Out of range ⇒ REJECT, don't clamp: the silent clamp changed the

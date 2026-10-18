@@ -187,10 +187,18 @@ final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
     final s = sizing[e.id];
     if (s == null || s.velocity.metersPerSecond <= 0) continue;
     final gravity = e.service.regime == FlowRegime.gravity;
+    // Round 17 follow-up (gravity-3-5) — a vertical gravity STACK / downpipe is
+    // not a sloped run: its "velocity" is the horizontal full-bore Manning
+    // value at the laid slope, physically meaningless for a riser, so no
+    // verdict is formed (the engine forms none either).
+    if (gravity && e.kind == EdgeKind.riser) continue;
     final max = gravity
         ? profile.maxDrainVelocity.value
         : profile.maxSupplyVelocity.value;
-    final min = e.service == ServiceType.drainage
+    // The drainage floor REPEATS the engine verdict instead of re-deriving it:
+    // at the code-minimum size no smaller pipe is allowed (G1), so a run the
+    // engine judged self-cleansing-OK is never shown LOW here.
+    final min = e.service == ServiceType.drainage && !s.selfCleansingOk
         ? const Velocity(kSelfCleansingVelocityMps)
         : const Velocity(0);
     out[e.id] = checkVelocityBand(s.velocity, min: min, max: max);
@@ -1423,7 +1431,7 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
             mounting: project.mounting,
           ).meters);
   if (loop == null) return null;
-  return sizeHotWaterRecirculation(
+  final design = sizeHotWaterRecirculation(
     heatLoss: heatLossFromLength(
         loopLength: Length(loop.circulatedLengthM + loop.returnLengthM)),
     loopLength: Length(loop.returnLengthM),
@@ -1438,6 +1446,17 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
     flowTempC: ref.watch(hotWaterFlowTempProvider),
     allowableDropK: ref.watch(hotWaterDeltaTProvider),
   );
+  // Round 17 follow-up — a DRAWN return: the reported loop length is the drawn
+  // loop the head was computed around (no phantom DN20 leg was added).
+  final drawn = loop.drawnLoopLengthM;
+  if (drawn == null) return design;
+  return HotWaterRecircDesign(
+    recircFlow: design.recircFlow,
+    loopHead: design.loopHead,
+    pump: design.pump,
+    returnTempC: design.returnTempC,
+    loopLength: Length(drawn),
+  );
 });
 
 /// Round 16 — the CIRCULATED hot-water pipework of [net] (pure; testable
@@ -1450,6 +1469,7 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
   double circulatedLengthM,
   double returnLengthM,
   List<({Length length, Diameter diameter})> indexPath,
+  double? drawnLoopLengthM,
 })? hotWaterRecircLoop(
   Network net,
   Map<String, EdgeSizing> sizing, {
@@ -1493,9 +1513,6 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
   }
   if (total <= 0) return null;
 
-  // Index run: the longest circulated path (by length) from a source.
-  var bestLen = 0.0;
-  var bestPath = const <NetEdge>[];
   final sources = {
     for (final e in circulated) ...[
       if (roots[e.fromId] == e.fromId) e.fromId,
@@ -1505,6 +1522,84 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
   // A component whose source sits on a dead leg starts from the circulated
   // node nearest it (deterministic: the lowest-id circulated node).
   if (sources.isEmpty) sources.add((adj.keys.toList()..sort()).first);
+  for (final l in adj.values) {
+    l.sort((a, b) => a.id.compareTo(b.id));
+  }
+
+  // Round 17 follow-up (regression-hw-recirc-phantom-return-on-drawn-loop) — a
+  // DRAWN return closes a cycle in the circulated pipework (the G2 HWR leg, the
+  // Round-12 check-valve cut). Its length is already inside [total], so adding
+  // the mirrored DN20 return on top counted the return twice (+40 % flow,
+  // +49 % head on a 100 m loop). When a cycle exists, the loop IS that cycle:
+  // no phantom return, and the head is the friction around the drawn loop at
+  // each segment's own bore. The longest fundamental cycle (BFS tree from the
+  // source + one closing edge) is taken — deterministic by edge id.
+  var bestCycleLen = 0.0;
+  var bestCycle = const <NetEdge>[];
+  for (final src in sources.toList()..sort()) {
+    final parent = <String, NetEdge>{};
+    final depth = <String, int>{src: 0};
+    final queue = [src];
+    final treeEdgeIds = <String>{};
+    for (var i = 0; i < queue.length; i++) {
+      final n = queue[i];
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        final m = e.fromId == n ? e.toId : e.fromId;
+        if (depth.containsKey(m)) continue;
+        depth[m] = depth[n]! + 1;
+        parent[m] = e;
+        treeEdgeIds.add(e.id);
+        queue.add(m);
+      }
+    }
+    final seen = <String>{};
+    for (final n in queue) {
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (treeEdgeIds.contains(e.id) || !seen.add(e.id)) continue;
+        if (e.fromId == e.toId) continue;
+        // Walk both ends up to their lowest common ancestor.
+        var a = e.fromId;
+        var b = e.toId;
+        final up = <NetEdge>[];
+        final down = <NetEdge>[];
+        while (a != b) {
+          if (depth[a]! >= depth[b]!) {
+            final pe = parent[a]!;
+            up.add(pe);
+            a = pe.fromId == a ? pe.toId : pe.fromId;
+          } else {
+            final pe = parent[b]!;
+            down.add(pe);
+            b = pe.fromId == b ? pe.toId : pe.fromId;
+          }
+        }
+        final cycle = [...up.reversed, e, ...down];
+        final len = cycle.fold<double>(0, (acc, c) => acc + lengthOf(c));
+        if (len > bestCycleLen + 1e-12) {
+          bestCycleLen = len;
+          bestCycle = cycle;
+        }
+      }
+    }
+  }
+  if (bestCycle.isNotEmpty) {
+    return (
+      circulatedLengthM: total,
+      returnLengthM: 0.0,
+      indexPath: [
+        for (final e in bestCycle)
+          (
+            length: Length(lengthOf(e)),
+            diameter: sizing[e.id]?.diameter ?? kDefaultRecircReturnDiameter,
+          ),
+      ],
+      drawnLoopLengthM: bestCycleLen,
+    );
+  }
+
+  // Index run: the longest circulated path (by length) from a source.
+  var bestLen = 0.0;
+  var bestPath = const <NetEdge>[];
   for (final src in sources.toList()..sort()) {
     final dist = <String, double>{src: 0};
     final via = <String, NetEdge>{};
@@ -1542,6 +1637,7 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
           diameter: sizing[e.id]?.diameter ?? kDefaultRecircReturnDiameter,
         ),
     ],
+    drawnLoopLengthM: null,
   );
 }
 

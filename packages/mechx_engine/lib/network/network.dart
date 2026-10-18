@@ -477,7 +477,10 @@ class NetNode {
 ///   • explicit [NetNode.elevation] if set;
 ///   • [NetNode.mountHeight] (above its floor) if set — the per-node wall height;
 ///   • [NodeRole.main]    → ceiling of its floor;
-///   • [NodeRole.fixture] → fixture height above its floor;
+///   • [NodeRole.fixture] → fixture height above its floor — except a GRAVITY
+///     outlet: [NodeComponent.floorDrain] / [NodeComponent.cleanout] at its
+///     floor surface, [NodeComponent.roofDrain] at the roof on the top storey
+///     (its own floor surface below it);
 ///   • [NodeRole.plant]   → depends on WHAT the plant is ([NetNode.component]):
 ///       – [NodeComponent.roofTank] → roof level (it sits on the roof slab);
 ///       – water plant that sits on its own floor — [NodeComponent.pump],
@@ -506,6 +509,26 @@ Length nodeElevation(
   final mount = node.mountHeight;
   if (mount != null) {
     return Length(building.elevationOf(node.floorIndex).meters + mount.meters);
+  }
+  // Round 17 follow-up (gravity-3-3) — a GRAVITY outlet sits ON its surface,
+  // not at tap height: a floor drain / cleanout at its own floor surface, a
+  // roof drain at the roof slab on the top storey (at its own floor's surface
+  // below it — a terrace / podium roof). Placing them at the 1.1 m fixture
+  // height cut 1.1 m (and more at the roof) off every downpipe / stack riser
+  // the BOM, cut plan and riser diagram read. // VERIFY notAnSniClause (a
+  // modelling datum; set the node elevation for a sunk / raised outlet).
+  switch (node.component) {
+    case NodeComponent.floorDrain:
+    case NodeComponent.cleanout:
+      return building.elevationOf(node.floorIndex);
+    case NodeComponent.roofDrain:
+      final top = building.levelCount - 1;
+      if (building.levelCount > 0 && node.floorIndex < top) {
+        return building.elevationOf(node.floorIndex);
+      }
+      return building.roofElevation;
+    default:
+      break;
   }
   switch (node.role) {
     case NodeRole.main:

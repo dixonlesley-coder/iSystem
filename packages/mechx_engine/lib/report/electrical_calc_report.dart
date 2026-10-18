@@ -465,8 +465,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         for (final node in ol.nodes)
           (
             '',
-            '${node.label} (${powerNodeKindLabel(node.kind, strings)})'
-                '${node.sub != null ? ' — ${node.sub}' : ''}'
+            '${_oneLineLabel(node.label, strings)} '
+                '(${_oneLineKindLabel(node, strings)})'
+                '${node.sub != null ? ' — ${_oneLineSub(node.sub!, strings)}' : ''}'
           ),
       ]));
     if (ol.interlocks.isNotEmpty) {
@@ -474,7 +475,12 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         ..add(RptHeading(3, strings(RptStringKey.headingSourceInterlocks)))
         ..add(RptKeyValue([
           for (final il in ol.interlocks)
-            ('', '_${interlockKindLabel(il.kind, strings)}_: ${il.note}'),
+            (
+              '',
+              '_${interlockKindLabel(il.kind, strings)}_: '
+                  '${strings.locale == ReportLocale.id ? strings(RptStringKey.olNoteLead) : ''}'
+                  '${il.note}'
+            ),
         ]));
     }
   }
@@ -512,3 +518,49 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
 String buildElectricalCalcReport(ElectricalCalcReportData data,
         [ReportStrings strings = const ReportStrings.en()]) =>
     renderRptMarkdown(buildElectricalCalcReportBlocks(data, strings));
+
+// Round 17 follow-up (i18n-residuals-oneline-section-english-in-id-report) —
+// the power one-line's fixed node labels / sub-captions are the engine's EN
+// literals (power_oneline.dart); the report localizes the known ones and
+// leaves anything else (a user-named node, a numeric sub) verbatim. The
+// interlock sentences stay EN but carry the explicit English-note lead in ID,
+// like the warnings section.
+const Map<String, RptStringKey> _oneLineLabelKeys = {
+  'Main LV bus': RptStringKey.olMainLvBus,
+  'Main panel': RptStringKey.olMainPanel,
+  'PLN utility': RptStringKey.olPlnUtility,
+  'Generator': RptStringKey.olGenerator,
+  'Essential bus': RptStringKey.olEssentialBus,
+  'Hybrid inverter': RptStringKey.olHybridInverter,
+  'Solar array': RptStringKey.olSolarArray,
+  'Battery': RptStringKey.olBattery,
+  'PV inverter': RptStringKey.olPvInverter,
+  'Battery inverter': RptStringKey.olBatteryInverter,
+  'UPS / critical bus': RptStringKey.olUpsCriticalBus,
+};
+
+String _oneLineLabel(String label, ReportStrings strings) {
+  final key = _oneLineLabelKeys[label];
+  return key == null ? label : strings(key);
+}
+
+/// A MANUAL changeover node is drawn 'COS' with the ATS kind — its tag must
+/// read (COS), never (ATS).
+String _oneLineKindLabel(PowerNode node, ReportStrings strings) =>
+    node.kind == PowerNodeKind.ats && node.label == 'COS'
+        ? strings(RptStringKey.pnCos)
+        : powerNodeKindLabel(node.kind, strings);
+
+final RegExp _voltsLv = RegExp(r'^([0-9.,]+) V LV$');
+
+String _oneLineSub(String sub, ReportStrings strings) {
+  if (sub == 'manual changeover') {
+    return strings(RptStringKey.olManualChangeover);
+  }
+  if (sub == 'transfer switch') return strings(RptStringKey.olTransferSwitch);
+  final m = _voltsLv.firstMatch(sub);
+  if (m != null) {
+    return strings.format(RptStringKey.olVoltsLv, {'v': m.group(1)});
+  }
+  return sub;
+}

@@ -130,6 +130,15 @@ class CalcReportData {
   /// byte-identical legacy output.
   final MountingHeights? mounting;
 
+  /// Round 17 follow-up (gravity-3-6) — the laid drainage design slope (m/m)
+  /// that Manning-sizes the rainwater collectors and drives every drainage
+  /// velocity / self-cleansing verdict in this report, with the Manning n and
+  /// the design fill ratio of that sizing. Null ⇒ the Design-basis row is
+  /// omitted (legacy output byte-identical).
+  final double? drainageSlope;
+  final double drainageManningN;
+  final double drainageFillRatio;
+
   const CalcReportData({
     required this.projectName,
     required this.date,
@@ -165,6 +174,9 @@ class CalcReportData {
     this.occupancy,
     this.revisions = const [],
     this.mounting,
+    this.drainageSlope,
+    this.drainageManningN = 0.010,
+    this.drainageFillRatio = 0.5,
   });
 }
 
@@ -270,7 +282,12 @@ List<RunScheduleRow> buildRunSchedule({
       sizeLabel: _edgeSizeLabel(s),
       fixtureUnits: edgeFixtureUnits[e.id],
       flowLps: s.flow.inLitersPerSecond,
-      velocityMs: s.velocity.metersPerSecond,
+      // Round 17 follow-up (gravity-3-5) — a drainage STACK's sized velocity
+      // is the horizontal Manning value at the laid slope, meaningless for a
+      // vertical pipe, so the column prints the dash (velocity 0).
+      velocityMs: e.service == ServiceType.drainage && e.kind == EdgeKind.riser
+          ? 0.0
+          : s.velocity.metersPerSecond,
       lengthM: edgeLengths[e.id]?.meters ?? 0.0,
       // M16 — carry the sizer's own "raised to match a branch" flag through to
       // the schedule (it had no consumer anywhere before).
@@ -390,6 +407,17 @@ RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
         'c': d.runoffCoefficient.toStringAsFixed(2),
       })
     ),
+    // Round 17 follow-up (gravity-3-6) — the slope every collector size and
+    // drainage velocity was computed at, so the report is reproducible.
+    if (d.drainageSlope != null && d.drainageSlope! > 0)
+      (
+        strings(RptStringKey.dbDrainageSlope),
+        strings.format(RptStringKey.dbDrainageSlopeValue, {
+          'n': (1.0 / d.drainageSlope!).round(),
+          'manning': d.drainageManningN.toStringAsFixed(3),
+          'fill': d.drainageFillRatio.toStringAsFixed(2),
+        })
+      ),
     (
       strings(RptStringKey.dbFireProtection),
       '**${fireSystems.isEmpty ? strings(RptStringKey.dbFireNoneModelled) : fireSystems.join(' + ')}**'
