@@ -135,6 +135,88 @@ const double _drawInset = 12.0;
 /// header-style block (byte-identical). [sheetIndexOverride] /
 /// [sheetTotalOverride] force the per-page `Sheet i of t` counter (the paginated
 /// exports) — folded into the chrome the shared block reads.
+/// The reserved strip across the page bottom: the device legend takes the
+/// bottom-left, the title block (height [titleBlockHeight], null = no chrome
+/// ⇒ the legacy 96 pt strip) the bottom-right.
+double _sldTitleStripH(SldSheet sheet, double? titleBlockHeight) {
+  final legendH =
+      sheet.legend.isNotEmpty ? 18.0 + sheet.legend.length * 11.0 : 0.0;
+  return titleBlockHeight != null
+      ? math.max(titleBlockHeight, legendH) + 24.0
+      : 96.0;
+}
+
+/// Round 10 (elec-drawing-props-3) — the smallest label size [sheet] would
+/// PRINT at (page points, after [fitSldSheetForPlot]) on the one-page A3
+/// layout [_sldPageContent] uses with [chrome]. Below [kMinPlotLabelPt] the
+/// page is unreadable as a single sheet.
+double sldSinglePageMinLabelPt(SldSheet sheet,
+    {DrawingChrome? chrome,
+    String projectName = 'Untitled project',
+    String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM'}) {
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  final tbH = hasChrome
+      ? pdfTitleBlock(chrome,
+              pageW: _pageW,
+              pageH: _pageH,
+              margin: _margin,
+              projectName: projectName,
+              scaleTextOverride: chrome.scaleText ?? 'NTS',
+              titleTextOverride: diagramTitle)
+          .height
+      : null;
+  const availW = _pageW - 2 * _margin - 2 * _drawInset;
+  final availH =
+      _pageH - 2 * _margin - _sldTitleStripH(sheet, tbH) - 2 * _drawInset;
+  final fit = fitSldSheetForPlot(sheet, availW: availW, availH: availH);
+  var minPt = double.infinity;
+  for (final p in fit.sheet.prims) {
+    if (p is SldLabel && p.text.trim().isNotEmpty) {
+      minPt = math.min(minPt, p.size * fit.scale);
+    }
+  }
+  return minPt;
+}
+
+/// Round 10 (elec-drawing-props-3) — the DETAIL single-line (every board's
+/// schedule) as an ISSUABLE PDF: one A3 sheet when every label still prints
+/// at [kMinPlotLabelPt] or more, else the one-board-per-page set
+/// ([electricalSldToPdfPaginated]) — a 45-way project stacked onto one page
+/// printed its schedule cells at ~3.6 pt (the cells sit between row rules, so
+/// the plot fit cannot grow them).
+Uint8List electricalSldDetailToPdf({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+  String title = 'iSystem electrical single-line',
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  Map<String, double>? breakerIcuKaByPanelId,
+}) {
+  final whole = buildElectricalSld(
+      project: project,
+      result: result,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId);
+  final minPt = sldSinglePageMinLabelPt(whole,
+      chrome: chrome,
+      projectName: _projectName(project),
+      diagramTitle: diagramTitle);
+  if (result.order.length <= 1 || minPt >= kMinPlotLabelPt - 1e-9) {
+    return electricalSldToPdf(
+        project: project,
+        sheet: whole,
+        title: title,
+        diagramTitle: diagramTitle,
+        chrome: chrome);
+  }
+  return electricalSldToPdfPaginated(
+      project: project,
+      result: result,
+      title: title,
+      diagramTitle: diagramTitle,
+      chrome: chrome,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId);
+}
+
 String _sldPageContent({
   required SldSheet sheet,
   required String projectName,
@@ -164,11 +246,7 @@ String _sldPageContent({
           scaleTextOverride: effChrome.scaleText ?? 'NTS',
           titleTextOverride: diagramTitle)
       : null;
-  // The device legend reserves the bottom-left; the title block the bottom-right.
-  final legendH =
-      sheet.legend.isNotEmpty ? 18.0 + sheet.legend.length * 11.0 : 0.0;
-  final titleBlockH = // reserved strip across the page bottom
-      hasChrome ? math.max(tb!.height, legendH) + 24.0 : 96.0;
+  final titleBlockH = _sldTitleStripH(sheet, tb?.height);
 
   // ── Auto-fit the drawing into the area above the title block ────────────────
   // drafting-9: the drawing sits a [_drawInset] inside the frame on every side,
@@ -215,7 +293,11 @@ String _sldPageContent({
         cs.writeln('${_n(tx(p.x))} ${_n(ty(p.y + p.h))} '
             '${_n(p.w * scale)} ${_n(p.h * scale)} re S');
       case SldLabel():
-        final fs = math.max(5.0, p.size * scale);
+        // Round 10 (elec-drawing-props-4) — print the FITTED size exactly, as
+        // the DXF does: [fitSldSheetForPlot] already grew every label it could
+        // into clear space; a renderer-side floor re-enlarged boxed-in labels
+        // around the same anchor and overprinted their neighbours (PDF != DXF).
+        final fs = p.size * scale;
         cs.writeln('BT /F1 ${_n(fs)} Tf ${_textRgForRole(p.role)} rg '
             '${_n(tx(p.x))} ${_n(ty(p.y))} Td (${_pdfText(p.text)}) Tj ET');
       case SldCircle():
@@ -245,7 +327,7 @@ String _sldPageContent({
     // The honest supply note kept as a muted line just above the block (the
     // schematic feed context the tabular grid has no row for).
     if (sheet.supplyNote.isNotEmpty) {
-      final ny = _margin + math.max(tb.height, legendH) + 8;
+      final ny = _margin + titleBlockH - 24 + 8; // = max(tb, legend) + 8
       cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
           '${_n(_margin + 4)} ${_n(ny)} Td (${_pdfText(sheet.supplyNote)}) Tj ET');
     }

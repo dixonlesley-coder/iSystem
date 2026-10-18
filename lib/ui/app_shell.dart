@@ -1451,7 +1451,9 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
                         // recovered work is still unsaved, so autosave should keep
                         // mirroring it after dismiss. (Recovery snapshots embed no
                         // assets, so rehydrate is a no-op here — kept for symmetry.)
-                        applyDocument(ref.read, rehydrateAssets(doc));
+                        final restored = rehydrateAssets(doc);
+                        rememberEmbeddedAssets(restored.assets);
+                        applyDocument(ref.read, restored);
                         // Re-link the file identity so the next Ctrl+S saves back
                         // to the source `.mechx` (not a Save-As fork) — when the
                         // file still exists. B2. (snapshot is promoted non-null

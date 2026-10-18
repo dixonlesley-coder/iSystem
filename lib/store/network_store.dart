@@ -284,6 +284,9 @@ class NetworkController extends Notifier<DrawingState> {
     Set<ServiceType> avoidServices = const {},
   }) {
     if (state.tool != DrawTool.drawRun) return;
+    // Store-level backstop (Round 10): a non-finite world point would plant a
+    // NaN/Infinity node the JSON encoder refuses (Save + autosave would throw).
+    if (!world.dx.isFinite || !world.dy.isFinite) return;
     if (state.pendingPoint == null) {
       state = DrawingState(
         network: state.network,
@@ -1352,7 +1355,8 @@ class NetworkController extends Notifier<DrawingState> {
     double distancePixels, {
     required bool leftSide,
   }) {
-    if (distancePixels <= 0) return null;
+    // `!(d > 0)` also refuses NaN (Round 10); Infinity is refused explicitly.
+    if (!(distancePixels > 0) || !distancePixels.isFinite) return null;
     final edge = state.network.edgeById(id);
     if (edge == null || edge.kind != EdgeKind.run) return null;
     final a = state.network.nodeById(edge.fromId);
@@ -1931,6 +1935,33 @@ class NetworkController extends Notifier<DrawingState> {
         gridMetersPerPixel: gridMetersPerPixel,
         underlaySnap: underlaySnap,
         avoidServices: avoidServices);
+    // Round 10 (canvas-geometry-4) — the start may SNAP onto a nearby node up to
+    // [snapRadius] away from the raw click the caller routed from. Keeping the
+    // interior bends where the RAW start put them would skew the first leg off
+    // its axis, so re-derive the route from the RESOLVED start in the same kind
+    // (axis-aligned / exact-45 by construction again).
+    if (pts.length >= 3) {
+      final s0 = nodes.firstWhere((n) => n.id == prevId);
+      final resolvedStart = Offset(s0.x, s0.y);
+      if ((resolvedStart - pts.first).distance > kRouteStraightEpsilonPx) {
+        final OrthoRouteKind kind;
+        if ((pts[1].dy - pts[0].dy).abs() <= kRouteStraightEpsilonPx) {
+          kind = OrthoRouteKind.horizontalFirst;
+        } else if ((pts[1].dx - pts[0].dx).abs() <= kRouteStraightEpsilonPx) {
+          kind = OrthoRouteKind.verticalFirst;
+        } else {
+          kind = OrthoRouteKind.diagonalZ;
+        }
+        final rerouted = orthoRoute(resolvedStart, pts.last, kind: kind);
+        pts
+          ..clear()
+          ..add(rerouted.first);
+        for (final p in rerouted.skip(1)) {
+          if ((p - pts.last).distance > kRouteStraightEpsilonPx) pts.add(p);
+        }
+        if (pts.length < 2) return null;
+      }
+    }
     var addedAny = false;
     for (var i = 1; i < pts.length; i++) {
       final isLast = i == pts.length - 1;
@@ -2015,7 +2046,10 @@ class NetworkController extends Notifier<DrawingState> {
     // Round 9 (mech-store-fuzz-7) — the anchor itself lies on the boundary
     // line (tA ≈ 0): the 'intersection' IS the anchor, so moving the end there
     // would collapse the run to zero length (or, via a merge, delete it).
-    if (tA.abs() <= 1e-6) return false;
+    // Round 10 (canvas-geometry-5) — tA < 0 means the boundary lies BEHIND the
+    // anchor: reaching it would carry the end THROUGH its anchor and reverse
+    // the run. CAD refuses ('no edge in that direction'); so do we.
+    if (tA <= 1e-6) return false;
     final inter = Offset(a0.dx + da.dx * tA, a0.dy + da.dy * tA);
 
     // Landed on a boundary end node -> merge the two nodes cleanly.
@@ -2110,6 +2144,13 @@ class NetworkController extends Notifier<DrawingState> {
     if ((da.dx == 0 && da.dy == 0) || (db.dx == 0 && db.dy == 0)) return false;
     final params = lineIntersectionParams(a0, da, b0, db);
     if (params == null) return false; // parallel
+    // Round 10 (canvas-geometry-5) — the corner must lie AHEAD of both anchors
+    // (positive parameter along each anchor→end direction); a corner behind
+    // either anchor would flip that run across it.
+    final paramsB = lineIntersectionParams(b0, db, a0, da);
+    if (params.$1 <= 1e-6 || paramsB == null || paramsB.$1 <= 1e-6) {
+      return false;
+    }
     final inter = Offset(a0.dx + da.dx * params.$1, a0.dy + da.dy * params.$1);
     // …and a corner sitting ON either anchor would zero that segment.
     if ((inter - a0).distance <= 0.5 || (inter - b0).distance <= 0.5) {

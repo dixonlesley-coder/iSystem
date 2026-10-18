@@ -500,6 +500,12 @@ class ProjectController extends Notifier<ProjectState> {
   }
 
   void setCalibration(String sheetId, ScaleCalibration calibration) {
+    // Round 10 — the single calibration chokepoint refuses a non-finite or
+    // non-positive scale: an Infinity/NaN metres-per-pixel turns every run
+    // length on the sheet non-finite and makes the project unsaveable (the
+    // JSON encoder rejects non-finite doubles).
+    final mpp = calibration.metersPerPixel;
+    if (!mpp.isFinite || !(mpp > 0)) return;
     // Round 9 (mech-store-fuzz-8) — re-applying the same, non-stale scale is a
     // no-op (no phantom undo step, no dirty flag).
     if (state.calibrations[sheetId] == calibration &&

@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
 import '../../data/dxf_import.dart' show dxfContentSize;
+import '../../data/file_stamped_cache.dart';
 import '../../data/dxf_text.dart';
 import '../../store/models/sheet.dart';
 
@@ -32,24 +33,24 @@ class DxfSheetPage extends StatefulWidget {
   @override
   State<DxfSheetPage> createState() => _DxfSheetPageState();
 
-  /// Parse cache keyed by file path. A floor-plan DXF parses once and is reused
-  /// across rebuilds / sheet revisits. A `null` value = parsed-but-empty/failed.
-  static final Map<String, DxfDrawing?> _cache = {};
-
-  static DxfDrawing? _load(String path) {
-    if (_cache.containsKey(path)) return _cache[path];
-    DxfDrawing? drawing;
+  /// Parse cache keyed by file path AND the file's size/mtime stamp (Round
+  /// 10): a floor-plan DXF parses once and is reused across rebuilds / sheet
+  /// revisits, but a plan revised IN PLACE (same path) re-parses instead of
+  /// painting the stale revision. A `null` value = parsed-but-empty/failed.
+  static final FileStampedCache<DxfDrawing?> _cache =
+      FileStampedCache<DxfDrawing?>((path) {
     try {
-      drawing = parseDxf(readDxfTextSync(path));
+      return parseDxf(readDxfTextSync(path));
     } catch (_) {
-      drawing = null;
+      return null;
     }
-    return _cache[path] = drawing;
-  }
+  });
+
+  static DxfDrawing? _load(String path) => _cache.get(path);
 
   /// Test seam: prime the cache so a widget test can render without disk I/O.
   static void cacheForTest(String path, DxfDrawing? drawing) =>
-      _cache[path] = drawing;
+      _cache.prime(path, drawing);
 
   /// The parsed drawing for [path] the painter uses, loading + caching it on
   /// first access (null when the file is missing / empty / unparseable). The

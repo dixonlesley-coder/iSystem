@@ -35,14 +35,20 @@ DrawInput parseDrawingInput(String text) {
   if (t.isEmpty) return const DrawInput();
   final parts = t.split(RegExp(r'\s+'));
   final mm = double.tryParse(parts[0]);
-  if (mm == null) {
+  // `double.tryParse` happily returns NaN / Infinity ('NaN', 'Infinity',
+  // '1e400'); a non-finite length would plant a NaN/Infinity node that the
+  // JSON encoder refuses, making Save and autosave throw (Round 10).
+  if (mm == null || !mm.isFinite) {
     return const DrawInput(error: 'Enter a length in mm, e.g. 3000');
   }
   if (mm <= 0) return const DrawInput(error: 'Length must be greater than 0');
+  if (parts.length > 2) {
+    return const DrawInput(error: 'Enter a length and an optional angle only');
+  }
   double? angle;
   if (parts.length > 1) {
     angle = double.tryParse(parts[1]);
-    if (angle == null) {
+    if (angle == null || !angle.isFinite) {
       return const DrawInput(error: 'Angle must be a number, e.g. 3000 90');
     }
   }

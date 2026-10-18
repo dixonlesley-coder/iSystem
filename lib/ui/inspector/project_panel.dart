@@ -13,7 +13,7 @@ import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart'
     show SldDxfLayers, electricalSldToDxf;
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
-    show electricalSldToPdf;
+    show electricalSldDetailToPdf, electricalSldToPdf;
 import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
@@ -1769,14 +1769,14 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
   final eResult = ref.read(electricalResultProvider);
   if (eResult.order.isNotEmpty) {
     final eProject = ref.read(electricalProjectProvider);
+    // Round 10 (elec-drawing-props-3) — one A3 sheet only while every label
+    // still prints at the minimum plotted size; a larger project issues one
+    // board per page instead of shrinking the schedules to ~3 pt.
     await File(out('electrical-sld.pdf')).writeAsBytes(
-      electricalSldToPdf(
+      electricalSldDetailToPdf(
         project: eProject,
-        sheet: buildElectricalSld(
-          project: eProject,
-          result: eResult,
-          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-        ),
+        result: eResult,
+        breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
         chrome: sldChrome(DrawingSeries.electricalDetail),
       ),
     );
@@ -2390,7 +2390,7 @@ class _PdfScaleTypeInState extends ConsumerState<_PdfScaleTypeIn> {
 
   void _apply() {
     final n = double.tryParse(_text.trim());
-    if (n == null || n <= 0) return;
+    if (n == null || !n.isFinite || n <= 0) return;
     final mpp = metersPerPixelForPdfScale(n);
     ref
         .read(projectControllerProvider.notifier)

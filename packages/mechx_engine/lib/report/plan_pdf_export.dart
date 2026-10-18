@@ -186,10 +186,26 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
       : 0.0;
   final spanX = maxX - minX;
   final spanY = maxY - minY;
-  final availW = pageW - 2 * margin - gridPad;
+  // Round 10 (mech-drawing-props-4) — the chrome marks are reserved, not
+  // overprinted: the NORTH arrow (top-right) takes a right-hand column out of
+  // the fit width, and the bottom band reserves the taller of the title block
+  // and the LEGEND (bottom-left, growing one row per service).
+  final northBox = hasChrome
+      ? pdfNorthArrowBox(cx: pageW - margin - 18, cy: pageH - margin - 40)
+      : null;
+  final legendBox = hasChrome
+      ? pdfLegendBox(chrome,
+          originX: margin + kLegendFrameInset, originY: margin + 28)
+      : null;
+  final northReserveW =
+      northBox != null ? (pageW - margin) - northBox.minX + 2 : 0.0;
+  final bandH = hasChrome
+      ? math.max(blockH, legendBox == null ? 0.0 : legendBox.maxY - margin + 2)
+      : 24.0;
+  final availW = pageW - 2 * margin - gridPad - northReserveW;
   // Reserve the title-block strip (chrome) or a little headroom for the
   // legacy two-line top-left title (and the grid bubbles' strip on top).
-  final availH = pageH - 2 * margin - (hasChrome ? blockH : 24.0) - gridPad;
+  final availH = pageH - 2 * margin - bandH - gridPad;
   var scale = 1.0;
   if (spanX > 0 || spanY > 0) {
     final sx = spanX > 0 ? availW / spanX : double.infinity;
@@ -208,6 +224,12 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
   scale = snap.scale;
   final scaleRow = snap.scaleRow;
   final pointsPerMeter = snap.pointsPerMeter;
+  final scaleBarBox = pointsPerMeter == null
+      ? null
+      : pdfScaleBarBox(
+          pointsPerMeter: pointsPerMeter,
+          centerX: pageW / 2,
+          baseY: hasChrome ? margin + kScaleBarFrameInset : margin);
 
   return (
     pageW: pageW,
@@ -249,6 +271,11 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
           maxX: pageW - margin,
           maxY: margin + blockH,
         ),
+      // Round 10: the north arrow, legend and scale bar are occupied too, so
+      // no tag picks a slot over them.
+      if (northBox != null) northBox,
+      if (legendBox != null) legendBox,
+      if (scaleBarBox != null) scaleBarBox,
     ],
   );
 }
@@ -530,43 +557,17 @@ Uint8List planToPdf({
 
   // Compose every edge's label up front (size · length · CL · fall) through
   // the ONE composer pair the plan DXF uses, so both print the same text.
-  final edgeLabels = <String, PlanEdgeLabelText>{};
-  for (final e in net.edges) {
-    final s = sizing[e.id];
-    final len = edgeLengths[e.id];
-    final elev = edgeElevationLabels?[e.id];
-    final sizeText = s != null ? _sizeLabel(e, s) : null;
-    final lenText =
-        (len != null && len.meters > 0) ? planLengthLabel(len) : null;
-    // G5: the laid fall (`1:100`) for a gravity-regime RUN, from the real ctx
-    // gradient the caller passes (never a hardcoded default).
-    final slopeText = (e.kind == EdgeKind.run &&
-            e.service.regime == FlowRegime.gravity &&
-            gravitySlope != null)
-        ? gravitySlopeLabel(gravitySlope)
-        : null;
-    // N5 + N13: `CW-R1 · DN50 - 3.5 m - CL +2.70`. U+00B7 is WinAnsi
-    // pass-through, so the separator survives the PDF text encoder.
-    final label = composePlanEdgeLabel(
-      tag: edgeTags?[e.id],
-      size: sizeText,
-      length: lenText,
-      elevation: elev,
-      slope: slopeText,
-    );
-    if (label == null) continue;
-    edgeLabels[e.id] = (
-      text: label,
-      // R5: the two-line form (`tag · size` over `length - CL - fall`).
-      split: composePlanEdgeLabelLines(
-        tag: edgeTags?[e.id],
-        size: sizeText,
-        length: lenText,
-        elevation: elev,
-        slope: slopeText,
-      ),
-    );
-  }
+  final edgeLabels = composePlanEdgeLabels(
+    net: net,
+    sizeText: (e) {
+      final s = sizing[e.id];
+      return s != null ? _sizeLabel(e, s) : null;
+    },
+    lengthOf: (e) => edgeLengths[e.id],
+    edgeTags: edgeTags,
+    edgeElevationLabels: edgeElevationLabels,
+    gravitySlope: gravitySlope,
+  );
 
   final ann = layoutPlanAnnotations(
     net: net,

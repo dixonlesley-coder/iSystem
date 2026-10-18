@@ -603,10 +603,12 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   ref
       .read(busyProvider.notifier)
       .set(MechXStringsData(ref.read(localeProvider))(StringKey.busySaving));
+  var missingAssets = 0;
   try {
     // Embed the source plans OFF the UI thread (the gzip+base64 of every plan is
     // a real window freeze on a large project) so the app stays responsive.
     final assets = await gatherSheetAssetsAsync(doc.sheets);
+    missingAssets = missingSheetAssetPaths(doc.sheets, assets).length;
     final portable = doc.withSheets(doc.sheets, assets: assets);
     // Atomic: a torn write can only ever hit the `.tmp` file; the previous
     // save survives as the target or its `.bak`.
@@ -647,9 +649,15 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   ref
       .read(appSettingsProvider.notifier)
       .recordRecent(full, ref.read(projectControllerProvider).name);
-  ref
-      .read(statusMessageProvider.notifier)
-      .showStatus('Saved ${full.split(Platform.pathSeparator).last}');
+  final savedName = full.split(Platform.pathSeparator).last;
+  // Round 10 (import-pipeline-1) — never claim a clean portable save when a
+  // plan could not be embedded (its source is gone AND nothing was embedded
+  // for it before): say so, with the count.
+  ref.read(statusMessageProvider.notifier).showStatus(missingAssets == 0
+      ? 'Saved $savedName'
+      : MechXStringsData(ref.read(localeProvider)).format(
+          StringKey.saveAssetsMissing,
+          {'file': savedName, 'count': missingAssets}));
 }
 
 /// Open a `.mechx` project, replacing the live state. Guards unsaved work first
@@ -670,7 +678,10 @@ Future<void> openProject(BuildContext context, WidgetRef ref) async {
 Future<void> openProjectPath(
     BuildContext context, WidgetRef ref, String path) async {
   if (!await confirmDiscardIfDirty(context, ref)) return;
-  if (!await File(path).exists()) {
+  // Round 10 (import-pipeline-4) — a missing target whose `.bak` survives (a
+  // save interrupted between the atomic writer's two renames) is NOT gone:
+  // the loader restores from the backup, so keep the MRU entry.
+  if (!await File(path).exists() && !await File('$path.bak').exists()) {
     ref
         .read(loadErrorProvider.notifier)
         .set('That project is no longer there:\n$path');
@@ -711,7 +722,7 @@ String? launchProjectPathFromArgs(List<String> args) {
 /// empty state) rather than surfacing a launch-time error banner.
 Future<void> openProjectAtLaunch(
     ProviderContainer container, String path) async {
-  if (!await File(path).exists()) return;
+  if (!await File(path).exists() && !await File('$path.bak').exists()) return;
   await _applyOpenedFileWith(container.read, path);
 }
 
@@ -732,12 +743,50 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
   read(busyProvider.notifier).set(
       MechXStringsData(read(localeProvider))(StringKey.busyOpeningProject));
   try {
-    final source = await File(path).readAsString();
     // Decode + extract any embedded source plans (gunzip + repoint the sheets
     // so a portable project renders even without the original plan files here)
     // TOGETHER off the UI thread — the exact freeze Save already fixed for its
     // symmetric asset-embedding work (see gatherSheetAssetsAsync).
-    final doc = await decodeAndRehydrateAsync(source);
+    //
+    // Round 10 (import-pipeline-4) — `atomicWriteString` promises that if the
+    // process dies between its two renames, the good copy in `<path>.bak` is
+    // what the open path falls back to. Honour it: when the target is missing
+    // or undecodable but the backup decodes, load the backup, put it back in
+    // place atomically, and tell the user.
+    ProjectDocument doc;
+    var restoredFromBackup = false;
+    final target = File(path);
+    final bak = File('$path.bak');
+    try {
+      if (!await target.exists()) {
+        throw const ProjectDocumentException('Project file is missing');
+      }
+      doc = await decodeAndRehydrateAsync(await target.readAsString());
+    } on Object catch (original, stack) {
+      if (!await bak.exists()) rethrow;
+      final bakSource = await bak.readAsString();
+      ProjectDocument fromBak;
+      try {
+        fromBak = await decodeAndRehydrateAsync(bakSource);
+      } on Object catch (_) {
+        // The backup is no better — report the ORIGINAL failure.
+        Error.throwWithStackTrace(original, stack);
+      }
+      doc = fromBak;
+      restoredFromBackup = true;
+      // Put the good copy back in place. A torn/corrupt target is deleted
+      // first so the atomic writer does not displace it OVER the good `.bak`.
+      try {
+        if (await target.exists()) await target.delete();
+        await atomicWriteString(path, bakSource);
+      } catch (_) {
+        // Best effort — the project is open from the backup either way.
+      }
+    }
+    // Round 10 (import-pipeline-1) — keep the embedded payloads (re-keyed by
+    // the extracted local paths) so a later Save survives the extraction
+    // being cleaned away.
+    rememberEmbeddedAssets(doc.assets);
     applyDocument(read, doc);
     // The just-loaded state is the clean baseline; capture its canonical
     // encoding so autosave won't immediately mirror it to recovery.
@@ -754,7 +803,11 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
     read(loadErrorProvider.notifier).clear();
     read(appSettingsProvider.notifier)
         .recordRecent(path, read(projectControllerProvider).name);
-    read(statusMessageProvider.notifier).showStatus('Project opened');
+    read(statusMessageProvider.notifier).showStatus(restoredFromBackup
+        ? MechXStringsData(read(localeProvider)).format(
+            StringKey.openRestoredFromBackup,
+            {'file': path.split(Platform.pathSeparator).last})
+        : 'Project opened');
   } on ProjectDocumentException catch (e) {
     // Malformed/incompatible file — surface why, leave the project untouched.
     read(loadErrorProvider.notifier).set(e.message);

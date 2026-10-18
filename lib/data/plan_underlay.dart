@@ -8,6 +8,7 @@ import 'package:pdfrx/pdfrx.dart';
 
 import '../store/models/sheet.dart';
 import 'dxf_text.dart';
+import 'file_stamped_cache.dart';
 
 /// How far the raster underlay pixels are blended toward white (0 = verbatim,
 /// 1 = fully white). ~60 % keeps the plan legible but unmistakably background
@@ -19,21 +20,21 @@ const double kUnderlayFade = 0.6;
 /// an A3 print without an unbounded pdfium allocation.
 const double kUnderlayMaxRenderPx = 1600.0;
 
-/// Parse cache keyed by file path — a floor-plan DXF parses once and is reused
-/// across exports (mirrors `DxfSheetPage`'s canvas cache; that one is private
-/// to the widget). A `null` value = parsed-but-empty/failed.
-final Map<String, DxfDrawing?> _dxfCache = {};
-
-DxfDrawing? _loadDxf(String path) {
-  if (_dxfCache.containsKey(path)) return _dxfCache[path];
-  DxfDrawing? drawing;
+/// Parse cache keyed by file path AND its size/mtime stamp (Round 10) — a
+/// floor-plan DXF parses once and is reused across exports (mirrors
+/// `DxfSheetPage`'s canvas cache), but a plan revised in place re-parses so
+/// the export never prints a stale underlay. A `null` value =
+/// parsed-but-empty/failed.
+final FileStampedCache<DxfDrawing?> _dxfCache =
+    FileStampedCache<DxfDrawing?>((path) {
   try {
-    drawing = parseDxf(readDxfTextSync(path));
+    return parseDxf(readDxfTextSync(path));
   } catch (_) {
-    drawing = null;
+    return null;
   }
-  return _dxfCache[path] = drawing;
-}
+});
+
+DxfDrawing? _loadDxf(String path) => _dxfCache.get(path);
 
 /// Build the floor-plan UNDERLAY for [sheet] — the substrate the engineer drew
 /// on, handed to the plan export engines so the printed drawing carries the

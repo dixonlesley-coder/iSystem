@@ -1829,6 +1829,17 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `breakingCapacityShort` and consolidation keys it APART from an adequate line of
   the same SKU (the flag can never be merged away). `parseMoneyInput` validates
   thousands grouping on both the single- and mixed-separator paths.
+- **Drawing honesty (Round 10)**: the plan PDF and DXF compose every edge
+  label through ONE `composePlanEdgeLabels` (unsized runs included) and fit /
+  extent over EVERY on-floor node; an unconnected glyph goes on the neutral
+  `M-EQPM-NCON` DXF layer. Plan chrome (north arrow, legend, scale bar) is
+  reserved space, never overprinted. The SLD PDF renderer prints the plot
+  fit's label sizes exactly (no renderer floor — PDF == DXF); an issued detail
+  SLD auto-paginates (`electricalSldDetailToPdf`) whenever one A3 sheet would
+  print below `kMinPlotLabelPt`. Power one-line skip-tier edges ride a side
+  lane, never through an intermediate box. Every user-typed geometric number
+  (smart input, 1 : N, offset) must be FINITE; `setCalibration` /
+  `placeRunPoint` / `offsetEdgeParallel` are the store backstops.
 - **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save
@@ -1842,4 +1853,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   path-based PDF/DXF renderers are unchanged. A DWG sheet embeds its CONVERTED
   DXF (portable without ODA). The autosave "clean baseline" signature stays the
   PATH-ONLY encode (autosave never embeds ⇒ recovery is lightweight, no phantom
-  recovery). Empty `assets` ⇒ byte-identical (no version bump).
+  recovery). Empty `assets` ⇒ byte-identical (no version bump). Round 10: a
+  re-Save falls back to the payload already embedded when a plan's source is
+  gone (never silently drops it) and warns when nothing could be embedded;
+  plan parse caches key on path + size/mtime (`FileStampedCache`); Open falls
+  back to `<file>.bak` after an interrupted atomic save.
