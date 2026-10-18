@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/hydraulics.dart' show headFromPressure;
 import 'package:mechx_engine/network/duct_static.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
@@ -175,9 +176,19 @@ final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
 
 /// Pick the supply source/tank. The source is the pump/tank entry, NOT an
 /// arbitrary fixture: the wrong leaf would invert the tree and mis-assign static
-/// lift. Preference: an explicit [NodeRole.plant] node, else the extreme-
-/// elevation node — LOWEST for upfeed (riser base), HIGHEST for downfeed (roof
-/// tank). [preferHighest] selects the direction.
+/// lift.
+///
+/// UPFEED (Round 15, root-metamorphic-picksource-*) — the solve sources at the
+/// SAME node the sizer accumulated from ([serviceComponentRoots] of the largest
+/// supply component) when that root is a plant; else the best-ranked plant
+/// ([supplyPlantRank], then lowest, then id — a ground tank beats a same-floor
+/// pump whatever order the pipes were drawn in, so the suction-leg friction is
+/// always in the pump head); with NO plant at all, the sizer's demand-free
+/// entry (never a ground-floor fixture, which used to win on elevation alone
+/// and route the solve through its own branch).
+///
+/// DOWNFEED — the highest plant (the roof tank), ties by id; else the highest
+/// node, ties to a leaf, then id.
 String? _pickSource(
   Network net,
   List<NetEdge> edges,
@@ -198,17 +209,54 @@ String? _pickSource(
 
   final candidates = ids.map((id) => net.nodeById(id)).whereType<NetNode>();
   double elev(NetNode n) => nodeElevation(n, building, mounting).meters;
-  bool better(double a, double b) => preferHighest ? a > b : a < b;
-
-  // 1. An explicit plant node wins (the extreme one for this strategy).
   final plants = candidates.where((n) => n.role == NodeRole.plant).toList();
+
+  if (!preferHighest) {
+    final roots = serviceComponentRoots(net, kSupplyService, demandNodeIds: {
+      for (final n in net.nodes)
+        if (n.role == NodeRole.fixture) n.id,
+    });
+    final edgeCount = <String, int>{};
+    for (final e in edges) {
+      final r = roots[e.fromId];
+      if (r != null) edgeCount[r] = (edgeCount[r] ?? 0) + 1;
+    }
+    String? sizerRoot;
+    for (final entry in edgeCount.entries) {
+      if (sizerRoot == null ||
+          entry.value > edgeCount[sizerRoot]! ||
+          (entry.value == edgeCount[sizerRoot]! &&
+              entry.key.compareTo(sizerRoot) < 0)) {
+        sizerRoot = entry.key;
+      }
+    }
+    if (sizerRoot != null &&
+        net.nodeById(sizerRoot)?.role == NodeRole.plant) {
+      return sizerRoot;
+    }
+    if (plants.isNotEmpty) {
+      plants.sort((a, b) {
+        var c = supplyPlantRank(a.component, degree[a.id] ?? 0)
+            .compareTo(supplyPlantRank(b.component, degree[b.id] ?? 0));
+        if (c != 0) return c;
+        c = elev(a).compareTo(elev(b));
+        return c != 0 ? c : a.id.compareTo(b.id);
+      });
+      return plants.first.id;
+    }
+    return sizerRoot;
+  }
+
+  // DOWNFEED 1. An explicit plant node wins (the highest, ties by id).
   if (plants.isNotEmpty) {
-    plants.sort((a, b) =>
-        preferHighest ? elev(b).compareTo(elev(a)) : elev(a).compareTo(elev(b)));
+    plants.sort((a, b) {
+      final c = elev(b).compareTo(elev(a));
+      return c != 0 ? c : a.id.compareTo(b.id);
+    });
     return plants.first.id;
   }
 
-  // 2. Extreme-elevation node; tie-break to a leaf, then deterministic order.
+  // 2. Highest node; tie-break to a leaf, then deterministic order.
   NetNode? best;
   for (final n in candidates) {
     if (best == null) {
@@ -217,7 +265,7 @@ String? _pickSource(
     }
     final ne = elev(n);
     final be = elev(best);
-    if (better(ne, be) ||
+    if (ne > be ||
         (ne == be && (degree[n.id] ?? 0) < (degree[best.id] ?? 0)) ||
         (ne == be &&
             (degree[n.id] ?? 0) == (degree[best.id] ?? 0) &&
@@ -228,10 +276,137 @@ String? _pickSource(
   return best?.id;
 }
 
+/// Round 15 (root-metamorphic-hybrid-booster-duty) — the supply pump /
+/// booster set drawn INLINE (degree >= 2, not its component's root) that a
+/// pump duty must be sized on, with the flow THROUGH it: the sized flow of
+/// its incoming pipe (the incident supply edge whose flow does not leave the
+/// booster), mirrored standby legs ([parallelLegEdgeIdsProvider]) excluded.
+/// That edge's flow is already the demand curve of every fixture beyond the
+/// booster, i.e. its own diversified load. Several boosters ⇒ the one moving
+/// the most water (ties by id). Null when no inline booster carries flow.
+typedef SupplyBooster = ({String nodeId, FlowRate flow, String inEdgeId});
+
+final supplyBoosterProvider = Provider<SupplyBooster?>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  return inlineSupplyBooster(net, sizing, excludeEdgeIds: legs);
+});
+
+/// Pure core of [supplyBoosterProvider] (testable without a container).
+SupplyBooster? inlineSupplyBooster(
+  Network net,
+  Map<String, EdgeSizing> sizing, {
+  Set<String> excludeEdgeIds = const {},
+}) {
+  final roots = serviceComponentRoots(net, kSupplyService, demandNodeIds: {
+    for (final n in net.nodes)
+      if (n.role == NodeRole.fixture) n.id,
+  });
+  SupplyBooster? best;
+  for (final n in net.nodes) {
+    if (n.component != NodeComponent.pump &&
+        n.component != NodeComponent.boosterSet) {
+      continue;
+    }
+    if (roots[n.id] == null || roots[n.id] == n.id) continue;
+    final incident = [
+      for (final e in net.edges)
+        if (e.service == kSupplyService && (e.fromId == n.id || e.toId == n.id))
+          e,
+    ];
+    if (incident.length < 2) continue;
+    for (final e in incident) {
+      if (excludeEdgeIds.contains(e.id)) continue;
+      final sz = sizing[e.id];
+      if (sz == null || sz.flowFromId == null || sz.flowFromId == n.id) {
+        continue;
+      }
+      final q = sz.flow.cubicMetersPerSecond;
+      if (q <= 0) continue;
+      if (best == null ||
+          q > best.flow.cubicMetersPerSecond + 1e-15 ||
+          ((q - best.flow.cubicMetersPerSecond).abs() <= 1e-15 &&
+              n.id.compareTo(best.nodeId) < 0)) {
+        best = (nodeId: n.id, flow: sz.flow, inEdgeId: e.id);
+      }
+    }
+  }
+  return best;
+}
+
+/// Round 15 — the head an inline booster must add on a DOWNFEED supply: the
+/// largest shortfall of the gravity residual below the target over the
+/// DELIVERY nodes it serves (every node reached from the booster without
+/// crossing its incoming pipe; fixtures, else those nodes' leaves). Zero or
+/// less ⇒ gravity already serves them.
+Head boosterShortfallHead({
+  required Network net,
+  required SupplyBooster booster,
+  required Map<String, Pressure> residual,
+  required Pressure target,
+}) {
+  final adj = <String, List<({String edgeId, String other})>>{};
+  for (final e in net.edges) {
+    if (e.service != kSupplyService) continue;
+    (adj[e.fromId] ??= []).add((edgeId: e.id, other: e.toId));
+    (adj[e.toId] ??= []).add((edgeId: e.id, other: e.fromId));
+  }
+  final served = <String>{booster.nodeId};
+  final stack = [booster.nodeId];
+  while (stack.isNotEmpty) {
+    final n = stack.removeLast();
+    for (final l in adj[n] ?? const <({String edgeId, String other})>[]) {
+      if (l.edgeId == booster.inEdgeId) continue;
+      if (served.add(l.other)) stack.add(l.other);
+    }
+  }
+  served.remove(booster.nodeId);
+  var delivery = [
+    for (final id in served)
+      if (net.nodeById(id)?.role == NodeRole.fixture) id,
+  ];
+  if (delivery.isEmpty) {
+    delivery = [
+      for (final id in served)
+        if ((adj[id]?.length ?? 0) == 1) id,
+    ];
+  }
+  var worstPa = double.negativeInfinity;
+  for (final id in delivery) {
+    final r = residual[id];
+    if (r == null) continue;
+    worstPa = math.max(worstPa, target.pascals - r.pascals);
+  }
+  if (worstPa == double.negativeInfinity) return const Head(0);
+  return headFromPressure(Pressure(worstPa));
+}
+
 /// Pump duty for an UPFEED supply at the trunk (largest-flow) cold-water flow.
 /// Null in downfeed (gravity-fed) or when there's nothing to pump.
 final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   final solution = ref.watch(solveProvider);
+  // Round 15 (root-metamorphic-hybrid-booster-duty) — a booster drawn INLINE
+  // (a roof tank feeding the top floors through a booster set) runs on the
+  // flow THROUGH it, never the whole building's flow at the root, in BOTH
+  // feed strategies; on a downfeed its head is the residual shortfall at the
+  // fixtures it serves (the gravity solve itself carries no pump).
+  final booster = ref.watch(supplyBoosterProvider);
+  if (booster != null) {
+    if (solution != null) {
+      return sizePump(flow: booster.flow, head: solution.requiredPumpHead);
+    }
+    final down = ref.watch(downfeedProvider);
+    if (down == null) return null;
+    final head = boosterShortfallHead(
+      net: ref.watch(sizingNetworkProvider),
+      booster: booster,
+      residual: down.residualPressure,
+      target: _targetResidual,
+    );
+    if (head.meters <= 0) return null;
+    return sizePump(flow: booster.flow, head: head);
+  }
   if (solution == null) return null;
   final sizing = ref.watch(sizingProvider);
   final net = ref.watch(sizingNetworkProvider);
@@ -302,12 +477,22 @@ FlowRate sourceDeliveredFlow(
   FlushSystem? flushSystem,
   Set<String> excludeEdgeIds = const {},
 }) {
+  // Round 15 (root-metamorphic-pdam-fill-phantom) — only the edges whose flow
+  // LEAVES the source (or, for extract air, ARRIVES at it) are its delivery:
+  // a ground tank's fill line is incident but carries water INTO the tank.
+  bool delivers(NetEdge e) {
+    final from = sizing[e.id]?.flowFromId;
+    if (from == null) return true;
+    return service.isExtractAir ? from != rootId : from == rootId;
+  }
+
   final incident = <NetEdge>[
     for (final e in net.edges)
       if (e.service == service &&
           !excludeEdgeIds.contains(e.id) &&
           (e.fromId == rootId || e.toId == rootId) &&
-          (sizing[e.id]?.flow.cubicMetersPerSecond ?? 0) > 0)
+          (sizing[e.id]?.flow.cubicMetersPerSecond ?? 0) > 0 &&
+          delivers(e))
         e,
   ];
   if (incident.isEmpty) return const FlowRate(0);

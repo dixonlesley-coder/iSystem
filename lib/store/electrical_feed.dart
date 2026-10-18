@@ -118,9 +118,14 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
   }
   String? supplyPump;
   if (supplyPumps.isNotEmpty) {
+    // Round 15 — the inline booster the pump duty is sized on (the flow
+    // THROUGH it) carries that duty, so the way lands on the same machine.
+    final booster = ref.watch(supplyBoosterProvider)?.nodeId;
     final roots = serviceComponentRoots(net, kSupplyService).values.toSet();
-    supplyPump = supplyPumps.firstWhere(roots.contains,
-        orElse: () => supplyPumps.first);
+    supplyPump = (booster != null && supplyPumps.contains(booster))
+        ? booster
+        : supplyPumps.firstWhere(roots.contains,
+            orElse: () => supplyPumps.first);
   }
   final units = ref.watch(airSystemRootNodesProvider);
   String? electricalLoad(String? id) {
