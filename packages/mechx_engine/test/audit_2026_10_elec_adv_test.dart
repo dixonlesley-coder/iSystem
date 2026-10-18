@@ -236,16 +236,17 @@ void main() {
       final rS = rSrc + (0.0435 + 0.069 + 0.0087 + 0.0138) * 1.28;
       final xS = xSrc + 2 * 0.004 + 2 * 0.0008;
       expect(math.sqrt(rS * rS + xS * xS), closeTo(0.176466, 1e-5));
-      expect(fs.circuits['s1']!.zsOhm, closeTo(0.176, 0.0005));
+      expect(fs.circuits['s1']!.zsOhm, 0.176); // floor(176.466) / 1000
       expect(fs.circuits['s1']!.adsOk, isTrue);
 
       // ROOT-board motor — no upstream feeder, so no feeder legs:
       //   R = 0.00204124 + 0.011136 + 0.017664 = 0.03084124,
-      //   X = 0.01428869 + 0.0016 = 0.01588869; Zs = 0.034693 Ω → 0.035.
+      //   X = 0.01428869 + 0.0016 = 0.01588869; Zs = 0.034693 Ω → 0.034
+      //   (Round 20: a PASS stores Zs rounded DOWN, floor(34.693) / 1000).
       final rR = rSrc + (0.0087 + 0.0138) * 1.28;
       final xR = xSrc + 2 * 0.0008;
       expect(math.sqrt(rR * rR + xR * xR), closeTo(0.034693, 1e-5));
-      expect(fs.circuits['m1']!.zsOhm, closeTo(0.035, 0.0005));
+      expect(fs.circuits['m1']!.zsOhm, 0.034);
       expect(fs.circuits['m1']!.adsOk, isTrue);
     });
 

@@ -647,9 +647,17 @@ class CircuitFaultResult {
   final double breakerKa;
 
   /// Earth-fault loop impedance Zs over the run (Ω) — TN only, else null.
+  /// Round 20: stored at 3 dp rounded in the direction of the ADS verdict
+  /// (up on a FAIL, down on a PASS) — see [zsMaxOhm].
   final double? zsOhm;
 
   /// Maximum Zs that still guarantees disconnection in time (Ω) — TN only.
+  ///
+  /// Round 20: VERDICT-DIRECTED 3-dp rounding, NOT the exact limit — floored
+  /// on a FAIL, ceiled on a PASS, so the printed pair always backs the
+  /// verdict. The same device can therefore print a limit up to 0.001 Ω
+  /// apart depending on the verdict (0.6828125 Ω prints 0.682 on a FAIL,
+  /// 0.683 on a PASS); recompute from the device data for the exact figure.
   final double? zsMaxOhm;
 
   /// True when ADS disconnects in time (Zs ≤ Zs_max) — TN only, else null
@@ -795,6 +803,11 @@ double _round(double v, int dp) {
   final f = math.pow(10, dp).toDouble();
   return (v * f).roundToDouble() / f;
 }
+
+/// Round 20 — [v] rounded UP / DOWN to 3 dp (a 1e-9 milli-unit guard keeps an
+/// exactly representable 0.683 at 0.683 despite binary noise).
+double _ceil3(double v) => (v * 1000 - 1e-9).ceilToDouble() / 1000;
+double _floor3(double v) => (v * 1000 + 1e-9).floorToDouble() / 1000;
 
 /// Compute the protection / fault study over an already-solved system.
 ///
@@ -1053,9 +1066,17 @@ FaultStudyResult faultStudy(
             ? (zsVoltageFactor * u0PhaseVoltageV) / idnA
             : 0.0;
         final zsMax = zsMaxRcd > zsMaxOcpd ? zsMaxRcd : zsMaxOcpd;
-        zsOhm = _round(zs, 3);
-        zsMaxOhm = zsMax.isFinite ? _round(zsMax, 3) : zsMax;
         adsOk = zs <= zsMax + 1e-9;
+        // Round 20 (electrical-property-ads-message-rounds-to-equal) — the
+        // stored / printed 3-dp pair is rounded IN THE DIRECTION OF THE
+        // VERDICT, so the figures always back it up: a failure rounds Zs up
+        // and the limit down (never 'Zs 0.683 Ω exceeds the 0.683 Ω limit'),
+        // a pass rounds Zs down and the limit up (never a printed Zs above
+        // its printed limit on a PASS). Each figure moves < 0.001 Ω.
+        zsOhm = adsOk ? _floor3(zs) : _ceil3(zs);
+        zsMaxOhm = zsMax.isFinite
+            ? (adsOk ? _ceil3(zsMax) : _floor3(zsMax))
+            : zsMax;
         adsByRcd = adsOk && zs > zsMaxOcpd + 1e-9;
         if (!adsOk) {
           warnings.add(ElectricalWarning(

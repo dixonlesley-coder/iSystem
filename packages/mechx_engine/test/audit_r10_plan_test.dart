@@ -133,7 +133,7 @@ void main() {
       final p = _pdfTagLines(pdf), d = _dxfTagLines(dxf);
       expect(d, p);
       // The unsized run carries its tag + take-off length in BOTH.
-      expect(d.join(' | '), contains('CW-F1 - 6 m'));
+      expect(d.join(' | '), contains('CW-F1 - 6.0 m'));
     });
 
     test('property: PDF == DXF tag lines with ~10% of runs unsized (seeded)',

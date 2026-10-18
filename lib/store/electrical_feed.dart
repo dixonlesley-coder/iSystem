@@ -24,7 +24,11 @@ import 'package:mechx_engine/units.dart';
 
 import 'annotation_store.dart';
 import 'app_state.dart'
-    show CoolingLoadMethod, coolingLoadMethodProvider, kSupplyService;
+    show
+        CoolingLoadMethod,
+        coolingLoadMethodProvider,
+        ductSettingsProvider,
+        kSupplyService;
 import 'fire_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -305,23 +309,22 @@ int _phasesFor(NodeComponent c) => switch (c) {
   NetNode node, {
   CoolingLoadMethod method = CoolingLoadMethod.simple,
 }) {
-  RoomArea? room;
-  for (final r in rooms) {
-    if (r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
-      room = r;
-      break;
-    }
-  }
-  if (room == null) return null;
+  // Round 20 (hvac-3-1) — the OWNING room (smallest containing, tie on id),
+  // never the first room in list order: the room draw order is not a design
+  // input, and a unit in a nested meeting room used to be fed the office load.
+  final ownerId = roomUnitOwnerId(node, rooms);
+  if (ownerId == null) return null;
+  final room = rooms.firstWhere((r) => r.id == ownerId);
   // The project's AC-load basis (Building page) drives the fed circuit too, so
   // the panel schedule and the Rooms inspector can never disagree on the PK.
   final load = room.coolingLoad(mppFor(room.sheetId), method: method);
   if (load == null) return null;
-  // Split the room load across the AC indoor units inside the same footprint.
+  // Split the room load across the AC indoor units the room OWNS (a unit in
+  // a nested room is that room's, never counted in the outer room's split).
   var count = 0;
   for (final n in net.nodes) {
     if (RoomArea.isAcComponent(n.component) &&
-        room.containsNode(n.sheetId, n.floorIndex, n.x, n.y)) {
+        roomUnitOwnerId(n, rooms) == room.id) {
       count++;
     }
   }
@@ -429,7 +432,48 @@ final riserEquipmentDetailsProvider = Provider<Map<String, String>>((ref) {
 /// ui-journey-2): the engineer's explicit override, the solved pump/fan duty
 /// the node roots, the room cooling PK (an AC in a scaled room), or the
 /// component's representative default.
-enum NodeLoadSource { explicit, solvedDuty, roomPk, componentDefault }
+///
+/// Round 20 (hvac-3-3) — [roomAir]: an UNPIPED AHU / FCU (no solved duct
+/// duty) is fed its owning room's room-air equipment duty, the same machine
+/// the equipment schedule prints under its tag.
+enum NodeLoadSource { explicit, solvedDuty, roomPk, roomAir, componentDefault }
+
+/// Round 20 (hvac-3-2 / hvac-3-3) — the room-air equipment duty each drawn
+/// AHU / FCU carries when it roots NO solved duct system: for every scaled,
+/// conditioned (non-extract) room, the FIRST AHU / FCU node the room owns
+/// ([roomUnitOwnerId], smallest containing room) — provided no unit the room
+/// owns already carries a solved network duty ([equipmentNodeDutiesProvider];
+/// that duty row IS the room's air handling). Keyed by node id. The equipment
+/// schedule's room rows and the panel feed both read it, so a drawn unit is
+/// scheduled once (never a room row beside its solved-duty row under one tag)
+/// and its panel way is the machine the schedule prints (never the 5.5 kW
+/// component default beside a 0.37 kW room-air row).
+final roomAirUnitDutiesProvider =
+    Provider<Map<String, ({RoomArea room, FanDuty duty})>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final rooms = ref.watch(roomAreasProvider);
+  final project = ref.watch(projectControllerProvider);
+  final duties = ref.watch(equipmentNodeDutiesProvider);
+  final ducts = ref.watch(ductSettingsProvider);
+  bool isAirUnit(NetNode n) =>
+      n.component == NodeComponent.ahu || n.component == NodeComponent.fcu;
+  final out = <String, ({RoomArea room, FanDuty duty})>{};
+  for (final r in rooms) {
+    final owned = [
+      for (final n in net.nodes)
+        if (isAirUnit(n) && roomUnitOwnerId(n, rooms) == r.id) n,
+    ];
+    if (owned.isEmpty || owned.any((n) => duties.containsKey(n.id))) continue;
+    final sizing = r.sizing(
+      project.calibrationFor(r.sheetId)?.metersPerPixel,
+      ductShape: ducts.shape,
+      ductMethod: ducts.method,
+    );
+    if (sizing == null || sizing.extractOnly) continue;
+    out[owned.first.id] = (room: r, duty: sizing.equipment);
+  }
+  return out;
+});
 
 /// The electrical load a placed equipment node actually FEEDS to the panel —
 /// [watts] (the figure the panel way is sized from), the electrical [input]
@@ -452,6 +496,7 @@ final nodeFedLoadsProvider = Provider<Map<String, NodeFedLoad>>((ref) {
   final rooms = ref.watch(roomAreasProvider);
   final project = ref.watch(projectControllerProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
+  final roomAirUnits = ref.watch(roomAirUnitDutiesProvider);
   double? mppFor(String sheetId) =>
       project.calibrationFor(sheetId)?.metersPerPixel;
   final out = <String, NodeFedLoad>{};
@@ -498,6 +543,18 @@ final nodeFedLoadsProvider = Provider<Map<String, NodeFedLoad>>((ref) {
     } else if (acWatts != null) {
       source = NodeLoadSource.roomPk;
       watts = acWatts;
+    } else if (roomAirUnits[n.id] case final ra?) {
+      // Round 20 (hvac-3-3) — an unpiped AHU / FCU: the owning room's
+      // room-air equipment duty, on the same nameplate basis as a solved
+      // duty way (motor rating, input at the nameplate).
+      final motor = ra.duty.selectedMotor;
+      out[n.id] = NodeFedLoad(
+          motor.watts,
+          MepEquipmentLoad.nameplateInput(
+                  ra.duty.motorInputPower, motor, defaultMotorEfficiency)
+              .watts,
+          NodeLoadSource.roomAir);
+      continue;
     } else {
       source = NodeLoadSource.componentDefault;
       watts = c.defaultMotorKw * 1000;

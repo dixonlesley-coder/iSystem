@@ -383,7 +383,7 @@ class SniVentilationProfile implements VentilationStandardsProfile {
           sourceUrl: _sourceUrl,
           verified: false,
           status: VerificationStatus.notAnSniClause,
-          note: 'Round 11: a toilet or commercial-kitchen room is sized and '
+          note: 'A toilet or commercial-kitchen room is sized and '
               'auto-placed as EXHAUST grilles on the exhaust service with a '
               'plain exhaust fan — never as conditioned supply nor as return '
               'air to an AHU/FCU. The ACH rate itself is the Tabel 4.4.1 '

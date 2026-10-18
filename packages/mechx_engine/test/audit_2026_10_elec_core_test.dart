@@ -205,8 +205,10 @@ void main() {
 
       final f = faultStudy(sys, project, profile).circuits['m']!;
       // Zs,max = 0.95 · U0 / (20 · In)  (curve D trips at 20 × In)
-      //        = 0.95 · 230 / (20 · 16) = 218.5 / 320 = 0.683 Ω.
-      expect(f.zsMaxOhm, closeTo(0.683, 0.001));
+      //        = 0.95 · 230 / (20 · 16) = 218.5 / 320 = 0.6828125 Ω.
+      // Round 20 — on a FAIL the stored 3-dp limit rounds DOWN (the figures
+      // back the verdict): floor(682.8125) / 1000 = 0.682 Ω.
+      expect(f.zsMaxOhm, 0.682);
       // The conductor loop ALONE on 50 m: phase + PE, both 2.5 mm²
       // (8.87 Ω/km), at the 1.28 fault-temperature factor:
       //   R = 2 · 8.87 · 0.050 · 1.28 = 1.135 Ω  > 0.683 Ω ⇒ must fail.

@@ -395,13 +395,13 @@ void main() {
       final r = sys.panels['LP']!;
       // Ib = 10000 / (sqrt(3) * 400) = 14.43 A, carried to 0.1 A ⇒ 14.4 A
       // (undiversified, worst phase); diversified = 14.4 × 0.9 = 12.96 A,
-      // printed to 0.1 A ⇒ 13 A.
+      // printed to a FIXED 0.1 A (Round 20) ⇒ 13.0 A.
       expect(r.demandCurrent.amperes, closeTo(14.4, 1e-9));
       expect(r.diversifiedDemandCurrent.amperes, closeTo(12.96, 1e-9));
       final labels = _labels(p, sys, 'LP');
-      expect(labels.any((t) => t.contains('demand 13A div (max ph 14.4A undiv)')),
+      expect(labels.any((t) => t.contains('demand 13.0A div (max ph 14.4A undiv)')),
           isTrue, reason: labels.join(' | '));
-      expect(labels.any((t) => t.startsWith('TOTAL') && t.contains('13A div')),
+      expect(labels.any((t) => t.startsWith('TOTAL') && t.contains('13.0A div')),
           isTrue);
       final md = buildElectricalCalcReport(ElectricalCalcReportData(
         projectName: 'P',

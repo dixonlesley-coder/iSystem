@@ -10,7 +10,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/network/network.dart' show NetNode, NodeComponent;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/cooling_load_detailed.dart'
     show DetailedCoolingLoadInputs, estimateDetailedCoolingLoad;
@@ -734,6 +734,72 @@ String? roomTerminalOwnerId(NodeComponent? component, String sheetId,
     if (compatible && smaller(r, bestCompatible)) bestCompatible = r;
   }
   return (bestCompatible ?? best)?.id;
+}
+
+/// Round 20 (regression-autoplace-nested-same-kind-room-stacks-terminals) —
+/// the owning room of an air-terminal NODE: the room whose Auto-place
+/// generated it ([NetNode.autoPlacedRoomId]) while the terminal still sits
+/// inside that room's footprint, else the geometric owner
+/// ([roomTerminalOwnerId], for hand-placed terminals or one dragged out of its
+/// room). With a meeting room nested in an open office, the office's grid can
+/// land a diffuser inside the meeting room; geometry alone gave it to the
+/// meeting room, so re-running the office's Auto-place neither deleted nor
+/// avoided it and stacked a second generation on top (+50 % air), and the
+/// stale judge under-counted the office / over-counted the meeting room.
+String? roomTerminalOwnerOf(NetNode node, Iterable<RoomArea> rooms) {
+  final tag = node.autoPlacedRoomId;
+  if (tag != null) {
+    for (final r in rooms) {
+      if (r.id == tag &&
+          r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
+        return r.id;
+      }
+    }
+  }
+  return roomTerminalOwnerId(
+      node.component, node.sheetId, node.floorIndex, node.x, node.y, rooms);
+}
+
+/// Round 20 (hvac-3-1) — the ONE room a placed AC indoor unit ([node])
+/// belongs to among [rooms]: the SMALLEST room containing it, ties broken on
+/// room id; null when none contains it. The AC feed ([acUnitShare]), the
+/// equipment schedule and the Rooms inspector all count a room's units by this
+/// owner, so a cassette in a meeting room nested inside an office is the
+/// meeting room's unit only — never counted again in the office's split, and
+/// never fed the office's load because the office was drawn first.
+String? roomUnitOwnerId(NetNode node, Iterable<RoomArea> rooms) {
+  RoomArea? best;
+  for (final r in rooms) {
+    if (!r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
+      continue;
+    }
+    if (best == null) {
+      best = r;
+      continue;
+    }
+    final d = r.widthPx * r.heightPx - best.widthPx * best.heightPx;
+    if (d < -1e-9 || (d.abs() <= 1e-9 && r.id.compareTo(best.id) < 0)) {
+      best = r;
+    }
+  }
+  return best?.id;
+}
+
+/// Round 20 — true when ([x], [y]) on [room]'s sheet/floor falls inside a
+/// DIFFERENT, smaller room of the same air kind (both conditioned, or both
+/// extract-only): a nested room that sizes and places its own terminals, so
+/// [room]'s Auto-place grid must not drop a terminal there.
+bool insideNestedSameKindRoom(
+    RoomArea room, double x, double y, Iterable<RoomArea> rooms) {
+  final kind = isExtractRoomType(room.roomType);
+  final area = room.widthPx * room.heightPx;
+  for (final r in rooms) {
+    if (r.id == room.id) continue;
+    if (isExtractRoomType(r.roomType) != kind) continue;
+    if (r.widthPx * r.heightPx >= area) continue;
+    if (r.containsNode(room.sheetId, room.floorIndex, x, y)) return true;
+  }
+  return false;
 }
 
 /// Round 19 — a stored room number: finite (and > 0 when [positive]), else

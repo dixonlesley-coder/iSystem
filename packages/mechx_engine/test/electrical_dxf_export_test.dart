@@ -103,9 +103,12 @@ void main() {
 
     test('renders the professional single-line content as TEXT', () {
       expect(dxf, contains('TEXT'));
-      // The incomer breaker, a way row + Ib, and the title-block / legend frame.
+      // The incomer breaker, a way row + its TOTAL footer, and the title-block
+      // / legend frame. Round 20 — no 'Ib' legend key: the R/S/T cells print
+      // bare figures, so the key the sheet never prints is not drawn.
       expect(dxf, contains('Incomer'));
-      expect(dxf, contains('Ib '));
+      expect(dxf, contains('TOTAL'));
+      expect(dxf, isNot(contains('Ib  -  ')));
       expect(dxf, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
       expect(dxf, contains('LEGEND'));
       expect(dxf, contains('E-FRAME'));

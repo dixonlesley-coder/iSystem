@@ -1307,16 +1307,18 @@ String? formatTieOffsetMm(double offsetPx, double? metersPerPixel) {
 // working from either format reads identical take-off data. Both exporters
 // compose through these two pure helpers (audit 2026-10 drawing-output-7/-8).
 
-/// A human metres string for a run/riser length label: `3.5 m`, or `4 m` for a
-/// whole number of metres. The value is ROUNDED to the printed 0.1 m before the
-/// whole-number test, so floating-point noise in a §10 elevation delta
-/// (11.7 − 7.7 = 3.999999999999999) prints the same `4 m` as an exact 4.0
-/// rather than `4.0 m` beside it on the same sheet. Pure.
+/// A human metres string for a run/riser length label: `3.5 m`, `4.0 m`. The
+/// value is ROUNDED to the printed 0.1 m first, so floating-point noise in a
+/// §10 elevation delta (11.7 − 7.7 = 3.999999999999999) prints the same
+/// `4.0 m` as an exact 4.0. Pure.
+///
+/// Round 20 (drafting-visual-4-7) — ONE fixed precision (0.1 m) for every
+/// length on every sheet: the plan used to print '3 m' for the run the riser
+/// tag and the report schedule print as '3.0 m', so the same quantity read as
+/// differently rounded. The riser tag now routes through this helper too.
 String planLengthLabel(Length l) {
   final r = (l.meters * 10).round() / 10;
-  final txt =
-      r == r.truncateToDouble() ? r.toInt().toString() : r.toStringAsFixed(1);
-  return '$txt m';
+  return '${r.toStringAsFixed(1)} m';
 }
 
 /// Compose a plan edge label from its parts: the present tokens of [size],

@@ -1458,6 +1458,29 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 20 — generating-room tags, owner rooms, undiversified phase,
+  drawn feed, verdict-backing figures (2026-10-18)**: an Auto-placed terminal
+  carries `NetNode.autoPlacedRoomId`; ownership is `roomTerminalOwnerOf`
+  (that tag while the terminal sits in the room, else
+  `roomTerminalOwnerId`) for BOTH the Auto-place clean-up and the stale
+  judge, and the outer room's grid never drops a terminal inside a nested
+  room of the same kind. AC units / AHU / FCU belong to their SMALLEST
+  containing room (`roomUnitOwnerId`, tie on id) in the feed, schedule and
+  Rooms inspector — never the first room in list order. A drawn AHU / FCU is
+  scheduled ONCE: its solved duct duty row, or — only when no unit the room
+  owns has a solved duty — the room-air row for the unit
+  `roomAirUnitDutiesProvider` names, which the panel also feeds
+  (`NodeLoadSource.roomAir`). The report's HVAC trunk is never an AC-rooted
+  system. A FINAL way's Auto phase reads its undiversified `c.loadW`
+  (diversity never moves a machine across the 3φ threshold); the `cap` cell
+  marker needs a capacitor way / capacitor-floored fed board. The calc
+  report's feed line, booster head and PRV zones follow the DRAWN feed (a
+  roof tank for 'downfeed'; else booster / direct mains, no head, no zones).
+  ADS 3-dp figures round in the verdict's direction. Re-kinding a way
+  re-derives `isLighting` unless the edit sets it. Riser leaders prefer a
+  square exit over a run along a pipe (second-tier cost, never above a label
+  collision). Schedule currents and every printed length use one fixed
+  0.1 precision; board legends key only printed tokens.
 - **Round 19 — recirc returns, one room per terminal, one essential set,
   BOM = schedule, tolerant decode (2026-10-18)**: a hot-water cycle is the
   drawn RETURN only when it passes through the source / a plant or carries a

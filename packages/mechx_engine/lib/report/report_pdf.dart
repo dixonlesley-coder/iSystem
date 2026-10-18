@@ -198,6 +198,11 @@ String _stripMd(String s) {
       .replaceAll(r'\|', '|')
       .replaceAll('_(', '(')
       .replaceAll(')_', ')');
+  // Round 20 (drafting-visual-4-5) — a leading `_TAG_:` emphasis (the
+  // reports' `_WARN_:` / `_INFO_:` severity + interlock-kind markers) is
+  // unwrapped to `TAG:`; it used to survive verbatim into the PDF.
+  out = out.replaceFirstMapped(
+      RegExp(r'^(\s*)_([^_\s][^_]*)_:'), (m) => '${m[1]}${m[2]}:');
   final t = out.trim();
   if (t.length > 1 && t.startsWith('_') && t.endsWith('_')) {
     out = t.substring(1, t.length - 1);

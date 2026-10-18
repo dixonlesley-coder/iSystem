@@ -352,7 +352,7 @@ void main() {
       // like the plan PDF's, so it now carries the run length too — the run is
       // 100 px x 0.05 m/px = 5.0 m (no edgeLengths map ⇒ the calibrated
       // horizontal fallback), printed '5 m', between the size and the CL.
-      expect(dxf, contains('DN50 - 5 m - CL +2.70'));
+      expect(dxf, contains('DN50 - 5.0 m - CL +2.70'));
     });
 
     test('N4: the setting-out grid + a riser tie dimension are emitted', () {
@@ -497,7 +497,7 @@ void main() {
       // composition as the plan PDF (100 px x 0.05 m/px = 5 m). The riser 'r'
       // has no sizing and no length map entry, so its TEXT is the bare tag.
       // Through the R12 code-page-safe encoder (drafting-5: '·' -> '-').
-      expect(dxf, contains(dxfText('CW-F1 · DN50 - 5 m')));
+      expect(dxf, contains(dxfText('CW-F1 · DN50 - 5.0 m')));
       expect(dxf, contains('\n1\nCW-R1\n'));
     });
 

@@ -495,7 +495,7 @@ class SniProfile implements StandardsProfile {
           unit: 'm/m',
           citation: 'general self-cleansing minimum (NOT an SNI 8153 figure)',
           status: VerificationStatus.notAnSniClause,
-          note: 'Min-slope advisory, judged PER PIPE SIZE (Round 9): ≤ DN65 '
+          note: 'Min-slope advisory, judged PER PIPE SIZE: ≤ DN65 '
               'needs 2 % (1:50), DN75–DN150 1 % (1:100), only ≥ DN200 mains '
               '0.5 % (1:200) — IPC 704.1 / UPC 708 practice, consistent with '
               'the SNI 8153 1 % / 2 % laid slopes. General practice — confirm '
@@ -507,7 +507,7 @@ class SniProfile implements StandardsProfile {
           citation: 'IPC Table 909.1 — trap-arm developed length '
               '(NOT an SNI 8153 figure)',
           status: VerificationStatus.notAnSniClause,
-          note: 'Trap-arm advisory (Round 9): the developed length from each '
+          note: 'Trap-arm advisory: the developed length from each '
               'fixture to its first vented point (vent / stack) is judged '
               'against DN32 1.5 m, DN40 1.8 m, DN50 2.4 m, DN75 3.7 m, '
               'DN100+ 4.9 m (IPC 909.1). General practice — confirm vs SNI 8153.',
@@ -517,7 +517,7 @@ class SniProfile implements StandardsProfile {
           unit: 'DFU',
           citation: 'UPC Table 703.2 — vent capacity (NOT an SNI 8153 figure)',
           status: VerificationStatus.notAnSniClause,
-          note: 'Vent sizing (Round 9): DN32 ≤ 1 DFU, DN40 ≤ 8, DN50 ≤ 24, '
+          note: 'Vent sizing: DN32 ≤ 1 DFU, DN40 ≤ 8, DN50 ≤ 24, '
               'DN65 ≤ 48, DN75 ≤ 84, DN100 ≤ 256, DN125 ≤ 600, DN150 ≤ 1380, '
               'and never smaller than ½ the drain it serves (IPC 906.2) nor '
               'DN32. Confirm vs the SNI 8153 vent table.',
@@ -529,8 +529,8 @@ class SniProfile implements StandardsProfile {
               '(NOT an SNI 8153 figure)',
           status: VerificationStatus.notAnSniClause,
           note: 'A DN75 horizontal branch carries at most 2 water closets and a '
-              'DN75 stack at most 6; beyond that the drain is floored at DN100 '
-              '(Round 9). Indonesian practice commonly lays DN100 anyway — '
+              'DN75 stack at most 6; beyond that the drain is floored at DN100. '
+              'Indonesian practice commonly lays DN100 anyway — '
               'confirm vs SNI 8153.',
         ),
         const StandardValue<Object?>(
@@ -541,7 +541,7 @@ class SniProfile implements StandardsProfile {
           status: VerificationStatus.notAnSniClause,
           note: 'A floor drain, shower or urinal has a 2 in (DN50) trap; every '
               'drain downstream of one is floored at DN50 — a drain is never '
-              'smaller than the trap it serves (Round 9). Confirm vs SNI 8153.',
+              'smaller than the trap it serves. Confirm vs SNI 8153.',
         ),
         dualSupplyFixtureUnitFactor,
         const StandardValue<Object?>(

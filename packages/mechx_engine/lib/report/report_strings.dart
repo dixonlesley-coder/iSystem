@@ -325,6 +325,8 @@ enum RptStringKey {
   untitledProject,
   feedUpfeed,
   feedDownfeed,
+  feedBoosterNoTank,
+  feedDirectMains,
   esSvcDomesticWater,
   esSvcFireStandpipe,
   esSvcMechVent,
@@ -402,7 +404,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
 
   // Mechanical.
   RptStringKey.calcTitle: 'MEP Calculation Report — {name}',
-  RptStringKey.calcGenerated: '_Generated {date} · MechX_',
+  RptStringKey.calcGenerated: '_Generated {date} · iSystem_',
   // N25 — a governed standards statement, not an unqualified "superseded"
   // admission. {rev} is intentionally no longer echoed here (it carried the
   // provenance blob); per-value provenance still prints in the Unverified
@@ -651,7 +653,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
 
   // Unified MEP.
   RptStringKey.mepTitle: 'MEP Building-Services Report — {name}',
-  RptStringKey.mepGenerated: '_Generated {date} · MechX (iSystem)_',
+  RptStringKey.mepGenerated: '_Generated {date} · iSystem_',
   RptStringKey.mepUnifiedIntro:
       'Unified mechanical · electrical · plumbing report.',
   RptStringKey.mepMechStandard: 'Mechanical / plumbing standard:',
@@ -729,6 +731,10 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.untitledProject: 'Untitled project',
   RptStringKey.feedUpfeed: 'Upfeed pump',
   RptStringKey.feedDownfeed: 'Roof-tank downfeed',
+  // Round 20 — a downfeed SETTING with no roof tank drawn: the report names
+  // the drawn feed (the riser sheet's riserFeedNote), never a phantom tank.
+  RptStringKey.feedBoosterNoTank: 'Booster pump (no roof tank)',
+  RptStringKey.feedDirectMains: 'Direct mains',
   RptStringKey.esSvcDomesticWater: 'Domestic water supply',
   RptStringKey.esSvcFireStandpipe: 'Fire standpipe pump',
   RptStringKey.esSvcMechVent: 'Mechanical ventilation',
@@ -808,7 +814,7 @@ const Map<RptStringKey, String> kReportStringsId = {
 
   // Mechanical.
   RptStringKey.calcTitle: 'LAPORAN PERHITUNGAN MEP — {name}',
-  RptStringKey.calcGenerated: '_Dibuat {date} · MechX_',
+  RptStringKey.calcGenerated: '_Dibuat {date} · iSystem_',
   RptStringKey.calcStandardsBasis:
       '**Dasar standar:** {name}. Dirancang mengacu SNI 8153:2015; edisi 2025 '
           'telah terbit — perbedaan sedang ditinjau.',
@@ -1055,7 +1061,7 @@ const Map<RptStringKey, String> kReportStringsId = {
 
   // Unified MEP.
   RptStringKey.mepTitle: 'Laporan Layanan Bangunan MEP — {name}',
-  RptStringKey.mepGenerated: '_Dibuat {date} · MechX (iSystem)_',
+  RptStringKey.mepGenerated: '_Dibuat {date} · iSystem_',
   RptStringKey.mepUnifiedIntro:
       'Laporan terpadu mekanikal · elektrikal · plambing.',
   RptStringKey.mepMechStandard: 'Standar mekanikal / plambing:',
@@ -1133,6 +1139,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.untitledProject: 'Proyek tanpa judul',
   RptStringKey.feedUpfeed: 'Pompa upfeed',
   RptStringKey.feedDownfeed: 'Downfeed tangki atap',
+  RptStringKey.feedBoosterNoTank: 'Pompa booster (tanpa tangki atap)',
+  RptStringKey.feedDirectMains: 'Langsung dari pipa induk',
   RptStringKey.esSvcDomesticWater: 'Suplai air bersih',
   RptStringKey.esSvcFireStandpipe: 'Pompa hidran kebakaran',
   RptStringKey.esSvcMechVent: 'Ventilasi mekanis',
