@@ -586,12 +586,9 @@ const _pdfScaleLadderM = <double>[1, 2, 5, 10, 20, 50, 100];
 /// nearest 120 pt, draws 4 alternating filled/open divisions, and figures the
 /// metre marks at 0 / mid / end. Centred on [centerX] at [baseY]. Returns ''
 /// when [pointsPerMeter] is not finite/positive (nothing honest to draw).
-String pdfScaleBarReal({
-  required double pointsPerMeter,
-  required double centerX,
-  required double baseY,
-}) {
-  if (!pointsPerMeter.isFinite || pointsPerMeter <= 0) return '';
+/// The ladder length (metres) [pdfScaleBarReal] draws at [pointsPerMeter] —
+/// the one whose drawn width lands nearest 120 pt.
+double _pdfScaleBarMetres(double pointsPerMeter) {
   const targetPt = 120.0;
   var bestM = _pdfScaleLadderM.first;
   var bestErr = double.infinity;
@@ -602,6 +599,68 @@ String pdfScaleBarReal({
       bestM = m;
     }
   }
+  return bestM;
+}
+
+/// Round 10 (mech-drawing-props-4) — the page box (points, y-up) the scale
+/// bar [pdfScaleBarReal] would draw centred on [centerX] at [baseY]: the bar
+/// plus its metre figures. Null when nothing would be drawn.
+LabelBox? pdfScaleBarBox({
+  required double pointsPerMeter,
+  required double centerX,
+  required double baseY,
+}) {
+  if (!pointsPerMeter.isFinite || pointsPerMeter <= 0) return null;
+  final barLen = _pdfScaleBarMetres(pointsPerMeter) * pointsPerMeter;
+  return (
+    minX: centerX - barLen / 2 - 4,
+    minY: baseY - 12,
+    maxX: centerX + barLen / 2 + 24, // the end figure (`100 m`) runs right
+    maxY: baseY + 6,
+  );
+}
+
+/// Round 10 (mech-drawing-props-4) — the page box (points, y-up) the
+/// [pdfLegend] block occupies with its origin at ([originX], [originY]): the
+/// swatch rows plus the `LEGEND` title above them. Null for an empty legend.
+LabelBox? pdfLegendBox(
+  DrawingChrome chrome, {
+  required double originX,
+  required double originY,
+}) {
+  final n = chrome.legendServices.length;
+  if (n == 0) return null;
+  var w = helveticaTextWidth('LEGEND', 9);
+  for (final s in chrome.legendServices) {
+    w = math.max(w, 18 + 6 + helveticaTextWidth(serviceChromeLabel(s), 8));
+  }
+  return (
+    minX: originX - 2,
+    minY: originY - 3,
+    maxX: originX + w + 2,
+    maxY: originY + n * 12.0 + 4 + 11, // the 9 pt title's cap + clearance
+  );
+}
+
+/// Round 10 (mech-drawing-props-4) — the page box (points, y-up) the
+/// [pdfNorthArrow] of radius [r] at ([cx], [cy]) occupies at ANY bearing:
+/// the arrow's circle plus the `N` beyond its tip.
+LabelBox pdfNorthArrowBox({
+  required double cx,
+  required double cy,
+  double r = 16,
+}) {
+  final reach = r + 7 + 9; // the tip, the 'N' offset, its glyph
+  return (minX: cx - reach, minY: cy - reach, maxX: cx + reach, maxY: cy + reach);
+}
+
+String pdfScaleBarReal({
+  required double pointsPerMeter,
+  required double centerX,
+  required double baseY,
+}) {
+  if (!pointsPerMeter.isFinite || pointsPerMeter <= 0) return '';
+  final bestM = _pdfScaleBarMetres(pointsPerMeter);
   final barLen = bestM * pointsPerMeter;
   final divW = barLen / 4;
   const barH = 4.0;
@@ -1543,6 +1602,13 @@ String dxfUnderlayEntities(
       if (onFloor(a)) include(a);
       if (onFloor(c)) include(c);
     }
+  }
+  // Round 10 (mech-drawing-props-2) — the exporters draw EVERY node on the
+  // floor (a placed-but-unpiped pump / tank is a normal mid-design state), so
+  // every on-floor node joins the fit: an unconnected one used to print off
+  // the page on an underlay-less sheet.
+  for (final n in net.nodes) {
+    if (onFloor(n)) include(n);
   }
 
   if (underlay != null) {

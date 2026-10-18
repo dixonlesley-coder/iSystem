@@ -22,6 +22,7 @@ library;
 import 'dart:math' as math;
 
 import '../network/network.dart';
+import '../units.dart' show Length;
 import 'drawing_chrome.dart' show LabelBox, kMinPlotTextMm;
 import 'plan_symbols.dart';
 
@@ -152,6 +153,60 @@ class PlanAnnotations {
 /// A label to place for an edge: the one-line [text] + the optional two-line
 /// [split] form (both from the shared composers).
 typedef PlanEdgeLabelText = ({String text, List<String>? split});
+
+/// Round 10 (mech-drawing-props-1) — the ONE label-composition rule both plan
+/// exporters call, so the PDF and the DXF of one issued sheet tag exactly the
+/// same edges with exactly the same text. Every edge (run or riser, sized or
+/// NOT) is composed through [composePlanEdgeLabel] /
+/// [composePlanEdgeLabelLines]: an unsized run still carries its tag + its
+/// take-off length (the DXF used to skip it, so one missing label shifted
+/// every later greedy slot choice and the two formats disagreed). An edge with
+/// nothing to say (no tag, size, length or CL) gets no label.
+///
+/// [sizeText] gives an edge's printed size (null = unsized); [lengthOf] its
+/// real length (null = unknown — never fabricated); [gravitySlope] the laid
+/// fall a gravity RUN prints (`1:100`, G5).
+Map<String, PlanEdgeLabelText> composePlanEdgeLabels({
+  required Network net,
+  required String? Function(NetEdge e) sizeText,
+  required Length? Function(NetEdge e) lengthOf,
+  Map<String, String>? edgeTags,
+  Map<String, String>? edgeElevationLabels,
+  double? gravitySlope,
+}) {
+  final out = <String, PlanEdgeLabelText>{};
+  for (final e in net.edges) {
+    final size = sizeText(e);
+    final len = lengthOf(e);
+    final lenText =
+        (len != null && len.meters > 0) ? planLengthLabel(len) : null;
+    final elev = edgeElevationLabels?[e.id];
+    final slope = (e.kind == EdgeKind.run &&
+            e.service.regime == FlowRegime.gravity &&
+            gravitySlope != null)
+        ? gravitySlopeLabel(gravitySlope)
+        : null;
+    final text = composePlanEdgeLabel(
+      tag: edgeTags?[e.id],
+      size: size,
+      length: lenText,
+      elevation: elev,
+      slope: slope,
+    );
+    if (text == null) continue;
+    out[e.id] = (
+      text: text,
+      split: composePlanEdgeLabelLines(
+        tag: edgeTags?[e.id],
+        size: size,
+        length: lenText,
+        elevation: elev,
+        slope: slope,
+      ),
+    );
+  }
+  return out;
+}
 
 /// Lay out every annotation of the plan sheet ([sheetId], [floorIndex]) —
 /// see the library note. [map] takes a sheet-pixel point to the output space
@@ -364,21 +419,52 @@ PlanAnnotations layoutPlanAnnotations({
       final w = label.length * fs * 0.55;
       final h = fs;
       final along = math.min(22 * pt, len * 0.5);
-      final cx0 = lb.x - ux * along + px * off;
-      final cy0 = lb.y - uy * along + py * off;
       LabelBox boxAt(double bcx, double bcy) => (
             minX: bcx - w / 2,
             minY: bcy - h / 2,
             maxX: bcx + w / 2,
             maxY: bcy + h / 2,
           );
-      var cx = cx0 + px * 7 * pt, cy = cy0 + py * 7 * pt;
-      for (var step = 0; step < 6; step++) {
-        if (!layout.hitsBox(boxAt(cx, cy))) break;
-        final o = 7 * pt + (step + 1) * (h + 4 * pt);
-        cx = cx0 + px * o;
-        cy = cy0 + py * o;
+      // Round 10 (mech-drawing-props-3) — the figure must clear RUNS too (a
+      // parallel HW main 0.5–0.9 m from a CW riser used to strike straight
+      // through the setting-out figure). Candidates, in order: the historic
+      // slot stepping outward on the figure's side; the opposite side of the
+      // dimension line; then the same two ladders at other stations ALONG the
+      // dimension (stepping perpendicular alone can never escape a run that
+      // parallels the perpendicular). Nothing clear ⇒ the historic outermost
+      // slot, as before.
+      bool blocked(double bcx, double bcy) =>
+          layout.hitsBox(boxAt(bcx, bcy)) ||
+          layout.hitsRun(boxAt(bcx, bcy), clearance: 0.1 * fs);
+      final stations = <double>[
+        along,
+        for (final f in const [0.3, 0.5, 0.7, 0.85])
+          if (len * f > w / 2 + pt && len * f < len - w / 2 - pt) len * f,
+      ];
+      double? fx, fy; // the historic fallback (outermost +p slot)
+      double? cx, cy;
+      search:
+      for (var si = 0; si < stations.length; si++) {
+        final cx0 = lb.x - ux * stations[si] + px * off;
+        final cy0 = lb.y - uy * stations[si] + py * off;
+        for (final side in const [1.0, -1.0]) {
+          for (var step = 0; step <= 6; step++) {
+            final o = 7 * pt + step * (h + 4 * pt);
+            final x = cx0 + side * px * o, y = cy0 + side * py * o;
+            if (si == 0 && side > 0) {
+              fx = x;
+              fy = y;
+            }
+            if (!blocked(x, y)) {
+              cx = x;
+              cy = y;
+              break search;
+            }
+          }
+        }
       }
+      cx ??= fx!;
+      cy ??= fy!;
       layout.addBox(boxAt(cx, cy));
       ties.add(PlanTieDimension(
         axisExtension: axisExt,

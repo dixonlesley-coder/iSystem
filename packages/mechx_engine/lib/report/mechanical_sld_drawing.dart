@@ -345,7 +345,7 @@ SldSheet buildMechanicalRiserSld({
     final a = posById[e.fromId];
     final b = posById[e.toId];
     if (a == null || b == null) continue;
-    placer.reserveLine(a.dx, a.dy, b.dx, a.dy);
+    if ((b.dx - a.dx).abs() >= 0.5) placer.reserveLine(a.dx, a.dy, b.dx, a.dy);
     if ((b.dy - a.dy).abs() > 0.5) {
       placer.reserveLine(b.dx, a.dy, b.dx, b.dy);
     }
@@ -386,6 +386,11 @@ SldSheet buildMechanicalRiserSld({
       // Roof-penetration cap tick.
       prims.add(SldLine(p.dx - 4, stubTop, p.dx + 4, stubTop,
           weight: SldWeight.medium, layer: riserServiceCode(ServiceType.vent)));
+      // Round 10 (mech-drawing-props-6) — the stub + cap are ink a top-floor
+      // band tag must divert around, not print through.
+      placer
+        ..reserveLine(p.dx, p.dy, p.dx, stubTop)
+        ..reserveLine(p.dx - 4, stubTop, p.dx + 4, stubTop);
       placer
           .reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 7, bold: true));
     }
@@ -459,8 +464,12 @@ SldSheet buildMechanicalRiserSld({
     final dashed = e.service == ServiceType.vent;
     final sz = sizing[e.id];
     // Orthogonal L-route: horizontal at the from-y, then vertical to the to-y.
-    prims.add(SldLine(a.dx, a.dy, b.dx, a.dy,
-        weight: SldWeight.medium, role: role, layer: layer, dashed: dashed));
+    // Round 10 (mech-drawing-props-7) — a purely vertical riser has no
+    // horizontal leg: skip it rather than emit a zero-length LINE.
+    if ((b.dx - a.dx).abs() >= 0.5) {
+      prims.add(SldLine(a.dx, a.dy, b.dx, a.dy,
+          weight: SldWeight.medium, role: role, layer: layer, dashed: dashed));
+    }
     if ((b.dy - a.dy).abs() > 0.5) {
       prims.add(SldLine(b.dx, a.dy, b.dx, b.dy,
           weight: SldWeight.medium, role: role, layer: layer, dashed: dashed));
@@ -477,8 +486,13 @@ SldSheet buildMechanicalRiserSld({
     final fn = riserFunctionFor(network, e, downfeed: downfeed);
     final tag = _pipeTag(sz, e, function: fn, length: edgeLengths[e.id]);
     if (e.kind == EdgeKind.riser) {
-      // Tag + riser id beside the vertical leg.
-      final midY = (a.dy + b.dy) / 2;
+      // Tag + riser id beside the vertical leg. Round 10
+      // (mech-drawing-props-7) — the default slot sits INSIDE the upper
+      // floor's band, a quarter band below its node: nodes sit at band
+      // centres, so the old mid-point of two adjacent floors landed exactly on
+      // the reserved floor datum and EVERY riser tag walked the ladder to a
+      // leader.
+      final midY = math.min(a.dy, b.dy) + _bandH / 4;
       placer.place(b.dx + 6, midY, tag,
           size: 8,
           role: role,
@@ -785,17 +799,20 @@ List<SldLegendEntry> _fittingLegend(
     for (final e in network.edges)
       if (focus == null || e.service == focus) e.service,
   };
-  for (final s in ServiceType.values) {
-    if (services.contains(s)) {
-      out.add(SldLegendEntry(riserServiceCode(s), _serviceMeaning(s)));
-    }
-  }
   // Every token any label prints (split on spaces, hyphens, the middle dot and
   // brackets — a tag `32-CW-PPR-BOOSTER - 4.0 m` yields CW / PPR / BOOSTER).
   final tokens = <String>{
     for (final p in prims)
       if (p is SldLabel) ...p.text.split(RegExp(r'[\s\-\u00B7/()]+')),
   };
+  // Round 10 (mech-drawing-props-8) — a service code is keyed only when some
+  // label actually PRINTS it (air tags print `Ø300` / `WxH`, no code, so an
+  // air service with no `SA-R1` riser id earns no key).
+  for (final s in ServiceType.values) {
+    if (services.contains(s) && tokens.contains(riserServiceCode(s))) {
+      out.add(SldLegendEntry(riserServiceCode(s), _serviceMeaning(s)));
+    }
+  }
   final keyed = {for (final e in out) e.code};
   for (final (code, meaning) in _kRiserTagGlossary) {
     if (tokens.contains(code) && keyed.add(code)) {
@@ -1132,6 +1149,10 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
     // The loop turn: tie the return top back to the supply riser leg.
     prims.add(SldLine(b.dx, yTop, legX, yTop,
         weight: SldWeight.thin, layer: layer, dashed: true));
+    // Round 10 — the return leg + loop turn are ink tags divert around.
+    placer
+      ..reserveLine(legX, yTop, legX, yBot)
+      ..reserveLine(b.dx, yTop, legX, yTop);
     // A down chevron: recirculation flow returns to the heater.
     final midY = (yTop + yBot) / 2;
     prims

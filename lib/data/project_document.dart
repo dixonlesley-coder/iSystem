@@ -937,13 +937,24 @@ class ProjectDocument {
     if (rawViewports is Map) {
       rawViewports.forEach((key, v) {
         if (v is Map && v['scale'] is num) {
-          viewports[key as String] = ViewportTransform(
-            scale: (v['scale'] as num).toDouble(),
-            offset: Offset(
-              (v['dx'] as num?)?.toDouble() ?? 0,
-              (v['dy'] as num?)?.toDouble() ?? 0,
-            ),
-          );
+          // Round 10 (canvas-geometry-6) — tolerant load: a viewport whose
+          // scale is zero/negative/out of the canvas zoom range or whose
+          // offset is non-finite (hand-edited / corrupt file) would give
+          // Infinity world coordinates or a mirrored view. Drop it so the
+          // canvas fits as usual.
+          final scale = (v['scale'] as num).toDouble();
+          final dx = (v['dx'] as num?)?.toDouble() ?? 0;
+          final dy = (v['dy'] as num?)?.toDouble() ?? 0;
+          if (scale.isFinite &&
+              scale >= ViewportTransform.minScale &&
+              scale <= ViewportTransform.maxScale &&
+              dx.isFinite &&
+              dy.isFinite) {
+            viewports[key as String] = ViewportTransform(
+              scale: scale,
+              offset: Offset(dx, dy),
+            );
+          }
         }
       });
     }

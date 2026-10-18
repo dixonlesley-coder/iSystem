@@ -165,6 +165,8 @@ enum StringKey {
   busyOpeningProject,
   busySaving,
   busyExportingSubmittal, // {current} {total} — J2 per-sheet submittal export
+  saveAssetsMissing, // {file} {count} — Round 10: plans that could not be embedded
+  openRestoredFromBackup, // {file} — Round 10: opened the .bak after a torn save
 
   // Unsaved-changes guard dialog (Open / Import / quit).
   confirmDiscardTitle,
@@ -1292,6 +1294,10 @@ const Map<StringKey, String> _en = {
   StringKey.busySaving: 'Saving...',
   StringKey.busyExportingSubmittal:
       'Exporting submittal package ({current}/{total})...',
+  StringKey.saveAssetsMissing:
+      'Saved {file}, but plans not embedded (source file missing): {count}',
+  StringKey.openRestoredFromBackup:
+      'Restored {file} from its backup after an interrupted save',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Unsaved changes',
@@ -2524,6 +2530,10 @@ const Map<StringKey, String> _id = {
   StringKey.busySaving: 'Menyimpan...',
   StringKey.busyExportingSubmittal:
       'Mengekspor paket submittal ({current}/{total})...',
+  StringKey.saveAssetsMissing:
+      'Tersimpan {file}, tetapi denah tidak tersemat (file sumber hilang): {count}',
+  StringKey.openRestoredFromBackup:
+      'Memulihkan {file} dari cadangan setelah penyimpanan terputus',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Perubahan belum disimpan',

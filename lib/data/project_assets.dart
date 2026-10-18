@@ -31,13 +31,54 @@ String projectAssetsDir() {
 /// placeholder sheet with nothing to embed.
 String? sheetSourcePath(Sheet sheet) => sheet.pdfPath ?? sheet.dxfPath;
 
+/// Round 10 (import-pipeline-1) — the embedded payloads this process already
+/// holds, keyed by the LOCAL path a sheet renders from (the original source
+/// path after a Save; the extracted `mechx_assets/<sha>` path after an Open).
+/// Save rebuilds the asset map from disk every time, so without this a plan
+/// whose source vanished (an unplugged USB stick, a temp-cleaned extraction)
+/// was silently DROPPED from the re-saved `.mechx`. The gather now falls back
+/// to the payload already embedded. Main-isolate state only — the isolate
+/// gathers receive the relevant slice as a plain sendable map.
+final Map<String, String> _knownPayloads = <String, String>{};
+
+/// Remember [byLocalPath] (`local path → base64(gzip(bytes))`) as embedded
+/// payloads the next Save may fall back to. Called with an opened document's
+/// re-keyed [ProjectDocument.assets] (see [rehydrateAssets]) and after every
+/// gather.
+void rememberEmbeddedAssets(Map<String, String> byLocalPath) =>
+    _knownPayloads.addAll(byLocalPath);
+
+/// Forget every remembered payload (tests).
+void debugClearEmbeddedAssets() => _knownPayloads.clear();
+
 /// Read every distinct sheet source file and return `path → base64(gzip(bytes))`,
 /// ready to attach as [ProjectDocument.assets]. Plans are gzip-compressed before
 /// base64 (PDF/DXF are highly compressible), clawing back most of base64's ~33 %
-/// inflation. A missing/unreadable file is skipped (the project still saves; that
-/// sheet just isn't portable).
-Map<String, String> gatherSheetAssets(List<Sheet> sheets) =>
-    _gatherFromPaths(_distinctSheetSourcePaths(sheets));
+/// inflation. A missing/unreadable file falls back to the payload already
+/// embedded for that path ([rememberEmbeddedAssets]); with neither it is
+/// skipped (the project still saves; [missingSheetAssetPaths] names it so the
+/// caller can warn).
+Map<String, String> gatherSheetAssets(List<Sheet> sheets) {
+  final paths = _distinctSheetSourcePaths(sheets);
+  final out = _gatherFromPaths(paths, _fallbackFor(paths));
+  rememberEmbeddedAssets(out);
+  return out;
+}
+
+/// The distinct sheet source paths that ended up WITHOUT a payload in [assets]
+/// — plans that could not be embedded (source unreadable and nothing embedded
+/// before). Empty ⇒ the saved file is fully portable.
+List<String> missingSheetAssetPaths(
+        List<Sheet> sheets, Map<String, String> assets) =>
+    [
+      for (final p in _distinctSheetSourcePaths(sheets))
+        if (!assets.containsKey(p)) p,
+    ];
+
+Map<String, String> _fallbackFor(List<String> paths) => {
+      for (final p in paths)
+        if (_knownPayloads[p] != null) p: _knownPayloads[p]!,
+    };
 
 /// The distinct source paths [sheets] render from, in first-seen order (the same
 /// dedup [gatherSheetAssets] applies) — the sendable input for the off-thread
@@ -55,33 +96,41 @@ List<String> _distinctSheetSourcePaths(List<Sheet> sheets) {
 }
 
 /// Read every path and return `path → base64(gzip(bytes))`. The pure, sendable
-/// half of the gather (plain [String] paths in, a `Map<String,String>` out) so it
-/// runs verbatim on the caller's thread OR inside an [Isolate]. Byte-identical to
-/// [gatherSheetAssets] for the same path set.
-Map<String, String> _gatherFromPaths(List<String> paths) {
+/// half of the gather (plain [String] paths + fallback payloads in, a
+/// `Map<String,String>` out) so it runs verbatim on the caller's thread OR
+/// inside an [Isolate]. An unreadable path takes its [fallback] payload.
+Map<String, String> _gatherFromPaths(
+    List<String> paths, Map<String, String> fallback) {
   final out = <String, String>{};
   for (final path in paths) {
     try {
       final f = File(path);
-      if (!f.existsSync()) continue;
-      out[path] = base64Encode(gzip.encode(f.readAsBytesSync()));
+      if (f.existsSync()) {
+        out[path] = base64Encode(gzip.encode(f.readAsBytesSync()));
+        continue;
+      }
     } catch (_) {
-      // Unreadable — skip; the rest of the project still embeds.
+      // Unreadable — fall through to the already-embedded payload.
     }
+    final prior = fallback[path];
+    if (prior != null) out[path] = prior;
   }
   return out;
 }
 
 /// The off-UI-thread variant of [gatherSheetAssets]: the synchronous gzip+base64
 /// of every plan (a real window freeze on a large project) runs on an [Isolate]
-/// so the UI stays responsive during a portable Save. The distinct paths are
-/// resolved on the caller's thread (only sendable [String]s cross the boundary),
-/// and the returned map is byte-identical to the synchronous [gatherSheetAssets].
-/// An empty path set skips the isolate spin-up entirely.
+/// so the UI stays responsive during a portable Save. The distinct paths (and
+/// their fallback payloads) are resolved on the caller's thread (only sendable
+/// [String]s cross the boundary), and the returned map is byte-identical to the
+/// synchronous [gatherSheetAssets]. An empty path set skips the isolate spin-up.
 Future<Map<String, String>> gatherSheetAssetsAsync(List<Sheet> sheets) async {
   final paths = _distinctSheetSourcePaths(sheets);
   if (paths.isEmpty) return const {};
-  return Isolate.run(() => _gatherFromPaths(paths));
+  final fallback = _fallbackFor(paths);
+  final out = await Isolate.run(() => _gatherFromPaths(paths, fallback));
+  rememberEmbeddedAssets(out);
+  return out;
 }
 
 /// Decode one embedded asset's base64 payload back to the original file bytes.
@@ -109,14 +158,25 @@ ProjectDocument rehydrateAssets(ProjectDocument doc) {
   // never collide — and an equal name implies equal content, so the
   // exists-skip below is safe.
   final localForKey = <String, String>{};
+  final byLocal = <String, String>{};
   doc.assets.forEach((key, b64) {
     try {
       final bytes = _decodeAsset(b64);
       final ext = key.toLowerCase().endsWith('.pdf') ? 'pdf' : 'dxf';
       final id = '${sha256.convert(bytes)}_${bytes.length}';
       final file = File('$dir/$id.$ext');
-      if (!file.existsSync()) file.writeAsBytesSync(bytes);
+      // Round 10 (import-pipeline-5) — an existing file is reused only when its
+      // on-disk length matches (a crash / disk-full mid-extraction would leave
+      // a TRUNCATED file under the right content name that every later Open
+      // reused); the write itself goes to a `.tmp` sibling renamed into place,
+      // so a torn write never lands under the content name.
+      if (!file.existsSync() || file.lengthSync() != bytes.length) {
+        final tmp = File('${file.path}.tmp');
+        tmp.writeAsBytesSync(bytes, flush: true);
+        tmp.renameSync(file.path);
+      }
       localForKey[key] = file.path;
+      byLocal[file.path] = b64;
     } catch (_) {
       // Corrupt asset — leave the sheet pointing at its original path.
     }
@@ -126,7 +186,16 @@ ProjectDocument rehydrateAssets(ProjectDocument doc) {
   final sheets = <Sheet>[
     for (final s in doc.sheets) _repoint(s, localForKey),
   ];
-  return doc.withSheets(sheets);
+  // The returned document's assets are RE-KEYED by the local path each sheet
+  // now renders from, so the caller can [rememberEmbeddedAssets] them and a
+  // later Save keeps the plan even if that extraction is cleaned away. Assets
+  // that failed to extract keep their original key.
+  final rekeyed = <String, String>{
+    for (final e in doc.assets.entries)
+      if (!localForKey.containsKey(e.key)) e.key: e.value,
+    ...byLocal,
+  };
+  return doc.withSheets(sheets, assets: rekeyed);
 }
 
 /// The off-UI-thread variant of the whole OPEN decode path: JSON-decode

@@ -129,13 +129,13 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) => runExportGuarded(
         // sheet 1 of 1 over the document-control title block (D3). The sheet
         // is built HERE so the fault study's breaking-capacity ratings reach
         // the device notation (C5).
-        final bytes = electricalSldToPdf(
+        // Round 10 (elec-drawing-props-3) — auto-paginates (one board per
+        // page) when the single sheet would print below the minimum plotted
+        // label size.
+        final bytes = electricalSldDetailToPdf(
           project: project,
-          sheet: buildElectricalSld(
-            project: project,
-            result: result,
-            breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-          ),
+          result: result,
+          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           chrome: electricalExportChrome(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;

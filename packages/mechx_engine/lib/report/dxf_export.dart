@@ -22,6 +22,11 @@ import 'plan_annotation_layout.dart';
 import 'plan_symbols.dart';
 import 'sld_sheet.dart';
 
+/// Round 10 (mech-drawing-props-2) — the neutral (grey) layer an UNCONNECTED
+/// component's glyph is drawn on: no incident edge ⇒ no service layer to own
+/// it, but the equipment is still on the sheet.
+const String kDxfLayerUnconnected = 'M-EQPM-NCON';
+
 String _sizeLabel(NetEdge e, EdgeSizing s) {
   if (s.isRectangular) {
     return '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}';
@@ -313,19 +318,22 @@ String networkToDxf({
   for (final n in net.nodes) {
     if (!onFloor(n)) continue;
     final svc = domService(n);
-    if (svc == null) continue;
+    // Round 10 (mech-drawing-props-2) — an unconnected component keeps its
+    // glyph (neutral layer) and joins the chrome extent.
+    final layer = svc?.name ?? kDxfLayerUnconnected;
+    include(n.x, -n.y);
     final comp = n.component;
     if (comp != null) {
       emitPrims(planComponentPrims(comp, cx: n.x, cy: -n.y, size: 16),
-          svc.name, -n.y);
+          layer, -n.y);
     } else if (n.role == NodeRole.fixture) {
-      emitPrims(planFixturePrims(cx: n.x, cy: -n.y, size: 16), svc.name, -n.y);
+      emitPrims(planFixturePrims(cx: n.x, cy: -n.y, size: 16), layer, -n.y);
     }
     // G1: the stable equipment tag (`P-01` …) as TEXT beside the glyph.
     final eqTag = nodeTags?[n.id];
     if (eqTag != null && eqTag.isNotEmpty) {
       g(0, 'TEXT');
-      g(8, svc.name);
+      g(8, layer);
       g(10, n.x + 12);
       g(20, -n.y - 14);
       g(40, 12);
@@ -405,6 +413,19 @@ String _professionalDxf({
       }
     }
   }
+  // Round 10 (mech-drawing-props-2) — every on-floor node joins the extent
+  // (the plan PDF's `planFitBounds` rule), so an unconnected component is
+  // inside the chrome-anchoring extent; an unconnected GLYPH is drawn on the
+  // neutral [kDxfLayerUnconnected] layer (its tag used to float alone).
+  var hasUnconnectedGlyph = false;
+  for (final n in net.nodes) {
+    if (!onFloor(n)) continue;
+    include(n.x * mmPerPx, -n.y * mmPerPx);
+    if (!net.edges.any((e) => e.fromId == n.id || e.toId == n.id) &&
+        (n.component != null || n.role == NodeRole.fixture)) {
+      hasUnconnectedGlyph = true;
+    }
+  }
   // A1: the underlay's sheet frame joins the extent (millimetre world, Y
   // negated) so the text height + chrome anchor to the whole floor plan.
   if (underlay != null) {
@@ -466,6 +487,8 @@ String _professionalDxf({
       (dxfLayerNameFor(s), serviceAciColorFor(s), dxfLinetypeFor(s)),
     (kDxfLayerAnno, 7, 'CONTINUOUS'),
     (kDxfLayerFrame, 7, 'CONTINUOUS'),
+    // Round 10: the neutral layer for unconnected equipment, only when used.
+    if (hasUnconnectedGlyph) (kDxfLayerUnconnected, 8, 'CONTINUOUS'),
     // A1: the grey floor-plan underlay layer, declared only when present.
     if (underlay != null) (kDxfLayerUnderlay, kDxfUnderlayAci, 'CONTINUOUS'),
     // N4: the grey setting-out grid layer (chain linetype), only when present.
@@ -495,73 +518,33 @@ String _professionalDxf({
   // millimetres at [unitsPerMm] model mm per PAPER mm (the plotted scale), so
   // at the same plotted scale the DXF makes the PDF's exact line splits and
   // slot choices. Compose the labels through the PDF's composer pair.
-  final edgeLabels = <String, PlanEdgeLabelText>{};
-  for (final e in net.edges) {
-    final s = sizing[e.id];
-    if (e.kind == EdgeKind.run) {
-      // A run is tagged once it is sized.
-      if (s == null) continue;
+  // Round 10 (mech-drawing-props-1) — the SAME composition rule as the plan
+  // PDF (`composePlanEdgeLabels`): an unsized run is tagged with its take-off
+  // length here too, so both formats make identical slot choices.
+  final edgeLabels = composePlanEdgeLabels(
+    net: net,
+    sizeText: (e) {
+      final s = sizing[e.id];
+      return s != null ? _sizeLabel(e, s) : null;
+    },
+    // A run's real length: the caller's §10 map, else its calibrated
+    // horizontal length (pixel length × m/px) — this path is always
+    // calibrated, so the take-off length is never fabricated. A riser prints
+    // only a §10 length from the caller.
+    lengthOf: (e) {
+      final given = edgeLengths?[e.id];
+      if (given != null || e.kind != EdgeKind.run) return given;
       final a = net.nodeById(e.fromId);
       final c = net.nodeById(e.toId);
-      if (a == null || c == null) continue;
-      // N5: append the centreline-elevation token to the size label.
-      final elev = edgeElevationLabels?[e.id];
-      // G5: the laid fall (`1:100`) for a gravity RUN, from the real ctx
-      // gradient (never hardcoded).
-      final slope =
-          (e.service.regime == FlowRegime.gravity && gravitySlope != null)
-              ? gravitySlopeLabel(gravitySlope)
-              : null;
-      // The run's real length: the caller's §10 map, else its calibrated
-      // horizontal length (pixel length × m/px) — this path is always
-      // calibrated, so the take-off length is never fabricated.
-      final len = edgeLengths?[e.id] ??
-          Length(math.sqrt((c.x - a.x) * (c.x - a.x) +
-                  (c.y - a.y) * (c.y - a.y)) *
-              metersPerPixel);
-      // N13 + N5 + G5 through the ONE composer the plan PDF uses
-      // (`CW-F2 · DN50 - 4.4 m - CL +2.70`), so PDF == DXF.
-      final lengthText = len.meters > 0 ? planLengthLabel(len) : null;
-      edgeLabels[e.id] = (
-        text: composePlanEdgeLabel(
-          tag: edgeTags?[e.id],
-          size: _sizeLabel(e, s),
-          length: lengthText,
-          elevation: elev,
-          slope: slope,
-        )!,
-        split: composePlanEdgeLabelLines(
-          tag: edgeTags?[e.id],
-          size: _sizeLabel(e, s),
-          length: lengthText,
-          elevation: elev,
-          slope: slope,
-        ),
-      );
-    } else {
-      // N13: the riser stack tag + size + §10 length, composed exactly like
-      // the plan PDF's riser label (`CW-R1 · DN32 - 4 m`; drawing-output-7).
-      final rLen = edgeLengths?[e.id];
-      final rLenText =
-          (rLen != null && rLen.meters > 0) ? planLengthLabel(rLen) : null;
-      final text = composePlanEdgeLabel(
-        tag: edgeTags?[e.id],
-        size: s != null ? _sizeLabel(e, s) : null,
-        length: rLenText,
-        elevation: edgeElevationLabels?[e.id],
-      );
-      if (text == null) continue;
-      edgeLabels[e.id] = (
-        text: text,
-        split: composePlanEdgeLabelLines(
-          tag: edgeTags?[e.id],
-          size: s != null ? _sizeLabel(e, s) : null,
-          length: rLenText,
-          elevation: edgeElevationLabels?[e.id],
-        ),
-      );
-    }
-  }
+      if (a == null || c == null) return null;
+      return Length(math.sqrt(
+              (c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y)) *
+          metersPerPixel);
+    },
+    edgeTags: edgeTags,
+    edgeElevationLabels: edgeElevationLabels,
+    gravitySlope: gravitySlope,
+  );
   final ann = layoutPlanAnnotations(
     net: net,
     sheetId: sheetId,
@@ -692,10 +675,15 @@ String _professionalDxf({
       // A5 flow arrow on a sized, oriented, long-enough run.
       if (s != null && s.flowFromId != null) {
         final len = math.sqrt((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay));
-        if (len > 30) {
+        // Round 10 (mech-drawing-props-5) — sized in PAPER units like the
+        // glyphs (and the plan PDF's 30 pt threshold / 5 pt arm): model mm =
+        // points × (paper mm per pt) × u (model mm per paper mm), so the
+        // chevron no longer depends on how the sheet was calibrated.
+        const ptMm = kPlanPaperMmPerPt;
+        if (len > 30 * ptMm * u) {
           final upIsA = s.flowFromId == a.id;
           flowChevron(upIsA ? ax : cx, upIsA ? ay : cy, upIsA ? cx : ax,
-              upIsA ? cy : ay, len, dxfLayerNameFor(e.service), 5 * mmPerPx);
+              upIsA ? cy : ay, len, dxfLayerNameFor(e.service), 5 * ptMm * u);
         }
       }
     } else {
@@ -726,8 +714,10 @@ String _professionalDxf({
   for (final n in net.nodes) {
     if (!onFloor(n)) continue;
     final svc = domService(n);
-    if (svc == null) continue;
-    final layer = dxfLayerNameFor(svc);
+    // Round 10 (mech-drawing-props-2) — an UNCONNECTED component / fixture
+    // still draws its glyph (on the neutral layer, as the PDF draws it in a
+    // neutral grey) so its equipment tag never floats without a symbol.
+    final layer = svc == null ? kDxfLayerUnconnected : dxfLayerNameFor(svc);
     final cyMm = -n.y * mmPerPx;
     final comp = n.component;
     if (comp != null) {

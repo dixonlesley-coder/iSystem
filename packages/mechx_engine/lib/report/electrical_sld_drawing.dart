@@ -37,6 +37,7 @@ import '../electrical/sources.dart'
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
 import '../units.dart' show ApparentPower, Power;
+import 'drawing_chrome.dart' show helveticaTextWidth;
 import 'number_format.dart' show groupThousands;
 import 'sld_sheet.dart';
 
@@ -1401,6 +1402,11 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   );
 }
 
+/// Round 10 (elec-drawing-props-1) — how far below a side-source node's
+/// centre its drawing reaches: the sub-label baseline at +12 plus its 7.5 pt
+/// descent (~1.6), which also clears every side glyph's half-height (≤ 13).
+const double _sideNodeBottom = 14;
+
 /// Synthesize the utility source spine drawn ABOVE the panel tree (overview) or
 /// the top floor band (riser). On a DECLARED MV service (`_isMvService`):
 /// PLN MV STATION -> PANEL UTAMA TEGANGAN MENENGAH -> TRANSFORMER <kVA> ->
@@ -1542,6 +1548,10 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
           size: 7.5, role: SldRole.source));
       prims.add(SldLine(nodeX + _ovW, cy, sideX + 14, cy,
           weight: SldWeight.medium, role: SldRole.source));
+      // Round 10 (elec-drawing-props-1) — the side stack counts toward the
+      // spine height (the LV-branch idiom): the sub-label baseline sits at
+      // cy + 12 (+ its descent), below the glyph's ±11.
+      stackBottom = math.max(stackBottom, cy + _sideNodeBottom);
     }
     // SOLAR PV array + BATTERY bank stack BELOW the capacitor slot (new side
     // nodes — absent sources leave every existing coordinate untouched).
@@ -1555,6 +1565,7 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
           size: 7.5, role: SldRole.source));
       prims.add(SldLine(nodeX + _ovW, sideY, sideX + 3, sideY,
           weight: SldWeight.medium, role: SldRole.source));
+      stackBottom = math.max(stackBottom, sideY + _sideNodeBottom);
       sideY += 54;
     }
     if (project.sources?.battery != null) {
@@ -1566,6 +1577,7 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
           size: 7.5, role: SldRole.source));
       prims.add(SldLine(nodeX + _ovW, sideY, sideX + 5, sideY,
           weight: SldWeight.medium, role: SldRole.source));
+      stackBottom = math.max(stackBottom, sideY + _sideNodeBottom);
     }
   } else {
     // LV: no LV-main box to hang off — the side sources drop from a short
@@ -3150,6 +3162,12 @@ const double _polH = 44;
 const double _polSymR = 14; // generator / utility symbol radius
 const double _polGapX = 44; // horizontal gap between siblings in a tier
 const double _polTierH = 120; // vertical pitch between tiers
+const double _polLaneGap = 16; // pitch of the skip-tier side lanes (Round 10)
+const double _polSubStrip = 14; // the strip a node's sub-label prints in
+const double _polEdgeLabelSize = 6.5;
+
+/// An axis-aligned box (left, top, right, bottom) for the one-line label placer.
+typedef _PolBox = ({double l, double t, double r, double b});
 
 /// The label (name + optional sub) beside a SYMBOL node (utility / generator),
 /// placed to the right of the glyph so all content stays inside the footprint.
@@ -3213,10 +3231,53 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
 
   final prims = <SldPrim>[];
 
-  // Edges first (under the node graphics): the overview orthogonal 3-segment
-  // route — source bottom-centre down to a mid line, across, then down into the
-  // target top-centre. The role follows the TARGET: the run into the main panel
-  // (the load side) is normal, everything else is a supply run.
+  // Round 10 (elec-drawing-props-2) — obstacle boxes for the edge-label
+  // placer: every node footprint plus the strip its sub-label prints in.
+  final obstacles = <_PolBox>[
+    for (final n in nodes)
+      (
+        l: pos[n.id]!.x,
+        t: pos[n.id]!.y,
+        r: pos[n.id]!.x + _polW,
+        b: pos[n.id]!.y + _polH + _polSubStrip,
+      ),
+  ];
+  final placedLabels = <_PolBox>[];
+  bool clear(_PolBox bx) {
+    bool hit(_PolBox o) =>
+        math.min(bx.r, o.r) - math.max(bx.l, o.l) > 0 &&
+        math.min(bx.b, o.b) - math.max(bx.t, o.t) > 0;
+    return !obstacles.any(hit) && !placedLabels.any(hit);
+  }
+
+  _PolBox labelBox(double x, double y, double w) =>
+      (l: x, t: y - _polEdgeLabelSize, r: x + w, b: y + 2);
+
+  void placeLabel(
+      String text, List<(double, double)> candidates, SldRole role) {
+    final w = helveticaTextWidth(text, _polEdgeLabelSize);
+    var at = candidates.first;
+    for (final c in candidates) {
+      if (clear(labelBox(c.$1, c.$2, w))) {
+        at = c;
+        break;
+      }
+    }
+    placedLabels.add(labelBox(at.$1, at.$2, w));
+    prims.add(
+        SldLabel(at.$1, at.$2, text, size: _polEdgeLabelSize, role: role));
+  }
+
+  // Edges first (under the node graphics). An ADJACENT-tier edge takes the
+  // overview orthogonal 3-segment route — source bottom-centre down to a mid
+  // line, across, then down into the target top-centre (all inside the
+  // inter-tier gap, so it never crosses a box). A SKIP-tier edge (e.g. PLN ->
+  // bus past the PV-inverter tier) would run that vertical straight THROUGH
+  // the intermediate tier's boxes and read as a SERIES connection, so it
+  // detours through its own side LANE left of every column (Round 10). The
+  // role follows the TARGET: the run into the main panel (the load side) is
+  // normal, everything else is a supply run.
+  var lane = 0;
   for (final e in oneLine.edges) {
     final a = pos[e.from];
     final z = pos[e.to];
@@ -3228,14 +3289,54 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
     final ay = a.y + _polH;
     final zx = z.x + _polW / 2;
     final zy = z.y;
-    final midY = (ay + zy) / 2;
-    prims
-      ..add(SldLine(ax, ay, ax, midY, weight: SldWeight.medium, role: role))
-      ..add(SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role))
-      ..add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
-    if (e.label != null && e.label!.isNotEmpty) {
-      prims.add(SldLabel(math.min(ax, zx) + 4, midY - 4, e.label!,
-          size: 6.5, role: role));
+    final label = (e.label != null && e.label!.isNotEmpty) ? e.label! : null;
+    final skip = tier[e.to]! - tier[e.from]! > 1;
+    if (!skip) {
+      final midY = (ay + zy) / 2;
+      prims
+        ..add(SldLine(ax, ay, ax, midY, weight: SldWeight.medium, role: role))
+        ..add(
+            SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role))
+        ..add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
+      if (label != null) {
+        final w = helveticaTextWidth(label, _polEdgeLabelSize);
+        placeLabel(
+            label,
+            [
+              (math.min(ax, zx) + 4, midY - 4),
+              (ax + 4, midY - 4),
+              (ax - 4 - w, midY - 4),
+              (zx + 4, midY - 4),
+              (zx - 4 - w, midY - 4),
+              for (var k = 1; k <= 3; k++) ...[
+                (ax + 4, midY - 4 - 9.0 * k),
+                (zx + 4, midY + 9.0 * k + 4),
+              ],
+            ],
+            role);
+      }
+    } else {
+      lane++;
+      final laneX = -_polLaneGap * lane;
+      final y1 = ay + _polSubStrip + 6; // clear of the source's sub-label
+      final y2 = zy - 12;
+      prims
+        ..add(SldLine(ax, ay, ax, y1, weight: SldWeight.medium, role: role))
+        ..add(SldLine(ax, y1, laneX, y1, weight: SldWeight.medium, role: role))
+        ..add(SldLine(laneX, y1, laneX, y2,
+            weight: SldWeight.medium, role: role))
+        ..add(SldLine(laneX, y2, zx, y2, weight: SldWeight.medium, role: role))
+        ..add(SldLine(zx, y2, zx, zy, weight: SldWeight.medium, role: role));
+      if (label != null) {
+        final w = helveticaTextWidth(label, _polEdgeLabelSize);
+        placeLabel(
+            label,
+            [
+              for (var yy = y1 + 12; yy < y2; yy += 9) (laneX - 3 - w, yy),
+              (laneX - 3 - w, y1 - 3),
+            ],
+            role);
+      }
     }
   }
 

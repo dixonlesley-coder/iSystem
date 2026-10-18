@@ -71,7 +71,7 @@ class _OffsetDialogState extends ConsumerState<_OffsetDialog> {
 
   void _create() {
     final mm = double.tryParse(_text.trim());
-    if (mm == null || mm <= 0) {
+    if (mm == null || !mm.isFinite || mm <= 0) {
       setState(() => _error = 'Enter a distance in mm, e.g. 500');
       return;
     }
