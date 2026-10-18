@@ -19,6 +19,8 @@ import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
 import '../standards/puil.dart' show BreakerClass;
 import '../standards/sni.dart' show Revision;
+import '../units.dart' show Length;
+import 'plan_symbols.dart' show planLengthLabel;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 
@@ -413,7 +415,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
                   '${_n(c.cable.csaMm2)} mm²',
               // Run length (N8) — the figure that drove the printed Vdrop;
               // geo-derived when placed, else the manual length. Absent ⇒ '—'.
-              c.lengthM > 0 ? '${_n(c.lengthM)} m' : '—',
+              // One 0.1 m length format across every deliverable (Round 20
+              // follow-up): the board schedule prints the same figure.
+              c.lengthM > 0 ? planLengthLabel(Length(c.lengthM)) : '—',
               '${_n(c.voltageDrop.dropPercent)}% '
                   '(${_n(c.cumulativeDropPercent)}%)'
                   '${voltageDropOverLimit(c, isFeeder: feederIds.contains(c.circuitId)) ? ' ${strings(RptStringKey.verdictOver)}' : ''}',

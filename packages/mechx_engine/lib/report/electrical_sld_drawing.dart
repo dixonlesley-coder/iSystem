@@ -1192,7 +1192,7 @@ const double _assumedPanelPf = 0.85;
 }
 
 /// The feeder cable + breaker (+ run length) annotation for a resolvable feeder,
-/// e.g. `NYY 4x50 mm2 · MCCB 250A 3ph · 24 m`. The LENGTH (N8) is the run the
+/// e.g. `NYY 4x50 mm2 · MCCB 250A 3ph · 24.0 m`. The LENGTH (N8) is the run the
 /// solve already used for the feeder (geo-derived when placed, else the manual
 /// length) — appended only when a real length exists, never fabricated. Null
 /// when the child's feeding circuit or its sized result is unresolved (⇒ omit

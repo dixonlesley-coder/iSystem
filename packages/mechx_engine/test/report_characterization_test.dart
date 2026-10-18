@@ -178,7 +178,7 @@ void main() {
       expect(
           md,
           contains('| Feeder SP-1 | feeder | 2.5 A | 3ph | 16 A MCB/C | 4 mm² '
-              '| 30 m |'));
+              '| 30.0 m |'));
       // The warning section is INFO-only: `feeder-below-fed-demand` is cured by
       // the feeder floor, and both boards' imbalance is inherent (too few
       // single-phase ways for any assignment to even out) so the unactionable
@@ -229,8 +229,13 @@ void main() {
       // Type cell prints the LoadKind label ('HVAC', not 'hvac'); (c) each
       // warning names its code ('[phase-imbalance-inherent] '). Verified as the
       // SOLE deltas: reverting (a)-(c) reproduces 0x775ce2e6. Lines unchanged.
+      // Re-baselined 2026-10-18 (Round 20 follow-up): the way table's Length
+      // cell prints the plan's one 0.1 m format (`planLengthLabel`, `30.0 m`)
+      // so the report agrees with the board schedule. Verified as the SOLE
+      // delta: reverting that one cell reproduces the previous pin. Lines
+      // unchanged.
       expect(md.split('\n').length, 87);
-      expect(fnv1a32(md), 0xf53d8f);
+      expect(fnv1a32(md), 0x67042f6f);
     });
   });
 
@@ -344,7 +349,10 @@ void main() {
       // mechanical body's '· MechX' both read '· iSystem'. Verified as the
       // SOLE delta by diffing against the pre-change output. Lines unchanged.
       expect(md.split('\n').length, 215);
-      expect(fnv1a32(md), 0x7f6412d0);
+      // Re-baselined 2026-10-18 (Round 20 follow-up): the embedded
+      // electrical way table's Length cell is `30.0 m` (planLengthLabel) — the
+      // sole delta, as for the standalone electrical pin above.
+      expect(fnv1a32(md), 0xe90c0dc0);
     });
   });
 
