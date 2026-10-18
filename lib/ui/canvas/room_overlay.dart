@@ -374,7 +374,8 @@ class _RoomPainter extends CustomPainter {
     if (s == null) return r.name;
     final cfm = s.airflowCfm.round();
     final lps = s.airflow.inLitersPerSecond.round();
-    return '${r.name} · $cfm CFM ($lps L/s) · ${airEquipmentLabel(r.equipmentKind)}';
+    // Round 11 — the SIZED unit (an extract room's is a plain exhaust fan).
+    return '${r.name} · $cfm CFM ($lps L/s) · ${airEquipmentLabel(s.equipmentKind)}';
   }
 
   void _drawRect(Canvas canvas, Offset aw, Offset bw,

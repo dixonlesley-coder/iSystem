@@ -313,7 +313,11 @@ void main() {
   });
 
   group('elec-core-3 — parallel runs are derated as a group', () {
-    // 560 kW general load, 3φ 400 V, cosφ 0.85, PVC in conduit (B1), 30 °C,
+    // Round 11: these cases pin the GROUP derating of parallel runs, so they
+    // run on method E (free air / tray) — the PVC table whose figures are the
+    // ones derived below (300 mm² = 500 A). Conduit (B1) PVC now reads IEC
+    // B.52.4 B1 (300 mm² = 394 A), where 560 kW exceeds even 4 × 300 mm².
+    // 560 kW general load, 3φ 400 V, cosφ 0.85, PVC on tray (E), 30 °C,
     // panel grouping 1 ⇒ df = 1.0:
     //   Ib = 560 000 / (√3·400·0.85) = 560 000 / 588.897 = 950.93 A
     //   In = first rung ≥ 950.93 = 1000 A
@@ -335,6 +339,7 @@ void main() {
         deratingFactor: 1.0,
         minSectionMm2: 4,
         threePhase: true,
+        method: CableInstallMethod.tray,
       );
       expect(cable.runsPerPhase, 4);
       expect(cable.csaMm2, 300);
@@ -360,6 +365,7 @@ void main() {
         minSectionMm2: 4,
         threePhase: true,
         groupingCount: 2,
+        method: CableInstallMethod.tray,
       );
       expect(cable.runsPerPhase, 2);
       expect(cable.csaMm2, 240);
@@ -377,6 +383,7 @@ void main() {
         minSectionMm2: 4,
         threePhase: true,
         groupingCount: 3,
+        method: CableInstallMethod.tray,
       );
       expect(cable.runsPerPhase, isNull);
       expect(cable.csaMm2, 35);
@@ -390,6 +397,7 @@ void main() {
           id: 'MDP',
           name: 'MDP',
           ambientTempC: 30,
+          installMethod: CableInstallMethod.tray,
           circuits: [
             ElectricalCircuit(
               id: 'big',

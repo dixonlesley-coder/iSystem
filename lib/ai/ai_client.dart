@@ -239,7 +239,7 @@ class AnthropicAiClient implements AiClient {
         final name = block['name'];
         final input = block['input'];
         if (name is String && input is Map) {
-          final cmd = AiCommand.fromJson(name, input);
+          final cmd = AiCommand.tryFromJson(name, input);
           if (cmd != null) commands.add(cmd);
         }
       } else if (type == 'text' && block['text'] is String) {

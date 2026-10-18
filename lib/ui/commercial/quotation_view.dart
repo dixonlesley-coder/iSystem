@@ -184,6 +184,9 @@ class _NumberRow extends ConsumerWidget {
   }
 
   // Plain (un-grouped) edit value so it parses back cleanly.
-  static String _editValue(double v) =>
-      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+  static String _editValue(double v) {
+    // Round 11 — a non-finite value (legacy file) renders blank, never throws.
+    if (!v.isFinite) return '';
+    return v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(2);
+  }
 }

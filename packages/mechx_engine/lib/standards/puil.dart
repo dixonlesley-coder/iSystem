@@ -379,10 +379,30 @@ class PuilProfile implements ElectricalStandardsProfile {
         CableInstallMethod.buried => RefMethod.d,
       };
 
-  // Base KHA, copper / PVC, 30 °C, reference method B1 (Supreme NYY "in air").
-  static final Map<double, double> _khaCuPvcB1 = {
+  // Base KHA, copper / PVC, 30 °C, METHOD E (Supreme NYY "in air" — the
+  // catalogue figures match IEC 60364-5-52 Table B.52.10 method E multicore,
+  // three loaded conductors). Round 11: this table used to be read for B1
+  // (conduit) and C (wall) as well, overrating every PVC conduit run 18–27 %
+  // (16 mm² read 80 A in conduit vs the IEC B1 68 A) while XLPE ranked by
+  // method — PVC/XLPE at B1 read 0.91 here vs 0.77 in IEC.
+  static final Map<double, double> _khaCuPvcE = {
     1.5: 18, 2.5: 25, 4: 34, 6: 44, 10: 60, 16: 80, 25: 105, 35: 130,
     50: 160, 70: 200, 95: 245, 120: 285, 150: 325, 185: 370, 240: 435, 300: 500,
+  };
+  // Copper / PVC (70 °C), METHOD B1 (insulated conductors in conduit / trunking
+  // on a wall) — IEC 60364-5-52 Table B.52.4 column B1, THREE loaded conductors
+  // (the same 3-loaded basis as every XLPE column). Round 11.
+  // VERIFY — secondarySource (IEC table, not a PUIL clause).
+  static final Map<double, double> _khaCuPvcB1 = {
+    1.5: 15.5, 2.5: 21, 4: 28, 6: 36, 10: 50, 16: 68, 25: 89, 35: 110,
+    50: 134, 70: 171, 95: 207, 120: 239, 150: 262, 185: 296, 240: 346, 300: 394,
+  };
+  // Copper / PVC (70 °C), METHOD C (clipped direct to a surface) — IEC
+  // 60364-5-52 Table B.52.4 column C, THREE loaded conductors. Round 11.
+  // VERIFY — secondarySource (IEC table, not a PUIL clause).
+  static final Map<double, double> _khaCuPvcC = {
+    1.5: 17.5, 2.5: 24, 4: 32, 6: 41, 10: 57, 16: 76, 25: 96, 35: 119,
+    50: 144, 70: 184, 95: 223, 120: 259, 150: 299, 185: 341, 240: 403, 300: 464,
   };
   // Base KHA, copper / XLPE (90 °C), method B1 (~IEC 60364-5-52 Table B.52.5
   // column B1, three loaded conductors).
@@ -390,7 +410,7 @@ class PuilProfile implements ElectricalStandardsProfile {
     1.5: 20, 2.5: 28, 4: 37, 6: 48, 10: 66, 16: 88, 25: 117, 35: 144,
     50: 175, 70: 222, 95: 269, 120: 312, 150: 358, 185: 408, 240: 481, 300: 553,
   };
-  // Copper/PVC by method C/E (== B1 "in air") and D (buried).
+  // Copper/PVC by method D (buried).
   //
   // D is IEC 60364-5-52 Table B.52.4 column D1 (in duct in the ground,
   // 20 °C ground, 2.5 K·m/W soil), THREE loaded conductors — the SAME basis as
@@ -443,9 +463,10 @@ class PuilProfile implements ElectricalStandardsProfile {
     double cu;
     if (insulation == ConductorInsulation.pvc) {
       cu = switch (ref) {
-        // C/E read the "in air" base table; D reads "in ground".
-        RefMethod.b1 || RefMethod.c || RefMethod.e =>
-          _khaCuPvcB1[sectionMm2] ?? 0,
+        // Round 11 — PVC ranks by method exactly like XLPE (B1 ≤ C ≤ E).
+        RefMethod.b1 => _khaCuPvcB1[sectionMm2] ?? 0,
+        RefMethod.c => _khaCuPvcC[sectionMm2] ?? 0,
+        RefMethod.e => _khaCuPvcE[sectionMm2] ?? 0,
         RefMethod.d => _khaCuPvcD[sectionMm2] ?? 0,
       };
     } else {
@@ -740,10 +761,12 @@ class PuilProfile implements ElectricalStandardsProfile {
               'moved onto the IEC 60364-5-52 three-loaded-conductor basis '
               '(PVC Table B.52.4 D1; XLPE Table B.52.5 B1/C/D1 and Table '
               'B.52.12 E). Like-for-like (same IEC 3-loaded basis, XLPE >= '
-              'PVC) therefore holds for method D and for the XLPE columns; '
-              'PVC methods B1, C and E all read ONE Supreme NYY "in air" '
-              'catalogue table (not separate IEC columns), so the PVC-vs-XLPE '
-              'comparison at B1/C/E is catalogue-vs-IEC, not one basis.',
+              'PVC) therefore holds for method D and for the XLPE columns. '
+              '2026-10-18 (Round 11): PVC B1 (conduit) and C (wall) now read '
+              'their own IEC Table B.52.4 3-loaded columns (B1 16 mm2 = 68 A, '
+              'C = 76 A); only PVC method E keeps the Supreme NYY "in air" '
+              'catalogue figures (which match Table B.52.10 method E), so '
+              'every PVC column ranks conduit <= wall <= air like XLPE.',
         ),
         const StandardValue<Object?>(
           'ambient / grouping / soil-thermal derating factors',

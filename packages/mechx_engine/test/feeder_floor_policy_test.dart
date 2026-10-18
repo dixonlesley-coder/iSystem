@@ -25,8 +25,12 @@
 /// Every expected value is hand-derived from the `PuilProfile` tables:
 ///   - breaker ladder: 6 10 16 20 25 32 40 50 63 | 80 100 125 160 200 250 315
 ///     400 500 630 800 1000 1250 1600 A;
-///   - KHA, Cu/PVC, reference method B1 (conduit): 1.5→18, 2.5→25, 4→34, 6→44,
-///     10→60, 16→80, 25→105, 35→130, 50→160, 70→200 A;
+///   - KHA, Cu/PVC, reference method E (the `_twoBoard` fixture boards are laid
+///     on tray — Round 11 split conduit B1 onto IEC B.52.4 B1, so the fixture
+///     pins the method whose table these derivations use): 1.5→18, 2.5→25,
+///     4→34, 6→44, 10→60, 16→80, 25→105, 35→130, 50→160, 70→200 A. The W-SIM
+///     office (group 6) stays on conduit and reads B1 (Round 11): 1.5→15.5,
+///     2.5→21, 4→28, 6→36, 10→50, 16→68, 25→89, 35→110 A;
 ///   - ambient air factors (PVC): 30 °C → 1.00, 35 °C → 0.94;
 ///   - grouping factors: 1 → 1.00, 6 → 0.57;
 ///   - PUIL continuous-load factor 1.25 (Iz ≥ max(In, 1.25·Ib));
@@ -70,6 +74,7 @@ ElectricalProject _twoBoard({
         ElectricalPanel(
           id: 'MDP',
           name: 'Main',
+          installMethod: CableInstallMethod.tray,
           circuits: [
             ElectricalCircuit(
               id: 'f1',
@@ -85,6 +90,7 @@ ElectricalProject _twoBoard({
         ElectricalPanel(
           id: 'SP',
           name: 'Sub',
+          installMethod: CableInstallMethod.tray,
           sourceType: PanelSource.feeder,
           fedByCircuitId: 'f1',
           circuits: [
@@ -423,21 +429,22 @@ void main() {
       //   Ib = 27 157.5 / (√3·400·0.89432) = 27 157.5 / 619.61 = 43.83 → 43.8 A
       //   ⇒ LOAD-SIZED device = first rung ≥ 43.83 = 50 A.
       // CABLE: MDP is 35 °C / grouping 6 / conduit ⇒ derating
-      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 43.83 = 54.79) = 54.79 A:
-      //   25 mm² → 105 × 0.5358 = 56.3 A ✓  ⇒ 25 mm², Iz 56.3 A
-      //   (the old policy landed on 150 mm²; the 0.85-pf basis on 35 mm²).
+      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 43.83 = 54.79) = 54.79 A.
+      //   Re-derived Round 11 — conduit reads IEC B.52.4 B1:
+      //   25 mm² → 89 × 0.5358 = 47.7 A ✗; 35 mm² → 110 × 0.5358 = 58.9 A ✓
+      //   ⇒ 35 mm², Iz 58.9 A (the old policy landed on 150 mm²).
       final f = _way(mdp, 'mdp-f-pp1');
       expect(f.designCurrent.amperes, 43.8);
-      expect(f.cable.csaMm2, 25.0);
-      expect(f.cable.deratedIz.amperes, closeTo(56.3, 0.05));
-      // The conductor is proportionate: 56.3/43.8 = 1.29 — just over the 1.25
-      // continuous margin.
+      expect(f.cable.csaMm2, 35.0);
+      expect(f.cable.deratedIz.amperes, closeTo(58.9, 0.05));
+      // The conductor is proportionate: 58.9/43.8 = 1.35 — one section step
+      // over the 1.25 continuous margin.
       expect(f.cable.deratedIz.amperes / f.designCurrent.amperes,
           lessThan(1.6));
 
       // DEVICE: PP-1's incomer is 80 A (58.0 A worst phase × 1.25 headroom ⇒
       // 72.5 ⇒ rung 80), so the floor target is 1.6 × 80 = 128 ⇒ rung 160 A.
-      // The cap is Iz 56.3 ⇒ the largest rung ≤ 56.3 is 50 A, so the floor
+      // The cap is Iz 58.9 ⇒ the largest rung ≤ 58.9 is 50 A, so the floor
       // cannot lift the device at all (CAP-limited ⇒ not listed).
       expect(sys.panels['pp1']!.incomer.breaker.ratingA.amperes, 80);
       expect(f.breaker.ratingA.amperes, 50);
@@ -451,17 +458,18 @@ void main() {
       // is cos 0.9 ⇒ pf = 5620 / (5620/0.9) = 0.9. So
       //   Ib = 5058 / (220 × 0.9) = 25.545 A → 25.5 A
       //   ⇒ LOAD-SIZED device = first rung ≥ 25.55 = 32 A.
-      // CABLE: Iz ≥ max(32, 1.25 × 25.545 = 31.93) = 32 A at derating 0.5358:
-      //   10 mm² → 60 × 0.5358 = 32.1 ✓  ⇒ 10 mm² (the old policy: 50 mm²).
+      // CABLE: Iz ≥ max(32, 1.25 × 25.545 = 31.93) = 32 A at derating 0.5358.
+      //   Re-derived Round 11 (conduit = IEC B.52.4 B1): 10 mm² → 50 × 0.5358
+      //   = 26.8 ✗; 16 mm² → 68 × 0.5358 = 36.4 ✓ ⇒ 16 mm² (old policy: 50).
       final f = _way(mdp, 'mdp-f-lp3');
       expect(f.threePhase, isFalse);
       expect(f.designCurrent.amperes, 25.5);
-      expect(f.cable.csaMm2, 10.0);
-      expect(f.cable.deratedIz.amperes, closeTo(32.1, 0.05));
+      expect(f.cable.csaMm2, 16.0);
+      expect(f.cable.deratedIz.amperes, closeTo(36.4, 0.05));
 
       // DEVICE: LP-3's incomer is 40 A (28.5 A × 1.20 headroom = 34.2 ⇒ 40), so
-      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. The cap is Iz 32.1 ⇒ the
-      // largest rung ≤ 32.1 is 32 A: the device stays at its load pick. Copper
+      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. The cap is Iz 36.4 ⇒ the
+      // largest rung ≤ 36.4 is 32 A: the device stays at its load pick. Copper
       // never moved.
       expect(sys.panels['lp3']!.incomer.breaker.ratingA.amperes, 40);
       expect(f.breaker.ratingA.amperes, 32);

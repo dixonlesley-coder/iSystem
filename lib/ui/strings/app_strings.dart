@@ -1110,6 +1110,14 @@ enum StringKey {
   bomNotMeasured,
   bomCalibrateHintOne,
   bomCalibrateHint, // {n}
+
+  /// Round 11 (2026-10-18) — numeric field rejection captions: a non-finite
+  /// entry ('NaN', 'Infinity', '1e999') and the independent min / max bounds.
+  numInputNotFinite,
+  numInputRange, // {min} {max}
+  numInputMin, // {min}
+  numInputMax, // {max}
+  roomExtractGrilleCount, // {n}
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -2348,6 +2356,13 @@ const Map<StringKey, String> _en = {
   StringKey.bomNotMeasured: 'not measured',
   StringKey.bomCalibrateHintOne: 'Calibrate the sheet to measure 1 run',
   StringKey.bomCalibrateHint: 'Calibrate the sheet to measure {n} runs',
+
+  // Round 11 (2026-10-18).
+  StringKey.numInputNotFinite: 'Enter a finite number',
+  StringKey.numInputRange: 'Enter a value between {min} and {max}',
+  StringKey.numInputMin: 'Enter a value of at least {min}',
+  StringKey.numInputMax: 'Enter a value of at most {max}',
+  StringKey.roomExtractGrilleCount: '{n} exhaust',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -3601,6 +3616,13 @@ const Map<StringKey, String> _id = {
   StringKey.bomNotMeasured: 'belum diukur',
   StringKey.bomCalibrateHintOne: 'Kalibrasi lembar untuk mengukur 1 jalur',
   StringKey.bomCalibrateHint: 'Kalibrasi lembar untuk mengukur {n} jalur',
+
+  // Round 11 (2026-10-18).
+  StringKey.numInputNotFinite: 'Masukkan angka yang terhingga',
+  StringKey.numInputRange: 'Masukkan nilai antara {min} dan {max}',
+  StringKey.numInputMin: 'Masukkan nilai minimal {min}',
+  StringKey.numInputMax: 'Masukkan nilai maksimal {max}',
+  StringKey.roomExtractGrilleCount: '{n} buang',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

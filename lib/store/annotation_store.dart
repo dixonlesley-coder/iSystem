@@ -509,6 +509,9 @@ class RoomArea {
       grilleApplication: profile.grilleApplicationFor(roomType),
       ductShape: ductShape,
       ductMethod: ductMethod,
+      // Round 11 (hvac-network-2) — a toilet / kitchen is EXTRACTED: exhaust
+      // grilles + an exhaust fan, never supply nor recirculated return air.
+      extractOnly: isExtractRoomType(roomType),
     );
   }
 

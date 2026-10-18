@@ -582,6 +582,15 @@ class CircuitFaultResult {
   /// (TT clears earth faults via the RCD, already modelled).
   final bool? adsOk;
 
+  /// Round 11 — true when the way's RCD (not its overcurrent device) is what
+  /// satisfies ADS in TN: IEC 60364-4-41 411.4.5 lets an RCD provide the
+  /// disconnection when Zs × IΔn ≤ U0. False otherwise (and for TT).
+  final bool adsByRcd;
+
+  /// Round 11 — the permitted disconnection time (s) the TN verdict was judged
+  /// against (0.4 or 5); null for TT.
+  final double? disconnectionTimeS;
+
   const CircuitFaultResult({
     required this.circuitId,
     required this.panelId,
@@ -591,8 +600,36 @@ class CircuitFaultResult {
     this.zsOhm,
     this.zsMaxOhm,
     this.adsOk,
+    this.adsByRcd = false,
+    this.disconnectionTimeS,
   });
 }
+
+/// Round 11 — the magnetic multiple Ia/In that guarantees disconnection within
+/// the 5 s limit IEC 60364-4-41 411.3.2.3 permits for DISTRIBUTION circuits and
+/// TN FINAL circuits above 32 A (the 0.4 s [curveTripMultiple] applies to
+/// finals ≤ 32 A). A type D device clears inside 5 s at 10 × In (vs 20 × In for
+/// 0.4 s); B and C are unchanged (their 0.4 s multiple already sits in the
+/// instantaneous band). Using the 0.4 s multiple everywhere raised a false
+/// `ads-disconnection` ERROR on ordinary D-curve pump / motor runs.
+// VERIFY — secondarySource (BS 7671 Table 41.4 / IEC 60898 time-current
+// bands; not a PUIL clause).
+const Map<BreakerCurve, double> curveTripMultiple5s = {
+  BreakerCurve.b: 5,
+  BreakerCurve.c: 10,
+  BreakerCurve.d: 10,
+};
+
+/// The final-circuit rating (A) above which IEC 60364-4-41 411.3.2.3 allows the
+/// 5 s disconnection time in TN (finals ≤ this must clear in 0.4 s).
+// VERIFY — secondarySource (IEC 60364-4-41 Table 41.1 note, 32 A boundary).
+const double kAds04sMaxFinalRatingA = 32;
+
+/// The permitted ADS disconnection time (s) for a TN circuit (Round 11): 5 s for
+/// a distribution circuit (a feeder) or a final above [kAds04sMaxFinalRatingA],
+/// else 0.4 s.
+double adsDisconnectionTimeS({required bool isFeeder, required double ratingA}) =>
+    (isFeeder || ratingA > kAds04sMaxFinalRatingA + 1e-9) ? 5.0 : 0.4;
 
 /// Service-vs-ultimate breaking-capacity ratio (Ics/Icu) per device class.
 /// MCCBs are commonly rated Ics = 50–100 % Icu; small MCBs are effectively
@@ -893,6 +930,8 @@ FaultStudyResult faultStudy(
       double? zsOhm;
       double? zsMaxOhm;
       bool? adsOk;
+      var adsByRcd = false;
+      double? disconnectionTimeS;
       if (isTn) {
         final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
         // Zs on the run the cable + Vd were sized on (geo-derived when placed),
@@ -911,12 +950,34 @@ FaultStudyResult faultStudy(
         // return + this circuit's own phase + PE (elec-advanced-2).
         final loop = sourceZHot + peReturnZ + phaseZ + peZ;
         final zs = loop.magnitude;
-        final ia = (curveTripMultiple[c.breaker.curve] ?? 10) *
+        // Round 11 — the magnetic multiple follows the PERMITTED disconnection
+        // time: 5 s for a feeder / a final > 32 A, 0.4 s otherwise.
+        final isFeeder =
+            cModel?.isFeeder ?? (c.loadKind == LoadKind.feeder);
+        final tDisc = adsDisconnectionTimeS(
+            isFeeder: isFeeder, ratingA: c.breaker.ratingA.amperes);
+        disconnectionTimeS = tDisc;
+        final multiples =
+            tDisc >= 5.0 ? curveTripMultiple5s : curveTripMultiple;
+        final ia = (multiples[c.breaker.curve] ?? 10) *
             c.breaker.ratingA.amperes;
-        final zsMax = ia > 0 ? (zsVoltageFactor * u0PhaseVoltageV) / ia : double.infinity;
+        final zsMaxOcpd =
+            ia > 0 ? (zsVoltageFactor * u0PhaseVoltageV) / ia : double.infinity;
+        // Round 11 — an RCD on the way may provide ADS (IEC 60364-4-41
+        // 411.4.5: Zs × IΔn ≤ U0); the governing limit is the more lenient of
+        // the two devices, and the RCD is reported as the disconnecting device
+        // when only it satisfies the loop.
+        final idnA = c.rcd.required && c.rcd.ratingMa > 0
+            ? c.rcd.ratingMa / 1000.0
+            : 0.0;
+        final zsMaxRcd = idnA > 0
+            ? (zsVoltageFactor * u0PhaseVoltageV) / idnA
+            : 0.0;
+        final zsMax = zsMaxRcd > zsMaxOcpd ? zsMaxRcd : zsMaxOcpd;
         zsOhm = _round(zs, 3);
         zsMaxOhm = zsMax.isFinite ? _round(zsMax, 3) : zsMax;
         adsOk = zs <= zsMax + 1e-9;
+        adsByRcd = adsOk && zs > zsMaxOcpd + 1e-9;
         if (!adsOk) {
           warnings.add(ElectricalWarning(
             code: 'ads-disconnection',
@@ -924,8 +985,8 @@ FaultStudyResult faultStudy(
             message:
                 '${panelResult.name} / ${c.name}: earth-fault loop Zs '
                 '${_fmt(zsOhm)} Ω exceeds the ${_fmt(zsMaxOhm)} Ω limit for '
-                'disconnection in time — shorten the run, increase the CSA, or '
-                'fit an RCD.',
+                'disconnection in ${_fmt(tDisc)} s — shorten the run, increase '
+                'the CSA${c.rcd.required ? '' : ', or fit an RCD'}.',
             panelId: panelId,
             circuitId: c.circuitId,
           ));
@@ -958,6 +1019,8 @@ FaultStudyResult faultStudy(
         breakerKa: ka,
         zsOhm: zsOhm,
         zsMaxOhm: zsMaxOhm,
+        adsByRcd: adsByRcd,
+        disconnectionTimeS: disconnectionTimeS,
         adsOk: adsOk,
       );
     }

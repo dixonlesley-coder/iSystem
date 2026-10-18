@@ -19,6 +19,15 @@ import '../standards/puil.dart' show BreakerCurve;
 // motorKw→FLC table).
 const double kAssumedMotorEfficiency = 0.88;
 
+/// Round 11 — the switching / protection current multiple for a capacitor-bank
+/// way, over its rated current: IEC 60831-1 lets a shunt capacitor carry 1.3 ×
+/// its rated current continuously (harmonics + overvoltage), and the
+/// capacitance tolerance adds up to 1.1 × — so the device and conductor size on
+/// 1.3 × 1.1 ≈ 1.43 × Ib, not Ib (IEC 60364-5-55 / manufacturer practice).
+// VERIFY — secondarySource (IEC 60831-1 / manufacturer selection practice; not
+// a PUIL clause).
+const double kCapacitorSwitchingFactor = 1.43;
+
 /// The kinds of electrical load the engine knows defaults for. Mirrors
 /// PanelMaker's `LoadKind` (ev_charger → [evCharger]).
 enum LoadKind {
