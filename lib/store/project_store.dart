@@ -7,6 +7,7 @@ import 'package:mechx_engine/units.dart';
 import 'floor_remap.dart';
 import 'history_store.dart';
 import 'network_store.dart';
+import 'sheets_store.dart';
 
 /// Editable project: name, the building's [floors] (the source of truth for
 /// riser/vertical length, §10), and per-sheet [calibrations] (px → real length,
@@ -258,11 +259,15 @@ class ProjectController extends Notifier<ProjectState> {
       for (var k = 0; k < count; k++)
         Floor('Basement ${existing + count - k}', h),
     ];
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    final oldLevels = state.floors.length;
     state = state.copyWith(
       floors: [...added, ...state.floors],
       groundIndex: state.groundIndex + count,
     );
+    _remapSheetFloors(oldLevels, insertedIndex: 0, insertedCount: count);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           insertedIndex: 0,
@@ -323,7 +328,10 @@ class ProjectController extends Notifier<ProjectState> {
     if (index < 0 || index >= state.floors.length || state.floors.length <= 1) {
       return;
     }
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    final oldLevels = state.floors.length;
     final floors = [...state.floors]..removeAt(index);
     // Removing a BELOW-ground floor slides the datum down one slot so the same
     // physical floor stays "ground"; removing ground-or-above leaves the datum
@@ -333,6 +341,7 @@ class ProjectController extends Notifier<ProjectState> {
             : state.groundIndex)
         .clamp(0, floors.length - 1);
     state = state.copyWith(floors: floors, groundIndex: nextGround);
+    _remapSheetFloors(oldLevels, removedIndex: index);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           removedIndex: index,
@@ -345,6 +354,46 @@ class ProjectController extends Notifier<ProjectState> {
         ref.read,
         (_, fi) =>
             shiftFloorIndex(fi, levelCount: levels, removedIndex: index));
+  }
+
+  /// roundtrip-1 — a stack edit that SHIFTS existing floor indices (a basement
+  /// insert, a floor removal) moves every drawn node with its physical floor;
+  /// each sheet's floor mapping must move the SAME way, or the canvas (which
+  /// matches sheetId AND floorIndex) and every per-sheet plan export lose the
+  /// sheet's work and relabel it a storey off. Applies [shiftFloorIndex] to each
+  /// sheet's effective floor (explicit override or rail position, against the
+  /// PRE-edit [oldLevelCount]) and writes the result as an explicit mapping,
+  /// WITHOUT a separate undo entry (the caller's structural snapshot captured
+  /// the sheets). A sheet whose own floor was removed falls to the floor below
+  /// (its drawn work went with the floor). No sheets ⇒ no-op.
+  void _remapSheetFloors(
+    int oldLevelCount, {
+    int? removedIndex,
+    int? insertedIndex,
+    int insertedCount = 0,
+  }) {
+    final sheets = ref.read(sheetsControllerProvider);
+    if (sheets.sheets.isEmpty) return;
+    final levels = state.floors.length;
+    final next = Map<String, int>.from(sheets.sheetFloors);
+    var changed = false;
+    for (final sheet in sheets.sheets) {
+      final old = sheets.floorFor(sheet.id, oldLevelCount);
+      final moved = shiftFloorIndex(old,
+              levelCount: levels,
+              removedIndex: removedIndex,
+              insertedIndex: insertedIndex,
+              insertedCount: insertedCount) ??
+          (old - 1).clamp(0, levels - 1);
+      if (moved != old || next.containsKey(sheet.id)) {
+        if (next[sheet.id] != moved) changed = true;
+        next[sheet.id] = moved;
+      }
+    }
+    if (!changed) return;
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .restoreState(sheets.copyWith(sheetFloors: next));
   }
 
   void renameFloor(int index, String name) {

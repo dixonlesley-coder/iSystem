@@ -756,6 +756,45 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
+  // ── 3e. UPFEED fixture over-pressure (mech-building-2) ─────────────────────
+  // The downfeed PRV zones above are compliant by construction and say
+  // nothing about an UPFEED riser, whose pump delivers nearly its whole head
+  // to the lowest fixtures. Each delivery node whose flowing residual or
+  // no-flow static exceeds the SNI max fixture pressure is its own WARNING; at
+  // the mandatory pressure-relief threshold it is CRITICAL. Judge-only,
+  // locatable to the node.
+  final overPressure = ref.watch(upfeedOverPressureProvider);
+  if (overPressure.isNotEmpty) {
+    const sni = SniProfile();
+    final maxFixKpa = sni.maxFixtureStaticPressure.value.inKiloPascals;
+    final reliefKpa = sni.mandatoryPressureReliefThreshold.value.inKiloPascals;
+    final floors = project.building.floors;
+    for (final o in overPressure) {
+      final node = nodeById[o.nodeId];
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      warnings.add(DesignIssue(
+        severity:
+            o.overRelief ? IssueSeverity.critical : IssueSeverity.warning,
+        kind: 'upfeed-over-pressure:${o.nodeId}',
+        title: o.overRelief
+            ? str(StringKey.issueUpfeedOverReliefTitle)
+            : str(StringKey.issueUpfeedOverPressureTitle),
+        message: str.format(StringKey.issueUpfeedOverPressureMessage, {
+          'floor': floorName,
+          'flowing': o.flowing.inKiloPascals.toStringAsFixed(0),
+          'static': o.noFlow.inKiloPascals.toStringAsFixed(0),
+          'limit': maxFixKpa.toStringAsFixed(0),
+          'relief': reliefKpa.toStringAsFixed(0),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: o.nodeId),
+      ));
+    }
+  }
+
   // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
   // Each advisory is edge-locatable via the edge's `from` node sheet. Title is
   // fixed (golden-friendly); the engine message carries the specifics.

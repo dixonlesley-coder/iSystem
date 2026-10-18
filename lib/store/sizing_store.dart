@@ -158,6 +158,9 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
     nodeFlowDemand: nodeFlowDemand,
     sizeOverrides: sizeOverrides,
     sprinklerDemandCap: sprinklerRemote.remoteAreaDemand,
+    // mech-building-5 — the hydrant riser/trunk carries the standpipe design
+    // flow the fire pump is sized on (one system, one flow), not Σ boxes.
+    hydrantDesignFlow: ref.watch(standpipeDesignProvider).requiredFlow,
     flushSystem:
         anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
     // Geometry lets looped (ring) mains balance their flow split against REAL

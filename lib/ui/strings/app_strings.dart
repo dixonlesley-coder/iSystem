@@ -662,6 +662,11 @@ enum StringKey {
   issuePressureZoneTitle,
   issuePressureZoneMessage, // {bottom} {top} {kpa} {limit}
 
+  // mech-building-2 — an UPFEED delivery node over the SNI fixture limits.
+  issueUpfeedOverPressureTitle,
+  issueUpfeedOverReliefTitle,
+  issueUpfeedOverPressureMessage, // {floor} {flowing} {static} {limit} {relief}
+
   // I6 — document-control revision inconsistency (revision history logged but
   // the title-block Revision left blank).
   issueRevisionTagMissingTitle,
@@ -1864,6 +1869,15 @@ const Map<StringKey, String> _en = {
       'The pressure zone from "{bottom}" to "{top}" reaches {kpa} kPa static at '
       'its lowest fixture, above the SNI max fixture static of {limit} kPa. Add '
       'a PRV / break-tank to split the zone.',
+  StringKey.issueUpfeedOverPressureTitle:
+      'Upfeed fixture over the pressure limit',
+  StringKey.issueUpfeedOverReliefTitle:
+      'Upfeed fixture over the pressure-relief limit',
+  StringKey.issueUpfeedOverPressureMessage:
+      'A fixture on "{floor}" sees {flowing} kPa flowing and {static} kPa at '
+      'no flow from the upfeed pump, above the SNI max fixture pressure of '
+      '{limit} kPa (pressure relief is mandatory from {relief} kPa). Zone the '
+      'riser with PRVs on the lower floors.',
   StringKey.issueRevisionTagMissingTitle: 'Revision not set for logged history',
   StringKey.issueRevisionTagMissingMessage:
       'The revision history has entries but the title-block Revision is blank, '
@@ -3073,6 +3087,15 @@ const Map<StringKey, String> _id = {
       'Zona tekanan dari "{bottom}" hingga "{top}" mencapai {kpa} kPa statik di '
       'fikstur terendahnya, di atas tekanan statik fikstur maksimum SNI {limit} '
       'kPa. Tambahkan PRV / tangki pemutus untuk membagi zona.',
+  StringKey.issueUpfeedOverPressureTitle:
+      'Fikstur upfeed melebihi batas tekanan',
+  StringKey.issueUpfeedOverReliefTitle:
+      'Fikstur upfeed melebihi batas pelepas tekanan',
+  StringKey.issueUpfeedOverPressureMessage:
+      'Sebuah fikstur di "{floor}" menerima {flowing} kPa saat mengalir dan '
+      '{static} kPa saat tanpa aliran dari pompa upfeed, di atas tekanan '
+      'fikstur maksimum SNI {limit} kPa (pelepas tekanan wajib mulai {relief} '
+      'kPa). Bagi riser dengan PRV di lantai bawah.',
   StringKey.issueRevisionTagMissingTitle:
       'Revisi belum diisi untuk riwayat yang tercatat',
   StringKey.issueRevisionTagMissingMessage:

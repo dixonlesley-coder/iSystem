@@ -101,12 +101,73 @@ class PressureSolution {
   /// really can push them below target — see [DownfeedSolution]).
   final bool targetHeldByDesign;
 
+  /// mech-building-2 — the NO-FLOW static pressure at each reachable node:
+  /// the pump head less the node's elevation gain (friction vanishes at zero
+  /// flow), i.e. `residual + friction`. On an upfeed the LOWEST fixtures see
+  /// nearly the whole pump head, which is exactly what the SNI maximum fixture
+  /// pressure / mandatory pressure-relief trigger judge. Empty for a result
+  /// built without it (byte-identical for legacy constructions).
+  final Map<String, Pressure> noFlowStaticPressure;
+
+  /// The DELIVERY nodes (fixtures, else open leaves) the residual is a
+  /// requirement at — the set a fixture-pressure check judges.
+  final Set<String> deliveryNodeIds;
+
   const PressureSolution({
     required this.residualPressure,
     required this.requiredPumpHead,
     required this.criticalNodeId,
     this.targetHeldByDesign = false,
+    this.noFlowStaticPressure = const {},
+    this.deliveryNodeIds = const {},
   });
+}
+
+/// One upfeed DELIVERY node whose pressure exceeds the SNI fixture limits
+/// (mech-building-2): [flowing] is the solved residual, [noFlow] the static
+/// at zero flow. [overRelief] when the no-flow static reaches the mandatory
+/// pressure-relief threshold (5 kgf/cm²); otherwise it is over the 4 kgf/cm²
+/// maximum fixture pressure.
+typedef UpfeedOverPressure = ({
+  String nodeId,
+  Pressure flowing,
+  Pressure noFlow,
+  bool overRelief,
+});
+
+/// JUDGE-ONLY upfeed fixture over-pressure check (mech-building-2). An upfeed
+/// pump sized to hold the target at the TOP fixture delivers nearly its whole
+/// head to the BOTTOM fixtures: on 8 × 3.5 m the ground-floor residual is
+/// ≈ 488 kPa flowing and ≈ 491 kPa at no flow — over the SNI 8153 392 kPa
+/// maximum and the 490 kPa mandatory-relief trigger — yet only the DOWNFEED
+/// PRV zones (compliant by construction) were ever judged. Every delivery node
+/// whose flowing residual OR no-flow static exceeds
+/// [SniProfile.maxFixtureStaticPressure] is returned (worst first); never
+/// resizes. Empty for a solution with no delivery set (legacy construction).
+List<UpfeedOverPressure> upfeedOverPressure(
+  PressureSolution solution, {
+  StandardsProfile profile = const SniProfile(),
+}) {
+  final maxFix = profile.maxFixtureStaticPressure.value.pascals;
+  final relief = profile.mandatoryPressureReliefThreshold.value.pascals;
+  final out = <UpfeedOverPressure>[];
+  for (final id in solution.deliveryNodeIds) {
+    final flowing = solution.residualPressure[id];
+    final noFlow = solution.noFlowStaticPressure[id];
+    if (flowing == null || noFlow == null) continue;
+    if (flowing.pascals <= maxFix && noFlow.pascals <= maxFix) continue;
+    out.add((
+      nodeId: id,
+      flowing: flowing,
+      noFlow: noFlow,
+      overRelief: noFlow.pascals >= relief,
+    ));
+  }
+  out.sort((a, b) {
+    final c = b.noFlow.pascals.compareTo(a.noFlow.pascals);
+    return c != 0 ? c : a.nodeId.compareTo(b.nodeId);
+  });
+  return out;
 }
 
 /// The DELIVERY nodes among [reached] — the points the design residual is a
@@ -263,12 +324,16 @@ PressureSolution solvePressurized({
     }
   });
 
-  // residual(node) = pump - friction(node) - elevationGain(node), as pressure.
+  // residual(node) = pump - friction(node) - elevationGain(node), as pressure;
+  // the no-flow static drops the friction term (mech-building-2).
   final residualPressure = <String, Pressure>{};
+  final noFlowStatic = <String, Pressure>{};
   costs.forEach((nodeId, cost) {
     final residualHead =
         requiredPumpHead - cost.friction.meters - cost.elevationGain.meters;
     residualPressure[nodeId] = pressureFromHead(Head(residualHead));
+    noFlowStatic[nodeId] =
+        pressureFromHead(Head(requiredPumpHead - cost.elevationGain.meters));
   });
 
   return PressureSolution(
@@ -279,6 +344,8 @@ PressureSolution solvePressurized({
     // target), so every residual is ≥ target as an algebraic identity — the
     // numbers are unchanged, but the consumer must not read them as a verdict.
     targetHeldByDesign: true,
+    noFlowStaticPressure: noFlowStatic,
+    deliveryNodeIds: delivery.difference({sourceId}),
   );
 }
 

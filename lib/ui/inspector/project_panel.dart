@@ -148,7 +148,12 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     pump: ref.read(pumpDutyProvider),
     boosterHead: downfeed?.boosterHeadRequired,
     gravitySufficient: downfeed?.gravitySufficient ?? false,
-    zones: ref.read(zoneStaticsProvider),
+    // mech-building-2 — the PRV zone table is a DOWNFEED design (compliant by
+    // construction); on an upfeed it said nothing about the pump's real
+    // lower-floor pressures (judged in Review instead), so it is not printed.
+    zones: strategy == FeedStrategy.downfeed
+        ? ref.read(zoneStaticsProvider)
+        : const [],
     hotWaterRecirc: ref.read(hotWaterRecircProvider),
     sprinkler: ref.read(sprinklerDesignProvider),
     standpipe: ref.read(standpipeDesignProvider),

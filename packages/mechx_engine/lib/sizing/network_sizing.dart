@@ -578,7 +578,10 @@ Map<String, EdgeSizing> sizeNetwork(
 ///    atmosphere);
 ///  • demand-free leaves — on a supply (pressurized/air) service the leaf the
 ///    run was DRAWN FROM (the `fromId` of its edge — a property of the drawn
-///    data, not of the order edges were added), then the lowest; on a gravity
+///    data, not of the order edges were added), then a leaf on a RISER end
+///    (the vertical supply connection — a roof tank or riser-base entry, not
+///    an open horizontal run end awaiting its fixture), then the lowest; on a
+///    gravity
 ///    service the LOWEST (the building drain), then drawn-from; for a vent the
 ///    HIGHEST (the VTR), then drawn-from;
 ///  • ties always fall to the node id.
@@ -592,6 +595,7 @@ String _pickComponentRoot({
   required ServiceType service,
   required NetNode? Function(String) nodeOf,
   required Set<String> drawnFromIds,
+  Set<String> riserEndIds = const {},
 }) {
   final highestFirst = service == ServiceType.vent;
   int heightCmp(String a, String b) {
@@ -633,7 +637,10 @@ String _pickComponentRoot({
       if (roleOf(id) != NodeRole.fixture && !demandKeys.contains(id)) id,
   ]..sort((a, b) {
       if (supply) {
-        final c = drawnRank(a).compareTo(drawnRank(b));
+        var c = drawnRank(a).compareTo(drawnRank(b));
+        if (c != 0) return c;
+        c = (riserEndIds.contains(a) ? 0 : 1)
+            .compareTo(riserEndIds.contains(b) ? 0 : 1);
         return c != 0 ? c : byHeight(a, b);
       }
       final h = heightCmp(a, b);
@@ -675,12 +682,18 @@ Map<String, String> serviceComponentRoots(
   final adjacency = <String, List<String>>{};
   final nodes = <String>{};
   final drawnFromIds = <String>{};
+  final riserEndIds = <String>{};
   for (final e in net.edges) {
     if (e.service != service) continue;
     nodes
       ..add(e.fromId)
       ..add(e.toId);
     drawnFromIds.add(e.fromId);
+    if (e.kind == EdgeKind.riser) {
+      riserEndIds
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
     (adjacency[e.fromId] ??= []).add(e.toId);
     (adjacency[e.toId] ??= []).add(e.fromId);
   }
@@ -710,6 +723,7 @@ Map<String, String> serviceComponentRoots(
       service: service,
       nodeOf: net.nodeById,
       drawnFromIds: drawnFromIds,
+      riserEndIds: riserEndIds,
     );
     for (final n in component) {
       out[n] = root;
@@ -753,6 +767,17 @@ Map<String, String> serviceComponentRoots(
 /// it, so a cross-main feeding 60 heads carries the design-area demand, not
 /// 60 × the per-head share. Null ⇒ byte-identical (flat accumulation).
 ///
+/// HYDRANT STANDPIPE FLOW ([hydrantDesignFlow]) — mech-building-5: a hydrant
+/// system is designed for the STANDPIPE flow the fire pump delivers (SNI
+/// 03-1745-2000: 500 gpm + 250 gpm per additional riser, `designStandpipe`),
+/// never for Σ (every drawn box × 5 L/s). When given, every `fireHydrant`
+/// RISER and every TRUNK run (one carrying more than a single box) carries
+/// exactly that design flow — so a 10-box riser is no longer sized for 50 L/s
+/// while the pump delivers 34.7 L/s, nor a 4-box riser for 20 L/s that the
+/// pump's 34.7 L/s would push past the velocity cap. A branch run serving a
+/// single box keeps its per-box flow. Null ⇒ byte-identical (flat
+/// accumulation).
+///
 /// WATER-CLOSET NODES ([waterClosetNodeIds]): node ids the caller knows carry a
 /// water closet beyond the built-in [PlumbingFixture] WC types — a user-defined
 /// custom fixture flagged `CustomFixture.isWaterCloset` (the app resolves the
@@ -769,6 +794,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Map<String, FlowRate> nodeFlowDemand = const {},
   Map<String, Diameter> sizeOverrides = const {},
   FlowRate? sprinklerDemandCap,
+  FlowRate? hydrantDesignFlow,
   FlushSystem flushSystem = FlushSystem.flushTank,
   BuildingLevels? building,
   Map<String, ScaleCalibration> calibrationBySheet = const {},
@@ -841,9 +867,15 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final adjacency = <String, List<({String edgeId, String other})>>{};
     final nodes = <String>{};
     final drawnFromIds = <String>{};
+    final riserEndIds = <String>{};
     for (final e in net.edges) {
       if (e.service != service) continue;
       drawnFromIds.add(e.fromId);
+      if (e.kind == EdgeKind.riser) {
+        riserEndIds
+          ..add(e.fromId)
+          ..add(e.toId);
+      }
       nodes
         ..add(e.fromId)
         ..add(e.toId);
@@ -937,6 +969,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
           service: service,
           nodeOf: net.nodeById,
           drawnFromIds: drawnFromIds,
+          riserEndIds: riserEndIds,
         );
 
     // Build the terminal-demand map over EVERY demand-bearing node except the
@@ -1331,6 +1364,19 @@ Map<String, EdgeSizing> autoSizeNetwork(
       if (q != null && q.cubicMetersPerSecond > capM3s) {
         allFlows[e.id] = sprinklerDemandCap;
       }
+    }
+  }
+  // Hydrant standpipe design flow (see the doc above).
+  if (hydrantDesignFlow != null && hydrantDesignFlow.cubicMetersPerSecond > 0) {
+    final perBox = (leafDemand[ServiceType.fireHydrant] ?? const FlowRate(0))
+        .cubicMetersPerSecond;
+    for (final e in net.edges) {
+      if (e.service != ServiceType.fireHydrant) continue;
+      final q = allFlows[e.id];
+      if (q == null) continue;
+      final trunk = e.kind == EdgeKind.riser ||
+          q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12;
+      if (trunk) allFlows[e.id] = hydrantDesignFlow;
     }
   }
   final result = sizeNetwork(net, allFlows, ctx, sizeOverrides: sizeOverrides);

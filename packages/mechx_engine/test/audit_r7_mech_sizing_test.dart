@@ -9,7 +9,9 @@
 //   mech-props-4  Hardy–Cross convergence verdict is edge-order invariant;
 //   mech-props-6  a demand-free duct ring no longer aborts the solve;
 //   mech-building-3  a vent stack sizes on the DFU it vents;
-//   mech-building-6  a dual-supply fixture loads 3/4 of its UBAP per supply.
+//   mech-building-6  a dual-supply fixture loads 3/4 of its UBAP per supply;
+//   mech-building-5  a hydrant riser carries the standpipe design flow;
+//   mech-building-2  the upfeed fixture over-pressure check.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/geometry/building.dart';
@@ -19,6 +21,7 @@ import 'package:mechx_engine/network/hardy_cross.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart' as drain;
+import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -581,5 +584,138 @@ void main() {
     // The factor is surfaced on the honesty surface.
     expect(_profile.verifyChecklist,
         contains(_profile.dualSupplyFixtureUnitFactor));
+  });
+
+  group('mech-building-5 — hydrant riser at the standpipe design flow', () {
+    // 4-storey riser, one box per floor (5 L/s per box default).
+    Network riser(int storeys) => Network(nodes: [
+          _n('FP', 0, 0, role: NodeRole.plant, component: NodeComponent.pump),
+          for (var f = 0; f < storeys; f++) _n('H$f', 100, 0, floor: f),
+          for (var f = 0; f < storeys; f++)
+            _n('B$f', 300, 0,
+                floor: f,
+                role: NodeRole.fixture,
+                component: NodeComponent.hydrantBox),
+        ], edges: [
+          _e('feed', 'FP', 'H0', ServiceType.fireHydrant),
+          for (var f = 0; f < storeys - 1; f++)
+            _e('h$f', 'H$f', 'H${f + 1}', ServiceType.fireHydrant,
+                kind: EdgeKind.riser),
+          for (var f = 0; f < storeys; f++)
+            _e('box$f', 'H$f', 'B$f', ServiceType.fireHydrant),
+        ]);
+    const perBox = FlowRate(0.005);
+    final design = designStandpipe(risers: 1, buildingHeight: const Length(12))
+        .requiredFlow;
+
+    test('SNI 03-1745 one riser = 500 gpm = 31.5 L/s ≫ 4 × 5 L/s', () {
+      // 500 gpm × 3.785 L/gal / 60 = 31.54 L/s (engine standpipeFlow(1)).
+      expect(design.cubicMetersPerSecond,
+          closeTo(standpipeFlow(1).cubicMetersPerSecond, 1e-15));
+      expect(design.cubicMetersPerSecond, greaterThan(4 * 0.005));
+    });
+
+    for (final storeys in [4, 10]) {
+      test('$storeys boxes: riser + trunk = design flow, box branch = 5 L/s',
+          () {
+        final sized = autoSizeNetwork(
+          riser(storeys),
+          const SizingContext(),
+          leafDemand: const {ServiceType.fireHydrant: perBox},
+          hydrantDesignFlow: design,
+        );
+        for (final id in [
+          'feed',
+          for (var f = 0; f < storeys - 1; f++) 'h$f'
+        ]) {
+          expect(sized[id]!.flow.cubicMetersPerSecond,
+              closeTo(design.cubicMetersPerSecond, 1e-15),
+              reason: id);
+          // The pipe the pump pushes its flow through stays inside the cap.
+          expect(sized[id]!.velocity.metersPerSecond, lessThanOrEqualTo(2.0));
+        }
+        expect(sized['box0']!.flow.cubicMetersPerSecond, closeTo(0.005, 1e-15));
+        // Without the design flow the legacy Σ-boxes accumulation is unchanged.
+        final legacy = autoSizeNetwork(riser(storeys), const SizingContext(),
+            leafDemand: const {ServiceType.fireHydrant: perBox});
+        expect(legacy['feed']!.flow.cubicMetersPerSecond,
+            closeTo(storeys * 0.005, 1e-12));
+      });
+    }
+  });
+
+  test('mech-building-2 — upfeed over-pressure = residual or no-flow > 392 kPa',
+      () {
+    const storeys = 8;
+    final building = BuildingLevels(
+        [for (var f = 0; f < storeys; f++) Floor('L$f', const Length(3.5))]);
+    const cal = {'s1': ScaleCalibration(0.01)};
+    final nodes = <NetNode>[
+      _n('P', 0, 0, role: NodeRole.plant, component: NodeComponent.pump),
+      for (var f = 0; f < storeys; f++) _n('R$f', 100, 0, floor: f),
+      for (var f = 0; f < storeys; f++)
+        for (var k = 0; k < 4; k++)
+          _n('W${f}_$k', 200.0 + 50 * k, 0,
+              floor: f,
+              role: NodeRole.fixture,
+              fixture: PlumbingFixture.waterClosetFlushTank),
+    ];
+    final edges = <NetEdge>[
+      _e('feed', 'P', 'R0', ServiceType.coldWater),
+      for (var f = 0; f < storeys - 1; f++)
+        _e('r$f', 'R$f', 'R${f + 1}', ServiceType.coldWater,
+            kind: EdgeKind.riser),
+      for (var f = 0; f < storeys; f++)
+        for (var k = 0; k < 4; k++)
+          _e('b${f}_$k', 'R$f', 'W${f}_$k', ServiceType.coldWater),
+    ];
+    final net = Network(nodes: nodes, edges: edges);
+    final sizing = autoSizeNetwork(net, const SizingContext(),
+        leafDemand: const {},
+        leafFixtureUnits: const {ServiceType.coldWater: 2.0},
+        nodeFixtureUnits: {
+          for (final n in nodes)
+            if (n.fixture != null) n.id: _profile.fixtureUnitLoad(n.fixture!),
+        },
+        building: building,
+        calibrationBySheet: cal);
+    final sol = solvePressurized(
+      net: net,
+      service: ServiceType.coldWater,
+      sourceId: 'P',
+      edgeFlows: {for (final s in sizing.values) s.edgeId: s.flow},
+      sizing: sizing,
+      calibrationBySheet: cal,
+      building: building,
+      targetResidual: const Pressure(225000),
+    );
+    // First-principles no-flow static: pump head − elevation gain (no friction).
+    const mh = MountingHeights();
+    final srcElev = nodeElevation(nodes.first, building, mh).meters;
+    const maxFix = 392266.0, relief = 490332.5;
+    final expected = <String>{};
+    for (final n in nodes.where((n) => n.fixture != null)) {
+      final noFlow = pressureFromHead(Head(sol.requiredPumpHead.meters -
+              (nodeElevation(n, building, mh).meters - srcElev)))
+          .pascals;
+      expect(sol.noFlowStaticPressure[n.id]!.pascals, closeTo(noFlow, 1e-6));
+      // no-flow = residual + path friction ≥ residual.
+      expect(noFlow, greaterThanOrEqualTo(sol.residualPressure[n.id]!.pascals));
+      if (noFlow > maxFix || sol.residualPressure[n.id]!.pascals > maxFix) {
+        expected.add(n.id);
+      }
+    }
+    final over = upfeedOverPressure(sol);
+    expect(over.map((o) => o.nodeId).toSet(), expected);
+    expect(expected, containsAll(['W0_0', 'W0_3']));
+    expect(expected, isNot(contains('W7_0')));
+    for (final o in over) {
+      expect(o.overRelief, o.noFlow.pascals >= relief);
+    }
+    // Worst (highest no-flow static) first.
+    for (var i = 1; i < over.length; i++) {
+      expect(over[i - 1].noFlow.pascals,
+          greaterThanOrEqualTo(over[i].noFlow.pascals));
+    }
   });
 }
