@@ -786,7 +786,7 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
     // Round 10 (import-pipeline-1) — keep the embedded payloads (re-keyed by
     // the extracted local paths) so a later Save survives the extraction
     // being cleaned away.
-    rememberEmbeddedAssets(doc.assets);
+    replaceEmbeddedAssets(doc.assets);
     applyDocument(read, doc);
     // The just-loaded state is the clean baseline; capture its canonical
     // encoding so autosave won't immediately mirror it to recovery.

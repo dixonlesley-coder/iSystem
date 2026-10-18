@@ -48,6 +48,23 @@ final Map<String, String> _knownPayloads = <String, String>{};
 void rememberEmbeddedAssets(Map<String, String> byLocalPath) =>
     _knownPayloads.addAll(byLocalPath);
 
+/// Replace every remembered payload with [byLocalPath] — called when a project
+/// is OPENED (or recovered), so the previous project's plan payloads are
+/// released instead of accumulating for the whole process lifetime.
+void replaceEmbeddedAssets(Map<String, String> byLocalPath) => _knownPayloads
+  ..clear()
+  ..addAll(byLocalPath);
+
+/// Keep only the payloads for [paths] (the sheets the project still renders
+/// from) and add [gathered] — so a payload for a removed sheet is released at
+/// the next Save rather than held for the process lifetime.
+void _rememberGathered(List<String> paths, Map<String, String> gathered) {
+  final keep = paths.toSet();
+  _knownPayloads
+    ..removeWhere((k, _) => !keep.contains(k))
+    ..addAll(gathered);
+}
+
 /// Forget every remembered payload (tests).
 void debugClearEmbeddedAssets() => _knownPayloads.clear();
 
@@ -61,7 +78,7 @@ void debugClearEmbeddedAssets() => _knownPayloads.clear();
 Map<String, String> gatherSheetAssets(List<Sheet> sheets) {
   final paths = _distinctSheetSourcePaths(sheets);
   final out = _gatherFromPaths(paths, _fallbackFor(paths));
-  rememberEmbeddedAssets(out);
+  _rememberGathered(paths, out);
   return out;
 }
 
@@ -129,7 +146,7 @@ Future<Map<String, String>> gatherSheetAssetsAsync(List<Sheet> sheets) async {
   if (paths.isEmpty) return const {};
   final fallback = _fallbackFor(paths);
   final out = await Isolate.run(() => _gatherFromPaths(paths, fallback));
-  rememberEmbeddedAssets(out);
+  _rememberGathered(paths, out);
   return out;
 }
 

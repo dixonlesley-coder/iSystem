@@ -364,6 +364,27 @@ void main() {
       expect(regathered[local], payload);
     });
 
+    test('remembered payloads are scoped to the current project (no '
+        'process-lifetime growth)', () {
+      final a = File('${tmp.path}/a.dxf')..writeAsStringSync('0\nEOF\n');
+      final b = File('${tmp.path}/b.dxf')..writeAsStringSync('0\nEOF\n');
+      final both = [
+        Sheet(id: 'a', name: 'A', dxfPath: a.path),
+        Sheet(id: 'b', name: 'B', dxfPath: b.path),
+      ];
+      gatherSheetAssets(both);
+      // Sheet b is removed and its file disappears; the next Save releases
+      // b's payload, so b can no longer be resurrected from the cache.
+      a.deleteSync();
+      b.deleteSync();
+      final onlyA = gatherSheetAssets([both.first]);
+      expect(onlyA.keys, [a.path]);
+      expect(gatherSheetAssets([both.last]), isEmpty);
+      // Opening another project replaces the cache outright.
+      replaceEmbeddedAssets(const {});
+      expect(gatherSheetAssets([both.first]), isEmpty);
+    });
+
     test('neither a readable file nor a prior payload ⇒ reported missing', () {
       final sheets = [
         Sheet(id: 's1', name: 'S1', dxfPath: '${tmp.path}/gone.dxf'),
