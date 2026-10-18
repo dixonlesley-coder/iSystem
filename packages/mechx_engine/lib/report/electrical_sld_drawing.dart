@@ -43,9 +43,10 @@ import '../electrical/sources.dart'
 import '../electrical/supply_design.dart' show serviceTransformer;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
-import '../units.dart' show ApparentPower, Current, Power;
+import '../units.dart' show ApparentPower, Current, Length, Power;
 import 'drawing_chrome.dart' show helveticaTextWidth;
 import 'number_format.dart' show groupThousands;
+import 'plan_symbols.dart' show planLengthLabel;
 import 'sld_sheet.dart';
 
 // The drawing-primitive types (SldSheet / SldPrim / SldLine / SldRect /
@@ -287,9 +288,8 @@ String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
   final hasPe = peCsaMm2 != null && peCsaMm2 > 0;
   final hasNeutral = n - live - (hasPe ? 1 : 0) >= 1;
   final pe = hasPe ? peCsaMm2 : csaMm2;
-  final neutral = (neutralCsaMm2 != null && neutralCsaMm2 > 0)
-      ? neutralCsaMm2
-      : csaMm2;
+  final neutral =
+      (neutralCsaMm2 != null && neutralCsaMm2 > 0) ? neutralCsaMm2 : csaMm2;
   final conductors = <double>[
     for (var i = 0; i < live; i++) csaMm2,
     if (hasNeutral) neutral,
@@ -330,7 +330,8 @@ String _boardDemandCurrent(ElectricalPanelResult p) {
 /// Null / <= 1 [runs] ⇒ exactly `${cableLabel(...)} mm2` (byte-identical).
 String cableRunLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
     {int? cores, int? runs, double? peCsaMm2, double? neutralCsaMm2}) {
-  final single = '${cableLabel(circuit, csaMm2, threePhase, cores: cores, peCsaMm2: peCsaMm2, neutralCsaMm2: neutralCsaMm2)} mm2';
+  final single =
+      '${cableLabel(circuit, csaMm2, threePhase, cores: cores, peCsaMm2: peCsaMm2, neutralCsaMm2: neutralCsaMm2)} mm2';
   return (runs != null && runs > 1) ? '${runs}x($single)' : single;
 }
 
@@ -685,7 +686,8 @@ SldSheet buildElectricalSld({
       // also drove the printed Vdrop (N8). Printed ONLY when a real length
       // exists (never fabricated); the ` m` suffix disambiguates it from the
       // `mm` conduit token.
-      final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
+      final length =
+          c.lengthM > 0 ? ' · ${planLengthLabel(Length(c.lengthM))}' : '';
       final cable =
           '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
           '$conduit$length';
@@ -932,7 +934,7 @@ SldSheet buildElectricalSld({
   }
   if (anyMetering) {
     legend
-      .add(const SldLegendEntry('V / A / Hz', 'Panel metering instruments'));
+        .add(const SldLegendEntry('V / A / Hz', 'Panel metering instruments'));
     if (printedMatch(RegExp(r'^CT '))) {
       legend.add(
           const SldLegendEntry('CT', 'Metering current transformer (x/5A)'));
@@ -1209,7 +1211,8 @@ String? _feederConnLabel(
   final circ = feederCircuitOf[child];
   if (cr == null || circ == null) return null;
   final poles = cr.threePhase ? 3 : 1;
-  final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
+  final length =
+      cr.lengthM > 0 ? ' · ${planLengthLabel(Length(cr.lengthM))}' : '';
   final twoPole = parentThreePhase && !cr.threePhase;
   return '${cableRunLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase, peCsaMm2: cr.grounding.peCsaMm2, neutralCsaMm2: cr.grounding.neutralCsaMm2)} · '
       '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
@@ -1403,7 +1406,8 @@ void _emitPanelBox(List<SldPrim> out, double cx, double cy, double w, double h,
     return;
   }
   final mid = label.length / 2;
-  final cut = spaces.reduce((a, b) => (a - mid).abs() <= (b - mid).abs() ? a : b);
+  final cut =
+      spaces.reduce((a, b) => (a - mid).abs() <= (b - mid).abs() ? a : b);
   final lines = [label.substring(0, cut), label.substring(cut + 1)];
   for (var i = 0; i < 2; i++) {
     final lw = helveticaTextWidth(lines[i], 8) * _kBoldWidthFactor;
@@ -1730,7 +1734,8 @@ const double _sideNodeBottom = 14;
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
       final backupVa = gensetBackupDemandVa(project, result);
-      final genFig = _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
+      final genFig =
+          _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
       final genKva = genFig.totalKva;
       final gy = lvMidY - _ovH - 8;
       final gcy = gy + _ovH / 2;
@@ -1742,7 +1747,8 @@ const double _sideNodeBottom = 14;
       // What fraction of the building's diversified demand this set can carry —
       // the honest coverage figure (capped at 100%), printed only when a demand
       // exists to compare against.
-      final pct = _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
+      final pct =
+          _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
       if (pct != null) {
         prims.add(SldLabel(sideX + 34, gcy + 24, pct,
             size: 7.5, role: SldRole.source));
@@ -1786,7 +1792,8 @@ const double _sideNodeBottom = 14;
       sideY += 54;
     }
     if (project.sources?.battery != null) {
-      final (head, sub) = _batteryNodeLabels(project, demandVa, result.supply.demandW);
+      final (head, sub) =
+          _batteryNodeLabels(project, demandVa, result.supply.demandW);
       _emitBattery(prims, sideX + 14, sideY, SldRole.source);
       prims.add(SldLabel(sideX + 34, sideY - 2, head,
           size: 8.5, bold: true, role: SldRole.source));
@@ -1825,7 +1832,8 @@ const double _sideNodeBottom = 14;
       if (project.sources?.generator != null) {
         final gen = project.sources!.generator!;
         final backupVa = gensetBackupDemandVa(project, result);
-        final genFig = _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
+        final genFig =
+            _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
         final genKva = genFig.totalKva;
         connectTo(13, 13);
         _emitGenerator(prims, dropX, cy, 13, SldRole.source);
@@ -1833,7 +1841,8 @@ const double _sideNodeBottom = 14;
             size: 8.5, bold: true, role: SldRole.source));
         prims.add(SldLabel(dropX + 20, cy + 12, gen.mode.label,
             size: 7.5, role: SldRole.source));
-        final pct = _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
+        final pct =
+            _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
         if (pct != null) {
           prims.add(SldLabel(dropX + 20, cy + 24, pct,
               size: 7.5, role: SldRole.source));
@@ -1864,7 +1873,8 @@ const double _sideNodeBottom = 14;
         cy += 58;
       }
       if (project.sources?.battery != null) {
-        final (head, sub) = _batteryNodeLabels(project, demandVa, result.supply.demandW);
+        final (head, sub) =
+            _batteryNodeLabels(project, demandVa, result.supply.demandW);
         connectTo(13, 13);
         _emitBattery(prims, dropX, cy, SldRole.source);
         prims.add(SldLabel(dropX + 20, cy - 2, head,
@@ -1989,7 +1999,8 @@ const double _sideNodeBottom = 14;
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = gensetBackupDemandVa(project, result);
-    final genFig = _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
+    final genFig =
+        _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
     final genKva = genFig.totalKva;
     final gcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
@@ -2032,7 +2043,8 @@ const double _sideNodeBottom = 14;
     nextCy += 58;
   }
   if (project.sources?.battery != null) {
-    final (head, sub) = _batteryNodeLabels(project, demandVa, result.supply.demandW);
+    final (head, sub) =
+        _batteryNodeLabels(project, demandVa, result.supply.demandW);
     final bcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, bcy - 13,
         weight: SldWeight.medium, role: role));
@@ -3484,8 +3496,8 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
       }
     }
     placedLabels.add(labelBox(at.$1, at.$2, w));
-    prims.add(
-        SldLabel(at.$1, at.$2, text, size: _polEdgeLabelSize, role: role));
+    prims
+        .add(SldLabel(at.$1, at.$2, text, size: _polEdgeLabelSize, role: role));
   }
 
   // Edges first (under the node graphics). An ADJACENT-tier edge takes the
@@ -3515,8 +3527,7 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
       final midY = (ay + zy) / 2;
       prims
         ..add(SldLine(ax, ay, ax, midY, weight: SldWeight.medium, role: role))
-        ..add(
-            SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role))
+        ..add(SldLine(ax, midY, zx, midY, weight: SldWeight.medium, role: role))
         ..add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
       if (label != null) {
         final w = helveticaTextWidth(label, _polEdgeLabelSize);
@@ -3543,8 +3554,8 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
       prims
         ..add(SldLine(ax, ay, ax, y1, weight: SldWeight.medium, role: role))
         ..add(SldLine(ax, y1, laneX, y1, weight: SldWeight.medium, role: role))
-        ..add(SldLine(laneX, y1, laneX, y2,
-            weight: SldWeight.medium, role: role))
+        ..add(
+            SldLine(laneX, y1, laneX, y2, weight: SldWeight.medium, role: role))
         ..add(SldLine(laneX, y2, zx, y2, weight: SldWeight.medium, role: role))
         ..add(SldLine(zx, y2, zx, zy, weight: SldWeight.medium, role: role));
       if (label != null) {

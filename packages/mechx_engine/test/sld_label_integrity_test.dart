@@ -714,7 +714,7 @@ void main() {
         }
       }
       // Each feeder still states its own run length — none was dropped.
-      for (final m in ['18 m', '24 m', '30 m']) {
+      for (final m in ['18.0 m', '24.0 m', '30.0 m']) {
         expect(tags.where((t) => t.text.endsWith(m)), isNotEmpty);
       }
     });

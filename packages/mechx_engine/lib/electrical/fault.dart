@@ -647,9 +647,17 @@ class CircuitFaultResult {
   final double breakerKa;
 
   /// Earth-fault loop impedance Zs over the run (Ω) — TN only, else null.
+  /// Round 20: stored at 3 dp rounded in the direction of the ADS verdict
+  /// (up on a FAIL, down on a PASS) — see [zsMaxOhm].
   final double? zsOhm;
 
   /// Maximum Zs that still guarantees disconnection in time (Ω) — TN only.
+  ///
+  /// Round 20: VERDICT-DIRECTED 3-dp rounding, NOT the exact limit — floored
+  /// on a FAIL, ceiled on a PASS, so the printed pair always backs the
+  /// verdict. The same device can therefore print a limit up to 0.001 Ω
+  /// apart depending on the verdict (0.6828125 Ω prints 0.682 on a FAIL,
+  /// 0.683 on a PASS); recompute from the device data for the exact figure.
   final double? zsMaxOhm;
 
   /// True when ADS disconnects in time (Zs ≤ Zs_max) — TN only, else null

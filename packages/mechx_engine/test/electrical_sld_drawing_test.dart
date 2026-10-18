@@ -1164,10 +1164,15 @@ void main() {
       final joined = allLabels();
       // The socket way's 22 m + the lighting way's 30 m run lengths read on the
       // conductor cell — the same lengths that drove the printed Vdrop.
-      expect(joined, contains('22 m'));
-      expect(joined, contains('30 m'));
-      // A cable cell reads `... mm2 ... · <n> m` (length appended after cable).
-      expect(RegExp(r'mm2.* · \d+(\.\d+)? m').hasMatch(joined), isTrue);
+      // Round 20 (drafting-visual-4-7): ONE fixed 0.1 m precision, the same
+      // `planLengthLabel` the plan + riser tags use ('22.0 m', never '22 m'
+      // beside a '4.6 m' on the same sheet).
+      expect(joined, contains('22.0 m'));
+      expect(joined, contains('30.0 m'));
+      // A cable cell reads `... mm2 ... · <n>.<d> m` (length after cable).
+      expect(RegExp(r'mm2.* · \d+\.\d m').hasMatch(joined), isTrue);
+      // No bare integer length survives anywhere on the schedule.
+      expect(RegExp(r' · \d+ m(\n|$)').hasMatch(joined), isFalse);
     });
 
     test('N8 — the overview feeder label carries the feeder run length', () {
@@ -1175,7 +1180,7 @@ void main() {
       final feeder = ov.prims.whereType<SldLabel>().firstWhere(
           (l) => l.text.contains(' mm2 ') && l.text.contains('·'));
       // The LV feeder to LP-1 (24 m) reads on the feeder annotation.
-      expect(feeder.text, contains('24 m'));
+      expect(feeder.text, endsWith(' · 24.0 m'));
     });
 
     test('N9 — the incomer + every DEVICE cell carry a kA from the withstand '
