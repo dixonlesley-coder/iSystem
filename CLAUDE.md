@@ -1470,8 +1470,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   sizes that cable and the BOM procures it, so every schedule / feeder label
   prints that count with no separate `+ NYA/BC` earth token
   (`NYY 3x4 mm2`); parallel runs print `Nx(...)`.
-- **Plan labels: one placer, gravity runs carry no CL**: the plan PDF and DXF
-  place every run/riser/equipment tag through `placePlanLabel` (beside its own
+- **Plan labels: one layout, gravity runs carry no CL**: the plan PDF and DXF
+  lay out every grid/UP-DN/tie/run/riser/equipment annotation through ONE
+  `layoutPlanAnnotations` (paper-mm units, the DXF takes the PDF's
+  `planSheetPlot` scale) and place tags via `placePlanLabel` (beside its own
   run first, then a two-line split, then a capped leader); round sizes print `Ø`
   in PDFs / `%%c` in DXF; gravity (drainage/vent/rainwater) runs print size +
   length + `1:N` fall but never a `CL` (no sub-slab/invert model exists).
