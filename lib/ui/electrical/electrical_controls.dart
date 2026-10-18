@@ -16,6 +16,7 @@ import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_segment.dart';
 import '../widgets/mechx_text_field.dart';
+import '../widgets/locale_number.dart';
 
 /// A labelled field row: a quiet sentence-case caption over its [child] input.
 class ElectricalField extends StatelessWidget {
@@ -198,8 +199,19 @@ class _ElectricalNumInputState extends State<ElectricalNumInput> {
         if (_error != null) setState(() => _error = null);
       },
       onCommitted: (s) {
-        final v = double.tryParse(s.trim());
-        if (v == null) return;
+        // Round 17 follow-up — an untouched field never re-commits (the
+        // display is dot-decimal; re-reading it by the ID locale would turn
+        // `1.125` into 1125).
+        if (s.trim() == ElectricalNumInput._fmt(widget.value)) return;
+        // Locale-aware: in the ID UI `33.000` VA is 33 000, `0,85` is 0.85.
+        final v = parseLocaleNumber(s,
+            indonesian: context.strings.locale == AppLocale.id);
+        if (v == null) {
+          // A non-number used to be dropped with no message at all.
+          setState(
+              () => _error = context.strings(StringKey.numInputNotANumber));
+          return;
+        }
         final rejection = ElectricalNumInput.rejectionFor(v,
             min: widget.min, max: widget.max, strings: context.strings);
         if (rejection != null) {
@@ -290,8 +302,15 @@ class _ElectricalOptionalNumInputState
           if (value != null) widget.onChanged(null);
           return;
         }
-        final parsed = double.tryParse(t);
-        if (parsed == null) return;
+        if (value != null && t == ElectricalNumInput._fmt(value)) return;
+        // Round 17 follow-up — locale-aware, and a non-number says so.
+        final parsed = parseLocaleNumber(t,
+            indonesian: context.strings.locale == AppLocale.id);
+        if (parsed == null) {
+          setState(
+              () => _error = context.strings(StringKey.numInputNotANumber));
+          return;
+        }
         // Round 11: 'NaN' / 'Infinity' / '1e999' parse, and NaN <= 0 is false —
         // reject non-finite with the field-error idiom instead of letting it
         // reach the store (whose jsonEncode no-op guard threw uncaught).

@@ -16,6 +16,8 @@ import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_text_field.dart';
+import '../../store/app_state.dart';
+import '../widgets/locale_number.dart';
 
 /// Open the offset dialog for run [edgeId]. No-op if the edge is gone, is a
 /// riser, or sits on an uncalibrated sheet (offset needs a real scale).
@@ -70,7 +72,9 @@ class _OffsetDialogState extends ConsumerState<_OffsetDialog> {
   String? _error;
 
   void _create() {
-    final mm = double.tryParse(_text.trim());
+    // Round 17 follow-up — locale-aware (`1.500` mm in the ID UI).
+    final mm = parseLocaleNumber(_text,
+        indonesian: ref.read(localeProvider) == AppLocale.id);
     if (mm == null || !mm.isFinite || mm <= 0) {
       setState(() => _error = 'Enter a distance in mm, e.g. 500');
       return;

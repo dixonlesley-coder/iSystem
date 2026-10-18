@@ -23,7 +23,7 @@ import '../electrical/containment.dart'
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
 import '../electrical/genset_backup.dart'
-    show gensetBackupDemandVa, gensetBackupDemandW;
+    show gensetBackupDemandVa, gensetBackupDemandW, isEssentialByName;
 import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
@@ -1167,12 +1167,7 @@ Set<String> essentialPanelIds(
   // board does NOT make the whole board essential (that would wrongly paint a
   // main board + all its sub-boards red); the emergency-supply flag is the cue.
   bool ownEssential(ElectricalPanelResult p) {
-    final n = p.name.toUpperCase();
-    if (n.contains('EMERGENCY') ||
-        n.contains('ESSENTIAL') ||
-        n.contains('DARURAT')) {
-      return true;
-    }
+    if (isEssentialByName(p.name)) return true;
     return modelById[p.panelId]?.essential ?? false;
   }
 

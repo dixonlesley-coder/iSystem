@@ -1136,6 +1136,29 @@ enum StringKey {
   numInputMin, // {min}
   numInputMax, // {max}
   roomExtractGrilleCount, // {n}
+  issueBelowCodeMinimumTitle,
+  issueBelowCodeMinimumMessage,
+  numInputNotANumber,
+  electricalFeedCurrentSuffix,
+  electricalIbDiversified,
+  nodeElectricalLoadLabel,
+  roomAutoPlaceCaption,
+  issueRoomTerminalsStaleTitle,
+  issueRoomTerminalsStaleMessage,
+  issueRoomBankSupply,
+  issueRoomBankExtract,
+  schematicNotesRoofTank,
+  schematicNotesGroundTank,
+  schematicNotesOccupancy,
+  schematicNotesPeakFlow,
+  schematicNotesFeedUpfeed,
+  schematicNotesFeedRoofTank,
+  schematicNotesFeedBooster,
+  schematicNotesFeedMainsMeter,
+  schematicNotesFeedMains,
+  schematicNotesOccPrivate,
+  schematicNotesOccPublic,
+  schematicNotesOccAssembly,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -2415,6 +2438,52 @@ const Map<StringKey, String> _en = {
   StringKey.numInputMin: 'Enter a value of at least {min}',
   StringKey.numInputMax: 'Enter a value of at most {max}',
   StringKey.roomExtractGrilleCount: '{n} exhaust',
+  StringKey.issueBelowCodeMinimumTitle:
+      'Hand-picked size below the code minimum',
+  StringKey.issueBelowCodeMinimumMessage:
+      'The size picked by hand on this gravity run is smaller than the smallest size the code tables allow for its load. Pick a larger size or clear the override.',
+  StringKey.numInputNotANumber:
+      'Enter a number',
+  StringKey.electricalFeedCurrentSuffix:
+      ' (current)',
+  StringKey.electricalIbDiversified:
+      'Ib (diversified)',
+  StringKey.nodeElectricalLoadLabel:
+      'Electrical load',
+  StringKey.roomAutoPlaceCaption:
+      '{supply} + {return}',
+  StringKey.issueRoomTerminalsStaleTitle:
+      'Room terminals out of date',
+  StringKey.issueRoomTerminalsStaleMessage:
+      'The air terminals placed in {room} carry {placed} m3/s but the room now requires {required} m3/s ({bank}). Re-run Auto-place diffusers or adjust the terminals.',
+  StringKey.issueRoomBankSupply:
+      'supply',
+  StringKey.issueRoomBankExtract:
+      'return / extract',
+  StringKey.schematicNotesRoofTank:
+      'Roof tank: {m3} m3',
+  StringKey.schematicNotesGroundTank:
+      'Ground tank: {m3} m3',
+  StringKey.schematicNotesOccupancy:
+      'Occupancy: {label}',
+  StringKey.schematicNotesPeakFlow:
+      'Peak design flow: {lps} L/s',
+  StringKey.schematicNotesFeedUpfeed:
+      'Feed: upfeed / booster pump',
+  StringKey.schematicNotesFeedRoofTank:
+      'Feed: gravity downfeed (roof tank)',
+  StringKey.schematicNotesFeedBooster:
+      'Feed: booster pump (no roof tank)',
+  StringKey.schematicNotesFeedMainsMeter:
+      'Feed: direct mains (water meter)',
+  StringKey.schematicNotesFeedMains:
+      'Feed: direct mains',
+  StringKey.schematicNotesOccPrivate:
+      'Private',
+  StringKey.schematicNotesOccPublic:
+      'Public',
+  StringKey.schematicNotesOccAssembly:
+      'Assembly',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -3711,6 +3780,52 @@ const Map<StringKey, String> _id = {
   StringKey.numInputMin: 'Masukkan nilai minimal {min}',
   StringKey.numInputMax: 'Masukkan nilai maksimal {max}',
   StringKey.roomExtractGrilleCount: '{n} buang',
+  StringKey.issueBelowCodeMinimumTitle:
+      'Ukuran pilihan manual di bawah minimum kode',
+  StringKey.issueBelowCodeMinimumMessage:
+      'Ukuran yang dipilih manual pada jalur gravitasi ini lebih kecil daripada ukuran terkecil yang diizinkan tabel kode untuk bebannya. Pilih ukuran yang lebih besar atau hapus pilihan manualnya.',
+  StringKey.numInputNotANumber:
+      'Masukkan angka',
+  StringKey.electricalFeedCurrentSuffix:
+      ' (saat ini)',
+  StringKey.electricalIbDiversified:
+      'Ib (terdiversifikasi)',
+  StringKey.nodeElectricalLoadLabel:
+      'Beban listrik',
+  StringKey.roomAutoPlaceCaption:
+      '{supply} + {return}',
+  StringKey.issueRoomTerminalsStaleTitle:
+      'Terminal ruangan tidak mutakhir',
+  StringKey.issueRoomTerminalsStaleMessage:
+      'Terminal udara yang dipasang di {room} membawa {placed} m3/s tetapi ruangan kini memerlukan {required} m3/s ({bank}). Jalankan ulang Tempatkan difuser otomatis atau sesuaikan terminalnya.',
+  StringKey.issueRoomBankSupply:
+      'suplai',
+  StringKey.issueRoomBankExtract:
+      'balik / buang',
+  StringKey.schematicNotesRoofTank:
+      'Tangki atap: {m3} m3',
+  StringKey.schematicNotesGroundTank:
+      'Tangki bawah: {m3} m3',
+  StringKey.schematicNotesOccupancy:
+      'Hunian: {label}',
+  StringKey.schematicNotesPeakFlow:
+      'Debit desain puncak: {lps} L/s',
+  StringKey.schematicNotesFeedUpfeed:
+      'Suplai: upfeed / pompa booster',
+  StringKey.schematicNotesFeedRoofTank:
+      'Suplai: gravitasi downfeed (tangki atap)',
+  StringKey.schematicNotesFeedBooster:
+      'Suplai: pompa booster (tanpa tangki atap)',
+  StringKey.schematicNotesFeedMainsMeter:
+      'Suplai: langsung dari PDAM (meter air)',
+  StringKey.schematicNotesFeedMains:
+      'Suplai: langsung dari PDAM',
+  StringKey.schematicNotesOccPrivate:
+      'Privat',
+  StringKey.schematicNotesOccPublic:
+      'Publik',
+  StringKey.schematicNotesOccAssembly:
+      'Pertemuan',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

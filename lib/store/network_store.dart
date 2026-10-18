@@ -742,6 +742,49 @@ class NetworkController extends Notifier<DrawingState> {
     record ? _commit(next) : _setNetworkNoRecord(next);
   }
 
+  /// Round 17 follow-up (ui-journeys-3-riser-top-ghost-until-forever) — move
+  /// every GHOST node onto the sheet now mapped to its floor. A node is a ghost
+  /// when its sheet's effective floor ([floorOfSheet]) differs from its own
+  /// `floorIndex`: every canvas overlay and snap filters on sheet AND floor, so
+  /// it renders nowhere and nothing can connect to it. That happens when a
+  /// riser (Riser tool, Riser-Edit drop, [placeRiserAt]) was drawn toward a
+  /// floor that had no plan yet — the far node fell back to the SOURCE sheet —
+  /// and used to stay invisible for good once that floor's plan was imported.
+  /// The sheets controller calls this after every mapping change (add / import
+  /// / duplicate-to-floor / set-floor), so the riser top appears on the new
+  /// plan and the floor's branch can tee into it.
+  ///
+  /// No-op (records nothing) when no ghost has a mapped sheet. When [record]
+  /// is false the change is not recorded (a compound structural step already
+  /// captured the network).
+  void rehomeNodesToMappedSheets({
+    required int? Function(String sheetId) floorOfSheet,
+    required String? Function(int floorIndex) sheetIdForFloor,
+    bool record = true,
+  }) {
+    var changed = false;
+    final nodes = <NetNode>[];
+    for (final n in state.network.nodes) {
+      final sheetFloor = floorOfSheet(n.sheetId);
+      // null ⇒ the node's sheet is not in the rail: an ORPHAN (its own
+      // critical issue), never silently re-homed.
+      if (sheetFloor == null || sheetFloor == n.floorIndex) {
+        nodes.add(n);
+        continue;
+      }
+      final target = sheetIdForFloor(n.floorIndex);
+      if (target == null || target == n.sheetId) {
+        nodes.add(n);
+        continue;
+      }
+      changed = true;
+      nodes.add(n.copyWith(sheetId: target));
+    }
+    if (!changed) return;
+    final next = Network(nodes: nodes, edges: state.network.edges);
+    record ? _commit(next) : _setNetworkNoRecord(next);
+  }
+
   /// Drop every drawn node whose [sheetId] is NOT in [liveSheetIds] (and every
   /// edge touching a dropped node), in ONE undo step — the active fix on the
   /// explicit Replace-all import path (A5). When Import REPLACES the sheet list,
@@ -2948,7 +2991,11 @@ class NetworkController extends Notifier<DrawingState> {
       var f = keepSpan ? floorIndex + (n.floorIndex - baseFloor) : floorIndex;
       if (keepSpan && levelCount > 0) f = f.clamp(0, levelCount - 1);
       cloneFloor[id] = f;
-      final sheet = (hasRiser && !preserveRelativeFloor && f != floorIndex)
+      // Round 17 follow-up (ui-journeys-3-assembly-stamp-ghosts-upper-floor)
+      // — the B1 rule applies to ANY kept span: a stamped multi-floor assembly
+      // (preserveRelativeFloor) used to put its upper-floor nodes on the DROP
+      // sheet, invisible on every plan while still sized into the BOM.
+      final sheet = (keepSpan && f != floorIndex)
           ? (sheetIdForFloor(f, levelCount) ?? sheetId)
           : sheetId;
       nodes.add(

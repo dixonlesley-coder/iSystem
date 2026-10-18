@@ -1458,6 +1458,28 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 17 follow-up invariants**: a DRAWN hot-water return is part of the
+  circulated pipework, so `hotWaterRecircLoop` takes the drawn cycle as THE
+  loop (`returnLengthM` 0, `drawnLoopLengthM` = the cycle) — the mirrored DN20
+  return is only for tree-only HW; never add it on top of a drawn loop. A
+  gravity override smaller than the auto pick (the code minimum) sets
+  `EdgeSizing.belowCodeMinimum` (→ `belowCodeMinimumEdgesProvider` → the
+  `gravity-below-code-minimum` warning) — never let an override inherit the
+  auto pick's clean flags. The DFU tables run to DN300 (IPC 710.1(2),
+  `// VERIFY`); `overCapacity` only past the DN300 row. Roof / floor drains and
+  cleanouts sit ON their surface in `nodeElevation` (roof drain on the top
+  storey at the roof). No gravity invert / IL datum exists anywhere — the live
+  draw chip states the datum-free fall only. Gravity RISERS get no velocity
+  verdict and the inspector's drainage floor repeats `selfCleansingOk`. Every
+  printed fire-pump head is the governing `fireRatedPointProvider` point. The
+  inspector Ib is `runCurrentA` (the report's Ib). Essential-by-name is ONE
+  `isEssentialByName` (EN + ID words) for genset backing AND the SLD colours.
+  Every engineering number field parses through `parseLocaleNumber`
+  (ID `.` groups thousands) and never re-commits an untouched display.
+  A ghost node (its sheet's floor ≠ its floor) is re-homed onto the sheet
+  mapped to its floor after every sheet-mapping change; a kept-span clone
+  (paste with a riser, stamped assembly) puts each off-floor node on its
+  floor's sheet.
 - **Round 16 — movers in series, valves by topology, supply by one study**:
   a cycle check valve is oriented TOPOLOGICALLY first (root-reachable side with
   all cycle valves cut = inlet), the drawn direction only as the tie-break;

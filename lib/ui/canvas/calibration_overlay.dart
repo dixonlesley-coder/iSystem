@@ -14,6 +14,7 @@ import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_text_field.dart';
 import 'viewport.dart';
+import '../widgets/locale_number.dart';
 
 /// Transparent layer shown over the canvas while calibrating. Captures taps
 /// (mapping them to sheet/world coordinates via the current viewport), draws
@@ -70,7 +71,9 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
   /// positive number — the ONE parse both the Set-scale enablement (G7) and the
   /// commit consult, so the button can never be live on a value that no-ops.
   double? get _parsedMeters {
-    final meters = double.tryParse(_distance.trim());
+    // Round 17 follow-up — locale-aware: `2,5` in the ID UI is 2.5 m.
+    final meters = parseLocaleNumber(_distance,
+        indonesian: ref.read(localeProvider) == AppLocale.id);
     if (meters == null || !meters.isFinite || meters <= 0) return null;
     return meters;
   }

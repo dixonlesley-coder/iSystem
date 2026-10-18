@@ -78,11 +78,13 @@ List<ElectricalMenuAction> feedChooserItems({
   required List<({String id, String label})> candidates,
   required String? currentLabel,
   required void Function(String fromPanelId) onPick,
+  String currentSuffix = ' (current)',
 }) =>
     [
       for (final c in candidates)
         if (currentLabel != null && c.label == currentLabel)
-          ElectricalMenuAction('${c.label} (current)', () {}, selected: true)
+          ElectricalMenuAction('${c.label}$currentSuffix', () {},
+              selected: true)
         else
           ElectricalMenuAction(c.label, () => onPick(c.id)),
     ];
@@ -547,6 +549,8 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
           ...feedChooserItems(
             candidates: widget.feedCandidates,
             currentLabel: widget.fedFromLabel,
+            currentSuffix:
+                context.strings(StringKey.electricalFeedCurrentSuffix),
             onPick: (id) {
               widget.onFeedFrom!(id);
               onDone();
@@ -805,10 +809,20 @@ class ElectricalCircuitInspector extends StatelessWidget {
     final rows = <Widget>[];
     final c = circuitResult;
     if (c != null) {
+      // Round 17 follow-up — the RUN current the way's device, conductor and
+      // printed Vd are sized on (the electrical report's Ib), so In / Vd can be
+      // recomputed from the figure shown; the diversified design current (the
+      // phase-balance / incomer basis) follows when it differs.
       rows.add(ElectricalResultRow(
         label: 'Ib',
-        value: '${fmtNum(c.designCurrent.amperes)} A',
+        value: '${fmtNum(c.runCurrentA.amperes)} A',
       ));
+      if ((c.runCurrentA.amperes - c.designCurrent.amperes).abs() > 1e-9) {
+        rows.add(ElectricalResultRow(
+          label: context.strings(StringKey.electricalIbDiversified),
+          value: '${fmtNum(c.designCurrent.amperes)} A',
+        ));
+      }
       final protection = _protectionLine();
       if (protection != null) {
         rows.add(ElectricalResultRow(
@@ -1600,6 +1614,8 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                                 items: feedChooserItems(
                                   candidates: widget.feedCandidates,
                                   currentLabel: widget.fedFromLabel,
+                                  currentSuffix: context.strings(
+                                      StringKey.electricalFeedCurrentSuffix),
                                   onPick: (id) {
                                     widget.onFeedFrom!(id);
                                     setState(() => _feedChooser = false);

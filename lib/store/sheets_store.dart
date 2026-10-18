@@ -152,6 +152,8 @@ class SheetsController extends Notifier<SheetsState> {
               ? shiftSheetFloorIndex(fi, delta, levelCount: levelCount)
               : fi);
     }
+    // Inside the same structural step (it captured the network).
+    _rehomeGhostNodes(record: false);
   }
 
   void selectSheet(int index) {
@@ -174,8 +176,34 @@ class SheetsController extends Notifier<SheetsState> {
     state = state.copyWith(viewports: next);
   }
 
-  void addSheet(Sheet sheet) =>
-      state = state.copyWith(sheets: [...state.sheets, sheet]);
+  /// Round 17 follow-up — after a sheet→floor MAPPING change, re-home every
+  /// ghost node (a riser top drawn toward a floor that had no plan) onto the
+  /// sheet now mapped to its floor ([NetworkController.rehomeNodesToMappedSheets]).
+  void _rehomeGhostNodes({bool record = true}) {
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    if (levelCount < 1) return;
+    final live = {for (final s in state.sheets) s.id};
+    String? sheetFor(int floor) {
+      for (final s in state.sheets) {
+        if (state.floorFor(s.id, levelCount) == floor) return s.id;
+      }
+      return null;
+    }
+
+    ref.read(networkControllerProvider.notifier).rehomeNodesToMappedSheets(
+          // A node on a sheet that is not in the rail is an orphan (a separate
+          // critical issue), never re-homed.
+          floorOfSheet: (id) =>
+              live.contains(id) ? state.floorFor(id, levelCount) : null,
+          sheetIdForFloor: sheetFor,
+          record: record,
+        );
+  }
+
+  void addSheet(Sheet sheet) {
+    state = state.copyWith(sheets: [...state.sheets, sheet]);
+    _rehomeGhostNodes();
+  }
 
   /// F6: reuse an ALREADY-imported plan on another building floor — create a new
   /// rail entry that SHARES [sheetId]'s source (pdf/dxf/dwg path + page + natural
@@ -237,6 +265,7 @@ class SheetsController extends Notifier<SheetsState> {
     if (cal != null) {
       ref.read(projectControllerProvider.notifier).setCalibration(id, cal);
     }
+    _rehomeGhostNodes();
     return id;
   }
 
@@ -271,6 +300,7 @@ class SheetsController extends Notifier<SheetsState> {
       added.add(id == s.id ? s : s.copyWith(id: id));
     }
     state = state.copyWith(sheets: [...state.sheets, ...added]);
+    _rehomeGhostNodes();
     return added.length;
   }
 

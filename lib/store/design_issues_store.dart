@@ -205,6 +205,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // not the air-only view: a clamped downpipe / over-velocity supply pipe used
   // to be computed and dropped.
   final overCapacity = ref.watch(overCapacityEdgesProvider);
+  final belowCodeMinimum = ref.watch(belowCodeMinimumEdgesProvider);
   final waterVelocity = ref.watch(waterVelocityChecksProvider);
   final selfCleansing = ref.watch(selfCleansingDefectsProvider);
   final loopUnbalanced = ref.watch(loopUnbalancedEdgesProvider);
@@ -213,7 +214,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
   final sprinklerPump = ref.watch(sprinklerPumpCheckProvider);
   final coolingMethod = ref.watch(coolingLoadMethodProvider);
-  final hasRooms = ref.watch(roomAreasProvider).isNotEmpty;
+  final rooms = ref.watch(roomAreasProvider);
+  final hasRooms = rooms.isNotEmpty;
+  final ductSettings = ref.watch(ductSettingsProvider);
   final docControl = ref.watch(documentControlProvider);
 
   // Wave 5a (H1) — every user-facing title/message resolves through the active
@@ -366,6 +369,22 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       kind: kind,
       title: title,
       message: message,
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-i. Hand-picked gravity size BELOW the code minimum (warning) ───────
+  // Round 17 (gravity-3-1) — a drain / vent / downpipe override smaller than
+  // the DFU / WC-count / trap floor or the downpipe / Manning capacity.
+  for (final id in belowCodeMinimum) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'gravity-below-code-minimum',
+      title: str(StringKey.issueBelowCodeMinimumTitle),
+      message: str(StringKey.issueBelowCodeMinimumMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }
@@ -923,6 +942,86 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         'need': sprinklerPump.requiredHeadM.toStringAsFixed(1),
         'pump': sprinklerPump.pumpHeadM.toStringAsFixed(1),
       }),
+    ));
+  }
+
+  // ── 5a-quater. Room terminals stale vs the room requirement (warning) ──────
+  // Round 17 follow-up (ui-journeys-3-room-terminals-stale-airflow) — Auto-
+  // place stamps a FIXED airflow on each terminal; changing the room's type,
+  // ACH or ceiling afterwards left the plan (duct sizing, fan duty, BOM) on the
+  // old airflow while the Rooms inspector / equipment schedule showed the new
+  // requirement — two airflows for one system, with no warning. Judge-only:
+  // for each scaled room carrying terminals with an airflow, the placed supply
+  // (diffusers) and extract (return / exhaust grilles) sums are compared with
+  // the room's sized banks; a > 1 % difference — or a now-extract-only room
+  // still carrying supply diffusers — warns, locatable to a terminal.
+  for (final r in rooms) {
+    final cal = project.calibrationFor(r.sheetId);
+    final sizing = r.sizing(cal?.metersPerPixel,
+        ductShape: ductSettings.shape, ductMethod: ductSettings.method);
+    if (sizing == null) continue;
+    var placedSupply = 0.0;
+    var placedExtract = 0.0;
+    var supplyCount = 0;
+    var extractCount = 0;
+    String? firstTerminal;
+    for (final n in net.nodes) {
+      final c = n.component;
+      final isSupply = c == NodeComponent.supplyDiffuser;
+      final isExtract = c == NodeComponent.returnGrille ||
+          c == NodeComponent.exhaustGrille;
+      if (!isSupply && !isExtract) continue;
+      final q = n.airflow;
+      if (q == null) continue;
+      if (!r.containsNode(n.sheetId, n.floorIndex, n.x, n.y)) continue;
+      firstTerminal ??= n.id;
+      if (isSupply) {
+        placedSupply += q.cubicMetersPerSecond;
+        supplyCount++;
+      } else {
+        placedExtract += q.cubicMetersPerSecond;
+        extractCount++;
+      }
+    }
+    if (firstTerminal == null) continue;
+    final reqSupply =
+        sizing.supply.count * sizing.supply.airflowEach.cubicMetersPerSecond;
+    final reqExtract =
+        sizing.return_.count * sizing.return_.airflowEach.cubicMetersPerSecond;
+    bool stale(double placed, double required, int count) {
+      if (count == 0) return false; // that bank has nothing placed to judge
+      if (required <= 0) return placed > 0;
+      return (placed - required).abs() / required > 0.01;
+    }
+
+    final String? bank;
+    final double placed;
+    final double required;
+    if (stale(placedSupply, reqSupply, supplyCount)) {
+      bank = str(StringKey.issueRoomBankSupply);
+      placed = placedSupply;
+      required = reqSupply;
+    } else if (stale(placedExtract, reqExtract, extractCount)) {
+      bank = str(StringKey.issueRoomBankExtract);
+      placed = placedExtract;
+      required = reqExtract;
+    } else {
+      bank = null;
+      placed = 0;
+      required = 0;
+    }
+    if (bank == null) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'room-terminals-stale:${r.id}',
+      title: str(StringKey.issueRoomTerminalsStaleTitle),
+      message: str.format(StringKey.issueRoomTerminalsStaleMessage, {
+        'room': r.name.isEmpty ? r.id : r.name,
+        'placed': placed.toStringAsFixed(3),
+        'required': required.toStringAsFixed(3),
+        'bank': bank,
+      }),
+      locate: IssueLocation(r.sheetId, nodeId: firstTerminal),
     ));
   }
 
