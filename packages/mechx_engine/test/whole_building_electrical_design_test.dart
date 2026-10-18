@@ -987,9 +987,27 @@ void main() {
     });
 
     test('demand VA sits inside the declared 197 kVA connection capacity', () {
-      // demandVa = demandW / assumedBuildingPf (0.85).
+      // Round 14 re-derivation: demandVa is the root's diversified demand
+      // VA at the REAL per-circuit cos φ — Σ (leaf W / cos φ) + each feeder at
+      // its fed board's VA, × each board's diversity — not demandW / 0.85.
+      final byId = {for (final x in project.panels) x.id: x};
+      double va(String id) {
+        final panel = byId[id]!;
+        var sum = 0.0;
+        for (final c in panel.circuits) {
+          if (c.feedsPanelId != null) {
+            sum += va(c.feedsPanelId!);
+          } else {
+            final w = circuitConnectedW(c);
+            sum += c.cosPhi > 0 ? w / c.cosPhi : w;
+          }
+        }
+        return sum * panel.diversityFactor;
+      }
+
+      expect(sys.supply.demandVa.voltAmperes, closeTo(va('mdp'), 1.0));
       expect(sys.supply.demandVa.voltAmperes,
-          closeTo(sys.totalDemandW / assumedBuildingPf, 1.0));
+          greaterThanOrEqualTo(sys.totalDemandW - 1));
       expect(sys.supply.demandVa.voltAmperes,
           lessThan(project.supplyCapacityVa!.voltAmperes));
       // The recommended PLN daya step also fits under the declared capacity.

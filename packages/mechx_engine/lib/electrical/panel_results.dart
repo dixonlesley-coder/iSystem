@@ -241,6 +241,18 @@ class ElectricalPanelResult {
   /// Demand line current (A) — the worst-loaded phase on a 3-phase board.
   final Current demandCurrent;
 
+  /// Round 14 (elec-building-sim-4) — the line current the board's METERING
+  /// (CT primary, meter range) must cover: the larger of today's demand and
+  /// the current the incomer + busbar were SIZED for (`busbar.totalCurrentA`
+  /// — the service-capacity floor, future-load headroom or capacitor floor).
+  /// A 197 kVA entrance board demanding 150 A but rated for 284 A used to
+  /// print a CT 150/5 that would run at 190 % of primary under the subscribed
+  /// load. Equals [demandCurrent] when nothing floors the board.
+  Current get meteringCurrent =>
+      busbar.totalCurrentA.amperes > demandCurrent.amperes
+          ? busbar.totalCurrentA
+          : demandCurrent;
+
   /// Future (spare-uplifted) demand (W) the incomer + busbar were sized for when
   /// panel headroom is set = demandW × (1 + sparePercentage/100). Equal to
   /// [demandW] (no uplift) when no headroom is applied. Additive (default 0 —

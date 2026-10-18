@@ -141,12 +141,17 @@ void main() {
           ),
         );
 
-    testWidgets('an uncommitted edit is committed on unmount', (tester) async {
+    // Round 14 re-derivation (regression-commit-on-dispose-deactivated-ref):
+    // the field no longer commits on TEARDOWN — its host's ref is already
+    // deactivated by then (see audit_r14_app_test.dart). A bare unmount
+    // therefore drops the edit; every navigation commits first instead.
+    testWidgets('a bare unmount does not call the host back', (tester) async {
       String? committed;
       await tester.pumpWidget(host((v) => committed = v));
       await tester.enterText(find.byType(EditableText), 'Roof deck');
       await tester.pumpWidget(const SizedBox());
-      expect(committed, 'Roof deck');
+      expect(committed, isNull);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('commitPendingEdit commits the focused field synchronously',

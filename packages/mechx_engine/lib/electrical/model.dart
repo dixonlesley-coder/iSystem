@@ -693,9 +693,9 @@ class ElectricalProject {
   /// the LV main bus. Distinct from the advanced study's COMPUTED PF-correction
   /// recommendation (`power_factor.dart`): this is the engineer-supplied
   /// nameplate. When set it labels the CAPACITOR BANK source-spine node verbatim
-  /// (`CAPACITOR BANK <kvar> kvar`); when null the node falls back to the generic
-  /// "PF correction" caption. Drawing the node stays gated on `sources != null`
-  /// OR `capacitorBankKvar != null`. A drawing input only — it never feeds a
+  /// (`CAPACITOR BANK <kvar> kvar`). Round 14: the node is drawn ONLY when this
+  /// is > 0 — declaring a genset / solar source no longer implies a generic
+  /// "PF correction" bank on the issued single-line. A drawing input only — it never feeds a
   /// sizing path. // VERIFY — PF-target / step practice, not an SNI/PUIL clause.
   /// Additive (default null ⇒ byte-identical).
   final double? capacitorBankKvar;

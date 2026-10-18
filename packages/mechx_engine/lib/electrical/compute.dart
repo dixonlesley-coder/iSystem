@@ -986,7 +986,13 @@ _CircuitComputation _computeCircuit(
       : circuitIsThreePhase(
           panelSystem: panel.system,
           kind: c.loadKind,
-          loadW: loadW,
+          // Round 14 (elec-building-sim-1) — a capacitor way's demand W is 0
+          // (circuitConnectedW: a bank draws no real power), so the phase
+          // decision reads its kvar RATING — the same figure its Ib, the
+          // selectivity pre-pass and [panelCapacitorFloorA] use. An Auto-phase
+          // 50 kvar bank on a 3φ board used to size 1φ at 216 A (MCCB 315 A,
+          // 300 mm²) instead of 3φ at 72 A.
+          loadW: c.loadKind == LoadKind.capacitor ? c.loadW : loadW,
           motorKw: c.motorKw,
           phases: c.phases,
           isFeeder: isFeeder,
@@ -1955,6 +1961,42 @@ ElectricalSystemResult computeSystem(
         childFloorA: capacitorFloorByPanel, panelSystems: panelSystems);
     if (f > 0) capacitorFloorByPanel[id] = f;
   }
+  // Round 14 (regression-capacitor-floor-phase-model-mismatch) — the figure a
+  // FEEDER floors at must be the SAME one its fed board's incomer floors at.
+  // That board places each single-phase bank on the line its phase BALANCE
+  // assigned (a bank adds no balance current, so the balancer may stack two
+  // banks on L1), while the estimate above put unpinned banks on the
+  // 'lightest line' — an 80 A / 25 mm² feeder then supplied a board whose
+  // incomer floored at 123.8 A. Re-solve each capacitor-bearing board
+  // bottom-up with the very `computePanel` the sizing pass runs (its balance
+  // assignment is a function of the board's own ways + the floors below it,
+  // never of its parent or the fault level) and take ITS
+  // `capacitorCurrentA`. Boards with no capacitor anywhere below are skipped
+  // ⇒ byte-identical.
+  if (capacitorFloorByPanel.isNotEmpty) {
+    for (final id in postOrder) {
+      final panel = byId[id];
+      if (panel == null || !capacitorFloorByPanel.containsKey(id)) continue;
+      final solved = computePanel(
+        profile,
+        panel,
+        opts: ComputePanelOptions(
+          feederLoadW: feederLoadWByPanel[id] ?? const {},
+          feederPowerFactor: panelPowerFactor,
+          feederCapacitorFloorA: capacitorFloorByPanel,
+          panelSystems: panelSystems,
+          earthingSystem: project.earthingSystem,
+          calibrationBySheet: calibrationBySheet,
+          building: building,
+          panelById: byId,
+          diversityLibrary: diversityLibrary,
+          priorAssignment: priorAssignments[id] ?? const {},
+          phaseReassignThresholdA: phaseReassignThresholdA,
+        ),
+      ).capacitorCurrentA;
+      if (solved > 0) capacitorFloorByPanel[id] = solved;
+    }
+  }
 
   // True building connected load = leaf loads only (feeders are aggregations).
   var connectedLoadW = 0.0;
@@ -2298,10 +2340,26 @@ ElectricalSystemResult computeSystem(
     final supplySystem =
         governingRoot?.system ?? ElectricalSystem.threePhase;
     final supplyVoltage = governingRoot?.voltage ?? const Voltage(400);
+    // Round 14 (elec-building-sim-2) — the supply kVA (genset size, the
+    // 'backs NN %' label, transformer + daya tiers) comes from the engine's
+    // OWN per-circuit cos φ: each root's diversified demand VA, aggregated
+    // bottom-up exactly like its demand W (Σ leaf W / cos φ, a feeder at its
+    // fed board's VA, × diversity) — the same per-board power factor the
+    // feeder sizing and the PF study use. The flat 0.85 PF stays only as the
+    // fallback for a root with no VA record. A 60 kW chiller at cos φ 0.72
+    // used to print 89.4 kVA (W / 0.85) against ~103 kVA really drawn, so a
+    // 100 kVA genset was labelled 'backs 100 %'. Never below the demand W.
+    var rootDemandVa = 0.0;
+    for (final r in roots) {
+      final w = panelDemandW[r.id] ?? 0;
+      final va = panelDemandVa[r.id];
+      rootDemandVa +=
+          va != null && va > 0 ? math.max(va, w) : w / assumedBuildingPf;
+    }
     final supply = SupplySummary(
       connectedW: roundTo(connectedLoadW, 0),
       demandW: roundTo(rootDemandW, 0),
-      demandVa: ApparentPower(roundTo(rootDemandW / assumedBuildingPf, 0)),
+      demandVa: ApparentPower(roundTo(rootDemandVa, 0)),
       system: supplySystem,
       voltage: supplyVoltage,
     );
@@ -2320,20 +2378,29 @@ ElectricalSystemResult computeSystem(
     // for a 50 A service while headroom had doubled the incomer to 100 A
     // (16 / 10 mm² printed vs 25 / 16 mm² required). No headroom ⇒ the
     // demand basis below ⇒ byte-identical.
+    //
+    // Round 14 (regression-capacitor-governed-root-earthing-undersized) — the
+    // same holds for EVERY reason the root incomer is rated above the device
+    // its demand would select: the Round-13 capacitor switching floor (a
+    // 100 kvar bank fed downstream lifts a 63 A board to 250 A) printed the
+    // 63 A service's 16 / 10 mm² earthing behind a 250 A incomer. Whenever
+    // the incomer exceeds the demand-selected breaker, the service is sized
+    // for the incomer.
     final mainDemandIb = mainResult?.demandCurrent ?? const Current(0);
     final rootHeadroomActive =
         (governingRoot?.headroom ?? HeadroomSpec.none).isActive;
     final incomerRating = mainResult?.incomer.breaker.ratingA;
-    final mainIb = rootHeadroomActive && incomerRating != null
-        ? incomerRating
-        : serviceMinCurrentA != null &&
-                serviceMinCurrentA > mainDemandIb.amperes
-            ? Current(roundTo(serviceMinCurrentA, 1))
-            : mainDemandIb;
-    final mainBreaker = rootHeadroomActive && incomerRating != null
-        ? null
-        : selectBreaker(profile,
-            designCurrent: mainIb, loadKind: LoadKind.feeder);
+    final demandIb = serviceMinCurrentA != null &&
+            serviceMinCurrentA > mainDemandIb.amperes
+        ? Current(roundTo(serviceMinCurrentA, 1))
+        : mainDemandIb;
+    final demandBreaker =
+        selectBreaker(profile, designCurrent: demandIb, loadKind: LoadKind.feeder);
+    final incomerFloored = incomerRating != null &&
+        (rootHeadroomActive ||
+            incomerRating.amperes > demandBreaker.ratingA.amperes + 1e-9);
+    final mainIb = incomerFloored ? incomerRating : demandIb;
+    final mainBreaker = incomerFloored ? null : demandBreaker;
     final mainCable = sizeCable(
       profile,
       designCurrent: mainIb,

@@ -668,7 +668,10 @@ String _pickComponentRoot({
   required NetNode? Function(String) nodeOf,
   required Set<String> drawnFromIds,
   Set<String> riserEndIds = const {},
+  Iterable<String> Function(String)? neighboursOf,
 }) {
+  Iterable<String> neighbours(String id) =>
+      neighboursOf?.call(id) ?? const <String>[];
   final highestFirst = service == ServiceType.vent;
   int heightCmp(String a, String b) {
     final na = nodeOf(a), nb = nodeOf(b);
@@ -686,18 +689,19 @@ String _pickComponentRoot({
 
   // Round 13 (regression-degree2-groundtank-not-root) — a GROUND TANK is the
   // source of a pressurized system at ANY degree: a duty/standby set draws
-  // from it through two (or more) suction legs, so it has degree >= 2, and it
-  // used to fall to rank 2 beside the pumps — the root then went to whichever
-  // pump id sorted first (n9 vs n10 as strings), feeding the other leg
-  // backwards through the tank. A roof tank still ranks only as a degree-1
-  // terminus (inline it is a break tank the flow passes through).
+  // from it through two (or more) suction legs, so it has degree >= 2.
+  //
+  // Round 14 (regression-groundtank-rank-inline-tank-steals-root) — but a
+  // TERMINUS tank (degree 1) always beats an INLINE one: a raw-water GWT →
+  // filter → treated GWT → booster chain used to tie both tanks at rank 0 and
+  // fall to the node id, so `n10` < `n9` rooted the treated tank and left the
+  // whole raw→treated transfer main unsized (0 L/s, DN15). Ladder:
+  //   0 degree-1 ground tank · 1 inline ground tank · 2 degree-1 roof tank ·
+  //   3 any other plant (heater, AHU, terminus pump…) — and an INLINE mover
+  //   (see [isInlineMover]) is never ranked with them at all.
   int plantRank(String id) {
     if (service.regime == FlowRegime.gravity) return 0;
-    final comp = nodeOf(id)?.component;
-    if (comp == NodeComponent.groundTank) return 0;
-    if (degree(id) != 1) return 2;
-    if (comp == NodeComponent.roofTank) return 1;
-    return 2;
+    return _supplyPlantRank(nodeOf(id)?.component, degree(id));
   }
 
   // Round 12 (mech-props-2 gravity-pump-root) — on a GRAVITY service only a
@@ -709,17 +713,49 @@ String _pickComponentRoot({
   // arrow reversed. A degree-1 plant is a TERMINUS: a branch that ends at a
   // sump pump (the ejector pit — the pump IS the gravity sink) roots there,
   // exactly like a ground tank, so its fixtures' load reaches the pit.
+  //
+  // Round 14 (mech-props-3 sump-ejector-outfall) — an INLINE ground tank with
+  // a pump / booster-set neighbour is an EJECTOR PIT: its contents are pumped
+  // ONWARD to the building drain, so it is pass-through too and the component
+  // roots at the real outfall. Rooting at the pit drained the ground-floor
+  // fixtures DOWN into the basement and gave the outfall a phantom 2 DFU.
   final gravity = service.regime == FlowRegime.gravity;
+  bool isMoverComponent(NodeComponent? c) =>
+      c == NodeComponent.pump || c == NodeComponent.boosterSet;
   bool isPassThroughPlant(String id) {
     if (!gravity || roleOf(id) != NodeRole.plant) return false;
     if (degree(id) < 2) return false;
     final comp = nodeOf(id)?.component;
-    return comp != null && comp != NodeComponent.groundTank;
+    if (comp == null) return false;
+    if (comp != NodeComponent.groundTank) return true;
+    return neighbours(id).any((m) =>
+        roleOf(m) == NodeRole.plant && isMoverComponent(nodeOf(m)?.component));
+  }
+
+  // Round 14 (mech-props-3 recirc-pump-root / inline-booster-fan-phantom) — on
+  // a supply (pressurized / air) service a pump, booster set or fan drawn
+  // INLINE (degree >= 2) is a machine the flow passes THROUGH (a recirc pump on
+  // the HW return, a booster on the PDAM line, an inline exhaust fan before its
+  // louvre), never the source: it ranks below every other plant AND below a
+  // demand-free entry/outlet leaf. Rooting there tied with the heater on the
+  // node id (the supply main lost a DN on a renamed drawing) and handed the
+  // real entry leaf the flat phantom default, reversing the suction main.
+  bool isInlineMover(String id) {
+    if (gravity || roleOf(id) != NodeRole.plant || degree(id) < 2) {
+      return false;
+    }
+    final c = nodeOf(id)?.component;
+    return isMoverComponent(c) ||
+        c == NodeComponent.supplyFan ||
+        c == NodeComponent.exhaustFan;
   }
 
   final plants = [
     for (final id in component)
-      if (roleOf(id) == NodeRole.plant && !isPassThroughPlant(id)) id,
+      if (roleOf(id) == NodeRole.plant &&
+          !isPassThroughPlant(id) &&
+          !isInlineMover(id))
+        id,
   ]..sort((a, b) {
       final c = plantRank(a).compareTo(plantRank(b));
       return c != 0 ? c : byHeight(a, b);
@@ -749,6 +785,12 @@ String _pickComponentRoot({
     });
   if (freeLeaves.isNotEmpty) return freeLeaves.first;
 
+  final movers = [
+    for (final id in component)
+      if (isInlineMover(id)) id,
+  ]..sort(byHeight);
+  if (movers.isNotEmpty) return movers.first;
+
   String? hub;
   var hubDegree = 1;
   for (final id in component) {
@@ -765,6 +807,16 @@ String _pickComponentRoot({
   if (hub != null) return hub;
   if (leaves.isNotEmpty) return ([...leaves]..sort()).first;
   return ([...component]..sort()).first;
+}
+
+/// Round 14 — the supply-side (pressurized / air) source rank of a plant node
+/// (lower roots first): 0 a degree-1 ground tank, 1 an inline ground tank, 2 a
+/// degree-1 roof tank, 3 any other plant. Shared by the root ladder and the
+/// parallel-source mirror so "equal rank" means the same thing in both.
+int _supplyPlantRank(NodeComponent? comp, int degree) {
+  if (comp == NodeComponent.groundTank) return degree == 1 ? 0 : 1;
+  if (comp == NodeComponent.roofTank && degree == 1) return 2;
+  return 3;
 }
 
 /// The source ROOT of every connected component of [service], keyed by each
@@ -823,6 +875,7 @@ Map<String, String> serviceComponentRoots(
       nodeOf: net.nodeById,
       drawnFromIds: drawnFromIds,
       riserEndIds: riserEndIds,
+      neighboursOf: (n) => adjacency[n] ?? const <String>[],
     );
     for (final n in component) {
       out[n] = root;
@@ -890,6 +943,14 @@ Map<String, String> serviceComponentRoots(
 /// numbers the sizer turned into a size, so the calc report's run schedule
 /// can print the basis ('why DN100') without re-deriving it. Ring edges of a
 /// looped water component are split by Hardy–Cross and are not recorded.
+///
+/// PARALLEL-LEG RECORD ([parallelLegEdgeIdsOut], Round 14): when given, every
+/// edge sized by MIRRORING a set flow rather than by accumulation — a
+/// duty/standby STANDBY leg, or the bridge of a parallel peer source (a second
+/// ground-tank compartment / AHU) — is added here. Those legs carry the full
+/// set flow so each machine can run alone, but they are NOT additional
+/// delivery: a consumer summing the flow leaving a source (the pump / fan duty)
+/// must skip them or it counts one set flow twice.
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
@@ -907,6 +968,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   MountingHeights mounting = const MountingHeights(),
   Set<String> waterClosetNodeIds = const {},
   Map<String, double>? fixtureUnitsOut,
+  Set<String>? parallelLegEdgeIdsOut,
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -1082,6 +1144,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
           nodeOf: net.nodeById,
           drawnFromIds: drawnFromIds,
           riserEndIds: riserEndIds,
+          neighboursOf: (n) => [
+            for (final l
+                in adjacency[n] ?? const <({String edgeId, String other})>[])
+              l.other,
+          ],
         );
 
     // Build the terminal-demand map over EVERY demand-bearing node except the
@@ -1634,6 +1701,68 @@ Map<String, EdgeSizing> autoSizeNetwork(
           edgeFlowFrom[leg.edgeIds[i]] = leg.fromNodeIds[i];
           if (units != null) fixtureUnitsOut?[leg.edgeIds[i]] = units;
           closingEdgeIds.remove(leg.edgeIds[i]);
+          parallelLegEdgeIdsOut?.add(leg.edgeIds[i]);
+        }
+      }
+
+      // Round 14 (mech-props-3 parallel-sources-by-id) — PARALLEL SOURCES:
+      // several equal-rank degree-1 plants on one supply component (two
+      // ground-tank compartments, two AHUs at opposite ends of one duct). The
+      // tree can root at only one, so every OTHER source's bridge (its chain
+      // of demand-free degree-2 nodes up to the first junction / terminal)
+      // used to carry ZERO and print at the minimum size — which leg that was
+      // depended on the node ids. Each peer source must carry the whole set
+      // flow while the other is isolated, exactly like a standby leg, so its
+      // bridge mirrors the root's outgoing flow (and fixture units).
+      if (regime != FlowRegime.gravity &&
+          roleOf(root) == NodeRole.plant &&
+          degree(root) == 1) {
+        final rootNode = net.nodeById(root);
+        final rootRank = _supplyPlantRank(rootNode?.component, 1);
+        final rootEdge = adjacency[root]!.single.edgeId;
+        final q = allFlows[rootEdge]?.cubicMetersPerSecond ?? 0.0;
+        final units = fixtureUnitsOut?[rootEdge];
+        final peers = [
+          for (final n in component)
+            if (n != root &&
+                roleOf(n) == NodeRole.plant &&
+                degree(n) == 1 &&
+                _supplyPlantRank(net.nodeById(n)?.component, 1) == rootRank)
+              n,
+        ]..sort();
+        for (final s in q > 0 ? peers : const <String>[]) {
+          final bridge = <(String, String)>[]; // (edgeId, flow-from node)
+          var cur = s;
+          String? prevEdge;
+          var reachedRoot = false;
+          while (true) {
+            final links = [
+              for (final l in adjacency[cur]!)
+                if (l.edgeId != prevEdge) l,
+            ];
+            if (links.length != 1) break;
+            final l = links.single;
+            bridge.add((l.edgeId, cur));
+            prevEdge = l.edgeId;
+            cur = l.other;
+            if (cur == root) {
+              reachedRoot = true;
+              break;
+            }
+            if (degree(cur) != 2 ||
+                explicitDemandKeys.contains(cur) ||
+                bearsDefaultDemand(cur)) {
+              break;
+            }
+          }
+          if (reachedRoot) continue;
+          for (final (id, from) in bridge) {
+            if ((allFlows[id]?.cubicMetersPerSecond ?? 0.0) >= q) continue;
+            allFlows[id] = FlowRate(q);
+            edgeFlowFrom[id] = from;
+            if (units != null) fixtureUnitsOut?[id] = units;
+            parallelLegEdgeIdsOut?.add(id);
+          }
         }
       }
     }

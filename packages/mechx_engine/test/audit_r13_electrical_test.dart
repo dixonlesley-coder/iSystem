@@ -410,10 +410,12 @@ void main() {
     test('backup = max(30 % × demand, the EMG demand)', () {
       final proj = project();
       final sys = computeSystem(p, proj);
-      // Supply 200 kW at the 0.85 building pf ⇒ 235.3 kVA; 30 % = 70.6 kVA.
+      // Round 14 re-derivation: supply VA at the REAL per-circuit cos φ. Both
+      // loads are cos φ 1.0 heaters ⇒ VA = W = 200 kVA (not the old flat
+      // 200 kW / 0.85 = 235.3 kVA). 30 % = 60.0 kVA.
       final demandVa = sys.supply.demandVa.voltAmperes;
-      expect(demandVa, closeTo(200000 / 0.85, 1));
-      // EMG 120 kW at the same pf basis ⇒ 141.2 kVA > 70.6 kVA.
+      expect(demandVa, closeTo(200000, 1));
+      // EMG 120 kW at the same pf basis ⇒ ≈ 120 kVA > 60 kVA.
       final essentialVa = 120000 * demandVa / sys.supply.demandW;
       expect(essentialDemandVa(proj, sys), closeTo(essentialVa, 1));
       expect(gensetBackupDemandVa(proj, sys).voltAmperes,

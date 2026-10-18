@@ -266,8 +266,10 @@ void main() {
       expect(r.totalDemandW, 8000);
       expect(r.supply.connectedW, 10000); // leaf load only
       expect(r.supply.demandW, 8000);
-      // VA = demandW / assumed building PF 0.85 = 9411.8 → 9412 VA.
-      expect(r.supply.demandVa.voltAmperes, closeTo(9412, 1));
+      // Round 14 re-derivation: VA at the REAL per-circuit cos φ — SP's one
+      // cos φ 1.0 heater ⇒ 10 000 VA × 0.8 = 8000 VA, carried up the feeder at
+      // SP's pf 1.0 — not the old flat 8000 / 0.85 = 9412 VA.
+      expect(r.supply.demandVa.voltAmperes, closeTo(8000, 1));
       expect(r.supply.system, ElectricalSystem.threePhase);
     });
 

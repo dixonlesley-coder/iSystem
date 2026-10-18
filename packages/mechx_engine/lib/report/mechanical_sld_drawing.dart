@@ -32,6 +32,24 @@ import 'riser_tags.dart';
 import 'sld_sheet.dart';
 
 // ── Drawing geometry (y-down drawing units) ──────────────────────────────────
+/// Round 14 (drafting-visual-4) — the PUMP-SET valve train, in flow order, as
+/// (glyph token, printed abbrev): suction GV · STR · FJ, the pump, then the
+/// discharge FJ · CV · GV. The FLEXIBLE JOINT sits right at each pump nozzle
+/// (pump > FJ > CV > GV, mirroring the suction's STR > FJ > pump) — it exists
+/// to isolate pump vibration, so the check valve and the isolating gate valve
+/// sit beyond it. It used to read CV · GV · FJ, putting the vibration through
+/// both valves; a foreman builds the train exactly as drawn. ONE source for
+/// the exported riser detail AND the live canvas painter (golden rule 5).
+const List<(String, String)> kPumpSetValveTrain = [
+  ('GV', 'GV'),
+  ('STR', 'STR'),
+  ('FJ', 'FJ'),
+  ('PUMP', ''),
+  ('FJ', 'FJ'),
+  ('CV', 'CV'),
+  ('GV', 'GV'),
+];
+
 const double _gutterW = 132; // left gutter: floor name + FFL
 const double _drawW = 840; // node placement band width
 const double _sidePad = 48; // inset for node x within the band
@@ -182,7 +200,12 @@ SldSheet buildMechanicalRiserSld({
   double placeX(String nodeId) =>
       _gutterW + _sidePad + (normX[nodeId] ?? 0.5) * (_drawW - 2 * _sidePad);
 
-  Offset posOf(NetNode n) => Offset(placeX(n.id), bandCentreY(n.floorIndex));
+  // Round 14 (drafting-visual-3) — each service on its own LANE within the
+  // floor band (the shared [riserServiceLanes], mirrored by the canvas Auto
+  // painter), so CW / HW and drainage / vent branches no longer overdraw.
+  final lanes = riserServiceLanes(network, focus: focus);
+  Offset posOf(NetNode n) => Offset(placeX(n.id),
+      bandCentreY(n.floorIndex) + (lanes[n.id] ?? 0) * kRiserLanePitch);
 
   final posById = <String, Offset>{
     for (final n in nodes) n.id: posOf(n),
@@ -1004,7 +1027,7 @@ bool _emitPlantDetail(
 
   // ── PUMP row with the suction / discharge VALVE TRAIN (G3) ───────────────────
   // The pump sits centred, flanked by its real isolation / backflow train — the
-  // suction leg (GV · STR · FJ) to the left, the discharge leg (CV · GV · FJ) to
+  // suction leg (GV · STR · FJ) to the left, the discharge leg (FJ · CV · GV) to
   // the right — the most safety-critical assembly on an air-bersih riser, drawn
   // instead of a bare pump icon. Glyphs reuse the plan-symbol + flexible-joint
   // libraries; the abbrevs already sit in the KETERANGAN legend.
@@ -1018,15 +1041,7 @@ bool _emitPlantDetail(
       prims.add(SldLine(cx, roofBottom, cx, trainCy - glyph / 2,
           weight: SldWeight.thin, role: SldRole.source));
     }
-    const train = <(String, String)>[
-      ('GV', 'GV'),
-      ('STR', 'STR'),
-      ('FJ', 'FJ'),
-      ('PUMP', ''),
-      ('CV', 'CV'),
-      ('GV', 'GV'),
-      ('FJ', 'FJ'),
-    ];
+    const train = kPumpSetValveTrain;
     const gap = 30.0;
     const gl = 15.0;
     final firstCx = cx - (train.length - 1) / 2 * gap;

@@ -292,6 +292,17 @@ class _ShellBody extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Round 14 (regression-commit-on-dispose-deactivated-ref) — ANY section /
+    // view switch commits a focused commit-on-blur field's pending edit while
+    // the screen holding it is still mounted (the listener fires synchronously
+    // on the state change, before this body rebuilds and unmounts it). Covers
+    // every non-focus-taking navigation (workflow stepper chips, Review
+    // Locate jumps, palette commands…) in one place; the field itself no
+    // longer commits on teardown, where its host's ref is already deactivated.
+    ref.listen(shellSectionProvider,
+        (_, _) => MechXTextField.commitPendingEdit());
+    ref.listen(workspaceViewProvider,
+        (_, _) => MechXTextField.commitPendingEdit());
     final section = ref.watch(shellSectionProvider);
     switch (section) {
       case ShellSection.building:

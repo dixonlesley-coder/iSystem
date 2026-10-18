@@ -187,12 +187,15 @@ class _MechXTextFieldState extends State<MechXTextField> {
 
   @override
   void dispose() {
-    // Round 12 (ui-journey-pending-field-edit-lost) — a typed-but-uncommitted
-    // edit is COMMITTED on teardown instead of silently dropped (a nav-rail
-    // tap or Ctrl+1..8 unmounts the screen without ever blurring the field).
-    // Children unmount before their ancestors, so the host's callback (and
-    // its ref) is still live here.
-    _commitIfDirty();
+    // Round 14 (regression-commit-on-dispose-deactivated-ref) — the field
+    // does NOT commit on teardown. Flutter deactivates the whole unmounting
+    // subtree (the host first) before disposing this State, so a host
+    // callback doing `ref.read(...)` here looked up a deactivated ancestor —
+    // a debug assertion, and the edit was lost anyway. Instead every
+    // navigation that swaps the screen WITHOUT taking focus commits first via
+    // [MechXTextField.commitPendingEdit]: the shell accelerators, the nav
+    // rail, the workflow stepper, and (for every other trigger) the shell's
+    // section / view listener, all while the host is still mounted.
     if (identical(_activeField, this)) _activeField = null;
     _focusNode.removeListener(_onFocusChange);
     _controller.dispose();

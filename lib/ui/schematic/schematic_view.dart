@@ -29,6 +29,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/mechanical_sld_drawing.dart'
+    show kPumpSetValveTrain;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -2009,6 +2011,11 @@ Map<String, Offset> _autoNodePositions(
   }
 
   final norm = riserLayoutPositions(network, focus: focus);
+  // Round 14 (drafting-visual-3) — the SAME per-service lanes the export
+  // draws (`riserServiceLanes`), scaled to this band by the shared
+  // kRiserLaneBandFraction, so the canvas offsets the same share of a floor.
+  final lanes = riserServiceLanes(network, focus: focus);
+  final lanePitch = (size.height / n) * kRiserLaneBandFraction;
   final drawWidth = size.width - 2 * _kAutoSidePad;
   final positions = <String, Offset>{};
   for (final entry in norm.entries) {
@@ -2016,7 +2023,7 @@ Map<String, Offset> _autoNodePositions(
     if (node == null) continue;
     positions[entry.key] = Offset(
       _kAutoSidePad + entry.value * drawWidth,
-      bandCentreY(node.floorIndex),
+      bandCentreY(node.floorIndex) + (lanes[entry.key] ?? 0) * lanePitch,
     );
   }
   return positions;
@@ -3183,8 +3190,8 @@ class _AutoSchematicPainter extends CustomPainter {
     }
 
     // PUMP row with the suction / discharge VALVE TRAIN (G3): the pump centred,
-    // flanked by its real train — suction (GV · STR · FJ) left, discharge (CV ·
-    // GV · FJ) right — the safety-critical assembly drawn, not a bare icon.
+    // flanked by its real train — suction (GV · STR · FJ) left, discharge (FJ ·
+    // CV · GV) right — the safety-critical assembly drawn, not a bare icon.
     if (hasPump) {
       final pumpC = _hasComponent(NodeComponent.boosterSet)
           ? NodeComponent.boosterSet
@@ -3200,15 +3207,8 @@ class _AutoSchematicPainter extends CustomPainter {
             ..style = PaintingStyle.stroke,
         );
       }
-      const train = <(String, String)>[
-        ('GV', 'GV'),
-        ('STR', 'STR'),
-        ('FJ', 'FJ'),
-        ('PUMP', ''),
-        ('CV', 'CV'),
-        ('GV', 'GV'),
-        ('FJ', 'FJ'),
-      ];
+      // The engine's ONE train (FJ at each pump nozzle, Round 14).
+      const train = kPumpSetValveTrain;
       const gap = 32.0;
       const gl = 16.0;
       final firstCx = cx - (train.length - 1) / 2 * gap;

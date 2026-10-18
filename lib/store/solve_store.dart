@@ -264,6 +264,7 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
       root,
       edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
       flushSystem: ref.watch(supplyFlushSystemProvider),
+      excludeEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
     );
     if (delivered.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
       flow = delivered;
@@ -286,6 +287,12 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
 /// A single incident edge returns that edge's flow verbatim (byte-identical to
 /// the old trunk for the common single-trunk layout); no sized incident edge ⇒
 /// zero.
+///
+/// Round 14 — [excludeEdgeIds] are the MIRRORED parallel legs the sizer
+/// recorded ([parallelLegEdgeIdsProvider]: duty/standby standby legs, peer
+/// source bridges). A standby suction leg leaving the same ground tank carries
+/// the full set flow but only one pump runs, so summing it counted the set
+/// flow twice (curve(160) = 4.05 L/s for a curve(80) = 2.55 L/s set).
 FlowRate sourceDeliveredFlow(
   Network net,
   Map<String, EdgeSizing> sizing,
@@ -293,10 +300,12 @@ FlowRate sourceDeliveredFlow(
   String rootId, {
   Map<String, double> edgeFixtureUnits = const {},
   FlushSystem? flushSystem,
+  Set<String> excludeEdgeIds = const {},
 }) {
   final incident = <NetEdge>[
     for (final e in net.edges)
       if (e.service == service &&
+          !excludeEdgeIds.contains(e.id) &&
           (e.fromId == rootId || e.toId == rootId) &&
           (sizing[e.id]?.flow.cubicMetersPerSecond ?? 0) > 0)
         e,
@@ -342,8 +351,9 @@ List<AirSystem> airSystemsFor(
   Network net,
   Map<String, EdgeSizing> sizing,
   ProjectState project,
-  ServiceType service,
-) {
+  ServiceType service, {
+  Set<String> parallelLegs = const {},
+}) {
   final edges = net.edges.where((e) => e.service == service).toList();
   if (edges.isEmpty) return const [];
   final flows = <String, FlowRate>{};
@@ -376,7 +386,8 @@ List<AirSystem> airSystemsFor(
   final out = <AirSystem>[];
   for (final entry in largest.entries) {
     final root = entry.key;
-    final delivered = sourceDeliveredFlow(net, sizing, service, root);
+    final delivered = sourceDeliveredFlow(net, sizing, service, root,
+        excludeEdgeIds: parallelLegs);
     final trunk = delivered.cubicMetersPerSecond > 0 ? delivered : entry.value;
     if (trunk.cubicMetersPerSecond <= 0) continue;
     final s = solveDuctStatic(
@@ -389,7 +400,24 @@ List<AirSystem> airSystemsFor(
       building: project.building,
       mounting: project.mounting,
     );
-    out.add((trunk: trunk, stat: s.totalStaticPressure, fanNodeId: root));
+    // Round 14 (inline-booster-fan-phantom) — an INLINE fan no longer roots
+    // its system (the sizer roots at the demand-free outlet/intake leaf so
+    // the discharge duct carries the whole airflow), but the DUTY still
+    // belongs to the drawn machine: report the system's air-unit plant node
+    // (lowest id) when the root itself is not one, so the MEP→E feed fills
+    // that node's way instead of minting a second duty way beside it.
+    var unit = root;
+    if (net.nodeById(root)?.role != NodeRole.plant) {
+      final machines = [
+        for (final n in net.nodes)
+          if (roots[n.id] == root &&
+              n.role == NodeRole.plant &&
+              (n.component?.isElectricalLoad ?? false))
+            n.id,
+      ]..sort();
+      if (machines.isNotEmpty) unit = machines.first;
+    }
+    out.add((trunk: trunk, stat: s.totalStaticPressure, fanNodeId: unit));
   }
   out.sort((a, b) {
     final c = b.trunk.cubicMetersPerSecond.compareTo(a.trunk.cubicMetersPerSecond);
@@ -404,9 +432,11 @@ List<AirSystem> airSystemsFor(
   Network net,
   Map<String, EdgeSizing> sizing,
   ProjectState project,
-  ServiceType service,
-) {
-  final all = airSystemsFor(net, sizing, project, service);
+  ServiceType service, {
+  Set<String> parallelLegs = const {},
+}) {
+  final all = airSystemsFor(net, sizing, project, service,
+      parallelLegs: parallelLegs);
   if (all.isEmpty) {
     return (trunk: const FlowRate(0), stat: const Pressure(0), fanNodeId: null);
   }
@@ -443,8 +473,10 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
-  final supplies = airSystemsFor(net, sizing, project, ServiceType.duct);
-  final rets = airSystemsFor(net, sizing, project, ServiceType.returnAir);
+  final supplies = airSystemsFor(net, sizing, project, ServiceType.duct,
+      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
+  final rets = airSystemsFor(net, sizing, project, ServiceType.returnAir,
+      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
   final supplyRoots = {for (final s in supplies) s.fanNodeId};
   final consumed = <String>{};
   final out = <String, FanDuty>{};
@@ -489,7 +521,8 @@ final exhaustFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
   return {
-    for (final ex in airSystemsFor(net, sizing, project, ServiceType.exhaust))
+    for (final ex in airSystemsFor(net, sizing, project, ServiceType.exhaust,
+      parallelLegs: ref.watch(parallelLegEdgeIdsProvider)))
       ex.fanNodeId:
           sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat),
   };
@@ -516,9 +549,12 @@ final airSystemRootNodesProvider =
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
-  final supply = _airSystem(net, sizing, project, ServiceType.duct);
-  final ret = _airSystem(net, sizing, project, ServiceType.returnAir);
-  final ex = _airSystem(net, sizing, project, ServiceType.exhaust);
+  final supply = _airSystem(net, sizing, project, ServiceType.duct,
+      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
+  final ret = _airSystem(net, sizing, project, ServiceType.returnAir,
+      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
+  final ex = _airSystem(net, sizing, project, ServiceType.exhaust,
+      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
   return (
     supply: supply.fanNodeId ?? ret.fanNodeId,
     exhaust: ex.fanNodeId,
@@ -545,7 +581,8 @@ final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
     final sizing = ref.watch(sizingProvider);
     final project = ref.watch(projectControllerProvider);
     double total(ServiceType service) =>
-        airSystemsFor(net, sizing, project, service)
+        airSystemsFor(net, sizing, project, service,
+      parallelLegs: ref.watch(parallelLegEdgeIdsProvider))
             .fold(0.0, (a, s) => a + s.trunk.inLitersPerSecond);
     final supply = total(ServiceType.duct);
     final ret = total(ServiceType.returnAir);

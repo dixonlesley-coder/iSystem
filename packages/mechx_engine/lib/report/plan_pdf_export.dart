@@ -117,6 +117,7 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
   required PlanUnderlay? underlay,
   required PaperSize paper,
   required ReferenceGrid? grid,
+  int? minScaleDenominator,
 }) {
   final pageW = paper.widthPt; // landscape sheet width, points
   final pageH = paper.heightPt; // landscape sheet height, points
@@ -201,7 +202,8 @@ const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
       rawScale: scale,
       metersPerPixel: metersPerPixel,
       hasContent: hasContent,
-      paperLabel: paper.label);
+      paperLabel: paper.label,
+      minDenominator: minScaleDenominator);
   scale = snap.scale;
   final scaleRow = snap.scaleRow;
   final pointsPerMeter = snap.pointsPerMeter;
@@ -282,6 +284,7 @@ PlanSheetPlot? planSheetPlot({
   double? metersPerPixel,
   PlanUnderlay? underlay,
   PaperSize paper = PaperSize.a3Landscape,
+  int? minScaleDenominator,
   ReferenceGrid? grid,
 }) {
   final f = _planSheetFit(
@@ -295,7 +298,8 @@ PlanSheetPlot? planSheetPlot({
       metersPerPixel: metersPerPixel,
       underlay: underlay,
       paper: paper,
-      grid: grid);
+      grid: grid,
+      minScaleDenominator: minScaleDenominator);
   if (f.pointsPerMeter == null || metersPerPixel == null) return null;
   // Page points → sheet pixels (the inverse of planToPdf's tx / ty).
   double px(double x) => (x - f.offX) / f.scale + f.minX;
@@ -334,6 +338,12 @@ PlanSheetPlot? planSheetPlot({
 /// NTS and NO divided bar is printed — a bar at an arbitrary auto-fit ratio is
 /// a bar an engineer could scale wrong dimensions from (CAD-OUTPUT-UX-REVIEW
 /// A3).
+///
+/// [minScaleDenominator] (Round 14, drafting-visual-7) floors the snapped
+/// `1 : N` — pass the LARGEST natural denominator over every plan of an issued
+/// set ([planSheetPlot]'s `scaleDenominator`) so all typical floors plot at ONE
+/// scale (a sparse floor no longer issues at 1 : 50 beside a dense 1 : 100).
+/// Null ⇒ each sheet's own snap (byte-identical).
 ///
 /// [paper] selects the landscape sheet size (default A3 ⇒ byte-identical); A2
 /// / A1 enlarge the page, margins, fit, chrome anchoring and scale text alike.
@@ -389,6 +399,7 @@ Uint8List planToPdf({
   double? metersPerPixel,
   PlanUnderlay? underlay,
   PaperSize paper = PaperSize.a3Landscape,
+  int? minScaleDenominator,
   Map<String, String>? edgeElevationLabels,
   ReferenceGrid? grid,
   Map<String, String>? edgeTags,
@@ -408,7 +419,8 @@ Uint8List planToPdf({
       metersPerPixel: metersPerPixel,
       underlay: underlay,
       paper: paper,
-      grid: grid);
+      grid: grid,
+      minScaleDenominator: minScaleDenominator);
   final pageW = fit0.pageW, pageH = fit0.pageH, margin = fit0.margin;
   final minX = fit0.minX, minY = fit0.minY, maxX = fit0.maxX, maxY = fit0.maxY;
   final hasGrid = fit0.hasGrid;
