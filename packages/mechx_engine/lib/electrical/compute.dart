@@ -799,6 +799,85 @@ double _singlePhaseNonLinearFraction(List<_CircuitComputation> comps) {
 double _balanceCurrentA(ElectricalCircuitResult r) =>
     r.loadKind == LoadKind.capacitor ? 0.0 : r.designCurrent.amperes;
 
+/// Round 15 — the current a busbar SECTION must carry for one way: its design
+/// current, a capacitor bank at [kCapacitorSwitchingFactor] × its rated
+/// current, a feeder at least its fed board's capacitor switching current.
+double _busbarWayCurrentA(ElectricalCircuitResult r, ElectricalCircuit c,
+    Map<String, double> feederCapacitorFloorA) {
+  var a = r.designCurrent.amperes;
+  if (c.loadKind == LoadKind.capacitor) a *= kCapacitorSwitchingFactor;
+  final fed = c.feedsPanelId;
+  final floor = fed != null ? feederCapacitorFloorA[fed] : null;
+  if (floor != null && floor > a) a = floor;
+  return a;
+}
+
+/// Round 15 (elec-props-3-single-phase-banks-stacked-on-one-line) — spread a
+/// three-phase board's UNPINNED single-phase capacitor banks across L1/L2/L3
+/// by their switching current ([kCapacitorSwitchingFactor] × Q / U0): seed
+/// each line with the pinned banks and the single-phase feeders' capacitor
+/// floors already on it, then place each unpinned bank, LARGEST first (ties
+/// by id), on the lowest tally (ties to the lower line). Load balance (l1/l2/
+/// l3) is untouched — a bank carries no balance current. A single-phase
+/// board, or one with no unpinned single-phase bank, returns [balance].
+PhaseBalance _spreadSinglePhaseBanks(
+  PhaseBalance balance, {
+  required ElectricalPanel panel,
+  required List<ElectricalCircuit> branches,
+  required Map<String, bool> threePhaseOf,
+  Map<String, double> feederCapacitorFloorA = const {},
+  Map<String, ElectricalSystem> panelSystems = const {},
+}) {
+  if (panel.system != ElectricalSystem.threePhase) return balance;
+  final phaseV = roundTo(panel.voltage.volts / math.sqrt(3), 0);
+  int? lineOf(PhaseAssignment? a) => switch (a) {
+        PhaseAssignment.l1 => 0,
+        PhaseAssignment.l2 => 1,
+        PhaseAssignment.l3 => 2,
+        _ => null,
+      };
+  final tally = [0.0, 0.0, 0.0];
+  final free = <(String, double)>[];
+  for (final c in branches) {
+    if (threePhaseOf[c.id] ?? true) continue;
+    if (c.feedsPanelId != null) {
+      final f = feederCapacitorFloorA[c.feedsPanelId];
+      final idx = lineOf(balance.assignment[c.id]);
+      if (f != null && idx != null) tally[idx] += f;
+      continue;
+    }
+    if (c.loadKind != LoadKind.capacitor || c.loadW <= 0) continue;
+    final a = c.loadW / phaseV * kCapacitorSwitchingFactor;
+    if (c.phaseOverride != null) {
+      tally[c.phaseOverride!.index] += a;
+    } else {
+      free.add((c.id, a));
+    }
+  }
+  if (free.isEmpty) return balance;
+  free.sort((x, y) {
+    final c = y.$2.compareTo(x.$2);
+    return c != 0 ? c : x.$1.compareTo(y.$1);
+  });
+  final assignment = {...balance.assignment};
+  const lines = [PhaseAssignment.l1, PhaseAssignment.l2, PhaseAssignment.l3];
+  for (final (id, a) in free) {
+    var idx = 0;
+    for (var i = 1; i < 3; i++) {
+      if (tally[i] < tally[idx] - 1e-9) idx = i;
+    }
+    tally[idx] += a;
+    assignment[id] = lines[idx];
+  }
+  return PhaseBalance(
+    l1: balance.l1,
+    l2: balance.l2,
+    l3: balance.l3,
+    imbalancePercent: balance.imbalancePercent,
+    assignment: assignment,
+  );
+}
+
 /// Round 13 (regression-capacitor-panel-feeder-zero) — the worst LINE current
 /// (A) a board must carry for its CAPACITOR ways alone: each bank way's rated
 /// current (`Q / (√3·U_LL)` 3φ, `Q / U0` 1φ, from its kvar rating) × the
@@ -871,10 +950,11 @@ double panelCapacitorFloorA(
     final phaseV = threePhasePanel
         ? roundTo(panel.voltage.volts / math.sqrt(3), 0)
         : panel.voltage.volts;
+    // Round 15 — Q / (√3·U): a bank's current carries no cos φ divisor.
     final rated = loadCurrent(
       power: Power(c.loadW),
       voltage: Voltage(threePhase ? panel.voltage.volts : phaseV),
-      cosPhi: c.cosPhi,
+      cosPhi: 1.0,
       threePhase: threePhase,
     ).amperes;
     add(c.id, threePhase, c.phaseOverride, rated * kCapacitorSwitchingFactor);
@@ -959,9 +1039,15 @@ _CircuitComputation _computeCircuit(
   final warnings = <ElectricalWarning>[];
   // elec-props-2 — a feeder converts the fed board's demand W at that board's
   // real power factor (see [ComputePanelOptions.feederPowerFactor]).
-  final cosPhi = (isFeeder && c.feedsPanelId != null)
-      ? (opts.feederPowerFactor[c.feedsPanelId] ?? c.cosPhi)
-      : c.cosPhi;
+  // Round 15 (regression-capacitor-ib-divides-by-stale-cosphi) — a capacitor
+  // bank has no meaningful power factor: its current is I = Q / (√3·U) (3φ)
+  // or Q / U0 (1φ) from its kvar. A way re-kinded to Capacitor in the
+  // inspector kept its old cos φ (0.85) and was sized 1/0.85 ≈ 18 % high.
+  final cosPhi = c.loadKind == LoadKind.capacitor
+      ? 1.0
+      : (isFeeder && c.feedsPanelId != null)
+          ? (opts.feederPowerFactor[c.feedsPanelId] ?? c.cosPhi)
+          : c.cosPhi;
 
   // Effective run length: geo-derived when this circuit + the panel are placed
   // on the calibrated layout (and `building`/`calibrationBySheet` were supplied),
@@ -1434,7 +1520,7 @@ ElectricalPanelResult computePanel(
       .toList();
 
   // Balance single-phase circuits across L1/L2/L3; pinned phases are honoured.
-  final balance = balancePhases(
+  final loadBalance = balancePhases(
     [
       for (var i = 0; i < comps.length; i++)
         _PhaseCircuit(
@@ -1447,6 +1533,22 @@ ElectricalPanelResult computePanel(
     panel.system,
     prior: opts.priorAssignment,
     reassignThresholdA: opts.phaseReassignThresholdA,
+  );
+  // Round 15 (elec-props-3-single-phase-banks-stacked-on-one-line) — a bank
+  // adds no balance current, so the load balancer had no signal to spread
+  // unpinned single-phase capacitor banks and stacked them all on L1 (three
+  // 10 kvar banks → 185.7 A on R, a 200 A incomer, S and T uncompensated).
+  // A separate deterministic pass spreads them by their SWITCHING current.
+  final balance = _spreadSinglePhaseBanks(
+    loadBalance,
+    panel: panel,
+    branches: branches,
+    threePhaseOf: {
+      for (var i = 0; i < comps.length; i++)
+        comps[i].result.circuitId: comps[i].threePhase,
+    },
+    feederCapacitorFloorA: opts.feederCapacitorFloorA,
+    panelSystems: opts.panelSystems,
   );
 
   final warnings = <ElectricalWarning>[];
@@ -1659,7 +1761,13 @@ ElectricalPanelResult computePanel(
       for (var i = 0; i < comps.length; i++)
         _BusbarWayLoad(
           comps[i].result.circuitId,
-          comps[i].result.designCurrent.amperes,
+          // Round 15 (elec-props-3-busbar-section-ignores-capacitor-
+          // switching) — a section carries what the way's own protection
+          // admits: a bank at its SWITCHING current, a feeder to a capacitor
+          // board at least that board's switching current (it adds no W, so
+          // its Ib alone is 0 A).
+          _busbarWayCurrentA(comps[i].result, branches[i],
+              opts.feederCapacitorFloorA),
           comps[i].threePhase,
           () {
             final a = balance.assignment[comps[i].result.circuitId];
@@ -2194,6 +2302,8 @@ ElectricalSystemResult computeSystem(
         connectedW: pr.connectedW,
         demandW: pr.demandW,
         demandCurrent: pr.demandCurrent,
+        demandVa: roundTo(
+            math.max(panelDemandVa[id] ?? 0, pr.demandW), 0),
         futureLoadW: pr.futureLoadW,
         headroomApplied: pr.headroomApplied,
         spareWaysReserved: pr.spareWaysReserved,
@@ -2250,6 +2360,53 @@ ElectricalSystemResult computeSystem(
               '${c.name}: the feeder breaker is ${_num(feederRatingA)} A but '
               '${childResult.name} draws ${_num(childDemandA)} A on its '
               'worst-loaded phase$cause.',
+          panelId: id,
+          circuitId: c.id,
+        ));
+      }
+    }
+
+    // Round 15 (elec-props-3-subboard-headroom-not-carried-by-feeder) —
+    // JUDGE-ONLY: a sub-board's FUTURE-LOAD headroom rates ITS incomer + bus
+    // for the uplifted demand, but by design (the headroom invariant) the
+    // feeder and every board upstream keep sizing on TODAY's demand. When the
+    // feeder breaker is below the fed board's future worst-phase current the
+    // reserved capacity can never be drawn (the planned load would trip the
+    // feeder first) — the spec is silently unfulfillable, so say so. Never
+    // resizes: raise the feeder (a breaker override) or drop the headroom.
+    for (final id in postOrder.reversed) {
+      final parent = byId[id];
+      final pr = results[id];
+      if (parent == null || pr == null) continue;
+      for (final c in parent.circuits) {
+        final childId = c.feedsPanelId;
+        if (childId == null) continue;
+        final child = byId[childId];
+        final childResult = results[childId];
+        final feederResult =
+            pr.circuits.where((r) => r.circuitId == c.id).firstOrNull;
+        if (child == null || childResult == null || feederResult == null) {
+          continue;
+        }
+        final multiplier =
+            (child.headroom ?? HeadroomSpec.none).demandMultiplier;
+        if (multiplier <= 1.0 + 1e-9) continue;
+        final futureA = roundTo(
+            childResult.demandCurrent.amperes *
+                child.diversityFactor *
+                multiplier,
+            1);
+        final feederRatingA = feederResult.breaker.ratingA.amperes;
+        if (futureA <= 0 || feederRatingA + 1e-9 >= futureA) continue;
+        pr.warnings.add(ElectricalWarning(
+          code: 'feeder-below-fed-headroom',
+          severity: WarningSeverity.warning,
+          message:
+              '${c.name}: ${childResult.name} reserves future load to '
+              '${_num(futureA)} A on its worst-loaded phase, but its feeder '
+              'breaker is ${_num(feederRatingA)} A — the reserved capacity '
+              'cannot be drawn; raise the feeder rating (and the boards '
+              'upstream) or reduce the headroom.',
           panelId: id,
           circuitId: c.id,
         ));

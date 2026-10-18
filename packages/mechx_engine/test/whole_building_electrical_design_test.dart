@@ -932,7 +932,13 @@ void main() {
       //   PP-1's 58.0 A worst phase × its 0.85 diversity = 49.3 A;)
       //   info     fire-pump-protection            x2  the FRC fire + jockey
       //            pumps (E6 — a specification note, no sizing change);
-      //   info     phase-imbalance-inherent        x1  PP-1 (E7).
+      //   info     phase-imbalance-inherent        x1  PP-1 (E7);
+      //   warning  feeder-below-fed-headroom       x5  (Round 15) every MDP
+      //            feeder to a board whose future-load headroom (20-25 %)
+      //            lifts its worst phase above the LOAD-sized feeder device:
+      //            the reserved capacity cannot be drawn through that feeder
+      //            (judge-only; re-derived per warning below as
+      //            rating < demandCurrent x diversity x (1 + %/100)).
       //
       // Nothing else, and in particular NO `selectivity-partial`: nothing
       // reached its floor target, so nothing is suppressed and nothing is
@@ -946,8 +952,26 @@ void main() {
         'cumulative-voltage-drop-exceeded': 2,
         'fire-pump-protection': 2,
         'phase-imbalance-inherent': 1,
+        'feeder-below-fed-headroom': 5,
       });
-      expect(everyWarning.length, 11); // 6 + 2 + 2 + 1 (Round 11)
+      expect(everyWarning.length, 16); // 6 + 2 + 2 + 1 + 5 (Round 15)
+      for (final w in everyWarning
+          .where((w) => w.code == 'feeder-below-fed-headroom')) {
+        final parent = project.panels.firstWhere((p) => p.id == w.panelId);
+        final feeder = parent.circuits.firstWhere((c) => c.id == w.circuitId);
+        final child =
+            project.panels.firstWhere((p) => p.id == feeder.feedsPanelId);
+        final childResult = sys.panels[child.id]!;
+        final rating = sys.panels[parent.id]!.circuits
+            .firstWhere((r) => r.circuitId == feeder.id)
+            .breaker
+            .ratingA
+            .amperes;
+        final future = childResult.demandCurrent.amperes *
+            child.diversityFactor *
+            (1 + child.headroom!.sparePercentage / 100);
+        expect(rating, lessThan(future), reason: w.message);
+      }
       for (final w in everyWarning) {
         expect(
           w.severity,

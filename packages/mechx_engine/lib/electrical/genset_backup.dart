@@ -43,10 +43,15 @@ Set<String> gensetBackedPanelIds(ElectricalProject project) {
 
 
 /// The diversified apparent-power demand (VA) of the ESSENTIAL sub-tree(s) —
-/// the demand W of each topmost genset-backed board (one whose parent is not
-/// itself backed; its demand already aggregates every board it feeds),
-/// converted at the SAME power-factor basis as the supply summary
-/// (`supply.demandVa / supply.demandW`). 0 when nothing is flagged essential.
+/// the demand VA of each topmost genset-backed board (one whose parent is not
+/// itself backed; its demand already aggregates every board it feeds).
+///
+/// Round 15 (regression-essential-genset-uses-building-pf) — each board's OWN
+/// per-circuit VA ([ElectricalPanelResult.demandVa], `max(VA, W)`), never the
+/// building-average `supply.demandVa / supply.demandW`: a 60 kW chiller board
+/// at cos φ 0.72 is 83.3 kVA, not 60 kW × the building's 1.130 = 67.8 kVA (an
+/// 82 kVA genset was selected against it). The averaged ratio stays only as
+/// the fallback for a board with no VA record. 0 when nothing is essential.
 double essentialDemandVa(ElectricalProject project, ElectricalSystemResult sys) {
   final backed = gensetBackedPanelIds(project);
   if (backed.isEmpty) return 0;
@@ -57,15 +62,19 @@ double essentialDemandVa(ElectricalProject project, ElectricalSystemResult sys) 
       if (fed != null && fed.isNotEmpty) parentOf[fed] = p.id;
     }
   }
-  var w = 0.0;
+  final supplyW = sys.supply.demandW;
+  final vaPerW = supplyW > 0 ? sys.supply.demandVa.voltAmperes / supplyW : 1.0;
+  var va = 0.0;
   for (final id in backed) {
     final parent = parentOf[id];
     if (parent != null && backed.contains(parent)) continue;
-    w += sys.panels[id]?.demandW ?? 0;
+    final pr = sys.panels[id];
+    if (pr == null) continue;
+    va += pr.demandVa > 0
+        ? (pr.demandVa > pr.demandW ? pr.demandVa : pr.demandW)
+        : pr.demandW * vaPerW;
   }
-  final supplyW = sys.supply.demandW;
-  final vaPerW = supplyW > 0 ? sys.supply.demandVa.voltAmperes / supplyW : 1.0;
-  return w * vaPerW;
+  return va;
 }
 
 /// The demand the genset must BACK: `max(backupFraction × the diversified

@@ -23,6 +23,7 @@ import 'dart:math' as math;
 import '../standards/puil.dart' show BreakerClass, BreakerCurve;
 import 'catalog.dart';
 import 'earthing.dart' show RcdType;
+import 'fault.dart' show FaultStudyResult;
 import 'load_kind.dart' show LoadKind;
 import 'panel_results.dart';
 import 'results.dart' show BreakerResult, BusbarResult, NeutralPeBars;
@@ -253,16 +254,24 @@ List<BomLine> _panelLines(
   ElectricalPanelResult panel,
   List<Part> parts, {
   double? minBreakingKa,
+  double? incomerKa,
+  Map<String, double> breakerKaByCircuitId = const {},
 }) {
   final lines = <BomLine>[];
   final pname = panel.name;
   final partBySku = {for (final p in parts) p.sku: p};
-  final kaTag = (minBreakingKa ?? 0) > 0 ? ' ${_fmt(_r1(minBreakingKa!))}kA' : '';
 
-  BomLine breakerLine(String description, BreakerResult b, int poles) {
-    final part = _matchBreaker(b, parts,
-        poles: poles, minBreakingKa: minBreakingKa);
-    final short = _kaShort(part, minBreakingKa);
+  // Round 15 (elec-props-3-bom-mccb-ka-below-schedule) — a device with a
+  // SPECIFIED breaking capacity (the fault study's Icu rung, which already
+  // satisfies Ics = fraction·Icu ≥ Isc for an MCCB) matches against THAT
+  // figure — the one the schedule prints — never the raw bus fault (a 16 kA
+  // MCCB has Ics 12 kA < a 16 kA fault, the study rules it out).
+  BomLine breakerLine(String description, BreakerResult b, int poles,
+      {double? specifiedKa}) {
+    final needKa = specifiedKa ?? minBreakingKa;
+    final kaTag = (needKa ?? 0) > 0 ? ' ${_fmt(_r1(needKa!))}kA' : '';
+    final part = _matchBreaker(b, parts, poles: poles, minBreakingKa: needKa);
+    final short = _kaShort(part, needKa);
     // The shortfall note goes BEFORE the trailing " — <location>" suffix, so
     // consolidation (which strips that suffix) keeps it on the merged line.
     String withNote(String d) {
@@ -287,6 +296,7 @@ List<BomLine> _panelLines(
     '${inc.poles}P incomer — $pname',
     inc.breaker,
     inc.poles,
+    specifiedKa: incomerKa,
   ));
 
   // Enclosure — one per panel (the panel box itself; un-matched without an
@@ -311,6 +321,7 @@ List<BomLine> _panelLines(
       'curve ${_curveStr(c.breaker.curve)} — ${c.name}',
       c.breaker,
       poles,
+      specifiedKa: breakerKaByCircuitId[c.circuitId],
     ));
 
     // Cable run — the conductor PULL LENGTH in metres (cable is sold per metre),
@@ -491,20 +502,56 @@ List<BomLine> _neutralPeLines(NeutralPeBars np, String pname) => [
 /// the fault study's `prospectiveFaultkA`) makes every breaker on that board
 /// match a part whose breaking capacity covers it (see [matchBreakerSku]);
 /// absent ⇒ the kA-blind match, byte-identical.
+///
+/// Round 15 — [incomerKaByPanelId] / [breakerKaByCircuitId] are the
+/// SPECIFIED per-device breaking capacities the schedule prints (the fault
+/// study's `incomerKa` / `breakerKa`); when given they win over the bus
+/// figure for that device, so the ordered part can never contradict the
+/// issued schedule (see [faultSpecifiedKa]).
 Bom buildBom(
   ElectricalSystemResult sys, {
   List<Part> parts = seedCatalog,
   Map<String, double> requiredIcuKaByPanelId = const {},
+  Map<String, double> incomerKaByPanelId = const {},
+  Map<String, double> breakerKaByCircuitId = const {},
 }) {
   final flat = <BomLine>[];
   for (final id in sys.order) {
     final panel = sys.panels[id];
     if (panel != null) {
       flat.addAll(_panelLines(panel, parts,
-          minBreakingKa: requiredIcuKaByPanelId[id]));
+          minBreakingKa: requiredIcuKaByPanelId[id],
+          incomerKa: incomerKaByPanelId[id],
+          breakerKaByCircuitId: breakerKaByCircuitId));
     }
   }
   return Bom(_consolidate(flat));
+}
+
+/// Round 15 — the three breaking-capacity maps a BOM needs, read off one
+/// fault study: the bus prospective fault per panel (fallback), the specified
+/// incomer kA per panel and the specified way kA per circuit (only finite,
+/// positive figures).
+({
+  Map<String, double> bus,
+  Map<String, double> incomers,
+  Map<String, double> breakers,
+}) faultSpecifiedKa(FaultStudyResult fault) {
+  bool ok(double v) => v.isFinite && v > 0;
+  return (
+    bus: {
+      for (final e in fault.panels.entries)
+        if (ok(e.value.prospectiveFaultkA)) e.key: e.value.prospectiveFaultkA,
+    },
+    incomers: {
+      for (final e in fault.panels.entries)
+        if (ok(e.value.incomerKa)) e.key: e.value.incomerKa,
+    },
+    breakers: {
+      for (final e in fault.circuits.entries)
+        if (ok(e.value.breakerKa)) e.key: e.value.breakerKa,
+    },
+  );
 }
 
 /// Build the (un-consolidated) bill for a single panel result — useful for a
