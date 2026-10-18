@@ -996,6 +996,11 @@ enum StringKey {
   mepSyncBoardCreatedTemplate, // {parts}
   mepSyncBoardRemoved,
 
+  /// Round 22 — refusals for editing an MEP-DERIVED way / the MEP board,
+  /// whose rows follow the equipment drawn on the plan.
+  mepDerivedWayLocked,
+  mepBoardLocked,
+
   /// The detail of the first added way — its own name + motor rating (the
   /// sized breaker/cable live on the board schedule, see [_narrateMepSync]).
   mepSyncDetailTemplate, // {name} {kw}
@@ -2324,6 +2329,10 @@ const Map<StringKey, String> _en = {
   StringKey.mepSyncBoardCreatedTemplate: 'MEP Equipment board created: {parts}',
   StringKey.mepSyncBoardRemoved:
       'MEP Equipment board removed — no equipment left',
+  StringKey.mepDerivedWayLocked:
+      'This way follows equipment on the plan — delete the equipment there to remove it',
+  StringKey.mepBoardLocked:
+      'The MEP Equipment board follows the plan — delete its equipment there first',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
   StringKey.calibrationScaleSetRemaining:
       'Scale set: {scale} - {sheets} still uncalibrated (apply to all in the '
@@ -3679,6 +3688,10 @@ const Map<StringKey, String> _id = {
   StringKey.mepSyncBoardCreatedTemplate: 'Panel Peralatan MEP dibuat: {parts}',
   StringKey.mepSyncBoardRemoved:
       'Panel Peralatan MEP dihapus — tidak ada peralatan tersisa',
+  StringKey.mepDerivedWayLocked:
+      'Jalur ini mengikuti peralatan di denah — hapus peralatannya di sana untuk menghapusnya',
+  StringKey.mepBoardLocked:
+      'Panel Peralatan MEP mengikuti denah — hapus peralatannya di sana terlebih dahulu',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
   StringKey.calibrationScaleSetRemaining:
       'Skala diatur: {scale} - {sheets} belum dikalibrasi (terapkan ke semua '

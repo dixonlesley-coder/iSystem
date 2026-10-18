@@ -87,3 +87,12 @@ String quantity(
   if (s.endsWith(decimalSeparator)) s = s.substring(0, s.length - 1);
   return s;
 }
+
+/// A signed elevation figure with two decimals — `+4.00`, `-3.20`, and `+0.00`
+/// for anything that rounds to zero (never `-0.00` / `+-3.20`). ONE formatter
+/// for every FFL notation (mechanical + electrical risers, the plan hover chip)
+/// so the issued drawings of one building agree on below-ground levels.
+String signedElevationText(double meters) {
+  final s = meters.abs().toStringAsFixed(2);
+  return (meters < 0 && s != '0.00') ? '-$s' : '+$s';
+}

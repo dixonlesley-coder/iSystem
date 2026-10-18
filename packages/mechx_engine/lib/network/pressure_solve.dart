@@ -241,6 +241,81 @@ class _NodeCost {
   const _NodeCost(this.friction, this.elevationGain);
 }
 
+/// Round 16 / 22 — the inline devices that change the head DOWNSTREAM of
+/// them, applied source-outward over the source-rooted BFS tree (the same
+/// tree the friction walk treats the service as):
+///
+/// * a drawn PRV ([NodeComponent.prv]) whose inlet head exceeds
+///   [setpointHead] lowers itself and every node below it by the excess
+///   (flowing and no-flow separately), so its outlet holds the setpoint;
+/// * a mover in [moverHeads] raises itself and every node below it by its
+///   head (a booster adds head to what it serves).
+///
+/// Nearer-the-source devices go first, so a booster then a PRV below it (or
+/// PRVs in series) compose in turn. Mutates [flowingHead] / [staticHead].
+void _applyInlineDevices({
+  required Network net,
+  required String sourceId,
+  required Map<String, List<({NetEdge edge, String other})>> adjacency,
+  required Iterable<String> reached,
+  required Map<String, double> flowingHead,
+  required Map<String, double> staticHead,
+  required double setpointHead,
+  Map<String, Head> moverHeads = const {},
+}) {
+  final devices = [
+    for (final id in reached)
+      if (id != sourceId &&
+          (net.nodeById(id)?.component == NodeComponent.prv ||
+              (moverHeads[id]?.meters ?? 0) > 0))
+        id,
+  ];
+  if (devices.isEmpty) return;
+  final parent = <String, String>{};
+  final hop = <String, int>{sourceId: 0};
+  final queue = [sourceId];
+  for (var i = 0; i < queue.length; i++) {
+    final n = queue[i];
+    for (final l in adjacency[n] ?? const <({NetEdge edge, String other})>[]) {
+      if (hop.containsKey(l.other)) continue;
+      hop[l.other] = hop[n]! + 1;
+      parent[l.other] = n;
+      queue.add(l.other);
+    }
+  }
+  final children = <String, List<String>>{};
+  parent.forEach((c, p) => (children[p] ??= []).add(c));
+  devices.sort((a, b) {
+    final c = (hop[a] ?? 0).compareTo(hop[b] ?? 0);
+    return c != 0 ? c : a.compareTo(b);
+  });
+  void shift(String root, double dFlow, double dStatic) {
+    final stack = [root];
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      final f = flowingHead[n];
+      if (f != null) flowingHead[n] = f + dFlow;
+      final st = staticHead[n];
+      if (st != null) staticHead[n] = st + dStatic;
+      stack.addAll(children[n] ?? const <String>[]);
+    }
+  }
+
+  for (final r in devices) {
+    final inFlow = flowingHead[r];
+    if (inFlow == null) continue;
+    final boost = moverHeads[r]?.meters ?? 0;
+    if (boost > 0) {
+      shift(r, boost, boost);
+      continue;
+    }
+    final dFlow = inFlow - setpointHead;
+    final dStatic = (staticHead[r] ?? inFlow) - setpointHead;
+    if (dFlow <= 0 && dStatic <= 0) continue;
+    shift(r, dFlow > 0 ? -dFlow : 0, dStatic > 0 ? -dStatic : 0);
+  }
+}
+
 /// Solve a pressurized supply [service] tree fed from [sourceId].
 ///
 /// Walks the [service] subgraph from [sourceId] (BFS, skipping visited nodes
@@ -264,10 +339,12 @@ PressureSolution solvePressurized({
   required Pressure targetResidual,
   PipeMaterial material = PipeMaterial.pvc,
   MountingHeights mounting = const MountingHeights(),
+  Pressure? prvSetpoint,
 }) {
   const profile = SniProfile();
   final hwC = profile.hazenWilliamsC(material);
   final targetHead = headFromPressure(targetResidual);
+  final setpointHead = headFromPressure(prvSetpoint ?? targetResidual).meters;
 
   final source = net.nodeById(sourceId);
   // Adjacency over THIS service only: nodeId → list of (edge, neighbour).
@@ -359,15 +436,33 @@ PressureSolution solvePressurized({
 
   // residual(node) = pump - friction(node) - elevationGain(node), as pressure;
   // the no-flow static drops the friction term (mech-building-2).
-  final residualPressure = <String, Pressure>{};
-  final noFlowStatic = <String, Pressure>{};
+  final flowingHead = <String, double>{};
+  final staticHead = <String, double>{};
   costs.forEach((nodeId, cost) {
-    final residualHead =
+    flowingHead[nodeId] =
         requiredPumpHead - cost.friction.meters - cost.elevationGain.meters;
-    residualPressure[nodeId] = pressureFromHead(Head(residualHead));
-    noFlowStatic[nodeId] =
-        pressureFromHead(Head(requiredPumpHead - cost.elevationGain.meters));
+    staticHead[nodeId] = requiredPumpHead - cost.elevationGain.meters;
   });
+  // Round 22 (pressurized-3-2) — a drawn PRV holds its setpoint downstream on
+  // the upfeed too (the same pass as [solveDownfeed]), so 'zone the riser with
+  // PRVs' really lowers the residuals and no-flow statics below each PRV. The
+  // pump head is unchanged: it is set by the critical fixture, upstream of
+  // any PRV that actually reduces.
+  _applyInlineDevices(
+    net: net,
+    sourceId: sourceId,
+    adjacency: adjacency,
+    reached: costs.keys,
+    flowingHead: flowingHead,
+    staticHead: staticHead,
+    setpointHead: setpointHead,
+  );
+  final residualPressure = <String, Pressure>{
+    for (final e in flowingHead.entries) e.key: pressureFromHead(Head(e.value)),
+  };
+  final noFlowStatic = <String, Pressure>{
+    for (final e in staticHead.entries) e.key: pressureFromHead(Head(e.value)),
+  };
 
   return PressureSolution(
     residualPressure: residualPressure,
@@ -463,6 +558,14 @@ class DownfeedSolution {
 /// are applied tank-outward. It used to be only a minor-loss K: the heatmap
 /// and residuals ignored it and the ground floor of a 20-storey downfeed read
 /// 601 kPa with or without a PRV drawn.
+///
+/// Round 22 (pressurized-3-3) — [moverHeads] (node id → head) are the heads
+/// of the drawn, SIZED inline movers (boosters): each adds its head to the
+/// flowing and no-flow head of every node it serves, applied tank-outward
+/// together with the PRVs. Empty (the default) ⇒ the unboosted field the
+/// booster duty itself is sized on; the app solves a second, DELIVERED field
+/// with the sized heads for the heatmap, the node probe and the over-pressure
+/// judgement.
 DownfeedSolution solveDownfeed({
   required Network net,
   required ServiceType service,
@@ -476,6 +579,7 @@ DownfeedSolution solveDownfeed({
   PipeMaterial material = PipeMaterial.pvc,
   MountingHeights mounting = const MountingHeights(),
   Pressure? prvSetpoint,
+  Map<String, Head> moverHeads = const {},
 }) {
   const profile = SniProfile();
   final hwC = profile.hazenWilliamsC(material);
@@ -550,48 +654,19 @@ DownfeedSolution solveDownfeed({
     staticHead[nodeId] = gravity;
   });
 
-  // Round 16 — drawn PRVs hold their setpoint downstream. The subtree below
-  // each PRV follows the tank-rooted BFS tree (the same tree the friction
-  // walk treats the service as); PRVs are applied tank-outward so a series
-  // pair reduces in turn.
-  final prvs = [
-    for (final id in friction.keys)
-      if (id != tankId && net.nodeById(id)?.component == NodeComponent.prv) id,
-  ];
-  if (prvs.isNotEmpty) {
-    final parent = <String, String>{};
-    final hop = <String, int>{tankId: 0};
-    final queue = [tankId];
-    for (var i = 0; i < queue.length; i++) {
-      final n = queue[i];
-      for (final l in adjacency[n] ?? const <({NetEdge edge, String other})>[]) {
-        if (hop.containsKey(l.other)) continue;
-        hop[l.other] = hop[n]! + 1;
-        parent[l.other] = n;
-        queue.add(l.other);
-      }
-    }
-    final children = <String, List<String>>{};
-    parent.forEach((c, p) => (children[p] ??= []).add(c));
-    prvs.sort((a, b) {
-      final c = (hop[a] ?? 0).compareTo(hop[b] ?? 0);
-      return c != 0 ? c : a.compareTo(b);
-    });
-    for (final r in prvs) {
-      final inFlow = flowingHead[r];
-      if (inFlow == null) continue;
-      final dFlow = inFlow - setpointHead;
-      final dStatic = (staticHead[r] ?? inFlow) - setpointHead;
-      if (dFlow <= 0 && dStatic <= 0) continue;
-      final stack = [r];
-      while (stack.isNotEmpty) {
-        final n = stack.removeLast();
-        if (dFlow > 0) flowingHead[n] = flowingHead[n]! - dFlow;
-        if (dStatic > 0) staticHead[n] = staticHead[n]! - dStatic;
-        stack.addAll(children[n] ?? const <String>[]);
-      }
-    }
-  }
+  // Round 16 — drawn PRVs hold their setpoint downstream; Round 22 — a drawn
+  // mover in [moverHeads] adds its head to everything it serves (see
+  // [_applyInlineDevices]).
+  _applyInlineDevices(
+    net: net,
+    sourceId: tankId,
+    adjacency: adjacency,
+    reached: friction.keys,
+    flowingHead: flowingHead,
+    staticHead: staticHead,
+    setpointHead: setpointHead,
+    moverHeads: moverHeads,
+  );
 
   final residualPressure = <String, Pressure>{};
   final noFlowStatic = <String, Pressure>{};

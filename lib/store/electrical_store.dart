@@ -118,6 +118,10 @@ final phasePriorCacheProvider = Provider<PhasePriorCache>((_) => PhasePriorCache
 /// and guard palette drops onto it (a user-dropped way there would be wiped).
 const String kMepEquipmentPanelId = 'mep-equipment';
 
+/// Round 22 — the deterministic id of the feeder [ElectricalProjectController.
+/// syncMepEquipment] auto-wires into the MEP board (one board ⇒ one id).
+const String kMepEquipmentFeederId = 'mep-equipment-feeder';
+
 /// Which whole-area workspace the center of the shell shows. Generalises the old
 /// binary plan/schematic toggle into a three-way selection (plan / schematic /
 /// electrical).
@@ -628,7 +632,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       final circuits = <ElectricalCircuit>[];
       for (final c in panel.circuits) {
         final pos = c.loadPos;
-        if (pos == null) {
+        // Round 22 (edit-fuzz-2-mep-loadpos-desync) — an MEP-DERIVED way's
+        // position is not the user's: it is re-derived from its equipment node
+        // (which the network remap has already moved) by [syncMepEquipment].
+        // Shifting it here too moved it twice (a phantom storey of cable) or,
+        // on a floor delete, un-placed it. [resyncMepEquipment] re-derives.
+        if (pos == null || c.sourceEquipmentId != null) {
           circuits.add(c);
           continue;
         }
@@ -1197,9 +1206,18 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// commit — the child's stale `fedByCircuitId` back-pointer is cleared and it
   /// becomes utility-fed again, as ONE undo step. No-op (and no phantom undo
   /// entry) when either id is unknown.
+  ///
+  /// Round 22 (edit-fuzz-2-mep-edits-silently-reverted) — an MEP-DERIVED way
+  /// (`sourceEquipmentId != null`) is REFUSED with a status message: it follows
+  /// its equipment node, so [syncMepEquipment] would silently re-add it on the
+  /// next drawing edit or on reopen. Delete the equipment on the plan instead.
   void deleteCircuit(String panelId, String circuitId) {
     final panel = state.panels.where((p) => p.id == panelId).firstOrNull;
     if (panel == null || !panel.circuits.any((c) => c.id == circuitId)) return;
+    if (isMepDerivedWay(panelId, circuitId)) {
+      _refuse(StringKey.mepDerivedWayLocked);
+      return;
+    }
     final panels = <ElectricalPanel>[
       for (final p in state.panels)
         if (p.id == panelId)
@@ -1304,6 +1322,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     }
     if (source == null || target == null) return;
     if (source.isFeeder || target.isFeeder) return; // feeders aren't loads
+    // Round 22 — MEP-derived ways follow their equipment (the sync would
+    // split a merge back apart): refused, like [deleteCircuit].
+    if (source.sourceEquipmentId != null || target.sourceEquipmentId != null) {
+      _refuse(StringKey.mepDerivedWayLocked);
+      return;
+    }
 
     final src = source;
     final tgt = target;
@@ -1356,7 +1380,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// DELETE HYGIENE: the parent's feeder way now points at a board that no
   /// longer exists, so the survivors run through [sanitizeFeederTopology] INSIDE
   /// the same commit — the dangling feeder is dropped as ONE undo step.
+  ///
+  /// Round 22 — the MEP Equipment board is REFUSED while it holds MEP-derived
+  /// ways ([isMepBoardLocked]): the sync would re-create it.
   void deletePanel(String id) {
+    if (isMepBoardLocked(id)) {
+      _refuse(StringKey.mepBoardLocked);
+      return;
+    }
     // C5 — count the sanitize cascade's collateral BEFORE mutating, so the
     // status pill can name it: the parent's feeder way into the deleted board
     // is dropped, and any board the deleted one fed is silently re-rooted.
@@ -1532,6 +1563,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// parity). Empty ⇒ no-op.
   void deletePanels(Iterable<String> ids) {
     final set = ids.toSet();
+    // Round 22 — a locked MEP board stays (see [deletePanel]).
+    if (set.any(isMepBoardLocked)) {
+      set.removeWhere(isMepBoardLocked);
+      _refuse(StringKey.mepBoardLocked);
+    }
     if (set.isEmpty) return;
     _commit(_withProject(
       panels: sanitizeFeederTopology([
@@ -2045,6 +2081,39 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// undo to a pre-sync snapshot simply predates the synced panel; the reactive
   /// listener re-asserts it on the next equipment change). H1: every pass that
   /// actually CHANGES the board narrates itself once via [_narrateMepSync].
+  /// Round 22 — true when [circuitId] on [panelId] is an MEP-DERIVED way
+  /// (carries a `sourceEquipmentId`): it follows its equipment node and is
+  /// refused by [deleteCircuit] / [mergeCircuit].
+  bool isMepDerivedWay(String panelId, String circuitId) {
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id == circuitId) return c.sourceEquipmentId != null;
+      }
+    }
+    return false;
+  }
+
+  /// Round 22 — true when [panelId] is the MEP Equipment board and still holds
+  /// an MEP-derived way (the sync would re-create a deleted board).
+  bool isMepBoardLocked(String panelId) =>
+      panelId == kMepEquipmentPanelId &&
+      state.panels.any((p) =>
+          p.id == panelId &&
+          p.circuits.any((c) => c.sourceEquipmentId != null));
+
+  void _refuse(StringKey key) {
+    final s = MechXStringsData(ref.read(localeProvider));
+    ref.read(statusMessageProvider.notifier).showStatus(s(key));
+  }
+
+  /// Round 22 — re-run [syncMepEquipment] on the CURRENT MEP feed (read
+  /// fresh, so it reflects nodes just moved by a floor / sheet edit) — the
+  /// step that re-derives MEP-derived load positions after
+  /// [remapLayoutPositions] (which deliberately leaves them alone).
+  void resyncMepEquipment() =>
+      syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
+
   void syncMepEquipment(List<ElectricalCircuit> derived) {
     final existing =
         state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
@@ -2210,7 +2279,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       return;
     }
     final root = roots.single;
-    final feederId = _freshId('c');
+    // Round 22 (edit-fuzz-2-mep-feeder-id-regenerated) — a DETERMINISTIC id
+    // (only one MEP board can exist), so undo → redo of placing equipment
+    // re-creates the identical document and anything keyed by the feeder id
+    // (selection, inspector target, acknowledged issues) still resolves.
+    final taken = {
+      for (final p in others)
+        for (final c in p.circuits) c.id,
+    };
+    final feederId = taken.contains(kMepEquipmentFeederId)
+        ? _freshId('c')
+        : kMepEquipmentFeederId;
     state = _withProject(panels: [
       for (final p in others)
         if (p.id == root.id)

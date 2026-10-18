@@ -444,11 +444,15 @@ class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
           ElectricalMenuAction(
               context.strings(StringKey.electricalShowInSingleLine),
               widget.onShowInSingleLine!),
-        ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
-            () {
-          controller.deleteCircuit(target.panelId, target.circuitId);
-          onDone();
-        }, danger: true),
+        // Round 22 — an MEP-derived way follows its equipment on the plan;
+        // the store refuses its delete, so the menu does not offer it.
+        if (widget.circuit?.sourceEquipmentId == null &&
+            !controller.isMepDerivedWay(target.panelId, target.circuitId))
+          ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
+              () {
+            controller.deleteCircuit(target.panelId, target.circuitId);
+            onDone();
+          }, danger: true),
       ],
     );
   }
@@ -660,11 +664,12 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
             controller.disconnectFeeder(panel.id);
             onDone();
           }),
-        ElectricalMenuAction(
-            context.strings(StringKey.electricalMenuDeletePanel), () {
-          controller.deletePanel(panel.id);
-          onDone();
-        }, danger: true),
+        if (!controller.isMepBoardLocked(panel.id))
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalMenuDeletePanel), () {
+            controller.deletePanel(panel.id);
+            onDone();
+          }, danger: true),
       ],
     );
   }

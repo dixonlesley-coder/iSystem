@@ -1458,6 +1458,28 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 22 — standpipe per riser, tank-fed top zone, inline devices on both
+  solves (2026-10-18)**: `hydrantDesignFlow` is the multi-riser TOTAL and
+  rides only the common supply; every hydrant riser / trunk carries
+  `standpipeFlow(n)` for the n stacks in parallel downstream of it (one stack
+  ⇒ 500 gpm). `drawnStandpipeRiserCount` counts PARALLEL stacks
+  (`parallelStandpipeCount`: max components over any storey interval) — a
+  jogged stack counts once. A bare VENT junction on the top storey reads the
+  roof (VTR); drainage / rainwater keep the under-slab datum. A paginated riser
+  prints each riser tag once (on its lower end's page) and draws a pass-through
+  on every page it spans. Every FFL goes through `signedElevationText`. The
+  downfeed TOP zone is fed by the tank head (`computeDownfeedZones(
+  tankElevation:, maxFixtureStatic:)`, `DownfeedZoneStatic.viaPrv` false) —
+  never budget it on a PRV setpoint; only zones below take PRV stations, and the
+  zone table shows only when one is needed (or a zone is over). Drawn PRVs hold
+  their setpoint on BOTH solves (`_applyInlineDevices`); a sized booster's head
+  is applied by `solveDownfeed(moverHeads:)` — the app's
+  `downfeedDeliveredProvider` feeds the heatmap / probe / over-pressure judge,
+  `downfeedProvider` stays the unboosted sizing input. Hot water always takes
+  the flush-TANK curve. MEP-derived ways' `loadPos` is never remapped by a
+  floor edit (re-derived by `resyncMepEquipment`), derived ways / the MEP board
+  refuse delete / merge, and the auto-wired MEP feeder id is
+  `kMepEquipmentFeederId`.
 - **Round 21 — nested rooms, fire pumps + pipe, family-true BOM, legible
   risers, a gravity datum (2026-10-18)**: the generating-room tag
   (`roomTerminalOwnerOf`) wins only outside a smaller same-kind room — a

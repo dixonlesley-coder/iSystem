@@ -351,8 +351,15 @@ void main() {
     c.read(projectControllerProvider.notifier).setFloors([
       for (var i = 0; i < 12; i++) Floor('L$i', const Length(3.5)),
     ]);
+    // Round 22 — the top zone is tank-fed (12 × 3.5 m: floors 11..1 sit
+    // within 42 − (3.5f + 1.1) ≤ 39.99 m of tank head); the first PRV zone
+    // (floor 0) holds the setpoint.
     expect(
-      c.read(zoneStaticsProvider).first.topResidual.inKiloPascals,
+      c
+          .read(zoneStaticsProvider)
+          .firstWhere((z) => z.viaPrv)
+          .topResidual
+          .inKiloPascals,
       closeTo(255, 1e-9),
     );
     expect(

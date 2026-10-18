@@ -128,6 +128,10 @@ void remapFloorPlacedWork(
     if (fi == null) return null;
     return fi == p.floorIndex ? p : p.copyWith(floorIndex: fi);
   });
+  // Round 22 (edit-fuzz-2-mep-loadpos-desync) — MEP-derived ways were left
+  // alone above; re-derive them now from the remapped equipment nodes, so a
+  // save / export straight after the edit carries the right cable length.
+  read(electricalProjectProvider.notifier).resyncMepEquipment();
 }
 
 /// Drop everything keyed to a GONE sheet ([isGone] true for its id) — the

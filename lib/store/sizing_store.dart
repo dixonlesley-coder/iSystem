@@ -159,7 +159,8 @@ final sizingDetailProvider = Provider<
         n.id: drainageFixtureUnit(n.fixture!),
   };
   // If any assigned WC uses a flush valve (built-in OR a custom flush-valve
-  // fixture), size the supply on the valve curve.
+  // fixture), size the COLD supply on the valve curve (Round 22: the engine
+  // keeps hot water on the flush-tank branch — it serves no flush valve).
   final anyFlushValve = net.nodes.any((n) =>
       n.fixture == PlumbingFixture.waterClosetFlushValve ||
       (customFor(n)?.isFlushValve ?? false));

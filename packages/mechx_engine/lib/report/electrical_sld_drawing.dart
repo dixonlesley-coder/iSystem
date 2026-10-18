@@ -45,7 +45,7 @@ import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
 import '../units.dart' show ApparentPower, Current, Length, Power;
 import 'drawing_chrome.dart' show helveticaTextWidth;
-import 'number_format.dart' show groupThousands;
+import 'number_format.dart' show groupThousands, signedElevationText;
 import 'plan_symbols.dart' show planLengthLabel;
 import 'sld_sheet.dart';
 
@@ -2488,10 +2488,7 @@ const double _fanColH = (kRiserFanMax + 1) * _fanRowH + 6;
 const double _fanLabelSize = 6;
 
 /// Format a true elevation (m) as an FFL tag like `+12.50` / `-3.00`.
-String _ffl(double meters) {
-  final s = meters.abs().toStringAsFixed(2);
-  return meters < 0 ? '-$s' : '+$s';
-}
+String _ffl(double meters) => signedElevationText(meters);
 
 /// Truncate a fan-out circuit NAME to [maxLen] characters total (the same
 /// on-canvas width budget the old bare `substring(0, 14)` used), but cut on a

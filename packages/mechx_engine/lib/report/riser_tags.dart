@@ -15,6 +15,8 @@
 library;
 
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/number_format.dart'
+    show signedElevationText;
 import 'package:mechx_engine/units.dart' show Power;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
@@ -51,7 +53,7 @@ String riserServiceCode(ServiceType s) => switch (s) {
 /// the exported [buildMechanicalRiserSld] SldSheet so the working view and the
 /// issued deliverable read the elevation identically (E6). [meters] is the SI
 /// elevation; this is a display formatter only (no unit maths).
-String fflLabel(double meters) => 'FFL +${meters.toStringAsFixed(2)}';
+String fflLabel(double meters) => 'FFL ${signedElevationText(meters)}';
 
 bool _isSupplyTank(NodeComponent? c) =>
     c == NodeComponent.groundTank || c == NodeComponent.pump ||

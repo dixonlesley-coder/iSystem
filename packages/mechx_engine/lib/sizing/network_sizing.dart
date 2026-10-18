@@ -29,7 +29,12 @@ import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
-    show kMaxFireVelocityMps, kMinHydrantBranchDiameterMm, kMinRiserDiameterMm;
+    show
+        kMaxFireVelocityMps,
+        kMinHydrantBranchDiameterMm,
+        kMinRiserDiameterMm,
+        parallelStandpipeCount,
+        standpipeFlow;
 import 'storm_sizing.dart' as storm;
 import 'water_supply_sizing.dart' as water;
 
@@ -1106,7 +1111,9 @@ Map<String, String> serviceComponentRoots(
 ///   • Water supply (cold/hot) with an entry in [leafFixtureUnits]: accumulate
 ///     fixture UNITS down the tree and convert each edge's total via the
 ///     Hunter/UBAP curve ([flushSystem]) — diversified simultaneous demand,
-///     NOT a sum of peak fixture flows.
+///     NOT a sum of peak fixture flows. Round 22: [flushSystem] applies to
+///     COLD water only; hot water always takes the flush-tank branch (it
+///     never serves a flush valve).
 ///   • Everything else (or water without fixture-unit data): accumulate the
 ///     flat [leafDemand] flows.
 ///
@@ -1137,7 +1144,11 @@ Map<String, String> serviceComponentRoots(
 /// exactly that design flow — so a 10-box riser is no longer sized for 50 L/s
 /// while the pump delivers 31.5 L/s, nor a 4-box riser for 20 L/s that the
 /// pump's 31.5 L/s would push past the velocity cap. A branch run serving a
-/// single box keeps its per-box flow. Null ⇒ byte-identical (flat
+/// single box keeps its per-box flow. Round 22: [hydrantDesignFlow] is the
+/// multi-riser TOTAL, carried only by the common supply upstream of the split;
+/// a riser, or a trunk serving fewer stacks, carries `standpipeFlow(n)` for
+/// the n stacks running in parallel downstream of it (one stack ⇒ 500 gpm),
+/// never more than [hydrantDesignFlow]. Null ⇒ byte-identical (flat
 /// accumulation).
 ///
 /// WATER-CLOSET NODES ([waterClosetNodeIds]): node ids the caller knows carry a
@@ -1241,6 +1252,13 @@ Map<String, EdgeSizing> autoSizeNetwork(
   final drainageParentNode = <String, String>{};
 
   for (final service in services) {
+    // Round 22 (pressurized-3-4) — the flush-VALVE branch of the demand curve
+    // exists for the valve WC's high instantaneous draw; the hot-water service
+    // never carries a flush valve, so it always takes the flush-tank branch
+    // (one valve WC on cold water used to put every HW main one or two DN up).
+    final serviceFlush = service == ServiceType.hotWater
+        ? FlushSystem.flushTank
+        : flushSystem;
     final demand = leafDemand[service] ?? const FlowRate(0);
     final useUbap =
         isWaterSupply(service) && leafFixtureUnits.containsKey(service);
@@ -1702,7 +1720,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
               totalUbap += ubap;
             }
           }
-          if (profile.demandCurveExceeded(totalUbap, system: flushSystem)) {
+          if (profile.demandCurveExceeded(totalUbap, system: serviceFlush)) {
             for (final e in componentEdges) {
               demandExtrapolatedEdges.add(e.id);
             }
@@ -1710,7 +1728,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
           nodeUbapForBridges = nodeUbap;
           if (totalUbap > 0) {
             final totalFlow = profile
-                .probableFlowForFixtureUnits(totalUbap, system: flushSystem)
+                .probableFlowForFixtureUnits(totalUbap, system: serviceFlush)
                 .cubicMetersPerSecond;
             for (final entry in nodeUbap.entries) {
               demandFlow[entry.key] = totalFlow * (entry.value / totalUbap);
@@ -1784,7 +1802,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
             if (entry.value <= 0) continue;
             allFlows[entry.key] = profile.probableFlowForFixtureUnits(
               entry.value,
-              system: flushSystem,
+              system: serviceFlush,
             );
           }
         }
@@ -2037,9 +2055,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
         for (final entry in edgeUnits.entries) {
           allFlows[entry.key] = profile.probableFlowForFixtureUnits(
             entry.value,
-            system: flushSystem,
+            system: serviceFlush,
           );
-          if (profile.demandCurveExceeded(entry.value, system: flushSystem)) {
+          if (profile.demandCurveExceeded(entry.value, system: serviceFlush)) {
             demandExtrapolatedEdges.add(entry.key);
           }
           // Supply flows AWAY from the source root, so it comes FROM the
@@ -2192,13 +2210,51 @@ Map<String, EdgeSizing> autoSizeNetwork(
   if (hydrantDesignFlow != null && hydrantDesignFlow.cubicMetersPerSecond > 0) {
     final perBox = (leafDemand[ServiceType.fireHydrant] ?? const FlowRate(0))
         .cubicMetersPerSecond;
-    for (final e in net.edges) {
-      if (e.service != ServiceType.fireHydrant) continue;
+    final hydrantEdges = [
+      for (final e in net.edges)
+        if (e.service == ServiceType.fireHydrant) e,
+    ];
+    final hydrantAdj = <String, List<NetEdge>>{};
+    for (final e in hydrantEdges) {
+      (hydrantAdj[e.fromId] ??= []).add(e);
+      (hydrantAdj[e.toId] ??= []).add(e);
+    }
+    for (final e in hydrantEdges) {
       final q = allFlows[e.id];
       if (q == null) continue;
       final trunk = e.kind == EdgeKind.riser ||
           q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12;
-      if (trunk) allFlows[e.id] = hydrantDesignFlow;
+      if (!trunk) continue;
+      // Round 22 (regression-standpipe-every-riser-carries-total-flow) — the
+      // multi-riser total (500 gpm + 250 gpm per additional riser) is the
+      // COMMON supply's flow; a pipe serving only some of the stacks carries
+      // the standpipe flow of the stacks DOWNSTREAM of it (one stack ⇒ the
+      // 500 gpm most-remote rating, SNI 03-1745 / NFPA 14). Never above the
+      // caller's design flow.
+      var flow = hydrantDesignFlow;
+      final from = edgeFlowFrom[e.id];
+      if (from == e.fromId || from == e.toId) {
+        final down = from == e.fromId ? e.toId : e.fromId;
+        final seen = <String>{down};
+        final reached = <String>{e.id};
+        final downstream = <NetEdge>[e];
+        final stack = [down];
+        while (stack.isNotEmpty) {
+          final cur = stack.removeLast();
+          for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+            if (!reached.add(x.id)) continue;
+            downstream.add(x);
+            final o = x.fromId == cur ? x.toId : x.fromId;
+            if (seen.add(o)) stack.add(o);
+          }
+        }
+        final stacks = math.max(1, parallelStandpipeCount(net, downstream));
+        final served = standpipeFlow(stacks);
+        if (served.cubicMetersPerSecond < flow.cubicMetersPerSecond) {
+          flow = served;
+        }
+      }
+      allFlows[e.id] = flow;
     }
   }
   final result = sizeNetwork(net, allFlows, ctx, sizeOverrides: sizeOverrides);

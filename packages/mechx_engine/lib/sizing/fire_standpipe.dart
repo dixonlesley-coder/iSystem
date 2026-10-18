@@ -18,9 +18,12 @@
 /// Pure Dart; zero Flutter imports (§12: engine is framework-free).
 library;
 
+import 'dart:math' as math;
+
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart';
-import 'package:mechx_engine/network/network.dart' show EdgeKind, Network, ServiceType;
+import 'package:mechx_engine/network/network.dart'
+    show EdgeKind, NetEdge, Network, ServiceType;
 import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
@@ -151,14 +154,30 @@ FlowRate standpipeFlow(int risers) {
 }
 
 /// Round 21 (fire-3-standpipe-riser-count-fixed-at-one) — the number of
-/// distinct STANDPIPE RISERS drawn in [net]: the connected components of its
-/// fire-hydrant RISER edges ([EdgeKind.riser] on [ServiceType.fireHydrant]),
-/// joined only through riser edges (a common pump header or a floor run does
-/// not merge two stacks). At least 1 — with no hydrant riser drawn the draft
-/// single-riser basis stands. Feeds [standpipeFlow] (500 gpm + 250 gpm per
-/// additional riser), so two drawn stacks rate the fire pump at 750 gpm, not
-/// 500. Pure.
-int drawnStandpipeRiserCount(Network net) {
+/// STANDPIPE RISERS drawn in [net] that run IN PARALLEL. Feeds
+/// [standpipeFlow] (500 gpm + 250 gpm per additional riser), so two drawn
+/// side-by-side stacks rate the fire pump at 750 gpm, not 500. At least 1 —
+/// with no hydrant riser drawn the draft single-riser basis stands. Pure.
+///
+/// Round 22 (regression-jogged-standpipe-counted-twice) — a stack is a
+/// connected component of fire-hydrant RISER edges (joined only through riser
+/// edges, so a common pump header does not merge two stacks), but a single
+/// standpipe that JOGS at a transfer floor (riser, horizontal run, riser) is
+/// two such components covering DISJOINT floor spans — hydraulically one
+/// standpipe. So the count is the maximum, over every storey interval
+/// (f, f+1), of the components whose floor span covers it
+/// ([parallelStandpipeCount]).
+int drawnStandpipeRiserCount(Network net) =>
+    math.max(1, parallelStandpipeCount(net, net.edges));
+
+/// Round 22 — the number of standpipe stacks among [edges] (only fire-hydrant
+/// RISER edges count) that run in PARALLEL: riser components are found by
+/// union-find over those edges, each spans [min floor, max floor] of its
+/// nodes, and the result is the largest number of components covering any one
+/// storey interval (f, f+1). Stacks in SERIES (a jogged standpipe) cover
+/// disjoint intervals and count once; side-by-side stacks count each. 0 when
+/// no riser edge is given. Pure.
+int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   final parent = <String, String>{};
   String find(String x) {
     var r = x;
@@ -174,18 +193,45 @@ int drawnStandpipeRiserCount(Network net) {
     return r;
   }
 
-  for (final e in net.edges) {
-    if (e.service != ServiceType.fireHydrant || e.kind != EdgeKind.riser) {
-      continue;
-    }
+  final risers = <NetEdge>[
+    for (final e in edges)
+      if (e.service == ServiceType.fireHydrant && e.kind == EdgeKind.riser) e,
+  ];
+  for (final e in risers) {
     parent.putIfAbsent(e.fromId, () => e.fromId);
     parent.putIfAbsent(e.toId, () => e.toId);
     final a = find(e.fromId);
     final b = find(e.toId);
     if (a != b) parent[a] = b;
   }
-  final roots = {for (final k in parent.keys) find(k)};
-  return roots.isEmpty ? 1 : roots.length;
+  if (parent.isEmpty) return 0;
+  final floorOf = {for (final n in net.nodes) n.id: n.floorIndex};
+  final lo = <String, int>{};
+  final hi = <String, int>{};
+  for (final id in parent.keys) {
+    final root = find(id);
+    final f = floorOf[id] ?? 0;
+    lo[root] = math.min(lo[root] ?? f, f);
+    hi[root] = math.max(hi[root] ?? f, f);
+  }
+  // cover[f] = number of stacks spanning the storey interval (f, f+1).
+  final cover = <int, int>{};
+  var best = 0;
+  for (final root in lo.keys) {
+    final a = lo[root]!;
+    final b = hi[root]!;
+    if (b <= a) {
+      // A riser drawn between two nodes on one floor still is a stack.
+      best = math.max(best, 1);
+      continue;
+    }
+    for (var f = a; f < b; f++) {
+      final c = (cover[f] ?? 0) + 1;
+      cover[f] = c;
+      if (c > best) best = c;
+    }
+  }
+  return best;
 }
 
 // ── Static lift from the building geometry ───────────────────────────────────

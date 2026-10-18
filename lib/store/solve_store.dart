@@ -85,6 +85,9 @@ final solveProvider = Provider<PressureSolution?>((ref) {
     // water-drainage-8 — static lift + riser friction on the project's
     // mounting heights, the same basis the drawings and report print.
     mounting: project.mounting,
+    // Round 22 (pressurized-3-2) — a drawn PRV holds the same setpoint on the
+    // upfeed as on the downfeed, so the over-pressure remedy works.
+    prvSetpoint: _prvSetpoint,
   );
 });
 
@@ -104,7 +107,9 @@ final upfeedOverPressureProvider = Provider<List<UpfeedOverPressure>>((ref) {
 /// this is the check of what is actually drawn. Empty on upfeed.
 final downfeedOverPressureProvider =
     Provider<List<UpfeedOverPressure>>((ref) {
-  final solution = ref.watch(downfeedProvider);
+  // Round 22 (pressurized-3-3) — judged on what the drawn system DELIVERS,
+  // sized boosters running.
+  final solution = ref.watch(downfeedDeliveredProvider);
   if (solution == null) return const [];
   return downfeedOverPressure(solution);
 });
@@ -139,12 +144,51 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
   );
 });
 
+/// Round 22 (pressurized-3-3) — the DOWNFEED field the drawn system actually
+/// delivers: the gravity solve with every sized non-transfer mover
+/// ([supplyMoverDutiesProvider]) adding its head to what it serves. With no
+/// sized booster it IS [downfeedProvider] (same object). [downfeedProvider]
+/// stays the UNBOOSTED field the booster duties are sized on; the heatmap,
+/// node probe and over-pressure judgement read this one.
+final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
+  final base = ref.watch(downfeedProvider);
+  if (base == null) return null;
+  final transfers = ref.watch(transferPumpNodeIdsProvider);
+  final heads = <String, Head>{
+    for (final e in ref.watch(supplyMoverDutiesProvider).entries)
+      if (!transfers.contains(e.key) && e.value.head.meters > 0)
+        e.key: e.value.head,
+  };
+  if (heads.isEmpty) return base;
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  final tank = _pickSource(net, edges, project.building,
+      preferHighest: true, mounting: project.mounting);
+  if (tank == null) return base;
+  return solveDownfeed(
+    net: net,
+    service: kSupplyService,
+    tankId: tank,
+    edgeFlows: _supplyFlows(edges, sizing),
+    sizing: sizing,
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+    targetResidual: _targetResidual,
+    mounting: project.mounting,
+    prvSetpoint: _prvSetpoint,
+    moverHeads: heads,
+  );
+});
+
 /// Residual pressure at every solved node, regardless of feed strategy — the
-/// single field the heatmap renders (§12).
+/// single field the heatmap renders (§12). Round 22: the downfeed field is the
+/// DELIVERED one ([downfeedDeliveredProvider], sized boosters running).
 final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
   final up = ref.watch(solveProvider);
   if (up != null) return up.residualPressure;
-  final down = ref.watch(downfeedProvider);
+  final down = ref.watch(downfeedDeliveredProvider);
   if (down != null) return down.residualPressure;
   return const {};
 });
@@ -1342,6 +1386,12 @@ final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
 /// fixture stays under the SNI max-fixture-pressure limit AFTER the PRV holds
 /// the target residual at the zone top — i.e. the effective span ceiling is
 /// (max-fixture − target-residual).
+///
+/// Round 22 (pressurized-3-1) — the TOP zone is fed straight from the roof
+/// tank ([downfeedTankElevationProvider]): it spans every floor the tank's
+/// own gravity head keeps under the limit, with no PRV (a PRV cannot raise
+/// pressure); only the floors below it take PRV stations. A building the tank
+/// head never over-pressures is one zone with no PRV.
 final zonesProvider = Provider<List<PressureZone>>((ref) {
   final project = ref.watch(projectControllerProvider);
   final maxFix = const SniProfile().maxFixtureStaticPressure.value;
@@ -1354,7 +1404,29 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
     building: project.building,
     mounting: project.mounting,
     maxStaticPressure: effective,
+    tankElevation: ref.watch(downfeedTankElevationProvider),
+    maxFixtureStatic: maxFix,
   );
+});
+
+/// Round 22 (pressurized-3-1) — the elevation of the DOWNFEED source the zone
+/// table hangs from: the drawn tank the gravity solve picks (its role-aware
+/// [nodeElevation]) on a downfeed, else the roof — the datum a roof tank
+/// defaults to.
+final downfeedTankElevationProvider = Provider<Length>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  if (ref.watch(feedStrategyProvider) == FeedStrategy.downfeed &&
+      edges.isNotEmpty) {
+    final tank = _pickSource(net, edges, project.building,
+        preferHighest: true, mounting: project.mounting);
+    final node = tank == null ? null : net.nodeById(tank);
+    if (node != null) {
+      return nodeElevation(node, project.building, project.mounting);
+    }
+  }
+  return project.building.roofElevation;
 });
 
 /// Per-zone PRV static profile (top residual → bottom static, within-limit) for
@@ -1368,6 +1440,7 @@ final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
     zones: zones,
     prvSetpoint: _prvSetpoint,
     maxStatic: const SniProfile().maxFixtureStaticPressure.value,
+    tankElevation: ref.watch(downfeedTankElevationProvider),
   );
 });
 
