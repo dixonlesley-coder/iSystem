@@ -748,25 +748,24 @@ class PuilProfile implements ElectricalStandardsProfile {
           unit: 'table',
           citation: '$_doc / IEC 60364-5-52 — Supreme Cable (SUCACO) catalogue',
           verified: false,
+          // Provenance (developer history, kept out of the issued note): a
+          // 2026-07 pass spot-checked one entry while document hosts were
+          // unreachable; the 2026-10 audit moved the buried PVC (D) and XLPE
+          // C/E columns onto the IEC 3-loaded basis; Round 11 (2026-10-18)
+          // gave PVC B1 / C their own Table B.52.4 columns.
           note: 'Transcribed from the Supreme NYY 0.6/1 kV catalogue '
-              '(IEC/SNI 60502-1). 2026-07 research pass: independently '
-              'spot-checked one entry (Cu/PVC method B1, 4 mm2 = 34 A) '
-              'against secondary sources reproducing Indonesian NYY KHA '
-              'tables — matched. Only 1 of 16 sections × 4 methods × 2 '
-              'insulations was checked (every document host was blocked by '
-              'this environment\'s network egress policy that session); the '
-              'full matrix still needs the manufacturer datasheet and the '
-              'PUIL ampacity table for the specific construction. 2026-10 '
-              'audit: the buried (D) PVC column and the XLPE C/E columns were '
-              'moved onto the IEC 60364-5-52 three-loaded-conductor basis '
-              '(PVC Table B.52.4 D1; XLPE Table B.52.5 B1/C/D1 and Table '
-              'B.52.12 E). Like-for-like (same IEC 3-loaded basis, XLPE >= '
-              'PVC) therefore holds for method D and for the XLPE columns. '
-              '2026-10-18 (Round 11): PVC B1 (conduit) and C (wall) now read '
-              'their own IEC Table B.52.4 3-loaded columns (B1 16 mm2 = 68 A, '
-              'C = 76 A); only PVC method E keeps the Supreme NYY "in air" '
-              'catalogue figures (which match Table B.52.10 method E), so '
-              'every PVC column ranks conduit <= wall <= air like XLPE.',
+              '(IEC/SNI 60502-1). One entry (Cu/PVC method B1, 4 mm2 = 34 A) '
+              'was spot-checked against secondary sources reproducing '
+              'Indonesian NYY KHA tables and matched; the full matrix (16 '
+              'sections x 4 methods x 2 insulations) still needs the '
+              'manufacturer datasheet and the PUIL ampacity table for the '
+              'specific construction. The buried (D) PVC column and the XLPE '
+              'B1/C/D/E columns use the IEC 60364-5-52 three-loaded-conductor '
+              'basis (PVC Table B.52.4 D1; XLPE Table B.52.5 B1/C/D1 and Table '
+              'B.52.12 E), as do PVC B1 (conduit, 16 mm2 = 68 A) and C (wall, '
+              '76 A) from Table B.52.4; PVC method E keeps the Supreme NYY "in '
+              'air" catalogue figures (matching Table B.52.10 method E), so '
+              'every column ranks conduit <= wall <= air and XLPE >= PVC.',
         ),
         const StandardValue<Object?>(
           'ambient / grouping / soil-thermal derating factors',

@@ -78,7 +78,7 @@ void main() {
     final s = latin1.decode(build());
     expect(s, contains(' l S')); // a stroked line segment (the run)
     expect(s, contains('DN50')); // the run size label
-    expect(s, contains('30 m')); // the run length
+    expect(s, contains('30.0 m')); // the run length
     expect(s, contains('3.5 m')); // the riser length (on-floor end)
     expect(s, contains(' c\n')); // a bezier curve (riser circle / node dots)
     // Title block: project name then sheet + date.
@@ -403,7 +403,7 @@ void main() {
       edgeElevationLabels: const {'e0': 'CL +2.70'},
     ));
     // The run label now reads size - length - elevation, one token.
-    expect(s, contains('(DN50 - 30 m - CL +2.70) Tj'));
+    expect(s, contains('(DN50 - 30.0 m - CL +2.70) Tj'));
   });
 
   test('N5: null/absent elevation map leaves the bytes byte-identical', () {
@@ -577,7 +577,7 @@ void main() {
       // The app passes elementTags(): the run e0 → CW-F1, the riser e1 → CW-R1.
       final s = latin1.decode(buildTagged(const {'e0': 'CW-F1', 'e1': 'CW-R1'}));
       // The tag rides in front of the size/length (middot is WinAnsi 0xB7).
-      expect(s, contains('CW-F1 · DN50 - 30 m'));
+      expect(s, contains('CW-F1 · DN50 - 30.0 m'));
       expect(s, contains('CW-R1 · '));
       // The riser marker label still carries the riser tag on-floor.
       expect(s, contains('CW-R1'));

@@ -395,6 +395,15 @@ class NetNode {
   /// drawing/BOM concern, never read by the sizing core.
   final JunctionFitting? fittingType;
 
+  /// Round 20 — the id of the room whose 'Auto-place diffusers' generated this
+  /// air terminal (null for a hand-placed / pasted terminal). The app's
+  /// idempotence clean-up and the stale-terminal judge read it FIRST (while
+  /// the terminal still sits inside that room), so a terminal an open office
+  /// generated inside a nested meeting room stays the office's — re-running
+  /// Auto-place never stacks a second generation on it. Additive — the sizing
+  /// core never reads it; null ⇒ byte-identical.
+  final String? autoPlacedRoomId;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -414,6 +423,7 @@ class NetNode {
     this.faceWidthMm,
     this.faceHeightMm,
     this.fittingType,
+    this.autoPlacedRoomId,
   });
 
   NetNode copyWith({
@@ -442,6 +452,8 @@ class NetNode {
     bool clearFace = false,
     JunctionFitting? fittingType,
     bool clearJunctionFitting = false,
+    String? autoPlacedRoomId,
+    bool clearAutoPlacedRoomId = false,
   }) =>
       NetNode(
         id: id,
@@ -470,6 +482,9 @@ class NetNode {
         faceHeightMm: clearFace ? null : (faceHeightMm ?? this.faceHeightMm),
         fittingType:
             clearJunctionFitting ? null : (fittingType ?? this.fittingType),
+        autoPlacedRoomId: clearAutoPlacedRoomId
+            ? null
+            : (autoPlacedRoomId ?? this.autoPlacedRoomId),
       );
 }
 

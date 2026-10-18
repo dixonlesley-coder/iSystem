@@ -246,7 +246,8 @@ void main() {
   test('legend lists the symbols actually used + a supply note', () {
     final codes = sheet.legend.map((e) => e.code).toList();
     expect(codes, contains('MCB'));
-    expect(codes, contains('Ib'));
+    // Round 20 — keyed from the PRINTED text: no row prints 'Ib', so no key.
+    expect(codes, isNot(contains('Ib')));
     expect(codes.any((c) => c.startsWith('Curve')), isTrue);
     expect(codes, contains('NYM'));
     expect(sheet.supplyNote, contains('kVA'));
@@ -1225,7 +1226,10 @@ void main() {
       expect(joined, isNot(contains('cl.1')));
       // The metering instruments are listed in the KETERANGAN legend.
       final codes = mdp.legend.map((e) => e.code).toList();
-      expect(codes, contains('CT'));
+      // Round 20 — 'CT' is keyed only when a CT-operated meter was printed
+      // (a 'kWh direct' board needs no CT key).
+      expect(codes,
+          spec.metering == MeteringKind.ct ? contains('CT') : isNot(contains('CT')));
       expect(codes, contains('V / A / Hz'));
     });
 

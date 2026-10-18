@@ -333,16 +333,17 @@ void main() {
   group('drawing-output-8: whole-metre lengths print consistently', () {
     test('elevation-delta float noise prints like the exact value', () {
       // ceiling(2) - ceiling(1) = 11.7 - 7.7 = 3.999999999999999 in doubles;
-      // rounding to the printed 0.1 m first gives 4.0 -> '4 m', the same as
-      // the exact ceiling(1) - ceiling(0) = 7.7 - 3.7 = 4.0.
+      // rounding to the printed 0.1 m first gives 4.0 -> '4.0 m', the same as
+      // the exact ceiling(1) - ceiling(0) = 7.7 - 3.7 = 4.0 (Round 20: one
+      // fixed 0.1 m precision on every sheet, plan == riser == report).
       const noisy = 11.7 - 7.7;
       expect(noisy, isNot(4.0));
-      expect(planLengthLabel(const Length(noisy)), '4 m');
-      expect(planLengthLabel(const Length(4.0)), '4 m');
+      expect(planLengthLabel(const Length(noisy)), '4.0 m');
+      expect(planLengthLabel(const Length(4.0)), '4.0 m');
       expect(planLengthLabel(const Length(3.5)), '3.5 m');
-      // 4.44 -> 4.4 (one decimal kept); 4.96 -> 5.0 -> '5 m'.
+      // 4.44 -> 4.4 (one decimal kept); 4.96 -> 5.0 -> '5.0 m'.
       expect(planLengthLabel(const Length(4.44)), '4.4 m');
-      expect(planLengthLabel(const Length(4.96)), '5 m');
+      expect(planLengthLabel(const Length(4.96)), '5.0 m');
     });
   });
 
@@ -635,7 +636,8 @@ void main() {
           .map((e) => e['1']!.first)
           .toList();
       const runLabel = 'CW-F1 · DN32 - 4.4 m - CL +2.70';
-      const riserLabel = 'CW-R1 · DN32 - 4 m';
+      // Round 20 — one fixed 0.1 m length precision (4.0 m, not 4 m).
+      const riserLabel = 'CW-R1 · DN32 - 4.0 m';
       // The DXF carries the SAME label through the R12 code-page-safe encoder
       // (drafting-5: '·' -> '-', so AutoCAD never shows 'Â·').
       expect(texts, containsAll([dxfText(runLabel), dxfText(riserLabel)]));

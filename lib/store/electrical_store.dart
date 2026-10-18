@@ -1142,7 +1142,16 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         phases: phases,
         clearPhases: clearPhases,
         lifeSafety: lifeSafety,
-        isLighting: isLighting,
+        // Round 20 (electrical-property-lighting-flag-decoupled-from-kind) —
+        // re-kinding a way re-derives its lighting flag (the 3 % vs 5 %
+        // voltage-drop limit, PUIL) exactly as a new way gets it, unless the
+        // same edit sets the flag explicitly; the Lighting toggle stays an
+        // override AFTER the kind change. A socket re-kinded to Lighting
+        // kept isLighting = false and was judged (and sized) against 5 %.
+        isLighting: isLighting ??
+            (loadKind != null && loadKind != c.loadKind
+                ? loadKind == LoadKind.lighting
+                : null),
         cableType: cableType,
         clearCableType: clearCableType,
         starterType: starterType,

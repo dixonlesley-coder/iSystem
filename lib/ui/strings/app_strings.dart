@@ -405,6 +405,7 @@ enum StringKey {
   exportSubmittalStaleRemovedTemplate,
   nodeLoadSourceDuty,
   nodeLoadSourceRoomPk,
+  nodeLoadSourceRoomAir,
   nodeLoadSourceDefault,
   exportIdentityRevisionHint,
   exportIdentityClientHint,
@@ -1628,6 +1629,7 @@ const Map<StringKey, String> _en = {
   StringKey.exportIdentityDrawingNoHint: 'e.g. BRI-MEP-01',
   StringKey.nodeLoadSourceDuty: 'solved duty',
   StringKey.nodeLoadSourceRoomPk: 'room PK',
+  StringKey.nodeLoadSourceRoomAir: 'room air',
   StringKey.nodeLoadSourceDefault: 'default',
   StringKey.exportSubmittalStaleRemovedTemplate:
       'Exported submittal package - superseded files removed from the folder: {count}',
@@ -2953,6 +2955,7 @@ const Map<StringKey, String> _id = {
   StringKey.exportIdentityDrawingNoHint: 'mis. BRI-MEP-01',
   StringKey.nodeLoadSourceDuty: 'duty terhitung',
   StringKey.nodeLoadSourceRoomPk: 'PK ruang',
+  StringKey.nodeLoadSourceRoomAir: 'udara ruang',
   StringKey.nodeLoadSourceDefault: 'bawaan',
   StringKey.exportSubmittalStaleRemovedTemplate:
       'Paket submittal diekspor - berkas lama dihapus dari folder: {count}',

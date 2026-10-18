@@ -27,6 +27,7 @@ import 'plan_symbols.dart'
         planComponentPrims,
         planFixturePrims,
         planFlexibleJointPrims,
+        planLengthLabel,
         planSewerTerminusPrims;
 import 'riser_tags.dart';
 import 'sld_sheet.dart';
@@ -755,7 +756,7 @@ String _pipeTag(EdgeSizing? s, NetEdge edge,
     }
   }
   if (length != null && length.meters > 0) {
-    tag = '$tag - ${length.meters.toStringAsFixed(1)} m';
+    tag = '$tag - ${planLengthLabel(length)}';
   }
   return tag;
 }
@@ -1449,6 +1450,41 @@ class _LabelPlacer {
     return total;
   }
 
+  /// Round 20 (drafting-visual-4-2) — the SECONDARY cost of the leader a slot
+  /// at ([x], [y]) would need: how far it runs ALONG a reserved pipe strip
+  /// (beyond the strip's own thickness — the square exit), plus a text height
+  /// for every OTHER glyph box it strikes (the anchor's own box is exempt:
+  /// every leader leaves it). A tag's leader once ran from the third supply
+  /// diffuser back along its duct, through two diffuser glyphs and the AHU,
+  /// to a slot left of the plant — reading as a duct stub. This tier only
+  /// ORDERS slots whose primary [_costAt] is equal (a clear slot with a
+  /// square leader beats a clear slot with a collinear one, and the search
+  /// keeps going past a collinear 'clear' slot); it never trades a label
+  /// collision for a straighter leader.
+  double _leaderInkCost(double x, double y, String text, double size,
+      {required double anchorX, required double anchorY}) {
+    final r = _rectFor(x, y, text, size);
+    final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
+    var total = 0.0;
+    for (final p in _ink) {
+      final len = _segmentClipLength(anchorX, anchorY, ex, ey, p);
+      if (len <= 0) continue;
+      final strip = (p.maxX - p.minX) <= 2 * _kInkHalfThickness + 0.01 ||
+          (p.maxY - p.minY) <= 2 * _kInkHalfThickness + 0.01;
+      if (strip) {
+        final along = len - 2 * _kInkHalfThickness;
+        if (along > 0) total += along;
+        continue;
+      }
+      final containsAnchor = anchorX >= p.minX &&
+          anchorX <= p.maxX &&
+          anchorY >= p.minY &&
+          anchorY <= p.maxY;
+      if (!containsAnchor) total += size;
+    }
+    return total;
+  }
+
   /// Emit a FIXED-position label (gutter / fan-out) and record its box so
   /// movable tags divert around it.
   void reserve(SldLabel label) {
@@ -1506,17 +1542,28 @@ class _LabelPlacer {
     double cost(Offset c) => _costAt(
         defaultX + c.dx, defaultY + c.dy, text, size,
         anchorX: anchorX, anchorY: anchorY, withLeader: needsLeader(c));
+    // Round 20 — the leader-along-ink tier (0 when no leader is drawn).
+    double leaderCost(Offset c) => needsLeader(c)
+        ? _leaderInkCost(defaultX + c.dx, defaultY + c.dy, text, size,
+            anchorX: anchorX, anchorY: anchorY)
+        : 0;
     Offset best = candidates.isEmpty ? const Offset(0, 0) : candidates.first;
     var bestCost = double.infinity;
+    var bestLeader = double.infinity;
     var cleared = false;
     void consider(Offset c) {
       if (cleared) return;
       final total = cost(c);
-      if (total < bestCost) {
+      // Only a slot that is at least as clear as the best so far pays for
+      // its leader check (the tier orders equal-primary slots).
+      if (total > bestCost) return;
+      final lead = leaderCost(c);
+      if (total < bestCost || lead < bestLeader) {
         bestCost = total;
+        bestLeader = lead;
         best = c;
       }
-      if (total <= 0) cleared = true;
+      if (total <= 0 && lead <= 0) cleared = true;
     }
 
     for (final c in candidates) {
@@ -1525,11 +1572,20 @@ class _LabelPlacer {
     }
     // No ladder slot cleared → escape vertically (down then up, growing) from
     // the least-bad column until a clear slot appears.
+    //
+    // Round 20 (drafting-visual-4-2) — each step also tries the tag CENTRED
+    // over its anchor, so its leader leaves the run square (perpendicular)
+    // instead of running back along the pipe to a slot beside it.
     if (!cleared) {
       final baseDx = best.dx;
+      final centredDx =
+          (anchorX - defaultX) - _labelWidth(text, size) / 2;
       for (var k = 1; k <= _kEscapeSteps && !cleared; k++) {
-        for (final dy in [_kEscapeStep * k, -_kEscapeStep * k]) {
-          consider(Offset(baseDx, dy));
+        for (final dx in [baseDx, centredDx]) {
+          for (final dy in [_kEscapeStep * k, -_kEscapeStep * k]) {
+            consider(Offset(dx, dy));
+            if (cleared) break;
+          }
           if (cleared) break;
         }
       }
@@ -1576,6 +1632,35 @@ class _LabelPlacer {
 
 /// Round 15 — does segment (x1,y1)-(x2,y2) pass through the open interior of
 /// [r] (Liang–Barsky; touching an edge does not count)?
+/// Round 20 — the LENGTH of segment (x1, y1)-(x2, y2) inside [r] (0 when it
+/// misses), by the same Liang–Barsky clip as [_segmentHitsRect] (no inset).
+double _segmentClipLength(
+    double x1, double y1, double x2, double y2, _LabelRect r) {
+  var t0 = 0.0, t1 = 1.0;
+  final dx = x2 - x1, dy = y2 - y1;
+  for (final (p, q) in [
+    (-dx, x1 - r.minX),
+    (dx, r.maxX - x1),
+    (-dy, y1 - r.minY),
+    (dy, r.maxY - y1),
+  ]) {
+    if (p == 0) {
+      if (q < 0) return 0;
+    } else {
+      final t = q / p;
+      if (p < 0) {
+        if (t > t1) return 0;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return 0;
+        if (t < t1) t1 = t;
+      }
+    }
+  }
+  if (t0 >= t1) return 0;
+  return (t1 - t0) * math.sqrt(dx * dx + dy * dy);
+}
+
 bool _segmentHitsRect(
     double x1, double y1, double x2, double y2, _LabelRect r) {
   const inset = 0.5;

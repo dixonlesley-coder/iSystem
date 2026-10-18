@@ -16,7 +16,11 @@ import 'package:mechx_engine/units.dart';
 import '../ui/canvas/canvas_grid.dart' show nearestGridIntersection;
 import '../ui/canvas/snapping.dart' show orthoElbow;
 import 'annotation_store.dart'
-    show RoomArea, roomAreasProvider, roomTerminalOwnerId;
+    show
+        RoomArea,
+        insideNestedSameKindRoom,
+        roomAreasProvider,
+        roomTerminalOwnerOf;
 import 'floor_remap.dart' show shiftFloorIndex;
 import 'history_store.dart';
 import 'project_store.dart' show projectControllerProvider;
@@ -932,6 +936,7 @@ class NetworkController extends Notifier<DrawingState> {
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
+      autoPlacedRoomId: node.autoPlacedRoomId,
       fixture: keepTerminal ? node.fixture : null,
       airflow: keepTerminal ? node.airflow : null,
     ));
@@ -982,6 +987,7 @@ class NetworkController extends Notifier<DrawingState> {
         faceWidthMm: node.faceWidthMm,
         faceHeightMm: node.faceHeightMm,
         fittingType: node.fittingType,
+        autoPlacedRoomId: node.autoPlacedRoomId,
         airflow: node.airflow,
         roofAreaM2: node.roofAreaM2,
       );
@@ -1013,6 +1019,7 @@ class NetworkController extends Notifier<DrawingState> {
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
+      autoPlacedRoomId: node.autoPlacedRoomId,
       fixture: node.fixture,
       airflow: airflow,
       customFixtureId: node.customFixtureId,
@@ -1066,6 +1073,7 @@ class NetworkController extends Notifier<DrawingState> {
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
+      autoPlacedRoomId: node.autoPlacedRoomId,
     ));
   }
 
@@ -1094,6 +1102,7 @@ class NetworkController extends Notifier<DrawingState> {
       faceWidthMm: node.faceWidthMm,
       faceHeightMm: node.faceHeightMm,
       fittingType: node.fittingType,
+      autoPlacedRoomId: node.autoPlacedRoomId,
       fixture: customFixtureId == null ? node.fixture : null,
       airflow: node.airflow,
       customFixtureId: customFixtureId,
@@ -1771,8 +1780,6 @@ class NetworkController extends Notifier<DrawingState> {
     // Lay the supply diffusers out on a near-square grid inside the footprint,
     // each cell's centre giving the node position (inset off the room edge).
     final n = s.supply.count;
-    final cols = math.max(1, math.sqrt(n).ceil());
-    final rows = (n / cols).ceil();
     final supplyFace = _faceMm(s.supply);
     final returnFace = _faceMm(s.return_);
 
@@ -1796,11 +1803,36 @@ class NetworkController extends Notifier<DrawingState> {
         if ((node.component == NodeComponent.supplyDiffuser ||
                 node.component == NodeComponent.returnGrille ||
                 node.component == NodeComponent.exhaustGrille) &&
-            roomTerminalOwnerId(node.component, node.sheetId,
-                    node.floorIndex, node.x, node.y, allRooms) ==
-                room.id)
+            roomTerminalOwnerOf(node, allRooms) == room.id)
           node.id,
     };
+    // Round 20 — the grid positions of a bank of [count] terminals: the
+    // near-square grid's cell centres in row-major order, SKIPPING any cell
+    // inside a nested room of the same kind (that room places its own
+    // terminals). With no nested room this is exactly the legacy grid; when
+    // cells are skipped the grid densifies (one more column + row per step)
+    // until [count] free cells exist, else the skipped cells fill the rest.
+    List<Offset> gridCells(int count) {
+      final cols0 = math.max(1, math.sqrt(count).ceil());
+      final rows0 = (count / cols0).ceil();
+      List<Offset> raw(int cols, int rows) => [
+            for (var ry = 0; ry < rows; ry++)
+              for (var cx = 0; cx < cols; cx++)
+                Offset(loX + w * (cx + 0.5) / cols, loY + h * (ry + 0.5) / rows),
+          ];
+      bool free(Offset p) =>
+          !insideNestedSameKindRoom(room, p.dx, p.dy, allRooms);
+      for (var k = 0; k <= 6; k++) {
+        final cells = raw(cols0 + k, rows0 + k).where(free).toList();
+        if (cells.length >= count) return cells.take(count).toList();
+      }
+      final base = raw(cols0, rows0);
+      return [
+        ...base.where(free),
+        ...base.where((p) => !free(p)),
+      ].take(count).toList();
+    }
+
     final nodes = [
       for (final node in state.network.nodes)
         if (!priorIds.contains(node.id)) node,
@@ -1810,27 +1842,22 @@ class NetworkController extends Notifier<DrawingState> {
         if (!priorIds.contains(e.fromId) && !priorIds.contains(e.toId)) e,
     ];
     final ids = <String>[];
-    var placed = 0;
-    for (var ry = 0; ry < rows && placed < n; ry++) {
-      for (var cx = 0; cx < cols && placed < n; cx++) {
-        final px = loX + w * (cx + 0.5) / cols;
-        final py = loY + h * (ry + 0.5) / rows;
-        final id = _id('n');
-        ids.add(id);
-        nodes.add(NetNode(
-          id: id,
-          sheetId: room.sheetId,
-          x: px,
-          y: py,
-          floorIndex: room.floorIndex,
-          role: NodeComponent.supplyDiffuser.role,
-          component: NodeComponent.supplyDiffuser,
-          airflow: s.supply.airflowEach,
-          faceWidthMm: supplyFace.$1,
-          faceHeightMm: supplyFace.$2,
-        ));
-        placed++;
-      }
+    for (final p in gridCells(n)) {
+      final id = _id('n');
+      ids.add(id);
+      nodes.add(NetNode(
+        id: id,
+        sheetId: room.sheetId,
+        x: p.dx,
+        y: p.dy,
+        floorIndex: room.floorIndex,
+        role: NodeComponent.supplyDiffuser.role,
+        component: NodeComponent.supplyDiffuser,
+        airflow: s.supply.airflowEach,
+        faceWidthMm: supplyFace.$1,
+        faceHeightMm: supplyFace.$2,
+        autoPlacedRoomId: room.id,
+      ));
     }
 
     // M10 — the return bank on its OWN grid, one node per sized grille.
@@ -1845,31 +1872,26 @@ class NetworkController extends Notifier<DrawingState> {
     // (loX + w/2, loY + h/2) — the exact position placed before — so a
     // single-return room is byte-identical.
     final rn = s.return_.count;
-    final rCols = math.max(1, math.sqrt(rn).ceil());
-    final rRows = (rn / rCols).ceil();
     // Round 11 — an extract room's bank is EXHAUST grilles, not return.
     final extractComponent = s.extractOnly
         ? NodeComponent.exhaustGrille
         : NodeComponent.returnGrille;
-    var placedReturns = 0;
-    for (var ry = 0; ry < rRows && placedReturns < rn; ry++) {
-      for (var cx = 0; cx < rCols && placedReturns < rn; cx++) {
-        final id = _id('n');
-        if (s.extractOnly) ids.add(id);
-        nodes.add(NetNode(
-          id: id,
-          sheetId: room.sheetId,
-          x: loX + w * (cx + 0.5) / rCols,
-          y: loY + h * (ry + 0.5) / rRows,
-          floorIndex: room.floorIndex,
-          role: extractComponent.role,
-          component: extractComponent,
-          airflow: s.return_.airflowEach,
-          faceWidthMm: returnFace.$1,
-          faceHeightMm: returnFace.$2,
-        ));
-        placedReturns++;
-      }
+    for (final p in gridCells(rn)) {
+      final id = _id('n');
+      if (s.extractOnly) ids.add(id);
+      nodes.add(NetNode(
+        id: id,
+        sheetId: room.sheetId,
+        x: p.dx,
+        y: p.dy,
+        floorIndex: room.floorIndex,
+        role: extractComponent.role,
+        component: extractComponent,
+        airflow: s.return_.airflowEach,
+        faceWidthMm: returnFace.$1,
+        faceHeightMm: returnFace.$2,
+        autoPlacedRoomId: room.id,
+      ));
     }
 
     _commit(Network(nodes: nodes, edges: priorEdges));

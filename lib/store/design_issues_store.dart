@@ -30,7 +30,7 @@ import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
-import 'annotation_store.dart' show roomAreasProvider, roomTerminalOwnerId;
+import 'annotation_store.dart' show roomAreasProvider, roomTerminalOwnerOf;
 import 'app_state.dart';
 import 'document_control_store.dart';
 import 'electrical_store.dart';
@@ -976,8 +976,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
               n.component == NodeComponent.returnGrille ||
               n.component == NodeComponent.exhaustGrille) &&
           n.airflow != null)
-        n.id: roomTerminalOwnerId(
-            n.component, n.sheetId, n.floorIndex, n.x, n.y, rooms),
+        n.id: roomTerminalOwnerOf(n, rooms),
   };
   for (final r in rooms) {
     final sizing = roomSizing[r.id];

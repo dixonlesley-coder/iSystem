@@ -97,7 +97,8 @@ void main() {
     // Per-way drafter content: incomer breaker + a way row with cable + Ib.
     expect(s, contains('Incomer'));
     expect(s, contains('Lighting')); // the LP-1 way name
-    expect(s, contains('Ib')); // design current label
+    expect(s, contains('TOTAL')); // the schedule footer (Round 20: no Ib key)
+    expect(s, isNot(contains('(Ib)')));
     expect(s, contains('MCB')); // a breaker class in the legend / rows
   });
 

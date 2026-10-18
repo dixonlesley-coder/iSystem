@@ -796,6 +796,11 @@ double _round(double v, int dp) {
   return (v * f).roundToDouble() / f;
 }
 
+/// Round 20 — [v] rounded UP / DOWN to 3 dp (a 1e-9 milli-unit guard keeps an
+/// exactly representable 0.683 at 0.683 despite binary noise).
+double _ceil3(double v) => (v * 1000 - 1e-9).ceilToDouble() / 1000;
+double _floor3(double v) => (v * 1000 + 1e-9).floorToDouble() / 1000;
+
 /// Compute the protection / fault study over an already-solved system.
 ///
 /// [originFaultLevel] is the prospective 3-phase symmetrical fault current the
@@ -1053,9 +1058,17 @@ FaultStudyResult faultStudy(
             ? (zsVoltageFactor * u0PhaseVoltageV) / idnA
             : 0.0;
         final zsMax = zsMaxRcd > zsMaxOcpd ? zsMaxRcd : zsMaxOcpd;
-        zsOhm = _round(zs, 3);
-        zsMaxOhm = zsMax.isFinite ? _round(zsMax, 3) : zsMax;
         adsOk = zs <= zsMax + 1e-9;
+        // Round 20 (electrical-property-ads-message-rounds-to-equal) — the
+        // stored / printed 3-dp pair is rounded IN THE DIRECTION OF THE
+        // VERDICT, so the figures always back it up: a failure rounds Zs up
+        // and the limit down (never 'Zs 0.683 Ω exceeds the 0.683 Ω limit'),
+        // a pass rounds Zs down and the limit up (never a printed Zs above
+        // its printed limit on a PASS). Each figure moves < 0.001 Ω.
+        zsOhm = adsOk ? _floor3(zs) : _ceil3(zs);
+        zsMaxOhm = zsMax.isFinite
+            ? (adsOk ? _ceil3(zsMax) : _floor3(zsMax))
+            : zsMax;
         adsByRcd = adsOk && zs > zsMaxOcpd + 1e-9;
         if (!adsOk) {
           warnings.add(ElectricalWarning(

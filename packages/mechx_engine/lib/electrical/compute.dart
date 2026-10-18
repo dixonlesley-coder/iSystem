@@ -1080,7 +1080,14 @@ _CircuitComputation _computeCircuit(
           // selectivity pre-pass and [panelCapacitorFloorA] use. An Auto-phase
           // 50 kvar bank on a 3φ board used to size 1φ at 216 A (MCCB 315 A,
           // 300 mm²) instead of 3φ at 72 A.
-          loadW: c.loadKind == LoadKind.capacitor ? c.loadW : loadW,
+          //
+          // Round 20 (regression-demand-factor-flips-way-to-single-phase) —
+          // a FINAL way's phase is decided on its UNDIVERSIFIED rating
+          // (c.loadW): one machine does not diversify against itself, so a
+          // coincidence factor must never move a 5 kW pump (df 0.5) below the
+          // 3 kW / 5500 W Auto threshold onto one phase (12.7 A design /
+          // 25.5 A run on 1φ instead of 8.5 A on 3φ). A feeder is 3φ by rule.
+          loadW: isFeeder ? loadW : c.loadW,
           motorKw: c.motorKw,
           phases: c.phases,
           isFeeder: isFeeder,

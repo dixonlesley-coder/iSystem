@@ -564,6 +564,7 @@ Map<String, dynamic> _netNodeToJson(NetNode n) => {
       if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
       if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
         'fitting': n.fittingType!.name,
+      if (n.autoPlacedRoomId != null) 'auto_room': n.autoPlacedRoomId,
     };
 
 NetNode _netNodeFromJson(Map n) => NetNode(
@@ -605,6 +606,9 @@ NetNode _netNodeFromJson(Map n) => NetNode(
       fittingType: n['fitting'] == null
           ? null
           : _enumOrNull(JunctionFitting.values, n['fitting']),
+      // Round 20 — the generating room of an auto-placed terminal. Tolerant:
+      // absent / non-string ⇒ null ⇒ the ownership fallback.
+      autoPlacedRoomId: n['auto_room'] is String ? n['auto_room'] as String : null,
     );
 
 Map<String, dynamic> _netEdgeToJson(NetEdge e) => {

@@ -127,8 +127,12 @@ void main() {
       // head 0.1 m') instead of the head under a 'loop … m' label. Verified as
       // the SOLE delta: substituting the old line back reproduces 0xf972feb4.
       // Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 20 drafting-visual-4-6): ONE line —
+      // the generator stamp reads '· iSystem' (the product brand) instead of
+      // '· MechX'. Verified as the SOLE delta by diffing against the
+      // pre-change output. Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0x86204b3d);
+      expect(fnv1a32(md), 0x0e4282b4);
     });
   });
 
@@ -335,8 +339,12 @@ void main() {
       // Re-baselined 2026-10-18 (Round 16): the embedded mechanical body's
       // HW-recirculation line (see the mechanical pin above); substituting the
       // old line back reproduces 0xdafbf026. Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 20 drafting-visual-4-6): exactly two
+      // lines — the unified head's stamp '· MechX (iSystem)' and the embedded
+      // mechanical body's '· MechX' both read '· iSystem'. Verified as the
+      // SOLE delta by diffing against the pre-change output. Lines unchanged.
       expect(md.split('\n').length, 215);
-      expect(fnv1a32(md), 0x589708b9);
+      expect(fnv1a32(md), 0x7f6412d0);
     });
   });
 

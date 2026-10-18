@@ -37,6 +37,7 @@ import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/duct_sizing.dart'
     show standardDuctDiametersMm;
+import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/fire_standpipe.dart' show standpipeVerifyChecklist;
 import 'package:mechx_engine/sizing/hot_water.dart' show hotWaterRecircVerifyChecklist;
@@ -67,6 +68,7 @@ import '../../store/electrical_feed.dart'
         NodeLoadSource,
         acUnitShare,
         mepDutyBindingProvider,
+        roomAirUnitDutiesProvider,
         nodeFedLoadsProvider;
 import '../../store/electrical_store.dart';
 import '../../store/command_store.dart';
@@ -180,6 +182,37 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       net.edges.any((e) => e.service == ServiceType.fireHydrant);
   final standpipe = hydrantDrawn ? ref.read(standpipeDesignProvider) : null;
   final hwRecirc = ref.read(hotWaterRecircProvider);
+  // Round 20 (drafting-visual-4-1) — the feed the report describes is the
+  // DRAWN feed, on the same evidence as the riser sheet's `riserFeedNote`
+  // (the two sheets of one submittal used to contradict each other): a
+  // downfeed SETTING with no roof tank drawn is a booster (pump drawn) or a
+  // direct-mains feed, and the booster head / gravity verdict / PRV zone
+  // table — all solved from a VIRTUAL roof-level source — are not printed.
+  final hasRoofTank =
+      net.nodes.any((n) => n.component == NodeComponent.roofTank);
+  final hasPump = net.nodes.any((n) =>
+      n.component == NodeComponent.pump ||
+      n.component == NodeComponent.boosterSet);
+  final gravityDownfeed = strategy == FeedStrategy.downfeed && hasRoofTank;
+  // Round 20 (hvac-3-4) — the HVAC trunk the report prints is a SCHEDULED
+  // machine: a supply system rooted at a packaged AC is the AC's internal fan
+  // (scheduled once, as its AC row), so the primary duty is the first
+  // non-AC-rooted system — never the AC's fan while the scheduled AHU is
+  // dropped — and null when every supply system is AC-rooted.
+  final airRoots = ref.read(airSystemRootNodesProvider);
+  bool acRoot(String? id) =>
+      id != null && RoomArea.isAcComponent(net.nodeById(id)?.component);
+  FanDuty? reportFan;
+  if (!acRoot(airRoots.supply)) {
+    reportFan = ref.read(ductFanProvider);
+  } else {
+    for (final e in ref.read(supplyFanDutiesByRootProvider).entries) {
+      if (!acRoot(e.key)) {
+        reportFan = e.value;
+        break;
+      }
+    }
+  }
   return CalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
@@ -209,28 +242,31 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     building: project.building,
     mounting: mounting,
     runSchedule: runSchedule,
-    feedStrategy: strategy == FeedStrategy.upfeed
-        ? reportStringsFor(ref)(RptStringKey.feedUpfeed)
-        : reportStringsFor(ref)(RptStringKey.feedDownfeed),
+    feedStrategy: rs(strategy == FeedStrategy.upfeed
+        ? RptStringKey.feedUpfeed
+        : hasRoofTank
+            ? RptStringKey.feedDownfeed
+            : hasPump
+                ? RptStringKey.feedBoosterNoTank
+                : RptStringKey.feedDirectMains),
     targetResidual:
         SupplyDesignCriteria.recommended().targetFixtureResidualPressure,
     pump: ref.read(pumpDutyProvider),
     supplyPumps: supplyPumps,
-    boosterHead: downfeed?.boosterHeadRequired,
-    gravitySufficient: downfeed?.gravitySufficient ?? false,
+    boosterHead: gravityDownfeed ? downfeed?.boosterHeadRequired : null,
+    gravitySufficient:
+        gravityDownfeed && (downfeed?.gravitySufficient ?? false),
     // mech-building-2 — the PRV zone table is a DOWNFEED design (compliant by
     // construction); on an upfeed it said nothing about the pump's real
     // lower-floor pressures (judged in Review instead), so it is not printed.
-    zones: strategy == FeedStrategy.downfeed
-        ? ref.read(zoneStaticsProvider)
-        : const [],
+    zones: gravityDownfeed ? ref.read(zoneStaticsProvider) : const [],
     hotWaterRecirc: hwRecirc,
     sprinkler: sprinklerDrawn ? ref.read(sprinklerDesignProvider) : null,
     standpipe: standpipe,
     sprinklerRemoteArea:
         sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
     firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
-    fan: ref.read(ductFanProvider),
+    fan: reportFan,
     exhaustFan: ref.read(exhaustFanProvider),
     supplyAirflowLps: balance?.supplyLps ?? 0,
     returnAirflowLps: balance?.returnLps ?? 0,
@@ -940,8 +976,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final usedNodeTags = nodeTags.values.toSet();
   final hasAirNetwork = net.edges.any((e) =>
       e.service == ServiceType.duct || e.service == ServiceType.returnAir);
-  bool inRoom(RoomArea r, NetNode n) =>
-      r.containsNode(n.sheetId, n.floorIndex, n.x, n.y);
+  final roomAirUnits = ref.read(roomAirUnitDutiesProvider);
   for (var i = 0; i < rooms.length; i++) {
     final r = rooms[i];
     final cal = project.calibrationFor(r.sheetId);
@@ -970,12 +1005,23 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       );
       continue;
     }
+    // Round 20 (hvac-3-2) — the units this room OWNS (smallest containing
+    // room). A drawn AHU / FCU that carries a SOLVED duct duty is already
+    // scheduled by its duty row (same tag), so the room-air row is emitted
+    // only for the unit [roomAirUnitDutiesProvider] gives the room duty to —
+    // the very unit the panel feed sizes on it.
     final drawnUnit = net.nodes.any((n) =>
         (n.component == NodeComponent.ahu ||
             n.component == NodeComponent.fcu) &&
-        inRoom(r, n));
-    final hasAc = net.nodes
-        .any((n) => RoomArea.isAcComponent(n.component) && inRoom(r, n));
+        roomUnitOwnerId(n, rooms) == r.id);
+    final hasAc = net.nodes.any((n) =>
+        RoomArea.isAcComponent(n.component) &&
+        roomUnitOwnerId(n, rooms) == r.id);
+    final roomAirUnitId = [
+      for (final e in roomAirUnits.entries)
+        if (e.value.room.id == r.id) e.key,
+    ].firstOrNull;
+    if (drawnUnit && roomAirUnitId == null) continue;
     if (!drawnUnit && (hasAc || hasAirNetwork)) continue;
     // J3: the AHU tag tracks the room's STABLE identity, not its live list
     // position — deleting / reordering / skipping (uncalibrated) another room
@@ -983,13 +1029,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     // revisions ([_roomScheduleTag]).
     // drafting-7: an AHU/FCU node DRAWN inside the room carries the plan tag;
     // the room-identity tag stays the fallback for a room with no drawn unit.
-    final tag =
-        tagOfFirst(
-          (n) =>
-              (n.component == NodeComponent.ahu ||
-                  n.component == NodeComponent.fcu) &&
-              inRoom(r, n),
-        ) ??
+    final tag = tagOfNode(roomAirUnitId) ??
         _roomScheduleTag(r, i, usedNodeTags: usedNodeTags);
     fans.add(
       FanScheduleItem(
@@ -2122,6 +2162,23 @@ Future<bool> writeSubmittalPackageToDir(
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
       ),
     );
+    // Round 20 (drafting-visual-4-3) — the board schedule is THE sheet a panel
+    // builder redraws / annotates in CAD, so it is issued in DXF too (like
+    // every other electrical sheet of the set), built exactly as the
+    // standalone 'Single-line DXF' export builds it (same kA maps).
+    await File(out('electrical-sld.dxf')).writeAsString(
+      electricalSldToDxf(
+        sheet: buildElectricalSld(
+          project: eProject,
+          result: eResult,
+          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+          breakerKaByCircuitId: breakerKaByCircuit(ref),
+        ),
+        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
+        chrome: sldChrome(DrawingSeries.electricalDetail),
+        projectName: base,
+      ),
+    );
 
     // Building single-line (overview) — the whole distribution hierarchy on one
     // sheet, with the PLN/MV/TX/LV source spine, in both formats.
@@ -2231,7 +2288,7 @@ final RegExp _submittalSuffix = RegExp(
   r'|quotation\.md'
   r'|riser-sld\.(pdf|dxf)'
   r'|(elec-)?plan-\d+-.+\.(pdf|dxf)'
-  r'|electrical-sld\.pdf'
+  r'|electrical-sld\.(pdf|dxf)'
   r'|electrical-overview-sld\.(pdf|dxf)'
   r'|electrical-riser\.(pdf|dxf)'
   r'|electrical-power-one-line\.(pdf|dxf)'
@@ -3604,8 +3661,9 @@ class _RoomsSection extends ConsumerWidget {
     final type = context.type;
     final sheet = ref.watch(sheetsControllerProvider).current;
     if (sheet == null) return const SizedBox.shrink();
+    final allRooms = ref.watch(roomAreasProvider);
     final rooms = [
-      for (final r in ref.watch(roomAreasProvider))
+      for (final r in allRooms)
         if (r.sheetId == sheet.id) r,
     ];
     if (rooms.isEmpty) return const SizedBox.shrink();
@@ -3661,10 +3719,13 @@ class _RoomsSection extends ConsumerWidget {
                 );
                 // AC cooling — computed once so the compact row can flag an
                 // over-range unit and the expanded editor can detail it.
+                // Round 20 (hvac-3-1) — the units this room OWNS (smallest
+                // containing room), the same split the panel feed and the
+                // schedule use: a unit in a nested room is not counted here.
                 final acs = [
                   for (final n in nodes)
                     if (RoomArea.isAcComponent(n.component) &&
-                        r.containsNode(n.sheetId, n.floorIndex, n.x, n.y))
+                        roomUnitOwnerId(n, allRooms) == r.id)
                       n,
                 ];
                 // M15/R6 — read the project's CHOSEN cooling-load basis (the
@@ -5321,6 +5382,8 @@ class _SelectionSection extends ConsumerWidget {
                   ' · ${strings(StringKey.nodeLoadSourceDuty)}',
                 NodeLoadSource.roomPk =>
                   ' · ${strings(StringKey.nodeLoadSourceRoomPk)}',
+                NodeLoadSource.roomAir =>
+                  ' · ${strings(StringKey.nodeLoadSourceRoomAir)}',
                 _ => ' · ${strings(StringKey.nodeLoadSourceDefault)}',
               };
               return SteppedValueField(

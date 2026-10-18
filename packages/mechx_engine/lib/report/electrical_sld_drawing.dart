@@ -107,6 +107,22 @@ double _centredInCell(double leftX, double rightX, String text, double size) =>
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
+/// Round 20 (drafting-visual-4-7) — a CURRENT figure in a ruled schedule
+/// column (the R/S/T cells, the TOTAL phase totals, the header / TOTAL
+/// demand currents): ONE fixed 0.1 A precision, so '13.0' sits beside '14.8'
+/// instead of a bare '13' that reads as a differently rounded quantity.
+String _amps(double v) => v.toStringAsFixed(1);
+
+/// Round 20 (drafting-visual-4-4) — whether any primitive is drawn in the
+/// ESSENTIAL role: the overview / riser legend keys 'Essential' only when the
+/// sheet shows an essential board or feeder.
+bool _anyEssentialPrim(List<SldPrim> prims) => prims.any((p) => switch (p) {
+      SldLine(:final role) => role == SldRole.essential,
+      SldRect(:final role) => role == SldRole.essential,
+      SldLabel(:final role) => role == SldRole.essential,
+      SldCircle(:final role) => role == SldRole.essential,
+    });
+
 /// A connected-load (DAYA) figure: `W` under 1 kW, else `kW`.
 String _watts(double w) => w >= 1000 ? '${_num(w / 1000)}kW' : '${_num(w)}W';
 
@@ -294,9 +310,9 @@ String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
 /// (`15.8A div (max ph 17.5A undiv)`); a board with no diversity prints the
 /// one figure exactly as before (`17.5A`).
 String _boardDemandCurrent(ElectricalPanelResult p) {
-  final undiv = _num(p.demandCurrent.amperes);
-  if (!p.isDiversified) return '${_num(p.demandCurrent.amperes)}A';
-  final div = _num((p.diversifiedDemandCurrent.amperes * 10).round() / 10);
+  final undiv = _amps(p.demandCurrent.amperes);
+  if (!p.isDiversified) return '${_amps(p.demandCurrent.amperes)}A';
+  final div = _amps(p.diversifiedDemandCurrent.amperes);
   return '${div}A div (max ph ${undiv}A undiv)';
 }
 
@@ -552,7 +568,12 @@ SldSheet buildElectricalSld({
     // Column-header band (slot 0): the BRI `Diagram Panel` table columns. The
     // R / S / T headers carry their PHASE role so every renderer colours the
     // three phase columns apart (red / yellow / blue — see [SldRole]).
-    final headY = busTop + 6 + _rowH / 2 + 3;
+    //
+    // Round 20 (drafting-visual-4-8) — the heads sit with the SAME clearance
+    // over their rule as every body row's figures (baseline 7 above the
+    // rule): the old busTop + 19 put the 7-pt caps 1 unit above the
+    // underline at busTop + 20, so they read as underlined text on it.
+    final headY = busTop + _rowH - 7;
     void colHead(double x, String t, {SldRole role = SldRole.normal}) => prims
         .add(SldLabel(blockX + x, headY, t, size: 7, bold: true, role: role));
     colHead(_colGrup, 'GRUP');
@@ -598,10 +619,9 @@ SldSheet buildElectricalSld({
       // Stub from bus to breaker + the breaker symbol.
       prims.add(SldLine(bx + 4, rowY, bx + 28, rowY));
       prims.add(SldRect(bx + 28, rowY - _brH / 2, _brW, _brH));
-      // Only an MCB carries a B/C/D trip curve in the legend (N12).
-      if (c.breaker.deviceClass != BreakerClass.mccb) {
-        usedCurves.add(c.breaker.curve);
-      }
+      // Round 20 (drafting-visual-4-4) — a way's schedule label prints NO
+      // curve letter (rating + phase first), so its curve is not keyed; only
+      // the incomer sub-line's curve (added where it is printed) is.
       usedClasses.add(c.breaker.deviceClass);
       final circuit = circuitById[c.circuitId];
       // Surface the cable family actually drawn (the explicit type, else the
@@ -714,11 +734,20 @@ SldSheet buildElectricalSld({
       // current the calc report's Ib prints), marked `cap`: excluded from the
       // TOTAL phase balance (bank-off governs), but never a 0 | 0 | 0 under a
       // 2x240 mm2 feeder.
+      //
+      // Round 20 — gated on the WAY being a capacitor, or a feeder whose fed
+      // board carries a capacitor floor; a zero design current alone (a
+      // standby pump at demand factor 0) is NOT a capacitor and prints its
+      // own (zero) design current.
+      final fedHasCapacitor = feeds != null &&
+          (result.panels[feeds]?.capacitorCurrentA ?? 0) > 1e-9;
       final capacitorCurrent = isCapacitor ||
-          (c.designCurrent.amperes <= 1e-9 && c.runCurrentA.amperes > 1e-9);
+          (fedHasCapacitor &&
+              c.designCurrent.amperes <= 1e-9 &&
+              c.runCurrentA.amperes > 1e-9);
       final ib = capacitorCurrent
-          ? '${_num(c.runCurrentA.amperes)} cap'
-          : _num(c.designCurrent.amperes);
+          ? '${_amps(c.runCurrentA.amperes)} cap'
+          : _amps(c.designCurrent.amperes);
       prims.add(
           SldLabel(blockX + _colGrup, rowY + 3, 'W${i + 1}', size: rowSize));
       prims.add(SldLabel(blockX + _colDevice, rowY + 3, device, size: rowSize));
@@ -787,7 +816,7 @@ SldSheet buildElectricalSld({
         size: 8.5, bold: true));
     if (p.system.isThreePhase) {
       final pb = p.phaseBalance;
-      final l1 = _num(pb.l1), l2 = _num(pb.l2), l3 = _num(pb.l3);
+      final l1 = _amps(pb.l1), l2 = _amps(pb.l2), l3 = _amps(pb.l3);
       prims.add(SldLabel(
           blockX + _centredInCell(_cellRL, _cellRR, l1, rowSize), footerY, l1,
           size: rowSize, bold: true, role: SldRole.phaseR));
@@ -871,8 +900,28 @@ SldSheet buildElectricalSld({
     // never the ambiguous shared "Cable construction" against NYY and NYM alike.
     legend.add(SldLegendEntry(f, cableFamilyDescription(f)));
   }
-  legend.add(const SldLegendEntry('Ib', 'Design (load) current'));
-  legend.add(const SldLegendEntry('VD!', 'Voltage drop over limit'));
+  // Round 20 (drafting-visual-4-4) — the remaining keys follow the PRINTED
+  // text, never the data behind it: no 'Ib' (the R/S/T cells print bare
+  // figures), 'VD!' only when a row printed it, 'CT' only when a board's
+  // meter token is CT-operated (a 'kWh direct' board needs no CT key), and
+  // the 'div' / 'undiv' + 'cap' abbreviations the header / TOTAL / cells
+  // print are keyed whenever they appear.
+  final printed = [
+    for (final pr in prims)
+      if (pr is SldLabel) pr.text,
+  ];
+  bool printedMatch(RegExp re) => printed.any(re.hasMatch);
+  if (printedMatch(RegExp(r'(^|\s)VD!'))) {
+    legend.add(const SldLegendEntry('VD!', 'Voltage drop over limit'));
+  }
+  if (printedMatch(RegExp(r'\bundiv\b'))) {
+    legend.add(const SldLegendEntry('div / undiv',
+        'Demand current with / without the board diversity factor'));
+  }
+  if (printedMatch(RegExp(r'\d cap$'))) {
+    legend.add(const SldLegendEntry(
+        'cap', 'Capacitor-bank current (excluded from the TOTAL balance)'));
+  }
   // The breaking-capacity + metering conventions, listed only when they were
   // actually drawn on a device / board (N9 / N11) — the kA source may be the
   // chosen device Icu or the prospective fault, so the note states the
@@ -883,8 +932,11 @@ SldSheet buildElectricalSld({
   }
   if (anyMetering) {
     legend
-      ..add(const SldLegendEntry('V / A / Hz', 'Panel metering instruments'))
-      ..add(const SldLegendEntry('CT', 'Metering current transformer (x/5A)'));
+      .add(const SldLegendEntry('V / A / Hz', 'Panel metering instruments'));
+    if (printedMatch(RegExp(r'^CT '))) {
+      legend.add(
+          const SldLegendEntry('CT', 'Metering current transformer (x/5A)'));
+    }
   }
   // drafting-8: every remaining row abbreviation, keyed only when printed.
   if (anyRcd) {
@@ -2312,7 +2364,8 @@ SldSheet buildElectricalOverview({
     maxY: maxY,
     legend: [
       const SldLegendEntry('Normal', 'Normal supply'),
-      const SldLegendEntry('Essential', 'Essential / emergency supply'),
+      if (_anyEssentialPrim(prims))
+        const SldLegendEntry('Essential', 'Essential / emergency supply'),
       if (sourceChain)
         const SldLegendEntry('Source', 'Utility / MV supply chain'),
       // The source spine draws the system-earthing mark, so surface it too.
@@ -3309,7 +3362,8 @@ SldSheet buildElectricalRiser({
     maxY: maxY,
     legend: [
       const SldLegendEntry('Normal', 'Normal supply'),
-      const SldLegendEntry('Essential', 'Essential / emergency supply'),
+      if (_anyEssentialPrim(prims))
+        const SldLegendEntry('Essential', 'Essential / emergency supply'),
       const SldLegendEntry('FFL', 'Finished floor level (m)'),
       if (sourceChain)
         const SldLegendEntry('Source', 'Utility / MV supply chain'),
