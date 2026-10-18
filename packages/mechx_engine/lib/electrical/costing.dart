@@ -69,7 +69,11 @@ CostEstimate estimateCost(
   final out = <CostLine>[];
 
   for (final line in bom.lines) {
-    final unit = line.sku == null ? null : priceList[line.sku];
+    // Priced by the line's pricelist key (a multi-core cable's `SKU:nC`, an
+    // unmatched enclosure/busbar/RCD/accessory's `elec:` key — audit r8), with
+    // a read-time fallback to the bare SKU so a saved pricelist still applies.
+    final byKey = line.priceKey == null ? null : priceList[line.priceKey];
+    final unit = byKey ?? (line.sku == null ? null : priceList[line.sku]);
     if (unit == null) {
       unmatched += 1;
       out.add(CostLine(line: line, matched: false));

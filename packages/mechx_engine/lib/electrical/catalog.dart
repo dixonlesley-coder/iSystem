@@ -96,6 +96,16 @@ class Part {
   double? get csaMm2 => _asNum(attributes['csaMm2']);
   String? get cableType => attributes['type'] as String?;
 
+  /// Conductor count of a cable part (1 = single-core, e.g. NYA); null when
+  /// the part does not declare it (a multi-core make-up sold per metre).
+  int? get cores => _asNum(attributes['cores'])?.toInt();
+
+  /// Rated breaking capacity (Icu / Icn, kA) of a breaker part, when declared.
+  double? get breakingKa => _asNum(attributes['breakingKa']);
+
+  /// Rated residual operating current (mA) of an RCCB / RCBO part.
+  double? get residualMa => _asNum(attributes['residualMa']);
+
   static double? _asNum(Object? v) => v is num ? v.toDouble() : null;
 }
 

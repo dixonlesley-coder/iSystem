@@ -42,14 +42,49 @@ double _round2(double v) => (v * 100).roundToDouble() / 100;
 const String kMechPriceKeyPrefix = 'mech:';
 
 /// The stable pricelist key for a mechanical pipe/duct line (per service, run vs
-/// riser, and nominal DN in mm). Human-stable so the pricelist survives edits.
-String mechPipeKey(ServiceType service, EdgeKind kind, int diameterMm) =>
-    '${kMechPriceKeyPrefix}pipe:${service.name}:${kind.name}:$diameterMm';
+/// riser, MATERIAL and size). Human-stable so the pricelist survives edits.
+///
+/// With a [material] (and/or a rectangular [widthMm]×[heightMm]) the key is
+/// `mech:pipe:<svc>:<kind>:<material>:<size>` where size is `WxH` for a
+/// rectangular duct, else the nominal mm — so PPR and HDPE, or a PU and a BJLS
+/// duct, price apart (audit r8; `sizing/bom.dart` already splits lines by
+/// material and W×H). Without either the LEGACY key
+/// `mech:pipe:<svc>:<kind>:<mm>` is returned, which [estimateMechanicalCost]
+/// also reads as a fallback so a saved pricelist keeps applying.
+String mechPipeKey(
+  ServiceType service,
+  EdgeKind kind,
+  int diameterMm, {
+  String material = '',
+  int? widthMm,
+  int? heightMm,
+}) {
+  final rect = widthMm != null && heightMm != null;
+  if (material.isEmpty && !rect) {
+    return '${kMechPriceKeyPrefix}pipe:${service.name}:${kind.name}:$diameterMm';
+  }
+  final size = rect ? '${widthMm}x$heightMm' : '$diameterMm';
+  final mat = material.isEmpty ? '-' : material;
+  return '${kMechPriceKeyPrefix}pipe:${service.name}:${kind.name}:$mat:$size';
+}
+
+/// The pricelist key a [BomLine] prices under (material + W×H aware).
+String mechPipeKeyFor(BomLine p) => mechPipeKey(p.service, p.kind, p.diameterMm,
+    material: p.material, widthMm: p.widthMm, heightMm: p.heightMm);
 
 /// The stable pricelist key for a mechanical fitting line (per service, type,
-/// and nominal DN in mm).
-String mechFittingKey(ServiceType service, FittingType type, int diameterMm) =>
-    '${kMechPriceKeyPrefix}fitting:${service.name}:${type.name}:$diameterMm';
+/// MATERIAL and nominal DN in mm). Without a [material] the legacy
+/// `mech:fitting:<svc>:<type>:<mm>` key is returned (also the read fallback).
+String mechFittingKey(
+  ServiceType service,
+  FittingType type,
+  int diameterMm, {
+  String material = '',
+}) =>
+    material.isEmpty
+        ? '${kMechPriceKeyPrefix}fitting:${service.name}:${type.name}:$diameterMm'
+        : '${kMechPriceKeyPrefix}fitting:${service.name}:${type.name}:'
+            '$material:$diameterMm';
 
 /// True when [key] addresses a mechanical price (vs an electrical catalogue SKU).
 bool isMechPriceKey(String key) => key.startsWith(kMechPriceKeyPrefix);
@@ -186,6 +221,7 @@ MechCostEstimate estimateMechanicalCost({
 
   void priceLine({
     required String key,
+    String? legacyKey,
     required String description,
     required MechItemCategory category,
     required ServiceType service,
@@ -194,7 +230,10 @@ MechCostEstimate estimateMechanicalCost({
     int? stockBars,
     double? wastePercent,
   }) {
-    final unitPrice = priceList[key];
+    // Read-time fallback to the legacy (material-less) key so a pricelist
+    // saved before the material split still applies (no version bump).
+    final unitPrice =
+        priceList[key] ?? (legacyKey == null ? null : priceList[legacyKey]);
     if (unitPrice == null) {
       unpriced += 1;
       lines.add(MechCostLine(
@@ -237,8 +276,10 @@ MechCostEstimate estimateMechanicalCost({
             planByKey['${p.service.name}:${p.diameterMm}:'])
         : null;
     priceLine(
-      key: mechPipeKey(p.service, p.kind, p.diameterMm),
-      description: '${mechServiceLabel(p.service)} $kindWord DN${p.diameterMm}',
+      key: mechPipeKeyFor(p),
+      legacyKey: mechPipeKey(p.service, p.kind, p.diameterMm),
+      description: '${mechServiceLabel(p.service)} $kindWord ${p.sizeLabel}'
+          '${p.material.isEmpty ? '' : ' ${p.material}'}',
       category: MechItemCategory.pipe,
       service: p.service,
       qty: _round2(p.totalLength.meters),
@@ -251,10 +292,13 @@ MechCostEstimate estimateMechanicalCost({
   }
 
   for (final f in fittings) {
+    final size = f.service.isAir ? 'Ø${f.diameterMm}' : 'DN${f.diameterMm}';
     priceLine(
-      key: mechFittingKey(f.service, f.type, f.diameterMm),
-      description:
-          '${mechServiceLabel(f.service)} ${_fittingLabel(f.type)} DN${f.diameterMm}',
+      key: mechFittingKey(f.service, f.type, f.diameterMm,
+          material: f.material),
+      legacyKey: mechFittingKey(f.service, f.type, f.diameterMm),
+      description: '${mechServiceLabel(f.service)} ${_fittingLabel(f.type)} '
+          '$size${f.material.isEmpty ? '' : ' ${f.material}'}',
       category: MechItemCategory.fitting,
       service: f.service,
       qty: f.count.toDouble(),

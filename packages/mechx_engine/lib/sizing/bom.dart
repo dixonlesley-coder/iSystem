@@ -5,6 +5,8 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import 'dart:math' as math;
+
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -304,64 +306,115 @@ List<BomLine> buildBom({
 /// Kind of pipe/duct fitting inferred from network topology.
 enum FittingType { elbow, tee, cross, reducer }
 
-/// One grouped fittings row: count of [type] at [diameterMm] for [service].
+/// One grouped fittings row: count of [type] at [diameterMm] for [service],
+/// in [material] (the [bomMaterialFor] code of the largest incident edge —
+/// a PPR and a PVC fitting price and joint apart; '' = unknown / hand-built).
 class FittingLine {
   final ServiceType service;
   final FittingType type;
   final int diameterMm;
   final int count;
+  final String material;
 
   const FittingLine({
     required this.service,
     required this.type,
     required this.diameterMm,
     required this.count,
+    this.material = '',
   });
 }
+
+/// Cosine below which two runs meeting at a vertex count as a straight
+/// pass-through (opposite directions within ≈ 12°) — the same threshold
+/// `buildPipeChains` uses to merge a continuous pipe through a vertex.
+const double _kPassThroughCos = -0.978;
 
 /// Estimate fittings from node topology + per-edge sizes. At each node, per
 /// service, the count of incident SIZED edges implies a fitting:
 ///   2 → elbow · 3 → tee · 4 → cross · >4 → (k−2) tees.
-/// A node whose incident edges have more than one diameter also adds
+/// A two-edge node is an elbow ONLY when the line actually turns: two
+/// collinear runs (a straight pass-through vertex, e.g. a multi-click run or a
+/// split segment) and two risers (a continuous vertical stack) count NO elbow —
+/// the cut plan already places those couplings (audit r8: every straight
+/// vertex used to be counted and priced as an elbow). A riser meeting a run is
+/// an elbow. A node whose incident edges have more than one diameter also adds
 /// (distinctDiameters − 1) reducers. Fitting size = the largest incident
-/// diameter. This is a takeoff ESTIMATE (straight in-line couplings on a
-/// polyline vertex are counted as elbows).
+/// diameter; fitting material = that edge's [bomMaterialFor] code.
 List<FittingLine> buildFittings({
   required Network net,
   required Map<String, EdgeSizing> sizing,
 }) {
-  // node → service → list of incident edge diameters (mm), sized edges only.
-  final byNode = <String, Map<ServiceType, List<int>>>{};
+  // node → service → incident (diameter mm, edge), sized edges only.
+  final byNode = <String, Map<ServiceType, List<(int, NetEdge)>>>{};
   for (final edge in net.edges) {
     final es = sizing[edge.id];
     if (es == null) continue;
     final mm = es.diameter.inMillimeters.round();
     for (final nodeId in [edge.fromId, edge.toId]) {
-      (byNode[nodeId] ??= {}).putIfAbsent(edge.service, () => []).add(mm);
+      (byNode[nodeId] ??= {})
+          .putIfAbsent(edge.service, () => [])
+          .add((mm, edge));
     }
   }
 
-  final acc = <({ServiceType service, FittingType type, int mm}), int>{};
-  void add(ServiceType s, FittingType t, int mm, int n) {
-    final key = (service: s, type: t, mm: mm);
+  // Unit plan direction from [nodeId] toward [edge]'s far end, or null when
+  // degenerate (coincident endpoints).
+  ({double dx, double dy})? dirFrom(String nodeId, NetEdge edge) {
+    final here = net.nodeById(nodeId);
+    final far = net.nodeById(edge.fromId == nodeId ? edge.toId : edge.fromId);
+    if (here == null || far == null) return null;
+    final dx = far.x - here.x, dy = far.y - here.y;
+    final len = math.sqrt(dx * dx + dy * dy);
+    if (len <= 1e-9) return null;
+    return (dx: dx / len, dy: dy / len);
+  }
+
+  bool isPassThrough(String nodeId, NetEdge a, NetEdge b) {
+    if (a.kind == EdgeKind.riser && b.kind == EdgeKind.riser) return true;
+    if (a.kind != EdgeKind.run || b.kind != EdgeKind.run) return false;
+    final da = dirFrom(nodeId, a), db = dirFrom(nodeId, b);
+    if (da == null || db == null) return false;
+    return da.dx * db.dx + da.dy * db.dy <= _kPassThroughCos;
+  }
+
+  final acc =
+      <({ServiceType service, FittingType type, int mm, String mat}), int>{};
+  void add(ServiceType s, FittingType t, int mm, String mat, int n) {
+    final key = (service: s, type: t, mm: mm, mat: mat);
     acc[key] = (acc[key] ?? 0) + n;
   }
 
-  byNode.forEach((_, services) {
-    services.forEach((service, diameters) {
-      final k = diameters.length;
-      final mm = diameters.reduce((a, b) => a > b ? a : b); // largest incident
-      if (k == 2) {
-        add(service, FittingType.elbow, mm, 1);
-      } else if (k == 3) {
-        add(service, FittingType.tee, mm, 1);
-      } else if (k == 4) {
-        add(service, FittingType.cross, mm, 1);
-      } else if (k > 4) {
-        add(service, FittingType.tee, mm, k - 2);
+  byNode.forEach((nodeId, services) {
+    services.forEach((service, incident) {
+      final k = incident.length;
+      // Largest incident diameter; its edge sets the material (ties → the
+      // alphabetically-first code, deterministic).
+      var best = incident.first;
+      for (final e in incident.skip(1)) {
+        if (e.$1 > best.$1 ||
+            (e.$1 == best.$1 &&
+                bomMaterialFor(e.$2).compareTo(bomMaterialFor(best.$2)) < 0)) {
+          best = e;
+        }
       }
-      final distinct = diameters.toSet().length;
-      if (distinct > 1) add(service, FittingType.reducer, mm, distinct - 1);
+      final mm = best.$1;
+      final mat = bomMaterialFor(best.$2);
+      if (k == 2) {
+        if (!isPassThrough(nodeId, incident[0].$2, incident[1].$2)) {
+          add(service, FittingType.elbow, mm, mat, 1);
+        }
+      } else if (k == 3) {
+        add(service, FittingType.tee, mm, mat, 1);
+      } else if (k == 4) {
+        add(service, FittingType.cross, mm, mat, 1);
+      } else if (k > 4) {
+        add(service, FittingType.tee, mm, mat, k - 2);
+      }
+      final distinct = incident.map((e) => e.$1).toSet().length;
+      if (distinct > 1) {
+        add(service, FittingType.reducer, mm, mat, distinct - 1);
+      }
     });
   });
 
@@ -372,6 +425,7 @@ List<FittingLine> buildFittings({
         type: e.key.type,
         diameterMm: e.key.mm,
         count: e.value,
+        material: e.key.mat,
       ),
   ];
   lines.sort((a, b) {
@@ -379,7 +433,9 @@ List<FittingLine> buildFittings({
     if (svc != 0) return svc;
     final t = a.type.index.compareTo(b.type.index);
     if (t != 0) return t;
-    return a.diameterMm.compareTo(b.diameterMm);
+    final d = a.diameterMm.compareTo(b.diameterMm);
+    if (d != 0) return d;
+    return a.material.compareTo(b.material);
   });
   return lines;
 }

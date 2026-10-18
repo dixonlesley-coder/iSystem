@@ -4,8 +4,10 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/network/network.dart' show ServiceType;
 import 'package:mechx_engine/units.dart' show Power;
 
+import 'network_store.dart';
 import 'project_store.dart';
 
 /// Selected sprinkler hazard class (drives the sprinkler design).
@@ -107,5 +109,54 @@ final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
     motorInputPower: Power(governingShaft * motorEff),
     selectedMotor: rating.selectedMotor,
     motorOversized: rating.oversized,
+  );
+});
+
+/// Sprinkler-vs-fire-pump coverage check (audit r8 fire-hvac-3) — JUDGE-ONLY.
+///
+/// The one scheduled + electrically fed fire pump ([firePumpDutyProvider]) is
+/// rated on the STANDPIPE flow and head; nothing compared it with the sprinkler
+/// design-area demand, so at Extra Hazard (≈ 43 L/s) the only pump (≈ 31.5 L/s)
+/// could not deliver the sprinklers it was scheduled for. Reported only when a
+/// sprinkler system is actually DRAWN (fireSprinkler edges):
+///  * flow:  remote-area demand (`sprinklerRemoteAreaProvider`) vs the pump's
+///           rated flow;
+///  * head:  a LOWER-BOUND sprinkler requirement — static lift from the pump
+///           datum (floor 0) to the top-floor ceiling + the branch-base pressure
+///           as head (P/ρg) — vs the pump head. Riser / main friction is NOT
+///           added, so a flagged shortfall is certain, never speculative.
+/// Never resizes anything. Null when no sprinkler is drawn or no pump duty.
+final sprinklerPumpCheckProvider = Provider<
+    ({
+      double demandLps,
+      double pumpLps,
+      double requiredHeadM,
+      double pumpHeadM,
+      bool flowShort,
+      bool headShort,
+    })?>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  if (!net.edges.any((e) => e.service == ServiceType.fireSprinkler)) {
+    return null;
+  }
+  final pump = ref.watch(firePumpDutyProvider);
+  if (pump == null) return null;
+  final remote = ref.watch(sprinklerRemoteAreaProvider);
+  final building = ref.watch(projectControllerProvider).building;
+  final top = building.floors.length - 1;
+  final lift = top < 0
+      ? 0.0
+      : building.ceilingElevationOf(top).meters - building.elevationOf(0).meters;
+  const rhoG = 1000 * 9.81;
+  final required = lift + remote.branchBasePressure.pascals / rhoG;
+  final demand = remote.remoteAreaDemand.inLitersPerSecond;
+  final pumpLps = pump.flow.inLitersPerSecond;
+  return (
+    demandLps: demand,
+    pumpLps: pumpLps,
+    requiredHeadM: required,
+    pumpHeadM: pump.head.meters,
+    flowShort: demand > pumpLps + 1e-9,
+    headShort: required > pump.head.meters + 1e-9,
   );
 });

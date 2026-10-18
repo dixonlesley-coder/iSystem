@@ -57,6 +57,7 @@ import '../../store/calibration_store.dart';
 import '../../store/compliance_store.dart';
 import '../../store/design_issues_store.dart';
 import '../../store/document_control_store.dart';
+import '../../store/electrical_feed.dart' show acUnitShare, mepDutyBindingProvider;
 import '../../store/electrical_store.dart';
 import '../../store/command_store.dart';
 import '../../store/commercial_store.dart';
@@ -595,10 +596,22 @@ Future<void> exportEquipmentSchedule(WidgetRef ref) => runExportGuarded(
 /// carry gaps after a deletion — that is the point: each unit keeps its number
 /// for life. Falls back to the live index only when an id carries no trailing
 /// integer (defensive — every real room id does).
-String _roomScheduleTag(RoomArea room, int fallbackIndex) {
+///
+/// When that natural `AHU-NN` collides with a tag the plan already prints
+/// beside a DRAWN unit ([usedNodeTags], from `equipmentNodeTags`), the room's
+/// fallback is namespaced `AHU-RNN` so the schedule never names two different
+/// units the same (audit r8 coupling-3). Node tags never contain `R`, and room
+/// ids are unique, so the namespaced tag is unique too.
+String _roomScheduleTag(
+  RoomArea room,
+  int fallbackIndex, {
+  Set<String> usedNodeTags = const {},
+}) {
   final m = RegExp(r'(\d+)$').firstMatch(room.id);
   final n = m != null ? int.parse(m.group(1)!) + 1 : fallbackIndex + 1;
-  return 'AHU-${n.toString().padLeft(2, '0')}';
+  final nn = n.toString().padLeft(2, '0');
+  final natural = 'AHU-$nn';
+  return usedNodeTags.contains(natural) ? 'AHU-R$nn' : natural;
 }
 
 /// Gather the live solved equipment (pumps, fans, room AHU/FCU/AC, and
@@ -647,12 +660,19 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     n.id,
   ).any((s) => s == ServiceType.coldWater || s == ServiceType.hotWater);
 
+  // The drawn plant node each solved duty is rooted at — the SAME binding the
+  // MEP→electrical feed uses, so a schedule tag, the plan tag and the panel
+  // way all name one machine (audit r8 coupling-2/3).
+  final binding = ref.read(mepDutyBindingProvider);
+  String? tagOfNode(String? id) => id == null ? null : nodeTags[id];
+
   // Pumps: the domestic-supply booster (upfeed) + the standpipe fire pump.
   final pumps = <PumpScheduleItem>[];
   final supplyPump = ref.read(pumpDutyProvider);
   if (supplyPump != null) {
-    final tag =
-        tagOfFirst((n) => isPumpNode(n) && onWater(n) && !onFire(n)) ?? 'P-01';
+    final tag = tagOfNode(binding.supplyPumpNodeId) ??
+        tagOfFirst((n) => isPumpNode(n) && onWater(n) && !onFire(n)) ??
+        'P-01';
     pumps.add(
       PumpScheduleItem(
         duty: supplyPump,
@@ -678,13 +698,19 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
 
   // Fans: the drawn supply/return duct fan + the separate exhaust fan.
   final fans = <FanScheduleItem>[];
+  final airRoots = ref.read(airSystemRootNodesProvider);
+  bool onService(NetNode n, ServiceType s) => servicesAt(n.id).contains(s);
   final ductFan = ref.read(ductFanProvider);
   if (ductFan != null) {
-    final tag =
+    // The unit the supply (else return) duct system is ROOTED at carries this
+    // duty — never the exhaust fan's tag (audit r8 coupling-3).
+    final tag = tagOfNode(airRoots.supply) ??
         tagOfFirst(
           (n) =>
-              n.component == NodeComponent.supplyFan ||
-              n.component == NodeComponent.exhaustFan,
+              (n.component == NodeComponent.supplyFan ||
+                  n.component == NodeComponent.ahu) &&
+              (onService(n, ServiceType.duct) ||
+                  onService(n, ServiceType.returnAir)),
         ) ??
         'F-01';
     fans.add(
@@ -698,7 +724,12 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   }
   final exhaustFan = ref.read(exhaustFanProvider);
   if (exhaustFan != null) {
-    const tag = 'EF-01';
+    // The exhaust system's ROOT fan's plan tag; 'EF-01' only when none drawn.
+    final tag = tagOfNode(airRoots.exhaust) ??
+        tagOfFirst((n) =>
+            n.component == NodeComponent.exhaustFan &&
+            onService(n, ServiceType.exhaust)) ??
+        'EF-01';
     fans.add(
       FanScheduleItem(
         duty: exhaustFan,
@@ -709,9 +740,19 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     );
   }
 
-  // Air-handling: each drawn ROOM's AHU/FCU/AC equipment duty (FanDuty).
+  // Air-handling: each drawn ROOM's AHU/FCU equipment duty (FanDuty) — only
+  // when that unit EXISTS: an AHU/FCU node drawn in the room, or a room with
+  // neither AC units nor an air network (the room-air sizing is then the only
+  // statement of its air handling). A room served by AC units schedules THOSE
+  // units instead (below), so every scheduled unit has exactly one electrical
+  // way and vice versa (audit r8 coupling-6).
   final ducts = ref.read(ductSettingsProvider);
   final rooms = ref.read(roomAreasProvider);
+  final usedNodeTags = nodeTags.values.toSet();
+  final hasAirNetwork = net.edges.any((e) =>
+      e.service == ServiceType.duct || e.service == ServiceType.returnAir);
+  bool inRoom(RoomArea r, NetNode n) =>
+      r.containsNode(n.sheetId, n.floorIndex, n.x, n.y);
   for (var i = 0; i < rooms.length; i++) {
     final r = rooms[i];
     final cal = project.calibrationFor(r.sheetId);
@@ -721,19 +762,27 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       ductMethod: ducts.method,
     );
     if (sizing == null) continue;
+    final drawnUnit = net.nodes.any((n) =>
+        (n.component == NodeComponent.ahu ||
+            n.component == NodeComponent.fcu) &&
+        inRoom(r, n));
+    final hasAc = net.nodes
+        .any((n) => RoomArea.isAcComponent(n.component) && inRoom(r, n));
+    if (!drawnUnit && (hasAc || hasAirNetwork)) continue;
     // J3: the AHU tag tracks the room's STABLE identity, not its live list
     // position — deleting / reordering / skipping (uncalibrated) another room
     // never renumbers this unit, so a procured AHU-03 stays AHU-03 across
     // revisions ([_roomScheduleTag]).
-    // drafting-7: an AHU node DRAWN inside the room carries the plan tag; the
-    // room-identity tag stays the fallback for a room with no drawn AHU.
+    // drafting-7: an AHU/FCU node DRAWN inside the room carries the plan tag;
+    // the room-identity tag stays the fallback for a room with no drawn unit.
     final tag =
         tagOfFirst(
           (n) =>
-              n.component == NodeComponent.ahu &&
-              r.containsNode(n.sheetId, n.floorIndex, n.x, n.y),
+              (n.component == NodeComponent.ahu ||
+                  n.component == NodeComponent.fcu) &&
+              inRoom(r, n),
         ) ??
-        _roomScheduleTag(r, i);
+        _roomScheduleTag(r, i, usedNodeTags: usedNodeTags);
     fans.add(
       FanScheduleItem(
         duty: sizing.equipment,
@@ -745,11 +794,33 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     );
   }
 
+  // Placed AC units — one row each, on the SAME per-unit share + input the
+  // electrical feed sizes its panel way on ([acUnitShare]).
+  final method = ref.read(coolingLoadMethodProvider);
+  double? mppFor(String sheetId) =>
+      project.calibrationFor(sheetId)?.metersPerPixel;
+  final acUnits = <AcScheduleItem>[];
+  for (final n in net.nodes) {
+    if (!RoomArea.isAcComponent(n.component)) continue;
+    final share = acUnitShare(net, rooms, mppFor, n, method: method);
+    if (share == null) continue;
+    final tag = nodeTags[n.id] ?? 'AC-${(acUnits.length + 1).toString().padLeft(2, '0')}';
+    acUnits.add(AcScheduleItem(
+      tag: tag,
+      service: '${share.room.name} · ${n.component!.label}',
+      coolingBtuPerHr: share.btuPerHr,
+      pk: share.unit.pk,
+      inputW: share.inputW,
+      modelSpec: specs[tag],
+    ));
+  }
+
   return EquipmentScheduleData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
     pumps: pumps,
     fans: fans,
+    acUnits: acUnits,
     electrical: ref.read(electricalResultProvider),
     // N22 (app half): the source apparatus (transformer / standby genset /
     // PF-correction bank) the electrical project may carry, so the schedule
@@ -786,6 +857,7 @@ List<({String tag, String service})> equipmentSpecTargets(WidgetRef ref) {
   return [
     for (final p in data.pumps) (tag: p.tag!, service: p.service),
     for (final f in data.fans) (tag: f.tag!, service: f.service),
+    for (final a in data.acUnits) (tag: a.tag, service: a.service),
     for (final r in buildEquipmentScheduleRows(data))
       if (apparatus.contains(r.category)) (tag: r.tag, service: r.service),
   ];
@@ -798,7 +870,9 @@ List<({String tag, String service})> equipmentSpecTargets(WidgetRef ref) {
 /// byte-identical).
 bool hasMechanicalEquipmentTargets(WidgetRef ref) {
   final data = gatherEquipmentScheduleData(ref);
-  return data.pumps.isNotEmpty || data.fans.isNotEmpty;
+  return data.pumps.isNotEmpty ||
+      data.fans.isNotEmpty ||
+      data.acUnits.isNotEmpty;
 }
 
 /// Watch every provider [equipmentSpecTargets]'s tag/service derivation reads
@@ -812,6 +886,9 @@ void watchEquipmentSpecInputs(WidgetRef ref) {
   ref.watch(ductFanProvider);
   ref.watch(ductSettingsProvider);
   ref.watch(roomAreasProvider);
+  ref.watch(networkControllerProvider);
+  ref.watch(exhaustFanProvider);
+  ref.watch(coolingLoadMethodProvider);
   ref.watch(electricalResultProvider);
   ref.watch(electricalProjectProvider);
 }

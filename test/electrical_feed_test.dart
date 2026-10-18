@@ -75,8 +75,11 @@ void main() {
     expect(pump.loadKind, LoadKind.pump);
     expect(pump.motorKw, closeTo(3.0, 1e-9)); // selectedMotor = 3 kW
     expect(pump.flaOverrideA, isNotNull);
-    // 2.5 kW input / (√3·400·0.85) ≈ 4.25 A
-    expect(pump.flaOverrideA!.amperes, closeTo(4.25, 0.1));
+    // Audit r8 coupling-4: sized on the NAMEPLATE —
+    //   input = max(operating 2500 W, 3000 W / η 0.90 = 3333.3 W) = 3333.3 W
+    //   I = 3333.3 / (√3·400·0.85) = 3333.3 / 588.9 ≈ 5.66 A
+    expect(pump.loadW, closeTo(3000 / 0.90, 1e-6));
+    expect(pump.flaOverrideA!.amperes, closeTo(5.66, 0.01));
   });
 
   test('a pump NODE placed on the plan is inter-related as an electrical load',

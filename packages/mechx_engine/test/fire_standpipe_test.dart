@@ -2,7 +2,7 @@
 ///
 /// Design constants are sourced from SNI 03-1745-2000 (standpipe/hydrant) and
 /// SNI 03-6570-2001 (fire pump):
-///   • Flow: 550 gpm most-remote riser + 250 gpm per additional riser, ≤1250
+///   • Flow: 500 gpm most-remote riser + 250 gpm per additional riser, ≤1250
 ///     gpm cap (converted to L/min via the US gallon = 3.785411784 L).
 ///   • Residual: 6.9 bar (690 kPa) Class I/III, 4.5 bar (450 kPa) Class II.
 ///   • Minimum Class I/III riser diameter: 100 mm.
@@ -25,8 +25,8 @@ void main() {
   // ── Constants (SNI 03-1745-2000) ─────────────────────────────────────────────
 
   group('design constants (SNI 03-1745-2000)', () {
-    test('kFirstRiserFlowLpm is 550 gpm', () {
-      expect(kFirstRiserFlowLpm, closeTo(550.0 * gal, 1e-9)); // ≈ 2082 L/min
+    test('kFirstRiserFlowLpm is 500 gpm', () {
+      expect(kFirstRiserFlowLpm, closeTo(500.0 * gal, 1e-9)); // ≈ 1893 L/min
     });
 
     test('kAdditionalRiserFlowLpm is 250 gpm', () {
@@ -53,23 +53,23 @@ void main() {
   // ── standpipeFlow ──────────────────────────────────────────────────────────
 
   group('standpipeFlow — flow demand by riser count', () {
-    test('1 riser → 550 gpm', () {
+    test('1 riser → 500 gpm', () {
       final q = standpipeFlow(1);
-      expect(q.inLitersPerMinute, closeTo(550.0 * gal, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(500.0 * gal, 1e-9));
     });
 
-    test('2 risers → 800 gpm (550 + 250)', () {
+    test('2 risers → 750 gpm (500 + 250)', () {
       final q = standpipeFlow(2);
-      expect(q.inLitersPerMinute, closeTo(800.0 * gal, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(750.0 * gal, 1e-9));
     });
 
-    test('3 risers → 1050 gpm', () {
+    test('3 risers → 1000 gpm', () {
       final q = standpipeFlow(3);
-      expect(q.inLitersPerMinute, closeTo(1050.0 * gal, 1e-9));
+      expect(q.inLitersPerMinute, closeTo(1000.0 * gal, 1e-9));
     });
 
-    test('4 risers → 1250 gpm (cap; uncapped 1300 → clamped)', () {
-      // 550 + 250×3 = 1300 gpm → clamped to the 1250 gpm cap.
+    test('4 risers → 1250 gpm (500 + 250×3 lands exactly on the cap)', () {
+      // 500 + 250×3 = 1250 gpm — the SNI/NFPA 14 cap is reached, not exceeded.
       final q = standpipeFlow(4);
       expect(q.inLitersPerMinute, closeTo(1250.0 * gal, 1e-9));
     });
@@ -114,8 +114,8 @@ void main() {
       expect(design.standpipeClass, StandpipeClass.classI);
     });
 
-    test('requiredFlow is 800 gpm', () {
-      expect(design.requiredFlow.inLitersPerMinute, closeTo(800.0 * gal, 1e-9));
+    test('requiredFlow is 750 gpm', () {
+      expect(design.requiredFlow.inLitersPerMinute, closeTo(750.0 * gal, 1e-9));
     });
 
     test('topResidualPressure is 690 kPa (Class I)', () {
@@ -159,8 +159,8 @@ void main() {
       );
     });
 
-    test('requiredFlow is 550 gpm', () {
-      expect(design.requiredFlow.inLitersPerMinute, closeTo(550.0 * gal, 1e-9));
+    test('requiredFlow is 500 gpm', () {
+      expect(design.requiredFlow.inLitersPerMinute, closeTo(500.0 * gal, 1e-9));
     });
 
     test('topResidualPressure is 450 kPa (Class II)', () {

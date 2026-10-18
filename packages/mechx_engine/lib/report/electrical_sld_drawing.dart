@@ -32,7 +32,7 @@ import '../electrical/sources.dart'
         BatteryChemistryInfo,
         GeneratorModeInfo,
         kGeneratorPf,
-        selectGeneratorKva,
+        selectGeneratorUnits,
         sizeBattery;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
@@ -1343,6 +1343,25 @@ String _supplyHeadLabel(ElectricalProject project,
 /// demand kVA, capped at 100 (an oversized set still backs the whole load, it
 /// does not back 250% of it). Null when there is no demand or no rating — no
 /// honest ratio to print, so nothing is printed.
+/// A genset-ladder kVA figure that NEVER saturates silently (audit r8-5):
+/// below the top rung it is the single standard rating (`500`); above it,
+/// `n x 2500` paralleled sets. [totalKva] is the paralleled capacity (what the
+/// coverage % compares), [text] the printable figure (no unit). An explicit
+/// [forced] rating is printed verbatim as one set.
+({double totalKva, String text}) _ladderKva(ApparentPower required,
+    {ApparentPower? forced}) {
+  if (forced != null) {
+    final k = forced.inKilovoltAmperes;
+    return (totalKva: k, text: _num(k));
+  }
+  final sel = selectGeneratorUnits(required);
+  final unit = sel.unitKva.inKilovoltAmperes;
+  return (
+    totalKva: unit * sel.units,
+    text: sel.units > 1 ? '${sel.units} x ${_num(unit)}' : _num(unit),
+  );
+}
+
 String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   final demandKva = demandVa.inKilovoltAmperes;
   if (demandKva <= 0 || genKva <= 0) return null;
@@ -1396,8 +1415,9 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
 ///
 /// Sizing is DERIVED from existing sizers only (no invented physics): on an
 /// MV service with no explicit rating (dual-tx), the transformer + genset kVA
-/// snap to the genset ladder (`selectGeneratorKva`) against the building
-/// demand VA — all `// VERIFY`.
+/// snap to the genset ladder (`selectGeneratorUnits` — `n x 2500` past the
+/// top rung, never a silent saturation) against the building demand VA — all
+/// `// VERIFY`.
 ({List<SldPrim> prims, double height, double feedX, double feedY})
     _buildSourceSpine(
   ElectricalProject project,
@@ -1412,11 +1432,12 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   // MV-chain transformer kVA: an EXPLICIT rating wins; else (dual-tx with no
   // rating) the smallest standard rating covering the building demand VA
   // (genset ladder, // VERIFY). Blank when neither is known.
-  final txKva = project.transformerKva?.inKilovoltAmperes ??
-      (demandVa.inKilovoltAmperes > 0
-          ? selectGeneratorKva(demandVa).inKilovoltAmperes
-          : 0.0);
-  final txLabel = txKva > 0 ? 'TRANSFORMER ${_num(txKva)} kVA' : 'TRANSFORMER';
+  final txFig = project.transformerKva != null
+      ? _ladderKva(project.transformerKva!, forced: project.transformerKva)
+      : (demandVa.inKilovoltAmperes > 0 ? _ladderKva(demandVa) : null);
+  final txLabel = (txFig != null && txFig.totalKva > 0)
+      ? 'TRANSFORMER ${txFig.text} kVA'
+      : 'TRANSFORMER';
 
   // The vertical spine, top -> bottom. The MV station chain exists ONLY on a
   // declared MV service — an LV direct service is just its supply head.
@@ -1485,12 +1506,12 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
       final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
-      final genKva =
-          (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
+      final genFig = _ladderKva(backupVa, forced: gen.kva);
+      final genKva = genFig.totalKva;
       final gy = lvMidY - _ovH - 8;
       final gcy = gy + _ovH / 2;
       _emitGenerator(prims, sideX + 14, gcy, 13, SldRole.source);
-      prims.add(SldLabel(sideX + 34, gcy - 2, 'GENSET ${_num(genKva)} kVA',
+      prims.add(SldLabel(sideX + 34, gcy - 2, 'GENSET ${genFig.text} kVA',
           size: 8.5, bold: true, role: SldRole.source));
       prims.add(SldLabel(sideX + 34, gcy + 12, gen.mode.label,
           size: 7.5, role: SldRole.source));
@@ -1573,11 +1594,11 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
         final gen = project.sources!.generator!;
         final backupVa =
             ApparentPower(demandVa.voltAmperes * gen.backupFraction);
-        final genKva =
-            (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
+        final genFig = _ladderKva(backupVa, forced: gen.kva);
+        final genKva = genFig.totalKva;
         connectTo(13, 13);
         _emitGenerator(prims, dropX, cy, 13, SldRole.source);
-        prims.add(SldLabel(dropX + 20, cy - 2, 'GENSET ${_num(genKva)} kVA',
+        prims.add(SldLabel(dropX + 20, cy - 2, 'GENSET ${genFig.text} kVA',
             size: 8.5, bold: true, role: SldRole.source));
         prims.add(SldLabel(dropX + 20, cy + 12, gen.mode.label,
             size: 7.5, role: SldRole.source));
@@ -1670,11 +1691,12 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   const role = SldRole.source;
   final demandVa = result.supply.demandVa;
   final isMv = _isMvService(project);
-  final txKva = project.transformerKva?.inKilovoltAmperes ??
-      (demandVa.inKilovoltAmperes > 0
-          ? selectGeneratorKva(demandVa).inKilovoltAmperes
-          : 0.0);
-  final txLabel = txKva > 0 ? 'TRAFO ${_num(txKva)} kVA' : 'TRAFO';
+  final txFig = project.transformerKva != null
+      ? _ladderKva(project.transformerKva!, forced: project.transformerKva)
+      : (demandVa.inKilovoltAmperes > 0 ? _ladderKva(demandVa) : null);
+  final txLabel = (txFig != null && txFig.totalKva > 0)
+      ? 'TRAFO ${txFig.text} kVA'
+      : 'TRAFO';
   final chain = <({String name, String kind})>[
     (name: _supplyHeadLabel(project, compact: true), kind: 'supply'),
     if (isMv) ...[
@@ -1740,12 +1762,13 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
-    final genKva = (gen.kva ?? selectGeneratorKva(backupVa)).inKilovoltAmperes;
+    final genFig = _ladderKva(backupVa, forced: gen.kva);
+    final genKva = genFig.totalKva;
     final gcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
         weight: SldWeight.medium, role: role));
     _emitGenerator(prims, lvX, gcy, 13, role);
-    prims.add(SldLabel(lvX - 104, gcy - 1, 'GENSET ${_num(genKva)} kVA',
+    prims.add(SldLabel(lvX - 104, gcy - 1, 'GENSET ${genFig.text} kVA',
         size: 7.5, bold: true, role: role));
     prims.add(
         SldLabel(lvX - 104, gcy + 11, gen.mode.label, size: 7, role: role));

@@ -286,23 +286,25 @@ void main() {
       }
     });
 
-    // Probe P4 (default 1-riser standpipe, 14 m): Q = 550 gpm = 34.70 L/s,
-    // H = 14 + 15 + 690e3/9810 = 99.336 m.
-    //   rated shaft    = 9810 · 0.034700 · 99.336 / 0.70 = 48.31 kW
-    //   overload shaft = 48.31 × 0.975 / 0.85           = 55.41 kW
-    //   ⇒ the 55 kW frame the old model picked would overload at 150 % flow;
-    //     the next standard frame (75 kW) covers it.
+    // Probe P4 (default 1-riser standpipe, 14 m): Q = 500 gpm = 31.545 L/s
+    // (SNI 03-1745 / NFPA 14 most-remote riser), H = 14 + 15 + 690e3/9810
+    // = 99.336 m.
+    //   rated shaft    = 9810 · 0.031545 · 99.336 / 0.70 = 43.92 kW
+    //   overload shaft = 43.92 × 0.975 / 0.85           = 50.38 kW
+    //   ⇒ the 45 kW frame the rated point alone would pick overloads at 150 %
+    //     flow; the next standard frame (55 kW) covers the overload point.
     test('default standpipe: motor no longer overloads at 150 % flow', () {
       final st = designStandpipe(risers: 1, buildingHeight: const Length(14));
       final r =
           checkFirePumpRating(ratedFlow: st.requiredFlow, ratedHead: st.pumpHead);
-      const q = 550 * 3.785411784 / 60000; // m³/s
+      const q = 500 * 3.785411784 / 60000; // m³/s
       const h = 14 + 15 + 690000 / 9810;
       const ratedW = 9810 * q * h / 0.70;
       expect(r.rated.shaftPower.watts, closeTo(ratedW, 1e-3));
       expect(r.overload.shaftPower.watts, closeTo(ratedW * 0.975 / 0.85, 1e-3));
-      expect(r.overload.shaftPower.inKiloWatts, greaterThan(55.0));
-      expect(r.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
+      expect(r.rated.shaftPower.inKiloWatts, lessThan(45.0));
+      expect(r.overload.shaftPower.inKiloWatts, greaterThan(45.0));
+      expect(r.selectedMotor.inKiloWatts, closeTo(55.0, 1e-9));
     });
 
     test('factor 1.0 reproduces the constant-efficiency model', () {

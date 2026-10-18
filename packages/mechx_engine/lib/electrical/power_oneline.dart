@@ -168,7 +168,12 @@ PowerOneLine buildPowerOneLine(
   // generator node so the one-line carries the load-acceptance verdict.
   final gensetStart = genResult == null
       ? null
-      : assessGensetStart(genResult.ratingKva, motors: motors);
+      // Paralleled sets share the start transient — screen the dip on the
+      // TOTAL running kVA, not one set (audit r8-5).
+      : assessGensetStart(
+          ApparentPower.kilovoltAmperes(
+              genResult.ratingKva.inKilovoltAmperes * genResult.units),
+          motors: motors);
 
   final solar = sources.solar;
   final solarResult = solar == null
@@ -203,7 +208,8 @@ PowerOneLine buildPowerOneLine(
       id: 'gen',
       kind: PowerNodeKind.generator,
       label: 'Generator',
-      sub: '${_fmt(genResult.ratingKva.inKilovoltAmperes)} kVA '
+      sub: '${genResult.units > 1 ? '${genResult.units} x ' : ''}'
+          '${_fmt(genResult.ratingKva.inKilovoltAmperes)} kVA '
           '${gen.mode.label}$dipTag',
     ));
     nodes.add(PowerNode(
@@ -313,7 +319,8 @@ PowerOneLine buildPowerOneLine(
         id: 'pvinv',
         kind: PowerNodeKind.pvInverter,
         label: 'PV inverter',
-        sub: '${_fmt(solarResult.inverterKw.inKiloWatts)} kW',
+        sub: inverterRatingLabel(
+            solarResult.inverterKw, solarResult.inverterUnits),
       ));
       edge('pv', 'pvinv');
       edge('pvinv', 'bus', 'AC');
@@ -350,7 +357,8 @@ PowerOneLine buildPowerOneLine(
         id: 'battinv',
         kind: PowerNodeKind.batteryInverter,
         label: 'Battery inverter',
-        sub: '${_fmt(batteryResult.inverterKw.inKiloWatts)} kW',
+        sub: inverterRatingLabel(
+            batteryResult.inverterKw, batteryResult.inverterUnits),
       ));
       edge('batt', 'battinv');
       if (essentialSplit) {
@@ -407,10 +415,16 @@ Power _demandToPower(ApparentPower demand) =>
     Power(demand.voltAmperes * kGeneratorPf);
 
 String? _hybridInverterSub(SolarResult? solar, BatteryResult? batt) {
-  final kw = [
-    solar?.inverterKw.inKiloWatts ?? 0,
-    batt?.inverterKw.inKiloWatts ?? 0,
-  ].reduce((a, b) => a > b ? a : b);
+  final s = solar == null
+      ? 0.0
+      : solar.inverterKw.inKiloWatts * solar.inverterUnits;
+  final b = batt == null
+      ? 0.0
+      : batt.inverterKw.inKiloWatts * batt.inverterUnits;
+  final kw = s > b ? s : b;
   if (kw <= 0) return null;
-  return '${_fmt(kw)} kW';
+  final pick = s >= b ? solar! : null;
+  return pick != null
+      ? inverterRatingLabel(pick.inverterKw, pick.inverterUnits)
+      : inverterRatingLabel(batt!.inverterKw, batt.inverterUnits);
 }

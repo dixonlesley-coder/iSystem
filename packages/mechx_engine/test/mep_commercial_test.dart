@@ -106,7 +106,8 @@ void main() {
           (l) => l.key == mechPipeKey(ServiceType.duct, EdgeKind.run, 200));
       expect(ductRun.unit, 'm');
       expect(ductRun.lineTotal, closeTo(400000, 1e-6));
-      expect(ductRun.description, 'Supply air duct DN200');
+      // A round air duct prints the set-wide Ø notation (BomLine.sizeLabel).
+      expect(ductRun.description, 'Supply air duct Ø200');
     });
 
     test('empty pricelist → grand total 0 and EVERY line unpriced', () {

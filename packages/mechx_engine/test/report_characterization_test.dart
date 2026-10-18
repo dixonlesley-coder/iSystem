@@ -101,8 +101,16 @@ void main() {
       // ladder saturates ('Motor above standard frame range - …'); the printed
       // 75.0 kW is unchanged. Verified as the SOLE delta: substituting the old
       // verdict back reproduces 0x109a3516 exactly. Line count unchanged.
+      // Re-baselined 2026-10-18 (audit r8 fire-hvac-2): the SNI 03-1745 /
+      // NFPA 14 most-remote riser is 500 gpm (was a web-seeded 550). The
+      // fixture's 2-riser standpipe drops 800 → 750 gpm = 47.32 L/s, so
+      // exactly the three fire lines move: standpipe 47.3 L/s · 63.9 kW
+      // (9810·0.04732·96.34/0.70); the rating row (rated 47 L/s, overload
+      // shaft 0.975·63.9/0.85 = 73.3 kW ≤ the 75 kW frame ⇒ 'Motor within
+      // standard frame range'); the jockey 1 % = 0.47 L/s. Line count
+      // unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0xa106eca3);
+      expect(fnv1a32(md), 0x4cc8f1a3);
     });
   });
 
@@ -285,8 +293,11 @@ void main() {
       // fire-pump verdict now reports the saturated motor ladder (see the
       // mechanical pin above); substituting the old verdict back reproduces
       // 0x47b44e65 exactly. Line count unchanged.
+      // Re-baselined 2026-10-18 (audit r8 fire-hvac-2): the embedded
+      // mechanical body's three fire lines move with the 500 gpm riser flow
+      // (see the mechanical pin above). Line count unchanged.
       expect(md.split('\n').length, 228);
-      expect(fnv1a32(md), 0xa37662b2);
+      expect(fnv1a32(md), 0xed1f728e);
     });
   });
 

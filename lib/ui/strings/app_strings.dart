@@ -59,6 +59,7 @@ enum StringKey {
   commercialPricelistTitle,
   commercialColUnit,
   commercialColUnitPrice,
+  commercialInvalidNumber,
   commercialPricelistLead, // {priced} {total}
 
   // Commercial workspace — quotation.
@@ -641,6 +642,9 @@ enum StringKey {
   issueDrainageLengthTitle,
   issueDrainageCleanoutTitle,
   issueLegionellaTitle,
+  issueCoolingInternalOnlyTitle,
+  issueSprinklerFlowTitle,
+  issueSprinklerHeadTitle,
   issueElectricalTitle, // {code} = w.code.replaceAll('-', ' ')
   issueUnverifiedTitle, // {name} = the // VERIFY value's short label
 
@@ -700,6 +704,9 @@ enum StringKey {
   issueServiceHydrant,
   issueDrainageCleanoutMessage,
   issueLegionellaMessage, // {temp}
+  issueCoolingInternalOnlyMessage,
+  issueSprinklerFlowMessage, // {demand} {pump}
+  issueSprinklerHeadMessage, // {need} {pump}
 
   // H1 — Design issue pluralized nouns + batch-action labels
   // (issueBatchActionsProvider). Batch labels use plural(n, one, many) (bare
@@ -1159,6 +1166,7 @@ const Map<StringKey, String> _en = {
   StringKey.commercialPricelistTitle: 'Pricelist',
   StringKey.commercialColUnit: 'Unit',
   StringKey.commercialColUnitPrice: 'Unit price',
+  StringKey.commercialInvalidNumber: 'Not a number - kept the previous value',
   StringKey.commercialPricelistLead:
       'Unit prices for the catalogue parts your design uses. Stored with the '
           'project, never in the catalogue. {priced} of {total} priced.',
@@ -1843,6 +1851,12 @@ const Map<StringKey, String> _en = {
   StringKey.issueDrainageLengthTitle: 'Drainage branch too long',
   StringKey.issueDrainageCleanoutTitle: 'Drainage stack cleanout',
   StringKey.issueLegionellaTitle: 'Hot-water return temperature low',
+  StringKey.issueCoolingInternalOnlyTitle:
+      'AC basis excludes envelope + solar gains',
+  StringKey.issueSprinklerFlowTitle:
+      'Sprinkler demand exceeds the fire pump flow',
+  StringKey.issueSprinklerHeadTitle:
+      'Sprinkler pressure exceeds the fire pump head',
   StringKey.issueElectricalTitle: 'Electrical: {code}',
   StringKey.issueUnverifiedTitle: 'Unverified: {name}',
   StringKey.issueUnconnectedLooseEndTitle: 'Unconnected run end',
@@ -1950,6 +1964,20 @@ const Map<StringKey, String> _en = {
           'cleanout component at or beside the base — rodding access is '
           'conventional at every stack base. Place a cleanout, or confirm '
           'access exists elsewhere.',
+  StringKey.issueCoolingInternalOnlyMessage:
+      'The Internal gains basis counts people, lighting, equipment and '
+      'ventilation only - wall, roof and glazing transmission and solar gain '
+      'are NOT included, so the AC capacity and its electrical load may be '
+      'well below a perimeter room\'s real load. Use Area density, or verify '
+      'the envelope separately.',
+  StringKey.issueSprinklerFlowMessage:
+      'The sprinkler design-area demand ({demand} L/s) is more than the only '
+      'scheduled fire pump delivers ({pump} L/s) - rate the fire pump on the '
+      'sprinkler demand (plus hose allowance) or add a sprinkler pump.',
+  StringKey.issueSprinklerHeadMessage:
+      'The sprinkler system needs at least {need} m at the pump (static lift '
+      'to the top-floor ceiling + branch-base pressure, before riser and main '
+      'friction) but the fire pump head is {pump} m.',
   StringKey.issueLegionellaMessage:
       'Modelled recirculation return temperature '
           '{temp} °C is below the '
@@ -2057,7 +2085,7 @@ const Map<StringKey, String> _en = {
   StringKey.designInputHotWaterDeltaT: 'Hot-water loop drop',
   StringKey.designInputAcLoadBasis: 'AC load basis',
   StringKey.designInputAcBasisArea: 'Area density',
-  StringKey.designInputAcBasisHeatGain: 'Heat gain',
+  StringKey.designInputAcBasisHeatGain: 'Internal gains (no envelope)',
   StringKey.undoLabelOccupancy: 'Occupancy',
   StringKey.undoLabelFireHazard: 'Fire hazard class',
   StringKey.undoLabelRainfall: 'Rainfall (storm)',
@@ -2226,7 +2254,9 @@ const Map<StringKey, String> _en = {
   StringKey.buildingInputCaptionHotWaterDeltaT:
       'K = degrees C lost around the loop; the return must stay above 55 C',
   StringKey.buildingInputCaptionAcBasis:
-      'Which basis the Rooms AC estimate uses for every room',
+      'Which basis the Rooms AC estimate uses for every room. Area density '
+      'includes envelope + solar; Internal gains counts people, lights, '
+      'equipment and ventilation only',
   StringKey.buildingSizingUpdated: 'Sizing updated',
 
   // F8 — mounting heights as a project input.
@@ -2367,6 +2397,7 @@ const Map<StringKey, String> _id = {
   StringKey.commercialPricelistTitle: 'Daftar Harga',
   StringKey.commercialColUnit: 'Satuan',
   StringKey.commercialColUnitPrice: 'Harga satuan',
+  StringKey.commercialInvalidNumber: 'Bukan angka - nilai sebelumnya dipertahankan',
   StringKey.commercialPricelistLead:
       'Harga satuan untuk komponen katalog yang dipakai desain Anda. Disimpan '
           'bersama proyek, bukan di katalog. {priced} dari {total} diberi harga.',
@@ -3060,6 +3091,12 @@ const Map<StringKey, String> _id = {
   StringKey.issueDrainageLengthTitle: 'Cabang drainase terlalu panjang',
   StringKey.issueDrainageCleanoutTitle: 'Cleanout tegak drainase',
   StringKey.issueLegionellaTitle: 'Suhu balik air panas rendah',
+  StringKey.issueCoolingInternalOnlyTitle:
+      'Dasar AC tidak mencakup perolehan selubung + surya',
+  StringKey.issueSprinklerFlowTitle:
+      'Kebutuhan sprinkler melebihi debit pompa kebakaran',
+  StringKey.issueSprinklerHeadTitle:
+      'Tekanan sprinkler melebihi head pompa kebakaran',
   StringKey.issueElectricalTitle: 'Listrik: {code}',
   StringKey.issueUnverifiedTitle: 'Belum terverifikasi: {name}',
   StringKey.issueUnconnectedLooseEndTitle: 'Ujung jalur tidak terhubung',
@@ -3170,6 +3207,21 @@ const Map<StringKey, String> _id = {
           'komponen cleanout di atau di samping dasarnya — akses rodding lazim '
           'ada di setiap dasar tegak. Tempatkan cleanout, atau pastikan akses '
           'tersedia di tempat lain.',
+  StringKey.issueCoolingInternalOnlyMessage:
+      'Dasar Perolehan internal hanya menghitung orang, pencahayaan, peralatan '
+      'dan ventilasi - transmisi dinding, atap, kaca dan perolehan surya TIDAK '
+      'termasuk, sehingga kapasitas AC dan beban listriknya bisa jauh di bawah '
+      'beban nyata ruang perimeter. Gunakan Kepadatan luas, atau periksa '
+      'selubung secara terpisah.',
+  StringKey.issueSprinklerFlowMessage:
+      'Kebutuhan area desain sprinkler ({demand} L/s) melebihi debit satu-'
+      'satunya pompa kebakaran terjadwal ({pump} L/s) - tetapkan pompa '
+      'kebakaran pada kebutuhan sprinkler (plus tambahan selang) atau tambah '
+      'pompa sprinkler.',
+  StringKey.issueSprinklerHeadMessage:
+      'Sistem sprinkler membutuhkan sedikitnya {need} m di pompa (angkat statis '
+      'ke plafon lantai teratas + tekanan pangkal cabang, sebelum gesekan riser '
+      'dan pipa utama) tetapi head pompa kebakaran {pump} m.',
   StringKey.issueLegionellaMessage:
       'Suhu balik resirkulasi termodelkan {temp} °C berada di bawah batas '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '
@@ -3281,7 +3333,7 @@ const Map<StringKey, String> _id = {
   StringKey.designInputHotWaterDeltaT: 'Penurunan suhu loop',
   StringKey.designInputAcLoadBasis: 'Dasar beban AC',
   StringKey.designInputAcBasisArea: 'Kepadatan luas',
-  StringKey.designInputAcBasisHeatGain: 'Perolehan kalor',
+  StringKey.designInputAcBasisHeatGain: 'Perolehan internal (tanpa selubung)',
   StringKey.undoLabelOccupancy: 'Hunian',
   StringKey.undoLabelFireHazard: 'Kelas bahaya kebakaran',
   StringKey.undoLabelRainfall: 'Curah hujan (badai)',
@@ -3451,7 +3503,9 @@ const Map<StringKey, String> _id = {
   StringKey.buildingInputCaptionHotWaterDeltaT:
       'K = derajat C yang hilang di loop; suhu balik harus di atas 55 C',
   StringKey.buildingInputCaptionAcBasis:
-      'Dasar yang dipakai estimasi AC untuk setiap ruang',
+      'Dasar yang dipakai estimasi AC untuk setiap ruang. Kepadatan luas '
+      'mencakup selubung + surya; Perolehan internal hanya menghitung orang, '
+      'lampu, peralatan dan ventilasi',
   StringKey.buildingSizingUpdated: 'Ukuran diperbarui',
 
   // F8.

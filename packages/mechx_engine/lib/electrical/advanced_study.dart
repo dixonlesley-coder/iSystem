@@ -37,7 +37,8 @@ import 'control/starter.dart'
     show ControlAssembly, StarterType, applyStarterTemplate;
 import 'diversity_library.dart' show diversityLibraryVerifyItems;
 import 'electrode.dart' show ElectrodeDesign, designElectrode;
-import 'enclosure.dart' show EnclosureResult, estimateEnclosure;
+import 'enclosure.dart'
+    show EnclosureResult, estimateEnclosure, switchgearLossW;
 import 'fault.dart'
     show
         FaultStudyResult,
@@ -59,7 +60,7 @@ import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
-    show SupplyDesign, determineSupply, recommendedDayaVa;
+    show SupplyDesign, determineSupply, recommendedDaya;
 
 /// A representative MCB clearing (arcing) time for the arc-flash screen (s) —
 /// fast magnetic/thermal trip on a miniature device.
@@ -69,10 +70,11 @@ const double _mcbClearingTimeS = 0.05;
 /// a moulded-case device clears more slowly than an MCB.
 const double _mccbClearingTimeS = 0.2;
 
-/// A small ambient / quiescent enclosure heat allowance (W) added to the summed
-/// control-device losses when no explicit `panel.heatW` is given — wiring +
-/// breaker losses the device-loss estimate does not capture. Engineering
-/// estimate; reported via the enclosure pass's own verifyItems.
+/// A small ambient / quiescent enclosure heat allowance (W) — wiring,
+/// terminals, indicator lamps — added to the summed control-device losses AND
+/// the load-dependent switchgear I²R ([switchgearLossW]) when no explicit
+/// `panel.heatW` is given. Engineering estimate; reported via the enclosure
+/// pass's own verifyItems.
 const double _baseEnclosureHeatW = 25;
 
 /// The bundled advanced-study result. Each map is keyed by panel id (or circuit
@@ -85,8 +87,14 @@ class AdvancedStudy {
   /// Project supply arrangement (LV direct vs MV + transformer).
   final SupplyDesign supply;
 
-  /// Recommended PLN connected power "daya tersambung" (VA).
-  final double recommendedDayaVa;
+  /// Recommended PLN connected power "daya tersambung" (VA) — the smallest
+  /// standard step AT OR ABOVE the demand; null when the demand exceeds the
+  /// LV catalogue (an MV service — no LV daya exists).
+  final double? recommendedDayaVa;
+
+  /// True when [recommendedDayaVa] is a 3-phase step (a single-phase project
+  /// whose demand exceeds the 1φ ceiling is recommended a 3φ service).
+  final bool recommendedDayaThreePhase;
 
   /// Power-factor / capacitor-bank correction.
   final PowerFactorResult powerFactor;
@@ -133,6 +141,7 @@ class AdvancedStudy {
     required this.fault,
     required this.supply,
     required this.recommendedDayaVa,
+    this.recommendedDayaThreePhase = true,
     required this.powerFactor,
     required this.controlAssemblies,
     required this.harmonics,
@@ -263,20 +272,23 @@ AdvancedStudy computeAdvancedStudy(
 
     // Harmonics — the VFD-driven (pump/fan) share the kind-only classifier can't
     // see is fed in from the control assemblies on this panel.
-    final nlFrac = _nonLinearFraction(panelResult, controlAssemblies);
-    final h = estimateHarmonics(panelResult, profile, nonLinearFraction: nlFrac);
+    final h = estimateHarmonics(panelResult, profile,
+        driveFedCircuitIds:
+            _driveFedCircuitIds(panelResult, controlAssemblies));
     harmonics[id] = h;
     if (h != null && h.thdBand == ThdBand.high) anyHarmonicRich = true;
 
     // Containment.
     containment[id] = containmentFor(panelResult);
 
-    // Enclosure — explicit panel heat wins; else summed control-device heat + a
-    // small base allowance. Floor gear when any VFD/soft-starter is present.
+    // Enclosure — explicit panel heat wins; else summed control-device heat +
+    // the load-dependent breaker/busbar I²R + a small base allowance. Floor gear when any VFD/soft-starter is present.
     final explicitHeat = panelModel?.heatW;
     final heatW = explicitHeat != null
         ? explicitHeat.watts
-        : (controlHeatByPanel[id] ?? 0) + _baseEnclosureHeatW;
+        : (controlHeatByPanel[id] ?? 0) +
+            switchgearLossW(panelResult) +
+            _baseEnclosureHeatW;
     enclosure[id] = estimateEnclosure(
       panelResult,
       heat: Power(heatW),
@@ -302,7 +314,7 @@ AdvancedStudy computeAdvancedStudy(
     sys.supply.demandVa,
     dualTransformer: project.dualTransformer,
   );
-  final daya = recommendedDayaVa(sys.supply.demandVa, sys.supply.system);
+  final daya = recommendedDaya(sys.supply.demandVa, sys.supply.system);
   final powerFactor = powerFactorCorrection(
     sys,
     project,
@@ -342,7 +354,14 @@ AdvancedStudy computeAdvancedStudy(
     );
   }
 
-  final bom = buildBom(sys);
+  // Breakers match parts whose breaking capacity covers the board's
+  // prospective fault — the same fault study the schedule's kA tokens use.
+  final bom = buildBom(sys, requiredIcuKaByPanelId: {
+    for (final e in fault.panels.entries)
+      if (e.value.prospectiveFaultkA.isFinite &&
+          e.value.prospectiveFaultkA > 0)
+        e.key: e.value.prospectiveFaultkA,
+  });
 
   // Aggregate every sub-result's provenance honesty surface.
   final verify = _aggregateVerify([
@@ -373,7 +392,10 @@ AdvancedStudy computeAdvancedStudy(
   return AdvancedStudy(
     fault: fault,
     supply: supply,
-    recommendedDayaVa: daya,
+    recommendedDayaVa: daya?.va,
+    recommendedDayaThreePhase:
+        (daya?.system ?? ElectricalSystem.threePhase) ==
+            ElectricalSystem.threePhase,
     powerFactor: powerFactor,
     controlAssemblies: controlAssemblies,
     harmonics: harmonics,
@@ -464,26 +486,21 @@ Map<String, double> _feederDistances(
   return dist;
 }
 
-/// The panel's non-linear demand fraction (0–1) for the harmonics estimate,
-/// derived from its VFD-fed motor/pump circuits (which the kind-only classifier
-/// inside `estimateHarmonics` cannot see). The share is design-current-weighted.
-/// Returns null when no VFD circuit is present (let the kind-only classifier
-/// — UPS / welding — drive it instead).
-double? _nonLinearFraction(
+/// The panel's VFD-fed circuit ids, which the kind-only classifier inside
+/// `estimateHarmonics` cannot see. They are counted ADDITIVELY with the
+/// kind-derived (UPS / welding) share — never as an override — so adding a
+/// drive can only raise the panel's non-linear fraction.
+Set<String> _driveFedCircuitIds(
   ElectricalPanelResult panel,
   Map<String, ControlAssembly> controlAssemblies,
 ) {
-  var total = 0.0;
-  var vfd = 0.0;
+  final ids = <String>{};
   for (final c in panel.circuits) {
     if (c.loadKind == LoadKind.spare) continue;
-    final w = c.designCurrent.amperes;
-    total += w;
     final a = controlAssemblies[c.circuitId];
-    if (a != null && a.starterType == StarterType.vfd) vfd += w;
+    if (a != null && a.starterType == StarterType.vfd) ids.add(c.circuitId);
   }
-  if (vfd <= 0 || total <= 0) return null;
-  return vfd / total;
+  return ids;
 }
 
 /// True when the panel hosts floor-standing gear (a VFD or soft-starter on any

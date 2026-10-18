@@ -20,7 +20,7 @@ library;
 
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
-import '../electrical/sources.dart' show selectGeneratorKva;
+import '../electrical/sources.dart' show selectGeneratorUnits;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
 import '../units.dart' show ApparentPower;
@@ -146,6 +146,39 @@ class FanScheduleItem {
   });
 }
 
+/// One placed AC unit (cassette / split-wall / ducted) to schedule — the same
+/// per-unit cooling share and electrical input the MEP→electrical feed sizes
+/// its panel way on, so every scheduled unit has exactly one electrical way
+/// (audit r8 coupling-6). Lands in the air-handling section.
+class AcScheduleItem {
+  final String tag;
+
+  /// Service / room the unit serves (e.g. "Room 1").
+  final String service;
+
+  /// The unit's share of the room cooling load (BTU/h).
+  final double coolingBtuPerHr;
+
+  /// Selected nominal capacity (PK).
+  final double pk;
+
+  /// Electrical input (W) — cooling ÷ COP, the panel way's load.
+  final double inputW;
+
+  final String? modelSpec;
+  final int qty;
+
+  const AcScheduleItem({
+    required this.tag,
+    required this.service,
+    required this.coolingBtuPerHr,
+    required this.pk,
+    required this.inputW,
+    this.modelSpec,
+    this.qty = 1,
+  });
+}
+
 /// All inputs the equipment schedule tabulates. Empty lists ⇒ the section is
 /// skipped; an all-empty data set yields an "(no equipment scheduled)" note.
 class EquipmentScheduleData {
@@ -154,6 +187,10 @@ class EquipmentScheduleData {
 
   final List<PumpScheduleItem> pumps;
   final List<FanScheduleItem> fans;
+
+  /// Placed AC units (air-handling section, after the fan-duty rows). Empty ⇒
+  /// byte-identical.
+  final List<AcScheduleItem> acUnits;
 
   /// Solved electrical system whose panels become one schedule row each. Null ⇒
   /// the panel section is skipped.
@@ -183,6 +220,7 @@ class EquipmentScheduleData {
     required this.date,
     this.pumps = const [],
     this.fans = const [],
+    this.acUnits = const [],
     this.electrical,
     this.electricalProject,
     this.modelSpecs = const {},
@@ -257,6 +295,23 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     ));
   }
 
+  // ── Placed AC units (air-handling) ─────────────────────────────────────────
+  for (final ac in data.acUnits) {
+    rows.add(EquipmentScheduleRow(
+      tag: ac.tag,
+      service: ac.service,
+      duty: strings.format(RptStringKey.esAcDuty, {
+        'btu': _fmt(ac.coolingBtuPerHr, dp: 0),
+        'pk': _fmt(ac.pk, dp: 1),
+      }),
+      size: strings.format(
+          RptStringKey.esAcSize, {'kw': _fmt(ac.inputW / 1000.0, dp: 2)}),
+      modelSpec: ac.modelSpec ?? '—',
+      qty: ac.qty,
+      category: EquipmentCategory.airHandling,
+    ));
+  }
+
   // ── Electrical panels ──────────────────────────────────────────────────────
   final e = data.electrical;
   if (e != null) {
@@ -304,19 +359,24 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       // (backupFraction × diversified demand), exactly as the source spine does.
       // No result / no demand and no forced kVA ⇒ can't size ⇒ no row.
       final demandVa = data.electrical?.supply.demandVa;
-      final ApparentPower? genKva = gen.kva ??
-          (demandVa != null && demandVa.inKilovoltAmperes > 0
-              ? selectGeneratorKva(
+      // Past the top rung the requirement is n PARALLELED sets of the largest
+      // genset (audit r8-5) — the row carries the per-set kVA with qty = n,
+      // never one set silently below the requirement.
+      final sel = gen.kva != null
+          ? (unitKva: gen.kva!, units: 1)
+          : (demandVa != null && demandVa.inKilovoltAmperes > 0
+              ? selectGeneratorUnits(
                   ApparentPower(demandVa.voltAmperes * gen.backupFraction))
               : null);
-      if (genKva != null && genKva.inKilovoltAmperes > 0) {
+      final genKva = sel?.unitKva;
+      if (sel != null && genKva != null && genKva.inKilovoltAmperes > 0) {
         rows.add(EquipmentScheduleRow(
           tag: 'G-01',
           service: strings(RptStringKey.esGeneratorService),
           duty: '${_fmt(genKva.inKilovoltAmperes, dp: 0)} kVA',
           size: '',
           modelSpec: specFor('G-01'),
-          qty: 1,
+          qty: sel.units,
           category: EquipmentCategory.generator,
         ));
       }

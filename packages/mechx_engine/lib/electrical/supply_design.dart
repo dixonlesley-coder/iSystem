@@ -99,8 +99,15 @@ class SupplyDesign {
   /// Selected transformer nameplate (kVA) — null on an LV service.
   final double? transformerKva;
 
-  /// Number of transformer units (1, or 2 when [dualTransformer]).
+  /// Number of transformer units (1, or 2 when [dualTransformer]; more when
+  /// the requirement exceeds the largest standard rating — then paralleled /
+  /// split units of [transformerKva] each).
   final int units;
+
+  /// True when the per-unit requirement exceeded the largest ladder rating
+  /// (audit r8 — the ladder used to saturate silently at 2500 kVA, leaving a
+  /// unit at 120 %+ loading against the 80 % design basis).
+  final bool ladderExceeded;
 
   /// Transformer short-circuit impedance (%) — null on an LV service.
   final double? impedancePct;
@@ -124,6 +131,7 @@ class SupplyDesign {
     this.mvVoltage,
     this.transformerKva,
     required this.units,
+    this.ladderExceeded = false,
     this.impedancePct,
     this.primaryFlc,
     this.secondaryFlc,
@@ -136,13 +144,15 @@ class SupplyDesign {
 
 // ── Supply determination ─────────────────────────────────────────────────────
 
-/// Smallest standard transformer kVA covering [requiredKva] (the largest ladder
-/// entry when the requirement exceeds the catalogue).
-double _selectTransformerKva(double requiredKva) {
+/// Smallest standard transformer kVA covering [requiredKva] with the unit
+/// count: one unit when the ladder covers it, else `n = ceil(required / top)`
+/// units of the largest rating — never one unit BELOW the requirement.
+({double kva, int units}) _selectTransformerUnits(double requiredKva) {
   for (final k in transformerKvaLadder) {
-    if (k >= requiredKva) return k;
+    if (k >= requiredKva) return (kva: k, units: 1);
   }
-  return transformerKvaLadder.last;
+  final top = transformerKvaLadder.last;
+  return (kva: top, units: (requiredKva / top).ceil());
 }
 
 /// Transformer full-load current on a winding at a given line voltage (A):
@@ -201,14 +211,17 @@ SupplyDesign determineSupply(
     // unit's (the coupler never parallels them).
     final perUnitRequired =
         (demand.inKilovoltAmperes / 2) / transformerLoadingFactor;
-    final kva = _selectTransformerKva(perUnitRequired);
+    final sel = _selectTransformerUnits(perUnitRequired);
+    final kva = sel.kva;
+    final exceeded = sel.units > 1;
     return SupplyDesign(
       lvOrMv: SupplyLevel.mv,
       demandKva: demandKva,
       lvVoltage: lvVoltage,
       mvVoltage: mvV,
       transformerKva: kva,
-      units: 2,
+      units: 2 * sel.units,
+      ladderExceeded: exceeded,
       impedancePct: transformerImpedancePct,
       primaryFlc: Current(_round1(_transformerFlc(kva, mvV).amperes)),
       secondaryFlc:
@@ -217,27 +230,34 @@ SupplyDesign determineSupply(
           'sections with a normally-open bus coupler. Each unit carries its '
           'section (~half the $demandKva kVA demand); with one unit out, close '
           'the coupler and shed non-essential load onto the survivor. Fault '
-          'level is one unit (coupler N.O.).',
+          'level is one unit (coupler N.O.).'
+          '${exceeded ? ' Each section needs ${sel.units} x ${_fmtKva(kva)} kVA '
+              '— the requirement exceeds the largest standard transformer.' : ''}',
       verifyItems: verify,
     );
   }
 
   final requiredKva = demand.inKilovoltAmperes / transformerLoadingFactor;
-  final kva = _selectTransformerKva(requiredKva);
+  final sel = _selectTransformerUnits(requiredKva);
+  final kva = sel.kva;
+  final exceeded = sel.units > 1;
   return SupplyDesign(
     lvOrMv: SupplyLevel.mv,
     demandKva: demandKva,
     lvVoltage: lvVoltage,
     mvVoltage: mvV,
     transformerKva: kva,
-    units: 1,
+    units: sel.units,
+    ladderExceeded: exceeded,
     impedancePct: transformerImpedancePct,
     primaryFlc: Current(_round1(_transformerFlc(kva, mvV).amperes)),
     secondaryFlc:
         Current(_transformerFlc(kva, lvVoltage).amperes.roundToDouble()),
     note: 'Demand exceeds ${_fmtKva(lvSupplyLimitKva)} kVA — medium-voltage '
-        '(20 kV) supply via a ${_fmtKva(kva)} kVA transformer and MV panel '
-        '(incomer + metering + transformer feeder) is required.',
+        '(20 kV) supply via '
+        '${exceeded ? '${sel.units} x ${_fmtKva(kva)} kVA transformers (the '
+            'requirement exceeds the largest standard rating)' : 'a ${_fmtKva(kva)} kVA transformer'} '
+        'and MV panel (incomer + metering + transformer feeder) is required.',
     verifyItems: verify,
   );
 }
@@ -248,16 +268,30 @@ SupplyDesign determineSupply(
 List<double> dayaTiers(ElectricalSystem system) =>
     system == ElectricalSystem.threePhase ? plnDayaVa3ph : plnDayaVa1ph;
 
-/// The smallest standard PLN connected-power step (VA) at or above [demand] for
-/// the supply [system]. Returns the largest published step when the demand
-/// exceeds the LV catalogue (beyond a standard LV daya — MV territory).
-double recommendedDayaVa(ApparentPower demand, ElectricalSystem system) {
-  final tiers = dayaTiers(system);
-  for (final t in tiers) {
-    if (t >= demand.voltAmperes) return t;
+/// The smallest standard PLN connected-power step at or above [demand], with
+/// the supply system it belongs to. A single-phase demand above the 1φ ceiling
+/// (13 900 VA) moves to the 3φ ladder — the honest answer is "take a 3-phase
+/// service", never a 1φ step BELOW the demand. Returns null when the demand
+/// exceeds the whole LV catalogue (MV territory — no LV daya exists).
+({double va, ElectricalSystem system})? recommendedDaya(
+  ApparentPower demand,
+  ElectricalSystem system,
+) {
+  for (final sys in system == ElectricalSystem.threePhase
+      ? const [ElectricalSystem.threePhase]
+      : const [ElectricalSystem.singlePhase, ElectricalSystem.threePhase]) {
+    for (final t in dayaTiers(sys)) {
+      if (t >= demand.voltAmperes) return (va: t, system: sys);
+    }
   }
-  return tiers.last;
+  return null;
 }
+
+/// The smallest standard PLN connected-power step (VA) at or above [demand]
+/// (see [recommendedDaya]). Always ≥ the demand when non-null; null beyond the
+/// LV catalogue (audit r8 — it used to return the top step, BELOW demand).
+double? recommendedDayaVa(ApparentPower demand, ElectricalSystem system) =>
+    recommendedDaya(demand, system)?.va;
 
 /// Format a daya step for display, e.g. 23000 → "23,000 VA (23 kVA)".
 String formatDaya(double va) {
