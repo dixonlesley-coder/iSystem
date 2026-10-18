@@ -2244,7 +2244,8 @@ ElectricalCircuit _readoptedMepWay(
 ///   * `role`/`points`/`cosPhi`/`isLighting`/`demandFactor`/`busbarBreakBefore`
 ///     at the mint values (branch / 1 / [defaultMotorCosPhi] / false / 1 / false);
 ///   * `length` still the unmeasured-stub default the mint uses;
-///   * NO cableType / laying / cableOverrideMm2 / breakerOverrideA /
+///   * NO cableType (bar the FRC a life-safety way is minted on) / laying /
+///     cableOverrideMm2 / breakerOverrideA /
 ///     groupingCountOverride / phaseOverride / starterType / feedsPanelId.
 ///
 /// `loadW` / `motorKw` / `flaOverrideA` / `phases` / `lifeSafety` / `loadPos` are
@@ -2260,7 +2261,9 @@ bool _isPristineDerivedWay(ElectricalCircuit c) =>
     (c.demandFactor - 1).abs() < 1e-9 &&
     !c.busbarBreakBefore &&
     (c.length.meters - kDefaultCircuitLength.meters).abs() < 1e-9 &&
-    c.cableType == null &&
+    // A life-safety way is MINTED on FRC (audit r8 coupling-5), so FRC there
+    // is the mint value, not an engineer override.
+    (c.cableType == null || (c.lifeSafety && c.cableType == 'FRC')) &&
     c.laying == null &&
     c.cableOverrideMm2 == null &&
     c.breakerOverrideA == null &&

@@ -164,8 +164,13 @@ class MepEquipmentLoad {
   bool get threePhase => phases == 3;
 
   /// Build a load descriptor from an already-sized [PumpDuty]. Pulls the
-  /// selected standard motor as the mechanical (rated) power and the duty's
-  /// `motorInputPower` as the known electrical input power.
+  /// selected standard motor as the mechanical (rated) power. The electrical
+  /// input is the larger of the duty's operating-point `motorInputPower` and
+  /// the NAMEPLATE input (selected motor ÷ η) — motor branch protection and
+  /// cable are sized on the motor's rated current, never on a light operating
+  /// point (audit r8 coupling-4: a 0.37 kW exhaust-fan motor at a 24 W
+  /// operating point used to print Ib 0.04 A). Matches the fire-pump path,
+  /// which already sized on the selected motor.
   factory MepEquipmentLoad.fromPumpDuty(
     PumpDuty duty, {
     required String id,
@@ -181,7 +186,8 @@ class MepEquipmentLoad {
         name: name,
         source: source,
         mechanicalPower: duty.selectedMotor,
-        electricalInputPower: duty.motorInputPower,
+        electricalInputPower: nameplateInput(
+            duty.motorInputPower, duty.selectedMotor, motorEfficiency),
         phases: phases,
         cosPhi: cosPhi,
         motorEfficiency: motorEfficiency,
@@ -189,7 +195,8 @@ class MepEquipmentLoad {
       );
 
   /// Build a load descriptor from an already-sized [FanDuty]. Pulls the selected
-  /// standard motor and the duty's `motorInputPower`.
+  /// standard motor; electrical input = max(operating-point input, nameplate
+  /// input) — see [MepEquipmentLoad.fromPumpDuty].
   factory MepEquipmentLoad.fromFanDuty(
     FanDuty duty, {
     required String id,
@@ -205,12 +212,23 @@ class MepEquipmentLoad {
         name: name,
         source: source,
         mechanicalPower: duty.selectedMotor,
-        electricalInputPower: duty.motorInputPower,
+        electricalInputPower: nameplateInput(
+            duty.motorInputPower, duty.selectedMotor, motorEfficiency),
         phases: phases,
         cosPhi: cosPhi,
         motorEfficiency: motorEfficiency,
         loadPos: loadPos,
       );
+
+  /// The motor-way sizing input: max(operating-point input, nameplate input =
+  /// [selectedMotor] ÷ [motorEfficiency]). A non-positive motor falls back to
+  /// the operating-point input.
+  static Power nameplateInput(
+      Power operatingInput, Power selectedMotor, double motorEfficiency) {
+    final plate =
+        motorEfficiency > 0 ? selectedMotor.watts / motorEfficiency : 0.0;
+    return Power(math.max(operatingInput.watts, plate));
+  }
 
   /// The electrical input power that drives the load current: the known
   /// `motorInputPower` if present, else mechanical / efficiency.
@@ -280,7 +298,8 @@ String equipmentCircuitId(MepEquipmentLoad e) => 'mep-${e.id}';
 ///   * `sourceEquipmentId` = `e.id` (re-imports update in place),
 ///   * `flaOverrideA` = [equipmentFullLoadCurrent] (A4 sizes off MechX's derived
 ///     current verbatim — see `compute.dart`, where `flaOverrideA` wins),
-///   * `lifeSafety` set for a fire pump (no RCD; fire-resistant cable),
+///   * `lifeSafety` set for a fire pump (no RCD) with `cableType: 'FRC'`
+///     (fire-resistant cable),
 ///   * `loadPos` = `e.loadPos` verbatim (null when the equipment is unplaced,
 ///     so the circuit sizes off the manual [lengthM] exactly as today —
 ///     `resolveCircuitLength` only geo-derives when both the fed panel and
@@ -312,6 +331,10 @@ ElectricalCircuit equipmentToCircuit(
     motorKw: e.mechanicalPower.inKiloWatts,
     phases: e.phases,
     lifeSafety: e.source.isLifeSafety,
+    // A life-safety machine (fire pump) is minted on fire-resistant cable
+    // (audit r8 coupling-5) — it used to fall back to the pump default NYY on
+    // the PVC 70 °C class, silently.
+    cableType: e.source.isLifeSafety ? 'FRC' : null,
     sourceEquipmentId: e.id,
     flaOverrideA: fla,
     loadPos: e.loadPos,

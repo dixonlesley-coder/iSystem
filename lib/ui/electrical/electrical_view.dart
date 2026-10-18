@@ -1705,7 +1705,19 @@ class _AdvancedBody extends StatelessWidget {
       ),
       _Metric(
         label: 'Demand (kVA)',
-        value: '${(advanced.recommendedDayaVa / 1000).toStringAsFixed(1)} kVA',
+        value:
+            '${result.supply.demandVa.inKilovoltAmperes.toStringAsFixed(1)} kVA',
+      ),
+      // The PLN connected-power step (>= demand), labelled for what it is —
+      // never the demand. Beyond the LV ladder / on an MV service there is no
+      // LV daya to recommend (audit r8).
+      _Metric(
+        label: 'Daya tersambung',
+        value: supply.lvOrMv == SupplyLevel.mv ||
+                advanced.recommendedDayaVa == null
+            ? 'MV (no LV daya)'
+            : '${(advanced.recommendedDayaVa! / 1000).toStringAsFixed(1)} kVA'
+                '${advanced.recommendedDayaThreePhase ? ' 3ph' : ' 1ph'}',
       ),
       _Metric(label: 'Origin Isc', value: '${fmtNum(fault.originFaultkA)} kA'),
       _Metric(

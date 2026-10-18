@@ -29,9 +29,11 @@ import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
+import 'annotation_store.dart' show roomAreasProvider;
 import 'app_state.dart';
 import 'document_control_store.dart';
 import 'electrical_store.dart';
+import 'fire_store.dart' show sprinklerPumpCheckProvider;
 import 'models/sheet.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -209,6 +211,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final demandExtrapolated = ref.watch(demandCurveExtrapolatedEdgesProvider);
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
+  final sprinklerPump = ref.watch(sprinklerPumpCheckProvider);
+  final coolingMethod = ref.watch(coolingLoadMethodProvider);
+  final hasRooms = ref.watch(roomAreasProvider).isNotEmpty;
   final docControl = ref.watch(documentControlProvider);
 
   // Wave 5a (H1) — every user-facing title/message resolves through the active
@@ -846,6 +851,45 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       title: str(StringKey.issueLegionellaTitle),
       message: str.format(StringKey.issueLegionellaMessage,
           {'temp': legionellaReturnTempC.toStringAsFixed(0)}),
+    ));
+  }
+
+  // ── 5a-bis. Sprinkler demand vs the one scheduled fire pump (audit r8) ──────
+  // Judge-only: the fire pump is rated on the standpipe duty; a drawn sprinkler
+  // system whose design-area demand / pressure that pump cannot meet is a real
+  // design finding (warning — blocks a PASS, never acknowledgeable).
+  if (sprinklerPump != null && sprinklerPump.flowShort) {
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'sprinkler-flow-exceeds-fire-pump',
+      title: str(StringKey.issueSprinklerFlowTitle),
+      message: str.format(StringKey.issueSprinklerFlowMessage, {
+        'demand': sprinklerPump.demandLps.toStringAsFixed(1),
+        'pump': sprinklerPump.pumpLps.toStringAsFixed(1),
+      }),
+    ));
+  }
+  if (sprinklerPump != null && sprinklerPump.headShort) {
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'sprinkler-head-exceeds-fire-pump',
+      title: str(StringKey.issueSprinklerHeadTitle),
+      message: str.format(StringKey.issueSprinklerHeadMessage, {
+        'need': sprinklerPump.requiredHeadM.toStringAsFixed(1),
+        'pump': sprinklerPump.pumpHeadM.toStringAsFixed(1),
+      }),
+    ));
+  }
+
+  // ── 5a-ter. AC basis honesty (audit r8 fire-hvac-4) ────────────────────────
+  // The 'Internal gains' basis omits envelope transmission + solar; while it is
+  // active (and rooms exist) the engineer is told so — an INFO advisory.
+  if (coolingMethod == CoolingLoadMethod.detailed && hasRooms) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'cooling-internal-gains-only',
+      title: str(StringKey.issueCoolingInternalOnlyTitle),
+      message: str(StringKey.issueCoolingInternalOnlyMessage),
     ));
   }
 

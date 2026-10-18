@@ -126,9 +126,23 @@ class CommercialController extends Notifier<CommercialSettings> {
 /// Derived: the electrical bill of materials over the FULL multi-brand catalogue
 /// (so the matcher binds order codes from every brand), recomputed whenever the
 /// sized electrical result changes.
-final electricalBomProvider = Provider<Bom>(
-  (ref) => buildBom(ref.watch(electricalResultProvider), parts: fullCatalog()),
-);
+///
+/// Breakers match catalogue parts whose breaking capacity covers each board's
+/// prospective fault (the same fault study the schedule's kA tokens read —
+/// audit r8 costing-4), so the quote never prices a 6 kA MCB at an 18 kA bus.
+final electricalBomProvider = Provider<Bom>((ref) {
+  final fault = ref.watch(electricalAdvancedProvider).fault;
+  return buildBom(
+    ref.watch(electricalResultProvider),
+    parts: fullCatalog(),
+    requiredIcuKaByPanelId: {
+      for (final e in fault.panels.entries)
+        if (e.value.prospectiveFaultkA.isFinite &&
+            e.value.prospectiveFaultkA > 0)
+          e.key: e.value.prospectiveFaultkA,
+    },
+  );
+});
 
 /// Derived: the priced material estimate — the BOM costed against the live
 /// pricelist. Unmatched lines (no sku, or a sku with no price) are kept but

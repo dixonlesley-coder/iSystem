@@ -1,13 +1,16 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/bom.dart' as elec show BomLine;
 import 'package:mechx_engine/electrical/catalog.dart';
 
+import '../../store/app_state.dart' show AppLocale, localeProvider;
 import '../../store/commercial_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_text_field.dart';
 import 'commercial_table.dart';
+import 'money_input.dart';
 
 /// The pricelist editor: every distinct SKU / key referenced by the live BOM
 /// gets an editable unit-price cell — a MECHANICAL section (pipe/duct + fittings,
@@ -100,14 +103,26 @@ class _ElectricalPricelist extends ConsumerWidget {
     final ctrl = ref.read(commercialSettingsProvider.notifier);
     final parts = _partIndex();
 
-    // Distinct, matched SKUs in BOM order — the lines that can be priced.
-    final skus = <String>[];
+    // Distinct PRICELIST KEYS in BOM order — every line that can be priced:
+    // matched SKUs, multi-core cables (`SKU:nC`) and the unmatched enclosure /
+    // busbar / RCD / accessory lines' `elec:` keys (audit r8 — these used to
+    // be unpriceable, silently leaving the panel box out of the sell price).
+    final keys = <String>[];
+    final lineFor = <String, elec.BomLine>{};
     for (final l in bom.lines) {
-      final sku = l.sku;
-      if (sku != null && !skus.contains(sku)) skus.add(sku);
+      final k = l.priceKey;
+      if (k != null && !keys.contains(k)) {
+        keys.add(k);
+        lineFor[k] = l;
+      }
     }
 
-    final priced = skus.where((s) => settings.priceList.containsKey(s)).length;
+    final priced = keys
+        .where((k) =>
+            settings.priceList.containsKey(k) ||
+            (lineFor[k]!.sku != null &&
+                settings.priceList.containsKey(lineFor[k]!.sku)))
+        .length;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -117,7 +132,7 @@ class _ElectricalPricelist extends ConsumerWidget {
         const SizedBox(height: MechXSpacing.xxs),
         Text(
           context.strings.format(StringKey.commercialPricelistLead,
-              {'priced': priced, 'total': skus.length}),
+              {'priced': priced, 'total': keys.length}),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),
@@ -133,16 +148,24 @@ class _ElectricalPricelist extends ConsumerWidget {
                 flex: 4, numeric: true),
           ],
           rows: [
-            for (final sku in skus)
+            for (final k in keys)
               CommercialRow(cells: [
-                CommercialCell.text(sku),
-                CommercialCell.text(_describe(parts[sku])),
-                CommercialCell.text(parts[sku]?.unit ?? 'ea'),
+                CommercialCell.text(lineFor[k]!.sku ?? '-'),
+                CommercialCell.text(_describe(k, lineFor[k]!, parts)),
+                CommercialCell.text(lineFor[k]!.sku != null
+                    ? (parts[lineFor[k]!.sku]?.unit ?? 'ea')
+                    : (lineFor[k]!.category == PartCategory.cable
+                        ? 'm'
+                        : 'ea')),
                 CommercialCell.widget(
                   _PriceField(
-                    key: ValueKey(sku),
-                    value: settings.priceList[sku],
-                    onChanged: (v) => ctrl.setPrice(sku, v),
+                    key: ValueKey(k),
+                    // A legacy bare-SKU price still applies until re-priced.
+                    value: settings.priceList[k] ??
+                        (lineFor[k]!.sku == null
+                            ? null
+                            : settings.priceList[lineFor[k]!.sku]),
+                    onChanged: (v) => ctrl.setPrice(k, v),
                   ),
                 ),
               ]),
@@ -152,9 +175,11 @@ class _ElectricalPricelist extends ConsumerWidget {
     );
   }
 
-  String _describe(Part? p) {
-    if (p == null) return '-';
-    return '${p.manufacturer} ${p.model}';
+  String _describe(String key, elec.BomLine line, Map<String, Part> parts) {
+    final p = line.sku == null ? null : parts[line.sku];
+    if (p == null) return line.description;
+    final cores = RegExp(r':(\d+)C$').firstMatch(key)?.group(1);
+    return '${p.manufacturer} ${p.model}${cores != null ? ' · $cores-core' : ''}';
   }
 }
 
@@ -162,38 +187,68 @@ Map<String, Part> _partIndex() => {
       for (final p in fullCatalog()) p.sku: p,
     };
 
-/// A small numeric input for a unit price: parses on change (a blank or invalid
-/// value clears the price). The foundation [MechXTextField] supplies the focus
-/// animation + ring; a muted "0.00" hint signals an empty, editable cell.
-/// Width-capped so the column stays tidy.
-class _PriceField extends StatelessWidget {
+/// A small numeric input for a unit price. Parses LOCALE-AWARE
+/// ([parseMoneyInput] — `12.500` is twelve thousand five hundred under the
+/// Indonesian notation the quotation is issued in); only an explicitly EMPTY
+/// field clears the price — an unparseable entry keeps the previous value and
+/// shows an inline error instead of silently un-pricing the line (audit r8).
+/// The foundation [MechXTextField] supplies the focus animation + ring; a muted
+/// "0,00" hint signals an empty, editable cell. Width-capped.
+class _PriceField extends ConsumerStatefulWidget {
   final double? value;
   final ValueChanged<double?> onChanged;
 
   const _PriceField({super.key, required this.value, required this.onChanged});
 
   @override
+  ConsumerState<_PriceField> createState() => _PriceFieldState();
+}
+
+class _PriceFieldState extends ConsumerState<_PriceField> {
+  bool _invalid = false;
+
+  @override
   Widget build(BuildContext context) {
+    final colors = context.colors;
+    final type = context.type;
+    final indonesian = ref.watch(localeProvider) == AppLocale.id;
     return SizedBox(
       width: 140,
-      child: MechXTextField(
-        value: value == null ? '' : _fmt(value!),
-        hint: CommercialFormat.money(0),
-        onChanged: (s) {
-          final trimmed = s.trim();
-          if (trimmed.isEmpty) {
-            onChanged(null);
-            return;
-          }
-          final parsed = double.tryParse(trimmed.replaceAll(',', ''));
-          onChanged(parsed);
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MechXTextField(
+            value: widget.value == null ? '' : _fmt(widget.value!),
+            hint: CommercialFormat.money(0),
+            onChanged: (s) {
+              final trimmed = s.trim();
+              if (trimmed.isEmpty) {
+                setState(() => _invalid = false);
+                widget.onChanged(null);
+                return;
+              }
+              final parsed = parseMoneyInput(trimmed, indonesian: indonesian);
+              if (parsed == null) {
+                setState(() => _invalid = true);
+                return; // keep the previous price
+              }
+              setState(() => _invalid = false);
+              widget.onChanged(parsed);
+            },
+          ),
+          if (_invalid)
+            Text(
+              context.strings(StringKey.commercialInvalidNumber),
+              style: type.caption.copyWith(color: colors.danger),
+            ),
+        ],
       ),
     );
   }
 
   // Keep the edit value plain (no grouping) so it round-trips through the
-  // parser cleanly; the hint carries the "0.00" formatting cue.
+  // parser cleanly; the hint carries the "0,00" formatting cue.
   static String _fmt(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 }

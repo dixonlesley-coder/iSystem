@@ -313,7 +313,8 @@ PowerOneLine buildPowerOneLine(
         id: 'pvinv',
         kind: PowerNodeKind.pvInverter,
         label: 'PV inverter',
-        sub: '${_fmt(solarResult.inverterKw.inKiloWatts)} kW',
+        sub: inverterRatingLabel(
+            solarResult.inverterKw, solarResult.inverterUnits),
       ));
       edge('pv', 'pvinv');
       edge('pvinv', 'bus', 'AC');
@@ -350,7 +351,8 @@ PowerOneLine buildPowerOneLine(
         id: 'battinv',
         kind: PowerNodeKind.batteryInverter,
         label: 'Battery inverter',
-        sub: '${_fmt(batteryResult.inverterKw.inKiloWatts)} kW',
+        sub: inverterRatingLabel(
+            batteryResult.inverterKw, batteryResult.inverterUnits),
       ));
       edge('batt', 'battinv');
       if (essentialSplit) {
@@ -407,10 +409,16 @@ Power _demandToPower(ApparentPower demand) =>
     Power(demand.voltAmperes * kGeneratorPf);
 
 String? _hybridInverterSub(SolarResult? solar, BatteryResult? batt) {
-  final kw = [
-    solar?.inverterKw.inKiloWatts ?? 0,
-    batt?.inverterKw.inKiloWatts ?? 0,
-  ].reduce((a, b) => a > b ? a : b);
+  final s = solar == null
+      ? 0.0
+      : solar.inverterKw.inKiloWatts * solar.inverterUnits;
+  final b = batt == null
+      ? 0.0
+      : batt.inverterKw.inKiloWatts * batt.inverterUnits;
+  final kw = s > b ? s : b;
   if (kw <= 0) return null;
-  return '${_fmt(kw)} kW';
+  final pick = s >= b ? solar! : null;
+  return pick != null
+      ? inverterRatingLabel(pick.inverterKw, pick.inverterUnits)
+      : inverterRatingLabel(batt!.inverterKw, batt.inverterUnits);
 }

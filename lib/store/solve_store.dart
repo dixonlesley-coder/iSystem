@@ -346,6 +346,25 @@ final ductFanProvider = Provider<FanDuty?>((ref) {
   );
 });
 
+/// The plant nodes the drawn air systems are ROOTED at (the same source the
+/// fan duties are solved from): the supply (else return) duct system's unit,
+/// and the exhaust system's fan. Null when that system has no sized edges.
+/// Read by the MEP→electrical feed + the equipment schedule so the duty, the
+/// panel way and the schedule tag all name ONE drawn machine (audit r8).
+final airSystemRootNodesProvider =
+    Provider<({String? supply, String? exhaust})>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final supply = _airSystem(net, sizing, project, ServiceType.duct);
+  final ret = _airSystem(net, sizing, project, ServiceType.returnAir);
+  final ex = _airSystem(net, sizing, project, ServiceType.exhaust);
+  return (
+    supply: supply.fanNodeId ?? ret.fanNodeId,
+    exhaust: ex.fanNodeId,
+  );
+});
+
 /// Fan duty for a drawn EXHAUST system (toilet / kitchen extract): its own
 /// trunk airflow against its OWN index-run static — a separate fan, so it is
 /// never folded into [ductFanProvider]'s supply + return sum. Null when no
@@ -519,7 +538,7 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
   // Fitting sockets (each is a made joint), grouped by the service join method.
   for (final f in fittings) {
     final joints = fittingSockets(f.type) * f.count;
-    switch (joinMethodForService(f.service)) {
+    switch (joinMethodFor(f.service, f.material)) {
       case PipeJoinMethod.solventWeld:
         solventByDn[f.diameterMm] = (solventByDn[f.diameterMm] ?? 0) + joints;
       case PipeJoinMethod.threaded:
@@ -535,7 +554,7 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
     final sections = (c.lengthM / c.stockLengthM).ceil();
     final couplings = sections > 1 ? sections - 1 : 0;
     if (couplings == 0) continue;
-    switch (joinMethodForService(c.service)) {
+    switch (joinMethodFor(c.service, c.material)) {
       case PipeJoinMethod.solventWeld:
         solventByDn[c.diameterMm] =
             (solventByDn[c.diameterMm] ?? 0) + couplings;

@@ -51,8 +51,12 @@ enum StandpipeClass {
 
 /// Minimum flow demand of the most remote (first) standpipe riser, in L/min.
 ///
-/// SNI 03-1745-2000: 550 gpm at the hydraulically most remote standpipe.
-const double kFirstRiserFlowLpm = 550.0 * _usGallonToLitre; // ≈ 2082 L/min
+/// SNI 03-1745-2000 (adopted from NFPA 14): 500 gpm (≈ 1893 L/min) at the
+/// hydraulically most remote standpipe. (Corrected 2026-10-18 from a
+/// web-seeded 550 gpm that contradicted the 1250 gpm cap's own 4-riser
+/// arithmetic: 500 + 3 × 250 = 1250.) // VERIFY — secondarySource until the
+/// SNI PDF is read.
+const double kFirstRiserFlowLpm = 500.0 * _usGallonToLitre; // ≈ 1893 L/min
 
 /// Additional flow added for each riser beyond the first, in L/min.
 ///
@@ -119,12 +123,13 @@ double residualPressureKpa(StandpipeClass cls) {
 ///   Q = kFirstRiserFlowLpm + kAdditionalRiserFlowLpm × (risers − 1)
 ///
 /// clamped to the range `[kFirstRiserFlowLpm, kMaxStandpipeFlowLpm]`
-/// (i.e. 550 gpm minimum, 1250 gpm cap).
+/// (i.e. 500 gpm minimum, 1250 gpm cap).
 ///
 /// Examples (gpm → L/min):
-///   risers = 1 →  550 gpm ≈ 2082 L/min
-///   risers = 2 →  800 gpm ≈ 3028 L/min
-///   risers = 4 → 1250 gpm ≈ 4732 L/min [cap reached at 1250 gpm]
+///   risers = 1 →  500 gpm ≈ 1893 L/min
+///   risers = 2 →  750 gpm ≈ 2839 L/min
+///   risers = 3 → 1000 gpm ≈ 3785 L/min
+///   risers = 4 → 1250 gpm ≈ 4732 L/min [500 + 3×250 — exactly the cap]
 ///   risers = 6 → 1250 gpm (cap applies)
 FlowRate standpipeFlow(int risers) {
   assert(risers >= 1, 'risers must be ≥ 1');

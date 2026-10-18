@@ -285,6 +285,8 @@ enum RptStringKey {
   esPanelDuty, // {kw}
   esPanelSize, // {a}
   esMotorSize, // {kw}
+  esAcDuty, // {btu} {pk}
+  esAcSize, // {kw}
   esTransformerService,
   esGeneratorService,
   esCapBankService,
@@ -591,6 +593,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esPanelDuty: '{kw} kW demand',
   RptStringKey.esPanelSize: '{a} A incomer',
   RptStringKey.esMotorSize: '{kw} kW motor',
+  RptStringKey.esAcDuty: '{btu} BTU/h cooling ({pk} PK)',
+  RptStringKey.esAcSize: '{kw} kW input',
   RptStringKey.esTransformerService: 'Distribution transformer',
   RptStringKey.esGeneratorService: 'Standby generator',
   RptStringKey.esCapBankService: 'PF-correction bank',
@@ -905,6 +909,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esPanelDuty: 'Permintaan {kw} kW',
   RptStringKey.esPanelSize: 'Pemutus masuk {a} A',
   RptStringKey.esMotorSize: 'Motor {kw} kW',
+  RptStringKey.esAcDuty: 'Pendinginan {btu} BTU/h ({pk} PK)',
+  RptStringKey.esAcSize: 'Daya masuk {kw} kW',
   RptStringKey.esTransformerService: 'Transformator distribusi',
   RptStringKey.esGeneratorService: 'Genset cadangan',
   RptStringKey.esCapBankService: 'Bank kapasitor perbaikan faktor daya',

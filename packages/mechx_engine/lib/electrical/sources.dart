@@ -51,6 +51,18 @@ ApparentPower selectGeneratorKva(ApparentPower required) {
   return ApparentPower.kilovoltAmperes(kGeneratorKva.last);
 }
 
+/// Genset rating + parallel-set count covering [required]: the smallest
+/// ladder rung when one set suffices, else `n = ceil(required / top)` sets of
+/// the largest rung — never a single set BELOW the requirement (audit r8: the
+/// ladder used to saturate silently at 2500 kVA).
+({ApparentPower unitKva, int units}) selectGeneratorUnits(
+    ApparentPower required) {
+  final reqKva = required.inKilovoltAmperes;
+  final top = kGeneratorKva.last;
+  if (reqKva <= top) return (unitKva: selectGeneratorKva(required), units: 1);
+  return (unitKva: ApparentPower.kilovoltAmperes(top), units: (reqKva / top).ceil());
+}
+
 /* ------------------------------ Genset dip -------------------------------- */
 
 /// Typical per-unit direct-axis sub-transient reactance Xd'' of a genset
@@ -142,6 +154,21 @@ Power selectInverterKw(Power required) {
   }
   return Power.kiloWatts(kInverterKw.last);
 }
+
+/// Inverter unit rating + count covering [required]: the smallest ladder rung
+/// when one unit suffices, else `n = ceil(required / 250 kW)` paralleled units
+/// of the largest rung — never one unit BELOW the requirement (audit r8: a
+/// 1.2 MW critical load used to get a single '250 kW' inverter).
+({Power unitKw, int units}) selectInverterUnits(Power required) {
+  final reqKw = required.inKiloWatts;
+  final top = kInverterKw.last;
+  if (reqKw <= top) return (unitKw: selectInverterKw(required), units: 1);
+  return (unitKw: Power.kiloWatts(top), units: (reqKw / top).ceil());
+}
+
+/// "250 kW" for one unit, "5 x 250 kW" for paralleled units (ASCII).
+String inverterRatingLabel(Power unitKw, int units) =>
+    '${units > 1 ? '$units x ' : ''}${_fmt(unitKw.inKiloWatts)} kW';
 
 /* --------------------------------- Battery -------------------------------- */
 
@@ -338,6 +365,13 @@ class GeneratorResult {
   /// Runtime (hours) the recommended day-tank provides.
   final double runtimeHours;
 
+  /// Parallel sets of [ratingKva] (> 1 only when the requirement exceeds the
+  /// largest standard genset — then [ratingKva] is the PER-SET rating).
+  final int units;
+
+  /// True when the requirement exceeded the largest ladder rung.
+  bool get ladderExceeded => units > 1;
+
   final String note;
   final List<String> verifyItems;
 
@@ -349,6 +383,7 @@ class GeneratorResult {
     required this.fuelLph,
     required this.dayTankL,
     required this.runtimeHours,
+    this.units = 1,
     required this.note,
     required this.verifyItems,
   });
@@ -362,8 +397,11 @@ class SolarResult {
   /// Installed DC array size.
   final Power arrayKwp;
 
-  /// Selected inverter AC rating.
+  /// Selected inverter AC rating (PER UNIT when [inverterUnits] > 1).
   final Power inverterKw;
+
+  /// Paralleled inverter units (> 1 only beyond the largest standard rung).
+  final int inverterUnits;
 
   /// Panels in series in the LONGEST string. With an uneven split the strings
   /// are NOT all this long — `strings × stringSize` can exceed [panelCount]
@@ -396,6 +434,7 @@ class SolarResult {
     required this.panelCount,
     required this.arrayKwp,
     required this.inverterKw,
+    this.inverterUnits = 1,
     required this.stringSize,
     required this.strings,
     required this.stringLengths,
@@ -421,8 +460,11 @@ class BatteryResult {
   final Energy moduleKwh;
   final int moduleCount;
 
-  /// Inverter/charger AC rating.
+  /// Inverter/charger AC rating (PER UNIT when [inverterUnits] > 1).
   final Power inverterKw;
+
+  /// Paralleled inverter/charger units (> 1 only beyond the largest rung).
+  final int inverterUnits;
 
   /// The critical load the bank was sized for.
   final Power criticalLoad;
@@ -438,6 +480,7 @@ class BatteryResult {
     required this.moduleKwh,
     required this.moduleCount,
     required this.inverterKw,
+    this.inverterUnits = 1,
     required this.criticalLoad,
     required this.note,
     required this.verifyItems,
@@ -559,8 +602,11 @@ GeneratorResult sizeGenerator(
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
   final required = mode == GeneratorMode.prime ? backupKva * 1.25 : backupKva;
-  final ratingKva =
-      forcedKva ?? selectGeneratorKva(ApparentPower.kilovoltAmperes(required));
+  final sel = forcedKva != null
+      ? (unitKva: forcedKva, units: 1)
+      : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));
+  final ratingKva = sel.unitKva;
+  final units = sel.units;
 
   final transferText = transfer.isManual
       ? 'Manual changeover (COS) — an operator must transfer; expect an outage '
@@ -588,8 +634,11 @@ GeneratorResult sizeGenerator(
     fuelLph: fuelLph,
     dayTankL: dayTankL,
     runtimeHours: runtimeHours,
+    units: units,
     note: '${mode.label} genset backing ${_round(backupKva, 1)} kVA → '
-        '${_fmt(ratingKva.inKilovoltAmperes)} kVA. $transferText$fuelText',
+        '${units > 1 ? '$units x ' : ''}${_fmt(ratingKva.inKilovoltAmperes)} kVA'
+        '${units > 1 ? ' (exceeds the largest standard genset — paralleled '
+            'sets with synchronising panel)' : ''}. $transferText$fuelText',
     verifyItems: const <String>[
       'Genset kVA ladder + power factor (0.8) — confirm against the genset datasheet.',
       'Diesel SFC (0.25 l/kWh) + day-tank runtime target (8 h) — confirm against the engine spec.',
@@ -609,7 +658,8 @@ SolarResult sizeSolar({
 }) {
   final panelCount = math.max(1, panels);
   final arrayKwp = _round(panelCount * panelWp / 1000, 2);
-  final inverterKw = selectInverterKw(Power.kiloWatts(arrayKwp / dcAcRatio));
+  final inv = selectInverterUnits(Power.kiloWatts(arrayKwp / dcAcRatio));
+  final inverterKw = inv.unitKw;
 
   // String length: MPPT window + cold-Voc max-system-voltage limit.
   final maxByMppt = (kMpptVmax / kPvVmp).floor();
@@ -639,13 +689,14 @@ SolarResult sizeSolar({
     panelCount: panelCount,
     arrayKwp: Power.kiloWatts(arrayKwp),
     inverterKw: inverterKw,
+    inverterUnits: inv.units,
     stringSize: stringSize,
     strings: strings,
     stringLengths: stringLengths,
     dailyKwh: Energy.kilowattHours(dailyKwh),
     note: '$panelCount x $panelWp Wp ($arrayKwp kWp) as $strings string(s) of '
         '${unevenSplit ? '$shortest-$stringSize' : '$stringSize'}; '
-        '${_fmt(inverterKw.inKiloWatts)} kW inverter (DC/AC '
+        '${inverterRatingLabel(inverterKw, inv.units)} inverter (DC/AC '
         '$dcAcRatio); ~$dailyKwh kWh/day at $sunHours peak-sun-hours.'
         '${belowMppt ? ' Array too small for the MPPT window: a $shortest-module '
             'string gives ~${_fmt(_round(shortest * kPvVmp, 0))} V Vmp, below the '
@@ -676,7 +727,8 @@ BatteryResult sizeBattery(
   final moduleCount = math.max(1, _ceil(requiredKwh / modKwh));
   final installedKwh = _round(moduleCount * modKwh, 2);
   final usableKwh = _round(installedKwh * dod, 2);
-  final inverterKw = selectInverterKw(criticalLoad);
+  final inv = selectInverterUnits(criticalLoad);
+  final inverterKw = inv.unitKw;
 
   return BatteryResult(
     chemistry: chemistry,
@@ -686,12 +738,15 @@ BatteryResult sizeBattery(
     moduleKwh: moduleKwh,
     moduleCount: moduleCount,
     inverterKw: inverterKw,
+    inverterUnits: inv.units,
     criticalLoad: Power.kiloWatts(_round(backupKw, 1)),
     note: '${_round(backupKw, 1)} kW for ${_fmt(autonomyHours)} h '
         '(${chemistry.label}, DoD ${(dod * 100).round()}%, discharge eff '
         '${(kBatteryDischargeEfficiency * 100).round()}%) → '
         '${_round(requiredKwh, 1)} kWh ⇒ $moduleCount x ${_fmt(modKwh)} kWh = '
-        '$installedKwh kWh; ${_fmt(inverterKw.inKiloWatts)} kW inverter/charger.',
+        '$installedKwh kWh; ${inverterRatingLabel(inverterKw, inv.units)} '
+        'inverter/charger${inv.units > 1 ? ' (paralleled — exceeds the largest '
+            'standard unit)' : ''}.',
     verifyItems: const <String>[
       'Battery DoD (LiFePO4 0.9 / lead-acid 0.5) + module kWh — confirm against the cell datasheet.',
       'Discharge-path efficiency (0.95) — confirm against the battery-inverter datasheet.',

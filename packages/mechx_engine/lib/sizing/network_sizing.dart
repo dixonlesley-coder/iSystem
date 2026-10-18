@@ -773,8 +773,8 @@ Map<String, String> serviceComponentRoots(
 /// never for Σ (every drawn box × 5 L/s). When given, every `fireHydrant`
 /// RISER and every TRUNK run (one carrying more than a single box) carries
 /// exactly that design flow — so a 10-box riser is no longer sized for 50 L/s
-/// while the pump delivers 34.7 L/s, nor a 4-box riser for 20 L/s that the
-/// pump's 34.7 L/s would push past the velocity cap. A branch run serving a
+/// while the pump delivers 31.5 L/s, nor a 4-box riser for 20 L/s that the
+/// pump's 31.5 L/s would push past the velocity cap. A branch run serving a
 /// single box keeps its per-box flow. Null ⇒ byte-identical (flat
 /// accumulation).
 ///

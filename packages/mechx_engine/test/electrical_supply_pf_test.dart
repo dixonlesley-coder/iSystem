@@ -80,7 +80,7 @@ void main() {
         ElectricalSystem.threePhase,
       );
       expect(daya, 53000);
-      expect(formatDaya(daya), '53,000 VA (53 kVA)');
+      expect(formatDaya(daya!), '53,000 VA (53 kVA)');
     });
 
     test('exact-match demand returns that step (>=)', () {
@@ -100,12 +100,40 @@ void main() {
       expect(daya, 4400);
     });
 
-    test('demand beyond the LV catalogue clamps to the largest step', () {
+    test('demand beyond the LV catalogue has NO LV daya (null, not a step '
+        'below demand)', () {
+      // 500 kVA > 233 kVA (largest 3φ step) — returning 233 kVA would print a
+      // connection 2.1× below the demand; MV territory ⇒ null.
       final daya = recommendedDayaVa(
         ApparentPower.kilovoltAmperes(500),
         ElectricalSystem.threePhase,
       );
-      expect(daya, 233000); // largest 3φ daya step
+      expect(daya, isNull);
+    });
+
+    test('1φ demand above the 1φ ceiling moves to the 3φ ladder', () {
+      // 15 kVA > 13 900 VA (1φ ceiling) ⇒ the next 3φ step ≥ 15000 = 16 500.
+      final d = recommendedDaya(
+          const ApparentPower(15000), ElectricalSystem.singlePhase)!;
+      expect(d.va, 16500);
+      expect(d.system, ElectricalSystem.threePhase);
+    });
+
+    test('property: any non-null daya is ≥ the demand (seeded)', () {
+      var seed = 8;
+      double next() {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+      }
+
+      for (var i = 0; i < 500; i++) {
+        final va = next() * 300000;
+        for (final sys in ElectricalSystem.values) {
+          final d = recommendedDayaVa(ApparentPower(va), sys);
+          if (d != null) expect(d, greaterThanOrEqualTo(va));
+          if (va <= 233000) expect(d, isNotNull);
+        }
+      }
     });
   });
 

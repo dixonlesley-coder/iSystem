@@ -52,13 +52,15 @@ double capacitorStepKvar(double bankKvar) {
   return 50;
 }
 
-/// Smallest standard bank (kVAR) covering [requiredKvar] (largest ladder entry
-/// when the requirement exceeds the catalogue).
-double _selectCapacitorBankKvar(double requiredKvar) {
+/// Smallest standard bank (kVAR) covering [requiredKvar], with the bank count:
+/// one bank when the ladder covers it, else `n = ceil(required / top)` banks of
+/// the largest rating — never one bank BELOW the requirement (audit r8).
+({double kvar, int banks}) _selectCapacitorBanks(double requiredKvar) {
   for (final k in capacitorBankKvarLadder) {
-    if (k >= requiredKvar) return k;
+    if (k >= requiredKvar) return (kvar: k, banks: 1);
   }
-  return capacitorBankKvarLadder.last;
+  final top = capacitorBankKvarLadder.last;
+  return (kvar: top, banks: (requiredKvar / top).ceil());
 }
 
 // ── Result type ──────────────────────────────────────────────────────────────
@@ -84,8 +86,13 @@ class PowerFactorResult {
   /// Required compensation to reach [targetPf] (kvar) — 0 when already at/above.
   final double requiredKvar;
 
-  /// Selected bank nameplate (kVAR) — 0 when no correction is sized.
+  /// Selected bank nameplate (kVAR) — 0 when no correction is sized. The TOTAL
+  /// installed compensation (`banks × per-bank rating`).
   final double bankKvar;
+
+  /// Number of banks (> 1 only when the requirement exceeds the largest
+  /// standard bank — then each bank is `bankKvar / banks`).
+  final int banks;
 
   /// Automatic-bank step size (kVAR) — 0 when no bank is sized.
   final double stepKvar;
@@ -110,6 +117,7 @@ class PowerFactorResult {
     required this.needed,
     required this.requiredKvar,
     required this.bankKvar,
+    this.banks = 1,
     required this.stepKvar,
     required this.steps,
     required this.detuned,
@@ -203,13 +211,16 @@ PowerFactorResult powerFactorCorrection(
   var bankKvar = 0.0;
   var stepKvar = 0.0;
   var steps = 0;
+  var banks = 1;
   if (existingPf < targetPf && kw > 0) {
     final phi1 = math.acos(_clampPf(existingPf));
     final phi2 = math.acos(_clampPf(targetPf));
     requiredKvar = kw * (math.tan(phi1) - math.tan(phi2));
     // Oversize the nameplate so the hot bank still delivers `requiredKvar`.
-    bankKvar = _selectCapacitorBankKvar(requiredKvar / tempDerate);
-    stepKvar = capacitorStepKvar(bankKvar);
+    final sel = _selectCapacitorBanks(requiredKvar / tempDerate);
+    banks = sel.banks;
+    bankKvar = sel.kvar * sel.banks;
+    stepKvar = capacitorStepKvar(sel.kvar);
     steps = math.max(1, (bankKvar / stepKvar).round());
   }
 
@@ -221,7 +232,9 @@ PowerFactorResult powerFactorCorrection(
   final existingPfR = _round(existingPf, 2);
   var note = needed
       ? 'Power factor $existingPfR is below the $pfPenaltyThreshold PLN penalty '
-          'threshold — fit a ${_fmt(bankKvar)} kVAR automatic bank '
+          'threshold — fit ${banks > 1 ? '$banks x ${_fmt(bankKvar / banks)} kVAR '
+              'automatic banks (exceeds the largest standard bank), total '
+              '${_fmt(bankKvar)} kVAR' : 'a ${_fmt(bankKvar)} kVAR automatic bank'} '
           '($steps x ${_fmt(stepKvar)} kVAR) to reach $targetPf.'
       : existingPf < targetPf
           ? 'Power factor $existingPfR avoids the PLN penalty; a '
@@ -248,6 +261,7 @@ PowerFactorResult powerFactorCorrection(
     needed: needed,
     requiredKvar: _round(requiredKvar, 1),
     bankKvar: bankKvar,
+    banks: banks,
     stepKvar: stepKvar,
     steps: steps,
     detuned: detuned,

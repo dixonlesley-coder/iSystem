@@ -1062,6 +1062,22 @@ _CircuitComputation _computeCircuit(
     lifeSafety: c.lifeSafety,
   );
 
+  // A life-safety run with NO construction named is sized + printed on the
+  // load kind's default family (NYY, PVC 70 °C) — the same spec gap as an
+  // explicit non-FRC type, so it is surfaced too (audit r8 coupling-5).
+  // Judge-only: the sizing basis is unchanged.
+  if (c.lifeSafety && (c.cableType == null || c.cableType!.isEmpty)) {
+    warnings.add(ElectricalWarning(
+      code: 'life-safety-cable',
+      severity: WarningSeverity.warning,
+      message:
+          '${c.name}: life-safety circuit has no cable type — it is sized and '
+          'printed as ${defaultCableFamily(c.loadKind)}; specify fire-resistant '
+          'cable (FRC/MICA) so the run survives a fire.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
   // A life-safety run with an explicit non-FRC construction is a spec error.
   if (c.lifeSafety && c.cableType != null && c.cableType != 'FRC') {
     warnings.add(ElectricalWarning(
@@ -1980,6 +1996,39 @@ ElectricalSystemResult computeSystem(
               'limiter would trip under full demand; raise the subscribed daya '
               'or shed load.',
           panelId: rootId,
+        ));
+      }
+    }
+
+    // JUDGE-ONLY essential-supply check (audit r8 coupling-5): a life-safety
+    // way (fire pump, smoke control …) on a board that is NOT on the essential
+    // (genset-backed) path loses supply exactly when it is needed. A board is
+    // essential when it, or any board upstream of it, carries the explicit
+    // `essential` flag. Never resizes.
+    bool onEssentialPath(String id) {
+      final seen = <String>{};
+      String? cur = id;
+      while (cur != null && seen.add(cur)) {
+        if (byId[cur]?.essential ?? false) return true;
+        cur = parentOf[cur];
+      }
+      return false;
+    }
+
+    for (final p in panels) {
+      if (onEssentialPath(p.id)) continue;
+      final pr = results[p.id];
+      if (pr == null) continue;
+      for (final c in p.circuits) {
+        if (!c.lifeSafety || c.isFeeder) continue;
+        pr.warnings.add(ElectricalWarning(
+          code: 'life-safety-not-essential',
+          severity: WarningSeverity.warning,
+          message: '${c.name}: life-safety load on ${p.name}, which is not on '
+              'the essential (genset-backed) supply — feed it from an essential '
+              'board or mark ${p.name} essential.',
+          panelId: p.id,
+          circuitId: c.id,
         ));
       }
     }

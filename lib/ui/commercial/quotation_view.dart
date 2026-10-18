@@ -2,12 +2,14 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/commercial_store.dart';
+import '../../store/app_state.dart' show AppLocale, localeProvider;
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_text_field.dart';
 import 'commercial_table.dart';
+import 'money_input.dart';
 
 /// The priced quotation / proposal: the quote-settings inputs (labour rate +
 /// overhead / contingency / margin percentages) over the unified M+E+P roll-up
@@ -138,7 +140,7 @@ class QuotationView extends ConsumerWidget {
 }
 
 /// A labelled numeric input row used in the quote-settings card.
-class _NumberRow extends StatelessWidget {
+class _NumberRow extends ConsumerWidget {
   final String label;
   final double value;
   final ValueChanged<double> onChanged;
@@ -152,7 +154,8 @@ class _NumberRow extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final indonesian = ref.watch(localeProvider) == AppLocale.id;
     final colors = context.colors;
     final type = context.type;
     return Padding(
@@ -168,7 +171,9 @@ class _NumberRow extends StatelessWidget {
             child: MechXTextField(
               value: _editValue(value),
               onChanged: (s) {
-                final parsed = double.tryParse(s.trim().replaceAll(',', ''));
+                // Locale-aware (`150.000` = 150 000 IDR/h under the issued
+                // Indonesian notation — audit r8); unparseable ⇒ keep.
+                final parsed = parseMoneyInput(s, indonesian: indonesian);
                 if (parsed != null) onChanged(parsed);
               },
             ),

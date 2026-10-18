@@ -1,4 +1,5 @@
 import 'package:flutter/widgets.dart';
+import 'package:mechx_engine/report/number_format.dart' as engine;
 
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
@@ -18,20 +19,13 @@ abstract final class CommercialFormat {
   /// Hours: always one decimal.
   static String hours(double v) => _grouped(v, 1);
 
-  /// Group the integer part with thousands separators and fix [decimals].
-  static String _grouped(double v, int decimals) {
-    final neg = v < 0;
-    final fixed = v.abs().toStringAsFixed(decimals);
-    final dot = fixed.indexOf('.');
-    final intPart = dot == -1 ? fixed : fixed.substring(0, dot);
-    final frac = dot == -1 ? '' : fixed.substring(dot);
-    final buf = StringBuffer();
-    for (var i = 0; i < intPart.length; i++) {
-      if (i > 0 && (intPart.length - i) % 3 == 0) buf.write(',');
-      buf.write(intPart[i]);
-    }
-    return '${neg ? '-' : ''}$buf$frac';
-  }
+  /// Group the integer part and fix [decimals] — delegated to the engine's
+  /// issued notation (`report/number_format.dart` `money()`: `.` thousands,
+  /// `,` decimals), so the screen and the exported quotation never disagree
+  /// (audit r8 costing-3: the screen used to print `1,181,250.00` beside an
+  /// issued `1.181.250,00`).
+  static String _grouped(double v, int decimals) =>
+      engine.money(v, dp: decimals);
 }
 
 /// One column spec for a [CommercialTable]. [numeric] right-aligns the column

@@ -39,6 +39,10 @@ extension LpsLevelLabel on LpsLevel {
       };
 }
 
+/// Efficiency of a level-I LPS (IEC 62305-1 Table 6). A required E above this
+/// cannot be met by an LPS alone. // VERIFY secondarySource.
+const double levelIEfficiency = 0.98;
+
 /// Map the required protection efficiency E to an LPS level (IEC 62305-1 Table 6
 /// efficiencies: I ≈ 0.98, II ≈ 0.95, III ≈ 0.90, IV ≈ 0.80). `null` when no LPS
 /// is required (E ≤ 0). // VERIFY secondarySource.
@@ -81,6 +85,11 @@ class LightningRisk {
   /// Recommended LPS protection level, or null when none is required.
   final LpsLevel? level;
 
+  /// True when the required E exceeds what a level-I LPS provides
+  /// ([levelIEfficiency]) — level I alone does NOT reach it; additional
+  /// measures or a full IEC 62305-2 risk assessment are needed (audit r8).
+  final bool beyondLevelI;
+
   final String note;
 
   /// Honesty surface — the foreign standard behind this screen.
@@ -94,6 +103,7 @@ class LightningRisk {
     required this.lpsRequired,
     required this.efficiency,
     required this.level,
+    this.beyondLevelI = false,
     required this.note,
     required this.verifyItems,
   });
@@ -129,12 +139,17 @@ LightningRisk assessLightning({
   final lpsRequired = nd > nc;
   final efficiency = lpsRequired ? 1 - nc / nd : 0.0;
   final level = lpsLevelForEfficiency(efficiency);
+  final beyondLevelI = efficiency > levelIEfficiency;
 
   final note = lpsRequired
       ? 'Expected direct strikes Nd ~ ${_round(nd, 4)}/yr exceed the tolerable '
           '$nc/yr - an external LPS to protection level ${level?.label} '
           '(IEC 62305) is recommended, plus a coordinated Type 1 SPD at the '
           'service.'
+          '${beyondLevelI ? ' Level I (E = $levelIEfficiency) alone does not '
+              'reach the required E = ${_round(efficiency, 3)} - add '
+              'protection measures (coordinated SPD system, mesh refinement, '
+              '...) or perform a full IEC 62305-2 risk assessment.' : ''}'
       : 'Expected direct strikes Nd ~ ${_round(nd, 4)}/yr are within the '
           'tolerable $nc/yr - no external LPS is indicated by the screening; '
           'surge protection still applies.';
@@ -147,6 +162,7 @@ LightningRisk assessLightning({
     lpsRequired: lpsRequired,
     efficiency: _round(efficiency, 3),
     level: level,
+    beyondLevelI: beyondLevelI,
     note: note,
     verifyItems: const [
       'Lightning risk uses the IEC 62305-2 SIMPLIFIED frequency method (Nd vs '
