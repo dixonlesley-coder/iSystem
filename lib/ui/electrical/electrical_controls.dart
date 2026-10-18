@@ -190,7 +190,7 @@ class _ElectricalNumInputState extends State<ElectricalNumInput> {
       );
     }
     final field = MechXTextField(
-      value: ElectricalNumInput._fmt(widget.value),
+      value: _shown(context, widget.value),
       textStyle: type.mono,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       onChanged: (_) {
@@ -202,7 +202,7 @@ class _ElectricalNumInputState extends State<ElectricalNumInput> {
         // Round 17 follow-up — an untouched field never re-commits (the
         // display is dot-decimal; re-reading it by the ID locale would turn
         // `1.125` into 1125).
-        if (s.trim() == ElectricalNumInput._fmt(widget.value)) return;
+        if (s.trim() == _shown(context, widget.value)) return;
         // Locale-aware: in the ID UI `33.000` VA is 33 000, `0,85` is 0.85.
         final v = parseLocaleNumber(s,
             indonesian: context.strings.locale == AppLocale.id);
@@ -289,7 +289,7 @@ class _ElectricalOptionalNumInputState
     final colors = context.colors;
     final value = widget.value;
     final field = MechXTextField(
-      value: value == null ? '' : ElectricalNumInput._fmt(value),
+      value: value == null ? '' : _shown(context, value),
       hint: widget.hint,
       textStyle: type.mono,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -302,7 +302,7 @@ class _ElectricalOptionalNumInputState
           if (value != null) widget.onChanged(null);
           return;
         }
-        if (value != null && t == ElectricalNumInput._fmt(value)) return;
+        if (value != null && t == _shown(context, value)) return;
         // Round 17 follow-up — locale-aware, and a non-number says so.
         final parsed = parseLocaleNumber(t,
             indonesian: context.strings.locale == AppLocale.id);
@@ -763,3 +763,8 @@ class ElectricalChooserCard extends StatelessWidget {
   }
 }
 
+/// The value as the field SHOWS it — the locale's decimal mark, so an edit of
+/// the shown text reads back by the same locale rules (Round 18 follow-up).
+String _shown(BuildContext context, double v) => localizeNumberText(
+    ElectricalNumInput._fmt(v),
+    indonesian: context.strings.locale == AppLocale.id);

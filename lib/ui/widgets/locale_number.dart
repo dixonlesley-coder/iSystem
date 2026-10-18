@@ -43,3 +43,16 @@ double? parseLocaleNumber(String input, {required bool indonesian}) {
   final plain = double.tryParse(t);
   return plain == null ? null : sign * plain;
 }
+
+/// The DISPLAY half of [parseLocaleNumber] (Round 18 review follow-up): a
+/// plain-dart number text (`1.125`, `33000`, `0.85` — never grouped) shown in
+/// the Indonesian UI with the decimal COMMA (`1,125`), so editing the shown
+/// value and committing it reads back the same number. A dot-decimal display
+/// with three decimals used to be re-read by the ID rules as a thousands group
+/// (`1.126` → 1126). Exponent / non-numeric text is returned unchanged; the
+/// English UI is byte-identical.
+String localizeNumberText(String plain, {required bool indonesian}) {
+  if (!indonesian) return plain;
+  if (!RegExp(r'^[+-]?[0-9]+\.[0-9]+$').hasMatch(plain.trim())) return plain;
+  return plain.replaceFirst('.', ',');
+}

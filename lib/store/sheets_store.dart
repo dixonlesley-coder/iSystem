@@ -153,7 +153,7 @@ class SheetsController extends Notifier<SheetsState> {
               : fi);
     }
     // Inside the same structural step (it captured the network).
-    _rehomeGhostNodes(record: false);
+    _rehomeGhostNodes();
   }
 
   void selectSheet(int index) {
@@ -179,7 +179,13 @@ class SheetsController extends Notifier<SheetsState> {
   /// Round 17 follow-up — after a sheet→floor MAPPING change, re-home every
   /// ghost node (a riser top drawn toward a floor that had no plan) onto the
   /// sheet now mapped to its floor ([NetworkController.rehomeNodesToMappedSheets]).
-  void _rehomeGhostNodes({bool record = true}) {
+  ///
+  /// Never recorded on the undo timeline (Round 18 review follow-up): the
+  /// mapping change that triggers it — a sheet add/import/duplicate, or the
+  /// structural [setSheetFloor] step — owns the history, so a recorded re-home
+  /// made Ctrl+Z after an import move the riser top back to its ghost sheet
+  /// while the new plan stayed in the rail (a torn undo).
+  void _rehomeGhostNodes() {
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
     if (levelCount < 1) return;
     final live = {for (final s in state.sheets) s.id};
@@ -196,7 +202,7 @@ class SheetsController extends Notifier<SheetsState> {
           floorOfSheet: (id) =>
               live.contains(id) ? state.floorFor(id, levelCount) : null,
           sheetIdForFloor: sheetFor,
-          record: record,
+          record: false,
         );
   }
 

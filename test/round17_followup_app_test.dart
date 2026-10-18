@@ -16,6 +16,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
+import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/air_warnings_store.dart';
 import 'package:mechx/store/app_state.dart';
@@ -34,6 +35,7 @@ import 'package:mechx/ui/electrical/electrical_inspector.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/strings/app_strings.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
+import 'package:mechx/ui/electrical/electrical_controls.dart';
 import 'package:mechx/ui/widgets/locale_number.dart';
 import 'package:mechx/ui/widgets/stepped_value_field.dart';
 import 'package:mechx_engine/electrical/compute.dart';
@@ -367,6 +369,59 @@ void main() {
       await tester.pump();
       expect(find.text('Masukkan angka'), findsOneWidget);
     });
+
+    // Round 18 review follow-up: a dot-decimal DISPLAY re-read by the ID
+    // rules turned an edited `1.126` into 1126. The field now SHOWS the
+    // locale's decimal comma, so editing the shown text round-trips.
+    test('localizeNumberText round-trips through parseLocaleNumber', () {
+      expect(localizeNumberText('1.125', indonesian: true), '1,125');
+      expect(localizeNumberText('1.125', indonesian: false), '1.125');
+      expect(localizeNumberText('33000', indonesian: true), '33000');
+      expect(localizeNumberText('1e-7', indonesian: true), '1e-7');
+      for (final v in [1.125, 0.85, 12.5, 2.375, -4.25, 33000.0, 1250.125]) {
+        for (final id in [true, false]) {
+          final plain = v == v.roundToDouble()
+              ? v.toInt().toString()
+              : v.toString();
+          expect(
+              parseLocaleNumber(localizeNumberText(plain, indonesian: id),
+                  indonesian: id),
+              v,
+              reason: 'v=$v id=$id');
+        }
+      }
+    });
+
+    testWidgets('an ID ElectricalNumInput shows 1,125 and an edit to 1,126 '
+        'commits 1.126 (never 1126)', (tester) async {
+      setDesktopSurface(tester);
+      final commits = <double>[];
+      await tester.pumpWidget(MediaQuery(
+        data: const MediaQueryData(),
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: MechXTheme(
+            data: MechXThemeData.dark,
+            child: MechXStrings(
+              data: const MechXStringsData(AppLocale.id),
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: SizedBox(
+                  width: 260,
+                  child: ElectricalNumInput(
+                      value: 1.125, onChanged: commits.add),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      expect(find.text('1,125'), findsOneWidget);
+      await tester.enterText(find.byType(EditableText), '1,126');
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump();
+      expect(commits, [1.126]);
+    });
   });
 
   // ── gravity-below-code-min + gravity-velocity-verdict ─────────────────────
@@ -448,6 +503,15 @@ void main() {
     net = c.read(networkControllerProvider).network;
     expect(net.nodeById(top.id)!.sheetId, 'l1');
     expect(net.nodeById(top.id)!.floorIndex, 1);
+    // Round 18 review follow-up: the re-home rides the (non-undoable) import,
+    // so it adds NO undo step — Ctrl+Z reverts the riser placement itself,
+    // never a torn 'riser top back on the ghost sheet' with the plan kept.
+    final hist = c.read(historyProvider.notifier);
+    hist.undo();
+    expect(c.read(networkControllerProvider).network.nodeById(top.id), isNull);
+    hist.redo();
+    net = c.read(networkControllerProvider).network;
+    expect(net.nodeById(top.id)!.sheetId, 'l1');
 
     // A cold-water run started ON the riser top tees into it: one component.
     n.setTool(DrawTool.drawRun);

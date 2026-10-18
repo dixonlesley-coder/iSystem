@@ -109,6 +109,12 @@ class SteppedValueField extends StatefulWidget {
 
 class _SteppedValueFieldState extends State<SteppedValueField> {
   final TextEditingController _controller = TextEditingController();
+
+  /// [SteppedValueField.editSeed] as the editor SHOWS it — the locale's
+  /// decimal mark, so editing the seed reads back by the same locale rules
+  /// (Round 18 follow-up: ID `1.125` m re-read as 1125).
+  String get _seed => localizeNumberText(widget.editSeed,
+      indonesian: MechXStrings.of(context).locale == AppLocale.id);
   final FocusNode _editFocus = FocusNode();
   bool _editing = false;
   bool _cancelled = false;
@@ -168,7 +174,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
       _editing = true;
       _cancelled = false;
       _error = null;
-      _controller.text = widget.editSeed;
+      _controller.text = _seed;
       _controller.selection = TextSelection(
         baseOffset: 0,
         extentOffset: _controller.text.length,
@@ -188,7 +194,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
     // to onSubmit(null) and wiped every run's manual size; an Auto ACH or
     // electrical-load field pinned its displayed default as an override.
     // Explicitly clearing a NON-empty box still means "Auto" (onSubmit(null)).
-    if (raw == widget.editSeed.trim()) {
+    if (raw == _seed.trim()) {
       setState(() {
         _editing = false;
         _error = null;
