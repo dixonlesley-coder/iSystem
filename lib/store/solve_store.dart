@@ -3,7 +3,8 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
-import 'package:mechx_engine/hydraulics.dart' show headFromPressure;
+import 'package:mechx_engine/hydraulics.dart'
+    show headFromPressure, pressureFromHead;
 import 'package:mechx_engine/network/duct_static.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
@@ -284,6 +285,13 @@ String? _pickSource(
 /// That edge's flow is already the demand curve of every fixture beyond the
 /// booster, i.e. its own diversified load. Several boosters ⇒ the one moving
 /// the most water (ties by id). Null when no inline booster carries flow.
+///
+/// Round 15 r2 — a mover whose SERVED set (every node reached beyond its
+/// incoming pipe) contains a storage TANK is a TRANSFER pump (the standard
+/// Indonesian downfeed: ground tank → transfer pump → roof tank → riser), not
+/// a booster: its duty is the lift to the tank, never the fixtures' residual
+/// shortfall, so it is excluded here and the trunk-duty path stays in charge
+/// (null on downfeed, as before Round 15).
 typedef SupplyBooster = ({String nodeId, FlowRate flow, String inEdgeId});
 
 final supplyBoosterProvider = Provider<SupplyBooster?>((ref) {
@@ -292,6 +300,33 @@ final supplyBoosterProvider = Provider<SupplyBooster?>((ref) {
   final legs = ref.watch(parallelLegEdgeIdsProvider);
   return inlineSupplyBooster(net, sizing, excludeEdgeIds: legs);
 });
+
+/// Every supply node reached from [nodeId] without crossing [inEdgeId] (the
+/// mover itself excluded) — what an inline mover SERVES.
+Set<String> boosterServedNodes(Network net, String nodeId, String inEdgeId) {
+  final adj = <String, List<({String edgeId, String other})>>{};
+  for (final e in net.edges) {
+    if (e.service != kSupplyService) continue;
+    (adj[e.fromId] ??= []).add((edgeId: e.id, other: e.toId));
+    (adj[e.toId] ??= []).add((edgeId: e.id, other: e.fromId));
+  }
+  final served = <String>{nodeId};
+  final stack = [nodeId];
+  while (stack.isNotEmpty) {
+    final n = stack.removeLast();
+    for (final l in adj[n] ?? const <({String edgeId, String other})>[]) {
+      if (l.edgeId == inEdgeId) continue;
+      if (served.add(l.other)) stack.add(l.other);
+    }
+  }
+  served.remove(nodeId);
+  return served;
+}
+
+bool _isStorageTank(NetNode? n) =>
+    n != null &&
+    (n.component == NodeComponent.roofTank ||
+        n.component == NodeComponent.groundTank);
 
 /// Pure core of [supplyBoosterProvider] (testable without a container).
 SupplyBooster? inlineSupplyBooster(
@@ -324,6 +359,11 @@ SupplyBooster? inlineSupplyBooster(
       }
       final q = sz.flow.cubicMetersPerSecond;
       if (q <= 0) continue;
+      // Round 15 r2 — a transfer pump (it fills a tank) is not a booster.
+      if (boosterServedNodes(net, n.id, e.id)
+          .any((id) => _isStorageTank(net.nodeById(id)))) {
+        continue;
+      }
       if (best == null ||
           q > best.flow.cubicMetersPerSecond + 1e-15 ||
           ((q - best.flow.cubicMetersPerSecond).abs() <= 1e-15 &&
@@ -335,33 +375,26 @@ SupplyBooster? inlineSupplyBooster(
   return best;
 }
 
-/// Round 15 — the head an inline booster must add on a DOWNFEED supply: the
-/// largest shortfall of the gravity residual below the target over the
-/// DELIVERY nodes it serves (every node reached from the booster without
-/// crossing its incoming pipe; fixtures, else those nodes' leaves). Zero or
-/// less ⇒ gravity already serves them.
+/// Round 15 — the head an inline booster must add: the largest shortfall of
+/// the residual below the target over the DELIVERY nodes it serves (every
+/// node reached from the booster without crossing its incoming pipe;
+/// fixtures, else those nodes' leaves), where [residual] is what the network
+/// delivers WITHOUT the booster (the gravity solve on downfeed; the upfeed
+/// solve shifted to zero source head — see [pumpDutyProvider]). Zero or less
+/// ⇒ the supply already serves them.
 Head boosterShortfallHead({
   required Network net,
   required SupplyBooster booster,
   required Map<String, Pressure> residual,
   required Pressure target,
 }) {
-  final adj = <String, List<({String edgeId, String other})>>{};
+  final served = boosterServedNodes(net, booster.nodeId, booster.inEdgeId);
+  final degree = <String, int>{};
   for (final e in net.edges) {
     if (e.service != kSupplyService) continue;
-    (adj[e.fromId] ??= []).add((edgeId: e.id, other: e.toId));
-    (adj[e.toId] ??= []).add((edgeId: e.id, other: e.fromId));
+    degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
+    degree[e.toId] = (degree[e.toId] ?? 0) + 1;
   }
-  final served = <String>{booster.nodeId};
-  final stack = [booster.nodeId];
-  while (stack.isNotEmpty) {
-    final n = stack.removeLast();
-    for (final l in adj[n] ?? const <({String edgeId, String other})>[]) {
-      if (l.edgeId == booster.inEdgeId) continue;
-      if (served.add(l.other)) stack.add(l.other);
-    }
-  }
-  served.remove(booster.nodeId);
   var delivery = [
     for (final id in served)
       if (net.nodeById(id)?.role == NodeRole.fixture) id,
@@ -369,7 +402,7 @@ Head boosterShortfallHead({
   if (delivery.isEmpty) {
     delivery = [
       for (final id in served)
-        if ((adj[id]?.length ?? 0) == 1) id,
+        if ((degree[id] ?? 0) == 1) id,
     ];
   }
   var worstPa = double.negativeInfinity;
@@ -382,31 +415,14 @@ Head boosterShortfallHead({
   return headFromPressure(Pressure(worstPa));
 }
 
-/// Pump duty for an UPFEED supply at the trunk (largest-flow) cold-water flow.
-/// Null in downfeed (gravity-fed) or when there's nothing to pump.
-final pumpDutyProvider = Provider<PumpDuty?>((ref) {
+/// Round 15 r2 — the BUILDING peak design flow on an UPFEED supply: the
+/// trunk (largest-flow) cold-water flow, or the flow the source delivers when
+/// a tee at its discharge splits it. This is what the KETERANGAN system notes
+/// print as 'Peak design flow' — never an inline booster's partial flow.
+/// Null in downfeed (gravity-fed) or when nothing flows (the notes never
+/// fabricate a figure; the same upfeed-only line as before Round 15).
+final supplyPeakFlowProvider = Provider<FlowRate?>((ref) {
   final solution = ref.watch(solveProvider);
-  // Round 15 (root-metamorphic-hybrid-booster-duty) — a booster drawn INLINE
-  // (a roof tank feeding the top floors through a booster set) runs on the
-  // flow THROUGH it, never the whole building's flow at the root, in BOTH
-  // feed strategies; on a downfeed its head is the residual shortfall at the
-  // fixtures it serves (the gravity solve itself carries no pump).
-  final booster = ref.watch(supplyBoosterProvider);
-  if (booster != null) {
-    if (solution != null) {
-      return sizePump(flow: booster.flow, head: solution.requiredPumpHead);
-    }
-    final down = ref.watch(downfeedProvider);
-    if (down == null) return null;
-    final head = boosterShortfallHead(
-      net: ref.watch(sizingNetworkProvider),
-      booster: booster,
-      residual: down.residualPressure,
-      target: _targetResidual,
-    );
-    if (head.meters <= 0) return null;
-    return sizePump(flow: booster.flow, head: head);
-  }
   if (solution == null) return null;
   final sizing = ref.watch(sizingProvider);
   final net = ref.watch(sizingNetworkProvider);
@@ -445,6 +461,57 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
       flow = delivered;
     }
   }
+  return flow;
+});
+
+/// The duty of the supply PUMP the design actually contains: the trunk pump
+/// of an UPFEED supply ([supplyPeakFlowProvider] at the solve's required
+/// head), or — Round 15 — an INLINE booster ([supplyBoosterProvider]) on the
+/// flow THROUGH it, in BOTH feed strategies. Null in a pure gravity downfeed
+/// (incl. a ground-tank → transfer-pump → roof-tank scheme, whose transfer
+/// duty is not modelled) or when there's nothing to pump.
+///
+/// Consumers that need the BUILDING peak flow (the KETERANGAN notes) read
+/// [supplyPeakFlowProvider], never this duty's flow — with a booster this is
+/// the booster's partial flow. The pump-motor ResultCard, the plant-detail
+/// BOOSTER kW, the equipment-schedule P-01 row and the MEP→E feed describe
+/// the one pump drawn, which with an inline booster IS the booster.
+final pumpDutyProvider = Provider<PumpDuty?>((ref) {
+  final solution = ref.watch(solveProvider);
+  final booster = ref.watch(supplyBoosterProvider);
+  if (booster != null) {
+    // The head the booster must ADD downstream of its inlet: the residual
+    // shortfall at the fixtures it serves with NO pump in the system.
+    final Map<String, Pressure> unboosted;
+    if (solution != null) {
+      // Upfeed: the solve sources at the sizer root (a roof tank in the
+      // hybrid case) and every residual is linear in the source head
+      // (r = p(H) − static − friction), so shifting by −p(requiredPumpHead)
+      // gives the residual at zero source head (the open tank's outlet). The
+      // whole system's required head at the root would over-state the
+      // booster whenever a lower, non-boosted floor is the critical node.
+      final pH = pressureFromHead(solution.requiredPumpHead).pascals;
+      unboosted = {
+        for (final e in solution.residualPressure.entries)
+          e.key: Pressure(e.value.pascals - pH),
+      };
+    } else {
+      final down = ref.watch(downfeedProvider);
+      if (down == null) return null;
+      unboosted = down.residualPressure;
+    }
+    final head = boosterShortfallHead(
+      net: ref.watch(sizingNetworkProvider),
+      booster: booster,
+      residual: unboosted,
+      target: _targetResidual,
+    );
+    if (head.meters <= 0) return null;
+    return sizePump(flow: booster.flow, head: head);
+  }
+  if (solution == null) return null;
+  final flow = ref.watch(supplyPeakFlowProvider);
+  if (flow == null) return null;
   return sizePump(flow: flow, head: solution.requiredPumpHead);
 });
 

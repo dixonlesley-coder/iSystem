@@ -190,6 +190,36 @@ void main() {
       expect(duty.flow.cubicMetersPerSecond, closeTo(expected, 1e-12));
       expect(duty.flow.cubicMetersPerSecond,
           lessThan(sizing['rt']!.flow.cubicMetersPerSecond));
+      // r2 — the head is what the booster must ADD downstream of the tank:
+      // the upfeed residuals are linear in the source head, so the residual
+      // at ZERO source head is r − p(H_req); the booster head is the worst
+      // shortfall of that below the target over the fixtures it serves.
+      final sol = c.read(solveProvider)!;
+      final pH = pressureFromHead(sol.requiredPumpHead).pascals;
+      final target = c.read(targetResidualProvider);
+      var worst = double.negativeInfinity;
+      for (final id in ['U0', 'U1']) {
+        worst = math.max(worst,
+            target.pascals - (sol.residualPressure[id]!.pascals - pH));
+      }
+      expect(duty.head.meters,
+          closeTo(headFromPressure(Pressure(worst)).meters, 1e-9));
+      expect(duty.head.meters,
+          lessThanOrEqualTo(sol.requiredPumpHead.meters + 1e-9));
+    });
+
+    test('upfeed: the KETERANGAN peak flow is the building trunk, '
+        'not the booster', () {
+      final c = _container(build(), FeedStrategy.upfeed);
+      addTearDown(c.dispose);
+      final sizing = c.read(sizingProvider);
+      final peak = c.read(supplyPeakFlowProvider)!;
+      // RT is a degree-1 source: its delivery is the single trunk edge 'rt'
+      // (curve of all 6 WCs).
+      expect(peak.cubicMetersPerSecond,
+          closeTo(sizing['rt']!.flow.cubicMetersPerSecond, 1e-12));
+      expect(peak.cubicMetersPerSecond,
+          greaterThan(c.read(pumpDutyProvider)!.flow.cubicMetersPerSecond));
     });
 
     test('downfeed: the booster gets a duty on its shortfall head', () {
@@ -211,6 +241,71 @@ void main() {
       expect(duty.flow.cubicMetersPerSecond,
           closeTo(c.read(sizingProvider)['tb']!.flow.cubicMetersPerSecond,
               1e-12));
+    });
+  });
+
+  group('transfer pump — GT -> TP -> RT downfeed is not a booster (r2)', () {
+    // The standard Indonesian downfeed: ground tank → TRANSFER pump → roof
+    // tank (floor 2) → gravity riser, 2 flush-tank WCs per floor. The
+    // transfer pump is inline (degree 2, not the sizer root) but it FILLS a
+    // tank: its duty is the lift to the roof tank, never the fixtures'
+    // residual shortfall, so no booster duty is fabricated (null on
+    // downfeed exactly as before Round 15).
+    Network build() => Network(nodes: [
+          _n('GT', 0, 0,
+              role: NodeRole.plant, component: NodeComponent.groundTank),
+          _n('TP', 100, 0, role: NodeRole.plant, component: NodeComponent.pump),
+          _n('RT', 100, 0,
+              floor: 2, role: NodeRole.plant, component: NodeComponent.roofTank),
+          for (var f = 0; f < 3; f++) _n('H$f', 200, 0, floor: f),
+          for (var f = 0; f < 3; f++)
+            for (var i = 0; i < 2; i++) _wc('W${f}_$i', 400, i * 200.0, f),
+        ], edges: [
+          _e('gt', 'GT', 'TP'),
+          _e('tr', 'TP', 'RT', kind: EdgeKind.riser),
+          _e('rh', 'RT', 'H2'),
+          _e('r1', 'H2', 'H1', kind: EdgeKind.riser),
+          _e('r0', 'H1', 'H0', kind: EdgeKind.riser),
+          for (var f = 0; f < 3; f++)
+            for (var i = 0; i < 2; i++) _e('w${f}_$i', 'H$f', 'W${f}_$i'),
+        ]);
+
+    test('downfeed: no booster, no pump duty, notes print no peak flow', () {
+      final c = _container(build(), FeedStrategy.downfeed);
+      addTearDown(c.dispose);
+      expect(c.read(downfeedProvider), isNotNull);
+      // The mover sits inline with flow through it — the r1 over-reach.
+      final sizing = c.read(sizingProvider);
+      final inflow = [
+        for (final id in ['gt', 'tr'])
+          if (sizing[id]?.flowFromId != null &&
+              sizing[id]!.flowFromId != 'TP' &&
+              sizing[id]!.flow.cubicMetersPerSecond > 0)
+            id,
+      ];
+      expect(inflow, isNotEmpty,
+          reason: 'TP must carry flow through it, or the test proves nothing');
+      final served = boosterServedNodes(c.read(sizingNetworkProvider), 'TP',
+          inflow.single);
+      expect(served, contains('RT'));
+      expect(c.read(supplyBoosterProvider), isNull);
+      expect(c.read(pumpDutyProvider), isNull);
+      expect(c.read(supplyPeakFlowProvider), isNull);
+    });
+
+    test('a true inline booster with no tank beyond it is still found', () {
+      // Control: the same layout with RT a plain junction ⇒ TP serves only
+      // fixtures ⇒ it IS a booster (the Round-15 behaviour kept).
+      final net = build();
+      final plain = Network(nodes: [
+        for (final n in net.nodes)
+          n.id == 'RT' ? _n('RT', 100, 0, floor: 2) : n,
+      ], edges: net.edges);
+      final c = _container(plain, FeedStrategy.upfeed);
+      addTearDown(c.dispose);
+      final b = inlineSupplyBooster(
+          c.read(sizingNetworkProvider), c.read(sizingProvider));
+      expect(b?.nodeId, 'TP');
     });
   });
 

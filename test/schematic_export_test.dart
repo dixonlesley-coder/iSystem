@@ -10,18 +10,23 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
 import 'package:mechx/ui/shell/export_sheet.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
+import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/units.dart';
 
 /// Pumps a minimal tree that hands back a real [WidgetRef] (the export entry
 /// points take one) + the scope's container.
-Future<(WidgetRef, ProviderContainer)> _pumpRef(WidgetTester tester) async {
+Future<(WidgetRef, ProviderContainer)> _pumpRef(WidgetTester tester,
+    {List<Override> overrides = const []}) async {
   late WidgetRef capturedRef;
   await tester.pumpWidget(
     ProviderScope(
+      overrides: overrides,
       child: Directionality(
         textDirection: TextDirection.ltr,
         child: Consumer(builder: (context, ref, _) {
@@ -192,5 +197,35 @@ void main() {
         .map((l) => l.text)
         .toList();
     expect(labels, contains('Feed: gravity downfeed (roof tank)'));
+  });
+
+  testWidgets(
+      'Round 15 r2: the KETERANGAN peak design flow is the BUILDING trunk '
+      '(supplyPeakFlowProvider), never an inline booster duty flow',
+      (tester) async {
+    // A booster duty on 0.5 L/s (its partial flow) beside a 2.1 L/s building
+    // trunk: the notes must print the trunk, not the booster.
+    final (ref, container) = await _pumpRef(tester, overrides: [
+      pumpDutyProvider.overrideWith((ref) => const PumpDuty(
+            flow: FlowRate(0.0005),
+            head: Head(20),
+            hydraulicPower: Power(100),
+            shaftPower: Power(150),
+            motorInputPower: Power(180),
+            selectedMotor: Power(370),
+          )),
+      supplyPeakFlowProvider.overrideWith((ref) => const FlowRate(0.0021)),
+    ]);
+    container
+        .read(networkControllerProvider.notifier)
+        .loadNetwork(_riserNetwork(roofTank: true));
+    await tester.pump();
+    final labels = buildLiveRiserSheet(ref, null)
+        .prims
+        .whereType<SldLabel>()
+        .map((l) => l.text)
+        .toList();
+    expect(labels, contains('Peak design flow: 2.1 L/s'));
+    expect(labels.any((t) => t.contains('Peak design flow: 0.5')), isFalse);
   });
 }

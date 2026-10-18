@@ -93,7 +93,7 @@ String _supplyNote(Network net, FeedStrategy feed) {
 List<String> _systemNotes(WidgetRef ref, Network net) {
   final feed = ref.read(feedStrategyProvider);
   final occupancy = ref.read(occupancyProvider);
-  final pump = ref.read(pumpDutyProvider);
+  final peakFlow = ref.read(supplyPeakFlowProvider);
 
   // Capacity of the first node with [component] carrying a stored capacity —
   // the shared engine `equipmentDetail` ('237 m3'), so the note matches the
@@ -128,11 +128,13 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
     Occupancy.public => 'Public',
     Occupancy.assembly => 'Assembly',
   }}');
-  // Peak design flow is upfeed-only (pumpDutyProvider null on downfeed). Never
+  // Peak design flow is upfeed-only (supplyPeakFlowProvider null on
+  // downfeed) and is the BUILDING trunk flow, never an inline booster's
+  // partial flow (Round 15 r2). Never
   // fabricate a m3/day figure when no pump flow exists.
-  if (pump != null) {
+  if (peakFlow != null) {
     lines.add('Peak design flow: '
-        '${pump.flow.inLitersPerSecond.toStringAsFixed(1)} L/s');
+        '${peakFlow.inLitersPerSecond.toStringAsFixed(1)} L/s');
   }
   return lines;
 }

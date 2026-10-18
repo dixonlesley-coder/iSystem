@@ -1674,8 +1674,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   leaves (supply) / arrives at (extract) the source. The app's upfeed solve
   sources at the sizer's root when it is a plant (else the best `supplyPlantRank`
   plant, else the sizer's entry — never a fixture), and an INLINE booster's duty
-  is sized on the flow THROUGH it (`supplyBoosterProvider`; downfeed head = the
-  residual shortfall at the fixtures it serves).
+  is sized on the flow THROUGH it (`supplyBoosterProvider`; head = the residual
+  shortfall at the fixtures it serves with no pump in the system — the gravity
+  solve on downfeed, the upfeed solve shifted to zero source head). A mover
+  whose served set (beyond its inlet pipe) holds a storage TANK is a TRANSFER
+  pump (GT -> TP -> RT downfeed), never a booster — no duty is fabricated.
+  `pumpDutyProvider` is the one drawn pump's duty (trunk, or the booster);
+  the KETERANGAN 'Peak design flow' reads the building trunk via
+  `supplyPeakFlowProvider` (upfeed-only), never the booster's partial flow.
 - **Units in reports**: typed quantities store SI base units (Pressure in Pa);
   a `StandardValue.unit` is a display label (e.g. "kPa"). Never print
   `value`+`unit` together — surface the human-readable `note`. (See

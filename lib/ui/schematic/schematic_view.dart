@@ -4341,7 +4341,7 @@ class _SystemNotes extends ConsumerWidget {
     final type = context.type;
     final feed = ref.watch(feedStrategyProvider);
     final occupancy = ref.watch(occupancyProvider);
-    final pump = ref.watch(pumpDutyProvider);
+    final peakFlow = ref.watch(supplyPeakFlowProvider);
 
     // F9: assert '(roof tank)' ONLY when a roofTank actually exists in the
     // network (mirrors the export `_supplyNote`) — the notes must never claim
@@ -4360,11 +4360,13 @@ class _SystemNotes extends ConsumerWidget {
     final groundM3 = _tankM3(NodeComponent.groundTank);
     if (groundM3 != null) lines.add('Ground tank: $groundM3 m3');
     lines.add('Occupancy: ${_occupancyLabel(occupancy)}');
-    // Peak design flow is upfeed-only (pumpDutyProvider null on downfeed). Never
+    // Peak design flow is upfeed-only (supplyPeakFlowProvider null on
+    // downfeed) and is the BUILDING trunk flow, never an inline booster's
+    // partial flow (Round 15 r2). Never
     // fabricate a m3/day figure when no pump flow exists.
-    if (pump != null) {
+    if (peakFlow != null) {
       lines.add(
-          'Peak design flow: ${pump.flow.inLitersPerSecond.toStringAsFixed(1)} L/s');
+          'Peak design flow: ${peakFlow.inLitersPerSecond.toStringAsFixed(1)} L/s');
     }
 
     // D8: the SAME flat/opaque/hairline treatment `_detailBox` paints for the
