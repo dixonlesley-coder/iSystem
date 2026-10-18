@@ -213,18 +213,25 @@ class PuilProfile implements ElectricalStandardsProfile {
   @override
   String get name => 'PUIL — Persyaratan Umum Instalasi Listrik';
 
+  /// The short EDITION label (Round 9) — what a report head / PDF cover
+  /// prints after the standard's name. The sourcing story lives in
+  /// [provenanceNote], printed with the honesty surface instead.
   @override
-  String get revision =>
-      'PUIL 2011 (SNI 0225:2011, amd. 2020) values ported 2026-06 from the '
-      'PanelMaker reference app (Supreme Cable / SUCACO catalogues + '
-      'IEC 60364-5-52/54, IEC 60898/60947). All secondary-sourced — clauses '
-      'pending confirmation against the official PUIL PDF. A 2026-07 research '
-      'pass sharpened several citations (SNI IEC 60038:2013 for nominal '
-      'voltages, PUIL Tabel 41.1 for the U0/ADS disconnection-time basis, '
-      'spot-checked KHA/derating figures) but could NOT read the primary PUIL '
-      'text end-to-end (every external document host was blocked by this '
-      'environment\'s network egress policy that session) — nothing here was '
-      'promoted to sniVerbatim on the strength of that pass alone.';
+  String get revision => 'PUIL 2011 (SNI 0225:2011, amd. 2020)';
+
+  /// How these values were sourced and what is still unconfirmed — a
+  /// provenance note for the report's 'Unverified values' section (Round 9:
+  /// it used to BE [revision], so an ~80-word paragraph stood in as the
+  /// 'Standard:' line and the PDF cover's standards line).
+  String get provenanceNote =>
+      'Values ported 2026-06 from the PanelMaker reference app (Supreme Cable '
+      '/ SUCACO catalogues + IEC 60364-5-52/54, IEC 60898/60947). All '
+      'secondary-sourced — clauses pending confirmation against the official '
+      'PUIL PDF. A 2026-07 research pass sharpened several citations (SNI IEC '
+      '60038:2013 for nominal voltages, PUIL Tabel 41.1 for the U0/ADS '
+      'disconnection-time basis, spot-checked KHA/derating figures) but could '
+      'NOT read the primary PUIL text end-to-end — nothing here was promoted '
+      'to sniVerbatim on the strength of that pass alone.';
 
   // ── Supply / voltages ─────────────────────────────────────────────────────
 

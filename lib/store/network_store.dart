@@ -18,6 +18,7 @@ import '../ui/canvas/snapping.dart' show orthoElbow;
 import 'annotation_store.dart' show RoomArea;
 import 'floor_remap.dart' show shiftFloorIndex;
 import 'history_store.dart';
+import 'project_store.dart' show projectControllerProvider;
 import 'route_geometry.dart';
 import 'schematic_layout_store.dart';
 import 'selection_store.dart';
@@ -661,10 +662,20 @@ class NetworkController extends Notifier<DrawingState> {
   /// every edge with an endpoint there (C2). This is exactly what
   /// [remapNodesForFloorChange] deletes when that floor is removed, so the
   /// confirm dialog can name a real count instead of asking blind. Read-only.
-  int elementsOnFloor(int floorIndex) {
+  int elementsOnFloor(int floorIndex) => _elementsWhere((fi) => fi == floorIndex);
+
+  /// Round 9 (mech-store-fuzz-4) — how many drawn elements sit on a floor at
+  /// or above [levelCount] (nodes there plus every edge touching them): what
+  /// [ProjectController.setFloors] deletes when a template with only
+  /// [levelCount] floors replaces a taller stack, so the caller can confirm
+  /// with a real count. Read-only.
+  int elementsAboveFloor(int levelCount) =>
+      _elementsWhere((fi) => fi >= levelCount);
+
+  int _elementsWhere(bool Function(int floorIndex) test) {
     final onFloor = <String>{};
     for (final n in state.network.nodes) {
-      if (n.floorIndex == floorIndex) onFloor.add(n.id);
+      if (test(n.floorIndex)) onFloor.add(n.id);
     }
     if (onFloor.isEmpty) return 0;
     var count = onFloor.length;
@@ -885,6 +896,19 @@ class NetworkController extends Notifier<DrawingState> {
   void setNodeFixture(String id, PlumbingFixture? fixture) {
     final node = state.network.nodeById(id);
     if (node == null) return;
+    // Round 9 (mech-store-fuzz-8) — re-picking the same fixture is a no-op
+    // (no phantom undo step, no dirty flag).
+    if (fixture != null &&
+        node.fixture == fixture &&
+        node.customFixtureId == null &&
+        node.role == NodeRole.fixture) {
+      return;
+    }
+    if (fixture == null &&
+        node.fixture == null &&
+        node.customFixtureId == null) {
+      return;
+    }
     _replaceNode(_applyFixture(node, fixture));
   }
 
@@ -971,6 +995,11 @@ class NetworkController extends Notifier<DrawingState> {
   void setNodeElevation(String id, Length? elevation) {
     final node = state.network.nodeById(id);
     if (node == null) return;
+    // Round 9 (mech-store-fuzz-8) — an unchanged elevation is a no-op.
+    if (node.elevation == elevation) return;
+    // The fresh constructor is how `elevation` is cleared (copyWith has no
+    // clear flag); every other field is carried so setting an elevation never
+    // strips the node's component / mount height / tank / face / load.
     _replaceNode(NetNode(
       id: node.id,
       sheetId: node.sheetId,
@@ -979,10 +1008,17 @@ class NetworkController extends Notifier<DrawingState> {
       floorIndex: node.floorIndex,
       role: node.role,
       elevation: elevation,
+      mountHeight: node.mountHeight,
       fixture: node.fixture,
       airflow: node.airflow,
       customFixtureId: node.customFixtureId,
       roofAreaM2: node.roofAreaM2,
+      component: node.component,
+      tankCapacityLitres: node.tankCapacityLitres,
+      electricalLoadW: node.electricalLoadW,
+      faceWidthMm: node.faceWidthMm,
+      faceHeightMm: node.faceHeightMm,
+      fittingType: node.fittingType,
     ));
   }
 
@@ -1786,6 +1822,20 @@ class NetworkController extends Notifier<DrawingState> {
     return best;
   }
 
+  /// Round 9 — the service of [node] when it is a PLAIN run junction (no
+  /// component, `main` role, every incident edge one service), else null. Used
+  /// to scope a drag-merge / tap-in to the node's own network (E1).
+  ServiceType? _bareMainService(NetNode node) {
+    if (node.component != null || node.role != NodeRole.main) return null;
+    ServiceType? svc;
+    for (final e in state.network.edges) {
+      if (e.fromId != node.id && e.toId != node.id) continue;
+      if (svc != null && e.service != svc) return null;
+      svc = e.service;
+    }
+    return svc;
+  }
+
   /// The service an existing run incident to [nodeId] carries (so a main pulled
   /// out of a node inherits its service), or null if the node has no run yet.
   ServiceType? _serviceOf(String nodeId) {
@@ -1935,6 +1985,9 @@ class NetworkController extends Notifier<DrawingState> {
     final b = net.edgeById(boundaryEdgeId);
     if (e == null || b == null) return false;
     if (e.kind == EdgeKind.riser || b.kind == EdgeKind.riser) return false;
+    // Round 9 (mech-store-fuzz-2) — each service is its own network: never
+    // splice a run into a different service's run (the Run tool's E1 rule).
+    if (b.service != e.service) return false;
     if (endNodeId != e.fromId && endNodeId != e.toId) return false;
     // The moving end already belonging to the boundary is a no-op.
     if (endNodeId == b.fromId || endNodeId == b.toId) return false;
@@ -1959,6 +2012,10 @@ class NetworkController extends Notifier<DrawingState> {
     final (tA, sB) = params;
     const segTol = 1e-9;
     if (sB < -segTol || sB > 1 + segTol) return false; // off the boundary span
+    // Round 9 (mech-store-fuzz-7) — the anchor itself lies on the boundary
+    // line (tA ≈ 0): the 'intersection' IS the anchor, so moving the end there
+    // would collapse the run to zero length (or, via a merge, delete it).
+    if (tA.abs() <= 1e-6) return false;
     final inter = Offset(a0.dx + da.dx * tA, a0.dy + da.dy * tA);
 
     // Landed on a boundary end node -> merge the two nodes cleanly.
@@ -1969,6 +2026,9 @@ class NetworkController extends Notifier<DrawingState> {
     } else if ((inter - Offset(q1.x, q1.y)).distance <= mergePx) {
       mergeTarget = q1.id;
     }
+    // Round 9 (mech-store-fuzz-7) — merging the mover onto its own anchor
+    // would drop the run as a self-loop and report success.
+    if (mergeTarget == anchorId) return false;
     if (mergeTarget != null && mergeTarget != endNodeId) {
       final finalNodes =
           net.nodes.where((n) => n.id != endNodeId).toList();
@@ -2036,6 +2096,10 @@ class NetworkController extends Notifier<DrawingState> {
     if (ea.service != eb.service) return false;
     final anchorAId = ea.fromId == endNodeIdA ? ea.toId : ea.fromId;
     final anchorBId = eb.fromId == endNodeIdB ? eb.toId : eb.fromId;
+    // Round 9 (mech-store-fuzz-6) — two stubs off the SAME anchor: both lines
+    // pass through it, so the 'corner' is the anchor itself and the join would
+    // collapse both stubs into duplicate zero-length runs.
+    if (anchorAId == anchorBId) return false;
     final aa = net.nodeById(anchorAId);
     final ab = net.nodeById(anchorBId);
     if (aa == null || ab == null) return false;
@@ -2047,6 +2111,10 @@ class NetworkController extends Notifier<DrawingState> {
     final params = lineIntersectionParams(a0, da, b0, db);
     if (params == null) return false; // parallel
     final inter = Offset(a0.dx + da.dx * params.$1, a0.dy + da.dy * params.$1);
+    // …and a corner sitting ON either anchor would zero that segment.
+    if ((inter - a0).distance <= 0.5 || (inter - b0).distance <= 0.5) {
+      return false;
+    }
     final maxLen = math.max(da.distance, db.distance);
     final reach = math.max((inter - Offset(na.x, na.y)).distance,
         (inter - Offset(nb.x, nb.y)).distance);
@@ -2338,6 +2406,12 @@ class NetworkController extends Notifier<DrawingState> {
       return;
     }
 
+    // Round 9 (mech-store-fuzz-2) — a dragged PLAIN run end (a bare `main`
+    // carrying a service) must obey the Run tool's E1 rule: never merge onto,
+    // or tap into, another service's plain junction / run. A fixture or
+    // equipment node keeps its cross-service joins (a WC sits on its supply AND
+    // its drain).
+    final dragService = _bareMainService(dragged);
     // Nearest OTHER node on the same sheet/floor within the snap radius.
     final r2 = snapRadiusWorld * snapRadiusWorld;
     String? targetId;
@@ -2349,9 +2423,9 @@ class NetworkController extends Notifier<DrawingState> {
       }
       // E1: never merge onto a node that belongs solely to an avoided (hidden /
       // locked) service — the engineer could neither see nor unpick the join.
-      if (avoidServices.isNotEmpty &&
+      if ((avoidServices.isNotEmpty || dragService != null) &&
           !_nodeAdoptable(n, state.network.edges,
-              avoidServices: avoidServices)) {
+              avoidServices: avoidServices, drawService: dragService)) {
         continue;
       }
       final dx = n.x - dragged.x;
@@ -2443,6 +2517,7 @@ class NetworkController extends Notifier<DrawingState> {
     Set<ServiceType> avoidServices = const {},
   }) {
     final net = state.network;
+    final dragService = _bareMainService(dragged);
 
     NetEdge? bestEdge;
     var bestD2 = radiusWorld * radiusWorld;
@@ -2452,6 +2527,9 @@ class NetworkController extends Notifier<DrawingState> {
       if (e.kind == EdgeKind.riser) continue; // tap onto horizontal runs only
       // E1: never tap into a run on an avoided (hidden / locked) service.
       if (avoidServices.contains(e.service)) continue;
+      // Round 9 (mech-store-fuzz-2) — a plain run end taps only into its OWN
+      // service's runs.
+      if (dragService != null && e.service != dragService) continue;
       if (e.fromId == dragged.id || e.toId == dragged.id) {
         continue; // never split the dragged node's own edge
       }
@@ -2790,23 +2868,37 @@ class NetworkController extends Notifier<DrawingState> {
   }) _cloneClipboard(
       _Clipboard clip, String sheetId, int floorIndex, Offset offset,
       {bool preserveRelativeFloor = false}) {
-    final baseFloor = preserveRelativeFloor
+    // Round 9 (mech-store-fuzz-5) — a block carrying a RISER keeps its
+    // vertical span automatically: flattening it onto one floor made a riser
+    // of ZERO §10 length between two coincident nodes (replicated onto every
+    // paste target). Each node keeps its floor relative to the block's lowest,
+    // clamped into the building; an off-paste-floor node lands on the sheet
+    // mapped to ITS floor (the B1 cross-surface rule), falling back to the
+    // paste sheet when none is mapped.
+    final hasRiser = clip.edges.any((e) => e.kind == EdgeKind.riser);
+    final keepSpan = preserveRelativeFloor || hasRiser;
+    final baseFloor = keepSpan
         ? clip.nodes
             .map((n) => n.floorIndex)
             .reduce((a, b) => a < b ? a : b)
         : 0;
+    final levelCount = ref.read(projectControllerProvider).floors.length;
     final clones = <String, String>{}; // old node id → new node id
+    final cloneFloor = <String, int>{}; // new node id → its floor
     final nodes = <NetNode>[];
     final nodeIds = <String>{};
     for (final n in clip.nodes) {
       final id = _id('n');
       clones[n.id] = id;
       nodeIds.add(id);
-      final f = preserveRelativeFloor
-          ? floorIndex + (n.floorIndex - baseFloor)
-          : floorIndex;
-      nodes.add(_cloneNodeAt(
-          n, id, sheetId, f, n.x + offset.dx, n.y + offset.dy));
+      var f = keepSpan ? floorIndex + (n.floorIndex - baseFloor) : floorIndex;
+      if (keepSpan && levelCount > 0) f = f.clamp(0, levelCount - 1);
+      cloneFloor[id] = f;
+      final sheet = (hasRiser && !preserveRelativeFloor && f != floorIndex)
+          ? (sheetIdForFloor(f, levelCount) ?? sheetId)
+          : sheetId;
+      nodes.add(
+          _cloneNodeAt(n, id, sheet, f, n.x + offset.dx, n.y + offset.dy));
     }
     final edges = <NetEdge>[];
     final edgeIds = <String>{};
@@ -2814,6 +2906,12 @@ class NetworkController extends Notifier<DrawingState> {
       final from = clones[e.fromId];
       final to = clones[e.toId];
       if (from == null || to == null) continue;
+      // A riser whose ends clamp onto ONE floor (the block hangs past the top
+      // of the building) has no vertical length left — drop it, never paste a
+      // zero-length riser.
+      if (e.kind == EdgeKind.riser && cloneFloor[from] == cloneFloor[to]) {
+        continue;
+      }
       final eid = _id('e');
       edgeIds.add(eid);
       edges.add(_cloneEdge(e, eid, from, to));

@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'report_blocks.dart';
+import 'report_strings.dart';
 import 'sld_sheet.dart';
 
 // ── Page geometry (A4 portrait, points) ─────────────────────────────────────
@@ -66,10 +67,19 @@ double _textWidth(String s, double size, {bool bold = false}) {
 
 // ── Text sanitation ──────────────────────────────────────────────────────────
 
+/// Public view of the report-PDF transliteration (Round 9), so a test can pin
+/// that every character the engine's strings carry reaches the PDF legibly.
+String pdfSafeText(String raw) => _ascii(raw);
+
 /// Transliterate the handful of non-ASCII typographic characters the report
 /// strings carry into printable ASCII (the base-14 fonts here are unencoded
 /// beyond Latin-1 and the house rule is ASCII exports); anything else becomes
 /// `?`. Typography only — no data is altered.
+///
+/// Round 9 (report-parity-pdf-citation-garbled) — the clause sign `§`, Greek
+/// symbols (ρ, ε, φ, µ…), `±`, vulgar fractions, `″` and `…` used to fall to
+/// `?`, so the guardrail-6 'Unverified values' section printed 'IEC 60364-4-44
+/// ?443 / PUIL 2011 ?3.20' and '±5 %' as '?5 %' (a changed number).
 String _ascii(String raw) {
   final b = StringBuffer();
   for (final rune in raw.runes) {
@@ -116,6 +126,59 @@ String _ascii(String raw) {
       case 0x201C: // “
       case 0x201D: // ”
         b.write('"');
+      case 0x00A7: // §
+        b.write('cl.');
+      case 0x00B1: // ±
+        b.write('+/-');
+      case 0x00BD: // ½
+        b.write('1/2');
+      case 0x00BC: // ¼
+        b.write('1/4');
+      case 0x00BE: // ¾
+        b.write('3/4');
+      case 0x215B: // ⅛
+        b.write('1/8');
+      case 0x2033: // ″
+        b.write('in');
+      case 0x2032: // ′
+        b.write("'");
+      case 0x2026: // …
+        b.write('...');
+      case 0x03C1: // ρ
+        b.write('rho');
+      case 0x03B5: // ε
+        b.write('eps');
+      case 0x03C6: // φ
+      case 0x03A6: // Φ
+        b.write('ph');
+      case 0x00B5: // µ (micro)
+      case 0x03BC: // μ
+        b.write('u');
+      case 0x03BD: // ν
+        b.write('nu');
+      case 0x03B7: // η
+        b.write('eta');
+      case 0x03B1: // α
+        b.write('alpha');
+      case 0x03B8: // θ
+        b.write('theta');
+      case 0x03BB: // λ
+        b.write('lambda');
+      case 0x221A: // √
+        b.write('sqrt');
+      case 0x221D: // ∝
+        b.write('prop. to');
+      case 0x2211: // ∑
+      case 0x03A3: // Σ
+        b.write('sum');
+      case 0x2260: // ≠
+        b.write('!=');
+      case 0x2212: // − (minus)
+        b.write('-');
+      case 0x2022: // •
+        b.write('*');
+      case 0x00A0: // no-break space
+        b.write(' ');
       default:
         b.write('?');
     }
@@ -549,6 +612,7 @@ String _coverPage({
   String? preparedBy,
   String? checkedBy,
   String? approvedBy,
+  ReportStrings strings = const ReportStrings.en(),
 }) {
   final cs = StringBuffer();
   void centred(double y, String raw,
@@ -589,10 +653,11 @@ String _coverPage({
   // signature; absent data is omitted instead).
   final roles = <(String, String)>[
     if (preparedBy != null && preparedBy.isNotEmpty)
-      ('Prepared by', preparedBy),
-    if (checkedBy != null && checkedBy.isNotEmpty) ('Checked by', checkedBy),
+      (strings(RptStringKey.pdfPreparedBy), preparedBy),
+    if (checkedBy != null && checkedBy.isNotEmpty)
+      (strings(RptStringKey.pdfCheckedBy), checkedBy),
     if (approvedBy != null && approvedBy.isNotEmpty)
-      ('Approved by', approvedBy),
+      (strings(RptStringKey.pdfApprovedBy), approvedBy),
   ];
   if (roles.isNotEmpty) {
     const rowH = 22.0;
@@ -672,6 +737,10 @@ Uint8List _assemblePdf(List<String> pageContents) {
 /// `projectName - documentNumber - Page X of Y` (the document number is
 /// skipped when null; X/Y count the content pages, stamped after layout so
 /// the total is real).
+///
+/// Round 9 — [strings] localizes the PDF CHROME (cover sign-off role labels
+/// and the 'Page X of Y' footer → 'Halaman X dari Y'); the default English
+/// keeps every existing byte.
 Uint8List reportBlocksToPdf(
   List<RptBlock> blocks, {
   required String docTitle,
@@ -683,6 +752,7 @@ Uint8List reportBlocksToPdf(
   String? preparedBy,
   String? checkedBy,
   String? approvedBy,
+  ReportStrings strings = const ReportStrings.en(),
 }) {
   // Lay the content out first — the footer needs the final page count.
   final ts = _Typesetter();
@@ -699,7 +769,10 @@ Uint8List reportBlocksToPdf(
   // The footer is a single un-wrapped run — ellipsize the identity half so a
   // very long project name / doc number can never overflow the content column
   // (the ' - Page X of Y' suffix stays intact; ~90pt reserves its width).
-  const footerMaxW = _contentW - 90.0;
+  String pageOf(int x) =>
+      _ascii(strings.format(RptStringKey.pdfPageOf, {'x': x, 'y': total}));
+  final suffixW = _textWidth(' - ${pageOf(total)}', 8);
+  final footerMaxW = _contentW - (suffixW > 90.0 ? suffixW : 90.0);
   if (_textWidth(footerBase, 8) > footerMaxW) {
     while (footerBase.isNotEmpty &&
         _textWidth('$footerBase...', 8) > footerMaxW) {
@@ -713,7 +786,7 @@ Uint8List reportBlocksToPdf(
     // Running footer: hairline + `project - doc no - Page X of Y`.
     cs.writeln('$_inkHairline RG 0.5 w ${_n(_margin)} ${_n(_margin - 8)} m '
         '${_n(_pageW - _margin)} ${_n(_margin - 8)} l S');
-    final footer = '$footerBase - Page ${i + 1} of $total';
+    final footer = '$footerBase - ${pageOf(i + 1)}';
     cs.writeln('BT /F1 8 Tf $_inkMuted rg ${_n(_margin)} ${_n(_margin - 20)} '
         'Td (${_esc(footer)}) Tj ET');
     contentPages.add(cs.toString());
@@ -729,6 +802,7 @@ Uint8List reportBlocksToPdf(
     preparedBy: preparedBy,
     checkedBy: checkedBy,
     approvedBy: approvedBy,
+    strings: strings,
   );
 
   return _assemblePdf([cover, ...contentPages]);

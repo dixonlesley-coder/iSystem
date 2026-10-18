@@ -63,3 +63,27 @@ String money(
   final body = frac.isEmpty ? grouped : '$grouped$decimalSeparator$frac';
   return '${neg ? '-' : ''}$body';
 }
+
+/// Round 9 (report-parity-quotation-separators) — a client-facing QUANTITY
+/// (metres, pieces, labour hours) in the SAME convention as [money], so one
+/// proposal row never mixes `1234.57` (dot = decimal) beside `45.000,00`
+/// (dot = thousands). Whole → grouped integer (`1234` → `1.234`); else 2 dp
+/// with trailing fraction zeros trimmed (`1234.567` → `1.234,57`, `246.9` →
+/// `246,9`). A non-finite [v] prints [kNonFiniteNumber].
+String quantity(
+  num v, {
+  String groupSeparator = '.',
+  String decimalSeparator = ',',
+}) {
+  if (v is double && !v.isFinite) return kNonFiniteNumber;
+  if (v == v.roundToDouble()) {
+    return groupThousands(v, separator: groupSeparator);
+  }
+  var s = money(v,
+      dp: 2, groupSeparator: groupSeparator, decimalSeparator: decimalSeparator);
+  while (s.contains(decimalSeparator) && s.endsWith('0')) {
+    s = s.substring(0, s.length - 1);
+  }
+  if (s.endsWith(decimalSeparator)) s = s.substring(0, s.length - 1);
+  return s;
+}

@@ -235,8 +235,16 @@ class ProjectController extends Notifier<ProjectState> {
     final added = [
       for (var k = 0; k < count; k++) Floor('Level ${base + k}', h),
     ];
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    final oldLevels = state.floors.length;
     state = state.copyWith(floors: [...state.floors, ...added]);
+    // Round 9 (mech-store-fuzz-1) — a sheet sitting on its rail position was
+    // CLAMPED to the old top floor; growing the stack would re-map it upward
+    // while its drawn work kept the old index (vanishing from its own plan,
+    // sizing at the wrong elevation). Pin it where its work is.
+    _pinSheetFloors(oldLevels);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           record: false,
@@ -296,11 +304,46 @@ class ProjectController extends Notifier<ProjectState> {
   /// empty network or a stack that only grew.
   void setFloors(List<Floor> floors) {
     if (floors.isEmpty) return;
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    // Round 9 (mech-store-fuzz-8) — re-applying the identical stack is a no-op,
+    // not a phantom undo step that also marks the project edited.
+    if (state.groundIndex == 0 && _sameFloors(floors, state.floors)) return;
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    // Round 9 (mech-store-fuzz-4) — a stack with FEWER floors drops the top
+    // floors exactly as [removeFloor] does (C2): the work drawn ON a dropped
+    // floor is deleted with it (callers count it with
+    // [NetworkController.elementsAboveFloor] and CONFIRM first), instead of
+    // being clamped onto the new top floor — which fused two floors' work at
+    // one elevation and collapsed every riser between them to zero length.
+    // Removing the TOP index shifts nothing below it, so each step is a pure
+    // delete; sheets on a dropped floor fall to the floor below.
+    for (var idx = state.floors.length - 1; idx >= floors.length; idx--) {
+      state = state.copyWith(
+        floors: state.floors.sublist(0, idx),
+        groundIndex: state.groundIndex.clamp(0, idx - 1),
+      );
+      _remapSheetFloors(idx + 1, removedIndex: idx);
+      ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+            levelCount: idx,
+            removedIndex: idx,
+            record: false,
+          );
+      final levels = idx;
+      final removed = idx;
+      remapFloorPlacedWork(
+          ref.read,
+          (_, fi) => shiftFloorIndex(fi,
+              levelCount: levels, removedIndex: removed));
+    }
+    final oldLevels = state.floors.length;
     // A wholesale replace (template / sample / opened doc) is a fresh building —
     // reset the ground datum to the bottom (no basements). Callers that keep a
     // basement stack use [addFloorsOnTop] / [addBasement] instead.
     state = state.copyWith(floors: List<Floor>.from(floors), groundIndex: 0);
+    // Round 9 (mech-store-fuzz-1) — a growing stack must not re-map clamped
+    // sheets away from their drawn work.
+    _pinSheetFloors(oldLevels);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           record: false,
@@ -308,6 +351,42 @@ class ProjectController extends Notifier<ProjectState> {
     final levels = state.floors.length;
     remapFloorPlacedWork(
         ref.read, (_, fi) => shiftFloorIndex(fi, levelCount: levels));
+  }
+
+  static bool _sameFloors(List<Floor> a, List<Floor> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// Round 9 (mech-store-fuzz-1) — after the stack grew from [oldLevelCount]
+  /// to the current size, PIN every sheet whose effective floor would change
+  /// (a rail-positional sheet that was clamped to the old top floor) as an
+  /// explicit mapping at its OLD floor, so the canvas (which filters on
+  /// sheetId AND floorIndex) keeps showing the work drawn on it and that work
+  /// keeps its elevation. Sheets whose floor does not move are untouched (no
+  /// spurious explicit entries). No undo entry — the caller's structural
+  /// snapshot captured the sheets. No sheets ⇒ no-op.
+  void _pinSheetFloors(int oldLevelCount) {
+    final sheets = ref.read(sheetsControllerProvider);
+    if (sheets.sheets.isEmpty) return;
+    final levels = state.floors.length;
+    final next = Map<String, int>.from(sheets.sheetFloors);
+    var changed = false;
+    for (final sheet in sheets.sheets) {
+      final old = sheets.floorFor(sheet.id, oldLevelCount);
+      final now = sheets.floorFor(sheet.id, levels);
+      if (old != now) {
+        next[sheet.id] = old;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .restoreState(sheets.copyWith(sheetFloors: next));
   }
 
   /// Remove the floor at [index] in ONE undo step. The floor removal AND the
@@ -421,6 +500,12 @@ class ProjectController extends Notifier<ProjectState> {
   }
 
   void setCalibration(String sheetId, ScaleCalibration calibration) {
+    // Round 9 (mech-store-fuzz-8) — re-applying the same, non-stale scale is a
+    // no-op (no phantom undo step, no dirty flag).
+    if (state.calibrations[sheetId] == calibration &&
+        !state.staleCalibrations.contains(sheetId)) {
+      return;
+    }
     _snapshot();
     final next = Map<String, ScaleCalibration>.from(state.calibrations)
       ..[sheetId] = calibration;

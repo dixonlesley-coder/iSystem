@@ -91,13 +91,28 @@ const List<(double, double)> _stackDfuTable = [
   (540, 125),
   (960, 150),
 ];
+// Round 9 (plumbing-rules-vent-table-shifted) — UPC Table 703.2 vent maximum
+// units, paired with the RIGHT diameters: 1¼ in (DN32) carries 1 DFU, 1½ in
+// (DN40) 8, 2 in (DN50) 24, 2½ in (DN65) 48, 3 in (DN75) 84, 4 in (DN100) 256,
+// 5 in (DN125) 600, 6 in (DN150) 1380. The previous table had slid the
+// diameter column down one row (8 DFU → DN32), issuing every vent one nominal
+// size small. // VERIFY against SNI 8153 vent table.
 const List<(double, double)> _ventDfuTable = [
-  (8, 32),
-  (24, 40),
-  (84, 50),
-  (256, 75),
-  (600, 100),
+  (1, 32),
+  (8, 40),
+  (24, 50),
+  (48, 65),
+  (84, 75),
+  (256, 100),
+  (600, 125),
+  (1380, 150),
 ];
+
+/// Nominal vent pipe series (mm) the half-drain floor rounds UP into.
+const List<double> _ventSeriesMm = [32, 40, 50, 65, 75, 100, 125, 150];
+
+/// Smallest vent diameter permitted anywhere (1¼ in).
+const double kMinVentMm = 32.0;
 
 double _lookup(List<(double, double)> table, double dfu) {
   for (final (maxDfu, mm) in table) {
@@ -114,8 +129,23 @@ Diameter drainDiameterForDfu(double dfu, {required bool isStack}) =>
 
 /// Minimum vent diameter for [dfu] drainage fixture units (developed-length
 /// refinement is a // VERIFY TODO). // VERIFY against SNI 8153 vent table.
-Diameter ventDiameterForDfu(double dfu) =>
-    Diameter.mm(_lookup(_ventDfuTable, dfu));
+///
+/// Round 9 — when [servedDrainMm] (the diameter of the drain this vent
+/// serves) is given the vent is also floored at HALF that drain diameter,
+/// rounded UP into the vent series (IPC 906.2 / UPC 904.1: a vent is never
+/// smaller than ½ the drain it serves, nor smaller than 1¼ in) — e.g. a
+/// DN75 WC drain ⇒ ≥ 37.5 mm ⇒ DN40. // VERIFY (`notAnSniClause`).
+Diameter ventDiameterForDfu(double dfu, {double? servedDrainMm}) {
+  var mm = _lookup(_ventDfuTable, dfu);
+  if (servedDrainMm != null && servedDrainMm > 0) {
+    final half = servedDrainMm / 2.0;
+    final floor = _ventSeriesMm.firstWhere((v) => v >= half - 1e-9,
+        orElse: () => _ventSeriesMm.last);
+    if (floor > mm) mm = floor;
+  }
+  if (mm < kMinVentMm) mm = kMinVentMm;
+  return Diameter.mm(mm);
+}
 
 /// True when [dfu] exceeds the TOP row of the stack / branch DFU table, i.e.
 /// [drainDiameterForDfu] is returning the table's largest diameter as a CLAMP,
@@ -134,6 +164,40 @@ bool ventDfuExceedsTable(double dfu) => dfu > _ventDfuTable.last.$1;
 /// (DN75) for a closet drain. // VERIFY against SNI 8153 (Indonesian practice
 /// commonly lays DN100); listed in `SniProfile.verifyChecklist`.
 const double kMinWcDrainMm = 75.0;
+
+/// Round 9 (plumbing-rules-wc-count-on-dn75) — a 3 in (DN75) HORIZONTAL
+/// branch may carry at most this many water closets (IPC Table 710.1(2)
+/// footnote / UPC 703.2 footnote); a third WC raises it to [kWcRowDrainMm].
+/// // VERIFY (`notAnSniClause`, IPC 710.1 footnote).
+const int kMaxWcOnDn75Branch = 2;
+
+/// A 3 in (DN75) STACK may carry at most this many water closets (IPC Table
+/// 710.1(2) footnote). // VERIFY (`notAnSniClause`, IPC 710.1 footnote).
+const int kMaxWcOnDn75Stack = 6;
+
+/// The drain floor once the WC count exceeds the DN75 limits above (4 in).
+const double kWcRowDrainMm = 100.0;
+
+/// Minimum drain diameter (mm) for an edge carrying [wcCount] water closets:
+/// none ⇒ 0 (no floor), 1..limit ⇒ [kMinWcDrainMm] (DN75), above the DN75
+/// branch/stack limit ⇒ [kWcRowDrainMm] (DN100).
+double minDrainMmForWcCount(int wcCount, {required bool isStack}) {
+  if (wcCount <= 0) return 0;
+  final limit = isStack ? kMaxWcOnDn75Stack : kMaxWcOnDn75Branch;
+  return wcCount > limit ? kWcRowDrainMm : kMinWcDrainMm;
+}
+
+/// Round 9 (plumbing-rules-floor-drain-dn40-stack) — the trap/outlet of a
+/// floor drain, shower or urinal is 2 in (DN50) minimum (IPC Table 709.1 /
+/// 1002, standard floor-drain bodies) and a drain may never be smaller than
+/// the trap it serves, so every edge downstream of such a terminal is floored
+/// here. // VERIFY (`notAnSniClause`).
+const double kMinTrapDrainMm = 50.0;
+
+/// True for the fixtures whose trap imposes the [kMinTrapDrainMm] floor.
+bool isDn50TrapFixture(PlumbingFixture fixture) =>
+    fixture == PlumbingFixture.shower ||
+    fixture == PlumbingFixture.urinalFlushTank;
 
 /// True for the fixtures that impose the [kMinWcDrainMm] floor.
 bool isWaterCloset(PlumbingFixture fixture) =>

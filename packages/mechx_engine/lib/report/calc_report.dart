@@ -572,7 +572,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         if (sp != null)
           (
             strings.format(
-                RptStringKey.fireSprinklerKey, {'hazard': sp.hazard.name}),
+                RptStringKey.fireSprinklerKey, {'hazard': fireHazardLabel(sp.hazard, strings)}),
             strings.format(RptStringKey.fireSprinklerValue, {
               // The issued system demand is the remote-area demand at the
               // flow each head ACTUALLY discharges: when the head minimum
@@ -796,7 +796,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
           for (final f in d.fittings)
             [
               _service(f.service, strings),
-              f.type.name,
+              fittingTypeLabel(f.type, strings),
               // N18: air fittings quote Ø, piped fittings DN (no more DN-for-air).
               f.service.isAir ? 'Ø${f.diameterMm}' : 'DN${f.diameterMm}',
               '${f.count}'

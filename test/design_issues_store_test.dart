@@ -400,11 +400,13 @@ void main() {
       expect(lastNonInfo, lessThan(firstInfo));
     });
 
-    test('an over-long drainage branch surfaces as an info issue (locatable)',
-        () {
+    // Round 9 — judged as a TRAP ARM: the leaf terminal (default 2 DFU →
+    // branch table 1 < 2 ≤ 3 ⇒ DN50) drains 40 m to the outlet, past the IPC
+    // 909.1 DN50 limit of 2.4 m.
+    test('an over-long trap arm surfaces as an info issue (locatable)', () {
       final c = makeContainer();
       const sheetId = 'sd';
-      // Calibrate so 100 px → 40 m (> the 32 m developed-length limit).
+      // Calibrate so 100 px → 40 m (far past any per-DN trap-arm limit).
       c.read(projectControllerProvider.notifier).setCalibration(
             sheetId,
             const ScaleCalibration(0.4), // 0.4 m/px
@@ -424,8 +426,8 @@ void main() {
           );
 
       final issue = c.read(designIssuesProvider).firstWhere(
-            (i) => i.title == 'Drainage branch too long',
-            orElse: () => fail('expected a drainage developed-length issue'),
+            (i) => i.title == 'Trap arm too long',
+            orElse: () => fail('expected a trap-arm developed-length issue'),
           );
       expect(issue.severity, IssueSeverity.info);
       expect(issue.locate, isNotNull);

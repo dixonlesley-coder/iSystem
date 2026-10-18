@@ -19,6 +19,11 @@
 /// report literal becomes translatable.
 library;
 
+import '../electrical/load_kind.dart';
+import '../electrical/power_oneline.dart';
+import '../sizing/bom.dart' show FittingType;
+import '../sizing/fire_sprinkler.dart' show FireHazardClass;
+
 /// The two languages the reports render in. Engine-local (the app maps its own
 /// `AppLocale` onto this at the boundary when it wires the locale through).
 enum ReportLocale { en, id }
@@ -296,6 +301,59 @@ enum RptStringKey {
   earthTailRcd,
   earthTailOcpd,
   stormRainfallValue, // {mm}
+
+  // ── Round 9 — PDF chrome, doc titles, enum labels, app-supplied cells ──────
+  pdfPreparedBy,
+  pdfCheckedBy,
+  pdfApprovedBy,
+  pdfPageOf,
+  docCalcReport,
+  docMepReport,
+  docEquipSchedule,
+  headingDrawings,
+  capMechRiser,
+  capElecSld,
+  untitledProject,
+  feedUpfeed,
+  feedDownfeed,
+  esSvcDomesticWater,
+  esSvcFireStandpipe,
+  esSvcMechVent,
+  esSvcExhaustVent,
+  warnLeadIn,
+  lkGeneral,
+  lkLighting,
+  lkSocket,
+  lkHeating,
+  lkHvac,
+  lkMotor,
+  lkPump,
+  lkEvCharger,
+  lkWelding,
+  lkCapacitor,
+  lkUps,
+  lkSpare,
+  lkFeeder,
+  pnUtility,
+  pnGenerator,
+  pnAts,
+  pnPv,
+  pnPvInverter,
+  pnBattery,
+  pnBatteryInverter,
+  pnHybridInverter,
+  pnBus,
+  pnMainPanel,
+  ilMechanical,
+  ilElectrical,
+  hazLight,
+  hazOh1,
+  hazOh2,
+  hazExtra,
+  fitElbow,
+  fitTee,
+  fitCross,
+  fitReducer,
 }
 
 /// English — the source language. Every value MUST match the inline literal it
@@ -465,7 +523,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.tblFitting: 'Fitting',
   RptStringKey.tblCount: 'Count',
   RptStringKey.headingRunSchedule: 'Run / riser schedule',
-  RptStringKey.tblFixtureUnits: 'FU',
+  RptStringKey.tblFixtureUnits: 'UBAP/DFU',
   RptStringKey.tblFlowLps: 'Flow (L/s)',
   RptStringKey.tblVelocityMs: 'Vel (m/s)',
   RptStringKey.runScheduleStackRaised:
@@ -613,6 +671,57 @@ const Map<RptStringKey, String> kReportStringsEn = {
       ' Overcurrent devices clear earth faults; RCDs are still required for '
           'socket-outlets and special locations.',
   RptStringKey.stormRainfallValue: '**{mm} mm/hr**',
+  RptStringKey.pdfPreparedBy: 'Prepared by',
+  RptStringKey.pdfCheckedBy: 'Checked by',
+  RptStringKey.pdfApprovedBy: 'Approved by',
+  RptStringKey.pdfPageOf: 'Page {x} of {y}',
+  RptStringKey.docCalcReport: 'MEP Calculation Report',
+  RptStringKey.docMepReport: 'MEP Building-Services Report',
+  RptStringKey.docEquipSchedule: 'Equipment Schedule',
+  RptStringKey.headingDrawings: 'Drawings',
+  RptStringKey.capMechRiser: 'Mechanical riser single-line diagram',
+  RptStringKey.capElecSld: 'Electrical single-line diagram',
+  RptStringKey.untitledProject: 'Untitled project',
+  RptStringKey.feedUpfeed: 'Upfeed pump',
+  RptStringKey.feedDownfeed: 'Roof-tank downfeed',
+  RptStringKey.esSvcDomesticWater: 'Domestic water supply',
+  RptStringKey.esSvcFireStandpipe: 'Fire standpipe pump',
+  RptStringKey.esSvcMechVent: 'Mechanical ventilation',
+  RptStringKey.esSvcExhaustVent: 'Exhaust ventilation',
+  RptStringKey.warnLeadIn: '[{code}] ',
+  RptStringKey.lkGeneral: 'general',
+  RptStringKey.lkLighting: 'lighting',
+  RptStringKey.lkSocket: 'socket',
+  RptStringKey.lkHeating: 'heating',
+  RptStringKey.lkHvac: 'HVAC',
+  RptStringKey.lkMotor: 'motor',
+  RptStringKey.lkPump: 'pump',
+  RptStringKey.lkEvCharger: 'EV charger',
+  RptStringKey.lkWelding: 'welding',
+  RptStringKey.lkCapacitor: 'capacitor',
+  RptStringKey.lkUps: 'UPS',
+  RptStringKey.lkSpare: 'spare',
+  RptStringKey.lkFeeder: 'feeder',
+  RptStringKey.pnUtility: 'utility',
+  RptStringKey.pnGenerator: 'generator',
+  RptStringKey.pnAts: 'ATS',
+  RptStringKey.pnPv: 'PV array',
+  RptStringKey.pnPvInverter: 'PV inverter',
+  RptStringKey.pnBattery: 'battery',
+  RptStringKey.pnBatteryInverter: 'battery inverter',
+  RptStringKey.pnHybridInverter: 'hybrid inverter',
+  RptStringKey.pnBus: 'bus',
+  RptStringKey.pnMainPanel: 'main panel',
+  RptStringKey.ilMechanical: 'mechanical',
+  RptStringKey.ilElectrical: 'electrical',
+  RptStringKey.hazLight: 'LH light hazard',
+  RptStringKey.hazOh1: 'OH1 ordinary hazard group 1',
+  RptStringKey.hazOh2: 'OH2 ordinary hazard group 2',
+  RptStringKey.hazExtra: 'EH extra hazard',
+  RptStringKey.fitElbow: 'elbow',
+  RptStringKey.fitTee: 'tee',
+  RptStringKey.fitCross: 'cross',
+  RptStringKey.fitReducer: 'reducer',
 };
 
 /// Bahasa Indonesia — natural consulting-report phrasing, reusing the
@@ -779,7 +888,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.tblFitting: 'Sambungan',
   RptStringKey.tblCount: 'Jumlah',
   RptStringKey.headingRunSchedule: 'Jadwal saluran / riser',
-  RptStringKey.tblFixtureUnits: 'UBAP',
+  RptStringKey.tblFixtureUnits: 'UBAP/DFU',
   RptStringKey.tblFlowLps: 'Aliran (L/s)',
   RptStringKey.tblVelocityMs: 'Kecepatan (m/s)',
   RptStringKey.runScheduleStackRaised:
@@ -794,11 +903,11 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.svcColdWater: 'Air dingin',
   RptStringKey.svcHotWater: 'Air panas',
   RptStringKey.svcDrainage: 'Drainase',
-  RptStringKey.svcVent: 'Vent',
+  RptStringKey.svcVent: 'Ven',
   RptStringKey.svcRainwater: 'Air hujan',
   RptStringKey.svcSupplyAir: 'Udara suplai',
   RptStringKey.svcReturnAir: 'Udara balik',
-  RptStringKey.svcExhaust: 'Exhaust',
+  RptStringKey.svcExhaust: 'Udara buang',
   RptStringKey.svcSprinkler: 'Sprinkler',
   RptStringKey.svcHydrant: 'Hidran',
 
@@ -929,6 +1038,57 @@ const Map<RptStringKey, String> kReportStringsId = {
       ' Gawai arus lebih memutus gangguan tanah; RCD tetap diperlukan untuk '
           'kotak-kontak dan lokasi khusus.',
   RptStringKey.stormRainfallValue: '**{mm} mm/jam**',
+  RptStringKey.pdfPreparedBy: 'Disiapkan oleh',
+  RptStringKey.pdfCheckedBy: 'Diperiksa oleh',
+  RptStringKey.pdfApprovedBy: 'Disetujui oleh',
+  RptStringKey.pdfPageOf: 'Halaman {x} dari {y}',
+  RptStringKey.docCalcReport: 'Laporan Perhitungan MEP',
+  RptStringKey.docMepReport: 'Laporan Utilitas Bangunan MEP',
+  RptStringKey.docEquipSchedule: 'Jadwal Peralatan',
+  RptStringKey.headingDrawings: 'Gambar',
+  RptStringKey.capMechRiser: 'Diagram satu garis riser mekanikal',
+  RptStringKey.capElecSld: 'Diagram satu garis kelistrikan',
+  RptStringKey.untitledProject: 'Proyek tanpa judul',
+  RptStringKey.feedUpfeed: 'Pompa upfeed',
+  RptStringKey.feedDownfeed: 'Downfeed tangki atap',
+  RptStringKey.esSvcDomesticWater: 'Suplai air bersih',
+  RptStringKey.esSvcFireStandpipe: 'Pompa hidran kebakaran',
+  RptStringKey.esSvcMechVent: 'Ventilasi mekanis',
+  RptStringKey.esSvcExhaustVent: 'Ventilasi udara buang',
+  RptStringKey.warnLeadIn: '[{code}] (pesan dalam bahasa Inggris) ',
+  RptStringKey.lkGeneral: 'umum',
+  RptStringKey.lkLighting: 'penerangan',
+  RptStringKey.lkSocket: 'kotak-kontak',
+  RptStringKey.lkHeating: 'pemanas',
+  RptStringKey.lkHvac: 'tata udara',
+  RptStringKey.lkMotor: 'motor',
+  RptStringKey.lkPump: 'pompa',
+  RptStringKey.lkEvCharger: 'pengisi daya EV',
+  RptStringKey.lkWelding: 'las',
+  RptStringKey.lkCapacitor: 'kapasitor',
+  RptStringKey.lkUps: 'UPS',
+  RptStringKey.lkSpare: 'cadangan',
+  RptStringKey.lkFeeder: 'pengumpan',
+  RptStringKey.pnUtility: 'utilitas',
+  RptStringKey.pnGenerator: 'genset',
+  RptStringKey.pnAts: 'ATS',
+  RptStringKey.pnPv: 'larik PV',
+  RptStringKey.pnPvInverter: 'inverter PV',
+  RptStringKey.pnBattery: 'baterai',
+  RptStringKey.pnBatteryInverter: 'inverter baterai',
+  RptStringKey.pnHybridInverter: 'inverter hibrida',
+  RptStringKey.pnBus: 'bus',
+  RptStringKey.pnMainPanel: 'panel utama',
+  RptStringKey.ilMechanical: 'mekanis',
+  RptStringKey.ilElectrical: 'elektrik',
+  RptStringKey.hazLight: 'Bahaya Kebakaran Ringan',
+  RptStringKey.hazOh1: 'Bahaya Kebakaran Sedang Kelompok I',
+  RptStringKey.hazOh2: 'Bahaya Kebakaran Sedang Kelompok II',
+  RptStringKey.hazExtra: 'Bahaya Kebakaran Berat',
+  RptStringKey.fitElbow: 'belokan',
+  RptStringKey.fitTee: 'tee',
+  RptStringKey.fitCross: 'silang',
+  RptStringKey.fitReducer: 'reduser',
 };
 
 /// Resolves a [RptStringKey] against a [ReportLocale], mirroring the app's
@@ -960,3 +1120,61 @@ class ReportStrings {
     return out;
   }
 }
+
+// ── Round 9 (report-parity-enum-names-leak) — localized enum labels ─────────
+// Raw Dart identifiers (`evCharger`, `ordinaryHazard1`…) used to print in
+// issued report bodies in BOTH locales. Each enum maps to a report string.
+
+/// Localized label for a [LoadKind] (the electrical way table's 'Type' cell).
+String loadKindLabel(LoadKind k, ReportStrings s) => s(switch (k) {
+      LoadKind.general => RptStringKey.lkGeneral,
+      LoadKind.lighting => RptStringKey.lkLighting,
+      LoadKind.socket => RptStringKey.lkSocket,
+      LoadKind.heating => RptStringKey.lkHeating,
+      LoadKind.hvac => RptStringKey.lkHvac,
+      LoadKind.motor => RptStringKey.lkMotor,
+      LoadKind.pump => RptStringKey.lkPump,
+      LoadKind.evCharger => RptStringKey.lkEvCharger,
+      LoadKind.welding => RptStringKey.lkWelding,
+      LoadKind.capacitor => RptStringKey.lkCapacitor,
+      LoadKind.ups => RptStringKey.lkUps,
+      LoadKind.spare => RptStringKey.lkSpare,
+      LoadKind.feeder => RptStringKey.lkFeeder,
+    });
+
+/// Localized label for a power one-line [PowerNodeKind].
+String powerNodeKindLabel(PowerNodeKind k, ReportStrings s) => s(switch (k) {
+      PowerNodeKind.utility => RptStringKey.pnUtility,
+      PowerNodeKind.generator => RptStringKey.pnGenerator,
+      PowerNodeKind.ats => RptStringKey.pnAts,
+      PowerNodeKind.pv => RptStringKey.pnPv,
+      PowerNodeKind.pvInverter => RptStringKey.pnPvInverter,
+      PowerNodeKind.battery => RptStringKey.pnBattery,
+      PowerNodeKind.batteryInverter => RptStringKey.pnBatteryInverter,
+      PowerNodeKind.hybridInverter => RptStringKey.pnHybridInverter,
+      PowerNodeKind.bus => RptStringKey.pnBus,
+      PowerNodeKind.mainPanel => RptStringKey.pnMainPanel,
+    });
+
+/// Localized label for a [PowerInterlockKind].
+String interlockKindLabel(PowerInterlockKind k, ReportStrings s) =>
+    s(switch (k) {
+      PowerInterlockKind.mechanical => RptStringKey.ilMechanical,
+      PowerInterlockKind.electrical => RptStringKey.ilElectrical,
+    });
+
+/// Localized label for a sprinkler [FireHazardClass] (SNI terms in ID).
+String fireHazardLabel(FireHazardClass h, ReportStrings s) => s(switch (h) {
+      FireHazardClass.lightHazard => RptStringKey.hazLight,
+      FireHazardClass.ordinaryHazard1 => RptStringKey.hazOh1,
+      FireHazardClass.ordinaryHazard2 => RptStringKey.hazOh2,
+      FireHazardClass.extraHazard => RptStringKey.hazExtra,
+    });
+
+/// Localized label for a BOM [FittingType].
+String fittingTypeLabel(FittingType t, ReportStrings s) => s(switch (t) {
+      FittingType.elbow => RptStringKey.fitElbow,
+      FittingType.tee => RptStringKey.fitTee,
+      FittingType.cross => RptStringKey.fitCross,
+      FittingType.reducer => RptStringKey.fitReducer,
+    });

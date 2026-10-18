@@ -52,9 +52,21 @@ const Map<ServiceType, double> kDefaultLeafFixtureUnits = {
 /// Each edge is routed to the correct §7 path and sized for its accumulated
 /// (per-branch) demand: water supply via accumulated fixture units → Hunter
 /// curve; other services via accumulated flows.
-final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
+final sizingProvider = Provider<Map<String, EdgeSizing>>(
+    (ref) => ref.watch(sizingDetailProvider).sizing);
+
+/// Round 9 (report-parity-run-schedule-fu-blank) — the accumulated fixture
+/// units (UBAP for water supply, DFU for drainage/vent) per TREE edge, recorded
+/// by the SAME [autoSizeNetwork] call that sized it (`fixtureUnitsOut`), so the
+/// calc report's run schedule prints the basis that drove each size.
+final edgeFixtureUnitsProvider = Provider<Map<String, double>>(
+    (ref) => ref.watch(sizingDetailProvider).fixtureUnits);
+
+/// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
+final sizingDetailProvider = Provider<
+    ({Map<String, EdgeSizing> sizing, Map<String, double> fixtureUnits})>((ref) {
   final net = ref.watch(sizingNetworkProvider);
-  if (net.edges.isEmpty) return const {};
+  if (net.edges.isEmpty) return (sizing: const {}, fixtureUnits: const {});
   final occupancy = ref.watch(occupancyProvider);
   final ducts = ref.watch(ductSettingsProvider);
   final project = ref.watch(projectControllerProvider);
@@ -140,7 +152,8 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       if (e.sizeOverride != null) e.id: e.sizeOverride!,
   };
 
-  return autoSizeNetwork(
+  final fixtureUnits = <String, double>{};
+  final sizing = autoSizeNetwork(
     net,
     // M13 — the laid drainage slope is a real design input now
     // (drainageSlopeProvider), not the dark const default: it sets the Manning
@@ -176,40 +189,56 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       for (final n in net.nodes)
         if (customFor(n)?.isWaterCloset ?? false) n.id,
     },
+    fixtureUnitsOut: fixtureUnits,
   );
+  return (sizing: sizing, fixtureUnits: fixtureUnits);
 });
 
 /// Advisory checks over the drawn DRAINAGE branches — a read-only judge layer
 /// (`drainage_advisory.dart`) that NEVER resizes. For each horizontal drainage
-/// run it flags a too-flat laid SLOPE (below the self-cleansing minimum) and an
-/// over-long developed length (trap-arm / self-siphonage risk), using the §10
-/// geometry length. Risers (vertical stacks) and vents are skipped — the slope
-/// rule is a horizontal-branch concern. All thresholds are `// VERIFY`.
+/// run it flags a laid SLOPE below the per-DN self-cleansing minimum (judged
+/// against the run's SIZED diameter), and for each fixture it walks the TRAP
+/// ARM — summing every drawn segment to the first vented point (vent / stack /
+/// root), so a branch split by the auto-elbow / tee-in tools is judged as one
+/// developed length — against the per-DN trap-arm limit (Round 9). Risers
+/// (vertical stacks) and vents are skipped. All thresholds are `// VERIFY`.
 ///
 /// Empty when there's no drainage network, so a project without drainage is
 /// byte-identical (no issues surfaced).
 final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
+  final sizing = ref.watch(sizingProvider);
   // M13 — the laid design slope the SIZER used (drainageSlopeProvider), so the
   // advisory judges the project's real gradient instead of a const that could
   // never trip its own threshold. // VERIFY the min-slope threshold itself.
   final slope = ref.watch(drainageSlopeProvider); // m/m // VERIFY
+  double lengthOf(NetEdge e) => edgeLength(
+        e,
+        net,
+        calibrationBySheet: project.calibrations,
+        building: project.building,
+        mounting: project.mounting,
+      ).meters;
   final out = <DrainageAdvisory>[];
   for (final e in net.edges) {
     if (e.service != ServiceType.drainage) continue;
     if (e.kind == EdgeKind.riser) continue; // slope is a horizontal-branch rule
-    final lenM = edgeLength(
-      e,
-      net,
-      calibrationBySheet: project.calibrations,
-      building: project.building,
-      mounting: project.mounting,
-    ).meters;
     out.addAll(drainageAdvisories(
       edgeId: e.id,
       slope: slope,
-      developedLengthM: lenM > 0 ? lenM : null,
+      diameterMm: sizing[e.id]?.diameter.inMillimeters,
+    ));
+  }
+  for (final arm in trapArmRuns(net: net, sizing: sizing, lengthOf: lengthOf)) {
+    final d = sizing[arm.firstEdgeId]?.diameter.inMillimeters;
+    if (d == null || arm.developedLengthM <= 0) continue;
+    out.addAll(drainageAdvisories(
+      edgeId: arm.firstEdgeId,
+      // Slope already judged per edge above — pass 0 so only the trap arm runs.
+      slope: 0,
+      developedLengthM: arm.developedLengthM,
+      diameterMm: d,
     ));
   }
   return out;

@@ -901,11 +901,12 @@ void main() {
           size(ServiceType.drainage, EdgeKind.run, 600).overCapacity, isFalse);
     });
 
-    test('vent: 700 DFU > 600 top row ⇒ DN100 flagged; 500 not', () {
-      final over = size(ServiceType.vent, EdgeKind.run, 700);
-      expect(over.diameter.inMillimeters, closeTo(100, 1e-9));
+    // Round 9 — the vent table is UPC 703.2 (top row 1380 DFU → DN150).
+    test('vent: 1500 DFU > 1380 top row ⇒ DN150 flagged; 1000 not', () {
+      final over = size(ServiceType.vent, EdgeKind.run, 1500);
+      expect(over.diameter.inMillimeters, closeTo(150, 1e-9));
       expect(over.overCapacity, isTrue);
-      expect(size(ServiceType.vent, EdgeKind.run, 500).overCapacity, isFalse);
+      expect(size(ServiceType.vent, EdgeKind.run, 1000).overCapacity, isFalse);
     });
 
     test('pure predicates', () {
@@ -913,8 +914,8 @@ void main() {
       expect(drain.drainDfuExceedsTable(960.5, isStack: true), isTrue);
       expect(drain.drainDfuExceedsTable(620, isStack: false), isFalse);
       expect(drain.drainDfuExceedsTable(621, isStack: false), isTrue);
-      expect(drain.ventDfuExceedsTable(600), isFalse);
-      expect(drain.ventDfuExceedsTable(601), isTrue);
+      expect(drain.ventDfuExceedsTable(1380), isFalse);
+      expect(drain.ventDfuExceedsTable(1381), isTrue);
     });
   });
 
@@ -1090,7 +1091,9 @@ void main() {
       expect(sized['stack']!.diameter.inMillimeters, closeTo(40, 1e-9));
     });
 
-    test('a vent serving a WC keeps its own DFU table (4 DFU → DN32)', () {
+    // Round 9 — UPC 703.2 puts 4 DFU in the DN40 row, and the vent is never
+    // below ½ the DN75 WC drain it serves (37.5 mm ⇒ DN40).
+    test('a vent serving a WC sizes DN40 (UPC row + half-drain floor)', () {
       final net = Network(
         nodes: const [
           NetNode(id: 'v0', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
@@ -1111,7 +1114,7 @@ void main() {
         leafDemand: const {ServiceType.vent: FlowRate(0)},
         nodeDrainageUnits: const {'fx': 4.0},
       );
-      expect(sized['v']!.diameter.inMillimeters, closeTo(32, 1e-9));
+      expect(sized['v']!.diameter.inMillimeters, closeTo(40, 1e-9));
     });
   });
 }

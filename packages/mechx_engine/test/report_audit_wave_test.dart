@@ -79,8 +79,11 @@ void main() {
           withAll([...base.result.warnings, ...faultFindings]));
       expect(md, contains('## Warnings'));
       // The error-severity fault finding the issued report used to omit.
-      expect(md, contains('_ERROR_: MDP incomer Icu 10 kA'));
-      expect(md, contains('_WARN_: Feeder SP-1 may not discriminate'));
+      // Round 9 — each warning line names its code after the severity tag.
+      expect(md,
+          contains('_ERROR_: [breaking-capacity-inadequate] MDP incomer Icu 10 kA'));
+      expect(md,
+          contains('_WARN_: [non-selective] Feeder SP-1 may not discriminate'));
       // Every core warning still prints.
       for (final w in base.result.warnings) {
         expect(md, contains(w.message));

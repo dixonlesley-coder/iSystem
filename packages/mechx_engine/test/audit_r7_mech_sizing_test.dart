@@ -524,8 +524,9 @@ void main() {
         drain.ventDiameterForDfu(72).inMillimeters);
     expect(sized['vtr']!.diameter.inMillimeters,
         drain.ventDiameterForDfu(96).inMillimeters);
-    // The engine's own vent table puts 96 DFU in the DN75 row (not DN32).
-    expect(drain.ventDiameterForDfu(96).inMillimeters, 75);
+    // Round 9 — UPC 703.2 puts 96 DFU (84 < 96 ≤ 256) in the DN100 row; the
+    // half-drain floor (96 DFU stack → DN100 ⇒ ½ = 50) does not bind.
+    expect(drain.ventDiameterForDfu(96).inMillimeters, 100);
     // The edge order does not move the vent root off the VTR.
     final shuffled = autoSizeNetwork(
       Network(nodes: nodes, edges: _shuffled(edges, 3)),
@@ -533,7 +534,7 @@ void main() {
       leafDemand: const {},
       nodeDrainageUnits: dfu,
     );
-    expect(shuffled['vtr']!.diameter.inMillimeters, 75);
+    expect(shuffled['vtr']!.diameter.inMillimeters, 100);
   });
 
   test('mech-building-6 — a dual-supply fixture loads 3/4 of its UBAP each',
