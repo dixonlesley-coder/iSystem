@@ -434,8 +434,10 @@ void main() {
       final proj = project(forced: ApparentPower.kilovoltAmperes(100));
       final sys = computeSystem(p, proj);
       final study = computeAdvancedStudy(p, proj, sys);
+      // 100 kVA < the 120 kVA essential VA (cos φ 1 heater), AND — Round 17,
+      // the engine's kW limit — 0.8 × 100 = 80 kW < the 120 kW essential W.
       expect(study.warnings.map((w) => w.code),
-          ['genset-below-essential-demand']);
+          ['genset-below-essential-demand', 'genset-below-essential-power']);
     });
   });
 

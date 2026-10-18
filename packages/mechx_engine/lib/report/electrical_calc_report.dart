@@ -390,7 +390,11 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
             [
               _md(c.name),
               loadKindLabel(c.loadKind, strings),
-              _a(c.designCurrent.amperes),
+              // Round 17 — the RUN current the way's In / Iz / printed Vd are
+              // sized on (undiversified for a final way), so a reviewer's
+              // Ib -> Vd and Ib <= In <= Iz recompute closes; the diversified
+              // figure stays in the phase balance / demand roll-up.
+              _a(c.runCurrentA.amperes),
               c.phase.label,
               // An MCCB has no B/C/D trip characteristic — print the curve
               // letter for MCBs only (as the board schedule + legend do, N12).

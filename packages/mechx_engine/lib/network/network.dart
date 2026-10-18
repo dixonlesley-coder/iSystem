@@ -489,8 +489,9 @@ class NetNode {
 ///         lift out of the pump head — audit 2026-10 water-drainage-1);
 ///       – ceiling-hung air plant ([NodeComponent.fcu], the AC indoor units)
 ///         → the ceiling of its own floor (where the unit and its ducts hang);
-///       – no / any other component → roof level (legacy default, so an
-///         untyped `NodeRole.plant` node is unchanged).
+///       – no component → its own floor surface below the top storey, the
+///         roof on the top storey (Round 17 — see the inline note);
+///       – any other component → roof level (legacy default).
 ///     Override via [NetNode.elevation] for a tank on a stand, a basement pump
 ///     on a plinth, or a rooftop fan.
 Length nodeElevation(
@@ -525,8 +526,25 @@ Length nodeElevation(
         case NodeComponent.acSplitWall:
         case NodeComponent.acDucted:
           return building.ceilingElevationOf(node.floorIndex, mounting);
+        case null:
+          // Round 17 (report-recompute-2-component-less-source-at-roof-on-
+          // upfeed) — an UNTYPED plant (the inspector's 'Source / tank') sits
+          // on its OWN floor when drawn below the top storey: a ground-floor
+          // source / heater placed at the roof dropped the whole building
+          // height out of the upfeed pump head (24.8 m printed for a 45.0 m
+          // lift on 6 × 3.5 m) and added a phantom vertical to every length
+          // consumer (HW recirc loop, BOM). On the TOP storey (and so in a
+          // one-level building) it keeps the legacy roof datum — the roof
+          // source a gravity downfeed hangs from.
+          // VERIFY — notAnSniClause (a modelling default; type the plant or set
+          // its elevation for the real datum).
+          final top = building.levelCount - 1;
+          if (building.levelCount > 0 && node.floorIndex < top) {
+            return building.elevationOf(node.floorIndex);
+          }
+          return building.roofElevation;
         default:
-          // roofTank, and a plant with no (or a non-plant) component.
+          // roofTank, and a plant with a non-plant component.
           return building.roofElevation;
       }
   }

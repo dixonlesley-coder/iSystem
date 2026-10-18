@@ -20,10 +20,20 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/units.dart';
 
-ProviderContainer _sprinklerNet({List<Override> overrides = const []}) {
+ProviderContainer _sprinklerNet(
+    {List<Override> overrides = const [], bool withHydrant = false}) {
   final c = ProviderContainer(overrides: overrides);
-  c.read(networkControllerProvider.notifier).loadNetwork(const Network(nodes: [
-        NetNode(
+  c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+        if (withHydrant)
+          const NetNode(
+              id: 'hb',
+              sheetId: 's1',
+              x: 0,
+              y: 200,
+              floorIndex: 0,
+              role: NodeRole.fixture,
+              component: NodeComponent.hydrantBox),
+        const NetNode(
             id: 'fp',
             sheetId: 's1',
             x: 0,
@@ -31,7 +41,7 @@ ProviderContainer _sprinklerNet({List<Override> overrides = const []}) {
             floorIndex: 0,
             role: NodeRole.plant,
             component: NodeComponent.pump),
-        NetNode(
+        const NetNode(
             id: 'sh',
             sheetId: 's1',
             x: 200,
@@ -40,7 +50,11 @@ ProviderContainer _sprinklerNet({List<Override> overrides = const []}) {
             role: NodeRole.fixture,
             component: NodeComponent.sprinklerHead),
       ], edges: [
-        NetEdge(id: 's', fromId: 'fp', toId: 'sh', service: ServiceType.fireSprinkler),
+        const NetEdge(
+            id: 's', fromId: 'fp', toId: 'sh', service: ServiceType.fireSprinkler),
+        if (withHydrant)
+          const NetEdge(
+              id: 'h', fromId: 'fp', toId: 'hb', service: ServiceType.fireHydrant),
       ]));
   return c;
 }
@@ -48,7 +62,9 @@ ProviderContainer _sprinklerNet({List<Override> overrides = const []}) {
 void main() {
   test('fire-hvac-3: Extra Hazard demand > the standpipe pump flow ⇒ warning',
       () {
-    final c = _sprinklerNet();
+    // Round 17 — the pump is STANDPIPE-rated only when a hydrant is drawn too
+    // (a sprinkler-only network now rates its pump on the sprinkler demand).
+    final c = _sprinklerNet(withHydrant: true);
     addTearDown(c.dispose);
     c.read(fireHazardProvider.notifier).set(FireHazardClass.extraHazard);
     final remote = c.read(sprinklerRemoteAreaProvider);
@@ -62,6 +78,24 @@ void main() {
     final issues = c.read(designIssuesProvider);
     expect(issues.any((i) => i.kind == 'sprinkler-flow-exceeds-fire-pump'),
         isTrue);
+  });
+
+  test('Round 17: sprinkler-only ⇒ the pump is rated on the sprinkler demand',
+      () {
+    final c = _sprinklerNet();
+    addTearDown(c.dispose);
+    c.read(fireHazardProvider.notifier).set(FireHazardClass.extraHazard);
+    final remote = c.read(sprinklerRemoteAreaProvider);
+    final pump = c.read(firePumpDutyProvider)!;
+    // Rated flow = the remote-area demand (not the 31.5 L/s standpipe).
+    expect(pump.flow.inLitersPerSecond,
+        closeTo(remote.remoteAreaDemand.inLitersPerSecond, 1e-9));
+    // Head = lift to the top ceiling + branch base pressure + 15 m allowance,
+    // so the lower-bound coverage check is met by construction.
+    final chk = c.read(sprinklerPumpCheckProvider)!;
+    expect(chk.flowShort, isFalse);
+    expect(chk.headShort, isFalse);
+    expect(pump.head.meters, closeTo(chk.requiredHeadM + 15, 1e-9));
   });
 
   test('fire-hvac-3: OH1 sits under the pump flow ⇒ no flow warning', () {

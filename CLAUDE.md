@@ -1357,8 +1357,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   branch, never drops a label); an uncollided label keeps its exact legacy anchor ⇒ goldens
   byte-identical; sheet bounds widen only when displacement happened. (2) **service-size-derived
   device kA** — pure `estimatedServiceFaultLevelA(project)` in `electrical/fault.dart`: a declared
-  `transformerKva` gives the transformer-impedance-limited LV fault (`Isc = S/(√3·400·0.05 pu)`,
-  capped 50 kA, `// VERIFY`), a declared `supplyCapacityVa` gives conservative service-entrance
+  `transformerKva` gives the transformer-impedance-limited LV fault (`Isc = S/(√3·400·0.04 pu)`,
+  UNCLAMPED since Round 17 — above 50 kA the advanced study raises `service-fault-estimate-high`
+  instead of lowering the figure, `// VERIFY`), a declared `supplyCapacityVa` gives conservative service-entrance
   rungs (≤16.5 kVA → 6 kA, ≤197 kVA → 10 kA, above → 16 kA, all `// VERIFY`), nothing declared →
   null (caller keeps the flat 16 kA ⇒ untouched projects byte-identical). Wired as the middle
   tier of the Fold-1 fallback chain (explicit `originFaultLevelA` → estimate → 16 kA) in
@@ -1567,13 +1568,39 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 - **Plant elevation is role- AND component-aware (`network.dart` `nodeElevation`)**:
   an explicit `elevation` / `mountHeight` wins; otherwise pump / groundTank /
   boosterSet / AHU / supply+exhaust fan sit on their OWN floor surface, FCU and the
-  AC units at their floor's ceiling, and only a roofTank (or a component-less
-  plant) at `roofElevation`. Upfeed static lift therefore includes the building
+  AC units at their floor's ceiling, and only a roofTank at `roofElevation`; an
+  UNTYPED plant ('Source / tank') sits on its own floor surface below the top
+  storey and at the roof only on the top storey (Round 17 — an L0 upfeed source
+  at the roof dropped the building height out of the pump head). Upfeed static lift therefore includes the building
   height (audit 2026-10 wd-1 — it was ~70 % low). Plan `CL` labels render this
   same elevation (`planSettingOutElevation`); only a roof-parked plant falls back
   to its floor ceiling so no label exceeds the storey. Both pressure solves pick
   the critical node from DELIVERY nodes (fixtures → open leaves → all) and every
   length consumer threads the project `MountingHeights` (printed == solved).
+- **Round 17 invariants (protection, air intakes, riser drafting, fire basis)**:
+  the MAXIMUM (Icu / withstand) prospective fault decays through feeder R at
+  20 °C (`coldMaxFaultImpedance` = the 70 °C table × (β+20)/(β+70), IEC 60909-0)
+  in BOTH `faultStudy` and the Fold-1 decay — the ADS earth-fault loop alone
+  keeps 70 °C × `zsFaultTempFactor`; never feed the 70 °C table into an Icu
+  decay. A safety quantity is never clamped DOWN: the service-size fault
+  estimate is unclamped and flagged above `maxEstimatedServiceFaultKa`. The
+  earth-electrode array is BS 7430 in-line (`η = 1/(1 + λ(n)·α)`, never a fixed
+  η table). A FORCED genset is judged on kVA AND on kW = 0.8 × kVA
+  (`genset-below-essential-power`). The air INTAKE walk passes through degree-2
+  inline dampers to the bare leaf, and a bare leaf that is the intake of a
+  demand-free terminal air unit never roots (the unit does). The riser FUNCTION
+  suffix (GRAVITASI / BOOSTER / TRANSFER) is cold / hot water ONLY; every RUN
+  sits on its own service lane (`riserEdgeLaneOffsets`, export + canvas); the
+  feed note follows drawn equipment (`riserFeedNote`, never 'gravity downfeed'
+  without a roof tank); pump-set captions are one per domestic mover
+  (`plantMoverCaptions`, TRANSFER for a transfer pump). A downfeed PRV holds
+  `defaultPrvSetpoint` (target + 30 kPa, `// VERIFY`) in the drawn-PRV solve,
+  the zone sizing AND the zone table — one figure. Each calc-report fire
+  section is gated on ITS drawn system, and the fire pump is rated on the
+  governing DRAWN system (`fireRatedPointProvider`: sprinkler-only ⇒ the
+  remote-area demand at lift + branch pressure + 15 m). The calc report lists
+  every scheduled supply mover (`CalcReportData.supplyPumps`); the electrical
+  report's Ib is the way's RUN current (`ElectricalCircuitResult.runCurrentA`).
 - **Drain / vent code floors (Round 9, `drainage_sizing.dart` + `_sizeSanitaryEdge`)**: the vent table is UPC 703.2 (DN32 ≤ 1, DN40 ≤ 8, DN50 ≤ 24, DN65 ≤ 48, DN75 ≤ 84, DN100 ≤ 256, DN125 ≤ 600, DN150 ≤ 1380 DFU) and a vent is never below ½ the drain its load requires (`ventDiameterForDfu(servedDrainMm:)`); a drain carrying > 2 WCs on a run / > 6 on a riser floors at DN100 (`minDrainMmForWcCount`, the WC count accumulated down the tree), 1–2 at DN75; a drain downstream of a floor drain / shower / urinal floors at DN50 (`kMinTrapDrainMm`). All `// VERIFY notAnSniClause` in the checklist. The drainage advisories are per DN: min slope ≤ DN65 2 % / DN75–150 1 % / ≥ DN200 0.5 % (`minSelfCleansingSlopeFor`), and the length check is a TRAP-ARM walk (`trapArmRuns`, fixture → first vent/stack/root, summed over segments) against IPC 909.1 (`maxTrapArmLengthM`) — never one drawn segment against a flat limit. A zero-flow AIR edge is left unsized (`sizeNetwork`); the sizer records each tree edge's UBAP/DFU via `fixtureUnitsOut` (→ `edgeFixtureUnitsProvider`, the run schedule's basis column).
 - **Floor-stack edits keep sheets with their work (Round 9, `project_store.dart`)**: a growing stack pins every sheet whose clamped floor would move (`_pinSheetFloors`); a shrinking `setFloors` drops the top floors exactly like `removeFloor` (work deleted, never clamped onto the new top) and callers confirm with `elementsAboveFloor`. A pasted riser keeps its floor span (clamped; a riser clamped onto one floor is dropped). A dragged / trimmed PLAIN run end never joins another service's run (E1). The MEP sync refresh re-derives `loadPos`, `lifeSafety` and a still-minted cable family (`_refreshedMepWay`); copies / moves off the MEP board are user-owned (no `sourceEquipmentId`).
 - **Source-root ladder + parallel legs (`network_sizing.dart`, Round 14)**: on

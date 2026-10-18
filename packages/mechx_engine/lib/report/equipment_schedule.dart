@@ -232,6 +232,12 @@ class EquipmentScheduleData {
 
 String _fmt(double v, {int dp = 1}) => v.toStringAsFixed(dp);
 
+/// Round 17 (report-recompute-2-schedule-flow-1dp) — a pump FLOW / HEAD cell:
+/// 1 dp at or above 1 (unchanged), 2 dp below it, so a 0.0709 L/s HW
+/// circulator no longer prints '0.1 L/s' (+41 %) nor a 0.036 L/s loop
+/// '0.0 L/s' — the calc report prints these at 2 dp too.
+String _fmtSmall(double v) => _fmt(v, dp: v.abs() < 1 ? 2 : 1);
+
 /// Sequential tag like "P-01", "F-02" — used when a source result carries none.
 String _seqTag(String prefix, int oneBasedIndex) =>
     '$prefix-${oneBasedIndex.toString().padLeft(2, '0')}';
@@ -265,8 +271,8 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     rows.add(EquipmentScheduleRow(
       tag: item.tag ?? _seqTag('P', i + 1),
       service: item.service,
-      duty: '${_fmt(d.flow.inLitersPerSecond)} L/s @ '
-          '${_fmt(d.head.meters)} m',
+      duty: '${_fmtSmall(d.flow.inLitersPerSecond)} L/s @ '
+          '${_fmtSmall(d.head.meters)} m',
       size: strings.format(RptStringKey.esMotorSize,
           {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',

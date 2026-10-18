@@ -45,6 +45,7 @@ import 'fault.dart'
         defaultLvUtilityFaultKa,
         estimatedServiceFaultLevelA,
         faultStudy,
+        maxEstimatedServiceFaultKa,
         serviceFaultEstimateVerifyItems,
         solvedRunLengthM;
 import 'genset_backup.dart'
@@ -64,7 +65,8 @@ import 'panel_results.dart'
         ElectricalCircuitResult,
         ElectricalPanelResult,
         ElectricalSystemResult,
-        ElectricalWarning;
+        ElectricalWarning,
+        WarningSeverity;
 import 'power_factor.dart' show PowerFactorResult, powerFactorCorrection;
 import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
@@ -443,7 +445,25 @@ AdvancedStudy computeAdvancedStudy(
     powerOneLine: powerOneLine,
     bom: bom,
     verifyItems: verify,
-    warnings: gensetBackupWarnings(project, sys),
+    warnings: [
+      ...gensetBackupWarnings(project, sys),
+      // Round 17 — the service-size estimate is no longer clamped at 50 kA
+      // (a clamp LOWERED the safety quantity); above the realistic LV device
+      // ladder it is flagged so the engineer commissions a real study.
+      if (serviceEstimateGoverns &&
+          serviceEstimate != null &&
+          serviceEstimate.amperes > maxEstimatedServiceFaultKa * 1000.0 + 1e-6)
+        ElectricalWarning(
+          code: 'service-fault-estimate-high',
+          severity: WarningSeverity.warning,
+          message: 'Service fault estimate '
+              '${(serviceEstimate.amperes / 1000).toStringAsFixed(1)} kA '
+              'exceeds ${maxEstimatedServiceFaultKa.toStringAsFixed(0)} kA — '
+              'an IEC 60909 short-circuit study and 65/70 kA-class devices are '
+              'required; enter the studied origin fault level in Service & '
+              'Earthing.',
+        ),
+    ],
   );
 }
 

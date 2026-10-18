@@ -262,7 +262,7 @@ double _centeredX(String text, double size, double cx) =>
 
 /// The submittal COVER SHEET: the project name, the document title, the
 /// discipline, and a framed identity block (client / drawing no / rev / date /
-/// sheet count / prepared-by), all as centred drawing primitives.
+/// drawing count / prepared-by), all as centred drawing primitives.
 SldSheet buildCoverSheet({
   required String projectName,
   String? clientName,
@@ -271,7 +271,7 @@ SldSheet buildCoverSheet({
   String? date,
   String discipline = 'MEP (Mekanikal - Elektrikal - Plambing)',
   String documentTitle = 'DESIGN SUBMITTAL / DOKUMEN PERENCANAAN',
-  int? sheetCount,
+  int? drawingCount,
   String? preparedBy,
 }) {
   const cx = _sheetW / 2;
@@ -303,8 +303,13 @@ SldSheet buildCoverSheet({
     if (revision != null && revision.trim().isNotEmpty)
       ('REVISI / REVISION', revision.trim()),
     if (date != null && date.trim().isNotEmpty) ('TANGGAL / DATE', date.trim()),
-    if (sheetCount != null)
-      ('JUMLAH LEMBAR / SHEETS', sheetCount.toString()),
+    // Round 17 (drafting-visual-3-8) — the figure is the number of DRAWINGS
+    // in the Daftar Gambar (a paginated board-schedule set is one drawing of
+    // several pages, and the three front-matter sheets are not drawings), so
+    // the row says so; 'JUMLAH LEMBAR / SHEETS' told a document controller a
+    // sheet count the issued PDFs did not match.
+    if (drawingCount != null)
+      ('JUMLAH GAMBAR / DRAWINGS', drawingCount.toString()),
     if (preparedBy != null && preparedBy.trim().isNotEmpty)
       ('DIGAMBAR / PREPARED BY', preparedBy.trim()),
   ];
@@ -499,7 +504,7 @@ List<SldSheet> buildSubmittalFrontMatter({
         revision: revision,
         date: date,
         preparedBy: preparedBy,
-        sheetCount: drawings.isEmpty ? null : drawings.length,
+        drawingCount: drawings.isEmpty ? null : drawings.length,
       ),
       buildDrawingListSheet(drawings, projectName: projectName),
       buildGeneralNotesSheet(

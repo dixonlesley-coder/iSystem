@@ -89,7 +89,7 @@ void main() {
       expect(nodeElevation(pump, building4).meters, 0.0);
     });
 
-    test('roofTank and an untyped plant keep the roof (legacy)', () {
+    test('roofTank keeps the roof; an untyped plant only on the top storey', () {
       const roofTank = NetNode(
           id: 't',
           sheetId: 's1',
@@ -106,7 +106,13 @@ void main() {
           floorIndex: 0,
           role: NodeRole.plant);
       expect(nodeElevation(roofTank, building4).meters, closeTo(16.0, 1e-12));
-      expect(nodeElevation(untyped, building4).meters, closeTo(16.0, 1e-12));
+      // Round 17 — an untyped plant on L0 sits on L0's surface (0.0 m), so an
+      // upfeed source drawn there lifts the whole building; on the TOP storey
+      // it keeps the legacy roof datum (16.0 m).
+      expect(nodeElevation(untyped, building4).meters, closeTo(0.0, 1e-12));
+      expect(
+          nodeElevation(untyped.copyWith(floorIndex: 3), building4).meters,
+          closeTo(16.0, 1e-12));
     });
 
     test('air plant: AHU / fans on the floor, FCU / AC at the ceiling', () {

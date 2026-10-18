@@ -149,7 +149,19 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   // exhaust system with its OWN duty and the SAME tag the equipment schedule
   // prints (the schedule's per-root rows), so a second AHU is reported.
   final rs = reportStringsFor(ref);
-  final scheduledFans = gatherEquipmentScheduleData(ref).fans;
+  final scheduleData = gatherEquipmentScheduleData(ref);
+  final scheduledFans = scheduleData.fans;
+  // Round 17 — every drawn supply mover the schedule lists (root pump, zone
+  // boosters, the transfer pump), with its tag + service; the HW recirc and
+  // fire pumps have their own report sections.
+  final movers = ref.read(supplyMoverDutiesProvider);
+  final supplyPumps = [
+    if (movers.isNotEmpty)
+      for (final p in scheduleData.pumps)
+        if (p.service == rs(RptStringKey.esSvcDomesticWater) ||
+            p.service == rs(RptStringKey.esSvcTransferPump))
+          (tag: p.tag ?? '', service: p.service, duty: p.duty),
+  ];
   // Round 16 (regression-report-fire-pump-without-fire-service) — the SAME
   // drawn-fire-service gate [firePumpDutyProvider] applies: with no
   // sprinkler / hydrant pipe drawn the schedule and the MDP carry no fire
@@ -158,7 +170,14 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   final fireDrawn = net.edges.any((e) =>
       e.service == ServiceType.fireSprinkler ||
       e.service == ServiceType.fireHydrant);
-  final standpipe = fireDrawn ? ref.read(standpipeDesignProvider) : null;
+  // Round 17 — each fire section is gated on ITS OWN drawn system: a
+  // hydrant-only network printed a sprinkler design + remote-head check that
+  // is not drawn, and the standpipe line rode a sprinkler-only network.
+  final sprinklerDrawn =
+      net.edges.any((e) => e.service == ServiceType.fireSprinkler);
+  final hydrantDrawn =
+      net.edges.any((e) => e.service == ServiceType.fireHydrant);
+  final standpipe = hydrantDrawn ? ref.read(standpipeDesignProvider) : null;
   final hwRecirc = ref.read(hotWaterRecircProvider);
   return CalcReportData(
     projectName: project.name,
@@ -195,6 +214,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     targetResidual:
         SupplyDesignCriteria.recommended().targetFixtureResidualPressure,
     pump: ref.read(pumpDutyProvider),
+    supplyPumps: supplyPumps,
     boosterHead: downfeed?.boosterHeadRequired,
     gravitySufficient: downfeed?.gravitySufficient ?? false,
     // mech-building-2 — the PRV zone table is a DOWNFEED design (compliant by
@@ -204,10 +224,10 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
         ? ref.read(zoneStaticsProvider)
         : const [],
     hotWaterRecirc: hwRecirc,
-    sprinkler: fireDrawn ? ref.read(sprinklerDesignProvider) : null,
+    sprinkler: sprinklerDrawn ? ref.read(sprinklerDesignProvider) : null,
     standpipe: standpipe,
     sprinklerRemoteArea:
-        fireDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
+        sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
     firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
     fan: ref.read(ductFanProvider),
     exhaustFan: ref.read(exhaustFanProvider),
@@ -2121,10 +2141,14 @@ Future<bool> writeSubmittalPackageToDir(
     // Floor-by-floor electrical riser — built with the LIVE mechanical
     // [BuildingLevels] (the shared §10 geometry), like its standalone sibling.
     final eRiserChrome = sldChrome(DrawingSeries.electricalRiser);
+    // Round 17 (drafting-visual-3-2) — the riser carries the SAME supply
+    // spine (PLN head / earthing / TX / genset) as the overview in this
+    // package, so two sheets of one submittal never disagree on the supply.
     final eRiserSheet = buildElectricalRiser(
       project: eProject,
       result: eResult,
       building: project.building,
+      sourceChain: true,
     );
     await File(out('electrical-riser.pdf')).writeAsBytes(
       electricalSldToPdf(

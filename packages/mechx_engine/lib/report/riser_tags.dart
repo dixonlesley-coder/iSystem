@@ -95,7 +95,7 @@ bool _componentHasRoofTank(Network net, NetEdge edge) {
 
 /// Best-effort FUNCTION classification for [edge] on the single-line.
 ///
-/// Returns null for air services and for any case that is NOT confidently
+/// Returns null for every service but cold / hot water, and for any case NOT confidently
 /// derivable (the tag then stays exactly `100-CW-PPR`). Heuristic — each rule is
 /// // VERIFY (drawing-convention inference, not an SNI clause):
 ///
@@ -126,8 +126,17 @@ bool _componentHasRoofTank(Network net, NetEdge edge) {
 /// orient.
 RiserFunction? riserFunctionFor(Network net, NetEdge edge,
     {required bool downfeed, Map<String, String>? flowFrom}) {
-  // Only piped (non-air) services carry a function suffix.
-  if (edge.service.regime == FlowRegime.air) return null;
+  // Round 17 (regression-flow-path-function-applies-to-fire-and-drainage) —
+  // GRAVITASI / BOOSTER / TRANSFER are DOMESTIC WATER (air bersih) terms (the
+  // drawing legend defines them as roof-tank gravity feed / booster-pumped
+  // supply / ground-to-roof transfer), so only cold / hot water carries one:
+  // a hydrant / sprinkler main is not a 'booster-pumped supply' and a sewage
+  // ejector lift to the STP is not a 'transfer to the roof tank'. Air, gravity
+  // drainage and fire services take no suffix on either path.
+  if (edge.service != ServiceType.coldWater &&
+      edge.service != ServiceType.hotWater) {
+    return null;
+  }
   final up = flowFrom?[edge.id];
   if (up != null && (up == edge.fromId || up == edge.toId)) {
     return _flowFunction(net, edge, up, flowFrom!);
@@ -522,6 +531,64 @@ Map<String, double> riserServiceLanes(Network net, {ServiceType? focus}) {
       if (entry.value.length == 1 && riserServiceLane(entry.value.single) != 0)
         entry.key: riserServiceLane(entry.value.single),
   };
+}
+
+/// Round 17 (drafting-visual-3-1) — the per-EDGE run-lane offset of the
+/// combined riser sheet: for each edge whose horizontal leg would NOT already
+/// sit on its own service's lane, the lane-factor delta (its
+/// [riserServiceLane] minus its FROM node's lane from [riserServiceLanes]).
+/// [riserServiceLanes] only lanes a node that carries ONE service, so on a
+/// real floor — a stack junction carrying D + V, a WC carrying CW + D — both
+/// endpoints sit on the band centre and a vent run was drawn exactly on top
+/// of the drainage run (their tags pointing at one line). Each consumer draws
+/// the horizontal leg at `fromY + delta × pitch` with short vertical drops
+/// into the multi-service endpoints. ONE helper for the vector export and the
+/// on-canvas Auto painter (golden rule 5). Empty — every run on its node's
+/// lane, byte-identical — for a single-service [focus] or a one-service
+/// network, and for every edge between single-service nodes.
+Map<String, double> riserEdgeLaneOffsets(Network net, {ServiceType? focus}) {
+  if (focus != null) return const {};
+  final all = {for (final e in net.edges) e.service};
+  if (all.length < 2) return const {};
+  final nodeLanes = riserServiceLanes(net, focus: focus);
+  final out = <String, double>{};
+  for (final e in net.edges) {
+    final delta = riserServiceLane(e.service) - (nodeLanes[e.fromId] ?? 0);
+    if (delta.abs() > 1e-9) out[e.id] = delta;
+  }
+  return out;
+}
+
+/// Round 17 (drafting-visual-3-4) — the riser sheet's FEED note, gated on the
+/// equipment the network actually carries (the evidence the Round-15
+/// GRAVITASI suffix rule uses), never on the feed-strategy SETTING alone: a
+/// gravity downfeed hangs from a ROOF TANK, so a downfeed-set project with no
+/// roof tank and no pump (the bundled meter-fed sample) is fed direct from the
+/// mains, and one with a pump but no roof tank is pumped. Upfeed is unchanged
+/// (an undrawn upfeed pump is still sized by the solve). [detailed] adds the
+/// '(roof tank)' / '(water meter)' qualifier the KETERANGAN box prints.
+// VERIFY drawing-convention wording, not an SNI clause.
+String riserFeedNote({
+  required bool downfeed,
+  required bool hasRoofTank,
+  required bool hasPump,
+  bool hasWaterMeter = false,
+  bool detailed = false,
+}) {
+  if (!downfeed) {
+    return detailed ? 'Feed: upfeed / booster pump' : 'Feed: upfeed / booster';
+  }
+  if (hasRoofTank) {
+    return detailed
+        ? 'Feed: gravity downfeed (roof tank)'
+        : 'Feed: gravity downfeed';
+  }
+  if (hasPump) {
+    return detailed ? 'Feed: booster pump (no roof tank)' : 'Feed: booster pump';
+  }
+  return detailed && hasWaterMeter
+      ? 'Feed: direct mains (water meter)'
+      : 'Feed: direct mains';
 }
 
 /// One grouped entry in a floor's fan-out: a fixture TYPE label and how many of

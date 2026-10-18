@@ -83,24 +83,28 @@ void main() {
       // Source |Z| at the origin: z = 400/(√3·16000) = 0.0144338 Ω, split by
       // X/R = 7 ⇒ R = z/√50 = 0.00204124, X = 7R = 0.01428869.
       // Feeder 25 mm² Cu (the LOAD-sized conductor — E3: the device floor never
-      // grows it), 50 m: R = 0.87·50/1000 = 0.0435, X = 0.08·50/1000 = 0.004.
-      // SP source Z = (0.00204124+0.0435, 0.01428869+0.004)
-      //             = (0.04554124, 0.01828869)
-      //   |Z| = √(0.04554124² + 0.01828869²) = 0.0490763 Ω.
-      // Isc_SP = 400/(√3·0.0490763) = 4705.8 A → 4.71 kA (< 16 kA upstream).
-      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(4.71, 0.01));
+      // grows it), 50 m: R70 = 0.87·50/1000 = 0.0435, X = 0.08·50/1000 = 0.004.
+      // Round 17 — the MAXIMUM fault takes the conductor at 20 °C (IEC
+      // 60909-0): R20 = 0.0435·(234.5+20)/(234.5+70) = 0.0435·0.835796 =
+      // 0.0363571.
+      // SP source Z = (0.00204124+0.0363571, 0.01428869+0.004)
+      //             = (0.0383983, 0.01828869)
+      //   |Z| = √(0.0383983² + 0.01828869²) = 0.0425328 Ω.
+      // Isc_SP = 400/(√3·0.0425328) = 5429.6 A → 5.43 kA (< 16 kA upstream).
+      // (The 70 °C table printed 4.71 kA — 13 % low, the unsafe direction.)
+      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(5.43, 0.01));
     });
 
     test('breaker breaking-capacity adequacy (Icu ≥ Isc)', () {
       // MDP incomer MCB 63 A vs 16 kA: MCB ladder [6,10,15,25] → 25 kA ≥ 16 ⇒ OK.
       expect(fs.panels['MDP']!.incomerKa, 25);
       expect(fs.panels['MDP']!.incomerAdequate, isTrue);
-      // SP incomer MCB 63 A vs 4.71 kA: first ladder rung ≥ 4.71 is 6 kA ⇒ OK.
+      // SP incomer MCB 63 A vs 5.43 kA: first ladder rung ≥ 5.43 is 6 kA ⇒ OK.
       expect(fs.panels['SP']!.incomerKa, 6);
       expect(fs.panels['SP']!.incomerAdequate, isTrue);
-      // The SP motor breaker sees the SP bus fault (4.71 kA) ⇒ 6 kA, adequate.
+      // The SP motor breaker sees the SP bus fault (5.43 kA) ⇒ 6 kA, adequate.
       final motor = fs.circuits['s1']!;
-      expect(motor.faultkA, closeTo(4.71, 0.01));
+      expect(motor.faultkA, closeTo(5.43, 0.01));
       expect(motor.breakerKa, 6);
       expect(motor.breakerAdequate, isTrue);
     });
@@ -369,16 +373,18 @@ void main() {
       expect(estimatedServiceFaultLevelA(project)!.amperes, 22733.2);
     });
 
-    test('a huge transformer clamps at the 50 kA ceiling', () {
-      // 5000 kVA: 5000000 / 27.712812921 = 180422.0 A — far past any LV device
-      // ladder, so the estimate is clamped to maxEstimatedServiceFaultKa.
+    test('a huge transformer is NOT clamped (Round 17) — flagged instead', () {
+      // 5000 kVA: 5000000 / 27.712812921 = 180421.97 A → 180422.0 A. The old
+      // 50 kA clamp LOWERED a safety quantity (every device kA token and the
+      // bus Icw were judged against 50 kA); now the real figure is returned
+      // and maxEstimatedServiceFaultKa is the review threshold.
       const project = ElectricalProject(
         id: 'e2',
         name: 'BigTx',
         panels: [mdp],
         transformerKva: ApparentPower(5000000),
       );
-      expect(estimatedServiceFaultLevelA(project)!.amperes, 50000);
+      expect(estimatedServiceFaultLevelA(project)!.amperes, 180422.0);
       expect(maxEstimatedServiceFaultKa, 50);
     });
 

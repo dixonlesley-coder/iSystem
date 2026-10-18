@@ -214,7 +214,10 @@ void main() {
         ),
       ]));
       await tester.pump();
-      expect(find.text('Feed: gravity downfeed'), findsOneWidget);
+      // Round 17 (drafting-visual-3-4) — no roof tank and no pump ⇒ fed from
+      // the mains; never 'gravity downfeed' without the tank it hangs from.
+      expect(find.text('Feed: direct mains'), findsOneWidget);
+      expect(find.textContaining('gravity downfeed'), findsNothing);
       expect(find.textContaining('(roof tank)'), findsNothing);
     });
 

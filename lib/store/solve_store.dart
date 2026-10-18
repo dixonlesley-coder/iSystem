@@ -35,6 +35,14 @@ import 'sizing_store.dart';
 Pressure get _targetResidual =>
     SupplyDesignCriteria.recommended().targetFixtureResidualPressure;
 
+/// Round 17 — the setpoint a downfeed PRV holds: the target residual plus a
+/// floor-branch friction allowance (`defaultPrvSetpoint`), ONE figure for the
+/// drawn-PRV solve, the zone sizing and the zone static table.
+Pressure get _prvSetpoint => defaultPrvSetpoint(
+      targetResidual: _targetResidual,
+      maxFixtureStatic: const SniProfile().maxFixtureStaticPressure.value,
+    );
+
 /// The absolute pass threshold the pressure solve holds at the critical fixture
 /// (the design target residual, ≈2.25 bar). Exposed so the heatmap legend's
 /// threshold anchor and the per-node inspector probe (I2) read the SAME value
@@ -126,6 +134,8 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
     // water-drainage-8 — static lift + riser friction on the project's
     // mounting heights, the same basis the drawings and report print.
     mounting: project.mounting,
+    // Round 17 — a drawn PRV holds target + the floor-branch friction margin.
+    prvSetpoint: _prvSetpoint,
   );
 });
 
@@ -1094,7 +1104,23 @@ List<AirSystem> airSystemsFor(
           final c = rank(a).compareTo(rank(b));
           return c != 0 ? c : a.id.compareTo(b.id);
         });
-      if (machines.isNotEmpty) unit = machines.first.id;
+      if (machines.isNotEmpty) {
+        unit = machines.first.id;
+      } else {
+        // Round 17 (regression-ducted-ac-intake-phantom-fan-way) — no fan /
+        // AHU / source plant: a DEMAND-FREE terminal air unit (a stand-alone
+        // ducted AC / FCU) is the system's machine before the bare root leaf,
+        // so its duty never lands on an open intake end as a phantom fan.
+        final units = [
+          for (final n in net.nodes)
+            if (roots[n.id] == root &&
+                n.role == NodeRole.plant &&
+                n.airflow == null &&
+                isTerminalAirUnit(n.component))
+              n,
+        ]..sort((a, b) => a.id.compareTo(b.id));
+        if (units.isNotEmpty) unit = units.first.id;
+      }
     }
     out.add((trunk: trunk, stat: s.totalStaticPressure, fanNodeId: unit));
   }
@@ -1306,7 +1332,7 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
   final project = ref.watch(projectControllerProvider);
   final maxFix = const SniProfile().maxFixtureStaticPressure.value;
   final effective = Pressure(
-    (maxFix.pascals - _targetResidual.pascals).clamp(1.0, double.infinity),
+    (maxFix.pascals - _prvSetpoint.pascals).clamp(1.0, double.infinity),
   );
   // The span is ceiling(top) − fixture(bottom), so it must use the PROJECT
   // mounting heights (F8) — the same ones the solves/BOM/report use.
@@ -1326,7 +1352,7 @@ final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
     building: project.building,
     mounting: project.mounting,
     zones: zones,
-    prvSetpoint: _targetResidual,
+    prvSetpoint: _prvSetpoint,
     maxStatic: const SniProfile().maxFixtureStaticPressure.value,
   );
 });

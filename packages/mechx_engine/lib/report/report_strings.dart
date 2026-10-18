@@ -96,6 +96,7 @@ enum RptStringKey {
   wsTargetResidual, // {kpa}
   wsPumpHead, // {m}
   wsPumpMotor, // {kw}
+  wsPumpTagged, // {tag} {service} {lps} {m} {kw}
   wsOperatingPoint, // {lps} {m} {pct} {match}
   wsMatchStable,
   wsMatchUnstable,
@@ -442,6 +443,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.wsTargetResidual: '- Target fixture residual: **{kpa} kPa**',
   RptStringKey.wsPumpHead: '- Pump head: **{m} m**',
   RptStringKey.wsPumpMotor: '- Pump motor: **{kw} kW**',
+  RptStringKey.wsPumpTagged:
+      '- Pump {tag} ({service}): **{lps} L/s @ {m} m**, motor **{kw} kW**',
   RptStringKey.wsOperatingPoint:
       '- Operating point (system × pump curve): **{lps} L/s** @ **{m} m** '
           '({pct} % of design flow) · {match} '
@@ -820,6 +823,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.wsTargetResidual: '- Target tekanan sisa fikstur: **{kpa} kPa**',
   RptStringKey.wsPumpHead: '- Head pompa: **{m} m**',
   RptStringKey.wsPumpMotor: '- Motor pompa: **{kw} kW**',
+  RptStringKey.wsPumpTagged:
+      '- Pompa {tag} ({service}): **{lps} L/s @ {m} m**, motor **{kw} kW**',
   RptStringKey.wsOperatingPoint:
       '- Titik operasi (sistem × kurva pompa): **{lps} L/s** @ **{m} m** '
           '({pct} % dari aliran desain) · {match} '
