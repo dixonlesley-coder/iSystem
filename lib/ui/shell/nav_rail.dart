@@ -11,6 +11,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_text_field.dart';
 
 /// The top-level destination chosen in the left navigation rail. `design` shows
 /// the workspace area (Plan / Schematic / Electrical, driven by
@@ -393,6 +394,14 @@ class _NavItemState extends State<_NavItem> {
   // already show, so it never opens (and the goldens stay byte-identical).
   final OverlayPortalController _tip = OverlayPortalController();
 
+  /// Round 12 (ui-journey-pending-field-edit-lost) — commit a focused field's
+  /// pending edit before navigating (the rail never takes focus, so the field
+  /// would otherwise unmount with its edit uncommitted).
+  void _activate() {
+    MechXTextField.commitPendingEdit();
+    widget.onTap();
+  }
+
   void _setHover(bool v) {
     setState(() => _hover = v);
     if (widget.collapsed && v) {
@@ -514,7 +523,7 @@ class _NavItemState extends State<_NavItem> {
     // restores the captions and the overlay never opens.
     final row = MechXFocusRing(
       borderRadius: const BorderRadius.all(MechXRadii.md),
-      onActivated: widget.onTap,
+      onActivated: _activate,
       // L4 (a11y): the button carries the destination name explicitly in BOTH
       // states — the visible caption (hidden from semantics above) is decorative
       // and would otherwise be swallowed by this button node's semantics
@@ -526,7 +535,7 @@ class _NavItemState extends State<_NavItem> {
         onEnter: (_) => _setHover(true),
         onExit: (_) => _setHover(false),
         child: GestureDetector(
-          onTap: widget.onTap,
+          onTap: _activate,
           child: item,
         ),
       ),

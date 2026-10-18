@@ -2097,17 +2097,33 @@ ElectricalSystemResult computeSystem(
     // tracks the entrance device the same floor sized.
     final mainResult =
         roots.firstOrNull != null ? results[roots.first.id] : null;
+    // Round 12 (report-recompute-earthing-ignores-headroom) — with a future-
+    // load HEADROOM on the root, the incomer is rated for the future load
+    // (demand × multiplier), so the service cable — and the main earthing /
+    // bonding conductors derived from its PE — are sized for the device that
+    // protects it: the root's ACTUAL incomer rating as both the design
+    // current and the breaker rating. Today's bare demand used to size them
+    // for a 50 A service while headroom had doubled the incomer to 100 A
+    // (16 / 10 mm² printed vs 25 / 16 mm² required). No headroom ⇒ the
+    // demand basis below ⇒ byte-identical.
     final mainDemandIb = mainResult?.demandCurrent ?? const Current(0);
-    final mainIb =
-        serviceMinCurrentA != null && serviceMinCurrentA > mainDemandIb.amperes
+    final rootHeadroomActive =
+        (roots.firstOrNull?.headroom ?? HeadroomSpec.none).isActive;
+    final incomerRating = mainResult?.incomer.breaker.ratingA;
+    final mainIb = rootHeadroomActive && incomerRating != null
+        ? incomerRating
+        : serviceMinCurrentA != null &&
+                serviceMinCurrentA > mainDemandIb.amperes
             ? Current(roundTo(serviceMinCurrentA, 1))
             : mainDemandIb;
-    final mainBreaker = selectBreaker(profile,
-        designCurrent: mainIb, loadKind: LoadKind.feeder);
+    final mainBreaker = rootHeadroomActive && incomerRating != null
+        ? null
+        : selectBreaker(profile,
+            designCurrent: mainIb, loadKind: LoadKind.feeder);
     final mainCable = sizeCable(
       profile,
       designCurrent: mainIb,
-      breakerRating: mainBreaker.ratingA,
+      breakerRating: mainBreaker?.ratingA ?? incomerRating!,
       deratingFactor: 1,
       minSectionMm2: 4,
     );

@@ -35,7 +35,6 @@ import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
-import '../../store/history_store.dart';
 import '../../store/inspector_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
@@ -527,14 +526,14 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       return KeyEventResult.ignored;
     }
 
-    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
-      ref.read(historyProvider.notifier).undo();
-      return KeyEventResult.handled;
-    }
+    // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
+    // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
+    // (AppShell._onHardwareKey). That handler's return value does NOT stop
+    // the framework delivering the same key down the focus chain, so acting
+    // here too undid / redid TWO steps per press. Consume the combo without
+    // acting so nothing further down this handler reacts to it.
     if (mod &&
-        ((key == LogicalKeyboardKey.keyZ && shift) ||
-            key == LogicalKeyboardKey.keyY)) {
-      ref.read(historyProvider.notifier).redo();
+        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
       return KeyEventResult.handled;
     }
 

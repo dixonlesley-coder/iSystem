@@ -424,12 +424,16 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     // G8 — mint the first FREE SP-N ordinal (max+1 across existing names AND
     // tags), so deleting a board never lets a later add re-mint its
     // designation onto an issued schedule.
-    final n = nextSubPanelOrdinal(ref.read(electricalProjectProvider).panels);
+    final project = ref.read(electricalProjectProvider);
+    final n = nextSubPanelOrdinal(project.panels);
+    // Round 12 — below the lowest existing board, never on top of it.
+    final slot =
+        nextPanelDropSlot(project, ref.read(electricalResultProvider));
     _controller.addPanelAt(
       name: 'Sub-panel $n',
       tag: 'SP-$n',
-      x: 80 + n * 40,
-      y: 80 + n * 40,
+      x: slot.dx,
+      y: slot.dy,
     );
   }
 

@@ -495,6 +495,7 @@ enum StringKey {
   // other packages (autoSizedRuns by app_state.dart H4, recoveryTornUnreadable
   // by app_shell.dart H5).
   autoSizedRuns, // {count} — the sizing-success status toast
+  autoSizedRunOne, // {count} — its singular form (Round 12: never "1 runs")
   recoveryTornUnreadable, // torn / unreadable crash-recovery banner
 
   // ── Apple design review Wave 5a (Themes H1 + H6) — the trust-surface
@@ -631,6 +632,8 @@ enum StringKey {
   issueRainwaterSelfCleansingMessage,
   issueLoopUnbalancedTitle,
   issueLoopUnbalancedMessage,
+  issueGravityLoopTitle,
+  issueGravityLoopMessage,
   issueMotorOversizedTitle,
   issuePumpMotorOversizedMessage,
   issueFanMotorOversizedMessage,
@@ -1686,6 +1689,7 @@ const Map<StringKey, String> _en = {
 
   // Apple design review Wave 2 — status + recovery copy.
   StringKey.autoSizedRuns: 'Auto-sized {count} runs · sizes shown on the plan',
+  StringKey.autoSizedRunOne: 'Auto-sized {count} run · sizes shown on the plan',
   StringKey.recoveryTornUnreadable:
       'The recovery file could not be read. Start a new project or open a '
           'saved copy.',
@@ -1838,6 +1842,13 @@ const Map<StringKey, String> _en = {
       'This rainwater collector runs below 0.6 m/s self-cleansing at the '
       'design slope, so grit and leaf debris settle out and it silts up. It is '
       'auto-sized on the roof runoff — steepen the laid slope (Building page).',
+  StringKey.issueGravityLoopTitle: 'Gravity loop — closing pipe provisional',
+  StringKey.issueGravityLoopMessage:
+      'This drain / storm pipe closes a loop (e.g. a gutter with two '
+      'downpipes). Gravity flow is assigned to the nearest outlet, and this '
+      'closing pipe is sized on the larger load beside it — conservative, but '
+      'the actual split is not computed. Confirm the intended drainage path or '
+      'break the loop.',
   StringKey.issueLoopUnbalancedTitle: 'Ring flow split not settled',
   StringKey.issueLoopUnbalancedMessage:
       'The Hardy-Cross balance for this looped main did not converge within its '
@@ -2931,6 +2942,8 @@ const Map<StringKey, String> _id = {
   // Apple design review Wave 2 — status + recovery copy.
   StringKey.autoSizedRuns:
       'Ukuran otomatis {count} saluran · ukuran ditampilkan pada denah',
+  StringKey.autoSizedRunOne:
+      'Ukuran otomatis {count} saluran · ukuran ditampilkan pada denah',
   StringKey.recoveryTornUnreadable:
       'Berkas pemulihan tidak dapat dibaca. Mulai proyek baru atau buka '
           'salinan tersimpan.',
@@ -3084,6 +3097,14 @@ const Map<StringKey, String> _id = {
       'kecepatan swa-bersih 0,6 m/s sehingga pasir dan serasah daun mengendap '
       'dan salurannya tersumbat. Ukurannya ditentukan otomatis dari limpasan '
       'atap — pertajam kemiringan pemasangan (halaman Bangunan).',
+  StringKey.issueGravityLoopTitle:
+      'Loop gravitasi — pipa penutup bersifat sementara',
+  StringKey.issueGravityLoopMessage:
+      'Pipa air kotor / air hujan ini menutup sebuah loop (mis. talang dengan '
+      'dua pipa tegak). Aliran gravitasi dibagikan ke saluran keluar terdekat, '
+      'dan pipa penutup ini diukur pada beban terbesar di sebelahnya — '
+      'konservatif, tetapi pembagian sebenarnya tidak dihitung. Pastikan jalur '
+      'drainase yang dimaksud atau putus loop-nya.',
   StringKey.issueLoopUnbalancedTitle: 'Pembagian aliran ring belum stabil',
   StringKey.issueLoopUnbalancedMessage:
       'Penyeimbangan Hardy-Cross untuk jaringan ring ini tidak konvergen dalam '

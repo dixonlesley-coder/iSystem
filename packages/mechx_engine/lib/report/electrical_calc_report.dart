@@ -46,8 +46,15 @@ class ElectricalCalcReportData {
   final double? originFaultLevelA;
 
   /// Protective-device clearing time (s) for the busbar withstand check. Null ⇒
-  /// omitted from the Design Basis.
+  /// omitted from the Design Basis. Round 12 — printed on its own row when
+  /// [originFaultLevelA] is null (it used to hide behind the fault gate).
   final double? busbarClearingTimeS;
+
+  /// Round 12 (report-recompute-fault-basis-omitted) — WHERE
+  /// [originFaultLevelA] came from (the app passes the EFFECTIVE value the
+  /// busbars were sized on: explicit → service estimate → 16 kA default).
+  /// Null ⇒ no provenance tail (byte-identical).
+  final FaultLevelBasis? faultLevelBasis;
 
   /// Revision history (caller-supplied). Empty ⇒ no Revision-history table, so a
   /// caller that does not populate it gets byte-identical legacy output.
@@ -90,6 +97,7 @@ class ElectricalCalcReportData {
     this.verifyItems = const [],
     this.originFaultLevelA,
     this.busbarClearingTimeS,
+    this.faultLevelBasis,
     this.revisions = const [],
     this.allWarnings,
     this.standardsProvenance,
@@ -137,6 +145,18 @@ String _severityTag(WarningSeverity s) => switch (s) {
 /// The electrical **Design Basis / Inputs & Assumptions** register as a
 /// key-value block — supply system/voltage, connected/diversified load,
 /// earthing system, and (when set) the Fold-1 fault target + clearing time.
+/// Provenance of the origin fault level printed in the Design Basis.
+enum FaultLevelBasis {
+  /// The engineer's explicit project setting.
+  explicit,
+
+  /// `estimatedServiceFaultLevelA` from the declared transformer / daya.
+  serviceEstimate,
+
+  /// The flat 16 kA fallback (nothing declared).
+  defaultValue,
+}
+
 /// Shared with the unified MEP report. Caller adds the `##` heading.
 RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
     [ReportStrings strings = const ReportStrings.en()]) {
@@ -167,7 +187,22 @@ RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
               ? strings.format(RptStringKey.edbClearingTime,
                   {'s': data.busbarClearingTimeS!.toStringAsFixed(2)})
               : '',
-        })
+        }) +
+            switch (data.faultLevelBasis) {
+              null => '',
+              FaultLevelBasis.explicit =>
+                strings(RptStringKey.edbFaultBasisExplicit),
+              FaultLevelBasis.serviceEstimate =>
+                strings(RptStringKey.edbFaultBasisEstimate),
+              FaultLevelBasis.defaultValue =>
+                strings(RptStringKey.edbFaultBasisDefault),
+            }
+      ),
+    if (data.originFaultLevelA == null && data.busbarClearingTimeS != null)
+      (
+        strings(RptStringKey.edbClearingTimeKey),
+        strings.format(RptStringKey.edbClearingTimeValue,
+            {'s': data.busbarClearingTimeS!.toStringAsFixed(2)})
       ),
   ]);
 }

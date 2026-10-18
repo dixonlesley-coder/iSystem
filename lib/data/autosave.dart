@@ -14,6 +14,10 @@ import '../store/electrical_store.dart';
 import '../store/equipment_spec_store.dart';
 import '../store/fire_store.dart';
 import '../store/assemblies_store.dart';
+import '../store/calibration_store.dart';
+import '../store/command_store.dart' show reportExportedProvider;
+import '../store/snap_settings_store.dart' show refLineModeProvider;
+import '../ui/canvas/segment_palette.dart' show armedPlacementProvider;
 import '../store/fixture_library_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
@@ -237,6 +241,20 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // An opened/restored document is a fresh baseline — clear the global timeline
   // to match the per-domain controllers clearing their own stacks on load.
   read(historyProvider.notifier).reset();
+  // Round 12 (ui-journey-new-project-keeps-session-state) — the previous
+  // project's SESSION state must not leak into the applied document: the
+  // Report stage starts un-exported, and no calibration / measure / tank /
+  // room / ref-line gesture, armed palette card or electrical inspector
+  // target survives (the next imported plan used to open straight into a
+  // calibration the user never started).
+  read(reportExportedProvider.notifier).reset();
+  read(calibrationControllerProvider.notifier).cancel();
+  read(measureModeProvider.notifier).set(false);
+  read(tankModeProvider.notifier).set(false);
+  read(roomModeProvider.notifier).set(false);
+  read(refLineModeProvider.notifier).set(false);
+  read(armedPlacementProvider.notifier).disarm();
+  read(electricalInspectorTargetProvider.notifier).clear();
   final s = doc.settings;
   read(occupancyProvider.notifier).set(s.occupancy);
   read(feedStrategyProvider.notifier)

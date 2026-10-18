@@ -20,7 +20,7 @@ library;
 
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
-import '../electrical/sources.dart' show selectGeneratorUnits;
+import '../electrical/sources.dart' show sizeGenerator;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
 import '../units.dart' show ApparentPower;
@@ -362,11 +362,17 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       // Past the top rung the requirement is n PARALLELED sets of the largest
       // genset (audit r8-5) — the row carries the per-set kVA with qty = n,
       // never one set silently below the requirement.
+      // Round 12 — sized by the SAME `sizeGenerator` the report's power
+      // one-line uses, so a PRIME-mode set carries its 1.25× uplift here too.
       final sel = gen.kva != null
           ? (unitKva: gen.kva!, units: 1)
           : (demandVa != null && demandVa.inKilovoltAmperes > 0
-              ? selectGeneratorUnits(
-                  ApparentPower(demandVa.voltAmperes * gen.backupFraction))
+              ? (() {
+                  final r = sizeGenerator(
+                      ApparentPower(demandVa.voltAmperes * gen.backupFraction),
+                      mode: gen.mode);
+                  return (unitKva: r.ratingKva, units: r.units);
+                })()
               : null);
       final genKva = sel?.unitKva;
       if (sel != null && genKva != null && genKva.inKilovoltAmperes > 0) {

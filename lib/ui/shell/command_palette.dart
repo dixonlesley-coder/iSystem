@@ -29,6 +29,7 @@ import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/snap_settings_store.dart' show refLineModeProvider;
 import '../inspector/project_panel.dart'
     show
         exportAnnotatedPlanPdf,
@@ -98,7 +99,22 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
     ref.read(measureModeProvider.notifier).set(measure);
     ref.read(tankModeProvider.notifier).set(tank);
     ref.read(roomModeProvider.notifier).set(room);
+    // Round 12 — the B12 ref-line trace is one of the exclusive modes too.
+    ref.read(refLineModeProvider.notifier).set(false);
     net.setTool(DrawTool.select);
+  }
+
+  // Round 12 (ui-journey-palette-tool-keeps-measure-mode) — the palette's draw
+  // tools go through the SAME mutual exclusion as the V/R/E keys and the Draw
+  // toolbar: every annotation mode (measure / tank / room / ref line) is
+  // cleared before the tool is set, so 'Tool: Select' after M no longer leaves
+  // Measure armed (canvas taps were still adding dimensions).
+  void armTool(DrawTool tool) {
+    ref.read(measureModeProvider.notifier).set(false);
+    ref.read(tankModeProvider.notifier).set(false);
+    ref.read(roomModeProvider.notifier).set(false);
+    ref.read(refLineModeProvider.notifier).set(false);
+    net.setTool(tool);
   }
 
   return [
@@ -247,7 +263,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       title: 'Tool: Select',
       subtitle: 'Draw tool',
       shortcut: 'V',
-      run: () => net.setTool(DrawTool.select),
+      run: () => armTool(DrawTool.select),
     ),
     _Command(
       id: 'tool.run',
@@ -256,7 +272,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       shortcut: 'R',
       run: () {
         openDesign(WorkspaceView.plan);
-        net.setTool(DrawTool.drawRun);
+        armTool(DrawTool.drawRun);
       },
     ),
     _Command(
@@ -266,7 +282,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       shortcut: 'E',
       run: () {
         openDesign(WorkspaceView.plan);
-        net.setTool(DrawTool.drawRiser);
+        armTool(DrawTool.drawRiser);
       },
     ),
     _Command(

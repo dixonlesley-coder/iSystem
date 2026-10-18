@@ -191,6 +191,10 @@ class ReportExportedController extends Notifier<bool> {
   bool build() => false;
 
   void markExported() => state = true;
+
+  /// Back to un-exported — called when a document is applied (File > New /
+  /// Open / recovery), honouring "a fresh open starts un-exported" (Round 12).
+  void reset() => state = false;
 }
 
 /// Whether the engineer has opened the Building (floors) screen this session —

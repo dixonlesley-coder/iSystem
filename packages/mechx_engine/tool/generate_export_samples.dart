@@ -46,7 +46,8 @@ import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/plan_symbols.dart';
-import 'package:mechx_engine/report/riser_tags.dart' show elementTags;
+import 'package:mechx_engine/report/riser_tags.dart'
+    show elementTags, equipmentDetail;
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
@@ -55,6 +56,8 @@ import 'package:mechx_engine/sizing/fire_pump_rating.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/sizing/room_air.dart'
+    show AirEquipmentKind, defaultInternalStatic;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -359,19 +362,31 @@ MechDuties deriveDuties(Network net, Map<String, EdgeSizing> sizing) {
     calibrationBySheet: calibrations,
     building: building,
   );
+  // Round 12 (printed-parity-5) — plus the AHU's own internal static, as the
+  // app's `airUnitInternalStatic` adds (the bare duct static was ~41 Pa vs the
+  // app's ~291 Pa duty).
   final ahuFan = sizeFan(
-      airflow: peak(saFlows), totalStaticPressure: duct.totalStaticPressure);
+      airflow: peak(saFlows),
+      totalStaticPressure: Pressure(duct.totalStaticPressure.pascals +
+          defaultInternalStatic(AirEquipmentKind.ahu).pascals));
 
   // Standpipe fire pump, as the app designs it from the building height.
   final standpipe =
       designStandpipe(risers: 1, buildingHeight: building.totalHeight);
+  // Round 12 (printed-parity-5) — the fire pump EXACTLY as the app's
+  // `firePumpDutyProvider` builds it (rated-point hydraulics, NFPA 20 motor):
+  // one duty for FP-01, the EMG way and the report's rating-curve motor.
+  final rating = checkFirePumpRating(
+      ratedFlow: standpipe.requiredFlow, ratedHead: standpipe.pumpHead);
   return MechDuties(
     supplyPump: supplyPump,
     ahuFan: ahuFan,
     standpipe: standpipe,
-    firePump: sizePump(flow: standpipe.requiredFlow, head: standpipe.pumpHead),
-    firePumpRating: checkFirePumpRating(
-        ratedFlow: standpipe.requiredFlow, ratedHead: standpipe.pumpHead),
+    firePump: firePumpDuty(
+        ratedFlow: standpipe.requiredFlow,
+        ratedHead: standpipe.pumpHead,
+        rating: rating),
+    firePumpRating: rating,
   );
 }
 
@@ -402,7 +417,8 @@ ElectricalProject buildElectrical(MechDuties duties) {
       id: 'fire-pump',
       name: 'Fire pump',
       source: MepLoadSource.firePump,
-      mechanicalPower: duties.standpipe.pumpShaftPower,
+      // Round 12 — the NFPA 20 selected motor, as electrical_feed feeds it.
+      mechanicalPower: duties.firePump.selectedMotor,
     ),
     panelVoltage: const Voltage(400),
     lengthM: 30,
@@ -795,7 +811,9 @@ void main(List<String> args) {
       // Derived from the model + the solved duty, never hand-typed.
       equipmentDetailByNodeId: {
         'cw-gtank': '$tankM3 m3',
-        'cw-pump': pumpKwToken,
+        // Round 12 — the SAME `equipmentDetail` the app's riser calls.
+        'cw-pump': equipmentDetail(net.nodeById('cw-pump')!,
+            motor: duties.supplyPump.selectedMotor)!,
       },
       notes: [
         'Sistem upfeed booster',
@@ -1192,6 +1210,26 @@ List<String> crossCheckArtifacts({
     if (!text('riser-mech').contains(tag)) {
       out.add('riser-mech does not print the scheduled tag $tag');
     }
+  }
+
+  // 1c. Round 12 (printed-parity-5) — ONE fire-pump motor: the scheduled
+  //     FP-01 duty, the calc report's NFPA 20 rating-curve motor and the EMG
+  //     way all name the same frame.
+  final fpKw = duties.firePump.selectedMotor.inKiloWatts;
+  if ((fpKw - duties.firePumpRating.selectedMotor.inKiloWatts).abs() > 1e-9) {
+    out.add('FP-01 motor $fpKw kW != rating-curve motor '
+        '${duties.firePumpRating.selectedMotor.inKiloWatts} kW');
+  }
+  if (!text('equipment-schedule')
+      .contains('${fpKw.toStringAsFixed(2)} kW motor')) {
+    out.add('equipment-schedule FP-01 does not state the $fpKw kW motor');
+  }
+  final fireWay = project.panels
+      .expand((p) => p.circuits)
+      .where((c) => c.sourceEquipmentId == 'fire-pump')
+      .firstOrNull;
+  if (fireWay != null && ((fireWay.motorKw ?? -1) - fpKw).abs() > 1e-9) {
+    out.add('electrical fire-pump way motorKw ${fireWay.motorKw} != $fpKw');
   }
 
   // 2. Fire pump presence: equipment schedule <=> calc-report fire section

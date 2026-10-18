@@ -37,7 +37,7 @@ import 'package:mechx_engine/standards/sni.dart';
 import '../../store/app_state.dart';
 import '../../store/command_store.dart' show ExportGroup, exportSheetProvider;
 import '../../store/electrical_store.dart' show WorkspaceView, workspaceViewProvider;
-import '../../store/history_store.dart';
+import '../../store/electrical_feed.dart' show riserEquipmentDetailsProvider;
 import '../../store/layer_store.dart'
     show DisciplineLayer, DisciplineLayerInfo, servicesFor;
 import '../../store/models/sheet.dart' show Sheet;
@@ -1002,12 +1002,9 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
         // Resolve the equipment detail suffix per node (tank m3 / pump-fan kW)
         // here, provider-free in the painter — a datum is included only when it
         // genuinely exists (equipmentDetail returns null otherwise).
-        final pump = ref.watch(pumpDutyProvider);
-        final fan = ref.watch(ductFanProvider);
-        final detailByNode = <String, String>{
-          for (final node in network.nodes)
-            node.id: ?equipmentDetail(node, supplyPump: pump, fan: fan),
-        };
+        // Round 12 — each node's OWN duty (the shared per-node map the issued
+        // riser + the panel feed read), never one system duty on every unit.
+        final detailByNode = ref.watch(riserEquipmentDetailsProvider);
         final vt = _current;
         // The painted single-line, wrapped in the ViewportTransform (identity by
         // default ⇒ byte-identical). The corner overlays below stay screen-fixed.
@@ -1029,7 +1026,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                   downfeed: feedStrategy == FeedStrategy.downfeed,
                   riserTagsById: riserTags(network, widget.focus),
                   detailByNode: detailByNode,
-                  supplyPump: pump,
+                  supplyPump: ref.watch(pumpDutyProvider),
                   showDetails: widget.showDetails,
                   // G2: the hot-water recirculation loop exists when the engine
                   // sizes one (the provider is non-null) — draw the HWR return.
@@ -1493,16 +1490,14 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
 
-    // F4: undo / redo on the SAME global timeline the Layout canvas drives — a
-    // riser drag pushes a snapshot, so it must be poppable from here too.
-    if (mod && key == LogicalKeyboardKey.keyZ) {
-      HardwareKeyboard.instance.isShiftPressed
-          ? ref.read(historyProvider.notifier).redo()
-          : ref.read(historyProvider.notifier).undo();
-      return KeyEventResult.handled;
-    }
-    if (mod && key == LogicalKeyboardKey.keyY) {
-      ref.read(historyProvider.notifier).redo();
+    // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
+    // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
+    // (AppShell._onHardwareKey). That handler's return value does NOT stop
+    // the framework delivering the same key down the focus chain, so acting
+    // here too undid / redid TWO steps per press. Consume the combo without
+    // acting so nothing further down this handler reacts to it.
+    if (mod &&
+        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
       return KeyEventResult.handled;
     }
 
@@ -3248,7 +3243,7 @@ class _AutoSchematicPainter extends CustomPainter {
         }
       }
       final kw = supplyPump != null
-          ? '${supplyPump!.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW'
+          ? motorKwText(supplyPump!.selectedMotor)
           : null;
       _drawText(
         canvas,
@@ -3259,9 +3254,12 @@ class _AutoSchematicPainter extends CustomPainter {
         fontWeight: FontWeight.w500,
         centered: true,
       );
-      // TRANSFER (ground -> roof lift) when a ground tank exists; else BOOSTER
+      // TRANSFER (ground -> roof lift) only when BOTH tanks exist (Round 12,
+      // printed-parity-3 — mirrors the engine callout + legend); else BOOSTER
       // (pump-up) on upfeed.
-      final leg = hasGround ? 'TRANSFER' : (!downfeed ? 'BOOSTER' : null);
+      final leg = hasGround && hasRoof
+          ? 'TRANSFER'
+          : (!downfeed ? 'BOOSTER' : null);
       if (leg != null) {
         _drawText(
           canvas,

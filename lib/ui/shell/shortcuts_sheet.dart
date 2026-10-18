@@ -11,6 +11,7 @@
 /// Esc (or a click outside / the Close button) dismisses it.
 library;
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -31,22 +32,75 @@ class ShortcutsSheetOverlay extends ConsumerWidget {
     if (!ref.watch(shortcutsSheetOpenProvider)) return const SizedBox.shrink();
     final colors = context.colors;
     return Positioned.fill(
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => ref.read(shortcutsSheetOpenProvider.notifier).close(),
-        child: ColoredBox(
-          color: colors.scrim,
-          child: Center(
-            // Swallow taps on the card itself (don't dismiss).
-            child: GestureDetector(
-              onTap: () {},
-              child: const _ShortcutsCard(),
+      // Round 12 (ui-journey-esc-closes-sheet-and-cancels-canvas) — the sheet
+      // TAKES primary focus while open, so its own Esc closes it and the
+      // canvas underneath (which used to keep focus behind the scrim) sees
+      // neither that Esc — no more lost half-drawn run — nor bare tool keys
+      // (R / M / Delete) acting on the hidden drawing.
+      child: _ClaimFocus(
+        onKeyEvent: (_, event) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.escape) {
+            ref.read(shortcutsSheetOpenProvider.notifier).close();
+          }
+          // Every other key stops here too — nothing behind the scrim reacts.
+          // (The shell's pre-focus accelerators — Ctrl+K, F1… — still run.)
+          return KeyEventResult.handled;
+        },
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => ref.read(shortcutsSheetOpenProvider.notifier).close(),
+          child: ColoredBox(
+            color: colors.scrim,
+            child: Center(
+              // Swallow taps on the card itself (don't dismiss).
+              child: GestureDetector(
+                onTap: () {},
+                child: const _ShortcutsCard(),
+              ),
             ),
           ),
         ),
       ),
     );
   }
+}
+
+/// A [Focus] that CLAIMS primary focus when mounted — an explicit post-frame
+/// request, not `autofocus` (a scope ignores an autofocus candidate when the
+/// canvas already holds focus, which is exactly the case here).
+class _ClaimFocus extends StatefulWidget {
+  final FocusOnKeyEventCallback onKeyEvent;
+  final Widget child;
+  const _ClaimFocus({required this.onKeyEvent, required this.child});
+
+  @override
+  State<_ClaimFocus> createState() => _ClaimFocusState();
+}
+
+class _ClaimFocusState extends State<_ClaimFocus> {
+  final _node = FocusNode(debugLabel: 'shortcuts-sheet');
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _node.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _node.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Focus(
+        focusNode: _node,
+        onKeyEvent: widget.onKeyEvent,
+        child: widget.child,
+      );
 }
 
 class _ShortcutsCard extends ConsumerWidget {

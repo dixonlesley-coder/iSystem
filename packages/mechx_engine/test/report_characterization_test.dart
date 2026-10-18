@@ -114,8 +114,15 @@ void main() {
       // instead of the raw Dart identifier 'ordinaryHazard1'. Verified as the
       // SOLE delta: substituting the identifier back reproduces 0x4cc8f1a3.
       // Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 12): exactly three lines move — the
+      // standpipe kW is labelled 'shaft at rated point' (printed-parity-4),
+      // the rating row prints the rated flow at 1 dp ('rated 47.3 L/s', the
+      // same figure as the standpipe line, not '47'), and the PRV zone rows
+      // name the Building-table floors ('L1–L2' / 'Ground–Ground', not the
+      // index+1 '2–3' / '1–1'). Verified as the SOLE delta: substituting the
+      // three old texts back reproduces 0x63072abe. Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0x63072abe);
+      expect(fnv1a32(md), 0xf972feb4);
     });
   });
 
@@ -242,7 +249,8 @@ void main() {
         '## Compliance summary',
         '# Mechanical & plumbing',
         '## Design basis',
-        '## Revision history',
+        // Round 12 — the per-discipline Revision-history tables are dropped
+        // from the demoted bodies; the unified report prints ONE merged one.
         // N25: ASCII heading in the embedded mechanical body.
         '## Unverified values',
         '## Building',
@@ -255,7 +263,6 @@ void main() {
         '### Fittings (estimated)',
         '# Electrical',
         '## Design basis',
-        '## Revision history',
         '## Supply summary',
         '## Panels',
         '### MDP [MDP] — 3-phase, 400 V',
@@ -311,8 +318,16 @@ void main() {
       // standalone pins' deltas (hazard label; short PUIL edition label, incl.
       // the design-basis 'Electrical standard' row; HVAC Type label; coded
       // warnings). Reverting them reproduces 0xed1f728e. Lines unchanged.
-      expect(md.split('\n').length, 228);
-      expect(fnv1a32(md), 0xa4c41871);
+      // Re-baselined 2026-10-18 (Round 12): (a) the embedded mechanical body
+      // carries the standalone pin's three-line delta (standpipe 'shaft at
+      // rated point', rated flow at 1 dp, zone floor names); (b) the two
+      // per-discipline Revision-history sections inside the demoted bodies
+      // are dropped (report-recompute-mep-revisions-duplicated) — the
+      // mechanical one is heading + blank + header + separator + 2 rows +
+      // blank = 7 lines, the electrical one 6 (1 row) ⇒ 228 − 13 = 215. The
+      // merged '# Revision history' table keeps all three distinct rows.
+      expect(md.split('\n').length, 215);
+      expect(fnv1a32(md), 0xdafbf026);
     });
   });
 

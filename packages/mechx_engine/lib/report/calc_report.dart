@@ -65,6 +65,18 @@ class CalcReportData {
   /// trunk airflow against its own index-run static. Null ⇒ no exhaust rows
   /// (byte-identical for a project without a sized exhaust system).
   final FanDuty? exhaustFan;
+
+  /// Round 12 (report-recompute-second-ahu-missing) — EVERY supply-air unit
+  /// with its own duty, tagged (`AHU-01`, `AHU-02` …), the same per-root
+  /// duties the equipment schedule + electrical feed list. With TWO OR MORE
+  /// entries the HVAC section prints one tagged row per unit instead of the
+  /// single [fan] trunk rows, so a second AHU (often the higher static) is no
+  /// longer missing from the report. Empty / one entry ⇒ byte-identical.
+  final List<({String tag, FanDuty duty})> supplyFans;
+
+  /// The exhaust counterpart of [supplyFans] (`EF-01` …); ≥ 2 entries ⇒
+  /// tagged rows replace the single [exhaustFan] rows.
+  final List<({String tag, FanDuty duty})> exhaustFans;
   final double supplyAirflowLps;
   final double returnAirflowLps;
 
@@ -129,6 +141,8 @@ class CalcReportData {
     this.firePumpRating,
     this.fan,
     this.exhaustFan,
+    this.supplyFans = const [],
+    this.exhaustFans = const [],
     this.supplyAirflowLps = 0,
     this.returnAirflowLps = 0,
     this.pumpOperatingPoint,
@@ -268,6 +282,13 @@ String _statusTag(VerificationStatus st, ReportStrings s) => switch (st) {
       VerificationStatus.secondarySource => s(RptStringKey.statusSecondary),
       VerificationStatus.notAnSniClause => s(RptStringKey.statusNotSni),
     };
+
+/// The Building-table name of floor [index] (falls back to `index + 1` only
+/// for an index outside the building — never fabricates a name).
+String _floorName(BuildingLevels b, int index) =>
+    index >= 0 && index < b.floors.length
+        ? b.floors[index].name
+        : '${index + 1}';
 
 String _service(ServiceType type, ReportStrings s) => switch (type) {
       ServiceType.coldWater => s(RptStringKey.svcColdWater),
@@ -545,7 +566,11 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         [
           for (final z in d.zones)
             [
-              '${z.zone.bottomFloorIndex + 1}–${z.zone.topFloorIndex + 1}',
+              // Round 12 — the zone names the SAME floor names as the
+              // Building table (index + 1 read '3–5' for G..L2 above two
+              // basements).
+              '${_floorName(d.building, z.zone.bottomFloorIndex)}–'
+                  '${_floorName(d.building, z.zone.topFloorIndex)}',
               z.topResidual.inKiloPascals.toStringAsFixed(0),
               z.bottomStatic.inKiloPascals.toStringAsFixed(0),
               z.withinLimit
@@ -628,7 +653,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   : strings(RptStringKey.firePumpStandby),
             }),
             strings.format(RptStringKey.firePumpValue, {
-              'rated': fp.ratedFlow.inLitersPerSecond.toStringAsFixed(0),
+              'rated': fp.ratedFlow.inLitersPerSecond.toStringAsFixed(1),
               'head': fp.ratedHead.meters.toStringAsFixed(0),
               'churn': fp.churn.head.meters.toStringAsFixed(0),
               'overload': fp.overload.head.meters.toStringAsFixed(0),
@@ -655,23 +680,43 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
 
   // ── HVAC ──────────────────────────────────────────────────────────────────
   final fan = d.fan;
-  if (fan != null) {
-    final fop = d.fanOperatingPoint ?? fan.operatingPoint;
+  // Round 12 — one tagged row per unit when several supply/exhaust systems
+  // exist (each its own duty, as scheduled); a single system keeps the legacy
+  // trunk rows byte-identical.
+  (String, String) unitRow(({String tag, FanDuty duty}) u) => (
+        '${u.tag}:',
+        strings.format(RptStringKey.hvacFanUnitValue, {
+          'lps': u.duty.airflow.inLitersPerSecond.toStringAsFixed(0),
+          'pa': u.duty.totalStaticPressure.pascals.toStringAsFixed(0),
+          'kw': u.duty.selectedMotor.inKiloWatts.toStringAsFixed(2),
+        }),
+      );
+  final multiSupply = d.supplyFans.length >= 2;
+  final multiExhaust = d.exhaustFans.length >= 2;
+  final hasSupply = fan != null || multiSupply;
+  if (hasSupply) {
+    final fop = multiSupply || fan == null
+        ? null
+        : (d.fanOperatingPoint ?? fan.operatingPoint);
     blocks
       ..add(RptHeading(2, strings(RptStringKey.headingHvac)))
       ..add(RptKeyValue([
-        (
-          strings(RptStringKey.hvacTrunkAirflow),
-          '**${fan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
-        ),
-        (
-          strings(RptStringKey.hvacFanStatic),
-          '**${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
-        ),
-        (
-          strings(RptStringKey.hvacFanMotor),
-          '**${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
-        ),
+        if (multiSupply)
+          for (final u in d.supplyFans) unitRow(u)
+        else ...[
+          (
+            strings(RptStringKey.hvacTrunkAirflow),
+            '**${fan!.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
+          ),
+          (
+            strings(RptStringKey.hvacFanStatic),
+            '**${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
+          ),
+          (
+            strings(RptStringKey.hvacFanMotor),
+            '**${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
+          ),
+        ],
         if (fop != null)
           (
             strings(RptStringKey.hvacOperatingPoint),
@@ -697,23 +742,27 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       ]));
   }
   final exFan = d.exhaustFan;
-  if (exFan != null) {
-    if (fan == null) {
+  if (exFan != null || multiExhaust) {
+    if (!hasSupply) {
       blocks.add(RptHeading(2, strings(RptStringKey.headingHvac)));
     }
     blocks.add(RptKeyValue([
-      (
-        strings(RptStringKey.hvacExhaustAirflow),
-        '**${exFan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
-      ),
-      (
-        strings(RptStringKey.hvacExhaustStatic),
-        '**${exFan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
-      ),
-      (
-        strings(RptStringKey.hvacExhaustMotor),
-        '**${exFan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
-      ),
+      if (multiExhaust)
+        for (final u in d.exhaustFans) unitRow(u)
+      else ...[
+        (
+          strings(RptStringKey.hvacExhaustAirflow),
+          '**${exFan!.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
+        ),
+        (
+          strings(RptStringKey.hvacExhaustStatic),
+          '**${exFan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
+        ),
+        (
+          strings(RptStringKey.hvacExhaustMotor),
+          '**${exFan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
+        ),
+      ],
     ]));
   }
 

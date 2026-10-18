@@ -319,7 +319,10 @@ class FirstAutoSizeNudgeController extends Notifier<bool> {
     ref.read(showSizingProvider.notifier).show();
     ref.read(statusMessageProvider.notifier).showStatus(
           MechXStringsData(ref.read(localeProvider))
-              .format(StringKey.autoSizedRuns, {'count': '$count'}),
+              // Round 12 (ui-journey-autosized-plural) — the singular key for
+              // one run: the first solve of a new project read "1 runs".
+              .format(count == 1 ? StringKey.autoSizedRunOne : StringKey.autoSizedRuns,
+                  {'count': '$count'}),
         );
   }
 }

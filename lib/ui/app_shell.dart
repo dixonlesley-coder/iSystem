@@ -49,6 +49,7 @@ import 'theme/mechx_theme.dart';
 import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
+import 'widgets/mechx_text_field.dart';
 import 'widgets/section_label.dart';
 import 'widgets/severity_glyph.dart';
 
@@ -87,44 +88,43 @@ class _AppShellState extends ConsumerState<AppShell> {
   /// Ctrl+1..8 / Ctrl+, (go to a destination). WHICH key means what is the pure,
   /// unit-tested table in `shell_shortcuts.dart`; this method only runs it.
   ///
-  /// Returns true when consumed so the focus system doesn't double-dispatch
-  /// the event to a focused canvas/field; everything else returns false and
-  /// flows through the normal focus chain untouched.
+  /// The return value only marks the platform event "handled" — it does NOT
+  /// stop the framework delivering the SAME key down the focus chain
+  /// (`KeyEventManager` dispatches to the focus system unconditionally). So a
+  /// combo run here must never also be acted on by a focused widget: the
+  /// canvases consume Ctrl+Z/Y without acting (Round 12), and overlays that
+  /// own Esc hold primary focus themselves.
   bool _onHardwareKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
-    // The shortcuts sheet carries no text field, so nothing inside it holds
-    // focus and the bubble-phase Esc listener would never see the key on a hub
-    // screen (the I1 dead spot). Close it here instead — pre-focus, but ONLY
-    // while it is open, so Esc otherwise reaches the canvases untouched.
-    final closingSheet = event.logicalKey == LogicalKeyboardKey.escape &&
-        (ref.read(shortcutsSheetOpenProvider) ||
-            ref.read(exportSheetProvider) != null);
-    final command = closingSheet
-        ? null
-        : matchShellShortcut(
-            event.logicalKey,
-            mod: HardwareKeyboard.instance.isControlPressed ||
-                HardwareKeyboard.instance.isMetaPressed,
-            shift: HardwareKeyboard.instance.isShiftPressed,
-            alt: HardwareKeyboard.instance.isAltPressed,
-          );
-    if (!closingSheet && command == null) return false;
+    // Round 12 — Esc for the shortcuts / export sheets is NOT handled here:
+    // this pre-focus handler cannot stop the same Esc reaching the focused
+    // canvas (it cancelled the in-progress run). Each sheet holds primary
+    // focus while open and closes on its own Esc instead.
+    final command = matchShellShortcut(
+      event.logicalKey,
+      mod: HardwareKeyboard.instance.isControlPressed ||
+          HardwareKeyboard.instance.isMetaPressed,
+      shift: HardwareKeyboard.instance.isShiftPressed,
+      alt: HardwareKeyboard.instance.isAltPressed,
+    );
+    if (command == null) return false;
     // This handler is pre-focus and process-global, so it must stand down when
     // a modal route (a dialog / file picker) is on top of the shell — otherwise
     // Ctrl+O could stack a second confirm dialog over the first, or Ctrl+K
     // would toggle the palette behind the barrier. Only act when the shell's
     // own route is the current one.
     if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
-    if (closingSheet) {
-      ref.read(shortcutsSheetOpenProvider.notifier).close();
-      ref.read(exportSheetProvider.notifier).close();
-      return true;
-    }
     // A focused text field owns its own editing keys: Ctrl+Z/Y inside a field
     // must undo the FIELD (the framework's DefaultTextEditingShortcuts), never
     // the drawing. Everything else stays live while typing, as it does in every
     // desktop editor.
-    if (command!.deferToTextField && isTextEntryFocused()) return false;
+    if (command.deferToTextField && isTextEntryFocused()) return false;
+    // Round 12 (ui-journey-pending-field-edit-lost) — a non-field command
+    // (save, navigate, export…) first BLURS any focused field, so its
+    // commit-on-blur edit lands BEFORE the command runs (Ctrl+S used to save
+    // the old name; Ctrl+1..8 discarded the edit with the unmounted screen).
+    MechXTextField.commitPendingEdit();
+    if (isTextEntryFocused()) FocusManager.instance.primaryFocus?.unfocus();
     _run(command);
     return true;
   }

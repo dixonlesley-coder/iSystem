@@ -6,6 +6,14 @@ import '../theme/mechx_theme.dart';
 
 /// A minimal single-line text field built on [EditableText] (no Material).
 class MechXTextField extends StatefulWidget {
+  /// Round 12 (ui-journey-pending-field-edit-lost) — commit the FOCUSED
+  /// commit-on-blur field's pending edit NOW (no-op when none is focused or
+  /// it is clean). The shell calls this before any accelerator / nav-rail
+  /// action, because blurring is asynchronous: Ctrl+S used to save the name
+  /// the user had already retyped as the OLD one.
+  static void commitPendingEdit() => _MechXTextFieldState._activeField
+      ?._commitIfDirty();
+
   final String value;
 
   /// Called live on every keystroke (the default edit mode). Optional so a
@@ -89,6 +97,9 @@ class _MechXTextFieldState extends State<MechXTextField> {
   /// / external value? Only consulted when [MechXTextField.onCommitted] is set.
   bool _dirty = false;
 
+  /// The commit-on-blur field that currently holds focus (at most one).
+  static _MechXTextFieldState? _activeField;
+
   @override
   void initState() {
     super.initState();
@@ -140,6 +151,11 @@ class _MechXTextFieldState extends State<MechXTextField> {
 
   void _onFocusChange() {
     final hasFocus = _focusNode.hasFocus;
+    if (hasFocus) {
+      _activeField = this;
+    } else if (identical(_activeField, this)) {
+      _activeField = null;
+    }
     if (!hasFocus && widget.onCommitted != null) {
       _commitIfDirty();
       // Always re-display the canonical value on blur: a rejected/partial edit
@@ -171,6 +187,13 @@ class _MechXTextFieldState extends State<MechXTextField> {
 
   @override
   void dispose() {
+    // Round 12 (ui-journey-pending-field-edit-lost) — a typed-but-uncommitted
+    // edit is COMMITTED on teardown instead of silently dropped (a nav-rail
+    // tap or Ctrl+1..8 unmounts the screen without ever blurring the field).
+    // Children unmount before their ancestors, so the host's callback (and
+    // its ref) is still live here.
+    _commitIfDirty();
+    if (identical(_activeField, this)) _activeField = null;
     _focusNode.removeListener(_onFocusChange);
     _controller.dispose();
     // Only a node this state created is ours to dispose.

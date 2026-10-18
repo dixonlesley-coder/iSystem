@@ -31,6 +31,7 @@ library;
 
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
 /// Specific heat capacity of water at constant pressure, c [J/(kg·K)].
@@ -160,3 +161,21 @@ Power heatLossFromLength({
   double lossPerMetreW = 25.0, // W/m for insulated DN pipe // VERIFY
 }) =>
     Power(loopLength.meters * lossPerMetreW);
+
+/// Round 12 (report-recompute-verify-items-incomplete) — the unverified
+/// constants behind the PRINTED hot-water recirculation line (loop heat loss →
+/// recirc flow), surfaced in the calc report's Unverified section.
+const List<StandardValue<Object?>> hotWaterRecircVerifyChecklist = [
+  StandardValue<Object?>(25.0,
+      unit: 'W/m',
+      citation: 'HW recirculation loop heat loss (heatLossFromLength default)',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Representative 25 W/m loss for insulated DN pipe — general '
+          'practice; verify against the insulation specification.'),
+  StandardValue<Object?>(waterSpecificHeat,
+      unit: 'J/(kg·K)',
+      citation: 'Specific heat of water cp',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Physical property 4186 J/(kg·K) at ~20 °C (varies slightly with '
+          'temperature) — not an SNI clause.'),
+];

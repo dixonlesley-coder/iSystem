@@ -59,7 +59,6 @@ import 'package:mechx_engine/units.dart';
 import '../../store/app_state.dart';
 import '../../store/electrical_canvas_store.dart';
 import '../../store/electrical_store.dart';
-import '../../store/history_store.dart';
 import '../canvas/canvas_grid.dart';
 import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
@@ -884,20 +883,16 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         key == LogicalKeyboardKey.arrowUp ||
         key == LogicalKeyboardKey.arrowDown;
     if (_nudgeBurstOpen && !isArrowKey) _endNudgeBurst();
-    // Undo / redo route through the GLOBAL timeline (history_store), matching
-    // the Layout canvas — so Ctrl+Z reverts the genuinely most-recent edit
-    // across domains, never silently undoing another workspace's work.
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
-    final shift = HardwareKeyboard.instance.isShiftPressed;
-    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
-      ref.read(historyProvider.notifier).undo();
-      return KeyEventResult.handled;
-    }
+    // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
+    // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
+    // (AppShell._onHardwareKey). That handler's return value does NOT stop
+    // the framework delivering the same key down the focus chain, so acting
+    // here too undid / redid TWO steps per press. Consume the combo without
+    // acting so nothing further down this handler reacts to it.
     if (mod &&
-        ((key == LogicalKeyboardKey.keyZ && shift) ||
-            key == LogicalKeyboardKey.keyY)) {
-      ref.read(historyProvider.notifier).redo();
+        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
       return KeyEventResult.handled;
     }
     // D2: arrow keys nudge the selected panel(s) by one grid step; a whole

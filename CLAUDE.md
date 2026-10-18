@@ -1567,6 +1567,29 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   extrapolates its last segment and flags `demandCurveExtrapolated`; a drain
   carrying a WC (built-in or `CustomFixture.isWaterCloset`) floors at DN75
   (`// VERIFY` UPC/IPC, `notAnSniClause`).
+- **Tree accumulation is order-free; loops, check valves, vents (Round 12,
+  `network_sizing.dart`)**: `accumulateFlows`/`accumulateFixtureUnits` run on
+  the deterministic BFS `serviceSpanningTree` (links sorted by edge id) — never
+  a recursive DFS whose drawing order decides the tree. A GRAVITY component is
+  rooted only at a SINK plant (ground tank / component-less plant): a sump
+  pump / booster / air unit on a drainage net is pass-through. A gravity
+  loop's CLOSING edge is sized on the larger adjacent load and flagged
+  `loopUnbalanced` (never left unsized). A CHECK VALVE is a directional cut: a
+  looped pressurized component acyclic once its check-valve edges are cut
+  sizes as a tree with those edges traversed last (a HW recirc return carries
+  no draw-off; Hardy–Cross only for genuine rings). Every riser of a VENT
+  STACK carries the stack's largest load (uniform, IPC 916.1, `// VERIFY`);
+  rainwater downpipes are clamped ≥ the collector feeding them (N17 rule,
+  `stackRaisedForBranch`); a cleanout / air vent / extinguisher carries no
+  default load even as a LEAF.
+- **One duty per drawn machine on every printed surface (Round 12)**: the
+  riser equipment suffix reads `riserEquipmentDetailsProvider` (from
+  `equipmentNodeDutiesProvider`, the map the panel feed uses) and prints
+  `motorKwText` (2 dp below 1 kW); the fire pump everywhere is the engine's
+  `firePumpDuty` (rated-point hydraulics, NFPA 20 motor); the genset on every
+  drawing / G-01 is `sizeGenerator` (prime ×1.25); with root headroom the
+  main earthing follows the incomer RATING; the Design Basis prints the
+  EFFECTIVE fault level (`effectiveOriginFaultLevel`) with its provenance.
 - **Electrical fault/sizing share one length + one derating basis**: Zs/ADS and
   the Fold-1 fault decay use the SOLVED run length (`solvedRunLengthM` — geo when
   placed), the same the sizing/Vd used; parallel runs are group-derated
