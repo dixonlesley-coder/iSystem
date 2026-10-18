@@ -290,8 +290,9 @@ void main() {
         // present — info-level content only.
         '## Warnings',
         '## Unverified values',
+        // Round 23 — ONE heading over the merged table (the shared table's
+        // own H2 used to print directly beneath the H1).
         '# Revision history',
-        '## Revision history',
       ]);
     });
 
@@ -348,11 +349,16 @@ void main() {
       // lines — the unified head's stamp '· MechX (iSystem)' and the embedded
       // mechanical body's '· MechX' both read '· iSystem'. Verified as the
       // SOLE delta by diffing against the pre-change output. Lines unchanged.
-      expect(md.split('\n').length, 215);
+      // Re-baselined 2026-10-18 (Round 23,
+      // report-pdf-mep-duplicate-revision-heading): the duplicate
+      // '## Revision history' line + its blank line under the merged H1 are
+      // dropped ⇒ 215 − 2 = 213; re-inserting them reproduces 0xe90c0dc0
+      // exactly (verified as the sole delta).
+      expect(md.split('\n').length, 213);
       // Re-baselined 2026-10-18 (Round 20 follow-up): the embedded
       // electrical way table's Length cell is `30.0 m` (planLengthLabel) — the
       // sole delta, as for the standalone electrical pin above.
-      expect(fnv1a32(md), 0xe90c0dc0);
+      expect(fnv1a32(md), 0xeef5aef7);
     });
   });
 

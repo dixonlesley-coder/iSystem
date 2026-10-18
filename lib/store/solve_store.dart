@@ -1411,22 +1411,35 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
 
 /// Round 22 (pressurized-3-1) — the elevation of the DOWNFEED source the zone
 /// table hangs from: the drawn tank the gravity solve picks (its role-aware
-/// [nodeElevation]) on a downfeed, else the roof — the datum a roof tank
-/// defaults to.
-final downfeedTankElevationProvider = Provider<Length>((ref) {
+/// [nodeElevation]).
+///
+/// Round 23 (regression-zones-phantom-roof-tank-datum) — NULL unless a real
+/// gravity tank feeds the top zone: on UPFEED the pump holds the target at the
+/// top fixture (no tank head exists, the legacy PRV-budget walk applies), and
+/// a downfeed whose picked source is NOT a roof tank / a plant above the top
+/// fixture (a ground booster with no roof tank drawn) has no tank head either
+/// (a downfeed with nothing drawn yet keeps the declared roof-tank datum)
+/// — hanging the zones off a phantom roof tank or a ground pump reported one
+/// zone and 'tank head OK' for a pressurized building.
+final downfeedTankElevationProvider = Provider<Length?>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
+  if (ref.watch(feedStrategyProvider) != FeedStrategy.downfeed) return null;
   final edges = _supplyEdges(net);
-  if (ref.watch(feedStrategyProvider) == FeedStrategy.downfeed &&
-      edges.isNotEmpty) {
-    final tank = _pickSource(net, edges, project.building,
-        preferHighest: true, mounting: project.mounting);
-    final node = tank == null ? null : net.nodeById(tank);
-    if (node != null) {
-      return nodeElevation(node, project.building, project.mounting);
-    }
-  }
-  return project.building.roofElevation;
+  final tank = edges.isEmpty
+      ? null
+      : _pickSource(net, edges, project.building,
+          preferHighest: true, mounting: project.mounting);
+  final node = tank == null ? null : net.nodeById(tank);
+  // Nothing drawn yet: the downfeed strategy itself declares a roof tank, at
+  // the datum a roof tank defaults to.
+  if (node == null) return project.building.roofElevation;
+  final elev = nodeElevation(node, project.building, project.mounting);
+  final topFixture = project.building.fixtureElevationOf(
+      project.building.levelCount - 1, project.mounting);
+  final isGravityTank = node.component == NodeComponent.roofTank ||
+      elev.meters > topFixture.meters;
+  return isGravityTank ? elev : null;
 });
 
 /// Per-zone PRV static profile (top residual → bottom static, within-limit) for

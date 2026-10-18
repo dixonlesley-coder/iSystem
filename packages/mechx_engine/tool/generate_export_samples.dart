@@ -1016,6 +1016,7 @@ void main(List<String> args) {
           projectName: projectName,
           sheetName: 'Denah Lantai Dasar',
           chrome: elecChromeFor(DrawingSeries.electricalLayout),
+          metersPerPixel: calibrations['s0']?.metersPerPixel,
         ));
   });
 

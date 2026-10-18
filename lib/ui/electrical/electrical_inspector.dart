@@ -22,7 +22,8 @@ import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, PhaseAssignment;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show breakerScheduleLabel, cableRunLabel;
-import 'package:mechx_engine/standards/puil.dart' show BreakerClass, PuilProfile;
+import 'package:mechx_engine/standards/puil.dart'
+    show BreakerClassCode, PuilProfile;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
@@ -214,7 +215,7 @@ class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
       v == v.roundToDouble() ? v.round().toString() : v.toString();
 
   static String _cls(double ratingA) =>
-      _profile.breakerClassFor(ratingA) == BreakerClass.mcb ? 'MCB' : 'MCCB';
+      _profile.breakerClassFor(ratingA).code;
 
   String get _breakerValue {
     final ov = _circuit?.breakerOverrideA;

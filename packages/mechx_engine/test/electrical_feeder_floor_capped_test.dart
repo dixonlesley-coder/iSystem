@@ -37,6 +37,19 @@ import 'package:test/test.dart';
 
 const p = PuilProfile();
 
+/// A profile whose breaker ladder STOPS at the 1600 A MCCB frame (no ACB
+/// frames) — the premise of group (D): the 1.6x target lies beyond the
+/// largest frame. Since Round 23 the PUIL ladder runs on to the 4000 A ACB,
+/// where a cable-reachable child incomer (<= 1300 A here) can never push the
+/// target past the top; the message logic is still exercised on this ladder.
+class _MccbTopProfile extends PuilProfile {
+  const _MccbTopProfile();
+  @override
+  List<double> get acbRatingsA => const <double>[];
+}
+
+const pTop = _MccbTopProfile();
+
 ElectricalCircuitResult _way(ElectricalPanelResult r, String id) =>
     r.circuits.firstWhere((c) => c.circuitId == id);
 
@@ -235,7 +248,7 @@ void main() {
     //   an infinite cable only buys the 1600 A top rung = 1.28× — so the advice
     //   must NOT be "increase the cable to reach 1.6×".
     final project = _twoBoard(loadW: 706000);
-    final sys = computeSystem(p, project);
+    final sys = computeSystem(pTop, project);
 
     test('premise: 4 x 300 mm2 at Iz 1300 A, device held at 1250 A', () {
       final feeder = _way(sys.panels['MDP']!, 'f1');
@@ -249,7 +262,7 @@ void main() {
     });
 
     test('the message states the target is beyond the largest frame', () {
-      final msg = _nonSelectiveMessage(faultStudy(sys, project, p));
+      final msg = _nonSelectiveMessage(faultStudy(sys, project, pTop));
       expect(
         msg,
         'Feeder to SP (1250 A) may not discriminate with Sub incomer (1250 A): '

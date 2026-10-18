@@ -28,12 +28,16 @@ int _q(String s) => '?'.allMatches(s).length;
 
 void main() {
   group('report-parity-pdf-citation-garbled', () {
-    test('the cited clauses survive: § → cl., ± → +/-, ρ → rho', () {
+    test('the cited clauses survive: § and ± print, ρ → rho', () {
+      // Round 23 — WinAnsi carries §, ±, °, ½ and … (bytes 0xA7, 0xB1, 0xB0,
+      // 0xBD, 0x85): they print as themselves; only glyphs outside WinAnsi
+      // (ρ, ″) are transliterated.
       expect(pdfSafeText('IEC 60364-4-44 §443 / PUIL 2011 §3.20'),
-          'IEC 60364-4-44 cl.443 / PUIL 2011 cl.3.20');
-      expect(pdfSafeText('±5 %'), '+/-5 %');
-      expect(pdfSafeText('ρ_Cu at 70 °C'), 'rho_Cu at 70 degC');
-      expect(pdfSafeText('½″…12″'), '1/2in...12in');
+          'IEC 60364-4-44 §443 / PUIL 2011 §3.20');
+      expect(pdfSafeText('±5 %'), '±5 %');
+      expect(pdfSafeText('ρ_Cu at 70 °C'), 'rho_Cu at 70 °C');
+      expect(pdfSafeText('½″…12″'), '½in\u008512in');
+      expect(pdfSafeText('Ø250'), 'Ø250');
     });
 
     // Property over the WHOLE engine: every non-ASCII rune used on a code

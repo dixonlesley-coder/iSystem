@@ -47,7 +47,20 @@ enum RefMethod { b1, c, e, d }
 enum BreakerCurve { b, c, d }
 
 /// Breaker frame class — ≤63 A is an MCB, above it an MCCB.
-enum BreakerClass { mcb, mccb }
+enum BreakerClass { mcb, mccb, acb }
+
+/// Round 23 (elec-drafting-2-5) — the schedule / BOM class code of a breaker
+/// frame, and whether it carries a B/C/D trip curve (only an MCB does; an
+/// MCCB / ACB carries an adjustable trip unit).
+extension BreakerClassCode on BreakerClass {
+  String get code => switch (this) {
+        BreakerClass.mcb => 'MCB',
+        BreakerClass.mccb => 'MCCB',
+        BreakerClass.acb => 'ACB',
+      };
+
+  bool get hasTripCurve => this == BreakerClass.mcb;
+}
 
 /// A standard copper flat-bar size + its continuous rating.
 class CopperBarSize {
@@ -146,6 +159,11 @@ abstract interface class ElectricalStandardsProfile {
 
   /// Standard MCCB preferred ratings (A), IEC 60947-2 (R10).
   List<double> get mccbRatingsA;
+
+  /// Round 23 — air circuit breaker frames above the MCCB ladder (an LV main
+  /// for a > 1100 kVA service; a 1600 kVA transformer's 2309 A FLC takes the
+  /// 2500 A ACB).
+  List<double> get acbRatingsA;
 
   /// All breaker frame ratings, ascending.
   List<double> get standardBreakerRatingsA;
@@ -581,13 +599,23 @@ class PuilProfile implements ElectricalStandardsProfile {
         80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600,
       ];
 
+  /// Round 23 (elec-drafting-2-5) — the standard ACB frame ladder (IEC
+  /// 60947-2 LV main frames, general practice, // VERIFY: secondarySource,
+  /// not a PUIL table). Without it a > 1100 kVA service printed a saturated
+  /// 'MCCB 1600A' incomer under its own larger demand.
   @override
-  List<double> get standardBreakerRatingsA =>
-      <double>[...mcbRatingsA, ...mccbRatingsA];
+  List<double> get acbRatingsA => const <double>[2000, 2500, 3200, 4000];
 
   @override
-  BreakerClass breakerClassFor(double ratingA) =>
-      ratingA <= 63 ? BreakerClass.mcb : BreakerClass.mccb;
+  List<double> get standardBreakerRatingsA =>
+      <double>[...mcbRatingsA, ...mccbRatingsA, ...acbRatingsA];
+
+  @override
+  BreakerClass breakerClassFor(double ratingA) => ratingA <= 63
+      ? BreakerClass.mcb
+      : ratingA <= 1600
+          ? BreakerClass.mccb
+          : BreakerClass.acb;
 
   @override
   BreakerCurve recommendedCurve({required bool lighting, required bool motor}) {

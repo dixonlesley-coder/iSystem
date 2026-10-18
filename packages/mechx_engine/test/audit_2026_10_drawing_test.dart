@@ -185,8 +185,9 @@ void main() {
       final r = computeSystem(const PuilProfile(), p);
       const b = BuildingLevels([Floor('G', Length(4)), Floor('L1', Length(4))]);
       final sheet = buildElectricalRiser(project: p, result: r, building: b);
-      // Bands: L1 (top) at y 0, G at y 160 (_riserBandH). MDP mid = 160 + 23 =
-      // 183, LP-1 mid = 23. sheetMaxX = 150 + 24 + 192 = 366 -> channel 406.
+      // Bands: L1 (top) at y 0, G at y 167 (_riserBandH, Round 23). MDP mid =
+      // 167 + 23 = 190, LP-1 mid = 23. sheetMaxX = 150 + 24 + 192 = 366 ->
+      // channel 406.
       final medium = sheet.prims
           .whereType<SldLine>()
           .where((l) => l.weight == SldWeight.medium)
@@ -199,8 +200,8 @@ void main() {
             : '${l.x2},${l.y2},${l.x1},${l.y1}';
       }).toSet();
       expect(medium, {
-        '342.0,183.0,406.0,183.0',
-        '406.0,23.0,406.0,183.0',
+        '342.0,190.0,406.0,190.0',
+        '406.0,23.0,406.0,190.0',
         '342.0,23.0,406.0,23.0'
       });
     });

@@ -189,9 +189,13 @@ List<RptBlock> buildMepUnifiedReportBlocks({
       if (seenRevisions.add((r.date, r.description))) r,
   ];
   if (mergedRevisions.isNotEmpty) {
+    // Round 23 (report-pdf-mep-duplicate-revision-heading) — ONE heading:
+    // the section is a top-level (H1) part of the unified report, so the
+    // shared table's own H2 is replaced rather than printed beneath it.
     blocks
       ..add(RptHeading(1, strings(RptStringKey.headingRevisionHistory)))
-      ..addAll(revisionHistoryBlocks(mergedRevisions, strings));
+      ..addAll(revisionHistoryBlocks(mergedRevisions, strings)
+          .where((b) => b is! RptHeading));
   }
 
   return blocks;

@@ -30,6 +30,8 @@ import 'app_state.dart'
         ductSettingsProvider,
         kSupplyService;
 import 'fire_store.dart';
+import '../ui/strings/app_strings.dart' show StringKey;
+import 'history_store.dart' show setSettingUndoable;
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sizing_store.dart' show parallelLegEdgeIdsProvider, sizingProvider;
@@ -113,6 +115,25 @@ class MepDutyBinding {
   /// info Design Issue naming the pump, never silent.
   final Set<String> fireAssumedJockeyPumpNodeIds;
 
+  /// Round 23 (mep-bridge-3) — a cold-water supply pump drawn on a mirrored
+  /// parallel STANDBY leg (the sizer's [parallelLegEdgeIdsProvider] record),
+  /// mapped to the DUTY pump it backs up: wired at the duty pump's machine,
+  /// never coincident with it (demand factor 0).
+  final Map<String, String> supplyStandbyPumpNodeIds;
+
+  /// Round 23 (mep-bridge-3) — the hot-water recirculation pumps that are the
+  /// STANDBY of a parallel pair / set (same connected hot-water network as the
+  /// duty recirc pump): the same recirc machine, demand factor 0. A subset of
+  /// [hwRecircPumpNodeIds].
+  final Set<String> hwStandbyPumpNodeIds;
+
+  /// Every standby pump (fire, supply, hot water) — its way adds no demand.
+  Set<String> get standbyPumpNodeIds => {
+        ...fireStandbyPumpNodeIds,
+        ...supplyStandbyPumpNodeIds.keys,
+        ...hwStandbyPumpNodeIds,
+      };
+
   const MepDutyBinding({
     this.firePumpNodeIds = const {},
     this.supplyPumpNodeId,
@@ -122,6 +143,8 @@ class MepDutyBinding {
     this.fireStandbyPumpNodeIds = const {},
     this.fireJockeyPumpNodeIds = const {},
     this.fireAssumedJockeyPumpNodeIds = const {},
+    this.supplyStandbyPumpNodeIds = const {},
+    this.hwStandbyPumpNodeIds = const {},
   });
 }
 
@@ -180,6 +203,34 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
               ref.watch(sizingProvider)[edgeId]?.diameter.inMillimeters,
           parallelLegEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
         );
+  // Round 23 (mep-bridge-3) — supply pumps on a mirrored parallel standby leg
+  // (series transfer + booster pumps are never on a leg, so they stay duty
+  // units), and the parallel hot-water recirc set.
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  double? boreMm(String edgeId) =>
+      ref.watch(sizingProvider)[edgeId]?.diameter.inMillimeters;
+  final supplyStandby = supplyPumps.length < 2
+      ? const <String, String>{}
+      : parallelStandbyPumps(
+          net,
+          supplyPumps.toSet(),
+          onService: (e) => e.service == kSupplyService,
+          bore: boreMm,
+          parallelLegEdgeIds: legs,
+          legOnly: true,
+        );
+  final hwStandby = hwPumps.length < 2
+      ? const <String, String>{}
+      : parallelStandbyPumps(
+          net,
+          hwPumps,
+          onService: (e) => e.service == ServiceType.hotWater,
+          bore: boreMm,
+          parallelLegEdgeIds: legs,
+        );
+  if (supplyPump != null && supplyStandby.containsKey(supplyPump)) {
+    supplyPump = supplyStandby[supplyPump];
+  }
   final units = ref.watch(airSystemRootNodesProvider);
   String? electricalLoad(String? id) {
     if (id == null) return null;
@@ -196,8 +247,85 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     fireStandbyPumpNodeIds: roles.standby,
     fireJockeyPumpNodeIds: roles.jockey,
     fireAssumedJockeyPumpNodeIds: roles.assumedJockey,
+    supplyStandbyPumpNodeIds: supplyStandby,
+    hwStandbyPumpNodeIds: hwStandby.keys.toSet(),
   );
 });
+
+/// Round 23 (mep-bridge-3) — the STANDBY pumps among [pumps] (one service,
+/// [onService]), each mapped to the DUTY pump it backs up. Pure.
+///
+/// Pumps are grouped by connected network of that service. In a group of two
+/// or more, the DUTY pump is the one NOT on a mirrored parallel leg
+/// ([parallelLegEdgeIds]), then the largest incident bore, then the lowest id;
+/// every other pump is a standby of it. With [legOnly] only a pump actually
+/// incident to a parallel-leg edge is a standby (pumps in SERIES — a transfer
+/// pump then a booster — are separate duty machines and stay out of the map).
+Map<String, String> parallelStandbyPumps(
+  Network net,
+  Set<String> pumps, {
+  required bool Function(NetEdge e) onService,
+  required double? Function(String edgeId) bore,
+  Set<String> parallelLegEdgeIds = const {},
+  bool legOnly = false,
+}) {
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while (parent[r] != null && parent[r] != r) {
+      r = parent[r]!;
+    }
+    return r;
+  }
+
+  for (final e in net.edges) {
+    if (!onService(e)) continue;
+    parent.putIfAbsent(e.fromId, () => e.fromId);
+    parent.putIfAbsent(e.toId, () => e.toId);
+    final a = find(e.fromId);
+    final b = find(e.toId);
+    if (a != b) parent[a] = b;
+  }
+  final groups = <String, List<String>>{};
+  for (final id in pumps) {
+    if (!parent.containsKey(id)) continue;
+    groups.putIfAbsent(find(id), () => []).add(id);
+  }
+  double boreOf(String id) {
+    var best = 0.0;
+    for (final e in net.edges) {
+      if (!onService(e) || (e.fromId != id && e.toId != id)) continue;
+      final d = bore(e.id) ?? 0.0;
+      if (d > best) best = d;
+    }
+    return best;
+  }
+
+  bool onLeg(String id) => net.edges.any((e) =>
+      onService(e) &&
+      (e.fromId == id || e.toId == id) &&
+      parallelLegEdgeIds.contains(e.id));
+
+  final out = <String, String>{};
+  for (final g in groups.values) {
+    if (g.length < 2) continue;
+    final ranked = [...g]..sort((a, b) {
+        final la = onLeg(a) ? 1 : 0;
+        final lb = onLeg(b) ? 1 : 0;
+        if (la != lb) return la - lb;
+        final d = boreOf(b).compareTo(boreOf(a));
+        if (d != 0) return d;
+        return a.compareTo(b);
+      });
+    final duty = ranked.first;
+    if (legOnly && onLeg(duty)) continue; // no un-mirrored duty pump
+    for (final id in ranked.skip(1)) {
+      if (legOnly && !onLeg(id)) continue;
+      out[id] = duty;
+    }
+  }
+  return out;
+}
 
 /// Round 21 (fire-3-parallel-fire-pumps-each-full-duty) — classify the fire
 /// pumps [firePumps] drawn in ONE connected fire network (hydrant + sprinkler
@@ -529,8 +657,11 @@ final equipmentNodeDutiesProvider =
     // duty; the primary binding keeps the legacy single duty as a fallback.
     // (The primary node reads [pumpDutyProvider] — the same duty, by
     // construction, as its map entry.)
-    p = (n.id == bind.supplyPumpNodeId ? ref.watch(pumpDutyProvider) : null) ??
-        ref.watch(supplyMoverDutiesProvider)[n.id];
+    // Round 23 (mep-bridge-3) — a STANDBY supply pump is the same machine
+    // as the duty pump it backs up (wired at its duty, demand factor 0).
+    final dutyId = bind.supplyStandbyPumpNodeIds[n.id] ?? n.id;
+    p = (dutyId == bind.supplyPumpNodeId ? ref.watch(pumpDutyProvider) : null) ??
+        ref.watch(supplyMoverDutiesProvider)[dutyId];
     if (bind.hwRecircPumpNodeIds.contains(n.id)) {
       p = ref.watch(hotWaterRecircProvider)?.pump;
     }
@@ -744,9 +875,10 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
               : _sourceFor(c),
       mechanicalPower: Power(f.watts),
       electricalInputPower: input == null ? null : Power(input),
-      // Round 21 — a STANDBY fire pump is wired at full size but never runs
-      // with the duty pump: it adds no demand to the board.
-      demandFactor: bind.fireStandbyPumpNodeIds.contains(n.id) ? 0 : null,
+      // Round 21 / 23 — a STANDBY pump (fire, supply or hot-water recirc) is
+      // wired at full size but never runs with the duty pump: it adds no
+      // demand to the board.
+      demandFactor: bind.standbyPumpNodeIds.contains(n.id) ? 0 : null,
       phases: _phasesFor(c),
       loadPos: LayoutPos(
         sheetId: n.sheetId,
@@ -817,6 +949,18 @@ class MepDutyFeedController extends Notifier<bool> {
   void set(bool value) => state = value;
   void toggle() => state = !state;
 }
+
+/// Round 23 (mep-bridge-4) — flip the 'Feed solved MEP duties' switch as an
+/// undoable step on the global timeline, so Ctrl+Z reverts the flip (and the
+/// reactive sync re-derives the MEP board from it) instead of restoring an
+/// electrical snapshot that contradicts the live switch.
+void setMepDutyFeedUndoable(
+        T Function<T>(ProviderListenable<T> provider) read, bool next) =>
+    setSettingUndoable<bool>(read,
+        get: () => read(mepDutyFeedEnabledProvider),
+        apply: (v) => read(mepDutyFeedEnabledProvider.notifier).set(v),
+        next: next,
+        label: StringKey.undoLabelMepDutyFeed);
 
 /// The circuits the reactive auto-sync folds into the MEP panel: the placed
 /// equipment NODES always, PLUS the solved-duty circuits (pump / fan / fire pump)

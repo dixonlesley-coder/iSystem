@@ -142,11 +142,13 @@ List<_Obstacle> _obstaclesOf(SldPrim p) => switch (p) {
     };
 
 /// Clear space a GROWN label keeps ahead of its text end, as a multiple of its
-/// size (a thin space), so growth stops short of a neighbouring label or line
-/// instead of touching it. Only the right side is padded: the left anchor never
+/// size — a full word space (Round 23, elec-drafting-2-7: a thin space let a
+/// grown riser fan-out stub run up to the NEIGHBOUR board's stub line, which
+/// then printed as one string, `...125A 3ph— Lift penumpang`), so growth stops
+/// short of a neighbouring label or line instead of reading into it. Only the right side is padded: the left anchor never
 /// moves (a leader may legitimately end there), and the box's ascent/descent
 /// already carry a small margin over the real glyphs.
-const double kSldLabelClearance = 0.08;
+const double kSldLabelClearance = 0.3;
 
 /// [sheet] with every label smaller than [floorSize] drawing units grown toward
 /// [floorSize] in place, as far as clear space allows (see the library doc),

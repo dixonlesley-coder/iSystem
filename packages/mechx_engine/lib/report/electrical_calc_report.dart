@@ -17,7 +17,7 @@ import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
-import '../standards/puil.dart' show BreakerClass;
+import '../standards/puil.dart' show BreakerClassCode;
 import '../standards/sni.dart' show Revision;
 import '../units.dart' show Length;
 import 'plan_symbols.dart' show planLengthLabel;
@@ -410,7 +410,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               // letter for MCBs only (as the board schedule + legend do, N12).
               '${_a(c.breaker.ratingA.amperes)} '
                   '${c.breaker.deviceClass.name.toUpperCase()}'
-                  '${c.breaker.deviceClass == BreakerClass.mccb ? '' : '/${c.breaker.curve.name.toUpperCase()}'}',
+                  '${c.breaker.deviceClass.hasTripCurve ? '/${c.breaker.curve.name.toUpperCase()}' : ''}',
               '${(c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : ''}'
                   '${_n(c.cable.csaMm2)} mm²',
               // Run length (N8) — the figure that drove the printed Vdrop;

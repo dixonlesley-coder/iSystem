@@ -20,7 +20,8 @@ library;
 
 import 'dart:math' as math;
 
-import '../standards/puil.dart' show BreakerClass, BreakerCurve;
+import '../standards/puil.dart'
+    show BreakerClass, BreakerClassCode, BreakerCurve;
 import 'catalog.dart';
 import 'earthing.dart' show RcdType, rcdTypeRank;
 import 'enclosure.dart' show EnclosureResult;
@@ -48,8 +49,7 @@ const double _skunMinCsaMm2 = 10; // VERIFY
 // ── matchers ─────────────────────────────────────────────────────────────────
 
 /// Map a [BreakerClass] to the catalogue `deviceClass` string.
-String _classStr(BreakerClass c) =>
-    c == BreakerClass.mcb ? 'MCB' : 'MCCB';
+String _classStr(BreakerClass c) => c.code;
 
 /// Map a [BreakerCurve] to the catalogue `curve` string.
 String _curveStr(BreakerCurve c) => switch (c) {

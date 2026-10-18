@@ -234,6 +234,8 @@ const Map<BreakerCurve, double> curveTripMultiple = {
 const Map<BreakerClass, List<double>> breakingCapacityKa = {
   BreakerClass.mcb: [6, 10, 15, 25],
   BreakerClass.mccb: [16, 25, 36, 50, 70],
+  // Round 23 — ACB frames (IEC 60947-2 Icu, general practice, // VERIFY).
+  BreakerClass.acb: [50, 65, 80, 100],
 };
 
 /// Adiabatic constant k for a protective (PE) conductor (A·s^½/mm²) by material
@@ -510,7 +512,7 @@ Impedance feederNeutralImpedance(
 /// maximum. Larger MCCB frames carry a rating-based floor.
 double breakerKa(double ratingA, BreakerClass deviceClass, double prospectiveKa) {
   final options = breakingCapacityKa[deviceClass]!;
-  final floorKa = deviceClass == BreakerClass.mccb && ratingA >= 400 ? 36.0 : 0.0;
+  final floorKa = deviceClass != BreakerClass.mcb && ratingA >= 400 ? 36.0 : 0.0;
   final pool = options.where((k) => k >= floorKa).toList();
   final candidates = pool.isNotEmpty ? pool : options;
   final maxKa = candidates.last;
@@ -533,7 +535,7 @@ double breakerKa(double ratingA, BreakerClass deviceClass, double prospectiveKa)
 double specifiedBreakerKa(
     double ratingA, BreakerClass deviceClass, double prospectiveKa) {
   final options = breakingCapacityKa[deviceClass]!;
-  final floorKa = deviceClass == BreakerClass.mccb && ratingA >= 400 ? 36.0 : 0.0;
+  final floorKa = deviceClass != BreakerClass.mcb && ratingA >= 400 ? 36.0 : 0.0;
   final pool = options.where((k) => k >= floorKa).toList();
   final candidates = pool.isNotEmpty ? pool : options;
   final ics = serviceCapacityFraction[deviceClass] ?? 1;
@@ -722,6 +724,8 @@ double adsDisconnectionTimeS({required bool isFeeder, required double ratingA}) 
 const Map<BreakerClass, double> serviceCapacityFraction = {
   BreakerClass.mcb: 1.0,
   BreakerClass.mccb: 0.75,
+  // An ACB's Ics is typically 100 % of Icu (IEC 60947-2, // VERIFY).
+  BreakerClass.acb: 1.0,
 };
 
 /// One upstream→downstream breaker pair examined for current discrimination.

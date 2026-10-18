@@ -19,6 +19,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
+import 'package:mechx_engine/report/electrical_pagination.dart'
+    show electricalOverviewToPdf, electricalRiserToPdf;
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
@@ -195,16 +197,16 @@ Future<void> exportElectricalOverviewPdf(WidgetRef ref) => runExportGuarded(
       write: () async {
         final project = ref.read(electricalProjectProvider);
         final result = ref.read(electricalResultProvider);
-        final bytes = electricalSldToPdf(
+        // Round 23 (elec-drafting-2-1) — sub-tree pages when one A3 sheet
+        // would print below the minimum plotted label size.
+        final bytes = electricalOverviewToPdf(
           project: project,
           result: result,
-          overview: true,
-          sourceChain: true,
           title: 'iSystem electrical single-line (overview)',
           diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
           chrome: electricalExportChrome(ref,
               series: DrawingSeries.electricalOverview),
-          projectName: electricalSheetProjectName(ref),
+          projectName: electricalSheetProjectName(ref) ?? 'Untitled project',
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -256,18 +258,17 @@ Future<void> exportElectricalRiserPdf(WidgetRef ref) => runExportGuarded(
         final project = ref.read(electricalProjectProvider);
         final result = ref.read(electricalResultProvider);
         final building = ref.read(projectControllerProvider).building;
-        final sheet = buildElectricalRiser(
-            project: project,
-            result: result,
-            building: building,
-            sourceChain: true);
-        final bytes = electricalSldToPdf(
-          sheet: sheet,
+        // Round 23 (elec-drafting-2-1) — floor-range pages with LANJUT KE
+        // match stubs when one A3 sheet would print below the label floor.
+        final bytes = electricalRiserToPdf(
+          project: project,
+          result: result,
+          building: building,
           title: 'iSystem electrical building riser',
           diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
           chrome:
               electricalExportChrome(ref, series: DrawingSeries.electricalRiser),
-          projectName: electricalSheetProjectName(ref),
+          projectName: electricalSheetProjectName(ref) ?? 'Untitled project',
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -364,11 +365,15 @@ Future<void> exportPowerOneLineDxf(WidgetRef ref) => runExportGuarded(
               .showStatus(kNoEnergySourcesMessage);
           return Future.value(false);
         }
+        // Round 23 (elec-drafting-2-7) — the SAME project name + register
+        // title the submittal package stamps on this sheet.
         final dxf = electricalSldToDxf(
           sheet: buildPowerOneLineSheet(oneLine),
-          diagramTitle: 'POWER ONE-LINE DIAGRAM',
+          diagramTitle:
+              drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
           chrome: electricalExportChrome(ref,
               series: DrawingSeries.electricalPowerOneLine),
+          projectName: electricalSheetProjectName(ref),
         );
         return _save(ref, dxf,
             name: project.name,
@@ -398,9 +403,11 @@ Future<void> exportPowerOneLinePdf(WidgetRef ref) => runExportGuarded(
         final bytes = electricalSldToPdf(
           sheet: buildPowerOneLineSheet(oneLine),
           title: 'iSystem power one-line',
-          diagramTitle: 'POWER ONE-LINE DIAGRAM',
+          diagramTitle:
+              drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
           chrome: electricalExportChrome(ref,
               series: DrawingSeries.electricalPowerOneLine),
+          projectName: electricalSheetProjectName(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -441,13 +448,17 @@ Future<void> exportElectricalPlanPdf(WidgetRef ref) => runExportGuarded(
           calibrations: mech.calibrations,
           building: mech.building,
         );
+        // Round 23 (elec-drafting-2-7) — the register title + the live
+        // project name, exactly as the submittal package stamps this sheet.
         final bytes = electricalPlanToPdf(
           data: data,
-          projectName: project.name.isEmpty ? 'electrical' : project.name,
+          projectName: electricalSheetProjectName(ref) ?? 'electrical',
           sheetName: sheet.name,
           dateString: DateTime.now().toIso8601String().split('T').first,
-          chrome:
-              electricalExportChrome(ref, series: DrawingSeries.electricalLayout),
+          chrome: electricalExportChrome(ref,
+                  series: DrawingSeries.electricalLayout)
+              .withTitle(drawingSeriesTitle(DrawingSeries.electricalLayout,
+                  sheetName: sheet.name)),
           metersPerPixel: mech.calibrationFor(sheet.id)?.metersPerPixel,
           underlay: await buildPlanUnderlay(sheet),
         );
@@ -490,10 +501,14 @@ Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
         );
         final dxf = electricalPlanToDxf(
           data: data,
-          projectName: project.name.isEmpty ? 'electrical' : project.name,
+          projectName: electricalSheetProjectName(ref) ?? 'electrical',
           sheetName: sheet.name,
-          chrome:
-              electricalExportChrome(ref, series: DrawingSeries.electricalLayout),
+          chrome: electricalExportChrome(ref,
+                  series: DrawingSeries.electricalLayout)
+              .withTitle(drawingSeriesTitle(DrawingSeries.electricalLayout,
+                  sheetName: sheet.name)),
+          // Round 23 (elec-drafting-2-3) — world millimetres + snapped 1 : N.
+          metersPerPixel: mech.calibrationFor(sheet.id)?.metersPerPixel,
         );
         return _save(ref, dxf,
             name: project.name,

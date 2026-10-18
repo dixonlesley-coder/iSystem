@@ -73,7 +73,7 @@ import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
-    show SupplyDesign, determineSupply, recommendedDaya;
+    show SupplyDesign, determineSupply, recommendedDaya, serviceTransformer;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
 
@@ -388,6 +388,7 @@ AdvancedStudy computeAdvancedStudy(
       demandPower: Power(sys.supply.demandW),
       voltage: sys.supply.voltage,
       motors: gensetStartMotors(project),
+      utilitySub: powerOneLineUtilitySub(project, sys.supply.demandVa),
     );
   }
 
@@ -658,4 +659,20 @@ List<String> _aggregateVerify(List<List<String>?> lists) {
     }
   }
   return out;
+}
+
+/// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a
+/// DECLARED MV service (an explicit transformer rating or a dual-transformer
+/// service): `MV via TX <n x kVA>` from the SAME [serviceTransformer] the
+/// riser / overview / schedule print; null on an LV direct service (the
+/// builder's `<V> V LV` stands).
+String? powerOneLineUtilitySub(
+    ElectricalProject project, ApparentPower demandVa) {
+  if (project.transformerKva == null && !project.dualTransformer) return null;
+  final t = serviceTransformer(project, demandVa);
+  if (t == null || t.kva <= 0) return 'MV via TX';
+  String n(double v) =>
+      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+  final fig = t.units > 1 ? '${t.units} x ${n(t.kva)}' : n(t.kva);
+  return 'MV via TX $fig kVA';
 }

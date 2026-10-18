@@ -853,6 +853,7 @@ enum StringKey {
   undoLabelOccupancy,
   undoLabelFireHazard,
   undoLabelRainfall,
+  undoLabelMepDutyFeed,
   undoLabelRunoff,
   undoLabelDuctShape,
   undoLabelDuctMethod,
@@ -999,6 +1000,7 @@ enum StringKey {
   /// Round 22 — refusals for editing an MEP-DERIVED way / the MEP board,
   /// whose rows follow the equipment drawn on the plan.
   mepDerivedWayLocked,
+  mepDerivedWayMoveLocked,
   mepBoardLocked,
 
   /// The detail of the first added way — its own name + motor rating (the
@@ -2200,6 +2202,7 @@ const Map<StringKey, String> _en = {
   StringKey.undoLabelOccupancy: 'Occupancy',
   StringKey.undoLabelFireHazard: 'Fire hazard class',
   StringKey.undoLabelRainfall: 'Rainfall (storm)',
+  StringKey.undoLabelMepDutyFeed: 'Feed solved MEP duties',
   StringKey.undoLabelRunoff: 'Runoff coefficient',
   StringKey.undoLabelDuctShape: 'Duct shape',
   StringKey.undoLabelDuctMethod: 'Duct sizing method',
@@ -2331,6 +2334,8 @@ const Map<StringKey, String> _en = {
       'MEP Equipment board removed — no equipment left',
   StringKey.mepDerivedWayLocked:
       'This way follows equipment on the plan — delete the equipment there to remove it',
+  StringKey.mepDerivedWayMoveLocked:
+      'This way follows equipment on the plan and stays on the MEP Equipment board — feed that board from the panel instead',
   StringKey.mepBoardLocked:
       'The MEP Equipment board follows the plan — delete its equipment there first',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
@@ -3558,6 +3563,7 @@ const Map<StringKey, String> _id = {
   StringKey.undoLabelOccupancy: 'Hunian',
   StringKey.undoLabelFireHazard: 'Kelas bahaya kebakaran',
   StringKey.undoLabelRainfall: 'Curah hujan (badai)',
+  StringKey.undoLabelMepDutyFeed: 'Suplai beban MEP terhitung',
   StringKey.undoLabelRunoff: 'Koefisien limpasan',
   StringKey.undoLabelDuctShape: 'Bentuk ducting',
   StringKey.undoLabelDuctMethod: 'Metode ukuran ducting',
@@ -3690,6 +3696,8 @@ const Map<StringKey, String> _id = {
       'Panel Peralatan MEP dihapus — tidak ada peralatan tersisa',
   StringKey.mepDerivedWayLocked:
       'Jalur ini mengikuti peralatan di denah — hapus peralatannya di sana untuk menghapusnya',
+  StringKey.mepDerivedWayMoveLocked:
+      'Jalur ini mengikuti peralatan di denah dan tetap di Panel Peralatan MEP — suplai panel tersebut dari panel tujuan',
   StringKey.mepBoardLocked:
       'Panel Peralatan MEP mengikuti denah — hapus peralatannya di sana terlebih dahulu',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',

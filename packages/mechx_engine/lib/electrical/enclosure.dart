@@ -25,7 +25,7 @@ library;
 
 import 'dart:math' as math;
 
-import '../standards/puil.dart' show BreakerClass;
+import '../standards/puil.dart' show BreakerClass, BreakerClassCode;
 import '../units.dart' show Power;
 import 'panel_results.dart' show ElectricalPanelResult;
 
@@ -140,7 +140,7 @@ const double copperResistivityOhmM = 1.72e-8 * (1 + 0.00393 * 50);
 /// monotonically with load (every term is ∝ I²).
 double switchgearLossW(ElectricalPanelResult panel) {
   double pole(BreakerClass c) =>
-      c == BreakerClass.mccb ? mccbLossPerPoleW : mcbLossPerPoleW;
+      c == BreakerClass.mcb ? mcbLossPerPoleW : mccbLossPerPoleW;
   double device(double i, double inA, BreakerClass c, int poles) {
     if (inA <= 0) return 0;
     final r = i / inA;
@@ -248,7 +248,7 @@ int deviceModules({
 /// [deviceModules] matches against — mirrors the schedule-label convention in
 /// `report/electrical_sld_drawing.dart`'s `_classCode` / `bom.dart`'s
 /// `_classStr` (kept local rather than shared to stay file-disjoint).
-String _classCode(BreakerClass c) => c == BreakerClass.mccb ? 'MCCB' : 'MCB';
+String _classCode(BreakerClass c) => c.code;
 
 /// Estimate the total DIN-module count for a panel result.
 ///
