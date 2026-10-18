@@ -149,6 +149,7 @@ enum RptStringKey {
   hvacExhaustAirflow,
   hvacExhaustStatic,
   hvacExhaustMotor,
+  hvacFanUnitValue, // {lps} {pa} {kw}
   hvacOperatingPoint,
   hvacOperatingPointValue, // {lps} {pa} {pct} {match} {shutoff}
   hvacAirBalance,
@@ -205,6 +206,11 @@ enum RptStringKey {
   edbOriginFault,
   edbOriginFaultValue, // {ka} {ct}
   edbClearingTime, // {s}
+  edbClearingTimeKey,
+  edbClearingTimeValue, // {s}
+  edbFaultBasisExplicit,
+  edbFaultBasisEstimate,
+  edbFaultBasisDefault,
   headingSupplySummary,
   ssSystem,
   ssDiversifiedDemand,
@@ -476,7 +482,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'Remote head OK - demand governed by head minimum pressure, not density',
   RptStringKey.fireStandpipeKey: 'Standpipe:',
   RptStringKey.fireStandpipeValue:
-      '**{lps} L/s** · fire pump {m} m · {kw} kW · min riser {mm} mm',
+      '**{lps} L/s** · fire pump {m} m · {kw} kW shaft at rated point · '
+          'min riser {mm} mm',
   RptStringKey.firePumpKey: 'Fire-pump rating curve (NFPA 20, {des} pump):',
   RptStringKey.firePumpDuty: 'duty',
   RptStringKey.firePumpStandby: 'standby',
@@ -501,6 +508,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.hvacExhaustAirflow: 'Exhaust airflow:',
   RptStringKey.hvacExhaustStatic: 'Exhaust fan total static:',
   RptStringKey.hvacExhaustMotor: 'Exhaust fan motor:',
+  RptStringKey.hvacFanUnitValue:
+      '**{lps} L/s** · total static {pa} Pa · motor **{kw} kW**',
   RptStringKey.hvacOperatingPoint: 'Operating point (system × fan curve):',
   RptStringKey.hvacOperatingPointValue:
       '**{lps} L/s** @ **{pa} Pa** ({pct} % of design flow) · {match} · '
@@ -558,6 +567,12 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.edbOriginFaultValue:
       '**{ka} kA**{ct} (busbar short-circuit-withstand basis)',
   RptStringKey.edbClearingTime: ' · clearing time **{s} s**',
+  RptStringKey.edbClearingTimeKey: 'Busbar clearing time:',
+  RptStringKey.edbClearingTimeValue: '**{s} s**',
+  RptStringKey.edbFaultBasisExplicit: ' · _project setting_',
+  RptStringKey.edbFaultBasisEstimate:
+      ' · _estimated from the declared service size (// VERIFY)_',
+  RptStringKey.edbFaultBasisDefault: ' · _default — no service declared_',
   RptStringKey.headingSupplySummary: 'Supply summary',
   RptStringKey.ssSystem: 'System:',
   RptStringKey.ssDiversifiedDemand: 'Diversified demand:',
@@ -843,7 +858,8 @@ const Map<RptStringKey, String> kReportStringsId = {
           'bukan kerapatan',
   RptStringKey.fireStandpipeKey: 'Pipa tegak:',
   RptStringKey.fireStandpipeValue:
-      '**{lps} L/s** · pompa pemadam {m} m · {kw} kW · riser min {mm} mm',
+      '**{lps} L/s** · pompa pemadam {m} m · poros {kw} kW di titik rated · '
+          'riser min {mm} mm',
   RptStringKey.firePumpKey: 'Kurva rating pompa pemadam (NFPA 20, pompa {des}):',
   RptStringKey.firePumpDuty: 'utama',
   RptStringKey.firePumpStandby: 'cadangan',
@@ -866,6 +882,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.hvacExhaustAirflow: 'Aliran udara buang:',
   RptStringKey.hvacExhaustStatic: 'Statis total kipas buang:',
   RptStringKey.hvacExhaustMotor: 'Motor kipas buang:',
+  RptStringKey.hvacFanUnitValue:
+      '**{lps} L/s** · statis total {pa} Pa · motor **{kw} kW**',
   RptStringKey.hvacOperatingPoint: 'Titik operasi (sistem × kurva kipas):',
   RptStringKey.hvacOperatingPointValue:
       '**{lps} L/s** @ **{pa} Pa** ({pct} % dari aliran desain) · {match} · '
@@ -924,6 +942,13 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.edbOriginFaultValue:
       '**{ka} kA**{ct} (dasar ketahanan hubung-singkat busbar)',
   RptStringKey.edbClearingTime: ' · waktu pemutusan **{s} s**',
+  RptStringKey.edbClearingTimeKey: 'Waktu pemutusan busbar:',
+  RptStringKey.edbClearingTimeValue: '**{s} s**',
+  RptStringKey.edbFaultBasisExplicit: ' · _pengaturan proyek_',
+  RptStringKey.edbFaultBasisEstimate:
+      ' · _perkiraan dari ukuran sambungan yang dideklarasikan (// VERIFY)_',
+  RptStringKey.edbFaultBasisDefault:
+      ' · _bawaan — sambungan tidak dideklarasikan_',
   RptStringKey.headingSupplySummary: 'Ringkasan pasokan',
   RptStringKey.ssSystem: 'Sistem:',
   RptStringKey.ssDiversifiedDemand: 'Permintaan terdiversifikasi:',

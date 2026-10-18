@@ -1052,9 +1052,13 @@ bool _emitPlantDetail(
     final cap = kw != null ? 'BOOSTER PUMP $kw' : 'BOOSTER PUMP';
     prims.add(SldLabel(cx - _labelWidth(cap, 7) / 2, trainCy + gl / 2 + 24, cap,
         size: 7, role: SldRole.source));
-    // TRANSFER (ground -> roof lift) when a ground tank exists; else BOOSTER
+    // TRANSFER (ground -> roof lift) only when BOTH tanks exist (the legend's
+    // own definition, and riserFunctionFor's rule — Round 12 printed-parity-3:
+    // an upfeed ground-tank booster was labelled TRANSFER); else BOOSTER
     // (pump-up) on upfeed. Mirrors the canvas leg labels.
-    final leg = hasGround ? 'TRANSFER' : (!downfeed ? 'BOOSTER' : null);
+    final leg = hasGround && hasRoof
+        ? 'TRANSFER'
+        : (!downfeed ? 'BOOSTER' : null);
     if (leg != null) {
       prims.add(SldLabel(
           cx - _labelWidth(leg, 7) / 2, trainCy + gl / 2 + 36, leg,

@@ -15,8 +15,7 @@
 library;
 
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
-import 'package:mechx_engine/sizing/pump.dart' show PumpDuty;
+import 'package:mechx_engine/units.dart' show Power;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
 /// the single-line pipe tag (e.g. `100-CW-PPR-BOOSTER`).
@@ -141,6 +140,11 @@ RiserFunction? riserFunctionFor(Network net, NetEdge edge,
   // A run/riser directly downstream of a pump/boosterSet (an endpoint is one).
   // VERIFY: pumped/pressurized run downstream of a pump.
   final touchesPump = _isPumpish(fromC) || _isPumpish(toC);
+  // Round 12 (printed-parity-3) — the SUCTION run (ground tank → pump) is not
+  // boosted: only the discharge side is. No suffix (never a false BOOSTER).
+  final suction = (_isPumpish(fromC) && toC == NodeComponent.groundTank) ||
+      (_isPumpish(toC) && fromC == NodeComponent.groundTank);
+  if (suction) return null;
   if (touchesPump) return RiserFunction.booster;
 
   // Under UPFEED, an ASCENDING pressurized cold/hot-water riser is the booster
@@ -414,22 +418,30 @@ class FloorFanOut {
   });
 }
 
+/// The ONE motor-kW figure every mechanical drawing prints beside a pump /
+/// fan (Round 12, printed-parity-2): 2 dp below 1 kW (0.37 / 0.55 — the real
+/// IEC frames; 1 dp printed non-existent '0.4' / '0.6' kW frames), 1 dp from
+/// 1 kW up (1.1 / 5.5 / 55.0), matching the equipment schedule's figures.
+String motorKwText(Power motor) {
+  final kw = motor.inKiloWatts;
+  return '${kw < 1 ? kw.toStringAsFixed(2) : kw.toStringAsFixed(1)} kW';
+}
+
 /// The equipment detail SUFFIX drawn beside an equipment symbol on the
 /// single-line — a tank capacity (`237 m3`) or a duty (`5.5 kW`) — or null when
 /// no datum genuinely exists (the node then keeps its plain name, no fabricated
 /// value). HONEST: a tank's m3 is a direct conversion of the stored
-/// [NetNode.tankCapacityLitres]; a duty is shown only when the matching system
-/// duty provider is non-null.
+/// [NetNode.tankCapacityLitres]; a duty is shown only for the node's OWN
+/// solved [motor] — Round 12 (printed-parity-1): the caller resolves it per
+/// node (fire-piped pump → the NFPA 20 frame, the domestic source pump → the
+/// booster, each air unit → the system rooted at it), so one system duty is
+/// never stamped on every pump / air unit of that kind. Null [motor] ⇒ no
+/// duty suffix.
 ///
 /// Pure + Flutter-free (engine types only) so it is unit-testable in isolation
 /// and shared by the schematic painter AND the riser single-line EXPORT builder
 /// (`mechanical_sld_drawing.dart` `equipmentDetailByNodeId` — B1 parity).
-String? equipmentDetail(
-  NetNode node, {
-  PumpDuty? supplyPump,
-  FanDuty? fan,
-  PumpDuty? firePump,
-}) {
+String? equipmentDetail(NetNode node, {Power? motor}) {
   final c = node.component;
   if (c == null) return null;
   switch (c) {
@@ -447,21 +459,12 @@ String? equipmentDetail(
       return '$clean m3';
     case NodeComponent.pump:
     case NodeComponent.boosterSet:
-      // VERIFY: this is the SYSTEM supply-pump duty (one trunk pump), not a
-      // per-node solve — a project with several independent pumps would show the
-      // same duty on every pump node. Acceptable first pass (one supply pump is
-      // the norm); the fire pump is deliberately NOT attached here (no node-kind
-      // distinguishes a fire pump from a plumbing pump yet).
-      if (supplyPump == null) return null;
-      return '${supplyPump.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
     case NodeComponent.ahu:
     case NodeComponent.fcu:
     case NodeComponent.supplyFan:
     case NodeComponent.exhaustFan:
-      // VERIFY: same system-level caveat as the pump — the central duct-fan duty
-      // is attached to every air-unit node of this kind (no per-unit fan solve).
-      if (fan == null) return null;
-      return '${fan.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
+      if (motor == null || motor.watts <= 0) return null;
+      return motorKwText(motor);
     default:
       return null;
   }

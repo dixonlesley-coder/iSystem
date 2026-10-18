@@ -3,7 +3,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/calibration_store.dart';
-import '../../store/history_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -145,18 +144,15 @@ class SheetCanvas extends ConsumerWidget {
     final key = event.logicalKey;
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
-    final shift = HardwareKeyboard.instance.isShiftPressed;
 
-    // Single global undo/redo timeline across all domains (Ctrl/Cmd+Z,
-    // Ctrl+Shift+Z or Ctrl+Y to redo) — reverts the genuinely most-recent edit.
-    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
-      ref.read(historyProvider.notifier).undo();
-      return KeyEventResult.handled;
-    }
+    // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
+    // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
+    // (AppShell._onHardwareKey). That handler's return value does NOT stop
+    // the framework delivering the same key down the focus chain, so acting
+    // here too undid / redid TWO steps per press. Consume the combo without
+    // acting so nothing further down this handler reacts to it.
     if (mod &&
-        ((key == LogicalKeyboardKey.keyZ && shift) ||
-            key == LogicalKeyboardKey.keyY)) {
-      ref.read(historyProvider.notifier).redo();
+        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
       return KeyEventResult.handled;
     }
 

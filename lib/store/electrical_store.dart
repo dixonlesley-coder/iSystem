@@ -32,6 +32,8 @@ import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/panel_templates.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/topology.dart';
+import 'package:mechx_engine/report/electrical_calc_report.dart'
+    show FaultLevelBasis;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -375,6 +377,32 @@ final electricalProjectProvider =
 /// // disconnection basis silently.
 const double _liveBusbarClearingTimeS = 0.1;
 
+/// The EFFECTIVE Fold-1 origin fault level the live solve sizes busbars on,
+/// with its provenance (Round 12, report-recompute-fault-basis-omitted):
+/// explicit project setting → [estimatedServiceFaultLevelA] from a declared
+/// service → the flat [defaultLvUtilityFaultKa]. The ONE chain shared by
+/// [electricalResultProvider] and the issued report's Design Basis, so the
+/// printed assumption can never differ from the one that sized the bus.
+({double amperes, FaultLevelBasis basis}) effectiveOriginFaultLevel(
+    ElectricalProject project) {
+  final explicit = project.originFaultLevelA;
+  if (explicit != null) {
+    return (amperes: explicit.amperes, basis: FaultLevelBasis.explicit);
+  }
+  final est = estimatedServiceFaultLevelA(project);
+  if (est != null) {
+    return (amperes: est.amperes, basis: FaultLevelBasis.serviceEstimate);
+  }
+  return (
+    amperes: defaultLvUtilityFaultKa * 1000,
+    basis: FaultLevelBasis.defaultValue,
+  );
+}
+
+/// The effective busbar clearing time (s) — explicit, else the live 0.1 s.
+double effectiveBusbarClearingTimeS(ElectricalProject project) =>
+    project.busbarClearingTimeS ?? _liveBusbarClearingTimeS;
+
 final electricalResultProvider = Provider<ElectricalSystemResult>(
   (ref) {
     final geo = ref.watch(projectControllerProvider);
@@ -400,11 +428,8 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
       // as a real substation); else the app default (16 kA) — so a project that
       // declares nothing stays byte-identical. Clearing time keeps its own
       // separate fallback (0.1 s) regardless of which fault-level tier applies.
-      originFaultLevel: project.originFaultLevelA ??
-          estimatedServiceFaultLevelA(project) ??
-          const Current(defaultLvUtilityFaultKa * 1000),
-      busbarClearingTimeS:
-          project.busbarClearingTimeS ?? _liveBusbarClearingTimeS,
+      originFaultLevel: Current(effectiveOriginFaultLevel(project).amperes),
+      busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
       priorAssignments: cache.prior,
       phaseReassignThresholdA: kPhaseStickinessA,
     );

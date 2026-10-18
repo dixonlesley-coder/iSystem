@@ -418,7 +418,9 @@ void main() {
       ],
     );
 
-    test('a 10 L/s collector is DN200, its downpipe keeps the table DN100', () {
+    test(
+        'a 10 L/s collector is DN200; its downpipe (table DN100) is raised '
+        'to DN200 so it never necks down (Round 12)', () {
       // Manning full bore, n = 0.010, S = 0.01, Q = (1/n)·A·R^(2/3)·√S:
       //   DN100: R = 0.025, R^(2/3) = 0.08550, A = 7.854e-3
       //          Q = 100 × 7.854e-3 × 0.08550 × 0.1 = 6.715 L/s full bore —
@@ -427,7 +429,9 @@ void main() {
       //          Q_full = 19.80 L/s → half-full 9.90 L/s < 10 ✗
       //   DN200: R = 0.05, R^(2/3) = 0.13572, A = 0.031416
       //          Q_full = 42.64 L/s → half-full 21.32 L/s ≥ 10 ✓ ⇒ DN200.
-      // Downpipe table row (10.5 L/s, DN100) still governs the vertical riser.
+      // Downpipe table row (10.5 L/s, DN100) is the riser's OWN pick, but the
+      // DN200 collector discharges into it — Round 12 (mech-props-2
+      // rain-downpipe-shrinks) clamps the downpipe ≥ that collector: DN200.
       final dn100Full = 100 *
           (math.pi * 0.1 * 0.1 / 4) *
           math.pow(0.025, 2 / 3) *
@@ -448,7 +452,14 @@ void main() {
               .sizeForFlow(flow: const FlowRate(0.010), slope: 0.01)
               .diameter
               .inMillimeters);
-      expect(sized['dp']!.diameter.inMillimeters, closeTo(100, 1e-9));
+      expect(
+          storm
+              .sizeRainwaterDownpipe(const FlowRate(0.010))
+              .diameter
+              .inMillimeters,
+          closeTo(100, 1e-9));
+      expect(sized['dp']!.diameter.inMillimeters, closeTo(200, 1e-9));
+      expect(sized['dp']!.stackRaisedForBranch, isTrue);
     });
 
     test('a collector past DN300 half-full is flagged overCapacity', () {
@@ -567,14 +578,18 @@ void main() {
       expect(sized['b']!.flow.inLitersPerSecond, closeTo(10, 1e-9));
       expect(sized['c']!.flow.inLitersPerSecond, closeTo(15, 1e-9));
       expect(sized['dp']!.flow.inLitersPerSecond, closeTo(15, 1e-9));
-      // Downpipe table: 15 L/s → first row ≥ 15 is (19.0, DN125).
-      expect(sized['dp']!.diameter.inMillimeters, closeTo(125, 1e-9));
+      // Downpipe table: 15 L/s → first row ≥ 15 is (19.0, DN125) — its own
+      // pick. The collector c (15 L/s, Manning half-full: DN150 9.90 L/s ✗,
+      // DN200 21.32 L/s ✓ ⇒ DN200) discharges into it, so Round 12 raises
+      // the downpipe to DN200 (never smaller than its collector).
       expect(
-          sized['dp']!.diameter.inMillimeters,
           storm
               .sizeRainwaterDownpipe(const FlowRate(0.015))
               .diameter
-              .inMillimeters);
+              .inMillimeters,
+          closeTo(125, 1e-9));
+      expect(sized['c']!.diameter.inMillimeters, closeTo(200, 1e-9));
+      expect(sized['dp']!.diameter.inMillimeters, closeTo(200, 1e-9));
     });
 
     test('src–o1–o2 untyped water outlets: a carries f(2 × fuPerLeaf)', () {

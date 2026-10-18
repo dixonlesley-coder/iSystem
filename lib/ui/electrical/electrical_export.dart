@@ -471,7 +471,17 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               project: project,
               result: result,
               powerOneLine: advanced.powerOneLine,
-              verifyItems: advanced.verifyItems,
+              // Round 12 — the PUIL KHA / derating / Vd debt beside the
+              // advanced-study items, and the EFFECTIVE fault basis the
+              // busbars were sized on (same chain as the live solve).
+              verifyItems: [
+                ...advanced.verifyItems,
+                for (final v in profile.verifyChecklist)
+                  '${v.citation}${v.note == null ? '' : ' — ${v.note}'}',
+              ],
+              originFaultLevelA: effectiveOriginFaultLevel(project).amperes,
+              faultLevelBasis: effectiveOriginFaultLevel(project).basis,
+              busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
               revisions: ref.read(documentControlProvider).revisions,
               // R1 — the issued report prints the SAME combined warning
               // surface Review + compliance show (core sizing warnings PLUS

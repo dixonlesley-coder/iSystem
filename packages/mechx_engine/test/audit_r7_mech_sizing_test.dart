@@ -518,12 +518,18 @@ void main() {
     // Each tie vents its floor's 24 DFU (through-DFU at DS_f minus what enters
     // through the tie below it); the vent accumulates toward the VTR:
     //   tie_f 24, v1 24, v2 48, v3 72, vtr 96.
+    // Round 12 (mech-props-2 vent-stack-reverse-taper) — a VENT STACK is
+    // sized over its whole developed length on the TOTAL DFU of the soil
+    // stack it serves (IPC 916.1 / UPC 703.2), so every riser segment
+    // v1..v3 + vtr takes the stack's largest load, 96 DFU → DN100 — never
+    // the reverse-tapered DN50 base. The branch ties keep their own 24 DFU.
     expect(sized['tie2']!.diameter.inMillimeters,
         drain.ventDiameterForDfu(24).inMillimeters);
-    expect(sized['v3']!.diameter.inMillimeters,
-        drain.ventDiameterForDfu(72).inMillimeters);
-    expect(sized['vtr']!.diameter.inMillimeters,
-        drain.ventDiameterForDfu(96).inMillimeters);
+    for (final id in ['v1', 'v2', 'v3', 'vtr']) {
+      expect(sized[id]!.diameter.inMillimeters,
+          drain.ventDiameterForDfu(96).inMillimeters,
+          reason: id);
+    }
     // Round 9 — UPC 703.2 puts 96 DFU (84 < 96 ≤ 256) in the DN100 row; the
     // half-drain floor (96 DFU stack → DN100 ⇒ ½ = 50) does not bind.
     expect(drain.ventDiameterForDfu(96).inMillimeters, 100);

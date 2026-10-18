@@ -36,6 +36,8 @@ import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/duct_sizing.dart'
     show standardDuctDiametersMm;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
+import 'package:mechx_engine/sizing/fire_standpipe.dart' show standpipeVerifyChecklist;
+import 'package:mechx_engine/sizing/hot_water.dart' show hotWaterRecircVerifyChecklist;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
@@ -135,12 +137,39 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     },
   );
 
+  // Round 12 (report-recompute-second-ahu-missing) — every drawn supply /
+  // exhaust system with its OWN duty and the SAME tag the equipment schedule
+  // prints (the schedule's per-root rows), so a second AHU is reported.
+  final rs = reportStringsFor(ref);
+  final scheduledFans = gatherEquipmentScheduleData(ref).fans;
+  final standpipe = ref.read(standpipeDesignProvider);
+  final hwRecirc = ref.read(hotWaterRecircProvider);
   return CalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
     standardsName: profile.name,
     standardsRevision: profile.revision,
-    verifyItems: profile.verifyChecklist,
+    // Round 12 (report-recompute-verify-items-incomplete) — every unverified
+    // constant that drives a PRINTED number: the per-material H-W C / duct
+    // roughness / BJLS gauges, and (when those lines print) the standpipe
+    // allowance / η / residual and the HW-recirc loss / cp (golden rule 6).
+    verifyItems: [
+      ...profile.verifyChecklist,
+      ...pipeProductsVerifyChecklist,
+      ...ductProductsVerifyChecklist,
+      ...standpipeVerifyChecklist,
+      if (hwRecirc != null) ...hotWaterRecircVerifyChecklist,
+    ],
+    supplyFans: [
+      for (final f in scheduledFans)
+        if (f.service == rs(RptStringKey.esSvcMechVent))
+          (tag: f.tag ?? '', duty: f.duty),
+    ],
+    exhaustFans: [
+      for (final f in scheduledFans)
+        if (f.service == rs(RptStringKey.esSvcExhaustVent))
+          (tag: f.tag ?? '', duty: f.duty),
+    ],
     building: project.building,
     mounting: mounting,
     runSchedule: runSchedule,
@@ -158,9 +187,9 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     zones: strategy == FeedStrategy.downfeed
         ? ref.read(zoneStaticsProvider)
         : const [],
-    hotWaterRecirc: ref.read(hotWaterRecircProvider),
+    hotWaterRecirc: hwRecirc,
     sprinkler: ref.read(sprinklerDesignProvider),
-    standpipe: ref.read(standpipeDesignProvider),
+    standpipe: standpipe,
     sprinklerRemoteArea: ref.read(sprinklerRemoteAreaProvider),
     firePumpRating: ref.read(firePumpRatingProvider),
     fan: ref.read(ductFanProvider),
@@ -186,6 +215,7 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
   final eResult = ref.read(electricalResultProvider);
   final eAdvanced = ref.read(electricalAdvancedProvider);
   const eProfile = PuilProfile();
+  final effectiveFault = effectiveOriginFaultLevel(eProject);
   return ElectricalCalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
@@ -195,9 +225,19 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
     project: eProject,
     result: eResult,
     powerOneLine: eAdvanced.powerOneLine,
-    verifyItems: eAdvanced.verifyItems,
-    originFaultLevelA: eProject.originFaultLevelA?.amperes,
-    busbarClearingTimeS: eProject.busbarClearingTimeS,
+    // Round 12 — the PUIL KHA / derating / Vd debt behind every printed cable
+    // size, beside the advanced-study items.
+    verifyItems: [
+      ...eAdvanced.verifyItems,
+      for (final v in eProfile.verifyChecklist)
+        '${v.citation}${v.note == null ? '' : ' — ${v.note}'}',
+    ],
+    // Round 12 (report-recompute-fault-basis-omitted) — the EFFECTIVE fault
+    // level + clearing time the busbars were sized on (the same chain as
+    // electricalResultProvider), with their provenance.
+    originFaultLevelA: effectiveFault.amperes,
+    faultLevelBasis: effectiveFault.basis,
+    busbarClearingTimeS: effectiveBusbarClearingTimeS(eProject),
     revisions: ref.read(documentControlProvider).revisions,
     // R1 — the ISSUED report reads the SAME combined warning surface Review and
     // the compliance roll-up read (core sizing warnings + the advanced fault

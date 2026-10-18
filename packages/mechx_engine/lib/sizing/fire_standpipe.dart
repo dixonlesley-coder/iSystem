@@ -20,6 +20,7 @@ library;
 
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart';
+import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
 // ── Unit conversion ──────────────────────────────────────────────────────────
@@ -283,3 +284,28 @@ FireStandpipeDesign designStandpipe({
     pumpShaftPower: pumpShaftPower,
   );
 }
+
+/// Round 12 (report-recompute-verify-items-incomplete) — the unverified
+/// constants behind the PRINTED standpipe line (flow / pump head / shaft
+/// power), so the calc report's Unverified section lists what the figure
+/// rests on (golden rule 6). Defaults of [designStandpipe].
+const List<StandardValue<Object?>> standpipeVerifyChecklist = [
+  StandardValue<Object?>(15.0,
+      unit: 'm',
+      citation: 'Standpipe friction allowance (designStandpipe default)',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Fixed 15 m head allowance for standpipe-main friction — general '
+          'practice pending a full Hazen–Williams route calculation '
+          '(SNI 03-1745-2000).'),
+  StandardValue<Object?>(0.70,
+      unit: '-',
+      citation: 'Fire-pump overall efficiency η (designStandpipe default)',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Representative pump + motor efficiency 0.70 — verify against the '
+          "selected pump's certified curve (SNI 03-6570-2001)."),
+  StandardValue<Object?>(kResidualPressureClassIKpa,
+      unit: 'kPa',
+      citation: 'SNI 03-1745-2000 — Class I topmost-outlet residual',
+      note: '690 kPa (100 psi) residual at the topmost Class I hose outlet; '
+          'secondary source pending the official clause.'),
+];

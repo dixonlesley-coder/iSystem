@@ -36,44 +36,42 @@ void main() {
     final l1 = mdp.phaseBalance.l1;
     final l2 = mdp.phaseBalance.l2;
     final l3 = mdp.phaseBalance.l3;
-    // Sample-project fixture values (Menara Contoh MDP): R=199.3A S=140.2A
-    // T=140.2A.
+    // Sample-project fixture values (Menara Contoh MDP): R=221.9A S=162.8A
+    // T=162.8A.
     //
-    // Re-derived 2026-10-18 (audit r8): fire-hvac-2 — the SNI 03-1745 /
-    // NFPA 14 most-remote riser is 500 gpm, not 550; coupling-4 — a solved
-    // motor way sizes on max(operating input, NAMEPLATE motor ÷ η 0.90). The
-    // harness fixture's motor ways are projected from the SOLVED duties via
-    // `buildEquipmentCircuits`. MDP's ways, at 400 V 3φ, cosφ 0.85
-    // (√3 × 400 × 0.85 = 588.9 V·):
+    // Re-derived 2026-10-18 (Round 12, printed-parity-5): the harness now
+    // feeds the EMG fire-pump way from the NFPA 20 SELECTED motor exactly as
+    // the app's electrical feed does (55 kW frame — the overload shaft power
+    // 49.36 kW governs — not the 43.0 kW rated-point shaft), and the AHU
+    // duty carries its 250 Pa internal static. MDP's ways, at 400 V 3φ,
+    // cosφ 0.85 (√3 × 400 × 0.85 = 588.9 V·):
     //   Feeder to PP-1   3·2600 + 4400 + max(537.6, 550/0.9 = 611.1) (booster)
-    //                    + max(25.2, 370/0.9 = 411.1) (AHU fan)
+    //                    + max(179.1, 370/0.9 = 411.1) (AHU fan, 291 Pa)
     //                    = 13 222.2 W / 588.9 = 22.5 A  (3φ)
-    //   Feeder to EMG    fire-pump shaft 9810·0.031545·97.336/0.70
-    //                    = 43 030.7 W ÷ η 0.90 = 47 811.9 W
-    //                    + 1 000 W em. lighting = 48 811.9 W / 588.9 = 82.9 A
+    //   Feeder to EMG    fire-pump motor 55 000 W ÷ η 0.90 = 61 111.1 W
+    //                    + 1 000 W em. lighting = 62 111.1 W / 588.9 = 105.5 A
     //   Lift motor       11 kW ÷ 0.88 = 12 500 W / 588.9 = 21.2 A  (3φ)
     //   General power    8 000 W / 588.9 = 13.6 A  (3φ)
     //   Feeder to LP-1   11 050 W / (220 × 0.85) = 59.1 A  (1φ, line R)
-    // S = T = 82 534.1 / 588.9 = 140.2 A; R = 140.2 + 59.1 = 199.3 A.
-    expect(l1, closeTo(199.3, 0.05));
-    expect(l2, closeTo(140.2, 0.05));
-    expect(l3, closeTo(140.2, 0.05));
+    // S = T = 22.5 + 105.5 + 21.2 + 13.6 = 162.8 A; R = 162.8 + 59.1 = 221.9 A.
+    expect(l1, closeTo(221.9, 0.05));
+    expect(l2, closeTo(162.8, 0.05));
+    expect(l3, closeTo(162.8, 0.05));
 
     // Hand derivation of the imbalance the engine must have computed:
-    //   avg   = (199.3 + 140.2 + 140.2) / 3     = 479.7 / 3   = 159.9 A
-    //   imbal = (max - min) / avg * 100         = (199.3 - 140.2) / 159.9 * 100
-    //         = 59.1 / 159.9 * 100              = 36.96...%
-    //   rounded to 1 dp (the engine's own `roundTo(_, 1)`)   -> 37.0%
+    //   avg   = (221.9 + 162.8 + 162.8) / 3     = 547.5 / 3   = 182.5 A
+    //   imbal = (max - min) / avg * 100         = (221.9 - 162.8) / 182.5 * 100
+    //         = 59.1 / 182.5 * 100              = 32.38...%
+    //   rounded to 1 dp (the engine's own `roundTo(_, 1)`)   -> 32.4%
     final avg = (l1 + l2 + l3) / 3;
     final handImbalance = (l1 - l3) / avg * 100; // max=l1, min=l3(==l2)
-    expect(handImbalance, closeTo(37.0, 0.05));
-    expect(mdp.imbalancePercent, closeTo(37.0, 0.05));
+    expect(handImbalance, closeTo(32.4, 0.05));
+    expect(mdp.imbalancePercent, closeTo(32.4, 0.05));
 
     final sheet = buildElectricalPanelDetail(
         project: project, result: result, panelId: 'MDP');
     final total = sheetLabels(sheet).firstWhere((t) => t.startsWith('TOTAL'));
-    // The footer prints a whole figure without a trailing '.0'.
-    expect(total, contains('imbalance 37%'),
+    expect(total, contains('imbalance 32.4%'),
         reason: 'the printed TOTAL footer must carry the same imbalance % '
             'the engine computed, not a re-derived or rounded-differently one');
   });

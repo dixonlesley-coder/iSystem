@@ -302,3 +302,35 @@ FirePumpRatingResult checkFirePumpRating({
     standbyRecommended: standbyRecommended,
   );
 }
+
+/// The ONE scheduled + electrically fed fire-pump duty (Round 12,
+/// printed-parity-5): the hydraulic duty is the standpipe RATED point
+/// ([sizePump] on [ratedFlow] / [ratedHead]) but the MOTOR is the NFPA 20
+/// selection of [rating] (the frame covering the governing — overload — shaft
+/// power), with the input taken at that governing shaft power at the rated
+/// point's motor efficiency. Shared by the app's `firePumpDutyProvider` and
+/// the export harness so the schedule FP-01 row, the EMG panel way and the
+/// calc report's rating-curve motor name ONE kW. Pure.
+PumpDuty firePumpDuty({
+  required FlowRate ratedFlow,
+  required Head ratedHead,
+  required FirePumpRatingResult rating,
+}) {
+  final base = sizePump(flow: ratedFlow, head: ratedHead);
+  final motorEff = base.shaftPower.watts > 0
+      ? base.motorInputPower.watts / base.shaftPower.watts
+      : 1.0;
+  final governingShaft =
+      rating.overload.shaftPower.watts > base.shaftPower.watts
+          ? rating.overload.shaftPower.watts
+          : base.shaftPower.watts;
+  return PumpDuty(
+    flow: base.flow,
+    head: base.head,
+    hydraulicPower: base.hydraulicPower,
+    shaftPower: base.shaftPower,
+    motorInputPower: Power(governingShaft * motorEff),
+    selectedMotor: rating.selectedMotor,
+    motorOversized: rating.oversized,
+  );
+}

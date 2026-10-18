@@ -104,6 +104,23 @@ List<RptBlock> _demoteBlocks(List<RptBlock> blocks) {
   return blocks;
 }
 
+/// [blocks] minus their Revision-history section (the heading and the table
+/// right after it) — the unified report prints ONE merged history instead.
+List<RptBlock> _withoutRevisionHistory(
+    List<RptBlock> blocks, ReportStrings strings) {
+  final title = strings(RptStringKey.headingRevisionHistory);
+  final out = <RptBlock>[];
+  for (var i = 0; i < blocks.length; i++) {
+    final b = blocks[i];
+    if (b is RptHeading && b.text == title) {
+      if (i + 1 < blocks.length && blocks[i + 1] is RptTable) i++;
+      continue;
+    }
+    out.add(b);
+  }
+  return out;
+}
+
 /// Build the unified MEP building-services report as the neutral block list —
 /// the one content model behind both the Markdown render
 /// ([buildMepUnifiedReport]) and the PDF typesetter.
@@ -146,21 +163,30 @@ List<RptBlock> buildMepUnifiedReportBlocks({
 
     // ── Mechanical section (full body, demoted) ───────────────────────────────
     RptHeading(1, strings(RptStringKey.mepHeadingMechPlumb1)),
-    ..._demoteBlocks(buildCalcReportBlocks(mechanical, strings)),
+    ..._withoutRevisionHistory(
+        _demoteBlocks(buildCalcReportBlocks(mechanical, strings)), strings),
     // The legacy composer wrote a blank line after each embedded body (the
     // mechanical body ends its closing note without one).
     const RptMarkdown('\n'),
 
     // ── Electrical section (full body, demoted) ───────────────────────────────
     RptHeading(1, strings(RptStringKey.mepHeadingElectrical)),
-    ..._demoteBlocks(buildElectricalCalcReportBlocks(electrical, strings)),
+    ..._withoutRevisionHistory(
+        _demoteBlocks(buildElectricalCalcReportBlocks(electrical, strings)),
+        strings),
     const RptMarkdown('\n'),
   ];
 
   // ── Merged revision history ─────────────────────────────────────────────────
+  // Round 12 (report-recompute-mep-revisions-duplicated) — both disciplines
+  // are fed from the SAME document-control register, so the merge is
+  // DE-DUPLICATED on (date, description), first occurrence order kept, and
+  // the per-discipline tables inside the demoted bodies are dropped
+  // ([_withoutRevisionHistory]) — one revision prints once, not four times.
+  final seenRevisions = <(String, String)>{};
   final mergedRevisions = <Revision>[
-    ...mechanical.revisions,
-    ...electrical.revisions,
+    for (final r in [...mechanical.revisions, ...electrical.revisions])
+      if (seenRevisions.add((r.date, r.description))) r,
   ];
   if (mergedRevisions.isNotEmpty) {
     blocks

@@ -13,6 +13,7 @@ import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/riser_tags.dart' show equipmentDetail;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/network_sizing.dart'
@@ -305,21 +306,19 @@ double? _acRoomWatts(
 }) =>
     acUnitShare(net, rooms, mppFor, node, method: method)?.inputW;
 
-/// Motorised equipment NODES the engineer has placed on the plan (pumps, fans,
-/// AHUs, FCUs…) surfaced as electrical loads — so a pump drawn on the PLUMBING
-/// layer is INTER-RELATED with the electrical model and appears as its own
-/// circuit on the panel. Each node's load is its explicit `electricalLoadW`
-/// override, else the component's representative `defaultMotorKw`. Keyed by the
-/// node id, so editing/moving the node updates its circuit in place.
-final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
+/// The solved duty each DRAWN equipment node carries — its OWN duty, keyed by
+/// node id (absent when none / not solved): a fire-piped pump the NFPA 20
+/// fire-pump frame, the cold-water source pump the domestic booster duty,
+/// every air unit a supply / return / exhaust system is rooted at THAT
+/// system's duty. Round 12 (printed-parity-1) — the ONE per-node duty map the
+/// panel feed AND the riser drawing read, so the riser can never print the
+/// booster's kW beside the fire pump or the supply AHU's kW beside an exhaust
+/// fan while the schedule prints each unit's own duty under the same tag.
+final equipmentNodeDutiesProvider =
+    Provider<Map<String, ({Power motor, Power input})>>((ref) {
   final net = ref.watch(networkControllerProvider).network;
-  final rooms = ref.watch(roomAreasProvider);
-  final project = ref.watch(projectControllerProvider);
   final bind = ref.watch(mepDutyBindingProvider);
-  double? mppFor(String sheetId) =>
-      project.calibrationFor(sheetId)?.metersPerPixel;
 
-  // The solved duty a drawn node carries (null when none / not solved).
   ({Power motor, Power input})? dutyFor(NetNode n) {
     PumpDuty? p;
     FanDuty? f;
@@ -350,6 +349,48 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
           op, motor, defaultMotorEfficiency),
     );
   }
+
+  final out = <String, ({Power motor, Power input})>{};
+  for (final n in net.nodes) {
+    final c = n.component;
+    if (c == null || !c.isElectricalLoad) continue;
+    final d = dutyFor(n);
+    if (d != null) out[n.id] = d;
+  }
+  return out;
+});
+
+/// The riser single-line's per-node equipment DETAIL suffix (tank m3 / the
+/// node's OWN motor kW) — one map shared by the Auto canvas and the issued
+/// riser PDF/DXF (Round 12, printed-parity-1/2), resolved from
+/// [equipmentNodeDutiesProvider] so the riser and the equipment schedule /
+/// panel feed print the same machine's duty under the same tag.
+final riserEquipmentDetailsProvider = Provider<Map<String, String>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final duties = ref.watch(equipmentNodeDutiesProvider);
+  return {
+    for (final node in net.nodes)
+      node.id: ?equipmentDetail(node, motor: duties[node.id]?.motor),
+  };
+});
+
+/// Motorised equipment NODES the engineer has placed on the plan (pumps, fans,
+/// AHUs, FCUs…) surfaced as electrical loads — so a pump drawn on the PLUMBING
+/// layer is INTER-RELATED with the electrical model and appears as its own
+/// circuit on the panel. Each node's load is its explicit `electricalLoadW`
+/// override, else the component's representative `defaultMotorKw`. Keyed by the
+/// node id, so editing/moving the node updates its circuit in place.
+final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final rooms = ref.watch(roomAreasProvider);
+  final project = ref.watch(projectControllerProvider);
+  final bind = ref.watch(mepDutyBindingProvider);
+  final duties = ref.watch(equipmentNodeDutiesProvider);
+  double? mppFor(String sheetId) =>
+      project.calibrationFor(sheetId)?.metersPerPixel;
+
+  // The solved duty a drawn node carries (null when none / not solved).
+  ({Power motor, Power input})? dutyFor(NetNode n) => duties[n.id];
 
   final loads = <MepEquipmentLoad>[];
   for (final n in net.nodes) {

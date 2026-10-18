@@ -517,11 +517,19 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final edge = edgeById[id];
     if (edge == null) continue;
     final sheetId = sheetForEdge(edge);
+    // Round 12 — on a GRAVITY service the flag marks a loop's CLOSING edge
+    // (nearest-outlet tree, sized on the larger adjacent load), not a
+    // Hardy–Cross non-convergence: say so.
+    final gravity = edge.service.regime == FlowRegime.gravity;
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: 'loop-unbalanced',
-      title: str(StringKey.issueLoopUnbalancedTitle),
-      message: str(StringKey.issueLoopUnbalancedMessage),
+      title: str(gravity
+          ? StringKey.issueGravityLoopTitle
+          : StringKey.issueLoopUnbalancedTitle),
+      message: str(gravity
+          ? StringKey.issueGravityLoopMessage
+          : StringKey.issueLoopUnbalancedMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }

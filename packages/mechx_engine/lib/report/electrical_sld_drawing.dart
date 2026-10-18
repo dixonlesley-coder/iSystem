@@ -33,6 +33,8 @@ import '../electrical/sources.dart'
         GeneratorModeInfo,
         kGeneratorPf,
         selectGeneratorUnits,
+        GeneratorSource,
+        sizeGenerator,
         sizeBattery;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
@@ -1363,6 +1365,23 @@ String _supplyHeadLabel(ElectricalProject project,
   );
 }
 
+/// The GENSET figure for the drawings, sized in ONE place (Round 12,
+/// report-recompute-genset-prime-kva-mismatch): [sizeGenerator] — the same
+/// call the report's power one-line makes — so a PRIME-mode set carries its
+/// 1.25× continuous-duty uplift on every drawing too (the drawings used to
+/// snap the bare backup demand: 82 kVA drawn vs 100 kVA reported). A forced
+/// nameplate is printed verbatim.
+({double totalKva, String text}) _gensetKva(
+    ApparentPower backupVa, GeneratorSource gen) {
+  if (gen.kva != null) return _ladderKva(backupVa, forced: gen.kva);
+  final r = sizeGenerator(backupVa, mode: gen.mode);
+  final unit = r.ratingKva.inKilovoltAmperes;
+  return (
+    totalKva: unit * r.units,
+    text: r.units > 1 ? '${r.units} x ${_num(unit)}' : _num(unit),
+  );
+}
+
 String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
   final demandKva = demandVa.inKilovoltAmperes;
   if (demandKva <= 0 || genKva <= 0) return null;
@@ -1512,7 +1531,7 @@ const double _sideNodeBottom = 14;
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
       final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
-      final genFig = _ladderKva(backupVa, forced: gen.kva);
+      final genFig = _gensetKva(backupVa, gen);
       final genKva = genFig.totalKva;
       final gy = lvMidY - _ovH - 8;
       final gcy = gy + _ovH / 2;
@@ -1606,7 +1625,7 @@ const double _sideNodeBottom = 14;
         final gen = project.sources!.generator!;
         final backupVa =
             ApparentPower(demandVa.voltAmperes * gen.backupFraction);
-        final genFig = _ladderKva(backupVa, forced: gen.kva);
+        final genFig = _gensetKva(backupVa, gen);
         final genKva = genFig.totalKva;
         connectTo(13, 13);
         _emitGenerator(prims, dropX, cy, 13, SldRole.source);
@@ -1774,7 +1793,7 @@ const double _sideNodeBottom = 14;
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = ApparentPower(demandVa.voltAmperes * gen.backupFraction);
-    final genFig = _ladderKva(backupVa, forced: gen.kva);
+    final genFig = _gensetKva(backupVa, gen);
     final genKva = genFig.totalKva;
     final gcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
