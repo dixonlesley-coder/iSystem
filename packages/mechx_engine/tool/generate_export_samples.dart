@@ -572,6 +572,25 @@ List<ServiceType> servicesOnFloor(Network net, String sheetId, int floor) {
   return svc.toList()..sort((a, b) => a.index.compareTo(b.index));
 }
 
+/// The issued title block of plan sheet [index] — ONE value for its PDF and
+/// its DXF, so both size to the same plotted scale (R6).
+DrawingChrome planSheetChrome(
+        Network net, String sheetId, int floor, int index, String title) =>
+    DrawingChrome(
+      // N19: derived per sheet (mechanical plan band, rail position).
+      drawingNumber:
+          sheetDrawingNumber(series: DrawingSeries.mechanicalPlan, index: index),
+      revisionNumber: 'Rev. 0',
+      sheetIndex: index,
+      sheetTotal: 3,
+      clientName: 'PT Contoh Developer',
+      drawingTitle: title,
+      drawnBy: 'CAD',
+      checkedBy: 'MEP',
+      dateString: dateString,
+      legendServices: servicesOnFloor(net, sheetId, floor),
+    );
+
 void main(List<String> args) {
   if (args.isNotEmpty) outDir = args.first;
   Directory(outDir).createSync(recursive: true);
@@ -703,20 +722,7 @@ void main(List<String> args) {
           sheetName: 'Ground Floor - Plumbing & Risers',
           dateString: dateString,
           metersPerPixel: 0.02,
-          chrome: DrawingChrome(
-            // N19: derived per sheet (mechanical plan band, rail position 1).
-            drawingNumber: sheetDrawingNumber(
-                series: DrawingSeries.mechanicalPlan, index: 1),
-            revisionNumber: 'Rev. 0',
-            sheetIndex: 1,
-            sheetTotal: 3,
-            clientName: 'PT Contoh Developer',
-            drawingTitle: 'GROUND FLOOR - PLUMBING & RISERS',
-            drawnBy: 'CAD',
-            checkedBy: 'MEP',
-            dateString: dateString,
-            legendServices: servicesOnFloor(net, 's0', 0),
-          ),
+          chrome: planSheetChrome(net, 's0', 0, 1, 'GROUND FLOOR - PLUMBING & RISERS'),
         );
     checkTexts['plan-ground'] = latin1.decode(bytes);
     writeBytes('plan-ground.pdf', bytes);
@@ -740,27 +746,17 @@ void main(List<String> args) {
           sheetName: 'Lantai 1 - Plumbing & HVAC',
           dateString: dateString,
           metersPerPixel: 0.02,
-          chrome: DrawingChrome(
-            // N19: derived per sheet (mechanical plan band, rail position 2).
-            drawingNumber: sheetDrawingNumber(
-                series: DrawingSeries.mechanicalPlan, index: 2),
-            revisionNumber: 'Rev. 0',
-            sheetIndex: 2,
-            sheetTotal: 3,
-            clientName: 'PT Contoh Developer',
-            drawingTitle: 'LANTAI 1 - PLUMBING & HVAC',
-            drawnBy: 'CAD',
-            checkedBy: 'MEP',
-            dateString: dateString,
-            legendServices: servicesOnFloor(net, 's1', 1),
-          ),
+          chrome: planSheetChrome(net, 's1', 1, 2, 'LANTAI 1 - PLUMBING & HVAC'),
         );
     checkTexts['plan-lantai1'] = latin1.decode(bytes);
     writeBytes('plan-lantai1.pdf', bytes);
   });
 
-  // 3 — plan DXF for the ground floor.
+  // 3 — plan DXF for the ground floor, at the plan PDF's own plotted scale
+  // (R6) so the shared annotation layout makes the PDF's exact label choices.
   attempt('plan-ground.dxf', () {
+    final chrome = planSheetChrome(net, 's0', 0, 1,
+        'GROUND FLOOR - PLUMBING & RISERS');
     writeText(
         'plan-ground.dxf',
         networkToDxf(
@@ -779,17 +775,17 @@ void main(List<String> args) {
           // G1 equipment tags + G5 gravity fall.
           nodeTags: nodeTagsMap,
           gravitySlope: gravitySlope,
-          chrome: DrawingChrome(
-            // N19: derived per sheet (mechanical plan band, rail position 1).
-            drawingNumber: sheetDrawingNumber(
-                series: DrawingSeries.mechanicalPlan, index: 1),
-            revisionNumber: 'Rev. 0',
-            sheetIndex: 1,
-            sheetTotal: 3,
-            clientName: 'PT Contoh Developer',
-            drawingTitle: 'GROUND FLOOR - PLUMBING & RISERS',
+          chrome: chrome,
+          sheetPlot: planSheetPlot(
+            net: net,
+            sheetId: 's0',
+            floorIndex: 0,
+            projectName: projectName,
+            sheetName: 'Ground Floor - Plumbing & Risers',
             dateString: dateString,
-            legendServices: servicesOnFloor(net, 's0', 0),
+            metersPerPixel: 0.02,
+            grid: referenceGrid,
+            chrome: chrome,
           ),
         ));
   });

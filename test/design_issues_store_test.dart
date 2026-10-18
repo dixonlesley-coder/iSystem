@@ -362,6 +362,19 @@ void main() {
       expect(issue.severity, IssueSeverity.warning);
       expect(issue.locate, isNotNull);
       expect(issue.locate!.sheetId, sheetId);
+      // R6: the message names the service in words, never the enum
+      // identifier; the locale-independent ack kind keeps the identifier.
+      expect(issue.message, startsWith('The cold water component with 2 nodes'));
+      expect(issue.message, isNot(contains('coldWater')));
+      expect(issue.kind, 'no-source:coldWater');
+
+      // …and in Bahasa Indonesia.
+      c.read(localeProvider.notifier).set(AppLocale.id);
+      final id = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'no-source:coldWater');
+      expect(id.message, startsWith('Komponen air dingin dengan 2 simpul'));
+      expect(id.message, isNot(contains('coldWater')));
     });
 
     test('grouping still puts critical + warning before info', () {

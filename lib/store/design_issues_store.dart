@@ -662,7 +662,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   for (final d in networkConnectivityDefects(net)) {
     final repId = d.representativeNodeId;
     final repNode = repId == null ? null : nodeById[repId];
+    // The stable, locale-independent ack key keeps the enum identifier; the
+    // message prints the localized human service name (R6).
     final service = d.service.name;
+    final serviceName = str(_serviceNameKey(d.service));
     final n = d.nodeIds.length;
     final title = d.isIsland
         ? str(StringKey.issueNetworkIslandTitle)
@@ -673,9 +676,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         n, str(StringKey.issueNounNodeOne), str(StringKey.issueNounNodeMany));
     final message = d.isIsland
         ? str.format(StringKey.issueNetworkIslandMessage,
-            {'service': service, 'nodes': nodeWord})
+            {'service': serviceName, 'nodes': nodeWord})
         : str.format(StringKey.issueNetworkNoSourceMessage,
-            {'service': service, 'nodes': nodeWord});
+            {'service': serviceName, 'nodes': nodeWord});
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: defectKind,
@@ -1286,3 +1289,18 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
 
   return actions;
 });
+
+/// The [StringKey] of a service's human, in-sentence name (R6) — what a
+/// design-issue message prints instead of the [ServiceType] identifier.
+StringKey _serviceNameKey(ServiceType s) => switch (s) {
+      ServiceType.coldWater => StringKey.issueServiceColdWater,
+      ServiceType.hotWater => StringKey.issueServiceHotWater,
+      ServiceType.drainage => StringKey.issueServiceDrainage,
+      ServiceType.vent => StringKey.issueServiceVent,
+      ServiceType.rainwater => StringKey.issueServiceRainwater,
+      ServiceType.duct => StringKey.issueServiceSupplyAir,
+      ServiceType.returnAir => StringKey.issueServiceReturnAir,
+      ServiceType.exhaust => StringKey.issueServiceExhaust,
+      ServiceType.fireSprinkler => StringKey.issueServiceSprinkler,
+      ServiceType.fireHydrant => StringKey.issueServiceHydrant,
+    };

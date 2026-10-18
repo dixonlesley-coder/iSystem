@@ -25,6 +25,7 @@ import '../network/network.dart';
 import '../sizing/network_sizing.dart';
 import '../units.dart';
 import 'drawing_chrome.dart';
+import 'plan_annotation_layout.dart';
 import 'plan_symbols.dart';
 import 'sld_sheet.dart';
 
@@ -33,13 +34,6 @@ import 'sld_sheet.dart';
 /// `pdf_export.dart` AND the live canvas `serviceColor`, so the annotated /
 /// plain PDFs and the on-screen line read the same colour.
 (double, double, double) _serviceColor(ServiceType s) => serviceChromeColor(s);
-
-/// drafting-4: the perpendicular offset (pt) of a tie dimension's line from the
-/// axis-to-riser ordinate (~3.5 mm on paper), so it never lands on a pipe run.
-const double _kTieDimOffsetPt = 10.0;
-
-/// drafting-4: half-length (pt) of a tie dimension's 45-degree oblique tick.
-const double _kTieTickHalfPt = 2.0;
 
 /// The size half of an edge label: `DN50` (pipe), `Ø200` (round duct — the
 /// WinAnsi O-stroke, R5), or `200x100` (rectangular duct).
@@ -90,11 +84,228 @@ String _pdfText(String raw) {
 
 String _n(double v) => v.toStringAsFixed(2);
 
+/// A font size: a whole number prints bare (`9`, the long-standing form),
+/// anything else to two decimals (`7.09`).
+String _fs(double v) =>
+    (v - v.roundToDouble()).abs() < 1e-6 ? '${v.round()}' : _n(v);
+
 /// N4 grid bubble radius (points) and the strip it occupies beyond the fitted
 /// extent: the bubble centre sits `r + 2` off the line end, so its far edge is
 /// `2r + 2` = 20 pt out.
 const double _kGridBubbleR = 9.0;
 const double _kGridBubblePad = 2 * _kGridBubbleR + 2;
+
+/// The plan sheet's fit (shared by [planToPdf] and
+/// [planPlottedScaleDenominator]): the page, the fitted sheet-pixel extent
+/// (network + underlay + every grid axis), the title-block strip, and the
+/// snapped plotted scale.
+({
+  double pageW,
+  double pageH,
+  double margin,
+  double minX,
+  double minY,
+  double maxX,
+  double maxY,
+  bool hasContent,
+  bool hasGrid,
+  double gridPad,
+  bool hasChrome,
+  String blockTitle,
+  String blockDate,
+  double blockH,
+  double spanX,
+  double spanY,
+  double availW,
+  double availH,
+  double scale,
+  String scaleRow,
+  double? pointsPerMeter,
+  double offX,
+  double offY,
+  List<LabelBox> occupied,
+}) _planSheetFit({
+  required Network net,
+  required String sheetId,
+  required int floorIndex,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  required DrawingChrome? chrome,
+  required double? metersPerPixel,
+  required PlanUnderlay? underlay,
+  required PaperSize paper,
+  required ReferenceGrid? grid,
+}) {
+  final pageW = paper.widthPt; // landscape sheet width, points
+  final pageH = paper.heightPt; // landscape sheet height, points
+  const margin = 48.0;
+
+  // ── Bounds of everything we'll draw, in screen pixels (A1: incl. underlay) ──
+  final fit = planFitBounds(net, sheetId, floorIndex, underlay);
+  var minX = fit.minX, minY = fit.minY, maxX = fit.maxX, maxY = fit.maxY;
+  final hasContent = fit.hasContent;
+  // N4 grid fit (audit 2026-10 drawing-output-3): a setting-out grid normally
+  // spans the whole building while one service's network covers part of it, so
+  // EVERY axis joins the fit (else an axis beyond the network lands off the
+  // sheet, and row/column lines — drawn across the fitted extent — stop short
+  // of the axes they should cross). Its bubbles hang [_kGridBubblePad] points
+  // above / left of the extent, reserved from the fit area below. No grid ⇒
+  // byte-identical.
+  final hasGrid = grid != null && !grid.isEmpty && hasContent;
+  if (hasGrid) {
+    for (final ax in grid.columns) {
+      minX = math.min(minX, ax.position);
+      maxX = math.max(maxX, ax.position);
+    }
+    for (final ay in grid.rows) {
+      minY = math.min(minY, ay.position);
+      maxY = math.max(maxY, ay.position);
+    }
+  }
+  final gridPad = hasGrid ? _kGridBubblePad : 0.0;
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  // The title block's TITLE/DATE rows fall back to this function's own
+  // sheet-name/date params, so the issued sheet never loses them.
+  final blockTitle = hasChrome ? (chrome.drawingTitle ?? sheetName) : sheetName;
+  final blockDate = hasChrome ? (chrome.dateString ?? dateString) : dateString;
+  // A4: reserve the ISO-7200 title-block strip at the bottom. The row COUNT
+  // (so the height) doesn't depend on the final scale text — with chrome the
+  // SCALE row is always stamped ('NTS' or '1 : N @ A3') — so probe with a
+  // placeholder here and render with the real text after the fit.
+  final blockH = hasChrome
+      ? pdfTitleBlock(chrome,
+              pageW: pageW,
+              pageH: pageH,
+              margin: margin,
+              projectName: projectName,
+              scaleTextOverride: 'NTS',
+              titleTextOverride: blockTitle,
+              dateTextOverride: blockDate)
+          .height
+      : 0.0;
+  final spanX = maxX - minX;
+  final spanY = maxY - minY;
+  final availW = pageW - 2 * margin - gridPad;
+  // Reserve the title-block strip (chrome) or a little headroom for the
+  // legacy two-line top-left title (and the grid bubbles' strip on top).
+  final availH = pageH - 2 * margin - (hasChrome ? blockH : 24.0) - gridPad;
+  var scale = 1.0;
+  if (spanX > 0 || spanY > 0) {
+    final sx = spanX > 0 ? availW / spanX : double.infinity;
+    final sy = spanY > 0 ? availH / spanY : double.infinity;
+    scale = math.min(sx, sy);
+    if (!scale.isFinite || scale <= 0) scale = 1.0;
+  }
+
+  // ── A3 true plotted scale: snap the raw auto-fit to a standard scale, the
+  // snapped-scale text naming the ACTUAL paper (`1 : N @ A2`). ───────────────
+  final snap = snapPlottedScale(
+      rawScale: scale,
+      metersPerPixel: metersPerPixel,
+      hasContent: hasContent,
+      paperLabel: paper.label);
+  scale = snap.scale;
+  final scaleRow = snap.scaleRow;
+  final pointsPerMeter = snap.pointsPerMeter;
+
+  return (
+    pageW: pageW,
+    pageH: pageH,
+    margin: margin,
+    minX: minX,
+    minY: minY,
+    maxX: maxX,
+    maxY: maxY,
+    hasContent: hasContent,
+    hasGrid: hasGrid,
+    gridPad: gridPad,
+    hasChrome: hasChrome,
+    blockTitle: blockTitle,
+    blockDate: blockDate,
+    blockH: blockH,
+    spanX: spanX,
+    spanY: spanY,
+    availW: availW,
+    availH: availH,
+    scale: scale,
+    scaleRow: scaleRow,
+    pointsPerMeter: pointsPerMeter,
+    // The grid-bubble strip sits LEFT of and ABOVE the fitted extent.
+    offX: margin + gridPad + (availW - spanX * scale) / 2,
+    offY: margin + gridPad + (availH - spanY * scale) / 2,
+    // Frame discipline (audit 2026-10 drawing-output-5): everything outside
+    // the frame (four strips) plus the title-block box is occupied, so every
+    // tag picks an in-frame slot.
+    occupied: <LabelBox>[
+      (minX: -_kFar, minY: -_kFar, maxX: margin, maxY: _kFar), // left
+      (minX: pageW - margin, minY: -_kFar, maxX: _kFar, maxY: _kFar), // right
+      (minX: -_kFar, minY: -_kFar, maxX: _kFar, maxY: margin), // below
+      (minX: -_kFar, minY: pageH - margin, maxX: _kFar, maxY: _kFar), // above
+      if (hasChrome && blockH > 0)
+        (
+          minX: pageW - margin - kPdfTitleBlockWidth,
+          minY: margin,
+          maxX: pageW - margin,
+          maxY: margin + blockH,
+        ),
+    ],
+  );
+}
+
+/// "Infinitely" far, for the off-frame occupied strips (points).
+const double _kFar = 1e5;
+
+/// R6: how [planToPdf] plots this sheet — its standard plotted scale
+/// (`1 : N`) and the sheet area outside its drawing frame + title block, in
+/// SHEET PIXELS. Pass it to `networkToDxf(sheetPlot:)` so the DXF sizes every
+/// annotation to the same paper dimensions against the same sheet limits, and
+/// the shared annotation layout makes the PDF's exact label choices. Null when
+/// the PDF is NTS (uncalibrated, empty, or too large for 1 : 1000). Same
+/// inputs as [planToPdf]; pure.
+PlanSheetPlot? planSheetPlot({
+  required Network net,
+  required String sheetId,
+  required int floorIndex,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
+  ReferenceGrid? grid,
+}) {
+  final f = _planSheetFit(
+      net: net,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay,
+      paper: paper,
+      grid: grid);
+  if (f.pointsPerMeter == null || metersPerPixel == null) return null;
+  // Page points → sheet pixels (the inverse of planToPdf's tx / ty).
+  double px(double x) => (x - f.offX) / f.scale + f.minX;
+  double py(double y) => (f.pageH - f.offY - y) / f.scale + f.minY;
+  return PlanSheetPlot(
+    scaleDenominator:
+        (metersPerPixel * 1000 / (f.scale * kPlanPaperMmPerPt)).round(),
+    occupiedPx: [
+      for (final o in f.occupied)
+        (
+          minX: px(o.minX),
+          minY: math.min(py(o.minY), py(o.maxY)),
+          maxX: px(o.maxX),
+          maxY: math.max(py(o.minY), py(o.maxY)),
+        ),
+    ],
+  );
+}
 
 /// Render the [sheetId]/[floorIndex] slice of [net] as a single-page ANNOTATED
 /// PDF and return its bytes. [edgeLengths] maps edge id → real §10 length (run
@@ -176,85 +387,30 @@ Uint8List planToPdf({
   Map<String, String>? nodeTags,
   double? gravitySlope,
 }) {
-  final pageW = paper.widthPt; // landscape sheet width, points
-  final pageH = paper.heightPt; // landscape sheet height, points
-  const margin = 48.0;
-
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
 
-  // ── Bounds of everything we'll draw, in screen pixels (A1: incl. underlay) ──
-  final fit = planFitBounds(net, sheetId, floorIndex, underlay);
-  var minX = fit.minX, minY = fit.minY, maxX = fit.maxX, maxY = fit.maxY;
-  final hasContent = fit.hasContent;
-  // N4 grid fit (audit 2026-10 drawing-output-3): a setting-out grid normally
-  // spans the whole building while one service's network covers part of it, so
-  // EVERY axis joins the fit (else an axis beyond the network lands off the
-  // sheet, and row/column lines — drawn across the fitted extent — stop short
-  // of the axes they should cross). Its bubbles hang [_kGridBubblePad] points
-  // above / left of the extent, reserved from the fit area below. No grid ⇒
-  // byte-identical.
-  final hasGrid = grid != null && !grid.isEmpty && hasContent;
-  if (hasGrid) {
-    for (final ax in grid.columns) {
-      minX = math.min(minX, ax.position);
-      maxX = math.max(maxX, ax.position);
-    }
-    for (final ay in grid.rows) {
-      minY = math.min(minY, ay.position);
-      maxY = math.max(maxY, ay.position);
-    }
-  }
-  final gridPad = hasGrid ? _kGridBubblePad : 0.0;
-  final hasChrome = chrome != null && !chrome.isEmpty;
-  // The title block's TITLE/DATE rows fall back to this function's own
-  // sheet-name/date params, so the issued sheet never loses them.
-  final blockTitle = hasChrome ? (chrome.drawingTitle ?? sheetName) : sheetName;
-  final blockDate = hasChrome ? (chrome.dateString ?? dateString) : dateString;
-  // A4: reserve the ISO-7200 title-block strip at the bottom. The row COUNT
-  // (so the height) doesn't depend on the final scale text — with chrome the
-  // SCALE row is always stamped ('NTS' or '1 : N @ A3') — so probe with a
-  // placeholder here and render with the real text after the fit.
-  final blockH = hasChrome
-      ? pdfTitleBlock(chrome,
-              pageW: pageW,
-              pageH: pageH,
-              margin: margin,
-              projectName: projectName,
-              scaleTextOverride: 'NTS',
-              titleTextOverride: blockTitle,
-              dateTextOverride: blockDate)
-          .height
-      : 0.0;
-  final spanX = maxX - minX;
-  final spanY = maxY - minY;
-  final availW = pageW - 2 * margin - gridPad;
-  // Reserve the title-block strip (chrome) or a little headroom for the
-  // legacy two-line top-left title (and the grid bubbles' strip on top).
-  final availH = pageH - 2 * margin - (hasChrome ? blockH : 24.0) - gridPad;
-  var scale = 1.0;
-  if (spanX > 0 || spanY > 0) {
-    final sx = spanX > 0 ? availW / spanX : double.infinity;
-    final sy = spanY > 0 ? availH / spanY : double.infinity;
-    scale = math.min(sx, sy);
-    if (!scale.isFinite || scale <= 0) scale = 1.0;
-  }
-
-  // ── A3 true plotted scale: snap the raw auto-fit to a standard scale, the
-  // snapped-scale text naming the ACTUAL paper (`1 : N @ A2`). ───────────────
-  final snap = snapPlottedScale(
-      rawScale: scale,
+  final fit0 = _planSheetFit(
+      net: net,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
       metersPerPixel: metersPerPixel,
-      hasContent: hasContent,
-      paperLabel: paper.label);
-  scale = snap.scale;
-  final scaleRow = snap.scaleRow;
-  final pointsPerMeter = snap.pointsPerMeter;
-
-  final drawnW = spanX * scale;
-  final drawnH = spanY * scale;
+      underlay: underlay,
+      paper: paper,
+      grid: grid);
+  final pageW = fit0.pageW, pageH = fit0.pageH, margin = fit0.margin;
+  final minX = fit0.minX, minY = fit0.minY, maxX = fit0.maxX, maxY = fit0.maxY;
+  final hasGrid = fit0.hasGrid;
+  final hasChrome = fit0.hasChrome;
+  final blockTitle = fit0.blockTitle, blockDate = fit0.blockDate;
+  final scale = fit0.scale;
+  final scaleRow = fit0.scaleRow;
+  final pointsPerMeter = fit0.pointsPerMeter;
   // The grid-bubble strip sits LEFT of and ABOVE the fitted extent.
-  final offX = margin + gridPad + (availW - drawnW) / 2;
-  final offY = margin + gridPad + (availH - drawnH) / 2;
+  final offX = fit0.offX, offY = fit0.offY;
   double tx(double x) => offX + (x - minX) * scale;
   double ty(double y) => (pageH - offY) - (y - minY) * scale; // flip y
 
@@ -360,150 +516,22 @@ Uint8List planToPdf({
     return null;
   }
 
-  // A7/N3 label discipline: rotate to the edge bearing (a `Tm` text matrix),
-  // offset to the consistent upper side; when a dense branch can't clear, the
-  // tag ESCAPES further out and is tied back to its run with a thin leader —
-  // never dropped, never fused (see `placeEdgeLabelLeadered`).
+  // A7/N3/R5/R6 label discipline: every annotation — grid marks, UP/DN marks,
+  // tie dimensions, run / riser / equipment tags — comes from the ONE shared
+  // `layoutPlanAnnotations` (the DXF calls it too), in page points at 72/25.4
+  // points per paper millimetre. A tag rotates to its run's bearing (a `Tm`
+  // text matrix), hugs it, splits to two lines before escaping, and an escaped
+  // tag ties back with a thin leader — never dropped, never fused.
   //
-  // Frame discipline (audit 2026-10 drawing-output-5): the placer only dodged
-  // other boxes, so a run at the sheet's extreme edge hung its rotated tag past
-  // the frame — off the printed page. The placer is SEEDED with the whole
-  // region outside the frame (four strips) plus the title-block box as occupied
-  // space, so the greedy/escape ladder picks an in-frame slot (leadered back
-  // when pulled off the run). A tag whose first slot was already in-frame and
-  // clear keeps it ⇒ in-frame labels are byte-identical.
-  const far = 1e5;
-  final layout = PlanLabelLayout(boxes: <LabelBox>[
-    (minX: -far, minY: -far, maxX: margin, maxY: far), // left of the frame
-    (minX: pageW - margin, minY: -far, maxX: far, maxY: far), // right
-    (minX: -far, minY: -far, maxX: far, maxY: margin), // below
-    (minX: -far, minY: pageH - margin, maxX: far, maxY: far), // above
-    if (hasChrome && blockH > 0)
-      (
-        minX: pageW - margin - kPdfTitleBlockWidth,
-        minY: margin,
-        maxX: pageW - margin,
-        maxY: margin + blockH,
-      ),
-  ]);
+  // Frame discipline (audit 2026-10 drawing-output-5): the layout is SEEDED
+  // with the whole region outside the frame (four strips) plus the title-block
+  // box as occupied space, so every tag picks an in-frame slot.
+  final occupied = fit0.occupied;
 
-  // R5: the placer also dodges the LINEWORK — every on-floor run (keyed by its
-  // edge id, so a tag skips only its own run) and every node glyph — so a tag
-  // never overprints another service or a fixture when a clear slot exists,
-  // and its leader avoids crossing other runs.
+  // Compose every edge's label up front (size · length · CL · fall) through
+  // the ONE composer pair the plan DXF uses, so both print the same text.
+  final edgeLabels = <String, PlanEdgeLabelText>{};
   for (final e in net.edges) {
-    if (e.kind != EdgeKind.run) continue;
-    final a = net.nodeById(e.fromId);
-    final c = net.nodeById(e.toId);
-    if (a == null || c == null || !onFloor(a) || !onFloor(c)) continue;
-    layout.addRun(e.id, tx(a.x), ty(a.y), tx(c.x), ty(c.y));
-  }
-  for (final n in net.nodes) {
-    if (!onFloor(n)) continue;
-    final px = tx(n.x), py = ty(n.y);
-    final r = (n.component != null || n.role == NodeRole.fixture) ? 7.0 : 2.5;
-    layout.addBox((minX: px - r, minY: py - r, maxX: px + r, maxY: py + r));
-  }
-  if (hasGrid) {
-    // The N4 grid bubbles (+ their labels) are occupied too.
-    const r = _kGridBubbleR;
-    for (final ax in grid.columns) {
-      final gx = tx(ax.position);
-      final topY = math.max(ty(minY), ty(maxY)) + r + 2;
-      layout.addBox(
-          (minX: gx - r, minY: topY - r, maxX: gx + r, maxY: topY + r));
-    }
-    for (final ay in grid.rows) {
-      final gy = ty(ay.position);
-      final leftX = math.min(tx(minX), tx(maxX)) - r - 2;
-      layout.addBox(
-          (minX: leftX - r, minY: gy - r, maxX: leftX + r, maxY: gy + r));
-    }
-  }
-
-  void edgeLabel(double ax, double ay, double bx, double by, String text,
-      {List<String>? split,
-      String? ownRunId,
-      ({double x, double y})? anchorPoint,
-      List<({double x, double y})> extraStations = const []}) {
-    const size = 9.0;
-    final p = placePlanLabel(
-        ax: ax,
-        ay: ay,
-        bx: bx,
-        by: by,
-        text: text,
-        textSize: size,
-        layout: layout,
-        splitLines: split,
-        ownRunId: ownRunId,
-        anchorPoint: anchorPoint,
-        extraStations: extraStations);
-    final lead = p.leaderAnchor;
-    final end = p.leaderEnd;
-    if (lead != null && end != null) {
-      // A thin dark-grey leader from the run to the near edge of the label.
-      cs.writeln('0.30 0.30 0.30 RG 0.5 w');
-      cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(end.x)} ${_n(end.y)} l S');
-    }
-    final rad = p.angleDeg * math.pi / 180;
-    final pc = math.cos(rad), ps = math.sin(rad);
-    for (final line in p.lines) {
-      cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-          '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
-          '${_n(line.x)} ${_n(line.y)} Tm (${_pdfText(line.text)}) Tj ET');
-    }
-  }
-
-  // R5: a point feature's tag may also sit on its LEFT — the stations of the
-  // mirrored pseudo-run (same horizontal bearing), tried after the right side.
-  List<({double x, double y})> mirrorStations(
-          double px, double py, double gap, double w) =>
-      [for (final t in const [0.5, 0.75, 0.25]) (x: px - gap - w * t, y: py)];
-
-  // N4: the reference setting-out grid — thin chain column/row lines with bubble
-  // labels — is drawn BENEATH the network (the MEP strokes overprint it) when
-  // present. The per-riser tie dimensions ride ON TOP (after the nodes).
-  if (hasGrid) {
-    const bubbleR = _kGridBubbleR;
-    cs.writeln('0.55 0.55 0.55 RG 0.4 w');
-    cs.writeln('[8 3 2 3] 0 d'); // chain linetype for a setting-out grid
-    for (final ax in grid.columns) {
-      final gx = tx(ax.position);
-      final y1 = ty(minY), y2 = ty(maxY);
-      cs.writeln('${_n(gx)} ${_n(y1)} m ${_n(gx)} ${_n(y2)} l S');
-      final topY = math.max(y1, y2) + bubbleR + 2;
-      circle(gx, topY, bubbleR);
-      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
-          '${_n(gx - ax.label.length * 2.2)} ${_n(topY - 3)} Td '
-          '(${_pdfText(ax.label)}) Tj ET');
-    }
-    for (final ay in grid.rows) {
-      final gy = ty(ay.position);
-      final x1 = tx(minX), x2 = tx(maxX);
-      cs.writeln('${_n(x1)} ${_n(gy)} m ${_n(x2)} ${_n(gy)} l S');
-      final leftX = math.min(x1, x2) - bubbleR - 2;
-      circle(leftX, gy, bubbleR);
-      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
-          '${_n(leftX - ay.label.length * 2.2)} ${_n(gy - 3)} Td '
-          '(${_pdfText(ay.label)}) Tj ET');
-    }
-    cs.writeln('[] 0 d'); // back to solid
-  }
-
-  // N3: riser-base labels are DEFERRED to a final pass so they dodge not just
-  // each other + the run labels, but the riser marker, its UP/DN text, AND the
-  // N4 tie-dimension text (all registered as occupied boxes below) — a crowded
-  // base pushes the tag off with a leader instead of overprinting the cluster.
-  final riserLabelJobs =
-      <({double px, double py, String text, List<String>? split})>[];
-
-  // Edges: lines (runs) + riser markers, each labelled size · length · elev.
-  for (final e in net.edges) {
-    final a = net.nodeById(e.fromId);
-    final c = net.nodeById(e.toId);
-    if (a == null || c == null) continue;
-
     final s = sizing[e.id];
     final len = edgeLengths[e.id];
     final elev = edgeElevationLabels?[e.id];
@@ -511,18 +539,14 @@ Uint8List planToPdf({
     final lenText =
         (len != null && len.meters > 0) ? planLengthLabel(len) : null;
     // G5: the laid fall (`1:100`) for a gravity-regime RUN, from the real ctx
-    // gradient the caller passes (never a hardcoded default) — a foreman reads
-    // the required fall off the soil/waste run itself.
+    // gradient the caller passes (never a hardcoded default).
     final slopeText = (e.kind == EdgeKind.run &&
             e.service.regime == FlowRegime.gravity &&
             gravitySlope != null)
         ? gravitySlopeLabel(gravitySlope)
         : null;
-    // N5: append the centreline-elevation token to the size/length label;
-    // N13: prepend the stable element tag (`CW-R1 · DN50 - 3.5 m`). U+00B7 is
-    // WinAnsi pass-through, so the separator survives the PDF text encoder.
-    // ONE composer shared with the plan DXF, so both formats print the same
-    // label for the same edge.
+    // N5 + N13: `CW-R1 · DN50 - 3.5 m - CL +2.70`. U+00B7 is WinAnsi
+    // pass-through, so the separator survives the PDF text encoder.
     final label = composePlanEdgeLabel(
       tag: edgeTags?[e.id],
       size: sizeText,
@@ -530,16 +554,57 @@ Uint8List planToPdf({
       elevation: elev,
       slope: slopeText,
     );
-    // R5: the two-line form (`tag · size` over `length - CL - fall`) the placer
-    // uses before it ever escapes — the same composer the DXF uses.
-    final split = composePlanEdgeLabelLines(
-      tag: edgeTags?[e.id],
-      size: sizeText,
-      length: lenText,
-      elevation: elev,
-      slope: slopeText,
+    if (label == null) continue;
+    edgeLabels[e.id] = (
+      text: label,
+      // R5: the two-line form (`tag · size` over `length - CL - fall`).
+      split: composePlanEdgeLabelLines(
+        tag: edgeTags?[e.id],
+        size: sizeText,
+        length: lenText,
+        elevation: elev,
+        slope: slopeText,
+      ),
     );
+  }
 
+  final ann = layoutPlanAnnotations(
+    net: net,
+    sheetId: sheetId,
+    floorIndex: floorIndex,
+    map: (x, y) => (x: tx(x), y: ty(y)),
+    unitsPerMm: 1 / kPlanPaperMmPerPt,
+    edgeLabels: edgeLabels,
+    nodeTags: nodeTags,
+    grid: hasGrid ? grid : null,
+    gridExtentPx: (minX: minX, minY: minY, maxX: maxX, maxY: maxY),
+    // Tie dimensions only with a real scale (an unscaled one is fabricated).
+    metersPerPixel: metersPerPixel,
+    occupied: occupied,
+  );
+
+  // N4: the reference setting-out grid — thin chain column/row lines with bubble
+  // labels — is drawn BENEATH the network (the MEP strokes overprint it).
+  if (ann.grid.isNotEmpty) {
+    cs.writeln('0.55 0.55 0.55 RG 0.4 w');
+    cs.writeln('[8 3 2 3] 0 d'); // chain linetype for a setting-out grid
+    for (final g in ann.grid) {
+      cs.writeln('${_n(g.line.x1)} ${_n(g.line.y1)} m '
+          '${_n(g.line.x2)} ${_n(g.line.y2)} l S');
+      circle(g.bubbleX, g.bubbleY, g.bubbleR);
+      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+          '${_n(g.bubbleX - g.label.length * 2.2)} ${_n(g.bubbleY - 3)} Td '
+          '(${_pdfText(g.label)}) Tj ET');
+    }
+    cs.writeln('[] 0 d'); // back to solid
+  }
+
+  // Edges: lines (runs) + riser markers.
+  for (final e in net.edges) {
+    final a = net.nodeById(e.fromId);
+    final c = net.nodeById(e.toId);
+    if (a == null || c == null) continue;
+    final s = sizing[e.id];
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;
       strokeColor(e.service);
@@ -561,54 +626,25 @@ Uint8List planToPdf({
               upIsA ? by : ay, flen, e.service);
         }
       }
-      if (label != null) {
-        edgeLabel(tx(a.x), ty(a.y), tx(c.x), ty(c.y), label,
-            split: split, ownRunId: e.id);
-      }
     } else {
       strokeColor(e.service);
       cs.writeln('1.4 w'); // markers keep the symbol weight, solid
       for (final n in [a, c]) {
         if (!onFloor(n)) continue;
-        final nx = tx(n.x), ny = ty(n.y);
-        circle(nx, ny, 5);
-        // N3: the marker circle is an occupied box so the base labels dodge it.
-        layout.addBox((minX: nx - 5, minY: ny - 5, maxX: nx + 5, maxY: ny + 5));
-        // A5 riser UP/DN sense from the endpoints' floor indices, above marker.
-        final other = n.id == a.id ? c : a;
-        final sense =
-            riserUpDown(hereFloor: n.floorIndex, otherFloor: other.floorIndex);
-        if (sense != null) {
-          final uw = sense.length * 9 * 0.55;
-          final ux = nx + 8;
-          var uy = ny - 8;
-          LabelBox upBox(double y) =>
-              (minX: ux, minY: y, maxX: ux + uw, maxY: y + 9);
-          // Two risers can share a node (one UP, one DN); step the second sense
-          // clear of the first so the marks STACK instead of overprinting (N3).
-          for (var step = 0; step < 4; step++) {
-            if (!layout.hitsBox(upBox(uy))) break;
-            uy -= 12;
-          }
-          cs.writeln('BT /F1 9 Tf 0 0 0 rg '
-              '${_n(ux)} ${_n(uy)} Td (${_pdfText(sense)}) Tj ET');
-          // Register the UP/DN box so the riser tag never lands on it (N3).
-          layout.addBox(upBox(uy));
-        }
-      }
-      // Defer the riser length/tag label to the final pass (after the tie
-      // dimensions are placed), so it dodges the marker + UP/DN + tie boxes.
-      final marker = onFloor(a) ? a : (onFloor(c) ? c : null);
-      if (marker != null && label != null) {
-        riserLabelJobs
-            .add((px: tx(marker.x), py: ty(marker.y), text: label, split: split));
+        circle(tx(n.x), ty(n.y), kPlanRiserMarkerMm / kPlanPaperMmPerPt);
       }
     }
+  }
+  // A5 riser UP/DN sense marks (the layout picked a clear quadrant for each).
+  for (final m in ann.upDown) {
+    cs.writeln('BT /F1 ${_fs(m.textSize)} Tf 0 0 0 rg '
+        '${_n(m.x)} ${_n(m.y)} Td (${_pdfText(m.text)}) Tj ET');
   }
 
   // Nodes on top: a component node draws its equipment glyph, a fixture-role
   // node a drop triangle, and a plain junction keeps the small filled dot
   // (A5 — replacing the anonymous dot for component/fixture nodes).
+  const glyph = kPlanGlyphSizeMm / kPlanPaperMmPerPt;
   for (final n in net.nodes) {
     if (!onFloor(n)) continue;
     final px = tx(n.x), py = ty(n.y);
@@ -616,138 +652,53 @@ Uint8List planToPdf({
     final col = svc == null ? (0.20, 0.20, 0.20) : _serviceColor(svc);
     final comp = n.component;
     if (comp != null) {
-      strokePrims(planComponentPrims(comp, cx: px, cy: py, size: 14), py, col);
+      strokePrims(planComponentPrims(comp, cx: px, cy: py, size: glyph), py, col);
     } else if (n.role == NodeRole.fixture) {
-      strokePrims(planFixturePrims(cx: px, cy: py, size: 14), py, col);
+      strokePrims(planFixturePrims(cx: px, cy: py, size: glyph), py, col);
     } else {
       cs.writeln('0.20 0.20 0.20 rg');
       circle(px, py, 2, fill: true);
     }
-    // G1: the stable equipment tag (`P-01` / `TK-01` / `AHU-01` …) beside the
-    // glyph, placed with the same collision-aware leadered placer the run
-    // labels use so it dodges the sized-run tags + other equipment tags.
-    final eqTag = nodeTags?[n.id];
-    if (eqTag != null && eqTag.isNotEmpty) {
-      final w = eqTag.length * 9.0 * 0.55;
-      edgeLabel(px + 10, py, px + 10 + w, py, eqTag,
-          anchorPoint: (x: px, y: py),
-          extraStations: mirrorStations(px, py, 10, w));
-    }
   }
 
-  // N4: per-riser TIE dimensions — the offset from each riser node to its
-  // nearest column + row axis, as a leadered dimension the mandor sets out from.
-  // Drawn ON TOP of the network, only with a real scale (an unscaled dimension
-  // would be fabricated — see `formatTieOffsetMm`).
-  if (grid != null && !grid.isEmpty && hasContent && metersPerPixel != null) {
-    final riserNodeIds = <String>{};
-    for (final e in net.edges) {
-      if (e.kind == EdgeKind.run) continue;
-      for (final id in [e.fromId, e.toId]) {
-        final n = net.nodeById(id);
-        if (n != null && onFloor(n)) riserNodeIds.add(id);
-      }
+  // N4: per-riser TIE dimensions — offset dimension line, extension lines and
+  // 45-degree oblique ticks in a lighter grey (so a coincident pipe keeps its
+  // colour), the figure staggered clear of the marker cluster.
+  for (final t in ann.ties) {
+    cs.writeln('0.45 0.45 0.45 RG 0.35 w');
+    for (final l in [t.axisExtension, t.riserExtension, t.dimension]) {
+      cs.writeln('${_n(l.x1)} ${_n(l.y1)} m ${_n(l.x2)} ${_n(l.y2)} l S');
     }
-    void tieDim(double fromXpx, double fromYpx, double toXpx, double toYpx,
-        String label) {
-      final lax = tx(fromXpx), lay = ty(fromYpx); // axis end (page space)
-      final lbx = tx(toXpx), lby = ty(toYpx); // node end (at the riser marker)
-      // drafting-4: a REAL dimension, not a bare line at the riser's own
-      // ordinate (which landed exactly on a pipe running toward the grid and
-      // read as a pipe / cross-connection). The dimension line is OFFSET
-      // perpendicular by [_kTieDimOffsetPt], joined to the axis and the riser
-      // by thin extension lines (gapped clear of the riser marker, overshooting
-      // the dimension line slightly), and terminated by 45-degree oblique
-      // ticks — all in a lighter grey so a coincident pipe keeps its colour.
-      final dxp = lbx - lax, dyp = lby - lay;
-      final len = math.sqrt(dxp * dxp + dyp * dyp);
-      final ux = len > 1e-6 ? dxp / len : 1.0;
-      final uy = len > 1e-6 ? dyp / len : 0.0;
-      final perpX = uy, perpY = -ux; // the line direction rotated by -90 deg
-      const off = _kTieDimOffsetPt;
-      final dax = lax + perpX * off, day = lay + perpY * off;
-      final dbx = lbx + perpX * off, dby = lby + perpY * off;
-      cs.writeln('0.45 0.45 0.45 RG 0.35 w');
-      // Extension lines: axis end (small gap) / riser end (clear of the r=5
-      // marker), each overshooting the dimension line by 2 pt.
-      const extOver = off + 2.0;
-      cs.writeln('${_n(lax + perpX * 2)} ${_n(lay + perpY * 2)} m '
-          '${_n(lax + perpX * extOver)} ${_n(lay + perpY * extOver)} l S');
-      cs.writeln('${_n(lbx + perpX * 6)} ${_n(lby + perpY * 6)} m '
-          '${_n(lbx + perpX * extOver)} ${_n(lby + perpY * extOver)} l S');
-      // The dimension line itself.
-      cs.writeln('${_n(dax)} ${_n(day)} m ${_n(dbx)} ${_n(dby)} l S');
-      // R5: the dimension line is linework the deferred riser tags must not
-      // overprint (or leader across).
-      layout.addRun(null, dax, day, dbx, dby);
-      // 45-degree oblique ticks (architectural terminators) at both ends.
-      final tkx = (ux + perpX) * _kTieTickHalfPt / math.sqrt2;
-      final tky = (uy + perpY) * _kTieTickHalfPt / math.sqrt2;
-      cs.writeln('0.6 w');
-      for (final (ex, ey) in [(dax, day), (dbx, dby)]) {
-        cs.writeln('${_n(ex - tkx)} ${_n(ey - tky)} m '
-            '${_n(ex + tkx)} ${_n(ey + tky)} l S');
-      }
-      // N3: stagger the dimension text AWAY from the marker (the node end) —
-      // back off along the line toward the axis, then step perpendicular until
-      // the box clears everything already placed (marker / UP-DN / labels).
-      // Register the cleared box so the riser tag (placed last) dodges it too.
-      // The text starts just beyond the offset dimension line.
-      const fs = 7.0;
-      final w = label.length * fs * 0.55;
-      const h = fs;
-      final along = math.min(22.0, len * 0.5); // back off from the node
-      final cx0 = lbx - ux * along + perpX * off;
-      final cy0 = lby - uy * along + perpY * off;
-      LabelBox boxAt(double bcx, double bcy) => (
-            minX: bcx - w / 2,
-            minY: bcy - h / 2,
-            maxX: bcx + w / 2,
-            maxY: bcy + h / 2,
-          );
-      var cx = cx0 + perpX * 7, cy = cy0 + perpY * 7;
-      for (var step = 0; step < 6; step++) {
-        if (!layout.hitsBox(boxAt(cx, cy))) break;
-        final off = 7 + (step + 1) * (h + 4);
-        cx = cx0 + perpX * off;
-        cy = cy0 + perpY * off;
-      }
-      layout.addBox(boxAt(cx, cy));
-      cs.writeln('BT /F1 7 Tf 0 0 0 rg '
-          '${_n(cx - w / 2)} ${_n(cy - h / 2)} Td '
-          '(${_pdfText(label)}) Tj ET');
+    cs.writeln('0.6 w');
+    for (final l in t.ticks) {
+      cs.writeln('${_n(l.x1)} ${_n(l.y1)} m ${_n(l.x2)} ${_n(l.y2)} l S');
     }
-
-    for (final id in riserNodeIds) {
-      final n = net.nodeById(id)!;
-      final col = nearestAxis(grid.columns, n.x);
-      if (col != null) {
-        final off = formatTieOffsetMm((n.x - col.position).abs(), metersPerPixel);
-        if (off != null) tieDim(col.position, n.y, n.x, n.y, off);
-      }
-      final row = nearestAxis(grid.rows, n.y);
-      if (row != null) {
-        final off = formatTieOffsetMm((n.y - row.position).abs(), metersPerPixel);
-        if (off != null) tieDim(n.x, row.position, n.x, n.y, off);
-      }
-    }
+    cs.writeln('BT /F1 ${_fs(t.textSize)} Tf 0 0 0 rg '
+        '${_n(t.textX)} ${_n(t.textY)} Td '
+        '(${_pdfText(t.text)}) Tj ET');
   }
 
-  // N3: the deferred riser-base labels — placed LAST via the leadered placer so
-  // they dodge the marker + UP/DN + tie-dimension boxes registered above. A
-  // short horizontal "edge" just right of the marker keeps the tag beside it in
-  // the common case; a crowded base escapes (up/down) and ties back with a
-  // leader rather than overprinting the cluster.
-  for (final job in riserLabelJobs) {
-    final w = job.text.length * 9.0 * 0.55;
-    edgeLabel(job.px + 8, job.py, job.px + 8 + w, job.py, job.text,
-        split: job.split,
-        anchorPoint: (x: job.px, y: job.py),
-        extraStations: mirrorStations(job.px, job.py, 8, w));
+  // Every tag (runs, equipment G1, risers N13) LAST, over all the linework.
+  for (final l in ann.labels) {
+    final p = l.placement;
+    final lead = p.leaderAnchor;
+    final end = p.leaderEnd;
+    if (lead != null && end != null) {
+      // A thin dark-grey leader from the run / feature to the label.
+      cs.writeln('0.30 0.30 0.30 RG 0.5 w');
+      cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(end.x)} ${_n(end.y)} l S');
+    }
+    final rad = p.angleDeg * math.pi / 180;
+    final pc = math.cos(rad), ps = math.sin(rad);
+    for (final line in p.lines) {
+      cs.writeln('BT /F1 ${_fs(l.textSize)} Tf 0 0 0 rg '
+          '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
+          '${_n(line.x)} ${_n(line.y)} Tm (${_pdfText(line.text)}) Tj ET');
+    }
   }
 
   // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────
-  if (hasChrome) {
+  if (hasChrome && chrome != null) {
     cs.write(pdfSheetFrame(pageW: pageW, pageH: pageH, margin: margin));
     cs.write(pdfTitleBlock(chrome,
             pageW: pageW,
