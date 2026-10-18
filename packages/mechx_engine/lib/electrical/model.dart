@@ -11,6 +11,8 @@
 /// Zero Flutter imports.
 library;
 
+import 'dart:math' as math;
+
 import '../standards/puil.dart'
     show CableInstallMethod, ConductorInsulation, ConductorMaterial;
 import '../units.dart';
@@ -867,10 +869,19 @@ ElectricalSources _sourcesFromJson(Map<String, dynamic> json) {
   SolarSource? solar;
   final so = json['solar'];
   if (so is Map<String, dynamic>) {
+    // Round 19 (persistence-2-2) — tolerant decode: a non-finite / non-
+    // positive DC:AC ratio (a hand-edited 0 made arrayKwp / 0 = Infinity and
+    // threw inside the inverter selection, taking down the advanced study,
+    // the warning surface, the BOM and the quotation) falls back to the
+    // default; a negative module count clamps to 0, a module rating to ≥ 1 W.
+    double? numOf(Object? v) => v is num ? v.toDouble() : null;
+    final ratio = numOf(so['dcAcRatio']);
+    final wp = numOf(so['panelWp']);
+    final n = numOf(so['panels']);
     solar = SolarSource(
-      panelWp: (so['panelWp'] as num?)?.toInt() ?? 550,
-      panels: (so['panels'] as num?)?.toInt() ?? 0,
-      dcAcRatio: (so['dcAcRatio'] as num?)?.toDouble() ?? 1.2,
+      panelWp: (wp == null || !wp.isFinite) ? 550 : math.max(1, wp.toInt()),
+      panels: (n == null || !n.isFinite) ? 0 : math.max(0, n.toInt()),
+      dcAcRatio: (ratio != null && ratio.isFinite && ratio > 0) ? ratio : 1.2,
     );
   }
   BatterySource? battery;

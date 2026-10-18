@@ -21,6 +21,7 @@ import 'package:mechx_engine/report/riser_tags.dart'
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
+import 'package:mechx_engine/sizing/room_air.dart' show RoomAirResult;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
@@ -29,7 +30,7 @@ import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
-import 'annotation_store.dart' show roomAreasProvider;
+import 'annotation_store.dart' show roomAreasProvider, roomTerminalOwnerId;
 import 'app_state.dart';
 import 'document_control_store.dart';
 import 'electrical_store.dart';
@@ -955,10 +956,31 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // (diffusers) and extract (return / exhaust grilles) sums are compared with
   // the room's sized banks; a > 1 % difference — or a now-extract-only room
   // still carrying supply diffusers — warns, locatable to a terminal.
+  //
+  // Round 19 (regression-room-stale-nested-rooms-false-warning) — each
+  // terminal belongs to exactly ONE room: the smallest room containing it
+  // whose kind it serves (a supply diffuser / return grille → a conditioned
+  // room, an exhaust grille → an extract-only room), else the smallest room
+  // containing it at all (so a stale diffuser left in a now-extract room still
+  // warns). Summing every terminal inside every footprint counted a toilet's
+  // exhaust grille as the surrounding office's extract (1.167 vs 1.000 m3/s on
+  // freshly auto-placed terminals — a warning Auto-place can never clear).
+  final roomSizing = <String, RoomAirResult?>{
+    for (final r in rooms)
+      r.id: r.sizing(project.calibrationFor(r.sheetId)?.metersPerPixel,
+          ductShape: ductSettings.shape, ductMethod: ductSettings.method),
+  };
+  final terminalOwner = <String, String?>{
+    for (final n in net.nodes)
+      if ((n.component == NodeComponent.supplyDiffuser ||
+              n.component == NodeComponent.returnGrille ||
+              n.component == NodeComponent.exhaustGrille) &&
+          n.airflow != null)
+        n.id: roomTerminalOwnerId(
+            n.component, n.sheetId, n.floorIndex, n.x, n.y, rooms),
+  };
   for (final r in rooms) {
-    final cal = project.calibrationFor(r.sheetId);
-    final sizing = r.sizing(cal?.metersPerPixel,
-        ductShape: ductSettings.shape, ductMethod: ductSettings.method);
+    final sizing = roomSizing[r.id];
     if (sizing == null) continue;
     var placedSupply = 0.0;
     var placedExtract = 0.0;
@@ -973,7 +995,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       if (!isSupply && !isExtract) continue;
       final q = n.airflow;
       if (q == null) continue;
-      if (!r.containsNode(n.sheetId, n.floorIndex, n.x, n.y)) continue;
+      if (terminalOwner[n.id] != r.id) continue;
       firstTerminal ??= n.id;
       if (isSupply) {
         placedSupply += q.cubicMetersPerSecond;

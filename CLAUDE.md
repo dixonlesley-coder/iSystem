@@ -1458,6 +1458,36 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 19 — recirc returns, one room per terminal, one essential set,
+  BOM = schedule, tolerant decode (2026-10-18)**: a hot-water cycle is the
+  drawn RETURN only when it passes through the source / a plant or carries a
+  check valve — a stub-fed ring main keeps the heater feed + the mirrored DN20
+  return (`hotWaterRecircLoop`). Each air terminal belongs to ONE room
+  (`roomTerminalOwnerId`: smallest COMPATIBLE room — diffuser / return grille →
+  conditioned, exhaust grille → extract-only — else smallest containing),
+  shared by the `room-terminals-stale` judge and Auto-place's idempotence
+  filter. Essential-by-name strips NEGATED words (NON / TIDAK / BUKAN +
+  essential word) and is read by genset backing, the SLD colours AND the
+  `life-safety-not-essential` judge. A rainwater downpipe raised to the bore of
+  an UNSATURATED collector carrying its whole flow clears the table-top
+  `overCapacity` (`// VERIFY notAnSniClause`). The BOM honours the schedule:
+  RCDs only of at least the specified type (B > F > A > AC; untyped parts never
+  satisfy a typed spec; S-type only for `RcdSpec.timeDelayed`), exact poles
+  first; breaker poles follow the schedule (1φ feeder off a 3φ board = 2P);
+  rating mismatch outranks curve; any class / rating / curve / pole departure
+  sets `BomLine.deviceSubstituted` + a `(catalogue part: …)` note and keys
+  apart on consolidation; lugs follow `grounding.cores` and each conductor's
+  own section. A diversified board prints its DIVERSIFIED current beside its kW
+  and labels the undiversified sizing current (`15.8A div (max ph 17.5A
+  undiv)`; diversity 1 ⇒ unchanged); a capacitor way / bank-only feeder prints
+  its run current marked `cap` and a bank's DAYA in kvar. The
+  `cable-ampacity-inadequate` message prints the failed `max(In, 1.25 × Ib)`
+  (`CableResult.izRequired`) and says `In > Iz` only when true. The `.mechx`
+  decoders drop / clamp out-of-band numbers (calibration ≤ 0, negative roof
+  area / airflow / tank / load, non-positive face / size override, room ACH /
+  ceiling, commercial markups, solar DC:AC ≤ 0) into the bands the store
+  setters enforce. The smart-input bar and the 1 : N scale type-in parse
+  through `parseLocaleNumber` too.
 - **Round 17 follow-up invariants**: a DRAWN hot-water return is part of the
   circulated pipework, so `hotWaterRecircLoop` takes the drawn cycle as THE
   loop (`returnLengthM` 0, `drawnLoopLengthM` = the cycle) — the mirrored DN20
@@ -1571,7 +1601,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `cableRunLabel`)**: `grounding.cores` counts live + N + PE, the earthing model
   sizes that cable and the BOM procures it, so every schedule / feeder label
   prints that count with no separate `+ NYA/BC` earth token
-  (`NYY 3x4 mm2`); parallel runs print `Nx(...)`.
+  (`NYY 3x4 mm2`); parallel runs print `Nx(...)`. Round 19: callers pass the
+  solved `peCsaMm2` / `neutralCsaMm2`, so a reduced PE / neutral prints the
+  grouped make-up the BOM orders (`NYY 4x35+16 mm2`, `NYY 3x70+35 mm2`), never
+  every core at the phase section.
 - **Plan labels: one layout, gravity runs carry no CL**: the plan PDF and DXF
   lay out every grid/UP-DN/tie/run/riser/equipment annotation through ONE
   `layoutPlanAnnotations` (paper-mm units, the DXF takes the PDF's

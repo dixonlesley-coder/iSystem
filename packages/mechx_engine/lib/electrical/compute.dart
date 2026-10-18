@@ -42,6 +42,7 @@ import 'fault.dart'
         solvedRunLengthM,
         sourceImpedanceFromIsc,
         subPanelBusFaultA;
+import 'genset_backup.dart' show isEssentialByName;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -1451,14 +1452,37 @@ _CircuitComputation _computeCircuit(
   // / max parallel runs: the breaker In now exceeds the conductor Iz, so the
   // device no longer protects the cable (IEC 60364-4-43 / PUIL cl 2.2.8.3
   // In ≤ Iz coordination violated). A genuine safety defect — flag as an error.
+  //
+  // Round 19 (electrical-parity-2-ampacity-error-message-wrong-comparison) —
+  // the message states the requirement that actually FAILED: the sizer needs
+  // Iz ≥ max(In, 1.25 × Ib) (the continuous-load rule, `notAnSniClause`), so
+  // a large feeder can have Iz ≥ In and still fail on 1.25 × Ib. Printing
+  // "Iz 1024.4 A is below the breaker In 1000 A (In > Iz)" was arithmetically
+  // false beside its own figures.
   if (!cable.ampacityReached) {
+    final iz = roundTo(cable.deratedIz.amperes, 1);
+    final inA = breaker.ratingA.amperes;
+    final f = cable.continuousLoadFactor ??
+        profile.continuousLoadFactor.value;
+    final ibA = (cable.izBasisCurrent ?? designCurrent).amperes;
+    final contA = roundTo(f * ibA, 1);
+    final reqA = roundTo(
+        cable.izRequired?.amperes ?? math.max(inA, f * ibA), 1);
+    final runs = cable.runsPerPhase ?? 1;
+    final section =
+        '${runs > 1 ? '${runs}x' : ''}${_num(cable.csaMm2)} mm2';
+    final inBelowCont = inA + 1e-9 < f * ibA;
+    final inShort = inA > iz + 1e-9;
     warnings.add(ElectricalWarning(
       code: 'cable-ampacity-inadequate',
       severity: WarningSeverity.error,
       message:
-          '${c.name}: cable ampacity Iz ${cable.deratedIz.amperes} A is below '
-          'the breaker In ${breaker.ratingA.amperes} A even at the largest '
-          'section — the breaker no longer protects the conductor (In > Iz). '
+          '${c.name}: cable ampacity Iz ${_num(iz)} A at $section is below the '
+          'required max(In ${_num(inA)} A, ${_num(f)} x Ib '
+          '${_num(roundTo(ibA, 1))} A = ${_num(contA)} A) = ${_num(reqA)} A '
+          'even at the largest section'
+          '${inShort ? ' — the breaker no longer protects the conductor (In > Iz)' : ' — the conductor cannot carry the continuous load (the ${_num(f * 100)} % continuous-load rule, VERIFY: general practice, not a PUIL clause)'}'
+          '${inBelowCont ? '; the ${_num(inA)} A breaker is itself below ${_num(f)} x Ib' : ''}. '
           'Reduce the grouping/ambient derating, split the load, or feed it '
           'separately.',
       panelId: panel.id,
@@ -1871,6 +1895,7 @@ ElectricalPanelResult computePanel(
       imbalanceReducible: imbalanceReducible,
     ),
     warnings: warnings,
+    diversityFactor: panel.diversityFactor,
   );
 }
 
@@ -2318,6 +2343,7 @@ ElectricalSystemResult computeSystem(
         capacitorCurrentA: pr.capacitorCurrentA,
         phaseBalance: pr.phaseBalance,
         warnings: pr.warnings,
+        diversityFactor: pr.diversityFactor,
       );
     }
 
@@ -2450,12 +2476,18 @@ ElectricalSystemResult computeSystem(
     // way (fire pump, smoke control …) on a board that is NOT on the essential
     // (genset-backed) path loses supply exactly when it is needed. A board is
     // essential when it, or any board upstream of it, carries the explicit
-    // `essential` flag. Never resizes.
+    // `essential` flag or an essential NAME ([isEssentialByName], Round 19).
+    // Never resizes.
     bool onEssentialPath(String id) {
       final seen = <String>{};
       String? cur = id;
       while (cur != null && seen.add(cur)) {
-        if (byId[cur]?.essential ?? false) return true;
+        // Round 19 — the SAME essential set as the genset backing / SLD
+        // colour split: the explicit flag OR the one name heuristic.
+        final b = byId[cur];
+        if (b != null && (b.essential || isEssentialByName(b.name))) {
+          return true;
+        }
         cur = parentOf[cur];
       }
       return false;

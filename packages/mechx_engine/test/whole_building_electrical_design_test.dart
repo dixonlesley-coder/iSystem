@@ -1352,8 +1352,10 @@ void main() {
       // copper-inflating floor this read `MCCB 160A 3ph` on 150 mm². Round 11
       // (conduit = IEC B.52.4 B1): Ib 66.5 A ⇒ Iz_req max(80, 83.1) = 83.1 A at
       // derating 0.5358: 50 mm² = 134 × 0.5358 = 71.8 ✗, 70 mm² = 171 × 0.5358
-      // = 91.6 ✓; the cap (≤ 91.6) holds the device at 80 A.
-      expect(texts.where((t) => t.contains('NYY 5x70 mm2 · MCCB 80A 3ph')),
+      // = 91.6 ✓; the cap (≤ 91.6) holds the device at 80 A. Round 19: the
+      // label carries the make-up the BOM orders — 3L + N at 70 mm², PE at
+      // the next standard ≥ 70/2 = 35 mm² ⇒ `4x70+35`, never `5x70`.
+      expect(texts.where((t) => t.contains('NYY 4x70+35 mm2 · MCCB 80A 3ph')),
           isNotEmpty);
     });
 
@@ -1457,8 +1459,9 @@ void main() {
       expect(byName['Feeder LP-1']!.conduitSizeMm, 25.0);
       // 25 mm2 feeder: schedule says PVC 50 mm, containment says 40 mm.
       // (AC-1's feeder since 2026-10 elec-core-4 moved PP-1's onto 35 mm²,
-      // where the two bases happen to agree at 50 mm.)
-      expect(cables.where((c) => c.contains('5x25 mm2')).first,
+      // where the two bases happen to agree at 50 mm.) Round 19: the 25 mm²
+      // phase carries a 16 mm² PE ⇒ `4x25+16`.
+      expect(cables.where((c) => c.contains('4x25+16 mm2')).first,
           contains('PVC 50mm'));
       expect(byName['Feeder AC-1']!.conduitSizeMm, 40.0);
       // The two only happen to agree on the single-phase LP-3 run — 32 mm on

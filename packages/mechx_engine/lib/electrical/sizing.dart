@@ -361,6 +361,9 @@ CableResult sizeCable(
             (vdDriven
                 ? '$rule; upsized to hold Vd <= ${vd!.isLighting ? 3 : 5}%'
                 : rule),
+        izRequired: Current(izRequired),
+        izBasisCurrent: designCurrent,
+        continuousLoadFactor: factor,
       );
     }
   }
@@ -380,6 +383,9 @@ CableResult sizeCable(
     // breaker In now exceeds Iz (coordination violated). The vd-only fallback
     // DID reach ampacity (it is over-limit only on voltage drop).
     ampacityReached: !ampacityImpossible,
+    izRequired: Current(izRequired),
+    izBasisCurrent: designCurrent,
+    continuousLoadFactor: factor,
     appliedRule: ampacityImpossible
         ? 'exceeds-range: $parallelMaxRuns× largest standard section still below required Iz'
         : 'voltage-drop-exceeds-range: largest standard section still over the Vd limit',

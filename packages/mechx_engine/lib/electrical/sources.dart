@@ -673,7 +673,10 @@ SolarResult sizeSolar({
 }) {
   final panelCount = math.max(1, panels);
   final arrayKwp = _round(panelCount * panelWp / 1000, 2);
-  final inv = selectInverterUnits(Power.kiloWatts(arrayKwp / dcAcRatio));
+  // Round 19 — a non-positive / non-finite ratio would divide to Infinity and
+  // throw in the inverter selection; the default ratio stands in.
+  final ratio = (dcAcRatio.isFinite && dcAcRatio > 0) ? dcAcRatio : kDcAcRatio;
+  final inv = selectInverterUnits(Power.kiloWatts(arrayKwp / ratio));
   final inverterKw = inv.unitKw;
 
   // String length: MPPT window + cold-Voc max-system-voltage limit.

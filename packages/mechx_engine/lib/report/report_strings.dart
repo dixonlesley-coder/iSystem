@@ -229,6 +229,7 @@ enum RptStringKey {
   panelNeutralBar, // {n} {oversize} {pe}
   panelNeutralOversize, // {f}
   panelDemand, // {c} {d} {a}
+  panelDemandCurrentSplit, // {div} {undiv}
   panelPhaseBalance, // {l1} {l2} {l3} {imb}
 
   // Circuit table.
@@ -621,6 +622,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.panelNeutralOversize: ' (×{f} triplen oversize)',
   RptStringKey.panelDemand:
       '- Demand: connected {c} W, diversified {d} W, {a}',
+  RptStringKey.panelDemandCurrentSplit:
+      '{div} diversified (max phase {undiv} undiversified)',
   RptStringKey.panelPhaseBalance:
       '- Phase balance: L1 {l1} A · L2 {l2} A · L3 {l3} A (imbalance {imb} %)',
 
@@ -1022,6 +1025,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.panelNeutralOversize: ' (×{f} pembesaran triplen)',
   RptStringKey.panelDemand:
       '- Permintaan: terpasang {c} W, terdiversifikasi {d} W, {a}',
+  RptStringKey.panelDemandCurrentSplit:
+      '{div} terdiversifikasi (fasa maks {undiv} tanpa diversitas)',
   RptStringKey.panelPhaseBalance:
       '- Keseimbangan fasa: L1 {l1} A · L2 {l2} A · L3 {l3} A '
           '(ketidakseimbangan {imb} %)',

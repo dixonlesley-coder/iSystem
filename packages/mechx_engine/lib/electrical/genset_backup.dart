@@ -24,12 +24,23 @@ const List<String> kEssentialNameWords = [
   'EMERGENSI',
 ];
 
+/// NON / TIDAK / BUKAN (optionally joined by a space, '-' or '_') before an
+/// essential word — the negated designation (Round 19).
+final RegExp _negatedEssentialWord = RegExp(
+    r'(NON|TIDAK|BUKAN)[\s_\-]*(' '${kEssentialNameWords.join('|')}' r')');
+
 /// True when [name] marks a board essential ([kEssentialNameWords],
 /// case-insensitive). The ONE name heuristic shared by [gensetBackedPanelIds]
 /// and the single-line colour split, so they can never diverge. The explicit
 /// [ElectricalPanel.essential] flag stays the authority; this is the fallback.
+///
+/// Round 19 (regression-non-essential-name-matches-essential) — a NEGATED
+/// word is the opposite designation: 'PANEL NON ESENSIAL', 'LP NON-ESSENTIAL',
+/// 'PANEL TIDAK ESENSIAL', 'BUKAN DARURAT' name the board meant to be SHED, so
+/// those phrases are stripped before matching ([_negatedEssentialWord]) —
+/// otherwise the genset was sized to carry exactly the load the design sheds.
 bool isEssentialByName(String name) {
-  final n = name.toUpperCase();
+  final n = name.toUpperCase().replaceAll(_negatedEssentialWord, ' ');
   for (final w in kEssentialNameWords) {
     if (n.contains(w)) return true;
   }

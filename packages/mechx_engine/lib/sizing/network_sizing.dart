@@ -1977,13 +1977,30 @@ Map<String, EdgeSizing> autoSizeNetwork(
           edgeParents: edgeParents,
           ctx: ctx,
           service: ServiceType.rainwater,
-          raise: (edge, base, raised) => EdgeSizing(
+          // Round 19 (property-storm-duct-raised-downpipe-false-overcapacity)
+          // — the downpipe table's over-capacity flag means "DN200 is the table
+          // top, not a size that carries this flow". Once the clamp raises the
+          // downpipe to the bore of the collector that feeds it, and that
+          // collector (Manning part-full at the design slope — a horizontal run
+          // needs MORE bore than a vertical downpipe for the same flow) carries
+          // at least the downpipe's whole flow WITHOUT itself saturating, the
+          // raised bore is proven to carry the flow, so the flag is cleared.
+          // A saturated collector (e.g. a 1 % slope), or a collector carrying
+          // only part of the downpipe's flow, keeps it.
+          // VERIFY notAnSniClause — general practice (part-full horizontal
+          // capacity as a conservative bound on a vertical downpipe).
+          raise: (edge, base, raised, governing) => EdgeSizing(
             edgeId: base.edgeId,
             service: base.service,
             flow: base.flow,
             diameter: raised,
             velocity: velocityFromFlow(base.flow, raised),
-            overCapacity: base.overCapacity,
+            overCapacity: base.overCapacity &&
+                !(governing != null &&
+                    !governing.overCapacity &&
+                    governing.flow.cubicMetersPerSecond >=
+                        base.flow.cubicMetersPerSecond * (1 - 1e-9) &&
+                    raised.meters >= governing.diameter.meters - 1e-9),
             stackRaisedForBranch: true,
           ),
         );
@@ -2388,7 +2405,9 @@ void _clampDrainageStacksToBranches({
   required Map<String, String> edgeParents,
   required SizingContext ctx,
   ServiceType service = ServiceType.drainage,
-  EdgeSizing Function(NetEdge edge, EdgeSizing base, Diameter raised)? raise,
+  EdgeSizing Function(NetEdge edge, EdgeSizing base, Diameter raised,
+          EdgeSizing? governing)?
+      raise,
 }) {
   // node → edges rooted there, i.e. edges whose ROOT-SIDE endpoint is this
   // node (the continuations AWAY from root passing through it — the stack
@@ -2404,11 +2423,16 @@ void _clampDrainageStacksToBranches({
   }
 
   final memo = <String, double>{};
+  // Round 19 — the BRANCH (non-riser) edge whose bore forced each raise (the
+  // governing collector, followed through raised riser segments above), so a
+  // [raise] callback can judge the raised size against the run that set it.
+  final governingOf = <String, String?>{};
   double effectiveMm(String edgeId) {
     final cached = memo[edgeId];
     if (cached != null) return cached;
     final edge = net.edgeById(edgeId)!;
     var maxMm = sanitary[edgeId]!.diameter.inMillimeters;
+    String? governing;
     for (final childId in childEdgesAt[awayNodeOf(edge)] ?? const <String>[]) {
       final child = net.edgeById(childId);
       if (child == null ||
@@ -2416,12 +2440,17 @@ void _clampDrainageStacksToBranches({
           !sanitary.containsKey(childId)) {
         continue;
       }
-      final childMm = child.kind == EdgeKind.riser
+      final isRiser = child.kind == EdgeKind.riser;
+      final childMm = isRiser
           ? effectiveMm(childId)
           : sanitary[childId]!.diameter.inMillimeters;
-      if (childMm > maxMm) maxMm = childMm;
+      if (childMm > maxMm) {
+        maxMm = childMm;
+        governing = isRiser ? governingOf[childId] : childId;
+      }
     }
     memo[edgeId] = maxMm;
+    governingOf[edgeId] = governing;
     return maxMm;
   }
 
@@ -2436,8 +2465,9 @@ void _clampDrainageStacksToBranches({
     final base = sanitary[edgeId]!.diameter.inMillimeters;
     final effective = effectiveMm(edgeId);
     if (effective > base && raise != null) {
-      sanitary[edgeId] =
-          raise(edge, sanitary[edgeId]!, Diameter.mm(effective));
+      final gov = governingOf[edgeId];
+      sanitary[edgeId] = raise(edge, sanitary[edgeId]!, Diameter.mm(effective),
+          gov == null ? null : sanitary[gov]);
     } else if (effective > base) {
       sanitary[edgeId] = _sanitaryEdgeSizing(
         edge,

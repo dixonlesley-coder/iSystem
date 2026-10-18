@@ -55,6 +55,7 @@ import '../../data/plan_underlay.dart';
 import '../../store/air_warnings_store.dart';
 import '../../store/annotation_store.dart';
 import '../../store/app_state.dart';
+import '../widgets/locale_number.dart' show parseLocaleNumber;
 import '../../store/inspector_store.dart';
 import '../../store/assemblies_store.dart';
 import '../../store/calibration_store.dart';
@@ -2813,7 +2814,11 @@ class _PdfScaleTypeInState extends ConsumerState<_PdfScaleTypeIn> {
   }
 
   void _apply() {
-    final n = double.tryParse(_text.trim());
+    // Round 19 (regression-locale-parser-not-universal) — the scale N reads
+    // through the ONE engineering-number parser: in the ID UI `1.000` is
+    // 1 : 1000, never a silent 1 : 1 calibration (every length ~1000× short).
+    final n = parseLocaleNumber(_text,
+        indonesian: ref.read(localeProvider) == AppLocale.id);
     if (n == null || !n.isFinite || n <= 0) return;
     final mpp = metersPerPixelForPdfScale(n);
     ref

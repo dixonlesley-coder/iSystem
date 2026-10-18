@@ -135,11 +135,17 @@ class RcdSpec {
   final String reason;
   final RcdType? type;
 
+  /// True when the device must be TIME-DELAYED (S-type, selective) — the TT
+  /// feeder's 300 mA RCD (Round 19: the BOM must not order an instantaneous
+  /// device for it).
+  final bool timeDelayed;
+
   const RcdSpec({
     required this.required,
     required this.ratingMa,
     required this.reason,
     this.type,
+    this.timeDelayed = false,
   });
 }
 
@@ -289,6 +295,7 @@ RcdSpec circuitRcd({
           'selective above the downstream final RCDs (no ADS on the TT loop). '
           '// VERIFY',
       type: rcdType(),
+      timeDelayed: true,
     );
   }
   if (loadKind == LoadKind.socket || loadKind == LoadKind.evCharger) {

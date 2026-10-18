@@ -186,9 +186,17 @@ void main() {
           .where((l) => l.description.startsWith('Cable lug'))
           .toList();
       expect(skun, isNotEmpty);
-      expect(skun.first.qty, 10); // 5 conductors (3L+N+PE) × 2 ends
+      // Round 19 — the lug count is the cable's OWN make-up: a motor way has
+      // no neutral, so 3L + PE = 4 conductors (grounding.cores) × 2 ends = 8
+      // (the old flat "5 per 3φ run" bought 2 lugs no conductor uses). The
+      // PE is at the phase section here (≤ 16 mm² ⇒ PE = S), so one line.
+      final c = r.circuits.single;
+      expect(c.grounding.cores, 4);
+      expect(c.cable.csaMm2, lessThanOrEqualTo(16));
+      expect(skun, hasLength(1));
+      expect(skun.first.qty, 8);
       // Sanity: the motor cable was indeed >= the 10 mm² skun threshold.
-      expect(r.circuits.single.cable.csaMm2, greaterThanOrEqualTo(10));
+      expect(c.cable.csaMm2, greaterThanOrEqualTo(10));
     });
   });
 

@@ -166,7 +166,11 @@ void main() {
       final motor = result.panels['MDP']!.circuits
           .firstWhere((c) => c.circuitId == 'm-1');
       expect(motor.grounding.cores, 4);
-      expect(text, contains('NYY 4x${motor.cable.csaMm2.round()} mm2 · '));
+      // Round 19 — the make-up the BOM orders: above 35 mm² the PE is the next
+      // standard section ≥ S/2 (50 → 25 mm²), so `NYY 3x50+25`, never `4x50`.
+      expect(motor.cable.csaMm2, 50);
+      expect(motor.grounding.peCsaMm2, 25);
+      expect(text, contains('NYY 3x50+25 mm2 · '));
       // BC only reaches the legend if a way actually uses a BC conductor.
       expect(text, isNot(contains('Bare copper')));
     });

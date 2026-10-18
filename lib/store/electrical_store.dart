@@ -764,7 +764,15 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setSolar(SolarSource? solar) {
     // Round 11: a non-finite DC/AC ratio is not a design input (and would
     // throw out of `_commitSources`' jsonEncode no-op guard).
-    if (solar != null && !solar.dcAcRatio.isFinite) return;
+    // Round 19: nor is a non-positive ratio (arrayKwp / 0 = Infinity throws in
+    // the inverter selection), a negative module count or a 0 W module.
+    if (solar != null &&
+        (!solar.dcAcRatio.isFinite ||
+            solar.dcAcRatio <= 0 ||
+            solar.panels < 0 ||
+            solar.panelWp < 1)) {
+      return;
+    }
     _commitSources(_sourcesWith(solar: solar, clearSolar: solar == null));
   }
 

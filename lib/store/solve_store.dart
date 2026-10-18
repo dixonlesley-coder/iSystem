@@ -1534,6 +1534,29 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
   // no phantom return, and the head is the friction around the drawn loop at
   // each segment's own bore. The longest fundamental cycle (BFS tree from the
   // source + one closing edge) is taken — deterministic by edge id.
+  //
+  // Round 19 (regression-hw-ring-main-taken-as-drawn-return) — only a cycle
+  // that IS a recirculation return counts: it must pass through the source /
+  // heater (a plant, or the component's own root) or carry the check valve
+  // that marks a drawn return (the Round-12 convention). A RING MAIN fed by a
+  // stub (heater → feed → ring) is distribution pipework, not a return: it
+  // still needs the feed AND a return to the heater, so it falls through to
+  // the index run + mirrored DN20 return (taking the ring as the loop dropped
+  // the heater feed and the return — ~32× low head on the probe).
+  bool isReturnCycle(List<NetEdge> cycle) {
+    for (final c in cycle) {
+      for (final id in [c.fromId, c.toId]) {
+        final n = net.nodeById(id);
+        if (roots[id] == id ||
+            n?.role == NodeRole.plant ||
+            n?.component == NodeComponent.checkValve) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   var bestCycleLen = 0.0;
   var bestCycle = const <NetEdge>[];
   for (final src in sources.toList()..sort()) {
@@ -1574,6 +1597,7 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
           }
         }
         final cycle = [...up.reversed, e, ...down];
+        if (!isReturnCycle(cycle)) continue;
         final len = cycle.fold<double>(0, (acc, c) => acc + lengthOf(c));
         if (len > bestCycleLen + 1e-12) {
           bestCycleLen = len;

@@ -681,8 +681,16 @@ class RoomArea {
       bx: bx.toDouble(),
       by: by.toDouble(),
       roomType: type,
-      ceilingHeightM: (raw['ceiling_m'] as num?)?.toDouble() ?? 3.0,
-      achOverride: (raw['ach'] as num?)?.toDouble(),
+      // Round 19 (persistence-2-3) — the bands the setters enforce
+      // ([RoomAreaController.setCeiling] 1.5–12 m, [setAch] 0.5–60): a
+      // non-positive / non-finite stored value falls back (ceiling 3.0 m, no
+      // ACH override), an out-of-band one clamps — never a 0 / negative ACH
+      // asserted on inside the room-air sizing.
+      ceilingHeightM:
+          _roomNum(raw['ceiling_m'], positive: true)?.clamp(1.5, 12).toDouble() ??
+              3.0,
+      achOverride:
+          _roomNum(raw['ach'], positive: true)?.clamp(0.5, 60).toDouble(),
       equipmentKind: kind,
       name: raw['name'] is String ? raw['name'] as String : 'Room',
     );
@@ -695,6 +703,48 @@ const Object _unset = Object();
 
 /// The project's designated room/zone areas. Mutated by the canvas room tool;
 /// read by the room overlay, the inspector editor, and the persistence layer.
+/// Round 19 (regression-room-stale-nested-rooms-false-warning) — the ONE room
+/// an air terminal ([component] at sheet-pixel [x],[y] on [sheetId]/[floor])
+/// belongs to among [rooms]: the smallest room containing it whose kind the
+/// terminal serves (a supply diffuser / return grille → a conditioned room, an
+/// exhaust grille → an extract-only room, `isExtractRoomType`), else the
+/// smallest room containing it at all; ties break on room id. Null when no room
+/// contains it. Shared by the Review stale check AND Auto-place's idempotence
+/// filter, so a toilet nested inside an office neither counts its exhaust
+/// grille as the office's extract nor has it deleted by re-placing the office.
+String? roomTerminalOwnerId(NodeComponent? component, String sheetId,
+    int floor, double x, double y, Iterable<RoomArea> rooms) {
+  RoomArea? best;
+  RoomArea? bestCompatible;
+  double areaOf(RoomArea r) => r.widthPx * r.heightPx;
+  bool smaller(RoomArea a, RoomArea? b) {
+    if (b == null) return true;
+    final d = areaOf(a) - areaOf(b);
+    if (d.abs() > 1e-9) return d < 0;
+    return a.id.compareTo(b.id) < 0;
+  }
+
+  for (final r in rooms) {
+    if (!r.containsNode(sheetId, floor, x, y)) continue;
+    if (smaller(r, best)) best = r;
+    final extractRoom = isExtractRoomType(r.roomType);
+    final compatible = component == NodeComponent.exhaustGrille
+        ? extractRoom
+        : !extractRoom;
+    if (compatible && smaller(r, bestCompatible)) bestCompatible = r;
+  }
+  return (bestCompatible ?? best)?.id;
+}
+
+/// Round 19 — a stored room number: finite (and > 0 when [positive]), else
+/// null.
+double? _roomNum(Object? raw, {bool positive = false}) {
+  final v = raw is num ? raw.toDouble() : null;
+  if (v == null || !v.isFinite) return null;
+  if (positive && v <= 0) return null;
+  return v;
+}
+
 final roomAreasProvider =
     NotifierProvider<RoomAreaController, List<RoomArea>>(RoomAreaController.new);
 

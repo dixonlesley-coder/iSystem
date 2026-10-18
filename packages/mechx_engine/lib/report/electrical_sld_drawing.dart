@@ -253,11 +253,60 @@ int? _conduitFromSpec(ConduitSpec spec) =>
 /// prints the protective earth as a SEPARATE conductor (`+ NYA/BC <csa> mm2`,
 /// the BRI schedule convention), callers go through [_cableSpecWithEarth],
 /// which passes `cores - 1` so the PE is never specified twice.
+///
+/// Round 19 (electrical-parity-2-cable-makeup-label-vs-bom) — the conductor
+/// MAKE-UP, not just the count: `sizeGrounding` reduces the PE (and may reduce
+/// the neutral) once the phase conductor exceeds 16 mm², and the BOM orders
+/// that make-up (`NYY 4×35 + 16 mm²`). Passing the solved [peCsaMm2] /
+/// [neutralCsaMm2] groups equal conductors exactly as `sizeGrounding` does,
+/// ASCII-safe: `NYY 4x35+16` (never `5x35` — that is 19 mm² of copper per
+/// metre the take-off does not buy, and a PE the ADS check never saw). Absent
+/// or equal to the phase section ⇒ `NYY 5x16` (byte-identical).
 String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
-    {int? cores}) {
+    {int? cores, double? peCsaMm2, double? neutralCsaMm2}) {
   final family = resolvedCableFamily(circuit);
   final n = (cores != null && cores > 0) ? cores : (threePhase ? 5 : 3);
-  return '$family ${n}x${_num(csaMm2)}';
+  final live = threePhase ? 3 : 1;
+  final hasPe = peCsaMm2 != null && peCsaMm2 > 0;
+  final hasNeutral = n - live - (hasPe ? 1 : 0) >= 1;
+  final pe = hasPe ? peCsaMm2 : csaMm2;
+  final neutral = (neutralCsaMm2 != null && neutralCsaMm2 > 0)
+      ? neutralCsaMm2
+      : csaMm2;
+  final conductors = <double>[
+    for (var i = 0; i < live; i++) csaMm2,
+    if (hasNeutral) neutral,
+    if (hasPe) pe,
+  ];
+  if (conductors.length != n || conductors.every((c) => c == csaMm2)) {
+    return '$family ${n}x${_num(csaMm2)}';
+  }
+  final groups = <({double size, int n})>[];
+  for (final size in conductors) {
+    if (groups.isNotEmpty && groups.last.size == size) {
+      final last = groups.removeLast();
+      groups.add((size: last.size, n: last.n + 1));
+    } else {
+      groups.add((size: size, n: 1));
+    }
+  }
+  final makeup = groups
+      .map((g) => g.n > 1 ? '${g.n}x${_num(g.size)}' : _num(g.size))
+      .join('+');
+  return '$family $makeup';
+}
+
+/// Round 19 (electrical-parity-2-board-demand-current-undiversified) — a
+/// board's demand CURRENT as printed beside its diversified kW: a diversified
+/// board prints the diversified worst-phase current (the basis its feeder is
+/// judged on) and labels the undiversified sizing current
+/// (`15.8A div (max ph 17.5A undiv)`); a board with no diversity prints the
+/// one figure exactly as before (`17.5A`).
+String _boardDemandCurrent(ElectricalPanelResult p) {
+  final undiv = _num(p.demandCurrent.amperes);
+  if (!p.isDiversified) return '${_num(p.demandCurrent.amperes)}A';
+  final div = _num((p.diversifiedDemandCurrent.amperes * 10).round() / 10);
+  return '${div}A div (max ph ${undiv}A undiv)';
 }
 
 /// The full PENGHANTAR conductor label WITH its unit and parallel-run count:
@@ -273,8 +322,8 @@ String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
 /// inspector all print, so the formats can never disagree with the take-off.
 /// Null / <= 1 [runs] ⇒ exactly `${cableLabel(...)} mm2` (byte-identical).
 String cableRunLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
-    {int? cores, int? runs}) {
-  final single = '${cableLabel(circuit, csaMm2, threePhase, cores: cores)} mm2';
+    {int? cores, int? runs, double? peCsaMm2, double? neutralCsaMm2}) {
+  final single = '${cableLabel(circuit, csaMm2, threePhase, cores: cores, peCsaMm2: peCsaMm2, neutralCsaMm2: neutralCsaMm2)} mm2';
   return (runs != null && runs > 1) ? '${runs}x($single)' : single;
 }
 
@@ -461,7 +510,7 @@ SldSheet buildElectricalSld({
         'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix  '
         '${p.system.label}  ${_num(v)}V  '
         'Cu bus ${_num(p.busbar.csaMm2)}mm2$icw  '
-        'demand ${_num(p.demandCurrent.amperes)}A',
+        'demand ${_boardDemandCurrent(p)}',
         size: 8));
     // The trip-curve legend is about MCB characteristics only — an MCCB carries
     // no B/C/D curve (N12), so don't seed a curve legend entry from one.
@@ -627,10 +676,16 @@ SldSheet buildElectricalSld({
       // `mm` conduit token.
       final length = c.lengthM > 0 ? ' · ${_num(c.lengthM)} m' : '';
       final cable =
-          '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase)}'
+          '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
           '$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
-      final daya = c.loadW > 0 ? _wattsId(c.loadW) : '-';
+      // Round 19 — a capacitor way's loadW is its REACTIVE rating, so it prints
+      // in kvar, never as WATT.
+      final isCapacitor = c.loadKind == LoadKind.capacitor;
+      final kvar = isCapacitor ? (circuit?.loadW ?? c.loadW) : 0.0;
+      final daya = isCapacitor && kvar > 0
+          ? '${_num(kvar / 1000)} kvar'
+          : (c.loadW > 0 && !isCapacitor ? _wattsId(c.loadW) : '-');
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
       // star-delta) APPENDED only when the way carries a real starterType —
       // most final lighting/socket ways have none, so the cell stays bare.
@@ -661,7 +716,18 @@ SldSheet buildElectricalSld({
       final device = '$breakerCell'
           '${starter != null ? ' · ${_starterCode(starter)}' : ''}'
           '$rcd';
-      final ib = _num(c.designCurrent.amperes);
+      // Round 19 (electrical-parity-2-capacitor-feeder-zero-current) — a
+      // capacitor way, or a feeder whose only current is a downstream bank
+      // (bank-off balance basis ⇒ design current 0), prints the current its
+      // conductor REALLY carries when the bank is switched in (the run
+      // current the calc report's Ib prints), marked `cap`: excluded from the
+      // TOTAL phase balance (bank-off governs), but never a 0 | 0 | 0 under a
+      // 2x240 mm2 feeder.
+      final capacitorCurrent = isCapacitor ||
+          (c.designCurrent.amperes <= 1e-9 && c.runCurrentA.amperes > 1e-9);
+      final ib = capacitorCurrent
+          ? '${_num(c.runCurrentA.amperes)} cap'
+          : _num(c.designCurrent.amperes);
       prims.add(
           SldLabel(blockX + _colGrup, rowY + 3, 'W${i + 1}', size: rowSize));
       prims.add(SldLabel(blockX + _colDevice, rowY + 3, device, size: rowSize));
@@ -726,7 +792,7 @@ SldSheet buildElectricalSld({
         : '';
     final footerY = busBot + _rowH / 2 + 3;
     prims.add(SldLabel(blockX + 8, footerY,
-        'TOTAL  ${_watts(p.demandW)} / ${_num(p.demandCurrent.amperes)}A$imbalance',
+        'TOTAL  ${_watts(p.demandW)} / ${_boardDemandCurrent(p)}$imbalance',
         size: 8.5, bold: true));
     if (p.system.isThreePhase) {
       final pb = p.phaseBalance;
@@ -1102,7 +1168,7 @@ String? _feederConnLabel(
   final poles = cr.threePhase ? 3 : 1;
   final length = cr.lengthM > 0 ? ' · ${_num(cr.lengthM)} m' : '';
   final twoPole = parentThreePhase && !cr.threePhase;
-  return '${cableRunLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase)} · '
+  return '${cableRunLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase, peCsaMm2: cr.grounding.peCsaMm2, neutralCsaMm2: cr.grounding.neutralCsaMm2)} · '
       '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
 }
 

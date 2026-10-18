@@ -22,9 +22,10 @@ import 'dart:math' as math;
 
 import '../standards/puil.dart' show BreakerClass, BreakerCurve;
 import 'catalog.dart';
-import 'earthing.dart' show RcdType;
+import 'earthing.dart' show RcdType, rcdTypeRank;
 import 'fault.dart' show FaultStudyResult;
 import 'load_kind.dart' show LoadKind;
+import 'model.dart' show ElectricalSystemInfo;
 import 'panel_results.dart';
 import 'results.dart' show BreakerResult, BusbarResult, NeutralPeBars;
 
@@ -106,6 +107,10 @@ Part? _matchBreaker(
     if (p.deviceClass == 'RCCB') s += 2000;
     if (p.deviceClass != null && p.deviceClass != wantClass) s += 1000;
     if (p.poles != null && p.poles != poles) s += 100;
+    // Round 19 — a different RATING is a protection change (the cable's
+    // In <= Iz was checked at the sized rating), so it costs more than a
+    // different trip curve.
+    if ((p.ratingA! - need).abs() > 1e-9) s += 50;
     if (p.curve != null && p.curve != wantCurve) s += 10;
     return s;
   }
@@ -120,6 +125,40 @@ Part? _matchBreaker(
   return candidates.first;
 }
 
+/// Round 19 (electrical-parity-2-bom-breaker-silent-substitution) — how the
+/// matched catalogue [p] departs from the SIZED [breaker] at [poles]: a
+/// ` (catalogue part: MCB 10A D 1P)` note naming the part actually priced,
+/// or null when it matches on every declared attribute (class, rating,
+/// curve, poles). A part that does not declare an attribute is not judged on
+/// it.
+String? _substitutionNote(Part? p, BreakerResult breaker, int poles) {
+  if (p == null) return null;
+  final wantClass = _classStr(breaker.deviceClass);
+  final wantCurve = _curveStr(breaker.curve);
+  final need = breaker.ratingA.amperes;
+  final classDiff = p.deviceClass != null && p.deviceClass != wantClass;
+  final ratingDiff = p.ratingA != null && (p.ratingA! - need).abs() > 1e-9;
+  final curveDiff = p.curve != null && p.curve != wantCurve;
+  final polesDiff = p.poles != null && p.poles != poles;
+  if (!classDiff && !ratingDiff && !curveDiff && !polesDiff) return null;
+  final attrs = <String>[
+    p.deviceClass ?? wantClass,
+    if (p.ratingA != null) '${_fmt(p.ratingA!)}A',
+    if (p.curve != null) p.curve!,
+    if (p.poles != null) '${p.poles}P',
+  ];
+  return ' (catalogue part: ${attrs.join(' ')})';
+}
+
+/// The breaker POLE count the schedule prints for a way (E8b): a 3φ way is
+/// 3-pole, a 1φ FEEDER leaving a 3φ board is 2-pole, any other 1φ way 1-pole.
+int _wayBreakerPoles(ElectricalCircuitResult c,
+    {required bool boardThreePhase}) {
+  if (c.phase.isThreePhase) return 3;
+  if (c.loadKind == LoadKind.feeder && boardThreePhase) return 2;
+  return 1;
+}
+
 /// True when [p] declares a breaking capacity below [minBreakingKa].
 bool _kaShort(Part? p, double? minBreakingKa) {
   final need = minBreakingKa ?? 0;
@@ -129,15 +168,49 @@ bool _kaShort(Part? p, double? minBreakingKa) {
 
 /// Pick the catalogue RCCB / RCBO part for a way's residual-current device:
 /// residual rating == [residualMa], poles ≥ the way's ([poles] 1φ → 2P, 3φ →
-/// 4P), current rating ≥ the way's breaker. Smallest adequate rating wins;
-/// null when the catalogue carries none.
+/// 4P), current rating ≥ the way's breaker. Null when the catalogue carries
+/// none.
+///
+/// Round 19 (electrical-parity-2-bom-rcd-type-ignored) — the WAVEFORM type is
+/// part of the specification: when [type] is given only a part AT LEAST as
+/// capable qualifies (B > F > A > AC, [rcdTypeRank]); a part that does not
+/// declare its type cannot be shown to qualify and is skipped. A Type AC
+/// device does not detect the pulsating-DC fault current Type A was specified
+/// for, so ordering one where the schedule prints `RCD 30mA A` was a silent
+/// protection-class substitution. [timeDelayed] (the TT feeder's S-type)
+/// likewise admits only a time-delayed part. Ranking: the EXACT pole count
+/// first (a 4P part for a 2P need is a last resort), then the smallest rating,
+/// then the least capable adequate type. Nothing qualifying ⇒ null (the line
+/// stays unmatched with its deterministic `elec:rcd` price key).
 String? matchRcdSku(
   int residualMa,
   double breakerA,
   List<Part> parts, {
   required bool threePhase,
+  RcdType? type,
+  bool timeDelayed = false,
 }) {
   final wantPoles = threePhase ? 4 : 2;
+  int? rankOf(Part p) {
+    final t = p.rcdType;
+    if (t == null) return null;
+    final base = t.split(RegExp(r'[\s\-]')).first;
+    return switch (base) {
+      'AC' => rcdTypeRank(RcdType.ac),
+      'A' => rcdTypeRank(RcdType.a),
+      'F' => rcdTypeRank(RcdType.f),
+      'B' => rcdTypeRank(RcdType.b),
+      _ => null,
+    };
+  }
+
+  bool typeOk(Part p) {
+    if (type == null) return true;
+    final r = rankOf(p);
+    return r != null && r >= rcdTypeRank(type);
+  }
+
+  int exact(Part p) => (p.poles ?? wantPoles) == wantPoles ? 0 : 1;
   final c = parts
       .where((p) =>
           (p.deviceClass == 'RCCB' || p.deviceClass == 'RCBO') &&
@@ -145,11 +218,17 @@ String? matchRcdSku(
           (p.residualMa! - residualMa).abs() < 1e-9 &&
           p.ratingA != null &&
           p.ratingA! >= breakerA &&
-          (p.poles ?? wantPoles) >= wantPoles)
+          (p.poles ?? wantPoles) >= wantPoles &&
+          typeOk(p) &&
+          (!timeDelayed || p.rcdTimeDelayed))
       .toList()
     ..sort((a, b) {
+      final e = exact(a).compareTo(exact(b));
+      if (e != 0) return e;
       final r = a.ratingA!.compareTo(b.ratingA!);
       if (r != 0) return r;
+      final t = (rankOf(a) ?? 9).compareTo(rankOf(b) ?? 9);
+      if (t != 0) return t;
       return (a.poles ?? 9).compareTo(b.poles ?? 9);
     });
   return c.isEmpty ? null : c.first.sku;
@@ -211,6 +290,12 @@ class BomLine {
   /// never silently priced as adequate.
   final bool breakingCapacityShort;
 
+  /// True when the matched catalogue breaker differs from the SIZED device in
+  /// class, rating, curve or poles (Round 19) — the description then names
+  /// the part actually priced, and consolidation keys it apart, so a
+  /// substitution is never silent.
+  final bool deviceSubstituted;
+
   const BomLine({
     required this.description,
     required this.qty,
@@ -219,6 +304,7 @@ class BomLine {
     this.runs = 1,
     String? priceKey,
     this.breakingCapacityShort = false,
+    this.deviceSubstituted = false,
   }) : priceKey = priceKey ?? sku;
 
   BomLine copyWith({double? qty, int? runs}) => BomLine(
@@ -229,6 +315,7 @@ class BomLine {
         runs: runs ?? this.runs,
         priceKey: priceKey,
         breakingCapacityShort: breakingCapacityShort,
+        deviceSubstituted: deviceSubstituted,
       );
 }
 
@@ -272,20 +359,24 @@ List<BomLine> _panelLines(
     final kaTag = (needKa ?? 0) > 0 ? ' ${_fmt(_r1(needKa!))}kA' : '';
     final part = _matchBreaker(b, parts, poles: poles, minBreakingKa: needKa);
     final short = _kaShort(part, needKa);
-    // The shortfall note goes BEFORE the trailing " — <location>" suffix, so
-    // consolidation (which strips that suffix) keeps it on the merged line.
-    String withNote(String d) {
-      final note = ' (no catalogue part reaches$kaTag)';
+    final subst = _substitutionNote(part, b, poles);
+    // The notes go BEFORE the trailing " — <location>" suffix, so
+    // consolidation (which strips that suffix) keeps them on the merged line.
+    String withNote(String d, String note) {
       final i = d.lastIndexOf(' — ');
       return i < 0 ? '$d$note' : '${d.substring(0, i)}$note${d.substring(i)}';
     }
 
+    var desc = description;
+    if (subst != null) desc = withNote(desc, subst);
+    if (short) desc = withNote(desc, ' (no catalogue part reaches$kaTag)');
     return BomLine(
-      description: short ? withNote(description) : description,
+      description: desc,
       qty: 1,
       category: PartCategory.breaker,
       sku: part?.sku,
       breakingCapacityShort: short,
+      deviceSubstituted: subst != null,
     );
   }
 
@@ -312,8 +403,10 @@ List<BomLine> _panelLines(
   lines.add(_busbarLine(panel.busbar, pname, threePhase: inc.poles >= 3));
   lines.addAll(_neutralPeLines(panel.neutralPeBars, pname));
 
+  final boardThreePhase = panel.system.isThreePhase;
   for (final c in panel.circuits) {
-    final poles = c.phase.isThreePhase ? 3 : 1;
+    // Round 19 — the schedule's pole rule (a 1φ feeder off a 3φ board is 2P).
+    final poles = _wayBreakerPoles(c, boardThreePhase: boardThreePhase);
 
     // Branch breaker.
     lines.add(breakerLine(
@@ -427,15 +520,41 @@ List<BomLine> _panelLines(
         ));
       }
       // Cable lugs (skun): one per conductor at EACH end of a larger cable.
+      // Round 19 (electrical-parity-2-lug-count-ignores-cores) — the conductor
+      // count is the cable's own make-up (`grounding.cores`: a motor / HVAC /
+      // capacitor run is 3L+PE, 4 cores, not 5), and each conductor gets a
+      // lug of ITS section: a reduced neutral / PE is its own lug line (one
+      // below the lug threshold clamps straight into its terminal).
       if (c.cable.csaMm2 >= _skunMinCsaMm2) {
-        final conductors = c.threePhase ? 5 : 3; // 3L+N+PE or L+N+PE
-        lines.add(BomLine(
-          description: 'Cable lug (skun) ${_fmt(c.cable.csaMm2)} mm² — ${c.name}',
-          // Both ends of EVERY parallel run.
-          qty: (conductors * 2 * runs).toDouble(),
-          category: PartCategory.accessory,
-          priceKey: '${kElecPriceKeyPrefix}accessory:lug-${_fmt(c.cable.csaMm2)}',
-        ));
+        final live = c.threePhase ? 3 : 1;
+        final hasPe = c.grounding.peCsaMm2 > 0;
+        final hasN = cores - live - (hasPe ? 1 : 0) >= 1;
+        final sizes = <double>[
+          for (var i = 0; i < live; i++) c.cable.csaMm2,
+          if (hasN)
+            c.grounding.neutralCsaMm2 > 0
+                ? c.grounding.neutralCsaMm2
+                : c.cable.csaMm2,
+          if (hasPe) c.grounding.peCsaMm2,
+        ];
+        // Any conductor the make-up did not account for is phase-size.
+        while (sizes.length < cores) {
+          sizes.add(c.cable.csaMm2);
+        }
+        final bySize = <double, int>{};
+        for (final sz in sizes) {
+          if (sz < _skunMinCsaMm2) continue;
+          bySize[sz] = (bySize[sz] ?? 0) + 1;
+        }
+        for (final e in bySize.entries) {
+          lines.add(BomLine(
+            description: 'Cable lug (skun) ${_fmt(e.key)} mm² — ${c.name}',
+            // Both ends of EVERY parallel run.
+            qty: (e.value * 2 * runs).toDouble(),
+            category: PartCategory.accessory,
+            priceKey: '${kElecPriceKeyPrefix}accessory:lug-${_fmt(e.key)}',
+          ));
+        }
       }
     }
 
@@ -445,17 +564,21 @@ List<BomLine> _panelLines(
       final rcdPoles = poles >= 3 ? 4 : 2;
       final rcdSku = matchRcdSku(
           c.rcd.ratingMa, c.breaker.ratingA.amperes, parts,
-          threePhase: poles >= 3);
+          threePhase: poles >= 3,
+          type: c.rcd.type,
+          timeDelayed: c.rcd.timeDelayed);
       lines.add(BomLine(
         description:
-            'RCD ${c.rcd.ratingMa} mA${c.rcd.type != null ? ' Type ${_rcdType(c.rcd.type!)}' : ''} '
+            'RCD ${c.rcd.ratingMa} mA${c.rcd.type != null ? ' Type ${_rcdType(c.rcd.type!)}' : ''}'
+            '${c.rcd.timeDelayed ? ' S' : ''} '
             '${rcdPoles}P — ${c.name}',
         qty: 1,
         category: PartCategory.rcd,
         sku: rcdSku,
         // An unmatched RCD still carries a deterministic pricelist key.
         priceKey: rcdSku ??
-            '${kElecPriceKeyPrefix}rcd:${c.rcd.ratingMa}:$typeTag:$rcdPoles',
+            '${kElecPriceKeyPrefix}rcd:${c.rcd.ratingMa}:$typeTag'
+                '${c.rcd.timeDelayed ? 'S' : ''}:$rcdPoles',
       ));
     }
   }
@@ -582,7 +705,9 @@ List<BomLine> _consolidate(List<BomLine> lines) {
             ? '${line.sku}::$desc'
             : line.breakingCapacityShort
                 ? '${line.sku}::kA-short::$desc'
-                : line.sku!;
+                : line.deviceSubstituted
+                    ? '${line.sku}::subst::$desc'
+                    : line.sku!;
     final existing = byKey[key];
     if (existing == null) {
       byKey[key] = BomLine(
@@ -593,6 +718,7 @@ List<BomLine> _consolidate(List<BomLine> lines) {
         runs: line.runs,
         priceKey: line.priceKey,
         breakingCapacityShort: line.breakingCapacityShort,
+        deviceSubstituted: line.deviceSubstituted,
       );
       order.add(key);
     } else {
