@@ -19,6 +19,8 @@ library;
 
 import 'dart:math' as math;
 
+import 'compute.dart' show effectiveDemandFactor;
+import 'diversity_library.dart' show DiversityLibrary;
 import 'load_kind.dart' show LoadKind, kAssumedMotorEfficiency;
 import 'model.dart'
     show CircuitRole, ElectricalCircuit, ElectricalProject;
@@ -168,11 +170,41 @@ PowerFactorResult powerFactorCorrection(
   /// True when the installation carries significant harmonic distortion (e.g.
   /// VFD-heavy). A8 harmonics may set this; defaults false.
   bool harmonicRich = false,
+  /// Optional occupancy diversity library — the SAME one the core solve used,
+  /// so each leaf's demand factor matches `circuitConnectedW`. Null ⇒ the
+  /// per-circuit factor (the app today).
+  DiversityLibrary? diversityLibrary,
 }) {
   var kw = 0.0;
   var kvar = 0.0;
 
+  // Round 13 (elec-props-2-pfc-ignores-diversity) — the bank compensates the
+  // DIVERSIFIED demand the supply summary reports, so each leaf carries its
+  // effective demand factor (library-aware) × the diversityFactor of its board
+  // AND of every board upstream (the supply demand applies each level's
+  // diversity in turn). It used to apply only the per-circuit factor, so a
+  // board at diversity 0.5 got a bank sized on twice the kW it compensates.
+  final parentOf = <String, String>{};
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final fed = c.feedsPanelId;
+      if (fed != null && fed.isNotEmpty) parentOf[fed] = p.id;
+    }
+  }
+  final byId = {for (final p in project.panels) p.id: p};
+  double pathDiversity(String id) {
+    var f = 1.0;
+    final seen = <String>{};
+    String? cur = id;
+    while (cur != null && seen.add(cur)) {
+      f *= byId[cur]?.diversityFactor ?? 1.0;
+      cur = parentOf[cur];
+    }
+    return f;
+  }
+
   for (final panel in project.panels) {
+    final boardDiversity = pathDiversity(panel.id);
     for (final c in panel.circuits) {
       if (!_isLeafLoad(c)) continue;
       // Motor shaft rating drives the connected kW when given; else the W field.
@@ -184,7 +216,11 @@ PowerFactorResult powerFactorCorrection(
       final baseKw = (c.motorKw != null)
           ? (motorLike ? c.motorKw! / kAssumedMotorEfficiency : c.motorKw!)
           : c.loadW / 1000.0;
-      final loadKw = baseKw * c.demandFactor;
+      final loadKw = baseKw *
+          effectiveDemandFactor(c,
+              library: diversityLibrary,
+              diversityLibraryId: panel.diversityLibraryId) *
+          boardDiversity;
       final pf = _clampPf(_isElectronic(c) ? electronicLoadPf : c.cosPhi);
       final phi = math.acos(pf);
       kw += loadKw;

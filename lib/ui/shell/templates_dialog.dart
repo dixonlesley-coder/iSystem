@@ -12,7 +12,10 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../store/annotation_store.dart'
+    show measurementsProvider, roomAreasProvider, tankAreasProvider;
 import '../../store/app_state.dart';
+import '../../store/floor_remap.dart' show floorPlacedWorkCount;
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -99,16 +102,18 @@ class _TemplatesDialog extends ConsumerWidget {
             style: type.caption.copyWith(color: colors.textMuted),
           ),
           // Honest warning (B6): applying a template REPLACES the floor stack.
-          // If it has fewer floors than the current building, any drawn work
-          // above the new top floor is moved down onto it (one undo step) — so
-          // "the drawn network is left untouched" is only true when nothing is
-          // drawn. Surface that only when there IS drawn work to move.
-          if (ref.watch(networkControllerProvider).network.nodes.isNotEmpty) ...[
+          // Round 13 (ui-journey-2) — a template with FEWER floors DELETES the
+          // work on the dropped floors (Round 9 — it is no longer fused onto
+          // the new top); the old text still promised it would be 'moved
+          // down'. It now says what happens, and the Apply path confirms with
+          // the real count (network + rooms / tanks / measurements).
+          if (ref.watch(networkControllerProvider).network.nodes.isNotEmpty ||
+              ref.watch(roomAreasProvider).isNotEmpty ||
+              ref.watch(tankAreasProvider).isNotEmpty ||
+              ref.watch(measurementsProvider).isNotEmpty) ...[
             const SizedBox(height: MechXSpacing.xs),
             Text(
-              'You have drawn work: if the chosen template has fewer floors than '
-              'your building, any elements above its top floor will be moved '
-              'down onto the new top floor.',
+              context.strings(StringKey.templatesShrinkDeletesWarning),
               style: type.caption.copyWith(color: colors.warning),
             ),
           ],
@@ -144,14 +149,16 @@ class _TemplatesDialog extends ConsumerWidget {
                     final dropped = ref
                         .read(networkControllerProvider.notifier)
                         .elementsAboveFloor(t.floors.length);
-                    if (dropped > 0) {
+                    final placed = floorPlacedWorkCount(
+                        ref.read, (fi) => fi >= t.floors.length);
+                    if (dropped > 0 || !placed.isEmpty) {
                       final floors = ref.read(projectControllerProvider).floors;
                       final names = [
                         for (var i = t.floors.length; i < floors.length; i++)
                           floors[i].name,
                       ].join(', ');
                       final ok = await showDeleteLevelDialog(context,
-                          level: names, count: dropped);
+                          level: names, count: dropped, placed: placed);
                       if (ok != true || !context.mounted) return;
                     }
                     applyTemplate(ref, t);

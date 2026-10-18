@@ -19,9 +19,13 @@ const double kLayoutLod = 0.65;
 const double kLayoutPanelW = 150;
 const double kLayoutPanelH = 56;
 
-/// Footprint (sheet px) of a placed load marker at world scale.
+/// Footprint (sheet px) of a placed load marker at world scale. Round 13
+/// (ui-journey-2) — 58 tall: the detail body is a 30 px chip + 2 px gap + a
+/// ~24 px two-line caption (9 pt name + 8 pt amps/utilisation, 1.3 line
+/// height, 2 px padding) = ~56 px, which overflowed the old 50 px box by 6 px
+/// on every sized load at detail zoom (the amps line clipped).
 const double kLayoutLoadW = 92;
-const double kLayoutLoadH = 50;
+const double kLayoutLoadH = 58;
 
 /// Callbacks the layout layer raises back to its host (the unified Layout
 /// canvas) to open the inspector / context menus over the one shared model.

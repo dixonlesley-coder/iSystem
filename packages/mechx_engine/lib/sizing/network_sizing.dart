@@ -684,11 +684,18 @@ String _pickComponentRoot({
     return c != 0 ? c : a.compareTo(b);
   }
 
+  // Round 13 (regression-degree2-groundtank-not-root) — a GROUND TANK is the
+  // source of a pressurized system at ANY degree: a duty/standby set draws
+  // from it through two (or more) suction legs, so it has degree >= 2, and it
+  // used to fall to rank 2 beside the pumps — the root then went to whichever
+  // pump id sorted first (n9 vs n10 as strings), feeding the other leg
+  // backwards through the tank. A roof tank still ranks only as a degree-1
+  // terminus (inline it is a break tank the flow passes through).
   int plantRank(String id) {
     if (service.regime == FlowRegime.gravity) return 0;
-    if (degree(id) != 1) return 2;
     final comp = nodeOf(id)?.component;
     if (comp == NodeComponent.groundTank) return 0;
+    if (degree(id) != 1) return 2;
     if (comp == NodeComponent.roofTank) return 1;
     return 2;
   }
@@ -1159,14 +1166,30 @@ Map<String, EdgeSizing> autoSizeNetwork(
       // return is a zero-draw-off branch and the supply carries the full
       // curve(UBAP). A genuine ring that stays looped after the cut keeps the
       // Hardy–Cross split.
-      final checkValveEdgeIds = <String>{};
-      if (isLooped && regime == FlowRegime.pressurized) {
-        bool isCv(String id) =>
-            net.nodeById(id)?.component == NodeComponent.checkValve;
-        for (final e in componentEdges) {
-          if (isCv(e.fromId) || isCv(e.toId)) checkValveEdgeIds.add(e.id);
-        }
-      }
+      //
+      // Round 13 (regression-checkvalve-cut-ignores-direction) — the cut now
+      // reads the valve's DIRECTION (its drawn in-edge -> out-edge). Only check
+      // valves that sit ON a cycle are considered ([_classifyLoopCheckValves]):
+      //   * every one a RETURN valve (it passes flow TOWARD the root — the HW
+      //     return closing back to the heater) => the Round-12 cut;
+      //   * every one a PARALLEL DISCHARGE valve (its outlet is reachable from
+      //     the root only THROUGH a check valve — duty/standby pump legs onto a
+      //     common header) => the tree runs through the first leg and EVERY
+      //     other leg is sized on the same full set flow afterwards (a standby
+      //     pump is a full-duty machine, never a DN15 leg);
+      //   * anything else (a discharge CV on the heater outlet of a recirc
+      //     ring, a mixed set) => no cut: Hardy–Cross, exactly as with no
+      //     valve drawn. A CV on the SUPPLY side used to route every draw-off
+      //     up the return and leave the supply main unsized.
+      final cvPlan = (isLooped && regime == FlowRegime.pressurized)
+          ? _classifyLoopCheckValves(
+              componentEdges: componentEdges,
+              root: root,
+              isCheckValve: (id) =>
+                  net.nodeById(id)?.component == NodeComponent.checkValve,
+            )
+          : null;
+      final checkValveEdgeIds = cvPlan?.deferredEdgeIds ?? const <String>{};
       final cutBreaksLoops = checkValveEdgeIds.isNotEmpty &&
           _isForest([
             for (final e in componentEdges)
@@ -1174,6 +1197,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
           ]);
       final deferred =
           cutBreaksLoops ? checkValveEdgeIds : const <String>{};
+      final standbyLegs = cutBreaksLoops
+          ? (cvPlan?.standbyLegs ?? const <_StandbyLeg>[])
+          : const <_StandbyLeg>[];
 
       // Round 12 (mech-props-2 gravity-loop) — on the TREE path a looped
       // component's CLOSING edges (left out of the deterministic spanning
@@ -1589,6 +1615,27 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // (parent) endpoint.
         edgeFlowFrom.addAll(edgeParents);
       }
+
+      // Round 13 — duty/standby parallel legs: every standby leg carries the
+      // SAME flow (and fixture units) as the duty leg's check valve, oriented
+      // in its valve's pass direction (the tree only ran through one leg).
+      for (final leg in standbyLegs) {
+        var q = 0.0;
+        double? units;
+        for (final id in leg.dutyEdgeIds) {
+          final f = allFlows[id]?.cubicMetersPerSecond ?? 0.0;
+          if (f > q) q = f;
+          final u = fixtureUnitsOut?[id];
+          if (u != null && (units == null || u > units)) units = u;
+        }
+        if (q <= 0) continue;
+        for (var i = 0; i < leg.edgeIds.length; i++) {
+          allFlows[leg.edgeIds[i]] = FlowRate(q);
+          edgeFlowFrom[leg.edgeIds[i]] = leg.fromNodeIds[i];
+          if (units != null) fixtureUnitsOut?[leg.edgeIds[i]] = units;
+          closingEdgeIds.remove(leg.edgeIds[i]);
+        }
+      }
     }
   }
 
@@ -1876,6 +1923,159 @@ void _clampDrainageStacksToBranches({
 
 /// True when the undirected [edges] (endpoint pairs) contain no cycle
 /// (union-find; a parallel pair or a self-loop is a cycle). Pure.
+/// One STANDBY leg of a duty/standby parallel set (Round 13): its edges in
+/// flow order (pass direction of its check valve), the node each edge's flow
+/// comes FROM, and the duty leg's check-valve edges whose flow it mirrors.
+class _StandbyLeg {
+  final List<String> edgeIds;
+  final List<String> fromNodeIds;
+  final List<String> dutyEdgeIds;
+  const _StandbyLeg(this.edgeIds, this.fromNodeIds, this.dutyEdgeIds);
+}
+
+/// How a looped pressurized component's check valves are treated (Round 13).
+class _CheckValvePlan {
+  /// The edges the spanning tree traverses last (empty => no cut =>
+  /// Hardy–Cross).
+  final Set<String> deferredEdgeIds;
+
+  /// Standby legs to size on the duty flow afterwards.
+  final List<_StandbyLeg> standbyLegs;
+  const _CheckValvePlan(this.deferredEdgeIds, this.standbyLegs);
+}
+
+typedef _Cv = ({String id, NetEdge inE, NetEdge outE});
+
+/// Classify the CYCLE check valves of a looped pressurized component by their
+/// drawn direction (in-edge -> valve -> out-edge). See the call site for the
+/// three outcomes. A check valve off every cycle (a branch valve) is a tree
+/// edge anyway and is ignored. Pure + deterministic (valves by id).
+_CheckValvePlan _classifyLoopCheckValves({
+  required List<NetEdge> componentEdges,
+  required String root,
+  required bool Function(String nodeId) isCheckValve,
+}) {
+  const none = _CheckValvePlan(<String>{}, <_StandbyLeg>[]);
+  final adj = <String, List<NetEdge>>{};
+  for (final e in componentEdges) {
+    (adj[e.fromId] ??= []).add(e);
+    (adj[e.toId] ??= []).add(e);
+  }
+  String other(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
+
+  bool connectedWithout(String a, String b, String blockedNode) {
+    final seen = <String>{a};
+    final stack = [a];
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      if (n == b) return true;
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        final m = other(e, n);
+        if (m == blockedNode || !seen.add(m)) continue;
+        stack.add(m);
+      }
+    }
+    return false;
+  }
+
+  // Cycle check valves with exactly one drawn in-edge and one out-edge.
+  final cvs = <_Cv>[];
+  final cvIds = [
+    for (final n in adj.keys)
+      if (isCheckValve(n)) n,
+  ]..sort();
+  var undirected = false;
+  for (final id in cvIds) {
+    final es = adj[id]!;
+    if (es.length != 2) continue;
+    final a = other(es[0], id), b = other(es[1], id);
+    if (!connectedWithout(a, b, id)) continue; // not on a cycle
+    final ins = es.where((e) => e.toId == id).toList();
+    final outs = es.where((e) => e.fromId == id).toList();
+    if (ins.length != 1 || outs.length != 1) {
+      undirected = true;
+      continue;
+    }
+    cvs.add((id: id, inE: ins.first, outE: outs.first));
+  }
+  if (cvs.isEmpty || undirected) return none;
+
+  // Hop distance from the root with EVERY cycle check valve's edges cut.
+  final cut = <String>{
+    for (final c in cvs) ...[c.inE.id, c.outE.id],
+  };
+  final dist = <String, int>{root: 0};
+  final queue = [root];
+  for (var i = 0; i < queue.length; i++) {
+    final n = queue[i];
+    for (final e in adj[n] ?? const <NetEdge>[]) {
+      if (cut.contains(e.id)) continue;
+      final m = other(e, n);
+      if (dist.containsKey(m)) continue;
+      dist[m] = dist[n]! + 1;
+      queue.add(m);
+    }
+  }
+  bool isReturn(_Cv c) {
+    final du = dist[c.inE.fromId], dd = dist[c.outE.toId];
+    return du != null && dd != null && dd < du;
+  }
+
+  bool isParallelDischarge(_Cv c) =>
+      dist[c.inE.fromId] != null && dist[c.outE.toId] == null;
+
+  if (cvs.every(isReturn)) return _CheckValvePlan(cut, const []);
+  if (cvs.length < 2 || !cvs.every(isParallelDischarge)) return none;
+
+  // Duty/standby: the tree runs through the FIRST valve's leg; every other
+  // valve's edges are deferred and its whole leg (the chain of degree-2
+  // nodes through it, up to the split / merge junction or the root) mirrors
+  // the duty valve's flow.
+  final duty = cvs.first;
+  final deferred = <String>{};
+  final legs = <_StandbyLeg>[];
+  for (final c in cvs.skip(1)) {
+    deferred
+      ..add(c.inE.id)
+      ..add(c.outE.id);
+    final seen = <String>{c.id};
+    // Walk upstream from the valve (against the flow): (edge, upstream node).
+    final up = <(NetEdge, String)>[];
+    var node = c.inE.fromId;
+    var edge = c.inE;
+    while (true) {
+      up.add((edge, node));
+      if (node == root || !seen.add(node)) break;
+      final es = adj[node]!;
+      if (es.length != 2) break;
+      final next = es.firstWhere((e) => e.id != edge.id);
+      edge = next;
+      node = other(next, node);
+    }
+    // ... and downstream (with the flow).
+    final down = <(NetEdge, String)>[];
+    var dn = c.id;
+    var de = c.outE;
+    while (true) {
+      down.add((de, dn));
+      final far = other(de, dn);
+      if (far == root || !seen.add(far)) break;
+      final es = adj[far]!;
+      if (es.length != 2) break;
+      final next = es.firstWhere((e) => e.id != de.id);
+      dn = far;
+      de = next;
+    }
+    final ordered = [...up.reversed, ...down];
+    legs.add(_StandbyLeg(
+      [for (final (e, _) in ordered) e.id],
+      [for (final (_, from) in ordered) from],
+      [duty.inE.id, duty.outE.id],
+    ));
+  }
+  return _CheckValvePlan(deferred, legs);
+}
+
 bool _isForest(List<(String, String)> edges) {
   final parent = <String, String>{};
   String find(String x) {

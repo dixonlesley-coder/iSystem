@@ -19,6 +19,8 @@ import '../../store/app_state.dart'
         rainfallIntensityProvider,
         runoffCoefficientProvider,
         statusMessageProvider;
+import '../../store/floor_remap.dart'
+    show FloorPlacedWorkCount, floorPlacedWorkCount;
 import '../../store/history_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
@@ -134,9 +136,14 @@ class BuildingScreen extends ConsumerWidget {
       BuildContext context, WidgetRef ref, int index) async {
     final count =
         ref.read(networkControllerProvider.notifier).elementsOnFloor(index);
-    if (count > 0) {
+    // Round 13 (ui-journey-2) — the level's rooms, tanks, measurements and
+    // electrical placements go with it too (floor_remap), so they count: a
+    // floor carrying only a room used to vanish with no dialog at all.
+    final placed = floorPlacedWorkCount(ref.read, (fi) => fi == index);
+    if (count > 0 || !placed.isEmpty) {
       final level = ref.read(projectControllerProvider).floors[index].name;
-      final ok = await showDeleteLevelDialog(context, level: level, count: count);
+      final ok = await showDeleteLevelDialog(context,
+          level: level, count: count, placed: placed);
       if (ok != true) return;
     }
     ref.read(projectControllerProvider.notifier).removeFloor(index);
@@ -161,6 +168,7 @@ Future<bool?> showDeleteLevelDialog(
   BuildContext context, {
   required String level,
   required int count,
+  FloorPlacedWorkCount placed = const FloorPlacedWorkCount(),
 }) {
   final theme = MechXTheme.of(context);
   return showGeneralDialog<bool>(
@@ -171,7 +179,9 @@ Future<bool?> showDeleteLevelDialog(
     transitionDuration: MechXMotion.appear,
     pageBuilder: (ctx, _, _) => MechXTheme(
       data: theme,
-      child: Center(child: _DeleteLevelDialog(level: level, count: count)),
+      child: Center(
+          child:
+              _DeleteLevelDialog(level: level, count: count, placed: placed)),
     ),
     transitionBuilder: (ctx, anim, _, child) {
       final curved = CurvedAnimation(
@@ -193,7 +203,9 @@ Future<bool?> showDeleteLevelDialog(
 class _DeleteLevelDialog extends StatelessWidget {
   final String level;
   final int count;
-  const _DeleteLevelDialog({required this.level, required this.count});
+  final FloorPlacedWorkCount placed;
+  const _DeleteLevelDialog(
+      {required this.level, required this.count, required this.placed});
 
   @override
   Widget build(BuildContext context) {
@@ -202,8 +214,25 @@ class _DeleteLevelDialog extends StatelessWidget {
     final strings = MechXStrings.of(context);
     // The count reads as a real phrase ("47 drawn elements" / "1 drawn
     // element"), never the dev-speak "element(s)".
-    final noun = plural(count, strings(StringKey.buildingDrawnElementOne),
-        strings(StringKey.buildingDrawnElementMany));
+    // Round 13 — every KIND that goes is named with its own count
+    // ('3 drawn elements, 1 room, 2 tanks'), never just the network.
+    String phrase(int n, StringKey one, StringKey many) =>
+        '$n ${plural(n, strings(one), strings(many))}';
+    final parts = <String>[
+      if (count > 0)
+        phrase(count, StringKey.buildingDrawnElementOne,
+            StringKey.buildingDrawnElementMany),
+      if (placed.rooms > 0)
+        phrase(placed.rooms, StringKey.buildingRoomOne,
+            StringKey.buildingRoomMany),
+      if (placed.tanks > 0)
+        phrase(placed.tanks, StringKey.buildingTankOne,
+            StringKey.buildingTankMany),
+      if (placed.measurements > 0)
+        phrase(placed.measurements, StringKey.buildingMeasurementOne,
+            StringKey.buildingMeasurementMany),
+    ];
+    final what = parts.join(', ');
     return Container(
       width: 420,
       padding: const EdgeInsets.all(MechXSpacing.lg),
@@ -222,11 +251,20 @@ class _DeleteLevelDialog extends StatelessWidget {
             style: type.title.copyWith(color: colors.textPrimary),
           ),
           const SizedBox(height: MechXSpacing.xs),
-          Text(
-            strings.format(StringKey.buildingDeleteLevelBody,
-                {'level': level, 'count': '$count $noun'}),
-            style: type.caption.copyWith(color: colors.textMuted),
-          ),
+          if (what.isNotEmpty)
+            Text(
+              strings.format(
+                  StringKey.buildingDeleteLevelBody, {'level': level, 'count': what}),
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          if (placed.electrical > 0) ...[
+            const SizedBox(height: MechXSpacing.xxs),
+            Text(
+              strings.format(StringKey.buildingDeleteLevelElectrical,
+                  {'count': '${placed.electrical}'}),
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ],
           const SizedBox(height: MechXSpacing.md),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,

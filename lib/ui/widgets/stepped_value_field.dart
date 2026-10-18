@@ -174,6 +174,19 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
   void _commit() {
     if (!_editing) return;
     final raw = _controller.text.trim();
+    // Round 13 (ui-journey-2) — an UNTOUCHED edit is a no-op: clicking into
+    // the value and leaving must never write the seed back as an explicit
+    // value. It used to: a 'Mixed' multi-selection size box (seed '') blurred
+    // to onSubmit(null) and wiped every run's manual size; an Auto ACH or
+    // electrical-load field pinned its displayed default as an override.
+    // Explicitly clearing a NON-empty box still means "Auto" (onSubmit(null)).
+    if (raw == widget.editSeed.trim()) {
+      setState(() {
+        _editing = false;
+        _error = null;
+      });
+      return;
+    }
     if (raw.isEmpty) {
       setState(() {
         _editing = false;
@@ -271,6 +284,11 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
         widget.display,
         textAlign: widget.valueAlign,
         style: valueStyle,
+        // Round 13 — a long display (e.g. '0.49 kW · room PK') ellipsizes its
+        // TAIL in a narrow inspector column instead of overflowing the row.
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
       );
       final tappable = MouseRegion(
         cursor: SystemMouseCursors.text,
@@ -294,7 +312,11 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
         ? strings(k)
         : '${strings(k)} ${widget.label}';
 
-    final row = Row(
+    // The display flexes (and ellipsizes) only under a BOUNDED width with no
+    // fixed value width — an unbounded host keeps the intrinsic row, so a
+    // Flexible never meets infinite constraints.
+    final flexValue = !_editing && widget.valueWidth == null;
+    final row = LayoutBuilder(builder: (context, constraints) => Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _StepperGlyphButton(
@@ -304,7 +326,10 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           semanticLabel: stepLabel(StringKey.a11yDecrease),
         ),
         SizedBox(width: widget.gap),
-        valueSlot,
+        if (flexValue && constraints.hasBoundedWidth)
+          Flexible(child: valueSlot)
+        else
+          valueSlot,
         SizedBox(width: widget.gap),
         _StepperGlyphButton(
           glyph: '+',
@@ -313,7 +338,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           semanticLabel: stepLabel(StringKey.a11yIncrease),
         ),
       ],
-    );
+    ));
     // The Column is ALWAYS present, even with no message: swapping between a
     // bare Row and a wrapped one would re-create the editor's element mid-edit
     // (dropping its focus + text-input connection the instant a rejection was

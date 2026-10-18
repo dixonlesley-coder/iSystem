@@ -7,6 +7,8 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/cover_sheet.dart';
+import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
+import 'package:mechx_engine/report/file_names.dart' show safeFileStem;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
@@ -59,7 +61,12 @@ import '../../store/calibration_store.dart';
 import '../../store/compliance_store.dart';
 import '../../store/design_issues_store.dart';
 import '../../store/document_control_store.dart';
-import '../../store/electrical_feed.dart' show acUnitShare, mepDutyBindingProvider;
+import '../../store/electrical_feed.dart'
+    show
+        NodeLoadSource,
+        acUnitShare,
+        mepDutyBindingProvider,
+        nodeFedLoadsProvider;
 import '../../store/electrical_store.dart';
 import '../../store/command_store.dart';
 import '../../store/commercial_store.dart';
@@ -352,7 +359,9 @@ Future<String?> pickExportSave(
 }) async {
   final path = await FilePicker.saveFile(
     dialogTitle: dialogTitle,
-    fileName: fileName,
+    // Round 13 (export-files-1) — the suggested name embeds the free-text
+    // project / sheet name; '/' ':' '?' … are not legal in a file name.
+    fileName: safeFileStem(fileName, fallback: 'export.$ext'),
     type: FileType.custom,
     allowedExtensions: [ext],
     initialDirectory: initialDirectory ?? ref.read(lastExportDirProvider),
@@ -1031,8 +1040,8 @@ Future<bool> _writeEquipmentSchedule(WidgetRef ref) async {
   ).writeAsString(buildEquipmentScheduleMarkdown(data, reportStringsFor(ref)));
   await File(
     '$stem.csv',
-  ).writeAsString(equipmentScheduleToCsv(
-        buildEquipmentScheduleRows(data, reportStringsFor(ref))));
+  ).writeAsString(excelCsv(equipmentScheduleToCsv(
+        buildEquipmentScheduleRows(data, reportStringsFor(ref)))));
   return true;
 }
 
@@ -1378,7 +1387,22 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
   );
   if (dir == null || dir.isEmpty) return false;
   ref.read(lastExportDirProvider.notifier).set(dir);
-  return writeSubmittalPackageToDir(ref, dir);
+  final removed = <String>[];
+  final ok = await writeSubmittalPackageToDir(ref, dir, removedOut: removed);
+  if (ok && removed.isNotEmpty) {
+    // export-files-3 — say that superseded files were pruned (the guard's
+    // own 'Exported …' pill would otherwise be the only cue). Deferred to
+    // the next event so it lands after the guard's generic confirmation.
+    final text = MechXStringsData(ref.read(localeProvider)).format(
+      StringKey.exportSubmittalStaleRemovedTemplate,
+      {'count': '${removed.length}'},
+    );
+    Future<void>.delayed(
+      Duration.zero,
+      () => ref.read(statusMessageProvider.notifier).showStatus(text),
+    );
+  }
+  return ok;
 }
 
 /// J2: the submittal package's actual file-writing pass, factored out of
@@ -1390,15 +1414,34 @@ Future<bool> _writeSubmittalPackage(WidgetRef ref) async {
 /// (N21) front matter lists one row per bundled sheet to match. Progress
 /// during the per-sheet loop rides the shared [busyProvider] pill, cleared in
 /// a `finally` so a thrown mid-loop error never leaves it stuck.
+///
+/// Round 13 — (export-files-1) every FILE name is built from [safeFileStem] of
+/// the project / sheet name (the raw names still print in the title blocks),
+/// so `Ruko A/B` or `Proyek: Tahap 1` can no longer throw mid-package or hide
+/// the set in an NTFS stream; (export-files-3) after writing, any file in
+/// [dir] that belongs to THIS project's package (`<stem>-<package suffix>`)
+/// but was not written by this run — a superseded sheet from an earlier
+/// revision — is deleted, so the folder holds exactly the set the new cover
+/// lists. The removed paths are appended to [removedOut] when given.
 @visibleForTesting
-Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
+Future<bool> writeSubmittalPackageToDir(
+  WidgetRef ref,
+  String dir, {
+  List<String>? removedOut,
+}) async {
   final project = ref.read(projectControllerProvider);
   final base = project.name.trim().isEmpty ? 'project' : project.name.trim();
+  final fileBase = safeFileStem(base);
   final strings = reportStringsFor(ref);
   final doc = ref.read(documentControlProvider);
   final today = DateTime.now().toIso8601String().split('T').first;
   final sep = Platform.pathSeparator;
-  String out(String suffix) => '$dir$sep$base-$suffix';
+  final written = <String>{};
+  String out(String suffix) {
+    final path = '$dir$sep$fileBase-$suffix';
+    written.add(path);
+    return path;
+  }
 
   // N19: the riser single-line and the electrical single-line in the package
   // are DIFFERENT drawings, so each derives its own number by [series] (the
@@ -1431,6 +1474,42 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
   // J2: one Daftar Gambar row per BUNDLED sheet — every floor in the rail,
   // not just whichever sheet happened to be active — matching the per-sheet
   // plan export loop below.
+  // export-files-2 — the sheets that carry an ELECTRICAL LAYOUT plan (placed
+  // panels/loads), pre-collected so the k-th one is numbered E-10k with its
+  // own SHEET k-of-n counter and listed on the Daftar Gambar (every elec plan
+  // used to stamp E-101 / '1 of 1' and none was indexed).
+  final elecPlanSheetIds = <String>[];
+  for (final s in sheetsFm.sheets) {
+    final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
+    final ePlanFm = buildElectricalPlanData(
+      project: eProjectFm,
+      result: eResultFm,
+      sheetId: s.id,
+      floorIndex: fIdx,
+      calibrations: project.calibrations,
+      building: project.building,
+    );
+    if (!ePlanFm.isEmpty) elecPlanSheetIds.add(s.id);
+  }
+  DrawingChrome elecPlanChrome(String sheetId) {
+    final k = elecPlanSheetIds.indexOf(sheetId) + 1;
+    return DrawingChrome(
+      sheetIndex: k,
+      sheetTotal: elecPlanSheetIds.length,
+      drawingNumber: sheetDrawingNumber(
+        base: doc.documentNumber,
+        series: DrawingSeries.electricalLayout,
+        index: k,
+      ),
+      revisionNumber: doc.revisionTag,
+      clientName: doc.clientName,
+      drawnBy: doc.preparedBy,
+      checkedBy: doc.checkedBy,
+      approvedBy: doc.approvedBy,
+      dateString: today,
+    );
+  }
+
   final drawingList = <DrawingListEntry>[];
   for (final s in sheetsFm.sheets) {
     final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
@@ -1439,6 +1518,17 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       DrawingListEntry(
         number: planChromeFm.drawingNumber ?? '',
         title: 'PLAN - ${s.name}',
+        revision: rev,
+        date: today,
+      ),
+    );
+  }
+  for (final id in elecPlanSheetIds) {
+    drawingList.add(
+      DrawingListEntry(
+        number: elecPlanChrome(id).drawingNumber ?? '',
+        title:
+            'DENAH INSTALASI LISTRIK - ${sheetsFm.sheetById(id)?.name ?? id}',
         revision: rev,
         date: today,
       ),
@@ -1639,8 +1729,8 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
   ).writeAsString(buildEquipmentScheduleMarkdown(sched, strings));
   await File(
     out('equipment-schedule.csv'),
-  ).writeAsString(equipmentScheduleToCsv(
-        buildEquipmentScheduleRows(sched, strings)));
+  ).writeAsString(excelCsv(equipmentScheduleToCsv(
+        buildEquipmentScheduleRows(sched, strings))));
   await File(out('equipment-schedule.pdf')).writeAsBytes(
     reportBlocksToPdf(
       buildEquipmentScheduleBlocks(sched, strings),
@@ -1659,7 +1749,8 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
   // ── BOM (CSV) + costed quotation (MD) — the unified M+E+P pipeline ───────────
   final mechCost = ref.read(mechanicalCostProvider);
   final elecCost = ref.read(electricalCostProvider);
-  await File(out('bom.csv')).writeAsString(mepBomToCsv(mechCost, elecCost));
+  await File(out('bom.csv'))
+      .writeAsString(excelCsv(mepBomToCsv(mechCost, elecCost)));
   await File(out('quotation.md')).writeAsString(
     mepQuotationToMarkdown(
       ref.read(mepQuotationProvider),
@@ -1756,7 +1847,8 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
       final gravitySlope = ref.read(drainageSlopeProvider);
       // One file per sheet, numbered by rail position so a multi-floor bundle
       // never collides (`project-plan-1-Ground Floor.pdf`, `-2-Level 1.pdf`…).
-      final suffix = 'plan-${i + 1}-${sheet.name}';
+      final suffix =
+          'plan-${i + 1}-${safeFileStem(sheet.name, fallback: 'sheet')}';
       await File(out('$suffix.pdf')).writeAsBytes(
         planToPdf(
           net: net,
@@ -1822,7 +1914,7 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
         building: project.building,
       );
       if (!ePlan.isEmpty) {
-        final eChrome = sldChrome(DrawingSeries.electricalLayout);
+        final eChrome = elecPlanChrome(sheet.id);
         await File(out('elec-$suffix.pdf')).writeAsBytes(
           electricalPlanToPdf(
             data: ePlan,
@@ -1942,7 +2034,70 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
     );
   }
 
+  // export-files-3 — prune superseded package files of THIS project.
+  final removed = await removeStaleSubmittalFiles(
+    dir,
+    fileBase: fileBase,
+    keep: written,
+  );
+  removedOut?.addAll(removed);
   return true;
+}
+
+/// The file suffixes (after `<stem>-`) a submittal package writes — the ONLY
+/// files [removeStaleSubmittalFiles] may delete, so an unrelated file that
+/// happens to share the stem is never touched.
+final RegExp _submittalSuffix = RegExp(
+  r'^(00-cover-sheets\.pdf'
+  r'|report\.(md|pdf)'
+  r'|mep-report\.(md|pdf)'
+  r'|equipment-schedule\.(md|csv|pdf)'
+  r'|bom\.csv'
+  r'|quotation\.md'
+  r'|riser-sld\.(pdf|dxf)'
+  r'|(elec-)?plan-\d+-.+\.(pdf|dxf)'
+  r'|electrical-sld\.pdf'
+  r'|electrical-overview-sld\.(pdf|dxf)'
+  r'|electrical-riser\.(pdf|dxf)'
+  r'|electrical-power-one-line\.(pdf|dxf)'
+  r'|electrical-report\.md)$',
+);
+
+/// Round 13 (export-files-3) — delete every file directly in [dir] named
+/// `<fileBase>-<a submittal package suffix>` that is NOT in [keep] (the paths
+/// this run wrote): drawings superseded since the last issue into the same
+/// folder (a removed sheet, a cleared electrical set). Returns the deleted
+/// paths. Never recurses; a file that cannot be deleted is left in place.
+@visibleForTesting
+Future<List<String>> removeStaleSubmittalFiles(
+  String dir, {
+  required String fileBase,
+  required Set<String> keep,
+}) async {
+  final removed = <String>[];
+  final folder = Directory(dir);
+  if (!await folder.exists()) return removed;
+  final prefix = '$fileBase-';
+  await for (final entity in folder.list(followLinks: false)) {
+    if (entity is! File) continue;
+    final name = entity.uri.pathSegments.isEmpty
+        ? ''
+        : entity.uri.pathSegments.last;
+    final decoded = Uri.decodeComponent(name);
+    if (!decoded.startsWith(prefix)) continue;
+    final suffix = decoded.substring(prefix.length);
+    if (!_submittalSuffix.hasMatch(suffix)) continue;
+    final path = '$dir${Platform.pathSeparator}$decoded';
+    if (keep.contains(path) || keep.contains(entity.path)) continue;
+    try {
+      await entity.delete();
+      removed.add(entity.path);
+    } on FileSystemException {
+      // Locked / read-only — leave it; the cover still lists the true set.
+    }
+  }
+  removed.sort();
+  return removed;
 }
 
 /// H5 — the document-control identity surfaced AT the export moment. A compact
@@ -3592,12 +3747,19 @@ class _RoomsSection extends ConsumerWidget {
                                     onTap: () => ctrl.setAch(r.id, null),
                                   ),
                                   const Spacer(),
+                                  // Round 13 (ui-journey-2) — the edit box
+                                  // pre-fills only an explicit OVERRIDE (Auto
+                                  // ⇒ '' — a look-and-leave no longer pins the
+                                  // room-type ACH, which then went stale on a
+                                  // room-type change), and ACH prints to one
+                                  // decimal so a 2.5 override never re-seeds
+                                  // as '3'. The selected Auto pill marks the
+                                  // auto figure.
                                   SteppedValueField(
-                                    display:
-                                        '${r.effectiveAch().toStringAsFixed(0)}/h',
-                                    editSeed: r.effectiveAch().toStringAsFixed(
-                                      0,
-                                    ),
+                                    display: '${_fmtAch(r.effectiveAch())}/h',
+                                    editSeed: r.achOverride == null
+                                        ? ''
+                                        : _fmtAch(r.achOverride!),
                                     label: context.strings(
                                       StringKey.a11yFieldAirChangesPerHour,
                                     ),
@@ -3666,23 +3828,34 @@ class _RoomsSection extends ConsumerWidget {
                                         )
                                   : null,
                             ),
-                            const Spacer(),
-                            if (s != null)
-                              Text(
-                                // Round 11 — an extract room (toilet /
-                                // kitchen) places exhaust grilles only.
-                                s.extractOnly
-                                    ? context.strings.format(
-                                        StringKey.roomExtractGrilleCount,
-                                        {'n': s.return_.count})
-                                    : '${s.supply.count} + 1',
-                                // L2: the diffuser count tracks the live sizing.
-                                style: MechXTypography.tabular(
-                                  type.caption.copyWith(
-                                    color: colors.textMuted,
-                                  ),
-                                ),
-                              ),
+                            const SizedBox(width: MechXSpacing.sm),
+                            // Round 13 — the count flexes (wrapping, right-
+                            // aligned) beside the button: an extract room's
+                            // 'N exhaust grilles' caption overflowed the 222 px
+                            // column by ~120 px.
+                            Expanded(
+                              child: s == null
+                                  ? const SizedBox.shrink()
+                                  : Text(
+                                      // Round 11 — an extract room (toilet /
+                                      // kitchen) places exhaust grilles only.
+                                      s.extractOnly
+                                          ? context.strings.format(
+                                              StringKey.roomExtractGrilleCount,
+                                              {'n': s.return_.count})
+                                          : '${s.supply.count} + 1',
+                                      textAlign: TextAlign.end,
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      // L2: the diffuser count tracks the live
+                                      // sizing.
+                                      style: MechXTypography.tabular(
+                                        type.caption.copyWith(
+                                          color: colors.textMuted,
+                                        ),
+                                      ),
+                                    ),
+                            ),
                           ],
                         ),
                         const SizedBox(height: MechXSpacing.sm),
@@ -4058,8 +4231,9 @@ Future<void> exportBomCsv(WidgetRef ref) {
       final cutPlan = ref.read(pipeCutPlanProvider);
       await File(
         '$base-bom.csv',
-      ).writeAsString(bomCsvWithCutPlan(floorBom, cutPlan));
-      await File('$base-fittings.csv').writeAsString(fittingsToCsv(fittings));
+      ).writeAsString(excelCsv(bomCsvWithCutPlan(floorBom, cutPlan)));
+      await File('$base-fittings.csv')
+          .writeAsString(excelCsv(fittingsToCsv(fittings)));
       return true;
     },
   );
@@ -4932,41 +5106,46 @@ class _SelectionSection extends ConsumerWidget {
               ),
             ),
             const SizedBox(height: MechXSpacing.xxs),
-            SteppedValueField(
-              display: () {
-                final w =
-                    node.electricalLoadW ??
-                    node.component!.defaultMotorKw * 1000;
-                final suffix = node.electricalLoadW == null ? ' · default' : '';
-                return '${(w / 1000).toStringAsFixed(2)} kW$suffix';
-              }(),
-              label: 'Electrical load',
-              editSeed:
-                  ((node.electricalLoadW ??
-                              node.component!.defaultMotorKw * 1000) /
-                          1000)
-                      .toStringAsFixed(2),
-              gap: MechXSpacing.sm,
-              min: 0,
-              onDecrement: () {
-                final base =
-                    node.electricalLoadW ??
-                    node.component!.defaultMotorKw * 1000;
-                final next = base - 250;
-                ctrl.setNodeElectricalLoad(node.id, next <= 0 ? null : next);
-              },
-              onIncrement: () {
-                final base =
-                    node.electricalLoadW ??
-                    node.component!.defaultMotorKw * 1000;
-                ctrl.setNodeElectricalLoad(node.id, base + 250);
-              },
-              // The typed value is in kW (the displayed unit); store it as W.
-              onSubmit: (v) => ctrl.setNodeElectricalLoad(
-                node.id,
-                (v == null || v <= 0) ? null : v * 1000,
-              ),
-            ),
+            // Round 13 (ui-journey-2) — the figure shown, and the +/- base,
+            // are the load the panel ACTUALLY carries ([nodeFedLoadsProvider]:
+            // explicit → solved duty → room PK → component default), labelled
+            // by source; the edit box pre-fills only an explicit override, so
+            // a look-and-leave can never pin the default as an override.
+            Builder(builder: (context) {
+              final fed = ref.watch(nodeFedLoadsProvider)[node.id];
+              final fedW =
+                  fed?.watts ?? node.component!.defaultMotorKw * 1000;
+              final strings = context.strings;
+              final suffix = switch (fed?.source) {
+                NodeLoadSource.explicit => '',
+                NodeLoadSource.solvedDuty =>
+                  ' · ${strings(StringKey.nodeLoadSourceDuty)}',
+                NodeLoadSource.roomPk =>
+                  ' · ${strings(StringKey.nodeLoadSourceRoomPk)}',
+                _ => ' · ${strings(StringKey.nodeLoadSourceDefault)}',
+              };
+              return SteppedValueField(
+                display: '${(fedW / 1000).toStringAsFixed(2)} kW$suffix',
+                label: 'Electrical load',
+                editSeed: node.electricalLoadW == null
+                    ? ''
+                    : (node.electricalLoadW! / 1000).toStringAsFixed(2),
+                gap: MechXSpacing.sm,
+                min: 0,
+                onDecrement: () {
+                  final next = fedW - 250;
+                  ctrl.setNodeElectricalLoad(
+                      node.id, next <= 0 ? null : next);
+                },
+                onIncrement: () =>
+                    ctrl.setNodeElectricalLoad(node.id, fedW + 250),
+                // The typed value is in kW (the displayed unit); store as W.
+                onSubmit: (v) => ctrl.setNodeElectricalLoad(
+                  node.id,
+                  (v == null || v <= 0) ? null : v * 1000,
+                ),
+              );
+            }),
           ],
         ],
         // E2: identity first — the fixture/type group (below, gated on the
@@ -5848,3 +6027,8 @@ String _motorKw(Power p) {
       .replaceFirst(RegExp(r'0+$'), '')
       .replaceFirst(RegExp(r'\.$'), '');
 }
+
+/// An ACH figure for the Rooms inspector: whole numbers bare (`6`), anything
+/// else to one decimal (`2.5`) — never rounded to an integer (Round 13).
+String _fmtAch(double v) =>
+    (v - v.roundToDouble()).abs() < 1e-9 ? '${v.round()}' : v.toStringAsFixed(1);

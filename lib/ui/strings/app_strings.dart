@@ -215,6 +215,14 @@ enum StringKey {
   buildingDeleteLevelCancel,
   buildingDrawnElementOne,
   buildingDrawnElementMany,
+  buildingRoomOne,
+  buildingRoomMany,
+  buildingTankOne,
+  buildingTankMany,
+  buildingMeasurementOne,
+  buildingMeasurementMany,
+  buildingDeleteLevelElectrical,
+  templatesShrinkDeletesWarning,
 
   // Schematic / elevation — help popover.
   schematicElevationGuide,
@@ -394,6 +402,10 @@ enum StringKey {
   exportIdentityTitle,
   exportIdentityDrawingNo,
   exportIdentityDrawingNoHint,
+  exportSubmittalStaleRemovedTemplate,
+  nodeLoadSourceDuty,
+  nodeLoadSourceRoomPk,
+  nodeLoadSourceDefault,
   exportIdentityRevisionHint,
   exportIdentityClientHint,
   sheetRailAddFiles,
@@ -1365,6 +1377,18 @@ const Map<StringKey, String> _en = {
   StringKey.buildingDeleteLevelCancel: 'Cancel',
   StringKey.buildingDrawnElementOne: 'drawn element',
   StringKey.buildingDrawnElementMany: 'drawn elements',
+  StringKey.buildingRoomOne: 'room',
+  StringKey.buildingRoomMany: 'rooms',
+  StringKey.buildingTankOne: 'tank',
+  StringKey.buildingTankMany: 'tanks',
+  StringKey.buildingMeasurementOne: 'measurement',
+  StringKey.buildingMeasurementMany: 'measurements',
+  StringKey.buildingDeleteLevelElectrical:
+      'Placed electrical items on it ({count}) return to the unplaced tray.',
+  StringKey.templatesShrinkDeletesWarning:
+      'You have drawn work: if the chosen template has fewer floors than '
+      'your building, everything on the floors above its top floor is '
+      'DELETED (you are asked to confirm first; Ctrl+Z restores it).',
 
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Elevation guide',
@@ -1575,7 +1599,12 @@ const Map<StringKey, String> _en = {
   StringKey.paletteEditEquipmentSpecsSub: 'Equipment model/spec on Projects',
   StringKey.exportIdentityTitle: 'Document control',
   StringKey.exportIdentityDrawingNo: 'Drawing no.',
-  StringKey.exportIdentityDrawingNoHint: 'e.g. M-101',
+  StringKey.exportIdentityDrawingNoHint: 'e.g. BRI-MEP-01',
+  StringKey.nodeLoadSourceDuty: 'solved duty',
+  StringKey.nodeLoadSourceRoomPk: 'room PK',
+  StringKey.nodeLoadSourceDefault: 'default',
+  StringKey.exportSubmittalStaleRemovedTemplate:
+      'Exported submittal package - superseded files removed from the folder: {count}',
   StringKey.exportIdentityRevisionHint: 'e.g. A',
   StringKey.exportIdentityClientHint: 'Client name',
   StringKey.sheetRailAddFiles: 'Add sheets from files…',
@@ -2618,6 +2647,18 @@ const Map<StringKey, String> _id = {
   // Bahasa Indonesia has no plural inflection — the same noun for both.
   StringKey.buildingDrawnElementOne: 'elemen gambar',
   StringKey.buildingDrawnElementMany: 'elemen gambar',
+  StringKey.buildingRoomOne: 'ruang',
+  StringKey.buildingRoomMany: 'ruang',
+  StringKey.buildingTankOne: 'tangki',
+  StringKey.buildingTankMany: 'tangki',
+  StringKey.buildingMeasurementOne: 'ukuran',
+  StringKey.buildingMeasurementMany: 'ukuran',
+  StringKey.buildingDeleteLevelElectrical:
+      'Item listrik terpasang di level ini ({count}) kembali ke baki belum-terpasang.',
+  StringKey.templatesShrinkDeletesWarning:
+      'Ada pekerjaan tergambar: jika template memiliki lantai lebih sedikit, '
+      'semua yang berada di atas lantai teratasnya DIHAPUS (diminta konfirmasi '
+      'dulu; Ctrl+Z memulihkannya).',
 
   // Schematic / elevation — help popover.
   StringKey.schematicElevationGuide: 'Panduan elevasi',
@@ -2828,7 +2869,12 @@ const Map<StringKey, String> _id = {
       'Model/spesifikasi peralatan di Proyek',
   StringKey.exportIdentityTitle: 'Kontrol dokumen',
   StringKey.exportIdentityDrawingNo: 'No. gambar',
-  StringKey.exportIdentityDrawingNoHint: 'mis. M-101',
+  StringKey.exportIdentityDrawingNoHint: 'mis. BRI-MEP-01',
+  StringKey.nodeLoadSourceDuty: 'duty terhitung',
+  StringKey.nodeLoadSourceRoomPk: 'PK ruang',
+  StringKey.nodeLoadSourceDefault: 'bawaan',
+  StringKey.exportSubmittalStaleRemovedTemplate:
+      'Paket submittal diekspor - berkas lama dihapus dari folder: {count}',
   StringKey.exportIdentityRevisionHint: 'mis. A',
   StringKey.exportIdentityClientHint: 'Nama klien',
   StringKey.sheetRailAddFiles: 'Tambah lembar dari berkas…',

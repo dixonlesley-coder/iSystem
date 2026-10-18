@@ -82,7 +82,7 @@ void main() {
   ) async {
     final (ref, container) = await harness(tester);
     final docCtrl = container.read(documentControlProvider.notifier);
-    docCtrl.setDocumentNumber('M-101');
+    docCtrl.setDocumentNumber('BRI-01');
     docCtrl.setRevisionTag('B');
     docCtrl.setClientName('PT Contoh');
     docCtrl.setPreparedBy('AR');
@@ -90,7 +90,9 @@ void main() {
     docCtrl.setApprovedBy('LW');
 
     final chrome = issuableChrome(ref, sheetId: 's1', floorIndex: 0);
-    expect(chrome.drawingNumber, 'M-101');
+    // Round 13 — the project-wide document number PREFIXES the derived
+    // per-sheet code (never one number on every sheet).
+    expect(chrome.drawingNumber, 'BRI-01-M-101');
     expect(chrome.revisionNumber, 'B');
     expect(chrome.clientName, 'PT Contoh');
     expect(chrome.drawnBy, 'AR');

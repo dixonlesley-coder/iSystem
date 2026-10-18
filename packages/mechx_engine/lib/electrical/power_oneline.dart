@@ -127,6 +127,7 @@ PowerOneLine buildPowerOneLine(
   required ApparentPower demand,
   Voltage voltage = const Voltage(400),
   List<GensetMotor> motors = const <GensetMotor>[],
+  ApparentPower? backupDemand,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -163,7 +164,7 @@ PowerOneLine buildPowerOneLine(
   // Pre-size the configured sources.
   final gen = sources.generator;
   final genResult =
-      gen == null ? null : _sizeGen(gen, demand);
+      gen == null ? null : _sizeGen(gen, demand, backupDemand);
   // Motor-start voltage-dip screen for the sized genset — annotated onto the
   // generator node so the one-line carries the load-acceptance verdict.
   final gensetStart = genResult == null
@@ -396,10 +397,13 @@ PowerOneLine buildPowerOneLine(
   return PowerOneLine(nodes: nodes, edges: edges, interlocks: interlocks);
 }
 
-/// Size the generator for the one-line: a forced kVA wins, else the demand ×
-/// backupFraction is the backup demand.
-GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand) {
+/// Size the generator for the one-line: a forced kVA wins, else the resolved
+/// [backupDemand] (Round 13 — `max(fraction × demand, essential demand)` from
+/// `gensetBackupDemandVa`), else the demand × backupFraction.
+GeneratorResult _sizeGen(
+    GeneratorSource gen, ApparentPower demand, ApparentPower? backupDemand) {
   final backup = gen.kva ??
+      backupDemand ??
       ApparentPower(demand.voltAmperes * gen.backupFraction);
   return sizeGenerator(
     backup,

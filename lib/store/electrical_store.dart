@@ -471,10 +471,13 @@ final electricalAdvancedProvider = Provider<AdvancedStudy>(
 /// busbar-withstand finding, and it must never show twice.
 final electricalAllWarningsProvider = Provider<List<ElectricalWarning>>((ref) {
   final core = ref.watch(electricalResultProvider).warnings;
-  final fault = ref.watch(electricalAdvancedProvider).fault.warnings;
+  final advanced = ref.watch(electricalAdvancedProvider);
+  final fault = advanced.fault.warnings;
   final seen = <(String, String?, String?)>{};
   final out = <ElectricalWarning>[];
-  for (final w in [...core, ...fault]) {
+  // Round 13 — plus the advanced study's own judge-only warnings (a forced
+  // genset nameplate below the essential boards' demand).
+  for (final w in [...core, ...fault, ...advanced.warnings]) {
     final key = (w.code, w.panelId, w.circuitId);
     if (!seen.add(key)) continue;
     out.add(w);
