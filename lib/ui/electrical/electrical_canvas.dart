@@ -65,7 +65,7 @@ import '../canvas/viewport.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
-import 'electrical_export.dart' show breakerIcuKaByPanel;
+import 'electrical_export.dart' show breakerIcuKaByPanel, breakerKaByCircuit;
 import 'electrical_format.dart';
 import 'electrical_palette.dart';
 import 'load_symbols.dart';
@@ -1092,6 +1092,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // called buildElectricalPanelDetail with none, leaving every on-screen kA
     // suffix blank).
     final icuKaByPanel = breakerIcuKaByPanel(ref);
+    final kaByCircuit = breakerKaByCircuit(ref);
     final positions = _positions(project, result);
     final rootId = serviceRootId(project, result);
     // ESSENTIAL (genset-backed / emergency) boards — propagated down the
@@ -1201,6 +1202,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                         positions,
                         result.panels,
                         icuKaByPanel,
+                        kaByCircuit,
                       ),
                     // D2: the marquee rectangle (empty-canvas left-drag), same
                     // translucent-accent visual language as the mechanical
@@ -1250,6 +1252,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     Map<String, Offset> positions,
     Map<String, ElectricalPanelResult> panels,
     Map<String, double> icuKaByPanel,
+    Map<String, double> kaByCircuit,
   ) {
     final scale = vt.scale;
     final tl = vt.worldToScreen(world);
@@ -1373,6 +1376,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               project: project,
               result: result,
               breakerIcuKaByPanelId: icuKaByPanel,
+              breakerKaByCircuitId: kaByCircuit,
               selected: _selectedPanels.contains(panel.panelId),
               selectedCircuitId:
                   (_selection?.isCircuit ?? false) &&
@@ -2049,6 +2053,11 @@ class _PanelScheduleBody extends StatefulWidget {
   /// The per-panel breaking-capacity (Icu, kA) map (H3) — see the matching
   /// field doc on [_PanelCardNode].
   final Map<String, double>? breakerIcuKaByPanelId;
+
+  /// Round 14 (elec-building-sim-3) — the fault study's per-DEVICE kA
+  /// (circuit id -> chosen breaking capacity), so a way prints its own
+  /// device rating, never the incomer frame's.
+  final Map<String, double>? breakerKaByCircuitId;
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
 
@@ -2068,6 +2077,7 @@ class _PanelScheduleBody extends StatefulWidget {
     required this.project,
     required this.result,
     required this.breakerIcuKaByPanelId,
+    this.breakerKaByCircuitId,
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onSelectWay,
@@ -2089,6 +2099,7 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
         result: widget.result,
         panelId: widget.panel.panelId,
         breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
+        breakerKaByCircuitId: widget.breakerKaByCircuitId,
       );
 
   /// Fit transform mapping the sheet bounds into [size] (matching
@@ -2297,6 +2308,11 @@ class _PanelCardNode extends StatefulWidget {
   /// schedule's kA suffix agrees with the exported sheet. Null/empty ⇒ no kA
   /// suffix (matches `buildElectricalPanelDetail`'s own null-safe fallback).
   final Map<String, double>? breakerIcuKaByPanelId;
+
+  /// Round 14 (elec-building-sim-3) — the fault study's per-DEVICE kA
+  /// (circuit id -> chosen breaking capacity), so a way prints its own
+  /// device rating, never the incomer frame's.
+  final Map<String, double>? breakerKaByCircuitId;
   final bool selected;
 
   /// The selected WAY on this panel (its schedule row is ringed — I5), or null.
@@ -2333,6 +2349,7 @@ class _PanelCardNode extends StatefulWidget {
     required this.project,
     required this.result,
     required this.breakerIcuKaByPanelId,
+    this.breakerKaByCircuitId,
     required this.selected,
     required this.selectedCircuitId,
     required this.unfed,
@@ -2452,6 +2469,7 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
                             project: widget.project,
                             result: widget.result,
                             breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
+                            breakerKaByCircuitId: widget.breakerKaByCircuitId,
                             selectedCircuitId: widget.selectedCircuitId,
                             onSelectWay: widget.onSelectWay,
                             // Header-band tap selects the whole board — reuses

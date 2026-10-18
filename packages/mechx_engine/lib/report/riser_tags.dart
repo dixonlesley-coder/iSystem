@@ -364,6 +364,60 @@ Map<String, double> riserLayoutPositions(Network net, {ServiceType? focus}) {
   };
 }
 
+/// Round 14 (drafting-visual-3) — the per-SERVICE horizontal LANE of the
+/// combined riser sheet, as a multiple of a consumer's lane pitch (the export
+/// uses [kRiserLanePitch] drawing units; the canvas scales the same fraction of
+/// its band height). Every node on a floor used to sit on the band centre
+/// whatever its service, so the HW branch was drawn ON the CW branch and the
+/// vent on the drainage run (their tags landing on the wrong pipe). Supply
+/// services rise above the band centre, gravity services drop below it.
+double riserServiceLane(ServiceType s) => switch (s) {
+      ServiceType.coldWater => 0,
+      ServiceType.hotWater => -1,
+      ServiceType.fireSprinkler => -1.6,
+      ServiceType.fireHydrant => -2.2,
+      ServiceType.duct => -2.8,
+      ServiceType.drainage => 1,
+      ServiceType.vent => 1.6,
+      ServiceType.rainwater => 2.2,
+      ServiceType.returnAir => 2.8,
+      ServiceType.exhaust => 3.4,
+    };
+
+/// The lane pitch (drawing units) the riser EXPORT applies to
+/// [riserServiceLane]; the band is 150 units tall, so the outermost lane
+/// (3.4 × 14 ≈ 48) stays inside it.
+const double kRiserLanePitch = 14;
+
+/// [kRiserLanePitch] as a fraction of the export's 150-unit floor band — the
+/// canvas Auto painter multiplies its own band height by this, so both
+/// surfaces offset each lane by the same share of a floor.
+const double kRiserLaneBandFraction = kRiserLanePitch / 150;
+
+/// Round 14 — each visible node's lane factor ([riserServiceLane] of the ONE
+/// service its visible edges carry) for the COMBINED riser sheet: ONE helper
+/// for the vector export and the on-canvas Auto painter (golden rule 5), so
+/// both separate CW / HW (and drainage / vent) runs identically. A node joined
+/// to several services (a fixture fed by CW and HW) stays on the band centre
+/// (lane 0). Empty — every node on the centre, byte-identical — for a
+/// single-service [focus] or a network drawing only one service.
+Map<String, double> riserServiceLanes(Network net, {ServiceType? focus}) {
+  if (focus != null) return const {};
+  final services = <String, Set<ServiceType>>{};
+  final all = <ServiceType>{};
+  for (final e in net.edges) {
+    all.add(e.service);
+    (services[e.fromId] ??= <ServiceType>{}).add(e.service);
+    (services[e.toId] ??= <ServiceType>{}).add(e.service);
+  }
+  if (all.length < 2) return const {};
+  return <String, double>{
+    for (final entry in services.entries)
+      if (entry.value.length == 1 && riserServiceLane(entry.value.single) != 0)
+        entry.key: riserServiceLane(entry.value.single),
+  };
+}
+
 /// One grouped entry in a floor's fan-out: a fixture TYPE label and how many of
 /// that type the floor distributes (e.g. `WC` × 3). Grouping by type means a
 /// whole floor's fixture population fits in a few compact rows, so the riser

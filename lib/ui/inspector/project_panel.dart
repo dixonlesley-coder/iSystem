@@ -89,11 +89,12 @@ import '../canvas/edge_context_menu.dart' show npsLabel;
 import '../canvas/segment_palette.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
-import '../electrical/electrical_export.dart' show breakerIcuKaByPanel;
+import '../electrical/electrical_export.dart'
+    show breakerIcuKaByPanel, breakerKaByCircuit;
 import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart'
-    show buildLiveRiserSheet, riserDiagramTitle;
+    show buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
@@ -591,6 +592,7 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
           project: ref.read(electricalProjectProvider),
           result: ref.read(electricalResultProvider),
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+          breakerKaByCircuitId: breakerKaByCircuit(ref),
         ),
         caption: reportStringsFor(ref)(RptStringKey.capElecSld),
       ),
@@ -1127,8 +1129,9 @@ DrawingChrome issuableChrome(
     legendServices: legend,
     // N19: the plan's drawing number is DERIVED per sheet — the mechanical plan
     // band `M-1xx`, running by RAIL POSITION — so sheet 1 is `M-101`, sheet 2
-    // `M-102`, never one number on every plan. A manual `documentNumber` remains
-    // the verbatim override, so a set left on the defaults still numbers itself.
+    // `M-102`, never one number on every plan. A manual `documentNumber`
+    // becomes the PREFIX (`<documentNumber>-<series><index>`, e.g.
+    // `BRI-MEP-01-M-101`); only the cover keeps the bare base.
     drawingNumber: sheetDrawingNumber(
       base: doc.documentNumber,
       series: DrawingSeries.mechanicalPlan,
@@ -1179,6 +1182,8 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     // A2: the sheet calibration lets the DXF emit true-scale mm world units
     // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
     metersPerPixel: metersPerPixel,
+    // Round 14 (drafting-visual-5) — the ISO title block's PROJECT row.
+    projectName: project.name,
     // R6: plotted exactly like the sheet's plan PDF (its `1 : N` + frame
     // limits), so the shared annotation layout makes the PDF's label choices.
     sheetPlot: planSheetPlot(
@@ -1517,7 +1522,10 @@ Future<bool> writeSubmittalPackageToDir(
     drawingList.add(
       DrawingListEntry(
         number: planChromeFm.drawingNumber ?? '',
-        title: 'PLAN - ${s.name}',
+        // Round 14 (drafting-visual-6) — the SAME title the sheet's own title
+        // block stamps ([drawingSeriesTitle]), so register == sheet.
+        title: drawingSeriesTitle(DrawingSeries.mechanicalPlan,
+            sheetName: s.name),
         revision: rev,
         date: today,
       ),
@@ -1527,8 +1535,8 @@ Future<bool> writeSubmittalPackageToDir(
     drawingList.add(
       DrawingListEntry(
         number: elecPlanChrome(id).drawingNumber ?? '',
-        title:
-            'DENAH INSTALASI LISTRIK - ${sheetsFm.sheetById(id)?.name ?? id}',
+        title: drawingSeriesTitle(DrawingSeries.electricalLayout,
+            sheetName: sheetsFm.sheetById(id)?.name ?? id),
         revision: rev,
         date: today,
       ),
@@ -1540,7 +1548,7 @@ Future<bool> writeSubmittalPackageToDir(
         base: doc.documentNumber,
         series: DrawingSeries.mechanicalRiser,
       ),
-      title: 'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
+      title: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
       revision: rev,
       date: today,
     ),
@@ -1559,7 +1567,7 @@ Future<bool> writeSubmittalPackageToDir(
           base: doc.documentNumber,
           series: DrawingSeries.electricalDetail,
         ),
-        title: 'DIAGRAM PANEL / ELECTRICAL SLD',
+        title: drawingSeriesTitle(DrawingSeries.electricalDetail),
         revision: rev,
         date: today,
       ),
@@ -1570,7 +1578,7 @@ Future<bool> writeSubmittalPackageToDir(
           base: doc.documentNumber,
           series: DrawingSeries.electricalOverview,
         ),
-        title: 'DIAGRAM SATU GARIS GEDUNG / BUILDING SINGLE-LINE',
+        title: drawingSeriesTitle(DrawingSeries.electricalOverview),
         revision: rev,
         date: today,
       ),
@@ -1581,7 +1589,7 @@ Future<bool> writeSubmittalPackageToDir(
           base: doc.documentNumber,
           series: DrawingSeries.electricalRiser,
         ),
-        title: 'DIAGRAM RISER LISTRIK / ELECTRICAL RISER',
+        title: drawingSeriesTitle(DrawingSeries.electricalRiser),
         revision: rev,
         date: today,
       ),
@@ -1593,7 +1601,7 @@ Future<bool> writeSubmittalPackageToDir(
             base: doc.documentNumber,
             series: DrawingSeries.electricalPowerOneLine,
           ),
-          title: 'DIAGRAM DAYA / POWER ONE-LINE',
+          title: drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
           revision: rev,
           date: today,
         ),
@@ -1703,6 +1711,7 @@ Future<bool> writeSubmittalPackageToDir(
             project: ref.read(electricalProjectProvider),
             result: ref.read(electricalResultProvider),
             breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+            breakerKaByCircuitId: breakerKaByCircuit(ref),
           ),
           caption: reportStringsFor(ref)(RptStringKey.capElecSld),
         ),
@@ -1778,7 +1787,7 @@ Future<bool> writeSubmittalPackageToDir(
     sldSheetToPdf(
       sheet: riserSheet,
       title: 'iSystem mechanical single-line',
-      diagramTitle: riserDiagramTitle(null),
+      diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
       chrome: sldChrome(DrawingSeries.mechanicalRiser),
       projectName: titleProjectName,
     ),
@@ -1786,7 +1795,7 @@ Future<bool> writeSubmittalPackageToDir(
   await File(out('riser-sld.dxf')).writeAsString(
     sldSheetToDxf(
       sheet: riserSheet,
-      diagramTitle: riserDiagramTitle(null),
+      diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
       chrome: sldChrome(DrawingSeries.mechanicalRiser),
       projectName: titleProjectName,
       layers: SldDxfLayers.mechanical,
@@ -1801,6 +1810,42 @@ Future<bool> writeSubmittalPackageToDir(
   // mid-loop error (a bad underlay, a disk error) never leaves it stuck.
   final planSheets = sheetsFm.sheets;
   final localeStrings = MechXStringsData(ref.read(localeProvider));
+  // Round 14 (drafting-visual-7) — every plan of ONE set is issued at ONE
+  // plotted scale: the largest natural `1 : N` over the calibrated sheets
+  // floors each sheet's snap, so a sparse floor no longer plots at 1 : 50
+  // beside a dense 1 : 100 of the same building (overlaying floors, riser
+  // positions and setting-out then need no re-scaling).
+  final planUnderlays = <String, PlanUnderlay?>{};
+  int? sharedPlanScale;
+  {
+    final net0 = ref.read(networkControllerProvider).network;
+    for (final sheet in planSheets) {
+      final underlay = await buildPlanUnderlay(sheet);
+      planUnderlays[sheet.id] = underlay;
+      final natural = planSheetPlot(
+        net: net0,
+        sheetId: sheet.id,
+        floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        chrome: issuableChrome(
+          ref,
+          sheetId: sheet.id,
+          floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
+        ),
+        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+        underlay: underlay,
+        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+      )?.scaleDenominator;
+      if (natural != null && natural > 0) {
+        sharedPlanScale =
+            sharedPlanScale == null || natural > sharedPlanScale
+                ? natural
+                : sharedPlanScale;
+      }
+    }
+  }
   try {
     for (var i = 0; i < planSheets.length; i++) {
       final sheet = planSheets[i];
@@ -1816,13 +1861,19 @@ Future<bool> writeSubmittalPackageToDir(
       final floorIndex = sheetsFm.floorFor(sheet.id, levelCount);
       final net = ref.read(networkControllerProvider).network;
       final sizing = ref.read(sizingProvider);
+      // Round 14 (drafting-visual-6) — the plan's title block stamps the
+      // register title ([drawingSeriesTitle]).
       final planChrome = issuableChrome(
         ref,
         sheetId: sheet.id,
         floorIndex: floorIndex,
+      ).withTitle(
+        drawingSeriesTitle(DrawingSeries.mechanicalPlan, sheetName: sheet.name),
       );
       final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
-      final underlay = await buildPlanUnderlay(sheet);
+      final underlay = planUnderlays.containsKey(sheet.id)
+          ? planUnderlays[sheet.id]
+          : await buildPlanUnderlay(sheet);
       final edgeLengths = projectEdgeLengths(net, project);
       // N5: the §10 centreline-height token folded into each run's size label.
       final elevationLabels = planEdgeElevationLabels(
@@ -1867,6 +1918,7 @@ Future<bool> writeSubmittalPackageToDir(
           grid: grid,
           nodeTags: nodeTags,
           gravitySlope: gravitySlope,
+          minScaleDenominator: sharedPlanScale,
         ),
       );
       await File(out('$suffix.dxf')).writeAsString(
@@ -1884,6 +1936,8 @@ Future<bool> writeSubmittalPackageToDir(
           grid: grid,
           nodeTags: nodeTags,
           gravitySlope: gravitySlope,
+          // Round 14 (drafting-visual-5) — the ISO title block's PROJECT row.
+          projectName: base,
           // R6: plotted exactly like the PDF beside it, so both carry the
           // same label splits + slots.
           sheetPlot: planSheetPlot(
@@ -1897,6 +1951,7 @@ Future<bool> writeSubmittalPackageToDir(
             metersPerPixel: metersPerPixel,
             underlay: underlay,
             grid: grid,
+            minScaleDenominator: sharedPlanScale,
           ),
         ),
       );
@@ -1914,7 +1969,10 @@ Future<bool> writeSubmittalPackageToDir(
         building: project.building,
       );
       if (!ePlan.isEmpty) {
-        final eChrome = elecPlanChrome(sheet.id);
+        final eChrome = elecPlanChrome(sheet.id).withTitle(
+          drawingSeriesTitle(DrawingSeries.electricalLayout,
+              sheetName: sheet.name),
+        );
         await File(out('elec-$suffix.pdf')).writeAsBytes(
           electricalPlanToPdf(
             data: ePlan,
@@ -1964,7 +2022,12 @@ Future<bool> writeSubmittalPackageToDir(
         project: eProject,
         result: eResult,
         breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+        breakerKaByCircuitId: breakerKaByCircuit(ref),
         chrome: sldChrome(DrawingSeries.electricalDetail),
+        // Round 14 (drafting-visual-1) — ONE project name + the register
+        // title on every electrical sheet of the package.
+        projectName: base,
+        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
       ),
     );
 
@@ -1980,11 +2043,18 @@ Future<bool> writeSubmittalPackageToDir(
       electricalSldToPdf(
         sheet: overviewSheet,
         title: 'iSystem electrical single-line (overview)',
+        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
         chrome: overviewChrome,
+        projectName: base,
       ),
     );
     await File(out('electrical-overview-sld.dxf')).writeAsString(
-      electricalSldToDxf(sheet: overviewSheet, chrome: overviewChrome),
+      electricalSldToDxf(
+        sheet: overviewSheet,
+        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
+        chrome: overviewChrome,
+        projectName: base,
+      ),
     );
 
     // Floor-by-floor electrical riser — built with the LIVE mechanical
@@ -1999,11 +2069,18 @@ Future<bool> writeSubmittalPackageToDir(
       electricalSldToPdf(
         sheet: eRiserSheet,
         title: 'iSystem electrical building riser',
+        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
         chrome: eRiserChrome,
+        projectName: base,
       ),
     );
     await File(out('electrical-riser.dxf')).writeAsString(
-      electricalSldToDxf(sheet: eRiserSheet, chrome: eRiserChrome),
+      electricalSldToDxf(
+        sheet: eRiserSheet,
+        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
+        chrome: eRiserChrome,
+        projectName: base,
+      ),
     );
 
     // Power one-line — only when energy sources exist to draw one.
@@ -2014,15 +2091,17 @@ Future<bool> writeSubmittalPackageToDir(
         electricalSldToPdf(
           sheet: oneLineSheet,
           title: 'iSystem power one-line',
-          diagramTitle: 'POWER ONE-LINE DIAGRAM',
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
           chrome: oneLineChrome,
+          projectName: base,
         ),
       );
       await File(out('electrical-power-one-line.dxf')).writeAsString(
         electricalSldToDxf(
           sheet: oneLineSheet,
-          diagramTitle: 'POWER ONE-LINE DIAGRAM',
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
           chrome: oneLineChrome,
+          projectName: base,
         ),
       );
     }

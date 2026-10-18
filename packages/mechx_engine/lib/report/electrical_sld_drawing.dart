@@ -68,7 +68,11 @@ const double _brH = 10;
 // Aligned panel-schedule COLUMNS (x offset within the block) — the real BRI
 // `Diagram Panel` layout: GRUP | DEVICE | PENGHANTAR | DAYA | KETERANGAN, then
 // the R / S / T per-phase loading band on the right.
-const double _colGrup = 92; // way no (W1) — clears the breaker stub + symbol
+// Round 14 (drafting-visual-8) — 89, not 92: the bold 7-pt 'GRUP' head is
+// 2.889 em = 20.2 wide, so at 92 it ran to 112.2, past the DEVICE rule at
+// _colDevice - 6 = 110 (the rule struck through its 'P'). At 89 it ends at
+// 109.2, and the row breaker symbol (bx + 28 .. + _brW = 87) still clears it.
+const double _colGrup = 89; // way no (W1) — clears the breaker stub + symbol
 const double _colDevice = 116; // breaker (MCB 16A 1ph[ 16kA][ · RCD 30mA A])
 const double _colPenghantar =
     252; // conductor + conduit + length (NYY 4x6 · 22 m)
@@ -492,11 +496,14 @@ SldSheet buildElectricalSld({
         prims.add(SldLabel(cx - m.length * 2.0, cy + 3, m, size: 7));
         mx += 30;
       }
-      // The metering CT ratio (N11): the next standard primary above the panel
-      // demand current over a 5 A secondary + the metering accuracy class,
-      // e.g. `CT 200/5A cl.1` — replaces the bare `CT` glyph.
+      // The metering CT ratio (N11): the next standard primary above the
+      // board's METERING current over a 5 A secondary + the metering accuracy
+      // class, e.g. `CT 200/5A cl.1` — replaces the bare `CT` glyph. Round 14:
+      // the metering current is the larger of the demand and the current the
+      // incomer/busbar were sized for (`meteringCurrent`), so a daya-floored
+      // entrance board never prints a CT that saturates at subscribed load.
       prims.add(SldLabel(
-          mx + 4, blockY + my + 13, _ctLabel(p.demandCurrent.amperes),
+          mx + 4, blockY + my + 13, _ctLabel(p.meteringCurrent.amperes),
           size: 8));
     }
 
@@ -768,7 +775,7 @@ SldSheet buildElectricalSld({
   }
 
   // Feeders: route from the feeding way's right edge down a vertical channel to
-  // the LEFT edge of the sub-panel block (orthogonal, riser-duct style). Skipped
+  // the RIGHT edge of the sub-panel block (orthogonal, riser-duct style). Skipped
   // for the single-panel detail filter (its sub-panels aren't laid out here) so
   // the block frames tightly.
   if (onlyPanelId == null) {
@@ -779,13 +786,17 @@ SldSheet buildElectricalSld({
       final dst = boxTop[child];
       if (dst == null) continue;
       final dropY = dst.y + 18; // enter a touch below the child header top
-      // way right -> channel; channel down; channel -> child left.
+      // way right -> channel; channel down; channel -> child RIGHT edge.
+      // Round 14 (drafting-visual-2) — the channel runs to the right of every
+      // block, so the last leg stops at the child's RIGHT edge: it used to run
+      // on to the LEFT edge, striking straight through the sub-panel's name +
+      // header text at title height.
       prims.add(
           SldLine(from.x, from.y, channelX, from.y, weight: SldWeight.medium));
       prims.add(
           SldLine(channelX, from.y, channelX, dropY, weight: SldWeight.medium));
-      prims.add(
-          SldLine(channelX, dropY, dst.x, dropY, weight: SldWeight.medium));
+      prims.add(SldLine(channelX, dropY, dst.x + _blockW, dropY,
+          weight: SldWeight.medium));
     }
     maxX = math.max(maxX, channelX);
   }
@@ -909,6 +920,12 @@ SldSheet buildElectricalPanelDetail({
 /// interactive single-line canvas — the source sits to the LEFT of the root
 /// board and flows right into it. The default vertical layout is used by the
 /// top-down overview + the floor-stacked riser.
+/// Round 14 — a CAPACITOR BANK node is drawn on a source spine only when the
+/// project specifies a real bank (`capacitorBankKvar > 0`): a declared genset or
+/// solar array no longer implies one (honesty by construction).
+bool _hasCapacitorBank(ElectricalProject project) =>
+    (project.capacitorBankKvar ?? 0) > 0;
+
 SldSheet buildElectricalSourceSpine({
   required ElectricalProject project,
   required ElectricalSystemResult result,
@@ -917,7 +934,7 @@ SldSheet buildElectricalSourceSpine({
   final hasSource = project.sources != null ||
       project.dualTransformer ||
       project.transformerKva != null ||
-      project.capacitorBankKvar != null ||
+      _hasCapacitorBank(project) ||
       project.supplyKind != SupplyKind.pln ||
       project.supplyCapacityVa != null;
   final hasDemand = result.supply.demandVa.inKilovoltAmperes > 0;
@@ -1552,15 +1569,14 @@ const double _sideNodeBottom = 14;
       prims.add(SldLine(nodeX + _ovW, gcy, sideX + 1, gcy,
           weight: SldWeight.medium, role: SldRole.source));
     }
-    // CAPACITOR BANK: drawn when a real bank is specified (kvar set) OR — kept
-    // as the historic proxy — whenever any distributed sources exist. The real
-    // field labels its kvar verbatim; the proxy stays the generic
-    // "PF correction".
-    if (project.capacitorBankKvar != null || project.sources != null) {
+    // CAPACITOR BANK: drawn ONLY when a real bank is specified (kvar > 0).
+    // Round 14 (elec-building-sim-5) — the historic "any distributed source ⇒
+    // a generic PF-correction bank" proxy is gone: declaring a genset or solar
+    // array added a piece of plant to the issued single-line that the design
+    // never specified (and the PF study may say none is needed).
+    if (_hasCapacitorBank(project)) {
       final cy = lvMidY + 8 + _ovH / 2;
-      final kvar = project.capacitorBankKvar;
-      final capSub =
-          (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
+      final capSub = '${_num(project.capacitorBankKvar!)} kvar';
       _emitCapacitor(prims, sideX + 14, cy, SldRole.source);
       prims.add(SldLabel(sideX + 34, cy - 2, 'CAPACITOR BANK',
           size: 8.5, bold: true, role: SldRole.source));
@@ -1606,7 +1622,7 @@ const double _sideNodeBottom = 14;
     // solar, battery; each glyph carries its top/bottom lead offsets so the
     // drop connectors meet the symbols exactly.
     final dropX = sideX + 14;
-    final hasCap = project.capacitorBankKvar != null || project.sources != null;
+    final hasCap = _hasCapacitorBank(project);
     final anySide = project.sources?.generator != null ||
         hasCap ||
         project.sources?.solar != null ||
@@ -1642,9 +1658,7 @@ const double _sideNodeBottom = 14;
         cy += 58;
       }
       if (hasCap) {
-        final kvar = project.capacitorBankKvar;
-        final capSub =
-            (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
+        final capSub = '${_num(project.capacitorBankKvar!)} kvar';
         connectTo(11, 11);
         _emitCapacitor(prims, dropX, cy, SldRole.source);
         prims.add(SldLabel(dropX + 20, cy - 2, 'CAPACITOR BANK',
@@ -1812,10 +1826,8 @@ const double _sideNodeBottom = 14;
     prevBottom = gcy + 13;
     nextCy += 58;
   }
-  if (project.capacitorBankKvar != null || project.sources != null) {
-    final kvar = project.capacitorBankKvar;
-    final capSub =
-        (kvar != null && kvar > 0) ? '${_num(kvar)} kvar' : 'PF correction';
+  if (_hasCapacitorBank(project)) {
+    final capSub = '${_num(project.capacitorBankKvar!)} kvar';
     final ccy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, ccy - 11,
         weight: SldWeight.medium, role: role));

@@ -479,7 +479,10 @@ void main() {
           (e) => e['0']!.first == 'CIRCLE' && e['8']?.first == 'G-ANNO-GRID');
       final chromeText = ents.where((e) =>
           e['0']!.first == 'TEXT' &&
-          const {'title', 'legend', 'scale', 'north'}.contains(e['8']?.first));
+          // Round 14 (drafting-visual-5): the calibrated plan chrome rides the
+          // G-ANNO-* layers and now includes the full ISO title block.
+          const {'G-ANNO-TTLB', 'G-ANNO-LEGN', 'G-ANNO-SCAL', 'G-ANNO-NRTH'}
+              .contains(e['8']?.first));
       expect(chromeText, isNotEmpty);
       for (final t in chromeText) {
         final tx = double.parse(t['10']!.first),

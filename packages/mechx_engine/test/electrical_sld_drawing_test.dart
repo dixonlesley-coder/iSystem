@@ -998,9 +998,12 @@ void main() {
       final joined =
           s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
       expect(joined, contains('GENSET'));
-      expect(joined, contains('CAPACITOR BANK'));
+      // Round 14 (elec-building-sim-5): a genset alone no longer implies a
+      // capacitor bank — none is specified (capacitorBankKvar null), so none
+      // is drawn.
+      expect(joined, isNot(contains('CAPACITOR BANK')));
       // Distributed sources do NOT declare an MV service: no fabricated MV
-      // main / transformer — the genset + capacitor hang off the LV head.
+      // main / transformer — the genset hangs off the LV head.
       expect(joined, isNot(contains('TEGANGAN MENENGAH')));
       expect(joined, isNot(contains('TRANSFORMER')));
     });

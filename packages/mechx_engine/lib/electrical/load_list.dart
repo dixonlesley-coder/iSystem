@@ -61,6 +61,11 @@ enum MepLoadSource {
   /// Hot-water recirculation pump.
   hotWaterRecircPump,
 
+  /// Round 14 (elec-building-sim-6) — an air-conditioning / fan-coil unit (a
+  /// split-wall, cassette or ducted AC, an FCU): an HVAC final, minted as
+  /// [LoadKind.hvac] (curve C), never a pump (curve D, half the Zs budget).
+  hvacUnit,
+
   /// Any other rotating equipment.
   generic,
 }
@@ -74,6 +79,15 @@ extension MepLoadSourceInfo on MepLoadSource {
           false,
         _ => true,
       };
+
+  /// The [LoadKind] the derived circuit is minted with: an HVAC unit is an
+  /// `hvac` final (its own curve / defaults), any other pump-like source a
+  /// `pump`, a fan a `motor`.
+  LoadKind get circuitLoadKind => this == MepLoadSource.hvacUnit
+      ? LoadKind.hvac
+      : isPump
+          ? LoadKind.pump
+          : LoadKind.motor;
 
   /// Is this source a life-safety load (no RCD, fire-resistant cable)?
   bool get isLifeSafety => this == MepLoadSource.firePump;
@@ -89,6 +103,7 @@ extension MepLoadSourceInfo on MepLoadSource {
         MepLoadSource.returnFan => 'Return fan',
         MepLoadSource.firePump => 'Fire pump',
         MepLoadSource.hotWaterRecircPump => 'HW recirc pump',
+        MepLoadSource.hvacUnit => 'HVAC unit',
         MepLoadSource.generic => 'Equipment',
       };
 }
@@ -290,8 +305,9 @@ String equipmentCircuitId(MepEquipmentLoad e) => 'mep-${e.id}';
 /// Project a sized piece of MEP equipment into a branch [ElectricalCircuit].
 ///
 /// The produced circuit:
-///   * `loadKind` = [LoadKind.pump] for water-source equipment, [LoadKind.motor]
-///     for fans,
+///   * `loadKind` = [MepLoadSourceInfo.circuitLoadKind]: [LoadKind.hvac] for an
+///     AC / FCU unit, [LoadKind.pump] for water-source equipment,
+///     [LoadKind.motor] for fans,
 ///   * `motorKw` = the mechanical (rated motor) power in kW,
 ///   * `loadW` = the electrical input power (so a consumer that ignores the
 ///     override still has a sensible connected load),
@@ -326,7 +342,7 @@ ElectricalCircuit equipmentToCircuit(
     loadW: e.inputPower.watts,
     cosPhi: e.cosPhi,
     length: Length(math.max(0, lengthM)),
-    loadKind: e.source.isPump ? LoadKind.pump : LoadKind.motor,
+    loadKind: e.source.circuitLoadKind,
     demandFactor: demandFactor,
     motorKw: e.mechanicalPower.inKiloWatts,
     phases: e.phases,

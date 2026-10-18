@@ -311,7 +311,7 @@ AdvancedStudy computeAdvancedStudy(
     );
 
     // Metering.
-    metering[id] = meterFor(panelResult.demandCurrent);
+    metering[id] = meterFor(panelResult.meteringCurrent);
 
     // SPD — origin board at the service entrance; sub-boards by feeder distance.
     final atOrigin = originPanelIds.contains(id);

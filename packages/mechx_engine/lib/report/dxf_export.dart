@@ -118,9 +118,11 @@ String networkToDxf({
   double? gravitySlope,
   Map<String, Length>? edgeLengths,
   PlanSheetPlot? sheetPlot,
+  String? projectName,
 }) {
   if (metersPerPixel != null && metersPerPixel > 0) {
     return _professionalDxf(
+      projectName: projectName ?? '',
       net: net,
       sizing: sizing,
       sheetId: sheetId,
@@ -374,6 +376,7 @@ String _professionalDxf({
   required double? gravitySlope,
   required Map<String, Length>? edgeLengths,
   required PlanSheetPlot? sheetPlot,
+  required String projectName,
 }) {
   final b = StringBuffer();
   void g(int code, Object value) {
@@ -495,12 +498,12 @@ String _professionalDxf({
     if (grid != null && !grid.isEmpty) (kDxfLayerGrid, 8, 'DASHDOT'),
     // drafting-4: the tie dimensions' own layer (grey), with the grid.
     if (grid != null && !grid.isEmpty) (kDxfLayerDims, 8, 'CONTINUOUS'),
-    // `dxfChrome` draws on its own toggleable layers — declare them too.
+    // Round 14 (drafting-visual-5) — the plan chrome rides the G-ANNO-*
+    // layers (the title block on G-ANNO-TTLB, declared above).
     if (hasChrome) ...const [
-      ('title', 7, 'CONTINUOUS'),
-      ('legend', 7, 'CONTINUOUS'),
-      ('scale', 7, 'CONTINUOUS'),
-      ('north', 7, 'CONTINUOUS'),
+      (kDxfLayerLegend, 7, 'CONTINUOUS'),
+      (kDxfLayerScale, 7, 'CONTINUOUS'),
+      (kDxfLayerNorth, 7, 'CONTINUOUS'),
     ],
   ]));
 
@@ -787,11 +790,14 @@ String _professionalDxf({
   if (hasChrome) {
     final bubblePad =
         hasGrid ? (2 * kPlanGridBubbleMm + kPlanGridBubbleGapMm) * u : 0.0;
-    b.write(dxfChrome(chrome,
+    b.write(dxfPlanChrome(chrome,
         minX: minX - bubblePad,
         minY: minY,
         maxX: maxX,
-        maxY: maxY + bubblePad));
+        maxY: maxY + bubblePad,
+        unitsPerPaperMm: u,
+        plotDenominator: plotN,
+        projectName: projectName));
   }
 
   g(0, 'ENDSEC');

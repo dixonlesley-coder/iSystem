@@ -175,22 +175,29 @@ Uint8List electricalSldDetailToPdf({
   String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
   DrawingChrome? chrome,
   Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  String? projectName,
 }) {
+  // Round 14 (drafting-visual-1) — [projectName] overrides the electrical
+  // model's own name, so a submittal stamps ONE project name on every sheet.
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : _projectName(project);
   final whole = buildElectricalSld(
       project: project,
       result: result,
-      breakerIcuKaByPanelId: breakerIcuKaByPanelId);
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId);
   final minPt = sldSinglePageMinLabelPt(whole,
-      chrome: chrome,
-      projectName: _projectName(project),
-      diagramTitle: diagramTitle);
+      chrome: chrome, projectName: pname, diagramTitle: diagramTitle);
   if (result.order.length <= 1 || minPt >= kMinPlotLabelPt - 1e-9) {
     return electricalSldToPdf(
         project: project,
         sheet: whole,
         title: title,
         diagramTitle: diagramTitle,
-        chrome: chrome);
+        chrome: chrome,
+        projectName: pname);
   }
   return electricalSldToPdfPaginated(
       project: project,
@@ -198,7 +205,9 @@ Uint8List electricalSldDetailToPdf({
       title: title,
       diagramTitle: diagramTitle,
       chrome: chrome,
-      breakerIcuKaByPanelId: breakerIcuKaByPanelId);
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      projectName: pname);
 }
 
 String _sldPageContent({
@@ -484,16 +493,21 @@ Uint8List electricalSldToPdfPaginated({
   String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
   DrawingChrome? chrome,
   Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  String? projectName,
 }) {
   final ids = result.order;
-  final pname = _projectName(project);
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : _projectName(project);
   if (ids.isEmpty) {
     return _assemblePdf([
       _sldPageContent(
         sheet: buildElectricalSld(
             project: project,
             result: result,
-            breakerIcuKaByPanelId: breakerIcuKaByPanelId),
+            breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+            breakerKaByCircuitId: breakerKaByCircuitId),
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
@@ -510,7 +524,8 @@ Uint8List electricalSldToPdfPaginated({
             project: project,
             result: result,
             onlyPanelId: ids[i],
-            breakerIcuKaByPanelId: breakerIcuKaByPanelId),
+            breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+            breakerKaByCircuitId: breakerKaByCircuitId),
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,

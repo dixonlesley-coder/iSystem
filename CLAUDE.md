@@ -1558,6 +1558,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   length consumer threads the project `MountingHeights` (printed == solved).
 - **Drain / vent code floors (Round 9, `drainage_sizing.dart` + `_sizeSanitaryEdge`)**: the vent table is UPC 703.2 (DN32 ≤ 1, DN40 ≤ 8, DN50 ≤ 24, DN65 ≤ 48, DN75 ≤ 84, DN100 ≤ 256, DN125 ≤ 600, DN150 ≤ 1380 DFU) and a vent is never below ½ the drain its load requires (`ventDiameterForDfu(servedDrainMm:)`); a drain carrying > 2 WCs on a run / > 6 on a riser floors at DN100 (`minDrainMmForWcCount`, the WC count accumulated down the tree), 1–2 at DN75; a drain downstream of a floor drain / shower / urinal floors at DN50 (`kMinTrapDrainMm`). All `// VERIFY notAnSniClause` in the checklist. The drainage advisories are per DN: min slope ≤ DN65 2 % / DN75–150 1 % / ≥ DN200 0.5 % (`minSelfCleansingSlopeFor`), and the length check is a TRAP-ARM walk (`trapArmRuns`, fixture → first vent/stack/root, summed over segments) against IPC 909.1 (`maxTrapArmLengthM`) — never one drawn segment against a flat limit. A zero-flow AIR edge is left unsized (`sizeNetwork`); the sizer records each tree edge's UBAP/DFU via `fixtureUnitsOut` (→ `edgeFixtureUnitsProvider`, the run schedule's basis column).
 - **Floor-stack edits keep sheets with their work (Round 9, `project_store.dart`)**: a growing stack pins every sheet whose clamped floor would move (`_pinSheetFloors`); a shrinking `setFloors` drops the top floors exactly like `removeFloor` (work deleted, never clamped onto the new top) and callers confirm with `elementsAboveFloor`. A pasted riser keeps its floor span (clamped; a riser clamped onto one floor is dropped). A dragged / trimmed PLAIN run end never joins another service's run (E1). The MEP sync refresh re-derives `loadPos`, `lifeSafety` and a still-minted cable family (`_refreshedMepWay`); copies / moves off the MEP board are user-owned (no `sourceEquipmentId`).
+- **Source-root ladder + parallel legs (`network_sizing.dart`, Round 14)**: on
+  a pressurized/air service the root is a degree-1 ground tank, then an INLINE
+  ground tank, then a degree-1 roof tank, then any other plant
+  (`_supplyPlantRank`); an INLINE pump / booster / supply-or-exhaust fan never
+  roots while another plant or a demand-free entry/outlet leaf exists (ties
+  never fall to node ids for these cases; `airSystemsFor` still reports the
+  drawn fan as the duty node). On drainage an inline ground tank beside a
+  pump/booster is an EJECTOR PIT ⇒ pass-through. Equal-rank degree-1 peer
+  sources mirror the root's outgoing flow onto their bridges, and every
+  mirrored leg (standby + peer) is recorded in `parallelLegEdgeIdsOut` —
+  `sourceDeliveredFlow(excludeEdgeIds:)` must skip them (one set flow, never
+  curve(2 × UBAP)).
 - **Terminals carry demand wherever they sit (`network_sizing.dart`)**: any
   fixture-role component (except cleanout / airVent / fireExtinguisher) with no
   explicit load takes the default terminal demand even when INLINE (degree 2);
@@ -1805,6 +1817,19 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `fire-pump-protection` note; an irreducible over-threshold imbalance carries
   an INFO `phase-imbalance-inherent` note; a feeder's voltage base (Ib and
   Vd%) is the FED panel's.
+- **One capacitor phase model (`electrical/compute.dart`, Round 14)**: a
+  capacitor way's phase decision reads its kvar (`c.loadW`), never its zeroed
+  demand W; a feeder to a capacitor board floors at that board's OWN solved
+  `capacitorCurrentA` (bottom-up `computePanel` pre-pass, same balance
+  assignment); the service cable + main earthing follow the root incomer
+  whenever it exceeds the demand-selected device (headroom, capacitor floor…).
+  The supply kVA is each root's diversified demand VA at the real per-circuit
+  cos φ (`panelDemandVa`, ≥ W; 0.85 only as fallback). Metering CT / meter
+  range size on `ElectricalPanelResult.meteringCurrent` = max(demand, busbar
+  sizing current). A spine CAPACITOR BANK is drawn only for
+  `capacitorBankKvar > 0`; an AC/FCU feed is `MepLoadSource.hvacUnit` →
+  `LoadKind.hvac`. Board schedules always receive the per-device
+  `breakerKaByCircuit` map beside the per-panel Icu map.
 - **Service-capacity floor (`electrical/compute.dart`) — the declared daya SIZES
   the service entrance**: a declared `ElectricalProject.supplyCapacityVa` (daya
   tersambung) is converted to its line current (3φ `VA/(√3·V_LL)`, 1φ `VA/V` —

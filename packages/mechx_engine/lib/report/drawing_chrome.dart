@@ -116,6 +116,25 @@ class DrawingChrome {
     return '$i of $t';
   }
 
+  /// A copy with the TITLE row overridden (every other field kept) — Round 14:
+  /// a submittal plan stamps its register title ([drawingSeriesTitle]).
+  DrawingChrome withTitle(String? title) => DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: sheetIndex,
+        sheetTotal: sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: title,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
   /// A copy with the sheet counter overridden (every other field kept). A
   /// paginated exporter builds one chrome and re-stamps the per-page `i of N`
   /// through this so each page's SHEET row reads its own number without the
@@ -162,6 +181,29 @@ enum DrawingSeries {
 
   /// The hundreds band for this drawing TYPE (1 plans, 2 riser/detail, …).
   final int hundreds;
+}
+
+/// Round 14 (drafting-visual-1 / -6) — the ONE title of each drawing in an
+/// issued set, used by BOTH the Daftar Gambar register row and that sheet's
+/// own title block / heading, so a reviewer can match register to sheet. It
+/// used to be a hard-coded register string beside an exporter default
+/// ('ELECTRICAL SINGLE-LINE DIAGRAM' on three different sheets, 'MECHANICAL
+/// SINGLE-LINE DIAGRAM' against 'DIAGRAM RISER MEKANIKAL'). Bilingual (ID / EN),
+/// ASCII-only. A plan / layout title carries its [sheetName].
+String drawingSeriesTitle(DrawingSeries series, {String? sheetName}) {
+  final name = sheetName?.trim() ?? '';
+  String withName(String t) => name.isEmpty ? t : '$t - $name';
+  return switch (series) {
+    DrawingSeries.mechanicalPlan => withName('PLAN'),
+    DrawingSeries.mechanicalRiser =>
+      'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
+    DrawingSeries.electricalLayout => withName('DENAH INSTALASI LISTRIK'),
+    DrawingSeries.electricalDetail => 'DIAGRAM PANEL / ELECTRICAL SLD',
+    DrawingSeries.electricalOverview =>
+      'DIAGRAM SATU GARIS GEDUNG / BUILDING SINGLE-LINE',
+    DrawingSeries.electricalRiser => 'DIAGRAM RISER LISTRIK / ELECTRICAL RISER',
+    DrawingSeries.electricalPowerOneLine => 'DIAGRAM DAYA / POWER ONE-LINE',
+  };
 }
 
 /// Derive a UNIQUE per-sheet drawing number so an issued set never stamps one
@@ -891,6 +933,129 @@ String dxfChrome(
   return b.toString();
 }
 
+/// Round 14 (drafting-visual-5) — the professional plan DXF's chrome layers,
+/// in the G-ANNO-* namespace the rest of the issued set uses (the legacy
+/// 'title' / 'legend' / 'scale' / 'north' names stay on the uncalibrated
+/// legacy path only).
+const kDxfLayerLegend = 'G-ANNO-LEGN';
+const kDxfLayerScale = 'G-ANNO-SCAL';
+const kDxfLayerNorth = 'G-ANNO-NRTH';
+
+/// Round 14 (drafting-visual-5) — the CALIBRATED plan DXF's chrome, sized in
+/// PAPER millimetres × [unitsPerPaperMm] (the plotted-scale denominator for a
+/// millimetre model) so it reads at the same size as the PDF beside it:
+///  * a LEGEND (bottom-left) and an HONEST graphic SCALE BAR whose length is a
+///    real-metre ladder rung (the PDF's own choice at that 1 : N) with
+///    `0` / `X/2 m` / `X m` figures and the `1 : N` text — the legacy bar was
+///    always 30 % of the drawing span with only 'SCALE' printed, so a CAD user
+///    measuring it got a meaningless length;
+///  * a NORTH arrow (top-right);
+///  * the SHARED ISO title block ([dxfTitleBlock]: PROJECT / TITLE / DWG NO /
+///    REV / SCALE / DATE / DRAWN / CHECKED / APPROVED / SHEET) below the
+///    extent, bottom-right — the plan DXF used to carry only its number and
+///    sheet counter, the one CAD deliverable a checker could not identify.
+/// All on the G-ANNO-* layers. With [plotDenominator] null (no ladder scale
+/// fits) no bar is drawn and the SCALE row reads `NTS`. Returns '' for an
+/// empty chrome.
+String dxfPlanChrome(
+  DrawingChrome chrome, {
+  required double minX,
+  required double minY,
+  required double maxX,
+  required double maxY,
+  required double unitsPerPaperMm,
+  required int? plotDenominator,
+  required String projectName,
+}) {
+  if (chrome.isEmpty) return '';
+  final b = StringBuffer();
+  final u = unitsPerPaperMm;
+  final txt = kMinPlotTextMm * u;
+  void line(String layer, double ax, double ay, double bx, double by) {
+    _g(b, 0, 'LINE');
+    _g(b, 8, layer);
+    _g(b, 10, ax);
+    _g(b, 20, ay);
+    _g(b, 11, bx);
+    _g(b, 21, by);
+  }
+
+  void text(String layer, double x, double y, double h, String t) {
+    _g(b, 0, 'TEXT');
+    _g(b, 8, layer);
+    _g(b, 10, x);
+    _g(b, 20, y);
+    _g(b, 40, h);
+    _g(b, 1, _dxfText(t));
+  }
+
+  // Legend — bottom-left, below the extent, one swatch row per service.
+  var ly = minY - 12 * u;
+  if (chrome.legendServices.isNotEmpty) {
+    text(kDxfLayerLegend, minX, ly, txt, 'LEGEND');
+    ly -= 7 * u;
+    for (final svc in chrome.legendServices) {
+      line(kDxfLayerLegend, minX, ly + txt / 2, minX + 12 * u, ly + txt / 2);
+      text(kDxfLayerLegend, minX + 15 * u, ly, txt, serviceChromeLabel(svc));
+      ly -= 6 * u;
+    }
+    ly -= 4 * u;
+  }
+
+  // Honest scale bar — a real-metre rung (the PDF's own pick at 1 : N).
+  final n = plotDenominator;
+  if (n != null && n > 0) {
+    // Paper points per real metre at 1 : N (the PDF helper's basis).
+    final ptPerM = 1000 / n * 72 / 25.4;
+    final m = _pdfScaleBarMetres(ptPerM);
+    final barLen = m * 1000; // model millimetres
+    final barH = 1.5 * u;
+    final y0 = ly - barH;
+    line(kDxfLayerScale, minX, y0, minX + barLen, y0);
+    line(kDxfLayerScale, minX, y0 + barH, minX + barLen, y0 + barH);
+    for (var i = 0; i <= 4; i++) {
+      final x = minX + barLen * i / 4;
+      line(kDxfLayerScale, x, y0, x, y0 + barH);
+    }
+    String fig(double v) =>
+        v == v.roundToDouble() ? v.round().toString() : v.toString();
+    final fy = y0 - txt * 1.5;
+    text(kDxfLayerScale, minX, fy, txt, '0');
+    text(kDxfLayerScale, minX + barLen / 2, fy, txt, '${fig(m / 2)} m');
+    text(kDxfLayerScale, minX + barLen, fy, txt, '${fig(m)} m');
+    text(kDxfLayerScale, minX + barLen + 6 * u, y0, txt, '1 : $n');
+  }
+
+  // North arrow — top-right, beyond the extent.
+  final nx = maxX + 14 * u;
+  final ny = maxY - 10 * u;
+  final r = 8 * u;
+  final a = -chrome.northAngleRad;
+  final ca = math.cos(a), sa = math.sin(a);
+  final tipX = nx - r * sa, tipY = ny + r * ca;
+  final tailX = nx + r * sa, tailY = ny - r * ca;
+  line(kDxfLayerNorth, tailX, tailY, tipX, tipY);
+  text(kDxfLayerNorth, tipX, tipY + txt / 2, txt, 'N');
+
+  // The shared ISO title block, hung below the extent at the right.
+  final scaleRow = n != null && n > 0 ? '1 : $n' : 'NTS';
+  final rows = _titleBlockRows(chrome, projectName, scaleRow);
+  if (rows.isNotEmpty) {
+    final unit = txt / 1.2; // dxfTitleBlock: value text = unit × 1.2
+    final blockH = rows.length * unit * 1.2 * 2.4;
+    final top = minY - 12 * u;
+    b.write(dxfTitleBlock(chrome,
+        minX: minX,
+        minY: top - blockH,
+        maxX: maxX,
+        maxY: maxY,
+        projectName: projectName,
+        scaleTextOverride: scaleRow,
+        unit: unit));
+  }
+  return b.toString();
+}
+
 /// DXF group-1 text must avoid the control chars that would break the ASCII
 /// stream; keep it to printable ASCII.
 String _dxfText(String raw) => dxfText(raw);
@@ -1081,8 +1246,9 @@ String dxfTablesForServices(Iterable<ServiceType> services) {
 
 /// The DXF sibling of [pdfTitleBlock]: the same filtered [_titleBlockRows]
 /// rendered as LINEs + TEXT on [kDxfLayerFrame], anchored to the bottom-RIGHT
-/// of the [minX]/[minY]/[maxX]/[maxY] extent (DXF world, y-up). Returns ''
-/// when no row has a value.
+/// of the [minX]/[minY]/[maxX]/[maxY] extent (DXF world, y-up). [unit]
+/// overrides the extent-derived sizing unit (value text = 1.2 × unit). Returns
+/// '' when no row has a value.
 String dxfTitleBlock(
   DrawingChrome chrome, {
   required double minX,
@@ -1091,6 +1257,7 @@ String dxfTitleBlock(
   required double maxY,
   required String projectName,
   String? scaleTextOverride,
+  double? unit,
 }) {
   final rows = _titleBlockRows(chrome, projectName, scaleTextOverride);
   if (rows.isEmpty) return '';
@@ -1099,7 +1266,9 @@ String dxfTitleBlock(
   final spanX = (maxX - minX).abs();
   final spanY = (maxY - minY).abs();
   final span = math.max(math.max(spanX, spanY), 1.0);
-  final u = span / 40.0; // sizing unit, scales to the drawing extent
+  // Sizing unit: scales to the drawing extent, unless the caller sizes the
+  // block in paper millimetres (Round 14 — the calibrated plan DXF).
+  final u = unit ?? span / 40.0;
   final txt = u * 1.2; // value text height
   final rowH = txt * 2.4;
   final blockW = u * 16;
@@ -1182,18 +1351,26 @@ class PlottedScale {
 /// calibration [metersPerPixel]. Returns the raw fit at `NTS` when
 /// uncalibrated, when there is no content, or when the plan is too large even
 /// for 1:1000. [paperLabel] names the ACTUAL paper in the snapped-scale text
-/// (`1 : N @ A2`). Pure — shared verbatim by `networkToPdf` / `planToPdf`.
+/// (`1 : N @ A2`). [minDenominator] (Round 14) floors the snapped `1 : N` for a
+/// set plotted at one shared scale; null ⇒ byte-identical. Pure — shared
+/// verbatim by `networkToPdf` / `planToPdf`.
 PlottedScale snapPlottedScale({
   required double rawScale,
   required double? metersPerPixel,
   required bool hasContent,
   required String paperLabel,
+  int? minDenominator,
 }) {
   var scale = rawScale;
   if (metersPerPixel != null && metersPerPixel > 0 && hasContent) {
     const mmPerPoint = 25.4 / 72; // PDF points → paper millimetres
     // The raw fit's plotted-scale denominator: real-world mm per paper mm.
-    final rawN = metersPerPixel * 1000 / (scale * mmPerPoint);
+    // Round 14 (drafting-visual-7) — a PROJECT-level [minDenominator] floors
+    // it, so every plan of one submittal shares the same 1 : N (never draws
+    // larger than the shared scale; a sheet that needs more room still snaps
+    // up on its own).
+    final rawN = math.max(metersPerPixel * 1000 / (scale * mmPerPoint),
+        (minDenominator ?? 0).toDouble());
     int? snappedN;
     for (final n in kPlanScaleLadder) {
       if (n >= rawN - 1e-9) {

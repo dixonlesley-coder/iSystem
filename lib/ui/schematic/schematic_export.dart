@@ -189,7 +189,9 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
 /// rows are omitted) plus today's date — the app formats the clock, the engine
 /// never reads it. N19: the drawing NUMBER is derived per sheet (mechanical
 /// riser band `M-2xx`, running by [index]) so a set never stamps one number on
-/// every sheet; the manual `documentNumber` remains the verbatim override.
+/// every sheet; a manual `documentNumber` becomes the PREFIX
+/// (`<documentNumber>-<series><index>`, e.g. `BRI-MEP-01-M-201`) — only the
+/// cover keeps the bare base.
 DrawingChrome _riserChrome(WidgetRef ref,
     {required int index, required int total}) {
   final doc = ref.read(documentControlProvider);

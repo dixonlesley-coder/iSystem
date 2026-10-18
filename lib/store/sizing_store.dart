@@ -62,12 +62,22 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>(
 final edgeFixtureUnitsProvider = Provider<Map<String, double>>(
     (ref) => ref.watch(sizingDetailProvider).fixtureUnits);
 
+/// Round 14 (regression-dutystandby-tank-root-doubles-pump-duty) — the edges
+/// the sizer gave a MIRRORED set flow (duty/standby standby legs, parallel
+/// peer-source bridges; `autoSizeNetwork(parallelLegEdgeIdsOut:)`). They carry
+/// the full set flow so each machine can run alone, but are not extra delivery:
+/// [sourceDeliveredFlow] skips them so a duty/standby set drawn straight from
+/// its ground tank is never sized on curve(2 × UBAP).
+final parallelLegEdgeIdsProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).parallelLegs);
+
 /// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
 final sizingDetailProvider = Provider<
     ({
       Map<String, EdgeSizing> sizing,
       Map<String, double> fixtureUnits,
       FlushSystem flushSystem,
+      Set<String> parallelLegs,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   if (net.edges.isEmpty) {
@@ -75,6 +85,7 @@ final sizingDetailProvider = Provider<
       sizing: const {},
       fixtureUnits: const {},
       flushSystem: FlushSystem.flushTank,
+      parallelLegs: const <String>{},
     );
   }
   final occupancy = ref.watch(occupancyProvider);
@@ -165,6 +176,7 @@ final sizingDetailProvider = Provider<
   };
 
   final fixtureUnits = <String, double>{};
+  final parallelLegs = <String>{};
   final sizing = autoSizeNetwork(
     net,
     // M13 — the laid drainage slope is a real design input now
@@ -201,11 +213,13 @@ final sizingDetailProvider = Provider<
         if (customFor(n)?.isWaterCloset ?? false) n.id,
     },
     fixtureUnitsOut: fixtureUnits,
+    parallelLegEdgeIdsOut: parallelLegs,
   );
   return (
     sizing: sizing,
     fixtureUnits: fixtureUnits,
     flushSystem: flushSystem,
+    parallelLegs: parallelLegs,
   );
 });
 

@@ -237,7 +237,14 @@ MepLoadSource _sourceFor(NodeComponent c) => switch (c) {
       NodeComponent.boosterSet => MepLoadSource.boosterPump,
       NodeComponent.supplyFan || NodeComponent.ahu => MepLoadSource.supplyFan,
       NodeComponent.exhaustFan => MepLoadSource.exhaustFan,
-      _ => MepLoadSource.generic, // fcu / AC / any other motorised node
+      // Round 14 (elec-building-sim-6) — an AC / FCU is an HVAC final
+      // (LoadKind.hvac, curve C), not a pump (curve D).
+      NodeComponent.fcu ||
+      NodeComponent.acCassette ||
+      NodeComponent.acSplitWall ||
+      NodeComponent.acDucted =>
+        MepLoadSource.hvacUnit,
+      _ => MepLoadSource.generic, // any other motorised node
     };
 
 /// Phase count for a placed motorised node: small fan-coils + wall/cassette AC

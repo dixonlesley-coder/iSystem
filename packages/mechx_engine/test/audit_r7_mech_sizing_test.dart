@@ -243,9 +243,18 @@ void main() {
         leafFixtureUnits: const {ServiceType.coldWater: 2.0},
         nodeFixtureUnits: const {'F': 8.0},
       );
+      // GT2 bears no load: the root edge carries curve(8) — never curve(8+2)
+      // with a phantom 2-UBAP leaf default.
       expect(sized['a']!.flow.cubicMetersPerSecond, closeTo(_curve(8), 1e-12));
-      expect(sized['b']?.flow.cubicMetersPerSecond ?? 0.0, 0.0,
-          reason: 'GT2 bears no load, so its edge carries none (was 2 UBAP)');
+      expect(sized['c']!.flow.cubicMetersPerSecond, closeTo(_curve(8), 1e-12));
+      // Round 14 (parallel-sources-by-id) re-derivation: GT2 is a PARALLEL
+      // source of equal rank, so its bridge mirrors the set flow curve(8)
+      // (each compartment must carry the whole suction alone) — it no longer
+      // prints a 0 L/s minimum-size leg that depends on the node ids. It is
+      // still curve(8), not curve(10): the mirror adds no demand.
+      expect(sized['b']!.flow.cubicMetersPerSecond, closeTo(_curve(8), 1e-12),
+          reason: 'GT2 mirrors the set flow (was 0 / 2 UBAP)');
+      expect(sized['b']!.flowFromId, 'GT2');
     });
 
     test('a drainage stack accumulates to the building drain in ANY order', () {
