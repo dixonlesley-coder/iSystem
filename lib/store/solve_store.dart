@@ -4,7 +4,7 @@ import 'package:flutter/foundation.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart'
-    show headFromPressure, pressureFromHead;
+    show headFromPressure, headLossHazenWilliams, pressureFromHead;
 import 'package:mechx_engine/network/duct_static.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
@@ -23,6 +23,7 @@ import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/sizing/room_air.dart'
     show AirEquipmentKind, defaultInternalStatic;
 import 'package:mechx_engine/sizing/supply_design.dart';
+import 'package:mechx_engine/standards/pipe_products.dart' show hazenWilliamsCFor;
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -86,6 +87,18 @@ final upfeedOverPressureProvider = Provider<List<UpfeedOverPressure>>((ref) {
   final solution = ref.watch(solveProvider);
   if (solution == null) return const [];
   return upfeedOverPressure(solution);
+});
+
+/// Round 16 (plumbing-plant-downfeed-prv-unmodelled) — DOWNFEED delivery
+/// nodes over the SNI fixture pressure limits, on the gravity solve in which
+/// every DRAWN PRV holds its setpoint (the engine's [downfeedOverPressure]).
+/// The PRV zone table is a design intent (it assumes a PRV at every zone top);
+/// this is the check of what is actually drawn. Empty on upfeed.
+final downfeedOverPressureProvider =
+    Provider<List<UpfeedOverPressure>>((ref) {
+  final solution = ref.watch(downfeedProvider);
+  if (solution == null) return const [];
+  return downfeedOverPressure(solution);
 });
 
 /// DOWNFEED gravity solve (roof tank distributing down). Null when the strategy
@@ -501,6 +514,26 @@ final supplyPeakFlowProvider = Provider<FlowRate?>((ref) {
 /// BOOSTER kW, the equipment-schedule P-01 row and the MEP→E feed describe
 /// the one pump drawn, which with an inline booster IS the booster.
 final pumpDutyProvider = Provider<PumpDuty?>((ref) {
+  // Round 16 — the drawn domestic movers are sized in series
+  // ([supplyMoverDutiesProvider]); this single duty is the PRIMARY one (the
+  // largest-flow non-transfer mover, ties by id) — the root / main pump of a
+  // root-pump + zone-booster scheme, not the booster on the system head.
+  final movers = ref.watch(supplyMoverDutiesProvider);
+  final transfers = ref.watch(transferPumpNodeIdsProvider);
+  String? primary;
+  for (final e in movers.entries) {
+    if (transfers.contains(e.key)) continue;
+    final p = primary == null ? null : movers[primary]!;
+    if (p == null ||
+        e.value.flow.cubicMetersPerSecond > p.flow.cubicMetersPerSecond + 1e-15 ||
+        ((e.value.flow.cubicMetersPerSecond - p.flow.cubicMetersPerSecond)
+                    .abs() <=
+                1e-15 &&
+            e.key.compareTo(primary!) < 0)) {
+      primary = e.key;
+    }
+  }
+  if (primary != null) return movers[primary];
   final solution = ref.watch(solveProvider);
   final booster = ref.watch(supplyBoosterProvider);
   if (booster != null) {
@@ -539,6 +572,356 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   final flow = ref.watch(supplyPeakFlowProvider);
   if (flow == null) return null;
   return sizePump(flow: flow, head: solution.requiredPumpHead);
+});
+
+/// Round 16 — one drawn supply MOVER (a pump / booster set on the cold-water
+/// service, not piped to a fire service): the flow THROUGH it, the nodes it
+/// SERVES (everything reached beyond its incoming pipe along the solved flow;
+/// for a ROOT mover, its whole component) and whether it fills a storage tank
+/// (a TRANSFER pump).
+typedef SupplyMover = ({
+  String nodeId,
+  String? inEdgeId,
+  FlowRate flow,
+  Set<String> served,
+  bool transfer,
+});
+
+/// Pure core of [supplyMoverDutiesProvider]: every supply mover, in a
+/// deterministic order (by id). A ROOT mover's flow is [rootFlowOf] (the flow
+/// its component's source delivers); an inline mover's is its incoming pipe's
+/// sized flow (mirrored standby legs in [excludeEdgeIds] skipped). A mover
+/// with no flow is omitted.
+List<SupplyMover> supplyMovers(
+  Network net,
+  Map<String, EdgeSizing> sizing, {
+  Set<String> excludeEdgeIds = const {},
+  required FlowRate Function(String rootId) rootFlowOf,
+}) {
+  final roots = serviceComponentRoots(net, kSupplyService, demandNodeIds: {
+    for (final n in net.nodes)
+      if (n.role == NodeRole.fixture) n.id,
+  });
+  final out = <SupplyMover>[];
+  final ids = [
+    for (final n in net.nodes)
+      if (n.component == NodeComponent.pump ||
+          n.component == NodeComponent.boosterSet)
+        n.id,
+  ]..sort();
+  for (final id in ids) {
+    final incident = [
+      for (final e in net.edges)
+        if (e.fromId == id || e.toId == id) e,
+    ];
+    if (incident.any((e) =>
+        e.service == ServiceType.fireHydrant ||
+        e.service == ServiceType.fireSprinkler)) {
+      continue;
+    }
+    final supply = [
+      for (final e in incident)
+        if (e.service == kSupplyService) e,
+    ];
+    if (supply.isEmpty || roots[id] == null) continue;
+    String? inEdge;
+    FlowRate flow;
+    if (roots[id] == id) {
+      flow = rootFlowOf(id);
+    } else {
+      var best = 0.0;
+      for (final e in supply) {
+        if (excludeEdgeIds.contains(e.id)) continue;
+        final sz = sizing[e.id];
+        if (sz == null || sz.flowFromId == null || sz.flowFromId == id) {
+          continue;
+        }
+        final q = sz.flow.cubicMetersPerSecond;
+        if (q > best) {
+          best = q;
+          inEdge = e.id;
+        }
+      }
+      if (inEdge == null) continue;
+      flow = FlowRate(best);
+    }
+    if (flow.cubicMetersPerSecond <= 0) continue;
+    final served = boosterServedNodes(net, id, inEdge ?? '',
+        sizing: sizing, excludeEdgeIds: excludeEdgeIds);
+    out.add((
+      nodeId: id,
+      inEdgeId: inEdge,
+      flow: flow,
+      served: served,
+      transfer: served.any((n) => _isStorageTank(net.nodeById(n))),
+    ));
+  }
+  return out;
+}
+
+/// Round 16 (plumbing-plant-root-pump-plus-booster /
+/// plumbing-plant-multi-booster-single-duty) — the head each NON-transfer
+/// mover adds, sized IN SERIES: movers are processed source-outward (a mover
+/// is downstream of another when it sits in that one's served set); each is
+/// sized on the largest shortfall, below [target], of the residual its OWN
+/// delivery nodes see — [residual] is what the network delivers with NO
+/// mover running (an open tank's outlet head) plus the heads of the movers
+/// already upstream of that node. A mover's OWN delivery nodes are the
+/// fixtures it serves that no downstream booster serves (else its open
+/// leaves), plus each immediately-downstream booster's inlet, which it owes a
+/// non-negative suction residual. So a root pump carries the floors it feeds
+/// directly at the trunk flow, and a zone booster only its own zone's
+/// SHORTFALL given that upstream head (it used to carry the WHOLE system head
+/// while the root pump got no duty), and every one of several zone boosters
+/// gets its own duty (only the largest-flow one used to). Pure.
+Map<String, Head> seriesMoverHeads({
+  required Network net,
+  required List<SupplyMover> movers,
+  required Map<String, Pressure> residual,
+  required Pressure target,
+}) {
+  final boosters = [
+    for (final m in movers)
+      if (!m.transfer) m,
+  ];
+  int depth(SupplyMover m) =>
+      boosters.where((u) => u.nodeId != m.nodeId && u.served.contains(m.nodeId)).length;
+  boosters.sort((a, b) {
+    final c = depth(a).compareTo(depth(b));
+    return c != 0 ? c : a.nodeId.compareTo(b.nodeId);
+  });
+  final degree = <String, int>{};
+  for (final e in net.edges) {
+    if (e.service != kSupplyService) continue;
+    degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
+    degree[e.toId] = (degree[e.toId] ?? 0) + 1;
+  }
+  final heads = <String, double>{}; // head in Pa
+  for (final m in boosters) {
+    double upstream(String node) {
+      var h = 0.0;
+      for (final u in boosters) {
+        if (u.nodeId == m.nodeId) continue;
+        final hu = heads[u.nodeId];
+        if (hu != null && u.served.contains(node)) h += hu;
+      }
+      return h;
+    }
+
+    final downstream = [
+      for (final d in boosters)
+        if (d.nodeId != m.nodeId && m.served.contains(d.nodeId)) d,
+    ];
+    bool ownedByDownstream(String n) =>
+        downstream.any((d) => d.nodeId == n || d.served.contains(n));
+    var own = [
+      for (final n in m.served)
+        if (net.nodeById(n)?.role == NodeRole.fixture && !ownedByDownstream(n))
+          n,
+    ];
+    if (own.isEmpty) {
+      own = [
+        for (final n in m.served)
+          if ((degree[n] ?? 0) == 1 && !ownedByDownstream(n)) n,
+      ];
+    }
+    var worst = double.negativeInfinity;
+    for (final n in own) {
+      final r = residual[n];
+      if (r == null) continue;
+      worst = math.max(worst, target.pascals - (r.pascals + upstream(n)));
+    }
+    // The immediately-downstream boosters' inlets (not behind another one).
+    for (final d in downstream) {
+      if (downstream.any((o) => o.nodeId != d.nodeId && o.served.contains(d.nodeId))) {
+        continue;
+      }
+      final r = residual[d.nodeId];
+      if (r == null) continue;
+      worst = math.max(worst, 0 - (r.pascals + upstream(d.nodeId)));
+    }
+    if (worst > 0) heads[m.nodeId] = worst;
+  }
+  return {
+    for (final e in heads.entries) e.key: headFromPressure(Pressure(e.value)),
+  };
+}
+
+/// Round 16 (plumbing-plant-transfer-pump-no-duty) — the head a TRANSFER pump
+/// lifts at [flow]: the elevation from its source (the storage tank, else the
+/// component root, reached walking UP the solved flow from the pump) to the
+/// tank it fills, plus the Hazen–Williams friction of [flow] over every
+/// drawn pipe on that source → pump → tank path at its sized bore and its
+/// pipe product's C (the service default C otherwise). The tank inlet is a
+/// free discharge (0 m residual, `// VERIFY` — a float valve's inlet
+/// pressure is not modelled). Pure; null when no tank is reached.
+Head? transferPumpHead({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+  required SupplyMover mover,
+  required FlowRate flow,
+  required double Function(NetEdge e) lengthOf,
+  required double Function(NetNode n) elevationOf,
+}) {
+  final hwC = const SniProfile().hazenWilliamsC(PipeMaterial.pvc);
+  String other(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
+  List<NetEdge> supplyAt(String n) => [
+        for (final e in net.edges)
+          if (e.service == kSupplyService && (e.fromId == n || e.toId == n)) e,
+      ];
+  final path = <NetEdge>[];
+  // Upstream: against the flow to the first storage tank (or the root).
+  var node = mover.nodeId;
+  final seen = <String>{node};
+  while (!_isStorageTank(net.nodeById(node)) || node == mover.nodeId) {
+    NetEdge? inE;
+    for (final e in supplyAt(node)) {
+      final f = sizing[e.id]?.flowFromId;
+      if (f != null && f != node) {
+        inE = e;
+        break;
+      }
+    }
+    if (inE == null) break;
+    final up = other(inE, node);
+    if (!seen.add(up)) break;
+    path.add(inE);
+    node = up;
+  }
+  final source = net.nodeById(node);
+  // Downstream: with the flow, along the branch that reaches the tank.
+  String? tank;
+  node = mover.nodeId;
+  final visited = <String>{node};
+  while (tank == null) {
+    NetEdge? next;
+    for (final e in supplyAt(node)) {
+      if (sizing[e.id]?.flowFromId != node) continue;
+      final far = other(e, node);
+      if (visited.contains(far)) continue;
+      if (_isStorageTank(net.nodeById(far)) ||
+          boosterServedNodes(net, far, e.id, sizing: sizing)
+              .any((n) => _isStorageTank(net.nodeById(n)))) {
+        next = e;
+        break;
+      }
+    }
+    if (next == null) return null;
+    path.add(next);
+    node = other(next, node);
+    visited.add(node);
+    if (_isStorageTank(net.nodeById(node))) tank = node;
+  }
+  final tankNode = net.nodeById(tank);
+  if (tankNode == null || source == null) return null;
+  var h = elevationOf(tankNode) - elevationOf(source);
+  for (final e in path) {
+    final sz = sizing[e.id];
+    if (sz == null) continue;
+    h += headLossHazenWilliams(
+      flow: flow,
+      length: Length(lengthOf(e)),
+      diameter: sz.diameter,
+      hazenWilliamsC: e.pipeProduct != null ? hazenWilliamsCFor(e.pipeProduct!) : hwC,
+    ).meters;
+  }
+  return Head(math.max(0, h));
+}
+
+/// Round 16 — the solved duty of EVERY drawn supply mover, keyed by node id:
+/// the root pump / inline boosters sized in series ([seriesMoverHeads]) on
+/// the flow through each, and each transfer pump on its lift
+/// ([transferPumpHead]) at the flow its discharge carries. A mover whose
+/// head is not positive (the supply already serves its set) is absent. The
+/// panel feed, the equipment schedule (one row per mover) and the riser read
+/// this map, so a drawn root pump, a second zone booster and a transfer pump
+/// are no longer fed at their component defaults and left off the schedule.
+final supplyMoverDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  final peak = ref.watch(supplyPeakFlowProvider);
+  final movers = supplyMovers(net, sizing,
+      excludeEdgeIds: legs,
+      rootFlowOf: (root) {
+        final d = sourceDeliveredFlow(net, sizing, kSupplyService, root,
+            edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
+            flushSystem: ref.watch(supplyFlushSystemProvider),
+            excludeEdgeIds: legs);
+        return d.cubicMetersPerSecond > 0 ? d : (peak ?? const FlowRate(0));
+      });
+  if (movers.isEmpty) return const {};
+  final out = <String, PumpDuty>{};
+
+  // Series movers on the no-mover residual.
+  final solution = ref.watch(solveProvider);
+  Map<String, Pressure>? unboosted;
+  if (solution != null) {
+    final pH = pressureFromHead(solution.requiredPumpHead).pascals;
+    unboosted = {
+      for (final e in solution.residualPressure.entries)
+        e.key: Pressure(e.value.pascals - pH),
+    };
+  } else {
+    unboosted = ref.watch(downfeedProvider)?.residualPressure;
+  }
+  if (unboosted != null) {
+    final heads = seriesMoverHeads(
+        net: net, movers: movers, residual: unboosted, target: _targetResidual);
+    for (final m in movers) {
+      final h = heads[m.nodeId];
+      if (h == null || h.meters <= 0) continue;
+      out[m.nodeId] = sizePump(flow: m.flow, head: h);
+    }
+  }
+
+  // Transfer pumps on their lift.
+  double lengthOf(NetEdge e) => edgeLength(
+        e,
+        net,
+        calibrationBySheet: project.calibrations,
+        building: project.building,
+        mounting: project.mounting,
+      ).meters;
+  for (final m in movers) {
+    if (!m.transfer) continue;
+    final h = transferPumpHead(
+      net: net,
+      sizing: sizing,
+      mover: m,
+      flow: m.flow,
+      lengthOf: lengthOf,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters,
+    );
+    if (h == null || h.meters <= 0) continue;
+    out[m.nodeId] = sizePump(flow: m.flow, head: h);
+  }
+  return out;
+});
+
+/// Round 16 — the node [pumpDutyProvider]'s duty belongs to (null when that
+/// duty is the legacy undrawn upfeed pump, or there is none).
+final primarySupplyPumpNodeProvider = Provider<String?>((ref) {
+  final duty = ref.watch(pumpDutyProvider);
+  if (duty == null) return null;
+  for (final e in ref.watch(supplyMoverDutiesProvider).entries) {
+    if (identical(e.value, duty)) return e.key;
+  }
+  return null;
+});
+
+/// Round 16 — the TRANSFER pumps among [supplyMoverDutiesProvider] (node ids).
+final transferPumpNodeIdsProvider = Provider<Set<String>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  return {
+    for (final m in supplyMovers(net, sizing,
+        excludeEdgeIds: legs, rootFlowOf: (_) => const FlowRate(1)))
+      if (m.transfer) m.nodeId,
+  };
 });
 
 /// Round 11 (hvac-network-1) — the flow a SOURCE node (the fan / AHU / pump a
@@ -684,16 +1067,34 @@ List<AirSystem> airSystemsFor(
     // belongs to the drawn machine: report the system's air-unit plant node
     // (lowest id) when the root itself is not one, so the MEP→E feed fills
     // that node's way instead of minting a second duty way beside it.
+    //
+    // Round 16 (regression-inline-fan-duty-attributed-to-fcu) — the unit is
+    // chosen by ROLE, never by id: an inline MOVER (supply / exhaust fan)
+    // first, then an AHU, then any other source plant. A terminal air unit
+    // (FCU / AC) and a demand-bearing plant (one with its own airflow) are
+    // DELIVERY points on the fresh-air fan's duct, never its machine — the
+    // lowest-id rule used to hand the PAU fan's duty (and its panel way and
+    // schedule tag) to an FCU whose id happened to sort first.
     var unit = root;
     if (net.nodeById(root)?.role != NodeRole.plant) {
+      int rank(NetNode n) => switch (n.component) {
+            NodeComponent.supplyFan || NodeComponent.exhaustFan => 0,
+            NodeComponent.ahu => 1,
+            _ => 2,
+          };
       final machines = [
         for (final n in net.nodes)
           if (roots[n.id] == root &&
               n.role == NodeRole.plant &&
+              n.airflow == null &&
+              !isTerminalAirUnit(n.component) &&
               (n.component?.isElectricalLoad ?? false))
-            n.id,
-      ]..sort();
-      if (machines.isNotEmpty) unit = machines.first;
+            n,
+      ]..sort((a, b) {
+          final c = rank(a).compareTo(rank(b));
+          return c != 0 ? c : a.id.compareTo(b.id);
+        });
+      if (machines.isNotEmpty) unit = machines.first.id;
     }
     out.add((trunk: trunk, stat: s.totalStaticPressure, fanNodeId: unit));
   }
@@ -789,6 +1190,34 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
       totalStaticPressure:
           Pressure(r.stat.pascals + internalOf(r.fanNodeId).pascals),
     );
+  }
+  // Round 16 (air-systems-2-shared-main-second-ahu-fed-default) — a PEER
+  // source on the same duct (a second AHU the sizer mirrored as a parallel
+  // source leg) carries the SAME system duty — the duty/standby convention
+  // the pumps use — so it is scheduled and fed on it instead of the 5.5 kW
+  // component default.
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  if (legs.isNotEmpty) {
+    for (final service in const [ServiceType.duct, ServiceType.returnAir]) {
+      final roots = serviceComponentRoots(net, service, demandNodeIds: {
+        for (final n in net.nodes)
+          if (n.airflow != null) n.id,
+      });
+      for (final n in net.nodes) {
+        if (out.containsKey(n.id) || n.role != NodeRole.plant) continue;
+        if (n.airflow != null || isTerminalAirUnit(n.component)) continue;
+        final root = roots[n.id];
+        if (root == null || root == n.id) continue;
+        final duty = out[root];
+        if (duty == null) continue;
+        if (net.nodeById(root)?.component != n.component) continue;
+        final onLeg = net.edges.any((e) =>
+            e.service == service &&
+            legs.contains(e.id) &&
+            (e.fromId == n.id || e.toId == n.id));
+        if (onLeg) out[n.id] = duty;
+      }
+    }
   }
   return out;
 });
@@ -941,47 +1370,154 @@ final pipeCutPlanProvider = Provider<List<PipeCutGroup>>((ref) {
   return buildPipeCutPlan(ref.watch(pipeChainsProvider));
 });
 
-/// Hot-water recirculation design for the drawn hot-water network: the loop is
-/// the total hot-water pipe length, heat loss is estimated per metre, and the
-/// return diameter defaults to the smallest hot-water size. Null when there's
-/// no hot-water network.
+/// Hot-water recirculation design for the drawn hot-water network. Null when
+/// there's no circulated hot-water pipework.
+///
+/// Round 16 (plumbing-plant-hw-recirc-loop-head) — the loop is the CIRCULATED
+/// pipework only ([hotWaterRecircLoop]): the mains / risers the recirculation
+/// keeps hot, never the fixture branches (dead legs the circulating flow does
+/// not pass through). Heat loss is 25 W/m over that pipework plus the return
+/// leg (one return run back along the index path, at
+/// [kDefaultRecircReturnDiameter] — `// VERIFY`, a return is rarely drawn),
+/// and the head is the index run's friction at each segment's OWN sized bore
+/// plus the return leg. It used to sum EVERY hot-water edge (fixture branches
+/// included) into one length and push the recirc flow through all of it at
+/// the network's SMALLEST bore (a DN15 branch): 1711 m of head and a 30 kW
+/// circulator on a 20-storey building.
 final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
-  final hwEdges =
-      net.edges.where((e) => e.service == ServiceType.hotWater).toList();
-  if (hwEdges.isEmpty) return null;
-
-  var lenM = 0.0;
-  var minDia = double.infinity;
-  for (final e in hwEdges) {
-    lenM += edgeLength(
-      e,
-      net,
-      calibrationBySheet: project.calibrations,
-      building: project.building,
-      mounting: project.mounting,
-    ).meters;
-    final s = sizing[e.id];
-    if (s != null) minDia = math.min(minDia, s.diameter.meters);
-  }
-  if (lenM <= 0) return null;
-  final loop = Length(lenM);
+  final loop = hotWaterRecircLoop(net, sizing,
+      lengthOf: (e) => edgeLength(
+            e,
+            net,
+            calibrationBySheet: project.calibrations,
+            building: project.building,
+            mounting: project.mounting,
+          ).meters);
+  if (loop == null) return null;
   return sizeHotWaterRecirculation(
-    heatLoss: heatLossFromLength(loopLength: loop),
-    loopLength: loop,
-    returnDiameter: minDia.isFinite ? Diameter(minDia) : Diameter.mm(20),
+    heatLoss: heatLossFromLength(
+        loopLength: Length(loop.circulatedLengthM + loop.returnLengthM)),
+    loopLength: Length(loop.returnLengthM),
+    returnDiameter: kDefaultRecircReturnDiameter,
+    supplyPath: loop.indexPath,
     // M14 — the flow temperature and allowable loop drop are DESIGN INPUTS
     // (Building page), not engine constants: they set the recirc flow AND the
     // modelled return temperature the anti-Legionella check judges. The
-    // defaults (60 °C / 5 K) reproduce the engine's own values exactly, so an
-    // untouched project is byte-identical — but a project that departs (55 °C
-    // stored, or a 10 K drop) now actually trips the check.
+    // defaults (60 °C / 5 K) reproduce the engine's own values exactly — but a
+    // project that departs (55 °C stored, or a 10 K drop) now actually trips
+    // the check.
     flowTempC: ref.watch(hotWaterFlowTempProvider),
     allowableDropK: ref.watch(hotWaterDeltaTProvider),
   );
 });
+
+/// Round 16 — the CIRCULATED hot-water pipework of [net] (pure; testable
+/// without a container): every hot-water edge with NO fixture-role endpoint
+/// and no bare open-ended leaf (a dead leg the recirculation never reaches),
+/// its total length, and the INDEX run from the component's source (the
+/// longest circulated path by length, each segment at its sized bore) whose
+/// length the return leg mirrors. Null when nothing is circulated.
+({
+  double circulatedLengthM,
+  double returnLengthM,
+  List<({Length length, Diameter diameter})> indexPath,
+})? hotWaterRecircLoop(
+  Network net,
+  Map<String, EdgeSizing> sizing, {
+  required double Function(NetEdge e) lengthOf,
+}) {
+  final hw = [
+    for (final e in net.edges)
+      if (e.service == ServiceType.hotWater) e,
+  ];
+  if (hw.isEmpty) return null;
+  final degree = <String, int>{};
+  for (final e in hw) {
+    degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
+    degree[e.toId] = (degree[e.toId] ?? 0) + 1;
+  }
+  final roots = serviceComponentRoots(net, ServiceType.hotWater,
+      demandNodeIds: {
+        for (final n in net.nodes)
+          if (n.role == NodeRole.fixture) n.id,
+      });
+  bool deadEnd(String id) {
+    final n = net.nodeById(id);
+    if (n?.role == NodeRole.fixture) return true;
+    // A bare open leaf (not the source) is a branch end, not a loop.
+    return (degree[id] ?? 0) == 1 &&
+        roots[id] != id &&
+        n?.role != NodeRole.plant;
+  }
+
+  final circulated = [
+    for (final e in hw)
+      if (!deadEnd(e.fromId) && !deadEnd(e.toId)) e,
+  ];
+  if (circulated.isEmpty) return null;
+  var total = 0.0;
+  final adj = <String, List<NetEdge>>{};
+  for (final e in circulated) {
+    total += lengthOf(e);
+    (adj[e.fromId] ??= []).add(e);
+    (adj[e.toId] ??= []).add(e);
+  }
+  if (total <= 0) return null;
+
+  // Index run: the longest circulated path (by length) from a source.
+  var bestLen = 0.0;
+  var bestPath = const <NetEdge>[];
+  final sources = {
+    for (final e in circulated) ...[
+      if (roots[e.fromId] == e.fromId) e.fromId,
+      if (roots[e.toId] == e.toId) e.toId,
+    ],
+  };
+  // A component whose source sits on a dead leg starts from the circulated
+  // node nearest it (deterministic: the lowest-id circulated node).
+  if (sources.isEmpty) sources.add((adj.keys.toList()..sort()).first);
+  for (final src in sources.toList()..sort()) {
+    final dist = <String, double>{src: 0};
+    final via = <String, NetEdge>{};
+    final queue = [src];
+    for (var i = 0; i < queue.length; i++) {
+      final n = queue[i];
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        final m = e.fromId == n ? e.toId : e.fromId;
+        if (dist.containsKey(m)) continue;
+        dist[m] = dist[n]! + lengthOf(e);
+        via[m] = e;
+        queue.add(m);
+      }
+    }
+    for (final en in dist.entries) {
+      if (en.value <= bestLen + 1e-12) continue;
+      bestLen = en.value;
+      final path = <NetEdge>[];
+      var cur = en.key;
+      while (via[cur] != null) {
+        final e = via[cur]!;
+        path.add(e);
+        cur = e.fromId == cur ? e.toId : e.fromId;
+      }
+      bestPath = path.reversed.toList();
+    }
+  }
+  return (
+    circulatedLengthM: total,
+    returnLengthM: bestLen,
+    indexPath: [
+      for (final e in bestPath)
+        (
+          length: Length(lengthOf(e)),
+          diameter: sizing[e.id]?.diameter ?? kDefaultRecircReturnDiameter,
+        ),
+    ],
+  );
+}
 
 /// Anti-Legionella advisory over the modelled hot-water recirculation: the
 /// modelled return temperature (°C) when it falls below the safe floor

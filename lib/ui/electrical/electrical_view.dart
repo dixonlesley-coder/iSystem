@@ -21,8 +21,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
-import 'package:mechx_engine/electrical/fault.dart'
-    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
 import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
 import 'package:mechx_engine/electrical/lightning.dart' show LpsLevelLabel;
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -1308,11 +1306,11 @@ class ElectricalSupplyInspector extends ConsumerWidget {
     // explicit setting wins, else a declared service size (transformer kVA /
     // connection capacity) drives a size-appropriate estimate, else the flat
     // app default — so the field shows the fault level the solve actually uses.
-    final effectiveOriginFaultLevelKa = project.originFaultLevelA != null
-        ? project.originFaultLevelA!.amperes / 1000
-        : (estimatedServiceFaultLevelA(project)?.amperes ??
-                defaultLvUtilityFaultKa * 1000) /
-            1000;
+    // Round 16 — the SAME chain, incl. the demand-sized MV transformer.
+    final effectiveOriginFaultLevelKa = effectiveOriginFaultLevel(project,
+                demand: ref.watch(electricalResultProvider).supply.demandVa)
+            .amperes /
+        1000;
 
     String genModeLabel(GeneratorMode m) => switch (m) {
           GeneratorMode.standby =>

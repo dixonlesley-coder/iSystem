@@ -808,6 +808,43 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
+  // ── 3f. DOWNFEED fixture over-pressure (Round 16) ─────────────────────────
+  // The zone table above assumes a PRV at every zone top; this judges what is
+  // DRAWN: the gravity solve holds each drawn PRV's setpoint, and any delivery
+  // node still over the SNI fixture maximum is a WARNING (CRITICAL at the
+  // mandatory relief threshold). Judge-only, locatable to the node.
+  final downOver = ref.watch(downfeedOverPressureProvider);
+  if (downOver.isNotEmpty) {
+    const sni = SniProfile();
+    final maxFixKpa = sni.maxFixtureStaticPressure.value.inKiloPascals;
+    final reliefKpa = sni.mandatoryPressureReliefThreshold.value.inKiloPascals;
+    final floors = project.building.floors;
+    for (final o in downOver) {
+      final node = nodeById[o.nodeId];
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      warnings.add(DesignIssue(
+        severity:
+            o.overRelief ? IssueSeverity.critical : IssueSeverity.warning,
+        kind: 'downfeed-over-pressure:${o.nodeId}',
+        title: o.overRelief
+            ? str(StringKey.issueDownfeedOverReliefTitle)
+            : str(StringKey.issueDownfeedOverPressureTitle),
+        message: str.format(StringKey.issueDownfeedOverPressureMessage, {
+          'floor': floorName,
+          'flowing': o.flowing.inKiloPascals.toStringAsFixed(0),
+          'static': o.noFlow.inKiloPascals.toStringAsFixed(0),
+          'limit': maxFixKpa.toStringAsFixed(0),
+          'relief': reliefKpa.toStringAsFixed(0),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: o.nodeId),
+      ));
+    }
+  }
+
   // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
   // Each advisory is edge-locatable via the edge's `from` node sheet. Title is
   // fixed (golden-friendly); the engine message carries the specifics.

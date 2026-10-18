@@ -674,6 +674,15 @@ void main() {
                 floorIndex: 0,
                 role: NodeRole.plant,
               ),
+              // Round 16 — a circulated MAIN (the recirculation keeps the
+              // main hot; the fixture branch is a dead leg it never reaches).
+              NetNode(
+                id: 'hwm',
+                sheetId: 's1',
+                x: 200,
+                y: 0,
+                floorIndex: 0,
+              ),
               NetNode(
                 id: 'hw1',
                 sheetId: 's1',
@@ -686,8 +695,14 @@ void main() {
             ],
             edges: [
               NetEdge(
-                id: 'hw',
+                id: 'hwmain',
                 fromId: 'hw0',
+                toId: 'hwm',
+                service: ServiceType.hotWater,
+              ),
+              NetEdge(
+                id: 'hw',
+                fromId: 'hwm',
                 toId: 'hw1',
                 service: ServiceType.hotWater,
               ),

@@ -150,7 +150,15 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   // prints (the schedule's per-root rows), so a second AHU is reported.
   final rs = reportStringsFor(ref);
   final scheduledFans = gatherEquipmentScheduleData(ref).fans;
-  final standpipe = ref.read(standpipeDesignProvider);
+  // Round 16 (regression-report-fire-pump-without-fire-service) — the SAME
+  // drawn-fire-service gate [firePumpDutyProvider] applies: with no
+  // sprinkler / hydrant pipe drawn the schedule and the MDP carry no fire
+  // pump, so the report must not print one (or the standpipe / sprinkler
+  // design it is rated on) either.
+  final fireDrawn = net.edges.any((e) =>
+      e.service == ServiceType.fireSprinkler ||
+      e.service == ServiceType.fireHydrant);
+  final standpipe = fireDrawn ? ref.read(standpipeDesignProvider) : null;
   final hwRecirc = ref.read(hotWaterRecircProvider);
   return CalcReportData(
     projectName: project.name,
@@ -165,7 +173,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       ...profile.verifyChecklist,
       ...pipeProductsVerifyChecklist,
       ...ductProductsVerifyChecklist,
-      ...standpipeVerifyChecklist,
+      if (fireDrawn) ...standpipeVerifyChecklist,
       if (hwRecirc != null) ...hotWaterRecircVerifyChecklist,
     ],
     supplyFans: [
@@ -196,10 +204,11 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
         ? ref.read(zoneStaticsProvider)
         : const [],
     hotWaterRecirc: hwRecirc,
-    sprinkler: ref.read(sprinklerDesignProvider),
+    sprinkler: fireDrawn ? ref.read(sprinklerDesignProvider) : null,
     standpipe: standpipe,
-    sprinklerRemoteArea: ref.read(sprinklerRemoteAreaProvider),
-    firePumpRating: ref.read(firePumpRatingProvider),
+    sprinklerRemoteArea:
+        fireDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
+    firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
     fan: ref.read(ductFanProvider),
     exhaustFan: ref.read(exhaustFanProvider),
     supplyAirflowLps: balance?.supplyLps ?? 0,
@@ -223,7 +232,8 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
   final eResult = ref.read(electricalResultProvider);
   final eAdvanced = ref.read(electricalAdvancedProvider);
   const eProfile = PuilProfile();
-  final effectiveFault = effectiveOriginFaultLevel(eProject);
+  final effectiveFault = effectiveOriginFaultLevel(eProject,
+      demand: eResult.supply.demandVa);
   return ElectricalCalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
@@ -729,7 +739,36 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
 
   // Pumps: the domestic-supply booster (upfeed) + the standpipe fire pump.
   final pumps = <PumpScheduleItem>[];
-  final supplyPump = ref.read(pumpDutyProvider);
+  // Round 16 — ONE row per drawn supply mover with a solved duty (the root /
+  // main pump, every zone booster, the transfer pump), each under its own
+  // plan tag; the single legacy row stays for the undrawn upfeed pump.
+  final movers = ref.read(supplyMoverDutiesProvider);
+  final transfers = ref.read(transferPumpNodeIdsProvider);
+  var pumpOrdinal = 0;
+  String nextPumpTag() {
+    String t;
+    do {
+      pumpOrdinal++;
+      t = 'P-${pumpOrdinal.toString().padLeft(2, '0')}';
+    } while (nodeTags.values.contains(t));
+    return t;
+  }
+
+  final moverIds = movers.keys.toList()..sort();
+  for (final id in moverIds) {
+    final tag = tagOfNode(id) ?? nextPumpTag();
+    pumps.add(
+      PumpScheduleItem(
+        duty: movers[id]!,
+        service: reportStringsFor(ref)(transfers.contains(id)
+            ? RptStringKey.esSvcTransferPump
+            : RptStringKey.esSvcDomesticWater),
+        tag: tag,
+        modelSpec: specs[tag],
+      ),
+    );
+  }
+  final supplyPump = movers.isEmpty ? ref.read(pumpDutyProvider) : null;
   if (supplyPump != null) {
     final tag = tagOfNode(binding.supplyPumpNodeId) ??
         tagOfFirst((n) => isPumpNode(n) && onWater(n) && !onFire(n)) ??
@@ -738,6 +777,24 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       PumpScheduleItem(
         duty: supplyPump,
         service: reportStringsFor(ref)(RptStringKey.esSvcDomesticWater),
+        tag: tag,
+        modelSpec: specs[tag],
+      ),
+    );
+  }
+  // Round 16 (plumbing-plant-recirc-pump-not-bound) — the HW recirculation
+  // pump the inspector and the report print, scheduled under the drawn HW
+  // pump's tag (else HWP-01) — the same duty the panel way is fed on.
+  final recirc = ref.read(hotWaterRecircProvider);
+  if (recirc != null && recirc.pump.selectedMotor.watts > 0) {
+    final hwId = binding.hwRecircPumpNodeIds.isEmpty
+        ? null
+        : (binding.hwRecircPumpNodeIds.toList()..sort()).first;
+    final tag = tagOfNode(hwId) ?? 'HWP-01';
+    pumps.add(
+      PumpScheduleItem(
+        duty: recirc.pump,
+        service: reportStringsFor(ref)(RptStringKey.esSvcHwRecirc),
         tag: tag,
         modelSpec: specs[tag],
       ),
@@ -761,7 +818,11 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final fans = <FanScheduleItem>[];
   final airRoots = ref.read(airSystemRootNodesProvider);
   bool onService(NetNode n, ServiceType s) => servicesAt(n.id).contains(s);
-  final ductFan = ref.read(ductFanProvider);
+  // Round 16 — a packaged AC unit rooting its own ducts is scheduled ONCE,
+  // as its AC row (below); its internal fan is not a separate machine.
+  bool acRoot(String? id) =>
+      id != null && RoomArea.isAcComponent(net.nodeById(id)?.component);
+  final ductFan = acRoot(airRoots.supply) ? null : ref.read(ductFanProvider);
   if (ductFan != null) {
     // The unit the supply (else return) duct system is ROOTED at carries this
     // duty — never the exhaust fan's tag (audit r8 coupling-3).
@@ -793,7 +854,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   }
 
   for (final e in ref.read(supplyFanDutiesByRootProvider).entries) {
-    if (e.key == airRoots.supply) continue;
+    if (e.key == airRoots.supply || acRoot(e.key)) continue;
     final tag = tagOfNode(e.key) ?? nextFanTag('F');
     fans.add(
       FanScheduleItem(

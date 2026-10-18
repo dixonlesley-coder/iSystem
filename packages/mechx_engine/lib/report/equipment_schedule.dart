@@ -18,10 +18,12 @@
 /// flag // VERIFY — a tag and a quantity are bookkeeping, not engineering claims.
 library;
 
-import '../electrical/genset_backup.dart' show gensetBackupDemandVa;
+import '../electrical/genset_backup.dart'
+    show gensetBackupDemandVa, gensetBackupDemandW;
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
 import '../electrical/sources.dart' show sizeGenerator;
+import '../electrical/supply_design.dart' show serviceTransformer;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
 import '../units.dart' show ApparentPower;
@@ -341,15 +343,18 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
   // spine). Each is emitted only when the model actually carries it.
   final ep = data.electricalProject;
   if (ep != null) {
-    final tx = ep.transformerKva;
-    if (tx != null && tx.inKilovoltAmperes > 0) {
+    // Round 16 — the SAME [serviceTransformer] the study + the spine use: the
+    // declared rating, else an undeclared dual-tx service's study pick.
+    final tx = serviceTransformer(
+        ep, data.electrical?.supply.demandVa ?? const ApparentPower(0));
+    if (tx != null) {
       rows.add(EquipmentScheduleRow(
         tag: 'TX-01',
         service: strings(RptStringKey.esTransformerService),
-        duty: '${_fmt(tx.inKilovoltAmperes, dp: 0)} kVA',
+        duty: '${_fmt(tx.kva, dp: 0)} kVA',
         size: '',
         modelSpec: specFor('TX-01'),
-        qty: ep.dualTransformer ? 2 : 1,
+        qty: tx.units,
         category: EquipmentCategory.transformer,
       ));
     }
@@ -375,7 +380,11 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
                           ? gensetBackupDemandVa(ep, data.electrical!)
                           : ApparentPower(
                               demandVa.voltAmperes * gen.backupFraction),
-                      mode: gen.mode);
+                      mode: gen.mode,
+                      // Round 16 — the set's kW limit (0.8 × kVA).
+                      backupPower: data.electrical != null
+                          ? gensetBackupDemandW(ep, data.electrical!)
+                          : null);
                   return (unitKva: r.ratingKva, units: r.units);
                 })()
               : null);

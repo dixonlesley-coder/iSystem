@@ -105,6 +105,16 @@ const double _kSpreadStep = 18;
 // clearance, not a standard. // VERIFY
 const double _kInkHalfThickness = 2;
 
+/// Round 16 — the solve's recorded flow direction per edge (edge id -> the
+/// node its flow comes FROM, `EdgeSizing.flowFromId`), the input of the
+/// flow-path FUNCTION suffix ([riserFunctionFor]). Edges the solve did not
+/// orient are absent.
+Map<String, String> flowFromBySizing(Map<String, EdgeSizing> sizing) => {
+      for (final en in sizing.entries)
+        // ignore: use_null_aware_elements
+        if (en.value.flowFromId case final f?) en.key: f,
+    };
+
 /// Build the mechanical riser single-line as an [SldSheet] for [network].
 ///
 /// [sizing] maps edgeId → its sized record (for the `SIZE-SERVICE-MATERIAL` tag;
@@ -166,6 +176,8 @@ SldSheet buildMechanicalRiserSld({
   Map<String, String> nodeTags = const {},
 }) {
   final prims = <SldPrim>[];
+  // Round 16 — the solve's flow direction drives the FUNCTION suffix.
+  final flowFromByEdge = flowFromBySizing(sizing);
 
   // Visible node ids under the focus filter (endpoints of focused-service edges).
   final Set<String>? visible = _focusedNodeIds(network, focus);
@@ -521,7 +533,8 @@ SldSheet buildMechanicalRiserSld({
           reversed: flowFrom == e.toId, role: role, layer: layer);
     }
 
-    final fn = riserFunctionFor(network, e, downfeed: downfeed);
+    final fn = riserFunctionFor(network, e,
+        downfeed: downfeed, flowFrom: flowFromByEdge);
     final tag = _pipeTag(sz, e, function: fn, length: edgeLengths[e.id]);
     if (e.kind == EdgeKind.riser) {
       // Tag + riser id beside the vertical leg. Round 10

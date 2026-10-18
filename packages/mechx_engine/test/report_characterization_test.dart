@@ -121,8 +121,14 @@ void main() {
       // name the Building-table floors ('L1–L2' / 'Ground–Ground', not the
       // index+1 '2–3' / '1–1'). Verified as the SOLE delta: substituting the
       // three old texts back reproduces 0x63072abe. Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 16 plumbing-plant-hw-recirc-loop-head):
+      // ONE line changed — the HW-recirculation line prints the return-loop
+      // LENGTH and the loop HEAD as separate figures ('return loop 30.0 m ·
+      // head 0.1 m') instead of the head under a 'loop … m' label. Verified as
+      // the SOLE delta: substituting the old line back reproduces 0xf972feb4.
+      // Line count unchanged.
       expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0xf972feb4);
+      expect(fnv1a32(md), 0x86204b3d);
     });
   });
 
@@ -326,8 +332,11 @@ void main() {
       // mechanical one is heading + blank + header + separator + 2 rows +
       // blank = 7 lines, the electrical one 6 (1 row) ⇒ 228 − 13 = 215. The
       // merged '# Revision history' table keeps all three distinct rows.
+      // Re-baselined 2026-10-18 (Round 16): the embedded mechanical body's
+      // HW-recirculation line (see the mechanical pin above); substituting the
+      // old line back reproduces 0xdafbf026. Line count unchanged.
       expect(md.split('\n').length, 215);
-      expect(fnv1a32(md), 0xdafbf026);
+      expect(fnv1a32(md), 0x589708b9);
     });
   });
 

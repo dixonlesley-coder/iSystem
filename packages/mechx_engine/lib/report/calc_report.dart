@@ -542,7 +542,9 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
   if (hwr != null) {
     ws.writeln(strings.format(RptStringKey.wsHotWaterRecirc, {
       'lps': hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2),
-      'loop': hwr.loopHead.meters.toStringAsFixed(1),
+      // Round 16 — the loop LENGTH and the loop HEAD are separate figures.
+      'len': hwr.loopLength.meters.toStringAsFixed(1),
+      'head': hwr.loopHead.meters.toStringAsFixed(1),
       'kw': hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2),
       'c': hwr.returnTempC.toStringAsFixed(0),
     }));

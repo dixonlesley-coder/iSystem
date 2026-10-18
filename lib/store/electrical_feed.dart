@@ -41,6 +41,7 @@ const String kSupplyPumpLoadName = 'Supply / booster pump';
 const String kSupplyFanLoadName = 'Supply air fan';
 const String kFirePumpLoadName = 'Fire pump';
 const String kExhaustFanLoadName = 'Exhaust air fan';
+const String kHwRecircPumpLoadName = 'HW recirculation pump';
 
 /// Every circuit NAME the MEP auto-feed can itself mint: the placed-equipment
 /// path names a way after its [NodeComponent.label], the solved-duty path after
@@ -62,6 +63,7 @@ final Set<String> mepMintedCircuitNames = {
   kSupplyFanLoadName,
   kFirePumpLoadName,
   kExhaustFanLoadName,
+  kHwRecircPumpLoadName,
 };
 
 /// Which DRAWN plant node carries which SOLVED duty (audit r8 coupling-1/2).
@@ -83,11 +85,17 @@ class MepDutyBinding {
   final String? supplyFanNodeId;
   final String? exhaustFanNodeId;
 
+  /// Round 16 — pumps drawn on the HOT-WATER service (not fire, not the
+  /// cold-water supply): the recirculation pump(s), fed from the solved
+  /// recirculation duty.
+  final Set<String> hwRecircPumpNodeIds;
+
   const MepDutyBinding({
     this.firePumpNodeIds = const {},
     this.supplyPumpNodeId,
     this.supplyFanNodeId,
     this.exhaustFanNodeId,
+    this.hwRecircPumpNodeIds = const {},
   });
 }
 
@@ -107,6 +115,7 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
   final net = ref.watch(networkControllerProvider).network;
   final fire = <String>{};
   final supplyPumps = <String>[];
+  final hwPumps = <String>{};
   for (final n in net.nodes) {
     if (!_isPumpComponent(n.component)) continue;
     final svc = _servicesAt(net, n.id);
@@ -114,18 +123,23 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
       fire.add(n.id);
     } else if (svc.contains(kSupplyService)) {
       supplyPumps.add(n.id);
+    } else if (svc.contains(ServiceType.hotWater)) {
+      hwPumps.add(n.id);
     }
   }
   String? supplyPump;
   if (supplyPumps.isNotEmpty) {
-    // Round 15 — the inline booster the pump duty is sized on (the flow
-    // THROUGH it) carries that duty, so the way lands on the same machine.
+    // Round 16 — the node the PRIMARY series duty belongs to; else (Round 15)
+    // the inline booster, else the component root, else the first.
+    final primary = ref.watch(primarySupplyPumpNodeProvider);
     final booster = ref.watch(supplyBoosterProvider)?.nodeId;
     final roots = serviceComponentRoots(net, kSupplyService).values.toSet();
-    supplyPump = (booster != null && supplyPumps.contains(booster))
-        ? booster
-        : supplyPumps.firstWhere(roots.contains,
-            orElse: () => supplyPumps.first);
+    supplyPump = (primary != null && supplyPumps.contains(primary))
+        ? primary
+        : (booster != null && supplyPumps.contains(booster))
+            ? booster
+            : supplyPumps.firstWhere(roots.contains,
+                orElse: () => supplyPumps.first);
   }
   final units = ref.watch(airSystemRootNodesProvider);
   String? electricalLoad(String? id) {
@@ -139,6 +153,7 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     supplyPumpNodeId: supplyPump,
     supplyFanNodeId: electricalLoad(units.supply),
     exhaustFanNodeId: electricalLoad(units.exhaust),
+    hwRecircPumpNodeIds: hwPumps,
   );
 });
 
@@ -215,6 +230,21 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   }
   addSecondary(ref.watch(exhaustFanDutiesByRootProvider), roots.exhaust,
       'exhaust-fan', kExhaustFanLoadName, MepLoadSource.exhaustFan);
+
+  // Round 16 (plumbing-plant-recirc-pump-not-bound) — the solved HW
+  // recirculation duty is a way of its own when no pump is drawn on the
+  // hot-water loop (a drawn one carries it via [equipmentNodeDutiesProvider]).
+  final recirc = ref.watch(hotWaterRecircProvider);
+  if (bind.hwRecircPumpNodeIds.isEmpty &&
+      recirc != null &&
+      recirc.pump.selectedMotor.watts > 0) {
+    loads.add(MepEquipmentLoad.fromPumpDuty(
+      recirc.pump,
+      id: 'hw-recirc-pump',
+      name: kHwRecircPumpLoadName,
+      source: MepLoadSource.hotWaterRecircPump,
+    ));
+  }
 
   // The fire-pump way is sized on the SELECTED NFPA 20 motor frame (the same
   // kW the equipment schedule tells the contractor to buy — it must carry the
@@ -344,7 +374,15 @@ final equipmentNodeDutiesProvider =
         input: Power(p.selectedMotor.watts / defaultMotorEfficiency),
       );
     }
-    if (n.id == bind.supplyPumpNodeId) p = ref.watch(pumpDutyProvider);
+    // Round 16 — every drawn supply mover carries its OWN series / transfer
+    // duty; the primary binding keeps the legacy single duty as a fallback.
+    // (The primary node reads [pumpDutyProvider] — the same duty, by
+    // construction, as its map entry.)
+    p = (n.id == bind.supplyPumpNodeId ? ref.watch(pumpDutyProvider) : null) ??
+        ref.watch(supplyMoverDutiesProvider)[n.id];
+    if (bind.hwRecircPumpNodeIds.contains(n.id)) {
+      p = ref.watch(hotWaterRecircProvider)?.pump;
+    }
     // Round 11 (hvac-network-4) — ANY drawn air unit a system is rooted at
     // carries THAT system's duty (the primary one included), not only the
     // single primary unit.
@@ -434,12 +472,26 @@ final nodeFedLoadsProvider = Provider<Map<String, NodeFedLoad>>((ref) {
     // an AC's cooling ÷ COP are ALREADY electrical input power — pass them as
     // the input verbatim so A5 does not divide by motor efficiency a second
     // time. Only the component's `defaultMotorKw` is a SHAFT rating (÷ η).
-    final input = n.electricalLoadW ?? duty?.input.watts ?? acWatts;
+    //
+    // Round 16 (air-systems-2-ducted-ac-load-replaced-by-fan-duty) — a
+    // PACKAGED AC unit's fan is inside its rated input: once a ducted AC roots
+    // its own supply system it picks up a fan duty, which used to replace the
+    // compressor load (cooling ÷ COP) on its panel way (370 W fed for a
+    // 7.2 kW unit, while the schedule printed the 7.2 kW AC row). An AC in a
+    // scaled room is fed its room-PK input, or the solved fan input when that
+    // is (implausibly) larger.
+    final acGoverns = acWatts != null &&
+        (duty == null || acWatts >= duty.input.watts);
+    final input = n.electricalLoadW ??
+        (acGoverns ? acWatts : (duty?.input.watts ?? acWatts));
     final NodeLoadSource source;
     final double watts;
     if (n.electricalLoadW != null) {
       source = NodeLoadSource.explicit;
       watts = n.electricalLoadW!;
+    } else if (acGoverns) {
+      source = NodeLoadSource.roomPk;
+      watts = acWatts;
     } else if (duty != null) {
       source = NodeLoadSource.solvedDuty;
       watts = duty.motor.watts;
@@ -480,7 +532,11 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
       name: c.label,
       // A pump piped to a fire service is a FIRE pump (life-safety), never an
       // ordinary 1.5 kW supply pump (audit r8 coupling-1).
-      source: fire ? MepLoadSource.firePump : _sourceFor(c),
+      source: fire
+          ? MepLoadSource.firePump
+          : bind.hwRecircPumpNodeIds.contains(n.id)
+              ? MepLoadSource.hotWaterRecircPump
+              : _sourceFor(c),
       mechanicalPower: Power(f.watts),
       electricalInputPower: input == null ? null : Power(input),
       phases: _phasesFor(c),

@@ -22,7 +22,8 @@ import '../electrical/containment.dart'
     show ConduitSpec, conduitFillSingle, sizeConduit;
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart' show EarthingSystemInfo;
-import '../electrical/genset_backup.dart' show gensetBackupDemandVa;
+import '../electrical/genset_backup.dart'
+    show gensetBackupDemandVa, gensetBackupDemandW;
 import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
@@ -38,6 +39,7 @@ import '../electrical/sources.dart'
         GeneratorSource,
         sizeGenerator,
         sizeBattery;
+import '../electrical/supply_design.dart' show serviceTransformer;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart' show BreakerCurve, BreakerClass;
 import '../units.dart' show ApparentPower, Current, Power;
@@ -1409,16 +1411,31 @@ String _supplyHeadLabel(ElectricalProject project,
   );
 }
 
+/// Round 16 — the transformer figure for the drawings: [serviceTransformer]
+/// (`n x <kVA>` when the study needs several units).
+({double totalKva, String text})? _transformerFig(
+    ElectricalProject project, ApparentPower demandVa) {
+  final t = serviceTransformer(project, demandVa);
+  if (t == null) return null;
+  return (
+    totalKva: t.kva * t.units,
+    text: t.units > 1 ? '${t.units} x ${_num(t.kva)}' : _num(t.kva),
+  );
+}
+
 /// The GENSET figure for the drawings, sized in ONE place (Round 12,
 /// report-recompute-genset-prime-kva-mismatch): [sizeGenerator] — the same
 /// call the report's power one-line makes — so a PRIME-mode set carries its
 /// 1.25× continuous-duty uplift on every drawing too (the drawings used to
 /// snap the bare backup demand: 82 kVA drawn vs 100 kVA reported). A forced
 /// nameplate is printed verbatim.
+///
+/// Round 16 — sized on the backup kW as well ([backupW]): a set delivers
+/// only 0.8 × its kVA in kW, so a load above cos φ 0.8 is kW-limited.
 ({double totalKva, String text}) _gensetKva(
-    ApparentPower backupVa, GeneratorSource gen) {
+    ApparentPower backupVa, GeneratorSource gen, Power backupW) {
   if (gen.kva != null) return _ladderKva(backupVa, forced: gen.kva);
-  final r = sizeGenerator(backupVa, mode: gen.mode);
+  final r = sizeGenerator(backupVa, mode: gen.mode, backupPower: backupW);
   final unit = r.ratingKva.inKilovoltAmperes;
   return (
     totalKva: unit * r.units,
@@ -1426,10 +1443,20 @@ String _supplyHeadLabel(ElectricalProject project,
   );
 }
 
-String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
+///
+/// Round 16 — the coverage is the LESSER of the kVA ratio and the kW ratio
+/// (the set's kW rating = 0.8 × kVA against the demand W): a 100 kVA / 80 kW
+/// set does not back 100 % of a 90 kW load. [demandW] ≤ 0 ⇒ the kVA ratio
+/// alone (byte-identical).
+String? _gensetBackupPctLabel(
+    double genKva, ApparentPower demandVa, double demandW) {
   final demandKva = demandVa.inKilovoltAmperes;
   if (demandKva <= 0 || genKva <= 0) return null;
-  final pct = math.min(100.0, genKva / demandKva * 100).round();
+  var ratio = genKva / demandKva;
+  if (demandW > 0) {
+    ratio = math.min(ratio, genKva * kGeneratorPf / (demandW / 1000));
+  }
+  final pct = math.min(100.0, ratio * 100).round();
   return 'backs $pct% of load';
 }
 
@@ -1437,13 +1464,16 @@ String? _gensetBackupPctLabel(double genKva, ApparentPower demandVa) {
 /// honest critical load — the SAME `sizeBattery` basis the power one-line uses)
 /// and the chemistry/autonomy sub-line. Zero demand ⇒ headline stays 'BATTERY'
 /// (a bank size derived from nothing would be fabricated).
+///
+/// Round 16 — the critical load is the REAL demand W ([demandW]) when known
+/// (the same basis the power one-line now sizes on), not demandVa × 0.8.
 (String, String) _batteryNodeLabels(
-    ElectricalProject project, ApparentPower demandVa) {
+    ElectricalProject project, ApparentPower demandVa, double demandW) {
   final batt = project.sources!.battery!;
   var head = 'BATTERY';
   if (demandVa.voltAmperes > 0) {
     final sized = sizeBattery(
-      Power(demandVa.voltAmperes * kGeneratorPf),
+      Power(demandW > 0 ? demandW : demandVa.voltAmperes * kGeneratorPf),
       autonomyHours: batt.autonomyHours,
       chemistry: batt.chemistry,
     );
@@ -1498,12 +1528,10 @@ const double _sideNodeBottom = 14;
   final demandVa = result.supply.demandVa;
   final isMv = _isMvService(project);
 
-  // MV-chain transformer kVA: an EXPLICIT rating wins; else (dual-tx with no
-  // rating) the smallest standard rating covering the building demand VA
-  // (genset ladder, // VERIFY). Blank when neither is known.
-  final txFig = project.transformerKva != null
-      ? _ladderKva(project.transformerKva!, forced: project.transformerKva)
-      : (demandVa.inKilovoltAmperes > 0 ? _ladderKva(demandVa) : null);
+  // MV-chain transformer kVA — Round 16: the SAME [serviceTransformer] the
+  // study and the schedule use (declared rating, else the dual-tx study pick
+  // on the transformer ladder). Blank when neither is known.
+  final txFig = _transformerFig(project, demandVa);
   final txLabel = (txFig != null && txFig.totalKva > 0)
       ? 'TRANSFORMER ${txFig.text} kVA'
       : 'TRANSFORMER';
@@ -1575,7 +1603,7 @@ const double _sideNodeBottom = 14;
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
       final backupVa = gensetBackupDemandVa(project, result);
-      final genFig = _gensetKva(backupVa, gen);
+      final genFig = _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
       final genKva = genFig.totalKva;
       final gy = lvMidY - _ovH - 8;
       final gcy = gy + _ovH / 2;
@@ -1587,7 +1615,7 @@ const double _sideNodeBottom = 14;
       // What fraction of the building's diversified demand this set can carry —
       // the honest coverage figure (capped at 100%), printed only when a demand
       // exists to compare against.
-      final pct = _gensetBackupPctLabel(genKva, demandVa);
+      final pct = _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
       if (pct != null) {
         prims.add(SldLabel(sideX + 34, gcy + 24, pct,
             size: 7.5, role: SldRole.source));
@@ -1631,7 +1659,7 @@ const double _sideNodeBottom = 14;
       sideY += 54;
     }
     if (project.sources?.battery != null) {
-      final (head, sub) = _batteryNodeLabels(project, demandVa);
+      final (head, sub) = _batteryNodeLabels(project, demandVa, result.supply.demandW);
       _emitBattery(prims, sideX + 14, sideY, SldRole.source);
       prims.add(SldLabel(sideX + 34, sideY - 2, head,
           size: 8.5, bold: true, role: SldRole.source));
@@ -1667,7 +1695,7 @@ const double _sideNodeBottom = 14;
       if (project.sources?.generator != null) {
         final gen = project.sources!.generator!;
         final backupVa = gensetBackupDemandVa(project, result);
-        final genFig = _gensetKva(backupVa, gen);
+        final genFig = _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
         final genKva = genFig.totalKva;
         connectTo(13, 13);
         _emitGenerator(prims, dropX, cy, 13, SldRole.source);
@@ -1675,7 +1703,7 @@ const double _sideNodeBottom = 14;
             size: 8.5, bold: true, role: SldRole.source));
         prims.add(SldLabel(dropX + 20, cy + 12, gen.mode.label,
             size: 7.5, role: SldRole.source));
-        final pct = _gensetBackupPctLabel(genKva, demandVa);
+        final pct = _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
         if (pct != null) {
           prims.add(SldLabel(dropX + 20, cy + 24, pct,
               size: 7.5, role: SldRole.source));
@@ -1706,7 +1734,7 @@ const double _sideNodeBottom = 14;
         cy += 58;
       }
       if (project.sources?.battery != null) {
-        final (head, sub) = _batteryNodeLabels(project, demandVa);
+        final (head, sub) = _batteryNodeLabels(project, demandVa, result.supply.demandW);
         connectTo(13, 13);
         _emitBattery(prims, dropX, cy, SldRole.source);
         prims.add(SldLabel(dropX + 20, cy - 2, head,
@@ -1762,9 +1790,7 @@ const double _sideNodeBottom = 14;
   const role = SldRole.source;
   final demandVa = result.supply.demandVa;
   final isMv = _isMvService(project);
-  final txFig = project.transformerKva != null
-      ? _ladderKva(project.transformerKva!, forced: project.transformerKva)
-      : (demandVa.inKilovoltAmperes > 0 ? _ladderKva(demandVa) : null);
+  final txFig = _transformerFig(project, demandVa);
   final txLabel = (txFig != null && txFig.totalKva > 0)
       ? 'TRAFO ${txFig.text} kVA'
       : 'TRAFO';
@@ -1833,7 +1859,7 @@ const double _sideNodeBottom = 14;
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = gensetBackupDemandVa(project, result);
-    final genFig = _gensetKva(backupVa, gen);
+    final genFig = _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
     final genKva = genFig.totalKva;
     final gcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
@@ -1845,7 +1871,7 @@ const double _sideNodeBottom = 14;
         SldLabel(lvX - 104, gcy + 11, gen.mode.label, size: 7, role: role));
     // The honest coverage figure — this set against the building's diversified
     // demand, capped at 100%; printed only when a demand exists.
-    final pct = _gensetBackupPctLabel(genKva, demandVa);
+    final pct = _gensetBackupPctLabel(genKva, demandVa, result.supply.demandW);
     if (pct != null) {
       prims.add(SldLabel(lvX - 104, gcy + 23, pct, size: 7, role: role));
     }
@@ -1876,7 +1902,7 @@ const double _sideNodeBottom = 14;
     nextCy += 58;
   }
   if (project.sources?.battery != null) {
-    final (head, sub) = _batteryNodeLabels(project, demandVa);
+    final (head, sub) = _batteryNodeLabels(project, demandVa, result.supply.demandW);
     final bcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, bcy - 13,
         weight: SldWeight.medium, role: role));

@@ -147,13 +147,46 @@ typedef UpfeedOverPressure = ({
 List<UpfeedOverPressure> upfeedOverPressure(
   PressureSolution solution, {
   StandardsProfile profile = const SniProfile(),
+}) =>
+    _deliveryOverPressure(
+      deliveryNodeIds: solution.deliveryNodeIds,
+      residual: solution.residualPressure,
+      noFlow: solution.noFlowStaticPressure,
+      profile: profile,
+    );
+
+/// Round 16 (plumbing-plant-downfeed-prv-unmodelled) — the SAME judge-only
+/// fixture over-pressure check on a gravity DOWNFEED solve: a 20-storey roof
+/// tank with no PRV drawn delivers ~600 kPa to the ground floor (over the
+/// 392 kPa fixture maximum AND the 490 kPa relief trigger) and Review used to
+/// stay silent, because the PRV zone table assumes a PRV at every zone top
+/// whether one is drawn or not. Drawn PRVs now hold their setpoint in
+/// [solveDownfeed], so a correctly zoned riser passes here and an unzoned one
+/// does not.
+List<UpfeedOverPressure> downfeedOverPressure(
+  DownfeedSolution solution, {
+  StandardsProfile profile = const SniProfile(),
+}) =>
+    _deliveryOverPressure(
+      deliveryNodeIds: solution.deliveryNodeIds,
+      residual: solution.residualPressure,
+      noFlow: solution.noFlowStaticPressure,
+      profile: profile,
+    );
+
+List<UpfeedOverPressure> _deliveryOverPressure({
+  required Set<String> deliveryNodeIds,
+  required Map<String, Pressure> residual,
+  required Map<String, Pressure> noFlow,
+  required StandardsProfile profile,
 }) {
   final maxFix = profile.maxFixtureStaticPressure.value.pascals;
   final relief = profile.mandatoryPressureReliefThreshold.value.pascals;
+  final noFlowMap = noFlow;
   final out = <UpfeedOverPressure>[];
-  for (final id in solution.deliveryNodeIds) {
-    final flowing = solution.residualPressure[id];
-    final noFlow = solution.noFlowStaticPressure[id];
+  for (final id in deliveryNodeIds) {
+    final flowing = residual[id];
+    final noFlow = noFlowMap[id];
     if (flowing == null || noFlow == null) continue;
     if (flowing.pascals <= maxFix && noFlow.pascals <= maxFix) continue;
     out.add((
@@ -381,12 +414,23 @@ class DownfeedSolution {
   /// downfeed residual is a real check.
   final bool targetHeldByDesign;
 
+  /// Round 16 — the NO-FLOW static at each reachable node (tank head less
+  /// elevation, held at a drawn PRV's setpoint below it). Empty for a legacy
+  /// construction.
+  final Map<String, Pressure> noFlowStaticPressure;
+
+  /// Round 16 — the DELIVERY nodes (fixtures, else open leaves) a fixture
+  /// pressure check judges.
+  final Set<String> deliveryNodeIds;
+
   const DownfeedSolution({
     required this.residualPressure,
     required this.criticalNodeId,
     required this.minResidual,
     required this.boosterHeadRequired,
     this.targetHeldByDesign = false,
+    this.noFlowStaticPressure = const {},
+    this.deliveryNodeIds = const {},
   });
 
   /// True when gravity alone meets the target residual everywhere.
@@ -408,6 +452,17 @@ class DownfeedSolution {
 /// Shares the tree/`// VERIFY`/missing-data semantics of [solvePressurized]:
 /// the [service] subgraph is treated as a tree rooted at the tank; unsized or
 /// unflowed edges add zero friction.
+///
+/// Round 16 (plumbing-plant-downfeed-prv-unmodelled) — a drawn PRV
+/// ([NodeComponent.prv]) REDUCES pressure: where the head arriving at it
+/// exceeds its setpoint ([prvSetpoint], default the target residual), every
+/// node downstream of it is lowered by the excess, so the PRV outlet holds
+/// the setpoint and each node below gains only `ρg·drop − friction` from
+/// there (the no-flow static likewise). A PRV whose inlet is already below
+/// its setpoint passes the flow through (its minor loss only). PRVs in series
+/// are applied tank-outward. It used to be only a minor-loss K: the heatmap
+/// and residuals ignored it and the ground floor of a 20-storey downfeed read
+/// 601 kPa with or without a PRV drawn.
 DownfeedSolution solveDownfeed({
   required Network net,
   required ServiceType service,
@@ -420,10 +475,12 @@ DownfeedSolution solveDownfeed({
   Head tankStaticHead = const Head(0),
   PipeMaterial material = PipeMaterial.pvc,
   MountingHeights mounting = const MountingHeights(),
+  Pressure? prvSetpoint,
 }) {
   const profile = SniProfile();
   final hwC = profile.hazenWilliamsC(material);
   final targetHead = headFromPressure(targetResidual);
+  final setpointHead = headFromPressure(prvSetpoint ?? targetResidual).meters;
 
   final tank = net.nodeById(tankId);
   final tankElevation = tank == null
@@ -482,16 +539,68 @@ DownfeedSolution solveDownfeed({
   // residual(node) = tankStaticHead + (tankElev − nodeElev) − friction, as head.
   // The critical node is the least-served DELIVERY node (water-drainage-5).
   final delivery = _deliveryNodes(net, friction.keys, tankId, adjacency);
-  final residualPressure = <String, Pressure>{};
-  var minResidualHead = double.infinity;
-  String? criticalNodeId;
+  final flowingHead = <String, double>{};
+  final staticHead = <String, double>{};
   friction.forEach((nodeId, f) {
     final n = net.nodeById(nodeId);
     final nElev =
         n == null ? tankElevation : nodeElevation(n, building, mounting);
-    final residualHead =
-        tankStaticHead.meters + (tankElevation.meters - nElev.meters) - f;
+    final gravity = tankStaticHead.meters + (tankElevation.meters - nElev.meters);
+    flowingHead[nodeId] = gravity - f;
+    staticHead[nodeId] = gravity;
+  });
+
+  // Round 16 — drawn PRVs hold their setpoint downstream. The subtree below
+  // each PRV follows the tank-rooted BFS tree (the same tree the friction
+  // walk treats the service as); PRVs are applied tank-outward so a series
+  // pair reduces in turn.
+  final prvs = [
+    for (final id in friction.keys)
+      if (id != tankId && net.nodeById(id)?.component == NodeComponent.prv) id,
+  ];
+  if (prvs.isNotEmpty) {
+    final parent = <String, String>{};
+    final hop = <String, int>{tankId: 0};
+    final queue = [tankId];
+    for (var i = 0; i < queue.length; i++) {
+      final n = queue[i];
+      for (final l in adjacency[n] ?? const <({NetEdge edge, String other})>[]) {
+        if (hop.containsKey(l.other)) continue;
+        hop[l.other] = hop[n]! + 1;
+        parent[l.other] = n;
+        queue.add(l.other);
+      }
+    }
+    final children = <String, List<String>>{};
+    parent.forEach((c, p) => (children[p] ??= []).add(c));
+    prvs.sort((a, b) {
+      final c = (hop[a] ?? 0).compareTo(hop[b] ?? 0);
+      return c != 0 ? c : a.compareTo(b);
+    });
+    for (final r in prvs) {
+      final inFlow = flowingHead[r];
+      if (inFlow == null) continue;
+      final dFlow = inFlow - setpointHead;
+      final dStatic = (staticHead[r] ?? inFlow) - setpointHead;
+      if (dFlow <= 0 && dStatic <= 0) continue;
+      final stack = [r];
+      while (stack.isNotEmpty) {
+        final n = stack.removeLast();
+        if (dFlow > 0) flowingHead[n] = flowingHead[n]! - dFlow;
+        if (dStatic > 0) staticHead[n] = staticHead[n]! - dStatic;
+        stack.addAll(children[n] ?? const <String>[]);
+      }
+    }
+  }
+
+  final residualPressure = <String, Pressure>{};
+  final noFlowStatic = <String, Pressure>{};
+  var minResidualHead = double.infinity;
+  String? criticalNodeId;
+  friction.forEach((nodeId, _) {
+    final residualHead = flowingHead[nodeId]!;
     residualPressure[nodeId] = pressureFromHead(Head(residualHead));
+    noFlowStatic[nodeId] = pressureFromHead(Head(staticHead[nodeId]!));
     if (nodeId != tankId &&
         delivery.contains(nodeId) &&
         residualHead < minResidualHead) {
@@ -511,5 +620,7 @@ DownfeedSolution solveDownfeed({
     criticalNodeId: criticalNodeId!,
     minResidual: pressureFromHead(Head(minResidualHead)),
     boosterHeadRequired: Head(deficit > 0 ? deficit : 0),
+    noFlowStaticPressure: noFlowStatic,
+    deliveryNodeIds: delivery.difference({tankId}),
   );
 }

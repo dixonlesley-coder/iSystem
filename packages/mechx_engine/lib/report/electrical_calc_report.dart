@@ -152,6 +152,10 @@ enum FaultLevelBasis {
 
   /// The flat 16 kA fallback (nothing declared).
   defaultValue,
+
+  /// Round 16 — nothing declared, but the demand needs an MV service: the
+  /// fault of the transformer the supply study selects for it.
+  supplyStudyEstimate,
 }
 
 /// The electrical **Design Basis / Inputs & Assumptions** register as a
@@ -196,6 +200,8 @@ RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
                 strings(RptStringKey.edbFaultBasisEstimate),
               FaultLevelBasis.defaultValue =>
                 strings(RptStringKey.edbFaultBasisDefault),
+              FaultLevelBasis.supplyStudyEstimate =>
+                strings(RptStringKey.edbFaultBasisSupplyStudy),
             }
       ),
     if (data.originFaultLevelA == null && data.busbarClearingTimeS != null)

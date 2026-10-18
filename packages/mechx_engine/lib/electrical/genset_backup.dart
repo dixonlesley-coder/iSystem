@@ -5,7 +5,7 @@
 /// size the genset on the SAME basis as the power one-line.
 library;
 
-import '../units.dart' show ApparentPower;
+import '../units.dart' show ApparentPower, Power;
 import 'model.dart';
 import 'panel_results.dart';
 
@@ -116,4 +116,34 @@ List<ElectricalWarning> gensetBackupWarnings(
           'shed essential load.',
     ),
   ];
+}
+
+/// Round 16 (supply-sources-genset-kw-limit-ignored) — the REAL power (W) the
+/// genset must back, on the same basis as [gensetBackupDemandVa]:
+/// `max(backupFraction × the building demand W, the essential sub-tree's
+/// demand W)`. A genset's engine is rated kW = pf_rated (0.8) × kVA, so a load
+/// above cos φ 0.8 is kW-limited, not kVA-limited — sizing on the kVA alone
+/// selected a 100 kVA / 80 kW set for a 90 kW load. No generator ⇒ the plain
+/// building demand W.
+Power gensetBackupDemandW(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final gen = project.sources?.generator;
+  final demandW = sys.supply.demandW;
+  if (gen == null) return Power(demandW);
+  final fractionW = demandW * gen.backupFraction;
+  final backed = gensetBackedPanelIds(project);
+  final parentOf = <String, String>{};
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final fed = c.feedsPanelId;
+      if (fed != null && fed.isNotEmpty) parentOf[fed] = p.id;
+    }
+  }
+  var essentialW = 0.0;
+  for (final id in backed) {
+    final parent = parentOf[id];
+    if (parent != null && backed.contains(parent)) continue;
+    essentialW += sys.panels[id]?.demandW ?? 0;
+  }
+  return Power(essentialW > fractionW ? essentialW : fractionW);
 }

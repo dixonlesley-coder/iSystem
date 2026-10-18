@@ -111,10 +111,27 @@ bool _componentHasRoofTank(Network net, NetEdge edge) {
 /// When two rules could fire prefer TRANSFER; if STILL ambiguous return null.
 // VERIFY heuristic — appends a function suffix only when confidently derivable;
 // ambiguous => null (no suffix). Drawing-convention inference, not an SNI clause.
+///
+/// Round 16 (regression-riser-function-transfer-scheme-mislabelled) — when
+/// the solve's recorded flow direction is supplied ([flowFrom]: edge id -> the
+/// node its flow comes FROM, i.e. `EdgeSizing.flowFromId`) and covers [edge],
+/// the function is read from the FLOW PATH instead of the two endpoints
+/// ([_flowFunction]): walking upstream to the first plant item, an edge fed
+/// through a pump / booster set is TRANSFER when a storage tank lies
+/// downstream of it (the tank-filling lift, its tank INLET included) and
+/// BOOSTER otherwise; an edge fed by a roof tank with no mover between is
+/// GRAVITASI (the down-risers included, whatever pump the service also has);
+/// fed from a ground tank (the suction) or from nothing known => null. The
+/// endpoint heuristic below stays the fallback for an edge the solve did not
+/// orient.
 RiserFunction? riserFunctionFor(Network net, NetEdge edge,
-    {required bool downfeed}) {
+    {required bool downfeed, Map<String, String>? flowFrom}) {
   // Only piped (non-air) services carry a function suffix.
   if (edge.service.regime == FlowRegime.air) return null;
+  final up = flowFrom?[edge.id];
+  if (up != null && (up == edge.fromId || up == edge.toId)) {
+    return _flowFunction(net, edge, up, flowFrom!);
+  }
 
   final from = net.nodeById(edge.fromId);
   final to = net.nodeById(edge.toId);
@@ -197,6 +214,67 @@ RiserFunction? riserFunctionFor(Network net, NetEdge edge,
 
   // Ambiguous — append nothing.
   return null;
+}
+
+/// The flow-path FUNCTION of [edge] whose flow comes from [up] (Round 16).
+/// See [riserFunctionFor]. Pure; guarded against cycles.
+// VERIFY drawing-convention inference, not an SNI clause.
+RiserFunction? _flowFunction(
+    Network net, NetEdge edge, String up, Map<String, String> flowFrom) {
+  final service = edge.service;
+  final down = up == edge.fromId ? edge.toId : edge.fromId;
+  String other(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
+  bool flowsInto(NetEdge e, String node) {
+    final f = flowFrom[e.id];
+    return f != null && f != node && (e.fromId == node || e.toId == node);
+  }
+
+  // First plant item upstream (against the flow), starting at [up].
+  NodeComponent? first;
+  var node = up;
+  var via = edge.id;
+  final seen = <String>{};
+  while (seen.add(node)) {
+    final c = net.nodeById(node)?.component;
+    if (_isPumpish(c) ||
+        c == NodeComponent.roofTank ||
+        c == NodeComponent.groundTank) {
+      first = c;
+      break;
+    }
+    NetEdge? inE;
+    for (final e in net.edgesAt(node)) {
+      if (e.service != service || e.id == via) continue;
+      if (flowsInto(e, node)) {
+        inE = e;
+        break;
+      }
+    }
+    if (inE == null) break;
+    via = inE.id;
+    node = other(inE, node);
+  }
+  if (first == null || first == NodeComponent.groundTank) return null;
+  if (first == NodeComponent.roofTank) return RiserFunction.gravitasi;
+
+  // Fed through a mover: TRANSFER when a storage tank lies downstream.
+  bool isStorage(String id) {
+    final c = net.nodeById(id)?.component;
+    return c == NodeComponent.roofTank || c == NodeComponent.groundTank;
+  }
+
+  final stack = [down];
+  final reached = <String>{down};
+  while (stack.isNotEmpty) {
+    final n = stack.removeLast();
+    if (isStorage(n)) return RiserFunction.transfer;
+    for (final e in net.edgesAt(n)) {
+      if (e.service != service || flowFrom[e.id] != n) continue;
+      final m = other(e, n);
+      if (reached.add(m)) stack.add(m);
+    }
+  }
+  return RiserFunction.booster;
 }
 
 /// Deterministic per-service riser TAG for every riser edge: service code + `R`

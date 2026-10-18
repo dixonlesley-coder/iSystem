@@ -957,6 +957,10 @@ bool _isTerminalAirUnit(NodeComponent? comp) => switch (comp) {
       _ => false,
     };
 
+/// Public view of [_isTerminalAirUnit] (Round 16) — the app's air-system
+/// unit choice excludes the same delivery units the sizer never roots at.
+bool isTerminalAirUnit(NodeComponent? comp) => _isTerminalAirUnit(comp);
+
 /// The source ROOT of every connected component of [service], keyed by each
 /// member node id → its component's root — the exact root [autoSizeNetwork]
 /// accumulates from (same component traversal, same [_pickComponentRoot]
@@ -1421,7 +1425,32 @@ Map<String, EdgeSizing> autoSizeNetwork(
           }
         }
       }
-      loadFreeSet = {...outfalls, ...fillLeaves};
+      // Round 16 (air-systems-2-ahu-intake-leaf-phantom-supply) — on an AIR
+      // service rooted at an air-unit PLANT (AHU, fan, ducted unit), a BARE
+      // leaf whose single duct joins the unit itself is its fresh-air INTAKE
+      // (or, on an extract system, its discharge to outside) — an open
+      // boundary, not a terminal. It used to bear the flat per-terminal
+      // default (0.05 m³/s) pointing OUT of the unit: +8 % on the fan
+      // airflow, a phantom 50 L/s on the supply balance and a Ø125 intake in
+      // the BOM. It now bears no load, and its duct is sized on the airflow
+      // the unit delivers, oriented toward the unit (a 100 % outdoor-air
+      // basis — `// VERIFY` conservative for a mixed-air AHU, whose outdoor
+      // air is a fraction of the supply).
+      final airIntakeEdges = <String, String>{}; // edge id -> leaf id
+      if (regime == FlowRegime.air && roleOf(root) == NodeRole.plant) {
+        for (final l in adjacency[root] ?? const <({String edgeId, String other})>[]) {
+          final leaf = l.other;
+          final ln = net.nodeById(leaf);
+          if (degree(leaf) == 1 &&
+              ln != null &&
+              ln.component == null &&
+              ln.role == NodeRole.main &&
+              !explicitDemandKeys.contains(leaf)) {
+            airIntakeEdges[l.edgeId] = leaf;
+          }
+        }
+      }
+      loadFreeSet = {...outfalls, ...fillLeaves, ...airIntakeEdges.values};
 
       // ── Looped (ring/grid) PRESSURIZED or AIR component → Hardy–Cross ───────
       // A tree has (nodes − 1) edges; more means parallel paths whose flow split
@@ -1917,6 +1946,20 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // Supply/air flows AWAY from the source root → comes FROM the root-side
         // (parent) endpoint.
         edgeFlowFrom.addAll(edgeParents);
+        // Round 16 — the unit's intake carries what the unit delivers (the
+        // sum over its other ducts), flowing FROM the open leaf INTO it.
+        if (airIntakeEdges.isNotEmpty) {
+          var delivered = 0.0;
+          for (final l in adjacency[root]!) {
+            if (airIntakeEdges.containsKey(l.edgeId)) continue;
+            delivered += allFlows[l.edgeId]?.cubicMetersPerSecond ?? 0.0;
+          }
+          for (final en in airIntakeEdges.entries) {
+            allFlows[en.key] = FlowRate(delivered);
+            edgeFlowFrom[en.key] = en.value;
+            closingEdgeIds.remove(en.key);
+          }
+        }
       }
 
       // Round 13 — duty/standby parallel legs: every standby leg carries the
@@ -2419,26 +2462,26 @@ _CheckValvePlan _classifyLoopCheckValves({
   final cvs = <_Cv>[];
   for (final id in cycleValves) {
     final es = adj[id]!;
-    final ins = es.where((e) => e.toId == id).toList();
-    final outs = es.where((e) => e.fromId == id).toList();
-    if (ins.length == 1 && outs.length == 1) {
-      cvs.add((
-        id: id,
-        inE: ins.first,
-        outE: outs.first,
-        upNode: other(ins.first, id),
-        downNode: other(outs.first, id),
-      ));
-      continue;
-    }
-    // Ambiguous drawing — orient topologically.
+    // Round 16 (regression-cv-reversed-drawing-halves-dutystandby-legs) —
+    // the TOPOLOGY decides first for EVERY cycle valve: with all cycle valves
+    // cut, the side still reachable from the root is the inlet. The drawn
+    // direction is consulted only when topology cannot decide (both sides
+    // reachable — a return valve closing a ring — or neither), then an
+    // adjacent mover. A duty/standby leg drawn header -> valve -> pump used
+    // to be read verbatim as flowing backwards and fall to Hardy–Cross (each
+    // leg, and the pump duty, on half the set flow).
     final a = other(es[0], id), b = other(es[1], id);
     final ra = dist.containsKey(a), rb = dist.containsKey(b);
     int? inlet; // index into es
     if (ra != rb) {
       inlet = ra ? 0 : 1;
-    } else if (isMover != null && isMover(a) != isMover(b)) {
-      inlet = isMover(a) ? 0 : 1;
+    } else {
+      final ins = [for (var i = 0; i < 2; i++) if (es[i].toId == id) i];
+      if (ins.length == 1) {
+        inlet = ins.first;
+      } else if (isMover != null && isMover(a) != isMover(b)) {
+        inlet = isMover(a) ? 0 : 1;
+      }
     }
     if (inlet == null) return none; // undecidable => Hardy–Cross
     final inE = es[inlet], outE = es[1 - inlet];
