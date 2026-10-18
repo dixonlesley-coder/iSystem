@@ -965,6 +965,9 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
       ? await buildPlanUnderlay(sheet)
       : null;
   final net = ref.read(networkControllerProvider).network;
+  final chrome = issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex);
+  final metersPerPixel = project.calibrationFor(sheet.id)?.metersPerPixel;
+  final grid = buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id);
   final dxf = networkToDxf(
     net: net,
     sizing: ref.read(sizingProvider),
@@ -972,10 +975,26 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     floorIndex: floorIndex,
     // The same §10 lengths the plan PDF prints, so the DXF labels match it.
     edgeLengths: projectEdgeLengths(net, project),
-    chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: floorIndex),
+    chrome: chrome,
     // A2: the sheet calibration lets the DXF emit true-scale mm world units
     // (HEADER/$INSUNITS + named layers); null keeps the legacy pixel DXF.
-    metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+    metersPerPixel: metersPerPixel,
+    // R6: plotted exactly like the sheet's plan PDF (its `1 : N` + frame
+    // limits), so the shared annotation layout makes the PDF's label choices.
+    sheetPlot: planSheetPlot(
+      net: net,
+      sheetId: sheet.id,
+      floorIndex: floorIndex,
+      projectName: project.name,
+      sheetName: sheet.name,
+      dateString: DateTime.now().toIso8601String().split('T').first,
+      chrome: chrome,
+      metersPerPixel: metersPerPixel,
+      underlay: sheet.dxfPath != null
+          ? planUnderlay
+          : await buildPlanUnderlay(sheet),
+      grid: grid,
+    ),
     underlay: planUnderlay is VectorPlanUnderlay ? planUnderlay : null,
     // N5: the §10 centreline-height token folded into each run's size label.
     edgeElevationLabels: planEdgeElevationLabels(
@@ -987,7 +1006,7 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     // plan DXF traces to the same element the riser + BOM + report carry.
     edgeTags: elementTags(net),
     // N4/B12: the setting-out grid from axis-aligned traced reference lines.
-    grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+    grid: grid,
     // G1: the stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
     // glyph, and G5: the laid gravity fall (1:N) folded into gravity-run size
     // labels — the same tokens the on-canvas plan shows, now on the issued DXF.
@@ -1578,6 +1597,20 @@ Future<bool> writeSubmittalPackageToDir(WidgetRef ref, String dir) async {
           grid: grid,
           nodeTags: nodeTags,
           gravitySlope: gravitySlope,
+          // R6: plotted exactly like the PDF beside it, so both carry the
+          // same label splits + slots.
+          sheetPlot: planSheetPlot(
+            net: net,
+            sheetId: sheet.id,
+            floorIndex: floorIndex,
+            projectName: base,
+            sheetName: sheet.name,
+            dateString: today,
+            chrome: planChrome,
+            metersPerPixel: metersPerPixel,
+            underlay: underlay,
+            grid: grid,
+          ),
         ),
       );
       // H1: the electrical installation layout (denah instalasi listrik) for

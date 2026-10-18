@@ -681,6 +681,18 @@ enum StringKey {
   issueMultiSheetFloorMessage, // {count} {floor} {names}
   issueNetworkIslandMessage, // {service} {nodes} = pluralCount(n,'node','nodes')
   issueNetworkNoSourceMessage, // {service} {nodes}
+  // R6: the human service name a design-issue message prints (in-sentence,
+  // lower case) instead of the ServiceType enum identifier.
+  issueServiceColdWater,
+  issueServiceHotWater,
+  issueServiceDrainage,
+  issueServiceVent,
+  issueServiceRainwater,
+  issueServiceSupplyAir,
+  issueServiceReturnAir,
+  issueServiceExhaust,
+  issueServiceSprinkler,
+  issueServiceHydrant,
   issueDrainageCleanoutMessage,
   issueLegionellaMessage, // {temp}
 
@@ -1902,13 +1914,23 @@ const Map<StringKey, String> _en = {
           'so the extras are stacked there (often an import that ran past the '
           'floor count). Re-map the extra sheets or add floors.',
   StringKey.issueNetworkIslandMessage:
-      'A {service} branch with {nodes} is disconnected from its fed '
+      'The {service} branch with {nodes} is disconnected from its fed '
           'network — it is rooted heuristically and sized as if supplied. '
           'Connect it to the source, or add a plant.',
   StringKey.issueNetworkNoSourceMessage:
-      'A {service} component with {nodes} has no plant/source — it is '
+      'The {service} component with {nodes} has no plant/source — it is '
           'being rooted heuristically and sized as if supplied. Add a pump / '
           'tank / AHU source.',
+  StringKey.issueServiceColdWater: 'cold water',
+  StringKey.issueServiceHotWater: 'hot water',
+  StringKey.issueServiceDrainage: 'drainage',
+  StringKey.issueServiceVent: 'vent',
+  StringKey.issueServiceRainwater: 'rainwater',
+  StringKey.issueServiceSupplyAir: 'supply air',
+  StringKey.issueServiceReturnAir: 'return air',
+  StringKey.issueServiceExhaust: 'exhaust air',
+  StringKey.issueServiceSprinkler: 'fire sprinkler',
+  StringKey.issueServiceHydrant: 'fire hydrant',
   StringKey.issueDrainageCleanoutMessage:
       'A drainage stack reaches its lowest drawn point here with no '
           'cleanout component at or beside the base — rodding access is '
@@ -3110,6 +3132,16 @@ const Map<StringKey, String> _id = {
       'Komponen {service} dengan {nodes} tidak memiliki plant/sumber — ia '
           'diakar secara heuristik dan diukur seolah-olah dipasok. Tambahkan '
           'sumber pompa / tangki / AHU.',
+  StringKey.issueServiceColdWater: 'air dingin',
+  StringKey.issueServiceHotWater: 'air panas',
+  StringKey.issueServiceDrainage: 'drainase',
+  StringKey.issueServiceVent: 'vent',
+  StringKey.issueServiceRainwater: 'air hujan',
+  StringKey.issueServiceSupplyAir: 'udara suplai',
+  StringKey.issueServiceReturnAir: 'udara balik',
+  StringKey.issueServiceExhaust: 'udara buang',
+  StringKey.issueServiceSprinkler: 'sprinkler',
+  StringKey.issueServiceHydrant: 'hidran',
   StringKey.issueDrainageCleanoutMessage:
       'Sebuah tegak drainase mencapai titik gambar terendahnya di sini tanpa '
           'komponen cleanout di atau di samping dasarnya — akses rodding lazim '

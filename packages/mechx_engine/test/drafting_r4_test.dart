@@ -81,9 +81,13 @@ void main() {
       expect(a3PlottedScaleDenominatorFor(1e7, 1e7), isNull); // > 1:1000
     });
 
-    test('plan DXF text is 2.5 mm on paper at the A3 plotted scale', () {
-      // The 4.4 m extent plots at 1:20 on A3 ⇒ 2.5 mm x 20 = 50 mm model
-      // height (was span / 80 = 55 mm, an arbitrary 2.75 mm on paper).
+    test('plan DXF text is >= 2.5 mm on paper at the A3 plotted scale', () {
+      // The 4.4 m extent plots at 1:20 on A3. R6: the run tag is the plan
+      // PDF's 9 pt on paper (9 x 25.4 / 72 = 3.175 mm, above the 2.5 mm ISO
+      // minimum) so both formats share one text-to-geometry ratio ⇒
+      // 3.175 mm x 20 = 63.5 mm model height (was span / 80 = 55 mm, an
+      // arbitrary 2.75 mm on paper; then 2.5 x 20 = 50 mm, smaller than the
+      // PDF's tag).
       final dxf = networkToDxf(
         net: _net,
         sizing: {'run': _dn('run', 32)},
@@ -91,7 +95,8 @@ void main() {
         floorIndex: 0,
         metersPerPixel: 0.02,
       );
-      expect(dxf, contains('\n40\n50.0\n'));
+      expect(dxf, contains('\n40\n63.5\n'));
+      expect(63.5 / 20, greaterThanOrEqualTo(kMinPlotTextMm));
       expect(dxf, isNot(contains('\n40\n55.0\n')));
     });
   });
