@@ -257,7 +257,10 @@ Future<void> exportElectricalRiserPdf(WidgetRef ref) => runExportGuarded(
         final result = ref.read(electricalResultProvider);
         final building = ref.read(projectControllerProvider).building;
         final sheet = buildElectricalRiser(
-            project: project, result: result, building: building);
+            project: project,
+            result: result,
+            building: building,
+            sourceChain: true);
         final bytes = electricalSldToPdf(
           sheet: sheet,
           title: 'iSystem electrical building riser',
@@ -287,7 +290,10 @@ Future<void> exportElectricalRiserDxf(WidgetRef ref) => runExportGuarded(
         final result = ref.read(electricalResultProvider);
         final building = ref.read(projectControllerProvider).building;
         final sheet = buildElectricalRiser(
-            project: project, result: result, building: building);
+            project: project,
+            result: result,
+            building: building,
+            sourceChain: true);
         final dxf = electricalSldToDxf(
             sheet: sheet,
             diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),

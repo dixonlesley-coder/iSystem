@@ -8,6 +8,7 @@ library;
 import '../units.dart' show ApparentPower, Power;
 import 'model.dart';
 import 'panel_results.dart';
+import 'sources.dart' show kGeneratorPf;
 
 /// The ESSENTIAL (genset-backed) panel ids (Round 11): a panel flagged
 /// [ElectricalPanel.essential], or named EMERGENCY / ESSENTIAL / DARURAT, plus
@@ -96,25 +97,43 @@ ApparentPower gensetBackupDemandVa(
 /// JUDGE-ONLY: a FORCED genset nameplate (`gen.kva`) below the essential
 /// sub-tree's demand cannot carry the boards it is designated to back. Never
 /// resizes — the engineer's nameplate stands.
+///
+/// Two independent limits (Round 17, regression-forced-genset-kw-limit-
+/// unjudged): the alternator's kVA against the essential VA
+/// (`genset-below-essential-demand`), and the ENGINE's kW = [kGeneratorPf] ×
+/// kVA against the essential W (`genset-below-essential-power`) — a
+/// 100 kVA / 80 kW set passes the VA test against a 94.7 kVA / 90 kW board
+/// (cos φ 0.95) yet overloads its engine by 10 kW.
 List<ElectricalWarning> gensetBackupWarnings(
     ElectricalProject project, ElectricalSystemResult sys) {
   final gen = project.sources?.generator;
   final forced = gen?.kva;
   if (gen == null || forced == null) return const [];
   final essentialVa = essentialDemandVa(project, sys);
-  if (essentialVa <= 0 || forced.voltAmperes + 1e-6 >= essentialVa) {
-    return const [];
-  }
+  final essentialW = essentialDemandW(project, sys);
+  final deliveredW = forced.voltAmperes * kGeneratorPf;
   String kva(double va) => (va / 1000).toStringAsFixed(1);
   return [
-    ElectricalWarning(
-      code: 'genset-below-essential-demand',
-      severity: WarningSeverity.warning,
-      message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate is '
-          'below the ${kva(essentialVa)} kVA demand of the essential '
-          '(genset-backed) boards it must carry — raise the genset rating or '
-          'shed essential load.',
-    ),
+    if (essentialVa > 0 && forced.voltAmperes + 1e-6 < essentialVa)
+      ElectricalWarning(
+        code: 'genset-below-essential-demand',
+        severity: WarningSeverity.warning,
+        message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate is '
+            'below the ${kva(essentialVa)} kVA demand of the essential '
+            '(genset-backed) boards it must carry — raise the genset rating or '
+            'shed essential load.',
+      ),
+    if (essentialW > 0 && deliveredW + 1e-6 < essentialW)
+      ElectricalWarning(
+        code: 'genset-below-essential-power',
+        severity: WarningSeverity.warning,
+        message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate '
+            'delivers ${kva(deliveredW)} kW (at the rated pf '
+            '${kGeneratorPf.toStringAsFixed(1)}), below the ${kva(essentialW)} '
+            'kW real-power demand of the essential (genset-backed) boards — the '
+            'engine is overloaded; raise the genset rating or shed essential '
+            'load.',
+      ),
   ];
 }
 
@@ -131,7 +150,18 @@ Power gensetBackupDemandW(
   final demandW = sys.supply.demandW;
   if (gen == null) return Power(demandW);
   final fractionW = demandW * gen.backupFraction;
+  final essentialW = essentialDemandW(project, sys);
+  return Power(essentialW > fractionW ? essentialW : fractionW);
+}
+
+/// The diversified REAL-power demand (W) of the ESSENTIAL sub-tree(s) — the
+/// demand W of each topmost genset-backed board (its demand already
+/// aggregates every board it feeds). 0 when nothing is essential. The kW twin
+/// of [essentialDemandVa], shared by [gensetBackupDemandW] and the forced-
+/// nameplate judge in [gensetBackupWarnings].
+double essentialDemandW(ElectricalProject project, ElectricalSystemResult sys) {
   final backed = gensetBackedPanelIds(project);
+  if (backed.isEmpty) return 0;
   final parentOf = <String, String>{};
   for (final p in project.panels) {
     for (final c in p.circuits) {
@@ -145,5 +175,5 @@ Power gensetBackupDemandW(
     if (parent != null && backed.contains(parent)) continue;
     essentialW += sys.panels[id]?.demandW ?? 0;
   }
-  return Power(essentialW > fractionW ? essentialW : fractionW);
+  return essentialW;
 }

@@ -35,6 +35,7 @@ import 'fault.dart'
     show
         Impedance,
         conductorImpedance,
+        coldMaxFaultImpedance,
         faultBasisLineVoltageV,
         feederNeutralImpedance,
         selectivityRatio,
@@ -1482,6 +1483,7 @@ _CircuitComputation _computeCircuit(
     lengthM: effectiveLength.meters,
     loadW: loadW,
     points: c.points,
+    runCurrent: Current(roundTo(feederRunCurrent.amperes, 1)),
   );
 
   return _CircuitComputation(
@@ -2196,15 +2198,21 @@ ElectricalSystemResult computeSystem(
           final single =
               conductorImpedance(profile, csa, lengthM, feederMaterial);
           final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
-          sourceZ = upstreamSourceZ + feederZ;
+          // Round 17 — the maximum (withstand) fault decays through the
+          // conductor at 20 °C (IEC 60909-0), the same basis `faultStudy`
+          // uses for the device kA, so the bus Icw and the tokens agree.
+          sourceZ =
+              upstreamSourceZ + coldMaxFaultImpedance(feederZ, feederMaterial);
           neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
-              feederNeutralImpedance(
-                  profile,
-                  csa,
-                  feederResult?.grounding.neutralCsaMm2 ?? 0,
-                  lengthM,
-                  feederMaterial,
-                  runs);
+              coldMaxFaultImpedance(
+                  feederNeutralImpedance(
+                      profile,
+                      csa,
+                      feederResult?.grounding.neutralCsaMm2 ?? 0,
+                      lengthM,
+                      feederMaterial,
+                      runs),
+                  feederMaterial);
           // 3-phase board: V_LL/(√3·|Z|); 1-phase board: the L-N fault
           // U0/|Z_phase + Z_neutral| (never 220 V in the 3-phase formula).
           faultA = subPanelBusFaultA(panel, sourceZ, neutralZ, upstreamIscA);

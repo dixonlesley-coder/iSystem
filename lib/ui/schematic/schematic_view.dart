@@ -30,9 +30,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart'
-    show flowFromBySizing, kPumpSetValveTrain;
+    show flowFromBySizing, kPumpSetValveTrain, plantMoverCaptions;
 import 'package:mechx_engine/sizing/network_sizing.dart';
-import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/standards/sni.dart';
 
@@ -1028,7 +1027,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                   downfeed: feedStrategy == FeedStrategy.downfeed,
                   riserTagsById: riserTags(network, widget.focus),
                   detailByNode: detailByNode,
-                  supplyPump: ref.watch(pumpDutyProvider),
+                  transferPumpNodeIds: ref.watch(transferPumpNodeIdsProvider),
                   showDetails: widget.showDetails,
                   // G2: the hot-water recirculation loop exists when the engine
                   // sizes one (the provider is non-null) — draw the HWR return.
@@ -2299,7 +2298,7 @@ class _AutoSchematicPainter extends CustomPainter {
     this.downfeed = false,
     this.riserTagsById = const {},
     this.detailByNode = const {},
-    this.supplyPump,
+    this.transferPumpNodeIds = const {},
     this.showDetails = true,
     this.hotWaterRecirc = false,
   });
@@ -2309,9 +2308,10 @@ class _AutoSchematicPainter extends CustomPainter {
   final BuildingLevels building;
   final MechXColors colors;
 
-  /// The system supply-pump duty (one trunk pump) — used for the plant-detail
-  /// callout's BOOSTER PUMP kW caption. Null ⇒ no kW caption (no fabricated duty).
-  final PumpDuty? supplyPump;
+  /// Round 17 — the drawn transfer pumps (ground tank -> roof tank), captioned
+  /// TRANSFER PUMP in the plant detail; every other mover reads BOOSTER PUMP.
+  /// The kW comes from each node's own duty in [detailByNode].
+  final Set<String> transferPumpNodeIds;
 
   /// G2: true when the engine's hot-water RECIRCULATION loop exists (the
   /// `hotWaterRecircProvider` result is non-null). When set — and the network
@@ -2383,7 +2383,9 @@ class _AutoSchematicPainter extends CustomPainter {
         ..addAll(_fanOutLabelRects(size))
         ..addAll(_detailCalloutRects(size));
     }
-    _paintEdges(canvas, nodePos, occupied);
+    _paintEdges(canvas, nodePos, occupied,
+        lanePitch: (size.height / building.levelCount.clamp(1, 999999)) *
+            kRiserLaneBandFraction);
     // G2: the hot-water recirculation return leg rides alongside the supply
     // riser — a structural element (drawn whenever the recirc loop exists),
     // not a toggleable detail callout.
@@ -2649,7 +2651,11 @@ class _AutoSchematicPainter extends CustomPainter {
   }
 
   void _paintEdges(
-      Canvas canvas, Map<String, Offset> nodePos, List<Rect> occupied) {
+      Canvas canvas, Map<String, Offset> nodePos, List<Rect> occupied,
+      {required double lanePitch}) {
+    // Round 17 (drafting-visual-3-1) — each run on its own service lane even
+    // between multi-service nodes (the SAME shared helper the export uses).
+    final edgeLanes = riserEdgeLaneOffsets(network, focus: focus);
     // F6: label a continuous run ONCE. Group the visible run (non-riser) edges
     // into components connected by a shared node AND carrying the SAME pipe tag,
     // and keep only one representative edge per component to label (a horizontal
@@ -2724,13 +2730,28 @@ class _AutoSchematicPainter extends CustomPainter {
           );
         }
       } else {
-        canvas.drawLine(from, to, linePaint);
+        final laneDy = (edgeLanes[edge.id] ?? 0) * lanePitch;
+        if (laneDy.abs() > 0.5) {
+          // Off-lane endpoints: drop to the service lane, run, rise back.
+          final y = from.dy + laneDy;
+          canvas.drawPath(
+              Path()
+                ..moveTo(from.dx, from.dy)
+                ..lineTo(from.dx, y)
+                ..lineTo(to.dx, y)
+                ..lineTo(to.dx, to.dy),
+              linePaint);
+        } else {
+          canvas.drawLine(from, to, linePaint);
+        }
         final s = sizing[edge.id];
         // F6: only the representative edge of a same-tag run carries the label,
         // placed avoiding the occupied rects (floor labels + earlier tags).
         if (s != null && runLabelEdgeIds.contains(edge.id)) {
           final midX = (from.dx + to.dx) / 2;
-          final midY = (from.dy + to.dy) / 2;
+          final midY = laneDy.abs() > 0.5
+              ? from.dy + laneDy
+              : (from.dy + to.dy) / 2;
           // R2: the tag sits MechXSpacing.md above the run's midpoint, so its
           // nudge ladder runs ALONG the run first, then flips to the run's other
           // side (below it) — both derived from the drawn geometry, never random.
@@ -3274,18 +3295,25 @@ class _AutoSchematicPainter extends CustomPainter {
           );
         }
       }
-      final kw = supplyPump != null
-          ? motorKwText(supplyPump!.selectedMotor)
-          : null;
-      _drawText(
-        canvas,
-        kw != null ? 'BOOSTER PUMP $kw' : 'BOOSTER PUMP',
-        Offset(cx, trainCy + gl / 2 + 16),
-        fontSize: 9,
-        color: colors.textSecondary,
-        fontWeight: FontWeight.w500,
-        centered: true,
-      );
+      // Round 17 — ONE caption per drawn mover from the per-node duty map
+      // (the SAME engine helper the export uses): a transfer pump reads
+      // TRANSFER PUMP with its own kW, never a bare BOOSTER PUMP.
+      final caps = plantMoverCaptions(network,
+          detailByNodeId: detailByNode,
+          transferPumpNodeIds: transferPumpNodeIds);
+      var capDy = 0.0;
+      for (final cap in caps) {
+        _drawText(
+          canvas,
+          cap,
+          Offset(cx, trainCy + gl / 2 + 16 + capDy),
+          fontSize: 9,
+          color: colors.textSecondary,
+          fontWeight: FontWeight.w500,
+          centered: true,
+        );
+        capDy += 12;
+      }
       // TRANSFER (ground -> roof lift) only when BOTH tanks exist (Round 12,
       // printed-parity-3 — mirrors the engine callout + legend); else BOOSTER
       // (pump-up) on upfeed.
@@ -3296,7 +3324,7 @@ class _AutoSchematicPainter extends CustomPainter {
         _drawText(
           canvas,
           leg,
-          Offset(cx, trainCy + gl / 2 + 30),
+          Offset(cx, trainCy + gl / 2 + 30 + (capDy - 12).clamp(0, 999)),
           fontSize: 8,
           color: color,
           fontWeight: FontWeight.w600,
@@ -3690,7 +3718,7 @@ class _AutoSchematicPainter extends CustomPainter {
       old.downfeed != downfeed ||
       old.riserTagsById != riserTagsById ||
       old.detailByNode != detailByNode ||
-      old.supplyPump != supplyPump ||
+      old.transferPumpNodeIds != transferPumpNodeIds ||
       old.showDetails != showDetails ||
       old.hotWaterRecirc != hotWaterRecirc;
 }
@@ -4351,12 +4379,17 @@ class _SystemNotes extends ConsumerWidget {
     // equipment the design doesn't contain.
     final hasRoofTank =
         network.nodes.any((n) => n.component == NodeComponent.roofTank);
+    // Round 17 — the SAME equipment-gated feed note the export prints.
     final lines = <String>[
-      feed == FeedStrategy.downfeed
-          ? (hasRoofTank
-              ? 'Feed: gravity downfeed (roof tank)'
-              : 'Feed: gravity downfeed')
-          : 'Feed: upfeed / booster pump',
+      riserFeedNote(
+          downfeed: feed == FeedStrategy.downfeed,
+          hasRoofTank: hasRoofTank,
+          hasPump: network.nodes.any((n) =>
+              n.component == NodeComponent.pump ||
+              n.component == NodeComponent.boosterSet),
+          hasWaterMeter: network.nodes
+              .any((n) => n.component == NodeComponent.waterMeter),
+          detailed: true),
     ];
     final roofM3 = _tankM3(NodeComponent.roofTank);
     if (roofM3 != null) lines.add('Roof tank: $roofM3 m3');

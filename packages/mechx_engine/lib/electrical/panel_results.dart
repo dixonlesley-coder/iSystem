@@ -100,6 +100,19 @@ class ElectricalCircuitResult {
   /// the explicit accessory count floor in the BOM. Additive (default 1).
   final int points;
 
+  /// Round 17 (report-recompute-2-elec-report-ib-not-sizing-basis) — the
+  /// current the run REALLY carries when its load runs (rounded to 0.1 A): the
+  /// UNDIVERSIFIED current a final way's device, conductor and printed voltage
+  /// drop are sized on, the aggregated Ib for a feeder (raised to a fed
+  /// capacitor bank's rated current). [designCurrent] stays the DIVERSIFIED
+  /// figure for the phase balance and demand roll-up. Null (a result built the
+  /// legacy way) ⇒ [designCurrent]; read it through [runCurrentA].
+  final Current? runCurrent;
+
+  /// [runCurrent] when recorded, else [designCurrent] — the Ib a reviewer can
+  /// recompute In / Iz / Vd from.
+  Current get runCurrentA => runCurrent ?? designCurrent;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -116,6 +129,7 @@ class ElectricalCircuitResult {
     this.lengthM = 0,
     this.loadW = 0,
     this.points = 1,
+    this.runCurrent,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -141,6 +155,7 @@ class ElectricalCircuitResult {
         lengthM: lengthM,
         loadW: loadW,
         points: points,
+        runCurrent: runCurrent,
       );
 }
 

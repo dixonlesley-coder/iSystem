@@ -794,12 +794,48 @@ String _pickComponentRoot({
 
   int drawnRank(String id) => drawnFromIds.contains(id) ? 0 : 1;
   final supply = !gravity;
+  // Round 17 (regression-ducted-ac-intake-phantom-fan-way) — a bare leaf
+  // whose duct joins a DEMAND-FREE terminal air unit (directly, or through
+  // inline dampers) is that unit's fresh-air INTAKE, not the system's entry:
+  // with no source plant drawn the stand-alone FCU / ducted AC is the source
+  // of its own diffuser run. Rooting at the intake leaf sized the intake as a
+  // supply trunk OUT of the open end and handed the unit's duty to a phantom
+  // fan (an F-01 row + a second MDP way beside the AC's own rated input).
+  bool isIntakeOfTerminalUnit(String leaf) {
+    if (gravity || service.regime != FlowRegime.air) return false;
+    final n = nodeOf(leaf);
+    if (n == null || n.component != null || n.role != NodeRole.main) {
+      return false;
+    }
+    var prev = leaf;
+    var cur = neighbours(leaf).isEmpty ? null : neighbours(leaf).first;
+    final seen = <String>{leaf};
+    while (cur != null && seen.add(cur)) {
+      final c = nodeOf(cur)?.component;
+      if (isDeferredPlant(cur)) {
+        return !demandKeys.contains(cur) && _isTerminalAirUnit(c);
+      }
+      final isDamper = c == NodeComponent.motorizedDamper ||
+          c == NodeComponent.volumeDamper ||
+          c == NodeComponent.fireDamper;
+      if (!isDamper || degree(cur) != 2 || demandKeys.contains(cur)) {
+        return false;
+      }
+      final p = prev;
+      prev = cur;
+      cur = neighbours(cur).firstWhere((m) => m != p, orElse: () => '');
+      if (cur.isEmpty) return false;
+    }
+    return false;
+  }
+
   final freeLeaves = [
     for (final id in leaves)
       if (roleOf(id) != NodeRole.fixture &&
           !demandKeys.contains(id) &&
           !isPassThroughPlant(id) &&
-          !isDeferredPlant(id))
+          !isDeferredPlant(id) &&
+          !isIntakeOfTerminalUnit(id))
         id,
   ]..sort((a, b) {
       if (supply) {
@@ -1436,21 +1472,57 @@ Map<String, EdgeSizing> autoSizeNetwork(
       // the unit delivers, oriented toward the unit (a 100 % outdoor-air
       // basis — `// VERIFY` conservative for a mixed-air AHU, whose outdoor
       // air is a fraction of the supply).
-      final airIntakeEdges = <String, String>{}; // edge id -> leaf id
+      //
+      // Round 17 (regression-ahu-intake-behind-damper-phantom) — the intake is
+      // usually drawn WITH its outdoor-air damper (AHU -> motorised damper ->
+      // bare leaf), so the walk now passes through degree-2 inline DAMPERS
+      // that carry no airflow of their own to reach the bare leaf; every edge
+      // of that chain is an intake edge (load-free, carrying the delivered
+      // flow inward). A bare junction is NOT walked through (an AHU -> j ->
+      // bare end is an undrawn terminal, judged as before).
+      final airIntakeEdges = <String, String>{}; // edge id -> its upstream node
+      final airIntakeLeaves = <String>{};
       if (regime == FlowRegime.air && roleOf(root) == NodeRole.plant) {
+        bool isIntakeAccessory(String id) {
+          final n = net.nodeById(id);
+          return n != null &&
+              degree(id) == 2 &&
+              !explicitDemandKeys.contains(id) &&
+              (n.component == NodeComponent.motorizedDamper ||
+                  n.component == NodeComponent.volumeDamper ||
+                  n.component == NodeComponent.fireDamper);
+        }
+
         for (final l in adjacency[root] ?? const <({String edgeId, String other})>[]) {
-          final leaf = l.other;
-          final ln = net.nodeById(leaf);
-          if (degree(leaf) == 1 &&
+          // Walk outward from the unit: (edge, far node) pairs of the chain.
+          final chain = <({String edgeId, String node})>[
+            (edgeId: l.edgeId, node: l.other),
+          ];
+          final seen = <String>{root, l.other};
+          var cur = l.other;
+          var via = l.edgeId;
+          while (isIntakeAccessory(cur)) {
+            final next = adjacency[cur]!.firstWhere((x) => x.edgeId != via);
+            if (!seen.add(next.other)) break;
+            chain.add((edgeId: next.edgeId, node: next.other));
+            via = next.edgeId;
+            cur = next.other;
+          }
+          final ln = net.nodeById(cur);
+          if (degree(cur) == 1 &&
               ln != null &&
               ln.component == null &&
               ln.role == NodeRole.main &&
-              !explicitDemandKeys.contains(leaf)) {
-            airIntakeEdges[l.edgeId] = leaf;
+              !explicitDemandKeys.contains(cur)) {
+            airIntakeLeaves.add(cur);
+            // Each chain edge's flow comes FROM its outer (leaf-side) node.
+            for (final c in chain) {
+              airIntakeEdges[c.edgeId] = c.node;
+            }
           }
         }
       }
-      loadFreeSet = {...outfalls, ...fillLeaves, ...airIntakeEdges.values};
+      loadFreeSet = {...outfalls, ...fillLeaves, ...airIntakeLeaves};
 
       // ── Looped (ring/grid) PRESSURIZED or AIR component → Hardy–Cross ───────
       // A tree has (nodes − 1) edges; more means parallel paths whose flow split
@@ -1954,6 +2026,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
             if (airIntakeEdges.containsKey(l.edgeId)) continue;
             delivered += allFlows[l.edgeId]?.cubicMetersPerSecond ?? 0.0;
           }
+          // (A chain edge's map value is its OUTER node, so the flow runs
+          // leaf -> damper -> unit.)
           for (final en in airIntakeEdges.entries) {
             allFlows[en.key] = FlowRate(delivered);
             edgeFlowFrom[en.key] = en.value;

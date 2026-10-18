@@ -183,7 +183,10 @@ void main() {
         .whereType<SldLabel>()
         .map((l) => l.text)
         .toList();
-    expect(labels, contains('Feed: gravity downfeed'));
+    // Round 17 (drafting-visual-3-4) — no roof tank, no pump ⇒ the supply
+    // note AND the KETERANGAN say direct mains, never 'gravity downfeed'.
+    expect(labels, contains('Feed: direct mains'));
+    expect(labels.any((t) => t.contains('gravity downfeed')), isFalse);
     expect(labels.any((t) => t.contains('(roof tank)')), isFalse);
 
     // With a real roofTank node the honest suffix returns.

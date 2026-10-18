@@ -398,6 +398,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       project: project,
       result: result,
       building: building,
+      // Round 17 — canvas/export parity: the live riser shows the supply.
+      sourceChain: true,
     );
     return _SldProjectionArea(
       sheetKey: _riserKey,

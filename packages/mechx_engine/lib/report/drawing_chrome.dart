@@ -385,8 +385,15 @@ String pdfLegend(
   for (final s in chrome.legendServices) {
     final (r, g, b) = serviceChromeColor(s);
     cs.writeln('${_n(r)} ${_n(g)} ${_n(b)} RG');
+    // Round 17 (drafting-visual-3-5) — the swatch carries the service's OWN
+    // linetype (vent / return dashed, fire dash-dot), exactly as the plan body
+    // draws it; a solid vent swatch beside a dashed vent run disagreed with
+    // the cover's master legend. Solid services stay byte-identical.
+    final dash = serviceDashPatternPdf(s);
+    if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
     cs.writeln('${_n(originX)} ${_n(y + 3)} m '
         '${_n(originX + swatchW)} ${_n(y + 3)} l S');
+    if (dash != null) cs.writeln('[] 0 d');
     cs.writeln('BT /F1 8 Tf 0 0 0 rg '
         '${_n(originX + swatchW + 6)} ${_n(y)} Td '
         '(${_pdfText(serviceChromeLabel(s))}) Tj ET');
@@ -971,9 +978,11 @@ String dxfPlanChrome(
   final b = StringBuffer();
   final u = unitsPerPaperMm;
   final txt = kMinPlotTextMm * u;
-  void line(String layer, double ax, double ay, double bx, double by) {
+  void line(String layer, double ax, double ay, double bx, double by,
+      {String? linetype}) {
     _g(b, 0, 'LINE');
     _g(b, 8, layer);
+    if (linetype != null) _g(b, 6, linetype);
     _g(b, 10, ax);
     _g(b, 20, ay);
     _g(b, 11, bx);
@@ -995,7 +1004,12 @@ String dxfPlanChrome(
     text(kDxfLayerLegend, minX, ly, txt, 'LEGEND');
     ly -= 7 * u;
     for (final svc in chrome.legendServices) {
-      line(kDxfLayerLegend, minX, ly + txt / 2, minX + 12 * u, ly + txt / 2);
+      line(kDxfLayerLegend, minX, ly + txt / 2, minX + 12 * u, ly + txt / 2,
+          // Round 17 — the swatch in the service's own linetype (declared by
+          // [dxfTablesSection]); CONTINUOUS stays the layer default.
+          linetype: dxfLinetypeFor(svc) == 'CONTINUOUS'
+              ? null
+              : dxfLinetypeFor(svc));
       text(kDxfLayerLegend, minX + 15 * u, ly, txt, serviceChromeLabel(svc));
       ly -= 6 * u;
     }

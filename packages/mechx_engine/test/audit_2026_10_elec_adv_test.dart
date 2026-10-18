@@ -94,31 +94,36 @@ void main() {
       expect(f.grounding.neutralCsaMm2, 16);
     });
 
-    test('bus fault = U0/|Zsrc + Zphase + Zneutral| ≈ 13.37 kA', () {
-      // Feeder 16 mm², 2 m: Rc = 1.38·2/1000 = 0.00276, Xc = 0.08·2/1000 =
-      // 0.00016 — once for the phase leg, once for the neutral return.
-      //   loop R = 0.00204124 + 2·0.00276 = 0.00756124
+    test('bus fault = U0/|Zsrc + Zphase + Zneutral| ≈ 13.70 kA', () {
+      // Feeder 16 mm², 2 m. Round 17: the MAXIMUM fault takes conductor R at
+      // 20 °C (IEC 60909-0) — the 70 °C table × (234.5 + 20)/(234.5 + 70) =
+      // 254.5/304.5 = 0.835796: Rc = 1.38·2/1000·0.835796 = 0.00230690,
+      // Xc = 0.08·2/1000 = 0.00016 — once for the phase leg, once for the
+      // neutral return.
+      //   loop R = 0.00204124 + 2·0.00230690 = 0.00665504
       //   loop X = 0.01428869 + 2·0.00016 = 0.01460869
-      //   |Z| = √(0.00756124² + 0.01460869²) = 0.0164495 Ω
-      //   I_LN = 220/0.0164495 = 13 374 A → 13.37 kA.
+      //   |Z| = √(0.00665504² + 0.01460869²) = 0.0160532 Ω
+      //   I_LN = 220/0.0160532 = 13 704 A → 13.70 kA.
       // (The old code fed 220 V into the 3-phase formula:
-      //  220/(√3·|0.00480+j0.01445|) = 8.34 kA — ~40 % low.)
-      const rc = 1.38 * 2 / 1000, xc = 0.08 * 2 / 1000;
+      //  220/(√3·|0.00480+j0.01445|) = 8.34 kA — ~40 % low; the 70 °C R then
+      //  still printed 13.37 kA — 2.4 % low.)
+      const kc = 254.5 / 304.5;
+      const rc = 1.38 * 2 / 1000 * kc, xc = 0.08 * 2 / 1000;
       final iLn = 220 /
           math.sqrt(math.pow(rSrc + 2 * rc, 2) + math.pow(xSrc + 2 * xc, 2));
-      expect(iLn / 1000, closeTo(13.37, 0.01));
+      expect(iLn / 1000, closeTo(13.70, 0.01));
       expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(iLn / 1000, 0.01));
       // It must not exceed the 3-phase fault at the same point:
-      //   400/(√3·|0.00480124+j0.01444869|) = 400/(√3·0.0152255) = 15.17 kA.
+      //   400/(√3·|0.00434814+j0.01444869|) = 400/(√3·0.0150888) = 15.31 kA.
       final i3 = 400 /
           (math.sqrt(3) *
               math.sqrt(math.pow(rSrc + rc, 2) + math.pow(xSrc + xc, 2)));
-      expect(i3 / 1000, closeTo(15.17, 0.01));
+      expect(i3 / 1000, closeTo(15.31, 0.01));
       expect(fs.panels['SP']!.prospectiveFaultkA, lessThan(i3 / 1000));
     });
 
     test('the MCB is specified at 15 kA (the 10 kA rung no longer passes)', () {
-      // MCB ladder [6, 10, 15, 25]: first rung ≥ 13.37 kA is 15 kA.
+      // MCB ladder [6, 10, 15, 25]: first rung ≥ 13.70 kA is 15 kA.
       expect(fs.panels['SP']!.incomerKa, 15);
       expect(fs.panels['SP']!.incomerAdequate, isTrue);
       expect(fs.circuits['s1']!.breakerKa, 15);
@@ -129,8 +134,8 @@ void main() {
           computeSystem(p, project, originFaultLevel: const Current(16000));
       final w = sysW.panels['SP']!.busbar.withstand;
       expect(w, isNotNull);
-      // Same derivation as above ⇒ 13.37 kA (was 8.34 kA on the 220 V basis).
-      expect(w!.faultKa, closeTo(13.37, 0.01));
+      // Same derivation as above ⇒ 13.70 kA (was 8.34 kA on the 220 V basis).
+      expect(w!.faultKa, closeTo(13.70, 0.01));
     });
 
     test('a 1-phase ROOT board refers its source Z to the 400 V line basis',
@@ -246,9 +251,11 @@ void main() {
 
     test('prospective-fault decay stays COLD (unchanged by the hot Zs legs)',
         () {
-      // Re-derived Round 11 — the load-sized feeder is 25 mm² (R 0.87 Ω/km):
-      // Isc_SP = 400/(√3·|(0.00204124+0.0435) + j(0.01428869+0.004)|)
-      //        = 400/(√3·0.0490763) = 4705.8 A → 4.71 kA (the cold basis —
+      // Re-derived Round 11 — the load-sized feeder is 25 mm² (R 0.87 Ω/km);
+      // Round 17 — the maximum fault takes R at 20 °C: 0.0435·0.835796 =
+      // 0.0363571 Ω:
+      // Isc_SP = 400/(√3·|(0.00204124+0.0363571) + j(0.01428869+0.004)|)
+      //        = 400/(√3·0.0425328) = 5429.6 A → 5.43 kA (the cold basis —
       //        the ×1.28 hot factor never enters the prospective fault).
       const sp = ElectricalPanel(
         id: 'SP',
@@ -288,7 +295,7 @@ void main() {
           panels: [mdp, sp],
           earthingSystem: EarthingSystem.tnS);
       final fs = faultStudy(computeSystem(p, project), project, p);
-      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(4.71, 0.01));
+      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(5.43, 0.01));
     });
   });
 
@@ -606,37 +613,40 @@ void main() {
   // elec-advanced-5 — the electrode rod count is the true minimum.
   // ─────────────────────────────────────────────────────────────────────────
   group('elec-advanced-5: minimum rod count with each count\'s own η', () {
-    test('100 Ω·m ⇒ 10 rods at 4.785 Ω (meets 5 Ω)', () {
+    test('100 Ω·m ⇒ 11 rods at 4.993 Ω (BS 7430, Round 17)', () {
       // R1 = 100/(2π·3)·(ln(24/0.016) − 1) = 5.30516·6.31322 = 33.4927 Ω.
-      // n = 9: 33.4927/(9·0.715) = 5.205 > 5; n = 10: 33.4927/7.0 = 4.785.
+      // α = 1/6.31322 = 0.158398 (s = L). n = 10: 33.4927·1.60350/10 = 5.371
+      // > 5; n = 11: λ 4.03975 ⇒ 33.4927·1.63989/11 = 4.9931 ≤ 5.
       final d = designElectrode(soilResistivityOhmM: 100);
-      expect(d.rodCount, 10);
-      expect(d.achieved.ohms, closeTo(4.785, 0.005));
+      expect(d.rodCount, 11);
+      expect(d.achieved.ohms, closeTo(4.993, 0.001));
       expect(d.meetsTarget, isTrue);
     });
 
     test('25 Ω·m ⇒ 2 rods (the fixed-η estimate over-counted to 3)', () {
       // R1 = 25/(2π·3)·6.31322 = 1.32629·6.31322 = 8.3732 Ω.
       // Fixed η: ceil(8.3732/(5·0.8)) = ceil(2.093) = 3.
-      // True minimum: n = 1: 8.37 > 5; n = 2: 8.3732/(2·0.86) = 4.868 ≤ 5.
+      // True minimum: n = 1: 8.37 > 5; n = 2: 8.3732·(1 + 0.158398)/2 = 4.8497.
       final d = designElectrode(soilResistivityOhmM: 25);
       expect(d.singleRod.ohms, closeTo(8.373, 0.001));
       expect(d.rodCount, 2);
-      expect(d.achieved.ohms, closeTo(4.868, 0.001));
+      expect(d.achieved.ohms, closeTo(4.850, 0.001));
       expect(d.meetsTarget, isTrue);
     });
 
-    test('500 Ω·m ⇒ 48 rods meet it (was 42 rods at 5.69 Ω)', () {
-      // R1 = 5·33.4927 = 167.463 Ω; η = 0.70 for n ≥ 10:
-      //   n ≥ 167.463/(5·0.7) = 47.85 ⇒ 48 ⇒ 167.463/33.6 = 4.984 Ω.
+    test('500 Ω·m ⇒ 75 rods meet it (BS 7430 coupling, Round 17)', () {
+      // R1 = 5·33.4927 = 167.463 Ω. λ(75) = (2/75)(75·H74 − 74)
+      //   = (2/75)(75·4.888029 − 74) = 7.80029 ⇒ 1 + 7.80029·0.158398 = 2.23555
+      //   ⇒ 167.463·2.23555/75 = 4.9917…≈4.992 Ω ≤ 5 (n = 74 just misses).
       final d = designElectrode(soilResistivityOhmM: 500);
-      expect(d.rodCount, 48);
-      expect(d.achieved.ohms, closeTo(4.984, 0.001));
+      expect(d.rodCount, 75);
+      expect(d.achieved.ohms, closeTo(4.992, 0.002));
       expect(d.meetsTarget, isTrue);
     });
 
     test('beyond the search cap ⇒ the cap, flagged unmet', () {
-      // 2000 Ω·m: R1 = 669.85 Ω ⇒ needs n ≥ 669.85/3.5 = 191.4 > 100.
+      // 2000 Ω·m: R1 = 669.85 Ω; even n = 100 gives 669.85·(1 + λ(100)·α)/100
+      // ≈ 15.6 Ω > 5 ⇒ the cap.
       final d = designElectrode(soilResistivityOhmM: 2000);
       expect(d.rodCount, maxElectrodeRods);
       expect(d.meetsTarget, isFalse);

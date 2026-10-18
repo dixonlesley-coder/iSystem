@@ -86,11 +86,19 @@ const double serviceFaultLineVoltageV = 400;
 // the transformer test certificate governs. Not a PUIL/SNI clause).
 const double representativeTransformerZpu = transformerImpedancePct / 100;
 
-/// Upper clamp (kA) on the service-size fault estimate — the top of the device
-/// ladder a specifier realistically lands on for an LV board (see
-/// [breakingCapacityKa]). Above it the simplified estimate stops being useful
-/// and a real IEC 60909 study is required, so it is capped rather than printed.
-// VERIFY — notAnSniClause (a modelling clamp, not a standard value).
+/// Threshold (kA) above which the service-size fault estimate is flagged —
+/// the top of the device ladder a specifier realistically lands on for an LV
+/// board (see [breakingCapacityKa]). Above it the simplified estimate stops
+/// being a sufficient basis and a real IEC 60909 study + 65/70 kA-class gear
+/// are required.
+///
+/// Round 17 (protection-2-service-estimate-50ka-clamp-hides-fault) — this used
+/// to CLAMP the estimate, i.e. LOWER a safety quantity: from ~1386 kVA at the
+/// 4 % impedance (50e3·√3·400·0.04) every device kA token, the bus Icw check
+/// and the arc-flash energy were judged against 50 kA while the transformer
+/// delivers more (1600 kVA ⇒ 57.7 kA). The estimate is now returned UNCLAMPED
+/// and `computeAdvancedStudy` raises `service-fault-estimate-high` instead.
+// VERIFY — notAnSniClause (a modelling threshold, not a standard value).
 const double maxEstimatedServiceFaultKa = 50;
 
 /// Declared LV connection capacity ("daya tersambung", VA) at or below which a
@@ -150,6 +158,36 @@ const double zsVoltageFactor = 0.95;
 // VERIFY — secondarySource (IEC 60364-4-41 / IEC 60364-4-43 temperature
 // correction; the 1.28 vs derived 1.295 rounding is an engineering choice).
 const double zsFaultTempFactor = 1.28;
+
+/// Resistance-temperature constant (°C) of a conductor material — the
+/// inferred zero-resistance temperature of the linear R(T) law
+/// R(T2)/R(T1) = (β + T2)/(β + T1): copper 234.5 °C, aluminium 228 °C
+/// (IEC 60287-1-1 / IEC 60228 α20 reciprocals).
+// VERIFY — secondarySource (IEC 60228 / IEC 60287 conductor constants).
+double conductorBetaC(ConductorMaterial material) =>
+    material == ConductorMaterial.aluminum ? 228.0 : 234.5;
+
+/// Factor scaling the profile's ~70 °C OPERATING conductor R (the
+/// `conductorResistanceOhmPerKm` table) down to 20 °C, the conductor
+/// temperature IEC 60909-0 prescribes for the MAXIMUM short-circuit current
+/// (the Icu / breaking-capacity basis). Copper: (234.5 + 20)/(234.5 + 70) =
+/// 254.5/304.5 = 0.83580; aluminium: 248/298 = 0.83221.
+///
+/// Round 17 (protection-2-max-fault-uses-70C-resistance) — the "cold"
+/// prospective-fault decay used to run on the 70 °C table, i.e. a ~20 % HIGH
+/// feeder R, understating every sub-board fault (a 20 m 16 mm² feeder off a
+/// 10 kA origin printed 5.86 kA and specified 6 kA MCBs for a 6.42 kA bus).
+/// The ADS earth-fault loop keeps the 70 °C table × [zsFaultTempFactor].
+// VERIFY — secondarySource (IEC 60909-0 §2.4 cmax / 20 °C conductor basis).
+double coldConductorResistanceFactor(ConductorMaterial material) {
+  final beta = conductorBetaC(material);
+  return (beta + 20) / (beta + 70);
+}
+
+/// [z70] (a 70 °C-table impedance) re-referred to 20 °C for the MAXIMUM fault:
+/// R scaled by [coldConductorResistanceFactor], X unchanged.
+Impedance coldMaxFaultImpedance(Impedance z70, ConductorMaterial material) =>
+    Impedance(z70.rOhm * coldConductorResistanceFactor(material), z70.xOhm);
 
 /// Current-based selectivity (discrimination) rule of thumb: an upstream device
 /// discriminates with a downstream one when its rating is ≥ 1.6× the downstream
@@ -240,14 +278,16 @@ const List<String> faultStudyVerifyItems = [
 /// [faultStudyVerifyItems] this pass (that would change every existing study's
 /// printed verify section) — surfacing it via `SniProfile.verifyChecklist` /
 /// `AdvancedStudy.verifyItems` is the RECORDED FOLLOW-UP.
-const List<String> serviceFaultEstimateVerifyItems = [
-  'representative transformer impedance (5 % p.u.) behind the service-size '
+final List<String> serviceFaultEstimateVerifyItems = [
+  'representative transformer impedance '
+      '(${transformerImpedancePct.toStringAsFixed(0)} % p.u.) behind the service-size '
       'fault estimate — the nameplate Z% governs',
   // ASCII in the printed label: a report PDF encodes WinAnsi, which has no
   // '≤' / '⇒' (they would garble to '?' — the Wave-7 separator defect).
   'service-entrance prospective-fault rungs by declared connection capacity '
       '(up to 16.5 kVA: 6 kA / up to 197 kVA: 10 kA / above: 16 kA)',
-  'service-size fault estimate clamp (50 kA) and its 400 V LV reference voltage',
+  'service-size fault estimate review threshold (50 kA) and its 400 V LV '
+      'reference voltage',
 ];
 
 /// Estimate the prospective 3-phase symmetrical fault current at the SERVICE
@@ -266,10 +306,11 @@ const List<String> serviceFaultEstimateVerifyItems = [
 ///
 ///    with S the transformer rating (VA), U_LL = [serviceFaultLineVoltageV] and
 ///    Zpu = [representativeTransformerZpu]. Worked example, a 630 kVA unit at
-///    5 %: 630000 / (1.732050808·400·0.05) = 630000 / 34.641016 = 18186.5 A.
+///    4 %: 630000 / (1.732050808·400·0.04) = 630000 / 27.712813 = 22733.2 A.
 ///    The utility impedance UPSTREAM of the transformer and the substation-to-
 ///    board cable are deliberately ignored — both only REDUCE the fault, so the
-///    estimate stays conservative. Clamped to [maxEstimatedServiceFaultKa].
+///    estimate stays conservative. NOT clamped (Round 17): above
+///    [maxEstimatedServiceFaultKa] the caller flags the estimate instead.
 ///
 /// 2. **[ElectricalProject.supplyCapacityVa] declared** (an LV direct service —
 ///    daya tersambung, no customer transformer): a conservative service-entrance
@@ -313,10 +354,7 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
         (math.sqrt(3) *
             serviceFaultLineVoltageV *
             representativeTransformerZpu);
-    return Current(_round(
-      math.min(iscA, maxEstimatedServiceFaultKa * 1000.0),
-      1,
-    ));
+    return Current(_round(iscA, 1));
   }
 
   // 2. LV direct service ⇒ a rung off the declared connection capacity.
@@ -346,10 +384,7 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
               serviceFaultLineVoltageV *
               (supply.impedancePct ?? transformerImpedancePct) /
               100);
-      return Current(_round(
-        math.min(iscA, maxEstimatedServiceFaultKa * 1000.0),
-        1,
-      ));
+      return Current(_round(iscA, 1));
     }
   }
 
@@ -890,15 +925,20 @@ FaultStudyResult faultStudy(
       final feederMaterial =
           modelById[parentId]?.material ?? panelModel.material;
       final single = conductorImpedance(profile, csa, lengthM, feederMaterial);
+      // 70 °C-table leg — the basis the HOT earth-fault loop scales below.
       final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
-      sourceZ = upstreamSourceZ + feederZ;
+      // Round 17 — the MAXIMUM (Icu) prospective fault decays through the
+      // conductor at 20 °C (IEC 60909-0), not the 70 °C operating table.
+      sourceZ = upstreamSourceZ + coldMaxFaultImpedance(feederZ, feederMaterial);
       neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
-          feederNeutralImpedance(profile, csa,
-              feederResult?.grounding.neutralCsaMm2 ?? 0, lengthM,
-              // elec-props-1 — the feeder's neutral is the PARENT's cable
-              // (the same material the phase leg + Fold-1 use), never the
-              // fed board's own bus material.
-              feederMaterial, runs);
+          coldMaxFaultImpedance(
+              feederNeutralImpedance(profile, csa,
+                  feederResult?.grounding.neutralCsaMm2 ?? 0, lengthM,
+                  // elec-props-1 — the feeder's neutral is the PARENT's cable
+                  // (the same material the phase leg + Fold-1 use), never the
+                  // fed board's own bus material.
+                  feederMaterial, runs),
+              feederMaterial);
       faultA = subPanelBusFaultA(panelModel, sourceZ, neutralZ, upstreamIscA);
       // Earth-fault loop legs at the fault temperature (cold decay above).
       sourceZHot = (panelSourceZHot[parentId] ?? upstreamSourceZ) +

@@ -20,7 +20,7 @@ import 'package:mechx_engine/report/electrical_pdf_export.dart'
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/riser_tags.dart'
-    show equipmentDetail, riserServiceCode;
+    show equipmentDetail, riserFeedNote, riserServiceCode;
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:mechx_engine/standards/sni.dart' show Occupancy;
@@ -74,10 +74,13 @@ String _supplyNote(Network net, FeedStrategy feed) {
   final hasPump = net.nodes.any((n) =>
       n.component == NodeComponent.pump ||
       n.component == NodeComponent.boosterSet);
+  // Round 17 — the feed note follows the drawn equipment (no roof tank ⇒ no
+  // gravity downfeed), the shared engine `riserFeedNote`.
   final parts = <String>[
-    feed == FeedStrategy.downfeed
-        ? 'Feed: gravity downfeed'
-        : 'Feed: upfeed / booster',
+    riserFeedNote(
+        downfeed: feed == FeedStrategy.downfeed,
+        hasRoofTank: hasRoofTank,
+        hasPump: hasPump),
   ];
   if (hasRoofTank) parts.add('roof tank');
   if (hasGroundTank) parts.add('ground tank');
@@ -112,12 +115,17 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
   // equipment the design doesn't contain.
   final hasRoofTank =
       net.nodes.any((n) => n.component == NodeComponent.roofTank);
+  final hasPump = net.nodes.any((n) =>
+      n.component == NodeComponent.pump ||
+      n.component == NodeComponent.boosterSet);
   final lines = <String>[
-    feed == FeedStrategy.downfeed
-        ? (hasRoofTank
-            ? 'Feed: gravity downfeed (roof tank)'
-            : 'Feed: gravity downfeed')
-        : 'Feed: upfeed / booster pump',
+    riserFeedNote(
+        downfeed: feed == FeedStrategy.downfeed,
+        hasRoofTank: hasRoofTank,
+        hasPump: hasPump,
+        hasWaterMeter:
+            net.nodes.any((n) => n.component == NodeComponent.waterMeter),
+        detailed: true),
   ];
   final roofM3 = tankM3(NodeComponent.roofTank);
   if (roofM3 != null) lines.add('Roof tank: $roofM3');
@@ -182,6 +190,8 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
     // drafting-7: the riser's equipment carries the SAME stable tag as the
     // plan + the equipment schedule (P-08 · 2.2 kW).
     nodeTags: equipmentNodeTags(network),
+    // Round 17 — the transfer pump is captioned TRANSFER PUMP on the sheet.
+    transferPumpNodeIds: ref.read(transferPumpNodeIdsProvider),
   );
 }
 

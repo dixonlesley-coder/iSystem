@@ -4,7 +4,9 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/geometry/building.dart' show BuildingLevels;
 import 'package:mechx_engine/network/network.dart' show ServiceType;
+import 'package:mechx_engine/units.dart' show FlowRate, Head;
 
 import 'network_store.dart';
 import 'project_store.dart';
@@ -65,14 +67,52 @@ final sprinklerRemoteAreaProvider = Provider<SprinklerRemoteAreaResult>((ref) {
   return remoteAreaHydraulics(design: design, kFactor: k);
 });
 
-/// NFPA 20 fire-pump rating-curve check for the standpipe pump — churn / rated /
-/// overload duty points, motor selection on the governing point, jockey-pump
-/// recommendation, and duty/standby designation.
-final firePumpRatingProvider = Provider<FirePumpRatingResult>((ref) {
+/// Static lift (m) from the fire-pump datum (floor 0) to the top-floor
+/// ceiling — the sprinkler lower-bound lift [sprinklerPumpCheckProvider] and
+/// the sprinkler-only rated point share.
+double _sprinklerStaticLiftM(BuildingLevels building) {
+  final top = building.floors.length - 1;
+  return top < 0
+      ? 0.0
+      : building.ceilingElevationOf(top).meters -
+          building.elevationOf(0).meters;
+}
+
+/// Round 17 (report-recompute-2-fire-sections-not-gated-per-system) — the
+/// fire pump's RATED POINT on the governing DRAWN system: the standpipe
+/// (flow + head from the building height) whenever a hydrant / standpipe is
+/// drawn (or nothing is — the advisory inspector basis); for a SPRINKLER-ONLY
+/// network the sprinkler remote-area demand at lift + branch pressure +
+/// friction allowance (`sprinklerPumpRatedPoint`), never the 31.5 L/s
+/// standpipe rating of a system that is not drawn.
+final fireRatedPointProvider =
+    Provider<({FlowRate flow, Head head, bool sprinklerOnly})>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final hasHydrant =
+      net.edges.any((e) => e.service == ServiceType.fireHydrant);
+  final hasSprinkler =
+      net.edges.any((e) => e.service == ServiceType.fireSprinkler);
+  if (hasSprinkler && !hasHydrant) {
+    final p = sprinklerPumpRatedPoint(
+      remote: ref.watch(sprinklerRemoteAreaProvider),
+      staticLiftM: _sprinklerStaticLiftM(
+          ref.watch(projectControllerProvider).building),
+    );
+    return (flow: p.flow, head: p.head, sprinklerOnly: true);
+  }
   final st = ref.watch(standpipeDesignProvider);
+  return (flow: st.requiredFlow, head: st.pumpHead, sprinklerOnly: false);
+});
+
+/// NFPA 20 fire-pump rating-curve check for the fire pump — churn / rated /
+/// overload duty points, motor selection on the governing point, jockey-pump
+/// recommendation, and duty/standby designation — at the governing DRAWN
+/// rated point ([fireRatedPointProvider]).
+final firePumpRatingProvider = Provider<FirePumpRatingResult>((ref) {
+  final rp = ref.watch(fireRatedPointProvider);
   return checkFirePumpRating(
-    ratedFlow: st.requiredFlow,
-    ratedHead: st.pumpHead,
+    ratedFlow: rp.flow,
+    ratedHead: rp.head,
   );
 });
 
@@ -97,13 +137,15 @@ final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
       e.service == ServiceType.fireHydrant)) {
     return null;
   }
-  final st = ref.watch(standpipeDesignProvider);
-  if (st.requiredFlow.cubicMetersPerSecond <= 0) return null;
+  // Round 17 — rated on the governing DRAWN system (sprinkler-only ⇒ the
+  // remote-area demand, else the standpipe).
+  final rp = ref.watch(fireRatedPointProvider);
+  if (rp.flow.cubicMetersPerSecond <= 0) return null;
   // Round 12 — the engine's shared `firePumpDuty` (the export harness calls
   // the same function, so the sample set issues the app's FP-01 duty).
   return firePumpDuty(
-    ratedFlow: st.requiredFlow,
-    ratedHead: st.pumpHead,
+    ratedFlow: rp.flow,
+    ratedHead: rp.head,
     rating: ref.watch(firePumpRatingProvider),
   );
 });
@@ -138,11 +180,8 @@ final sprinklerPumpCheckProvider = Provider<
   final pump = ref.watch(firePumpDutyProvider);
   if (pump == null) return null;
   final remote = ref.watch(sprinklerRemoteAreaProvider);
-  final building = ref.watch(projectControllerProvider).building;
-  final top = building.floors.length - 1;
-  final lift = top < 0
-      ? 0.0
-      : building.ceilingElevationOf(top).meters - building.elevationOf(0).meters;
+  final lift =
+      _sprinklerStaticLiftM(ref.watch(projectControllerProvider).building);
   const rhoG = 1000 * 9.81;
   final required = lift + remote.branchBasePressure.pascals / rhoG;
   final demand = remote.remoteAreaDemand.inLitersPerSecond;

@@ -305,3 +305,28 @@ SprinklerRemoteAreaResult remoteAreaHydraulics({
     governedByMinimumPressure: governedByMinimum,
   );
 }
+
+
+/// Round 17 (report-recompute-2-fire-sections-not-gated-per-system) — the
+/// fire-pump RATED POINT of a SPRINKLER-ONLY system: the remote-area demand
+/// ([SprinklerRemoteAreaResult.remoteAreaDemand]) at
+///
+///     H = staticLift + P_branch/(ρ·g) + frictionAllowance,
+///
+/// the static lift from the pump datum to the top-floor ceiling, the branch-
+/// base pressure as head, and the SAME fixed main/riser friction allowance
+/// the standpipe design uses (15 m, `designStandpipe` — `// VERIFY`, already on
+/// the standpipe verify checklist). A sprinkler-only building used to get the
+/// standpipe-rated pump (≈ 31.5 L/s / 55 kW) on its report, schedule and MDP —
+/// about 5× the flow of the only drawn fire system. Pure orchestration.
+({FlowRate flow, Head head}) sprinklerPumpRatedPoint({
+  required SprinklerRemoteAreaResult remote,
+  required double staticLiftM,
+  Head frictionAllowance = const Head(15),
+}) {
+  const rhoG = 1000 * 9.81;
+  final head = math.max(0.0, staticLiftM) +
+      remote.branchBasePressure.pascals / rhoG +
+      frictionAllowance.meters;
+  return (flow: remote.remoteAreaDemand, head: Head(head));
+}

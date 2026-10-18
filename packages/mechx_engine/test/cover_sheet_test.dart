@@ -62,7 +62,7 @@ void main() {
         drawingNumber: 'G-001',
         revision: 'Rev. 0',
         date: '2026-07-06',
-        sheetCount: 6,
+        drawingCount: 6,
       );
       final text = _labels(s);
       expect(text, contains('Menara Contoh'));

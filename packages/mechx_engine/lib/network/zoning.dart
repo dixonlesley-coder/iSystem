@@ -72,6 +72,36 @@ class PressureZone {
 double maxZoneHeightMetres(Pressure maxStatic) =>
     headFromPressure(maxStatic).meters;
 
+// ── PRV setpoint ─────────────────────────────────────────────────────────────
+
+/// Friction allowance (kPa) a downfeed PRV is set ABOVE the target residual,
+/// so the fixtures on the PRV's own floor — reached through that floor's
+/// distribution branch — still clear the target once branch friction is paid.
+/// A 25 m DN20 floor branch serving 6 fixtures loses ~22 kPa (the probe that
+/// found the defect), so 30 kPa covers a typical floor run.
+// VERIFY — notAnSniClause (a design allowance, not an SNI value; the real
+// setpoint follows the PRV station's own floor friction).
+const double kPrvFrictionMarginKpa = 30;
+
+/// The setpoint a downfeed PRV holds (Round 17, regression-downfeed-prv-
+/// setpoint-equals-target): the target residual PLUS [kPrvFrictionMarginKpa],
+/// bounded to half the [maxFixtureStatic] − target window so a zone always
+/// keeps a positive span. Holding EXACTLY the pass threshold (the old default)
+/// put every zone-top fixture below it as soon as the floor branch had any
+/// friction — drawing the PRV the over-pressure warning asked for turned its
+/// own floor LOW. The SAME figure feeds the drawn-PRV solve, the zone sizing
+/// and the zone static table, so they cannot disagree.
+Pressure defaultPrvSetpoint({
+  required Pressure targetResidual,
+  required Pressure maxFixtureStatic,
+}) {
+  final window = maxFixtureStatic.pascals - targetResidual.pascals;
+  final margin = window > 0
+      ? (kPrvFrictionMarginKpa * 1000).clamp(0.0, window / 2)
+      : 0.0;
+  return Pressure(targetResidual.pascals + margin);
+}
+
 // ── PRV zone statics ─────────────────────────────────────────────────────────
 
 /// Static-pressure profile of one downfeed zone fed through a PRV (or the tank

@@ -1241,9 +1241,27 @@ void _emitTransformer(
 
 /// Utility / MV-incoming BOWTIE (two triangles meeting at a point) — the
 /// isolator/incoming symbol on the far left of the DXF, centred at ([cx],[cy]).
+///
+/// Round 17 (drafting-visual-3-3) — [vertical] draws the bowtie ALONG a
+/// vertical conductor (apexes meeting on the Y axis, bars horizontal at
+/// `cy ± r`), so on the vertical source spine the isolator sits IN SERIES
+/// with the riser lead instead of across it.
 void _emitBowtie(
-    List<SldPrim> out, double cx, double cy, double r, SldRole role) {
+    List<SldPrim> out, double cx, double cy, double r, SldRole role,
+    {bool vertical = false}) {
   final t = r * 0.9;
+  if (vertical) {
+    out
+      ..add(SldLine(cx - t, cy - r, cx + t, cy - r,
+          weight: SldWeight.medium, role: role))
+      ..add(SldLine(cx - t, cy - r, cx, cy, role: role))
+      ..add(SldLine(cx + t, cy - r, cx, cy, role: role))
+      ..add(SldLine(cx - t, cy + r, cx + t, cy + r,
+          weight: SldWeight.medium, role: role))
+      ..add(SldLine(cx - t, cy + r, cx, cy, role: role))
+      ..add(SldLine(cx + t, cy + r, cx, cy, role: role));
+    return;
+  }
   // Left triangle (apex at centre), right triangle (apex at centre).
   out
     ..add(SldLine(cx - r, cy - t, cx - r, cy + t,
@@ -1573,7 +1591,12 @@ const double _sideNodeBottom = 14;
         // The incoming isolator (bowtie). On an LV head-only chain the label
         // moves ABOVE the symbol — the side-source trunk leaves at mid-height
         // to the right, exactly where the MV label used to sit.
-        _emitBowtie(prims, centreX, midY, 11, role);
+        _emitBowtie(prims, centreX, midY, 11, role, vertical: true);
+        // The outgoing lead from the isolator's lower bar down to the band
+        // bottom, where the next riser leg / root feeder picks up — the
+        // symbol no longer floats 13 units above its conductor.
+        prims.add(SldLine(centreX, midY + 11, centreX, y + _ovH,
+            weight: SldWeight.medium, role: role));
         prims.add(SldLabel(centreX + 22, isMv ? midY + 3 : midY - 14, node.name,
             size: 8.5, bold: true, role: role));
       case 'bus':
@@ -1682,9 +1705,12 @@ const double _sideNodeBottom = 14;
         project.sources?.solar != null ||
         project.sources?.battery != null;
     if (anySide) {
-      prims.add(SldLine(centreX + 12, lvMidY, dropX, lvMidY,
+      // Round 17 — the side trunk TEES off the outgoing lead just below the
+      // (now in-line) isolator, never off the symbol's flank.
+      final trunkY = lvMidY + 15;
+      prims.add(SldLine(centreX, trunkY, dropX, trunkY,
           weight: SldWeight.medium, role: SldRole.source));
-      var prevDropBottom = lvMidY;
+      var prevDropBottom = trunkY;
       var cy = lvMidY + 58;
       void connectTo(double topOff, double bottomOff) {
         prims.add(SldLine(dropX, prevDropBottom, dropX, cy - topOff,

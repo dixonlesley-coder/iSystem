@@ -43,6 +43,15 @@ class CalcReportData {
   final String feedStrategy;
   final Pressure targetResidual;
   final PumpDuty? pump; // upfeed
+
+  /// Round 17 (report-recompute-2-report-omits-non-primary-supply-movers) —
+  /// EVERY drawn supply mover with its solved duty, under the SAME tag and
+  /// service the equipment schedule prints (root pump, zone boosters, the
+  /// transfer pump of a GT -> TP -> RT scheme). Non-empty ⇒ one tagged line per
+  /// mover replaces the single [pump] head / motor lines (which only ever
+  /// carried the primary non-transfer mover, so a pure transfer scheme printed
+  /// no pump at all). Empty (an undrawn upfeed pump) ⇒ the legacy lines.
+  final List<({String tag, String service, PumpDuty duty})> supplyPumps;
   final Head? boosterHead; // downfeed shortfall (null if n/a)
   final bool gravitySufficient;
   final List<DownfeedZoneStatic> zones;
@@ -131,6 +140,7 @@ class CalcReportData {
     required this.feedStrategy,
     required this.targetResidual,
     this.pump,
+    this.supplyPumps = const [],
     this.boosterHead,
     this.gravitySufficient = false,
     this.zones = const [],
@@ -502,7 +512,18 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       .format(RptStringKey.wsFeedStrategy, {'strategy': d.feedStrategy}));
   ws.writeln(strings.format(RptStringKey.wsTargetResidual,
       {'kpa': d.targetResidual.inKiloPascals.toStringAsFixed(0)}));
-  if (d.pump != null) {
+  if (d.supplyPumps.isNotEmpty) {
+    for (final p in d.supplyPumps) {
+      final lps = p.duty.flow.inLitersPerSecond;
+      ws.writeln(strings.format(RptStringKey.wsPumpTagged, {
+        'tag': p.tag,
+        'service': p.service,
+        'lps': lps.toStringAsFixed(lps < 1 ? 2 : 1),
+        'm': p.duty.head.meters.toStringAsFixed(1),
+        'kw': p.duty.selectedMotor.inKiloWatts.toStringAsFixed(2),
+      }));
+    }
+  } else if (d.pump != null) {
     ws.writeln(strings.format(RptStringKey.wsPumpHead,
         {'m': d.pump!.head.meters.toStringAsFixed(1)}));
     ws.writeln(strings.format(RptStringKey.wsPumpMotor,
