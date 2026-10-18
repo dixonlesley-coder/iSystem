@@ -1455,6 +1455,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Sizing is ORDER-INDEPENDENT (round 7 property suite `audit_r7_*`)**: shuffling
+  nodes/edges or renaming ids never changes a size, head or verdict. The root
+  ladder is physical + id-tie-broken (plants never bear leaf demand; gravity at
+  the lowest demand-free leaf, vent at the highest); looped-water BRIDGE edges
+  size on their own far-side UBAP; heads/fan static take the max upstream
+  friction over the SIZED flow direction (`oriented_paths.dart`); Hardy-Cross
+  uses a min-resistance spanning tree + a simultaneous Newton loop solve.
+
 - **A run's length includes its vertical leg (`network.dart` `runVerticalLeg` /
   `edgeLength`)**: a RUN between nodes at different CONNECTION elevations
   (`runConnectionElevation`: ceiling air terminals + sprinkler heads at the
