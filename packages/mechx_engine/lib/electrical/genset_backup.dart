@@ -27,7 +27,7 @@ const List<String> kEssentialNameWords = [
 /// NON / TIDAK / BUKAN (optionally joined by a space, '-' or '_') before an
 /// essential word — the negated designation (Round 19).
 final RegExp _negatedEssentialWord = RegExp(
-    r'(NON|TIDAK|BUKAN)[\s_\-]*(' '${kEssentialNameWords.join('|')}' r')');
+    r'(?<![A-Z0-9])(NON|TIDAK|BUKAN)[\s_\-]*(' '${kEssentialNameWords.join('|')}' r')');
 
 /// True when [name] marks a board essential ([kEssentialNameWords],
 /// case-insensitive). The ONE name heuristic shared by [gensetBackedPanelIds]

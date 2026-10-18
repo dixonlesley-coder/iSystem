@@ -173,6 +173,32 @@ class EarthingResult {
 String _num(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
+/// The ONE conductor-grouping rule behind every printed cable make-up (Round
+/// 19 review follow-up): consecutive equal sections collapse to `N×size`
+/// (`[35, 35, 35, 35, 16]` → `4×35 + 16`). The BOM description
+/// ([GroundingResult.cableSpec], unicode `×` / ` + `) and the drawing labels
+/// (`cableLabel`, ASCII `x` / `+`) both call it with their own glyphs, so the
+/// two can differ only in typography, never in the grouping.
+String groupedConductorMakeup(
+  List<double> conductors,
+  String Function(double) format, {
+  required String times,
+  required String separator,
+}) {
+  final groups = <({double size, int n})>[];
+  for (final size in conductors) {
+    if (groups.isNotEmpty && groups.last.size == size) {
+      final last = groups.removeLast();
+      groups.add((size: last.size, n: last.n + 1));
+    } else {
+      groups.add((size: size, n: 1));
+    }
+  }
+  return groups
+      .map((g) => g.n > 1 ? '${g.n}$times${format(g.size)}' : format(g.size))
+      .join(separator);
+}
+
 /// Size the PE + neutral conductors and describe the cable make-up.
 /// 1φ = L+N+PE; 3φ = 3L+N+PE (or 3L+PE without a neutral, e.g. motors). With
 /// parallel runs the make-up is per run, prefixed with the run count.
@@ -199,18 +225,8 @@ GroundingResult sizeGrounding(
     if (hasNeutral) neutral,
     pe,
   ];
-  final groups = <({double size, int n})>[];
-  for (final size in conductors) {
-    if (groups.isNotEmpty && groups.last.size == size) {
-      final last = groups.removeLast();
-      groups.add((size: last.size, n: last.n + 1));
-    } else {
-      groups.add((size: size, n: 1));
-    }
-  }
-  final makeup = groups
-      .map((g) => g.n > 1 ? '${g.n}×${_num(g.size)}' : _num(g.size))
-      .join(' + ');
+  final makeup =
+      groupedConductorMakeup(conductors, _num, times: '×', separator: ' + ');
 
   final prefix = runsPerPhase > 1 ? '$runsPerPhase× ' : '';
   return GroundingResult(

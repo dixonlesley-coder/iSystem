@@ -10,10 +10,12 @@
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/genset_backup.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart' show cableLabel;
 import 'package:mechx_engine/sizing/drainage_sizing.dart' as drain;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart' as storm;
@@ -175,6 +177,7 @@ void main() {
         'PANEL TIDAK ESENSIAL',
         'PANEL BUKAN DARURAT',
         'non_emergency lighting',
+        'PANEL_NON_ESENSIAL',
       ]) {
         expect(isEssentialByName(neg), isFalse, reason: neg);
       }
@@ -185,6 +188,10 @@ void main() {
         'PANEL EMERGENSI',
         // A negated word elsewhere does not cancel a real essential word.
         'ESSENTIAL (NON-UPS)',
+        // Review follow-up: a word merely ENDING in NON/TIDAK/BUKAN is not a
+        // negation (no separator before it).
+        'CANON ESENSIAL',
+        'PANEL_ANON_DARURAT',
       ]) {
         expect(isEssentialByName(pos), isTrue, reason: pos);
       }
@@ -202,5 +209,33 @@ void main() {
       ]);
       expect(gensetBackedPanelIds(p), {'E'});
     });
+  });
+
+  // Review follow-up: the BOM description (GroundingResult.cableSpec) and the
+  // drawing label (cableLabel) group conductors through ONE helper, so for
+  // every section/phase/neutral combination they differ only in typography.
+  test('cable make-up parity: BOM spec == drawing label (modulo glyphs)', () {
+    for (final csa in [1.5, 2.5, 4.0, 10.0, 16.0, 35.0, 70.0, 150.0, 240.0]) {
+      for (final three in [true, false]) {
+        for (final hasN in [true, false]) {
+          if (!three && !hasN) continue;
+          final g = sizeGrounding(_profile,
+              phaseCsaMm2: csa, threePhase: three, hasNeutral: hasN,
+              cableType: 'NYY');
+          final label = cableLabel(null, csa, three,
+              cores: g.cores,
+              peCsaMm2: g.peCsaMm2,
+              neutralCsaMm2: hasN ? g.neutralCsaMm2 : null);
+          final bom = g.cableSpec
+              .replaceAll('×', 'x')
+              .replaceAll(' + ', '+')
+              .replaceAll(' mm²', '');
+          // The label collapses an all-equal make-up to `NYY 5x16`; the BOM
+          // groups it the same way (`5×16`), so the strings must match.
+          expect(label.split(' ').last, bom.split(' ').last,
+              reason: 'csa=$csa 3ph=$three N=$hasN ($label vs ${g.cableSpec})');
+        }
+      }
+    }
   });
 }

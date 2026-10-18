@@ -21,7 +21,8 @@ import '../electrical/cable_family.dart'
 import '../electrical/containment.dart'
     show ConduitSpec, conduitFillSingle, sizeConduit;
 import '../electrical/control/starter.dart' show StarterType;
-import '../electrical/earthing.dart' show EarthingSystemInfo;
+import '../electrical/earthing.dart'
+    show EarthingSystemInfo, groupedConductorMakeup;
 import '../electrical/genset_backup.dart'
     show gensetBackupDemandVa, gensetBackupDemandW, isEssentialByName;
 import '../electrical/load_kind.dart' show LoadKind;
@@ -281,18 +282,8 @@ String cableLabel(ElectricalCircuit? circuit, double csaMm2, bool threePhase,
   if (conductors.length != n || conductors.every((c) => c == csaMm2)) {
     return '$family ${n}x${_num(csaMm2)}';
   }
-  final groups = <({double size, int n})>[];
-  for (final size in conductors) {
-    if (groups.isNotEmpty && groups.last.size == size) {
-      final last = groups.removeLast();
-      groups.add((size: last.size, n: last.n + 1));
-    } else {
-      groups.add((size: size, n: 1));
-    }
-  }
-  final makeup = groups
-      .map((g) => g.n > 1 ? '${g.n}x${_num(g.size)}' : _num(g.size))
-      .join('+');
+  final makeup =
+      groupedConductorMakeup(conductors, _num, times: 'x', separator: '+');
   return '$family $makeup';
 }
 
