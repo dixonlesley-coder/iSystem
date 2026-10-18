@@ -106,6 +106,23 @@ class Part {
   /// Rated residual operating current (mA) of an RCCB / RCBO part.
   double? get residualMa => _asNum(attributes['residualMa']);
 
+  /// Residual-current WAVEFORM type of an RCCB / RCBO part (AC / A / F / B),
+  /// read from `rcdType` (or ABB's `acClass` on an RCD device — on a
+  /// contactor `acClass` is a utilisation category, never read for it). Null
+  /// when the part does not declare it (Round 19).
+  String? get rcdType {
+    final t = attributes['rcdType'] ?? attributes['acClass'];
+    return t is String ? t.trim().toUpperCase() : null;
+  }
+
+  /// True when the part is a TIME-DELAYED (S-type, selective) RCD — declared
+  /// `timeDelayed: true` or an `rcdType` carrying the `S` suffix (`A-S`).
+  bool get rcdTimeDelayed {
+    if (attributes['timeDelayed'] == true) return true;
+    final t = rcdType;
+    return t != null && (t.endsWith('-S') || t.endsWith(' S') || t == 'S');
+  }
+
   static double? _asNum(Object? v) => v is num ? v.toDouble() : null;
 }
 

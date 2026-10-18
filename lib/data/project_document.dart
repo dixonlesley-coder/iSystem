@@ -397,11 +397,14 @@ class DesignSettings {
         // Tolerant: only the known codes are accepted; anything else → 'en'.
         localeCode: json['locale'] == 'id' ? 'id' : 'en',
         priceList: _priceListFromJson(json['priceList']),
-        labourRatePerHour:
-            (json['labourRatePerHour'] as num?)?.toDouble() ?? 150000,
-        overheadPct: (json['overheadPct'] as num?)?.toDouble() ?? 10,
-        contingencyPct: (json['contingencyPct'] as num?)?.toDouble() ?? 5,
-        marginPct: (json['marginPct'] as num?)?.toDouble() ?? 15,
+        // Round 19 (persistence-2-3) — the commercial markups decode into
+        // the bands their setters enforce (rate ≥ 0, overhead / contingency
+        // 0–100 %, margin 0–99.9 %).
+        labourRatePerHour: _decodeClamped(
+            json['labourRatePerHour'], 150000, 0, double.maxFinite),
+        overheadPct: _decodeClamped(json['overheadPct'], 10, 0, 100),
+        contingencyPct: _decodeClamped(json['contingencyPct'], 5, 0, 100),
+        marginPct: _decodeClamped(json['marginPct'], 15, 0, 99.9),
         fixtureLibrary: _fixtureLibraryFromJson(json['fixtureLibrary']),
         // Tolerant: only the known method code is accepted.
         coolingLoadMethod:
@@ -580,19 +583,25 @@ NetNode _netNodeFromJson(Map n) => NetNode(
       fixture: n['fixture'] == null
           ? null
           : _enumOrNull(PlumbingFixture.values, n['fixture']),
-      airflow: n['airflow_lps'] == null
+      // Round 19 (persistence-2-3) — every numeric design field is decoded
+      // into the band its store setter / engine entry enforces: a negative
+      // roof area / airflow / tank / load or a non-positive face is DROPPED
+      // (null ⇒ the default), never fed to an engine assert that takes the
+      // whole sizing chain down (debug) or silently computes with it
+      // (release).
+      airflow: _decodeNonNegative(n['airflow_lps']) == null
           ? null
-          : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
+          : FlowRate.litersPerSecond(_decodeNonNegative(n['airflow_lps'])!),
       customFixtureId: n['customFixtureId'] as String?,
-      roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
+      roofAreaM2: _decodeNonNegative(n['roof_area_m2']),
       // Tolerant: absent / unknown ⇒ null ⇒ an ordinary node.
       component: n['component'] == null
           ? null
           : _enumOrNull(NodeComponent.values, n['component']),
-      tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
-      electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
-      faceWidthMm: (n['face_w_mm'] as num?)?.toDouble(),
-      faceHeightMm: (n['face_h_mm'] as num?)?.toDouble(),
+      tankCapacityLitres: _decodeNonNegative(n['tank_l']),
+      electricalLoadW: _decodeNonNegative(n['elec_w']),
+      faceWidthMm: _decodePositive(n['face_w_mm']),
+      faceHeightMm: _decodePositive(n['face_h_mm']),
       fittingType: n['fitting'] == null
           ? null
           : _enumOrNull(JunctionFitting.values, n['fitting']),
@@ -618,10 +627,33 @@ NetEdge _netEdgeFromJson(Map e) => NetEdge(
       kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
       pipeProduct: _enumOrNull(PipeProduct.values, e['pipe_product']),
       ductProduct: _enumOrNull(DuctProduct.values, e['duct_product']),
-      sizeOverride: e['size_override_mm'] == null
+      // Round 19 — a zero / negative / non-finite size override is dropped
+      // (auto-size), never a 0 mm bore asserted on in every pressure solve.
+      sizeOverride: _decodePositive(e['size_override_mm']) == null
           ? null
-          : Diameter.mm((e['size_override_mm'] as num).toDouble()),
+          : Diameter.mm(_decodePositive(e['size_override_mm'])!),
     );
+
+/// Round 19 (persistence-2-3) — a stored number that must be FINITE and > 0,
+/// else null (the field's default).
+double? _decodePositive(Object? raw) {
+  final v = raw is num ? raw.toDouble() : null;
+  return (v != null && v.isFinite && v > 0) ? v : null;
+}
+
+/// Round 19 — a stored number that must be FINITE and ≥ 0, else null.
+double? _decodeNonNegative(Object? raw) {
+  final v = raw is num ? raw.toDouble() : null;
+  return (v != null && v.isFinite && v >= 0) ? v : null;
+}
+
+/// Round 19 — a stored number clamped into [lo, hi]; non-finite / absent ⇒
+/// [fallback].
+double _decodeClamped(Object? raw, double fallback, double lo, double hi) {
+  final v = raw is num ? raw.toDouble() : null;
+  if (v == null || !v.isFinite) return fallback;
+  return v.clamp(lo, hi).toDouble();
+}
 
 /// A named, re-stampable group of drawn nodes + edges (E5) — a reusable "block":
 /// the WC toilet group, the pump-room hookup, a shaft riser set. Persisted in
@@ -904,14 +936,22 @@ class ProjectDocument {
       fixtureHeight: Length(mountM(
           project['fixtureHeightM'], defaultMounting.fixtureHeight.meters, 2.5)),
     );
+    // Round 19 (persistence-2-1) — tolerant like the viewport decode: a
+    // non-finite / non-positive metres-per-pixel (the store's
+    // `setCalibration` refuses those) is DROPPED, so the sheet loads
+    // uncalibrated and Review prompts a re-scale — instead of the
+    // ScaleCalibration assert refusing the whole file (debug) or every run
+    // on that sheet measuring negative (release).
     final calibrations = <String, ScaleCalibration>{
       for (final e in (project['calibrations'] as Map).entries)
-        e.key as String: ScaleCalibration((e.value as num).toDouble()),
+        if (_decodePositive(e.value) != null)
+          e.key as String: ScaleCalibration(_decodePositive(e.value)!),
     };
-    // J1: tolerant — absent on an older file ⇒ no stale flags.
+    // J1: tolerant — absent on an older file ⇒ no stale flags. A flag on a
+    // sheet whose calibration was dropped above is dropped with it.
     final staleCalibrations = <String>{
       for (final id in (project['staleCalibrations'] as List? ?? const []))
-        id as String,
+        if (calibrations.containsKey(id)) id as String,
     };
     final sheets = [
       for (final s in json['sheets'] as List)

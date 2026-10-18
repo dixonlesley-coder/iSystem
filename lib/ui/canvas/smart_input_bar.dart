@@ -3,6 +3,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../../store/app_state.dart' show AppLocale, localeProvider;
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/smart_input_store.dart';
@@ -42,8 +43,12 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
     super.dispose();
   }
 
+  /// Round 19 — the active UI locale's number convention.
+  bool get _indonesian => ref.read(localeProvider) == AppLocale.id;
+
   void _commit() {
-    final parse = parseDrawingInput(_controller.text);
+    final parse =
+        parseDrawingInput(_controller.text, indonesian: _indonesian);
     if (parse.error != null) {
       setState(() => _error = parse.error);
       return;
@@ -97,7 +102,8 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
     final type = context.type;
 
     // Live preview of the parsed length (e.g. "3000 mm = 3.0 m").
-    final parse = parseDrawingInput(_controller.text);
+    final parse = parseDrawingInput(_controller.text,
+        indonesian: ref.watch(localeProvider) == AppLocale.id);
     String preview;
     Color previewColor = colors.textMuted;
     if (!calibrated) {
@@ -159,7 +165,8 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
                   if (_error != null) setState(() => _error = null);
                   // B25 — seed the Alt parallel-offset lock with the last valid
                   // typed length, so 'type an offset, then Alt over a wall' works.
-                  final parsed = parseDrawingInput(text);
+                  final parsed =
+                      parseDrawingInput(text, indonesian: _indonesian);
                   if (parsed.ok) {
                     ref
                         .read(parallelOffsetProvider.notifier)

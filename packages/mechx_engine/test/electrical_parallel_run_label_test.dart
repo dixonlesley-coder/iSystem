@@ -89,6 +89,23 @@ void main() {
       expect(cableRunLabel(null, 240, true, cores: 4, runs: 3),
           '3x(NYY 4x240 mm2)');
     });
+
+    test('Round 19: a reduced PE / neutral prints the grouped make-up', () {
+      // 3L + N at 35 mm², PE 16 mm² (25–35 mm² phase ⇒ 16 mm² PE).
+      expect(cableRunLabel(null, 35, true, cores: 5, peCsaMm2: 16),
+          'NYY 4x35+16 mm2');
+      // Motor (no neutral): 3L at 70, PE 35 (S/2).
+      expect(cableRunLabel(null, 70, true, cores: 4, peCsaMm2: 35),
+          'NYY 3x70+35 mm2');
+      // Reduced neutral AND PE: 3×240 + 120 + 120 ⇒ 3x240+2x120.
+      expect(
+          cableRunLabel(null, 240, true,
+              cores: 5, runs: 2, peCsaMm2: 120, neutralCsaMm2: 120),
+          '2x(NYY 3x240+2x120 mm2)');
+      // PE at the phase section ⇒ the plain count (byte-identical).
+      expect(cableRunLabel(null, 16, true, cores: 5, peCsaMm2: 16),
+          'NYY 5x16 mm2');
+    });
   });
 
   group('every drawing surface carries the run count', () {
@@ -110,8 +127,11 @@ void main() {
       final labels =
           sheet.prims.whereType<SldLabel>().map((l) => l.text).toList();
       final n = big.cable.runsPerPhase!;
-      final expected =
-          '${n}x(NYM ${big.grounding.cores}x${big.cable.csaMm2.round()} mm2)';
+      // Round 19 — 3L + N at the phase section, PE reduced (S/2 → standard).
+      expect(big.grounding.neutralCsaMm2, big.cable.csaMm2);
+      expect(big.grounding.peCsaMm2, lessThan(big.cable.csaMm2));
+      final expected = '${n}x(NYM 4x${big.cable.csaMm2.round()}'
+          '+${big.grounding.peCsaMm2.round()} mm2)';
       expect(labels.where((t) => t.startsWith(expected)), hasLength(1));
       // No row prints a bare single parallel-section cable.
       expect(
@@ -124,8 +144,9 @@ void main() {
 
     test('overview AND riser feeder labels', () {
       final n = feed.cable.runsPerPhase!;
-      final prefix = '${n}x(NYM ${feed.grounding.cores}x'
-          '${feed.cable.csaMm2.round()} mm2) · ';
+      expect(feed.grounding.neutralCsaMm2, feed.cable.csaMm2);
+      final prefix = '${n}x(NYM 4x${feed.cable.csaMm2.round()}'
+          '+${feed.grounding.peCsaMm2.round()} mm2) · ';
       final ov = buildElectricalOverview(project: _project, result: sys);
       expect(
           ov.prims

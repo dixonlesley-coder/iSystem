@@ -15,7 +15,8 @@ import 'package:mechx_engine/units.dart';
 
 import '../ui/canvas/canvas_grid.dart' show nearestGridIntersection;
 import '../ui/canvas/snapping.dart' show orthoElbow;
-import 'annotation_store.dart' show RoomArea;
+import 'annotation_store.dart'
+    show RoomArea, roomAreasProvider, roomTerminalOwnerId;
 import 'floor_remap.dart' show shiftFloorIndex;
 import 'history_store.dart';
 import 'project_store.dart' show projectControllerProvider;
@@ -1780,13 +1781,24 @@ class NetworkController extends Notifier<DrawingState> {
     // — before re-placing, so re-running the button re-generates the terminals
     // instead of stacking a second generation atop the first (which silently
     // doubled the carried airflow). All in the SAME undo step as the placement.
+    //
+    // Round 19 — "this room's" terminals are the ones it OWNS
+    // ([roomTerminalOwnerId]: the smallest compatible room containing them),
+    // so re-placing an office never deletes the exhaust grilles of a toilet
+    // drawn inside it (nor a toilet the office diffusers around it).
+    final allRooms = [
+      for (final r in ref.read(roomAreasProvider))
+        if (r.id != room.id) r,
+      room,
+    ];
     final priorIds = <String>{
       for (final node in state.network.nodes)
         if ((node.component == NodeComponent.supplyDiffuser ||
                 node.component == NodeComponent.returnGrille ||
                 node.component == NodeComponent.exhaustGrille) &&
-            room.containsNode(
-                node.sheetId, node.floorIndex, node.x, node.y))
+            roomTerminalOwnerId(node.component, node.sheetId,
+                    node.floorIndex, node.x, node.y, allRooms) ==
+                room.id)
           node.id,
     };
     final nodes = [

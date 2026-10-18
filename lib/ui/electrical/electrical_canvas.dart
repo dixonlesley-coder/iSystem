@@ -1773,7 +1773,7 @@ class _CanvasPainter extends CustomPainter {
           // G5: the REAL core count from the sized grounding (4 for a 3ph run
           // with no neutral), so the canvas label matches the schedule/export.
           final label =
-              '${cableRunLabel(c, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase)}'
+              '${cableRunLabel(c, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase, peCsaMm2: cr.grounding.peCsaMm2, neutralCsaMm2: cr.grounding.neutralCsaMm2)}'
               ' · ${breakerScheduleLabel(cr.breaker, poles)}';
           labels.add((
             spec: FeederLabelSpec(
@@ -2721,7 +2721,11 @@ class _PanelSummaryBody extends StatelessWidget {
           runSpacing: 6,
           children: [
             _Stat(value: fmtKw(panel.connectedW), label: 'load'),
-            _Stat(value: fmtAmp(panel.demandCurrent.amperes), label: 'demand'),
+            // Round 19 — beside the undiversified 'load' this is the
+            // undiversified worst-phase current: a diversified board says so.
+            _Stat(
+                value: fmtAmp(panel.demandCurrent.amperes),
+                label: panel.isDiversified ? 'max ph' : 'demand'),
             _Stat(
               value:
                   '${_cls(panel.incomer.breaker)} ${fmtAmp0(panel.incomer.breaker.ratingA.amperes)}/${panel.incomer.poles}P',

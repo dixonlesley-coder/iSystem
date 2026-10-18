@@ -838,7 +838,10 @@ class ElectricalCircuitInspector extends StatelessWidget {
         // schedule's PENGHANTAR cell exactly.
         value:
             cableRunLabel(circuit, c.cable.csaMm2, c.threePhase,
-                cores: c.grounding.cores, runs: c.cable.runsPerPhase),
+                cores: c.grounding.cores,
+                runs: c.cable.runsPerPhase,
+                peCsaMm2: c.grounding.peCsaMm2,
+                neutralCsaMm2: c.grounding.neutralCsaMm2),
       ));
       final vd = c.voltageDrop;
       rows.add(ElectricalResultRow(
@@ -1447,7 +1450,13 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
     if (r != null) {
       rows.add(ElectricalResultRow(
         label: 'Demand',
-        value: '${fmtAmp(r.demandCurrent.amperes)} · ${fmtKw(r.demandW)}',
+        // Round 19 — a diversified board pairs the DIVERSIFIED current with
+        // its diversified kW and labels the undiversified worst-phase sizing
+        // current (the schedule header's `div (max ph … undiv)` basis).
+        value: r.isDiversified
+            ? '${fmtAmp(r.diversifiedDemandCurrent.amperes)} div · max ph '
+                '${fmtAmp(r.demandCurrent.amperes)} · ${fmtKw(r.demandW)}'
+            : '${fmtAmp(r.demandCurrent.amperes)} · ${fmtKw(r.demandW)}',
       ));
       rows.add(ElectricalResultRow(
         label: 'Incomer',

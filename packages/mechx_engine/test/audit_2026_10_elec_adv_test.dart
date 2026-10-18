@@ -550,9 +550,16 @@ void main() {
       // The description names the single cable, so 120 m reads unambiguously.
       expect(cable.description, isNot(contains('3×')));
       expect(cable.description, contains('4×240'));
-      // Skun: 5 conductors (3L+N+PE) × 2 ends × 3 runs = 30 lugs.
-      final lugs = lines.where((l) => l.description.contains('skun')).single;
-      expect(lugs.qty, 30);
+      // Skun: 5 conductors (3L+N+PE) × 2 ends × 3 runs = 30 lugs — Round 19
+      // split by section: the PE of a 240 mm² phase is 120 mm² (S/2), so
+      // 4 × 2 × 3 = 24 lugs at 240 mm² and 1 × 2 × 3 = 6 at 120 mm².
+      final lugs = lines.where((l) => l.description.contains('skun')).toList();
+      expect(feeder.grounding.peCsaMm2, 120);
+      expect(lugs.singleWhere((l) => l.description.contains('240 mm²')).qty,
+          24);
+      expect(lugs.singleWhere((l) => l.description.contains('120 mm²')).qty,
+          6);
+      expect(lugs.fold<double>(0, (a, l) => a + l.qty), 30);
     });
 
     test('tray fill counts one cable per parallel run', () {

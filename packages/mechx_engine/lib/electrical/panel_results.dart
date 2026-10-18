@@ -309,6 +309,22 @@ class ElectricalPanelResult {
 
   final List<ElectricalWarning> warnings;
 
+  /// The board's own diversity factor (Round 19) — [demandW] =
+  /// [connectedW] × this. 1.0 on a hand-built result.
+  final double diversityFactor;
+
+  /// True when the board diversifies ([diversityFactor] < 1): its
+  /// [demandCurrent] (the worst-phase balance current BEFORE diversity, the
+  /// incomer / busbar sizing basis) then differs from [diversifiedDemandCurrent].
+  bool get isDiversified => diversityFactor < 1 - 1e-9;
+
+  /// The diversified worst-phase current, [demandCurrent] × [diversityFactor]
+  /// (Round 19, electrical-parity-2-board-demand-current-undiversified) — the
+  /// figure that pairs with the diversified [demandW] and that the
+  /// `feeder-below-fed-demand` judge compares the feeder breaker against.
+  Current get diversifiedDemandCurrent =>
+      Current(demandCurrent.amperes * diversityFactor);
+
   const ElectricalPanelResult({
     required this.panelId,
     required this.name,
@@ -329,6 +345,7 @@ class ElectricalPanelResult {
     this.capacitorCurrentA = 0,
     required this.phaseBalance,
     required this.warnings,
+    this.diversityFactor = 1.0,
   });
 }
 

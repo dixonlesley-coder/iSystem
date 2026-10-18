@@ -83,6 +83,19 @@ class CableResult {
   /// Defaults true so a normally-sized cable is byte-identical.
   final bool ampacityReached;
 
+  /// The ampacity the sizer REQUIRED of the conductor (Round 19):
+  /// `max(In, continuousLoadFactor × Ib)` — the figure a failed
+  /// [ampacityReached] is judged against (it may exceed In for a large
+  /// continuous load). Null on a hand-built result.
+  final Current? izRequired;
+
+  /// The design current Ib the continuous-load term was taken on (Round 19).
+  final Current? izBasisCurrent;
+
+  /// The continuous-load factor applied to [izBasisCurrent] (1.25, a
+  /// `notAnSniClause` value — see `PuilProfile.continuousLoadFactor`).
+  final double? continuousLoadFactor;
+
   const CableResult({
     required this.csaMm2,
     required this.baseKha,
@@ -92,6 +105,9 @@ class CableResult {
     required this.vdDriven,
     required this.appliedRule,
     this.ampacityReached = true,
+    this.izRequired,
+    this.izBasisCurrent,
+    this.continuousLoadFactor,
   });
 }
 

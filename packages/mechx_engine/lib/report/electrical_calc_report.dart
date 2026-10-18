@@ -347,10 +347,18 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
           : '',
       'pe': _n(p.neutralPeBars.peCsaMm2),
     }));
+    // Round 19 — a diversified board's current is printed as the diversified
+    // figure (pairs with the diversified W) with the undiversified worst-phase
+    // sizing current labelled beside it, never the bare pre-diversity figure.
     pb.writeln(strings.format(RptStringKey.panelDemand, {
       'c': _n(p.connectedW),
       'd': _n(p.demandW),
-      'a': _a(p.demandCurrent.amperes),
+      'a': p.isDiversified
+          ? strings.format(RptStringKey.panelDemandCurrentSplit, {
+              'div': _a(p.diversifiedDemandCurrent.amperes),
+              'undiv': _a(p.demandCurrent.amperes),
+            })
+          : _a(p.demandCurrent.amperes),
     }));
     if (p.system.isThreePhase) {
       pb.writeln(strings.format(RptStringKey.panelPhaseBalance, {

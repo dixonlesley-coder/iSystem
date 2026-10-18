@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart' show Offset, immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../ui/widgets/locale_number.dart' show parseLocaleNumber;
 import 'route_geometry.dart';
 
 /// Parsed smart-input while drawing a run: an exact length in millimetres and an
@@ -30,11 +31,17 @@ class DrawInput {
 
 /// Parse the smart-input text. Format: `<length-mm> [<angle-deg>]`. Empty text
 /// is a no-op (no error, no length). Validation messages are plain language.
-DrawInput parseDrawingInput(String text) {
+///
+/// Round 19 (regression-locale-parser-not-universal) — both tokens go through
+/// the ONE engineering-number parser ([parseLocaleNumber]): in the Indonesian
+/// UI ([indonesian]) `1.500` is 1500 mm (`.` groups thousands) and `2,5` is
+/// 2.5 mm, exactly as the offset dialog reads the same keystrokes — the two mm
+/// length fields used to disagree by 1000× in one session.
+DrawInput parseDrawingInput(String text, {bool indonesian = false}) {
   final t = text.trim();
   if (t.isEmpty) return const DrawInput();
   final parts = t.split(RegExp(r'\s+'));
-  final mm = double.tryParse(parts[0]);
+  final mm = parseLocaleNumber(parts[0], indonesian: indonesian);
   // `double.tryParse` happily returns NaN / Infinity ('NaN', 'Infinity',
   // '1e400'); a non-finite length would plant a NaN/Infinity node that the
   // JSON encoder refuses, making Save and autosave throw (Round 10).
@@ -47,7 +54,7 @@ DrawInput parseDrawingInput(String text) {
   }
   double? angle;
   if (parts.length > 1) {
-    angle = double.tryParse(parts[1]);
+    angle = parseLocaleNumber(parts[1], indonesian: indonesian);
     if (angle == null || !angle.isFinite) {
       return const DrawInput(error: 'Angle must be a number, e.g. 3000 90');
     }

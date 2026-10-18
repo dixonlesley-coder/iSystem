@@ -14,6 +14,8 @@ import 'package:mechx_engine/electrical/containment.dart'
 import 'package:mechx_engine/electrical/fault.dart' show breakingCapacityKa;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalCircuitResult;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart'
@@ -468,12 +470,14 @@ void main() {
       expect(spec.conduitSizeMm, 63.0);
 
       // G5: the probe way is a MOTOR — motor-like ⇒ no neutral ⇒ the sized
-      // grounding is 3L + PE = 4 cores, PE INSIDE the cable, so the cable cell
-      // reads `4x70` (the conduit basis is unchanged: the fallback ladder
-      // still sizes the conservative 5-core bundle).
+      // grounding is 3L + PE = 4 cores, PE INSIDE the cable. Round 19: the PE
+      // of a 70 mm² phase is S/2 = 35 mm² (PUIL / IEC 60364-5-54), so the cell
+      // prints the make-up the BOM orders, `3x70+35` (the conduit basis is
+      // unchanged: the fallback ladder still sizes the conservative 5-core
+      // bundle).
       final sheet = _scheduleForCsa(puil, 70, threePhase: true);
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('4x70 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('3x70+35 mm2'), orElse: () => '');
       expect(cable, isNotEmpty, reason: 'the 70 mm2 run must be on the sheet');
       expect(cable, isNot(contains('PVC 50mm')));
       expect(cable, contains('PVC 63mm'));
@@ -520,9 +524,8 @@ void main() {
         // G5: the schedule prints the REAL core count the sizing resolved
         // (3L+PE for a motor, 3L+N+PE otherwise) — the same count the
         // containment study sizes its conduit from.
-        final cores = c.grounding.cores;
         final cell = _cableCells(sheet).firstWhere(
-            (t) => t.contains('${cores}x${_numText(c.cable.csaMm2)} mm2'),
+            (t) => t.contains('${_makeup(c)} mm2'),
             orElse: () => '');
         expect(cell, isNotEmpty);
         expect(cell, contains(want),
@@ -539,9 +542,10 @@ void main() {
       expect(spec.conduitSizeMm, 63.0);
       expect(spec.fillPct, greaterThan(conduitFillSingle * 100));
       final sheet = _scheduleForCsa(puil, 150, threePhase: true);
-      // G5: the motor probe has no neutral ⇒ `4x150` (see above).
+      // G5: the motor probe has no neutral; Round 19: PE = next standard
+      // section ≥ 150/2 = 75 ⇒ 95 mm² ⇒ `3x150+95` (see above).
       final cable = _cableCells(sheet)
-          .firstWhere((t) => t.contains('4x150 mm2'), orElse: () => '');
+          .firstWhere((t) => t.contains('3x150+95 mm2'), orElse: () => '');
       expect(cable, contains(' · tray'));
     });
   });
@@ -561,11 +565,10 @@ void main() {
       final mdp = result.panels['MDP']!;
       expect(mdp.circuits, isNotEmpty);
       for (final c in mdp.circuits) {
-        final csa = _numText(c.cable.csaMm2);
+        final makeup = RegExp.escape(_makeup(c));
         expect(
             cells.where((t) =>
-                RegExp('^[A-Z]+ ${c.grounding.cores}x$csa mm2( |\$)')
-                    .hasMatch(t)),
+                RegExp('^[A-Z]+ $makeup mm2( |\$)').hasMatch(t)),
             isNotEmpty,
             reason: 'way ${c.circuitId}: ${c.grounding.cores} conductors incl. '
                 'PE; got $cells');
@@ -737,6 +740,34 @@ void main() {
 
 /// The engine's own number formatting for a schedule figure (integer when
 /// whole, else one decimal) — mirrored here so expectations read like the sheet.
+/// Round 19 — the conductor MAKE-UP a way's cable carries, derived from first
+/// principles of the sizing: [ElectricalCircuitResult.grounding] counts live +
+/// (neutral) + PE cores; live conductors are at the phase section, the
+/// neutral at its sized section, the PE at its sized (possibly reduced)
+/// section; equal adjacent sections group as `nxS`, joined by `+`.
+String _makeup(ElectricalCircuitResult c) {
+  final live = c.threePhase ? 3 : 1;
+  final g = c.grounding;
+  final hasN = g.cores - live - 1 >= 1;
+  final sizes = [
+    for (var i = 0; i < live; i++) c.cable.csaMm2,
+    if (hasN) g.neutralCsaMm2,
+    g.peCsaMm2,
+  ];
+  final out = <String>[];
+  var i = 0;
+  while (i < sizes.length) {
+    var j = i;
+    while (j < sizes.length && sizes[j] == sizes[i]) {
+      j++;
+    }
+    final n = j - i;
+    out.add(n > 1 ? '${n}x${_numText(sizes[i])}' : _numText(sizes[i]));
+    i = j;
+  }
+  return out.join('+');
+}
+
 String _numText(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
