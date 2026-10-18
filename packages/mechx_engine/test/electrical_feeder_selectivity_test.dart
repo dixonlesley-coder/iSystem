@@ -298,11 +298,16 @@ void main() {
   // ── (3) an already-selective pair ⇒ no second pass ────────────────────────
   group('(3) an already-selective feeder is left exactly as pass 1 sized it',
       () {
-    // SP: 3φ heater 20 kW at cosφ 1.0 ⇒ Ib = 20 000/(√3·400) = 28.868 → 28.9 A
-    //   ⇒ SP incomer = first rung ≥ 28.9 = 32 A ⇒ floor would be 1.6×32 = 51.2.
-    // The feeder runs at a poor cosφ 0.5, so it already sizes well above that:
-    //   Ib(f1) = 20 000/(√3·400·0.5) = 57.735 A ⇒ 63 A ≥ 51.2 ⇒ NO floor is
-    //   derived, the floors map is empty and pass 1 IS the answer.
+    // Round-7 elec-props-2: a feeder now converts the fed board's demand at
+    // that board's REAL power factor, so it can no longer out-size its fed
+    // incomer by running at a poorer cos φ than the loads (the old premise of
+    // this case was exactly that defect). The already-selective pair is now a
+    // way whose NAMEPLATE FLA sits below its W-based current:
+    // SP: 3φ 20 kW at cosφ 1.0 with an A5 FLA of 10 A ⇒ SP's incomer sizes on
+    //   the FLA ⇒ first rung ≥ 10 = 10 A ⇒ the floor would be 1.6×10 = 16 A.
+    // The feeder carries SP's 20 kW demand at SP's pf 1.0:
+    //   Ib(f1) = 20 000/(√3·400·1.0) = 28.868 → 28.9 A ⇒ 32 A ≥ 16 ⇒ NO floor
+    //   is derived, the floors map is empty and pass 1 IS the answer.
     const sp = ElectricalPanel(
       id: 'SP',
       name: 'Sub',
@@ -319,6 +324,7 @@ void main() {
           cosPhi: 1.0,
           phases: 3,
           length: Length(10),
+          flaOverrideA: Current(10),
         ),
       ],
     );
@@ -332,7 +338,7 @@ void main() {
           id: 'f1',
           name: 'Feeder to SP',
           loadKind: LoadKind.feeder,
-          cosPhi: 0.5,
+          cosPhi: 1.0,
           length: Length(25),
           feedsPanelId: 'SP',
         ),
@@ -350,6 +356,7 @@ void main() {
       mdp,
       opts: const ComputePanelOptions(
         feederLoadW: {'SP': 20000},
+        feederPowerFactor: {'SP': 1.0},
         panelSystems: {
           'MDP': ElectricalSystem.threePhase,
           'SP': ElectricalSystem.threePhase,
@@ -360,10 +367,10 @@ void main() {
     final sys = computeSystem(p, project);
 
     test('premise: the pass-1 feeder already clears 1.6× the child incomer', () {
-      expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 32);
-      expect(_way(pass1Mdp, 'f1').designCurrent.amperes, closeTo(57.7, 1e-9));
-      expect(_way(pass1Mdp, 'f1').breaker.ratingA.amperes, 63);
-      expect(nonSelective(63, 32), isFalse); // 63 ≥ 1.6 × 32 = 51.2
+      expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 10);
+      expect(_way(pass1Mdp, 'f1').designCurrent.amperes, closeTo(28.9, 1e-9));
+      expect(_way(pass1Mdp, 'f1').breaker.ratingA.amperes, 32);
+      expect(nonSelective(32, 10), isFalse); // 32 ≥ 1.6 × 10 = 16
     });
 
     test('the system result reproduces the pass-1 sizing field for field', () {
@@ -375,8 +382,10 @@ void main() {
       expect(feeder.cable.deratedIz.amperes, ref.cable.deratedIz.amperes);
       expect(feeder.voltageDrop.dropPercent, ref.voltageDrop.dropPercent);
       expect(feeder.grounding.peCsaMm2, ref.grounding.peCsaMm2);
-      // Iz ≥ max(63, 1.25 × 57.735 = 72.17) = 72.17 ⇒ 16 mm² (80 A).
-      expect(feeder.cable.csaMm2, 16);
+      // Iz ≥ max(32, 1.25 × 28.868 = 36.08) = 36.08 A: 4 mm² (KHA 34 A) ✗ ⇒
+      // 6 mm², the first section clearing it.
+      expect(feeder.cable.csaMm2, 6);
+      expect(feeder.cable.deratedIz.amperes, greaterThanOrEqualTo(36.08));
     });
   });
 

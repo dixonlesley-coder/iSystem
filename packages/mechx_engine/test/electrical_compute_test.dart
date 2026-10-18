@@ -222,8 +222,10 @@ void main() {
     test('feeder carries the child panel\'s diversified demand (not raw 10 kW)',
         () {
       final feeder = byId(r.panels['MDP']!, 'f1');
-      // Ib = 8000 / (√3·400·0.85) = 13.583 → 13.6 A  (NOT 10 000-based 16.98).
-      expect(feeder.designCurrent.amperes, closeTo(13.6, 1e-9));
+      // Round-7 elec-props-2: the feeder converts SP's demand at SP's REAL
+      // power factor (one cos 1.0 heater ⇒ pf 1.0), not its own 0.85 default:
+      // Ib = 8000 / (√3·400·1.0) = 11.547 → 11.5 A  (NOT 10 000-based 14.4).
+      expect(feeder.designCurrent.amperes, closeTo(11.5, 1e-9));
       expect(feeder.threePhase, isTrue);
       // SELECTIVITY FLOOR (2026-07-30): the heater is 3φ (14.4 A on every line)
       // so SP's demand current is 14.4 A ⇒ its incomer is the first rung ≥ 14.4
@@ -231,7 +233,7 @@ void main() {
       // 1.0 ⇒ non-selective). The feeder is therefore floored at
       // 1.6 × 16 = 25.6 A ⇒ first rung ≥ 25.6 = 32 A.
       expect(feeder.breaker.ratingA.amperes, 32);
-      // Cable: Iz ≥ max(In 32, 1.25 × 13.583 = 16.98) = 32 A; the 3φ trunk
+      // Cable: Iz ≥ max(In 32, 1.25 × 11.547 = 14.43) = 32 A; the 3φ trunk
       // minimum is 4 mm², whose B1 Cu/PVC KHA is 34 A ≥ 32 ⇒ still 4 mm².
       expect(feeder.cable.csaMm2, 4);
     });

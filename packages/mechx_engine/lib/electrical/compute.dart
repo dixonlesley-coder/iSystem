@@ -297,6 +297,74 @@ PhaseBalance balancePhases(
     if (!improved) break;
   }
 
+  // elec-props-3 — EXACT refinement. Relocate / pairwise-swap stops at local
+  // optima: nine ways of 7.7…24.4 A settled at L 47.5 / 48.1 / 50.8 A (a 63 A
+  // incomer) where {24.4, 23.7} / {23.1, 16.7, 9.7} / {21.5, 13.4, 7.7, 6.2}
+  // reaches a 49.5 A worst phase (a 50 A incomer) — and the engine then told
+  // the engineer to "redistribute" its own assignment. For a board with at
+  // most [kPhaseExactSearchMaxWays] movable singles, walk every assignment
+  // (pins and 3φ ways fixed) and adopt the best by the sizing objective:
+  // minimum WORST phase (what the incomer + busbar size on), then minimum
+  // spread. Only a STRICT improvement is adopted, so a board the local search
+  // already solved keeps its labels; with a prior seed the gain must also
+  // clear the stickiness threshold, exactly like a single move.
+  if (singles.length >= 2 && singles.length <= kPhaseExactSearchMaxWays) {
+    final base = <PhaseLine, double>{...phases};
+    for (final c in singles) {
+      final line = fromAssign(assignment[c.id]!);
+      base[line] = base[line]! - c.currentA;
+    }
+    final lines = [
+      base[PhaseLine.l1]!,
+      base[PhaseLine.l2]!,
+      base[PhaseLine.l3]!
+    ];
+    final pick = List<int>.filled(singles.length, 0);
+    List<int>? bestPick;
+    var bestWorst = double.infinity;
+    var bestSpread = double.infinity;
+    void walk(int i) {
+      if (i == singles.length) {
+        final worst = math.max(lines[0], math.max(lines[1], lines[2]));
+        final sp = _spread3(lines[0], lines[1], lines[2]);
+        if (worst < bestWorst - 1e-9 ||
+            (worst <= bestWorst + 1e-9 && sp < bestSpread - 1e-9)) {
+          bestWorst = worst;
+          bestSpread = sp;
+          bestPick = [...pick];
+        }
+        return;
+      }
+      for (var p = 0; p < 3; p++) {
+        lines[p] += singles[i].currentA;
+        pick[i] = p;
+        walk(i + 1);
+        lines[p] -= singles[i].currentA;
+      }
+    }
+
+    walk(0);
+    final curWorst = math.max(phases[PhaseLine.l1]!,
+        math.max(phases[PhaseLine.l2]!, phases[PhaseLine.l3]!));
+    final curSpread = spread();
+    final better = bestWorst < curWorst - 1e-9 ||
+        (bestWorst <= curWorst + 1e-9 && bestSpread < curSpread - 1e-9);
+    final clearsStickiness = seeded.isEmpty ||
+        curWorst - bestWorst > reassignThresholdA ||
+        curSpread - bestSpread > reassignThresholdA;
+    if (bestPick != null && better && clearsStickiness) {
+      phases
+        ..[PhaseLine.l1] = base[PhaseLine.l1]!
+        ..[PhaseLine.l2] = base[PhaseLine.l2]!
+        ..[PhaseLine.l3] = base[PhaseLine.l3]!;
+      for (var i = 0; i < singles.length; i++) {
+        final line = keys[bestPick![i]];
+        phases[line] = phases[line]! + singles[i].currentA;
+        assignment[singles[i].id] = _lineAssign(line);
+      }
+    }
+  }
+
   final vals = [
     phases[PhaseLine.l1]!,
     phases[PhaseLine.l2]!,
@@ -579,6 +647,16 @@ class ComputePanelOptions {
   /// byte-identical.
   final double? serviceMinCurrentA;
 
+  /// elec-props-2 — the REAL power factor of each fed board (child panel id →
+  /// diversified demand W / diversified demand VA), derived by `computeSystem`
+  /// bottom-up. A feeder way's load IS that board's demand W, so its Ib and
+  /// voltage drop convert at the fed board's own power factor — not at the
+  /// feeder circuit's default 0.85 (which under-sized a feeder to a 0.65-pf
+  /// board by 0.65/0.85 = 24 %, leaving its cable carrying more than Iz). A
+  /// feeder absent from the map keeps its own `cosPhi` (direct `computePanel`
+  /// callers ⇒ byte-identical).
+  final Map<String, double> feederPowerFactor;
+
   const ComputePanelOptions({
     this.feederLoadW = const {},
     this.panelSystems = const {},
@@ -594,6 +672,7 @@ class ComputePanelOptions {
     this.phaseReassignThresholdA = 0,
     this.feederBreakerFloorA = const {},
     this.serviceMinCurrentA,
+    this.feederPowerFactor = const {},
   });
 }
 
@@ -736,6 +815,11 @@ _CircuitComputation _computeCircuit(
   final def = loadDefaults[c.loadKind]!;
   final isFeeder = c.isFeeder;
   final warnings = <ElectricalWarning>[];
+  // elec-props-2 — a feeder converts the fed board's demand W at that board's
+  // real power factor (see [ComputePanelOptions.feederPowerFactor]).
+  final cosPhi = (isFeeder && c.feedsPanelId != null)
+      ? (opts.feederPowerFactor[c.feedsPanelId] ?? c.cosPhi)
+      : c.cosPhi;
 
   // Effective run length: geo-derived when this circuit + the panel are placed
   // on the calibrated layout (and `building`/`calibrationBySheet` were supplied),
@@ -798,14 +882,14 @@ _CircuitComputation _computeCircuit(
     ib = loadCurrent(
       power: Power.kiloWatts(c.motorKw! / kAssumedMotorEfficiency),
       voltage: Voltage(useVoltageV),
-      cosPhi: c.cosPhi,
+      cosPhi: cosPhi,
       threePhase: threePhase,
     );
   } else {
     ib = loadCurrent(
       power: Power(loadW),
       voltage: Voltage(useVoltageV),
-      cosPhi: c.cosPhi,
+      cosPhi: cosPhi,
       threePhase: threePhase,
     );
   }
@@ -830,7 +914,7 @@ _CircuitComputation _computeCircuit(
     final undiversified = loadCurrent(
       power: Power(c.loadW),
       voltage: Voltage(useVoltageV),
-      cosPhi: c.cosPhi,
+      cosPhi: cosPhi,
       threePhase: threePhase,
     );
     // A demand factor above 1 must never size the device BELOW the load it
@@ -848,6 +932,24 @@ _CircuitComputation _computeCircuit(
     loadKind: c.loadKind,
     overrideA: c.breakerOverrideA,
   );
+
+  // elec-props-5 — a MANUAL breaker below the current it must carry
+  // (Ib > In) trips on normal load. IEC 60364-4-43 / PUIL 2011 require
+  // Ib ≤ In ≤ Iz; the In ≤ Iz half is already judged (cable-ampacity-
+  // inadequate), this is the Ib ≤ In half. Judge-only: the override is kept.
+  if (loadBreaker.overridden &&
+      loadBreaker.ratingA.amperes < sizingCurrent.amperes - 1e-9) {
+    warnings.add(ElectricalWarning(
+      code: 'breaker-below-design-current',
+      severity: WarningSeverity.warning,
+      message: '${c.name}: the ${_num(loadBreaker.ratingA.amperes)} A breaker '
+          'override is below the design current '
+          '${_num(roundTo(sizingCurrent.amperes, 1))} A (Ib > In) — it will '
+          'trip on normal load; pick a rating at or above Ib (IEC 60364-4-43).',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
 
   // PUIL minimums: trunk (incomer/feeder) → 4 (3φ) / 2.5; final → lighting 1.5
   // else 2.5. A manual cable minimum floors it.
@@ -881,7 +983,7 @@ _CircuitComputation _computeCircuit(
     groupingCount: c.groupingCountOverride ?? panel.groupingCount,
     vd: CableVoltageDropConstraint(
       length: effectiveLength,
-      cosPhi: c.cosPhi,
+      cosPhi: cosPhi,
       threePhase: threePhase,
       voltage: Voltage(useVoltageV),
       isLighting: c.isLighting,
@@ -925,7 +1027,7 @@ _CircuitComputation _computeCircuit(
     current: Current(ib.amperes / runsPerPhase),
     length: effectiveLength,
     csaMm2: cable.csaMm2,
-    cosPhi: c.cosPhi,
+    cosPhi: cosPhi,
     threePhase: threePhase,
     voltage: Voltage(useVoltageV),
     isLighting: c.isLighting,
@@ -1146,6 +1248,14 @@ ElectricalPanelResult computePanel(
       balance.imbalancePercent > kPhaseImbalanceWarnPercent;
   var imbalanceReducible = false;
   var bestImbalancePercent = balance.imbalancePercent;
+  // elec-props-3 — with no phase PIN and no prior seed on any single, the
+  // assignment is the ENGINE's own (exact for ≤ kPhaseExactSearchMaxWays
+  // singles, by the min-worst-phase objective the incomer sizes on), so no
+  // re-assignment is an action the engineer could take: never "reducible".
+  final engineOwned = !branches.asMap().entries.any((e) =>
+      !comps[e.key].threePhase &&
+      (e.value.phaseOverride != null ||
+          opts.priorAssignment.containsKey(e.value.id)));
   if (overImbalanceLimit) {
     // The average line current is assignment-invariant (the same total load is
     // shared out however the ways are placed), so the achievable imbalance is
@@ -1157,7 +1267,7 @@ ElectricalPanelResult computePanel(
     ]);
     bestImbalancePercent =
         avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
-    imbalanceReducible =
+    imbalanceReducible = !engineOwned &&
         bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
             balance.imbalancePercent;
   }
@@ -1559,11 +1669,18 @@ ElectricalSystemResult computeSystem(
   // connected load, so it is summed cheaply here ahead of the full sizing.
   final feederLoadWByPanel = <String, Map<String, double>>{};
   final panelDemandW = <String, double>{};
+  // elec-props-2 — the same bottom-up sum in VA (each leaf W ÷ its own cos φ,
+  // each feeder W ÷ its fed board's power factor), so every board carries its
+  // REAL power factor = demand W / demand VA for the feeder that supplies it.
+  // Arithmetic VA (not phasor) — conservative: never above the true pf.
+  final panelDemandVa = <String, double>{};
+  final panelPowerFactor = <String, double>{};
   for (final id in postOrder) {
     final panel = byId[id];
     if (panel == null) continue;
     final feederLoadW = <String, double>{};
     var connectedW = 0.0;
+    var connectedVa = 0.0;
     for (final c in panel.circuits) {
       if (c.role != CircuitRole.branch) continue;
       final load = c.feedsPanelId != null
@@ -1573,9 +1690,17 @@ ElectricalSystemResult computeSystem(
               diversityLibraryId: panel.diversityLibraryId);
       if (c.feedsPanelId != null) feederLoadW[c.feedsPanelId!] = load;
       connectedW += load;
+      final pf = c.feedsPanelId != null
+          ? (panelPowerFactor[c.feedsPanelId] ?? c.cosPhi)
+          : c.cosPhi;
+      connectedVa += pf > 0 ? load / pf : load;
     }
     feederLoadWByPanel[id] = feederLoadW;
     panelDemandW[id] = connectedW * panel.diversityFactor;
+    panelDemandVa[id] = connectedVa * panel.diversityFactor;
+    if (connectedVa > 0 && connectedW > 0) {
+      panelPowerFactor[id] = math.min(1.0, connectedW / connectedVa);
+    }
   }
 
   // True building connected load = leaf loads only (feeders are aggregations).
@@ -1692,6 +1817,7 @@ ElectricalSystemResult computeSystem(
         panel,
         opts: ComputePanelOptions(
           feederLoadW: feederLoadWByPanel[id] ?? const {},
+          feederPowerFactor: panelPowerFactor,
           panelSystems: panelSystems,
           earthingSystem: project.earthingSystem,
           faultLevelA: faultLevelA,
@@ -1799,7 +1925,14 @@ ElectricalSystemResult computeSystem(
         final feederResult =
             pr.circuits.where((r) => r.circuitId == c.id).firstOrNull;
         if (childResult == null || feederResult == null) continue;
-        final childDemandA = childResult.demandCurrent.amperes;
+        // elec-props-4 — the feeder sizes on the fed board's DIVERSIFIED
+        // demand (connected × diversityFactor), while `demandCurrent` is the
+        // board's undiversified worst-phase current. Compare like with like:
+        // the worst phase at the same diversity, so a perfectly balanced board
+        // with diversity < 1 is no longer told its feeder is too small.
+        final childDiversity = byId[childId]?.diversityFactor ?? 1.0;
+        final childDemandA =
+            roundTo(childResult.demandCurrent.amperes * childDiversity, 1);
         final feederRatingA = feederResult.breaker.ratingA.amperes;
         if (childDemandA <= 0 || feederRatingA + 1e-9 >= childDemandA) continue;
         // Only offer "rebalance" when that board's imbalance is actually
