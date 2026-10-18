@@ -437,6 +437,27 @@ class SniProfile implements StandardsProfile {
 
   // ── Verify checklist (UI surfaces these as still-unverified) ──────────────
 
+  /// mech-building-6 — the share of a fixture's TOTAL UBAP loaded onto EACH of
+  /// its cold and hot supplies when it is fed by both (a lavatory, sink,
+  /// shower…). The UBAP/Hunter load tables give the fixture's combined load;
+  /// the practice the profile cites (Noerbambang-Morimura; UPC 610.3 "for
+  /// fixtures with both hot and cold supplies the separate loads are 3/4 of
+  /// the total") assigns 0.75 to each, not 1.0 to both. `// VERIFY` against
+  /// SNI 8153 — general practice, not a confirmed SNI clause. NB: the engine
+  /// does not model the heater's cold make-up, so a cold main that also feeds
+  /// the water heater is not raised back to the full total (engineer review).
+  StandardValue<double> get dualSupplyFixtureUnitFactor => const StandardValue(
+        0.75,
+        unit: 'x UBAP',
+        citation: 'UPC 610.3 / Noerbambang-Morimura — separate hot & cold '
+            'loads = 3/4 of the fixture total (NOT an SNI 8153 figure)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A fixture fed by BOTH cold and hot water loads 0.75 x its total '
+            'UBAP onto each supply (general practice — confirm vs SNI 8153). '
+            'A cold main that also feeds the water heater is not raised back '
+            'to the full total by the engine.',
+      );
+
   @override
   List<StandardValue<Object?>> get verifyChecklist => <StandardValue<Object?>>[
         // Ordered most-critical first (§13.4): zoning target, then demand.
@@ -488,6 +509,7 @@ class SniProfile implements StandardsProfile {
           note: 'Developed-length limit ≈ 32 m before self-siphonage / loss of '
               'grade; general practice — confirm vs SNI 8153.',
         ),
+        dualSupplyFixtureUnitFactor,
         const StandardValue<Object?>(
           55.0,
           unit: 'C',
@@ -535,7 +557,8 @@ class SniProfile implements StandardsProfile {
           unit: 'mm',
           citation: 'NFPA 13 — minimum steel sprinkler pipe size (1 in.)',
           status: VerificationStatus.notAnSniClause,
-          note: 'Every drawn sprinkler pipe is sized no smaller than 25 mm (1 in). '
+          note:
+              'Every drawn sprinkler pipe is sized no smaller than 25 mm (1 in). '
               'General practice (NFPA 13), not an SNI 03-3989-2000 clause.',
         ),
         const StandardValue<Object?>(
@@ -543,7 +566,8 @@ class SniProfile implements StandardsProfile {
           unit: 'mm',
           citation: 'Hydrant run minimum = Class I 65 mm landing-valve size',
           status: VerificationStatus.notAnSniClause,
-          note: 'A horizontal hydrant run feeding a 65 mm (2-1/2 in) Class I hose '
+          note:
+              'A horizontal hydrant run feeding a 65 mm (2-1/2 in) Class I hose '
               'connection is sized no smaller than 65 mm. Follows from the '
               'outlet size (general practice), not an SNI 03-1745-2000 clause. '
               'The vertical standpipe takes the SNI 100 mm minimum.',
@@ -553,7 +577,8 @@ class SniProfile implements StandardsProfile {
           unit: 'm',
           citation: 'Hydrant-box landing valve height above finished floor',
           status: VerificationStatus.notAnSniClause,
-          note: 'Standpipe static lift = top-floor elevation - pump-datum floor '
+          note:
+              'Standpipe static lift = top-floor elevation - pump-datum floor '
               '+ 1.2 m outlet height (typical 0.9-1.5 m). General practice, not '
               'an SNI clause.',
         ),
@@ -562,7 +587,8 @@ class SniProfile implements StandardsProfile {
           unit: 'x eta',
           citation: 'Fire-pump efficiency at 150 % flow relative to rated',
           status: VerificationStatus.notAnSniClause,
-          note: 'A centrifugal pump at 150 % flow runs past its best-efficiency '
+          note:
+              'A centrifugal pump at 150 % flow runs past its best-efficiency '
               'point; the overload-point shaft power uses eta x 0.85, so the '
               'motor is checked against the overload point (NFPA 20: no motor '
               'overload anywhere on the curve). Representative, not a certified '

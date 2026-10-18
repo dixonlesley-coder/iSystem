@@ -16,6 +16,8 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import 'dart:math' as math;
+
 import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
 import '../hydraulics.dart';
@@ -565,34 +567,98 @@ Map<String, EdgeSizing> sizeNetwork(
 /// demand-free hub → any leaf → any node. Shared by [serviceComponentRoots] so
 /// downstream consumers (e.g. the fan index-run static) root a system at the
 /// SAME source the sizer accumulated from.
+///
+/// Every rung is DETERMINISTIC and physical (mech-props-2 / mech-building-1):
+/// the old ladder took the FIRST candidate in component (= edge-insertion)
+/// order, so the same building drawn in a different order could root a
+/// drainage stack at its roof or a transfer system at its roof tank.
+///  • plants — on a pressurized/air service a degree-1 GROUND tank (the
+///    suction source), then any degree-1 tank, then the lowest plant; on a
+///    gravity service the lowest plant (the sink); the VENT the highest (the
+///    atmosphere);
+///  • demand-free leaves — on a supply (pressurized/air) service the leaf the
+///    run was DRAWN FROM (the `fromId` of its edge — a property of the drawn
+///    data, not of the order edges were added), then the lowest; on a gravity
+///    service the LOWEST (the building drain), then drawn-from; for a vent the
+///    HIGHEST (the VTR), then drawn-from;
+///  • ties always fall to the node id.
+/// "Lowest" is the floor index, then any explicit elevation.
 String _pickComponentRoot({
   required List<String> component,
   required List<String> leaves,
   required int Function(String) degree,
   required NodeRole? Function(String) roleOf,
   required Set<String> demandKeys,
+  required ServiceType service,
+  required NetNode? Function(String) nodeOf,
+  required Set<String> drawnFromIds,
 }) {
-  for (final id in component) {
-    if (roleOf(id) == NodeRole.plant) return id;
-  }
-  for (final id in leaves) {
-    if (roleOf(id) != NodeRole.fixture && !demandKeys.contains(id)) {
-      return id;
+  final highestFirst = service == ServiceType.vent;
+  int heightCmp(String a, String b) {
+    final na = nodeOf(a), nb = nodeOf(b);
+    var c = (na?.floorIndex ?? 0).compareTo(nb?.floorIndex ?? 0);
+    if (c == 0) {
+      c = (na?.elevation?.meters ?? 0).compareTo(nb?.elevation?.meters ?? 0);
     }
+    return highestFirst ? -c : c;
   }
+
+  int byHeight(String a, String b) {
+    final c = heightCmp(a, b);
+    return c != 0 ? c : a.compareTo(b);
+  }
+
+  int plantRank(String id) {
+    if (service.regime == FlowRegime.gravity) return 0;
+    if (degree(id) != 1) return 2;
+    final comp = nodeOf(id)?.component;
+    if (comp == NodeComponent.groundTank) return 0;
+    if (comp == NodeComponent.roofTank) return 1;
+    return 2;
+  }
+
+  final plants = [
+    for (final id in component)
+      if (roleOf(id) == NodeRole.plant) id,
+  ]..sort((a, b) {
+      final c = plantRank(a).compareTo(plantRank(b));
+      return c != 0 ? c : byHeight(a, b);
+    });
+  if (plants.isNotEmpty) return plants.first;
+
+  int drawnRank(String id) => drawnFromIds.contains(id) ? 0 : 1;
+  final supply = service.regime != FlowRegime.gravity;
+  final freeLeaves = [
+    for (final id in leaves)
+      if (roleOf(id) != NodeRole.fixture && !demandKeys.contains(id)) id,
+  ]..sort((a, b) {
+      if (supply) {
+        final c = drawnRank(a).compareTo(drawnRank(b));
+        return c != 0 ? c : byHeight(a, b);
+      }
+      final h = heightCmp(a, b);
+      if (h != 0) return h;
+      final c = drawnRank(a).compareTo(drawnRank(b));
+      return c != 0 ? c : a.compareTo(b);
+    });
+  if (freeLeaves.isNotEmpty) return freeLeaves.first;
+
   String? hub;
   var hubDegree = 1;
   for (final id in component) {
     final d = degree(id);
-    if (d > hubDegree &&
-        roleOf(id) != NodeRole.fixture &&
-        !demandKeys.contains(id)) {
+    if (d <= 1) continue;
+    if (roleOf(id) == NodeRole.fixture || demandKeys.contains(id)) continue;
+    if (hub == null ||
+        d > hubDegree ||
+        (d == hubDegree && id.compareTo(hub) < 0)) {
       hub = id;
       hubDegree = d;
     }
   }
   if (hub != null) return hub;
-  return leaves.isNotEmpty ? leaves.first : component.first;
+  if (leaves.isNotEmpty) return ([...leaves]..sort()).first;
+  return ([...component]..sort()).first;
 }
 
 /// The source ROOT of every connected component of [service], keyed by each
@@ -608,9 +674,13 @@ Map<String, String> serviceComponentRoots(
 }) {
   final adjacency = <String, List<String>>{};
   final nodes = <String>{};
+  final drawnFromIds = <String>{};
   for (final e in net.edges) {
     if (e.service != service) continue;
-    nodes..add(e.fromId)..add(e.toId);
+    nodes
+      ..add(e.fromId)
+      ..add(e.toId);
+    drawnFromIds.add(e.fromId);
     (adjacency[e.fromId] ??= []).add(e.toId);
     (adjacency[e.toId] ??= []).add(e.fromId);
   }
@@ -637,6 +707,9 @@ Map<String, String> serviceComponentRoots(
       degree: degree,
       roleOf: roleOf,
       demandKeys: demandNodeIds,
+      service: service,
+      nodeOf: net.nodeById,
+      drawnFromIds: drawnFromIds,
     );
     for (final n in component) {
       out[n] = root;
@@ -723,10 +796,43 @@ Map<String, EdgeSizing> autoSizeNetwork(
 
   bool isWaterSupply(ServiceType s) =>
       s == ServiceType.coldWater || s == ServiceType.hotWater;
+
+  // mech-building-6 — a fixture node fed by BOTH a cold and a hot branch loads
+  // [SniProfile.dualSupplyFixtureUnitFactor] (3/4) of its total UBAP onto each
+  // supply, not the full total onto both. Nodes on one supply are unchanged.
+  final coldNodes = <String>{};
+  final hotNodes = <String>{};
+  for (final e in net.edges) {
+    if (e.service == ServiceType.coldWater) {
+      coldNodes
+        ..add(e.fromId)
+        ..add(e.toId);
+    } else if (e.service == ServiceType.hotWater) {
+      hotNodes
+        ..add(e.fromId)
+        ..add(e.toId);
+    }
+  }
+  final dualSupplyNodes = coldNodes.intersection(hotNodes);
+  final dualFactor = profile.dualSupplyFixtureUnitFactor.value;
   bool isSanitary(ServiceType s) =>
       s == ServiceType.drainage || s == ServiceType.vent;
 
-  for (final service in net.edges.map((e) => e.service).toSet()) {
+  // mech-building-3 — the VENT pass reads the DFU the drainage system carries
+  // at each node a vent ties into, so drainage is always processed first.
+  final services = net.edges.map((e) => e.service).toSet().toList();
+  if (services.contains(ServiceType.vent)) {
+    services
+      ..remove(ServiceType.vent)
+      ..add(ServiceType.vent);
+  }
+  // Drainage through-DFU per node (the DFU on the drainage edge leaving that
+  // node toward the drainage root) and the drainage tree's parent links —
+  // filled by the drainage pass, read by the vent pass.
+  final drainageThroughDfu = <String, double>{};
+  final drainageParentNode = <String, String>{};
+
+  for (final service in services) {
     final demand = leafDemand[service] ?? const FlowRate(0);
     final useUbap =
         isWaterSupply(service) && leafFixtureUnits.containsKey(service);
@@ -734,8 +840,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
 
     final adjacency = <String, List<({String edgeId, String other})>>{};
     final nodes = <String>{};
+    final drawnFromIds = <String>{};
     for (final e in net.edges) {
       if (e.service != service) continue;
+      drawnFromIds.add(e.fromId);
       nodes
         ..add(e.fromId)
         ..add(e.toId);
@@ -756,9 +864,14 @@ Map<String, EdgeSizing> autoSizeNetwork(
     // NOT demand points — a cleanout (an access fitting), an air vent (an
     // air-release valve), a fire extinguisher (not piped) — stay at zero, as do
     // pure main/valve junctions.
+    // A PLANT (tank, pump, AHU…) is a source/sink, never a terminal: a plant
+    // leaf that is not the root (a ground tank when the component happened to
+    // root elsewhere) used to bear a phantom 2-UBAP / default-flow load
+    // (mech-props-2 / mech-building-1).
     bool bearsDefaultDemand(String n) {
-      if (degree(n) == 1) return true;
       final node = net.nodeById(n);
+      if (node?.role == NodeRole.plant) return false;
+      if (degree(n) == 1) return true;
       if (node == null || node.role != NodeRole.fixture) return false;
       return switch (node.component) {
         NodeComponent.cleanout ||
@@ -769,10 +882,37 @@ Map<String, EdgeSizing> autoSizeNetwork(
       };
     }
 
+    // mech-building-3 — a vent TIE (a vent-graph node that is also on the
+    // drainage graph: a soil-stack tie, or a fixture's individual vent) is
+    // seeded with the DFU it actually VENTS: the drainage through-DFU at that
+    // node minus what already enters through the nearest tie(s) below it in
+    // the drainage tree (so a stack tied at every floor counts each floor's
+    // DFU once, and the vent accumulates to the stack total at its VTR). The
+    // bare 2-DFU leaf default used to size a vent stack serving a 96-DFU soil
+    // stack on 4 ties x 2 = 8 DFU -> DN32 instead of the table's DN75.
+    final ventSeeds = <String, double>{};
+    if (service == ServiceType.vent && drainageThroughDfu.isNotEmpty) {
+      final ties = nodes.where(drainageThroughDfu.containsKey).toSet();
+      for (final t in ties) {
+        ventSeeds[t] = drainageThroughDfu[t]!;
+      }
+      for (final t in ties) {
+        var up = drainageParentNode[t];
+        while (up != null && !ties.contains(up)) {
+          up = drainageParentNode[up];
+        }
+        if (up != null) ventSeeds[up] = ventSeeds[up]! - drainageThroughDfu[t]!;
+      }
+      ventSeeds.removeWhere((_, v) => v <= 1e-9);
+    }
+    final drainageUnitsForService = ventSeeds.isEmpty
+        ? nodeDrainageUnits
+        : {...nodeDrainageUnits, ...ventSeeds};
+
     // The explicit per-node demand keys relevant to THIS service decide which
     // nodes "bear demand" (and so must not be chosen as the source root).
     final explicitDemandKeys = isSanitary(service)
-        ? nodeDrainageUnits.keys.toSet()
+        ? drainageUnitsForService.keys.toSet()
         : useUbap
             ? nodeFixtureUnits.keys.toSet()
             : nodeFlowDemand.keys.toSet();
@@ -794,6 +934,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
           degree: degree,
           roleOf: roleOf,
           demandKeys: explicitDemandKeys,
+          service: service,
+          nodeOf: net.nodeById,
+          drawnFromIds: drawnFromIds,
         );
 
     // Build the terminal-demand map over EVERY demand-bearing node except the
@@ -869,6 +1012,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
       if (isLooped &&
           (regime == FlowRegime.pressurized || regime == FlowRegime.air)) {
         final demandFlow = <String, double>{};
+        var nodeUbapForBridges = const <String, double>{};
         if (useUbap) {
           // Water supply: diversify the COMBINED fixture-unit load through the
           // Hunter/UBAP curve ONCE for the whole ring (mirrors the tree path —
@@ -880,8 +1024,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
           var totalUbap = 0.0;
           for (final n in component) {
             if (n == root) continue;
-            final ubap = nodeFixtureUnits[n] ??
-                (bearsDefaultDemand(n) ? fuPerLeaf : 0.0);
+            final ubap = (nodeFixtureUnits[n] ??
+                    (bearsDefaultDemand(n) ? fuPerLeaf : 0.0)) *
+                (dualSupplyNodes.contains(n) ? dualFactor : 1.0);
             if (ubap > 0) {
               nodeUbap[n] = ubap;
               totalUbap += ubap;
@@ -892,6 +1037,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
               demandExtrapolatedEdges.add(e.id);
             }
           }
+          nodeUbapForBridges = nodeUbap;
           if (totalUbap > 0) {
             final totalFlow = profile
                 .probableFlowForFixtureUnits(totalUbap, system: flushSystem)
@@ -939,7 +1085,38 @@ Map<String, EdgeSizing> autoSizeNetwork(
           exponent: regime == FlowRegime.air ? 2.0 : 1.852,
         );
         for (final entry in balanced.edgeFlow.entries) {
+          // mech-props-6 — a demand-free loop pocket (a bare duct ring drawn
+          // before its diffusers) balances to EXACTLY zero flow; leave it
+          // unsized, as the tree path leaves a no-demand edge (the duct
+          // sizers require a positive airflow).
+          if (entry.value.abs() <= 1e-12) continue;
           allFlows[entry.key] = FlowRate(entry.value.abs());
+        }
+        // mech-props-1 — a BRIDGE of a looped water component (a dead-end
+        // branch hanging off the ring, or the feed into it) is a TREE edge:
+        // every fixture beyond it is served only through it, so it carries the
+        // diversified flow of ITS OWN far-side units, curve(far UBAP), exactly
+        // like the tree path. The ring-share split above gives it
+        // total × far/total, which (the curve being concave through the
+        // origin) is never more than curve(far) — and on a ring with many
+        // branches it under-sized every branch (8 UBAP sized for 0.245 L/s
+        // instead of 0.400 L/s). Ring (2-edge-connected) edges keep the share.
+        if (useUbap && nodeUbapForBridges.isNotEmpty) {
+          final far = _bridgeFarSideSums(
+            edges: [
+              for (final e in componentEdges)
+                (id: e.id, from: e.fromId, to: e.toId),
+            ],
+            root: root,
+            weight: nodeUbapForBridges,
+          );
+          for (final entry in far.entries) {
+            if (entry.value <= 0) continue;
+            allFlows[entry.key] = profile.probableFlowForFixtureUnits(
+              entry.value,
+              system: flushSystem,
+            );
+          }
         }
         // M17 — record a best-effort (unsettled) split instead of presenting it
         // as balanced. Continuity still holds, so the sizes are usable; the
@@ -965,8 +1142,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
       if (isSanitary(service)) {
         // Accumulate DRAINAGE FIXTURE UNITS and size each edge from the code
         // capacity table (branch vs stack), not from Manning flow.
-        final terminalUnits =
-            terminalMap(component, root, nodeDrainageUnits, kDefaultLeafDfu);
+        final terminalUnits = terminalMap(
+            component, root, drainageUnitsForService, kDefaultLeafDfu);
         final edgeParents = <String, String>{};
         final edgeUnits = accumulateFixtureUnits(
           net: net,
@@ -1005,8 +1182,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
           if (edge.service == ServiceType.drainage) {
             final parent = edgeParents[entry.key];
             if (parent != null) {
-              edgeFlowFrom[entry.key] =
-                  parent == edge.fromId ? edge.toId : edge.fromId;
+              final child = parent == edge.fromId ? edge.toId : edge.fromId;
+              edgeFlowFrom[entry.key] = child;
+              drainageThroughDfu[child] = entry.value;
+              drainageParentNode[child] = parent;
             }
           }
         }
@@ -1092,8 +1271,13 @@ Map<String, EdgeSizing> autoSizeNetwork(
       } else if (useUbap) {
         // Per-fixture UBAP when a node carries a fixture type; else the flat
         // default for that water service.
-        final terminalUnits =
-            terminalMap(component, root, nodeFixtureUnits, fuPerLeaf);
+        final terminalUnits = {
+          for (final entry
+              in terminalMap(component, root, nodeFixtureUnits, fuPerLeaf)
+                  .entries)
+            entry.key: entry.value *
+                (dualSupplyNodes.contains(entry.key) ? dualFactor : 1.0),
+        };
         final edgeParents = <String, String>{};
         final edgeUnits = accumulateFixtureUnits(
           net: net,
@@ -1368,4 +1552,62 @@ void _clampDrainageStacksToBranches({
       );
     }
   }
+}
+
+/// For every BRIDGE of a connected edge list (an edge whose removal splits the
+/// graph — a tree edge hanging off or into a ring), the summed [weight] of the
+/// nodes on its FAR side from [root]. Ring (2-edge-connected) edges are absent.
+///
+/// Tarjan's bridge test on a DFS from [root] (parallel edges are told apart by
+/// id, so a doubled pipe is correctly NOT a bridge): a tree edge parent→child
+/// is a bridge iff low[child] > tin[parent], and its far side is then exactly
+/// the DFS subtree of the child. Iterative, so a long run cannot overflow the
+/// stack. Pure.
+Map<String, double> _bridgeFarSideSums({
+  required List<({String id, String from, String to})> edges,
+  required String root,
+  required Map<String, double> weight,
+}) {
+  final adjacency = <String, List<({String edgeId, String other})>>{};
+  for (final e in edges) {
+    (adjacency[e.from] ??= []).add((edgeId: e.id, other: e.to));
+    (adjacency[e.to] ??= []).add((edgeId: e.id, other: e.from));
+  }
+  final tin = <String, int>{};
+  final low = <String, int>{};
+  final sub = <String, double>{};
+  final out = <String, double>{};
+  var timer = 0;
+  // Frame: node, the edge id it was entered by, next adjacency index.
+  final stack = <({String node, String? viaEdge, int next})>[];
+  final parentOf = <String, String>{};
+  tin[root] = low[root] = timer++;
+  sub[root] = weight[root] ?? 0.0;
+  stack.add((node: root, viaEdge: null, next: 0));
+  while (stack.isNotEmpty) {
+    final top = stack.removeLast();
+    final links = adjacency[top.node] ?? const [];
+    if (top.next < links.length) {
+      stack.add((node: top.node, viaEdge: top.viaEdge, next: top.next + 1));
+      final link = links[top.next];
+      if (link.edgeId == top.viaEdge) continue;
+      final seen = tin[link.other];
+      if (seen != null) {
+        low[top.node] = math.min(low[top.node]!, seen);
+      } else {
+        tin[link.other] = low[link.other] = timer++;
+        sub[link.other] = weight[link.other] ?? 0.0;
+        parentOf[link.other] = top.node;
+        stack.add((node: link.other, viaEdge: link.edgeId, next: 0));
+      }
+      continue;
+    }
+    // Finished top.node: fold into its parent.
+    final p = parentOf[top.node];
+    if (p == null) continue;
+    low[p] = math.min(low[p]!, low[top.node]!);
+    sub[p] = sub[p]! + sub[top.node]!;
+    if (low[top.node]! > tin[p]!) out[top.viaEdge!] = sub[top.node]!;
+  }
+  return out;
 }

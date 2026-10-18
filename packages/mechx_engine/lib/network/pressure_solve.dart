@@ -59,6 +59,7 @@ import '../standards/pipe_products.dart';
 import '../standards/sni.dart';
 import '../units.dart';
 import 'network.dart';
+import 'oriented_paths.dart';
 
 /// Result of [solvePressurized]: the residual pressure at every reachable node,
 /// the pump head the source must develop, and which node set that requirement.
@@ -189,69 +190,61 @@ PressureSolution solvePressurized({
       ? const Length(0)
       : nodeElevation(source, building, mounting);
 
-  // BFS from the source; each visited node records cumulative friction +
-  // elevation gain along its (unique, tree) path back to the source.
-  final costs = <String, _NodeCost>{
-    sourceId: const _NodeCost(Head(0), Length(0))
-  };
-  final queue = <String>[sourceId];
-  var head = 0;
-  while (head < queue.length) {
-    final current = queue[head];
-    head++;
-    final currentCost = costs[current]!;
-    final links = adjacency[current];
-    if (links == null) continue;
-    for (final link in links) {
-      if (costs.containsKey(link.other)) continue; // already visited (tree)
-      final edge = link.edge;
-
-      // Friction over this edge. Unsized edge → skip (0 friction). Absent flow
-      // → FlowRate(0) → Hazen–Williams loss is exactly 0.
-      var edgeFriction = 0.0;
-      final edgeSizing = sizing[edge.id];
-      if (edgeSizing != null) {
-        final flow = edgeFlows[edge.id] ?? const FlowRate(0);
-        final length = edgeLength(
-          edge,
-          net,
-          calibrationBySheet: calibrationBySheet,
-          building: building,
-          mounting: mounting,
-        );
-        // Per-edge C: the edge's pipe product if set, else the service-wide C.
-        final edgeC = edge.pipeProduct != null
-            ? hazenWilliamsCFor(edge.pipeProduct!)
-            : hwC;
-        edgeFriction = headLossHazenWilliams(
-          flow: flow,
-          length: length,
-          diameter: edgeSizing.diameter,
-          hazenWilliamsC: edgeC,
-        ).meters;
-        // Minor (local) loss if we're arriving at an inline restrictor
-        // (valve/strainer/meter): h = K·v²/2g at the feeding edge's velocity.
-        // Added to this node's accumulated friction, so it propagates to every
-        // downstream node. K = 0 (no component / not a restrictor) ⇒ no change.
-        final k = net.nodeById(link.other)?.component?.minorLossK ?? 0;
-        if (k > 0) {
-          final v = velocityFromFlow(flow, edgeSizing.diameter);
-          edgeFriction += minorLossHead(k: k, velocity: v).meters;
-        }
-      }
-
-      final neighbour = net.nodeById(link.other);
-      final neighbourElevation = neighbour == null
-          ? sourceElevation
-          : nodeElevation(neighbour, building, mounting);
-
-      costs[link.other] = _NodeCost(
-        Head(currentCost.friction.meters + edgeFriction),
-        Length(neighbourElevation.meters - sourceElevation.meters),
-      );
-      queue.add(link.other);
+  // Friction along the GOVERNING path to each node, walking every edge in
+  // its sized flow direction (mech-props-3 — see [orientedPathCost]); on a
+  // tree this is exactly the unique source path.
+  double edgeFrictionArriving(NetEdge edge, String arriving) {
+    // Friction over this edge. Unsized edge → skip (0 friction). Absent flow
+    // → FlowRate(0) → Hazen–Williams loss is exactly 0.
+    final edgeSizing = sizing[edge.id];
+    if (edgeSizing == null) return 0.0;
+    final flow = edgeFlows[edge.id] ?? const FlowRate(0);
+    final length = edgeLength(
+      edge,
+      net,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      mounting: mounting,
+    );
+    // Per-edge C: the edge's pipe product if set, else the service-wide C.
+    final edgeC =
+        edge.pipeProduct != null ? hazenWilliamsCFor(edge.pipeProduct!) : hwC;
+    var edgeFriction = headLossHazenWilliams(
+      flow: flow,
+      length: length,
+      diameter: edgeSizing.diameter,
+      hazenWilliamsC: edgeC,
+    ).meters;
+    // Minor (local) loss if we're arriving at an inline restrictor
+    // (valve/strainer/meter): h = K·v²/2g at the feeding edge's velocity.
+    // Added to this node's accumulated friction, so it propagates to every
+    // downstream node. K = 0 (no component / not a restrictor) ⇒ no change.
+    final k = net.nodeById(arriving)?.component?.minorLossK ?? 0;
+    if (k > 0) {
+      final v = velocityFromFlow(flow, edgeSizing.diameter);
+      edgeFriction += minorLossHead(k: k, velocity: v).meters;
     }
+    return edgeFriction;
   }
+
+  final friction = orientedPathCost(
+    sourceId: sourceId,
+    adjacency: adjacency,
+    flowFromOf: (e) => sizing[e.id]?.flowFromId,
+    edgeCost: edgeFrictionArriving,
+  );
+  final costs = <String, _NodeCost>{
+    for (final entry in friction.entries)
+      entry.key: () {
+        final n = net.nodeById(entry.key);
+        final elev =
+            n == null ? sourceElevation : nodeElevation(n, building, mounting);
+        return _NodeCost(
+          Head(entry.value),
+          Length(elev.meters - sourceElevation.meters),
+        );
+      }(),
+  };
 
   // requiredPumpHead = max over reachable DELIVERY nodes of
   //   friction-from-source + elevation-gain + target-as-head.
@@ -380,52 +373,44 @@ DownfeedSolution solveDownfeed({
         .add((edge: e, other: e.fromId));
   }
 
-  // BFS from the tank accumulating cumulative friction along the tree path.
-  final friction = <String, double>{tankId: 0.0};
-  final queue = <String>[tankId];
-  var head = 0;
-  while (head < queue.length) {
-    final current = queue[head];
-    head++;
-    final currentFriction = friction[current]!;
-    final links = adjacency[current];
-    if (links == null) continue;
-    for (final link in links) {
-      if (friction.containsKey(link.other)) continue; // visited (tree)
-      final edge = link.edge;
-      var edgeFriction = 0.0;
-      final edgeSizing = sizing[edge.id];
-      if (edgeSizing != null) {
-        final flow = edgeFlows[edge.id] ?? const FlowRate(0);
-        final length = edgeLength(
-          edge,
-          net,
-          calibrationBySheet: calibrationBySheet,
-          building: building,
-          mounting: mounting,
-        );
-        // Per-edge C: the edge's pipe product if set, else the service-wide C.
-        final edgeC = edge.pipeProduct != null
-            ? hazenWilliamsCFor(edge.pipeProduct!)
-            : hwC;
-        edgeFriction = headLossHazenWilliams(
-          flow: flow,
-          length: length,
-          diameter: edgeSizing.diameter,
-          hazenWilliamsC: edgeC,
-        ).meters;
-        // Minor (local) loss at an inline restrictor we're arriving at — same
-        // h = K·v²/2g treatment as the upfeed solve (K = 0 ⇒ no change).
-        final k = net.nodeById(link.other)?.component?.minorLossK ?? 0;
-        if (k > 0) {
-          final v = velocityFromFlow(flow, edgeSizing.diameter);
-          edgeFriction += minorLossHead(k: k, velocity: v).meters;
-        }
-      }
-      friction[link.other] = currentFriction + edgeFriction;
-      queue.add(link.other);
+  // Friction along the governing path from the tank, each edge walked in its
+  // sized flow direction (mech-props-3 — see [orientedPathCost]).
+  double edgeFrictionArriving(NetEdge edge, String arriving) {
+    final edgeSizing = sizing[edge.id];
+    if (edgeSizing == null) return 0.0;
+    final flow = edgeFlows[edge.id] ?? const FlowRate(0);
+    final length = edgeLength(
+      edge,
+      net,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      mounting: mounting,
+    );
+    // Per-edge C: the edge's pipe product if set, else the service-wide C.
+    final edgeC =
+        edge.pipeProduct != null ? hazenWilliamsCFor(edge.pipeProduct!) : hwC;
+    var edgeFriction = headLossHazenWilliams(
+      flow: flow,
+      length: length,
+      diameter: edgeSizing.diameter,
+      hazenWilliamsC: edgeC,
+    ).meters;
+    // Minor (local) loss at an inline restrictor we're arriving at — same
+    // h = K·v²/2g treatment as the upfeed solve (K = 0 ⇒ no change).
+    final k = net.nodeById(arriving)?.component?.minorLossK ?? 0;
+    if (k > 0) {
+      final v = velocityFromFlow(flow, edgeSizing.diameter);
+      edgeFriction += minorLossHead(k: k, velocity: v).meters;
     }
+    return edgeFriction;
   }
+
+  final friction = orientedPathCost(
+    sourceId: tankId,
+    adjacency: adjacency,
+    flowFromOf: (e) => sizing[e.id]?.flowFromId,
+    edgeCost: edgeFrictionArriving,
+  );
 
   // residual(node) = tankStaticHead + (tankElev − nodeElev) − friction, as head.
   // The critical node is the least-served DELIVERY node (water-drainage-5).
