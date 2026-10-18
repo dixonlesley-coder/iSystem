@@ -678,42 +678,107 @@ SldSheet buildMechanicalRiserSld({
   // ── Round 21 (riser-drafting-2-2) — page-edge MATCH stubs ───────────────────
   // A riser whose far end sits on another page of a paginated set runs to the
   // page's band edge and names the floor it continues to.
+  //
+  // Round 22 (regression-riser-page-break-drops-tags) — the riser's
+  // SIZE-SERVICE-MATERIAL tag + its riser id ride the page holding the
+  // riser's LOWER end (exactly one page, so the set carries every tag once),
+  // and a riser whose span strictly contains this page's floors is drawn as a
+  // full-height PASS-THROUGH with its pipe tag and a LANJUT label at both
+  // page edges — never absent from an intermediate page.
+  final tags = riserTags(network, focus);
   if (floorRange != null) {
     final byId = {for (final n in allVisible) n.id: n};
+    final topEdgeY = bandTop(hiFloor) + 2;
+    final bottomEdgeY = bandTop(loFloor) + _bandH - 2;
+    String floorName(int f) => (building != null && f < building.levelCount)
+        ? building.floors[f].name
+        : 'Level ${f + 1}';
+    void lanjut(double x, double edgeY, bool up, int floor) {
+      final text = 'LANJUT KE ${floorName(floor)}';
+      placer.place(x + 6, up ? edgeY + 9 : edgeY - 3, text,
+          size: 8,
+          bold: true,
+          anchorX: x,
+          anchorY: edgeY,
+          candidates: _riserLadder(text));
+    }
+
+    void riserTagAt(NetEdge e, double x, double y1, double y2,
+        {required bool withId}) {
+      final role = _edgeRole(network, e);
+      final fn = riserFunctionFor(network, e,
+          downfeed: downfeed, flowFrom: flowFromByEdge);
+      final tag = _pipeTag(sizing[e.id], e,
+          function: fn, length: edgeLengths[e.id]);
+      final midY = math.min(y1, y2) + (y1 - y2).abs() / 4;
+      placer.place(x + 6, midY, tag,
+          size: 8,
+          role: role,
+          anchorX: x,
+          anchorY: midY,
+          candidates: _riserLadder(tag));
+      final rt = withId ? tags[e.id] : null;
+      if (rt != null) {
+        placer.place(x + 6, midY + 12, rt,
+            size: 8,
+            bold: true,
+            role: role,
+            anchorX: x,
+            anchorY: midY + 12,
+            candidates: _riserLadder(rt));
+      }
+    }
+
     for (final e in network.edges) {
       if (focus != null && e.service != focus) continue;
       final a = posById[e.fromId];
       final b = posById[e.toId];
-      if ((a == null) == (b == null)) continue;
-      final here = a ?? b!;
-      final farNode = byId[a == null ? e.fromId : e.toId];
-      if (farNode == null) continue;
-      final up = farNode.floorIndex > hiFloor;
-      final edgeY = up ? bandTop(hiFloor) + 2 : bandTop(loFloor) + _bandH - 2;
       final layer = riserServiceCode(e.service);
-      prims.add(SldLine(here.dx, here.dy, here.dx, edgeY,
-          weight: SldWeight.medium,
-          role: _edgeRole(network, e),
-          layer: layer,
-          dashed: e.service == ServiceType.vent));
-      placer.reserveLine(here.dx, here.dy, here.dx, edgeY);
-      final fname = (building != null && farNode.floorIndex < building.levelCount)
-          ? building.floors[farNode.floorIndex].name
-          : 'Level ${farNode.floorIndex + 1}';
-      final text = 'LANJUT KE $fname';
-      placer.place(here.dx + 6, up ? edgeY + 9 : edgeY - 3, text,
-          size: 8,
-          bold: true,
-          anchorX: here.dx,
-          anchorY: edgeY,
-          candidates: _riserLadder(text));
+      if (a == null && b == null) {
+        // A pass-through: both ends visible on OTHER pages, one above and one
+        // below this page's floor range.
+        final na = byId[e.fromId];
+        final nb = byId[e.toId];
+        if (na == null || nb == null) continue;
+        final lo = math.min(na.floorIndex, nb.floorIndex);
+        final hi = math.max(na.floorIndex, nb.floorIndex);
+        if (!(lo < loFloor && hi > hiFloor)) continue;
+        final lower = na.floorIndex <= nb.floorIndex ? na : nb;
+        final upper = identical(lower, na) ? nb : na;
+        final x = placeX(lower.id);
+        prims.add(SldLine(x, bottomEdgeY, x, topEdgeY,
+            weight: SldWeight.medium,
+            role: _edgeRole(network, e),
+            layer: layer,
+            dashed: e.service == ServiceType.vent));
+        placer.reserveLine(x, bottomEdgeY, x, topEdgeY);
+        lanjut(x, topEdgeY, true, upper.floorIndex);
+        lanjut(x, bottomEdgeY, false, lower.floorIndex);
+        riserTagAt(e, x, topEdgeY, bottomEdgeY, withId: false);
+        continue;
+      }
+      if (a == null || b == null) {
+        final here = a ?? b!;
+        final farNode = byId[a == null ? e.fromId : e.toId];
+        if (farNode == null) continue;
+        final up = farNode.floorIndex > hiFloor;
+        final edgeY = up ? topEdgeY : bottomEdgeY;
+        prims.add(SldLine(here.dx, here.dy, here.dx, edgeY,
+            weight: SldWeight.medium,
+            role: _edgeRole(network, e),
+            layer: layer,
+            dashed: e.service == ServiceType.vent));
+        placer.reserveLine(here.dx, here.dy, here.dx, edgeY);
+        lanjut(here.dx, edgeY, up, farNode.floorIndex);
+        // The lower end's page carries the tag + riser id.
+        if (up) riserTagAt(e, here.dx, here.dy, edgeY, withId: true);
+      }
     }
   }
 
   // ── Edges: runs + risers with the SIZE-SERVICE-MATERIAL[-FUNCTION] tag ───────
   // B4: every pipe run/riser is MEDIUM weight (vs the thin datum), carries its
   // service code as the CAD layer, and the vent service draws DASHED.
-  final tags = riserTags(network, focus);
   for (final e in network.edges) {
     if (focus != null && e.service != focus) continue;
     final a = posById[e.fromId];

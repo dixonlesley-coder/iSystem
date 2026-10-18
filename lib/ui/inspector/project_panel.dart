@@ -5,6 +5,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/network/zoning.dart' show DownfeedZoneStatic;
 import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/report/cover_sheet.dart';
 import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
@@ -268,7 +269,12 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     // mech-building-2 — the PRV zone table is a DOWNFEED design (compliant by
     // construction); on an upfeed it said nothing about the pump's real
     // lower-floor pressures (judged in Review instead), so it is not printed.
-    zones: gravityDownfeed ? ref.read(zoneStaticsProvider) : const [],
+    // Round 22 (pressurized-3-1) — printed only when it holds a PRV station
+    // (or an over-limit zone): a building the roof tank's own head keeps
+    // under the limit needs no PRV and gets no invented zone pressures.
+    zones: gravityDownfeed && _zoneTableNeeded(ref.read(zoneStaticsProvider))
+        ? ref.read(zoneStaticsProvider)
+        : const [],
     hotWaterRecirc: hwRecirc,
     sprinkler: sprinklerDrawn ? ref.read(sprinklerDesignProvider) : null,
     standpipe: standpipe,
@@ -4252,6 +4258,9 @@ class _ResultsSection extends ConsumerWidget {
               .map((z) => z.bottomStatic.inKiloPascals)
               .reduce((a, b) => a > b ? a : b);
     final zonesOk = zoneStatics.every((z) => z.withinLimit);
+    // Round 22 (pressurized-3-1) — the PRV stations the zone table actually
+    // needs (the tank-fed top zone has none).
+    final prvStations = zoneStatics.where((z) => z.viaPrv).length;
     final totalLength = bom.fold<double>(
       0,
       (sum, line) => sum + line.totalLength.meters,
@@ -4307,26 +4316,33 @@ class _ResultsSection extends ConsumerWidget {
       }
     } else {
       if (downfeed != null) {
-        if (zoneStatics.isEmpty) {
-          // No PRV zones drawn — the headline is the gravity/booster verdict.
-          headlineCard = ResultCard(
-            headline: downfeed.gravitySufficient
-                ? 'gravity'
-                : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
-            label: 'Downfeed booster',
-            verdict: downfeed.gravitySufficient ? 'OK' : 'boost',
-            verdictColor: downfeed.gravitySufficient
-                ? colors.success
-                : colors.warning,
-          );
-        } else {
+        // Round 22 (pressurized-3-5) — a booster requirement leads: a green
+        // zone card must never hide that gravity cannot deliver. With gravity
+        // sufficient, the PRV-zone verdict shows only when a PRV station is
+        // actually needed; otherwise the gravity verdict.
+        if (!downfeed.gravitySufficient) {
           headlineCard = ResultCard(
             headline:
-                '${zones.length} zone${zones.length == 1 ? '' : 's'}'
+                '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
+            label: 'Downfeed booster',
+            verdict: 'boost',
+            verdictColor: colors.warning,
+          );
+        } else if (_zoneTableNeeded(zoneStatics)) {
+          headlineCard = ResultCard(
+            headline:
+                '$prvStations PRV zone${prvStations == 1 ? '' : 's'}'
                 ' · ${worstZone.toStringAsFixed(0)} kPa',
             label: 'PRV zones (worst) · zone static',
             verdict: zonesOk ? 'OK' : 'over',
             verdictColor: zonesOk ? colors.success : colors.danger,
+          );
+        } else {
+          headlineCard = ResultCard(
+            headline: 'gravity',
+            label: 'Downfeed booster',
+            verdict: 'OK',
+            verdictColor: colors.success,
           );
         }
       }
@@ -4414,9 +4430,9 @@ class _ResultsSection extends ConsumerWidget {
               _kvRow(
                 context,
                 'PRV zones',
-                zoneStatics.isEmpty
-                    ? '${zones.length}'
-                    : '${zones.length} · worst ${worstZone.toStringAsFixed(0)} kPa'
+                !_zoneTableNeeded(zoneStatics)
+                    ? 'none (tank head OK)'
+                    : '$prvStations · worst ${worstZone.toStringAsFixed(0)} kPa'
                           ' ${zonesOk ? 'OK' : 'over'}',
               ),
             ],
@@ -6373,3 +6389,10 @@ String _motorKw(Power p) {
 /// else to one decimal (`2.5`) — never rounded to an integer (Round 13).
 String _fmtAch(double v) =>
     (v - v.roundToDouble()).abs() < 1e-9 ? '${v.round()}' : v.toStringAsFixed(1);
+
+/// Round 22 (pressurized-3-1) — the downfeed zone table is shown / printed
+/// only when it says something: a PRV station is needed, or a zone is over
+/// the limit. A building the roof tank's own head keeps under the limit is one
+/// tank-fed zone with no PRV — no table.
+bool _zoneTableNeeded(List<DownfeedZoneStatic> statics) =>
+    statics.any((z) => z.viaPrv || !z.withinLimit);

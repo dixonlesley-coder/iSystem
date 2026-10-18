@@ -602,10 +602,20 @@ Length nodeElevation(
 /// riser, a stack top ~3.6 m long and a downpipe stopping 3.3 m above grade.
 /// `// VERIFY` notAnSniClause (a modelling datum, no invert model; set the
 /// node elevation for a real invert).
+///
+/// Round 22 (regression-vent-stack-top-under-top-slab) — a VENT stack
+/// ([service] == [ServiceType.vent]) does not stop under the top floor's slab:
+/// it continues through the top storey and penetrates the roof (the VTR the
+/// riser drawing extends to the ATAP line), so a bare vent junction on the
+/// TOP storey reads [BuildingLevels.roofElevation]. The summed vent stack is
+/// then roof − foot datum, not one storey short. Drainage / rainwater keep the
+/// under-slab datum. `// VERIFY` notAnSniClause (the VTR is taken at the roof
+/// slab; the upstand above it is not modelled).
 Length gravityRiserEndElevation(
   NetNode node,
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
+  ServiceType? service,
 ]) {
   final bareJunction = node.elevation == null &&
       node.mountHeight == null &&
@@ -614,6 +624,11 @@ Length gravityRiserEndElevation(
       building.levelCount > 0;
   if (!bareJunction) return nodeElevation(node, building, mounting);
   final f = node.floorIndex.clamp(0, building.levelCount - 1);
+  if (service == ServiceType.vent &&
+      building.levelCount > 1 &&
+      f == building.levelCount - 1) {
+    return building.roofElevation;
+  }
   if (f == 0) return building.elevationOf(0);
   return building.ceilingElevationOf(f - 1, mounting);
 }
@@ -630,7 +645,7 @@ Length riserEndElevation(
   MountingHeights mounting = const MountingHeights(),
 ]) =>
     edge.service.regime == FlowRegime.gravity
-        ? gravityRiserEndElevation(node, building, mounting)
+        ? gravityRiserEndElevation(node, building, mounting, edge.service)
         : nodeElevation(node, building, mounting);
 
 /// The elevation a node is SHOWN at (inspector readout, hover FFL chip): a

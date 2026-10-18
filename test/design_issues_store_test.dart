@@ -677,12 +677,19 @@ void main() {
     // floor cannot be split, so the zoner emits it and the checker honestly
     // rejects it.
     //
-    // One floor × 20.0 m, ρg = 9810, targetResidual = 225 000 Pa.
-    //   budget = (392266 − 225000)/9810 ≈ 17.05 m
-    //   span = ceiling(0) − fixture(0) = (20.0 − 0.3) − 1.1 = 18.6 m > 17.05
-    //   bottomStatic = 225000 + 9810·18.6 = 407 466 Pa ≈ 407 kPa > 392 kPa
-    //   ⇒ withinLimit is false ⇒ an over-limit pressure zone.
-    List<Floor> tallFloors() => [Floor('Hall', const Length(20.0))];
+    // Round 22 (pressurized-3-1) — the TOP zone is fed by the roof tank's own
+    // head, so the indivisible over-limit zone is a PRV zone BELOW it:
+    // Hall 20.0 m (floor 0) under Upper 25.0 m (floor 1), roof (tank) 45.0 m,
+    // ρg = 9810, PRV setpoint 255 000 Pa (target 225 kPa + 30 kPa margin).
+    //   tank zone: floor 1 (always admitted); floor 0's fixture sees
+    //     45.0 − 1.1 = 43.9 m ⇒ 430.7 kPa > 392.3 ⇒ not tank-fed
+    //   PRV zone floor 0: span = (20.0 − 0.3) − 1.1 = 18.6 m (one storey —
+    //     indivisible) ⇒ bottomStatic = 255000 + 9810·18.6 = 437 466 Pa
+    //     ≈ 437 kPa > 392 kPa ⇒ withinLimit is false ⇒ an over-limit zone.
+    List<Floor> tallFloors() => [
+          Floor('Hall', const Length(20.0)),
+          Floor('Upper', const Length(25.0)),
+        ];
 
     test('an over-limit pressure zone surfaces a warning DesignIssue', () {
       final c = ProviderContainer();
@@ -697,7 +704,7 @@ void main() {
           reason: 'a tall building must flag its over-limit pressure zone');
       expect(zoneIssues.every((i) => i.severity == IssueSeverity.warning),
           isTrue);
-      // The message names the worst static + the SNI limit (407 kPa > 392 kPa).
+      // The message names the worst static + the SNI limit (437 kPa > 392 kPa).
       expect(zoneIssues.first.message, contains('kPa'));
     });
 
