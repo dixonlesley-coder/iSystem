@@ -358,7 +358,13 @@ class StructuralHistoryController extends Notifier<int> {
   /// Snapshot the CURRENT (pre-mutation) project floors + network and record one
   /// [UndoDomain.structural] entry — called by a floor-stack edit BEFORE it
   /// changes the floors and remaps node floor indices.
-  void recordFloorStackChange() => _record(project: true, sheets: false);
+  ///
+  /// [sheets] also captures the sheet→floor mapping — for a stack edit that
+  /// shifts existing floor indices (a basement insert / a floor removal), which
+  /// re-maps every sheet with its drawn work (roundtrip-1), so one undo
+  /// restores both.
+  void recordFloorStackChange({bool sheets = false}) =>
+      _record(project: true, sheets: sheets);
 
   /// Snapshot the CURRENT (pre-mutation) sheet mapping + network and record one
   /// [UndoDomain.structural] entry — called by a sheet→floor re-mapping BEFORE

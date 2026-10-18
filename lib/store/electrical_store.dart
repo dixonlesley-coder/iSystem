@@ -102,8 +102,10 @@ class PhasePriorCache {
 }
 
 /// The per-container [PhasePriorCache]. One instance per [ProviderContainer]
-/// (so a fresh app/test container starts from no prior — no cross-project or
-/// cross-test leakage).
+/// (a fresh app/test container starts from no prior); because the app's root
+/// container lives for the whole process, loading a project
+/// ([ElectricalProjectController.setProject]) also clears it — no
+/// cross-project leakage.
 final phasePriorCacheProvider = Provider<PhasePriorCache>((_) => PhasePriorCache());
 
 /// The fixed id of the machine-owned "MEP Equipment" panel — the board
@@ -607,6 +609,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setProject(ElectricalProject project) {
     _undo.clear();
     _redo.clear();
+    // roundtrip-2 — a LOADED project (Open / File→New / recovery) starts from
+    // no phase prior: the cache is keyed by panel/circuit id, ids recur across
+    // projects (mdp, lp-1, mep-equipment, template ids) and the root container
+    // lives for the whole process, so the previous project's R/S/T assignment
+    // used to seed — and, under the 1 A stickiness, stick on — the new one.
+    ref.read(phasePriorCacheProvider).prior = const {};
     state = project;
     final panels = sanitizeFeederTopology(project.panels);
     if (!identical(panels, project.panels)) {
@@ -1887,6 +1895,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         if (c.sourceEquipmentId != null) c.sourceEquipmentId!: c,
     };
 
+    // Each source's position in the derived (mint) order — the order a fresh
+    // board would list the ways in.
+    final derivedIndex = <String, int>{
+      for (var i = 0; i < derived.length; i++)
+        if (derived[i].sourceEquipmentId != null)
+          derived[i].sourceEquipmentId!: i,
+    };
+
     final merged = <ElectricalCircuit>[];
     final refreshed = <String>{};
     // H1 — what this pass actually did (nothing ⇒ no status message).
@@ -1938,7 +1954,23 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         merged[parkedIndex] = _readoptedMepWay(merged[parkedIndex], c);
         restored++;
       } else {
-        merged.add(c);
+        // roundtrip-3 — slot the (re-)minted way back at its DERIVED position
+        // (before the first surviving derived way that comes after it in the
+        // derived list), not at the end: a pristine way dropped when its
+        // source went away and re-minted when it returns (a feed-strategy
+        // toggle, or its undo) must land where it was, or the board's way
+        // order / GRUP numbering changes on an action that was reverted.
+        final k = derivedIndex[src]!;
+        final at = merged.indexWhere((m) {
+          final ms = m.sourceEquipmentId;
+          final mi = ms == null ? null : derivedIndex[ms];
+          return mi != null && mi > k;
+        });
+        if (at < 0) {
+          merged.add(c);
+        } else {
+          merged.insert(at, c);
+        }
         added.add(c);
       }
       refreshed.add(src);
@@ -1967,8 +1999,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       // fedByCircuitId ride through `copyWith`, and the parent's feeder way
       // lives on ANOTHER panel (untouched in `others`), so a hand-rewired MEP
       // feed survives every re-sync.
-      state = _withProject(
-          panels: [...others, existing.copyWith(circuits: merged)]);
+      // roundtrip-3 — the board keeps its place in the panel list (it used to
+      // be re-appended at the end on every sync).
+      state = _withProject(panels: [
+        for (final p in state.panels)
+          p.id == kMepEquipmentPanelId ? existing.copyWith(circuits: merged) : p,
+      ]);
       _narrateMepSync(
         added: added,
         restored: restored,

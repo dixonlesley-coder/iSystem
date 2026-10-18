@@ -60,6 +60,7 @@ ElectricalProject _twoBoard({
   required double feederCosPhi,
   required double feederLengthM,
   Current? feederOverrideA,
+  Current? loadFlaA,
 }) =>
     ElectricalProject(
       id: 'pr',
@@ -95,6 +96,7 @@ ElectricalProject _twoBoard({
               cosPhi: loadCosPhi,
               phases: 3,
               length: const Length(10),
+              flaOverrideA: loadFlaA,
             ),
           ],
         ),
@@ -349,24 +351,30 @@ void main() {
 
   // ── (4) an already-selective feeder ⇒ no floor at all ──────────────────────
   test('(4) an already-selective feeder is not floored and not listed', () {
-    // SP: 3φ 20 kW at cosφ 1.0 ⇒ Ib = 28.868 → 28.9 A ⇒ SP incomer 32 A ⇒ the
-    // floor would be 1.6 × 32 = 51.2 A. The feeder's own poor cosφ 0.5 already
-    // puts it at Ib = 20 000/(√3·400·0.5) = 57.735 A ⇒ 63 A ≥ 51.2 ⇒ no floor.
+    // Round-7 elec-props-2: the feeder converts SP's demand at SP's REAL pf,
+    // so the old premise (a feeder at cosφ 0.5 out-sizing a cos 1.0 board) was
+    // the very defect fixed. An already-selective pair is now a way whose
+    // NAMEPLATE FLA sits below its W-based current:
+    // SP: 3φ 20 kW at cosφ 1.0, A5 FLA 10 A ⇒ SP incomer = first rung ≥ 10 =
+    // 10 A ⇒ the floor would be 1.6 × 10 = 16 A. The feeder carries the 20 kW
+    // at SP's pf 1.0: Ib = 20 000/(√3·400·1.0) = 28.868 A ⇒ 32 A ≥ 16 ⇒ no
+    // floor.
     final project = _twoBoard(
       loadW: 20000,
       loadCosPhi: 1.0,
-      feederCosPhi: 0.5,
+      feederCosPhi: 1.0,
       feederLengthM: 25,
+      loadFlaA: const Current(10),
     );
     final sys = computeSystem(p, project);
-    expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 32);
-    expect(_way(sys.panels['MDP']!, 'f1').breaker.ratingA.amperes, 63);
+    expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 10);
+    expect(_way(sys.panels['MDP']!, 'f1').breaker.ratingA.amperes, 32);
     expect(sys.feederFloorsApplied, isEmpty);
-    // 63 / 32 = 1.97 ⇒ partial, and since the SIZER did not floor it the
-    // advisory is a genuine finding and IS raised.
+    // 32 / 10 = 3.2 ≥ 2.5 ⇒ TOTAL selectivity on the sizer's own pick: nothing
+    // was floored and nothing is reported.
     final fs = faultStudy(sys, project, p);
-    expect(fs.selectivity.single.zone, SelectivityZone.partial);
-    expect(fs.warnings.map((w) => w.code), contains('selectivity-partial'));
+    expect(fs.selectivity.single.zone, SelectivityZone.total);
+    expect(fs.warnings.map((w) => w.code), isNot(contains('selectivity-partial')));
   });
 
   test('(5) a project with no feeders reports an empty floors set', () {
@@ -401,61 +409,62 @@ void main() {
     final sys = computeSystem(p, project);
     final mdp = sys.panels['MDP'] ?? sys.panels['mdp']!;
 
-    test('PP-1: a board drawing 46.1 A no longer takes 150 mm2', () {
-      // Re-derived 2026-10 (audit elec-core-4): PP-1's connected demand now
-      // counts each motor at its ELECTRICAL INPUT (shaft kW / η 0.88):
+    test('PP-1: a board drawing 43.8 A no longer takes 150 mm2', () {
+      // Re-derived 2026-10 (audit elec-core-4): PP-1's connected demand counts
+      // each motor at its ELECTRICAL INPUT (shaft kW / η 0.88):
       //   connected = 6000×0.7 + 4500 + 4500 + 11 000/0.88 + 5500/0.88
       //             = 4200 + 9000 + 12 500 + 6250 = 31 950 W
       //   demand    = 31 950 × 0.85 (board diversity) = 27 157.5 W
-      // (was 25 245 W on shaft kW). The feeder converts it at the feeder
-      // default cosφ 0.85:
-      //   Ib = 27 157.5 / (√3·400·0.85) = 27 157.5 / 588.897 = 46.12 A → 46.1 A
-      //   ⇒ LOAD-SIZED device = first rung ≥ 46.12 = 50 A.
+      // Round-7 elec-props-2: the feeder converts it at PP-1's REAL power
+      // factor, not the feeder default 0.85:
+      //   VA = 4200/0.9 + 4500/1.0 + 4500/1.0 + 12 500/0.85 + 6250/0.85
+      //      = 4666.67 + 9000 + 14 705.88 + 7352.94 = 35 725.49 VA
+      //   pf = 31 950 / 35 725.49 = 0.89432
+      //   Ib = 27 157.5 / (√3·400·0.89432) = 27 157.5 / 619.61 = 43.83 → 43.8 A
+      //   ⇒ LOAD-SIZED device = first rung ≥ 43.83 = 50 A.
       // CABLE: MDP is 35 °C / grouping 6 / conduit ⇒ derating
-      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 46.12 = 57.65) = 57.65 A:
-      //   25 mm² → 105 × 0.5358 = 56.3 A ✗;  35 mm² → 130 × 0.5358 = 69.7 A ✓.
-      //   ⇒ 35 mm², Iz 69.7 A  (the old policy landed on 150 mm²).
+      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 43.83 = 54.79) = 54.79 A:
+      //   25 mm² → 105 × 0.5358 = 56.3 A ✓  ⇒ 25 mm², Iz 56.3 A
+      //   (the old policy landed on 150 mm²; the 0.85-pf basis on 35 mm²).
       final f = _way(mdp, 'mdp-f-pp1');
-      expect(f.designCurrent.amperes, 46.1);
-      expect(f.cable.csaMm2, 35.0);
-      expect(f.cable.deratedIz.amperes, closeTo(69.7, 0.05));
-      // The conductor is proportionate: Iz/Ib was > 3.0 under the old
-      // cable-inflating floor; it is now 69.7/46.1 = 1.51 — one rung above the
-      // 1.25 continuous margin, because the next-smaller 25 mm² misses the
-      // 57.65 A requirement by 1.3 A (so < 1.6, not the old < 1.5 bound that
-      // held only while the demand under-counted the motors' input).
+      expect(f.designCurrent.amperes, 43.8);
+      expect(f.cable.csaMm2, 25.0);
+      expect(f.cable.deratedIz.amperes, closeTo(56.3, 0.05));
+      // The conductor is proportionate: 56.3/43.8 = 1.29 — just over the 1.25
+      // continuous margin.
       expect(f.cable.deratedIz.amperes / f.designCurrent.amperes,
           lessThan(1.6));
 
       // DEVICE: PP-1's incomer is 80 A (58.0 A worst phase × 1.25 headroom ⇒
       // 72.5 ⇒ rung 80), so the floor target is 1.6 × 80 = 128 ⇒ rung 160 A.
-      // The cap is Iz 69.7 ⇒ the largest rung ≤ 69.7 is 63 A, so the floor
-      // lifts the device 50 → 63 A and stops there (CAP-limited ⇒ not listed).
+      // The cap is Iz 56.3 ⇒ the largest rung ≤ 56.3 is 50 A, so the floor
+      // cannot lift the device at all (CAP-limited ⇒ not listed).
       expect(sys.panels['pp1']!.incomer.breaker.ratingA.amperes, 80);
-      expect(f.breaker.ratingA.amperes, 63);
+      expect(f.breaker.ratingA.amperes, 50);
       expect(sys.feederFloorsApplied, isNot(contains('mdp-f-pp1')));
     });
 
     test('LP-3: the small 1-phase board no longer takes 50 mm2', () {
       // LP-3 connected 1400 + 1000 + 2600×0.7 + 2000×0.7 = 5620 W, diversity
       // 0.9 ⇒ demand 5058 W. Its feeder follows the FED board — 1φ at 220 V
-      // (E8a) — so Ib = 5058 / (220 × 0.85) = 27.05 A → 27.0 A ⇒ LOAD-SIZED
-      // device = first rung ≥ 27.05 = 32 A.
-      // CABLE: Iz ≥ max(32, 1.25 × 27.05 = 33.81) = 33.81 A at derating 0.5358:
-      //   10 mm² → 60 × 0.5358 = 32.1 ✗;  16 mm² → 80 × 0.5358 = 42.9 ✓
-      //   ⇒ 16 mm² (the old policy landed on 50 mm²).
+      // (E8a) — and (Round-7 elec-props-2) LP-3's REAL power factor: every way
+      // is cos 0.9 ⇒ pf = 5620 / (5620/0.9) = 0.9. So
+      //   Ib = 5058 / (220 × 0.9) = 25.545 A → 25.5 A
+      //   ⇒ LOAD-SIZED device = first rung ≥ 25.55 = 32 A.
+      // CABLE: Iz ≥ max(32, 1.25 × 25.545 = 31.93) = 32 A at derating 0.5358:
+      //   10 mm² → 60 × 0.5358 = 32.1 ✓  ⇒ 10 mm² (the old policy: 50 mm²).
       final f = _way(mdp, 'mdp-f-lp3');
       expect(f.threePhase, isFalse);
-      expect(f.designCurrent.amperes, 27.0);
-      expect(f.cable.csaMm2, 16.0);
-      expect(f.cable.deratedIz.amperes, closeTo(42.9, 0.05));
+      expect(f.designCurrent.amperes, 25.5);
+      expect(f.cable.csaMm2, 10.0);
+      expect(f.cable.deratedIz.amperes, closeTo(32.1, 0.05));
 
       // DEVICE: LP-3's incomer is 40 A (28.5 A × 1.20 headroom = 34.2 ⇒ 40), so
-      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. The cap is Iz 42.9 ⇒ the
-      // largest rung ≤ 42.9 is 40 A: the device lifts ONE rung (32 → 40) and
-      // stops. Copper never moved.
+      // the target is 1.6 × 40 = 64 ⇒ rung 80 A. The cap is Iz 32.1 ⇒ the
+      // largest rung ≤ 32.1 is 32 A: the device stays at its load pick. Copper
+      // never moved.
       expect(sys.panels['lp3']!.incomer.breaker.ratingA.amperes, 40);
-      expect(f.breaker.ratingA.amperes, 40);
+      expect(f.breaker.ratingA.amperes, 32);
       expect(sys.feederFloorsApplied, isNot(contains('mdp-f-lp3')));
     });
 

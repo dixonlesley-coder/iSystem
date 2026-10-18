@@ -819,13 +819,17 @@ FaultStudyResult faultStudy(
       neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
           feederNeutralImpedance(profile, csa,
               feederResult?.grounding.neutralCsaMm2 ?? 0, lengthM,
-              panelModel.material, runs);
+              // elec-props-1 — the feeder's neutral is the PARENT's cable
+              // (the same material the phase leg + Fold-1 use), never the
+              // fed board's own bus material.
+              feederMaterial, runs);
       faultA = subPanelBusFaultA(panelModel, sourceZ, neutralZ, upstreamIscA);
       // Earth-fault loop legs at the fault temperature (cold decay above).
       sourceZHot = (panelSourceZHot[parentId] ?? upstreamSourceZ) +
           Impedance(feederZ.rOhm * zsFaultTempFactor, feederZ.xOhm);
+      // elec-props-1 — the feeder's PE conductor runs in the PARENT's cable.
       final pe0 = conductorImpedance(profile,
-          feederResult?.grounding.peCsaMm2 ?? 0, lengthM, panelModel.material);
+          feederResult?.grounding.peCsaMm2 ?? 0, lengthM, feederMaterial);
       peReturnZ = (panelPeZ[parentId] ?? const Impedance(0, 0)) +
           Impedance(pe0.rOhm * zsFaultTempFactor / runs, pe0.xOhm / runs);
     }

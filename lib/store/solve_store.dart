@@ -18,6 +18,8 @@ import 'package:mechx_engine/sizing/consumables.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/sizing/room_air.dart'
+    show AirEquipmentKind, defaultInternalStatic;
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -73,6 +75,15 @@ final solveProvider = Provider<PressureSolution?>((ref) {
     // mounting heights, the same basis the drawings and report print.
     mounting: project.mounting,
   );
+});
+
+/// mech-building-2 — upfeed DELIVERY nodes over the SNI fixture pressure
+/// limits (judge-only; see the engine's [upfeedOverPressure]). Empty on a
+/// downfeed (its PRV zones are the check there) or with no upfeed solve.
+final upfeedOverPressureProvider = Provider<List<UpfeedOverPressure>>((ref) {
+  final solution = ref.watch(solveProvider);
+  if (solution == null) return const [];
+  return upfeedOverPressure(solution);
 });
 
 /// DOWNFEED gravity solve (roof tank distributing down). Null when the strategy
@@ -237,16 +248,18 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   return sizePump(flow: flow, head: solution.requiredPumpHead);
 });
 
-/// Trunk airflow + index-run static for one air [service]. Zero when the
-/// service has no sized edges.
-({FlowRate trunk, Pressure stat}) _airSystem(
+/// Trunk airflow + index-run static for one air [service], plus the node the
+/// fan is rooted at. Zero (and no fan node) when the service has no sized edges.
+({FlowRate trunk, Pressure stat, String? fanNodeId}) _airSystem(
   Network net,
   Map<String, EdgeSizing> sizing,
   ProjectState project,
   ServiceType service,
 ) {
   final edges = net.edges.where((e) => e.service == service).toList();
-  if (edges.isEmpty) return (trunk: const FlowRate(0), stat: const Pressure(0));
+  if (edges.isEmpty) {
+    return (trunk: const FlowRate(0), stat: const Pressure(0), fanNodeId: null);
+  }
 
   var trunk = const FlowRate(0);
   NetEdge? trunkEdge;
@@ -261,7 +274,7 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
     }
   }
   if (trunk.cubicMetersPerSecond <= 0 || trunkEdge == null) {
-    return (trunk: const FlowRate(0), stat: const Pressure(0));
+    return (trunk: const FlowRate(0), stat: const Pressure(0), fanNodeId: null);
   }
 
   // Seed the fan at the SAME source the sizer accumulated from (plant → demand-
@@ -287,7 +300,23 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
     building: project.building,
     mounting: project.mounting,
   );
-  return (trunk: trunk, stat: s.totalStaticPressure);
+  return (trunk: trunk, stat: s.totalStaticPressure, fanNodeId: fan);
+}
+
+/// mech-building-4 — the equipment INTERNAL static (filter + coil + casing) of
+/// the air unit a drawn duct system is rooted at: the drawn-network solve only
+/// sums duct friction + the terminal loss (the EXTERNAL static), so an AHU fan
+/// sized on it alone came out ≈2× under-motored. The same
+/// [defaultInternalStatic] the room-air path uses (AHU 250 Pa, FCU / ducted AC
+/// 50 Pa, `// VERIFY` representative allowances), added ONCE per fan. A bare
+/// fan, an un-typed source node or no node ⇒ 0 Pa (byte-identical).
+Pressure airUnitInternalStatic(NetNode? source) {
+  final kind = switch (source?.component) {
+    NodeComponent.ahu => AirEquipmentKind.ahu,
+    NodeComponent.fcu || NodeComponent.acDucted => AirEquipmentKind.fcu,
+    _ => null,
+  };
+  return kind == null ? const Pressure(0) : defaultInternalStatic(kind);
 }
 
 /// Fan duty for the air system: supply trunk airflow against the SUM of the
@@ -305,9 +334,15 @@ final ductFanProvider = Provider<FanDuty?>((ref) {
       : ret.trunk; // return-only systems still get a fan
   if (airflow.cubicMetersPerSecond <= 0) return null;
 
+  // The AHU fan develops the supply + return EXTERNAL statics PLUS the unit's
+  // own internal losses (once — the supply and return legs meet at one unit).
+  final unitId = supply.fanNodeId ?? ret.fanNodeId;
+  final internal =
+      airUnitInternalStatic(unitId == null ? null : net.nodeById(unitId));
   return sizeFan(
     airflow: airflow,
-    totalStaticPressure: Pressure(supply.stat.pascals + ret.stat.pascals),
+    totalStaticPressure: Pressure(
+        supply.stat.pascals + ret.stat.pascals + internal.pascals),
   );
 });
 

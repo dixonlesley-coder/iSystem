@@ -70,6 +70,11 @@ void main() {
             loadKind: LoadKind.feeder,
             cosPhi: 0.85,
             length: Length(2),
+            // Round-7 elec-props-2: the feeder now converts SP's 10 kW at SP's
+            // REAL pf (two cos 1 heaters ⇒ 1.0): Ib = 10 000/220 = 45.5 A,
+            // which alone sizes 10 mm². The fault arithmetic below is derived
+            // on a 16 mm² feeder, so it is pinned with a manual cable minimum.
+            cableOverrideMm2: 16,
             feedsPanelId: 'SP'),
       ],
     );

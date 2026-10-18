@@ -26,6 +26,7 @@ import '../sizing/network_sizing.dart';
 import '../standards/duct_products.dart';
 import '../units.dart';
 import 'network.dart';
+import 'oriented_paths.dart';
 
 /// Result of [solveDuctStatic]: the fan total static pressure and the index
 /// (critical, longest-friction) terminal that sets it.
@@ -67,68 +68,62 @@ DuctStaticSolution solveDuctStatic({
         .add((edge: e, other: e.fromId));
   }
 
-  // BFS from the fan accumulating cumulative friction (Pa) along the tree path.
-  final staticPa = <String, double>{fanNodeId: 0.0};
-  final queue = <String>[fanNodeId];
-  var head = 0;
-  while (head < queue.length) {
-    final current = queue[head];
-    head++;
-    final currentStatic = staticPa[current]!;
-    final links = adjacency[current];
-    if (links == null) continue;
-    for (final link in links) {
-      if (staticPa.containsKey(link.other)) continue; // visited (tree)
-      final edge = link.edge;
-      var edgePa = 0.0;
-      final edgeSizing = sizing[edge.id];
-      if (edgeSizing != null) {
-        final flow = edgeFlows[edge.id] ?? const FlowRate(0);
-        final length = edgeLength(
-          edge,
-          net,
-          calibrationBySheet: calibrationBySheet,
-          building: building,
-          mounting: mounting,
+  // Static (Pa) along the governing path from the fan, each duct walked in
+  // its sized flow direction (mech-props-3 — see [orientedPathCost]).
+  double edgePaArriving(NetEdge edge, String arriving) {
+    var edgePa = 0.0;
+    final edgeSizing = sizing[edge.id];
+    if (edgeSizing == null) return 0.0;
+    final flow = edgeFlows[edge.id] ?? const FlowRate(0);
+    final length = edgeLength(
+      edge,
+      net,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      mounting: mounting,
+    );
+    edgePa = ductFrictionPaPerMetre(
+          flow,
+          edgeSizing.diameter,
+          // Per-segment material → wall roughness ε. The product defaults by
+          // service (PU for AC supply/return, BJLS for exhaust) when unset.
+          roughness: ductRoughnessFor(effectiveDuctProductFor(edge)),
+        ) *
+        length.meters *
+        fittingFactor;
+    // Inline air restrictor (damper / VAV) we're arriving at: add its static
+    // loss C·ρv²/2 (velocity from the feeding duct), so it propagates to
+    // every downstream node — the air-path analogue of the valve minor
+    // loss. C = 0 (no component / not a restrictor) ⇒ no change.
+    final c = net.nodeById(arriving)?.component?.airLossC ?? 0;
+    if (c > 0) {
+      final w = edgeSizing.width;
+      final h = edgeSizing.height;
+      if (w != null && h != null && w.meters > 0 && h.meters > 0) {
+        // Rectangular duct: the restrictor's velocity pressure uses the
+        // TRUE section velocity Q/(W·H). The Huebscher equivalent diameter
+        // in `edgeSizing.diameter` is an equal-FRICTION equivalent whose
+        // circle is smaller than W·H, so it overstated v (~+18 % ρv²/2).
+        edgePa += c *
+            airVelocityPressurePa(
+                Velocity(flow.cubicMetersPerSecond / (w.meters * h.meters)));
+      } else {
+        edgePa += ductFittingLossPa(
+          c: c,
+          flow: flow,
+          diameter: edgeSizing.diameter,
         );
-        edgePa = ductFrictionPaPerMetre(
-              flow,
-              edgeSizing.diameter,
-              // Per-segment material → wall roughness ε. The product defaults by
-              // service (PU for AC supply/return, BJLS for exhaust) when unset.
-              roughness: ductRoughnessFor(effectiveDuctProductFor(edge)),
-            ) *
-            length.meters *
-            fittingFactor;
-        // Inline air restrictor (damper / VAV) we're arriving at: add its static
-        // loss C·ρv²/2 (velocity from the feeding duct), so it propagates to
-        // every downstream node — the air-path analogue of the valve minor
-        // loss. C = 0 (no component / not a restrictor) ⇒ no change.
-        final c = net.nodeById(link.other)?.component?.airLossC ?? 0;
-        if (c > 0) {
-          final w = edgeSizing.width;
-          final h = edgeSizing.height;
-          if (w != null && h != null && w.meters > 0 && h.meters > 0) {
-            // Rectangular duct: the restrictor's velocity pressure uses the
-            // TRUE section velocity Q/(W·H). The Huebscher equivalent diameter
-            // in `edgeSizing.diameter` is an equal-FRICTION equivalent whose
-            // circle is smaller than W·H, so it overstated v (~+18 % ρv²/2).
-            edgePa += c *
-                airVelocityPressurePa(Velocity(
-                    flow.cubicMetersPerSecond / (w.meters * h.meters)));
-          } else {
-            edgePa += ductFittingLossPa(
-              c: c,
-              flow: flow,
-              diameter: edgeSizing.diameter,
-            );
-          }
-        }
       }
-      staticPa[link.other] = currentStatic + edgePa;
-      queue.add(link.other);
     }
+    return edgePa;
   }
+
+  final staticPa = orientedPathCost(
+    sourceId: fanNodeId,
+    adjacency: adjacency,
+    flowFromOf: (e) => sizing[e.id]?.flowFromId,
+    edgeCost: edgePaArriving,
+  );
 
   // Index run = the node with the greatest accumulated friction.
   var worst = 0.0;
