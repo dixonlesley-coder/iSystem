@@ -1457,6 +1457,24 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 16 — movers in series, valves by topology, supply by one study**:
+  a cycle check valve is oriented TOPOLOGICALLY first (root-reachable side with
+  all cycle valves cut = inlet), the drawn direction only as the tie-break;
+  an air-unit plant's bare intake leaf bears no load and carries the unit's
+  delivered airflow inward (`// VERIFY` 100 % OA); `riserFunctionFor` reads the
+  SOLVED flow path when `flowFrom` is supplied (TRANSFER = mover with a tank
+  downstream, GRAVITASI = roof tank with no mover between, never a tank inlet).
+  App: `supplyMoverDutiesProvider` is THE per-mover pump duty map (series heads
+  via `seriesMoverHeads`, transfer lift via `transferPumpHead`), read by the
+  feed, schedule and riser; `pumpDutyProvider` is its primary (largest-flow
+  non-transfer) entry. The HW recirc loop is circulated pipework only, head =
+  index run at own bores + DN20 return. An air system's unit is chosen by role
+  (fan → AHU, never a terminal unit). A packaged AC is fed its room-PK input.
+  Genset rating covers max(S, P/0.8); battery on demand W; installed kvar
+  enters the PF study; `determineSupply(declaredKva:)` / `serviceTransformer`
+  are the one transformer source; an undeclared MV demand takes the study
+  transformer's fault at the ONE 4 % impedance. A drawn PRV holds its setpoint
+  in `solveDownfeed`, and downfeed delivery nodes are over-pressure judged.
 - **Round 11 electrical rules (2026-10-18, seed suite
   `round11_electrical_test.dart`)**: (1) PVC ampacity RANKS BY METHOD like XLPE
   — conduit = IEC 60364-5-52 Table B.52.4 B1 (16 mm² = 68 A), wall = column C,
