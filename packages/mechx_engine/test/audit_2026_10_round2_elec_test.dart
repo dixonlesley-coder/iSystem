@@ -95,6 +95,8 @@ void main() {
     });
 
     test('a 6-grouped 2-run feeder derates at gf(12) = 0.45, not 0.50', () {
+      // Round 11: run on method E (tray) — the PVC table whose figures are
+      // derived below (300 mm² = 500 A); conduit (B1) now reads IEC B.52.4 B1.
       // g = 6 ⇒ df = gf(6) = 0.57 already applied. Ib 240 A, In 300 A ⇒
       //   Iz ≥ max(300, 1.25·240 = 300) = 300 A.
       //   n=1: per run ≥ 300 / 0.57 = 526.3 A > 500 (300 mm² KHA) ✗
@@ -114,6 +116,7 @@ void main() {
         minSectionMm2: 4,
         threePhase: true,
         groupingCount: 6,
+        method: CableInstallMethod.tray,
       );
       expect(cable.runsPerPhase, 2);
       expect(cable.deratingFactor, 0.45);

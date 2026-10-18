@@ -350,7 +350,7 @@ AdvancedStudy computeAdvancedStudy(
       project.sources!,
       demand: sys.supply.demandVa,
       voltage: sys.supply.voltage,
-      motors: _gensetMotors(project),
+      motors: gensetStartMotors(project),
     );
   }
 
@@ -521,11 +521,55 @@ bool _hasFloorGear(
   return false;
 }
 
-/// The motors (for the genset-start voltage-dip screen) — every motor/pump
-/// circuit across the project, with its starter string.
-List<GensetMotor> _gensetMotors(ElectricalProject project) {
-  final motors = <GensetMotor>[];
+/// The ESSENTIAL (genset-backed) panel ids (Round 11): a panel flagged
+/// [ElectricalPanel.essential], or named EMERGENCY / ESSENTIAL / DARURAT, plus
+/// every board it feeds (the property propagates DOWN the emergency sub-tree) —
+/// the same rule the single-line's normal / essential colour split uses.
+Set<String> gensetBackedPanelIds(ElectricalProject project) {
+  final children = <String, List<String>>{};
   for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final fed = c.feedsPanelId;
+      if (fed != null && fed.isNotEmpty) {
+        (children[p.id] ??= <String>[]).add(fed);
+      }
+    }
+  }
+  bool own(ElectricalPanel p) {
+    final n = p.name.toUpperCase();
+    return p.essential ||
+        n.contains('EMERGENCY') ||
+        n.contains('ESSENTIAL') ||
+        n.contains('DARURAT');
+  }
+
+  final out = <String>{};
+  final stack = [for (final p in project.panels) if (own(p)) p.id];
+  while (stack.isNotEmpty) {
+    final id = stack.removeLast();
+    if (!out.add(id)) continue; // also guards a (sanitized-away) cycle
+    stack.addAll(children[id] ?? const <String>[]);
+  }
+  return out;
+}
+
+/// The motors (for the genset-start voltage-dip screen), with their starter
+/// strings.
+///
+/// Round 11 — only the motors the genset actually STARTS: when the set backs a
+/// fraction of the load (`backupFraction < 1`) or any board is flagged
+/// essential, just the motors on the essential sub-tree
+/// ([gensetBackedPanelIds]); a full-backup set with no essential designation
+/// still screens every motor. It used to screen every motor in the project —
+/// a 110 kW chiller on the NORMAL supply was the limiting motor of a 30 %-backup
+/// 200 kVA set and printed 'start dip 38.22% over'.
+List<GensetMotor> gensetStartMotors(ElectricalProject project) {
+  final motors = <GensetMotor>[];
+  final backup = project.sources?.generator?.backupFraction ?? 1.0;
+  final essential = gensetBackedPanelIds(project);
+  final restrict = backup < 1.0 - 1e-9 || essential.isNotEmpty;
+  for (final p in project.panels) {
+    if (restrict && !essential.contains(p.id)) continue;
     for (final c in p.circuits) {
       if (!_isMotorLike(c)) continue;
       final kw = _motorKw(c);

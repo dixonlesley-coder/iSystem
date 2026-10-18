@@ -729,6 +729,12 @@ double circuitConnectedW(
   DiversityLibrary? library,
   String? diversityLibraryId,
 }) {
+  // Round 11 — a capacitor bank's `loadW` is its REACTIVE rating (kvar): it
+  // draws no real power, so it contributes nothing to the connected / demand
+  // W of the panel, the feeders above it, the supply or the daya check (it
+  // used to be summed as kW — a 20 kvar bank added +20 kW, +59 % on the
+  // worked example). `power_factor.dart` already excludes it from leaf loads.
+  if (c.loadKind == LoadKind.capacitor) return 0;
   final isMotor =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
@@ -766,13 +772,22 @@ double _singlePhaseNonLinearFraction(List<_CircuitComputation> comps) {
   var singlePhaseNonLinear = 0.0;
   for (final cm in comps) {
     if (cm.result.loadKind == LoadKind.spare) continue;
-    final w = math.max(0.0, cm.result.designCurrent.amperes);
+    final w = math.max(0.0, _balanceCurrentA(cm.result));
     total += w;
     if (cm.nonLinear && !cm.threePhase) singlePhaseNonLinear += w;
   }
   if (total <= 0) return 0;
   return roundTo(singlePhaseNonLinear / total, 3);
 }
+
+/// The line current a way adds to the PHASE balance (and so to the incomer's
+/// worst-phase sizing current). Round 11 — a capacitor bank's current is
+/// REACTIVE and leading: it offsets the lagging load current in phasor, it
+/// never adds to it arithmetically (a 20 kvar bank took a 30 kW motor board
+/// from 61.5 A to 90.4 A and a 63 A incomer to 100 A). Its worst case is the
+/// bank switched OFF — the load alone — so it contributes 0 here.
+double _balanceCurrentA(ElectricalCircuitResult r) =>
+    r.loadKind == LoadKind.capacitor ? 0.0 : r.designCurrent.amperes;
 
 /// Format a double without a trailing `.0` for whole numbers (warning text only).
 String _num(double v) =>
@@ -887,7 +902,9 @@ _CircuitComputation _computeCircuit(
     );
   } else {
     ib = loadCurrent(
-      power: Power(loadW),
+      // A capacitor way carries no demand W (see [circuitConnectedW]) but its
+      // own line current is real: Ib = Q / (√3·U) from its kvar rating.
+      power: Power(c.loadKind == LoadKind.capacitor ? c.loadW : loadW),
       voltage: Voltage(useVoltageV),
       cosPhi: cosPhi,
       threePhase: threePhase,
@@ -908,8 +925,16 @@ _CircuitComputation _computeCircuit(
   // VERIFY — notAnSniClause: Indonesian practice puts a stop-kontak final on a
   // uniform 16 A / 2.5 mm² make-up; no PUIL clause forbids diversifying a final
   // circuit's own device, this is a drafting/uniformity convention.
-  final sizeOnUndiversifiedLoad = !isFeeder && c.loadKind == LoadKind.socket;
-  final Current sizingCurrent;
+  //
+  // Round 11 — GENERALISED from sockets to EVERY final way: one machine does
+  // not diversify against itself, so a final way's own device + conductor
+  // always size on its undiversified current (a 2.5 PK AC at df 0.9 drew
+  // 10.5 A and got a 10 A breaker — Ib > In, a trip on normal running; a
+  // 54.5 kW chiller got 25 mm² against its own 1.25·Ib rule). Motor / A5-FLA
+  // ways already derive Ib from the undiversified input, and a feeder IS an
+  // aggregation, so both keep `ib`.
+  final sizeOnUndiversifiedLoad = !isFeeder;
+  Current sizingCurrent;
   if (sizeOnUndiversifiedLoad && c.flaOverrideA == null && !motorLike) {
     final undiversified = loadCurrent(
       power: Power(c.loadW),
@@ -922,6 +947,12 @@ _CircuitComputation _computeCircuit(
     sizingCurrent = Current(math.max(ib.amperes, undiversified.amperes));
   } else {
     sizingCurrent = ib;
+  }
+  // Round 11 — a capacitor bank's switching device + conductor carry 1.43 ×
+  // its rated current ([kCapacitorSwitchingFactor], IEC 60831-1 1.3 × 1.1).
+  if (c.loadKind == LoadKind.capacitor) {
+    sizingCurrent =
+        Current(sizingCurrent.amperes * kCapacitorSwitchingFactor);
   }
 
   // THE LOAD-SIZED DEVICE. Deliberately floor-free: the conductor below is sized
@@ -1060,6 +1091,9 @@ _CircuitComputation _computeCircuit(
     isFinalCircuit: !isFeeder,
     designCurrent: designCurrent,
     lifeSafety: c.lifeSafety,
+    // Round 11 — a VFD's 3-phase rectifier can drive SMOOTH DC earth-fault
+    // current that blinds a Type A RCD: the Type B branch must be reachable.
+    hasVfd: c.starterType == StarterType.vfd,
   );
 
   // A life-safety run with NO construction named is sized + printed on the
@@ -1228,7 +1262,7 @@ ElectricalPanelResult computePanel(
         _PhaseCircuit(
           comps[i].result.circuitId,
           comps[i].threePhase,
-          comps[i].result.designCurrent.amperes,
+          _balanceCurrentA(comps[i].result),
           branches[i].phaseOverride,
         ),
     ],
@@ -1279,7 +1313,7 @@ ElectricalPanelResult computePanel(
     final avgA = (balance.l1 + balance.l2 + balance.l3) / 3;
     final bestSpreadA = minimumPhaseSpreadA([
       for (final cm in comps)
-        if (!cm.threePhase) cm.result.designCurrent.amperes,
+        if (!cm.threePhase) _balanceCurrentA(cm.result),
     ]);
     bestImbalancePercent =
         avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;

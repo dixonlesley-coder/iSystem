@@ -732,6 +732,27 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       ),
     );
   }
+  // Round 11 (hvac-network-4) — every OTHER drawn supply / return system (a
+  // second AHU on another floor) is scheduled with its OWN solved duty, tagged
+  // after its root unit (else the next free F-nn).
+  var fanOrdinal = fans.length;
+  String nextFanTag(String prefix) {
+    fanOrdinal++;
+    return '$prefix-${fanOrdinal.toString().padLeft(2, '0')}';
+  }
+
+  for (final e in ref.read(supplyFanDutiesByRootProvider).entries) {
+    if (e.key == airRoots.supply) continue;
+    final tag = tagOfNode(e.key) ?? nextFanTag('F');
+    fans.add(
+      FanScheduleItem(
+        duty: e.value,
+        service: reportStringsFor(ref)(RptStringKey.esSvcMechVent),
+        tag: tag,
+        modelSpec: specs[tag],
+      ),
+    );
+  }
   final exhaustFan = ref.read(exhaustFanProvider);
   if (exhaustFan != null) {
     // The exhaust system's ROOT fan's plan tag; 'EF-01' only when none drawn.
@@ -743,6 +764,21 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     fans.add(
       FanScheduleItem(
         duty: exhaustFan,
+        service: reportStringsFor(ref)(RptStringKey.esSvcExhaustVent),
+        tag: tag,
+        modelSpec: specs[tag],
+      ),
+    );
+  }
+  var exOrdinal = 1;
+  for (final e in ref.read(exhaustFanDutiesByRootProvider).entries) {
+    if (e.key == airRoots.exhaust) continue;
+    exOrdinal++;
+    final tag =
+        tagOfNode(e.key) ?? 'EF-${exOrdinal.toString().padLeft(2, '0')}';
+    fans.add(
+      FanScheduleItem(
+        duty: e.value,
         service: reportStringsFor(ref)(RptStringKey.esSvcExhaustVent),
         tag: tag,
         modelSpec: specs[tag],
@@ -772,6 +808,25 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       ductMethod: ducts.method,
     );
     if (sizing == null) continue;
+    // Round 11 (hvac-network-2) — an EXTRACT room (toilet / kitchen) is served
+    // by an exhaust fan, never an AHU/FCU: scheduled as an EF row (stable per
+    // room identity) unless a drawn exhaust system already carries its duty.
+    if (sizing.extractOnly) {
+      final hasExhaustNetwork =
+          net.edges.any((e) => e.service == ServiceType.exhaust);
+      if (hasExhaustNetwork) continue;
+      final ahuTag = _roomScheduleTag(r, i, usedNodeTags: usedNodeTags);
+      final tag = ahuTag.replaceFirst('AHU-', 'EF-R');
+      fans.add(
+        FanScheduleItem(
+          duty: sizing.equipment,
+          service: r.name,
+          tag: tag,
+          modelSpec: specs[tag],
+        ),
+      );
+      continue;
+    }
     final drawnUnit = net.nodes.any((n) =>
         (n.component == NodeComponent.ahu ||
             n.component == NodeComponent.fcu) &&
@@ -3336,14 +3391,18 @@ class _RoomsSection extends ConsumerWidget {
                               type.caption.copyWith(color: colors.textMuted),
                             ),
                           ),
-                          Text(
-                            'Supply ${bank(s.supply)}',
-                            style: MechXTypography.tabular(
-                              type.caption.copyWith(color: colors.textMuted),
+                          // Round 11 — an extract room shows its exhaust bank
+                          // only (no conditioned supply, no recirculation).
+                          if (!s.extractOnly)
+                            Text(
+                              'Supply ${bank(s.supply)}',
+                              style: MechXTypography.tabular(
+                                type.caption.copyWith(color: colors.textMuted),
+                              ),
                             ),
-                          ),
                           Text(
-                            'Return ${bank(s.return_)}',
+                            '${s.extractOnly ? 'Exhaust' : 'Return'} '
+                            '${bank(s.return_)}',
                             style: MechXTypography.tabular(
                               type.caption.copyWith(color: colors.textMuted),
                             ),
@@ -3570,7 +3629,13 @@ class _RoomsSection extends ConsumerWidget {
                             const Spacer(),
                             if (s != null)
                               Text(
-                                '${s.supply.count} + 1',
+                                // Round 11 — an extract room (toilet /
+                                // kitchen) places exhaust grilles only.
+                                s.extractOnly
+                                    ? context.strings.format(
+                                        StringKey.roomExtractGrilleCount,
+                                        {'n': s.return_.count})
+                                    : '${s.supply.count} + 1',
                                 // L2: the diffuser count tracks the live sizing.
                                 style: MechXTypography.tabular(
                                   type.caption.copyWith(

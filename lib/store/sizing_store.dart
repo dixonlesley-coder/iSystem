@@ -64,9 +64,19 @@ final edgeFixtureUnitsProvider = Provider<Map<String, double>>(
 
 /// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
 final sizingDetailProvider = Provider<
-    ({Map<String, EdgeSizing> sizing, Map<String, double> fixtureUnits})>((ref) {
+    ({
+      Map<String, EdgeSizing> sizing,
+      Map<String, double> fixtureUnits,
+      FlushSystem flushSystem,
+    })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
-  if (net.edges.isEmpty) return (sizing: const {}, fixtureUnits: const {});
+  if (net.edges.isEmpty) {
+    return (
+      sizing: const {},
+      fixtureUnits: const {},
+      flushSystem: FlushSystem.flushTank,
+    );
+  }
   final occupancy = ref.watch(occupancyProvider);
   final ducts = ref.watch(ductSettingsProvider);
   final project = ref.watch(projectControllerProvider);
@@ -126,6 +136,8 @@ final sizingDetailProvider = Provider<
   final anyFlushValve = net.nodes.any((n) =>
       n.fixture == PlumbingFixture.waterClosetFlushValve ||
       (customFor(n)?.isFlushValve ?? false));
+  final flushSystem =
+      anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank;
 
   // Rainwater leaves drain a default roof area at the design storm intensity
   // (per-outlet roof areas, when set, override this via nodeFlowDemand above).
@@ -174,8 +186,7 @@ final sizingDetailProvider = Provider<
     // mech-building-5 — the hydrant riser/trunk carries the standpipe design
     // flow the fire pump is sized on (one system, one flow), not Σ boxes.
     hydrantDesignFlow: ref.watch(standpipeDesignProvider).requiredFlow,
-    flushSystem:
-        anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
+    flushSystem: flushSystem,
     // Geometry lets looped (ring) mains balance their flow split against REAL
     // edge lengths — runs via calibration, risers via the §10 elevation delta.
     building: project.building,
@@ -191,8 +202,18 @@ final sizingDetailProvider = Provider<
     },
     fixtureUnitsOut: fixtureUnits,
   );
-  return (sizing: sizing, fixtureUnits: fixtureUnits);
+  return (
+    sizing: sizing,
+    fixtureUnits: fixtureUnits,
+    flushSystem: flushSystem,
+  );
 });
+
+/// Round 11 — the demand-curve branch (flush tank / flush valve) the live
+/// water-supply sizing used, so a consumer re-diversifying a summed UBAP load
+/// (the pump at a tee'd discharge) reads the SAME curve the sizer did.
+final supplyFlushSystemProvider = Provider<FlushSystem>(
+    (ref) => ref.watch(sizingDetailProvider).flushSystem);
 
 /// Advisory checks over the drawn DRAINAGE branches — a read-only judge layer
 /// (`drainage_advisory.dart`) that NEVER resizes. For each horizontal drainage

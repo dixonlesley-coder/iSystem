@@ -231,11 +231,15 @@ void main() {
       // so SP's demand current is 14.4 A ⇒ its incomer is the first rung ≥ 14.4
       // = 16 A — the very rung the feeder's own 13.6 A would have picked (ratio
       // 1.0 ⇒ non-selective). The feeder is therefore floored at
-      // 1.6 × 16 = 25.6 A ⇒ first rung ≥ 25.6 = 32 A.
-      expect(feeder.breaker.ratingA.amperes, 32);
-      // Cable: Iz ≥ max(In 32, 1.25 × 11.547 = 14.43) = 32 A; the 3φ trunk
-      // minimum is 4 mm², whose B1 Cu/PVC KHA is 34 A ≥ 32 ⇒ still 4 mm².
+      // 1.6 × 16 = 25.6 A ⇒ first rung ≥ 25.6 = 32 A — but the floor is
+      // device-only and CAPPED at the load-sized cable's Iz (E3/E4).
+      // Cable (sized on the load): Iz ≥ max(In 16, 1.25 × 11.547 = 14.43) = 16
+      // A; the 3φ trunk minimum is 4 mm², whose B1 Cu/PVC KHA is 28 A (IEC
+      // Table B.52.4 B1, re-derived Round 11 — was the 34 A "in air" figure)
+      // ⇒ 4 mm², Iz 28 A. Cap: the largest rung ≤ 28 A is 25 A (32 > 28).
+      expect(feeder.breaker.ratingA.amperes, 25);
       expect(feeder.cable.csaMm2, 4);
+      expect(feeder.cable.deratedIz.amperes, 28);
     });
 
     test('SP demand + heater current', () {

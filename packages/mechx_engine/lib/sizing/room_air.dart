@@ -168,6 +168,15 @@ final class RoomAirResult {
   /// Selected equipment duty (air/shaft/motor power + motor selection).
   final FanDuty equipment;
 
+  /// Round 11 (hvac-network-2) — true for an EXTRACT room (toilet / kitchen,
+  /// see `isExtractRoomType`): the whole ACH airflow is EXHAUSTED. Then
+  /// [return_] is the EXHAUST-grille bank (sized in the shared extract face
+  /// band), [supply] is an EMPTY bank (count 0 — no conditioned supply), the
+  /// trunk is the extract duct and [equipment] is a plain exhaust fan
+  /// ([AirEquipmentKind.fan]) against duct friction + the extract terminal
+  /// loss only. Default false ⇒ every supply/return room is byte-identical.
+  final bool extractOnly;
+
   const RoomAirResult({
     required this.roomVolumeM3,
     required this.airChangesPerHour,
@@ -178,7 +187,11 @@ final class RoomAirResult {
     required this.supplyDuctRound,
     required this.supplyDuctRect,
     required this.equipment,
+    this.extractOnly = false,
   });
+
+  /// The exhaust-grille bank of an [extractOnly] room (null otherwise).
+  TerminalBank? get extract => extractOnly ? return_ : null;
 
   /// Total design airflow in CFM — the customary HVAC headline figure.
   double get airflowCfm => airflow.inCubicFeetPerMinute;
@@ -218,6 +231,7 @@ RoomAirResult sizeRoomAir({
   Pressure? equipmentInternalStatic,
   double fanEfficiency = 0.65,
   double motorEfficiency = 0.90,
+  bool extractOnly = false,
 }) {
   final volume = roomVolumeM3(floorArea, ceilingHeight);
   final airflow = airChangeFlow(
@@ -237,8 +251,12 @@ RoomAirResult sizeRoomAir({
       math.min(appFace, kSupplyFaceVelocityMax.metersPerSecond));
   final returnFace = Velocity(
       math.min(appFace, kReturnFaceVelocityMax.metersPerSecond));
-  final supply = _autoTerminals(airflow, supplyFace, freeAreaRatio);
   final return_ = _autoTerminals(airflow, returnFace, freeAreaRatio);
+  // Round 11 — an extract room supplies NO conditioned air: an empty bank.
+  final supply = extractOnly
+      ? TerminalBank(
+          count: 0, airflowEach: const FlowRate(0), each: return_.each)
+      : _autoTerminals(airflow, supplyFace, freeAreaRatio);
 
   // 4 — supply trunk duct (carries the whole room airflow).
   duct.DuctSizingResult? round;
@@ -275,12 +293,15 @@ RoomAirResult sizeRoomAir({
   // 5 — equipment duty against an estimated total static pressure:
   //   internal (filter+coil+casing) + duct friction over the assumed run
   //   (× fitting factor) + supply terminal drop + return terminal drop.
-  final internal = equipmentInternalStatic ?? defaultInternalStatic(equipmentKind);
+  // Round 11 — an extract room's unit is a plain EXHAUST fan (no coil, no
+  // casing loss) seeing the extract duct + the extract-grille loss only.
+  final kind = extractOnly ? AirEquipmentKind.fan : equipmentKind;
+  final internal = equipmentInternalStatic ?? defaultInternalStatic(kind);
   final ductLoss = frictionPerMetre * assumedDuctRun.meters * fittingFactor;
   final totalStatic = Pressure(
     internal.pascals +
         ductLoss +
-        supplyTerminalLoss.pascals +
+        (extractOnly ? 0.0 : supplyTerminalLoss.pascals) +
         returnTerminalLoss.pascals,
   );
   final equipment = sizeFan(
@@ -294,12 +315,13 @@ RoomAirResult sizeRoomAir({
     roomVolumeM3: volume,
     airChangesPerHour: airChangesPerHour,
     airflow: airflow,
-    equipmentKind: equipmentKind,
+    equipmentKind: kind,
     supply: supply,
     return_: return_,
     supplyDuctRound: round,
     supplyDuctRect: rect,
     equipment: equipment,
+    extractOnly: extractOnly,
   );
 }
 

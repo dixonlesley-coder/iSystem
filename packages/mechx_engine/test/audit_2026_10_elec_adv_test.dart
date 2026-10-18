@@ -209,39 +209,47 @@ void main() {
       final s1 = sys.panels['SP']!.circuits.single;
       final m1 =
           sys.panels['MDP']!.circuits.firstWhere((c) => c.circuitId == 'm1');
-      // Fixture check: 16 mm² feeder with a 16 mm² PE; both motors on 16 mm².
-      expect(feeder.cable.csaMm2, 16);
+      // Fixture check (re-derived Round 11 — conduit PVC reads IEC B.52.4 B1):
+      // every 57.9 A run needs Iz ≥ 1.25 × 57.89 = 72.36 A ⇒ 16 mm² (68 A) is
+      // too small ⇒ 25 mm² (89 A), with a 16 mm² PE (16 < 25 ≤ 35).
+      expect(feeder.cable.csaMm2, 25);
       expect(feeder.grounding.peCsaMm2, 16);
-      expect(s1.cable.csaMm2, 16);
-      expect(m1.cable.csaMm2, 16);
+      expect(s1.cable.csaMm2, 25);
+      expect(m1.cable.csaMm2, 25);
       expect(m1.grounding.peCsaMm2, 16);
 
-      // Sub-board motor (the seed fixture's s1):
-      //   feeder 50 m hot phase = hot PE = (0.069·1.28, 0.004) = (0.08832, 0.004)
-      //   final 10 m hot phase = hot PE = (0.0138·1.28, 0.0008) = (0.017664, 0.0008)
-      //   R = 0.00204124 + 2·0.08832 + 2·0.017664 = 0.21400924
+      // Sub-board motor (the seed fixture's s1) — the loop carries the FEEDER's
+      // phase AND its PE, every conductor hot (×1.28):
+      //   feeder 25 mm² phase 50 m = (0.0435·1.28, 0.004) = (0.05568, 0.004)
+      //   feeder 16 mm² PE    50 m = (0.069·1.28,  0.004) = (0.08832, 0.004)
+      //   final  25 mm² phase 10 m = (0.0087·1.28, 0.0008) = (0.011136, 0.0008)
+      //   final  16 mm² PE    10 m = (0.0138·1.28, 0.0008) = (0.017664, 0.0008)
+      //   R = 0.00204124 + 0.05568 + 0.08832 + 0.011136 + 0.017664 = 0.17484124
       //   X = 0.01428869 + 2·0.004 + 2·0.0008 = 0.02388869
-      //   Zs = 0.215339 Ω > Zs_max = 0.95·230/(20·63) = 0.17341 ⇒ ADS FAILS.
-      final rS = rSrc + 2 * 0.069 * 1.28 + 2 * 0.0138 * 1.28;
+      //   Zs = 0.176466 Ω ≤ Zs_max(5 s, a 63 A final > 32 A) = 0.95·230/(10·63)
+      //      = 0.34683 Ω ⇒ ADS passes (Round 11: the 5 s D-curve multiple).
+      final rS = rSrc + (0.0435 + 0.069 + 0.0087 + 0.0138) * 1.28;
       final xS = xSrc + 2 * 0.004 + 2 * 0.0008;
-      expect(math.sqrt(rS * rS + xS * xS), closeTo(0.215339, 1e-5));
-      expect(fs.circuits['s1']!.zsOhm, closeTo(0.215, 0.0005));
-      expect(fs.circuits['s1']!.adsOk, isFalse);
+      expect(math.sqrt(rS * rS + xS * xS), closeTo(0.176466, 1e-5));
+      expect(fs.circuits['s1']!.zsOhm, closeTo(0.176, 0.0005));
+      expect(fs.circuits['s1']!.adsOk, isTrue);
 
-      // ROOT-board motor — no upstream feeder, so its loop is UNCHANGED:
-      //   R = 0.00204124 + 2·0.017664 = 0.03736924, X = 0.01428869 + 0.0016
-      //     = 0.01588869; Zs = √(0.0013965 + 0.00025245) = 0.040607 Ω → 0.041.
-      final rR = rSrc + 2 * 0.0138 * 1.28;
+      // ROOT-board motor — no upstream feeder, so no feeder legs:
+      //   R = 0.00204124 + 0.011136 + 0.017664 = 0.03084124,
+      //   X = 0.01428869 + 0.0016 = 0.01588869; Zs = 0.034693 Ω → 0.035.
+      final rR = rSrc + (0.0087 + 0.0138) * 1.28;
       final xR = xSrc + 2 * 0.0008;
-      expect(math.sqrt(rR * rR + xR * xR), closeTo(0.040607, 1e-5));
-      expect(fs.circuits['m1']!.zsOhm, closeTo(0.041, 0.0005));
+      expect(math.sqrt(rR * rR + xR * xR), closeTo(0.034693, 1e-5));
+      expect(fs.circuits['m1']!.zsOhm, closeTo(0.035, 0.0005));
       expect(fs.circuits['m1']!.adsOk, isTrue);
     });
 
     test('prospective-fault decay stays COLD (unchanged by the hot Zs legs)',
         () {
-      // Isc_SP = 400/(√3·|(0.00204124+0.069) + j(0.01428869+0.004)|)
-      //        = 400/(√3·0.0733576) = 3148.1 A → 3.15 kA (the seed value).
+      // Re-derived Round 11 — the load-sized feeder is 25 mm² (R 0.87 Ω/km):
+      // Isc_SP = 400/(√3·|(0.00204124+0.0435) + j(0.01428869+0.004)|)
+      //        = 400/(√3·0.0490763) = 4705.8 A → 4.71 kA (the cold basis —
+      //        the ×1.28 hot factor never enters the prospective fault).
       const sp = ElectricalPanel(
         id: 'SP',
         name: 'Sub',
@@ -280,7 +288,7 @@ void main() {
           panels: [mdp, sp],
           earthingSystem: EarthingSystem.tnS);
       final fs = faultStudy(computeSystem(p, project), project, p);
-      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(3.15, 0.01));
+      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(4.71, 0.01));
     });
   });
 
@@ -512,37 +520,41 @@ void main() {
     final mdp = sys.panels['MDP']!;
     final feeder = mdp.circuits.single;
 
-    test('fixture: the 400 kW feeder sizes as 2 parallel runs of 300 mm²', () {
-      expect(feeder.cable.runsPerPhase, 2);
-      // Ib = 400 kW / (√3·400·1) = 577 A → In 800 A. Two parallel runs laid
-      // together are group-derated (elec-core-3): gf(2) = 0.8, so each run needs
-      // a table Iz ≥ 800 / 2 / 0.8 = 500 A → 300 mm² (2 × 500 × 0.8 = 800 A).
-      expect(feeder.cable.csaMm2, 300);
-      expect(feeder.grounding.cableSpec, startsWith('2× '));
+    test('fixture: the 400 kW feeder sizes as 3 parallel runs of 240 mm²', () {
+      expect(feeder.cable.runsPerPhase, 3);
+      // Ib = 400 kW / (√3·400·1) = 577.4 A → the load-sized device is the
+      // 630 A rung, so Iz_req = max(630, 1.25 × 577.4 = 721.7) = 721.7 A.
+      // Parallel runs laid together are group-derated (elec-core-3).
+      // Re-derived Round 11 — conduit PVC reads IEC B.52.4 B1 (240 mm² = 346 A,
+      // 300 mm² = 394 A): two runs top out at 2 × 394 × 0.8 = 630 A < 721.7;
+      // three runs at gf(3) = 0.7 need a table Iz ≥ 721.7 / 3 / 0.7 = 343.7 A
+      // → 240 mm² (346 A) ⇒ 3 × 346 × 0.7 = 726.6 A ≥ 721.7.
+      expect(feeder.cable.csaMm2, 240);
+      expect(feeder.grounding.cableSpec, startsWith('3× '));
     });
 
-    test('BOM: 2 runs × 40 m = 80 m of the SINGLE cable; lugs on every run',
+    test('BOM: 3 runs × 40 m = 120 m of the SINGLE cable; lugs on every run',
         () {
       final lines = buildPanelBom(mdp);
       final cable = lines.where((l) => l.category == PartCategory.cable).single;
-      // 40 m run × 2 parallel runs = 80 m to buy (was 40 m).
-      expect(cable.qty, 80);
-      expect(cable.runs, 2);
-      // The description names the single cable, so 80 m reads unambiguously.
-      expect(cable.description, isNot(contains('2×')));
-      expect(cable.description, contains('4×300'));
-      // Skun: 5 conductors (3L+N+PE) × 2 ends × 2 runs = 20 lugs.
+      // 40 m run × 3 parallel runs = 120 m to buy (was 40 m).
+      expect(cable.qty, 120);
+      expect(cable.runs, 3);
+      // The description names the single cable, so 120 m reads unambiguously.
+      expect(cable.description, isNot(contains('3×')));
+      expect(cable.description, contains('4×240'));
+      // Skun: 5 conductors (3L+N+PE) × 2 ends × 3 runs = 30 lugs.
       final lugs = lines.where((l) => l.description.contains('skun')).single;
-      expect(lugs.qty, 20);
+      expect(lugs.qty, 30);
     });
 
     test('tray fill counts one cable per parallel run', () {
       final tray = sizeCableTray(mdp);
-      expect(tray.cableCount, 2);
-      // Width = 2·OD × packing factor (one OD per run).
+      expect(tray.cableCount, 3);
+      // Width = 3·OD × packing factor (one OD per run).
       final od =
           cableOuterDiameterMm(feeder.cable.csaMm2, feeder.grounding.cores);
-      final required = 2 * od * trayPackingFactor;
+      final required = 3 * od * trayPackingFactor;
       expect(tray.fillPct, closeTo(required / tray.widthMm * 100, 0.06));
     });
   });

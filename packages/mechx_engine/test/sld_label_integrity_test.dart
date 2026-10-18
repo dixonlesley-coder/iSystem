@@ -484,7 +484,12 @@ void main() {
       // the conservative max() keeps the ladder's 40 mm, so existing sheets do
       // not shift.
       expect(sizeConduit(16, 5).conduitSizeMm, 32.0);
-      final sheet = _scheduleForCsa(puil, 16, threePhase: true);
+      // Round 11: the probe motor drops to 15 kW so the 16 mm² override IS the
+      // conductor — the 30 kW probe (Ib 57.9 A, Iz_req 72.4 A) now needs 25 mm²
+      // on the IEC B1 conduit column (16 mm² = 68 A), and the override is only
+      // a MINIMUM. 15 kW: Ib = 15/0.88/(√3·400·0.85) = 28.9 A ⇒ 6 mm² by load,
+      // lifted to the 16 mm² minimum.
+      final sheet = _scheduleForCsa(puil, 16, threePhase: true, motorKw: 15);
       // G5: the motor probe has no neutral ⇒ `4x16` (see above).
       final cable = _cableCells(sheet)
           .firstWhere((t) => t.contains('4x16 mm2'), orElse: () => '');
@@ -739,7 +744,7 @@ String _numText(double v) =>
 /// explicit cable override, so the conduit token for that exact conductor can
 /// be read off the sheet.
 SldSheet _scheduleForCsa(PuilProfile puil, double csaMm2,
-    {required bool threePhase}) {
+    {required bool threePhase, double? motorKw}) {
   final project = ElectricalProject(
     id: 'p-csa',
     name: 'CSA probe',
@@ -756,7 +761,7 @@ SldSheet _scheduleForCsa(PuilProfile puil, double csaMm2,
             id: 'w1',
             name: 'Probe',
             loadKind: LoadKind.motor,
-            motorKw: threePhase ? 30 : 5,
+            motorKw: motorKw ?? (threePhase ? 30 : 5),
             cableType: 'NYY',
             length: const Length(20),
             cableOverrideMm2: csaMm2,

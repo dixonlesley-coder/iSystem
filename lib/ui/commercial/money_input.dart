@@ -56,7 +56,10 @@ double? parseMoneyInput(String input, {required bool indonesian}) {
   }
   if (decimal != null) s = s.replaceAll(decimal, '.');
   if (s.startsWith('.') || s.endsWith('.')) return null;
-  return double.tryParse(s);
+  // Round 11 — a digit run past ~309 digits parses to Infinity, which would
+  // crash the field's rebuild (`toInt()`) and make DesignSettings unencodable.
+  final v = double.tryParse(s);
+  return v != null && v.isFinite ? v : null;
 }
 
 /// True when [intPart] is valid thousands grouping on [sep]: a non-empty

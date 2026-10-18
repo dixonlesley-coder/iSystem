@@ -1700,6 +1700,12 @@ class NetworkController extends Notifier<DrawingState> {
   /// All nodes land in ONE undo step. A null/degenerate sizing (no scale, zero
   /// footprint) is a no-op (nothing recorded). Returns the new supply-diffuser
   /// node ids (for optional trunk wiring); empty on a no-op.
+  ///
+  /// Round 11 (hvac-network-2) — an EXTRACT room (toilet / commercial kitchen,
+  /// [RoomAirResult.extractOnly]) gets NO supply diffuser and NO return grille:
+  /// its ACH airflow is placed as [NodeComponent.exhaustGrille] nodes (the
+  /// exhaust service, never recirculated to an air unit), and the returned ids
+  /// are those exhaust grilles.
   List<String> autoPlaceRoomTerminals({
     required RoomArea room,
     required double metersPerPixel,
@@ -1734,7 +1740,8 @@ class NetworkController extends Notifier<DrawingState> {
     final priorIds = <String>{
       for (final node in state.network.nodes)
         if ((node.component == NodeComponent.supplyDiffuser ||
-                node.component == NodeComponent.returnGrille) &&
+                node.component == NodeComponent.returnGrille ||
+                node.component == NodeComponent.exhaustGrille) &&
             room.containsNode(
                 node.sheetId, node.floorIndex, node.x, node.y))
           node.id,
@@ -1785,17 +1792,23 @@ class NetworkController extends Notifier<DrawingState> {
     final rn = s.return_.count;
     final rCols = math.max(1, math.sqrt(rn).ceil());
     final rRows = (rn / rCols).ceil();
+    // Round 11 — an extract room's bank is EXHAUST grilles, not return.
+    final extractComponent = s.extractOnly
+        ? NodeComponent.exhaustGrille
+        : NodeComponent.returnGrille;
     var placedReturns = 0;
     for (var ry = 0; ry < rRows && placedReturns < rn; ry++) {
       for (var cx = 0; cx < rCols && placedReturns < rn; cx++) {
+        final id = _id('n');
+        if (s.extractOnly) ids.add(id);
         nodes.add(NetNode(
-          id: _id('n'),
+          id: id,
           sheetId: room.sheetId,
           x: loX + w * (cx + 0.5) / rCols,
           y: loY + h * (ry + 0.5) / rRows,
           floorIndex: room.floorIndex,
-          role: NodeComponent.returnGrille.role,
-          component: NodeComponent.returnGrille,
+          role: extractComponent.role,
+          component: extractComponent,
           airflow: s.return_.airflowEach,
           faceWidthMm: returnFace.$1,
           faceHeightMm: returnFace.$2,

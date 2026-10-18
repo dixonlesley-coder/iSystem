@@ -13,17 +13,18 @@ import 'package:test/test.dart';
 /// sizing produced by `computeSystem`, and the local fault constants, so they
 /// anchor the port to the reference PanelMaker `engine/fault.ts`.
 ///
-/// Probe of the sizing (`computeSystem`) used below:
-///   - Feeder f1 (50 m): Ib = 30 000/(√3·400·0.85) = 50.943 A → 50.9 A. Its
-///     CABLE is sized on that load (audit E3, 2026-07-30 — the selectivity floor
-///     is device-only and never inflates copper): Iz ≥ max(63, 1.25 × 50.943 =
-///     63.68) = 63.68 A ⇒ 16 mm² (B1 Cu/PVC KHA 80 A), PE 16 mm².
-///     Its DEVICE would floor at 1.6 × SP's 63 A incomer = 100.8 A ⇒ rung 125 A,
-///     but the cap "In ≤ Iz = 80 A" allows only the 80 A rung, so the feeder is
-///     an MCCB 80 A and the residual non-selectivity (80/63 = 1.27) is reported.
-///   - SP incomer: MCB 63 A (sized on the board's own 57.9 A demand, load-side
-///     and therefore unaffected by the feeder floor). SP motor s1 (30 kW, 10 m):
-///     MCB 63 A (curve D), cable 16 mm², PE 16 mm².
+/// Probe of the sizing (`computeSystem`) used below (re-derived Round 11 —
+/// conduit PVC reads IEC Table B.52.4 B1: 16 mm² = 68 A, 25 mm² = 89 A):
+///   - SP motor s1 (30 kW shaft, 10 m): input 30/0.88 = 34.091 kW,
+///     Ib = 34 091/(√3·400·0.85) = 57.89 A → MCB 63 A (curve D); Iz ≥ max(63,
+///     1.25 × 57.89 = 72.36) = 72.36 A ⇒ 16 mm² (68 A) is too small ⇒ 25 mm²
+///     (89 A), PE 16 mm² (16 < 25 ≤ 35).
+///   - Feeder f1 (50 m) carries SP's 34 091 W at SP's pf 0.85 ⇒ Ib 57.9 A, the
+///     same Iz requirement ⇒ 25 mm² (89 A), PE 16 mm². Its DEVICE would floor
+///     at 1.6 × SP's 63 A incomer = 100.8 A ⇒ rung 125 A, but the cap "In ≤ Iz
+///     = 89 A" allows only the 80 A rung, so the feeder is an MCCB 80 A and the
+///     residual non-selectivity (80/63 = 1.27) is reported.
+///   - SP incomer: MCB 63 A (sized on the board's own 57.9 A demand).
 void main() {
   const p = PuilProfile();
 
@@ -81,25 +82,25 @@ void main() {
     test('Isc decays through the feeder cable to the sub-panel bus', () {
       // Source |Z| at the origin: z = 400/(√3·16000) = 0.0144338 Ω, split by
       // X/R = 7 ⇒ R = z/√50 = 0.00204124, X = 7R = 0.01428869.
-      // Feeder 16 mm² Cu (the LOAD-sized conductor — E3: the device floor never
-      // grows it), 50 m: R = 1.38·50/1000 = 0.069, X = 0.08·50/1000 = 0.004.
-      // SP source Z = (0.00204124+0.069, 0.01428869+0.004)
-      //             = (0.07104124, 0.01828869)
-      //   |Z| = √(0.07104124² + 0.01828869²) = 0.0733576 Ω.
-      // Isc_SP = 400/(√3·0.0733576) = 3148.1 A → 3.15 kA (< 16 kA upstream).
-      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(3.15, 0.01));
+      // Feeder 25 mm² Cu (the LOAD-sized conductor — E3: the device floor never
+      // grows it), 50 m: R = 0.87·50/1000 = 0.0435, X = 0.08·50/1000 = 0.004.
+      // SP source Z = (0.00204124+0.0435, 0.01428869+0.004)
+      //             = (0.04554124, 0.01828869)
+      //   |Z| = √(0.04554124² + 0.01828869²) = 0.0490763 Ω.
+      // Isc_SP = 400/(√3·0.0490763) = 4705.8 A → 4.71 kA (< 16 kA upstream).
+      expect(fs.panels['SP']!.prospectiveFaultkA, closeTo(4.71, 0.01));
     });
 
     test('breaker breaking-capacity adequacy (Icu ≥ Isc)', () {
       // MDP incomer MCB 63 A vs 16 kA: MCB ladder [6,10,15,25] → 25 kA ≥ 16 ⇒ OK.
       expect(fs.panels['MDP']!.incomerKa, 25);
       expect(fs.panels['MDP']!.incomerAdequate, isTrue);
-      // SP incomer MCB 63 A vs 3.15 kA: first ladder rung ≥ 3.15 is 6 kA ⇒ OK.
+      // SP incomer MCB 63 A vs 4.71 kA: first ladder rung ≥ 4.71 is 6 kA ⇒ OK.
       expect(fs.panels['SP']!.incomerKa, 6);
       expect(fs.panels['SP']!.incomerAdequate, isTrue);
-      // The SP motor breaker sees the SP bus fault (3.15 kA) ⇒ 6 kA, adequate.
+      // The SP motor breaker sees the SP bus fault (4.71 kA) ⇒ 6 kA, adequate.
       final motor = fs.circuits['s1']!;
-      expect(motor.faultkA, closeTo(3.15, 0.01));
+      expect(motor.faultkA, closeTo(4.71, 0.01));
       expect(motor.breakerKa, 6);
       expect(motor.breakerAdequate, isTrue);
     });
@@ -110,32 +111,37 @@ void main() {
       // loop (feeder phase + feeder PE + final phase + final PE) is taken at the
       // fault temperature (R ×1.28); the source Z stays as derived (cold).
       //   Source Z = (0.00204124, 0.01428869).
-      //   Feeder 16 mm², 50 m, hot: phase = PE = (0.069·1.28, 0.004)
-      //                                       = (0.08832, 0.004).
-      //   Final 16 mm², 10 m, hot: phase = PE = (0.0138·1.28, 0.0008)
-      //                                       = (0.017664, 0.0008).
-      // loopR = 0.00204124 + 0.08832 + 0.08832 + 0.017664 + 0.017664
-      //       = 0.21400924
+      //   Feeder 25 mm² phase, 50 m, hot: (0.0435·1.28, 0.004) = (0.05568, 0.004)
+      //   Feeder 16 mm² PE,    50 m, hot: (0.069·1.28, 0.004)  = (0.08832, 0.004)
+      //   Final 25 mm² phase,  10 m, hot: (0.0087·1.28, 0.0008) = (0.011136, ..)
+      //   Final 16 mm² PE,     10 m, hot: (0.0138·1.28, 0.0008) = (0.017664, ..)
+      // loopR = 0.00204124 + 0.05568 + 0.08832 + 0.011136 + 0.017664
+      //       = 0.17484124
       // loopX = 0.01428869 + 0.004 + 0.004 + 0.0008 + 0.0008 = 0.02388869
-      //   Zs = √(0.21400924² + 0.02388869²) = √0.0463707 = 0.215339 Ω.
+      //   Zs = √(0.17484124² + 0.02388869²) = √0.0311401 = 0.176465 Ω.
       final motor = fs.circuits['s1']!;
-      expect(motor.zsOhm, closeTo(0.215, 0.001));
-      // Ia (curve D) = 20·63 = 1260 A; Zs_max = 0.95·230/1260 = 0.17341 Ω.
-      expect(motor.zsMaxOhm, closeTo(0.173, 0.001));
-      // 0.215 > 0.173 ⇒ the 63 A curve-D breaker does NOT disconnect in time
-      // (the old feeder-PE-less loop, 0.108 Ω, passed it optimistically).
-      expect(motor.adsOk, isFalse);
+      expect(motor.zsOhm, closeTo(0.176, 0.001));
+      // Round 11: a TN final ABOVE 32 A may disconnect in 5 s (IEC 60364-4-41
+      // 411.3.2.3), where a curve-D device's Ia is 10·In (not the 0.4 s 20·In):
+      // Ia = 10·63 = 630 A; Zs_max = 0.95·230/630 = 0.34683 Ω.
+      expect(motor.disconnectionTimeS, 5.0);
+      expect(motor.zsMaxOhm, closeTo(0.347, 0.001));
+      // 0.176 ≤ 0.347 ⇒ the 63 A curve-D breaker disconnects within 5 s (the
+      // 0.4 s basis, 0.173 Ω, raised a FALSE error on this ordinary pump run).
+      expect(motor.adsOk, isTrue);
+      expect(motor.adsByRcd, isFalse);
       expect(
         fs.warnings.where(
             (w) => w.code == 'ads-disconnection' && w.circuitId == 's1'),
-        hasLength(1),
+        isEmpty,
       );
     });
 
     test('selectivity: the ampacity cap holds the feeder at 80 A over 63 A', () {
       // Re-derived 2026-07-30 (audit E3+E4): `computeSystem` floors a feeder at
       // 1.6 × the fed board's incomer (100.8 A ⇒ rung 125 A) but caps it at the
-      // largest rung its LOAD-sized 16 mm² conductor protects (Iz 80 A) — copper
+      // largest rung its LOAD-sized 25 mm² conductor protects (Iz 89 A ⇒ the
+      // 80 A rung; Round 11 B1 table) — copper
       // is never inflated for discrimination. 80/63 = 1.27 < 1.6, so the pair
       // stays non-selective and is REPORTED (a capped floor is never counted as
       // applied, so nothing is suppressed for it).

@@ -635,7 +635,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// withstand). Null resets to the app default (16 kA). Non-positive values are
   /// ignored (the engine guards faultKa ≤ 0, but we avoid persisting garbage).
   void setOriginFaultLevel(Current? a) {
-    if (a != null && a.amperes <= 0) return;
+    // Round 11: NaN fails `<= 0`, Infinity passes it — a non-finite value
+    // persisted here made every later Save / autosave throw on encode.
+    if (a != null && (!a.amperes.isFinite || a.amperes <= 0)) return;
     _commit(a == null
         ? _withProject(clearOriginFaultLevelA: true)
         : _withProject(originFaultLevelA: a));
@@ -644,7 +646,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the busbar clearing time (s) for the Fold-1 withstand thermal check.
   /// Null resets to the app default (0.1 s). Non-positive values are ignored.
   void setBusbarClearingTime(double? s) {
-    if (s != null && s <= 0) return;
+    if (s != null && (!s.isFinite || s <= 0)) return;
     _commit(s == null
         ? _withProject(clearBusbarClearingTimeS: true)
         : _withProject(busbarClearingTimeS: s));
@@ -704,12 +706,20 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       _sourcesWith(generator: gen, clearGenerator: gen == null));
 
   /// Set (or clear) the grid-tied / hybrid solar PV array on the source spine.
-  void setSolar(SolarSource? solar) =>
-      _commitSources(_sourcesWith(solar: solar, clearSolar: solar == null));
+  void setSolar(SolarSource? solar) {
+    // Round 11: a non-finite DC/AC ratio is not a design input (and would
+    // throw out of `_commitSources`' jsonEncode no-op guard).
+    if (solar != null && !solar.dcAcRatio.isFinite) return;
+    _commitSources(_sourcesWith(solar: solar, clearSolar: solar == null));
+  }
 
   /// Set (or clear) the backup battery bank on the source spine.
-  void setBattery(BatterySource? battery) => _commitSources(
-      _sourcesWith(battery: battery, clearBattery: battery == null));
+  void setBattery(BatterySource? battery) {
+    // Round 11: reject a non-finite autonomy before it reaches jsonEncode.
+    if (battery != null && !battery.autonomyHours.isFinite) return;
+    _commitSources(
+        _sourcesWith(battery: battery, clearBattery: battery == null));
+  }
 
   /// Set the building's PRIMARY supply kind (PLN grid / generator plant /
   /// solar plant) — re-labels the source-spine supply head, never a sizing
@@ -724,6 +734,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setSupplyCapacityVa(ApparentPower? capacity) {
     // Round 9 (elec-store-fuzz-6) — no-op when unchanged (incl. clearing a
     // capacity that was never declared).
+    // Round 11: a non-finite capacity (e.g. '1e999' typed) is ignored, never
+    // persisted — it would make the project unsaveable.
+    if (capacity != null && !capacity.voltAmperes.isFinite) return;
     final clear = capacity == null || capacity.voltAmperes <= 0;
     if (clear && state.supplyCapacityVa == null) return;
     if (!clear && state.supplyCapacityVa == capacity) return;
@@ -735,7 +748,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the genset rating (kVA). Null ⇒ auto-size from demand (the ladder
   /// snap); non-positive ignored. Preserves the genset's mode / transfer.
   void setGeneratorKva(ApparentPower? kva) {
-    if (kva != null && kva.voltAmperes <= 0) return;
+    if (kva != null && (!kva.voltAmperes.isFinite || kva.voltAmperes <= 0)) {
+      return;
+    }
     final cur = state.sources?.generator ?? const GeneratorSource();
     setGenerator(GeneratorSource(
       kva: kva,
@@ -770,6 +785,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the installed PF-correction capacitor bank (kvar). Null / non-positive
   /// ⇒ clear (falls back to the advanced study's recommended kvar caption).
   void setCapacitorBankKvar(double? kvar) {
+    if (kvar != null && !kvar.isFinite) return; // Round 11 — never persist NaN.
     _commit((kvar == null || kvar <= 0)
         ? _withProject(clearCapacitorBankKvar: true)
         : _withProject(capacitorBankKvar: kvar));
@@ -778,6 +794,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the explicit transformer rating (kVA). Null / non-positive ⇒ clear
   /// (falls back to the demand-derived ladder snap).
   void setTransformerKva(ApparentPower? kva) {
+    if (kva != null && !kva.voltAmperes.isFinite) return; // Round 11.
     _commit((kva == null || kva.voltAmperes <= 0)
         ? _withProject(clearTransformerKva: true)
         : _withProject(transformerKva: kva));
@@ -1030,6 +1047,23 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     String? laying,
     bool clearLaying = false,
   }) {
+    // Round 11 — the store is the last gate before the solver: a negative /
+    // non-finite load, length or override (typed, pasted or scripted) is not a
+    // design input. A negative W gave a NEGATIVE Ib that was subtracted from
+    // the board demand; a negative length a negative Vd% that "passed" the
+    // limit; cos phi 0 a silent 0 A way; NaN threw out of the jsonEncode no-op
+    // guard below. Reject the whole edit (one atomic intent) instead.
+    if (!isValidCircuitEdit(
+      loadW: loadW,
+      motorKw: motorKw,
+      cosPhi: cosPhi,
+      demandFactor: demandFactor,
+      length: length,
+      breakerOverrideA: breakerOverrideA,
+      cableOverrideMm2: cableOverrideMm2,
+    )) {
+      return;
+    }
     _replaceCircuit(
       panelId,
       circuitId,
@@ -2516,4 +2550,38 @@ ElectricalProject sampleElectricalProject() {
     earthingSystem: EarthingSystem.tnCs,
     panels: [mdp, lp1],
   );
+}
+
+/// Smallest run length the circuit inspector accepts (m). Round 11.
+const double kMinCircuitRunLengthM = 0.1;
+
+/// Smallest cos phi the circuit inspector accepts. Round 11 — cos phi → 0 is an
+/// unbounded current; 0.1 is far below any real load's power factor.
+const double kMinCircuitCosPhi = 0.1;
+
+/// Pure gate for [ElectricalProjectController.setCircuit]'s numeric fields
+/// (Round 11). Null means "keep" and always passes. Rejected: any non-finite
+/// value; a NEGATIVE load / motor kW / demand factor (zero stays legal — an
+/// excluded or not-yet-specified load); cos phi outside (0, 1] (cos phi 0 is an
+/// unbounded current that `loadCurrent` silently zeroed); a NON-POSITIVE run
+/// length (a zero / negative length makes Vd% trivially pass); and a
+/// non-positive breaker / cable override.
+bool isValidCircuitEdit({
+  double? loadW,
+  double? motorKw,
+  double? cosPhi,
+  double? demandFactor,
+  Length? length,
+  Current? breakerOverrideA,
+  double? cableOverrideMm2,
+}) {
+  bool nonNeg(double? v) => v == null || (v.isFinite && v >= 0);
+  bool pos(double? v) => v == null || (v.isFinite && v > 0);
+  return nonNeg(loadW) &&
+      nonNeg(motorKw) &&
+      nonNeg(demandFactor) &&
+      (cosPhi == null || (cosPhi.isFinite && cosPhi > 0 && cosPhi <= 1)) &&
+      pos(length?.meters) &&
+      pos(breakerOverrideA?.amperes) &&
+      pos(cableOverrideMm2);
 }

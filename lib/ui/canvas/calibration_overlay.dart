@@ -128,8 +128,10 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
   /// could tofu in Roboto.
   List<Widget> _scalePreview(
       double pixelDistance, MechXColors colors, MechXTypography type) {
-    final meters = double.tryParse(_distance.trim());
-    if (meters == null || meters <= 0 || pixelDistance <= 0) return const [];
+    // Round 11 — the SAME finite-positive parse the commit uses: the raw
+    // `tryParse` accepted 'NaN' / '1e999' and the readout threw inside build.
+    final meters = _parsedMeters;
+    if (meters == null || pixelDistance <= 0) return const [];
     final mpp = meters / pixelDistance;
     // Plausible building-drawing range: well under 1 m/px, well over 1e-4 m/px.
     final implausible = mpp < 1e-4 || mpp > 1.0;

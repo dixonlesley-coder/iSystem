@@ -236,51 +236,123 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
   final sizing = ref.watch(sizingProvider);
   final net = ref.watch(sizingNetworkProvider);
   var flow = const FlowRate(0);
+  NetEdge? trunkEdge;
   for (final e in net.edges) {
     if (e.service != kSupplyService) continue;
     final s = sizing[e.id];
     if (s != null &&
         s.flow.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
       flow = s.flow;
+      trunkEdge = e;
     }
   }
-  if (flow.cubicMetersPerSecond <= 0) return null;
+  if (flow.cubicMetersPerSecond <= 0 || trunkEdge == null) return null;
+  // Round 11 (hvac-network-1) — the pump delivers the flow LEAVING its source
+  // node: with a tee at the discharge that is every branch together, not the
+  // single largest edge. Re-diversified through the demand curve once (the
+  // summed UBAP), never Σ of already-diversified branch flows.
+  final roots = serviceComponentRoots(net, kSupplyService, demandNodeIds: {
+    for (final n in net.nodes)
+      if (n.role == NodeRole.fixture) n.id,
+  });
+  final root = roots[trunkEdge.fromId];
+  if (root != null) {
+    final delivered = sourceDeliveredFlow(
+      net,
+      sizing,
+      kSupplyService,
+      root,
+      edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
+      flushSystem: ref.watch(supplyFlushSystemProvider),
+    );
+    if (delivered.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
+      flow = delivered;
+    }
+  }
   return sizePump(flow: flow, head: solution.requiredPumpHead);
 });
 
-/// Trunk airflow + index-run static for one air [service], plus the node the
-/// fan is rooted at. Zero (and no fan node) when the service has no sized edges.
-({FlowRate trunk, Pressure stat, String? fanNodeId}) _airSystem(
+/// Round 11 (hvac-network-1) — the flow a SOURCE node (the fan / AHU / pump a
+/// service component is rooted at) actually delivers: the sum of the sized
+/// flows on the [service] edges incident to [rootId]. The old fan / pump duty
+/// took the single LARGEST edge, which equals the delivery only when exactly
+/// one duct / pipe leaves the source — an AHU feeding two 0.5 m³/s trunks was
+/// sized on 0.5 m³/s (one motor frame small, and the MEP→E feed with it).
+///
+/// When [flushSystem] is given (water supply) and every incident edge carries
+/// its accumulated fixture units ([edgeFixtureUnits]), the summed UBAP is
+/// diversified ONCE through the demand curve (Σ of already-diversified branch
+/// flows would over-state a Hunter load), never below the largest branch.
+/// A single incident edge returns that edge's flow verbatim (byte-identical to
+/// the old trunk for the common single-trunk layout); no sized incident edge ⇒
+/// zero.
+FlowRate sourceDeliveredFlow(
+  Network net,
+  Map<String, EdgeSizing> sizing,
+  ServiceType service,
+  String rootId, {
+  Map<String, double> edgeFixtureUnits = const {},
+  FlushSystem? flushSystem,
+}) {
+  final incident = <NetEdge>[
+    for (final e in net.edges)
+      if (e.service == service &&
+          (e.fromId == rootId || e.toId == rootId) &&
+          (sizing[e.id]?.flow.cubicMetersPerSecond ?? 0) > 0)
+        e,
+  ];
+  if (incident.isEmpty) return const FlowRate(0);
+  if (incident.length == 1) return sizing[incident.single.id]!.flow;
+  var summed = 0.0;
+  var largest = 0.0;
+  for (final e in incident) {
+    final q = sizing[e.id]!.flow.cubicMetersPerSecond;
+    summed += q;
+    largest = math.max(largest, q);
+  }
+  if (flushSystem != null) {
+    final units = [for (final e in incident) edgeFixtureUnits[e.id]];
+    if (units.every((u) => u != null && u > 0)) {
+      final total = units.fold<double>(0, (a, u) => a + u!);
+      final q = const SniProfile()
+          .probableFlowForFixtureUnits(total, system: flushSystem)
+          .cubicMetersPerSecond;
+      return FlowRate(math.max(q, largest));
+    }
+  }
+  return FlowRate(summed);
+}
+
+/// One drawn air SYSTEM (a connected component of one air service): the
+/// airflow its source delivers, its index-run static, and the node it is
+/// rooted at.
+typedef AirSystem = ({FlowRate trunk, Pressure stat, String fanNodeId});
+
+/// Every drawn system of one air [service] — ONE per connected component,
+/// each rooted at the SAME source the sizer accumulated from (plant → demand-
+/// free entry leaf → demand-free hub), never at an arbitrary (e.g. a diffuser)
+/// node. Sorted by delivered airflow, largest first (ties by root id), so the
+/// head is the building's primary system.
+///
+/// Round 11 (hvac-network-1/4): the airflow is what LEAVES the source
+/// ([sourceDeliveredFlow] — every trunk out of an AHU, not the single largest
+/// edge), and a second AHU on another floor is its OWN system with its own
+/// airflow + static instead of being dropped. Empty when nothing is sized.
+List<AirSystem> airSystemsFor(
   Network net,
   Map<String, EdgeSizing> sizing,
   ProjectState project,
   ServiceType service,
 ) {
   final edges = net.edges.where((e) => e.service == service).toList();
-  if (edges.isEmpty) {
-    return (trunk: const FlowRate(0), stat: const Pressure(0), fanNodeId: null);
-  }
-
-  var trunk = const FlowRate(0);
-  NetEdge? trunkEdge;
+  if (edges.isEmpty) return const [];
   final flows = <String, FlowRate>{};
   for (final e in edges) {
     final s = sizing[e.id];
-    if (s == null) continue;
-    flows[e.id] = s.flow;
-    if (s.flow.cubicMetersPerSecond > trunk.cubicMetersPerSecond) {
-      trunk = s.flow;
-      trunkEdge = e;
-    }
+    if (s != null) flows[e.id] = s.flow;
   }
-  if (trunk.cubicMetersPerSecond <= 0 || trunkEdge == null) {
-    return (trunk: const FlowRate(0), stat: const Pressure(0), fanNodeId: null);
-  }
+  if (!flows.values.any((f) => f.cubicMetersPerSecond > 0)) return const [];
 
-  // Seed the fan at the SAME source the sizer accumulated from (plant → demand-
-  // free entry leaf → demand-free hub), for the component carrying the trunk —
-  // never at an arbitrary (e.g. lexicographically smallest) node, which could
-  // be a diffuser and drop the trunk out of the index run.
   final roots = serviceComponentRoots(
     net,
     service,
@@ -289,18 +361,57 @@ final pumpDutyProvider = Provider<PumpDuty?>((ref) {
         if (n.airflow != null) n.id,
     },
   );
-  final fan = roots[trunkEdge.fromId]!;
-  final s = solveDuctStatic(
-    net: net,
-    service: service,
-    fanNodeId: fan,
-    edgeFlows: flows,
-    sizing: sizing,
-    calibrationBySheet: project.calibrations,
-    building: project.building,
-    mounting: project.mounting,
-  );
-  return (trunk: trunk, stat: s.totalStaticPressure, fanNodeId: fan);
+  // The largest sized edge per component (keyed by its root) — the fallback
+  // airflow when the root itself has no sized incident edge.
+  final largest = <String, FlowRate>{};
+  for (final e in edges) {
+    final root = roots[e.fromId];
+    final f = flows[e.id];
+    if (root == null || f == null) continue;
+    if (f.cubicMetersPerSecond >
+        (largest[root]?.cubicMetersPerSecond ?? 0)) {
+      largest[root] = f;
+    }
+  }
+  final out = <AirSystem>[];
+  for (final entry in largest.entries) {
+    final root = entry.key;
+    final delivered = sourceDeliveredFlow(net, sizing, service, root);
+    final trunk = delivered.cubicMetersPerSecond > 0 ? delivered : entry.value;
+    if (trunk.cubicMetersPerSecond <= 0) continue;
+    final s = solveDuctStatic(
+      net: net,
+      service: service,
+      fanNodeId: root,
+      edgeFlows: flows,
+      sizing: sizing,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+      mounting: project.mounting,
+    );
+    out.add((trunk: trunk, stat: s.totalStaticPressure, fanNodeId: root));
+  }
+  out.sort((a, b) {
+    final c = b.trunk.cubicMetersPerSecond.compareTo(a.trunk.cubicMetersPerSecond);
+    return c != 0 ? c : a.fanNodeId.compareTo(b.fanNodeId);
+  });
+  return out;
+}
+
+/// The PRIMARY system of one air [service] (the largest delivered airflow) —
+/// zero (and no fan node) when nothing is sized.
+({FlowRate trunk, Pressure stat, String? fanNodeId}) _airSystem(
+  Network net,
+  Map<String, EdgeSizing> sizing,
+  ProjectState project,
+  ServiceType service,
+) {
+  final all = airSystemsFor(net, sizing, project, service);
+  if (all.isEmpty) {
+    return (trunk: const FlowRate(0), stat: const Pressure(0), fanNodeId: null);
+  }
+  final s = all.first;
+  return (trunk: s.trunk, stat: s.stat, fanNodeId: s.fanNodeId);
 }
 
 /// mech-building-4 — the equipment INTERNAL static (filter + coil + casing) of
@@ -319,31 +430,80 @@ Pressure airUnitInternalStatic(NetNode? source) {
   return kind == null ? const Pressure(0) : defaultInternalStatic(kind);
 }
 
-/// Fan duty for the air system: supply trunk airflow against the SUM of the
-/// supply and return index-run statics (the AHU fan sees both). Null when
-/// there's no sized air network.
-final ductFanProvider = Provider<FanDuty?>((ref) {
+/// Round 11 (hvac-network-4) — one supply/return FAN DUTY per drawn air
+/// unit, keyed by the node the system is rooted at. Each supply system's
+/// delivered airflow runs against its OWN supply index-run static plus the
+/// return system rooted at the SAME unit (the unit's fan sees both legs) plus
+/// the unit's internal static, once. The PRIMARY supply system (largest
+/// airflow) also adopts the primary return system when no return shares its
+/// root (the historic single-system pairing); any other return-only system
+/// gets its own fan. A second AHU on another floor therefore gets its own
+/// duty instead of being dropped. Empty when nothing is sized.
+final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
+  final supplies = airSystemsFor(net, sizing, project, ServiceType.duct);
+  final rets = airSystemsFor(net, sizing, project, ServiceType.returnAir);
+  final supplyRoots = {for (final s in supplies) s.fanNodeId};
+  final consumed = <String>{};
+  final out = <String, FanDuty>{};
+  Pressure internalOf(String root) => airUnitInternalStatic(net.nodeById(root));
+  for (var i = 0; i < supplies.length; i++) {
+    final s = supplies[i];
+    AirSystem? ret;
+    for (final r in rets) {
+      if (r.fanNodeId == s.fanNodeId) ret = r;
+    }
+    if (ret == null &&
+        i == 0 &&
+        rets.isNotEmpty &&
+        !supplyRoots.contains(rets.first.fanNodeId)) {
+      ret = rets.first;
+    }
+    if (ret != null) consumed.add(ret.fanNodeId);
+    out[s.fanNodeId] = sizeFan(
+      airflow: s.trunk,
+      totalStaticPressure: Pressure(s.stat.pascals +
+          (ret?.stat.pascals ?? 0) +
+          internalOf(s.fanNodeId).pascals),
+    );
+  }
+  // Return-only systems still get a fan.
+  for (final r in rets) {
+    if (consumed.contains(r.fanNodeId) || out.containsKey(r.fanNodeId)) {
+      continue;
+    }
+    out[r.fanNodeId] = sizeFan(
+      airflow: r.trunk,
+      totalStaticPressure:
+          Pressure(r.stat.pascals + internalOf(r.fanNodeId).pascals),
+    );
+  }
+  return out;
+});
 
-  final supply = _airSystem(net, sizing, project, ServiceType.duct);
-  final ret = _airSystem(net, sizing, project, ServiceType.returnAir);
-  final airflow = supply.trunk.cubicMetersPerSecond > 0
-      ? supply.trunk
-      : ret.trunk; // return-only systems still get a fan
-  if (airflow.cubicMetersPerSecond <= 0) return null;
+/// Round 11 — one EXHAUST fan duty per drawn exhaust system, keyed by its root.
+final exhaustFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  return {
+    for (final ex in airSystemsFor(net, sizing, project, ServiceType.exhaust))
+      ex.fanNodeId:
+          sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat),
+  };
+});
 
-  // The AHU fan develops the supply + return EXTERNAL statics PLUS the unit's
-  // own internal losses (once — the supply and return legs meet at one unit).
-  final unitId = supply.fanNodeId ?? ret.fanNodeId;
-  final internal =
-      airUnitInternalStatic(unitId == null ? null : net.nodeById(unitId));
-  return sizeFan(
-    airflow: airflow,
-    totalStaticPressure: Pressure(
-        supply.stat.pascals + ret.stat.pascals + internal.pascals),
-  );
+/// Fan duty for the PRIMARY air system: its delivered airflow against the SUM
+/// of the supply and return index-run statics (the AHU fan sees both) plus the
+/// unit's internal static. The entry of [supplyFanDutiesByRootProvider] for the
+/// primary root. Null when there's no sized air network.
+final ductFanProvider = Provider<FanDuty?>((ref) {
+  final roots = ref.watch(airSystemRootNodesProvider);
+  final id = roots.supply;
+  if (id == null) return null;
+  return ref.watch(supplyFanDutiesByRootProvider)[id];
 });
 
 /// The plant nodes the drawn air systems are ROOTED at (the same source the
@@ -370,31 +530,27 @@ final airSystemRootNodesProvider =
 /// never folded into [ductFanProvider]'s supply + return sum. Null when no
 /// exhaust duct is sized.
 final exhaustFanProvider = Provider<FanDuty?>((ref) {
-  final net = ref.watch(sizingNetworkProvider);
-  final sizing = ref.watch(sizingProvider);
-  final project = ref.watch(projectControllerProvider);
-  final ex = _airSystem(net, sizing, project, ServiceType.exhaust);
-  if (ex.trunk.cubicMetersPerSecond <= 0) return null;
-  return sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat);
+  final id = ref.watch(airSystemRootNodesProvider).exhaust;
+  if (id == null) return null;
+  return ref.watch(exhaustFanDutiesByRootProvider)[id];
 });
 
-/// Supply vs return trunk airflow (L/s) for the air-balance readout. Null when
+/// Supply vs return airflow (L/s) for the air-balance readout — the TOTAL each
+/// service's sources deliver, summed over every drawn system (Round 11: it
+/// read the single largest edge, halving an AHU with two trunks). Null when
 /// there's no sized air network.
 final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
   (ref) {
     final net = ref.watch(sizingNetworkProvider);
     final sizing = ref.watch(sizingProvider);
     final project = ref.watch(projectControllerProvider);
-    final s = _airSystem(net, sizing, project, ServiceType.duct);
-    final r = _airSystem(net, sizing, project, ServiceType.returnAir);
-    if (s.trunk.cubicMetersPerSecond <= 0 &&
-        r.trunk.cubicMetersPerSecond <= 0) {
-      return null;
-    }
-    return (
-      supplyLps: s.trunk.inLitersPerSecond,
-      returnLps: r.trunk.inLitersPerSecond,
-    );
+    double total(ServiceType service) =>
+        airSystemsFor(net, sizing, project, service)
+            .fold(0.0, (a, s) => a + s.trunk.inLitersPerSecond);
+    final supply = total(ServiceType.duct);
+    final ret = total(ServiceType.returnAir);
+    if (supply <= 0 && ret <= 0) return null;
+    return (supplyLps: supply, returnLps: ret);
   },
 );
 

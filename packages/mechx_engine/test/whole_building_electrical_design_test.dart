@@ -546,7 +546,7 @@ void main() {
       }
     });
 
-    test('the CUMULATIVE chain over-runs on exactly three lighting runs', () {
+    test('the CUMULATIVE chain over-runs on exactly two lighting runs', () {
       // Re-derived 2026-07-30 (audit E3). `sizeCable` holds each run inside its
       // OWN limit; the cumulative origin→load chain is a separate, judge-only
       // check. It used to pass here only because the old selectivity floor
@@ -563,8 +563,16 @@ void main() {
       // Round-7 elec-props-2: LP-3's feeder now converts LP-3's demand at its
       // REAL pf 0.9 (every way cos 0.9), so it carries 25.5 A and sizes on the
       // load-correct 10 mm² (was 27.0 A on 16 mm² at the feeder's 0.85
-      // default). The thinner feeder's larger upstream share (1.68 %) puts the
-      // corridor run over too — a genuine finding, honestly reported.
+      // default). The thinner feeder's larger upstream share (1.68 %) put the
+      // corridor run over too.
+      // Re-derived Round 11 — conduit PVC reads IEC B.52.4 B1, so LP-3's feeder
+      // (Iz_req 32 A at derating 0.94 × 0.57 = 0.5358) needs 16 mm² (68 ×
+      // 0.5358 = 36.4 A; 10 mm² = 50 × 0.5358 = 26.8 A is short). Its 1φ drop
+      // at 220 V, 36 m, 25.5 A, cos 0.9 (sin 0.436):
+      //   2 · 0.036 · 25.5 · (1.38 · 0.9 + 0.08 · 0.436) / 220 = 1.07 %
+      // so LP-3 "Lighting open plan" = 2.52 + 1.07 = 3.59 % > 3 % (still over)
+      // while "Lighting corridor" = 1.44 + 1.07 = 2.51 % ≤ 3 % (now within).
+      // LP-2 "Lighting zone A" is unchanged at 3.07 %.
       final feederIds = feederTargets.keys.toSet();
       final over = <String>[];
       for (final (p, c) in _allWays(sys)) {
@@ -573,15 +581,17 @@ void main() {
           over.add('${p.panelId}/${c.circuitId}');
         }
       }
-      expect(over.toSet(), {'lp3/lp3-l1', 'lp3/lp3-l2', 'lp2/lp2-l1'});
-      expect(_way(sys.panels['lp3']!, 'lp3-l1').cumulativeDropPercent, 4.2);
-      expect(_way(sys.panels['lp3']!, 'lp3-l2').cumulativeDropPercent, 3.12);
+      expect(over.toSet(), {'lp3/lp3-l1', 'lp2/lp2-l1'});
+      expect(_way(sys.panels['mdp']!, 'mdp-f-lp3').voltageDrop.dropPercent,
+          1.07);
+      expect(_way(sys.panels['lp3']!, 'lp3-l1').cumulativeDropPercent, 3.59);
+      expect(_way(sys.panels['lp3']!, 'lp3-l2').cumulativeDropPercent, 2.51);
       expect(_way(sys.panels['lp2']!, 'lp2-l1').cumulativeDropPercent, 3.07);
       // Each is surfaced, once, as a locatable warning.
       final w = everyWarning
           .where((w) => w.code == 'cumulative-voltage-drop-exceeded')
           .toList();
-      expect(w.map((x) => x.circuitId).toSet(), {'lp3-l1', 'lp3-l2', 'lp2-l1'});
+      expect(w.map((x) => x.circuitId).toSet(), {'lp3-l1', 'lp2-l1'});
     });
 
     test('the drop the engine prints is the drop its own primitive computes',
@@ -913,8 +923,10 @@ void main() {
       //   warning  non-selective                  x6  every MDP feeder — the
       //            ampacity cap holds the device below 1.6x the fed incomer
       //            (group 2 derives each ratio);
-      //   warning  cumulative-voltage-drop-exceeded x3  LP-3's two and LP-2's
-      //            longest 3 %-limited lighting runs (group 1 derives the sums);
+      //   warning  cumulative-voltage-drop-exceeded x2  LP-3's open-plan and
+      //            LP-2's longest 3 %-limited lighting runs (group 1 derives
+      //            the sums; Round 11's B1 conduit table puts LP-3's feeder on
+      //            16 mm², pulling the corridor run back within 3 %);
       //   (feeder-below-fed-demand on PP-1 is GONE since the 2026-10
       //   elec-core-4 fix and the Round-7 like-for-like basis: a 50 A device ≥
       //   PP-1's 58.0 A worst phase × its 0.85 diversity = 49.3 A;)
@@ -931,11 +943,11 @@ void main() {
       }
       expect(byCode, {
         'non-selective': 6,
-        'cumulative-voltage-drop-exceeded': 3,
+        'cumulative-voltage-drop-exceeded': 2,
         'fire-pump-protection': 2,
         'phase-imbalance-inherent': 1,
       });
-      expect(everyWarning.length, 12);
+      expect(everyWarning.length, 11); // 6 + 2 + 2 + 1 (Round 11)
       for (final w in everyWarning) {
         expect(
           w.severity,
@@ -1294,9 +1306,12 @@ void main() {
             reason: p.name);
       }
       // Each feeder annotation carries the real cable + breaker + length. The
-      // heaviest feeder (EP-1) is now an MCCB 80 A on 50 mm² — under the old
-      // copper-inflating floor this read `MCCB 160A 3ph` on 150 mm².
-      expect(texts.where((t) => t.contains('NYY 5x50 mm2 · MCCB 80A 3ph')),
+      // heaviest feeder (EP-1) is an MCCB 80 A on 70 mm² — under the old
+      // copper-inflating floor this read `MCCB 160A 3ph` on 150 mm². Round 11
+      // (conduit = IEC B.52.4 B1): Ib 66.5 A ⇒ Iz_req max(80, 83.1) = 83.1 A at
+      // derating 0.5358: 50 mm² = 134 × 0.5358 = 71.8 ✗, 70 mm² = 171 × 0.5358
+      // = 91.6 ✓; the cap (≤ 91.6) holds the device at 80 A.
+      expect(texts.where((t) => t.contains('NYY 5x70 mm2 · MCCB 80A 3ph')),
           isNotEmpty);
     });
 
@@ -1404,11 +1419,12 @@ void main() {
       expect(cables.where((c) => c.contains('5x25 mm2')).first,
           contains('PVC 50mm'));
       expect(byName['Feeder AC-1']!.conduitSizeMm, 40.0);
-      // The two only happen to agree on the single-phase LP-3 run — 25 mm on
-      // its 10 mm² cable since Round-7's real-pf feeder (was 32 mm on 16 mm²).
-      expect(cables.where((c) => c.contains('3x10 mm2')).first,
-          contains('PVC 25mm'));
-      expect(byName['Feeder LP-3']!.conduitSizeMm, 25.0);
+      // The two only happen to agree on the single-phase LP-3 run — 32 mm on
+      // its 16 mm² cable (Round 11: the B1 conduit column puts the real-pf
+      // 25.5 A feeder back on 16 mm²; it read 25 mm on 10 mm² before).
+      expect(cables.where((c) => c.contains('3x16 mm2')).first,
+          contains('PVC 32mm'));
+      expect(byName['Feeder LP-3']!.conduitSizeMm, 32.0);
       // And the ampacity that sized the cable used the CONDUIT reference
       // method (the panel default), not a tray method — a third basis.
       expect(project.panels.first.installMethod, CableInstallMethod.conduit);
@@ -1429,26 +1445,28 @@ void main() {
       // (Round-7 elec-props-2) at PP-1's REAL pf 0.89432:
       // Ib = 27 157.5/(sqrt3 x 400 x 0.89432) = 43.83 A -> load rung 50 A.
       // Derating 0.94 (35 degC PVC) x 0.57 (grouping 6) = 0.5358;
-      //   Iz >= max(50, 1.25 x 43.83 = 54.79): 25 mm2 -> 105 x 0.5358 = 56.3 yes.
-      //   Cap 56.3 -> largest rung 50 A, so the device cannot lift toward the
-      //   1.6 x 80 = 128 -> 160 A target at all.
+      //   Iz >= max(50, 1.25 x 43.83 = 54.79). Round 11 (conduit = IEC B.52.4
+      //   B1): 25 mm2 -> 89 x 0.5358 = 47.7 no; 35 mm2 -> 110 x 0.5358 = 58.9
+      //   yes. Cap 58.9 -> largest rung 50 A, so the device cannot lift toward
+      //   the 1.6 x 80 = 128 -> 160 A target at all.
       final pp1Feeder = _way(mdp, 'mdp-f-pp1');
       expect(pp1Feeder.designCurrent.amperes, 43.8);
       expect(pp1Feeder.breaker.ratingA.amperes, 50);
-      expect(pp1Feeder.cable.csaMm2, 25.0);
-      // 150 mm2 gave Iz/Ib > 3.0; 25 mm2 gives 56.3/43.8 = 1.29 (< 1.6).
+      expect(pp1Feeder.cable.csaMm2, 35.0);
+      // 150 mm2 gave Iz/Ib > 3.0; 35 mm2 gives 58.9/43.8 = 1.35 (< 1.6).
       expect(pp1Feeder.cable.deratedIz.amperes / pp1Feeder.designCurrent.amperes,
           lessThan(1.6));
 
       // LP-3 — 1-phase at the FED board's 220 V (E8a) and its REAL pf 0.9
       // (Round-7): Ib = 5058/(220 x 0.9) = 25.55 A -> load rung 32 A;
-      // Iz >= max(32, 31.93): 10 mm2 -> 32.1 yes. Cap 32.1 -> largest rung
-      // 32 A, so the device stays at its load pick (target 1.6 x 40 -> 80 A).
+      // Iz >= max(32, 31.93). Round 11 (B1): 10 mm2 -> 50 x 0.5358 = 26.8 no;
+      // 16 mm2 -> 68 x 0.5358 = 36.4 yes. Cap 36.4 -> largest rung 32 A, so the
+      // device stays at its load pick (target 1.6 x 40 -> 80 A).
       final lp3Feeder = _way(mdp, 'mdp-f-lp3');
       expect(lp3Feeder.threePhase, isFalse);
       expect(sys.panels['lp3']!.demandW, lessThan(6000));
       expect(lp3Feeder.breaker.ratingA.amperes, 32);
-      expect(lp3Feeder.cable.csaMm2, 10.0);
+      expect(lp3Feeder.cable.csaMm2, 16.0);
 
       // Neither reached its target, so neither is claimed as floored.
       expect(sys.feederFloorsApplied, isEmpty);

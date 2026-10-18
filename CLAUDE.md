@@ -1457,6 +1457,57 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 11 electrical rules (2026-10-18, seed suite
+  `round11_electrical_test.dart`)**: (1) PVC ampacity RANKS BY METHOD like XLPE
+  — conduit = IEC 60364-5-52 Table B.52.4 B1 (16 mm² = 68 A), wall = column C,
+  air / tray = the Supreme method-E table; PVC B1 ≤ C ≤ E and PVC ≤ XLPE per
+  method for every section (a property test) — never read the "in air" table for
+  conduit again. (2) A `LoadKind.capacitor` way draws NO real power:
+  `circuitConnectedW` returns 0 and `_balanceCurrentA` drops it from the phase
+  balance / incomer current (the bank OFF is the worst case); its own device +
+  conductor size on `kCapacitorSwitchingFactor` 1.43 × Ib (`// VERIFY`, IEC
+  60831-1 1.3 × 1.1). (3) The FOLD-2 neutral steps the profile's copper
+  FLAT-BAR ladder (`copperBusbarTable`), falling back to `ceil(target)` — never
+  the cable ladder, never collapsing to the phase size while the factor is > 1.
+  (4) TN ADS: the governing Zs limit is the more lenient of the overcurrent
+  device and the way's RCD (`Zs·IΔn ≤ U0`, IEC 60364-4-41 411.4.5,
+  `CircuitFaultResult.adsByRcd`), and the magnetic multiple follows the
+  PERMITTED disconnection time — 5 s (`curveTripMultiple5s`, D = 10 × In) for a
+  feeder or a final > 32 A, 0.4 s (`curveTripMultiple`) otherwise
+  (`adsDisconnectionTimeS`, `// VERIFY`). (5) A VFD way passes `hasVfd` to
+  `circuitRcd` (TT ⇒ Type B). (6) The genset motor-start dip screens only the
+  motors the genset STARTS: the essential sub-tree (`gensetBackedPanelIds`)
+  whenever the set backs a fraction or any board is essential
+  (`gensetStartMotors`).
+- **Source-delivered flow + one duty per air system (Round 11, `solve_store`)**:
+  a fan / pump duty runs on the flow LEAVING its source node —
+  `sourceDeliveredFlow` = Σ of the sized root-incident edge flows (water: the
+  summed UBAP re-diversified ONCE through the demand curve on the sizer's
+  `supplyFlushSystemProvider` branch, never below the largest branch; a single
+  incident edge is verbatim ⇒ single-trunk layouts byte-identical). Never size a
+  fan / pump on the single largest edge. Every connected component of an air
+  service is its own system (`airSystemsFor`, sorted largest first) with its own
+  duty (`supplyFanDutiesByRootProvider` / `exhaustFanDutiesByRootProvider`,
+  keyed by root); `ductFanProvider` / `exhaustFanProvider` are the PRIMARY
+  entries, the equipment schedule + the electrical feed consume every entry, and
+  `airBalanceProvider` sums all systems.
+- **Extract rooms (Round 11)**: a toilet / commercial kitchen
+  (`isExtractRoomType`) is sized `extractOnly` — the ACH airflow is an EXHAUST
+  bank (`RoomAirResult.return_`/`extract`) on a plain exhaust fan (duct + extract
+  grille loss only, no supply bank, no AHU/FCU duty) and auto-places
+  `exhaustGrille` nodes only. Its air is never supplied as conditioned air nor
+  recirculated (`// VERIFY notAnSniClause`, in the ventilation verify list).
+- **No non-finite value reaches the model (Round 11)**: every numeric field
+  commits through `ElectricalNumInput.rejectionFor` (finite first, then each of
+  `min` / `max` on its own) or rejects non-finite in the optional input; the
+  store setters (Supply/source intents, `setCircuit` via `isValidCircuitEdit`)
+  refuse NaN / Infinity / negative loads / non-positive lengths / cos phi
+  outside (0, 1]; formatters (`isFormattableScale`, `parseMoneyInput`,
+  `_fmt`/`_editValue`) never `round()`/`toInt()` a non-finite double. A NaN in
+  state makes `jsonEncode` throw, i.e. an unsaveable project — Save's baseline
+  encode is guarded too. The copilot decoder records malformed required fields
+  (`AiCommand.invalidFields`) and `_validate` rejects them, off-sheet points and
+  a floor ≠ the sheet's mapped floor; a no-op auto-place is a skip.
 - **Sizing is ORDER-INDEPENDENT (round 7 property suite `audit_r7_*`)**: shuffling
   nodes/edges or renaming ids never changes a size, head or verdict. The root
   ladder is physical + id-tie-broken (plants never bear leaf demand; gravity at
@@ -1724,7 +1775,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   entirely. The 1.6× basis stays `// VERIFY notAnSniClause`. Related policies
   from the same wave: a final `socket` way sizes its own device+cable on the
   UNdiversified load (aggregation keeps the demand factor, `// VERIFY` uniform
-  stop-kontak practice); a `lifeSafety` motor/pump way carries an INFO
+  stop-kontak practice) — since Round 11 EVERY final (non-feeder) way does
+  (one machine does not diversify against itself; motor / A5-FLA ways already
+  derive Ib undiversified); a `lifeSafety` motor/pump way carries an INFO
   `fire-pump-protection` note; an irreducible over-threshold imbalance carries
   an INFO `phase-imbalance-inherent` note; a feeder's voltage base (Ib and
   Vd%) is the FED panel's.

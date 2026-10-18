@@ -15,9 +15,11 @@
 /// Every expected value is hand-derived from the `PuilProfile` tables:
 ///   - breaker ladder: 6 10 16 20 25 32 40 50 63 | 80 100 125 160 200 250 315
 ///     400 500 630 800 1000 1250 1600 A;
-///   - KHA, Cu/PVC, reference method B1 (conduit): 4→34, 10→60, 16→80,
-///     300→500 A;
-///   - derating at the panel defaults (30 °C air, grouping 1, conduit) = 1.0
+///   - KHA, Cu/PVC, reference method E (free air / tray — both boards are laid
+///     on tray here; Round 11 split conduit B1 onto IEC B.52.4 B1, so these
+///     fixtures pin the method whose table matches the derivations): 4→34,
+///     10→60, 16→80, 300→500 A;
+///   - derating at the panel defaults (30 °C air, grouping 1) = 1.0
 ///     for a single run; n parallel runs group at groupingFactor(n);
 ///   - PUIL continuous-load factor 1.25 (Iz ≥ max(In, 1.25·Ib));
 ///   - 3φ trunk minimum section 4 mm².
@@ -51,6 +53,7 @@ ElectricalProject _twoBoard({required double loadW, Current? feederOverride}) =>
           name: 'Main',
           system: ElectricalSystem.threePhase,
           voltage: const Voltage(400),
+          installMethod: CableInstallMethod.tray,
           circuits: [
             ElectricalCircuit(
               id: 'f1',
@@ -68,6 +71,7 @@ ElectricalProject _twoBoard({required double loadW, Current? feederOverride}) =>
           name: 'Sub',
           system: ElectricalSystem.threePhase,
           voltage: const Voltage(400),
+          installMethod: CableInstallMethod.tray,
           sourceType: PanelSource.feeder,
           fedByCircuitId: 'f1',
           circuits: [

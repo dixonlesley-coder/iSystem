@@ -168,6 +168,32 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     ));
   }
 
+  // Round 11 (hvac-network-4) — every OTHER drawn supply / exhaust system
+  // (a second AHU on another floor …) carries its own solved duty. When its
+  // root is a drawn electrical-load node that node's way is fed from the duty
+  // ([placedEquipmentLoadsProvider]); a system rooted at a bare node gets its
+  // own duty way here, so no solved airflow is silently dropped.
+  final roots = ref.watch(airSystemRootNodesProvider);
+  final net = ref.watch(networkControllerProvider).network;
+  bool isLoadNode(String id) =>
+      net.nodeById(id)?.component?.isElectricalLoad ?? false;
+  void addSecondary(Map<String, FanDuty> duties, String? primary,
+      String idPrefix, String name, MepLoadSource source) {
+    for (final e in duties.entries) {
+      if (e.key == primary || isLoadNode(e.key)) continue;
+      if (e.value.selectedMotor.watts <= 0) continue;
+      loads.add(MepEquipmentLoad.fromFanDuty(
+        e.value,
+        id: '$idPrefix-${e.key}',
+        name: name,
+        source: source,
+      ));
+    }
+  }
+
+  addSecondary(ref.watch(supplyFanDutiesByRootProvider), roots.supply,
+      'supply-fan', kSupplyFanLoadName, MepLoadSource.supplyFan);
+
   // The drawn EXHAUST system's own fan (separate from the supply/return AHU).
   final exhaust = ref.watch(exhaustFanProvider);
   if (bind.exhaustFanNodeId == null &&
@@ -180,6 +206,8 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
       source: MepLoadSource.exhaustFan,
     ));
   }
+  addSecondary(ref.watch(exhaustFanDutiesByRootProvider), roots.exhaust,
+      'exhaust-fan', kExhaustFanLoadName, MepLoadSource.exhaustFan);
 
   // The fire-pump way is sized on the SELECTED NFPA 20 motor frame (the same
   // kW the equipment schedule tells the contractor to buy — it must carry the
@@ -305,6 +333,11 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
       );
     }
     if (n.id == bind.supplyPumpNodeId) p = ref.watch(pumpDutyProvider);
+    // Round 11 (hvac-network-4) — ANY drawn air unit a system is rooted at
+    // carries THAT system's duty (the primary one included), not only the
+    // single primary unit.
+    f = ref.watch(supplyFanDutiesByRootProvider)[n.id] ??
+        ref.watch(exhaustFanDutiesByRootProvider)[n.id];
     if (n.id == bind.supplyFanNodeId) f = ref.watch(ductFanProvider);
     if (n.id == bind.exhaustFanNodeId) f = ref.watch(exhaustFanProvider);
     final motor = p?.selectedMotor ?? f?.selectedMotor;

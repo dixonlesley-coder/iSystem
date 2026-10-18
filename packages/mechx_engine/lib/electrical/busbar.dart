@@ -190,16 +190,27 @@ NeutralPeBars sizeNeutralPeBars(
           ? 16.0
           : phaseCsaMm2 / 2;
 
-  // Triplen oversize: step the neutral up the standard ladder by the factor.
+  // Triplen oversize: step the neutral up the BUSBAR ladder by the factor.
+  //
+  // Round 11 — it used to step the CABLE ladder (`standardSectionsMm2`, which
+  // tops out at 300 mm²): any phase bar whose target exceeded 300 mm² found no
+  // rung, the neutral silently collapsed to the phase size and the factor /
+  // triplen fraction reported 1 / 0 — dropping the oversize (and its warning)
+  // on exactly the large UPS / IT boards FOLD 2 exists for, while smaller boards
+  // printed cable rungs (95, 120) as bar sections. It now steps the profile's
+  // copper flat-bar ladder, and beyond the largest bar falls back to the
+  // ceiling of the target — never to the phase size while the factor is > 1.
   var neutral = phaseCsaMm2;
   if (profile != null && neutralOversizeFactor > 1 && phaseCsaMm2 > 0) {
     final target = phaseCsaMm2 * neutralOversizeFactor;
-    for (final s in profile.standardSectionsMm2) {
-      if (s >= target) {
-        neutral = s;
+    double? rung;
+    for (final b in profile.copperBusbarTable) {
+      if (b.csaMm2 + 1e-9 >= target) {
+        rung = b.csaMm2;
         break;
       }
     }
+    neutral = rung ?? target.ceilToDouble();
   }
   // The bar's continuous rating tracks the phase bar (the oversize is a thermal
   // headroom for the harmonic neutral RMS, not a higher continuous duty).

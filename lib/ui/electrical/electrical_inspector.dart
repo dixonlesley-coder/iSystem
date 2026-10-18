@@ -947,6 +947,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                             context.strings(StringKey.electricalFieldMotorPower),
                         child: ElectricalNumInput(
                           value: circuit.motorKw ?? 0,
+                          // Round 11 — a negative shaft power is rejected (the
+                          // min-only bound is now enforced on its own).
+                          min: 0,
                           onChanged: (v) => controller.setCircuit(
                             panel.id,
                             circuit.id,
@@ -959,6 +962,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                         label: context.strings(StringKey.electricalFieldLoadW),
                         child: ElectricalNumInput(
                           value: circuit.loadW,
+                          // Round 11 — a negative load gave a negative Ib that
+                          // was SUBTRACTED from the board demand.
+                          min: 0,
                           onChanged: (v) => controller.setCircuit(
                             panel.id,
                             circuit.id,
@@ -982,6 +988,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                                 ? _lengthInForce.meters
                                 : circuit.length.meters,
                             enabled: !_lengthFromLayout,
+                            // Round 11 — a run is at least 0.1 m: zero or a
+                            // negative length made Vd% pass by construction.
+                            min: kMinCircuitRunLengthM,
                             onChanged: (v) => controller.setCircuit(
                               panel.id,
                               circuit.id,
@@ -1131,7 +1140,10 @@ class ElectricalCircuitInspector extends StatelessWidget {
                             // idiom below the field), not silently clamped.
                             child: ElectricalNumInput(
                               value: circuit.cosPhi,
-                              min: 0.0,
+                              // Round 11 — cos phi 0 is an unbounded current
+                              // (P / (U·0)); the engine silently sized it at
+                              // Ib 0 A, so the field's floor is 0.1.
+                              min: kMinCircuitCosPhi,
                               max: 1.0,
                               onChanged: (v) => controller.setCircuit(
                                 panel.id,

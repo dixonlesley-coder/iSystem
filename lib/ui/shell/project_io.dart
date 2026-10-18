@@ -597,7 +597,20 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // against (autosave never embeds) — so a just-saved project leaves no phantom
   // recovery. The FILE on disk, however, embeds the source plans so it is
   // portable across machines.
-  final baseline = doc.encode();
+  //
+  // Round 11 — the encode runs INSIDE a guard: a non-finite double anywhere in
+  // the model (NaN / Infinity) makes `JsonEncoder` throw, and an uncaught throw
+  // here used to abort Save silently with nothing written. Surface it on the
+  // load-error banner instead so the engineer learns the save did not happen.
+  final String baseline;
+  try {
+    baseline = doc.encode();
+  } catch (e) {
+    if (ref.context.mounted) {
+      ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
+    }
+    return;
+  }
   // Tell the user we're working: embedding gzips every plan, and even without
   // assets the write touches disk.
   ref

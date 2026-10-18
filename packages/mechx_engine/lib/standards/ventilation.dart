@@ -74,6 +74,16 @@ enum RoomType {
   commercialKitchen,
 }
 
+/// Round 11 (hvac-network-2) — whether [type] is an EXTRACT space: its ACH is
+/// an exhaust requirement (SNI 03-6572-2001 Tabel 4.4.1 toilet / kitchen
+/// rates), and its air must be EXHAUSTED to outside — never supplied as
+/// conditioned air nor returned (recirculated) to an air unit. Room sizing
+/// therefore gives such a room exhaust grilles + an exhaust fan only.
+// VERIFY — notAnSniClause (general HVAC practice: toilet / kitchen air is not
+// recirculated; the SNI table gives the rate, not the air path).
+bool isExtractRoomType(RoomType type) =>
+    type == RoomType.toilet || type == RoomType.commercialKitchen;
+
 /// Human-readable label for [type].
 String roomTypeLabel(RoomType type) {
   switch (type) {
@@ -364,6 +374,20 @@ class SniVentilationProfile implements VentilationStandardsProfile {
               'Confirmed (2026-07 research pass): SNI 03-6572-2001 is '
               'ACH/fresh-air based and prescribes no area-density cooling '
               'figure — no Indonesian SNI governs this rule of thumb.',
+        ),
+        const StandardValue<Object?>(
+          'extract-only air path for toilet / commercial kitchen',
+          unit: 'rule',
+          citation: 'general HVAC practice — udara toilet / dapur dibuang, '
+              'tidak disirkulasi ulang; $_doc gives the rate, not the path',
+          sourceUrl: _sourceUrl,
+          verified: false,
+          status: VerificationStatus.notAnSniClause,
+          note: 'Round 11: a toilet or commercial-kitchen room is sized and '
+              'auto-placed as EXHAUST grilles on the exhaust service with a '
+              'plain exhaust fan — never as conditioned supply nor as return '
+              'air to an AHU/FCU. The ACH rate itself is the Tabel 4.4.1 '
+              'figure; the no-recirculation air path is general practice.',
         ),
       ];
 }
