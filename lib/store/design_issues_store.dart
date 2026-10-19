@@ -1033,18 +1033,29 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // floor ⇒ a blocking WARNING citing it; between floor and target ⇒ an
   // acknowledgeable INFO advisory ('SNI minimum met, booster recommended').
   // The kind stays `downfeed-below-target` so acks / compliance matching hold.
+  //
+  // Round 33 (regression-sni-minimum-judged-only-at-critical-node) — the SNI
+  // floor is judged at EVERY delivery node against its OWN floor
+  // ([downfeedSniFloorsProvider]): a flush-valve WC at 83 kPa elsewhere
+  // fails although the faucet-fed critical node meets its 49 kPa. Below any
+  // floor ⇒ the warning names the LARGEST shortfall node (its floor, its
+  // residual, locate); otherwise the info advisory at the critical node.
   if (ref.watch(gravityDownfeedDrawnProvider)) {
     final delivered = ref.watch(downfeedDeliveredProvider);
     if (delivered != null && !delivered.gravitySufficient) {
-      final node = nodeById[delivered.criticalNodeId];
+      final short = worstSniShortfall(
+          floors: ref.watch(downfeedSniFloorsProvider),
+          residual: delivered.residualPressure);
+      final belowSni = short != null;
+      final node = nodeById[short?.nodeId ?? delivered.criticalNodeId];
       final floors = project.building.floors;
       final floorName = node == null || floors.isEmpty
           ? ''
           : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
-      final sniMin = ref.watch(downfeedSniMinimumResidualProvider) ??
+      final sniMin = short?.floor ??
+          ref.watch(downfeedSniMinimumResidualProvider) ??
           const SniProfile().minResidualPressureFaucet.value;
-      final belowSni = delivered.minResidual.inKiloPascals <
-          sniMin.inKiloPascals - 1e-6;
+      final residualShown = short?.residual ?? delivered.minResidual;
       warnings.add(DesignIssue(
         severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
         kind: 'downfeed-below-target',
@@ -1058,8 +1069,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
             {
           'floor': floorName,
           'sni': sniMin.inKiloPascals.toStringAsFixed(0),
-          'residual':
-              delivered.minResidual.inKiloPascals.toStringAsFixed(0),
+          'residual': residualShown.inKiloPascals.toStringAsFixed(0),
           'target': ref
               .watch(targetResidualProvider)
               .inKiloPascals
@@ -1080,20 +1090,27 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // delivery node). Then the shortfall is a real finding: Review says so and
   // the compliance 'Supply pressure' row claims it, never a vacuous PASS.
   // Round 32 (binding-1) — the same SNI-floor / comfort-target split as 3g.
-  final upfeed = ref.watch(solveProvider);
+  // Round 33 — judged on the DELIVERED upfeed field (drawn movers at their
+  // own duties, [upfeedDeliveredProvider]) with the per-node SNI floor.
+  final upfeed = ref.watch(upfeedDeliveredProvider);
   if (upfeed != null && !upfeed.targetHeldByDesign) {
     final target = ref.watch(targetResidualProvider);
-    final worst = upfeed.residualPressure[upfeed.criticalNodeId];
-    if (worst != null &&
-        worst.inKiloPascals < target.inKiloPascals - 0.5) {
-      final node = nodeById[upfeed.criticalNodeId];
+    final critical = upfeed.residualPressure[upfeed.criticalNodeId];
+    if (critical != null &&
+        critical.inKiloPascals < target.inKiloPascals - 0.5) {
+      final short = worstSniShortfall(
+          floors: ref.watch(upfeedSniFloorsProvider),
+          residual: upfeed.residualPressure);
+      final belowSni = short != null;
+      final worst = short?.residual ?? critical;
+      final node = nodeById[short?.nodeId ?? upfeed.criticalNodeId];
       final floors = project.building.floors;
       final floorName = node == null || floors.isEmpty
           ? ''
           : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
-      final sniMin = ref.watch(upfeedSniMinimumResidualProvider) ??
+      final sniMin = short?.floor ??
+          ref.watch(upfeedSniMinimumResidualProvider) ??
           const SniProfile().minResidualPressureFaucet.value;
-      final belowSni = worst.inKiloPascals < sniMin.inKiloPascals - 1e-6;
       warnings.add(DesignIssue(
         severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
         kind: 'upfeed-below-target',

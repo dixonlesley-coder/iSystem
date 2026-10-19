@@ -1116,6 +1116,9 @@ enum StringKey {
   // ── The heatmap says WHICH check is falsifiable (G6) ──────────────────────
   heatmapHeldByDesign,
   heatmapRealCheckPumpDuty,
+  heatmapTarget,
+  heatmapSniMin,
+  heatmapBelowTarget,
 
   // ── Import failures speak human (WORKFLOW-FRICTION I5) ────────────────────
   /// A plan import that threw a parse/format failure, mapped per file TYPE so
@@ -2593,6 +2596,9 @@ const Map<StringKey, String> _en = {
   // G6 — the heatmap names the falsifiable check.
   StringKey.heatmapHeldByDesign: 'target held by design',
   StringKey.heatmapRealCheckPumpDuty: 'the real check is the pump duty',
+  StringKey.heatmapTarget: 'Target',
+  StringKey.heatmapSniMin: 'SNI min',
+  StringKey.heatmapBelowTarget: 'below target',
 
   // I5 — import failures speak human; the raw text rides the parenthetical.
   StringKey.importFailedDxfTemplate:
@@ -4106,6 +4112,9 @@ const Map<StringKey, String> _id = {
   StringKey.heatmapHeldByDesign: 'target ditahan oleh desain',
   StringKey.heatmapRealCheckPumpDuty:
       'pemeriksaan sebenarnya ada pada duti pompa',
+  StringKey.heatmapTarget: 'Target',
+  StringKey.heatmapSniMin: 'Min. SNI',
+  StringKey.heatmapBelowTarget: 'di bawah target',
 
   // I5.
   StringKey.importFailedDxfTemplate:

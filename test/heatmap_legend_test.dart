@@ -13,7 +13,7 @@ import 'package:mechx/ui/theme/mechx_theme.dart';
 /// width: every endpoint renders whole, at any value width.
 ///
 /// Finding I2/E4 — the legend now also carries the ABSOLUTE pass anchor: the
-/// SNI target residual (a threshold tick + a "Min NN kPa" label on a spread
+/// SNI target residual (a threshold tick + a "Target NN kPa" label (Round 33: the tick is the COMFORT target, never 'Min') on a spread
 /// field; a PASS/LOW verdict on the uniform field), so the colours read against
 /// the code requirement, not just the view's own min/max.
 Future<void> _loadFonts() async {
@@ -90,7 +90,7 @@ void main() {
     _expectRendersWhole(tester, 'Low 3 kPa');
     _expectRendersWhole(tester, 'High 12345 kPa');
     // The absolute anchor is labelled (the threshold tick's meaning).
-    _expectRendersWhole(tester, 'Min 225 kPa');
+    _expectRendersWhole(tester, 'Target 225 kPa');
     // A genuinely spread field shows no uniform verdict / note.
     expect(find.text('PASS'), findsNothing);
     expect(find.text('LOW'), findsNothing);
@@ -106,9 +106,9 @@ void main() {
       const HeatmapLegend(
           minKpa: 230, maxKpa: 310, targetKpa: 225, targetHeldByDesign: true),
     ));
-    // The Min tick keeps its label — but it no longer stands alone: on the
+    // The Target tick keeps its label — but it no longer stands alone: on the
     // upfeed solve every residual clears it by construction.
-    _expectRendersWhole(tester, 'Min 225 kPa');
+    _expectRendersWhole(tester, 'Target 225 kPa');
     _expectRendersWhole(tester, 'target held by design');
     _expectRendersWhole(tester, '- the real check is the pump duty');
     // It is a statement, not a verdict — no green PASS is claimed.
@@ -120,7 +120,7 @@ void main() {
     await tester.pumpWidget(_host(
       const HeatmapLegend(minKpa: 230, maxKpa: 310, targetKpa: 225),
     ));
-    _expectRendersWhole(tester, 'Min 225 kPa');
+    _expectRendersWhole(tester, 'Target 225 kPa');
     expect(find.text('target held by design'), findsNothing);
     expect(find.text('- the real check is the pump duty'), findsNothing);
   });

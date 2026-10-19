@@ -4560,9 +4560,13 @@ class _ResultsSection extends ConsumerWidget {
               _kvRow(
                 context,
                 'Pump head',
+                // Round 33 (hydraulics-3-2) — the head of the PRIMARY drawn
+                // pump (the same duty the motor ResultCard above is sized
+                // on), never the whole-system single-source head when a root
+                // pump + zone booster split it.
                 solution == null
                     ? '—'
-                    : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m',
+                    : '${(pump?.head ?? solution.requiredPumpHead).meters.toStringAsFixed(1)} m',
               ),
             ] else if (!gravityDrawn) ...[
               // Round 25 — no roof tank drawn: the drawn feed is the mains (or
@@ -5512,7 +5516,15 @@ class _SelectionSection extends ConsumerWidget {
             // Mirror the heatmap legend's 0.5 kPa slack (= 500 Pa), NOT 0.5 Pa —
             // both verdicts read the same targetResidualProvider, so they must use
             // the same-unit tolerance or a sub-target residual splits PASS vs LOW.
-            final pass = residual.pascals >= target.pascals - 500;
+            // Round 33 — the shared ladder: LOW only below this node's own
+            // SNI 8153 floor; floor met but under the comfort target reads
+            // 'below target' (advisory), never a red LOW against 225 kPa.
+            final sniFloor = ref.watch(sniFloorByNodeProvider)[node.id];
+            final v = residualVerdict(
+                residualPa: residual.pascals,
+                targetPa: target.pascals,
+                sniFloorPa: sniFloor?.pascals);
+            final pass = v == ResidualVerdict.pass;
             // M9 — on the UPFEED solve the pump head is DEFINED as the max of
             // (friction + elevation + target), so residual >= target is an
             // algebraic identity: no drawn network can make this probe read LOW.
@@ -5520,15 +5532,25 @@ class _SelectionSection extends ConsumerWidget {
             // lie the 'all sheets calibrated' row was. Say what is true instead —
             // the target is held BY DESIGN, and the falsifiable question (can a
             // real pump deliver the required head?) lives on the pump duty.
-            final held = ref.watch(solveProvider)?.targetHeldByDesign ?? false;
+            final held =
+                ref.watch(upfeedDeliveredProvider)?.targetHeldByDesign ?? false;
+            final targetTxt = '${context.strings(StringKey.heatmapTarget).toLowerCase()} '
+                '${target.inKiloPascals.toStringAsFixed(0)} kPa';
             final verdict = !isFixture
                 ? ''
                 : held
-                ? ' · target held by design (min '
-                      '${target.inKiloPascals.toStringAsFixed(0)} kPa) - '
+                ? ' · target held by design ($targetTxt) - '
                       '${context.strings(StringKey.heatmapRealCheckPumpDuty)}'
-                : ' · ${pass ? 'PASS' : 'LOW'} (min '
-                      '${target.inKiloPascals.toStringAsFixed(0)} kPa)';
+                : switch (v) {
+                    ResidualVerdict.low => sniFloor == null
+                        ? ' · LOW ($targetTxt)'
+                        : ' · LOW (${context.strings(StringKey.heatmapSniMin)} '
+                            '${sniFloor.inKiloPascals.toStringAsFixed(0)} kPa)',
+                    ResidualVerdict.belowTarget =>
+                      ' · ${context.strings(StringKey.heatmapBelowTarget)} '
+                          '($targetTxt)',
+                    ResidualVerdict.pass => ' · PASS ($targetTxt)',
+                  };
             return Padding(
               padding: const EdgeInsets.only(top: MechXSpacing.xxs),
               child: Text(
@@ -5540,6 +5562,8 @@ class _SelectionSection extends ConsumerWidget {
                         ? context.colors.textSecondary
                         : (pass
                               ? context.colors.success
+                              : v == ResidualVerdict.belowTarget
+                              ? context.colors.warning
                               : context.colors.danger),
                   ),
                 ),
