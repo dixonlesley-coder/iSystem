@@ -1601,6 +1601,12 @@ Map<String, EdgeSizing> autoSizeNetwork(
       // two VTRs on one vent component (two stacks headered together) only
       // one is the tree root; the other used to take the 2-DFU leaf default
       // as a phantom load (a 8-DFU stack's header read 10 DFU, one DN up).
+      final ventTopFloor = service == ServiceType.vent
+          ? component.fold<int>(
+              -1 << 30,
+              (m, id) => math.max(m, net.nodeById(id)?.floorIndex ?? m),
+            )
+          : 0;
       bool isOpenVtr(String n) {
         if (n == root || degree(n) != 1 || explicitDemandKeys.contains(n)) {
           return false;
@@ -1612,9 +1618,32 @@ Map<String, EdgeSizing> autoSizeNetwork(
           return false;
         }
         final e = net.edgeById(adjacency[n]!.first.edgeId);
-        if (e == null || e.kind != EdgeKind.riser) return false;
+        if (e == null) return false;
         final o = net.nodeById(e.fromId == n ? e.toId : e.fromId);
-        return o != null && o.floorIndex < node.floorIndex;
+        if (o == null) return false;
+        if (e.kind == EdgeKind.riser) return o.floorIndex < node.floorIndex;
+        // Round 26 r4 — a VTR drawn as a short RUN on the TOP storey (the
+        // Round-22 'bare vent junction on the top storey reads the roof'
+        // idiom), reached horizontally from the top of a vent stack: o is
+        // the UPPER end of a vent riser (rising from a lower floor, nothing
+        // rising above it) on the component's top storey. It took the 2-DFU
+        // default, so a header read B's 8 DFU + 2 and B's stack went one DN
+        // up (DN50 vs DN40 alone).
+        if (node.floorIndex != ventTopFloor ||
+            o.floorIndex != node.floorIndex) {
+          return false;
+        }
+        var fromBelow = false;
+        for (final l
+            in adjacency[o.id] ?? const <({String edgeId, String other})>[]) {
+          final r = net.edgeById(l.edgeId);
+          if (r == null || r.kind != EdgeKind.riser) continue;
+          final f = net.nodeById(l.other)?.floorIndex;
+          if (f == null) continue;
+          if (f > o.floorIndex) return false;
+          if (f < o.floorIndex) fromBelow = true;
+        }
+        return fromBelow;
       }
 
       final ventTerminals = <String>{
@@ -1706,6 +1735,36 @@ Map<String, EdgeSizing> autoSizeNetwork(
       final standbyLegs = cutBreaksLoops
           ? (cvPlan?.standbyLegs ?? const <_StandbyLeg>[])
           : const <_StandbyLeg>[];
+      // Round 26 r4 (binding design decision) — a RETURN check valve carries
+      // NO draw-off, whatever the return-side walk decided. When every cycle
+      // valve is a return valve its two edges are ALWAYS out of the
+      // Hardy–Cross loop set and sized at zero flow, oriented in the physical
+      // return direction (up-node -> valve -> down-node). If the rest of the
+      // component is a forest the tree path above does it (the valve edges
+      // are deferred); if it still loops (a ring main with a return teed from
+      // its bare tee, a hotel return teed at / beyond the top fixture) the
+      // Hardy–Cross split runs on that REMAINDER — never on the network
+      // including the valve, which used to route up to ~40 % of the peak
+      // forward through the return valve and size the heater feed for the
+      // rest. The walk cannot tell a ring segment from a return riser (both
+      // orientations of that ambiguity exist), so the valve cut does not
+      // depend on it; only the ring-vs-return split of the ambiguous segment
+      // does.
+      final returnValveFlowFrom =
+          cvPlan?.returnValveFlowFrom ?? const <String, String>{};
+      final loopEdges = returnValveFlowFrom.isEmpty
+          ? componentEdges
+          : [
+              for (final e in componentEdges)
+                if (!returnValveFlowFrom.containsKey(e.id)) e,
+            ];
+      void zeroReturnValves() {
+        for (final en in returnValveFlowFrom.entries) {
+          allFlows[en.key] = const FlowRate(0);
+          edgeFlowFrom[en.key] = en.value;
+          if (useUbap) fixtureUnitsOut?[en.key] = 0;
+        }
+      }
 
       // Round 12 (mech-props-2 gravity-loop) — on the TREE path a looped
       // component's CLOSING edges (left out of the deterministic spanning
@@ -1820,8 +1879,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
         };
         final balanced = balanceFlows(
           edges: [
-            for (final e in componentEdges)
-              (id: e.id, from: e.fromId, to: e.toId),
+            for (final e in loopEdges) (id: e.id, from: e.fromId, to: e.toId),
           ],
           root: root,
           demand: demandFlow,
@@ -1848,8 +1906,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
         if (useUbap && nodeUbapForBridges.isNotEmpty) {
           final far = _bridgeFarSideSums(
             edges: [
-              for (final e in componentEdges)
-                (id: e.id, from: e.fromId, to: e.toId),
+              for (final e in loopEdges) (id: e.id, from: e.fromId, to: e.toId),
             ],
             root: root,
             weight: nodeUbapForBridges,
@@ -1866,13 +1923,13 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // as balanced. Continuity still holds, so the sizes are usable; the
         // loop head-loss balance is what was not achieved.
         if (!balanced.converged) {
-          for (final e in componentEdges) {
+          for (final e in loopEdges) {
             loopUnbalancedEdges.add(e.id);
           }
         }
         // Orient each ring edge from the balanced flow SIGN (positive = from→to,
         // per LoopBalanceResult); a near-zero edge stays undirected (null).
-        for (final e in componentEdges) {
+        for (final e in loopEdges) {
           final q = balanced.edgeFlow[e.id] ?? 0.0;
           if (q > 1e-12) {
             edgeFlowFrom[e.id] = e.fromId;
@@ -1880,6 +1937,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
             edgeFlowFrom[e.id] = e.toId;
           }
         }
+        zeroReturnValves();
         continue;
       }
 
@@ -2159,6 +2217,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
           }
         }
       }
+
+      // Round 26 r4 — the deferred return valve edges carry zero draw-off in
+      // the tree path too; record their PHYSICAL return direction (the tree
+      // reaches them from the heater side, against the valve).
+      if (cutBreaksLoops) zeroReturnValves();
 
       // Round 13 — duty/standby parallel legs: every standby leg carries the
       // SAME flow (and fixture units) as the duty leg's check valve, oriented
@@ -2712,7 +2775,15 @@ class _CheckValvePlan {
 
   /// Standby legs to size on the duty flow afterwards.
   final List<_StandbyLeg> standbyLegs;
-  const _CheckValvePlan(this.deferredEdgeIds, this.standbyLegs);
+
+  /// Round 26 r4 — every cycle check valve is a RETURN valve: each valve
+  /// edge -> the endpoint its (zero draw-off) flow physically comes FROM.
+  /// These edges are ALWAYS out of the Hardy–Cross loop set (a return valve
+  /// carries no draw-off, the Round-12 principle), whether or not the rest
+  /// of the component still loops. Empty for any other plan.
+  final Map<String, String> returnValveFlowFrom;
+  const _CheckValvePlan(this.deferredEdgeIds, this.standbyLegs,
+      [this.returnValveFlowFrom = const {}]);
 }
 
 /// A cycle check valve with its ORIENTED legs: [inE] arrives from [upNode],
@@ -2942,7 +3013,9 @@ _CheckValvePlan _classifyLoopCheckValves({
         cutEdges.addAll(returnSide);
       }
     }
-    return _CheckValvePlan(cutEdges, const []);
+    return _CheckValvePlan(cutEdges, const [], {
+      for (final c in cvs) ...{c.inE.id: c.upNode, c.outE.id: c.id},
+    });
   }
   if (cvs.length < 2 || !cvs.every(isParallelDischarge)) return none;
 
@@ -3182,6 +3255,15 @@ Map<String, double> _uniformVentStacks(
   final headerLoadAt = <String, double>{};
   final drainedBound = <String, double>{}; // riser group -> header load
   for (final e in headers) {
+    // Round 26 r4 — a loop-CLOSING header (left out of the solved tree: two
+    // headers between the same two stacks, a relief / yoke header below a
+    // roof header) carries only the conservative 'larger adjacent load' the
+    // closing rule hands it — no vent air is ACCOUNTED through it. Adding
+    // that to [headerLoadAt] subtracted the larger stack's own load from
+    // its shared risers (a 40-DFU stack sized DN50 on 20 DFU instead of
+    // DN65); bounding a stack by it would oversize the small one. It is
+    // neither a receiving nor a draining header.
+    if (edgeParent != null && !edgeParent.containsKey(e.id)) continue;
     for (final j in [e.fromId, e.toId]) {
       final g = riserGroupOf[j]!;
       final f = floorOf(j);
@@ -3235,9 +3317,52 @@ Map<String, double> _uniformVentStacks(
         0.0, units[e.id]! - (headerLoadAt[riserGroupOf[e.fromId]] ?? 0));
     if (own > (stackMax[k] ?? 0)) stackMax[k] = own;
   }
+  // Round 26 r4 — a VTR drawn as a short RUN on the top storey (stack top ->
+  // a bare vent leaf on the same storey, joined by nothing else) is the
+  // stack's roof termination, part of its developed length exactly like a
+  // VTR riser. The top floor's tie enters ABOVE the last riser, so only
+  // this run carried the stack's whole load: the risers sized one DN small
+  // (24 vs 32 DFU, DN50 vs DN65) and an un-rooted second VTR printed DN32
+  // over a DN40 stack. It counts like a shared riser — its own load less the
+  // header load entering the stack — and is never below the stack it ends.
+  final ventDegree = <String, int>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.vent) continue;
+    ventDegree[e.fromId] = (ventDegree[e.fromId] ?? 0) + 1;
+    ventDegree[e.toId] = (ventDegree[e.toId] ?? 0) + 1;
+  }
+  bool vtrRunLink(String top, String leaf) {
+    if (!stackEnd(top) || parent.containsKey(leaf)) return false;
+    if (ventDegree[leaf] != 1 || drainNodes.contains(leaf)) return false;
+    final ft = floorOf(top), fl = floorOf(leaf);
+    if (ft == null || ft != fl || ft != groupTop[riserGroupOf[top]]) {
+      return false;
+    }
+    final node = net.nodeById(leaf);
+    return node != null && node.component == null && node.role == NodeRole.main;
+  }
+
+  final vtrRuns = <(NetEdge, String)>[
+    for (final id in units.keys)
+      if (net.edgeById(id) case final e?
+          when e.kind != EdgeKind.riser && e.service == ServiceType.vent)
+        if (vtrRunLink(e.fromId, e.toId))
+          (e, e.fromId)
+        else if (vtrRunLink(e.toId, e.fromId))
+          (e, e.toId),
+  ];
+  for (final (e, top) in vtrRuns) {
+    final k = find(top);
+    if (!stackMax.containsKey(k)) continue;
+    final own =
+        math.max(0.0, units[e.id]! - (headerLoadAt[riserGroupOf[top]] ?? 0));
+    if (own > stackMax[k]!) stackMax[k] = own;
+  }
   return {
     ...units,
     for (final e in members) e.id: stackMax[find(e.fromId)]!,
+    for (final (e, top) in vtrRuns)
+      if (stackMax[find(top)] case final m?) e.id: math.max(units[e.id]!, m),
     // A shared riser above a header junction keeps its own (combined) load,
     // never less than the stack it sits on.
     for (final e in shared)

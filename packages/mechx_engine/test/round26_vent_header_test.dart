@@ -30,10 +30,16 @@ NetEdge _e(String id, String a, String b, ServiceType s,
 /// VB_f; each stack continues above it, tied every floor, so a stack with no
 /// VTR keeps a dead STUB above the header) and [vtrA] / [vtrB] override
 /// which stacks carry a VTR.
+/// Round 26 r4 — [vtrRun] draws each VTR as a short RUN on the top storey
+/// (V*3 -> VTR*, the Round-22 'bare vent junction on the top storey reads
+/// the roof' idiom) instead of a riser to a roof node, and [extraHeaderFloors]
+/// adds further headers (ids `hdr<f>`, same direction) between the stacks.
 ({Network net, Map<String, double> dfu}) _twoStacks(
     {required bool header,
     bool mirror = false,
     int headerFloor = 3,
+    List<int> extraHeaderFloors = const [],
+    bool vtrRun = false,
     bool? vtrA,
     bool? vtrB,
     double dfuA = 10,
@@ -64,21 +70,25 @@ NetEdge _e(String id, String a, String b, ServiceType s,
   }
   final vtrOnA = vtrA ?? (!header || !mirror);
   final vtrOnB = vtrB ?? (!header || mirror);
+  final vtrFloor = vtrRun ? 3 : 4;
+  final vtrKind = vtrRun ? EdgeKind.run : EdgeKind.riser;
   if (vtrOnA) {
-    nodes.add(_n('VTRA', 120, 0, floor: 4));
-    edges
-        .add(_e('vtrA', 'VA3', 'VTRA', ServiceType.vent, kind: EdgeKind.riser));
+    nodes.add(_n('VTRA', 120, 30, floor: vtrFloor));
+    edges.add(_e('vtrA', 'VA3', 'VTRA', ServiceType.vent, kind: vtrKind));
   }
   if (vtrOnB) {
-    nodes.add(_n('VTRB', 420, 0, floor: 4));
-    edges
-        .add(_e('vtrB', 'VB3', 'VTRB', ServiceType.vent, kind: EdgeKind.riser));
+    nodes.add(_n('VTRB', 420, 30, floor: vtrFloor));
+    edges.add(_e('vtrB', 'VB3', 'VTRB', ServiceType.vent, kind: vtrKind));
   }
   if (header) {
-    final f = headerFloor;
-    edges.add(mirror
-        ? _e('hdr', 'VA$f', 'VB$f', ServiceType.vent)
-        : _e('hdr', 'VB$f', 'VA$f', ServiceType.vent));
+    for (final (id, f) in [
+      ('hdr', headerFloor),
+      for (final x in extraHeaderFloors) ('hdr$x', x),
+    ]) {
+      edges.add(mirror
+          ? _e(id, 'VA$f', 'VB$f', ServiceType.vent)
+          : _e(id, 'VB$f', 'VA$f', ServiceType.vent));
+    }
   }
   return (net: Network(nodes: nodes, edges: edges), dfu: dfu);
 }
@@ -279,6 +289,142 @@ void main() {
             expect(got, own, reason: '$why $id');
           } else {
             // The shared section above the junction carries both stacks.
+            expect(got, greaterThanOrEqualTo(own), reason: '$why $id');
+          }
+        }
+      }
+    }
+  });
+
+  test(
+      'a VTR drawn as a top-storey RUN is an open terminal too (no phantom '
+      'header load)', () {
+    // Round 26 r4 — VTRs on both stacks drawn as short RUNS on the top
+    // storey (VA3 -> VTRA, VB3 -> VTRB), header B -> A at floor 2, A 19 /
+    // B 2 DFU per floor. B's own VTR alone carries 4 x 2 = 8 DFU (DN40:
+    // 1 < 8 <= 8, UPC 703.2). The un-rooted VTRB used to take the 2-DFU
+    // leaf default: the header read 10 DFU and — B drained via the solved
+    // tree — vB1..vB3 went DN50.
+    final alone = _twoStacks(header: false, dfuA: 19, dfuB: 2, vtrRun: true);
+    final tied = _twoStacks(
+        header: true,
+        headerFloor: 2,
+        vtrA: true,
+        vtrB: true,
+        vtrRun: true,
+        dfuA: 19,
+        dfuB: 2);
+    final fuAlone = <String, double>{};
+    final fuTied = <String, double>{};
+    final sAlone = autoSizeNetwork(alone.net, const SizingContext(),
+        leafDemand: const {},
+        nodeDrainageUnits: alone.dfu,
+        fixtureUnitsOut: fuAlone);
+    final sTied = autoSizeNetwork(tied.net, const SizingContext(),
+        leafDemand: const {},
+        nodeDrainageUnits: tied.dfu,
+        fixtureUnitsOut: fuTied);
+    expect(fuAlone['vtrB'], 8);
+    expect(fuTied['hdr'], fuAlone['vtrB']);
+    expect(drain.ventDiameterForDfu(8).inMillimeters, 40);
+    // The run VTR is the stack's roof termination: B's risers carry the
+    // whole 8 DFU (the top floor's tie enters above vB3), and the un-rooted
+    // VTRB — load-free itself — is never below the stack it ends.
+    expect(fuAlone['vB3'], 8);
+    for (final id in ['vB1', 'vB2', 'vB3', 'vtrB']) {
+      expect(sTied[id]!.diameter.inMillimeters, 40, reason: id);
+      expect(
+          sTied[id]!.diameter.inMillimeters, sAlone[id]!.diameter.inMillimeters,
+          reason: id);
+    }
+    // A VTR drawn as a run sizes the stack exactly as a VTR riser does.
+    final riserVtr = _twoStacks(header: false, dfuA: 19, dfuB: 2);
+    final sRiser = autoSizeNetwork(riserVtr.net, const SizingContext(),
+        leafDemand: const {}, nodeDrainageUnits: riserVtr.dfu);
+    for (final id in ['vA1', 'vA2', 'vA3', 'vB1', 'vB2', 'vB3']) {
+      expect(sAlone[id]!.diameter.inMillimeters,
+          sRiser[id]!.diameter.inMillimeters,
+          reason: id);
+    }
+  });
+
+  test(
+      'two headers between the same stacks (relief + roof header): the '
+      'loop-closing header never thins the larger stack', () {
+    // Round 26 r4 — A 10 DFU/floor, B 1, headers B -> A at floors 1 and 3,
+    // VTR on A only. A alone: 32-DFU vent basis (the soil stack's 40 less
+    // the foot's own seed) ⇒ DN65 (24 < 32 <= 48). The loop-CLOSING header
+    // carries only the closing rule's conservative 'larger adjacent load';
+    // it used to be added to A's header load and subtracted from A's
+    // shared risers (vA1..vA3 on 20/20/22 DFU ⇒ DN50).
+    final alone = _twoStacks(header: false, dfuA: 10, dfuB: 1);
+    final tied = _twoStacks(
+        header: true,
+        headerFloor: 3,
+        extraHeaderFloors: [1],
+        vtrA: true,
+        vtrB: false,
+        dfuA: 10,
+        dfuB: 1);
+    final sAlone = autoSizeNetwork(alone.net, const SizingContext(),
+        leafDemand: const {}, nodeDrainageUnits: alone.dfu);
+    final sTied = autoSizeNetwork(tied.net, const SizingContext(),
+        leafDemand: const {}, nodeDrainageUnits: tied.dfu);
+    for (final id in ['vA1', 'vA2', 'vA3']) {
+      expect(sAlone[id]!.diameter.inMillimeters, 65, reason: '$id alone');
+      expect(sTied[id]!.diameter.inMillimeters, 65, reason: id);
+    }
+    for (final id in ['vB1', 'vB2', 'vB3']) {
+      expect(sTied[id]!.diameter.inMillimeters, 40, reason: id);
+    }
+  });
+
+  test(
+      'property: one or two headers x direction x VTR placement x VTR as '
+      'riser or run — a VTR-less stack keeps its own size, a vented one '
+      'below the lowest junction (seeded)', () {
+    final rnd = math.Random(2604);
+    for (var trial = 0; trial < 80; trial++) {
+      final a = 1.0 + rnd.nextInt(20);
+      final b = 1.0 + rnd.nextInt(20);
+      final hf = 1 + rnd.nextInt(3);
+      final extra = <int>[
+        if (rnd.nextBool())
+          for (final f in [1, 2, 3])
+            if (f != hf) f,
+      ]..shuffle(rnd);
+      final extraHeaders = extra.take(1).toList();
+      final mirror = rnd.nextBool();
+      final vtrRun = rnd.nextBool();
+      final pick = rnd.nextInt(3);
+      final vtrA = pick != 1;
+      final vtrB = pick != 0;
+      final alone = _twoStacks(header: false, dfuA: a, dfuB: b, vtrRun: vtrRun);
+      final tied = _twoStacks(
+          header: true,
+          mirror: mirror,
+          headerFloor: hf,
+          extraHeaderFloors: extraHeaders,
+          vtrRun: vtrRun,
+          vtrA: vtrA,
+          vtrB: vtrB,
+          dfuA: a,
+          dfuB: b);
+      final sAlone = autoSizeNetwork(alone.net, const SizingContext(),
+          leafDemand: const {}, nodeDrainageUnits: alone.dfu);
+      final sTied = autoSizeNetwork(tied.net, const SizingContext(),
+          leafDemand: const {}, nodeDrainageUnits: tied.dfu);
+      final low = [hf, ...extraHeaders].reduce(math.min);
+      final why = 'trial $trial hf=$hf extra=$extraHeaders mirror=$mirror '
+          'vtrRun=$vtrRun vtrA=$vtrA vtrB=$vtrB a=$a b=$b';
+      for (final (tag, vented) in [('A', vtrA), ('B', vtrB)]) {
+        for (var f = 1; f <= 3; f++) {
+          final id = 'v$tag$f';
+          final own = sAlone[id]!.diameter.inMillimeters;
+          final got = sTied[id]!.diameter.inMillimeters;
+          if (!vented || f <= low) {
+            expect(got, own, reason: '$why $id');
+          } else {
             expect(got, greaterThanOrEqualTo(own), reason: '$why $id');
           }
         }

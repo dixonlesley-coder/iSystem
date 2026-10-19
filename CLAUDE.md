@@ -1476,21 +1476,43 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   drawn (r2). Which end receives is read from the SOLVED vent tree (r3): the
   header's root-side endpoint receives, the other stack's air leaves through
   the header and it is drained — a dead stub above a mid-storey header (no
-  VTR of its own) never makes a stack 'receiving' (only a loop-closing header
-  falls back to 'a riser continues above'). An open VTR (a vent leaf at a
-  riser's upper end, joined by nothing else) is load-free — the second VTR of
-  a headered pair never takes the 2-DFU leaf default (r3). A single common
-  return check valve: the RETURN side is grown ONLY from each valve's
-  upstream node through draw-off-free, off-supply nodes over edges on no
-  shortest root -> draw-off path, and deferred with the valve whenever the
-  supply that remains is acyclic AND no walk edge lands on a DRAW-OFF node
-  (r3: a return meets the supply at a BARE node, the riser top; one teed from
-  a bare ring tee between two draw-off nodes is a ring segment) — so a
-  stub-fed ring main with draw-off on both legs and a drawn return, teed from
-  a fixture OR a bare tee, keeps Hardy–Cross (r2/r3). Conservative by
-  construction: a return and a ring whose tee nodes are all bare (fixtures on
-  branch stubs) are topologically identical, and that case still takes the
-  tree cut. Hot-water recirculation is PER COMPONENT
+  VTR of its own) never makes a stack 'receiving'. A loop-CLOSING header
+  (left out of the solved tree — a relief header below a roof header between
+  the same stacks) neither receives nor drains: its closing-rule load is a
+  conservative artifact, never subtracted from or bounding a stack (r4; it
+  used to thin a 40-DFU stack to DN50). An open VTR (a vent leaf at a
+  riser's upper end, or — r4 — a bare leaf reached by a RUN from a stack top
+  on the component's top storey, joined by nothing else) is load-free — the
+  second VTR of a headered pair never takes the 2-DFU leaf default — and a
+  run VTR is the stack's roof termination: it counts in the uniform stack
+  like a shared riser (its load less the header load entering the stack) and
+  never prints below the stack, so a run VTR sizes the stack exactly as a VTR
+  riser does. Pre-existing residual (r4): a vent component with NO VTR at all
+  sizes both headered stacks on the combined load (over-size on an invalid
+  design). RETURN check valves (r4, binding): when every cycle check valve
+  of a pressurized component is a RETURN valve its two edges are ALWAYS out
+  of the Hardy–Cross loop set and sized at zero draw-off, `flowFromId` in the
+  physical return direction (up-node -> valve -> down-node) — the Round-12
+  principle — whatever the return-side walk decides. The walk grows the
+  return side ONLY from each valve's upstream node through draw-off-free,
+  off-supply nodes over edges on no shortest root -> draw-off path; those
+  edges are deferred with the valve when the walk meets no DRAW-OFF node and
+  the remainder is a forest (hotel return trees teed at the riser top / a
+  bare branch tee keep their tree cut). When the walk meets a draw-off node
+  (a ring teed at a fixture or a bare tee between inline fixtures, a hotel
+  return teed AT or BEYOND an inline top fixture) the return side is not
+  grown and Hardy–Cross runs on the REMAINDER without the valve — never on
+  the network including it (r3 routed ~40 % of the peak forward through the
+  return valve and sized the heater feed one DN small). The walk heuristic
+  CANNOT discriminate a return riser from a ring segment — a hotel return
+  touching an inline top fixture and a ring whose tee-adjacent nodes are all
+  bare (fixtures on stubs, the commonest Run-tool drawing) are topologically
+  the same, and BOTH orientations of the ambiguity exist (the hotel then
+  splits draw-off up its return risers; the all-stub ring collapses to the
+  hop-count tree) — which is why the valve cut is unconditional: the heater
+  feed carries curve(total UBAP) and every valve edge 0 in every case; only
+  the ring-vs-return split of the ambiguous segment stays heuristic.
+  Hot-water recirculation is PER COMPONENT
   (`hotWaterRecircSystemsProvider`; one way / schedule row / report line each,
   a drawn HW pump takes its own system's duty; ONE primary = the largest
   recirc flow ∝ circulated + assumed-return length, in the provider AND
