@@ -1821,6 +1821,55 @@ Map<String, EdgeSizing> autoSizeNetwork(
         }
       }
 
+      // Round 27 r4 (orchestrator sign-off) — a ZERO-FLOW check valve (a
+      // classified RETURN, or a FEED the Hardy–Cross balance CLOSED) isolates
+      // the pipes behind it from every draw-off point. Those pipes are sized
+      // at ZERO flow (the DN15 minimum, fixture units 0) — never silently left
+      // out of the result because the balance (mech-props-6: an exactly-zero
+      // edge stays unsized) or the tree (a demand-free dead end) dropped
+      // them, which made the BOM / canvas / riser lose the return pipework
+      // depending only on whether the drawing was calibrated. Walked from
+      // each side of the valve over unsized / zero-flow pipes (never through
+      // another check valve), oriented in the valve's permitted direction:
+      // toward the valve on its inlet side, away from it on its outlet side.
+      // Pipes that already carry a size are left untouched.
+      void sizeZeroPockets(Iterable<_Cv> valves) {
+        if (valves.isEmpty) return;
+        final cAdj = <String, List<NetEdge>>{};
+        for (final e in componentEdges) {
+          (cAdj[e.fromId] ??= []).add(e);
+          (cAdj[e.toId] ??= []).add(e);
+        }
+        bool zero(NetEdge e) =>
+            (allFlows[e.id]?.cubicMetersPerSecond ?? 0.0).abs() <= 1e-15;
+        for (final c in valves) {
+          for (final (start, inletSide) in [
+            (c.upNode, true),
+            (c.downNode, false),
+          ]) {
+            final seen = <String>{start};
+            final stack = [start];
+            while (stack.isNotEmpty) {
+              final n = stack.removeLast();
+              for (final e in cAdj[n] ?? const <NetEdge>[]) {
+                final m = e.fromId == n ? e.toId : e.fromId;
+                if (m == c.id ||
+                    net.nodeById(m)?.component == NodeComponent.checkValve ||
+                    !zero(e)) {
+                  continue;
+                }
+                if (!allFlows.containsKey(e.id)) {
+                  allFlows[e.id] = const FlowRate(0);
+                  edgeFlowFrom[e.id] = inletSide ? m : n;
+                  if (useUbap) fixtureUnitsOut?[e.id] = 0;
+                }
+                if (seen.add(m)) stack.add(m);
+              }
+            }
+          }
+        }
+      }
+
       // Round 12 (mech-props-2 gravity-loop) — on the TREE path a looped
       // component's CLOSING edges (left out of the deterministic spanning
       // tree) used to go silently UNSIZED, the choice of which depending on
@@ -2048,11 +2097,31 @@ Map<String, EdgeSizing> autoSizeNetwork(
           }
         }
         zeroReturnValves();
+        // Round 27 r4 — a feed valve the balance left at exactly zero flow
+        // (closed against reverse pressure, or nothing to feed) is a CLOSED
+        // valve: treated exactly like a classified RETURN for output — both
+        // legs sized at zero in its permitted direction, the pipes it
+        // isolates sized at zero ([sizeZeroPockets]), and never the
+        // check-valve-feeds-ring advisory (it carries no draw-off, so the
+        // "second feed that carries draw-off" message would contradict the
+        // solve).
+        final closedValves = <_Cv>[];
+        for (final c in cvPlan?.feedValves ?? const <_Cv>[]) {
+          if (!closedFeed.containsKey(c.inE.id) &&
+              (balanced.edgeFlow[c.inE.id] ?? 0.0).abs() > 1e-12) {
+            continue;
+          }
+          closedFeed[c.inE.id] = c.upNode;
+          closedFeed[c.outE.id] = c.id;
+          closedValves.add(c);
+        }
         for (final en in closedFeed.entries) {
           allFlows[en.key] = const FlowRate(0);
           edgeFlowFrom[en.key] = en.value;
           if (useUbap) fixtureUnitsOut?[en.key] = 0;
         }
+        checkValveFeedsRingOut?.removeAll([for (final c in closedValves) c.id]);
+        sizeZeroPockets([...?cvPlan?.returnValves, ...closedValves]);
         continue;
       }
 
@@ -2425,6 +2494,29 @@ Map<String, EdgeSizing> autoSizeNetwork(
             parallelLegEdgeIdsOut?.add(id);
           }
         }
+      }
+
+      // Round 27 r4 — the tree path's zero-flow check valves (every RETURN,
+      // and a feed valve nothing downstream draws through) isolate the pipes
+      // behind them: size those at zero flow too (see [sizeZeroPockets]); a
+      // zero-flow feed valve is a closed valve, never the feeds-ring advisory.
+      if (cvPlan != null) {
+        bool zeroFlow(String id) =>
+            (allFlows[id]?.cubicMetersPerSecond ?? 0.0).abs() <= 1e-15;
+        final closedValves = [
+          for (final c in cvPlan.feedValves)
+            if (zeroFlow(c.inE.id) && zeroFlow(c.outE.id)) c,
+        ];
+        for (final c in closedValves) {
+          for (final (e, from) in [(c.inE, c.upNode), (c.outE, c.id)]) {
+            if (allFlows.containsKey(e.id)) continue;
+            allFlows[e.id] = const FlowRate(0);
+            edgeFlowFrom[e.id] = from;
+            if (useUbap) fixtureUnitsOut?[e.id] = 0;
+          }
+        }
+        checkValveFeedsRingOut?.removeAll([for (final c in closedValves) c.id]);
+        sizeZeroPockets([...cvPlan.returnValves, ...closedValves]);
       }
     }
   }
@@ -2941,12 +3033,18 @@ class _CheckValvePlan {
   /// return with its arrow drawn backwards produces (a judge-only advisory on
   /// hot water; `checkValveFeedsRingOut`).
   final Set<String> feedsRingValveIds;
+
+  /// Round 27 r4 — the RETURN valves themselves (oriented), so the sizer can
+  /// size the zero-flow pipes behind them ([returnValveFlowFrom] holds only
+  /// the two valve edges).
+  final List<_Cv> returnValves;
   const _CheckValvePlan(
     this.deferredEdgeIds,
     this.standbyLegs, [
     this.returnValveFlowFrom = const {},
     this.feedValves = const [],
     this.feedsRingValveIds = const {},
+    this.returnValves = const [],
   ]);
 }
 
@@ -2983,15 +3081,21 @@ typedef _Cv = ({
 ///     the same junction, or every leg carrying a pump), which keeps the
 ///     Round-13 standby-leg rule;
 ///  3. only an AMBIGUOUSLY drawn valve (both pipes into, or both out of, the
-///     valve node) keeps the Round-15 topological orientation (with every
-///     cycle valve cut the root-reachable side is the inlet; the Round-27
-///     return reading when both sides are reached; else an adjacent mover);
+///     valve node) is oriented topologically — Round 27 r4: read with ONLY
+///     ITSELF removed like rule 2 (strictly off every root -> draw-off path
+///     => the farther side is the inlet; else an adjacent mover; else a
+///     valve that only ties a path, the farther side again), the Round-15
+///     all-cut reading only as the last resort;
 ///  4. mixed sets: exactly the RETURN valves are zeroed, the rest are pipes.
 ///
 /// A set of returns that would cut a draw-off point off the source is a
 /// self-contradictory drawing (no water could reach it — every duty/standby
-/// leg drawn header -> valve -> pump): those valves fall back to the
-/// topological orientation of rule 3.
+/// leg drawn header -> valve -> pump): those valves (drawn or ambiguous)
+/// fall back to the Round-15 all-cut topological orientation.
+///
+/// Round 27 r4 — a valve that ends at zero flow (a RETURN, or a feed the
+/// sizer's Hardy–Cross balance closes) is output identically: the pipes it
+/// isolates are sized at zero flow by the sizer (`sizeZeroPockets`).
 _CheckValvePlan _classifyLoopCheckValves({
   required List<NetEdge> componentEdges,
   required String root,
@@ -3078,16 +3182,18 @@ _CheckValvePlan _classifyLoopCheckValves({
     }
   }
 
-  // Hop distance from [start] with every cycle valve cut.
-  Map<String, int> bfsCut(String start) {
+  // Hop distance from [start] with the edges [cutE] cut and the nodes
+  // [blocked] removed.
+  Map<String, int> hopsFrom(String start,
+      {Set<String> cutE = const {}, Set<String> blocked = const {}}) {
     final d = <String, int>{start: 0};
     final q = [start];
     for (var i = 0; i < q.length; i++) {
       final n = q[i];
       for (final e in adj[n] ?? const <NetEdge>[]) {
-        if (cut.contains(e.id)) continue;
+        if (cutE.contains(e.id)) continue;
         final m = other(e, n);
-        if (d.containsKey(m)) continue;
+        if (blocked.contains(m) || d.containsKey(m)) continue;
         d[m] = d[n]! + 1;
         q.add(m);
       }
@@ -3096,19 +3202,24 @@ _CheckValvePlan _classifyLoopCheckValves({
   }
 
   // (Rule 3, ambiguous drawing only.) True when a valve between the reached
-  // nodes [a] and [b] shortens or ties NO root -> draw-off path.
-  bool strictlyOffDrawOffPaths(String a, String b) {
+  // nodes [a] and [b] shortens or ties NO root -> draw-off path ([allowTies]:
+  // shortens none, a tie allowed), read on the hop distances [d0] from the
+  // root and [hops] from each side (the same graph, the valve itself absent).
+  bool strictlyOffDrawOffPaths(String a, String b, Map<String, int> d0,
+      Map<String, int> Function(String start) hops,
+      {bool allowTies = false}) {
     if (isDemand == null) return false;
-    final da = bfsCut(a), db = bfsCut(b);
+    final da = hops(a), db = hops(b);
     var any = false;
-    for (final MapEntry(key: x, value: d0) in dist.entries) {
+    for (final MapEntry(key: x, value: dx) in d0.entries) {
       if (x == root || !isDemand(x)) continue;
       any = true;
-      final viaAB = db[x] == null ? null : dist[a]! + 2 + db[x]!;
-      final viaBA = da[x] == null ? null : dist[b]! + 2 + da[x]!;
-      final via = [viaAB, viaBA].whereType<int>().fold<int?>(
-          null, (m, v) => m == null || v < m ? v : m);
-      if (via != null && via <= d0) return false;
+      final viaAB = db[x] == null ? null : d0[a]! + 2 + db[x]!;
+      final viaBA = da[x] == null ? null : d0[b]! + 2 + da[x]!;
+      final via = [viaAB, viaBA]
+          .whereType<int>()
+          .fold<int?>(null, (m, v) => m == null || v < m ? v : m);
+      if (via != null && (allowTies ? via < dx : via <= dx)) return false;
     }
     return any;
   }
@@ -3153,17 +3264,55 @@ _CheckValvePlan _classifyLoopCheckValves({
     );
   }
 
-  // Rule 3 — the Round-15 topological orientation (null = undecidable).
+  // The Round-15 topological orientation with EVERY cycle valve cut (null =
+  // undecidable) — the fallback for a self-contradictory set of drawn
+  // returns (duty/standby legs drawn header -> valve -> pump: the pump side
+  // is the one the root reaches with the valves cut).
   int? topologicalInlet(String id) {
     final es = adj[id]!;
     final a = other(es[0], id), b = other(es[1], id);
     final ra = dist.containsKey(a), rb = dist.containsKey(b);
     if (ra != rb) return ra ? 0 : 1;
-    if (ra && dist[a] != dist[b] && strictlyOffDrawOffPaths(a, b)) {
+    if (ra &&
+        dist[a] != dist[b] &&
+        strictlyOffDrawOffPaths(a, b, dist, (n) => hopsFrom(n, cutE: cut))) {
       return dist[a]! > dist[b]! ? 0 : 1;
     }
     if (isMover != null && isMover(a) != isMover(b)) return isMover(a) ? 0 : 1;
     return null;
+  }
+
+  // Rule 3 for an AMBIGUOUSLY drawn valve (Round 27 r4) — read with ONLY
+  // THAT VALVE removed (every other check valve a plain pipe, the principle
+  // rule 2 uses). Cutting every cycle valve let ANOTHER valve's cut decide:
+  // a heater discharge valve (H -> CVd -> M) isolated the root, so the only
+  // reached side of an ambiguous common return valve was the heater itself
+  // and the return read as a second feed (Hardy–Cross then pushed draw-off
+  // forward through it: heater feed curve(16) / 2). With only the valve
+  // itself gone both sides of a cycle valve are reached, and a valve
+  // strictly off every root -> draw-off path takes its FARTHER side as the
+  // inlet (RJ -> CV -> H, a return); else an adjacent mover is the inlet
+  // (a duty/standby pump leg); else a valve that SHORTENS no root ->
+  // draw-off path (it only ties one: a return teed at the top fixture,
+  // reached as far up the return riser as up the supply riser) is a return
+  // the same way; only then the all-cut reading.
+  int? ambiguousInlet(String id) {
+    final es = adj[id]!;
+    final a = other(es[0], id), b = other(es[1], id);
+    final d = hopsFrom(root, blocked: {id});
+    final ra = d.containsKey(a), rb = d.containsKey(b);
+    if (ra != rb) return ra ? 0 : 1;
+    Map<String, int> hops(String n) => hopsFrom(n, blocked: {id});
+    final farther = ra && d[a] != d[b] ? (d[a]! > d[b]! ? 0 : 1) : null;
+    if (farther != null && strictlyOffDrawOffPaths(a, b, d, hops)) {
+      return farther;
+    }
+    if (isMover != null && isMover(a) != isMover(b)) return isMover(a) ? 0 : 1;
+    if (farther != null &&
+        strictlyOffDrawOffPaths(a, b, d, hops, allowTies: true)) {
+      return farther;
+    }
+    return topologicalInlet(id);
   }
 
   // Rule 2 — the permitted direction points TOWARD the root.
@@ -3175,7 +3324,6 @@ _CheckValvePlan _classifyLoopCheckValves({
   }
 
   final cvs = <_Cv>[];
-  final drawn = <String>{};
   for (final id in cycleValves) {
     final es = adj[id]!;
     final ins = [
@@ -3185,9 +3333,8 @@ _CheckValvePlan _classifyLoopCheckValves({
     int? inlet;
     if (ins.length == 1) {
       inlet = ins.first; // rule 1: the drawn direction
-      drawn.add(id);
     } else {
-      inlet = topologicalInlet(id); // rule 3
+      inlet = ambiguousInlet(id); // rule 3
     }
     if (inlet == null) return none; // undecidable => Hardy–Cross
     cvs.add(oriented(id, inlet));
@@ -3212,7 +3359,10 @@ _CheckValvePlan _classifyLoopCheckValves({
   if (disconnectsDemand(returnIds)) {
     for (var i = 0; i < cvs.length; i++) {
       final c = cvs[i];
-      if (!returnIds.contains(c.id) || !drawn.contains(c.id)) continue;
+      // (Drawn or ambiguous alike: the self-contradictory set is re-read
+      // with every cycle valve cut — a pumpless duty/standby pair drawn
+      // ambiguously reads as two returns that isolate the header.)
+      if (!returnIds.contains(c.id)) continue;
       final inlet = topologicalInlet(c.id);
       if (inlet == null) continue;
       cvs[i] = oriented(c.id, inlet);
@@ -3386,7 +3536,6 @@ _CheckValvePlan _classifyLoopCheckValves({
     });
   }
 
-
   // The leg end of a valve: walk from [from] over [via] through plain
   // degree-2 nodes to the first junction / root / other valve.
   String legEnd(String from, NetEdge via) {
@@ -3525,7 +3674,8 @@ _CheckValvePlan _classifyLoopCheckValves({
     deferred = {...deferred, ...rp.deferredEdgeIds};
     returnFlowFrom = rp.returnValveFlowFrom;
   }
-  return _CheckValvePlan(deferred, legs, returnFlowFrom, feeds, feedsRing);
+  return _CheckValvePlan(
+      deferred, legs, returnFlowFrom, feeds, feedsRing, rets);
 }
 
 bool _isForest(List<(String, String)> edges) {

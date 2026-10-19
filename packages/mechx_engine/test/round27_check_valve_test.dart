@@ -81,8 +81,7 @@ Network _hotel({
         ..add(_e('b${r}_$f', 'S${r}_$f', 'fx${r}_$f'))
         ..add(f == 0
             ? _e('m$r', 'M', 'S${r}_0')
-            : _e('s${r}_$f', 'S${r}_${f - 1}', 'S${r}_$f',
-                k: EdgeKind.riser));
+            : _e('s${r}_$f', 'S${r}_${f - 1}', 'S${r}_$f', k: EdgeKind.riser));
     }
     if (ret) {
       for (var f = 0; f < 4; f++) {
@@ -128,8 +127,7 @@ Map<String, EdgeSizing> _size(Network net, {bool cal = false}) =>
               Floor('L4', Length(3.0)),
             ])
           : null,
-      calibrationBySheet:
-          cal ? const {'s1': ScaleCalibration(0.05)} : const {},
+      calibrationBySheet: cal ? const {'s1': ScaleCalibration(0.05)} : const {},
     );
 
 const _sni = SniProfile();
@@ -156,9 +154,13 @@ void main() {
       'feed is curve(16) DN25, riser bases curve(8) DN20, the return 0', () {
     for (final cal in [false, true]) {
       final open = _size(_hotel(ret: false, discharge: true), cal: cal);
-      for (final ids in [('CVd', 'CV'), ('CV', 'CVd'), ('A', 'Z'), ('Z', 'A')]) {
-        final s = _size(
-            _hotel(discharge: true, cvdId: ids.$1, cvId: ids.$2),
+      for (final ids in [
+        ('CVd', 'CV'),
+        ('CV', 'CVd'),
+        ('A', 'Z'),
+        ('Z', 'A')
+      ]) {
+        final s = _size(_hotel(discharge: true, cvdId: ids.$1, cvId: ids.$2),
             cal: cal);
         final why = 'cal=$cal ids=$ids';
         for (final id in ['hm1', 'hm2']) {
@@ -216,8 +218,7 @@ void main() {
         final why = 'cal=$cal discharge=$discharge';
         final trunk = discharge ? 'hm1' : 'hm';
         expect(
-            s[trunk]!.flow.inLitersPerSecond +
-                s['ch']!.flow.inLitersPerSecond,
+            s[trunk]!.flow.inLitersPerSecond + s['ch']!.flow.inLitersPerSecond,
             closeTo(_curve(16), 1e-9),
             reason: why);
         expect(s['ch']!.flow.inLitersPerSecond, greaterThan(0), reason: why);
@@ -269,6 +270,235 @@ void main() {
   });
 
   test(
+      'r4 regression: an AMBIGUOUS return valve beside a heater DISCHARGE '
+      'valve is read with only itself removed — a return, supply == open '
+      'network, no feeds-ring advisory', () {
+    // H -> CVd -> M plus RJ -> CV and H -> CV (no drawn direction). r3 read
+    // rule 3 with EVERY cycle valve cut: CVd's cut isolated H, the only
+    // reached side of CV was H itself, so CV read H -> CV -> RJ (a FEED) and
+    // Hardy–Cross pushed draw-off forward through it (heater feed 0.3237 L/s
+    // instead of curve(16) = 0.6533 L/s). With only CV removed (CVd a plain
+    // pipe) both sides are reached; CV shortens no root -> draw-off path (via
+    // CV every fixture is reached up the RETURN riser, strictly farther), so
+    // its FARTHER side RJ is the inlet: RJ -> CV -> H, a return with zero
+    // draw-off. [tee]: the returns teed at the top fixture, which is then
+    // reached as far through CV as up the supply riser (7 hops each way):
+    // CV shortens no path (it only ties one), so it reads the same way.
+    for (final (risers, tee) in [
+      (2, false),
+      (3, false),
+      (2, true),
+      (3, true)
+    ]) {
+      for (final cal in [false, true]) {
+        final base = _hotel(risers: risers, discharge: true, fixtureTee: tee);
+        final net = Network(nodes: base.nodes, edges: [
+          for (final e in base.edges)
+            if (e.id == 'ch') _e('ch', 'H', 'CV') else e,
+        ]);
+        final ring = <String>{};
+        final s = autoSizeNetwork(
+          net,
+          const SizingContext(),
+          leafDemand: const {ServiceType.hotWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.hotWater: 2.0},
+          building: cal ? _levels : null,
+          calibrationBySheet:
+              cal ? const {'s1': ScaleCalibration(0.05)} : const {},
+          checkValveFeedsRingOut: ring,
+        );
+        final open = _size(_hotel(risers: risers, ret: false, discharge: true),
+            cal: cal);
+        final why = 'risers=$risers tee=$tee cal=$cal';
+        for (final id in ['hm1', 'hm2']) {
+          expect(s[id]!.flow.inLitersPerSecond,
+              closeTo(_curve(8.0 * risers), 1e-9),
+              reason: '$why $id');
+        }
+        for (var r = 0; r < risers; r++) {
+          expect(s['m$r']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9),
+              reason: '$why m$r');
+          expect(s['m$r']!.diameter.inMillimeters, 20, reason: '$why m$r');
+        }
+        for (final id in open.keys) {
+          expect(s[id]!.flow.inLitersPerSecond,
+              closeTo(open[id]!.flow.inLitersPerSecond, 1e-9),
+              reason: '$why $id');
+        }
+        expect(s['ch']!.flow.inLitersPerSecond, 0, reason: why);
+        expect(s['jc']!.flow.inLitersPerSecond, 0, reason: why);
+        expect(s['jc']!.flowFromId, 'RJ', reason: why);
+        expect(s['ch']!.flowFromId, 'CV', reason: why);
+        // Neither the return valve nor the heater's own discharge valve is a
+        // "second feed into a ring".
+        expect(ring, isEmpty, reason: why);
+      }
+    }
+  });
+
+  /// One supply riser H -> S0..S3 (2-UBAP fixture per floor) with a return
+  /// valve at the TOP of the return riser: S3 -> CV -> R3 -> R2 -> R1 -> R0
+  /// -> H. [bends] routes R0 -> K0 -> K1 -> K2 -> H.
+  Network topReturn({bool bends = false}) {
+    final nodes = <NetNode>[_n('H', 0, 0, role: NodeRole.plant)];
+    final edges = <NetEdge>[];
+    for (var f = 0; f < 4; f++) {
+      nodes
+        ..add(_n('S$f', 100, 0, floor: f))
+        ..add(_n('fx$f', 140, 0, floor: f, role: NodeRole.fixture))
+        ..add(_n('R$f', 120, 0, floor: f));
+      edges.add(_e('b$f', 'S$f', 'fx$f'));
+      edges.add(f == 0
+          ? _e('m', 'H', 'S0')
+          : _e('s$f', 'S${f - 1}', 'S$f', k: EdgeKind.riser));
+      if (f > 0) edges.add(_e('r$f', 'R$f', 'R${f - 1}', k: EdgeKind.riser));
+    }
+    nodes.add(_n('CV', 110, 0, floor: 3, c: NodeComponent.checkValve));
+    edges
+      ..add(_e('sc', 'S3', 'CV'))
+      ..add(_e('cr', 'CV', 'R3'));
+    if (bends) {
+      nodes
+        ..add(_n('K0', 90, 0))
+        ..add(_n('K1', 60, 0))
+        ..add(_n('K2', 30, 0));
+      edges
+        ..add(_e('k0', 'R0', 'K0'))
+        ..add(_e('k1', 'K0', 'K1'))
+        ..add(_e('k2', 'K1', 'K2'))
+        ..add(_e('rh', 'K2', 'H'));
+    } else {
+      edges.add(_e('rh', 'R0', 'H'));
+    }
+    return Network(nodes: nodes, edges: edges);
+  }
+
+  test(
+      'r4 regression: a return valve at the TOP of the return riser — a feed '
+      'the balance CLOSES is output exactly like a return: every return pipe '
+      'sized at zero (DN15, fu 0) calibrated or not, no feeds-ring advisory',
+      () {
+    // Rule 2 reads the valve on distances with only itself removed:
+    // calibrated (0.05 m/px, 3 m floors) S3 is 11 m from H and R3 13 m, and
+    // uncalibrated the hops tie (4 / 4) — either way a FEED, which the
+    // Hardy–Cross balance then CLOSES (the split would run against it). A
+    // closed valve carries no draw-off: the supply riser carries the open
+    // network's flows — m = 4 x 2 = 8 UBAP => curve(8) = 0.400 L/s (DN20),
+    // s1 / s2 / s3 curve(6) / curve(4) / curve(2) — and the return pipes
+    // behind it are pipework the installer buys: present, zero flow, the DN15
+    // minimum, fixture units 0, oriented in the valve's permitted direction
+    // (away from it on its outlet side). r3 dropped them from the result (an
+    // exactly-zero balanced edge stays unsized) and named the valve "a second
+    // feed that carries draw-off".
+    for (final bends in [false, true]) {
+      final returnIds = [
+        'sc',
+        'cr',
+        'r3',
+        'r2',
+        'r1',
+        if (bends) ...['k0', 'k1', 'k2'],
+        'rh',
+      ];
+      final from = <bool, Map<String, String?>>{};
+      for (final cal in [false, true]) {
+        final ring = <String>{};
+        final fu = <String, double>{};
+        final s = autoSizeNetwork(
+          topReturn(bends: bends),
+          const SizingContext(),
+          leafDemand: const {ServiceType.hotWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.hotWater: 2.0},
+          building: cal ? _levels : null,
+          calibrationBySheet:
+              cal ? const {'s1': ScaleCalibration(0.05)} : const {},
+          checkValveFeedsRingOut: ring,
+          fixtureUnitsOut: fu,
+        );
+        final why = 'bends=$bends cal=$cal';
+        expect(s['m']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9),
+            reason: why);
+        expect(s['m']!.diameter.inMillimeters, 20, reason: why);
+        for (final (id, ubap) in [('s1', 6.0), ('s2', 4.0), ('s3', 2.0)]) {
+          expect(s[id]!.flow.inLitersPerSecond, closeTo(_curve(ubap), 1e-9),
+              reason: '$why $id');
+        }
+        for (final id in returnIds) {
+          expect(s[id], isNotNull, reason: '$why $id');
+          expect(s[id]!.flow.inLitersPerSecond, 0, reason: '$why $id');
+          expect(s[id]!.diameter.inMillimeters, 15, reason: '$why $id');
+          expect(fu[id], 0, reason: '$why $id');
+        }
+        expect(s['sc']!.flowFromId, 'S3', reason: why);
+        expect(s['cr']!.flowFromId, 'CV', reason: why);
+        expect(s['r3']!.flowFromId, 'R3', reason: why);
+        expect(s['rh']!.flowFromId, bends ? 'K2' : 'R0', reason: why);
+        expect(ring, isEmpty, reason: why);
+        from[cal] = {for (final id in returnIds) id: s[id]!.flowFromId};
+      }
+      // Calibration never changes what the drawing outputs.
+      expect(from[true], from[false], reason: 'bends=$bends');
+    }
+  });
+
+  test(
+      'documented residual (inherent to the binding rule): a genuine second '
+      'feed whose leg is LONGER than the ring route to its entry reads as a '
+      'return — zeroed, but its leg is sized at zero, never left unsized', () {
+    // T -> M -> J1; ring J1 - A - B - J2 - J1; long leg M -> X -> Y -> Z ->
+    // CV2 -> J2. With only CV2 removed J2 is 3 hops from T (via J1) and Z 4,
+    // so CV2's drawn direction points TOWARD the source => a RETURN (rule
+    // 2). Topology alone cannot tell this from a recirculation return: the
+    // whole curve(8) = 0.400 L/s enters by m1 (plain pipes would split it
+    // 0.1424 / 0.0576). Recorded in CLAUDE.md / §15; the zero leg is still
+    // pipework, so x1..x3 are sized at zero (DN15, fu 0).
+    NetEdge e(String id, String a, String b) =>
+        NetEdge(id: id, fromId: a, toId: b, service: ServiceType.coldWater);
+    final net = Network(nodes: [
+      _n('T', 0, 0, role: NodeRole.plant),
+      _n('M', 20, 0),
+      _n('J1', 40, 0),
+      _n('A', 60, -20),
+      _n('B', 80, -20),
+      _n('J2', 40, 20),
+      _n('fA', 60, -40, role: NodeRole.fixture),
+      _n('fB', 80, -40, role: NodeRole.fixture),
+      _n('X', 20, 40),
+      _n('Y', 20, 60),
+      _n('Z', 30, 60),
+      _n('CV2', 40, 40, c: NodeComponent.checkValve),
+    ], edges: [
+      e('tm', 'T', 'M'),
+      e('m1', 'M', 'J1'),
+      e('ja', 'J1', 'A'),
+      e('ab', 'A', 'B'),
+      e('bj', 'B', 'J2'),
+      e('jj', 'J2', 'J1'),
+      e('fa', 'A', 'fA'),
+      e('fb', 'B', 'fB'),
+      e('x1', 'M', 'X'),
+      e('x2', 'X', 'Y'),
+      e('x3', 'Y', 'Z'),
+      e('zc', 'Z', 'CV2'),
+      e('c2', 'CV2', 'J2'),
+    ]);
+    final fu = <String, double>{};
+    final s = autoSizeNetwork(net, const SizingContext(),
+        leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+        leafFixtureUnits: const {ServiceType.coldWater: 4.0},
+        fixtureUnitsOut: fu);
+    expect(s['m1']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9));
+    for (final id in ['x1', 'x2', 'x3', 'zc', 'c2']) {
+      expect(s[id], isNotNull, reason: id);
+      expect(s[id]!.flow.inLitersPerSecond, 0, reason: id);
+      expect(s[id]!.diameter.inMillimeters, 15, reason: id);
+      expect(fu[id], 0, reason: id);
+    }
+    expect(s['zc']!.flowFromId, 'Z');
+    expect(s['c2']!.flowFromId, 'CV2');
+  });
+
+  test(
       'residuals-4: a common return teed at the inline top fixture — every '
       'riser base carries curve(8) DN20, the returns carry no draw-off', () {
     for (final risers in [2, 3]) {
@@ -311,7 +541,8 @@ void main() {
       _n(cv1, 40, -20, c: plain ? null : NodeComponent.checkValve),
       _n(cv2, 40, 20, c: plain ? null : NodeComponent.checkValve),
       for (final (id, x, y) in ringNodes)
-        _n(id, x, y, role: id.startsWith('f') ? NodeRole.fixture : NodeRole.main),
+        _n(id, x, y,
+            role: id.startsWith('f') ? NodeRole.fixture : NodeRole.main),
     ], edges: [
       e('tm', 'T', 'M'),
       e('m1', 'M', cv1),
@@ -322,10 +553,10 @@ void main() {
     ]);
   }
 
-  Map<String, EdgeSizing> sizeCold(Network net) => autoSizeNetwork(
-      net, const SizingContext(),
-      leafDemand: const {ServiceType.coldWater: FlowRate(0)},
-      leafFixtureUnits: const {ServiceType.coldWater: 4.0});
+  Map<String, EdgeSizing> sizeCold(Network net) =>
+      autoSizeNetwork(net, const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 4.0});
 
   test(
       'r3 regression: a pumpless DUAL-FEED ring entered at two different '
@@ -353,11 +584,10 @@ void main() {
     ];
     final ref = sizeCold(dualFeed(ring, nodes, 'J1', 'J2', plain: true));
     for (final ids in [('CV1', 'CV2'), ('CV2', 'CV1')]) {
-      final s = sizeCold(
-          dualFeed(ring, nodes, 'J1', 'J2', cv1: ids.$1, cv2: ids.$2));
+      final s =
+          sizeCold(dualFeed(ring, nodes, 'J1', 'J2', cv1: ids.$1, cv2: ids.$2));
       expect(s['tm']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9));
-      expect(
-          s['m1']!.flow.inLitersPerSecond + s['m2']!.flow.inLitersPerSecond,
+      expect(s['m1']!.flow.inLitersPerSecond + s['m2']!.flow.inLitersPerSecond,
           closeTo(_curve(8), 1e-9));
       for (final id in ref.keys) {
         expect(s[id]!.flow.inLitersPerSecond,
@@ -405,15 +635,14 @@ void main() {
     ];
     final ref = sizeCold(dualFeed(ring, nodes, 'J1', 'J2', plain: true));
     for (final ids in [('CV1', 'CV2'), ('CV2', 'CV1')]) {
-      final s = sizeCold(
-          dualFeed(ring, nodes, 'J1', 'J2', cv1: ids.$1, cv2: ids.$2));
+      final s =
+          sizeCold(dualFeed(ring, nodes, 'J1', 'J2', cv1: ids.$1, cv2: ids.$2));
       for (final id in ref.keys) {
         expect(s[id]!.flow.inLitersPerSecond,
             closeTo(ref[id]!.flow.inLitersPerSecond, 1e-9),
             reason: '$ids $id');
       }
-      expect(
-          s['m1']!.flow.inLitersPerSecond + s['m2']!.flow.inLitersPerSecond,
+      expect(s['m1']!.flow.inLitersPerSecond + s['m2']!.flow.inLitersPerSecond,
           closeTo(_curve(8), 1e-9));
       expect(s['m2']!.flow.inLitersPerSecond, greaterThan(0));
       expect(s['c2']!.flow.inLitersPerSecond, greaterThan(0));
@@ -537,8 +766,8 @@ void main() {
         pipe('R$r', 'Q');
         valve('Q', 'T', 10, 60);
       }
-      final net = Network(
-          nodes: nodes, edges: [...edges]..shuffle(math.Random(trial)));
+      final net =
+          Network(nodes: nodes, edges: [...edges]..shuffle(math.Random(trial)));
 
       // Independent oracle: hop distances from T with only [blocked] gone.
       Map<String, int> hops(Set<String> blocked) {
@@ -574,7 +803,8 @@ void main() {
       // A drawing whose returns cut a fixture off the source is
       // self-contradictory (handled topologically) — outside this property.
       final dr = hops(towardRoot);
-      if (nodes.any((n) => n.role == NodeRole.fixture && !dr.containsKey(n.id))) {
+      if (nodes
+          .any((n) => n.role == NodeRole.fixture && !dr.containsKey(n.id))) {
         skipped++;
         continue;
       }
@@ -590,8 +820,11 @@ void main() {
       }
 
       for (final MapEntry(key: v, value: (i, o)) in valves.entries) {
-        // (An exactly zero-flow ring pipe is left unsized: flow 0.)
+        // Round 27 r4 — every classified valve is sized, closed or open
+        // (never silently left out of the result).
         final inS = sOf(i, v), outS = sOf(v, o);
+        expect(inS, isNotNull, reason: 'trial $trial valve $v in');
+        expect(outS, isNotNull, reason: 'trial $trial valve $v out');
         final qIn = inS?.flow.inLitersPerSecond ?? 0.0;
         final qOut = outS?.flow.inLitersPerSecond ?? 0.0;
         final why = 'trial $trial valve $v ($i -> $o)';
