@@ -1757,8 +1757,14 @@ const double _sideNodeBottom = 14;
   final sideX = nodeX + _ovW + 60;
   var stackBottom = lvBottom;
   if (isMv) {
-    // MV: GENSET + CAPACITOR BANK hang off the LV-main bus to the right
-    // (historic coordinates — declared-MV projects are byte-identical).
+    // MV: GENSET + CAPACITOR BANK hang off the LV-main bus to the right.
+    // Round 29 (drawings-3-4) — every side tie starts on a vertical COLLECTOR
+    // bus just right of the LV-main box, joined to the box at its mid-height,
+    // so the standby genset / PF bank / solar / battery are drawn CONNECTED
+    // to the board they serve (the ties used to start 12 units above / below
+    // the box, hanging in free air).
+    final collX = nodeX + _ovW + 20;
+    final tieYs = <double>[];
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
       final backupVa = gensetBackupDemandVa(project, result);
@@ -1781,8 +1787,9 @@ const double _sideNodeBottom = 14;
         prims.add(SldLabel(sideX + 34, gcy + 24, pct,
             size: 7.5, role: SldRole.source));
       }
-      prims.add(SldLine(nodeX + _ovW, gcy, sideX + 1, gcy,
+      prims.add(SldLine(collX, gcy, sideX + 1, gcy,
           weight: SldWeight.medium, role: SldRole.source));
+      tieYs.add(gcy);
     }
     // CAPACITOR BANK: drawn ONLY when a real bank is specified (kvar > 0).
     // Round 14 (elec-building-sim-5) — the historic "any distributed source ⇒
@@ -1797,8 +1804,11 @@ const double _sideNodeBottom = 14;
           size: 8.5, bold: true, role: SldRole.source));
       prims.add(SldLabel(sideX + 34, cy + 12, capSub,
           size: 7.5, role: SldRole.source));
-      prims.add(SldLine(nodeX + _ovW, cy, sideX + 14, cy,
+      // The tie lands on the bank's TOP LEAD (an L into the lead), never
+      // sideways between its plates.
+      prims.add(SldLine(collX, cy - 11, sideX + 14, cy - 11,
           weight: SldWeight.medium, role: SldRole.source));
+      tieYs.add(cy - 11);
       // Round 10 (elec-drawing-props-1) — the side stack counts toward the
       // spine height (the LV-branch idiom): the sub-label baseline sits at
       // cy + 12 (+ its descent), below the glyph's ±11.
@@ -1814,8 +1824,9 @@ const double _sideNodeBottom = 14;
           size: 8.5, bold: true, role: SldRole.source));
       prims.add(SldLabel(sideX + 34, sideY + 12, sub,
           size: 7.5, role: SldRole.source));
-      prims.add(SldLine(nodeX + _ovW, sideY, sideX + 3, sideY,
+      prims.add(SldLine(collX, sideY, sideX + 3, sideY,
           weight: SldWeight.medium, role: SldRole.source));
+      tieYs.add(sideY);
       stackBottom = math.max(stackBottom, sideY + _sideNodeBottom);
       sideY += 54;
     }
@@ -1827,9 +1838,22 @@ const double _sideNodeBottom = 14;
           size: 8.5, bold: true, role: SldRole.source));
       prims.add(SldLabel(sideX + 34, sideY + 12, sub,
           size: 7.5, role: SldRole.source));
-      prims.add(SldLine(nodeX + _ovW, sideY, sideX + 5, sideY,
+      prims.add(SldLine(collX, sideY, sideX + 5, sideY,
           weight: SldWeight.medium, role: SldRole.source));
+      tieYs.add(sideY);
       stackBottom = math.max(stackBottom, sideY + _sideNodeBottom);
+    }
+    if (tieYs.isNotEmpty) {
+      // The box -> collector stub at the LV main's mid-height, and the
+      // collector spanning every tie (and that stub).
+      prims.add(SldLine(nodeX + _ovW, lvMidY, collX, lvMidY,
+          weight: SldWeight.medium, role: SldRole.source));
+      final top = math.min(lvMidY, tieYs.reduce(math.min));
+      final bottom = math.max(lvMidY, tieYs.reduce(math.max));
+      if (bottom > top) {
+        prims.add(SldLine(collX, top, collX, bottom,
+            weight: SldWeight.medium, role: SldRole.source));
+      }
     }
   } else {
     // LV: no LV-main box to hang off — the side sources drop from a short
@@ -3233,9 +3257,14 @@ SldSheet buildElectricalRiser({
     }
     // The column ends 24 units left of the floor gutter; its feed point sits
     // 10 units above the spine root's own supply row.
+    // Round 29 (drawings-3-5) — the WHOLE spine stack (the capacitor / solar
+    // / battery side nodes hang below the LV main, to the right of the feed)
+    // clears that row: the lead rides 10 units below the stack's lowest
+    // glyph, never through the capacitor's plates. A spine with no side node
+    // below its LV main (height == feedY) is unchanged.
     final rowY = busTrackOf['s:$spineRoot']!;
     final double dx = -24 - (sMaxX.isFinite ? sMaxX : 0.0);
-    final dy = rowY - 10 - raw.feedY;
+    final dy = rowY - 10 - math.max(raw.feedY, raw.height);
     final shifted = [for (final pr in raw.prims) _shiftPrim(pr, dx, dy)];
     spine = (
       prims: shifted,

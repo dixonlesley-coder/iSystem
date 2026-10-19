@@ -262,6 +262,7 @@ List<RunScheduleRow> buildRunSchedule({
   required Map<String, EdgeSizing> sizing,
   required Map<String, Length> edgeLengths,
   Map<String, double> edgeFixtureUnits = const {},
+  BuildingLevels? building,
 }) {
   final drawnIndex = <String, int>{
     for (var i = 0; i < net.edges.length; i++) net.edges[i].id: i,
@@ -277,7 +278,7 @@ List<RunScheduleRow> buildRunSchedule({
       return drawnIndex[a.id]!.compareTo(drawnIndex[b.id]!);
     });
 
-  final tags = elementTags(net);
+  final tags = elementTags(net, building: building);
   final rows = <RunScheduleRow>[];
   for (final e in ordered) {
     final s = sizing[e.id]!;

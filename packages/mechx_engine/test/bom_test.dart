@@ -699,10 +699,12 @@ void main() {
       // N13: the tag column sits right after kind, before the floor column.
       expect(lines.first,
           'service,kind,tag,floor,nominal_size_mm,material,length_m,segments');
-      // Floor 0 → human 1 (tag CW-F1), floor 1 → human 2 (CW-F2), riser → the
-      // stack tag CW-R1 with an empty floor cell (all PPR).
-      expect(lines, contains('coldWater,run,CW-F1,1,25,PPR,5.00,1'));
-      expect(lines, contains('coldWater,run,CW-F2,2,25,PPR,3.00,1'));
+      // Floor 0 → human 1, floor 1 → human 2 in the floor column; Round 29 —
+      // the TAG reads the building's ground-relative level (ground index 0:
+      // floor 0 = GF, floor 1 = L1), riser → the stack tag CW-R1 with an
+      // empty floor cell (all PPR).
+      expect(lines, contains('coldWater,run,CW-GF,1,25,PPR,5.00,1'));
+      expect(lines, contains('coldWater,run,CW-L1,2,25,PPR,3.00,1'));
       expect(lines, contains('coldWater,riser,CW-R1,,50,PPR,3.50,1'));
     });
 
@@ -727,17 +729,18 @@ void main() {
         building: _building,
         groupByFloor: true,
       );
-      // Runs (floor-grouped): service code + 1-based floor.
+      // Runs (floor-grouped): service code + the building's ground-relative
+      // level (Round 29: GF, then L1 — the sheet-title numbering).
       expect(
           grouped
               .singleWhere((l) => l.kind == EdgeKind.run && l.floorIndex == 0)
               .tag,
-          'CW-F1');
+          'CW-GF');
       expect(
           grouped
               .singleWhere((l) => l.kind == EdgeKind.run && l.floorIndex == 1)
               .tag,
-          'CW-F2');
+          'CW-L1');
       // Riser: its per-service stack tag (same as riserTags), never a floor tag.
       expect(grouped.singleWhere((l) => l.kind == EdgeKind.riser).tag, 'CW-R1');
 

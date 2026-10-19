@@ -11,7 +11,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
-    show riserServiceCode, riserTags;
+    show floorLocatorToken, riserServiceCode, riserTags;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -297,7 +297,10 @@ List<BomLine> buildBom({
       final sorted = tags.toList()..sort();
       return sorted.join('/');
     }
-    return key.floorIndex == null ? code : '$code-F${key.floorIndex! + 1}';
+    // Round 29 (drawings-3-7) — the building's ground-relative locator.
+    return key.floorIndex == null
+        ? code
+        : '$code-${floorLocatorToken(key.floorIndex!, building)}';
   }
 
   final lines = [
