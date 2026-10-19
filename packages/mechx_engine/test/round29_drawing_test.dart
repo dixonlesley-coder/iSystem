@@ -41,7 +41,7 @@ typedef _Box = ({double minX, double minY, double maxX, double maxY});
 _Box _box(SldLabel l) => (
       minX: l.x,
       minY: l.y - l.size,
-      maxX: l.x + l.text.length * l.size * kMechRiserLabelCharW,
+      maxX: l.x + mechRiserLabelWidth(l.text, l.size),
       maxY: l.y,
     );
 

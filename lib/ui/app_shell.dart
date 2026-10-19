@@ -223,9 +223,24 @@ class _AppShellState extends ConsumerState<AppShell> {
     // the (one-shot) nudge fires there too — acceptable, since the sizes shown
     // on the plan really were just auto-computed. AppShell is the
     // always-mounted host; the guard itself lives in `firstAutoSizeNudgeProvider`.
+    //
+    // Round 32 r2 — the Notifier write is DEFERRED to a microtask. The
+    // listener fires synchronously whenever `sizingProvider` first computes,
+    // and that first computation can happen INSIDE another provider's build
+    // (any derived provider — downfeed / SNI-minimum / advisories — that is
+    // flushed before a widget reads sizing). Writing a Notifier there trips
+    // Riverpod's "providers may not modify other providers during their
+    // initialization" assertion, and because the dependent flush order walks
+    // a hash map it did so nondeterministically. A microtask always runs
+    // after the current build/flush, so no provider build can ever write the
+    // nudge state.
     ref.listen(sizingProvider, (previous, next) {
       if ((previous == null || previous.isEmpty) && next.isNotEmpty) {
-        ref.read(firstAutoSizeNudgeProvider.notifier).maybeFire(next.length);
+        final count = next.length;
+        Future.microtask(() {
+          if (!mounted) return;
+          ref.read(firstAutoSizeNudgeProvider.notifier).maybeFire(count);
+        });
       }
     });
     // A2: latch "Building visited" the first time the engineer opens the

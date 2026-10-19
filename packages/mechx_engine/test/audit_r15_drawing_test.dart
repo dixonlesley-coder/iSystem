@@ -24,7 +24,7 @@ typedef _Box = ({double minX, double minY, double maxX, double maxY});
 _Box _labelBox(SldLabel l) => (
       minX: l.x,
       minY: l.y - l.size,
-      maxX: l.x + l.text.length * l.size * kMechRiserLabelCharW,
+      maxX: l.x + mechRiserLabelWidth(l.text, l.size),
       maxY: l.y,
     );
 
@@ -179,7 +179,7 @@ void main() {
           .whereType<SldLabel>()
           .firstWhere((l) => l.text == 'U');
       // The union bars sit just above the U caption, centred on its glyph.
-      final cx = u.x + 'U'.length * u.size * kMechRiserLabelCharW / 2;
+      final cx = u.x + mechRiserLabelWidth('U', u.size) / 2;
       final bars = s.prims.whereType<SldLine>().where((l) =>
           l.x1 == l.x2 &&
           (l.x1 - cx).abs() <= 3 &&

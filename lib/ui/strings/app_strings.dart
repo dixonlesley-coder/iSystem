@@ -726,7 +726,13 @@ enum StringKey {
   issueDownfeedBelowTargetTitle,
   issueDownfeedBelowTargetMessage,
   issueUpfeedBelowTargetTitle,
-  issueUpfeedBelowTargetMessage, // {floor} {residual} {target}
+  issueUpfeedBelowTargetMessage, // {floor} {residual} {sni} {target}
+  // Round 32 (binding-1) — SNI minimum met, below the comfort target (info).
+  issueDownfeedBelowComfortTitle,
+  issueDownfeedBelowComfortMessage, // {floor} {residual} {sni} {target} {head}
+  issueUpfeedBelowComfortTitle,
+  issueUpfeedBelowComfortMessage, // {floor} {residual} {sni} {target}
+  complianceDetailPressureSniMet,
   complianceCategorySupplyPressure,
   complianceDetailPressureMet,
   complianceCategoryDesignContent,
@@ -2149,15 +2155,25 @@ const Map<StringKey, String> _en = {
   StringKey.issueDownfeedBelowTargetTitle:
       'Roof tank cannot reach the target pressure',
   StringKey.issueDownfeedBelowTargetMessage:
-      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank, below the {target} kPa target. Raise the tank or draw a booster of about +{head} m.',
+      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank, below the SNI 8153 minimum of {sni} kPa (target {target} kPa). Raise the tank or draw a booster of about +{head} m.',
   StringKey.issueUpfeedBelowTargetTitle:
       'Pump supply falls below the target pressure',
   StringKey.issueUpfeedBelowTargetMessage:
-      'A drawn pressure-reducing valve leaves the worst-served fixture on "{floor}" at {residual} kPa, below the {target} kPa target. Raise the PRV setpoint or move the PRV below the floors it cannot serve.',
+      'A drawn pressure-reducing valve leaves the worst-served fixture on "{floor}" at {residual} kPa, below the SNI 8153 minimum of {sni} kPa (target {target} kPa). Raise the PRV setpoint or move the PRV below the floors it cannot serve.',
+  StringKey.issueDownfeedBelowComfortTitle:
+      'Roof tank meets the SNI minimum, below the comfort target',
+  StringKey.issueDownfeedBelowComfortMessage:
+      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank: the SNI 8153 minimum of {sni} kPa is met, but it is below the {target} kPa comfort target. A booster of about +{head} m is recommended.',
+  StringKey.issueUpfeedBelowComfortTitle:
+      'Pump supply meets the SNI minimum, below the comfort target',
+  StringKey.issueUpfeedBelowComfortMessage:
+      'A drawn pressure-reducing valve leaves the worst-served fixture on "{floor}" at {residual} kPa: the SNI 8153 minimum of {sni} kPa is met, but it is below the {target} kPa comfort target. Raising the PRV setpoint is recommended.',
   StringKey.complianceCategorySupplyPressure:
       'Supply pressure',
   StringKey.complianceDetailPressureMet:
       'target residual met',
+  StringKey.complianceDetailPressureSniMet:
+      'SNI minimum met; below comfort target (advisory)',
   StringKey.complianceCategoryDesignContent:
       'Design content',
   StringKey.complianceDetailNothingDesigned:
@@ -3643,15 +3659,25 @@ const Map<StringKey, String> _id = {
   StringKey.issueDownfeedBelowTargetTitle:
       'Tangki atap tidak mencapai tekanan target',
   StringKey.issueDownfeedBelowTargetMessage:
-      'Fikstur terburuk di "{floor}" hanya menerima {residual} kPa dari tangki atap, di bawah target {target} kPa. Tinggikan tangki atau pasang booster sekitar +{head} m.',
+      'Fikstur terburuk di "{floor}" hanya menerima {residual} kPa dari tangki atap, di bawah minimum SNI 8153 sebesar {sni} kPa (target {target} kPa). Tinggikan tangki atau pasang booster sekitar +{head} m.',
   StringKey.issueUpfeedBelowTargetTitle:
       'Suplai pompa di bawah tekanan target',
   StringKey.issueUpfeedBelowTargetMessage:
-      'Katup penurun tekanan (PRV) yang digambar membuat fikstur terburuk di "{floor}" hanya menerima {residual} kPa, di bawah target {target} kPa. Naikkan setelan PRV atau pindahkan PRV ke bawah lantai yang tidak dapat dilayaninya.',
+      'Katup penurun tekanan (PRV) yang digambar membuat fikstur terburuk di "{floor}" hanya menerima {residual} kPa, di bawah minimum SNI 8153 sebesar {sni} kPa (target {target} kPa). Naikkan setelan PRV atau pindahkan PRV ke bawah lantai yang tidak dapat dilayaninya.',
+  StringKey.issueDownfeedBelowComfortTitle:
+      'Tangki atap memenuhi minimum SNI, di bawah target kenyamanan',
+  StringKey.issueDownfeedBelowComfortMessage:
+      'Fikstur terburuk di "{floor}" menerima {residual} kPa dari tangki atap: minimum SNI 8153 sebesar {sni} kPa terpenuhi, tetapi di bawah target kenyamanan {target} kPa. Disarankan booster sekitar +{head} m.',
+  StringKey.issueUpfeedBelowComfortTitle:
+      'Suplai pompa memenuhi minimum SNI, di bawah target kenyamanan',
+  StringKey.issueUpfeedBelowComfortMessage:
+      'Katup penurun tekanan (PRV) yang digambar membuat fikstur terburuk di "{floor}" menerima {residual} kPa: minimum SNI 8153 sebesar {sni} kPa terpenuhi, tetapi di bawah target kenyamanan {target} kPa. Disarankan menaikkan setelan PRV.',
   StringKey.complianceCategorySupplyPressure:
       'Tekanan suplai',
   StringKey.complianceDetailPressureMet:
       'tekanan sisa target tercapai',
+  StringKey.complianceDetailPressureSniMet:
+      'minimum SNI terpenuhi; di bawah target kenyamanan (saran)',
   StringKey.complianceCategoryDesignContent:
       'Isi desain',
   StringKey.complianceDetailNothingDesigned:

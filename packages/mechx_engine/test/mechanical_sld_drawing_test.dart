@@ -167,9 +167,9 @@ Map<String, EdgeSizing> _denseSizing() => {
     };
 
 /// Whether two labels' collision boxes intersect, sized with the builder's OWN
-/// per-char advance ([kMechRiserLabelCharW]) and the same baseline-up box model.
+/// label width ([mechRiserLabelWidth]) and the same baseline-up box model.
 bool _labelBoxesIntersect(SldLabel a, SldLabel b) {
-  double w(SldLabel l) => l.text.length * l.size * kMechRiserLabelCharW;
+  double w(SldLabel l) => mechRiserLabelWidth(l.text, l.size);
   final aMaxX = a.x + w(a), bMaxX = b.x + w(b);
   final aMinY = a.y - a.size, bMinY = b.y - b.size;
   return a.x < bMaxX && b.x < aMaxX && aMinY < b.y && bMinY < a.y;

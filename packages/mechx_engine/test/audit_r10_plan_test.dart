@@ -542,7 +542,7 @@ void main() {
           stubs++;
           for (final l in labels) {
             if (identical(l, v)) continue;
-            final w = l.text.length * l.size * kMechRiserLabelCharW;
+            final w = mechRiserLabelWidth(l.text, l.size);
             expect(
                 _segCrossesBox(stub.x1, stub.y1, stub.x2, stub.y2, l.x,
                     l.y - l.size, l.x + w, l.y),

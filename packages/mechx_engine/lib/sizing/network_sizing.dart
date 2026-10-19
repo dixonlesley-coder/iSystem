@@ -28,6 +28,7 @@ import '../standards/sni.dart';
 import '../units.dart';
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
+import 'ejector.dart' as ejector;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
     show
@@ -1332,6 +1333,161 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Map<String, CheckValveAmbiguity>? checkValveAmbiguousOut,
   Set<String>? checkValveAgainstPumpOut,
   Set<String>? moverAgainstBalanceOut,
+  Set<String>? airIntakeLeavesOut,
+}) {
+  // Round 32 (binding-2) — a DUPLEX sewage ejector set (PIT -> EJ / EJ2 ->
+  // header) is duty / standby, never a gravity ring: the standby legs are
+  // taken OUT of the solve (so no closing edge, no `loopUnbalanced`, no
+  // 0-DFU DN40 standby discharge), the network is sized through the duty
+  // leg, and each standby leg MIRRORS the duty leg edge by edge (size,
+  // fixture units, flow orientation pump -> header) and is recorded on
+  // [parallelLegEdgeIdsOut] so a consumer summing a set flow reads it once.
+  final sets = net.edges.any((e) => e.service == ServiceType.drainage)
+      ? ejector.duplexEjectorSets(net)
+      : const <ejector.DuplexEjectorSet>[];
+  final standbyIds = <String>{
+    for (final st in sets)
+      for (final leg in st.standby) ...leg.edgeIds,
+  };
+  final solveNet = standbyIds.isEmpty
+      ? net
+      : Network(
+          nodes: net.nodes,
+          edges: [
+            for (final e in net.edges)
+              if (!standbyIds.contains(e.id)) e,
+          ]);
+  final result = _autoSizeNetworkCore(
+    solveNet,
+    ctx,
+    leafDemand: leafDemand,
+    leafFixtureUnits: leafFixtureUnits,
+    nodeFixtureUnits: nodeFixtureUnits,
+    nodeDrainageUnits: nodeDrainageUnits,
+    nodeFlowDemand: nodeFlowDemand,
+    sizeOverrides: sizeOverrides,
+    sprinklerDemandCap: sprinklerDemandCap,
+    hydrantDesignFlow: hydrantDesignFlow,
+    flushSystem: flushSystem,
+    flushValveNodeIds: flushValveNodeIds,
+    building: building,
+    calibrationBySheet: calibrationBySheet,
+    mounting: mounting,
+    waterClosetNodeIds: waterClosetNodeIds,
+    fixtureUnitsOut: fixtureUnitsOut,
+    parallelLegEdgeIdsOut: parallelLegEdgeIdsOut,
+    checkValveFeedsRingOut: checkValveFeedsRingOut,
+    checkValveAmbiguousOut: checkValveAmbiguousOut,
+    checkValveAgainstPumpOut: checkValveAgainstPumpOut,
+    moverAgainstBalanceOut: moverAgainstBalanceOut,
+    airIntakeLeavesOut: airIntakeLeavesOut,
+  );
+  if (!net.edges.any((e) => e.service == ServiceType.drainage)) return result;
+
+  // Round 32 (binding-2) — the solids-handling bore floor of every drawn
+  // ejector's force main (pump -> header -> riser to the sewer junction):
+  // never below [ejector.kEjectorForceMainMinBoreMm] whatever the DFU table
+  // gives a small pit (`// VERIFY notAnSniClause`). The DFU / WC / trap
+  // floors already applied stay (the larger wins); a hand override is never
+  // touched (its own `belowCodeMinimum` judge applies).
+  const minBore = ejector.kEjectorForceMainMinBoreMm;
+  for (final pumpId in ejector.drawnEjectorPumpIds(solveNet)) {
+    for (final step in ejector.ejectorForceMainSteps(solveNet, pumpId)) {
+      final id = step.edge.id;
+      final sized = result[id];
+      if (sized == null ||
+          sizeOverrides.containsKey(id) ||
+          sized.service != ServiceType.drainage ||
+          sized.diameter.inMillimeters >= minBore - 1e-9) {
+        continue;
+      }
+      final raised = _sanitaryEdgeSizing(step.edge, Diameter.mm(minBore), ctx,
+          codeMinimum: Diameter.mm(minBore),
+          overCapacity: sized.overCapacity);
+      result[id] = raised
+          .withGravityFlags(raised: sized.stackRaisedForBranch)
+          .withLoopUnbalanced(sized.loopUnbalanced)
+          .withFlowFrom(sized.flowFromId);
+    }
+  }
+
+  for (final st in sets) {
+    final duty = st.duty;
+    EdgeSizing? dutyAt(List<String> ids, int i) {
+      if (ids.isEmpty) return null;
+      return result[ids[i < ids.length ? i : ids.length - 1]];
+    }
+
+    void mirror(String id, String fromId, EdgeSizing? src, String? srcId) {
+      final edge = net.edgeById(id);
+      if (src == null || edge == null) return;
+      var m = EdgeSizing(
+        edgeId: id,
+        service: edge.service,
+        flow: src.flow,
+        diameter: src.diameter,
+        velocity: src.velocity,
+        width: src.width,
+        height: src.height,
+        overCapacity: src.overCapacity,
+        stackRaisedForBranch: src.stackRaisedForBranch,
+        flowFromId: fromId,
+        selfCleansingOk: src.selfCleansingOk,
+        loopUnbalanced: src.loopUnbalanced,
+        demandCurveExtrapolated: src.demandCurveExtrapolated,
+        belowCodeMinimum: src.belowCodeMinimum,
+      );
+      final override = sizeOverrides[id];
+      if (override != null) {
+        m = applySizeOverride(m, override,
+                ctx: ctx, codeMinimum: m.diameter, minimumCompliant: m.diameter)
+            .withFlowFrom(fromId);
+      }
+      result[id] = m;
+      final u = srcId == null ? null : fixtureUnitsOut?[srcId];
+      if (u != null) fixtureUnitsOut?[id] = u;
+      parallelLegEdgeIdsOut?.add(id);
+    }
+
+    for (final leg in st.standby) {
+      mirror(leg.pitEdgeId, st.pitId, result[duty.pitEdgeId], duty.pitEdgeId);
+      for (var i = 0; i < leg.dischargeEdgeIds.length; i++) {
+        final srcIds = duty.dischargeEdgeIds;
+        final srcId = srcIds.isEmpty
+            ? null
+            : srcIds[i < srcIds.length ? i : srcIds.length - 1];
+        mirror(leg.dischargeEdgeIds[i], leg.dischargeFromIds[i],
+            dutyAt(srcIds, i), srcId);
+      }
+    }
+  }
+  return result;
+}
+
+Map<String, EdgeSizing> _autoSizeNetworkCore(
+  Network net,
+  SizingContext ctx, {
+  required Map<ServiceType, FlowRate> leafDemand,
+  Map<ServiceType, double> leafFixtureUnits = const {},
+  Map<String, double> nodeFixtureUnits = const {},
+  Map<String, double> nodeDrainageUnits = const {},
+  Map<String, FlowRate> nodeFlowDemand = const {},
+  Map<String, Diameter> sizeOverrides = const {},
+  FlowRate? sprinklerDemandCap,
+  FlowRate? hydrantDesignFlow,
+  FlushSystem flushSystem = FlushSystem.flushTank,
+  Set<String> flushValveNodeIds = const {},
+  BuildingLevels? building,
+  Map<String, ScaleCalibration> calibrationBySheet = const {},
+  MountingHeights mounting = const MountingHeights(),
+  Set<String> waterClosetNodeIds = const {},
+  Map<String, double>? fixtureUnitsOut,
+  Set<String>? parallelLegEdgeIdsOut,
+  Set<String>? checkValveFeedsRingOut,
+  Map<String, CheckValveAmbiguity>? checkValveAmbiguousOut,
+  Set<String>? checkValveAgainstPumpOut,
+  Set<String>? moverAgainstBalanceOut,
+  Set<String>? airIntakeLeavesOut,
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -1795,6 +1951,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
         ...airIntakeLeaves,
         ...ventTerminals,
       };
+      airIntakeLeavesOut?.addAll(airIntakeLeaves);
 
       // ── Looped (ring/grid) PRESSURIZED or AIR component → Hardy–Cross ───────
       // A tree has (nodes − 1) edges; more means parallel paths whose flow split
@@ -5693,4 +5850,61 @@ Map<String, double> _bridgeFarSideSums({
     if (low[top.node]! > tin[p]!) out[top.viaEdge!] = sub[top.node]!;
   }
   return out;
+}
+
+final _airOpenBoundaryCache = Expando<
+    (List<NetNode>, List<NetEdge>, int, int, Set<String>)>(
+  'airOpenBoundaryLeaves',
+);
+
+/// Round 32 (regression-air-open-boundary-exempts-undrawn-terminal-off-non-
+/// root-fcu) — the bare air leaves the SIZER treats as an air unit's open
+/// boundary (its outdoor-air INTAKE, or an extract unit's DISCHARGE): the
+/// load-free intake leaves of every air component, exactly as
+/// [autoSizeNetwork] decides them (only off the component's ROOT unit — a
+/// terminal FCU never roots while a source exists, Round 15, so a bare leaf
+/// off a non-root FCU is a default terminal, not an intake). The connectivity
+/// judge consults THIS set, so the loose-end check and the sizer can never
+/// disagree. Pure.
+///
+/// Memoised per [Network], re-keyed (like `Network.nodeById`'s index) on the
+/// node / edge LIST instances and their lengths: the lists are plain mutable
+/// `List`s, so a network whose lists were swapped or grown after the first
+/// call recomputes instead of serving a stale intake set.
+Set<String> airOpenBoundaryLeaves(Network net) {
+  final cached = _airOpenBoundaryCache[net];
+  if (cached != null &&
+      identical(cached.$1, net.nodes) &&
+      identical(cached.$2, net.edges) &&
+      cached.$3 == net.nodes.length &&
+      cached.$4 == net.edges.length) {
+    return cached.$5;
+  }
+  final airEdges = [
+    for (final e in net.edges)
+      if (e.service.regime == FlowRegime.air) e,
+  ];
+  final out = <String>{};
+  if (airEdges.isNotEmpty) {
+    autoSizeNetwork(
+      Network(nodes: net.nodes, edges: airEdges),
+      const SizingContext(),
+      // The intake decision depends on the topology + explicit loads only;
+      // a nominal per-terminal default keeps the solve non-degenerate.
+      leafDemand: const {
+        ServiceType.duct: FlowRate(0.05),
+        ServiceType.returnAir: FlowRate(0.05),
+        ServiceType.exhaust: FlowRate(0.05),
+      },
+      nodeFlowDemand: {
+        for (final n in net.nodes)
+          if (n.airflow != null) n.id: n.airflow!,
+      },
+      airIntakeLeavesOut: out,
+    );
+  }
+  final frozen = Set<String>.unmodifiable(out);
+  _airOpenBoundaryCache[net] =
+      (net.nodes, net.edges, net.nodes.length, net.edges.length, frozen);
+  return frozen;
 }

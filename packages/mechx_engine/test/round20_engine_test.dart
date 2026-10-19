@@ -155,7 +155,7 @@ void main() {
     // A LEADER ends on its label's box (the nearest point of it).
     final labels = sheet.prims.whereType<SldLabel>().toList();
     bool endsOnLabel(SldLine l) => labels.any((t) {
-          final w = t.text.length * t.size * kMechRiserLabelCharW;
+          final w = mechRiserLabelWidth(t.text, t.size);
           return l.x2 >= t.x - 0.01 &&
               l.x2 <= t.x + w + 0.01 &&
               l.y2 >= t.y - t.size - 0.01 &&

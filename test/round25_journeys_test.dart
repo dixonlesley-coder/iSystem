@@ -1,7 +1,9 @@
 // Round 25 — the user-journey + whole-building app findings:
 //
 //   whole-building-2-downfeed-underpressure-silent   a drawn roof tank below
-//     the target residual raises a Review warning + a failing compliance row.
+//     the SNI minimum raises a Review warning + a failing compliance row;
+//     between the SNI minimum and the comfort target it is an advisory and
+//     the row passes (Round 32, binding-1).
 //   ui-journeys-4-direct-mains-feed-contradiction   a meter-fed network is an
 //     acknowledgeable 'fed from the mains' advisory, and the inspector shows
 //     no phantom roof-tank booster.
@@ -60,20 +62,50 @@ void main() {
       return c;
     }
 
-    test('the sample floors (roof 11 m) cannot reach the target: warning + row',
-        () {
+    test('the sample floors (roof 11 m) meet the SNI minimum, below the '
+        'comfort target: an advisory + a passing row', () {
       // Tank at the roof (4 + 3.5 + 3.5 = 11 m) over a ground lavatory: about
-      // 10 m of static head ≈ 98 kPa, below the target residual.
+      // 10 m of static head ≈ 98 kPa, below the 225 kPa comfort target but
+      // above the SNI 8153 faucet minimum (0.5 kgf/cm² = 49 kPa; no flush
+      // valve on the path). Round 32 (binding-1): an acknowledgeable INFO
+      // advisory recommending the booster; the 'Supply pressure' row PASSES.
       final c = roofTankSample(kSampleFloors);
       expect(c.read(gravityDownfeedDrawnProvider), isTrue);
       final d = c.read(downfeedDeliveredProvider)!;
       expect(d.gravitySufficient, isFalse);
       expect(d.minResidual.pascals,
           lessThan(c.read(targetResidualProvider).pascals));
+      expect(d.minResidual.inKiloPascals, greaterThan(49.03));
+      expect(c.read(downfeedSniMinimumResidualProvider)!.inKiloPascals,
+          closeTo(49.03, 0.01));
+      final issue = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'downfeed-below-target');
+      expect(issue.severity, IssueSeverity.info);
+      expect(issue.isAcknowledgeable, isTrue);
+      expect(issue.message, contains('SNI 8153 minimum of 49 kPa is met'));
+      expect(issue.message,
+          contains('+${d.boosterHeadRequired.meters.toStringAsFixed(1)} m'));
+      final row = c
+          .read(complianceSummaryProvider)
+          .items
+          .firstWhere((i) => i.category == 'Supply pressure');
+      expect(row.pass, isTrue);
+      expect(row.detail, 'SNI minimum met; below comfort target (advisory)');
+    });
+
+    test('a single 4 m storey is below the SNI minimum: a blocking warning',
+        () {
+      // Tank on the roof of ONE 4 m storey over a ground lavatory: ≈ 3 m of
+      // head ≈ 28 kPa < the 49 kPa SNI 8153 faucet minimum.
+      final c = roofTankSample(const [Floor('Ground', Length(4.0))]);
+      final d = c.read(downfeedDeliveredProvider)!;
+      expect(d.minResidual.inKiloPascals, lessThan(49.03));
       final issue = c
           .read(designIssuesProvider)
           .firstWhere((i) => i.kind == 'downfeed-below-target');
       expect(issue.severity, IssueSeverity.warning);
+      expect(issue.message, contains('SNI 8153 minimum of 49 kPa'));
       expect(issue.message,
           contains('+${d.boosterHeadRequired.meters.toStringAsFixed(1)} m'));
       final row = c
