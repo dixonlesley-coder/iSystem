@@ -652,6 +652,8 @@ enum StringKey {
   issueFirePumpMotorOversizedMessage,
   issueFireJockeyAssumedTitle,
   issueFireJockeyAssumedMessage,
+  issueCheckValveFeedsRingTitle,
+  issueCheckValveFeedsRingMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1945,6 +1947,14 @@ const Map<StringKey, String> _en = {
       'iteration budget. The flow still satisfies continuity, but the split — '
       'and every size derived from it — is provisional. Simplify the ring or '
       'check for a near-zero-resistance leg.',
+  StringKey.issueCheckValveFeedsRingTitle:
+      'Hot-water check valve sized as a feed',
+  StringKey.issueCheckValveFeedsRingMessage:
+      'This check valve is drawn so it lets water flow away from the heater '
+      'into a loop the heater already feeds another way, so it is sized as a '
+      'second feed and carries draw-off. If it is a recirculation return, '
+      'its arrow is drawn backwards: redraw its pipes from the return toward '
+      'the heater and it will be sized as a return (no draw-off).',
   StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
   StringKey.issueFireJockeyAssumedMessage:
       'Three or more identical fire pumps are drawn in parallel and nothing '
@@ -3340,6 +3350,15 @@ const Map<StringKey, String> _id = {
       'pembagiannya — dan setiap ukuran yang diturunkan darinya — bersifat '
       'sementara. Sederhanakan ring atau periksa kaki dengan resistansi '
       'mendekati nol.',
+  StringKey.issueCheckValveFeedsRingTitle:
+      'Katup searah air panas diukur sebagai suplai',
+  StringKey.issueCheckValveFeedsRingMessage:
+      'Katup searah ini digambar sehingga mengalirkan air menjauhi pemanas '
+      'ke loop yang sudah disuplai pemanas melalui jalur lain, sehingga '
+      'diukur sebagai suplai kedua dan ikut membawa pemakaian. Jika katup ini '
+      'adalah balikan sirkulasi, arah panahnya terbalik: gambar ulang pipanya '
+      'dari balikan menuju pemanas agar diukur sebagai balikan (tanpa '
+      'pemakaian).',
   StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
   StringKey.issueFireJockeyAssumedMessage:
       'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '

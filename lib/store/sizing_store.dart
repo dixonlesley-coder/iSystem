@@ -88,6 +88,14 @@ final edgeFixtureUnitsProvider = Provider<Map<String, double>>(
 final parallelLegEdgeIdsProvider = Provider<Set<String>>(
     (ref) => ref.watch(sizingDetailProvider).parallelLegs);
 
+/// Round 27 r3 — hot-water cycle check valves the sizer read as a FEED (the
+/// drawn arrow does not point toward the heater) into a component the heater
+/// already feeds another way: the drawing a recirculation return with its
+/// arrow drawn backwards produces (`autoSizeNetwork(checkValveFeedsRingOut:)`).
+/// Judge-only — the valve is sized as drawn; Review names it.
+final checkValveFeedsRingProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).checkValveFeedsRing);
+
 /// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
 final sizingDetailProvider = Provider<
     ({
@@ -96,6 +104,7 @@ final sizingDetailProvider = Provider<
       FlushSystem flushSystem,
       Set<String> flushValveNodeIds,
       Set<String> parallelLegs,
+      Set<String> checkValveFeedsRing,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   if (net.edges.isEmpty) {
@@ -105,6 +114,7 @@ final sizingDetailProvider = Provider<
       flushSystem: FlushSystem.flushTank,
       flushValveNodeIds: const <String>{},
       parallelLegs: const <String>{},
+      checkValveFeedsRing: const <String>{},
     );
   }
   final occupancy = ref.watch(occupancyProvider);
@@ -202,6 +212,7 @@ final sizingDetailProvider = Provider<
 
   final fixtureUnits = <String, double>{};
   final parallelLegs = <String>{};
+  final checkValveFeedsRing = <String>{};
   final sizing = autoSizeNetwork(
     net,
     // The one sizing context (duct settings + the laid drainage slope).
@@ -233,6 +244,7 @@ final sizingDetailProvider = Provider<
     },
     fixtureUnitsOut: fixtureUnits,
     parallelLegEdgeIdsOut: parallelLegs,
+    checkValveFeedsRingOut: checkValveFeedsRing,
   );
   return (
     sizing: sizing,
@@ -240,6 +252,7 @@ final sizingDetailProvider = Provider<
     flushSystem: flushSystem,
     flushValveNodeIds: flushValveNodeIds,
     parallelLegs: parallelLegs,
+    checkValveFeedsRing: checkValveFeedsRing,
   );
 });
 

@@ -7,6 +7,9 @@
 //   hvac-4-4   a room trunk clamped over capacity is a Review warning
 //   hvac-4-5   the Rooms inspector's grille face is the catalogue W x H
 //   residuals-6  the Hunter curve per cold-water system in the live sizing
+//   r3 (binding check-valve decision) — a hot-water check valve read as a
+//              feed into a loop the heater already feeds is a locatable info
+//              advisory (check-valve-feeds-ring:<id>), never re-interpreted
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -310,5 +313,83 @@ void main() {
                     system: FlushSystem.flushValve)
                 .inLitersPerSecond,
             1e-9));
+  });
+
+  // ── r3 — the check-valve feed advisory ────────────────────────────────────
+  group('check-valve-feeds-ring advisory (hot water)', () {
+    // H -> S0 -> S1 supply riser with a fixture at each floor; S1 -> R1 ->
+    // R0 return riser -> CV -> H. [backwards] draws the valve H -> CV -> R0:
+    // the drawn arrow points AWAY from the heater, so it is sized as a feed
+    // (and named); drawn R0 -> CV -> H it is a return (zero, no advisory).
+    Network hotel({required bool backwards}) {
+      NetEdge hw(String id, String a, String b,
+              {EdgeKind k = EdgeKind.run}) =>
+          NetEdge(
+              id: id, fromId: a, toId: b, service: ServiceType.hotWater,
+              kind: k);
+      return Network(nodes: [
+        _n('H', 0, 0, role: NodeRole.plant),
+        _n('S0', 100, 0),
+        _n('S1', 100, 0, floor: 1),
+        _n('f0', 200, 0, role: NodeRole.fixture),
+        _n('f1', 200, 0, role: NodeRole.fixture, floor: 1),
+        _n('R1', 50, 0, floor: 1),
+        _n('R0', 50, 0),
+        _n('CV', 20, 0, c: NodeComponent.checkValve),
+      ], edges: [
+        hw('hs', 'H', 'S0'),
+        hw('s1', 'S0', 'S1', k: EdgeKind.riser),
+        hw('b0', 'S0', 'f0'),
+        hw('b1', 'S1', 'f1'),
+        hw('top', 'S1', 'R1'),
+        hw('r1', 'R1', 'R0', k: EdgeKind.riser),
+        if (backwards) ...[
+          hw('ch', 'H', 'CV'),
+          hw('cr', 'CV', 'R0'),
+        ] else ...[
+          hw('rc', 'R0', 'CV'),
+          hw('ch', 'CV', 'H'),
+        ],
+      ]);
+    }
+
+    testWidgets('a return drawn backwards is sized as drawn + named',
+        (tester) async {
+      final (_, c) = await _harness(tester);
+      c.read(projectControllerProvider.notifier).setFloors(const [
+        Floor('L0', Length(3.0)),
+        Floor('L1', Length(3.0)),
+      ]);
+      c.read(networkControllerProvider.notifier)
+          .loadNetwork(hotel(backwards: true));
+      await tester.pump();
+      expect(c.read(checkValveFeedsRingProvider), {'CV'});
+      final s = c.read(sizingProvider);
+      expect(s['ch']!.flow.inLitersPerSecond, greaterThan(0));
+      expect(s['ch']!.flowFromId, 'H');
+      final issue = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'check-valve-feeds-ring:CV');
+      expect(issue.severity, IssueSeverity.info);
+      expect(issue.locate?.nodeId, 'CV');
+      expect(issue.locate?.sheetId, 's1');
+    });
+
+    testWidgets('the correctly drawn return: zero flow, no advisory',
+        (tester) async {
+      final (_, c) = await _harness(tester);
+      c.read(projectControllerProvider.notifier).setFloors(const [
+        Floor('L0', Length(3.0)),
+        Floor('L1', Length(3.0)),
+      ]);
+      c.read(networkControllerProvider.notifier)
+          .loadNetwork(hotel(backwards: false));
+      await tester.pump();
+      expect(c.read(checkValveFeedsRingProvider), isEmpty);
+      expect(c.read(sizingProvider)['ch']!.flow.inLitersPerSecond, 0);
+      expect(
+          c.read(designIssuesProvider).map((i) => i.kind),
+          isNot(contains(startsWith('check-valve-feeds-ring'))));
+    });
   });
 }

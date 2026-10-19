@@ -293,9 +293,13 @@ void main() {
         // Each valve: 0 = drawn in→out, 1 = in-edge reversed (both out),
         // 2 = out-edge reversed (both in), 3 = BOTH reversed (Round 16: a
         // leg drawn header -> valve -> pump, consistently backwards). Plus
-        // random flips of the rest.
-        final v1 = trial == 0 ? 0 : (trial == 1 ? 3 : rnd.nextInt(4));
-        final v2 = trial == 0 ? 2 : (trial == 1 ? 3 : rnd.nextInt(4));
+        // random flips of the rest. Round 27 r3: an UNAMBIGUOUS drawing is
+        // authoritative, so ONE leg drawn backwards (state 3) is a closed
+        // return (see the next test); BOTH legs backwards would cut every
+        // fixture off the tank — a self-contradictory drawing, oriented
+        // topologically (trial 1) like the ambiguous states 1/2.
+        final v1 = trial == 0 ? 0 : (trial == 1 ? 3 : rnd.nextInt(3));
+        final v2 = trial == 0 ? 2 : (trial == 1 ? 3 : rnd.nextInt(3));
         bool flip() => trial > 1 && rnd.nextBool();
         NetEdge e(String id, String a, String b, bool rev) =>
             rev ? _e(id, b, a, ServiceType.coldWater)
@@ -342,6 +346,53 @@ void main() {
         expect(s['ch1']!.flowFromId, 'C1', reason: 'trial $trial');
         expect(s['ch2']!.flowFromId, 'C2', reason: 'trial $trial');
       }
+    });
+
+    test(
+        'Round 27 r3: ONE leg drawn header -> valve -> pump is read as drawn '
+        '(a return, closed) — the other leg carries the whole set flow', () {
+      // C1 permitted H -> P1; with only C1 removed P1 is 2 hops from GT
+      // (GT-S-P1) and H is 4 (GT-S-P2-C2-H): the permitted direction points
+      // toward the source => a RETURN valve (zero flow). The drawn arrow is
+      // authoritative; the fixtures stay fed through C2.
+      final q = _curve(8);
+      NetEdge e(String id, String a, String b) =>
+          _e(id, a, b, ServiceType.coldWater);
+      final net = Network(nodes: [
+        _n('GT', 0, 0,
+            role: NodeRole.plant, component: NodeComponent.groundTank),
+        _n('S', 40, 0),
+        _n('P1', 80, -20, role: NodeRole.plant, component: NodeComponent.pump),
+        _n('P2', 80, 20, role: NodeRole.plant, component: NodeComponent.pump),
+        _n('C1', 120, -20, component: NodeComponent.checkValve),
+        _n('C2', 120, 20, component: NodeComponent.checkValve),
+        _n('H', 160, 0),
+        for (var i = 0; i < 4; i++)
+          _n('f$i', 240, i * 30.0, role: NodeRole.fixture),
+      ], edges: [
+        e('gs', 'GT', 'S'),
+        e('s1', 'S', 'P1'),
+        e('s2', 'S', 'P2'),
+        e('pc1', 'C1', 'P1'), // drawn backwards: H -> C1 -> P1
+        e('ch1', 'H', 'C1'),
+        e('pc2', 'P2', 'C2'),
+        e('ch2', 'C2', 'H'),
+        for (var i = 0; i < 4; i++) e('b$i', 'H', 'f$i'),
+      ]);
+      final legs = <String>{};
+      final s = autoSizeNetwork(net, const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 2.0},
+          parallelLegEdgeIdsOut: legs);
+      for (final id in ['gs', 's2', 'pc2', 'ch2']) {
+        expect(s[id]!.flow.inLitersPerSecond, closeTo(q, 1e-9), reason: id);
+      }
+      for (final id in ['pc1', 'ch1']) {
+        expect(s[id]!.flow.inLitersPerSecond, 0, reason: id);
+      }
+      expect(s['ch1']!.flowFromId, 'H');
+      expect(s['pc1']!.flowFromId, 'C1');
+      expect(legs, isEmpty);
     });
   });
 

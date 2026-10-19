@@ -612,6 +612,23 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       ));
     }
   }
+  // Round 27 r3 (binding check-valve decision) — the drawn direction of a
+  // check valve is authoritative: a hot-water valve read as a FEED into a
+  // loop the heater already feeds is sized as drawn (it carries draw-off).
+  // Topology cannot tell a genuine second feed from a recirculation return
+  // drawn backwards, so name it (judge-only) instead of re-reading it.
+  final feedsRing = ref.watch(checkValveFeedsRingProvider).toList()..sort();
+  for (final id in feedsRing) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'check-valve-feeds-ring:$id',
+      title: str(StringKey.issueCheckValveFeedsRingTitle),
+      message: str(StringKey.issueCheckValveFeedsRingMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
   if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
