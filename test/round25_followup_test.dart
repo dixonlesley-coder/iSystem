@@ -8,7 +8,6 @@
 ///     over-pressure judge are empty (no phantom-tank field).
 library;
 
-import 'package:flutter/widgets.dart' hide Velocity;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';

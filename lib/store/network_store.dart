@@ -1124,13 +1124,18 @@ class NetworkController extends Notifier<DrawingState> {
   }
 
   /// Set (or clear, with null) the equipment [component] a node represents.
-  /// Clearing reverts it to an ordinary node (its role is left as-is).
+  /// Setting a component also sets its [NodeComponentInfo.role] — the same
+  /// role [addComponentNode] gives a placed one (Round 25 follow-up: a roof
+  /// tank left at `main` was a source to the solve but 'no source' to the
+  /// connectivity check). Clearing reverts it to an ordinary node (its role
+  /// is left as-is).
   void setNodeComponent(String id, NodeComponent? component) {
     final node = state.network.nodeById(id);
     if (node == null) return;
     _replaceNode(node.copyWith(
       component: component,
       clearComponent: component == null,
+      role: component?.role,
     ));
   }
 
