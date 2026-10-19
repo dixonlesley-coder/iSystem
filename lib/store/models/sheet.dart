@@ -40,6 +40,13 @@ class Sheet {
   /// a PDF / placeholder sheet and on legacy files (live bounds are used).
   final DxfBounds? dxfFrame;
 
+  /// Round 24 (r2) — the LIVE drawing extent last seen to differ from
+  /// [dxfFrame] (a plan revised in place) and already flagged as a stale
+  /// calibration. The change detector fires once per REAL change: a live
+  /// extent equal to this acknowledged one is not re-flagged on a remount /
+  /// reopen after 'Scale confirmed'. Null until a change is first seen.
+  final DxfBounds? dxfLiveFrameAck;
+
   const Sheet({
     required this.id,
     required this.name,
@@ -49,6 +56,7 @@ class Sheet {
     this.pageIndex = 0,
     this.sizePx = const Size(1684, 1190), // ~A3 landscape placeholder
     this.dxfFrame,
+    this.dxfLiveFrameAck,
   });
 
   /// Round 24 — content pixels per DXF world unit for this sheet (null when
@@ -74,6 +82,7 @@ class Sheet {
     int? pageIndex,
     Size? sizePx,
     DxfBounds? dxfFrame,
+    DxfBounds? dxfLiveFrameAck,
   }) =>
       Sheet(
         id: id ?? this.id,
@@ -84,6 +93,7 @@ class Sheet {
         pageIndex: pageIndex ?? this.pageIndex,
         sizePx: sizePx ?? this.sizePx,
         dxfFrame: dxfFrame ?? this.dxfFrame,
+        dxfLiveFrameAck: dxfLiveFrameAck ?? this.dxfLiveFrameAck,
       );
 
   @override
@@ -96,7 +106,8 @@ class Sheet {
       other.dwgPath == dwgPath &&
       other.pageIndex == pageIndex &&
       other.sizePx == sizePx &&
-      _sameFrame(other.dxfFrame, dxfFrame);
+      _sameFrame(other.dxfFrame, dxfFrame) &&
+      _sameFrame(other.dxfLiveFrameAck, dxfLiveFrameAck);
 
   static bool _sameFrame(DxfBounds? a, DxfBounds? b) =>
       identical(a, b) ||

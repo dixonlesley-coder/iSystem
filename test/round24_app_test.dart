@@ -26,6 +26,7 @@ import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/shell/project_io.dart' show orderReplacementPages;
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx_engine/electrical/load_kind.dart' show LoadKind;
 import 'package:mechx_engine/electrical/load_list.dart' show defaultMotorCosPhi;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
@@ -115,6 +116,39 @@ void main() {
       final j = now.toJson();
       expect(j[ElectricalCircuit.kMepProvenanceKey], 1);
       expect(j['cosPhiUserSet'], isTrue);
+    });
+
+    test('a legacy value the old mint produced is not locked as typed (r2)',
+        () async {
+      final c = _c();
+      c.read(projectControllerProvider.notifier)
+        ..setFloors([Floor('L0', const Length(3.5))])
+        ..setCalibration('s1', const ScaleCalibration(0.01));
+      c.read(electricalProjectProvider);
+      c.read(networkControllerProvider.notifier).addComponentNode(
+          's1', 0, const Offset(700, 200), NodeComponent.acCassette);
+      await _settle(c);
+      expect(_mepWay(c).loadKind, LoadKind.hvac);
+      final e = c.read(electricalProjectProvider.notifier);
+      // A pre-hvac build minted the AC unit as a `motor` at the historical
+      // cos phi: both are machine values, not typed ones.
+      e.setProject(_legacy(c.read(electricalProjectProvider), (w) {
+        w['loadKind'] = 'motor';
+        w['cosPhi'] = defaultMotorCosPhi;
+      }));
+      e.resyncMepEquipment();
+      var now = _mepWay(c);
+      expect(now.loadKind, LoadKind.hvac);
+      expect(now.loadKindUserSet, isFalse);
+      expect(now.cosPhiUserSet, isFalse);
+      // A kind no mint ever produced IS the engineer's.
+      e.setProject(_legacy(c.read(electricalProjectProvider), (w) {
+        w['loadKind'] = 'general';
+      }));
+      e.resyncMepEquipment();
+      now = _mepWay(c);
+      expect(now.loadKind, LoadKind.general);
+      expect(now.loadKindUserSet, isTrue);
     });
 
     test('an untouched legacy way stays machine-owned', () async {

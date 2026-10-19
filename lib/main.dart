@@ -9,8 +9,7 @@ import 'data/autosave.dart';
 import 'data/recovery.dart';
 import 'store/app_state.dart';
 import 'store/models/sheet.dart';
-import 'store/project_store.dart';
-import 'ui/canvas/dxf_sheet_page.dart';
+import 'ui/canvas/hosted_dxf_sheet_page.dart';
 import 'ui/canvas/pdf_sheet_page.dart';
 import 'ui/canvas/sheet_canvas.dart';
 import 'ui/shell/project_io.dart';
@@ -31,15 +30,9 @@ void main(List<String> args) async {
           }
           if (sheet.dxfPath != null) {
             // Round 24 — a plan revised in place (its extent changed) flags
-            // the sheet's calibration stale ('re-verify scale').
-            return Consumer(
-              builder: (context, ref, _) => DxfSheetPage(
-                sheet: sheet,
-                onFrameChanged: (id) => ref
-                    .read(projectControllerProvider.notifier)
-                    .markCalibrationStale(id),
-              ),
-            );
+            // the sheet's calibration stale ('re-verify scale'), once per
+            // real change.
+            return HostedDxfSheetPage(sheet: sheet);
           }
           return PlaceholderSheetPage(sheet: sheet);
         },

@@ -309,7 +309,7 @@ DxfDrawing? parseDxf(String contents) {
     circles: acc.circles,
     arcs: acc.arcs,
     bounds: DxfBounds(acc.minX, acc.minY, acc.maxX, acc.maxY),
-    truncated: acc.truncated || acc.insertsSpent,
+    truncated: acc.truncated,
   );
 }
 
@@ -643,7 +643,6 @@ void _emitInsert(
   _Acc acc,
   Set<String> ancestors,
 ) {
-  if (depth >= _maxInsertDepth || acc.insertsSpent) return;
   final name = _firstStr(body, 2);
   if (name == null) return;
   // A block already on the active expansion stack would recurse into itself
@@ -651,6 +650,13 @@ void _emitInsert(
   if (ancestors.contains(name)) return;
   final block = blocks[name];
   if (block == null) return;
+  // Round 24 (r2) — a real INSERT refused by the depth or insert budget drops
+  // geometry: flag it (and only then — a file with exactly [_Acc.maxInserts]
+  // INSERTs, none refused, is complete).
+  if (depth >= _maxInsertDepth || acc.insertsSpent) {
+    acc.truncated = true;
+    return;
+  }
 
   final ix = _first(body, 10) ?? 0;
   final iy = _first(body, 20) ?? 0;
@@ -682,7 +688,7 @@ void _emitInsert(
   for (var r = 0; r < rows; r++) {
     for (var c = 0; c < cols; c++) {
       if (instances >= _maxArrayInstances || acc.insertsSpent) {
-        if (instances >= _maxArrayInstances) acc.truncated = true;
+        acc.truncated = true;
         return;
       }
       instances++;

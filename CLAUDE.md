@@ -1484,6 +1484,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   underlay); a scale is transferred between sheets only via
   `transferCalibration` (DXF → DXF rescaled by the frames, mixed skipped);
   Replace-all keeps a surviving sheet-with-work on its old floor.
+  Round 24 r2: a frame change is flagged ONCE per real change — the
+  detector compares the live extent against `Sheet.dxfFrame` AND the
+  acknowledged `Sheet.dxfLiveFrameAck` (recorded with the stale flag by
+  `SheetsController.reportDxfFrameChanged`), so 'Scale confirmed' survives
+  remounts and reopens; the Layout content cache keys on the whole sheet
+  source (`layoutContentCacheKey`). A TT feeder's sub-tree RCD TYPE always
+  propagates upstream (a life-safety feeder skips only the level count).
+  A legacy MEP value equal to an old mint (`defaultMotorCosPhi`, a kind in
+  `kMepMintedLoadKinds`) is machine-owned, never flagged typed.
+  `DxfDrawing.truncated` only when an INSERT is actually refused (budget,
+  array cap or depth). The plan DXF double-lines ducts only on a real
+  plotted scale (`plotN != null`), like the PDF.
 - **Every `BreakerClass` consumer is EXHAUSTIVE (Round 23 r2)**: an ACB is
   never sized, timed or labelled as an MCB — switch on the enum / `.code`,
   never `name == 'mccb' ? … : <mcb>`. ACB frame 330 mm (`acbFrameWidthMm`,

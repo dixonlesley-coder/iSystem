@@ -2523,6 +2523,15 @@ ElectricalCircuit _readoptedMepWay(
 /// life-safety way, none otherwise) ONLY while it is still a minted value
 /// (null, or FRC on a way that was life-safety); a family the engineer typed
 /// is kept. Name / length / starter / laying / overrides stay the engineer's.
+/// Round 24 r2 — every load kind the MEP auto-feed has ever minted
+/// (`MepLoadSourceInfo.circuitLoadKind`, incl. the pre-`hvac` `motor` for AC
+/// units): a legacy unflagged way carrying one of these is machine-owned.
+const Set<LoadKind> kMepMintedLoadKinds = {
+  LoadKind.motor,
+  LoadKind.pump,
+  LoadKind.hvac,
+};
+
 ElectricalCircuit _refreshedMepWay(
   ElectricalCircuit c,
   ElectricalCircuit fresh,
@@ -2547,12 +2556,24 @@ ElectricalCircuit _refreshedMepWay(
   // re-derived cos phi / phases / load kind, so an unflagged value that
   // differs from the fresh mint may have been TYPED. Keep it and record the
   // provenance (flag it user-set) instead of silently reverting it.
+  //
+  // Round 24 r2 — never INVENT provenance for a value a legacy build itself
+  // minted: a cos phi still at the historical mint ([defaultMotorCosPhi]) or a
+  // load kind the mint has ever produced ([kMepMintedLoadKinds] — e.g. an AC
+  // unit minted `motor` before it became `hvac`) is machine-owned and
+  // re-derives. A phase count has no historical-mint record, so a legacy phase
+  // count differing from today's mint is kept (conservative: never destroys a
+  // typed value, but may lock a since-changed machine pick — documented).
   final legacy = c.legacyProvenance;
   final cosUser = c.cosPhiUserSet ||
-      (legacy && (c.cosPhi - fresh.cosPhi).abs() > 1e-9);
+      (legacy &&
+          (c.cosPhi - fresh.cosPhi).abs() > 1e-9 &&
+          (c.cosPhi - defaultMotorCosPhi).abs() > 1e-9);
   final phasesUser = c.phasesUserSet || (legacy && c.phases != fresh.phases);
-  final kindUser =
-      c.loadKindUserSet || (legacy && c.loadKind != fresh.loadKind);
+  final kindUser = c.loadKindUserSet ||
+      (legacy &&
+          c.loadKind != fresh.loadKind &&
+          !kMepMintedLoadKinds.contains(c.loadKind));
   final demandUser = c.demandFactorUserSet || (legacy && !mintedDemand);
   return c.copyWith(
     name: mintedName ? fresh.name : null,

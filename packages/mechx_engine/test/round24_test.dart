@@ -362,6 +362,51 @@ void main() {
       expect((ys[0] - ys[1]).abs(), closeTo(500, 1e-6));
     });
 
+    test('an NTS DXF (no ladder scale) keeps one line, like the PDF (r2)', () {
+      // 300 px × 2 m = 600 m: no A3 ladder scale fits ⇒ plotN null, u =
+      // 600 000 / 80 / 2.5 = 3000; W 5000 mm ⇒ 1.67 paper-mm ≥ 1 would have
+      // double-lined on the heuristic alone. The PDF has no pointsPerMeter
+      // here (NTS) ⇒ single line, so the DXF twin must agree.
+      const net = Network(nodes: [
+        NetNode(id: 'a', sheetId: 's', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's', x: 300, y: 0, floorIndex: 0),
+      ], edges: [
+        NetEdge(id: 'd', fromId: 'a', toId: 'b', service: ServiceType.duct),
+      ]);
+      final sizing = {
+        'd': EdgeSizing(
+          edgeId: 'd',
+          service: ServiceType.duct,
+          flow: FlowRate.litersPerSecond(8000),
+          diameter: Diameter.mm(2000),
+          velocity: const Velocity(4),
+          width: Length.mm(5000),
+          height: Length.mm(350),
+        ),
+      };
+      expect(a3PlottedScaleDenominatorFor(600000, 0), isNull);
+      final dxf = networkToDxf(
+          net: net,
+          sizing: sizing,
+          sheetId: 's',
+          floorIndex: 0,
+          metersPerPixel: 2);
+      final l = dxf.split('\n').map((s) => s.trim()).toList();
+      var lines = 0;
+      for (var i = 0; i + 1 < l.length; i++) {
+        if (l[i] == '0' && l[i + 1] == 'LINE') {
+          var j = i + 2;
+          String? layer;
+          while (j + 1 < l.length && l[j] != '0') {
+            if (l[j] == '8') layer = l[j + 1];
+            j += 2;
+          }
+          if (layer == dxfLayerNameFor(ServiceType.duct)) lines++;
+        }
+      }
+      expect(lines, 1);
+    });
+
     test('a pipe never double-lines', () {
       expect(
           planDuctWidthM(EdgeSizing(
@@ -582,6 +627,45 @@ void main() {
       expect(w.message, isNot(contains('carries no RCD')));
     });
 
+    test('a life-safety feeder still passes its Type B load upstream (r2)',
+        () {
+      // MDP --mf--> SDP --lf (life-safety, no RCD)--> DB [EV charger].
+      final project = ElectricalProject(
+        id: 'b',
+        name: 'B',
+        earthingSystem: EarthingSystem.tt,
+        panels: [
+          _root('MDP', [_feeder('mf', 'SDP', 30)]),
+          _sub('SDP', 'mf', [
+            const ElectricalCircuit(
+                id: 'lt',
+                name: 'Lights',
+                loadKind: LoadKind.lighting,
+                isLighting: true,
+                loadW: 2000,
+                length: Length(10)),
+            _feeder('lf', 'DB', 20, lifeSafety: true),
+          ]),
+          _sub('DB', 'lf', [
+            const ElectricalCircuit(
+                id: 'ev',
+                name: 'EV',
+                loadKind: LoadKind.evCharger,
+                loadW: 11000,
+                phases: 3,
+                length: Length(10)),
+          ]),
+        ],
+      );
+      final sys = computeSystem(_p, project);
+      expect(_way(sys, 'SDP', 'lf').rcd.required, isFalse);
+      final upper = _way(sys, 'MDP', 'mf').rcd;
+      // A Type A device here would be blinded by the EV's DC fault current.
+      expect(upper.type, RcdType.b);
+      // The life-safety feeder carries no RCD ⇒ no discrimination level.
+      expect(upper.ratingMa, 300);
+    });
+
     test('TN projects are untouched', () {
       final tn = ElectricalProject(
         id: 't',
@@ -693,6 +777,34 @@ void main() {
       expect(d.bounds.minX, -50000);
       final small = parseDxf(wrap(line(0, 0, 10, 10)))!;
       expect(small.truncated, isFalse);
+    });
+
+    test('truncated only when an INSERT is actually refused (r2)', () {
+      const tick = '0\nBLOCK\n8\n0\n2\nTICK\n10\n0\n20\n0\n'
+          '0\nLINE\n8\n0\n10\n0\n20\n0\n11\n1\n21\n1\n0\nENDBLK\n';
+      // 10 × (100 × 100) MINSERTs = exactly maxInserts instances, none refused.
+      const m = '0\nINSERT\n8\n0\n2\nTICK\n10\n0\n20\n0\n'
+          '70\n100\n71\n100\n44\n2\n45\n2\n';
+      final exact = parseDxf(wrap(m * 10, blocks: tick))!;
+      expect(exact.polylines, hasLength(100000));
+      expect(exact.truncated, isFalse);
+      // One more INSERT is refused ⇒ flagged.
+      const one = '0\nINSERT\n8\n0\n2\nTICK\n10\n500\n20\n500\n';
+      expect(parseDxf(wrap(m * 10 + one, blocks: tick))!.truncated, isTrue);
+
+      // A block nested past the depth limit drops its geometry ⇒ flagged.
+      final chain = StringBuffer();
+      for (var i = 0; i < 10; i++) {
+        chain.write('0\nBLOCK\n8\n0\n2\nB$i\n10\n0\n20\n0\n');
+        chain.write(i == 9
+            ? line(0, 0, 5, 5)
+            : '0\nINSERT\n8\n0\n2\nB${i + 1}\n10\n0\n20\n0\n');
+        chain.write('0\nENDBLK\n');
+      }
+      final deep = parseDxf(wrap(
+          '0\nINSERT\n8\n0\n2\nB0\n10\n0\n20\n0\n${line(0, 0, 100, 100)}',
+          blocks: chain.toString()))!;
+      expect(deep.truncated, isTrue);
     });
 
     test('a frame change is detected', () {

@@ -874,6 +874,13 @@ class ProjectDocument {
                   s.dxfFrame!.maxX,
                   s.dxfFrame!.maxY,
                 ],
+              if (s.dxfLiveFrameAck != null)
+                'dxfLiveFrameAck': [
+                  s.dxfLiveFrameAck!.minX,
+                  s.dxfLiveFrameAck!.minY,
+                  s.dxfLiveFrameAck!.maxX,
+                  s.dxfLiveFrameAck!.maxY,
+                ],
             },
         ],
         'viewports': {
@@ -977,6 +984,7 @@ class ProjectDocument {
           pageIndex: (s['pageIndex'] as num).toInt(),
           sizePx: Size((s['w'] as num).toDouble(), (s['h'] as num).toDouble()),
           dxfFrame: _dxfFrameFromJson(s['dxfFrame']),
+          dxfLiveFrameAck: _dxfFrameFromJson(s['dxfLiveFrameAck']),
         ),
     ];
     final net = json['network'] as Map<String, dynamic>;

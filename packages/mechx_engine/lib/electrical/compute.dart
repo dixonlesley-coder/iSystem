@@ -2139,10 +2139,13 @@ ElectricalSystemResult computeSystem(
             if (!lo) allLife = false;
           }
           final childLevels = subLevels[child] ?? 0;
-          // This feeder carries a tripping RCD unless it (or its whole
-          // sub-tree) is life-safety.
+          // The sub-tree's RCD TYPE always propagates (r2): a life-safety
+          // feeder carries no RCD itself, but the Type B load below it still
+          // sits under any RCD further up. Only the discrimination LEVEL count
+          // skips a feeder that carries no tripping RCD (it, or its whole
+          // sub-tree, is life-safety).
+          best = maxType(best, subType[child]);
           if (!c.lifeSafety && lo != true) {
-            best = maxType(best, subType[child]);
             levels = math.max(levels, childLevels + 1);
           } else {
             levels = math.max(levels, childLevels);

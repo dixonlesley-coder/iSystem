@@ -30,9 +30,11 @@ class DxfSheetPage extends StatefulWidget {
 
   /// Round 24 — called (once per detected change, after the frame) when the
   /// file's LIVE extent no longer matches the sheet's import-time
-  /// [Sheet.dxfFrame] — the plan was revised in place. The host marks the
-  /// calibration stale; the drawing keeps painting through the stored frame.
-  final void Function(String sheetId)? onFrameChanged;
+  /// [Sheet.dxfFrame] — the plan was revised in place — AND differs from the
+  /// extent already acknowledged on [Sheet.dxfLiveFrameAck]. The host records
+  /// the live extent and marks the calibration stale; the drawing keeps
+  /// painting through the stored frame.
+  final void Function(String sheetId, DxfBounds live)? onFrameChanged;
 
   const DxfSheetPage({super.key, required this.sheet, this.onFrameChanged});
 
@@ -81,14 +83,17 @@ class _DxfSheetPageState extends State<DxfSheetPage> {
     }
     final frame = dxfMappingBounds(widget.sheet, drawing.bounds);
     final stored = widget.sheet.dxfFrame;
+    final ack = widget.sheet.dxfLiveFrameAck;
     final cb = widget.onFrameChanged;
+    final live = drawing.bounds;
     if (cb != null &&
         stored != null &&
         !identical(_reported, drawing) &&
-        stored.differsFrom(drawing.bounds)) {
+        stored.differsFrom(live) &&
+        (ack == null || ack.differsFrom(live))) {
       _reported = drawing;
       final id = widget.sheet.id;
-      WidgetsBinding.instance.addPostFrameCallback((_) => cb(id));
+      WidgetsBinding.instance.addPostFrameCallback((_) => cb(id, live));
     }
 
     final size = widget.sheet.sizePx;

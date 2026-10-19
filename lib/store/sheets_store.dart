@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
 import 'package:mechx_engine/network/network.dart';
 
 import '../ui/canvas/viewport.dart';
@@ -256,6 +257,7 @@ class SheetsController extends Notifier<SheetsState> {
       pageIndex: source.pageIndex,
       sizePx: source.sizePx,
       dxfFrame: source.dxfFrame,
+      dxfLiveFrameAck: source.dxfLiveFrameAck,
     );
     final sheets = [...state.sheets, duplicate];
     final sheetFloors = Map<String, int>.from(state.sheetFloors)
@@ -367,6 +369,25 @@ class SheetsController extends Notifier<SheetsState> {
     final sheets = [...state.sheets];
     sheets[idx] = replaced;
     state = state.copyWith(sheets: sheets);
+    ref.read(projectControllerProvider.notifier).markCalibrationStale(sheetId);
+  }
+
+  /// Round 24 (r2) — a DXF sheet's file was seen revised IN PLACE: its live
+  /// extent [live] no longer matches the import frame. Records [live] as the
+  /// acknowledged extent ([Sheet.dxfLiveFrameAck]) and flags the calibration
+  /// stale, so the detector fires ONCE per real change — 'Scale confirmed'
+  /// then sticks across remounts and reopens until the file changes again.
+  /// Not undoable (bookkeeping, like [replaceSheetSource]).
+  void reportDxfFrameChanged(String sheetId, DxfBounds live) {
+    final idx = state.sheets.indexWhere((s) => s.id == sheetId);
+    if (idx < 0) return;
+    final old = state.sheets[idx];
+    final ack = old.dxfLiveFrameAck;
+    if (ack == null || ack.differsFrom(live)) {
+      final sheets = [...state.sheets];
+      sheets[idx] = old.copyWith(dxfLiveFrameAck: live);
+      state = state.copyWith(sheets: sheets);
+    }
     ref.read(projectControllerProvider.notifier).markCalibrationStale(sheetId);
   }
 

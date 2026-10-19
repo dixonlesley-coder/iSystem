@@ -554,14 +554,20 @@ String _professionalDxf({
   );
   // Round 24 — a sized duct is drawn TRUE-WIDTH (its real W / Ø in model
   // mm, double line) when that width reaches kPlanDuctDoubleLineMinMm on
-  // paper at the plotted scale — the same rule as the plan PDF.
+  // paper at the plotted scale — the same rule as the plan PDF. Round 24
+  // (r2): only on a REAL plotted scale ([plotN]), like the PDF's
+  // `pointsPerMeter != null` gate — an NTS sheet (no ladder scale) keeps the
+  // single band stroke in BOTH formats, never double-lined on the u = span/80
+  // heuristic alone.
   final ductHalfMm = <String, double>{};
-  for (final e in net.edges) {
-    if (e.kind != EdgeKind.run) continue;
-    final w = planDuctWidthM(sizing[e.id]);
-    if (w == null) continue;
-    final mm = w * 1000;
-    if (mm / u >= kPlanDuctDoubleLineMinMm) ductHalfMm[e.id] = mm / 2;
+  if (plotN != null) {
+    for (final e in net.edges) {
+      if (e.kind != EdgeKind.run) continue;
+      final w = planDuctWidthM(sizing[e.id]);
+      if (w == null) continue;
+      final mm = w * 1000;
+      if (mm / u >= kPlanDuctDoubleLineMinMm) ductHalfMm[e.id] = mm / 2;
+    }
   }
   final ann = layoutPlanAnnotations(
     runHalfWidths: ductHalfMm,
