@@ -13,12 +13,14 @@
 library;
 
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
+import '../electrical/fault.dart' show faultStudyU0VerifyItem;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
 import '../standards/puil.dart' show BreakerClassCode;
-import '../standards/sni.dart' show Revision;
+import '../standards/sni.dart'
+    show Revision, StandardValue, VerificationStatus;
 import '../units.dart' show Length;
 import 'plan_symbols.dart' show planLengthLabel;
 import 'report_blocks.dart';
@@ -42,6 +44,12 @@ class ElectricalCalcReportData {
 
   /// Aggregated provenance honesty surface (e.g. `AdvancedStudy.verifyItems`).
   final List<String> verifyItems;
+
+  /// Round 30 (report-parity-2-3) — the standards profile's checklist
+  /// (`PuilProfile.verifyChecklist`), printed WITH each value's verification
+  /// tier (the mechanical report's convention). The flattened
+  /// '<citation> — <note>' strings in [verifyItems] dropped the tier.
+  final List<StandardValue<Object?>> verifyChecklist;
 
   /// Prospective short-circuit current at the supply origin (A) — the Fold-1
   /// busbar-withstand fault target. Null ⇒ omitted from the Design Basis.
@@ -97,6 +105,7 @@ class ElectricalCalcReportData {
     required this.result,
     this.powerOneLine,
     this.verifyItems = const [],
+    this.verifyChecklist = const [],
     this.originFaultLevelA,
     this.busbarClearingTimeS,
     this.faultLevelBasis,
@@ -109,7 +118,59 @@ class ElectricalCalcReportData {
 String _n(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
-String _a(double amperes) => '${_n(amperes)} A';
+/// Round 30 (report-parity-2-4) — a current at the ONE fixed 0.1 A precision
+/// the board schedule / SLD print (never '59 A' beside '59.1 A').
+String _a(double amperes) => '${amperes.toStringAsFixed(1)} A';
+
+/// A device / bar RATING (a nominal rung, not a computed current) keeps its
+/// whole-number notation (`125 A MCCB`).
+String _rating(double amperes) => '${_n(amperes)} A';
+
+/// Round 30 — a percentage at a fixed 0.1 (the warnings' own format).
+String _pct(double v) => v.toStringAsFixed(1);
+
+/// Round 30 (report-parity-2-5) — the localized phase cell.
+String _phaseCell(PhaseAssignment p, ReportStrings strings) =>
+    p == PhaseAssignment.threePhase
+        ? strings(RptStringKey.phaseCell3ph)
+        : p.label;
+
+/// Round 30 (report-parity-2-3) — the verification tier tag the mechanical
+/// report prints beside each unverified value.
+String _statusTag(VerificationStatus st, ReportStrings s) => switch (st) {
+      VerificationStatus.sniVerbatim => '',
+      VerificationStatus.secondarySource => s(RptStringKey.statusSecondary),
+      VerificationStatus.notAnSniClause => s(RptStringKey.statusNotSni),
+    };
+
+/// Round 30 (report-parity-2-2) — the UNDIVERSIFIED connected load of [panelId]
+/// and every board below it: each final way at its undiversified connected W,
+/// each feeder replaced by its fed board's own sub-tree. The engine's panel
+/// `connectedW` counts a feeder at the fed board's DIVERSIFIED demand, so with
+/// any sub-board diversity the root bullet disagreed with the supply's
+/// 'connected' figure (Σ undiversified leaves). Equal to `connectedW` when no
+/// feeder hangs below (byte-identical).
+double _subtreeConnectedW(ElectricalProject project, ElectricalSystemResult r,
+    String panelId, [Set<String>? seen]) {
+  final visited = seen ?? <String>{};
+  if (!visited.add(panelId)) return 0;
+  final p = r.panels[panelId];
+  if (p == null) return 0;
+  final feeds = <String, String>{
+    for (final m in project.panels)
+      if (m.id == panelId)
+        for (final c in m.circuits)
+          if (c.feedsPanelId != null) c.id: c.feedsPanelId!,
+  };
+  var w = 0.0;
+  for (final c in p.circuits) {
+    final fed = feeds[c.circuitId];
+    w += fed != null && r.panels.containsKey(fed)
+        ? _subtreeConnectedW(project, r, fed, visited)
+        : c.connectedWOrLoad;
+  }
+  return w;
+}
 
 /// The localized system label (`3-phase` / `3 fasa`).
 String _systemLabel(ElectricalSystem s, ReportStrings strings) =>
@@ -138,11 +199,12 @@ String _earthingNote(EarthingResult e, ReportStrings strings) {
 /// into extra columns; a newline would break it.
 String _md(String v) => v.replaceAll('|', r'\|').replaceAll('\n', ' ');
 
-String _severityTag(WarningSeverity s) => switch (s) {
-      WarningSeverity.error => 'ERROR',
-      WarningSeverity.warning => 'WARN',
-      WarningSeverity.info => 'INFO',
-    };
+String _severityTag(WarningSeverity s, ReportStrings strings) =>
+    strings(switch (s) {
+      WarningSeverity.error => RptStringKey.sevError,
+      WarningSeverity.warning => RptStringKey.sevWarn,
+      WarningSeverity.info => RptStringKey.sevInfo,
+    });
 
 /// Provenance of the origin fault level printed in the Design Basis.
 enum FaultLevelBasis {
@@ -309,7 +371,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     final pb = StringBuffer();
     // Round 24 — a saturated incomer bullet carries the OVER RANGE token.
     pb.writeln(strings.format(RptStringKey.panelIncomer, {
-          'rating': _a(p.incomer.breaker.ratingA.amperes),
+          'rating': _rating(p.incomer.breaker.ratingA.amperes),
           'class': p.incomer.breaker.deviceClass.name.toUpperCase(),
           'poles': p.incomer.poles,
         }) +
@@ -323,7 +385,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         : strings(RptStringKey.busbarReasonContinuous);
     pb.writeln(strings.format(RptStringKey.panelMainBusbar, {
       'geom': busGeom,
-      'amp': _a(bus.ampacityA.amperes),
+      'amp': _rating(bus.ampacityA.amperes),
       'reason': reason,
     }));
     final w = bus.withstand;
@@ -355,7 +417,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     // figure (pairs with the diversified W) with the undiversified worst-phase
     // sizing current labelled beside it, never the bare pre-diversity figure.
     pb.writeln(strings.format(RptStringKey.panelDemand, {
-      'c': _n(p.connectedW),
+      'c': _n(_subtreeConnectedW(data.project, r, id)),
       'd': _n(p.demandW),
       'a': p.isDiversified
           ? strings.format(RptStringKey.panelDemandCurrentSplit, {
@@ -366,10 +428,10 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     }));
     if (p.system.isThreePhase) {
       pb.writeln(strings.format(RptStringKey.panelPhaseBalance, {
-        'l1': _n(p.phaseBalance.l1),
-        'l2': _n(p.phaseBalance.l2),
-        'l3': _n(p.phaseBalance.l3),
-        'imb': _n(p.imbalancePercent),
+        'l1': p.phaseBalance.l1.toStringAsFixed(1),
+        'l2': p.phaseBalance.l2.toStringAsFixed(1),
+        'l3': p.phaseBalance.l3.toStringAsFixed(1),
+        'imb': _pct(p.imbalancePercent),
       }));
     }
     pb.writeln();
@@ -407,10 +469,10 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               // Ib -> Vd and Ib <= In <= Iz recompute closes; the diversified
               // figure stays in the phase balance / demand roll-up.
               _a(c.runCurrentA.amperes),
-              c.phase.label,
+              _phaseCell(c.phase, strings),
               // An MCCB has no B/C/D trip characteristic — print the curve
               // letter for MCBs only (as the board schedule + legend do, N12).
-              '${_a(c.breaker.ratingA.amperes)} '
+              '${_rating(c.breaker.ratingA.amperes)} '
                   '${c.breaker.deviceClass.name.toUpperCase()}'
                   '${c.breaker.deviceClass.hasTripCurve ? '/${c.breaker.curve.name.toUpperCase()}' : ''}',
               '${(c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : ''}'
@@ -420,8 +482,8 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               // One 0.1 m length format across every deliverable (Round 20
               // follow-up): the board schedule prints the same figure.
               c.lengthM > 0 ? planLengthLabel(Length(c.lengthM)) : '—',
-              '${_n(c.voltageDrop.dropPercent)}% '
-                  '(${_n(c.cumulativeDropPercent)}%)'
+              '${_pct(c.voltageDrop.dropPercent)}% '
+                  '(${_pct(c.cumulativeDropPercent)}%)'
                   '${voltageDropOverLimit(c, isFeeder: feederIds.contains(c.circuitId)) ? ' ${strings(RptStringKey.verdictOver)}' : ''}',
               c.rcd.required
                   ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
@@ -450,7 +512,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
       blocks.add(RptKeyValue([
         for (final w in panelWarnings)
           ('',
-              '_${_severityTag(w.severity)}_: ${strings.format(RptStringKey.warnLeadIn, {'code': w.code})}${w.message}'),
+              '_${_severityTag(w.severity, strings)}_: ${strings.format(RptStringKey.warnLeadIn, {'code': w.code})}${w.message}'),
       ]));
     }
   }
@@ -509,19 +571,38 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
       ..add(RptKeyValue([
         for (final w in systemWarnings)
           ('',
-              '_${_severityTag(w.severity)}_: ${strings.format(RptStringKey.warnLeadIn, {'code': w.code})}${w.message}'),
+              '_${_severityTag(w.severity, strings)}_: ${strings.format(RptStringKey.warnLeadIn, {'code': w.code})}${w.message}'),
       ]));
   }
 
   // ── Unverified values ──────────────────────────────────────────────────────
   final provenance = data.standardsProvenance;
-  if (data.verifyItems.isNotEmpty || provenance != null) {
+  if (data.verifyItems.isNotEmpty ||
+      data.verifyChecklist.isNotEmpty ||
+      provenance != null) {
+    // Round 30 (report-parity-2-3) — the advanced study's U0 line restates
+    // the profile's own U0 entry: print the basis once.
+    final checklistHasU0 =
+        data.verifyChecklist.any((v) => v.citation.contains('U0'));
+    final plain = [
+      for (final v in data.verifyItems)
+        if (!(checklistHasU0 && v == faultStudyU0VerifyItem)) v,
+    ];
+    // The notes are English source text: ID carries the explicit lead, like
+    // the warnings and interlocks.
+    final lead = strings.locale == ReportLocale.id
+        ? strings(RptStringKey.olNoteLead)
+        : '';
     blocks
       ..add(RptHeading(2, strings(RptStringKey.headingUnverifiedElec)))
       ..add(RptParagraph(strings(RptStringKey.unverifiedElecIntro)))
       ..add(RptKeyValue([
         if (provenance != null) ('', provenance),
-        for (final v in data.verifyItems) ('', v),
+        for (final v in plain) ('', '$lead$v'),
+        for (final v in data.verifyChecklist)
+          ('',
+              '$lead**${v.citation}**${_statusTag(v.status, strings)}'
+                  '${v.note == null ? '' : ' — ${v.note}'}'),
       ]));
   }
 
@@ -572,6 +653,17 @@ String _oneLineSub(String sub, ReportStrings strings) {
     return strings(RptStringKey.olManualChangeover);
   }
   if (sub == 'transfer switch') return strings(RptStringKey.olTransferSwitch);
+  // Round 30 (report-parity-2-5) — the genset caption's mode word.
+  for (final (word, key) in [
+    (' kVA Prime (continuous)', RptStringKey.olGenPrime),
+    (' kVA Standby', RptStringKey.olGenStandby),
+  ]) {
+    final i = sub.indexOf(word);
+    if (i >= 0) {
+      return '${sub.substring(0, i)} kVA ${strings(key)}'
+          '${sub.substring(i + word.length)}';
+    }
+  }
   final m = _voltsLv.firstMatch(sub);
   if (m != null) {
     return strings.format(RptStringKey.olVoltsLv, {'v': m.group(1)});

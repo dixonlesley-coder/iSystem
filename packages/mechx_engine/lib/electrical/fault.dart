@@ -266,9 +266,14 @@ const Map<ConductorMaterial, Map<ConductorInsulation, double>> peAdiabaticK = {
 /// list: [faultStudy] appends it only when a motor contribution was actually
 /// folded in (> 0). Every report used to assert a basis the study never used
 /// (the default contribution is 0).
+/// Round 30 — the U0 basis line (a report that also prints the PUIL profile's
+/// own U0 entry prints it once).
+const String faultStudyU0VerifyItem =
+    'phase voltage U0 (230 V) for Zs / ADS limits';
+
 const List<String> faultStudyVerifyItems = [
   'default LV utility prospective fault level (16 kA)',
-  'phase voltage U0 (230 V) for Zs / ADS limits',
+  faultStudyU0VerifyItem,
   'source X/R ratio (7) for the earth-fault loop split',
   'ADS voltage factor (0.95) and fault-temperature factor (1.28)',
   'MCB curve trip multiples (B 5× / C 10× / D 20×)',

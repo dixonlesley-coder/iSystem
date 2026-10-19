@@ -2,6 +2,10 @@
 ///   * regression-dual-tx-declared-capacity-doubled — a declared PLN
 ///     connection capacity is the TOTAL connection: a dual service splits it
 ///     across its two sections, and above the ladder top it is n × 2500 kVA.
+///   * costing-2-3 — SPD BOM lines carry their 3+N / 1+N connection.
+///   * report-parity-2-2..5 — the electrical calc report: undiversified
+///     connected load per board, verification tiers, fixed 0.1 precision,
+///     localized severity / phase / genset tokens.
 library;
 
 import 'dart:math' as math;
@@ -11,7 +15,11 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/fault.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/electrical/supply_design.dart';
+import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -132,7 +140,7 @@ void main() {
   group('SPD lines carry their connection', () {
     test('3φ MDP feeding a 1φ LP: two SPD lines, 3+N and 1+N, never merged',
         () {
-      final pr = ElectricalProject(
+      const pr = ElectricalProject(
         id: 'pr',
         name: 'SPD',
         panels: [
@@ -199,6 +207,155 @@ void main() {
       expect(spd.map((l) => l.priceKey).toSet().length, 2);
       expect(spd.any((l) => l.priceKey!.endsWith(':3+n')), isTrue);
       expect(spd.any((l) => l.priceKey!.endsWith(':1+n')), isTrue);
+    });
+  });
+
+  group('electrical calc report parity', () {
+    // MDP (diversity 0.7) feeding LP-1 (diversity 0.7).
+    const pr = ElectricalProject(
+      id: 'pr',
+      name: 'Report',
+      panels: [
+        ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          system: ElectricalSystem.threePhase,
+          voltage: const Voltage(400),
+          diversityFactor: 0.7,
+          circuits: [
+            ElectricalCircuit(
+                id: 'h',
+                name: 'Heater',
+                loadKind: LoadKind.heating,
+                loadW: 20000,
+                phases: 3,
+                length: const Length(10)),
+            const ElectricalCircuit(
+                id: 'f',
+                name: 'LP feed',
+                feedsPanelId: 'LP',
+                length: Length(20)),
+          ],
+        ),
+        ElectricalPanel(
+          id: 'LP',
+          name: 'LP-1',
+          system: ElectricalSystem.threePhase,
+          voltage: const Voltage(400),
+          diversityFactor: 0.7,
+          circuits: [
+            ElectricalCircuit(
+                id: 'l',
+                name: 'Lights',
+                loadKind: LoadKind.lighting,
+                loadW: 6050,
+                length: const Length(15)),
+            ElectricalCircuit(
+                id: 's',
+                name: 'Sockets',
+                loadKind: LoadKind.socket,
+                loadW: 5000,
+                length: const Length(15)),
+          ],
+        ),
+      ],
+    );
+    final sys = computeSystem(p, pr);
+    ElectricalCalcReportData data({List<String> verify = const []}) =>
+        ElectricalCalcReportData(
+          projectName: 'R',
+          date: '2026-10-18',
+          standardsName: p.name,
+          standardsRevision: p.revision,
+          project: pr,
+          result: sys,
+          verifyItems: verify,
+          verifyChecklist: p.verifyChecklist,
+        );
+    String w(double v) =>
+        v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+
+    test('the root board prints the SAME undiversified connected load as the '
+        'design basis (sub-board diversity never leaks into connected)', () {
+      final md = buildElectricalCalcReport(data());
+      // Supply connected = Σ undiversified leaves (the feeder excluded).
+      final supplyW = sys.supply.connectedW;
+      final undiv = [
+        for (final pp in sys.panels.values)
+          for (final c in pp.circuits)
+            if (c.circuitId != 'f') c.connectedWOrLoad,
+      ].fold<double>(0, (a, x) => a + x);
+      expect(supplyW, closeTo(undiv, 1e-6));
+      // The engine's MDP connectedW counts the feeder at LP-1's DIVERSIFIED
+      // demand — below the undiversified total.
+      final mdpW = sys.panels['MDP']!.connectedW;
+      expect(mdpW, lessThan(supplyW - 1));
+      expect(md, contains('connected ${w(supplyW)} W'));
+      expect(md, isNot(contains('connected ${w(mdpW)} W')));
+    });
+
+    test('every checklist value prints with its tier; U0 prints once; ID '
+        'carries the English-note lead', () {
+      final md = buildElectricalCalcReport(
+          data(verify: const [faultStudyU0VerifyItem, 'other item']));
+      expect(md, contains('other item'));
+      expect(md, isNot(contains(faultStudyU0VerifyItem)));
+      for (final v in p.verifyChecklist) {
+        expect(md, contains('**${v.citation}**'), reason: v.citation);
+      }
+      expect(
+          md, contains(const ReportStrings.en()(RptStringKey.statusNotSni)));
+      final id = buildElectricalCalcReport(
+          data(verify: const ['other item']), const ReportStrings.id());
+      expect(id, contains('(catatan dalam bahasa Inggris) other item'));
+    });
+
+    test('currents and percentages at one fixed 0.1 precision', () {
+      final md = buildElectricalCalcReport(data());
+      final bal = RegExp(
+          r'L1 (\S+) A · L2 (\S+) A · L3 (\S+) A \(imbalance (\S+) %\)');
+      final ms = bal.allMatches(md).toList();
+      expect(ms, isNotEmpty);
+      for (final m in ms) {
+        for (var g = 1; g <= 4; g++) {
+          expect(m.group(g), matches(RegExp(r'^\d+\.\d$')),
+              reason: m.group(0));
+        }
+      }
+    });
+
+    test('ID: severity tags, the 3-phase cell and the genset mode localize',
+        () {
+      ElectricalCalcReportData d(WarningSeverity sev) =>
+          ElectricalCalcReportData(
+            projectName: 'R',
+            date: '2026-10-18',
+            standardsName: p.name,
+            standardsRevision: p.revision,
+            project: pr,
+            result: sys,
+            powerOneLine: const PowerOneLine(nodes: [
+              PowerNode(
+                  id: 'gen',
+                  kind: PowerNodeKind.generator,
+                  label: 'Generator',
+                  sub: '82 kVA Standby'),
+            ], edges: [], interlocks: []),
+            allWarnings: [
+              ElectricalWarning(code: 'x', message: 'm', severity: sev),
+            ],
+          );
+      final id = buildElectricalCalcReport(
+          d(WarningSeverity.warning), const ReportStrings.id());
+      expect(id, contains('82 kVA Siaga'));
+      expect(id, isNot(contains('82 kVA Standby')));
+      expect(id, contains('| 3 fasa |'));
+      expect(id, isNot(contains('| 3ph |')));
+      expect(id, contains('_PERINGATAN_'));
+      final en = buildElectricalCalcReport(d(WarningSeverity.error));
+      expect(en, contains('_ERROR_'));
+      expect(en, contains('| 3ph |'));
+      expect(en, contains('82 kVA Standby'));
     });
   });
 }

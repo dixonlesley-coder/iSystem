@@ -559,11 +559,9 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               // Round 12 — the PUIL KHA / derating / Vd debt beside the
               // advanced-study items, and the EFFECTIVE fault basis the
               // busbars were sized on (same chain as the live solve).
-              verifyItems: [
-                ...advanced.verifyItems,
-                for (final v in profile.verifyChecklist)
-                  '${v.citation}${v.note == null ? '' : ' — ${v.note}'}',
-              ],
+              // Round 30 (report-parity-2-3) — with its verification tier.
+              verifyItems: advanced.verifyItems,
+              verifyChecklist: profile.verifyChecklist,
               originFaultLevelA: effectiveOriginFaultLevel(project,
                       demand: result.supply.demandVa)
                   .amperes,

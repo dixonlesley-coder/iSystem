@@ -414,6 +414,18 @@ enum RptStringKey {
   mqUnpricedNote,
   mqAssumedNote,
   mqEquipmentNote,
+  // Round 30 (report-parity-2-5) — the last EN tokens of the ID electrical
+  // report: severity tags, the 3-phase cell, the genset mode words.
+  sevError,
+  sevWarn,
+  sevInfo,
+  phaseCell3ph,
+  olGenStandby,
+  olGenPrime,
+  // Round 30 (report-parity-2-1) — one fire-pump rating line per system.
+  fireSystemPumpKey,
+  fireSystemSprinkler,
+  fireSystemStandpipe,
 }
 
 /// English — the source language. Every value MUST match the inline literal it
@@ -869,6 +881,15 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '> {n} mechanical line(s) are assumptions the calculation relies on but the drawing does not show (marked \'assumed\'): confirm them before ordering.',
   RptStringKey.mqEquipmentNote:
       '> {n} scheduled equipment item(s) (pumps, tanks, air units, fans, AC units) are listed by duty and priced per piece; an unpriced item is excluded from the subtotal.',
+  RptStringKey.sevError: 'ERROR',
+  RptStringKey.sevWarn: 'WARN',
+  RptStringKey.sevInfo: 'INFO',
+  RptStringKey.phaseCell3ph: '3ph',
+  RptStringKey.olGenStandby: 'Standby',
+  RptStringKey.olGenPrime: 'Prime (continuous)',
+  RptStringKey.fireSystemPumpKey: '{tag} — {system} pump rating curve (NFPA 20):',
+  RptStringKey.fireSystemSprinkler: 'sprinkler',
+  RptStringKey.fireSystemStandpipe: 'standpipe',
 };
 
 /// Bahasa Indonesia — natural consulting-report phrasing, reusing the
@@ -1323,6 +1344,15 @@ const Map<RptStringKey, String> kReportStringsId = {
       '> {n} baris mekanis adalah asumsi perhitungan yang tidak tergambar (bertanda \'assumed\'): pastikan sebelum pemesanan.',
   RptStringKey.mqEquipmentNote:
       '> {n} item peralatan terjadwal (pompa, tangki, unit udara, kipas, unit AC) dicantumkan menurut kapasitas dan diberi harga per unit; item yang belum berharga tidak termasuk dalam subtotal.',
+  RptStringKey.sevError: 'GALAT',
+  RptStringKey.sevWarn: 'PERINGATAN',
+  RptStringKey.sevInfo: 'INFO',
+  RptStringKey.phaseCell3ph: '3 fasa',
+  RptStringKey.olGenStandby: 'Siaga',
+  RptStringKey.olGenPrime: 'Utama (kontinu)',
+  RptStringKey.fireSystemPumpKey: '{tag} — kurva rating pompa {system} (NFPA 20):',
+  RptStringKey.fireSystemSprinkler: 'sprinkler',
+  RptStringKey.fireSystemStandpipe: 'hidran',
 };
 
 /// Resolves a [RptStringKey] against a [ReportLocale], mirroring the app's

@@ -293,6 +293,21 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     sprinklerRemoteArea:
         sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
     firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
+    // Round 30 (report-parity-2-1) — each drawn fire system's own pump, under
+    // the tag its schedule row / MDP way carry.
+    fireSystems: fireDrawn
+        ? [
+            for (final (i, b) in ref.read(fireSystemBasesProvider).indexed)
+              FireSystemReportLine(
+                tag: (b.pumpIds.isEmpty
+                        ? null
+                        : equipmentNodeTags(net)[b.pumpIds.first]) ??
+                    'FP-${(i + 1).toString().padLeft(2, '0')}',
+                sprinklerOnly: b.sprinklerOnly,
+                rating: b.rating,
+              ),
+          ]
+        : const [],
     fan: reportFan,
     exhaustFan: ref.read(exhaustFanProvider),
     supplyAirflowLps: balance?.supplyLps ?? 0,
@@ -334,11 +349,10 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
     powerOneLine: eAdvanced.powerOneLine,
     // Round 12 — the PUIL KHA / derating / Vd debt behind every printed cable
     // size, beside the advanced-study items.
-    verifyItems: [
-      ...eAdvanced.verifyItems,
-      for (final v in eProfile.verifyChecklist)
-        '${v.citation}${v.note == null ? '' : ' — ${v.note}'}',
-    ],
+    // Round 30 (report-parity-2-3) — the profile checklist goes through
+    // with its verification TIER (the report prints it beside each value).
+    verifyItems: eAdvanced.verifyItems,
+    verifyChecklist: eProfile.verifyChecklist,
     // Round 12 (report-recompute-fault-basis-omitted) — the EFFECTIVE fault
     // level + clearing time the busbars were sized on (the same chain as
     // electricalResultProvider), with their provenance.

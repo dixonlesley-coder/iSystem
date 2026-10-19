@@ -109,11 +109,20 @@ List<RptBlock> _demoteBlocks(List<RptBlock> blocks) {
 List<RptBlock> _withoutRevisionHistory(
     List<RptBlock> blocks, ReportStrings strings) {
   final title = strings(RptStringKey.headingRevisionHistory);
+  // Round 30 (report-parity-2-6) — each embedded body's own Design Basis
+  // register (its heading + the one register block after it) is dropped
+  // too: the unified head already prints both disciplines' registers, so the
+  // same inputs used to print three times (and could drift apart).
+  final basis = strings(RptStringKey.headingDesignBasis);
   final out = <RptBlock>[];
   for (var i = 0; i < blocks.length; i++) {
     final b = blocks[i];
     if (b is RptHeading && b.text == title) {
       if (i + 1 < blocks.length && blocks[i + 1] is RptTable) i++;
+      continue;
+    }
+    if (b is RptHeading && b.text == basis) {
+      if (i + 1 < blocks.length && blocks[i + 1] is! RptHeading) i++;
       continue;
     }
     out.add(b);

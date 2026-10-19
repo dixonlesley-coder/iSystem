@@ -235,7 +235,12 @@ void main() {
       // delta: reverting that one cell reproduces the previous pin. Lines
       // unchanged.
       expect(md.split('\n').length, 87);
-      expect(fnv1a32(md), 0x67042f6f);
+      // Re-baselined 2026-10-18 (Round 30, report-parity-2-4): the MDP
+      // phase-balance bullet prints its currents and imbalance at the fixed
+      // 0.1 precision ('L2 0.0 A · L3 0.0 A (imbalance 300.0 %)', was '0 A' /
+      // '300 %'). Verified as the SOLE delta by diffing against the
+      // pre-change output. Lines unchanged.
+      expect(fnv1a32(md), 0xda143cb1);
     });
   });
 
@@ -263,7 +268,8 @@ void main() {
         '### Electrical',
         '## Compliance summary',
         '# Mechanical & plumbing',
-        '## Design basis',
+        // Round 30 — each embedded body's own Design basis is dropped (the
+        // unified head prints both registers once).
         // Round 12 — the per-discipline Revision-history tables are dropped
         // from the demoted bodies; the unified report prints ONE merged one.
         // N25: ASCII heading in the embedded mechanical body.
@@ -277,7 +283,6 @@ void main() {
         '## Bill of materials',
         '### Fittings (estimated)',
         '# Electrical',
-        '## Design basis',
         '## Supply summary',
         '## Panels',
         '### MDP [MDP] — 3-phase, 400 V',
@@ -354,11 +359,18 @@ void main() {
       // '## Revision history' line + its blank line under the merged H1 are
       // dropped ⇒ 215 − 2 = 213; re-inserting them reproduces 0xe90c0dc0
       // exactly (verified as the sole delta).
-      expect(md.split('\n').length, 213);
+      // Re-baselined 2026-10-18 (Round 30, report-parity-2-6): each embedded
+      // body's own '## Design basis' heading + register is dropped (the
+      // unified head prints both): mechanical 9 lines (heading, blank, 6
+      // rows, blank) + electrical 7 (heading, blank, 4 rows, blank) ⇒
+      // 213 − 16 = 197; plus the electrical body's phase-balance precision
+      // line (see the standalone pin). Verified as the SOLE deltas by diffing
+      // against the pre-change output.
+      expect(md.split('\n').length, 197);
       // Re-baselined 2026-10-18 (Round 20 follow-up): the embedded
       // electrical way table's Length cell is `30.0 m` (planLengthLabel) — the
       // sole delta, as for the standalone electrical pin above.
-      expect(fnv1a32(md), 0xeef5aef7);
+      expect(fnv1a32(md), 0xa40e604c);
     });
   });
 

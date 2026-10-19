@@ -15,8 +15,10 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/zoning.dart';
+import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart' as drain;
+import 'package:mechx_engine/sizing/fire_pump_rating.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -285,6 +287,64 @@ void main() {
       expect(count(f, FittingType.tee), 0);
       expect(count(f, FittingType.elbow), 0);
       expect(count(f, FittingType.reducer), 0);
+    });
+  });
+
+  group('calc report: one fire-pump rating line per drawn system', () {
+    CalcReportData data(List<FireSystemReportLine> systems) => CalcReportData(
+          projectName: 'F',
+          date: '2026-10-18',
+          standardsName: 'SNI',
+          standardsRevision: 'r',
+          verifyItems: const [],
+          building: _tower(8, 4),
+          feedStrategy: 'Upfeed pump',
+          targetResidual: const Pressure(225000),
+          firePumpRating: systems.isEmpty ? null : systems.last.rating,
+          fireSystems: systems,
+        );
+    // The round-28 fixture: a sprinkler pump 4.7 L/s @ 133.9 m beside a
+    // standpipe pump 31.5 L/s @ 114.5 m.
+    final sprinkler = checkFirePumpRating(
+        ratedFlow: FlowRate.litersPerSecond(4.7),
+        ratedHead: const Head(133.9));
+    final standpipe = checkFirePumpRating(
+        ratedFlow: FlowRate.litersPerSecond(31.5),
+        ratedHead: const Head(114.5));
+
+    test('two systems: each pump is printed under its tag with its own head '
+        'and motor', () {
+      final md = buildCalcReportMarkdown(data([
+        FireSystemReportLine(
+            tag: 'P-01', sprinklerOnly: true, rating: sprinkler),
+        FireSystemReportLine(
+            tag: 'P-02', sprinklerOnly: false, rating: standpipe),
+      ]));
+      expect(md, contains('P-01 — sprinkler pump rating curve (NFPA 20):'));
+      expect(md, contains('P-02 — standpipe pump rating curve (NFPA 20):'));
+      // 133.9 m prints at 0 dp: '134 m'; the sprinkler motor is its own.
+      expect(md, contains('@ 134 m'));
+      expect(md,
+          contains(sprinkler.selectedMotor.inKiloWatts.toStringAsFixed(1)));
+    });
+
+    test('one system: no extra line (byte-identical)', () {
+      final one = buildCalcReportMarkdown(data([
+        FireSystemReportLine(
+            tag: 'P-01', sprinklerOnly: false, rating: standpipe),
+      ]));
+      final none = buildCalcReportMarkdown(CalcReportData(
+        projectName: 'F',
+        date: '2026-10-18',
+        standardsName: 'SNI',
+        standardsRevision: 'r',
+        verifyItems: const [],
+        building: _tower(8, 4),
+        feedStrategy: 'Upfeed pump',
+        targetResidual: const Pressure(225000),
+        firePumpRating: standpipe,
+      ));
+      expect(one, none);
     });
   });
 }
