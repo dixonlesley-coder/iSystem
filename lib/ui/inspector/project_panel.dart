@@ -153,6 +153,8 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
           mounting: mounting,
         ),
     },
+    // Round 29 — run tags on the building's ground-relative levels.
+    building: project.building,
   );
 
   // Round 12 (report-recompute-second-ahu-missing) — every drawn supply /
@@ -187,7 +189,10 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       net.edges.any((e) => e.service == ServiceType.fireSprinkler);
   final hydrantDrawn =
       net.edges.any((e) => e.service == ServiceType.fireHydrant);
-  final standpipe = hydrantDrawn ? ref.read(standpipeDesignProvider) : null;
+  // Round 29 — the governing hydrant system's design (friction-inclusive),
+  // so the standpipe line agrees with the fire-pump rating beside it.
+  final standpipe =
+      hydrantDrawn ? ref.read(reportStandpipeDesignProvider) : null;
   final hwRecirc = ref.read(hotWaterRecircProvider);
   // Round 20 (drafting-visual-4-1) — the feed the report describes is the
   // DRAWN feed, on the same evidence as the riser sheet's `riserFeedNote`
@@ -1431,7 +1436,7 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     ),
     // N13: the stable element tag (`CW-R1` / `CW-F2`) on each run/riser so the
     // plan DXF traces to the same element the riser + BOM + report carry.
-    edgeTags: elementTags(net),
+    edgeTags: elementTags(net, building: project.building),
     // N4/B12: the setting-out grid from axis-aligned traced reference lines.
     grid: grid,
     // G1: the stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
@@ -1562,7 +1567,7 @@ Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     ),
     // N13: the stable element tag (`CW-R1` / `CW-F2`) prepended to each label so
     // the plan traces to the same element the riser + BOM + report carry.
-    edgeTags: elementTags(net),
+    edgeTags: elementTags(net, building: project.building),
     // N4/B12: axis-aligned traced reference lines become the setting-out grid
     // (vertical → lettered columns, horizontal → numbered rows); diagonal ones
     // are snap-only. Empty ⇒ no grid drawn (byte-identical).
@@ -2115,7 +2120,7 @@ Future<bool> writeSubmittalPackageToDir(
         mounting: ref.read(mountingProvider),
       );
       // N13: the stable element tags shared by both plan formats + the reports.
-      final tags = elementTags(net);
+      final tags = elementTags(net, building: project.building);
       // N4/B12: the setting-out grid from axis-aligned traced reference lines,
       // shared by both plan formats.
       final grid = buildReferenceGrid(

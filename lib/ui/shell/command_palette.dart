@@ -27,7 +27,6 @@ import '../../store/history_store.dart';
 import '../../store/inspector_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
-import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/snap_settings_store.dart' show refLineModeProvider;
 import '../inspector/project_panel.dart'
@@ -334,37 +333,10 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Remove all drawn elements (undoable)',
       run: net.clear,
     ),
-    _Command(
-      id: 'floor.dupUp',
-      title: 'Duplicate floor up',
-      subtitle: "Copy this floor's runs to the floor above",
-      run: () {
-        final sheets = ref.read(sheetsControllerProvider);
-        final levelCount =
-            ref.read(projectControllerProvider).building.levelCount;
-        final current = sheets.current;
-        if (current == null) return;
-        final fromFloor = sheets.floorFor(current.id, levelCount);
-        final toFloor = fromFloor + 1;
-        if (toFloor >= levelCount) return;
-        // Resolve the destination by the sheet→floor MAPPING (a sheet may carry
-        // an explicit floor override, so list index need not equal floor index).
-        String? toSheetId;
-        for (final s in sheets.sheets) {
-          if (sheets.floorFor(s.id, levelCount) == toFloor) {
-            toSheetId = s.id;
-            break;
-          }
-        }
-        if (toSheetId == null) return;
-        net.duplicateFloor(
-          fromSheetId: current.id,
-          fromFloor: fromFloor,
-          toSheetId: toSheetId,
-          toFloor: toFloor,
-        );
-      },
-    ),
+    // Round 29 (ui-journeys-3-palette-dup-floor-up-silent) — the old
+    // 'Duplicate floor up' is gone: it failed silently three ways (no
+    // sheet, top floor, no plan above) and duplicated the dialog below,
+    // which covers it honestly (disabled 'no plan' targets + a status toast).
     _Command(
       id: 'floor.dupRange',
       title: 'Duplicate floor to…',
@@ -382,6 +354,14 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       title: 'Start calibration',
       subtitle: 'Mark a known distance on the sheet',
       run: () {
+        // Round 29 (ui-journeys-3-palette-calibrate-no-sheet) — the stepper's
+        // F12 guard: with no plan loaded the Layout shows its empty state
+        // (the calibration overlay never mounts), so an armed calibration
+        // would be invisible — send the engineer to Import instead.
+        if (ref.read(sheetsControllerProvider).sheets.isEmpty) {
+          importPlan(context, ref);
+          return;
+        }
         openDesign(WorkspaceView.plan);
         ref.read(calibrationControllerProvider.notifier).start();
       },
@@ -809,9 +789,15 @@ class _CommandRow extends StatelessWidget {
               ),
               if (command.subtitle.isNotEmpty) ...[
                 const SizedBox(width: MechXSpacing.sm),
-                Text(
-                  command.subtitle,
-                  style: type.caption.copyWith(color: colors.textMuted),
+                // Round 29 — a long subtitle ellipsizes instead of
+                // overflowing the row (it was unconstrained).
+                Flexible(
+                  child: Text(
+                    command.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.caption.copyWith(color: colors.textMuted),
+                  ),
                 ),
               ],
               // Right-aligned keyboard-shortcut hint (a keycap), for the rows

@@ -161,7 +161,18 @@ class EarthingResult {
   final EarthingSystem system;
   final String label;
   final bool requiresRcd;
+  /// The main earthing conductor's TOTAL equivalent section (mm²).
   final double mainEarthingConductorMm2;
+
+  /// Round 29 (electrical-sim-3-main-earthing-off-ladder-single-conductor) —
+  /// the ORDERABLE make-up of [mainEarthingConductorMm2]: [mainEarthingConductorCount]
+  /// parallel conductors of [mainEarthingPerConductorMm2] each, every one a
+  /// rung of the standard section ladder. One conductor (count 1, per =
+  /// total) whenever the total fits the ladder; only a total above the
+  /// ladder's top is carried as parallel runs (a 4 × 150 mm² service PE is
+  /// `4 x 150 mm²`, never an unorderable `1 x 600 mm²`).
+  final double mainEarthingPerConductorMm2;
+  final int mainEarthingConductorCount;
   final double mainBondingConductorMm2;
   final Resistance electrodeResistanceTarget;
   final String note;
@@ -171,10 +182,19 @@ class EarthingResult {
     required this.label,
     required this.requiresRcd,
     required this.mainEarthingConductorMm2,
+    double? mainEarthingPerConductorMm2,
+    this.mainEarthingConductorCount = 1,
     required this.mainBondingConductorMm2,
     required this.electrodeResistanceTarget,
     required this.note,
-  });
+  }) : mainEarthingPerConductorMm2 =
+            mainEarthingPerConductorMm2 ?? mainEarthingConductorMm2;
+
+  /// The printed make-up: `S` for one conductor, `n x S` for parallel runs
+  /// (unit appended by the caller).
+  String get mainEarthingMakeup => mainEarthingConductorCount > 1
+      ? '$mainEarthingConductorCount x ${_num(mainEarthingPerConductorMm2)}'
+      : _num(mainEarthingConductorMm2);
 }
 
 String _num(double v) =>
@@ -253,13 +273,40 @@ double tnMainEarthingConductorMm2(
   ElectricalStandardsProfile profile,
   double supplyPeMm2, {
   int runsPerPhase = 1,
+}) =>
+    tnMainEarthingConductor(profile, supplyPeMm2, runsPerPhase: runsPerPhase)
+        .totalMm2;
+
+/// Round 29 — the TN main earthing conductor as an ORDERABLE make-up: a single
+/// ladder conductor when the total ([tnMainEarthingConductorMm2]'s figure)
+/// fits the section ladder, else [runsPerPhase] parallel conductors of the
+/// per-run PE snapped up the ladder (the total CSA is the per-run sum).
+({double perConductorMm2, int count, double totalMm2}) tnMainEarthingConductor(
+  ElectricalStandardsProfile profile,
+  double supplyPeMm2, {
+  int runsPerPhase = 1,
 }) {
-  final total = supplyPeMm2 * (runsPerPhase < 1 ? 1 : runsPerPhase);
+  final runs = runsPerPhase < 1 ? 1 : runsPerPhase;
+  final total = supplyPeMm2 * runs;
   final target = total > 16 ? total : 16.0;
   for (final s in profile.standardSectionsMm2) {
-    if (s >= target - 1e-9) return s;
+    if (s >= target - 1e-9) {
+      return (perConductorMm2: s, count: 1, totalMm2: s);
+    }
   }
-  return target;
+  // Above the ladder's top: parallel conductors, each a ladder rung.
+  final perTarget = supplyPeMm2 > 16 ? supplyPeMm2 : 16.0;
+  var per = profile.standardSectionsMm2.last;
+  for (final s in profile.standardSectionsMm2) {
+    if (s >= perTarget - 1e-9) {
+      per = s;
+      break;
+    }
+  }
+  // Enough conductors of [per] to reach the target (never fewer than runs).
+  var count = (target / per - 1e-9).ceil();
+  if (count < runs) count = runs;
+  return (perConductorMm2: per, count: count, totalMm2: per * count);
 }
 
 /// Design the installation earthing system: RCD policy, main earthing + bonding
@@ -281,6 +328,8 @@ EarthingResult computeEarthing(
   int runsPerPhase = 1,
 }) {
   final requiresRcd = system == EarthingSystem.tt;
+  final tn = tnMainEarthingConductor(profile, supplyPeMm2,
+      runsPerPhase: runsPerPhase);
   final tail = requiresRcd
       ? ' Earth-fault loop impedance is high, so an RCD provides fault '
           'protection on every final circuit.'
@@ -292,8 +341,11 @@ EarthingResult computeEarthing(
     requiresRcd: requiresRcd,
     mainEarthingConductorMm2: system == EarthingSystem.tt
         ? profile.mainEarthingConductorMm2(supplyPeMm2)
-        : tnMainEarthingConductorMm2(profile, supplyPeMm2,
-            runsPerPhase: runsPerPhase),
+        : tn.totalMm2,
+    mainEarthingPerConductorMm2: system == EarthingSystem.tt
+        ? null
+        : tn.perConductorMm2,
+    mainEarthingConductorCount: system == EarthingSystem.tt ? 1 : tn.count,
     mainBondingConductorMm2: profile.mainBondingConductorMm2(supplyPeMm2),
     electrodeResistanceTarget: profile.maxEarthResistance.value,
     note: system.note + tail,

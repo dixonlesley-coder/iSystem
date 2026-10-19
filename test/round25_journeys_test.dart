@@ -123,8 +123,8 @@ void main() {
       setDesktopSurface(tester);
       await tester.pumpWidget(const ProviderScope(child: MechXApp()));
       await tester.pump();
-      await tester.ensureVisible(find.text('Load sample project'));
-      await tester.tap(find.text('Load sample project'));
+      await tester.ensureVisible(find.text('Load plumbing sample'));
+      await tester.tap(find.text('Load plumbing sample'));
       await tester.pumpAndSettle();
       expect(find.text('Direct mains: no booster duty', skipOffstage: false),
           findsOneWidget);

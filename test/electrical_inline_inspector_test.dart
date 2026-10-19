@@ -65,8 +65,8 @@ void main() {
     // The sample carries no sources → Backup & on-site starts collapsed.
     expect(find.text('Genset present'), findsNothing);
     // Advanced is COLLAPSED by default.
-    expect(find.text('Origin fault level (kA)'), findsNothing);
-    expect(find.text('Busbar clearing time (s)'), findsNothing);
+    expect(find.text('Origin fault level (kA, 0 = auto)'), findsNothing);
+    expect(find.text('Busbar clearing time (s, 0 = auto)'), findsNothing);
     expect(find.text('MEP equipment feed'), findsNothing);
 
     // Expanding the two closed sections discloses the rest.
@@ -80,8 +80,8 @@ void main() {
     await tester.ensureVisible(find.text('ADVANCED'));
     await tester.tap(find.text('ADVANCED'));
     await tester.pumpAndSettle();
-    expect(find.text('Origin fault level (kA)'), findsOneWidget);
-    expect(find.text('Busbar clearing time (s)'), findsOneWidget);
+    expect(find.text('Origin fault level (kA, 0 = auto)'), findsOneWidget);
+    expect(find.text('Busbar clearing time (s, 0 = auto)'), findsOneWidget);
     expect(find.text('MEP equipment feed'), findsOneWidget);
 
     // The Issues button toggles the Advanced section on/off (shared target).

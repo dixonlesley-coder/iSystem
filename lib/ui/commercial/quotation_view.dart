@@ -170,7 +170,8 @@ class _NumberRow extends ConsumerWidget {
             width: 160,
             child: MechXTextField(
               value: _editValue(value),
-              onChanged: (s) {
+              // Round 29 — commit on blur / Enter (one settings undo step).
+              onCommitted: (s) {
                 // Locale-aware (`150.000` = 150 000 IDR/h under the issued
                 // Indonesian notation — audit r8); unparseable ⇒ keep.
                 final parsed = parseMoneyInput(s, indonesian: indonesian);

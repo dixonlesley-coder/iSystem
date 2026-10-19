@@ -265,6 +265,7 @@ SldSheet _withTextBounds(SldSheet sheet, List<SldPrim> prims) {
     maxY: maxY,
     legend: sheet.legend,
     supplyNote: sheet.supplyNote,
+    overlapCount: sheet.overlapCount,
   );
 }
 

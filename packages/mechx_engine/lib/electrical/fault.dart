@@ -51,7 +51,11 @@ import 'model.dart'
 import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
         ElectricalWarning, WarningSeverity;
-import 'supply_design.dart' show determineSupply, transformerImpedancePct;
+import 'supply_design.dart'
+    show
+        declaredServiceTransformerKva,
+        determineSupply,
+        transformerImpedancePct;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Local standards constants (all // VERIFY — define here to stay file-disjoint
@@ -256,6 +260,12 @@ const Map<ConductorMaterial, Map<ConductorInsulation, double>> peAdiabaticK = {
 
 /// The unverified-value labels this study introduces, for a report's
 /// "verify against the official PUIL / IEC text" section.
+///
+/// Round 29 (electrical-sim-3-motor-fault-contribution-claimed-not-applied) —
+/// the motor-infeed line ([faultStudyMotorVerifyItem]) is NOT in this base
+/// list: [faultStudy] appends it only when a motor contribution was actually
+/// folded in (> 0). Every report used to assert a basis the study never used
+/// (the default contribution is 0).
 const List<String> faultStudyVerifyItems = [
   'default LV utility prospective fault level (16 kA)',
   'phase voltage U0 (230 V) for Zs / ADS limits',
@@ -265,11 +275,15 @@ const List<String> faultStudyVerifyItems = [
   'breaker breaking-capacity ladders (MCB 6–25 kA / MCCB 16–70 kA)',
   'selectivity discrimination ratios (partial 1.6× / total 2.5×) — a simplified '
       'time-current zone model, not manufacturer let-through / selectivity tables',
-  'estimated motor fault contribution (~6× FLA sub-transient pulse, ~100 ms) '
-      'folded into the prospective fault level',
   'Ics vs Icu service/ultimate breaking-capacity check (IEC 60947-2)',
   'PE adiabatic-k table (IEC 60364-5-54 Table 54.3)',
 ];
+
+/// Round 29 — the motor-infeed provenance line, emitted by [faultStudy] only
+/// when [faultStudy]'s `estimatedMotorFaultContributionA` is > 0.
+const String faultStudyMotorVerifyItem =
+    'estimated motor fault contribution (~6× FLA sub-transient pulse, ~100 ms) '
+    'folded into the prospective fault level';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Service-size-derived prospective fault level.
@@ -378,7 +392,13 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
     // Round 25 — above the PLN TR ceiling: the declared capacity's own
     // transformer fault, never below the study transformer for the demand
     // (step 3) nor the flat 16 kA the rung used to return.
-    final declaredA = capacityVa /
+    // Round 29 — that transformer is the SNAPPED unit the supply study,
+    // drawings and power one-line all print
+    // ([declaredServiceTransformerKva]: a 555 kVA daya ⇒ 630 kVA), never
+    // the raw daya figure (no 555 kVA unit exists).
+    final txKva = declaredServiceTransformerKva(project)?.voltAmperes ??
+        capacityVa;
+    final declaredA = txKva /
         (math.sqrt(3) *
             serviceFaultLineVoltageV *
             representativeTransformerZpu);
@@ -1345,7 +1365,9 @@ FaultStudyResult faultStudy(
     circuits: circuitResults,
     selectivity: selectivity,
     warnings: warnings,
-    verifyItems: faultStudyVerifyItems,
+    verifyItems: motorA > 0 && baseIscA > 0
+        ? const [...faultStudyVerifyItems, faultStudyMotorVerifyItem]
+        : faultStudyVerifyItems,
   );
 }
 

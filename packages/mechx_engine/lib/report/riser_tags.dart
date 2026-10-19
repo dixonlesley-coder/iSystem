@@ -14,6 +14,7 @@
 /// app's `FeedStrategy` enum.
 library;
 
+import 'package:mechx_engine/geometry/building.dart' show BuildingLevels;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/number_format.dart'
     show signedElevationText;
@@ -398,14 +399,37 @@ class _RiserRef {
 ///
 /// Pure + deterministic. Never fabricates — an absent floor / riser tag simply
 /// degrades to the service code.
+///
+/// Round 29 (drawings-3-7) — with the project [building] the floor token
+/// follows the building's GROUND-RELATIVE levels ([floorLocatorToken]: `B2`,
+/// `B1`, `GF`, `L1`, …), so a run on the sheet titled 'Lantai 4' reads
+/// `CW-L4` — matching the sheet title, the riser's FFL gutter and the
+/// ground-relative datum — never `CW-F5`. Without a building the legacy
+/// 1-based `F<n>` stands (byte-identical).
 String elementTagForEdge(
-    Network net, NetEdge edge, Map<String, String> riserTagByEdge) {
+    Network net, NetEdge edge, Map<String, String> riserTagByEdge,
+    {BuildingLevels? building}) {
   final code = riserServiceCode(edge.service);
   if (edge.kind == EdgeKind.riser) {
     return riserTagByEdge[edge.id] ?? code;
   }
   final floor = net.nodeById(edge.fromId)?.floorIndex;
-  return floor == null ? code : '$code-F${floor + 1}';
+  return floor == null ? code : '$code-${floorLocatorToken(floor, building)}';
+}
+
+/// Round 29 (drawings-3-7) — the floor LOCATOR token of a run tag: relative
+/// to the building's ground floor ([BuildingLevels.groundIndex], clamped into
+/// the stack) — basements `B<n>` (B1 directly below ground), the ground floor
+/// `GF`, upper floors `L<n>` (L1 directly above ground). Null [building] ⇒
+/// the legacy 1-based `F<floorIndex + 1>`.
+String floorLocatorToken(int floorIndex, BuildingLevels? building) {
+  if (building == null) return 'F${floorIndex + 1}';
+  final n = building.levelCount;
+  final g = n == 0 ? 0 : building.groundIndex.clamp(0, n - 1);
+  final rel = floorIndex - g;
+  if (rel < 0) return 'B${-rel}';
+  if (rel == 0) return 'GF';
+  return 'L$rel';
 }
 
 /// Per-edge stable element tags for the WHOLE [net] (N13), keyed by edge id: the
@@ -413,10 +437,11 @@ String elementTagForEdge(
 /// the ONE map threaded into the plan-drawing labels ([planToPdf]/[networkToDxf]
 /// `edgeTags`), the BOM tag column and the calc-report run schedule, so a
 /// run/riser reads the same tag on all four artifacts. Pure + deterministic.
-Map<String, String> elementTags(Network net) {
+Map<String, String> elementTags(Network net, {BuildingLevels? building}) {
   final risers = riserTags(net, null);
   return <String, String>{
-    for (final e in net.edges) e.id: elementTagForEdge(net, e, risers),
+    for (final e in net.edges)
+      e.id: elementTagForEdge(net, e, risers, building: building),
   };
 }
 

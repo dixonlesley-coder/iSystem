@@ -606,7 +606,7 @@ void main(List<String> args) {
   final elevLabels = elevationLabels(net);
   // N13: one stable element tag per edge (riser stack tag / run floor tag),
   // threaded into BOTH plan formats so they trace to the riser + BOM + report.
-  final edgeTagsMap = elementTags(net);
+  final edgeTagsMap = elementTags(net, building: building);
   // G1: one stable equipment tag per plant/air-unit node (P-01 / TK-01 / AHU-01),
   // threaded into the plan PDF + DXF beside each equipment glyph.
   final nodeTagsMap = equipmentNodeTags(net);
@@ -1069,6 +1069,7 @@ void main(List<String> args) {
         sizing: sizing,
         edgeLengths: edgeLengths,
         edgeFixtureUnits: edgeFixtureUnits,
+        building: building,
       ),
       revisions: const [
         Revision('2026-07-06', 'Issued for construction (Rev. 0)'),

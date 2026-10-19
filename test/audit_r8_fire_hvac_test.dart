@@ -21,7 +21,9 @@ import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/units.dart';
 
 ProviderContainer _sprinklerNet(
-    {List<Override> overrides = const [], bool withHydrant = false}) {
+    {List<Override> overrides = const [],
+    bool withHydrant = false,
+    bool drawnPump = true}) {
   final c = ProviderContainer(overrides: overrides);
   c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
         if (withHydrant)
@@ -33,14 +35,14 @@ ProviderContainer _sprinklerNet(
               floorIndex: 0,
               role: NodeRole.fixture,
               component: NodeComponent.hydrantBox),
-        const NetNode(
+        NetNode(
             id: 'fp',
             sheetId: 's1',
             x: 0,
             y: 0,
             floorIndex: 0,
             role: NodeRole.plant,
-            component: NodeComponent.pump),
+            component: drawnPump ? NodeComponent.pump : null),
         const NetNode(
             id: 'sh',
             sheetId: 's1',
@@ -118,7 +120,10 @@ void main() {
       motorInputPower: Power(7800),
       selectedMotor: Power(7500),
     );
+    // Round 29 — no pump drawn on the sprinkler system, so the check falls
+    // back to the governing (scheduled) fire pump, overridden here.
     final c = _sprinklerNet(
+        drawnPump: false,
         overrides: [firePumpDutyProvider.overrideWith((ref) => weak)]);
     addTearDown(c.dispose);
     final b = c.read(projectControllerProvider).building;
@@ -141,6 +146,48 @@ void main() {
     addTearDown(c.dispose);
     c.read(fireHazardProvider.notifier).set(FireHazardClass.extraHazard);
     expect(c.read(sprinklerPumpCheckProvider), isNull);
+  });
+
+  test(
+      'Round 29: a sprinkler system with its own pump beside a separate '
+      'hydrant tower is judged on ITS pump (no false warning)', () {
+    NetNode n(String id, double x, NodeRole r, NodeComponent? c) => NetNode(
+        id: id, sheetId: 's1', x: x, y: 0, floorIndex: 0, role: r, component: c);
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+          n('aGT', 0, NodeRole.plant, NodeComponent.groundTank),
+          n('aSP', 100, NodeRole.plant, NodeComponent.pump),
+          n('aSH', 200, NodeRole.fixture, NodeComponent.sprinklerHead),
+          n('bGT', 1000, NodeRole.plant, NodeComponent.groundTank),
+          n('bHP', 1100, NodeRole.plant, NodeComponent.pump),
+          n('bHB', 1200, NodeRole.fixture, NodeComponent.hydrantBox),
+        ], edges: const [
+          NetEdge(id: 'a1', fromId: 'aGT', toId: 'aSP', service: ServiceType.fireSprinkler),
+          NetEdge(id: 'a2', fromId: 'aSP', toId: 'aSH', service: ServiceType.fireSprinkler),
+          NetEdge(id: 'b1', fromId: 'bGT', toId: 'bHP', service: ServiceType.fireHydrant),
+          NetEdge(id: 'b2', fromId: 'bHP', toId: 'bHB', service: ServiceType.fireHydrant),
+        ]));
+    c.read(fireHazardProvider.notifier).set(FireHazardClass.extraHazard);
+    final remote = c.read(sprinklerRemoteAreaProvider);
+    final demand = remote.remoteAreaDemand.inLitersPerSecond;
+    final byNode = c.read(firePumpBasisByNodeProvider);
+    // The sprinkler pump is rated on its own remote-area demand (≈ 43 L/s);
+    // the governing (scheduled) pump is the 500 gpm hydrant one (31.5 L/s),
+    // which the pre-Round-29 judge compared against and flagged.
+    expect(byNode['aSP']!.sprinklerOnly, isTrue);
+    expect(byNode['aSP']!.flow.inLitersPerSecond, closeTo(demand, 1e-9));
+    expect(c.read(firePumpDutyProvider)!.flow.inLitersPerSecond,
+        lessThan(demand));
+    final chk = c.read(sprinklerPumpCheckProvider)!;
+    expect(chk.pumpLps, closeTo(demand, 1e-9));
+    expect(chk.flowShort, isFalse);
+    expect(chk.headShort, isFalse);
+    expect(
+        c.read(designIssuesProvider).any((i) =>
+            i.kind == 'sprinkler-flow-exceeds-fire-pump' ||
+            i.kind == 'sprinkler-head-exceeds-fire-pump'),
+        isFalse);
   });
 
   test('fire-hvac-4: the Internal-gains basis raises an info advisory + is '

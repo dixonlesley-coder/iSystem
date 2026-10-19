@@ -21,6 +21,7 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart';
+import 'fault.dart' show plnLvServiceCeilingVa;
 import 'model.dart' show ElectricalProject, ElectricalSystem;
 
 // ── Local reference constants (`// VERIFY`) ─────────────────────────────────
@@ -371,6 +372,33 @@ String _thousands(double va) {
   return buf.toString();
 }
 
+/// Round 29 (electrical-sim-3-declared-capacity-above-tr-ceiling) — the ONE
+/// declared customer transformer rating: the explicit
+/// [ElectricalProject.transformerKva] when set (> 0), else — a declared PLN
+/// connection capacity ([ElectricalProject.supplyCapacityVa]) ABOVE the LV
+/// (TR) ceiling [plnLvServiceCeilingVa] is a TM (MV) connection — the
+/// smallest [transformerKvaLadder] rating covering it (a 555 kVA daya ⇒ a
+/// 630 kVA unit; above the ladder, the capacity itself). Null on an LV
+/// service. The supply study, the fault estimate, the drawings and the power
+/// one-line all read this, so one declared service is described ONE way.
+ApparentPower? declaredServiceTransformerKva(ElectricalProject project) {
+  final tx = project.transformerKva;
+  if (tx != null && tx.inKilovoltAmperes > 0) return tx;
+  final cap = project.supplyCapacityVa?.voltAmperes;
+  if (cap == null || cap <= plnLvServiceCeilingVa) return null;
+  final kva = cap / 1000;
+  for (final k in transformerKvaLadder) {
+    if (k >= kva - 1e-9) return ApparentPower.kilovoltAmperes(k);
+  }
+  return ApparentPower.kilovoltAmperes(kva);
+}
+
+/// Round 29 — the ONE 'declared MV service' predicate: a declared transformer
+/// ([declaredServiceTransformerKva], incl. a connection capacity above the LV
+/// ceiling) or a dual-transformer service.
+bool isDeclaredMvService(ElectricalProject project) =>
+    declaredServiceTransformerKva(project) != null || project.dualTransformer;
+
 /// Round 16 (supply-sources-dual-tx-spine-genset-ladder) — the service
 /// transformer the DRAWINGS and the equipment schedule print, from the SAME
 /// [determineSupply] the study reports: the declared rating when one is set
@@ -381,8 +409,8 @@ String _thousands(double va) {
 /// undeclared one has no demand to size from.
 ({double kva, int units})? serviceTransformer(
     ElectricalProject project, ApparentPower demand) {
-  final declared = project.transformerKva;
-  final hasDeclared = declared != null && declared.inKilovoltAmperes > 0;
+  final declared = declaredServiceTransformerKva(project);
+  final hasDeclared = declared != null;
   if (!hasDeclared && !project.dualTransformer) return null;
   if (!hasDeclared && demand.voltAmperes <= 0) return null;
   final s = determineSupply(demand,

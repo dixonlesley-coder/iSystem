@@ -266,12 +266,19 @@ class ElectricalOptionalNumInput extends StatefulWidget {
   /// Round the committed value to a whole number (way counts, grouping counts).
   final bool integer;
 
+  /// Round 29 (ui-journeys-3-fault-level-pinned-no-auto) — a committed 0 (or
+  /// negative) hands the value back to the engine (`onChanged(null)`), the
+  /// '0 = auto' idiom of the genset / transformer fields; default false keeps
+  /// a non-positive entry ignored (an override of 0 A is nonsense).
+  final bool zeroClears;
+
   const ElectricalOptionalNumInput({
     super.key,
     required this.value,
     required this.onChanged,
     this.hint = 'Auto',
     this.integer = false,
+    this.zeroClears = false,
   });
 
   @override
@@ -320,7 +327,10 @@ class _ElectricalOptionalNumInputState
         }
         // A non-positive override (0 A breaker, 0 mm² cable, 0 cables grouped)
         // is not a design input — reject it rather than committing nonsense.
-        if (parsed <= 0) return;
+        if (parsed <= 0) {
+          if (widget.zeroClears && value != null) widget.onChanged(null);
+          return;
+        }
         final v = widget.integer ? parsed.roundToDouble() : parsed;
         if (v != value) widget.onChanged(v);
       },

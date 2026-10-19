@@ -97,6 +97,12 @@ class SldSheet {
   /// renderer in page space.
   final String supplyNote;
 
+  /// Round 29 (drawings-3-1) — annotations the builder could only place FUSED
+  /// into another label. Non-zero ⇒ the PDF / DXF renderers print the plan
+  /// pipeline's overlap warning ([planOverlapWarning]) so an illegible sheet
+  /// is never issued as if clean. 0 (the default) ⇒ byte-identical.
+  final int overlapCount;
+
   const SldSheet({
     required this.prims,
     required this.minX,
@@ -105,6 +111,7 @@ class SldSheet {
     required this.maxY,
     required this.legend,
     required this.supplyNote,
+    this.overlapCount = 0,
   });
 
   bool get isEmpty => prims.isEmpty;

@@ -1567,12 +1567,26 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                 // ── Advanced (fault level + clearing time + MEP feed) ────
                 section(kSupplyAdvancedSectionKey,
                     StringKey.electricalSupplyAdvanced, false, [
+                  // Round 29 (ui-journeys-3-fault-level-pinned-no-auto) —
+                  // an OPTIONAL field: empty (or 0) = the estimate chain,
+                  // shown as the hint, so a typed value is visibly a pin and
+                  // can always be handed back (a pinned 10 kA used to stay
+                  // after a 1000 kVA transformer raised the real fault to
+                  // ~36 kA).
                   ElectricalField(
                     label: context.strings(StringKey.electricalOriginFaultLevel),
-                    child: ElectricalNumInput(
-                      value: effectiveOriginFaultLevelKa,
-                      onChanged: (v) =>
-                          ctrl.setOriginFaultLevel(Current(v * 1000)),
+                    child: ElectricalOptionalNumInput(
+                      value: project.originFaultLevelA == null
+                          ? null
+                          : project.originFaultLevelA!.amperes / 1000,
+                      hint: context.strings.format(
+                          StringKey.electricalAutoValueHint, {
+                        'value':
+                            '${effectiveOriginFaultLevelKa.toStringAsFixed(1)} kA',
+                      }),
+                      zeroClears: true,
+                      onChanged: (v) => ctrl.setOriginFaultLevel(
+                          v == null ? null : Current(v * 1000)),
                     ),
                   ),
                   note(context.strings(StringKey.electricalOriginFaultLevelNote)),
@@ -1580,8 +1594,11 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                   ElectricalField(
                     label:
                         context.strings(StringKey.electricalBusbarClearingTime),
-                    child: ElectricalNumInput(
-                      value: project.busbarClearingTimeS ?? 0.1,
+                    child: ElectricalOptionalNumInput(
+                      value: project.busbarClearingTimeS,
+                      hint: context.strings.format(
+                          StringKey.electricalAutoValueHint, {'value': '0.1 s'}),
+                      zeroClears: true,
                       onChanged: ctrl.setBusbarClearingTime,
                     ),
                   ),

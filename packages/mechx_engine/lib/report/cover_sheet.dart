@@ -542,18 +542,16 @@ void _addLegendGlyph(
     case LegendGlyphKind.fixtureTriangle:
       prims.addAll(planFixturePrims(cx: cx, cy: cy, size: 14));
     case LegendGlyphKind.riserUp:
-      // A riser marker (circle) + an upward tick — the plan's UP sense.
-      prims
-        ..add(SldCircle(cx, cy, 5))
-        ..add(SldLine(cx, cy - 5, cx, cy - 12))
-        ..add(SldLine(cx, cy - 12, cx - 4, cy - 7))
-        ..add(SldLine(cx, cy - 12, cx + 4, cy - 7));
     case LegendGlyphKind.riserDown:
+      // Round 29 (drawings-3-8) — EXACTLY the plan's riser-end mark: the
+      // service circle, the junction dot at its centre, and the 'UP' / 'DN'
+      // sense text beside it (plan PDF / DXF `ann.upDown`). The legend used
+      // to key an arrow-shaft glyph that no plan draws.
+      final sense = e.kind == LegendGlyphKind.riserUp ? 'UP' : 'DN';
       prims
-        ..add(SldCircle(cx, cy, 5))
-        ..add(SldLine(cx, cy + 5, cx, cy + 12))
-        ..add(SldLine(cx, cy + 12, cx - 4, cy + 7))
-        ..add(SldLine(cx, cy + 12, cx + 4, cy + 7));
+        ..add(SldCircle(cx - 8, cy, 5))
+        ..add(SldCircle(cx - 8, cy, 1))
+        ..add(SldLabel(cx - 1, cy + 3, sense, size: 7));
     case LegendGlyphKind.flowChevron:
       // A short shaft + an open chevron pointing right (flow direction).
       prims

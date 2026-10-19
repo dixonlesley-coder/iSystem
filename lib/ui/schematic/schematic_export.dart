@@ -25,7 +25,6 @@ import 'package:mechx_engine/report/riser_tags.dart'
     show equipmentDetail, riserFeedNote, riserServiceCode;
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
-import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart' show Length;
 
 import '../../store/app_state.dart';
@@ -38,6 +37,7 @@ import '../../store/solve_store.dart';
 import '../inspector/project_panel.dart'
     show kDrawServices, pickExportSave, runExportGuarded;
 import '../strings/app_strings.dart';
+import '../strings/occupancy_label.dart';
 
 /// The title-block heading for the active system [focus] — a per-service riser
 /// title (Indonesian air-bersih convention) when one system is filtered, else
@@ -133,11 +133,12 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
   if (roofM3 != null) lines.add('Roof tank: $roofM3');
   final groundM3 = tankM3(NodeComponent.groundTank);
   if (groundM3 != null) lines.add('Ground tank: $groundM3');
-  lines.add('Occupancy: ${switch (occupancy) {
-    Occupancy.private => 'Private',
-    Occupancy.public => 'Public',
-    Occupancy.assembly => 'Assembly',
-  }}');
+  // Round 29 (ui-journeys-3-occupancy-two-vocabularies) — the Building
+  // input's own label in the active locale (was the hard-coded English enum
+  // name 'Private', unlike the 'Residential' the engineer picked).
+  final str = MechXStringsData(ref.read(localeProvider));
+  lines.add(str.format(StringKey.schematicNotesOccupancy,
+      {'label': str(occupancyLabelKey(occupancy))}));
   // Peak design flow is upfeed-only (supplyPeakFlowProvider null on
   // downfeed) and is the BUILDING trunk flow, never an inline booster's
   // partial flow (Round 15 r2). Never

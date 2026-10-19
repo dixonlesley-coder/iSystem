@@ -191,8 +191,17 @@ void main() {
   test('fault study verify items list the simplified models', () {
     final sys = computeSystem(p, project);
     final study = faultStudy(sys, project, p);
+    // Round 29 — the motor-infeed line prints only when an infeed was
+    // actually folded in (the default contribution is 0).
     expect(
       study.verifyItems.any((s) => s.contains('motor fault contribution')),
+      isFalse,
+    );
+    final withMotor = faultStudy(sys, project, p,
+        estimatedMotorFaultContributionA: const Current(500));
+    expect(
+      withMotor.verifyItems
+          .any((s) => s.contains('motor fault contribution')),
       isTrue,
     );
     expect(

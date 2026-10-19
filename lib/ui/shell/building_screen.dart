@@ -29,6 +29,7 @@ import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
 import '../strings/app_strings.dart';
+import '../strings/occupancy_label.dart';
 import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -618,11 +619,6 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
     });
   }
 
-  static String _occupancyLabel(Occupancy o) => switch (o) {
-        Occupancy.private => 'Residential',
-        Occupancy.public => 'Office / public',
-        Occupancy.assembly => 'Assembly / mall',
-      };
 
   @override
   Widget build(BuildContext context) {
@@ -699,7 +695,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
             children: [
               for (final o in Occupancy.values)
                 MechXSegment(
-                  label: _occupancyLabel(o),
+                  label: context.strings(occupancyLabelKey(o)),
                   selected: occ == o,
                   onTap: () {
                     setOccupancyUndoable(ref.read, o);

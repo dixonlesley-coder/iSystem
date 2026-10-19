@@ -107,24 +107,45 @@ double _sprinklerStaticLiftM(BuildingLevels building) {
 /// ([firePumpBasisByNodeProvider]).
 final fireRatedPointProvider =
     Provider<({FlowRate flow, Head head, bool sprinklerOnly})>((ref) {
-  final bases = ref.watch(fireSystemBasesProvider);
-  if (bases.isNotEmpty) {
-    final hydrant = [
-      for (final b in bases)
-        if (!b.sprinklerOnly) b,
-    ];
-    final pool = hydrant.isNotEmpty ? hydrant : bases;
-    var best = pool.first;
-    for (final b in pool.skip(1)) {
-      final f = b.flow.cubicMetersPerSecond - best.flow.cubicMetersPerSecond;
-      if (f > 1e-12 || (f.abs() <= 1e-12 && b.head.meters > best.head.meters)) {
-        best = b;
-      }
-    }
+  final best = ref.watch(governingFireBasisProvider);
+  if (best != null) {
     return (flow: best.flow, head: best.head, sprinklerOnly: best.sprinklerOnly);
   }
   final st = ref.watch(standpipeDesignProvider);
   return (flow: st.requiredFlow, head: st.pumpHead, sprinklerOnly: false);
+});
+
+/// Round 29 — the GOVERNING fire system basis (the one [fireRatedPointProvider]
+/// rates the project-level pump on): the hydrant system with the largest
+/// rated point whenever a hydrant is drawn, else the sprinkler system with the
+/// largest flow / head. Null when no fire system is drawn.
+final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
+  final bases = ref.watch(fireSystemBasesProvider);
+  if (bases.isEmpty) return null;
+  final hydrant = [
+    for (final b in bases)
+      if (!b.sprinklerOnly) b,
+  ];
+  final pool = hydrant.isNotEmpty ? hydrant : bases;
+  var best = pool.first;
+  for (final b in pool.skip(1)) {
+    final f = b.flow.cubicMetersPerSecond - best.flow.cubicMetersPerSecond;
+    if (f > 1e-12 || (f.abs() <= 1e-12 && b.head.meters > best.head.meters)) {
+      best = b;
+    }
+  }
+  return best;
+});
+
+/// Round 29 (regression-report-standpipe-head-contradicts-rated-head) — the
+/// standpipe design the calc report PRINTS: the governing hydrant system's
+/// design (the SAME friction-inclusive head the fire-pump rating, schedule and
+/// MDP way use), falling back to the friction-free [standpipeDesignProvider]
+/// only when no hydrant system basis exists. [standpipeDesignProvider] stays
+/// friction-free because it feeds the sizer (friction depends on sizing).
+final reportStandpipeDesignProvider = Provider<FireStandpipeDesign>((ref) {
+  final gov = ref.watch(governingFireBasisProvider);
+  return gov?.standpipe ?? ref.watch(standpipeDesignProvider);
 });
 
 /// Round 28 — one connected fire SYSTEM (sprinkler + hydrant edges joined
@@ -155,6 +176,10 @@ class FireSystemBasis {
   /// NFPA 20 curve check on the rated point.
   final FirePumpRatingResult rating;
 
+  /// The standpipe design of a hydrant-bearing system (carrying the sized
+  /// index-path friction); null for a sprinkler-only system.
+  final FireStandpipeDesign? standpipe;
+
   /// The main pump duty (NFPA 20 motor) and the jockey duty.
   final PumpDuty? duty;
   final PumpDuty? jockey;
@@ -168,6 +193,7 @@ class FireSystemBasis {
     required this.flow,
     required this.head,
     required this.rating,
+    this.standpipe,
     required this.duty,
     required this.jockey,
   });
@@ -239,6 +265,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final risers = sys.standpipeRisers(net);
     final FlowRate flow;
     final Head head;
+    FireStandpipeDesign? standpipe;
     if (sprinklerOnly) {
       final p = sprinklerPumpRatedPoint(
         remote: remote,
@@ -255,6 +282,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       );
       flow = st.requiredFlow;
       head = st.pumpHead;
+      standpipe = st;
     }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
     final dutyPump = flow.cubicMetersPerSecond <= 0
@@ -272,6 +300,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       flow: flow,
       head: head,
       rating: rating,
+      standpipe: standpipe,
       duty: dutyPump,
       jockey: jockey,
     ));
@@ -350,17 +379,25 @@ final fireJockeyDutyProvider = Provider<PumpDuty?>((ref) {
 
 /// Sprinkler-vs-fire-pump coverage check (audit r8 fire-hvac-3) — JUDGE-ONLY.
 ///
-/// The one scheduled + electrically fed fire pump ([firePumpDutyProvider]) is
-/// rated on the STANDPIPE flow and head; nothing compared it with the sprinkler
-/// design-area demand, so at Extra Hazard (≈ 43 L/s) the only pump (≈ 31.5 L/s)
-/// could not deliver the sprinklers it was scheduled for. Reported only when a
-/// sprinkler system is actually DRAWN (fireSprinkler edges):
+/// Compares each drawn SPRINKLER-bearing fire system's demand with the pump
+/// that actually serves it. Reported only when a sprinkler system is DRAWN
+/// (fireSprinkler edges):
 ///  * flow:  remote-area demand (`sprinklerRemoteAreaProvider`) vs the pump's
 ///           rated flow;
 ///  * head:  a LOWER-BOUND sprinkler requirement — static lift from the pump
 ///           datum (floor 0) to the top-floor ceiling + the branch-base pressure
 ///           as head (P/ρg) — vs the pump head. Riser / main friction is NOT
 ///           added, so a flagged shortfall is certain, never speculative.
+///
+/// Round 29 (regression-sprinkler-check-uses-other-systems-pump) — Round 28
+/// rates every connected fire system on its OWN demand
+/// ([fireSystemBasesProvider]), so the pump compared is that SYSTEM's duty
+/// (its drawn pump, or — for a combined sprinkler + hydrant system — its
+/// standpipe-rated pump), never the project-level governing (hydrant) pump of
+/// a separate tower. Only a sprinkler-only system with NO pump drawn falls back
+/// to the governing [firePumpDutyProvider] (the scheduled FP-01 is then the
+/// only candidate). The worst short system is reported (flow deficit first,
+/// then head deficit); with none short, the tightest flow margin.
 /// Never resizes anything. Null when no sprinkler is drawn or no pump duty.
 final sprinklerPumpCheckProvider = Provider<
     ({
@@ -375,21 +412,55 @@ final sprinklerPumpCheckProvider = Provider<
   if (!net.edges.any((e) => e.service == ServiceType.fireSprinkler)) {
     return null;
   }
-  final pump = ref.watch(firePumpDutyProvider);
-  if (pump == null) return null;
   final remote = ref.watch(sprinklerRemoteAreaProvider);
   final lift =
       _sprinklerStaticLiftM(ref.watch(projectControllerProvider).building);
   const rhoG = 1000 * 9.81;
   final required = lift + remote.branchBasePressure.pascals / rhoG;
   final demand = remote.remoteAreaDemand.inLitersPerSecond;
-  final pumpLps = pump.flow.inLitersPerSecond;
-  return (
-    demandLps: demand,
-    pumpLps: pumpLps,
-    requiredHeadM: required,
-    pumpHeadM: pump.head.meters,
-    flowShort: demand > pumpLps + 1e-9,
-    headShort: required > pump.head.meters + 1e-9,
-  );
+  // The pump serving each sprinkler-bearing system.
+  final pumps = <PumpDuty>[];
+  for (final b in ref.watch(fireSystemBasesProvider)) {
+    if (!b.system.hasSprinkler) continue;
+    final own = b.pumpIds.isNotEmpty || b.system.hasHydrant;
+    final pump = own ? b.duty : ref.watch(firePumpDutyProvider);
+    if (pump != null) pumps.add(pump);
+  }
+  if (pumps.isEmpty) return null;
+  ({
+    double demandLps,
+    double pumpLps,
+    double requiredHeadM,
+    double pumpHeadM,
+    bool flowShort,
+    bool headShort,
+  })? worst;
+  for (final pump in pumps) {
+    final pumpLps = pump.flow.inLitersPerSecond;
+    final r = (
+      demandLps: demand,
+      pumpLps: pumpLps,
+      requiredHeadM: required,
+      pumpHeadM: pump.head.meters,
+      flowShort: demand > pumpLps + 1e-9,
+      headShort: required > pump.head.meters + 1e-9,
+    );
+    if (worst == null) {
+      worst = r;
+      continue;
+    }
+    final rShort = r.flowShort || r.headShort;
+    final wShort = worst.flowShort || worst.headShort;
+    if (rShort != wShort) {
+      if (rShort) worst = r;
+      continue;
+    }
+    final df = (demand - r.pumpLps) - (demand - worst.pumpLps);
+    if (df > 1e-9 ||
+        (df.abs() <= 1e-9 &&
+            (required - r.pumpHeadM) > (required - worst.pumpHeadM) + 1e-9)) {
+      worst = r;
+    }
+  }
+  return worst;
 });

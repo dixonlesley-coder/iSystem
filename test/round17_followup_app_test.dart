@@ -663,7 +663,7 @@ void main() {
       expect(id(StringKey.nodeElectricalLoadLabel), 'Beban listrik');
       expect(id(StringKey.electricalFeedCurrentSuffix), ' (saat ini)');
       expect(en(StringKey.electricalFeedCurrentSuffix), ' (current)');
-      expect(id(StringKey.schematicNotesOccPublic), 'Publik');
+      expect(id(StringKey.inspectorOccupancyPublic), 'Kantor / publik');
       expect(en.format(StringKey.schematicNotesRoofTank, {'m3': '12'}),
           'Roof tank: 12 m3');
       expect(feedChooserItems(
