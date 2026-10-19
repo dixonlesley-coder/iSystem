@@ -1211,6 +1211,21 @@ Map<String, String> serviceComponentRoots(
 /// Hardy–Cross balance; when the balanced split runs AGAINST the leg's pump
 /// direction the leg is kept open, sized on |flow| in the pump's direction,
 /// and the valve's node id is added here (judge-only, locatable).
+///
+/// Round 27 r8 (binding orchestrator decision) — a mover leg (valved OR
+/// valveless) whose balanced split runs against its coherently drawn pump is
+/// sized on the ENVELOPE of two scenarios: (a) the leg CLOSED (zero draw-off,
+/// the r4 closed-return treatment incl. the zero pockets) and (b) the leg
+/// OPEN as balanced — every edge on the larger |flow|, the leg itself on its
+/// scenario-(b) |flow| in the pump's direction (the mover duty, never 0).
+/// Scenario (a) is skipped when closing the leg starves a draw-off point. A
+/// VALVELESS leg against the balance is named on [moverAgainstBalanceOut]
+/// (its pump node ids). Envelope honesty: a scenario's side outputs (these
+/// advisories, [checkValveFeedsRingOut], [checkValveAmbiguousOut], the
+/// loop-unbalanced flag, [parallelLegEdgeIdsOut]) are reported only when
+/// that scenario WINS at least one edge of the element they name (a valve:
+/// its two pipes; a leg advisory: an edge of that leg; an edge flag: the
+/// edge itself).
 Map<String, EdgeSizing> autoSizeNetwork(
   Network net,
   SizingContext ctx, {
@@ -1233,6 +1248,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Set<String>? checkValveFeedsRingOut,
   Map<String, CheckValveAmbiguity>? checkValveAmbiguousOut,
   Set<String>? checkValveAgainstPumpOut,
+  Set<String>? moverAgainstBalanceOut,
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -1754,26 +1770,33 @@ Map<String, EdgeSizing> autoSizeNetwork(
       //     Classification reads NO distance (rule 2 counts hops), so
       //     calibration and plan coordinates never move it. A mover leg is
       //     never zero-forced or reversed.
+      List<_CheckValvePlan> classify(
+              [Set<String> closedMoverLegs = const {}]) =>
+          _classifyLoopCheckValves(
+            componentEdges: componentEdges,
+            root: root,
+            isCheckValve: (id) =>
+                net.nodeById(id)?.component == NodeComponent.checkValve,
+            isMover: (id) {
+              final c = net.nodeById(id)?.component;
+              return c == NodeComponent.pump ||
+                  c == NodeComponent.boosterSet ||
+                  c == NodeComponent.supplyFan;
+            },
+            isDemand: (id) =>
+                id != root &&
+                (explicitDemandKeys.contains(id) || bearsDefaultDemand(id)),
+            closedMoverLegs: closedMoverLegs,
+          );
       final cvPlans = (isLooped && regime == FlowRegime.pressurized)
-          ? _classifyLoopCheckValves(
-              componentEdges: componentEdges,
-              root: root,
-              isCheckValve: (id) =>
-                  net.nodeById(id)?.component == NodeComponent.checkValve,
-              isMover: (id) {
-                final c = net.nodeById(id)?.component;
-                return c == NodeComponent.pump ||
-                    c == NodeComponent.boosterSet ||
-                    c == NodeComponent.supplyFan;
-              },
-              isDemand: (id) =>
-                  id != root &&
-                  (explicitDemandKeys.contains(id) || bearsDefaultDemand(id)),
-            )
+          ? classify()
           : const <_CheckValvePlan>[];
 
-      // The flow solve of this component under one check-valve plan.
-      void runComponent(_CheckValvePlan? cvPlan) {
+      // The flow solve of this component under one check-valve plan; returns
+      // the keys of the mover legs whose BALANCED split ran against their
+      // pump (Round 27 r8 — the Hardy–Cross path only: the tree path has no
+      // balance to run against a pump).
+      Set<String> runComponent(_CheckValvePlan? cvPlan) {
         if (service == ServiceType.hotWater && cvPlan != null) {
           checkValveFeedsRingOut?.addAll(cvPlan.feedsRingValveIds);
         }
@@ -1888,7 +1911,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
           for (final leg in cvPlan?.moverLegs ?? const <_MoverLeg>[])
             ...leg.valveIds,
         };
-        void orientMoverLegs(_CheckValvePlan? plan) {
+        Set<String> orientMoverLegs(_CheckValvePlan? plan) {
+          final againstKeys = <String>{};
           for (final leg in plan?.moverLegs ?? const <_MoverLeg>[]) {
             var against = false;
             for (var i = 0; i < leg.edgeIds.length; i++) {
@@ -1899,8 +1923,16 @@ Map<String, EdgeSizing> autoSizeNetwork(
               if (from != null && from != leg.fromNodeIds[i]) against = true;
               edgeFlowFrom[id] = leg.fromNodeIds[i];
             }
-            if (against) checkValveAgainstPumpOut?.addAll(leg.valveIds);
+            if (!against) continue;
+            againstKeys.add(leg.key);
+            if (leg.valveIds.isEmpty) {
+              // r8 — a VALVELESS mover leg: named on its pump(s).
+              moverAgainstBalanceOut?.addAll(leg.pumpIds);
+            } else {
+              checkValveAgainstPumpOut?.addAll(leg.valveIds);
+            }
           }
+          return againstKeys;
         }
 
         // Round 12 (mech-props-2 gravity-loop) — on the TREE path a looped
@@ -2202,8 +2234,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
           checkValveFeedsRingOut
               ?.removeAll([for (final c in closedValves) c.id]);
           sizeZeroPockets([...?cvPlan?.returnValves, ...closedValves]);
-          orientMoverLegs(cvPlan);
-          return;
+          return orientMoverLegs(cvPlan);
         }
 
         if (isSanitary(service)) {
@@ -2582,25 +2613,29 @@ Map<String, EdgeSizing> autoSizeNetwork(
           sizeZeroPockets([...cvPlan.returnValves, ...closedValves]);
           orientMoverLegs(cvPlan);
         }
+        return const <String>{};
       }
 
-      if (cvPlans.length <= 1) {
-        runComponent(cvPlans.isEmpty ? null : cvPlans.first);
+      if (cvPlans.isEmpty) {
+        runComponent(null);
         continue;
       }
       // Round 27 r7 — the ENVELOPE: solve every plausible discharge and size
       // each edge of the component on the largest |flow| any of them gives
       // (its direction, fixture units from that scenario; first on ties).
-      // Flags / advisories are the union over the scenarios.
+      // Round 27 r8 — plus, for every mover leg whose balanced split ran
+      // against its pump, scenario (a): the same readings with that leg
+      // CLOSED (the r4 closed-return treatment; skipped when it starves a
+      // draw-off point). Side outputs are reported only from scenarios that
+      // win at least one edge of the element they name (see the doc above).
       final keys = [for (final e in componentEdges) e.id];
       final ringBefore = {...?checkValveFeedsRingOut};
-      final ringAfter = <String>{...ringBefore};
-      final results = <(
-        Map<String, FlowRate>,
-        Map<String, String>,
-        Map<String, double>,
-      )>[];
-      for (final plan in cvPlans) {
+      final ambBefore = {...?checkValveAmbiguousOut};
+      final againstBefore = {...?checkValveAgainstPumpOut};
+      final moverAgainstBefore = {...?moverAgainstBalanceOut};
+      final unbalancedBefore = {...loopUnbalancedEdges};
+      final parallelBefore = {...?parallelLegEdgeIdsOut};
+      void restore() {
         for (final k in keys) {
           allFlows.remove(k);
           edgeFlowFrom.remove(k);
@@ -2609,46 +2644,172 @@ Map<String, EdgeSizing> autoSizeNetwork(
         checkValveFeedsRingOut
           ?..clear()
           ..addAll(ringBefore);
-        runComponent(plan);
-        ringAfter.addAll(checkValveFeedsRingOut ?? const <String>{});
+        checkValveAmbiguousOut
+          ?..clear()
+          ..addAll(ambBefore);
+        checkValveAgainstPumpOut
+          ?..clear()
+          ..addAll(againstBefore);
+        moverAgainstBalanceOut
+          ?..clear()
+          ..addAll(moverAgainstBefore);
+        loopUnbalancedEdges
+          ..clear()
+          ..addAll(unbalancedBefore);
+        parallelLegEdgeIdsOut
+          ?..clear()
+          ..addAll(parallelBefore);
+      }
+
+      final results = <({
+        Map<String, FlowRate> flows,
+        Map<String, String> from,
+        Map<String, double> units,
+        Set<String> ring,
+        Map<String, CheckValveAmbiguity> amb,
+        Set<String> against,
+        Set<String> moverAgainst,
+        Set<String> unbalanced,
+        Set<String> parallel,
+      })>[];
+      Set<String> run(_CheckValvePlan plan) {
+        restore();
+        final againstKeys = runComponent(plan);
         results.add((
-          {
+          flows: {
             for (final k in keys)
               if (allFlows[k] != null) k: allFlows[k]!
           },
-          {
+          from: {
             for (final k in keys)
               if (edgeFlowFrom[k] != null) k: edgeFlowFrom[k]!,
           },
-          {
+          units: {
             for (final k in keys)
               if (fixtureUnitsOut?[k] != null) k: fixtureUnitsOut![k]!,
           },
+          ring: {...?checkValveFeedsRingOut}.difference(ringBefore),
+          amb: {
+            for (final MapEntry(key: id, value: l)
+                in (checkValveAmbiguousOut ?? const {}).entries)
+              if (ambBefore[id] != l) id: l,
+          },
+          against: {...?checkValveAgainstPumpOut}.difference(againstBefore),
+          moverAgainst:
+              {...?moverAgainstBalanceOut}.difference(moverAgainstBefore),
+          unbalanced: loopUnbalancedEdges.difference(unbalancedBefore),
+          parallel: {...?parallelLegEdgeIdsOut}.difference(parallelBefore),
         ));
+        return againstKeys;
       }
-      checkValveFeedsRingOut
-        ?..clear()
-        ..addAll(ringAfter);
+
+      final againstLegs = <String>{};
+      for (final plan in cvPlans) {
+        againstLegs.addAll(run(plan));
+      }
+      if (againstLegs.isNotEmpty) {
+        // Scenario (a): every leg that ran against its pump closed together;
+        // when that starves a draw-off point, each leg closed on its own.
+        var closedPlans = classify(againstLegs);
+        if (closedPlans.isEmpty && againstLegs.length > 1) {
+          closedPlans = [
+            for (final k in [...againstLegs]..sort()) ...classify({k}),
+          ];
+        }
+        for (final plan in closedPlans) {
+          run(plan);
+        }
+      }
+      // One reading: its outputs stand as written.
+      if (results.length == 1) continue;
+
+      restore();
+      final winner = <String, int>{};
       for (final k in keys) {
-        allFlows.remove(k);
-        edgeFlowFrom.remove(k);
-        fixtureUnitsOut?.remove(k);
         var best = -1;
         for (var i = 0; i < results.length; i++) {
-          final q = results[i].$1[k];
+          final q = results[i].flows[k];
           if (q == null) continue;
           if (best < 0 ||
               q.cubicMetersPerSecond >
-                  results[best].$1[k]!.cubicMetersPerSecond + 1e-15) {
+                  results[best].flows[k]!.cubicMetersPerSecond + 1e-15) {
             best = i;
           }
         }
         if (best < 0) continue;
-        allFlows[k] = results[best].$1[k]!;
-        final from = results[best].$2[k];
+        winner[k] = best;
+        allFlows[k] = results[best].flows[k]!;
+        final from = results[best].from[k];
         if (from != null) edgeFlowFrom[k] = from;
-        final fu = results[best].$3[k];
+        final fu = results[best].units[k];
         if (fu != null) fixtureUnitsOut?[k] = fu;
+      }
+      // The elements a side output names: a valve's two pipes; a leg (the
+      // chain of degree-2 nodes through a mover / mover-leg valve).
+      final cAdj = <String, List<NetEdge>>{};
+      for (final e in componentEdges) {
+        (cAdj[e.fromId] ??= []).add(e);
+        (cAdj[e.toId] ??= []).add(e);
+      }
+      List<String> pipesOf(String node) =>
+          [for (final e in cAdj[node] ?? const <NetEdge>[]) e.id];
+      List<String> legOf(String node) {
+        final out = <String>{};
+        final seen = <String>{node};
+        for (final first in cAdj[node] ?? const <NetEdge>[]) {
+          var e = first;
+          var n = node;
+          while (true) {
+            out.add(e.id);
+            final m = e.fromId == n ? e.toId : e.fromId;
+            if (m == root || !seen.add(m)) break;
+            final es = cAdj[m] ?? const <NetEdge>[];
+            if (es.length != 2) break;
+            e = es.firstWhere((x) => x.id != e.id);
+            n = m;
+          }
+        }
+        return [...out];
+      }
+
+      bool wins(int i, Iterable<String> edgeIds) =>
+          edgeIds.any((id) => winner[id] == i);
+      for (var i = 0; i < results.length; i++) {
+        final r = results[i];
+        checkValveFeedsRingOut?.addAll([
+          for (final v in r.ring)
+            if (wins(i, pipesOf(v))) v,
+        ]);
+        checkValveAgainstPumpOut?.addAll([
+          for (final v in r.against)
+            if (wins(i, legOf(v))) v,
+        ]);
+        moverAgainstBalanceOut?.addAll([
+          for (final p in r.moverAgainst)
+            if (wins(i, legOf(p))) p,
+        ]);
+        loopUnbalancedEdges.addAll([
+          for (final e in r.unbalanced)
+            if (winner[e] == i) e,
+        ]);
+        parallelLegEdgeIdsOut?.addAll([
+          for (final e in r.parallel)
+            if (winner[e] == i) e,
+        ]);
+      }
+      // An ambiguity label from the first scenario winning a pipe of its
+      // valve (a valve no scenario sizes keeps the first reading's label, so
+      // an ambiguous valve is always named).
+      if (checkValveAmbiguousOut != null) {
+        final ids = <String>{for (final r in results) ...r.amb.keys};
+        for (final id in [...ids]..sort()) {
+          CheckValveAmbiguity? label;
+          for (var i = 0; i < results.length && label == null; i++) {
+            if (wins(i, pipesOf(id))) label = results[i].amb[id];
+          }
+          label ??= results.firstWhere((r) => r.amb.containsKey(id)).amb[id];
+          checkValveAmbiguousOut[id] = label!;
+        }
       }
     }
   }
@@ -3199,11 +3360,22 @@ class _CheckValvePlan {
 /// degree-2 nodes between two junctions, or between the source and its first
 /// junction) carrying feed check valve(s) [valveIds]: its edges in the
 /// pump's flow order and the node each edge's flow comes FROM.
+///
+/// Round 27 r8 — a VALVELESS mover leg (a coherently drawn pump on a chain
+/// with no check valve, on a cycle) is a [_MoverLeg] too: [valveIds] empty,
+/// [pumpIds] its movers (the advisory `moverAgainstBalanceOut` is keyed on
+/// them).
 class _MoverLeg {
   final List<String> valveIds;
   final List<String> edgeIds;
   final List<String> fromNodeIds;
-  const _MoverLeg(this.valveIds, this.edgeIds, this.fromNodeIds);
+  final List<String> pumpIds;
+  const _MoverLeg(this.valveIds, this.edgeIds, this.fromNodeIds,
+      [this.pumpIds = const []]);
+
+  /// The leg's identity (its sorted edge ids) — how the sizer names a leg
+  /// back to the classifier (`closedMoverLegs`).
+  String get key => ([...edgeIds]..sort()).join('\u0000');
 }
 
 /// Round 27 r5 (binding orchestrator decision) — how the sizer read a cycle
@@ -3272,9 +3444,12 @@ typedef _Cv = ({
 ///     pipe drawn INTO the valve node and one OUT of it: in -> out is the
 ///     permitted direction);
 ///  2. each valve is classified with ONLY ITSELF removed (every other check
-///     valve a plain pipe): the shortest HOP distance from the root to its
+///     valve a plain pipe): the shortest distance from the root to its
 ///     in- and out-node (Round 27 r7: never calibrated metres or plan pixels,
-///     so calibration and plan coordinates never move a reading). A
+///     so calibration and plan coordinates never move a reading; Round 27
+///     r8: in the BEND-FREE hop metric between its effective neighbours —
+///     the first non-bend node past any elbows — so a bare elbow never
+///     moves it either). A
 ///     permitted direction pointing TOWARD the root (out-node strictly
 ///     nearer) is a RETURN — zero draw-off, the Round-26 r4 cut; otherwise
 ///     (ties included) it is a FEED / DISCHARGE and is never zeroed: a
@@ -3322,6 +3497,16 @@ typedef _Cv = ({
 /// beside only valveless / mover chains keeps the r5 rule; the only
 /// non-return chain out of the root is its discharge.
 ///
+/// Round 27 r8 (binding orchestrator decision) — VALVELESS mover legs (a
+/// coherently drawn mover on a valve-free cycle chain) are inputs too: a
+/// structural root-chain cue in (3) (drawn toward the root => a return
+/// chain, away => a discharge chain) and [_CheckValvePlan.moverLegs] entries
+/// the sizer orients. [closedMoverLegs] (leg keys, [_MoverLeg.key]) asks for
+/// scenario (a) of the balance-against-pump envelope: those legs CLOSED —
+/// a valved leg's valves fixed returns, a valveless leg a pseudo return
+/// valve at its first pump — with the r4 closed-return treatment; an empty
+/// list is returned when that starves a draw-off point.
+///
 /// A set of DRAWN returns that would cut a draw-off point off the source is
 /// a self-contradictory drawing (no water could reach it — every
 /// duty/standby leg drawn header -> valve -> pump): those valves fall back
@@ -3336,6 +3521,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   required bool Function(String nodeId) isCheckValve,
   bool Function(String nodeId)? isMover,
   bool Function(String nodeId)? isDemand,
+  Set<String> closedMoverLegs = const {},
 }) {
   const none = [_CheckValvePlan(<String>{}, <_StandbyLeg>[])];
   final adj = <String, List<NetEdge>>{};
@@ -3373,7 +3559,8 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     if (!connectedWithout(a, b, id)) continue; // not on a cycle
     cycleValves.add(id);
   }
-  if (cycleValves.isEmpty) return none;
+  // (Round 27 r8 — a component with no cycle valve still has its VALVELESS
+  // mover legs read below; the early return waits for them.)
 
   // Hop distance from the root with EVERY cycle check valve's edges cut.
   final cut = <String>{
@@ -3533,10 +3720,28 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     return null;
   }
 
-  // Rule 2 — the permitted direction points TOWARD the root.
+  // The first node beyond [from] over [via] that is not a bare bend (Round
+  // 27 r8): a valve's effective neighbour, the same with or without elbows
+  // drawn next to it.
+  String pastBends(String from, NetEdge via) {
+    var node = other(via, from);
+    var edge = via;
+    final seen = <String>{from};
+    while (bend(node) && seen.add(node)) {
+      edge = adj[node]!.firstWhere((e) => e.id != edge.id);
+      node = other(edge, node);
+    }
+    return node;
+  }
+
+  // Rule 2 — the permitted direction points TOWARD the root. Round 27 r8:
+  // read in the BEND-FREE metric ([bendWeight]) between the valve's
+  // effective neighbours ([pastBends]), so adding elbows to a drawn leg
+  // never flips FEED / RETURN (plain hops did: four bends on the second
+  // feed of a dual-feed ring read it a return).
   bool isReturnValve(_Cv c) {
-    final d = distWithout({c.id});
-    final du = d[c.upNode], dd = d[c.downNode];
+    final d = distFrom(root, {c.id}, bendFree: true);
+    final du = d[pastBends(c.id, c.inE)], dd = d[pastBends(c.id, c.outE)];
     if (du == null || dd == null) return false;
     return dd < du - 1e-9;
   }
@@ -3752,8 +3957,148 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       prev?.fromNodeIds ?? legFrom,
     );
   }
+  // Round 27 r8 (scenario (a) of the balance-against-pump envelope) — a
+  // valved mover leg the sizer CLOSES: every valve on it a fixed return in
+  // the pump's direction (the r4 closed-return treatment), the leg off the
+  // open mover legs.
+  for (final key in [...moverLegsByKey.keys]) {
+    if (!closedMoverLegs.contains(key)) continue;
+    for (final v in moverLegsByKey[key]!.valveIds) {
+      final inlet = fixedInlet.remove(v);
+      if (inlet != null) fixedReturn[v] = inlet;
+    }
+    moverLegsByKey.remove(key);
+  }
   final moverLegs = moverLegsByKey.values.toList()
     ..sort((a, b) => a.valveIds.first.compareTo(b.valveIds.first));
+
+  // ── Round 27 r8 — VALVELESS MOVER LEGS ARE CLASSIFIER INPUTS ──
+  // A pump / booster set / supply fan drawn COHERENTLY (one pipe in, one
+  // out; several movers on one chain all agreeing) on a degree-2 chain with
+  // NO check valve, on a cycle: a leg with a direction. (An incoherently
+  // drawn valveless mover carries no readable direction and is left as a
+  // plain pipe.) It orients its root chain (precedence 3: drawn toward the
+  // root => a RETURN chain, away => a discharge chain), and the sizer keeps
+  // it in the pump's direction / sizes it on the balance-against-pump
+  // envelope like a valved mover leg.
+  bool connectedAvoiding(String a, String b, Set<String> blocked) {
+    final seen = <String>{a};
+    final stack = [a];
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      if (n == b) return true;
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        final m = other(e, n);
+        if (blocked.contains(m) || !seen.add(m)) continue;
+        stack.add(m);
+      }
+    }
+    return false;
+  }
+
+  final valvelessByKey = <String, _MoverLeg>{};
+  if (isMover != null) {
+    for (final p in [...adj.keys]..sort()) {
+      if (p == root || !isMover(p) || adj[p]!.length != 2) continue;
+      final es = adj[p]!;
+      final s0 = walk(p, es[0]), s1 = walk(p, es[1]);
+      // The chain end0 .. p .. end1 in drawing order.
+      final ns = <String>[...s0.nodes.reversed, p, ...s1.nodes];
+      final eds = <NetEdge>[...s0.edges.reversed, ...s1.edges];
+      final interior = ns.sublist(1, ns.length - 1);
+      if (interior.any(isCheckValve)) continue; // a valved leg (above)
+      final end0 = ns.first, end1 = ns.last;
+      if (end0 == end1 || interior.toSet().length != interior.length) {
+        continue; // a chain closing on itself: no leg ends
+      }
+      if (!connectedAvoiding(end0, end1, interior.toSet())) continue;
+      int? dir; // +1: end0 -> end1, -1: end1 -> end0
+      var coherent = true;
+      for (var i = 1; i < ns.length - 1; i++) {
+        final n = ns[i];
+        if (!isMover(n)) continue;
+        final ea = eds[i - 1], eb = eds[i];
+        final d = (ea.toId == n && eb.fromId == n)
+            ? 1
+            : (ea.fromId == n && eb.toId == n)
+                ? -1
+                : 0;
+        if (d == 0 || (dir != null && dir != d)) {
+          coherent = false;
+          break;
+        }
+        dir = d;
+      }
+      if (!coherent || dir == null) continue;
+      final legEdges = <String>[];
+      final legFrom = <String>[];
+      if (dir == 1) {
+        for (var i = 0; i < eds.length; i++) {
+          legEdges.add(eds[i].id);
+          legFrom.add(ns[i]);
+        }
+      } else {
+        for (var i = eds.length - 1; i >= 0; i--) {
+          legEdges.add(eds[i].id);
+          legFrom.add(ns[i + 1]);
+        }
+      }
+      final leg = _MoverLeg(
+          const [],
+          legEdges,
+          legFrom,
+          [
+            for (final n in interior)
+              if (isMover(n)) n,
+          ]..sort());
+      valvelessByKey.putIfAbsent(leg.key, () => leg);
+    }
+  }
+  if (cycleValves.isEmpty && valvelessByKey.isEmpty) return none;
+  // Where a valveless leg's flow ARRIVES (the end its pump points at).
+  String legDestination(_MoverLeg l) {
+    final last =
+        adj[l.fromNodeIds.last]!.firstWhere((e) => e.id == l.edgeIds.last);
+    return other(last, l.fromNodeIds.last);
+  }
+
+  // Pumps of valveless root chains drawn TOWARD the root: recirculation
+  // returns (never a path a second feed can be judged against).
+  final valvelessReturnPumps = <String>{
+    for (final l in valvelessByKey.values)
+      if (legDestination(l) == root) ...l.pumpIds,
+  };
+  // Scenario (a) — a valveless leg the sizer CLOSES: a pseudo return valve
+  // at its first pump (the pump's two pipes, in its drawn direction), so the
+  // r4 closed-return treatment (zero draw-off, the return walk from both
+  // sides, the zero pockets) applies to it unchanged.
+  final pseudoReturns = <_Cv>[];
+  final closedValvelessKeys = <String>{};
+  for (final l in valvelessByKey.values.toList()
+    ..sort((a, b) => a.pumpIds.first.compareTo(b.pumpIds.first))) {
+    if (!closedMoverLegs.contains(l.key)) continue;
+    closedValvelessKeys.add(l.key);
+    final p = l.pumpIds.first;
+    final i = l.fromNodeIds.indexOf(p) - 1;
+    final inE = adj[p]!.firstWhere((e) => e.id == l.edgeIds[i]);
+    final outE = adj[p]!.firstWhere((e) => e.id == l.edgeIds[i + 1]);
+    pseudoReturns.add((
+      id: p,
+      inE: inE,
+      outE: outE,
+      upNode: l.fromNodeIds[i],
+      downNode: other(outE, p),
+    ));
+  }
+  final pseudoIds = {for (final c in pseudoReturns) c.id};
+  final openMoverLegs = <_MoverLeg>[
+    ...moverLegs,
+    for (final l
+        in valvelessByKey.values.toList()
+          ..sort((a, b) => a.pumpIds.first.compareTo(b.pumpIds.first)))
+      if (!closedValvelessKeys.contains(l.key)) l,
+  ];
+  final closingLegs = closedMoverLegs.isNotEmpty;
 
   // Rule 3(1) — an ambiguous valve in a PARALLEL set onto one header: its
   // two leg ends (through bare degree-2 nodes and inline pumps) are exactly
@@ -3815,6 +4160,18 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
           ch.nodes[i]: sideToward(ch.nodes[i], i == 0 ? root : ch.nodes[i - 1]),
     };
     if (valves.keys.any(fixedReturn.containsKey)) continue;
+    if (valves.isEmpty) {
+      // r8 — a valveless chain carrying a coherent mover: drawn toward the
+      // root it is a RETURN chain (never a candidate discharge), as is a
+      // closed one; drawn away, a mover discharge.
+      final vl = valvelessByKey[
+          ([for (final x in ch.edges) x.id]..sort()).join('\u0000')];
+      if (vl != null &&
+          (closedValvelessKeys.contains(vl.key) ||
+              legDestination(vl) == root)) {
+        continue;
+      }
+    }
     var toward = false, away = false, mover = false;
     for (final MapEntry(key: v, value: rs) in valves.entries) {
       if (fixedInlet.containsKey(v)) {
@@ -3944,7 +4301,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
             if (l == CheckValveAmbiguity.drawnAgainstSupplyLeg) id: l,
         };
     final undecidable = _CheckValvePlan(<String>{}, <_StandbyLeg>[], const {},
-        const [], const {}, const [], labels(), moverLegs);
+        const [], const {}, const [], labels(), openMoverLegs);
 
     final cvs = <_Cv>[
       for (final id in cycleValves)
@@ -3974,7 +4331,15 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     Set<String> rule2() => {
           for (final c in cvs)
             if (fixedRet(c.id) || (!fixedFeed(c.id) && isReturnValve(c))) c.id,
+          ...pseudoIds,
         };
+    // r8 — scenario (a): closing the leg(s) the balance ran against must
+    // leave every draw-off point fed, else the scenario is skipped.
+    if (closingLegs &&
+        disconnectsDemand(
+            {...fixedReturn.keys, ...sClosed.keys, ...pseudoIds})) {
+      return (null, parallelAmb);
+    }
     var returnIds = rule2();
 
     // A set of DRAWN returns that cuts a draw-off point off the source is
@@ -4025,11 +4390,12 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     returnIds = {...returnIds, ...closed};
     // An ambiguous scenario-closed return is walked from both its sides too
     // (its orientation is cosmetic).
-    closed = {...closed, ...sClosed.keys};
+    closed = {...closed, ...sClosed.keys, ...pseudoIds};
 
     final rets = [
       for (final c in cvs)
         if (returnIds.contains(c.id)) c,
+      ...pseudoReturns,
     ];
     final feeds = [
       for (final c in cvs)
@@ -4353,20 +4719,24 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
           fixedInlet.containsKey(c.id)) {
         continue;
       }
-      final d = distWithout({c.id, ...returnIds});
+      // r8 — a valveless circulator drawn toward the root is a return
+      // chain: never the path a second feed is judged against.
+      final d = distWithout({c.id, ...returnIds, ...valvelessReturnPumps});
       if (d.containsKey(c.downNode)) feedsRing.add(c.id);
     }
     // (Judge-only, so it may read hop counts: a return riser's bare nodes
     // count here, which is what tells the heater's discharge from a
     // backwards return beside it.)
     if (feedsRing.length >= 2 && isDemand != null) {
-      final d0 = hopsFrom(root, blocked: returnIds);
+      final d0 =
+          hopsFrom(root, blocked: {...returnIds, ...valvelessReturnPumps});
       final score = <String, double>{};
       for (final c in feeds) {
         if (!feedsRing.contains(c.id)) continue;
         final dv = d0[c.id];
         if (dv == null) continue;
-        final dd = hopsFrom(c.downNode, blocked: {c.id, ...returnIds});
+        final dd = hopsFrom(c.downNode,
+            blocked: {c.id, ...returnIds, ...valvelessReturnPumps});
         int? near;
         for (final MapEntry(key: x, value: v) in dd.entries) {
           if (x == root || !isDemand(x)) continue;
@@ -4425,7 +4795,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     }
     return (
       _CheckValvePlan(deferred, legs, returnFlowFrom, feeds, feedsRing, rets,
-          labels(closed: closed, standby: inParallel), moverLegs),
+          labels(closed: closed, standby: inParallel), openMoverLegs),
       inParallel,
     );
   }
@@ -4445,7 +4815,10 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     }
   }
 
-  if (scenarios.isEmpty) return [solve()!];
+  if (scenarios.isEmpty) {
+    final p = solve();
+    return p == null ? const [] : [p];
+  }
   final surviving = <(_CheckValvePlan, Map<String, int>)>[];
   for (final sc in scenarios) {
     final plan = solve(sc.feeds, sc.closed);
@@ -4455,7 +4828,10 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   // One plausible reading (or none): no envelope — the surviving scenario as
   // read, else the r5 rule.
   envelopeValves.clear();
-  if (surviving.isEmpty) return [solve()!];
+  if (surviving.isEmpty) {
+    final p = solve();
+    return p == null ? const [] : [p];
+  }
   final (_, feeds) = surviving.single;
   final plan = surviving.single.$1;
   return [

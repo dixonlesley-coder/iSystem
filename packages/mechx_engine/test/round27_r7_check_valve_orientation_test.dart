@@ -543,7 +543,8 @@ void main() {
       'probe 5 (doubly mis-drawn): an ambiguous heater discharge CVd beside '
       'the return drawn backwards (H -> CV -> RJ, a drawn-valve-only '
       'discharge) — the envelope: the heater discharge always carries '
-      'curve(16), and the feeds-ring advisory names CV in ONE step', () {
+      'curve(16); the feeds-ring advisory only from a reading that wins CV',
+      () {
     // The drawn-away valve on CV's chain is exactly what a return drawn
     // backwards looks like, so it does not settle which chain is the
     // discharge: (A) CVd a feed too (both drawn as feeds); (B) CVd closed
@@ -561,7 +562,15 @@ void main() {
             cal: cal);
         final open = _size(_hotel(ret: 'none', retDx: retDx), cal: cal);
         expect(r.amb, {'CVd': CheckValveAmbiguity.envelope}, reason: why);
-        expect(r.ring, {'CV'}, reason: why);
+        // r8 envelope honesty: CV's two pipes (ch / jc) are WON by reading
+        // (B) — there CV is the hotel's only feed, never a second feed into
+        // a ring — so (A)'s feeds-ring advisory is not reported for them.
+        // CVd still carries its envelope advisory (redraw it).
+        expect(a.ring, {'CV'}, reason: why);
+        expect(b.ring, isEmpty, reason: why);
+        expect(r.q('ch'), closeTo(b.q('ch'), 1e-12), reason: why);
+        expect(r.q('ch'), greaterThan(a.q('ch')), reason: why);
+        expect(r.ring, isEmpty, reason: why);
         _envelope(r, [a, b], why);
         // (A)'s heater feed is below curve(16) (the ring shares it), but the
         // open-network peak curve(16) is reached by... the (B) reading's
@@ -635,6 +644,7 @@ void main() {
       'is invariant to plan coordinates (every node jittered), bends and '
       'calibration, and every size to a length-ratio-preserving redraw', () {
     var checkedMover = 0;
+    var checkedValveless = 0;
     var envelopes = 0;
     for (var trial = 0; trial < 160; trial++) {
       final rnd = math.Random(7700 + trial);
@@ -647,6 +657,9 @@ void main() {
       // Mover-leg valves: id -> (pump id, pump drawn coherently?).
       // Mover-leg valves: id -> (its pump-side pipe's id, pump coherent?).
       final moverValves = <String, (String, bool)>{};
+      // r8 - valveless pumps: id -> (inlet pipe, outlet pipe, drawn
+      // coherently?).
+      final valvelessPumps = <String, (String, String, bool)>{};
       var vid = 0;
       String valve(String a, String b, double x, double y) {
         final id = 'V${rnd.nextInt(1 << 20)}_${vid++}';
@@ -706,6 +719,17 @@ void main() {
         final j = (i + 1) % k;
         if (rnd.nextDouble() < 0.2) {
           pumpLeg('R$i', 'R$j', 300.0 + 10 * i, 150, np++);
+        } else if (rnd.nextDouble() < 0.15) {
+          // r8 - a VALVELESS pump leg between neighbours (its pipes drawn
+          // coherently R_i -> P -> R_j, or both into P).
+          final p = 'P${np++}';
+          nodes.add(_n(p, 300.0 + 10 * i, 170,
+              role: NodeRole.plant, c: NodeComponent.pump));
+          final coherent = rnd.nextBool();
+          pipe('R$i', p);
+          final pin = edges.last.$1;
+          coherent ? pipe(p, 'R$j') : pipe('R$j', p);
+          valvelessPumps[p] = (pin, edges.last.$1, coherent);
         } else {
           rnd.nextBool() ? pipe('R$i', 'R$j') : pipe('R$j', 'R$i');
         }
@@ -806,12 +830,30 @@ void main() {
           }
           checkedMover++;
         }
+        // r8 - a coherently drawn VALVELESS pump never passes water
+        // backwards (the balance-against-pump envelope keeps its leg in the
+        // pump's direction).
+        for (final MapEntry(key: p, value: (pin, pout, coherent))
+            in valvelessPumps.entries) {
+          if (!coherent) continue;
+          final pe = net.edges.firstWhere(
+              (e) => (e.id == pin || e.id == '${pin}k') && e.toId == p);
+          final oe = net.edges.firstWhere(
+              (e) => (e.id == pout || e.id == '${pout}k') && e.fromId == p);
+          final s1 = r.s[pe.id], s2 = r.s[oe.id];
+          if (s1 != null && s1.flow.inLitersPerSecond > 1e-12) {
+            expect(s1.flowFromId, isNot(p), reason: '$why $p in');
+          }
+          if (s2 != null && s2.flow.inLitersPerSecond > 1e-12) {
+            expect(s2.flowFromId, p, reason: '$why $p out');
+          }
+          checkedValveless++;
+        }
       }
       // (b) the reading never moves; a length-ratio-preserving redraw keeps
-      // the zero-flow set and every size. (A bare bend adds a HOP: rule 2
-      // reads a drawn valve on hop counts — calibration- and coordinate-
-      // free, but a bend is a node — so on the bends variant only the
-      // reading of the ambiguous / mover valves is compared.)
+      // the zero-flow set and every size. Round 27 r8: rule 2 reads drawn
+      // valves in the BEND-FREE metric, so the bends variant (each bend at
+      // its pipe's midpoint: same lengths) keeps every FLOW too.
       final base = runs.first;
       if (base.amb.values.contains(CheckValveAmbiguity.envelope)) envelopes++;
       Set<String> zeros(_Run r) => {
@@ -824,6 +866,16 @@ void main() {
         // (Whether the balance shuts a genuine FEED valve — a check valve
         // closing under reverse pressure — follows real lengths, like any
         // ring split: compared on the length-ratio-preserving redraws.)
+        if (v == 4) {
+          for (final (id, _, _) in edges) {
+            final want = base.q(id);
+            expect(runs[v].q(id), closeTo(want, 1e-9), reason: '$why $id');
+            if (runs[v].s.containsKey('${id}k')) {
+              expect(runs[v].q('${id}k'), closeTo(want, 1e-9),
+                  reason: '$why ${id}k');
+            }
+          }
+        }
         if (v == 5) {
           expect(zeros(runs[v]), zeros(base), reason: why);
           for (final (id, _, _) in edges) {
@@ -840,6 +892,7 @@ void main() {
       }
     }
     expect(checkedMover, greaterThan(150));
+    expect(checkedValveless, greaterThan(30));
     expect(envelopes, greaterThan(5));
   });
 }

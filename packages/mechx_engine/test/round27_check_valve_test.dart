@@ -339,8 +339,8 @@ void main() {
         final open = _size(_hotel(risers: risers, ret: false, discharge: true),
             cal: cal);
         for (final id in s.keys) {
-          final want = math.max(a[id]!.flow.inLitersPerSecond,
-              b[id]!.flow.inLitersPerSecond);
+          final want = math.max(
+              a[id]!.flow.inLitersPerSecond, b[id]!.flow.inLitersPerSecond);
           expect(s[id]!.flow.inLitersPerSecond, closeTo(want, 1e-9),
               reason: '$why $id');
         }
@@ -471,53 +471,88 @@ void main() {
   });
 
   test(
-      'documented residual (inherent to the binding rule): a genuine second '
-      'feed whose leg is LONGER than the ring route to its entry reads as a '
-      'return — zeroed, but its leg is sized at zero, never left unsized', () {
-    // T -> M -> J1; ring J1 - A - B - J2 - J1; long leg M -> X -> Y -> Z ->
-    // CV2 -> J2. With only CV2 removed J2 is 3 hops from T (via J1) and Z 4,
-    // so CV2's drawn direction points TOWARD the source => a RETURN (rule
-    // 2). Topology alone cannot tell this from a recirculation return: the
-    // whole curve(8) = 0.400 L/s enters by m1 (plain pipes would split it
-    // 0.1424 / 0.0576). Recorded in CLAUDE.md / §15; the zero leg is still
-    // pipework, so x1..x3 are sized at zero (DN15, fu 0).
+      'r8 — rule 2 is BEND-FREE: a second feed whose longer leg is made of '
+      'bare elbows is a FEED split exactly as plain pipes; the residual '
+      '(inherent to the binding rule) needs real nodes — a leg LONGER in '
+      'tees than the ring route to its entry reads as a return', () {
+    // T -> M -> J1; ring J1 - A - B - J2 - J1 (fixtures off A and B); second
+    // leg M -> X -> Y -> Z -> CV2 -> J2 (drawn away from T).
+    //  * X, Y, Z bare elbows: a bend weighs nothing, so CV2's effective
+    //    inlet neighbour is M (bend-free 2 from T) and its outlet J2 (T-M-J1-
+    //    J2 = 6) — a FEED. r7 counted plain hops (Z 4 > J2 3) and read it a
+    //    RETURN, zeroing the leg. The result equals CV2 replaced by a bare
+    //    node (plain pipes), and continuity at M: m1 + x1 = curve(8).
+    //  * X, Y, Z TEES each feeding a fixture (real nodes): Z is 8 from T,
+    //    J2 6 — the drawn direction points toward the source => a RETURN
+    //    (rule 2): zc / c2 sized at zero (DN15, fu 0), m1 curve(8), the leg
+    //    to Z carrying its own fixtures, curve(12) at x1. Topology alone
+    //    cannot tell this from a recirculation return (recorded in CLAUDE.md
+    //    / §15).
     NetEdge e(String id, String a, String b) =>
         NetEdge(id: id, fromId: a, toId: b, service: ServiceType.coldWater);
-    final net = Network(nodes: [
-      _n('T', 0, 0, role: NodeRole.plant),
-      _n('M', 20, 0),
-      _n('J1', 40, 0),
-      _n('A', 60, -20),
-      _n('B', 80, -20),
-      _n('J2', 40, 20),
-      _n('fA', 60, -40, role: NodeRole.fixture),
-      _n('fB', 80, -40, role: NodeRole.fixture),
-      _n('X', 20, 40),
-      _n('Y', 20, 60),
-      _n('Z', 30, 60),
-      _n('CV2', 40, 40, c: NodeComponent.checkValve),
-    ], edges: [
-      e('tm', 'T', 'M'),
-      e('m1', 'M', 'J1'),
-      e('ja', 'J1', 'A'),
-      e('ab', 'A', 'B'),
-      e('bj', 'B', 'J2'),
-      e('jj', 'J2', 'J1'),
-      e('fa', 'A', 'fA'),
-      e('fb', 'B', 'fB'),
-      e('x1', 'M', 'X'),
-      e('x2', 'X', 'Y'),
-      e('x3', 'Y', 'Z'),
-      e('zc', 'Z', 'CV2'),
-      e('c2', 'CV2', 'J2'),
-    ]);
+    Network net({required bool tees, bool plain = false}) => Network(nodes: [
+          _n('T', 0, 0, role: NodeRole.plant),
+          _n('M', 20, 0),
+          _n('J1', 40, 0),
+          _n('A', 60, -20),
+          _n('B', 80, -20),
+          _n('J2', 40, 20),
+          _n('fA', 60, -40, role: NodeRole.fixture),
+          _n('fB', 80, -40, role: NodeRole.fixture),
+          _n('X', 20, 40),
+          _n('Y', 20, 60),
+          _n('Z', 30, 60),
+          if (tees) ...[
+            _n('fX', 0, 40, role: NodeRole.fixture),
+            _n('fY', 0, 60, role: NodeRole.fixture),
+            _n('fZ', 30, 80, role: NodeRole.fixture),
+          ],
+          _n('CV2', 40, 40, c: plain ? null : NodeComponent.checkValve),
+        ], edges: [
+          e('tm', 'T', 'M'),
+          e('m1', 'M', 'J1'),
+          e('ja', 'J1', 'A'),
+          e('ab', 'A', 'B'),
+          e('bj', 'B', 'J2'),
+          e('jj', 'J2', 'J1'),
+          e('fa', 'A', 'fA'),
+          e('fb', 'B', 'fB'),
+          e('x1', 'M', 'X'),
+          e('x2', 'X', 'Y'),
+          e('x3', 'Y', 'Z'),
+          if (tees) ...[
+            e('fx', 'X', 'fX'),
+            e('fy', 'Y', 'fY'),
+            e('fz', 'Z', 'fZ'),
+          ],
+          e('zc', 'Z', 'CV2'),
+          e('c2', 'CV2', 'J2'),
+        ]);
+    Map<String, EdgeSizing> size(Network n, [Map<String, double>? fu]) =>
+        autoSizeNetwork(n, const SizingContext(),
+            leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+            leafFixtureUnits: const {ServiceType.coldWater: 4.0},
+            fixtureUnitsOut: fu);
+
+    final bends = size(net(tees: false));
+    final ref = size(net(tees: false, plain: true));
+    for (final id in ref.keys) {
+      expect(bends[id]!.flow.inLitersPerSecond,
+          closeTo(ref[id]!.flow.inLitersPerSecond, 1e-12),
+          reason: id);
+    }
+    expect(bends['c2']!.flow.inLitersPerSecond, greaterThan(0));
+    expect(bends['c2']!.flowFromId, 'CV2');
+    expect(
+        bends['m1']!.flow.inLitersPerSecond +
+            bends['x1']!.flow.inLitersPerSecond,
+        closeTo(_curve(8), 1e-9));
+
     final fu = <String, double>{};
-    final s = autoSizeNetwork(net, const SizingContext(),
-        leafDemand: const {ServiceType.coldWater: FlowRate(0)},
-        leafFixtureUnits: const {ServiceType.coldWater: 4.0},
-        fixtureUnitsOut: fu);
+    final s = size(net(tees: true), fu);
     expect(s['m1']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9));
-    for (final id in ['x1', 'x2', 'x3', 'zc', 'c2']) {
+    expect(s['x1']!.flow.inLitersPerSecond, closeTo(_curve(12), 1e-9));
+    for (final id in ['zc', 'c2']) {
       expect(s[id], isNotNull, reason: id);
       expect(s[id]!.flow.inLitersPerSecond, 0, reason: id);
       expect(s[id]!.diameter.inMillimeters, 15, reason: id);
@@ -821,11 +856,60 @@ void main() {
           if (hops({v}).containsKey(i) && hops({v}).containsKey(o)) v,
       };
       valves.removeWhere((v, _) => !cycle.contains(v));
+      // Round 27 r8 — rule 2 reads the BEND-FREE metric between the
+      // valve's effective neighbours: a bare bend (a degree-2 node that is
+      // not the source, a check valve or a fixture) weighs nothing, every
+      // other node half a hop on each pipe it touches (doubled to
+      // integers), and a neighbour is the first non-bend node past bends.
+      final degree = <String, int>{};
+      for (final e in edges) {
+        degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
+        degree[e.toId] = (degree[e.toId] ?? 0) + 1;
+      }
+      bool isBend(String n) =>
+          n != 'T' &&
+          degree[n] == 2 &&
+          !n.startsWith('V') &&
+          !n.startsWith('f');
+      Map<String, int> bendFree(Set<String> blocked) {
+        final d = <String, int>{'T': 0};
+        final done = <String>{};
+        while (true) {
+          String? best;
+          for (final MapEntry(key: n, value: x) in d.entries) {
+            if (!done.contains(n) && (best == null || x < d[best]!)) best = n;
+          }
+          if (best == null) return d;
+          done.add(best);
+          for (final e in edges) {
+            final m =
+                e.fromId == best ? e.toId : (e.toId == best ? e.fromId : null);
+            if (m == null || blocked.contains(m) || done.contains(m)) continue;
+            final w = (isBend(best) ? 0 : 1) + (isBend(m) ? 0 : 1);
+            if (d[m] == null || d[best]! + w < d[m]!) d[m] = d[best]! + w;
+          }
+        }
+      }
+
+      String pastBends(String v, String n) {
+        var prev = v, cur = n;
+        final seen = <String>{v};
+        while (isBend(cur) && seen.add(cur)) {
+          final e = edges.firstWhere((x) =>
+              (x.fromId == cur || x.toId == cur) &&
+              x.fromId != prev &&
+              x.toId != prev);
+          prev = cur;
+          cur = e.fromId == cur ? e.toId : e.fromId;
+        }
+        return cur;
+      }
+
       final towardRoot = <String>{
         for (final MapEntry(key: v, value: (i, o)) in valves.entries)
           if (() {
-            final d = hops({v});
-            return d[o]! < d[i]!;
+            final d = bendFree({v});
+            return d[pastBends(v, o)]! < d[pastBends(v, i)]!;
           }())
             v,
       };

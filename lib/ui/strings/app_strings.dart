@@ -665,6 +665,8 @@ enum StringKey {
   issueCheckValveEnvelopeMessage,
   issueCheckValveAgainstPumpTitle,
   issueCheckValveAgainstPumpMessage,
+  issueMoverAgainstBalanceTitle,
+  issueMoverAgainstBalanceMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -2018,6 +2020,15 @@ const Map<StringKey, String> _en = {
       'valve\'s leg. A pump leg is never closed: the leg is kept open and '
       'sized on the flow it carries, in the pump\'s drawn direction. Check '
       'the pump\'s head and the direction its pipes are drawn in.',
+  StringKey.issueMoverAgainstBalanceTitle:
+      'Balance runs against the drawn pump',
+  StringKey.issueMoverAgainstBalanceMessage:
+      'The balanced flow split runs against this pump as drawn (its leg has '
+      'no check valve). Its pipework is sized for both readings — the leg '
+      'closed and the leg open — on the larger flow, and the leg in the '
+      'pump\'s drawn direction, never backwards through the pump. Check the '
+      'pump\'s head and the direction its pipes are drawn in, or draw a check '
+      'valve on the leg.',
   StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
   StringKey.issueFireJockeyAssumedMessage:
       'Three or more identical fire pumps are drawn in parallel and nothing '
@@ -3476,6 +3487,15 @@ const Map<StringKey, String> _id = {
       'digambar pada kaki katup searah ini. Kaki pompa tidak pernah ditutup: '
       'kaki tetap terbuka dan diukur untuk debit yang dibawanya, searah '
       'pompa yang digambar. Periksa head pompa dan arah gambar pipanya.',
+  StringKey.issueMoverAgainstBalanceTitle:
+      'Keseimbangan aliran berlawanan dengan pompa yang digambar',
+  StringKey.issueMoverAgainstBalanceMessage:
+      'Pembagian aliran hasil penyeimbangan berlawanan dengan pompa ini '
+      'sebagaimana digambar (kakinya tanpa katup searah). Pipanya diukur '
+      'untuk kedua kemungkinan — kaki tertutup dan kaki terbuka — pada debit '
+      'terbesar, dan kaki searah pompa yang digambar, tidak pernah mundur '
+      'melalui pompa. Periksa head pompa dan arah gambar pipanya, atau '
+      'gambar katup searah pada kaki tersebut.',
   StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
   StringKey.issueFireJockeyAssumedMessage:
       'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '

@@ -106,6 +106,15 @@ final checkValveFeedsRingProvider = Provider<Set<String>>(
 final checkValveAmbiguousProvider = Provider<Map<String, CheckValveAmbiguity>>(
     (ref) => ref.watch(sizingDetailProvider).checkValveAmbiguous);
 
+/// Round 27 r8 — the PUMP nodes of VALVELESS mover legs (a pump drawn
+/// coherently on a chain with no check valve, on a ring) whose balanced
+/// split runs against the drawn pump: the leg is sized on the envelope of
+/// the leg closed and the leg open, in the pump's direction
+/// (`autoSizeNetwork(moverAgainstBalanceOut:)`). Judge-only; Review names
+/// each pump.
+final moverAgainstBalanceProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).moverAgainstBalance);
+
 /// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
 final sizingDetailProvider = Provider<
     ({
@@ -116,6 +125,7 @@ final sizingDetailProvider = Provider<
       Set<String> parallelLegs,
       Set<String> checkValveFeedsRing,
       Map<String, CheckValveAmbiguity> checkValveAmbiguous,
+      Set<String> moverAgainstBalance,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   if (net.edges.isEmpty) {
@@ -127,6 +137,7 @@ final sizingDetailProvider = Provider<
       parallelLegs: const <String>{},
       checkValveFeedsRing: const <String>{},
       checkValveAmbiguous: const <String, CheckValveAmbiguity>{},
+      moverAgainstBalance: const <String>{},
     );
   }
   final occupancy = ref.watch(occupancyProvider);
@@ -227,6 +238,7 @@ final sizingDetailProvider = Provider<
   final checkValveFeedsRing = <String>{};
   final checkValveAmbiguous = <String, CheckValveAmbiguity>{};
   final checkValveAgainstPump = <String>{};
+  final moverAgainstBalance = <String>{};
   final sizing = autoSizeNetwork(
     net,
     // The one sizing context (duct settings + the laid drainage slope).
@@ -261,6 +273,7 @@ final sizingDetailProvider = Provider<
     checkValveFeedsRingOut: checkValveFeedsRing,
     checkValveAmbiguousOut: checkValveAmbiguous,
     checkValveAgainstPumpOut: checkValveAgainstPump,
+    moverAgainstBalanceOut: moverAgainstBalance,
   );
   // Round 27 r7 — a mover-leg valve whose balance runs against its pump is
   // named on the same advisory kind with its own message.
@@ -275,6 +288,7 @@ final sizingDetailProvider = Provider<
     parallelLegs: parallelLegs,
     checkValveFeedsRing: checkValveFeedsRing,
     checkValveAmbiguous: checkValveAmbiguous,
+    moverAgainstBalance: moverAgainstBalance,
   );
 });
 

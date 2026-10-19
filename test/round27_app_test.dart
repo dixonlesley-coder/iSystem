@@ -559,5 +559,59 @@ void main() {
       expect(pump.title, 'Balance runs against the drawn pump');
       expect(pump.locate?.nodeId, 'CV');
     });
+
+    // r8 (binding orchestrator decision) — a VALVELESS circulator drawn
+    // toward the heater makes its root chain a return (the ambiguous heater
+    // discharge is a feed), and its leg the balance runs against is sized on
+    // the envelope and named on the PUMP (mover-against-balance:<id>).
+    testWidgets('valveless circulator against the balance is named on the pump',
+        (tester) async {
+      NetEdge hw(String id, String a, String b, {EdgeKind k = EdgeKind.run}) =>
+          NetEdge(
+              id: id, fromId: a, toId: b, service: ServiceType.hotWater,
+              kind: k);
+      final (_, c) = await _harness(tester);
+      c.read(projectControllerProvider.notifier).setFloors(const [
+        Floor('L0', Length(3.0)),
+        Floor('L1', Length(3.0)),
+      ]);
+      c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+        _n('H', 0, 0, role: NodeRole.plant),
+        _n('CVd', 20, 0, c: NodeComponent.checkValve),
+        _n('M', 50, 0),
+        _n('S0', 100, 0),
+        _n('S1', 100, 0, floor: 1),
+        _n('f0', 140, 0, role: NodeRole.fixture),
+        _n('f1', 140, 0, role: NodeRole.fixture, floor: 1),
+        _n('R1', 120, 40, floor: 1),
+        _n('R0', 120, 40),
+        _n('Pr', 50, 40, role: NodeRole.plant, c: NodeComponent.pump),
+      ], edges: [
+        hw('hc', 'CVd', 'H'),
+        hw('cm', 'CVd', 'M'),
+        hw('m', 'M', 'S0'),
+        hw('s1', 'S0', 'S1', k: EdgeKind.riser),
+        hw('b0', 'S0', 'f0'),
+        hw('b1', 'S1', 'f1'),
+        hw('top', 'S1', 'R1'),
+        hw('r1', 'R1', 'R0', k: EdgeKind.riser),
+        hw('rp', 'R0', 'Pr'),
+        hw('ph', 'Pr', 'H'),
+      ]));
+      await tester.pump();
+      expect(c.read(moverAgainstBalanceProvider), {'Pr'});
+      expect(c.read(checkValveAmbiguousProvider),
+          {'CVd': CheckValveAmbiguity.supplyLeg});
+      final s = c.read(sizingProvider);
+      expect(s['hc']!.flow.inLitersPerSecond, greaterThan(0));
+      expect(s['ph']!.flowFromId, 'Pr');
+      expect(s['rp']!.flowFromId, 'R0');
+      final issue = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'mover-against-balance:Pr');
+      expect(issue.title, 'Balance runs against the drawn pump');
+      expect(issue.message, contains('never backwards through the pump'));
+      expect(issue.locate?.nodeId, 'Pr');
+    });
   });
 }

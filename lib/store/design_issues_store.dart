@@ -673,6 +673,20 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       locate: IssueLocation(n.sheetId, nodeId: id),
     ));
   }
+  // Round 27 r8 — a VALVELESS pump leg whose balanced split runs against
+  // the drawn pump: sized on the envelope (leg closed / leg open), never
+  // backwards through the pump. Named on the pump node.
+  for (final id in ref.watch(moverAgainstBalanceProvider).toList()..sort()) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'mover-against-balance:$id',
+      title: str(StringKey.issueMoverAgainstBalanceTitle),
+      message: str(StringKey.issueMoverAgainstBalanceMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
   if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
