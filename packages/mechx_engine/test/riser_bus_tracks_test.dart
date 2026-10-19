@@ -3,8 +3,8 @@
 //
 // Geometry used below (all from `electrical_sld_drawing.dart`):
 //   gutter 150, gap 24, board 168 x 46 ⇒ boards at x = 174, 366, 558 … (pitch
-//   192); band height 160 (drafting-6: the 13-unit fan-out pitch), top band
-//   at y 0.
+//   192); band height 167 (drafting-6: the 13-unit fan-out pitch; Round 23:
+//   the first stub one pitch below the box, +7), top band at y 0.
 //   Bus tracks sit 12 / 17 / 22 / 27 above a band's box tops, claimed
 //   right-to-left by jog x (the rightmost jog keeps the legacy 12); a band with
 //   more than four jogs spreads its tracks MONOTONICALLY from 4 up to 29 above
@@ -119,19 +119,19 @@ void main() {
   group('drawing-output-1 residual: every jogged leg owns its bus track', () {
     test('the fixture exercises the CHILD-leg jog (childBusY branch)', () {
       // The band packs A/B/C left to right in feeder-tree order; whichever is
-      // LEFTMOST on L1 (x 174, y 160) has two boards between it and the
+      // LEFTMOST on L1 (x 174, y 167) has two boards between it and the
       // channel, so its child leg must jog. Right edge 342 ⇒ jog x 342 + 12 =
-      // 354: a vertical rising from its centre-line (160 + 23 = 183) to a bus
+      // 354: a vertical rising from its centre-line (167 + 23 = 190) to a bus
       // track ABOVE the box top.
-      final l1 = rects.where((rc) => rc.y == 160.0).toList()
+      final l1 = rects.where((rc) => rc.y == 167.0).toList()
         ..sort((a, b) => a.x.compareTo(b.x));
       expect(l1.length, 3);
       expect(l1.first.x, 174.0);
       final jog = medium.where((l) =>
           l.x1 == 354.0 &&
           l.x2 == 354.0 &&
-          math.max(l.y1, l.y2) == 183.0 &&
-          math.min(l.y1, l.y2) < 160.0);
+          math.max(l.y1, l.y2) == 190.0 &&
+          math.min(l.y1, l.y2) < 167.0);
       expect(jog, isNotEmpty);
     });
 
@@ -160,12 +160,12 @@ void main() {
 
     test('three jogs on L1 take three distinct tracks 12/17/22 above the boxes',
         () {
-      // L1 box tops at y 160 ⇒ tracks 148, 143, 138 (12 / 17 / 22 above).
+      // L1 box tops at y 167 ⇒ tracks 155, 150, 145 (12 / 17 / 22 above).
       final busRows = {
         for (final l in medium)
-          if (l.y1 == l.y2 && l.y1 < 160 && l.y1 > 160 - 31) l.y1
+          if (l.y1 == l.y2 && l.y1 < 167 && l.y1 > 167 - 31) l.y1
       };
-      expect(busRows, {148.0, 143.0, 138.0});
+      expect(busRows, {155.0, 150.0, 145.0});
     });
 
     test('no feeder line passes through any panel box interior', () {
@@ -226,11 +226,11 @@ void main() {
         .toList();
 
     test('the fixture has >= 2 jogs on L1 AND an L1 span that fits a tag', () {
-      // L1 box tops at y 160: its bus rows are the medium horizontals in the
-      // gap above them (160 - 31 .. 160).
+      // L1 box tops at y 167: its bus rows are the medium horizontals in the
+      // gap above them (167 - 31 .. 167).
       final l1Rows = {
         for (final l in medium2)
-          if (l.y1 == l.y2 && l.y1 < 160 && l.y1 > 160 - 31) l.y1
+          if (l.y1 == l.y2 && l.y1 < 167 && l.y1 > 167 - 31) l.y1
       };
       expect(l1Rows.length, greaterThanOrEqualTo(2));
       // Channel x = the shared vertical every feeder drops down.
@@ -357,7 +357,7 @@ void main() {
         () {
       // 11 tracks at the 3-unit minimum pitch need 4 + 10 x 3 = 34 above the
       // box tops; the gap under the hairline only offers 29 ⇒ the band grows by
-      // 5, pushing L1's box tops from 160 to 165 (the G band follows).
+      // 5, pushing L1's box tops from 167 to 172 (the G band follows).
       final pd = _denseBand(12);
       final rd = computeSystem(const PuilProfile(), pd);
       final sd =
@@ -366,9 +366,9 @@ void main() {
         for (final b in sd.prims.whereType<SldRect>().where((x) => x.w > 100))
           b.y
       };
-      expect(tops, containsAll(<double>[0, 165]));
-      // A band with <= 4 jogs keeps the fixed pitch (byte-identical).
-      expect(rects.map((b) => b.y).toSet(), {0.0, 160.0, 320.0});
+      expect(tops, containsAll(<double>[0, 172]));
+      // A band with <= 4 jogs keeps the fixed pitch (167 per band).
+      expect(rects.map((b) => b.y).toSet(), {0.0, 167.0, 334.0});
     });
   });
 }

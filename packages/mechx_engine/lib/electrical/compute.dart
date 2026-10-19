@@ -1731,6 +1731,7 @@ ElectricalPanelResult computePanel(
   final incomer = IncomerResult(
     breaker: incomerBreaker,
     poles: panel.system == ElectricalSystem.threePhase ? 4 : 2,
+    sizingCurrent: Current(incomerSizingCurrentA),
   );
   if (incomerBreaker.ratingA.amperes + 1e-9 < incomerSizingCurrentA) {
     final basis = serviceGoverns
@@ -1990,6 +1991,11 @@ ElectricalSystemResult computeSystem(
   final visited = <String>{};
   final inStack = <String>{};
   final postOrder = <String>[];
+  // Round 23 (report-pdf-board-order-reversed) — the ROOT-FIRST order the
+  // reports / schedules / drawings list boards in is a PRE-order walk
+  // (parent, then its children in model order): reversing the post-order put
+  // the parent first but reversed every sibling run (MDP, LP-6 … LP-1).
+  final preOrder = <String>[];
   var cycle = false;
 
   List<ElectricalPanel> childrenOf(String id) =>
@@ -2002,6 +2008,7 @@ ElectricalSystemResult computeSystem(
     }
     if (visited.contains(id)) return;
     inStack.add(id);
+    preOrder.add(id);
     for (final child in childrenOf(id)) {
       dfs(child.id);
     }
@@ -2019,6 +2026,7 @@ ElectricalSystemResult computeSystem(
     if (!visited.contains(p.id)) {
       cycle = true;
       postOrder.add(p.id);
+      if (!preOrder.contains(p.id)) preOrder.add(p.id);
       visited.add(p.id);
     }
   }
@@ -2650,7 +2658,7 @@ ElectricalSystemResult computeSystem(
     return ElectricalSystemResult(
       projectId: project.id,
       panels: results,
-      order: postOrder.reversed.toList(),
+      order: preOrder.toList(),
       totalDemandW: roundTo(rootDemandW, 0),
       supply: supply,
       earthing: earthing,

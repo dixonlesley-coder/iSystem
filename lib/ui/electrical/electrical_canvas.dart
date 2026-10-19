@@ -54,6 +54,7 @@ import 'package:mechx_engine/electrical/panel_templates.dart'
     show panelTemplateById;
 import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
+import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
@@ -2755,9 +2756,13 @@ class _PanelSummaryBody extends StatelessWidget {
     );
   }
 
-  String _cls(BreakerResult b) =>
-      b.deviceClass.name.toUpperCase() == 'MCCB' ? 'MCCB' : 'MCB';
+  String _cls(BreakerResult b) => breakerClassLabel(b);
 }
+
+/// The summary card's breaker-class label — the engine's own
+/// [BreakerClassCode.code] ('MCB' / 'MCCB' / 'ACB'), exhaustive over the
+/// class enum so an ACB incomer never reads 'MCB' (Round 23 r2).
+String breakerClassLabel(BreakerResult b) => b.deviceClass.code;
 
 // ════════════════════════════════════════════════════════════════════════════
 // Micro chip body — the far-zoomed-out tier.

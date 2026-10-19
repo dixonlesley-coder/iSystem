@@ -587,10 +587,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Revert the most recent committed edit. Driven by the global
   /// [historyProvider] (which owns cross-domain ordering) — not called
   /// directly by widgets.
+  ///
+  /// Round 23 (mep-bridge-4) — the restored snapshot is re-synced against the
+  /// LIVE MEP feed (idempotent, records no history): the MEP board is derived
+  /// from the drawing + the duty-feed switch, which an electrical undo does
+  /// not rewind, so a snapshot must never resurrect ways the feed no longer
+  /// derives (or drop ones it does).
   void undo() {
     if (_undo.isEmpty) return;
     _redo.add(state);
     state = _undo.removeLast();
+    resyncMepEquipment();
   }
 
   /// Replay the most recently undone edit (see [undo]).
@@ -598,13 +605,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     if (_redo.isEmpty) return;
     _undo.add(state);
     state = _redo.removeLast();
+    resyncMepEquipment();
   }
 
   /// Restore a captured project WITHOUT recording undo and WITHOUT clearing
   /// the local stacks — the structural coordinator's restore path for a
   /// compound floor-stack / sheet edit that moved electrical placements. Not
-  /// for widgets.
-  void restoreProject(ElectricalProject project) => state = project;
+  /// for widgets. Re-synced against the live MEP feed like [undo].
+  void restoreProject(ElectricalProject project) {
+    state = project;
+    resyncMepEquipment();
+  }
 
   /// Re-map every PLACED panel ([ElectricalPanel.layoutPos]) and circuit load
   /// ([ElectricalCircuit.loadPos]) through [map] WITHOUT recording undo — a
@@ -1147,6 +1158,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         clearMotorKw: clearMotorKw,
         cosPhi: cosPhi,
         demandFactor: demandFactor,
+        // Round 23 (mep-bridge-5) — record provenance: a typed factor is the
+        // engineer's and the MEP sync never re-derives it.
+        demandFactorUserSet: demandFactor != null ? true : null,
+        // Round 23 r2 (mep-bridge-2) — the same provenance for the way's
+        // electrical character, so the MEP sync never reverts a typed value.
+        cosPhiUserSet: cosPhi != null ? true : null,
+        phasesUserSet: (phases != null || clearPhases) ? true : null,
+        loadKindUserSet: loadKind != null ? true : null,
         length: length,
         phases: phases,
         clearPhases: clearPhases,
@@ -1273,6 +1292,16 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       if (c.id == circuitId) circuit = c;
     }
     if (circuit == null) return;
+    // Round 23 (regression-mep-move-off-board-duplicates-load) — an
+    // MEP-DERIVED way follows its equipment node: moved off the MEP board it
+    // would lose its source id, and the next sync would re-mint a second
+    // 'mep-<src>' way for the same machine (double demand, a duplicate circuit
+    // id). Refused like delete / merge; feed the MEP board from the target
+    // panel instead.
+    if (circuit.sourceEquipmentId != null) {
+      _refuse(StringKey.mepDerivedWayMoveLocked);
+      return;
+    }
     if (circuit.feedsPanelId == toPanelId) return; // would feed itself
     // Round 9 (elec-store-fuzz-5) — moving a FEEDER way re-parents the board
     // it feeds: refuse a move that would make a feeder cycle (the same rule
@@ -1281,12 +1310,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     if (fed != null && feederRefusalReason(toPanelId, fed) != null) {
       return;
     }
-    // A way moved OFF the MEP board becomes user-owned (the sync would
-    // otherwise re-mint a second 'mep-<src>' way for the same machine).
-    final moved = fromPanelId == kMepEquipmentPanelId
-        ? circuit.copyWith(
-            clearSourceEquipmentId: true, clearFlaOverrideA: true)
-        : circuit;
+    final moved = circuit;
     final panels = [
       for (final p in state.panels)
         if (p.id == fromPanelId)
@@ -2174,9 +2198,21 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     // the parked way that same equipment left behind (matched on the
     // deterministic mint id), so a source that comes back does not arrive as a
     // second copy of its own load.
+    // Round 23 — circuit ids already used on ANOTHER board (e.g. a way a
+    // legacy build let the engineer move off the MEP board): minting the same
+    // 'mep-<src>' id again would count the machine twice under one id.
+    final foreignIds = <String>{
+      for (final p in state.panels)
+        if (p.id != kMepEquipmentPanelId)
+          for (final c in p.circuits) c.id,
+    };
     for (final c in derived) {
       final src = c.sourceEquipmentId;
       if (src == null || refreshed.contains(src)) continue;
+      if (foreignIds.contains(c.id)) {
+        refreshed.add(src);
+        continue;
+      }
       final parkedIndex = merged.indexWhere(
           (m) => m.sourceEquipmentId == null && m.id == c.id);
       if (parkedIndex >= 0) {
@@ -2450,6 +2486,10 @@ ElectricalCircuit _parkedMepWay(ElectricalCircuit c) => ElectricalCircuit(
       flaOverrideA: c.flaOverrideA,
       starterType: c.starterType,
       loadPos: c.loadPos,
+      demandFactorUserSet: c.demandFactorUserSet,
+      cosPhiUserSet: c.cosPhiUserSet,
+      phasesUserSet: c.phasesUserSet,
+      loadKindUserSet: c.loadKindUserSet,
     );
 
 /// A [parked] way re-claimed by the [fresh] derived circuit for the SAME source
@@ -2489,12 +2529,26 @@ ElectricalCircuit _refreshedMepWay(
 ) {
   final mintedCable =
       c.cableType == null || (c.lifeSafety && c.cableType == 'FRC');
-  // Round 21 — a fire pump's 1 (duty) / 0 (standby) factor is machine-derived
-  // (re-derived when the duty/standby roles change); any other value is the
-  // engineer's and is kept.
-  final mintedDemand = c.lifeSafety &&
+  // Round 21 / 23 — a machine way's 1 (duty) / 0 (standby) factor is
+  // machine-derived (re-derived when the duty/standby roles change). Round 23
+  // (mep-bridge-5): provenance, not inference — a factor the engineer TYPED
+  // (`demandFactorUserSet`) is never overwritten, even a 0 or 1; a legacy
+  // unflagged value other than 0 / 1 is also kept as the engineer's.
+  final mintedDemand = !c.demandFactorUserSet &&
       ((c.demandFactor - 1).abs() < 1e-9 || c.demandFactor.abs() < 1e-9);
+  // Round 23 (mep-bridge-2) — a component swap on the SAME node keeps the
+  // way id, so the electrical character (phases / load kind / cos phi) is
+  // re-derived from the fresh mint (a phase PIN stays the engineer's), and a
+  // name the app supplied follows the new unit. Round 23 r2 — provenance: a
+  // cos phi / phase count / load kind the engineer TYPED (`*UserSet`) is
+  // never overwritten by the re-derivation.
+  final mintedName = mepMintedCircuitNames.contains(c.name);
   return c.copyWith(
+    name: mintedName ? fresh.name : null,
+    phases: c.phasesUserSet ? null : fresh.phases,
+    clearPhases: !c.phasesUserSet && fresh.phases == null,
+    loadKind: c.loadKindUserSet ? null : fresh.loadKind,
+    cosPhi: c.cosPhiUserSet ? null : fresh.cosPhi,
     demandFactor: mintedDemand ? fresh.demandFactor : null,
     loadW: fresh.loadW,
     motorKw: fresh.motorKw,
@@ -2533,9 +2587,15 @@ bool _isPristineDerivedWay(ElectricalCircuit c) =>
     c.points == 1 &&
     (c.cosPhi - defaultMotorCosPhi).abs() < 1e-9 &&
     !c.isLighting &&
-    ((c.demandFactor - 1).abs() < 1e-9 ||
-        // Round 21 — a standby fire pump is MINTED at demand factor 0.
-        (c.lifeSafety && c.demandFactor.abs() < 1e-9)) &&
+    // Round 21 / 23 — a standby pump is MINTED at demand factor 0; a factor
+    // the engineer typed (even 0 / 1) makes the way theirs (parked, never
+    // dropped).
+    !c.demandFactorUserSet &&
+    ((c.demandFactor - 1).abs() < 1e-9 || c.demandFactor.abs() < 1e-9) &&
+    // Round 23 r2 — a typed cos phi / phases / load kind is the engineer's.
+    !c.cosPhiUserSet &&
+    !c.phasesUserSet &&
+    !c.loadKindUserSet &&
     !c.busbarBreakBefore &&
     (c.length.meters - kDefaultCircuitLength.meters).abs() < 1e-9 &&
     // A life-safety way is MINTED on FRC (audit r8 coupling-5), so FRC there

@@ -166,7 +166,20 @@ class IncomerResult {
   /// Pole count (2 = 1-phase L+N, 4 = 3-phase + N).
   final int poles;
 
-  const IncomerResult({required this.breaker, required this.poles});
+  /// Round 23 (elec-drafting-2-5) — the current the incomer was SIZED on
+  /// (headroom / capacitor / service floors applied); null on legacy
+  /// hand-built results.
+  final Current? sizingCurrent;
+
+  const IncomerResult(
+      {required this.breaker, required this.poles, this.sizingCurrent});
+
+  /// True when even the largest standard frame sits BELOW its sizing current
+  /// (the ladder saturated) — every printed surface must say so, never print
+  /// the saturated device silently.
+  bool get overRange =>
+      sizingCurrent != null &&
+      breaker.ratingA.amperes + 1e-9 < sizingCurrent!.amperes;
 }
 
 /// One busbar section a panel's ways are grouped onto (radially fed from the

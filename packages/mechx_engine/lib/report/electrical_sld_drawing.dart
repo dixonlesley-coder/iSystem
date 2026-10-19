@@ -42,7 +42,8 @@ import '../electrical/sources.dart'
         sizeBattery;
 import '../electrical/supply_design.dart' show serviceTransformer;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
-import '../standards/puil.dart' show BreakerCurve, BreakerClass;
+import '../standards/puil.dart'
+    show BreakerCurve, BreakerClass, BreakerClassCode;
 import '../units.dart' show ApparentPower, Current, Length, Power;
 import 'drawing_chrome.dart' show helveticaTextWidth;
 import 'number_format.dart' show groupThousands, signedElevationText;
@@ -162,7 +163,7 @@ String _curveCode(BreakerCurve c) => switch (c) {
       BreakerCurve.d => 'D',
     };
 
-String _classCode(BreakerClass c) => c == BreakerClass.mccb ? 'MCCB' : 'MCB';
+String _classCode(BreakerClass c) => c.code;
 
 /// A breaker label like `MCB C16A/1P` — the curve-led form (kept for the
 /// incomer sub-line + the device legend so the trip curve stays surfaced).
@@ -172,7 +173,7 @@ String _classCode(BreakerClass c) => c == BreakerClass.mccb ? 'MCCB' : 'MCB';
 /// characteristic, so `MCCB C160A/4P` is not a valid designation — an MCCB reads
 /// `MCCB 160A/4P` (N12).
 String breakerLabel(BreakerResult b, int poles) {
-  final curve = b.deviceClass == BreakerClass.mccb ? '' : _curveCode(b.curve);
+  final curve = b.deviceClass.hasTripCurve ? _curveCode(b.curve) : '';
   return '${_classCode(b.deviceClass)} $curve'
       '${_num(b.ratingA.amperes)}A/${poles}P';
 }
@@ -515,14 +516,15 @@ SldSheet buildElectricalSld({
     prims.add(SldLabel(
         blockX + 8,
         blockY + 32,
-        'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix  '
+        'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix'
+        '${p.incomer.overRange ? ' $kIncomerOverRangeToken (needs ${_num(p.incomer.sizingCurrent!.amperes)}A)' : ''}  '
         '${p.system.label}  ${_num(v)}V  '
         'Cu bus ${_num(p.busbar.csaMm2)}mm2$icw  '
         'demand ${_boardDemandCurrent(p)}',
         size: 8));
     // The trip-curve legend is about MCB characteristics only — an MCCB carries
     // no B/C/D curve (N12), so don't seed a curve legend entry from one.
-    if (p.incomer.breaker.deviceClass != BreakerClass.mccb) {
+    if (p.incomer.breaker.deviceClass.hasTripCurve) {
       usedCurves.add(p.incomer.breaker.curve);
     }
     usedClasses.add(p.incomer.breaker.deviceClass);
@@ -886,6 +888,9 @@ SldSheet buildElectricalSld({
   if (usedClasses.contains(BreakerClass.mccb)) {
     legend.add(const SldLegendEntry('MCCB', 'Moulded-case circuit breaker'));
   }
+  if (usedClasses.contains(BreakerClass.acb)) {
+    legend.add(const SldLegendEntry('ACB', 'Air circuit breaker'));
+  }
   for (final cv in [BreakerCurve.b, BreakerCurve.c, BreakerCurve.d]) {
     if (usedCurves.contains(cv)) {
       legend.add(SldLegendEntry(
@@ -1239,10 +1244,29 @@ bool _parentIsThreePhase(
 /// (the basis `computeSystem` sums into the supply note), so a single-root
 /// sheet prints ONE apparent power for one demand (the node used W / 0.85 =
 /// 44.9 kVA beside a 44.1 kVA supply note). The flat PF is the fallback only.
-String _compactNodeSubLine(ElectricalPanelResult p) =>
-    '${_num(p.incomer.breaker.ratingA.amperes)}A ${p.incomer.poles}P · '
-    '${_num(p.demandW / 1000)}kW / '
-    '${_num(p.demandVaOrEstimate(fallbackPf: _assumedPanelPf) / 1000)}kVA';
+String _compactNodeSubLine(ElectricalPanelResult p, {ElectricalPanel? model}) {
+  // Round 23 (elec-drafting-2-5) — a saturated incomer says so on the node.
+  final head = '${_num(p.incomer.breaker.ratingA.amperes)}A '
+      '${p.incomer.poles}P${p.incomer.overRange ? ' $kIncomerOverRangeToken' : ''}';
+  // Round 23 (elec-drafting-2-7) — a capacitor-only board carries no real
+  // power (Round 11): print its bank rating, never '0kW / 0kVA'. The bank's
+  // kvar is the MODEL way's rating (the solved way carries 0 W by design).
+  var kvar = 0.0;
+  for (final c in model?.circuits ?? const <ElectricalCircuit>[]) {
+    if (c.loadKind == LoadKind.capacitor) kvar += c.loadW;
+  }
+  if (p.demandW <= 0 && kvar > 0) {
+    return '$head · ${_num(kvar / 1000)} kvar';
+  }
+  return '$head · ${_num(p.demandW / 1000)}kW / '
+      '${_num(p.demandVaOrEstimate(fallbackPf: _assumedPanelPf) / 1000)}kVA';
+}
+
+/// Round 23 (elec-drafting-2-5) — the token every printed surface appends to
+/// an incomer whose largest standard frame still sits below its sizing
+/// current (the ladder saturated), so a saturated device is never printed
+/// silently (the Round-8 rule the genset ladder already follows).
+const String kIncomerOverRangeToken = 'OVER RANGE';
 
 /// Parent-of map over the feeder graph (childPanelId -> parentPanelId), limited
 /// to children that have a result. Shared by the overview + riser layouts.
@@ -2101,27 +2125,75 @@ SldSheet buildElectricalOverview({
   required ElectricalProject project,
   required ElectricalSystemResult result,
   bool sourceChain = false,
+  String? subtreeRootId,
+  int? maxDepth,
 }) {
   // children map over the feeder graph; parent + essential via shared helpers.
-  final parentOf = _parentOf(project, result);
+  final fullParentOf = _parentOf(project, result);
+  // Round 23 (elec-drafting-2-1) — an issuable PAGE of a wide distribution
+  // tree: [subtreeRootId] draws only that board + its descendants (the board
+  // becomes the page's root, with a 'DARI <parent>' match note above it), and
+  // [maxDepth] stops the tree at that depth (a cut board carries a
+  // 'LANJUT KE DIAGRAM <board>' note below it). Both null ⇒ the whole tree.
+  final fullChildren = <String, List<String>>{};
+  for (final entry in fullParentOf.entries) {
+    (fullChildren[entry.value] ??= []).add(entry.key);
+  }
+  Set<String>? include;
+  if (subtreeRootId != null) {
+    include = <String>{};
+    final stack = [subtreeRootId];
+    while (stack.isNotEmpty) {
+      final id = stack.removeLast();
+      if (!include.add(id)) continue;
+      stack.addAll(fullChildren[id] ?? const []);
+    }
+  }
+  if (maxDepth != null) {
+    final rel = <String, int>{};
+    for (final id in result.order) {
+      if (include != null && !include.contains(id)) continue;
+      final par = fullParentOf[id];
+      rel[id] = (par == null || (include != null && !include.contains(par)))
+          ? 0
+          : (rel[par] ?? 0) + 1;
+    }
+    include = {
+      for (final e in rel.entries)
+        if (e.value <= maxDepth) e.key,
+    };
+  }
+  final order = [
+    for (final id in result.order)
+      if (include == null || include.contains(id)) id,
+  ];
+  final parentOf = <String, String>{
+    for (final e in fullParentOf.entries)
+      if (include == null ||
+          (include.contains(e.key) && include.contains(e.value)))
+        e.key: e.value,
+  };
+  // A sub-tree page never repeats the building's source spine.
+  if (subtreeRootId != null) sourceChain = false;
   final (feederCircuitOf, feederResultOf) =
       _feederLabelLookups(project, result, parentOf);
   final children = <String, List<String>>{};
   for (final entry in parentOf.entries) {
     (children[entry.value] ??= []).add(entry.key);
   }
-  // Preserve result.order within each parent's child list (was insertion order
+  // Preserve order within each parent's child list (was insertion order
   // over the feeder graph; root-first order is a faithful proxy).
   final essential = essentialPanelIds(project, result);
+  final panelModelById = {for (final p in project.panels) p.id: p};
 
   // ── Tree layout: x by leaf order (in-order), y by depth ─────────────────────
   final depth = <String, int>{};
-  for (final id in result.order) {
+  for (final id in order) {
     final par = parentOf[id];
     depth[id] = par == null ? 0 : (depth[par] ?? 0) + 1;
   }
   final roots = [
-    for (final id in result.order)
+    for (final id in order)
       if (!parentOf.containsKey(id)) id
   ];
   final cx = <String, double>{};
@@ -2200,7 +2272,7 @@ SldSheet buildElectricalOverview({
   final ovCleared = <String, bool>{};
   {
     final ovPlacer = _RiserLabelPlacer([
-      for (final id in result.order)
+      for (final id in order)
         if (cx.containsKey(id))
           _RiserBox(cx[id]!, nodeY(id), cx[id]! + _ovW, nodeY(id) + _ovH),
     ]);
@@ -2208,6 +2280,12 @@ SldSheet buildElectricalOverview({
     for (final entry in children.entries) {
       final ax = cx[entry.key]! + _ovW / 2;
       final ay = nodeY(entry.key) + _ovH;
+      // Every sibling's drop x, so a RIGHT-hand child's tag can sit on the bus
+      // segment that is its own (Round 23).
+      final drops = [
+        for (final k in entry.value)
+          if (cx.containsKey(k)) cx[k]! + _ovW / 2,
+      ];
       for (final child in entry.value) {
         if (!cx.containsKey(child)) continue;
         final lbl = _feederConnLabel(feederCircuitOf, feederResultOf, child,
@@ -2215,7 +2293,24 @@ SldSheet buildElectricalOverview({
         if (lbl == null) continue;
         final zx = cx[child]! + _ovW / 2;
         final midY = (ay + nodeY(child)) / 2;
-        final slot = (math.min(ax, zx) + 4, midY - 4);
+        // Round 23 (elec-drafting-2-4) — a child LEFT of (or under) its
+        // parent keeps the anchor at its own drop; a child to the RIGHT used to
+        // anchor at min(ax, zx) = the PARENT's drop, so every right-hand
+        // sibling's tag piled over another feeder's drop. It now ends at its
+        // OWN drop, on the bus segment only it uses (from the nearest drop to
+        // its left — a sibling or the parent's), never starting left of that.
+        final double slotX;
+        if (zx > ax + 1e-6) {
+          var prev = ax;
+          for (final d in drops) {
+            if (d < zx - 1e-6 && d > prev) prev = d;
+          }
+          final w = _riserLabelWidth(lbl, _ovFeederLabelSize);
+          slotX = math.max(prev + 4, zx - w - 4);
+        } else {
+          slotX = zx + 4;
+        }
+        final slot = (slotX, midY - 4);
         ovLabel[child] = lbl;
         ovDefault[child] = slot;
         ovSlot[child] = slot;
@@ -2297,7 +2392,7 @@ SldSheet buildElectricalOverview({
   }
 
   // Compact panel nodes.
-  for (final id in result.order) {
+  for (final id in order) {
     final p = result.panels[id];
     if (p == null || !cx.containsKey(id)) continue;
     final x = cx[id]!;
@@ -2307,14 +2402,34 @@ SldSheet buildElectricalOverview({
     final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
     prims.add(SldLabel(x + 7, y + 17, '${p.name}$tag',
         size: 10, bold: true, role: role));
-    prims.add(
-        SldLabel(x + 7, y + 33, _compactNodeSubLine(p), size: 7.5, role: role));
+    prims.add(SldLabel(
+        x + 7, y + 33, _compactNodeSubLine(p, model: panelModelById[id]),
+        size: 7.5, role: role));
+    // Page match notes (Round 23): a board whose sub-tree was cut continues
+    // on its own diagram; a sub-tree page's root names the board feeding it.
+    final cut = (fullChildren[id] ?? const <String>[])
+        .any((k) => result.panels.containsKey(k) && !cx.containsKey(k));
+    if (cut) {
+      prims.add(SldLine(x + _ovW / 2, y + _ovH, x + _ovW / 2, y + _ovH + 14,
+          weight: SldWeight.medium, role: role));
+      prims.add(SldLabel(
+          x + _ovW / 2 + 4, y + _ovH + 12, 'LANJUT KE DIAGRAM ${p.name}',
+          size: _ovFeederLabelSize, role: role));
+    }
+    final par = fullParentOf[id];
+    if (par != null && !parentOf.containsKey(id)) {
+      final parName = result.panels[par]?.name ?? par;
+      prims.add(SldLine(x + _ovW / 2, y - 14, x + _ovW / 2, y,
+          weight: SldWeight.medium, role: role));
+      prims.add(SldLabel(x + _ovW / 2 + 4, y - 6, 'DARI $parName',
+          size: _ovFeederLabelSize, role: role));
+    }
   }
 
   // ── Bounds ─────────────────────────────────────────────────────────────────
   var minX = double.infinity, minY = double.infinity;
   var maxX = -double.infinity, maxY = -double.infinity;
-  for (final id in result.order) {
+  for (final id in order) {
     if (!cx.containsKey(id)) continue;
     final x = cx[id]!;
     final y = nodeY(id);
@@ -2362,6 +2477,18 @@ SldSheet buildElectricalOverview({
   maxX = math.max(maxX, ovLabelMaxX);
   minY = math.min(minY, ovLabelMinY);
   maxY = math.max(maxY, ovLabelMaxY);
+  // Page match notes (sub-tree / depth-cut pages only) extend the bounds.
+  if (subtreeRootId != null || maxDepth != null) {
+    for (final pr in prims) {
+      if (pr is SldLabel &&
+          (pr.text.startsWith('LANJUT KE DIAGRAM') ||
+              pr.text.startsWith('DARI '))) {
+        minY = math.min(minY, pr.y - pr.size - 8);
+        maxY = math.max(maxY, pr.y + 2);
+        maxX = math.max(maxX, pr.x + _riserLabelWidth(pr.text, pr.size));
+      }
+    }
+  }
 
   final s = result.supply;
   final supplyNote = '${s.system.label}  ${_num(s.voltage.volts)}V  '
@@ -2391,12 +2518,12 @@ SldSheet buildElectricalOverview({
 
 /// Gutter + band geometry for the riser.
 const double _riserGutterW = 150;
-const double _riserBandH = 160;
+const double _riserBandH = 167;
 const double _riserPanelGap = 24;
 
 /// How far above a band's boxes its BUS ROW runs — the clear gap between the
 /// previous band's floor grid line (31 units above the boxes:
-/// `_riserBandH − _ovH − _fanColH − _riserPanelGap/2` = 160 − 46 − 71 − 12)
+/// `_riserBandH − _ovH − _fanColH − _riserPanelGap/2` = 167 − 46 − 78 − 12)
 /// and the box tops, where a feeder / supply leg that would otherwise cross a
 /// board is routed instead. A drafting choice, not a standard.
 const double _riserBusOffset = 12;
@@ -2476,10 +2603,14 @@ typedef _RiserLeg = ({
 /// for the plot fit (`sld_plot_fit.dart`) to grow each stub label to the
 /// minimum plotted size on a scaled-down sheet without touching the box or the
 /// next row (was an 11 pitch with a 4 gap, which boxed the labels in).
+/// Round 23 (elec-drafting-2-7) — the first stub starts ONE ROW PITCH below
+/// the box (a 6-unit gap left the first row's text touching every board's
+/// bottom border once grown); the band grows by the same 7 units so the bus
+/// gap above the boxes stays 31.
 const int kRiserFanMax = 4;
 const double _fanRowH = 13;
-const double _fanTopGap = 6;
-const double _fanColH = (kRiserFanMax + 1) * _fanRowH + 6;
+const double _fanTopGap = _fanRowH;
+const double _fanColH = (kRiserFanMax + 1) * _fanRowH + _fanTopGap;
 
 /// Drawn size of a fan-out stub label — also the font-size term in its
 /// name-truncation budget (`kElectricalRiserLabelCharW * _fanLabelSize`),
@@ -2787,8 +2918,18 @@ List<SldLine> _mergeFeederSegments(List<_FeederSeg> segs,
 /// pure feeder-depth TIERS (gutter shows `Tier n`, no elevation) — never throws.
 ///
 /// When [sourceChain] is true a PLN/MV/transformer/LV-main source spine is
-/// prepended ABOVE the top floor band. [mounting] is accepted for signature
-/// parity with the mechanical riser; it is unused here.
+/// drawn: ABOVE the top floor band when a root board sits on the top band,
+/// else (Round 23, elec-drafting-2-6) BESIDE the highest root's band — in a
+/// column left of the floor gutter, with a short lead into the root — so the
+/// PLN / transformer / genset sit at the substation level next to the LV main
+/// instead of at roof level with a service cable descending every storey.
+/// [mounting] is accepted for signature parity with the mechanical riser; it
+/// is unused here.
+///
+/// [floorRange] (Round 23, elec-drafting-2-1) crops the sheet to those bands
+/// (an issuable PAGE of a tall riser): every feeder that leaves the page is
+/// cut at the page edge with a `LANJUT KE <floor>` match stub, and the source
+/// spine rides the page that carries its root band. Null ⇒ the whole riser.
 ///
 /// Each feeder's cable/breaker annotation keeps its default anchor (on the
 /// branch, just right of the child's box) whenever that is clear; when boards
@@ -2800,6 +2941,7 @@ SldSheet buildElectricalRiser({
   BuildingLevels? building,
   MountingHeights mounting = const MountingHeights(),
   bool sourceChain = false,
+  ({int lo, int hi})? floorRange,
 }) {
   final parentOf = _parentOf(project, result);
   final essential = essentialPanelIds(project, result);
@@ -2863,11 +3005,27 @@ SldSheet buildElectricalRiser({
     return y;
   }
 
-  // ── Optional source spine above the top band ────────────────────────────────
+  // ── Optional source spine ───────────────────────────────────────────────────
   final prims = <SldPrim>[];
   var contentOffsetY = 0.0;
   ({List<SldPrim> prims, double height, double feedX, double feedY})? spine;
-  if (sourceChain) {
+  // Round 23 (elec-drafting-2-6) — when every root board sits BELOW the top
+  // band the spine is drawn beside the highest root's band (placed once the
+  // band positions are final, below); only a top-band root keeps it above.
+  final rootIds = [
+    for (final id in result.order)
+      if (!parentOf.containsKey(id) && result.panels.containsKey(id)) id,
+  ];
+  final spineBeside = sourceChain &&
+      rootIds.isNotEmpty &&
+      rootIds.every((r) => floorOf(r) < topIndex);
+  String? spineRoot;
+  if (spineBeside) {
+    for (final r in rootIds) {
+      if (spineRoot == null || floorOf(r) > floorOf(spineRoot)) spineRoot = r;
+    }
+  }
+  if (sourceChain && !spineBeside) {
     spine = _buildSourceSpine(project, result, _riserGutterW + 2 * _ovW);
     contentOffsetY = spine.height + _ovTierH;
     prims.addAll(spine.prims);
@@ -2942,7 +3100,7 @@ SldSheet buildElectricalRiser({
   // Shared by the track pre-claim AND the drawing so the two always agree.
   bool rootNeedsTrunk(String id) {
     final sp = spine;
-    if (sp == null) return false;
+    if (sp == null || spineBeside) return false;
     final zx = panelX[id]! + _ovW / 2;
     final zy = panelY[id]!;
     final midY = (sp.feedY + zy) / 2;
@@ -2999,6 +3157,11 @@ SldSheet buildElectricalRiser({
     }
     for (final id in result.order) {
       if (parentOf.containsKey(id) || !panelX.containsKey(id)) continue;
+      if (spineBeside) {
+        // The beside-spine lead rides its own row above the root's boxes.
+        claim('s:$id', floorOf(id), double.negativeInfinity);
+        continue;
+      }
       if (!rootNeedsTrunk(id)) continue;
       claim('top', topIndex, double.negativeInfinity);
       if (floorOf(id) != topIndex) {
@@ -3046,6 +3209,38 @@ SldSheet buildElectricalRiser({
     busTrackOf[c.key] = bandY(c.band) +
         contentOffsetY -
         _riserBusTrackOffset(k, trackCount[c.band]!, bandExtra[c.band] ?? 0);
+  }
+
+  // Prims that belong to the beside-root source spine + its root leads: kept
+  // WHOLE on the page that carries the spine root's band (never cropped).
+  final spineGroup = <SldPrim>{};
+  if (spineBeside) {
+    final raw = _buildSourceSpine(project, result, 0);
+    var sMaxX = -double.infinity;
+    for (final pr in raw.prims) {
+      sMaxX = math.max(
+          sMaxX,
+          switch (pr) {
+            SldRect() => pr.x + pr.w,
+            SldLine() => math.max(pr.x1, pr.x2),
+            SldLabel() => pr.x + _riserLabelWidth(pr.text, pr.size),
+            SldCircle() => pr.cx + pr.r,
+          });
+    }
+    // The column ends 24 units left of the floor gutter; its feed point sits
+    // 10 units above the spine root's own supply row.
+    final rowY = busTrackOf['s:$spineRoot']!;
+    final double dx = -24 - (sMaxX.isFinite ? sMaxX : 0.0);
+    final dy = rowY - 10 - raw.feedY;
+    final shifted = [for (final pr in raw.prims) _shiftPrim(pr, dx, dy)];
+    spine = (
+      prims: shifted,
+      height: raw.height,
+      feedX: raw.feedX + dx,
+      feedY: raw.feedY + dy,
+    );
+    spineGroup.addAll(shifted);
+    prims.addAll(shifted);
   }
 
   final feeders = <_RiserFeeder>[];
@@ -3187,7 +3382,28 @@ SldSheet buildElectricalRiser({
   sheetMaxX = math.max(sheetMaxX, channelX);
 
   // Source -> each root: from the LV-main bus bottom into the root panel.
-  if (spine != null) {
+  if (spine != null && spineBeside) {
+    // Beside-root spine: down the spine column to the root's own supply row,
+    // across (above its band's boxes), down into the root. The spine root is
+    // the HIGHEST root, so every other root's lead runs down, never back up
+    // through the spine column.
+    for (final id in result.order) {
+      if (parentOf.containsKey(id) || !panelX.containsKey(id)) continue;
+      final zx = panelX[id]! + _ovW / 2;
+      final zy = panelY[id]!;
+      final rowY = busTrackOf['s:$id']!;
+      final lead = [
+        SldLine(spine.feedX, spine.feedY, spine.feedX, rowY,
+            weight: SldWeight.medium, role: SldRole.source),
+        SldLine(spine.feedX, rowY, zx, rowY,
+            weight: SldWeight.medium, role: SldRole.source),
+        SldLine(zx, rowY, zx, zy,
+            weight: SldWeight.medium, role: SldRole.source),
+      ];
+      prims.addAll(lead);
+      if (id == spineRoot) spineGroup.addAll(lead);
+    }
+  } else if (spine != null) {
     for (final id in result.order) {
       if (parentOf.containsKey(id) || !panelX.containsKey(id)) continue;
       final zx = panelX[id]! + _ovW / 2;
@@ -3275,8 +3491,9 @@ SldSheet buildElectricalRiser({
     final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
     prims.add(SldLabel(x + 7, y + 17, '${p.name}$tag',
         size: 10, bold: true, role: role));
-    prims.add(
-        SldLabel(x + 7, y + 33, _compactNodeSubLine(p), size: 7.5, role: role));
+    prims.add(SldLabel(
+        x + 7, y + 33, _compactNodeSubLine(p, model: panelModelById[id]),
+        size: 7.5, role: role));
 
     // Per-floor branch fan-out: the panel's NON-FEEDER outgoing load ways as a
     // compact column of short labelled stubs below the box — the real riser
@@ -3325,6 +3542,75 @@ SldSheet buildElectricalRiser({
     }
   }
 
+  // ── Page crop (Round 23, elec-drafting-2-1) ────────────────────────────────
+  if (floorRange != null) {
+    final lo = floorRange.lo.clamp(0, topIndex);
+    final hi = floorRange.hi.clamp(lo, topIndex);
+    double gridY(int i) =>
+        bandY(i) + contentOffsetY + _ovH + _fanColH + _riserPanelGap / 2;
+    final top = hi >= topIndex ? double.negativeInfinity : gridY(hi + 1);
+    final bottom = lo <= 0 ? double.infinity : gridY(lo);
+    String floorName(int i) {
+      if (hasFloors) {
+        final n = building.floors[i].name;
+        return n.isEmpty ? 'L${i + 1}' : n;
+      }
+      return 'Tier ${topIndex - i + 1}';
+    }
+
+    final keepSpine = spineRoot != null &&
+        floorOf(spineRoot) >= lo &&
+        floorOf(spineRoot) <= hi;
+    const eps = 1e-6;
+    bool inWin(double y) => y >= top - eps && y <= bottom + eps;
+    final cropped = <SldPrim>[];
+    final stubs = <String>{};
+    void stub(double x, double y, int floor, SldRole role) {
+      if (!stubs.add('${x.toStringAsFixed(2)}@${y.toStringAsFixed(2)}')) return;
+      cropped.add(SldLabel(x + 3, y, 'LANJUT KE ${floorName(floor)}',
+          size: _fanLabelSize, role: role));
+    }
+
+    for (final pr in prims) {
+      if (spineGroup.contains(pr)) {
+        if (keepSpine) cropped.add(pr);
+        continue;
+      }
+      switch (pr) {
+        case SldRect():
+          if (inWin(pr.y) && inWin(pr.y + pr.h)) cropped.add(pr);
+        case SldLabel():
+          if (inWin(pr.y)) cropped.add(pr);
+        case SldCircle():
+          if (inWin(pr.cy)) cropped.add(pr);
+        case SldLine():
+          final ya = math.min(pr.y1, pr.y2), yb = math.max(pr.y1, pr.y2);
+          if (yb < top - eps || ya > bottom + eps) continue;
+          if (ya >= top - eps && yb <= bottom + eps) {
+            cropped.add(pr);
+            continue;
+          }
+          // Clip a line crossing the page edge(s).
+          double xAt(double y) => (pr.y2 - pr.y1).abs() < eps
+              ? pr.x1
+              : pr.x1 + (pr.x2 - pr.x1) * (y - pr.y1) / (pr.y2 - pr.y1);
+          final ca = math.max(ya, top), cb = math.min(yb, bottom);
+          cropped.add(SldLine(xAt(ca), ca, xAt(cb), cb,
+              weight: pr.weight,
+              role: pr.role,
+              layer: pr.layer,
+              dashed: pr.dashed));
+          if (ya < top - eps) {
+            stub(xAt(ca), ca + _fanLabelSize + 2, hi + 1, pr.role);
+          }
+          if (yb > bottom + eps) stub(xAt(cb), cb - 3, lo - 1, pr.role);
+      }
+    }
+    prims
+      ..clear()
+      ..addAll(cropped);
+  }
+
   // ── Bounds ─────────────────────────────────────────────────────────────────
   var minX = 0.0,
       minY = double.infinity,
@@ -3333,17 +3619,21 @@ SldSheet buildElectricalRiser({
   for (final pr in prims) {
     switch (pr) {
       case SldRect():
+        minX = math.min(minX, pr.x);
         minY = math.min(minY, pr.y);
         maxY = math.max(maxY, pr.y + pr.h);
         maxX = math.max(maxX, pr.x + pr.w);
       case SldLine():
+        minX = math.min(minX, math.min(pr.x1, pr.x2));
         minY = math.min(minY, math.min(pr.y1, pr.y2));
         maxY = math.max(maxY, math.max(pr.y1, pr.y2));
         maxX = math.max(maxX, math.max(pr.x1, pr.x2));
       case SldLabel():
         // drafting-9: the label's top (y - size), not its baseline.
+        minX = math.min(minX, pr.x);
         minY = math.min(minY, pr.y - pr.size);
       case SldCircle():
+        minX = math.min(minX, pr.cx - pr.r);
         minY = math.min(minY, pr.cy - pr.r);
         maxY = math.max(maxY, pr.cy + pr.r);
         maxX = math.max(maxX, pr.cx + pr.r);
@@ -3381,6 +3671,35 @@ SldSheet buildElectricalRiser({
     ],
     supplyNote: supplyNote,
   );
+}
+
+/// [p] translated by ([dx], [dy]) — every field else verbatim.
+SldPrim _shiftPrim(SldPrim p, double dx, double dy) => switch (p) {
+      SldLine() => SldLine(p.x1 + dx, p.y1 + dy, p.x2 + dx, p.y2 + dy,
+          weight: p.weight, role: p.role, layer: p.layer, dashed: p.dashed),
+      SldRect() =>
+        SldRect(p.x + dx, p.y + dy, p.w, p.h, weight: p.weight, role: p.role),
+      SldLabel() => SldLabel(p.x + dx, p.y + dy, p.text,
+          size: p.size, bold: p.bold, role: p.role),
+      SldCircle() =>
+        SldCircle(p.cx + dx, p.cy + dy, p.r, weight: p.weight, role: p.role),
+    };
+
+/// The number of floor BANDS [buildElectricalRiser] draws for [project] —
+/// the building's levels, else (no [building]) the feeder-depth tiers. The
+/// page chunker ([paginatedRiserSheets]) splits on this count.
+int electricalRiserBandCount(ElectricalProject project,
+    ElectricalSystemResult result, BuildingLevels? building) {
+  if (building != null && building.levelCount > 0) return building.levelCount;
+  final parentOf = _parentOf(project, result);
+  final depth = <String, int>{};
+  var maxDepth = 0;
+  for (final id in result.order) {
+    final par = parentOf[id];
+    depth[id] = par == null ? 0 : (depth[par] ?? 0) + 1;
+    maxDepth = math.max(maxDepth, depth[id]!);
+  }
+  return maxDepth + 1;
 }
 
 // ── Hybrid POWER one-line (C7) ───────────────────────────────────────────────
@@ -3506,7 +3825,21 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
   // detours through its own side LANE left of every column (Round 10). The
   // role follows the TARGET: the run into the main panel (the load side) is
   // normal, everything else is a supply run.
-  var lane = 0;
+  //
+  // Round 23 (elec-drafting-2-2) — two skip-tier sources on ONE tier (PLN and
+  // the genset) used to turn into their lanes on the SAME y and draw one
+  // continuous line between their drops: the utility and the standby genset
+  // read as solidly tied upstream of the ATS. Each source now takes the lane
+  // on ITS side of the drawing (a source right of the column centre detours
+  // right), and every lane on a side gets its own turn rows, so no two edges
+  // ever share a collinear segment.
+  var colMinX = double.infinity, colMaxX = -double.infinity;
+  for (final p in pos.values) {
+    colMinX = math.min(colMinX, p.x);
+    colMaxX = math.max(colMaxX, p.x + _polW);
+  }
+  final colMid = colMinX.isFinite ? (colMinX + colMaxX) / 2 : 0.0;
+  var laneL = 0, laneR = 0;
   for (final e in oneLine.edges) {
     final a = pos[e.from];
     final z = pos[e.to];
@@ -3544,10 +3877,14 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
             role);
       }
     } else {
-      lane++;
-      final laneX = -_polLaneGap * lane;
-      final y1 = ay + _polSubStrip + 6; // clear of the source's sub-label
-      final y2 = zy - 12;
+      final rightSide = ax > colMid;
+      final k = rightSide ? ++laneR : ++laneL;
+      final laneX =
+          rightSide ? colMaxX + _polLaneGap * k : colMinX - _polLaneGap * k;
+      // Clear of the source's sub-label; each lane on a side turns on its own
+      // rows (8 units apart), so same-side lanes never run collinear.
+      final y1 = ay + _polSubStrip + 6 + 8.0 * (k - 1);
+      final y2 = zy - 12 - 8.0 * (k - 1);
       prims
         ..add(SldLine(ax, ay, ax, y1, weight: SldWeight.medium, role: role))
         ..add(SldLine(ax, y1, laneX, y1, weight: SldWeight.medium, role: role))
@@ -3560,8 +3897,9 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
         placeLabel(
             label,
             [
-              for (var yy = y1 + 12; yy < y2; yy += 9) (laneX - 3 - w, yy),
-              (laneX - 3 - w, y1 - 3),
+              for (var yy = y1 + 12; yy < y2; yy += 9)
+                (rightSide ? laneX + 3 : laneX - 3 - w, yy),
+              (rightSide ? laneX + 3 : laneX - 3 - w, y1 - 3),
             ],
             role);
       }

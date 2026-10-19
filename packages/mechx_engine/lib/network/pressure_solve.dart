@@ -253,7 +253,11 @@ class _NodeCost {
 ///
 /// Nearer-the-source devices go first, so a booster then a PRV below it (or
 /// PRVs in series) compose in turn. Mutates [flowingHead] / [staticHead].
-void _applyInlineDevices({
+///
+/// Returns true when any PRV actually REDUCED the flowing head below it
+/// (Round 23 — the upfeed solve then re-judges its delivery nodes instead of
+/// claiming the target is held by design).
+bool _applyInlineDevices({
   required Network net,
   required String sourceId,
   required Map<String, List<({NetEdge edge, String other})>> adjacency,
@@ -270,7 +274,7 @@ void _applyInlineDevices({
               (moverHeads[id]?.meters ?? 0) > 0))
         id,
   ];
-  if (devices.isEmpty) return;
+  if (devices.isEmpty) return false;
   final parent = <String, String>{};
   final hop = <String, int>{sourceId: 0};
   final queue = [sourceId];
@@ -301,6 +305,7 @@ void _applyInlineDevices({
     }
   }
 
+  var reducedFlowing = false;
   for (final r in devices) {
     final inFlow = flowingHead[r];
     if (inFlow == null) continue;
@@ -312,8 +317,10 @@ void _applyInlineDevices({
     final dFlow = inFlow - setpointHead;
     final dStatic = (staticHead[r] ?? inFlow) - setpointHead;
     if (dFlow <= 0 && dStatic <= 0) continue;
+    if (dFlow > 0) reducedFlowing = true;
     shift(r, dFlow > 0 ? -dFlow : 0, dStatic > 0 ? -dStatic : 0);
   }
+  return reducedFlowing;
 }
 
 /// Solve a pressurized supply [service] tree fed from [sourceId].
@@ -434,6 +441,7 @@ PressureSolution solvePressurized({
     }
   });
 
+  final criticalBeforePrv = criticalNodeId;
   // residual(node) = pump - friction(node) - elevationGain(node), as pressure;
   // the no-flow static drops the friction term (mech-building-2).
   final flowingHead = <String, double>{};
@@ -446,9 +454,11 @@ PressureSolution solvePressurized({
   // Round 22 (pressurized-3-2) — a drawn PRV holds its setpoint downstream on
   // the upfeed too (the same pass as [solveDownfeed]), so 'zone the riser with
   // PRVs' really lowers the residuals and no-flow statics below each PRV. The
-  // pump head is unchanged: it is set by the critical fixture, upstream of
-  // any PRV that actually reduces.
-  _applyInlineDevices(
+  // pump head is unchanged (it is the pump's duty without the PRV loss).
+  // Round 23 — a PRV that reduces can starve the fixtures it serves (a PRV at
+  // the pump discharge or below the top riser fixture), so the identity
+  // 'every residual >= target' no longer holds by construction: re-judge.
+  final prvReduced = _applyInlineDevices(
     net: net,
     sourceId: sourceId,
     adjacency: adjacency,
@@ -464,14 +474,38 @@ PressureSolution solvePressurized({
     for (final e in staticHead.entries) e.key: pressureFromHead(Head(e.value)),
   };
 
+  // Without a reducing PRV the pump head above was DEFINED as the max of
+  // (friction + elevation + target), so every residual is >= target as an
+  // algebraic identity — the consumer must not read them as a verdict. With
+  // a reducing PRV that identity is broken: the critical node becomes the
+  // least-margin delivery node and the verdict is falsifiable again.
+  var heldByDesign = true;
+  if (prvReduced) {
+    const tolM = 1e-6;
+    double? worst;
+    for (final id in delivery) {
+      if (id == sourceId) continue;
+      final h = flowingHead[id];
+      if (h == null) continue;
+      if (worst == null || h < worst || (h == worst && id.compareTo(criticalNodeId) < 0)) {
+        worst = h;
+        criticalNodeId = id;
+      }
+    }
+    if (worst != null && worst < targetHead.meters - tolM) {
+      heldByDesign = false;
+    } else {
+      // Every delivery node still meets the target — keep the original
+      // (pump-governing) critical node and the by-design reading.
+      criticalNodeId = criticalBeforePrv;
+    }
+  }
+
   return PressureSolution(
     residualPressure: residualPressure,
     requiredPumpHead: Head(requiredPumpHead),
     criticalNodeId: criticalNodeId,
-    // The pump head above was DEFINED as the max of (friction + elevation +
-    // target), so every residual is ≥ target as an algebraic identity — the
-    // numbers are unchanged, but the consumer must not read them as a verdict.
-    targetHeldByDesign: true,
+    targetHeldByDesign: heldByDesign,
     noFlowStaticPressure: noFlowStatic,
     deliveryNodeIds: delivery.difference({sourceId}),
   );

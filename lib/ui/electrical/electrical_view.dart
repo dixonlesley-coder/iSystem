@@ -1589,8 +1589,7 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                   ElectricalToggleRow(
                     label: context.strings(StringKey.electricalMepFeedToggle),
                     value: dutyFeedOn,
-                    onChanged: (on) =>
-                        ref.read(mepDutyFeedEnabledProvider.notifier).set(on),
+                    onChanged: (on) => setMepDutyFeedUndoable(ref.read, on),
                   ),
                   note(duties.isEmpty
                       ? context.strings(StringKey.electricalMepFeedNoteEmpty)

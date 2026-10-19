@@ -130,6 +130,7 @@ PowerOneLine buildPowerOneLine(
   ApparentPower? backupDemand,
   Power? backupPower,
   Power? demandPower,
+  String? utilitySub,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -154,12 +155,15 @@ PowerOneLine buildPowerOneLine(
   edge('bus', 'main');
 
   // Utility (PLN). This domain feeds the bus at LV; MV/transformer topology is
-  // an A8 supply concern, deliberately out of scope here.
+  // an A8 supply concern, deliberately out of scope here. Round 23
+  // (elec-drafting-2-2) — [utilitySub] names a DECLARED MV service ('MV via
+  // TX 2 x 1600 kVA'), so the one-line never calls a tower's MV supply
+  // '400 V LV' while the riser of the same set draws its transformer.
   nodes.add(PowerNode(
     id: 'utility',
     kind: PowerNodeKind.utility,
     label: 'PLN utility',
-    sub: '${_fmt(voltage.volts)} V LV',
+    sub: utilitySub ?? '${_fmt(voltage.volts)} V LV',
   ));
   const utilityOut = 'utility';
 

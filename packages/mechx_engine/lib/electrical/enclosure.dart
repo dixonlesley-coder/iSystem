@@ -25,7 +25,7 @@ library;
 
 import 'dart:math' as math;
 
-import '../standards/puil.dart' show BreakerClass;
+import '../standards/puil.dart' show BreakerClass, BreakerClassCode;
 import '../units.dart' show Power;
 import 'panel_results.dart' show ElectricalPanelResult;
 
@@ -82,6 +82,15 @@ const List<({double maxRatingA, double frameWidthMm})> mccbFrameBands = [
   (maxRatingA: double.infinity, frameWidthMm: 140),
 ];
 
+/// Representative ACB (air circuit breaker) frame width (mm). An ACB is a
+/// power-circuit-breaker frame far wider than any moulded case — a 3P
+/// draw-out ACB is ≈ 300–440 mm wide — so it is NEVER narrower than the widest
+/// MCCB band (Round 23 r2: an ACB incomer had fallen through to the narrow
+/// MCB-by-poles path and SHRANK the enclosure).
+// VERIFY (notAnSniClause): representative 3P draw-out ACB frame width, not a
+// specific manufacturer's certified drawing.
+const double acbFrameWidthMm = 330;
+
 /// Surface heat-transfer coefficient `k` for a painted sheet-steel enclosure
 /// wall under natural convection + radiation (W per m² per K).
 // VERIFY (notAnSniClause): IEC 60890 representative ≈ 5.5 W/m²K for painted steel.
@@ -121,6 +130,11 @@ const double mcbLossPerPoleW = 3;
 // VERIFY (notAnSniClause): manufacturer data ≈ 10–20 W/pole at In for MCCBs.
 const double mccbLossPerPoleW = 15;
 
+/// Representative power loss of one ACB pole carrying its rated current (W).
+// VERIFY (notAnSniClause): manufacturer data ≈ 40–100 W/pole at In for
+// 800–4000 A air circuit breakers.
+const double acbLossPerPoleW = 60;
+
 /// Copper resistivity at a representative busbar operating temperature (Ω·m)
 /// — 1.72e-8 at 20 °C × (1 + 0.00393 × 50 K) ≈ 2.06e-8 at 70 °C.
 // VERIFY (notAnSniClause): ρ_Cu(70 °C), IEC 60228 / IEC 61439 practice.
@@ -139,8 +153,11 @@ const double copperResistivityOhmM = 1.72e-8 * (1 + 0.00393 * 50);
 /// (L + N), and the busbar run L = the estimated enclosure height. Grows
 /// monotonically with load (every term is ∝ I²).
 double switchgearLossW(ElectricalPanelResult panel) {
-  double pole(BreakerClass c) =>
-      c == BreakerClass.mccb ? mccbLossPerPoleW : mcbLossPerPoleW;
+  double pole(BreakerClass c) => switch (c) {
+        BreakerClass.mcb => mcbLossPerPoleW,
+        BreakerClass.mccb => mccbLossPerPoleW,
+        BreakerClass.acb => acbLossPerPoleW,
+      };
   double device(double i, double inA, BreakerClass c, int poles) {
     if (inA <= 0) return 0;
     final r = i / inA;
@@ -222,8 +239,10 @@ double _effectiveAreaM2(double wMm, double hMm, double dMm) {
 /// RCD-protected — today's behaviour. MCCB-family devices are wide
 /// moulded-case frames: their width comes from their rating band
 /// ([mccbFrameBands]), converted to 18 mm module-equivalents and rounded up —
-/// their pole count does not drive the width. `deviceClass` is matched
-/// case-insensitively against `'MCCB'`; anything else (including a null/empty
+/// their pole count does not drive the width. An ACB (`'ACB'`) is a fixed
+/// [acbFrameWidthMm] power-breaker frame, never narrower than the widest MCCB
+/// band. `deviceClass` is matched case-insensitively against `'MCCB'` /
+/// `'ACB'` ([BreakerClassCode.code]); anything else (including a null/empty
 /// string) is treated as the narrow MCB-like default. A null/omitted
 /// `ratingA` for an MCCB falls back to the smallest (≤125 A) frame band.
 int deviceModules({
@@ -232,7 +251,11 @@ int deviceModules({
   double? ratingA,
   bool rcdRequired = false,
 }) {
-  if (deviceClass.toUpperCase() == 'MCCB') {
+  final cls = deviceClass.toUpperCase();
+  if (cls == BreakerClass.acb.code) {
+    return (acbFrameWidthMm / dinModuleWidthMm).ceil();
+  }
+  if (cls == BreakerClass.mccb.code) {
     final rating = ratingA ?? 0;
     for (final band in mccbFrameBands) {
       if (rating <= band.maxRatingA) {
@@ -244,11 +267,11 @@ int deviceModules({
   return poles + (rcdRequired ? rcdModules : 0);
 }
 
-/// Map a breaker's [BreakerClass] to the catalogue-style label ('MCB'/'MCCB')
+/// Map a breaker's [BreakerClass] to the catalogue-style label ('MCB'/'MCCB'/'ACB')
 /// [deviceModules] matches against — mirrors the schedule-label convention in
 /// `report/electrical_sld_drawing.dart`'s `_classCode` / `bom.dart`'s
 /// `_classStr` (kept local rather than shared to stay file-disjoint).
-String _classCode(BreakerClass c) => c == BreakerClass.mccb ? 'MCCB' : 'MCB';
+String _classCode(BreakerClass c) => c.code;
 
 /// Estimate the total DIN-module count for a panel result.
 ///

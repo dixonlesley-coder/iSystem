@@ -7,7 +7,7 @@ library;
 import 'package:mechx_engine/electrical/earthing.dart' show RcdType;
 import 'package:mechx_engine/electrical/results.dart'
     show BreakerResult, BusbarResult;
-import 'package:mechx_engine/standards/puil.dart' show BreakerClass;
+import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 
 /// One-or-zero-dp number.
 String fmtNum(double v) =>
@@ -24,7 +24,7 @@ String fmtKw(double w) => '${(w / 1000).toStringAsFixed(1)} kW';
 String fmtKva(double kva) => '${kva.toStringAsFixed(1)} kVA';
 
 String fmtBreaker(BreakerResult b) {
-  final cls = b.deviceClass == BreakerClass.mccb ? 'MCCB' : 'MCB';
+  final cls = b.deviceClass.code;
   final curve = b.curve.name.toUpperCase();
   return '${fmtAmp0(b.ratingA.amperes)}A $cls·$curve';
 }

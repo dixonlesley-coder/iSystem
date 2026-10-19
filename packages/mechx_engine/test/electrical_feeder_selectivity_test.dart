@@ -100,7 +100,9 @@ void main() {
           designCurrent: const Current(50.5),
           loadKind: LoadKind.feeder,
           minRatingA: 9999);
-      expect(r.ratingA.amperes, 1600); // the ladder top
+      // The ladder top — the 4000 A ACB frame since Round 23.
+      expect(r.ratingA.amperes, p.standardBreakerRatingsA.last);
+      expect(r.ratingA.amperes, 4000);
     });
   });
 
@@ -439,8 +441,8 @@ void main() {
     //   → 1019.0 A ⇒ SP incomer = first rung ≥ 1019.0 = 1250 A.
     // Feeder f1 carries the same 706 kW at cosφ 1.0 ⇒ Ib = 1019.0 A ⇒ pass 1
     //   picks 1250 A, the child incomer's own rung (non-selective).
-    // FLOOR = 1.6 × 1250 = 2000 A — beyond the 1600 A ladder top, so the floor
-    //   itself clamps to 1600 A (never a throw).
+    // FLOOR = 1.6 × 1250 = 2000 A — the 2000 A ACB rung since the Round-23
+    //   ACB ladder (it used to clamp to the old 1600 A MCCB top).
     // CABLE (load-sized, single-run derating 1.00): Iz ≥ max(1250, 1.25 ×
     //   1019.02 = 1273.8) = 1273.8 A. One run tops out at 300 mm² (500 A);
     //   2 runs need 1273.8/2/0.8 = 796 A per run ✗; 3 runs 1273.8/3/0.7 =

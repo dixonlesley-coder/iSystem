@@ -1458,6 +1458,18 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Every `BreakerClass` consumer is EXHAUSTIVE (Round 23 r2)**: an ACB is
+  never sized, timed or labelled as an MCB — switch on the enum / `.code`,
+  never `name == 'mccb' ? … : <mcb>`. ACB frame 330 mm (`acbFrameWidthMm`,
+  >= the widest MCCB band), ACB pole loss 60 W, arc-flash clearing time
+  `arcFlashClearingTimeS` MCB 0.05 / MCCB 0.2 / ACB 0.5 s (`// VERIFY`); a
+  BOM line names a curve letter only when `hasTripCurve`. Typed electrical
+  character is PROVENANCE: `setCircuit(cosPhi:/phases:/loadKind:)` sets
+  `cosPhiUserSet` / `phasesUserSet` / `loadKindUserSet` (like
+  `demandFactorUserSet`) and the MEP sync never re-derives a flagged field.
+  The electrical layout DXF stamps the PDF twin's own snapped `1 : N`
+  (`electricalPlanPlottedScaleDenominator` → `plottedScaleDenominator`).
+- **Round 23 — held-by-design is falsifiable, MEP ways stay put, issued documents stay legible (2026-10-18)**: `solvePressurized` claims `targetHeldByDesign` only while no drawn PRV REDUCED the field below the target — a reducing PRV re-picks the least-residual delivery node as critical and the verdict turns falsifiable. `downfeedTankElevationProvider` is non-null only for a REAL gravity source on downfeed (roof tank / plant above the top fixture; nothing drawn ⇒ the declared roof datum); upfeed and booster-only downfeeds use the PRV-budget walk. An MEP-derived way never leaves the MEP board (`moveCircuit` refuses) and the sync never mints an id another board holds; a refresh re-derives phases / load kind / cos φ / an app-supplied name; a demand factor is the engineer's once `demandFactorUserSet` (provenance, never value inference); standby pumps (fire, supply on a mirrored leg, parallel HW recirc) carry the duty machine at df 0; electrical undo / redo / restore re-sync the MEP board and the duty-feed switch is undoable. `ElectricalSystemResult.order` is PRE-order (siblings in model order). The breaker ladder runs on to ACB frames (2000-4000 A, `// VERIFY`) and a saturated incomer always prints `OVER RANGE`. Report PDFs: WinAnsi fonts, wrapped cover runs, whole-word table columns, figures never below 5 pt (tiled), headings keep with their body. Electrical riser / overview PDFs paginate below 7 pt (floor ranges / sub-trees); the layout DXF is in world mm when calibrated; one-line skip lanes never share a stretch.
 - **Round 22 — standpipe per riser, tank-fed top zone, inline devices on both
   solves (2026-10-18)**: `hydrantDesignFlow` is the multi-riser TOTAL and
   rides only the common supply; every hydrant riser / trunk carries

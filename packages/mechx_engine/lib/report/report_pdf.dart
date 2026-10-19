@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'drawing_chrome.dart' show winAnsiByte;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 import 'sld_sheet.dart';
@@ -55,12 +56,46 @@ const List<int> _helveticaBoldWidths = [
   333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584,
 ];
 
-/// Width of [s] (already ASCII-sanitized) at [size] points.
+// Round 23 (report-pdf-glyph-transliteration) — AFM widths of the WinAnsi
+// upper half (0x80-0xFF) for Helvetica / Helvetica-Bold, so the real ·, Ø,
+// ², °, ±, ×, µ, §, fractions, dashes and curly quotes measure correctly.
+// 0 = an unassigned WinAnsi slot (never produced).
+const List<int> _helveticaHigh = [
+  556, 0, 222, 556, 333, 1000, 556, 556, 333, 1000, 667, 333, 1000, 0, 611, 0,
+  0, 222, 222, 333, 333, 350, 556, 1000, 333, 1000, 500, 333, 944, 0, 500, 667,
+  278, 333, 556, 556, 556, 556, 260, 556, 333, 737, 370, 556, 584, 333, 737, 333,
+  400, 584, 333, 333, 333, 556, 537, 278, 333, 333, 365, 556, 834, 834, 834, 611,
+  667, 667, 667, 667, 667, 667, 1000, 722, 667, 667, 667, 667, 278, 278, 278, 278,
+  722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667, 611,
+  556, 556, 556, 556, 556, 556, 889, 500, 556, 556, 556, 556, 278, 278, 278, 278,
+  556, 556, 556, 556, 556, 556, 556, 584, 611, 556, 556, 556, 556, 500, 556, 500,
+];
+
+const List<int> _helveticaBoldHigh = [
+  556, 0, 278, 556, 500, 1000, 556, 556, 333, 1000, 667, 333, 1000, 0, 611, 0,
+  0, 278, 278, 500, 500, 350, 556, 1000, 333, 1000, 556, 333, 944, 0, 500, 667,
+  278, 333, 556, 556, 556, 556, 280, 556, 333, 737, 370, 556, 584, 333, 737, 333,
+  400, 584, 333, 333, 333, 611, 556, 278, 333, 333, 365, 556, 834, 834, 834, 611,
+  722, 722, 722, 722, 722, 722, 1000, 722, 667, 667, 667, 667, 278, 278, 278, 278,
+  722, 722, 778, 778, 778, 778, 778, 584, 778, 722, 722, 722, 722, 667, 667, 611,
+  556, 556, 556, 556, 556, 556, 889, 556, 556, 556, 556, 556, 278, 278, 278, 278,
+  611, 611, 611, 611, 611, 611, 611, 584, 611, 611, 611, 611, 611, 556, 611, 556,
+];
+
+/// Width of [s] (already WinAnsi-sanitized: one char per WinAnsi byte) at
+/// [size] points.
 double _textWidth(String s, double size, {bool bold = false}) {
   final table = bold ? _helveticaBoldWidths : _helveticaWidths;
+  final high = bold ? _helveticaBoldHigh : _helveticaHigh;
   var units = 0;
   for (final c in s.codeUnits) {
-    units += (c >= 0x20 && c <= 0x7e) ? table[c - 0x20] : 556;
+    if (c >= 0x20 && c <= 0x7e) {
+      units += table[c - 0x20];
+    } else if (c >= 0x80 && c <= 0xff && high[c - 0x80] > 0) {
+      units += high[c - 0x80];
+    } else {
+      units += 556;
+    }
   }
   return units * size / 1000.0;
 }
@@ -71,10 +106,14 @@ double _textWidth(String s, double size, {bool bold = false}) {
 /// that every character the engine's strings carry reaches the PDF legibly.
 String pdfSafeText(String raw) => _ascii(raw);
 
-/// Transliterate the handful of non-ASCII typographic characters the report
-/// strings carry into printable ASCII (the base-14 fonts here are unencoded
-/// beyond Latin-1 and the house rule is ASCII exports); anything else becomes
-/// `?`. Typography only — no data is altered.
+/// Map report text onto the fonts' WinAnsiEncoding: every character WinAnsi
+/// carries (printable ASCII, the Latin-1 block — ·, Ø, ², °, ±, ×, µ, §,
+/// fractions — and the cp1252 dashes / curly quotes / bullet / ellipsis) is
+/// written as its own WinAnsi byte (one char per output byte), so the issued
+/// report prints the same `Ø250` / `k·Q²` the Wave-7 drawing PDFs do (Round
+/// 23, report-pdf-glyph-transliteration — it used to print `O250`, `k.Q2`).
+/// Only a character OUTSIDE WinAnsi (Greek, ≤, →, √ …) is transliterated to
+/// ASCII; anything else becomes `?`. Typography only — no data is altered.
 ///
 /// Round 9 (report-parity-pdf-citation-garbled) — the clause sign `§`, Greek
 /// symbols (ρ, ε, φ, µ…), `±`, vulgar fractions, `″` and `…` used to fall to
@@ -83,8 +122,9 @@ String pdfSafeText(String raw) => _ascii(raw);
 String _ascii(String raw) {
   final b = StringBuffer();
   for (final rune in raw.runes) {
-    if (rune >= 0x20 && rune <= 0x7e) {
-      b.writeCharCode(rune);
+    final win = winAnsiByte(rune);
+    if (win != null) {
+      b.writeCharCode(win);
       continue;
     }
     switch (rune) {
@@ -222,6 +262,9 @@ List<String> _wrap(String text, double size, double maxW, {bool bold = false}) {
   final words = text.split(' ');
   final lines = <String>[];
   var line = '';
+  // A width that equals the column to the last bit (a column sized exactly to
+  // its widest word, Round 23) must not hard-break on float noise.
+  maxW += 1e-6;
   void push(String w) {
     final candidate = line.isEmpty ? w : '$line $w';
     if (_textWidth(candidate, size, bold: bold) <= maxW || line.isEmpty) {
@@ -273,6 +316,93 @@ double _figWeight(SldWeight w) => switch (w) {
       SldWeight.medium => 1.0,
       SldWeight.thick => 1.8,
     };
+
+/// Smallest printed size (pt) an embedded figure's labels may reach before
+/// the typesetter slices the figure across pages instead of shrinking it
+/// further (Round 23, report-pdf-figure-illegible).
+const double kMinFigureLabelPt = 5.0;
+
+// ── Table column allocation ─────────────────────────────────────────────────
+
+/// Round 23 (report-pdf-table-midword-breaks) — bind a number to the unit
+/// that follows it with a no-break space (WinAnsi 0xA0, which [_wrap] never
+/// splits on), so a cell wraps as `12.7 A` / `2.5 mm2`, never `12.7` / `A`.
+String _bindUnits(String cell) => cell.replaceAllMapped(
+    RegExp(r'(\d) (mA|A|kA|mm2|mm|m|kW|W|kVA|kvar|V|kPa|Pa|L/s|m/s|m3|Hz|%)'
+        r'(?![A-Za-z0-9])'),
+    (m) => '${m[1]}\u00A0${m[2]}');
+
+/// The widest single unbreakable word of [s] (split on plain spaces only).
+double _widestWord(String s, double size, {bool bold = false}) {
+  var w = 0.0;
+  for (final word in s.split(' ')) {
+    w = math.max(w, _textWidth(word, size, bold: bold));
+  }
+  return w;
+}
+
+/// Column widths for a ruled table filling [_contentW] (Round 23 two-pass
+/// allocation). Each column's MINIMUM is its widest single word (header bold,
+/// body regular) + padding, floored at 28 pt — so a unit, an enum word or a
+/// header is never hard-broken while room exists. The natural width (widest
+/// whole cell, capped at 45 % of the page) is honoured when everything fits;
+/// otherwise only the columns ABOVE their minimum give space back, each in
+/// proportion to its slack. Proportional scaling (the old rule) remains only
+/// as the fallback when the minimums alone exceed the content width.
+List<double> _tableColumnWidths(
+    List<String> headCells, List<List<String>> bodyCells,
+    {required double fs, required double padX}) {
+  final cols = headCells.length;
+  final minW = List<double>.filled(cols, 0);
+  final nat = List<double>.filled(cols, 0);
+  for (var c = 0; c < cols; c++) {
+    minW[c] = _widestWord(headCells[c], fs, bold: true);
+    nat[c] = _textWidth(headCells[c], fs, bold: true);
+  }
+  for (final row in bodyCells) {
+    for (var c = 0; c < cols; c++) {
+      minW[c] = math.max(minW[c], _widestWord(row[c], fs));
+      nat[c] = math.max(nat[c], _textWidth(row[c], fs));
+    }
+  }
+  for (var c = 0; c < cols; c++) {
+    minW[c] = math.max(28.0, minW[c] + 2 * padX);
+    nat[c] = math.max(minW[c], math.min(nat[c] + 2 * padX, _contentW * 0.45));
+  }
+  final minTotal = minW.reduce((a, b) => a + b);
+  if (minTotal >= _contentW) {
+    return [for (final w in minW) w * _contentW / minTotal];
+  }
+  final natTotal = nat.reduce((a, b) => a + b);
+  if (natTotal <= _contentW) {
+    return [for (final w in nat) w * _contentW / natTotal];
+  }
+  final slack = natTotal - minTotal; // > 0 here
+  final excess = natTotal - _contentW;
+  return [
+    for (var c = 0; c < cols; c++)
+      nat[c] - (nat[c] - minW[c]) * excess / slack,
+  ];
+}
+
+/// Public view of the table column allocation (tests pin the no-mid-word
+/// property against the engine's own AFM widths).
+List<double> reportTableColumnWidths(
+        List<String> headers, List<List<String>> rows,
+        {double fs = 8.5, double padX = 4.0}) =>
+    _tableColumnWidths([
+      for (final h in headers) _bindUnits(_ascii(_stripMd(h))),
+    ], [
+      for (final r in rows)
+        [
+          for (var c = 0; c < headers.length; c++)
+            _bindUnits(_ascii(_stripMd(c < r.length ? r[c] : ''))),
+        ],
+    ], fs: fs, padX: padX);
+
+/// The AFM width of [s] after report sanitation (test hook).
+double reportTextWidth(String s, double size, {bool bold = false}) =>
+    _textWidth(_bindUnits(_ascii(_stripMd(s))), size, bold: bold);
 
 // ── The flowing typesetter ────────────────────────────────────────────────────
 
@@ -332,11 +462,77 @@ class _Typesetter {
 
   // ── Blocks ─────────────────────────────────────────────────────────────────
 
+  /// The block that follows the one being typeset (set by the driver), so a
+  /// heading can keep with the start of its body.
+  RptBlock? next;
+
+  /// Full flowed height of a fresh content page.
+  static const double _pageFlowH = _pageH - _margin - _bottomLimit;
+
+  /// Round 23 (report-pdf-orphan-headings) — the minimum height [b] needs to
+  /// START on the current page (a table's header band + first row, a figure's
+  /// first chunk + caption, two lines of a paragraph …): what the block's own
+  /// `_ensure` asks for, so a heading reserving this can never be stranded at
+  /// the page foot while its body jumps to the next page.
+  double _minStartHeight(RptBlock? b) {
+    switch (b) {
+      case null:
+        return 0;
+      case RptTable():
+        if (b.headers.isEmpty) return 0;
+        const fs = 8.5, lead = 10.5, padX = 4.0, padY = 3.0;
+        final cols = b.headers.length;
+        final head = [
+          for (final h in b.headers) _bindUnits(_ascii(_stripMd(h))),
+        ];
+        final body = [
+          for (final row in b.rows)
+            [
+              for (var c = 0; c < cols; c++)
+                _bindUnits(_ascii(_stripMd(c < row.length ? row[c] : ''))),
+            ],
+        ];
+        final widths = _tableColumnWidths(head, body, fs: fs, padX: padX);
+        var headLines = 1;
+        for (var c = 0; c < cols; c++) {
+          headLines = math.max(headLines,
+              _wrap(head[c], fs, widths[c] - 2 * padX, bold: true).length);
+        }
+        var rowLines = 1;
+        if (body.isNotEmpty) {
+          for (var c = 0; c < cols; c++) {
+            rowLines = math.max(rowLines,
+                _wrap(body.first[c], fs, widths[c] - 2 * padX).length);
+          }
+        }
+        return headLines * lead + 2 * padY + rowLines * lead + 2 * padY + 4;
+      case RptFigure():
+        final plan = _planFigure(b.sheet);
+        return math.min(plan.firstChunkH, 120.0) + 14 + 16;
+      case RptParagraph():
+        return math.min(2, _wrap(b.text, 9.5, _contentW).length) * 13.0;
+      case RptNote():
+        return math.min(2, _wrap(b.text, 8.5, _contentW).length) * 11.5;
+      case RptKeyValue():
+        return math.min(2, b.rows.length) * 12.5;
+      case RptMarkdown():
+        return 26;
+      case RptHeading():
+        return 40;
+    }
+  }
+
   void heading(RptHeading h) {
     final size = switch (h.level) { 1 => 16.0, 2 => 13.0, _ => 11.0 };
     final before = switch (h.level) { 1 => 18.0, 2 => 14.0, _ => 10.0 };
-    // Keep the heading + a couple of body lines together.
-    _ensure(before + size + 32);
+    // Keep the heading with the START of the block that follows it (Round
+    // 23): its own gap + wrapped lines + rule + gap, plus the next block's
+    // minimum start height — capped at one page so a page-filling body still
+    // takes its heading with it onto the fresh page.
+    final lines =
+        _wrap(_ascii(_stripMd(h.text)), size, _contentW, bold: true).length;
+    final own = before + lines * (size + 3) + (h.level <= 2 ? 5 : 0) + 4;
+    _ensure(math.min(_pageFlowH, own + math.max(13.0, _minStartHeight(next))));
     _gap(before);
     _flowText(_ascii(_stripMd(h.text)),
         size: size, leading: size + 3, bold: true);
@@ -410,30 +606,17 @@ class _Typesetter {
     const padY = 3.0;
     final cols = t.headers.length;
 
-    // Column widths proportional to the widest content (header measured bold),
-    // floored + capped, then scaled to fill the content width.
-    final nat = List<double>.filled(cols, 0);
-    final headCells = [for (final h in t.headers) _ascii(_stripMd(h))];
-    for (var c = 0; c < cols; c++) {
-      nat[c] = _textWidth(headCells[c], fs, bold: true);
-    }
+    final headCells = [
+      for (final h in t.headers) _bindUnits(_ascii(_stripMd(h))),
+    ];
     final bodyCells = [
       for (final row in t.rows)
         [
           for (var c = 0; c < cols; c++)
-            _ascii(_stripMd(c < row.length ? row[c] : '')),
+            _bindUnits(_ascii(_stripMd(c < row.length ? row[c] : ''))),
         ],
     ];
-    for (final row in bodyCells) {
-      for (var c = 0; c < cols; c++) {
-        nat[c] = math.max(nat[c], _textWidth(row[c], fs));
-      }
-    }
-    for (var c = 0; c < cols; c++) {
-      nat[c] = (nat[c] + 2 * padX).clamp(28.0, _contentW * 0.45);
-    }
-    final natTotal = nat.reduce((a, b) => a + b);
-    final widths = [for (final w in nat) w * _contentW / natTotal];
+    final widths = _tableColumnWidths(headCells, bodyCells, fs: fs, padX: padX);
     final xs = List<double>.filled(cols + 1, _margin);
     for (var c = 0; c < cols; c++) {
       xs[c + 1] = xs[c] + widths[c];
@@ -506,27 +689,51 @@ class _Typesetter {
     _gap(8);
   }
 
-  void figure(RptFigure f) {
-    final sheet = f.sheet;
+  /// Round 23 (report-pdf-figure-illegible) — how a figure is set: at the
+  /// width-limited scale (never above 1:1) when it fits a fresh page; else
+  /// shrunk to one page when its smallest label still prints at
+  /// [kMinFigureLabelPt]; else TILED across pages (top-down slices, and
+  /// side-by-side columns when the sheet is also too wide) at the scale that
+  /// keeps that label legible. It used to be squeezed into a fixed 460 × 300 pt box
+  /// with 4 pt labels clamped against geometry scaled to 0.11 — every row of
+  /// a multi-board schedule overprinted its neighbours.
+  ({double scale, bool sliced, double firstChunkH}) _planFigure(
+      SldSheet sheet) {
     final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
     final spanY = math.max(1e-6, sheet.maxY - sheet.minY);
-    final boxW = math.min(460.0, _contentW);
-    const boxH = 300.0;
-    var scale = math.min(boxW / spanX, boxH / spanY);
-    if (!scale.isFinite || scale <= 0) scale = 1.0;
-    scale = math.min(scale, 1.0); // never blow a small drawing up past 1:1
-    final drawnW = spanX * scale;
-    final drawnH = spanY * scale;
-    const capH = 14.0;
-    _ensure(drawnH + capH + 12);
-    final offX = _margin + (_contentW - drawnW) / 2;
-    final topY = _y - 4;
-    double tx(double x) => offX + (x - sheet.minX) * scale;
-    double ty(double y) => topY - (y - sheet.minY) * scale; // y-down → y-up
+    const fullH = _pageFlowH - 4 - 10 - 14; // fresh page minus caption room
+    var s = math.min(1.0, _contentW / spanX);
+    if (!s.isFinite || s <= 0) s = 1.0;
+    if (spanY * s <= fullH) {
+      return (scale: s, sliced: false, firstChunkH: spanY * s);
+    }
+    double? minLabel;
+    for (final p in sheet.prims) {
+      if (p is SldLabel && p.size > 0) {
+        minLabel = minLabel == null ? p.size : math.min(minLabel, p.size);
+      }
+    }
+    final s1 = math.min(s, fullH / spanY);
+    if (minLabel == null || minLabel * s1 >= kMinFigureLabelPt) {
+      return (scale: s1, sliced: false, firstChunkH: spanY * s1);
+    }
+    // The legible scale — never above 1:1; a sheet wider than the column at
+    // this scale is tiled into side-by-side column strips as well.
+    final sl = math.min(1.0, kMinFigureLabelPt / minLabel);
+    return (scale: sl, sliced: true, firstChunkH: fullH);
+  }
 
+  void _drawFigurePrims(SldSheet sheet, double scale, double offX, double topY,
+      double y0, double y1, {double? x0}) {
+    final originX = x0 ?? sheet.minX;
+    double tx(double x) => offX + (x - originX) * scale;
+    double ty(double y) => topY - (y - y0) * scale; // y-down → y-up
+    bool inBand(double a, double b) =>
+        math.max(a, b) >= y0 - 1e-6 && math.min(a, b) <= y1 + 1e-6;
     for (final p in sheet.prims) {
       switch (p) {
         case SldLine():
+          if (!inBand(p.y1, p.y2)) continue;
           _cs.writeln('${_figStroke(p.role)} RG '
               '${_n(_figWeight(p.weight) * scale + 0.3)} w');
           if (p.dashed) _cs.writeln('[3 2] 0 d');
@@ -534,15 +741,18 @@ class _Typesetter {
               '${_n(tx(p.x2))} ${_n(ty(p.y2))} l S');
           if (p.dashed) _cs.writeln('[] 0 d');
         case SldRect():
+          if (!inBand(p.y, p.y + p.h)) continue;
           _cs.writeln('${_figStroke(p.role)} RG '
               '${_n(_figWeight(p.weight) * scale + 0.3)} w');
           _cs.writeln('${_n(tx(p.x))} ${_n(ty(p.y + p.h))} '
               '${_n(p.w * scale)} ${_n(p.h * scale)} re S');
         case SldLabel():
+          if (!inBand(p.y - p.size, p.y)) continue;
           final fsz = math.max(4.0, p.size * scale);
           _text(tx(p.x), ty(p.y), _ascii(p.text),
               size: fsz, bold: p.bold, color: _figStroke(p.role));
         case SldCircle():
+          if (!inBand(p.cy - p.r, p.cy + p.r)) continue;
           _cs.writeln('${_figStroke(p.role)} RG '
               '${_n(_figWeight(p.weight) * scale + 0.3)} w');
           final cx = tx(p.cx), cy = ty(p.cy), r = p.r * scale;
@@ -559,10 +769,56 @@ class _Typesetter {
           _cs.writeln('S');
       }
     }
-    _y = topY - drawnH - 10;
+  }
+
+  void figure(RptFigure f) {
+    final sheet = f.sheet;
+    final plan = _planFigure(sheet);
+    final scale = plan.scale;
+    final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
+    final spanY = math.max(1e-6, sheet.maxY - sheet.minY);
+    final drawnW = spanX * scale;
+    final offX = _margin + (_contentW - drawnW) / 2;
+    const capH = 14.0;
+    if (!plan.sliced) {
+      final drawnH = spanY * scale;
+      _ensure(drawnH + capH + 16);
+      final topY = _y - 4;
+      _drawFigurePrims(sheet, scale, offX, topY, sheet.minY, sheet.maxY);
+      _y = topY - drawnH - 10;
+    } else {
+      // Tile: column strips left to right (one when the sheet fits the column
+      // width), each sliced top-down — every page takes as much as fits,
+      // clipped to its tile (a label straddling a cut prints on both tiles).
+      final colSpan = _contentW / scale; // sheet units per column strip
+      final cols = math.max(1, (spanX / colSpan - 1e-9).ceil());
+      if (_y - 4 - _bottomLimit < 120) _newPage();
+      for (var c = 0; c < cols; c++) {
+        final x0 = sheet.minX + c * colSpan;
+        final x1 = math.min(sheet.maxX, x0 + colSpan);
+        final tileW = (x1 - x0) * scale;
+        final tileOffX = cols == 1 ? offX : _margin;
+        var y0 = sheet.minY;
+        while (y0 < sheet.maxY - 1e-6) {
+          final availPt = _y - 4 - _bottomLimit - 2;
+          final y1 = math.min(sheet.maxY, y0 + availPt / scale);
+          final topY = _y - 4;
+          final bandH = (y1 - y0) * scale;
+          _cs.writeln('q ${_n(tileOffX - 1)} ${_n(topY - bandH - 1)} '
+              '${_n(tileW + 2)} ${_n(bandH + 2)} re W n');
+          _drawFigurePrims(sheet, scale, tileOffX, topY, y0, y1, x0: x0);
+          _cs.writeln('Q');
+          _y = topY - bandH - 2;
+          y0 = y1;
+          if (y0 < sheet.maxY - 1e-6 || c + 1 < cols) _newPage();
+        }
+      }
+      _y -= 8;
+    }
     // Caption, centred beneath the figure.
     final cap = _ascii(_stripMd(f.caption));
     if (cap.isNotEmpty) {
+      _ensure(capH);
       final capW = _textWidth(cap, 8.5);
       _text(_margin + (_contentW - capW) / 2, _y - 8.5, cap,
           size: 8.5, color: _inkMuted);
@@ -577,6 +833,15 @@ class _Typesetter {
     for (final line in m.raw.split('\n')) {
       if (line.trim().isEmpty) {
         _gap(4);
+        continue;
+      }
+      // Round 23 (report-pdf-literal-md-rule) — a Markdown thematic break
+      // (`---`, `***`, `___`) is a hairline rule, never literal text.
+      if (RegExp(r'^\s*(-{3,}|\*{3,}|_{3,})\s*$').hasMatch(line)) {
+        _ensure(10);
+        _gap(3);
+        _line(_margin, _y, _pageW - _margin, _y, w: 0.5, color: _inkHairline);
+        _gap(6);
         continue;
       }
       final indent = line.startsWith('  ') ? 12.0 : 0.0;
@@ -620,26 +885,36 @@ String _coverPage({
   ReportStrings strings = const ReportStrings.en(),
 }) {
   final cs = StringBuffer();
-  void centred(double y, String raw,
+  // Round 23 (report-pdf-cover-standards-overflow) — every cover run is
+  // WRAPPED to the content width and each line centred, returning the
+  // baseline of the next line: a long standards provenance line / title /
+  // project name used to be set on one line at a negative x and clipped on
+  // both page edges.
+  double centred(double y, String raw,
       {double size = 12, bool bold = false, String color = _inkBody}) {
     final s = _ascii(_stripMd(raw));
-    if (s.isEmpty) return;
-    final w = _textWidth(s, size, bold: bold);
-    cs.writeln('BT /${bold ? 'F2' : 'F1'} ${_n(size)} Tf $color rg '
-        '${_n(_margin + (_contentW - w) / 2)} ${_n(y)} Td (${_esc(s)}) Tj ET');
+    if (s.isEmpty) return y;
+    for (final line in _wrap(s, size, _contentW, bold: bold)) {
+      final w = _textWidth(line, size, bold: bold);
+      cs.writeln('BT /${bold ? 'F2' : 'F1'} ${_n(size)} Tf $color rg '
+          '${_n(_margin + (_contentW - w) / 2)} ${_n(y)} Td (${_esc(line)}) '
+          'Tj ET');
+      y -= size + 4;
+    }
+    return y;
   }
 
   // Head rule + title cluster.
   cs.writeln('$_inkRule RG 1.0 w ${_n(_margin)} ${_n(_pageH - 200)} m '
       '${_n(_pageW - _margin)} ${_n(_pageH - 200)} l S');
-  centred(_pageH - 250, docTitle, size: 22, bold: true);
-  centred(_pageH - 280, projectName, size: 14);
-  cs.writeln('$_inkRule RG 1.0 w ${_n(_margin)} ${_n(_pageH - 305)} m '
-      '${_n(_pageW - _margin)} ${_n(_pageH - 305)} l S');
-  var y = _pageH - 340.0;
+  var y = centred(_pageH - 250, docTitle, size: 22, bold: true);
+  y = centred(math.min(_pageH - 280, y - 4), projectName, size: 14);
+  final rule2 = math.min(_pageH - 305, y - 7);
+  cs.writeln('$_inkRule RG 1.0 w ${_n(_margin)} ${_n(rule2)} m '
+      '${_n(_pageW - _margin)} ${_n(rule2)} l S');
+  y = rule2 - 35;
   if (standardsLine != null && standardsLine.isNotEmpty) {
-    centred(y, standardsLine, size: 10, color: _inkMuted);
-    y -= 16;
+    y = centred(y, standardsLine, size: 10, color: _inkMuted) - 2;
   }
   final docRev = [
     if (documentNumber != null && documentNumber.isNotEmpty) documentNumber,
@@ -708,8 +983,10 @@ Uint8List _assemblePdf(List<String> pageContents) {
       '<< /Length ${latin1.encode(pageContents[i]).length} >>\n'
           'stream\n${pageContents[i]}\nendstream',
     ],
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica '
+        '/Encoding /WinAnsiEncoding >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold '
+        '/Encoding /WinAnsiEncoding >>',
   ];
 
   final out = BytesBuilder();
@@ -761,8 +1038,9 @@ Uint8List reportBlocksToPdf(
 }) {
   // Lay the content out first — the footer needs the final page count.
   final ts = _Typesetter();
-  for (final b in blocks) {
-    ts.block(b);
+  for (var i = 0; i < blocks.length; i++) {
+    ts.next = i + 1 < blocks.length ? blocks[i + 1] : null;
+    ts.block(blocks[i]);
   }
 
   final total = ts.pages.length;

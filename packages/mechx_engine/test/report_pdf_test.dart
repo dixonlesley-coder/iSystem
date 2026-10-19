@@ -83,12 +83,14 @@ void main() {
     expect(s, contains('(P - Page 1 of 1)'));
   });
 
-  test('non-ASCII typography is transliterated, not dropped', () {
+  test('non-ASCII typography prints as its WinAnsi glyph, not dropped', () {
     final s = latin1.decode(buildRich());
-    // `52 °C` → `52 degC`, `k·Q²` → `k.Q2`, `×` → `x` (the operating-point
-    // caveat line from the rich fixture).
-    expect(s, contains('52 degC'));
-    expect(s, contains('k.Q2 x pump curve'));
+    // Round 23 — the fonts carry /WinAnsiEncoding, so `52 °C`, `k·Q²` and
+    // `×` print as the real glyphs (bytes 0xB0, 0xB7, 0xB2, 0xD7), exactly as
+    // the drawing PDFs do (the operating-point caveat line of the fixture).
+    expect(s, contains('52 \u00B0C'));
+    expect(s, contains('k\u00B7Q\u00B2 \u00D7 pump curve'));
+    expect(s, contains('/Encoding /WinAnsiEncoding'));
     // Markdown bold/emphasis markers are stripped for typesetting.
     expect(s, isNot(contains('**')));
   });

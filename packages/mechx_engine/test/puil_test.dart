@@ -161,18 +161,28 @@ void main() {
   });
 
   group('protection ladders + curve', () {
-    test('MCB 6…63, MCCB 80…1600; combined ascending', () {
+    test('MCB 6…63, MCCB 80…1600, ACB 2000…4000; combined ascending', () {
       expect(p.mcbRatingsA.first, 6);
       expect(p.mcbRatingsA.last, 63);
       expect(p.mccbRatingsA.first, 80);
       expect(p.mccbRatingsA.last, 1600);
+      // Round 23 — the ACB frames above the MCCB ladder (a 1600 kVA service's
+      // 1 600 000 / (√3 · 400) = 2309 A FLC takes the 2500 A ACB).
+      expect(p.acbRatingsA, [2000, 2500, 3200, 4000]);
       expect(p.standardBreakerRatingsA.length,
-          p.mcbRatingsA.length + p.mccbRatingsA.length);
+          p.mcbRatingsA.length + p.mccbRatingsA.length + p.acbRatingsA.length);
+      final l = p.standardBreakerRatingsA;
+      for (var i = 1; i < l.length; i++) {
+        expect(l[i], greaterThan(l[i - 1]));
+      }
     });
 
-    test('class: ≤63 A MCB, above MCCB', () {
+    test('class: ≤63 A MCB, ≤1600 A MCCB, above ACB', () {
       expect(p.breakerClassFor(63), BreakerClass.mcb);
       expect(p.breakerClassFor(80), BreakerClass.mccb);
+      expect(p.breakerClassFor(1600), BreakerClass.mccb);
+      expect(p.breakerClassFor(2000), BreakerClass.acb);
+      expect(p.breakerClassFor(2000).code, 'ACB');
     });
 
     test('curve: lighting→B, motor→D, else C', () {

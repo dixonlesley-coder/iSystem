@@ -142,6 +142,22 @@ class ElectricalCircuit {
   /// space from any single-line canvas coordinate.
   final LayoutPos? loadPos;
 
+  /// Round 23 — true once the ENGINEER typed this way's [demandFactor]
+  /// (provenance, not inference): the MEP sync re-derives a machine way's
+  /// duty (1) / standby (0) factor only while this is false, so a typed 0 on a
+  /// fire pump is never silently reverted. Additive; persisted only when true.
+  final bool demandFactorUserSet;
+
+  /// Round 23 r2 (mep-bridge-2) — the same provenance for the way's
+  /// electrical CHARACTER: true once the engineer typed its [cosPhi] /
+  /// [phases] / [loadKind]. The MEP sync re-derives each of those from the
+  /// fresh mint (a component swap on the same node) only while its flag is
+  /// false, so a typed cos phi or phase count is never silently reverted on
+  /// the next drawing edit. Additive; persisted only when true.
+  final bool cosPhiUserSet;
+  final bool phasesUserSet;
+  final bool loadKindUserSet;
+
   const ElectricalCircuit({
     required this.id,
     required this.name,
@@ -168,6 +184,10 @@ class ElectricalCircuit {
     this.flaOverrideA,
     this.starterType,
     this.loadPos,
+    this.demandFactorUserSet = false,
+    this.cosPhiUserSet = false,
+    this.phasesUserSet = false,
+    this.loadKindUserSet = false,
   });
 
   /// True when this way is a feeder (explicit kind or it feeds a panel).
@@ -217,6 +237,10 @@ class ElectricalCircuit {
     bool clearStarterType = false,
     LayoutPos? loadPos,
     bool clearLoadPos = false,
+    bool? demandFactorUserSet,
+    bool? cosPhiUserSet,
+    bool? phasesUserSet,
+    bool? loadKindUserSet,
   }) =>
       ElectricalCircuit(
         id: id ?? this.id,
@@ -256,6 +280,10 @@ class ElectricalCircuit {
         starterType:
             clearStarterType ? null : (starterType ?? this.starterType),
         loadPos: clearLoadPos ? null : (loadPos ?? this.loadPos),
+        demandFactorUserSet: demandFactorUserSet ?? this.demandFactorUserSet,
+        cosPhiUserSet: cosPhiUserSet ?? this.cosPhiUserSet,
+        phasesUserSet: phasesUserSet ?? this.phasesUserSet,
+        loadKindUserSet: loadKindUserSet ?? this.loadKindUserSet,
       );
 
   /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
@@ -289,6 +317,10 @@ class ElectricalCircuit {
         if (flaOverrideA != null) 'flaOverrideA': flaOverrideA!.amperes,
         if (starterType != null) 'starterType': starterType!.name,
         if (loadPos != null) 'loadPos': loadPos!.toJson(),
+        if (demandFactorUserSet) 'demandFactorUserSet': true,
+        if (cosPhiUserSet) 'cosPhiUserSet': true,
+        if (phasesUserSet) 'phasesUserSet': true,
+        if (loadKindUserSet) 'loadKindUserSet': true,
       };
 
   /// Tolerant decode: unknown enum names fall back to the field default,
@@ -330,6 +362,10 @@ class ElectricalCircuit {
         loadPos: json['loadPos'] is Map<String, dynamic>
             ? LayoutPos.fromJson(json['loadPos'] as Map<String, dynamic>)
             : null,
+        demandFactorUserSet: json['demandFactorUserSet'] == true,
+        cosPhiUserSet: json['cosPhiUserSet'] == true,
+        phasesUserSet: json['phasesUserSet'] == true,
+        loadKindUserSet: json['loadKindUserSet'] == true,
       );
 }
 

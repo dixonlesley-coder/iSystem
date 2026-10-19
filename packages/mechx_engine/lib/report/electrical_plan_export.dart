@@ -246,14 +246,27 @@ String _pdfText(String raw) => pdfWinAnsiText(raw);
 const _kNormalInk = (0.10, 0.10, 0.10);
 const _kEssentialInk = (0.80, 0.12, 0.12);
 
-/// Render the [data] for one sheet+floor as a single-page ANNOTATED electrical
-/// layout PDF and return its bytes. Mirrors [planToPdf]'s fit / snap / chrome
-/// pipeline: the drawing auto-fits (centred, uniform scale) into [paper],
-/// SNAPS to a standard plotted scale when [metersPerPixel] is given, paints an
-/// optional floor-plan [underlay] beneath, and stamps the [chrome] frame /
-/// title block / scale bar / north arrow. [projectName] / [sheetName] /
-/// [dateString] populate the title block (the engine never reads the clock).
-Uint8List electricalPlanToPdf({
+const double _kElecPlanMargin = 48.0;
+
+typedef _ElecPlanFit = ({
+  double minX,
+  double minY,
+  double spanX,
+  double spanY,
+  double availW,
+  double availH,
+  String blockTitle,
+  String blockDate,
+  PlottedScale snap,
+});
+
+/// The ONE fit / snap computation of the electrical layout PDF — bounds over
+/// every node, route endpoint AND the underlay frame, the real page less its
+/// margins and the ACTUAL title-block height, snapped to the plan scale
+/// ladder. Shared by [electricalPlanToPdf] and (via
+/// [electricalPlanPlottedScaleDenominator]) the DXF twin, so both stamp the
+/// same `1 : N` (Round 23 r2, elec-drafting-2-3 parity).
+_ElecPlanFit _electricalPlanFit({
   required ElectricalPlanData data,
   required String projectName,
   required String sheetName,
@@ -265,7 +278,7 @@ Uint8List electricalPlanToPdf({
 }) {
   final pageW = paper.widthPt;
   final pageH = paper.heightPt;
-  const margin = 48.0;
+  const margin = _kElecPlanMargin;
 
   // ── Bounds (sheet pixels) over every node + route endpoint + underlay frame ──
   var minX = double.infinity, minY = double.infinity;
@@ -328,7 +341,85 @@ Uint8List electricalPlanToPdf({
       metersPerPixel: metersPerPixel,
       hasContent: hasContent,
       paperLabel: paper.label);
-  scale = snap.scale;
+  return (
+    minX: minX,
+    minY: minY,
+    spanX: spanX,
+    spanY: spanY,
+    availW: availW,
+    availH: availH,
+    blockTitle: blockTitle,
+    blockDate: blockDate,
+    snap: snap,
+  );
+}
+
+/// The snapped plotted-scale denominator ([kPlanScaleLadder]) the electrical
+/// layout PDF prints for these inputs (`1 : N @ A3`), or null when it prints
+/// NTS (uncalibrated, empty, or too large even for 1 : 1000). Pass the SAME
+/// arguments as the [electricalPlanToPdf] call so the DXF twin
+/// ([electricalPlanToDxf] `plottedScaleDenominator`) stamps the identical
+/// scale. Pure.
+int? electricalPlanPlottedScaleDenominator({
+  required ElectricalPlanData data,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
+}) {
+  final snap = _electricalPlanFit(
+          data: data,
+          projectName: projectName,
+          sheetName: sheetName,
+          dateString: dateString,
+          chrome: chrome,
+          metersPerPixel: metersPerPixel,
+          underlay: underlay,
+          paper: paper)
+      .snap;
+  final m = RegExp(r'^1 : (\d+) @').firstMatch(snap.scaleRow);
+  return m == null ? null : int.parse(m.group(1)!);
+}
+
+/// Render the [data] for one sheet+floor as a single-page ANNOTATED electrical
+/// layout PDF and return its bytes. Mirrors [planToPdf]'s fit / snap / chrome
+/// pipeline: the drawing auto-fits (centred, uniform scale) into [paper],
+/// SNAPS to a standard plotted scale when [metersPerPixel] is given, paints an
+/// optional floor-plan [underlay] beneath, and stamps the [chrome] frame /
+/// title block / scale bar / north arrow. [projectName] / [sheetName] /
+/// [dateString] populate the title block (the engine never reads the clock).
+Uint8List electricalPlanToPdf({
+  required ElectricalPlanData data,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
+}) {
+  final pageW = paper.widthPt;
+  final pageH = paper.heightPt;
+  const margin = _kElecPlanMargin;
+  final fit = _electricalPlanFit(
+      data: data,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay,
+      paper: paper);
+  final minX = fit.minX, minY = fit.minY;
+  final spanX = fit.spanX, spanY = fit.spanY;
+  final availW = fit.availW, availH = fit.availH;
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  final blockTitle = fit.blockTitle, blockDate = fit.blockDate;
+  final snap = fit.snap;
+  final scale = snap.scale;
   final scaleRow = snap.scaleRow;
   final pointsPerMeter = snap.pointsPerMeter;
 
@@ -497,13 +588,63 @@ Uint8List electricalPlanToPdf({
 /// circles, cable routes LINEs (on `E-FEEDER`); labels TEXT on `E-TEXT`;
 /// essential items ACI red. DXF Y is up, so screen Y is negated. The [chrome]'s
 /// title-block rows are stamped below the drawing (mirroring [electricalSldToDxf]).
+///
+/// Round 23 (elec-drafting-2-3) — with the sheet's calibration
+/// ([metersPerPixel]) the DXF is written in WORLD MILLIMETRES (`$INSUNITS` 4,
+/// `$MEASUREMENT` 1), like the mechanical plan DXF: a 15.0 m route measures
+/// 15000 units, so the denah xrefs onto the architect's mm DWG at 1:1, and
+/// the SCALE row stamps the same snapped `1 : N @ A3` the PDF twin prints
+/// (annotation sized for that plot, symbols in paper mm). Pass
+/// [plottedScaleDenominator] = [electricalPlanPlottedScaleDenominator] over
+/// the PDF call's own arguments (underlay frame + real title block) so the
+/// two stamp the identical rung; null falls back to the A3 extent estimate. Uncalibrated (null)
+/// keeps the legacy sheet-pixel drawing with SCALE NTS, byte-identical.
 String electricalPlanToDxf({
   required ElectricalPlanData data,
   required String projectName,
   required String sheetName,
   DrawingChrome? chrome,
   SldDxfLayers layers = SldDxfLayers.electrical,
+  double? metersPerPixel,
+  int? plottedScaleDenominator,
 }) {
+  final world = metersPerPixel != null &&
+      metersPerPixel.isFinite &&
+      metersPerPixel > 0;
+  final mmPerPx = world ? metersPerPixel * 1000 : 1.0;
+  // Paper-mm → model units: the plotted-scale denominator of the drawing's mm
+  // extent on A3 (the ladder the plan PDF snaps to). Legacy annotation sizes
+  // are quarter-millimetres of paper (10 → 2.5 mm text), so [a] scales them.
+  int? plotN;
+  double u = 1;
+  if (world) {
+    var x0 = double.infinity, y0 = double.infinity;
+    var x1 = double.negativeInfinity, y1 = double.negativeInfinity;
+    void grow(double x, double y) {
+      x0 = math.min(x0, x * mmPerPx);
+      y0 = math.min(y0, y * mmPerPx);
+      x1 = math.max(x1, x * mmPerPx);
+      y1 = math.max(y1, y * mmPerPx);
+    }
+
+    for (final nd in data.nodes) {
+      grow(nd.x, nd.y);
+    }
+    for (final r in data.routes) {
+      grow(r.x1, r.y1);
+      grow(r.x2, r.y2);
+    }
+    if (x0.isFinite) {
+      plotN = plottedScaleDenominator ??
+          a3PlottedScaleDenominatorFor(x1 - x0, y1 - y0);
+      final span = math.max(x1 - x0, y1 - y0);
+      u = plotN != null
+          ? plotN.toDouble()
+          : (span > 0 ? span / 80 / kMinPlotTextMm : 1.0);
+    }
+  }
+  double a(double v) => world ? v * u / 4 : v; // annotation (paper) size
+  double gx(double x) => x * mmPerPx; // geometry (world) coordinate
   final b = StringBuffer();
   void g(int code, Object v) {
     b.writeln(code);
@@ -556,62 +697,69 @@ String electricalPlanToDxf({
 
   // Routes.
   for (final r in data.routes) {
-    line(layers.feeder, r.x1, r.y1, r.x2, r.y2, color: redIf(r.essential));
+    line(layers.feeder, gx(r.x1), gx(r.y1), gx(r.x2), gx(r.y2),
+        color: redIf(r.essential));
     if (r.label != null && r.label!.isNotEmpty) {
-      text(layers.text, (r.x1 + r.x2) / 2 + 4, (r.y1 + r.y2) / 2, r.label!,
-          size: 9);
+      text(layers.text, gx((r.x1 + r.x2) / 2) + a(4), gx((r.y1 + r.y2) / 2),
+          r.label!,
+          size: a(9));
     }
   }
 
-  // Nodes.
+  // Nodes (symbols are paper-sized annotation, placed at world positions).
   for (final nd in data.nodes) {
     final col = redIf(nd.essential);
+    final nx = gx(nd.x), ny = gx(nd.y);
     if (nd.kind == ElectricalPlanNodeKind.panel) {
-      const w = 40.0, h = 24.0;
-      box(layers.device, nd.x - w / 2, nd.y - h / 2, w, h, color: col);
-      line(layers.device, nd.x - w / 2, nd.y - h / 2, nd.x + w / 2, nd.y + h / 2,
+      final w = a(40.0), h = a(24.0);
+      box(layers.device, nx - w / 2, ny - h / 2, w, h, color: col);
+      line(layers.device, nx - w / 2, ny - h / 2, nx + w / 2, ny + h / 2,
           color: col);
-      text(layers.text, nd.x + w / 2 + 6, nd.y, nd.tag, size: 12, color: col);
+      text(layers.text, nx + w / 2 + a(6), ny, nd.tag,
+          size: a(12), color: col);
       if (nd.sub != null) {
-        text(layers.text, nd.x + w / 2 + 6, nd.y + 16, nd.sub!, size: 8);
+        text(layers.text, nx + w / 2 + a(6), ny + a(16), nd.sub!, size: a(8));
       }
     } else {
-      dxfCircle(layers.device, nd.x, nd.y, 10, color: col);
-      text(layers.text, nd.x + 14, nd.y, nd.tag, size: 9, color: col);
+      dxfCircle(layers.device, nx, ny, a(10), color: col);
+      text(layers.text, nx + a(14), ny, nd.tag, size: a(9), color: col);
       if (nd.sub != null) {
-        text(layers.text, nd.x + 14, nd.y + 12, nd.sub!, size: 7);
+        text(layers.text, nx + a(14), ny + a(12), nd.sub!, size: a(7));
       }
     }
   }
 
   // Corner "Unplaced" note (below the drawing extent — use a fixed origin so it
   // never overprints placed items; DXF has no page, so anchor it above origin).
-  var noteY = -40.0;
+  var noteY = a(-40.0);
   if (data.unplaced.isNotEmpty) {
-    text(layers.text, 0, noteY, 'BELUM DITEMPATKAN:', size: 10, color: 1);
-    for (final u in data.unplaced) {
-      noteY -= 16;
-      text(layers.text, 0, noteY, '- $u', size: 8);
+    text(layers.text, 0, noteY, 'BELUM DITEMPATKAN:', size: a(10), color: 1);
+    for (final un in data.unplaced) {
+      noteY -= a(16);
+      text(layers.text, 0, noteY, '- $un', size: a(8));
     }
   }
 
   // Title block below everything.
-  final rows = _dxfChromeRows(chrome);
-  final frameTop = noteY - 60;
+  final scaleText = world && plotN != null ? '1 : $plotN @ A3' : null;
+  final rows = _dxfChromeRows(chrome, scaleOverride: scaleText);
+  final frameTop = noteY - a(60);
   final pname = projectName.isNotEmpty ? projectName : 'Untitled project';
-  box(layers.frame, 0, frameTop, 360, rows.isEmpty ? 96 : 60.0 + rows.length * 18);
-  text(layers.frame, 8, frameTop + 22, pname, size: 16);
-  text(layers.frame, 8, frameTop + 44, 'DENAH INSTALASI LISTRIK - $sheetName',
-      size: 10);
+  box(layers.frame, 0, frameTop, a(360),
+      rows.isEmpty ? a(96) : a(60.0 + rows.length * 18));
+  text(layers.frame, a(8), frameTop + a(22), pname, size: a(16));
+  text(layers.frame, a(8), frameTop + a(44),
+      'DENAH INSTALASI LISTRIK - $sheetName',
+      size: a(10));
   if (rows.isNotEmpty) {
-    const rowH = 18.0;
-    const labelW = 88.0;
-    final bandTop = frameTop + 56;
+    final rowH = a(18.0);
+    final labelW = a(88.0);
+    final bandTop = frameTop + a(56);
     for (var i = 0; i < rows.length; i++) {
       final (l, v) = rows[i];
       final rowTop = bandTop + i * rowH;
-      text(layers.frame, 8, rowTop + 13, l, size: 7);
-      text(layers.frame, labelW + 8, rowTop + 13, v, size: 10);
+      text(layers.frame, a(8), rowTop + a(13), l, size: a(7));
+      text(layers.frame, labelW + a(8), rowTop + a(13), v, size: a(10));
     }
   }
 
@@ -622,20 +770,25 @@ String electricalPlanToDxf({
   final tables = dxfTablesSection(layers: [
     for (final (name, aci) in classLayers) (name, aci, 'CONTINUOUS'),
   ]);
-  // drafting-5: a minimal HEADER declaring the R12 format.
-  return '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n' +
-      tables +
-      b.toString();
+  // drafting-5: a minimal HEADER declaring the R12 format; Round 23 — a
+  // calibrated (world-mm) drawing also declares millimetre units + metric.
+  final header = world
+      ? '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n'
+          '9\n\$INSUNITS\n70\n4\n9\n\$MEASUREMENT\n70\n1\n0\nENDSEC\n'
+      : '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n';
+  return header + tables + b.toString();
 }
 
-List<(String, String)> _dxfChromeRows(DrawingChrome? chrome) {
+List<(String, String)> _dxfChromeRows(DrawingChrome? chrome,
+    {String? scaleOverride}) {
   if (chrome == null || chrome.isEmpty) return const [];
   bool has(String? s) => s != null && s.isNotEmpty;
   return [
     if (has(chrome.clientName)) ('CLIENT', chrome.clientName!),
     if (has(chrome.drawingNumber)) ('DWG NO', chrome.drawingNumber!),
     if (has(chrome.revisionNumber)) ('REV', chrome.revisionNumber!),
-    ('SCALE', has(chrome.scaleText) ? chrome.scaleText! : 'NTS'),
+    ('SCALE',
+        scaleOverride ?? (has(chrome.scaleText) ? chrome.scaleText! : 'NTS')),
     if (has(chrome.dateString)) ('DATE', chrome.dateString!),
     if (has(chrome.drawnBy)) ('DRAWN', chrome.drawnBy!),
     if (has(chrome.checkedBy)) ('CHECKED', chrome.checkedBy!),

@@ -28,7 +28,7 @@
 /// Pure + deterministic — zero Flutter imports.
 library;
 
-import '../standards/puil.dart' show ElectricalStandardsProfile;
+import '../standards/puil.dart' show BreakerClass, ElectricalStandardsProfile;
 import '../units.dart';
 import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
@@ -73,7 +73,7 @@ import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
-    show SupplyDesign, determineSupply, recommendedDaya;
+    show SupplyDesign, determineSupply, recommendedDaya, serviceTransformer;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
 
@@ -84,6 +84,23 @@ const double _mcbClearingTimeS = 0.05;
 /// A representative MCCB clearing (arcing) time for the arc-flash screen (s) —
 /// a moulded-case device clears more slowly than an MCB.
 const double _mccbClearingTimeS = 0.2;
+
+/// A representative ACB clearing (arcing) time for the arc-flash screen (s) —
+/// an air circuit breaker on an LV main normally carries a short-time delay
+/// for selectivity, so it clears SLOWER than an MCCB (Round 23 r2: an ACB had
+/// fallen through to the 0.05 s MCB time, under-estimating the incident energy
+/// on the largest board ~4×). A safety quantity — never clamp it down.
+// VERIFY (notAnSniClause): IEEE 1584 practice ≈ 0.3–0.5 s for an LV power
+// breaker with short-time delay.
+const double _acbClearingTimeS = 0.5;
+
+/// The arc-flash clearing time for a breaker class (s) — exhaustive over
+/// [BreakerClass] so a new frame class can never silently fall to the MCB time.
+double arcFlashClearingTimeS(BreakerClass c) => switch (c) {
+      BreakerClass.mcb => _mcbClearingTimeS,
+      BreakerClass.mccb => _mccbClearingTimeS,
+      BreakerClass.acb => _acbClearingTimeS,
+    };
 
 /// A small ambient / quiescent enclosure heat allowance (W) — wiring,
 /// terminals, indicator lamps — added to the summed control-device losses AND
@@ -188,7 +205,8 @@ class AdvancedStudy {
 ///      becomes the per-panel enclosure heat when `panel.heatW` is unset.
 ///   2. **Fault study** — Isc / breaking-capacity / Zs-ADS / selectivity.
 ///   3. **Arc-flash** — per panel, from the panel's prospective fault and a
-///      representative clearing time (MCB 0.05 s / MCCB 0.2 s by the incomer).
+///      representative clearing time (MCB 0.05 s / MCCB 0.2 s / ACB 0.5 s by
+///      the incomer class, [arcFlashClearingTimeS]).
 ///   4. **Harmonics / containment / metering / SPD** — per panel (the origin
 ///      panel gets `atOrigin:true`; sub-boards by their feeder distance).
 ///   5. **Supply** + **daya tersambung**, **power factor** (detuned when any
@@ -286,9 +304,8 @@ AdvancedStudy computeAdvancedStudy(
 
     // Arc-flash — fault kA at the bus × a representative clearing time.
     final faultkA = fault.panels[id]?.prospectiveFaultkA ?? 0;
-    final clearingTimeS = panelResult.incomer.breaker.deviceClass.name == 'mccb'
-        ? _mccbClearingTimeS
-        : _mcbClearingTimeS;
+    final clearingTimeS =
+        arcFlashClearingTimeS(panelResult.incomer.breaker.deviceClass);
     arcFlash[id] = estimateArcFlash(
       faultkA: Current.kiloamperes(faultkA),
       clearingTimeS: clearingTimeS,
@@ -388,6 +405,7 @@ AdvancedStudy computeAdvancedStudy(
       demandPower: Power(sys.supply.demandW),
       voltage: sys.supply.voltage,
       motors: gensetStartMotors(project),
+      utilitySub: powerOneLineUtilitySub(project, sys.supply.demandVa),
     );
   }
 
@@ -658,4 +676,20 @@ List<String> _aggregateVerify(List<List<String>?> lists) {
     }
   }
   return out;
+}
+
+/// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a
+/// DECLARED MV service (an explicit transformer rating or a dual-transformer
+/// service): `MV via TX <n x kVA>` from the SAME [serviceTransformer] the
+/// riser / overview / schedule print; null on an LV direct service (the
+/// builder's `<V> V LV` stands).
+String? powerOneLineUtilitySub(
+    ElectricalProject project, ApparentPower demandVa) {
+  if (project.transformerKva == null && !project.dualTransformer) return null;
+  final t = serviceTransformer(project, demandVa);
+  if (t == null || t.kva <= 0) return 'MV via TX';
+  String n(double v) =>
+      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+  final fig = t.units > 1 ? '${t.units} x ${n(t.kva)}' : n(t.kva);
+  return 'MV via TX $fig kVA';
 }

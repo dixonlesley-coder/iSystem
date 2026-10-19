@@ -15,6 +15,8 @@ import 'package:mechx_engine/report/dxf_export.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart'
     show SldDxfLayers, electricalSldToDxf;
+import 'package:mechx_engine/report/electrical_pagination.dart'
+    show electricalOverviewToPdf, electricalRiserToPdf;
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldDetailToPdf, electricalSldToPdf;
 import 'package:mechx_engine/report/electrical_plan_export.dart';
@@ -2171,6 +2173,20 @@ Future<bool> writeSubmittalPackageToDir(
             projectName: base,
             sheetName: sheet.name,
             chrome: eChrome,
+            // Round 23 (elec-drafting-2-3) — world millimetres + the PDF's
+            // snapped 1 : N, like the mechanical plan DXF beside it. The N
+            // is the PDF twin's own fit (same args, underlay frame + real
+            // title block included), so the two sheets stamp one scale.
+            metersPerPixel: metersPerPixel,
+            plottedScaleDenominator: electricalPlanPlottedScaleDenominator(
+              data: ePlan,
+              projectName: base,
+              sheetName: sheet.name,
+              dateString: today,
+              chrome: eChrome,
+              metersPerPixel: metersPerPixel,
+              underlay: underlay,
+            ),
           ),
         );
       }
@@ -2237,9 +2253,12 @@ Future<bool> writeSubmittalPackageToDir(
       result: eResult,
       sourceChain: true,
     );
+    // Round 23 (elec-drafting-2-1) — paginated by sub-tree whenever one A3
+    // sheet would print below the minimum plotted label size.
     await File(out('electrical-overview-sld.pdf')).writeAsBytes(
-      electricalSldToPdf(
-        sheet: overviewSheet,
+      electricalOverviewToPdf(
+        project: eProject,
+        result: eResult,
         title: 'iSystem electrical single-line (overview)',
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
         chrome: overviewChrome,
@@ -2267,9 +2286,13 @@ Future<bool> writeSubmittalPackageToDir(
       building: project.building,
       sourceChain: true,
     );
+    // Round 23 (elec-drafting-2-1) — floor-range pages (LANJUT KE match
+    // stubs) whenever one A3 sheet would print below the label floor.
     await File(out('electrical-riser.pdf')).writeAsBytes(
-      electricalSldToPdf(
-        sheet: eRiserSheet,
+      electricalRiserToPdf(
+        project: eProject,
+        result: eResult,
+        building: project.building,
         title: 'iSystem electrical building riser',
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
         chrome: eRiserChrome,
