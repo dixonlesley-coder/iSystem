@@ -22,6 +22,8 @@ import 'package:mechx_engine/report/riser_tags.dart'
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show CheckValveAmbiguity;
 import 'package:mechx_engine/sizing/room_air.dart' show RoomAirResult;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -626,6 +628,29 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       kind: 'check-valve-feeds-ring:$id',
       title: str(StringKey.issueCheckValveFeedsRingTitle),
       message: str(StringKey.issueCheckValveFeedsRingMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
+  // Round 27 r5 (binding check-valve decision) — a cycle check valve drawn
+  // with NO direction cannot be read from topology: the sizer assumed it
+  // conservatively (closed return / plain pipe / standby leg). Name each so
+  // the engineer redraws it instead of trusting the assumption.
+  final ambiguousValves = ref.watch(checkValveAmbiguousProvider);
+  for (final id in ambiguousValves.keys.toList()..sort()) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'check-valve-ambiguous:$id',
+      title: str(StringKey.issueCheckValveAmbiguousTitle),
+      message: str(switch (ambiguousValves[id]!) {
+        CheckValveAmbiguity.closedReturn =>
+          StringKey.issueCheckValveAmbiguousClosedMessage,
+        CheckValveAmbiguity.plainPipe =>
+          StringKey.issueCheckValveAmbiguousPipeMessage,
+        CheckValveAmbiguity.standbySet =>
+          StringKey.issueCheckValveAmbiguousStandbyMessage,
+      }),
       locate: IssueLocation(n.sheetId, nodeId: id),
     ));
   }

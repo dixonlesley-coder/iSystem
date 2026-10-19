@@ -654,6 +654,10 @@ enum StringKey {
   issueFireJockeyAssumedMessage,
   issueCheckValveFeedsRingTitle,
   issueCheckValveFeedsRingMessage,
+  issueCheckValveAmbiguousTitle,
+  issueCheckValveAmbiguousClosedMessage,
+  issueCheckValveAmbiguousPipeMessage,
+  issueCheckValveAmbiguousStandbyMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1955,6 +1959,26 @@ const Map<StringKey, String> _en = {
       'second feed and carries draw-off. If it is a recirculation return, '
       'its arrow is drawn backwards: redraw its pipes from the return toward '
       'the heater and it will be sized as a return (no draw-off).',
+  StringKey.issueCheckValveAmbiguousTitle:
+      'Check valve has no drawn flow direction',
+  StringKey.issueCheckValveAmbiguousClosedMessage:
+      'Both pipes of this check valve are drawn into it (or both out of it), '
+      'so its flow direction is ambiguous. It was assumed CLOSED, like a '
+      'recirculation return: it carries no draw-off and every main upstream '
+      'is sized for the full peak. Redraw its two pipes in the flow direction '
+      '(into the valve, then out of it) so it is sized as intended.',
+  StringKey.issueCheckValveAmbiguousPipeMessage:
+      'Both pipes of this check valve are drawn into it (or both out of it), '
+      'so its flow direction is ambiguous. Closing it would cut a fixture off '
+      'the source, so it was assumed to be a PLAIN PIPE (the loop is '
+      'balanced through it both ways). Redraw its two pipes in the flow '
+      'direction (into the valve, then out of it) so it is sized as intended.',
+  StringKey.issueCheckValveAmbiguousStandbyMessage:
+      'Both pipes of this check valve are drawn into it (or both out of it), '
+      'so its flow direction is ambiguous. It sits in a parallel '
+      'duty/standby set onto one header, so it was assumed to be a STANDBY '
+      'leg sized for the full set flow. Redraw its two pipes in the flow '
+      'direction (into the valve, then out of it) so it is sized as intended.',
   StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
   StringKey.issueFireJockeyAssumedMessage:
       'Three or more identical fire pumps are drawn in parallel and nothing '
@@ -3359,6 +3383,27 @@ const Map<StringKey, String> _id = {
       'adalah balikan sirkulasi, arah panahnya terbalik: gambar ulang pipanya '
       'dari balikan menuju pemanas agar diukur sebagai balikan (tanpa '
       'pemakaian).',
+  StringKey.issueCheckValveAmbiguousTitle:
+      'Katup searah tanpa arah aliran yang digambar',
+  StringKey.issueCheckValveAmbiguousClosedMessage:
+      'Kedua pipa katup searah ini digambar masuk ke katup (atau keduanya '
+      'keluar), sehingga arah alirannya ambigu. Katup diasumsikan TERTUTUP, '
+      'seperti balikan sirkulasi: tidak membawa pemakaian dan setiap pipa '
+      'utama di hulunya diukur untuk debit puncak penuh. Gambar ulang kedua '
+      'pipanya searah aliran (masuk ke katup, lalu keluar) agar diukur sesuai '
+      'maksud.',
+  StringKey.issueCheckValveAmbiguousPipeMessage:
+      'Kedua pipa katup searah ini digambar masuk ke katup (atau keduanya '
+      'keluar), sehingga arah alirannya ambigu. Menutupnya akan memutus '
+      'fixture dari sumber, sehingga diasumsikan sebagai PIPA BIASA (loop '
+      'diseimbangkan melaluinya ke dua arah). Gambar ulang kedua pipanya '
+      'searah aliran (masuk ke katup, lalu keluar) agar diukur sesuai maksud.',
+  StringKey.issueCheckValveAmbiguousStandbyMessage:
+      'Kedua pipa katup searah ini digambar masuk ke katup (atau keduanya '
+      'keluar), sehingga arah alirannya ambigu. Katup berada dalam set '
+      'paralel duty/standby ke satu header, sehingga diasumsikan sebagai kaki '
+      'STANDBY yang diukur untuk debit set penuh. Gambar ulang kedua pipanya '
+      'searah aliran (masuk ke katup, lalu keluar) agar diukur sesuai maksud.',
   StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
   StringKey.issueFireJockeyAssumedMessage:
       'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '

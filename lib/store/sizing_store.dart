@@ -96,6 +96,13 @@ final parallelLegEdgeIdsProvider = Provider<Set<String>>(
 final checkValveFeedsRingProvider = Provider<Set<String>>(
     (ref) => ref.watch(sizingDetailProvider).checkValveFeedsRing);
 
+/// Round 27 r5 — pressurized cycle check valves drawn with NO direction (both
+/// pipes into, or both out of, the valve node) -> how the sizer assumed them
+/// (closed return / plain pipe / standby-set leg;
+/// `autoSizeNetwork(checkValveAmbiguousOut:)`). Judge-only; Review names each.
+final checkValveAmbiguousProvider = Provider<Map<String, CheckValveAmbiguity>>(
+    (ref) => ref.watch(sizingDetailProvider).checkValveAmbiguous);
+
 /// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
 final sizingDetailProvider = Provider<
     ({
@@ -105,6 +112,7 @@ final sizingDetailProvider = Provider<
       Set<String> flushValveNodeIds,
       Set<String> parallelLegs,
       Set<String> checkValveFeedsRing,
+      Map<String, CheckValveAmbiguity> checkValveAmbiguous,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   if (net.edges.isEmpty) {
@@ -115,6 +123,7 @@ final sizingDetailProvider = Provider<
       flushValveNodeIds: const <String>{},
       parallelLegs: const <String>{},
       checkValveFeedsRing: const <String>{},
+      checkValveAmbiguous: const <String, CheckValveAmbiguity>{},
     );
   }
   final occupancy = ref.watch(occupancyProvider);
@@ -213,6 +222,7 @@ final sizingDetailProvider = Provider<
   final fixtureUnits = <String, double>{};
   final parallelLegs = <String>{};
   final checkValveFeedsRing = <String>{};
+  final checkValveAmbiguous = <String, CheckValveAmbiguity>{};
   final sizing = autoSizeNetwork(
     net,
     // The one sizing context (duct settings + the laid drainage slope).
@@ -245,6 +255,7 @@ final sizingDetailProvider = Provider<
     fixtureUnitsOut: fixtureUnits,
     parallelLegEdgeIdsOut: parallelLegs,
     checkValveFeedsRingOut: checkValveFeedsRing,
+    checkValveAmbiguousOut: checkValveAmbiguous,
   );
   return (
     sizing: sizing,
@@ -253,6 +264,7 @@ final sizingDetailProvider = Provider<
     flushValveNodeIds: flushValveNodeIds,
     parallelLegs: parallelLegs,
     checkValveFeedsRing: checkValveFeedsRing,
+    checkValveAmbiguous: checkValveAmbiguous,
   );
 });
 

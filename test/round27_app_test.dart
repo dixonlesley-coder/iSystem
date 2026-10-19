@@ -24,6 +24,8 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/grille_sizing.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show CheckValveAmbiguity;
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/units.dart';
@@ -321,7 +323,7 @@ void main() {
     // R0 return riser -> CV -> H. [backwards] draws the valve H -> CV -> R0:
     // the drawn arrow points AWAY from the heater, so it is sized as a feed
     // (and named); drawn R0 -> CV -> H it is a return (zero, no advisory).
-    Network hotel({required bool backwards}) {
+    Network hotel({required bool backwards, bool ambiguous = false}) {
       NetEdge hw(String id, String a, String b,
               {EdgeKind k = EdgeKind.run}) =>
           NetEdge(
@@ -343,7 +345,10 @@ void main() {
         hw('b1', 'S1', 'f1'),
         hw('top', 'S1', 'R1'),
         hw('r1', 'R1', 'R0', k: EdgeKind.riser),
-        if (backwards) ...[
+        if (ambiguous) ...[
+          hw('rc', 'R0', 'CV'),
+          hw('ch', 'H', 'CV'),
+        ] else if (backwards) ...[
           hw('ch', 'H', 'CV'),
           hw('cr', 'CV', 'R0'),
         ] else ...[
@@ -390,6 +395,33 @@ void main() {
       expect(
           c.read(designIssuesProvider).map((i) => i.kind),
           isNot(contains(startsWith('check-valve-feeds-ring'))));
+    });
+
+    // r5 (binding rule) — a valve with NO drawn direction (both pipes drawn
+    // into it) is read as a closed return (zero draw-off) and named, never
+    // as a feed.
+    testWidgets('an ambiguously drawn valve: closed return + locatable advisory',
+        (tester) async {
+      final (_, c) = await _harness(tester);
+      c.read(projectControllerProvider.notifier).setFloors(const [
+        Floor('L0', Length(3.0)),
+        Floor('L1', Length(3.0)),
+      ]);
+      c.read(networkControllerProvider.notifier)
+          .loadNetwork(hotel(backwards: false, ambiguous: true));
+      await tester.pump();
+      expect(c.read(checkValveAmbiguousProvider),
+          {'CV': CheckValveAmbiguity.closedReturn});
+      expect(c.read(checkValveFeedsRingProvider), isEmpty);
+      expect(c.read(sizingProvider)['ch']!.flow.inLitersPerSecond, 0);
+      final issue = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'check-valve-ambiguous:CV');
+      expect(issue.severity, IssueSeverity.info);
+      expect(issue.locate?.nodeId, 'CV');
+      expect(issue.locate?.sheetId, 's1');
+      expect(issue.title, 'Check valve has no drawn flow direction');
+      expect(issue.message, contains('CLOSED'));
     });
   });
 }

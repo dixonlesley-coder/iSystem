@@ -224,7 +224,11 @@ void main() {
         expect(s['ch']!.flow.inLitersPerSecond, greaterThan(0), reason: why);
         expect(s['ch']!.flowFromId, 'H', reason: why);
         expect(s['jc']!.flowFromId, 'CV', reason: why);
-        expect(ring, contains('CV'), reason: why);
+        // Round 27 r5 — only the backwards return is named: the heater's own
+        // discharge valve CVd (on the shortest heater -> draw-off route) is
+        // correctly drawn, so the "arrow drawn backwards" message is not
+        // about it.
+        expect(ring, {'CV'}, reason: why);
       }
     }
   });
@@ -852,5 +856,469 @@ void main() {
     expect(checkedReturns, greaterThan(20));
     expect(checkedFeeds, greaterThan(50));
     expect(skipped, lessThan(150));
+  });
+  // ── r5 — the binding conservative rule for AMBIGUOUSLY drawn valves ────────
+
+  /// A heater H with duty/standby CIRCULATION pumps, each with its own
+  /// discharge valve drawn in the flow direction: H -> P1 -> CV1 -> HDR and
+  /// H -> P2 -> CV2 -> HDR. HDR -> S0..S3 supply riser (a 2-UBAP fixture per
+  /// floor), the riser top S3 -> R3 -> R2 -> R1 -> R0 return riser, then the
+  /// common return valve CVr drawn AMBIGUOUSLY (R0 -> CVr and H -> CVr).
+  /// [rj] adds one bare node on the return (R0 -> RJ -> CVr).
+  Network dutyStandby({bool rj = false, bool ambiguous = true}) {
+    final nodes = <NetNode>[
+      _n('H', 0, 0, role: NodeRole.plant),
+      _n('P1', 20, -20, c: NodeComponent.pump),
+      _n('P2', 20, 20, c: NodeComponent.pump),
+      _n('CV1', 40, -20, c: NodeComponent.checkValve),
+      _n('CV2', 40, 20, c: NodeComponent.checkValve),
+      _n('HDR', 60, 0),
+      _n('CVr', 10, 40, c: NodeComponent.checkValve),
+    ];
+    final edges = <NetEdge>[
+      _e('h1', 'H', 'P1'),
+      _e('p1', 'P1', 'CV1'),
+      _e('c1', 'CV1', 'HDR'),
+      _e('h2', 'H', 'P2'),
+      _e('p2', 'P2', 'CV2'),
+      _e('c2', 'CV2', 'HDR'),
+    ];
+    for (var f = 0; f < 4; f++) {
+      nodes
+        ..add(_n('S$f', 100, 0, floor: f))
+        ..add(_n('fx$f', 140, 0, floor: f, role: NodeRole.fixture))
+        ..add(_n('R$f', 120, 40, floor: f));
+      edges.add(_e('b$f', 'S$f', 'fx$f'));
+      edges.add(f == 0
+          ? _e('m', 'HDR', 'S0')
+          : _e('s$f', 'S${f - 1}', 'S$f', k: EdgeKind.riser));
+      if (f > 0) edges.add(_e('r$f', 'R$f', 'R${f - 1}', k: EdgeKind.riser));
+    }
+    edges.add(_e('top', 'S3', 'R3'));
+    final last = rj ? 'RJ' : 'R0';
+    if (rj) {
+      nodes.add(_n('RJ', 60, 40));
+      edges.add(_e('rr', 'R0', 'RJ'));
+    }
+    edges
+      ..add(_e('jc', last, 'CVr'))
+      ..add(ambiguous ? _e('ch', 'H', 'CVr') : _e('ch', 'CVr', 'H'));
+    return Network(nodes: nodes, edges: edges);
+  }
+
+  test(
+      'r5 (binding rule): duty/standby circulation pumps + an AMBIGUOUS '
+      'common return — supply main curve(8) DN20, each pump leg the full set '
+      'flow, the return 0; calibrated or not, with or without a bare node on '
+      'the return; only CVr is named (closed return), never feeds-ring', () {
+    // The ambiguous CVr shares no leg-end pair with another valve (its legs
+    // end at H and at the riser top S3), so it is not in a parallel set; it
+    // is read as a CLOSED RETURN, and closing it cuts no fixture off the
+    // heater (the pumps feed HDR). So the supply sizes as the open network:
+    // 4 floors x 2 UBAP = 8 UBAP => curve(8) = 8/10 x 0.5 = 0.400 L/s
+    // (flush-tank Gambar 1), DN20 (DN15 at 0.4 L/s is 2.26 m/s > 2.0 m/s).
+    // CV1 / CV2 are drawn (rule 1) and share the leg ends {H, HDR}: a
+    // Round-13 duty/standby set — the duty leg carries the set flow and the
+    // standby leg MIRRORS it (a standby pump is a full-duty machine), so
+    // every pump-leg pipe carries 0.400 L/s and the standby leg is recorded
+    // in parallelLegEdgeIdsOut. r4 read CVr as a FEED here (hop-distance
+    // heuristics: m = 0.2381 L/s DN15, -40 %) and named CV1/CV2/CVr.
+    for (final rj in [false, true]) {
+      for (final cal in [false, true]) {
+        final ring = <String>{};
+        final par = <String>{};
+        final amb = <String, CheckValveAmbiguity>{};
+        final s = autoSizeNetwork(
+          dutyStandby(rj: rj),
+          const SizingContext(),
+          leafDemand: const {ServiceType.hotWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.hotWater: 2.0},
+          building: cal ? _levels : null,
+          calibrationBySheet:
+              cal ? const {'s1': ScaleCalibration(0.05)} : const {},
+          checkValveFeedsRingOut: ring,
+          parallelLegEdgeIdsOut: par,
+          checkValveAmbiguousOut: amb,
+        );
+        final why = 'rj=$rj cal=$cal';
+        expect(s['m']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9),
+            reason: why);
+        expect(s['m']!.diameter.inMillimeters, 20, reason: why);
+        for (final id in ['h1', 'p1', 'c1', 'h2', 'p2', 'c2']) {
+          expect(s[id]!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9),
+              reason: '$why $id');
+        }
+        expect(par, {'h2', 'p2', 'c2'}, reason: why);
+        for (final id in ['top', 'r3', 'r2', 'r1', if (rj) 'rr', 'jc', 'ch']) {
+          expect(s[id]!.flow.inLitersPerSecond, 0, reason: '$why $id');
+        }
+        expect(ring, isEmpty, reason: why);
+        expect(amb, {'CVr': CheckValveAmbiguity.closedReturn}, reason: why);
+      }
+    }
+    // The same return drawn R0 -> CVr -> H (unambiguous) sizes identically.
+    final drawn = _size(dutyStandby(ambiguous: false));
+    final amb = _size(dutyStandby());
+    for (final id in drawn.keys) {
+      expect(amb[id]!.flow.inLitersPerSecond,
+          closeTo(drawn[id]!.flow.inLitersPerSecond, 1e-9),
+          reason: id);
+    }
+  });
+
+  test(
+      'r5: an ambiguous valve PAIRED with a drawn one (pump + bypass / '
+      'duty-standby onto one header) is a standby-set member', () {
+    // CV2 drawn ambiguously (P2 -> CV2 and HDR -> CV2) beside the drawn CV1:
+    // both legs end at {H, HDR} — a parallel set (structural, no distance).
+    // The drawn partner fixes the direction (H side in), so the set keeps
+    // the Round-13 standby rule: both legs carry the full set flow.
+    final base = dutyStandby(ambiguous: false);
+    final net = Network(nodes: base.nodes, edges: [
+      for (final e in base.edges)
+        if (e.id == 'c2') _e('c2', 'HDR', 'CV2') else e,
+    ]);
+    for (final cal in [false, true]) {
+      final par = <String>{};
+      final amb = <String, CheckValveAmbiguity>{};
+      final s = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.hotWater: FlowRate(0)},
+        leafFixtureUnits: const {ServiceType.hotWater: 2.0},
+        building: cal ? _levels : null,
+        calibrationBySheet:
+            cal ? const {'s1': ScaleCalibration(0.05)} : const {},
+        parallelLegEdgeIdsOut: par,
+        checkValveAmbiguousOut: amb,
+      );
+      for (final id in ['h1', 'p1', 'c1', 'h2', 'p2', 'c2', 'm']) {
+        expect(s[id]!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9),
+            reason: 'cal=$cal $id');
+      }
+      expect(s['c2']!.flowFromId, 'CV2', reason: 'cal=$cal');
+      expect(par, {'h2', 'p2', 'c2'}, reason: 'cal=$cal');
+      expect(amb, {'CV2': CheckValveAmbiguity.standbySet}, reason: 'cal=$cal');
+    }
+  });
+
+  test(
+      'r5: the hotel + heater discharge + AMBIGUOUS return keeps its result '
+      '(supply == open network, return 0) and names the valve closed return',
+      () {
+    for (final cal in [false, true]) {
+      final base = _hotel(discharge: true);
+      final net = Network(nodes: base.nodes, edges: [
+        for (final e in base.edges)
+          if (e.id == 'ch') _e('ch', 'H', 'CV') else e,
+      ]);
+      final amb = <String, CheckValveAmbiguity>{};
+      final ring = <String>{};
+      final s = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.hotWater: FlowRate(0)},
+        leafFixtureUnits: const {ServiceType.hotWater: 2.0},
+        building: cal ? _levels : null,
+        calibrationBySheet:
+            cal ? const {'s1': ScaleCalibration(0.05)} : const {},
+        checkValveAmbiguousOut: amb,
+        checkValveFeedsRingOut: ring,
+      );
+      final open = _size(_hotel(ret: false, discharge: true), cal: cal);
+      for (final id in open.keys) {
+        expect(s[id]!.flow.inLitersPerSecond,
+            closeTo(open[id]!.flow.inLitersPerSecond, 1e-9),
+            reason: 'cal=$cal $id');
+      }
+      expect(s['hm1']!.flow.inLitersPerSecond, closeTo(_curve(16), 1e-9));
+      expect(s['ch']!.flow.inLitersPerSecond, 0);
+      expect(s['jc']!.flow.inLitersPerSecond, 0);
+      expect(amb, {'CV': CheckValveAmbiguity.closedReturn});
+      expect(ring, isEmpty);
+    }
+  });
+
+  /// T -> M -> J1 (or M -> CV1 -> J1 with [cv1]); ring J1 - A0 - A1 - J2 -
+  /// J1 with a 4-UBAP fixture off A0 and A1; second leg M -> CV2 <- J2
+  /// (AMBIGUOUS, both pipes drawn into CV2). [cv1Return] instead draws the
+  /// FIRST leg J1 -> CV1 -> M (a drawn valve pointing toward the source).
+  Network secondFeed({bool cv1 = false, bool cv1Return = false}) {
+    NetEdge e(String id, String a, String b) =>
+        NetEdge(id: id, fromId: a, toId: b, service: ServiceType.coldWater);
+    final useCv1 = cv1 || cv1Return;
+    return Network(nodes: [
+      _n('T', 0, 0, role: NodeRole.plant),
+      _n('M', 20, 0),
+      if (useCv1) _n('CV1', 30, -10, c: NodeComponent.checkValve),
+      _n('J1', 40, -20),
+      _n('A0', 60, -20),
+      _n('A1', 60, 20),
+      _n('J2', 40, 20),
+      _n('fA0', 80, -20, role: NodeRole.fixture),
+      _n('fA1', 80, 20, role: NodeRole.fixture),
+      _n('CV2', 30, 10, c: NodeComponent.checkValve),
+    ], edges: [
+      e('tm', 'T', 'M'),
+      if (!useCv1) e('m1', 'M', 'J1'),
+      if (cv1) ...[e('m1', 'M', 'CV1'), e('c1', 'CV1', 'J1')],
+      if (cv1Return) ...[e('m1', 'CV1', 'M'), e('c1', 'J1', 'CV1')],
+      e('ja', 'J1', 'A0'),
+      e('aa', 'A0', 'A1'),
+      e('aj', 'A1', 'J2'),
+      e('jj', 'J2', 'J1'),
+      e('fa0', 'A0', 'fA0'),
+      e('fa1', 'A1', 'fA1'),
+      e('zc', 'M', 'CV2'),
+      e('c2', 'J2', 'CV2'),
+    ]);
+  }
+
+  test(
+      'r5: an ambiguous genuine second feed reads as a CLOSED return — the '
+      'first leg carries the whole curve(8) — whether or not the first leg '
+      'carries a valve (r4 flipped on that)', () {
+    // Closing CV2 cuts no fixture off T (the ring is fed through J1), so it
+    // is a closed return: the first leg carries the whole ring demand,
+    // 2 x 4 = 8 UBAP => curve(8) = 0.400 L/s, and zc / c2 are sized at zero
+    // (DN15, fu 0). Recorded behaviour: an ambiguous valve that only TIES or
+    // even shortens a draw-off path is not a feed.
+    for (final cv1 in [false, true]) {
+      final fu = <String, double>{};
+      final amb = <String, CheckValveAmbiguity>{};
+      final s = autoSizeNetwork(secondFeed(cv1: cv1), const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 4.0},
+          fixtureUnitsOut: fu,
+          checkValveAmbiguousOut: amb);
+      expect(s['m1']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9),
+          reason: 'cv1=$cv1');
+      if (cv1) {
+        expect(s['c1']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9));
+      }
+      for (final id in ['zc', 'c2']) {
+        expect(s[id]!.flow.inLitersPerSecond, 0, reason: 'cv1=$cv1 $id');
+        expect(s[id]!.diameter.inMillimeters, 15, reason: 'cv1=$cv1 $id');
+        expect(fu[id], 0, reason: 'cv1=$cv1 $id');
+      }
+      expect(amb, {'CV2': CheckValveAmbiguity.closedReturn});
+    }
+  });
+
+  test(
+      'r5: an ambiguous valve whose closing would starve a fixture is a '
+      'PLAIN PIPE (+ advisory); two that starve it only together are both '
+      'pipes, sized exactly as bare junctions', () {
+    // (a) The first leg is a drawn RETURN (J1 -> CV1 -> M points toward T):
+    // zeroed. Closing CV2 too would cut A0 / A1 off T, so CV2 is a plain
+    // pipe and the whole curve(8) = 0.400 L/s enters by it.
+    final amb = <String, CheckValveAmbiguity>{};
+    final s = autoSizeNetwork(
+        secondFeed(cv1Return: true), const SizingContext(),
+        leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+        leafFixtureUnits: const {ServiceType.coldWater: 4.0},
+        checkValveAmbiguousOut: amb);
+    expect(amb, {'CV2': CheckValveAmbiguity.plainPipe});
+    expect(s['zc']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9));
+    expect(s['c2']!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9));
+    expect(s['m1']!.flow.inLitersPerSecond, 0);
+    expect(s['c1']!.flow.inLitersPerSecond, 0);
+
+    // (b) A dual-feed ring entered through TWO ambiguous valves: either
+    // alone may close, both together starve the ring — reopening either
+    // restores it, so (symmetrically, never by id order) both are pipes and
+    // the network sizes exactly as with bare junctions (Hardy–Cross).
+    NetEdge e(String id, String a, String b) =>
+        NetEdge(id: id, fromId: a, toId: b, service: ServiceType.coldWater);
+    Network dual({required bool valves, String v1 = 'V1', String v2 = 'V2'}) =>
+        Network(nodes: [
+          _n('T', 0, 0, role: NodeRole.plant),
+          _n('M', 20, 0),
+          _n(v1, 40, -20, c: valves ? NodeComponent.checkValve : null),
+          _n(v2, 40, 20, c: valves ? NodeComponent.checkValve : null),
+          _n('J1', 60, -20),
+          _n('J2', 60, 20),
+          _n('X', 80, 20),
+          _n('fA', 80, -20, role: NodeRole.fixture),
+          _n('fB', 100, 20, role: NodeRole.fixture),
+        ], edges: [
+          e('tm', 'T', 'M'),
+          e('m1', 'M', v1),
+          e('c1', 'J1', v1),
+          e('m2', v2, 'M'),
+          e('c2', v2, 'J2'),
+          e('hdr', 'J1', 'J2'),
+          e('a', 'J1', 'fA'),
+          e('x', 'J2', 'X'),
+          e('b', 'X', 'fB'),
+        ]);
+    final ref = sizeCold(dual(valves: false));
+    for (final ids in [('V1', 'V2'), ('V2', 'V1')]) {
+      final amb2 = <String, CheckValveAmbiguity>{};
+      final s2 = autoSizeNetwork(
+          dual(valves: true, v1: ids.$1, v2: ids.$2), const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 4.0},
+          checkValveAmbiguousOut: amb2);
+      expect(amb2, {
+        'V1': CheckValveAmbiguity.plainPipe,
+        'V2': CheckValveAmbiguity.plainPipe,
+      });
+      for (final id in ref.keys) {
+        expect(s2[id]!.flow.inLitersPerSecond,
+            closeTo(ref[id]!.flow.inLitersPerSecond, 1e-9),
+            reason: '$ids $id');
+      }
+    }
+  });
+
+  test(
+      'r5 property (seeded): for every AMBIGUOUS valve the result — its '
+      'reading and every pipe size — is invariant to bare bends anywhere and '
+      'to calibration', () {
+    var checked = 0;
+    final seen = <CheckValveAmbiguity>{};
+    for (var trial = 0; trial < 120; trial++) {
+      final rnd = math.Random(5200 + trial);
+      final nodes = <NetNode>[
+        _n('T', 0, 0, role: NodeRole.plant),
+        _n('M', 20, 0),
+      ];
+      final edges = <(String, String, String)>[];
+      var eid = 0;
+      void pipe(String a, String b) => edges.add(('e${eid++}', a, b));
+      var vid = 0;
+      void valve(String a, String b, double x, double y) {
+        final id = 'V${rnd.nextInt(1 << 20)}_${vid++}';
+        nodes.add(_n(id, x, y, c: NodeComponent.checkValve));
+        if (rnd.nextBool()) {
+          pipe(a, id); // both INTO the valve
+          pipe(b, id);
+        } else {
+          pipe(id, a); // both OUT of it
+          pipe(id, b);
+        }
+      }
+
+      pipe('T', 'M');
+      final k = 4 + rnd.nextInt(4);
+      var anyFixture = false;
+      for (var i = 0; i < k; i++) {
+        final a = 2 * math.pi * i / k;
+        final (x, y) = (200 + 100 * math.cos(a), 100 * math.sin(a));
+        nodes.add(_n('R$i', x, y));
+        if (rnd.nextBool() || (i == k - 1 && !anyFixture)) {
+          anyFixture = true;
+          nodes.add(_n('f$i', x * 1.1, y * 1.1, role: NodeRole.fixture));
+          pipe('R$i', 'f$i');
+        }
+      }
+      final ringValveAt = rnd.nextDouble() < 0.4 ? rnd.nextInt(k) : -1;
+      for (var i = 0; i < k; i++) {
+        final j = (i + 1) % k;
+        if (i == ringValveAt) {
+          valve('R$i', 'R$j', 210, 10.0 * i);
+        } else {
+          rnd.nextBool() ? pipe('R$i', 'R$j') : pipe('R$j', 'R$i');
+        }
+      }
+      final entries = ([for (var i = 0; i < k; i++) i]..shuffle(rnd))
+          .take(1 + rnd.nextInt(2))
+          .toList();
+      for (final en in entries) {
+        if (rnd.nextDouble() < 0.7) {
+          valve('M', 'R$en', 60, 5.0 * en);
+        } else {
+          pipe('M', 'R$en');
+        }
+      }
+      if (rnd.nextDouble() < 0.5) {
+        final r = rnd.nextInt(k);
+        nodes.add(_n('Q', 30, 80));
+        pipe('R$r', 'Q');
+        valve('Q', 'T', 10, 60);
+      }
+      final pos = {for (final n in nodes) n.id: (n.x, n.y)};
+      final bent = {
+        for (final (id, _, _) in edges)
+          if (rnd.nextDouble() < 0.35) id,
+      };
+      NetEdge cw(String id, String a, String b) =>
+          NetEdge(id: id, fromId: a, toId: b, service: ServiceType.coldWater);
+      Network build({required bool bends}) {
+        final ns = [...nodes];
+        final es = <NetEdge>[];
+        for (final (id, a, b) in edges) {
+          if (bends && bent.contains(id)) {
+            // A bare bend at the exact midpoint: same drawn direction, same
+            // pixel length.
+            final (xa, ya) = pos[a]!;
+            final (xb, yb) = pos[b]!;
+            ns.add(_n('K$id', (xa + xb) / 2, (ya + yb) / 2));
+            es
+              ..add(cw(id, a, 'K$id'))
+              ..add(cw('${id}k', 'K$id', b));
+          } else {
+            es.add(cw(id, a, b));
+          }
+        }
+        return Network(nodes: ns, edges: es);
+      }
+
+      final results =
+          <(Map<String, EdgeSizing>, Map<String, CheckValveAmbiguity>)>[];
+      for (final bends in [false, true]) {
+        for (final cal in [false, true]) {
+          final amb = <String, CheckValveAmbiguity>{};
+          final s = autoSizeNetwork(build(bends: bends), const SizingContext(),
+              leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+              leafFixtureUnits: const {ServiceType.coldWater: 4.0},
+              building:
+                  cal ? const BuildingLevels([Floor('L1', Length(3.0))]) : null,
+              calibrationBySheet:
+                  cal ? const {'s1': ScaleCalibration(0.05)} : const {},
+              checkValveAmbiguousOut: amb);
+          results.add((s, amb));
+        }
+      }
+      // Variants: 0 plain, 1 calibrated, 2 bends, 3 bends + calibrated. The
+      // valve READING never moves; every pipe size is bend-invariant (a bend
+      // at the exact midpoint keeps the pixel length, so even a plain-pipe
+      // ring's Hardy–Cross split is unchanged); a CLOSED valve's legs carry
+      // exactly 0 in every variant. (A plain-pipe ring's split may move
+      // with calibration — real lengths, incl. vertical legs, are its
+      // resistance basis — that is the pipe, not the valve reading.)
+      final (s0, amb0) = results.first;
+      seen.addAll(amb0.values);
+      for (var v = 1; v < results.length; v++) {
+        final (s, amb) = results[v];
+        final why = 'trial $trial variant $v';
+        expect(amb, amb0, reason: why);
+        for (final (id, a, b) in edges) {
+          final ref = results[v & 1].$1[id];
+          for (final sid in [id, if (v >= 2 && bent.contains(id)) '${id}k']) {
+            final got = s[sid];
+            expect(got == null, s0[id] == null, reason: '$why $sid');
+            final closed =
+                [a, b].any((n) => amb0[n] == CheckValveAmbiguity.closedReturn);
+            if (closed) {
+              expect(got!.flow.inLitersPerSecond, 0, reason: '$why $sid');
+            }
+            if (v < 2 || got == null || ref == null) continue;
+            expect(got.flow.inLitersPerSecond,
+                closeTo(ref.flow.inLitersPerSecond, 1e-6),
+                reason: '$why $sid');
+            expect(got.diameter.inMillimeters, ref.diameter.inMillimeters,
+                reason: '$why $sid');
+          }
+        }
+      }
+      if (amb0.isNotEmpty) checked++;
+    }
+    expect(checked, greaterThan(60));
+    expect(
+        seen,
+        containsAll(
+            [CheckValveAmbiguity.closedReturn, CheckValveAmbiguity.plainPipe]));
   });
 }
