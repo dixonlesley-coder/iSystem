@@ -69,6 +69,12 @@ final sizingContextProvider = Provider<SizingContext>((ref) {
   );
 });
 
+// Round 32: this provider is often FIRST built from inside another provider's
+// build (downfeedProvider, the SNI-minimum chain). A `ref.listen` on it, or on
+// anything derived from it, must never write Notifier state synchronously —
+// defer the write (a mounted-guarded microtask, as AppShell's first-auto-size
+// nudge does) or Riverpod asserts 'Providers are not allowed to modify other
+// providers during their initialization' (a hash-order flake in the goldens).
 final sizingProvider = Provider<Map<String, EdgeSizing>>(
     (ref) => ref.watch(sizingDetailProvider).sizing);
 
