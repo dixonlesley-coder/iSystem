@@ -1486,8 +1486,16 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   second VTR of a headered pair never takes the 2-DFU leaf default — and a
   run VTR is the stack's roof termination: it counts in the uniform stack
   like a shared riser (its load less the header load entering the stack) and
-  never prints below the stack, so a run VTR sizes the stack exactly as a VTR
-  riser does. Pre-existing residual (r4): a vent component with NO VTR at all
+  never prints below the stack, so a degree-1 run VTR off the stack top
+  sizes the stack exactly as a VTR riser does. Recorded residuals (r4
+  review, pre-existing, under-size direction): a roof header whose one VTR
+  hangs from a BARE mid-header node (stack top -> HX -> other stack top,
+  HX -> VTR) leaves the top-floor tie bypassing every riser, so the stack
+  sizes one DN small; and the run-VTR rule keys on the COMPONENT's top
+  storey, so a component mixing a riser VTR and a run VTR misses the run one
+  (+1 DN on the other stack). A hotel return teed AT / BEYOND an inline top
+  fixture keeps the right trunk but Hardy–Cross shares draw-off up its return
+  risers, which can leave a second riser BASE one DN small. Pre-existing residual (r4): a vent component with NO VTR at all
   sizes both headered stacks on the combined load (over-size on an invalid
   design). RETURN check valves (r4, binding): when every cycle check valve
   of a pressurized component is a RETURN valve its two edges are ALWAYS out
