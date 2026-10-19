@@ -180,10 +180,11 @@ void main() {
       leafDemand: const {},
       nodeDrainageUnits: const {'f1': 4.0, 'f2': 4.0}, // two WCs (flush tank)
     );
-    // Trunk carries 8 DFU → branch table row (≤12) = 75 mm; a single fixture
-    // branch carries 4 DFU → (≤6) = 65 mm.
-    expect(sized['t']!.diameter.inMillimeters, 75);
-    expect(sized['b1']!.diameter.inMillimeters, 65);
+    // Trunk carries 8 DFU → branch table row (≤12, 2½ in) = 65 mm; a single
+    // fixture branch carries 4 DFU → (≤6, 2 in) = 50 mm (IPC 710.1(2),
+    // Round 30). These are bare DFU loads (no WC node), so no WC floor.
+    expect(sized['t']!.diameter.inMillimeters, 65);
+    expect(sized['b1']!.diameter.inMillimeters, 50);
     expect(sized['t']!.service, ServiceType.drainage);
   });
 

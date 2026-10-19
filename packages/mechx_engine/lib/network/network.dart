@@ -854,10 +854,39 @@ Length runVerticalLeg(
   MountingHeights mounting = const MountingHeights(),
 }) {
   if (edge.kind == EdgeKind.riser) return const Length(0);
-  if (edge.service.regime == FlowRegime.gravity) return const Length(0);
   final a = net.nodeById(edge.fromId);
   final b = net.nodeById(edge.toId);
   if (a == null || b == null) return const Length(0);
+  if (edge.service.regime == FlowRegime.gravity) {
+    // Round 30 (mech-sim-4-rainwater-top-junction-under-slab) — the one
+    // gravity exception: a ROOF DRAIN's leader run to a bare rainwater
+    // junction drops from the roof (the drain sits ON it) to the junction's
+    // under-slab datum ([gravityRiserEndElevation]). Without it the storey
+    // between the roof and the top floor's under-slab datum was in no BOM /
+    // riser length, while drawing the same downpipe as a riser counted it.
+    // `// VERIFY` notAnSniClause (modelling datum, no invert model).
+    if (edge.service != ServiceType.rainwater) return const Length(0);
+    NetNode? drain, junction;
+    for (final (x, y) in [(a, b), (b, a)]) {
+      if (x.component == NodeComponent.roofDrain &&
+          x.elevation == null &&
+          x.mountHeight == null &&
+          y.component == null &&
+          y.role == NodeRole.main &&
+          y.elevation == null &&
+          y.mountHeight == null) {
+        drain = x;
+        junction = y;
+      }
+    }
+    if (drain == null || junction == null) return const Length(0);
+    final dz = (nodeElevation(drain, building, mounting).meters -
+            gravityRiserEndElevation(
+                    junction, building, mounting, ServiceType.rainwater)
+                .meters)
+        .abs();
+    return Length(dz < 1e-6 ? 0 : dz);
+  }
   final dz = (runConnectionElevation(b, building, mounting).meters -
           runConnectionElevation(a, building, mounting).meters)
       .abs();

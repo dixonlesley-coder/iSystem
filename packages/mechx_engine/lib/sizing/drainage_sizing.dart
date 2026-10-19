@@ -72,11 +72,17 @@ double drainageFixtureUnit(PlumbingFixture fixture) {
 
 // Threshold tables: (maxDfu, diameterMm) ascending; pick the first row whose
 // maxDfu ≥ the accumulated DFU.
+// Round 30 (mech-sim-4-branch-dfu-table-shifted) — IPC Table 710.1(2)
+// horizontal fixture branch capacities paired with the RIGHT diameters:
+// 1½ in (DN40) 3 DFU, 2 in (DN50) 6, 2½ in (DN65) 12, 3 in (DN75) 20, 4 in
+// (DN100) 160. The previous rows had slid the diameter column down one row
+// (the duplicate (12,75),(20,75) gave it away), issuing every 2–12 DFU branch
+// one nominal size large. The trap / WC floors (kMinTrapDrainMm,
+// kMinWcDrainMm) still floor showers at DN50 and WCs at DN75.
 const List<(double, double)> _branchDfuTable = [
-  (1, 40),
-  (3, 50),
-  (6, 65),
-  (12, 75),
+  (3, 40),
+  (6, 50),
+  (12, 65),
   (20, 75),
   (160, 100),
   (360, 125),

@@ -25,9 +25,14 @@ void main() {
       expect(drainageFixtureUnit(PlumbingFixture.hoseBibb), 0);
     });
 
-    test('branch diameter rises with DFU (40→65→100 mm)', () {
+    test('branch diameter rises with DFU (40→50→65→100 mm)', () {
+      // IPC Table 710.1(2) horizontal branch: 1½ in ≤ 3, 2 in ≤ 6,
+      // 2½ in ≤ 12, 3 in ≤ 20, 4 in ≤ 160 DFU.
       expect(drainDiameterForDfu(1, isStack: false).inMillimeters, 40);
-      expect(drainDiameterForDfu(6, isStack: false).inMillimeters, 65);
+      expect(drainDiameterForDfu(3, isStack: false).inMillimeters, 40);
+      expect(drainDiameterForDfu(6, isStack: false).inMillimeters, 50);
+      expect(drainDiameterForDfu(12, isStack: false).inMillimeters, 65);
+      expect(drainDiameterForDfu(20, isStack: false).inMillimeters, 75);
       expect(drainDiameterForDfu(150, isStack: false).inMillimeters, 100);
     });
 

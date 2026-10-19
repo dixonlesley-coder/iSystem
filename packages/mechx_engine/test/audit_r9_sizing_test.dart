@@ -96,9 +96,10 @@ void main() {
     test('2 WCs (8 DFU) on a branch stay DN75', () {
       expect(wcRow(2)['e0']!.diameter.inMillimeters, 75);
     });
-    test('3 WCs (12 DFU — DN75 by the table) on a branch ⇒ DN100', () {
-      // Branch table: 12 DFU → DN75; IPC 710.1(2) footnote: > 2 WCs ⇒ 4 in.
-      expect(drain.drainDiameterForDfu(12, isStack: false).inMillimeters, 75);
+    test('3 WCs (12 DFU — DN65 by the table) on a branch ⇒ DN100', () {
+      // Branch table (Round 30, IPC 710.1(2)): 12 DFU → 2½ in = DN65; the
+      // WC floor lifts it, and IPC 710.1(2) footnote: > 2 WCs ⇒ 4 in.
+      expect(drain.drainDiameterForDfu(12, isStack: false).inMillimeters, 65);
       final s = wcRow(3);
       expect(s['e0']!.diameter.inMillimeters, 100); // carries all 3
       expect(s['e1']!.diameter.inMillimeters, 75); // carries 2

@@ -401,9 +401,25 @@ const double _kPassThroughCos = -0.978;
 /// an elbow. A node whose incident edges have more than one diameter also adds
 /// (distinctDiameters − 1) reducers. Fitting size = the largest incident
 /// diameter; fitting material = that edge's [bomMaterialFor] code.
+///
+/// Round 30 (costing-2-2) — with [building] given, every sized RUN whose
+/// length carries a vertical leg ([runVerticalLeg] > 0 — a ceiling main
+/// dropping to a fixture, a floor pump rising to the main) over a non-zero
+/// horizontal span adds ONE elbow at its own size: the bend where the
+/// horizontal run turns into the drop / rise. Its pipe was already bought
+/// ([edgeLength]); the count no longer depends on whether the drop was drawn
+/// as a riser. A zero-span run (the tee outlet turns straight down) adds none.
+/// Null ⇒ the legacy topology-only count.
+///
+/// Round 30 (costing-2-4) — a PLANT node (tank nozzles, pump flanges, AHU /
+/// fan spigots) counts no elbow / tee / cross: its connections are separate
+/// equipment nozzles, not a pipe fitting. A size change there still counts
+/// its reducer.
 List<FittingLine> buildFittings({
   required Network net,
   required Map<String, EdgeSizing> sizing,
+  BuildingLevels? building,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   // node → service → incident (diameter mm, edge), sized edges only.
   final byNode = <String, Map<ServiceType, List<(int, NetEdge)>>>{};
@@ -494,7 +510,10 @@ List<FittingLine> buildFittings({
       final mm = best.$1;
       final mat = bomMaterialFor(best.$2);
       final rect = rectOf[best.$2.id];
-      if (k == 2) {
+      final plant = net.nodeById(nodeId)?.role == NodeRole.plant;
+      if (plant) {
+        // Equipment nozzles: no elbow / tee / cross (reducers below).
+      } else if (k == 2) {
         if (inlineTerminal(nodeId)) {
           add(service, FittingType.tee, mm, mat, 1, rect);
         } else if (!isPassThrough(nodeId, incident[0].$2, incident[1].$2)) {
@@ -515,6 +534,20 @@ List<FittingLine> buildFittings({
       }
     });
   });
+
+  if (building != null) {
+    for (final edge in net.edges) {
+      if (edge.kind != EdgeKind.run) continue;
+      final es = sizing[edge.id];
+      if (es == null) continue;
+      if (runPixelLength(edge, net) <= 1e-9) continue;
+      final leg =
+          runVerticalLeg(edge, net, building: building, mounting: mounting);
+      if (leg.meters <= 0) continue;
+      add(edge.service, FittingType.elbow, es.diameter.inMillimeters.round(),
+          bomMaterialFor(edge), 1, rectOf[edge.id]);
+    }
+  }
 
   final lines = [
     for (final e in acc.entries)

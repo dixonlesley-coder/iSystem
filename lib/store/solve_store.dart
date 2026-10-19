@@ -1440,12 +1440,28 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
   );
   // The span is ceiling(top) − fixture(bottom), so it must use the PROJECT
   // mounting heights (F8) — the same ones the solves/BOM/report use.
+  // Round 30 (mech-sim-4-phantom-basement-prv-zone) — with a supply network
+  // drawn, the walk stops at the lowest floor carrying a cold / hot water
+  // DELIVERY node: a fixture-less basement the riser only passes opens no
+  // PRV station. Nothing drawn ⇒ the full-building walk.
+  final net = ref.watch(sizingNetworkProvider);
+  final waterIds = <String>{
+    for (final e in net.edges)
+      if (e.service == ServiceType.coldWater ||
+          e.service == ServiceType.hotWater) ...[e.fromId, e.toId],
+  };
+  int? lowest;
+  for (final n in net.nodes) {
+    if (n.role != NodeRole.fixture || !waterIds.contains(n.id)) continue;
+    if (lowest == null || n.floorIndex < lowest) lowest = n.floorIndex;
+  }
   return computeDownfeedZones(
     building: project.building,
     mounting: project.mounting,
     maxStaticPressure: effective,
     tankElevation: ref.watch(downfeedTankElevationProvider),
     maxFixtureStatic: maxFix,
+    lowestServedFloor: lowest ?? 0,
   );
 });
 
@@ -2162,7 +2178,12 @@ final fittingsProvider = Provider<List<FittingLine>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   if (sizing.isEmpty) return const [];
-  return buildFittings(net: net, sizing: sizing);
+  final project = ref.watch(projectControllerProvider);
+  return buildFittings(
+      net: net,
+      sizing: sizing,
+      building: project.building,
+      mounting: project.mounting);
 });
 
 /// Key for [heatmapFieldProvider]: the sheet/floor being rendered plus the
