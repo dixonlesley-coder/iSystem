@@ -431,7 +431,10 @@ List<BomLine> _panelLines(
     // Branch breaker.
     lines.add(breakerLine(
       '${_classStr(c.breaker.deviceClass)} ${_fmt(c.breaker.ratingA.amperes)}A '
-      'curve ${_curveStr(c.breaker.curve)} — ${c.name}',
+      // Round 23 r2 — only an MCB carries a B/C/D curve; an MCCB / ACB has
+      // an adjustable trip unit, so its line names no curve letter.
+      '${c.breaker.deviceClass.hasTripCurve ? 'curve ${_curveStr(c.breaker.curve)} ' : ''}'
+      '— ${c.name}',
       c.breaker,
       poles,
       specifiedKa: breakerKaByCircuitId[c.circuitId],

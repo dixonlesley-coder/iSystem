@@ -2174,8 +2174,19 @@ Future<bool> writeSubmittalPackageToDir(
             sheetName: sheet.name,
             chrome: eChrome,
             // Round 23 (elec-drafting-2-3) — world millimetres + the PDF's
-            // snapped 1 : N, like the mechanical plan DXF beside it.
+            // snapped 1 : N, like the mechanical plan DXF beside it. The N
+            // is the PDF twin's own fit (same args, underlay frame + real
+            // title block included), so the two sheets stamp one scale.
             metersPerPixel: metersPerPixel,
+            plottedScaleDenominator: electricalPlanPlottedScaleDenominator(
+              data: ePlan,
+              projectName: base,
+              sheetName: sheet.name,
+              dateString: today,
+              chrome: eChrome,
+              metersPerPixel: metersPerPixel,
+              underlay: underlay,
+            ),
           ),
         );
       }

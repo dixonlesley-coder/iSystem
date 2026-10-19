@@ -1161,6 +1161,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         // Round 23 (mep-bridge-5) — record provenance: a typed factor is the
         // engineer's and the MEP sync never re-derives it.
         demandFactorUserSet: demandFactor != null ? true : null,
+        // Round 23 r2 (mep-bridge-2) — the same provenance for the way's
+        // electrical character, so the MEP sync never reverts a typed value.
+        cosPhiUserSet: cosPhi != null ? true : null,
+        phasesUserSet: (phases != null || clearPhases) ? true : null,
+        loadKindUserSet: loadKind != null ? true : null,
         length: length,
         phases: phases,
         clearPhases: clearPhases,
@@ -2482,6 +2487,9 @@ ElectricalCircuit _parkedMepWay(ElectricalCircuit c) => ElectricalCircuit(
       starterType: c.starterType,
       loadPos: c.loadPos,
       demandFactorUserSet: c.demandFactorUserSet,
+      cosPhiUserSet: c.cosPhiUserSet,
+      phasesUserSet: c.phasesUserSet,
+      loadKindUserSet: c.loadKindUserSet,
     );
 
 /// A [parked] way re-claimed by the [fresh] derived circuit for the SAME source
@@ -2531,14 +2539,16 @@ ElectricalCircuit _refreshedMepWay(
   // Round 23 (mep-bridge-2) — a component swap on the SAME node keeps the
   // way id, so the electrical character (phases / load kind / cos phi) is
   // re-derived from the fresh mint (a phase PIN stays the engineer's), and a
-  // name the app supplied follows the new unit.
+  // name the app supplied follows the new unit. Round 23 r2 — provenance: a
+  // cos phi / phase count / load kind the engineer TYPED (`*UserSet`) is
+  // never overwritten by the re-derivation.
   final mintedName = mepMintedCircuitNames.contains(c.name);
   return c.copyWith(
     name: mintedName ? fresh.name : null,
-    phases: fresh.phases,
-    clearPhases: fresh.phases == null,
-    loadKind: fresh.loadKind,
-    cosPhi: fresh.cosPhi,
+    phases: c.phasesUserSet ? null : fresh.phases,
+    clearPhases: !c.phasesUserSet && fresh.phases == null,
+    loadKind: c.loadKindUserSet ? null : fresh.loadKind,
+    cosPhi: c.cosPhiUserSet ? null : fresh.cosPhi,
     demandFactor: mintedDemand ? fresh.demandFactor : null,
     loadW: fresh.loadW,
     motorKw: fresh.motorKw,
@@ -2582,6 +2592,10 @@ bool _isPristineDerivedWay(ElectricalCircuit c) =>
     // dropped).
     !c.demandFactorUserSet &&
     ((c.demandFactor - 1).abs() < 1e-9 || c.demandFactor.abs() < 1e-9) &&
+    // Round 23 r2 — a typed cos phi / phases / load kind is the engineer's.
+    !c.cosPhiUserSet &&
+    !c.phasesUserSet &&
+    !c.loadKindUserSet &&
     !c.busbarBreakBefore &&
     (c.length.meters - kDefaultCircuitLength.meters).abs() < 1e-9 &&
     // A life-safety way is MINTED on FRC (audit r8 coupling-5), so FRC there

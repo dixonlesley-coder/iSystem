@@ -1017,6 +1017,14 @@ void main(List<String> args) {
           sheetName: 'Denah Lantai Dasar',
           chrome: elecChromeFor(DrawingSeries.electricalLayout),
           metersPerPixel: calibrations['s0']?.metersPerPixel,
+          plottedScaleDenominator: electricalPlanPlottedScaleDenominator(
+            data: planData,
+            projectName: projectName,
+            sheetName: 'Denah Lantai Dasar',
+            dateString: dateString,
+            chrome: elecChromeFor(DrawingSeries.electricalLayout),
+            metersPerPixel: calibrations['s0']?.metersPerPixel,
+          ),
         ));
   });
 

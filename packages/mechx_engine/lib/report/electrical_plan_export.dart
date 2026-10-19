@@ -246,14 +246,27 @@ String _pdfText(String raw) => pdfWinAnsiText(raw);
 const _kNormalInk = (0.10, 0.10, 0.10);
 const _kEssentialInk = (0.80, 0.12, 0.12);
 
-/// Render the [data] for one sheet+floor as a single-page ANNOTATED electrical
-/// layout PDF and return its bytes. Mirrors [planToPdf]'s fit / snap / chrome
-/// pipeline: the drawing auto-fits (centred, uniform scale) into [paper],
-/// SNAPS to a standard plotted scale when [metersPerPixel] is given, paints an
-/// optional floor-plan [underlay] beneath, and stamps the [chrome] frame /
-/// title block / scale bar / north arrow. [projectName] / [sheetName] /
-/// [dateString] populate the title block (the engine never reads the clock).
-Uint8List electricalPlanToPdf({
+const double _kElecPlanMargin = 48.0;
+
+typedef _ElecPlanFit = ({
+  double minX,
+  double minY,
+  double spanX,
+  double spanY,
+  double availW,
+  double availH,
+  String blockTitle,
+  String blockDate,
+  PlottedScale snap,
+});
+
+/// The ONE fit / snap computation of the electrical layout PDF — bounds over
+/// every node, route endpoint AND the underlay frame, the real page less its
+/// margins and the ACTUAL title-block height, snapped to the plan scale
+/// ladder. Shared by [electricalPlanToPdf] and (via
+/// [electricalPlanPlottedScaleDenominator]) the DXF twin, so both stamp the
+/// same `1 : N` (Round 23 r2, elec-drafting-2-3 parity).
+_ElecPlanFit _electricalPlanFit({
   required ElectricalPlanData data,
   required String projectName,
   required String sheetName,
@@ -265,7 +278,7 @@ Uint8List electricalPlanToPdf({
 }) {
   final pageW = paper.widthPt;
   final pageH = paper.heightPt;
-  const margin = 48.0;
+  const margin = _kElecPlanMargin;
 
   // ── Bounds (sheet pixels) over every node + route endpoint + underlay frame ──
   var minX = double.infinity, minY = double.infinity;
@@ -328,7 +341,85 @@ Uint8List electricalPlanToPdf({
       metersPerPixel: metersPerPixel,
       hasContent: hasContent,
       paperLabel: paper.label);
-  scale = snap.scale;
+  return (
+    minX: minX,
+    minY: minY,
+    spanX: spanX,
+    spanY: spanY,
+    availW: availW,
+    availH: availH,
+    blockTitle: blockTitle,
+    blockDate: blockDate,
+    snap: snap,
+  );
+}
+
+/// The snapped plotted-scale denominator ([kPlanScaleLadder]) the electrical
+/// layout PDF prints for these inputs (`1 : N @ A3`), or null when it prints
+/// NTS (uncalibrated, empty, or too large even for 1 : 1000). Pass the SAME
+/// arguments as the [electricalPlanToPdf] call so the DXF twin
+/// ([electricalPlanToDxf] `plottedScaleDenominator`) stamps the identical
+/// scale. Pure.
+int? electricalPlanPlottedScaleDenominator({
+  required ElectricalPlanData data,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
+}) {
+  final snap = _electricalPlanFit(
+          data: data,
+          projectName: projectName,
+          sheetName: sheetName,
+          dateString: dateString,
+          chrome: chrome,
+          metersPerPixel: metersPerPixel,
+          underlay: underlay,
+          paper: paper)
+      .snap;
+  final m = RegExp(r'^1 : (\d+) @').firstMatch(snap.scaleRow);
+  return m == null ? null : int.parse(m.group(1)!);
+}
+
+/// Render the [data] for one sheet+floor as a single-page ANNOTATED electrical
+/// layout PDF and return its bytes. Mirrors [planToPdf]'s fit / snap / chrome
+/// pipeline: the drawing auto-fits (centred, uniform scale) into [paper],
+/// SNAPS to a standard plotted scale when [metersPerPixel] is given, paints an
+/// optional floor-plan [underlay] beneath, and stamps the [chrome] frame /
+/// title block / scale bar / north arrow. [projectName] / [sheetName] /
+/// [dateString] populate the title block (the engine never reads the clock).
+Uint8List electricalPlanToPdf({
+  required ElectricalPlanData data,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  DrawingChrome? chrome,
+  double? metersPerPixel,
+  PlanUnderlay? underlay,
+  PaperSize paper = PaperSize.a3Landscape,
+}) {
+  final pageW = paper.widthPt;
+  final pageH = paper.heightPt;
+  const margin = _kElecPlanMargin;
+  final fit = _electricalPlanFit(
+      data: data,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      chrome: chrome,
+      metersPerPixel: metersPerPixel,
+      underlay: underlay,
+      paper: paper);
+  final minX = fit.minX, minY = fit.minY;
+  final spanX = fit.spanX, spanY = fit.spanY;
+  final availW = fit.availW, availH = fit.availH;
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  final blockTitle = fit.blockTitle, blockDate = fit.blockDate;
+  final snap = fit.snap;
+  final scale = snap.scale;
   final scaleRow = snap.scaleRow;
   final pointsPerMeter = snap.pointsPerMeter;
 
@@ -503,7 +594,10 @@ Uint8List electricalPlanToPdf({
 /// `$MEASUREMENT` 1), like the mechanical plan DXF: a 15.0 m route measures
 /// 15000 units, so the denah xrefs onto the architect's mm DWG at 1:1, and
 /// the SCALE row stamps the same snapped `1 : N @ A3` the PDF twin prints
-/// (annotation sized for that plot, symbols in paper mm). Uncalibrated (null)
+/// (annotation sized for that plot, symbols in paper mm). Pass
+/// [plottedScaleDenominator] = [electricalPlanPlottedScaleDenominator] over
+/// the PDF call's own arguments (underlay frame + real title block) so the
+/// two stamp the identical rung; null falls back to the A3 extent estimate. Uncalibrated (null)
 /// keeps the legacy sheet-pixel drawing with SCALE NTS, byte-identical.
 String electricalPlanToDxf({
   required ElectricalPlanData data,
@@ -512,6 +606,7 @@ String electricalPlanToDxf({
   DrawingChrome? chrome,
   SldDxfLayers layers = SldDxfLayers.electrical,
   double? metersPerPixel,
+  int? plottedScaleDenominator,
 }) {
   final world = metersPerPixel != null &&
       metersPerPixel.isFinite &&
@@ -540,7 +635,8 @@ String electricalPlanToDxf({
       grow(r.x2, r.y2);
     }
     if (x0.isFinite) {
-      plotN = a3PlottedScaleDenominatorFor(x1 - x0, y1 - y0);
+      plotN = plottedScaleDenominator ??
+          a3PlottedScaleDenominatorFor(x1 - x0, y1 - y0);
       final span = math.max(x1 - x0, y1 - y0);
       u = plotN != null
           ? plotN.toDouble()

@@ -499,16 +499,33 @@ Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
           calibrations: mech.calibrations,
           building: mech.building,
         );
+        final projectName = electricalSheetProjectName(ref) ?? 'electrical';
+        final chrome = electricalExportChrome(ref,
+                series: DrawingSeries.electricalLayout)
+            .withTitle(drawingSeriesTitle(DrawingSeries.electricalLayout,
+                sheetName: sheet.name));
+        final metersPerPixel = mech.calibrationFor(sheet.id)?.metersPerPixel;
         final dxf = electricalPlanToDxf(
           data: data,
-          projectName: electricalSheetProjectName(ref) ?? 'electrical',
+          projectName: projectName,
           sheetName: sheet.name,
-          chrome: electricalExportChrome(ref,
-                  series: DrawingSeries.electricalLayout)
-              .withTitle(drawingSeriesTitle(DrawingSeries.electricalLayout,
-                  sheetName: sheet.name)),
-          // Round 23 (elec-drafting-2-3) — world millimetres + snapped 1 : N.
-          metersPerPixel: mech.calibrationFor(sheet.id)?.metersPerPixel,
+          chrome: chrome,
+          // Round 23 (elec-drafting-2-3) — world millimetres + the snapped
+          // 1 : N of the PDF twin (its own fit: underlay frame + the real
+          // title block), so the DXF and PDF stamp one scale.
+          metersPerPixel: metersPerPixel,
+          plottedScaleDenominator: metersPerPixel == null
+              ? null
+              : electricalPlanPlottedScaleDenominator(
+                  data: data,
+                  projectName: projectName,
+                  sheetName: sheet.name,
+                  dateString:
+                      DateTime.now().toIso8601String().split('T').first,
+                  chrome: chrome,
+                  metersPerPixel: metersPerPixel,
+                  underlay: await buildPlanUnderlay(sheet),
+                ),
         );
         return _save(ref, dxf,
             name: project.name,
