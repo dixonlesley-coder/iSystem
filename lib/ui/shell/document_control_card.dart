@@ -60,8 +60,9 @@ class _DocumentControlCardState extends ConsumerState<DocumentControlCard> {
     final ctrl = ref.read(documentControlProvider.notifier);
 
     // A labelled single-line field. The store setter normalizes (trims; an
-    // emptied field clears back to null), so committing on every change is
-    // safe — the same idiom as the project-name field on the Projects page.
+    // emptied field clears back to null). Round 29 — it commits on blur /
+    // Enter (the project-name idiom), so one edit = ONE settings undo step,
+    // never one step per keystroke.
     Widget field(
       StringKey label,
       String? value,
@@ -76,7 +77,7 @@ class _DocumentControlCardState extends ConsumerState<DocumentControlCard> {
             style: type.caption.copyWith(color: colors.textMuted),
           ),
           const SizedBox(height: MechXSpacing.xs),
-          MechXTextField(value: value ?? '', onChanged: onChanged),
+          MechXTextField(value: value ?? '', onCommitted: onChanged),
         ],
       ),
     );

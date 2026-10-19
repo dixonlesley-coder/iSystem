@@ -613,7 +613,12 @@ const List<String> _baseVerifyItems = [
 ///
 /// - [circuitId] namespaces every instantiated device / interlock id.
 /// - [motorKw] sizes contactors / overload / VFD via the FLC table.
-/// - [voltage] scales the FLC (FLC ∝ 1/V).
+/// - [voltage] scales the FLC (FLC ∝ 1/V). For a [singlePhase] motor it is
+///   the PHASE voltage the machine runs at (U0, ~230 V on a 400 V board).
+/// - [singlePhase] (Round 29) sizes the gear on the single-phase FLC
+///   ([motorFlc1ph], `P / (U0 · η·cosφ)`) instead of the 3-phase 400 V table
+///   — a 2.2 kW 1φ motor draws ~14 A, not the 5 A a 3φ machine of the same
+///   rating does; an overload set at 5 A would trip on every start.
 /// - [duty] (`jogging` = AC-4) enlarges the contactor frame and the trip class.
 /// - [variableTorque] (pump/fan) refines the VFD starting note.
 ControlAssembly applyStarterTemplate({
@@ -624,8 +629,12 @@ ControlAssembly applyStarterTemplate({
   Voltage voltage = const Voltage(400),
   StartingDuty duty = StartingDuty.normal,
   bool variableTorque = false,
+  bool singlePhase = false,
 }) {
-  final flc = Current(_round(motorFlc(motorKw, voltage).amperes, 1));
+  final flc = Current(_round(
+      (singlePhase ? motorFlc1ph(motorKw, voltage) : motorFlc(motorKw, voltage))
+          .amperes,
+      1));
   final template = starterTemplates[starterType];
   final warnings = <String>[];
   final verifyItems = <String>[..._baseVerifyItems];

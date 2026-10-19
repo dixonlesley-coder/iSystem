@@ -131,13 +131,17 @@ List<BomLine> advancedBomLines({
   }
 
   // ── Main earthing conductor (BC bare copper, MET → electrode) ────────────
-  final met = sys.earthing.mainEarthingConductorMm2;
+  // Round 29 — ordered as its ladder make-up: n parallel conductors of one
+  // ladder section (never an unorderable `1x600 mm²`).
+  final met = sys.earthing.mainEarthingPerConductorMm2;
+  final metCount = sys.earthing.mainEarthingConductorCount;
   if (sys.panels.isNotEmpty && met > 0) {
     final csa = _fmt(met);
     lines.add(BomLine(
-      description: 'Main earthing conductor BC 1x$csa mm² (lot, run length '
-          'per site)',
-      qty: 1,
+      description: 'Main earthing conductor BC 1x$csa mm² '
+          '${metCount > 1 ? '($metCount in parallel, lot each, run length per '
+              'site)' : '(lot, run length per site)'}',
+      qty: metCount.toDouble(),
       category: PartCategory.accessory,
       priceKey: '${kElecPriceKeyPrefix}earthing:bc:$csa',
     ));

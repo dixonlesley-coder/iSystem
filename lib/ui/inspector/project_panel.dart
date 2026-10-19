@@ -187,7 +187,10 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       net.edges.any((e) => e.service == ServiceType.fireSprinkler);
   final hydrantDrawn =
       net.edges.any((e) => e.service == ServiceType.fireHydrant);
-  final standpipe = hydrantDrawn ? ref.read(standpipeDesignProvider) : null;
+  // Round 29 — the governing hydrant system's design (friction-inclusive),
+  // so the standpipe line agrees with the fire-pump rating beside it.
+  final standpipe =
+      hydrantDrawn ? ref.read(reportStandpipeDesignProvider) : null;
   final hwRecirc = ref.read(hotWaterRecircProvider);
   // Round 20 (drafting-visual-4-1) — the feed the report describes is the
   // DRAWN feed, on the same evidence as the riser sheet's `riserFeedNote`

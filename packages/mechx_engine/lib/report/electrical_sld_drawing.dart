@@ -40,7 +40,8 @@ import '../electrical/sources.dart'
         GeneratorSource,
         sizeGenerator,
         sizeBattery;
-import '../electrical/supply_design.dart' show serviceTransformer;
+import '../electrical/supply_design.dart'
+    show isDeclaredMvService, serviceTransformer;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart'
     show BreakerCurve, BreakerClass, BreakerClassCode;
@@ -1519,8 +1520,10 @@ void _emitPvArray(List<SldPrim> out, double cx, double cy, SldRole role) {
 /// TRAFO to draw). Distributed sources (genset / solar / battery /
 /// capacitor) do NOT imply an MV service — they hang off the LV side of
 /// whichever service exists.
-bool _isMvService(ElectricalProject project) =>
-    project.transformerKva != null || project.dualTransformer;
+///
+/// Round 29 — the engine's ONE predicate ([isDeclaredMvService]): a declared
+/// connection capacity above the PLN LV ceiling is a TM (MV) service too.
+bool _isMvService(ElectricalProject project) => isDeclaredMvService(project);
 
 /// The SUPPLY-head node name for the project's primary supply kind, with the
 /// declared connection capacity appended when set (`PLN MV STATION 197 kVA` /

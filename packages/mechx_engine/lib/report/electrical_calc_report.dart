@@ -461,7 +461,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     ..add(RptHeading(2, strings(RptStringKey.headingEarthing)))
     ..add(RptKeyValue([
       (strings(RptStringKey.ssSystem), e.label),
-      (strings(RptStringKey.eMainEarthing), '${_n(e.mainEarthingConductorMm2)} mm²'),
+      (strings(RptStringKey.eMainEarthing), '${e.mainEarthingMakeup} mm²'),
       (strings(RptStringKey.eMainBonding), '${_n(e.mainBondingConductorMm2)} mm²'),
       (
         strings(RptStringKey.eElectrodeTarget),

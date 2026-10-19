@@ -221,7 +221,9 @@ class _PriceFieldState extends ConsumerState<_PriceField> {
           MechXTextField(
             value: widget.value == null ? '' : _fmt(widget.value!),
             hint: CommercialFormat.money(0),
-            onChanged: (s) {
+            // Round 29 — commit on blur / Enter: one price edit = ONE
+            // settings undo step (was one per keystroke).
+            onCommitted: (s) {
               final trimmed = s.trim();
               if (trimmed.isEmpty) {
                 setState(() => _invalid = false);

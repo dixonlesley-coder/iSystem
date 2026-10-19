@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/document_control_store.dart';
+import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/ui/shell/document_control_card.dart';
@@ -190,9 +191,22 @@ void main() {
         matching: find.byType(MechXTextField));
     // DRAWN / CHECKED / APPROVED, then the two add-revision fields.
     expect(fields, findsNWidgets(5));
+    // Round 29 — the sign-off fields commit on Enter / blur, never per
+    // keystroke (one settings undo step per edit).
     await tester.enterText(fields.at(0), 'AB');
+    expect(container.read(documentControlProvider).preparedBy, isNull);
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
     await tester.enterText(fields.at(2), 'CD');
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
     expect(container.read(documentControlProvider).preparedBy, 'AB');
+    expect(container.read(documentControlProvider).approvedBy, 'CD');
+    // One undo reverts the whole two-letter edit (was: back to 'C').
+    container.read(historyProvider.notifier).undo();
+    expect(container.read(documentControlProvider).approvedBy, isNull);
+    expect(container.read(documentControlProvider).preparedBy, 'AB');
+    container.read(historyProvider.notifier).redo();
     expect(container.read(documentControlProvider).approvedBy, 'CD');
 
     await tester.enterText(fields.at(3), '2026-10-17');

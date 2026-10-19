@@ -94,13 +94,15 @@ class DocumentControlController extends Notifier<DocumentControl> {
         ));
   }
 
+  // Round 29 — null encodes as a control character, never the string
+  // 'null' (typing a name literally 'null' over an empty field is a change).
   static String _signature(DocumentControl d) => [
-        d.documentNumber,
-        d.revisionTag,
-        d.clientName,
-        d.preparedBy,
-        d.checkedBy,
-        d.approvedBy,
+        d.documentNumber ?? '\u0002',
+        d.revisionTag ?? '\u0002',
+        d.clientName ?? '\u0002',
+        d.preparedBy ?? '\u0002',
+        d.checkedBy ?? '\u0002',
+        d.approvedBy ?? '\u0002',
         for (final r in d.revisions) '${r.date}\u0001${r.description}',
       ].join('\u0000');
 

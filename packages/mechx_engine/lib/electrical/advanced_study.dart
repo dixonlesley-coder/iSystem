@@ -28,11 +28,14 @@
 /// Pure + deterministic — zero Flutter imports.
 library;
 
+import 'dart:math' as math;
+
 import '../standards/puil.dart' show BreakerClass, ElectricalStandardsProfile;
 import '../units.dart';
 import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
+import 'compute.dart' show circuitIsThreePhase;
 import 'containment.dart' show ContainmentResult, containmentFor;
 import 'control/starter.dart'
     show ControlAssembly, StarterType, applyStarterTemplate;
@@ -73,7 +76,13 @@ import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
-    show SupplyDesign, determineSupply, recommendedDaya, serviceTransformer;
+    show
+        SupplyDesign,
+        declaredServiceTransformerKva,
+        determineSupply,
+        isDeclaredMvService,
+        recommendedDaya,
+        serviceTransformer;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
 
@@ -221,6 +230,12 @@ AdvancedStudy computeAdvancedStudy(
   Current? originFaultLevel,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
+  // Round 29 — the SOLVED phase of each way (a 1φ motor's starter / overload
+  // size on the 1φ FLC at U0, never the 3φ 400 V table).
+  final threePhaseByCircuit = <String, bool>{
+    for (final pr in sys.panels.values)
+      for (final r in pr.circuits) r.circuitId: r.threePhase,
+  };
 
   // 1 ── Control assemblies (per motor/pump circuit with an explicit starter).
   final controlAssemblies = <String, ControlAssembly>{};
@@ -233,11 +248,24 @@ AdvancedStudy computeAdvancedStudy(
       if (!_isMotorLike(c)) continue;
       final motorKw = _motorKw(c);
       if (motorKw <= 0) continue;
+      final threePhase = threePhaseByCircuit[c.id] ??
+          circuitIsThreePhase(
+            panelSystem: panel.system,
+            kind: c.loadKind,
+            loadW: c.loadW,
+            motorKw: c.motorKw,
+            phases: c.phases,
+          );
+      // U0 for a 1φ way on a 3φ board (the rounding compute.dart uses).
+      final u0 = panel.system == ElectricalSystem.threePhase
+          ? (panel.voltage.volts / math.sqrt(3)).roundToDouble()
+          : panel.voltage.volts;
       final assembly = applyStarterTemplate(
         circuitId: c.id,
         starterType: c.starterType!,
         motorKw: motorKw,
-        voltage: panel.voltage,
+        voltage: threePhase ? panel.voltage : Voltage(u0),
+        singlePhase: !threePhase,
         variableTorque:
             c.starterType == StarterType.vfd && c.loadKind == LoadKind.pump,
       );
@@ -382,7 +410,9 @@ AdvancedStudy computeAdvancedStudy(
   final supply = determineSupply(
     sys.supply.demandVa,
     dualTransformer: project.dualTransformer,
-    declaredKva: project.transformerKva,
+    // Round 29 — the ONE declared rating (a connection capacity above the
+    // LV ceiling is a TM service on its snapped transformer).
+    declaredKva: declaredServiceTransformerKva(project),
   );
   final daya = supply.declared
       ? null
@@ -714,7 +744,7 @@ List<String> _aggregateVerify(List<List<String>?> lists) {
 /// builder's `<V> V LV` stands).
 String? powerOneLineUtilitySub(
     ElectricalProject project, ApparentPower demandVa) {
-  if (project.transformerKva == null && !project.dualTransformer) return null;
+  if (!isDeclaredMvService(project)) return null;
   final t = serviceTransformer(project, demandVa);
   if (t == null || t.kva <= 0) return 'MV via TX';
   String n(double v) =>
