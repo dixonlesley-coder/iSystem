@@ -37,6 +37,7 @@ import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
 import 'fire_store.dart' show firePumpDutyProvider, sprinklerPumpCheckProvider;
+import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -735,6 +736,26 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final service = d.service.name;
     final serviceName = str(_serviceNameKey(d.service));
     final n = d.nodeIds.length;
+    // Round 25 — a water network fed straight from the mains through a drawn
+    // meter is not a drawing defect: an ACKNOWLEDGEABLE info (the mains
+    // pressure is not modelled), never the blocking no-source warning that a
+    // direct-from-PDAM building could only clear by drawing a fake tank.
+    if (d.isMainsFed) {
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'mains-fed:$service',
+        title: str(StringKey.issueMainsFedTitle),
+        message: str.format(StringKey.issueMainsFedMessage, {
+          'service': serviceName,
+          'nodes': pluralCount(n, str(StringKey.issueNounNodeOne),
+              str(StringKey.issueNounNodeMany)),
+        }),
+        locate: repNode == null
+            ? null
+            : IssueLocation(repNode.sheetId, nodeId: repId),
+      ));
+      continue;
+    }
     final title = d.isIsland
         ? str(StringKey.issueNetworkIslandTitle)
         : str(StringKey.issueNetworkNoSourceTitle);
@@ -896,6 +917,42 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         locate: node == null
             ? null
             : IssueLocation(node.sheetId, nodeId: o.nodeId),
+      ));
+    }
+  }
+
+  // ── 3g. DOWNFEED below the target residual (Round 25) ─────────────────────
+  // A drawn roof tank whose gravity head (less friction) leaves the worst-
+  // served delivery node below the target residual needs a booster or a
+  // higher tank. Judged on what the drawn system DELIVERS (sized boosters
+  // running); the inspector card and the calc report already say 'boost', so
+  // Review / compliance must not stay silent (an under-pressure downfeed could
+  // print PASS). Judge-only, locatable to the critical node.
+  if (ref.watch(gravityDownfeedDrawnProvider)) {
+    final delivered = ref.watch(downfeedDeliveredProvider);
+    if (delivered != null && !delivered.gravitySufficient) {
+      final node = nodeById[delivered.criticalNodeId];
+      final floors = project.building.floors;
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      warnings.add(DesignIssue(
+        severity: IssueSeverity.warning,
+        kind: 'downfeed-below-target',
+        title: str(StringKey.issueDownfeedBelowTargetTitle),
+        message: str.format(StringKey.issueDownfeedBelowTargetMessage, {
+          'floor': floorName,
+          'residual':
+              delivered.minResidual.inKiloPascals.toStringAsFixed(0),
+          'target': ref
+              .watch(targetResidualProvider)
+              .inKiloPascals
+              .toStringAsFixed(0),
+          'head': delivered.boosterHeadRequired.meters.toStringAsFixed(1),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: node.id),
       ));
     }
   }
@@ -1259,19 +1316,40 @@ class AcknowledgedIssuesController extends Notifier<Map<String, IssueAck>> {
   /// Replace the whole map (used by `applyDocument` on load).
   void set(Map<String, IssueAck> acks) => state = Map.unmodifiable(acks);
 
+  /// Round 25 (ui-journeys-4-undo-skips-riser-drag-and-acknowledge) — every
+  /// forward acknowledgement edit is persisted in `.mechx`, so it records ONE
+  /// [UndoDomain.settings] step on the global timeline (a registered revert
+  /// pair restoring the previous map). Ctrl+Z after 'Acknowledge all' used to
+  /// revert an older, unrelated edit instead. [set] / [clear] (load, new
+  /// document) stay non-recording.
+  void _commit(Map<String, IssueAck> next) {
+    final previous = state;
+    final applied = Map<String, IssueAck>.unmodifiable(next);
+    state = applied;
+    ref.read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+          label: MechXStringsData(ref.read(localeProvider))(
+              StringKey.undoLabelAcknowledge),
+          undo: () => state = previous,
+          redo: () => state = applied,
+        ));
+  }
+
   /// Acknowledge one advisory by its [DesignIssue.key], recording who accepted
   /// it ([author]), an optional one-line [note], and the app-stamped [date]
   /// (the engine never reads the clock; the caller passes today's date).
   void acknowledge(String key,
           {String author = '', String note = '', String date = ''}) =>
-      state = Map.unmodifiable({
+      _commit({
         ...state,
         key: IssueAck(key: key, author: author, note: note, date: date),
       });
 
-  /// Withdraw an acknowledgement (the row blocks again).
-  void unacknowledge(String key) =>
-      state = Map.unmodifiable({...state}..remove(key));
+  /// Withdraw an acknowledgement (the row blocks again). A no-op (nothing
+  /// recorded) when [key] is not acknowledged.
+  void unacknowledge(String key) {
+    if (!state.containsKey(key)) return;
+    _commit({...state}..remove(key));
+  }
 
   /// Toggle the acknowledgement of [key].
   void toggle(String key,
@@ -1282,15 +1360,17 @@ class AcknowledgedIssuesController extends Notifier<Map<String, IssueAck>> {
 
   /// Acknowledge every currently-OPEN acknowledgeable issue at once (the Review
   /// "Acknowledge all advisories" affordance), stamping them with ONE audit
-  /// record ([author]/[note]/[date]). [keys] is the set of acknowledgeable issue
-  /// keys the caller derived from [designIssuesProvider].
+  /// record ([author]/[note]/[date]) — ONE undo step. [keys] is the set of
+  /// acknowledgeable issue keys the caller derived from [designIssuesProvider].
   void acknowledgeAll(Iterable<String> keys,
-          {String author = '', String note = '', String date = ''}) =>
-      state = Map.unmodifiable({
-        ...state,
-        for (final k in keys)
-          k: IssueAck(key: k, author: author, note: note, date: date),
-      });
+      {String author = '', String note = '', String date = ''}) {
+    if (keys.isEmpty) return;
+    _commit({
+      ...state,
+      for (final k in keys)
+        k: IssueAck(key: k, author: author, note: note, date: date),
+    });
+  }
 
   void clear() => state = const {};
 }

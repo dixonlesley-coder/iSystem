@@ -92,9 +92,20 @@ class ElectricalCircuitResult {
   /// (default 0).
   final double lengthM;
 
-  /// Connected load (W) on the circuit — for the accessory takeoff (light
-  /// points / sockets). Additive (default 0).
+  /// DIVERSIFIED load (W) on the circuit — the way's connected input × its
+  /// demand factor ([circuitConnectedW]); a feeder carries the fed board's
+  /// diversified demand. The demand / phase-balance basis. Additive (default 0).
   final double loadW;
+
+  /// Round 25 — the UNDIVERSIFIED connected load (W): the way's input before
+  /// its demand factor (0 for a capacitor bank; the fed board's W for a
+  /// feeder). The accessory takeoff (light points / sockets) and the
+  /// schedule's per-way DAYA read it. Null (a result built the legacy way) ⇒
+  /// [loadW]; read it through [connectedWOrLoad].
+  final double? connectedW;
+
+  /// [connectedW] when recorded, else [loadW].
+  double get connectedWOrLoad => connectedW ?? loadW;
 
   /// Physical outlet points on the way (1, or more when loads were chained) —
   /// the explicit accessory count floor in the BOM. Additive (default 1).
@@ -128,6 +139,7 @@ class ElectricalCircuitResult {
     required this.rcd,
     this.lengthM = 0,
     this.loadW = 0,
+    this.connectedW,
     this.points = 1,
     this.runCurrent,
   });
@@ -154,6 +166,7 @@ class ElectricalCircuitResult {
         rcd: rcd,
         lengthM: lengthM,
         loadW: loadW,
+        connectedW: connectedW,
         points: points,
         runCurrent: runCurrent,
       );

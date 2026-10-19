@@ -773,6 +773,20 @@ double circuitConnectedW(
           library: library, diversityLibraryId: diversityLibraryId);
 }
 
+/// Round 25 — the UNDIVERSIFIED connected input (W) of a way: the same
+/// electrical-input basis as [circuitConnectedW] before the demand factor (0
+/// for a capacitor bank). The accessory takeoff and the schedule DAYA read it.
+double circuitUndiversifiedW(ElectricalCircuit c) {
+  if (c.loadKind == LoadKind.capacitor) return 0;
+  final isMotor =
+      (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
+          c.motorKw != null;
+  if (c.flaOverrideA == null && isMotor) {
+    return c.motorKw! * 1000 / kAssumedMotorEfficiency;
+  }
+  return c.loadW;
+}
+
 double _effectiveLoadW(
     ElectricalCircuit c, ElectricalPanel panel, ComputePanelOptions opts) {
   if (c.feedsPanelId != null && opts.feederLoadW.containsKey(c.feedsPanelId)) {
@@ -1431,10 +1445,13 @@ _CircuitComputation _computeCircuit(
       code: 'fire-pump-protection',
       severity: WarningSeverity.info,
       message:
-          '${c.name}: fire pump way - specify overload-trip-disabled protection '
+          '${c.name}: ${c.loadKind == LoadKind.pump ? 'fire pump way' : 'life-safety motor way'}'
+          ' - specify overload-trip-disabled protection '
           'on the schedule (fire duty runs to destruction - NFPA 20 practice). '
-          'Sized here as an ordinary ${_num(breaker.ratingA.amperes)} A curve '
-          '${breaker.curve.name.toUpperCase()} device; the schedule row carries '
+          // Round 25 — a curve letter only for a device that has one (MCB):
+          // an MCCB / ACB prints its class, like the schedule and the BOM.
+          'Sized here as an ordinary ${breaker.deviceClass.hasTripCurve ? '${_num(breaker.ratingA.amperes)} A curve ${breaker.curve.name.toUpperCase()} MCB' : '${_num(breaker.ratingA.amperes)} A ${breaker.deviceClass.code}'}'
+          ' device; the schedule row carries '
           '"no-OL trip (fire)".',
       panelId: panel.id,
       circuitId: c.id,
@@ -1523,6 +1540,9 @@ _CircuitComputation _computeCircuit(
     rcd: rcd,
     lengthM: effectiveLength.meters,
     loadW: loadW,
+    // Round 25 — the takeoff / DAYA basis: undiversified for a final way, the
+    // fed board's W for a feeder.
+    connectedW: isFeeder ? loadW : circuitUndiversifiedW(c),
     points: c.points,
     runCurrent: Current(roundTo(feederRunCurrent.amperes, 1)),
   );

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart';
+import 'package:mechx_engine/report/number_format.dart' show signedElevationText;
 
 import '../../store/app_state.dart'
     show
@@ -76,10 +77,10 @@ class BuildingScreen extends ConsumerWidget {
           'its PDF page, or add and remove levels.',
       children: [
         HubStatRow(stats: [
-          ('Total height', '${building.totalHeight.meters.toStringAsFixed(1)} m'),
+          ('Total height', '${trimmedMetres(building.totalHeight.meters)} m'),
           ('Levels', '${building.levelCount}'),
           ('Roof elevation',
-              '${building.roofElevation.meters.toStringAsFixed(1)} m'),
+              '${signedElevationText(building.roofElevation.meters)} m'),
         ]),
         const SizedBox(height: MechXSpacing.lg),
         // Top floor first, matching how a building reads on an elevation.
@@ -345,7 +346,10 @@ class _LevelCard extends StatelessWidget {
               const SizedBox(width: MechXSpacing.sm),
               // B3: the elevation restates itself every time a height below it
               // changes — tabular figures keep the row from shuffling.
-              Text('elev ${elevation.meters.toStringAsFixed(1)} m',
+              // Round 25 — 2 dp through the SAME formatter the riser / FFL
+              // labels use, so a 3.25 m storey never reads 'elev 7.3 m' here
+              // beside 'FFL +7.25' on the drawings.
+              Text('elev ${signedElevationText(elevation.meters)} m',
                   style: MechXTypography.tabular(type.caption)
                       .copyWith(color: colors.textMuted)),
               const SizedBox(width: MechXSpacing.xxs),
@@ -367,8 +371,11 @@ class _LevelCard extends StatelessWidget {
                     style: type.body.copyWith(color: colors.textSecondary)),
               ),
               SteppedValueField(
-                display: '${floor.height.meters.toStringAsFixed(1)} m',
-                editSeed: floor.height.meters.toStringAsFixed(1),
+                // Round 25 — 2 dp (trailing zero trimmed): a typed 3.25 m
+                // reads and re-seeds as 3.25, never a rounded '3.3' that a
+                // re-commit would silently store.
+                display: '${trimmedMetres(floor.height.meters)} m',
+                editSeed: trimmedMetres(floor.height.meters),
                 label: context.strings(StringKey.a11yFieldFloorToFloorHeight),
                 gap: MechXSpacing.sm,
                 valueWidth: 84,
@@ -511,8 +518,8 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
           _StepperField(
             label: 'Height',
             child: SteppedValueField(
-              display: '${_height.toStringAsFixed(1)} m',
-              editSeed: _height.toStringAsFixed(1),
+              display: '${trimmedMetres(_height)} m',
+              editSeed: trimmedMetres(_height),
               label: context.strings(StringKey.a11yFieldFloorHeight),
               gap: MechXSpacing.xs,
               valueWidth: 56,
@@ -1082,4 +1089,12 @@ class _GlyphButtonState extends State<_GlyphButton> {
       ),
     );
   }
+}
+
+/// Round 25 — a height in metres at 2 dp with ONE trailing zero trimmed
+/// (3.25 → '3.25', 3.50 → '3.5', 3.00 → '3.0'), so whole and half metres read
+/// as before while a centimetre value is never rounded away.
+String trimmedMetres(double m) {
+  final s = m.toStringAsFixed(2);
+  return s.endsWith('0') ? s.substring(0, s.length - 1) : s;
 }

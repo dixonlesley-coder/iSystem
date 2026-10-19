@@ -697,6 +697,19 @@ enum StringKey {
 
   // I6 — document-control revision inconsistency (revision history logged but
   // the title-block Revision left blank).
+  issueMainsFedTitle,
+  issueMainsFedMessage,
+  issueDownfeedBelowTargetTitle,
+  issueDownfeedBelowTargetMessage,
+  complianceCategorySupplyPressure,
+  complianceDetailPressureMet,
+  complianceCategoryDesignContent,
+  complianceDetailNothingDesigned,
+  complianceDetailNaNothingDrawn,
+  complianceDetailNaNoSheets,
+  complianceDetailNaNoPanels,
+  resultsFeedDirectMains,
+  resultsFeedBoosterNoTank,
   issueRevisionTagMissingTitle,
   issueRevisionTagMissingMessage,
 
@@ -851,6 +864,7 @@ enum StringKey {
   // The undo-timeline labels of the remaining design inputs (each is now its
   // own undoable settings step) + the template apply.
   undoLabelOccupancy,
+  undoLabelAcknowledge,
   undoLabelFireHazard,
   undoLabelRainfall,
   undoLabelMepDutyFeed,
@@ -1441,7 +1455,8 @@ const Map<StringKey, String> _en = {
   StringKey.schematicHelp2:
       'A riser length is the floor-to-floor elevation delta, never a PDF distance',
   StringKey.schematicHelp3:
-      'Drag a riser sideways to reposition it; its length does not change',
+      'Drag a riser sideways to reposition it (a diagram-only layout, not an '
+          'undo step); its length does not change',
   StringKey.schematicHelp4:
       'Right-click a riser to set its nominal size in inches or pick a material',
   StringKey.schematicHelpModes:
@@ -1736,8 +1751,7 @@ const Map<StringKey, String> _en = {
   StringKey.electricalEmptyTitle: 'Set up your service',
   StringKey.electricalEmptyBody:
       'Add a distribution panel, then drag loads from the palette '
-          'onto it. Set the supply phase and earthing from Service & '
-          'Earthing.',
+          'onto it. Set the supply phase and earthing from {supply}.',
   StringKey.electricalGuide1:
       'Double-click a component to edit its size, type or label',
   StringKey.electricalGuide2:
@@ -1826,10 +1840,10 @@ const Map<StringKey, String> _en = {
       'REVIEW REQUIRED — you decide whether to issue',
   StringKey.reviewExportSubmittalPackage: 'Export submittal package...',
   StringKey.reviewSubmittalHint:
-      'The submittal package above bundles the drawings too (the current '
-          "sheet's annotated plan, the mechanical riser, and the electrical "
-          'single-line). For a single drawing, report or data file, open '
-          'All exports... (Ctrl E).',
+      'The submittal package above bundles the drawings too (every '
+          "sheet's annotated plan, the mechanical riser, the electrical "
+          'single-line and layout, plus the cover and drawing index). For a '
+          'single drawing, report or data file, open All exports... (Ctrl E).',
   StringKey.reviewVerdictPass: 'PASS',
   StringKey.reviewVerdictReviewRequired: 'REVIEW REQUIRED',
   StringKey.reviewDesignSignoff: 'design sign-off',
@@ -2010,6 +2024,32 @@ const Map<StringKey, String> _en = {
       'no flow from the roof tank, above the SNI max fixture pressure of '
       '{limit} kPa (pressure relief is mandatory from {relief} kPa). Draw a '
       'PRV on the riser above this zone.',
+  StringKey.issueMainsFedTitle:
+      'Fed from the mains (pressure not modelled)',
+  StringKey.issueMainsFedMessage:
+      'The {service} network ({nodes}) is fed straight from the mains through a water meter. The mains pressure is not modelled: confirm the PDAM pressure meets the target at the highest fixture.',
+  StringKey.issueDownfeedBelowTargetTitle:
+      'Roof tank cannot reach the target pressure',
+  StringKey.issueDownfeedBelowTargetMessage:
+      'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank, below the {target} kPa target. Raise the tank or draw a booster of about +{head} m.',
+  StringKey.complianceCategorySupplyPressure:
+      'Supply pressure',
+  StringKey.complianceDetailPressureMet:
+      'target residual met',
+  StringKey.complianceCategoryDesignContent:
+      'Design content',
+  StringKey.complianceDetailNothingDesigned:
+      'nothing designed yet: draw a network or add a panel',
+  StringKey.complianceDetailNaNothingDrawn:
+      'n/a: nothing drawn',
+  StringKey.complianceDetailNaNoSheets:
+      'n/a: no sheets',
+  StringKey.complianceDetailNaNoPanels:
+      'n/a: no panels',
+  StringKey.resultsFeedDirectMains:
+      'Direct mains: no booster duty',
+  StringKey.resultsFeedBoosterNoTank:
+      'Booster feed: no roof tank drawn',
   StringKey.issueRevisionTagMissingTitle: 'Revision not set for logged history',
   StringKey.issueRevisionTagMissingMessage:
       'The revision history has entries but the title-block Revision is blank, '
@@ -2205,6 +2245,7 @@ const Map<StringKey, String> _en = {
   StringKey.designInputAcBasisArea: 'Area density',
   StringKey.designInputAcBasisHeatGain: 'Internal gains (no envelope)',
   StringKey.undoLabelOccupancy: 'Occupancy',
+  StringKey.undoLabelAcknowledge: 'Acknowledgement',
   StringKey.undoLabelFireHazard: 'Fire hazard class',
   StringKey.undoLabelRainfall: 'Rainfall (storm)',
   StringKey.undoLabelMepDutyFeed: 'Feed solved MEP duties',
@@ -2796,7 +2837,8 @@ const Map<StringKey, String> _id = {
   StringKey.schematicHelp2:
       'Panjang riser adalah selisih elevasi antar-lantai, bukan jarak pada PDF',
   StringKey.schematicHelp3:
-      'Seret riser ke samping untuk memindahkannya; panjangnya tidak berubah',
+      'Seret riser ke samping untuk memindahkannya (tata letak diagram saja, '
+          'bukan langkah undo); panjangnya tidak berubah',
   StringKey.schematicHelp4:
       'Klik-kanan riser untuk mengatur ukuran nominalnya dalam inci atau memilih material',
   StringKey.schematicHelpModes:
@@ -3091,8 +3133,7 @@ const Map<StringKey, String> _id = {
   StringKey.electricalEmptyTitle: 'Siapkan sambungan Anda',
   StringKey.electricalEmptyBody:
       'Tambahkan panel distribusi, lalu seret beban dari palet ke '
-          'atasnya. Atur fasa suplai dan pembumian dari Sambungan & '
-          'Pembumian.',
+          'atasnya. Atur fasa suplai dan pembumian dari {supply}.',
   StringKey.electricalGuide1:
       'Klik ganda komponen untuk mengubah ukuran, jenis, atau labelnya',
   StringKey.electricalGuide2:
@@ -3177,11 +3218,12 @@ const Map<StringKey, String> _id = {
   StringKey.reviewIssueReady: 'LULUS — siap diterbitkan',
   StringKey.reviewIssueReviewRequired:
       'PERLU TINJAUAN — Anda memutuskan apakah akan menerbitkan',
-  StringKey.reviewExportSubmittalPackage: 'Ekspor paket serah...',
+  StringKey.reviewExportSubmittalPackage: 'Ekspor paket submittal...',
   StringKey.reviewSubmittalHint:
-      'Paket serah di atas juga menyertakan gambar (denah beranotasi lembar '
-          'saat ini, riser mekanikal, dan satu-garis kelistrikan). Untuk satu '
-          'gambar, laporan, atau berkas data, buka Semua ekspor... (Ctrl E).',
+      'Paket submittal di atas juga menyertakan gambar (denah beranotasi '
+          'setiap lembar, riser mekanikal, satu-garis dan tata letak '
+          'kelistrikan, serta sampul dan daftar gambar). Untuk satu gambar, '
+          'laporan, atau berkas data, buka Semua ekspor... (Ctrl E).',
   StringKey.reviewVerdictPass: 'LULUS',
   StringKey.reviewVerdictReviewRequired: 'PERLU TINJAUAN',
   StringKey.reviewDesignSignoff: 'pengesahan desain',
@@ -3374,6 +3416,32 @@ const Map<StringKey, String> _id = {
       '{static} kPa saat tanpa aliran dari tangki atap, di atas tekanan '
       'fikstur maksimum SNI {limit} kPa (pelepas tekanan wajib mulai {relief} '
       'kPa). Pasang PRV pada riser di atas zona ini.',
+  StringKey.issueMainsFedTitle:
+      'Disuplai dari PDAM (tekanan tidak dimodelkan)',
+  StringKey.issueMainsFedMessage:
+      'Jaringan {service} ({nodes}) disuplai langsung dari PDAM melalui meter air. Tekanan PDAM tidak dimodelkan: pastikan tekanannya memenuhi target di fikstur tertinggi.',
+  StringKey.issueDownfeedBelowTargetTitle:
+      'Tangki atap tidak mencapai tekanan target',
+  StringKey.issueDownfeedBelowTargetMessage:
+      'Fikstur terburuk di "{floor}" hanya menerima {residual} kPa dari tangki atap, di bawah target {target} kPa. Tinggikan tangki atau pasang booster sekitar +{head} m.',
+  StringKey.complianceCategorySupplyPressure:
+      'Tekanan suplai',
+  StringKey.complianceDetailPressureMet:
+      'tekanan sisa target tercapai',
+  StringKey.complianceCategoryDesignContent:
+      'Isi desain',
+  StringKey.complianceDetailNothingDesigned:
+      'belum ada desain: gambar jaringan atau tambahkan panel',
+  StringKey.complianceDetailNaNothingDrawn:
+      'n/a: belum ada gambar',
+  StringKey.complianceDetailNaNoSheets:
+      'n/a: belum ada lembar',
+  StringKey.complianceDetailNaNoPanels:
+      'n/a: belum ada panel',
+  StringKey.resultsFeedDirectMains:
+      'Langsung dari PDAM: tanpa booster',
+  StringKey.resultsFeedBoosterNoTank:
+      'Suplai booster: tanpa tangki atap',
   StringKey.issueRevisionTagMissingTitle:
       'Revisi belum diisi untuk riwayat yang tercatat',
   StringKey.issueRevisionTagMissingMessage:
@@ -3576,6 +3644,7 @@ const Map<StringKey, String> _id = {
   StringKey.designInputAcBasisArea: 'Kepadatan luas',
   StringKey.designInputAcBasisHeatGain: 'Perolehan internal (tanpa selubung)',
   StringKey.undoLabelOccupancy: 'Hunian',
+  StringKey.undoLabelAcknowledge: 'Pengakuan',
   StringKey.undoLabelFireHazard: 'Kelas bahaya kebakaran',
   StringKey.undoLabelRainfall: 'Curah hujan (badai)',
   StringKey.undoLabelMepDutyFeed: 'Suplai beban MEP terhitung',

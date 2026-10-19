@@ -1189,7 +1189,11 @@ class _EmptyState extends StatelessWidget {
       padding: const EdgeInsets.all(MechXSpacing.lg),
       child: MechXEmptyStateCard(
         title: context.strings(StringKey.electricalEmptyTitle),
-        body: context.strings(StringKey.electricalEmptyBody),
+        // Round 25 — names the toolbar control through its OWN key, so the
+        // copy can never drift from the button again.
+        body: context.strings.format(StringKey.electricalEmptyBody, {
+          'supply': context.strings(StringKey.electricalSupply),
+        }),
         actions: [
           MechXButton(
             label: context.strings(StringKey.electricalAddPanel),

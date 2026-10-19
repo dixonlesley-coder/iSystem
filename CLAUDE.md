@@ -1458,6 +1458,33 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 25 — legacy provenance, honest fault estimates, connected daya, no
+  override reducers, uniform vent stacks, one drawn feed (2026-10-18)**: in a
+  LEGACY file a demand factor 0 on a NON-life-safety MEP way is typed (pre-r23
+  feeds minted 0 only on a life-safety standby) — kept, flagged, parked never
+  dropped (`_isMintedDemandFactor`); a PARKED way (`kMepParkedNameSuffix`) is
+  provenance-stamped like a derived one and stays legacy until re-adopted. Past
+  the DXF primitive cap an INSERT grows the bounds by its block's memoised
+  extent (4 transformed corners) — never re-walk a block body bounds-only. A
+  declared LV capacity above the PLN TR ceiling estimates its OWN transformer
+  fault (`S/(√3·400·0.04)`), never below the study transformer for the demand
+  nor 16 kA: more information never lowers a safety quantity. The accessory
+  takeoff and the schedule DAYA read the UNDIVERSIFIED
+  `ElectricalCircuitResult.connectedW`; `loadW` stays the diversified demand. A
+  gravity edge below a hand-OVERRIDDEN pipe is raised (or, if itself
+  overridden, flagged `belowCodeMinimum`) — no reducer in the direction of flow
+  (`_clampGravityDownstreamOfOverrides`). A vent offset run between two stack
+  riser groups and the base run to the soil-stack foot are part of the vent
+  stack (uniform size); a zero-seed vent tie stays an explicit 0 (no phantom
+  leaf DFU); a fixture vented at its own node has a 0 trap arm. ONE drawn-feed
+  predicate (`gravityDownfeedDrawnProvider`, a roof tank drawn) gates the
+  inspector headline / rows, the report and the Review `downfeed-below-target`
+  warning (→ the 'Supply pressure' compliance row); a meter-fed water network is
+  the acknowledgeable `mains-fed:<service>` info, never `no-source`. An empty
+  project carries a failing 'Design content' compliance row (n/a details, never
+  PASS). Acknowledgements are ONE `UndoDomain.settings` step. Drawn tanks are
+  scheduled (`EquipmentCategory.tank`). The fire-duty note names an MCCB / ACB
+  by class (no curve letter) and a non-pump life-safety motor a 'motor way'.
 - **Round 24 — migration, honest drawings, TT RCD topology, import
   integrity (2026-10-18)**: a `.mechx` MEP way without the `mepProvenance`
   key is LEGACY (`ElectricalCircuit.legacyProvenance`, decode-time only): the

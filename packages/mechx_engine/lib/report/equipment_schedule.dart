@@ -37,6 +37,7 @@ enum EquipmentCategory {
   pump,
   fan,
   airHandling,
+  tank,
   panel,
   transformer,
   generator,
@@ -49,6 +50,7 @@ extension EquipmentCategoryInfo on EquipmentCategory {
         EquipmentCategory.pump => 'Pumps',
         EquipmentCategory.fan => 'Fans',
         EquipmentCategory.airHandling => 'Air-handling (AHU / FCU / AC)',
+        EquipmentCategory.tank => 'Tanks',
         EquipmentCategory.panel => 'Electrical panels',
         EquipmentCategory.transformer => 'Transformer',
         EquipmentCategory.generator => 'Standby generator',
@@ -182,6 +184,32 @@ class AcScheduleItem {
   });
 }
 
+/// Round 25 — one drawn storage tank (roof / ground) to schedule. The BOM
+/// leaves plant out because it is scheduled EQUIPMENT, so a drawn, tagged tank
+/// must reach the schedule (it used to reach no procurement surface at all).
+/// The capacity is the node's own [NetNode.tankCapacityLitres] — never
+/// fabricated (null ⇒ the row says 'capacity not set').
+class TankScheduleItem {
+  final String tag;
+
+  /// True for a roof tank, false for a ground tank.
+  final bool roof;
+
+  /// Effective capacity (litres); null ⇒ not set on the drawn node.
+  final double? capacityLitres;
+
+  final String? modelSpec;
+  final int qty;
+
+  const TankScheduleItem({
+    required this.tag,
+    required this.roof,
+    this.capacityLitres,
+    this.modelSpec,
+    this.qty = 1,
+  });
+}
+
 /// All inputs the equipment schedule tabulates. Empty lists ⇒ the section is
 /// skipped; an all-empty data set yields an "(no equipment scheduled)" note.
 class EquipmentScheduleData {
@@ -194,6 +222,9 @@ class EquipmentScheduleData {
   /// Placed AC units (air-handling section, after the fan-duty rows). Empty ⇒
   /// byte-identical.
   final List<AcScheduleItem> acUnits;
+
+  /// Round 25 — drawn storage tanks (tanks section). Empty ⇒ byte-identical.
+  final List<TankScheduleItem> tanks;
 
   /// Solved electrical system whose panels become one schedule row each. Null ⇒
   /// the panel section is skipped.
@@ -224,6 +255,7 @@ class EquipmentScheduleData {
     this.pumps = const [],
     this.fans = const [],
     this.acUnits = const [],
+    this.tanks = const [],
     this.electrical,
     this.electricalProject,
     this.modelSpecs = const {},
@@ -318,6 +350,25 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       modelSpec: ac.modelSpec ?? '—',
       qty: ac.qty,
       category: EquipmentCategory.airHandling,
+    ));
+  }
+
+  // ── Storage tanks (Round 25) ─────────────────────────────────────────────
+  for (final t in data.tanks) {
+    final cap = t.capacityLitres;
+    rows.add(EquipmentScheduleRow(
+      tag: t.tag,
+      service: strings(t.roof
+          ? RptStringKey.esRoofTankService
+          : RptStringKey.esGroundTankService),
+      // ASCII 'm3' (WinAnsi PDF + Roboto-safe).
+      duty: cap != null && cap > 0
+          ? '${_fmt(cap / 1000.0, dp: 1)} m3'
+          : strings(RptStringKey.esTankCapacityUnset),
+      size: '',
+      modelSpec: t.modelSpec ?? specFor(t.tag),
+      qty: t.qty,
+      category: EquipmentCategory.tank,
     ));
   }
 
@@ -437,6 +488,7 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
       EquipmentCategory.pump => strings(RptStringKey.catPumps),
       EquipmentCategory.fan => strings(RptStringKey.catFans),
       EquipmentCategory.airHandling => strings(RptStringKey.catAirHandling),
+      EquipmentCategory.tank => strings(RptStringKey.catTanks),
       EquipmentCategory.panel => strings(RptStringKey.catPanels),
       EquipmentCategory.transformer => strings(RptStringKey.catTransformer),
       EquipmentCategory.generator => strings(RptStringKey.catGenerator),

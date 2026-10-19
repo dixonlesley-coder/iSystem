@@ -266,7 +266,9 @@ AdvancedStudy computeAdvancedStudy(
   // Round 16 — with nothing declared, a demand that needs an MV service
   // resolves to the transformer the supply study selects (the store's Fold-1
   // chain resolves the same way, so the device kA and the bus agree).
-  final serviceEstimate = estimatedServiceFaultLevelA(project) ??
+  // Round 25 — the demand rides every tier (a declared capacity above the
+  // PLN TR ceiling never estimates below the study transformer's fault).
+  final serviceEstimate =
       estimatedServiceFaultLevelA(project, demand: sys.supply.demandVa);
   final serviceEstimateGoverns = originFaultLevel == null &&
       project.originFaultLevelA == null &&
