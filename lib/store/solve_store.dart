@@ -215,6 +215,89 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
   );
 });
 
+/// Round 32 (binding-1) — the SNI 8153 MINIMUM residual a solve's critical
+/// node must meet: [SniProfile.minResidualPressureFlushValve] (1 kgf/cm²,
+/// ≈98 kPa) when a flush-valve fixture ([flushValveNodeIds]) lies on the
+/// supply path from [sourceId] to [criticalNodeId] (the critical node itself
+/// included), else [SniProfile.minResidualPressureFaucet] (0.5 kgf/cm²,
+/// ≈49 kPa). Path-derived, never project-wide: a flush-valve WC on another
+/// branch does not raise the floor of a faucet-fed critical node. A missing
+/// source / unreachable critical node reads the critical node alone.
+Pressure sniMinimumResidualAt({
+  required Network net,
+  required String? sourceId,
+  required String criticalNodeId,
+  required Set<String> flushValveNodeIds,
+  SniProfile profile = const SniProfile(),
+}) {
+  final onPath = <String>{criticalNodeId};
+  if (sourceId != null && sourceId != criticalNodeId) {
+    final adj = <String, List<String>>{};
+    for (final e in _supplyEdges(net)) {
+      adj.putIfAbsent(e.fromId, () => []).add(e.toId);
+      adj.putIfAbsent(e.toId, () => []).add(e.fromId);
+    }
+    for (final l in adj.values) {
+      l.sort();
+    }
+    final parent = <String, String?>{sourceId: null};
+    final queue = <String>[sourceId];
+    for (var i = 0; i < queue.length; i++) {
+      final here = queue[i];
+      if (here == criticalNodeId) break;
+      for (final next in adj[here] ?? const <String>[]) {
+        if (parent.containsKey(next)) continue;
+        parent[next] = here;
+        queue.add(next);
+      }
+    }
+    if (parent.containsKey(criticalNodeId)) {
+      String? cur = criticalNodeId;
+      while (cur != null) {
+        onPath.add(cur);
+        cur = parent[cur];
+      }
+    }
+  }
+  return onPath.any(flushValveNodeIds.contains)
+      ? profile.minResidualPressureFlushValve.value
+      : profile.minResidualPressureFaucet.value;
+}
+
+/// Round 32 (binding-1) — the SNI minimum at the UPFEED solve's critical node
+/// (null with no upfeed solve).
+final upfeedSniMinimumResidualProvider = Provider<Pressure?>((ref) {
+  final up = ref.watch(solveProvider);
+  if (up == null) return null;
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final source = _pickSource(net, _supplyEdges(net), project.building,
+      preferHighest: false, mounting: project.mounting);
+  return sniMinimumResidualAt(
+    net: net,
+    sourceId: source,
+    criticalNodeId: up.criticalNodeId,
+    flushValveNodeIds: ref.watch(supplyFlushValveNodeIdsProvider),
+  );
+});
+
+/// Round 32 (binding-1) — the SNI minimum at the DELIVERED downfeed solve's
+/// critical node (null with no downfeed solve).
+final downfeedSniMinimumResidualProvider = Provider<Pressure?>((ref) {
+  final down = ref.watch(downfeedDeliveredProvider);
+  if (down == null) return null;
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final tank = _pickSource(net, _supplyEdges(net), project.building,
+      preferHighest: true, mounting: project.mounting);
+  return sniMinimumResidualAt(
+    net: net,
+    sourceId: tank,
+    criticalNodeId: down.criticalNodeId,
+    flushValveNodeIds: ref.watch(supplyFlushValveNodeIdsProvider),
+  );
+});
+
 /// Residual pressure at every solved node, regardless of feed strategy — the
 /// single field the heatmap renders (§12). Round 22: the downfeed field is the
 /// DELIVERED one ([downfeedDeliveredProvider], sized boosters running).

@@ -925,16 +925,27 @@ PhaseBalance _spreadSinglePhaseBanks(
 /// 3φ way loads every line; a 1φ way loads its [assignment] line (else its
 /// pin, else the lightest line so far). 0 when the board holds no capacitor
 /// way, directly or downstream.
+/// Round 32 (electrical-props-3-demand-rounding-order-dependent) — an
+/// ORDER-FREE accumulator: float addition is not associative, so a board
+/// total summed in model order could land either side of a rounding
+/// boundary (63 360 vs 63 359 W) when the ways are shuffled. Each term is
+/// quantized to an integer number of micro-units and summed as an int —
+/// exact, so the printed totals are permutation-invariant.
+int _micro(double v) => (v * 1e6).round();
+double _fromMicro(int v) => v / 1e6;
+
 double panelCapacitorFloorA(
   ElectricalPanel panel, {
   Map<String, double> childFloorA = const {},
   Map<String, ElectricalSystem> panelSystems = const {},
   Map<String, PhaseAssignment> assignment = const {},
 }) {
-  final lines = [0.0, 0.0, 0.0];
+  // Integer micro-amps (Round 32) — order-free sums.
+  final lines = [0, 0, 0];
   final threePhasePanel = panel.system == ElectricalSystem.threePhase;
-  void add(String id, bool threePhase, PhaseLine? pin, double a) {
-    if (a <= 0) return;
+  void add(String id, bool threePhase, PhaseLine? pin, double amps) {
+    if (amps <= 0) return;
+    final a = _micro(amps);
     if (!threePhasePanel) {
       lines[0] += a;
       return;
@@ -995,7 +1006,7 @@ double panelCapacitorFloorA(
     add(c.id, threePhase, c.phaseOverride, rated * kCapacitorSwitchingFactor);
   }
   final worst = math.max(lines[0], math.max(lines[1], lines[2]));
-  return roundTo(worst, 1);
+  return roundTo(_fromMicro(worst), 1);
 }
 
 /// Round 13 — the root (utility-fed) panel that GOVERNS the service: the
@@ -1625,15 +1636,18 @@ ElectricalPanelResult computePanel(
   );
 
   final warnings = <ElectricalWarning>[];
-  var connectedW = 0.0;
+  // Round 32 — integer micro-watts: the printed board kW is order-free.
+  var connectedMicroW = 0;
   final circuits = <ElectricalCircuitResult>[];
   for (final cm in comps) {
-    connectedW += cm.effectiveLoadW;
+    connectedMicroW += _micro(cm.effectiveLoadW);
     warnings.addAll(cm.warnings);
     circuits.add(cm.result.copyWith(
       phase: balance.assignment[cm.result.circuitId] ?? cm.result.phase,
     ));
   }
+
+  final connectedW = _fromMicro(connectedMicroW);
 
   // PHASE IMBALANCE — reported only when it is actually REDUCIBLE.
   //
@@ -1975,8 +1989,8 @@ ElectricalPanelResult computePanel(
 /// [ElectricalProject.supplyCapacityVa] (daya tersambung) floors the single
 /// root panel's incomer + busbar (and the earthing PE derivation) at the
 /// declared capacity's line current, and raises a judge-only
-/// `service-capacity-below-demand` warning when the computed worst-phase
-/// demand exceeds what that capacity's limiter passes. Null (the default) ⇒
+/// `service-capacity-below-demand` warning when the computed DIVERSIFIED
+/// worst-phase demand exceeds what that capacity's limiter passes. Null (the default) ⇒
 /// no floor ⇒ byte-identical.
 ///
 /// PHASE STABILITY is opt-in: [priorAssignments] (`panelId → (circuitId → line)`,
@@ -2115,8 +2129,9 @@ ElectricalSystemResult computeSystem(
     final panel = byId[id];
     if (panel == null) continue;
     final feederLoadW = <String, double>{};
-    var connectedW = 0.0;
-    var connectedVa = 0.0;
+    // Round 32 — integer micro-units: order-free board totals.
+    var connectedMicroW = 0;
+    var connectedMicroVa = 0;
     for (final c in panel.circuits) {
       if (c.role != CircuitRole.branch) continue;
       final load = c.feedsPanelId != null
@@ -2125,12 +2140,14 @@ ElectricalSystemResult computeSystem(
               library: diversityLibrary,
               diversityLibraryId: panel.diversityLibraryId);
       if (c.feedsPanelId != null) feederLoadW[c.feedsPanelId!] = load;
-      connectedW += load;
+      connectedMicroW += _micro(load);
       final pf = c.feedsPanelId != null
           ? (panelPowerFactor[c.feedsPanelId] ?? c.cosPhi)
           : c.cosPhi;
-      connectedVa += pf > 0 ? load / pf : load;
+      connectedMicroVa += _micro(pf > 0 ? load / pf : load);
     }
+    final connectedW = _fromMicro(connectedMicroW);
+    final connectedVa = _fromMicro(connectedMicroVa);
     feederLoadWByPanel[id] = feederLoadW;
     panelDemandW[id] = connectedW * panel.diversityFactor;
     panelDemandVa[id] = connectedVa * panel.diversityFactor;
@@ -2256,16 +2273,18 @@ ElectricalSystemResult computeSystem(
   }
 
   // True building connected load = leaf loads only (feeders are aggregations).
-  var connectedLoadW = 0.0;
+  // Round 32 — integer micro-watts: order-free (see [_micro]).
+  var connectedLoadMicroW = 0;
   for (final p in panels) {
     for (final c in p.circuits) {
       if (c.role == CircuitRole.branch && c.feedsPanelId == null) {
-        connectedLoadW += circuitConnectedW(c,
+        connectedLoadMicroW += _micro(circuitConnectedW(c,
             library: diversityLibrary,
-            diversityLibraryId: p.diversityLibraryId);
+            diversityLibraryId: p.diversityLibraryId));
       }
     }
   }
+  final connectedLoadW = _fromMicro(connectedLoadMicroW);
 
   // FOLD 1 — prospective-fault propagation (only when an origin fault is given).
   // Root-first, so a parent's bus fault + source impedance are known before its
@@ -2572,24 +2591,32 @@ ElectricalSystemResult computeSystem(
 
     // JUDGE-ONLY service-capacity check: the declared connection capacity
     // (daya tersambung) is what the utility limiter passes — a root board whose
-    // worst-phase demand exceeds that current will trip the limiter under full
-    // load. Never resizes (the incomer already sizes on the larger demand);
-    // the honest fix is a bigger subscription or shedding load.
+    // DIVERSIFIED worst-phase demand exceeds that current will trip the
+    // limiter. Round 32 (electrical-props-3-service-capacity-judged-on-
+    // undiversified-current): the limiter trips on the real (diversified)
+    // current, the same basis the advanced study's recommended daya sizes on,
+    // so the judge reads [ElectricalPanelResult.diversifiedDemandCurrent]
+    // (the sibling `feeder-below-fed-demand` moved there in Round 19). The
+    // incomer / busbar floor stays max(undiversified demand, service) —
+    // conservative sizing is untouched. Never resizes; the honest fix is a
+    // bigger subscription or shedding load.
     if (serviceMinCurrentA != null) {
       final rootId = roots.first.id;
       final rootResult = results[rootId];
-      if (rootResult != null &&
-          rootResult.demandCurrent.amperes > serviceMinCurrentA + 1e-9) {
+      final divA = rootResult == null
+          ? 0.0
+          : roundTo(rootResult.diversifiedDemandCurrent.amperes, 1);
+      if (rootResult != null && divA > serviceMinCurrentA + 1e-9) {
         rootResult.warnings.add(ElectricalWarning(
           code: 'service-capacity-below-demand',
           severity: WarningSeverity.warning,
-          message: '${rootResult.name}: demand '
-              '${_num(rootResult.demandCurrent.amperes)} A on the worst-loaded '
+          message: '${rootResult.name}: diversified demand '
+              '${_num(divA)} A on the worst-loaded '
               'phase exceeds the declared connection capacity '
               '${_num(serviceCapacityVa! / 1000)} kVA '
               '(~${_num(roundTo(serviceMinCurrentA, 1))} A) — the utility '
-              'limiter would trip under full demand; raise the subscribed daya '
-              'or shed load.',
+              'limiter would trip under the diversified demand; raise the '
+              'subscribed daya or shed load.',
           panelId: rootId,
         ));
       }

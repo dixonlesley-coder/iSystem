@@ -203,8 +203,13 @@ ComplianceSummary buildComplianceSummaryFrom({
       if (pressureJudged || pressureIssues.isNotEmpty)
         ComplianceItem(strings(StringKey.complianceCategorySupplyPressure),
             pass: pressureFails == 0,
+            // Round 32 (binding-1) — an info-only pressure finding is the
+            // SNI minimum met below the comfort target: the row PASSES and
+            // says so (only warning-severity items count as fails).
             detail: pressureFails == 0
-                ? strings(StringKey.complianceDetailPressureMet)
+                ? strings(pressureIssues.isEmpty
+                    ? StringKey.complianceDetailPressureMet
+                    : StringKey.complianceDetailPressureSniMet)
                 : pluralCount(
                     pressureFails,
                     strings(StringKey.complianceNounFindingOne),

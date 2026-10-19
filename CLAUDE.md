@@ -1461,6 +1461,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 32 — two pressure thresholds, duplex ejectors, one intake decision, honest drawings (2026-10-18)**: the supply-pressure judges (`downfeed-below-target` / `upfeed-below-target`, ONE kind each) raise a WARNING only below the SNI 8153 minimum at the critical node (`sniMinimumResidualAt`: 98 kPa when a flush-valve fixture lies on the source → critical supply PATH, else 49 kPa — never project-wide) and an acknowledgeable INFO between that minimum and the 225 kPa comfort target; compliance counts only the warning, and an info-only pressure row passes as 'SNI minimum met; below comfort target (advisory)'. A DUPLEX ejector set (`duplexEjectorSets`: ≥ 2 drawn ejectors, one pit, one header) is duty / standby, never a gravity ring: `autoSizeNetwork` sizes through the duty leg (lowest pump id) and mirrors it onto each standby leg (size, fixture units, flow pump → header, `parallelLegEdgeIdsOut`); every ejector force main is ≥ `kEjectorForceMainMinBoreMm` DN50 (`// VERIFY notAnSniClause`). The force-main walk treats a ground tank as the ejector side only when it is the start pump's OWN pit (an STP / septic outfall is the sewer's sink); one walk (`ejectorForceMainSteps`) feeds the duty and the bore floor. The air loose-end exemption IS the sizer's intake decision (`airOpenBoundaryLeaves` ← `autoSizeNetwork(airIntakeLeavesOut:)`) — never a parallel structural rule. `service-capacity-below-demand` judges the DIVERSIFIED worst-phase current (the incomer floor keeps max(undiversified, service)). Board totals sum integer micro-units (`_micro`) — order-free. Riser drawing: a paginated HW return leg spans every page its stack crosses (clamped to the band edge), closes once at the real stack top, its HWR PUMP rides the base page; the PUMP-SET DETAIL and every reference callout are gated on the DOMESTIC / focused service's own nodes (no caption fallback onto a fire pump); label boxes use the printed Helvetica advance (`mechRiserLabelWidth`) + 0.3 em clearance; a leader > 28 units pays a per-pipe crossing charge in the leader tier.
 - **Round 31 — force mains, duplex ejectors, air boundaries, phase accounting (2026-10-18)**:
   the ejector force-main walk (`sizing/ejector.dart`) passes INLINE devices
   (`kEjectorForceMainInlineComponents`: check / gate / balancing valve,
@@ -2251,8 +2252,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `// VERIFY notAnSniClause`. Per-circuit sizing is untouched; SEVERAL
   utility-fed roots ⇒ no floor (the capacity split is unknown — never
   fabricate); demand above the capacity keeps the larger demand-based incomer
-  and raises the judge-only `service-capacity-below-demand` warning (the
-  utility limiter would trip under full demand). Null capacity (the default)
+  and raises the judge-only `service-capacity-below-demand` warning when the
+  root's DIVERSIFIED worst-phase current exceeds the service current (Round 32
+  — the limiter trips on the diversified current, the basis the recommended
+  daya sizes on). Null capacity (the default)
   ⇒ byte-identical. Seed suite: `electrical_service_capacity_test.dart`.
 - **Capacitor ways floor their board + feeder (`electrical/compute.dart`, Round 13)**:
   a capacitor bank adds NO demand W and NO balance current (Round 11 — its

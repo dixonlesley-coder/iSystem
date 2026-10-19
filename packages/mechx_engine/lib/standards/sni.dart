@@ -543,6 +543,18 @@ class SniProfile implements StandardsProfile {
               'drain downstream of one is floored at DN50 — a drain is never '
               'smaller than the trap it serves. Confirm vs SNI 8153.',
         ),
+        // Round 32 (binding-2) — `kEjectorForceMainMinBoreMm` (ejector.dart).
+        const StandardValue<Object?>(
+          50.0,
+          unit: 'mm',
+          citation: 'IPC 712.4.1 / UPC 710 — sewage-ejector force main minimum '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A sewage pump / ejector passes 2 in solids, so its discharge '
+              '(force main) is floored at DN50 whatever the DFU table gives a '
+              'small pit; a duplex set\'s standby leg is sized like its duty '
+              'leg. Confirm vs SNI 8153.',
+        ),
         dualSupplyFixtureUnitFactor,
         const StandardValue<Object?>(
           55.0,

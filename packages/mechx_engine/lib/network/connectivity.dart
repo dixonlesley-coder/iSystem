@@ -21,6 +21,7 @@
 /// gravity component is never a defect here (see CLAUDE.md gravity-loop note).
 library;
 
+import '../sizing/network_sizing.dart' show airOpenBoundaryLeaves;
 import 'network.dart';
 
 /// What kind of supply-integrity problem a component has.
@@ -228,7 +229,10 @@ bool _isValidTermination(NetNode node) =>
 /// unit's outdoor-air INTAKE (Round 16/17 — sized on the delivered airflow,
 /// its friction added to the fan static) or an extract unit's DISCHARGE to
 /// outside, so it is a legitimate end, never a loose end. A bare leaf off a
-/// bare junction is still an undrawn terminal (not walked through). Pure.
+/// bare junction is still an undrawn terminal (not walked through). Round
+/// 32: only when the unit is the one the sizer ROOTS the component at
+/// ([airOpenBoundaryLeaves]) — a bare leaf off a non-root FCU is a default
+/// terminal the sizer loads, so it stays a loose end. Pure.
 bool isAirOpenBoundaryLeaf(Network net, String leafId) {
   final leaf = net.nodeById(leafId);
   if (leaf == null ||
@@ -249,7 +253,15 @@ bool isAirOpenBoundaryLeaf(Network net, String leafId) {
     if (!seen.add(next)) return false;
     final n = net.nodeById(next);
     if (n == null) return false;
-    if (n.role == NodeRole.plant) return _isAirUnitComponent(n.component);
+    // Round 32 — the structural walk is only a prefilter: the leaf is an
+    // open boundary exactly when the SIZER treats it as one (an intake off
+    // the component's ROOT unit, [airOpenBoundaryLeaves]). A bare leaf off a
+    // non-root terminal FCU is loaded as a default terminal there, so it is
+    // still a loose end here.
+    if (n.role == NodeRole.plant) {
+      return _isAirUnitComponent(n.component) &&
+          airOpenBoundaryLeaves(net).contains(leafId);
+    }
     final c = n.component;
     final damper = c == NodeComponent.motorizedDamper ||
         c == NodeComponent.volumeDamper ||

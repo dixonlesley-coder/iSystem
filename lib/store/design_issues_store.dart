@@ -1025,6 +1025,14 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // running); the inspector card and the calc report already say 'boost', so
   // Review / compliance must not stay silent (an under-pressure downfeed could
   // print PASS). Judge-only, locatable to the critical node.
+  //
+  // Round 32 (binding-1) — TWO thresholds, ONE kind: the 225 kPa target is a
+  // COMFORT target; the SNI 8153 floor is the minimum delivery pressure at
+  // the critical node (49 kPa at a faucet, 98 kPa when a flush valve lies on
+  // its supply path — [downfeedSniMinimumResidualProvider]). Below the SNI
+  // floor ⇒ a blocking WARNING citing it; between floor and target ⇒ an
+  // acknowledgeable INFO advisory ('SNI minimum met, booster recommended').
+  // The kind stays `downfeed-below-target` so acks / compliance matching hold.
   if (ref.watch(gravityDownfeedDrawnProvider)) {
     final delivered = ref.watch(downfeedDeliveredProvider);
     if (delivered != null && !delivered.gravitySufficient) {
@@ -1033,12 +1041,23 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       final floorName = node == null || floors.isEmpty
           ? ''
           : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      final sniMin = ref.watch(downfeedSniMinimumResidualProvider) ??
+          const SniProfile().minResidualPressureFaucet.value;
+      final belowSni = delivered.minResidual.inKiloPascals <
+          sniMin.inKiloPascals - 1e-6;
       warnings.add(DesignIssue(
-        severity: IssueSeverity.warning,
+        severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
         kind: 'downfeed-below-target',
-        title: str(StringKey.issueDownfeedBelowTargetTitle),
-        message: str.format(StringKey.issueDownfeedBelowTargetMessage, {
+        title: str(belowSni
+            ? StringKey.issueDownfeedBelowTargetTitle
+            : StringKey.issueDownfeedBelowComfortTitle),
+        message: str.format(
+            belowSni
+                ? StringKey.issueDownfeedBelowTargetMessage
+                : StringKey.issueDownfeedBelowComfortMessage,
+            {
           'floor': floorName,
+          'sni': sniMin.inKiloPascals.toStringAsFixed(0),
           'residual':
               delivered.minResidual.inKiloPascals.toStringAsFixed(0),
           'target': ref
@@ -1060,6 +1079,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // `targetHeldByDesign` false, critical node re-picked as the least-residual
   // delivery node). Then the shortfall is a real finding: Review says so and
   // the compliance 'Supply pressure' row claims it, never a vacuous PASS.
+  // Round 32 (binding-1) — the same SNI-floor / comfort-target split as 3g.
   final upfeed = ref.watch(solveProvider);
   if (upfeed != null && !upfeed.targetHeldByDesign) {
     final target = ref.watch(targetResidualProvider);
@@ -1071,12 +1091,22 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       final floorName = node == null || floors.isEmpty
           ? ''
           : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      final sniMin = ref.watch(upfeedSniMinimumResidualProvider) ??
+          const SniProfile().minResidualPressureFaucet.value;
+      final belowSni = worst.inKiloPascals < sniMin.inKiloPascals - 1e-6;
       warnings.add(DesignIssue(
-        severity: IssueSeverity.warning,
+        severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
         kind: 'upfeed-below-target',
-        title: str(StringKey.issueUpfeedBelowTargetTitle),
-        message: str.format(StringKey.issueUpfeedBelowTargetMessage, {
+        title: str(belowSni
+            ? StringKey.issueUpfeedBelowTargetTitle
+            : StringKey.issueUpfeedBelowComfortTitle),
+        message: str.format(
+            belowSni
+                ? StringKey.issueUpfeedBelowTargetMessage
+                : StringKey.issueUpfeedBelowComfortMessage,
+            {
           'floor': floorName,
+          'sni': sniMin.inKiloPascals.toStringAsFixed(0),
           'residual': worst.inKiloPascals.toStringAsFixed(0),
           'target': target.inKiloPascals.toStringAsFixed(0),
         }),

@@ -263,7 +263,6 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     ejectorStandbyPumpNodeIds: duplexEjectorStandbys(
       net,
       drawnEjectorPumpIds(net),
-      bore: boreMm,
     ),
   );
 });
@@ -274,16 +273,20 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
 ///
 /// Ejectors are grouped by the PIT they draw from (the ground tank one of
 /// their drainage edges joins directly). A duplex ('pompa sewage duplex')
-/// set is duty + standby, alternating — the same rule the Round 23 parallel
-/// supply / hot-water / fire sets follow: the DUTY ejector is the one with
-/// the largest incident drainage bore ([bore], mm), then the lowest id; every
-/// other ejector on that pit is its standby. Ejectors on different pits are
-/// separate duty machines.
+/// set is duty + standby, alternating: the DUTY ejector is the one with the
+/// LOWEST id; every other ejector on that pit is its standby. Ejectors on
+/// different pits are separate duty machines.
+///
+/// Round 32 (binding-2) — the 'largest incident drainage bore' criterion was
+/// dropped: the sizer now mirrors the duty leg onto every standby leg
+/// (`duplexEjectorSets`, the engine's own duty = lowest pump id), so the
+/// bores are equal by construction and the old criterion only echoed which
+/// leg the sizer happened to put in its tree. The id tie-break is the honest,
+/// order-independent choice and matches the engine.
 Map<String, String> duplexEjectorStandbys(
   Network net,
-  Iterable<String> ejectors, {
-  required double? Function(String edgeId) bore,
-}) {
+  Iterable<String> ejectors,
+) {
   final byPit = <String, List<String>>{};
   for (final id in ejectors) {
     final pits = <String>{
@@ -296,23 +299,10 @@ Map<String, String> duplexEjectorStandbys(
     if (pits.isEmpty) continue;
     byPit.putIfAbsent((pits.toList()..sort()).first, () => []).add(id);
   }
-  double boreOf(String id) {
-    var best = 0.0;
-    for (final e in net.edgesAt(id)) {
-      if (e.service != ServiceType.drainage) continue;
-      final d = bore(e.id) ?? 0.0;
-      if (d > best) best = d;
-    }
-    return best;
-  }
-
   final out = <String, String>{};
   for (final g in byPit.values) {
     if (g.length < 2) continue;
-    final ranked = [...g]..sort((a, b) {
-        final d = boreOf(b).compareTo(boreOf(a));
-        return d != 0 ? d : a.compareTo(b);
-      });
+    final ranked = [...g]..sort();
     for (final id in ranked.skip(1)) {
       out[id] = ranked.first;
     }
