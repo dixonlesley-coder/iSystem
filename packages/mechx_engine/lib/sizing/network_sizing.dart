@@ -16,6 +16,7 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import 'dart:collection' show SplayTreeSet;
 import 'dart:math' as math;
 
 import '../geometry/building.dart';
@@ -1770,23 +1771,46 @@ Map<String, EdgeSizing> autoSizeNetwork(
       //     Classification reads NO distance (rule 2 counts hops), so
       //     calibration and plan coordinates never move it. A mover leg is
       //     never zero-forced or reversed.
+      //
+      // Round 28 (regression-classifier-quadratic-dijkstra) — the node
+      // predicates are resolved ONCE per component into sets: the classifier
+      // calls them on every edge relaxation, and `net.nodeById` is a linear
+      // scan, which made one sizing of a 30-riser hotel with return valves
+      // cost over a second.
+      final cvNodeIds = <String>{};
+      final moverNodeIds = <String>{};
+      final demandNodeIds = <String>{};
+      if (isLooped && regime == FlowRegime.pressurized) {
+        final byId = {for (final n in net.nodes) n.id: n};
+        final ends = <String>{
+          for (final e in componentEdges) ...[e.fromId, e.toId],
+        };
+        for (final id in ends) {
+          final c = byId[id]?.component;
+          if (c == NodeComponent.checkValve) cvNodeIds.add(id);
+          if (c == NodeComponent.pump ||
+              c == NodeComponent.boosterSet ||
+              c == NodeComponent.supplyFan) {
+            moverNodeIds.add(id);
+          }
+          if (id != root &&
+              (explicitDemandKeys.contains(id) || bearsDefaultDemand(id))) {
+            demandNodeIds.add(id);
+          }
+        }
+      }
+      final returnChainKeys = <String>{};
       List<_CheckValvePlan> classify(
               [Set<String> closedMoverLegs = const {}]) =>
           _classifyLoopCheckValves(
             componentEdges: componentEdges,
             root: root,
-            isCheckValve: (id) =>
-                net.nodeById(id)?.component == NodeComponent.checkValve,
-            isMover: (id) {
-              final c = net.nodeById(id)?.component;
-              return c == NodeComponent.pump ||
-                  c == NodeComponent.boosterSet ||
-                  c == NodeComponent.supplyFan;
-            },
-            isDemand: (id) =>
-                id != root &&
-                (explicitDemandKeys.contains(id) || bearsDefaultDemand(id)),
+            isCheckValve: cvNodeIds.contains,
+            isMover: moverNodeIds.contains,
+            isDemand: demandNodeIds.contains,
             closedMoverLegs: closedMoverLegs,
+            returnChainEnvelope: service == ServiceType.hotWater,
+            returnChainKeysOut: returnChainKeys,
           );
       final cvPlans = (isLooped && regime == FlowRegime.pressurized)
           ? classify()
@@ -2707,18 +2731,45 @@ Map<String, EdgeSizing> autoSizeNetwork(
       for (final plan in cvPlans) {
         againstLegs.addAll(run(plan));
       }
-      if (againstLegs.isNotEmpty) {
-        // Scenario (a): every leg that ran against its pump closed together;
-        // when that starves a draw-off point, each leg closed on its own.
-        var closedPlans = classify(againstLegs);
-        if (closedPlans.isEmpty && againstLegs.length > 1) {
+      // Scenario (a): every leg that ran against its pump closed together;
+      // when that starves a draw-off point, each leg closed on its own.
+      //
+      // Round 28 (regression-envelope-scenario-a-not-iterated) — scenario
+      // (a) is ITERATED to a fixed point: closing the legs that ran against
+      // their pump can leave a leg that ran WITH its pump in the first solve
+      // as the only open return path, and that leg then carries draw-off
+      // backwards. Its key joins the closed set and the closed reading is
+      // re-solved while the set grows (each pass adds at least one mover
+      // leg, so it stops within the number of mover legs). Without this a
+      // hotel of 24+ circulator returns sized its supply main on the
+      // re-opened leg's share — one DN small (2.75 L/s DN50 against the
+      // open network's curve(192 UBAP) = 4.60 L/s DN65).
+      //
+      // Round 28 (residuals-2) — a hot-water root chain the classifier names
+      // a plausible valveless RECIRCULATION RETURN (beside a pump on the
+      // heater discharge) joins scenario (a) the same way: closed with a
+      // pseudo return valve at its root end, enveloped with the open
+      // (balanced) reading; skipped when closing it starves a draw-off point.
+      var closedSet = {...againstLegs, ...returnChainKeys};
+      final legCount = cvPlans.fold<int>(
+          0, (m, p) => p.moverLegs.length > m ? p.moverLegs.length : m);
+      for (var pass = 0; closedSet.isNotEmpty && pass <= legCount; pass++) {
+        var closedPlans = classify(closedSet);
+        var joint = true;
+        if (closedPlans.isEmpty && closedSet.length > 1) {
+          joint = false;
           closedPlans = [
-            for (final k in [...againstLegs]..sort()) ...classify({k}),
+            for (final k in [...closedSet]..sort()) ...classify({k}),
           ];
         }
+        final grown = {...closedSet};
         for (final plan in closedPlans) {
-          run(plan);
+          grown.addAll(run(plan));
         }
+        // (The per-leg fallback reads each leg on its own: its against-legs
+        // name no joint closure, so it is not iterated.)
+        if (!joint || grown.length == closedSet.length) break;
+        closedSet = grown;
       }
       // One reading: its outputs stand as written.
       if (results.length == 1) continue;
@@ -3522,6 +3573,8 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   bool Function(String nodeId)? isMover,
   bool Function(String nodeId)? isDemand,
   Set<String> closedMoverLegs = const {},
+  bool returnChainEnvelope = false,
+  Set<String>? returnChainKeysOut,
 }) {
   const none = [_CheckValvePlan(<String>{}, <_StandbyLeg>[])];
   final adj = <String, List<NetEdge>>{};
@@ -3660,30 +3713,65 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   // Shortest distance from [start] with only [blocked] removed (Dijkstra in
   // HOPS — Round 27 r7: classification reads no metres and no plan pixels,
   // so calibration and plan coordinates never move it).
+  //
+  // Round 28 (regression-classifier-quadratic-dijkstra) — a priority queue
+  // keyed on (distance, node id) replaces the full-map scan (O(V^2) per
+  // call, over a second per sizing on a 30-riser x 10-storey hotel with
+  // return valves): nodes settle in EXACTLY the old (distance, id) order, so
+  // the map (values and insertion order) is unchanged. Results are memoised
+  // per classification call (every caller only reads them).
+  final distMemo = <String, Map<String, double>>{};
   Map<String, double> distFrom(String start, Set<String> blocked,
       {bool bendFree = false}) {
+    final memoKey =
+        '$start\u0001$bendFree\u0001${([...blocked]..sort()).join('\u0000')}';
+    final hit = distMemo[memoKey];
+    if (hit != null) return hit;
     final d = <String, double>{start: 0};
     final done = <String>{};
-    while (true) {
-      String? best;
-      for (final MapEntry(key: n, value: v) in d.entries) {
-        if (done.contains(n)) continue;
-        if (best == null ||
-            v < d[best]! ||
-            (v == d[best]! && n.compareTo(best) < 0)) {
-          best = n;
-        }
-      }
-      if (best == null) break;
-      done.add(best);
+    final queue = SplayTreeSet<(double, String)>((x, y) {
+      final c = x.$1.compareTo(y.$1);
+      return c != 0 ? c : x.$2.compareTo(y.$2);
+    })
+      ..add((0.0, start));
+    while (queue.isNotEmpty) {
+      final top = queue.first;
+      queue.remove(top);
+      final best = top.$2;
+      if (!done.add(best)) continue;
       for (final e in adj[best] ?? const <NetEdge>[]) {
         final m = other(e, best);
         if (blocked.contains(m) || done.contains(m)) continue;
         final nd = d[best]! + (bendFree ? bendWeight(e) : 1.0);
-        if (d[m] == null || nd < d[m]!) d[m] = nd;
+        final old = d[m];
+        if (old == null || nd < old) {
+          if (old != null) queue.remove((old, m));
+          d[m] = nd;
+          queue.add((nd, m));
+        }
       }
     }
-    return d;
+    return distMemo[memoKey] = d;
+  }
+
+  // The nodes reached from the root with [blocked] removed — reachability
+  // only, a plain memoised BFS (Round 28; `disconnectsDemand` runs in the
+  // r5 starve loops once per valve pair).
+  final reachMemo = <String, Set<String>>{};
+  Set<String> reachableWithout(Set<String> blocked) {
+    final memoKey = ([...blocked]..sort()).join('\u0000');
+    final hit = reachMemo[memoKey];
+    if (hit != null) return hit;
+    final seen = <String>{root};
+    final q = [root];
+    for (var i = 0; i < q.length; i++) {
+      for (final e in adj[q[i]] ?? const <NetEdge>[]) {
+        final m = other(e, q[i]);
+        if (blocked.contains(m) || !seen.add(m)) continue;
+        q.add(m);
+      }
+    }
+    return reachMemo[memoKey] = seen;
   }
 
   // Rule 2 — shortest distance from the root with only [blocked] removed.
@@ -3749,11 +3837,11 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   // A draw-off point cut off the source by [blocked] closed valves.
   bool disconnectsDemand(Set<String> blocked) {
     if (blocked.isEmpty) return false;
-    final d = distWithout(blocked);
+    final d = reachableWithout(blocked);
     for (final n in adj.keys) {
       if (blocked.contains(n) || n == root) continue;
       final demand = isDemand == null ? true : isDemand(n);
-      if (demand && !d.containsKey(n)) return true;
+      if (demand && !d.contains(n)) return true;
     }
     return false;
   }
@@ -4062,11 +4150,57 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     return other(last, l.fromNodeIds.last);
   }
 
+  // Round 28 (residuals-3) — a pump-free, valveless ROOT chain whose far
+  // junction is reached from every other side ONLY through coherent
+  // valveless movers pointing INTO it (per-riser circulators R -> Pr -> RJ,
+  // then a plain RJ -> K -> H back to the heater) is a RETURN chain too: no
+  // water can leave the heater that way without running backwards through a
+  // circulator. It is never a candidate discharge, so an ambiguous heater
+  // discharge valve beside it is the lone discharge (a feed) instead of a
+  // closed return that fed the whole building backwards up the returns.
+  final valvelessLegByEdge = <String, _MoverLeg>{
+    for (final l in valvelessByKey.values)
+      for (final id in l.edgeIds) id: l,
+  };
+  final returnFedChainKeys = <String>{};
+  final returnFedPumps = <String>{};
+  for (final e in adj[root] ?? const <NetEdge>[]) {
+    final ch = walk(root, e);
+    final end = ch.nodes.last;
+    if (end == root) continue;
+    final interior = ch.nodes.sublist(0, ch.nodes.length - 1);
+    if (interior.any((n) => isCheckValve(n) || (isMover?.call(n) ?? false))) {
+      continue;
+    }
+    final last = ch.edges.last;
+    final others = [
+      for (final x in adj[end] ?? const <NetEdge>[])
+        if (x.id != last.id) x,
+    ];
+    if (others.isEmpty) continue;
+    final feeders = <_MoverLeg>{};
+    var allMovers = true;
+    for (final x in others) {
+      final l = valvelessLegByEdge[x.id];
+      if (l == null || legDestination(l) != end) {
+        allMovers = false;
+        break;
+      }
+      feeders.add(l);
+    }
+    if (!allMovers) continue;
+    returnFedChainKeys.add(([for (final x in ch.edges) x.id]..sort()).join('\u0000'));
+    for (final l in feeders) {
+      returnFedPumps.addAll(l.pumpIds);
+    }
+  }
+
   // Pumps of valveless root chains drawn TOWARD the root: recirculation
   // returns (never a path a second feed can be judged against).
   final valvelessReturnPumps = <String>{
     for (final l in valvelessByKey.values)
       if (legDestination(l) == root) ...l.pumpIds,
+    ...returnFedPumps,
   };
   // Scenario (a) — a valveless leg the sizer CLOSES: a pseudo return valve
   // at its first pump (the pump's two pipes, in its drawn direction), so the
@@ -4090,6 +4224,52 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       downNode: other(outE, p),
     ));
   }
+
+  // Round 28 (residuals-2) — a hot-water RECIRCULATION RETURN drawn without
+  // its check valve: when a root chain carries a coherent mover pointing
+  // AWAY from the root (the circulator / pump set on the heater discharge),
+  // every other valve-free, mover-free root chain is a plausible return.
+  // Hardy–Cross on the plain ring fed draw-off from the heater up that
+  // return, against the circulation the pump sets, and sized the supply
+  // main on a share of the peak (curve(8) = 0.400 L/s at DN15 = 2.26 m/s).
+  // Such chains are reported ([returnChainKeysOut]) for the sizer's
+  // scenario (a): closed with a pseudo return valve at their root end (the
+  // r4 closed-return treatment), enveloped with the open reading.
+  final closedChainKeys = <String>{};
+  if (returnChainEnvelope) {
+    final discharges = <String>{
+      for (final l in [...moverLegs, ...valvelessByKey.values])
+        if (l.fromNodeIds.isNotEmpty && l.fromNodeIds.first == root)
+          l.edgeIds.first,
+    };
+    if (discharges.isNotEmpty) {
+      for (final e in adj[root] ?? const <NetEdge>[]) {
+        if (discharges.contains(e.id)) continue;
+        final ch = walk(root, e);
+        if (ch.nodes.last == root || ch.edges.length < 2) continue;
+        final interior = ch.nodes.sublist(0, ch.nodes.length - 1);
+        if (interior.any((n) =>
+            isCheckValve(n) ||
+            (isMover?.call(n) ?? false) ||
+            (isDemand?.call(n) ?? false))) {
+          continue;
+        }
+        final key = ([for (final x in ch.edges) x.id]..sort()).join('\u0000');
+        if (returnFedChainKeys.contains(key)) continue;
+        returnChainKeysOut?.add(key);
+        if (!closedMoverLegs.contains(key)) continue;
+        closedChainKeys.add(key);
+        final n1 = ch.nodes[0];
+        pseudoReturns.add((
+          id: n1,
+          inE: ch.edges[1],
+          outE: ch.edges[0],
+          upNode: ch.nodes[1],
+          downNode: root,
+        ));
+      }
+    }
+  }
   final pseudoIds = {for (final c in pseudoReturns) c.id};
   final openMoverLegs = <_MoverLeg>[
     ...moverLegs,
@@ -4099,6 +4279,49 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       if (!closedValvelessKeys.contains(l.key)) l,
   ];
   final closingLegs = closedMoverLegs.isNotEmpty;
+
+  // Round 28 (residuals-1) — a VALVELESS PARALLEL SET: two or more open,
+  // coherently drawn valveless mover legs between the SAME two leg ends in
+  // the SAME direction (a duty/standby pump set drawn without its check
+  // valves, GT -> P1 -> HDR and GT -> P2 -> HDR) is the Round-13 parallel
+  // discharge set — exactly as with the valves drawn: the tree runs through
+  // the first leg (by pump id), every other leg's pump pipes are deferred
+  // and its whole leg mirrors the duty leg's flow (a standby pump is a
+  // full-duty machine). Hardy–Cross used to split the set 50/50, halving
+  // each pump's duty and sizing both legs on half the flow (DN15 at
+  // 0.6278 L/s = 3.55 m/s). Discharge sets only (a set drawn toward the
+  // root is a recirculation return, sized by the return rules).
+  final valvelessStandby = <_StandbyLeg>[];
+  final valvelessStandbyDeferred = <String>{};
+  {
+    (String, String) pumpPipes(_MoverLeg l) {
+      final p = l.pumpIds.first;
+      final i = l.fromNodeIds.indexOf(p);
+      return (l.edgeIds[i - 1], l.edgeIds[i]);
+    }
+
+    final sets = <String, List<_MoverLeg>>{};
+    for (final l in valvelessByKey.values) {
+      if (closedValvelessKeys.contains(l.key)) continue;
+      final dest = legDestination(l);
+      if (dest == root) continue;
+      (sets['${l.fromNodeIds.first}\u0000$dest'] ??= []).add(l);
+    }
+    for (final key in [...sets.keys]..sort()) {
+      final group = sets[key]!
+        ..sort((a, b) => a.pumpIds.first.compareTo(b.pumpIds.first));
+      if (group.length < 2) continue;
+      final (dIn, dOut) = pumpPipes(group.first);
+      for (final l in group.skip(1)) {
+        final (sIn, sOut) = pumpPipes(l);
+        valvelessStandbyDeferred
+          ..add(sIn)
+          ..add(sOut);
+        valvelessStandby
+            .add(_StandbyLeg(l.edgeIds, l.fromNodeIds, [dIn, dOut]));
+      }
+    }
+  }
 
   // Rule 3(1) — an ambiguous valve in a PARALLEL set onto one header: its
   // two leg ends (through bare degree-2 nodes and inline pumps) are exactly
@@ -4160,6 +4383,16 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
           ch.nodes[i]: sideToward(ch.nodes[i], i == 0 ? root : ch.nodes[i - 1]),
     };
     if (valves.keys.any(fixedReturn.containsKey)) continue;
+    if (valves.isEmpty) {
+      final chainKey =
+          ([for (final x in ch.edges) x.id]..sort()).join('\u0000');
+      // Round 28 — fed only through circulators, or a recirculation return
+      // closed for scenario (a): a return chain.
+      if (returnFedChainKeys.contains(chainKey) ||
+          closedChainKeys.contains(chainKey)) {
+        continue;
+      }
+    }
     if (valves.isEmpty) {
       // r8 — a valveless chain carrying a coherent mover: drawn toward the
       // root it is a RETURN chain (never a candidate discharge), as is a
@@ -4653,8 +4886,8 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     // every other valve's edges are deferred and its whole leg (the chain of
     // degree-2 nodes through it, up to the split / merge junction or the
     // root) mirrors the duty valve's flow.
-    final standbyDeferred = <String>{};
-    final legs = <_StandbyLeg>[];
+    final standbyDeferred = <String>{...valvelessStandbyDeferred};
+    final legs = <_StandbyLeg>[...valvelessStandby];
     for (final group in parallelGroups) {
       final duty = group.first;
       for (final c in group.skip(1)) {
@@ -4767,26 +5000,31 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       // Distance with the returns cut and every feed valve one-way, in the
       // BEND-FREE metric ([bendWeight]; Round 27 r5): a bare bend inserted
       // anywhere never changes which pipes lie on a shortest supply path.
+      // (Round 28 — a (distance, id) priority queue: the same settle order
+      // as the old full-map scan, without its O(V^2).)
       final dist1 = <String, int>{root: 0};
       final done1 = <String>{};
-      while (true) {
-        String? best;
-        for (final MapEntry(key: n, value: v) in dist1.entries) {
-          if (done1.contains(n)) continue;
-          if (best == null ||
-              v < dist1[best]! ||
-              (v == dist1[best]! && n.compareTo(best) < 0)) {
-            best = n;
-          }
-        }
-        if (best == null) break;
-        done1.add(best);
+      final queue1 = SplayTreeSet<(int, String)>((x, y) {
+        final c = x.$1.compareTo(y.$1);
+        return c != 0 ? c : x.$2.compareTo(y.$2);
+      })
+        ..add((0, root));
+      while (queue1.isNotEmpty) {
+        final top = queue1.first;
+        queue1.remove(top);
+        final best = top.$2;
+        if (!done1.add(best)) continue;
         for (final e in adj[best] ?? const <NetEdge>[]) {
           if (cut1.contains(e.id) || !passable(e, best)) continue;
           final m = other(e, best);
           if (done1.contains(m)) continue;
           final nd = dist1[best]! + bendWeight(e);
-          if (dist1[m] == null || nd < dist1[m]!) dist1[m] = nd;
+          final old = dist1[m];
+          if (old == null || nd < old) {
+            if (old != null) queue1.remove((old, m));
+            dist1[m] = nd;
+            queue1.add((nd, m));
+          }
         }
       }
       final rp = returnPlan(dist1, cut1, rets);

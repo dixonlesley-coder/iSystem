@@ -3460,12 +3460,46 @@ class NetworkController extends Notifier<DrawingState> {
 
   /// Replace the network (used when opening a saved document). Resets history
   /// and advances the id counter past any loaded ids to avoid collisions.
-  void loadNetwork(Network net) {
+  ///
+  /// Round 28 (persist-undo-2-1) — the counter also honours the SAVED counter
+  /// ([nextSeq], `network.nextSeq` in `.mechx`) and every id still REFERENCED
+  /// by persisted records ([referencedIds]: parked MEP way ids
+  /// `mep-node-n<k>`, acknowledgement keys …), so a node minted after a reload
+  /// never re-uses a deleted node's id — re-adopting its parked way (with the
+  /// overrides typed for another machine) or inheriting its signed
+  /// acknowledgement — exactly as in the never-saved session.
+  void loadNetwork(Network net,
+      {int? nextSeq, Iterable<String> referencedIds = const []}) {
     _undo.clear();
     _redo.clear();
     _dragSnapshotPending = false;
-    _seq = _maxLoadedSeq(net) + 1;
+    var seq = _maxLoadedSeq(net) + 1;
+    if (nextSeq != null && nextSeq > seq) seq = nextSeq;
+    final ref = maxReferencedSeq(referencedIds);
+    if (ref + 1 > seq) seq = ref + 1;
+    _seq = seq;
     state = DrawingState(network: net, service: state.service);
+  }
+
+  /// Round 28 — the counter value to persist (`network.nextSeq`), or null
+  /// when the live ids already imply it (nothing minted above the highest
+  /// live id was deleted), so an untouched file stays byte-identical.
+  int? get persistedNextSeq =>
+      _seq > _maxLoadedSeq(state.network) + 1 ? _seq : null;
+
+  /// The largest `n<k>` / `e<k>` id number embedded in [refs] (a node / edge
+  /// id token not glued to a longer word), or -1. Over-reserving is harmless
+  /// (an id is merely skipped); under-reserving re-uses a referenced id.
+  static int maxReferencedSeq(Iterable<String> refs) {
+    final token = RegExp(r'(?<![A-Za-z0-9])[ne](\d+)(?![0-9])');
+    var max = -1;
+    for (final r in refs) {
+      for (final m in token.allMatches(r)) {
+        final v = int.tryParse(m.group(1)!);
+        if (v != null && v > max) max = v;
+      }
+    }
+    return max;
   }
 
   int _maxLoadedSeq(Network net) {

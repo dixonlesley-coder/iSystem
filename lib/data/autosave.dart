@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:isolate';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
+import 'package:mechx_engine/electrical/model.dart'
+    show ElectricalPanel, ElectricalProject;
 
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
@@ -181,6 +182,11 @@ ProjectDocument buildDocument(ProviderReader read) {
     rooms: read(roomAreasProvider),
     // Traced reference lines (B12) round-trip with the project.
     referenceLines: read(referenceLinesProvider),
+    // Round 28 (persist-undo-2-1 / -4) — the id counters, written only when
+    // they run ahead of the live ids (a deleted top id), so a reload never
+    // re-mints a deleted node / room id.
+    networkNextSeq: read(networkControllerProvider.notifier).persistedNextSeq,
+    roomNextSeq: read(roomAreasProvider.notifier).persistedNextSeq,
   );
 }
 
@@ -238,7 +244,22 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
         viewports: doc.viewports,
         sheetFloors: doc.sheetFloors,
       );
-  read(networkControllerProvider.notifier).loadNetwork(doc.network);
+  // Round 28 (persist-undo-2-1) — the id counter also clears every id still
+  // REFERENCED by persisted records: parked MEP ways (`mep-node-n<k>`) and
+  // acknowledgement keys, so an older file without `nextSeq` never re-mints a
+  // deleted node's id either.
+  read(networkControllerProvider.notifier).loadNetwork(
+    doc.network,
+    nextSeq: doc.networkNextSeq,
+    referencedIds: [
+      for (final a in doc.settings.acknowledgedIssues) a.key,
+      for (final p in doc.electrical?.panels ?? const <ElectricalPanel>[])
+        for (final c in p.circuits) ...[
+          c.id,
+          if (c.sourceEquipmentId != null) c.sourceEquipmentId!,
+        ],
+    ],
+  );
   // An opened/restored document is a fresh baseline — clear the global timeline
   // to match the per-domain controllers clearing their own stacks on load.
   read(historyProvider.notifier).reset();
@@ -334,7 +355,13 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // Restore designated tank areas (absent on an older file ⇒ empty).
   read(tankAreasProvider.notifier).set(doc.tanks);
   // Restore designated room/zone areas (absent on an older file ⇒ empty).
-  read(roomAreasProvider.notifier).set(doc.rooms);
+  // Round 28 (persist-undo-2-4) — the room counter restarts from the
+  // document, past the saved counter and every terminal's generating-room tag.
+  read(roomAreasProvider.notifier).load(
+    doc.rooms,
+    nextSeq: doc.roomNextSeq,
+    referencedIds: [for (final n in doc.network.nodes) n.autoPlacedRoomId],
+  );
   // Restore traced reference lines (B12; absent on an older file ⇒ empty).
   read(referenceLinesProvider.notifier).set(doc.referenceLines);
   // Drop the underlay snap caches (vector/ink/reference indices) — they are keyed

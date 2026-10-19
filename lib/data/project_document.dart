@@ -784,6 +784,16 @@ class ProjectDocument {
   /// the key; a build without the source files falls back to the paths.
   final Map<String, String> assets;
 
+  /// Round 28 (persist-undo-2-1) — the network id counter (`network.nextSeq`)
+  /// when it runs AHEAD of the live ids (a node / edge minted above the
+  /// highest live id was deleted). Null ⇒ implied by the ids, not written, so
+  /// an untouched file stays byte-identical.
+  final int? networkNextSeq;
+
+  /// Round 28 (persist-undo-2-4) — the room id counter (`roomNextSeq`) when it
+  /// runs ahead of the live room ids; null ⇒ not written.
+  final int? roomNextSeq;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -803,6 +813,8 @@ class ProjectDocument {
     this.rooms = const [],
     this.referenceLines = const [],
     this.assets = const {},
+    this.networkNextSeq,
+    this.roomNextSeq,
   });
 
   /// A copy with [sheets] (and optionally [assets]) replaced — used by asset
@@ -827,6 +839,8 @@ class ProjectDocument {
         rooms: rooms,
         referenceLines: referenceLines,
         assets: assets ?? this.assets,
+        networkNextSeq: networkNextSeq,
+        roomNextSeq: roomNextSeq,
       );
 
   Map<String, dynamic> toJson() => {
@@ -898,6 +912,7 @@ class ProjectDocument {
         'measurements': [for (final m in measurements) m.toJson()],
         'tanks': [for (final t in tanks) t.toJson()],
         'rooms': [for (final r in rooms) r.toJson()],
+        if (roomNextSeq != null) 'roomNextSeq': roomNextSeq,
         'referenceLines': [for (final r in referenceLines) r.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         // Embedded source plans (base64), only when present ⇒ path-only projects
@@ -906,6 +921,7 @@ class ProjectDocument {
         'network': {
           'nodes': [for (final n in network.nodes) _netNodeToJson(n)],
           'edges': [for (final e in network.edges) _netEdgeToJson(e)],
+          if (networkNextSeq != null) 'nextSeq': networkNextSeq,
         },
       };
 
@@ -926,11 +942,22 @@ class ProjectDocument {
       );
     }
     final project = json['project'] as Map<String, dynamic>;
+    // Round 28 (persist-undo-2-5) — each height is decoded into the setter
+    // band [0.5, 20] m (non-finite / non-positive ⇒ 3.5 m), like every other
+    // Round-19 decoder: a hand-damaged negative storey would otherwise put
+    // the floor above below the one beneath it. (An EMPTY list is left empty:
+    // `ProjectController.load` falls back to the default stack.)
+    double floorHeight(Object? raw) {
+      final v = raw is num ? raw.toDouble() : double.nan;
+      if (!v.isFinite || v <= 0) return 3.5;
+      return v.clamp(0.5, 20.0).toDouble();
+    }
+
     final floors = [
       for (final f in project['floors'] as List)
         Floor(
           (f as Map)['name'] as String,
-          Length((f['height_m'] as num).toDouble()),
+          Length(floorHeight(f['height_m'])),
         ),
     ];
     // Tolerant — absent on an older / no-basement file ⇒ ground at the bottom.
@@ -1080,6 +1107,8 @@ class ProjectDocument {
       rooms: rooms,
       referenceLines: referenceLines,
       assets: assets,
+      networkNextSeq: _seqOrNull(net['nextSeq']),
+      roomNextSeq: _seqOrNull(json['roomNextSeq']),
     );
   }
 
@@ -1102,6 +1131,14 @@ class ProjectDocument {
       throw ProjectDocumentException('Could not read project: $e');
     }
   }
+}
+
+/// Round 28 — a persisted id counter: a non-negative integer, else null
+/// (tolerant: a hand-damaged value falls back to the ids themselves).
+int? _seqOrNull(Object? raw) {
+  if (raw is! num || !raw.isFinite) return null;
+  final v = raw.toInt();
+  return v >= 0 ? v : null;
 }
 
 /// Round 24 — tolerant decode of a sheet's DXF import frame: four finite

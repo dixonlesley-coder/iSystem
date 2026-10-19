@@ -1034,6 +1034,35 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
       if (n != null && n >= _seq) _seq = n + 1;
     }
   }
+
+  /// Round 28 (persist-undo-2-4) — load a DOCUMENT's rooms: the counter
+  /// restarts from the document, past every live room id, the saved counter
+  /// ([nextSeq], `.mechx` `roomNextSeq`) and every room id still REFERENCED
+  /// by the drawing ([referencedIds]: the terminals' `autoPlacedRoomId`), so
+  /// a room drawn after a reload never re-uses a deleted room's id — and
+  /// never adopts (then deletes on Auto-place) the terminals tagged with it.
+  void load(List<RoomArea> rooms,
+      {int? nextSeq, Iterable<String?> referencedIds = const []}) {
+    _seq = 0;
+    set(rooms);
+    if (nextSeq != null && nextSeq > _seq) _seq = nextSeq;
+    for (final id in referencedIds) {
+      if (id == null || !id.startsWith('r')) continue;
+      final n = int.tryParse(id.substring(1));
+      if (n != null && n >= _seq) _seq = n + 1;
+    }
+  }
+
+  /// Round 28 — the counter to persist (`roomNextSeq`), or null when the live
+  /// room ids already imply it (an untouched file stays byte-identical).
+  int? get persistedNextSeq {
+    var implied = 0;
+    for (final r in state) {
+      final n = int.tryParse(r.id.replaceFirst('r', ''));
+      if (n != null && n >= implied) implied = n + 1;
+    }
+    return _seq > implied ? _seq : null;
+  }
 }
 
 /// M15 — the AC cooling load for one room (by [RoomArea.id]) computed on the

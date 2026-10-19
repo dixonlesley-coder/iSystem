@@ -319,14 +319,34 @@ SprinklerRemoteAreaResult remoteAreaHydraulics({
 /// the standpipe verify checklist). A sprinkler-only building used to get the
 /// standpipe-rated pump (≈ 31.5 L/s / 55 kW) on its report, schedule and MDP —
 /// about 5× the flow of the only drawn fire system. Pure orchestration.
+///
+/// Round 28 (fire-3-pump-head-ignores-sized-fire-pipe-friction) — when the
+/// friction of the SIZED index path from the pump to the most-remote head is
+/// known ([indexPathFriction], `fireIndexPathFrictionM` on a calibrated
+/// drawing), the head is the larger of the allowance basis above and the
+/// calculated basis
+///
+///     H = staticLift + P_remoteHead/(ρ·g) + indexPathFriction
+///
+/// (the drawn branch is part of the index path, so the remote HEAD pressure
+/// replaces the branch-base pressure). More information never lowers the
+/// rated head: the 15 m allowance stays the floor. Null ⇒ byte-identical.
 ({FlowRate flow, Head head}) sprinklerPumpRatedPoint({
   required SprinklerRemoteAreaResult remote,
   required double staticLiftM,
   Head frictionAllowance = const Head(15),
+  Head? indexPathFriction,
 }) {
   const rhoG = 1000 * 9.81;
-  final head = math.max(0.0, staticLiftM) +
-      remote.branchBasePressure.pascals / rhoG +
-      frictionAllowance.meters;
+  final lift = math.max(0.0, staticLiftM);
+  var head =
+      lift + remote.branchBasePressure.pascals / rhoG + frictionAllowance.meters;
+  if (indexPathFriction != null) {
+    head = math.max(
+        head,
+        lift +
+            remote.remoteHeadPressure.pascals / rhoG +
+            indexPathFriction.meters);
+  }
   return (flow: remote.remoteAreaDemand, head: Head(head));
 }

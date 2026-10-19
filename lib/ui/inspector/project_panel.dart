@@ -916,16 +916,28 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       ));
     }
     final jockeyDuty = ref.read(fireJockeyDutyProvider);
+    // Round 28 — each drawn pump on the duty and service of its OWN fire
+    // system (a sprinkler pump on its own network is a sprinkler pump).
+    final bases = ref.read(firePumpBasisByNodeProvider);
     for (final id in drawn) {
       final tag = nodeTags[id]!;
       final jockey = binding.fireJockeyPumpNodeIds.contains(id);
+      final basis = bases[id];
+      final mainDuty = basis?.duty ?? firePump;
+      final sysService = basis == null
+          ? fireService
+          : reportStringsFor(ref)(basis.sprinklerOnly
+              ? RptStringKey.esSvcFireSprinkler
+              : RptStringKey.esSvcFireStandpipe);
       pumps.add(PumpScheduleItem(
-        duty: jockey ? (jockeyDuty ?? firePump) : firePump,
+        duty: jockey
+            ? (basis?.jockey ?? jockeyDuty ?? mainDuty)
+            : mainDuty,
         service: jockey
             ? reportStringsFor(ref)(RptStringKey.esSvcFireJockeyPump)
             : binding.fireStandbyPumpNodeIds.contains(id)
                 ? reportStringsFor(ref)(RptStringKey.esSvcFireStandbyPump)
-                : fireService,
+                : sysService,
         tag: tag,
         modelSpec: specs[tag],
       ));

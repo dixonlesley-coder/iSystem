@@ -109,9 +109,23 @@ class ProjectState {
       );
 }
 
+/// The default 3-level stack a brand-new project starts with — also the
+/// fallback for a document whose floor list is empty (Round 28
+/// persist-undo-2-5: never the previously open project's floors).
+const List<Floor> kDefaultProjectFloors = [
+  Floor('Ground', Length(4.0)),
+  Floor('Level 1', Length(3.5)),
+  Floor('Level 2', Length(3.5)),
+];
+
+/// The storey-height band every setter clamps to (m); a loaded document is
+/// clamped into it too (Round 28).
+const double kMinFloorHeightM = 0.5;
+const double kMaxFloorHeightM = 20.0;
+
 class ProjectController extends Notifier<ProjectState> {
-  static const double _minHeight = 0.5;
-  static const double _maxHeight = 20.0;
+  static const double _minHeight = kMinFloorHeightM;
+  static const double _maxHeight = kMaxFloorHeightM;
   // F8 — sane bounds for the two mounting heights (a main can hang from flush
   // with the slab to 1.5 m below it; a fixture connection sits between the
   // floor and head height). They bound typing, not physics.
@@ -126,11 +140,7 @@ class ProjectController extends Notifier<ProjectState> {
   @override
   ProjectState build() => const ProjectState(
         name: 'Untitled project',
-        floors: [
-          Floor('Ground', Length(4.0)),
-          Floor('Level 1', Length(3.5)),
-          Floor('Level 2', Length(3.5)),
-        ],
+        floors: kDefaultProjectFloors,
       );
 
   bool get canUndo => _undo.isNotEmpty;
@@ -181,7 +191,22 @@ class ProjectController extends Notifier<ProjectState> {
   }) {
     _undo.clear();
     _redo.clear();
-    final f = floors.isEmpty ? state.floors : floors;
+    // Round 28 (persist-undo-2-5) — a damaged (empty) floor list falls back
+    // to the DEFAULT stack, never the previously open project's floors (the
+    // same file used to load different elevations depending on what was open
+    // before), and every height is clamped into the setter band (a negative
+    // storey put the floor above below the one beneath it).
+    final f = floors.isEmpty
+        ? kDefaultProjectFloors
+        : [
+            for (final fl in floors)
+              Floor(
+                fl.name,
+                Length(fl.height.meters.isFinite && fl.height.meters > 0
+                    ? fl.height.meters.clamp(_minHeight, _maxHeight).toDouble()
+                    : 3.5),
+              ),
+          ];
     state = ProjectState(
       name: name,
       floors: f,

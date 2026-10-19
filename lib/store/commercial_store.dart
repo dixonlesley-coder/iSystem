@@ -26,7 +26,10 @@ import 'package:mechx_engine/electrical/costing.dart';
 import 'package:mechx_engine/electrical/quotation.dart';
 import 'package:mechx_engine/report/mep_commercial.dart';
 
+import '../ui/strings/app_strings.dart';
+import 'app_state.dart' show localeProvider;
 import 'electrical_store.dart';
+import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'solve_store.dart';
 
 /// The user-editable commercial inputs: the catalogue pricelist (`sku → unit
@@ -92,6 +95,36 @@ class CommercialController extends Notifier<CommercialSettings> {
   /// Replace the whole settings object (used by `applyDocument` on load).
   void set(CommercialSettings settings) => state = settings;
 
+  /// Round 28 (persist-undo-2-2) — the pricelist and markups are persisted in
+  /// `.mechx` and drive the issued quotation, so each user edit records ONE
+  /// [UndoDomain.settings] step (an edit that changes nothing records
+  /// nothing). [set] (load) stays non-recording.
+  void _commit(CommercialSettings next) {
+    final previous = state;
+    if (_same(previous, next)) return;
+    state = next;
+    ref.read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+          label: MechXStringsData(ref.read(localeProvider))(
+              StringKey.undoLabelPricelist),
+          undo: () => state = previous,
+          redo: () => state = next,
+        ));
+  }
+
+  static bool _same(CommercialSettings a, CommercialSettings b) {
+    if (a.labourRatePerHour != b.labourRatePerHour ||
+        a.overheadPct != b.overheadPct ||
+        a.contingencyPct != b.contingencyPct ||
+        a.marginPct != b.marginPct ||
+        a.priceList.length != b.priceList.length) {
+      return false;
+    }
+    for (final e in a.priceList.entries) {
+      if (b.priceList[e.key] != e.value) return false;
+    }
+    return true;
+  }
+
   /// Set / clear one part's unit price. A null or non-positive [price] removes
   /// the entry (so an empty cell un-prices the line rather than pinning 0).
   void setPrice(String sku, double? price) {
@@ -101,7 +134,7 @@ class CommercialController extends Notifier<CommercialSettings> {
     } else {
       next[sku] = price;
     }
-    state = state.copyWith(priceList: next);
+    _commit(state.copyWith(priceList: next));
   }
 
   /// Remove one part's price.
@@ -109,19 +142,19 @@ class CommercialController extends Notifier<CommercialSettings> {
 
   /// Replace the whole pricelist (e.g. paste / import).
   void setPriceList(Map<String, double> priceList) =>
-      state = state.copyWith(priceList: Map<String, double>.from(priceList));
+      _commit(state.copyWith(priceList: Map<String, double>.from(priceList)));
 
   void setLabourRate(double rate) =>
-      state = state.copyWith(labourRatePerHour: rate < 0 ? 0 : rate);
+      _commit(state.copyWith(labourRatePerHour: rate < 0 ? 0 : rate));
 
   void setOverheadPct(double pct) =>
-      state = state.copyWith(overheadPct: pct.clamp(0.0, 100.0));
+      _commit(state.copyWith(overheadPct: pct.clamp(0.0, 100.0)));
 
   void setContingencyPct(double pct) =>
-      state = state.copyWith(contingencyPct: pct.clamp(0.0, 100.0));
+      _commit(state.copyWith(contingencyPct: pct.clamp(0.0, 100.0)));
 
   void setMarginPct(double pct) =>
-      state = state.copyWith(marginPct: pct.clamp(0.0, 99.9));
+      _commit(state.copyWith(marginPct: pct.clamp(0.0, 99.9)));
 }
 
 /// Derived: the electrical bill of materials over the FULL multi-brand catalogue

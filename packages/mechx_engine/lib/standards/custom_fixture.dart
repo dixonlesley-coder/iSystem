@@ -112,11 +112,19 @@ class CustomFixture {
     final name = raw['name'];
     if (id is! String || id.isEmpty || name is! String) return null;
     final mh = raw['mountingHeight_m'];
+    // Round 28 (persist-undo-2-5) — a load is a non-negative, finite number
+    // of fixture units (a hand-damaged -5 UBAP used to size its supply at
+    // Q = 0); anything else decodes to 0, the absent-value default.
+    double units(Object? v) {
+      final d = v is num ? v.toDouble() : 0.0;
+      return d.isFinite && d > 0 ? d : 0.0;
+    }
+
     return CustomFixture(
       id: id,
       name: name,
-      supplyUnits: (raw['supplyUnits'] as num?)?.toDouble() ?? 0,
-      drainageUnits: (raw['drainageUnits'] as num?)?.toDouble() ?? 0,
+      supplyUnits: units(raw['supplyUnits']),
+      drainageUnits: units(raw['drainageUnits']),
       defaultMountingHeight: mh is num ? Length(mh.toDouble()) : null,
       isFlushValve: raw['isFlushValve'] == true,
       // Tolerant: absent / non-bool (an older file) ⇒ false.
