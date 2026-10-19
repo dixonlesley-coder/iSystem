@@ -108,6 +108,11 @@ final class TerminalBank {
     required this.airflowEach,
     required this.each,
   });
+
+  /// Round 27 (hvac-4-5) — the selected standard rectangular face of one
+  /// terminal (width × height mm), the face Auto-place stamps on the node.
+  (double widthMm, double heightMm) get faceMm =>
+      standardGrilleFaceForGrossArea(each.grossFaceArea);
 }
 
 /// Largest standard grille gross face area (m²) — caps one terminal's quiet

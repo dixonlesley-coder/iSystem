@@ -1179,6 +1179,8 @@ enum StringKey {
   issueRoomTerminalsStaleMessage,
   issueRoomBankSupply,
   issueRoomBankExtract,
+  issueRoomTrunkOverCapacityTitle,
+  issueRoomTrunkOverCapacityMessage,
   schematicNotesRoofTank,
   schematicNotesGroundTank,
   schematicNotesOccupancy,
@@ -2553,6 +2555,10 @@ const Map<StringKey, String> _en = {
       'supply',
   StringKey.issueRoomBankExtract:
       'return / extract',
+  StringKey.issueRoomTrunkOverCapacityTitle:
+      'Room trunk over capacity',
+  StringKey.issueRoomTrunkOverCapacityMessage:
+      '{room} needs {flow} m3/s; even the largest standard trunk ({size}) runs at {velocity} m/s. Split the room across several units / trunks or lower its ACH.',
   StringKey.schematicNotesRoofTank:
       'Roof tank: {m3} m3',
   StringKey.schematicNotesGroundTank:
@@ -3957,6 +3963,10 @@ const Map<StringKey, String> _id = {
       'suplai',
   StringKey.issueRoomBankExtract:
       'balik / buang',
+  StringKey.issueRoomTrunkOverCapacityTitle:
+      'Saluran utama ruangan melebihi kapasitas',
+  StringKey.issueRoomTrunkOverCapacityMessage:
+      '{room} memerlukan {flow} m3/s; saluran standar terbesar ({size}) pun mengalir {velocity} m/s. Bagi ruangan ke beberapa unit / saluran atau turunkan ACH-nya.',
   StringKey.schematicNotesRoofTank:
       'Tangki atap: {m3} m3',
   StringKey.schematicNotesGroundTank:

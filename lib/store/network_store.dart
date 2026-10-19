@@ -4,7 +4,6 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/grille_sizing.dart' show standardGrilleFacesMm;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show DuctShape, DuctSizingMethod;
 import 'package:mechx_engine/sizing/room_air.dart' show TerminalBank;
@@ -1770,8 +1769,11 @@ class NetworkController extends Notifier<DrawingState> {
     DuctShape ductShape = DuctShape.round,
     DuctSizingMethod ductMethod = DuctSizingMethod.velocity,
   }) {
+    // Round 27 (hvac-4-2) — the NET area: a nested room places its own.
     final s = room.sizing(metersPerPixel,
-        ductShape: ductShape, ductMethod: ductMethod);
+        ductShape: ductShape,
+        ductMethod: ductMethod,
+        rooms: ref.read(roomAreasProvider));
     if (s == null) return const [];
 
     final loX = room.ax < room.bx ? room.ax : room.bx;
@@ -1925,22 +1927,8 @@ class NetworkController extends Notifier<DrawingState> {
   }
 
   /// The standard rectangular face (width, height in mm) the engine chose for a
-  /// [bank], recovered by matching the bank's chosen gross face area against the
-  /// standard catalogue (see [standardGrilleFacesMm]).
-  (double, double) _faceMm(TerminalBank bank) {
-    final targetM2 = bank.each.grossFaceArea.squareMeters;
-    var best = standardGrilleFacesMm.first;
-    var bestErr = double.infinity;
-    for (final f in standardGrilleFacesMm) {
-      final grossM2 = (f.$1 / 1000.0) * (f.$2 / 1000.0);
-      final err = (grossM2 - targetM2).abs();
-      if (err < bestErr) {
-        bestErr = err;
-        best = f;
-      }
-    }
-    return best;
-  }
+  /// [bank] (Round 27 — the shared engine lookup the inspector prints too).
+  (double, double) _faceMm(TerminalBank bank) => bank.faceMm;
 
   /// Round 9 — the service of [node] when it is a PLAIN run junction (no
   /// component, `main` role, every incident edge one service), else null. Used

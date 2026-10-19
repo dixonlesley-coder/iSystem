@@ -1132,7 +1132,9 @@ Map<String, String> serviceComponentRoots(
 ///     Hunter/UBAP curve ([flushSystem]) — diversified simultaneous demand,
 ///     NOT a sum of peak fixture flows. Round 22: [flushSystem] applies to
 ///     COLD water only; hot water always takes the flush-tank branch (it
-///     never serves a flush valve).
+///     never serves a flush valve). Round 27: with [flushValveNodeIds] the
+///     branch is chosen per cold-water COMPONENT (flush valve only where one
+///     of those nodes is on it) — see [flushSystemForRoot].
 ///   • Everything else (or water without fixture-unit data): accumulate the
 ///     flat [leafDemand] flows.
 ///
@@ -1203,6 +1205,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   FlowRate? sprinklerDemandCap,
   FlowRate? hydrantDesignFlow,
   FlushSystem flushSystem = FlushSystem.flushTank,
+  Set<String> flushValveNodeIds = const {},
   BuildingLevels? building,
   Map<String, ScaleCalibration> calibrationBySheet = const {},
   MountingHeights mounting = const MountingHeights(),
@@ -1275,7 +1278,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
     // exists for the valve WC's high instantaneous draw; the hot-water service
     // never carries a flush valve, so it always takes the flush-tank branch
     // (one valve WC on cold water used to put every HW main one or two DN up).
-    final serviceFlush =
+    final serviceFlushDefault =
         service == ServiceType.hotWater ? FlushSystem.flushTank : flushSystem;
     final demand = leafDemand[service] ?? const FlowRate(0);
     final useUbap =
@@ -1452,6 +1455,18 @@ Map<String, EdgeSizing> autoSizeNetwork(
       final leaves = component.where((n) => degree(n) == 1).toList();
       final pickedRoot = pickRoot(component, leaves);
       final regime = service.regime;
+      // Round 27 (residuals-6) — Hunter's method picks the demand curve per
+      // SUPPLY SYSTEM: with [flushValveNodeIds] given, a cold-water component
+      // takes the flush-VALVE branch only when it holds a flush-valve fixture
+      // itself. One valve WC on a separate system (or typed on the drainage
+      // layer only) used to re-curve every cold-water system in the project
+      // (+76 % flow, one DN up). Empty set ⇒ the single [flushSystem].
+      final serviceFlush =
+          service == ServiceType.hotWater || flushValveNodeIds.isEmpty
+              ? serviceFlushDefault
+              : (component.any(flushValveNodeIds.contains)
+                  ? FlushSystem.flushValve
+                  : FlushSystem.flushTank);
 
       // Round 15 (root-metamorphic-rain-multi-downpipe) — a DRAINAGE or
       // RAINWATER component can discharge at SEVERAL outfalls: two downpipes
@@ -2772,6 +2787,38 @@ class _StandbyLeg {
   final List<String> fromNodeIds;
   final List<String> dutyEdgeIds;
   const _StandbyLeg(this.edgeIds, this.fromNodeIds, this.dutyEdgeIds);
+}
+
+/// Round 27 (residuals-6) — the demand-curve branch of the [service]
+/// component containing [rootId]: the flush-VALVE branch only for a cold-water
+/// system that holds one of [flushValveNodeIds] (hot water never serves a
+/// flush valve). The SAME per-system rule [autoSizeNetwork] applies, so a
+/// consumer re-diversifying a source's summed UBAP reads the sizer's curve.
+FlushSystem flushSystemForRoot(
+  Network net,
+  ServiceType service,
+  String rootId,
+  Set<String> flushValveNodeIds,
+) {
+  if (service != ServiceType.coldWater || flushValveNodeIds.isEmpty) {
+    return FlushSystem.flushTank;
+  }
+  final adj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != service) continue;
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final seen = <String>{rootId};
+  final stack = [rootId];
+  while (stack.isNotEmpty) {
+    final n = stack.removeLast();
+    if (flushValveNodeIds.contains(n)) return FlushSystem.flushValve;
+    for (final m in adj[n] ?? const <String>[]) {
+      if (seen.add(m)) stack.add(m);
+    }
+  }
+  return FlushSystem.flushTank;
 }
 
 /// How a looped pressurized component's check valves are treated (Round 13).

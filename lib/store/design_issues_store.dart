@@ -1093,7 +1093,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final roomSizing = <String, RoomAirResult?>{
     for (final r in rooms)
       r.id: r.sizing(project.calibrationFor(r.sheetId)?.metersPerPixel,
-          ductShape: ductSettings.shape, ductMethod: ductSettings.method),
+          ductShape: ductSettings.shape,
+          ductMethod: ductSettings.method,
+          rooms: rooms),
   };
   final terminalOwner = <String, String?>{
     for (final n in net.nodes)
@@ -1168,6 +1170,34 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         'bank': bank,
       }),
       locate: IssueLocation(r.sheetId, nodeId: firstTerminal),
+    ));
+  }
+
+  // ── 5a-quinquies. Room trunk over capacity (warning) ──────────────────────
+  // Round 27 (hvac-4-4) — a room whose airflow exceeds the largest standard
+  // trunk is CLAMPED by `sizeRoomAir` (`trunkOverCapacity`); the Rooms
+  // inspector used to print the clamped size as 'sized' with nothing in
+  // Review, unlike the drawn-network duct (`airOverCapacityProvider`).
+  for (final r in rooms) {
+    final sizing = roomSizing[r.id];
+    if (sizing == null || !sizing.trunkOverCapacity) continue;
+    final round = sizing.supplyDuctRound;
+    final rect = sizing.supplyDuctRect;
+    final size = round != null
+        ? 'D${round.diameter.inMillimeters.round()} mm'
+        : '${rect!.width.inMillimeters.round()}x'
+            '${rect.height.inMillimeters.round()} mm';
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'room-trunk-over-capacity:${r.id}',
+      title: str(StringKey.issueRoomTrunkOverCapacityTitle),
+      message: str.format(StringKey.issueRoomTrunkOverCapacityMessage, {
+        'room': r.name.isEmpty ? r.id : r.name,
+        'flow': sizing.airflow.cubicMetersPerSecond.toStringAsFixed(2),
+        'size': size,
+        'velocity': sizing.supplyDuctVelocity.metersPerSecond.toStringAsFixed(1),
+      }),
+      locate: IssueLocation(r.sheetId),
     ));
   }
 

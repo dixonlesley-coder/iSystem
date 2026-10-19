@@ -5,6 +5,8 @@
 ///   frictions (+ the terminal loss), never their maximum.
 /// * hvac-4-4 — a room trunk clamped over capacity is reported
 ///   (`RoomAirResult.trunkOverCapacity`), never silently "sized".
+/// * residuals-6 — the Hunter curve branch is chosen per cold-water SYSTEM:
+///   a flush-valve WC on one system never re-curves another.
 library;
 
 import 'dart:math' as math;
@@ -17,6 +19,7 @@ import 'package:mechx_engine/sizing/duct_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
@@ -150,6 +153,85 @@ void main() {
           airChangesPerHour: 6,
           equipmentKind: AirEquipmentKind.ahu);
       expect(ok.trunkOverCapacity, isFalse);
+    });
+  });
+
+  group('residuals-6 — the demand curve per cold-water system', () {
+    NetNode n(String id, double x, int f,
+            {NodeRole role = NodeRole.main, PlumbingFixture? fx}) =>
+        NetNode(
+            id: id,
+            sheetId: 's1',
+            x: x,
+            y: 0,
+            floorIndex: f,
+            role: role,
+            fixture: fx);
+    NetEdge e(String id, String a, String b, {EdgeKind k = EdgeKind.run}) =>
+        NetEdge(
+            id: id, fromId: a, toId: b, service: ServiceType.coldWater, kind: k);
+
+    // System 1 (apartments): plant A -> riser S0..S3, a 3-UBAP fixture per
+    // floor (flush tanks). System 2 (public toilet core, separate plant B):
+    // one flush-valve WC.
+    final net = Network(nodes: [
+      n('A', 0, 0, role: NodeRole.plant),
+      for (var f = 0; f < 4; f++) ...[
+        n('S$f', 100, f),
+        n('fx$f', 140, f, role: NodeRole.fixture),
+      ],
+      n('B', 1000, 0, role: NodeRole.plant),
+      n('wc', 1100, 0,
+          role: NodeRole.fixture, fx: PlumbingFixture.waterClosetFlushValve),
+    ], edges: [
+      e('a0', 'A', 'S0'),
+      for (var f = 0; f < 4; f++) ...[
+        if (f > 0) e('s$f', 'S${f - 1}', 'S$f', k: EdgeKind.riser),
+        e('b$f', 'S$f', 'fx$f'),
+      ],
+      e('bw', 'B', 'wc'),
+    ]);
+    const sni = SniProfile();
+    double curve(double u, FlushSystem fs) =>
+        sni.probableFlowForFixtureUnits(u, system: fs).inLitersPerSecond;
+
+    test('the tank system keeps the flush-tank curve beside a valve system',
+        () {
+      final s = autoSizeNetwork(net, const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 3.0},
+          nodeFixtureUnits: const {'wc': 10.0},
+          flushSystem: FlushSystem.flushValve,
+          flushValveNodeIds: const {'wc'});
+      // The riser base carries 4 x 3 = 12 UBAP on the TANK curve.
+      expect(s['a0']!.flow.inLitersPerSecond,
+          closeTo(curve(12, FlushSystem.flushTank), 1e-9));
+      expect(s['s1']!.flow.inLitersPerSecond,
+          closeTo(curve(9, FlushSystem.flushTank), 1e-9));
+      // The valve curve would be larger (the over-sizing it used to cause).
+      expect(curve(12, FlushSystem.flushValve),
+          greaterThan(curve(12, FlushSystem.flushTank)));
+      // The toilet core's own system is on the VALVE curve.
+      expect(s['bw']!.flow.inLitersPerSecond,
+          closeTo(curve(10, FlushSystem.flushValve), 1e-9));
+      // The helper the duty consumers read agrees per root.
+      expect(flushSystemForRoot(net, ServiceType.coldWater, 'A', {'wc'}),
+          FlushSystem.flushTank);
+      expect(flushSystemForRoot(net, ServiceType.coldWater, 'B', {'wc'}),
+          FlushSystem.flushValve);
+      expect(flushSystemForRoot(net, ServiceType.hotWater, 'B', {'wc'}),
+          FlushSystem.flushTank);
+    });
+
+    test('no flush-valve node set => the legacy single curve (byte-identical)',
+        () {
+      final s = autoSizeNetwork(net, const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 3.0},
+          nodeFixtureUnits: const {'wc': 10.0},
+          flushSystem: FlushSystem.flushValve);
+      expect(s['a0']!.flow.inLitersPerSecond,
+          closeTo(curve(12, FlushSystem.flushValve), 1e-9));
     });
   });
 }

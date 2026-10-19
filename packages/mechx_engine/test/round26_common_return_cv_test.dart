@@ -371,11 +371,11 @@ void main() {
   test(
       '(b) hotel common return teed AT or BEYOND the top fixture: the trunk '
       'carries the full peak, the valve legs nothing', () {
-    // Round 26 r4 — the walk from the valve lands on the inline top fixture,
-    // so the return riser is not grown; the remainder still loops (supply
-    // riser / return riser / header) and falls to Hardy–Cross — but without
-    // the valve legs, so the trunk hm is a BRIDGE carrying every fixture:
-    // curve(2 risers x 4 floors x 2 UBAP) = curve(16). r3 left the valve in
+    // Round 26 r4 — the walk from the valve lands on the inline top fixture;
+    // the trunk hm is a BRIDGE carrying every fixture: curve(2 risers x 4
+    // floors x 2 UBAP) = curve(16). (Round 27 residuals-4: the return CHAIN
+    // landing on the top fixture is now grown too, so every riser base also
+    // sizes as with no return drawn — round27_check_valve_test.) r3 left the valve in
     // the loop set: hm 0.6533 -> 0.3766 (DN25 -> DN20) with 0.277 L/s of
     // draw-off forward through the return valve.
     final peak = curve(16);

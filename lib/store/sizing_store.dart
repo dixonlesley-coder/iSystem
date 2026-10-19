@@ -94,6 +94,7 @@ final sizingDetailProvider = Provider<
       Map<String, EdgeSizing> sizing,
       Map<String, double> fixtureUnits,
       FlushSystem flushSystem,
+      Set<String> flushValveNodeIds,
       Set<String> parallelLegs,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
@@ -102,6 +103,7 @@ final sizingDetailProvider = Provider<
       sizing: const {},
       fixtureUnits: const {},
       flushSystem: FlushSystem.flushTank,
+      flushValveNodeIds: const <String>{},
       parallelLegs: const <String>{},
     );
   }
@@ -158,14 +160,20 @@ final sizingDetailProvider = Provider<
       else if (n.fixture != null)
         n.id: drainageFixtureUnit(n.fixture!),
   };
-  // If any assigned WC uses a flush valve (built-in OR a custom flush-valve
-  // fixture), size the COLD supply on the valve curve (Round 22: the engine
-  // keeps hot water on the flush-tank branch — it serves no flush valve).
-  final anyFlushValve = net.nodes.any((n) =>
-      n.fixture == PlumbingFixture.waterClosetFlushValve ||
-      (customFor(n)?.isFlushValve ?? false));
-  final flushSystem =
-      anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank;
+  // Flush-valve WCs (built-in OR a custom flush-valve fixture). Round 27
+  // (residuals-6) — the engine picks the valve curve per cold-water SYSTEM
+  // (only a component holding one of these nodes; hot water never), so a
+  // valve WC on a public toilet core no longer re-curves the apartments'
+  // flush-tank system. [flushSystem] is the whole-project summary only.
+  final flushValveNodeIds = <String>{
+    for (final n in net.nodes)
+      if (n.fixture == PlumbingFixture.waterClosetFlushValve ||
+          (customFor(n)?.isFlushValve ?? false))
+        n.id,
+  };
+  final flushSystem = flushValveNodeIds.isNotEmpty
+      ? FlushSystem.flushValve
+      : FlushSystem.flushTank;
 
   // Rainwater leaves drain a default roof area at the design storm intensity
   // (per-outlet roof areas, when set, override this via nodeFlowDemand above).
@@ -209,6 +217,7 @@ final sizingDetailProvider = Provider<
     // flow the fire pump is sized on (one system, one flow), not Σ boxes.
     hydrantDesignFlow: ref.watch(standpipeDesignProvider).requiredFlow,
     flushSystem: flushSystem,
+    flushValveNodeIds: flushValveNodeIds,
     // Geometry lets looped (ring) mains balance their flow split against REAL
     // edge lengths — runs via calibration, risers via the §10 elevation delta.
     building: project.building,
@@ -229,6 +238,7 @@ final sizingDetailProvider = Provider<
     sizing: sizing,
     fixtureUnits: fixtureUnits,
     flushSystem: flushSystem,
+    flushValveNodeIds: flushValveNodeIds,
     parallelLegs: parallelLegs,
   );
 });
@@ -238,6 +248,12 @@ final sizingDetailProvider = Provider<
 /// (the pump at a tee'd discharge) reads the SAME curve the sizer did.
 final supplyFlushSystemProvider = Provider<FlushSystem>(
     (ref) => ref.watch(sizingDetailProvider).flushSystem);
+
+/// Round 27 (residuals-6) — the flush-valve fixture nodes the sizer chose the
+/// demand curve from, per system: pair with `flushSystemForRoot` to read the
+/// curve of ONE supply system (the pump duties re-diversify on it).
+final supplyFlushValveNodeIdsProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).flushValveNodeIds);
 
 /// Advisory checks over the drawn DRAINAGE branches — a read-only judge layer
 /// (`drainage_advisory.dart`) that NEVER resizes. For each horizontal drainage

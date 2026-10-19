@@ -278,6 +278,27 @@ GrilleSizingResult selectStandardGrille({
   );
 }
 
+/// Round 27 (hvac-4-5) — the standard rectangular face (width × height mm,
+/// from [standardGrilleFacesMm]) whose gross area is CLOSEST to [grossFaceArea]
+/// (the face [selectStandardGrille] chose, recovered from its result). The ONE
+/// lookup both the Auto-place stamp and the Rooms inspector print, so the
+/// inspector never shows a square-equivalent side no catalogue face has.
+(double widthMm, double heightMm) standardGrilleFaceForGrossArea(
+    Area grossFaceArea) {
+  final targetM2 = grossFaceArea.squareMeters;
+  var best = standardGrilleFacesMm.first;
+  var bestErr = double.infinity;
+  for (final f in standardGrilleFacesMm) {
+    final grossM2 = (f.$1 / 1000.0) * (f.$2 / 1000.0);
+    final err = (grossM2 - targetM2).abs();
+    if (err < bestErr) {
+      bestErr = err;
+      best = f;
+    }
+  }
+  return best;
+}
+
 /// The standard rectangular face (width × height in mm, from
 /// [standardGrilleFacesMm]) that [selectStandardGrille] picks for [airflow].
 ///

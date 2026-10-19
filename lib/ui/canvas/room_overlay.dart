@@ -370,7 +370,7 @@ class _RoomPainter extends CustomPainter {
   String _airflowLabel(RoomArea r) {
     final cal = calibration;
     if (cal == null) return 'set scale';
-    final s = r.sizing(cal.metersPerPixel);
+    final s = r.sizing(cal.metersPerPixel, rooms: rooms);
     if (s == null) return r.name;
     final cfm = s.airflowCfm.round();
     final lps = s.airflow.inLitersPerSecond.round();

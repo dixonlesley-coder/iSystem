@@ -1025,8 +1025,10 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   final ducts = ref.read(ductSettingsProvider);
   final rooms = ref.read(roomAreasProvider);
   final usedNodeTags = nodeTags.values.toSet();
-  final hasAirNetwork = net.edges.any((e) =>
-      e.service == ServiceType.duct || e.service == ServiceType.returnAir);
+  // Round 27 (hvac-4-3) — a room's own row is dropped only when a drawn,
+  // sized system actually reaches ITS terminals ([roomServedByDrawnAir]),
+  // never because some duct exists elsewhere in the project.
+  final sizedEdgeIds = ref.read(sizingProvider).keys.toSet();
   final roomAirUnits = ref.read(roomAirUnitDutiesProvider);
   for (var i = 0; i < rooms.length; i++) {
     final r = rooms[i];
@@ -1035,15 +1037,16 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       cal?.metersPerPixel,
       ductShape: ducts.shape,
       ductMethod: ducts.method,
+      rooms: rooms,
     );
     if (sizing == null) continue;
     // Round 11 (hvac-network-2) — an EXTRACT room (toilet / kitchen) is served
     // by an exhaust fan, never an AHU/FCU: scheduled as an EF row (stable per
     // room identity) unless a drawn exhaust system already carries its duty.
     if (sizing.extractOnly) {
-      final hasExhaustNetwork =
-          net.edges.any((e) => e.service == ServiceType.exhaust);
-      if (hasExhaustNetwork) continue;
+      if (roomServedByDrawnAir(r, rooms, net, sizedEdgeIds, extract: true)) {
+        continue;
+      }
       final ahuTag = _roomScheduleTag(r, i, usedNodeTags: usedNodeTags);
       final tag = ahuTag.replaceFirst('AHU-', 'EF-R');
       fans.add(
@@ -1073,7 +1076,12 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
         if (e.value.room.id == r.id) e.key,
     ].firstOrNull;
     if (drawnUnit && roomAirUnitId == null) continue;
-    if (!drawnUnit && (hasAc || hasAirNetwork)) continue;
+    if (!drawnUnit &&
+        (hasAc ||
+            roomServedByDrawnAir(r, rooms, net, sizedEdgeIds,
+                extract: false))) {
+      continue;
+    }
     // J3: the AHU tag tracks the room's STABLE identity, not its live list
     // position — deleting / reordering / skipping (uncalibrated) another room
     // never renumbers this unit, so a procured AHU-03 stays AHU-03 across
@@ -3799,20 +3807,29 @@ class _RoomsSection extends ConsumerWidget {
     }
 
     String duct(RoomAirResult s) {
+      // Round 27 (hvac-4-4) — a trunk clamped to the largest standard size
+      // says so; it is not a valid selection.
+      final over = s.trunkOverCapacity ? ' · over capacity' : '';
       final round = s.supplyDuctRound;
       if (round != null) {
         return 'Duct Ø${round.diameter.inMillimeters.round()} mm @ '
-            '${round.actualVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
+            '${round.actualVelocity.metersPerSecond.toStringAsFixed(1)} m/s'
+            '$over';
       }
       final rect = s.supplyDuctRect!;
       return 'Duct ${rect.width.inMillimeters.round()}x'
           '${rect.height.inMillimeters.round()} mm @ '
-          '${rect.actualVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
+          '${rect.actualVelocity.metersPerSecond.toStringAsFixed(1)} m/s'
+          '$over';
     }
 
-    String bank(TerminalBank b) =>
-        '${b.count} x ${b.each.squareSide.inMillimeters.round()} mm @ '
-        '${b.each.faceVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
+    // Round 27 (hvac-4-5) — the selected catalogue face W x H (the face
+    // Auto-place stamps on the node), never the square-equivalent side.
+    String bank(TerminalBank b) {
+      final (w, h) = b.faceMm;
+      return '${b.count} x ${w.round()}x${h.round()} mm @ '
+          '${b.each.faceVelocity.metersPerSecond.toStringAsFixed(1)} m/s';
+    }
 
     return DisclosureSection(
       name: 'Rooms (ACH airflow)',
@@ -3826,6 +3843,7 @@ class _RoomsSection extends ConsumerWidget {
                   cal?.metersPerPixel,
                   ductShape: ducts.shape,
                   ductMethod: ducts.method,
+                  rooms: rooms,
                 );
                 // AC cooling — computed once so the compact row can flag an
                 // over-range unit and the expanded editor can detail it.
@@ -3933,7 +3951,10 @@ class _RoomsSection extends ConsumerWidget {
                           Text(
                             duct(s),
                             style: MechXTypography.tabular(
-                              type.caption.copyWith(color: colors.textMuted),
+                              type.caption.copyWith(
+                                  color: s.trunkOverCapacity
+                                      ? colors.danger
+                                      : colors.textMuted),
                             ),
                           ),
                           // Round 11 — an extract room shows its exhaust bank
@@ -3964,8 +3985,11 @@ class _RoomsSection extends ConsumerWidget {
                                 '${s.equipment.motorOversized ? ' · above standard frame' : ''}',
                             verdict: s.equipment.motorOversized
                                 ? 'over frame'
-                                : 'sized',
-                            verdictColor: s.equipment.motorOversized
+                                : s.trunkOverCapacity
+                                    ? 'duct over capacity'
+                                    : 'sized',
+                            verdictColor: s.equipment.motorOversized ||
+                                    s.trunkOverCapacity
                                 ? colors.danger
                                 : colors.success,
                           ),

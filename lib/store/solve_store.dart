@@ -596,7 +596,9 @@ final supplyPeakFlowProvider = Provider<FlowRate?>((ref) {
       kSupplyService,
       root,
       edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
-      flushSystem: ref.watch(supplyFlushSystemProvider),
+      // Round 27 — THIS system's curve branch (residuals-6).
+      flushSystem: flushSystemForRoot(net, kSupplyService, root,
+          ref.watch(supplyFlushValveNodeIdsProvider)),
       excludeEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
     );
     if (delivered.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
@@ -952,7 +954,8 @@ final supplyMoverDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
       rootFlowOf: (root) {
         final d = sourceDeliveredFlow(net, sizing, kSupplyService, root,
             edgeFixtureUnits: ref.watch(edgeFixtureUnitsProvider),
-            flushSystem: ref.watch(supplyFlushSystemProvider),
+            flushSystem: flushSystemForRoot(net, kSupplyService, root,
+                ref.watch(supplyFlushValveNodeIdsProvider)),
             excludeEdgeIds: legs);
         return d.cubicMetersPerSecond > 0 ? d : (peak ?? const FlowRate(0));
       });

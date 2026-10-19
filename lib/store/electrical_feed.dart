@@ -590,7 +590,8 @@ int _phasesFor(NodeComponent c) => switch (c) {
   final room = rooms.firstWhere((r) => r.id == ownerId);
   // The project's AC-load basis (Building page) drives the fed circuit too, so
   // the panel schedule and the Rooms inspector can never disagree on the PK.
-  final load = room.coolingLoad(mppFor(room.sheetId), method: method);
+  final load =
+      room.coolingLoad(mppFor(room.sheetId), method: method, rooms: rooms);
   if (load == null) return null;
   // Split the room load across the AC indoor units the room OWNS (a unit in
   // a nested room is that room's, never counted in the outer room's split).
@@ -757,6 +758,7 @@ final roomAirUnitDutiesProvider =
       project.calibrationFor(r.sheetId)?.metersPerPixel,
       ductShape: ducts.shape,
       ductMethod: ducts.method,
+      rooms: rooms,
     );
     if (sizing == null || sizing.extractOnly) continue;
     out[owned.first.id] = (room: r, duty: sizing.equipment);
