@@ -114,6 +114,22 @@ final downfeedOverPressureProvider =
   return downfeedOverPressure(solution);
 });
 
+/// Round 25 (ui-journeys-4-direct-mains-feed-contradiction) — THE drawn-feed
+/// predicate: a downfeed SETTING whose gravity source is actually drawn (a
+/// roof tank on the network). [downfeedProvider] solves from the highest node
+/// whenever the strategy is downfeed — with no tank that is a phantom source
+/// (a meter or a fixture), so its booster head / top residual / zone verdict
+/// describe a tank that does not exist. The inspector headline + rows, the
+/// calc report and the Review pressure judgement all gate on THIS, so the four
+/// surfaces describe one feed.
+final gravityDownfeedDrawnProvider = Provider<bool>((ref) {
+  if (ref.watch(feedStrategyProvider) != FeedStrategy.downfeed) return false;
+  return ref
+      .watch(sizingNetworkProvider)
+      .nodes
+      .any((n) => n.component == NodeComponent.roofTank);
+});
+
 /// DOWNFEED gravity solve (roof tank distributing down). Null when the strategy
 /// is upfeed or there is no supply network.
 final downfeedProvider = Provider<DownfeedSolution?>((ref) {

@@ -210,6 +210,17 @@ List<TrapArmRun> trapArmRuns({
     final first = entry.value.single;
     if (sizing[first.id]?.flowFromId != entry.key) continue; // not a terminal
     if (first.kind == EdgeKind.riser) continue;
+    // Round 25 (drainage-4-4) — a fixture vented AT its own node (an
+    // individual vent drawn from the fixture) has a ~0 trap arm: the vent is
+    // already at the trap, so the walk never starts.
+    if (ventNodes.contains(entry.key)) {
+      out.add(TrapArmRun(
+        fixtureNodeId: entry.key,
+        firstEdgeId: first.id,
+        developedLengthM: 0,
+      ));
+      continue;
+    }
     var total = 0.0;
     var edge = first;
     var at = entry.key;

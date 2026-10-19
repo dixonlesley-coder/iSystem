@@ -200,7 +200,8 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   final hasPump = net.nodes.any((n) =>
       n.component == NodeComponent.pump ||
       n.component == NodeComponent.boosterSet);
-  final gravityDownfeed = strategy == FeedStrategy.downfeed && hasRoofTank;
+  // Round 25 — the ONE drawn-feed predicate the inspector + Review share.
+  final gravityDownfeed = ref.read(gravityDownfeedDrawnProvider);
   // Round 20 (hvac-3-4) — the HVAC trunk the report prints is a SCHEDULED
   // machine: a supply system rooted at a packaged AC is the AC's internal fan
   // (scheduled once, as its AC row), so the primary duty is the first
@@ -1103,12 +1104,31 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     ));
   }
 
+  // Round 25 — every drawn storage tank, under its plan tag, so the TK-nn the
+  // riser / plans print reaches the procurement schedule (the BOM leaves
+  // plant out as scheduled equipment).
+  final tanks = <TankScheduleItem>[];
+  var tankOrdinal = 0;
+  for (final n in net.nodes) {
+    if (n.component != NodeComponent.roofTank &&
+        n.component != NodeComponent.groundTank) {
+      continue;
+    }
+    tankOrdinal++;
+    tanks.add(TankScheduleItem(
+      tag: nodeTags[n.id] ?? 'TK-${tankOrdinal.toString().padLeft(2, '0')}',
+      roof: n.component == NodeComponent.roofTank,
+      capacityLitres: n.tankCapacityLitres,
+    ));
+  }
+
   return EquipmentScheduleData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
     pumps: pumps,
     fans: fans,
     acUnits: acUnits,
+    tanks: tanks,
     electrical: ref.read(electricalResultProvider),
     // N22 (app half): the source apparatus (transformer / standby genset /
     // PF-correction bank) the electrical project may carry, so the schedule
@@ -4276,7 +4296,15 @@ class _ResultsSection extends ConsumerWidget {
     final showSizes = ref.watch(showSizingProvider);
     final strategy = ref.watch(feedStrategyProvider);
     final solution = ref.watch(solveProvider);
-    final downfeed = ref.watch(downfeedProvider);
+    // Round 25 — the gravity solve describes a DRAWN roof tank only: with no
+    // tank it solved from a phantom source (the highest meter / fixture), so
+    // its booster head, top residual and zone verdict are not shown — the
+    // same gate the calc report prints on.
+    final gravityDrawn = ref.watch(gravityDownfeedDrawnProvider);
+    final downfeed = gravityDrawn ? ref.watch(downfeedProvider) : null;
+    final hasPumpDrawn = ref.watch(sizingNetworkProvider).nodes.any((n) =>
+        n.component == NodeComponent.pump ||
+        n.component == NodeComponent.boosterSet);
     final pump = ref.watch(pumpDutyProvider);
     final zones = ref.watch(zonesProvider);
     final zoneStatics = ref.watch(zoneStaticsProvider);
@@ -4440,6 +4468,18 @@ class _ResultsSection extends ConsumerWidget {
                 solution == null
                     ? '—'
                     : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m',
+              ),
+            ] else if (!gravityDrawn) ...[
+              // Round 25 — no roof tank drawn: the drawn feed is the mains (or
+              // a booster), so no gravity duty / zone table is claimed.
+              // A caption, not a key/value row: the Feed setting line above
+              // already carries the label, and the value must never truncate.
+              Text(
+                context.strings(hasPumpDrawn
+                    ? StringKey.resultsFeedBoosterNoTank
+                    : StringKey.resultsFeedDirectMains),
+                style: context.type.caption
+                    .copyWith(color: colors.textSecondary),
               ),
             ] else ...[
               _kvRow(

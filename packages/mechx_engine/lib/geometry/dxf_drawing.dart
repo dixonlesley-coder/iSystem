@@ -193,6 +193,24 @@ class _Block {
 /// Accumulates emitted primitives + the running bounding box. Capped so a
 /// pathological / deeply-nested file can't exhaust memory.
 class _Acc {
+  _Acc() : boundsOnly = false, blockExtents = {};
+
+  /// Round 25 — a scratch accumulator that only measures a block's LOCAL
+  /// extent: it stores nothing ([full] is always true) and shares the
+  /// per-block extent memo with the main accumulator.
+  _Acc._boundsOnly(this.blockExtents) : boundsOnly = true;
+
+  final bool boundsOnly;
+
+  /// Round 25 — memoised per-block local extent (block coordinates, before
+  /// the INSERT transform; null = the block draws nothing). Past the
+  /// primitive cap an INSERT instance grows the bounds by the 4 transformed
+  /// corners of this box (a conservative superset — an affine image of a box
+  /// contains the image of everything inside it) instead of re-walking the
+  /// block body, so the bounds-only continuation costs O(instances), never
+  /// O(instances × block size).
+  final Map<String, DxfBounds?> blockExtents;
+
   final List<DxfPolyline> polylines = [];
   final List<DxfCircle> circles = [];
   final List<DxfArc> arcs = [];
@@ -208,7 +226,7 @@ class _Acc {
   static const int _maxPrimitives = 400000;
   static const int maxInserts = 100000;
 
-  bool get full => count >= _maxPrimitives;
+  bool get full => boundsOnly || count >= _maxPrimitives;
   bool get insertsSpent => inserts >= maxInserts;
 
   /// Round 24 — set when a budget dropped geometry (see
@@ -631,6 +649,30 @@ void _emitArc(List<_Pair> body, _Xform x, _Acc acc) {
   acc.addArc(DxfArc(c, r * x.scale, s, s + sweep));
 }
 
+/// Round 25 — [block]'s local extent (memoised on [acc.blockExtents]),
+/// measured ONCE by a bounds-only walk whose own nested INSERTs also use
+/// memoised extents, so measuring is linear in the block's own pairs.
+DxfBounds? _blockExtent(
+  String name,
+  _Block block,
+  Map<String, _Block> blocks,
+  int depth,
+  _Acc acc,
+  Set<String> nested,
+) {
+  if (acc.blockExtents.containsKey(name)) return acc.blockExtents[name];
+  // Reserve the slot first (a corrupt self-cycle can't recurse forever).
+  acc.blockExtents[name] = null;
+  final scratch = _Acc._boundsOnly(acc.blockExtents);
+  _parseEntities(block.pairs, 0, block.pairs.length, _Xform.identity, blocks,
+      depth + 1, scratch, nested);
+  final ext = scratch._has
+      ? DxfBounds(scratch.minX, scratch.minY, scratch.maxX, scratch.maxY)
+      : null;
+  acc.blockExtents[name] = ext;
+  return ext;
+}
+
 /// Largest column × row ARRAY expanded from one INSERT (the rest is dropped —
 /// the instances also count against the [_Acc.maxInserts] budget).
 const int _maxArrayInstances = 10000;
@@ -697,6 +739,23 @@ void _emitInsert(
       final insert = _Xform(ax, bx, cx, dy, ex + cos * ox - sin * oy,
           fy + sin * ox + cos * oy);
       final child = x.compose(insert);
+      if (acc.full) {
+        // Round 25 — past the cap nothing more is stored: grow the bounds by
+        // the block's memoised extent instead of re-walking its body.
+        final ext = _blockExtent(name, block, blocks, depth, acc, nested);
+        if (ext != null) {
+          if (!acc.boundsOnly) acc.truncated = true;
+          for (final p in [
+            child.apply(ext.minX, ext.minY),
+            child.apply(ext.maxX, ext.minY),
+            child.apply(ext.minX, ext.maxY),
+            child.apply(ext.maxX, ext.maxY),
+          ]) {
+            acc._grow(p.x, p.y);
+          }
+        }
+        continue;
+      }
       _parseEntities(block.pairs, 0, block.pairs.length, child, blocks,
           depth + 1, acc, nested);
     }

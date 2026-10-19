@@ -173,6 +173,18 @@ class ElectricalCircuit {
   /// (pre-flag) file ⇒ [legacyProvenance].
   static const String kMepProvenanceKey = 'mepProvenance';
 
+  /// Round 25 — the ONE marker the MEP sync appends to a PARKED derived way
+  /// (its source equipment disappeared; `sourceEquipmentId` dropped). A parked
+  /// way is still an MEP way for provenance purposes: it can be re-adopted
+  /// when its source returns, so it carries [kMepProvenanceKey] too, and a
+  /// parked way decoded WITHOUT the key is [legacyProvenance].
+  static const String kMepParkedNameSuffix = ' (source removed)';
+
+  /// True when this way is MEP-owned for provenance: derived (source id set)
+  /// or parked (name carries [kMepParkedNameSuffix]).
+  bool get isMepProvenanced =>
+      sourceEquipmentId != null || name.endsWith(kMepParkedNameSuffix);
+
   const ElectricalCircuit({
     required this.id,
     required this.name,
@@ -341,8 +353,9 @@ class ElectricalCircuit {
         if (loadKindUserSet) 'loadKindUserSet': true,
         // Round 24 — a provenance-aware MEP way says so; a legacy way that has
         // not yet been resolved by a sync keeps its legacy status on re-save.
-        if (sourceEquipmentId != null && !legacyProvenance)
-          kMepProvenanceKey: 1,
+        // Round 25 — a PARKED way (source removed) is stamped too, so a parked
+        // way written by a provenance-aware build is never mistaken for legacy.
+        if (isMepProvenanced && !legacyProvenance) kMepProvenanceKey: 1,
       };
 
   /// Tolerant decode: unknown enum names fall back to the field default,
@@ -388,7 +401,10 @@ class ElectricalCircuit {
         cosPhiUserSet: json['cosPhiUserSet'] == true,
         phasesUserSet: json['phasesUserSet'] == true,
         loadKindUserSet: json['loadKindUserSet'] == true,
-        legacyProvenance: json['sourceEquipmentId'] is String &&
+        legacyProvenance: (json['sourceEquipmentId'] is String ||
+                (json['name'] is String &&
+                    (json['name'] as String)
+                        .endsWith(kMepParkedNameSuffix))) &&
             !json.containsKey(kMepProvenanceKey),
       );
 }

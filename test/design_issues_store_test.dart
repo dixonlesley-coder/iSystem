@@ -918,7 +918,13 @@ void main() {
       final IssueAck sample = acks.values.first;
       expect(sample.author, 'LD');
       final summary = c.read(complianceSummaryProvider);
-      expect(summary.allPass, isTrue);
+      // Round 25 — this container has nothing designed (no sized element, no
+      // panel), so the ONLY blocking row left is 'Design content': every
+      // advisory is accepted and every check row passes, but an empty project
+      // can never read 'PASS — ready to issue'.
+      expect(summary.items.where((i) => !i.pass).map((i) => i.category),
+          ['Design content']);
+      expect(summary.allPass, isFalse);
       final ackRows = summary.items.where((it) =>
           it.category.startsWith('Acknowledged:') &&
           it.detail.contains('LD') &&

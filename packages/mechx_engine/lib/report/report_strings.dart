@@ -286,6 +286,7 @@ enum RptStringKey {
   catTransformer,
   catGenerator,
   catCapacitorBank,
+  catTanks,
   tblTag,
   tblDuty,
   tblModelSpec,
@@ -304,6 +305,9 @@ enum RptStringKey {
   esTransformerService,
   esGeneratorService,
   esCapBankService,
+  esRoofTankService,
+  esGroundTankService,
+  esTankCapacityUnset,
   earthNoteTnCs,
   earthNoteTnS,
   earthNoteTt,
@@ -685,6 +689,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.catTransformer: 'Transformer',
   RptStringKey.catGenerator: 'Standby generator',
   RptStringKey.catCapacitorBank: 'Capacitor bank',
+  RptStringKey.catTanks: 'Tanks',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Duty',
   RptStringKey.tblModelSpec: 'Model / spec',
@@ -705,6 +710,9 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esTransformerService: 'Distribution transformer',
   RptStringKey.esGeneratorService: 'Standby generator',
   RptStringKey.esCapBankService: 'PF-correction bank',
+  RptStringKey.esRoofTankService: 'Roof tank (water storage)',
+  RptStringKey.esGroundTankService: 'Ground tank (water storage)',
+  RptStringKey.esTankCapacityUnset: 'capacity not set',
   RptStringKey.earthNoteTnCs:
       'Combined PEN from the source, split into separate N and PE at the '
           'origin. Common PLN practice.',
@@ -1095,6 +1103,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.catTransformer: 'Transformator',
   RptStringKey.catGenerator: 'Genset cadangan',
   RptStringKey.catCapacitorBank: 'Bank kapasitor',
+  RptStringKey.catTanks: 'Tangki',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Kapasitas',
   RptStringKey.tblModelSpec: 'Model / spesifikasi',
@@ -1115,6 +1124,9 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esTransformerService: 'Transformator distribusi',
   RptStringKey.esGeneratorService: 'Genset cadangan',
   RptStringKey.esCapBankService: 'Bank kapasitor perbaikan faktor daya',
+  RptStringKey.esRoofTankService: 'Tangki atap (penampungan air)',
+  RptStringKey.esGroundTankService: 'Tangki bawah (penampungan air)',
+  RptStringKey.esTankCapacityUnset: 'kapasitas belum diisi',
   RptStringKey.earthNoteTnCs:
       'PEN gabungan dari sumber, dipisah menjadi N dan PE terpisah di titik '
           'asal. Praktik umum PLN.',

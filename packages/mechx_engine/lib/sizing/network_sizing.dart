@@ -271,6 +271,26 @@ class EdgeSizing {
         demandCurveExtrapolated: value,
         belowCodeMinimum: belowCodeMinimum,
       );
+
+  /// Round 25 — a copy carrying the given [stackRaisedForBranch] /
+  /// [belowCodeMinimum] verdicts; every other field preserved.
+  EdgeSizing withGravityFlags({bool? raised, bool? belowMinimum}) =>
+      EdgeSizing(
+        edgeId: edgeId,
+        service: service,
+        flow: flow,
+        diameter: diameter,
+        velocity: velocity,
+        width: width,
+        height: height,
+        overCapacity: overCapacity,
+        stackRaisedForBranch: raised ?? stackRaisedForBranch,
+        flowFromId: flowFromId,
+        selfCleansingOk: selfCleansingOk,
+        loopUnbalanced: loopUnbalanced,
+        demandCurveExtrapolated: demandCurveExtrapolated,
+        belowCodeMinimum: belowMinimum ?? belowCodeMinimum,
+      );
 }
 
 /// The deterministic SPANNING TREE of [service]'s subgraph reachable from
@@ -1340,7 +1360,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
         }
         if (up != null) ventSeeds[up] = ventSeeds[up]! - drainageThroughDfu[t]!;
       }
-      ventSeeds.removeWhere((_, v) => v <= 1e-9);
+      // Round 25 (drainage-4-3) — a tie whose net seed is 0 (the soil-stack
+      // FOOT, every DFU already counted at the ties above it) stays an
+      // explicit 0: dropping it let the degree-1 leaf default hand the base
+      // connection a phantom 2 DFU (a 24-DFU stack sized DN65, not DN50).
+      ventSeeds.updateAll((_, v) => v <= 1e-9 ? 0.0 : v);
     }
     final drainageUnitsForService = ventSeeds.isEmpty
         ? nodeDrainageUnits
@@ -2289,6 +2313,22 @@ Map<String, EdgeSizing> autoSizeNetwork(
             // stack ≥ collector clamp), so any smaller pick cannot carry it.
             minimumCompliant: entry.value.diameter);
   }
+  // Round 25 (drainage-4-1) — the N17 clamp ran on the AUTO sizes; a hand-
+  // OVERSIZED branch / stack / collector must not leave the pipe below it
+  // smaller in the direction of flow (IPC 704.2: no reduction in size in the
+  // direction of flow). Walk the post-override map downstream of every
+  // override: an auto edge is raised (flagged `stackRaisedForBranch`), an
+  // overridden edge smaller than an overridden pipe above it is flagged
+  // `belowCodeMinimum` (→ the gravity-below-code-minimum warning).
+  if (sizeOverrides.isNotEmpty) {
+    _clampGravityDownstreamOfOverrides(
+      net: net,
+      result: result,
+      edgeFlowFrom: edgeFlowFrom,
+      sizeOverrides: sizeOverrides,
+      ctx: ctx,
+    );
+  }
   // M17 — a ring/grid whose Hardy–Cross balance never settled: every edge of
   // that component carries a PROVISIONAL split, so mark them all (after the
   // overrides, which preserve the flag either way).
@@ -2551,6 +2591,73 @@ void _clampDrainageStacksToBranches({
   }
 }
 
+/// Round 25 (drainage-4-1) — see the call site. Only sizes propagated from a
+/// hand OVERRIDE are enforced here (the auto sizes already passed the N17
+/// clamp), so a network with no gravity override is byte-identical. Topology:
+/// each gravity edge's flow comes FROM its away-from-outfall node
+/// ([edgeFlowFrom]); the edges upstream of edge e are those whose flow
+/// arrives at e's from-node.
+void _clampGravityDownstreamOfOverrides({
+  required Network net,
+  required Map<String, EdgeSizing> result,
+  required Map<String, String> edgeFlowFrom,
+  required Map<String, Diameter> sizeOverrides,
+  required SizingContext ctx,
+}) {
+  bool isGravity(ServiceType s) =>
+      s == ServiceType.drainage || s == ServiceType.rainwater;
+  // node → gravity edges whose flow ARRIVES at it (their root-side endpoint).
+  final arriving = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    if (!isGravity(e.service) || !result.containsKey(e.id)) continue;
+    final from = edgeFlowFrom[e.id];
+    if (from == null) continue;
+    final to = from == e.fromId ? e.toId : e.fromId;
+    (arriving[to] ??= []).add(e);
+  }
+  // The largest OVERRIDDEN bore upstream of an edge (its own excluded),
+  // memoised; the in-progress guard breaks a gravity loop's closing edge.
+  final memo = <String, double>{};
+  final busy = <String>{};
+  double overrideAbove(NetEdge e) {
+    final cached = memo[e.id];
+    if (cached != null) return cached;
+    if (!busy.add(e.id)) return 0;
+    var m = 0.0;
+    final from = edgeFlowFrom[e.id];
+    for (final up in arriving[from] ?? const <NetEdge>[]) {
+      if (up.id == e.id || up.service != e.service) continue;
+      if (sizeOverrides.containsKey(up.id)) {
+        m = math.max(m, result[up.id]!.diameter.meters);
+      }
+      m = math.max(m, overrideAbove(up));
+    }
+    busy.remove(e.id);
+    return memo[e.id] = m;
+  }
+
+  for (final e in net.edges) {
+    if (!isGravity(e.service)) continue;
+    final sized = result[e.id];
+    if (sized == null || edgeFlowFrom[e.id] == null) continue;
+    final need = overrideAbove(e);
+    if (need <= sized.diameter.meters + _kDiameterEpsM) continue;
+    if (sizeOverrides.containsKey(e.id)) {
+      // A hand pick smaller than a hand pick above it: a code violation the
+      // engineer's own picks create — flagged, never silently resized.
+      result[e.id] = sized.withGravityFlags(belowMinimum: true);
+    } else {
+      final raised = Diameter(need);
+      result[e.id] = applySizeOverride(sized, raised,
+              ctx: ctx,
+              codeMinimum: raised,
+              manningRun: e.service == ServiceType.rainwater &&
+                  e.kind != EdgeKind.riser)
+          .withGravityFlags(raised: true);
+    }
+  }
+}
+
 /// True when the undirected [edges] (endpoint pairs) contain no cycle
 /// (union-find; a parallel pair or a self-loop is a cycle). Pure.
 /// One STANDBY leg of a duty/standby parallel set (Round 13): its edges in
@@ -2791,7 +2898,15 @@ Map<String, double> _uniformVentStacks(
           when e.kind == EdgeKind.riser && e.service == ServiceType.vent)
         e,
   ];
-  if (risers.length < 2) return units;
+  if (risers.isEmpty) return units;
+  // Round 25 (drainage-4-2 / -4-3) — a vent RUN is part of the stack when it
+  // joins two vent-STACK riser groups (a horizontal OFFSET: riser, run,
+  // riser) or a vent-stack riser end to a drainage-STACK node (the base
+  // connection to the soil-stack foot). Either way it is the stack's developed
+  // length and carries the stack size (IPC 916.1 / UPC 703.2 uniform,
+  // `// VERIFY` notAnSniClause). A fixture's INDIVIDUAL vent riser (its group
+  // touches a drainage node off the soil stack — the fixture trap) is a
+  // branch vent: it never joins a stack, and keeps its own load.
   final parent = <String, String>{};
   String find(String x) {
     var r = x;
@@ -2802,21 +2917,69 @@ Map<String, double> _uniformVentStacks(
     return r;
   }
 
-  for (final e in risers) {
+  void union(NetEdge e) {
     parent.putIfAbsent(e.fromId, () => e.fromId);
     parent.putIfAbsent(e.toId, () => e.toId);
     final ra = find(e.fromId), rb = find(e.toId);
     if (ra != rb) parent[ra] = rb;
   }
-  final stackMax = <String, double>{};
+
   for (final e in risers) {
+    union(e);
+  }
+  final drainNodes = <String>{};
+  final drainStackNodes = <String>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.drainage) continue;
+    drainNodes.addAll([e.fromId, e.toId]);
+    if (e.kind == EdgeKind.riser) drainStackNodes.addAll([e.fromId, e.toId]);
+  }
+  // Riser groups touching a drainage node OFF the soil stack = fixture vents.
+  final branchGroups = <String>{
+    for (final n in parent.keys)
+      if (drainNodes.contains(n) && !drainStackNodes.contains(n)) find(n),
+  };
+  bool stackEnd(String n) =>
+      parent.containsKey(n) && !branchGroups.contains(find(n));
+  // The lowest storey of each vent-stack riser group: only its BASE joins the
+  // soil-stack foot (a floor tie / relief vent higher up keeps its own load).
+  final groupBottom = <String, int>{};
+  for (final n in parent.keys) {
+    final f = net.nodeById(n)?.floorIndex;
+    if (f == null) continue;
+    final g = find(n);
+    if (f < (groupBottom[g] ?? f + 1)) groupBottom[g] = f;
+  }
+  bool baseEnd(String n) =>
+      stackEnd(n) && net.nodeById(n)?.floorIndex == groupBottom[find(n)];
+  bool baseLink(String ventEnd, String other) =>
+      baseEnd(ventEnd) &&
+      !parent.containsKey(other) &&
+      drainStackNodes.contains(other);
+  final stackRuns = [
+    for (final id in units.keys)
+      if (net.edgeById(id) case final e?
+          when e.kind != EdgeKind.riser &&
+              e.service == ServiceType.vent &&
+              ((stackEnd(e.fromId) && stackEnd(e.toId)) ||
+                  baseLink(e.fromId, e.toId) ||
+                  baseLink(e.toId, e.fromId)))
+        e,
+  ];
+  for (final e in stackRuns) {
+    union(e);
+  }
+  final members = [...risers, ...stackRuns];
+  if (members.length < 2) return units;
+  final stackMax = <String, double>{};
+  for (final e in members) {
     final k = find(e.fromId);
     final v = units[e.id]!;
     if (v > (stackMax[k] ?? 0)) stackMax[k] = v;
   }
   return {
     ...units,
-    for (final e in risers) e.id: stackMax[find(e.fromId)]!,
+    for (final e in members) e.id: stackMax[find(e.fromId)]!,
   };
 }
 

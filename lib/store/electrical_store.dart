@@ -22,7 +22,10 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart'
-    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
+    show
+        defaultLvUtilityFaultKa,
+        estimatedServiceFaultLevelA,
+        hasDeclaredServiceSize;
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -399,15 +402,16 @@ const double _liveBusbarClearingTimeS = 0.1;
   if (explicit != null) {
     return (amperes: explicit.amperes, basis: FaultLevelBasis.explicit);
   }
-  final est = estimatedServiceFaultLevelA(project);
+  // Round 25 — the demand rides every tier: a declared capacity above the
+  // PLN TR ceiling resolves to its own transformer's fault, never below the
+  // study transformer for the demand.
+  final est = estimatedServiceFaultLevelA(project, demand: demand);
   if (est != null) {
-    return (amperes: est.amperes, basis: FaultLevelBasis.serviceEstimate);
-  }
-  final fromDemand = estimatedServiceFaultLevelA(project, demand: demand);
-  if (fromDemand != null) {
     return (
-      amperes: fromDemand.amperes,
-      basis: FaultLevelBasis.supplyStudyEstimate,
+      amperes: est.amperes,
+      basis: hasDeclaredServiceSize(project)
+          ? FaultLevelBasis.serviceEstimate
+          : FaultLevelBasis.supplyStudyEstimate,
     );
   }
   return (
@@ -457,10 +461,10 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
     // so one re-solve at the demand-derived figure is exact.
     final first = effectiveOriginFaultLevel(project);
     var result = solve(first.amperes);
-    if (first.basis == FaultLevelBasis.defaultValue) {
+    if (first.basis != FaultLevelBasis.explicit) {
       final second =
           effectiveOriginFaultLevel(project, demand: result.supply.demandVa);
-      if (second.basis == FaultLevelBasis.supplyStudyEstimate) {
+      if ((second.amperes - first.amperes).abs() > 1e-9) {
         result = solve(second.amperes);
       }
     }
@@ -2449,7 +2453,7 @@ String _fmtKw(double kw) {
 /// (C1). Neutral ASCII, appended at most once — a parked way carries no
 /// `sourceEquipmentId`, so a later sync treats it as a hand-added way and never
 /// touches its name again.
-const String kMepParkedSuffix = ' (source removed)';
+const String kMepParkedSuffix = ElectricalCircuit.kMepParkedNameSuffix;
 
 /// [c] without its `sourceEquipmentId` and with the parked marker on its name —
 /// the way becomes user-owned, exactly as if the engineer had added it.
@@ -2490,6 +2494,9 @@ ElectricalCircuit _parkedMepWay(ElectricalCircuit c) => ElectricalCircuit(
       cosPhiUserSet: c.cosPhiUserSet,
       phasesUserSet: c.phasesUserSet,
       loadKindUserSet: c.loadKindUserSet,
+      // Round 25 — an unresolved LEGACY way stays legacy while parked, so the
+      // Round-24 migration still runs when it is re-adopted.
+      legacyProvenance: c.legacyProvenance,
     );
 
 /// A [parked] way re-claimed by the [fresh] derived circuit for the SAME source
@@ -2543,8 +2550,8 @@ ElectricalCircuit _refreshedMepWay(
   // (mep-bridge-5): provenance, not inference — a factor the engineer TYPED
   // (`demandFactorUserSet`) is never overwritten, even a 0 or 1; a legacy
   // unflagged value other than 0 / 1 is also kept as the engineer's.
-  final mintedDemand = !c.demandFactorUserSet &&
-      ((c.demandFactor - 1).abs() < 1e-9 || c.demandFactor.abs() < 1e-9);
+  final mintedDemand =
+      !c.demandFactorUserSet && _isMintedDemandFactor(c, c.legacyProvenance);
   // Round 23 (mep-bridge-2) — a component swap on the SAME node keeps the
   // way id, so the electrical character (phases / load kind / cos phi) is
   // re-derived from the fresh mint (a phase PIN stays the engineer's), and a
@@ -2599,6 +2606,19 @@ ElectricalCircuit _refreshedMepWay(
   );
 }
 
+/// Round 25 — whether [c]'s unflagged demand factor is one the MEP feed
+/// itself could have minted. Today's mint produces 1 (duty) or 0 (standby)
+/// on any way, but before round 23 the feed minted 0 ONLY for a life-safety
+/// standby fire pump (Round 21): in a [legacy] (pre-flag) file a 0 on a
+/// NON-life-safety way can only have been TYPED (the manual standby
+/// workaround) — it is the engineer's, kept and flagged, never reverted to 1.
+bool _isMintedDemandFactor(ElectricalCircuit c, bool legacy) {
+  final isOne = (c.demandFactor - 1).abs() < 1e-9;
+  final isZero = c.demandFactor.abs() < 1e-9;
+  if (legacy && !c.lifeSafety) return isOne;
+  return isOne || isZero;
+}
+
 /// True when [c] is still EXACTLY as the MEP auto-feed minted it — the engineer
 /// has not renamed it and has set no override of any kind — so re-minting it
 /// would reproduce it verbatim and dropping it (when its source equipment
@@ -2628,7 +2648,7 @@ bool _isPristineDerivedWay(ElectricalCircuit c) =>
     // the engineer typed (even 0 / 1) makes the way theirs (parked, never
     // dropped).
     !c.demandFactorUserSet &&
-    ((c.demandFactor - 1).abs() < 1e-9 || c.demandFactor.abs() < 1e-9) &&
+    _isMintedDemandFactor(c, c.legacyProvenance) &&
     // Round 23 r2 — a typed cos phi / phases / load kind is the engineer's.
     !c.cosPhiUserSet &&
     !c.phasesUserSet &&

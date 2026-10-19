@@ -31,6 +31,12 @@ enum NetworkDefectKind {
   /// The component is plant-less but its SERVICE has another component WITH a
   /// plant — i.e. this branch is disconnected from the rooted/fed tree.
   disconnectedIsland,
+
+  /// Round 25 — a cold/hot WATER component with no plant whose open END is a
+  /// water meter: it is fed straight from the mains (PDAM). Not a drawing
+  /// defect, but the mains pressure is not modelled — an ADVISORY (the app
+  /// surfaces it as an acknowledgeable info), never the no-source warning.
+  mainsFed,
 }
 
 /// One detected supply-integrity defect: the [service] it belongs to, the
@@ -52,6 +58,9 @@ class NetworkComponentDefect {
 
   /// True for the "branch fell off the rooted tree" defect.
   bool get isIsland => kind == NetworkDefectKind.disconnectedIsland;
+
+  /// True for a water component fed from the mains through a drawn meter.
+  bool get isMainsFed => kind == NetworkDefectKind.mainsFed;
 
   /// A representative node id for locating the defect on a sheet (the first
   /// node id, deterministic since [nodeIds] is sorted). Null only when the
@@ -111,13 +120,32 @@ List<NetworkComponentDefect> networkConnectivityDefects(Network net) {
       components.add(component);
     }
 
-    // A service "has a source somewhere" when any component carries a plant.
+    // Round 25 — a degree-1 water meter on a cold/hot water service is the
+    // mains connection (a direct-from-PDAM building draws no tank or pump).
+    final isWater =
+        service == ServiceType.coldWater || service == ServiceType.hotWater;
+    bool isMainsEntry(String id) =>
+        isWater &&
+        net.nodeById(id)?.component == NodeComponent.waterMeter &&
+        (adjacency[id]?.length ?? 0) == 1;
+    bool mainsFed(List<String> c) => c.any(isMainsEntry);
+
+    // A service "has a source somewhere" when any component carries a plant
+    // (or, on water, a mains meter).
     final serviceHasPlant =
-        components.any((c) => c.any(isPlant));
+        components.any((c) => c.any(isPlant) || mainsFed(c));
 
     for (final component in components) {
       if (component.isEmpty) continue;
       if (component.any(isPlant)) continue; // this component is fed
+      if (mainsFed(component)) {
+        defects.add(NetworkComponentDefect(
+          service: service,
+          nodeIds: component,
+          kind: NetworkDefectKind.mainsFed,
+        ));
+        continue;
+      }
       // A plant-less component: an island if the service is otherwise fed,
       // else the whole service has no source.
       defects.add(NetworkComponentDefect(

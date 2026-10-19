@@ -702,7 +702,11 @@ SldSheet buildElectricalSld({
       final kvar = isCapacitor ? (circuit?.loadW ?? c.loadW) : 0.0;
       final daya = isCapacitor && kvar > 0
           ? '${_num(kvar / 1000)} kvar'
-          : (c.loadW > 0 && !isCapacitor ? _wattsId(c.loadW) : '-');
+          // Round 25 — the CONNECTED daya (before the demand factor); the
+          // TOTAL footer carries the diversified demand.
+          : (c.connectedWOrLoad > 0 && !isCapacitor
+              ? _wattsId(c.connectedWOrLoad)
+              : '-');
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
       // star-delta) APPENDED only when the way carries a real starterType —
       // most final lighting/socket ways have none, so the cell stays bare.

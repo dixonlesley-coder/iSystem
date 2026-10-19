@@ -287,7 +287,9 @@ final List<String> serviceFaultEstimateVerifyItems = [
   // ASCII in the printed label: a report PDF encodes WinAnsi, which has no
   // '≤' / '⇒' (they would garble to '?' — the Wave-7 separator defect).
   'service-entrance prospective-fault rungs by declared connection capacity '
-      '(up to 16.5 kVA: 6 kA / up to 197 kVA: 10 kA / above: 16 kA)',
+      '(up to 16.5 kVA: 6 kA / up to 197 kVA: 10 kA / above: the declared '
+      'capacity\'s own transformer fault at the representative Z%, at least '
+      '16 kA)',
   'service-size fault estimate review threshold (50 kA) and its 400 V LV '
       'reference voltage',
 ];
@@ -319,8 +321,13 @@ final List<String> serviceFaultEstimateVerifyItems = [
 ///    RUNG off the declared capacity, monotone non-decreasing —
 ///    ≤ [smallServiceCapacityCeilingVa] ⇒ [smallServiceFaultKa];
 ///    ≤ [plnLvServiceCeilingVa] ⇒ [lvServiceFaultKa];
-///    above the PLN TR ceiling with no declared transformer ⇒
-///    [defaultLvUtilityFaultKa] (no better claim available).
+///    above the PLN TR ceiling the service is fed at MV through its own
+///    transformer (Round 25): the fault is that transformer's, rated at the
+///    declared capacity (or the [demand], whichever is larger, through the
+///    supply study's own pick — step 3) by the same formula as step 1, and
+///    NEVER below [defaultLvUtilityFaultKa]. Declaring a 630 kVA service gives
+///    630000 / (1.732050808·400·0.04) = 22733.2 A — more information never
+///    LOWERS the safety quantity below the undeclared estimate.
 ///
 /// 3. **Nothing declared, but the [demand] needs an MV service** (Round 16,
 ///    supply-sources-undeclared-mv-fault-16ka) — when the caller passes the
@@ -368,32 +375,56 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
     if (capacityVa <= plnLvServiceCeilingVa) {
       return Current.kiloamperes(lvServiceFaultKa);
     }
-    return Current.kiloamperes(defaultLvUtilityFaultKa);
+    // Round 25 — above the PLN TR ceiling: the declared capacity's own
+    // transformer fault, never below the study transformer for the demand
+    // (step 3) nor the flat 16 kA the rung used to return.
+    final declaredA = capacityVa /
+        (math.sqrt(3) *
+            serviceFaultLineVoltageV *
+            representativeTransformerZpu);
+    final studyA = demand == null ? null : _studyTransformerFaultA(project, demand);
+    return Current(_round(
+        math.max(math.max(declaredA, studyA ?? 0),
+            defaultLvUtilityFaultKa * 1000),
+        1));
   }
 
   // 3. Nothing declared, but the demand needs a transformer ⇒ the unit the
   //    supply study itself selects (one section's units: coupler N.O.).
-  if (demand != null && demand.voltAmperes > 0) {
-    final supply =
-        determineSupply(demand, dualTransformer: project.dualTransformer);
-    final kva = supply.transformerKva;
-    if (supply.isMv && kva != null && kva > 0) {
-      final perSection =
-          project.dualTransformer ? supply.units ~/ 2 : supply.units;
-      final va = kva * 1000 * math.max(1, perSection);
-      final iscA = va /
-          (math.sqrt(3) *
-              serviceFaultLineVoltageV *
-              (supply.impedancePct ?? transformerImpedancePct) /
-              100);
-      return Current(_round(iscA, 1));
-    }
+  if (demand != null) {
+    final studyA = _studyTransformerFaultA(project, demand);
+    if (studyA != null) return Current(_round(studyA, 1));
   }
 
   // 4. Nothing declared, LV demand (dualTransformer alone has no rating) ⇒
   //    no claim; the caller keeps its flat default.
   return null;
 }
+
+/// The fault (A, unrounded) of the transformer the supply study selects for
+/// [demand] (one section's units — a dual service's coupler is N.O.), or null
+/// when the demand needs no MV service.
+double? _studyTransformerFaultA(ElectricalProject project, ApparentPower demand) {
+  if (demand.voltAmperes <= 0) return null;
+  final supply =
+      determineSupply(demand, dualTransformer: project.dualTransformer);
+  final kva = supply.transformerKva;
+  if (!supply.isMv || kva == null || kva <= 0) return null;
+  final perSection = project.dualTransformer ? supply.units ~/ 2 : supply.units;
+  final va = kva * 1000 * math.max(1, perSection);
+  return va /
+      (math.sqrt(3) *
+          serviceFaultLineVoltageV *
+          (supply.impedancePct ?? transformerImpedancePct) /
+          100);
+}
+
+/// Round 25 — true when the project DECLARES its service size (a customer
+/// transformer or a connection capacity), so a resolved estimate's basis is
+/// the declared service rather than the supply study.
+bool hasDeclaredServiceSize(ElectricalProject project) =>
+    (project.transformerKva?.voltAmperes ?? 0) > 0 ||
+    (project.supplyCapacityVa?.voltAmperes ?? 0) > 0;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Impedance helpers.

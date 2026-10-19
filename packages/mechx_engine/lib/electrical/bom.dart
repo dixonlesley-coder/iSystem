@@ -536,7 +536,7 @@ List<BomLine> _panelLines(
         // At least the chained point count (c.points), at least the load-implied
         // estimate.
         final points = math.max(
-            c.points, math.max(1, (c.loadW / _wattsPerLightPoint).ceil()));
+            c.points, math.max(1, (c.connectedWOrLoad / _wattsPerLightPoint).ceil()));
         final switches = math.max(1, (points / _pointsPerSwitch).ceil());
         lines.add(BomLine(
           description: 'Light point — ${c.name}',
@@ -552,7 +552,7 @@ List<BomLine> _panelLines(
         ));
       } else if (c.loadKind == LoadKind.socket) {
         final sockets =
-            math.max(c.points, math.max(1, (c.loadW / _vaPerSocket).ceil()));
+            math.max(c.points, math.max(1, (c.connectedWOrLoad / _vaPerSocket).ceil()));
         lines.add(BomLine(
           description: 'Socket outlet (stop kontak) — ${c.name}',
           qty: sockets.toDouble(),
