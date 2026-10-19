@@ -233,6 +233,53 @@ void main() {
   });
 
   test(
+      'r2 regression: a pumpless DUAL-FEED ring (two check valves entering '
+      'the ring at different nodes) keeps both feeds at the set flow — the '
+      'second feed is never zeroed as a return', () {
+    // T -> M; M -> CV1 -> J1 and M -> CV2 -> J2; header J1 - J2; fixture A
+    // one hop off J1, fixture B two hops off J2 (via X), 4 UBAP each. Both
+    // entry nodes serve draw-off, so neither valve is a return pipe: the
+    // duty/standby reading sizes each leg on the whole set flow,
+    // curve(8) = 8/10 x 0.5 = 0.400 L/s (flush-tank Gambar 1).
+    NetEdge e(String id, String a, String b) => NetEdge(
+        id: id, fromId: a, toId: b, service: ServiceType.coldWater);
+    for (final ids in [('CV1', 'CV2'), ('CV2', 'CV1')]) {
+      final net = Network(nodes: [
+        _n('T', 0, 0, role: NodeRole.plant),
+        _n('M', 20, 0),
+        _n(ids.$1, 40, -20, c: NodeComponent.checkValve),
+        _n(ids.$2, 40, 20, c: NodeComponent.checkValve),
+        _n('J1', 60, -20),
+        _n('J2', 60, 20),
+        _n('X', 80, 20),
+        _n('fA', 80, -20, role: NodeRole.fixture),
+        _n('fB', 100, 20, role: NodeRole.fixture),
+      ], edges: [
+        e('tm', 'T', 'M'),
+        e('m1', 'M', ids.$1),
+        e('c1', ids.$1, 'J1'),
+        e('m2', 'M', ids.$2),
+        e('c2', ids.$2, 'J2'),
+        e('hdr', 'J1', 'J2'),
+        e('a', 'J1', 'fA'),
+        e('x', 'J2', 'X'),
+        e('b', 'X', 'fB'),
+      ]);
+      final s = autoSizeNetwork(net, const SizingContext(),
+          leafDemand: const {ServiceType.coldWater: FlowRate(0)},
+          leafFixtureUnits: const {ServiceType.coldWater: 4.0});
+      expect(_curve(8), closeTo(0.400, 1e-12));
+      for (final id in ['tm', 'm1', 'c1', 'm2', 'c2']) {
+        expect(s[id]!.flow.inLitersPerSecond, closeTo(_curve(8), 1e-9),
+            reason: '$ids $id');
+      }
+      // Never flow AGAINST a check valve.
+      expect(s['c2']!.flowFromId, ids.$2, reason: '$ids');
+      expect(s['c1']!.flowFromId, ids.$1, reason: '$ids');
+    }
+  });
+
+  test(
       'property: drawing direction, valve ids, edge order, riser count and '
       'tee placement never move the supply off the open network (seeded)', () {
     final rnd = math.Random(27);

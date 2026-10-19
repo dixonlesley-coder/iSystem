@@ -187,7 +187,7 @@ void main() {
   /// riser W3 -> VTR (floor 4). [bend] draws the offset as two runs through a
   /// bare node K (V2 -> K -> W2) instead of one run (V2 -> W2).
   ({Network net, Map<String, double> dfu}) offsetStack(
-      {required bool bend, double load = 10}) {
+      {required bool bend, double load = 10, bool tieAtUpper = false}) {
     final nodes = <NetNode>[_n('out', 0, 0)];
     final edges = <NetEdge>[
       _e('sewer', 'out', 'DS0', ServiceType.drainage),
@@ -206,7 +206,9 @@ void main() {
     }
     for (var f = 0; f <= 2; f++) {
       nodes.add(_n('V$f', 120, 0, floor: f));
-      edges.add(_e('t$f', 'V$f', 'DS$f', ServiceType.vent));
+      if (!(tieAtUpper && f == 2)) {
+        edges.add(_e('t$f', 'V$f', 'DS$f', ServiceType.vent));
+      }
       if (f > 0) {
         edges.add(_e('v$f', 'V${f - 1}', 'V$f', ServiceType.vent,
             kind: EdgeKind.riser));
@@ -220,6 +222,7 @@ void main() {
       ..add(_e('w3', 'W2', 'W3', ServiceType.vent, kind: EdgeKind.riser))
       ..add(_e('t3', 'W3', 'DS3', ServiceType.vent))
       ..add(_e('vtr', 'W3', 'VTR', ServiceType.vent, kind: EdgeKind.riser));
+    if (tieAtUpper) edges.add(_e('t2', 'W2', 'DS2', ServiceType.vent));
     if (bend) {
       nodes.add(_n('K', 160, 40, floor: 2));
       edges
@@ -249,6 +252,33 @@ void main() {
             reason: 'bend $load $id');
       }
     }
+  });
+
+  test(
+      'residuals-2 r2: the floor tie drawn from the offset\'s UPPER foot (W2) '
+      'is a stack, not a VTR stub — the stack stays uniform', () {
+    // V2 -> W2 offset, W2 -> DS2 tie, W2 -> W3 -> VTR. W2 carries two runs
+    // (offset + tie) but its group is TIED to the soil stack, so it is the
+    // foot of an offset stack, not a header junction. One soil stack: the
+    // whole developed length carries one load (UPC 703.2 / IPC 916.1).
+    for (final bend in [false, true]) {
+      for (final load in [10.0, 20.0]) {
+        final t = _size(offsetStack(bend: bend, load: load, tieAtUpper: true));
+        final stack = t.fu['vtr']!;
+        final ids = ['v1', 'v2', 'o1', if (bend) 'o2', 'w3', 'vtr'];
+        for (final id in ids) {
+          expect(t.fu[id], closeTo(stack, 1e-9), reason: '$bend $load $id');
+          expect(t.s[id]!.diameter.inMillimeters,
+              drain.ventDiameterForDfu(stack).inMillimeters,
+              reason: '$bend $load $id');
+        }
+      }
+    }
+    // 10 DFU/floor: 40 DFU on the stack => UPC 703.2 24 < 40 <= 48 => DN65
+    // (the reviewer's probe; a53dc90 gave v1/v2/o1 20 DFU DN50).
+    final t = _size(offsetStack(bend: false, tieAtUpper: true));
+    expect(t.s['v1']!.diameter.inMillimeters, 65);
+    expect(t.s['o1']!.diameter.inMillimeters, 65);
   });
 
   test(

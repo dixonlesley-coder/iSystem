@@ -3236,6 +3236,45 @@ _CheckValvePlan _classifyLoopCheckValves({
     return null;
   }
 
+  // True when [node] lies on a shortest root -> draw-off path with only the
+  // valve [open] passable among the cycle check valves.
+  bool onSupplyPath(_Cv open, String node) {
+    if (isDemand == null) return true;
+    final cutX = {...cut}
+      ..remove(open.inE.id)
+      ..remove(open.outE.id);
+    final d = <String, int>{root: 0};
+    final q = [root];
+    for (var i = 0; i < q.length; i++) {
+      final n = q[i];
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (cutX.contains(e.id)) continue;
+        final m = other(e, n);
+        if (d.containsKey(m)) continue;
+        d[m] = d[n]! + 1;
+        q.add(m);
+      }
+    }
+    if (!d.containsKey(node)) return false;
+    final visited = <String>{};
+    final stack = [
+      for (final n in d.keys)
+        if (n != root && isDemand(n)) n,
+    ];
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      if (!visited.add(n)) continue;
+      if (n == node) return true;
+      final dn = d[n]!;
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (cutX.contains(e.id)) continue;
+        final m = other(e, n);
+        if (d[m] == dn - 1) stack.add(m);
+      }
+    }
+    return false;
+  }
+
   final byRegion = <int, List<_Cv>>{};
   for (final c in discharge) {
     (byRegion[region[c.downNode]!] ??= []).add(c);
@@ -3254,9 +3293,23 @@ _CheckValvePlan _classifyLoopCheckValves({
         .whereType<int>()
         .fold<int?>(null, (m, v) => m == null || v < m ? v : m);
     if (best == null || nd.where((v) => v == best).length != 1) return none;
-    for (var i = 0; i < group.length; i++) {
-      if (nd[i] != best) returns.add(flipped(group[i]));
+    final feed = group[nd.indexOf(best)];
+    final candidates = [
+      for (var i = 0; i < group.length; i++)
+        if (nd[i] != best) group[i],
+    ];
+    // Round 27 r2 — a non-nearest valve is a RETURN only when, with the
+    // nearest feed alone open (every other cycle valve cut), its outlet lies
+    // on NO shortest root -> draw-off path: a return pipe never carries
+    // draw-off. A two-connection (dual-feed) ring entered at two different
+    // ring nodes serves draw-off through BOTH entry nodes, so its second
+    // feed is a feed (the duty/standby reading), never zeroed with its flow
+    // pointing back through the valve.
+    if (!candidates.every((c) => !onSupplyPath(feed, c.downNode))) {
+      anyParallel = true;
+      continue;
     }
+    returns.addAll(candidates.map(flipped));
   }
   if (returns.isNotEmpty) {
     if (anyParallel) return none; // duty/standby + a drawn return: undecided
@@ -3452,11 +3505,17 @@ Map<String, double> _uniformVentStacks(
       }
     }
   }
-  // Round 27 (residuals-2) — a riser group that touches no drainage node is a
-  // bare VTR STUB (a riser from a header junction up to the roof). Its bottom
-  // node joined by TWO or more runs is a HEADER junction, not the foot of an
-  // offset stack: both header halves used to pass as stack offsets and merge
-  // the two stacks (and the stub) into one uniform stack.
+  // Round 27 (residuals-2) — a riser group that is TIED to no drainage node
+  // is a bare VTR STUB (a riser from a header junction up to the roof). Its
+  // bottom node joined by TWO or more runs is a HEADER junction, not the foot
+  // of an offset stack: both header halves used to pass as stack offsets and
+  // merge the two stacks (and the stub) into one uniform stack. A group is
+  // TIED when one of its nodes is a drainage node OR a vent run (chain,
+  // through bare bends) joins one of its nodes to a drainage node — an
+  // ordinary upper vent stack whose ties run to the soil stack is a stack,
+  // never a stub (r2: a floor tie drawn from the offset's upper foot W2 left
+  // the lower stack reverse-tapered). Tie chains are added below, once the
+  // chains are built (before any [offsetLink] call).
   final groupTouchesDrain = <String>{
     for (final n in parent.keys)
       if (drainNodes.contains(n)) riserGroupOf[n]!,
@@ -3527,6 +3586,13 @@ Map<String, double> _uniformVentStacks(
         seenRun.add(x.id);
       }
       chains.add((u: u, v: v, eu: eu, ev: ev, edges: edges));
+    }
+  }
+  for (final c in chains) {
+    for (final (a, b) in [(c.u, c.v), (c.v, c.u)]) {
+      if (riserGroupOf[a] case final g? when drainNodes.contains(b)) {
+        groupTouchesDrain.add(g);
+      }
     }
   }
 
