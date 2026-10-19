@@ -1133,8 +1133,14 @@ FlowRate sourceDeliveredFlow(
 
 /// One drawn air SYSTEM (a connected component of one air service): the
 /// airflow its source delivers, its index-run static, and the node it is
-/// rooted at.
-typedef AirSystem = ({FlowRate trunk, Pressure stat, String fanNodeId});
+/// rooted at. Round 31 (hvac-5-3): [intake] is the part of [stat] spent on
+/// the unit's outdoor-air intake path (0 when none is drawn).
+typedef AirSystem = ({
+  FlowRate trunk,
+  Pressure stat,
+  String fanNodeId,
+  Pressure intake,
+});
 
 /// Every drawn system of one air [service] — ONE per connected component,
 /// each rooted at the SAME source the sizer accumulated from (plant → demand-
@@ -1250,7 +1256,12 @@ List<AirSystem> airSystemsFor(
         if (units.isNotEmpty) unit = units.first.id;
       }
     }
-    out.add((trunk: trunk, stat: s.totalStaticPressure, fanNodeId: unit));
+    out.add((
+      trunk: trunk,
+      stat: s.totalStaticPressure,
+      fanNodeId: unit,
+      intake: s.intakeStaticPressure,
+    ));
   }
   out.sort((a, b) {
     final c = b.trunk.cubicMetersPerSecond.compareTo(a.trunk.cubicMetersPerSecond);
@@ -1327,11 +1338,19 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
       ret = rets.first;
     }
     if (ret != null) consumed.add(ret.fanNodeId);
+    // Round 31 (hvac-5-3) — the outdoor-air INTAKE and a RETURN drawn to the
+    // same unit enter its mixing box in PARALLEL, so the inlet side governs
+    // at max(intake, return), never their sum: (supply index excluding the
+    // intake) + max(intake, return) + internal. With no return the intake
+    // stays in series with the supply (Round 27).
+    final supplyIndexPa = s.stat.pascals - s.intake.pascals;
+    final inletPa = ret == null
+        ? s.intake.pascals
+        : math.max(s.intake.pascals, ret.stat.pascals);
     out[s.fanNodeId] = sizeFan(
       airflow: s.trunk,
-      totalStaticPressure: Pressure(s.stat.pascals +
-          (ret?.stat.pascals ?? 0) +
-          internalOf(s.fanNodeId).pascals),
+      totalStaticPressure: Pressure(
+          supplyIndexPa + inletPa + internalOf(s.fanNodeId).pascals),
     );
   }
   // Return-only systems still get a fan.

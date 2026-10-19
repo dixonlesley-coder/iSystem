@@ -405,7 +405,8 @@ void main() {
       expect(r.phaseBalance.l3, closeTo(6.0, 1e-9));
     });
 
-    test('adding a 12.0 A way moves three circuits despite the threshold', () {
+    test('adding a 12.0 A way rebalances (k3 moves) despite the threshold',
+        () {
       // Seed (10, 8, 6); the NEW way g (12.0 A) has no prior, so the greedy
       // drops it on the least-loaded line L3 -> (10, 8, 18), spread 10.0 A.
       // Relocate pass (descending g, k1, k2, k3):
@@ -413,13 +414,20 @@ void main() {
       //   k1 L1->L2 ( 0,18,18) 18.0 / L1->L3 (0,8,28) 28.0          -> reject
       //   k2 L2->L1 (18, 0,18) 18.0 / L2->L3 (10,0,26) 26.0         -> reject
       //   k3 L3->L1 (16, 8,12) 8.0: gain 10.0-8.0 = 2.0 > 1.0       -> ACCEPT
-      //      then L3->L2 (16,14,6) 10.0                             -> reject
-      // Swap pass on (16, 8, 12):
-      //   g<->k1 (18,8,10) 10.0, g<->k2 (16,12,8) 8.0                -> reject
-      //   k1<->k2: L1 16-10+8 = 14, L2 8-8+10 = 10 -> (14,10,12) spread 4.0,
-      //      gain 8.0-4.0 = 4.0 > 1.0                                -> ACCEPT
-      // Nothing improves on (14, 10, 12) in the next pass, so:
-      //   L1 {k2 8.0, k3 6.0} = 14.0   L2 {k1 10.0} = 10.0   L3 {g 12.0} = 12.0
+      //      then FROM ITS NEW LINE L1 (Round 31 — the relocate pass
+      //      tracks the current line): L1->L2 (10,14,12) spread 4.0,
+      //      gain 8.0-4.0 = 4.0 > 0 (k3 is already off its prior L3,
+      //      so no stickiness cost)                                -> ACCEPT
+      //      (the stale-`from` code subtracted 6 A from L3 a second time
+      //      here, reading a corrupt (16,14,6) and rejecting.)
+      // Swap pass on (10, 14, 12): every pair widens or ties the 4.0 A
+      // spread (g<->k1 (12,14,10) 4.0 ties, g<->k2 (10,18,8), g<->k3
+      // (10,20,6), k1<->k2 (8,16,12), k1<->k3 (6,18,12))          -> reject
+      // Next pass: no relocate / swap narrows 4.0. Exact search: ways
+      // 12 / 10 / 8 / 6 (sum 36) — the only 12 A subset is {g}, so no
+      // partition beats a 14 A worst phase, and every 14 A partition has
+      // spread >= 4 ⇒ (10, 14, 12) is kept:
+      //   L1 {k1 10.0} = 10.0   L2 {k2 8.0, k3 6.0} = 14.0   L3 {g 12.0} = 12.0
       final r = computePanel(
         p,
         ElectricalPanel(
@@ -432,14 +440,14 @@ void main() {
           phaseReassignThresholdA: 1.0,
         ),
       );
-      expect(phaseOf(r, 'k1'), PhaseAssignment.l2);
-      expect(phaseOf(r, 'k2'), PhaseAssignment.l1);
-      expect(phaseOf(r, 'k3'), PhaseAssignment.l1);
+      expect(phaseOf(r, 'k1'), PhaseAssignment.l1);
+      expect(phaseOf(r, 'k2'), PhaseAssignment.l2);
+      expect(phaseOf(r, 'k3'), PhaseAssignment.l2);
       expect(phaseOf(r, 'g'), PhaseAssignment.l3);
-      expect(r.phaseBalance.l1, closeTo(14.0, 1e-9));
-      expect(r.phaseBalance.l2, closeTo(10.0, 1e-9));
+      expect(r.phaseBalance.l1, closeTo(10.0, 1e-9));
+      expect(r.phaseBalance.l2, closeTo(14.0, 1e-9));
       expect(r.phaseBalance.l3, closeTo(12.0, 1e-9));
-      // imbalance = (14 - 10) / ((14+10+12)/3) · 100 = 4 / 12 · 100 = 33.3 %
+      // imbalance = (14 - 10) / ((10+14+12)/3) · 100 = 4 / 12 · 100 = 33.3 %
       expect(r.phaseBalance.imbalancePercent, closeTo(33.3, 1e-9));
     });
   });

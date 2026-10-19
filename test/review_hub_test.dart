@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
@@ -218,9 +219,12 @@ void main() {
       listen: false,
     );
     expect(container.read(issueFocusProvider), isNull);
+    // Round 31 — the PUIL // VERIFY register surfaces once a panel exists.
+    container.read(electricalProjectProvider.notifier).addPanel(name: 'DB');
+    await tester.pump();
 
-    // The 'Standards verification' row is REVIEW by default (the // VERIFY
-    // register), and the actionable copy sits in the IssuesCard below the fold.
+    // The 'Standards verification' row is REVIEW (the // VERIFY register),
+    // and the actionable copy sits in the IssuesCard below the fold.
     await tester.tap(find.text('Standards verification'));
     await tester.pump();
 

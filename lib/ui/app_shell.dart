@@ -491,7 +491,8 @@ Widget? buildElectricalInlineEditor(
         lengthSource: resolved.source,
         effectiveLength: resolved.length,
         placementLabel: placementLabel,
-        onUnplace: loadPos == null
+        // Round 31 — an MEP-derived load follows its equipment: no un-place.
+        onUnplace: loadPos == null || circuit.sourceEquipmentId != null
             ? null
             : () => unplaceCircuitLoad(ref, context, panel.id, circuit.id),
         panelSystem: panel.system,

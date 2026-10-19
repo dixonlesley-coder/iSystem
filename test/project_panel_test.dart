@@ -72,12 +72,18 @@ void main() {
 
   testWidgets('uncalibrated sheet shows a calibration prompt', (tester) async {
     await _pumpAppWithDemoSheets(tester);
-    // Scoped to the inspector: the Layout breadcrumb tail
-    // ('breadcrumb-calibrate') also states the uncalibrated status.
+    // Round 31 — the uncalibrated state is stated ONCE by the Layout
+    // breadcrumb tail ('breadcrumb-calibrate'); the inspector's Scale section
+    // carries the 'Calibrate scale' action instead of repeating the status.
     expect(
         find.descendant(
             of: find.byType(ProjectPanel),
             matching: find.textContaining('Not calibrated')),
+        findsNothing);
+    expect(
+        find.descendant(
+            of: find.byType(ProjectPanel),
+            matching: find.text('Calibrate scale')),
         findsOneWidget);
     expect(find.byKey(const ValueKey('breadcrumb-calibrate')), findsOneWidget);
   });

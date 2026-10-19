@@ -15,6 +15,7 @@ import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/riser_tags.dart' show equipmentDetail;
+import 'package:mechx_engine/sizing/ejector.dart' show drawnEjectorPumpIds;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/network_sizing.dart'
@@ -127,11 +128,20 @@ class MepDutyBinding {
   /// [hwRecircPumpNodeIds].
   final Set<String> hwStandbyPumpNodeIds;
 
-  /// Every standby pump (fire, supply, hot water) — its way adds no demand.
+  /// Round 31 (regression-duplex-ejector-standby-full-demand) — a sewage
+  /// ejector that is the STANDBY of a duplex set (two or more ejectors on ONE
+  /// pit, [duplexEjectorStandbys]), mapped to the DUTY ejector it backs up:
+  /// the same machine (wired at the duty rating), alternating, never
+  /// coincident — demand factor 0, 'standby' on the schedule row.
+  final Map<String, String> ejectorStandbyPumpNodeIds;
+
+  /// Every standby pump (fire, supply, hot water, ejector) — its way adds no
+  /// demand.
   Set<String> get standbyPumpNodeIds => {
         ...fireStandbyPumpNodeIds,
         ...supplyStandbyPumpNodeIds.keys,
         ...hwStandbyPumpNodeIds,
+        ...ejectorStandbyPumpNodeIds.keys,
       };
 
   const MepDutyBinding({
@@ -145,6 +155,7 @@ class MepDutyBinding {
     this.fireAssumedJockeyPumpNodeIds = const {},
     this.supplyStandbyPumpNodeIds = const {},
     this.hwStandbyPumpNodeIds = const {},
+    this.ejectorStandbyPumpNodeIds = const {},
   });
 }
 
@@ -249,8 +260,65 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     fireAssumedJockeyPumpNodeIds: roles.assumedJockey,
     supplyStandbyPumpNodeIds: supplyStandby,
     hwStandbyPumpNodeIds: hwStandby.keys.toSet(),
+    ejectorStandbyPumpNodeIds: duplexEjectorStandbys(
+      net,
+      drawnEjectorPumpIds(net),
+      bore: boreMm,
+    ),
   );
 });
+
+/// Round 31 (regression-duplex-ejector-standby-full-demand) — the STANDBY
+/// ejectors among [ejectors], each mapped to the DUTY ejector it backs up.
+/// Pure.
+///
+/// Ejectors are grouped by the PIT they draw from (the ground tank one of
+/// their drainage edges joins directly). A duplex ('pompa sewage duplex')
+/// set is duty + standby, alternating — the same rule the Round 23 parallel
+/// supply / hot-water / fire sets follow: the DUTY ejector is the one with
+/// the largest incident drainage bore ([bore], mm), then the lowest id; every
+/// other ejector on that pit is its standby. Ejectors on different pits are
+/// separate duty machines.
+Map<String, String> duplexEjectorStandbys(
+  Network net,
+  Iterable<String> ejectors, {
+  required double? Function(String edgeId) bore,
+}) {
+  final byPit = <String, List<String>>{};
+  for (final id in ejectors) {
+    final pits = <String>{
+      for (final e in net.edgesAt(id))
+        if (e.service == ServiceType.drainage &&
+            net.nodeById(e.fromId == id ? e.toId : e.fromId)?.component ==
+                NodeComponent.groundTank)
+          e.fromId == id ? e.toId : e.fromId,
+    };
+    if (pits.isEmpty) continue;
+    byPit.putIfAbsent((pits.toList()..sort()).first, () => []).add(id);
+  }
+  double boreOf(String id) {
+    var best = 0.0;
+    for (final e in net.edgesAt(id)) {
+      if (e.service != ServiceType.drainage) continue;
+      final d = bore(e.id) ?? 0.0;
+      if (d > best) best = d;
+    }
+    return best;
+  }
+
+  final out = <String, String>{};
+  for (final g in byPit.values) {
+    if (g.length < 2) continue;
+    final ranked = [...g]..sort((a, b) {
+        final d = boreOf(b).compareTo(boreOf(a));
+        return d != 0 ? d : a.compareTo(b);
+      });
+    for (final id in ranked.skip(1)) {
+      out[id] = ranked.first;
+    }
+  }
+  return out;
+}
 
 /// Round 23 (mep-bridge-3) — the STANDBY pumps among [pumps] (one service,
 /// [onService]), each mapped to the DUTY pump it backs up. Pure.
@@ -673,8 +741,10 @@ final equipmentNodeDutiesProvider =
     final dutyId = bind.supplyStandbyPumpNodeIds[n.id] ?? n.id;
     p = (dutyId == bind.supplyPumpNodeId ? ref.watch(pumpDutyProvider) : null) ??
         ref.watch(supplyMoverDutiesProvider)[dutyId] ??
-        // Round 30 — a sewage ejector carries its own solved duty.
-        ref.watch(ejectorDutiesProvider)[n.id];
+        // Round 30 — a sewage ejector carries its own solved duty; Round 31
+        // — a duplex STANDBY ejector is wired at its duty ejector's machine.
+        ref.watch(ejectorDutiesProvider)[
+            bind.ejectorStandbyPumpNodeIds[n.id] ?? n.id];
     if (bind.hwRecircPumpNodeIds.contains(n.id)) {
       // Round 26 — the duty of the hot-water SYSTEM this pump sits on.
       p = null;

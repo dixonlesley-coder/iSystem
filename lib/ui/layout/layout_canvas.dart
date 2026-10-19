@@ -415,7 +415,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           // A placed load can be handed back to its manual length — the SAME
           // shared action the standalone electrical workspace's menu and the
           // inline circuit inspector run (one undo step + one toast).
-          hasLoadPos: circuit?.loadPos != null,
+          // Round 31 — an MEP-derived load follows its equipment: the
+          // 'Remove from layout' row is hidden for it.
+          hasLoadPos: circuit?.loadPos != null &&
+              circuit?.sourceEquipmentId == null,
           onUnplace: () => unplaceCircuitLoad(ref, context, t.panelId, t.circuitId),
           onShowInSingleLine: () =>
               _showInSingleLine(t.panelId, circuitId: t.circuitId),
@@ -1014,7 +1017,8 @@ class _LayoutTopBar extends ConsumerWidget {
 /// Work item 4 (2026-10-17): the sheet's calibration state, stated ONCE beside
 /// the floor breadcrumb (the status bar no longer repeats it on Layout).
 /// Uncalibrated -> a tappable ' · Not calibrated' (warning) that starts
-/// calibration exactly like the top-centre pill; a stale calibration -> a
+/// calibration (Round 31: the only on-canvas statement — the top-centre pill
+/// and the Scale section's status row were dropped); a stale calibration -> a
 /// tappable ' · Re-verify scale' (warning); calibrated -> a quiet ' · 1 : N'.
 class _BreadcrumbScaleTail extends ConsumerWidget {
   final Sheet sheet;
@@ -1415,14 +1419,10 @@ class _SharedSheet extends ConsumerWidget {
           ),
         if (calibrating)
           Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
-        // First-run calibrate nudge.
-        if (!calibrated && !calibrating)
-          const Positioned(
-            top: MechXSpacing.md,
-            left: 0,
-            right: 0,
-            child: Center(child: _CalibrateHint()),
-          ),
+        // Round 31 (ui-simplicity-4) — the top-centre 'Set drawing scale'
+        // pill is gone from Layout: the floor breadcrumb's tappable
+        // ' · Not calibrated' tail (rendered beside every Layout sheet) states
+        // the same condition and starts the same calibration.
         // A4: first-draw hint — a quiet, non-interactive nudge over a
         // calibrated-but-empty mechanical canvas teaching the primary draw
         // gesture. Shown only while idle (Select, no active mode) so it never
@@ -1591,67 +1591,6 @@ const _electricalLayerGuideItems = <String>[
   // electrical model, just two different projections of it.
   'Panels and loads placed here also appear in the Electrical workspace (left nav)',
 ];
-
-/// A small tappable nudge over an uncalibrated sheet — starts scale calibration.
-class _CalibrateHint extends ConsumerWidget {
-  const _CalibrateHint();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => ref.read(calibrationControllerProvider.notifier).start(),
-        // Gentle scale-in + fade so the nudge arrives rather than pops.
-        child: const _EntranceScaleFade(
-          child: _CalibrateHintBody(),
-        ),
-      ),
-    );
-  }
-}
-
-/// The calibrate-nudge content (factored out so the entrance wrapper can be a
-/// const child).
-class _CalibrateHintBody extends StatelessWidget {
-  const _CalibrateHintBody();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.sm + 2,
-        vertical: MechXSpacing.xs + 1,
-      ),
-      decoration: BoxDecoration(
-        color: colors.surface.withAlpha(240),
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.warning),
-        boxShadow: MechXShadow.card,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 7,
-            height: 7,
-            margin: const EdgeInsets.only(right: MechXSpacing.xs),
-            decoration: BoxDecoration(
-              color: colors.warning,
-              borderRadius: MechXRadii.small,
-            ),
-          ),
-          Text(
-            'Set drawing scale to measure runs',
-            style: type.label.copyWith(color: colors.textPrimary),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// A one-shot entrance: scales from ~0.94 → 1.0 and fades 0 → 1 over
 /// [MechXMotion.appear] the first (and only) time it's built. Transient motion

@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
-import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/network/network.dart' show NodeComponent, isSupplyAirTerminal;
 import 'package:mechx_engine/sizing/room_air.dart';
 
 import '../../store/annotation_store.dart';
@@ -141,7 +141,7 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
     final net = ref.read(networkControllerProvider).network;
     var n = 0;
     for (final node in net.nodes) {
-      if (node.component != NodeComponent.supplyDiffuser &&
+      if (!isSupplyAirTerminal(node.component) &&
           node.component != NodeComponent.returnGrille) {
         continue;
       }

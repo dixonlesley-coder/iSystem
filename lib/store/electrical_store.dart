@@ -1967,7 +1967,20 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Place / move one circuit's LOAD on the calibrated layout (or clear with a
   /// null [pos]). No-op when either id is unknown. A LIVE-DRAG intent — see
   /// [setPanelLayoutPos] for the undo pairing.
-  void setLoadPos(String panelId, String circuitId, LayoutPos? pos) =>
+  ///
+  /// Round 31 (stress-edits-2) — an MEP-DERIVED way's load sits at its
+  /// equipment node (re-derived on every MEP sync, Round 22), so moving or
+  /// un-placing it here is REFUSED (status toast, no change) instead of being
+  /// accepted live and silently reverted by the next sync / reopen.
+  void setLoadPos(String panelId, String circuitId, LayoutPos? pos) {
+    if (isMepDerivedWay(panelId, circuitId)) {
+      _refuse(StringKey.mepDerivedWayPositionLocked);
+      return;
+    }
+    _setLoadPos(panelId, circuitId, pos);
+  }
+
+  void _setLoadPos(String panelId, String circuitId, LayoutPos? pos) =>
       _replaceCircuit(
         panelId,
         circuitId,

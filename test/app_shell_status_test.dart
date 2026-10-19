@@ -95,7 +95,7 @@ void main() {
   });
 
   testWidgets(
-      'standards-provenance dot is lit by default (unverified values present)',
+      'standards-provenance dot is lit once unverified values are present',
       (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
@@ -104,8 +104,11 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
-    // The const standards profiles carry // VERIFY items, so the dot's gate is
-    // open and the caption renders.
+    // Round 31 — the PUIL // VERIFY debt surfaces once the project has an
+    // electrical panel (a fresh project carries none), so add one: the dot's
+    // gate is then open and the caption renders.
+    container.read(electricalProjectProvider.notifier).addPanel(name: 'DB');
+    await tester.pump();
     expect(
       container
           .read(designIssuesProvider)

@@ -4900,10 +4900,10 @@ class RiserSystemSummary extends ConsumerWidget {
         const MechXSectionLabel('System'),
         const SizedBox(height: MechXSpacing.xs),
         _kv(context, 'Services', services, maxLines: 2),
-        if (tags.isNotEmpty)
-          _kv(context, 'Risers', '${tags.length}', numeric: true),
-        if (tags.isNotEmpty)
-          _kv(context, 'Tags', tags.join(' · '), maxLines: 2),
+        // Round 31 (ui-simplicity-4) — the tags ARE the riser count spelled
+        // out, so no separate 'Risers N' row; each tag is an unbreakable chip
+        // in a right-aligned wrap (a joined string broke 'D-' / 'R1').
+        if (tags.isNotEmpty) _tagsRow(context, tags),
         if (riserEdgeCount > 0)
           _kv(context, 'Riser length', '${totalRiserM.toStringAsFixed(1)} m',
               numeric: true),
@@ -4924,24 +4924,60 @@ class RiserSystemSummary extends ConsumerWidget {
     final type = context.type;
     final base = numeric ? MechXTypography.tabular(type.caption) : type.caption;
     final valueStyle = base.copyWith(color: colors.textSecondary);
+    // Round 31 (ui-simplicity-4) — the key takes its intrinsic width and the
+    // VALUE is Expanded, so textAlign.right reaches the card's right edge
+    // (a loose Flexible value started at the column's midpoint).
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(key,
+              maxLines: 1,
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(width: MechXSpacing.sm),
           Expanded(
-            child: Text(key,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.caption.copyWith(color: colors.textMuted)),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          Flexible(
             child: Text(value,
                 maxLines: maxLines,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.right,
                 style: valueStyle),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The riser tags as a right-aligned wrap of unbreakable chips
+  /// (`softWrap: false`), so no tag ever splits at its hyphen.
+  Widget _tagsRow(BuildContext context, List<String> tags) {
+    final colors = context.colors;
+    final type = context.type;
+    final valueStyle = type.caption.copyWith(color: colors.textSecondary);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Tags',
+              maxLines: 1,
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(width: MechXSpacing.sm),
+          Expanded(
+            child: Wrap(
+              alignment: WrapAlignment.end,
+              spacing: MechXSpacing.xs,
+              children: [
+                for (var i = 0; i < tags.length; i++)
+                  Text(
+                    i < tags.length - 1 ? '${tags[i]} ·' : tags[i],
+                    key: ValueKey('riser-summary-tag-${tags[i]}'),
+                    softWrap: false,
+                    maxLines: 1,
+                    style: valueStyle,
+                  ),
+              ],
+            ),
           ),
         ],
       ),

@@ -204,6 +204,9 @@ void main() {
 
     test('unverified standards surface as info-level issues', () {
       final c = makeContainer();
+      // Round 31 — the PUIL debt (the pending secondarySource values) is
+      // surfaced once the project carries an electrical panel.
+      c.read(electricalProjectProvider.notifier).addPanel(name: 'DB');
       final infos = c
           .read(designIssuesProvider)
           .where((i) => i.isVerify)
@@ -889,8 +892,10 @@ void main() {
       final c = ProviderContainer();
       addTearDown(c.dispose);
 
-      // The default const standards profiles carry secondarySource // VERIFY
-      // items ⇒ the Standards row is REVIEW until they are acknowledged.
+      // The const PUIL profile carries secondarySource // VERIFY items
+      // (surfaced once a panel exists — Round 31) ⇒ the Standards row is
+      // REVIEW until they are acknowledged.
+      c.read(electricalProjectProvider.notifier).addPanel(name: 'DB');
       final open = c.read(complianceSummaryProvider);
       expect(open.allPass, isFalse);
 
@@ -918,13 +923,13 @@ void main() {
       final IssueAck sample = acks.values.first;
       expect(sample.author, 'LD');
       final summary = c.read(complianceSummaryProvider);
-      // Round 25 — this container has nothing designed (no sized element, no
-      // panel), so the ONLY blocking row left is 'Design content': every
-      // advisory is accepted and every check row passes, but an empty project
-      // can never read 'PASS — ready to issue'.
+      // Round 31 — the container now carries one electrical panel (it is what
+      // brings the PUIL register), so it is not an empty project ('Design
+      // content' passes); with every advisory accepted every row passes and
+      // the verdict is reachable.
       expect(summary.items.where((i) => !i.pass).map((i) => i.category),
-          ['Design content']);
-      expect(summary.allPass, isFalse);
+          isEmpty);
+      expect(summary.allPass, isTrue);
       final ackRows = summary.items.where((it) =>
           it.category.startsWith('Acknowledged:') &&
           it.detail.contains('LD') &&

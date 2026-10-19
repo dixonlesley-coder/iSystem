@@ -337,6 +337,7 @@ enum RptStringKey {
   esSvcExhaustVent,
   esSvcTransferPump,
   esSvcSewageEjector,
+  esSvcSewageEjectorStandby,
   esSvcHwRecirc,
   warnLeadIn,
   lkGeneral,
@@ -785,6 +786,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esSvcExhaustVent: 'Exhaust ventilation',
   RptStringKey.esSvcTransferPump: 'Transfer pump (ground tank to roof tank)',
   RptStringKey.esSvcSewageEjector: 'Sewage ejector (pit to building drain)',
+  RptStringKey.esSvcSewageEjectorStandby: 'Sewage ejector (standby)',
   RptStringKey.esSvcHwRecirc: 'Hot-water recirculation',
   RptStringKey.warnLeadIn: '[{code}] ',
   RptStringKey.lkGeneral: 'general',
@@ -1248,6 +1250,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esSvcTransferPump: 'Pompa transfer (tangki bawah ke tangki atap)',
   RptStringKey.esSvcSewageEjector:
       'Pompa ejektor air kotor (bak ke saluran gedung)',
+  RptStringKey.esSvcSewageEjectorStandby: 'Pompa ejektor air kotor (cadangan)',
   RptStringKey.esSvcHwRecirc: 'Resirkulasi air panas',
   RptStringKey.warnLeadIn: '[{code}] (pesan dalam bahasa Inggris) ',
   RptStringKey.lkGeneral: 'umum',
