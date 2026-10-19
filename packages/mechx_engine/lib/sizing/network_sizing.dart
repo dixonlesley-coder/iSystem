@@ -741,6 +741,7 @@ String _pickComponentRoot({
   required Set<String> drawnFromIds,
   Set<String> riserEndIds = const {},
   Set<String> riserTopIds = const {},
+  Map<String, int> riserTopSpan = const {},
   Iterable<String> Function(String)? neighboursOf,
 }) {
   Iterable<String> neighbours(String id) =>
@@ -923,7 +924,16 @@ String _pickComponentRoot({
             roleOf(id) != NodeRole.fixture &&
             !demandKeys.contains(id))
           id,
-    ]..sort(byHeight);
+    ]..sort((a, b) {
+        // Round 30 (r2) — the STACK's top, not a branch vent's: a fixture's
+        // own vent riser (A2 -> A3) tied by a run into the stack top also
+        // ends at a riser top on the top storey. Rooting there carried the
+        // whole stack through the tie (20 -> 60 DFU); the stubbed drawing's
+        // VTR sits on the stack, so prefer the top whose riser chain spans
+        // the most storeys, then the usual height / id order.
+        final c = (riserTopSpan[b] ?? 0).compareTo(riserTopSpan[a] ?? 0);
+        return c != 0 ? c : byHeight(a, b);
+      });
     if (tops.isNotEmpty) return tops.first;
   }
 
@@ -963,6 +973,37 @@ String _pickComponentRoot({
   if (hub != null) return hub;
   if (leaves.isNotEmpty) return ([...leaves]..sort()).first;
   return ([...component]..sort()).first;
+}
+
+/// Round 30 (r2) — for each riser TOP of [service], the number of storeys
+/// its riser-only chain spans below it (top floor less the lowest floor
+/// reachable through riser edges).
+Map<String, int> _riserTopSpans(
+    Network net, ServiceType service, Set<String> tops) {
+  if (tops.isEmpty) return const {};
+  final adj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != service || e.kind != EdgeKind.riser) continue;
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final out = <String, int>{};
+  for (final t in tops) {
+    final top = net.nodeById(t)?.floorIndex ?? 0;
+    var low = top;
+    final seen = <String>{t};
+    final stack = [t];
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      final f = net.nodeById(n)?.floorIndex ?? top;
+      if (f < low) low = f;
+      for (final o in adj[n] ?? const <String>[]) {
+        if (seen.add(o)) stack.add(o);
+      }
+    }
+    out[t] = top - low;
+  }
+  return out;
 }
 
 /// Round 30 — record a riser's UPPER / LOWER end by floor (then explicit
@@ -1120,6 +1161,10 @@ Map<String, String> serviceComponentRoots(
   }
   int degree(String n) => adjacency[n]?.length ?? 0;
   NodeRole? roleOf(String n) => net.nodeById(n)?.role;
+  final riserTops = riserUppers.difference(riserLowers);
+  final riserTopSpan = service == ServiceType.vent
+      ? _riserTopSpans(net, service, riserTops)
+      : const <String, int>{};
 
   final out = <String, String>{};
   final seen = <String>{};
@@ -1145,7 +1190,8 @@ Map<String, String> serviceComponentRoots(
       nodeOf: net.nodeById,
       drawnFromIds: drawnFromIds,
       riserEndIds: riserEndIds,
-      riserTopIds: riserUppers.difference(riserLowers),
+      riserTopIds: riserTops,
+      riserTopSpan: riserTopSpan,
       neighboursOf: (n) => adjacency[n] ?? const <String>[],
     );
     for (final n in component) {
@@ -1465,6 +1511,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
     //      hub — rooting here keeps EVERY terminal's load, whereas falling back
     //      to a fixture leaf would drop that fixture's demand);
     //   4. any leaf, else any node (degenerate component).
+    final riserTops = riserUppers.difference(riserLowers);
+    final riserTopSpan = service == ServiceType.vent
+        ? _riserTopSpans(net, service, riserTops)
+        : const <String, int>{};
     String pickRoot(List<String> component, List<String> leaves) =>
         _pickComponentRoot(
           component: component,
@@ -1476,7 +1526,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
           nodeOf: net.nodeById,
           drawnFromIds: drawnFromIds,
           riserEndIds: riserEndIds,
-          riserTopIds: riserUppers.difference(riserLowers),
+          riserTopIds: riserTops,
+          riserTopSpan: riserTopSpan,
           neighboursOf: (n) => [
             for (final l
                 in adjacency[n] ?? const <({String edgeId, String other})>[])

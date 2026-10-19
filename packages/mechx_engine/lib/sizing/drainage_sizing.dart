@@ -98,7 +98,11 @@ const List<(double, double)> _branchDfuTable = [
 const List<(double, double)> _stackDfuTable = [
   (2, 40),
   (10, 50),
-  (24, 65),
+  // Round 30 (r2) — IPC 710.1(2) stacks <= 3 branch intervals: 2½ in
+  // carries 20 DFU (the old 24 was the > 3-interval 2 in figure one size up
+  // and sized a 21-24 DFU stack one nominal size SMALL). The 3 in row's 42
+  // stays below IPC's 48 — conservative. // VERIFY against SNI 8153.
+  (20, 65),
   (42, 75),
   (240, 100),
   (540, 125),

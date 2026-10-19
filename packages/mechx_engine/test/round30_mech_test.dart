@@ -40,13 +40,14 @@ NetEdge _e(String id, String a, String b, ServiceType s,
         {EdgeKind kind = EdgeKind.run}) =>
     NetEdge(id: id, fromId: a, toId: b, service: s, kind: kind);
 
-BuildingLevels _tower(int n, double h, {int groundIndex = 0}) => BuildingLevels(
-    [for (var i = 0; i < n; i++) Floor('L$i', Length(h))],
-    groundIndex: groundIndex);
+BuildingLevels _tower(int n, double h, {int groundIndex = 0}) =>
+    BuildingLevels([for (var i = 0; i < n; i++) Floor('L$i', Length(h))],
+        groundIndex: groundIndex);
 
 void main() {
   group('branch DFU table = IPC 710.1(2)', () {
-    test('property: every load maps to the smallest IPC branch row covering '
+    test(
+        'property: every load maps to the smallest IPC branch row covering '
         'it (1½ in 3 · 2 in 6 · 2½ in 12 · 3 in 20 · 4 in 160 …)', () {
       const ipc = [
         (3.0, 40.0),
@@ -62,14 +63,28 @@ void main() {
       for (var i = 0; i < 400; i++) {
         final dfu = 0.5 + rnd.nextDouble() * 1399;
         final want = ipc.firstWhere((r) => dfu <= r.$1).$2;
-        expect(drain.drainDiameterForDfu(dfu, isStack: false).inMillimeters,
-            want,
+        expect(
+            drain.drainDiameterForDfu(dfu, isStack: false).inMillimeters, want,
             reason: '$dfu');
       }
       // The tower's apartment branches: SH + LV = 4 DFU ⇒ DN50 (was DN65);
       // a kitchen-sink arm 2 DFU ⇒ DN40 (was DN50).
       expect(drain.drainDiameterForDfu(4, isStack: false).inMillimeters, 50);
       expect(drain.drainDiameterForDfu(2, isStack: false).inMillimeters, 40);
+    });
+
+    test(
+        'r2: the stack 2½ in row is IPC 710.1(2) <=3-interval 20 DFU '
+        '(was 24: a 21-24 DFU stack sized DN65 where IPC gives DN75)', () {
+      // IPC 710.1(2), stacks <= 3 branch intervals: 2½ in 20 DFU, 3 in 48.
+      // The 3 in row stays at 42 (conservative against 48, recorded).
+      expect(drain.drainDiameterForDfu(20, isStack: true).inMillimeters, 65);
+      for (final dfu in [20.5, 21.0, 24.0, 42.0]) {
+        expect(drain.drainDiameterForDfu(dfu, isStack: true).inMillimeters, 75,
+            reason: '$dfu');
+      }
+      expect(drain.drainDiameterForDfu(10, isStack: true).inMillimeters, 50);
+      expect(drain.drainDiameterForDfu(43, isStack: true).inMillimeters, 100);
     });
   });
 
@@ -98,20 +113,21 @@ void main() {
           _e('dp', 'R9', 'R0', ServiceType.rainwater, kind: EdgeKind.riser),
         ]);
 
-    test('RD -run-> R(top) -riser-> foot carries the full roof-to-foot drop '
+    test(
+        'RD -run-> R(top) -riser-> foot carries the full roof-to-foot drop '
         '(32.0 - 0 = 32.0 m vertical, + 1.0 m horizontal)', () {
       // Run: 20 px x 0.05 = 1.0 m horizontal + (32.0 - 28.5) = 3.5 m drop;
       // riser R9 (28.5) -> R0 (0.0, lowest slab) = 28.5 m.
       final run = leader(true);
-      expect(
-          runVerticalLeg(run.edges.first, run, building: b).meters,
+      expect(runVerticalLeg(run.edges.first, run, building: b).meters,
           closeTo(3.5, 1e-9));
       expect(total(run), closeTo(1.0 + 32.0, 1e-9));
       // The same downpipe drawn RD -riser-> R8 -> R0: 32.0 - 0 = 32.0 m.
       expect(total(leader(false)), closeTo(32.0, 1e-9));
     });
 
-    test('property: the leader idiom never changes the vertical total '
+    test(
+        'property: the leader idiom never changes the vertical total '
         '(seeded storeys / heights)', () {
       final rnd = math.Random(301);
       for (var i = 0; i < 40; i++) {
@@ -155,7 +171,8 @@ void main() {
   });
 
   group('downfeed zones stop at the lowest served floor', () {
-    test('tank-fed tower over two empty basements: one zone L1..L10, no '
+    test(
+        'tank-fed tower over two empty basements: one zone L1..L10, no '
         'phantom B2 PRV station', () {
       // 12 levels x 3.6 m, groundIndex 2 (B2, B1, L0..L9). Roof = 10 x 3.6
       // = 36.0 m; B2 fixture = -7.2 + 1.1 = -6.1 m ⇒ tank head 42.1 m.
@@ -181,7 +198,8 @@ void main() {
       expect(served.single.bottomFloorIndex, 2);
     });
 
-    test('property: zones tile exactly [lowestServed, top], top-down, and '
+    test(
+        'property: zones tile exactly [lowestServed, top], top-down, and '
         'lowestServed 0 is the legacy walk (seeded)', () {
       final rnd = math.Random(302);
       for (var i = 0; i < 60; i++) {
@@ -202,7 +220,8 @@ void main() {
         for (var k = 1; k < zs.length; k++) {
           expect(zs[k].topFloorIndex, zs[k - 1].bottomFloorIndex - 1);
         }
-        expect(z(0).toString(),
+        expect(
+            z(0).toString(),
             computeDownfeedZones(
               building: bb,
               maxStaticPressure: const Pressure(250000),
@@ -259,7 +278,8 @@ void main() {
           0);
     });
 
-    test('a ground tank with three nozzles and a pump turning 90 deg count '
+    test(
+        'a ground tank with three nozzles and a pump turning 90 deg count '
         'no tee / elbow', () {
       final net = Network(nodes: [
         _n('F', -100, 0),
@@ -306,13 +326,13 @@ void main() {
     // The round-28 fixture: a sprinkler pump 4.7 L/s @ 133.9 m beside a
     // standpipe pump 31.5 L/s @ 114.5 m.
     final sprinkler = checkFirePumpRating(
-        ratedFlow: FlowRate.litersPerSecond(4.7),
-        ratedHead: const Head(133.9));
+        ratedFlow: FlowRate.litersPerSecond(4.7), ratedHead: const Head(133.9));
     final standpipe = checkFirePumpRating(
         ratedFlow: FlowRate.litersPerSecond(31.5),
         ratedHead: const Head(114.5));
 
-    test('two systems: each pump is printed under its tag with its own head '
+    test(
+        'two systems: each pump is printed under its tag with its own head '
         'and motor', () {
       final md = buildCalcReportMarkdown(data([
         FireSystemReportLine(
@@ -324,8 +344,8 @@ void main() {
       expect(md, contains('P-02 — standpipe pump rating curve (NFPA 20):'));
       // 133.9 m prints at 0 dp: '134 m'; the sprinkler motor is its own.
       expect(md, contains('@ 134 m'));
-      expect(md,
-          contains(sprinkler.selectedMotor.inKiloWatts.toStringAsFixed(1)));
+      expect(
+          md, contains(sprinkler.selectedMotor.inKiloWatts.toStringAsFixed(1)));
     });
 
     test('one system: no extra line (byte-identical)', () {
