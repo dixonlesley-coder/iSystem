@@ -151,9 +151,14 @@ void main() {
       for (var trial = 0; trial < 200; trial++) {
         final storeys = 3 + rnd.nextInt(10);
         final m = 1 + rnd.nextInt(4);
-        final nodes = <NetNode>[];
+        // Round 28 — independent fire networks are separate SYSTEMS (each
+        // counts only its own stacks), so the m stacks are drawn off ONE
+        // common pump header HDR: a single system with m parallel stacks.
+        final nodes = <NetNode>[_n('HDR', -500, 0)];
         final edges = <NetEdge>[];
         for (var k = 0; k < m; k++) {
+          edges.add(
+              _e('h$k', 'HDR', 's$k-0-0', s: ServiceType.fireHydrant));
           // Random cut floors (strictly inside) split the stack into series
           // segments.
           final cuts = <int>{

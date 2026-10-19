@@ -531,10 +531,17 @@ void main() {
           expect(r.q(sb), closeTo(r.q(d), 1e-12), reason: '$why $sb');
         }
         expect(r.s['c2']!.flowFromId, 'CV2', reason: why);
-        // Continuity at the heater: the duty leg + the return deliver one
-        // diversified curve(8) (the standby leg is the idle machine).
-        final rhOut = r.s['rh']!.flowFromId == 'H' ? r.q('rh') : -r.q('rh');
-        expect(r.q('h1') + rhOut, closeTo(_curve(8), 1e-9), reason: why);
+        // Round 28 (residuals-2) — the valveless return beside the pump set
+        // is a plausible recirculation return: the component is sized on
+        // the ENVELOPE of (a) the return closed (the duty leg and the
+        // supply main carry the whole diversified curve(8) = 0.400 L/s,
+        // which needs DN20: 4Q/(pi D^2) = 2.26 m/s in DN15 > 2.0) and (b)
+        // the balanced ring (the return shares the heater outflow). Was
+        // h1 + rh = curve(8), the main on a share (0.2215 L/s DN15).
+        expect(r.q('h1'), closeTo(_curve(8), 1e-9), reason: why);
+        expect(r.q('m'), closeTo(_curve(8), 1e-9), reason: why);
+        expect(r.s['m']!.diameter.inMillimeters.round(), 20, reason: why);
+        expect(r.q('rh'), greaterThan(0), reason: why);
       }
     }
   });

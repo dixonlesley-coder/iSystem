@@ -754,18 +754,36 @@ class Network {
 
   const Network({this.nodes = const [], this.edges = const []});
 
+  // Round 28 (regression-classifier-quadratic-dijkstra) — id lookups go
+  // through a lazily built index (first occurrence wins, exactly as the
+  // linear scan did), re-built whenever the list instance or its length
+  // changes: the sizer looks nodes up per edge relaxation, and a linear scan
+  // there made sizing quadratic in the drawing.
+  static final _nodeIndex = Expando<(int, Map<String, NetNode>)>();
+  static final _edgeIndex = Expando<(int, Map<String, NetEdge>)>();
+
   NetNode? nodeById(String id) {
-    for (final n in nodes) {
-      if (n.id == id) return n;
+    var idx = _nodeIndex[nodes];
+    if (idx == null || idx.$1 != nodes.length) {
+      final m = <String, NetNode>{};
+      for (final n in nodes) {
+        m.putIfAbsent(n.id, () => n);
+      }
+      _nodeIndex[nodes] = idx = (nodes.length, m);
     }
-    return null;
+    return idx.$2[id];
   }
 
   NetEdge? edgeById(String id) {
-    for (final e in edges) {
-      if (e.id == id) return e;
+    var idx = _edgeIndex[edges];
+    if (idx == null || idx.$1 != edges.length) {
+      final m = <String, NetEdge>{};
+      for (final e in edges) {
+        m.putIfAbsent(e.id, () => e);
+      }
+      _edgeIndex[edges] = idx = (edges.length, m);
     }
-    return null;
+    return idx.$2[id];
   }
 
   Iterable<NetEdge> edgesAt(String nodeId) =>

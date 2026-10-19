@@ -24,6 +24,8 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart'
     show EdgeKind, NetEdge, Network, ServiceType;
+import 'package:mechx_engine/sizing/fire_index_friction.dart'
+    show fireSystems;
 import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
@@ -167,8 +169,20 @@ FlowRate standpipeFlow(int risers) {
 /// standpipe. So the count is the maximum, over every storey interval
 /// (f, f+1), of the components whose floor span covers it
 /// ([parallelStandpipeCount]).
-int drawnStandpipeRiserCount(Network net) =>
-    math.max(1, parallelStandpipeCount(net, net.edges));
+///
+/// Round 28 (fire-3-standpipe-stacks-counted-across-independent-systems) —
+/// stacks are counted PER CONNECTED FIRE SYSTEM ([fireSystems]) and the
+/// largest system's count is returned: two towers, each with its own pump
+/// and one stack, are two 500 gpm systems, never one 750 gpm system (each
+/// pump rated 50 % high, contradicting the per-system trunk sizing). The
+/// per-system count is [FireSystem.standpipeRisers].
+int drawnStandpipeRiserCount(Network net) {
+  var best = 1;
+  for (final s in fireSystems(net)) {
+    best = math.max(best, parallelStandpipeCount(net, s.edges));
+  }
+  return best;
+}
 
 /// Round 22 — the number of standpipe stacks among [edges] (only fire-hydrant
 /// RISER edges count) that run in PARALLEL: riser components are found by
@@ -336,8 +350,18 @@ FireStandpipeDesign designStandpipe({
   StandpipeClass standpipeClass = StandpipeClass.classI,
   Head frictionAllowance = const Head(15),
   double pumpEfficiency = 0.70,
+  Head? indexPathFriction,
 }) {
   assert(risers >= 1, 'risers must be ≥ 1');
+  // Round 28 (fire-3-pump-head-ignores-sized-fire-pipe-friction) — the
+  // friction of the SIZED index path (pump -> topmost outlet, at the sized
+  // flows; `fireIndexPathFrictionM`) replaces the fixed allowance when it is
+  // larger; the allowance stays the floor (more information never lowers the
+  // rated head). Null ⇒ byte-identical.
+  if (indexPathFriction != null &&
+      indexPathFriction.meters > frictionAllowance.meters) {
+    frictionAllowance = indexPathFriction;
+  }
   assert(
     pumpEfficiency > 0 && pumpEfficiency <= 1,
     'pumpEfficiency must be in (0, 1]',

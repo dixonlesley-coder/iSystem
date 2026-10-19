@@ -644,9 +644,16 @@ final equipmentNodeDutiesProvider =
     FanDuty? f;
     if (bind.firePumpNodeIds.contains(n.id)) {
       // Round 21 — a JOCKEY is fed its own pressure-maintenance duty.
-      p = bind.fireJockeyPumpNodeIds.contains(n.id)
-          ? ref.watch(fireJockeyDutyProvider)
-          : ref.watch(firePumpDutyProvider);
+      // Round 28 (fire-3-sprinkler-pump-gets-standpipe-duty) — each pump is
+      // rated on its OWN fire system: a sprinkler pump on a separate
+      // network is never wired as the standpipe pump drawn elsewhere.
+      final basis = ref.watch(firePumpBasisByNodeProvider)[n.id];
+      final jockey = bind.fireJockeyPumpNodeIds.contains(n.id);
+      p = basis != null
+          ? (jockey ? basis.jockey : basis.duty)
+          : jockey
+              ? ref.watch(fireJockeyDutyProvider)
+              : ref.watch(firePumpDutyProvider);
       if (p == null || p.selectedMotor.watts <= 0) return null;
       // NFPA 20 selected frame; Round 21 — the input is the larger of the
       // nameplate (motor / η) and the governing-point input, so a frame

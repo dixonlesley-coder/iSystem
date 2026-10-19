@@ -223,8 +223,16 @@ void main() {
       c.read(electricalResultProvider);
       await tester.pump();
       final pumps = gatherEquipmentScheduleData(captured).pumps;
-      final fp = pumps.singleWhere((p) => identical(
-          p.duty, c.read(firePumpDutyProvider)));
+      // Round 28 — the drawn pump's row carries its OWN fire system's duty
+      // (here the only, governing system: the same rated point as the
+      // project-level duty).
+      final own = c.read(firePumpBasisByNodeProvider)['P']!.duty!;
+      final fp = pumps.singleWhere((p) => identical(p.duty, own));
+      final project = c.read(firePumpDutyProvider)!;
+      expect(own.flow.cubicMetersPerSecond,
+          closeTo(project.flow.cubicMetersPerSecond, 1e-12));
+      expect(own.head.meters, closeTo(project.head.meters, 1e-9));
+      expect(own.selectedMotor.watts, project.selectedMotor.watts);
       expect(fp.service, 'Fire sprinkler pump');
       expect(const ReportStrings.id()(RptStringKey.esSvcFireSprinkler),
           'Pompa sprinkler kebakaran');

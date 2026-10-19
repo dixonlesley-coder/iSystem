@@ -889,6 +889,11 @@ enum StringKey {
   undoLabelDuctShape,
   undoLabelDuctMethod,
   undoLabelTemplate,
+  undoLabelFixtureLibrary,
+  undoLabelEquipmentSpec,
+  undoLabelDocumentControl,
+  undoLabelPricelist,
+  undoLabelAssemblies,
 
   // A1 — the Layout empty-state's 'Load sample project' action (mirrors the
   // electrical workspace's `electricalLoadSampleProject`, kept as its own key
@@ -2345,6 +2350,11 @@ const Map<StringKey, String> _en = {
   StringKey.undoLabelDuctShape: 'Duct shape',
   StringKey.undoLabelDuctMethod: 'Duct sizing method',
   StringKey.undoLabelTemplate: 'Building template',
+  StringKey.undoLabelFixtureLibrary: 'Custom fixture library',
+  StringKey.undoLabelEquipmentSpec: 'Equipment model/spec',
+  StringKey.undoLabelDocumentControl: 'Document control',
+  StringKey.undoLabelPricelist: 'Pricelist & markups',
+  StringKey.undoLabelAssemblies: 'Saved assemblies',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Load sample project',
@@ -3824,6 +3834,11 @@ const Map<StringKey, String> _id = {
   StringKey.undoLabelDuctShape: 'Bentuk ducting',
   StringKey.undoLabelDuctMethod: 'Metode ukuran ducting',
   StringKey.undoLabelTemplate: 'Templat bangunan',
+  StringKey.undoLabelFixtureLibrary: 'Pustaka fixture kustom',
+  StringKey.undoLabelEquipmentSpec: 'Model/spesifikasi peralatan',
+  StringKey.undoLabelDocumentControl: 'Kontrol dokumen',
+  StringKey.undoLabelPricelist: 'Daftar harga & markup',
+  StringKey.undoLabelAssemblies: 'Rakitan tersimpan',
 
   // A1 — Layout empty-state 'Load sample project'.
   StringKey.layoutLoadSampleProject: 'Muat proyek contoh',

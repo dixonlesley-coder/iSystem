@@ -5,11 +5,14 @@ import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/geometry/building.dart' show BuildingLevels;
-import 'package:mechx_engine/network/network.dart' show ServiceType;
+import 'package:mechx_engine/network/network.dart'
+    show NetEdge, NodeComponent, ServiceType, edgeLength;
+import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/units.dart' show FlowRate, Head;
 
 import 'network_store.dart';
 import 'project_store.dart';
+import 'sizing_store.dart' show sizingProvider;
 
 /// Selected sprinkler hazard class (drives the sprinkler design).
 final fireHazardProvider =
@@ -96,24 +99,195 @@ double _sprinklerStaticLiftM(BuildingLevels building) {
 /// network the sprinkler remote-area demand at lift + branch pressure +
 /// friction allowance (`sprinklerPumpRatedPoint`), never the 31.5 L/s
 /// standpipe rating of a system that is not drawn.
+///
+/// Round 28 — the project-level figure is the GOVERNING fire SYSTEM's
+/// ([fireSystemBasesProvider]): the hydrant system with the largest rated
+/// point whenever a hydrant is drawn, else the sprinkler system with the
+/// largest head; each drawn pump is rated on its OWN system
+/// ([firePumpBasisByNodeProvider]).
 final fireRatedPointProvider =
     Provider<({FlowRate flow, Head head, bool sprinklerOnly})>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
-  final hasHydrant =
-      net.edges.any((e) => e.service == ServiceType.fireHydrant);
-  final hasSprinkler =
-      net.edges.any((e) => e.service == ServiceType.fireSprinkler);
-  if (hasSprinkler && !hasHydrant) {
-    final p = sprinklerPumpRatedPoint(
-      remote: ref.watch(sprinklerRemoteAreaProvider),
-      staticLiftM: _sprinklerStaticLiftM(
-          ref.watch(projectControllerProvider).building),
-    );
-    return (flow: p.flow, head: p.head, sprinklerOnly: true);
+  final bases = ref.watch(fireSystemBasesProvider);
+  if (bases.isNotEmpty) {
+    final hydrant = [
+      for (final b in bases)
+        if (!b.sprinklerOnly) b,
+    ];
+    final pool = hydrant.isNotEmpty ? hydrant : bases;
+    var best = pool.first;
+    for (final b in pool.skip(1)) {
+      final f = b.flow.cubicMetersPerSecond - best.flow.cubicMetersPerSecond;
+      if (f > 1e-12 || (f.abs() <= 1e-12 && b.head.meters > best.head.meters)) {
+        best = b;
+      }
+    }
+    return (flow: best.flow, head: best.head, sprinklerOnly: best.sprinklerOnly);
   }
   final st = ref.watch(standpipeDesignProvider);
   return (flow: st.requiredFlow, head: st.pumpHead, sprinklerOnly: false);
 });
+
+/// Round 28 — one connected fire SYSTEM (sprinkler + hydrant edges joined
+/// through shared nodes) and the pump rating it needs.
+class FireSystemBasis {
+  /// The connected fire network.
+  final FireSystem system;
+
+  /// The pumps / booster sets drawn on it (sorted).
+  final List<String> pumpIds;
+
+  /// True when no hydrant / standpipe is part of this system: its pump is a
+  /// SPRINKLER pump, rated on the remote-area demand.
+  final bool sprinklerOnly;
+
+  /// The parallel standpipe stacks of THIS system (at least 1).
+  final int standpipeRisers;
+
+  /// Hazen–Williams friction of the sized index path from the duty pump
+  /// (`fireIndexPathFrictionM`); null when unmeasured (uncalibrated) or no
+  /// pump is drawn — the 15 m allowance then stands.
+  final double? indexFrictionM;
+
+  /// The rated point.
+  final FlowRate flow;
+  final Head head;
+
+  /// NFPA 20 curve check on the rated point.
+  final FirePumpRatingResult rating;
+
+  /// The main pump duty (NFPA 20 motor) and the jockey duty.
+  final PumpDuty? duty;
+  final PumpDuty? jockey;
+
+  const FireSystemBasis({
+    required this.system,
+    required this.pumpIds,
+    required this.sprinklerOnly,
+    required this.standpipeRisers,
+    required this.indexFrictionM,
+    required this.flow,
+    required this.head,
+    required this.rating,
+    required this.duty,
+    required this.jockey,
+  });
+}
+
+/// Round 28 (fire-3-sprinkler-pump-gets-standpipe-duty /
+/// fire-3-standpipe-stacks-counted-across-independent-systems /
+/// fire-3-pump-head-ignores-sized-fire-pipe-friction) — every drawn fire
+/// SYSTEM rated on its OWN demand:
+///  * a system with a hydrant edge: the standpipe point for ITS stacks
+///    (500 gpm for one stack, never the project-wide count of independent
+///    towers), at the topmost-outlet lift;
+///  * a sprinkler-only system: the remote-area demand at lift + pressure;
+///  * on a calibrated drawing the friction term is the larger of the 15 m
+///    allowance and the Hazen–Williams friction of the SIZED index path from
+///    the duty pump (the fire sizer runs at up to 6 m/s, where small bore
+///    loses ~1.4 m/m — a fixed 15 m printed heads 2x low).
+/// Ordered as [fireSystems]. Empty when no fire service is drawn.
+final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
+  final net = ref.watch(networkControllerProvider).network;
+  final systems = fireSystems(net);
+  if (systems.isEmpty) return const [];
+  final project = ref.watch(projectControllerProvider);
+  final building = project.building;
+  final sizing = ref.watch(sizingProvider);
+  final remote = ref.watch(sprinklerRemoteAreaProvider);
+  double lengthOf(NetEdge e) => edgeLength(
+        e,
+        net,
+        calibrationBySheet: project.calibrations,
+        building: building,
+        mounting: project.mounting,
+      ).meters;
+  final out = <FireSystemBasis>[];
+  for (final sys in systems) {
+    final pumps = [
+      for (final n in net.nodes)
+        if (sys.nodeIds.contains(n.id) &&
+            (n.component == NodeComponent.pump ||
+                n.component == NodeComponent.boosterSet))
+          n.id,
+    ]..sort();
+    // The duty pump: the largest sized incident bore (a jockey sits on a
+    // small leg), ties to the lowest id.
+    String? duty;
+    var dutyBore = -1.0;
+    for (final p in pumps) {
+      var bore = 0.0;
+      for (final e in sys.edges) {
+        if (e.fromId != p && e.toId != p) continue;
+        final d = sizing[e.id]?.diameter.inMillimeters ?? 0.0;
+        if (d > bore) bore = d;
+      }
+      if (bore > dutyBore + 1e-9) {
+        duty = p;
+        dutyBore = bore;
+      }
+    }
+    final friction = duty == null
+        ? null
+        : fireIndexPathFrictionM(
+            net: net,
+            system: sys,
+            pumpId: duty,
+            sizing: sizing,
+            lengthOf: lengthOf,
+          );
+    final sprinklerOnly = !sys.hasHydrant;
+    final risers = sys.standpipeRisers(net);
+    final FlowRate flow;
+    final Head head;
+    if (sprinklerOnly) {
+      final p = sprinklerPumpRatedPoint(
+        remote: remote,
+        staticLiftM: _sprinklerStaticLiftM(building),
+        indexPathFriction: friction == null ? null : Head(friction),
+      );
+      flow = p.flow;
+      head = p.head;
+    } else {
+      final st = designStandpipe(
+        risers: risers,
+        buildingHeight: standpipeStaticLift(building),
+        indexPathFriction: friction == null ? null : Head(friction),
+      );
+      flow = st.requiredFlow;
+      head = st.pumpHead;
+    }
+    final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
+    final dutyPump = flow.cubicMetersPerSecond <= 0
+        ? null
+        : firePumpDuty(ratedFlow: flow, ratedHead: head, rating: rating);
+    final jockey = dutyPump == null || rating.jockeyFlow.cubicMetersPerSecond <= 0
+        ? null
+        : sizePump(flow: rating.jockeyFlow, head: rating.jockeyHead);
+    out.add(FireSystemBasis(
+      system: sys,
+      pumpIds: pumps,
+      sprinklerOnly: sprinklerOnly,
+      standpipeRisers: risers,
+      indexFrictionM: friction,
+      flow: flow,
+      head: head,
+      rating: rating,
+      duty: dutyPump,
+      jockey: jockey,
+    ));
+  }
+  return out;
+});
+
+/// Round 28 — each drawn fire pump -> the basis of its OWN fire system (its
+/// duty, jockey duty and service label), read by the panel feed, the
+/// equipment schedule and the riser detail.
+final firePumpBasisByNodeProvider = Provider<Map<String, FireSystemBasis>>(
+  (ref) => {
+    for (final b in ref.watch(fireSystemBasesProvider))
+      for (final p in b.pumpIds) p: b,
+  },
+);
 
 /// NFPA 20 fire-pump rating-curve check for the fire pump — churn / rated /
 /// overload duty points, motor selection on the governing point, jockey-pump
