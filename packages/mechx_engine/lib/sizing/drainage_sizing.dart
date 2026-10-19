@@ -72,11 +72,17 @@ double drainageFixtureUnit(PlumbingFixture fixture) {
 
 // Threshold tables: (maxDfu, diameterMm) ascending; pick the first row whose
 // maxDfu ≥ the accumulated DFU.
+// Round 30 (mech-sim-4-branch-dfu-table-shifted) — IPC Table 710.1(2)
+// horizontal fixture branch capacities paired with the RIGHT diameters:
+// 1½ in (DN40) 3 DFU, 2 in (DN50) 6, 2½ in (DN65) 12, 3 in (DN75) 20, 4 in
+// (DN100) 160. The previous rows had slid the diameter column down one row
+// (the duplicate (12,75),(20,75) gave it away), issuing every 2–12 DFU branch
+// one nominal size large. The trap / WC floors (kMinTrapDrainMm,
+// kMinWcDrainMm) still floor showers at DN50 and WCs at DN75.
 const List<(double, double)> _branchDfuTable = [
-  (1, 40),
-  (3, 50),
-  (6, 65),
-  (12, 75),
+  (3, 40),
+  (6, 50),
+  (12, 65),
   (20, 75),
   (160, 100),
   (360, 125),
@@ -92,7 +98,11 @@ const List<(double, double)> _branchDfuTable = [
 const List<(double, double)> _stackDfuTable = [
   (2, 40),
   (10, 50),
-  (24, 65),
+  // Round 30 (r2) — IPC 710.1(2) stacks <= 3 branch intervals: 2½ in
+  // carries 20 DFU (the old 24 was the > 3-interval 2 in figure one size up
+  // and sized a 21-24 DFU stack one nominal size SMALL). The 3 in row's 42
+  // stays below IPC's 48 — conservative. // VERIFY against SNI 8153.
+  (20, 65),
   (42, 75),
   (240, 100),
   (540, 125),

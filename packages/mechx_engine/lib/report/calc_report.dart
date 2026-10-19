@@ -29,6 +29,25 @@ import 'report_blocks.dart';
 import 'report_strings.dart';
 import 'riser_tags.dart' show elementTags;
 
+/// Round 30 (report-parity-2-1) — one drawn fire system's pump rating, for
+/// the calc report's per-system lines ([CalcReportData.fireSystems]).
+class FireSystemReportLine {
+  /// The duty pump's plan / schedule tag (`P-01`, `FP-01`).
+  final String tag;
+
+  /// True for a sprinkler-only system (else a standpipe / hydrant system).
+  final bool sprinklerOnly;
+
+  /// The system's NFPA 20 rating check on its OWN demand.
+  final FirePumpRatingResult rating;
+
+  const FireSystemReportLine({
+    required this.tag,
+    required this.sprinklerOnly,
+    required this.rating,
+  });
+}
+
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
 class CalcReportData {
@@ -72,6 +91,13 @@ class CalcReportData {
   /// NFPA 20 fire-pump rating-curve check (churn/rated/overload points + jockey
   /// + duty/standby). Null ⇒ section skipped.
   final FirePumpRatingResult? firePumpRating;
+
+  /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
+  /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
+  /// the tag its schedule row and MDP way carry. Printed only when two or
+  /// more systems are drawn (a single system's [firePumpRating] row is the
+  /// same pump ⇒ byte-identical).
+  final List<FireSystemReportLine> fireSystems;
 
   final FanDuty? fan;
 
@@ -164,6 +190,7 @@ class CalcReportData {
     this.standpipe,
     this.sprinklerRemoteArea,
     this.firePumpRating,
+    this.fireSystems = const [],
     this.fan,
     this.exhaustFan,
     this.supplyFans = const [],
@@ -724,6 +751,28 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   : strings(RptStringKey.firePumpVerdictWithin),
             })
           ),
+        // Round 30 (report-parity-2-1) — every drawn fire system's own pump.
+        if (d.fireSystems.length >= 2)
+          for (final fs in d.fireSystems)
+            (
+              strings.format(RptStringKey.fireSystemPumpKey, {
+                'tag': fs.tag,
+                'system': strings(fs.sprinklerOnly
+                    ? RptStringKey.fireSystemSprinkler
+                    : RptStringKey.fireSystemStandpipe),
+              }),
+              strings.format(RptStringKey.firePumpValue, {
+                'rated': fs.rating.ratedFlow.inLitersPerSecond
+                    .toStringAsFixed(1),
+                'head': fs.rating.ratedHead.meters.toStringAsFixed(0),
+                'churn': fs.rating.churn.head.meters.toStringAsFixed(0),
+                'overload': fs.rating.overload.head.meters.toStringAsFixed(0),
+                'motor': fs.rating.selectedMotor.inKiloWatts.toStringAsFixed(1),
+                'verdict': fs.rating.oversized
+                    ? strings(RptStringKey.firePumpVerdictOversized)
+                    : strings(RptStringKey.firePumpVerdictWithin),
+              })
+            ),
         if (fp != null)
           (
             strings(RptStringKey.fireJockeyKey),

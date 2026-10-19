@@ -18,7 +18,7 @@ import 'catalog.dart' show PartCategory;
 import 'control/starter.dart' show ControlAssembly, DeviceCategory;
 import 'electrode.dart' show ElectrodeDesign;
 import 'genset_backup.dart' show gensetBackupDemandVa, gensetBackupDemandW;
-import 'model.dart' show ElectricalProject;
+import 'model.dart' show ElectricalProject, ElectricalSystem;
 import 'panel_results.dart' show ElectricalSystemResult;
 import 'sources.dart' show GeneratorTransfer, sizeGenerator;
 import 'spd.dart' show SpdRecommendation, SpdTypeLabel;
@@ -50,6 +50,9 @@ List<BomLine> advancedBomLines({
   };
   final panelName = <String, String>{
     for (final p in project.panels) p.id: p.name,
+  };
+  final panelSystem = <String, ElectricalSystem>{
+    for (final p in project.panels) p.id: p.system,
   };
 
   // ── Starter / control gear (contactors, overloads, timers, VFDs …) ───────
@@ -110,11 +113,19 @@ List<BomLine> advancedBomLines({
     final r = spd[id]!;
     if (!r.recommended) continue;
     final uc = _fmt(r.ucV.roundToDouble());
+    // Round 30 (costing-2-3) — the CONNECTION is part of the part: a 3φ
+    // board takes a 4-pole 3+N device, a 1φ board a 2-pole 1+N, and a TT
+    // N-PE module (npeUcV) makes it 3+1 / 1+1. Merging them onto one line
+    // and price ordered two identical devices for different parts.
+    final threePhase = panelSystem[id] != ElectricalSystem.singlePhase;
+    final conn = '${threePhase ? 3 : 1}+${r.npeUcV != null ? '1' : 'N'}';
     lines.add(BomLine(
-      description: 'SPD ${r.type.label} Uc $uc V — ${panelName[id] ?? id}',
+      description:
+          'SPD ${r.type.label} $conn Uc $uc V — ${panelName[id] ?? id}',
       qty: 1,
       category: PartCategory.accessory,
-      priceKey: '${kElecPriceKeyPrefix}spd:${r.type.name}:${uc}v',
+      priceKey: '${kElecPriceKeyPrefix}spd:${r.type.name}:${uc}v:'
+          '${conn.toLowerCase()}',
     ));
   }
 

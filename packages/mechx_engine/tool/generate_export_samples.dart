@@ -1042,7 +1042,8 @@ void main(List<String> args) {
       building: building,
       groupByFloor: true,
     );
-    final fittings = buildFittings(net: net, sizing: sizing);
+    final fittings =
+        buildFittings(net: net, sizing: sizing, building: building);
     final data = CalcReportData(
       projectName: projectName,
       date: dateString,

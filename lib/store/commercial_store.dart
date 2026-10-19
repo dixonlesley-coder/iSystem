@@ -25,10 +25,14 @@ import 'package:mechx_engine/electrical/catalog.dart';
 import 'package:mechx_engine/electrical/costing.dart';
 import 'package:mechx_engine/electrical/quotation.dart';
 import 'package:mechx_engine/report/mep_commercial.dart';
+import 'package:mechx_engine/sizing/bom.dart'
+    show ComponentLine, buildEquipmentTakeoff;
 
 import '../ui/strings/app_strings.dart';
 import 'app_state.dart' show localeProvider;
+import 'electrical_feed.dart' show riserEquipmentDetailsProvider;
 import 'electrical_store.dart';
+import 'network_store.dart' show sizingNetworkProvider;
 import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'solve_store.dart';
 
@@ -218,11 +222,23 @@ final electricalQuotationProvider = Provider<Quotation>((ref) {
 /// pricelist by mechanical key, enriched with the pipe cut-plan (stock bars /
 /// waste). Unpriced lines contribute nothing and are counted, so the pricelist
 /// can prompt the user. Empty when nothing mechanical is sized ⇒ zero subtotal.
+/// Round 30 (costing-2-1) — the drawn PLANT (pumps, tanks, boosters, AHU /
+/// FCU, fans, AC units) taken off per piece by its duty — the same per-node
+/// detail the riser and the schedule print (tank m3 / the machine's motor
+/// kW) — so the quotation never silently omits the largest items.
+final equipmentTakeoffProvider = Provider<List<ComponentLine>>((ref) {
+  return buildEquipmentTakeoff(
+    net: ref.watch(sizingNetworkProvider),
+    dutyByNodeId: ref.watch(riserEquipmentDetailsProvider),
+  );
+});
+
 final mechanicalCostProvider = Provider<MechCostEstimate>((ref) {
   return estimateMechanicalCost(
     pipes: ref.watch(bomProvider),
     fittings: ref.watch(fittingsProvider),
     components: ref.watch(componentTakeoffProvider),
+    equipment: ref.watch(equipmentTakeoffProvider),
     priceList: ref.watch(commercialSettingsProvider).priceList,
     cutPlan: ref.watch(pipeCutPlanProvider),
   );
@@ -243,6 +259,7 @@ final mepQuotationProvider = Provider<MepQuotation>((ref) {
     mechanicalPipes: ref.watch(bomProvider),
     mechanicalFittings: ref.watch(fittingsProvider),
     mechanicalComponents: ref.watch(componentTakeoffProvider),
+    mechanicalEquipment: ref.watch(equipmentTakeoffProvider),
     labourRate: settings.labourRatePerHour,
     overheadPct: settings.overheadPct,
     contingencyPct: settings.contingencyPct,

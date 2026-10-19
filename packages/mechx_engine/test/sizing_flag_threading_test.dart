@@ -384,8 +384,9 @@ void main() {
     });
 
     test('a DN50 branch AT the DFU minimum is not flagged (0.539 m/s)', () {
-      // Branch DFU table: 1 < dfu ≤ 3 ⇒ DN50, again the table minimum.
-      final s = sizeDrain(3.0)['e']!;
+      // Branch DFU table (Round 30, IPC 710.1(2)): 3 < dfu ≤ 6 ⇒ DN50, again
+      // the table minimum.
+      final s = sizeDrain(6.0)['e']!;
       expect(s.diameter.inMillimeters, closeTo(50, 1e-9));
       expect(s.velocity.metersPerSecond, closeTo(0.538608672508, 1e-9));
       expect(s.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
@@ -405,10 +406,10 @@ void main() {
     });
 
     test('a hand pick BELOW the DFU minimum keeps the verdict true', () {
-      // DFU 3 ⇒ minimum DN50; hand-picking DN40 is under the minimum (its own
+      // DFU 6 ⇒ minimum DN50; hand-picking DN40 is under the minimum (its own
       // code violation, not a self-cleansing finding) and runs FASTER, so the
       // self-cleansing flag stays true either way.
-      final s = sizeDrain(3.0, sizeOverrides: {'e': Diameter.mm(40)})['e']!;
+      final s = sizeDrain(6.0, sizeOverrides: {'e': Diameter.mm(40)})['e']!;
       expect(s.diameter.inMillimeters, closeTo(40, 1e-9));
       expect(s.selfCleansingOk, isTrue);
     });
@@ -466,7 +467,8 @@ void main() {
         _twoNode(ServiceType.drainage),
         const SizingContext(drainageSlope: 0.04),
         leafDemand: const {ServiceType.drainage: FlowRate(0)},
-        nodeDrainageUnits: const {'d': 3.0},
+        // 3 < 6 ≤ 6 DFU ⇒ DN50 (IPC 710.1(2), Round 30).
+        nodeDrainageUnits: const {'d': 6.0},
       );
       expect(
         sized['e']!.velocity.metersPerSecond,

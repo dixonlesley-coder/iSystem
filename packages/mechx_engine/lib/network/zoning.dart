@@ -231,6 +231,13 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
 /// over-pressures is ONE zone with no PRV station. Null ⇒ the legacy
 /// every-zone-on-the-PRV-budget walk.
 ///
+/// LOWEST SERVED FLOOR (Round 30, mech-sim-4-phantom-basement-prv-zone) —
+/// [lowestServedFloor] stops the walk at the lowest floor a drawn supply
+/// network actually delivers to (a cold / hot water outlet): floors below it
+/// (fixture-less basements the riser merely passes) open no zone, so the
+/// report never specifies a PRV station that serves nothing. Default 0 (the
+/// legacy full-building walk — used when nothing is drawn) ⇒ byte-identical.
+///
 /// Returns zones ordered **top → bottom** (index 0 = highest zone).
 List<PressureZone> computeDownfeedZones({
   required BuildingLevels building,
@@ -238,8 +245,10 @@ List<PressureZone> computeDownfeedZones({
   MountingHeights mounting = const MountingHeights(),
   Length? tankElevation,
   Pressure? maxFixtureStatic,
+  int lowestServedFloor = 0,
 }) {
   assert(building.levelCount > 0, 'building must have at least one floor');
+  final low = lowestServedFloor.clamp(0, building.levelCount - 1);
 
   final maxHeight = maxZoneHeightMetres(maxStaticPressure);
   final zones = <PressureZone>[];
@@ -251,19 +260,19 @@ List<PressureZone> computeDownfeedZones({
     final tankSpan = maxZoneHeightMetres(maxFixtureStatic);
     final top = building.levelCount - 1;
     var bottom = top; // a storey is indivisible: the top floor always admits.
-    for (var f = top - 1; f >= 0; f--) {
+    for (var f = top - 1; f >= low; f--) {
       final head = tankElevation.meters -
           building.fixtureElevationOf(f, mounting).meters;
       if (head > tankSpan) break;
       bottom = f;
     }
     zones.add(PressureZone(top, bottom));
-    if (bottom == 0) return zones;
+    if (bottom == low) return zones;
     zoneTop = bottom - 1;
     start = bottom - 1;
   }
 
-  for (var f = start; f >= 0; f--) {
+  for (var f = start; f >= low; f--) {
     // The measured span of the candidate zone [zoneTop … f] — identical to the
     // one downfeedZoneStatics evaluates.
     final span = building.ceilingElevationOf(zoneTop, mounting).meters -
@@ -277,9 +286,9 @@ List<PressureZone> computeDownfeedZones({
       zoneTop = f;
     }
 
-    // Always close the last zone at floor 0.
-    if (f == 0) {
-      zones.add(PressureZone(zoneTop, 0));
+    // Always close the last zone at the lowest served floor.
+    if (f == low) {
+      zones.add(PressureZone(zoneTop, low));
     }
   }
 

@@ -202,6 +202,7 @@ SupplyDesign determineSupply(
   Voltage lvVoltage = const Voltage(400),
   bool dualTransformer = false,
   ApparentPower? declaredKva,
+  int? declaredUnits,
 }) {
   final demandKva = _round1(demand.inKilovoltAmperes);
   final verify = <String>[
@@ -213,18 +214,21 @@ SupplyDesign determineSupply(
     const mvV = Voltage(mvVoltageV);
     verify.add('Transformer loading factor $transformerLoadingFactor and Z% '
         '$transformerImpedancePct — secondary source (design practice).');
-    final carried = dualTransformer
-        ? demand.inKilovoltAmperes / 2
-        : demand.inKilovoltAmperes;
+    // Round 30 — each unit carries demand / units (a dual service's two
+    // sections; paralleled units above the ladder top).
+    final units = (declaredUnits != null && declaredUnits > 0)
+        ? declaredUnits
+        : (dualTransformer ? 2 : 1);
+    final carried = demand.inKilovoltAmperes / units;
     final below = declared * transformerLoadingFactor < carried - 1e-9;
-    final unitsText = dualTransformer ? '2 × ' : '';
+    final unitsText = units > 1 ? '$units × ' : '';
     return SupplyDesign(
       lvOrMv: SupplyLevel.mv,
       demandKva: demandKva,
       lvVoltage: lvVoltage,
       mvVoltage: mvV,
       transformerKva: declared,
-      units: dualTransformer ? 2 : 1,
+      units: units,
       declared: true,
       declaredBelowDemand: below,
       impedancePct: transformerImpedancePct,
@@ -235,7 +239,7 @@ SupplyDesign determineSupply(
           'MV supply (20 kV) for the $demandKva kVA demand.'
           '${below ? ' At ${(transformerLoadingFactor * 100).round()} % '
               'loading it carries ${_fmtKva(_round1(declared * transformerLoadingFactor))} kVA '
-              '— below the ${_fmtKva(_round1(carried))} kVA ${dualTransformer ? 'each section carries' : 'demand'}; '
+              '— below the ${_fmtKva(_round1(carried))} kVA ${units > 1 ? (dualTransformer && units == 2 ? 'each section carries' : 'each unit carries') : 'demand'}; '
               'raise the rating.' : ''}',
       verifyItems: verify,
     );
@@ -381,16 +385,37 @@ String _thousands(double va) {
 /// 630 kVA unit; above the ladder, the capacity itself). Null on an LV
 /// service. The supply study, the fault estimate, the drawings and the power
 /// one-line all read this, so one declared service is described ONE way.
-ApparentPower? declaredServiceTransformerKva(ElectricalProject project) {
+ApparentPower? declaredServiceTransformerKva(ElectricalProject project) =>
+    declaredServiceTransformer(project)?.kva;
+
+/// Round 30 (regression-dual-tx-declared-capacity-doubled) — the declared
+/// customer transformer as PER-UNIT rating × unit count. An explicit
+/// [ElectricalProject.transformerKva] is per-unit by contract (one unit, or
+/// two on a [ElectricalProject.dualTransformer] service — byte-identical). A
+/// declared PLN connection capacity ([ElectricalProject.supplyCapacityVa])
+/// above the LV ceiling is the TOTAL connection: a dual service splits it
+/// across its two sections (each unit covers HALF the daya), and a figure
+/// above the ladder top becomes `n × top` units — never one non-standard
+/// unit, never 2 × the whole capacity. Null on an LV service.
+({ApparentPower kva, int units})? declaredServiceTransformer(
+    ElectricalProject project) {
+  final dual = project.dualTransformer;
   final tx = project.transformerKva;
-  if (tx != null && tx.inKilovoltAmperes > 0) return tx;
+  if (tx != null && tx.inKilovoltAmperes > 0) {
+    return (kva: tx, units: dual ? 2 : 1);
+  }
   final cap = project.supplyCapacityVa?.voltAmperes;
   if (cap == null || cap <= plnLvServiceCeilingVa) return null;
-  final kva = cap / 1000;
+  final sections = dual ? 2 : 1;
+  final perSection = (cap / 1000) / sections;
   for (final k in transformerKvaLadder) {
-    if (k >= kva - 1e-9) return ApparentPower.kilovoltAmperes(k);
+    if (k >= perSection - 1e-9) {
+      return (kva: ApparentPower.kilovoltAmperes(k), units: sections);
+    }
   }
-  return ApparentPower.kilovoltAmperes(kva);
+  final top = transformerKvaLadder.last;
+  final n = (perSection / top - 1e-9).ceil();
+  return (kva: ApparentPower.kilovoltAmperes(top), units: sections * n);
 }
 
 /// Round 29 — the ONE 'declared MV service' predicate: a declared transformer
@@ -409,13 +434,14 @@ bool isDeclaredMvService(ElectricalProject project) =>
 /// undeclared one has no demand to size from.
 ({double kva, int units})? serviceTransformer(
     ElectricalProject project, ApparentPower demand) {
-  final declared = declaredServiceTransformerKva(project);
+  final declared = declaredServiceTransformer(project);
   final hasDeclared = declared != null;
   if (!hasDeclared && !project.dualTransformer) return null;
   if (!hasDeclared && demand.voltAmperes <= 0) return null;
   final s = determineSupply(demand,
       dualTransformer: project.dualTransformer,
-      declaredKva: hasDeclared ? declared : null);
+      declaredKva: declared?.kva,
+      declaredUnits: declared?.units);
   final kva = s.transformerKva;
   if (kva == null || kva <= 0) return null;
   return (kva: kva, units: s.units);

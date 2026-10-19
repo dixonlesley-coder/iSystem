@@ -53,7 +53,7 @@ import 'panel_results.dart'
         ElectricalWarning, WarningSeverity;
 import 'supply_design.dart'
     show
-        declaredServiceTransformerKva,
+        declaredServiceTransformer,
         determineSupply,
         transformerImpedancePct;
 
@@ -266,9 +266,14 @@ const Map<ConductorMaterial, Map<ConductorInsulation, double>> peAdiabaticK = {
 /// list: [faultStudy] appends it only when a motor contribution was actually
 /// folded in (> 0). Every report used to assert a basis the study never used
 /// (the default contribution is 0).
+/// Round 30 — the U0 basis line (a report that also prints the PUIL profile's
+/// own U0 entry prints it once).
+const String faultStudyU0VerifyItem =
+    'phase voltage U0 (230 V) for Zs / ADS limits';
+
 const List<String> faultStudyVerifyItems = [
   'default LV utility prospective fault level (16 kA)',
-  'phase voltage U0 (230 V) for Zs / ADS limits',
+  faultStudyU0VerifyItem,
   'source X/R ratio (7) for the earth-fault loop split',
   'ADS voltage factor (0.95) and fault-temperature factor (1.28)',
   'MCB curve trip multiples (B 5× / C 10× / D 20×)',
@@ -396,8 +401,14 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
     // drawings and power one-line all print
     // ([declaredServiceTransformerKva]: a 555 kVA daya ⇒ 630 kVA), never
     // the raw daya figure (no 555 kVA unit exists).
-    final txKva = declaredServiceTransformerKva(project)?.voltAmperes ??
-        capacityVa;
+    // Round 30 — per-unit rating × the units one section parallels (a dual
+    // service's coupler is N.O. ⇒ one section's units only).
+    final declaredTx = declaredServiceTransformer(project);
+    final txKva = declaredTx == null
+        ? capacityVa
+        : declaredTx.kva.voltAmperes *
+            math.max(1,
+                project.dualTransformer ? declaredTx.units ~/ 2 : declaredTx.units);
     final declaredA = txKva /
         (math.sqrt(3) *
             serviceFaultLineVoltageV *

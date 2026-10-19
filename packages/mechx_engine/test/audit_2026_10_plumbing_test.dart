@@ -1027,14 +1027,15 @@ void main() {
   // ── water-drainage-7 — a drain carrying a WC is ≥ DN75 ───────────────────
   group('water-drainage-7 · water-closet minimum drain size', () {
     // src —branch→ j (floor 1 main) ... a single flush-tank WC = 4 DFU:
-    //   DFU tables alone: branch (6, DN65), stack (10, DN50).
+    //   DFU tables alone (Round 30, IPC 710.1(2)): branch (6, DN50),
+    //   stack (10, DN50).
     //   UPC/IPC floor: ≥ DN75 for any drain carrying a closet.
     test('premises: a flush-tank WC is 4 DFU; the floor is DN75', () {
       expect(
           drain.drainageFixtureUnit(PlumbingFixture.waterClosetFlushTank), 4);
       expect(drain.kMinWcDrainMm, 75.0);
-      // The tables alone would issue DN65 / DN50 for that one WC.
-      expect(drain.drainDiameterForDfu(4, isStack: false).inMillimeters, 65);
+      // The tables alone would issue DN50 / DN50 for that one WC.
+      expect(drain.drainDiameterForDfu(4, isStack: false).inMillimeters, 50);
       expect(drain.drainDiameterForDfu(4, isStack: true).inMillimeters, 50);
     });
 
@@ -1101,17 +1102,18 @@ void main() {
       );
       expect(flagged['branch']!.diameter.inMillimeters, closeTo(75, 1e-9));
       expect(flagged['stack']!.diameter.inMillimeters, closeTo(75, 1e-9));
-      // Unflagged (default) ⇒ the bare DFU tables: DN65 branch; the stack's
-      // table DN50 is then raised to its branch's DN65 (N17 stack ≥ branch).
+      // Unflagged (default) ⇒ the bare DFU tables: DN50 branch (4 ≤ 6, IPC
+      // 2 in) and the stack's table DN50 (4 ≤ 10) — equal, so the N17
+      // stack ≥ branch clamp does not need to raise it.
       final bare = autoSizeNetwork(
         net,
         const SizingContext(),
         leafDemand: const {ServiceType.drainage: FlowRate(0)},
         nodeDrainageUnits: const {'fx': 4.0},
       );
-      expect(bare['branch']!.diameter.inMillimeters, closeTo(65, 1e-9));
-      expect(bare['stack']!.diameter.inMillimeters, closeTo(65, 1e-9));
-      expect(bare['stack']!.stackRaisedForBranch, isTrue);
+      expect(bare['branch']!.diameter.inMillimeters, closeTo(50, 1e-9));
+      expect(bare['stack']!.diameter.inMillimeters, closeTo(50, 1e-9));
+      expect(bare['stack']!.stackRaisedForBranch, isFalse);
     });
 
     test('a lavatory-only branch still sizes at DN40', () {

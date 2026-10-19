@@ -740,6 +740,8 @@ String _pickComponentRoot({
   required NetNode? Function(String) nodeOf,
   required Set<String> drawnFromIds,
   Set<String> riserEndIds = const {},
+  Set<String> riserTopIds = const {},
+  Map<String, int> riserTopSpan = const {},
   Iterable<String> Function(String)? neighboursOf,
 }) {
   Iterable<String> neighbours(String id) =>
@@ -909,6 +911,32 @@ String _pickComponentRoot({
     });
   if (freeLeaves.isNotEmpty) return freeLeaves.first;
 
+  // Round 30 (mech-sim-4-vent-stack-without-vtr-stub-undersized) — a vent
+  // stack drawn with no VTR stub ends at its top-floor tie node: that bare
+  // stack TOP is the roof penetration (`gravityRiserEndElevation` already
+  // reads it so), so the vent air leaves there. Rooting at the busiest
+  // junction instead sized the stack on the floors above that hub only
+  // (72 vs 90 DFU, DN75 where DN100 is needed).
+  if (service == ServiceType.vent) {
+    final tops = [
+      for (final id in component)
+        if (riserTopIds.contains(id) &&
+            roleOf(id) != NodeRole.fixture &&
+            !demandKeys.contains(id))
+          id,
+    ]..sort((a, b) {
+        // Round 30 (r2) — the STACK's top, not a branch vent's: a fixture's
+        // own vent riser (A2 -> A3) tied by a run into the stack top also
+        // ends at a riser top on the top storey. Rooting there carried the
+        // whole stack through the tie (20 -> 60 DFU); the stubbed drawing's
+        // VTR sits on the stack, so prefer the top whose riser chain spans
+        // the most storeys, then the usual height / id order.
+        final c = (riserTopSpan[b] ?? 0).compareTo(riserTopSpan[a] ?? 0);
+        return c != 0 ? c : byHeight(a, b);
+      });
+    if (tops.isNotEmpty) return tops.first;
+  }
+
   final movers = [
     for (final id in component)
       if (isInlineMover(id)) id,
@@ -945,6 +973,52 @@ String _pickComponentRoot({
   if (hub != null) return hub;
   if (leaves.isNotEmpty) return ([...leaves]..sort()).first;
   return ([...component]..sort()).first;
+}
+
+/// Round 30 (r2) — for each riser TOP of [service], the number of storeys
+/// its riser-only chain spans below it (top floor less the lowest floor
+/// reachable through riser edges).
+Map<String, int> _riserTopSpans(
+    Network net, ServiceType service, Set<String> tops) {
+  if (tops.isEmpty) return const {};
+  final adj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != service || e.kind != EdgeKind.riser) continue;
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final out = <String, int>{};
+  for (final t in tops) {
+    final top = net.nodeById(t)?.floorIndex ?? 0;
+    var low = top;
+    final seen = <String>{t};
+    final stack = [t];
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      final f = net.nodeById(n)?.floorIndex ?? top;
+      if (f < low) low = f;
+      for (final o in adj[n] ?? const <String>[]) {
+        if (seen.add(o)) stack.add(o);
+      }
+    }
+    out[t] = top - low;
+  }
+  return out;
+}
+
+/// Round 30 — record a riser's UPPER / LOWER end by floor (then explicit
+/// elevation); a riser between two nodes at one height records nothing.
+void _noteRiserEnds(
+    Network net, NetEdge e, Set<String> uppers, Set<String> lowers) {
+  final a = net.nodeById(e.fromId), b = net.nodeById(e.toId);
+  if (a == null || b == null) return;
+  var c = a.floorIndex.compareTo(b.floorIndex);
+  if (c == 0) {
+    c = (a.elevation?.meters ?? 0).compareTo(b.elevation?.meters ?? 0);
+  }
+  if (c == 0) return;
+  uppers.add(c > 0 ? a.id : b.id);
+  lowers.add(c > 0 ? b.id : a.id);
 }
 
 /// Round 15 (root-metamorphic-rain-multi-downpipe) — the OUTFALLS of a
@@ -1069,6 +1143,7 @@ Map<String, String> serviceComponentRoots(
   final nodes = <String>{};
   final drawnFromIds = <String>{};
   final riserEndIds = <String>{};
+  final riserUppers = <String>{}, riserLowers = <String>{};
   for (final e in net.edges) {
     if (e.service != service) continue;
     nodes
@@ -1079,12 +1154,17 @@ Map<String, String> serviceComponentRoots(
       riserEndIds
         ..add(e.fromId)
         ..add(e.toId);
+      _noteRiserEnds(net, e, riserUppers, riserLowers);
     }
     (adjacency[e.fromId] ??= []).add(e.toId);
     (adjacency[e.toId] ??= []).add(e.fromId);
   }
   int degree(String n) => adjacency[n]?.length ?? 0;
   NodeRole? roleOf(String n) => net.nodeById(n)?.role;
+  final riserTops = riserUppers.difference(riserLowers);
+  final riserTopSpan = service == ServiceType.vent
+      ? _riserTopSpans(net, service, riserTops)
+      : const <String, int>{};
 
   final out = <String, String>{};
   final seen = <String>{};
@@ -1110,6 +1190,8 @@ Map<String, String> serviceComponentRoots(
       nodeOf: net.nodeById,
       drawnFromIds: drawnFromIds,
       riserEndIds: riserEndIds,
+      riserTopIds: riserTops,
+      riserTopSpan: riserTopSpan,
       neighboursOf: (n) => adjacency[n] ?? const <String>[],
     );
     for (final n in component) {
@@ -1327,6 +1409,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final nodes = <String>{};
     final drawnFromIds = <String>{};
     final riserEndIds = <String>{};
+    final riserUppers = <String>{}, riserLowers = <String>{};
     for (final e in net.edges) {
       if (e.service != service) continue;
       drawnFromIds.add(e.fromId);
@@ -1334,6 +1417,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
         riserEndIds
           ..add(e.fromId)
           ..add(e.toId);
+        _noteRiserEnds(net, e, riserUppers, riserLowers);
       }
       nodes
         ..add(e.fromId)
@@ -1427,6 +1511,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
     //      hub — rooting here keeps EVERY terminal's load, whereas falling back
     //      to a fixture leaf would drop that fixture's demand);
     //   4. any leaf, else any node (degenerate component).
+    final riserTops = riserUppers.difference(riserLowers);
+    final riserTopSpan = service == ServiceType.vent
+        ? _riserTopSpans(net, service, riserTops)
+        : const <String, int>{};
     String pickRoot(List<String> component, List<String> leaves) =>
         _pickComponentRoot(
           component: component,
@@ -1438,6 +1526,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
           nodeOf: net.nodeById,
           drawnFromIds: drawnFromIds,
           riserEndIds: riserEndIds,
+          riserTopIds: riserTops,
+          riserTopSpan: riserTopSpan,
           neighboursOf: (n) => [
             for (final l
                 in adjacency[n] ?? const <({String edgeId, String other})>[])
@@ -5486,6 +5576,48 @@ Map<String, double> _uniformVentStacks(
         else if (vtrRunLink(e.toId, e.fromId))
           (e, e.toId),
   ];
+  // Round 30 (mech-sim-4-vent-stack-without-vtr-stub-undersized) — a stack
+  // whose TOP node is the vent tree's ROOT (no VTR stub drawn: the bare
+  // top-storey junction is the roof penetration) carries, through its
+  // zero-length virtual VTR, every load ENTERING that node — the top riser
+  // plus the top floor's tie — less a header received there. Without it the
+  // stack sized on the floors below the top tie only (72 vs 90 DFU).
+  if (edgeParent != null) {
+    for (final t in riserGroupOf.keys) {
+      if (!stackEnd(t)) continue;
+      final g = riserGroupOf[t]!;
+      if (floorOf(t) != groupTop[g]) continue;
+      final incident = ventAdj[t] ?? const <NetEdge>[];
+      // Only a tie / branch junction at the top (a run enters there): a bare
+      // VTR stub top's single riser is already the stack's own member.
+      if (!incident.any((e) => e.kind != EdgeKind.riser)) continue;
+      // The tree root: every incident tree edge hangs FROM it.
+      var isRoot = true;
+      var sum = 0.0;
+      for (final e in incident) {
+        final p = edgeParent[e.id];
+        final u = units[e.id];
+        if (p == null || u == null) continue;
+        if (p != t) {
+          isRoot = false;
+          break;
+        }
+        sum += u;
+      }
+      if (!isRoot) continue;
+      final k = find(t);
+      if (!stackMax.containsKey(k)) continue;
+      final jf = junctionFloor[g];
+      final ft = floorOf(t);
+      final own = math.max(
+          0.0,
+          sum -
+              (jf != null && ft != null && jf <= ft
+                  ? (headerLoadAt[g] ?? 0)
+                  : 0.0));
+      if (own > stackMax[k]!) stackMax[k] = own;
+    }
+  }
   for (final (e, top) in vtrRuns) {
     final k = find(top);
     if (!stackMax.containsKey(k)) continue;

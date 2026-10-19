@@ -32,7 +32,8 @@ import 'package:mechx_engine/report/plan_symbols.dart'
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
-import 'package:mechx_engine/report/riser_tags.dart' show elementTags;
+import 'package:mechx_engine/report/riser_tags.dart'
+    show drawnWaterFeedEquipment, elementTags;
 import 'package:mechx_engine/report/sld_export.dart'
     show sldSheetToDxf, sldSheetToPdf, sldSheetsToPdf;
 import 'package:mechx_engine/standards/puil.dart';
@@ -200,11 +201,13 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   // downfeed SETTING with no roof tank drawn is a booster (pump drawn) or a
   // direct-mains feed, and the booster head / gravity verdict / PRV zone
   // table — all solved from a VIRTUAL roof-level source — are not printed.
-  final hasRoofTank =
-      net.nodes.any((n) => n.component == NodeComponent.roofTank);
-  final hasPump = net.nodes.any((n) =>
-      n.component == NodeComponent.pump ||
-      n.component == NodeComponent.boosterSet);
+  // Round 30 (r2) — only WATER-network equipment is feed evidence (the
+  // shared `drawnWaterFeedEquipment`, the inspector feed line / riser notes
+  // use the same): a fire pump on the hydrant line or a sump pump on
+  // drainage never makes the water feed 'Booster pump (no roof tank)'.
+  final waterFeed = drawnWaterFeedEquipment(net);
+  final hasRoofTank = waterFeed.hasRoofTank;
+  final hasPump = waterFeed.hasPump;
   // Round 25 — the ONE drawn-feed predicate the inspector + Review share.
   final gravityDownfeed = ref.read(gravityDownfeedDrawnProvider);
   // Round 20 (hvac-3-4) — the HVAC trunk the report prints is a SCHEDULED
@@ -293,6 +296,21 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     sprinklerRemoteArea:
         sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
     firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
+    // Round 30 (report-parity-2-1) — each drawn fire system's own pump, under
+    // the tag its schedule row / MDP way carry.
+    fireSystems: fireDrawn
+        ? [
+            for (final (i, b) in ref.read(fireSystemBasesProvider).indexed)
+              FireSystemReportLine(
+                tag: (b.pumpIds.isEmpty
+                        ? null
+                        : equipmentNodeTags(net)[b.pumpIds.first]) ??
+                    'FP-${(i + 1).toString().padLeft(2, '0')}',
+                sprinklerOnly: b.sprinklerOnly,
+                rating: b.rating,
+              ),
+          ]
+        : const [],
     fan: reportFan,
     exhaustFan: ref.read(exhaustFanProvider),
     supplyAirflowLps: balance?.supplyLps ?? 0,
@@ -334,11 +352,10 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
     powerOneLine: eAdvanced.powerOneLine,
     // Round 12 — the PUIL KHA / derating / Vd debt behind every printed cable
     // size, beside the advanced-study items.
-    verifyItems: [
-      ...eAdvanced.verifyItems,
-      for (final v in eProfile.verifyChecklist)
-        '${v.citation}${v.note == null ? '' : ' — ${v.note}'}',
-    ],
+    // Round 30 (report-parity-2-3) — the profile checklist goes through
+    // with its verification TIER (the report prints it beside each value).
+    verifyItems: eAdvanced.verifyItems,
+    verifyChecklist: eProfile.verifyChecklist,
     // Round 12 (report-recompute-fault-basis-omitted) — the EFFECTIVE fault
     // level + clearing time the busbars were sized on (the same chain as
     // electricalResultProvider), with their provenance.
@@ -870,6 +887,18 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
         modelSpec: specs[tag],
       ),
     );
+  }
+  // Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — one row per
+  // drawn sewage ejector, under its plan tag, on the duty its MDP way is fed.
+  final ejectors = ref.read(ejectorDutiesProvider);
+  for (final id in ejectors.keys.toList()..sort()) {
+    final tag = tagOfNode(id) ?? nextPumpTag();
+    pumps.add(PumpScheduleItem(
+      duty: ejectors[id]!,
+      service: reportStringsFor(ref)(RptStringKey.esSvcSewageEjector),
+      tag: tag,
+      modelSpec: specs[tag],
+    ));
   }
   // Round 16 (plumbing-plant-recirc-pump-not-bound) — the HW recirculation
   // pump the inspector and the report print, scheduled under the drawn HW
@@ -1993,6 +2022,7 @@ Future<bool> writeSubmittalPackageToDir(
       mechanical: mechCost,
       electrical: elecCost,
       projectName: base,
+      strings: reportStringsFor(ref),
     ),
   );
 
@@ -4353,9 +4383,10 @@ class _ResultsSection extends ConsumerWidget {
     // same gate the calc report prints on.
     final gravityDrawn = ref.watch(gravityDownfeedDrawnProvider);
     final downfeed = gravityDrawn ? ref.watch(downfeedProvider) : null;
-    final hasPumpDrawn = ref.watch(sizingNetworkProvider).nodes.any((n) =>
-        n.component == NodeComponent.pump ||
-        n.component == NodeComponent.boosterSet);
+    // Round 30 (r2) — water-network pumps only (a fire / sump pump is not a
+    // water booster), the same evidence as the feed line above.
+    final hasPumpDrawn =
+        drawnWaterFeedEquipment(ref.watch(sizingNetworkProvider)).hasPump;
     final pump = ref.watch(pumpDutyProvider);
     final zones = ref.watch(zonesProvider);
     final zoneStatics = ref.watch(zoneStaticsProvider);

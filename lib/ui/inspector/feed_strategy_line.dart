@@ -1,7 +1,8 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/report/riser_tags.dart'
+    show drawnWaterFeedEquipment;
 
 import '../../store/app_state.dart';
 import '../../store/network_store.dart';
@@ -33,20 +34,23 @@ class FeedStrategyLine extends ConsumerWidget {
     final colors = context.colors;
     final type = context.type;
     final strategy = ref.watch(feedStrategyProvider);
-    final nodes = ref.watch(networkControllerProvider).network.nodes;
-    bool has(NodeComponent c) => nodes.any((n) => n.component == c);
-    final hasPump = has(NodeComponent.pump) || has(NodeComponent.boosterSet);
+    // Round 30 — only WATER-network equipment is feed evidence (a fire pump
+    // on the hydrant line is not a water booster); nothing drawn on the water
+    // services ⇒ the setting as chosen.
+    final eq = drawnWaterFeedEquipment(
+        ref.watch(networkControllerProvider).network);
+    final hasPump = eq.hasPump;
     final StringKey key;
     if (strategy == FeedStrategy.upfeed) {
-      key = hasPump || nodes.isEmpty
+      key = hasPump || !eq.anyWaterNode
           ? StringKey.feedUpfeedPump
           : StringKey.feedUpfeedPumpAssumed;
-    } else if (has(NodeComponent.roofTank) || nodes.isEmpty) {
+    } else if (eq.hasRoofTank || !eq.anyWaterNode) {
       key = StringKey.feedRoofTankDownfeed;
     } else if (hasPump) {
       key = StringKey.feedBoosterNoRoofTank;
     } else {
-      key = has(NodeComponent.waterMeter)
+      key = eq.hasWaterMeter
           ? StringKey.feedDirectMainsMeter
           : StringKey.feedDirectMains;
     }

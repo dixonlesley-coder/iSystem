@@ -401,9 +401,25 @@ const double _kPassThroughCos = -0.978;
 /// an elbow. A node whose incident edges have more than one diameter also adds
 /// (distinctDiameters − 1) reducers. Fitting size = the largest incident
 /// diameter; fitting material = that edge's [bomMaterialFor] code.
+///
+/// Round 30 (costing-2-2) — with [building] given, every sized RUN whose
+/// length carries a vertical leg ([runVerticalLeg] > 0 — a ceiling main
+/// dropping to a fixture, a floor pump rising to the main) over a non-zero
+/// horizontal span adds ONE elbow at its own size: the bend where the
+/// horizontal run turns into the drop / rise. Its pipe was already bought
+/// ([edgeLength]); the count no longer depends on whether the drop was drawn
+/// as a riser. A zero-span run (the tee outlet turns straight down) adds none.
+/// Null ⇒ the legacy topology-only count.
+///
+/// Round 30 (costing-2-4) — a PLANT node (tank nozzles, pump flanges, AHU /
+/// fan spigots) counts no elbow / tee / cross: its connections are separate
+/// equipment nozzles, not a pipe fitting. A size change there still counts
+/// its reducer.
 List<FittingLine> buildFittings({
   required Network net,
   required Map<String, EdgeSizing> sizing,
+  BuildingLevels? building,
+  MountingHeights mounting = const MountingHeights(),
 }) {
   // node → service → incident (diameter mm, edge), sized edges only.
   final byNode = <String, Map<ServiceType, List<(int, NetEdge)>>>{};
@@ -494,7 +510,10 @@ List<FittingLine> buildFittings({
       final mm = best.$1;
       final mat = bomMaterialFor(best.$2);
       final rect = rectOf[best.$2.id];
-      if (k == 2) {
+      final plant = net.nodeById(nodeId)?.role == NodeRole.plant;
+      if (plant) {
+        // Equipment nozzles: no elbow / tee / cross (reducers below).
+      } else if (k == 2) {
         if (inlineTerminal(nodeId)) {
           add(service, FittingType.tee, mm, mat, 1, rect);
         } else if (!isPassThrough(nodeId, incident[0].$2, incident[1].$2)) {
@@ -515,6 +534,20 @@ List<FittingLine> buildFittings({
       }
     });
   });
+
+  if (building != null) {
+    for (final edge in net.edges) {
+      if (edge.kind != EdgeKind.run) continue;
+      final es = sizing[edge.id];
+      if (es == null) continue;
+      if (runPixelLength(edge, net) <= 1e-9) continue;
+      final leg =
+          runVerticalLeg(edge, net, building: building, mounting: mounting);
+      if (leg.meters <= 0) continue;
+      add(edge.service, FittingType.elbow, es.diameter.inMillimeters.round(),
+          bomMaterialFor(edge), 1, rectOf[edge.id]);
+    }
+  }
 
   final lines = [
     for (final e in acc.entries)
@@ -643,12 +676,17 @@ class ComponentLine {
   /// the hot-water recirculation pump when none is drawn.
   final bool assumed;
 
+  /// Round 30 (costing-2-1) — a scheduled EQUIPMENT item (pump, tank, AHU …)
+  /// rather than a pipe-sized component; [sizeLabel] is then its duty.
+  final bool equipment;
+
   const ComponentLine({
     required this.service,
     required this.component,
     required this.sizeLabel,
     required this.count,
     this.assumed = false,
+    this.equipment = false,
   });
 }
 
@@ -701,6 +739,75 @@ List<ComponentLine> buildComponentTakeoff({
           component: e.key.$2,
           sizeLabel: e.key.$3,
           count: e.value),
+  ]..sort((a, b) {
+      final s = a.service.index.compareTo(b.service.index);
+      if (s != 0) return s;
+      final c = a.component.index.compareTo(b.component.index);
+      if (c != 0) return c;
+      return a.sizeLabel.compareTo(b.sizeLabel);
+    });
+  return lines;
+}
+
+/// Round 30 (costing-2-1) — the drawn PLANT a quotation buys as EQUIPMENT:
+/// pumps, tanks, booster sets, AHU / FCU, fans and AC indoor units (excluded
+/// from [kTakeoffComponents] because they are scheduled by DUTY, not by pipe
+/// size).
+const Set<NodeComponent> kEquipmentComponents = {
+  NodeComponent.pump,
+  NodeComponent.boosterSet,
+  NodeComponent.roofTank,
+  NodeComponent.groundTank,
+  NodeComponent.ahu,
+  NodeComponent.fcu,
+  NodeComponent.supplyFan,
+  NodeComponent.exhaustFan,
+  NodeComponent.acCassette,
+  NodeComponent.acSplitWall,
+  NodeComponent.acDucted,
+};
+
+ServiceType _equipmentDefaultService(NodeComponent c) => switch (c) {
+      NodeComponent.ahu ||
+      NodeComponent.fcu ||
+      NodeComponent.supplyFan ||
+      NodeComponent.acCassette ||
+      NodeComponent.acSplitWall ||
+      NodeComponent.acDucted =>
+        ServiceType.duct,
+      NodeComponent.exhaustFan => ServiceType.exhaust,
+      _ => ServiceType.coldWater,
+    };
+
+/// Round 30 (costing-2-1) — the per-piece take-off of every drawn plant item
+/// in [kEquipmentComponents], grouped by (service, component, duty). The duty
+/// is [dutyByNodeId]'s string for that node (the equipment-schedule duty the
+/// app already prints, e.g. `4.7 L/s @ 133.9 m · 11.00 kW`), '' when none —
+/// so each duty prices apart and stays UNPRICED until the estimator prices
+/// it. Service as [buildComponentTakeoff]. Pure; sorted like it.
+List<ComponentLine> buildEquipmentTakeoff({
+  required Network net,
+  Map<String, String> dutyByNodeId = const {},
+}) {
+  final acc = <(ServiceType, NodeComponent, String), int>{};
+  for (final n in net.nodes) {
+    final c = n.component;
+    if (c == null || !kEquipmentComponents.contains(c)) continue;
+    final incident = net.edgesAt(n.id).toList()
+      ..sort((a, b) => a.service.index.compareTo(b.service.index));
+    final service =
+        incident.isEmpty ? _equipmentDefaultService(c) : incident.first.service;
+    final key = (service, c, dutyByNodeId[n.id] ?? '');
+    acc[key] = (acc[key] ?? 0) + 1;
+  }
+  final lines = [
+    for (final e in acc.entries)
+      ComponentLine(
+          service: e.key.$1,
+          component: e.key.$2,
+          sizeLabel: e.key.$3,
+          count: e.value,
+          equipment: true),
   ]..sort((a, b) {
       final s = a.service.index.compareTo(b.service.index);
       if (s != 0) return s;

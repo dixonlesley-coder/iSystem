@@ -617,6 +617,65 @@ Map<String, double> riserEdgeLaneOffsets(Network net, {ServiceType? focus}) {
   return out;
 }
 
+/// Round 30 (regression-feed-line-any-pump-counts) — the WATER-SUPPLY feed
+/// equipment the drawing carries: only nodes that are an endpoint of a
+/// cold / hot WATER edge count, so a fire pump on the hydrant line, a sump /
+/// ejector pump on drainage or a tank on another service never turns the water
+/// feed into 'booster pump'. The ONE evidence source for the inspector feed
+/// line, the riser export notes and the canvas notes card (Review's
+/// `mains-fed` / `upfeed-pump-assumed` infos are per cold-water component, so
+/// every surface now tells the same story).
+class WaterFeedEquipment {
+  const WaterFeedEquipment({
+    required this.anyWaterNode,
+    required this.hasRoofTank,
+    required this.hasGroundTank,
+    required this.hasPump,
+    required this.hasWaterMeter,
+  });
+
+  /// At least one node sits on a cold / hot water edge.
+  final bool anyWaterNode;
+  final bool hasRoofTank;
+  final bool hasGroundTank;
+
+  /// A pump or booster set on the water network.
+  final bool hasPump;
+  final bool hasWaterMeter;
+}
+
+/// [WaterFeedEquipment] for [net] — see that class.
+WaterFeedEquipment drawnWaterFeedEquipment(Network net) {
+  final ids = <String>{
+    for (final e in net.edges)
+      if (e.service == ServiceType.coldWater ||
+          e.service == ServiceType.hotWater) ...[e.fromId, e.toId],
+  };
+  var roof = false, ground = false, pump = false, meter = false;
+  for (final n in net.nodes) {
+    if (!ids.contains(n.id)) continue;
+    switch (n.component) {
+      case NodeComponent.roofTank:
+        roof = true;
+      case NodeComponent.groundTank:
+        ground = true;
+      case NodeComponent.pump || NodeComponent.boosterSet:
+        pump = true;
+      case NodeComponent.waterMeter:
+        meter = true;
+      default:
+        break;
+    }
+  }
+  return WaterFeedEquipment(
+    anyWaterNode: ids.isNotEmpty,
+    hasRoofTank: roof,
+    hasGroundTank: ground,
+    hasPump: pump,
+    hasWaterMeter: meter,
+  );
+}
+
 /// Round 17 (drafting-visual-3-4) — the riser sheet's FEED note, gated on the
 /// equipment the network actually carries (the evidence the Round-15
 /// GRAVITASI suffix rule uses), never on the feed-strategy SETTING alone: a
