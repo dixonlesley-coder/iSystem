@@ -200,7 +200,7 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
     transferPumpNodeIds: ref.read(transferPumpNodeIdsProvider),
     // Round 21 (riser-drafting-2-1) — the HWR recirculation return leg the
     // canvas draws rides the issued sheet too (issued >= preview).
-    hotWaterRecirc: ref.read(hotWaterRecircProvider) != null,
+    hotWaterRecirc: ref.read(hotWaterAssumedReturnProvider),
     floorRange: floorRange,
   );
 }

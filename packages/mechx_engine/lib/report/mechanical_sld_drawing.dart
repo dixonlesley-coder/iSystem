@@ -292,20 +292,15 @@ SldSheet buildMechanicalRiserSld({
   // Two fixtures at the same world x land on the same band point and stack their
   // markers/labels; nudge each such group apart in x, centred on the shared
   // point, deterministically (by node id).
-  final coincident = <String, List<NetNode>>{};
-  for (final n in nodes) {
-    final p = posById[n.id]!;
-    (coincident['${n.floorIndex}:${p.dx.round()}'] ??= <NetNode>[]).add(n);
-  }
-  for (final group in coincident.values) {
-    if (group.length < 2) continue;
-    group.sort((a, b) => a.id.compareTo(b.id));
-    final baseX = posById[group.first.id]!.dx;
-    for (var i = 0; i < group.length; i++) {
-      final dx = (i - (group.length - 1) / 2) * _kSpreadStep;
-      final p = posById[group[i].id]!;
-      posById[group[i].id] = Offset(baseX + dx, p.dy);
-    }
+  // Round 26 — the ONE shared spread (the live canvas applies it too).
+  final spread = coincidentSpreadDx(
+    x: {for (final n in nodes) n.id: posById[n.id]!.dx},
+    floorOf: {for (final n in nodes) n.id: n.floorIndex},
+    step: _kSpreadStep,
+  );
+  for (final e in spread.entries) {
+    final p = posById[e.key]!;
+    posById[e.key] = Offset(p.dx + e.value, p.dy);
   }
 
   // ── Round 21 (riser-drafting-2-4) — branch fan-out from one header ─────────
@@ -1591,22 +1586,40 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
         e,
   ];
   if (hwRisers.isEmpty) return;
+  // Round 26 (hot-water-2-phantom-hwr-leg-on-drawn-return) — ONE return leg
+  // per hot-water riser STACK (risers sharing a column), never one per
+  // storey segment (every per-floor segment used to repeat its own 'HWR').
+  final stacks = <int, ({double x, double yTop, double yBot})>{};
   for (final e in hwRisers) {
     final a = posById[e.fromId]!;
     final b = posById[e.toId]!;
-    final legX = b.dx + off;
+    final key = b.dx.round();
     final yTop = math.min(a.dy, b.dy);
     final yBot = math.max(a.dy, b.dy);
+    final cur = stacks[key];
+    stacks[key] = cur == null
+        ? (x: b.dx, yTop: yTop, yBot: yBot)
+        : (
+            x: cur.x,
+            yTop: math.min(cur.yTop, yTop),
+            yBot: math.max(cur.yBot, yBot),
+          );
+  }
+  for (final key in stacks.keys.toList()..sort()) {
+    final st = stacks[key]!;
+    final legX = st.x + off;
+    final yTop = st.yTop;
+    final yBot = st.yBot;
     // The parallel return riser — THINNER + DASHED (a hot-water return).
     prims.add(SldLine(legX, yTop, legX, yBot,
         weight: SldWeight.thin, layer: layer, dashed: true));
     // The loop turn: tie the return top back to the supply riser leg.
-    prims.add(SldLine(b.dx, yTop, legX, yTop,
+    prims.add(SldLine(st.x, yTop, legX, yTop,
         weight: SldWeight.thin, layer: layer, dashed: true));
     // Round 10 — the return leg + loop turn are ink tags divert around.
     placer
       ..reserveLine(legX, yTop, legX, yBot)
-      ..reserveLine(b.dx, yTop, legX, yTop);
+      ..reserveLine(st.x, yTop, legX, yTop);
     // A down chevron: recirculation flow returns to the heater.
     final midY = (yTop + yBot) / 2;
     prims
@@ -1621,13 +1634,29 @@ void _emitHotWaterReturn(List<SldPrim> prims, Network network,
         anchorY: midY,
         candidates: _riserLadder('HWR'));
   }
-  // The recirc pump glyph at the loop base — the lowest hot-water node.
+  // The recirc pump glyph at the loop base — the lowest hot-water riser node
+  // of the WHOLE network (Round 26, riser-drafting-3-6: a paginated page used
+  // to take the lowest node among its OWN floors and print a phantom pump on
+  // every upper page), drawn only on the page that holds it, and never beside
+  // a pump / booster already drawn on the hot-water service.
+  final hwPumpDrawn = network.nodes.any((n) =>
+      (n.component == NodeComponent.pump ||
+          n.component == NodeComponent.boosterSet) &&
+      network.edgesAt(n.id).any((e) => e.service == ServiceType.hotWater));
+  if (hwPumpDrawn) return;
   NetNode? lowest;
-  for (final e in hwRisers) {
+  for (final e in network.edges) {
+    if (e.service != ServiceType.hotWater || e.kind != EdgeKind.riser) {
+      continue;
+    }
     for (final id in [e.fromId, e.toId]) {
       final n = network.nodeById(id);
       if (n == null) continue;
-      if (lowest == null || n.floorIndex < lowest.floorIndex) lowest = n;
+      if (lowest == null ||
+          n.floorIndex < lowest.floorIndex ||
+          (n.floorIndex == lowest.floorIndex && n.id.compareTo(lowest.id) < 0)) {
+        lowest = n;
+      }
     }
   }
   final lp = lowest == null ? null : posById[lowest.id];

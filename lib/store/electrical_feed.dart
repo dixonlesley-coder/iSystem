@@ -503,14 +503,17 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   // Round 16 (plumbing-plant-recirc-pump-not-bound) — the solved HW
   // recirculation duty is a way of its own when no pump is drawn on the
   // hot-water loop (a drawn one carries it via [equipmentNodeDutiesProvider]).
-  final recirc = ref.watch(hotWaterRecircProvider);
-  if (bind.hwRecircPumpNodeIds.isEmpty &&
-      recirc != null &&
-      recirc.pump.selectedMotor.watts > 0) {
+  // Round 26 (hot-water-2-separate-systems-merged) — ONE way per hot-water
+  // system with no pump drawn on it (the primary keeps the legacy id).
+  final recircSystems = ref.watch(hotWaterRecircSystemsProvider);
+  for (var i = 0; i < recircSystems.length; i++) {
+    final sys = recircSystems[i];
+    if (sys.nodeIds.any(bind.hwRecircPumpNodeIds.contains)) continue;
+    if (sys.design.pump.selectedMotor.watts <= 0) continue;
     loads.add(MepEquipmentLoad.fromPumpDuty(
-      recirc.pump,
-      id: 'hw-recirc-pump',
-      name: kHwRecircPumpLoadName,
+      sys.design.pump,
+      id: i == 0 ? 'hw-recirc-pump' : 'hw-recirc-pump-${i + 1}',
+      name: i == 0 ? kHwRecircPumpLoadName : '$kHwRecircPumpLoadName ${i + 1}',
       source: MepLoadSource.hotWaterRecircPump,
     ));
   }
@@ -663,7 +666,14 @@ final equipmentNodeDutiesProvider =
     p = (dutyId == bind.supplyPumpNodeId ? ref.watch(pumpDutyProvider) : null) ??
         ref.watch(supplyMoverDutiesProvider)[dutyId];
     if (bind.hwRecircPumpNodeIds.contains(n.id)) {
-      p = ref.watch(hotWaterRecircProvider)?.pump;
+      // Round 26 — the duty of the hot-water SYSTEM this pump sits on.
+      p = null;
+      for (final sys in ref.watch(hotWaterRecircSystemsProvider)) {
+        if (sys.nodeIds.contains(n.id)) {
+          p = sys.design.pump;
+          break;
+        }
+      }
     }
     // Round 11 (hvac-network-4) — ANY drawn air unit a system is rooted at
     // carries THAT system's duty (the primary one included), not only the

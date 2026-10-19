@@ -73,6 +73,13 @@ class BomLine {
   /// `unmeasuredSegments > 0`, never only an all-zero total. Default 0.
   final int unmeasuredSegments;
 
+  /// Round 26 (hot-water-2-mirrored-return-missing-from-bom) — true for a line
+  /// that is NOT drawn but that the calculation ASSUMES (the DN20 hot-water
+  /// recirculation return mirrored along the index run when no return is
+  /// drawn). Its length drives the recirc heat loss + head, so the quotation
+  /// must carry it — flagged so it never reads as measured drawn work.
+  final bool assumed;
+
   const BomLine({
     required this.service,
     required this.kind,
@@ -86,6 +93,7 @@ class BomLine {
     this.heightMm,
     this.floorIndex,
     this.unmeasuredSegments = 0,
+    this.assumed = false,
   });
 
   /// True when at least one edge of this line could not be measured.
@@ -628,11 +636,16 @@ class ComponentLine {
   final String sizeLabel;
   final int count;
 
+  /// Round 26 — an ASSUMED (not drawn) piece the calculation relies on, e.g.
+  /// the hot-water recirculation pump when none is drawn.
+  final bool assumed;
+
   const ComponentLine({
     required this.service,
     required this.component,
     required this.sizeLabel,
     required this.count,
+    this.assumed = false,
   });
 }
 

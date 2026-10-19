@@ -481,6 +481,37 @@ Map<String, double> riserLayoutPositions(Network net, {ServiceType? focus}) {
   };
 }
 
+/// Round 26 (riser-drafting-3-3) — the B5 COINCIDENT spread, shared by the
+/// issued riser and the live canvas: nodes on one floor that land on the same
+/// x (a WC and a lavatory sharing a plan x — an ordinary toilet layout) are
+/// nudged apart, centred on the shared point, deterministically by node id.
+/// [x] is each node's laid-out x and [floorOf] its floor; [step] is the
+/// consumer's spacing (drawing units / screen px). Returns the x SHIFT per
+/// node (absent ⇒ 0). Pure.
+Map<String, double> coincidentSpreadDx({
+  required Map<String, double> x,
+  required Map<String, int> floorOf,
+  required double step,
+}) {
+  final groups = <String, List<String>>{};
+  for (final e in x.entries) {
+    final f = floorOf[e.key];
+    if (f == null) continue;
+    (groups['$f:${e.value.round()}'] ??= <String>[]).add(e.key);
+  }
+  final out = <String, double>{};
+  for (final g in groups.values) {
+    if (g.length < 2) continue;
+    g.sort();
+    final baseX = x[g.first]!;
+    for (var i = 0; i < g.length; i++) {
+      final target = baseX + (i - (g.length - 1) / 2) * step;
+      out[g[i]] = target - x[g[i]]!;
+    }
+  }
+  return out;
+}
+
 /// Round 14 (drafting-visual-3) — the per-SERVICE horizontal LANE of the
 /// combined riser sheet, as a multiple of a consumer's lane pitch (the export
 /// uses [kRiserLanePitch] drawing units; the canvas scales the same fraction of

@@ -279,6 +279,10 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
         ? ref.read(zoneStaticsProvider)
         : const [],
     hotWaterRecirc: hwRecirc,
+    additionalHotWaterRecirc: [
+      for (final sys in ref.read(hotWaterRecircSystemsProvider).skip(1))
+        sys.design,
+    ],
     sprinkler: sprinklerDrawn ? ref.read(sprinklerDesignProvider) : null,
     standpipe: standpipe,
     sprinklerRemoteArea:
@@ -865,15 +869,21 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // Round 16 (plumbing-plant-recirc-pump-not-bound) — the HW recirculation
   // pump the inspector and the report print, scheduled under the drawn HW
   // pump's tag (else HWP-01) — the same duty the panel way is fed on.
-  final recirc = ref.read(hotWaterRecircProvider);
-  if (recirc != null && recirc.pump.selectedMotor.watts > 0) {
-    final hwId = binding.hwRecircPumpNodeIds.isEmpty
-        ? null
-        : (binding.hwRecircPumpNodeIds.toList()..sort()).first;
-    final tag = tagOfNode(hwId) ?? 'HWP-01';
+  // Round 26 (hot-water-2-separate-systems-merged) — one row per hot-water
+  // system, under the pump drawn on THAT system (else HWP-0n).
+  final recircSystems = ref.read(hotWaterRecircSystemsProvider);
+  for (var i = 0; i < recircSystems.length; i++) {
+    final sys = recircSystems[i];
+    if (sys.design.pump.selectedMotor.watts <= 0) continue;
+    final onSys = [
+      for (final id in binding.hwRecircPumpNodeIds)
+        if (sys.nodeIds.contains(id)) id,
+    ]..sort();
+    final tag = tagOfNode(onSys.isEmpty ? null : onSys.first) ??
+        'HWP-${(i + 1).toString().padLeft(2, '0')}';
     pumps.add(
       PumpScheduleItem(
-        duty: recirc.pump,
+        duty: sys.design.pump,
         service: reportStringsFor(ref)(RptStringKey.esSvcHwRecirc),
         tag: tag,
         modelSpec: specs[tag],
