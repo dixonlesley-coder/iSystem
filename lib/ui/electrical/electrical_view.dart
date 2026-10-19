@@ -228,7 +228,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _Toolbar(
-          warningCount: allWarnings.length,
+          // Round 31 (ui-simplicity-4) — the danger-toned 'Electrical issues
+          // (n)' counts what Review's Warnings group counts: warnings +
+          // errors, never the info notes.
+          warningCount: allWarnings
+              .where((w) => w.severity != WarningSeverity.info)
+              .length,
           tab: tab,
           onTab: (t) => ref.read(electricalTabProvider.notifier).set(t),
           onSupply: _openSupply,
@@ -521,7 +526,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               .editCircuit(ref0.panelId, ref0.circuitId);
           setState(() => _circuitMenu = null);
         },
-        hasLoadPos: loadPos != null,
+        // Round 31 — an MEP-derived load follows its equipment: no un-place.
+        hasLoadPos: loadPos != null && circuit?.sourceEquipmentId == null,
         onUnplace: () =>
             unplaceCircuitLoad(ref, context, ref0.panelId, ref0.circuitId),
         // Cross-view jump to the Layout electrical layer — only when the
@@ -709,6 +715,12 @@ void unplaceCircuitLoad(
   String circuitId,
 ) {
   final ctrl = ref.read(electricalProjectProvider.notifier);
+  // Round 31 (stress-edits-2) — an MEP-derived load follows its equipment:
+  // the store refuses (and narrates); no undo step is pushed for a no-op.
+  if (ctrl.isMepDerivedWay(panelId, circuitId)) {
+    ctrl.setLoadPos(panelId, circuitId, null);
+    return;
+  }
   ctrl.pushUndoSnapshot();
   ctrl.setLoadPos(panelId, circuitId, null);
   ref

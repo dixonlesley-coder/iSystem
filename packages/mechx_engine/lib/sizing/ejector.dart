@@ -34,6 +34,49 @@ import 'pump.dart';
 // VERIFY: representative PVC / HDPE force-main value, not an SNI clause.
 const double kEjectorForceMainHwC = 140;
 
+/// Inline devices a force main passes straight through (Round 31): a
+/// discharge check valve, an isolating gate / balancing valve, a strainer and
+/// a riser marker never end the discharge.
+const Set<NodeComponent> kEjectorForceMainInlineComponents = {
+  NodeComponent.checkValve,
+  NodeComponent.gateValve,
+  NodeComponent.balancingValve,
+  NodeComponent.strainer,
+  NodeComponent.riser,
+};
+
+/// Whether the drainage leg [edge] leaving [fromId] leads — through
+/// degree-2 pass-through nodes — back to an ejector pump / booster or a pit
+/// (the other legs of a duplex discharge header).
+bool _legLeadsToEjector(Network net, NetEdge edge, String fromId) {
+  var here = fromId;
+  var e = edge;
+  final seen = <String>{fromId};
+  while (true) {
+    final next = e.fromId == here ? e.toId : e.fromId;
+    if (!seen.add(next)) return false;
+    final nn = net.nodeById(next);
+    if (nn == null) return false;
+    final c = nn.component;
+    if (c == NodeComponent.pump ||
+        c == NodeComponent.boosterSet ||
+        c == NodeComponent.groundTank) {
+      return true;
+    }
+    if (nn.role != NodeRole.main ||
+        (c != null && !kEjectorForceMainInlineComponents.contains(c))) {
+      return false;
+    }
+    final onward = [
+      for (final x in net.edgesAt(next))
+        if (x.service == ServiceType.drainage && x.id != e.id) x,
+    ];
+    if (onward.length != 1) return false;
+    here = next;
+    e = onward.single;
+  }
+}
+
 /// The drawn ejector pumps of [net]: a pump / booster set carrying a DRAINAGE
 /// edge and no supply / fire edge. Sorted by id.
 List<String> drawnEjectorPumpIds(Network net) {
@@ -86,8 +129,8 @@ List<String> drawnEjectorPumpIds(Network net) {
       net.nodeById(id)?.component == NodeComponent.groundTank;
   final base = elevOf(pump, incident.first);
 
-  // Walk each discharge edge (not into the pit) through bare degree-2
-  // drainage nodes: the force main.
+  // Walk each discharge edge (not into the pit) through pass-through
+  // drainage nodes, inline valves and a duplex header: the force main.
   var top = base;
   var friction = 0.0;
   for (final start in incident) {
@@ -122,14 +165,25 @@ List<String> drawnEjectorPumpIds(Network net) {
         for (final e in net.edgesAt(next))
           if (e.service == ServiceType.drainage && e.id != edge.id) e,
       ];
-      // A bare pass-through node continues the force main; anything else (a
-      // junction with the gravity sewer, a fixture, plant) ends it.
-      final bare = nn.component == null &&
-          nn.role == NodeRole.main &&
-          onward.length == 1;
-      if (!bare) break;
+      // Round 31 (regression-ejector-force-main-walk-stops-at-valve-or-
+      // header): the force main continues through an INLINE pass-through
+      // device (discharge check valve, isolating gate valve, strainer, riser
+      // marker) and through a duplex HEADER — a bare junction whose other
+      // legs lead back to another ejector / the pit — along its single
+      // onward leg. It ends only where gravity / fixture drainage joins
+      // (more than one non-ejector onward leg), at a fixture / plant, or at
+      // a dead end.
+      final passThrough = nn.role == NodeRole.main &&
+          (nn.component == null ||
+              kEjectorForceMainInlineComponents.contains(nn.component));
+      if (!passThrough) break;
+      final forward = [
+        for (final e in onward)
+          if (!_legLeadsToEjector(net, e, next)) e,
+      ];
+      if (forward.length != 1) break;
       here = next;
-      edge = onward.single;
+      edge = forward.single;
     }
   }
   final lift = math.max(0.0, top - base);

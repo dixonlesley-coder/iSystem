@@ -221,6 +221,61 @@ bool _isValidTermination(NetNode node) =>
     node.roofAreaM2 != null ||
     node.component != null;
 
+/// Round 31 (hvac-5-2) — whether the bare degree-1 node [leafId] is an AIR
+/// unit's OPEN BOUNDARY: its single duct reaches an air-unit PLANT (AHU, FCU,
+/// supply / exhaust fan, AC unit) directly or through degree-2 inline dampers
+/// that carry no airflow. That is exactly the drawing the sizer treats as the
+/// unit's outdoor-air INTAKE (Round 16/17 — sized on the delivered airflow,
+/// its friction added to the fan static) or an extract unit's DISCHARGE to
+/// outside, so it is a legitimate end, never a loose end. A bare leaf off a
+/// bare junction is still an undrawn terminal (not walked through). Pure.
+bool isAirOpenBoundaryLeaf(Network net, String leafId) {
+  final leaf = net.nodeById(leafId);
+  if (leaf == null ||
+      leaf.role != NodeRole.main ||
+      leaf.component != null ||
+      leaf.airflow != null) {
+    return false;
+  }
+  final first = net.edgesAt(leafId);
+  if (first.length != 1 || first.single.service.regime != FlowRegime.air) {
+    return false;
+  }
+  var edge = first.single;
+  var here = leafId;
+  final seen = <String>{leafId};
+  while (true) {
+    final next = edge.fromId == here ? edge.toId : edge.fromId;
+    if (!seen.add(next)) return false;
+    final n = net.nodeById(next);
+    if (n == null) return false;
+    if (n.role == NodeRole.plant) return _isAirUnitComponent(n.component);
+    final c = n.component;
+    final damper = c == NodeComponent.motorizedDamper ||
+        c == NodeComponent.volumeDamper ||
+        c == NodeComponent.fireDamper;
+    final onward = [
+      for (final e in net.edgesAt(next))
+        if (e.id != edge.id) e,
+    ];
+    if (!damper || n.airflow != null || onward.length != 1) return false;
+    here = next;
+    edge = onward.single;
+  }
+}
+
+bool _isAirUnitComponent(NodeComponent? c) => switch (c) {
+      NodeComponent.ahu ||
+      NodeComponent.fcu ||
+      NodeComponent.supplyFan ||
+      NodeComponent.exhaustFan ||
+      NodeComponent.acCassette ||
+      NodeComponent.acSplitWall ||
+      NodeComponent.acDucted =>
+        true,
+      _ => false,
+    };
+
 /// Detect every per-ELEMENT connectivity defect in [net]:
 ///   • [NetworkElementDefectKind.orphan] — a node in [Network.nodes] with degree
 ///     0 (connected to nothing);
@@ -251,7 +306,8 @@ List<NetworkElementDefect> networkElementDefects(Network net) {
     } else if (degree == 1 &&
         node.role == NodeRole.main &&
         edges!.single.service.regime != FlowRegime.gravity &&
-        !_isValidTermination(node)) {
+        !_isValidTermination(node) &&
+        !isAirOpenBoundaryLeaf(net, node.id)) {
       // GRAVITY (drainage / vent / rainwater) is SKIPPED for loose-ends, exactly
       // as networkConnectivityDefects skips it (lines 19-21): a degree-1 bare end
       // there is the NORMAL way to draw a legitimate terminus — a soil-stack

@@ -1807,7 +1807,7 @@ class NetworkController extends Notifier<DrawingState> {
     ];
     final priorIds = <String>{
       for (final node in state.network.nodes)
-        if ((node.component == NodeComponent.supplyDiffuser ||
+        if ((isSupplyAirTerminal(node.component) ||
                 node.component == NodeComponent.returnGrille ||
                 node.component == NodeComponent.exhaustGrille) &&
             roomTerminalOwnerOf(node, allRooms) == room.id)

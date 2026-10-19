@@ -258,7 +258,11 @@ PhaseBalance balancePhases(
   for (var pass = 0; pass < 40; pass++) {
     var improved = false;
     for (final c in singles) {
-      final from = fromAssign(assignment[c.id]!);
+      // Round 31 (stress-edits-1): `from` tracks the way's CURRENT line. An
+      // accepted move updates it, so the next trial never subtracts the
+      // current from the line the way already left (a stale `from` counted
+      // the way on two lines and dropped it from a third).
+      var from = fromAssign(assignment[c.id]!);
       for (final to in keys) {
         if (to == from) continue;
         final before = spread();
@@ -267,6 +271,7 @@ PhaseBalance balancePhases(
         phases[to] = phases[to]! + c.currentA;
         if (spread() < before - cost - 1e-9) {
           assignment[c.id] = _lineAssign(to);
+          from = to;
           improved = true;
         } else {
           phases[from] = phases[from]! + c.currentA;

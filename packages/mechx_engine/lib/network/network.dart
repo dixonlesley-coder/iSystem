@@ -165,6 +165,13 @@ enum NodeComponent {
   acDucted,
 }
 
+/// Round 31 (hvac-5-1) — the ONE supply-air terminal predicate: a supply
+/// diffuser or a LINEAR (slot) diffuser. Both carry the delivered airflow of
+/// a conditioned room; every room-served / stale / Auto-place test reads this
+/// so a room fed only through linear diffusers is never mistaken for unserved.
+bool isSupplyAirTerminal(NodeComponent? c) =>
+    c == NodeComponent.supplyDiffuser || c == NodeComponent.linearDiffuser;
+
 extension NodeComponentInfo on NodeComponent {
   /// The vertical [NodeRole] this component takes when placed.
   NodeRole get role => switch (this) {

@@ -38,9 +38,17 @@ class DuctStaticSolution {
   /// Id of the index (worst-served) node.
   final String criticalNodeId;
 
+  /// Round 31 (hvac-5-3) — the part of [totalStaticPressure] spent on the
+  /// unit's outdoor-air INTAKE path (0 when none is drawn). A caller that
+  /// combines this supply static with a RETURN drawn to the same unit takes
+  /// the intake and the return in PARALLEL (both enter the mixing box):
+  /// `(total - intake) + max(intake, return)`.
+  final Pressure intakeStaticPressure;
+
   const DuctStaticSolution({
     required this.totalStaticPressure,
     required this.criticalNodeId,
+    this.intakeStaticPressure = const Pressure(0),
   });
 }
 
@@ -183,5 +191,6 @@ DuctStaticSolution solveDuctStatic({
   return DuctStaticSolution(
     totalStaticPressure: Pressure(worst + intakePa + terminalLoss.pascals),
     criticalNodeId: criticalNodeId,
+    intakeStaticPressure: Pressure(intakePa),
   );
 }

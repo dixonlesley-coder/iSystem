@@ -134,6 +134,9 @@ ComplianceSummary buildComplianceSummaryFrom({
     if (accounted.contains(i)) continue;
     remainder.putIfAbsent(i.title, () => []).add(i);
   }
+  final advisoryOnly = remainder.values
+      .where((g) => !g.any(isFail))
+      .fold<int>(0, (n, g) => n + g.length);
 
   // Electrical sizing: the solved system's own warning list (error severity —
   // e.g. cable-ampacity-inadequate — must fail the sign-off).
@@ -223,20 +226,32 @@ ComplianceSummary buildComplianceSummaryFrom({
                     })
                   : strings.format(StringKey.complianceDetailOpenAck,
                       {'open': '$openUnverified', 'ack': '$ackUnverified'}))),
+      // Round 31 (ui-simplicity-4) — a per-title row only for a group holding
+      // a FAILING issue; info-only groups fold into ONE 'Advisory notes' row
+      // (a sign-off line titled 'Fixture type not set — PASS' read as a
+      // defect beside its own verdict).
       for (final e in remainder.entries)
-        ComplianceItem(e.key,
-            pass: !e.value.any(isFail),
-            detail: e.value.any(isFail)
-                ? pluralCount(
-                    e.value.where(isFail).length,
-                    strings(StringKey.complianceNounFindingOne),
-                    strings(StringKey.complianceNounFindingMany))
-                : pluralCount(
-                    e.value.length,
-                    strings(StringKey.complianceNounAdvisoryNoteOne),
-                    strings(StringKey.complianceNounAdvisoryNoteMany))),
+        if (e.value.any(isFail))
+          ComplianceItem(e.key,
+              pass: false,
+              detail: pluralCount(
+                  e.value.where(isFail).length,
+                  strings(StringKey.complianceNounFindingOne),
+                  strings(StringKey.complianceNounFindingMany))),
+      if (advisoryOnly > 0)
+        ComplianceItem(strings(StringKey.complianceCategoryAdvisoryNotes),
+            pass: true,
+            detail: pluralCount(
+                advisoryOnly,
+                strings(StringKey.complianceNounAdvisoryNoteOne),
+                strings(StringKey.complianceNounAdvisoryNoteMany))),
+      // Round 31 (ui-simplicity-4) — ONE rule for every category: a WARNING
+      // blocks the sign-off exactly like a mechanical warning does (the
+      // remainder rows' [isFail]); only info notes pass. It used to pass
+      // electrical warnings (PASS '5 warnings, no errors') while the same
+      // five read as yellow Warnings in the issue list below it.
       ComplianceItem(strings(StringKey.complianceCategoryElectricalSizing),
-          pass: eErrors == 0,
+          pass: eErrors == 0 && eWarns == 0,
           detail: eErrors == 0
               ? (eWarns == 0
                   ? strings(noPanels

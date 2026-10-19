@@ -890,12 +890,17 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   }
   // Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — one row per
   // drawn sewage ejector, under its plan tag, on the duty its MDP way is fed.
+  // Round 31 — a duplex STANDBY ejector is the duty ejector's machine,
+  // designated '(standby)' (its MDP way carries demand factor 0).
   final ejectors = ref.read(ejectorDutiesProvider);
   for (final id in ejectors.keys.toList()..sort()) {
     final tag = tagOfNode(id) ?? nextPumpTag();
+    final dutyId = binding.ejectorStandbyPumpNodeIds[id];
     pumps.add(PumpScheduleItem(
-      duty: ejectors[id]!,
-      service: reportStringsFor(ref)(RptStringKey.esSvcSewageEjector),
+      duty: ejectors[dutyId ?? id] ?? ejectors[id]!,
+      service: reportStringsFor(ref)(dutyId != null
+          ? RptStringKey.esSvcSewageEjectorStandby
+          : RptStringKey.esSvcSewageEjector),
       tag: tag,
       modelSpec: specs[tag],
     ));
@@ -2754,6 +2759,11 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            // Round 31 (ui-simplicity-4) — an uncalibrated sheet's state is
+            // stated by the Layout breadcrumb tail; here the 'Calibrate
+            // scale' button carries it, so the 'Not calibrated' status row
+            // shows only when there is no sheet to calibrate.
+            if (calibration != null || currentSheet == null)
             Container(
               padding: const EdgeInsets.all(MechXSpacing.sm),
               decoration: BoxDecoration(
@@ -2820,7 +2830,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
               ),
             ],
             if (currentSheet != null) ...[
-              const SizedBox(height: MechXSpacing.sm),
+              if (calibration != null) const SizedBox(height: MechXSpacing.sm),
               Align(
                 alignment: Alignment.centerLeft,
                 child: MechXButton(
@@ -4421,13 +4431,16 @@ class _ResultsSection extends ConsumerWidget {
 
     // L1: keep the BOM row leader short enough that it never fights the
     // quantity for space. When every listed line shares ONE service the
-    // service word is redundant ('15 DN riser'); with several services a
+    // service word is redundant ('DN15 riser'); with several services a
     // compact service word — the trailing 'water'/'air' dropped, never a
-    // mid-word abbreviation — keeps rows distinct ('15 DN · Cold riser').
+    // mid-word abbreviation — keeps rows distinct ('DN15 · Cold riser').
     final bomServiceCount = {for (final l in bom) l.service}.length;
     String bomLeader(BomLine line) {
-      final size =
-          '${line.diameterMm}${line.service.regime == FlowRegime.air ? ' Ø' : ' DN'}';
+      // Round 31 — the standard size notation every other surface prints
+      // (canvas chips, riser tags, Commercial BOM): 'DN15' / 'Ø300'.
+      final size = line.service.regime == FlowRegime.air
+          ? 'Ø${line.diameterMm}'
+          : 'DN${line.diameterMm}';
       final kindWord = line.kind == EdgeKind.riser ? 'riser' : 'run';
       if (bomServiceCount <= 1) return '$size $kindWord';
       final service = serviceLabel(
@@ -4571,23 +4584,29 @@ class _ResultsSection extends ConsumerWidget {
                     ? '—'
                     : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa',
               ),
-              _kvRow(
-                context,
-                'Booster',
-                downfeed == null
-                    ? '—'
-                    : downfeed.gravitySufficient
-                    ? 'gravity OK'
-                    : '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
-              ),
-              _kvRow(
-                context,
-                'PRV zones',
-                !_zoneTableNeeded(zoneStatics)
-                    ? 'none (tank head OK)'
-                    : '$prvStations · worst ${worstZone.toStringAsFixed(0)} kPa'
-                          ' ${zonesOk ? 'OK' : 'over'}',
-              ),
+              // Round 31 (ui-simplicity-4) — H8 on the downfeed branch too: a
+              // figure the headline card already states is not repeated as a
+              // supporting row. The booster card (or the 'gravity OK' card)
+              // carries the booster verdict; the PRV-zone card the zones.
+              if (downfeed == null ||
+                  (downfeed.gravitySufficient &&
+                      _zoneTableNeeded(zoneStatics)))
+                _kvRow(
+                  context,
+                  'Booster',
+                  downfeed == null ? '—' : 'gravity OK',
+                ),
+              if (downfeed == null ||
+                  !downfeed.gravitySufficient ||
+                  !_zoneTableNeeded(zoneStatics))
+                _kvRow(
+                  context,
+                  'PRV zones',
+                  !_zoneTableNeeded(zoneStatics)
+                      ? 'none (tank head OK)'
+                      : '$prvStations · worst ${worstZone.toStringAsFixed(0)} kPa'
+                            ' ${zonesOk ? 'OK' : 'over'}',
+                ),
             ],
             if (strategy == FeedStrategy.upfeed)
               _kvRow(context, 'Pressure zones', '${zones.length}'),

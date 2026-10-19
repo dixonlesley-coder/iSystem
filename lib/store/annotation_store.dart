@@ -11,7 +11,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart'
-    show Network, NetNode, NodeComponent, ServiceType;
+    show Network, NetNode, NodeComponent, ServiceType, isSupplyAirTerminal;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/cooling_load_detailed.dart'
     show DetailedCoolingLoadInputs, estimateDetailedCoolingLoad;
@@ -823,14 +823,16 @@ bool roomServedByDrawnAir(
   Set<String> sizedEdgeIds, {
   required bool extract,
 }) {
-  final terminals = extract
-      ? const {NodeComponent.exhaustGrille}
-      : const {NodeComponent.supplyDiffuser, NodeComponent.returnGrille};
+  // Round 31 (hvac-5-1): a linear diffuser serves a room exactly like a
+  // supply diffuser ([isSupplyAirTerminal]).
+  bool isTerminal(NodeComponent? c) => extract
+      ? c == NodeComponent.exhaustGrille
+      : isSupplyAirTerminal(c) || c == NodeComponent.returnGrille;
   final services = extract
       ? const {ServiceType.exhaust}
       : const {ServiceType.duct, ServiceType.returnAir};
   for (final n in net.nodes) {
-    if (!terminals.contains(n.component)) continue;
+    if (!isTerminal(n.component)) continue;
     if (roomTerminalOwnerOf(n, rooms) != room.id) continue;
     for (final e in net.edges) {
       if ((e.fromId == n.id || e.toId == n.id) &&

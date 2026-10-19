@@ -1196,7 +1196,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   };
   final terminalOwner = <String, String?>{
     for (final n in net.nodes)
-      if ((n.component == NodeComponent.supplyDiffuser ||
+      if ((isSupplyAirTerminal(n.component) ||
               n.component == NodeComponent.returnGrille ||
               n.component == NodeComponent.exhaustGrille) &&
           n.airflow != null)
@@ -1212,7 +1212,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     String? firstTerminal;
     for (final n in net.nodes) {
       final c = n.component;
-      final isSupply = c == NodeComponent.supplyDiffuser;
+      final isSupply = isSupplyAirTerminal(c);
       final isExtract = c == NodeComponent.returnGrille ||
           c == NodeComponent.exhaustGrille;
       if (!isSupply && !isExtract) continue;
@@ -1427,8 +1427,14 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   for (final v in const SniVentilationProfile().verifyChecklist) {
     addVerify(v);
   }
-  for (final v in const PuilProfile().verifyChecklist) {
-    addVerify(v);
+  // Round 31 (ui-simplicity-4) — the PUIL (electrical) verification debt is
+  // surfaced only once the project HAS electrical panels: a fresh project
+  // never shows a Review badge for electrical constants nothing uses. The
+  // electrical calc report keeps printing the full list (guardrail 6).
+  if (electricalProject.panels.isNotEmpty) {
+    for (final v in const PuilProfile().verifyChecklist) {
+      addVerify(v);
+    }
   }
 
   return [...criticals, ...warnings, ...infos];

@@ -533,6 +533,7 @@ enum StringKey {
   complianceCategorySheetCalibration,
   complianceCategoryStandardsVerification,
   complianceCategoryElectricalSizing,
+  complianceCategoryAdvisoryNotes,
 
   // I4 — the acknowledgement-log row category (compliance_store.dart): one row
   // per accepted advisory, carrying its audit trail (author/date/note) in the
@@ -1045,6 +1046,7 @@ enum StringKey {
   /// whose rows follow the equipment drawn on the plan.
   mepDerivedWayLocked,
   mepDerivedWayMoveLocked,
+  mepDerivedWayPositionLocked,
   mepBoardLocked,
 
   /// The detail of the first added way — its own name + motor rating (the
@@ -1833,6 +1835,7 @@ const Map<StringKey, String> _en = {
   StringKey.complianceCategorySheetCalibration: 'Sheet calibration',
   StringKey.complianceCategoryStandardsVerification: 'Standards verification',
   StringKey.complianceCategoryElectricalSizing: 'Electrical circuit sizing',
+  StringKey.complianceCategoryAdvisoryNotes: 'Advisory notes',
   StringKey.complianceAckEntry: 'Acknowledged: {label}',
 
   // H1 — compliance roll-up detail phrases.
@@ -2506,6 +2509,8 @@ const Map<StringKey, String> _en = {
       'This way follows equipment on the plan — delete the equipment there to remove it',
   StringKey.mepDerivedWayMoveLocked:
       'This way follows equipment on the plan and stays on the MEP Equipment board — feed that board from the panel instead',
+  StringKey.mepDerivedWayPositionLocked:
+      'This load sits at its equipment on the plan — move the equipment there to move it',
   StringKey.mepBoardLocked:
       'The MEP Equipment board follows the plan — delete its equipment there first',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
@@ -3308,6 +3313,7 @@ const Map<StringKey, String> _id = {
   StringKey.complianceCategorySheetCalibration: 'Kalibrasi lembar',
   StringKey.complianceCategoryStandardsVerification: 'Verifikasi standar',
   StringKey.complianceCategoryElectricalSizing: 'Pengukuran sirkuit listrik',
+  StringKey.complianceCategoryAdvisoryNotes: 'Catatan saran',
   StringKey.complianceAckEntry: 'Diakui: {label}',
 
   // H1 — compliance roll-up detail phrases.
@@ -4005,6 +4011,8 @@ const Map<StringKey, String> _id = {
       'Jalur ini mengikuti peralatan di denah — hapus peralatannya di sana untuk menghapusnya',
   StringKey.mepDerivedWayMoveLocked:
       'Jalur ini mengikuti peralatan di denah dan tetap di Panel Peralatan MEP — suplai panel tersebut dari panel tujuan',
+  StringKey.mepDerivedWayPositionLocked:
+      'Beban ini berada di peralatannya pada denah — pindahkan peralatannya di sana untuk memindahkannya',
   StringKey.mepBoardLocked:
       'Panel Peralatan MEP mengikuti denah — hapus peralatannya di sana terlebih dahulu',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',

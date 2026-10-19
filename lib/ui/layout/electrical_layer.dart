@@ -459,7 +459,9 @@ class ElectricalLayoutLayer extends ConsumerWidget {
         child: Opacity(
           opacity: opacity,
           child: _LayoutNodeDraggable(
-            enabled: interactive,
+            // Round 31 (stress-edits-2) — an MEP-derived way's load sits at
+            // its equipment node (re-derived on every sync): not draggable.
+            enabled: interactive && c.sourceEquipmentId == null,
             scale: vt.scale,
             world: Offset(lp.x, lp.y),
             onDragStart: ctrl.pushUndoSnapshot,

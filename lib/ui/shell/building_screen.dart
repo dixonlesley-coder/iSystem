@@ -80,8 +80,12 @@ class BuildingScreen extends ConsumerWidget {
         HubStatRow(stats: [
           ('Total height', '${trimmedMetres(building.totalHeight.meters)} m'),
           ('Levels', '${building.levelCount}'),
-          ('Roof elevation',
-              '${signedElevationText(building.roofElevation.meters)} m'),
+          // Round 31 (ui-simplicity-4) — without basements the roof elevation
+          // IS the total height (ground datum 0.0), so it is shown only when
+          // basements make the two differ.
+          if (building.groundIndex > 0)
+            ('Roof elevation',
+                '${signedElevationText(building.roofElevation.meters)} m'),
         ]),
         const SizedBox(height: MechXSpacing.lg),
         // Top floor first, matching how a building reads on an elevation.
