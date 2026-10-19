@@ -55,19 +55,23 @@ class _MechanicalPricelist extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Mechanical pricelist',
+        Text(context.strings(StringKey.commercialMechPricelist),
             style: type.title.copyWith(color: colors.textPrimary)),
         const SizedBox(height: MechXSpacing.xxs),
         Text(
-          '$priced of ${est.lines.length} priced',
+          context.strings.format(StringKey.commercialMechPricedCount,
+              {'priced': priced, 'total': est.lines.length}),
           style: type.caption.copyWith(color: colors.textMuted),
         ),
         const SizedBox(height: MechXSpacing.sm),
         CommercialTable(
-          columns: const [
-            CommercialColumn('Item', flex: 10),
-            CommercialColumn('Unit', flex: 2),
-            CommercialColumn('Unit price', flex: 4, numeric: true),
+          columns: [
+            CommercialColumn(context.strings(StringKey.commercialColItem),
+                flex: 10),
+            CommercialColumn(context.strings(StringKey.commercialColUnit),
+                flex: 2),
+            CommercialColumn(context.strings(StringKey.commercialColUnitPrice),
+                flex: 4, numeric: true),
           ],
           rows: [
             for (final l in est.lines)

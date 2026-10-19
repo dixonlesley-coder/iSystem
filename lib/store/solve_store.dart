@@ -17,6 +17,7 @@ import 'package:mechx_engine/sizing/drainage_sizing.dart'
 import 'package:mechx_engine/sizing/fan.dart';
 import 'package:mechx_engine/sizing/hot_water.dart';
 import 'package:mechx_engine/sizing/consumables.dart';
+import 'package:mechx_engine/sizing/ejector.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/pipe_optimizer.dart';
 import 'package:mechx_engine/sizing/pump.dart';
@@ -934,6 +935,35 @@ Head? transferPumpHead({
   }
   return Head(math.max(0, h));
 }
+
+/// Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — the solved duty
+/// of every drawn SEWAGE EJECTOR (a pump / booster set on the drainage
+/// service), keyed by node id: the pit's DFU inflow at the lift + friction of
+/// its force main (`sizing/ejector.dart`). The panel feed and the equipment
+/// schedule read it, so the MDP way and the schedule describe the same
+/// machine (it used to be fed the 1.5 kW component default with no row).
+final ejectorDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final ids = drawnEjectorPumpIds(net);
+  if (ids.isEmpty) return const {};
+  final sizing = ref.watch(sizingProvider);
+  final fu = ref.watch(edgeFixtureUnitsProvider);
+  final project = ref.watch(projectControllerProvider);
+  final out = <String, PumpDuty>{};
+  for (final id in ids) {
+    final d = ejectorPumpDuty(
+      net: net,
+      pumpId: id,
+      sizing: sizing,
+      edgeFixtureUnits: fu,
+      building: project.building,
+      mounting: project.mounting,
+      calibrationBySheet: project.calibrations,
+    );
+    if (d != null) out[id] = d;
+  }
+  return out;
+});
 
 /// Round 16 — the solved duty of EVERY drawn supply mover, keyed by node id:
 /// the root pump / inline boosters sized in series ([seriesMoverHeads]) on

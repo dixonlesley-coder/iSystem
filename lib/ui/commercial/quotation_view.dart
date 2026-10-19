@@ -106,8 +106,10 @@ class QuotationView extends ConsumerWidget {
                 numeric: true),
           ],
           rows: [
-            _money('Mechanical material', q.mechanicalMaterial),
-            _money('Electrical material', q.electricalMaterial),
+            _money(context.strings(StringKey.commercialMechMaterial),
+                q.mechanicalMaterial),
+            _money(context.strings(StringKey.commercialElecMaterial),
+                q.electricalMaterial),
             _money(context.strings(StringKey.commercialItemMaterial),
                 q.materialSubtotal),
             _money(

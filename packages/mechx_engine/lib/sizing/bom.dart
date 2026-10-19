@@ -676,12 +676,17 @@ class ComponentLine {
   /// the hot-water recirculation pump when none is drawn.
   final bool assumed;
 
+  /// Round 30 (costing-2-1) — a scheduled EQUIPMENT item (pump, tank, AHU …)
+  /// rather than a pipe-sized component; [sizeLabel] is then its duty.
+  final bool equipment;
+
   const ComponentLine({
     required this.service,
     required this.component,
     required this.sizeLabel,
     required this.count,
     this.assumed = false,
+    this.equipment = false,
   });
 }
 
@@ -734,6 +739,75 @@ List<ComponentLine> buildComponentTakeoff({
           component: e.key.$2,
           sizeLabel: e.key.$3,
           count: e.value),
+  ]..sort((a, b) {
+      final s = a.service.index.compareTo(b.service.index);
+      if (s != 0) return s;
+      final c = a.component.index.compareTo(b.component.index);
+      if (c != 0) return c;
+      return a.sizeLabel.compareTo(b.sizeLabel);
+    });
+  return lines;
+}
+
+/// Round 30 (costing-2-1) — the drawn PLANT a quotation buys as EQUIPMENT:
+/// pumps, tanks, booster sets, AHU / FCU, fans and AC indoor units (excluded
+/// from [kTakeoffComponents] because they are scheduled by DUTY, not by pipe
+/// size).
+const Set<NodeComponent> kEquipmentComponents = {
+  NodeComponent.pump,
+  NodeComponent.boosterSet,
+  NodeComponent.roofTank,
+  NodeComponent.groundTank,
+  NodeComponent.ahu,
+  NodeComponent.fcu,
+  NodeComponent.supplyFan,
+  NodeComponent.exhaustFan,
+  NodeComponent.acCassette,
+  NodeComponent.acSplitWall,
+  NodeComponent.acDucted,
+};
+
+ServiceType _equipmentDefaultService(NodeComponent c) => switch (c) {
+      NodeComponent.ahu ||
+      NodeComponent.fcu ||
+      NodeComponent.supplyFan ||
+      NodeComponent.acCassette ||
+      NodeComponent.acSplitWall ||
+      NodeComponent.acDucted =>
+        ServiceType.duct,
+      NodeComponent.exhaustFan => ServiceType.exhaust,
+      _ => ServiceType.coldWater,
+    };
+
+/// Round 30 (costing-2-1) — the per-piece take-off of every drawn plant item
+/// in [kEquipmentComponents], grouped by (service, component, duty). The duty
+/// is [dutyByNodeId]'s string for that node (the equipment-schedule duty the
+/// app already prints, e.g. `4.7 L/s @ 133.9 m · 11.00 kW`), '' when none —
+/// so each duty prices apart and stays UNPRICED until the estimator prices
+/// it. Service as [buildComponentTakeoff]. Pure; sorted like it.
+List<ComponentLine> buildEquipmentTakeoff({
+  required Network net,
+  Map<String, String> dutyByNodeId = const {},
+}) {
+  final acc = <(ServiceType, NodeComponent, String), int>{};
+  for (final n in net.nodes) {
+    final c = n.component;
+    if (c == null || !kEquipmentComponents.contains(c)) continue;
+    final incident = net.edgesAt(n.id).toList()
+      ..sort((a, b) => a.service.index.compareTo(b.service.index));
+    final service =
+        incident.isEmpty ? _equipmentDefaultService(c) : incident.first.service;
+    final key = (service, c, dutyByNodeId[n.id] ?? '');
+    acc[key] = (acc[key] ?? 0) + 1;
+  }
+  final lines = [
+    for (final e in acc.entries)
+      ComponentLine(
+          service: e.key.$1,
+          component: e.key.$2,
+          sizeLabel: e.key.$3,
+          count: e.value,
+          equipment: true),
   ]..sort((a, b) {
       final s = a.service.index.compareTo(b.service.index);
       if (s != 0) return s;

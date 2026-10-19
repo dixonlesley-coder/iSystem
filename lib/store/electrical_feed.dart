@@ -672,7 +672,9 @@ final equipmentNodeDutiesProvider =
     // as the duty pump it backs up (wired at its duty, demand factor 0).
     final dutyId = bind.supplyStandbyPumpNodeIds[n.id] ?? n.id;
     p = (dutyId == bind.supplyPumpNodeId ? ref.watch(pumpDutyProvider) : null) ??
-        ref.watch(supplyMoverDutiesProvider)[dutyId];
+        ref.watch(supplyMoverDutiesProvider)[dutyId] ??
+        // Round 30 — a sewage ejector carries its own solved duty.
+        ref.watch(ejectorDutiesProvider)[n.id];
     if (bind.hwRecircPumpNodeIds.contains(n.id)) {
       // Round 26 — the duty of the hot-water SYSTEM this pump sits on.
       p = null;

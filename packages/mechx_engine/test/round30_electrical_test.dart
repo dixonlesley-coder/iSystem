@@ -128,4 +128,77 @@ void main() {
       }
     });
   });
+
+  group('SPD lines carry their connection', () {
+    test('3φ MDP feeding a 1φ LP: two SPD lines, 3+N and 1+N, never merged',
+        () {
+      final pr = ElectricalProject(
+        id: 'pr',
+        name: 'SPD',
+        panels: [
+          ElectricalPanel(
+            id: 'MDP',
+            name: 'MDP',
+            system: ElectricalSystem.threePhase,
+            voltage: const Voltage(400),
+            circuits: [
+              ElectricalCircuit(
+                  id: 'm',
+                  name: 'Motor',
+                  loadKind: LoadKind.motor,
+                  loadW: 15000,
+                  motorKw: 11,
+                  phases: 3,
+                  cosPhi: 0.85,
+                  length: const Length(20)),
+              // A 40 m feeder: past the secondary-SPD distance, so LP-1
+              // recommends its own device.
+              const ElectricalCircuit(
+                  id: 'f',
+                  name: 'LP feed',
+                  feedsPanelId: 'LP',
+                  length: Length(40)),
+            ],
+          ),
+          ElectricalPanel(
+            id: 'LP',
+            name: 'LP-1',
+            system: ElectricalSystem.singlePhase,
+            voltage: const Voltage(230),
+            circuits: [
+              ElectricalCircuit(
+                  id: 'l',
+                  name: 'Lights',
+                  loadKind: LoadKind.lighting,
+                  loadW: 2000,
+                  length: const Length(15)),
+            ],
+          ),
+        ],
+      );
+      final sys = computeSystem(p, pr);
+      final adv = computeAdvancedStudy(p, pr, sys);
+      final spd = [
+        for (final l in adv.bom.lines)
+          if ((l.priceKey ?? '').startsWith('elec:spd:')) l,
+      ];
+      final recommended = adv.spd.values.where((r) => r.recommended).length;
+      expect(spd.fold<double>(0, (a, l) => a + l.qty), recommended);
+      for (final l in spd) {
+        final k = l.priceKey!;
+        expect(k.endsWith(':3+n') || k.endsWith(':1+n') ||
+            k.endsWith(':3+1') || k.endsWith(':1+1'), isTrue, reason: k);
+        // The description names the same connection the key carries.
+        final conn = k.split(':').last.toUpperCase();
+        expect(l.description, contains(conn), reason: k);
+      }
+      // Both boards recommend a type-2 device at the same Uc (the merge the
+      // finding found); the keys now differ by the connection.
+      expect(adv.spd['MDP']!.recommended, isTrue);
+      expect(adv.spd['LP']!.recommended, isTrue);
+      expect(spd.map((l) => l.priceKey).toSet().length, 2);
+      expect(spd.any((l) => l.priceKey!.endsWith(':3+n')), isTrue);
+      expect(spd.any((l) => l.priceKey!.endsWith(':1+n')), isTrue);
+    });
+  });
 }

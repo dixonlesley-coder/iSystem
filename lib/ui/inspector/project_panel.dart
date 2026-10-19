@@ -871,6 +871,18 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       ),
     );
   }
+  // Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — one row per
+  // drawn sewage ejector, under its plan tag, on the duty its MDP way is fed.
+  final ejectors = ref.read(ejectorDutiesProvider);
+  for (final id in ejectors.keys.toList()..sort()) {
+    final tag = tagOfNode(id) ?? nextPumpTag();
+    pumps.add(PumpScheduleItem(
+      duty: ejectors[id]!,
+      service: reportStringsFor(ref)(RptStringKey.esSvcSewageEjector),
+      tag: tag,
+      modelSpec: specs[tag],
+    ));
+  }
   // Round 16 (plumbing-plant-recirc-pump-not-bound) — the HW recirculation
   // pump the inspector and the report print, scheduled under the drawn HW
   // pump's tag (else HWP-01) — the same duty the panel way is fed on.
@@ -1993,6 +2005,7 @@ Future<bool> writeSubmittalPackageToDir(
       mechanical: mechCost,
       electrical: elecCost,
       projectName: base,
+      strings: reportStringsFor(ref),
     ),
   );
 

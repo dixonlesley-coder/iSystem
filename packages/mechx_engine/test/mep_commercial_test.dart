@@ -286,7 +286,8 @@ void main() {
       // 5 mechanical + 1 electrical + 1 subtotal row.
       expect(rows.length, 5 + 1 + 1 + 1); // +1 header
       expect(csv, contains('mechanical,20,m,pipe,Cold water pipe DN50'));
-      expect(csv, contains('electrical,2,,breaker,MCB 16A'));
+      // Round 30 (costing-2-5): a breaker is bought per piece ('ea').
+      expect(csv, contains('electrical,2,ea,breaker,MCB 16A'));
       // Combined subtotal = 1 260 000 + 180 000 = 1 440 000.
       expect(csv, contains('1440000.00'));
       // CSV money stays UNGROUPED + 2 dp (spreadsheet-parseable).

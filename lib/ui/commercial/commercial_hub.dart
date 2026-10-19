@@ -9,7 +9,7 @@ import '../../store/app_state.dart';
 import '../../store/commercial_store.dart';
 import '../../store/project_store.dart';
 import '../inspector/project_panel.dart'
-    show pickExportSave, runExportGuarded;
+    show pickExportSave, reportStringsFor, runExportGuarded;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -148,6 +148,7 @@ Future<void> exportMepProposalMarkdown(WidgetRef ref) => runExportGuarded(
           mechanical: ref.read(mechanicalCostProvider),
           electrical: ref.read(electricalCostProvider),
           projectName: name,
+          strings: reportStringsFor(ref),
         );
         final full = await pickExportSave(ref,
             dialogTitle: MechXStringsData(ref.read(localeProvider))(

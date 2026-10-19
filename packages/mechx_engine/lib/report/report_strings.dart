@@ -336,6 +336,7 @@ enum RptStringKey {
   esSvcMechVent,
   esSvcExhaustVent,
   esSvcTransferPump,
+  esSvcSewageEjector,
   esSvcHwRecirc,
   warnLeadIn,
   lkGeneral,
@@ -392,6 +393,27 @@ enum RptStringKey {
   fitTee,
   fitCross,
   fitReducer,
+  // Round 30 (costing-2-7) — the MEP proposal (mepQuotationToMarkdown).
+  mqTitle,
+  mqMechBom,
+  mqElecBom,
+  mqMechHead,
+  mqElecHead,
+  mqUnpriced,
+  mqQuotation,
+  mqQuoteHead,
+  mqMechMaterial,
+  mqElecMaterial,
+  mqMaterialSubtotal,
+  mqLabour,
+  mqOverhead,
+  mqContingency,
+  mqMargin,
+  mqGrandTotal,
+  mqUnmeasuredNote,
+  mqUnpricedNote,
+  mqAssumedNote,
+  mqEquipmentNote,
 }
 
 /// English — the source language. Every value MUST match the inline literal it
@@ -750,6 +772,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esSvcMechVent: 'Mechanical ventilation',
   RptStringKey.esSvcExhaustVent: 'Exhaust ventilation',
   RptStringKey.esSvcTransferPump: 'Transfer pump (ground tank to roof tank)',
+  RptStringKey.esSvcSewageEjector: 'Sewage ejector (pit to building drain)',
   RptStringKey.esSvcHwRecirc: 'Hot-water recirculation',
   RptStringKey.warnLeadIn: '[{code}] ',
   RptStringKey.lkGeneral: 'general',
@@ -806,6 +829,46 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.fitTee: 'tee',
   RptStringKey.fitCross: 'cross',
   RptStringKey.fitReducer: 'reducer',
+  RptStringKey.mqTitle:
+      '# MEP proposal — {project}',
+  RptStringKey.mqMechBom:
+      '## Mechanical bill of materials',
+  RptStringKey.mqElecBom:
+      '## Electrical bill of materials',
+  RptStringKey.mqMechHead:
+      '| Qty | Unit | Item | Unit ({cur}) | Total ({cur}) |',
+  RptStringKey.mqElecHead:
+      '| Qty | Category | Description | SKU | Unit ({cur}) | Total ({cur}) |',
+  RptStringKey.mqUnpriced:
+      '(unpriced)',
+  RptStringKey.mqQuotation:
+      '## Quotation',
+  RptStringKey.mqQuoteHead:
+      '| Item | Amount ({cur}) |',
+  RptStringKey.mqMechMaterial:
+      'Mechanical material',
+  RptStringKey.mqElecMaterial:
+      'Electrical material',
+  RptStringKey.mqMaterialSubtotal:
+      'Material subtotal',
+  RptStringKey.mqLabour:
+      'Labour ({h} h)',
+  RptStringKey.mqOverhead:
+      'Overhead',
+  RptStringKey.mqContingency:
+      'Contingency',
+  RptStringKey.mqMargin:
+      'Margin',
+  RptStringKey.mqGrandTotal:
+      'Grand total',
+  RptStringKey.mqUnmeasuredNote:
+      '> {n} mechanical line(s) include runs on an uncalibrated sheet, measured at 0 m: their metres, material and labour are understated until the sheet is calibrated.',
+  RptStringKey.mqUnpricedNote:
+      '> {n} line(s) are unpriced (no price in the pricelist) and are excluded from the material subtotal ({mech} mechanical, {elec} electrical).',
+  RptStringKey.mqAssumedNote:
+      '> {n} mechanical line(s) are assumptions the calculation relies on but the drawing does not show (marked \'assumed\'): confirm them before ordering.',
+  RptStringKey.mqEquipmentNote:
+      '> {n} scheduled equipment item(s) (pumps, tanks, air units, fans, AC units) are listed by duty and priced per piece; an unpriced item is excluded from the subtotal.',
 };
 
 /// Bahasa Indonesia — natural consulting-report phrasing, reusing the
@@ -1162,6 +1225,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esSvcMechVent: 'Ventilasi mekanis',
   RptStringKey.esSvcExhaustVent: 'Ventilasi udara buang',
   RptStringKey.esSvcTransferPump: 'Pompa transfer (tangki bawah ke tangki atap)',
+  RptStringKey.esSvcSewageEjector:
+      'Pompa ejektor air kotor (bak ke saluran gedung)',
   RptStringKey.esSvcHwRecirc: 'Resirkulasi air panas',
   RptStringKey.warnLeadIn: '[{code}] (pesan dalam bahasa Inggris) ',
   RptStringKey.lkGeneral: 'umum',
@@ -1218,6 +1283,46 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.fitTee: 'tee',
   RptStringKey.fitCross: 'silang',
   RptStringKey.fitReducer: 'reduser',
+  RptStringKey.mqTitle:
+      '# Penawaran MEP — {project}',
+  RptStringKey.mqMechBom:
+      '## Daftar material mekanis',
+  RptStringKey.mqElecBom:
+      '## Daftar material elektrik',
+  RptStringKey.mqMechHead:
+      '| Jml | Satuan | Item | Harga satuan ({cur}) | Jumlah ({cur}) |',
+  RptStringKey.mqElecHead:
+      '| Jml | Kategori | Uraian | SKU | Harga satuan ({cur}) | Jumlah ({cur}) |',
+  RptStringKey.mqUnpriced:
+      '(belum berharga)',
+  RptStringKey.mqQuotation:
+      '## Penawaran harga',
+  RptStringKey.mqQuoteHead:
+      '| Item | Jumlah ({cur}) |',
+  RptStringKey.mqMechMaterial:
+      'Material mekanis',
+  RptStringKey.mqElecMaterial:
+      'Material elektrik',
+  RptStringKey.mqMaterialSubtotal:
+      'Subtotal material',
+  RptStringKey.mqLabour:
+      'Upah kerja ({h} jam)',
+  RptStringKey.mqOverhead:
+      'Biaya umum',
+  RptStringKey.mqContingency:
+      'Biaya tak terduga',
+  RptStringKey.mqMargin:
+      'Margin',
+  RptStringKey.mqGrandTotal:
+      'Total keseluruhan',
+  RptStringKey.mqUnmeasuredNote:
+      '> {n} baris mekanis memuat jalur pada lembar yang belum dikalibrasi (terukur 0 m): panjang, material dan upahnya masih terlalu rendah sampai lembar dikalibrasi.',
+  RptStringKey.mqUnpricedNote:
+      '> {n} baris belum berharga (tidak ada harga di daftar harga) dan tidak termasuk dalam subtotal material ({mech} mekanis, {elec} elektrik).',
+  RptStringKey.mqAssumedNote:
+      '> {n} baris mekanis adalah asumsi perhitungan yang tidak tergambar (bertanda \'assumed\'): pastikan sebelum pemesanan.',
+  RptStringKey.mqEquipmentNote:
+      '> {n} item peralatan terjadwal (pompa, tangki, unit udara, kipas, unit AC) dicantumkan menurut kapasitas dan diberi harga per unit; item yang belum berharga tidak termasuk dalam subtotal.',
 };
 
 /// Resolves a [RptStringKey] against a [ReportLocale], mirroring the app's
