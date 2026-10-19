@@ -57,6 +57,11 @@ class CalcReportData {
   final List<DownfeedZoneStatic> zones;
   final HotWaterRecircDesign? hotWaterRecirc;
 
+  /// Round 26 (hot-water-2-separate-systems-merged) — the recirculation
+  /// designs of every FURTHER hot-water system (a second heater's wing), each
+  /// printed on its own line after [hotWaterRecirc]. Empty ⇒ unchanged.
+  final List<HotWaterRecircDesign> additionalHotWaterRecirc;
+
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
 
@@ -154,6 +159,7 @@ class CalcReportData {
     this.gravitySufficient = false,
     this.zones = const [],
     this.hotWaterRecirc,
+    this.additionalHotWaterRecirc = const [],
     this.sprinkler,
     this.standpipe,
     this.sprinklerRemoteArea,
@@ -587,8 +593,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               {'m': d.boosterHead!.meters.toStringAsFixed(1)}),
     }));
   }
-  final hwr = d.hotWaterRecirc;
-  if (hwr != null) {
+  for (final hwr in [
+    if (d.hotWaterRecirc != null) d.hotWaterRecirc!,
+    ...d.additionalHotWaterRecirc,
+  ]) {
     ws.writeln(strings.format(RptStringKey.wsHotWaterRecirc, {
       'lps': hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2),
       // Round 16 — the loop LENGTH and the loop HEAD are separate figures.

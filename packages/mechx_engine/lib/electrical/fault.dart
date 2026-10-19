@@ -881,6 +881,9 @@ FaultStudyResult faultStudy(
   // wording ⇒ byte-identical.
   final cappedFeeders = sys.feederFloorsCapped;
   final warnings = <ElectricalWarning>[];
+  // Round 26 — devices already given a service-capacity (Ics) warning in the
+  // per-way pass, so the feeder selectivity pass never repeats it.
+  final icsWarned = <String>{};
   final panelResults = <String, PanelFaultResult>{};
   final circuitResults = <String, CircuitFaultResult>{};
   final selectivity = <SelectivityResult>[];
@@ -1019,6 +1022,15 @@ FaultStudyResult faultStudy(
       incomerAdequate: incomerAdequate,
       incomerKa: incomerKa,
     );
+    final incomerIcs = incomerAdequate
+        ? _icsShortfall(
+            label: '${panelResult.name} incomer',
+            icuKa: incomerKa,
+            deviceClass: incomer.deviceClass,
+            faultKa: faultA / 1000.0,
+            panelId: panelId)
+        : null;
+    if (incomerIcs != null) warnings.add(incomerIcs);
     if (!incomerAdequate) {
       warnings.add(ElectricalWarning(
         code: 'breaking-capacity-inadequate',
@@ -1040,6 +1052,19 @@ FaultStudyResult faultStudy(
         faultA / 1000.0,
       );
       final adequate = ka + 1e-9 >= faultA / 1000.0;
+      final wayIcs = adequate
+          ? _icsShortfall(
+              label: '${panelResult.name} / ${c.name}',
+              icuKa: ka,
+              deviceClass: c.breaker.deviceClass,
+              faultKa: faultA / 1000.0,
+              panelId: panelId,
+              circuitId: c.circuitId)
+          : null;
+      if (wayIcs != null) {
+        warnings.add(wayIcs);
+        icsWarned.add('$panelId|${c.circuitId}');
+      }
       if (!adequate) {
         warnings.add(ElectricalWarning(
           code: 'breaking-capacity-inadequate',
@@ -1302,26 +1327,15 @@ FaultStudyResult faultStudy(
         circuitId: feederCircuitId,
       ));
     }
-    if (!icsAdequate) {
-      // E8d — the CODE is kept verbatim (a stable acknowledgement / compliance
-      // discriminator); only the wording is clarified. "Service capacity" here
-      // is the IEC 60947-2 DEVICE rating Ics (the fault a breaker can clear and
-      // stay in service after), NOT the PLN supply/connection capacity.
-      warnings.add(ElectricalWarning(
-        code: 'service-capacity-inadequate',
-        severity: WarningSeverity.warning,
-        message:
-            '${feeder.name}: DEVICE rated service short-circuit breaking '
-            'capacity Ics (~${_fmt(_round(icu * icsFraction, 1))} kA, '
-            '${(icsFraction * 100).round()} % of Icu ${_fmt(icu)} kA, IEC '
-            '60947-2) is below the ${_fmt(_round(upstreamFaultKa, 2))} kA '
-            'prospective fault at its bus — the breaker may survive one '
-            'clearance (Icu) but is not rated to remain in service afterwards; '
-            'specify a 100 % Ics device. (A device rating, not the PLN supply '
-            'connection capacity.)',
-        panelId: parentId,
-        circuitId: feederCircuitId,
-      ));
+    if (!icsAdequate && !icsWarned.contains('$parentId|$feederCircuitId')) {
+      final w = _icsShortfall(
+          label: feeder.name,
+          icuKa: icu,
+          deviceClass: feeder.breaker.deviceClass,
+          faultKa: upstreamFaultKa,
+          panelId: parentId,
+          circuitId: feederCircuitId);
+      if (w != null) warnings.add(w);
     }
   }
 
@@ -1363,6 +1377,40 @@ ElectricalCircuit? _modelCircuitById(ElectricalPanel? panelModel, String id) {
     if (c.id == id) return c;
   }
   return null;
+}
+
+/// Round 26 (ics-unchecked-on-incomers-and-final-mccbs) — the ONE IEC
+/// 60947-2 service-capacity test, applied to EVERY device the study specifies
+/// (incomer, each way, each feeder): Ics = [serviceCapacityFraction]·Icu must
+/// cover the prospective fault at its bus. Null when adequate. The CODE stays
+/// `service-capacity-inadequate` (E8d — a stable acknowledgement / compliance
+/// discriminator). "Service capacity" is the DEVICE rating Ics (the fault a
+/// breaker can clear and stay in service after), NOT the PLN supply capacity.
+ElectricalWarning? _icsShortfall({
+  required String label,
+  required double icuKa,
+  required BreakerClass deviceClass,
+  required double faultKa,
+  required String? panelId,
+  String? circuitId,
+}) {
+  final icsFraction = serviceCapacityFraction[deviceClass] ?? 1;
+  if (icuKa * icsFraction + 1e-9 >= faultKa) return null;
+  return ElectricalWarning(
+    code: 'service-capacity-inadequate',
+    severity: WarningSeverity.warning,
+    message:
+        '$label: DEVICE rated service short-circuit breaking '
+        'capacity Ics (~${_fmt(_round(icuKa * icsFraction, 1))} kA, '
+        '${(icsFraction * 100).round()} % of Icu ${_fmt(icuKa)} kA, IEC '
+        '60947-2) is below the ${_fmt(_round(faultKa, 2))} kA '
+        'prospective fault at its bus — the breaker may survive one '
+        'clearance (Icu) but is not rated to remain in service afterwards; '
+        'specify a 100 % Ics device. (A device rating, not the PLN supply '
+        'connection capacity.)',
+    panelId: panelId,
+    circuitId: circuitId,
+  );
 }
 
 String _fmt(double v) =>

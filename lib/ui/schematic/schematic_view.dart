@@ -839,6 +839,10 @@ class _AutoElevation extends ConsumerStatefulWidget {
 }
 
 class _AutoElevationState extends ConsumerState<_AutoElevation> {
+  /// Round 26 — the painter of the last build: its framed node layout is the
+  /// one the inferred-riser hit test reads.
+  _AutoSchematicPainter? _painter;
+
   Size _size = Size.zero;
   bool _hoverInferred = false;
 
@@ -872,7 +876,9 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
 
   List<_InferredRiser> _inferred(Network net, int levels) {
     if (!widget.inferRisers || _size.isEmpty) return const [];
-    final pos = _autoNodePositions(net, levels, _size, focus: widget.focus);
+    // Round 26 — the SAME framed layout the painter draws.
+    final pos = _painter?.layoutNodePositions(_size) ??
+        _autoNodePositions(net, levels, _size, focus: widget.focus);
     return _computeInferredRisers(net, pos, widget.focus);
   }
 
@@ -1009,15 +1015,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
         final vt = _current;
         // The painted single-line, wrapped in the ViewportTransform (identity by
         // default ⇒ byte-identical). The corner overlays below stay screen-fixed.
-        final content = ClipRect(
-          child: Transform.translate(
-            offset: vt.offset,
-            child: Transform.scale(
-              scale: vt.scale,
-              alignment: Alignment.topLeft,
-              child: CustomPaint(
-                size: _size,
-                painter: _AutoSchematicPainter(
+        final painter = _AutoSchematicPainter(
                   network: network,
                   sizing: sizing,
                   building: building,
@@ -1031,9 +1029,23 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
                   showDetails: widget.showDetails,
                   // G2: the hot-water recirculation loop exists when the engine
                   // sizes one (the provider is non-null) — draw the HWR return.
-                  hotWaterRecirc:
-                      ref.watch(hotWaterRecircProvider) != null,
-                ),
+                  hotWaterRecirc: ref.watch(hotWaterAssumedReturnProvider),
+                  // Round 26 — the bottom-right notes / title block are kept
+                  // clear of the band diagram.
+                  rightOverlayWidth: (widget.showNotes || widget.showTitleBlock)
+                      ? _kAutoNotesReserve
+                      : 0,
+                );
+        _painter = painter;
+        final content = ClipRect(
+          child: Transform.translate(
+            offset: vt.offset,
+            child: Transform.scale(
+              scale: vt.scale,
+              alignment: Alignment.topLeft,
+              child: CustomPaint(
+                size: _size,
+                painter: painter,
               ),
             ),
           ),
@@ -1977,6 +1989,31 @@ String _pipeMaterialCode(PipeProduct? p, ServiceType s) {
 // the single-line and the widget that makes the inferred risers CLICKABLE).
 // ---------------------------------------------------------------------------
 
+/// Round 26 (riser-drafting-3-1) — a riser flow-arrow triangle whose APEX is
+/// [tip]: for an up arrow the base sits [h] below the apex (screen y grows
+/// downward), for a down arrow [h] above it. Shared by the Auto and Edit
+/// painters (both used to draw the base on the wrong side).
+@visibleForTesting
+Path riserArrowPath(Offset tip, {required bool pointUp, double h = 6, double w = 4}) {
+  final baseY = pointUp ? tip.dy + h : tip.dy - h;
+  return Path()
+    ..moveTo(tip.dx, tip.dy)
+    ..lineTo(tip.dx - w, baseY)
+    ..lineTo(tip.dx + w, baseY)
+    ..close();
+}
+
+/// Round 26 (riser-drafting-3-1) — whether a riser's flow arrow points UP on
+/// screen: from the SOLVED flow direction (`EdgeSizing.flowFromId`, the same
+/// basis the issued sheet's chevron reads — a drainage stack flows DOWN, a
+/// transfer riser UP) and only from the drawing direction when unsized.
+@visibleForTesting
+bool riserFlowGoesUp(NetEdge edge, Offset from, Offset to, EdgeSizing? s) {
+  final flowFrom = s?.flowFromId;
+  if (flowFrom == edge.toId) return from.dy < to.dy;
+  return to.dy < from.dy;
+}
+
 const double _kAutoSidePad = MechXSpacing.xl;
 
 /// Node ids kept when one system is focused — endpoints of that service's edges
@@ -2000,12 +2037,24 @@ Set<String>? _focusedNodeIds(Network network, ServiceType? focus) {
 /// so a vertical riser stack reads as one column both here and in the exported
 /// sheet (the export consumes the same helper), instead of the two jogging
 /// apart. A single column (all nodes aligned, or one node) centres at 0.5.
+///
+/// Round 26 — the layout lives inside a FRAME: x in [[left], width − [right]]
+/// (the floor-label / fan-out gutter on the left, the detail column on the
+/// right — riser-drafting-3-2 / 3-8) and the bands over [bandsHeight] (the
+/// bottom detail callouts sit below the ground band). Coincident nodes are
+/// spread apart by the SHARED B5 rule ([coincidentSpreadDx], riser-drafting-
+/// 3-3), exactly as the issued sheet does. Defaults = the legacy full-surface
+/// layout.
 Map<String, Offset> _autoNodePositions(
     Network network, int levelCount, Size size,
-    {ServiceType? focus}) {
+    {ServiceType? focus,
+    double left = _kAutoSidePad,
+    double right = _kAutoSidePad,
+    double? bandsHeight}) {
   final n = levelCount.clamp(1, 999999);
+  final h = bandsHeight ?? size.height;
   double bandCentreY(int floorIndex) {
-    final bandH = size.height / n;
+    final bandH = h / n;
     return bandH * ((n - 1) - floorIndex) + bandH / 2;
   }
 
@@ -2014,19 +2063,39 @@ Map<String, Offset> _autoNodePositions(
   // draws (`riserServiceLanes`), scaled to this band by the shared
   // kRiserLaneBandFraction, so the canvas offsets the same share of a floor.
   final lanes = riserServiceLanes(network, focus: focus);
-  final lanePitch = (size.height / n) * kRiserLaneBandFraction;
-  final drawWidth = size.width - 2 * _kAutoSidePad;
+  final lanePitch = (h / n) * kRiserLaneBandFraction;
+  final drawWidth = math.max(0.0, size.width - left - right);
   final positions = <String, Offset>{};
   for (final entry in norm.entries) {
     final node = network.nodeById(entry.key);
     if (node == null) continue;
     positions[entry.key] = Offset(
-      _kAutoSidePad + entry.value * drawWidth,
+      left + entry.value * drawWidth,
       bandCentreY(node.floorIndex) + (lanes[entry.key] ?? 0) * lanePitch,
     );
   }
+  final spread = coincidentSpreadDx(
+    x: {for (final e in positions.entries) e.key: e.value.dx},
+    floorOf: {
+      for (final id in positions.keys) id: network.nodeById(id)!.floorIndex,
+    },
+    step: _kAutoSpreadStep,
+  );
+  for (final e in spread.entries) {
+    final p = positions[e.key]!;
+    positions[e.key] = Offset(p.dx + e.value, p.dy);
+  }
   return positions;
 }
+
+/// Round 26 — the canvas B5 coincident-spread step (px): one node glyph box
+/// (20 px) plus a hairline, the canvas counterpart of the export's 18-unit
+/// step.
+const double _kAutoSpreadStep = 24;
+
+/// Round 26 (riser-drafting-3-2) — the right reserve (px) for the bottom-right
+/// system-NOTES card / title block (their 240 px max width + the md inset).
+const double _kAutoNotesReserve = 256;
 
 /// An inferred vertical the engineer hasn't drawn: two existing nodes on
 /// different floors that share a service with no drawn riser between them.
@@ -2301,12 +2370,18 @@ class _AutoSchematicPainter extends CustomPainter {
     this.transferPumpNodeIds = const {},
     this.showDetails = true,
     this.hotWaterRecirc = false,
+    this.rightOverlayWidth = 0,
   });
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
   final BuildingLevels building;
   final MechXColors colors;
+
+  /// Round 26 (riser-drafting-3-2) — the width (px) of the screen-fixed
+  /// bottom-right overlays (the system-NOTES card / title block) the band
+  /// diagram must keep clear of; 0 when neither is shown.
+  final double rightOverlayWidth;
 
   /// Round 17 — the drawn transfer pumps (ground tank -> roof tank), captioned
   /// TRANSFER PUMP in the plant detail; every other mover reads BOOSTER PUMP.
@@ -2365,11 +2440,66 @@ class _AutoSchematicPainter extends CustomPainter {
     return bandH * invertedIndex;
   }
 
+  /// Round 26 (riser-drafting-3-2) — the height the floor BANDS occupy: the
+  /// bottom detail callouts get a reserved strip BELOW the ground band (the
+  /// issued sheet keeps its extras outside the band grid) instead of painting
+  /// opaque boxes over ground-floor equipment.
+  double _bandsHeight(Size size) {
+    if (!showDetails) return size.height;
+    final callouts = _valveCalloutRects(size);
+    if (callouts.isEmpty) return size.height;
+    final top = callouts.map((r) => r.top).reduce(math.min);
+    return math.max(size.height * 0.5, top - MechXSpacing.sm);
+  }
+
+  /// Round 26 (riser-drafting-3-8) — the left GUTTER: wide enough for the
+  /// per-floor FFL labels (and, with details on, the fan-out stubs), so a
+  /// riser column never strikes through the primary datum labels.
+  double _leftGutter(Size size) {
+    var right = 0.0;
+    for (final r in _floorLabelRects(size)) {
+      right = math.max(right, r.right);
+    }
+    if (showDetails) {
+      for (final r in _fanOutLabelRects(size)) {
+        right = math.max(right, r.right);
+      }
+    }
+    return math.min(
+        size.width * 0.4, math.max(_kAutoSidePad, right + MechXSpacing.md));
+  }
+
+  /// Round 26 (riser-drafting-3-2) — the right reserve: the PUMP-SET DETAIL
+  /// column (top-right) and the notes / title-block overlays (bottom-right)
+  /// sit OUTSIDE the band drawing width, never over equipment.
+  double _rightReserve(Size size, double left) {
+    var r = rightOverlayWidth;
+    if (showDetails) {
+      final pd = _plantDetailRect(size);
+      if (pd != null) r = math.max(r, size.width - pd.left);
+    }
+    final right = r <= 0 ? _kAutoSidePad : r + MechXSpacing.md;
+    // A too-narrow surface keeps the legacy span rather than crushing the
+    // diagram to nothing.
+    if (size.width - left - right < size.width * 0.3) return _kAutoSidePad;
+    return right;
+  }
+
+  /// The laid-out position of every visible node (the ONE layout the painter
+  /// and the widget's inferred-riser hit test share).
+  Map<String, Offset> layoutNodePositions(Size size) {
+    final left = _leftGutter(size);
+    return _autoNodePositions(network, building.levelCount, size,
+        focus: focus,
+        left: left,
+        right: _rightReserve(size, left),
+        bandsHeight: _bandsHeight(size));
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
-    final nodePos =
-        _autoNodePositions(network, building.levelCount, size, focus: focus);
+    final nodePos = layoutNodePositions(size);
     _paintBands(canvas, size);
     if (inferRisers) _paintInferredRisers(canvas, nodePos);
     // F6/R2: seed the label-collision list BEFORE any tag places, in the order
@@ -2383,14 +2513,32 @@ class _AutoSchematicPainter extends CustomPainter {
         ..addAll(_fanOutLabelRects(size))
         ..addAll(_detailCalloutRects(size));
     }
+    // Round 26 (riser-drafting-3-4 / 3-5) — the fixed geometry every tag must
+    // dodge is seeded BEFORE the edge pass: each node's glyph halo, each HWR
+    // return column + label, then the node labels themselves (placed through
+    // the same collision ladder, so adjacent plant labels never overprint).
+    final hwrLegs = hotWaterRecirc
+        ? _hotWaterReturnStacks(nodePos)
+        : const <({double x, double yTop, double yBot})>[];
+    for (final leg in hwrLegs) {
+      occupied
+        ..add(Rect.fromLTRB(leg.x - 3, leg.yTop, leg.x + 3, leg.yBot))
+        ..add(estimateLabelRect('HWR',
+            Offset(leg.x + 5, (leg.yTop + leg.yBot) / 2 - MechXSpacing.sm), 9));
+    }
+    for (final e in nodePos.entries) {
+      final r = _nodeGlyphRect(e.key, e.value);
+      if (r != null) occupied.add(r);
+    }
+    final nodeLabels = _placeNodeLabels(nodePos, occupied);
     _paintEdges(canvas, nodePos, occupied,
-        lanePitch: (size.height / building.levelCount.clamp(1, 999999)) *
+        lanePitch: (_bandsHeight(size) / building.levelCount.clamp(1, 999999)) *
             kRiserLaneBandFraction);
     // G2: the hot-water recirculation return leg rides alongside the supply
     // riser — a structural element (drawn whenever the recirc loop exists),
     // not a toggleable detail callout.
-    if (hotWaterRecirc) _paintHotWaterReturn(canvas, nodePos);
-    _paintNodes(canvas, nodePos);
+    if (hotWaterRecirc) _paintHotWaterReturn(canvas, nodePos, hwrLegs);
+    _paintNodes(canvas, nodePos, nodeLabels);
     if (showDetails) {
       _paintFloorFanOut(canvas, size);
       _paintPlantDetail(canvas, size);
@@ -2399,20 +2547,45 @@ class _AutoSchematicPainter extends CustomPainter {
     }
   }
 
+  /// Round 26 (hot-water-2-phantom-hwr-leg-on-drawn-return) — the hot-water
+  /// riser STACKS (risers sharing a column) the return leg rides beside: ONE
+  /// leg per stack, never one per storey segment. Mirrors the export.
+  List<({double x, double yTop, double yBot})> _hotWaterReturnStacks(
+      Map<String, Offset> nodePos) {
+    if (!(focus == null || focus == ServiceType.hotWater)) return const [];
+    const off = 12.0;
+    final stacks = <int, ({double x, double yTop, double yBot})>{};
+    for (final e in network.edges) {
+      if (e.service != ServiceType.hotWater || e.kind != EdgeKind.riser) {
+        continue;
+      }
+      final from = nodePos[e.fromId];
+      final to = nodePos[e.toId];
+      if (from == null || to == null) continue;
+      final midX = (from.dx + to.dx) / 2;
+      final key = midX.round();
+      final yTop = math.min(from.dy, to.dy);
+      final yBot = math.max(from.dy, to.dy);
+      final cur = stacks[key];
+      stacks[key] = cur == null
+          ? (x: midX + off, yTop: yTop, yBot: yBot)
+          : (
+              x: cur.x,
+              yTop: math.min(cur.yTop, yTop),
+              yBot: math.max(cur.yBot, yBot),
+            );
+    }
+    return [for (final k in stacks.keys.toList()..sort()) stacks[k]!];
+  }
+
   /// G2: draw the hot-water RECIRCULATION return leg(s) — a thinner dashed
-  /// `HWR` return riser alongside each hot-water supply riser, a down arrow
-  /// (return flow), and a recirc-pump glyph at the loop base. Mirrors the export
-  /// builder's `_emitHotWaterReturn`.
-  void _paintHotWaterReturn(Canvas canvas, Map<String, Offset> nodePos) {
-    if (!(focus == null || focus == ServiceType.hotWater)) return;
-    final hwRisers = network.edges
-        .where((e) =>
-            e.service == ServiceType.hotWater &&
-            e.kind == EdgeKind.riser &&
-            nodePos[e.fromId] != null &&
-            nodePos[e.toId] != null)
-        .toList();
-    if (hwRisers.isEmpty) return;
+  /// `HWR` return riser beside each hot-water riser STACK, a down arrow
+  /// (return flow), and a recirc-pump glyph at the loop base of the WHOLE
+  /// network (never beside a pump already drawn on the hot-water service).
+  /// Mirrors the export builder's `_emitHotWaterReturn`.
+  void _paintHotWaterReturn(Canvas canvas, Map<String, Offset> nodePos,
+      List<({double x, double yTop, double yBot})> legs) {
+    if (legs.isEmpty) return;
     final color = serviceColor(ServiceType.hotWater);
     const off = 12.0;
     final dashPaint = Paint()
@@ -2420,33 +2593,44 @@ class _AutoSchematicPainter extends CustomPainter {
       ..strokeWidth = 1.2
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
-    for (final e in hwRisers) {
-      final from = nodePos[e.fromId]!;
-      final to = nodePos[e.toId]!;
-      final midX = (from.dx + to.dx) / 2;
-      final legX = midX + off;
-      final yTop = math.min(from.dy, to.dy);
-      final yBot = math.max(from.dy, to.dy);
-      _dashedLine(canvas, Offset(legX, yTop), Offset(legX, yBot), dashPaint);
-      _dashedLine(canvas, Offset(midX, yTop), Offset(legX, yTop), dashPaint);
+    for (final leg in legs) {
+      final legX = leg.x;
+      final midX = legX - off;
+      _dashedLine(
+          canvas, Offset(legX, leg.yTop), Offset(legX, leg.yBot), dashPaint);
+      _dashedLine(
+          canvas, Offset(midX, leg.yTop), Offset(legX, leg.yTop), dashPaint);
       // A down arrow — recirculation flow returns to the heater.
-      _drawArrow(canvas, Offset(legX, (yTop + yBot) / 2), false, color);
+      _drawArrow(canvas, Offset(legX, (leg.yTop + leg.yBot) / 2), false, color);
       _drawText(
         canvas,
         'HWR',
-        Offset(legX + 5, (yTop + yBot) / 2 - MechXSpacing.sm),
+        Offset(legX + 5, (leg.yTop + leg.yBot) / 2 - MechXSpacing.sm),
         fontSize: 9,
         color: color,
         fontWeight: FontWeight.w600,
       );
     }
-    // The recirc pump glyph at the loop base — the lowest hot-water node.
+    final hwPumpDrawn = network.nodes.any((n) =>
+        (n.component == NodeComponent.pump ||
+            n.component == NodeComponent.boosterSet) &&
+        network.edgesAt(n.id).any((e) => e.service == ServiceType.hotWater));
+    if (hwPumpDrawn) return;
+    // The recirc pump glyph at the loop base — the lowest hot-water riser node.
     NetNode? lowest;
-    for (final e in hwRisers) {
+    for (final e in network.edges) {
+      if (e.service != ServiceType.hotWater || e.kind != EdgeKind.riser) {
+        continue;
+      }
       for (final id in [e.fromId, e.toId]) {
         final n = network.nodeById(id);
         if (n == null) continue;
-        if (lowest == null || n.floorIndex < lowest.floorIndex) lowest = n;
+        if (lowest == null ||
+            n.floorIndex < lowest.floorIndex ||
+            (n.floorIndex == lowest.floorIndex &&
+                n.id.compareTo(lowest.id) < 0)) {
+          lowest = n;
+        }
       }
     }
     final lp = lowest == null ? null : nodePos[lowest.id];
@@ -2475,8 +2659,9 @@ class _AutoSchematicPainter extends CustomPainter {
   /// geometry) — the seed of the F6 label-collision list.
   List<Rect> _floorLabelRects(Size size) {
     final rects = <Rect>[];
+    final bandsH = _bandsHeight(size);
     for (var i = 0; i < building.levelCount; i++) {
-      final top = _bandTopY(i, size.height);
+      final top = _bandTopY(i, bandsH);
       final floor = building.floors[i];
       final elevM = building.elevationOf(i).meters;
       // E6: the SAME FFL notation the export gutter uses (one shared formatter),
@@ -2486,7 +2671,7 @@ class _AutoSchematicPainter extends CustomPainter {
       // rect in the collision list is produced the same deterministic way.
       rects.add(estimateLabelRect(
         label,
-        Offset(MechXSpacing.sm, top + MechXSpacing.xs),
+        Offset(_floorLabelX(top), top + MechXSpacing.xs),
         _floorLabelFontSize,
       ));
     }
@@ -2506,7 +2691,8 @@ class _AutoSchematicPainter extends CustomPainter {
     );
     if (fans.isEmpty) return const [];
     final n = building.levelCount;
-    final bandH = size.height / n;
+    final bandsH = _bandsHeight(size);
+    final bandH = bandsH / n;
     const stubX = MechXSpacing.sm;
     const rowPitch = 11.0;
     const buttonBottom = MechXSpacing.sm + 26;
@@ -2514,18 +2700,19 @@ class _AutoSchematicPainter extends CustomPainter {
     final rects = <Rect>[];
     for (final fan in fans) {
       if (fan.floorIndex < 0 || fan.floorIndex >= n) continue;
-      final top = _bandTopY(fan.floorIndex, size.height);
+      final top = _bandTopY(fan.floorIndex, bandsH);
       var y = top + 24;
       if (y < buttonBottom + MechXSpacing.xs) y = buttonBottom + MechXSpacing.xs;
-      for (final label in fan.labels) {
+      final (rows, overflow) = _fanRows(fan);
+      for (final label in rows) {
         if (y + rowPitch > top + bandH) break;
         rects.add(
             estimateLabelRect(label, Offset(stubX + 10, y), fontSize));
         y += rowPitch;
       }
-      if (fan.overflow > 0 && y + rowPitch <= top + bandH) {
+      if (overflow > 0 && y + rowPitch <= top + bandH) {
         rects.add(estimateLabelRect(
-            '+${fan.overflow} more', Offset(stubX + 10, y), fontSize));
+            '+$overflow more', Offset(stubX + 10, y), fontSize));
       }
     }
     return rects;
@@ -2612,8 +2799,9 @@ class _AutoSchematicPainter extends CustomPainter {
       ..strokeWidth = _gridStrokeWidth
       ..style = PaintingStyle.stroke;
 
+    final bandsH = _bandsHeight(size);
     for (var i = 0; i < building.levelCount; i++) {
-      final top = _bandTopY(i, size.height);
+      final top = _bandTopY(i, bandsH);
       canvas.drawLine(Offset(0, top), Offset(size.width, top), gridPaint);
 
       final floor = building.floors[i];
@@ -2627,10 +2815,7 @@ class _AutoSchematicPainter extends CustomPainter {
       // within the button's height, start it just right of the button instead
       // of at the gutter edge.
       final labelY = top + MechXSpacing.xs;
-      const buttonBottom = MechXSpacing.sm + 26; // button: top=sm, 26px tall
-      final labelX = labelY < buttonBottom + MechXSpacing.xs
-          ? MechXSpacing.md + 26 + MechXSpacing.sm
-          : MechXSpacing.sm;
+      final labelX = _floorLabelX(top);
 
       _drawText(
         canvas,
@@ -2646,8 +2831,18 @@ class _AutoSchematicPainter extends CustomPainter {
       );
     }
 
-    canvas.drawLine(
-        Offset(0, size.height), Offset(size.width, size.height), gridPaint);
+    canvas.drawLine(Offset(0, bandsH), Offset(size.width, bandsH), gridPaint);
+  }
+
+  /// The FFL label's x for a band whose top is [top]: clear of the top-left
+  /// (?) guide button when the label row falls within its height (the ONE
+  /// rule [_paintBands] and [_floorLabelRects] share).
+  double _floorLabelX(double top) {
+    final labelY = top + MechXSpacing.xs;
+    const buttonBottom = MechXSpacing.sm + 26; // button: top=sm, 26px tall
+    return labelY < buttonBottom + MechXSpacing.xs
+        ? MechXSpacing.md + 26 + MechXSpacing.sm
+        : MechXSpacing.sm;
   }
 
   void _paintEdges(
@@ -2701,18 +2896,28 @@ class _AutoSchematicPainter extends CustomPainter {
         canvas.drawPath(path, linePaint);
 
         final arrowY = (from.dy + to.dy) / 2;
-        final goingUp = to.dy < from.dy;
+        // Round 26 — the SOLVED flow direction (the export's chevron basis),
+        // the drawn direction only when unsized.
+        final goingUp = riserFlowGoesUp(edge, from, to, sizing[edge.id]);
         _drawArrow(canvas, Offset(midX, arrowY), goingUp, color);
 
         final s = sizing[edge.id];
         if (s != null) {
-          _drawText(
+          // Round 26 (riser-drafting-3-4) — through the SAME collision pass
+          // as the run tags (the issued sheet's _LabelPlacer analogue): two
+          // risers spanning one storey gap, or the HWR leg beside a HW
+          // riser, no longer overprint each other's tag. Steps run DOWN the
+          // riser first, then flip to its other side.
+          _placeText(
             canvas,
             _pipeTag(s, edge, function: fn),
             Offset(midX + MechXSpacing.xs, arrowY - MechXSpacing.sm),
+            occupied,
             fontSize: _labelFontSize,
             color: color,
             fontWeight: FontWeight.w500,
+            runDirection: const Offset(0, 1),
+            perpendicularOffset: MechXSpacing.xs,
           );
         }
 
@@ -2959,15 +3164,12 @@ class _AutoSchematicPainter extends CustomPainter {
     occupied.add(rect);
   }
 
+  /// Round 26 (riser-drafting-3-1) — the apex IS [tip]; the base sits [h]
+  /// BELOW it for an up arrow (screen y grows downward) and above it for a
+  /// down arrow. The base used to be drawn on the wrong side, so every riser
+  /// arrow pointed the opposite way to its flow.
   void _drawArrow(Canvas canvas, Offset tip, bool pointUp, Color color) {
-    const h = 6.0;
-    const w = 4.0;
-    final sign = pointUp ? -1.0 : 1.0;
-    final path = Path()
-      ..moveTo(tip.dx, tip.dy)
-      ..lineTo(tip.dx - w, tip.dy + sign * h)
-      ..lineTo(tip.dx + w, tip.dy + sign * h)
-      ..close();
+    final path = riserArrowPath(tip, pointUp: pointUp);
     canvas.drawPath(path, Paint()..color = color);
   }
 
@@ -2985,7 +3187,75 @@ class _AutoSchematicPainter extends CustomPainter {
   /// pump / tank / AHU / diffuser / valve / drain …), a fixture terminal (a
   /// small down-triangle "drop"), or a plain junction dot — so the single-line
   /// reads like an engineered riser, not a string of anonymous dots.
-  void _paintNodes(Canvas canvas, Map<String, Offset> nodePos) {
+  /// Round 26 (riser-drafting-3-5) — the opaque halo rect of a node's glyph
+  /// (equipment symbol or fixture drop), or null for a plain junction dot.
+  /// Seeded into the collision list before any tag places, so a run / riser
+  /// tag is never painted under a glyph.
+  Rect? _nodeGlyphRect(String id, Offset pos) {
+    final node = network.nodeById(id);
+    if (node == null) return null;
+    if (node.component != null) {
+      return Rect.fromCircle(center: pos, radius: 20.0 * 0.62);
+    }
+    if (node.role == NodeRole.fixture) {
+      return Rect.fromCircle(center: pos, radius: 6.0 + 2.5);
+    }
+    return null;
+  }
+
+  /// The label text of a node ('Roof tank · 10 m3'), or null for a junction.
+  String? _nodeLabelText(NetNode node) {
+    final label = _nodeLabel(node);
+    if (label == null) return null;
+    final detail = detailByNode[node.id];
+    return detail != null ? '$label · $detail' : label;
+  }
+
+  /// Round 26 (riser-drafting-3-5) — every node label placed through the
+  /// collision ladder (below the glyph, further below, above, then aside),
+  /// in a deterministic order (top-to-bottom, left-to-right, then id), each
+  /// recorded so adjacent plant labels ('Water meter' / 'Ground tank' /
+  /// 'Pump') and the later edge tags never overprint it. Returns each
+  /// labelled node's resolved (centred) text origin.
+  Map<String, Offset> _placeNodeLabels(
+      Map<String, Offset> nodePos, List<Rect> occupied) {
+    final ids = nodePos.keys.toList()
+      ..sort((a, b) {
+        final pa = nodePos[a]!, pb = nodePos[b]!;
+        final c = pa.dy.compareTo(pb.dy);
+        if (c != 0) return c;
+        final d = pa.dx.compareTo(pb.dx);
+        return d != 0 ? d : a.compareTo(b);
+      });
+    const candidates = <Offset>[
+      Offset(0, 0),
+      Offset(0, 11),
+      Offset(0, 22),
+      Offset(0, -38),
+      Offset(0, -49),
+      Offset(48, 0),
+      Offset(-48, 0),
+      Offset(48, 11),
+      Offset(-48, 11),
+    ];
+    final out = <String, Offset>{};
+    for (final id in ids) {
+      final node = network.nodeById(id);
+      if (node == null) continue;
+      final text = _nodeLabelText(node);
+      if (text == null) continue;
+      final pos = nodePos[id]!;
+      final anchor = Offset(pos.dx, pos.dy + 13);
+      final rect = estimateLabelRect(text, anchor, 9, centered: true);
+      final delta = resolveLabelDisplacement(rect, occupied, candidates);
+      occupied.add(rect.shift(delta));
+      out[id] = anchor + delta;
+    }
+    return out;
+  }
+
+  void _paintNodes(Canvas canvas, Map<String, Offset> nodePos,
+      [Map<String, Offset> labelAt = const {}]) {
     const box = 20.0;
     for (final entry in nodePos.entries) {
       final pos = entry.value;
@@ -3018,14 +3288,12 @@ class _AutoSchematicPainter extends CustomPainter {
       // Fixture / equipment label, centred just below the symbol. When the node
       // carries an equipment detail (capacity / duty), append it after a '·'
       // (e.g. 'Roof tank · 237 m3', 'Booster set · 5.5 kW').
-      final label = node == null ? null : _nodeLabel(node);
-      if (label != null) {
-        final detail = node == null ? null : detailByNode[node.id];
-        final text = detail != null ? '$label · $detail' : label;
+      final text = node == null ? null : _nodeLabelText(node);
+      if (text != null) {
         _drawText(
           canvas,
           text,
-          Offset(pos.dx, pos.dy + 13),
+          labelAt[entry.key] ?? Offset(pos.dx, pos.dy + 13),
           fontSize: 9,
           color: colors.textMuted,
           fontWeight: FontWeight.w500,
@@ -3173,7 +3441,9 @@ class _AutoSchematicPainter extends CustomPainter {
         _hasComponent(NodeComponent.boosterSet);
     if (!hasRoof && !hasGround && !hasPump) return null;
     const boxW = 250.0;
-    const boxH = 150.0;
+    // Round 26 (riser-drafting-3-7) — the GROUND TANK row the issued callout
+    // prints grows the box (it used to be dropped from the preview).
+    final boxH = hasGround && hasPump ? 190.0 : 150.0;
     const pad = MechXSpacing.md;
     // Guard a too-narrow / too-short viewport.
     if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return null;
@@ -3320,17 +3590,55 @@ class _AutoSchematicPainter extends CustomPainter {
       final leg = hasGround && hasRoof
           ? 'TRANSFER'
           : (!downfeed ? 'BOOSTER' : null);
+      final legY = trainCy + gl / 2 + 30 + (capDy - 12).clamp(0, 999);
       if (leg != null) {
         _drawText(
           canvas,
           leg,
-          Offset(cx, trainCy + gl / 2 + 30 + (capDy - 12).clamp(0, 999)),
+          Offset(cx, legY),
           fontSize: 8,
           color: color,
           fontWeight: FontWeight.w600,
           centered: true,
         );
       }
+      // Round 26 (riser-drafting-3-7) — the GROUND TANK the pump draws from,
+      // with its real capacity, under the train (the export's callout row).
+      if (hasGround) {
+        final gy = math.min(legY + 12, rect.bottom - glyph - 4);
+        canvas.save();
+        canvas.translate(cx - glyph / 2, gy);
+        paintComponentSymbol(
+            canvas, const Size(glyph, glyph), NodeComponent.groundTank, color);
+        canvas.restore();
+        final m3 = _tankM3(NodeComponent.groundTank);
+        _drawText(
+          canvas,
+          m3 != null ? 'GROUND TANK $m3 m3' : 'GROUND TANK',
+          Offset(cx + glyph / 2 + 8, gy + glyph / 2 - 6),
+          fontSize: 9,
+          color: colors.textSecondary,
+          fontWeight: FontWeight.w500,
+          maxWidth: rect.right - (cx + glyph / 2 + 12),
+        );
+      }
+    } else if (hasGround) {
+      // A ground tank with no pump drawn: the tank row alone.
+      canvas.save();
+      canvas.translate(cx - glyph / 2, y);
+      paintComponentSymbol(
+          canvas, const Size(glyph, glyph), NodeComponent.groundTank, color);
+      canvas.restore();
+      final m3 = _tankM3(NodeComponent.groundTank);
+      _drawText(
+        canvas,
+        m3 != null ? 'GROUND TANK $m3 m3' : 'GROUND TANK',
+        Offset(cx + glyph / 2 + 8, y + glyph / 2 - 6),
+        fontSize: 9,
+        color: colors.textSecondary,
+        fontWeight: FontWeight.w500,
+        maxWidth: rect.right - (cx + glyph / 2 + 12),
+      );
     }
   }
 
@@ -3609,6 +3917,22 @@ class _AutoSchematicPainter extends CustomPainter {
     ln(0.70, 0.66, 0.60, 0.82);
   }
 
+  /// Round 26 (riser-drafting-3-7) — the canvas fan-out rows, GROUPED per
+  /// fixture type with a count exactly like the issued sheet (`WC x2`), then
+  /// capped at 4 rows with the remaining TYPES counted in a `+N more` row.
+  (List<String>, int) _fanRows(FloorFanOut fan) {
+    const maxRows = 4;
+    final rows = [
+      for (final g in fan.groups) g.count > 1 ? '${g.label} x${g.count}' : g.label,
+    ];
+    if (rows.isEmpty) return (fan.labels, fan.overflow);
+    if (rows.length <= maxRows) return (rows, fan.groupOverflow);
+    return (
+      rows.sublist(0, maxRows),
+      rows.length - maxRows + fan.groupOverflow,
+    );
+  }
+
   /// (5) PER-FLOOR BRANCH FAN-OUT — under each floor band, a compact column of
   /// short labelled stubs for the FIXTURES/terminals that floor distributes,
   /// capped at 4 with a `+N more` row (the cap is surfaced by [floorFanOuts], not
@@ -3623,7 +3947,8 @@ class _AutoSchematicPainter extends CustomPainter {
     );
     if (fans.isEmpty) return;
     final n = building.levelCount;
-    final bandH = size.height / n;
+    final bandsH = _bandsHeight(size);
+    final bandH = bandsH / n;
     const stubX = MechXSpacing.sm;
     const rowPitch = 11.0;
     const gutterW = 150.0;
@@ -3636,14 +3961,15 @@ class _AutoSchematicPainter extends CustomPainter {
     const buttonBottom = MechXSpacing.sm + 26;
     for (final fan in fans) {
       if (fan.floorIndex < 0 || fan.floorIndex >= n) continue;
-      final top = _bandTopY(fan.floorIndex, size.height);
+      final top = _bandTopY(fan.floorIndex, bandsH);
       // Start below the FFL label (which sits at top + xs and is ~15px tall
       // at the R2 13px label scale), keeping an xs breathing gap.
       var y = top + 24;
       if (y < buttonBottom + MechXSpacing.xs) y = buttonBottom + MechXSpacing.xs;
       final color =
           focus != null ? serviceColor(focus!) : colors.textSecondary;
-      for (final label in fan.labels) {
+      final (rows, overflow) = _fanRows(fan);
+      for (final label in rows) {
         if (y + rowPitch > top + bandH) break; // never overrun the band.
         // A tiny tick + the fixture short-name.
         canvas.drawLine(
@@ -3665,10 +3991,10 @@ class _AutoSchematicPainter extends CustomPainter {
         );
         y += rowPitch;
       }
-      if (fan.overflow > 0 && y + rowPitch <= top + bandH) {
+      if (overflow > 0 && y + rowPitch <= top + bandH) {
         _drawText(
           canvas,
-          '+${fan.overflow} more',
+          '+$overflow more',
           Offset(stubX + 10, y),
           fontSize: 9,
           color: colors.textMuted,
@@ -3720,7 +4046,8 @@ class _AutoSchematicPainter extends CustomPainter {
       old.detailByNode != detailByNode ||
       old.transferPumpNodeIds != transferPumpNodeIds ||
       old.showDetails != showDetails ||
-      old.hotWaterRecirc != hotWaterRecirc;
+      old.hotWaterRecirc != hotWaterRecirc ||
+      old.rightOverlayWidth != rightOverlayWidth;
 }
 
 // ---------------------------------------------------------------------------
@@ -3900,7 +4227,7 @@ class _EditSchematicPainter extends CustomPainter {
 
       if (isRiser) {
         canvas.drawPath(riserPath(), linePaint);
-        final goingUp = toS.dy < fromS.dy;
+        final goingUp = riserFlowGoesUp(edge, fromS, toS, sizing[edge.id]);
         final arrowY = (fromS.dy + toS.dy) / 2;
         final mid = Offset(midX, arrowY);
         _drawArrow(canvas, mid, goingUp, color);
@@ -4051,15 +4378,8 @@ class _EditSchematicPainter extends CustomPainter {
   }
 
   void _drawArrow(Canvas canvas, Offset tip, bool pointUp, Color color) {
-    const h = 6.0;
-    const w = 4.0;
-    final sign = pointUp ? -1.0 : 1.0;
-    final path = Path()
-      ..moveTo(tip.dx, tip.dy - sign * h)
-      ..lineTo(tip.dx - w, tip.dy)
-      ..lineTo(tip.dx + w, tip.dy)
-      ..close();
-    canvas.drawPath(path, Paint()..color = color);
+    canvas.drawPath(riserArrowPath(tip, pointUp: pointUp),
+        Paint()..color = color);
   }
 
   void _drawText(

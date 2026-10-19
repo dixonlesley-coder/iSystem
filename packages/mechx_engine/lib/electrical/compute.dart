@@ -720,9 +720,14 @@ double effectiveDemandFactor(
   DiversityLibrary? library,
   String? diversityLibraryId,
 }) {
+  // Round 26 — the library replaces MINTED defaults only: an engineer's typed
+  // factor (`demandFactorUserSet`) and a deliberate 0 (a standby machine that
+  // never coincides with its duty partner) are provenance, never overwritten.
   if (library == null ||
       diversityLibraryId == null ||
       c.isFeeder ||
+      c.demandFactorUserSet ||
+      c.demandFactor == 0 ||
       !library.hasOccupancy(diversityLibraryId)) {
     return c.demandFactor;
   }

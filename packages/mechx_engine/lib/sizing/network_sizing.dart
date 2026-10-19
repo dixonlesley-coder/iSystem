@@ -1661,6 +1661,9 @@ Map<String, EdgeSizing> autoSizeNetwork(
                 return c == NodeComponent.pump ||
                     c == NodeComponent.boosterSet;
               },
+              isDemand: (id) =>
+                  id != root &&
+                  (explicitDemandKeys.contains(id) || bearsDefaultDemand(id)),
             )
           : null;
       final checkValveEdgeIds = cvPlan?.deferredEdgeIds ?? const <String>{};
@@ -2710,6 +2713,7 @@ _CheckValvePlan _classifyLoopCheckValves({
   required String root,
   required bool Function(String nodeId) isCheckValve,
   bool Function(String nodeId)? isMover,
+  bool Function(String nodeId)? isDemand,
 }) {
   const none = _CheckValvePlan(<String>{}, <_StandbyLeg>[]);
   final adj = <String, List<NetEdge>>{};
@@ -2809,7 +2813,58 @@ _CheckValvePlan _classifyLoopCheckValves({
   bool isParallelDischarge(_Cv c) =>
       dist[c.upNode] != null && dist[c.downNode] == null;
 
-  if (cvs.every(isReturn)) return _CheckValvePlan(cut, const []);
+  if (cvs.every(isReturn)) {
+    // Round 26 (hot-water-2-common-return-cv-hardy-cross) — N riser returns
+    // joined on a common header, then ONE check valve back to the heater:
+    // cutting the valve alone leaves the supply-riser / return-riser ring
+    // intact, and Hardy–Cross used to push draw-off up the returns, through
+    // the valve against its direction (supply main ~40 % under-sized). The
+    // RETURN side is every edge on NO shortest root -> demand path (hop
+    // distance with the valves cut): a return pipe never lies on the way to
+    // a draw-off. Those edges are deferred with the valves, so the returns
+    // size as zero-draw-off branches — but only when what remains (the
+    // supply) is acyclic; a genuine ring with draw-off on both legs keeps
+    // the Hardy–Cross split.
+    final cutEdges = {...cut};
+    final supplyEdges = <String>{};
+    if (isDemand != null) {
+      final visited = <String>{};
+      final stack = [
+        for (final n in dist.keys)
+          if (isDemand(n)) n,
+      ];
+      while (stack.isNotEmpty) {
+        final n = stack.removeLast();
+        if (!visited.add(n)) continue;
+        final dn = dist[n]!;
+        for (final e in adj[n] ?? const <NetEdge>[]) {
+          if (cut.contains(e.id)) continue;
+          final m = other(e, n);
+          if (dist[m] == dn - 1) {
+            supplyEdges.add(e.id);
+            stack.add(m);
+          }
+        }
+      }
+      final returnSide = <String>{
+        for (final e in componentEdges)
+          if (!cut.contains(e.id) && !supplyEdges.contains(e.id)) e.id,
+      };
+      final remaining = [
+        for (final e in componentEdges)
+          if (!cut.contains(e.id) && !returnSide.contains(e.id))
+            (e.fromId, e.toId),
+      ];
+      final keepsLoop = !_isForest([
+        for (final e in componentEdges)
+          if (!cut.contains(e.id)) (e.fromId, e.toId),
+      ]);
+      if (keepsLoop && returnSide.isNotEmpty && _isForest(remaining)) {
+        cutEdges.addAll(returnSide);
+      }
+    }
+    return _CheckValvePlan(cutEdges, const []);
+  }
   if (cvs.length < 2 || !cvs.every(isParallelDischarge)) return none;
 
   // Duty/standby: the tree runs through the FIRST valve's leg; every other
@@ -2944,12 +2999,35 @@ Map<String, double> _uniformVentStacks(
   // The lowest storey of each vent-stack riser group: only its BASE joins the
   // soil-stack foot (a floor tie / relief vent higher up keeps its own load).
   final groupBottom = <String, int>{};
+  final groupTop = <String, int>{};
   for (final n in parent.keys) {
     final f = net.nodeById(n)?.floorIndex;
     if (f == null) continue;
     final g = find(n);
     if (f < (groupBottom[g] ?? f + 1)) groupBottom[g] = f;
+    if (f > (groupTop[g] ?? f - 1)) groupTop[g] = f;
   }
+  // Round 26 (regression-vent-header-unions-separate-stacks) — a run between
+  // two riser groups is a stack OFFSET only when it joins one group's TOP to
+  // a DIFFERENT group's BOTTOM on the same storey (riser, run, riser). A roof
+  // vent HEADER tying the tops of two independent stacks into one VTR (both
+  // ends at their group's top) is NOT an offset: each stack keeps its own
+  // load and the header its own accumulated load (UPC 703.2 / IPC 916 size a
+  // vent stack on its own drain DFU and only the header on the combined
+  // load). Group membership is fixed here, before any run is unioned.
+  final riserGroupOf = <String, String>{
+    for (final n in parent.keys) n: find(n),
+  };
+  bool offsetLink(String lower, String upper) {
+    if (!stackEnd(lower) || !stackEnd(upper)) return false;
+    final gl = riserGroupOf[lower]!, gu = riserGroupOf[upper]!;
+    if (gl == gu) return false;
+    final fl = net.nodeById(lower)?.floorIndex;
+    final fu = net.nodeById(upper)?.floorIndex;
+    if (fl == null || fu == null || fl != fu) return false;
+    return fl == groupTop[gl] && fu == groupBottom[gu];
+  }
+
   bool baseEnd(String n) =>
       stackEnd(n) && net.nodeById(n)?.floorIndex == groupBottom[find(n)];
   bool baseLink(String ventEnd, String other) =>
@@ -2961,9 +3039,28 @@ Map<String, double> _uniformVentStacks(
       if (net.edgeById(id) case final e?
           when e.kind != EdgeKind.riser &&
               e.service == ServiceType.vent &&
-              ((stackEnd(e.fromId) && stackEnd(e.toId)) ||
+              (offsetLink(e.fromId, e.toId) ||
+                  offsetLink(e.toId, e.fromId) ||
                   baseLink(e.fromId, e.toId) ||
                   baseLink(e.toId, e.fromId)))
+        e,
+  ];
+  // Any other vent run joining two DIFFERENT stack groups is a HEADER (e.g.
+  // one stack's top tied into another stack below a shared VTR): it carries
+  // the full vent load of the stack it drains — that stack's own total, the
+  // figure its own VTR would carry — so it bounds BOTH groups' uniform size
+  // without merging them (the other group's members already carry at least
+  // that load where the header joins).
+  final headers = [
+    for (final id in units.keys)
+      if (net.edgeById(id) case final e?
+          when e.kind != EdgeKind.riser &&
+              e.service == ServiceType.vent &&
+              stackEnd(e.fromId) &&
+              stackEnd(e.toId) &&
+              riserGroupOf[e.fromId] != riserGroupOf[e.toId] &&
+              !offsetLink(e.fromId, e.toId) &&
+              !offsetLink(e.toId, e.fromId))
         e,
   ];
   for (final e in stackRuns) {
@@ -2976,6 +3073,12 @@ Map<String, double> _uniformVentStacks(
     final k = find(e.fromId);
     final v = units[e.id]!;
     if (v > (stackMax[k] ?? 0)) stackMax[k] = v;
+  }
+  for (final e in headers) {
+    final v = units[e.id]!;
+    for (final k in {find(e.fromId), find(e.toId)}) {
+      if (stackMax.containsKey(k) && v > stackMax[k]!) stackMax[k] = v;
+    }
   }
   return {
     ...units,

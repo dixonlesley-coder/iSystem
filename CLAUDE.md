@@ -964,7 +964,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   lighting/socket ways have none); **(b) DAYA in WATT** — the cell switched from `_watts()` (kW) to the
   pure, unit-tested `_wattsId(double w)` → integer watts with the Indonesian DOT thousands separator +
   ` WATT` (`190 WATT`, `1.100 WATT`, `4.400 WATT`, `52.871 WATT`; rounds to the nearest watt, from the
-  solved `ElectricalCircuitResult.loadW`), a feeder (loadW 0) staying `-`; **(c) circle V/A/Hz meters** —
+  solved UNDIVERSIFIED connected load `ElectricalCircuitResult.connectedWOrLoad` since Round 25 — the
+  TOTAL footer stays the diversified demand), a feeder (loadW 0) staying `-`; **(c) circle V/A/Hz meters** —
   a new SEALED `SldCircle` primitive `{ cx, cy, r; weight; role }` replaces the boxed incomer-metering
   cluster on 3-phase boards with three small role-coloured CIRCLES (each a centred letter) + the kept `CT`
   note, handled EXHAUSTIVELY in all FOUR `SldPrim` switch sites (`electrical_sld_drawing.dart` overview/
@@ -1360,7 +1361,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `transformerKva` gives the transformer-impedance-limited LV fault (`Isc = S/(√3·400·0.04 pu)`,
   UNCLAMPED since Round 17 — above 50 kA the advanced study raises `service-fault-estimate-high`
   instead of lowering the figure, `// VERIFY`), a declared `supplyCapacityVa` gives conservative service-entrance
-  rungs (≤16.5 kVA → 6 kA, ≤197 kVA → 10 kA, above → 16 kA, all `// VERIFY`), nothing declared →
+  rungs (≤16.5 kVA → 6 kA, ≤197 kVA → 10 kA, all `// VERIFY`) and — since Round 25 — ABOVE the PLN TR
+  ceiling its own transformer fault `max(S/(√3·400·0.04), the study transformer's fault for the demand,
+  16 kA)` (a declared 630 kVA ⇒ 22 733 A, never a flat 16 kA), nothing declared →
   null (caller keeps the flat 16 kA ⇒ untouched projects byte-identical). Wired as the middle
   tier of the Fold-1 fallback chain (explicit `originFaultLevelA` → estimate → 16 kA) in
   `electricalResultProvider`, the Service & Earthing field (shows the EFFECTIVE default), the
@@ -1458,6 +1461,39 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 26 — one gravity-source rule, separate vent stacks, parallel recirc
+  loops, honest riser canvas (2026-10-18)**: `gravityDownfeedDrawnProvider` =
+  downfeed + a drawn supply network + a pickable source + a non-null
+  `downfeedTankElevationProvider` — the ONE Round-23 rule (a roof tank, or a
+  PLANT above the top-storey fixture; a bare top-floor main is never a tank),
+  so an untyped top-storey 'Source / tank' is judged like a roof tank. A vent
+  RUN joins two stack riser groups only as an OFFSET (one group's TOP to a
+  different group's BOTTOM on one storey); any other run between groups is a
+  HEADER that bounds both groups' uniform size with its own load but never
+  merges them. A single common return check valve: the RETURN side (edges on
+  no shortest root -> draw-off path) is deferred with the valve whenever the
+  supply that remains is acyclic. Hot-water recirculation is PER COMPONENT
+  (`hotWaterRecircSystemsProvider`; one way / schedule row / report line each,
+  a drawn HW pump takes its own system's duty); parallel drawn loops carry
+  heat-loss SHARES (`supplyPathFlowShares`, shared trunks the sum, index loop
+  by Σ s^1.852·L/D^4.871); the index run is Dijkstra (never hop order); with
+  no return drawn recirculation is assumed only above
+  `kRecircMinDevelopedLengthM` (15 m, IPC 607.2, `// VERIFY`), and the
+  assumed DN20 return + pump are taken off flagged `assumed`. The HWR leg is
+  drawn only for an ASSUMED return (`hotWaterAssumedReturnProvider`), one per
+  riser STACK, the HWR PUMP at the whole network's lowest HW riser node and
+  never beside a drawn HW pump. A partial genset with NO essential board
+  screens every motor (`gensetStartMotors` restricts only on an essential
+  designation). The diversity library never overrides `demandFactorUserSet`
+  or a 0 factor. The Ics test (`_icsShortfall`) runs on the incomer, every
+  way and every feeder, once per device. Live riser canvas: arrows are
+  `riserArrowPath` (apex at the tip) pointing along the SOLVED flow
+  (`riserFlowGoesUp`); the band diagram sits in a frame (left gutter for the
+  FFL / fan-out labels, right column for the plant detail + notes, bottom
+  strip for the callouts); coincident nodes spread by the shared
+  `coincidentSpreadDx`; node glyphs + labels and riser tags go through the
+  collision list; the fan-out is grouped (`WC x2`) and the plant detail
+  carries the ground tank.
 - **Round 25 — legacy provenance, honest fault estimates, connected daya, no
   override reducers, uniform vent stacks, one drawn feed (2026-10-18)**: in a
   LEGACY file a demand factor 0 on a NON-life-safety MEP way is typed (pre-r23
@@ -1477,7 +1513,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   riser groups and the base run to the soil-stack foot are part of the vent
   stack (uniform size); a zero-seed vent tie stays an explicit 0 (no phantom
   leaf DFU); a fixture vented at its own node has a 0 trap arm. ONE drawn-feed
-  predicate (`gravityDownfeedDrawnProvider`, a roof tank drawn) gates the
+  predicate (`gravityDownfeedDrawnProvider`, a drawn gravity source — a roof
+  tank, or a PLANT above the top fixture, Round 26) gates the
   inspector headline / rows, the report and the Review `downfeed-below-target`
   warning (→ the 'Supply pressure' compliance row); a meter-fed water network is
   the acknowledgeable `mains-fed:<service>` info, never `no-source`. An empty

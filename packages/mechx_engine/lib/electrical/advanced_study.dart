@@ -653,11 +653,16 @@ bool _hasFloorGear(
 /// still screens every motor. It used to screen every motor in the project —
 /// a 110 kW chiller on the NORMAL supply was the limiting motor of a 30 %-backup
 /// 200 kVA set and printed 'start dip 38.22% over'.
+///
+/// Round 26 (fractional-genset-screens-no-motor) — the restriction applies only
+/// when some board IS designated essential. A fractional set with NO essential
+/// designation names no sub-tree, so nothing says which motors it does not
+/// start: it screens every motor, like full backup (the safe direction — a
+/// silently skipped 110 kW DOL start on a 100 kVA set dips ~55 %).
 List<GensetMotor> gensetStartMotors(ElectricalProject project) {
   final motors = <GensetMotor>[];
-  final backup = project.sources?.generator?.backupFraction ?? 1.0;
   final essential = gensetBackedPanelIds(project);
-  final restrict = backup < 1.0 - 1e-9 || essential.isNotEmpty;
+  final restrict = essential.isNotEmpty;
   for (final p in project.panels) {
     if (restrict && !essential.contains(p.id)) continue;
     for (final c in p.circuits) {

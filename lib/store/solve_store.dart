@@ -124,12 +124,26 @@ final downfeedOverPressureProvider =
 /// describe a tank that does not exist. The inspector headline + rows, the
 /// calc report and the Review pressure judgement all gate on THIS, so the four
 /// surfaces describe one feed.
+///
+/// Round 26 (regression-untyped-roof-source-downfeed-silenced) — the gravity
+/// source test is the ONE Round-23 rule [downfeedTankElevationProvider]
+/// encodes (a roof tank, OR a plant above the top-storey fixture — the
+/// untyped 'Source / tank' on the top storey sits at the roof), never a
+/// roofTank-only component check: a generic roof plant feeding a downfeed is
+/// judged exactly like a typed roof tank. A drawn supply network with a
+/// pickable source is still required — with nothing drawn the tank-elevation
+/// provider returns the declared roof datum, and an empty network stays
+/// un-judged.
 final gravityDownfeedDrawnProvider = Provider<bool>((ref) {
   if (ref.watch(feedStrategyProvider) != FeedStrategy.downfeed) return false;
-  return ref
-      .watch(sizingNetworkProvider)
-      .nodes
-      .any((n) => n.component == NodeComponent.roofTank);
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  if (edges.isEmpty) return false;
+  final source = _pickSource(net, edges, project.building,
+      preferHighest: true, mounting: project.mounting);
+  if (source == null || net.nodeById(source) == null) return false;
+  return ref.watch(downfeedTankElevationProvider) != null;
 });
 
 /// DOWNFEED gravity solve (roof tank distributing down). Null when the strategy
@@ -1460,8 +1474,11 @@ final downfeedTankElevationProvider = Provider<Length?>((ref) {
   final elev = nodeElevation(node, project.building, project.mounting);
   final topFixture = project.building.fixtureElevationOf(
       project.building.levelCount - 1, project.mounting);
+  // Round 26 — a PLANT above the top fixture (the invariant's wording): a
+  // bare top-storey main junction (the highest node when no plant is drawn)
+  // is not a tank, whatever its ceiling elevation.
   final isGravityTank = node.component == NodeComponent.roofTank ||
-      elev.meters > topFixture.meters;
+      (node.role == NodeRole.plant && elev.meters > topFixture.meters);
   return isGravityTank ? elev : null;
 });
 
@@ -1486,13 +1503,33 @@ final bomProvider = Provider<List<BomLine>>((ref) {
   final sizing = ref.watch(sizingProvider);
   if (sizing.isEmpty) return const [];
   final project = ref.watch(projectControllerProvider);
-  return buildBom(
+  final drawn = buildBom(
     net: net,
     sizing: sizing,
     calibrationBySheet: project.calibrations,
     building: project.building,
     mounting: project.mounting,
   );
+  // Round 26 (hot-water-2-mirrored-return-missing-from-bom) — the DN20
+  // return the recirculation calculation ASSUMES when none is drawn (its
+  // length drives the heat loss + head, and the riser sheet draws it as HWR)
+  // is taken off too, flagged `assumed` and tagged so it never reads as
+  // measured drawn work.
+  final assumed = [
+    for (final sys in ref.watch(hotWaterRecircSystemsProvider))
+      if (!sys.drawnReturn && sys.assumedReturnLengthM > 0)
+        BomLine(
+          service: ServiceType.hotWater,
+          kind: EdgeKind.run,
+          diameterMm: kDefaultRecircReturnDiameter.inMillimeters.round(),
+          totalLength: Length(sys.assumedReturnLengthM),
+          segmentCount: 1,
+          material: 'PPR',
+          tag: 'HWR-ASSUMED',
+          assumed: true,
+        ),
+  ];
+  return assumed.isEmpty ? drawn : [...drawn, ...assumed];
 });
 
 /// Continuous pipe chains (maximal collinear same-service/-diameter run
@@ -1519,25 +1556,58 @@ final pipeCutPlanProvider = Provider<List<PipeCutGroup>>((ref) {
   return buildPipeCutPlan(ref.watch(pipeChainsProvider));
 });
 
-/// Hot-water recirculation design for the drawn hot-water network. Null when
-/// there's no circulated hot-water pipework.
+/// Round 26 (hot-water-2-separate-systems-merged) — ONE hot-water
+/// recirculation system per hot-water connected component (keyed by the
+/// component's [serviceComponentRoots] root): its design, its node set (which
+/// drawn HW pump carries it) and the ASSUMED return the calculation relies on
+/// when none is drawn.
+@immutable
+class HotWaterRecircSystem {
+  /// The component's source / root node id.
+  final String rootId;
+
+  /// The sized recirculation duty of THIS system.
+  final HotWaterRecircDesign design;
+
+  /// True when the loop is a DRAWN return (no assumed DN20 return).
+  final bool drawnReturn;
+
+  /// The length of the ASSUMED DN20 return the heat loss + head include when
+  /// no return is drawn (0 when drawn) — taken off as an 'assumed' BOM line.
+  final double assumedReturnLengthM;
+
+  /// Every node of the hot-water component.
+  final Set<String> nodeIds;
+
+  const HotWaterRecircSystem({
+    required this.rootId,
+    required this.design,
+    required this.drawnReturn,
+    required this.assumedReturnLengthM,
+    required this.nodeIds,
+  });
+}
+
+/// Every hot-water recirculation system of the drawn network, ordered by
+/// recirculation flow (largest first, ties by root id) — the first is the
+/// PRIMARY system ([hotWaterRecircProvider]).
 ///
-/// Round 16 (plumbing-plant-hw-recirc-loop-head) — the loop is the CIRCULATED
-/// pipework only ([hotWaterRecircLoop]): the mains / risers the recirculation
-/// keeps hot, never the fixture branches (dead legs the circulating flow does
-/// not pass through). Heat loss is 25 W/m over that pipework plus the return
-/// leg (one return run back along the index path, at
-/// [kDefaultRecircReturnDiameter] — `// VERIFY`, a return is rarely drawn),
-/// and the head is the index run's friction at each segment's OWN sized bore
-/// plus the return leg. It used to sum EVERY hot-water edge (fixture branches
-/// included) into one length and push the recirc flow through all of it at
-/// the network's SMALLEST bore (a DN15 branch): 1711 m of head and a 30 kW
-/// circulator on a 20-storey building.
-final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
+/// Round 16 (plumbing-plant-hw-recirc-loop-head) — each loop is the CIRCULATED
+/// pipework only ([hotWaterRecircLoops]): the mains / risers the recirculation
+/// keeps hot, never the fixture branches. Heat loss is 25 W/m over that
+/// pipework plus the assumed return leg (one return run back along the index
+/// path at [kDefaultRecircReturnDiameter] — `// VERIFY`), and the head is the
+/// index run's friction at each segment's OWN sized bore plus the return leg.
+/// Round 26 — PARALLEL drawn loops each carry their heat-loss share of the
+/// flow (shared trunks the sum); two heaters are two systems; a system with no
+/// return drawn and a developed length ≤ [kRecircMinDevelopedLengthM] assumes
+/// no recirculation at all.
+final hotWaterRecircSystemsProvider =
+    Provider<List<HotWaterRecircSystem>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
-  final loop = hotWaterRecircLoop(net, sizing,
+  final loops = hotWaterRecircLoops(net, sizing,
       lengthOf: (e) => edgeLength(
             e,
             net,
@@ -1545,66 +1615,195 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
             building: project.building,
             mounting: project.mounting,
           ).meters);
-  if (loop == null) return null;
-  final design = sizeHotWaterRecirculation(
-    heatLoss: heatLossFromLength(
-        loopLength: Length(loop.circulatedLengthM + loop.returnLengthM)),
-    loopLength: Length(loop.returnLengthM),
-    returnDiameter: kDefaultRecircReturnDiameter,
-    supplyPath: loop.indexPath,
-    // M14 — the flow temperature and allowable loop drop are DESIGN INPUTS
-    // (Building page), not engine constants: they set the recirc flow AND the
-    // modelled return temperature the anti-Legionella check judges. The
-    // defaults (60 °C / 5 K) reproduce the engine's own values exactly — but a
-    // project that departs (55 °C stored, or a 10 K drop) now actually trips
-    // the check.
-    flowTempC: ref.watch(hotWaterFlowTempProvider),
-    allowableDropK: ref.watch(hotWaterDeltaTProvider),
-  );
-  // Round 17 follow-up — a DRAWN return: the reported loop length is the drawn
-  // loop the head was computed around (no phantom DN20 leg was added).
-  final drawn = loop.drawnLoopLengthM;
-  if (drawn == null) return design;
-  return HotWaterRecircDesign(
-    recircFlow: design.recircFlow,
-    loopHead: design.loopHead,
-    pump: design.pump,
-    returnTempC: design.returnTempC,
-    loopLength: Length(drawn),
-  );
+  final flowTemp = ref.watch(hotWaterFlowTempProvider);
+  final dT = ref.watch(hotWaterDeltaTProvider);
+  final out = <HotWaterRecircSystem>[];
+  for (final loop in loops) {
+    final design = sizeHotWaterRecirculation(
+      heatLoss: heatLossFromLength(
+          loopLength: Length(loop.circulatedLengthM + loop.returnLengthM)),
+      loopLength: Length(loop.returnLengthM),
+      returnDiameter: kDefaultRecircReturnDiameter,
+      supplyPath: loop.indexPath,
+      supplyPathFlowShares: loop.indexFlowShares,
+      // M14 — the flow temperature and allowable loop drop are DESIGN INPUTS
+      // (Building page), not engine constants.
+      flowTempC: flowTemp,
+      allowableDropK: dT,
+    );
+    // Round 17 follow-up — a DRAWN return: the reported loop length is the
+    // drawn loop the head was computed around (no phantom DN20 leg added).
+    final drawn = loop.drawnLoopLengthM;
+    out.add(HotWaterRecircSystem(
+      rootId: loop.rootId,
+      design: drawn == null
+          ? design
+          : HotWaterRecircDesign(
+              recircFlow: design.recircFlow,
+              loopHead: design.loopHead,
+              pump: design.pump,
+              returnTempC: design.returnTempC,
+              loopLength: Length(drawn),
+            ),
+      drawnReturn: drawn != null,
+      assumedReturnLengthM: drawn == null ? loop.returnLengthM : 0,
+      nodeIds: loop.nodeIds,
+    ));
+  }
+  out.sort((a, b) {
+    final c = b.design.recircFlow.cubicMetersPerSecond
+        .compareTo(a.design.recircFlow.cubicMetersPerSecond);
+    return c != 0 ? c : a.rootId.compareTo(b.rootId);
+  });
+  return out;
 });
 
-/// Round 16 — the CIRCULATED hot-water pipework of [net] (pure; testable
+/// The PRIMARY hot-water recirculation design (the largest system of
+/// [hotWaterRecircSystemsProvider]). Null when no hot-water pipework needs
+/// recirculation.
+final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
+  final systems = ref.watch(hotWaterRecircSystemsProvider);
+  return systems.isEmpty ? null : systems.first.design;
+});
+
+/// Round 26 (hot-water-2-phantom-hwr-leg-on-drawn-return) — true when some
+/// hot-water system's recirculation relies on an ASSUMED (undrawn) return:
+/// the ONE signal the riser canvas + export draw the dashed HWR leg on. A
+/// drawn return is drawn as itself — never a second phantom leg beside it.
+final hotWaterAssumedReturnProvider = Provider<bool>((ref) => ref
+    .watch(hotWaterRecircSystemsProvider)
+    .any((s) => !s.drawnReturn));
+
+/// One hot-water recirculation loop of [hotWaterRecircLoops].
+typedef HotWaterRecircLoop = ({
+  String rootId,
+  double circulatedLengthM,
+  double returnLengthM,
+  List<({Length length, Diameter diameter})> indexPath,
+  List<double>? indexFlowShares,
+  double? drawnLoopLengthM,
+  Set<String> nodeIds,
+});
+
+/// The PRIMARY loop of [hotWaterRecircLoops] (the most circulated pipework,
+/// ties by root id) — the single-system view. Null when nothing needs
+/// recirculation.
+HotWaterRecircLoop? hotWaterRecircLoop(
+  Network net,
+  Map<String, EdgeSizing> sizing, {
+  required double Function(NetEdge e) lengthOf,
+  double minDevelopedLengthM = kRecircMinDevelopedLengthM,
+}) {
+  final loops = hotWaterRecircLoops(net, sizing,
+      lengthOf: lengthOf, minDevelopedLengthM: minDevelopedLengthM);
+  if (loops.isEmpty) return null;
+  final sorted = [...loops]..sort((a, b) {
+      final c = b.circulatedLengthM.compareTo(a.circulatedLengthM);
+      return c != 0 ? c : a.rootId.compareTo(b.rootId);
+    });
+  return sorted.first;
+}
+
+/// Shortest-path distances (by [lengthOf]) from [src] over [adj] — Dijkstra
+/// with equal-length ties broken by node id, so the result never depends on
+/// edge ids or drawing order (Round 26, hot-water-2-ring-index-run-bfs-id-
+/// dependent: a hop-order BFS took whichever ring branch sorted first).
+({Map<String, double> dist, Map<String, NetEdge> via}) _shortestPaths(
+  Map<String, List<NetEdge>> adj,
+  String src,
+  double Function(NetEdge e) lengthOf,
+) {
+  final dist = <String, double>{src: 0};
+  final via = <String, NetEdge>{};
+  final done = <String>{};
+  String otherEnd(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
+  while (true) {
+    String? best;
+    for (final en in dist.entries) {
+      if (done.contains(en.key)) continue;
+      final b = best;
+      if (b == null ||
+          en.value < dist[b]! - 1e-12 ||
+          ((en.value - dist[b]!).abs() <= 1e-12 && en.key.compareTo(b) < 0)) {
+        best = en.key;
+      }
+    }
+    if (best == null) break;
+    done.add(best);
+    final d = dist[best]!;
+    for (final e in adj[best] ?? const <NetEdge>[]) {
+      final m = otherEnd(e, best);
+      if (done.contains(m)) continue;
+      final nd = d + lengthOf(e);
+      final old = dist[m];
+      if (old == null || nd < old - 1e-12) {
+        dist[m] = nd;
+        via[m] = e;
+      } else if ((nd - old).abs() <= 1e-12) {
+        // Equal length: keep the predecessor with the lower NODE id.
+        final cur = via[m];
+        if (cur != null && best.compareTo(otherEnd(cur, m)) < 0) via[m] = e;
+      }
+    }
+  }
+  return (dist: dist, via: via);
+}
+
+/// Round 16 / 26 — the CIRCULATED hot-water pipework of [net], one loop per
+/// hot-water connected component that needs recirculation (pure; testable
 /// without a container): every hot-water edge with NO fixture-role endpoint
 /// and no bare open-ended leaf (a dead leg the recirculation never reaches),
 /// its total length, and the INDEX run from the component's source (the
 /// longest circulated path by length, each segment at its sized bore) whose
-/// length the return leg mirrors. Null when nothing is circulated.
-({
-  double circulatedLengthM,
-  double returnLengthM,
-  List<({Length length, Diameter diameter})> indexPath,
-  double? drawnLoopLengthM,
-})? hotWaterRecircLoop(
+/// length the return leg mirrors. A component with no DRAWN return whose
+/// developed length (source → farthest fixture) is at or below
+/// [minDevelopedLengthM] is omitted — no recirculation is assumed.
+List<HotWaterRecircLoop> hotWaterRecircLoops(
   Network net,
   Map<String, EdgeSizing> sizing, {
   required double Function(NetEdge e) lengthOf,
+  double minDevelopedLengthM = kRecircMinDevelopedLengthM,
 }) {
-  final hw = [
+  final hwAll = [
     for (final e in net.edges)
       if (e.service == ServiceType.hotWater) e,
   ];
-  if (hw.isEmpty) return null;
-  final degree = <String, int>{};
-  for (final e in hw) {
-    degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
-    degree[e.toId] = (degree[e.toId] ?? 0) + 1;
-  }
+  if (hwAll.isEmpty) return const [];
   final roots = serviceComponentRoots(net, ServiceType.hotWater,
       demandNodeIds: {
         for (final n in net.nodes)
           if (n.role == NodeRole.fixture) n.id,
       });
+  final byRoot = <String, List<NetEdge>>{};
+  for (final e in hwAll) {
+    final r = roots[e.fromId] ?? roots[e.toId];
+    if (r == null) continue;
+    (byRoot[r] ??= []).add(e);
+  }
+  final out = <HotWaterRecircLoop>[];
+  for (final root in byRoot.keys.toList()..sort()) {
+    final loop = _hotWaterRecircLoopOf(net, sizing, byRoot[root]!, root, roots,
+        lengthOf: lengthOf, minDevelopedLengthM: minDevelopedLengthM);
+    if (loop != null) out.add(loop);
+  }
+  return out;
+}
+
+HotWaterRecircLoop? _hotWaterRecircLoopOf(
+  Network net,
+  Map<String, EdgeSizing> sizing,
+  List<NetEdge> hw,
+  String root,
+  Map<String, String> roots, {
+  required double Function(NetEdge e) lengthOf,
+  required double minDevelopedLengthM,
+}) {
+  final degree = <String, int>{};
+  for (final e in hw) {
+    degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
+    degree[e.toId] = (degree[e.toId] ?? 0) + 1;
+  }
+  final nodeIds = degree.keys.toSet();
   bool deadEnd(String id) {
     final n = net.nodeById(id);
     if (n?.role == NodeRole.fixture) return true;
@@ -1627,37 +1826,18 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
     (adj[e.toId] ??= []).add(e);
   }
   if (total <= 0) return null;
-
-  final sources = {
-    for (final e in circulated) ...[
-      if (roots[e.fromId] == e.fromId) e.fromId,
-      if (roots[e.toId] == e.toId) e.toId,
-    ],
-  };
-  // A component whose source sits on a dead leg starts from the circulated
-  // node nearest it (deterministic: the lowest-id circulated node).
-  if (sources.isEmpty) sources.add((adj.keys.toList()..sort()).first);
   for (final l in adj.values) {
     l.sort((a, b) => a.id.compareTo(b.id));
   }
+  // A component whose source sits on a dead leg starts from the circulated
+  // node nearest it (deterministic: the lowest-id circulated node).
+  final src =
+      adj.containsKey(root) ? root : (adj.keys.toList()..sort()).first;
 
-  // Round 17 follow-up (regression-hw-recirc-phantom-return-on-drawn-loop) — a
-  // DRAWN return closes a cycle in the circulated pipework (the G2 HWR leg, the
-  // Round-12 check-valve cut). Its length is already inside [total], so adding
-  // the mirrored DN20 return on top counted the return twice (+40 % flow,
-  // +49 % head on a 100 m loop). When a cycle exists, the loop IS that cycle:
-  // no phantom return, and the head is the friction around the drawn loop at
-  // each segment's own bore. The longest fundamental cycle (BFS tree from the
-  // source + one closing edge) is taken — deterministic by edge id.
-  //
-  // Round 19 (regression-hw-ring-main-taken-as-drawn-return) — only a cycle
-  // that IS a recirculation return counts: it must pass through the source /
-  // heater (a plant, or the component's own root) or carry the check valve
-  // that marks a drawn return (the Round-12 convention). A RING MAIN fed by a
-  // stub (heater → feed → ring) is distribution pipework, not a return: it
-  // still needs the feed AND a return to the heater, so it falls through to
-  // the index run + mirrored DN20 return (taking the ring as the loop dropped
-  // the heater feed and the return — ~32× low head on the probe).
+  // Round 17 follow-up / Round 19 — a DRAWN return closes a cycle in the
+  // circulated pipework through the source / a plant or a check valve (a
+  // stub-fed RING MAIN is distribution, not a return). When such cycles exist
+  // they ARE the loops: no phantom return.
   bool isReturnCycle(List<NetEdge> cycle) {
     for (final c in cycle) {
       for (final id in [c.fromId, c.toId]) {
@@ -1672,9 +1852,8 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
     return false;
   }
 
-  var bestCycleLen = 0.0;
-  var bestCycle = const <NetEdge>[];
-  for (final src in sources.toList()..sort()) {
+  final returnCycles = <List<NetEdge>>[];
+  {
     final parent = <String, NetEdge>{};
     final depth = <String, int>{src: 0};
     final queue = [src];
@@ -1695,7 +1874,6 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
       for (final e in adj[n] ?? const <NetEdge>[]) {
         if (treeEdgeIds.contains(e.id) || !seen.add(e.id)) continue;
         if (e.fromId == e.toId) continue;
-        // Walk both ends up to their lowest common ancestor.
         var a = e.fromId;
         var b = e.toId;
         final up = <NetEdge>[];
@@ -1712,61 +1890,123 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
           }
         }
         final cycle = [...up.reversed, e, ...down];
-        if (!isReturnCycle(cycle)) continue;
-        final len = cycle.fold<double>(0, (acc, c) => acc + lengthOf(c));
-        if (len > bestCycleLen + 1e-12) {
-          bestCycleLen = len;
-          bestCycle = cycle;
-        }
+        if (isReturnCycle(cycle)) returnCycles.add(cycle);
       }
     }
   }
-  if (bestCycle.isNotEmpty) {
+  if (returnCycles.isNotEmpty) {
+    // Round 26 (hot-water-2-multi-loop-full-flow-one-loop) — the loops run in
+    // PARALLEL: each carries the share of the circulating flow its own
+    // pipework loses (a segment shared by n loops splits its length n ways;
+    // circulated pipework on no loop is spread pro rata), and a segment
+    // carries the SUM of the shares of the loops through it. The index loop
+    // is the one with the greatest friction at those flows (Hazen–Williams
+    // h ∝ Σ s^1.852 · L / D^4.871 — the common Q factor cancels).
+    final count = <String, int>{};
+    for (final c in returnCycles) {
+      for (final e in c) {
+        count[e.id] = (count[e.id] ?? 0) + 1;
+      }
+    }
+    final loopHeat = [
+      for (final c in returnCycles)
+        c.fold<double>(0, (a, e) => a + lengthOf(e) / count[e.id]!),
+    ];
+    final heatSum = loopHeat.fold<double>(0, (a, b) => a + b);
+    final shareOf = [
+      for (final h in loopHeat)
+        heatSum > 0 ? h / heatSum : 1.0 / returnCycles.length,
+    ];
+    final edgeShare = <String, double>{};
+    for (var i = 0; i < returnCycles.length; i++) {
+      for (final e in returnCycles[i]) {
+        edgeShare[e.id] = (edgeShare[e.id] ?? 0) + shareOf[i];
+      }
+    }
+    double dOf(NetEdge e) =>
+        (sizing[e.id]?.diameter ?? kDefaultRecircReturnDiameter).meters;
+    var bestI = 0;
+    var bestH = -1.0;
+    var bestLen = 0.0;
+    for (var i = 0; i < returnCycles.length; i++) {
+      var h = 0.0;
+      var len = 0.0;
+      for (final e in returnCycles[i]) {
+        final l = lengthOf(e);
+        len += l;
+        final d = dOf(e);
+        if (l <= 0 || d <= 0) continue;
+        h += math.pow(edgeShare[e.id]!, 1.852).toDouble() *
+            l /
+            math.pow(d, 4.871).toDouble();
+      }
+      if (h > bestH * (1 + 1e-12) + 1e-300 ||
+          ((h - bestH).abs() <= bestH.abs() * 1e-12 && len > bestLen + 1e-12)) {
+        bestH = h;
+        bestI = i;
+        bestLen = len;
+      }
+    }
+    final index = returnCycles[bestI];
+    final single = returnCycles.length == 1;
     return (
+      rootId: root,
       circulatedLengthM: total,
       returnLengthM: 0.0,
       indexPath: [
-        for (final e in bestCycle)
+        for (final e in index)
           (
             length: Length(lengthOf(e)),
             diameter: sizing[e.id]?.diameter ?? kDefaultRecircReturnDiameter,
           ),
       ],
-      drawnLoopLengthM: bestCycleLen,
+      indexFlowShares:
+          single ? null : [for (final e in index) edgeShare[e.id]!],
+      drawnLoopLengthM: index.fold<double>(0, (a, e) => a + lengthOf(e)),
+      nodeIds: nodeIds,
     );
   }
 
-  // Index run: the longest circulated path (by length) from a source.
-  var bestLen = 0.0;
-  var bestPath = const <NetEdge>[];
-  for (final src in sources.toList()..sort()) {
-    final dist = <String, double>{src: 0};
-    final via = <String, NetEdge>{};
-    final queue = [src];
-    for (var i = 0; i < queue.length; i++) {
-      final n = queue[i];
-      for (final e in adj[n] ?? const <NetEdge>[]) {
-        final m = e.fromId == n ? e.toId : e.fromId;
-        if (dist.containsKey(m)) continue;
-        dist[m] = dist[n]! + lengthOf(e);
-        via[m] = e;
-        queue.add(m);
-      }
-    }
-    for (final en in dist.entries) {
-      if (en.value <= bestLen + 1e-12) continue;
-      bestLen = en.value;
-      final path = <NetEdge>[];
-      var cur = en.key;
-      while (via[cur] != null) {
-        final e = via[cur]!;
-        path.add(e);
-        cur = e.fromId == cur ? e.toId : e.fromId;
-      }
-      bestPath = path.reversed.toList();
-    }
+  // Round 26 (hot-water-2-house-fabricated-recirc-pump) — with NO return
+  // drawn, recirculation is only ASSUMED where the developed length (source →
+  // farthest hot-water fixture, over every hot-water pipe) exceeds the
+  // threshold (IPC 607.2, `// VERIFY`): a house gets no pump, way or HWR leg.
+  final allAdj = <String, List<NetEdge>>{};
+  for (final e in hw) {
+    (allAdj[e.fromId] ??= []).add(e);
+    (allAdj[e.toId] ??= []).add(e);
   }
+  final dev = _shortestPaths(
+      allAdj, allAdj.containsKey(root) ? root : src, lengthOf);
+  var developed = 0.0;
+  for (final en in dev.dist.entries) {
+    if (net.nodeById(en.key)?.role != NodeRole.fixture) continue;
+    if (en.value > developed) developed = en.value;
+  }
+  if (developed <= minDevelopedLengthM + 1e-9) return null;
+
+  // Index run: the longest circulated path (by length) from the source, on
+  // SHORTEST-path distances (Round 26 — Dijkstra, never hop order).
+  final sp = _shortestPaths(adj, src, lengthOf);
+  var bestLen = 0.0;
+  String? far;
+  final entries = sp.dist.entries.toList()
+    ..sort((a, b) => a.key.compareTo(b.key));
+  for (final en in entries) {
+    if (en.value <= bestLen + 1e-12) continue;
+    bestLen = en.value;
+    far = en.key;
+  }
+  final path = <NetEdge>[];
+  var cur = far;
+  while (cur != null && sp.via[cur] != null) {
+    final e = sp.via[cur]!;
+    path.add(e);
+    cur = e.fromId == cur ? e.toId : e.fromId;
+  }
+  final bestPath = path.reversed.toList();
   return (
+    rootId: root,
     circulatedLengthM: total,
     returnLengthM: bestLen,
     indexPath: [
@@ -1776,7 +2016,9 @@ final hotWaterRecircProvider = Provider<HotWaterRecircDesign?>((ref) {
           diameter: sizing[e.id]?.diameter ?? kDefaultRecircReturnDiameter,
         ),
     ],
+    indexFlowShares: null,
     drawnLoopLengthM: null,
+    nodeIds: nodeIds,
   );
 }
 
@@ -1859,7 +2101,27 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
 /// drains, dampers) taken off per piece for the mechanical quotation.
 final componentTakeoffProvider = Provider<List<ComponentLine>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
-  return buildComponentTakeoff(net: net, sizing: ref.watch(sizingProvider));
+  final drawn =
+      buildComponentTakeoff(net: net, sizing: ref.watch(sizingProvider));
+  // Round 26 — the recirculation pump an ASSUMED (undrawn) return relies on,
+  // when no pump / booster is drawn on that hot-water system.
+  final assumed = [
+    for (final sys in ref.watch(hotWaterRecircSystemsProvider))
+      if (!sys.drawnReturn &&
+          !sys.nodeIds.any((id) {
+            final c = net.nodeById(id)?.component;
+            return c == NodeComponent.pump || c == NodeComponent.boosterSet;
+          }))
+        ComponentLine(
+          service: ServiceType.hotWater,
+          component: NodeComponent.pump,
+          sizeLabel:
+              '${sys.design.pump.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW',
+          count: 1,
+          assumed: true,
+        ),
+  ];
+  return assumed.isEmpty ? drawn : [...drawn, ...assumed];
 });
 
 /// Estimated fittings (elbows/tees/crosses/reducers) for the sized network.

@@ -229,17 +229,29 @@ void main() {
         .where((e) => e.kind == EdgeKind.riser)
         .length;
     // Two mutual-nearest pairs (a↔c on the left, b↔d on the right) ⇒ two
-    // inferred connectors. Under the shared column layout (B7) a node sits at
-    // `sidePad + rank/(cols-1) * drawWidth`: with 4 distinct x-buckets and a
-    // 1100-wide canvas (sidePad 32, drawWidth 1036) the ranks are a=0, c=1,
-    // b=2, d=3, so a=32, c=32+1036/3=377.3, b=32+2*1036/3=722.7, d=1068. Each
-    // dashed connector's clickable vertical leg sits at its endpoints' mid-x:
-    // left = (32+377.3)/2 ≈ 205, right = (722.7+1068)/2 ≈ 895.
-    await tester.tapAt(const Offset(205, 400)); // left pair mid-x
+    // inferred connectors, each clickable on its vertical leg at its
+    // endpoints' mid-x. Round 26 — the Auto layout now sits in a FRAME (the
+    // FFL/fan-out gutter on the left, the pump-set detail + notes column on
+    // the right), so the node x's are read from the painter's OWN layout
+    // (the same `layoutNodePositions` its hit test uses) rather than the old
+    // full-width `sidePad + rank/(cols-1) * drawWidth` arithmetic.
+    final paint = tester
+        .widgetList<CustomPaint>(find.byType(CustomPaint))
+        .firstWhere((w) =>
+            w.painter.runtimeType.toString() == '_AutoSchematicPainter');
+    final pos = (paint.painter as dynamic).layoutNodePositions(
+        paint.size) as Map<String, Offset>;
+    // Column ranks a=0, c=1, b=2, d=3 (4 distinct x-buckets) ⇒ left-to-right.
+    expect(pos['a']!.dx < pos['c']!.dx && pos['c']!.dx < pos['b']!.dx,
+        isTrue);
+    final leftX = (pos['a']!.dx + pos['c']!.dx) / 2;
+    final rightX = (pos['b']!.dx + pos['d']!.dx) / 2;
+    final midY = (pos['a']!.dy + pos['c']!.dy) / 2;
+    await tester.tapAt(Offset(leftX, midY)); // left pair mid-x
     await tester.pump();
     expect(hasRiser(), isTrue);
     expect(riserCount(), 1);
-    await tester.tapAt(const Offset(895, 400)); // right pair mid-x
+    await tester.tapAt(Offset(rightX, midY)); // right pair mid-x
     // Drain the transient 'Riser added' status-message timers before teardown.
     await tester.pump(const Duration(seconds: 4));
 
