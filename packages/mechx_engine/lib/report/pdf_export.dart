@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../network/network.dart';
+import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart';
 import 'drawing_chrome.dart';
 import 'plan_symbols.dart';
@@ -300,7 +301,8 @@ Uint8List networkToPdf({
         // from the real ctx gradient the caller passes (never hardcoded).
         final slopeText = (e.service.regime == FlowRegime.gravity &&
                 gravitySlope != null)
-            ? gravitySlopeLabel(gravitySlope)
+            ? gravitySlopeLabel(
+                laidGravitySlope(e, gravitySlope, s.diameter.inMillimeters))
             : null;
         final label = slopeText != null
             ? '${_sizeLabel(e, s)} - $slopeText'

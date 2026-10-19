@@ -556,6 +556,8 @@ Uint8List planToPdf({
       final s = sizing[e.id];
       return s != null ? _sizeLabel(e, s) : null;
     },
+    // Round 33 — the laid fall of a drainage run reads its own sized bore.
+    diameterMmOf: (e) => sizing[e.id]?.diameter.inMillimeters,
     lengthOf: (e) => edgeLengths[e.id],
     edgeTags: edgeTags,
     edgeElevationLabels: edgeElevationLabels,

@@ -154,10 +154,47 @@ Future<Map<String, String>> gatherSheetAssetsAsync(List<Sheet> sheets) async {
 /// Payloads are gzip-compressed (detected by the `1f 8b` magic); a raw-base64
 /// payload from before compression landed is passed through unchanged, so older
 /// portable files still open.
+///
+/// Round 33 (import-robustness-2-4) — `gzip.decode` does NOT throw on a
+/// TRUNCATED stream (it returns the inflated prefix), so a torn payload used
+/// to extract silently as a partial plan. The gzip trailer's ISIZE (the last
+/// 4 bytes, little-endian: the uncompressed length mod 2^32) must match the
+/// decoded length, else the asset is corrupt and this throws.
 List<int> _decodeAsset(String b64) {
   final raw = base64Decode(b64);
   final gzipped = raw.length >= 2 && raw[0] == 0x1f && raw[1] == 0x8b;
-  return gzipped ? gzip.decode(raw) : raw;
+  if (!gzipped) return raw;
+  final out = gzip.decode(raw);
+  if (!gzipTrailerMatches(raw, out.length)) {
+    throw const FormatException('embedded plan is truncated / corrupt');
+  }
+  return out;
+}
+
+/// Round 33 — whether the gzip member [raw]'s ISIZE trailer equals
+/// [decodedLength] mod 2^32 (a single-member stream, as [gzip.encode] writes).
+/// Pure.
+bool gzipTrailerMatches(List<int> raw, int decodedLength) {
+  if (raw.length < 18) return false; // 10-byte header + 8-byte trailer
+  final n = raw.length;
+  final isize =
+      raw[n - 4] | (raw[n - 3] << 8) | (raw[n - 2] << 16) | (raw[n - 1] << 24);
+  return (isize & 0xffffffff) == (decodedLength & 0xffffffff);
+}
+
+/// Round 33 (import-robustness-2-4) — the sheets of [doc] whose plan file is
+/// NOT on disk after Open (a corrupt / truncated embedded asset left the
+/// sheet on its original path, or a path-only file whose plans are gone):
+/// their names, in rail order. A placeholder sheet is never listed. The
+/// caller says so instead of a silent 'Project opened' over a blank sheet.
+List<String> missingPlanSheetNames(ProjectDocument doc,
+    {bool Function(String path)? exists}) {
+  final ok = exists ?? (String p) => File(p).existsSync();
+  return [
+    for (final s in doc.sheets)
+      if ((s.pdfPath ?? s.dxfPath) case final path?)
+        if (!ok(path)) s.name,
+  ];
 }
 
 /// Return a copy of [doc] with every embedded asset extracted to a local file

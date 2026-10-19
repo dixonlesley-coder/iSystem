@@ -6,6 +6,8 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/plan_symbols.dart'
     show equipmentNodeTags, gravitySlopeLabel;
 import 'package:mechx_engine/report/riser_tags.dart';
+import 'package:mechx_engine/sizing/drainage_advisory.dart'
+    show laidGravitySlope;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -513,9 +515,14 @@ class _NetworkPainter extends CustomPainter {
           if (tag != null) label = '$label  $tag';
           // G5: append the laid fall (`1:100`) on a gravity-regime run so the
           // soil/waste/rainwater branch shows its slope, not just its size.
+          // Round 33 — the fall the run is LAID at (a <= DN65 drainage
+          // branch never prints flatter than its 1:50 minimum), the SAME
+          // rule as the plan exporters.
           if (e.service.regime == FlowRegime.gravity &&
               gravitySlopeText != null) {
-            label = '$label  $gravitySlopeText';
+            final laid = gravitySlopeLabel(laidGravitySlope(
+                e, drainageSlope, s.diameter.inMillimeters));
+            label = '$label  ${laid ?? gravitySlopeText}';
           }
           labelSide = _label(canvas, pa, pb, outer, label, placedLabels);
         }

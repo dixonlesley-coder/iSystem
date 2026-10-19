@@ -443,6 +443,14 @@ class NetNode {
   /// core never reads it; null ⇒ byte-identical.
   final String? autoPlacedRoomId;
 
+  /// Round 33 (engineer-walkthrough-equipment-tag-global-ordinal) — the
+  /// equipment TAG NUMBER this node was minted with, per tag prefix (the 1 of
+  /// `P-01`), so the first pump is P-01 however many fixtures were drawn
+  /// before it. Assigned once at mint from a per-prefix sequence that never
+  /// re-issues a deleted number (C6 stability); null on a legacy node (its
+  /// tag still derives from the node-id ordinal — unchanged). Additive.
+  final int? tagNo;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -463,6 +471,7 @@ class NetNode {
     this.faceHeightMm,
     this.fittingType,
     this.autoPlacedRoomId,
+    this.tagNo,
   });
 
   NetNode copyWith({
@@ -493,6 +502,8 @@ class NetNode {
     bool clearJunctionFitting = false,
     String? autoPlacedRoomId,
     bool clearAutoPlacedRoomId = false,
+    int? tagNo,
+    bool clearTagNo = false,
   }) =>
       NetNode(
         id: id,
@@ -524,6 +535,7 @@ class NetNode {
         autoPlacedRoomId: clearAutoPlacedRoomId
             ? null
             : (autoPlacedRoomId ?? this.autoPlacedRoomId),
+        tagNo: clearTagNo ? null : (tagNo ?? this.tagNo),
       );
 }
 

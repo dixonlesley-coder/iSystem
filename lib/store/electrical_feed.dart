@@ -14,6 +14,7 @@ import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/riser_tags.dart' show equipmentDetail;
 import 'package:mechx_engine/sizing/ejector.dart'
     show drawnEjectorPumpIds, duplexEjectorSets;
@@ -74,6 +75,20 @@ final Set<String> mepMintedCircuitNames = {
   kExhaustFanLoadName,
   kHwRecircPumpLoadName,
 };
+
+/// Round 33 (engineer-walkthrough-electrical-way-not-tagged-to-equipment) —
+/// a drawn machine's way is named `<label> <tag>` ('Pump P-02'), the tag the
+/// mechanical sheets print. A minted name is either one of
+/// [mepMintedCircuitNames] or such a name with a trailing equipment tag, so a
+/// legacy bare 'Pump' re-adopts the tagged name and a re-tagged machine's
+/// name follows; anything else is the engineer's.
+final RegExp _kMintedTagSuffix = RegExp(r'^(.*) ([A-Z]+-\d{2,})$');
+
+bool isMepMintedCircuitName(String name) {
+  if (mepMintedCircuitNames.contains(name)) return true;
+  final m = _kMintedTagSuffix.firstMatch(name);
+  return m != null && mepMintedCircuitNames.contains(m.group(1));
+}
 
 /// Which DRAWN plant node carries which SOLVED duty (audit r8 coupling-1/2).
 ///
@@ -927,6 +942,8 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   final net = ref.watch(networkControllerProvider).network;
   final bind = ref.watch(mepDutyBindingProvider);
   final fed = ref.watch(nodeFedLoadsProvider);
+  // Round 33 — the stable equipment tags the mechanical sheets print.
+  final tags = equipmentNodeTags(net);
 
   final loads = <MepEquipmentLoad>[];
   for (final n in net.nodes) {
@@ -938,7 +955,8 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     final input = f.input;
     loads.add(MepEquipmentLoad(
       id: 'node-${n.id}',
-      name: c.label,
+      // Round 33 — 'Pump P-02', never a bare 'Pump' beside a second 'Pump'.
+      name: '${c.label} ${tags[n.id] ?? ''}'.trim(),
       // A pump piped to a fire service is a FIRE pump (life-safety), never an
       // ordinary 1.5 kW supply pump (audit r8 coupling-1).
       source: fire

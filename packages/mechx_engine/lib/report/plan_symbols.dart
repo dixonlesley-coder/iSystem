@@ -17,8 +17,12 @@ import 'dart:math' as math;
 
 import '../geometry/building.dart';
 import '../network/network.dart';
+import '../sizing/drainage_advisory.dart' show laidGravitySlope;
+import '../sizing/network_sizing.dart' show EdgeSizing;
+import '../standards/sni.dart' show PlumbingFixture;
 import '../units.dart';
 import 'drawing_chrome.dart' show LabelBox;
+import 'number_format.dart' show signedElevationText;
 import 'sld_sheet.dart';
 
 /// Equipment glyph for [c] as neutral drawing primitives, centred on
@@ -436,6 +440,125 @@ int? _nodeIdOrdinal(String id) {
 /// for hand-built data) push to the next free number, in node order.
 ///
 /// Pure + deterministic — never fabricates a tag for a non-equipment node.
+/// Round 33 (engineer-walkthrough-plan-fixtures-anonymous) — the short
+/// ASCII PLAN CODE of a plumbing fixture / drain terminal: WC (water closet,
+/// flush valve or tank), UR (urinal), LAV (lavatory), SH (shower), BT
+/// (bathtub), KS (kitchen sink), HB (hose bibb), FD (floor drain). Null for
+/// anything else (equipment carries its own `P-01` tag). Pure; the plan PDF
+/// and DXF print it beside the fixture glyph (one placer, PDF == DXF).
+String? fixturePlanCode(NetNode n) {
+  if (n.component == NodeComponent.floorDrain) return 'FD';
+  return switch (n.fixture) {
+    PlumbingFixture.waterClosetFlushValve ||
+    PlumbingFixture.waterClosetFlushTank =>
+      'WC',
+    PlumbingFixture.urinalFlushTank => 'UR',
+    PlumbingFixture.lavatory => 'LAV',
+    PlumbingFixture.shower => 'SH',
+    PlumbingFixture.bathtub => 'BT',
+    PlumbingFixture.kitchenSink => 'KS',
+    PlumbingFixture.hoseBibb => 'HB',
+    null => null,
+  };
+}
+
+/// Round 33 — what each [fixturePlanCode] stands for (the plan legend key).
+const Map<String, String> kFixturePlanCodeNames = {
+  'WC': 'water closet',
+  'UR': 'urinal',
+  'LAV': 'lavatory',
+  'SH': 'shower',
+  'BT': 'bathtub',
+  'KS': 'kitchen sink',
+  'HB': 'hose bibb',
+  'FD': 'floor drain',
+};
+
+/// Round 33 — the fixture-code tags of every node on ([sheetId],
+/// [floorIndex]) that carries a [fixturePlanCode] and no tag in [nodeTags].
+Map<String, String> fixturePlanTags(Network net,
+    {required String sheetId,
+    required int floorIndex,
+    Map<String, String>? nodeTags}) {
+  final out = <String, String>{};
+  for (final n in net.nodes) {
+    if (n.sheetId != sheetId || n.floorIndex != floorIndex) continue;
+    if ((nodeTags?[n.id] ?? '').isNotEmpty) continue;
+    final code = fixturePlanCode(n);
+    if (code != null) out[n.id] = code;
+  }
+  return out;
+}
+
+/// Round 33 — the plan sheet NOTES a plan PDF / DXF prints once in its
+/// legend (reserved chrome, PDF == DXF text):
+///   * the fixture codes used on the sheet ([fixtureTags]);
+///   * (engineer-walkthrough-plan-cl-datum-unstated) the `CL` datum when the
+///     sheet prints centreline heights ([hasCentrelineLabels]) and the
+///     floor's FFL is known: `CL = pipe centreline above this floor's FFL
+///     (<floor> FFL +16.00)` — a floor plan's CL is floor-relative while the
+///     riser sheet states absolute levels;
+///   * (engineer-walkthrough-plan-fall-below-own-minimum) the laid-fall
+///     rule when some drainage run is printed steeper than the project
+///     slope ([laidGravitySlope]).
+/// Pure; empty ⇒ nothing printed.
+List<String> planSheetNotes({
+  required Network net,
+  required String sheetId,
+  required int floorIndex,
+  Map<String, String> fixtureTags = const {},
+  bool hasCentrelineLabels = false,
+  double? floorFflM,
+  String? floorName,
+  double? gravitySlope,
+  Map<String, EdgeSizing> sizing = const {},
+}) {
+  final notes = <String>[];
+  final codes = fixtureTags.values.toSet().toList()
+    ..sort((a, b) {
+      final ka = kFixturePlanCodeNames.keys.toList();
+      return ka.indexOf(a).compareTo(ka.indexOf(b));
+    });
+  if (codes.isNotEmpty) {
+    notes.add(codes
+        .map((c) => '$c ${kFixturePlanCodeNames[c] ?? c}')
+        .join(' - '));
+  }
+  if (hasCentrelineLabels && floorFflM != null && floorFflM.isFinite) {
+    final where = [
+      if (floorName != null && floorName.isNotEmpty) floorName,
+      'FFL ${signedElevationText(floorFflM)}',
+    ].join(' ');
+    notes.add("CL = pipe centreline above this floor's FFL ($where)");
+  }
+  final slope = gravitySlope;
+  if (slope != null && slope > 0 && slope.isFinite) {
+    var steeper = false;
+    for (final e in net.edges) {
+      if (e.service != ServiceType.drainage || e.kind != EdgeKind.run) continue;
+      final a = net.nodeById(e.fromId), c = net.nodeById(e.toId);
+      bool on(NetNode? n) =>
+          n != null && n.sheetId == sheetId && n.floorIndex == floorIndex;
+      if (!on(a) || !on(c)) continue;
+      final d = sizing[e.id]?.diameter.inMillimeters;
+      if (laidGravitySlope(e, slope, d) > slope + 1e-12) {
+        steeper = true;
+        break;
+      }
+    }
+    if (steeper) {
+      notes.add('Drain fall: <= DN65 at 1:50 min, DN75-150 at 1:100 min, '
+          'else ${gravitySlopeLabel(slope)}');
+    }
+  }
+  return notes;
+}
+
+///
+/// Round 33 (engineer-walkthrough-equipment-tag-global-ordinal) — a node
+/// minted with a per-prefix [NetNode.tagNo] claims THAT number first (the
+/// first pump drawn is P-01, never P-41 after 40 fixtures); legacy nodes
+/// without one keep the node-id ordinal rule below, unchanged.
 Map<String, String> equipmentNodeTags(Network net) {
   final out = <String, String>{};
   final used = <String, Set<int>>{};
@@ -444,7 +567,20 @@ Map<String, String> equipmentNodeTags(Network net) {
   String format(String prefix, int n) =>
       '$prefix-${n.toString().padLeft(2, '0')}';
 
+  final claimed = <String>{};
   for (final n in net.nodes) {
+    final c = n.component;
+    final no = n.tagNo;
+    if (c == null || no == null || no < 1) continue;
+    final prefix = equipmentTagPrefix(c);
+    if (prefix == null) continue;
+    if (!used.putIfAbsent(prefix, () => <int>{}).add(no)) continue;
+    out[n.id] = format(prefix, no);
+    claimed.add(n.id);
+  }
+
+  for (final n in net.nodes) {
+    if (claimed.contains(n.id)) continue;
     final c = n.component;
     if (c == null) continue;
     final prefix = equipmentTagPrefix(c);

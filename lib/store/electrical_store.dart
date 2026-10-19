@@ -627,6 +627,18 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// drawn work (`floor_remap.dart`). [map] returns the new position, the SAME
   /// instance to leave it, or null to UN-PLACE it (its floor / sheet is gone).
   /// No-op — state untouched — when nothing changes.
+  /// Round 33 — the sheet ids carrying an electrical PLACEMENT (a panel's
+  /// `layoutPos` or a way's `loadPos`). A method on the notifier so the
+  /// project controller can ask WITHOUT depending on this provider's state
+  /// (which watches the project — a read of it from there is a cycle).
+  Set<String> placedSheetIds() => {
+        for (final p in state.panels) ...[
+          if (p.layoutPos != null) p.layoutPos!.sheetId,
+          for (final c in p.circuits)
+            if (c.loadPos != null) c.loadPos!.sheetId,
+        ],
+      };
+
   void remapLayoutPositions(LayoutPos? Function(LayoutPos pos) map) {
     var changed = false;
     final panels = <ElectricalPanel>[];
@@ -2571,7 +2583,7 @@ ElectricalCircuit _refreshedMepWay(
   // name the app supplied follows the new unit. Round 23 r2 — provenance: a
   // cos phi / phase count / load kind the engineer TYPED (`*UserSet`) is
   // never overwritten by the re-derivation.
-  final mintedName = mepMintedCircuitNames.contains(c.name);
+  final mintedName = isMepMintedCircuitName(c.name);
   // Round 24 — MIGRATION of a pre-flag (legacy) file: those builds never
   // re-derived cos phi / phases / load kind, so an unflagged value that
   // differs from the fresh mint may have been TYPED. Keep it and record the
@@ -2652,7 +2664,7 @@ bool _isMintedDemandFactor(ElectricalCircuit c, bool legacy) {
 /// of the test. Anything that fails ANY of the above is parked, never dropped —
 /// the check is deliberately conservative in the engineer's favour.
 bool _isPristineDerivedWay(ElectricalCircuit c) =>
-    mepMintedCircuitNames.contains(c.name) &&
+    isMepMintedCircuitName(c.name) &&
     c.role == CircuitRole.branch &&
     c.points == 1 &&
     (c.cosPhi - defaultMotorCosPhi).abs() < 1e-9 &&

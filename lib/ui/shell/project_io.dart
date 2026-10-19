@@ -851,6 +851,18 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
             StringKey.openRestoredFromBackup,
             {'file': path.split(Platform.pathSeparator).last})
         : 'Project opened');
+    // Round 33 (import-robustness-2-4) — a plan that could not be restored
+    // (a corrupt / truncated embedded copy, or a path-only file whose plans
+    // are gone) is named, never a silent blank sheet behind 'Project opened'.
+    final missing = missingPlanSheetNames(doc);
+    if (missing.isNotEmpty) {
+      read(loadErrorProvider.notifier).set(MechXStringsData(
+              read(localeProvider))
+          .format(StringKey.openPlansNotRestored, {
+        'count': '${missing.length}',
+        'names': missing.join(', '),
+      }));
+    }
   } on ProjectDocumentException catch (e) {
     // Malformed/incompatible file — surface why, leave the project untouched.
     read(loadErrorProvider.notifier).set(e.message);

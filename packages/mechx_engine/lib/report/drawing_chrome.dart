@@ -43,6 +43,11 @@ class DrawingChrome {
   /// The services to list in the legend colour/line key. Empty ⇒ no legend.
   final List<ServiceType> legendServices;
 
+  /// Round 33 — short text NOTES printed once under the legend rows (the
+  /// plan's fixture codes, its CL datum, the drain-fall rule). Empty ⇒
+  /// byte-identical.
+  final List<String> legendNotes;
+
   /// Optional human label under the scale bar (e.g. `1 : 100` or `5 m`). The
   /// engine never computes a real-world scale (it has no calibration here); the
   /// caller passes a label when it can, else the bar is a graphic-only marker.
@@ -82,6 +87,7 @@ class DrawingChrome {
     this.sheetTotal,
     this.northAngleRad = 0,
     this.legendServices = const [],
+    this.legendNotes = const [],
     this.scaleBarLabel,
     this.clientName,
     this.drawingTitle,
@@ -100,6 +106,7 @@ class DrawingChrome {
       sheetIndex == null &&
       sheetTotal == null &&
       legendServices.isEmpty &&
+      legendNotes.isEmpty &&
       clientName == null &&
       drawingTitle == null &&
       drawnBy == null &&
@@ -125,6 +132,7 @@ class DrawingChrome {
         sheetTotal: sheetTotal,
         northAngleRad: northAngleRad,
         legendServices: legendServices,
+        legendNotes: legendNotes,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: title,
@@ -134,6 +142,28 @@ class DrawingChrome {
         dateString: dateString,
         scaleText: scaleText,
       );
+
+  /// Round 33 — a copy with [notes] appended to [legendNotes] (every other
+  /// field kept); no notes ⇒ this same object (byte-identical).
+  DrawingChrome withLegendNotes(List<String> notes) => notes.isEmpty
+      ? this
+      : DrawingChrome(
+          drawingNumber: drawingNumber,
+          revisionNumber: revisionNumber,
+          sheetIndex: sheetIndex,
+          sheetTotal: sheetTotal,
+          northAngleRad: northAngleRad,
+          legendServices: legendServices,
+          legendNotes: [...legendNotes, ...notes],
+          scaleBarLabel: scaleBarLabel,
+          clientName: clientName,
+          drawingTitle: drawingTitle,
+          drawnBy: drawnBy,
+          checkedBy: checkedBy,
+          approvedBy: approvedBy,
+          dateString: dateString,
+          scaleText: scaleText,
+        );
 
   /// A copy with the sheet counter overridden (every other field kept). A
   /// paginated exporter builds one chrome and re-stamps the per-page `i of N`
@@ -147,6 +177,7 @@ class DrawingChrome {
         sheetTotal: total ?? sheetTotal,
         northAngleRad: northAngleRad,
         legendServices: legendServices,
+        legendNotes: legendNotes,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -367,15 +398,28 @@ String _pdfText(String raw) => pdfWinAnsiText(raw);
 
 /// A service-colour legend in the bottom-LEFT, one row per service: a short
 /// coloured swatch line + the service name. Grows UP from [originY].
+/// Round 33 — the height of one [DrawingChrome.legendNotes] row (points).
+const double _kLegendNoteRowH = 10.0;
+
 String pdfLegend(
   DrawingChrome chrome, {
   required double originX,
   required double originY,
 }) {
-  if (chrome.legendServices.isEmpty) return '';
+  if (chrome.legendServices.isEmpty && chrome.legendNotes.isEmpty) return '';
   final cs = StringBuffer();
   const rowH = 12.0;
   const swatchW = 18.0;
+  // Round 33 — the note rows sit BELOW the service rows (origin = the last
+  // note row), each a 7 pt text line.
+  final notes = chrome.legendNotes;
+  final baseY = originY + notes.length * _kLegendNoteRowH;
+  for (var i = 0; i < notes.length; i++) {
+    cs.writeln('BT /F1 7 Tf 0 0 0 rg '
+        '${_n(originX)} ${_n(baseY - (i + 1) * _kLegendNoteRowH)} Td '
+        '(${_pdfText(notes[i])}) Tj ET');
+  }
+  originY = baseY;
   // Title above the rows.
   final titleY = originY + chrome.legendServices.length * rowH + 4;
   cs.writeln('BT /F1 9 Tf 0 0 0 rg '
@@ -721,16 +765,21 @@ LabelBox? pdfLegendBox(
   required double originY,
 }) {
   final n = chrome.legendServices.length;
-  if (n == 0) return null;
+  final notes = chrome.legendNotes;
+  if (n == 0 && notes.isEmpty) return null;
   var w = helveticaTextWidth('LEGEND', 9);
   for (final s in chrome.legendServices) {
     w = math.max(w, 18 + 6 + helveticaTextWidth(serviceChromeLabel(s), 8));
+  }
+  for (final t in notes) {
+    w = math.max(w, helveticaTextWidth(t, 7));
   }
   return (
     minX: originX - 2,
     minY: originY - 3,
     maxX: originX + w + 2,
-    maxY: originY + n * 12.0 + 4 + 11, // the 9 pt title's cap + clearance
+    // the 9 pt title's cap + clearance, plus the note rows (Round 33)
+    maxY: originY + notes.length * _kLegendNoteRowH + n * 12.0 + 4 + 11,
   );
 }
 
@@ -885,6 +934,16 @@ String dxfChrome(
     _g(b, 1, _dxfText(serviceChromeLabel(s)));
     ly -= txt * 2.0;
   }
+  // Round 33 — the sheet notes under the swatch rows.
+  for (final t in chrome.legendNotes) {
+    _g(b, 0, 'TEXT');
+    _g(b, 8, 'legend');
+    _g(b, 10, minX);
+    _g(b, 20, ly - txt / 2);
+    _g(b, 40, txt * 0.8);
+    _g(b, 1, _dxfText(t));
+    ly -= txt * 1.8;
+  }
 
   // Scale bar — a divided LWPOLYLINE-free LINE bar on layer 'scale', under the
   // legend block.
@@ -1000,7 +1059,7 @@ String dxfPlanChrome(
 
   // Legend — bottom-left, below the extent, one swatch row per service.
   var ly = minY - 12 * u;
-  if (chrome.legendServices.isNotEmpty) {
+  if (chrome.legendServices.isNotEmpty || chrome.legendNotes.isNotEmpty) {
     text(kDxfLayerLegend, minX, ly, txt, 'LEGEND');
     ly -= 7 * u;
     for (final svc in chrome.legendServices) {
@@ -1012,6 +1071,11 @@ String dxfPlanChrome(
               : dxfLinetypeFor(svc));
       text(kDxfLayerLegend, minX + 15 * u, ly, txt, serviceChromeLabel(svc));
       ly -= 6 * u;
+    }
+    // Round 33 — the sheet notes under the swatch rows (PDF == DXF text).
+    for (final t in chrome.legendNotes) {
+      text(kDxfLayerLegend, minX, ly, txt * 0.8, t);
+      ly -= 5 * u;
     }
     ly -= 4 * u;
   }

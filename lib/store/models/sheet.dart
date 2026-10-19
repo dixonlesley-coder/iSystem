@@ -47,6 +47,12 @@ class Sheet {
   /// reopen after 'Scale confirmed'. Null until a change is first seen.
   final DxfBounds? dxfLiveFrameAck;
 
+  /// Round 33 (import-robustness-2-1) — the DXF HEADER `$INSUNITS` code the
+  /// sheet was imported with (0 = unitless; 4 mm, 6 m, 1 in…; null = legacy /
+  /// not a DXF). 'Apply scale to all sheets' converts between two DXFs of
+  /// different units (and refuses when only one is known).
+  final int? dxfInsUnits;
+
   const Sheet({
     required this.id,
     required this.name,
@@ -57,6 +63,7 @@ class Sheet {
     this.sizePx = const Size(1684, 1190), // ~A3 landscape placeholder
     this.dxfFrame,
     this.dxfLiveFrameAck,
+    this.dxfInsUnits,
   });
 
   /// Round 24 — content pixels per DXF world unit for this sheet (null when
@@ -83,6 +90,7 @@ class Sheet {
     Size? sizePx,
     DxfBounds? dxfFrame,
     DxfBounds? dxfLiveFrameAck,
+    int? dxfInsUnits,
   }) =>
       Sheet(
         id: id ?? this.id,
@@ -94,6 +102,7 @@ class Sheet {
         sizePx: sizePx ?? this.sizePx,
         dxfFrame: dxfFrame ?? this.dxfFrame,
         dxfLiveFrameAck: dxfLiveFrameAck ?? this.dxfLiveFrameAck,
+        dxfInsUnits: dxfInsUnits ?? this.dxfInsUnits,
       );
 
   @override
@@ -107,7 +116,8 @@ class Sheet {
       other.pageIndex == pageIndex &&
       other.sizePx == sizePx &&
       _sameFrame(other.dxfFrame, dxfFrame) &&
-      _sameFrame(other.dxfLiveFrameAck, dxfLiveFrameAck);
+      _sameFrame(other.dxfLiveFrameAck, dxfLiveFrameAck) &&
+      other.dxfInsUnits == dxfInsUnits;
 
   static bool _sameFrame(DxfBounds? a, DxfBounds? b) =>
       identical(a, b) ||

@@ -9,21 +9,33 @@
 //     DELIVERED field (root pump + zone booster at their own duties).
 //   hydraulics-3-3   a PDAM meter -> pump -> roof tank fill pump is a
 //     TRANSFER pump, never a 225 kPa-at-the-meter booster.
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/data/project_assets.dart';
+import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/compliance_store.dart';
+import 'package:mechx/store/electrical_feed.dart' show isMepMintedCircuitName;
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sample_project.dart';
+import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/canvas/heatmap_layer.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/hydraulics.dart' show pressureFromHead;
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -295,6 +307,262 @@ void main() {
       // (10.5 m), plus the fill-line friction (> 0).
       expect(duty.head.meters, greaterThan(10.5));
       expect(duty.head.meters, lessThan(10.5 + 5));
+    });
+  });
+
+  group(r'DXF $INSUNITS on Apply scale to all sheets (import-robustness-2-1)',
+      () {
+    // a.dxf: 40000 x 20000 mm; b.dxf: the same plan drawn 40 x 20 m. Both
+    // normalise to 1684 x 842 content px.
+    Sheet sheet(String id, double w, double h, int? units) => Sheet(
+        id: id,
+        name: id,
+        dxfPath: '/plans/$id.dxf',
+        sizePx: const Size(1684, 842),
+        dxfFrame: DxfBounds(0, 0, w, h),
+        dxfInsUnits: units);
+    test('mm -> m: the scale is transferred verbatim (same content box)', () {
+      final a = sheet('a', 40000, 20000, 4);
+      final b = sheet('b', 40, 20, 6);
+      // First principles: a physical length L spans L / u world units, i.e.
+      // L·k / u px, so mpp = u / k. A: 0.001 / (1684/40000) = 40/1684;
+      // B: 1 / (1684/40) = 40/1684 — the same figure (the old transfer gave
+      // 40/1684 / 1000: a 40 m wall read 0.04 m).
+      const mpp = 40 / 1684;
+      final t = transferCalibration(const ScaleCalibration(mpp),
+          from: a, to: b)!;
+      expect(t.metersPerPixel, closeTo(mpp, 1e-15));
+      // B's 40 m wall (1684 px) reads 40 m.
+      expect(t.metersPerPixel * 1684, closeTo(40, 1e-9));
+    });
+
+    test('inch -> mm converts by 25.4', () {
+      final a = sheet('a', 1000, 500, 1); // 1000 in = 25.4 m
+      final b = sheet('b', 25400, 12700, 4); // the same 25.4 m in mm
+      const mpp = 25.4 / 1684;
+      final t = transferCalibration(const ScaleCalibration(mpp),
+          from: a, to: b)!;
+      expect(t.metersPerPixel, closeTo(mpp, 1e-15));
+    });
+
+    test('only one unit known: refused; neither known: legacy same-unit', () {
+      final a = sheet('a', 40000, 20000, 4);
+      expect(
+          transferCalibration(const ScaleCalibration(0.02),
+              from: a, to: sheet('b', 40, 20, 0)),
+          isNull);
+      expect(
+          transferCalibration(const ScaleCalibration(0.02),
+              from: a, to: sheet('b', 40, 20, null)),
+          isNull);
+      final t = transferCalibration(const ScaleCalibration(0.02),
+          from: sheet('a', 40000, 20000, null),
+          to: sheet('b', 20000, 10000, null))!;
+      expect(t.metersPerPixel,
+          closeTo(0.02 * (1684 / 40000) / (1684 / 20000), 1e-15));
+    });
+
+    test(r'$INSUNITS round-trips in .mechx (additive)', () {
+      final doc = ProjectDocument(
+        projectName: 'P',
+        floors: const [Floor('G', Length(3.0))],
+        calibrations: const {},
+        sheets: [sheet('a', 40, 20, 6)],
+        network: const Network(nodes: [], edges: []),
+      );
+      final back = ProjectDocument.decode(doc.encode());
+      expect(back.sheets.single.dxfInsUnits, 6);
+    });
+  });
+
+  group('a truncated / corrupt embedded plan is reported (2-4)', () {
+    final bytes =
+        utf8.encode('0\nLINE\n10\n0\n20\n0\n11\n100\n21\n50\n' * 3000);
+    ProjectDocument docWith(String b64) => ProjectDocument(
+          projectName: 'P',
+          floors: const [Floor('G', Length(3.0))],
+          calibrations: const {},
+          sheets: const [
+            Sheet(id: 'a', name: 'Denah', dxfPath: '/no/such/denah.dxf'),
+          ],
+          network: const Network(nodes: [], edges: []),
+          assets: {'/no/such/denah.dxf': b64},
+        );
+
+    test('the ISIZE trailer catches a stream cut in half', () {
+      final gz = gzip.encode(bytes);
+      expect(gzipTrailerMatches(gz, bytes.length), isTrue);
+      final half = gz.sublist(0, gz.length ~/ 2);
+      // dart:io returns the inflated PREFIX without throwing — the reason the
+      // trailer check exists.
+      final prefix = gzip.decode(half);
+      expect(prefix.length, lessThan(bytes.length));
+      expect(gzipTrailerMatches(half, prefix.length), isFalse);
+    });
+
+    test('half a gzip asset: not repointed, named as missing', () {
+      final gz = gzip.encode(bytes);
+      final doc = rehydrateAssets(
+          docWith(base64Encode(gz.sublist(0, gz.length ~/ 2))));
+      expect(doc.sheets.single.dxfPath, '/no/such/denah.dxf');
+      expect(missingPlanSheetNames(doc), ['Denah']);
+    });
+
+    test('a bit-flipped asset: same', () {
+      final gz = gzip.encode(bytes);
+      gz[gz.length ~/ 2] ^= 0xff;
+      final doc = rehydrateAssets(docWith(base64Encode(gz)));
+      expect(doc.sheets.single.dxfPath, '/no/such/denah.dxf');
+      expect(missingPlanSheetNames(doc), ['Denah']);
+    });
+
+    test('a whole asset restores and is not missing', () {
+      final doc = rehydrateAssets(docWith(base64Encode(gzip.encode(bytes))));
+      expect(File(doc.sheets.single.dxfPath!).readAsBytesSync(), bytes);
+      expect(missingPlanSheetNames(doc), isEmpty);
+    });
+  });
+
+  group('stack growth pins only sheets with work', () {
+    // Default 3 levels; 5 blank imported pages. First principles: an EMPTY
+    // sheet carries nothing to keep in place, so it keeps its rail-position
+    // mapping; adding 2 levels maps pages 4-5 onto the new floors 3-4.
+    List<Sheet> pages() => [
+          for (var i = 0; i < 5; i++) Sheet(id: 'p$i', name: 'Page ${i + 1}'),
+        ];
+    test('5 blank sheets + 2 levels on top -> [0,1,2,3,4]', () {
+      final c = _c();
+      c.read(sheetsControllerProvider.notifier).loadSheets(pages());
+      c.read(projectControllerProvider.notifier).addFloorsOnTop(2, 4.0);
+      final levels = c.read(projectControllerProvider).building.levelCount;
+      expect(levels, 5);
+      final s = c.read(sheetsControllerProvider);
+      expect([for (final p in s.sheets) s.floorFor(p.id, levels)],
+          [0, 1, 2, 3, 4]);
+    });
+
+    test('a sheet with drawn work stays on its old floor; empty ones follow',
+        () {
+      final c = _c();
+      c.read(sheetsControllerProvider.notifier).loadSheets(pages());
+      // Page 4 (clamped onto floor 2 of 3) carries a drawn node.
+      c.read(networkControllerProvider.notifier).loadNetwork(const Network(
+            nodes: [
+              NetNode(id: 'n', sheetId: 'p3', x: 10, y: 10, floorIndex: 2),
+            ],
+            edges: [],
+          ));
+      c.read(projectControllerProvider.notifier).addFloorsOnTop(2, 4.0);
+      final s = c.read(sheetsControllerProvider);
+      expect([for (final p in s.sheets) s.floorFor(p.id, 5)], [0, 1, 2, 2, 4]);
+    });
+  });
+
+  group('equipment tags number per prefix (engineer-walkthrough-…-ordinal)',
+      () {
+    Map<String, String> tags(ProviderContainer c) =>
+        equipmentNodeTags(c.read(networkControllerProvider).network);
+    String idOf(ProviderContainer c, NodeComponent comp, {int skip = 0}) => c
+        .read(networkControllerProvider)
+        .network
+        .nodes
+        .where((n) => n.component == comp)
+        .skip(skip)
+        .first
+        .id;
+
+    test('tank then pump after fixtures -> TK-01, P-01 (not P-02 / P-41)', () {
+      final c = _c();
+      final net = c.read(networkControllerProvider.notifier);
+      // Ten fixtures first: the global node counter runs to n9.
+      for (var i = 0; i < 10; i++) {
+        net.mergeOrAddTerminal('s1', 0, Offset(100.0 + 40 * i, 900),
+            fixture: PlumbingFixture.lavatory);
+      }
+      net.addComponentNode('s1', 0, const Offset(100, 100),
+          NodeComponent.groundTank);
+      net.addComponentNode('s1', 0, const Offset(300, 100), NodeComponent.pump);
+      final t = tags(c);
+      expect(t[idOf(c, NodeComponent.groundTank)], 'TK-01');
+      expect(t[idOf(c, NodeComponent.pump)], 'P-01');
+    });
+
+    test('a deleted P-01 is never re-issued (C6 stability), across a reload',
+        () {
+      final c = _c();
+      final net = c.read(networkControllerProvider.notifier);
+      net.addComponentNode('s1', 0, const Offset(100, 100), NodeComponent.pump);
+      final p1 = idOf(c, NodeComponent.pump);
+      net.deleteNode(p1);
+      net.addComponentNode('s1', 0, const Offset(300, 100), NodeComponent.pump);
+      expect(tags(c)[idOf(c, NodeComponent.pump)], 'P-02');
+      // Persisted only because it runs ahead (P-02 live ⇒ next 3 implied).
+      expect(net.persistedTagSeq, isEmpty);
+      net.deleteNode(idOf(c, NodeComponent.pump));
+      expect(net.persistedTagSeq, {'P': 3});
+      // Reload the (empty) network with the saved sequence: the next pump is
+      // P-03, never a re-issued P-01 / P-02.
+      final c2 = _c();
+      c2.read(networkControllerProvider.notifier).loadNetwork(
+          c.read(networkControllerProvider).network,
+          tagSeq: net.persistedTagSeq);
+      c2.read(networkControllerProvider.notifier).addComponentNode(
+          's1', 0, const Offset(300, 100), NodeComponent.pump);
+      expect(tags(c2)[idOf(c2, NodeComponent.pump)], 'P-03');
+    });
+
+    test('a legacy file (no tag numbers) keeps its ordinal tags', () {
+      final c = _c();
+      c.read(networkControllerProvider.notifier).loadNetwork(const Network(
+            nodes: [
+              NetNode(
+                  id: 'n0',
+                  sheetId: 's1',
+                  x: 0,
+                  y: 0,
+                  floorIndex: 0,
+                  role: NodeRole.plant,
+                  component: NodeComponent.groundTank),
+              NetNode(
+                  id: 'n1',
+                  sheetId: 's1',
+                  x: 50,
+                  y: 0,
+                  floorIndex: 0,
+                  role: NodeRole.plant,
+                  component: NodeComponent.pump),
+            ],
+            edges: [],
+          ));
+      expect(tags(c), {'n0': 'TK-01', 'n1': 'P-02'});
+      // A pump drawn afterwards never collides with the legacy P-02.
+      c.read(networkControllerProvider.notifier).addComponentNode(
+          's1', 0, const Offset(300, 100), NodeComponent.pump);
+      expect(tags(c).values.where((v) => v.startsWith('P-')).toSet(),
+          {'P-02', 'P-03'});
+      expect(tags(c)['n1'], 'P-02');
+    });
+
+    test('two drawn pumps feed ways named after their tags', () async {
+      final c = _c();
+      c.read(projectControllerProvider.notifier)
+          .setFloors(const [Floor('L0', Length(3.5))]);
+      c.read(electricalProjectProvider);
+      final net = c.read(networkControllerProvider.notifier);
+      net.addComponentNode('s1', 0, const Offset(100, 100), NodeComponent.pump);
+      net.addComponentNode('s1', 0, const Offset(300, 100), NodeComponent.pump);
+      await Future<void>.delayed(Duration.zero);
+      final names = [
+        for (final p in c.read(electricalProjectProvider).panels)
+          for (final w in p.circuits)
+            if (w.sourceEquipmentId != null &&
+                w.name.startsWith(NodeComponent.pump.label))
+              w.name,
+      ]..sort();
+      expect(names, ['Pump P-01', 'Pump P-02']);
+      expect(isMepMintedCircuitName('Pump P-02'), isTrue);
+      expect(isMepMintedCircuitName('Pump'), isTrue);
+      expect(isMepMintedCircuitName('Booster pump room A'), isFalse);
     });
   });
 }

@@ -28,7 +28,11 @@ import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/plan_symbols.dart'
-    show equipmentNodeTags, planEdgeElevationLabels;
+    show
+        equipmentNodeTags,
+        fixturePlanTags,
+        planEdgeElevationLabels,
+        planSheetNotes;
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
@@ -1384,10 +1388,43 @@ DrawingChrome issuableChrome(
 
   final idx = sheets.indexWhere((s) => s.id == sheetId);
   final doc = ref.read(documentControlProvider);
+  // Round 33 — the plan's sheet NOTES printed once in its legend (the same
+  // chrome feeds `planSheetPlot`, the plan PDF and the plan DXF, so all three
+  // reserve the same legend box): the fixture codes used on this floor, the
+  // floor-relative CL datum (the riser sheet states ABSOLUTE levels) and the
+  // per-DN drain-fall rule.
+  final project = ref.read(projectControllerProvider);
+  final floors = project.building.floors;
+  final hasCl = planEdgeElevationLabels(net, project.building,
+          mounting: ref.read(mountingProvider))
+      .keys
+      .any((id) {
+    final e = net.edgeById(id);
+    return e != null && (onFloor(e.fromId) || onFloor(e.toId));
+  });
+  final notes = planSheetNotes(
+    net: net,
+    sheetId: sheetId,
+    floorIndex: floorIndex,
+    fixtureTags: fixturePlanTags(net,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        nodeTags: equipmentNodeTags(net)),
+    hasCentrelineLabels: hasCl,
+    floorFflM: floorIndex >= 0 && floorIndex < floors.length
+        ? project.building.elevationOf(floorIndex).meters
+        : null,
+    floorName: floorIndex >= 0 && floorIndex < floors.length
+        ? floors[floorIndex].name
+        : null,
+    gravitySlope: ref.read(drainageSlopeProvider),
+    sizing: ref.read(sizingProvider),
+  );
   return DrawingChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
+    legendNotes: notes,
     // N19: the plan's drawing number is DERIVED per sheet — the mechanical plan
     // band `M-1xx`, running by RAIL POSITION — so sheet 1 is `M-101`, sheet 2
     // `M-102`, never one number on every plan. A manual `documentNumber`

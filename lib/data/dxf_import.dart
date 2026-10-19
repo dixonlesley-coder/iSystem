@@ -37,6 +37,9 @@ Future<List<Sheet>> importDxf(String filePath,
       : basename;
 
   final contents = await readDxfText(filePath);
+  // Round 33 (import-robustness-2-8) — a binary DXF is refused with the
+  // real reason, never 'no importable geometry'.
+  if (isBinaryDxf(contents)) throw StateError(dxfBinaryMessage(basename));
   final drawing = parseDxf(contents);
   if (drawing == null || drawing.isEmpty) {
     throw StateError('DXF "$basename" has no importable geometry.');
@@ -48,6 +51,7 @@ Future<List<Sheet>> importDxf(String filePath,
         '(zero-size or non-finite coordinates).');
   }
   if (drawing.truncated) onWarning?.call(dxfTruncatedMessage(basename));
+  if (drawing.incomplete) onWarning?.call(dxfIncompleteMessage(basename));
 
   return [
     Sheet(
@@ -58,6 +62,7 @@ Future<List<Sheet>> importDxf(String filePath,
       sizePx: dxfContentSize(drawing.bounds),
       // Round 24 — remember the world frame the content was normalised from.
       dxfFrame: drawing.bounds,
+      dxfInsUnits: drawing.insUnits,
     ),
   ];
 }
@@ -80,6 +85,18 @@ Size dxfContentSize(DxfBounds bounds) {
 /// its registration), else the [live] drawing bounds (legacy sheets).
 DxfBounds dxfMappingBounds(Sheet sheet, DxfBounds live) =>
     sheet.dxfFrame ?? live;
+
+/// Round 33 (import-robustness-2-5) — the warning for a DXF FILE that ends
+/// before its ENTITIES section does (an interrupted copy / a killed
+/// conversion), distinct from the parser-budget [dxfTruncatedMessage].
+String dxfIncompleteMessage(String fileName) =>
+    'DXF "$fileName" ends unexpectedly: the plan may be incomplete. '
+    'Re-export or re-copy the file, then re-import.';
+
+/// Round 33 (import-robustness-2-8) — the refusal for a BINARY DXF.
+String dxfBinaryMessage(String fileName) =>
+    'DXF "$fileName" is a binary DXF, which is not supported: save it as an '
+    'ASCII DXF in CAD, then re-import.';
 
 /// Round 24 — the warning for a plan the DXF parser could only partly draw.
 String dxfTruncatedMessage(String fileName) =>

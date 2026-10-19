@@ -4,7 +4,12 @@ import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
 import '../store/models/sheet.dart';
 import 'dwg_converter.dart';
-import 'dxf_import.dart' show dxfContentSize, dxfTruncatedMessage;
+import 'dxf_import.dart'
+    show
+        dxfBinaryMessage,
+        dxfContentSize,
+        dxfIncompleteMessage,
+        dxfTruncatedMessage;
 import 'dxf_text.dart';
 
 /// Persistent directory the DWG→DXF conversions are cached in, so a converted
@@ -50,7 +55,9 @@ Future<List<Sheet>> importDwg(
   }
 
   final dxfPath = result.dxfPath!;
-  final drawing = parseDxf(readDxfTextSync(dxfPath));
+  final text = readDxfTextSync(dxfPath);
+  if (isBinaryDxf(text)) throw StateError(dxfBinaryMessage(basename));
+  final drawing = parseDxf(text);
   if (drawing == null || drawing.isEmpty) {
     throw StateError('DWG "$basename" converted, but the DXF had no geometry.');
   }
@@ -61,6 +68,7 @@ Future<List<Sheet>> importDwg(
         'extent (zero-size or non-finite coordinates).');
   }
   if (drawing.truncated) onWarning?.call(dxfTruncatedMessage(basename));
+  if (drawing.incomplete) onWarning?.call(dxfIncompleteMessage(basename));
 
   return [
     Sheet(
@@ -72,6 +80,7 @@ Future<List<Sheet>> importDwg(
       sizePx: dxfContentSize(drawing.bounds),
       // Round 24 — remember the world frame the content was normalised from.
       dxfFrame: drawing.bounds,
+      dxfInsUnits: drawing.insUnits,
     ),
   ];
 }

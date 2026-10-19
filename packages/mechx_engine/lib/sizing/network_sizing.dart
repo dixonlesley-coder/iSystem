@@ -26,6 +26,7 @@ import '../network/hardy_cross.dart';
 import '../network/network.dart';
 import '../standards/sni.dart';
 import '../units.dart';
+import 'drainage_advisory.dart' show effectiveDrainageSlope, laidGravitySlope;
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'ejector.dart' as ejector;
@@ -639,7 +640,10 @@ EdgeSizing applySizeOverride(
     velocity = manningVelocity(
       manningN: ctx.drainageManningN,
       hydraulicRadius: Length(override.meters / 4.0),
-      slope: ctx.drainageSlope,
+      // Round 33 — a drainage pipe is laid at least at its own minimum fall.
+      slope: isDrainage
+          ? effectiveDrainageSlope(ctx.drainageSlope, override.inMillimeters)
+          : ctx.drainageSlope,
     );
   } else {
     // v = Q / A at the overridden diameter (continuity); see velocityFromFlow.
@@ -3425,12 +3429,15 @@ EdgeSizing _sanitaryEdgeSizing(
   bool overCapacity = false,
 }) {
   final isVent = edge.service == ServiceType.vent;
+  // Round 33 — at the fall the run is LAID at (≥ its own self-cleansing
+  // minimum), the same figure the plan prints.
   final v = isVent
       ? const Velocity(0)
       : manningVelocity(
           manningN: ctx.drainageManningN,
           hydraulicRadius: Length(diameter.meters / 4.0),
-          slope: ctx.drainageSlope,
+          slope: laidGravitySlope(
+              edge, ctx.drainageSlope, diameter.inMillimeters),
         );
   return EdgeSizing(
     edgeId: edge.id,

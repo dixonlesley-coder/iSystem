@@ -49,6 +49,30 @@ double minSelfCleansingSlopeFor(double? diameterMm) {
   return kMinSelfCleansingSlope;
 }
 
+/// Round 33 (engineer-walkthrough-plan-fall-below-own-minimum) — the fall a
+/// sanitary DRAINAGE run is actually LAID at: the project design slope, but
+/// never flatter than the run's own self-cleansing minimum
+/// ([minSelfCleansingSlopeFor]: ≤ DN65 at 2 % / 1:50, DN75–150 at 1 %,
+/// ≥ DN200 at 0.5 %). The one project slope cannot otherwise be both 1:50
+/// for a DN40 lavatory branch and 1:100 for a DN100 main, so the issued plan
+/// used to print '1:100' on a branch the app's own rule says must fall 1:50.
+/// `// VERIFY notAnSniClause` (the floors are IPC / UPC practice). Pure.
+double effectiveDrainageSlope(double projectSlope, double? diameterMm) {
+  final floor = minSelfCleansingSlopeFor(diameterMm);
+  if (!projectSlope.isFinite || projectSlope <= 0) return projectSlope;
+  return projectSlope > floor ? projectSlope : floor;
+}
+
+/// Round 33 — the laid fall of a gravity [edge] of [diameterMm]: a sanitary
+/// DRAINAGE run takes [effectiveDrainageSlope]; a vent, a rainwater
+/// collector and every riser keep the project [projectSlope]. The ONE rule
+/// the sizer's velocity, the plan / canvas fall labels and the min-slope
+/// advisory read.
+double laidGravitySlope(NetEdge edge, double projectSlope, double? diameterMm) =>
+    edge.service == ServiceType.drainage && edge.kind == EdgeKind.run
+        ? effectiveDrainageSlope(projectSlope, diameterMm)
+        : projectSlope;
+
 /// Round 9 (plumbing-rules-developed-length-per-segment) — IPC Table 909.1
 /// maximum TRAP-ARM developed length (fixture trap weir → vent) by trap-arm
 /// diameter: (max DN mm, max length m). 1¼ in 5 ft, 1½ in 6 ft, 2 in 8 ft,

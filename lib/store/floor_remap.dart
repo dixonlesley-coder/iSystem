@@ -160,21 +160,27 @@ void pruneWorkOnSheets(
 /// annotation, a reference line or an electrical placement — even when no
 /// live sheet uses them. A freshly-added sheet must not take one of these ids
 /// or it would silently inherit that state.
-Set<String> sheetIdsWithState(ProviderReader read) {
+Set<String> sheetIdsWithState(ProviderReader read) => {
+      ...read(projectControllerProvider).calibrations.keys,
+      ...sheetIdsWithWork(read),
+    };
+
+/// Round 33 (engineer-walkthrough-sheet-floors-pinned-on-stack-growth) — the
+/// sheets carrying DRAWN / PLACED work (network nodes, rooms, tanks,
+/// measurements, reference lines, electrical placements) — [sheetIdsWithState]
+/// less the bare calibration, which is a property of the sheet, not work
+/// anchored to a floor.
+Set<String> sheetIdsWithWork(ProviderReader read) {
   final ids = <String>{
-    ...read(projectControllerProvider).calibrations.keys,
     for (final n in read(networkControllerProvider).network.nodes) n.sheetId,
     for (final r in read(roomAreasProvider)) r.sheetId,
     for (final t in read(tankAreasProvider)) t.sheetId,
     for (final m in read(measurementsProvider)) m.sheetId,
     for (final l in read(referenceLinesProvider)) l.sheetId,
+    // Through the notifier: the project controller calls this, and the
+    // electrical project's state watches the project (a cycle otherwise).
+    ...read(electricalProjectProvider.notifier).placedSheetIds(),
   };
-  for (final p in read(electricalProjectProvider).panels) {
-    if (p.layoutPos != null) ids.add(p.layoutPos!.sheetId);
-    for (final c in p.circuits) {
-      if (c.loadPos != null) ids.add(c.loadPos!.sheetId);
-    }
-  }
   return ids;
 }
 

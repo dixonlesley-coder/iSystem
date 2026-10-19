@@ -340,10 +340,14 @@ final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
   for (final e in net.edges) {
     if (e.service != ServiceType.drainage) continue;
     if (e.kind == EdgeKind.riser) continue; // slope is a horizontal-branch rule
+    // Round 33 — judged at the fall the run is LAID at (the plan prints
+    // the same `laidGravitySlope`: >= its own self-cleansing minimum), so
+    // the advisory never contradicts the issued drawing.
+    final d = sizing[e.id]?.diameter.inMillimeters;
     out.addAll(drainageAdvisories(
       edgeId: e.id,
-      slope: slope,
-      diameterMm: sizing[e.id]?.diameter.inMillimeters,
+      slope: laidGravitySlope(e, slope, d),
+      diameterMm: d,
     ));
   }
   for (final arm in trapArmRuns(net: net, sizing: sizing, lengthOf: lengthOf)) {
