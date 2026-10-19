@@ -3436,6 +3436,23 @@ class _AutoSchematicPainter extends CustomPainter {
   bool _hasComponent(NodeComponent component) =>
       network.nodes.any((n) => n.component == component);
 
+  /// Round 30 — [component] present on the WATER network (an endpoint of a
+  /// cold / hot water edge): the pump-set detail never shows a fire pump or a
+  /// drainage ejector as the water booster.
+  bool _hasWaterComponent(NodeComponent component) {
+    final eq = drawnWaterFeedEquipment(network);
+    return switch (component) {
+      NodeComponent.roofTank => eq.hasRoofTank,
+      NodeComponent.groundTank => eq.hasGroundTank,
+      NodeComponent.pump || NodeComponent.boosterSet => network.edges.any((e) =>
+          (e.service == ServiceType.coldWater ||
+              e.service == ServiceType.hotWater) &&
+          [e.fromId, e.toId].any((id) => network.nodes
+              .any((n) => n.id == id && n.component == component))),
+      _ => _hasComponent(component),
+    };
+  }
+
   /// (1) PUMP-SET / ROOF-TANK PLANT DETAIL — a compact bordered callout in the
   /// TOP-RIGHT (H101 convention): a roof-tank glyph + capacity, a booster-pump
   /// glyph + duty, and the GRAVITASI / TRANSFER / BOOSTER leg labels. Drawn only
@@ -3447,10 +3464,10 @@ class _AutoSchematicPainter extends CustomPainter {
   /// viewport too small to hold it).
   Rect? _plantDetailRect(Size size) {
     if (!_waterFocus) return null;
-    final hasRoof = _hasComponent(NodeComponent.roofTank);
-    final hasGround = _hasComponent(NodeComponent.groundTank);
-    final hasPump = _hasComponent(NodeComponent.pump) ||
-        _hasComponent(NodeComponent.boosterSet);
+    final hasRoof = _hasWaterComponent(NodeComponent.roofTank);
+    final hasGround = _hasWaterComponent(NodeComponent.groundTank);
+    final hasPump = _hasWaterComponent(NodeComponent.pump) ||
+        _hasWaterComponent(NodeComponent.boosterSet);
     if (!hasRoof && !hasGround && !hasPump) return null;
     const boxW = 250.0;
     // Round 26 (riser-drafting-3-7) — the GROUND TANK row the issued callout
@@ -3465,10 +3482,10 @@ class _AutoSchematicPainter extends CustomPainter {
   void _paintPlantDetail(Canvas canvas, Size size) {
     final rect = _plantDetailRect(size);
     if (rect == null) return;
-    final hasRoof = _hasComponent(NodeComponent.roofTank);
-    final hasGround = _hasComponent(NodeComponent.groundTank);
-    final hasPump = _hasComponent(NodeComponent.pump) ||
-        _hasComponent(NodeComponent.boosterSet);
+    final hasRoof = _hasWaterComponent(NodeComponent.roofTank);
+    final hasGround = _hasWaterComponent(NodeComponent.groundTank);
+    final hasPump = _hasWaterComponent(NodeComponent.pump) ||
+        _hasWaterComponent(NodeComponent.boosterSet);
 
     final color = serviceColor(ServiceType.coldWater);
     final boxW = rect.width;
@@ -3514,7 +3531,7 @@ class _AutoSchematicPainter extends CustomPainter {
     // flanked by its real train — suction (GV · STR · FJ) left, discharge (FJ ·
     // CV · GV) right — the safety-critical assembly drawn, not a bare icon.
     if (hasPump) {
-      final pumpC = _hasComponent(NodeComponent.boosterSet)
+      final pumpC = _hasWaterComponent(NodeComponent.boosterSet)
           ? NodeComponent.boosterSet
           : NodeComponent.pump;
       final trainCy = y + glyph / 2;
@@ -4712,15 +4729,13 @@ class _SystemNotes extends ConsumerWidget {
     // F9: assert '(roof tank)' ONLY when a roofTank actually exists in the
     // network (mirrors the export `_supplyNote`) — the notes must never claim
     // equipment the design doesn't contain.
-    final hasRoofTank =
-        network.nodes.any((n) => n.component == NodeComponent.roofTank);
+    // Round 30 — water-network equipment only (a fire pump is not a booster).
+    final eq = drawnWaterFeedEquipment(network);
+    final hasRoofTank = eq.hasRoofTank;
     // Round 17 — the SAME equipment-gated feed note the export prints.
     final str = context.strings;
-    final hasPump = network.nodes.any((n) =>
-        n.component == NodeComponent.pump ||
-        n.component == NodeComponent.boosterSet);
-    final hasMeter =
-        network.nodes.any((n) => n.component == NodeComponent.waterMeter);
+    final hasPump = eq.hasPump;
+    final hasMeter = eq.hasWaterMeter;
     // The feed line follows the SAME equipment gates as `riserFeedNote`
     // (detailed form), each outcome localized.
     final feedKey = feed != FeedStrategy.downfeed

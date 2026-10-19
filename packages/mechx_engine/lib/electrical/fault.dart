@@ -53,7 +53,7 @@ import 'panel_results.dart'
         ElectricalWarning, WarningSeverity;
 import 'supply_design.dart'
     show
-        declaredServiceTransformerKva,
+        declaredServiceTransformer,
         determineSupply,
         transformerImpedancePct;
 
@@ -396,8 +396,14 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
     // drawings and power one-line all print
     // ([declaredServiceTransformerKva]: a 555 kVA daya ⇒ 630 kVA), never
     // the raw daya figure (no 555 kVA unit exists).
-    final txKva = declaredServiceTransformerKva(project)?.voltAmperes ??
-        capacityVa;
+    // Round 30 — per-unit rating × the units one section parallels (a dual
+    // service's coupler is N.O. ⇒ one section's units only).
+    final declaredTx = declaredServiceTransformer(project);
+    final txKva = declaredTx == null
+        ? capacityVa
+        : declaredTx.kva.voltAmperes *
+            math.max(1,
+                project.dualTransformer ? declaredTx.units ~/ 2 : declaredTx.units);
     final declaredA = txKva /
         (math.sqrt(3) *
             serviceFaultLineVoltageV *

@@ -78,7 +78,7 @@ import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
     show
         SupplyDesign,
-        declaredServiceTransformerKva,
+        declaredServiceTransformer,
         determineSupply,
         isDeclaredMvService,
         recommendedDaya,
@@ -412,7 +412,8 @@ AdvancedStudy computeAdvancedStudy(
     dualTransformer: project.dualTransformer,
     // Round 29 — the ONE declared rating (a connection capacity above the
     // LV ceiling is a TM service on its snapped transformer).
-    declaredKva: declaredServiceTransformerKva(project),
+    declaredKva: declaredServiceTransformer(project)?.kva,
+    declaredUnits: declaredServiceTransformer(project)?.units,
   );
   final daya = supply.declared
       ? null

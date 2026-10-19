@@ -22,7 +22,11 @@ import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/riser_pagination.dart'
     show paginatedRiserSheets;
 import 'package:mechx_engine/report/riser_tags.dart'
-    show equipmentDetail, riserFeedNote, riserServiceCode;
+    show
+        drawnWaterFeedEquipment,
+        equipmentDetail,
+        riserFeedNote,
+        riserServiceCode;
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:mechx_engine/units.dart' show Length;
@@ -69,13 +73,11 @@ String riserDiagramTitle(ServiceType? focus) {
 /// A short title-block supply note from the live feed strategy + the tanks
 /// actually present (honest — only mentions a tank/pump the network has).
 String _supplyNote(Network net, FeedStrategy feed) {
-  final hasRoofTank =
-      net.nodes.any((n) => n.component == NodeComponent.roofTank);
-  final hasGroundTank =
-      net.nodes.any((n) => n.component == NodeComponent.groundTank);
-  final hasPump = net.nodes.any((n) =>
-      n.component == NodeComponent.pump ||
-      n.component == NodeComponent.boosterSet);
+  // Round 30 — water-network equipment only (a fire pump is not a booster).
+  final eq = drawnWaterFeedEquipment(net);
+  final hasRoofTank = eq.hasRoofTank;
+  final hasGroundTank = eq.hasGroundTank;
+  final hasPump = eq.hasPump;
   // Round 17 — the feed note follows the drawn equipment (no roof tank ⇒ no
   // gravity downfeed), the shared engine `riserFeedNote`.
   final parts = <String>[
@@ -115,18 +117,14 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
   // F9: assert '(roof tank)' ONLY when a roofTank actually exists in the
   // network (mirrors `_supplyNote`) — the KETERANGAN must never claim
   // equipment the design doesn't contain.
-  final hasRoofTank =
-      net.nodes.any((n) => n.component == NodeComponent.roofTank);
-  final hasPump = net.nodes.any((n) =>
-      n.component == NodeComponent.pump ||
-      n.component == NodeComponent.boosterSet);
+  // Round 30 — water-network equipment only (a fire pump is not a booster).
+  final eq = drawnWaterFeedEquipment(net);
   final lines = <String>[
     riserFeedNote(
         downfeed: feed == FeedStrategy.downfeed,
-        hasRoofTank: hasRoofTank,
-        hasPump: hasPump,
-        hasWaterMeter:
-            net.nodes.any((n) => n.component == NodeComponent.waterMeter),
+        hasRoofTank: eq.hasRoofTank,
+        hasPump: eq.hasPump,
+        hasWaterMeter: eq.hasWaterMeter,
         detailed: true),
   ];
   final roofM3 = tankM3(NodeComponent.roofTank);
