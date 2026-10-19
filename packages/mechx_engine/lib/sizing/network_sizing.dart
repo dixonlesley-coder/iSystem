@@ -740,6 +740,7 @@ String _pickComponentRoot({
   required NetNode? Function(String) nodeOf,
   required Set<String> drawnFromIds,
   Set<String> riserEndIds = const {},
+  Set<String> riserTopIds = const {},
   Iterable<String> Function(String)? neighboursOf,
 }) {
   Iterable<String> neighbours(String id) =>
@@ -909,6 +910,23 @@ String _pickComponentRoot({
     });
   if (freeLeaves.isNotEmpty) return freeLeaves.first;
 
+  // Round 30 (mech-sim-4-vent-stack-without-vtr-stub-undersized) — a vent
+  // stack drawn with no VTR stub ends at its top-floor tie node: that bare
+  // stack TOP is the roof penetration (`gravityRiserEndElevation` already
+  // reads it so), so the vent air leaves there. Rooting at the busiest
+  // junction instead sized the stack on the floors above that hub only
+  // (72 vs 90 DFU, DN75 where DN100 is needed).
+  if (service == ServiceType.vent) {
+    final tops = [
+      for (final id in component)
+        if (riserTopIds.contains(id) &&
+            roleOf(id) != NodeRole.fixture &&
+            !demandKeys.contains(id))
+          id,
+    ]..sort(byHeight);
+    if (tops.isNotEmpty) return tops.first;
+  }
+
   final movers = [
     for (final id in component)
       if (isInlineMover(id)) id,
@@ -945,6 +963,21 @@ String _pickComponentRoot({
   if (hub != null) return hub;
   if (leaves.isNotEmpty) return ([...leaves]..sort()).first;
   return ([...component]..sort()).first;
+}
+
+/// Round 30 — record a riser's UPPER / LOWER end by floor (then explicit
+/// elevation); a riser between two nodes at one height records nothing.
+void _noteRiserEnds(
+    Network net, NetEdge e, Set<String> uppers, Set<String> lowers) {
+  final a = net.nodeById(e.fromId), b = net.nodeById(e.toId);
+  if (a == null || b == null) return;
+  var c = a.floorIndex.compareTo(b.floorIndex);
+  if (c == 0) {
+    c = (a.elevation?.meters ?? 0).compareTo(b.elevation?.meters ?? 0);
+  }
+  if (c == 0) return;
+  uppers.add(c > 0 ? a.id : b.id);
+  lowers.add(c > 0 ? b.id : a.id);
 }
 
 /// Round 15 (root-metamorphic-rain-multi-downpipe) — the OUTFALLS of a
@@ -1069,6 +1102,7 @@ Map<String, String> serviceComponentRoots(
   final nodes = <String>{};
   final drawnFromIds = <String>{};
   final riserEndIds = <String>{};
+  final riserUppers = <String>{}, riserLowers = <String>{};
   for (final e in net.edges) {
     if (e.service != service) continue;
     nodes
@@ -1079,6 +1113,7 @@ Map<String, String> serviceComponentRoots(
       riserEndIds
         ..add(e.fromId)
         ..add(e.toId);
+      _noteRiserEnds(net, e, riserUppers, riserLowers);
     }
     (adjacency[e.fromId] ??= []).add(e.toId);
     (adjacency[e.toId] ??= []).add(e.fromId);
@@ -1110,6 +1145,7 @@ Map<String, String> serviceComponentRoots(
       nodeOf: net.nodeById,
       drawnFromIds: drawnFromIds,
       riserEndIds: riserEndIds,
+      riserTopIds: riserUppers.difference(riserLowers),
       neighboursOf: (n) => adjacency[n] ?? const <String>[],
     );
     for (final n in component) {
@@ -1327,6 +1363,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
     final nodes = <String>{};
     final drawnFromIds = <String>{};
     final riserEndIds = <String>{};
+    final riserUppers = <String>{}, riserLowers = <String>{};
     for (final e in net.edges) {
       if (e.service != service) continue;
       drawnFromIds.add(e.fromId);
@@ -1334,6 +1371,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
         riserEndIds
           ..add(e.fromId)
           ..add(e.toId);
+        _noteRiserEnds(net, e, riserUppers, riserLowers);
       }
       nodes
         ..add(e.fromId)
@@ -1438,6 +1476,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
           nodeOf: net.nodeById,
           drawnFromIds: drawnFromIds,
           riserEndIds: riserEndIds,
+          riserTopIds: riserUppers.difference(riserLowers),
           neighboursOf: (n) => [
             for (final l
                 in adjacency[n] ?? const <({String edgeId, String other})>[])
@@ -5486,6 +5525,48 @@ Map<String, double> _uniformVentStacks(
         else if (vtrRunLink(e.toId, e.fromId))
           (e, e.toId),
   ];
+  // Round 30 (mech-sim-4-vent-stack-without-vtr-stub-undersized) — a stack
+  // whose TOP node is the vent tree's ROOT (no VTR stub drawn: the bare
+  // top-storey junction is the roof penetration) carries, through its
+  // zero-length virtual VTR, every load ENTERING that node — the top riser
+  // plus the top floor's tie — less a header received there. Without it the
+  // stack sized on the floors below the top tie only (72 vs 90 DFU).
+  if (edgeParent != null) {
+    for (final t in riserGroupOf.keys) {
+      if (!stackEnd(t)) continue;
+      final g = riserGroupOf[t]!;
+      if (floorOf(t) != groupTop[g]) continue;
+      final incident = ventAdj[t] ?? const <NetEdge>[];
+      // Only a tie / branch junction at the top (a run enters there): a bare
+      // VTR stub top's single riser is already the stack's own member.
+      if (!incident.any((e) => e.kind != EdgeKind.riser)) continue;
+      // The tree root: every incident tree edge hangs FROM it.
+      var isRoot = true;
+      var sum = 0.0;
+      for (final e in incident) {
+        final p = edgeParent[e.id];
+        final u = units[e.id];
+        if (p == null || u == null) continue;
+        if (p != t) {
+          isRoot = false;
+          break;
+        }
+        sum += u;
+      }
+      if (!isRoot) continue;
+      final k = find(t);
+      if (!stackMax.containsKey(k)) continue;
+      final jf = junctionFloor[g];
+      final ft = floorOf(t);
+      final own = math.max(
+          0.0,
+          sum -
+              (jf != null && ft != null && jf <= ft
+                  ? (headerLoadAt[g] ?? 0)
+                  : 0.0));
+      if (own > stackMax[k]!) stackMax[k] = own;
+    }
+  }
   for (final (e, top) in vtrRuns) {
     final k = find(top);
     if (!stackMax.containsKey(k)) continue;
