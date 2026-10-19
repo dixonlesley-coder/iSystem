@@ -1074,6 +1074,11 @@ String dxfPlanChrome(
 /// stream; keep it to printable ASCII.
 String _dxfText(String raw) => dxfText(raw);
 
+/// Round 27 — Helvetica's CAP height per em (0.718). DXF TEXT group 40 is the
+/// cap height, while the PDF writers print an em; a DXF label meant to match a
+/// PDF label of em E is written at E x this.
+const double kHelveticaCapHeightEm = 0.718;
+
 /// The ONE code-page-safe encoder for every DXF string value (drafting-5). An
 /// R12 DXF is read in the ANSI code page, so a raw UTF-8 `·` (C2 B7) displays
 /// as `Â·` in AutoCAD; every writer routes its string group values through
@@ -1450,10 +1455,6 @@ int? a3PlottedScaleDenominatorFor(double spanXmm, double spanYmm) {
 /// PDF stroke widths in points for the three A6 line-weight bands
 /// (index 0 small / 1 medium / 2 large). Unsized edges keep the legacy 1.4 w.
 const kPdfStrokeWidths = <double>[1.0, 1.6, 2.2];
-
-/// DXF group-370 lineweights (hundredths of a millimetre: 0.13 / 0.25 /
-/// 0.35 mm) for the same three bands.
-const kDxfLineweights = <int>[13, 25, 35];
 
 /// The A6 stroke band (0 small / 1 medium / 2 large) for a sized element.
 /// Pipes band on DN — small <= 50, medium <= 150; ducts on their largest

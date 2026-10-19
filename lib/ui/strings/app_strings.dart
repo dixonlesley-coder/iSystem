@@ -652,6 +652,12 @@ enum StringKey {
   issueFirePumpMotorOversizedMessage,
   issueFireJockeyAssumedTitle,
   issueFireJockeyAssumedMessage,
+  issueCheckValveFeedsRingTitle,
+  issueCheckValveFeedsRingMessage,
+  issueCheckValveAmbiguousTitle,
+  issueCheckValveAmbiguousClosedMessage,
+  issueCheckValveAmbiguousPipeMessage,
+  issueCheckValveAmbiguousStandbyMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1179,6 +1185,8 @@ enum StringKey {
   issueRoomTerminalsStaleMessage,
   issueRoomBankSupply,
   issueRoomBankExtract,
+  issueRoomTrunkOverCapacityTitle,
+  issueRoomTrunkOverCapacityMessage,
   schematicNotesRoofTank,
   schematicNotesGroundTank,
   schematicNotesOccupancy,
@@ -1943,6 +1951,34 @@ const Map<StringKey, String> _en = {
       'iteration budget. The flow still satisfies continuity, but the split — '
       'and every size derived from it — is provisional. Simplify the ring or '
       'check for a near-zero-resistance leg.',
+  StringKey.issueCheckValveFeedsRingTitle:
+      'Hot-water check valve sized as a feed',
+  StringKey.issueCheckValveFeedsRingMessage:
+      'This check valve is drawn so it lets water flow away from the heater '
+      'into a loop the heater already feeds another way, so it is sized as a '
+      'second feed and carries draw-off. If it is a recirculation return, '
+      'its arrow is drawn backwards: redraw its pipes from the return toward '
+      'the heater and it will be sized as a return (no draw-off).',
+  StringKey.issueCheckValveAmbiguousTitle:
+      'Check valve has no drawn flow direction',
+  StringKey.issueCheckValveAmbiguousClosedMessage:
+      'Both pipes of this check valve are drawn into it (or both out of it), '
+      'so its flow direction is ambiguous. It was assumed CLOSED, like a '
+      'recirculation return: it carries no draw-off and every main upstream '
+      'is sized for the full peak. Redraw its two pipes in the flow direction '
+      '(into the valve, then out of it) so it is sized as intended.',
+  StringKey.issueCheckValveAmbiguousPipeMessage:
+      'Both pipes of this check valve are drawn into it (or both out of it), '
+      'so its flow direction is ambiguous. Closing it would cut a fixture off '
+      'the source, so it was assumed to be a PLAIN PIPE (the loop is '
+      'balanced through it both ways). Redraw its two pipes in the flow '
+      'direction (into the valve, then out of it) so it is sized as intended.',
+  StringKey.issueCheckValveAmbiguousStandbyMessage:
+      'Both pipes of this check valve are drawn into it (or both out of it), '
+      'so its flow direction is ambiguous. It sits in a parallel '
+      'duty/standby set onto one header, so it was assumed to be a STANDBY '
+      'leg sized for the full set flow. Redraw its two pipes in the flow '
+      'direction (into the valve, then out of it) so it is sized as intended.',
   StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
   StringKey.issueFireJockeyAssumedMessage:
       'Three or more identical fire pumps are drawn in parallel and nothing '
@@ -2553,6 +2589,10 @@ const Map<StringKey, String> _en = {
       'supply',
   StringKey.issueRoomBankExtract:
       'return / extract',
+  StringKey.issueRoomTrunkOverCapacityTitle:
+      'Room trunk over capacity',
+  StringKey.issueRoomTrunkOverCapacityMessage:
+      '{room} needs {flow} m3/s; even the largest standard trunk ({size}) runs at {velocity} m/s. Split the room across several units / trunks or lower its ACH.',
   StringKey.schematicNotesRoofTank:
       'Roof tank: {m3} m3',
   StringKey.schematicNotesGroundTank:
@@ -3334,6 +3374,36 @@ const Map<StringKey, String> _id = {
       'pembagiannya — dan setiap ukuran yang diturunkan darinya — bersifat '
       'sementara. Sederhanakan ring atau periksa kaki dengan resistansi '
       'mendekati nol.',
+  StringKey.issueCheckValveFeedsRingTitle:
+      'Katup searah air panas diukur sebagai suplai',
+  StringKey.issueCheckValveFeedsRingMessage:
+      'Katup searah ini digambar sehingga mengalirkan air menjauhi pemanas '
+      'ke loop yang sudah disuplai pemanas melalui jalur lain, sehingga '
+      'diukur sebagai suplai kedua dan ikut membawa pemakaian. Jika katup ini '
+      'adalah balikan sirkulasi, arah panahnya terbalik: gambar ulang pipanya '
+      'dari balikan menuju pemanas agar diukur sebagai balikan (tanpa '
+      'pemakaian).',
+  StringKey.issueCheckValveAmbiguousTitle:
+      'Katup searah tanpa arah aliran yang digambar',
+  StringKey.issueCheckValveAmbiguousClosedMessage:
+      'Kedua pipa katup searah ini digambar masuk ke katup (atau keduanya '
+      'keluar), sehingga arah alirannya ambigu. Katup diasumsikan TERTUTUP, '
+      'seperti balikan sirkulasi: tidak membawa pemakaian dan setiap pipa '
+      'utama di hulunya diukur untuk debit puncak penuh. Gambar ulang kedua '
+      'pipanya searah aliran (masuk ke katup, lalu keluar) agar diukur sesuai '
+      'maksud.',
+  StringKey.issueCheckValveAmbiguousPipeMessage:
+      'Kedua pipa katup searah ini digambar masuk ke katup (atau keduanya '
+      'keluar), sehingga arah alirannya ambigu. Menutupnya akan memutus '
+      'fixture dari sumber, sehingga diasumsikan sebagai PIPA BIASA (loop '
+      'diseimbangkan melaluinya ke dua arah). Gambar ulang kedua pipanya '
+      'searah aliran (masuk ke katup, lalu keluar) agar diukur sesuai maksud.',
+  StringKey.issueCheckValveAmbiguousStandbyMessage:
+      'Kedua pipa katup searah ini digambar masuk ke katup (atau keduanya '
+      'keluar), sehingga arah alirannya ambigu. Katup berada dalam set '
+      'paralel duty/standby ke satu header, sehingga diasumsikan sebagai kaki '
+      'STANDBY yang diukur untuk debit set penuh. Gambar ulang kedua pipanya '
+      'searah aliran (masuk ke katup, lalu keluar) agar diukur sesuai maksud.',
   StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
   StringKey.issueFireJockeyAssumedMessage:
       'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '
@@ -3957,6 +4027,10 @@ const Map<StringKey, String> _id = {
       'suplai',
   StringKey.issueRoomBankExtract:
       'balik / buang',
+  StringKey.issueRoomTrunkOverCapacityTitle:
+      'Saluran utama ruangan melebihi kapasitas',
+  StringKey.issueRoomTrunkOverCapacityMessage:
+      '{room} memerlukan {flow} m3/s; saluran standar terbesar ({size}) pun mengalir {velocity} m/s. Bagi ruangan ke beberapa unit / saluran atau turunkan ACH-nya.',
   StringKey.schematicNotesRoofTank:
       'Tangki atap: {m3} m3',
   StringKey.schematicNotesGroundTank:

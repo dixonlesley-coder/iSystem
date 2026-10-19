@@ -22,6 +22,8 @@ import 'package:mechx_engine/report/riser_tags.dart'
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show CheckValveAmbiguity;
 import 'package:mechx_engine/sizing/room_air.dart' show RoomAirResult;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
@@ -612,6 +614,46 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       ));
     }
   }
+  // Round 27 r3 (binding check-valve decision) — the drawn direction of a
+  // check valve is authoritative: a hot-water valve read as a FEED into a
+  // loop the heater already feeds is sized as drawn (it carries draw-off).
+  // Topology cannot tell a genuine second feed from a recirculation return
+  // drawn backwards, so name it (judge-only) instead of re-reading it.
+  final feedsRing = ref.watch(checkValveFeedsRingProvider).toList()..sort();
+  for (final id in feedsRing) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'check-valve-feeds-ring:$id',
+      title: str(StringKey.issueCheckValveFeedsRingTitle),
+      message: str(StringKey.issueCheckValveFeedsRingMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
+  // Round 27 r5 (binding check-valve decision) — a cycle check valve drawn
+  // with NO direction cannot be read from topology: the sizer assumed it
+  // conservatively (closed return / plain pipe / standby leg). Name each so
+  // the engineer redraws it instead of trusting the assumption.
+  final ambiguousValves = ref.watch(checkValveAmbiguousProvider);
+  for (final id in ambiguousValves.keys.toList()..sort()) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'check-valve-ambiguous:$id',
+      title: str(StringKey.issueCheckValveAmbiguousTitle),
+      message: str(switch (ambiguousValves[id]!) {
+        CheckValveAmbiguity.closedReturn =>
+          StringKey.issueCheckValveAmbiguousClosedMessage,
+        CheckValveAmbiguity.plainPipe =>
+          StringKey.issueCheckValveAmbiguousPipeMessage,
+        CheckValveAmbiguity.standbySet =>
+          StringKey.issueCheckValveAmbiguousStandbyMessage,
+      }),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
   if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
@@ -1093,7 +1135,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final roomSizing = <String, RoomAirResult?>{
     for (final r in rooms)
       r.id: r.sizing(project.calibrationFor(r.sheetId)?.metersPerPixel,
-          ductShape: ductSettings.shape, ductMethod: ductSettings.method),
+          ductShape: ductSettings.shape,
+          ductMethod: ductSettings.method,
+          rooms: rooms),
   };
   final terminalOwner = <String, String?>{
     for (final n in net.nodes)
@@ -1168,6 +1212,34 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         'bank': bank,
       }),
       locate: IssueLocation(r.sheetId, nodeId: firstTerminal),
+    ));
+  }
+
+  // ── 5a-quinquies. Room trunk over capacity (warning) ──────────────────────
+  // Round 27 (hvac-4-4) — a room whose airflow exceeds the largest standard
+  // trunk is CLAMPED by `sizeRoomAir` (`trunkOverCapacity`); the Rooms
+  // inspector used to print the clamped size as 'sized' with nothing in
+  // Review, unlike the drawn-network duct (`airOverCapacityProvider`).
+  for (final r in rooms) {
+    final sizing = roomSizing[r.id];
+    if (sizing == null || !sizing.trunkOverCapacity) continue;
+    final round = sizing.supplyDuctRound;
+    final rect = sizing.supplyDuctRect;
+    final size = round != null
+        ? 'D${round.diameter.inMillimeters.round()} mm'
+        : '${rect!.width.inMillimeters.round()}x'
+            '${rect.height.inMillimeters.round()} mm';
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'room-trunk-over-capacity:${r.id}',
+      title: str(StringKey.issueRoomTrunkOverCapacityTitle),
+      message: str.format(StringKey.issueRoomTrunkOverCapacityMessage, {
+        'room': r.name.isEmpty ? r.id : r.name,
+        'flow': sizing.airflow.cubicMetersPerSecond.toStringAsFixed(2),
+        'size': size,
+        'velocity': sizing.supplyDuctVelocity.metersPerSecond.toStringAsFixed(1),
+      }),
+      locate: IssueLocation(r.sheetId),
     ));
   }
 

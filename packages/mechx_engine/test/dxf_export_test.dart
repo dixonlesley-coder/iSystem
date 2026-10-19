@@ -257,11 +257,14 @@ void main() {
       expect(dxf, isNot(contains('\n11\n100.0\n'))); // no raw pixels left
     });
 
-    test('HEADER declares millimetre units and metric measurement', () {
+    test('HEADER declares AC1009 and no post-R12 unit variables', () {
+      // Round 27 (export-files-2-4) — $INSUNITS (R2000) and $MEASUREMENT
+      // (R14) do not exist in R12; the coordinates stay 1:1 mm.
       final dxf = pro();
       expect(dxf, contains('HEADER'));
-      expect(dxf, contains('\$INSUNITS\n70\n4\n')); // 4 = millimetres
-      expect(dxf, contains('\$MEASUREMENT\n70\n1\n')); // 1 = metric
+      expect(dxf, contains('\$ACADVER\n1\nAC1009\n'));
+      expect(dxf, isNot(contains('INSUNITS')));
+      expect(dxf, isNot(contains('MEASUREMENT')));
     });
 
     test('TABLES defines LTYPE + named service/ANNO/FRAME layers', () {
@@ -274,11 +277,11 @@ void main() {
       expect(dxf, isNot(contains('coldWater'))); // no enum-name layers
     });
 
-    test('sized runs carry group 6 linetype + group 370 lineweight', () {
+    test('sized runs carry group 6 linetype, no R2000 group 370', () {
       final dxf = pro();
-      // Cold water is CONTINUOUS; DN50 is the small band → 0.13 mm.
+      // Cold water is CONTINUOUS. Round 27 — R12 has no lineweight group.
       expect(dxf, contains('\n6\nCONTINUOUS\n'));
-      expect(dxf, contains('\n370\n13\n'));
+      expect(dxf, isNot(contains('\n370\n')));
     });
 
     test('A1: the underlay layer joins the TABLES and coordinates are mm', () {

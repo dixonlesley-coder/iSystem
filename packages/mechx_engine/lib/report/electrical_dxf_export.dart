@@ -32,7 +32,9 @@ import 'drawing_chrome.dart'
         dxfLinetypeFor,
         dxfTablesSection,
         dxfText,
-        serviceAciColorFor;
+        kHelveticaCapHeightEm,
+        serviceAciColorFor,
+        wrapTitleLines;
 import 'electrical_sld_drawing.dart';
 import 'riser_tags.dart' show riserServiceCode;
 import 'sld_plot_fit.dart';
@@ -180,12 +182,10 @@ class SldDxfLayers {
   }
 }
 
-/// DXF group-370 lineweight (1/100 mm) per [SldWeight] bucket.
-int _lineweightFor(SldWeight w) => switch (w) {
-      SldWeight.thin => 13,
-      SldWeight.medium => 25,
-      SldWeight.thick => 50,
-    };
+// Round 27 (export-files-2-4) — the file declares AC1009 (R12), which has
+// no per-entity lineweight (group 370 arrived with R2000): none is written.
+// The weight bucket of an un-layered line still rides its CLASS layer (bus /
+// feeder / device), which a CTB plots by layer.
 
 class _Dxf {
   final StringBuffer b = StringBuffer();
@@ -208,14 +208,12 @@ class _Dxf {
 
   /// A box (4 LINEs) with top-left at ([x],[y]) in screen space (Y negated).
   /// [color] is an optional ACI override (62) — null = inherit the layer colour.
-  /// [lineweight] is an optional group-370 width (1/100 mm).
   void box(String layer, double x, double y, double w, double h,
-      {int? color, int? lineweight}) {
+      {int? color}) {
     void line(double x1, double y1, double x2, double y2) {
       g(0, 'LINE');
       g(8, layer);
       if (color != null) g(62, color);
-      if (lineweight != null) g(370, lineweight);
       g(10, x1);
       g(20, -y1);
       g(11, x2);
@@ -239,24 +237,21 @@ class _Dxf {
     g(1, value);
   }
 
-  void circle(String layer, double cx, double cy, double r,
-      {int? color, int? lineweight}) {
+  void circle(String layer, double cx, double cy, double r, {int? color}) {
     g(0, 'CIRCLE');
     g(8, layer);
     if (color != null) g(62, color);
-    if (lineweight != null) g(370, lineweight);
     g(10, cx);
     g(20, -cy); // DXF Y negated, like box/text/connector
     g(40, r);
   }
 
   void connector(String layer, double x1, double y1, double x2, double y2,
-      {int? color, int? lineweight, String? linetype}) {
+      {int? color, String? linetype}) {
     g(0, 'LINE');
     g(8, layer);
     if (linetype != null) g(6, linetype);
     if (color != null) g(62, color);
-    if (lineweight != null) g(370, lineweight);
     g(10, x1);
     g(20, -y1);
     g(11, x2);
@@ -343,18 +338,19 @@ String electricalSldToDxf({
     switch (p) {
       case SldLine():
         d.connector(lineLayer(p), p.x1, p.y1, p.x2, p.y2,
-            color: colorFor(p.role),
-            lineweight: _lineweightFor(p.weight),
-            linetype: p.dashed ? 'DASHED' : null);
+            color: colorFor(p.role), linetype: p.dashed ? 'DASHED' : null);
       case SldRect():
-        d.box(shapeLayer(p.role), p.x, p.y, p.w, p.h,
-            color: colorFor(p.role), lineweight: _lineweightFor(p.weight));
+        d.box(shapeLayer(p.role), p.x, p.y, p.w, p.h, color: colorFor(p.role));
       case SldLabel():
+        // Round 27 (export-files-2-2) — DXF group 40 is the CAP height; the
+        // PDF prints this fitted label at em = p.size, whose Helvetica cap
+        // height is 0.718 em. The old 1.3 x em printed the DXF label ~1.8x
+        // the PDF's relative to the same geometry and overprinted the
+        // schedule columns the plot fit had cleared.
         d.text(layers.text, p.x, p.y, p.text,
-            size: p.size * 1.3, color: colorFor(p.role));
+            size: p.size * kHelveticaCapHeightEm, color: colorFor(p.role));
       case SldCircle():
-        d.circle(shapeLayer(p.role), p.cx, p.cy, p.r,
-            color: colorFor(p.role), lineweight: _lineweightFor(p.weight));
+        d.circle(shapeLayer(p.role), p.cx, p.cy, p.r, color: colorFor(p.role));
     }
   }
 
@@ -365,7 +361,20 @@ String electricalSldToDxf({
   const rowH = 18.0;
   const tbW = 360.0;
   const labelW = 88.0;
-  final tbH = rows.isEmpty ? 96.0 : 84.0 + rows.length * rowH + 6.0;
+  // Round 27 (export-files-2-3) — the supply note is WORD-WRAPPED to the
+  // title box (tbW - 16, Helvetica metrics at the em whose cap height is the
+  // written size 10) instead of running out of the box into the LEGEND; each
+  // extra line grows the block by [noteLineH].
+  const noteSize = 10.0;
+  const noteLineH = 14.0;
+  const noteEm = noteSize / kHelveticaCapHeightEm;
+  final wrapped = wrapTitleLines(sheetResolved.supplyNote, tbW - 16,
+          maxSize: noteEm, minSize: noteEm)
+      .lines;
+  final noteLines = wrapped.isEmpty ? [sheetResolved.supplyNote] : wrapped;
+  final noteExtra = (noteLines.length - 1) * noteLineH;
+  final tbH =
+      (rows.isEmpty ? 96.0 : 84.0 + rows.length * rowH + 6.0) + noteExtra;
   final frameTop = sheetResolved.maxY + 60;
   // [projectName] overrides the derived name — a prebuilt sheet (mechanical
   // riser) carries no [project], so the app passes the live name to avoid the
@@ -379,12 +388,14 @@ String electricalSldToDxf({
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 44, diagramTitle,
       size: 12);
-  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 66,
-      sheetResolved.supplyNote,
-      size: 10);
+  for (var i = 0; i < noteLines.length; i++) {
+    d.text(layers.frame, sheetResolved.minX + 8,
+        frameTop + 66 + i * noteLineH, noteLines[i],
+        size: noteSize);
+  }
   if (rows.isNotEmpty) {
     final x0 = sheetResolved.minX;
-    const bandPad = 84.0; // band top, below the supply-note line
+    final bandPad = 84.0 + noteExtra; // band top, below the supply note
     final bandTop = frameTop + bandPad;
     final bandBot = bandTop + rows.length * rowH;
     // Band top rule + full-height label|value divider (the box bottom closes

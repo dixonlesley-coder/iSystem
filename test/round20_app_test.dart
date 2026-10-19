@@ -125,8 +125,12 @@ void main() {
         () {
       final c = setUp();
       final net = c.read(networkControllerProvider.notifier);
-      final sOffice = office.sizing(0.01)!;
-      final sMeeting = meeting.sizing(0.01)!;
+      // Round 27 (hvac-4-2) — each room on its NET area: the office's 200 m2
+      // less the nested meeting room's 16 m2 (the meeting room is sized once).
+      const rooms = [office, meeting];
+      final sOffice = office.sizing(0.01, rooms: rooms)!;
+      final sMeeting = meeting.sizing(0.01, rooms: rooms)!;
+      expect(office.netAreaM2(0.01, rooms), closeTo(200 - 16, 1e-9));
       // Each room's required supply = count × airflowEach (the bank).
       final reqSupply = sOffice.supply.count *
               sOffice.supply.airflowEach.cubicMetersPerSecond +
@@ -290,8 +294,12 @@ void main() {
 
     // The feed: per-unit share of the OWNING room's cooling, input = the
     // selected unit's nominal (or the real requirement above 3 PK) ÷ COP.
+    // Round 27 (hvac-4-2) — on the room's NET area (the office cools its
+    // 200 m2 less the nested meeting room's 20 m2).
     double expectedInput(RoomArea room, int units) {
-      final perUnit = room.coolingLoad(0.01)!.btuPerHr / units;
+      final perUnit = room.coolingLoad(0.01, rooms: const [office, meeting])!
+              .btuPerHr /
+          units;
       final sel = selectAc(perUnit);
       return acInputPowerW(
           coolingBtuPerHr: sel.exceedsRange ? perUnit : sel.nominalBtuPerHr);

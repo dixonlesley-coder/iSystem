@@ -38,26 +38,16 @@ String _sizeLabel(NetEdge e, EdgeSizing s) {
   return e.service.isAir ? '\u00D8$mm' : 'DN$mm';
 }
 
-/// The A6 line-weight band for a sized edge — rectangular ducts band on their
-/// larger side, round ducts on Ø, pipes on DN (see `strokeBandFor`).
-int _strokeBand(EdgeSizing s) {
-  if (s.isRectangular) {
-    final side = math.max(s.width!.inMillimeters, s.height!.inMillimeters);
-    return strokeBandFor(sizeMm: side, isDuct: true);
-  }
-  return strokeBandFor(
-      sizeMm: s.diameter.inMillimeters, isDuct: s.service.isAir);
-}
-
 /// Render the [sheetId]/[floorIndex] slice of [net] as a DXF document.
 ///
 /// With [metersPerPixel] null the output is the legacy ENTITIES-only
 /// pixel-space document — byte-identical to before the parameter existed.
 /// With the sheet calibration supplied, coordinates are multiplied to
 /// MILLIMETRES so every run measures true in CAD, and the document gains a
-/// HEADER (`$INSUNITS` 4 = mm, `$MEASUREMENT` 1 = metric), a TABLES section
+/// HEADER (`$ACADVER` AC1009 + `$LTSCALE`; Round 27 — no R2000 `$INSUNITS` /
+/// group-370 lineweights in an R12 file), a TABLES section
 /// (LTYPE + one LAYER per present service + annotation/frame layers), AIA-style
-/// layer names, group 6 linetypes, group 370 lineweights on sized runs, and
+/// layer names, group 6 linetypes, and
 /// ANNO-layer labels rotated to their edge bearing (group 50).
 ///
 /// With [underlay] present (A1) the sheet's parsed floor-plan geometry is
@@ -477,10 +467,9 @@ String _professionalDxf({
   // drafting-5: declare the R12 format the file is written in.
   g(9, r'$ACADVER');
   g(1, 'AC1009');
-  g(9, r'$INSUNITS');
-  g(70, 4); // 4 = millimetres
-  g(9, r'$MEASUREMENT');
-  g(70, 1); // 1 = metric
+  // Round 27 (export-files-2-4) — R12 has no $INSUNITS / $MEASUREMENT
+  // (R2000 / R14 variables), so none is written; the coordinates stay 1:1 mm
+  // and the title block's SCALE row states the plotted 1 : N.
   // Round 24 — the model is real-world millimetres, so the LTYPE dashes must
   // be scaled to plot at the PDF's paper dash (PDF == DXF linetype parity).
   g(9, r'$LTSCALE');
@@ -695,7 +684,6 @@ String _professionalDxf({
           g(0, 'LINE');
           g(8, dxfLayerNameFor(e.service));
           g(6, dxfLinetypeFor(e.service));
-          g(370, kDxfLineweights[0]);
           g(10, o.x1);
           g(20, o.y1);
           g(11, o.x2);
@@ -705,8 +693,8 @@ String _professionalDxf({
         g(0, 'LINE');
         g(8, dxfLayerNameFor(e.service));
         g(6, dxfLinetypeFor(e.service));
-        // A6 lineweight bands for sized runs (unsized keep the layer default).
-        if (s != null) g(370, kDxfLineweights[_strokeBand(s)]);
+        // Round 27 — no group-370 lineweight under AC1009 (R12 has none);
+        // the A6 stroke bands print in the plan PDF.
         g(10, ax);
         g(20, ay);
         g(11, cx);

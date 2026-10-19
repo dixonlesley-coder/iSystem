@@ -10,7 +10,8 @@ import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/network/network.dart' show NetNode, NodeComponent;
+import 'package:mechx_engine/network/network.dart'
+    show Network, NetNode, NodeComponent, ServiceType;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/cooling_load_detailed.dart'
     show DetailedCoolingLoadInputs, estimateDetailedCoolingLoad;
@@ -488,9 +489,61 @@ class RoomArea {
   double get widthPx => (bx - ax).abs();
   double get heightPx => (by - ay).abs();
 
-  /// Floor area (m²) given the sheet's metres-per-pixel.
+  /// Floor area (m²) given the sheet's metres-per-pixel — the GROSS
+  /// footprint, nested rooms included (see [netAreaM2]).
   double areaM2(double metersPerPixel) =>
       widthPx * heightPx * metersPerPixel * metersPerPixel;
+
+  /// Round 27 (hvac-4-2) — whether [other] is SMALLER than this room for the
+  /// nested-room rule: a strictly smaller gross footprint. Two equal
+  /// footprints are never nested in each other (a duplicated room keeps its
+  /// own sizing — the same rule as the smallest-room ownership tie).
+  bool _isSmallerRoom(RoomArea other) =>
+      other.widthPx * other.heightPx < widthPx * heightPx;
+
+  /// Round 27 (hvac-4-2) — the NET floor area (m²): the footprint less the
+  /// part covered by SMALLER rooms on the same sheet + floor (a meeting room
+  /// drawn inside an office; a partial overlap is clipped to the overlap).
+  /// The covered part is the UNION of those overlaps, so a room nested two
+  /// deep is subtracted once. A nested room owns its own terminals and AC
+  /// units, so it must own its own volume too: counting it in the outer room
+  /// as well sized the inner room's air and cooling twice (office airflow
+  /// +9.7 %, its cassette 120000 instead of 108000 BTU/h). No overlapping
+  /// smaller room ⇒ exactly [areaM2].
+  double netAreaM2(double metersPerPixel, Iterable<RoomArea> rooms) {
+    final gross = areaM2(metersPerPixel);
+    final loX = math.min(ax, bx), hiX = math.max(ax, bx);
+    final loY = math.min(ay, by), hiY = math.max(ay, by);
+    final clips = <(double, double, double, double)>[];
+    for (final r in rooms) {
+      if (r.id == id ||
+          r.sheetId != sheetId ||
+          r.floorIndex != floorIndex ||
+          !_isSmallerRoom(r)) {
+        continue;
+      }
+      final x0 = math.max(loX, math.min(r.ax, r.bx));
+      final x1 = math.min(hiX, math.max(r.ax, r.bx));
+      final y0 = math.max(loY, math.min(r.ay, r.by));
+      final y1 = math.min(hiY, math.max(r.ay, r.by));
+      if (x1 > x0 && y1 > y0) clips.add((x0, y0, x1, y1));
+    }
+    if (clips.isEmpty) return gross;
+    // Union of the overlap rectangles on the compressed grid of their edges.
+    final xs = {for (final c in clips) ...[c.$1, c.$3]}.toList()..sort();
+    final ys = {for (final c in clips) ...[c.$2, c.$4]}.toList()..sort();
+    var coveredPx = 0.0;
+    for (var i = 0; i + 1 < xs.length; i++) {
+      for (var j = 0; j + 1 < ys.length; j++) {
+        final cx = (xs[i] + xs[i + 1]) / 2, cy = (ys[j] + ys[j + 1]) / 2;
+        if (clips.any((c) => cx > c.$1 && cx < c.$3 && cy > c.$2 && cy < c.$4)) {
+          coveredPx += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]);
+        }
+      }
+    }
+    return math.max(
+        0.0, gross - coveredPx * metersPerPixel * metersPerPixel);
+  }
 
   /// Air-change rate actually applied: the [achOverride] if set, else the
   /// [roomType] default from the ventilation profile.
@@ -499,13 +552,17 @@ class RoomArea {
 
   /// Full air-side sizing for the room, or null when the sheet has no scale or
   /// the footprint is degenerate. Honours the project [ductShape]/[ductMethod].
+  ///
+  /// Round 27 (hvac-4-2) — pass the project's [rooms] so a smaller room drawn
+  /// inside this one is sized by itself, not twice ([netAreaM2]).
   RoomAirResult? sizing(
     double? metersPerPixel, {
     DuctShape ductShape = DuctShape.round,
     DuctSizingMethod ductMethod = DuctSizingMethod.velocity,
+    Iterable<RoomArea> rooms = const [],
   }) {
     if (metersPerPixel == null) return null;
-    final area = areaM2(metersPerPixel);
+    final area = netAreaM2(metersPerPixel, rooms);
     if (area <= 0 || ceilingHeightM <= 0) return null;
     const profile = SniVentilationProfile();
     return sizeRoomAir(
@@ -543,9 +600,11 @@ class RoomArea {
   CoolingLoad? coolingLoad(
     double? metersPerPixel, {
     CoolingLoadMethod method = CoolingLoadMethod.simple,
+    Iterable<RoomArea> rooms = const [],
   }) {
     if (metersPerPixel == null) return null;
-    final area = areaM2(metersPerPixel);
+    // Round 27 (hvac-4-2) — the NET area: a nested room cools its own floor.
+    final area = netAreaM2(metersPerPixel, rooms);
     if (area <= 0 || ceilingHeightM <= 0) return null;
     if (method == CoolingLoadMethod.detailed) {
       final d = estimateDetailedCoolingLoad(DetailedCoolingLoadInputs(
@@ -749,6 +808,41 @@ String? roomTerminalOwnerId(NodeComponent? component, String sheetId,
 /// Round 21: the tag wins only OUTSIDE every nested same-kind room of the
 /// tagged room ([insideNestedSameKindRoom]); inside one the geometric owner
 /// (the nested room) takes it.
+/// Round 27 (hvac-4-3) — whether a DRAWN air system actually serves [room]:
+/// a terminal of the room's kind that the room OWNS ([roomTerminalOwnerOf] —
+/// an exhaust grille for an [extract] room, a supply diffuser / return grille
+/// otherwise) is connected to a SIZED duct of the matching service
+/// ([sizedEdgeIds]). The equipment schedule drops a room's own EF / AHU row
+/// only then: any exhaust (or supply) duct ANYWHERE in the project used to
+/// drop every room's row, so a ductless kitchen's 800 L/s exhaust fan
+/// vanished from the issued schedule once the toilets were piped.
+bool roomServedByDrawnAir(
+  RoomArea room,
+  Iterable<RoomArea> rooms,
+  Network net,
+  Set<String> sizedEdgeIds, {
+  required bool extract,
+}) {
+  final terminals = extract
+      ? const {NodeComponent.exhaustGrille}
+      : const {NodeComponent.supplyDiffuser, NodeComponent.returnGrille};
+  final services = extract
+      ? const {ServiceType.exhaust}
+      : const {ServiceType.duct, ServiceType.returnAir};
+  for (final n in net.nodes) {
+    if (!terminals.contains(n.component)) continue;
+    if (roomTerminalOwnerOf(n, rooms) != room.id) continue;
+    for (final e in net.edges) {
+      if ((e.fromId == n.id || e.toId == n.id) &&
+          services.contains(e.service) &&
+          sizedEdgeIds.contains(e.id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 String? roomTerminalOwnerOf(NetNode node, Iterable<RoomArea> rooms) {
   final tag = node.autoPlacedRoomId;
   if (tag != null) {
@@ -958,7 +1052,9 @@ final roomCoolingLoadProvider =
   final mpp =
       ref.watch(projectControllerProvider).calibrationFor(room.sheetId)
           ?.metersPerPixel;
-  return room.coolingLoad(mpp, method: ref.watch(coolingLoadMethodProvider));
+  return room.coolingLoad(mpp,
+      method: ref.watch(coolingLoadMethodProvider),
+      rooms: ref.watch(roomAreasProvider));
 });
 
 /// Whether the canvas room tool is active (drag to draw a room footprint).

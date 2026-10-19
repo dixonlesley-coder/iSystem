@@ -108,6 +108,11 @@ final class TerminalBank {
     required this.airflowEach,
     required this.each,
   });
+
+  /// Round 27 (hvac-4-5) — the selected standard rectangular face of one
+  /// terminal (width × height mm), the face Auto-place stamps on the node.
+  (double widthMm, double heightMm) get faceMm =>
+      standardGrilleFaceForGrossArea(each.grossFaceArea);
 }
 
 /// Largest standard grille gross face area (m²) — caps one terminal's quiet
@@ -204,6 +209,13 @@ final class RoomAirResult {
   /// Mean velocity in the supply trunk.
   Velocity get supplyDuctVelocity =>
       supplyDuctRound?.actualVelocity ?? supplyDuctRect!.actualVelocity;
+
+  /// Round 27 (hvac-4-4) — the trunk was CLAMPED to the largest standard size
+  /// (its airflow exceeds what that size carries within the velocity / friction
+  /// target): the printed size is not a valid selection. A robustness flag,
+  /// like `EdgeSizing.overCapacity` on the drawn network, not a standards value.
+  bool get trunkOverCapacity =>
+      supplyDuctRound?.overCapacity ?? supplyDuctRect?.overCapacity ?? false;
 }
 
 /// Size the complete air system for a room from its geometry and target ACH.
