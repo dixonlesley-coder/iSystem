@@ -109,6 +109,8 @@ final downfeedOverPressureProvider =
     Provider<List<UpfeedOverPressure>>((ref) {
   // Round 22 (pressurized-3-3) — judged on what the drawn system DELIVERS,
   // sized boosters running.
+  // Round 25 follow-up — no drawn roof tank ⇒ no gravity field to judge.
+  if (!ref.watch(gravityDownfeedDrawnProvider)) return const [];
   final solution = ref.watch(downfeedDeliveredProvider);
   if (solution == null) return const [];
   return downfeedOverPressure(solution);
@@ -204,6 +206,11 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
 final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
   final up = ref.watch(solveProvider);
   if (up != null) return up.residualPressure;
+  // Round 25 follow-up — a downfeed SETTING with no roof tank drawn has no
+  // gravity source: its solve runs from a phantom (the highest node), so the
+  // heatmap / node probe must not paint that field while the inspector, calc
+  // report and Review all say 'no roof tank drawn' ([gravityDownfeedDrawnProvider]).
+  if (!ref.watch(gravityDownfeedDrawnProvider)) return const {};
   final down = ref.watch(downfeedDeliveredProvider);
   if (down != null) return down.residualPressure;
   return const {};

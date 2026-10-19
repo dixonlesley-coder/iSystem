@@ -701,6 +701,8 @@ enum StringKey {
   issueMainsFedMessage,
   issueDownfeedBelowTargetTitle,
   issueDownfeedBelowTargetMessage,
+  issueUpfeedBelowTargetTitle,
+  issueUpfeedBelowTargetMessage, // {floor} {residual} {target}
   complianceCategorySupplyPressure,
   complianceDetailPressureMet,
   complianceCategoryDesignContent,
@@ -2032,6 +2034,10 @@ const Map<StringKey, String> _en = {
       'Roof tank cannot reach the target pressure',
   StringKey.issueDownfeedBelowTargetMessage:
       'The worst-served fixture on "{floor}" gets {residual} kPa from the roof tank, below the {target} kPa target. Raise the tank or draw a booster of about +{head} m.',
+  StringKey.issueUpfeedBelowTargetTitle:
+      'Pump supply falls below the target pressure',
+  StringKey.issueUpfeedBelowTargetMessage:
+      'A drawn pressure-reducing valve leaves the worst-served fixture on "{floor}" at {residual} kPa, below the {target} kPa target. Raise the PRV setpoint or move the PRV below the floors it cannot serve.',
   StringKey.complianceCategorySupplyPressure:
       'Supply pressure',
   StringKey.complianceDetailPressureMet:
@@ -3424,6 +3430,10 @@ const Map<StringKey, String> _id = {
       'Tangki atap tidak mencapai tekanan target',
   StringKey.issueDownfeedBelowTargetMessage:
       'Fikstur terburuk di "{floor}" hanya menerima {residual} kPa dari tangki atap, di bawah target {target} kPa. Tinggikan tangki atau pasang booster sekitar +{head} m.',
+  StringKey.issueUpfeedBelowTargetTitle:
+      'Suplai pompa di bawah tekanan target',
+  StringKey.issueUpfeedBelowTargetMessage:
+      'Katup penurun tekanan (PRV) yang digambar membuat fikstur terburuk di "{floor}" hanya menerima {residual} kPa, di bawah target {target} kPa. Naikkan setelan PRV atau pindahkan PRV ke bawah lantai yang tidak dapat dilayaninya.',
   StringKey.complianceCategorySupplyPressure:
       'Tekanan suplai',
   StringKey.complianceDetailPressureMet:

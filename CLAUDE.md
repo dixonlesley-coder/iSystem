@@ -1523,6 +1523,13 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `DxfDrawing.truncated` only when an INSERT is actually refused (budget,
   array cap or depth). The plan DXF double-lines ducts only on a real
   plotted scale (`plotN != null`), like the PDF.
+- **Round 25 follow-up — no vacuous pressure PASS, no phantom tank**: the
+  compliance 'Supply pressure' row claims BOTH `downfeed-below-target` and
+  `upfeed-below-target` (raised when `solvePressurized` reports
+  `targetHeldByDesign` false and the critical delivery residual is below the
+  target — a reducing PRV). `residualByNodeProvider` (heatmap / probe) and
+  `downfeedOverPressureProvider` are empty on a downfeed setting with no roof
+  tank drawn (`gravityDownfeedDrawnProvider`).
 - **Every `BreakerClass` consumer is EXHAUSTIVE (Round 23 r2)**: an ACB is
   never sized, timed or labelled as an MCB — switch on the enum / `.code`,
   never `name == 'mccb' ? … : <mcb>`. ACB frame 330 mm (`acbFrameWidthMm`,

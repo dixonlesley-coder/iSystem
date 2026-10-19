@@ -119,7 +119,11 @@ ComplianceSummary buildComplianceSummaryFrom({
   claim((i) => i.kind.startsWith('electrical:'));
   // Round 25 — a roof-tank downfeed below the target residual rolls into the
   // named 'Supply pressure' row (it blocks PASS).
-  final pressureIssues = claim((i) => i.kind == 'downfeed-below-target');
+  // Round 25 follow-up — the upfeed shortfall (a reducing PRV below the
+  // target) is claimed here too, so the row can never PASS a solve whose own
+  // `targetHeldByDesign` is false with a fixture short.
+  final pressureIssues = claim((i) =>
+      i.kind == 'downfeed-below-target' || i.kind == 'upfeed-below-target');
   final pressureFails = pressureIssues.where(isFail).length;
 
   // Every other aggregated issue, grouped by title — duct over-capacity,

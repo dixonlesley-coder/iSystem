@@ -957,6 +957,39 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
+  // ── 3h. UPFEED below the target residual (Round 25 follow-up) ─────────────
+  // The upfeed pump is sized so every delivery node meets the target — unless
+  // a drawn reducing PRV cuts the field afterwards (Round 23:
+  // `targetHeldByDesign` false, critical node re-picked as the least-residual
+  // delivery node). Then the shortfall is a real finding: Review says so and
+  // the compliance 'Supply pressure' row claims it, never a vacuous PASS.
+  final upfeed = ref.watch(solveProvider);
+  if (upfeed != null && !upfeed.targetHeldByDesign) {
+    final target = ref.watch(targetResidualProvider);
+    final worst = upfeed.residualPressure[upfeed.criticalNodeId];
+    if (worst != null &&
+        worst.inKiloPascals < target.inKiloPascals - 0.5) {
+      final node = nodeById[upfeed.criticalNodeId];
+      final floors = project.building.floors;
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      warnings.add(DesignIssue(
+        severity: IssueSeverity.warning,
+        kind: 'upfeed-below-target',
+        title: str(StringKey.issueUpfeedBelowTargetTitle),
+        message: str.format(StringKey.issueUpfeedBelowTargetMessage, {
+          'floor': floorName,
+          'residual': worst.inKiloPascals.toStringAsFixed(0),
+          'target': target.inKiloPascals.toStringAsFixed(0),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: node.id),
+      ));
+    }
+  }
+
   // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
   // Each advisory is edge-locatable via the edge's `from` node sheet. Title is
   // fixed (golden-friendly); the engine message carries the specifics.
