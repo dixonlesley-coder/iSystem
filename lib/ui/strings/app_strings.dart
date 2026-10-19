@@ -661,6 +661,10 @@ enum StringKey {
   issueCheckValveAmbiguousSupplyMessage,
   issueCheckValveAgainstSupplyTitle,
   issueCheckValveAgainstSupplyMessage,
+  issueCheckValveEnvelopeTitle,
+  issueCheckValveEnvelopeMessage,
+  issueCheckValveAgainstPumpTitle,
+  issueCheckValveAgainstPumpMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1997,6 +2001,23 @@ const Map<StringKey, String> _en = {
       'own discharge): as drawn it would starve its own pump or source. It '
       'was read as a FEED in the direction away from the source. Redraw its '
       'pipes from the pump / source toward the system so the drawing matches.',
+  StringKey.issueCheckValveEnvelopeTitle:
+      'Check valve direction unclear at the source',
+  StringKey.issueCheckValveEnvelopeMessage:
+      'Check valve direction unclear at the source — pipework sized for '
+      'every plausible flow direction; draw the valve arrow to tighten. '
+      'Several pipes leave the source and nothing drawn says which one is '
+      'the discharge, so each was solved as the discharge in turn and every '
+      'pipe is sized for the largest flow it carries in any of them. Redraw '
+      'its two pipes in the flow direction (into the valve, then out of it) '
+      'to size the system as intended.',
+  StringKey.issueCheckValveAgainstPumpTitle:
+      'Balance runs against the drawn pump',
+  StringKey.issueCheckValveAgainstPumpMessage:
+      'The balanced flow split runs against the drawn pump on this check '
+      'valve\'s leg. A pump leg is never closed: the leg is kept open and '
+      'sized on the flow it carries, in the pump\'s drawn direction. Check '
+      'the pump\'s head and the direction its pipes are drawn in.',
   StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
   StringKey.issueFireJockeyAssumedMessage:
       'Three or more identical fire pumps are drawn in parallel and nothing '
@@ -3438,6 +3459,23 @@ const Map<StringKey, String> _id = {
       'sumbernya sendiri. Katup dibaca sebagai SUPLAI dengan arah menjauhi '
       'sumber. Gambar ulang pipanya dari pompa / sumber menuju sistem agar '
       'gambar sesuai.',
+  StringKey.issueCheckValveEnvelopeTitle:
+      'Arah katup searah tidak jelas di sumber',
+  StringKey.issueCheckValveEnvelopeMessage:
+      'Arah katup searah tidak jelas di sumber — pipa diukur untuk setiap '
+      'arah aliran yang mungkin; gambar panah katup agar lebih tepat. '
+      'Beberapa pipa keluar dari sumber dan tidak ada gambar yang '
+      'menunjukkan mana pipa keluarannya, sehingga masing-masing dihitung '
+      'bergantian sebagai pipa keluaran dan setiap pipa diukur untuk debit '
+      'terbesar yang dibawanya. Gambar ulang kedua pipanya searah aliran '
+      '(masuk ke katup, lalu keluar) agar sistem diukur sesuai maksud.',
+  StringKey.issueCheckValveAgainstPumpTitle:
+      'Keseimbangan aliran berlawanan dengan pompa yang digambar',
+  StringKey.issueCheckValveAgainstPumpMessage:
+      'Pembagian aliran hasil penyeimbangan berlawanan dengan pompa yang '
+      'digambar pada kaki katup searah ini. Kaki pompa tidak pernah ditutup: '
+      'kaki tetap terbuka dan diukur untuk debit yang dibawanya, searah '
+      'pompa yang digambar. Periksa head pompa dan arah gambar pipanya.',
   StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
   StringKey.issueFireJockeyAssumedMessage:
       'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '

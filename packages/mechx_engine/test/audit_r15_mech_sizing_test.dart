@@ -319,8 +319,12 @@ void main() {
             _n('f$i', 240, i * 30.0, role: NodeRole.fixture),
         ], edges: [
           e('gs', 'GT', 'S', flip()),
-          e('s1', 'S', 'P1', flip()),
-          e('s2', 'S', 'P2', flip()),
+          // Round 27 r7 — the pumps' suction pipes stay drawn S -> P: a
+          // pump whose own two pipes are drawn COHERENTLY header -> pump ->
+          // suction is honoured as drawn (precedence 2, never overridden by
+          // hops), so flipping s1 / s2 is not a mere drawing variant.
+          e('s1', 'S', 'P1', false),
+          e('s2', 'S', 'P2', false),
           e('pc1', 'P1', 'C1', v1 == 1 || v1 == 3),
           e('ch1', 'C1', 'H', v1 == 2 || v1 == 3),
           e('pc2', 'P2', 'C2', v2 == 1 || v2 == 3),

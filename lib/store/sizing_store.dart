@@ -98,8 +98,11 @@ final checkValveFeedsRingProvider = Provider<Set<String>>(
 
 /// Round 27 r5 — pressurized cycle check valves drawn with NO direction (both
 /// pipes into, or both out of, the valve node) -> how the sizer assumed them
-/// (closed return / plain pipe / standby-set leg;
-/// `autoSizeNetwork(checkValveAmbiguousOut:)`). Judge-only; Review names each.
+/// (closed return / plain pipe / standby-set leg / supply leg / envelope;
+/// `autoSizeNetwork(checkValveAmbiguousOut:)`), plus (Round 27 r7) every
+/// mover-leg valve whose balanced split runs against its drawn pump
+/// ([CheckValveAmbiguity.balanceAgainstPump], from `checkValveAgainstPumpOut`).
+/// Judge-only; Review names each.
 final checkValveAmbiguousProvider = Provider<Map<String, CheckValveAmbiguity>>(
     (ref) => ref.watch(sizingDetailProvider).checkValveAmbiguous);
 
@@ -223,6 +226,7 @@ final sizingDetailProvider = Provider<
   final parallelLegs = <String>{};
   final checkValveFeedsRing = <String>{};
   final checkValveAmbiguous = <String, CheckValveAmbiguity>{};
+  final checkValveAgainstPump = <String>{};
   final sizing = autoSizeNetwork(
     net,
     // The one sizing context (duct settings + the laid drainage slope).
@@ -256,7 +260,13 @@ final sizingDetailProvider = Provider<
     parallelLegEdgeIdsOut: parallelLegs,
     checkValveFeedsRingOut: checkValveFeedsRing,
     checkValveAmbiguousOut: checkValveAmbiguous,
+    checkValveAgainstPumpOut: checkValveAgainstPump,
   );
+  // Round 27 r7 — a mover-leg valve whose balance runs against its pump is
+  // named on the same advisory kind with its own message.
+  for (final id in checkValveAgainstPump) {
+    checkValveAmbiguous[id] = CheckValveAmbiguity.balanceAgainstPump;
+  }
   return (
     sizing: sizing,
     fixtureUnits: fixtureUnits,

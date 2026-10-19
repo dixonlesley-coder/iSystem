@@ -474,5 +474,90 @@ void main() {
         expect(issue.message, contains('FEED'));
       }
     });
+
+    // r7 (binding orchestrator decision) — two undecided root chains are
+    // sized on the ENVELOPE (named), and a pump leg the balance runs against
+    // stays open in the pump's direction (named on the same kind with its
+    // own message).
+    testWidgets('envelope + balance-against-pump advisories', (tester) async {
+      NetEdge hw(String id, String a, String b,
+              {EdgeKind k = EdgeKind.run}) =>
+          NetEdge(
+              id: id, fromId: a, toId: b, service: ServiceType.hotWater,
+              kind: k);
+      final both = Network(nodes: [
+        _n('H', 0, 0, role: NodeRole.plant),
+        _n('CVd', 20, 0, c: NodeComponent.checkValve),
+        _n('S0', 100, 0),
+        _n('S1', 100, 0, floor: 1),
+        _n('f0', 200, 0, role: NodeRole.fixture),
+        _n('f1', 200, 0, role: NodeRole.fixture, floor: 1),
+        _n('R1', 50, 0, floor: 1),
+        _n('R0', 50, 0),
+        _n('CV', 20, 20, c: NodeComponent.checkValve),
+      ], edges: [
+        hw('hc', 'H', 'CVd'),
+        hw('cs', 'S0', 'CVd'),
+        hw('s1', 'S0', 'S1', k: EdgeKind.riser),
+        hw('b0', 'S0', 'f0'),
+        hw('b1', 'S1', 'f1'),
+        hw('top', 'S1', 'R1'),
+        hw('r1', 'R1', 'R0', k: EdgeKind.riser),
+        hw('rc', 'R0', 'CV'),
+        hw('ch', 'H', 'CV'),
+      ]);
+      final (_, c) = await _harness(tester);
+      c.read(projectControllerProvider.notifier).setFloors(const [
+        Floor('L0', Length(3.0)),
+        Floor('L1', Length(3.0)),
+      ]);
+      c.read(networkControllerProvider.notifier).loadNetwork(both);
+      await tester.pump();
+      expect(c.read(checkValveAmbiguousProvider), {
+        'CV': CheckValveAmbiguity.envelope,
+        'CVd': CheckValveAmbiguity.envelope,
+      });
+      final env = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'check-valve-ambiguous:CVd');
+      expect(env.title, 'Check valve direction unclear at the source');
+      expect(env.message, contains('sized for every plausible flow direction'));
+      expect(env.locate?.nodeId, 'CVd');
+
+      NetEdge cw(String id, String a, String b) =>
+          NetEdge(id: id, fromId: a, toId: b, service: ServiceType.coldWater);
+      c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+        _n('T', 0, 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+        _n('R0', 20, 0),
+        _n('R1', 420, 0),
+        _n('R2', 20, 20),
+        _n('R3', 20, 40),
+        _n('P', 220, 40, role: NodeRole.plant, c: NodeComponent.pump),
+        _n('CV', 120, 40, c: NodeComponent.checkValve),
+        _n('f1', 440, 0, role: NodeRole.fixture),
+        _n('f3', 0, 40, role: NodeRole.fixture),
+      ], edges: [
+        cw('t0', 'T', 'R0'),
+        cw('r01', 'R0', 'R1'),
+        cw('r02', 'R0', 'R2'),
+        cw('r23', 'R2', 'R3'),
+        cw('r1p', 'R1', 'P'),
+        cw('pc', 'P', 'CV'),
+        cw('c3', 'CV', 'R3'),
+        cw('b1', 'R1', 'f1'),
+        cw('b3', 'R3', 'f3'),
+      ]));
+      await tester.pump();
+      expect(c.read(checkValveAmbiguousProvider),
+          {'CV': CheckValveAmbiguity.balanceAgainstPump});
+      final s = c.read(sizingProvider);
+      expect(s['pc']!.flow.inLitersPerSecond, greaterThan(0));
+      expect(s['c3']!.flowFromId, 'CV');
+      final pump = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'check-valve-ambiguous:CV');
+      expect(pump.title, 'Balance runs against the drawn pump');
+      expect(pump.locate?.nodeId, 'CV');
+    });
   });
 }

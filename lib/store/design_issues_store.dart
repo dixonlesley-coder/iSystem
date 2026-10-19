@@ -644,10 +644,16 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       kind: 'check-valve-ambiguous:$id',
       // Round 27 r6 — a DRAWN valve pointing back at its own pump / the
       // source is not direction-less: it carries its own title.
-      title: str(
-          ambiguousValves[id] == CheckValveAmbiguity.drawnAgainstSupplyLeg
-              ? StringKey.issueCheckValveAgainstSupplyTitle
-              : StringKey.issueCheckValveAmbiguousTitle),
+      // Round 27 r7 — the envelope and the balance-against-pump readings
+      // carry their own titles too.
+      title: str(switch (ambiguousValves[id]!) {
+        CheckValveAmbiguity.drawnAgainstSupplyLeg =>
+          StringKey.issueCheckValveAgainstSupplyTitle,
+        CheckValveAmbiguity.envelope => StringKey.issueCheckValveEnvelopeTitle,
+        CheckValveAmbiguity.balanceAgainstPump =>
+          StringKey.issueCheckValveAgainstPumpTitle,
+        _ => StringKey.issueCheckValveAmbiguousTitle,
+      }),
       message: str(switch (ambiguousValves[id]!) {
         CheckValveAmbiguity.closedReturn =>
           StringKey.issueCheckValveAmbiguousClosedMessage,
@@ -659,6 +665,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           StringKey.issueCheckValveAmbiguousSupplyMessage,
         CheckValveAmbiguity.drawnAgainstSupplyLeg =>
           StringKey.issueCheckValveAgainstSupplyMessage,
+        CheckValveAmbiguity.envelope =>
+          StringKey.issueCheckValveEnvelopeMessage,
+        CheckValveAmbiguity.balanceAgainstPump =>
+          StringKey.issueCheckValveAgainstPumpMessage,
       }),
       locate: IssueLocation(n.sheetId, nodeId: id),
     ));

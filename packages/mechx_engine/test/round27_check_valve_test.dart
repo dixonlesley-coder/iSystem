@@ -274,9 +274,10 @@ void main() {
   });
 
   test(
-      'r4 regression: an AMBIGUOUS return valve beside a heater DISCHARGE '
-      'valve is read with only itself removed — a return, supply == open '
-      'network, no feeds-ring advisory', () {
+      'r4 regression (r7 envelope): an AMBIGUOUS return valve beside a '
+      'heater DISCHARGE valve — the supply sized as the open network (hm1 '
+      'curve(16), each riser base curve(8) DN20), the return on the reading '
+      'in which it feeds; no feeds-ring advisory', () {
     // H -> CVd -> M plus RJ -> CV and H -> CV (no drawn direction). r3 read
     // rule 3 with EVERY cycle valve cut: CVd's cut isolated H, the only
     // reached side of CV was H itself, so CV read H -> CV -> RJ (a FEED) and
@@ -288,6 +289,19 @@ void main() {
     // draw-off. [tee]: the returns teed at the top fixture, which is then
     // reached as far through CV as up the supply riser (7 hops each way):
     // CV shortens no path (it only ties one), so it reads the same way.
+    //
+    // Round 27 r7 (binding orchestrator decision) — classification reads NO
+    // distance. CVd's chain is a discharge only by its DRAWN valve, which is
+    // exactly what a return drawn backwards looks like (probe 5 is this very
+    // topology with the roles swapped), so the two root chains stay
+    // plausible discharges and the ENVELOPE is sized: (A) CV a return (the
+    // drawing H -> CVd -> M, RJ -> CV -> H) and (B) CV a second feed (H -> CV
+    // -> RJ drawn); every edge carries the larger. The supply keeps (A)'s
+    // open-network flows (the heater feed curve(16) = 0.6533 L/s, each riser
+    // base curve(8) = 0.400 L/s DN20 — B shares them with the return); the
+    // return takes (B)'s. No feeds-ring advisory: in (B) the heater's own
+    // discharge valve CVd is on the source's shortest route to a draw-off,
+    // so it is not the one named, and CV is ambiguous (its own advisory).
     for (final (risers, tee) in [
       (2, false),
       (3, false),
@@ -311,9 +325,25 @@ void main() {
               cal ? const {'s1': ScaleCalibration(0.05)} : const {},
           checkValveFeedsRingOut: ring,
         );
+        final why = 'risers=$risers tee=$tee cal=$cal';
+        final a = _size(
+            _hotel(risers: risers, discharge: true, fixtureTee: tee),
+            cal: cal);
+        final b = _size(
+            _hotel(
+                risers: risers,
+                discharge: true,
+                fixtureTee: tee,
+                reversedReturn: true),
+            cal: cal);
         final open = _size(_hotel(risers: risers, ret: false, discharge: true),
             cal: cal);
-        final why = 'risers=$risers tee=$tee cal=$cal';
+        for (final id in s.keys) {
+          final want = math.max(a[id]!.flow.inLitersPerSecond,
+              b[id]!.flow.inLitersPerSecond);
+          expect(s[id]!.flow.inLitersPerSecond, closeTo(want, 1e-9),
+              reason: '$why $id');
+        }
         for (final id in ['hm1', 'hm2']) {
           expect(s[id]!.flow.inLitersPerSecond,
               closeTo(_curve(8.0 * risers), 1e-9),
@@ -326,15 +356,10 @@ void main() {
         }
         for (final id in open.keys) {
           expect(s[id]!.flow.inLitersPerSecond,
-              closeTo(open[id]!.flow.inLitersPerSecond, 1e-9),
+              greaterThanOrEqualTo(open[id]!.flow.inLitersPerSecond - 1e-9),
               reason: '$why $id');
         }
-        expect(s['ch']!.flow.inLitersPerSecond, 0, reason: why);
-        expect(s['jc']!.flow.inLitersPerSecond, 0, reason: why);
-        expect(s['jc']!.flowFromId, 'RJ', reason: why);
-        expect(s['ch']!.flowFromId, 'CV', reason: why);
-        // Neither the return valve nor the heater's own discharge valve is a
-        // "second feed into a ring".
+        expect(s['ch']!.flow.inLitersPerSecond, greaterThan(0), reason: why);
         expect(ring, isEmpty, reason: why);
       }
     }
@@ -1003,9 +1028,15 @@ void main() {
   });
 
   test(
-      'r5: the hotel + heater discharge + AMBIGUOUS return keeps its result '
-      '(supply == open network, return 0) and names the valve closed return',
-      () {
+      'r5 -> r7: the hotel + a DRAWN heater discharge + an AMBIGUOUS return '
+      '— the envelope (the supply keeps the open network, the return the '
+      'reading in which it feeds); the valve is named envelope', () {
+    // Round 27 r7 — CVd's chain is a discharge only by its drawn valve
+    // (what a backwards-drawn return also looks like: probe 5 is this
+    // topology mirrored), so both readings are sized: (A) CV a return
+    // (_hotel(discharge: true) as drawn), (B) CV a second feed (the return
+    // drawn H -> CV -> RJ). Each edge carries the larger; the heater feed
+    // keeps curve(16) = 0.6533 L/s.
     for (final cal in [false, true]) {
       final base = _hotel(discharge: true);
       final net = Network(nodes: base.nodes, edges: [
@@ -1025,16 +1056,21 @@ void main() {
         checkValveAmbiguousOut: amb,
         checkValveFeedsRingOut: ring,
       );
-      final open = _size(_hotel(ret: false, discharge: true), cal: cal);
-      for (final id in open.keys) {
-        expect(s[id]!.flow.inLitersPerSecond,
-            closeTo(open[id]!.flow.inLitersPerSecond, 1e-9),
+      final a = _size(_hotel(discharge: true), cal: cal);
+      final b = _size(_hotel(discharge: true, reversedReturn: true), cal: cal);
+      for (final id in s.keys) {
+        expect(
+            s[id]!.flow.inLitersPerSecond,
+            closeTo(
+                math.max(a[id]!.flow.inLitersPerSecond,
+                    b[id]!.flow.inLitersPerSecond),
+                1e-9),
             reason: 'cal=$cal $id');
       }
       expect(s['hm1']!.flow.inLitersPerSecond, closeTo(_curve(16), 1e-9));
-      expect(s['ch']!.flow.inLitersPerSecond, 0);
-      expect(s['jc']!.flow.inLitersPerSecond, 0);
-      expect(amb, {'CV': CheckValveAmbiguity.closedReturn});
+      expect(s['ch']!.flow.inLitersPerSecond,
+          closeTo(b['ch']!.flow.inLitersPerSecond, 1e-9));
+      expect(amb, {'CV': CheckValveAmbiguity.envelope});
       expect(ring, isEmpty);
     }
   });
