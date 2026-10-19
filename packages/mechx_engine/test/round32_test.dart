@@ -83,7 +83,11 @@ const _b5 = BuildingLevels([
 
 /// Proper crossings between a LEADER (thin, unlayered, longer than 28 units,
 /// not a full-width floor hairline) and a pipe (medium weight).
-int _longLeaderPipeCrossings(SldSheet s) {
+int _longLeaderPipeCrossings(SldSheet s) => _leaderPipeCrossings(s, 28);
+
+/// Every thin (leader / glyph-stroke) line properly crossing a pipe, of any
+/// length above [minLength].
+int _leaderPipeCrossings(SldSheet s, double minLength) {
   bool proper(SldLine a, SldLine b) {
     double o(
             double ax, double ay, double bx, double by, double cx, double cy) =>
@@ -100,7 +104,8 @@ int _longLeaderPipeCrossings(SldSheet s) {
       l.weight == SldWeight.thin &&
       l.layer == null &&
       !((l.y1 - l.y2).abs() < 1e-9 && (l.x2 - l.x1).abs() > 400) &&
-      math.sqrt(math.pow(l.x2 - l.x1, 2) + math.pow(l.y2 - l.y1, 2)) > 28);
+      math.sqrt(math.pow(l.x2 - l.x1, 2) + math.pow(l.y2 - l.y1, 2)) >
+          minLength);
   final pipes = lines.where((l) => l.weight == SldWeight.medium);
   var n = 0;
   for (final a in leaders) {
@@ -363,6 +368,23 @@ void main() {
       expect(isAirOpenBoundaryLeaf(net, 'oa'), isTrue);
       expect(networkElementDefects(net).where((x) => x.isLooseEnd), isEmpty);
     });
+
+    test('the memo never serves a stale set after the lists change (r2)', () {
+      // Plain mutable lists: the same Network instance first holds the
+      // stand-alone FCU with its intake leaf, then loses the intake edge —
+      // `oa` is then an orphan, not an intake.
+      final nodes = <NetNode>[
+        a('oa', -10),
+        a('fcu', 0, c: NodeComponent.fcu),
+        a('d1', 10,
+            c: NodeComponent.supplyDiffuser, airflow: const FlowRate(0.1)),
+      ];
+      final edges = <NetEdge>[d('e1', 'fcu', 'd1'), d('e0', 'oa', 'fcu')];
+      final net = Network(nodes: nodes, edges: edges);
+      expect(airOpenBoundaryLeaves(net), contains('oa'));
+      edges.removeLast();
+      expect(airOpenBoundaryLeaves(net), isNot(contains('oa')));
+    });
   });
 
   group('riser drawings', () {
@@ -477,6 +499,58 @@ void main() {
       }
       expect(plantMoverCaptions(net, detailByNodeId: const {'FP': '55 kW'}),
           isEmpty);
+    });
+
+    test('4-2/4-3 r2 — the HW sheet captions only the movers it draws', () {
+      // HB: a booster on the CW feed whose discharge is the HOT-water riser
+      // (visible on the HW sheet). P1: a cold-water-only booster (not drawn
+      // on the HW sheet). The HW sheet's pump-set detail captions HB alone,
+      // and its box is sized for ONE caption row set, not two.
+      final net = Network(nodes: [
+        rn('G', 0, 0),
+        rn('P1', 40, 0, c: NodeComponent.boosterSet),
+        rn('C0', 80, 0),
+        rn('C1', 80, 1),
+        rn('W1', 120, 1, role: NodeRole.fixture),
+        rn('Y', 160, 0),
+        rn('HB', 200, 0, c: NodeComponent.boosterSet),
+        rn('H0', 240, 0),
+        rn('H1', 240, 1),
+        rn('X1', 280, 1, role: NodeRole.fixture),
+      ], edges: [
+        re('g', 'G', 'P1', ServiceType.coldWater),
+        re('p', 'P1', 'C0', ServiceType.coldWater),
+        re('c', 'C0', 'C1', ServiceType.coldWater, kind: EdgeKind.riser),
+        re('w', 'C1', 'W1', ServiceType.coldWater),
+        re('f', 'Y', 'HB', ServiceType.coldWater),
+        re('h', 'HB', 'H0', ServiceType.hotWater),
+        re('hr', 'H0', 'H1', ServiceType.hotWater, kind: EdgeKind.riser),
+        re('x', 'H1', 'X1', ServiceType.hotWater),
+      ]);
+      const detail = {'P1': '1.5 kW', 'HB': '0.75 kW'};
+      final hw = buildMechanicalRiserSld(
+          network: net,
+          building: levels(2),
+          focus: ServiceType.hotWater,
+          detailCallouts: true,
+          equipmentDetailByNodeId: detail);
+      final t = labels(hw).map((l) => l.text).toList();
+      expect(t.where((x) => x.contains('PUMP-SET DETAIL')), hasLength(1));
+      expect(t.where((x) => x.startsWith('BOOSTER PUMP')).toList(),
+          ['BOOSTER PUMP 0.75 kW']);
+      // The combined sheet still captions both movers.
+      final all = buildMechanicalRiserSld(
+          network: net,
+          building: levels(2),
+          detailCallouts: true,
+          equipmentDetailByNodeId: detail);
+      expect(
+          labels(all).where((l) => l.text.startsWith('BOOSTER PUMP')).length,
+          2);
+      expect(
+          plantMoverCaptions(net,
+              detailByNodeId: detail, include: (n) => n.id == 'HB'),
+          ['BOOSTER PUMP 0.75 kW']);
     });
 
     test('4-3 the HW sheet carries no CW roof tank / GRAVITASI / PRV set', () {
@@ -598,9 +672,20 @@ void main() {
             floorRange: (lo: lo, hi: lo + 1));
         expect(_longLeaderPipeCrossings(s), 0, reason: 'page $lo');
       }
-      // The export harness M-201 riser (a dense mixed-service sheet): the
-      // per-crossing charge cut its long-leader pipe crossings from 17 to 9
-      // (the remainder have no crossing-free slot in the placer's ladder).
+      // (The tower is a no-regression guard: its leaders cleared before the
+      // charge too. The harness sheet below is where the charge decides.)
+      //
+      // The export harness M-201 riser (a dense mixed-service sheet). Both
+      // figures are DISCRIMINATING ratchets, measured by zeroing
+      // `_kLeaderCrossingWeight` (no charge) and by restoring the r1
+      // long-leader-only gate:
+      //   long-leader (> 28) crossings   no charge 17 · r1 9 · now 9
+      //   all thin-line crossings (incl.  no charge 51 · r1 44 · now 43
+      //   fixed glyph strokes)
+      // so the HARD long-leader charge moves 8 tags off the risers they
+      // slashed and the SOFT short-leader charge re-orders one more tag
+      // that cannot clear. The 9 left have no crossing-free slot in the
+      // placer's ladder.
       final hn = harness.buildNetwork();
       final hs = buildMechanicalRiserSld(
         network: hn,
@@ -616,6 +701,7 @@ void main() {
         hotWaterRecirc: hn.edges.any((e) => e.service == ServiceType.hotWater),
       );
       expect(_longLeaderPipeCrossings(hs), lessThanOrEqualTo(9));
+      expect(_leaderPipeCrossings(hs, 0), lessThanOrEqualTo(43));
     });
   });
 

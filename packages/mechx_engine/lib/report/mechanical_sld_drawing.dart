@@ -119,8 +119,10 @@ const double _kFusedLabelWeight = 2 * _kInkWeight;
 /// legibility weight, not a standard.
 const double _kLeaderCrossingWeight = _kInkWeight / 10;
 
-/// Round 32 — a leader longer than this (drawing units) is charged
-/// [_kLeaderCrossingWeight] per pipe it crosses.
+/// Round 32 — every leader is charged [_kLeaderCrossingWeight] per pipe it
+/// properly crosses; for a leader longer than this (drawing units) the charge
+/// is HARD (the slot cannot end the search), for a shorter one SOFT (it only
+/// orders slots that cannot clear — see [_LabelPlacer._leaderInkCost]).
 const double _kLongLeader = 2 * _kLeaderThreshold;
 const double _kFusedHairline = 1.0;
 // Minimal x nudge per coincident node so two fixtures at the same world x don't
@@ -617,7 +619,8 @@ SldSheet buildMechanicalRiserSld({
         _topPad,
         contentMaxX + 12 + _plantW,
         _topPad +
-            _plantDetailH(network, ground: plant.ground, pump: plant.pump));
+            _plantDetailH(network,
+                ground: plant.ground, pump: plant.pump, include: nodeVisible));
   }
   if (detailBoxes.isNotEmpty) {
     var bx = calloutX0;
@@ -977,6 +980,7 @@ SldSheet buildMechanicalRiserSld({
             hasGround: plant.ground,
             hasPump: plant.pump,
             plantNode: plantNode,
+            moverVisible: nodeVisible,
             equipmentDetailByNodeId: equipmentDetailByNodeId,
             downfeed: downfeed,
             transferPumpNodeIds: transferPumpNodeIds)) {
@@ -1377,6 +1381,7 @@ bool _emitPlantDetail(
   required bool hasGround,
   required bool hasPump,
   required bool Function(NetNode) plantNode,
+  required bool Function(NetNode) moverVisible,
   required Map<String, String> equipmentDetailByNodeId,
   required bool downfeed,
   Set<String> transferPumpNodeIds = const {},
@@ -1396,7 +1401,8 @@ bool _emitPlantDetail(
   if (!hasRoof && !hasGround && !hasPump) return false;
 
   prims.add(SldRect(left, top, _plantW,
-      _plantDetailH(network, ground: hasGround, pump: hasPump),
+      _plantDetailH(network,
+          ground: hasGround, pump: hasPump, include: moverVisible),
       weight: SldWeight.thin));
   prims.add(
       SldLabel(left + 6, top + 12, 'PUMP-SET DETAIL', size: 7, bold: true));
@@ -1493,7 +1499,8 @@ bool _emitPlantDetail(
     var capY = trainCy + gl / 2 + 24;
     for (final cap in plantMoverCaptions(network,
         detailByNodeId: equipmentDetailByNodeId,
-        transferPumpNodeIds: transferPumpNodeIds)) {
+        transferPumpNodeIds: transferPumpNodeIds,
+        include: moverVisible)) {
       prims.add(SldLabel(cx - _labelWidth(cap, 7) / 2, capY, cap,
           size: 7, role: SldRole.source));
       capY += 12;
@@ -1546,12 +1553,21 @@ List<NetNode> _plantMovers(Network network) => [
 /// 4-2: the old fallback captioned the first pump anywhere — a fire pump —
 /// as the 'BOOSTER PUMP'). Shared by the export and the canvas Auto painter
 /// (golden rule 5) so the two never disagree.
+///
+/// Round 32 r2 (riser-drawings-4-2/4-3) — [include] limits the captions to
+/// the movers the sheet actually DRAWS (a per-service sheet passes its
+/// focus-visibility test), so a hot-water sheet never captions a cold-water
+/// booster it does not show. Null ⇒ every domestic mover.
 List<String> plantMoverCaptions(
   Network network, {
   required Map<String, String> detailByNodeId,
   Set<String> transferPumpNodeIds = const {},
+  bool Function(NetNode)? include,
 }) {
-  final movers = _plantMovers(network);
+  final movers = [
+    for (final m in _plantMovers(network))
+      if (include == null || include(m)) m,
+  ];
   return [
     for (final m in movers)
       () {
@@ -1568,11 +1584,19 @@ List<String> plantMoverCaptions(
 /// beyond the second (Round 17 — one duty caption per mover).
 ///
 /// Round 21 — plus one tank row when a ground tank sits below the pump train.
+///
+/// Round 32 r2 — counts only the movers [include] admits (the same set the
+/// captions print).
 double _plantDetailH(Network network,
-    {required bool ground, required bool pump}) {
+    {required bool ground,
+    required bool pump,
+    bool Function(NetNode)? include}) {
   final groundBelowTrain = ground && pump;
+  final movers = _plantMovers(network)
+      .where((m) => include == null || include(m))
+      .length;
   return _plantH +
-      math.max(0, _plantMovers(network).length - 2) * 12.0 +
+      math.max(0, movers - 2) * 12.0 +
       (groundBelowTrain ? 36.0 : 0.0);
 }
 
@@ -1935,17 +1959,24 @@ class _LabelPlacer {
   /// square leader beats a clear slot with a collinear one, and the search
   /// keeps going past a collinear 'clear' slot); it never trades a label
   /// collision for a straighter leader.
-  double _leaderInkCost(double x, double y, String text, double size,
+  ({double hard, double soft}) _leaderInkCost(
+      double x, double y, String text, double size,
       {required double anchorX, required double anchorY}) {
     final r = _rectFor(x, y, text, size);
     final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
-    // Round 32 — only a LONG leader is charged per pipe crossing (a short
-    // hop over the adjacent run beside its own pipe reads fine; the 150-200
-    // unit diagonals slashing across several risers do not).
+    // Round 32 — EVERY proper pipe crossing is charged; a LONG leader's
+    // crossing is HARD (it blocks the early stop: the 150-200 unit diagonals
+    // slashing across several risers keep searching), a short leader's is
+    // SOFT (it only orders slots that cannot clear). Round 32 r2 — charging a
+    // short hop as hard was measured on the harness M-201: no fewer long
+    // crossings (9 either way) but a junction tag pushed into a slot that
+    // trapped its neighbour, striking a tag through with a leader — so a
+    // leader leaving its junction over the adjacent run may still clear.
     final longLeader = math.sqrt((ex - anchorX) * (ex - anchorX) +
             (ey - anchorY) * (ey - anchorY)) >
         _kLongLeader;
     var total = 0.0;
+    var soft = 0.0;
     for (final p in _ink) {
       final len = _segmentClipLength(anchorX, anchorY, ex, ey, p);
       if (len <= 0) continue;
@@ -1967,14 +1998,18 @@ class _LabelPlacer {
         // anchor's own pipe is exempt (every leader leaves it).
         final containsEnd =
             ex >= p.minX && ex <= p.maxX && ey >= p.minY && ey <= p.maxY;
-        if (longLeader && !containsAnchor && !containsEnd) {
-          total += _kLeaderCrossingWeight * size;
+        if (!containsAnchor && !containsEnd) {
+          if (longLeader) {
+            total += _kLeaderCrossingWeight * size;
+          } else {
+            soft += _kLeaderCrossingWeight * size;
+          }
         }
         continue;
       }
       if (!containsAnchor) total += size;
     }
-    return total;
+    return (hard: total, soft: soft);
   }
 
   /// Emit a FIXED-position label (gutter / fan-out) and record its box so
@@ -2035,10 +2070,10 @@ class _LabelPlacer {
         _costAt(defaultX + c.dx, defaultY + c.dy, text, size,
             anchorX: anchorX, anchorY: anchorY, withLeader: needsLeader(c));
     // Round 20 — the leader-along-ink tier (0 when no leader is drawn).
-    double leaderCost(Offset c) => needsLeader(c)
+    ({double hard, double soft}) leaderCost(Offset c) => needsLeader(c)
         ? _leaderInkCost(defaultX + c.dx, defaultY + c.dy, text, size,
             anchorX: anchorX, anchorY: anchorY)
-        : 0;
+        : (hard: 0.0, soft: 0.0);
     Offset best = candidates.isEmpty ? const Offset(0, 0) : candidates.first;
     var bestCost = double.infinity;
     var bestLeader = double.infinity;
@@ -2049,13 +2084,23 @@ class _LabelPlacer {
       // Only a slot that is at least as clear as the best so far pays for
       // its leader check (the tier orders equal-primary slots).
       if (total > bestCost) return;
-      final lead = leaderCost(c);
+      final (:hard, :soft) = leaderCost(c);
+      final lead = hard + soft;
+      // A primary-clear slot whose leader is HARD-free ends the search (a
+      // short hop over the adjacent run does not block it); every crossing,
+      // soft or hard, orders the slots that cannot clear.
+      if (total <= 0 && hard <= 0) {
+        bestCost = total;
+        bestLeader = lead;
+        best = c;
+        cleared = true;
+        return;
+      }
       if (total < bestCost || lead < bestLeader) {
         bestCost = total;
         bestLeader = lead;
         best = c;
       }
-      if (total <= 0 && lead <= 0) cleared = true;
     }
 
     for (final c in candidates) {

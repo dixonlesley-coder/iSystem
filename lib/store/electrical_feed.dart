@@ -15,7 +15,8 @@ import 'package:mechx_engine/electrical/load_list.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/riser_tags.dart' show equipmentDetail;
-import 'package:mechx_engine/sizing/ejector.dart' show drawnEjectorPumpIds;
+import 'package:mechx_engine/sizing/ejector.dart'
+    show drawnEjectorPumpIds, duplexEjectorSets;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/network_sizing.dart'
@@ -130,7 +131,8 @@ class MepDutyBinding {
 
   /// Round 31 (regression-duplex-ejector-standby-full-demand) — a sewage
   /// ejector that is the STANDBY of a duplex set (two or more ejectors on ONE
-  /// pit, [duplexEjectorStandbys]), mapped to the DUTY ejector it backs up:
+  /// pit discharging to ONE header — the engine's `duplexEjectorSets`,
+  /// [duplexEjectorStandbys]), mapped to the DUTY ejector it backs up:
   /// the same machine (wired at the duty rating), alternating, never
   /// coincident — demand factor 0, 'standby' on the schedule row.
   final Map<String, String> ejectorStandbyPumpNodeIds;
@@ -271,38 +273,28 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
 /// ejectors among [ejectors], each mapped to the DUTY ejector it backs up.
 /// Pure.
 ///
-/// Ejectors are grouped by the PIT they draw from (the ground tank one of
-/// their drainage edges joins directly). A duplex ('pompa sewage duplex')
-/// set is duty + standby, alternating: the DUTY ejector is the one with the
-/// LOWEST id; every other ejector on that pit is its standby. Ejectors on
-/// different pits are separate duty machines.
+/// A duplex ('pompa sewage duplex') set is duty + standby, alternating: the
+/// DUTY ejector is the one with the LOWEST id; every other ejector of the set
+/// is its standby.
 ///
-/// Round 32 (binding-2) — the 'largest incident drainage bore' criterion was
-/// dropped: the sizer now mirrors the duty leg onto every standby leg
-/// (`duplexEjectorSets`, the engine's own duty = lowest pump id), so the
-/// bores are equal by construction and the old criterion only echoed which
-/// leg the sizer happened to put in its tree. The id tie-break is the honest,
-/// order-independent choice and matches the engine.
+/// Round 32 r2 — the sets ARE the engine's [duplexEjectorSets] (two or more
+/// ejectors drawing from ONE pit AND discharging to ONE header, each with
+/// exactly two drainage edges), the same sets the sizer mirrors the duty leg
+/// onto. Grouping by pit alone parked a standby at demand factor 0 for two
+/// ejectors on one pit discharging to SEPARATE headers — two duty machines
+/// the sizer sizes as two force mains. Only ejectors in [ejectors] count.
 Map<String, String> duplexEjectorStandbys(
   Network net,
   Iterable<String> ejectors,
 ) {
-  final byPit = <String, List<String>>{};
-  for (final id in ejectors) {
-    final pits = <String>{
-      for (final e in net.edgesAt(id))
-        if (e.service == ServiceType.drainage &&
-            net.nodeById(e.fromId == id ? e.toId : e.fromId)?.component ==
-                NodeComponent.groundTank)
-          e.fromId == id ? e.toId : e.fromId,
-    };
-    if (pits.isEmpty) continue;
-    byPit.putIfAbsent((pits.toList()..sort()).first, () => []).add(id);
-  }
+  final allowed = ejectors.toSet();
   final out = <String, String>{};
-  for (final g in byPit.values) {
-    if (g.length < 2) continue;
-    final ranked = [...g]..sort();
+  for (final set in duplexEjectorSets(net)) {
+    final ranked = [
+      for (final leg in [set.duty, ...set.standby])
+        if (allowed.contains(leg.pumpId)) leg.pumpId,
+    ]..sort();
+    if (ranked.length < 2) continue;
     for (final id in ranked.skip(1)) {
       out[id] = ranked.first;
     }

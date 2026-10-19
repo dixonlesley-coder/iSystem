@@ -3597,9 +3597,13 @@ class _AutoSchematicPainter extends CustomPainter {
       // Round 17 — ONE caption per drawn mover from the per-node duty map
       // (the SAME engine helper the export uses): a transfer pump reads
       // TRANSFER PUMP with its own kW, never a bare BOOSTER PUMP.
+      // Round 32 r2 — only the movers this (focused) sheet draws, as the
+      // export does.
+      final shown = _focusedNodeIds(network, focus);
       final caps = plantMoverCaptions(network,
           detailByNodeId: detailByNode,
-          transferPumpNodeIds: transferPumpNodeIds);
+          transferPumpNodeIds: transferPumpNodeIds,
+          include: (n) => shown == null || shown.contains(n.id));
       var capDy = 0.0;
       for (final cap in caps) {
         _drawText(

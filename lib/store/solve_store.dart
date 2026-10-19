@@ -223,6 +223,13 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
 /// ≈49 kPa). Path-derived, never project-wide: a flush-valve WC on another
 /// branch does not raise the floor of a faucet-fed critical node. A missing
 /// source / unreachable critical node reads the critical node alone.
+///
+/// The path is an unweighted, id-ordered BFS over every supply edge from the
+/// SAME source the solve uses (upfeed `preferHighest: false`, downfeed
+/// `preferHighest: true`). On a tree that is the unique supply path. On a
+/// LOOPED (Hardy–Cross) supply the fewest-hop route need not be the
+/// hydraulic one, so a flush valve on the other ring leg can be missed or
+/// wrongly counted — a recorded approximation, not a hydraulic path.
 Pressure sniMinimumResidualAt({
   required Network net,
   required String? sourceId,

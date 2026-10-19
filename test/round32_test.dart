@@ -11,7 +11,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/electrical_feed.dart' show duplexEjectorStandbys;
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/ejector.dart' show drawnEjectorPumpIds;
+import 'package:mechx_engine/sizing/ejector.dart'
+    show drawnEjectorPumpIds, duplexEjectorSets;
 
 NetNode _n(String id, double x, {NodeRole role = NodeRole.main}) =>
     NetNode(id: id, sheetId: 's1', x: x, y: 0, floorIndex: 0, role: role);
@@ -39,17 +40,55 @@ void main() {
         p('Z-EJ', NodeComponent.pump),
         p('A-EJ', NodeComponent.pump),
         _n('H', 10),
+        _n('OUT', 20),
       ],
       edges: [
         d('p1', 'PIT', 'Z-EJ'),
         d('p2', 'PIT', 'A-EJ'),
         d('h1', 'Z-EJ', 'H'),
         d('h2', 'A-EJ', 'H'),
+        // The header discharges on (r2: a bare H joining only the two pumps
+        // is a pass-through, not a header, for the engine's set walk).
+        d('ho', 'H', 'OUT'),
       ],
     );
     expect(duplexEjectorStandbys(net, drawnEjectorPumpIds(net)), {
       'Z-EJ': 'A-EJ',
     });
+  });
+
+  test('two ejectors on one pit discharging to SEPARATE headers are two duty '
+      'machines (r2: the app reads the engine duplexEjectorSets)', () {
+    NetNode p(String id, NodeComponent c) => NetNode(
+      id: id,
+      sheetId: 's1',
+      x: 0,
+      y: 0,
+      floorIndex: 0,
+      role: c.role,
+      component: c,
+    );
+    NetEdge d(String id, String a, String b) =>
+        NetEdge(id: id, fromId: a, toId: b, service: ServiceType.drainage);
+    final net = Network(
+      nodes: [
+        p('PIT', NodeComponent.groundTank),
+        p('A-EJ', NodeComponent.pump),
+        p('Z-EJ', NodeComponent.pump),
+        _n('H1', 10),
+        _n('H2', 20),
+      ],
+      edges: [
+        d('p1', 'PIT', 'A-EJ'),
+        d('p2', 'PIT', 'Z-EJ'),
+        d('h1', 'A-EJ', 'H1'),
+        d('h2', 'Z-EJ', 'H2'),
+      ],
+    );
+    // The sizer mirrors nothing here (each is its own force main) …
+    expect(duplexEjectorSets(net), isEmpty);
+    // … so neither ejector is parked as a standby.
+    expect(duplexEjectorStandbys(net, drawnEjectorPumpIds(net)), isEmpty);
   });
 
   group('SNI minimum residual follows the critical node\'s path', () {

@@ -5852,7 +5852,10 @@ Map<String, double> _bridgeFarSideSums({
   return out;
 }
 
-final _airOpenBoundaryCache = Expando<Set<String>>('airOpenBoundaryLeaves');
+final _airOpenBoundaryCache = Expando<
+    (List<NetNode>, List<NetEdge>, int, int, Set<String>)>(
+  'airOpenBoundaryLeaves',
+);
 
 /// Round 32 (regression-air-open-boundary-exempts-undrawn-terminal-off-non-
 /// root-fcu) — the bare air leaves the SIZER treats as an air unit's open
@@ -5862,10 +5865,21 @@ final _airOpenBoundaryCache = Expando<Set<String>>('airOpenBoundaryLeaves');
 /// terminal FCU never roots while a source exists, Round 15, so a bare leaf
 /// off a non-root FCU is a default terminal, not an intake). The connectivity
 /// judge consults THIS set, so the loose-end check and the sizer can never
-/// disagree. Memoised per (immutable) [Network]. Pure.
+/// disagree. Pure.
+///
+/// Memoised per [Network], re-keyed (like `Network.nodeById`'s index) on the
+/// node / edge LIST instances and their lengths: the lists are plain mutable
+/// `List`s, so a network whose lists were swapped or grown after the first
+/// call recomputes instead of serving a stale intake set.
 Set<String> airOpenBoundaryLeaves(Network net) {
   final cached = _airOpenBoundaryCache[net];
-  if (cached != null) return cached;
+  if (cached != null &&
+      identical(cached.$1, net.nodes) &&
+      identical(cached.$2, net.edges) &&
+      cached.$3 == net.nodes.length &&
+      cached.$4 == net.edges.length) {
+    return cached.$5;
+  }
   final airEdges = [
     for (final e in net.edges)
       if (e.service.regime == FlowRegime.air) e,
@@ -5890,6 +5904,7 @@ Set<String> airOpenBoundaryLeaves(Network net) {
     );
   }
   final frozen = Set<String>.unmodifiable(out);
-  _airOpenBoundaryCache[net] = frozen;
+  _airOpenBoundaryCache[net] =
+      (net.nodes, net.edges, net.nodes.length, net.edges.length, frozen);
   return frozen;
 }
