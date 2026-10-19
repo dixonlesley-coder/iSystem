@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
-import '../../data/dxf_import.dart' show dxfContentSize;
+import '../../data/dxf_import.dart' show dxfContentSize, dxfMappingBounds;
 import '../../data/file_stamped_cache.dart';
 import '../../data/dxf_text.dart';
 import '../../store/models/sheet.dart';
@@ -28,7 +28,15 @@ class DxfSheetPage extends StatefulWidget {
   /// sharp while keeping the rasterised layer bounded.
   static const double _superSample = 3.0;
 
-  const DxfSheetPage({super.key, required this.sheet});
+  /// Round 24 — called (once per detected change, after the frame) when the
+  /// file's LIVE extent no longer matches the sheet's import-time
+  /// [Sheet.dxfFrame] — the plan was revised in place — AND differs from the
+  /// extent already acknowledged on [Sheet.dxfLiveFrameAck]. The host records
+  /// the live extent and marks the calibration stale; the drawing keeps
+  /// painting through the stored frame.
+  final void Function(String sheetId, DxfBounds live)? onFrameChanged;
+
+  const DxfSheetPage({super.key, required this.sheet, this.onFrameChanged});
 
   @override
   State<DxfSheetPage> createState() => _DxfSheetPageState();
@@ -61,6 +69,8 @@ class DxfSheetPage extends StatefulWidget {
 }
 
 class _DxfSheetPageState extends State<DxfSheetPage> {
+  DxfDrawing? _reported;
+
   @override
   Widget build(BuildContext context) {
     final path = widget.sheet.dxfPath;
@@ -70,6 +80,20 @@ class _DxfSheetPageState extends State<DxfSheetPage> {
     final drawing = DxfSheetPage._load(path);
     if (drawing == null || drawing.isEmpty) {
       return const _ErrorPage('Could not load DXF, or it has no geometry.');
+    }
+    final frame = dxfMappingBounds(widget.sheet, drawing.bounds);
+    final stored = widget.sheet.dxfFrame;
+    final ack = widget.sheet.dxfLiveFrameAck;
+    final cb = widget.onFrameChanged;
+    final live = drawing.bounds;
+    if (cb != null &&
+        stored != null &&
+        !identical(_reported, drawing) &&
+        stored.differsFrom(live) &&
+        (ack == null || ack.differsFrom(live))) {
+      _reported = drawing;
+      final id = widget.sheet.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) => cb(id, live));
     }
 
     final size = widget.sheet.sizePx;
@@ -83,7 +107,7 @@ class _DxfSheetPageState extends State<DxfSheetPage> {
         width: size.width * ss,
         height: size.height * ss,
         child: CustomPaint(
-          painter: _DxfPainter(drawing: drawing, scale: ss),
+          painter: _DxfPainter(drawing: drawing, frame: frame, scale: ss),
         ),
       ),
     );
@@ -96,11 +120,15 @@ class _DxfSheetPageState extends State<DxfSheetPage> {
 class _DxfPainter extends CustomPainter {
   final DxfDrawing drawing;
 
+  /// Round 24 — the world frame the content maps from (the sheet's import
+  /// frame, else the live bounds).
+  final DxfBounds frame;
+
   /// Extra supersample factor folded into the world→content map (the SizedBox is
   /// laid out this many times larger than the content slot).
   final double scale;
 
-  _DxfPainter({required this.drawing, required this.scale});
+  _DxfPainter({required this.drawing, required this.frame, required this.scale});
 
   static const Color _paper = Color(0xFFFFFFFF);
   static const Color _ink = Color(0xFF3A3F46);
@@ -109,7 +137,7 @@ class _DxfPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = _paper);
 
-    final b = drawing.bounds;
+    final b = frame;
     // Uniform world→content scale (the same one the importer used to size the
     // sheet), times the supersample factor.
     final extentW = b.width, extentH = b.height;
@@ -167,7 +195,12 @@ class _DxfPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_DxfPainter old) =>
-      old.drawing != drawing || old.scale != scale;
+      old.drawing != drawing ||
+      old.scale != scale ||
+      old.frame.minX != frame.minX ||
+      old.frame.maxX != frame.maxX ||
+      old.frame.minY != frame.minY ||
+      old.frame.maxY != frame.maxY;
 }
 
 class _ErrorPage extends StatelessWidget {

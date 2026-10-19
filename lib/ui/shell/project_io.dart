@@ -253,12 +253,16 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
   // the UI thread — either way, tell the user we're working.
   ref.read(busyProvider.notifier).set(MechXStringsData(ref.read(localeProvider))(
       isDwg ? StringKey.busyConvertingDwg : StringKey.busyImportingPlan));
+  // Round 24 — a plan that imported only partly (DXF budget) says so.
+  final warnings = <String>[];
   try {
     var sheets = isDwg
         ? await importDwg(path,
-            converter: const OdaDwgConverter(), outDir: dwgCacheDir())
+            converter: const OdaDwgConverter(),
+            outDir: dwgCacheDir(),
+            onWarning: warnings.add)
         : isDxf
-            ? await importDxf(path)
+            ? await importDxf(path, onWarning: warnings.add)
             : await importPdf(path);
     if (sheets.isEmpty) {
       ref
@@ -293,6 +297,9 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
         final added =
             ref.read(sheetsControllerProvider.notifier).addSheets(sheets);
         ref.read(loadErrorProvider.notifier).clear();
+        if (warnings.isNotEmpty) {
+          ref.read(loadErrorProvider.notifier).set(warnings.join(' '));
+        }
         // A5: jump to the first freshly-added sheet — the appended block starts
         // at index `existing` (the sheet count captured before the add).
         _revealImportedSheet(ref, existing);
@@ -318,6 +325,9 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
     // revised plan gets a STALE scale flag instead of silently inheriting it.
     ref.read(sheetsControllerProvider.notifier).replaceAllSheets(sheets);
     ref.read(loadErrorProvider.notifier).clear();
+    if (warnings.isNotEmpty) {
+      ref.read(loadErrorProvider.notifier).set(warnings.join(' '));
+    }
     // A5: reveal the imported plan on DESIGN → Layout at the first sheet.
     _revealImportedSheet(ref, 0);
     final n = sheets.length;
@@ -465,9 +475,12 @@ Future<void> addSheetsFromFiles(BuildContext context, WidgetRef ref) async {
 /// Revise a SINGLE sheet's plan IN PLACE (A5): pick a new PDF/DXF/DWG and swap
 /// [sheetId]'s source for it, KEEPING the sheet id — so its calibration and the
 /// drawn nodes that reference the id survive (the real plan-revision workflow,
-/// surfaced from the sheet rail's context menu). A multi-page PDF contributes
-/// its first page. No dirty-guard: nothing is destroyed (the id, calibration and
-/// network are preserved); only the underlay changes.
+/// surfaced from the sheet rail's context menu). Round 24 (import-2-4) — a
+/// multi-page replacement asks WHICH page replaces this sheet (single-select,
+/// the sheet's current page listed first), so a per-floor PDF set can be
+/// revised in place; cancelling the picker replaces nothing. No dirty-guard:
+/// nothing is destroyed (the id, calibration and network are preserved); only
+/// the underlay changes.
 Future<void> replaceSheetPlan(
     BuildContext context, WidgetRef ref, String sheetId) async {
   final picked =
@@ -485,12 +498,15 @@ Future<void> replaceSheetPlan(
           : 'PDF';
   ref.read(busyProvider.notifier).set(MechXStringsData(ref.read(localeProvider))(
       isDwg ? StringKey.busyConvertingDwg : StringKey.busyImportingPlan));
+  final warnings = <String>[];
   try {
     final sheets = isDwg
         ? await importDwg(path,
-            converter: const OdaDwgConverter(), outDir: dwgCacheDir())
+            converter: const OdaDwgConverter(),
+            outDir: dwgCacheDir(),
+            onWarning: warnings.add)
         : isDxf
-            ? await importDxf(path)
+            ? await importDxf(path, onWarning: warnings.add)
             : await importPdf(path);
     if (sheets.isEmpty) {
       ref
@@ -498,10 +514,24 @@ Future<void> replaceSheetPlan(
           .set('That $what had no importable geometry.');
       return;
     }
+    var chosen = sheets.first;
+    if (sheets.length > 1) {
+      final current =
+          ref.read(sheetsControllerProvider).sheetById(sheetId)?.pageIndex ?? 0;
+      final ordered = orderReplacementPages(sheets, current);
+      ref.read(busyProvider.notifier).clear();
+      if (!context.mounted) return;
+      final id = await showSheetPicker(context, ordered);
+      if (id == null) return; // cancelled — nothing replaced
+      chosen = ordered.firstWhere((s) => s.id == id, orElse: () => ordered.first);
+    }
     ref
         .read(sheetsControllerProvider.notifier)
-        .replaceSheetSource(sheetId, sheets.first);
+        .replaceSheetSource(sheetId, chosen);
     ref.read(loadErrorProvider.notifier).clear();
+    if (warnings.isNotEmpty) {
+      ref.read(loadErrorProvider.notifier).set(warnings.join(' '));
+    }
     ref.read(statusMessageProvider.notifier).showStatus('Plan replaced');
   } catch (e) {
     // I5 — the same human mapping as Import (this is the identical parse path).
@@ -829,4 +859,13 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
   } finally {
     read(busyProvider.notifier).clear();
   }
+}
+
+/// Round 24 (import-2-4) — the pages of a multi-page replacement in picker
+/// order: the page at the replaced sheet's own [currentPageIndex] first (the
+/// likely revision of the same floor), the rest in page order. Pure.
+List<Sheet> orderReplacementPages(List<Sheet> pages, int currentPageIndex) {
+  final i = pages.indexWhere((s) => s.pageIndex == currentPageIndex);
+  if (i <= 0) return List<Sheet>.of(pages);
+  return [pages[i], ...pages.sublist(0, i), ...pages.sublist(i + 1)];
 }

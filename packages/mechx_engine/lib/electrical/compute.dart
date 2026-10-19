@@ -668,7 +668,16 @@ class ComputePanelOptions {
   /// byte-identical.
   final Map<String, double> feederCapacitorFloorA;
 
+  /// Round 24 — on a TT installation, the fed sub-tree's RCD topology keyed
+  /// by the CHILD panel id a feeder serves (see [TtFeederRcdBasis]): the
+  /// feeder RCD takes the highest downstream type, steps its sensitivity up
+  /// per RCD feeder level below it, and is omitted for a life-safety-only
+  /// sub-tree. Derived by `computeSystem`; empty (the default, and every TN
+  /// project) ⇒ the single-level rule ⇒ byte-identical.
+  final Map<String, TtFeederRcdBasis> ttFeederRcd;
+
   const ComputePanelOptions({
+    this.ttFeederRcd = const {},
     this.feederCapacitorFloorA = const {},
     this.feederLoadW = const {},
     this.panelSystems = const {},
@@ -1367,6 +1376,7 @@ _CircuitComputation _computeCircuit(
     // Round 11 — a VFD's 3-phase rectifier can drive SMOOTH DC earth-fault
     // current that blinds a Type A RCD: the Type B branch must be reachable.
     hasVfd: c.starterType == StarterType.vfd,
+    ttFeeder: c.feedsPanelId == null ? null : opts.ttFeederRcd[c.feedsPanelId],
   );
 
   // A life-safety run with NO construction named is sized + printed on the
@@ -2099,6 +2109,72 @@ ElectricalSystemResult computeSystem(
     }
   }
 
+  // Round 24 — on a TT installation, each feeder's RCD follows the board it
+  // feeds: the highest RCD type anywhere below it (a Type A device upstream of
+  // an EV / VFD Type B is blinded), one sensitivity step per RCD feeder level
+  // below (≥ 3 × IΔn discrimination), and no tripping RCD at all when every
+  // load below it is life-safety. Bottom-up over the same post-order; TN ⇒
+  // empty ⇒ byte-identical.
+  final ttFeederRcd = <String, TtFeederRcdBasis>{};
+  if (project.earthingSystem == EarthingSystem.tt) {
+    final subType = <String, RcdType?>{};
+    final subLifeOnly = <String, bool?>{}; // null ⇒ no load way below
+    final subLevels = <String, int>{};
+    RcdType? maxType(RcdType? a, RcdType? b) => a == null
+        ? b
+        : (b == null ? a : (rcdTypeRank(b) > rcdTypeRank(a) ? b : a));
+    for (final id in postOrder) {
+      final panel = byId[id];
+      if (panel == null) continue;
+      RcdType? best;
+      var anyLoad = false;
+      var allLife = true;
+      var levels = 0;
+      for (final c in panel.circuits) {
+        final child = c.feedsPanelId;
+        if (child != null) {
+          final lo = subLifeOnly[child];
+          if (lo != null) {
+            anyLoad = true;
+            if (!lo) allLife = false;
+          }
+          final childLevels = subLevels[child] ?? 0;
+          // The sub-tree's RCD TYPE always propagates (r2): a life-safety
+          // feeder carries no RCD itself, but the Type B load below it still
+          // sits under any RCD further up. Only the discrimination LEVEL count
+          // skips a feeder that carries no tripping RCD (it, or its whole
+          // sub-tree, is life-safety).
+          best = maxType(best, subType[child]);
+          if (!c.lifeSafety && lo != true) {
+            levels = math.max(levels, childLevels + 1);
+          } else {
+            levels = math.max(levels, childLevels);
+          }
+          continue;
+        }
+        if (c.loadKind == LoadKind.spare) continue;
+        anyLoad = true;
+        if (c.lifeSafety) continue;
+        allLife = false;
+        best = maxType(
+            best,
+            recommendedRcdType(c.loadKind,
+                    hasVfd: c.starterType == StarterType.vfd)
+                .type);
+      }
+      subType[id] = best;
+      subLifeOnly[id] = anyLoad ? allLife : null;
+      subLevels[id] = levels;
+    }
+    for (final child in parentOf.keys) {
+      ttFeederRcd[child] = (
+        downstreamType: subType[child],
+        rcdFeederLevelsBelow: subLevels[child] ?? 0,
+        lifeSafetyOnly: subLifeOnly[child] == true,
+      );
+    }
+  }
+
   // Round 13 — bottom-up capacitor switching current per board (its own banks
   // + every board it feeds), so a feeder to a PFC board floors at the bank's
   // current (see [ComputePanelOptions.feederCapacitorFloorA]). Boards with no
@@ -2136,6 +2212,7 @@ ElectricalSystemResult computeSystem(
           feederCapacitorFloorA: capacitorFloorByPanel,
           panelSystems: panelSystems,
           earthingSystem: project.earthingSystem,
+          ttFeederRcd: ttFeederRcd,
           calibrationBySheet: calibrationBySheet,
           building: building,
           panelById: byId,
@@ -2272,6 +2349,7 @@ ElectricalSystemResult computeSystem(
           feederCapacitorFloorA: capacitorFloorByPanel,
           panelSystems: panelSystems,
           earthingSystem: project.earthingSystem,
+          ttFeederRcd: ttFeederRcd,
           faultLevelA: faultLevelA,
           busbarClearingTimeS: busbarClearingTimeS,
           calibrationBySheet: calibrationBySheet,
@@ -2624,6 +2702,8 @@ ElectricalSystemResult computeSystem(
       profile,
       system: project.earthingSystem,
       supplyPeMm2: profile.peConductorSizeMm2(mainCable.csaMm2),
+      // Round 24 — parallel service runs each carry their own PE.
+      runsPerPhase: mainCable.runsPerPhase ?? 1,
     );
 
     // Which flagged feeders actually REACHED their selectivity target. A floor

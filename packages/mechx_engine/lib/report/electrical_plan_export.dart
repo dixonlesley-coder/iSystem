@@ -35,7 +35,14 @@ import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
 import 'drawing_chrome.dart';
 import 'electrical_dxf_export.dart' show SldDxfLayers;
-import 'plan_symbols.dart' show planLengthLabel;
+import 'plan_annotation_layout.dart' show planOverlapWarning;
+import 'plan_symbols.dart'
+    show
+        LeaderedLabelPlacement,
+        PlanLabelLayout,
+        placePlanLabel,
+        planLengthLabel,
+        riserUpDown;
 
 /// Whether a plan node is a distribution panel (a stroked box) or a load / meter
 /// (a small circle) — drives the glyph the renderers draw.
@@ -86,22 +93,46 @@ class ElectricalPlanRoute {
   });
 }
 
+/// Round 24 — a feeder whose far board sits on ANOTHER sheet / floor: drawn
+/// at the on-sheet board ([x] / [y], sheet pixels) as a riser mark + a short
+/// home-run stub with its [text] (`ke LP-1 (L1) - 12.0 m` / `dari MDP (L0)`)
+/// and the vertical [sense] (`UP` / `DN`, null on the same floor). Never
+/// dropped: the main vertical feeders are what the foreman pulls cable for.
+class ElectricalPlanRiser {
+  final double x;
+  final double y;
+  final String text;
+  final String? sense;
+  final bool essential;
+
+  const ElectricalPlanRiser({
+    required this.x,
+    required this.y,
+    required this.text,
+    this.sense,
+    this.essential = false,
+  });
+}
+
 /// The drawable content of one electrical layout sheet — placed [nodes], their
-/// [routes], and the honest [unplaced] note lines (items with no placement on
-/// this sheet+floor). Pure data, format-agnostic.
+/// [routes], the off-sheet feeder [risers], and the honest [unplaced] note
+/// lines (items with no placement on this sheet+floor, plus every off-sheet
+/// feeder by name). Pure data, format-agnostic.
 class ElectricalPlanData {
   final List<ElectricalPlanNode> nodes;
   final List<ElectricalPlanRoute> routes;
+  final List<ElectricalPlanRiser> risers;
   final List<String> unplaced;
 
   const ElectricalPlanData({
     this.nodes = const [],
     this.routes = const [],
+    this.risers = const [],
     this.unplaced = const [],
   });
 
   /// True when nothing would be drawn (an empty sheet — a blank export).
-  bool get isEmpty => nodes.isEmpty && routes.isEmpty;
+  bool get isEmpty => nodes.isEmpty && routes.isEmpty && risers.isEmpty;
 }
 
 /// Build the drawable [ElectricalPlanData] for the [sheetId] / [floorIndex]
@@ -111,10 +142,12 @@ class ElectricalPlanData {
 ///
 /// A panel is drawn where its [ElectricalPanel.layoutPos] lands on this sheet +
 /// floor; a load where its [ElectricalCircuit.loadPos] does. A cable route is
-/// drawn only when BOTH ends are on this sheet+floor (a feeder to an off-sheet
-/// sub-panel, or a load on another floor, is listed in [ElectricalPlanData.unplaced]
-/// instead — never given a fabricated on-sheet position). A panel / load with no
-/// placement AT ALL is likewise listed, not invented.
+/// drawn only when BOTH ends are on this sheet+floor. Round 24 — a FEEDER whose
+/// other board is placed on another sheet / floor is drawn at the on-sheet
+/// board as an [ElectricalPlanRiser] (`ke LP-1 (L1) - 12.0 m` with the §10
+/// length, `UP`/`DN`) AND listed in [ElectricalPlanData.unplaced] — never given
+/// a fabricated on-sheet position, never silently dropped. A panel / load with
+/// no placement AT ALL is likewise listed, not invented.
 ElectricalPlanData buildElectricalPlanData({
   required ElectricalProject project,
   ElectricalSystemResult? result,
@@ -138,18 +171,51 @@ ElectricalPlanData buildElectricalPlanData({
 
   final nodes = <ElectricalPlanNode>[];
   final routes = <ElectricalPlanRoute>[];
+  final risers = <ElectricalPlanRiser>[];
+  final offSheetFeeders = <String>[];
   final unplacedPanels = <String>[];
   var unplacedLoads = 0;
+
+  String tagOf(ElectricalPanel p) =>
+      (p.tag != null && p.tag!.isNotEmpty) ? p.tag! : p.name;
+  String floorName(int i) {
+    final fl = building?.floors;
+    return (fl != null && i >= 0 && i < fl.length && fl[i].name.isNotEmpty)
+        ? fl[i].name
+        : 'Lt.$i';
+  }
+
+  // Round 24 — the off-sheet feeder mark at the on-sheet board [here]:
+  // `ke`/`dari` <other board> (<its floor>) + the §10 length when both ends
+  // are placed.
+  void offSheetRiser(LayoutPos here, LayoutPos? there, String verb,
+      String otherTag, bool essential) {
+    final where = there != null ? ' (${floorName(there.floorIndex)})' : '';
+    final len = there != null ? routeLabel(here, there) : null;
+    final text = '$verb $otherTag$where${len != null ? ' - $len' : ''}';
+    risers.add(ElectricalPlanRiser(
+      x: here.x,
+      y: here.y,
+      text: text,
+      sense: there == null
+          ? null
+          : riserUpDown(
+              hereFloor: here.floorIndex, otherFloor: there.floorIndex),
+      essential: essential,
+    ));
+    offSheetFeeders.add(text);
+  }
 
   for (final p in project.panels) {
     final rp = result?.panels[p.id];
     final pos = p.layoutPos;
-    final tag = (p.tag != null && p.tag!.isNotEmpty) ? p.tag! : p.name;
+    final tag = tagOf(p);
 
     if (onSheet(pos)) {
       final sub = rp != null
           ? '${rp.incomer.breaker.ratingA.amperes.round()}A '
               '${rp.system.isThreePhase ? '3ph' : '1ph'}'
+              '${incomerOverRangeSuffix(rp.incomer, withNeeds: false)}'
           : null;
       nodes.add(ElectricalPlanNode(
         x: pos!.x,
@@ -166,20 +232,24 @@ ElectricalPlanData buildElectricalPlanData({
     // Circuits: feeders route to a sub-panel; loads route to their loadPos.
     for (final c in p.circuits) {
       if (c.feedsPanelId != null) {
-        // A feeder route is drawn only when both boards are on this sheet+floor.
-        if (onSheet(pos)) {
-          final target = panelById[c.feedsPanelId];
-          final tpos = target?.layoutPos;
-          if (onSheet(tpos)) {
-            routes.add(ElectricalPlanRoute(
-              x1: pos!.x,
-              y1: pos.y,
-              x2: tpos!.x,
-              y2: tpos.y,
-              label: routeLabel(pos, tpos),
-              essential: p.essential || (target?.essential ?? false),
-            ));
-          }
+        // A feeder route is drawn when both boards are on this sheet+floor;
+        // when only ONE end is here it becomes an off-sheet riser mark there.
+        final target = panelById[c.feedsPanelId];
+        final tpos = target?.layoutPos;
+        final ess = p.essential || (target?.essential ?? false);
+        if (onSheet(pos) && onSheet(tpos)) {
+          routes.add(ElectricalPlanRoute(
+            x1: pos!.x,
+            y1: pos.y,
+            x2: tpos!.x,
+            y2: tpos.y,
+            label: routeLabel(pos, tpos),
+            essential: ess,
+          ));
+        } else if (onSheet(pos) && target != null && tpos != null) {
+          offSheetRiser(pos!, tpos, 'ke', tagOf(target), ess);
+        } else if (onSheet(tpos) && target != null) {
+          offSheetRiser(tpos!, pos, 'dari', tag, ess);
         }
         continue;
       }
@@ -218,10 +288,11 @@ ElectricalPlanData buildElectricalPlanData({
   final unplaced = <String>[
     for (final name in unplacedPanels) 'Panel $name (belum ditempatkan)',
     if (unplacedLoads > 0) '$unplacedLoads beban belum ditempatkan',
+    for (final f in offSheetFeeders) 'Feeder $f (lembar lain)',
   ];
 
   return ElectricalPlanData(
-      nodes: nodes, routes: routes, unplaced: unplaced);
+      nodes: nodes, routes: routes, risers: risers, unplaced: unplaced);
 }
 
 ElectricalCircuitResult? _circuitResult(
@@ -231,6 +302,167 @@ ElectricalCircuitResult? _circuitResult(
     if (c.circuitId == circuitId) return c;
   }
   return null;
+}
+
+// ── Shared annotation layout (Round 24) ─────────────────────────────────────
+
+/// The renderer-specific glyph / text sizes the annotation layout places
+/// around (all in the renderer's OUTPUT units, y-up). Each renderer keeps its
+/// own historic glyph sizes; the layout only needs them as obstacles.
+typedef ElectricalPlanSizes = ({
+  double panelW,
+  double panelH,
+  double panelTagSize,
+  double panelSubSize,
+  double panelTagGap,
+  double panelTagDy,
+  double panelSubDy,
+  double loadR,
+  double loadTagSize,
+  double loadSubSize,
+  double loadTagGap,
+  double loadTagDy,
+  double loadSubDy,
+  double routeTextSize,
+  double riserStub,
+  double riserR,
+});
+
+/// One off-sheet feeder mark as laid out: the stub from the board to the
+/// riser marker, the marker, and its placed label.
+class ElectricalPlanRiserLayout {
+  final ElectricalPlanRiser riser;
+  final double x1, y1, x2, y2; // stub, board -> marker (output units)
+  final LeaderedLabelPlacement label;
+  const ElectricalPlanRiserLayout(
+      this.riser, this.x1, this.y1, this.x2, this.y2, this.label);
+}
+
+/// The placed annotations of one electrical layout sheet (output units).
+class ElectricalPlanAnnotations {
+  /// Route index -> its placed length label (absent = unlabelled route).
+  final Map<int, LeaderedLabelPlacement> routeLabels;
+  final List<ElectricalPlanRiserLayout> risers;
+
+  /// Annotations that could only be placed overprinting something.
+  final int overlapCount;
+  const ElectricalPlanAnnotations(
+      this.routeLabels, this.risers, this.overlapCount);
+}
+
+/// Round 24 — lay out the electrical plan's route length labels and the
+/// off-sheet feeder marks through the SHARED plan label placer
+/// ([placePlanLabel]): every route is a run obstacle, every glyph + fixed
+/// node tag an occupied box, so a home-run line never strikes through its own
+/// figure and two figures never stack (a label sits along its route, offset
+/// off the line, leadered back when crowded). [map] takes a sheet-pixel
+/// point to the y-up output space. Pure; both renderers call it.
+ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
+  ElectricalPlanData data, {
+  required ({double x, double y}) Function(double xPx, double yPx) map,
+  required ElectricalPlanSizes sizes,
+}) {
+  final z = sizes;
+  final layout = PlanLabelLayout();
+  for (var i = 0; i < data.routes.length; i++) {
+    final r = data.routes[i];
+    final a = map(r.x1, r.y1), b = map(r.x2, r.y2);
+    layout.addRun('r$i', a.x, a.y, b.x, b.y);
+  }
+  void textBox(double x, double y, String t, double size) => layout.addBox((
+        minX: x,
+        minY: y - 0.25 * size,
+        maxX: x + t.length * size * 0.55,
+        maxY: y + size,
+      ));
+  for (final nd in data.nodes) {
+    final p = map(nd.x, nd.y);
+    if (nd.kind == ElectricalPlanNodeKind.panel) {
+      layout.addBox((
+        minX: p.x - z.panelW / 2,
+        minY: p.y - z.panelH / 2,
+        maxX: p.x + z.panelW / 2,
+        maxY: p.y + z.panelH / 2,
+      ));
+      final tx = p.x + z.panelW / 2 + z.panelTagGap;
+      textBox(tx, p.y + z.panelTagDy, nd.tag, z.panelTagSize);
+      if (nd.sub != null) {
+        textBox(tx, p.y + z.panelSubDy, nd.sub!, z.panelSubSize);
+      }
+    } else {
+      layout.addBox((
+        minX: p.x - z.loadR,
+        minY: p.y - z.loadR,
+        maxX: p.x + z.loadR,
+        maxY: p.y + z.loadR,
+      ));
+      final tx = p.x + z.loadTagGap;
+      textBox(tx, p.y + z.loadTagDy, nd.tag, z.loadTagSize);
+      if (nd.sub != null) {
+        textBox(tx, p.y + z.loadSubDy, nd.sub!, z.loadSubSize);
+      }
+    }
+  }
+
+  // Off-sheet feeder stubs first (they are linework): the k-th mark at one
+  // board fans out at its own bearing so two never coincide.
+  const bearings = [90.0, 60.0, 120.0, 30.0, 150.0, 0.0, 180.0];
+  final perBoard = <String, int>{};
+  final stubs = <(ElectricalPlanRiser, double, double, double, double)>[];
+  for (final rs in data.risers) {
+    final p = map(rs.x, rs.y);
+    final key = '${rs.x},${rs.y}';
+    final k = perBoard.update(key, (v) => v + 1, ifAbsent: () => 0);
+    final deg = bearings[k % bearings.length];
+    final rad = deg * math.pi / 180;
+    final start = z.panelH / 2;
+    final x1 = p.x + math.cos(rad) * start, y1 = p.y + math.sin(rad) * start;
+    final x2 = p.x + math.cos(rad) * (start + z.riserStub);
+    final y2 = p.y + math.sin(rad) * (start + z.riserStub);
+    layout.addRun(null, x1, y1, x2, y2);
+    layout.addBox((
+      minX: x2 - z.riserR,
+      minY: y2 - z.riserR,
+      maxX: x2 + z.riserR,
+      maxY: y2 + z.riserR,
+    ));
+    stubs.add((rs, x1, y1, x2, y2));
+  }
+
+  final routeLabels = <int, LeaderedLabelPlacement>{};
+  for (var i = 0; i < data.routes.length; i++) {
+    final r = data.routes[i];
+    final text = r.label;
+    if (text == null || text.isEmpty) continue;
+    final a = map(r.x1, r.y1), b = map(r.x2, r.y2);
+    routeLabels[i] = placePlanLabel(
+        ax: a.x,
+        ay: a.y,
+        bx: b.x,
+        by: b.y,
+        text: text,
+        textSize: z.routeTextSize,
+        layout: layout,
+        ownRunId: 'r$i');
+  }
+  final risers = <ElectricalPlanRiserLayout>[];
+  for (final (rs, x1, y1, x2, y2) in stubs) {
+    final text = rs.sense != null ? '${rs.sense} ${rs.text}' : rs.text;
+    final gap = z.riserR * 1.5;
+    final w = text.length * z.routeTextSize * 0.55;
+    final label = placePlanLabel(
+        ax: x2 + gap,
+        ay: y2,
+        bx: x2 + gap + w,
+        by: y2,
+        text: text,
+        textSize: z.routeTextSize,
+        layout: layout,
+        anchorPoint: (x: x2, y: y2));
+    risers.add(ElectricalPlanRiserLayout(rs, x1, y1, x2, y2, label));
+  }
+  return ElectricalPlanAnnotations(
+      routeLabels, risers, layout.unresolvedCount);
 }
 
 // ── PDF renderer ─────────────────────────────────────────────────────────────
@@ -247,6 +479,26 @@ const _kNormalInk = (0.10, 0.10, 0.10);
 const _kEssentialInk = (0.80, 0.12, 0.12);
 
 const double _kElecPlanMargin = 48.0;
+
+/// The PDF renderer's glyph / text sizes (points) for the annotation layout.
+const ElectricalPlanSizes kElectricalPlanPdfSizes = (
+  panelW: 20.0,
+  panelH: 12.0,
+  panelTagSize: 9.0,
+  panelSubSize: kMinPlotLabelPt,
+  panelTagGap: 4.0,
+  panelTagDy: 1.0,
+  panelSubDy: -9.0,
+  loadR: 5.0,
+  loadTagSize: 7.0,
+  loadSubSize: kMinPlotLabelPt,
+  loadTagGap: 8.0,
+  loadTagDy: 1.0,
+  loadSubDy: -8.0,
+  routeTextSize: 7.0,
+  riserStub: 16.0,
+  riserR: 3.0,
+);
 
 typedef _ElecPlanFit = ({
   double minX,
@@ -480,15 +732,38 @@ Uint8List electricalPlanToPdf({
     cs.writeln(fill ? 'f' : 'S');
   }
 
+  // Round 24 — the route figures + off-sheet feeder marks are placed by the
+  // shared plan label placer (along the route, clear of every line / glyph).
+  final ann = layoutElectricalPlanAnnotations(data,
+      map: (x, y) => (x: tx(x), y: ty(y)), sizes: kElectricalPlanPdfSizes);
+  void placedLabel(LeaderedLabelPlacement p, double size) {
+    final lead = p.leaderAnchor, end = p.leaderEnd;
+    if (lead != null && end != null) {
+      cs.writeln('0.30 0.30 0.30 RG 0.5 w');
+      cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(end.x)} ${_n(end.y)} l S');
+    }
+    final rad = p.angleDeg * math.pi / 180;
+    final pc = math.cos(rad), ps = math.sin(rad);
+    for (final line in p.lines) {
+      cs.writeln('BT /F1 ${size.toStringAsFixed(0)} Tf 0 0 0 rg '
+          '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
+          '${_n(line.x)} ${_n(line.y)} Tm (${_pdfText(line.text)}) Tj ET');
+    }
+  }
+
   // Routes (beneath the glyphs).
   for (final r in data.routes) {
     setInk(r.essential ? _kEssentialInk : _kNormalInk);
     cs.writeln('1.0 w');
     final ax = tx(r.x1), ay = ty(r.y1), bx = tx(r.x2), by = ty(r.y2);
     cs.writeln('${_n(ax)} ${_n(ay)} m ${_n(bx)} ${_n(by)} l S');
-    if (r.label != null && r.label!.isNotEmpty) {
-      label((ax + bx) / 2 + 3, (ay + by) / 2 + 2, r.label!, size: 7);
-    }
+  }
+  // Off-sheet feeder marks: stub + riser circle.
+  for (final rl in ann.risers) {
+    setInk(rl.riser.essential ? _kEssentialInk : _kNormalInk);
+    cs.writeln('1.0 w');
+    cs.writeln('${_n(rl.x1)} ${_n(rl.y1)} m ${_n(rl.x2)} ${_n(rl.y2)} l S');
+    circle(rl.x2, rl.y2, kElectricalPlanPdfSizes.riserR);
   }
 
   // Nodes on top.
@@ -515,10 +790,26 @@ Uint8List electricalPlanToPdf({
     }
   }
 
+  // Every placed figure LAST, over all the linework.
+  for (final e in ann.routeLabels.entries) {
+    placedLabel(e.value, kElectricalPlanPdfSizes.routeTextSize);
+  }
+  for (final rl in ann.risers) {
+    placedLabel(rl.label, kElectricalPlanPdfSizes.routeTextSize);
+  }
+
   // Corner "Unplaced" note — honest visibility of items with no on-sheet
   // position (never invented). Top-left, below the loose title line.
+  // Round 24 — preceded by the overlap warning when labels had to overprint.
+  final overlapNote = planOverlapWarning(ann.overlapCount);
+  var notesTop = pageH - margin - (hasChrome ? 14.0 : 30.0);
+  if (overlapNote != null) {
+    cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
+        '${_n(margin + 4)} ${_n(notesTop)} Td (${_pdfText(overlapNote)}) Tj ET');
+    notesTop -= 13;
+  }
   if (data.unplaced.isNotEmpty) {
-    var ny = pageH - margin - (hasChrome ? 14.0 : 30.0);
+    var ny = notesTop;
     cs.writeln('BT /F1 8 Tf 0.55 0.12 0.12 rg '
         '${_n(margin + 4)} ${_n(ny)} Td (${_pdfText('BELUM DITEMPATKAN:')}) Tj ET');
     for (final u in data.unplaced) {
@@ -695,15 +986,60 @@ String electricalPlanToDxf({
 
   int? redIf(bool essential) => essential ? 1 : null;
 
+  // Round 24 — the same shared annotation layout as the PDF, in this
+  // drawing's y-up output space (screen y negated) at its own glyph sizes.
+  final sizes = (
+    panelW: a(40),
+    panelH: a(24),
+    panelTagSize: a(12),
+    panelSubSize: a(8),
+    panelTagGap: a(6),
+    panelTagDy: 0.0,
+    panelSubDy: -a(16),
+    loadR: a(10),
+    loadTagSize: a(9),
+    loadSubSize: a(7),
+    loadTagGap: a(14),
+    loadTagDy: 0.0,
+    loadSubDy: -a(12),
+    routeTextSize: a(9),
+    riserStub: a(32),
+    riserR: a(6),
+  );
+  final ann = layoutElectricalPlanAnnotations(data,
+      map: (x, y) => (x: gx(x), y: -gx(y)), sizes: sizes);
+  // A placed label in the y-up layout space (TEXT rotation group 50).
+  void placedText(LeaderedLabelPlacement p, double size, int? color) {
+    for (final ln in p.lines) {
+      g(0, 'TEXT');
+      g(8, layers.text);
+      if (color != null) g(62, color);
+      g(10, ln.x);
+      g(20, ln.y);
+      g(40, size);
+      g(1, ln.text);
+      g(50, p.angleDeg.toStringAsFixed(1));
+    }
+    final lead = p.leaderAnchor, end = p.leaderEnd;
+    if (lead != null && end != null) {
+      line(layers.text, lead.x, -lead.y, end.x, -end.y);
+    }
+  }
+
   // Routes.
   for (final r in data.routes) {
     line(layers.feeder, gx(r.x1), gx(r.y1), gx(r.x2), gx(r.y2),
         color: redIf(r.essential));
-    if (r.label != null && r.label!.isNotEmpty) {
-      text(layers.text, gx((r.x1 + r.x2) / 2) + a(4), gx((r.y1 + r.y2) / 2),
-          r.label!,
-          size: a(9));
-    }
+  }
+  for (final e in ann.routeLabels.entries) {
+    placedText(e.value, sizes.routeTextSize, null);
+  }
+  // Off-sheet feeder marks: stub + riser circle + placed label.
+  for (final rl in ann.risers) {
+    final col = redIf(rl.riser.essential);
+    line(layers.feeder, rl.x1, -rl.y1, rl.x2, -rl.y2, color: col);
+    dxfCircle(layers.feeder, rl.x2, -rl.y2, sizes.riserR, color: col);
+    placedText(rl.label, sizes.routeTextSize, col);
   }
 
   // Nodes (symbols are paper-sized annotation, placed at world positions).
@@ -732,6 +1068,12 @@ String electricalPlanToDxf({
   // Corner "Unplaced" note (below the drawing extent — use a fixed origin so it
   // never overprints placed items; DXF has no page, so anchor it above origin).
   var noteY = a(-40.0);
+  // Round 24 — the overlap warning (same text as the PDF) heads the notes.
+  final overlapNote = planOverlapWarning(ann.overlapCount);
+  if (overlapNote != null) {
+    text(layers.text, 0, noteY, overlapNote, size: a(10), color: 1);
+    noteY -= a(16);
+  }
   if (data.unplaced.isNotEmpty) {
     text(layers.text, 0, noteY, 'BELUM DITEMPATKAN:', size: a(10), color: 1);
     for (final un in data.unplaced) {

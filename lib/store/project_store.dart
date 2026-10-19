@@ -6,6 +6,7 @@ import 'package:mechx_engine/units.dart';
 
 import 'floor_remap.dart';
 import 'history_store.dart';
+import 'models/sheet.dart';
 import 'network_store.dart';
 import 'sheets_store.dart';
 
@@ -579,7 +580,21 @@ class ProjectController extends Notifier<ProjectState> {
   /// caller can default to the safe uncalibrated-only target set and confirm
   /// before overwriting a differing scale; see [uncalibratedAmong] /
   /// [differentlyCalibratedFrom]).
-  int applyCalibrationToAllSheets(String fromSheetId, {Set<String>? toSheetIds}) {
+  ///
+  /// Round 24 (import-2-1) — with [sheets] (id → [Sheet]) the scale is
+  /// TRANSFERRED per target through [transferCalibration]: a DXF sheet's pixel
+  /// is file-specific (each DXF is normalised so its longest extent is
+  /// `kDxfTargetExtent`), so a DXF → DXF copy is rescaled by the two content
+  /// frames, a PDF → PDF copy stays verbatim, and a mixed PDF ↔ DXF (or a DXF
+  /// with no recorded frame) is SKIPPED — its id added to [skippedOut] so the
+  /// caller can say so. Without [sheets] every target takes the figure
+  /// verbatim (legacy behaviour).
+  int applyCalibrationToAllSheets(
+    String fromSheetId, {
+    Set<String>? toSheetIds,
+    Map<String, Sheet> sheets = const {},
+    Set<String>? skippedOut,
+  }) {
     final source = state.calibrationFor(fromSheetId);
     if (source == null) return 0;
     final targets = toSheetIds ?? state.calibrations.keys.toSet();
@@ -587,11 +602,23 @@ class ProjectController extends Notifier<ProjectState> {
     // J1: a freshly-stamped calibration is a re-verification too — clear any
     // stale flag on a sheet this actually changes.
     final nextStale = Set<String>.from(state.staleCalibrations);
+    final fromSheet = sheets[fromSheetId];
     var changed = 0;
     for (final id in targets) {
       if (id == fromSheetId) continue;
-      if (next[id] == source) continue; // already this scale — no change
-      next[id] = source;
+      ScaleCalibration? cal = source;
+      if (sheets.isNotEmpty) {
+        final to = sheets[id];
+        cal = (fromSheet == null || to == null)
+            ? null
+            : transferCalibration(source, from: fromSheet, to: to);
+        if (cal == null) {
+          skippedOut?.add(id);
+          continue;
+        }
+      }
+      if (next[id] == cal) continue; // already this scale — no change
+      next[id] = cal;
       nextStale.remove(id);
       changed++;
     }
@@ -612,3 +639,28 @@ final projectControllerProvider =
 /// lengths and the report's design-basis rows can never disagree.
 final mountingProvider = Provider<MountingHeights>(
     (ref) => ref.watch(projectControllerProvider).mounting);
+
+/// Round 24 (import-2-1) — the scale [source] (measured on sheet [from])
+/// expressed on sheet [to], or null when it cannot be transferred honestly:
+///   * PDF / placeholder → PDF / placeholder: verbatim (both pixels are page
+///     points — the long-standing 'same plot scale' assumption);
+///   * DXF → DXF with both import frames known: `mpp_to = mpp_from ×
+///     k_from / k_to`, k = content px per DXF world unit (each DXF is
+///     normalised to its own extent, so the same CAD drawing unit maps to a
+///     different pixel). Assumes both files share the CAD drawing unit
+///     (mm on an architectural plan). // VERIFY
+///   * anything mixed (PDF ↔ DXF), or a DXF without a recorded frame: null.
+ScaleCalibration? transferCalibration(
+  ScaleCalibration source, {
+  required Sheet from,
+  required Sheet to,
+}) {
+  final fromDxf = from.dxfPath != null, toDxf = to.dxfPath != null;
+  if (!fromDxf && !toDxf) return source;
+  if (fromDxf != toDxf) return null;
+  final kFrom = from.dxfContentPerWorld, kTo = to.dxfContentPerWorld;
+  if (kFrom == null || kTo == null) return null;
+  final mpp = source.metersPerPixel * kFrom / kTo;
+  if (!mpp.isFinite || mpp <= 0) return null;
+  return ScaleCalibration(mpp);
+}

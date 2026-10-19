@@ -1176,6 +1176,23 @@ List<double>? serviceDashPatternPdf(ServiceType s) => switch (s) {
       _ => null,
     };
 
+/// Round 24 — the PAPER length of one dash on the issued PDF (the 6 pt dash
+/// of [serviceDashPatternPdf]'s DASHED pattern, 6 × 25.4 / 72 mm).
+const double kPlotDashPaperMm = 6 * 25.4 / 72;
+
+/// The model length of one dash in the shared LTYPE table ([dxfTablesSection]
+/// DASHED / DASHDOT: 12 drawing units).
+const double kDxfLtypeDashUnits = 12.0;
+
+/// Round 24 — the `$LTSCALE` a millimetre-model DXF needs so its 12-unit
+/// LTYPE dash plots at the PDF's paper dash ([kPlotDashPaperMm]):
+/// `12 × LTSCALE / N = 2.117 mm` ⇒ `LTSCALE = N × 2.117 / 12`, where
+/// [modelMmPerPaperMm] is the plotted-scale denominator N (model mm per paper
+/// mm). Without it AutoCAD's LTSCALE 1 plots a 12 mm MODEL dash at 1:100 as
+/// 0.12 mm — vent / return air / sprinkler / grid lines read solid.
+double dxfLtScaleFor(double modelMmPerPaperMm) =>
+    modelMmPerPaperMm * kPlotDashPaperMm / kDxfLtypeDashUnits;
+
 /// DXF line-type name per service, consistent with [serviceDashPatternPdf].
 String dxfLinetypeFor(ServiceType s) => switch (s) {
       ServiceType.vent || ServiceType.returnAir => 'DASHED',
@@ -1572,17 +1589,28 @@ class VectorPlanUnderlay extends PlanUnderlay {
   @override
   final double sheetHeightPx;
 
+  /// Round 24 — the world frame the sheet was NORMALISED from at import
+  /// (`Sheet.dxfFrame`). A plan revised in place keeps that mapping, so the
+  /// underlay stays registered with the drawn nodes and the calibration;
+  /// null ⇒ the live drawing bounds (legacy sheets, byte-identical).
+  final DxfBounds? frame;
+
   const VectorPlanUnderlay({
     required this.drawing,
     required this.sheetWidthPx,
     required this.sheetHeightPx,
+    this.frame,
   });
+
+  /// The world bounds the fit maps from: [frame] when known, else the live
+  /// drawing bounds.
+  DxfBounds get mappingBounds => frame ?? drawing.bounds;
 
   /// The uniform DXF-world → sheet-pixel scale — the canvas rule verbatim:
   /// width ratio when the bounds width is non-degenerate, else the height
   /// ratio, else 1 (a degenerate drawing maps 1:1).
   double get worldToSheetScale {
-    final b = drawing.bounds;
+    final b = mappingBounds;
     final kx = b.width > 1e-9 ? sheetWidthPx / b.width : 0.0;
     final ky = b.height > 1e-9 ? sheetHeightPx / b.height : 0.0;
     if (kx != 0.0) return kx;
@@ -1593,7 +1621,7 @@ class VectorPlanUnderlay extends PlanUnderlay {
   /// `x' = (x − minX)·k`, `y' = (maxY − y)·k` — the exact map the canvas
   /// paints the DXF background with.
   (double, double) toSheetPx(double x, double y) {
-    final b = drawing.bounds;
+    final b = mappingBounds;
     final k = worldToSheetScale;
     return ((x - b.minX) * k, (b.maxY - y) * k);
   }
@@ -1745,7 +1773,7 @@ String dxfUnderlayEntities(
   double unitsPerSheetPx = 1.0,
 }) {
   final b = StringBuffer();
-  final bnd = u.drawing.bounds;
+  final bnd = u.mappingBounds;
   final k = u.worldToSheetScale * unitsPerSheetPx;
   (double, double) map(double x, double y) =>
       ((x - bnd.minX) * k, (y - bnd.maxY) * k);

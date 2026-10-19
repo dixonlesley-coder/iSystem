@@ -873,7 +873,8 @@ class _PanelMarkerState extends State<_PanelMarker> {
                 if (widget.detail && r != null)
                   Text(
                     '${fmtAmp0(r.demandCurrent.amperes)} A · '
-                    '${fmtAmp0(r.incomer.breaker.ratingA.amperes)}/${r.incomer.poles}P',
+                    '${fmtAmp0(r.incomer.breaker.ratingA.amperes)}/${r.incomer.poles}P'
+                    '${incomerOverRangeSuffix(r.incomer, withNeeds: false)}',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: type.caption.copyWith(

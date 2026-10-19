@@ -27,6 +27,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
 import 'package:mechx_engine/network/network.dart' show Network;
 
 import '../../data/app_settings.dart';
@@ -91,6 +92,18 @@ import '../widgets/mechx_empty_state_card.dart';
 import 'electrical_layer.dart';
 import 'first_run_guide.dart';
 import 'layer_switcher.dart';
+
+/// The Layout canvas's per-sheet content cache key — every field the sheet's
+/// content widget renders from (Round 24 r2: a DXF -> DXF replace changes the
+/// key, so the new plan paints without a remount).
+@visibleForTesting
+String layoutContentCacheKey(Sheet sheet) {
+  String f(DxfBounds? b) =>
+      b == null ? '-' : '${b.minX},${b.minY},${b.maxX},${b.maxY}';
+  return '${sheet.id}:${sheet.pageIndex}:${sheet.pdfPath}:${sheet.dxfPath}:'
+      '${sheet.sizePx.width}x${sheet.sizePx.height}:'
+      '${f(sheet.dxfFrame)}:${f(sheet.dxfLiveFrameAck)}';
+}
 
 /// The unified Layout workspace: a top bar (layer switcher + sheet/floor
 /// selector) over the shared-substrate canvas, with the electrical edit overlays
@@ -219,9 +232,18 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   /// page — which flashed its white placeholder while it re-resolved, so any
   /// pan/zoom/edit blanked the drawing. Returning the same instance lets the
   /// framework skip the PDF subtree entirely, so it stays put.
+  ///
+  /// Round 24 (r2) — keyed on the sheet's whole SOURCE identity (PDF path +
+  /// page, DXF path, content size, import frame and acknowledged live frame),
+  /// so a DXF -> DXF 'Replace plan...' repaints the new file / Sheet instead
+  /// of the cached old one; a superseded entry for the same sheet is evicted.
   final Map<String, Widget> _contentCache = {};
+  final Map<String, String> _contentKeyBySheet = {};
   Widget contentFor(Sheet sheet) {
-    final key = '${sheet.id}:${sheet.pageIndex}:${sheet.pdfPath}';
+    final key = layoutContentCacheKey(sheet);
+    final prev = _contentKeyBySheet[sheet.id];
+    if (prev != null && prev != key) _contentCache.remove(prev);
+    _contentKeyBySheet[sheet.id] = key;
     return _contentCache.putIfAbsent(
         key, () => ref.read(sheetContentBuilderProvider)(context, sheet));
   }

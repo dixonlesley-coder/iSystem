@@ -33,6 +33,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfDrawing;
 import 'package:pdfrx/pdfrx.dart';
 
+import '../../data/dxf_import.dart' show dxfMappingBounds;
 import '../../store/models/sheet.dart';
 import '../../store/reference_line_store.dart';
 import '../../store/sheets_store.dart';
@@ -284,8 +285,9 @@ class UnderlaySnapService {
     }
     UnderlaySnapIndex? idx;
     if (drawing != null && !drawing.isEmpty) {
-      final t = UnderlayTransform.forSheet(
-          drawing.bounds, sheet.sizePx.width, sheet.sizePx.height);
+      // Round 24 — through the sheet's import frame, like the painter.
+      final t = UnderlayTransform.forSheet(dxfMappingBounds(sheet, drawing.bounds),
+          sheet.sizePx.width, sheet.sizePx.height);
       idx = UnderlaySnapIndex.fromDrawing(drawing, transform: t);
     }
     _vectorByPath[path] = (

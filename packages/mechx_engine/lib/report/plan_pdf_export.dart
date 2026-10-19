@@ -562,7 +562,24 @@ Uint8List planToPdf({
     gravitySlope: gravitySlope,
   );
 
+  // Round 24 — a sized duct is drawn TRUE-WIDTH (double line at W / Ø on
+  // paper) whenever the sheet has a real plotted scale and that width reaches
+  // kPlanDuctDoubleLineMinMm on paper; narrower it keeps the band stroke.
+  final ductHalfPt = <String, double>{};
+  if (pointsPerMeter != null) {
+    for (final e in net.edges) {
+      if (e.kind != EdgeKind.run) continue;
+      final w = planDuctWidthM(sizing[e.id]);
+      if (w == null) continue;
+      final pt = w * pointsPerMeter;
+      if (pt * kPlanPaperMmPerPt >= kPlanDuctDoubleLineMinMm) {
+        ductHalfPt[e.id] = pt / 2;
+      }
+    }
+  }
+
   final ann = layoutPlanAnnotations(
+    runHalfWidths: ductHalfPt,
     net: net,
     sheetId: sheetId,
     floorIndex: floorIndex,
@@ -602,14 +619,27 @@ Uint8List planToPdf({
     if (e.kind == EdgeKind.run) {
       if (!onFloor(a) || !onFloor(c)) continue;
       strokeColor(e.service);
-      // A6 line-weight hierarchy: three bands from the sized dimension;
-      // unsized edges keep the legacy 1.4 w.
-      cs.writeln('${_n(s == null ? 1.4 : kPdfStrokeWidths[_strokeBand(s)])} w');
       final dash = serviceDashPatternPdf(e.service);
-      if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
-      cs.writeln('${_n(tx(a.x))} ${_n(ty(a.y))} m '
-          '${_n(tx(c.x))} ${_n(ty(c.y))} l S');
-      if (dash != null) cs.writeln('[] 0 d'); // back to solid
+      final half = ductHalfPt[e.id];
+      if (half != null) {
+        // Round 24 — true-width double-line duct (the outline at ±W/2).
+        cs.writeln('${_n(kPdfStrokeWidths[0])} w');
+        if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
+        for (final o in planDoubleLineOutline(
+            tx(a.x), ty(a.y), tx(c.x), ty(c.y), half)) {
+          cs.writeln('${_n(o.x1)} ${_n(o.y1)} m ${_n(o.x2)} ${_n(o.y2)} l S');
+        }
+        if (dash != null) cs.writeln('[] 0 d');
+      } else {
+        // A6 line-weight hierarchy: three bands from the sized dimension;
+        // unsized edges keep the legacy 1.4 w.
+        cs.writeln(
+            '${_n(s == null ? 1.4 : kPdfStrokeWidths[_strokeBand(s)])} w');
+        if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
+        cs.writeln('${_n(tx(a.x))} ${_n(ty(a.y))} m '
+            '${_n(tx(c.x))} ${_n(ty(c.y))} l S');
+        if (dash != null) cs.writeln('[] 0 d'); // back to solid
+      }
       // A5 flow arrow on a sized run with a known orientation and enough length.
       if (s != null && s.flowFromId != null) {
         final ax = tx(a.x), ay = ty(a.y), bx = tx(c.x), by = ty(c.y);
@@ -689,6 +719,15 @@ Uint8List planToPdf({
           '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
           '${_n(line.x)} ${_n(line.y)} Tm (${_pdfText(line.text)}) Tj ET');
     }
+  }
+
+  // Round 24 — a sheet whose annotations could not all be placed clear says
+  // so (top-left, inside the frame) instead of being issued as if clean.
+  final overlapNote = planOverlapWarning(ann.overlapCount);
+  if (overlapNote != null) {
+    cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
+        '${_n(margin + 6)} ${_n(pageH - margin - (hasChrome ? 12 : 22))} Td '
+        '(${_pdfText(overlapNote)}) Tj ET');
   }
 
   // ── Issuable-document chrome (opt-in; byte-identical when null) ─────────────

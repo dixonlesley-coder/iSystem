@@ -1102,14 +1102,39 @@ FaultStudyResult faultStudy(
         // mechanism. (TT finals and feeders now get an RCD in `circuitRcd`, so
         // only a genuinely uncovered way, e.g. an RCD-exempt life-safety run,
         // reaches here.)
+        // Round 24 — an upstream FEEDER RCD does detect this way's earth
+        // fault: name it (and what it does to a life-safety way) instead of
+        // claiming the fault goes undetected.
+        ElectricalCircuitResult? upstreamRcd;
+        String? upstreamBoard;
+        for (var pid = panelId, hops = 0;
+            hops < sys.order.length && upstreamRcd == null;
+            hops++) {
+          final fid = panelFeederCircuit[pid];
+          final par = panelParent[pid];
+          if (fid == null || par == null) break;
+          final fr = _circuitById(sys.panels[par], fid);
+          if (fr != null && fr.rcd.required) {
+            upstreamRcd = fr;
+            upstreamBoard = sys.panels[par]?.name ?? par;
+          }
+          pid = par;
+        }
         warnings.add(ElectricalWarning(
           code: 'tt-no-earth-fault-protection',
           severity: WarningSeverity.warning,
-          message:
-              '${panelResult.name} / ${c.name}: TT circuit with no modelled '
-              'earth-fault protection — the high TT earth-loop impedance gives '
-              'no ADS by overcurrent and this way carries no RCD. Fit a '
-              'time-delayed/S-type RCD or verify the earth-loop disconnection.',
+          message: upstreamRcd == null
+              ? '${panelResult.name} / ${c.name}: TT circuit with no modelled '
+                  'earth-fault protection — the high TT earth-loop impedance gives '
+                  'no ADS by overcurrent and this way carries no RCD. Fit a '
+                  'time-delayed/S-type RCD or verify the earth-loop disconnection.'
+              : '${panelResult.name} / ${c.name}: TT circuit with no RCD of its '
+                  'own — its earth fault is cleared only by the upstream '
+                  '${upstreamRcd.rcd.ratingMa} mA RCD on $upstreamBoard / '
+                  '${upstreamRcd.name}, which disconnects that whole feeder'
+                  '${c.loadKind == LoadKind.pump || c.loadKind == LoadKind.motor ? ' (a life-safety pump stops with it)' : ''}. '
+                  'Fit a selective RCD on this way, or feed it from a board '
+                  'with no tripping RCD upstream.',
           panelId: panelId,
           circuitId: c.circuitId,
         ));

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart' show Brightness, Offset, Size;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
@@ -865,6 +866,21 @@ class ProjectDocument {
               'pageIndex': s.pageIndex,
               'w': s.sizePx.width,
               'h': s.sizePx.height,
+              // Round 24 — the DXF import frame (additive; absent ⇒ legacy).
+              if (s.dxfFrame != null)
+                'dxfFrame': [
+                  s.dxfFrame!.minX,
+                  s.dxfFrame!.minY,
+                  s.dxfFrame!.maxX,
+                  s.dxfFrame!.maxY,
+                ],
+              if (s.dxfLiveFrameAck != null)
+                'dxfLiveFrameAck': [
+                  s.dxfLiveFrameAck!.minX,
+                  s.dxfLiveFrameAck!.minY,
+                  s.dxfLiveFrameAck!.maxX,
+                  s.dxfLiveFrameAck!.maxY,
+                ],
             },
         ],
         'viewports': {
@@ -967,6 +983,8 @@ class ProjectDocument {
           dwgPath: s['dwgPath'] as String?,
           pageIndex: (s['pageIndex'] as num).toInt(),
           sizePx: Size((s['w'] as num).toDouble(), (s['h'] as num).toDouble()),
+          dxfFrame: _dxfFrameFromJson(s['dxfFrame']),
+          dxfLiveFrameAck: _dxfFrameFromJson(s['dxfLiveFrameAck']),
         ),
     ];
     final net = json['network'] as Map<String, dynamic>;
@@ -1084,4 +1102,18 @@ class ProjectDocument {
       throw ProjectDocumentException('Could not read project: $e');
     }
   }
+}
+
+/// Round 24 — tolerant decode of a sheet's DXF import frame: four finite
+/// numbers with a positive extent, else null (the sheet falls back to the
+/// live drawing bounds, the pre-round-24 behaviour).
+DxfBounds? _dxfFrameFromJson(Object? raw) {
+  if (raw is! List || raw.length != 4) return null;
+  final v = <double>[];
+  for (final e in raw) {
+    if (e is! num || !e.toDouble().isFinite) return null;
+    v.add(e.toDouble());
+  }
+  final b = DxfBounds(v[0], v[1], v[2], v[3]);
+  return (b.width >= 0 && b.height >= 0 && b.isUsable) ? b : null;
 }

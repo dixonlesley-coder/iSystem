@@ -307,11 +307,13 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     // Panel summary bullets: conditional bullets with an indented withstand
     // sub-bullet — a stubborn legacy construct, kept verbatim via RptMarkdown.
     final pb = StringBuffer();
+    // Round 24 — a saturated incomer bullet carries the OVER RANGE token.
     pb.writeln(strings.format(RptStringKey.panelIncomer, {
-      'rating': _a(p.incomer.breaker.ratingA.amperes),
-      'class': p.incomer.breaker.deviceClass.name.toUpperCase(),
-      'poles': p.incomer.poles,
-    }));
+          'rating': _a(p.incomer.breaker.ratingA.amperes),
+          'class': p.incomer.breaker.deviceClass.name.toUpperCase(),
+          'poles': p.incomer.poles,
+        }) +
+        incomerOverRangeSuffix(p.incomer));
     final bus = p.busbar;
     final busGeom = bus.widthMm > 0 && bus.thicknessMm > 0
         ? '${_n(bus.widthMm)}×${_n(bus.thicknessMm)} mm (${_n(bus.csaMm2)} mm²)'

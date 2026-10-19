@@ -67,6 +67,28 @@ class DxfBounds {
 
   double get width => maxX - minX;
   double get height => maxY - minY;
+
+  /// Round 24 — true when every coordinate is finite and the box has a
+  /// positive extent on at least one axis (an importable plan).
+  bool get isUsable =>
+      minX.isFinite &&
+      minY.isFinite &&
+      maxX.isFinite &&
+      maxY.isFinite &&
+      (width > 0 || height > 0);
+
+  /// Round 24 — true when [other] differs from this box by more than a
+  /// relative [tolerance] of the larger extent (a plan revised in place whose
+  /// geometry grew / shrank / moved).
+  bool differsFrom(DxfBounds other, {double tolerance = 1e-6}) {
+    final ext = math.max(math.max(width, height),
+        math.max(other.width, other.height));
+    final tol = (ext > 0 ? ext : 1.0) * tolerance;
+    return (minX - other.minX).abs() > tol ||
+        (minY - other.minY).abs() > tol ||
+        (maxX - other.maxX).abs() > tol ||
+        (maxY - other.maxY).abs() > tol;
+  }
 }
 
 /// The parsed drawing: display primitives + the bounding box. The primitives
@@ -78,11 +100,18 @@ class DxfDrawing {
   final List<DxfArc> arcs;
   final DxfBounds bounds;
 
+  /// Round 24 — true when the primitive or INSERT budget stopped emission
+  /// before the whole file was read: some geometry is NOT drawn (the bounds
+  /// still cover it — a bounds-only pass continues past the cap). The import
+  /// surfaces it; never a silent partial plan.
+  final bool truncated;
+
   const DxfDrawing({
     required this.polylines,
     required this.circles,
     required this.arcs,
     required this.bounds,
+    this.truncated = false,
   });
 
   bool get isEmpty => polylines.isEmpty && circles.isEmpty && arcs.isEmpty;
@@ -95,7 +124,16 @@ class _Pair {
   final String value;
   const _Pair(this.code, this.value);
 
-  double get d => double.tryParse(value.trim()) ?? 0.0;
+  double get d => df ?? 0.0;
+
+  /// Round 24 — the value as a FINITE double, else null: Dart parses `1e999`
+  /// as Infinity and `NaN` as NaN, and either would collapse the bounds (a
+  /// 1 × 1 px sheet) or paint a line to infinity. A non-finite coordinate is
+  /// treated as absent, so its entity is skipped.
+  double? get df {
+    final v = double.tryParse(value.trim());
+    return (v != null && v.isFinite) ? v : null;
+  }
 }
 
 /// 2×3 affine transform `[[a c e],[b d f]]`: `x' = a·x + c·y + e`,
@@ -173,7 +211,14 @@ class _Acc {
   bool get full => count >= _maxPrimitives;
   bool get insertsSpent => inserts >= maxInserts;
 
+  /// Round 24 — set when a budget dropped geometry (see
+  /// [DxfDrawing.truncated]).
+  bool truncated = false;
+
+  static bool _finitePt(DxfPoint p) => p.x.isFinite && p.y.isFinite;
+
   void _grow(double x, double y) {
+    if (!x.isFinite || !y.isFinite) return;
     if (!_has) {
       minX = maxX = x;
       minY = maxY = y;
@@ -186,27 +231,47 @@ class _Acc {
     }
   }
 
+  // Round 24 — past the primitive cap an entity is no longer STORED, but its
+  // extent still grows the bounds (a cheap bounds-only pass), and the drawing
+  // is flagged truncated. A primitive with a non-finite point is dropped.
   void addPolyline(DxfPolyline p) {
-    if (full || p.points.isEmpty) return;
-    polylines.add(p);
-    count++;
+    if (p.points.isEmpty || !p.points.every(_finitePt)) return;
+    if (full) {
+      truncated = true;
+    } else {
+      polylines.add(p);
+      count++;
+    }
     for (final pt in p.points) {
       _grow(pt.x, pt.y);
     }
   }
 
   void addCircle(DxfCircle c) {
-    if (full) return;
-    circles.add(c);
-    count++;
+    if (!_finitePt(c.center) || !c.radius.isFinite) return;
+    if (full) {
+      truncated = true;
+    } else {
+      circles.add(c);
+      count++;
+    }
     _grow(c.center.x - c.radius, c.center.y - c.radius);
     _grow(c.center.x + c.radius, c.center.y + c.radius);
   }
 
   void addArc(DxfArc a) {
-    if (full) return;
-    arcs.add(a);
-    count++;
+    if (!_finitePt(a.center) ||
+        !a.radius.isFinite ||
+        !a.startDeg.isFinite ||
+        !a.endDeg.isFinite) {
+      return;
+    }
+    if (full) {
+      truncated = true;
+    } else {
+      arcs.add(a);
+      count++;
+    }
     // Conservative box: the full circle (cheap, never under-estimates).
     _grow(a.center.x - a.radius, a.center.y - a.radius);
     _grow(a.center.x + a.radius, a.center.y + a.radius);
@@ -244,6 +309,7 @@ DxfDrawing? parseDxf(String contents) {
     circles: acc.circles,
     arcs: acc.arcs,
     bounds: DxfBounds(acc.minX, acc.minY, acc.maxX, acc.maxY),
+    truncated: acc.truncated,
   );
 }
 
@@ -355,7 +421,7 @@ void _parseEntities(
   Set<String> ancestors,
 ) {
   var i = start;
-  while (i < end && !acc.full) {
+  while (i < end) {
     if (pairs[i].code != 0) {
       i++;
       continue;
@@ -383,10 +449,14 @@ void _parseEntities(
       case 'POLYLINE':
         // Old-style polyline: vertices follow as VERTEX entities until SEQEND.
         // Its extrusion sits on the POLYLINE header and applies to the run.
+        // Round 24 — a POLYFACE (70 bit 64) or polygon MESH (bit 16) is a 3D
+        // surface whose face records sit at (0,0,0): skipped like every other
+        // 3D entity (its vertices are still consumed).
         final closed = _flagBit(body, 70, 1);
+        final mesh = _flagBit(body, 70, 64) || _flagBit(body, 70, 16);
         final vEnd = _emitOldPolyline(
             pairs, j, end, xform.compose(_ocs(body)), closed, acc,
-            emit: !paper);
+            emit: !paper && !mesh);
         j = vEnd; // resume after SEQEND
         break;
       case 'CIRCLE':
@@ -410,7 +480,8 @@ void _parseEntities(
 
 double? _first(List<_Pair> body, int code) {
   for (final p in body) {
-    if (p.code == code) return p.d;
+    // Round 24 — a non-finite value reads as ABSENT (the entity is skipped).
+    if (p.code == code) return p.df;
   }
   return null;
 }
@@ -452,9 +523,10 @@ void _emitLwPolyline(List<_Pair> body, _Xform x, _Acc acc) {
   double? px;
   for (final p in body) {
     if (p.code == 10) {
-      px = p.d;
+      px = p.df; // Round 24 — a non-finite vertex is skipped
     } else if (p.code == 20 && px != null) {
-      pts.add(x.apply(px, p.d));
+      final py = p.df;
+      if (py != null) pts.add(x.apply(px, py));
       px = null;
     }
   }
@@ -488,12 +560,25 @@ int _emitOldPolyline(
     if (type == 'VERTEX') {
       var j = i + 1;
       double? vx, vy;
+      var flags = 0;
+      var badCoord = false;
       while (j < end && pairs[j].code != 0) {
-        if (pairs[j].code == 10) vx = pairs[j].d;
-        if (pairs[j].code == 20) vy = pairs[j].d;
+        final c = pairs[j].code;
+        if (c == 10 || c == 20) {
+          final v = pairs[j].df;
+          if (v == null) badCoord = true;
+          if (c == 10) vx = v;
+          if (c == 20) vy = v;
+        }
+        if (c == 70) flags = pairs[j].d.toInt();
         j++;
       }
-      if (vx != null && vy != null) pts.add(x.apply(vx, vy));
+      // Round 24 — a polyface FACE record (70 bit 128 without bit 64) carries
+      // vertex indices, not a point (its 10/20 are 0,0): never a plan point.
+      final faceRecord = (flags & 128) != 0 && (flags & 64) == 0;
+      if (!faceRecord && !badCoord && vx != null && vy != null) {
+        pts.add(x.apply(vx, vy));
+      }
       i = j;
     } else {
       break; // unexpected — stop the vertex run
@@ -558,7 +643,6 @@ void _emitInsert(
   _Acc acc,
   Set<String> ancestors,
 ) {
-  if (depth >= _maxInsertDepth || acc.insertsSpent) return;
   final name = _firstStr(body, 2);
   if (name == null) return;
   // A block already on the active expansion stack would recurse into itself
@@ -566,6 +650,13 @@ void _emitInsert(
   if (ancestors.contains(name)) return;
   final block = blocks[name];
   if (block == null) return;
+  // Round 24 (r2) — a real INSERT refused by the depth or insert budget drops
+  // geometry: flag it (and only then — a file with exactly [_Acc.maxInserts]
+  // INSERTs, none refused, is complete).
+  if (depth >= _maxInsertDepth || acc.insertsSpent) {
+    acc.truncated = true;
+    return;
+  }
 
   final ix = _first(body, 10) ?? 0;
   final iy = _first(body, 20) ?? 0;
@@ -596,7 +687,8 @@ void _emitInsert(
   var instances = 0;
   for (var r = 0; r < rows; r++) {
     for (var c = 0; c < cols; c++) {
-      if (instances >= _maxArrayInstances || acc.insertsSpent || acc.full) {
+      if (instances >= _maxArrayInstances || acc.insertsSpent) {
+        acc.truncated = true;
         return;
       }
       instances++;

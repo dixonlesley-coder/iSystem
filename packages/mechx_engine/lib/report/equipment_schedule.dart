@@ -334,8 +334,10 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
             {'system': _systemLabel(p.system, strings)}),
         duty: strings.format(RptStringKey.esPanelDuty,
             {'kw': _fmt(p.demandW / 1000.0, dp: 1)}),
+        // Round 24 — a saturated incomer says so on the procurement schedule.
         size: strings.format(RptStringKey.esPanelSize,
-            {'a': _fmt(p.incomer.breaker.ratingA.amperes, dp: 0)}),
+                {'a': _fmt(p.incomer.breaker.ratingA.amperes, dp: 0)}) +
+            incomerOverRangeSuffix(p.incomer),
         modelSpec: specFor(tag),
         qty: 1,
         category: EquipmentCategory.panel,

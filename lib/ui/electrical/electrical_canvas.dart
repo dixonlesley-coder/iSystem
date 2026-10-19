@@ -2729,7 +2729,8 @@ class _PanelSummaryBody extends StatelessWidget {
                 label: panel.isDiversified ? 'max ph' : 'demand'),
             _Stat(
               value:
-                  '${_cls(panel.incomer.breaker)} ${fmtAmp0(panel.incomer.breaker.ratingA.amperes)}/${panel.incomer.poles}P',
+                  '${_cls(panel.incomer.breaker)} ${fmtAmp0(panel.incomer.breaker.ratingA.amperes)}/${panel.incomer.poles}P'
+                  '${incomerOverRangeSuffix(panel.incomer, withNeeds: false)}',
               label: 'incomer',
             ),
             // The sized busbar — the one incomer-side number the summary was

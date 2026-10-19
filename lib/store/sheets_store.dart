@@ -1,5 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
 import 'package:mechx_engine/network/network.dart';
 
 import '../ui/canvas/viewport.dart';
@@ -255,6 +256,8 @@ class SheetsController extends Notifier<SheetsState> {
       dwgPath: source.dwgPath,
       pageIndex: source.pageIndex,
       sizePx: source.sizePx,
+      dxfFrame: source.dxfFrame,
+      dxfLiveFrameAck: source.dxfLiveFrameAck,
     );
     final sheets = [...state.sheets, duplicate];
     final sheetFloors = Map<String, int>.from(state.sheetFloors)
@@ -344,6 +347,14 @@ class SheetsController extends Notifier<SheetsState> {
     final idx = state.sheets.indexWhere((s) => s.id == sheetId);
     if (idx < 0) return;
     final old = state.sheets[idx];
+    // Round 24 (import-2-3) — a DXF revised by another DXF keeps the OLD
+    // world → content mapping (frame + content size): a revision in the same
+    // CAD coordinates then stays registered with the drawn work, instead of
+    // being re-normalised to its new extent under the old calibration. The
+    // calibration is still flagged stale below.
+    final keepFrame = old.dxfPath != null &&
+        old.dxfFrame != null &&
+        source.dxfPath != null;
     final replaced = Sheet(
       id: old.id,
       name: old.name,
@@ -351,12 +362,32 @@ class SheetsController extends Notifier<SheetsState> {
       dxfPath: source.dxfPath,
       dwgPath: source.dwgPath,
       pageIndex: source.pageIndex,
-      sizePx: source.sizePx,
+      sizePx: keepFrame ? old.sizePx : source.sizePx,
+      dxfFrame: keepFrame ? old.dxfFrame : source.dxfFrame,
     );
     if (replaced == old) return;
     final sheets = [...state.sheets];
     sheets[idx] = replaced;
     state = state.copyWith(sheets: sheets);
+    ref.read(projectControllerProvider.notifier).markCalibrationStale(sheetId);
+  }
+
+  /// Round 24 (r2) — a DXF sheet's file was seen revised IN PLACE: its live
+  /// extent [live] no longer matches the import frame. Records [live] as the
+  /// acknowledged extent ([Sheet.dxfLiveFrameAck]) and flags the calibration
+  /// stale, so the detector fires ONCE per real change — 'Scale confirmed'
+  /// then sticks across remounts and reopens until the file changes again.
+  /// Not undoable (bookkeeping, like [replaceSheetSource]).
+  void reportDxfFrameChanged(String sheetId, DxfBounds live) {
+    final idx = state.sheets.indexWhere((s) => s.id == sheetId);
+    if (idx < 0) return;
+    final old = state.sheets[idx];
+    final ack = old.dxfLiveFrameAck;
+    if (ack == null || ack.differsFrom(live)) {
+      final sheets = [...state.sheets];
+      sheets[idx] = old.copyWith(dxfLiveFrameAck: live);
+      state = state.copyWith(sheets: sheets);
+    }
     ref.read(projectControllerProvider.notifier).markCalibrationStale(sheetId);
   }
 
@@ -495,13 +526,38 @@ class SheetsController extends Notifier<SheetsState> {
       for (final id in live)
         if (project.calibrations.containsKey(id)) id,
     ];
+    // Round 24 (import-2-2) — a SURVIVING sheet keeps its drawn work, whose
+    // nodes carry the sheet's frozen floor. `loadSheets` re-derives every
+    // floor from the NEW list position (and drops explicit overrides), so the
+    // effective floor each surviving sheet had is carried forward as an
+    // explicit mapping — otherwise its work is hidden (the canvas filters on
+    // sheet AND floor) while it keeps feeding sizing at the old elevation.
+    final levelCount = project.building.levelCount;
+    final withWork = sheetIdsWithState(ref.read);
+    final oldFloors = <String, int>{
+      for (final s in state.sheets)
+        if (live.contains(s.id) && withWork.contains(s.id))
+          s.id: state.floorFor(s.id, levelCount),
+    };
     final discards = orphaned.isNotEmpty || survivingCalibrated.isNotEmpty;
-    if (discards) {
+    final previewFloors = SheetsState(sheets: sheets);
+    final carry = <String, int>{
+      for (final e in oldFloors.entries)
+        if (previewFloors.floorFor(e.key, levelCount) != e.value)
+          e.key: e.value,
+    };
+    final records = discards || carry.isNotEmpty;
+    if (records) {
       ref
           .read(structuralHistoryProvider.notifier)
           .recordSheetMappingChange(project: true);
     }
     loadSheets(sheets);
+    if (carry.isNotEmpty) {
+      state = state.copyWith(sheetFloors: {...state.sheetFloors, ...carry});
+    }
+    if (!records) return;
+    _rehomeGhostNodes();
     if (!discards) return;
     final net = ref.read(networkControllerProvider).network;
     final gone = <String>{
