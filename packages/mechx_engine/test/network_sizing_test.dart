@@ -190,7 +190,7 @@ void main() {
 
   group('N17 — a drainage stack must never size smaller than a branch feeding it', () {
     // The branch and stack DFU tables disagree at dfu=20: the branch table's
-    // (20, 75) row gives 75 mm while the stack table's (24, 65) row (20 ≤ 24)
+    // (20, 75) row gives 75 mm while the stack table's (20, 65) row (20 ≤ 20)
     // gives only 65 mm for the SAME load — a stack carrying no more DFU than
     // the one branch discharging into it sizes smaller than that branch. This
     // is the exact DN65-stack/DN75-branch violation from the finding.
@@ -230,7 +230,7 @@ void main() {
       // Sanity: confirm the raw table disagreement this finding is about.
       expect(sized['B']!.diameter.inMillimeters, 75); // branch table (20,75)
       // The stack must be raised to match — not left at its own raw 65 mm
-      // (stack table (24,65)) — and the raise must be recorded.
+      // (stack table (20,65)) — and the raise must be recorded.
       expect(sized['R1']!.diameter.inMillimeters, 75);
       expect(sized['R1']!.stackRaisedForBranch, isTrue);
       // Velocity is recomputed at the RAISED diameter, not stale from 65 mm.
