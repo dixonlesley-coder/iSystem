@@ -702,7 +702,7 @@ void main() {
 
       // No fictional switchboard — the guided empty state is reachable.
       expect(container.read(electricalProjectProvider).panels, isEmpty);
-      final loadSample = find.text('Load sample project');
+      final loadSample = find.text('Load sample switchboard');
       expect(loadSample, findsOneWidget);
 
       await tester.tap(loadSample);
@@ -714,7 +714,7 @@ void main() {
           .toSet();
       expect(ids, containsAll(<String>{'mdp', 'lp1'}));
       // The card is gone once the project has panels.
-      expect(find.text('Load sample project'), findsNothing);
+      expect(find.text('Load sample switchboard'), findsNothing);
     });
 
     testWidgets('+ Panel toolbar action grows the system', (tester) async {

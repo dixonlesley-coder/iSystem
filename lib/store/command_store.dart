@@ -20,6 +20,8 @@ import 'package:mechx_engine/units.dart';
 
 import '../ui/strings/app_strings.dart';
 import 'design_issues_store.dart' show zeroLengthSizedEdgeCountProvider;
+import 'electrical_store.dart'
+    show electricalProjectProvider, electricalResultProvider;
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -241,9 +243,13 @@ const List<Floor> _kDefaultFloorStack = [
 ///  • Calibrate — any loaded sheet has a calibration;
 ///  • Floors    — the engineer has engaged with the levels (visited/edited the
 ///    Building screen, or changed the stack away from the default seed);
-///  • Draw      — the network has at least one edge;
+///  • Draw      — the network has at least one edge, OR (Round 29) an
+///    electrical board carries at least one way — the welcome card promises
+///    'lay out pipes, ducts and panels';
 ///  • Size      — at least one edge is sized AND a sheet is calibrated (an
 ///    uncalibrated solve runs on 0.0 m lengths, so it is not a finished step);
+///    with NO mechanical edges, an electrical design whose ways are solved
+///    (the electrical result sizes every board) completes it too;
 ///  • Report    — a deliverable (report/drawing/BOM) was exported this session.
 final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   final project = ref.watch(projectControllerProvider);
@@ -273,6 +279,14 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
       : drawnSheets.every((sid) => project.calibrationFor(sid) != null);
   final hasNetwork = edges.isNotEmpty;
   final sized = sizing.isNotEmpty;
+  // Round 29 (ui-journeys-3-stepper-ignores-electrical) — electrical work
+  // counts: a board with at least one way is drawn work, and with no
+  // mechanical edge its solved result is the sizing (the calibrated /
+  // zero-length guards stay scoped to the mechanical network).
+  final elecProject = ref.watch(electricalProjectProvider);
+  final hasElectrical = elecProject.panels.any((p) => p.circuits.isNotEmpty);
+  final elecSized = hasElectrical &&
+      ref.watch(electricalResultProvider).panels.isNotEmpty;
   // A fresh project ships with the default 3-floor seed, so the old
   // `floors.length > 1` marked Floors DONE before the user touched anything —
   // the map lied on first contact (A2). "Floors" is honest only once the
@@ -292,7 +306,7 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   return WorkflowState({
     WorkflowStage.calibrate: calibrated,
     WorkflowStage.floors: floorsSet,
-    WorkflowStage.draw: hasNetwork,
+    WorkflowStage.draw: hasNetwork || hasElectrical,
     // F11 — Size is honest only on a MEASURED network. Without a calibration
     // every horizontal run is 0.0 m (§10 makes the per-sheet scale the sole
     // source of horizontal length), so the sizing that "completed" is running
@@ -303,9 +317,11 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
     //
     // Round 17 follow-up — and no SIZED run may still be 0.0 m (the export
     // gate's own blocker).
-    WorkflowStage.size: sized &&
-        calibrated &&
-        ref.watch(zeroLengthSizedEdgeCountProvider) == 0,
+    WorkflowStage.size: hasNetwork
+        ? sized &&
+            calibrated &&
+            ref.watch(zeroLengthSizedEdgeCountProvider) == 0
+        : elecSized,
     WorkflowStage.report: ref.watch(reportExportedProvider),
   });
 });

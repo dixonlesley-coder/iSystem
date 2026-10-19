@@ -111,6 +111,7 @@ enum StringKey {
   electricalOriginFaultLevelNote,
   electricalBusbarClearingTime,
   electricalBusbarClearingTimeNote,
+  electricalAutoValueHint,
 
   // Electrical — Sources editor (genset / capacitor / transformer / dual-tx).
   electricalSources,
@@ -714,6 +715,8 @@ enum StringKey {
   // the title-block Revision left blank).
   issueMainsFedTitle,
   issueMainsFedMessage,
+  issueUpfeedAssumedTitle,
+  issueUpfeedAssumedMessage,
   issueDownfeedBelowTargetTitle,
   issueDownfeedBelowTargetMessage,
   issueUpfeedBelowTargetTitle,
@@ -1060,6 +1063,10 @@ enum StringKey {
   buildingWaterSupply,
   feedUpfeedPump,
   feedRoofTankDownfeed,
+  feedUpfeedPumpAssumed,
+  feedBoosterNoRoofTank,
+  feedDirectMains,
+  feedDirectMainsMeter,
   buildingInputCaptionFeed,
   inspectorFeedLabel,
   inspectorFeedChange,
@@ -1210,9 +1217,6 @@ enum StringKey {
   schematicNotesFeedBooster,
   schematicNotesFeedMainsMeter,
   schematicNotesFeedMains,
-  schematicNotesOccPrivate,
-  schematicNotesOccPublic,
-  schematicNotesOccAssembly,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -1323,24 +1327,28 @@ const Map<StringKey, String> _en = {
   StringKey.mechExportAllSystemsDxf: 'DXF (one file per system)',
 
   // Electrical — Service & Earthing (Fold-1 fields).
-  StringKey.electricalOriginFaultLevel: 'Origin fault level (kA)',
+  StringKey.electricalOriginFaultLevel: 'Origin fault level (kA, 0 = auto)',
   StringKey.electricalOriginFaultLevelNote:
       'Prospective 3-phase fault at the supply origin. Drives '
           'Fold-1 busbar short-circuit withstand sizing. Default is '
           'estimated from the declared service size (daya tersambung / '
           'transformer kVA) when one is set, else 16 kA. VERIFY against '
           'the PLN / upstream let-through.',
-  StringKey.electricalBusbarClearingTime: 'Busbar clearing time (s)',
+  StringKey.electricalBusbarClearingTime: 'Busbar clearing time (s, 0 = auto)',
   StringKey.electricalBusbarClearingTimeNote:
       'Protective-device clearing time for the withstand '
           'thermal check (smaller = less oversize). Default 0.1 s.',
+  StringKey.electricalAutoValueHint: 'Auto · {value}',
 
   // Electrical — Sources editor.
   StringKey.electricalSources: 'Sources',
   StringKey.electricalSourcesNote:
       'The genset, transformer and capacitor draw on the source spine '
-          '(Overview / Riser / single-line head + exports). Drawing inputs '
-          'only — all VERIFY.',
+          '(Overview / Riser / single-line head + exports) AND drive the '
+          'design: the transformer kVA sets the estimated fault level '
+          '(every device kA + the busbar withstand), the capacitor kvar '
+          'enters the PF study, and the genset is checked against the '
+          'essential demand. All VERIFY.',
   StringKey.electricalGenset: 'Standby generator (genset)',
   StringKey.electricalGensetPresent: 'Genset present',
   StringKey.electricalGensetKva: 'Genset rating (kVA, 0 = auto)',
@@ -1348,7 +1356,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalGensetTransfer: 'Transfer',
   StringKey.electricalTransformerKva: 'Transformer (kVA, 0 = auto)',
   StringKey.electricalTransformerKvaNote:
-      'Explicit MV/LV transformer rating. 0 derives it from the building '
+      'Explicit MV/LV transformer rating — sets the estimated fault level '
+          '(device kA, busbar withstand). 0 derives it from the building '
           'demand. VERIFY against the transformer schedule.',
   StringKey.electricalCapacitorKvar: 'Capacitor bank (kvar, 0 = none)',
   StringKey.electricalCapacitorKvarNote:
@@ -1775,7 +1784,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalEmptyTitle: 'Set up your service',
   StringKey.electricalEmptyBody:
       'Add a distribution panel, then drag loads from the palette '
-          'onto it. Set the supply phase and earthing from {supply}.',
+          'onto it. Set the earthing and connection from {supply}; pick '
+          "each board's 1ph / 3ph from its menu.",
   StringKey.electricalGuide1:
       'Double-click a component to edit its size, type or label',
   StringKey.electricalGuide2:
@@ -2121,6 +2131,9 @@ const Map<StringKey, String> _en = {
       'Fed from the mains (pressure not modelled)',
   StringKey.issueMainsFedMessage:
       'The {service} network ({nodes}) is fed straight from the mains through a water meter. The mains pressure is not modelled: confirm the PDAM pressure meets the target at the highest fixture.',
+  StringKey.issueUpfeedAssumedTitle: 'Upfeed pump assumed (not drawn)',
+  StringKey.issueUpfeedAssumedMessage:
+      'The {service} network ({nodes}) is set to upfeed but no pump is drawn: an upfeed pump is ASSUMED at the meter, sized on the peak flow and the head to the critical fixture, and carried on the equipment schedule and the electrical feed. Draw the pump where it will be installed.',
   StringKey.issueDownfeedBelowTargetTitle:
       'Roof tank cannot reach the target pressure',
   StringKey.issueDownfeedBelowTargetMessage:
@@ -2286,7 +2299,7 @@ const Map<StringKey, String> _en = {
   StringKey.copilotChangeNounMany: 'changes',
 
   // H6 — half-localized odds & ends.
-  StringKey.electricalLoadSampleProject: 'Load sample project',
+  StringKey.electricalLoadSampleProject: 'Load sample switchboard',
   StringKey.projectApplyBuildingTemplate: 'Apply a building template',
 
   // Workflow-goldens review (2026-07-06).
@@ -2357,7 +2370,7 @@ const Map<StringKey, String> _en = {
   StringKey.undoLabelAssemblies: 'Saved assemblies',
 
   // A1 — Layout empty-state 'Load sample project'.
-  StringKey.layoutLoadSampleProject: 'Load sample project',
+  StringKey.layoutLoadSampleProject: 'Load plumbing sample',
 
   // A5 — Projects-hub export grouping.
   StringKey.projectsExportGroupDrawings: 'Drawings',
@@ -2499,6 +2512,10 @@ const Map<StringKey, String> _en = {
   StringKey.buildingWaterSupply: 'Water supply',
   StringKey.feedUpfeedPump: 'Upfeed pump',
   StringKey.feedRoofTankDownfeed: 'Roof-tank downfeed',
+  StringKey.feedUpfeedPumpAssumed: 'Upfeed pump (assumed, not drawn)',
+  StringKey.feedBoosterNoRoofTank: 'Booster pump (no roof tank)',
+  StringKey.feedDirectMains: 'Direct mains',
+  StringKey.feedDirectMainsMeter: 'Direct mains (water meter)',
   StringKey.buildingInputCaptionFeed:
       'Decides the whole water solve: pump duty (upfeed) or PRV zones (downfeed).',
   StringKey.inspectorFeedLabel: 'Feed',
@@ -2671,12 +2688,6 @@ const Map<StringKey, String> _en = {
       'Feed: direct mains (water meter)',
   StringKey.schematicNotesFeedMains:
       'Feed: direct mains',
-  StringKey.schematicNotesOccPrivate:
-      'Private',
-  StringKey.schematicNotesOccPublic:
-      'Public',
-  StringKey.schematicNotesOccAssembly:
-      'Assembly',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -2784,24 +2795,30 @@ const Map<StringKey, String> _id = {
   StringKey.mechExportAllSystemsDxf: 'DXF (satu berkas per sistem)',
 
   // Electrical — Service & Earthing (Fold-1 fields).
-  StringKey.electricalOriginFaultLevel: 'Tingkat gangguan sumber (kA)',
+  StringKey.electricalOriginFaultLevel:
+      'Tingkat gangguan sumber (kA, 0 = otomatis)',
   StringKey.electricalOriginFaultLevelNote:
       'Gangguan 3-fasa prospektif di titik asal suplai. Menjadi dasar '
           'pengukuran ketahanan hubung-singkat busbar Fold-1. Default '
           'diperkirakan dari ukuran daya yang dideklarasikan (daya '
           'tersambung / kVA trafo) jika ada, jika tidak 16 kA. VERIFIKASI '
           'terhadap let-through PLN / hulu.',
-  StringKey.electricalBusbarClearingTime: 'Waktu pemutusan busbar (s)',
+  StringKey.electricalBusbarClearingTime:
+      'Waktu pemutusan busbar (s, 0 = otomatis)',
   StringKey.electricalBusbarClearingTimeNote:
       'Waktu pemutusan perangkat proteksi untuk pemeriksaan ketahanan '
           'termal (lebih kecil = lebih sedikit pembesaran). Default 0,1 s.',
+  StringKey.electricalAutoValueHint: 'Otomatis · {value}',
 
   // Electrical — Sources editor.
   StringKey.electricalSources: 'Sumber',
   StringKey.electricalSourcesNote:
       'Genset, trafo, dan kapasitor digambar pada tulang sumber '
-          '(Ikhtisar / Riser / kepala satu-garis + ekspor). Hanya masukan '
-          'gambar — semua VERIFIKASI.',
+          '(Ikhtisar / Riser / kepala satu-garis + ekspor) DAN menentukan '
+          'desain: kVA trafo menetapkan perkiraan tingkat gangguan (kA '
+          'setiap perangkat + ketahanan busbar), kvar kapasitor masuk ke '
+          'studi PF, dan genset diperiksa terhadap beban esensial. Semua '
+          'VERIFIKASI.',
   StringKey.electricalGenset: 'Generator cadangan (genset)',
   StringKey.electricalGensetPresent: 'Genset tersedia',
   StringKey.electricalGensetKva: 'Daya genset (kVA, 0 = otomatis)',
@@ -2809,8 +2826,9 @@ const Map<StringKey, String> _id = {
   StringKey.electricalGensetTransfer: 'Transfer',
   StringKey.electricalTransformerKva: 'Trafo (kVA, 0 = otomatis)',
   StringKey.electricalTransformerKvaNote:
-      'Daya trafo MV/LV eksplisit. 0 menurunkannya dari beban gedung. '
-          'VERIFIKASI terhadap jadwal trafo.',
+      'Daya trafo MV/LV eksplisit — menetapkan perkiraan tingkat gangguan '
+          '(kA perangkat, ketahanan busbar). 0 menurunkannya dari beban '
+          'gedung. VERIFIKASI terhadap jadwal trafo.',
   StringKey.electricalCapacitorKvar: 'Bank kapasitor (kvar, 0 = tidak ada)',
   StringKey.electricalCapacitorKvarNote:
       'Bank koreksi PF terpasang. 0 menampilkan catatan "PF correction" '
@@ -3239,7 +3257,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalEmptyTitle: 'Siapkan sambungan Anda',
   StringKey.electricalEmptyBody:
       'Tambahkan panel distribusi, lalu seret beban dari palet ke '
-          'atasnya. Atur fasa suplai dan pembumian dari {supply}.',
+          'atasnya. Atur pembumian dan sambungan dari {supply}; pilih '
+          '1ph / 3ph tiap panel dari menunya.',
   StringKey.electricalGuide1:
       'Klik ganda komponen untuk mengubah ukuran, jenis, atau labelnya',
   StringKey.electricalGuide2:
@@ -3598,6 +3617,10 @@ const Map<StringKey, String> _id = {
       'Disuplai dari PDAM (tekanan tidak dimodelkan)',
   StringKey.issueMainsFedMessage:
       'Jaringan {service} ({nodes}) disuplai langsung dari PDAM melalui meter air. Tekanan PDAM tidak dimodelkan: pastikan tekanannya memenuhi target di fikstur tertinggi.',
+  StringKey.issueUpfeedAssumedTitle:
+      'Pompa dorong diasumsikan (tidak digambar)',
+  StringKey.issueUpfeedAssumedMessage:
+      'Jaringan {service} ({nodes}) diatur sistem dorong ke atas tetapi tidak ada pompa yang digambar: pompa DIASUMSIKAN di meter air, diukur dari debit puncak dan head ke fikstur kritis, serta dicantumkan di jadwal peralatan dan suplai listrik. Gambarkan pompa di lokasi pemasangannya.',
   StringKey.issueDownfeedBelowTargetTitle:
       'Tangki atap tidak mencapai tekanan target',
   StringKey.issueDownfeedBelowTargetMessage:
@@ -3768,7 +3791,7 @@ const Map<StringKey, String> _id = {
   StringKey.copilotChangeNounMany: 'perubahan',
 
   // H6 — half-localized odds & ends.
-  StringKey.electricalLoadSampleProject: 'Muat proyek contoh',
+  StringKey.electricalLoadSampleProject: 'Muat contoh panel listrik',
   StringKey.projectApplyBuildingTemplate: 'Terapkan templat bangunan',
 
   // Workflow-goldens review (2026-07-06).
@@ -3841,7 +3864,7 @@ const Map<StringKey, String> _id = {
   StringKey.undoLabelAssemblies: 'Rakitan tersimpan',
 
   // A1 — Layout empty-state 'Load sample project'.
-  StringKey.layoutLoadSampleProject: 'Muat proyek contoh',
+  StringKey.layoutLoadSampleProject: 'Muat contoh plumbing',
 
   // A5 — Projects-hub export grouping.
   StringKey.projectsExportGroupDrawings: 'Gambar',
@@ -3984,6 +4007,10 @@ const Map<StringKey, String> _id = {
   StringKey.buildingWaterSupply: 'Pasokan air',
   StringKey.feedUpfeedPump: 'Pompa dorong ke atas',
   StringKey.feedRoofTankDownfeed: 'Gravitasi tangki atap',
+  StringKey.feedUpfeedPumpAssumed: 'Pompa dorong (diasumsikan, tidak digambar)',
+  StringKey.feedBoosterNoRoofTank: 'Pompa booster (tanpa tangki atap)',
+  StringKey.feedDirectMains: 'Langsung PDAM',
+  StringKey.feedDirectMainsMeter: 'Langsung PDAM (meter air)',
   StringKey.buildingInputCaptionFeed:
       'Menentukan seluruh perhitungan air: duti pompa (upfeed) atau zona PRV (downfeed).',
   StringKey.inspectorFeedLabel: 'Pasokan',
@@ -4156,12 +4183,6 @@ const Map<StringKey, String> _id = {
       'Suplai: langsung dari PDAM (meter air)',
   StringKey.schematicNotesFeedMains:
       'Suplai: langsung dari PDAM',
-  StringKey.schematicNotesOccPrivate:
-      'Privat',
-  StringKey.schematicNotesOccPublic:
-      'Publik',
-  StringKey.schematicNotesOccAssembly:
-      'Pertemuan',
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

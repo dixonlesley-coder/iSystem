@@ -18,18 +18,17 @@ import 'dart:convert';
 
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/geometry/building.dart';
-import 'package:mechx_engine/report/cover_sheet.dart' show buildGeneralNotesSheet;
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/cover_sheet.dart' show buildGeneralNotesSheet;
+import 'package:mechx_engine/report/electrical_plan_export.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_annotation_layout.dart'
     show planDoubleLineOutline, planOverlapWarning;
-import 'package:mechx_engine/report/electrical_plan_export.dart';
-import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
     show elementTags, floorLocatorToken;
 import 'package:mechx_engine/report/sld_export.dart';
-import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';

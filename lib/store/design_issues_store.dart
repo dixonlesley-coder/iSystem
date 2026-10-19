@@ -816,6 +816,28 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     // pressure is not modelled), never the blocking no-source warning that a
     // direct-from-PDAM building could only clear by drawing a fake tank.
     if (d.isMainsFed) {
+      // Round 29 (ui-journeys-3-feed-shown-three-ways) — on the UPFEED
+      // setting the solve sizes an assumed upfeed pump at the meter (the
+      // schedule + electrical feed carry it), so 'mains pressure is not
+      // modelled' would contradict them: ONE story — the pump is assumed,
+      // not drawn.
+      if (ref.watch(feedStrategyProvider) == FeedStrategy.upfeed &&
+          d.service == ServiceType.coldWater) {
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'upfeed-pump-assumed:$service',
+          title: str(StringKey.issueUpfeedAssumedTitle),
+          message: str.format(StringKey.issueUpfeedAssumedMessage, {
+            'service': serviceName,
+            'nodes': pluralCount(n, str(StringKey.issueNounNodeOne),
+                str(StringKey.issueNounNodeMany)),
+          }),
+          locate: repNode == null
+              ? null
+              : IssueLocation(repNode.sheetId, nodeId: repId),
+        ));
+        continue;
+      }
       infos.add(DesignIssue(
         severity: IssueSeverity.info,
         kind: 'mains-fed:$service',

@@ -58,6 +58,7 @@ import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
 import '../shell/nav_rail.dart' show ShellSection, shellSectionProvider;
 import '../strings/app_strings.dart';
+import '../strings/occupancy_label.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/canvas_guide_popover.dart';
@@ -4680,13 +4681,11 @@ class _SystemNotes extends ConsumerWidget {
   const _SystemNotes({required this.focus, required this.network});
 
   // Round 17 follow-up (i18n-residuals-riser-notes-card-english) — every row
-  // localizes like the heading; EN byte-identical.
+  // localizes like the heading. Round 29 (ui-journeys-3-occupancy-two-
+  // vocabularies) — the value is the Building input's OWN label (Residential
+  // / Office / public / Assembly / mall), never the internal enum name.
   String _occupancyLabel(BuildContext context, Occupancy o) =>
-      context.strings(switch (o) {
-        Occupancy.private => StringKey.schematicNotesOccPrivate,
-        Occupancy.public => StringKey.schematicNotesOccPublic,
-        Occupancy.assembly => StringKey.schematicNotesOccAssembly,
-      });
+      context.strings(occupancyLabelKey(o));
 
   /// Capacity (m3, ASCII) of the first node with [component] with a stored
   /// capacity, or null.
