@@ -658,6 +658,9 @@ enum StringKey {
   issueCheckValveAmbiguousClosedMessage,
   issueCheckValveAmbiguousPipeMessage,
   issueCheckValveAmbiguousStandbyMessage,
+  issueCheckValveAmbiguousSupplyMessage,
+  issueCheckValveAgainstSupplyTitle,
+  issueCheckValveAgainstSupplyMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1979,6 +1982,21 @@ const Map<StringKey, String> _en = {
       'duty/standby set onto one header, so it was assumed to be a STANDBY '
       'leg sized for the full set flow. Redraw its two pipes in the flow '
       'direction (into the valve, then out of it) so it is sized as intended.',
+  StringKey.issueCheckValveAmbiguousSupplyMessage:
+      'Both pipes of this check valve are drawn into it (or both out of it), '
+      'so its flow direction is ambiguous. It sits on a supply leg that '
+      'exists to pass flow (a pump\'s leg, or the source\'s own discharge), '
+      'so it was assumed to be a FEED in the direction away from the source '
+      'and is never closed. Redraw its two pipes in the flow direction (into '
+      'the valve, then out of it) so it is sized as intended.',
+  StringKey.issueCheckValveAgainstSupplyTitle:
+      'Check valve drawn against its supply leg',
+  StringKey.issueCheckValveAgainstSupplyMessage:
+      'This check valve is drawn so it only lets water flow back toward the '
+      'source, but it sits on a supply leg (a pump\'s leg, or the source\'s '
+      'own discharge): as drawn it would starve its own pump or source. It '
+      'was read as a FEED in the direction away from the source. Redraw its '
+      'pipes from the pump / source toward the system so the drawing matches.',
   StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
   StringKey.issueFireJockeyAssumedMessage:
       'Three or more identical fire pumps are drawn in parallel and nothing '
@@ -3404,6 +3422,22 @@ const Map<StringKey, String> _id = {
       'paralel duty/standby ke satu header, sehingga diasumsikan sebagai kaki '
       'STANDBY yang diukur untuk debit set penuh. Gambar ulang kedua pipanya '
       'searah aliran (masuk ke katup, lalu keluar) agar diukur sesuai maksud.',
+  StringKey.issueCheckValveAmbiguousSupplyMessage:
+      'Kedua pipa katup searah ini digambar masuk ke katup (atau keduanya '
+      'keluar), sehingga arah alirannya ambigu. Katup berada pada kaki suplai '
+      'yang memang untuk mengalirkan air (kaki pompa, atau pipa keluaran '
+      'sumber), sehingga diasumsikan sebagai SUPLAI dengan arah menjauhi '
+      'sumber dan tidak pernah ditutup. Gambar ulang kedua pipanya searah '
+      'aliran (masuk ke katup, lalu keluar) agar diukur sesuai maksud.',
+  StringKey.issueCheckValveAgainstSupplyTitle:
+      'Katup searah digambar berlawanan dengan kaki suplainya',
+  StringKey.issueCheckValveAgainstSupplyMessage:
+      'Katup searah ini digambar sehingga hanya mengalirkan air kembali ke '
+      'sumber, padahal berada pada kaki suplai (kaki pompa, atau pipa '
+      'keluaran sumber): seperti digambar, katup akan memutus pompa atau '
+      'sumbernya sendiri. Katup dibaca sebagai SUPLAI dengan arah menjauhi '
+      'sumber. Gambar ulang pipanya dari pompa / sumber menuju sistem agar '
+      'gambar sesuai.',
   StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
   StringKey.issueFireJockeyAssumedMessage:
       'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '

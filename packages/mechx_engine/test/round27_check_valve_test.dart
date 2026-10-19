@@ -1304,6 +1304,14 @@ void main() {
             if (closed) {
               expect(got!.flow.inLitersPerSecond, 0, reason: '$why $sid');
             }
+            // Round 27 r6 — a valve on the source's discharge leg is never
+            // zero-forced: it always carries water away from the source.
+            final supply =
+                [a, b].any((n) => amb0[n] == CheckValveAmbiguity.supplyLeg);
+            if (supply) {
+              expect(got!.flow.inLitersPerSecond, greaterThan(0),
+                  reason: '$why $sid');
+            }
             if (v < 2 || got == null || ref == null) continue;
             expect(got.flow.inLitersPerSecond,
                 closeTo(ref.flow.inLitersPerSecond, 1e-6),

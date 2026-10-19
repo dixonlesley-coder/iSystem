@@ -349,12 +349,19 @@ void main() {
     });
 
     test(
-        'Round 27 r3: ONE leg drawn header -> valve -> pump is read as drawn '
-        '(a return, closed) — the other leg carries the whole set flow', () {
-      // C1 permitted H -> P1; with only C1 removed P1 is 2 hops from GT
-      // (GT-S-P1) and H is 4 (GT-S-P2-C2-H): the permitted direction points
-      // toward the source => a RETURN valve (zero flow). The drawn arrow is
-      // authoritative; the fixtures stay fed through C2.
+        'Round 27 r6 (binding refinement): ONE leg drawn header -> valve -> '
+        'pump is SELF-CONTRADICTORY (it would starve its own pump) - read as '
+        'a feed, the duty/standby set keeps the full set flow on both legs, '
+        'and the valve is named', () {
+      // C1 drawn H -> C1 -> P1: its arrow points back into its own pump's
+      // discharge (toward the source GT). r3 read it as drawn - a RETURN,
+      // zero flow - which zero-forced a pump leg. A check valve on a MOVER
+      // leg exists to pass flow, so it is a FEED leading away from the
+      // source (P1 -> C1 -> H), and C1 / C2 share the leg ends {S, H}: a
+      // Round-13 duty/standby set. Each pump leg carries the whole set flow,
+      // 4 x 2 UBAP => curve(8) = 0.400 L/s (flush-tank Gambar 1); C2 (after
+      // C1 by id) is the mirrored standby leg. The drawing is reported
+      // (drawnAgainstSupplyLeg) for the engineer to fix.
       final q = _curve(8);
       NetEdge e(String id, String a, String b) =>
           _e(id, a, b, ServiceType.coldWater);
@@ -380,19 +387,19 @@ void main() {
         for (var i = 0; i < 4; i++) e('b$i', 'H', 'f$i'),
       ]);
       final legs = <String>{};
+      final amb = <String, CheckValveAmbiguity>{};
       final s = autoSizeNetwork(net, const SizingContext(),
           leafDemand: const {ServiceType.coldWater: FlowRate(0)},
           leafFixtureUnits: const {ServiceType.coldWater: 2.0},
-          parallelLegEdgeIdsOut: legs);
-      for (final id in ['gs', 's2', 'pc2', 'ch2']) {
+          parallelLegEdgeIdsOut: legs,
+          checkValveAmbiguousOut: amb);
+      for (final id in ['gs', 's1', 'pc1', 'ch1', 's2', 'pc2', 'ch2']) {
         expect(s[id]!.flow.inLitersPerSecond, closeTo(q, 1e-9), reason: id);
       }
-      for (final id in ['pc1', 'ch1']) {
-        expect(s[id]!.flow.inLitersPerSecond, 0, reason: id);
-      }
-      expect(s['ch1']!.flowFromId, 'H');
-      expect(s['pc1']!.flowFromId, 'C1');
-      expect(legs, isEmpty);
+      expect(s['ch1']!.flowFromId, 'C1');
+      expect(s['pc1']!.flowFromId, 'P1');
+      expect(legs, {'s2', 'pc2', 'ch2'});
+      expect(amb, {'C1': CheckValveAmbiguity.drawnAgainstSupplyLeg});
     });
   });
 

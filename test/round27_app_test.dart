@@ -423,5 +423,56 @@ void main() {
       expect(issue.title, 'Check valve has no drawn flow direction');
       expect(issue.message, contains('CLOSED'));
     });
+
+    // r6 (binding refinement) — a valve on a pump's leg is never closed: an
+    // ambiguous one is a feed away from the source, and one DRAWN back at its
+    // own pump is read as a feed and named with its own title.
+    testWidgets('a valve on a pump leg: never closed, named as a supply leg',
+        (tester) async {
+      Network pumpBypass({required bool back}) {
+        NetEdge cw(String id, String a, String b) => NetEdge(
+            id: id, fromId: a, toId: b, service: ServiceType.coldWater);
+        return Network(nodes: [
+          _n('T', 0, 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+          _n('P', 30, -30, role: NodeRole.plant, c: NodeComponent.pump),
+          _n('CV', 60, -30, c: NodeComponent.checkValve),
+          _n('J', 90, 0),
+          _n('f0', 150, 0, role: NodeRole.fixture),
+          _n('f1', 150, 30, role: NodeRole.fixture),
+        ], edges: [
+          cw('tp', 'T', 'P'),
+          if (back) ...[cw('pc', 'CV', 'P'), cw('jc', 'J', 'CV')],
+          if (!back) ...[cw('pc', 'P', 'CV'), cw('jc', 'J', 'CV')],
+          cw('tj', 'T', 'J'),
+          cw('b0', 'J', 'f0'),
+          cw('b1', 'J', 'f1'),
+        ]);
+      }
+
+      final (_, c) = await _harness(tester);
+      for (final back in [false, true]) {
+        c.read(networkControllerProvider.notifier)
+            .loadNetwork(pumpBypass(back: back));
+        await tester.pump();
+        expect(c.read(checkValveAmbiguousProvider), {
+          'CV': back
+              ? CheckValveAmbiguity.drawnAgainstSupplyLeg
+              : CheckValveAmbiguity.supplyLeg,
+        });
+        final s = c.read(sizingProvider);
+        expect(s['pc']!.flow.inLitersPerSecond, greaterThan(0));
+        expect(s['jc']!.flowFromId, 'CV');
+        final issue = c
+            .read(designIssuesProvider)
+            .firstWhere((i) => i.kind == 'check-valve-ambiguous:CV');
+        expect(issue.locate?.nodeId, 'CV');
+        expect(
+            issue.title,
+            back
+                ? 'Check valve drawn against its supply leg'
+                : 'Check valve has no drawn flow direction');
+        expect(issue.message, contains('FEED'));
+      }
+    });
   });
 }

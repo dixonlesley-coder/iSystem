@@ -642,7 +642,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
       kind: 'check-valve-ambiguous:$id',
-      title: str(StringKey.issueCheckValveAmbiguousTitle),
+      // Round 27 r6 — a DRAWN valve pointing back at its own pump / the
+      // source is not direction-less: it carries its own title.
+      title: str(
+          ambiguousValves[id] == CheckValveAmbiguity.drawnAgainstSupplyLeg
+              ? StringKey.issueCheckValveAgainstSupplyTitle
+              : StringKey.issueCheckValveAmbiguousTitle),
       message: str(switch (ambiguousValves[id]!) {
         CheckValveAmbiguity.closedReturn =>
           StringKey.issueCheckValveAmbiguousClosedMessage,
@@ -650,6 +655,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           StringKey.issueCheckValveAmbiguousPipeMessage,
         CheckValveAmbiguity.standbySet =>
           StringKey.issueCheckValveAmbiguousStandbyMessage,
+        CheckValveAmbiguity.supplyLeg =>
+          StringKey.issueCheckValveAmbiguousSupplyMessage,
+        CheckValveAmbiguity.drawnAgainstSupplyLeg =>
+          StringKey.issueCheckValveAgainstSupplyMessage,
       }),
       locate: IssueLocation(n.sheetId, nodeId: id),
     ));
