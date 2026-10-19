@@ -1150,6 +1150,11 @@ enum StringKey {
   issueBelowCodeMinimumTitle,
   issueBelowCodeMinimumMessage,
   numInputNotANumber,
+  scaleAlreadyAllSheets,
+  scaleAppliedOne,
+  scaleAppliedMany, // {n}
+  scaleSkippedOne,
+  scaleSkippedMany, // {m}
   electricalFeedCurrentSuffix,
   electricalIbDiversified,
   nodeElectricalLoadLabel,
@@ -2475,6 +2480,16 @@ const Map<StringKey, String> _en = {
       'The size picked by hand on this gravity run is smaller than the smallest size the code tables allow for its load. Pick a larger size or clear the override.',
   StringKey.numInputNotANumber:
       'Enter a number',
+  StringKey.scaleAlreadyAllSheets:
+      'All other sheets already use this scale',
+  StringKey.scaleAppliedOne:
+      'Scale applied to 1 sheet',
+  StringKey.scaleAppliedMany:
+      'Scale applied to {n} sheets',
+  StringKey.scaleSkippedOne:
+      '; 1 skipped (different plan type - calibrate it separately)',
+  StringKey.scaleSkippedMany:
+      '; {m} skipped (different plan type - calibrate them separately)',
   StringKey.electricalFeedCurrentSuffix:
       ' (current)',
   StringKey.electricalIbDiversified:
@@ -3837,6 +3852,16 @@ const Map<StringKey, String> _id = {
       'Ukuran yang dipilih manual pada jalur gravitasi ini lebih kecil daripada ukuran terkecil yang diizinkan tabel kode untuk bebannya. Pilih ukuran yang lebih besar atau hapus pilihan manualnya.',
   StringKey.numInputNotANumber:
       'Masukkan angka',
+  StringKey.scaleAlreadyAllSheets:
+      'Semua lembar lain sudah memakai skala ini',
+  StringKey.scaleAppliedOne:
+      'Skala diterapkan ke 1 lembar',
+  StringKey.scaleAppliedMany:
+      'Skala diterapkan ke {n} lembar',
+  StringKey.scaleSkippedOne:
+      '; 1 dilewati (jenis denah berbeda - kalibrasi tersendiri)',
+  StringKey.scaleSkippedMany:
+      '; {m} dilewati (jenis denah berbeda - kalibrasi tersendiri)',
   StringKey.electricalFeedCurrentSuffix:
       ' (saat ini)',
   StringKey.electricalIbDiversified:
@@ -3901,6 +3926,19 @@ class MechXStringsData {
   /// unused params ignored, so a template + call can never throw. Falls back to
   /// English like [call] — keep the `{name}` placeholders identical across the EN
   /// and ID templates so both substitute correctly.
+  /// The 'apply scale to all sheets' status (Round 24 follow-up): ONE
+  /// formatter for the Scale inspector button and the Review quick fix, so the
+  /// two can never word it differently; [skipped] PDF <-> DXF targets are said.
+  String scaleAppliedStatus(int applied, int skipped) =>
+      (applied == 1
+          ? this(StringKey.scaleAppliedOne)
+          : format(StringKey.scaleAppliedMany, {'n': applied})) +
+      (skipped == 0
+          ? ''
+          : skipped == 1
+              ? this(StringKey.scaleSkippedOne)
+              : format(StringKey.scaleSkippedMany, {'m': skipped}));
+
   String format(StringKey key, Map<String, Object?> params) {
     var out = _map[key] ?? _en[key]!;
     params.forEach((k, v) => out = out.replaceAll('{$k}', '$v'));

@@ -2822,7 +2822,7 @@ Future<void> _applyScaleToAllSheets(
   void status(String m) =>
       ref.read(statusMessageProvider.notifier).showStatus(m);
   if (targets.isEmpty) {
-    status('All other sheets already use this scale');
+    status(context.strings(StringKey.scaleAlreadyAllSheets));
     return;
   }
   // Round 24 — transferred per sheet type: DXF sheets are rescaled by their
@@ -2839,9 +2839,7 @@ Future<void> _applyScaleToAllSheets(
         skippedOut: skipped,
       );
   final m = skipped.length;
-  status('Scale applied to $n ${n == 1 ? 'sheet' : 'sheets'}'
-      '${m == 0 ? '' : '; $m skipped (different plan type - calibrate '
-          '${m == 1 ? 'it' : 'them'} separately)'}');
+  status(context.strings.scaleAppliedStatus(n, m));
 }
 
 /// Ask before overwriting [count] sheets that carry their own different scale

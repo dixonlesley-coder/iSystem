@@ -2512,6 +2512,15 @@ ElectricalCircuit _readoptedMepWay(
       fresh,
     );
 
+/// Round 24 r2 — every load kind the MEP auto-feed has ever minted
+/// (`MepLoadSourceInfo.circuitLoadKind`, incl. the pre-`hvac` `motor` for AC
+/// units): a legacy unflagged way carrying one of these is machine-owned.
+const Set<LoadKind> kMepMintedLoadKinds = {
+  LoadKind.motor,
+  LoadKind.pump,
+  LoadKind.hvac,
+};
+
 /// Round 9 (elec-store-fuzz-1/-2) — refresh an existing derived way [c] from
 /// the [fresh] mint for the same source: EVERY machine-derived field is
 /// re-derived — the load (`loadW` / `motorKw` / `flaOverrideA`), the plan
@@ -2523,15 +2532,6 @@ ElectricalCircuit _readoptedMepWay(
 /// life-safety way, none otherwise) ONLY while it is still a minted value
 /// (null, or FRC on a way that was life-safety); a family the engineer typed
 /// is kept. Name / length / starter / laying / overrides stay the engineer's.
-/// Round 24 r2 — every load kind the MEP auto-feed has ever minted
-/// (`MepLoadSourceInfo.circuitLoadKind`, incl. the pre-`hvac` `motor` for AC
-/// units): a legacy unflagged way carrying one of these is machine-owned.
-const Set<LoadKind> kMepMintedLoadKinds = {
-  LoadKind.motor,
-  LoadKind.pump,
-  LoadKind.hvac,
-};
-
 ElectricalCircuit _refreshedMepWay(
   ElectricalCircuit c,
   ElectricalCircuit fresh,
