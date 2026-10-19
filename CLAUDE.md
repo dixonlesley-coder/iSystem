@@ -1470,16 +1470,27 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   RUN joins two stack riser groups only as an OFFSET (one group's TOP to a
   different group's BOTTOM on one storey); any other run between groups is a
   HEADER that never merges them: it keeps its own load and bounds only the
-  stack it DRAINS (that stack's top tied off sideways); the stack that
-  RECEIVES it splits at the junction — risers above it (the shared stub to the
-  VTR) keep their own combined load, the stack below keeps its OWN soil
-  stack's size, whichever way the header is drawn (r2). A single common return
-  check valve: the RETURN side is grown ONLY from each valve's upstream node
-  through draw-off-free, off-supply nodes over edges on no shortest root ->
-  draw-off path, and deferred with the valve whenever the supply that remains
-  is acyclic — a ring segment between two demand-fed ring nodes is never a
-  'return', so a stub-fed ring main with draw-off on both legs and a drawn
-  return keeps Hardy–Cross (r2). Hot-water recirculation is PER COMPONENT
+  stack it DRAINS; the stack that RECEIVES it splits at the junction — risers
+  above it (the shared stub to the VTR) keep their own combined load, the
+  stack below keeps its OWN soil stack's size, whichever way the header is
+  drawn (r2). Which end receives is read from the SOLVED vent tree (r3): the
+  header's root-side endpoint receives, the other stack's air leaves through
+  the header and it is drained — a dead stub above a mid-storey header (no
+  VTR of its own) never makes a stack 'receiving' (only a loop-closing header
+  falls back to 'a riser continues above'). An open VTR (a vent leaf at a
+  riser's upper end, joined by nothing else) is load-free — the second VTR of
+  a headered pair never takes the 2-DFU leaf default (r3). A single common
+  return check valve: the RETURN side is grown ONLY from each valve's
+  upstream node through draw-off-free, off-supply nodes over edges on no
+  shortest root -> draw-off path, and deferred with the valve whenever the
+  supply that remains is acyclic AND no walk edge lands on a DRAW-OFF node
+  (r3: a return meets the supply at a BARE node, the riser top; one teed from
+  a bare ring tee between two draw-off nodes is a ring segment) — so a
+  stub-fed ring main with draw-off on both legs and a drawn return, teed from
+  a fixture OR a bare tee, keeps Hardy–Cross (r2/r3). Conservative by
+  construction: a return and a ring whose tee nodes are all bare (fixtures on
+  branch stubs) are topologically identical, and that case still takes the
+  tree cut. Hot-water recirculation is PER COMPONENT
   (`hotWaterRecircSystemsProvider`; one way / schedule row / report line each,
   a drawn HW pump takes its own system's duty; ONE primary = the largest
   recirc flow ∝ circulated + assumed-return length, in the provider AND

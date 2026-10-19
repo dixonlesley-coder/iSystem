@@ -35,7 +35,16 @@ NetEdge _e(String id, String a, String b, {EdgeKind k = EdgeKind.run}) =>
 /// each floor node. With [common], each riser top runs down a return riser to
 /// a shared header RJ -> CV -> H; [perRiser] puts a CV in every return
 /// instead (the Round-12 topology, the reference answer).
-Network _hotel({int risers = 2, bool common = false, bool perRiser = false}) {
+///
+/// Round 26 r3 — [branchTee] (per riser index) tees the return top from a
+/// BARE node T on the top branch S_r_3 - fx_r_3 instead of the riser top
+/// S_r_3 (the Run tool's tee-in); without a return the tee is drawn too, so
+/// the open network compares like for like.
+Network _hotel(
+    {int risers = 2,
+    bool common = false,
+    bool perRiser = false,
+    Set<int> branchTee = const {}}) {
   final nodes = <NetNode>[
     _n('H', 0, 0, role: NodeRole.plant),
     _n('M', 50, 0),
@@ -47,7 +56,14 @@ Network _hotel({int risers = 2, bool common = false, bool perRiser = false}) {
       nodes
         ..add(_n('S${r}_$f', x, 0, floor: f))
         ..add(_n('fx${r}_$f', x + 40, 0, floor: f, role: NodeRole.fixture));
-      edges.add(_e('b${r}_$f', 'S${r}_$f', 'fx${r}_$f'));
+      if (f == 3 && branchTee.contains(r)) {
+        nodes.add(_n('T$r', x + 30, 0, floor: f));
+        edges
+          ..add(_e('b${r}_$f', 'S${r}_$f', 'T$r'))
+          ..add(_e('bt$r', 'T$r', 'fx${r}_$f'));
+      } else {
+        edges.add(_e('b${r}_$f', 'S${r}_$f', 'fx${r}_$f'));
+      }
       edges.add(f == 0
           ? _e('m$r', 'M', 'S${r}_0')
           : _e('s${r}_$f', 'S${r}_${f - 1}', 'S${r}_$f', k: EdgeKind.riser));
@@ -56,7 +72,8 @@ Network _hotel({int risers = 2, bool common = false, bool perRiser = false}) {
       for (var f = 0; f < 4; f++) {
         nodes.add(_n('R${r}_$f', x + 20, 0, floor: f));
       }
-      edges.add(_e('top$r', 'S${r}_3', 'R${r}_3'));
+      edges.add(
+          _e('top$r', branchTee.contains(r) ? 'T$r' : 'S${r}_3', 'R${r}_3'));
       for (var f = 3; f >= 1; f--) {
         edges.add(
             _e('r${r}_$f', 'R${r}_$f', 'R${r}_${f - 1}', k: EdgeKind.riser));
@@ -189,5 +206,136 @@ void main() {
     expect(withCv['fa']!.flow.inLitersPerSecond,
         isNot(closeTo(withCv['df']!.flow.inLitersPerSecond, 1e-6)));
     expect(withCv['bc']!.flowFromId, isNotNull);
+  });
+
+  // Round 26 r3 — a ring of [k] 2-UBAP fixture nodes r0..r(k-1) fed at F
+  // (F - r0 ... r(k-1) - F) with a drawn return X -> CV -> H. [teeAt] places
+  // X: a value i < k-1 inserts a BARE tee X between r_i and r_(i+1) (the
+  // junction the Run tool's tee-in creates); null tees the return straight
+  // from fixture r_[fixtureTee]. With [valve] false the CV is a plain node —
+  // the Hardy–Cross reference.
+  ({Network net, List<String> ring}) teeRing(int k,
+      {int? teeAt, int fixtureTee = 0, bool valve = true}) {
+    final nodes = <NetNode>[
+      _n('H', 0, 0, role: NodeRole.plant),
+      _n('F', 100, 0),
+      _n('CV', 150, -50, c: valve ? NodeComponent.checkValve : null),
+    ];
+    final ringIds = <String>[];
+    final edges = <NetEdge>[_e('hf', 'H', 'F')];
+    var prev = 'F';
+    for (var i = 0; i < k; i++) {
+      // A rectangle-ish loop: out along y = 100, back to y = 0 at the end.
+      final x = 100.0 + 100 * i;
+      nodes.add(_n('r$i', x, i == k - 1 ? 0 : 100, role: NodeRole.fixture));
+      final id = 'e$i';
+      edges.add(_e(id, prev, 'r$i'));
+      ringIds.add(id);
+      prev = 'r$i';
+      if (teeAt == i) {
+        nodes.add(_n('X', x + 50, 100));
+        edges.add(_e('ex', 'r$i', 'X'));
+        ringIds.add('ex');
+        prev = 'X';
+      }
+    }
+    edges.add(_e('ek', prev, 'F'));
+    ringIds.add('ek');
+    final tee = teeAt == null ? 'r$fixtureTee' : 'X';
+    edges
+      ..add(_e('xv', tee, 'CV'))
+      ..add(_e('vh', 'CV', 'H'));
+    return (net: Network(nodes: nodes, edges: edges), ring: ringIds);
+  }
+
+  test(
+      'ring main with a return teed from a BARE ring tee keeps Hardy–Cross '
+      '(probe topology)', () {
+    // H -> F, ring F-a-b-X-c-d-F, X bare between b and c, return X -> CV -> H
+    // (k = 4 fixtures, tee after the second). Reference (CV a plain node, the
+    // Hardy–Cross split at 0.01 m/px): fa 0.1249 / ab 0.0249 / bx 0.0751 /
+    // xc 0.0884 / cd 0.0116 / df 0.1116 — the valve used to collapse it to a
+    // hop-count tree (bx = xc = 0, flowFromId null): X is bare and off every
+    // hop-shortest path, so the walk from the valve deferred both ring
+    // segments as zero-draw-off 'returns'.
+    final withCv = teeRing(4, teeAt: 1);
+    final plain = teeRing(4, teeAt: 1, valve: false);
+    final s = sizeCal(withCv.net);
+    final p = sizeCal(plain.net);
+    for (final id in withCv.ring) {
+      expect(s[id]!.flow.inLitersPerSecond,
+          closeTo(p[id]!.flow.inLitersPerSecond, 1e-9),
+          reason: id);
+    }
+    // Both sides of the tee carry real flow (not deferred zero 'returns').
+    for (final id in ['ex', 'e2']) {
+      expect(s[id]!.flow.inLitersPerSecond, greaterThan(0.01), reason: id);
+      expect(s[id]!.flowFromId, isNotNull, reason: id);
+    }
+    // A valve that cuts no loop is solved as if it were not drawn (the
+    // Round-13 rule): the heater feed and the valve leg match too.
+    for (final id in ['hf', 'xv', 'vh']) {
+      expect(s[id]!.flow.inLitersPerSecond,
+          closeTo(p[id]!.flow.inLitersPerSecond, 1e-9),
+          reason: id);
+    }
+  });
+
+  test(
+      'property: a ring return teed anywhere (bare tee or fixture) keeps the '
+      'Hardy–Cross split; a hotel return teed anywhere keeps its tree cut '
+      '(seeded)', () {
+    final rnd = math.Random(263);
+    const sni = SniProfile();
+    for (var trial = 0; trial < 30; trial++) {
+      // Ring: 3..6 fixtures, tee placement drawn at random.
+      final k = 3 + rnd.nextInt(4);
+      final bare = rnd.nextBool();
+      final teeAt = bare ? rnd.nextInt(k - 1) : null;
+      final fixtureTee = rnd.nextInt(k);
+      final r = teeRing(k, teeAt: teeAt, fixtureTee: fixtureTee);
+      final ref =
+          teeRing(k, teeAt: teeAt, fixtureTee: fixtureTee, valve: false);
+      final s = sizeCal(Network(
+          nodes: r.net.nodes,
+          edges: [...r.net.edges]..shuffle(math.Random(trial))));
+      final p = sizeCal(ref.net);
+      final why = 'trial $trial k=$k teeAt=$teeAt fixtureTee=$fixtureTee';
+      for (final id in r.ring) {
+        expect(s[id]!.flow.inLitersPerSecond,
+            closeTo(p[id]!.flow.inLitersPerSecond, 1e-9),
+            reason: '$why $id');
+      }
+
+      // Hotel: 2..5 risers, each return top teed from the riser top or a
+      // bare tee on the top branch — the return is still a zero-draw-off
+      // tree and the supply sizes exactly as with no return drawn.
+      final n = 2 + rnd.nextInt(4);
+      final tees = {
+        for (var i = 0; i < n; i++)
+          if (rnd.nextBool()) i,
+      };
+      final open = _size(_hotel(risers: n, branchTee: tees));
+      final hotel = _hotel(risers: n, common: true, branchTee: tees);
+      final h = _size(Network(
+          nodes: hotel.nodes,
+          edges: [...hotel.edges]..shuffle(math.Random(100 + trial))));
+      final hwhy = 'trial $trial risers=$n tees=$tees';
+      expect(
+          h['hm']!.flow.inLitersPerSecond,
+          closeTo(
+              sni.probableFlowForFixtureUnits(8.0 * n).inLitersPerSecond, 1e-9),
+          reason: hwhy);
+      for (final id in open.keys) {
+        expect(h[id]!.flow.inLitersPerSecond,
+            closeTo(open[id]!.flow.inLitersPerSecond, 1e-9),
+            reason: '$hwhy $id');
+      }
+      for (var i = 0; i < n; i++) {
+        expect(h['top$i']!.flow.inLitersPerSecond, closeTo(0, 1e-12),
+            reason: '$hwhy top$i');
+      }
+      expect(h['ch']!.flow.inLitersPerSecond, closeTo(0, 1e-12), reason: hwhy);
+    }
   });
 }

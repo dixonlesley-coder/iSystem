@@ -1595,7 +1595,39 @@ Map<String, EdgeSizing> autoSizeNetwork(
           }
         }
       }
-      loadFreeSet = {...outfalls, ...fillLeaves, ...airIntakeLeaves};
+      // Round 26 r3 — a VENT leaf at the UPPER end of a vent riser, joined by
+      // nothing else (no tie, no drainage, no fitting, no explicit load), is
+      // an open VTR: air leaves the system there, no vent load enters. With
+      // two VTRs on one vent component (two stacks headered together) only
+      // one is the tree root; the other used to take the 2-DFU leaf default
+      // as a phantom load (a 8-DFU stack's header read 10 DFU, one DN up).
+      bool isOpenVtr(String n) {
+        if (n == root || degree(n) != 1 || explicitDemandKeys.contains(n)) {
+          return false;
+        }
+        final node = net.nodeById(n);
+        if (node == null ||
+            node.component != null ||
+            node.role != NodeRole.main) {
+          return false;
+        }
+        final e = net.edgeById(adjacency[n]!.first.edgeId);
+        if (e == null || e.kind != EdgeKind.riser) return false;
+        final o = net.nodeById(e.fromId == n ? e.toId : e.fromId);
+        return o != null && o.floorIndex < node.floorIndex;
+      }
+
+      final ventTerminals = <String>{
+        if (service == ServiceType.vent)
+          for (final n in component)
+            if (isOpenVtr(n)) n,
+      };
+      loadFreeSet = {
+        ...outfalls,
+        ...fillLeaves,
+        ...airIntakeLeaves,
+        ...ventTerminals,
+      };
 
       // ── Looped (ring/grid) PRESSURIZED or AIR component → Hardy–Cross ───────
       // A tree has (nodes − 1) edges; more means parallel paths whose flow split
@@ -1876,7 +1908,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // vertical stack now carries the stack's largest riser load; branch
         // (run) vents keep their own accumulated load.
         if (service == ServiceType.vent) {
-          edgeUnits = _uniformVentStacks(net, edgeUnits);
+          edgeUnits =
+              _uniformVentStacks(net, edgeUnits, edgeParent: edgeParents);
         }
         // water-drainage-7 — which edges carry a water closet: accumulate a
         // count of WC fixtures down the SAME tree (> 0 ⇒ the edge drains one).
@@ -2863,24 +2896,39 @@ _CheckValvePlan _classifyLoopCheckValves({
         for (final e in componentEdges)
           if (supplyEdges.contains(e.id)) ...[e.fromId, e.toId],
       };
+      //
+      // Round 26 r3 — the conservative variant: a return pipe ends where it
+      // meets the supply at a BARE node (the riser top beyond the last
+      // branch). When any return-walk edge lands on a DRAW-OFF node the
+      // "return" is a ring segment instead — a return teed from a bare ring
+      // tee X (b - X - c with draw-off at b and c, the junction the Run
+      // tool's tee-in creates) is topologically the same as the hotel return
+      // trees, and only the draw-off at its ends tells them apart. Such a
+      // walk extends nothing and the ring keeps the Hardy–Cross split.
       bool returnNode(String n) =>
           n != root && !supplyNodes.contains(n) && !isDemand(n);
       final returnSide = <String>{};
       final seenReturn = <String>{};
+      var meetsDrawOff = false;
       final walk = <String>[
         for (final c in cvs)
           if (returnNode(c.upNode)) c.upNode,
       ];
-      while (walk.isNotEmpty) {
+      while (walk.isNotEmpty && !meetsDrawOff) {
         final n = walk.removeLast();
         if (!seenReturn.add(n)) continue;
         for (final e in adj[n] ?? const <NetEdge>[]) {
           if (!candidates.contains(e.id)) continue;
-          returnSide.add(e.id);
           final m = other(e, n);
+          if (m != root && isDemand(m)) {
+            meetsDrawOff = true;
+            break;
+          }
+          returnSide.add(e.id);
           if (returnNode(m)) walk.add(m);
         }
       }
+      if (meetsDrawOff) returnSide.clear();
       final remaining = [
         for (final e in componentEdges)
           if (!cut.contains(e.id) && !returnSide.contains(e.id))
@@ -2976,8 +3024,9 @@ bool _isForest(List<(String, String)> edges) {
 /// uniform size, never reverse-tapered. Run (branch-vent) edges unchanged.
 Map<String, double> _uniformVentStacks(
   Network net,
-  Map<String, double> units,
-) {
+  Map<String, double> units, {
+  Map<String, String>? edgeParent,
+}) {
   final risers = [
     for (final id in units.keys)
       if (net.edgeById(id) case final e?
@@ -3098,10 +3147,9 @@ Map<String, double> _uniformVentStacks(
               !offsetLink(e.toId, e.fromId))
         e,
   ];
-  // A header endpoint RECEIVES the header when its stack continues above the
-  // junction (a riser of that group at or above the junction storey — the
-  // shared stub to the VTR); otherwise the header DRAINS that stack (the
-  // stack's top tied off sideways) and carries that stack's whole vent load,
+  // A header endpoint RECEIVES the header when the vent air enters its stack
+  // there (see [receives] below — the solved tree, r3); otherwise the header
+  // DRAINS that stack and carries that stack's whole vent load,
   // the figure its own VTR would carry, so it bounds that stack's uniform
   // size. Per receiving group: the lowest junction storey above its bottom,
   // and the header load entering there.
@@ -3111,6 +3159,25 @@ Map<String, double> _uniformVentStacks(
         final fa = floorOf(r.fromId), fb = floorOf(r.toId);
         return fa != null && fb != null && math.min(fa, fb) >= f;
       });
+  // Round 26 r3 — a riser continuing above the junction is not enough: a
+  // stack RECEIVES the header only when the vent air actually enters it
+  // there, i.e. the junction is the ROOT-SIDE end of the header in the solved
+  // vent tree ([edgeParent] — rooted at the highest vent node, the VTR the
+  // air leaves by). When the header is rooted at its OTHER end the stack's
+  // air leaves through the header: it is DRAINED, whatever is drawn above
+  // the junction — a dead STUB above a mid-storey header (tied off at the top
+  // floor, no VTR) vents nothing, and with VTRs on both stacks the one the
+  // tree does not root at is drained just the same. A drained stack is
+  // bounded by the header load (its whole vent load); the receiving one
+  // keeps its own load below the junction. A loop-CLOSING header (no tree
+  // parent) keeps the riser-only rule.
+  bool receives(NetEdge header, String j) {
+    final p = edgeParent?[header.id];
+    if (p != null) return p == j;
+    final f = floorOf(j);
+    return f != null && continuesAbove(riserGroupOf[j]!, f);
+  }
+
   final junctionFloor = <String, int>{};
   final headerLoadAt = <String, double>{};
   final drainedBound = <String, double>{}; // riser group -> header load
@@ -3119,7 +3186,7 @@ Map<String, double> _uniformVentStacks(
       final g = riserGroupOf[j]!;
       final f = floorOf(j);
       if (f == null) continue;
-      if (!continuesAbove(g, f)) {
+      if (!receives(e, j)) {
         drainedBound[g] = math.max(drainedBound[g] ?? 0, units[e.id]!);
         continue;
       }
