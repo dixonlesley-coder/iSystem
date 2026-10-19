@@ -158,6 +158,21 @@ class ElectricalCircuit {
   final bool phasesUserSet;
   final bool loadKindUserSet;
 
+  /// Round 24 — MIGRATION marker (never persisted as such): true when this
+  /// MEP-derived way ([sourceEquipmentId] set) was decoded from a file written
+  /// BEFORE the round-23 provenance flags existed (no [kMepProvenanceKey] in
+  /// its JSON). Pre-round-23 builds never re-derived a machine way's cos phi /
+  /// phases / load kind, so an unflagged value in such a file may be one the
+  /// engineer TYPED. The MEP sync resolves it on the first refresh: a value
+  /// that differs from the fresh mint is kept AND flagged user-set (golden
+  /// rule 7 — load old files tolerantly, migrate rather than break).
+  final bool legacyProvenance;
+
+  /// JSON key stamped on every MEP-derived way written by a build that
+  /// records provenance (round 24+). Its absence on an MEP way marks a legacy
+  /// (pre-flag) file ⇒ [legacyProvenance].
+  static const String kMepProvenanceKey = 'mepProvenance';
+
   const ElectricalCircuit({
     required this.id,
     required this.name,
@@ -188,6 +203,7 @@ class ElectricalCircuit {
     this.cosPhiUserSet = false,
     this.phasesUserSet = false,
     this.loadKindUserSet = false,
+    this.legacyProvenance = false,
   });
 
   /// True when this way is a feeder (explicit kind or it feeds a panel).
@@ -241,6 +257,7 @@ class ElectricalCircuit {
     bool? cosPhiUserSet,
     bool? phasesUserSet,
     bool? loadKindUserSet,
+    bool? legacyProvenance,
   }) =>
       ElectricalCircuit(
         id: id ?? this.id,
@@ -284,6 +301,7 @@ class ElectricalCircuit {
         cosPhiUserSet: cosPhiUserSet ?? this.cosPhiUserSet,
         phasesUserSet: phasesUserSet ?? this.phasesUserSet,
         loadKindUserSet: loadKindUserSet ?? this.loadKindUserSet,
+        legacyProvenance: legacyProvenance ?? this.legacyProvenance,
       );
 
   /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
@@ -321,6 +339,10 @@ class ElectricalCircuit {
         if (cosPhiUserSet) 'cosPhiUserSet': true,
         if (phasesUserSet) 'phasesUserSet': true,
         if (loadKindUserSet) 'loadKindUserSet': true,
+        // Round 24 — a provenance-aware MEP way says so; a legacy way that has
+        // not yet been resolved by a sync keeps its legacy status on re-save.
+        if (sourceEquipmentId != null && !legacyProvenance)
+          kMepProvenanceKey: 1,
       };
 
   /// Tolerant decode: unknown enum names fall back to the field default,
@@ -366,6 +388,8 @@ class ElectricalCircuit {
         cosPhiUserSet: json['cosPhiUserSet'] == true,
         phasesUserSet: json['phasesUserSet'] == true,
         loadKindUserSet: json['loadKindUserSet'] == true,
+        legacyProvenance: json['sourceEquipmentId'] is String &&
+            !json.containsKey(kMepProvenanceKey),
       );
 }
 

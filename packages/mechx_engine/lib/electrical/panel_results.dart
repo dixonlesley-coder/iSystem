@@ -182,6 +182,25 @@ class IncomerResult {
       breaker.ratingA.amperes + 1e-9 < sizingCurrent!.amperes;
 }
 
+/// Round 23 (elec-drafting-2-5) — the token every printed surface appends to
+/// an incomer whose largest standard frame still sits below its sizing
+/// current (the ladder saturated), so a saturated device is never printed
+/// silently (the Round-8 rule the genset ladder already follows).
+const String kIncomerOverRangeToken = 'OVER RANGE';
+
+/// Round 24 — the ONE suffix every printed incomer goes through (SLD schedule
+/// header + compact nodes, equipment schedule, calc report, plan export,
+/// canvas card): `' OVER RANGE (needs 4330A)'` for a saturated incomer
+/// ([IncomerResult.overRange]), `''` otherwise. [withNeeds] false drops the
+/// needed-current figure for space-limited labels.
+String incomerOverRangeSuffix(IncomerResult incomer, {bool withNeeds = true}) {
+  if (!incomer.overRange) return '';
+  if (!withNeeds) return ' $kIncomerOverRangeToken';
+  final a = incomer.sizingCurrent!.amperes;
+  final needs = a == a.roundToDouble() ? a.toInt().toString() : a.toStringAsFixed(1);
+  return ' $kIncomerOverRangeToken (needs ${needs}A)';
+}
+
 /// One busbar section a panel's ways are grouped onto (radially fed from the
 /// incomer, IEC 61439-1) — see `splitBusbarSections`.
 class BusbarSectionResult {

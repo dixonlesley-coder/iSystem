@@ -284,9 +284,17 @@ AdvancedStudy computeAdvancedStudy(
   // Origin / service-root panels — EVERY utility-fed root (Round 13: one
   // origin per service entrance, not just the first listed).
   final originPanelIds = originPanelIdsOf(sys, project);
-  // Feeder distance (m) from the origin SPD to each sub-board (the cumulative
-  // feeder-cable run on the path to the panel).
+  // Feeder distance (m) from the origin to each sub-board (the cumulative
+  // feeder-cable run on the path to the panel). Round 24 — the SPD rule reads
+  // the distance from the NEAREST upstream SPD instead (below).
   final feederDistanceM = _feederDistances(sys, project);
+  final parentOfPanel = <String, String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null) c.feedsPanelId!: p.id,
+  };
+  // Distance from the nearest upstream recommended SPD, root-first.
+  final spdDistanceM = <String, double>{};
 
   // 3+4 ── Per-panel passes.
   final arcFlash = <String, ArcFlashResult?>{};
@@ -341,11 +349,25 @@ AdvancedStudy computeAdvancedStudy(
     // Metering.
     metering[id] = meterFor(panelResult.meteringCurrent);
 
-    // SPD — origin board at the service entrance; sub-boards by feeder distance.
+    // SPD — origin board at the service entrance; sub-boards by the feeder
+    // distance from the NEAREST upstream SPD (Round 24 — a board below a
+    // sub-board that itself received a recommended SPD measures from THAT
+    // device, IEC 61643-12 / IEC 60364-5-534 protective distance).
     final atOrigin = originPanelIds.contains(id);
+    final parentId = parentOfPanel[id];
+    final double distFromSpd;
+    if (atOrigin || parentId == null) {
+      distFromSpd = 0;
+    } else {
+      final ownLeg = (feederDistanceM[id] ?? 0) - (feederDistanceM[parentId] ?? 0);
+      final parentProtected = spd[parentId]?.recommended ?? false;
+      distFromSpd = (parentProtected ? 0 : (spdDistanceM[parentId] ?? 0)) +
+          (ownLeg > 0 ? ownLeg : 0);
+    }
+    spdDistanceM[id] = distFromSpd;
     spd[id] = recommendSpd(
       atOrigin: atOrigin,
-      feederDistanceM: feederDistanceM[id] ?? 0,
+      feederDistanceM: distFromSpd,
       earthingSystem: sys.earthing.system.name,
       hasExternalLps: project.externalLps,
       overheadSupply: project.overheadSupply,

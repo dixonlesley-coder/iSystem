@@ -22,7 +22,13 @@ const double kDxfTargetExtent = 1684.0;
 /// DXF units (identical to the PDF flow).
 ///
 /// Throws if the file cannot be read or carries no drawable geometry.
-Future<List<Sheet>> importDxf(String filePath) async {
+///
+/// Round 24 — [onWarning] receives a human message when the plan imported but
+/// is INCOMPLETE (the parser's primitive / INSERT budget dropped geometry —
+/// [DxfDrawing.truncated]), so the caller can say so instead of presenting a
+/// silently partial plan.
+Future<List<Sheet>> importDxf(String filePath,
+    {void Function(String message)? onWarning}) async {
   final file = File(filePath);
   final basename = file.uri.pathSegments.last;
   final lower = basename.toLowerCase();
@@ -35,6 +41,13 @@ Future<List<Sheet>> importDxf(String filePath) async {
   if (drawing == null || drawing.isEmpty) {
     throw StateError('DXF "$basename" has no importable geometry.');
   }
+  // Round 24 — a zero-area / non-finite extent would import as a 1 x 1 px
+  // sheet that can never be seen or calibrated: refuse it honestly.
+  if (!drawing.bounds.isUsable) {
+    throw StateError('DXF "$basename" has no usable extent '
+        '(zero-size or non-finite coordinates).');
+  }
+  if (drawing.truncated) onWarning?.call(dxfTruncatedMessage(basename));
 
   return [
     Sheet(
@@ -43,6 +56,8 @@ Future<List<Sheet>> importDxf(String filePath) async {
       dxfPath: filePath,
       pageIndex: 0,
       sizePx: dxfContentSize(drawing.bounds),
+      // Round 24 — remember the world frame the content was normalised from.
+      dxfFrame: drawing.bounds,
     ),
   ];
 }
@@ -59,3 +74,15 @@ Size dxfContentSize(DxfBounds bounds) {
   final h = bounds.height * k;
   return Size(w > 1 ? w : 1, h > 1 ? h : 1);
 }
+
+/// Round 24 — the world bounds a DXF [sheet] maps world → content through:
+/// its import-time [Sheet.dxfFrame] when known (a plan revised in place keeps
+/// its registration), else the [live] drawing bounds (legacy sheets).
+DxfBounds dxfMappingBounds(Sheet sheet, DxfBounds live) =>
+    sheet.dxfFrame ?? live;
+
+/// Round 24 — the warning for a plan the DXF parser could only partly draw.
+String dxfTruncatedMessage(String fileName) =>
+    'Plan "$fileName" is very large: only part of its geometry is drawn '
+    '(furniture / block-heavy file). Purge or explode blocks in CAD, or '
+    'export the plan layers only, then re-import.';

@@ -375,6 +375,10 @@ List<BomLine> _panelLines(
     var desc = description;
     if (subst != null) desc = withNote(desc, subst);
     if (short) desc = withNote(desc, ' (no catalogue part reaches$kaTag)');
+    // Round 24 — an UNMATCHED device names its specified kA in the line
+    // itself, so two non-catalogue breakers differing only in breaking
+    // capacity stay two orderable lines (and the BOM reader sees the kA).
+    if (part == null && kaTag.isNotEmpty) desc = withNote(desc, kaTag);
     return BomLine(
       description: desc,
       qty: 1,
@@ -743,8 +747,12 @@ List<BomLine> _consolidate(List<BomLine> lines) {
     // prospective fault keys apart (`::kA-short::<desc>`, the desc carrying
     // the kA it misses), so consolidation can never
     // fold the shortfall into an adequate line and drop the flag.
+    // Round 24 — a sku-less line also keys on its PRICE KEY: the price key
+    // carries what the description may not (an unmatched breaker's poles /
+    // kA), so two devices that price differently never merge onto the first
+    // line's key (an under-rated breaker could otherwise reach procurement).
     final key = line.sku == null
-        ? '${line.category.name}::$desc'
+        ? '${line.category.name}::${line.priceKey ?? ''}::$desc'
         : line.category == PartCategory.cable
             ? '${line.sku}::$desc'
             : line.breakingCapacityShort

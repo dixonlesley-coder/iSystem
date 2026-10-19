@@ -602,6 +602,18 @@ class PlanLabelLayout {
   /// Number of labels placed so far.
   int get labelCount => _labels.length;
 
+  int _unresolved = 0;
+
+  /// Round 24 — how many annotations were committed to a slot that STILL
+  /// overprints something (a label / mark / run) because no clear slot
+  /// existed: the placer never drops a tag, but it must not stay silent
+  /// either — the exporters print this as a warning on the sheet.
+  int get unresolvedCount => _unresolved;
+
+  /// Record one annotation committed to an overlapping slot (a caller's own
+  /// fallback, e.g. the UP/DN stack or a tie figure's historic slot).
+  void markUnresolved() => _unresolved++;
+
   /// True when [b] overlaps an occupied box or a placed label's oriented
   /// rectangle — for a caller's own (axis-aligned) marks to dodge the labels.
   bool hitsBox(LabelBox b) {
@@ -1196,9 +1208,12 @@ LeaderedLabelPlacement placePlanLabel({
     final (cx, cy) = along.first;
     final b = block(escapeForms.first, cx, cy, 1, du + lh);
     final (ex, ey) = world(cx, cy, 0, b.v0 - 0.15 * ts);
+    if (hitsPlaced(b.padded) || runHits(b) > 0) layout._unresolved++;
     return commit(b,
         anchor: anchorPoint ?? (x: cx, y: cy), end: (x: ex, y: ey));
   }
+  // Round 24 — tier 3 is the least-bad OVERPRINT: count it (never silent).
+  if (bestScore.$1 == 3) layout._unresolved++;
   return commit(best, anchor: bestA, end: bestE);
 }
 

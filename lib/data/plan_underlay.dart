@@ -58,6 +58,8 @@ Future<PlanUnderlay?> buildPlanUnderlay(Sheet sheet) async {
         drawing: drawing,
         sheetWidthPx: sheet.sizePx.width,
         sheetHeightPx: sheet.sizePx.height,
+        // Round 24 — the export underlay maps through the import frame too.
+        frame: sheet.dxfFrame,
       );
     }
     final pdfPath = sheet.pdfPath;

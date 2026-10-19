@@ -54,6 +54,8 @@ import 'sld_sheet.dart';
 // SldLabel / SldCircle / SldLegendEntry / SldWeight / SldRole) now live in the
 // discipline-neutral `sld_sheet.dart`; re-exported so existing importers of this
 // file (the PDF/DXF exporters, the canvas painter) keep their single import.
+export '../electrical/panel_results.dart'
+    show kIncomerOverRangeToken, incomerOverRangeSuffix;
 export 'sld_sheet.dart';
 
 // ── Block geometry (drawing units) ───────────────────────────────────────────
@@ -517,7 +519,7 @@ SldSheet buildElectricalSld({
         blockX + 8,
         blockY + 32,
         'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix'
-        '${p.incomer.overRange ? ' $kIncomerOverRangeToken (needs ${_num(p.incomer.sizingCurrent!.amperes)}A)' : ''}  '
+        '${incomerOverRangeSuffix(p.incomer)}  '
         '${p.system.label}  ${_num(v)}V  '
         'Cu bus ${_num(p.busbar.csaMm2)}mm2$icw  '
         'demand ${_boardDemandCurrent(p)}',
@@ -1247,7 +1249,7 @@ bool _parentIsThreePhase(
 String _compactNodeSubLine(ElectricalPanelResult p, {ElectricalPanel? model}) {
   // Round 23 (elec-drafting-2-5) — a saturated incomer says so on the node.
   final head = '${_num(p.incomer.breaker.ratingA.amperes)}A '
-      '${p.incomer.poles}P${p.incomer.overRange ? ' $kIncomerOverRangeToken' : ''}';
+      '${p.incomer.poles}P${incomerOverRangeSuffix(p.incomer, withNeeds: false)}';
   // Round 23 (elec-drafting-2-7) — a capacitor-only board carries no real
   // power (Round 11): print its bank rating, never '0kW / 0kVA'. The bank's
   // kvar is the MODEL way's rating (the solved way carries 0 W by design).
@@ -1262,11 +1264,6 @@ String _compactNodeSubLine(ElectricalPanelResult p, {ElectricalPanel? model}) {
       '${_num(p.demandVaOrEstimate(fallbackPf: _assumedPanelPf) / 1000)}kVA';
 }
 
-/// Round 23 (elec-drafting-2-5) — the token every printed surface appends to
-/// an incomer whose largest standard frame still sits below its sizing
-/// current (the ladder saturated), so a saturated device is never printed
-/// silently (the Round-8 rule the genset ladder already follows).
-const String kIncomerOverRangeToken = 'OVER RANGE';
 
 /// Parent-of map over the feeder graph (childPanelId -> parentPanelId), limited
 /// to children that have a result. Shared by the overview + riser layouts.

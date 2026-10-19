@@ -51,6 +51,13 @@ int rcdTypeRank(RcdType t) => switch (t) {
       RcdType.b => 3,
     };
 
+String _rcdTypeCode(RcdType t) => switch (t) {
+      RcdType.ac => 'AC',
+      RcdType.a => 'A',
+      RcdType.f => 'F',
+      RcdType.b => 'B',
+    };
+
 /// Recommend the minimum-suitable RCD *type* from the load's nature. Never
 /// returns [RcdType.ac] (deprecated for general use). The mA sensitivity is set
 /// separately by [circuitRcd].
@@ -238,13 +245,40 @@ GroundingResult sizeGrounding(
   );
 }
 
+/// Round 24 — a TN service's main earthing conductor (mm²): the service PE
+/// summed over its parallel runs (`supplyPeMm2 × runsPerPhase`), floored at
+/// 16 mm² and snapped up the standard section ladder (an equivalent section
+/// above the ladder's top is returned as-is). See [computeEarthing].
+double tnMainEarthingConductorMm2(
+  ElectricalStandardsProfile profile,
+  double supplyPeMm2, {
+  int runsPerPhase = 1,
+}) {
+  final total = supplyPeMm2 * (runsPerPhase < 1 ? 1 : runsPerPhase);
+  final target = total > 16 ? total : 16.0;
+  for (final s in profile.standardSectionsMm2) {
+    if (s >= target - 1e-9) return s;
+  }
+  return target;
+}
+
 /// Design the installation earthing system: RCD policy, main earthing + bonding
 /// conductors and the electrode-resistance target. (Electrode rod-array design
 /// to reach the target is an A8 refinement.)
+///
+/// Round 24 — the main EARTHING conductor on a TN service follows the
+/// service's protective conductor (IEC 60364-5-54 §542.3.1 → §543.1, Table
+/// 54.7: the whole PE of the service cable — [supplyPeMm2] per run ×
+/// [runsPerPhase] parallel runs), floored at 16 mm², snapped up the standard
+/// section ladder, NEVER capped at 50 mm² (the earth-fault current of a
+/// TN-C-S service returns through it). The 16..50 clamp
+/// ([ElectricalStandardsProfile.mainEarthingConductorMm2]) is kept for the
+/// TT electrode conductor only. // VERIFY (secondarySource)
 EarthingResult computeEarthing(
   ElectricalStandardsProfile profile, {
   required EarthingSystem system,
   required double supplyPeMm2,
+  int runsPerPhase = 1,
 }) {
   final requiresRcd = system == EarthingSystem.tt;
   final tail = requiresRcd
@@ -256,14 +290,46 @@ EarthingResult computeEarthing(
     system: system,
     label: system.label,
     requiresRcd: requiresRcd,
-    mainEarthingConductorMm2: profile.mainEarthingConductorMm2(supplyPeMm2),
+    mainEarthingConductorMm2: system == EarthingSystem.tt
+        ? profile.mainEarthingConductorMm2(supplyPeMm2)
+        : tnMainEarthingConductorMm2(profile, supplyPeMm2,
+            runsPerPhase: runsPerPhase),
     mainBondingConductorMm2: profile.mainBondingConductorMm2(supplyPeMm2),
     electrodeResistanceTarget: profile.maxEarthResistance.value,
     note: system.note + tail,
   );
 }
 
+/// Round 24 — the TT feeder RCD sensitivity ladder (mA): a feeder with NO
+/// RCD-bearing feeder below it sits at 300 mA (≥ 3 × the 30 / 100 mA finals);
+/// each further RCD feeder level below steps it up the standard IΔn series
+/// (300 → 1000 → 3000 → 10000 mA) so the upstream device keeps the ≥ 3 × IΔn
+/// ratio of IEC 60364-5-53 §535.3 discrimination. // VERIFY
+int ttFeederRcdMa(int rcdFeederLevelsBelow) {
+  const ladder = [300, 1000, 3000, 10000];
+  return ladder[rcdFeederLevelsBelow.clamp(0, ladder.length - 1)];
+}
+
+/// Round 24 — the TOPOLOGY a TT feeder's RCD must respect, derived bottom-up
+/// over the board it feeds by `computeSystem`:
+///   * [downstreamType] — the highest RCD type anywhere in the fed sub-tree
+///     (B > F > A > AC): a Type A device upstream of a Type B load is blinded
+///     by smooth DC residual current (IEC 60364-5-53 §531.3.3), so the feeder
+///     takes at least that type;
+///   * [rcdFeederLevelsBelow] — how many RCD-bearing feeder levels sit below
+///     it (the sensitivity ladder [ttFeederRcdMa]);
+///   * [lifeSafetyOnly] — every load way in the sub-tree is life-safety: a
+///     tripping RCD on the feeder would defeat their deliberate RCD omission
+///     (a fire pump must not stop on an earth fault).
+typedef TtFeederRcdBasis = ({
+  RcdType? downstreamType,
+  int rcdFeederLevelsBelow,
+  bool lifeSafetyOnly,
+});
+
 /// Decide whether a circuit needs an RCD, at what sensitivity, and which type.
+/// [ttFeeder] (a TT feeder only) carries the fed sub-tree's topology — see
+/// [TtFeederRcdBasis]; null ⇒ the single-level 300 mA rule (byte-identical).
 RcdSpec circuitRcd({
   required EarthingSystem earthingSystem,
   required LoadKind loadKind,
@@ -271,6 +337,7 @@ RcdSpec circuitRcd({
   required Current designCurrent,
   bool lifeSafety = false,
   bool hasVfd = false,
+  TtFeederRcdBasis? ttFeeder,
 }) {
   RcdType rcdType() =>
       recommendedRcdType(loadKind, hasVfd: hasVfd, isEvCharger: loadKind == LoadKind.evCharger)
@@ -279,6 +346,22 @@ RcdSpec circuitRcd({
   // A spare way has no load and no cable run — nothing to protect.
   if (loadKind == LoadKind.spare) {
     return const RcdSpec(required: false, ratingMa: 0, reason: '');
+  }
+  // Round 24 — a TT feeder whose whole sub-tree is life-safety takes no
+  // tripping RCD either: it would stop the fire pump the downstream omission
+  // protects. An RCM (residual-current MONITOR, alarm only) keeps the earth
+  // fault visible without a trip.
+  if (!lifeSafety &&
+      !isFinalCircuit &&
+      earthingSystem == EarthingSystem.tt &&
+      (ttFeeder?.lifeSafetyOnly ?? false)) {
+    return const RcdSpec(
+      required: false,
+      ratingMa: 0,
+      reason: 'Feeder to a life-safety-only board — no tripping RCD (it would '
+          'stop the fire pump on an earth fault); fit an RCM (residual-current '
+          'monitor, alarm only). // VERIFY',
+    );
   }
   // Life-safety: an earth-fault trip must not stop a fire pump mid-fire.
   if (lifeSafety) {
@@ -303,14 +386,33 @@ RcdSpec circuitRcd({
   // (S-type) 300 mA RCD provides it while discriminating above the 30/100 mA
   // RCDs on the downstream finals.
   if (earthingSystem == EarthingSystem.tt) {
+    // Round 24 — at least the highest type downstream (a Type A device above
+    // a Type B load is blinded by smooth DC), and a sensitivity that keeps
+    // the ≥ 3 × IΔn ratio above every RCD feeder below it.
+    final own = rcdType();
+    final down = ttFeeder?.downstreamType;
+    final raised = down != null && rcdTypeRank(down) > rcdTypeRank(own);
+    final type = raised ? down : own;
+    final levels = ttFeeder?.rcdFeederLevelsBelow ?? 0;
+    final ma = ttFeederRcdMa(levels);
+    final typeNote = raised
+        ? ' Type ${_rcdTypeCode(type)}: a Type ${_rcdTypeCode(type)} device '
+            'downstream (EV / VFD) — a lower type here would be blinded by its '
+            'smooth DC residual current.'
+        : '';
+    final reason = levels == 0
+        ? 'TT feeder — time-delayed (S-type) RCD for earth-fault protection, '
+            'selective above the downstream final RCDs (no ADS on the TT loop). '
+            '// VERIFY'
+        : 'TT feeder — time-delayed RCD at $ma mA, ≥ 3 × the '
+            '${ttFeederRcdMa(levels - 1)} mA time-delayed feeder RCD below it '
+            'and set to a LONGER delay than it (IEC 60364-5-53 §535.3 '
+            'discrimination; no ADS on the TT loop). // VERIFY';
     return RcdSpec(
       required: true,
-      ratingMa: 300,
-      reason:
-          'TT feeder — time-delayed (S-type) RCD for earth-fault protection, '
-          'selective above the downstream final RCDs (no ADS on the TT loop). '
-          '// VERIFY',
-      type: rcdType(),
+      ratingMa: ma,
+      reason: reason + typeNote,
+      type: type,
       timeDelayed: true,
     );
   }

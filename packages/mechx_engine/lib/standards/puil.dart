@@ -46,7 +46,7 @@ enum RefMethod { b1, c, e, d }
 /// Trip curve (IEC 60898): B resistive/lighting, C general, D high-inrush.
 enum BreakerCurve { b, c, d }
 
-/// Breaker frame class — ≤63 A is an MCB, above it an MCCB.
+/// Breaker frame class — ≤63 A is an MCB, ≤1600 A an MCCB, above that an ACB.
 enum BreakerClass { mcb, mccb, acb }
 
 /// Round 23 (elec-drafting-2-5) — the schedule / BOM class code of a breaker
@@ -181,7 +181,10 @@ abstract interface class ElectricalStandardsProfile {
   /// Neutral conductor section (mm²); [reduced] halves above 16 mm².
   double neutralConductorSizeMm2(double phaseCsaMm2, {bool reduced});
 
-  /// Main earthing conductor (mm²): clamp(phasePE, 16..50).
+  /// Main earthing conductor (mm²) of a TT installation's electrode
+  /// conductor: clamp(phasePE, 16..50). A TN service's main earthing
+  /// conductor follows the service PE uncapped (`tnMainEarthingConductorMm2`
+  /// in `earthing.dart`, Round 24).
   double mainEarthingConductorMm2(double supplyPeMm2);
 
   /// Main protective-bonding conductor (mm²): max(6, PE/2), capped at 25.

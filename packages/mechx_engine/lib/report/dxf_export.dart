@@ -481,6 +481,10 @@ String _professionalDxf({
   g(70, 4); // 4 = millimetres
   g(9, r'$MEASUREMENT');
   g(70, 1); // 1 = metric
+  // Round 24 — the model is real-world millimetres, so the LTYPE dashes must
+  // be scaled to plot at the PDF's paper dash (PDF == DXF linetype parity).
+  g(9, r'$LTSCALE');
+  g(40, dxfLtScaleFor(u).toStringAsFixed(4));
   g(0, 'ENDSEC');
 
   // ── TABLES: LTYPE + one LAYER per present service + ANNO/FRAME (+ chrome) ──
@@ -548,7 +552,19 @@ String _professionalDxf({
     edgeElevationLabels: edgeElevationLabels,
     gravitySlope: gravitySlope,
   );
+  // Round 24 — a sized duct is drawn TRUE-WIDTH (its real W / Ø in model
+  // mm, double line) when that width reaches kPlanDuctDoubleLineMinMm on
+  // paper at the plotted scale — the same rule as the plan PDF.
+  final ductHalfMm = <String, double>{};
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    final w = planDuctWidthM(sizing[e.id]);
+    if (w == null) continue;
+    final mm = w * 1000;
+    if (mm / u >= kPlanDuctDoubleLineMinMm) ductHalfMm[e.id] = mm / 2;
+  }
   final ann = layoutPlanAnnotations(
+    runHalfWidths: ductHalfMm,
     net: net,
     sheetId: sheetId,
     floorIndex: floorIndex,
@@ -666,15 +682,30 @@ String _professionalDxf({
       final ax = a.x * mmPerPx, ay = -a.y * mmPerPx;
       final cx = c.x * mmPerPx, cy = -c.y * mmPerPx;
       final s = sizing[e.id];
-      g(0, 'LINE');
-      g(8, dxfLayerNameFor(e.service));
-      g(6, dxfLinetypeFor(e.service));
-      // A6 lineweight bands for sized runs (unsized keep the layer default).
-      if (s != null) g(370, kDxfLineweights[_strokeBand(s)]);
-      g(10, ax);
-      g(20, ay);
-      g(11, cx);
-      g(21, cy);
+      final half = ductHalfMm[e.id];
+      if (half != null) {
+        // Round 24 — true-width double-line duct (outline at ±W/2, real mm).
+        for (final o in planDoubleLineOutline(ax, ay, cx, cy, half)) {
+          g(0, 'LINE');
+          g(8, dxfLayerNameFor(e.service));
+          g(6, dxfLinetypeFor(e.service));
+          g(370, kDxfLineweights[0]);
+          g(10, o.x1);
+          g(20, o.y1);
+          g(11, o.x2);
+          g(21, o.y2);
+        }
+      } else {
+        g(0, 'LINE');
+        g(8, dxfLayerNameFor(e.service));
+        g(6, dxfLinetypeFor(e.service));
+        // A6 lineweight bands for sized runs (unsized keep the layer default).
+        if (s != null) g(370, kDxfLineweights[_strokeBand(s)]);
+        g(10, ax);
+        g(20, ay);
+        g(11, cx);
+        g(21, cy);
+      }
       // A5 flow arrow on a sized, oriented, long-enough run.
       if (s != null && s.flowFromId != null) {
         final len = math.sqrt((cx - ax) * (cx - ax) + (cy - ay) * (cy - ay));
@@ -781,6 +812,18 @@ String _professionalDxf({
       g(11, end.x);
       g(21, end.y);
     }
+  }
+
+  // Round 24 — the overlap warning (same text as the PDF), above the extent.
+  final overlapNote = planOverlapWarning(ann.overlapCount);
+  if (overlapNote != null) {
+    g(0, 'TEXT');
+    g(8, kDxfLayerAnno);
+    g(62, 1);
+    g(10, minX);
+    g(20, maxY + 2 * textH);
+    g(40, textH);
+    g(1, overlapNote);
   }
 
   // ── Issuable-document chrome (opt-in), anchored to the mm extent ────────────

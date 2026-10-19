@@ -2825,13 +2825,23 @@ Future<void> _applyScaleToAllSheets(
     status('All other sheets already use this scale');
     return;
   }
+  // Round 24 — transferred per sheet type: DXF sheets are rescaled by their
+  // own import frames, a PDF <-> DXF copy is skipped (and said so).
+  final skipped = <String>{};
   final n = ref
       .read(projectControllerProvider.notifier)
       .applyCalibrationToAllSheets(
         fromSheetId,
         toSheetIds: {fromSheetId, ...targets},
+        sheets: {
+          for (final s in ref.read(sheetsControllerProvider).sheets) s.id: s,
+        },
+        skippedOut: skipped,
       );
-  status('Scale applied to $n ${n == 1 ? 'sheet' : 'sheets'}');
+  final m = skipped.length;
+  status('Scale applied to $n ${n == 1 ? 'sheet' : 'sheets'}'
+      '${m == 0 ? '' : '; $m skipped (different plan type - calibrate '
+          '${m == 1 ? 'it' : 'them'} separately)'}');
 }
 
 /// Ask before overwriting [count] sheets that carry their own different scale

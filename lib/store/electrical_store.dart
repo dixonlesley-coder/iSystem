@@ -2543,13 +2543,29 @@ ElectricalCircuit _refreshedMepWay(
   // cos phi / phase count / load kind the engineer TYPED (`*UserSet`) is
   // never overwritten by the re-derivation.
   final mintedName = mepMintedCircuitNames.contains(c.name);
+  // Round 24 — MIGRATION of a pre-flag (legacy) file: those builds never
+  // re-derived cos phi / phases / load kind, so an unflagged value that
+  // differs from the fresh mint may have been TYPED. Keep it and record the
+  // provenance (flag it user-set) instead of silently reverting it.
+  final legacy = c.legacyProvenance;
+  final cosUser = c.cosPhiUserSet ||
+      (legacy && (c.cosPhi - fresh.cosPhi).abs() > 1e-9);
+  final phasesUser = c.phasesUserSet || (legacy && c.phases != fresh.phases);
+  final kindUser =
+      c.loadKindUserSet || (legacy && c.loadKind != fresh.loadKind);
+  final demandUser = c.demandFactorUserSet || (legacy && !mintedDemand);
   return c.copyWith(
     name: mintedName ? fresh.name : null,
-    phases: c.phasesUserSet ? null : fresh.phases,
-    clearPhases: !c.phasesUserSet && fresh.phases == null,
-    loadKind: c.loadKindUserSet ? null : fresh.loadKind,
-    cosPhi: c.cosPhiUserSet ? null : fresh.cosPhi,
+    phases: phasesUser ? null : fresh.phases,
+    clearPhases: !phasesUser && fresh.phases == null,
+    loadKind: kindUser ? null : fresh.loadKind,
+    cosPhi: cosUser ? null : fresh.cosPhi,
     demandFactor: mintedDemand ? fresh.demandFactor : null,
+    cosPhiUserSet: cosUser,
+    phasesUserSet: phasesUser,
+    loadKindUserSet: kindUser,
+    demandFactorUserSet: demandUser,
+    legacyProvenance: false,
     loadW: fresh.loadW,
     motorKw: fresh.motorKw,
     flaOverrideA: fresh.flaOverrideA,

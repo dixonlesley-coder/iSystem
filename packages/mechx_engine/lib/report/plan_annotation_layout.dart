@@ -22,6 +22,7 @@ library;
 import 'dart:math' as math;
 
 import '../network/network.dart';
+import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../units.dart' show Length;
 import 'drawing_chrome.dart' show LabelBox, kMinPlotTextMm;
 import 'plan_symbols.dart';
@@ -143,12 +144,55 @@ class PlanAnnotations {
   final List<PlanUpDownMark> upDown;
   final List<PlanTieDimension> ties;
   final List<PlanPlacedLabel> labels;
+
+  /// Round 24 — annotations that could only be placed OVERPRINTING something
+  /// (the density limit of the sheet: no clear slot existed). The exporters
+  /// print [planOverlapWarning] on the sheet when this is non-zero, so an
+  /// illegible sheet is never issued as if it were clean.
+  final int overlapCount;
   const PlanAnnotations(
       {this.grid = const [],
       this.upDown = const [],
       this.ties = const [],
-      this.labels = const []});
+      this.labels = const [],
+      this.overlapCount = 0});
 }
+
+/// Round 24 — the minimum PAPER width (mm) at which a sized duct is drawn
+/// true-width double-line; narrower it keeps the single band-stroke centre
+/// line (two lines closer than ~1 mm on paper fuse into one heavy stroke).
+const double kPlanDuctDoubleLineMinMm = 1.0;
+
+/// Round 24 — the true PLAN width of a sized AIR run in metres (a rectangular
+/// duct's W, a round duct's Ø); null for a pipe or an unsized edge. Pure; the
+/// ONE source both plan exporters draw the double-line duct from.
+double? planDuctWidthM(EdgeSizing? s) {
+  if (s == null || !s.service.isAir) return null;
+  final w = s.isRectangular ? s.width!.meters : s.diameter.meters;
+  return w > 0 && w.isFinite ? w : null;
+}
+
+/// Round 24 — the two outline lines of a true-width run (a→b) offset ±[half]
+/// perpendicular to it, in the caller's output space. Pure.
+List<LabelSegment> planDoubleLineOutline(
+    double ax, double ay, double bx, double by, double half) {
+  final dx = bx - ax, dy = by - ay;
+  final len = math.sqrt(dx * dx + dy * dy);
+  if (len <= 0 || !(half > 0)) return const [];
+  final nx = -dy / len * half, ny = dx / len * half;
+  return [
+    (x1: ax + nx, y1: ay + ny, x2: bx + nx, y2: by + ny),
+    (x1: ax - nx, y1: ay - ny, x2: bx - nx, y2: by - ny),
+  ];
+}
+
+/// Round 24 — the on-sheet warning a plan exporter prints when [overlapCount]
+/// annotations could not be placed clear (null when there are none). One
+/// text for the PDF and the DXF (bilingual — the issued set is Indonesian).
+String? planOverlapWarning(int overlapCount) => overlapCount <= 0
+    ? null
+    : 'PERHATIAN: $overlapCount label bertumpuk / labels overlap - '
+        'cetak skala lebih besar, kertas lebih besar, atau pecah lembar';
 
 /// A label to place for an edge: the one-line [text] + the optional two-line
 /// [split] form (both from the shared composers).
@@ -218,6 +262,8 @@ Map<String, PlanEdgeLabelText> composePlanEdgeLabels({
 /// extent the axes span) the setting-out grid is laid out, and with a real
 /// [metersPerPixel] too the per-riser tie dimensions. [occupied] seeds hard
 /// no-go boxes in output units (a PDF's frame strips + title block).
+/// [runHalfWidths] (edge id → half the drawn width in output units) registers
+/// a true-width duct's double-line outline as linework (Round 24).
 ///
 /// Order (greedy, deterministic): hard marks first (runs, glyphs, grid, riser
 /// markers), then the UP/DN marks (each tries the four quadrants about its
@@ -236,6 +282,7 @@ PlanAnnotations layoutPlanAnnotations({
   ({double minX, double minY, double maxX, double maxY})? gridExtentPx,
   double? metersPerPixel,
   List<LabelBox> occupied = const [],
+  Map<String, double> runHalfWidths = const {},
 }) {
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
   final u = unitsPerMm;
@@ -250,6 +297,14 @@ PlanAnnotations layoutPlanAnnotations({
     if (a == null || c == null || !onFloor(a) || !onFloor(c)) continue;
     final pa = map(a.x, a.y), pc = map(c.x, c.y);
     layout.addRun(e.id, pa.x, pa.y, pc.x, pc.y);
+    // Round 24 — a true-width (double-line) duct's two outline lines are
+    // linework other tags must clear (its own tag may sit between them).
+    final hw = runHalfWidths[e.id];
+    if (hw != null && hw > 0) {
+      for (final o in planDoubleLineOutline(pa.x, pa.y, pc.x, pc.y, hw)) {
+        layout.addRun(e.id, o.x1, o.y1, o.x2, o.y2);
+      }
+    }
   }
   for (final n in net.nodes) {
     if (!onFloor(n)) continue;
@@ -362,6 +417,8 @@ PlanAnnotations layoutPlanAnnotations({
           if (!layout.hitsBox(boxAt(x, y))) break;
           y -= 1.3 * ts;
         }
+        // Round 24 — still colliding after the stack: counted, not silent.
+        if (layout.hitsBox(boxAt(x, y))) layout.markUnresolved();
         pick = (x, y);
       }
       final (x, y) = pick;
@@ -462,6 +519,10 @@ PlanAnnotations layoutPlanAnnotations({
             }
           }
         }
+      }
+      if (cx == null) {
+        // Round 24 — the historic slot is kept, but it overlaps: counted.
+        if (blocked(fx!, fy!)) layout.markUnresolved();
       }
       cx ??= fx!;
       cy ??= fy!;
@@ -570,5 +631,9 @@ PlanAnnotations layoutPlanAnnotations({
   }
 
   return PlanAnnotations(
-      grid: gridMarks, upDown: upDown, ties: ties, labels: labels);
+      grid: gridMarks,
+      upDown: upDown,
+      ties: ties,
+      labels: labels,
+      overlapCount: layout.unresolvedCount);
 }
