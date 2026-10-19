@@ -36,6 +36,7 @@ import 'drawing_chrome.dart'
         serviceAciColorFor,
         wrapTitleLines;
 import 'electrical_sld_drawing.dart';
+import 'plan_annotation_layout.dart' show planOverlapWarning;
 import 'riser_tags.dart' show riserServiceCode;
 import 'sld_plot_fit.dart';
 
@@ -352,6 +353,15 @@ String electricalSldToDxf({
       case SldCircle():
         d.circle(shapeLayer(p.role), p.cx, p.cy, p.r, color: colorFor(p.role));
     }
+  }
+
+  // Round 29 (drawings-3-1) — the overlap warning above the drawing when the
+  // builder could only place some tags fused into others.
+  final overlapNote = planOverlapWarning(sheetResolved.overlapCount);
+  if (overlapNote != null) {
+    d.text(layers.frame, sheetResolved.minX, sheetResolved.minY - 16,
+        overlapNote,
+        size: 8);
   }
 
   // ── Model-space title block + legend, laid out below the drawing ────────────

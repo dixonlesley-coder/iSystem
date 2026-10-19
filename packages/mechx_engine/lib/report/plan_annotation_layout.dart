@@ -579,7 +579,9 @@ PlanAnnotations layoutPlanAnnotations({
             splitLines: l.split,
             textSize: ts,
             layout: layout,
-            ownRunId: e.id),
+            ownRunId: e.id,
+            // Round 29 (drawings-3-3) — clear the duct's own outline.
+            ownHalfWidth: runHalfWidths[e.id] ?? 0),
         ts));
   }
   // A point feature's tag: a short pseudo-run just right of the feature,

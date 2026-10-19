@@ -846,6 +846,7 @@ LeaderedLabelPlacement placePlanLabel({
   ({double x, double y})? anchorPoint,
   List<({double x, double y})> extraStations = const [],
   bool beyondEnds = true,
+  double ownHalfWidth = 0,
 }) {
   final dx = bx - ax, dy = by - ay;
   var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
@@ -995,7 +996,11 @@ LeaderedLabelPlacement placePlanLabel({
     );
   }
 
-  final du = 0.7 * ts; // the standard beside-the-run offset
+  // The standard beside-the-run offset, measured from the run's DRAWN edge:
+  // Round 29 (drawings-3-3) — a true-width (double-line) duct's tag clears
+  // its own outline ([ownHalfWidth] = the paper half-width; 0 for a
+  // single-line run ⇒ byte-identical), never printing along the duct edge.
+  final du = 0.7 * ts + (ownHalfWidth > 0 ? ownHalfWidth : 0);
   final along = [
     for (final t in _kAlongStations) (ax + dx * t, ay + dy * t),
     for (final p in extraStations) (p.x, p.y),
@@ -1090,6 +1095,7 @@ LeaderedLabelPlacement placePlanLabel({
   final hardCap = kPlanLeaderHardMaxFactor * ts;
   _Block? best;
   ({double x, double y})? bestA, bestE;
+  var bestLeaderStrikesLabel = false;
   // Lexicographic score: (tier, crossings, grid hits, overprint, leader).
   var bestScore = (9, 1 << 30, 1 << 30, double.infinity, double.infinity);
   bool better((int, int, int, double, double) s) {
@@ -1175,8 +1181,12 @@ LeaderedLabelPlacement placePlanLabel({
           }
         }
         final leaderSeg = [(sx, sy), (ex, ey)];
+        var labelCrossings = 0;
         for (final l in layout._labels) {
-          if (_quadsOverlap(l, leaderSeg)) crossings++;
+          if (_quadsOverlap(l, leaderSeg)) {
+            crossings++;
+            labelCrossings++;
+          }
         }
         for (final o in layout.boxes) {
           final lb = _quadBounds(leaderSeg);
@@ -1199,6 +1209,7 @@ LeaderedLabelPlacement placePlanLabel({
           best = b;
           bestA = (x: sx, y: sy);
           bestE = (x: ex, y: ey);
+          bestLeaderStrikesLabel = labelCrossings > 0;
         }
       }
     }
@@ -1213,7 +1224,11 @@ LeaderedLabelPlacement placePlanLabel({
         anchor: anchorPoint ?? (x: cx, y: cy), end: (x: ex, y: ey));
   }
   // Round 24 — tier 3 is the least-bad OVERPRINT: count it (never silent).
-  if (bestScore.$1 == 3) layout._unresolved++;
+  // Round 29 (drawings-3-6) — so is a tier-2 slot whose LEADER strikes
+  // through a placed label (it reads as tagging that label's element).
+  if (bestScore.$1 == 3 || (bestScore.$1 == 2 && bestLeaderStrikesLabel)) {
+    layout._unresolved++;
+  }
   return commit(best, anchor: bestA, end: bestE);
 }
 

@@ -29,6 +29,7 @@ import '../electrical/panel_results.dart';
 import '../network/network.dart' show ServiceType;
 import 'drawing_chrome.dart';
 import 'electrical_sld_drawing.dart';
+import 'plan_annotation_layout.dart' show planOverlapWarning;
 import 'riser_tags.dart' show riserServiceCode;
 import 'sld_plot_fit.dart';
 
@@ -355,6 +356,16 @@ String _sldPageContent({
       cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
           '${_n(tbX + 8)} ${_n(tbY + 8)} Td (${_pdfText(counter)}) Tj ET');
     }
+  }
+
+  // Round 29 (drawings-3-1) — a sheet whose builder could only place some
+  // tags fused into others says so (top-left, inside the frame), like the
+  // plan pipeline, instead of being issued as if clean.
+  final overlapNote = planOverlapWarning(sheet.overlapCount);
+  if (overlapNote != null) {
+    cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
+        '${_n(_margin + 6)} ${_n(_pageH - _margin - 12)} Td '
+        '(${_pdfText(overlapNote)}) Tj ET');
   }
 
   // ── Device legend (KETERANGAN, bottom-left) ─────────────────────────────────

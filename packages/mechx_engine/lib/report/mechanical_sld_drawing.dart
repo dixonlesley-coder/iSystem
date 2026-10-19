@@ -101,6 +101,16 @@ const int _kSideEscapeSteps = 8;
 /// the same area over another label: a pipe through a tag's text makes it
 /// unreadable, two touching tags merely crowd.
 const double _kInkWeight = 1000;
+
+/// Round 29 (drawings-3-1) — a tag FUSED into another tag (their glyph bodies
+/// overlap: more than the descender allowance vertically and more than a
+/// hairline horizontally) is the worst outcome of all — neither pipe size can
+/// be read — so it costs TWICE ink: a pipe through a tag (one size still
+/// legible beside a line) is preferred over a tag through a tag. Two boxes
+/// merely touching (descender into the next row's cap allowance) keep the
+/// plain area cost.
+const double _kFusedLabelWeight = 2 * _kInkWeight;
+const double _kFusedHairline = 1.0;
 // Minimal x nudge per coincident node so two fixtures at the same world x don't
 // stack their markers/labels.
 const double _kSpreadStep = 18;
@@ -724,6 +734,11 @@ SldSheet buildMechanicalRiserSld({
       }
     }
 
+    // Round 29 (drawings-3-2) — TWO passes: every pass-through / page-edge
+    // stub line is emitted + reserved FIRST, then the LANJUT labels and tags
+    // are placed, so a continuation reference can never be struck by a
+    // neighbouring riser reserved only after it was placed.
+    final deferred = <void Function()>[];
     for (final e in network.edges) {
       if (focus != null && e.service != focus) continue;
       final a = posById[e.fromId];
@@ -747,9 +762,11 @@ SldSheet buildMechanicalRiserSld({
             layer: layer,
             dashed: e.service == ServiceType.vent));
         placer.reserveLine(x, bottomEdgeY, x, topEdgeY);
-        lanjut(x, topEdgeY, true, upper.floorIndex);
-        lanjut(x, bottomEdgeY, false, lower.floorIndex);
-        riserTagAt(e, x, topEdgeY, bottomEdgeY, withId: false);
+        deferred.add(() {
+          lanjut(x, topEdgeY, true, upper.floorIndex);
+          lanjut(x, bottomEdgeY, false, lower.floorIndex);
+          riserTagAt(e, x, topEdgeY, bottomEdgeY, withId: false);
+        });
         continue;
       }
       if (a == null || b == null) {
@@ -764,10 +781,15 @@ SldSheet buildMechanicalRiserSld({
             layer: layer,
             dashed: e.service == ServiceType.vent));
         placer.reserveLine(here.dx, here.dy, here.dx, edgeY);
-        lanjut(here.dx, edgeY, up, farNode.floorIndex);
-        // The lower end's page carries the tag + riser id.
-        if (up) riserTagAt(e, here.dx, here.dy, edgeY, withId: true);
+        deferred.add(() {
+          lanjut(here.dx, edgeY, up, farNode.floorIndex);
+          // The lower end's page carries the tag + riser id.
+          if (up) riserTagAt(e, here.dx, here.dy, edgeY, withId: true);
+        });
       }
+    }
+    for (final place in deferred) {
+      place();
     }
   }
 
@@ -954,6 +976,7 @@ SldSheet buildMechanicalRiserSld({
     maxY: maxY,
     legend: _fittingLegend(network, focus, prims),
     supplyNote: supplyNote,
+    overlapCount: placer.unresolvedCount,
   );
 }
 
@@ -1687,6 +1710,15 @@ class _LabelRect {
   final double minX, minY, maxX, maxY;
   const _LabelRect(this.minX, this.minY, this.maxX, this.maxY);
 
+  /// Round 29 — do the two label boxes FUSE (glyph bodies overlap: more than
+  /// the descender allowance of a [size]-pt label vertically, more than a
+  /// hairline horizontally)?
+  bool fusesWith(_LabelRect o, double size) {
+    final dx = math.min(maxX, o.maxX) - math.max(minX, o.minX);
+    final dy = math.min(maxY, o.maxY) - math.max(minY, o.minY);
+    return dx > _kFusedHairline && dy > _kDescenderFraction * size;
+  }
+
   /// Overlap AREA with [o] (0 when disjoint) — used to pick the least-bad slot.
   double overlap(_LabelRect o) {
     final dx = math.min(maxX, o.maxX) - math.max(minX, o.minX);
@@ -1720,6 +1752,12 @@ class _LabelPlacer {
   final List<_LabelRect> _hard = <_LabelRect>[];
   _LabelPlacer(this.prims);
 
+  /// Round 29 (drawings-3-1) — tags that could only be placed FUSED into
+  /// another label (the least-cost fallback after every escape). Carried on
+  /// the sheet ([SldSheet.overlapCount]) so the issued PDF / DXF prints the
+  /// plan pipeline's overlap warning instead of looking clean.
+  int unresolvedCount = 0;
+
   /// A label's box: cap height above the baseline PLUS a descender allowance
   /// of [_kDescenderFraction] × size below it (Round 17 — a leader skimming
   /// 0.3 units under a baseline used to pass 'clear' through the descenders
@@ -1747,7 +1785,8 @@ class _LabelPlacer {
     final r = _rectFor(x, y, text, size);
     var total = 0.0;
     for (final p in _labels) {
-      total += p.overlap(r);
+      final a = p.overlap(r);
+      total += r.fusesWith(p, size) ? _kFusedLabelWeight * a : a;
     }
     for (final p in _ink) {
       total += _kInkWeight * p.overlap(r);
@@ -1929,9 +1968,32 @@ class _LabelPlacer {
         }
       }
     }
+    // Round 29 (drawings-3-1) — a dense branch fan can leave every slot above
+    // touching SOME line or tag: widen once more (further rows, both sides)
+    // before accepting a least-cost slot, appended so every tag that already
+    // cleared keeps its slot.
+    if (!cleared) {
+      final w = _labelWidth(text, size);
+      for (var k = 0; k <= _kSideEscapeSteps && !cleared; k++) {
+        for (final dx in k == 0
+            ? const [0.0]
+            : [_kSideEscapeStep * k, -_kSideEscapeStep * k - w]) {
+          for (var r = 3; r <= 2 * _kEscapeSteps && !cleared; r++) {
+            for (final dy in [_kEscapeStep * r, -_kEscapeStep * r]) {
+              consider(Offset(dx, dy));
+              if (cleared) break;
+            }
+          }
+          if (cleared) break;
+        }
+      }
+    }
     final lx = defaultX + best.dx;
     final ly = defaultY + best.dy;
     final rect = _rectFor(lx, ly, text, size);
+    if (!cleared && _labels.any((p) => rect.fusesWith(p, size))) {
+      unresolvedCount++;
+    }
     _labels.add(rect);
     // A tag pulled well off its default anchor — or one that could not be fully
     // cleared — gets a leader so its element stays legible / unfused.

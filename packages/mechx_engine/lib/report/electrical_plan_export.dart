@@ -406,7 +406,11 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
 
   // Off-sheet feeder stubs first (they are linework): the k-th mark at one
   // board fans out at its own bearing so two never coincide.
-  const bearings = [90.0, 60.0, 120.0, 30.0, 150.0, 0.0, 180.0];
+  // Round 29 (drawings-3-6) — fanned in 45° steps ALTERNATING sides (was 30°
+  // steps all to one side: two marks ~11 pt apart competed for one tag slot
+  // and the second tag's leader struck the first), the first still straight
+  // down, so each tag sits beside its own mark.
+  const bearings = [90.0, 135.0, 45.0, 180.0, 0.0, 270.0, 225.0, 315.0];
   final perBoard = <String, int>{};
   final stubs = <(ElectricalPlanRiser, double, double, double, double)>[];
   for (final rs in data.risers) {
@@ -450,10 +454,17 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
     final text = rs.sense != null ? '${rs.sense} ${rs.text}' : rs.text;
     final gap = z.riserR * 1.5;
     final w = text.length * z.routeTextSize * 0.55;
+    // Round 29 (drawings-3-6) — the tag's horizontal pseudo-run leaves the
+    // marker on the SIDE its stub points to (a stub fanned left tags to the
+    // left), so the tags of a fan never queue for one slot on the right; a
+    // vertical stub keeps the right-hand slot (byte-identical first mark).
+    final dirX = x2 - x1;
+    final stubLen = math.sqrt(dirX * dirX + (y2 - y1) * (y2 - y1));
+    final left = stubLen > 0 && dirX / stubLen < -0.2;
     final label = placePlanLabel(
-        ax: x2 + gap,
+        ax: left ? x2 - gap : x2 + gap,
         ay: y2,
-        bx: x2 + gap + w,
+        bx: left ? x2 - gap - w : x2 + gap + w,
         by: y2,
         text: text,
         textSize: z.routeTextSize,
