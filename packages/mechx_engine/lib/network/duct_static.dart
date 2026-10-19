@@ -118,9 +118,47 @@ DuctStaticSolution solveDuctStatic({
     return edgePa;
   }
 
+  // Round 27 (hvac-4-1) — an air unit's OUTDOOR-AIR INTAKE (a duct whose
+  // sized flow ARRIVES at the fan: the Round-16 bare intake leaf, through
+  // any inline damper) is in SERIES with the supply index run through the
+  // fan: the fan pulls the air through the intake and pushes it through the
+  // supply. It used to be costed as one more outward branch, so the fan
+  // static took max(intake, supply index) instead of their sum (a long
+  // roof-louvre intake behind a short supply index run lost its whole
+  // friction from the motor selection). Walk the intake AGAINST the flow from
+  // the fan, take its worst path, and cost the supply on the rest.
+  final intakeEdgeIds = <String>{};
+  var intakePa = 0.0;
+  if (!service.isExtractAir) {
+    final intakeCost = <String, double>{fanNodeId: 0.0};
+    final q = [fanNodeId];
+    for (var i = 0; i < q.length; i++) {
+      final n = q[i];
+      for (final link
+          in adjacency[n] ?? const <({NetEdge edge, String other})>[]) {
+        if (sizing[link.edge.id]?.flowFromId != link.other) continue;
+        if (intakeCost.containsKey(link.other)) continue;
+        intakeEdgeIds.add(link.edge.id);
+        final c = intakeCost[n]! + edgePaArriving(link.edge, n);
+        intakeCost[link.other] = c;
+        if (c > intakePa) intakePa = c;
+        q.add(link.other);
+      }
+    }
+  }
+  final outwardAdjacency = intakeEdgeIds.isEmpty
+      ? adjacency
+      : {
+          for (final MapEntry(key: k, value: v) in adjacency.entries)
+            k: [
+              for (final l in v)
+                if (!intakeEdgeIds.contains(l.edge.id)) l,
+            ],
+        };
+
   final staticPa = orientedPathCost(
     sourceId: fanNodeId,
-    adjacency: adjacency,
+    adjacency: outwardAdjacency,
     // Round 15 — the sizer records EXTRACT air (return / exhaust) in its
     // physical direction (grilles → fan); this walk runs OUTWARD from the
     // fan, so flip it back to the fan-outward orientation.
@@ -143,7 +181,7 @@ DuctStaticSolution solveDuctStatic({
   });
 
   return DuctStaticSolution(
-    totalStaticPressure: Pressure(worst + terminalLoss.pascals),
+    totalStaticPressure: Pressure(worst + intakePa + terminalLoss.pascals),
     criticalNodeId: criticalNodeId,
   );
 }

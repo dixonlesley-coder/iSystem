@@ -881,8 +881,9 @@ Uint8List electricalPlanToPdf({
 /// title-block rows are stamped below the drawing (mirroring [electricalSldToDxf]).
 ///
 /// Round 23 (elec-drafting-2-3) — with the sheet's calibration
-/// ([metersPerPixel]) the DXF is written in WORLD MILLIMETRES (`$INSUNITS` 4,
-/// `$MEASUREMENT` 1), like the mechanical plan DXF: a 15.0 m route measures
+/// ([metersPerPixel]) the DXF is written in WORLD MILLIMETRES (1 unit = 1 mm;
+/// Round 27 — no R2000 `$INSUNITS` in the R12 header), like the mechanical
+/// plan DXF: a 15.0 m route measures
 /// 15000 units, so the denah xrefs onto the architect's mm DWG at 1:1, and
 /// the SCALE row stamps the same snapped `1 : N @ A3` the PDF twin prints
 /// (annotation sized for that plot, symbols in paper mm). Pass
@@ -1082,13 +1083,18 @@ String electricalPlanToDxf({
     }
   }
 
-  // Title block below everything.
+  // Title block ABOVE the topmost note (screen y grows downward, so the
+  // block sits at more-negative y). Round 27 (export-files-2-1) — the block
+  // used to start a(60) above the top note and grow DOWN through every note
+  // (REV over 'BELUM DITEMPATKAN:'); its height is now computed first and the
+  // whole box ends a(24) above the top note's baseline (its a(10) text
+  // rises a(10) above that, leaving a clear a(14) gap).
   final scaleText = world && plotN != null ? '1 : $plotN @ A3' : null;
   final rows = _dxfChromeRows(chrome, scaleOverride: scaleText);
-  final frameTop = noteY - a(60);
+  final frameH = rows.isEmpty ? a(96) : a(60.0 + rows.length * 18);
+  final frameTop = noteY - a(24) - frameH;
   final pname = projectName.isNotEmpty ? projectName : 'Untitled project';
-  box(layers.frame, 0, frameTop, a(360),
-      rows.isEmpty ? a(96) : a(60.0 + rows.length * 18));
+  box(layers.frame, 0, frameTop, a(360), frameH);
   text(layers.frame, a(8), frameTop + a(22), pname, size: a(16));
   text(layers.frame, a(8), frameTop + a(44),
       'DENAH INSTALASI LISTRIK - $sheetName',
@@ -1112,12 +1118,12 @@ String electricalPlanToDxf({
   final tables = dxfTablesSection(layers: [
     for (final (name, aci) in classLayers) (name, aci, 'CONTINUOUS'),
   ]);
-  // drafting-5: a minimal HEADER declaring the R12 format; Round 23 — a
-  // calibrated (world-mm) drawing also declares millimetre units + metric.
-  final header = world
-      ? '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n'
-          '9\n\$INSUNITS\n70\n4\n9\n\$MEASUREMENT\n70\n1\n0\nENDSEC\n'
-      : '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n';
+  // drafting-5: a minimal HEADER declaring the R12 format.
+  // Round 27 (export-files-2-4) — no R2000 $INSUNITS / R14 $MEASUREMENT in
+  // an AC1009 file: the world-mm drawing states its plotted 1 : N on the
+  // title block's SCALE row instead.
+  const header =
+      '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n';
   return header + tables + b.toString();
 }
 

@@ -1601,12 +1601,6 @@ Map<String, EdgeSizing> autoSizeNetwork(
       // two VTRs on one vent component (two stacks headered together) only
       // one is the tree root; the other used to take the 2-DFU leaf default
       // as a phantom load (a 8-DFU stack's header read 10 DFU, one DN up).
-      final ventTopFloor = service == ServiceType.vent
-          ? component.fold<int>(
-              -1 << 30,
-              (m, id) => math.max(m, net.nodeById(id)?.floorIndex ?? m),
-            )
-          : 0;
       bool isOpenVtr(String n) {
         if (n == root || degree(n) != 1 || explicitDemandKeys.contains(n)) {
           return false;
@@ -1629,10 +1623,11 @@ Map<String, EdgeSizing> autoSizeNetwork(
         // rising above it) on the component's top storey. It took the 2-DFU
         // default, so a header read B's 8 DFU + 2 and B's stack went one DN
         // up (DN50 vs DN40 alone).
-        if (node.floorIndex != ventTopFloor ||
-            o.floorIndex != node.floorIndex) {
-          return false;
-        }
+        // Round 27 (residuals-5) — tested against ITS OWN stack top (o, with
+        // nothing rising above it), not the component's top storey: another
+        // stack's riser VTR one storey higher used to turn this run VTR into
+        // a 2-DFU phantom load (the small stack one DN up).
+        if (o.floorIndex != node.floorIndex) return false;
         var fromBelow = false;
         for (final l
             in adjacency[o.id] ?? const <({String edgeId, String other})>[]) {
@@ -1706,10 +1701,13 @@ Map<String, EdgeSizing> autoSizeNetwork(
       //     common header) => the tree runs through the first leg and EVERY
       //     other leg is sized on the same full set flow afterwards (a standby
       //     pump is a full-duty machine, never a DN15 leg);
-      //   * anything else (a discharge CV on the heater outlet of a recirc
-      //     ring, a mixed set) => no cut: Hardy–Cross, exactly as with no
-      //     valve drawn. A CV on the SUPPLY side used to route every draw-off
-      //     up the return and leave the supply main unsized.
+      //   * Round 27 — a DISCHARGE CV on the heater outlet of a recirc ring
+      //     plus the return valve: the feed is the valve whose outlet is
+      //     nearest a draw-off point (an ordinary pipe), the others are
+      //     returns => the return plan above. Only a set no rule decides
+      //     falls to Hardy–Cross (as with no valve drawn). A CV on the SUPPLY
+      //     side used to route every draw-off up the return and leave the
+      //     supply main unsized.
       final cvPlan = (isLooped && regime == FlowRegime.pressurized)
           ? _classifyLoopCheckValves(
               componentEdges: componentEdges,
@@ -1785,6 +1783,15 @@ Map<String, EdgeSizing> autoSizeNetwork(
         final out = {...m};
         for (final e in closing) {
           closingEdgeIds.add(e.id);
+          // Round 27 — a deferred RETURN-SIDE pipe (not a valve leg) that
+          // closes the tree carries no draw-off, whichever way it was drawn.
+          if (deferred.contains(e.id) &&
+              returnValveFlowFrom.isNotEmpty &&
+              net.nodeById(e.fromId)?.component != NodeComponent.checkValve &&
+              net.nodeById(e.toId)?.component != NodeComponent.checkValve) {
+            out[e.id] = 0;
+            continue;
+          }
           final cvNode = deferred.contains(e.id)
               ? (net.nodeById(e.fromId)?.component == NodeComponent.checkValve
                   ? e.fromId
@@ -2873,31 +2880,103 @@ _CheckValvePlan _classifyLoopCheckValves({
     }
   }
 
+  // Round 27 — the unreached part of the component (all cycle valves cut) in
+  // REGIONS: a valve whose one side is reached and whose other side is not
+  // enters the region of its unreached side.
+  final region = <String, int>{};
+  var regionCount = 0;
+  for (final start in adj.keys) {
+    if (dist.containsKey(start) || region.containsKey(start)) continue;
+    final rid = regionCount++;
+    region[start] = rid;
+    final st = [start];
+    while (st.isNotEmpty) {
+      final n = st.removeLast();
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (cut.contains(e.id)) continue;
+        final m = other(e, n);
+        if (dist.containsKey(m) || region.containsKey(m)) continue;
+        region[m] = rid;
+        st.add(m);
+      }
+    }
+  }
+
+  // Hop distance from [start] with every cycle valve cut.
+  Map<String, int> bfsCut(String start) {
+    final d = <String, int>{start: 0};
+    final q = [start];
+    for (var i = 0; i < q.length; i++) {
+      final n = q[i];
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (cut.contains(e.id)) continue;
+        final m = other(e, n);
+        if (d.containsKey(m)) continue;
+        d[m] = d[n]! + 1;
+        q.add(m);
+      }
+    }
+    return d;
+  }
+
+  // True when a valve between the reached nodes [a] and [b] shortens or ties
+  // NO root -> draw-off path: through the valve (two hops) every draw-off
+  // point is strictly farther than without it.
+  bool strictlyOffDrawOffPaths(String a, String b) {
+    if (isDemand == null) return false;
+    final da = bfsCut(a), db = bfsCut(b);
+    var any = false;
+    for (final MapEntry(key: x, value: d0) in dist.entries) {
+      if (x == root || !isDemand(x)) continue;
+      any = true;
+      final viaAB = db[x] == null ? null : dist[a]! + 2 + db[x]!;
+      final viaBA = da[x] == null ? null : dist[b]! + 2 + da[x]!;
+      final via = [viaAB, viaBA].whereType<int>().fold<int?>(
+          null, (m, v) => m == null || v < m ? v : m);
+      if (via != null && via <= d0) return false;
+    }
+    return any;
+  }
+
   final cvs = <_Cv>[];
   for (final id in cycleValves) {
     final es = adj[id]!;
     // Round 16 (regression-cv-reversed-drawing-halves-dutystandby-legs) —
     // the TOPOLOGY decides first for EVERY cycle valve: with all cycle valves
     // cut, the side still reachable from the root is the inlet. The drawn
-    // direction is consulted only when topology cannot decide (both sides
-    // reachable — a return valve closing a ring — or neither), then an
+    // direction is consulted only when topology cannot decide, then an
     // adjacent mover. A duty/standby leg drawn header -> valve -> pump used
     // to be read verbatim as flowing backwards and fall to Hardy–Cross (each
     // leg, and the pump duty, on half the set flow).
+    //
+    // Round 27 (residuals-0) — with BOTH sides reachable (a return valve
+    // closing a ring back to the heater) the topology decides first when the
+    // valve lies on NO shortest root -> draw-off path (every draw-off point
+    // is strictly nearer the root without it — the return-pipe principle):
+    // it is a RETURN and its FARTHER side is the inlet. A return drawn
+    // heater -> CV -> header used to be read verbatim as a supply valve and
+    // fall to Hardy–Cross with draw-off forward through it (the trunk two DN
+    // small). Otherwise (the valve shortens or ties some draw-off path) the
+    // drawn direction decides, then an adjacent mover.
     final a = other(es[0], id), b = other(es[1], id);
     final ra = dist.containsKey(a), rb = dist.containsKey(b);
     int? inlet; // index into es
     if (ra != rb) {
       inlet = ra ? 0 : 1;
     } else {
-      final ins = [
-        for (var i = 0; i < 2; i++)
-          if (es[i].toId == id) i
-      ];
-      if (ins.length == 1) {
-        inlet = ins.first;
-      } else if (isMover != null && isMover(a) != isMover(b)) {
-        inlet = isMover(a) ? 0 : 1;
+      if (ra && dist[a] != dist[b] && strictlyOffDrawOffPaths(a, b)) {
+        inlet = dist[a]! > dist[b]! ? 0 : 1;
+      }
+      if (inlet == null) {
+        final ins = [
+          for (var i = 0; i < 2; i++)
+            if (es[i].toId == id) i
+        ];
+        if (ins.length == 1) {
+          inlet = ins.first;
+        } else if (isMover != null && isMover(a) != isMover(b)) {
+          inlet = isMover(a) ? 0 : 1;
+        }
       }
     }
     if (inlet == null) return none; // undecidable => Hardy–Cross
@@ -2910,15 +2989,25 @@ _CheckValvePlan _classifyLoopCheckValves({
       downNode: other(outE, id),
     ));
   }
-  bool isReturn(_Cv c) {
-    final du = dist[c.upNode], dd = dist[c.downNode];
+  _Cv flipped(_Cv c) => (
+        id: c.id,
+        inE: c.outE,
+        outE: c.inE,
+        upNode: c.downNode,
+        downNode: c.upNode,
+      );
+  bool isReturnIn(Map<String, int> d, _Cv c) {
+    final du = d[c.upNode], dd = d[c.downNode];
     return du != null && dd != null && dd < du;
   }
 
   bool isParallelDischarge(_Cv c) =>
       dist[c.upNode] != null && dist[c.downNode] == null;
 
-  if (cvs.every(isReturn)) {
+  // The RETURN plan over [rets] with hop distance [d] from the root and the
+  // valve edges [cutE] cut (see the call site).
+  _CheckValvePlan returnPlan(
+      Map<String, int> d, Set<String> cutE, List<_Cv> rets) {
     // Round 26 (hot-water-2-common-return-cv-hardy-cross) — N riser returns
     // joined on a common header, then ONE check valve back to the heater:
     // cutting the valve alone leaves the supply-riser / return-riser ring
@@ -2931,22 +3020,22 @@ _CheckValvePlan _classifyLoopCheckValves({
     // size as zero-draw-off branches — but only when what remains (the
     // supply) is acyclic; a genuine ring with draw-off on both legs keeps
     // the Hardy–Cross split.
-    final cutEdges = {...cut};
+    final cutEdges = {...cutE};
     final supplyEdges = <String>{};
     if (isDemand != null) {
       final visited = <String>{};
       final stack = [
-        for (final n in dist.keys)
+        for (final n in d.keys)
           if (isDemand(n)) n,
       ];
       while (stack.isNotEmpty) {
         final n = stack.removeLast();
         if (!visited.add(n)) continue;
-        final dn = dist[n]!;
+        final dn = d[n]!;
         for (final e in adj[n] ?? const <NetEdge>[]) {
-          if (cut.contains(e.id)) continue;
+          if (cutE.contains(e.id)) continue;
           final m = other(e, n);
-          if (dist[m] == dn - 1) {
+          if (d[m] == dn - 1) {
             supplyEdges.add(e.id);
             stack.add(m);
           }
@@ -2954,7 +3043,7 @@ _CheckValvePlan _classifyLoopCheckValves({
       }
       final candidates = <String>{
         for (final e in componentEdges)
-          if (!cut.contains(e.id) && !supplyEdges.contains(e.id)) e.id,
+          if (!cutE.contains(e.id) && !supplyEdges.contains(e.id)) e.id,
       };
       // Round 26 r2 — the return side is grown ONLY from each valve's
       // upstream node, through nodes that bear no draw-off and lie on no
@@ -2970,19 +3059,26 @@ _CheckValvePlan _classifyLoopCheckValves({
       //
       // Round 26 r3 — the conservative variant: a return pipe ends where it
       // meets the supply at a BARE node (the riser top beyond the last
-      // branch). When any return-walk edge lands on a DRAW-OFF node the
-      // "return" is a ring segment instead — a return teed from a bare ring
-      // tee X (b - X - c with draw-off at b and c, the junction the Run
-      // tool's tee-in creates) is topologically the same as the hotel return
-      // trees, and only the draw-off at its ends tells them apart. Such a
-      // walk extends nothing and the ring keeps the Hardy–Cross split.
+      // branch). When the walk lands on a DRAW-OFF node FROM A TEE (a node
+      // joining more than the two pipes of a chain) the "return" is a ring
+      // segment instead — a return teed from a bare ring tee X (b - X - c
+      // with draw-off at b and c, the junction the Run tool's tee-in
+      // creates). Such a walk extends nothing and the ring keeps the
+      // Hardy–Cross split.
+      //
+      // Round 27 (residuals-4) — a return CHAIN (the walked node has exactly
+      // two pipes: the hotel return riser) that ends on the inline top
+      // fixture, or on a bare node beyond it, is a return all the same: it
+      // lands on that draw-off point and stops there. r4 rejected it and left
+      // the supply-riser / return-riser ring in Hardy–Cross, which pushed
+      // draw-off up the returns and sized the far riser bases one DN small.
       bool returnNode(String n) =>
           n != root && !supplyNodes.contains(n) && !isDemand(n);
       final returnSide = <String>{};
       final seenReturn = <String>{};
       var meetsDrawOff = false;
       final walk = <String>[
-        for (final c in cvs)
+        for (final c in rets)
           if (returnNode(c.upNode)) c.upNode,
       ];
       while (walk.isNotEmpty && !meetsDrawOff) {
@@ -2992,8 +3088,12 @@ _CheckValvePlan _classifyLoopCheckValves({
           if (!candidates.contains(e.id)) continue;
           final m = other(e, n);
           if (m != root && isDemand(m)) {
-            meetsDrawOff = true;
-            break;
+            if ((adj[n]?.length ?? 0) != 2) {
+              meetsDrawOff = true;
+              break;
+            }
+            returnSide.add(e.id); // a return chain landing on the fixture
+            continue;
           }
           returnSide.add(e.id);
           if (returnNode(m)) walk.add(m);
@@ -3002,21 +3102,141 @@ _CheckValvePlan _classifyLoopCheckValves({
       if (meetsDrawOff) returnSide.clear();
       final remaining = [
         for (final e in componentEdges)
-          if (!cut.contains(e.id) && !returnSide.contains(e.id))
+          if (!cutE.contains(e.id) && !returnSide.contains(e.id))
             (e.fromId, e.toId),
       ];
       final keepsLoop = !_isForest([
         for (final e in componentEdges)
-          if (!cut.contains(e.id)) (e.fromId, e.toId),
+          if (!cutE.contains(e.id)) (e.fromId, e.toId),
       ]);
       if (keepsLoop && returnSide.isNotEmpty && _isForest(remaining)) {
         cutEdges.addAll(returnSide);
       }
     }
     return _CheckValvePlan(cutEdges, const [], {
-      for (final c in cvs) ...{c.inE.id: c.upNode, c.outE.id: c.id},
+      for (final c in rets) ...{c.inE.id: c.upNode, c.outE.id: c.id},
     });
   }
+
+  final discharge = [
+    for (final c in cvs)
+      if (isParallelDischarge(c)) c,
+  ];
+  if (discharge.isEmpty) {
+    if (cvs.every((c) => isReturnIn(dist, c))) {
+      return returnPlan(dist, cut, cvs);
+    }
+    return none;
+  }
+
+  // Round 27 (regression-mixed-discharge-and-return-cv) — a DISCHARGE valve
+  // on the heater outlet (H -> CVd -> M) plus the return valve (RJ -> CV ->
+  // H): cutting BOTH isolates the root, so the return valve's reachable side
+  // is the heater and it read as a second parallel discharge — the pair was
+  // taken for duty/standby and Hardy–Cross ran with draw-off forward through
+  // the return valve (heater feed DN15 instead of DN25). The valves entering
+  // one region are a genuine PARALLEL set only when their legs merge at the
+  // SAME junction, or when every leg carries a pump / booster set; otherwise
+  // the valve whose outlet is NEAREST a draw-off point (region hop distance)
+  // is the feed and the others are RETURNS, re-oriented region -> root. The
+  // feed is then an ordinary pipe and the returns take the return plan.
+  String legEnd(String from, NetEdge via) {
+    var node = other(via, from);
+    var edge = via;
+    final seen = <String>{from};
+    while (seen.add(node)) {
+      final es = adj[node]!;
+      if (node == root || es.length != 2 || isCheckValve(node)) break;
+      edge = es.firstWhere((e) => e.id != edge.id);
+      node = other(edge, node);
+    }
+    return node;
+  }
+
+  bool legHasMover(_Cv c) {
+    if (isMover == null) return false;
+    for (final via in [c.inE, c.outE]) {
+      var node = other(via, c.id);
+      var edge = via;
+      final seen = <String>{c.id};
+      while (seen.add(node)) {
+        if (isMover(node)) return true;
+        final es = adj[node]!;
+        if (node == root || es.length != 2 || isCheckValve(node)) break;
+        edge = es.firstWhere((e) => e.id != edge.id);
+        node = other(edge, node);
+      }
+    }
+    return false;
+  }
+
+  int? nearestDemand(String start) {
+    if (isDemand == null) return null;
+    final rid = region[start];
+    final dd = <String, int>{start: 0};
+    final q = [start];
+    for (var i = 0; i < q.length; i++) {
+      final n = q[i];
+      if (isDemand(n)) return dd[n];
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (cut.contains(e.id)) continue;
+        final m = other(e, n);
+        if (region[m] != rid || dd.containsKey(m)) continue;
+        dd[m] = dd[n]! + 1;
+        q.add(m);
+      }
+    }
+    return null;
+  }
+
+  final byRegion = <int, List<_Cv>>{};
+  for (final c in discharge) {
+    (byRegion[region[c.downNode]!] ??= []).add(c);
+  }
+  final returns = <_Cv>[];
+  var anyParallel = false;
+  for (final group in byRegion.values) {
+    if (group.length < 2) continue;
+    final ends = {for (final c in group) legEnd(c.id, c.outE)};
+    if (ends.length == 1 || group.every(legHasMover)) {
+      anyParallel = true;
+      continue;
+    }
+    final nd = [for (final c in group) nearestDemand(c.downNode)];
+    final best = nd
+        .whereType<int>()
+        .fold<int?>(null, (m, v) => m == null || v < m ? v : m);
+    if (best == null || nd.where((v) => v == best).length != 1) return none;
+    for (var i = 0; i < group.length; i++) {
+      if (nd[i] != best) returns.add(flipped(group[i]));
+    }
+  }
+  if (returns.isNotEmpty) {
+    if (anyParallel) return none; // duty/standby + a drawn return: undecided
+    final rets = [
+      ...returns,
+      for (final c in cvs)
+        if (!isParallelDischarge(c)) c,
+    ]..sort((x, y) => x.id.compareTo(y.id));
+    final cut1 = <String>{
+      for (final c in rets) ...[c.inE.id, c.outE.id],
+    };
+    final dist1 = <String, int>{root: 0};
+    final q1 = [root];
+    for (var i = 0; i < q1.length; i++) {
+      final n = q1[i];
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (cut1.contains(e.id)) continue;
+        final m = other(e, n);
+        if (dist1.containsKey(m)) continue;
+        dist1[m] = dist1[n]! + 1;
+        q1.add(m);
+      }
+    }
+    if (!rets.every((c) => isReturnIn(dist1, c))) return none;
+    return returnPlan(dist1, cut1, rets);
+  }
+  // Every region's entering valves form a parallel set (duty/standby).
   if (cvs.length < 2 || !cvs.every(isParallelDischarge)) return none;
 
   // Duty/standby: the tree runs through the FIRST valve's leg; every other
@@ -3171,6 +3391,29 @@ Map<String, double> _uniformVentStacks(
   final riserGroupOf = <String, String>{
     for (final n in parent.keys) n: find(n),
   };
+  // Vent-graph degree and run count per node.
+  final ventDegree = <String, int>{};
+  final ventRunCount = <String, int>{};
+  final ventAdj = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.vent) continue;
+    for (final n in [e.fromId, e.toId]) {
+      ventDegree[n] = (ventDegree[n] ?? 0) + 1;
+      (ventAdj[n] ??= []).add(e);
+      if (e.kind != EdgeKind.riser) {
+        ventRunCount[n] = (ventRunCount[n] ?? 0) + 1;
+      }
+    }
+  }
+  // Round 27 (residuals-2) — a riser group that touches no drainage node is a
+  // bare VTR STUB (a riser from a header junction up to the roof). Its bottom
+  // node joined by TWO or more runs is a HEADER junction, not the foot of an
+  // offset stack: both header halves used to pass as stack offsets and merge
+  // the two stacks (and the stub) into one uniform stack.
+  final groupTouchesDrain = <String>{
+    for (final n in parent.keys)
+      if (drainNodes.contains(n)) riserGroupOf[n]!,
+  };
   bool offsetLink(String lower, String upper) {
     if (!stackEnd(lower) || !stackEnd(upper)) return false;
     final gl = riserGroupOf[lower]!, gu = riserGroupOf[upper]!;
@@ -3178,7 +3421,66 @@ Map<String, double> _uniformVentStacks(
     final fl = net.nodeById(lower)?.floorIndex;
     final fu = net.nodeById(upper)?.floorIndex;
     if (fl == null || fu == null || fl != fu) return false;
+    if (!groupTouchesDrain.contains(gu) && (ventRunCount[upper] ?? 0) >= 2) {
+      return false;
+    }
     return fl == groupTop[gl] && fu == groupBottom[gu];
+  }
+
+  // Round 27 (residuals-3) — a run drawn through BARE bend nodes (degree 2,
+  // two runs, no riser / tie / drainage / fitting / load) is ONE logical run:
+  // a stack offset drawn V2 -> K -> W2 used to join no two riser groups and
+  // leave the lower stack reverse-tapered. Each chain is classified on its
+  // two END nodes; every chain edge takes the classification.
+  bool bareBend(String n) {
+    if (parent.containsKey(n) || drainNodes.contains(n)) return false;
+    if (ventDegree[n] != 2 || ventRunCount[n] != 2) return false;
+    final node = net.nodeById(n);
+    return node != null && node.component == null && node.role == NodeRole.main;
+  }
+
+  final chains = <({
+    String u,
+    String v,
+    NetEdge eu,
+    NetEdge ev,
+    List<NetEdge> edges,
+  })>[];
+  {
+    final seenRun = <String>{};
+    final runIds = [
+      for (final id in units.keys)
+        if (net.edgeById(id) case final e?
+            when e.kind != EdgeKind.riser && e.service == ServiceType.vent)
+          id,
+    ]..sort();
+    for (final id in runIds) {
+      if (seenRun.contains(id)) continue;
+      final e0 = net.edgeById(id)!;
+      // Extend from each end through bare bends.
+      (String, NetEdge, List<NetEdge>) extend(String from, NetEdge via) {
+        var node = via.fromId == from ? via.toId : via.fromId;
+        var edge = via;
+        final path = <NetEdge>[];
+        final seen = <String>{from};
+        while (bareBend(node) && seen.add(node)) {
+          final next = ventAdj[node]!.firstWhere((x) => x.id != edge.id);
+          if (!units.containsKey(next.id)) break;
+          path.add(next);
+          edge = next;
+          node = next.fromId == node ? next.toId : next.fromId;
+        }
+        return (node, edge, path);
+      }
+
+      final (v, ev, pv) = extend(e0.fromId, e0);
+      final (u, eu, pu) = extend(e0.toId, e0);
+      final edges = [...pu.reversed, e0, ...pv];
+      for (final x in edges) {
+        seenRun.add(x.id);
+      }
+      chains.add((u: u, v: v, eu: eu, ev: ev, edges: edges));
+    }
   }
 
   bool baseEnd(String n) =>
@@ -3188,15 +3490,12 @@ Map<String, double> _uniformVentStacks(
       !parent.containsKey(other) &&
       drainStackNodes.contains(other);
   final stackRuns = [
-    for (final id in units.keys)
-      if (net.edgeById(id) case final e?
-          when e.kind != EdgeKind.riser &&
-              e.service == ServiceType.vent &&
-              (offsetLink(e.fromId, e.toId) ||
-                  offsetLink(e.toId, e.fromId) ||
-                  baseLink(e.fromId, e.toId) ||
-                  baseLink(e.toId, e.fromId)))
-        e,
+    for (final c in chains)
+      if (offsetLink(c.u, c.v) ||
+          offsetLink(c.v, c.u) ||
+          baseLink(c.u, c.v) ||
+          baseLink(c.v, c.u))
+        ...c.edges,
   ];
   // Any other vent run joining two DIFFERENT stack groups is a HEADER (e.g.
   // one stack's top tied into another stack below a shared VTR). Round 26 r2
@@ -3209,16 +3508,13 @@ Map<String, double> _uniformVentStacks(
   // size a vent stack on its own drain DFU, only the shared section on the
   // combined load). A junction at a group's BOTTOM storey splits nothing.
   final headers = [
-    for (final id in units.keys)
-      if (net.edgeById(id) case final e?
-          when e.kind != EdgeKind.riser &&
-              e.service == ServiceType.vent &&
-              stackEnd(e.fromId) &&
-              stackEnd(e.toId) &&
-              riserGroupOf[e.fromId] != riserGroupOf[e.toId] &&
-              !offsetLink(e.fromId, e.toId) &&
-              !offsetLink(e.toId, e.fromId))
-        e,
+    for (final c in chains)
+      if (stackEnd(c.u) &&
+          stackEnd(c.v) &&
+          riserGroupOf[c.u] != riserGroupOf[c.v] &&
+          !offsetLink(c.u, c.v) &&
+          !offsetLink(c.v, c.u))
+        c,
   ];
   // A header endpoint RECEIVES the header when the vent air enters its stack
   // there (see [receives] below — the solved tree, r3); otherwise the header
@@ -3254,7 +3550,7 @@ Map<String, double> _uniformVentStacks(
   final junctionFloor = <String, int>{};
   final headerLoadAt = <String, double>{};
   final drainedBound = <String, double>{}; // riser group -> header load
-  for (final e in headers) {
+  for (final c in headers) {
     // Round 26 r4 — a loop-CLOSING header (left out of the solved tree: two
     // headers between the same two stacks, a relief / yoke header below a
     // roof header) carries only the conservative 'larger adjacent load' the
@@ -3263,18 +3559,54 @@ Map<String, double> _uniformVentStacks(
     // its shared risers (a 40-DFU stack sized DN50 on 20 DFU instead of
     // DN65); bounding a stack by it would oversize the small one. It is
     // neither a receiving nor a draining header.
-    if (edgeParent != null && !edgeParent.containsKey(e.id)) continue;
-    for (final j in [e.fromId, e.toId]) {
+    if (edgeParent != null &&
+        c.edges.any((x) => !edgeParent.containsKey(x.id))) {
+      continue;
+    }
+    for (final (j, ej) in [(c.u, c.eu), (c.v, c.ev)]) {
       final g = riserGroupOf[j]!;
       final f = floorOf(j);
       if (f == null) continue;
-      if (!receives(e, j)) {
-        drainedBound[g] = math.max(drainedBound[g] ?? 0, units[e.id]!);
+      if (!receives(ej, j)) {
+        drainedBound[g] = math.max(drainedBound[g] ?? 0, units[ej.id]!);
         continue;
       }
       if (f <= (groupBottom[g] ?? f)) continue;
       if (f < (junctionFloor[g] ?? f + 1)) junctionFloor[g] = f;
-      headerLoadAt[g] = (headerLoadAt[g] ?? 0) + units[e.id]!;
+      headerLoadAt[g] = (headerLoadAt[g] ?? 0) + units[ej.id]!;
+    }
+  }
+  // Round 27 (residuals-1) — a vent run (chain) leaving a stack's TOP to a
+  // BARE node outside every riser group (a mid-header junction off which the
+  // VTR rises or runs) through which the stack's air LEAVES in the solved
+  // tree drains that stack exactly like a header: it carries the stack's
+  // whole vent load (less any header entering at that top) and bounds the
+  // stack's uniform size. The stack used to keep its below-tie partial load
+  // (a 32-DFU stack sized DN50 on 22 DFU).
+  bool vtrLeaf(String n) {
+    final node = net.nodeById(n);
+    return ventDegree[n] == 1 &&
+        !drainNodes.contains(n) &&
+        node != null &&
+        node.component == null &&
+        node.role == NodeRole.main;
+  }
+
+  if (edgeParent != null) {
+    for (final c in chains) {
+      for (final (j, ej, o) in [(c.u, c.eu, c.v), (c.v, c.ev, c.u)]) {
+        if (!stackEnd(j) || parent.containsKey(o) || drainNodes.contains(o)) {
+          continue;
+        }
+        if (vtrLeaf(o)) continue; // a run VTR: see [vtrRunLink] below
+        final g = riserGroupOf[j]!;
+        if (floorOf(j) != groupTop[g]) continue;
+        final p = edgeParent[ej.id];
+        if (p == null || p == j) continue; // the air does not leave here
+        final load = units[ej.id]! -
+            (junctionFloor[g] == floorOf(j) ? (headerLoadAt[g] ?? 0) : 0.0);
+        drainedBound[g] = math.max(drainedBound[g] ?? 0, load);
+      }
     }
   }
   bool aboveJunction(NetEdge e) {
@@ -3325,12 +3657,6 @@ Map<String, double> _uniformVentStacks(
   // (24 vs 32 DFU, DN50 vs DN65) and an un-rooted second VTR printed DN32
   // over a DN40 stack. It counts like a shared riser — its own load less the
   // header load entering the stack — and is never below the stack it ends.
-  final ventDegree = <String, int>{};
-  for (final e in net.edges) {
-    if (e.service != ServiceType.vent) continue;
-    ventDegree[e.fromId] = (ventDegree[e.fromId] ?? 0) + 1;
-    ventDegree[e.toId] = (ventDegree[e.toId] ?? 0) + 1;
-  }
   bool vtrRunLink(String top, String leaf) {
     if (!stackEnd(top) || parent.containsKey(leaf)) return false;
     if (ventDegree[leaf] != 1 || drainNodes.contains(leaf)) return false;

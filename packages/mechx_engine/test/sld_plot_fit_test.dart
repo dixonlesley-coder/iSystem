@@ -227,15 +227,17 @@ void main() {
     });
 
     test('the DXF text heights follow the same fit as the PDF', () {
-      // The DXF writes each label at 1.3 x its (fitted) size: a tag that the
-      // fit grew prints taller in the DXF than the as-built size would.
+      // Round 27 (export-files-2-2) — the DXF writes each label's CAP height
+      // (group 40) = its fitted em x Helvetica's cap height 0.718, so it
+      // prints the same size as the PDF's em (was 1.3 x em, ~1.8x the PDF).
       final fit = fitSldSheetForPlot(sheet,
           availW: kSldA3PlotAvailW, availH: kSldA3PlotAvailH);
       final grown = fit.sheet.prims
           .whereType<SldLabel>()
           .firstWhere((l) => l.text.contains('mm2'));
       final dxf = electricalSldToDxf(sheet: sheet);
-      final h = (grown.size * 1.3).toString();
+      final h = (grown.size * 0.718).toString();
+      expect(kHelveticaCapHeightEm, 0.718);
       expect(dxf, contains('\n40\n$h\n'));
     });
   });

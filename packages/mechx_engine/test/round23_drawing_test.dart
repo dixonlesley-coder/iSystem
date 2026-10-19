@@ -673,14 +673,16 @@ void main() {
     ]);
     const chrome = DrawingChrome(drawingNumber: 'E-101');
 
-    test('calibrated: world mm, INSUNITS 4, the snapped 1 : N row', () {
+    test('calibrated: world mm, the snapped 1 : N row (R12: no INSUNITS)', () {
       final dxf = electricalPlanToDxf(
           data: data,
           projectName: 'P',
           sheetName: 'Lantai Dasar',
           chrome: chrome,
           metersPerPixel: 0.03);
-      expect(dxf, contains('\$INSUNITS\n70\n4'));
+      // Round 27 (export-files-2-4) — AC1009 has no $INSUNITS (R2000).
+      expect(dxf, contains('\$ACADVER\n1\nAC1009'));
+      expect(dxf, isNot(contains('INSUNITS')));
       // The 500 px route at 0.03 m/px is 15.0 m = 15000 mm long.
       final m = RegExp(r'0\nLINE\n8\nE-FEEDER\n10\n([0-9.-]+)\n20\n'
               r'([0-9.-]+)\n11\n([0-9.-]+)\n21\n([0-9.-]+)')
