@@ -274,8 +274,7 @@ class EdgeSizing {
 
   /// Round 25 — a copy carrying the given [stackRaisedForBranch] /
   /// [belowCodeMinimum] verdicts; every other field preserved.
-  EdgeSizing withGravityFlags({bool? raised, bool? belowMinimum}) =>
-      EdgeSizing(
+  EdgeSizing withGravityFlags({bool? raised, bool? belowMinimum}) => EdgeSizing(
         edgeId: edgeId,
         service: service,
         flow: flow,
@@ -1276,9 +1275,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
     // exists for the valve WC's high instantaneous draw; the hot-water service
     // never carries a flush valve, so it always takes the flush-tank branch
     // (one valve WC on cold water used to put every HW main one or two DN up).
-    final serviceFlush = service == ServiceType.hotWater
-        ? FlushSystem.flushTank
-        : flushSystem;
+    final serviceFlush =
+        service == ServiceType.hotWater ? FlushSystem.flushTank : flushSystem;
     final demand = leafDemand[service] ?? const FlowRate(0);
     final useUbap =
         isWaterSupply(service) && leafFixtureUnits.containsKey(service);
@@ -1567,7 +1565,8 @@ Map<String, EdgeSizing> autoSizeNetwork(
                   n.component == NodeComponent.fireDamper);
         }
 
-        for (final l in adjacency[root] ?? const <({String edgeId, String other})>[]) {
+        for (final l
+            in adjacency[root] ?? const <({String edgeId, String other})>[]) {
           // Walk outward from the unit: (edge, far node) pairs of the chain.
           final chain = <({String edgeId, String node})>[
             (edgeId: l.edgeId, node: l.other),
@@ -1658,8 +1657,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
                   net.nodeById(id)?.component == NodeComponent.checkValve,
               isMover: (id) {
                 final c = net.nodeById(id)?.component;
-                return c == NodeComponent.pump ||
-                    c == NodeComponent.boosterSet;
+                return c == NodeComponent.pump || c == NodeComponent.boosterSet;
               },
               isDemand: (id) =>
                   id != root &&
@@ -1672,8 +1670,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
             for (final e in componentEdges)
               if (!checkValveEdgeIds.contains(e.id)) (e.fromId, e.toId),
           ]);
-      final deferred =
-          cutBreaksLoops ? checkValveEdgeIds : const <String>{};
+      final deferred = cutBreaksLoops ? checkValveEdgeIds : const <String>{};
       final standbyLegs = cutBreaksLoops
           ? (cvPlan?.standbyLegs ?? const <_StandbyLeg>[])
           : const <_StandbyLeg>[];
@@ -2395,7 +2392,8 @@ EdgeSizing _sizeSanitaryEdge(
   // The drain this load needs: the DFU table, floored by the WC count and the
   // DN50-trap rule. Drain edges take it directly; vents take half of it.
   var drainMm = drain.drainDiameterForDfu(dfu, isStack: isStack).inMillimeters;
-  final wcFloor = drain.minDrainMmForWcCount(waterClosetCount, isStack: isStack);
+  final wcFloor =
+      drain.minDrainMmForWcCount(waterClosetCount, isStack: isStack);
   if (wcFloor > drainMm) drainMm = wcFloor;
   if (carriesDn50Trap && drainMm < drain.kMinTrapDrainMm) {
     drainMm = drain.kMinTrapDrainMm;
@@ -2788,7 +2786,10 @@ _CheckValvePlan _classifyLoopCheckValves({
     if (ra != rb) {
       inlet = ra ? 0 : 1;
     } else {
-      final ins = [for (var i = 0; i < 2; i++) if (es[i].toId == id) i];
+      final ins = [
+        for (var i = 0; i < 2; i++)
+          if (es[i].toId == id) i
+      ];
       if (ins.length == 1) {
         inlet = ins.first;
       } else if (isMover != null && isMover(a) != isMover(b)) {
@@ -2819,8 +2820,9 @@ _CheckValvePlan _classifyLoopCheckValves({
     // cutting the valve alone leaves the supply-riser / return-riser ring
     // intact, and Hardy–Cross used to push draw-off up the returns, through
     // the valve against its direction (supply main ~40 % under-sized). The
-    // RETURN side is every edge on NO shortest root -> demand path (hop
-    // distance with the valves cut): a return pipe never lies on the way to
+    // RETURN side is grown from each valve's upstream node over edges on NO
+    // shortest root -> demand path (hop distance with the valves cut) through
+    // draw-off-free, off-supply nodes: a return pipe never lies on the way to
     // a draw-off. Those edges are deferred with the valves, so the returns
     // size as zero-draw-off branches — but only when what remains (the
     // supply) is acyclic; a genuine ring with draw-off on both legs keeps
@@ -2846,10 +2848,39 @@ _CheckValvePlan _classifyLoopCheckValves({
           }
         }
       }
-      final returnSide = <String>{
+      final candidates = <String>{
         for (final e in componentEdges)
           if (!cut.contains(e.id) && !supplyEdges.contains(e.id)) e.id,
       };
+      // Round 26 r2 — the return side is grown ONLY from each valve's
+      // upstream node, through nodes that bear no draw-off and lie on no
+      // supply path; it stops (edge included) where it meets the supply. A
+      // ring segment BETWEEN two demand-fed ring nodes is off every shortest
+      // path too, but it is reached from no such return node, so a stub-fed
+      // ring main with a drawn return (valve upstream ON the ring) keeps the
+      // Hardy–Cross split.
+      final supplyNodes = <String>{
+        for (final e in componentEdges)
+          if (supplyEdges.contains(e.id)) ...[e.fromId, e.toId],
+      };
+      bool returnNode(String n) =>
+          n != root && !supplyNodes.contains(n) && !isDemand(n);
+      final returnSide = <String>{};
+      final seenReturn = <String>{};
+      final walk = <String>[
+        for (final c in cvs)
+          if (returnNode(c.upNode)) c.upNode,
+      ];
+      while (walk.isNotEmpty) {
+        final n = walk.removeLast();
+        if (!seenReturn.add(n)) continue;
+        for (final e in adj[n] ?? const <NetEdge>[]) {
+          if (!candidates.contains(e.id)) continue;
+          returnSide.add(e.id);
+          final m = other(e, n);
+          if (returnNode(m)) walk.add(m);
+        }
+      }
       final remaining = [
         for (final e in componentEdges)
           if (!cut.contains(e.id) && !returnSide.contains(e.id))
@@ -3046,11 +3077,15 @@ Map<String, double> _uniformVentStacks(
         e,
   ];
   // Any other vent run joining two DIFFERENT stack groups is a HEADER (e.g.
-  // one stack's top tied into another stack below a shared VTR): it carries
-  // the full vent load of the stack it drains — that stack's own total, the
-  // figure its own VTR would carry — so it bounds BOTH groups' uniform size
-  // without merging them (the other group's members already carry at least
-  // that load where the header joins).
+  // one stack's top tied into another stack below a shared VTR). Round 26 r2
+  // — a header keeps its own accumulated load and never lifts the stack that
+  // RECEIVES it; so does every riser of that stack ABOVE the header's
+  // junction (the shared stub up to the VTR carries both stacks). Those
+  // risers are split out of
+  // the uniform group, so the stack below the junction keeps the size of its
+  // OWN soil stack whichever way the header is drawn (UPC 703.2 / IPC 916
+  // size a vent stack on its own drain DFU, only the shared section on the
+  // combined load). A junction at a group's BOTTOM storey splits nothing.
   final headers = [
     for (final id in units.keys)
       if (net.edgeById(id) case final e?
@@ -3063,26 +3098,83 @@ Map<String, double> _uniformVentStacks(
               !offsetLink(e.toId, e.fromId))
         e,
   ];
+  // A header endpoint RECEIVES the header when its stack continues above the
+  // junction (a riser of that group at or above the junction storey — the
+  // shared stub to the VTR); otherwise the header DRAINS that stack (the
+  // stack's top tied off sideways) and carries that stack's whole vent load,
+  // the figure its own VTR would carry, so it bounds that stack's uniform
+  // size. Per receiving group: the lowest junction storey above its bottom,
+  // and the header load entering there.
+  int? floorOf(String n) => net.nodeById(n)?.floorIndex;
+  bool continuesAbove(String g, int f) => risers.any((r) {
+        if (riserGroupOf[r.fromId] != g) return false;
+        final fa = floorOf(r.fromId), fb = floorOf(r.toId);
+        return fa != null && fb != null && math.min(fa, fb) >= f;
+      });
+  final junctionFloor = <String, int>{};
+  final headerLoadAt = <String, double>{};
+  final drainedBound = <String, double>{}; // riser group -> header load
+  for (final e in headers) {
+    for (final j in [e.fromId, e.toId]) {
+      final g = riserGroupOf[j]!;
+      final f = floorOf(j);
+      if (f == null) continue;
+      if (!continuesAbove(g, f)) {
+        drainedBound[g] = math.max(drainedBound[g] ?? 0, units[e.id]!);
+        continue;
+      }
+      if (f <= (groupBottom[g] ?? f)) continue;
+      if (f < (junctionFloor[g] ?? f + 1)) junctionFloor[g] = f;
+      headerLoadAt[g] = (headerLoadAt[g] ?? 0) + units[e.id]!;
+    }
+  }
+  bool aboveJunction(NetEdge e) {
+    final g = riserGroupOf[e.fromId];
+    final jf = g == null ? null : junctionFloor[g];
+    if (jf == null) return false;
+    final fa = floorOf(e.fromId), fb = floorOf(e.toId);
+    if (fa == null || fb == null) return false;
+    return math.min(fa, fb) >= jf;
+  }
+
+  final shared = [
+    for (final e in risers)
+      if (aboveJunction(e)) e,
+  ];
   for (final e in stackRuns) {
     union(e);
   }
-  final members = [...risers, ...stackRuns];
-  if (members.length < 2) return units;
+  final members = [
+    for (final e in risers)
+      if (!aboveJunction(e)) e,
+    ...stackRuns,
+  ];
+  if (members.length + shared.length < 2) return units;
   final stackMax = <String, double>{};
   for (final e in members) {
     final k = find(e.fromId);
     final v = units[e.id]!;
     if (v > (stackMax[k] ?? 0)) stackMax[k] = v;
   }
-  for (final e in headers) {
-    final v = units[e.id]!;
-    for (final k in {find(e.fromId), find(e.toId)}) {
-      if (stackMax.containsKey(k) && v > stackMax[k]!) stackMax[k] = v;
-    }
+  for (final MapEntry(key: g, value: v) in drainedBound.entries) {
+    final k = find(g);
+    if (stackMax.containsKey(k) && v > stackMax[k]!) stackMax[k] = v;
+  }
+  // The stack's own total still governs below the junction: a shared riser's
+  // load less the header load entering at the junction (never below zero).
+  for (final e in shared) {
+    final k = find(e.fromId);
+    final own = math.max(
+        0.0, units[e.id]! - (headerLoadAt[riserGroupOf[e.fromId]] ?? 0));
+    if (own > (stackMax[k] ?? 0)) stackMax[k] = own;
   }
   return {
     ...units,
     for (final e in members) e.id: stackMax[find(e.fromId)]!,
+    // A shared riser above a header junction keeps its own (combined) load,
+    // never less than the stack it sits on.
+    for (final e in shared)
+      e.id: math.max(units[e.id]!, stackMax[find(e.fromId)] ?? 0),
   };
 }
 

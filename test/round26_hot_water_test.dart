@@ -7,7 +7,8 @@
 //                        round one loop
 //   separate-systems     two heaters are two recirculation systems (two ways)
 //   house-gate           no return drawn + developed length <= 15 m ⇒ no
-//                        recirculation is assumed (no pump, way, HWR leg)
+//                        recirculation is assumed (no pump, way, HWR leg) —
+//                        unless a hot-water pump is DRAWN (r2)
 //   mirrored-return-bom  the ASSUMED DN20 return is taken off, flagged
 import 'dart:math' as math;
 
@@ -297,5 +298,42 @@ void main() {
         isEmpty);
     expect(c.read(bomProvider).where((b) => b.assumed), isEmpty);
     expect(c.read(hotWaterAssumedReturnProvider), isFalse);
+  });
+
+  test('a DRAWN hot-water pump keeps its recirc duty on a short system', () {
+    // Round 26 r2 — Heater → pump → 0.2 m main → shower on one floor: far
+    // under the 15 m developed-length gate, but the engineer DREW the
+    // circulator, so it keeps its duty, its schedule row and its way.
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    c.read(projectControllerProvider.notifier)
+      ..setFloors([Floor('L0', const Length(3.5))])
+      ..setCalibration('s1', const ScaleCalibration(0.01));
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+      _n('H', role: NodeRole.plant),
+      _n('P', x: 50, role: NodeRole.plant, c: NodeComponent.pump),
+      _n('M', x: 70),
+      _n('S', x: 70, y: 20, role: NodeRole.fixture,
+          fixture: PlumbingFixture.shower),
+    ], edges: [
+      _hw('hp', 'H', 'P'),
+      _hw('pm', 'P', 'M'),
+      _hw('ms', 'M', 'S'),
+    ]));
+    expect(c.read(mepDutyBindingProvider).hwRecircPumpNodeIds, {'P'});
+    expect(c.read(hotWaterRecircSystemsProvider), hasLength(1));
+    expect(c.read(hotWaterRecircProvider), isNotNull);
+    expect(c.read(equipmentNodeDutiesProvider)['P'], isNotNull);
+    // The same system without the drawn pump stays under the gate.
+    c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
+      _n('H', role: NodeRole.plant),
+      _n('M', x: 70),
+      _n('S', x: 70, y: 20, role: NodeRole.fixture,
+          fixture: PlumbingFixture.shower),
+    ], edges: [
+      _hw('hm', 'H', 'M'),
+      _hw('ms', 'M', 'S'),
+    ]));
+    expect(c.read(hotWaterRecircSystemsProvider), isEmpty);
   });
 }

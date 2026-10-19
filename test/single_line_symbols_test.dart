@@ -235,12 +235,10 @@ void main() {
     // the right), so the node x's are read from the painter's OWN layout
     // (the same `layoutNodePositions` its hit test uses) rather than the old
     // full-width `sidePad + rank/(cols-1) * drawWidth` arithmetic.
-    final paint = tester
+    final pos = tester
         .widgetList<CustomPaint>(find.byType(CustomPaint))
-        .firstWhere((w) =>
-            w.painter.runtimeType.toString() == '_AutoSchematicPainter');
-    final pos = (paint.painter as dynamic).layoutNodePositions(
-        paint.size) as Map<String, Offset>;
+        .map((w) => autoSchematicLayoutPositions(w.painter, w.size))
+        .firstWhere((p) => p != null)!;
     // Column ranks a=0, c=1, b=2, d=3 (4 distinct x-buckets) ⇒ left-to-right.
     expect(pos['a']!.dx < pos['c']!.dx && pos['c']!.dx < pos['b']!.dx,
         isTrue);

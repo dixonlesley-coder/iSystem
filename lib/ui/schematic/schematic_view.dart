@@ -2356,6 +2356,17 @@ Offset resolveLabelDisplacement(
 // Auto-mode painter (the prior read-only diagram)
 // ---------------------------------------------------------------------------
 
+/// Test hook: the Auto riser painter's OWN laid-out node positions (the one
+/// layout its paint + the inferred-riser hit test share) when [painter] is
+/// the Auto schematic painter, else null — a typed seam so a test never
+/// reaches the private painter through `dynamic`.
+@visibleForTesting
+Map<String, Offset>? autoSchematicLayoutPositions(
+        CustomPainter? painter, Size size) =>
+    painter is _AutoSchematicPainter
+        ? painter.layoutNodePositions(size)
+        : null;
+
 class _AutoSchematicPainter extends CustomPainter {
   const _AutoSchematicPainter({
     required this.network,

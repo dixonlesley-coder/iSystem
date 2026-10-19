@@ -1600,8 +1600,8 @@ class HotWaterRecircSystem {
 /// index run's friction at each segment's OWN sized bore plus the return leg.
 /// Round 26 — PARALLEL drawn loops each carry their heat-loss share of the
 /// flow (shared trunks the sum); two heaters are two systems; a system with no
-/// return drawn and a developed length ≤ [kRecircMinDevelopedLengthM] assumes
-/// no recirculation at all.
+/// return drawn, no hot-water pump drawn and a developed length ≤
+/// [kRecircMinDevelopedLengthM] assumes no recirculation at all.
 final hotWaterRecircSystemsProvider =
     Provider<List<HotWaterRecircSystem>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
@@ -1685,9 +1685,12 @@ typedef HotWaterRecircLoop = ({
   Set<String> nodeIds,
 });
 
-/// The PRIMARY loop of [hotWaterRecircLoops] (the most circulated pipework,
-/// ties by root id) — the single-system view. Null when nothing needs
-/// recirculation.
+/// The PRIMARY loop of [hotWaterRecircLoops] — the single-system view. Null
+/// when nothing needs recirculation. Round 26 r2 — the SAME primary as
+/// [hotWaterRecircSystemsProvider]: the largest recirculation FLOW, which is
+/// proportional to the heat-losing pipework (circulated + assumed return,
+/// [heatLossFromLength] at one flow temperature / ΔT for every system), ties
+/// by root id.
 HotWaterRecircLoop? hotWaterRecircLoop(
   Network net,
   Map<String, EdgeSizing> sizing, {
@@ -1698,7 +1701,8 @@ HotWaterRecircLoop? hotWaterRecircLoop(
       lengthOf: lengthOf, minDevelopedLengthM: minDevelopedLengthM);
   if (loops.isEmpty) return null;
   final sorted = [...loops]..sort((a, b) {
-      final c = b.circulatedLengthM.compareTo(a.circulatedLengthM);
+      final c = (b.circulatedLengthM + b.returnLengthM)
+          .compareTo(a.circulatedLengthM + a.returnLengthM);
       return c != 0 ? c : a.rootId.compareTo(b.rootId);
     });
   return sorted.first;
@@ -1755,9 +1759,9 @@ HotWaterRecircLoop? hotWaterRecircLoop(
 /// and no bare open-ended leaf (a dead leg the recirculation never reaches),
 /// its total length, and the INDEX run from the component's source (the
 /// longest circulated path by length, each segment at its sized bore) whose
-/// length the return leg mirrors. A component with no DRAWN return whose
-/// developed length (source → farthest fixture) is at or below
-/// [minDevelopedLengthM] is omitted — no recirculation is assumed.
+/// length the return leg mirrors. A component with no DRAWN return and no
+/// drawn hot-water pump whose developed length (source → farthest fixture) is
+/// at or below [minDevelopedLengthM] is omitted — no recirculation is assumed.
 List<HotWaterRecircLoop> hotWaterRecircLoops(
   Network net,
   Map<String, EdgeSizing> sizing, {
@@ -1787,6 +1791,27 @@ List<HotWaterRecircLoop> hotWaterRecircLoops(
     if (loop != null) out.add(loop);
   }
   return out;
+}
+
+/// True when [nodeIds] (one hot-water component) holds a drawn pump /
+/// booster set that serves hot water only — not the cold-water supply, not a
+/// fire service (mirrors the HW recirc pump test of the duty binding).
+bool _hasDrawnHotWaterPump(Network net, Set<String> nodeIds) {
+  for (final id in nodeIds) {
+    final c = net.nodeById(id)?.component;
+    if (c != NodeComponent.pump && c != NodeComponent.boosterSet) continue;
+    final svc = {
+      for (final e in net.edges)
+        if (e.fromId == id || e.toId == id) e.service,
+    };
+    if (svc.contains(ServiceType.hotWater) &&
+        !svc.contains(kSupplyService) &&
+        !svc.contains(ServiceType.fireHydrant) &&
+        !svc.contains(ServiceType.fireSprinkler)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 HotWaterRecircLoop? _hotWaterRecircLoopOf(
@@ -1971,6 +1996,11 @@ HotWaterRecircLoop? _hotWaterRecircLoopOf(
   // drawn, recirculation is only ASSUMED where the developed length (source →
   // farthest hot-water fixture, over every hot-water pipe) exceeds the
   // threshold (IPC 607.2, `// VERIFY`): a house gets no pump, way or HWR leg.
+  // Round 26 r2 — a pump / booster DRAWN on the hot-water service (the same
+  // test [mepDutyBindingProvider] uses for a HW recirc pump: not on the
+  // cold-water or a fire service) is an explicit recirculation signal: the
+  // gate never silences the engineer's drawn circulator.
+  final drawnPump = _hasDrawnHotWaterPump(net, nodeIds);
   final allAdj = <String, List<NetEdge>>{};
   for (final e in hw) {
     (allAdj[e.fromId] ??= []).add(e);
@@ -1983,7 +2013,7 @@ HotWaterRecircLoop? _hotWaterRecircLoopOf(
     if (net.nodeById(en.key)?.role != NodeRole.fixture) continue;
     if (en.value > developed) developed = en.value;
   }
-  if (developed <= minDevelopedLengthM + 1e-9) return null;
+  if (!drawnPump && developed <= minDevelopedLengthM + 1e-9) return null;
 
   // Index run: the longest circulated path (by length) from the source, on
   // SHORTEST-path distances (Round 26 — Dijkstra, never hop order).

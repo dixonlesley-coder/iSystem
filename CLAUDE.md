@@ -1469,16 +1469,27 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   so an untyped top-storey 'Source / tank' is judged like a roof tank. A vent
   RUN joins two stack riser groups only as an OFFSET (one group's TOP to a
   different group's BOTTOM on one storey); any other run between groups is a
-  HEADER that bounds both groups' uniform size with its own load but never
-  merges them. A single common return check valve: the RETURN side (edges on
-  no shortest root -> draw-off path) is deferred with the valve whenever the
-  supply that remains is acyclic. Hot-water recirculation is PER COMPONENT
+  HEADER that never merges them: it keeps its own load and bounds only the
+  stack it DRAINS (that stack's top tied off sideways); the stack that
+  RECEIVES it splits at the junction — risers above it (the shared stub to the
+  VTR) keep their own combined load, the stack below keeps its OWN soil
+  stack's size, whichever way the header is drawn (r2). A single common return
+  check valve: the RETURN side is grown ONLY from each valve's upstream node
+  through draw-off-free, off-supply nodes over edges on no shortest root ->
+  draw-off path, and deferred with the valve whenever the supply that remains
+  is acyclic — a ring segment between two demand-fed ring nodes is never a
+  'return', so a stub-fed ring main with draw-off on both legs and a drawn
+  return keeps Hardy–Cross (r2). Hot-water recirculation is PER COMPONENT
   (`hotWaterRecircSystemsProvider`; one way / schedule row / report line each,
-  a drawn HW pump takes its own system's duty); parallel drawn loops carry
+  a drawn HW pump takes its own system's duty; ONE primary = the largest
+  recirc flow ∝ circulated + assumed-return length, in the provider AND
+  `hotWaterRecircLoop`); parallel drawn loops carry
   heat-loss SHARES (`supplyPathFlowShares`, shared trunks the sum, index loop
   by Σ s^1.852·L/D^4.871); the index run is Dijkstra (never hop order); with
-  no return drawn recirculation is assumed only above
-  `kRecircMinDevelopedLengthM` (15 m, IPC 607.2, `// VERIFY`), and the
+  no return drawn AND no hot-water pump drawn, recirculation is assumed only
+  above `kRecircMinDevelopedLengthM` (15 m, IPC 607.2, `// VERIFY`) — a drawn
+  HW circulator is an explicit recirculation signal and is never silenced
+  (r2) — and the
   assumed DN20 return + pump are taken off flagged `assumed`. The HWR leg is
   drawn only for an ASSUMED return (`hotWaterAssumedReturnProvider`), one per
   riser STACK, the HWR PUMP at the whole network's lowest HW riser node and

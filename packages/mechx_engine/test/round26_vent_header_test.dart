@@ -15,8 +15,7 @@ import 'package:test/test.dart';
 
 NetNode _n(String id, double x, double y,
         {int floor = 0, NodeRole role = NodeRole.main}) =>
-    NetNode(
-        id: id, sheetId: 's1', x: x, y: y, floorIndex: floor, role: role);
+    NetNode(id: id, sheetId: 's1', x: x, y: y, floorIndex: floor, role: role);
 
 NetEdge _e(String id, String a, String b, ServiceType s,
         {EdgeKind kind = EdgeKind.run}) =>
@@ -25,9 +24,13 @@ NetEdge _e(String id, String a, String b, ServiceType s,
 /// Two soil stacks off one outfall — A at [dfuA] per floor, B at [dfuB] per
 /// floor, 4 floors — each with its own vent stack tied every floor. With
 /// [header], B's top VB3 runs to A's top VA3 and only A has a VTR; without
-/// it each stack has its own VTR.
+/// it each stack has its own VTR. [mirror] draws the header the other way:
+/// A's top VA3 runs to B's top VB3 and only B (the SMALL stack) has a VTR.
 ({Network net, Map<String, double> dfu}) _twoStacks(
-    {required bool header, double dfuA = 10, double dfuB = 1}) {
+    {required bool header,
+    bool mirror = false,
+    double dfuA = 10,
+    double dfuB = 1}) {
   final nodes = <NetNode>[_n('out', 0, 0)];
   final edges = <NetEdge>[];
   final dfu = <String, double>{};
@@ -44,22 +47,30 @@ NetEdge _e(String id, String a, String b, ServiceType s,
         ..add(_e('t$tag$f', 'V$tag$f', 'DS$tag$f', ServiceType.vent));
       if (f > 0) {
         edges
-          ..add(_e('ds$tag$f', 'DS$tag${f - 1}', 'DS$tag$f',
-              ServiceType.drainage,
+          ..add(_e(
+              'ds$tag$f', 'DS$tag${f - 1}', 'DS$tag$f', ServiceType.drainage,
               kind: EdgeKind.riser))
           ..add(_e('v$tag$f', 'V$tag${f - 1}', 'V$tag$f', ServiceType.vent,
               kind: EdgeKind.riser));
       }
     }
   }
-  nodes.add(_n('VTRA', 120, 0, floor: 4));
-  edges.add(_e('vtrA', 'VA3', 'VTRA', ServiceType.vent, kind: EdgeKind.riser));
-  if (header) {
-    edges.add(_e('hdr', 'VB3', 'VA3', ServiceType.vent));
-  } else {
+  final vtrOnA = !header || !mirror;
+  final vtrOnB = !header || mirror;
+  if (vtrOnA) {
+    nodes.add(_n('VTRA', 120, 0, floor: 4));
+    edges
+        .add(_e('vtrA', 'VA3', 'VTRA', ServiceType.vent, kind: EdgeKind.riser));
+  }
+  if (vtrOnB) {
     nodes.add(_n('VTRB', 420, 0, floor: 4));
-    edges.add(
-        _e('vtrB', 'VB3', 'VTRB', ServiceType.vent, kind: EdgeKind.riser));
+    edges
+        .add(_e('vtrB', 'VB3', 'VTRB', ServiceType.vent, kind: EdgeKind.riser));
+  }
+  if (header) {
+    edges.add(mirror
+        ? _e('hdr', 'VA3', 'VB3', ServiceType.vent)
+        : _e('hdr', 'VB3', 'VA3', ServiceType.vent));
   }
   return (net: Network(nodes: nodes, edges: edges), dfu: dfu);
 }
@@ -98,21 +109,51 @@ void main() {
     }
   });
 
-  test('property: a header never changes the other stack (seeded)', () {
+  test('mirrored header (VTR on the SMALL stack) leaves it its own size', () {
+    // Round 26 r2 — A's top VA3 headered into B's top VB3, VTR only on B.
+    // The stub VB3 -> VTRB carries A + B (36 DFU, DN65) but B's own stack
+    // stays on its own 4 DFU (DN40); A keeps its own 32 DFU (DN65).
+    final alone = _twoStacks(header: false);
+    final tied = _twoStacks(header: true, mirror: true);
+    final fuTied = <String, double>{};
+    final sAlone = autoSizeNetwork(alone.net, const SizingContext(),
+        leafDemand: const {}, nodeDrainageUnits: alone.dfu);
+    final sTied = autoSizeNetwork(tied.net, const SizingContext(),
+        leafDemand: const {},
+        nodeDrainageUnits: tied.dfu,
+        fixtureUnitsOut: fuTied);
+    for (final id in ['vB1', 'vB2', 'vB3']) {
+      expect(sTied[id]!.diameter.inMillimeters, 40, reason: id);
+    }
+    for (final id in ['vA1', 'vA2', 'vA3']) {
+      expect(
+          sTied[id]!.diameter.inMillimeters, sAlone[id]!.diameter.inMillimeters,
+          reason: id);
+    }
+    // The shared stub to the one VTR carries the combined load.
+    expect(sTied['vtrB']!.diameter.inMillimeters, 65);
+    expect(sTied['hdr']!.diameter.inMillimeters,
+        drain.ventDiameterForDfu(fuTied['hdr']!).inMillimeters);
+  });
+
+  test(
+      'property: a header never changes either stack, both orientations '
+      '(seeded)', () {
     final rnd = math.Random(26);
-    for (var trial = 0; trial < 25; trial++) {
+    for (var trial = 0; trial < 40; trial++) {
       final a = 1.0 + rnd.nextInt(20);
       final b = 1.0 + rnd.nextInt(20);
+      final mirror = trial.isOdd;
       final alone = _twoStacks(header: false, dfuA: a, dfuB: b);
-      final tied = _twoStacks(header: true, dfuA: a, dfuB: b);
+      final tied = _twoStacks(header: true, mirror: mirror, dfuA: a, dfuB: b);
       final sAlone = autoSizeNetwork(alone.net, const SizingContext(),
           leafDemand: const {}, nodeDrainageUnits: alone.dfu);
       final sTied = autoSizeNetwork(tied.net, const SizingContext(),
           leafDemand: const {}, nodeDrainageUnits: tied.dfu);
-      for (final id in ['vB1', 'vB2', 'vB3']) {
+      for (final id in ['vA1', 'vA2', 'vA3', 'vB1', 'vB2', 'vB3']) {
         expect(sTied[id]!.diameter.inMillimeters,
             sAlone[id]!.diameter.inMillimeters,
-            reason: 'trial $trial a=$a b=$b $id');
+            reason: 'trial $trial mirror=$mirror a=$a b=$b $id');
       }
     }
   });
