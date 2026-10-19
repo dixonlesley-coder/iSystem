@@ -380,6 +380,15 @@ List<BomLine> _panelLines(
       qty: 1,
       category: PartCategory.breaker,
       sku: part?.sku,
+      // Round 23 follow-up — an UNMATCHED device (an ACB, an MCCB above the
+      // catalogue's widest frame) still carries an `elec:` price key (audit
+      // round 8: every non-catalogue electrical line is priceable), keyed on
+      // what the schedule specifies: class · rating · poles · kA.
+      priceKey: part == null
+          ? '${kElecPriceKeyPrefix}breaker:${_classStr(b.deviceClass)}:'
+              '${_fmt(b.ratingA.amperes)}A:${poles}P'
+              '${(needKa ?? 0) > 0 ? ':${_fmt(_r1(needKa!))}kA' : ''}'
+          : null,
       breakingCapacityShort: short,
       deviceSubstituted: subst != null,
     );

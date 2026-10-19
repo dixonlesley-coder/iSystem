@@ -104,6 +104,12 @@ void main() {
       // The widest catalogue frame is below 2500 A ⇒ nothing covers it:
       // the line carries no SKU (unmatched), never a clean MCCB match.
       expect(line.sku, isNull);
+      // Round 23 follow-up — the unmatched line is still PRICEABLE: an
+      // `elec:breaker:<class>:<A>:<poles>P[:<kA>]` key (audit round 8: every
+      // non-catalogue electrical line carries an `elec:` key).
+      expect(line.priceKey, startsWith('${kElecPriceKeyPrefix}breaker:ACB:2500A:'));
+      // The substitution branch is unreachable today: ACB starts above 1600 A
+      // and the widest catalogue breaker is 800 A, so nothing ever matches.
       // Only an MCB carries a B/C/D curve — no ACB line names one.
       for (final l in bom.lines.where((l) =>
           l.category == PartCategory.breaker &&
