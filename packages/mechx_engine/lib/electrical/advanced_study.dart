@@ -37,8 +37,14 @@ import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
 import 'compute.dart' show circuitIsThreePhase, kThreePhaseServiceLineVoltageV;
 import 'containment.dart' show ConduitSpec, ContainmentResult, containmentFor;
+import 'control/motor_flc.dart' show motorFlc, motorFlc1ph;
 import 'control/starter.dart'
-    show ControlAssembly, StarterType, applyStarterTemplate;
+    show
+        ControlAssembly,
+        StarterType,
+        applyStarterTemplate,
+        effectiveStarterType;
+import 'control/starting.dart' show startingAnalysis;
 import 'diversity_library.dart' show diversityLibraryVerifyItems;
 import 'electrode.dart' show ElectrodeDesign, designElectrode;
 import 'enclosure.dart'
@@ -72,7 +78,8 @@ import 'panel_results.dart'
         ElectricalSystemResult,
         ElectricalWarning,
         WarningSeverity;
-import 'power_factor.dart' show PowerFactorResult, powerFactorCorrection;
+import 'power_factor.dart'
+    show PowerFactorResult, isDriveFedCircuit, powerFactorCorrection;
 import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
 import 'sources.dart' show GensetMotor;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
@@ -237,6 +244,11 @@ AdvancedStudy computeAdvancedStudy(
     for (final pr in sys.panels.values)
       for (final r in pr.circuits) r.circuitId: r.threePhase,
   };
+  final resultByCircuit = <String, ElectricalCircuitResult>{
+    for (final pr in sys.panels.values)
+      for (final r in pr.circuits) r.circuitId: r,
+  };
+  final starterWarnings = <ElectricalWarning>[];
 
   // 1 ── Control assemblies (per motor/pump circuit with an explicit starter).
   final controlAssemblies = <String, ControlAssembly>{};
@@ -261,14 +273,37 @@ AdvancedStudy computeAdvancedStudy(
       final u0 = panel.system == ElectricalSystem.threePhase
           ? (panel.voltage.volts / math.sqrt(3)).roundToDouble()
           : panel.voltage.volts;
+      // Round 42 (elec-props-8-star-delta-on-single-phase-way) — a
+      // single-phase motor has no six winding terminals to reconnect: a
+      // star-delta starter on a 1φ way is built as DOL on the full 1φ
+      // current (never 58 % gear carrying the whole line current) and the
+      // way is flagged (judge-only).
+      final starter = effectiveStarterType(c.starterType!, threePhase);
+      if (starter != c.starterType) {
+        starterWarnings.add(ElectricalWarning(
+          code: 'star-delta-single-phase',
+          severity: WarningSeverity.warning,
+          message: '${c.name}: a star-delta starter needs a three-phase '
+              'motor with six winding terminals — this way is single-phase, '
+              'so its control gear is sized as direct-on-line on the full '
+              'current; choose DOL / soft-starter or supply it three-phase.',
+          panelId: panel.id,
+          circuitId: c.id,
+        ));
+      }
+      // Round 42 (elec-props-8-control-gear-flc-basis-below-schedule-ib) —
+      // the gear sizes on the way's SOLVED running current (the Ib the
+      // schedule prints); the IEC table only when no solved result exists.
+      final solved = resultByCircuit[c.id];
       final assembly = applyStarterTemplate(
         circuitId: c.id,
-        starterType: c.starterType!,
+        starterType: starter,
         motorKw: motorKw,
         voltage: threePhase ? panel.voltage : Voltage(u0),
         singlePhase: !threePhase,
+        flcA: solved?.runCurrentA,
         variableTorque:
-            c.starterType == StarterType.vfd && c.loadKind == LoadKind.pump,
+            starter == StarterType.vfd && c.loadKind == LoadKind.pump,
         // Round 41 — the SAME gate as the schedule's 'no-OL trip (fire)'
         // token and compute.dart's `fire-pump-protection` note, so the
         // control spec / BOM never buys a tripping overload for a fire pump.
@@ -361,7 +396,7 @@ AdvancedStudy computeAdvancedStudy(
     // see is fed in from the control assemblies on this panel.
     final h = estimateHarmonics(panelResult, profile,
         driveFedCircuitIds:
-            _driveFedCircuitIds(panelResult, controlAssemblies));
+            _driveFedCircuitIds(panelResult, panelModel));
     harmonics[id] = h;
     if (h != null && h.thdBand == ThdBand.high) anyHarmonicRich = true;
 
@@ -533,7 +568,8 @@ AdvancedStudy computeAdvancedStudy(
       backupPower: gensetBackupDemandW(project, sys),
       demandPower: Power(sys.supply.demandW),
       voltage: sys.supply.voltage,
-      motors: gensetStartMotors(project),
+      motors: gensetStartMotors(project,
+          sys: sys, assemblies: controlAssemblies),
       utilitySub: powerOneLineUtilitySub(project, sys.supply.demandVa,
           voltage: sys.supply.voltage),
     );
@@ -609,6 +645,7 @@ AdvancedStudy computeAdvancedStudy(
     verifyItems: verify,
     warnings: [
       ...gensetBackupWarnings(project, sys),
+      ...starterWarnings,
       // Round 40 — a DECLARED transformer (or the most loaded section of a
       // dual service) whose 80 %-loaded rating is below what it carries was
       // only a note; it is now a judge-only warning (never resizes).
@@ -816,15 +853,20 @@ Map<String, double> _feederDistances(
 /// `estimateHarmonics` cannot see. They are counted ADDITIVELY with the
 /// kind-derived (UPS / welding) share — never as an override — so adding a
 /// drive can only raise the panel's non-linear fraction.
+///
+/// Round 42 — read through [isDriveFedCircuit], the predicate the PF study
+/// also uses, so both studies see ONE drive-fed set.
 Set<String> _driveFedCircuitIds(
   ElectricalPanelResult panel,
-  Map<String, ControlAssembly> controlAssemblies,
+  ElectricalPanel? panelModel,
 ) {
   final ids = <String>{};
-  for (final c in panel.circuits) {
+  if (panelModel == null) return ids;
+  final resultIds = {for (final c in panel.circuits) c.circuitId};
+  for (final c in panelModel.circuits) {
     if (c.loadKind == LoadKind.spare) continue;
-    final a = controlAssemblies[c.circuitId];
-    if (a != null && a.starterType == StarterType.vfd) ids.add(c.circuitId);
+    if (!resultIds.contains(c.id)) continue;
+    if (isDriveFedCircuit(c)) ids.add(c.id);
   }
   return ids;
 }
@@ -871,29 +913,80 @@ bool _hasFloorGear(
 /// was sized on the whole demand, so after transfer it starts every motor:
 /// marking the fire-pump board essential (what `life-safety-not-essential`
 /// asks for) must never drop a 110 kW DOL chiller out of the dip screen.
-List<GensetMotor> gensetStartMotors(ElectricalProject project) {
+///
+/// Round 42 (electrical-sim-7-genset-dip-multiples-disagree-with-starter) —
+/// each motor carries its STARTING kVA on the ONE starting basis the control
+/// assembly prints (`control/starting.dart`): the way's own assembly's
+/// starting current when [assemblies] holds one, else [startingAnalysis] on
+/// the assembly's own FLC basis (max of the IEC table FLC and the way's
+/// solved running current [sys]) × √3·U (3φ) / U0 (1φ). One machine, one
+/// starting current.
+List<GensetMotor> gensetStartMotors(
+  ElectricalProject project, {
+  ElectricalSystemResult? sys,
+  Map<String, ControlAssembly> assemblies = const {},
+}) {
   final motors = <GensetMotor>[];
   final essential = gensetBackedPanelIds(project);
   final gen = project.sources?.generator;
   final restrict =
       essential.isNotEmpty && (gen?.backupFraction ?? 1.0) < 1.0;
+  final resultByCircuit = <String, ElectricalCircuitResult>{
+    if (sys != null)
+      for (final pr in sys.panels.values)
+        for (final r in pr.circuits) r.circuitId: r,
+  };
   for (final p in project.panels) {
     if (restrict && !essential.contains(p.id)) continue;
     for (final c in p.circuits) {
       if (!_isMotorLike(c)) continue;
       final kw = _motorKw(c);
       if (kw <= 0) continue;
+      final solved = resultByCircuit[c.id];
+      final threePhase = solved?.threePhase ??
+          circuitIsThreePhase(
+            panelSystem: p.system,
+            kind: c.loadKind,
+            loadW: c.loadW,
+            motorKw: c.motorKw,
+            phases: c.phases,
+          );
+      final u0 = p.system == ElectricalSystem.threePhase
+          ? (p.voltage.volts / math.sqrt(3)).roundToDouble()
+          : p.voltage.volts;
+      final starter = c.starterType == null
+          ? null
+          : effectiveStarterType(c.starterType!, threePhase);
+      final assemblyStart = assemblies[c.id]?.starting;
+      final double startA;
+      if (assemblyStart != null) {
+        startA = assemblyStart.startCurrentA.amperes;
+      } else {
+        // The assembly's own basis: max(table FLC, the solved Ib).
+        final table = threePhase
+            ? motorFlc(kw, p.voltage).amperes
+            : motorFlc1ph(kw, Voltage(u0)).amperes;
+        final ib = solved?.runCurrentA.amperes ?? 0;
+        final flc = Current(
+            ((ib > table ? ib : table) * 10).roundToDouble() / 10);
+        startA = startingAnalysis(flc, starter ?? StarterType.dol)
+            .startCurrentA
+            .amperes;
+      }
+      final startVa = threePhase
+          ? math.sqrt(3) * p.voltage.volts * startA
+          : u0 * startA;
       motors.add(GensetMotor(
         name: c.name,
         shaftPower: Power.kiloWatts(kw),
-        starterType: c.starterType == null
-            ? null
-            : _starterString(c.starterType!),
+        starterType: starter == null ? null : _starterString(starter),
+        startKva: ApparentPower(startVa),
       ));
     }
   }
   return motors;
 }
+
 
 /// Map a [StarterType] to the loose string the genset dip screen expects (its
 /// `kStartKvaMultiple` keys: DOL / STAR_DELTA / SOFT_STARTER / VFD / …).

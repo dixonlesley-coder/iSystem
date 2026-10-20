@@ -19,8 +19,9 @@ import 'dart:math' as math;
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
 import '../electrical/containment.dart'
-    show ConduitSpec, conduitFillSingle, sizeConduit;
-import '../electrical/control/starter.dart' show StarterType;
+    show ConduitSpec, conduitFillSingle, fieldCablesOf, sizeConduit;
+import '../electrical/control/starter.dart'
+    show StarterType, effectiveStarterType;
 import '../electrical/earthing.dart'
     show EarthingSystemInfo, groupedConductorMakeup;
 import '../electrical/fault.dart' show serviceCapacityFraction;
@@ -771,7 +772,7 @@ SldSheet buildElectricalSld({
       final studySpec = containmentByCircuitId?[c.circuitId];
       final conduitMm = studySpec != null
           ? _conduitFromSpec(studySpec)
-          : _conduitMm(c.cable.csaMm2, c.threePhase);
+          : _conduitMm(fieldCablesOf(c).csaMm2, c.threePhase);
       // H6: a way whose conductor exceeds the conduit range runs on cable tray /
       // ladder, not in conduit — print an explicit `tray` route token so EVERY
       // row states a route method (the code's own convention; never a silent
@@ -781,7 +782,8 @@ SldSheet buildElectricalSld({
       // (the containment study's `CircuitConduit.count`) ⇒ `· 2x PVC 50mm`, so
       // the token can never under-count the conduits to procure. A single run
       // keeps the bare token (byte-identical).
-      final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
+      // Round 42 — the FIELD cable count (a star-delta way's two lead runs).
+      final runs = fieldCablesOf(c).count;
       final conduitCount = runs > 1 ? '${runs}x ' : '';
       final conduit = conduitMm != null
           ? ' · ${conduitCount}PVC ${conduitMm}mm'
@@ -806,11 +808,16 @@ SldSheet buildElectricalSld({
           c.lengthM > 0 ? ' · ${planLengthLabel(Length(c.lengthM))}' : '';
       final cable = isSpareWay
           ? '-'
-          : '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
-              '$conduit$length'
-              // Round 41 — a star-delta way's TWO motor-lead cables (the
-              // starter → motor six-terminal connection, each on Ib/√3).
-              '${c.motorLeads == null ? '' : ' · leads ${cableRunLabel(circuit, c.motorLeads!.csaMm2, true, cores: 4, runs: 2 * (c.motorLeads!.runsPerPhase ?? 1), peCsaMm2: c.motorLeadsPeCsaMm2)}'}';
+          : c.motorLeads != null
+              // Round 41/42 — a star-delta way's FIELD run is its TWO
+              // motor-lead cables (the starter → motor six-terminal
+              // connection, each on Ib/√3); the starter sits in the board,
+              // so the breaker → starter link is internal wiring and is not
+              // a PENGHANTAR run.
+              ? 'leads ${cableRunLabel(circuit, c.motorLeads!.csaMm2, true, cores: 4, runs: 2 * (c.motorLeads!.runsPerPhase ?? 1), peCsaMm2: c.motorLeadsPeCsaMm2)}'
+                  '$conduit$length'
+              : '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
+                  '$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       // Round 19 — a capacitor way's loadW is its REACTIVE rating, so it prints
       // in kvar, never as WATT.
@@ -826,7 +833,17 @@ SldSheet buildElectricalSld({
       // DEVICE: breaker label + the motor-control / starter token (DOL / VSD /
       // star-delta) APPENDED only when the way carries a real starterType —
       // most final lighting/socket ways have none, so the cell stays bare.
-      final starter = circuit?.starterType;
+      // Round 42 — the starter the gear ACTUALLY uses: only on a motor-like
+      // way (motor / pump / HVAC — a heater re-kinded from a motor keeps no
+      // starter token), and a star-delta on a single-phase way prints DOL
+      // (the advanced study's `effectiveStarterType`).
+      final rawStarter = circuit?.starterType;
+      final starter = rawStarter != null &&
+              (c.loadKind == LoadKind.motor ||
+                  c.loadKind == LoadKind.pump ||
+                  c.loadKind == LoadKind.hvac)
+          ? effectiveStarterType(rawStarter, c.threePhase)
+          : null;
       if (starter != null) usedStarters.add(starter);
       if (c.rcd.required) anyRcd = true;
       if (c.rcd.required && c.rcd.timeDelayed) anyRcdS = true;

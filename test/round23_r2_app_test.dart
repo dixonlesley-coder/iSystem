@@ -120,7 +120,13 @@ void main() {
       expect(now.loadKind, fresh.loadKind);
     });
 
-    test('a typed load kind is kept', () async {
+    test('the drawn machine owns the load kind (Round 42 supersedes the '
+        'typed-kind keep)', () async {
+      // Re-derived Round 42 (regression-mep-kind-lock-traps-spare-rekinded-
+      // machine): since Round 41 a derived way's kind cannot be changed, so
+      // a stored `loadKindUserSet` is migrated — the sync re-derives the kind
+      // from the fresh mint and clears the flag (a kept Spare zeroed a drawn
+      // pump's demand for good).
       final (c, way, nodeId) = await ahu();
       final e = c.read(electricalProjectProvider.notifier);
       e.setCircuit(kMepEquipmentPanelId, way.id, loadKind: way.loadKind);
@@ -129,8 +135,11 @@ void main() {
           .setNodeComponent(nodeId, NodeComponent.acSplitWall);
       await _settle(c);
       final now = _mepBoard(c)!.circuits.firstWhere((w) => w.id == way.id);
-      expect(now.loadKindUserSet, isTrue);
-      expect(now.loadKind, way.loadKind);
+      final fresh = c
+          .read(mepAutoFeedCircuitsProvider)
+          .firstWhere((w) => w.sourceEquipmentId == way.sourceEquipmentId);
+      expect(now.loadKindUserSet, isFalse);
+      expect(now.loadKind, fresh.loadKind);
     });
   });
 }

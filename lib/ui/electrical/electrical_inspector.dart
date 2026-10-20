@@ -20,6 +20,8 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, PhaseAssignment;
+import 'package:mechx_engine/report/electrical_calc_report.dart'
+    show vdropPctForVerdict;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show breakerScheduleLabel, cableRunLabel;
 import 'package:mechx_engine/standards/puil.dart'
@@ -748,6 +750,19 @@ class ElectricalCircuitInspector extends StatelessWidget {
   bool get _isMotor =>
       circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;
 
+  /// Round 42 (elec-ui-journey-3-starter-survives-rekind-unclearable) — the
+  /// kinds whose starter the advanced study sizes + buys (motor / pump /
+  /// HVAC): the picker shows wherever the field has an effect, so it can
+  /// always be seen and cleared.
+  bool get _takesStarter => _isMotor || circuit.loadKind == LoadKind.hvac;
+
+  /// Round 42 (elec-props-8-star-delta-on-single-phase-way) — a star-delta
+  /// starter needs a three-phase motor: not offered on a way that solves
+  /// single-phase or sits on a single-phase board.
+  bool get _starDeltaPossible =>
+      (panelSystem ?? panel.system).isThreePhase &&
+      !(circuitResult != null ? !circuitResult!.threePhase : circuit.phases == 1);
+
   /// Round 40 — an MEP-DERIVED way (it carries a `sourceEquipmentId`): its
   /// machine power and life-safety duty follow the drawn equipment, so the
   /// inspector shows them read-only (the store refuses the edit anyway).
@@ -805,11 +820,19 @@ class ElectricalCircuitInspector extends StatelessWidget {
     final poles = c.threePhase ? 3 : 1;
     final ka = breakerIcuKa;
     final icu = (ka != null && ka > 0) ? ' · Icu ${fmtNum(ka)}kA' : '';
+    // Round 42 (elec-ui-journey-3-inspector-protection-diverges-from-
+    // schedule) — the schedule's own inputs: a 1φ FEEDER off a 3φ board is a
+    // 2-pole device, and a time-delayed (TT feeder) RCD carries ' S'.
+    final twoPole = circuit.feedsPanelId != null &&
+        !c.threePhase &&
+        (panelSystem ?? panel.system).isThreePhase;
     final rcd = c.rcd.required
         ? ' · RCD ${c.rcd.ratingMa}mA'
             '${c.rcd.type != null ? ' ${fmtRcdType(c.rcd.type!)}' : ''}'
+            '${c.rcd.timeDelayed ? ' S' : ''}'
         : '';
-    return '${breakerScheduleLabel(c.breaker, poles)}$icu$rcd';
+    return '${breakerScheduleLabel(c.breaker, poles, twoPole: twoPole)}'
+        '$icu$rcd';
   }
 
   /// The read-only RESULT rows for this way — Ib, protection, cable, voltage
@@ -849,18 +872,26 @@ class ElectricalCircuitInspector extends StatelessWidget {
         label: 'Cable',
         // G5: the REAL core count from the sized grounding, matching the
         // schedule's PENGHANTAR cell exactly.
-        value:
-            cableRunLabel(circuit, c.cable.csaMm2, c.threePhase,
+        // Round 42 — a star-delta way's field run is its two motor leads
+        // (the schedule's PENGHANTAR cell).
+        value: c.motorLeads != null
+            ? 'leads ${cableRunLabel(circuit, c.motorLeads!.csaMm2, true, cores: 4, runs: 2 * (c.motorLeads!.runsPerPhase ?? 1), peCsaMm2: c.motorLeadsPeCsaMm2)}'
+            : cableRunLabel(circuit, c.cable.csaMm2, c.threePhase,
                 cores: c.grounding.cores,
                 runs: c.cable.runsPerPhase,
                 peCsaMm2: c.grounding.peCsaMm2,
                 neutralCsaMm2: c.grounding.neutralCsaMm2),
       ));
       final vd = c.voltageDrop;
+      // Round 42 — printed in its verdict's direction (the calc report's
+      // `vdropPctForVerdict`): an over-limit drop never reads AT the limit.
+      final isFeeder = circuit.feedsPanelId != null;
+      final cumOver = !isFeeder &&
+          c.cumulativeDropPercent > vd.limitPercent + 1e-9;
       rows.add(ElectricalResultRow(
         label: 'Vdrop',
-        value: '${vd.dropPercent.toStringAsFixed(1)} %'
-            ' · cum ${c.cumulativeDropPercent.toStringAsFixed(1)} %'
+        value: '${vdropPctForVerdict(vd.dropPercent, limit: vd.limitPercent, over: !vd.withinLimit)} %'
+            ' · cum ${vdropPctForVerdict(c.cumulativeDropPercent, limit: vd.limitPercent, over: cumOver)} %'
             ' (max ${fmtNum(vd.limitPercent)} %)',
         valueColor: vd.withinLimit ? null : colors.danger,
       ));
@@ -993,7 +1024,15 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             ElectricalNumInput(
-                              value: circuit.motorKw ?? 0,
+                              // Round 42 — a way still sized on its W (no
+                              // motor power yet) shows that load as shaft kW,
+                              // never a misleading 0.
+                              value: circuit.motorKw ??
+                                  (circuit.flaOverrideA == null
+                                      ? circuit.loadW *
+                                          kAssumedMotorEfficiency /
+                                          1000
+                                      : 0),
                               enabled: !_machineOwned,
                               // Round 11 — a negative shaft power is rejected
                               // (the min-only bound is now enforced on its own).
@@ -1340,16 +1379,19 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           // schedule drafter appends as a control token
                           // (DOL / VFD / star-delta) on the way's DEVICE cell.
                           // "None" clears it back to a bare breaker cell.
-                          if (_isMotor)
+                          if (_takesStarter)
                             ElectricalField(
                               label: context
                                   .strings(StringKey.electricalFieldStarter),
                               child: ElectricalEnumPicker<StarterType?>(
                                 value: circuit.starterType,
-                                options: const [
+                                options: [
                                   null,
                                   StarterType.dol,
-                                  StarterType.starDelta,
+                                  if (_starDeltaPossible ||
+                                      circuit.starterType ==
+                                          StarterType.starDelta)
+                                    StarterType.starDelta,
                                   StarterType.reversing,
                                   StarterType.softStarter,
                                   StarterType.vfd,

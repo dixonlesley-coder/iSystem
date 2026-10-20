@@ -53,7 +53,12 @@ import 'headroom.dart' show HeadroomSpec;
 import 'load_kind.dart';
 import 'model.dart';
 import 'panel_results.dart';
-import 'results.dart' show BreakerResult, CableResult;
+import 'results.dart'
+    show
+        BreakerResult,
+        CableResult,
+        VoltageDropResult,
+        kStarDeltaInternalWiringM;
 import 'sizing.dart';
 import 'supply_design.dart' show plnDayaVa1ph;
 
@@ -1763,6 +1768,37 @@ _CircuitComputation _computeCircuit(
     ));
   }
 
+  // Round 42 (elec-ui-journey-3-free-typed-breaker-override-nonstandard) — a
+  // typed breaker override that is NOT a standard rating (17 A, 70 A …) is
+  // kept verbatim (the engineer's statement) but named: no such device is
+  // made, so the schedule + BOM would carry an unbuildable line. Judge-only.
+  if (loadBreaker.overridden) {
+    final ov = loadBreaker.ratingA.amperes;
+    final ladder = profile.standardBreakerRatingsA;
+    final onLadder = ladder.any((r) => (r - ov).abs() < 1e-6);
+    if (!onLadder) {
+      double? below;
+      double? above;
+      for (final r in ladder) {
+        if (r < ov) below = r;
+        if (r > ov && above == null) above = r;
+      }
+      final near = [
+        if (below != null) '${_num(below)} A',
+        if (above != null) '${_num(above)} A',
+      ].join(' / ');
+      warnings.add(ElectricalWarning(
+        code: 'breaker-override-nonstandard',
+        severity: WarningSeverity.warning,
+        message: '${c.name}: the ${_num(ov)} A breaker override is not a '
+            'standard rating — no such device is made; pick a standard rung'
+            '${near.isEmpty ? '' : ' ($near)'}.',
+        panelId: panel.id,
+        circuitId: c.id,
+      ));
+    }
+  }
+
   // PUIL minimums: trunk (incomer/feeder) → 4 (3φ) / 2.5; final → lighting 1.5
   // else 2.5. A manual cable minimum floors it.
   final isTrunk = c.role == CircuitRole.incomer || isFeeder;
@@ -1780,6 +1816,19 @@ _CircuitComputation _computeCircuit(
   final cableInsulation =
       insulationForCableType(c.cableType, fallback: panel.insulation);
 
+  // Round 42 — a star-delta motor way (the starter in the board): the
+  // supply cable is the INTERNAL breaker → starter link; the field run is
+  // the motor leads (sized below on the way length).
+  final starDeltaMotor = !isFeeder &&
+      threePhase &&
+      c.starterType == StarterType.starDelta &&
+      (c.loadKind == LoadKind.motor ||
+          c.loadKind == LoadKind.pump ||
+          c.loadKind == LoadKind.hvac);
+  final supplyLength = starDeltaMotor
+      ? const Length(kStarDeltaInternalWiringM)
+      : effectiveLength;
+
   var cable = sizeCable(
     profile,
     designCurrent: sizingCurrent,
@@ -1794,7 +1843,7 @@ _CircuitComputation _computeCircuit(
     // `dfFor` folded into `df`).
     groupingCount: c.groupingCountOverride ?? panel.groupingCount,
     vd: CableVoltageDropConstraint(
-      length: effectiveLength,
+      length: supplyLength,
       cosPhi: cosPhi,
       threePhase: threePhase,
       voltage: Voltage(useVoltageV),
@@ -1946,10 +1995,47 @@ _CircuitComputation _computeCircuit(
   }
 
   final runsPerPhase = cable.runsPerPhase ?? 1;
-  final vd = voltageDrop(
+
+  // Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-leads)
+  // — a STAR-DELTA starter is wired to the motor's SIX winding terminals:
+  // the starter → motor section is TWO 3-core cables, each carrying the
+  // winding current Ib/√3 (I_line = √3 · I_winding in delta). One lead cable
+  // is sized here on that current (same family, laying, derating and
+  // minimum; In basis = the delta-leg overload setting ≈ the winding
+  // current, so Iz ≥ 1.25 × Ib/√3). Each lead carries a PE (the way's PE,
+  // capped at the lead section).
+  // Round 42 — the leads ARE the field run (the starter is in the board,
+  // [kStarDeltaInternalWiringM]): the way length, and the way's Vd is judged
+  // on them. // VERIFY (notAnSniClause): the lead Vd is judged at Ib/√3 on
+  // the 3φ formula (approximation).
+  CableResult? motorLeads;
+  if (starDeltaMotor) {
+    final leadIb = Current(sizingCurrent.amperes / math.sqrt(3));
+    motorLeads = sizeCable(
+      profile,
+      designCurrent: leadIb,
+      breakerRating: leadIb,
+      deratingFactor: df,
+      minSectionMm2: baseMin,
+      insulation: cableInsulation,
+      material: panel.material,
+      method: installMethod,
+      threePhase: true,
+      groupingCount: c.groupingCountOverride ?? panel.groupingCount,
+      vd: CableVoltageDropConstraint(
+        length: effectiveLength,
+        cosPhi: cosPhi,
+        threePhase: true,
+        voltage: Voltage(useVoltageV),
+        isLighting: false,
+      ),
+    );
+  }
+
+  final supplyVd = voltageDrop(
     profile,
     current: Current(feederRunCurrent.amperes / runsPerPhase),
-    length: effectiveLength,
+    length: supplyLength,
     csaMm2: cable.csaMm2,
     cosPhi: cosPhi,
     threePhase: threePhase,
@@ -1957,6 +2043,32 @@ _CircuitComputation _computeCircuit(
     isLighting: c.isLighting,
     material: panel.material,
   );
+  final VoltageDropResult vd;
+  if (motorLeads == null) {
+    vd = supplyVd;
+  } else {
+    // The motor terminal sees the internal link's drop PLUS the lead run's.
+    final leadRuns = motorLeads.runsPerPhase ?? 1;
+    final leadVd = voltageDrop(
+      profile,
+      current: Current(
+          feederRunCurrent.amperes / math.sqrt(3) / leadRuns),
+      length: effectiveLength,
+      csaMm2: motorLeads.csaMm2,
+      cosPhi: cosPhi,
+      threePhase: true,
+      voltage: Voltage(useVoltageV),
+      isLighting: false,
+      material: panel.material,
+    );
+    final pct = roundTo(supplyVd.dropPercent + leadVd.dropPercent, 2);
+    vd = VoltageDropResult(
+      dropV: roundTo(supplyVd.dropV + leadVd.dropV, 2),
+      dropPercent: pct,
+      limitPercent: supplyVd.limitPercent,
+      withinLimit: pct <= supplyVd.limitPercent + 1e-9,
+    );
+  }
 
   // Cores follow the load's neutral need: every 1φ final carries its neutral;
   // 3φ motors/resistive line loads are 4-core (no N), other 3φ loads 5-core.
@@ -2145,45 +2257,9 @@ _CircuitComputation _computeCircuit(
     ));
   }
 
-  // Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-leads)
-  // — a STAR-DELTA starter is wired to the motor's SIX winding terminals:
-  // the starter → motor section is TWO 3-core cables, each carrying the
-  // winding current Ib/√3 (I_line = √3 · I_winding in delta). One lead cable
-  // is sized here on that current (same family, laying, derating and
-  // minimum; In basis = the delta-leg overload setting ≈ the winding
-  // current, so Iz ≥ 1.25 × Ib/√3) — the supply cable above is unchanged.
   // Each lead carries a PE (the way's PE, capped at the lead section).
-  // // VERIFY (notAnSniClause): starter in the board ⇒ lead length = the way
-  // length; the lead Vd is judged at Ib/√3 on the 3φ formula (approximation).
-  CableResult? motorLeads;
   double? motorLeadsPe;
-  final starDeltaMotor = !isFeeder &&
-      threePhase &&
-      c.starterType == StarterType.starDelta &&
-      (c.loadKind == LoadKind.motor ||
-          c.loadKind == LoadKind.pump ||
-          c.loadKind == LoadKind.hvac);
-  if (starDeltaMotor) {
-    final leadIb = Current(sizingCurrent.amperes / math.sqrt(3));
-    motorLeads = sizeCable(
-      profile,
-      designCurrent: leadIb,
-      breakerRating: leadIb,
-      deratingFactor: df,
-      minSectionMm2: baseMin,
-      insulation: cableInsulation,
-      material: panel.material,
-      method: installMethod,
-      threePhase: true,
-      groupingCount: c.groupingCountOverride ?? panel.groupingCount,
-      vd: CableVoltageDropConstraint(
-        length: effectiveLength,
-        cosPhi: cosPhi,
-        threePhase: true,
-        voltage: Voltage(useVoltageV),
-        isLighting: false,
-      ),
-    );
+  if (motorLeads != null) {
     final wayPe =
         grounding.peCsaMm2 > 0 ? grounding.peCsaMm2 : cable.csaMm2;
     motorLeadsPe = math.min(wayPe, motorLeads.csaMm2);
@@ -3722,6 +3798,28 @@ ElectricalSystemResult computeSystem(
       deratingFactor: 1,
       minSectionMm2: 4,
     );
+    // Round 42 (electrical-sim-7-parallel-run-cap-4-unsizable-feeders-and-
+    // silent-service-cable) — the SERVICE cable is sized like every way, up
+    // to the 4-parallel-run cap; a large service (a 2000 A ACB) cannot reach
+    // its ampacity that way. It used to fail silently and the main earthing
+    // conductor was then derived from the inadequate cable. Judge-only: the
+    // cable + earthing figures are kept, the defect is stated.
+    if (!mainCable.ampacityReached) {
+      final runs = mainCable.runsPerPhase ?? 1;
+      final inA = (mainBreaker?.ratingA ?? incomerRating!).amperes;
+      warnings.add(ElectricalWarning(
+        code: 'service-cable-ampacity-inadequate',
+        severity: WarningSeverity.warning,
+        message: 'Service cable: the ${_num(inA)} A service needs more than '
+            '$runs parallel runs of ${_num(mainCable.csaMm2)} mm2 (Iz '
+            '${_num(roundTo(mainCable.deratedIz.amperes, 1))} A < required '
+            '${_num(roundTo(mainCable.izRequired?.amperes ?? inA, 1))} A) — '
+            'specify a busduct or more parallel runs; the main earthing '
+            'conductor derived from this cable must be re-checked against '
+            'the real service.',
+        panelId: governingRoot?.id,
+      ));
+    }
     final earthing = computeEarthing(
       profile,
       system: project.earthingSystem,

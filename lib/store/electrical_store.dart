@@ -1249,15 +1249,33 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     // the next sync silently restored it), to Capacitor it read the pump's
     // W as kvar and dropped its demand for good. A kind CHANGE is refused;
     // re-stating the current kind is a no-op provenance write (allowed).
+    final derivedWay = isMepDerivedWay(panelId, circuitId);
+    // Round 42 (regression-mep-kind-lock-traps-spare-rekinded-machine) — the
+    // safety net: re-kinding a derived way BACK to its drawn machine's own
+    // kind (the fresh mint's) is always allowed — it is the way out of a
+    // kind a parked / r40 edit left on it, never a departure from the
+    // machine.
+    final mintKind = derivedWay && loadKind != null
+        ? _mintKindOf(panelId, circuitId)
+        : null;
     final kindChange = loadKind != null &&
-        loadKind != _circuitKind(panelId, circuitId);
-    if (isMepDerivedWay(panelId, circuitId) &&
+        loadKind != _circuitKind(panelId, circuitId) &&
+        loadKind != mintKind;
+    if (derivedWay &&
         (loadW != null ||
             motorKw != null ||
             clearMotorKw ||
             kindChange ||
             lifeSafety != null)) {
       _refuse(StringKey.mepDerivedWayMachineLocked);
+      return;
+    }
+    // Round 42 (elec-props-8-star-delta-on-single-phase-way) — a star-delta
+    // starter needs a three-phase motor; refuse it on a way that solves
+    // single-phase (the inspector does not offer it there).
+    if (starterType == StarterType.starDelta &&
+        _solvesSinglePhase(panelId, circuitId)) {
+      _refuse(StringKey.starDeltaNeedsThreePhase);
       return;
     }
     _replaceCircuit(panelId, circuitId, (c) {
@@ -1303,6 +1321,37 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           rekindedOffMotor && !nonLoadTarget && loadW == null && c.loadW <= 0
               ? c.motorKw! * 1000 / kAssumedMotorEfficiency
               : null;
+      // Round 42 (elec-ui-journey-3-rekind-to-motor-shows-zero-kw) — the
+      // mirror of the Round-36 seed: a W-sized way re-kinded ONTO a motor /
+      // pump (which sizes on its motor power, the only power field the
+      // inspector then shows) carries its load across as shaft kW (input W ×
+      // the assumed efficiency) and its W is cleared, so the 7.5 kW in force
+      // is the 6.6 kW shaft the inspector shows — one basis, one undo step.
+      final rekindedOntoMotor = loadKind != null &&
+          loadKind != c.loadKind &&
+          (loadKind == LoadKind.motor || loadKind == LoadKind.pump) &&
+          c.loadKind != LoadKind.motor &&
+          c.loadKind != LoadKind.pump &&
+          motorKw == null &&
+          loadW == null &&
+          c.motorKw == null &&
+          c.loadW > 0 &&
+          c.flaOverrideA == null &&
+          c.loadKind != LoadKind.capacitor;
+      final seededMotorKw = rekindedOntoMotor
+          ? c.loadW * kAssumedMotorEfficiency / 1000
+          : null;
+      // Round 42 (elec-ui-journey-3-starter-survives-rekind-unclearable) —
+      // a way re-kinded to a kind that takes no starter (anything but motor
+      // / pump / HVAC) drops its starter in the same edit: the field is
+      // hidden there and the schedule would print it on a heater.
+      final starterDropped = loadKind != null &&
+          loadKind != c.loadKind &&
+          loadKind != LoadKind.motor &&
+          loadKind != LoadKind.pump &&
+          loadKind != LoadKind.hvac &&
+          starterType == null &&
+          c.starterType != null;
       // A way re-kinded to spare / feeder carries no W of its own unless the
       // same edit types one.
       final zeroedW = loadKind != null &&
@@ -1314,8 +1363,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       return c.copyWith(
         name: name,
         loadKind: loadKind,
-        loadW: loadW ?? retypedW ?? seededW ?? zeroedW,
-        motorKw: motorKw,
+        loadW: loadW ?? retypedW ?? seededW ?? zeroedW ??
+            (rekindedOntoMotor ? 0.0 : null),
+        motorKw: motorKw ?? seededMotorKw,
         clearMotorKw: clearMotorKw || rekindedOffMotor,
         clearFlaOverrideA: parkedRetype,
         cosPhi: cosPhi,
@@ -1345,7 +1395,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         cableType: cableType,
         clearCableType: clearCableType,
         starterType: starterType,
-        clearStarterType: clearStarterType,
+        clearStarterType: clearStarterType || starterDropped,
         breakerOverrideA: breakerOverrideA,
         clearBreakerOverrideA: clearBreakerOverrideA,
         cableOverrideMm2: cableOverrideMm2,
@@ -2439,6 +2489,44 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     return false;
   }
 
+  /// Round 42 — the [LoadKind] the CURRENT MEP feed mints for a derived way
+  /// (matched on its source equipment), or null when the feed has none.
+  LoadKind? _mintKindOf(String panelId, String circuitId) {
+    String? source;
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id == circuitId) source = c.sourceEquipmentId;
+      }
+    }
+    if (source == null) return null;
+    for (final f in ref.read(mepAutoFeedCircuitsProvider)) {
+      if (f.sourceEquipmentId == source) return f.loadKind;
+    }
+    return null;
+  }
+
+  /// Round 42 — true when the way solves single-phase: the engine's own
+  /// phase rule ([circuitIsThreePhase], the one `computePanel` uses for a
+  /// final way) on the stored way.
+  bool _solvesSinglePhase(String panelId, String circuitId) {
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id != circuitId) continue;
+        if (c.feedsPanelId != null) return false;
+        return !circuitIsThreePhase(
+          panelSystem: p.system,
+          kind: c.loadKind,
+          loadW: c.loadW,
+          motorKw: c.motorKw,
+          phases: c.phases,
+        );
+      }
+    }
+    return false;
+  }
+
   /// Round 41 — the current [LoadKind] of a way (null when not found).
   LoadKind? _circuitKind(String panelId, String circuitId) {
     for (final p in state.panels) {
@@ -2912,21 +3000,24 @@ ElectricalCircuit _refreshedMepWay(
           (c.cosPhi - fresh.cosPhi).abs() > 1e-9 &&
           (c.cosPhi - defaultMotorCosPhi).abs() > 1e-9);
   final phasesUser = c.phasesUserSet || (legacy && c.phases != fresh.phases);
-  final kindUser = c.loadKindUserSet ||
-      (legacy &&
-          c.loadKind != fresh.loadKind &&
-          !kMepMintedLoadKinds.contains(c.loadKind));
+  // Round 42 (regression-mep-kind-lock-traps-spare-rekinded-machine) — since
+  // Round 41 the drawn machine OWNS its kind (a kind change on a derived way
+  // is refused), so a kind left on a derived / re-adopted way — re-kinded to
+  // Spare while parked, or saved by an r40 build with `loadKindUserSet` —
+  // is MIGRATED back to the mint: the r40 provenance flag is superseded, and
+  // the Round-24 legacy keep no longer applies to the kind (a stored Spare
+  // zeroed a drawn 15 kW pump's demand for good, with every re-kind refused).
   final demandUser = c.demandFactorUserSet || (legacy && !mintedDemand);
   return c.copyWith(
     name: mintedName ? fresh.name : null,
     phases: phasesUser ? null : fresh.phases,
     clearPhases: !phasesUser && fresh.phases == null,
-    loadKind: kindUser ? null : fresh.loadKind,
+    loadKind: fresh.loadKind,
     cosPhi: cosUser ? null : fresh.cosPhi,
     demandFactor: mintedDemand ? fresh.demandFactor : null,
     cosPhiUserSet: cosUser,
     phasesUserSet: phasesUser,
-    loadKindUserSet: kindUser,
+    loadKindUserSet: false,
     demandFactorUserSet: demandUser,
     legacyProvenance: false,
     loadW: fresh.loadW,

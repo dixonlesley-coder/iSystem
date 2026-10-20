@@ -20,6 +20,7 @@ library;
 import 'dart:math' as math;
 
 import 'compute.dart' show effectiveDemandFactor;
+import 'control/starter.dart' show StarterType;
 import 'diversity_library.dart' show DiversityLibrary;
 import 'load_kind.dart' show LoadKind, kAssumedMotorEfficiency;
 import 'model.dart'
@@ -231,8 +232,24 @@ double _round(double x, int dp) {
 
 /// Whether a circuit's PF should be treated as the near-unity electronic value
 /// (VFD / electronic front end). UPS and EV chargers are electronically fed.
+///
+/// Round 42 (electrical-sim-7-pfc-ignores-vfd-supply-pf) — and every
+/// DRIVE-FED motor way ([isDriveFedCircuit], the same set the harmonics pass
+/// counts as drive-fed): a VFD's diode front end draws near-unity
+/// displacement current, so its supply side is at [electronicLoadPf], never
+/// the motor's own cos φ (0.85) — a drive-only bus needs no bank.
 bool _isElectronic(ElectricalCircuit c) =>
-    c.loadKind == LoadKind.ups || c.loadKind == LoadKind.evCharger;
+    c.loadKind == LoadKind.ups ||
+    c.loadKind == LoadKind.evCharger ||
+    isDriveFedCircuit(c);
+
+/// Round 42 — a motor-like way (motor / pump / HVAC) fed through a VFD: the
+/// ONE drive-fed predicate the PF study and the harmonics pass share.
+bool isDriveFedCircuit(ElectricalCircuit c) =>
+    c.starterType == StarterType.vfd &&
+    (c.loadKind == LoadKind.motor ||
+        c.loadKind == LoadKind.pump ||
+        c.loadKind == LoadKind.hvac);
 
 /// Whether a circuit contributes a real load to the PF aggregate. Feeders
 /// (which represent the diversified demand of a downstream panel) are excluded

@@ -18,6 +18,8 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart';
+import 'control/starter.dart' show StarterType;
+import 'control/starting.dart' show startingProfiles;
 
 // ===========================================================================
 // Reference data (local `// VERIFY` constants — see the library doc).
@@ -80,18 +82,25 @@ const double kMotorKvaFromKwFactor = 0.8;
 
 /// Starting-kVA as a multiple of a motor's RUNNING (full-load) kVA, by starter
 /// method (how each starter limits inrush). // VERIFY — IEC 60947-4-1 basis.
-const Map<String, double> kStartKvaMultiple = <String, double>{
-  'DOL': 6,
-  'STAR_DELTA': 2,
-  'SOFT_STARTER': 3,
-  'VFD': 1,
-  'REVERSING': 6,
-  'PUMP': 6,
-  'ATS': 6,
+///
+/// Round 42 (electrical-sim-7-genset-dip-multiples-disagree-with-starter) —
+/// ONE starting table: every multiple is read from `control/starting.dart`
+/// [startingProfiles] (the figure the control assembly prints), never a
+/// parallel 6 / 2 / 3 / 1 set. An ATS starts no motor itself, so it keeps
+/// the worst-case DOL multiple.
+final Map<String, double> kStartKvaMultiple = <String, double>{
+  'DOL': startingProfiles[StarterType.dol]!.startMultiple,
+  'STAR_DELTA': startingProfiles[StarterType.starDelta]!.startMultiple,
+  'SOFT_STARTER': startingProfiles[StarterType.softStarter]!.startMultiple,
+  'VFD': startingProfiles[StarterType.vfd]!.startMultiple,
+  'REVERSING': startingProfiles[StarterType.reversing]!.startMultiple,
+  'PUMP': startingProfiles[StarterType.pump]!.startMultiple,
+  'ATS': startingProfiles[StarterType.dol]!.startMultiple,
 };
 
 /// Fallback multiple for unrecognised starter strings (worst case = DOL).
-const double kDefaultStartKvaMultiple = 6;
+final double kDefaultStartKvaMultiple =
+    startingProfiles[StarterType.dol]!.startMultiple;
 
 /// Starting-kVA multiple of running kVA for a starter method (case-insensitive;
 /// unknown → DOL, the worst case).
@@ -307,7 +316,15 @@ class GensetMotor {
   /// Starter method (loose string; see [startKvaMultiple]). Null = DOL.
   final String? starterType;
 
-  const GensetMotor({this.name, required this.shaftPower, this.starterType});
+  /// Round 42 — the motor's STARTING apparent power on the control
+  /// assembly's own starting basis (`control/starting.dart`: starting
+  /// current × √3·U). When set the dip screen uses it verbatim — one
+  /// starting current per machine; null ⇒ the running-kVA × multiple
+  /// estimate (a hand-built list).
+  final ApparentPower? startKva;
+
+  const GensetMotor(
+      {this.name, required this.shaftPower, this.starterType, this.startKva});
 }
 
 /// Outcome of a genset motor-starting voltage-dip screen.
@@ -532,6 +549,10 @@ GensetStartResult assessGensetStart(
 
   final candidates =
       motors.where((m) => m.shaftPower.inKiloWatts > 0).toList();
+  double startKvaOf(GensetMotor m) =>
+      m.startKva?.inKilovoltAmperes ??
+      motorRunningKva(m.shaftPower).inKilovoltAmperes *
+          startKvaMultiple(m.starterType);
 
   if (candidates.isEmpty) {
     return GensetStartResult(
@@ -547,12 +568,9 @@ GensetStartResult assessGensetStart(
 
   // Limiting motor = largest starting kVA (worst per-motor dip).
   GensetMotor limiting = candidates.first;
-  double limitingStartKva =
-      motorRunningKva(limiting.shaftPower).inKilovoltAmperes *
-          startKvaMultiple(limiting.starterType);
+  double limitingStartKva = startKvaOf(limiting);
   for (final m in candidates.skip(1)) {
-    final sk = motorRunningKva(m.shaftPower).inKilovoltAmperes *
-        startKvaMultiple(m.starterType);
+    final sk = startKvaOf(m);
     if (sk > limitingStartKva) {
       limiting = m;
       limitingStartKva = sk;

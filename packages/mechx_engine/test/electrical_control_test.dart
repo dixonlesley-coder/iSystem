@@ -30,9 +30,14 @@ void main() {
       expect(motorFlc(7.5, const Voltage(380)).amperes, closeTo(16.3158, 1e-3));
     });
 
-    test('clamps below/above the table', () {
+    test('clamps below the table, scales above it (Round 42)', () {
       expect(motorFlc(0.1).amperes, closeTo(1.0, 1e-9)); // first row
-      expect(motorFlc(999).amperes, closeTo(435.0, 1e-9)); // last row
+      // Round 42 — the table runs to 315 kW (545 A); above it the top row
+      // scales ∝ kW: 999 kW → 545 × 999 / 315 = 1728.43 A (never clamps).
+      expect(motorFlc(315).amperes, closeTo(545.0, 1e-9));
+      expect(motorFlc(999).amperes, closeTo(545.0 * 999 / 315, 1e-9));
+      expect(motorFlcAboveTable(315), isFalse);
+      expect(motorFlcAboveTable(400), isTrue);
     });
 
     test('motorFlc1ph uses η·cosφ: 1.5 kW @ 230 V, η·cosφ = 0.65', () {

@@ -316,8 +316,11 @@ void main() {
       // Large frame floor (≥ 400 A ⇒ ≥ 36 kA) is honoured: 30 kA ⇒ 36 kA
       // gives Ics 27 < 30 ⇒ 50 kA (Ics 37.5 ≥ 30).
       expect(specifiedBreakerKa(400, BreakerClass.mccb, 30), 50);
-      // Above every rung's Ics ⇒ the class maximum (70 kA, Ics 52.5).
-      expect(specifiedBreakerKa(125, BreakerClass.mccb, 60), 70);
+      // Re-derived Round 42 — the MCCB ladder runs on to 100 / 150 kA:
+      // 60 kA ⇒ 70 gives Ics 52.5 < 60 ⇒ 100 kA (Ics 75 ≥ 60).
+      expect(specifiedBreakerKa(125, BreakerClass.mccb, 60), 100);
+      // Above every rung's Ics ⇒ the class maximum (150 kA, Ics 112.5).
+      expect(specifiedBreakerKa(125, BreakerClass.mccb, 120), 150);
     });
 
     ElectricalProject feederProject() => const ElectricalProject(
@@ -377,12 +380,13 @@ void main() {
     });
 
     test('above the ladder top Ics the warning still fires', () {
-      // Origin 60 kA: top MCCB rung 70 kA ⇒ Ics 52.5 kA < 60 kA.
+      // Re-derived Round 42 — origin 120 kA: top MCCB rung 150 kA ⇒ Ics
+      // 0.75 x 150 = 112.5 kA < 120 kA.
       final project = feederProject();
       final sys = computeSystem(p, project);
       final fs =
-          faultStudy(sys, project, p, originFaultLevel: const Current(60000));
-      expect(fs.circuits['f1']!.breakerKa, 70);
+          faultStudy(sys, project, p, originFaultLevel: const Current(120000));
+      expect(fs.circuits['f1']!.breakerKa, 150);
       expect(fs.selectivity.single.icsAdequate, isFalse);
       expect(fs.warnings.map((w) => w.code),
           contains('service-capacity-inadequate'));

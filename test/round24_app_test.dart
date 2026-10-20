@@ -141,14 +141,18 @@ void main() {
       expect(now.loadKind, LoadKind.hvac);
       expect(now.loadKindUserSet, isFalse);
       expect(now.cosPhiUserSet, isFalse);
-      // A kind no mint ever produced IS the engineer's.
+      // Re-derived Round 42 (regression-mep-kind-lock-traps-spare-rekinded-
+      // machine): the drawn machine owns its kind, so even a kind no mint
+      // ever produced is migrated back to the mint on a DERIVED way (the
+      // kind lock refuses every re-kind, so a kept foreign kind could never
+      // be undone).
       e.setProject(_legacy(c.read(electricalProjectProvider), (w) {
         w['loadKind'] = 'general';
       }));
       e.resyncMepEquipment();
       now = _mepWay(c);
-      expect(now.loadKind, LoadKind.general);
-      expect(now.loadKindUserSet, isTrue);
+      expect(now.loadKind, LoadKind.hvac);
+      expect(now.loadKindUserSet, isFalse);
     });
 
     test('an untouched legacy way stays machine-owned', () async {

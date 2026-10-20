@@ -8,6 +8,16 @@ library;
 import '../standards/puil.dart' show BreakerClass, BreakerCurve;
 import '../units.dart';
 
+/// Round 42 (regression-star-delta-supply-cable-and-leads-both-bought-full-
+/// length) — the STAR-DELTA physical model: the starter sits IN THE BOARD,
+/// so the breaker → starter conductor is INTERNAL panel wiring of this
+/// nominal length (m) and the board → motor FIELD run is the two motor-lead
+/// cables at the way length. The internal link is sized on ampacity with its
+/// drop judged over this length; the takeoff, containment, Zs and the way's
+/// printed Vd all follow the lead run. // VERIFY (notAnSniClause): a typical
+/// cubicle wiring allowance, not a code figure.
+const double kStarDeltaInternalWiringM = 2.0;
+
 /// Voltage-drop over a cable run, with the applicable limit + pass/fail.
 class VoltageDropResult {
   /// Absolute drop (V).

@@ -95,14 +95,24 @@ void main() {
               1e-9));
     });
 
-    test('property: a 3φ motor keeps the IEC 400 V table (byte-identical)',
+    test('property: a 3φ motor keeps the IEC 400 V table as its floor',
         () {
+      // Re-derived Round 42 (elec-props-8-control-gear-flc-basis-below-
+      // schedule-ib): the gear basis is max(table FLC, the way's solved Ib
+      // = kW / 0.88 / (√3 · 400 · 0.85)) — small machines keep the table
+      // (0.75 kW: 1.9 A > 1.45 A), larger ones the printed Ib (30 kW:
+      // 30000 / 0.88 / 588.9 = 57.9 A > the table 56 A).
       for (final kw in [0.75, 2.2, 5.5, 11.0, 30.0]) {
         final pr = _motorBoard(phases: 3, kw: kw);
-        final a = computeAdvancedStudy(p, pr, computeSystem(p, pr))
-            .controlAssemblies['jp']!;
+        final sys = computeSystem(p, pr);
+        final a = computeAdvancedStudy(p, pr, sys).controlAssemblies['jp']!;
+        final ib = sys.panels['EP-1']!.circuits.single.runCurrentA.amperes;
+        final ibHand = kw * 1000 / 0.88 / (math.sqrt(3) * 400 * 0.85);
+        expect(ib, closeTo(ibHand, 0.05), reason: '$kw kW');
+        final table = motorFlc(kw).amperes;
+        final basis = table > ib ? table : ib;
         expect(a.motor!.flcA.amperes,
-            closeTo((motorFlc(kw).amperes * 10).roundToDouble() / 10, 1e-9),
+            closeTo((basis * 10).roundToDouble() / 10, 1e-9),
             reason: '$kw kW');
       }
     });
