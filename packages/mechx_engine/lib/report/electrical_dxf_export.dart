@@ -28,6 +28,7 @@ import '../network/network.dart' show ServiceType;
 import 'drawing_chrome.dart'
     show
         DrawingChrome,
+        kMinPlotLabelPt,
         dxfLayerNameFor,
         dxfLinetypeFor,
         dxfTablesSection,
@@ -399,6 +400,14 @@ String electricalSldToDxf({
   if (overlapNote != null) {
     d.text(layers.frame, sheetResolved.minX, sheetResolved.minY - 16,
         overlapNote,
+        size: 8);
+  }
+  // Round 43 — the page-legibility warning (see [SldSheet.belowMinLabelPt]).
+  final legNote = sldLegibilityWarning(sheetResolved.belowMinLabelPt,
+      minPt: kMinPlotLabelPt);
+  if (legNote != null) {
+    d.text(layers.frame, sheetResolved.minX,
+        sheetResolved.minY - (overlapNote != null ? 28 : 16), legNote,
         size: 8);
   }
 

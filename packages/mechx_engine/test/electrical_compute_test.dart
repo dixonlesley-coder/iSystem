@@ -123,18 +123,22 @@ void main() {
     });
 
     test('balanced phases + worst-phase demand current', () {
-      // 3φ motor loads every line at 14.5 A. Single-phase sorted desc:
-      //   sockets 14.4 → least-loaded line (all equal) → L1: L1 = 14.5+14.4 = 28.9
-      //   lighting 8.7 → least loaded (L2 or L3 = 14.5) → L2: L2 = 14.5+8.7 = 23.2
-      //   L3 = 14.5. Local search finds no smaller spread.
+      // 3φ motor loads every line at 14.472 A. Single-phase sorted desc:
+      //   sockets 14.430 → least-loaded line (all equal) → L1:
+      //     L1 = 14.472 + 14.430 = 28.902 → 28.9
+      //   lighting 8.658 → least loaded (L2 or L3) → L2:
+      //     L2 = 14.472 + 8.658 = 23.130 → 23.1
+      //   L3 = 14.472 → 14.5. Local search finds no smaller spread.
+      // Round 43: the lines sum the EXACT way currents and round ONCE
+      // (23.2 was 14.5 + 8.7, a sum of rounded figures).
       expect(r.phaseBalance.l1, closeTo(28.9, 1e-9));
-      expect(r.phaseBalance.l2, closeTo(23.2, 1e-9));
+      expect(r.phaseBalance.l2, closeTo(23.1, 1e-9));
       expect(r.phaseBalance.l3, closeTo(14.5, 1e-9));
       // Worst phase = 28.9 A drives the incomer + main bus.
       expect(r.demandCurrent.amperes, closeTo(28.9, 1e-9));
-      // avg = (28.9+23.2+14.5)/3 = 22.2; imbalance = (28.9-14.5)/22.2·100
-      //     = 14.4/22.2·100 = 64.86 % > 15 %.
-      expect(r.imbalancePercent, closeTo(64.86, 0.2));
+      // avg = (28.902+23.130+14.472)/3 = 22.168; imbalance =
+      //     (28.902-14.472)/22.168·100 = 14.430/22.168·100 = 65.09 % > 15 %.
+      expect(r.imbalancePercent, closeTo(65.09, 0.06));
       // …but NO warning: with exactly two single-phase ways (14.4 A + 8.7 A) on
       // three lines the alternatives are 23.1/0/0 (spread 23.1) or 14.4/8.7/0
       // (spread 14.4) — the balancer already took the better one, so the 64.9 %

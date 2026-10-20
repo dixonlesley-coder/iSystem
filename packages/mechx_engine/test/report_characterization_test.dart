@@ -257,7 +257,14 @@ void main() {
       // row's Cable cell prints the board schedule's `cableRunLabel`
       // ('NYM 3x1.5 mm2', 'NYY 5x4 mm2', was '1.5 mm²' / '4 mm²'). Verified as
       // the SOLE delta (incomers / Ib / Vdrop unchanged). Lines unchanged.
-      expect(fnv1a32(md), 0xbed04a0f);
+      // Re-baselined 2026-10-18 (Round 43, elec-drawings-6-board-demand-sums-
+      // rounded-way-currents): the MDP lines sum the EXACT way currents and
+      // round once, so its imbalance reads 71.9 % (was 72.0 % from rounded
+      // way figures) in the phase-balance bullet and both
+      // phase-imbalance-inherent notes (whose achievable floor is capped at
+      // the actual figure). Verified as the SOLE deltas by diffing against
+      // the pre-change output (3 lines). Lines unchanged.
+      expect(fnv1a32(md), 0x57d92a45);
     });
   });
 
@@ -391,7 +398,10 @@ void main() {
       // feeder-line deltas (see the standalone electrical pin) — sole delta.
       // Re-baselined 2026-10-18 (Round 39): the embedded electrical body's
       // Cable cells (see the standalone electrical pin) — sole delta.
-      expect(fnv1a32(md), 0x5724e73a);
+      // Re-baselined 2026-10-18 (Round 43): the embedded electrical body's
+      // 71.9 % imbalance lines (see the standalone electrical pin) — sole
+      // delta.
+      expect(fnv1a32(md), 0x1ecdcdbc);
     });
   });
 

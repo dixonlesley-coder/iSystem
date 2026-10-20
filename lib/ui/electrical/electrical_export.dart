@@ -20,6 +20,7 @@ import 'package:mechx_engine/electrical/advanced_study.dart'
     show containmentByCircuitIdOf;
 import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
+import 'package:mechx_engine/electrical/fault.dart' show adsFailedCircuitIdsOf;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
@@ -184,6 +185,12 @@ Map<String, double> breakerKaByCircuit(WidgetRef ref) {
   };
 }
 
+/// Round 43 — the fault study's ways that FAIL automatic disconnection, so
+/// every issued board schedule marks them ` Zs!` (the same study the kA maps
+/// read).
+Set<String> adsFailedCircuitIds(WidgetRef ref) =>
+    adsFailedCircuitIdsOf(ref.read(electricalAdvancedProvider).fault);
+
 /// Export the sized electrical single-line as a DXF drawing file.
 Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(
       ref,
@@ -198,6 +205,7 @@ Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(
           result: result,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
           containmentByCircuitId: containmentByCircuit(ref),
         );
         final dxf = electricalSldToDxf(
@@ -234,6 +242,7 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) => runExportGuarded(
           result: result,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
           containmentByCircuitId: containmentByCircuit(ref),
           chrome: electricalExportChrome(ref),
           diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
@@ -395,6 +404,7 @@ Future<void> exportElectricalPanelSchedulesPdf(WidgetRef ref) =>
           // set too, matching the single-sheet detail export.
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
           containmentByCircuitId: containmentByCircuit(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;

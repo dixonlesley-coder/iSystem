@@ -5,6 +5,8 @@
 /// size the genset on the SAME basis as the power one-line.
 library;
 
+import 'dart:math' as math;
+
 import '../units.dart' show ApparentPower, Power;
 import 'model.dart';
 import 'panel_results.dart';
@@ -133,7 +135,26 @@ ApparentPower gensetBackupDemandVa(
   final essentialVa = essentialDemandVa(project, sys);
   final balanced = essentialVa > fractionVa ? essentialVa : fractionVa;
   final phase = gensetPhaseDemandVa(project, sys);
-  return ApparentPower(phase > balanced ? phase : balanced);
+  return ApparentPower(
+      _phaseBasisGoverns(project, sys, phase, balanced) ? phase : balanced);
+}
+
+/// Round 43 — the per-phase basis governs only when it exceeds the balanced
+/// basis by more than the 0.1 A line QUANTISATION it is read through (each
+/// board's printed line is rounded once to 0.1 A, so the per-phase figure
+/// carries up to 0.05 A of rounding per summed board). A perfectly balanced
+/// 5000 kVA board read at 7216.9 A (exact 7216.88 A) is 5 VA "over" its own
+/// balanced figure — that is quantisation, not imbalance, and must never buy
+/// a third 2500 kVA set. A genuinely imbalanced board (the Round-36 case)
+/// clears this by orders of magnitude. Closes the Round-35 '~35 VA' residual.
+bool _phaseBasisGoverns(ElectricalProject project, ElectricalSystemResult sys,
+    double phaseVa, double balancedVa) {
+  final boards = math.max(1,
+      math.max(_rootPanelIds(project).length,
+          _topmostBackedPanelIds(project).length));
+  final quantumVa = capacityForLineCurrentVa(
+      0.05 * boards, sys.supply.system, sys.supply.voltage.volts);
+  return phaseVa > balancedVa + quantumVa;
 }
 
 /// The per-phase VA a set of boards needs: Σ over [panelIds] of the
@@ -360,7 +381,7 @@ List<ElectricalWarning> gensetBackupWarnings(
     // the backed boards must fit S / (√3·400). Judge-only.
     if (phaseVa > 0 &&
         forced.voltAmperes + 1e-6 < phaseVa &&
-        phaseVa > balancedVa + 1e-6)
+        _phaseBasisGoverns(project, sys, phaseVa, balancedVa))
       ElectricalWarning(
         code: 'genset-phase-overload',
         severity: WarningSeverity.warning,

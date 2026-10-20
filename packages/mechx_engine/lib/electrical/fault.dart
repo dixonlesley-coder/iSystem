@@ -1167,10 +1167,15 @@ FaultStudyResult faultStudy(
         final lengthM = solvedRunLengthM(c, cModel);
         // Round 42 — a STAR-DELTA way's field run is its two motor-lead
         // cables (the starter in the board, [kStarDeltaInternalWiringM] of
-        // internal supply link): in run (delta) each line feeds TWO winding
-        // conductors, one in each lead cable, so the loop sees the lead
-        // section on 2 × lead runs in parallel (each lead with its PE), plus
-        // the short internal link on the supply section.
+        // internal supply link), plus the short internal link on the supply
+        // section. Round 43 correction: the earlier reading put a line's two
+        // lead conductors in PARALLEL for the phase path. They are not — at
+        // the motor they land on terminals of DIFFERENT windings (U1 / W2)
+        // and meet only through the winding impedance (the delta / star
+        // bridge is made at the starter contactors in the board), so a
+        // terminal earth fault is fed by ONE lead conductor per lead run.
+        // Only the PE return is genuinely parallel: both lead cables bond
+        // the motor frame to the board PE bar (2 × lead runs).
         final leads = c.motorLeads;
         final Impedance phaseZ;
         final Impedance peZ;
@@ -1185,9 +1190,12 @@ FaultStudyResult faultStudy(
           peZ = Impedance(
               peZ0.rOhm * zsFaultTempFactor / runs, peZ0.xOhm / runs);
         } else {
-          final leadPaths = 2 * ((leads.runsPerPhase ?? 1) > 1
+          final leadRuns = (leads.runsPerPhase ?? 1) > 1
               ? leads.runsPerPhase!
-              : 1);
+              : 1;
+          // Phase: one conductor per lead run; PE: both lead cables.
+          final leadPhasePaths = leadRuns;
+          final leadPePaths = 2 * leadRuns;
           final leadPe = c.motorLeadsPeCsaMm2 ?? leads.csaMm2;
           final lPh = conductorImpedance(
               profile, leads.csaMm2, lengthM, panelModel.material);
@@ -1198,13 +1206,13 @@ FaultStudyResult faultStudy(
           final iPe = conductorImpedance(profile, c.grounding.peCsaMm2,
               kStarDeltaInternalWiringM, panelModel.material);
           phaseZ = Impedance(
-              lPh.rOhm * zsFaultTempFactor / leadPaths +
+              lPh.rOhm * zsFaultTempFactor / leadPhasePaths +
                   iPh.rOhm * zsFaultTempFactor / runs,
-              lPh.xOhm / leadPaths + iPh.xOhm / runs);
+              lPh.xOhm / leadPhasePaths + iPh.xOhm / runs);
           peZ = Impedance(
-              lPe.rOhm * zsFaultTempFactor / leadPaths +
+              lPe.rOhm * zsFaultTempFactor / leadPePaths +
                   iPe.rOhm * zsFaultTempFactor / runs,
-              lPe.xOhm / leadPaths + iPe.xOhm / runs);
+              lPe.xOhm / leadPePaths + iPe.xOhm / runs);
         }
         // Loop = hot source/feeder phase path + every upstream feeder's PE
         // return + this circuit's own phase + PE (elec-advanced-2).
@@ -1535,3 +1543,12 @@ ElectricalWarning? _icsShortfall({
 
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
+
+/// Round 43 (elec-drawings-6-schedule-silent-on-iz-below-in-and-ads-fail) —
+/// the way ids whose earth-fault loop FAILS automatic disconnection
+/// (`CircuitFaultResult.adsOk == false`), the set the board schedule marks
+/// ` Zs!` ([buildElectricalSld]'s `adsFailedCircuitIds`). Pure.
+Set<String> adsFailedCircuitIdsOf(FaultStudyResult fault) => {
+      for (final e in fault.circuits.entries)
+        if (e.value.adsOk == false) e.key,
+    };

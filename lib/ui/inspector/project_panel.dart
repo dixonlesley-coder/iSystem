@@ -110,6 +110,7 @@ import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart'
     show
+        adsFailedCircuitIds,
         breakerIcuKaByPanel,
         breakerKaByCircuit,
         containmentByCircuit,
@@ -758,6 +759,7 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
           result: ref.read(electricalResultProvider),
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
           containmentByCircuitId: containmentByCircuit(ref),
         ),
         caption: reportStringsFor(ref)(RptStringKey.capElecSld),
@@ -2054,6 +2056,7 @@ Future<bool> writeSubmittalPackageToDir(
             result: ref.read(electricalResultProvider),
             breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
             breakerKaByCircuitId: breakerKaByCircuit(ref),
+            adsFailedCircuitIds: adsFailedCircuitIds(ref),
             containmentByCircuitId: containmentByCircuit(ref),
           ),
           caption: reportStringsFor(ref)(RptStringKey.capElecSld),
@@ -2393,6 +2396,7 @@ Future<bool> writeSubmittalPackageToDir(
         result: eResult,
         breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
         breakerKaByCircuitId: breakerKaByCircuit(ref),
+        adsFailedCircuitIds: adsFailedCircuitIds(ref),
         containmentByCircuitId: containmentByCircuit(ref),
         chrome: sldChrome(DrawingSeries.electricalDetail),
         // Round 14 (drafting-visual-1) — ONE project name + the register
@@ -2412,6 +2416,7 @@ Future<bool> writeSubmittalPackageToDir(
           result: eResult,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
           containmentByCircuitId: containmentByCircuit(ref),
         ),
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),

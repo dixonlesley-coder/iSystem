@@ -67,8 +67,20 @@ class ElectricalCircuitResult {
   final String name;
   final LoadKind loadKind;
 
-  /// Design (load) current Ib, rounded to 1 dp.
+  /// Design (load) current Ib, rounded to 1 dp (the PRINTED way figure).
   final Current designCurrent;
+
+  /// Round 43 (elec-drawings-6-board-demand-sums-rounded-way-currents) — the
+  /// EXACT (unrounded) design current. Every board SUM (phase balance, demand
+  /// current, incomer, busbar sections, the TOTAL row) reads this and rounds
+  /// the summed line currents ONCE — never a sum of 0.1 A-rounded way figures
+  /// (31 × 100 W lighting = 16.58 A, never 31 × 0.5 = 15.5 A on a 16 A
+  /// incomer). Null (a legacy-built result) ⇒ [designCurrent].
+  final double? designCurrentExactA;
+
+  /// [designCurrentExactA] when recorded, else the rounded [designCurrent].
+  double get designCurrentSumA =>
+      designCurrentExactA ?? designCurrent.amperes;
 
   /// Whether the circuit is supplied three-phase.
   final bool threePhase;
@@ -148,6 +160,7 @@ class ElectricalCircuitResult {
     required this.name,
     required this.loadKind,
     required this.designCurrent,
+    this.designCurrentExactA,
     required this.threePhase,
     required this.phase,
     required this.breaker,
@@ -177,6 +190,7 @@ class ElectricalCircuitResult {
         name: name,
         loadKind: loadKind,
         designCurrent: designCurrent,
+        designCurrentExactA: designCurrentExactA,
         threePhase: threePhase,
         phase: phase ?? this.phase,
         breaker: breaker,

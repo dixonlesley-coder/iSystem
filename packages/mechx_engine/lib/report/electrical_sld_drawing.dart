@@ -451,6 +451,14 @@ double? _panelIcuKa(
 /// largest standard conduit at the study's fill limit) instead of the local CSA
 /// ladder, so the schedule and the containment take-off can never contradict
 /// each other on the same run. Absent ⇒ the (now fill-aware) ladder.
+///
+/// Round 43 (elec-drawings-6-schedule-silent-on-iz-below-in-and-ads-fail) —
+/// [adsFailedCircuitIds] (the fault study's ways with `adsOk == false`,
+/// [adsFailedCircuitIdsOf]) marks each such row ` Zs!` in KETERANGAN; a way
+/// whose conductor cannot meet `Iz ≥ In` (`CableResult.ampacityReached`
+/// false — the `cable-ampacity-inadequate` ERROR) is marked ` Iz!` from the
+/// result alone. Both join the legend only when printed. Null / clean ⇒
+/// byte-identical.
 SldSheet buildElectricalSld({
   required ElectricalProject project,
   required ElectricalSystemResult result,
@@ -459,6 +467,7 @@ SldSheet buildElectricalSld({
   Map<String, double>? breakerKaByCircuitId,
   Map<String, ConduitSpec>? containmentByCircuitId,
   ({int lo, int hi})? wayRange,
+  Set<String>? adsFailedCircuitIds,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
   final circuitById = <String, ElectricalCircuit>{
@@ -503,6 +512,7 @@ SldSheet buildElectricalSld({
   // metering cluster (N11) — drives the matching KETERANGAN legend entries.
   var anyIcuKa = false;
   var anyMetering = false;
+  var anySubmeter = false;
   // drafting-8: the row tokens actually printed (starter / RCD / conduit /
   // tray), so the KETERANGAN keys every abbreviation the schedule uses.
   final usedStarters = <StarterType>{};
@@ -659,6 +669,15 @@ SldSheet buildElectricalSld({
       prims.add(SldLabel(
           mx + 4, blockY + my + 13, _ctLabel(p.meteringCurrent.amperes),
           size: 8));
+    } else if (firstChunk && (model?.submeter ?? false)) {
+      // Round 43 (electrical-sim-8-tenant-submeter-flag-ignored) — a
+      // sub-metered (tenant) single-phase board carries its revenue kWh
+      // meter (no V / A / Hz instruments): the SAME `meterFor` token the
+      // BOM buys ('kWh direct' whole-current, else 'CT x/5A cl.').
+      anySubmeter = true;
+      prims.add(SldLabel(blockX + _blockW - 220, blockY + 25,
+          _ctLabel(p.meteringCurrent.amperes),
+          size: 8));
     }
 
     // Header / body divider (full width) for a clean schedule look.
@@ -765,6 +784,15 @@ SldSheet buildElectricalSld({
       // The schedule must never call a way fine that the calc report fails.
       final vd =
           voltageDropOverLimit(c, isFeeder: feeds != null) ? '  VD!' : '';
+      // Round 43 — the two conductor-safety defects a kontraktor would
+      // otherwise build exactly as drawn: In above the conductor's Iz
+      // (`cable-ampacity-inadequate`) and an earth-fault loop that does not
+      // disconnect in time (`ads-disconnection`).
+      final izShort = c.loadKind != LoadKind.spare &&
+          (!c.cable.ampacityReached ||
+              (c.motorLeads != null && !c.motorLeads!.ampacityReached));
+      final safety = '${izShort ? '  Iz!' : ''}'
+          '${(adsFailedCircuitIds?.contains(c.circuitId) ?? false) ? '  Zs!' : ''}';
       // E2: the containment STUDY's own result for this run wins when supplied
       // (one containment source for the schedule + the take-off); else the
       // fill-aware ladder. Both return null for a cable no standard conduit
@@ -905,7 +933,7 @@ SldSheet buildElectricalSld({
           SldLabel(blockX + _colPenghantar, rowY + 3, cable, size: rowSize));
       prims.add(SldLabel(blockX + _colDaya, rowY + 3, daya, size: rowSize));
       prims.add(SldLabel(
-          blockX + _colKeterangan, rowY + 3, '$keterangan$fireDuty$vd',
+          blockX + _colKeterangan, rowY + 3, '$keterangan$fireDuty$vd$safety',
           size: rowSize));
       // R/S/T loading band — the line current under the way's phase(s), each
       // cell carrying its phase role so the loading reads by colour at a glance.
@@ -1096,6 +1124,14 @@ SldSheet buildElectricalSld({
   if (printedMatch(RegExp(r'(^|\s)VD!'))) {
     legend.add(const SldLegendEntry('VD!', 'Voltage drop over limit'));
   }
+  if (printedMatch(RegExp(r'(^|\s)Iz!'))) {
+    legend.add(const SldLegendEntry(
+        'Iz!', 'Breaker In above the cable Iz - conductor unprotected'));
+  }
+  if (printedMatch(RegExp(r'(^|\s)Zs!'))) {
+    legend.add(const SldLegendEntry(
+        'Zs!', 'Earth-fault loop too high - no disconnection in time (ADS)'));
+  }
   if (printedMatch(RegExp(r'\bundiv\b'))) {
     legend.add(const SldLegendEntry('div / undiv',
         'Demand current with / without the board diversity factor'));
@@ -1120,9 +1156,15 @@ SldSheet buildElectricalSld({
     legend.add(const SldLegendEntry(
         'Ics100', 'Specify a 100 % Ics device (service capacity below the bus fault)'));
   }
-  if (anyMetering) {
-    legend
-        .add(const SldLegendEntry('V / A / Hz', 'Panel metering instruments'));
+  if (anySubmeter && printedMatch(RegExp(r'^kWh direct$'))) {
+    legend.add(const SldLegendEntry(
+        'kWh direct', 'Tenant kWh meter, whole-current (sub-metered board)'));
+  }
+  if (anyMetering || anySubmeter) {
+    if (anyMetering) {
+      legend.add(
+          const SldLegendEntry('V / A / Hz', 'Panel metering instruments'));
+    }
     if (printedMatch(RegExp(r'^CT '))) {
       legend.add(
           const SldLegendEntry('CT', 'Metering current transformer (x/5A)'));
@@ -1186,6 +1228,7 @@ SldSheet buildElectricalPanelDetail({
   Map<String, double>? breakerIcuKaByPanelId,
   Map<String, double>? breakerKaByCircuitId,
   Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
 }) =>
     buildElectricalSld(
       project: project,
@@ -1194,6 +1237,7 @@ SldSheet buildElectricalPanelDetail({
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
       breakerKaByCircuitId: breakerKaByCircuitId,
       containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds,
     );
 
 /// The utility SOURCE-SPINE only, as a standalone `SldSheet` for painting a
@@ -1446,8 +1490,10 @@ String? _feederConnLabel(
   final length =
       cr.lengthM > 0 ? ' · ${planLengthLabel(Length(cr.lengthM))}' : '';
   final twoPole = parentThreePhase && !cr.threePhase;
+  // Round 43 — the conductor-unprotected mark rides the feeder label too.
+  final iz = cr.cable.ampacityReached ? '' : ' Iz!';
   return '${cableRunLabel(circ, cr.cable.csaMm2, cr.threePhase, cores: cr.grounding.cores, runs: cr.cable.runsPerPhase, peCsaMm2: cr.grounding.peCsaMm2, neutralCsaMm2: cr.grounding.neutralCsaMm2)} · '
-      '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length';
+      '${breakerScheduleLabel(cr.breaker, poles, twoPole: twoPole)}$length$iz';
 }
 
 /// True when [child]'s PARENT board is three-phase (so a single-phase feeder to
@@ -2711,13 +2757,36 @@ SldSheet buildElectricalOverview({
         size: 7.5, role: role));
     // Page match notes (Round 23): a board whose sub-tree was cut continues
     // on its own diagram; a sub-tree page's root names the board feeding it.
-    final cut = (fullChildren[id] ?? const <String>[])
-        .any((k) => result.panels.containsKey(k) && !cx.containsKey(k));
+    // Round 43 (elec-drawings-6-overview-chunk-self-reference) — on a
+    // CHUNK page ([rootChildIds]) a page root's sub-boards outside the chunk
+    // sit on the SIBLING chunk pages under the same root heading; there is
+    // no 'DIAGRAM <root>' sheet, so those are named as a range on the other
+    // sheets instead of a cross-reference to a sheet that does not exist.
+    final missing = [
+      for (final k in fullChildren[id] ?? const <String>[])
+        if (result.panels.containsKey(k) && !cx.containsKey(k)) k,
+    ];
+    final isChunkRoot = rootChildIds != null && !parentOf.containsKey(id);
+    final siblingChunk = isChunkRoot
+        ? [
+            for (final k in missing)
+              if (!rootChildIds.contains(k)) k,
+          ]
+        : const <String>[];
+    final cut = missing.any((k) => !siblingChunk.contains(k));
     if (cut) {
       prims.add(SldLine(x + _ovW / 2, y + _ovH, x + _ovW / 2, y + _ovH + 14,
           weight: SldWeight.medium, role: role));
       prims.add(SldLabel(
           x + _ovW / 2 + 4, y + _ovH + 12, 'LANJUT KE DIAGRAM ${p.name}',
+          size: _ovFeederLabelSize, role: role));
+    } else if (siblingChunk.isNotEmpty) {
+      String nm(String k) => result.panels[k]?.name ?? k;
+      final range = siblingChunk.length == 1
+          ? nm(siblingChunk.first)
+          : '${nm(siblingChunk.first)} .. ${nm(siblingChunk.last)}';
+      prims.add(SldLabel(x + _ovW + 6, y + _ovH / 2 + 3,
+          'LANJUT: $range (lembar lain)',
           size: _ovFeederLabelSize, role: role));
     }
     final par = fullParentOf[id];
@@ -2786,6 +2855,7 @@ SldSheet buildElectricalOverview({
     for (final pr in prims) {
       if (pr is SldLabel &&
           (pr.text.startsWith('LANJUT KE DIAGRAM') ||
+              pr.text.startsWith('LANJUT: ') ||
               pr.text.startsWith('DARI '))) {
         minY = math.min(minY, pr.y - pr.size - 8);
         maxY = math.max(maxY, pr.y + 2);
@@ -3877,6 +3947,7 @@ SldSheet buildElectricalRiser({
   }
 
   // ── Page crop (Round 23, elec-drafting-2-1) ────────────────────────────────
+  var stubOverlaps = 0;
   if (floorRange != null) {
     final lo = floorRange.lo.clamp(0, topIndex);
     final hi = floorRange.hi.clamp(lo, topIndex);
@@ -3899,26 +3970,16 @@ SldSheet buildElectricalRiser({
     bool inWin(double y) => y >= top - eps && y <= bottom + eps;
     final cropped = <SldPrim>[];
     final stubs = <String>{};
-    final placedStubs = <(double, double)>[];
+    // Round 43 (elec-drawings-6-riser-lanjut-stub-overprints-feeder-label) —
+    // stubs are PLACED after the crop, against every kept label (the feeder
+    // cable / breaker annotations the riser placer already put at the top of
+    // the window) AND every stub placed before, stepping away from the page
+    // edge until clear; a stub with no clear slot inside the window is
+    // COUNTED ([SldSheet.overlapCount] ⇒ the legibility note), never silent.
+    final stubRequests = <(double, double, int, SldRole, double)>[];
     void stub(double x, double y, int floor, SldRole role, {double dir = 1}) {
       if (!stubs.add('${x.toStringAsFixed(2)}@${y.toStringAsFixed(2)}')) return;
-      // Round 40 — one stub PER channel lane: a second lane's stub that would
-      // print over another's text steps one line further from the page edge.
-      final text = 'LANJUT KE ${floorName(floor)}';
-      final w = _riserLabelWidth(text, _fanLabelSize);
-      var sy = y;
-      var moved = true;
-      while (moved) {
-        moved = false;
-        for (final (px, py) in placedStubs) {
-          if ((py - sy).abs() < _fanLabelSize + 1 && (px - x).abs() < w + 3) {
-            sy += dir * (_fanLabelSize + 2);
-            moved = true;
-          }
-        }
-      }
-      placedStubs.add((x, sy));
-      cropped.add(SldLabel(x + 3, sy, text, size: _fanLabelSize, role: role));
+      stubRequests.add((x, y, floor, role, dir));
     }
 
     for (final pr in prims) {
@@ -3957,6 +4018,39 @@ SldSheet buildElectricalRiser({
             stub(xAt(cb), cb - 3, lo - 1, pr.role, dir: -1);
           }
       }
+    }
+    // Place the stubs (see `stub`).
+    final keptBoxes = <_RiserBox>[
+      for (final l in cropped.whereType<SldLabel>())
+        _RiserBox(l.x, l.y - l.size,
+            l.x + _riserLabelWidth(l.text, l.size), l.y),
+    ];
+    bool hits(_RiserBox b) {
+      for (final o in keptBoxes) {
+        if (b.overlap(o) > 1e-9) return true;
+      }
+      return false;
+    }
+
+    for (final (x, y, floor, role, dir) in stubRequests) {
+      final text = 'LANJUT KE ${floorName(floor)}';
+      final w = _riserLabelWidth(text, _fanLabelSize);
+      _RiserBox boxAt(double sy) =>
+          _RiserBox(x + 3, sy - _fanLabelSize, x + 3 + w, sy);
+      var sy = y;
+      var clear = !hits(boxAt(sy));
+      for (var k = 0; !clear && k < 40; k++) {
+        final next = sy + dir * (_fanLabelSize + 2);
+        if (!inWin(next) || !inWin(next - _fanLabelSize)) break;
+        sy = next;
+        clear = !hits(boxAt(sy));
+      }
+      if (!clear) {
+        sy = y;
+        stubOverlaps++;
+      }
+      keptBoxes.add(boxAt(sy));
+      cropped.add(SldLabel(x + 3, sy, text, size: _fanLabelSize, role: role));
     }
     prims
       ..clear()
@@ -4027,6 +4121,7 @@ SldSheet buildElectricalRiser({
         const SldLegendEntry('Earth', 'System earthing point'),
     ],
     supplyNote: supplyNote,
+    overlapCount: stubOverlaps,
   );
 }
 
