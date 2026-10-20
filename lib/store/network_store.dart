@@ -2650,8 +2650,14 @@ class NetworkController extends Notifier<DrawingState> {
   /// (one undo step) on success; false — mutating NOTHING — for a missing/riser
   /// edge, a non-positive length or scale, a degenerate (zero-length) run, or an
   /// ambiguous mover (both/neither end free and no valid [moveEndId]).
+  ///
+  /// [duringDrag] — the typed length that FINISHES an endpoint grip stretch
+  /// (item 2): the drag already pushed its undo snapshot, so the result lands
+  /// through [_commitDragEnd] — the drag and the typed length are ONE undo
+  /// step back to the pre-drag network.
   bool setRunLength(String edgeId, double metres, double metersPerPixel,
-      {String? moveEndId}) {
+      {String? moveEndId, bool duringDrag = false}) {
+    if (!metres.isFinite || !metersPerPixel.isFinite) return false;
     if (metres <= 0 || metersPerPixel <= 0) return false;
     final net = state.network;
     final e = net.edgeById(edgeId);
@@ -2688,7 +2694,11 @@ class NetworkController extends Notifier<DrawingState> {
       for (final n in net.nodes)
         n.id == moverId ? n.copyWith(x: nxpos, y: nypos) : n,
     ];
-    _commit(Network(nodes: nodes, edges: net.edges));
+    if (duringDrag) {
+      _commitDragEnd(Network(nodes: nodes, edges: net.edges));
+    } else {
+      _commit(Network(nodes: nodes, edges: net.edges));
+    }
     return true;
   }
 
@@ -3650,6 +3660,197 @@ class NetworkController extends Notifier<DrawingState> {
     }
     if (!moved) return;
     _commit(Network(nodes: nodes, edges: net.edges));
+  }
+
+  // ── Base-point transforms (M8 — AutoCAD MOVE / COPY / ROTATE) ──────────────
+
+  /// MOVE the [nodeIds]/[edgeIds] selection by [delta] (world px) in ONE undo
+  /// step — the commit of a base-point Move (base → target). The effective set
+  /// is [_selectionNodeSet] (edges follow their endpoints); a run joining a
+  /// moved node to an unmoved one stretches, exactly like a group drag. Floors,
+  /// elevations and ids are untouched. Returns false (recording nothing) for a
+  /// non-finite / zero delta or an empty set.
+  bool translateSelection(
+      Set<String> nodeIds, Set<String> edgeIds, Offset delta) {
+    if (!delta.dx.isFinite || !delta.dy.isFinite || delta == Offset.zero) {
+      return false;
+    }
+    final net = state.network;
+    final ids = _selectionNodeSet(nodeIds, edgeIds);
+    if (ids.isEmpty) return false;
+    _commit(Network(
+      nodes: [
+        for (final n in net.nodes)
+          ids.contains(n.id)
+              ? n.copyWith(x: n.x + delta.dx, y: n.y + delta.dy)
+              : n,
+      ],
+      edges: net.edges,
+    ));
+    return true;
+  }
+
+  /// COPY the [nodeIds]/[edgeIds] selection by [delta] (world px) in ONE undo
+  /// step — one placement of a base-point Copy. Fresh ids exactly like
+  /// [paste] (the shared [_cloneNodeAt] / [_cloneEdge], so the field set can
+  /// never drift), connectivity kept WITHIN the copied set by [copySelection]'s
+  /// rule (the chosen nodes + both endpoints of every chosen edge; an edge is
+  /// copied only when both its endpoints are), and every node keeps its OWN
+  /// sheet + floor — a copied riser keeps its true span. The clipboard and the
+  /// selection are left alone (AutoCAD COPY-multiple places further copies
+  /// relative to the ORIGINALS). Returns the new ids; empty (nothing recorded)
+  /// for a non-finite / zero delta or an empty set.
+  ({Set<String> nodeIds, Set<String> edgeIds}) copySelectionBy(
+      Set<String> nodeIds, Set<String> edgeIds, Offset delta) {
+    const none = (nodeIds: <String>{}, edgeIds: <String>{});
+    if (!delta.dx.isFinite || !delta.dy.isFinite || delta == Offset.zero) {
+      return none;
+    }
+    final net = state.network;
+    final kept = _selectionNodeSet(nodeIds, edgeIds);
+    if (kept.isEmpty) return none;
+    final clones = <String, String>{};
+    final newNodes = <NetNode>[];
+    for (final n in net.nodes) {
+      if (!kept.contains(n.id)) continue;
+      final id = _id('n');
+      clones[n.id] = id;
+      newNodes.add(_cloneNodeAt(
+          n, id, n.sheetId, n.floorIndex, n.x + delta.dx, n.y + delta.dy));
+    }
+    final newEdges = <NetEdge>[];
+    for (final e in net.edges) {
+      if (!edgeIds.contains(e.id)) continue;
+      final from = clones[e.fromId];
+      final to = clones[e.toId];
+      if (from == null || to == null) continue;
+      newEdges.add(_cloneEdge(e, _id('e'), from, to));
+    }
+    _commit(Network(
+      nodes: [...net.nodes, ...newNodes],
+      edges: [...net.edges, ...newEdges],
+    ));
+    return (
+      nodeIds: {for (final n in newNodes) n.id},
+      edgeIds: {for (final e in newEdges) e.id},
+    );
+  }
+
+  /// ROTATE the [nodeIds]/[edgeIds] selection by [angleDeg] about [pivot]
+  /// (world px) in ONE undo step — the commit of a base-point Rotate.
+  ///
+  /// [angleDeg] is the AutoCAD sense: COUNTER-clockwise positive as SEEN on the
+  /// plan. Screen y grows downward, so a visual CCW turn maps a pivot-relative
+  /// delta (dx, dy) to (dx·cos + dy·sin, −dx·sin + dy·cos) — 90° turns East
+  /// (1, 0) to North (0, −1).
+  ///
+  /// Exactness (the F2 contract): a whole number of QUARTER turns uses
+  /// [rotateSelection]'s trig-free swap/negate, so axis-aligned and 45° runs
+  /// stay bit-exact. An odd multiple of 45° goes through trig and then
+  /// re-squares every selected run that WAS exactly axis-aligned or exactly
+  /// diagonal: walking the selected edges breadth-first from the first node,
+  /// each child is placed at its parent plus the rotated delta with the minor
+  /// component zeroed (axis) or |dx| == |dy| forced (diagonal) — so an
+  /// orthogonal layout turned 45° is exactly diagonal, never off by an ulp
+  /// that ortho / the riser view would read as a skew. Any other angle is a
+  /// plain rotation. Plan-only: floors, elevations and ids are untouched (a
+  /// riser's two coincident ends map to one point, so it stays vertical).
+  /// Returns false (recording nothing) for a non-finite input, an empty set,
+  /// or a turn that moves nothing.
+  bool rotateSelectionAbout(Set<String> nodeIds, Set<String> edgeIds,
+      Offset pivot, double angleDeg) {
+    if (!angleDeg.isFinite || !pivot.dx.isFinite || !pivot.dy.isFinite) {
+      return false;
+    }
+    final net = state.network;
+    final ids = _selectionNodeSet(nodeIds, edgeIds);
+    if (ids.isEmpty) return false;
+    final quarters = angleDeg / 90.0;
+    final q = quarters.roundToDouble();
+    final Offset Function(Offset d) rot;
+    if ((quarters - q).abs() < 1e-12) {
+      final k = ((q % 4) + 4) % 4;
+      if (k == 0) return false;
+      rot = switch (k.toInt()) {
+        1 => (d) => Offset(d.dy, -d.dx),
+        2 => (d) => Offset(-d.dx, -d.dy),
+        _ => (d) => Offset(-d.dy, d.dx),
+      };
+    } else {
+      final rad = angleDeg * math.pi / 180.0;
+      final c = math.cos(rad), s = math.sin(rad);
+      rot = (d) => Offset(d.dx * c + d.dy * s, -d.dx * s + d.dy * c);
+    }
+    final next = <String, Offset>{
+      for (final n in net.nodes)
+        if (ids.contains(n.id)) n.id: pivot + rot(Offset(n.x, n.y) - pivot),
+    };
+    final eighths = angleDeg / 45.0;
+    if ((eighths - eighths.roundToDouble()).abs() < 1e-12 &&
+        (quarters - q).abs() >= 1e-12) {
+      _resquareRotated(net, ids, edgeIds, next, rot);
+    }
+    var moved = false;
+    final nodes = <NetNode>[];
+    for (final n in net.nodes) {
+      final p = next[n.id];
+      if (p == null) {
+        nodes.add(n);
+        continue;
+      }
+      if (p.dx != n.x || p.dy != n.y) moved = true;
+      nodes.add(n.copyWith(x: p.dx, y: p.dy));
+    }
+    if (!moved) return false;
+    _commit(Network(nodes: nodes, edges: net.edges));
+    return true;
+  }
+
+  /// The 45° re-squaring walk of [rotateSelectionAbout] (see there): rewrites
+  /// [next] in place so every selected run that was exactly axis-aligned or
+  /// diagonal before the turn is exactly diagonal / axis-aligned after it.
+  void _resquareRotated(Network net, Set<String> ids, Set<String> edgeIds,
+      Map<String, Offset> next, Offset Function(Offset d) rot) {
+    bool square(Offset d) =>
+        d.dx == 0 || d.dy == 0 || d.dx.abs() == d.dy.abs();
+    Offset snap(Offset d) {
+      final len = d.distance;
+      if (len == 0) return Offset.zero;
+      final tol = len * 1e-9;
+      if (d.dx.abs() <= tol) return Offset(0, d.dy);
+      if (d.dy.abs() <= tol) return Offset(d.dx, 0);
+      if ((d.dx.abs() - d.dy.abs()).abs() <= tol) {
+        final m = (d.dx.abs() + d.dy.abs()) / 2;
+        return Offset(d.dx.sign * m, d.dy.sign * m);
+      }
+      return d;
+    }
+
+    final placed = <String>{};
+    for (final start in net.nodes) {
+      if (!ids.contains(start.id) || placed.contains(start.id)) continue;
+      placed.add(start.id);
+      final queue = <String>[start.id];
+      while (queue.isNotEmpty) {
+        final pid = queue.removeAt(0);
+        final parent = net.nodeById(pid)!;
+        for (final e in net.edgesAt(pid)) {
+          if (!edgeIds.contains(e.id) && !(ids.contains(e.fromId) &&
+              ids.contains(e.toId))) {
+            continue;
+          }
+          final cid = e.fromId == pid ? e.toId : e.fromId;
+          if (!ids.contains(cid) || placed.contains(cid)) continue;
+          final child = net.nodeById(cid);
+          if (child == null) continue;
+          final d0 = Offset(child.x - parent.x, child.y - parent.y);
+          placed.add(cid);
+          queue.add(cid);
+          if (!square(d0)) continue; // keeps its plain rotated position
+          next[cid] = next[pid]! + snap(rot(d0));
+        }
+      }
+    }
   }
 
   /// The bounding-box centre (in sheet/world px) of the nodes whose ids are in

@@ -17,6 +17,7 @@ import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart' show sizingProvider;
+import '../../store/smart_input_store.dart' show endpointStretchProvider;
 import '../../store/snap_settings_store.dart' show gridSnapProvider;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
@@ -195,11 +196,30 @@ class _NetworkSelectionOverlayState
     ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
     // K1 — a pointer drag freezes the heavy chain until it settles/ends.
     ref.read(dragSessionProvider.notifier).beginDrag();
-    final node = ref.read(networkControllerProvider).network.nodeById(id);
+    final net = ref.read(networkControllerProvider).network;
+    final node = net.nodeById(id);
     _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
+    // Item 2 — publish the stretch so a typed length (smart bar, fed by the
+    // canvas key handler) can set the run's exact length mid-drag.
+    final edges = net.edgesAt(id);
+    if (edges.length == 1) {
+      ref.read(endpointStretchProvider.notifier).begin(id, edges.first.id);
+    }
+  }
+
+  /// Whether a typed length already finished this stretch (item 2): the rest
+  /// of the pointer drag is inert so the exact length survives the release.
+  bool get _stretchTyped => ref.read(endpointStretchProvider)?.typed ?? false;
+
+  void _cancelEndpointStretch() {
+    ref.read(canvasGestureActiveProvider.notifier).set(false);
+    ref.read(dragSessionProvider.notifier).endDrag();
+    ref.read(endpointStretchProvider.notifier).end();
+    _nodeDragRaw = null;
   }
 
   void _updateEndpointStretch(String id, double dxWorld, double dyWorld) {
+    if (_stretchTyped) return;
     ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
     final net = ref.read(networkControllerProvider).network;
     final node = net.nodeById(id);
@@ -217,9 +237,11 @@ class _NetworkSelectionOverlayState
   }
 
   void _endEndpointStretch(String id, double scale, double snapWorld) {
-    ref.read(canvasGestureActiveProvider.notifier).set(false);
-    ref.read(dragSessionProvider.notifier).endDrag();
-    _nodeDragRaw = null;
+    final typed = _stretchTyped;
+    _cancelEndpointStretch();
+    // A typed length already committed this drag (one undo step with it):
+    // never let the release snap / merge the exact end somewhere else.
+    if (typed) return;
     final gridOrtho =
         ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
     final gridMpp = ref
@@ -871,12 +893,7 @@ class _NetworkSelectionOverlayState
               ? (_) => _endEndpointStretch(
                   nodeId, transform.scale, 14 / transform.scale)
               : (_) => _endPull(transform),
-          onPanCancel: stretch
-              ? () {
-                  ref.read(canvasGestureActiveProvider.notifier).set(false);
-                  ref.read(dragSessionProvider.notifier).endDrag();
-                  _nodeDragRaw = null;
-                }
+          onPanCancel: stretch ? _cancelEndpointStretch
               : () {
                   ref.read(canvasGestureActiveProvider.notifier).set(false);
                   ref.read(dragSessionProvider.notifier).endDrag();
@@ -1358,6 +1375,73 @@ bool _nodeInert(Network net, String nodeId, Set<ServiceType> inert) {
     if (!inert.contains(e.service)) return false;
   }
   return touched;
+}
+
+/// Item 6 — EVERY element a click at [world] could mean, in the order a plain
+/// click resolves them: the nodes within the node hit radius (nearest first),
+/// then the runs / risers within their hit corridors (nearest first) — the
+/// same radii, corridors and inert filter as [_nodeAt] / [_edgeAt], so the
+/// first candidate is always what a click selects. Shift+Space walks the rest
+/// (coincident nodes, a node sitting on a run, crossing runs).
+List<HoverTarget> pickCandidatesAt(
+  Network net,
+  ViewportTransform transform,
+  Offset world,
+  String sheetId,
+  int floorIndex, {
+  Map<String, EdgeSizing>? sizing,
+  double? metersPerPixel,
+  Set<ServiceType> inertServices = const {},
+}) {
+  final idx = floorIndexOf(net, sheetId, floorIndex);
+  final nodeHitR = 13 / transform.scale;
+  // (distance, tie order, id). Ties break the way the click's own scans do:
+  // [_nodeAt] keeps the LAST of equally near nodes, [_edgeAt] the FIRST of
+  // equally near edges.
+  final nodes = <(double, int, String)>[];
+  for (var i = 0; i < idx.nodes.length; i++) {
+    final n = idx.nodes[i];
+    final dx = n.x - world.dx;
+    final dy = n.y - world.dy;
+    final d2 = dx * dx + dy * dy;
+    if (d2 > nodeHitR * nodeHitR) continue;
+    if (_nodeInert(net, n.id, inertServices)) continue;
+    nodes.add((d2, -i, n.id));
+  }
+  final edges = <(double, int, String)>[];
+  final riserHitR = 8 / transform.scale;
+  for (var i = 0; i < idx.edges.length; i++) {
+    final fe = idx.edges[i];
+    final e = fe.edge;
+    if (inertServices.contains(e.service)) continue;
+    if (e.kind == EdgeKind.run) {
+      final outer = pipeOuterPx(sizing?[e.id], e.service,
+          scale: transform.scale, metersPerPixel: metersPerPixel);
+      final hitR = math.max(8.0, outer / 2 + 4.0) / transform.scale;
+      final d = _distToSegment(
+          world, Offset(fe.a.x, fe.a.y), Offset(fe.b.x, fe.b.y));
+      if (d <= hitR) edges.add((d, i, e.id));
+    } else {
+      var best = double.infinity;
+      for (final n in [fe.a, fe.b]) {
+        if (!_isOnFloor(n, sheetId, floorIndex)) continue;
+        final d = (Offset(n.x, n.y) - world).distance;
+        if (d <= riserHitR && d < best) best = d;
+      }
+      if (best.isFinite) edges.add((best, i, e.id));
+    }
+  }
+  int byDist((double, int, String) a, (double, int, String) b) {
+    final c = a.$1.compareTo(b.$1);
+    return c != 0 ? c : a.$2.compareTo(b.$2);
+  }
+
+  nodes.sort(byDist);
+  edges.sort(byDist);
+  return [
+    for (final n in nodes) (nodeId: n.$3, edgeId: null),
+    for (final e in edges) (nodeId: null, edgeId: e.$3),
+  ];
 }
 
 /// Nearest node id on this floor within the node hit radius, or null. [inert]
