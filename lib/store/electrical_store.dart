@@ -447,10 +447,13 @@ class ElectricalDragSessionController extends Notifier<ElectricalDragSession> {
     return const ElectricalDragSession();
   }
 
-  /// Open a drag session (call at pointer-drag START). Idempotent while open.
-  void begin() {
+  /// Open a drag session (call at pointer-drag START) frozen on [sizing] —
+  /// the caller passes `ref.read(electricalSizingProjectProvider)` (this
+  /// notifier cannot read it: that provider depends on this one). Idempotent
+  /// while open.
+  void begin(ElectricalProject sizing) {
     if (state.active) return;
-    state = ElectricalDragSession(ref.read(electricalSizingProjectProvider));
+    state = ElectricalDragSession(sizing);
   }
 
   /// Close the session (pointer-drag END / cancel / unmount): the heavy chain

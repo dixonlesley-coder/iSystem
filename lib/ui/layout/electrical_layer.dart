@@ -223,7 +223,9 @@ final _markerGroupDragProvider =
 void _beginMarkerDrag(WidgetRef ref, ElectricalProjectController ctrl,
     ElectricalSelection grabbed, Offset grabbedWorld) {
   ctrl.pushUndoSnapshot();
-  ref.read(electricalDragSessionProvider.notifier).begin();
+  ref
+      .read(electricalDragSessionProvider.notifier)
+      .begin(ref.read(electricalSizingProjectProvider));
   final group = ref.read(_markerGroupDragProvider);
   group.grabbedStart = null;
   group.starts = const {};
@@ -1527,6 +1529,9 @@ class _LayerMarqueeState extends ConsumerState<_LayerMarquee> {
     final start = _start, now = _now;
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
+      // The box starts where the button went DOWN, not where the drag slop
+      // was crossed.
+      dragStartBehavior: DragStartBehavior.down,
       supportedDevices: const {
         PointerDeviceKind.mouse,
         PointerDeviceKind.touch,
