@@ -474,8 +474,12 @@ class ElectricalPanel {
   /// generator backup. Carried for the A8 sources / power-one-line pass.
   final bool essential;
 
-  /// Critical / UPS-backed board: backed by the battery bank in the A8 sources
-  /// pass (the topmost-flagged-demand tier).
+  /// Critical / UPS-backed board, supplied THROUGH a UPS. Round 44: its
+  /// feeder (and every board upstream) carries the UPS INPUT — the board's
+  /// diversified demand × `kUpsInputFactor` (÷ 0.94 efficiency × 1.10
+  /// recharge, `// VERIFY`) at a balanced rectifier draw — and an INFO
+  /// `ups-not-sized` states that no UPS unit / battery is sized or taken off
+  /// (enter the battery as a project source).
   final bool upsBacked;
 
   /// Tenant sub-metered board — picks direct vs CT revenue metering in the A8

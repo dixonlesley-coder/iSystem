@@ -460,4 +460,62 @@ void main() {
           hasLength(1));
     });
   });
+
+  // ── a UPS-backed board's feeder carries the UPS input ─────────────────────
+  group('electrical-sim-9-ups-backed-board-sizes-no-ups', () {
+    ElectricalProject tree(bool ups) => ElectricalProject(
+          id: 'p',
+          name: 'P',
+          panels: [
+            const ElectricalPanel(
+                id: 'LV',
+                name: 'LV',
+                system: ElectricalSystem.threePhase,
+                voltage: Voltage(400),
+                circuits: [
+                  ElectricalCircuit(
+                      id: 'f',
+                      name: 'to CR',
+                      loadKind: LoadKind.feeder,
+                      feedsPanelId: 'CR',
+                      length: Length(20)),
+                ]),
+            ElectricalPanel(
+                id: 'CR',
+                name: 'CR',
+                system: ElectricalSystem.threePhase,
+                voltage: const Voltage(400),
+                upsBacked: ups,
+                circuits: [
+                  for (var i = 0; i < 6; i++)
+                    ElectricalCircuit(
+                        id: 'c$i',
+                        name: 'IT $i',
+                        loadKind: LoadKind.general,
+                        loadW: 15000,
+                        cosPhi: 0.9,
+                        phases: 3,
+                        length: const Length(10)),
+                ]),
+          ],
+        );
+
+    test('6 × 15 kW: the feeder Ib rises by ÷0.94 × 1.10 and an info says no '
+        'UPS is sized', () {
+      final off = computeSystem(_p, tree(false));
+      final on = computeSystem(_p, tree(true));
+      final ibOff = _way(off, 'f', 'LV').runCurrentA.amperes;
+      final ibOn = _way(on, 'f', 'LV').runCurrentA.amperes;
+      // 90 kW / (√3 × 400 × 0.9) = 144.3 A ⇒ × 1.10 / 0.94 = 168.9 A.
+      expect(ibOff, closeTo(90000 / (1.7320508 * 400 * 0.9), 0.2));
+      expect(ibOn, closeTo(ibOff * 1.10 / 0.94, 0.3));
+      expect(_way(on, 'f', 'LV').breaker.ratingA.amperes,
+          greaterThan(_way(off, 'f', 'LV').breaker.ratingA.amperes - 1e-9));
+      expect(on.warnings.where((w) => w.code == 'ups-not-sized'),
+          hasLength(1));
+      expect(off.warnings.where((w) => w.code == 'ups-not-sized'), isEmpty);
+      // The UPS-backed board's OWN schedule is the output side (unchanged).
+      expect(on.panels['CR']!.demandW, off.panels['CR']!.demandW);
+    });
+  });
 }
