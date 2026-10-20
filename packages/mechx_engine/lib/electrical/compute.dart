@@ -2510,9 +2510,11 @@ ElectricalPanelResult computePanel(
       ));
     }
     if (!imbalanceReducible && excesses.isNotEmpty) {
+      // Only the three CYCLIC relabellings — the same set
+      // `computeSystem.rotateFedChildren` applies and the 'Rotate R/S/T'
+      // advice names; a two-line swap is never counted as achievable here.
       const perms = [
         [0, 1, 2], [1, 2, 0], [2, 0, 1], //
-        [0, 2, 1], [2, 1, 0], [1, 0, 2],
       ];
       final ordered = [...excesses]..sort((a, b) {
           final byMax = b.$2.reduce(math.max).compareTo(a.$2.reduce(math.max));

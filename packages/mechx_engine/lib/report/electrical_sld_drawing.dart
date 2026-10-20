@@ -3581,6 +3581,12 @@ SldSheet buildElectricalRiser({
   // Boards fed by a DRAWN leg: their own outgoing legs leave below the
   // centre-line (see [_kRiserOutLegDy]).
   bool fedOnSheet(String id) {
+    // A board fed from ANOTHER sheet (its same-storey feeder hidden by the
+    // page plan) draws its incoming `DARI` stub at the centre-line, so its
+    // own outgoing legs leave below it exactly like an on-sheet fed board.
+    if (offPageFeedNotes.containsKey(id) && panelX.containsKey(id)) {
+      return true;
+    }
     final par = parentOf[id];
     return par != null && panelX.containsKey(id) && panelX.containsKey(par);
   }
@@ -3941,7 +3947,23 @@ SldSheet buildElectricalRiser({
   // Round 46 — two DIFFERENT boards' feeder runs lying on one line (a shared
   // stretch reads as one cable) are counted ([SldSheet.overlapCount] ⇒ the
   // legibility note), never silent. Each overlap as (vertical, at, lo, hi).
-  final feederLineOverlaps = _collinearOverlaps(mergedByParent.values.toList());
+  // The incoming `DARI` stub of a board fed from another sheet is its own
+  // group, so a stub collinear with any feeder run is counted too.
+  final offPageStubs = <String, SldLine>{
+    for (final id in offPageFeedNotes.keys)
+      if (panelX[id] != null && panelY[id] != null)
+        id: SldLine(
+            panelX[id]! + _ovW,
+            panelY[id]! + _ovH / 2,
+            panelX[id]! + _ovW + _riserPanelGap / 2 - 2,
+            panelY[id]! + _ovH / 2,
+            weight: SldWeight.medium,
+            role: essential.contains(id) ? SldRole.essential : SldRole.normal),
+  };
+  final feederLineOverlaps = _collinearOverlaps([
+    ...mergedByParent.values,
+    for (final l in offPageStubs.values) [l],
+  ]);
   sheetMaxX = math.max(sheetMaxX, outerChannelX);
 
   // Source -> each root: from the LV-main bus bottom into the root panel.
@@ -4051,14 +4073,7 @@ SldSheet buildElectricalRiser({
       }
     }
   }
-  for (final id in offPageFeedNotes.keys) {
-    final x = panelX[id], y = panelY[id];
-    if (x == null || y == null) continue;
-    final role = essential.contains(id) ? SldRole.essential : SldRole.normal;
-    prims.add(SldLine(
-        x + _ovW, y + _ovH / 2, x + _ovW + _riserPanelGap / 2 - 2, y + _ovH / 2,
-        weight: SldWeight.medium, role: role));
-  }
+  prims.addAll(offPageStubs.values);
 
   // Per-panel horizontal budget for the load-way fan-out stub labels below the
   // box: the clear space from the stub label's x to the NEXT panel's box left

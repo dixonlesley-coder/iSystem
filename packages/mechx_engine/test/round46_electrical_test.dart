@@ -304,6 +304,11 @@ void main() {
             project: pr, result: r, building: b)) {
           final boards = _boards(p).where((x) => x.startsWith('DB-')).toSet();
           final texts = _texts(p);
+          // Every PAGE, not only the whole sheet: a board fed from another
+          // sheet (its `DARI` stub) never shares a line with its own feeders.
+          expect(_collinearFeederOverlaps(p), 0,
+              reason: 'seed $seed page $boards');
+          expect(p.overlapCount, 0, reason: 'seed $seed page $boards');
           if (boards.length > 1) {
             expect(sldSinglePageMinLabelPt(p), greaterThanOrEqualTo(_floor),
                 reason: 'seed $seed $boards');
