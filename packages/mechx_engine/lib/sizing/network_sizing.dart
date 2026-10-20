@@ -1716,7 +1716,11 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       // (hydraulics-3-3: a PDAM meter leaf drew a phantom default load and
       // reversed the roof-tank fill line).
       if (isNonDemandTerminal(node?.component) ||
-          isInlineDeviceComponent(node?.component)) {
+          isInlineDeviceComponent(node?.component) ||
+          // Round 34 — an FDC is an INLET: no demand, so it never counts as
+          // a second hydrant outlet (which lifted the trunk to the standpipe
+          // flow) nor draws a phantom box flow out through its branch.
+          isSupplyInletComponent(node?.component)) {
         return false;
       }
       if (node?.role == NodeRole.plant) return false;
@@ -3342,6 +3346,35 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     if (sized != null) result[id] = sized.withDemandCurveExtrapolated(true);
   }
   edgeFlowFrom.addAll(fillEdgeFlowFrom);
+  // Round 34 — a SUPPLY INLET leaf (FDC) and its unbranched chain to the
+  // first junction carry the brigade's water INTO the system: orient them
+  // from the inlet inward (they carry no design demand of their own).
+  for (final inlet in net.nodes) {
+    if (!isSupplyInletComponent(inlet.component)) continue;
+    final incident = net.edgesAt(inlet.id);
+    if (incident.length != 1) continue;
+    var cur = inlet.id;
+    var edge = incident.single;
+    final seen = <String>{};
+    while (seen.add(edge.id)) {
+      if (result[edge.id] == null) break;
+      edgeFlowFrom[edge.id] = cur;
+      final next = edge.fromId == cur ? edge.toId : edge.fromId;
+      final nextNode = net.nodeById(next);
+      final onward = [
+        for (final e in net.edgesAt(next))
+          if (e.id != edge.id && e.service == edge.service) e,
+      ];
+      if (onward.length != 1 ||
+          nextNode == null ||
+          nextNode.role == NodeRole.plant ||
+          nextNode.role == NodeRole.fixture) {
+        break;
+      }
+      cur = next;
+      edge = onward.single;
+    }
+  }
   // Attach the read-only flow orientation last (after overrides), so the arrow
   // record survives an override without touching any computed size/flow.
   //

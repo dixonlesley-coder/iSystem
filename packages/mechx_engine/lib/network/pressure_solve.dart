@@ -276,6 +276,7 @@ Set<String> pressureDeliveryNodes({
     if (n.role == NodeRole.plant ||
         isNonDemandTerminal(n.component) ||
         isInlineDeviceComponent(n.component) ||
+        isSupplyInletComponent(n.component) ||
         degreeOf(id) != 1) {
       continue;
     }
