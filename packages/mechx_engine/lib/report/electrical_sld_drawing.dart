@@ -1501,13 +1501,22 @@ String? _feederConnLabel(
   Map<String, ElectricalCircuitResult> feederResultOf,
   String child, {
   bool parentThreePhase = false,
+  bool withLength = true,
+  String? lengthOverride,
 }) {
   final cr = feederResultOf[child];
   final circ = feederCircuitOf[child];
   if (cr == null || circ == null) return null;
   final poles = cr.threePhase ? 3 : 1;
-  final length =
-      cr.lengthM > 0 ? ' · ${planLengthLabel(Length(cr.lengthM))}' : '';
+  // Round 45 — [withLength] false gives the length-free spec the TIPIKAL key
+  // groups on; [lengthOverride] prints a typical node's member length range.
+  final length = !withLength
+      ? ''
+      : lengthOverride != null
+          ? ' · $lengthOverride'
+          : cr.lengthM > 0
+              ? ' · ${planLengthLabel(Length(cr.lengthM))}'
+              : '';
   final twoPole = parentThreePhase && !cr.threePhase;
   // Round 43 — the conductor-unprotected mark rides the feeder label too.
   final iz = cr.cable.ampacityReached ? '' : ' Iz!';
@@ -3333,6 +3342,7 @@ SldSheet buildElectricalRiser({
   Set<String> hidePanelIds = const {},
   Map<String, String> typicalNames = const {},
   Map<int, String> bandNotes = const {},
+  Map<String, String> typicalFeederLengths = const {},
 }) {
   final parentOf = _parentOf(project, result);
   final essential = essentialPanelIds(project, result);
@@ -3386,10 +3396,19 @@ SldSheet buildElectricalRiser({
   // Round 23 (elec-drafting-2-6) — when every root board sits BELOW the top
   // band the spine is drawn beside the highest root's band (placed once the
   // band positions are final, below); only a top-band root keeps it above.
-  final rootIds = [
+  final allRootIds = [
     for (final id in result.order)
       if (!parentOf.containsKey(id) && result.panels.containsKey(id)) id,
   ];
+  // Round 45 (electrical-sim-10-riser-export-crash-empty-band) — the spine is
+  // chosen among DRAWN roots only: a page whose roots are all hidden (another
+  // column page of the root band) draws no spine at all (it rides the page
+  // that carries its root), never a lead to a board that is not placed.
+  final rootIds = [
+    for (final id in allRootIds)
+      if (!hidePanelIds.contains(id)) id,
+  ];
+  final rootsAllHidden = allRootIds.isNotEmpty && rootIds.isEmpty;
   final spineBeside = sourceChain &&
       rootIds.isNotEmpty &&
       rootIds.every((r) => floorOf(r) < topIndex);
@@ -3399,7 +3418,7 @@ SldSheet buildElectricalRiser({
       if (spineRoot == null || floorOf(r) > floorOf(spineRoot)) spineRoot = r;
     }
   }
-  if (sourceChain && !spineBeside) {
+  if (sourceChain && !spineBeside && !rootsAllHidden) {
     spine = _buildSourceSpine(project, result, _riserGutterW + 2 * _ovW);
     contentOffsetY = spine.height + _ovTierH;
     prims.addAll(spine.prims);
@@ -3591,7 +3610,8 @@ SldSheet buildElectricalRiser({
   // Prims that belong to the beside-root source spine + its root leads: kept
   // WHOLE on the page that carries the spine root's band (never cropped).
   final spineGroup = <SldPrim>{};
-  if (spineBeside) {
+  final spineRowY = spineBeside ? busTrackOf['s:$spineRoot'] : null;
+  if (spineBeside && spineRowY != null) {
     final raw = _buildSourceSpine(project, result, 0);
     var sMaxX = -double.infinity;
     for (final pr in raw.prims) {
@@ -3611,7 +3631,7 @@ SldSheet buildElectricalRiser({
     // clears that row: the lead rides 10 units below the stack's lowest
     // glyph, never through the capacitor's plates. A spine with no side node
     // below its LV main (height == feedY) is unchanged.
-    final rowY = busTrackOf['s:$spineRoot']!;
+    final rowY = spineRowY;
     final double dx = -24 - (sMaxX.isFinite ? sMaxX : 0.0);
     final dy = rowY - 10 - math.max(raw.feedY, raw.height);
     final shifted = [for (final pr in raw.prims) _shiftPrim(pr, dx, dy)];
@@ -3638,7 +3658,8 @@ SldSheet buildElectricalRiser({
       // Feeder annotation (cable + breaker); null when the feeding circuit
       // can't resolve ⇒ that run is left unlabelled (never fabricated).
       label: _feederConnLabel(feederCircuitOf, feederResultOf, l.child,
-          parentThreePhase: _parentIsThreePhase(parentOf, result, l.child)),
+          parentThreePhase: _parentIsThreePhase(parentOf, result, l.child),
+          lengthOverride: typicalFeederLengths[l.child]),
       parentBusY: l.pJog ? busTrackOf['p:${l.parent}'] : null,
       childBusY: l.cJog ? busTrackOf['c:${l.child}'] : null,
     ));
@@ -3789,7 +3810,8 @@ SldSheet buildElectricalRiser({
       if (parentOf.containsKey(id) || !panelX.containsKey(id)) continue;
       final zx = panelX[id]! + _ovW / 2;
       final zy = panelY[id]!;
-      final rowY = busTrackOf['s:$id']!;
+      final rowY = busTrackOf['s:$id'];
+      if (rowY == null) continue;
       final lead = [
         SldLine(spine.feedX, spine.feedY, spine.feedX, rowY,
             weight: SldWeight.medium, role: SldRole.source),
@@ -4195,15 +4217,25 @@ Map<String, List<String>> electricalRiserTypicalGroups(
   final (feederCircuitOf, feederResultOf) =
       _feederLabelLookups(project, result, parentOf);
   final hasChildren = {...parentOf.values};
+  final panelModelById = {for (final p in project.panels) p.id: p};
+  final feederCircuitIds = <String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null) c.id
+  };
   final groups = <String, List<String>>{};
   for (final id in result.order) {
     final p = result.panels[id];
     final par = parentOf[id];
     if (p == null || par == null || hasChildren.contains(id)) continue;
+    // Round 45 — each way's LOAD rides its token, and the node's printed
+    // sub-line (incomer + demand kW / kVA) and fan-out rows join the key, so
+    // a typical node never prints one member's figures for another.
     final ways = [
       for (final c in p.circuits)
         '${c.loadKind.name}:${_num(c.breaker.ratingA.amperes)}:'
-            '${_num(c.cable.csaMm2)}:${c.threePhase}',
+            '${_num(c.cable.csaMm2)}:${c.threePhase}:'
+            '${c.connectedWOrLoad.round()}',
     ]..sort();
     final key = [
       par,
@@ -4211,9 +4243,16 @@ Map<String, List<String>> electricalRiserTypicalGroups(
       essential.contains(id),
       _num(p.incomer.breaker.ratingA.amperes),
       p.incomer.poles,
+      // Round 45 (electrical-sim-10-typical-collapse-never-fires-length-in-
+      // key) — the feeder SPEC without its length: identical boards sit at
+      // different distances from their DB; the typical node prints the
+      // members' length range instead ([electricalRiserTypicalFeederLength]).
       _feederConnLabel(feederCircuitOf, feederResultOf, id,
-              parentThreePhase: _parentIsThreePhase(parentOf, result, id)) ??
+              parentThreePhase: _parentIsThreePhase(parentOf, result, id),
+              withLength: false) ??
           '-',
+      _compactNodeSubLine(p, model: panelModelById[id]),
+      _riserFanOutRows(p, feederCircuitIds).join(';'),
       ways.join(','),
     ].join('|');
     (groups[key] ??= []).add(id);
@@ -4222,6 +4261,43 @@ Map<String, List<String>> electricalRiserTypicalGroups(
     for (final g in groups.values)
       if (g.length >= 2) g.first: g,
   };
+}
+
+/// Round 45 — the fan-out rows a riser node prints (way name + rating
+/// [+ 3ph], the first [kRiserFanMax], then '+N more'), untruncated: the
+/// TIPIKAL key compares what the node would print.
+List<String> _riserFanOutRows(
+    ElectricalPanelResult p, Set<String> feederCircuitIds) {
+  final ways = [
+    for (final cr in p.circuits)
+      if (!feederCircuitIds.contains(cr.circuitId)) cr
+  ];
+  return [
+    for (final cr in ways.take(kRiserFanMax))
+      '${cr.name} ${_num(cr.breaker.ratingA.amperes)}A'
+          '${cr.threePhase ? ' 3ph' : ''}',
+    if (ways.length > kRiserFanMax) '+${ways.length - kRiserFanMax} more',
+  ];
+}
+
+/// Round 45 — the feeder LENGTH a typical node prints for its [members]:
+/// the single length when they agree, else the `<min>..<max> m` range (the
+/// longest member is the voltage-drop basis), so the collapsed node never
+/// states one member's run for all of them. Null when no member resolves a
+/// positive length.
+String? electricalRiserTypicalFeederLength(ElectricalProject project,
+    ElectricalSystemResult result, List<String> members) {
+  final parentOf = _parentOf(project, result);
+  final (_, feederResultOf) = _feederLabelLookups(project, result, parentOf);
+  final lengths = [
+    for (final id in members)
+      if ((feederResultOf[id]?.lengthM ?? 0) > 0) feederResultOf[id]!.lengthM,
+  ];
+  if (lengths.isEmpty) return null;
+  final lo = lengths.reduce(math.min), hi = lengths.reduce(math.max);
+  final a = planLengthLabel(Length(lo)), b = planLengthLabel(Length(hi));
+  if (a == b) return a;
+  return '${a.replaceAll(' m', '')}..$b';
 }
 
 /// The typical-node name for [names] (≥ 2, riser order): the shared prefix

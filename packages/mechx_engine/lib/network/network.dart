@@ -547,6 +547,27 @@ class NetNode {
       );
 }
 
+/// Round 45 (mech-convergence-1) — true when [n] carries DESIGN CONTENT a
+/// merge must never silently discard: a component, a non-`main` role, a
+/// fixture / custom fixture, an airflow, a tank capacity, a roof area, an
+/// electrical load, a face size, or an elevation / mounting override. A bare
+/// run-end junction carries none. The node-merge paths (drag-end snap, a
+/// base-point Move / Copy landing on a node) keep the content-bearing node
+/// and drop the bare one, and never join two content-bearing nodes. Pure.
+bool nodeCarriesContent(NetNode n) =>
+    n.component != null ||
+    n.role != NodeRole.main ||
+    n.fixture != null ||
+    n.customFixtureId != null ||
+    n.airflow != null ||
+    n.tankCapacityLitres != null ||
+    n.roofAreaM2 != null ||
+    n.electricalLoadW != null ||
+    n.faceWidthMm != null ||
+    n.faceHeightMm != null ||
+    n.elevation != null ||
+    n.mountHeight != null;
+
 /// True elevation of [node] (§10), used for riser/drop length and static lift:
 ///   • explicit [NetNode.elevation] if set;
 ///   • [NetNode.mountHeight] (above its floor) if set — the per-node wall height;

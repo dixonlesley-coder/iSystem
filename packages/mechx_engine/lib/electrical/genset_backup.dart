@@ -8,10 +8,21 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart' show ApparentPower, Power;
+import 'compute.dart' show kUpsInputFactor;
 import 'model.dart';
 import 'panel_results.dart';
 import 'sizing.dart' show roundTo;
 import 'sources.dart' show kGeneratorPf;
+
+/// Round 45 (regression-ups-input-not-carried-to-genset) — the factor from a
+/// board's OWN (output) demand to what the genset supplies for it: a
+/// UPS-backed board is fed THROUGH its UPS, so the set carries the UPS INPUT
+/// (output ÷ η + battery recharge, [kUpsInputFactor] ≈ 1.170), exactly as its
+/// feeder in `computeSystem` does. Applied only to a TOPMOST backed board's
+/// own figure: a UPS child below a backed parent is already inside the
+/// parent's uplifted feeder load. Pure.
+double _upsIn(ElectricalPanel? panel) =>
+    (panel?.upsBacked ?? false) ? kUpsInputFactor : 1.0;
 
 /// The name words that mark a board ESSENTIAL (on the genset-backed bus) in
 /// either UI language: EN EMERGENCY / ESSENTIAL, ID DARURAT / ESENSIAL (the ID
@@ -97,19 +108,26 @@ double essentialDemandVa(ElectricalProject project, ElectricalSystemResult sys) 
       if (fed != null && fed.isNotEmpty) parentOf[fed] = p.id;
     }
   }
-  final supplyW = sys.supply.demandW;
-  final vaPerW = supplyW > 0 ? sys.supply.demandVa.voltAmperes / supplyW : 1.0;
+  final modelById = {for (final p in project.panels) p.id: p};
   var va = 0.0;
   for (final id in backed) {
     final parent = parentOf[id];
     if (parent != null && backed.contains(parent)) continue;
     final pr = sys.panels[id];
     if (pr == null) continue;
-    va += pr.demandVa > 0
-        ? (pr.demandVa > pr.demandW ? pr.demandVa : pr.demandW)
-        : pr.demandW * vaPerW;
+    va += _boardDemandVa(sys, pr) * _upsIn(modelById[id]);
   }
   return va;
+}
+
+/// A board's own diversified demand VA (`max(VA, W)`), the building-average
+/// VA/W only as the fallback for a board with no VA record.
+double _boardDemandVa(ElectricalSystemResult sys, ElectricalPanelResult pr) {
+  final supplyW = sys.supply.demandW;
+  final vaPerW = supplyW > 0 ? sys.supply.demandVa.voltAmperes / supplyW : 1.0;
+  return pr.demandVa > 0
+      ? (pr.demandVa > pr.demandW ? pr.demandVa : pr.demandW)
+      : pr.demandW * vaPerW;
 }
 
 /// The demand the genset must BACK: `max(backupFraction × the diversified
@@ -176,13 +194,19 @@ double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
     {bool roundCurrent = false,
     ElectricalSystem? asSystem,
     double? asVolts,
-    bool withLargestMachine = false}) {
+    bool withLargestMachine = false,
+    bool upsInput = false}) {
   final modelById = {for (final p in project.panels) p.id: p};
   var va = 0.0;
   for (final id in panelIds) {
     final r = sys.panels[id];
     final m = modelById[id];
     if (r == null || m == null) continue;
+    // Round 45 — on the GENSET basis a UPS-backed board is the UPS input.
+    if (upsInput && m.upsBacked) {
+      va += _boardDemandVa(sys, r) * kUpsInputFactor;
+      continue;
+    }
     var a = roundCurrent
         ? roundTo(r.diversifiedDemandCurrent.amperes, 1)
         : r.diversifiedDemandCurrent.amperes;
@@ -247,11 +271,12 @@ double gensetPhaseDemandVa(
       sys.supply.system == ElectricalSystem.threePhase;
   if (!threePhaseSupply) {
     // A 1φ supply: every board is 1φ, the board basis is the alternator's.
-    final fraction =
-        worstPhaseDemandVa(project, sys, _rootPanelIds(project)) *
-            gen.backupFraction;
-    final essential =
-        worstPhaseDemandVa(project, sys, _topmostBackedPanelIds(project));
+    final fraction = worstPhaseDemandVa(project, sys, _rootPanelIds(project),
+            upsInput: true) *
+        gen.backupFraction;
+    final essential = worstPhaseDemandVa(
+        project, sys, _topmostBackedPanelIds(project),
+        upsInput: true);
     return essential > fraction ? essential : fraction;
   }
   final fraction = alternatorLineDemandVa(project, sys, _rootPanelIds(project)) *
@@ -291,6 +316,20 @@ double alternatorLineDemandVa(ElectricalProject project,
     final r = sys.panels[id];
     final m = modelById[id];
     if (r == null || m == null) continue;
+    if (m.upsBacked && m.system == ElectricalSystem.threePhase) {
+      // Round 45 — a 3φ UPS-backed board is supplied through its rectifier: a
+      // BALANCED draw of the UPS input VA (× [kUpsInputFactor]) spread over
+      // the three alternator lines, never the output board's own (possibly
+      // imbalanced) lines — mirroring `computeSystem`'s feeder rule.
+      final a = lineCurrentForCapacityA(
+          _boardDemandVa(sys, r) * kUpsInputFactor,
+          ElectricalSystem.threePhase,
+          volts);
+      l1 += a;
+      l2 += a;
+      l3 += a;
+      continue;
+    }
     if (m.system == ElectricalSystem.threePhase) {
       // Round 39 r3 — the ONE labelled assignment each board prints: the
       // assignment is persisted in the document (`assignedPhase`), so the
@@ -302,7 +341,8 @@ double alternatorLineDemandVa(ElectricalProject project,
       l3 += b.l3 * d;
       continue;
     }
-    final a = r.diversifiedDemandCurrent.amperes;
+    // Round 45 — a 1φ UPS draws its input from one line: × [kUpsInputFactor].
+    final a = r.diversifiedDemandCurrent.amperes * _upsIn(m);
     final feed = feedOf[id];
     final parent = feed == null ? null : sys.panels[feed.$1];
     PhaseAssignment? line;
@@ -428,11 +468,13 @@ double essentialDemandW(ElectricalProject project, ElectricalSystemResult sys) {
       if (fed != null && fed.isNotEmpty) parentOf[fed] = p.id;
     }
   }
+  final modelById = {for (final p in project.panels) p.id: p};
   var essentialW = 0.0;
   for (final id in backed) {
     final parent = parentOf[id];
     if (parent != null && backed.contains(parent)) continue;
-    essentialW += sys.panels[id]?.demandW ?? 0;
+    // Round 45 — a UPS-backed board's genset load is the UPS INPUT.
+    essentialW += (sys.panels[id]?.demandW ?? 0) * _upsIn(modelById[id]);
   }
   return essentialW;
 }

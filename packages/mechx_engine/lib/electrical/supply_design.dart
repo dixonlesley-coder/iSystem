@@ -164,21 +164,32 @@ class SupplyDesign {
 
 /// Smallest standard transformer kVA covering [requiredKva] with the unit
 /// count: one unit when the ladder covers it, else `n = ceil(required / top)`
-/// units of the largest rating — never one unit BELOW the requirement.
-({double kva, int units}) _selectTransformerUnits(double requiredKva) {
+/// units on the smallest rung covering the per-unit share — never one unit
+/// BELOW the requirement.
+///
+/// Round 45 (regression-declared-capacity-transformer-top-rung) — the ONE
+/// covering-units rule, shared by the supply study and the DECLARED service
+/// transformer ([declaredServiceTransformer]), so a declared 3 MVA connection
+/// is 2 × 1600 kVA on every surface (never 2 × 2500). [tolerance] lets a
+/// figure a hair above a rung (floating division) still take that rung.
+({double kva, int units}) coveringTransformerUnits(double requiredKva,
+    {double tolerance = 0}) {
   for (final k in transformerKvaLadder) {
-    if (k >= requiredKva) return (kva: k, units: 1);
+    if (k >= requiredKva - tolerance) return (kva: k, units: 1);
   }
   final top = transformerKvaLadder.last;
   // Round 44 — n units on the smallest rung covering the per-unit share
   // (2970 kVA ⇒ 2 × 1600, never 2 × 2500).
-  final n = (requiredKva / top).ceil();
+  final n = (requiredKva / top - tolerance).ceil();
   final share = requiredKva / n;
   for (final k in transformerKvaLadder) {
-    if (k >= share) return (kva: k, units: n);
+    if (k >= share - tolerance) return (kva: k, units: n);
   }
   return (kva: top, units: n);
 }
+
+({double kva, int units}) _selectTransformerUnits(double requiredKva) =>
+    coveringTransformerUnits(requiredKva);
 
 /// Transformer full-load current on a winding at a given line voltage (A):
 /// `I = kVA·1000 / (√3·V)`. Returns 0 A for a non-positive voltage.
@@ -463,7 +474,8 @@ ApparentPower? declaredServiceTransformerKva(ElectricalProject project) =>
 /// declared PLN connection capacity ([ElectricalProject.supplyCapacityVa])
 /// above the LV ceiling is the TOTAL connection: a dual service splits it
 /// across its two sections (each unit covers HALF the daya), and a figure
-/// above the ladder top becomes `n × top` units — never one non-standard
+/// above the ladder top becomes n units on the smallest covering rung
+/// (Round 45, [coveringTransformerUnits]) — never one non-standard
 /// unit, never 2 × the whole capacity. Null on an LV service.
 ({ApparentPower kva, int units})? declaredServiceTransformer(
     ElectricalProject project) {
@@ -481,14 +493,9 @@ ApparentPower? declaredServiceTransformerKva(ElectricalProject project) =>
   if (cap == null || cap <= plnLvServiceCeilingVa) return null;
   final sections = dual ? 2 : 1;
   final perSection = (cap / 1000) / sections;
-  for (final k in transformerKvaLadder) {
-    if (k >= perSection - 1e-9) {
-      return (kva: ApparentPower.kilovoltAmperes(k), units: sections);
-    }
-  }
-  final top = transformerKvaLadder.last;
-  final n = (perSection / top - 1e-9).ceil();
-  return (kva: ApparentPower.kilovoltAmperes(top), units: sections * n);
+  // Round 45 — the SAME covering-units rule as the supply study.
+  final u = coveringTransformerUnits(perSection, tolerance: 1e-9);
+  return (kva: ApparentPower.kilovoltAmperes(u.kva), units: sections * u.units);
 }
 
 /// Round 29 — the ONE 'declared MV service' predicate: a declared transformer

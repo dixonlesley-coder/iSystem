@@ -2866,6 +2866,7 @@ class NetworkController extends Notifier<DrawingState> {
     // equipment node keeps its cross-service joins (a WC sits on its supply AND
     // its drain).
     final dragService = _bareMainService(dragged);
+    final draggedHasContent = nodeCarriesContent(dragged);
     // Nearest OTHER node on the same sheet/floor within the snap radius.
     final r2 = snapRadiusWorld * snapRadiusWorld;
     String? targetId;
@@ -2875,6 +2876,11 @@ class NetworkController extends Notifier<DrawingState> {
       if (n.sheetId != dragged.sheetId || n.floorIndex != dragged.floorIndex) {
         continue;
       }
+      // Round 45 (mech-convergence-1) — two content-bearing nodes (a pump
+      // onto a WC, a tank onto a diffuser) never join: one of them would be
+      // silently deleted. The drag falls through to the next candidate / the
+      // tap-in path.
+      if (draggedHasContent && nodeCarriesContent(n)) continue;
       // E1: never merge onto a node that belongs solely to an avoided (hidden /
       // locked) service — the engineer could neither see nor unpick the join.
       if ((avoidServices.isNotEmpty || dragService != null) &&
@@ -2931,17 +2937,38 @@ class NetworkController extends Notifier<DrawingState> {
       }
     }
 
-    final target = targetId;
+    // Round 45 (mech-convergence-1) — the merge keeps the CONTENT-bearing
+    // node: dragging a pump / tank / AHU / fixture onto a bare run end used to
+    // drop the dragged node (and with it its duty, schedule row, electrical
+    // way or fixture load). When the dragged node carries content and the
+    // target is a bare junction, the dragged node survives AT the target's
+    // position (keeping its own id, so its tag and its electrical way stay
+    // bound) and the bare junction's pipes re-point to it.
+    final targetNode = state.network.nodeById(targetId)!;
+    final keepDragged = draggedHasContent && !nodeCarriesContent(targetNode);
+    final drop = keepDragged ? targetId : nodeId;
+    final keep = keepDragged ? nodeId : targetId;
     // Re-point edges, dropping self-loops left by the merge.
     final edges = <NetEdge>[];
     for (final e in state.network.edges) {
-      final from = e.fromId == nodeId ? target : e.fromId;
-      final to = e.toId == nodeId ? target : e.toId;
+      final from = e.fromId == drop ? keep : e.fromId;
+      final to = e.toId == drop ? keep : e.toId;
       if (from == to) continue; // collapsed self-loop — drop it
       edges.add(
           (from == e.fromId && to == e.toId) ? e : e.copyWith(fromId: from, toId: to));
     }
-    final nodes = state.network.nodes.where((n) => n.id != nodeId).toList();
+    final nodes = [
+      for (final n in state.network.nodes)
+        if (n.id == drop)
+          null
+        else if (keepDragged && n.id == keep)
+          n.copyWith(
+              x: targetNode.x,
+              y: targetNode.y,
+              fittingType: n.fittingType ?? targetNode.fittingType)
+        else
+          n,
+    ].whereType<NetNode>().toList();
     _commitDragEnd(Network(nodes: nodes, edges: edges));
   }
 
@@ -3715,8 +3742,13 @@ class NetworkController extends Notifier<DrawingState> {
         svc = e.service;
       }
       final drawService = mIsPlain && !mixed ? svc : null;
+      final mHasContent = nodeCarriesContent(m);
       for (final n in net.nodes) {
-        if (placed.contains(n.id) || rename.containsValue(n.id)) continue;
+        if (placed.contains(n.id) ||
+            rename.containsKey(n.id) ||
+            rename.containsValue(n.id)) {
+          continue;
+        }
         if (n.sheetId != m.sheetId || n.floorIndex != m.floorIndex) continue;
         if (n.x != m.x || n.y != m.y) continue;
         if (drawService != null &&
@@ -3724,7 +3756,16 @@ class NetworkController extends Notifier<DrawingState> {
                 drawService: drawService)) {
           continue;
         }
-        rename[m.id] = n.id;
+        // Round 45 (mech-convergence-1) — keep the CONTENT-bearing node: a
+        // placed pump / fixture landing on a bare junction survives and the
+        // junction joins IT; two content-bearing nodes never join.
+        final nHasContent = nodeCarriesContent(n);
+        if (mHasContent && nHasContent) continue;
+        if (mHasContent) {
+          rename[n.id] = m.id;
+        } else {
+          rename[m.id] = n.id;
+        }
         break;
       }
     }
