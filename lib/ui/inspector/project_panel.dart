@@ -1251,6 +1251,9 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     // rows (pumps/fans carry their own per-item override above), keyed by the
     // panel tag/name + the fixed TX-01/G-01/CB-01 apparatus tags.
     modelSpecs: specs,
+    // Round 41 — the study's PF result, so the schedule lists the
+    // recommended APFC bank the BOM buys (one capacitor-bank source).
+    powerFactor: ref.read(electricalAdvancedProvider).powerFactor,
   );
 }
 

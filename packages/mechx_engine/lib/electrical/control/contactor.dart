@@ -83,6 +83,18 @@ const double ac4DerateFactor = 0.25;
 /// // VERIFY (secondarySource): standard Y-Δ winding-current relationship.
 const double starDeltaWindingFactor = 0.58;
 
+/// Round 41 (electrical-sim-6-star-delta-contactors-sized-at-full-flc) — in a
+/// 6-lead star-delta starter the in-line MAIN (KM1) and DELTA (KM2)
+/// contactors carry the WINDING current I/√3 ≈ 0.58 FLC (they sit in series
+/// with the delta-leg overload, which is set at FLC × 0.58), while the STAR
+/// contactor (KM3) only carries the star-connected starting current I/3 ≈
+/// 0.33 FLC (the winding sees U/√3 → current ÷ √3 of the delta winding
+/// current, i.e. FLC/√3 ÷ √3 = FLC/3).
+///
+/// // VERIFY (secondarySource): IEC 60947-4-1 / manufacturer Y-Δ selection
+/// guides (Schneider TeSys, ABB AF: KM1 = KM2 = 0.58 Ie, KM3 = 0.33 Ie).
+const double starDeltaStarFactor = 1 / 3;
+
 /// Overload relay set-point factor on motor FLC (IEC allows 1.05–1.15).
 ///
 /// // VERIFY (secondarySource): IEC 60947-4-1 overload setting range.
@@ -134,15 +146,20 @@ class ContactorSelection {
 
 /// Select the smallest AC-3 frame covering the (adjusted) motor current.
 ///
-/// - [starDelta] true → the *star* contactor only needs 58 % of [flc].
+/// - [starDelta] true → a star-delta WINDING-current contactor (main / delta,
+///   58 % of [flc]).
+/// - [currentFactor] (Round 41) overrides the fraction of [flc] the frame
+///   carries (the star contactor's [starDeltaStarFactor] = 1/3).
 /// - [jogging] (AC-4 inching/plugging) → the frame must be much larger
 ///   (`target / 0.25`).
 ContactorSelection selectContactor(
   Current flc, {
   bool starDelta = false,
+  double? currentFactor,
   StartingDuty duty = StartingDuty.normal,
 }) {
-  final windingFactor = starDelta ? starDeltaWindingFactor : 1.0;
+  final windingFactor =
+      currentFactor ?? (starDelta ? starDeltaWindingFactor : 1.0);
   final targetA = flc.amperes * windingFactor;
 
   // AC-4 (inching/plugging) needs a much larger AC-3 frame.

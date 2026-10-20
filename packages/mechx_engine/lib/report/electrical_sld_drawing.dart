@@ -23,13 +23,15 @@ import '../electrical/containment.dart'
 import '../electrical/control/starter.dart' show StarterType;
 import '../electrical/earthing.dart'
     show EarthingSystemInfo, groupedConductorMakeup;
+import '../electrical/fault.dart' show serviceCapacityFraction;
 import '../electrical/genset_backup.dart'
     show gensetBackupDemandVa, gensetBackupDemandW, isEssentialByName;
 import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
-import '../electrical/power_factor.dart' show installedCapacitorBanks;
+import '../electrical/power_factor.dart'
+    show capacitorBanksToProcure, installedCapacitorBanks, powerFactorCorrection;
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BreakerResult;
 import '../electrical/sources.dart'
@@ -127,6 +129,26 @@ bool _anyEssentialPrim(List<SldPrim> prims) =>
 
 /// Round 34 (electrical-drawings-4-overview-legend-keys-unprinted) — whether
 /// any primitive is drawn in [role]: a legend keys only what is printed.
+/// Round 40 — the device-rating mark after a printed kA: `!` when the
+/// specified breaking capacity [ka] is below the bus prospective fault
+/// [busFaultKa] (the fault study's `breaking-capacity-inadequate`), ` Ics100`
+/// when Icu covers it but the class's service capacity (Ics = fraction × Icu,
+/// IEC 60947-2) does not (`service-capacity-inadequate`), else nothing.
+String _kaMark(double ka, BreakerClass cls, double? busFaultKa) {
+  if (busFaultKa == null || busFaultKa <= 0) return '';
+  if (ka + 1e-9 < busFaultKa) return '!';
+  final ics = serviceCapacityFraction[cls] ?? 1;
+  if (ka * ics + 1e-9 < busFaultKa) return ' Ics100';
+  return '';
+}
+
+/// Round 40 — the bottom of a side-source node: the lower of its glyph
+/// bottom and its last label's baseline plus descent (0.3 em), so a lead
+/// routed below the stack never strikes printed text.
+double _sideNodeTextBottom(
+        double glyphBottom, double lastBaseline, double size) =>
+    math.max(glyphBottom, lastBaseline + 0.3 * size);
+
 bool _anyRolePrim(List<SldPrim> prims, SldRole role) =>
     prims.any((p) => switch (p) {
           SldLine(role: final r) => r == role,
@@ -542,7 +564,15 @@ SldSheet buildElectricalSld({
       }
     }
     final icuKa = _panelIcuKa(id, p, project, breakerIcuKaByPanelId);
-    final kaSuffix = icuKa != null ? ' ${_num(icuKa)}kA' : '';
+    // Round 40 (elec-drawings-5-schedule-underrated-device-ka-unmarked) —
+    // the bus prospective fault the board's devices must break (the Fold-1
+    // withstand figure, the fault study's own basis): a device printed below
+    // it carries 'kA!', one whose service capacity Ics falls short 'Ics100'.
+    final busFaultKa = p.busbar.withstand?.faultKa;
+    final kaSuffix = icuKa != null
+        ? ' ${_num(icuKa)}kA'
+            '${_kaMark(icuKa, p.incomer.breaker.deviceClass, busFaultKa)}'
+        : '';
     if (icuKa != null) anyIcuKa = true;
     // Reserved spare ways (CADANGAN) draw as extra schedule rows below the real
     // ways; a footer row carries the panel TOTAL. Both extend the block height
@@ -777,7 +807,10 @@ SldSheet buildElectricalSld({
       final cable = isSpareWay
           ? '-'
           : '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
-              '$conduit$length';
+              '$conduit$length'
+              // Round 41 — a star-delta way's TWO motor-lead cables (the
+              // starter → motor six-terminal connection, each on Ib/√3).
+              '${c.motorLeads == null ? '' : ' · leads ${cableRunLabel(circuit, c.motorLeads!.csaMm2, true, cores: 4, runs: 2 * (c.motorLeads!.runsPerPhase ?? 1), peCsaMm2: c.motorLeadsPeCsaMm2)}'}';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       // Round 19 — a capacitor way's loadW is its REACTIVE rating, so it prints
       // in kvar, never as WATT.
@@ -813,7 +846,10 @@ SldSheet buildElectricalSld({
       // E1: a per-CIRCUIT kA (the way's OWN device ladder) wins over the
       // board-wide figure; absent ⇒ the panel figure, exactly as before.
       final wayKa = breakerKaByCircuitId?[c.circuitId] ?? icuKa;
-      final wayKaSuffix = wayKa != null ? ' ${_num(wayKa)}kA' : '';
+      final wayKaSuffix = wayKa != null
+          ? ' ${_num(wayKa)}kA'
+              '${_kaMark(wayKa, c.breaker.deviceClass, busFaultKa)}'
+          : '';
       if (wayKa != null) anyIcuKa = true;
       // E8b: a single-phase FEEDER on a three-phase board is a 2-pole device.
       final feederTwoPole =
@@ -1056,8 +1092,16 @@ SldSheet buildElectricalSld({
   // chosen device Icu or the prospective fault, so the note states the
   // selection rule the two share (Icu >= fault). // VERIFY.
   if (anyIcuKa) {
+    legend.add(const SldLegendEntry('kA', 'Breaking capacity Icu'));
+  }
+  // Round 40 — the device-rating shortfall marks, keyed only when printed.
+  if (printedMatch(RegExp(r'\dkA!'))) {
+    legend.add(const SldLegendEntry('kA!',
+        'Icu below the bus fault: back-up (cascade) protection by the upstream device required'));
+  }
+  if (printedMatch(RegExp(r'\bIcs100\b'))) {
     legend.add(const SldLegendEntry(
-        'kA', 'Breaking capacity Icu (>= prospective fault at bus)'));
+        'Ics100', 'Specify a 100 % Ics device (service capacity below the bus fault)'));
   }
   if (anyMetering) {
     legend
@@ -1159,6 +1203,42 @@ SldSheet buildElectricalPanelDetail({
 bool _hasCapacitorBank(ElectricalProject project) {
   final banks = installedCapacitorBanks(project);
   return banks.length == 1 && banks.first.panelId == null;
+}
+
+/// Round 41 (elec-report-bom-2-apfc-bank-bought-not-scheduled) — the LV-bus
+/// capacitor node the source spine draws, from the ONE
+/// [capacitorBanksToProcure] list the BOM buys and the schedule tabulates:
+/// the installed LV-bus bank ([_hasCapacitorBank]) and/or the PF study's
+/// RECOMMENDED APFC bank, labelled distinctly (`APFC (RECOMMENDED)`) so it is
+/// never mistaken for installed gear. Null ⇒ no node (byte-identical when no
+/// bank is installed on the bus and none is recommended).
+({String head, String sub, String compact})? _spineCapacitor(
+    ElectricalProject project, ElectricalSystemResult result) {
+  final installed = _hasCapacitorBank(project);
+  final rec = capacitorBanksToProcure(
+          project,
+          result.supply.demandW > 0
+              ? powerFactorCorrection(result, project)
+              : null)
+      .where((b) => b.recommended)
+      .firstOrNull;
+  if (!installed && rec == null) return null;
+  final recText = rec == null
+      ? null
+      : '${rec.units > 1 ? '${rec.units}x' : ''}${_num(rec.kvar)} kvar';
+  if (installed) {
+    final inst = '${_num(project.capacitorBankKvar!)} kvar';
+    return (
+      head: 'CAPACITOR BANK',
+      sub: recText == null ? inst : '$inst + $recText APFC rec.',
+      compact: recText == null ? 'CAP $inst' : 'CAP $inst + $recText rec.',
+    );
+  }
+  return (
+    head: 'APFC (RECOMMENDED)',
+    sub: recText!,
+    compact: 'APFC rec. $recText',
+  );
 }
 
 SldSheet buildElectricalSourceSpine({
@@ -1919,11 +1999,12 @@ const double _sideNodeBottom = 14;
     // a generic PF-correction bank" proxy is gone: declaring a genset or solar
     // array added a piece of plant to the issued single-line that the design
     // never specified (and the PF study may say none is needed).
-    if (_hasCapacitorBank(project)) {
+    final spineCap = _spineCapacitor(project, result);
+    if (spineCap != null) {
       final cy = lvMidY + 8 + _ovH / 2;
-      final capSub = '${_num(project.capacitorBankKvar!)} kvar';
+      final capSub = spineCap.sub;
       _emitCapacitor(prims, sideX + 14, cy, SldRole.source);
-      prims.add(SldLabel(sideX + 34, cy - 2, 'CAPACITOR BANK',
+      prims.add(SldLabel(sideX + 34, cy - 2, spineCap.head,
           size: 8.5, bold: true, role: SldRole.source));
       prims.add(SldLabel(sideX + 34, cy + 12, capSub,
           size: 7.5, role: SldRole.source));
@@ -1985,7 +2066,8 @@ const double _sideNodeBottom = 14;
     // solar, battery; each glyph carries its top/bottom lead offsets so the
     // drop connectors meet the symbols exactly.
     final dropX = sideX + 14;
-    final hasCap = _hasCapacitorBank(project);
+    final spineCap = _spineCapacitor(project, result);
+    final hasCap = spineCap != null;
     final anySide = project.sources?.generator != null ||
         hasCap ||
         project.sources?.solar != null ||
@@ -2022,18 +2104,22 @@ const double _sideNodeBottom = 14;
           prims.add(SldLabel(dropX + 20, cy + 24, pct,
               size: 7.5, role: SldRole.source));
         }
-        stackBottom = cy + 13;
+        // Round 40 (elec-drawings-5-supply-lead-strikes-genset-label) — the
+        // stack ends below its LOWEST printed text (baseline + descent), so
+        // the outgoing lead never strikes the 'backs NN% of load' line.
+        stackBottom = _sideNodeTextBottom(
+            cy + 13, pct != null ? cy + 24 : cy + 12, 7.5);
         cy += 58;
       }
-      if (hasCap) {
-        final capSub = '${_num(project.capacitorBankKvar!)} kvar';
+      if (spineCap != null) {
+        final capSub = spineCap.sub;
         connectTo(11, 11);
         _emitCapacitor(prims, dropX, cy, SldRole.source);
-        prims.add(SldLabel(dropX + 20, cy - 2, 'CAPACITOR BANK',
+        prims.add(SldLabel(dropX + 20, cy - 2, spineCap.head,
             size: 8.5, bold: true, role: SldRole.source));
         prims.add(SldLabel(dropX + 20, cy + 12, capSub,
             size: 7.5, role: SldRole.source));
-        stackBottom = cy + 11;
+        stackBottom = _sideNodeTextBottom(cy + 11, cy + 12, 7.5);
         cy += 58;
       }
       if (project.sources?.solar != null) {
@@ -2044,7 +2130,7 @@ const double _sideNodeBottom = 14;
             size: 8.5, bold: true, role: SldRole.source));
         prims.add(SldLabel(dropX + 20, cy + 12, sub,
             size: 7.5, role: SldRole.source));
-        stackBottom = cy + 7;
+        stackBottom = _sideNodeTextBottom(cy + 7, cy + 12, 7.5);
         cy += 58;
       }
       if (project.sources?.battery != null) {
@@ -2056,7 +2142,7 @@ const double _sideNodeBottom = 14;
             size: 8.5, bold: true, role: SldRole.source));
         prims.add(SldLabel(dropX + 20, cy + 12, sub,
             size: 7.5, role: SldRole.source));
-        stackBottom = cy + 13;
+        stackBottom = _sideNodeTextBottom(cy + 13, cy + 12, 7.5);
       }
     }
   }
@@ -2194,13 +2280,13 @@ const double _sideNodeBottom = 14;
     prevBottom = gcy + 13;
     nextCy += 58;
   }
-  if (_hasCapacitorBank(project)) {
-    final capSub = '${_num(project.capacitorBankKvar!)} kvar';
+  final spineCap = _spineCapacitor(project, result);
+  if (spineCap != null) {
     final ccy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, ccy - 11,
         weight: SldWeight.medium, role: role));
     _emitCapacitor(prims, lvX, ccy, role);
-    prims.add(SldLabel(lvX - 96, ccy + 2, 'CAP $capSub',
+    prims.add(SldLabel(lvX - 96, ccy + 2, spineCap.compact,
         size: 7.5, bold: true, role: role));
     prevBottom = ccy + 11;
     nextCy += 58;
@@ -2707,10 +2793,14 @@ SldSheet buildElectricalOverview({
         const SldLegendEntry('Normal', 'Normal supply'),
       if (_anyEssentialPrim(prims))
         const SldLegendEntry('Essential', 'Essential / emergency supply'),
-      if (sourceChain)
+      // Round 40 (elec-drawings-5-riser-page-legend-keys-unprinted-source) —
+      // keyed only when the spine is actually DRAWN on this sheet (a
+      // paginated page without the root band carries no source prims).
+      if (sourceChain && _anyRolePrim(prims, SldRole.source))
         SldLegendEntry('Source', _sourceLegendText(project)),
       // The source spine draws the system-earthing mark, so surface it too.
-      if (sourceChain) const SldLegendEntry('Earth', 'System earthing point'),
+      if (sourceChain && _anyRolePrim(prims, SldRole.source))
+        const SldLegendEntry('Earth', 'System earthing point'),
     ],
     supplyNote: supplyNote,
   );
@@ -2865,6 +2955,10 @@ const double kElectricalRiserLabelCharW = 0.6;
 /// A slot pulled more than this far (drawing units) off the default anchor gets
 /// a thin leader back to the branch it annotates. // VERIFY: a drafting
 /// declutter heuristic, not a standard.
+/// Round 40 — the offset (units) of the ESSENTIAL feeder channel lane from
+/// the normal one on the building riser.
+const double _kRiserLaneGap = 12;
+
 const double _kRiserLeaderThreshold = 14;
 
 /// Vertical pitch of the right-of-channel annotation column and how many stacked
@@ -3480,20 +3574,35 @@ SldSheet buildElectricalRiser({
   // otherwise be struck through by a NEIGHBOURING feeder's track above it.
   // (A tag never collides with its own branch: its glyph box ends 4 units
   // above the line it rides.)
+  // Round 40 (elec-drawings-5-riser-shared-channel-essential-overprints-
+  // normal) — feeders from ESSENTIAL boards ride their own channel lane
+  // (outside the normal one) whenever normal boards feed too: a single shared
+  // vertical printed the normal sub-mains under the essential red (and drew
+  // two separate cables as one line). One role only ⇒ one lane ⇒
+  // byte-identical.
+  final hasNormalParentFeeder =
+      feeders.any((f) => !essential.contains(f.parent));
+  double chOf(_RiserFeeder f) =>
+      essential.contains(f.parent) && hasNormalParentFeeder
+          ? channelX + _kRiserLaneGap
+          : channelX;
+  final outerChannelX = feeders.any((f) => chOf(f) != channelX)
+      ? channelX + _kRiserLaneGap
+      : channelX;
   final placer = _RiserLabelPlacer([
     for (final id in panelX.keys)
       _RiserBox(
           panelX[id]!, panelY[id]!, panelX[id]! + _ovW, panelY[id]! + _ovH),
     for (final f in feeders)
-      _RiserBox(channelX - 0.5, math.min(f.parentBusY ?? f.py, f.branchY),
-          channelX + 0.5, math.max(f.parentBusY ?? f.py, f.branchY)),
+      _RiserBox(chOf(f) - 0.5, math.min(f.parentBusY ?? f.py, f.branchY),
+          chOf(f) + 0.5, math.max(f.parentBusY ?? f.py, f.branchY)),
     for (final f in feeders)
       for (final (edgeX, centreY, busY) in [
         (f.px, f.py, f.parentBusY),
         (f.cx, f.cy, f.childBusY),
       ])
         if (busY != null) ...[
-          _RiserBox(_RiserFeeder.jogX(edgeX), busY - 0.5, channelX, busY + 0.5),
+          _RiserBox(_RiserFeeder.jogX(edgeX), busY - 0.5, chOf(f), busY + 0.5),
           _RiserBox(_RiserFeeder.jogX(edgeX) - 0.5, math.min(busY, centreY),
               _RiserFeeder.jogX(edgeX) + 0.5, math.max(busY, centreY)),
         ],
@@ -3501,14 +3610,14 @@ SldSheet buildElectricalRiser({
   final needsEscape = <_RiserFeeder>[];
   for (final f in feeders) {
     if (f.label == null) continue;
-    f.slot = f.defaultSlot(channelX);
+    f.slot = f.defaultSlot(chOf(f));
     if (!placer.reserveIfClear(f.slot, f.label!, _riserFeederLabelSize)) {
       needsEscape.add(f);
     }
   }
   for (final f in needsEscape) {
-    final r = placer.escape(f.ladder(channelX, _riserFeederLabelSize), f.label!,
-        _riserFeederLabelSize);
+    final r = placer.escape(f.ladder(outerChannelX, _riserFeederLabelSize),
+        f.label!, _riserFeederLabelSize);
     f.slot = r.slot;
     f.cleared = r.cleared;
   }
@@ -3527,6 +3636,7 @@ SldSheet buildElectricalRiser({
   final segsByParent = <String, List<_FeederSeg>>{};
   for (final f in feeders) {
     final route = segsByParent[f.parent] ??= [];
+    final channelX = chOf(f);
     // parent right -> channel; channel vertical riser (length ∝ elevation
     // delta); channel -> child right. A leg with a board in its way jogs up
     // into its band's bus row (above the boxes) so it never crosses that board.
@@ -3586,7 +3696,7 @@ SldSheet buildElectricalRiser({
             ? SldRole.essential
             : SldRole.normal));
   }
-  sheetMaxX = math.max(sheetMaxX, channelX);
+  sheetMaxX = math.max(sheetMaxX, outerChannelX);
 
   // Source -> each root: from the LV-main bus bottom into the root panel.
   if (spine != null && spineBeside) {
@@ -3772,10 +3882,26 @@ SldSheet buildElectricalRiser({
     bool inWin(double y) => y >= top - eps && y <= bottom + eps;
     final cropped = <SldPrim>[];
     final stubs = <String>{};
-    void stub(double x, double y, int floor, SldRole role) {
+    final placedStubs = <(double, double)>[];
+    void stub(double x, double y, int floor, SldRole role, {double dir = 1}) {
       if (!stubs.add('${x.toStringAsFixed(2)}@${y.toStringAsFixed(2)}')) return;
-      cropped.add(SldLabel(x + 3, y, 'LANJUT KE ${floorName(floor)}',
-          size: _fanLabelSize, role: role));
+      // Round 40 — one stub PER channel lane: a second lane's stub that would
+      // print over another's text steps one line further from the page edge.
+      final text = 'LANJUT KE ${floorName(floor)}';
+      final w = _riserLabelWidth(text, _fanLabelSize);
+      var sy = y;
+      var moved = true;
+      while (moved) {
+        moved = false;
+        for (final (px, py) in placedStubs) {
+          if ((py - sy).abs() < _fanLabelSize + 1 && (px - x).abs() < w + 3) {
+            sy += dir * (_fanLabelSize + 2);
+            moved = true;
+          }
+        }
+      }
+      placedStubs.add((x, sy));
+      cropped.add(SldLabel(x + 3, sy, text, size: _fanLabelSize, role: role));
     }
 
     for (final pr in prims) {
@@ -3810,7 +3936,9 @@ SldSheet buildElectricalRiser({
           if (ya < top - eps) {
             stub(xAt(ca), ca + _fanLabelSize + 2, hi + 1, pr.role);
           }
-          if (yb > bottom + eps) stub(xAt(cb), cb - 3, lo - 1, pr.role);
+          if (yb > bottom + eps) {
+            stub(xAt(cb), cb - 3, lo - 1, pr.role, dir: -1);
+          }
       }
     }
     prims
@@ -3872,10 +4000,14 @@ SldSheet buildElectricalRiser({
       if (_anyEssentialPrim(prims))
         const SldLegendEntry('Essential', 'Essential / emergency supply'),
       const SldLegendEntry('FFL', 'Finished floor level (m)'),
-      if (sourceChain)
+      // Round 40 (elec-drawings-5-riser-page-legend-keys-unprinted-source) —
+      // keyed only when the spine is actually DRAWN on this sheet (a
+      // paginated page without the root band carries no source prims).
+      if (sourceChain && _anyRolePrim(prims, SldRole.source))
         SldLegendEntry('Source', _sourceLegendText(project)),
       // The source spine draws the system-earthing mark, so surface it too.
-      if (sourceChain) const SldLegendEntry('Earth', 'System earthing point'),
+      if (sourceChain && _anyRolePrim(prims, SldRole.source))
+        const SldLegendEntry('Earth', 'System earthing point'),
     ],
     supplyNote: supplyNote,
   );

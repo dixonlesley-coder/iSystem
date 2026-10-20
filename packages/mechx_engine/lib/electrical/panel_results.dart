@@ -131,6 +131,18 @@ class ElectricalCircuitResult {
   /// R / S / T so the column sums to the board TOTAL.
   final List<double>? lineCurrentsA;
 
+  /// Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-leads)
+  /// — a STAR-DELTA way's motor leads: the starter (in the board) is wired to
+  /// the motor's SIX winding terminals by TWO 3-core cables, each carrying the
+  /// winding current Ib/√3. This is ONE of those two cables (sized on Ib/√3,
+  /// same family / laying); the supply cable [cable] is unchanged. Null for
+  /// every other way.
+  final CableResult? motorLeads;
+
+  /// Round 41 — the PE section inside each motor-lead cable (the way's PE,
+  /// capped at the lead section). Null when [motorLeads] is null.
+  final double? motorLeadsPeCsaMm2;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -150,6 +162,8 @@ class ElectricalCircuitResult {
     this.points = 1,
     this.runCurrent,
     this.lineCurrentsA,
+    this.motorLeads,
+    this.motorLeadsPeCsaMm2,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -178,6 +192,8 @@ class ElectricalCircuitResult {
         points: points,
         runCurrent: runCurrent,
         lineCurrentsA: lineCurrentsA,
+        motorLeads: motorLeads,
+        motorLeadsPeCsaMm2: motorLeadsPeCsaMm2,
       );
 }
 
@@ -356,6 +372,14 @@ class ElectricalPanelResult {
   /// when the board holds no capacitor way.
   final double capacitorCurrentA;
 
+  /// Round 40 (regression-largest-machine-floor-not-propagated-upstream) —
+  /// the largest UNDIVERSIFIED running current (A) of any single FINAL way on
+  /// this board OR anywhere below it in the feeder tree. One machine does not
+  /// diversify against itself, so this floors this board's incomer, the
+  /// feeder that supplies it, every incomer upstream and the recommended PLN
+  /// daya. 0 (the default) on a hand-built result.
+  final double largestDownstreamRunA;
+
   final PhaseBalanceResult phaseBalance;
 
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
@@ -397,6 +421,7 @@ class ElectricalPanelResult {
     this.headroomApplied = false,
     this.spareWaysReserved = 0,
     this.capacitorCurrentA = 0,
+    this.largestDownstreamRunA = 0,
     required this.phaseBalance,
     required this.warnings,
     this.diversityFactor = 1.0,

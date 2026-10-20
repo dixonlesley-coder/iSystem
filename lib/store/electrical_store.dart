@@ -1447,7 +1447,42 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     )) {
       return;
     }
+    // Round 40 (elec-props-6-mep-way-machine-fields-editable-then-silently-
+    // reverted) — an MEP-derived way's machine (its power and life-safety
+    // duty) IS the drawn equipment: the next MEP sync re-derives them, so a
+    // typed value would size live and silently revert on the next drawing
+    // change or reopen. Refuse the edit instead (atomic, like delete / move).
+    //
+    // Round 41 (regression-rekind-bypasses-mep-machine-lock) — the drawn
+    // machine owns its KIND too: a re-kind to Spare zeroed its W live (and
+    // the next sync silently restored it), to Capacitor it read the pump's
+    // W as kvar and dropped its demand for good. A kind CHANGE is refused;
+    // re-stating the current kind is a no-op provenance write (allowed).
+    final kindChange = loadKind != null &&
+        loadKind != _circuitKind(panelId, circuitId);
+    if (isMepDerivedWay(panelId, circuitId) &&
+        (loadW != null ||
+            motorKw != null ||
+            clearMotorKw ||
+            kindChange ||
+            lifeSafety != null)) {
+      _refuse(StringKey.mepDerivedWayMachineLocked);
+      return;
+    }
     _replaceCircuit(panelId, circuitId, (c) {
+      // Round 40 (regression-parked-way-retyped-motor-kw-ignored) — a PARKED
+      // MEP way (source removed) still carries the minted A5 FLA and input W
+      // of its old machine; compute reads those, never motorKw. Retyping its
+      // Motor kW (the only power field the inspector shows for a motor /
+      // pump) replaces the machine: the stale FLA is dropped and the input W
+      // follows the typed shaft kW (÷ the assumed efficiency), so every
+      // consumer (Ib, connected / demand W) agrees with the motor branch.
+      final parkedRetype = c.sourceEquipmentId == null &&
+          c.flaOverrideA != null &&
+          (motorKw != null || clearMotorKw);
+      final retypedW = parkedRetype && motorKw != null && loadW == null
+          ? motorKw * 1000 / kAssumedMotorEfficiency
+          : null;
       // Round 36 (elec-props-4-stale-motorkw-after-rekind) — re-kinding a
       // hand-entered motor / pump way to a kind that sizes on its W (HVAC,
       // general, heating …) drops the motor power the inspector then hides:
@@ -1488,9 +1523,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       return c.copyWith(
         name: name,
         loadKind: loadKind,
-        loadW: loadW ?? seededW ?? zeroedW,
+        loadW: loadW ?? retypedW ?? seededW ?? zeroedW,
         motorKw: motorKw,
         clearMotorKw: clearMotorKw || rekindedOffMotor,
+        clearFlaOverrideA: parkedRetype,
         cosPhi: cosPhi,
         demandFactor: demandFactor,
         // Round 23 (mep-bridge-5) — record provenance: a typed factor is the
@@ -1582,8 +1618,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ];
-    _commit(_withProject(panels: sanitizeFeederTopology(panels)));
+    _commit(_withProject(
+        panels: sanitizeFeederTopology(_dropEmptyMepBoard(panels))));
   }
+
+  /// Round 40 (elec-props-6-empty-mep-board-survives-last-way-delete) — the
+  /// MEP Equipment board removed when it holds NO way at all (no derived, no
+  /// parked, no hand-added way): exactly the board `syncMepEquipment` drops,
+  /// so deleting / moving its last way gives the same document a reopen
+  /// would (no phantom incomer, enclosure, feeder breaker and cable in the
+  /// BOM). The caller sweeps the dangling feeder with
+  /// [sanitizeFeederTopology] in the same commit (one undo step).
+  static List<ElectricalPanel> _dropEmptyMepBoard(
+          List<ElectricalPanel> panels) =>
+      panels.any((p) => p.id == kMepEquipmentPanelId && p.circuits.isEmpty)
+          ? [
+              for (final p in panels)
+                if (p.id != kMepEquipmentPanelId) p,
+            ]
+          : panels;
 
   /// Duplicate one circuit (fresh id, "(copy)" name), inserted just after it.
   /// A duplicated feeder drops its `feedsPanelId` (a feeder targets exactly one
@@ -1687,7 +1740,13 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ];
-    _commit(_withProject(panels: panels));
+    // Round 40 — moving the MEP board's last (hand-added / parked) way off
+    // it removes the empty board + its feeder, as a reopen would.
+    final pruned = _dropEmptyMepBoard(panels);
+    _commit(_withProject(
+        panels: identical(pruned, panels)
+            ? panels
+            : sanitizeFeederTopology(pruned)));
   }
 
   /// CHAIN one load onto another on the SAME panel — the [sourceId] circuit's
@@ -1722,9 +1781,18 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final points = tgt.points + src.points; // chained outlet points add up
     final lifeSafety = src.lifeSafety || tgt.lifeSafety;
     if (srcMotor && tgtMotor) {
+      final kw = tgt.motorKw! + src.motorKw!;
+      // Round 40 — a target carrying a minted A5 FLA (a parked MEP way) is
+      // sized on its FLA / input W, never motorKw: the summed machine drops
+      // the stale FLA and its input W follows the summed shaft kW, so the
+      // source's kW is never silently lost.
+      final staleFla = tgt.flaOverrideA != null || src.flaOverrideA != null;
       return tgt.copyWith(
-        loadW: tgt.loadW + src.loadW,
-        motorKw: tgt.motorKw! + src.motorKw!,
+        loadW: staleFla
+            ? kw * 1000 / kAssumedMotorEfficiency
+            : tgt.loadW + src.loadW,
+        motorKw: kw,
+        clearFlaOverrideA: staleFla,
         points: points,
         lifeSafety: lifeSafety,
       );
@@ -2662,6 +2730,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       }
     }
     return false;
+  }
+
+  /// Round 41 — the current [LoadKind] of a way (null when not found).
+  LoadKind? _circuitKind(String panelId, String circuitId) {
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id == circuitId) return c.loadKind;
+      }
+    }
+    return null;
   }
 
   /// Round 22 — true when [panelId] is the MEP Equipment board and still holds

@@ -81,7 +81,13 @@ CostEstimate estimateCost(
                 false)
         ? priceList['${kElecPriceKeyPrefix}enclosure']
         : null;
+    // Round 41 — a refined key (reduced cable make-up, role-keyed control
+    // device) falls back to the key a saved pricelist used before.
+    final legacyKeyed = byKey == null && line.legacyPriceKey != null
+        ? priceList[line.legacyPriceKey]
+        : null;
     final unit = byKey ??
+        legacyKeyed ??
         legacyEnclosure ??
         (line.sku == null ? null : priceList[line.sku]);
     if (unit == null) {

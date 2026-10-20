@@ -124,6 +124,8 @@ class _ElectricalPricelist extends ConsumerWidget {
     final priced = keys
         .where((k) =>
             settings.priceList.containsKey(k) ||
+            (lineFor[k]!.legacyPriceKey != null &&
+                settings.priceList.containsKey(lineFor[k]!.legacyPriceKey)) ||
             (lineFor[k]!.sku != null &&
                 settings.priceList.containsKey(lineFor[k]!.sku)))
         .length;
@@ -166,6 +168,9 @@ class _ElectricalPricelist extends ConsumerWidget {
                     key: ValueKey(k),
                     // A legacy bare-SKU price still applies until re-priced.
                     value: settings.priceList[k] ??
+                        (lineFor[k]!.legacyPriceKey == null
+                            ? null
+                            : settings.priceList[lineFor[k]!.legacyPriceKey]) ??
                         (lineFor[k]!.sku == null
                             ? null
                             : settings.priceList[lineFor[k]!.sku]),

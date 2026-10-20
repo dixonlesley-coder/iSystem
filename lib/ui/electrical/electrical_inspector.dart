@@ -748,6 +748,13 @@ class ElectricalCircuitInspector extends StatelessWidget {
   bool get _isMotor =>
       circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;
 
+  /// Round 40 — an MEP-DERIVED way (it carries a `sourceEquipmentId`): its
+  /// machine power and life-safety duty follow the drawn equipment, so the
+  /// inspector shows them read-only (the store refuses the edit anyway).
+  bool get _machineOwned =>
+      circuit.sourceEquipmentId != null &&
+      circuit.sourceEquipmentId!.isNotEmpty;
+
   /// True when the length in force comes from the calibrated layout — the
   /// manual field is then READ-ONLY (editing it would be a lie: the geo length
   /// wins in `resolveCircuitLengthDetailed`).
@@ -936,7 +943,13 @@ class ElectricalCircuitInspector extends StatelessWidget {
                     ),
                     ElectricalField(
                       label: context.strings(StringKey.electricalFieldLoadKind),
-                      child: ElectricalEnumPicker<LoadKind>(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                      ElectricalEnumPicker<LoadKind>(
+                        // Round 41 — the drawn machine owns its kind (the
+                        // store refuses a re-kind of an MEP-derived way).
+                        enabled: !_machineOwned,
                         value: circuit.loadKind,
                         options: const [
                           LoadKind.general,
@@ -963,36 +976,62 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           loadKind: k,
                         ),
                       ),
+                      if (_machineOwned)
+                        ElectricalHint(context.strings(
+                            StringKey.electricalFromDrawnMachine)),
+                        ],
+                      ),
                     ),
+                    // Round 40 — an MEP-derived way's power follows the drawn
+                    // machine (the store refuses an edit); shown greyed with
+                    // the one place to change it named.
                     if (_isMotor)
                       ElectricalField(
                         label:
                             context.strings(StringKey.electricalFieldMotorPower),
-                        child: ElectricalNumInput(
-                          value: circuit.motorKw ?? 0,
-                          // Round 11 — a negative shaft power is rejected (the
-                          // min-only bound is now enforced on its own).
-                          min: 0,
-                          onChanged: (v) => controller.setCircuit(
-                            panel.id,
-                            circuit.id,
-                            motorKw: v,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            ElectricalNumInput(
+                              value: circuit.motorKw ?? 0,
+                              enabled: !_machineOwned,
+                              // Round 11 — a negative shaft power is rejected
+                              // (the min-only bound is now enforced on its own).
+                              min: 0,
+                              onChanged: (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                motorKw: v,
+                              ),
+                            ),
+                            if (_machineOwned)
+                              ElectricalHint(context.strings(
+                                  StringKey.electricalFromDrawnMachine)),
+                          ],
                         ),
                       )
                     else
                       ElectricalField(
                         label: context.strings(StringKey.electricalFieldLoadW),
-                        child: ElectricalNumInput(
-                          value: circuit.loadW,
-                          // Round 11 — a negative load gave a negative Ib that
-                          // was SUBTRACTED from the board demand.
-                          min: 0,
-                          onChanged: (v) => controller.setCircuit(
-                            panel.id,
-                            circuit.id,
-                            loadW: v,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            ElectricalNumInput(
+                              value: circuit.loadW,
+                              enabled: !_machineOwned,
+                              // Round 11 — a negative load gave a negative Ib
+                              // that was SUBTRACTED from the board demand.
+                              min: 0,
+                              onChanged: (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                loadW: v,
+                              ),
+                            ),
+                            if (_machineOwned)
+                              ElectricalHint(context.strings(
+                                  StringKey.electricalFromDrawnMachine)),
+                          ],
                         ),
                       ),
                     // §10 — when both ends are placed on a calibrated sheet the
@@ -1136,11 +1175,13 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       label:
                           context.strings(StringKey.electricalToggleLifeSafety),
                       value: circuit.lifeSafety,
-                      onChanged: (v) => controller.setCircuit(
-                        panel.id,
-                        circuit.id,
-                        lifeSafety: v,
-                      ),
+                      onChanged: _machineOwned
+                          ? null
+                          : (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                lifeSafety: v,
+                              ),
                     ),
                     // E4 — expert electrical parameters (power factor, demand
                     // factor, cable class) are demoted under a collapsed
