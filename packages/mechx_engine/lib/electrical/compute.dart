@@ -1030,6 +1030,35 @@ double _busbarWayCurrentA(ElectricalCircuitResult r, ElectricalCircuit c,
 /// by id), on the lowest tally (ties to the lower line). Load balance (l1/l2/
 /// l3) is untouched — a bank carries no balance current. A single-phase
 /// board, or one with no unpinned single-phase bank, returns [balance].
+/// Round 39 r2 — true when [panel] is a 3φ board fed (by a feeder way) from
+/// a 3φ parent that carries two or more feeder ways. [panelById] empty
+/// (a hand-built direct call) ⇒ false.
+bool _feedsIntoMultiFeederParent(
+    ElectricalPanel panel, Map<String, ElectricalPanel> panelById) {
+  if (panel.system != ElectricalSystem.threePhase) return false;
+  for (final parent in panelById.values) {
+    if (parent.id == panel.id) continue;
+    if (!parent.circuits.any((c) => c.feedsPanelId == panel.id)) continue;
+    if (parent.system != ElectricalSystem.threePhase) return false;
+    final feeders = parent.circuits
+        .where((c) => c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
+        .length;
+    return feeders >= 2;
+  }
+  return false;
+}
+
+/// Round 39 r2 — true when [a]'s line currents are a permutation of [b]'s
+/// (the same sorted triple within 1e-9).
+bool _sameSortedLines(PhaseBalance a, PhaseBalance b) {
+  final x = [a.l1, a.l2, a.l3]..sort();
+  final y = [b.l1, b.l2, b.l3]..sort();
+  for (var i = 0; i < 3; i++) {
+    if ((x[i] - y[i]).abs() > 1e-9) return false;
+  }
+  return true;
+}
+
 PhaseBalance _spreadSinglePhaseBanks(
   PhaseBalance balance, {
   required ElectricalPanel panel,
@@ -1986,7 +2015,7 @@ ElectricalPanelResult computePanel(
   // unpinned single-phase capacitor banks and stacked them all on L1 (three
   // 10 kvar banks → 185.7 A on R, a 200 A incomer, S and T uncompensated).
   // A separate deterministic pass spreads them by their SWITCHING current.
-  final balance = _spreadSinglePhaseBanks(
+  final stickyBalance = _spreadSinglePhaseBanks(
     loadBalance,
     panel: panel,
     branches: branches,
@@ -1998,6 +2027,35 @@ ElectricalPanelResult computePanel(
     panelSystems: opts.panelSystems,
   );
 
+  final judged = opts.priorAssignment.isEmpty
+      ? stickyBalance
+      : _spreadSinglePhaseBanks(
+          balancePhases(phaseCircuits, panel.system),
+          panel: panel,
+          branches: branches,
+          threePhaseOf: {
+            for (var i = 0; i < comps.length; i++)
+              comps[i].result.circuitId: comps[i].threePhase,
+          },
+          feederCapacitorFloorA: opts.feederCapacitorFloorA,
+          panelSystems: opts.panelSystems,
+        );
+  // Round 39 r2 (regression-history-free-feeder-lines) — a board fed by a
+  // 3φ feeder from a parent that feeds TWO OR MORE boards may never keep a
+  // session-sticky result that is a pure RELABELLING of the history-free
+  // lines: that parent sums its fed boards' lines position by position, so
+  // two permuted label sets moved its worst line / incomer with the editing
+  // history (MDP 50 A live vs 63 A after reopen on one document). Such a
+  // board adopts the UNSEEDED assignment — its schedule, its feeder row and
+  // the parent then share one document-only assignment. Everywhere else the
+  // labels stay sticky: a root board has no parent, and a parent of ONE fed
+  // board balances a permuted base to a permuted (same-worst-line) result.
+  // A sticky result that is NOT a permutation keeps its labels too.
+  final balance = opts.priorAssignment.isNotEmpty &&
+          _feedsIntoMultiFeederParent(panel, opts.panelById) &&
+          _sameSortedLines(stickyBalance, judged)
+      ? judged
+      : stickyBalance;
   final warnings = <ElectricalWarning>[];
   // Round 32 — integer micro-watts: the printed board kW is order-free.
   var connectedMicroW = 0;
@@ -2028,19 +2086,6 @@ ElectricalPanelResult computePanel(
   // assignment, so a session-only prior seed (the engine's own earlier
   // output, never saved) can neither raise nor hide the warning: the same
   // document reports the same verdict live and after reopen.
-  final judged = opts.priorAssignment.isEmpty
-      ? balance
-      : _spreadSinglePhaseBanks(
-          balancePhases(phaseCircuits, panel.system),
-          panel: panel,
-          branches: branches,
-          threePhaseOf: {
-            for (var i = 0; i < comps.length; i++)
-              comps[i].result.circuitId: comps[i].threePhase,
-          },
-          feederCapacitorFloorA: opts.feederCapacitorFloorA,
-          panelSystems: opts.panelSystems,
-        );
   final overImbalanceLimit = panel.system == ElectricalSystem.threePhase &&
       judged.imbalancePercent > kPhaseImbalanceWarnPercent;
   var imbalanceReducible = false;
@@ -2848,6 +2893,9 @@ ElectricalSystemResult computeSystem(
     // Round 39 — …except a pure RELABELLING: then the labelled lines (the
     // fed board's printed TOTAL), so the parent's balance and the feeder
     // row's R/S/T match the wiring the two issued schedules describe.
+    // Round 39 r2 — a board whose parent feeds two or more boards never
+    // keeps a relabelling (computePanel adopts the unseeded assignment), so
+    // a parent never sums two permuted label sets.
     final b = solved.parentFacingPhaseBalance;
     final d = panel.diversityFactor;
     if ((math.max(b.l1, math.max(b.l2, b.l3)) -

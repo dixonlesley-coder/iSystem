@@ -145,7 +145,7 @@ void main() {
     });
   });
 
-  // ── 2. a permuting prior feeds the parent the LABELLED lines ─────────────
+  // ── 2. a permuting prior never relabels a fed board (r2: adopts judged) ──
   group('regression-history-free-feeder-lines-contradict-labelled-subboard',
       () {
     ElectricalCircuit heater(String id, double a) => ElectricalCircuit(
@@ -188,6 +188,12 @@ void main() {
         },
         phaseReassignThresholdA: 1.0);
 
+    test('(r2) a parent of ONE fed board: the DB keeps its sticky labels', () {
+      // Stickiness is refused only under a parent feeding >= 2 boards.
+      final a = _way(sys, 'DB', 'a');
+      expect(a.phase, PhaseAssignment.l2);
+    });
+
     test('the MDP feeder row prints the DB schedule\'s labelled R/S/T', () {
       final db = sys.panels['DB']!.phaseBalance;
       final row = _way(sys, 'MDP', 'f').lineCurrentsA!;
@@ -204,6 +210,133 @@ void main() {
           .reduce(math.max);
       expect(worst, closeTo(30, 0.2));
       expect(m.incomer.breaker.ratingA.amperes, greaterThanOrEqualTo(worst));
+    });
+  });
+
+  // ── 2b. (r2) two fed boards: the parent never depends on the labels ─────
+  group('regression-history-free-feeder-lines (two fed boards)', () {
+    ElectricalCircuit heater(String id, double a) => ElectricalCircuit(
+          id: id,
+          name: id,
+          loadKind: LoadKind.heating,
+          loadW: a * 231,
+          cosPhi: 1.0,
+          phases: 1,
+          length: const Length(5),
+        );
+    ElectricalPanel board(String id, String feeder) => ElectricalPanel(
+            id: id,
+            name: id,
+            sourceType: PanelSource.feeder,
+            fedByCircuitId: feeder,
+            circuits: [
+              heater('${id}30', 30),
+              heater('${id}20', 20),
+              heater('${id}10', 10),
+            ]);
+    // MDP feeds A and B, each 30 / 20 / 10 A 1ph heaters. The engine puts
+    // the 30 A way of each board on the same line, so the MDP worst line is
+    // 30 + 30 = 60 A -> a 63 A incomer. A session prior that ROTATES B's
+    // labels by one line (a pure relabelling) used to hand the MDP
+    // 30+10 / 20+30 / 10+20 = 40 / 50 / 30 A -> a 50 A incomer live and a
+    // 63 A one after reopen on the same document.
+    final project = ElectricalProject(id: 'p', name: 'P', panels: [
+      const ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+        ElectricalCircuit(
+            id: 'fA',
+            name: 'to A',
+            loadKind: LoadKind.feeder,
+            feedsPanelId: 'A',
+            length: Length(10)),
+        ElectricalCircuit(
+            id: 'fB',
+            name: 'to B',
+            loadKind: LoadKind.feeder,
+            feedsPanelId: 'B',
+            length: Length(10)),
+      ]),
+      board('A', 'fA'),
+      board('B', 'fB'),
+    ]);
+    PhaseAssignment rot(PhaseAssignment a) => switch (a) {
+          PhaseAssignment.l1 => PhaseAssignment.l2,
+          PhaseAssignment.l2 => PhaseAssignment.l3,
+          _ => PhaseAssignment.l1,
+        };
+    final reopened = computeSystem(_p, project);
+    final judgedB = {
+      for (final c in reopened.panels['B']!.circuits) c.circuitId: c.phase,
+    };
+    final live = computeSystem(_p, project,
+        priorAssignments: {
+          'B': {for (final e in judgedB.entries) e.key: rot(e.value)},
+        },
+        phaseReassignThresholdA: 1.0);
+    double worst(PhaseBalanceResult b) => [b.l1, b.l2, b.l3].reduce(math.max);
+
+    test('reopen: MDP worst line 60 A, 63 A incomer (derivation)', () {
+      final m = reopened.panels['MDP']!;
+      expect(worst(m.phaseBalance), closeTo(60, 0.2));
+      expect(m.incomer.breaker.ratingA.amperes, 63);
+    });
+
+    test('a permuting prior leaves the MDP worst line + incomer unchanged',
+        () {
+      final a = reopened.panels['MDP']!, b = live.panels['MDP']!;
+      expect(worst(b.phaseBalance), closeTo(worst(a.phaseBalance), 1e-9));
+      expect(b.phaseBalance.l1, closeTo(a.phaseBalance.l1, 1e-9));
+      expect(b.phaseBalance.l2, closeTo(a.phaseBalance.l2, 1e-9));
+      expect(b.phaseBalance.l3, closeTo(a.phaseBalance.l3, 1e-9));
+      expect(b.incomer.breaker.ratingA.amperes,
+          a.incomer.breaker.ratingA.amperes);
+      expect(b.phaseBalance.imbalancePercent,
+          closeTo(a.phaseBalance.imbalancePercent, 1e-9));
+    });
+
+    test('B prints the history-free assignment (schedule == parent basis)',
+        () {
+      final b = live.panels['B']!;
+      for (final c in b.circuits) {
+        expect(c.phase, judgedB[c.circuitId], reason: c.circuitId);
+      }
+      final row = _way(live, 'MDP', 'fB').lineCurrentsA!;
+      expect(row[0], closeTo(b.phaseBalance.l1, 1e-6));
+      expect(row[1], closeTo(b.phaseBalance.l2, 1e-6));
+      expect(row[2], closeTo(b.phaseBalance.l3, 1e-6));
+    });
+
+    test('a NON-permuting sticky result keeps its labels', () {
+      // One board, 30 / 20 / 10 / 5 A. Unseeded LPT: 30 R, 20 S, 10 + 5 T
+      // = 30 / 20 / 15 A. The prior holds the 5 A way on S: 30 / 25 / 10 A —
+      // the SAME worst line (30 A, so Round 37 keeps it) but NOT a
+      // permutation of 30 / 20 / 15, and a 100 A threshold forbids the move
+      // -> the sticky labels stand (stickiness is only refused for a pure
+      // relabelling).
+      final one = ElectricalProject(id: 'q', name: 'Q', panels: [
+        ElectricalPanel(id: 'X', name: 'X', circuits: [
+          heater('x30', 30),
+          heater('x20', 20),
+          heater('x10', 10),
+          heater('x5', 5),
+        ]),
+      ]);
+      final sticky = computeSystem(_p, one,
+          priorAssignments: const {
+            'X': {
+              'x30': PhaseAssignment.l1,
+              'x20': PhaseAssignment.l2,
+              'x10': PhaseAssignment.l3,
+              'x5': PhaseAssignment.l2,
+            },
+          },
+          phaseReassignThresholdA: 100.0);
+      final x = sticky.panels['X']!;
+      expect(x.circuits.firstWhere((c) => c.circuitId == 'x5').phase,
+          PhaseAssignment.l2);
+      expect(x.phaseBalance.l2, closeTo(25, 0.2));
+      // …while the parent-facing basis stays the history-free 30 / 20 / 15.
+      final j = x.parentFacingPhaseBalance;
+      expect(([j.l1, j.l2, j.l3]..sort())[1], closeTo(20, 0.2));
     });
   });
 
@@ -263,6 +396,47 @@ void main() {
             reason: 'trial $t: ${adv.supply.note}');
       }
     });
+
+    test('seeded property (r2): a 1ph ROOT board — lv <=> daya != null', () {
+      // The single-phase branch of the per-phase basis: a 1ph root loads ONE
+      // phase of whatever service it gets, judged at sqrt3*400*I. Loads span
+      // the 1ph ladder, the 3ph LV steps and past the 197 kVA LV ceiling
+      // (up to 4 x 40 kW = 160 kW 1ph at 231 V = 693 A -> sqrt3*400*693 =
+      // 480 kVA per-phase basis => MV).
+      final rng = math.Random(39392);
+      var sawLv = 0, sawMv = 0;
+      for (var t = 0; t < 200; t++) {
+        final circuits = [
+          for (var i = 0; i < 1 + rng.nextInt(4); i++)
+            ElectricalCircuit(
+              id: 'c$i',
+              name: 'c$i',
+              loadKind: LoadKind.heating,
+              loadW: 200 + rng.nextDouble() * 40000,
+              cosPhi: 1,
+              phases: 1,
+              length: const Length(5),
+            ),
+        ];
+        final project = ElectricalProject(id: 'p', name: 'P', panels: [
+          ElectricalPanel(
+              id: 'MDB',
+              name: 'MDB',
+              system: ElectricalSystem.singlePhase,
+              circuits: circuits),
+        ]);
+        final sys = computeSystem(_p, project);
+        expect(sys.supply.system, ElectricalSystem.singlePhase,
+            reason: 'trial $t exercises the 1ph branch');
+        final adv = computeAdvancedStudy(_p, project, sys);
+        final lv = adv.supply.lvOrMv == SupplyLevel.lv;
+        lv ? sawLv++ : sawMv++;
+        expect(lv, adv.recommendedDayaVa != null,
+            reason: 'trial $t: ${adv.supply.note}');
+      }
+      expect(sawLv, greaterThan(0));
+      expect(sawMv, greaterThan(0));
+    });
   });
 
   // ── 4. no MCCB below its 16 A frame ──────────────────────────────────────
@@ -292,9 +466,40 @@ void main() {
       expect(w.deviceClass, BreakerClass.mccb);
       expect(w.ratingA.amperes, kMccbMinFrameA);
       final inc = sys.panels['MDP']!.incomer.breaker;
-      if (inc.deviceClass == BreakerClass.mccb) {
-        expect(inc.ratingA.amperes, greaterThanOrEqualTo(kMccbMinFrameA));
+      // r2 — unconditional: the incomer on the same 36 kA bus is raised to
+      // the MCCB class too, and never below the 16 A frame.
+      expect(inc.deviceClass, BreakerClass.mccb);
+      expect(inc.ratingA.amperes, greaterThanOrEqualTo(kMccbMinFrameA));
+
+      // r2 — no issued surface (board schedule, BOM description / price
+      // key) may name an MCCB below the 16 A frame.
+      final small = RegExp(r'MCCB[ :]*(\d+(?:\.\d+)?) ?A');
+      var seen = 0;
+      void noSmallMccb(String text, String where) {
+        for (final m in small.allMatches(text)) {
+          seen++;
+          expect(double.parse(m.group(1)!),
+              greaterThanOrEqualTo(kMccbMinFrameA),
+              reason: '$where: "$text"');
+        }
       }
+
+      for (final t in _labels(buildElectricalPanelDetail(
+          project: project, result: sys, panelId: 'MDP'))) {
+        noSmallMccb(t, 'schedule');
+      }
+      final adv = computeAdvancedStudy(_p, project, sys);
+      final ka = faultSpecifiedKa(adv.fault);
+      final bom = buildBom(sys,
+          requiredIcuKaByPanelId: ka.bus,
+          incomerKaByPanelId: ka.incomers,
+          breakerKaByCircuitId: ka.breakers);
+      expect(bom.lines, isNotEmpty);
+      for (final l in bom.lines) {
+        noSmallMccb(l.description, 'BOM description');
+        noSmallMccb((l.priceKey ?? '').toUpperCase(), 'BOM price key');
+      }
+      expect(seen, greaterThan(0), reason: 'the scan saw the MCCB labels');
     });
 
     test('Iz below 16 A keeps the MCB and flags back-up protection', () {
@@ -693,6 +898,52 @@ void main() {
           panels: const []);
       expect(estimatedServiceFaultLevelA(solar)!.amperes,
           closeTo(1.5 * 100000 / (math.sqrt(3) * 400), 0.1));
+    });
+
+    test('(r2) the Design Basis names the alternator / inverter basis', () {
+      expect(serviceFaultEstimateBasis(project),
+          FaultLevelBasis.generatorEstimate);
+      final sys = computeSystem(_p, project);
+      final md = buildElectricalCalcReport(ElectricalCalcReportData(
+        projectName: 'P',
+        date: 'd',
+        standardsName: 'PUIL',
+        standardsRevision: '2011',
+        project: project,
+        result: sys,
+        originFaultLevelA: estimatedServiceFaultLevelA(project)!.amperes,
+        faultLevelBasis: serviceFaultEstimateBasis(project),
+      ));
+      expect(md, contains("generator's alternator"));
+      expect(md, contains("Xd'' 0.12 p.u."));
+      expect(md, isNot(contains('declared service size')));
+
+      const solar = ElectricalProject(
+          id: 's',
+          name: 'S',
+          supplyKind: SupplyKind.solar,
+          supplyCapacityVa: ApparentPower(100000),
+          panels: []);
+      expect(serviceFaultEstimateBasis(solar),
+          FaultLevelBasis.inverterEstimate);
+      // A declared customer transformer wins (the engine's step 1).
+      const genTx = ElectricalProject(
+          id: 'g',
+          name: 'G',
+          supplyKind: SupplyKind.generator,
+          transformerKva: ApparentPower(630000),
+          panels: []);
+      expect(serviceFaultEstimateBasis(genTx), FaultLevelBasis.serviceEstimate);
+      // PLN keeps the legacy split.
+      const pln = ElectricalProject(
+          id: 'n',
+          name: 'N',
+          supplyCapacityVa: ApparentPower(33000),
+          panels: []);
+      expect(serviceFaultEstimateBasis(pln), FaultLevelBasis.serviceEstimate);
+      const bare = ElectricalProject(id: 'b', name: 'B', panels: []);
+      expect(serviceFaultEstimateBasis(bare),
+          FaultLevelBasis.supplyStudyEstimate);
     });
   });
 }

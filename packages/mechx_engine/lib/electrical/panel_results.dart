@@ -393,9 +393,11 @@ class ElectricalPanelResult {
   /// Round 39 — the per-line currents a PARENT board balances this board's
   /// feeder against (and its feeder row prints): the LABELLED lines when they
   /// are a pure permutation of the history-free ones (so the parent agrees
-  /// with this board's issued schedule — its worst phase / incomer is
-  /// permutation-invariant, so reopen determinism holds), else the
-  /// history-free lines.
+  /// with this board's issued schedule), else the history-free lines.
+  /// Round 39 r2 — that is reopen-deterministic because `computePanel` never
+  /// keeps a permuted sticky result on a board whose parent feeds two or
+  /// more boards (there labelled == history-free); a parent of ONE fed board
+  /// balances a permuted base to the same worst line / incomer.
   PhaseBalanceResult get parentFacingPhaseBalance =>
       labelledIsPermutationOfJudged ? phaseBalance : historyFreePhaseBalance;
 

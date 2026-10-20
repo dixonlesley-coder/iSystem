@@ -22,10 +22,7 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart'
-    show
-        defaultLvUtilityFaultKa,
-        estimatedServiceFaultLevelA,
-        hasDeclaredServiceSize;
+    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -36,7 +33,7 @@ import 'package:mechx_engine/electrical/panel_templates.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/topology.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart'
-    show FaultLevelBasis;
+    show FaultLevelBasis, serviceFaultEstimateBasis;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -409,9 +406,9 @@ const double _liveBusbarClearingTimeS = 0.1;
   if (est != null) {
     return (
       amperes: est.amperes,
-      basis: hasDeclaredServiceSize(project)
-          ? FaultLevelBasis.serviceEstimate
-          : FaultLevelBasis.supplyStudyEstimate,
+      // Round 39 r2 — a generator / solar primary supply names its
+      // alternator / inverter basis (the engine's own branch order).
+      basis: serviceFaultEstimateBasis(project),
     );
   }
   return (

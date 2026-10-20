@@ -5,6 +5,8 @@ import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/report/electrical_calc_report.dart'
+    show FaultLevelBasis;
 import 'package:mechx_engine/units.dart';
 
 ElectricalCircuit _w(
@@ -172,6 +174,36 @@ void main() {
       );
       expect(m!.lifeSafety, isTrue);
       expect(m.loadW, 300);
+    });
+  });
+
+  group('elec-ui-journeys-2-generator-supply (r2) fault provenance', () {
+    test('a generator supply resolves to the alternator basis', () {
+      const gen = ElectricalProject(
+          id: 'g',
+          name: 'G',
+          supplyKind: SupplyKind.generator,
+          supplyCapacityVa: ApparentPower(250000),
+          panels: []);
+      final f = effectiveOriginFaultLevel(gen);
+      expect(f.basis, FaultLevelBasis.generatorEstimate);
+      // 250e3 / (sqrt3 * 400 * 0.12) = 3007 A.
+      expect(f.amperes, closeTo(3007.0, 0.5));
+      const solar = ElectricalProject(
+          id: 's',
+          name: 'S',
+          supplyKind: SupplyKind.solar,
+          supplyCapacityVa: ApparentPower(100000),
+          panels: []);
+      expect(effectiveOriginFaultLevel(solar).basis,
+          FaultLevelBasis.inverterEstimate);
+      const pln = ElectricalProject(
+          id: 'n',
+          name: 'N',
+          supplyCapacityVa: ApparentPower(33000),
+          panels: []);
+      expect(effectiveOriginFaultLevel(pln).basis,
+          FaultLevelBasis.serviceEstimate);
     });
   });
 }

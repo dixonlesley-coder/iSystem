@@ -14,7 +14,8 @@ library;
 
 import '../electrical/compute.dart' show serviceEntranceCapacityVa;
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
-import '../electrical/fault.dart' show faultStudyU0VerifyItem;
+import '../electrical/fault.dart'
+    show faultStudyU0VerifyItem, inverterFaultMultiple, kAlternatorXdPu;
 import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
@@ -256,6 +257,37 @@ enum FaultLevelBasis {
   /// Round 16 — nothing declared, but the demand needs an MV service: the
   /// fault of the transformer the supply study selects for it.
   supplyStudyEstimate,
+
+  /// Round 39 r2 — a GENERATOR primary supply: the alternator's own
+  /// S/(√3·400·Xd'') on its declared capacity (else the demand).
+  generatorEstimate,
+
+  /// Round 39 r2 — a SOLAR (inverter) primary supply: the inverter's
+  /// current-limited fault (a multiple of its rated current).
+  inverterEstimate,
+}
+
+/// Round 39 r2 — the provenance of a NON-explicit origin-fault estimate
+/// (`estimatedServiceFaultLevelA` returned a figure): a declared customer
+/// transformer is the service estimate; otherwise a generator / solar
+/// primary supply names its alternator / inverter basis; otherwise a
+/// declared capacity is the service estimate and nothing declared is the
+/// supply-study transformer. Mirrors the branch order of
+/// `estimatedServiceFaultLevelA`, so the printed basis is the one used.
+FaultLevelBasis serviceFaultEstimateBasis(ElectricalProject project) {
+  if ((project.transformerKva?.voltAmperes ?? 0) > 0) {
+    return FaultLevelBasis.serviceEstimate;
+  }
+  switch (project.supplyKind) {
+    case SupplyKind.generator:
+      return FaultLevelBasis.generatorEstimate;
+    case SupplyKind.solar:
+      return FaultLevelBasis.inverterEstimate;
+    case SupplyKind.pln:
+      return (project.supplyCapacityVa?.voltAmperes ?? 0) > 0
+          ? FaultLevelBasis.serviceEstimate
+          : FaultLevelBasis.supplyStudyEstimate;
+  }
 }
 
 /// The electrical **Design Basis / Inputs & Assumptions** register as a
@@ -302,6 +334,12 @@ RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
                 strings(RptStringKey.edbFaultBasisDefault),
               FaultLevelBasis.supplyStudyEstimate =>
                 strings(RptStringKey.edbFaultBasisSupplyStudy),
+              FaultLevelBasis.generatorEstimate =>
+                strings.format(RptStringKey.edbFaultBasisGenerator,
+                    {'xd': kAlternatorXdPu.toStringAsFixed(2)}),
+              FaultLevelBasis.inverterEstimate =>
+                strings.format(RptStringKey.edbFaultBasisInverter,
+                    {'m': inverterFaultMultiple.toStringAsFixed(1)}),
             }
       ),
     if (data.originFaultLevelA == null && data.busbarClearingTimeS != null)
