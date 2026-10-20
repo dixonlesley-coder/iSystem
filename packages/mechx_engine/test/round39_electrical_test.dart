@@ -236,12 +236,13 @@ void main() {
               heater('${id}20', 20),
               heater('${id}10', 10),
             ]);
-    // MDP feeds A and B, each 30 / 20 / 10 A 1ph heaters. The engine puts
-    // the 30 A way of each board on the same line, so the MDP worst line is
-    // 30 + 30 = 60 A -> a 63 A incomer. A session prior that ROTATES B's
-    // labels by one line (a pure relabelling) used to hand the MDP
-    // 30+10 / 20+30 / 10+20 = 40 / 50 / 30 A -> a 50 A incomer live and a
-    // 63 A one after reopen on the same document.
+    // MDP feeds A and B, each 30 / 20 / 10 A 1ph heaters. Each board's own
+    // LPT puts its 30 A way on L1; a session prior that ROTATED B's labels
+    // by one line used to hand the MDP 40 / 50 / 30 A (50 A incomer) live
+    // and 60 / 40 / 20 A (63 A) after reopen on the same document. Round 46
+    // (drawings-7-phase-label-bias-inherent-verdict) — with no persisted
+    // labels the engine itself rotates B onto the MDP's lighter lines
+    // (parent-aware): 30 L2 / 20 L3 / 10 L1.
     final project = ElectricalProject(id: 'p', name: 'P', panels: [
       const ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
         ElectricalCircuit(
@@ -284,16 +285,27 @@ void main() {
     final doc = computeSystem(_p, rotated, phaseReassignThresholdA: 1.0);
     double worst(PhaseBalanceResult b) => [b.l1, b.l2, b.l3].reduce(math.max);
 
-    test('no persisted assignment: MDP worst line 60 A, 63 A incomer', () {
+    test(
+        'no persisted assignment: B rotated one line, MDP 40 / 50 / 30 A, '
+        'a 50 A incomer (never the 60 A / 63 A stacked labels)', () {
+      // A: 30 L1, 20 L2, 10 L3. B rotated: 10 L1, 30 L2, 20 L3. MDP: L1
+      // 30 + 10 = 40, L2 20 + 30 = 50, L3 10 + 20 = 30 A (the greedy's first
+      // rotation; the other one, 20 / 10 / 30 on B, also gives a 50 A worst
+      // line and the identity is kept on that tie).
       final m = reopened.panels['MDP']!;
-      expect(worst(m.phaseBalance), closeTo(60, 0.2));
-      expect(m.incomer.breaker.ratingA.amperes, 63);
+      expect(m.phaseBalance.l1, closeTo(40, 0.2));
+      expect(m.phaseBalance.l2, closeTo(50, 0.2));
+      expect(m.phaseBalance.l3, closeTo(30, 0.2));
+      expect(m.incomer.breaker.ratingA.amperes, 50);
     });
 
     test('(r3) the persisted labels: B prints them, the MDP sums them', () {
-      // B keeps its rotated labels (same worst line, a relabel never saves
-      // 1 A): 30 on L2, 20 on L3, 10 on L1. A (engine LPT): 30 L1, 20 L2,
-      // 10 L3. MDP: L1 30 + 10 = 40, L2 20 + 30 = 50, L3 10 + 20 = 30 A.
+      // B keeps its persisted labels (the engine's parent-aware labels
+      // rotated once more): 30 on L3, 20 on L1, 10 on L2. A (engine LPT):
+      // 30 L1, 20 L2, 10 L3. MDP: L1 30 + 20 = 50, L2 20 + 10 = 30, L3
+      // 10 + 30 = 40 A. No relabelling of B beats a 50 A worst line by
+      // more than the 1 A stability threshold (its three rotations give
+      // 50 / 60 / 50 A), so the persisted labels stand.
       final b = doc.panels['B']!;
       for (final c in b.circuits) {
         expect(c.phase.name, rot(engineB[c.circuitId]!).name,
@@ -304,9 +316,9 @@ void main() {
       expect(row[1], closeTo(b.phaseBalance.l2, 1e-6));
       expect(row[2], closeTo(b.phaseBalance.l3, 1e-6));
       final m = doc.panels['MDP']!;
-      expect(m.phaseBalance.l1, closeTo(40, 0.2));
-      expect(m.phaseBalance.l2, closeTo(50, 0.2));
-      expect(m.phaseBalance.l3, closeTo(30, 0.2));
+      expect(m.phaseBalance.l1, closeTo(50, 0.2));
+      expect(m.phaseBalance.l2, closeTo(30, 0.2));
+      expect(m.phaseBalance.l3, closeTo(40, 0.2));
       expect(m.incomer.breaker.ratingA.amperes,
           greaterThanOrEqualTo(worst(m.phaseBalance)));
     });

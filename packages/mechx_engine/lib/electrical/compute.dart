@@ -2445,6 +2445,9 @@ ElectricalPanelResult computePanel(
       balance.imbalancePercent > kPhaseImbalanceWarnPercent;
   var imbalanceReducible = false;
   var bestImbalancePercent = balance.imbalancePercent;
+  // Round 46 — fed boards whose R/S/T relabelling makes this board's
+  // imbalance reducible (see below).
+  final rotateBoardIds = <String>[];
   // elec-props-3 — with no phase PIN and no prior seed on any single, the
   // assignment is the ENGINE's own (exact for ≤ kPhaseExactSearchMaxWays
   // singles, by the min-worst-phase objective the incomer sizes on), so no
@@ -2484,6 +2487,83 @@ ElectricalPanelResult computePanel(
     imbalanceReducible = !engineOwned &&
         bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
             balance.imbalancePercent;
+    // Round 46 (drawings-7-phase-label-bias-inherent-verdict) — a fed
+    // board's R/S/T labels are an engineer's choice too: relabelling a
+    // sub-board (rotating which of its lines is light) permutes the lines its
+    // feeder brings here. The floor is therefore also taken with each fed
+    // board's lines PERMUTED (greedy, heaviest first, onto the lightest
+    // accumulated line — a constructive, achievable assignment); when that
+    // beats the actual figure by the margin, the imbalance is REDUCIBLE by
+    // rotating those boards, never 'inherent'. (Rotatable boards are already
+    // rotated by `computeSystem`; this names the ones it could not move — a
+    // phase pin below, or a gain within the stability threshold.)
+    final excesses = <(String, List<double>)>[];
+    for (var i = 0; i < phaseCircuits.length; i++) {
+      final pc = phaseCircuits[i];
+      final ls = pc.lines;
+      if (!pc.threePhase || ls == null) continue;
+      final m = ls.reduce(math.min);
+      if (ls.reduce(math.max) - m <= 1e-9) continue;
+      excesses.add((
+        branches[i].feedsPanelId!,
+        [for (final v in ls) v - m],
+      ));
+    }
+    if (!imbalanceReducible && excesses.isNotEmpty) {
+      // Only the three CYCLIC relabellings — the same set
+      // `computeSystem.rotateFedChildren` applies and the 'Rotate R/S/T'
+      // advice names; a two-line swap is never counted as achievable here.
+      const perms = [
+        [0, 1, 2], [1, 2, 0], [2, 0, 1], //
+      ];
+      final ordered = [...excesses]..sort((a, b) {
+          final byMax = b.$2.reduce(math.max).compareTo(a.$2.reduce(math.max));
+          return byMax != 0 ? byMax : a.$1.compareTo(b.$1);
+        });
+      final permBase = [0.0, 0.0, 0.0];
+      final moved = <String>[];
+      for (final (id, ex) in ordered) {
+        List<double>? bestL;
+        var bestIdx = 0;
+        double rank(List<double> l) =>
+            l.reduce(math.max) * 1e6 +
+            (l.reduce(math.max) - l.reduce(math.min));
+        for (var k = 0; k < perms.length; k++) {
+          // Source line j of the fed board lands on parent line perms[k][j].
+          final onParent = [...permBase];
+          for (var j = 0; j < 3; j++) {
+            onParent[perms[k][j]] += ex[j];
+          }
+          if (bestL == null || rank(onParent) < rank(bestL) - 1e-6) {
+            bestL = onParent;
+            bestIdx = k;
+          }
+        }
+        for (var j = 0; j < 3; j++) {
+          permBase[j] = bestL![j];
+        }
+        if (bestIdx != 0) moved.add(id);
+      }
+      final permSpreadA = minimumPhaseSpreadA([
+        for (final cm in comps)
+          if (!cm.threePhase) _balanceCurrentA(cm.result),
+      ], base: permBase);
+      final permPercent =
+          avgA > 0 ? roundTo((permSpreadA / avgA) * 100, 1) : 0.0;
+      if (moved.isNotEmpty &&
+          permPercent + kPhaseImbalanceReducibleMarginPercent <
+              balance.imbalancePercent) {
+        imbalanceReducible = true;
+        // Named in the board's own circuit (schedule) order.
+        rotateBoardIds.addAll([
+          for (final (id, _) in excesses)
+            if (moved.contains(id)) id,
+        ]);
+        if (permPercent < bestImbalancePercent) {
+          bestImbalancePercent = permPercent;
+        }
+      }
+    }
   }
 
   if (overImbalanceLimit && imbalanceReducible) {
@@ -2492,10 +2572,15 @@ ElectricalPanelResult computePanel(
         if (!comps[i].threePhase && branches[i].phaseOverride != null)
           branches[i].id,
     ].length;
-    final action = pinnedWays > 0
-        ? 'Unpin the ${pinnedWays == 1 ? 'way pinned' : '$pinnedWays ways pinned'} '
-            'to a phase so the balancer can even the load'
-        : 'Redistribute single-phase circuits';
+    String boardName(String id) => opts.panelById[id]?.name ?? id;
+    final action = rotateBoardIds.isNotEmpty
+        ? 'Rotate R/S/T at ${rotateBoardIds.map(boardName).join(', ')} '
+            '(relabel their single-phase ways so their light lines fall on '
+            'different phases here)'
+        : pinnedWays > 0
+            ? 'Unpin the ${pinnedWays == 1 ? 'way pinned' : '$pinnedWays ways pinned'} '
+                'to a phase so the balancer can even the load'
+            : 'Redistribute single-phase circuits';
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance',
       severity: WarningSeverity.warning,
@@ -3222,7 +3307,186 @@ ElectricalSystemResult computeSystem(
   // Round 37 — and every fed 3φ board whose FOLD-2 neutral factor is above 1
   // (see [ComputePanelOptions.feederNeutralLoad]).
   final feederNeutralByPanel = <String, FedNeutralLoad>{};
+  ElectricalPanelResult solveFedLines(ElectricalPanel panel) => computePanel(
+        profile,
+        panel,
+        opts: ComputePanelOptions(
+          feederLoadW: feederLoadWByPanel[panel.id] ?? const {},
+          feederPowerFactor: panelPowerFactor,
+          feederCapacitorFloorA: capacitorFloorByPanel,
+          feederLineCurrentsA: feederLinesByPanel,
+          feederNeutralLoad: feederNeutralByPanel,
+          panelSystems: panelSystems,
+          earthingSystem: project.earthingSystem,
+          ttFeederRcd: ttFeederRcd,
+          calibrationBySheet: calibrationBySheet,
+          building: building,
+          panelById: byId,
+          diversityLibrary: diversityLibrary,
+          priorAssignment: prior[panel.id] ?? const {},
+          phaseReassignThresholdA: phaseReassignThresholdA,
+        ),
+      );
+  // The labelled assignment of every fed board solved by this pass.
+  final fedBalance = <String, Map<String, PhaseAssignment>>{};
+  Map<String, PhaseAssignment> assignmentOf(ElectricalPanelResult r) =>
+      {for (final c in r.circuits) c.circuitId: c.phase};
+  // A fed board whose ONLY imbalance is its own unpinned single-phase ways
+  // (no phase pin, no feeder carrying unequal lines, no capacitor bank): a
+  // cyclic relabelling R->S->T of those ways keeps its own spread AND worst
+  // line exactly, so only the PARENT's lines change.
+  bool rotatable(String id) {
+    final panel = byId[id];
+    if (panel == null || panel.upsBacked) return false;
+    if (panel.system != ElectricalSystem.threePhase) return false;
+    if (!fedBalance.containsKey(id)) return false;
+    for (final c in panel.circuits) {
+      if (c.role != CircuitRole.branch) continue;
+      if (c.loadKind == LoadKind.capacitor) return false;
+      if (c.phaseOverride != null) return false;
+      final fed = c.feedsPanelId;
+      if (fed != null && feederLinesByPanel.containsKey(fed)) return false;
+    }
+    return true;
+  }
+
+  PhaseAssignment rotated(PhaseAssignment a, int r) => switch (a) {
+        PhaseAssignment.threePhase => a,
+        _ => PhaseAssignment.values[(a.index + r) % 3],
+      };
+  List<double> shifted(List<double> ls, int r) {
+    final out = [0.0, 0.0, 0.0];
+    for (var i = 0; i < 3; i++) {
+      out[(i + r) % 3] = ls[i];
+    }
+    return out;
+  }
+
+  // Round 46 (drawings-7-phase-label-bias-inherent-verdict) — PARENT-AWARE
+  // rotation of identical / imbalanced sub-boards. Each fed board balances
+  // its own ways independently, and ties go to the LOWEST line, so twelve
+  // identical floor DBs all left T light: the LVMDP summed twelve identical
+  // patterns into a 29 % imbalance (394.9 / 394.9 / 291.7 A, every upstream
+  // worst-phase basis ~10 % over-stated) that no single DB's balance could
+  // see. Before a parent is solved, its rotatable fed boards are given the
+  // cyclic relabelling that loads the parent's LIGHTEST accumulated line
+  // (greedy in circuit order, the identity kept on a tie). A board whose
+  // ways already carry persisted labels is relabelled only when the parent's
+  // worst line drops by more than [phaseReassignThresholdA] (the stability
+  // rule a single board's balance follows); the chosen rotation becomes the
+  // board's prior here and is persisted by the store as `assignedPhase`, so
+  // the document stays the one source (a re-solve keeps it: the identity is
+  // then already the best). No imbalanced fed boards ⇒ byte-identical.
+  void rotateFedChildren(String parentId) {
+    final parent = byId[parentId];
+    if (parent == null || parent.system != ElectricalSystem.threePhase) {
+      return;
+    }
+    final kids = <String>[];
+    final fixed = [0.0, 0.0, 0.0];
+    for (final c in parent.circuits) {
+      final k = c.feedsPanelId;
+      if (c.role != CircuitRole.branch || k == null) continue;
+      final ls = feederLinesByPanel[k];
+      if (ls == null) continue;
+      if (rotatable(k)) {
+        kids.add(k);
+      } else {
+        final m = ls.reduce(math.min);
+        for (var i = 0; i < 3; i++) {
+          fixed[i] += ls[i] - m;
+        }
+      }
+    }
+    if (kids.isEmpty) return;
+    (double, double) score(List<double> l) => (
+          l.reduce(math.max),
+          l.reduce(math.max) - l.reduce(math.min),
+        );
+    bool better((double, double) a, (double, double) b) =>
+        a.$1 < b.$1 - 1e-9 ||
+        ((a.$1 - b.$1).abs() <= 1e-9 && a.$2 < b.$2 - 1e-9);
+    (List<int>, List<double>) greedy(bool Function(String) free) {
+      final acc = [...fixed];
+      final picks = <int>[];
+      for (final k in kids) {
+        final ls = feederLinesByPanel[k]!;
+        final m = ls.reduce(math.min);
+        final ex = [for (final v in ls) v - m];
+        var best = 0;
+        var bestScore = score([for (var i = 0; i < 3; i++) acc[i] + ex[i]]);
+        if (free(k)) {
+          for (var r = 1; r < 3; r++) {
+            final sh = shifted(ex, r);
+            final sc = score([for (var i = 0; i < 3; i++) acc[i] + sh[i]]);
+            if (better(sc, bestScore)) {
+              best = r;
+              bestScore = sc;
+            }
+          }
+        }
+        final sh = shifted(ex, best);
+        for (var i = 0; i < 3; i++) {
+          acc[i] += sh[i];
+        }
+        picks.add(best);
+      }
+      return (picks, acc);
+    }
+
+    bool labelled(String k) => (prior[k] ?? const {}).isNotEmpty;
+    // Each candidate is judged on the PARENT's own solved balance (its
+    // single-phase ways placed against the rotated feeder lines), never on
+    // the feeder lines alone: the identity, the greedy that moves only
+    // unlabelled boards, and the greedy that may relabel every board.
+    final original = {for (final k in kids) k: feederLinesByPanel[k]!};
+    (double, double) parentScore(List<int> picks) {
+      for (var i = 0; i < kids.length; i++) {
+        feederLinesByPanel[kids[i]] = shifted(original[kids[i]]!, picks[i]);
+      }
+      final b = solveFedLines(parent).phaseBalance;
+      for (final k in kids) {
+        feederLinesByPanel[k] = original[k]!;
+      }
+      return score([b.l1, b.l2, b.l3]);
+    }
+
+    final identity = List<int>.filled(kids.length, 0);
+    final kept = greedy((k) => !labelled(k)).$1;
+    final all = greedy((_) => true).$1;
+    final sIdentity = parentScore(identity);
+    final sKept = _listEq(kept, identity) ? sIdentity : parentScore(kept);
+    var picks = better(sKept, sIdentity) ? kept : identity;
+    final sBase = better(sKept, sIdentity) ? sKept : sIdentity;
+    if (!_listEq(all, picks)) {
+      final sAll = parentScore(all);
+      final freeMove = !kids.asMap().entries.any((e) =>
+          labelled(e.value) && all[e.key] != picks[e.key]);
+      final gain = sBase.$1 - sAll.$1;
+      if (freeMove
+          ? better(sAll, sBase)
+          : gain > math.max(phaseReassignThresholdA, 1e-9)) {
+        picks = all;
+      }
+    }
+    for (var i = 0; i < kids.length; i++) {
+      final r = picks[i];
+      if (r == 0) continue;
+      final k = kids[i];
+      prior[k] = {
+        for (final e in fedBalance[k]!.entries)
+          if (e.value != PhaseAssignment.threePhase) e.key: rotated(e.value, r),
+      };
+      final solved = solveFedLines(byId[k]!);
+      final b = solved.phaseBalance;
+      fedBalance[k] = assignmentOf(solved);
+      final d = byId[k]!.diversityFactor;
+      feederLinesByPanel[k] = [b.l1 * d, b.l2 * d, b.l3 * d];
+    }
+  }
+
   for (final id in postOrder) {
+    rotateFedChildren(id);
     final panel = byId[id];
     if (panel == null || !parentOf.containsKey(id)) continue;
     if (panel.system != ElectricalSystem.threePhase) continue;
@@ -3248,26 +3512,8 @@ ElectricalSystemResult computeSystem(
           );
     });
     if (!maybeImbalanced) continue;
-    final solved = computePanel(
-      profile,
-      panel,
-      opts: ComputePanelOptions(
-        feederLoadW: feederLoadWByPanel[id] ?? const {},
-        feederPowerFactor: panelPowerFactor,
-        feederCapacitorFloorA: capacitorFloorByPanel,
-        feederLineCurrentsA: feederLinesByPanel,
-        feederNeutralLoad: feederNeutralByPanel,
-        panelSystems: panelSystems,
-        earthingSystem: project.earthingSystem,
-        ttFeederRcd: ttFeederRcd,
-        calibrationBySheet: calibrationBySheet,
-        building: building,
-        panelById: byId,
-        diversityLibrary: diversityLibrary,
-        priorAssignment: prior[id] ?? const {},
-        phaseReassignThresholdA: phaseReassignThresholdA,
-      ),
-    );
+    final solved = solveFedLines(panel);
+    fedBalance[id] = assignmentOf(solved);
     // Round 39 r3 — the fed board's LABELLED lines (its printed TOTAL): the
     // assignment behind them is persisted in the document, so the parent's
     // balance, its feeder row R/S/T and its incomer are a function of the

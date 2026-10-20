@@ -2327,6 +2327,10 @@ Future<bool> writeSubmittalPackageToDir(
         floorIndex: floorIndex,
         calibrations: project.calibrations,
         building: project.building,
+        // Round 46 — boards placed nowhere are listed once, on the first
+        // layout sheet; every other note is scoped to its own sheet.
+        listUnhomedUnplaced:
+            elecPlanSheetIds.isEmpty || elecPlanSheetIds.first == sheet.id,
       );
       if (!ePlan.isEmpty) {
         final eChrome = elecPlanChrome(sheet.id).withTitle(

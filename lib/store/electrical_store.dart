@@ -739,20 +739,35 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     // once the engineer opts in (G1, [mepDutyFeedEnabledProvider]) — the
     // [mepAutoFeedCircuitsProvider] gates that. Default is placed-only, so an
     // untouched project with nothing placed has no MEP panel and is byte-
-    // identical to before. The listener fires on every change after build; a
-    // microtask does the initial sync (state can't be set during build()).
-    ref.listen(
-        mepAutoFeedCircuitsProvider, (_, next) => syncMepEquipment(next));
+    // identical to before. A microtask does the initial sync (state can't be
+    // set during build()).
+    //
     // The microtask can outlive the container (app quit / test teardown
     // disposing mid-flight) — reading a disposed container throws a StateError
     // on a platform-timing-dependent race (caught by the Windows release gate),
     // so it must no-op once this notifier is disposed.
     var disposed = false;
     ref.onDispose(() => disposed = true);
-    Future.microtask(() {
-      if (disposed) return;
-      syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
-    });
+    // Round 46 (mech-props-1-mep-sync-listener-writes-during-build) — the
+    // listener DEFERS its write like the initial sync (the Round 32 rule): the
+    // feed is first recomputed inside ANOTHER provider's build (the Review
+    // fan-in reading the electrical result after an equipment drop), where a
+    // synchronous `state =` is a Riverpod assertion. One pending microtask
+    // reads the LATEST feed, so a burst of edits syncs once (and the
+    // value-identical re-sync stays a no-op).
+    var syncPending = false;
+    void scheduleSync() {
+      if (syncPending) return;
+      syncPending = true;
+      Future.microtask(() {
+        syncPending = false;
+        if (disposed) return;
+        syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
+      });
+    }
+
+    ref.listen(mepAutoFeedCircuitsProvider, (_, _) => scheduleSync());
+    scheduleSync();
     // A2 — a fresh project is EMPTY: the fictional sample switchboard must
     // never leak into a real `.mechx` / BOM / quotation. The sample stays one
     // explicit click away ([resetToSample], the empty-state action).

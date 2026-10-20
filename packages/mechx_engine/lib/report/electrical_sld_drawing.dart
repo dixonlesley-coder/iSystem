@@ -38,7 +38,10 @@ import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_factor.dart'
-    show capacitorBanksToProcure, installedCapacitorBanks, powerFactorCorrection;
+    show
+        capacitorBanksToProcure,
+        installedCapacitorBanks,
+        powerFactorCorrection;
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BreakerResult;
 import '../electrical/sources.dart'
@@ -634,15 +637,16 @@ SldSheet buildElectricalSld({
         ? '  Icw ${_num(w.icwKa)}kA'
             '${(w.durationS - 1).abs() > 1e-9 ? '/${_num(w.durationS)}s' : ''}'
         : '';
-    if (firstChunk) prims.add(SldLabel(
-        blockX + 8,
-        blockY + 32,
-        'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix'
-        '${incomerOverRangeSuffix(p.incomer)}  '
-        '${p.system.label}  ${_num(v)}V  '
-        'Cu bus ${_num(p.busbar.csaMm2)}mm2$icw  '
-        'demand ${_boardDemandCurrent(p)}',
-        size: 8));
+    if (firstChunk)
+      prims.add(SldLabel(
+          blockX + 8,
+          blockY + 32,
+          'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix'
+          '${incomerOverRangeSuffix(p.incomer)}  '
+          '${p.system.label}  ${_num(v)}V  '
+          'Cu bus ${_num(p.busbar.csaMm2)}mm2$icw  '
+          'demand ${_boardDemandCurrent(p)}',
+          size: 8));
     // The trip-curve legend is about MCB characteristics only — an MCCB carries
     // no B/C/D curve (N12), so don't seed a curve legend entry from one.
     if (p.incomer.breaker.deviceClass.hasTripCurve) {
@@ -809,8 +813,7 @@ SldSheet buildElectricalSld({
       final ownModel = modelById[p.panelId];
       final route = studySpec?.route ??
           (circuit != null && ownModel != null
-              ? routeForInstallMethod(
-                  effectiveInstallMethod(circuit, ownModel))
+              ? routeForInstallMethod(effectiveInstallMethod(circuit, ownModel))
               : ContainmentRoute.conduit);
       final conduitMm = route != ContainmentRoute.conduit
           ? null
@@ -1022,9 +1025,10 @@ SldSheet buildElectricalSld({
         ? '  ·  imbalance ${_num(p.imbalancePercent)}%'
         : '';
     final footerY = busBot + _rowH / 2 + 3;
-    if (lastChunk) prims.add(SldLabel(blockX + 8, footerY,
-        'TOTAL  ${_watts(p.demandW)} / ${_boardDemandCurrent(p)}$imbalance',
-        size: 8.5, bold: true));
+    if (lastChunk)
+      prims.add(SldLabel(blockX + 8, footerY,
+          'TOTAL  ${_watts(p.demandW)} / ${_boardDemandCurrent(p)}$imbalance',
+          size: 8.5, bold: true));
     if (p.system.isThreePhase && lastChunk) {
       final pb = p.phaseBalance;
       final l1 = _amps(pb.l1), l2 = _amps(pb.l2), l3 = _amps(pb.l3);
@@ -1172,8 +1176,8 @@ SldSheet buildElectricalSld({
         'Icu below the bus fault: back-up (cascade) protection by the upstream device required'));
   }
   if (printedMatch(RegExp(r'\bIcs100\b'))) {
-    legend.add(const SldLegendEntry(
-        'Ics100', 'Specify a 100 % Ics device (service capacity below the bus fault)'));
+    legend.add(const SldLegendEntry('Ics100',
+        'Specify a 100 % Ics device (service capacity below the bus fault)'));
   }
   if (anySubmeter && printedMatch(RegExp(r'^kWh direct$'))) {
     legend.add(const SldLegendEntry(
@@ -1562,7 +1566,6 @@ String _compactNodeSubLine(ElectricalPanelResult p, {ElectricalPanel? model}) {
   return '$head · ${_num(p.demandW / 1000)} kW / '
       '${_num(p.demandVaOrEstimate(fallbackPf: _assumedPanelPf) / 1000)} kVA';
 }
-
 
 /// Parent-of map over the feeder graph (childPanelId -> parentPanelId), limited
 /// to children that have a result. Shared by the overview + riser layouts.
@@ -2184,8 +2187,8 @@ const double _sideNodeBottom = 14;
         // Round 40 (elec-drawings-5-supply-lead-strikes-genset-label) — the
         // stack ends below its LOWEST printed text (baseline + descent), so
         // the outgoing lead never strikes the 'backs NN% of load' line.
-        stackBottom = _sideNodeTextBottom(
-            cy + 13, pct != null ? cy + 24 : cy + 12, 7.5);
+        stackBottom =
+            _sideNodeTextBottom(cy + 13, pct != null ? cy + 24 : cy + 12, 7.5);
         cy += 58;
       }
       if (spineCap != null) {
@@ -2487,8 +2490,7 @@ SldSheet buildElectricalOverview({
     final base = include ?? {for (final id in result.order) id};
     final pageRoots = {
       for (final id in base)
-        if (fullParentOf[id] == null || !base.contains(fullParentOf[id]))
-          id,
+        if (fullParentOf[id] == null || !base.contains(fullParentOf[id])) id,
     };
     final drop = <String>{};
     for (final r in pageRoots) {
@@ -2799,8 +2801,8 @@ SldSheet buildElectricalOverview({
       final range = siblingChunk.length == 1
           ? nm(siblingChunk.first)
           : '${nm(siblingChunk.first)} .. ${nm(siblingChunk.last)}';
-      prims.add(SldLabel(x + _ovW + 6, y + _ovH / 2 + 3,
-          'LANJUT: $range (lembar lain)',
+      prims.add(SldLabel(
+          x + _ovW + 6, y + _ovH / 2 + 3, 'LANJUT: $range (lembar lain)',
           size: _ovFeederLabelSize, role: role));
     }
     final par = fullParentOf[id];
@@ -2983,9 +2985,25 @@ typedef _RiserLeg = ({
   double pxx,
   double pyy,
   double cyy,
+  double pjx,
   bool pJog,
   bool cJog,
 });
+
+/// Round 46 (drawings-7-riser-subfeeders-on-parent-channel) — a board that is
+/// itself fed on the sheet leaves for its OWN feeders this far below its
+/// centre-line (and jogs this far right of the incoming jog), so its incoming
+/// and outgoing cables never share the entry point or a stretch of line.
+const double _kRiserOutLegDy = 8;
+
+/// The step between stacked `LANJUT KE` stubs at one page edge (twice the
+/// stub size: room for the plot fit to grow each to [kMinPlotLabelPt]).
+const double _kRiserStubPitch = 2 * _fanLabelSize;
+const double _kRiserOutJogDx = 4;
+
+/// Two parents' channel spans closer than this (vertically) take separate
+/// lanes; further apart they share one.
+const double _kRiserLaneSpanMargin = 20;
 
 /// Per-floor branch fan-out: how many outgoing LOAD ways a riser panel shows as
 /// labelled stubs before collapsing the remainder to a `+N more` summary, the
@@ -3169,6 +3187,10 @@ class _RiserFeeder {
   /// legacy leg at [py].
   final double? parentBusY;
 
+  /// The x where a jogged PARENT leg turns (see [jogX]; offset right of the
+  /// incoming jog for a board that is itself fed on the sheet).
+  final double parentJogX;
+
   /// Bus-row y of the CHILD leg when a board sits between the channel and the
   /// child's right edge (the same jog, on the child's band). Null ⇒ the
   /// straight legacy branch at [cy].
@@ -3186,7 +3208,8 @@ class _RiserFeeder {
     required this.label,
     this.parentBusY,
     this.childBusY,
-  });
+    double? parentJogX,
+  }) : parentJogX = parentJogX ?? jogX(px);
 
   /// The y the branch runs at OUTSIDE the band's boxes (right of the band, up
   /// to the channel): the bus row when the child leg jogs, else [cy].
@@ -3233,6 +3256,40 @@ class _FeederSeg {
   final double x1, y1, x2, y2;
   final SldRole role;
   const _FeederSeg(this.x1, this.y1, this.x2, this.y2, this.role);
+}
+
+/// Round 46 — every stretch where lines of two DIFFERENT groups (one group
+/// per feeding board) lie on one axis line and overlap by more than a hair:
+/// `(vertical, at, lo, hi)`.
+List<(bool, double, double, double)> _collinearOverlaps(
+    List<List<SldLine>> groups) {
+  const eps = 1e-6;
+  final out = <(bool, double, double, double)>[];
+  (bool, double, double, double)? axis(SldLine l) {
+    if ((l.x1 - l.x2).abs() < eps && (l.y1 - l.y2).abs() > eps) {
+      return (true, l.x1, math.min(l.y1, l.y2), math.max(l.y1, l.y2));
+    }
+    if ((l.y1 - l.y2).abs() < eps && (l.x1 - l.x2).abs() > eps) {
+      return (false, l.y1, math.min(l.x1, l.x2), math.max(l.x1, l.x2));
+    }
+    return null;
+  }
+
+  final axes = [
+    for (final g in groups) [...g.map(axis).nonNulls],
+  ];
+  for (var i = 0; i < axes.length; i++) {
+    for (var j = i + 1; j < axes.length; j++) {
+      for (final a in axes[i]) {
+        for (final b in axes[j]) {
+          if (a.$1 != b.$1 || (a.$2 - b.$2).abs() > eps) continue;
+          final lo = math.max(a.$3, b.$3), hi = math.min(a.$4, b.$4);
+          if (hi - lo > 0.5) out.add((a.$1, a.$2, lo, hi));
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /// Merge ONE parent's per-child feeder routes into non-overlapping lines: every
@@ -3343,6 +3400,7 @@ SldSheet buildElectricalRiser({
   Map<String, String> typicalNames = const {},
   Map<int, String> bandNotes = const {},
   Map<String, String> typicalFeederLengths = const {},
+  Map<String, String> offPageFeedNotes = const {},
 }) {
   final parentOf = _parentOf(project, result);
   final essential = essentialPanelIds(project, result);
@@ -3439,6 +3497,17 @@ SldSheet buildElectricalRiser({
   final panelY = <String, double>{};
   const panelPitch = _ovW + _riserPanelGap;
   var sheetMaxX = _riserGutterW + _ovW;
+  // Round 46 (elec-props-12-riser-rest-page-inherits-other-band-width) — a
+  // PAGE ([floorRange]) is as wide as the bands it PRINTS: a board on a band
+  // cropped off the page is still placed (its feeders are cut at the page
+  // edge with their LANJUT stub) but never widens the sheet, the channel or
+  // the gutter hairlines. Null ⇒ every band ⇒ byte-identical.
+  final windowLo =
+      floorRange == null ? 0 : floorRange.lo.clamp(0, topIndex).toInt();
+  final windowHi = floorRange == null
+      ? topIndex
+      : floorRange.hi.clamp(windowLo, topIndex).toInt();
+  bool bandInWindow(int f) => f >= windowLo && f <= windowHi;
   void placePanels() {
     for (final entry in byFloor.entries) {
       final y = bandY(entry.key) + contentOffsetY;
@@ -3448,7 +3517,7 @@ SldSheet buildElectricalRiser({
         panelY[id] = y;
         x += panelPitch;
       }
-      sheetMaxX = math.max(sheetMaxX, x);
+      if (bandInWindow(entry.key)) sheetMaxX = math.max(sheetMaxX, x);
     }
   }
 
@@ -3509,6 +3578,19 @@ SldSheet buildElectricalRiser({
   // legs must jog is decided first; their bus tracks are then claimed per band
   // in GEOMETRIC order — RIGHT-TO-LEFT by jog x (see [_riserBusTrackOffset]) —
   // so no track horizontal crosses another leg's jog vertical.
+  // Boards fed by a DRAWN leg: their own outgoing legs leave below the
+  // centre-line (see [_kRiserOutLegDy]).
+  bool fedOnSheet(String id) {
+    // A board fed from ANOTHER sheet (its same-storey feeder hidden by the
+    // page plan) draws its incoming `DARI` stub at the centre-line, so its
+    // own outgoing legs leave below it exactly like an on-sheet fed board.
+    if (offPageFeedNotes.containsKey(id) && panelX.containsKey(id)) {
+      return true;
+    }
+    final par = parentOf[id];
+    return par != null && panelX.containsKey(id) && panelX.containsKey(par);
+  }
+
   List<_RiserLeg> buildLegs() => [
         for (final entry in parentOf.entries)
           if (panelX.containsKey(entry.key) && panelX.containsKey(entry.value))
@@ -3517,8 +3599,12 @@ SldSheet buildElectricalRiser({
               parent: entry.value,
               cxx: panelX[entry.key]! + _ovW, // child right edge
               pxx: panelX[entry.value]! + _ovW, // parent right edge
-              pyy: panelY[entry.value]! + _ovH / 2,
+              pyy: panelY[entry.value]! +
+                  _ovH / 2 +
+                  (fedOnSheet(entry.value) ? _kRiserOutLegDy : 0),
               cyy: panelY[entry.key]! + _ovH / 2,
+              pjx: _RiserFeeder.jogX(panelX[entry.value]! + _ovW) +
+                  (fedOnSheet(entry.value) ? _kRiserOutJogDx : 0),
               // A board between a leg's box and the channel ⇒ that leg jogs to
               // its band's bus row (the clear gap above the boxes). One board
               // per band ⇒ nothing blocks ⇒ the straight legacy geometry,
@@ -3545,7 +3631,7 @@ SldSheet buildElectricalRiser({
 
     for (final l in legs) {
       if (l.pJog) {
-        claim('p:${l.parent}', floorOf(l.parent), _RiserFeeder.jogX(l.pxx));
+        claim('p:${l.parent}', floorOf(l.parent), l.pjx);
       }
       if (l.cJog) {
         claim('c:${l.child}', floorOf(l.child), _RiserFeeder.jogX(l.cxx));
@@ -3662,6 +3748,7 @@ SldSheet buildElectricalRiser({
           lengthOverride: typicalFeederLengths[l.child]),
       parentBusY: l.pJog ? busTrackOf['p:${l.parent}'] : null,
       childBusY: l.cJog ? busTrackOf['c:${l.child}'] : null,
+      parentJogX: l.pjx,
     ));
   }
   // Pass 1 — every annotation whose DEFAULT anchor is clear keeps it (so a riser
@@ -3682,15 +3769,60 @@ SldSheet buildElectricalRiser({
   // vertical printed the normal sub-mains under the essential red (and drew
   // two separate cables as one line). One role only ⇒ one lane ⇒
   // byte-identical.
-  final hasNormalParentFeeder =
-      feeders.any((f) => !essential.contains(f.parent));
+  //
+  // Round 46 (drawings-7-riser-subfeeders-on-parent-channel) — and every
+  // PARENT board rides its own lane wherever its channel span overlaps
+  // another parent's: a sub-board's outgoing feeders no longer run down the
+  // MDP's riser line (three cables on one line read as fed from the MDP).
+  // Lanes are assigned greedily in riser order (normal parents first, the
+  // essential ones outside them); parents whose spans are clear of each
+  // other share a lane. One parent / disjoint spans ⇒ one lane ⇒
+  // byte-identical.
+  final spanOf = <String, (double, double)>{};
+  for (final f in feeders) {
+    final a = math.min(f.parentBusY ?? f.py, f.branchY);
+    final b = math.max(f.parentBusY ?? f.py, f.branchY);
+    final s0 = spanOf[f.parent];
+    spanOf[f.parent] =
+        s0 == null ? (a, b) : (math.min(s0.$1, a), math.max(s0.$2, b));
+  }
+  final orderIdx = {
+    for (var i = 0; i < result.order.length; i++) result.order[i]: i,
+  };
+  final laneParents = spanOf.keys.toList()
+    ..sort((a, b) {
+      final ea = essential.contains(a) ? 1 : 0;
+      final eb = essential.contains(b) ? 1 : 0;
+      if (ea != eb) return ea.compareTo(eb);
+      return (orderIdx[a] ?? 0).compareTo(orderIdx[b] ?? 0);
+    });
+  final laneOf = <String, int>{};
+  final laneSpans = <List<(double, double)>>[];
+  var essentialBase = -1;
+  for (final par in laneParents) {
+    if (essential.contains(par) && essentialBase < 0) {
+      essentialBase = laneSpans.length;
+    }
+    final sp = spanOf[par]!;
+    var lane = essentialBase < 0 ? 0 : essentialBase;
+    for (; lane < laneSpans.length; lane++) {
+      final clear = laneSpans[lane].every((o) =>
+          sp.$1 > o.$2 + _kRiserLaneSpanMargin ||
+          sp.$2 < o.$1 - _kRiserLaneSpanMargin);
+      if (clear) break;
+    }
+    if (lane == laneSpans.length) laneSpans.add([]);
+    laneSpans[lane].add(sp);
+    laneOf[par] = lane;
+  }
   double chOf(_RiserFeeder f) =>
-      essential.contains(f.parent) && hasNormalParentFeeder
-          ? channelX + _kRiserLaneGap
-          : channelX;
-  final outerChannelX = feeders.any((f) => chOf(f) != channelX)
-      ? channelX + _kRiserLaneGap
-      : channelX;
+      channelX + (laneOf[f.parent] ?? 0) * _kRiserLaneGap;
+  final outerChannelX = channelX +
+      (laneSpans.isEmpty ? 0 : laneSpans.length - 1) * _kRiserLaneGap;
+  final stubLaneXs = <double>{
+    for (var k = 0; k < math.max(1, laneSpans.length); k++)
+      channelX + k * _kRiserLaneGap,
+  };
   final placer = _RiserLabelPlacer([
     for (final id in panelX.keys)
       _RiserBox(
@@ -3699,14 +3831,14 @@ SldSheet buildElectricalRiser({
       _RiserBox(chOf(f) - 0.5, math.min(f.parentBusY ?? f.py, f.branchY),
           chOf(f) + 0.5, math.max(f.parentBusY ?? f.py, f.branchY)),
     for (final f in feeders)
-      for (final (edgeX, centreY, busY) in [
-        (f.px, f.py, f.parentBusY),
-        (f.cx, f.cy, f.childBusY),
+      for (final (jx, centreY, busY) in [
+        (f.parentJogX, f.py, f.parentBusY),
+        (_RiserFeeder.jogX(f.cx), f.cy, f.childBusY),
       ])
         if (busY != null) ...[
-          _RiserBox(_RiserFeeder.jogX(edgeX), busY - 0.5, chOf(f), busY + 0.5),
-          _RiserBox(_RiserFeeder.jogX(edgeX) - 0.5, math.min(busY, centreY),
-              _RiserFeeder.jogX(edgeX) + 0.5, math.max(busY, centreY)),
+          _RiserBox(jx, busY - 0.5, chOf(f), busY + 0.5),
+          _RiserBox(jx - 0.5, math.min(busY, centreY), jx + 0.5,
+              math.max(busY, centreY)),
         ],
   ], gutterX: _riserGutterW);
   final needsEscape = <_RiserFeeder>[];
@@ -3726,7 +3858,15 @@ SldSheet buildElectricalRiser({
   // The right edge of the widest DISPLACED annotation — folded into the sheet
   // bounds below so an escaped tag is never clipped. Labels otherwise don't
   // drive the bounds, so a riser with no displacement keeps its exact extents.
-  var displacedMaxX = double.negativeInfinity;
+  // Round 46 — keyed by the label prim so a page ([floorRange]) widens only
+  // for the displaced tags it actually PRINTS (a cropped band's tag never
+  // widens the page).
+  final displacedRight = Map<SldPrim, double>.identity();
+  // Each feeder tag (+ its leader) by the y of the BRANCH it annotates: a
+  // page drops a tag whose branch is cropped off it (an escaped tag can
+  // stack into the neighbouring band), never printing a spec — or cutting a
+  // leader into a false LANJUT stub — for a run that is not on the page.
+  final tagBranchY = Map<SldPrim, double>.identity();
   // Every feeder's route (parent leg + optional jog to its bus track, the
   // channel vertical, the child branch + optional jog) is collected per PARENT
   // and merged by [_mergeFeederSegments], so a piece shared by sibling feeders
@@ -3748,7 +3888,7 @@ SldSheet buildElectricalRiser({
       route.add(_FeederSeg(f.px, f.py, channelX, f.py, f.role));
       channelTopY = f.py;
     } else {
-      final jx = _RiserFeeder.jogX(f.px);
+      final jx = f.parentJogX;
       route.add(_FeederSeg(f.px, f.py, jx, f.py, f.role));
       route.add(_FeederSeg(jx, f.py, jx, pBus, f.role));
       route.add(_FeederSeg(jx, pBus, channelX, pBus, f.role));
@@ -3769,9 +3909,10 @@ SldSheet buildElectricalRiser({
     final (lx, ly) = f.slot;
     final def = f.defaultSlot(channelX);
     final dx = lx - def.$1, dy = ly - def.$2;
+    final tag =
+        SldLabel(lx, ly, lbl, size: _riserFeederLabelSize, role: f.role);
     if (dx != 0 || dy != 0) {
-      displacedMaxX = math.max(
-          displacedMaxX, lx + _riserLabelWidth(lbl, _riserFeederLabelSize));
+      displacedRight[tag] = lx + _riserLabelWidth(lbl, _riserFeederLabelSize);
     }
     // A tag pulled well off its anchor — or one no slot could fully clear —
     // gets a thin leader from the nearest point on ITS branch, so it still
@@ -3787,17 +3928,42 @@ SldSheet buildElectricalRiser({
       // its branch is not crossed by the leader that points at it.
       final rx = lx + _riserLabelWidth(lbl, _riserFeederLabelSize);
       final endX = rx < bx ? rx : lx;
-      prims.add(SldLine(bx, f.branchY, endX, ly,
-          weight: SldWeight.thin, role: f.role));
+      final leader = SldLine(bx, f.branchY, endX, ly,
+          weight: SldWeight.thin, role: f.role);
+      tagBranchY[leader] = f.branchY;
+      prims.add(leader);
     }
-    prims.add(SldLabel(lx, ly, lbl, size: _riserFeederLabelSize, role: f.role));
+    tagBranchY[tag] = f.branchY;
+    prims.add(tag);
   }
+  final mergedByParent = <String, List<SldLine>>{};
   for (final entry in segsByParent.entries) {
-    prims.addAll(_mergeFeederSegments(entry.value,
-        parentRole: essential.contains(entry.key)
-            ? SldRole.essential
-            : SldRole.normal));
+    final lines = _mergeFeederSegments(entry.value,
+        parentRole:
+            essential.contains(entry.key) ? SldRole.essential : SldRole.normal);
+    mergedByParent[entry.key] = lines;
+    prims.addAll(lines);
   }
+  // Round 46 — two DIFFERENT boards' feeder runs lying on one line (a shared
+  // stretch reads as one cable) are counted ([SldSheet.overlapCount] ⇒ the
+  // legibility note), never silent. Each overlap as (vertical, at, lo, hi).
+  // The incoming `DARI` stub of a board fed from another sheet is its own
+  // group, so a stub collinear with any feeder run is counted too.
+  final offPageStubs = <String, SldLine>{
+    for (final id in offPageFeedNotes.keys)
+      if (panelX[id] != null && panelY[id] != null)
+        id: SldLine(
+            panelX[id]! + _ovW,
+            panelY[id]! + _ovH / 2,
+            panelX[id]! + _ovW + _riserPanelGap / 2 - 2,
+            panelY[id]! + _ovH / 2,
+            weight: SldWeight.medium,
+            role: essential.contains(id) ? SldRole.essential : SldRole.normal),
+  };
+  final feederLineOverlaps = _collinearOverlaps([
+    ...mergedByParent.values,
+    for (final l in offPageStubs.values) [l],
+  ]);
   sheetMaxX = math.max(sheetMaxX, outerChannelX);
 
   // Source -> each root: from the LV-main bus bottom into the root panel.
@@ -3890,7 +4056,24 @@ SldSheet buildElectricalRiser({
       prims.add(SldLabel(6, y + 47, 'LANJUT (lembar lain):', size: 7));
       prims.add(SldLabel(6, y + 57, note, size: 7));
     }
+    // Round 46 (elec-props-12-riser-same-band-ancestor-chain-illegible) — a
+    // drawn board whose feeding board (on this SAME storey) is drawn on
+    // another sheet names it here, and its incoming leg is drawn as a short
+    // stub at its entry (below), so it never reads as a root.
+    final fedFrom = [
+      for (final id in byFloor[i] ?? const <String>[])
+        if (offPageFeedNotes[id] != null && panelX.containsKey(id))
+          '${offPageFeedNotes[id]} > ${typicalNames[id] ?? result.panels[id]?.name ?? id}',
+    ];
+    if (fedFrom.isNotEmpty) {
+      final dy = note != null ? 24.0 : 0.0;
+      prims.add(SldLabel(6, y + 47 + dy, 'DARI (lembar lain):', size: 7));
+      for (var k = 0; k < fedFrom.length; k++) {
+        prims.add(SldLabel(6, y + 57 + dy + 10 * k, fedFrom[k], size: 7));
+      }
+    }
   }
+  prims.addAll(offPageStubs.values);
 
   // Per-panel horizontal budget for the load-way fan-out stub labels below the
   // box: the clear space from the stub label's x to the NEXT panel's box left
@@ -4010,6 +4193,8 @@ SldSheet buildElectricalRiser({
         if (keepSpine) cropped.add(pr);
         continue;
       }
+      final tagY = tagBranchY[pr];
+      if (tagY != null && !inWin(tagY)) continue;
       switch (pr) {
         case SldRect():
           if (inWin(pr.y) && inWin(pr.y + pr.h)) cropped.add(pr);
@@ -4045,8 +4230,8 @@ SldSheet buildElectricalRiser({
     // Place the stubs (see `stub`).
     final keptBoxes = <_RiserBox>[
       for (final l in cropped.whereType<SldLabel>())
-        _RiserBox(l.x, l.y - l.size,
-            l.x + _riserLabelWidth(l.text, l.size), l.y),
+        _RiserBox(
+            l.x, l.y - l.size, l.x + _riserLabelWidth(l.text, l.size), l.y),
     ];
     bool hits(_RiserBox b) {
       for (final o in keptBoxes) {
@@ -4055,7 +4240,27 @@ SldSheet buildElectricalRiser({
       return false;
     }
 
-    for (final (x, y, floor, role, dir) in stubRequests) {
+    // Round 46 — adjacent LANES crossing one page edge toward one floor
+    // (same role) share ONE stub at the leftmost lane: three identical
+    // 'LANJUT KE <floor>' tags a lane-gap apart only crowd the edge.
+    final merged = <(double, double, int, SldRole, double)>[];
+    final byEdge = [...stubRequests]..sort((a, b) {
+        final c = a.$2.compareTo(b.$2);
+        return c != 0 ? c : a.$1.compareTo(b.$1);
+      });
+    for (final r in byEdge) {
+      final last = merged.isEmpty ? null : merged.last;
+      if (last != null &&
+          (last.$2 - r.$2).abs() < 1e-6 &&
+          last.$3 == r.$3 &&
+          last.$4 == r.$4 &&
+          r.$1 - last.$1 <= _kRiserLaneGap * 3 + 1e-6 &&
+          stubLaneXs.contains(r.$1)) {
+        continue;
+      }
+      merged.add(r);
+    }
+    for (final (x, y, floor, role, dir) in merged) {
       final text = 'LANJUT KE ${floorName(floor)}';
       final w = _riserLabelWidth(text, _fanLabelSize);
       _RiserBox boxAt(double sy) =>
@@ -4063,7 +4268,11 @@ SldSheet buildElectricalRiser({
       var sy = y;
       var clear = !hits(boxAt(sy));
       for (var k = 0; !clear && k < 40; k++) {
-        final next = sy + dir * (_fanLabelSize + 2);
+        // Round 46 — one stub PITCH that leaves room for the plot fit to
+        // grow a stacked stub to the 7 pt floor (lanes put several stubs a
+        // lane-gap apart at one page edge; an 8-unit stack locked them at
+        // ~6 pt).
+        final next = sy + dir * _kRiserStubPitch;
         if (!inWin(next) || !inWin(next - _fanLabelSize)) break;
         sy = next;
         clear = !hits(boxAt(sy));
@@ -4078,6 +4287,10 @@ SldSheet buildElectricalRiser({
     prims
       ..clear()
       ..addAll(cropped);
+    // Only the shared stretches this page prints.
+    feederLineOverlaps.removeWhere((o) => o.$1
+        ? math.min(o.$4, bottom) - math.max(o.$3, top) <= eps
+        : !inWin(o.$2));
   }
 
   // ── Bounds ─────────────────────────────────────────────────────────────────
@@ -4110,7 +4323,10 @@ SldSheet buildElectricalRiser({
   }
   // A DISPLACED feeder annotation escapes past the channel — widen the sheet so
   // it can't be clipped (no displacement ⇒ -infinity ⇒ the bounds are unchanged).
-  maxX = math.max(maxX, displacedMaxX);
+  for (final pr in prims) {
+    final r = displacedRight[pr];
+    if (r != null) maxX = math.max(maxX, r);
+  }
   if (!minY.isFinite) {
     minY = 0;
     maxY = 1;
@@ -4144,7 +4360,7 @@ SldSheet buildElectricalRiser({
         const SldLegendEntry('Earth', 'System earthing point'),
     ],
     supplyNote: supplyNote,
-    overlapCount: stubOverlaps,
+    overlapCount: stubOverlaps + feederLineOverlaps.length,
   );
 }
 

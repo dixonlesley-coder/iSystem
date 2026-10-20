@@ -150,6 +150,16 @@ class ElectricalPlanData {
 /// length, `UP`/`DN`) AND listed in [ElectricalPlanData.unplaced] — never given
 /// a fabricated on-sheet position, never silently dropped. A panel / load with
 /// no placement AT ALL is likewise listed, not invented.
+///
+/// Round 46 (drawings-7-layout-unplaced-count-projectwide) — the unplaced
+/// note is SHEET-SCOPED: a board's unplaced loads are counted (and an
+/// unplaced board listed) only on the sheet of its HOME — the board itself
+/// when placed, else its nearest placed feeding board — so a floor's sheet
+/// never reports another floor's missing points. Boards with no placed board
+/// up their feeder chain are listed once, on the sheet the caller marks with
+/// [listUnhomedUnplaced] (the first layout sheet; default true for a lone
+/// sheet).
+///
 /// The essential board set over the MODEL alone (no solved result): a board
 /// is essential when it, or any board feeding it, carries the explicit
 /// `essential` flag or an emergency name — the [essentialPanelIds] rule.
@@ -185,10 +195,35 @@ ElectricalPlanData buildElectricalPlanData({
   required int floorIndex,
   Map<String, ScaleCalibration> calibrations = const {},
   BuildingLevels? building,
+  bool listUnhomedUnplaced = true,
 }) {
   final panelById = {for (final p in project.panels) p.id: p};
   bool onSheet(LayoutPos? pos) =>
       pos != null && pos.sheetId == sheetId && pos.floorIndex == floorIndex;
+  final feedingBoardOf = <String, String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null && panelById.containsKey(c.feedsPanelId))
+          c.feedsPanelId!: p.id,
+  };
+  // The placement a board's unplaced items are reported at (see above).
+  LayoutPos? homeOf(String id) {
+    final seen = <String>{};
+    for (String? cur = id; cur != null && seen.add(cur);
+        cur = feedingBoardOf[cur]) {
+      final pos = panelById[cur]?.layoutPos;
+      if (pos != null) return pos;
+    }
+    return null;
+  }
+
+  // null ⇒ not reported on this sheet; true ⇒ homed here; false ⇒ unhomed,
+  // reported here (the caller's designated sheet).
+  bool? reportHere(String panelId) {
+    final home = homeOf(panelId);
+    if (home != null) return onSheet(home) ? true : null;
+    return listUnhomedUnplaced ? false : null;
+  }
 
   String? routeLabel(LayoutPos a, LayoutPos b) {
     if (building == null) return null;
@@ -211,7 +246,8 @@ ElectricalPlanData buildElectricalPlanData({
   final risers = <ElectricalPlanRiser>[];
   final offSheetFeeders = <String>[];
   final unplacedPanels = <String>[];
-  var unplacedLoads = 0;
+  var unplacedLoads = 0; // of boards homed on this sheet
+  var unhomedLoads = 0; // of boards with no placed board up their chain
 
   String tagOf(ElectricalPanel p) =>
       (p.tag != null && p.tag!.isNotEmpty) ? p.tag! : p.name;
@@ -268,9 +304,10 @@ ElectricalPlanData buildElectricalPlanData({
         kind: ElectricalPlanNodeKind.panel,
         essential: ess.contains(p.id),
       ));
-    } else if (pos == null) {
+    } else if (pos == null && reportHere(p.id) != null) {
       unplacedPanels.add(tag);
     }
+    final loadsHere = reportHere(p.id);
 
     // Circuits: feeders route to a sub-panel; loads route to their loadPos.
     for (final c in p.circuits) {
@@ -325,15 +362,22 @@ ElectricalPlanData buildElectricalPlanData({
             essential: ess.contains(p.id) || c.lifeSafety,
           ));
         }
-      } else if (lp == null) {
-        unplacedLoads++;
+      } else if (lp == null && loadsHere != null) {
+        if (loadsHere) {
+          unplacedLoads++;
+        } else {
+          unhomedLoads++;
+        }
       }
     }
   }
 
   final unplaced = <String>[
     for (final name in unplacedPanels) 'Panel $name (belum ditempatkan)',
-    if (unplacedLoads > 0) '$unplacedLoads beban belum ditempatkan',
+    if (unplacedLoads > 0)
+      '$unplacedLoads beban belum ditempatkan (panel di lembar ini)',
+    if (unhomedLoads > 0)
+      '$unhomedLoads beban belum ditempatkan (panel tanpa lembar)',
     for (final f in offSheetFeeders) 'Feeder $f (lembar lain)',
   ];
 

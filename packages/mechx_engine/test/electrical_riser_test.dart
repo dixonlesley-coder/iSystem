@@ -644,9 +644,14 @@ void main() {
       // channel at sheetMaxX + 40 = 366 + 40 = 406, where the LP-1 -> LP-2
       // riser leg (y 23 .. 190) strikes through its glyph box [179.5, 186]. The
       // channel vertical is an obstacle (drawing-output residual), so the tag
-      // takes the first channel-column slot (406 + 10, 190 - 4) and gets a
-      // thin leader from its branch end on the channel (406, 190).
-      final mid = labels.where((l) => l.x == 416.0 && l.y == 186.0).toList();
+      // escapes to the annotation column right of the OUTERMOST lane and gets
+      // a thin leader from its branch end on the channel (406, 190).
+      // Round 46 (drawings-7-riser-subfeeders-on-parent-channel) — LP-1 is
+      // itself fed on the sheet, so its own feeder leaves 8 below its
+      // centre-line (190 + 8 = 198) and runs 23 .. 198, overlapping the MDP's
+      // run 190 .. 357: it takes its own lane 406 + 12 = 418 (never the MDP's
+      // riser line), and the escaped tag sits at (418 + 10, 190 - 4).
+      final mid = labels.where((l) => l.x == 428.0 && l.y == 186.0).toList();
       expect(mid, hasLength(1),
           reason: labels.map((l) => '${l.x},${l.y}').join(' '));
       expect(
@@ -654,9 +659,18 @@ void main() {
               ln.weight == SldWeight.thin &&
               ln.x1 == 406.0 &&
               ln.y1 == 190.0 &&
-              ln.x2 == 416.0 &&
+              ln.x2 == 428.0 &&
               ln.y2 == 186.0),
           isTrue);
+      // LP-1's outgoing riser rides lane 418 from its exit (198) up to the
+      // LP-2 branch (23); the MDP's stays on 406 (190 .. 357).
+      expect(
+          _feederLines(s).any((l) =>
+              l.x1 == 418.0 &&
+              l.x2 == 418.0 &&
+              {l.y1, l.y2}.containsAll({23.0, 198.0})),
+          isTrue);
+      expect(s.overlapCount, 0);
     });
   });
 }

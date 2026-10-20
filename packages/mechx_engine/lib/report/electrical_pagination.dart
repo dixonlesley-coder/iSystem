@@ -34,6 +34,12 @@ import 'electrical_pdf_export.dart'
 import 'electrical_sld_drawing.dart';
 import 'riser_pagination.dart' show paginatedRiserSheets;
 
+/// Round 46 (elec-props-12-riser-same-band-ancestor-chain-illegible) — the
+/// plot fit settles its scale to 1e-4 (relative), so a label grown to the
+/// [kMinPlotLabelPt] floor can land up to ~7e-4 pt short of it (6.9995 pt):
+/// that IS the floor, never a page to split further or flag.
+const double kRiserLegibleTolerancePt = kMinPlotLabelPt * 2e-4;
+
 /// The electrical riser as issuable PAGES, TOP floors first (see the library
 /// doc). `[whole]` when it already prints at [kMinPlotLabelPt].
 ///
@@ -65,12 +71,14 @@ List<SldSheet> paginatedElectricalRiserSheets({
 }) {
   double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
-  bool legible(SldSheet s) => minPt(s) >= kMinPlotLabelPt - 1e-9;
+  bool legible(SldSheet s) =>
+      minPt(s) >= kMinPlotLabelPt - kRiserLegibleTolerancePt;
   SldSheet build(({int lo, int hi})? r,
           {Set<String> hide = const {},
           Map<String, String> names = const {},
           Map<String, String> lengths = const {},
-          Map<int, String> notes = const {}}) =>
+          Map<int, String> notes = const {},
+          Map<String, String> fedFrom = const {}}) =>
       buildElectricalRiser(
           project: project,
           result: result,
@@ -80,7 +88,8 @@ List<SldSheet> paginatedElectricalRiserSheets({
           hidePanelIds: hide,
           typicalNames: names,
           typicalFeederLengths: lengths,
-          bandNotes: notes);
+          bandNotes: notes,
+          offPageFeedNotes: fedFrom);
   final levels = electricalRiserBandCount(project, result, building);
   List<SldSheet> floorPages(int a, int b,
           {Set<String> hide = const {},
@@ -112,8 +121,8 @@ List<SldSheet> paginatedElectricalRiserSheets({
   final hide = <String>{};
   final names = <String, String>{};
   final lengths = <String, String>{};
-  for (final g in electricalRiserTypicalGroups(project, result, building)
-      .values) {
+  for (final g
+      in electricalRiserTypicalGroups(project, result, building).values) {
     if (!bandIllegible(floorOf[g.first] ?? 0)) continue;
     hide.addAll(g.skip(1));
     names[g.first] =
@@ -156,23 +165,72 @@ List<SldSheet> paginatedElectricalRiserSheets({
     if (par != null) (childrenOf[par] ??= []).add(id);
   }
   String label(String id) => names[id] ?? nameOf[id] ?? id;
-  Set<String> ancestorsOf(Iterable<String> ids) {
-    final out = <String>{};
-    for (final id in ids) {
-      for (var p = parentOfId[id]; p != null && out.add(p);
-          p = parentOfId[p]) {}
-    }
-    return out;
-  }
 
-  // Everything a page drawing [members] hides.
-  Set<String> pageHide(Set<String> members) {
-    final keep = {...members, ...ancestorsOf(members)};
-    return {
-      ...hide,
-      for (final id in allIds)
-        if (!keep.contains(id)) id,
+  // What a page printing bands [lo]..[hi] and drawing [members] keeps,
+  // hides and notes (one rule for the column pages, the split decision and
+  // the rest pages, so the geometry a page is judged on IS the issued one).
+  //
+  // Round 46 — kept: the members; every DRAWN board's direct children on a
+  // band off the page (elec-props-12-riser-column-page-drops-offband-
+  // feeders — placed off the page, so the drawn board's own outgoing feeder
+  // is cut at the page edge with its 'LANJUT KE <floor>' stub instead of
+  // vanishing); each member's FIRST ancestor off the page (its incoming leg
+  // ends in its stub; nothing above it can print here); and, on a column
+  // page, only the NEAREST same-band ancestor of a member
+  // (elec-props-12-riser-same-band-ancestor-chain-illegible): a higher
+  // same-band link is hidden and the drawn one names it in the gutter
+  // ('DARI (lembar lain): <parent> > <board>') with an incoming leg stub, so
+  // a deep sub-main chain on one storey no longer prints every link side by
+  // side. Every other board — the other bands' boards, the pass-through
+  // risers between them (elec-props-12-riser-rest-page-inherits-other-band-
+  // width) — is hidden.
+  ({Set<String> hide, Map<String, String> fedFrom}) pagePlan(
+      int lo, int hi, Set<String> members) {
+    bool onPage(String id) {
+      final f = floorOf[id] ?? 0;
+      return f >= lo && f <= hi;
+    }
+
+    final keep = <String>{...members};
+    for (final m in members) {
+      var sameBandDrawn = false;
+      for (var p = parentOfId[m];
+          p != null && !members.contains(p);
+          p = parentOfId[p]) {
+        if (!onPage(p)) {
+          keep.add(p); // cropped off the page: the leg ends in its stub
+          break;
+        }
+        if (sameBandDrawn) break; // a higher same-band link: off the page
+        sameBandDrawn = true;
+        keep.add(p);
+      }
+    }
+    // Every DRAWN board's children on other bands (placed off the page).
+    for (final d in [...keep]) {
+      if (!onPage(d)) continue;
+      for (final k in childrenOf[d] ?? const <String>[]) {
+        if (!onPage(k)) keep.add(k);
+      }
+    }
+    // A drawn board whose feeding board sits on the page but is not drawn
+    // names it (the walk stopped there).
+    final fedFrom = <String, String>{
+      for (final id in keep)
+        if (onPage(id) &&
+            parentOfId[id] != null &&
+            !keep.contains(parentOfId[id]) &&
+            onPage(parentOfId[id]!))
+          id: label(parentOfId[id]!),
     };
+    return (
+      hide: {
+        ...hide,
+        for (final id in allIds)
+          if (!keep.contains(id)) id,
+      },
+      fedFrom: fedFrom,
+    );
   }
 
   // A unit rooted at [root] on band [f]: the root + its same-band descendants.
@@ -187,13 +245,53 @@ List<SldSheet> paginatedElectricalRiserSheets({
     return out;
   }
 
-  SldSheet pageFor(int f, Set<String> members,
-          {Map<int, String> notes = const {}}) =>
-      build((lo: f, hi: f),
-          hide: pageHide(members),
-          names: names,
-          lengths: lengths,
-          notes: notes);
+  // The gutter note of a column page: PER PARENT, its boards on this storey
+  // drawn on the other sheets (never a range spanning other parents).
+  // Round 45 r2 — a parent is any board feeding a unit ROOT of the page
+  // (its parent off the page's members). Round 46 — and every board DRAWN on
+  // the page: a refined sub-main drawn here whose same-storey child is drawn
+  // only on another sheet names it, so no drawn board loses a feeder
+  // silently. A function of the page alone, so the split decision and the
+  // issued page are judged on the SAME sheet (notes included).
+  String? noteFor(int f, Set<String> members, Set<String> hidden) {
+    final keep = <String>{
+      for (final id in allIds)
+        if (!hidden.contains(id)) id,
+    };
+    final parents = <String>{
+      for (final id in allIds)
+        if (members.contains(id) &&
+            parentOfId[id] != null &&
+            !members.contains(parentOfId[id]))
+          parentOfId[id]!,
+      for (final id in allIds)
+        if (keep.contains(id) && floorOf[id] == f) id,
+    };
+    final parts = <String>[];
+    for (final par in parents) {
+      final others = [
+        for (final k in childrenOf[par] ?? const <String>[])
+          if (floorOf[k] == f && !keep.contains(k)) k,
+      ];
+      if (others.isEmpty) continue;
+      parts.add(others.length == 1
+          ? label(others.first)
+          : '${label(others.first)}..${label(others.last)}');
+    }
+    return parts.isEmpty ? null : parts.join(', ');
+  }
+
+  SldSheet pageFor(int f, Set<String> members) {
+    final plan = pagePlan(f, f, members);
+    final note = noteFor(f, members, plan.hide);
+    return build((lo: f, hi: f),
+        hide: plan.hide,
+        names: names,
+        lengths: lengths,
+        notes: note == null ? const {} : {f: note},
+        fedFrom: plan.fedFrom);
+  }
+
   final legibleUnit = <String, bool>{};
   bool unitLegible(int f, List<String> u) =>
       legibleUnit['$f|${u.join(',')}'] ??= legible(pageFor(f, u.toSet()));
@@ -295,76 +393,48 @@ List<SldSheet> paginatedElectricalRiserSheets({
 
   SldSheet flagged(SldSheet p) {
     final pt = minPt(p);
-    return pt < kMinPlotLabelPt - 1e-9 ? p.withBelowMinLabelPt(pt) : p;
+    return pt < kMinPlotLabelPt - kRiserLegibleTolerancePt
+        ? p.withBelowMinLabelPt(pt)
+        : p;
   }
 
-  List<SldSheet> columnPages(int f) {
-    final chunks = chunksOf[f]!;
-    final out = <SldSheet>[];
-    for (final chunk in chunks) {
-      final mine = chunk.toSet();
-      // The gutter note names, PER PARENT of this chunk, its sibling boards
-      // drawn on the other sheets (never a range spanning other parents).
-      // Round 45 r2 — a parent is any board feeding a unit ROOT of the chunk
-      // (its parent off the chunk): an off-band board, or a refined root on
-      // this band riding every column page of its children.
-      final parts = <String>[];
-      final parents = <String?>{
-        for (final id in chunk)
-          if (parentOfId[id] == null || !mine.contains(parentOfId[id]))
-            parentOfId[id],
-      };
-      for (final par in parents) {
-        final others = [
-          for (final c in chunks)
-            if (!identical(c, chunk))
-              for (final id in c)
-                if (parentOfId[id] == par && !c.contains(par)) id,
-        ];
-        if (others.isEmpty) continue;
-        parts.add(others.length == 1
-            ? label(others.first)
-            : '${label(others.first)}..${label(others.last)}');
-      }
-      out.add(flagged(pageFor(f, mine,
-          notes: parts.isEmpty ? const {} : {f: parts.join(', ')})));
-    }
-    return out;
-  }
+  List<SldSheet> columnPages(int f) => [
+        for (final chunk in chunksOf[f]!) flagged(pageFor(f, chunk.toSet())),
+      ];
 
   // Round 45 r2 — a REFINED unit root (a sub-main on the same storey as the
   // boards it feeds) is in no chunk: it rides every column page of its
-  // children. The rest pages keep it (with every same-band ancestor of a
-  // first-chunk board) so its off-band parent still draws the feeder and its
-  // LANJUT stub, and the gutter note names every board of a wide band that is
+  // children. The gutter note names every board of a wide band that is
   // drawn only on the column pages (not just the boards beyond the first
   // chunk) — the parent's issued page never loses a board silently.
-  final keptOnRest = <String>{
-    ...firstChunkOf,
-    for (final m in firstChunkOf)
-      for (final id in ancestorsOf([m]))
-        if (floorOf[id] == floorOf[m]) id,
-  };
+  //
+  // Round 46 — a rest page draws the boards of ITS bands (wide bands are
+  // never in a rest run) through the same [pagePlan] as the column pages:
+  // their off-page children (a wide band's boards included) and first
+  // off-page ancestors are placed off the page for the LANJUT stubs, and
+  // every other board is hidden, so a rest page is exactly as wide as the
+  // band that was judged legible by itself.
   final restNotes = parentNotes({
     for (final id in allIds)
       if (chunksOf.containsKey(floorOf[id]) && !firstChunkOf.contains(id)) id,
   });
-  // The rest pages keep each wide band's FIRST chunk (off the page, it only
-  // carries its parents' LANJUT stubs) and hide the other chunks.
-  final restHide = <String>{
-    ...hide,
-    for (final c in chunksOf.entries)
-      for (final chunk in c.value.skip(1)) ...chunk,
-    for (final id in allIds)
-      if (chunksOf.containsKey(floorOf[id]) && !keptOnRest.contains(id)) id,
-  };
   List<SldSheet> restPages(int a, int b) => paginatedRiserSheets(
-        build: (r) => build(
-            r == null ? (lo: a, hi: b) : (lo: a + r.lo, hi: a + r.hi),
-            hide: restHide,
-            names: names,
-            lengths: lengths,
-            notes: restNotes),
+        build: (r) {
+          final range =
+              r == null ? (lo: a, hi: b) : (lo: a + r.lo, hi: a + r.hi);
+          final plan = pagePlan(range.lo, range.hi, {
+            for (final id in allIds)
+              if ((floorOf[id] ?? 0) >= range.lo &&
+                  (floorOf[id] ?? 0) <= range.hi)
+                id,
+          });
+          return build(range,
+              hide: plan.hide,
+              names: names,
+              lengths: lengths,
+              notes: restNotes,
+              fedFrom: plan.fedFrom);
+        },
         levelCount: b - a + 1,
         chrome: chrome,
         projectName: projectName,
@@ -452,8 +522,7 @@ List<SldSheet> paginatedElectricalOverviewSheets({
           ];
     if (minPt(whole) >= kMinPlotLabelPt - 1e-9) return [whole];
     final splittable = roots.any(hasGrandchildren);
-    final directCount =
-        roots.fold<int>(0, (n, r) => n + kidsOf(r).length);
+    final directCount = roots.fold<int>(0, (n, r) => n + kidsOf(r).length);
     if (!splittable && directCount < 2) return [whole];
     final top = splittable
         ? buildElectricalOverview(
