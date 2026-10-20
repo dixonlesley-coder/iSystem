@@ -405,9 +405,11 @@ void main() {
     });
 
     test('an Icu-short feeder carries the error alone — no contradictory '
-        '"100 % Ics" advice (2500 kVA ⇒ 90.2 kA > the 70 kA MCCB top)', () {
+        '"100 % Ics" advice (4500 kVA ⇒ 162.4 kA > the 150 kA MCCB top)', () {
+      // Re-derived Round 42 — the MCCB ladder tops at 150 kA:
+      // 4 500 000 / (√3 · 400 · 0.04) = 162 380 A.
       final project = ElectricalProject(
-        transformerKva: ApparentPower.kilovoltAmperes(2500),
+        transformerKva: ApparentPower.kilovoltAmperes(4500),
         panels: [
           const ElectricalPanel(id: 'mdp', name: 'MDP', circuits: [
             ElectricalCircuit(
@@ -428,7 +430,7 @@ void main() {
         ],
       );
       final origin = estimatedServiceFaultLevelA(project)!;
-      expect(origin.amperes / 1000, closeTo(90.2, 0.1));
+      expect(origin.amperes / 1000, closeTo(162.4, 0.1));
       final sys = computeSystem(_p, project, originFaultLevel: origin);
       final fs = faultStudy(sys, project, _p, originFaultLevel: origin);
       final ws = fs.warnings.where((w) => w.circuitId == 'f').toList();

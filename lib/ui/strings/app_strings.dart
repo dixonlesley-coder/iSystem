@@ -1064,6 +1064,8 @@ enum StringKey {
   /// Round 40 — refusal: an MEP-derived way's machine power / life-safety
   /// duty follows the drawn equipment.
   mepDerivedWayMachineLocked,
+  /// Round 42 — refusal: a star-delta starter on a single-phase way.
+  starDeltaNeedsThreePhase,
   /// Round 40 — inspector caption under an MEP-derived way's greyed power.
   electricalFromDrawnMachine,
   mepBoardLocked,
@@ -2585,6 +2587,8 @@ const Map<StringKey, String> _en = {
       'This load sits at its equipment on the plan — move the equipment there to move it',
   StringKey.mepDerivedWayMachineLocked:
       'This way\'s power and life-safety duty follow the drawn machine — change the equipment on the plan',
+  StringKey.starDeltaNeedsThreePhase:
+      'Star-delta needs a three-phase motor — this way is single-phase; use DOL or a soft starter',
   StringKey.electricalFromDrawnMachine:
       'From the drawn machine — change the equipment on the plan',
   StringKey.mepBoardLocked:
@@ -4165,6 +4169,8 @@ const Map<StringKey, String> _id = {
       'Beban ini berada di peralatannya pada denah — pindahkan peralatannya di sana untuk memindahkannya',
   StringKey.mepDerivedWayMachineLocked:
       'Daya dan fungsi keselamatan jalur ini mengikuti mesin di denah — ubah peralatannya di denah',
+  StringKey.starDeltaNeedsThreePhase:
+      'Bintang-segitiga memerlukan motor tiga fasa — jalur ini satu fasa; gunakan DOL atau soft starter',
   StringKey.electricalFromDrawnMachine:
       'Dari mesin di denah — ubah peralatannya di denah',
   StringKey.mepBoardLocked:
@@ -4523,6 +4529,19 @@ const Map<String, (String, String)> _electricalWarningTitles = {
   'outgoing-exceeds-incomer': (
     'Outgoing way above its incomer',
     'Pemutus keluar melebihi incomer'
+  ),
+  // Round 42.
+  'service-cable-ampacity-inadequate': (
+    'Service cable ampacity inadequate',
+    'KHA kabel layanan tidak memadai'
+  ),
+  'star-delta-single-phase': (
+    'Star-delta starter on a single-phase motor',
+    'Starter bintang-segitiga pada motor satu fasa'
+  ),
+  'breaker-override-nonstandard': (
+    'Non-standard breaker rating',
+    'Rating pemutus tidak standar'
   ),
 };
 

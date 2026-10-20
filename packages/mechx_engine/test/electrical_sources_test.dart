@@ -52,28 +52,30 @@ void main() {
 
   group('assessGensetStart (motor-start voltage dip)', () {
     test('one 30 kW DOL motor on a 150 kVA genset is acceptable', () {
-      // running kVA = 30/0.8 = 37.5; DOL ×6 → startKva = 225.
-      // z = 225·0.15 = 33.75; dip = 100·33.75/(150+33.75)
-      //   = 100·33.75/183.75 = 18.367... → 18.37%. ≤ 25% → acceptable.
+      // Re-derived Round 42 — ONE starting table (control/starting.dart):
+      // running kVA = 30/0.8 = 37.5; DOL ×6.5 → startKva = 243.75.
+      // z = 243.75·0.15 = 36.5625; dip = 100·36.5625/(150+36.5625)
+      //   = 3656.25/186.5625 = 19.598... → 19.60%. ≤ 25% → acceptable.
       final r = assessGensetStart(
         ApparentPower.kilovoltAmperes(150),
         motors: const [GensetMotor(name: 'P-1', shaftPower: Power(30000))],
       );
-      expect(r.startingKva.inKilovoltAmperes, closeTo(225, 1e-6));
-      expect(r.estimatedDipPct, closeTo(18.37, 0.01));
+      expect(r.startingKva.inKilovoltAmperes, closeTo(243.75, 1e-6));
+      expect(r.estimatedDipPct, closeTo(19.60, 0.01));
       expect(r.acceptable, isTrue);
     });
 
     test('the same motor on a 65 kVA genset exceeds the 25% limit', () {
-      // z = 33.75; dip = 100·33.75/(65+33.75) = 3375/98.75 = 34.18%. > 25%.
-      // recommendedMin = z·(100−25)/25 = 33.75·3 = 101.25 kVA.
+      // z = 36.5625; dip = 100·36.5625/(65+36.5625) = 3656.25/101.5625
+      //   = 36.0%. > 25%.
+      // recommendedMin = z·(100−25)/25 = 36.5625·3 = 109.6875 → 109.69 kVA.
       final r = assessGensetStart(
         ApparentPower.kilovoltAmperes(65),
         motors: const [GensetMotor(name: 'P-1', shaftPower: Power(30000))],
       );
-      expect(r.estimatedDipPct, closeTo(34.18, 0.01));
+      expect(r.estimatedDipPct, closeTo(36.0, 0.01));
       expect(r.acceptable, isFalse);
-      expect(r.recommendedMinGensetKva.inKilovoltAmperes, closeTo(101.25, 0.01));
+      expect(r.recommendedMinGensetKva.inKilovoltAmperes, closeTo(109.69, 0.01));
     });
 
     test('no motors → trivially acceptable, zero dip', () {
@@ -84,9 +86,9 @@ void main() {
     });
 
     test('the LARGEST starting motor limits (star-delta vs DOL)', () {
-      // 30 kW DOL: startKva = 37.5·6 = 225.
-      // 45 kW star-delta (×2): startKva = (45/0.8)·2 = 56.25·2 = 112.5.
-      // The 30 kW DOL motor wins (225 > 112.5) — reduced-inrush starter helps.
+      // 30 kW DOL: startKva = 37.5·6.5 = 243.75.
+      // 45 kW star-delta (×2.2): startKva = (45/0.8)·2.2 = 56.25·2.2 = 123.75.
+      // The 30 kW DOL motor wins (243.75 > 123.75).
       final r = assessGensetStart(
         ApparentPower.kilovoltAmperes(200),
         motors: const [
@@ -96,7 +98,7 @@ void main() {
         ],
       );
       expect(r.limitingMotorName, 'DOL-30');
-      expect(r.startingKva.inKilovoltAmperes, closeTo(225, 1e-6));
+      expect(r.startingKva.inKilovoltAmperes, closeTo(243.75, 1e-6));
     });
   });
 

@@ -359,13 +359,21 @@ void main() {
       expect(lead, hasLength(1));
       expect(lead.single.qty, 2 * 55);
       expect(lead.single.runs, 2);
-      // The supply cable line is unchanged (55 m of the line cable).
-      expect(
-          bom.lines.any((l) =>
+      // Re-derived Round 42 — the starter sits in the board: the supply
+      // cable is the INTERNAL breaker -> starter link, taken off at
+      // kStarDeltaInternalWiringM (2 m), never a second 55 m field run.
+      final cables = bom.lines
+          .where((l) =>
               l.category == PartCategory.cable &&
-              !l.description.contains('motor leads') &&
-              l.qty == 55),
-          isTrue);
+              !l.description.contains('motor leads'))
+          .toList();
+      // The chiller's supply (internal) + the DOL pump's 30 m field run.
+      expect(cables, hasLength(2));
+      final supply =
+          cables.where((l) => l.description.contains('internal')).toList();
+      expect(supply, hasLength(1));
+      expect(supply.single.qty, kStarDeltaInternalWiringM);
+      expect(cables.where((l) => l.qty == 55), isEmpty);
     });
 
     test('the schedule PENGHANTAR prints the leads token', () {

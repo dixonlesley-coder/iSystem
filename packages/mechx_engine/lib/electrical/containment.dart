@@ -19,7 +19,7 @@ library;
 import 'dart:math' as math;
 
 import 'load_kind.dart' show LoadKind;
-import 'panel_results.dart' show ElectricalPanelResult;
+import 'panel_results.dart' show ElectricalCircuitResult, ElectricalPanelResult;
 
 // ---------------------------------------------------------------------------
 // Local standards constants (kept local to stay file-disjoint; folding into
@@ -232,6 +232,22 @@ ConduitSpec sizeConduit(double csaMm2, int cores) {
   );
 }
 
+/// Round 42 (regression-star-delta-supply-cable-and-leads-both-bought-full-
+/// length) — the cables a way lays in the FIELD (board → load): its own
+/// cable × parallel runs, except a STAR-DELTA way, whose starter sits in the
+/// board — its field run is the two motor-lead cables (4-core incl. PE, ×
+/// the lead's parallel runs); the supply cable is internal board wiring.
+({double csaMm2, int cores, int count}) fieldCablesOf(
+    ElectricalCircuitResult c) {
+  final leads = c.motorLeads;
+  if (leads != null) {
+    final runs = (leads.runsPerPhase ?? 1) > 1 ? leads.runsPerPhase! : 1;
+    return (csaMm2: leads.csaMm2, cores: 4, count: 2 * runs);
+  }
+  final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
+  return (csaMm2: c.cable.csaMm2, cores: c.grounding.cores, count: runs);
+}
+
 /// Smallest standard tray holding the panel's outgoing cables side-by-side in a
 /// single layer (required width = Σ(cable OD) × [trayPackingFactor]). When the
 /// cables exceed the widest standard tray, the widest is returned with its
@@ -245,11 +261,11 @@ CableTraySpec sizeCableTray(ElectricalPanelResult panel) {
   for (final c in panel.circuits) {
     // Round 39 — a SPARE way pulls no cable (the BOM buys none).
     if (c.loadKind == LoadKind.spare) continue;
-    final od = cableOuterDiameterMm(c.cable.csaMm2, c.grounding.cores);
+    final f = fieldCablesOf(c);
+    final od = cableOuterDiameterMm(f.csaMm2, f.cores);
     if (od <= 0) continue;
     // A feeder sized as N parallel runs lays N cables on the tray, not one.
-    final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
-    for (var i = 0; i < runs; i++) {
+    for (var i = 0; i < f.count; i++) {
       ods.add(od);
     }
   }
@@ -282,12 +298,12 @@ ContainmentResult containmentFor(ElectricalPanelResult panel) {
     // Round 39 (elec-props-5) — a SPARE (CADANGAN) way pulls no cable even
     // though it is sized like a placeholder: no conduit (the BOM buys none).
     if (c.loadKind == LoadKind.spare) continue;
-    final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
+    final f = fieldCablesOf(c);
     conduits.add(CircuitConduit(
       circuitId: c.circuitId,
       name: c.name,
-      conduit: sizeConduit(c.cable.csaMm2, c.grounding.cores),
-      count: runs,
+      conduit: sizeConduit(f.csaMm2, f.cores),
+      count: f.count,
     ));
   }
   return ContainmentResult(

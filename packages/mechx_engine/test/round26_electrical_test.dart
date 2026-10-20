@@ -187,13 +187,15 @@ void main() {
           ],
         );
 
-    test('a 1600 kVA service (57.74 kA) flags the MCCB incomer and the MCCB '
+    test('a 3500 kVA service (126.3 kA) flags the MCCB incomer and the MCCB '
         'chiller way', () {
-      // Transformer-limited LV fault: S / (√3 · 400 · 0.04)
-      //   = 1 600 000 / 27.713 = 57 735 A. A 70 kA MCCB has Ics = 0.75 x 70
-      //   = 52.5 kA < 57.74 kA (and no MCCB rung covers both) ⇒ shortfall.
-      final isc = 1600000 / (math.sqrt(3) * 400 * 0.04);
-      expect(isc, closeTo(57735, 1));
+      // Re-derived Round 42 — the MCCB Icu ladder runs on to 150 kA, so the
+      // shortfall needs a fault above the TOP rung's Ics. Transformer-limited
+      // LV fault: S / (√3 · 400 · 0.04) = 3 500 000 / 27.713 = 126 295 A.
+      // The 150 kA MCCB has Ics = 0.75 x 150 = 112.5 kA < 126.3 kA (and no
+      // MCCB rung covers both) ⇒ shortfall.
+      final isc = 3500000 / (math.sqrt(3) * 400 * 0.04);
+      expect(isc, closeTo(126295, 1));
       final pr = board();
       final sys = computeSystem(p, pr);
       final mdp = sys.panels['MDP']!;
@@ -209,7 +211,7 @@ void main() {
           hasLength(1),
           reason: 'incomer');
       expect(ics.where((w) => w.circuitId == 'chiller'), hasLength(1));
-      expect(ics.first.message, contains('52.5 kA'));
+      expect(ics.first.message, contains('112.5 kA'));
     });
 
     test('property: a device is flagged exactly when its Icu holds but its '

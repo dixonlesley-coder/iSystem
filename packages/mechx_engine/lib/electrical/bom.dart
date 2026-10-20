@@ -29,7 +29,8 @@ import 'fault.dart' show FaultStudyResult;
 import 'load_kind.dart' show LoadKind;
 import 'model.dart' show ElectricalSystemInfo;
 import 'panel_results.dart';
-import 'results.dart' show BreakerResult, BusbarResult, NeutralPeBars;
+import 'results.dart'
+    show BreakerResult, BusbarResult, NeutralPeBars, kStarDeltaInternalWiringM;
 
 // ── Accessory takeoff coverage (VERIFY — representative trade figures) ──────
 
@@ -588,6 +589,16 @@ List<BomLine> _panelLines(
           ? rawSpec.substring(runPrefix.length)
           : rawSpec;
       final runLengthM = c.lengthM > 0 ? c.lengthM.ceilToDouble() : 1.0;
+      // Round 42 (regression-star-delta-supply-cable-and-leads-both-bought-
+      // full-length) — a star-delta way's starter sits in the board: its
+      // supply cable is the INTERNAL breaker → starter link
+      // ([kStarDeltaInternalWiringM]) and the field run is the two motor
+      // leads below, at the way length. Never both at the way length.
+      final starDelta = c.motorLeads != null;
+      final supplyLengthM = starDelta
+          ? kStarDeltaInternalWiringM.ceilToDouble()
+          : runLengthM;
+      final internalNote = starDelta ? ' (internal, breaker to starter)' : '';
       final cableSku =
           matchCableSku(c.cable.csaMm2, parts, cableType: c.grounding.cableType);
       final cablePart = cableSku == null ? null : partBySku[cableSku];
@@ -611,9 +622,9 @@ List<BomLine> _panelLines(
         final live = hasPe ? math.max(1, cores - 1) : cores;
         final liveSku = singleCoreSku(cableSku);
         lines.add(BomLine(
-          description: 'Cable $spec ($live × 1C) — ${c.name}',
+          description: 'Cable $spec ($live × 1C)$internalNote — ${c.name}',
           location: c.name,
-          qty: runLengthM * runs * live,
+          qty: supplyLengthM * runs * live,
           category: PartCategory.cable,
           sku: liveSku,
           runs: runs,
@@ -624,9 +635,9 @@ List<BomLine> _panelLines(
               matchCableSku(c.grounding.peCsaMm2, parts, cableType: family));
           lines.add(BomLine(
             description: 'Cable $family 1×'
-                '${_fmt(c.grounding.peCsaMm2)} mm² PE — ${c.name}',
+                '${_fmt(c.grounding.peCsaMm2)} mm² PE$internalNote — ${c.name}',
                 location: c.name,
-            qty: runLengthM * runs,
+            qty: supplyLengthM * runs,
             category: PartCategory.cable,
             sku: peSku,
             runs: runs,
@@ -656,9 +667,9 @@ List<BomLine> _panelLines(
                     '${makeup.full}x${_fmt(c.cable.csaMm2)}${makeup.suffix}'
                 : '$cableSku:${makeup.full}C${makeup.suffix}';
         lines.add(BomLine(
-          description: 'Cable $spec — ${c.name}',
+          description: 'Cable $spec$internalNote — ${c.name}',
           location: c.name,
-          qty: runLengthM * runs,
+          qty: supplyLengthM * runs,
           category: PartCategory.cable,
           sku: cableSku,
           runs: runs,
@@ -672,33 +683,72 @@ List<BomLine> _panelLines(
       // Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-
       // leads) — a star-delta way's MOTOR LEADS: two 3-core (+PE) cables
       // from the starter to the motor's six terminals, each on Ib/√3, at the
-      // way length (starter in the board, `// VERIFY`). Taken off apart
-      // from the supply cable above.
+      // way length (Round 42: the FIELD run — the supply above is the short
+      // internal link).
+      //
+      // Round 42 (elec-props-8-single-core-star-delta-leads-bought-as-
+      // multicore) — a SINGLE-CORE family (NYA / NYAF) has no 4-core cable:
+      // each lead is 3 phase conductors + its PE, every one its own pull, so
+      // the takeoff is run × lead runs × 3 single cores plus run × lead runs
+      // of the PE core (the supply-cable single-core rule above).
       final leads = c.motorLeads;
       if (leads != null) {
         final leadRuns =
             2 * ((leads.runsPerPhase ?? 1) > 1 ? leads.runsPerPhase! : 1);
         final pe = c.motorLeadsPeCsaMm2 ?? leads.csaMm2;
-        final reduced = pe > 0 && (pe - leads.csaMm2).abs() > 1e-9;
-        final leadSpec = reduced
-            ? '$family 3×${_fmt(leads.csaMm2)} + ${_fmt(pe)} mm²'
-            : '$family 4×${_fmt(leads.csaMm2)} mm²';
-        final leadSku =
-            matchCableSku(leads.csaMm2, parts, cableType: family);
-        final suffix = reduced ? '3C+${_fmt(pe)}' : '4C';
-        lines.add(BomLine(
-          description: 'Cable $leadSpec motor leads (star-delta, '
-              '$leadRuns runs) — ${c.name}',
-          qty: runLengthM * leadRuns,
-          category: PartCategory.cable,
-          sku: leadSku,
-          runs: leadRuns,
-          priceKey: leadSku == null
-              ? '${kElecPriceKeyPrefix}cable:$family:'
-                  '${reduced ? '3x${_fmt(leads.csaMm2)}+${_fmt(pe)}' : '4x${_fmt(leads.csaMm2)}'}'
-              : '$leadSku:$suffix',
-          location: c.name,
-        ));
+        if (isSingleCoreCableFamily(family)) {
+          String? singleCoreSku(String? sku) =>
+              (sku != null && partBySku[sku]?.cores == 1) ? sku : null;
+          String singleCoreKey(double csa) =>
+              '${kElecPriceKeyPrefix}cable:$family:1x${_fmt(csa)}';
+          final liveSku = singleCoreSku(
+              matchCableSku(leads.csaMm2, parts, cableType: family));
+          lines.add(BomLine(
+            description: 'Cable $family 1×${_fmt(leads.csaMm2)} mm² '
+                'motor leads (star-delta, $leadRuns runs × 3 × 1C) — ${c.name}',
+            qty: runLengthM * leadRuns * 3,
+            category: PartCategory.cable,
+            sku: liveSku,
+            runs: leadRuns,
+            priceKey: liveSku ?? singleCoreKey(leads.csaMm2),
+            location: c.name,
+          ));
+          if (pe > 0) {
+            final peSku =
+                singleCoreSku(matchCableSku(pe, parts, cableType: family));
+            lines.add(BomLine(
+              description: 'Cable $family 1×${_fmt(pe)} mm² PE motor leads '
+                  '(star-delta, $leadRuns runs) — ${c.name}',
+              qty: runLengthM * leadRuns,
+              category: PartCategory.cable,
+              sku: peSku,
+              runs: leadRuns,
+              priceKey: peSku ?? singleCoreKey(pe),
+              location: c.name,
+            ));
+          }
+        } else {
+          final reduced = pe > 0 && (pe - leads.csaMm2).abs() > 1e-9;
+          final leadSpec = reduced
+              ? '$family 3×${_fmt(leads.csaMm2)} + ${_fmt(pe)} mm²'
+              : '$family 4×${_fmt(leads.csaMm2)} mm²';
+          final leadSku =
+              matchCableSku(leads.csaMm2, parts, cableType: family);
+          final suffix = reduced ? '3C+${_fmt(pe)}' : '4C';
+          lines.add(BomLine(
+            description: 'Cable $leadSpec motor leads (star-delta, '
+                '$leadRuns runs) — ${c.name}',
+            qty: runLengthM * leadRuns,
+            category: PartCategory.cable,
+            sku: leadSku,
+            runs: leadRuns,
+            priceKey: leadSku == null
+                ? '${kElecPriceKeyPrefix}cable:$family:'
+                    '${reduced ? '3x${_fmt(leads.csaMm2)}+${_fmt(pe)}' : '4x${_fmt(leads.csaMm2)}'}'
+                : '$leadSku:$suffix',
+            location: c.name,
+          ));
+        }
       }
 
       // ── Wiring accessories (estimate) ──────────────────────────────────────

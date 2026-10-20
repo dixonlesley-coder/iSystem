@@ -276,9 +276,9 @@ List<BomLine> containmentBomLines(
       final fits = cc.conduit.fillPct <= conduitFillSingle * 100;
       if (fits) {
         final mm = cc.conduit.conduitSizeMm.round();
-        final runs =
-            (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
-        conduitM[mm] = (conduitM[mm] ?? 0) + c.lengthM * runs;
+        // One conduit per FIELD cable — the study's count (a star-delta
+        // way's two lead runs, Round 42; else the way's parallel runs).
+        conduitM[mm] = (conduitM[mm] ?? 0) + c.lengthM * cc.count;
       } else {
         final w = study.tray.widthMm.round();
         trayM[w] = (trayM[w] ?? 0) + c.lengthM;

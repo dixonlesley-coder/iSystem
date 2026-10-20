@@ -616,6 +616,13 @@ const List<String> _baseVerifyItems = [
       'against the chosen manufacturer catalogue (secondarySource).',
 ];
 
+/// Round 42 (elec-props-8-star-delta-on-single-phase-way) — the starter the
+/// gear, the schedule token and the dip screen actually use: a star-delta
+/// starter is meaningless on a SINGLE-PHASE way (no six winding terminals),
+/// so it degrades to direct-on-line there; every other starter is kept.
+StarterType effectiveStarterType(StarterType t, bool threePhase) =>
+    (t == StarterType.starDelta && !threePhase) ? StarterType.dol : t;
+
 /// Interpret a starter template for a motor circuit and produce its full control
 /// assembly. Pure and fully unit-testable.
 ///
@@ -629,6 +636,8 @@ const List<String> _baseVerifyItems = [
 ///   rating does; an overload set at 5 A would trip on every start.
 /// - [duty] (`jogging` = AC-4) enlarges the contactor frame and the trip class.
 /// - [variableTorque] (pump/fan) refines the VFD starting note.
+/// - [flcA] (Round 42) — the way's solved running current (the schedule's
+///   Ib); the gear basis is the larger of it and the table FLC.
 /// - [fireDuty] (Round 41) — a life-safety motor (fire pump, jockey, smoke
 ///   fan): every overload slot becomes an ALARM-ONLY relay (role
 ///   `overload-alarm`, [ControlDevice.tripDisabled]) — NFPA 20: a fire pump
@@ -644,14 +653,31 @@ ControlAssembly applyStarterTemplate({
   bool variableTorque = false,
   bool singlePhase = false,
   bool fireDuty = false,
+  Current? flcA,
 }) {
-  final flc = Current(_round(
-      (singlePhase ? motorFlc1ph(motorKw, voltage) : motorFlc(motorKw, voltage))
-          .amperes,
-      1));
+  // Round 42 (elec-props-8-control-gear-flc-basis-below-schedule-ib) — an
+  // explicit [flcA] (the way's SOLVED running current, the Ib the board
+  // schedule prints) floors the gear's basis: no contactor or overload is
+  // ever sized below the current the schedule says the machine draws. The
+  // nameplate-typical table still floors it from the other side (Round 29:
+  // a small motor's real FLC — low η·cosφ — is ABOVE the 0.88 × cos φ
+  // estimate; an overload set below it trips at load). Basis = the larger.
+  final tableFlc = (singlePhase
+          ? motorFlc1ph(motorKw, voltage)
+          : motorFlc(motorKw, voltage))
+      .amperes;
+  final explicitFlc = flcA != null && flcA.amperes > tableFlc;
+  final flc = Current(_round(explicitFlc ? flcA.amperes : tableFlc, 1));
   final template = starterTemplates[starterType];
   final warnings = <String>[];
   final verifyItems = <String>[..._baseVerifyItems];
+  // Round 42 (elec-props-8-motor-flc-clamps-above-250kw) — a table FLC above
+  // the largest tabulated frame is extrapolated ∝ kW: say so.
+  if (!explicitFlc && !singlePhase && motorFlcAboveTable(motorKw)) {
+    warnings.add('Motor FLC for ${_num(motorKw)} kW is extrapolated above '
+        'the ${_num(kMotorFlcTableTopKw)} kW IEC table (${_num(flc.amperes)} '
+        'A) — confirm the gear against the motor nameplate.');
+  }
   final starting = startingAnalysis(
     flc,
     starterType,

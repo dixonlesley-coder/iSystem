@@ -52,6 +52,7 @@ import 'model.dart'
 import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
         ElectricalWarning, WarningSeverity;
+import 'results.dart' show kStarDeltaInternalWiringM;
 import 'supply_design.dart'
     show
         declaredServiceTransformer,
@@ -238,7 +239,11 @@ const Map<BreakerCurve, double> curveTripMultiple = {
 // 400 V on the datasheet).
 const Map<BreakerClass, List<double>> breakingCapacityKa = {
   BreakerClass.mcb: [6, 10, 15, 25],
-  BreakerClass.mccb: [16, 25, 36, 50, 70],
+  // Round 42 (electrical-sim-7-mccb-icu-ladder-tops-at-70ka) — the IEC
+  // 60947-2 high-performance frames (L / V, 100 / 150 kA) exist: a 2000 kVA
+  // LVMDP (~72 kA) must have an achievable outgoing MCCB. // VERIFY
+  // (notAnSniClause).
+  BreakerClass.mccb: [16, 25, 36, 50, 70, 100, 150],
   // Round 23 — ACB frames (IEC 60947-2 Icu, general practice, // VERIFY).
   BreakerClass.acb: [50, 65, 80, 100],
 };
@@ -278,7 +283,7 @@ const List<String> faultStudyVerifyItems = [
   'source X/R ratio (7) for the earth-fault loop split',
   'ADS voltage factor (0.95) and fault-temperature factor (1.28)',
   'MCB curve trip multiples (B 5× / C 10× / D 20×)',
-  'breaker breaking-capacity ladders (MCB 6–25 kA / MCCB 16–70 kA)',
+  'breaker breaking-capacity ladders (MCB 6–25 kA / MCCB 16–150 kA)',
   'selectivity discrimination ratios (partial 1.6× / total 2.5×) — a simplified '
       'time-current zone model, not manufacturer let-through / selectivity tables',
   'Ics vs Icu service/ultimate breaking-capacity check (IEC 60947-2)',
@@ -1160,15 +1165,47 @@ FaultStudyResult faultStudy(
         // Zs on the run the cable + Vd were sized on (geo-derived when placed),
         // never the stale manual length.
         final lengthM = solvedRunLengthM(c, cModel);
-        final phaseZ0 =
-            conductorImpedance(profile, c.cable.csaMm2, lengthM, panelModel.material);
-        final peZ0 = conductorImpedance(
-            profile, c.grounding.peCsaMm2, lengthM, panelModel.material);
-        // Fault-temperature R, parallel runs each carry their own PE.
-        final phaseZ = Impedance(
-            phaseZ0.rOhm * zsFaultTempFactor / runs, phaseZ0.xOhm / runs);
-        final peZ =
-            Impedance(peZ0.rOhm * zsFaultTempFactor / runs, peZ0.xOhm / runs);
+        // Round 42 — a STAR-DELTA way's field run is its two motor-lead
+        // cables (the starter in the board, [kStarDeltaInternalWiringM] of
+        // internal supply link): in run (delta) each line feeds TWO winding
+        // conductors, one in each lead cable, so the loop sees the lead
+        // section on 2 × lead runs in parallel (each lead with its PE), plus
+        // the short internal link on the supply section.
+        final leads = c.motorLeads;
+        final Impedance phaseZ;
+        final Impedance peZ;
+        if (leads == null) {
+          final phaseZ0 = conductorImpedance(
+              profile, c.cable.csaMm2, lengthM, panelModel.material);
+          final peZ0 = conductorImpedance(
+              profile, c.grounding.peCsaMm2, lengthM, panelModel.material);
+          // Fault-temperature R, parallel runs each carry their own PE.
+          phaseZ = Impedance(
+              phaseZ0.rOhm * zsFaultTempFactor / runs, phaseZ0.xOhm / runs);
+          peZ = Impedance(
+              peZ0.rOhm * zsFaultTempFactor / runs, peZ0.xOhm / runs);
+        } else {
+          final leadPaths = 2 * ((leads.runsPerPhase ?? 1) > 1
+              ? leads.runsPerPhase!
+              : 1);
+          final leadPe = c.motorLeadsPeCsaMm2 ?? leads.csaMm2;
+          final lPh = conductorImpedance(
+              profile, leads.csaMm2, lengthM, panelModel.material);
+          final lPe =
+              conductorImpedance(profile, leadPe, lengthM, panelModel.material);
+          final iPh = conductorImpedance(profile, c.cable.csaMm2,
+              kStarDeltaInternalWiringM, panelModel.material);
+          final iPe = conductorImpedance(profile, c.grounding.peCsaMm2,
+              kStarDeltaInternalWiringM, panelModel.material);
+          phaseZ = Impedance(
+              lPh.rOhm * zsFaultTempFactor / leadPaths +
+                  iPh.rOhm * zsFaultTempFactor / runs,
+              lPh.xOhm / leadPaths + iPh.xOhm / runs);
+          peZ = Impedance(
+              lPe.rOhm * zsFaultTempFactor / leadPaths +
+                  iPe.rOhm * zsFaultTempFactor / runs,
+              lPe.xOhm / leadPaths + iPe.xOhm / runs);
+        }
         // Loop = hot source/feeder phase path + every upstream feeder's PE
         // return + this circuit's own phase + PE (elec-advanced-2).
         final loop = sourceZHot + peReturnZ + phaseZ + peZ;

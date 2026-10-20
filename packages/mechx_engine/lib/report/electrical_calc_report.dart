@@ -774,6 +774,12 @@ String _reportCableCell(ElectricalCircuitResult c, ElectricalCircuit? model) {
     final single = '${_n(c.cable.csaMm2)} mm²';
     return runs > 1 ? '$runs x ($single)' : single;
   }
+  // Round 42 — a star-delta way's field run is its two motor leads (the
+  // schedule's PENGHANTAR cell).
+  final leads = c.motorLeads;
+  if (leads != null) {
+    return 'leads ${cableRunLabel(model, leads.csaMm2, true, cores: 4, runs: 2 * (leads.runsPerPhase ?? 1), peCsaMm2: c.motorLeadsPeCsaMm2)}';
+  }
   return cableRunLabel(model, c.cable.csaMm2, c.threePhase,
       cores: c.grounding.cores,
       runs: c.cable.runsPerPhase,
