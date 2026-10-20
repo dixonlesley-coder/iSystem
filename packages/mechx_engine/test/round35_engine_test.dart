@@ -290,6 +290,10 @@ void main() {
               generator: GeneratorSource(kva: ApparentPower(20000))));
       final w = gensetBackupWarnings(p, computeSystem(_p, p));
       expect(w.map((x) => x.code), contains('genset-phase-overload'));
+      // The printed per-phase rating uses the SUPPLY's own system (3φ here):
+      // 20 000 / (√3·400) = 28.87 A ⇒ '28.9 A' (never a hard-coded 3φ).
+      final msg = w.firstWhere((x) => x.code == 'genset-phase-overload').message;
+      expect(msg, contains('28.9 A'));
     });
   });
 }

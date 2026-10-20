@@ -260,7 +260,7 @@ List<ElectricalWarning> gensetBackupWarnings(
         code: 'genset-phase-overload',
         severity: WarningSeverity.warning,
         message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate '
-            'is rated ${(lineCurrentForCapacityA(forced.voltAmperes, ElectricalSystem.threePhase, sys.supply.voltage.volts)).toStringAsFixed(1)} A '
+            'is rated ${(lineCurrentForCapacityA(forced.voltAmperes, sys.supply.system, sys.supply.voltage.volts)).toStringAsFixed(1)} A '
             'per phase, below the heaviest line of the boards it backs '
             '(needs ${kva(phaseVa)} kVA of per-phase rating) — the alternator '
             'overloads on that phase; raise the genset rating or rebalance the '
