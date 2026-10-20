@@ -107,7 +107,7 @@ void main() {
         'Panels sized',
         'BOM line items',
         'Stock pipes',
-        'Pipe required',
+        'Pipe required (runs)',
         'Offcut waste',
       ]) {
         expect(find.text(label), findsOneWidget, reason: 'missing tile "$label"');
@@ -119,7 +119,7 @@ void main() {
           'Panels sized',
           'BOM line items',
           'Stock pipes',
-          'Pipe required',
+          'Pipe required (runs)',
           'Offcut waste',
         ])
           tester.getTopLeft(find.text(label)).dy,
