@@ -29,6 +29,7 @@ import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
+import '../electrical/power_factor.dart' show installedCapacitorBanks;
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BreakerResult;
 import '../electrical/sources.dart'
@@ -755,7 +756,13 @@ SldSheet buildElectricalSld({
       final conduit = conduitMm != null
           ? ' · ${conduitCount}PVC ${conduitMm}mm'
           : ' · tray';
-      if (conduitMm != null) {
+      // Round 39 (elec-props-5) — a SPARE (CADANGAN) way has no load and no
+      // cable to pull (the BOM buys none): its PENGHANTAR cell is '-', like
+      // the headroom CADANGAN rows, and it contributes no conduit / tray.
+      final isSpareWay = c.loadKind == LoadKind.spare;
+      if (isSpareWay) {
+        // no route token
+      } else if (conduitMm != null) {
         anyConduit = true;
       } else {
         anyTray = true;
@@ -767,9 +774,10 @@ SldSheet buildElectricalSld({
       // `mm` conduit token.
       final length =
           c.lengthM > 0 ? ' · ${planLengthLabel(Length(c.lengthM))}' : '';
-      final cable =
-          '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
-          '$conduit$length';
+      final cable = isSpareWay
+          ? '-'
+          : '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
+              '$conduit$length';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       // Round 19 — a capacitor way's loadW is its REACTIVE rating, so it prints
       // in kvar, never as WATT.
@@ -1145,8 +1153,13 @@ SldSheet buildElectricalPanelDetail({
 /// Round 14 — a CAPACITOR BANK node is drawn on a source spine only when the
 /// project specifies a real bank (`capacitorBankKvar > 0`): a declared genset or
 /// solar array no longer implies one (honesty by construction).
-bool _hasCapacitorBank(ElectricalProject project) =>
-    (project.capacitorBankKvar ?? 0) > 0;
+/// Round 39 (elec-reports-parity-3) — the LV-bus bank is drawn only when it
+/// is the INSTALLED bank ([installedCapacitorBanks]): a capacitor way models
+/// the bank on its own board schedule instead (never both — the BOM buys one).
+bool _hasCapacitorBank(ElectricalProject project) {
+  final banks = installedCapacitorBanks(project);
+  return banks.length == 1 && banks.first.panelId == null;
+}
 
 SldSheet buildElectricalSourceSpine({
   required ElectricalProject project,

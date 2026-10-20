@@ -12,6 +12,7 @@ import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
 import 'package:mechx_engine/report/file_names.dart' show safeFileStem;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart'
     show SldDxfLayers, electricalSldToDxf;
@@ -379,6 +380,10 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
     // study's selectivity / breaking-capacity / withstand / TT findings). Read
     // from `electricalAllWarningsProvider`, never either source directly.
     allWarnings: ref.read(electricalAllWarningsProvider),
+    // Round 39 (elec-reports-parity-5) — every device's SPECIFIED breaking
+    // capacity, the same maps the board schedule + BOM receive.
+    incomerKaByPanelId: faultSpecifiedKa(eAdvanced.fault).incomers,
+    breakerKaByCircuitId: faultSpecifiedKa(eAdvanced.fault).breakers,
   );
 }
 

@@ -1313,8 +1313,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   static ElectricalCircuit _detargetedFeederCopy(ElectricalCircuit copy,
           {required bool wasFeeder}) =>
       wasFeeder
+          // Round 39 (regression-detargeted-feeder-copy-keeps-overrides) — the
+          // placeholder sizes like a palette spare: the feeder's breaker /
+          // cable / grouping / phase overrides, laying, cable family and
+          // starter belonged to the FED board's feed and must not survive
+          // (a 250 A override made a Spare way specified, bought and judged
+          // at 250 A).
           ? copy.copyWith(
-              name: 'Spare', loadKind: LoadKind.spare, loadW: 0)
+              name: 'Spare',
+              loadKind: LoadKind.spare,
+              loadW: 0,
+              clearBreakerOverrideA: true,
+              clearCableOverrideMm2: true,
+              clearGroupingCountOverride: true,
+              clearPhaseOverride: true,
+              clearLaying: true,
+              clearCableType: true,
+              clearStarterType: true,
+              clearMotorKw: true,
+            )
           : copy;
 
   void duplicateCircuit(String panelId, String circuitId) {
@@ -1395,6 +1412,50 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// (and motor kW, if any) sum onto the target; the target keeps its identity,
   /// cable type, phase and accessories. No-op when the two are the same, on
   /// different panels, missing, or either is a feeder (feeders aren't loads).
+  /// Round 39 (elec-ui-journeys-2-merge-drop-loses-load) — the way [src]
+  /// merged INTO [tgt], or null when the two cannot share one load basis
+  /// (the merge is then refused, never silently lossy):
+  ///   * a capacitor bank (its loadW is kvar) never merges in or out;
+  ///   * motor + motor (motor / pump kinds with a shaft kW) add their kW;
+  ///   * a motor source into a W-sized way adds its ELECTRICAL INPUT
+  ///     (kW × 1000 / [kAssumedMotorEfficiency]) to the target's W;
+  ///   * a W-sized source onto a motor way is refused (compute reads only the
+  ///     motor's kW there, so the watts would vanish);
+  ///   * a 3φ source onto a non-3φ way is refused.
+  /// The merged way is life-safety when either was. Pure.
+  static ElectricalCircuit? mergedLoadWay(
+      ElectricalCircuit src, ElectricalCircuit tgt) {
+    if (src.loadKind == LoadKind.capacitor ||
+        tgt.loadKind == LoadKind.capacitor) {
+      return null;
+    }
+    bool motorBasis(ElectricalCircuit c) =>
+        (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
+        c.motorKw != null;
+    if (src.phases == 3 && tgt.phases != 3) return null;
+    final srcMotor = motorBasis(src);
+    final tgtMotor = motorBasis(tgt);
+    final points = tgt.points + src.points; // chained outlet points add up
+    final lifeSafety = src.lifeSafety || tgt.lifeSafety;
+    if (srcMotor && tgtMotor) {
+      return tgt.copyWith(
+        loadW: tgt.loadW + src.loadW,
+        motorKw: tgt.motorKw! + src.motorKw!,
+        points: points,
+        lifeSafety: lifeSafety,
+      );
+    }
+    if (tgtMotor) return null;
+    final srcW = srcMotor
+        ? src.motorKw! * 1000 / kAssumedMotorEfficiency
+        : src.loadW;
+    return tgt.copyWith(
+      loadW: tgt.loadW + srcW,
+      points: points,
+      lifeSafety: lifeSafety,
+    );
+  }
+
   void mergeCircuit(String panelId, String sourceId, String targetId) {
     if (sourceId == targetId) return;
     ElectricalPanel? panel;
@@ -1418,14 +1479,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
     final src = source;
     final tgt = target;
-    final mergedMotorKw = (tgt.motorKw == null && src.motorKw == null)
-        ? null
-        : (tgt.motorKw ?? 0) + (src.motorKw ?? 0);
-    final merged = tgt.copyWith(
-      loadW: tgt.loadW + src.loadW,
-      points: tgt.points + src.points, // chained outlet points add up
-      motorKw: mergedMotorKw,
-    );
+    final merged = mergedLoadWay(src, tgt);
+    if (merged == null) {
+      _refuse(StringKey.mergeLoadBasisMismatch);
+      return;
+    }
     final panels = [
       for (final p in state.panels)
         if (p.id == panelId)

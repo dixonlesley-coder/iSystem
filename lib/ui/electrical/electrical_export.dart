@@ -18,6 +18,7 @@ import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart'
     show containmentByCircuitIdOf;
+import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
@@ -637,6 +638,9 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               // TT findings), so an error-severity finding can no longer be on
               // screen but missing from the panel builder's document.
               allWarnings: ref.read(electricalAllWarningsProvider),
+              // Round 39 (elec-reports-parity-5) — each device's specified kA.
+              incomerKaByPanelId: faultSpecifiedKa(advanced.fault).incomers,
+              breakerKaByCircuitId: faultSpecifiedKa(advanced.fault).breakers,
             ),
             reportStringsFor(ref));
         return _save(ref, md,

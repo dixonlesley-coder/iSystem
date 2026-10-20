@@ -70,17 +70,50 @@ const double kThreePhaseServiceLineVoltageV = 400;
 /// rating, curve and override flag are kept. An unknown bus fault (null / 0)
 /// keeps the rating-only class ⇒ byte-identical. Pure.
 // VERIFY — notAnSniClause (device-class practice, IEC 60898-1 vs 60947-2).
-BreakerResult faultAwareBreakerClass(BreakerResult b, Current? busFault) {
-  if (b.deviceClass != BreakerClass.mcb || busFault == null) return b;
-  final mcbTopKa = breakingCapacityKa[BreakerClass.mcb]!.last;
-  if (busFault.amperes / 1000.0 <= mcbTopKa + 1e-9) return b;
+///
+/// Round 39 (regression-fault-aware-class-mints-nonexistent-small-mccb) — an
+/// MCCB frame starts at [kMccbMinFrameA]: a converted rating below it is
+/// RAISED to the frame minimum (no 6 A / 10 A MCCB exists), but only while
+/// that stays ≤ [maxRatingA] (the way's cable derated Iz — In ≤ Iz is
+/// inviolable) and the rating is not the engineer's override. Otherwise the
+/// MCB is KEPT (it then needs back-up / cascade protection from the upstream
+/// device — see [mcbNeedsBackupProtection]).
+BreakerResult faultAwareBreakerClass(BreakerResult b, Current? busFault,
+    {Current? maxRatingA}) {
+  if (!_mcbBelowBusFault(b, busFault)) return b;
+  var rating = b.ratingA.amperes;
+  if (rating < kMccbMinFrameA - 1e-9) {
+    if (b.overridden) return b;
+    if (maxRatingA != null && kMccbMinFrameA > maxRatingA.amperes + 1e-9) {
+      return b;
+    }
+    rating = kMccbMinFrameA;
+  }
   return BreakerResult(
-    ratingA: b.ratingA,
+    ratingA: Current(rating),
     deviceClass: BreakerClass.mccb,
     curve: b.curve,
     overridden: b.overridden,
   );
 }
+
+/// Round 39 — the smallest MCCB frame rating (A). // VERIFY — notAnSniClause
+/// (manufacturer frame practice: MCCB ranges start at 16 A).
+const double kMccbMinFrameA = 16;
+
+bool _mcbBelowBusFault(BreakerResult b, Current? busFault) {
+  if (b.deviceClass != BreakerClass.mcb || busFault == null) return false;
+  final mcbTopKa = breakingCapacityKa[BreakerClass.mcb]!.last;
+  return busFault.amperes / 1000.0 > mcbTopKa + 1e-9;
+}
+
+/// Round 39 — true when [faultAwareBreakerClass] had to KEEP an MCB on a bus
+/// whose prospective fault exceeds the MCB breaking-capacity ladder (the way
+/// is below the MCCB frame minimum and its cable cannot take a 16 A MCCB):
+/// the MCB then relies on back-up (cascade) protection by the upstream
+/// device (IEC 60898-1 Annex D / IEC 60947-2 Annex A). Pure.
+bool mcbNeedsBackupProtection(BreakerResult chosen, Current? busFault) =>
+    _mcbBelowBusFault(chosen, busFault);
 
 /// Practical building power factor used to convert demand kW → kVA for the
 /// supply summary (matches PanelMaker `ASSUMED_BUILDING_PF`). Not a PUIL clause.
@@ -1322,7 +1355,20 @@ _CircuitComputation _computeCircuit(
     // sized at its 3φ 5.7 A on a 6 A breaker instead of 17.0 A / 20 A. Re-derive
     // it with the SAME formula on the way's effective phase, voltage and cos φ
     // (identical to the mint for an untouched way ⇒ byte-identical).
-    undiversifiedFlc = (c.phasesUserSet || c.cosPhiUserSet)
+    //
+    // Round 39 (elec-ui-journeys-2) — the mint is ALSO stale when the way is
+    // no longer machine-owned (a PARKED way, `sourceEquipmentId` cleared: the
+    // engineer may retype its load for a replacement machine) or when it now
+    // runs at a different phase count / on a single-phase BOARD than the
+    // 3φ / 400 V it was minted at (`setPanelSystem`, a move onto a 1φ board):
+    // a 3529 W pump minted at 6.0 A must size at 3529 / (220 × 0.85) = 18.9 A
+    // on a 1φ 220 V board, and a parked row retyped to 15 kW at 25.5 A.
+    final mintStale = c.phasesUserSet ||
+        c.cosPhiUserSet ||
+        c.sourceEquipmentId == null ||
+        threePhase != (c.phases == 3) ||
+        refPanel.system == ElectricalSystem.singlePhase;
+    undiversifiedFlc = mintStale
         ? loadCurrent(
             power: Power(c.loadW),
             voltage: Voltage(useVoltageV),
@@ -1636,7 +1682,24 @@ _CircuitComputation _computeCircuit(
   }
   // Round 38 — the device CLASS follows the bus fault (see
   // [faultAwareBreakerClass]).
-  breaker = faultAwareBreakerClass(breaker, opts.faultLevelA);
+  breaker = faultAwareBreakerClass(breaker, opts.faultLevelA,
+      maxRatingA: cable.deratedIz);
+  if (mcbNeedsBackupProtection(breaker, opts.faultLevelA)) {
+    warnings.add(ElectricalWarning(
+      code: 'mcb-backup-protection-required',
+      severity: WarningSeverity.info,
+      message: '${c.name}: the ${_num(breaker.ratingA.amperes)} A way sits on '
+          'a ${_num(roundTo(opts.faultLevelA!.amperes / 1000.0, 1))} kA bus, '
+          'above the MCB breaking-capacity range, and is below the '
+          '${_num(kMccbMinFrameA)} A MCCB frame its cable '
+          '(Iz ${_num(roundTo(cable.deratedIz.amperes, 1))} A) could carry — '
+          'it relies on back-up (cascade) protection by the upstream device '
+          '(IEC 60898-1 Annex D); verify the cascade combination or upsize the '
+          'cable for a 16 A MCCB.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
 
   final runsPerPhase = cable.runsPerPhase ?? 1;
   final vd = voltageDrop(
@@ -2114,15 +2177,39 @@ ElectricalPanelResult computePanel(
     panelSystems: opts.panelSystems,
     assignment: balance.assignment,
   );
+  // Round 39 (regression-outgoing-exceeds-incomer) — the incomer carries at
+  // least the largest single FINAL way's UNDIVERSIFIED running current: one
+  // machine does not diversify against itself, so a board whose only way is a
+  // 17 A machine at df 0.9 must not get a 16 A incomer sized on the 15.3 A
+  // diversified worst line (it would trip on normal running). Feeders,
+  // capacitor banks (their own floor above) and spare ways are excluded.
+  // Byte-identical whenever the diversified worst line already covers it.
+  var largestWayRunA = 0.0;
+  for (var i = 0; i < comps.length; i++) {
+    final b = branches[i];
+    if (b.feedsPanelId != null) continue;
+    final k = comps[i].result.loadKind;
+    if (k == LoadKind.capacitor || k == LoadKind.spare) continue;
+    final run = comps[i].result.runCurrentA.amperes;
+    if (run > largestWayRunA) largestWayRunA = run;
+  }
+  largestWayRunA = roundTo(largestWayRunA, 1);
   final serviceGoverns = serviceFloorA > futureDemandCurrentA &&
-      serviceFloorA >= capacitorFloorA;
+      serviceFloorA >= capacitorFloorA &&
+      serviceFloorA >= largestWayRunA;
   final capacitorGoverns = !serviceGoverns &&
-      capacitorFloorA > futureDemandCurrentA;
+      capacitorFloorA > futureDemandCurrentA &&
+      capacitorFloorA >= largestWayRunA;
+  final largestWayGoverns = !serviceGoverns &&
+      !capacitorGoverns &&
+      largestWayRunA > futureDemandCurrentA;
   final incomerSizingCurrentA = serviceGoverns
       ? roundTo(serviceFloorA, 1)
       : capacitorGoverns
           ? capacitorFloorA
-          : futureDemandCurrentA;
+          : largestWayGoverns
+              ? largestWayRunA
+              : futureDemandCurrentA;
 
   final incomerBreaker = faultAwareBreakerClass(
     selectBreaker(
@@ -2142,7 +2229,9 @@ ElectricalPanelResult computePanel(
         ? 'declared service capacity'
         : capacitorGoverns
             ? 'capacitor-bank switching current'
-            : '${headroomApplied ? 'future ' : ''}demand';
+            : largestWayGoverns
+                ? 'largest way running current'
+                : '${headroomApplied ? 'future ' : ''}demand';
     warnings.add(ElectricalWarning(
       code: 'incomer-exceeds-range',
       severity: WarningSeverity.error,
@@ -2168,15 +2257,21 @@ ElectricalPanelResult computePanel(
   for (final cr in circuits) {
     if (cr.breaker.ratingA.amperes >
         incomerBreaker.ratingA.amperes + 1e-9) {
-      final engineFloor = overrideById[cr.circuitId] == null &&
+      // Round 39 — any override-free inversion is the ENGINE's own device
+      // pick (the selectivity floor, a motor / capacitor switching factor),
+      // never an engineer error: INFO naming the incomer action. Only a way
+      // carrying a breaker override stays a sign-off WARNING.
+      final selectivityFloor =
           opts.feederBreakerFloorA.containsKey(cr.circuitId);
+      final engineFloor = overrideById[cr.circuitId] == null;
       warnings.add(ElectricalWarning(
         code: 'outgoing-exceeds-incomer',
         severity:
             engineFloor ? WarningSeverity.info : WarningSeverity.warning,
         message: engineFloor
-            ? '${panel.name} / ${cr.name}: the selectivity floor raised this '
-                'feeder to ${_num(cr.breaker.ratingA.amperes)} A, above the '
+            ? '${panel.name} / ${cr.name}: '
+                '${selectivityFloor ? 'the selectivity floor raised this feeder' : 'the engine sized this way'} '
+                'to ${_num(cr.breaker.ratingA.amperes)} A, above the '
                 'board\'s own ${_num(incomerBreaker.ratingA.amperes)} A '
                 'incomer — raise the incomer to at least '
                 '${_num(cr.breaker.ratingA.amperes)} A (this board\'s '
@@ -2750,7 +2845,10 @@ ElectricalSystemResult computeSystem(
     // Round 38 (regression-feeder-lines-carry-session-phase-labels) — the
     // UNSEEDED (history-free) lines, never the session-sticky labels: the
     // parent's incomer must be a function of the document alone.
-    final b = solved.historyFreePhaseBalance;
+    // Round 39 — …except a pure RELABELLING: then the labelled lines (the
+    // fed board's printed TOTAL), so the parent's balance and the feeder
+    // row's R/S/T match the wiring the two issued schedules describe.
+    final b = solved.parentFacingPhaseBalance;
     final d = panel.diversityFactor;
     if ((math.max(b.l1, math.max(b.l2, b.l3)) -
             math.min(b.l1, math.min(b.l2, b.l3))) >

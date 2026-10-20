@@ -225,10 +225,16 @@ ElectricalPlanData buildElectricalPlanData({
   // Round 24 — the off-sheet feeder mark at the on-sheet board [here]:
   // `ke`/`dari` <other board> (<its floor>) + the §10 length when both ends
   // are placed.
+  // Round 39 (elec-reports-parity-1) — the length is ALWAYS measured from
+  // the FEEDING board to the fed one ([from] → [to]), the direction the solve
+  // (`resolveCircuitLengthDetailed`) measures on (the feeding board's sheet
+  // scale), so the 'ke' mark on the parent's layout and the 'dari' mark on
+  // the child's print one figure for one cable.
   void offSheetRiser(LayoutPos here, LayoutPos? there, String verb,
-      String otherTag, bool essential) {
+      String otherTag, bool essential,
+      {required LayoutPos? from, required LayoutPos? to}) {
     final where = there != null ? ' (${floorName(there.floorIndex)})' : '';
-    final len = there != null ? routeLabel(here, there) : null;
+    final len = (from != null && to != null) ? routeLabel(from, to) : null;
     final text = '$verb $otherTag$where${len != null ? ' - $len' : ''}';
     risers.add(ElectricalPlanRiser(
       x: here.x,
@@ -285,9 +291,11 @@ ElectricalPlanData buildElectricalPlanData({
             essential: routeEss,
           ));
         } else if (onSheet(pos) && target != null && tpos != null) {
-          offSheetRiser(pos!, tpos, 'ke', tagOf(target), routeEss);
+          offSheetRiser(pos!, tpos, 'ke', tagOf(target), routeEss,
+              from: pos, to: tpos);
         } else if (onSheet(tpos) && target != null) {
-          offSheetRiser(tpos!, pos, 'dari', tag, routeEss);
+          offSheetRiser(tpos!, pos, 'dari', tag, routeEss,
+              from: pos, to: tpos);
         }
         continue;
       }

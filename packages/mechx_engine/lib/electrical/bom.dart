@@ -613,23 +613,50 @@ List<BomLine> _panelLines(
           threePhase: poles >= 3,
           type: c.rcd.type,
           timeDelayed: c.rcd.timeDelayed);
+      // Round 39 (elec-reports-parity-2) — an UNMATCHED RCD names (and keys
+      // on) the rated current it must carry — the next standard RCCB frame
+      // ≥ the way's breaker In — so devices of different ratings never
+      // consolidate into one line; above the largest RCCB frame it is an
+      // earth-leakage relay + shunt trip on the MCCB.
+      final frameA = rcdSku == null ? rcdFrameRatingA(c.breaker.ratingA.amperes) : null;
+      final frameText = rcdSku == null
+          ? (frameA != null ? ' ${_fmt(frameA)}A' : ' (ELR + shunt-trip on ${_fmt(c.breaker.ratingA.amperes)}A MCCB)')
+          : '';
+      final frameKey = rcdSku == null
+          ? ':${frameA != null ? '${_fmt(frameA)}A' : 'elr${_fmt(c.breaker.ratingA.amperes)}A'}'
+          : '';
       lines.add(BomLine(
         description:
             'RCD ${c.rcd.ratingMa} mA${c.rcd.type != null ? ' Type ${_rcdType(c.rcd.type!)}' : ''}'
             '${c.rcd.timeDelayed ? ' S' : ''} '
-            '${rcdPoles}P — ${c.name}',
+            '${rcdPoles}P$frameText — ${c.name}',
         qty: 1,
         category: PartCategory.rcd,
         sku: rcdSku,
         // An unmatched RCD still carries a deterministic pricelist key.
         priceKey: rcdSku ??
             '${kElecPriceKeyPrefix}rcd:${c.rcd.ratingMa}:$typeTag'
-                '${c.rcd.timeDelayed ? 'S' : ''}:$rcdPoles',
+                '${c.rcd.timeDelayed ? 'S' : ''}:$rcdPoles$frameKey',
       ));
     }
   }
 
   return lines;
+}
+
+/// Round 39 — standard RCCB frame ratings (A). // VERIFY — secondarySource
+/// (IEC 61008-1 preferred rated currents; the catalogue's RCCB range tops out
+/// at 125 A — above it residual-current protection is an earth-leakage relay
+/// with a shunt trip on the MCCB).
+const List<double> kRcdFrameRatingsA = [16, 25, 40, 63, 80, 100, 125];
+
+/// The smallest standard RCCB frame (A) ≥ [breakerA], or null above the
+/// largest frame (⇒ ELR + shunt trip). Pure.
+double? rcdFrameRatingA(double breakerA) {
+  for (final f in kRcdFrameRatingsA) {
+    if (f + 1e-9 >= breakerA) return f;
+  }
+  return null;
 }
 
 BomLine _busbarLine(BusbarResult b, String pname, {required bool threePhase}) {

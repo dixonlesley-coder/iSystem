@@ -1,0 +1,698 @@
+// Round 39 (2026-10-18) — electrical regressions + report / drawing parity.
+//
+// Each group pins one confirmed finding with a first-principles derivation;
+// where a counterexample generalises, it is a seeded property.
+import 'dart:math' as math;
+
+import 'package:mechx_engine/electrical/advanced_bom.dart';
+import 'package:mechx_engine/electrical/advanced_study.dart';
+import 'package:mechx_engine/electrical/bom.dart';
+import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/containment.dart';
+import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/fault.dart';
+import 'package:mechx_engine/electrical/geo_length.dart';
+import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/power_factor.dart';
+import 'package:mechx_engine/electrical/results.dart';
+import 'package:mechx_engine/electrical/supply_design.dart';
+import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/report/electrical_calc_report.dart';
+import 'package:mechx_engine/report/electrical_plan_export.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
+import 'package:mechx_engine/report/equipment_schedule.dart';
+import 'package:mechx_engine/standards/puil.dart';
+import 'package:mechx_engine/units.dart';
+import 'package:test/test.dart';
+
+const _p = PuilProfile();
+
+ElectricalCircuitResult _way(ElectricalSystemResult s, String panel, String c) =>
+    s.panels[panel]!.circuits.firstWhere((r) => r.circuitId == c);
+
+List<String> _labels(SldSheet s) =>
+    [for (final p in s.prims) if (p is SldLabel) p.text];
+
+void main() {
+  // ── 1. the incomer carries the largest final way's running current ───────
+  group('regression-outgoing-exceeds-incomer', () {
+    // One HVAC way 10 kW at cos phi 0.85, df 0.9 (the palette default):
+    //   run current = 10000 / (sqrt(3) * 400 * 0.85) = 16.98 A -> 20 A way;
+    //   diversified worst line = 0.9 * 16.98 = 15.3 A -> was a 16 A incomer.
+    // One machine does not diversify against itself: the incomer floors at
+    // the 17.0 A running current -> 20 A, and nothing warns.
+    const project = ElectricalProject(id: 'p', name: 'P', panels: [
+      ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+        ElectricalCircuit(
+          id: 'ac',
+          name: 'AC',
+          loadKind: LoadKind.hvac,
+          loadW: 10000,
+          cosPhi: 0.85,
+          phases: 3,
+          demandFactor: 0.9,
+          length: const Length(10),
+        ),
+      ]),
+    ]);
+    final sys = computeSystem(_p, project);
+    final run = 10000 / (math.sqrt(3) * 400 * 0.85);
+
+    test('way 20 A on 17.0 A; incomer 20 A (not 16 A)', () {
+      expect(_way(sys, 'MDP', 'ac').runCurrentA.amperes,
+          closeTo(run, 0.05));
+      expect(_way(sys, 'MDP', 'ac').breaker.ratingA.amperes, 20);
+      expect(sys.panels['MDP']!.incomer.breaker.ratingA.amperes, 20);
+    });
+
+    test('no warning-severity outgoing-exceeds-incomer', () {
+      expect(
+          sys.warnings.where((w) =>
+              w.code == 'outgoing-exceeds-incomer' &&
+              w.severity == WarningSeverity.warning),
+          isEmpty);
+    });
+
+    test('an override-caused inversion stays a WARNING', () {
+      const o = ElectricalProject(id: 'p', name: 'P', panels: [
+        ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+          ElectricalCircuit(
+            id: 'ac',
+            name: 'AC',
+            loadKind: LoadKind.hvac,
+            loadW: 10000,
+            cosPhi: 0.85,
+            phases: 3,
+            length: const Length(10),
+            breakerOverrideA: const Current(63),
+          ),
+        ]),
+      ]);
+      final s = computeSystem(_p, o);
+      expect(
+          s.warnings.where((w) =>
+              w.code == 'outgoing-exceeds-incomer' &&
+              w.severity == WarningSeverity.warning),
+          hasLength(1));
+    });
+
+    test('seeded property: override-free boards never warn, incomer >= every '
+        'final way running current', () {
+      final rng = math.Random(39);
+      const kinds = [
+        LoadKind.hvac,
+        LoadKind.heating,
+        LoadKind.general,
+        LoadKind.lighting,
+        LoadKind.socket,
+      ];
+      for (var t = 0; t < 300; t++) {
+        final n = 1 + rng.nextInt(4);
+        final circuits = [
+          for (var i = 0; i < n; i++)
+            ElectricalCircuit(
+              id: 'c$i',
+              name: 'c$i',
+              loadKind: kinds[rng.nextInt(kinds.length)],
+              loadW: 500 + rng.nextDouble() * 30000,
+              cosPhi: 0.8 + rng.nextDouble() * 0.2,
+              demandFactor: 0.3 + rng.nextDouble() * 0.7,
+              phases: rng.nextBool() ? 3 : 1,
+              length: Length(5 + rng.nextDouble() * 40),
+            ),
+        ];
+        final s = computeSystem(
+            _p,
+            ElectricalProject(id: 'p', name: 'P', panels: [
+              ElectricalPanel(id: 'B', name: 'B', circuits: circuits),
+            ]));
+        final b = s.panels['B']!;
+        for (final c in b.circuits) {
+          expect(b.incomer.breaker.ratingA.amperes + 0.05,
+              greaterThanOrEqualTo(c.runCurrentA.amperes),
+              reason: 'trial $t way ${c.circuitId}');
+        }
+        expect(
+            s.warnings.where((w) =>
+                w.code == 'outgoing-exceeds-incomer' &&
+                w.severity == WarningSeverity.warning),
+            isEmpty,
+            reason: 'trial $t');
+      }
+    });
+  });
+
+  // ── 2. a permuting prior feeds the parent the LABELLED lines ─────────────
+  group('regression-history-free-feeder-lines-contradict-labelled-subboard',
+      () {
+    ElectricalCircuit heater(String id, double a) => ElectricalCircuit(
+          id: id,
+          name: id,
+          loadKind: LoadKind.heating,
+          // 1ph at 231 V, cos 1: W = I * 231.
+          loadW: a * 231,
+          cosPhi: 1.0,
+          phases: 1,
+          length: const Length(5),
+        );
+    final project = ElectricalProject(id: 'p', name: 'P', panels: [
+      ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+        const ElectricalCircuit(
+          id: 'f',
+          name: 'to DB',
+          loadKind: LoadKind.feeder,
+          feedsPanelId: 'DB',
+          length: Length(10),
+        ),
+        heater('d', 10),
+      ]),
+      ElectricalPanel(
+          id: 'DB',
+          name: 'DB',
+          sourceType: PanelSource.feeder,
+          fedByCircuitId: 'f',
+          circuits: [heater('a', 30), heater('b', 20), heater('c', 20)]),
+    ]);
+    // The live store's stickiness prior: a on L2, b on L1, c on L3 — a pure
+    // relabelling of the engine's own assignment (a relabel never saves 1 A).
+    final sys = computeSystem(_p, project,
+        priorAssignments: const {
+          'DB': {
+            'a': PhaseAssignment.l2,
+            'b': PhaseAssignment.l1,
+            'c': PhaseAssignment.l3,
+          },
+        },
+        phaseReassignThresholdA: 1.0);
+
+    test('the MDP feeder row prints the DB schedule\'s labelled R/S/T', () {
+      final db = sys.panels['DB']!.phaseBalance;
+      final row = _way(sys, 'MDP', 'f').lineCurrentsA!;
+      expect(row[0], closeTo(db.l1, 1e-6));
+      expect(row[1], closeTo(db.l2, 1e-6));
+      expect(row[2], closeTo(db.l3, 1e-6));
+    });
+
+    test('the wired worst MDP line fits under the printed incomer', () {
+      // DB labels a (30 A) on S -> the MDP balancer must put d (10 A) on
+      // R or T, so the MDP worst line is 30 A (never 30 + 10 = 40 A on S).
+      final m = sys.panels['MDP']!;
+      final worst = [m.phaseBalance.l1, m.phaseBalance.l2, m.phaseBalance.l3]
+          .reduce(math.max);
+      expect(worst, closeTo(30, 0.2));
+      expect(m.incomer.breaker.ratingA.amperes, greaterThanOrEqualTo(worst));
+    });
+  });
+
+  // ── 3. the LV verdict and the daya recommendation share one basis ────────
+  group('regression-lv-supply-verdict-without-any-lv-daya', () {
+    test('150 kW 3ph + 30 kW 1ph: worst phase 240 kVA > 197 kVA => MV', () {
+      // Worst phase: 150000 / (sqrt3*400) + 30000 / 231 = 216.5 + 129.9 =
+      // 346.4 A -> sqrt3*400*346.4 = 240 kVA > the 197 kVA LV ceiling.
+      const project = ElectricalProject(id: 'p', name: 'P', panels: [
+        ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+          ElectricalCircuit(
+              id: 'h3',
+              name: 'h3',
+              loadKind: LoadKind.heating,
+              loadW: 150000,
+              cosPhi: 1,
+              phases: 3,
+              length: const Length(5)),
+          ElectricalCircuit(
+              id: 'h1',
+              name: 'h1',
+              loadKind: LoadKind.heating,
+              loadW: 30000,
+              cosPhi: 1,
+              phases: 1,
+              length: const Length(5)),
+        ]),
+      ]);
+      final sys = computeSystem(_p, project);
+      final adv = computeAdvancedStudy(_p, project, sys);
+      expect(adv.recommendedDayaVa, isNull);
+      expect(adv.supply.lvOrMv, SupplyLevel.mv);
+    });
+
+    test('seeded property: lv <=> recommendedDaya != null', () {
+      final rng = math.Random(3939);
+      for (var t = 0; t < 200; t++) {
+        final circuits = [
+          for (var i = 0; i < 1 + rng.nextInt(4); i++)
+            ElectricalCircuit(
+              id: 'c$i',
+              name: 'c$i',
+              loadKind: LoadKind.heating,
+              loadW: 1000 + rng.nextDouble() * 120000,
+              cosPhi: 1,
+              phases: rng.nextBool() ? 3 : 1,
+              length: const Length(5),
+            ),
+        ];
+        final project = ElectricalProject(id: 'p', name: 'P', panels: [
+          ElectricalPanel(id: 'MDP', name: 'MDP', circuits: circuits),
+        ]);
+        final sys = computeSystem(_p, project);
+        final adv = computeAdvancedStudy(_p, project, sys);
+        expect(adv.supply.lvOrMv == SupplyLevel.lv,
+            adv.recommendedDayaVa != null,
+            reason: 'trial $t: ${adv.supply.note}');
+      }
+    });
+  });
+
+  // ── 4. no MCCB below its 16 A frame ──────────────────────────────────────
+  group('regression-fault-aware-class-mints-nonexistent-small-mccb', () {
+    test('a 6 A way on a 36 kA bus becomes an MCCB 16 A, never MCCB 6 A', () {
+      // transformerKva 1000 -> 1e6 / (sqrt3*400*0.04) = 36 084 A origin.
+      const project = ElectricalProject(
+        id: 'p',
+        name: 'P',
+        transformerKva: const ApparentPower(1000000),
+        panels: [
+          ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+            ElectricalCircuit(
+                id: 'l',
+                name: 'Lights',
+                loadKind: LoadKind.lighting,
+                loadW: 300,
+                cosPhi: 0.9,
+                phases: 1,
+                length: const Length(10)),
+          ]),
+        ],
+      );
+      final sys = computeSystem(_p, project,
+          originFaultLevel: estimatedServiceFaultLevelA(project));
+      final w = _way(sys, 'MDP', 'l').breaker;
+      expect(w.deviceClass, BreakerClass.mccb);
+      expect(w.ratingA.amperes, kMccbMinFrameA);
+      final inc = sys.panels['MDP']!.incomer.breaker;
+      if (inc.deviceClass == BreakerClass.mccb) {
+        expect(inc.ratingA.amperes, greaterThanOrEqualTo(kMccbMinFrameA));
+      }
+    });
+
+    test('Iz below 16 A keeps the MCB and flags back-up protection', () {
+      const b = BreakerResult(
+          ratingA: Current(10),
+          deviceClass: BreakerClass.mcb,
+          curve: BreakerCurve.c);
+      final kept = faultAwareBreakerClass(b, const Current(36000),
+          maxRatingA: const Current(13));
+      expect(kept.deviceClass, BreakerClass.mcb);
+      expect(mcbNeedsBackupProtection(kept, const Current(36000)), isTrue);
+      final raised = faultAwareBreakerClass(b, const Current(36000),
+          maxRatingA: const Current(24));
+      expect(raised.deviceClass, BreakerClass.mccb);
+      expect(raised.ratingA.amperes, 16);
+      // Below the MCB ladder top nothing changes (byte-identical).
+      expect(identical(faultAwareBreakerClass(b, const Current(10000)), b),
+          isTrue);
+    });
+  });
+
+  // ── 5. a spare way pulls no cable on the schedule ────────────────────────
+  group('elec-props-5-spare-way-cable-on-schedule-not-in-bom', () {
+    const project = ElectricalProject(id: 'p', name: 'P', panels: [
+      ElectricalPanel(id: 'SDP', name: 'SDP', circuits: [
+        ElectricalCircuit(
+            id: 'l',
+            name: 'Light',
+            loadKind: LoadKind.lighting,
+            loadW: 2000,
+            phases: 1,
+            length: const Length(10)),
+        ElectricalCircuit(
+            id: 's',
+            name: 'Spare MCB',
+            loadKind: LoadKind.spare,
+            loadW: 0,
+            length: const Length(10)),
+      ]),
+    ]);
+    final sys = computeSystem(_p, project);
+
+    test('the spare row prints no cable / conduit / length token', () {
+      final labels = _labels(buildElectricalPanelDetail(
+          project: project, result: sys, panelId: 'SDP'));
+      expect(labels, isNot(contains(contains('10.0 m · ')))); // sanity
+      final cableTokens =
+          labels.where((t) => t.contains('mm2 ·') || t == '-').toList();
+      // Only the lighting way prints a cable; the spare row prints '-'.
+      expect(cableTokens.where((t) => t.contains('mm2')), hasLength(1));
+      expect(labels.where((t) => t.endsWith(' m') && t.contains('mm2')),
+          hasLength(1));
+    });
+
+    test('the containment study gives the spare no conduit', () {
+      final c = containmentFor(sys.panels['SDP']!);
+      expect(c.conduits.map((x) => x.circuitId), ['l']);
+    });
+
+    test('schedule cable metres == BOM cable metres', () {
+      final bom = buildBom(sys);
+      final cableQty = bom.lines
+          .where((l) => l.category.name == 'cable')
+          .fold<double>(0, (s, l) => s + l.qty);
+      expect(cableQty, closeTo(10, 1e-9));
+    });
+  });
+
+  // ── 6. the off-sheet feeder length is one figure on both layouts ─────────
+  group('elec-reports-parity-1', () {
+    const building = BuildingLevels([
+      Floor('GF', Length(4.0)),
+      Floor('L1', Length(4.0)),
+    ]);
+    const calib = {
+      's0': ScaleCalibration(0.02),
+      's1': ScaleCalibration(0.05),
+    };
+    const mdpPos = LayoutPos(sheetId: 's0', floorIndex: 0, x: 100, y: 100);
+    const lpPos = LayoutPos(sheetId: 's1', floorIndex: 1, x: 600, y: 100);
+    const project = ElectricalProject(id: 'p', name: 'P', panels: [
+      ElectricalPanel(
+          id: 'MDP',
+          name: 'MDP',
+          tag: 'MDP',
+          layoutPos: mdpPos,
+          circuits: const [
+            ElectricalCircuit(
+                id: 'f',
+                name: 'to LP',
+                loadKind: LoadKind.feeder,
+                feedsPanelId: 'LP',
+                length: Length(10)),
+          ]),
+      const ElectricalPanel(
+          id: 'LP',
+          name: 'LP',
+          tag: 'LP',
+          sourceType: PanelSource.feeder,
+          fedByCircuitId: 'f',
+          layoutPos: lpPos,
+          circuits: []),
+    ]);
+
+    test('ke and dari print the feeding sheet\'s 500 x 0.02 + 4 = 14.0 m', () {
+      final ke = buildElectricalPlanData(
+              project: project,
+              sheetId: 's0',
+              floorIndex: 0,
+              calibrations: calib,
+              building: building)
+          .risers
+          .single
+          .text;
+      final dari = buildElectricalPlanData(
+              project: project,
+              sheetId: 's1',
+              floorIndex: 1,
+              calibrations: calib,
+              building: building)
+          .risers
+          .single
+          .text;
+      expect(ke, endsWith('- 14.0 m'));
+      expect(dari, endsWith('- 14.0 m'));
+    });
+  });
+
+  // ── 7. unmatched RCDs key on their rated current ─────────────────────────
+  group('elec-reports-parity-2', () {
+    test('unmatched RCDs of different breaker ratings stay two lines', () {
+      const project = ElectricalProject(
+        id: 'p',
+        name: 'P',
+        earthingSystem: EarthingSystem.tt,
+        panels: [
+          const ElectricalPanel(id: 'B', name: 'B', circuits: [
+            ElectricalCircuit(
+                id: 'a',
+                name: 'Socket A',
+                loadKind: LoadKind.socket,
+                loadW: 1500,
+                phases: 1,
+                length: Length(10)),
+            ElectricalCircuit(
+                id: 'b',
+                name: 'Water heater',
+                loadKind: LoadKind.general,
+                // 9000 / 231 = 39 A -> a 40 A breaker -> a 40 A RCD frame,
+                // vs Socket A's 10 A breaker -> a 16 A frame.
+                loadW: 9000,
+                phases: 1,
+                length: Length(10)),
+          ]),
+        ],
+      );
+      final sys = computeSystem(_p, project);
+      final ra = _way(sys, 'B', 'a');
+      final rb = _way(sys, 'B', 'b');
+      expect(ra.rcd.required && rb.rcd.required, isTrue);
+      expect(ra.breaker.ratingA.amperes, isNot(rb.breaker.ratingA.amperes));
+      final bom = buildBom(sys, parts: const []);
+      final rcdKeys = {
+        for (final l in bom.lines)
+          if (l.category.name == 'rcd') l.priceKey
+      };
+      expect(rcdKeys, hasLength(2));
+      expect(rcdFrameRatingA(10), 16);
+      expect(rcdFrameRatingA(126), isNull);
+    });
+  });
+
+  // ── 8. one installed-capacitor-bank definition ───────────────────────────
+  group('elec-reports-parity-3', () {
+    ElectricalCircuit cap(String id, double kvar) => ElectricalCircuit(
+        id: id,
+        name: id,
+        loadKind: LoadKind.capacitor,
+        loadW: kvar * 1000,
+        phases: 3,
+        length: const Length(5));
+    ElectricalCircuit load() => const ElectricalCircuit(
+        id: 'm',
+        name: 'Motor',
+        loadKind: LoadKind.heating,
+        loadW: 80000,
+        cosPhi: 0.75,
+        phases: 3,
+        length: Length(5));
+    for (final (name, ways, declared) in [
+      ('ways only', [cap('c', 50)], null),
+      ('declared only', <ElectricalCircuit>[], 100.0),
+      ('both present', [cap('c', 50)], 100.0),
+    ]) {
+      test('$name: schedule == BOM == PF installed', () {
+        final project = ElectricalProject(
+          id: 'p',
+          name: 'P',
+          capacitorBankKvar: declared,
+          panels: [
+            ElectricalPanel(
+                id: 'LVMDP', name: 'LVMDP', circuits: [load(), ...ways]),
+          ],
+        );
+        final sys = computeSystem(_p, project);
+        final installed = installedCapacitorBanks(project)
+            .fold<double>(0, (s, b) => s + b.kvar);
+        final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
+            projectName: 'P',
+            date: 'd',
+            electrical: sys,
+            electricalProject: project));
+        final schedKvar = rows
+            .where((r) => r.category == EquipmentCategory.capacitorBank)
+            .fold<double>(
+                0, (s, r) => s + double.parse(r.duty.split(' ').first));
+        final bomKvar = advancedBomLines(project: project, sys: sys)
+            .where((l) => l.description.startsWith('Capacitor bank '))
+            .fold<double>(
+                0, (s, l) => s + double.parse(l.description.split(' ')[2]));
+        final pf = powerFactorCorrection(sys, project);
+        expect(schedKvar, closeTo(installed, 1e-9));
+        expect(bomKvar, closeTo(installed, 1e-9));
+        expect(pf.installedKvar, closeTo(installed, 1e-6));
+        expect(installed, ways.isEmpty ? 100 : 50);
+      });
+    }
+  });
+
+  // ── 9-11. the calc report states the schedule's make-up, kA, verdict ─────
+  group('elec-reports-parity-4/5/6', () {
+    test('Vdrop printed in its verdict direction: 3.05 % vs 3.0 % -> 3.1', () {
+      expect(vdropPctForVerdict(3.05, limit: 3.0, over: true), '3.1');
+      expect(vdropPctForVerdict(3.01, limit: 3.0, over: true), '3.1');
+      expect(vdropPctForVerdict(3.04, limit: 3.0, over: false), '3.0');
+      // Property: an OVER figure always prints above its limit.
+      final rng = math.Random(9);
+      for (var i = 0; i < 500; i++) {
+        final lim = [3.0, 4.0, 5.0][rng.nextInt(3)];
+        final v = lim + 1e-6 + rng.nextDouble() * 0.2;
+        expect(double.parse(vdropPctForVerdict(v, limit: lim, over: true)),
+            greaterThan(lim));
+      }
+    });
+
+    test('cable cell = schedule make-up; kA printed when supplied', () {
+      const project = ElectricalProject(id: 'p', name: 'P', panels: [
+        ElectricalPanel(id: 'B', name: 'B', circuits: [
+          ElectricalCircuit(
+              id: 'h',
+              name: 'Heater',
+              loadKind: LoadKind.heating,
+              loadW: 20000,
+              cosPhi: 1,
+              phases: 3,
+              length: const Length(10)),
+        ]),
+      ]);
+      final sys = computeSystem(_p, project);
+      final r = _way(sys, 'B', 'h');
+      final md = buildElectricalCalcReport(ElectricalCalcReportData(
+        projectName: 'P',
+        date: 'd',
+        standardsName: 'PUIL',
+        standardsRevision: '2011',
+        project: project,
+        result: sys,
+        incomerKaByPanelId: const {'B': 10},
+        breakerKaByCircuitId: const {'h': 6},
+      ));
+      final label = cableRunLabel(project.panels.first.circuits.first,
+          r.cable.csaMm2, r.threePhase,
+          cores: r.grounding.cores,
+          runs: r.cable.runsPerPhase,
+          peCsaMm2: r.grounding.peCsaMm2,
+          neutralCsaMm2: r.grounding.neutralCsaMm2);
+      expect(md, contains('| $label |'));
+      expect(md, contains(' 6 kA'));
+      expect(md, contains(' 10 kA'));
+    });
+  });
+
+  // ── 12-13. a stale A5 FLA re-derives from the way's own load ─────────────
+  group('elec-ui-journeys-2 (FLA)', () {
+    test('parked (source-less) way retyped to 15 kW sizes at 25.5 A / 32 A',
+        () {
+      const project = ElectricalProject(id: 'p', name: 'P', panels: [
+        ElectricalPanel(id: 'B', name: 'B', circuits: [
+          ElectricalCircuit(
+            id: 'w',
+            name: 'Pump P-01 (source removed)',
+            loadKind: LoadKind.pump,
+            loadW: 15000,
+            motorKw: 3,
+            cosPhi: 0.85,
+            phases: 3,
+            length: const Length(10),
+            flaOverrideA: const Current(6.0),
+          ),
+        ]),
+      ]);
+      final r = _way(computeSystem(_p, project), 'B', 'w');
+      // 15000 / (sqrt3 * 400 * 0.85) = 25.47 A -> 32 A.
+      expect(r.runCurrentA.amperes, closeTo(25.5, 0.05));
+      expect(r.breaker.ratingA.amperes, 32);
+    });
+
+    test('MEP way on a 1ph 220 V board: 3529.4 / (220 * 0.85) = 18.9 A', () {
+      const project = ElectricalProject(id: 'p', name: 'P', panels: [
+        ElectricalPanel(
+            id: 'B',
+            name: 'B',
+            system: ElectricalSystem.singlePhase,
+            voltage: const Voltage(220),
+            circuits: [
+              ElectricalCircuit(
+                id: 'w',
+                name: 'Pump',
+                loadKind: LoadKind.pump,
+                loadW: 3529.4,
+                motorKw: 3,
+                cosPhi: 0.85,
+                phases: 3,
+                length: const Length(10),
+                sourceEquipmentId: 'n1',
+                flaOverrideA: const Current(6.0),
+              ),
+            ]),
+      ]);
+      final r = _way(computeSystem(_p, project), 'B', 'w');
+      expect(r.runCurrentA.amperes, closeTo(18.9, 0.05));
+      expect(r.breaker.ratingA.amperes, 20);
+    });
+
+    test('an untouched MEP way on its 3ph 400 V board keeps the mint', () {
+      const project = ElectricalProject(id: 'p', name: 'P', panels: [
+        ElectricalPanel(id: 'B', name: 'B', circuits: [
+          ElectricalCircuit(
+            id: 'w',
+            name: 'Pump',
+            loadKind: LoadKind.pump,
+            loadW: 3529.4,
+            motorKw: 3,
+            cosPhi: 0.85,
+            phases: 3,
+            length: const Length(10),
+            sourceEquipmentId: 'n1',
+            flaOverrideA: const Current(6.0),
+          ),
+        ]),
+      ]);
+      expect(_way(computeSystem(_p, project), 'B', 'w').runCurrentA.amperes,
+          closeTo(6.0, 1e-9));
+    });
+  });
+
+  // ── 14. a generator / solar primary supply is LV, with its own fault ─────
+  group('elec-ui-journeys-2-generator-supply-drawn-as-mv', () {
+    const project = ElectricalProject(
+      id: 'p',
+      name: 'P',
+      supplyKind: SupplyKind.generator,
+      supplyCapacityVa: const ApparentPower(250000),
+      panels: [
+        ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+          ElectricalCircuit(
+              id: 'h',
+              name: 'h',
+              loadKind: LoadKind.heating,
+              loadW: 100000,
+              cosPhi: 1,
+              phases: 3,
+              length: const Length(5)),
+        ]),
+      ],
+    );
+
+    test('no declared MV service, no transformer', () {
+      expect(isDeclaredMvService(project), isFalse);
+      expect(declaredServiceTransformer(project), isNull);
+      final sys = computeSystem(_p, project);
+      final labels = _labels(buildElectricalSourceSpine(
+          project: project, result: sys));
+      expect(labels.any((t) => t.contains('TRANSFORMER')), isFalse);
+      expect(labels.any((t) => t.contains('TEGANGAN MENENGAH')), isFalse);
+    });
+
+    test('fault = 250e3 / (sqrt3 * 400 * 0.12) = 3007 A, not 16 kA', () {
+      final f = estimatedServiceFaultLevelA(project)!.amperes;
+      expect(f, closeTo(250000 / (math.sqrt(3) * 400 * 0.12), 0.1));
+      const solar = ElectricalProject(
+          id: 's',
+          name: 'S',
+          supplyKind: SupplyKind.solar,
+          supplyCapacityVa: const ApparentPower(100000),
+          panels: const []);
+      expect(estimatedServiceFaultLevelA(solar)!.amperes,
+          closeTo(1.5 * 100000 / (math.sqrt(3) * 400), 0.1));
+    });
+  });
+}
