@@ -602,7 +602,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   @override
   set state(ElectricalProject value) {
-    super.state = _raw.on ? value : stampAssignedPhases(value);
+    // A GEOMETRY-ONLY write (a panel dragged on the single-line, a board or a
+    // load placed / moved on the layout — [_setGeometry]) cannot change any
+    // phase assignment: the balancer reads currents and topology, never
+    // positions, and the moved objects keep their `assignedPhase`. It skips
+    // both stamping solves — it runs on every drag frame.
+    super.state =
+        (_raw.on || _geometry.on) ? value : stampAssignedPhases(value);
+  }
+
+  final _RawWriteFlag _geometry = _RawWriteFlag();
+
+  /// Run a position-only mutation without re-stamping phases (see [state]).
+  void _setGeometry(void Function() write) {
+    _geometry.on = true;
+    try {
+      write();
+    } finally {
+      _geometry.on = false;
+    }
   }
 
   /// Round 39 r3 — the ONE bookkeeping write that makes the document fully
@@ -1739,8 +1757,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// the mechanical canvas `moveNode`: no undo recording — pair with
   /// [pushUndoSnapshot] at drag start so the whole move is ONE undo step).
   /// No-op when the id is unknown.
-  void setPanelPosition(String id, double x, double y) =>
-      _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false);
+  void setPanelPosition(String id, double x, double y) => _setGeometry(() =>
+      _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false));
 
   /// Move SEVERAL panels to absolute canvas positions in ONE undo step (D2 —
   /// the multi-select group arrow-nudge). The caller passes each panel's
@@ -1750,13 +1768,13 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// identical). One `_commit`, so a single Ctrl+Z restores every moved panel.
   void movePanels(Map<String, Offset> positions) {
     if (positions.isEmpty) return;
-    _commit(_withProject(panels: [
+    _setGeometry(() => _commit(_withProject(panels: [
       for (final p in state.panels)
         if (positions.containsKey(p.id))
           p.copyWith(x: positions[p.id]!.dx, y: positions[p.id]!.dy)
         else
           p,
-    ]));
+    ])));
   }
 
   /// Delete SEVERAL panels in ONE undo step (D2 — the multi-select Delete). The
@@ -2173,13 +2191,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// No-op when the id is unknown. A LIVE-DRAG intent (called per pan-update),
   /// so it never records undo itself — callers [pushUndoSnapshot] at drag start
   /// / before a one-shot placement so the move is ONE undo step.
-  void setPanelLayoutPos(String panelId, LayoutPos? pos) => _replacePanel(
-        panelId,
-        (p) => pos == null
-            ? p.copyWith(clearLayoutPos: true)
-            : p.copyWith(layoutPos: pos),
-        record: false,
-      );
+  void setPanelLayoutPos(String panelId, LayoutPos? pos) =>
+      _setGeometry(() => _replacePanel(
+            panelId,
+            (p) => pos == null
+                ? p.copyWith(clearLayoutPos: true)
+                : p.copyWith(layoutPos: pos),
+            record: false,
+          ));
 
   /// Place / move one circuit's LOAD on the calibrated layout (or clear with a
   /// null [pos]). No-op when either id is unknown. A LIVE-DRAG intent — see
@@ -2198,14 +2217,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   }
 
   void _setLoadPos(String panelId, String circuitId, LayoutPos? pos) =>
-      _replaceCircuit(
-        panelId,
-        circuitId,
-        (c) => pos == null
-            ? c.copyWith(clearLoadPos: true)
-            : c.copyWith(loadPos: pos),
-        record: false,
-      );
+      _setGeometry(() => _replaceCircuit(
+            panelId,
+            circuitId,
+            (c) => pos == null
+                ? c.copyWith(clearLoadPos: true)
+                : c.copyWith(loadPos: pos),
+            record: false,
+          ));
 
   /// Add a new way to [panelId] already PLACED on the layout at [pos] — the
   /// drag-a-palette-card-onto-the-sheet-near-a-panel gesture. Same standards
@@ -2500,10 +2519,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       // feed survives every re-sync.
       // roundtrip-3 — the board keeps its place in the panel list (it used to
       // be re-appended at the end on every sync).
-      state = _withProject(panels: [
-        for (final p in state.panels)
-          p.id == kMepEquipmentPanelId ? existing.copyWith(circuits: merged) : p,
-      ]);
+      // A value-identical re-sync (the on-open sync of a saved project, an
+      // unchanged feed) writes NOTHING: a phantom write would re-stamp the
+      // document and mark an untouched file dirty.
+      if (!_sameCircuits(existing.circuits, merged)) {
+        state = _withProject(panels: [
+          for (final p in state.panels)
+            p.id == kMepEquipmentPanelId
+                ? existing.copyWith(circuits: merged)
+                : p,
+        ]);
+      }
       _narrateMepSync(
         added: added,
         restored: restored,
@@ -3090,4 +3116,17 @@ bool isValidCircuitEdit({
       pos(length?.meters) &&
       pos(breakerOverrideA?.amperes) &&
       pos(cableOverrideMm2);
+}
+
+/// Round 39 r3 follow-up — value equality of two way lists (the MEP re-sync's
+/// no-op test). Identical lists short-circuit; otherwise compared on their
+/// serialized form, which is the document's own notion of equality.
+bool _sameCircuits(List<ElectricalCircuit> a, List<ElectricalCircuit> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (identical(a[i], b[i])) continue;
+    if (jsonEncode(a[i].toJson()) != jsonEncode(b[i].toJson())) return false;
+  }
+  return true;
 }
