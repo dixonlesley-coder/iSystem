@@ -6,17 +6,19 @@
 /// [kMinPlotLabelPt] floor the electrical detail SLD already enforces
 /// (`electricalSldDetailToPdf`). This module picks the fewest pages whose
 /// labels print as large as the sheet geometry allows: one page when it
-/// already prints at [kMinPlotLabelPt], else the LARGEST floors-per-page
-/// whose every page prints at `min(kMinPlotLabelPt, 0.95 × best)` — `best` being
-/// the single-floor pages' size (the sheet's WIDTH caps how large a label
-/// can ever get, so 7 pt is not always reachable and a one-floor-per-page
-/// set would gain nothing past that cap).
+/// already prints at [kMinPlotLabelPt], else floor runs cut GREEDILY from
+/// floor 0 upward, each page as tall as it can be while it prints at the
+/// largest `min(kMinPlotLabelPt, 0.95 × its single-floor size)` of its floors
+/// (Round 40 — the sheet's WIDTH caps how large a label can ever get, so a
+/// width-limited band shrinks only its own page, never the whole set).
 ///
 /// The builder supplies each page (`buildMechanicalRiserSld(floorRange:)`),
 /// which draws a 'LANJUT KE <floor>' match stub where a riser leaves the
 /// page; the extras (plant detail, callouts, notes) ride the page carrying
 /// the lowest floor. Pages are returned TOP floors first. Pure.
 library;
+
+import 'dart:math' as math;
 
 import 'drawing_chrome.dart' show DrawingChrome, kMinPlotLabelPt;
 import 'electrical_pdf_export.dart' show sldSinglePageMinLabelPt;
@@ -53,28 +55,40 @@ List<SldSheet> paginatedRiserSheets({
   if (levelCount <= 1 || minPt(whole) >= kMinPlotLabelPt - 1e-9) {
     return [whole];
   }
-  ({List<SldSheet> sheets, double min}) pagesAt(int k) {
-    final sheets = [for (final r in riserFloorChunks(levelCount, k)) build(r)];
-    var m = double.infinity;
-    for (final s in sheets) {
-      final v = minPt(s);
-      if (v < m) m = v;
-    }
-    return (sheets: sheets, min: m);
+  // Round 40 (elec-drawings-5-riser-pagination-global-cap-shrinks-all-
+  // pages) — paginate GREEDILY per chunk from floor 0 upward. Each floor's
+  // own best size is `min(kMinPlotLabelPt, 0.95 × its single-floor page)`;
+  // a page may hold a run of floors only while it prints at the LARGEST of
+  // those targets among its floors, so a width-limited band (a ground band
+  // with the source spine + several boards) shrinks ITS OWN page only —
+  // never every page of the set (one global floors-per-page used to print
+  // the upper pages at ~6 pt where 5-floor chunks print at 7 pt).
+  final singleMin = [
+    for (var f = 0; f < levelCount; f++) minPt(build((lo: f, hi: f))),
+  ];
+  double floorTarget(int f) {
+    final cap = singleMin[f] * 0.95;
+    return (cap < kMinPlotLabelPt ? cap : kMinPlotLabelPt) - 1e-9;
   }
 
-  final single = pagesAt(1);
-  // Within 5 % of the best achievable size counts as legible-as-possible, so
-  // float noise never forces one more page.
-  final cap = single.min * 0.95;
-  final target = (cap < kMinPlotLabelPt ? cap : kMinPlotLabelPt) - 1e-9;
-  // The width-capped case: one sheet already prints as large as any split.
-  if (minPt(whole) >= target) return [whole];
-  var best = single.sheets;
-  for (var k = 2; k < levelCount; k++) {
-    final pages = pagesAt(k);
-    if (pages.min < target) break;
-    best = pages.sheets;
+  final pages = <SldSheet>[];
+  var lo = 0;
+  while (lo < levelCount) {
+    var hi = lo;
+    var sheet = build((lo: lo, hi: lo));
+    var target = floorTarget(lo);
+    while (hi + 1 < levelCount) {
+      final t = math.max(target, floorTarget(hi + 1));
+      final next = build((lo: lo, hi: hi + 1));
+      if (minPt(next) < t) break;
+      hi++;
+      sheet = next;
+      target = t;
+    }
+    pages.add(sheet);
+    lo = hi + 1;
   }
-  return best;
+  // One chunk spanning every floor IS the whole sheet.
+  if (pages.length == 1) return [whole];
+  return pages.reversed.toList();
 }

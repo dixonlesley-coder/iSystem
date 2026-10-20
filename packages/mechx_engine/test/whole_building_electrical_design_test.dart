@@ -1032,7 +1032,9 @@ void main() {
       var leaves = 0.0;
       for (final p in project.panels) {
         for (final c in p.circuits) {
-          if (c.feedsPanelId == null) leaves += circuitConnectedW(c);
+          // Round 40 — CONNECTED is undiversified (the board 'connected'
+          // basis); the demand factors belong in the demand figure only.
+          if (c.feedsPanelId == null) leaves += circuitUndiversifiedW(c);
         }
       }
       expect(sys.supply.connectedW, closeTo(leaves, 1.0));

@@ -356,6 +356,14 @@ class ElectricalPanelResult {
   /// when the board holds no capacitor way.
   final double capacitorCurrentA;
 
+  /// Round 40 (regression-largest-machine-floor-not-propagated-upstream) —
+  /// the largest UNDIVERSIFIED running current (A) of any single FINAL way on
+  /// this board OR anywhere below it in the feeder tree. One machine does not
+  /// diversify against itself, so this floors this board's incomer, the
+  /// feeder that supplies it, every incomer upstream and the recommended PLN
+  /// daya. 0 (the default) on a hand-built result.
+  final double largestDownstreamRunA;
+
   final PhaseBalanceResult phaseBalance;
 
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
@@ -397,6 +405,7 @@ class ElectricalPanelResult {
     this.headroomApplied = false,
     this.spareWaysReserved = 0,
     this.capacitorCurrentA = 0,
+    this.largestDownstreamRunA = 0,
     required this.phaseBalance,
     required this.warnings,
     this.diversityFactor = 1.0,

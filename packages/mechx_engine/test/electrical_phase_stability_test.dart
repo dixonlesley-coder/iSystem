@@ -302,9 +302,11 @@ void main() {
       // minimum-worst partition. The incomer sizes on the worst phase and the
       // prior map is session-only (never saved), so the 0.2 A heavier sticky
       // assignment is NOT kept even though the spread gain (0.4 A) is below
-      // the 1.0 A threshold. The exact walk (k1 first, L1 before L2 before
-      // L3) labels the optimum k1/k6 -> L1, k2/k5 -> L2, k3/k4 -> L3 — the
-      // same labels the fresh greedy reaches.
+      // the 1.0 A threshold. Round 40 — the optimum PARTITION is labelled
+      // with the fewest ways off their wired line (never the fresh labels
+      // wholesale): k1 stays on L1 so {k1,k6} -> L1 (k6 moves), {k3,k4}
+      // stays on L2 (0 moves), {k2,k5} -> L3 (k5 moves) — 2 moves, against
+      // 4 for the fresh labels (k1/k6 L1, k2/k5 L2, k3/k4 L3).
       final r = computePanel(
         p,
         panel,
@@ -313,10 +315,17 @@ void main() {
           phaseReassignThresholdA: 1.0,
         ),
       );
-      expect(assignmentOf(r), assignmentOf(computePanel(p, panel)));
+      expect(assignmentOf(r), const <String, PhaseAssignment>{
+        'k1': PhaseAssignment.l1,
+        'k2': PhaseAssignment.l3,
+        'k3': PhaseAssignment.l2,
+        'k4': PhaseAssignment.l2,
+        'k5': PhaseAssignment.l3,
+        'k6': PhaseAssignment.l1,
+      });
       expect(r.phaseBalance.l1, closeTo(15.4, 1e-9));
-      expect(r.phaseBalance.l2, closeTo(16.6, 1e-9));
-      expect(r.phaseBalance.l3, closeTo(16.0, 1e-9));
+      expect(r.phaseBalance.l2, closeTo(16.0, 1e-9));
+      expect(r.phaseBalance.l3, closeTo(16.6, 1e-9));
       // imbalance = (16.6 - 15.4) / 16 · 100 = 7.5 %
       expect(r.phaseBalance.imbalancePercent, closeTo(7.5, 1e-9));
     });

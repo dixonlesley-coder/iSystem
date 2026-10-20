@@ -211,7 +211,14 @@ SupplyDesign determineSupply(
   int? declaredUnits,
   bool singleSectionCarriesAll = false,
   ApparentPower? perPhaseDemand,
+  ApparentPower? largestSectionDemand,
 }) {
+  // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
+  // service each root board sits on ONE unit (coupler normally open — the
+  // fault model gives each section one unit's fault), so a section carries
+  // what ITS root board demands, never an equal half of the total. Null ⇒
+  // the equal split ⇒ byte-identical.
+  final sectionKva = largestSectionDemand?.inKilovoltAmperes ?? 0;
   final demandKva = _round1(demand.inKilovoltAmperes);
   // Round 39 (regression-lv-supply-verdict-without-any-lv-daya) — a PLN 3φ
   // service is limited PER PHASE, so an undeclared service is judged (LV vs
@@ -246,19 +253,29 @@ SupplyDesign determineSupply(
     // whole demand — the basis the incomer floor and the
     // `service-capacity-below-demand` judge use (never demand / 2).
     final oneSection = dualTransformer && singleSectionCarriesAll && units > 1;
-    final carried = oneSection
+    final split = oneSection
         ? demand.inKilovoltAmperes / (units / 2)
         : demand.inKilovoltAmperes / units;
+    // Round 40 — the most loaded SECTION governs a dual service whose two
+    // root boards are unequal (one unit per section on a 2-unit service).
+    final sectionGoverns = dualTransformer &&
+        !oneSection &&
+        units == 2 &&
+        sectionKva > split + 1e-9;
+    final carried = sectionGoverns ? sectionKva : split;
     final below = declared * transformerLoadingFactor < carried - 1e-9;
     final unitsText = units > 1 ? '$units × ' : '';
     final carrierText = oneSection
         ? 'the one section feeding the single service-entrance board '
             '(coupler normally open) carries'
-        : units > 1
-            ? (dualTransformer && units == 2
-                ? 'each section carries'
-                : 'each unit carries')
-            : 'demand';
+        : sectionGoverns
+            ? 'the most loaded section carries (its unit is '
+                '${(carried / declared * 100).round()} % of nameplate)'
+            : units > 1
+                ? (dualTransformer && units == 2
+                    ? 'each section carries'
+                    : 'each unit carries')
+                : 'demand';
     return SupplyDesign(
       lvOrMv: SupplyLevel.mv,
       demandKva: demandKva,
@@ -308,7 +325,7 @@ SupplyDesign determineSupply(
     // behind a normally-open coupler. The fault level the boards see is ONE
     // unit's (the coupler never parallels them).
     final perUnitRequired =
-        (basisKva / 2) / transformerLoadingFactor;
+        math.max(basisKva / 2, sectionKva) / transformerLoadingFactor;
     final sel = _selectTransformerUnits(perUnitRequired);
     final kva = sel.kva;
     final exceeded = sel.units > 1;

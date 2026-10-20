@@ -1061,6 +1061,11 @@ enum StringKey {
   mergeLoadBasisMismatch,
   mepDerivedWayMoveLocked,
   mepDerivedWayPositionLocked,
+  /// Round 40 — refusal: an MEP-derived way's machine power / life-safety
+  /// duty follows the drawn equipment.
+  mepDerivedWayMachineLocked,
+  /// Round 40 — inspector caption under an MEP-derived way's greyed power.
+  electricalFromDrawnMachine,
   mepBoardLocked,
 
   /// The detail of the first added way — its own name + motor rating (the
@@ -2557,6 +2562,10 @@ const Map<StringKey, String> _en = {
       'This way follows equipment on the plan and stays on the MEP Equipment board — feed that board from the panel instead',
   StringKey.mepDerivedWayPositionLocked:
       'This load sits at its equipment on the plan — move the equipment there to move it',
+  StringKey.mepDerivedWayMachineLocked:
+      'This way\'s power and life-safety duty follow the drawn machine — change the equipment on the plan',
+  StringKey.electricalFromDrawnMachine:
+      'From the drawn machine — change the equipment on the plan',
   StringKey.mepBoardLocked:
       'The MEP Equipment board follows the plan — delete its equipment there first',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
@@ -4091,6 +4100,10 @@ const Map<StringKey, String> _id = {
       'Jalur ini mengikuti peralatan di denah dan tetap di Panel Peralatan MEP — suplai panel tersebut dari panel tujuan',
   StringKey.mepDerivedWayPositionLocked:
       'Beban ini berada di peralatannya pada denah — pindahkan peralatannya di sana untuk memindahkannya',
+  StringKey.mepDerivedWayMachineLocked:
+      'Daya dan fungsi keselamatan jalur ini mengikuti mesin di denah — ubah peralatannya di denah',
+  StringKey.electricalFromDrawnMachine:
+      'Dari mesin di denah — ubah peralatannya di denah',
   StringKey.mepBoardLocked:
       'Panel Peralatan MEP mengikuti denah — hapus peralatannya di sana terlebih dahulu',
   StringKey.mepSyncDetailTemplate: '{name} · {kw} kW',
@@ -4351,6 +4364,19 @@ const Map<String, (String, String)> _electricalWarningTitles = {
   'genset-below-essential-demand': (
     'Genset below essential demand',
     'Genset di bawah beban esensial'
+  ),
+  // Round 40 — dual-transformer sections / declared transformer loading.
+  'section-transformer-overloaded': (
+    'Transformer section overloaded',
+    'Seksi trafo kelebihan beban'
+  ),
+  'transformer-below-demand': (
+    'Transformer below demand',
+    'Trafo di bawah beban'
+  ),
+  'root-incomer-exceeds-transformer-flc': (
+    'Incomer above transformer full-load current',
+    'Incomer melebihi arus beban penuh trafo'
   ),
   'genset-below-essential-power': (
     'Genset below essential power',

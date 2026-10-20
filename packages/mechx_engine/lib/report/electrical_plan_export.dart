@@ -463,12 +463,22 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
     final p = map(rs.x, rs.y);
     final key = '${rs.x},${rs.y}';
     final k = perBoard.update(key, (v) => v + 1, ifAbsent: () => 0);
-    final deg = bearings[k % bearings.length];
+    // Round 40 (elec-drawings-5-layout-riser-markers-coincide) — a board
+    // with more than 8 off-sheet risers used to repeat the 8 bearings at one
+    // stub length, so the 9th marker sat ON the 1st (21 risers drew 10
+    // marks). Each further LAP of eight rotates between the earlier rays
+    // (+22.5 deg on odd laps, +11.25 deg on the next pair) and reaches one
+    // stub further out, so every mark — and the ray to it — is its own.
+    final lap = k ~/ bearings.length;
+    final deg = bearings[k % bearings.length] +
+        22.5 * (lap % 2) +
+        11.25 * ((lap ~/ 2) % 2);
     final rad = deg * math.pi / 180;
     final start = z.panelH / 2;
+    final reach = start + z.riserStub * (1 + lap);
     final x1 = p.x + math.cos(rad) * start, y1 = p.y + math.sin(rad) * start;
-    final x2 = p.x + math.cos(rad) * (start + z.riserStub);
-    final y2 = p.y + math.sin(rad) * (start + z.riserStub);
+    final x2 = p.x + math.cos(rad) * reach;
+    final y2 = p.y + math.sin(rad) * reach;
     layout.addRun(null, x1, y1, x2, y2);
     layout.addBox((
       minX: x2 - z.riserR,
