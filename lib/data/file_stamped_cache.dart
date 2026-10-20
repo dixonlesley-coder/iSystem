@@ -38,6 +38,20 @@ class FileStampedCache<T> {
   /// a non-existent path primes against a null stamp and stays a hit).
   void prime(String path, T value) => _entries[path] = (fileStamp(path), value);
 
+  /// The cached value for [path] when it is still FRESH (its stamp unchanged),
+  /// without loading on a miss — `(true, value)` on a hit, `(false, null)`
+  /// otherwise. Lets a caller load off the UI isolate and [store] the result.
+  (bool, T?) peek(String path) {
+    final hit = _entries[path];
+    if (hit != null && hit.$1 == fileStamp(path)) return (true, hit.$2);
+    return (false, null);
+  }
+
+  /// Record [value] for [path] against [stamp] — the stamp read BEFORE an
+  /// asynchronous load began, so a file revised mid-load re-loads next time.
+  void store(String path, String? stamp, T value) =>
+      _entries[path] = (stamp, value);
+
   /// Drop [path]'s entry (or every entry).
   void evict(String path) => _entries.remove(path);
   void clear() => _entries.clear();

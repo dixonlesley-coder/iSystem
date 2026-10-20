@@ -453,10 +453,10 @@ class _GlyphState extends State<_Glyph> {
     final enabled = widget.onTap != null;
     final visual = AnimatedScale(
       scale: _down && enabled ? 0.9 : 1.0,
-      duration: MechXMotion.press,
+      duration: MechXMotion.resolve(context, MechXMotion.press),
       curve: MechXMotion.standard,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         width: 28,
         height: 28,

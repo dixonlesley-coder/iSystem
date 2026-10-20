@@ -101,6 +101,8 @@ class ServiceLegendChip extends ConsumerWidget {
       borderRadius: MechXRadii.control,
       blurSigma: MechXGlass.blurSigmaLight,
       shadow: MechXShadow.card,
+      // Floats over the drawing paper — the legible over-paper glass.
+      overPaper: true,
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 176),
         child: Column(
@@ -158,7 +160,7 @@ class ServiceLegendChip extends ConsumerWidget {
                       Text(
                         strings(StringKey.canvasLegendGhosted).toUpperCase(),
                         style: context.type.micro
-                            .copyWith(color: colors.textMuted),
+                            .copyWith(color: colors.textSecondary),
                       ),
                       for (final l in ghosted) _ghostRow(context, l),
                     ],
@@ -207,7 +209,7 @@ class ServiceLegendChip extends ConsumerWidget {
           layer.label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: context.type.caption.copyWith(color: context.colors.textMuted),
+          style: context.type.caption.copyWith(color: context.colors.textSecondary),
         ),
       );
 }

@@ -43,6 +43,41 @@ const Color kRailT = Color(0xFF1971C2); // L3 / T
 const Color kRailN = Color(0xFF4DABF7); // neutral
 const Color kRailPE = Color(0xFF2F9E44); // protective earth
 
+/// The R / S / T inks the engine-sheet PHASE ROLES ([SldRole.phaseR] / `phaseS`
+/// / `phaseT`) paint in on a live electrical CANVAS, chosen for the surface
+/// they sit on. On a light surface they are the [kRailR] / [kRailS] /
+/// [kRailT] rail hues; on the DARK workspace (board schedules inside dark
+/// panel cards, the overview / riser on the near-black canvas) the deep red
+/// and blue rails measure only ~2.5:1, so dark mode lifts them to the
+/// matching LIGHT tints (R #FF6B6B, T #4DABF7, both >= 5:1 on `surface`);
+/// S (amber) already reads at ~6:1 and is unchanged. Same hues, legible
+/// weight — a phase is still recognisably the same colour in both themes.
+///
+/// CANVAS ONLY: the PDF / DXF exporters are pure-engine renderers with their
+/// own print inks (paper is white) and never read these constants.
+@immutable
+class SldPhaseInks {
+  final Color r, s, t;
+  const SldPhaseInks(this.r, this.s, this.t);
+
+  /// The rail hues (light surfaces, the default).
+  static const SldPhaseInks light = SldPhaseInks(kRailR, kRailS, kRailT);
+
+  /// The dark-surface tints.
+  static const SldPhaseInks dark =
+      SldPhaseInks(Color(0xFFFF6B6B), kRailS, Color(0xFF4DABF7));
+
+  static SldPhaseInks forBrightness(Brightness b) =>
+      b == Brightness.dark ? dark : light;
+
+  @override
+  bool operator ==(Object other) =>
+      other is SldPhaseInks && other.r == r && other.s == s && other.t == t;
+
+  @override
+  int get hashCode => Object.hash(r, s, t);
+}
+
 /// Stroke px per [SldWeight] bucket (shared by the painter + the free function).
 double _weightPxFor(SldWeight w) => switch (w) {
       SldWeight.thin => 1.0,
@@ -83,16 +118,18 @@ void paintSldPrims(
   required Color essential,
   required Color source,
   required Color rectFill,
+  SldPhaseInks phaseInks = SldPhaseInks.light,
 }) {
   Color roleColor(SldRole role) => switch (role) {
         SldRole.normal => ink,
         SldRole.essential => essential,
         SldRole.source => source,
-        // Phase-bearing schedule content — the same rail hues the summary
-        // card / micro bar use, so R/S/T read identically at every LOD.
-        SldRole.phaseR => kRailR,
-        SldRole.phaseS => kRailS,
-        SldRole.phaseT => kRailT,
+        // Phase-bearing schedule content — the rail hues the summary card /
+        // micro bar use (lifted to legible tints on a dark surface, see
+        // [SldPhaseInks]), so R/S/T read as the same phase at every LOD.
+        SldRole.phaseR => phaseInks.r,
+        SldRole.phaseS => phaseInks.s,
+        SldRole.phaseT => phaseInks.t,
       };
   final s = transform.scale;
   for (final prim in sheet.prims) {
@@ -170,6 +207,9 @@ class SldSheetPainter extends CustomPainter {
   final Color background;
   final Color gridLine;
 
+  /// The R/S/T inks for the surface (see [SldPhaseInks]).
+  final SldPhaseInks phaseInks;
+
   SldSheetPainter({
     required this.sheet,
     required this.transform,
@@ -178,6 +218,7 @@ class SldSheetPainter extends CustomPainter {
     required this.source,
     required this.background,
     required this.gridLine,
+    this.phaseInks = SldPhaseInks.light,
   });
 
   @override
@@ -192,11 +233,13 @@ class SldSheetPainter extends CustomPainter {
       essential: essential,
       source: source,
       rectFill: background,
+      phaseInks: phaseInks,
     );
   }
 
   @override
   bool shouldRepaint(SldSheetPainter old) =>
+      old.phaseInks != phaseInks ||
       old.sheet != sheet ||
       old.transform != transform ||
       old.ink != ink ||
@@ -236,6 +279,9 @@ class SldBoardSchedulePainter extends CustomPainter {
   final int? hoveredRow;
   final Color? highlight;
 
+  /// The R/S/T inks for the card surface (see [SldPhaseInks]).
+  final SldPhaseInks phaseInks;
+
   SldBoardSchedulePainter({
     required this.sheet,
     required this.ink,
@@ -243,6 +289,7 @@ class SldBoardSchedulePainter extends CustomPainter {
     this.pad = 6,
     this.hoveredRow,
     this.highlight,
+    this.phaseInks = SldPhaseInks.light,
   });
 
   @override
@@ -282,11 +329,13 @@ class SldBoardSchedulePainter extends CustomPainter {
       essential: essential,
       source: ink,
       rectFill: const Color(0x00000000),
+      phaseInks: phaseInks,
     );
   }
 
   @override
   bool shouldRepaint(SldBoardSchedulePainter old) =>
+      old.phaseInks != phaseInks ||
       old.sheet != sheet ||
       old.ink != ink ||
       old.essential != essential ||
@@ -454,6 +503,7 @@ class SldSheetViewState extends State<SldSheetView> {
                   source: colors.accent,
                   background: colors.canvas,
                   gridLine: colors.gridLine,
+                  phaseInks: SldPhaseInks.forBrightness(colors.brightness),
                 ),
               ),
             );

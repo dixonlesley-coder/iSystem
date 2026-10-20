@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
@@ -7,6 +9,8 @@ import '../../data/dxf_import.dart' show dxfContentSize, dxfMappingBounds;
 import '../../data/file_stamped_cache.dart';
 import '../../data/dxf_text.dart';
 import '../../store/models/sheet.dart';
+import '../strings/app_strings.dart';
+import 'sheet_page_states.dart';
 
 /// Renders a DXF-backed [Sheet] as static vector linework filling its content
 /// box — the vector sibling of [PdfSheetPage]. The drawing is normalised into
@@ -19,8 +23,12 @@ import '../../store/models/sheet.dart';
 /// ([_superSample]× the content size, scaled back with a [FittedBox]) to keep
 /// the linework crisp when zoomed in to place nodes.
 ///
-/// Parsing is cached per path; a read/parse failure renders an inline message
-/// rather than throwing.
+/// Parsing is cached per path. A drawing not yet in the cache is parsed OFF the
+/// UI isolate ([Isolate.run] — the engine's `parseDxf` is pure Dart), showing
+/// the sheet-paper [SheetLoadingPage] meanwhile, so opening a large plan never
+/// freezes a frame; a cached drawing paints on the first frame as before. A
+/// read/parse failure renders the token [SheetLoadErrorPage] (with 'Replace
+/// plan…' when the host wires [onReplacePlan]) rather than throwing.
 class DxfSheetPage extends StatefulWidget {
   final Sheet sheet;
 
@@ -36,7 +44,11 @@ class DxfSheetPage extends StatefulWidget {
   /// painting through the stored frame.
   final void Function(String sheetId, DxfBounds live)? onFrameChanged;
 
-  const DxfSheetPage({super.key, required this.sheet, this.onFrameChanged});
+  /// Re-point the sheet at another file — offered on the load-error page.
+  final VoidCallback? onReplacePlan;
+
+  const DxfSheetPage(
+      {super.key, required this.sheet, this.onFrameChanged, this.onReplacePlan});
 
   @override
   State<DxfSheetPage> createState() => _DxfSheetPageState();
@@ -46,15 +58,44 @@ class DxfSheetPage extends StatefulWidget {
   /// revisits, but a plan revised IN PLACE (same path) re-parses instead of
   /// painting the stale revision. A `null` value = parsed-but-empty/failed.
   static final FileStampedCache<DxfDrawing?> _cache =
-      FileStampedCache<DxfDrawing?>((path) {
+      FileStampedCache<DxfDrawing?>(_parseFile);
+
+  /// Read + parse [path] (null on any failure). Pure Dart — safe to run on a
+  /// background isolate.
+  static DxfDrawing? _parseFile(String path) {
     try {
       return parseDxf(readDxfTextSync(path));
     } catch (_) {
       return null;
     }
-  });
+  }
 
   static DxfDrawing? _load(String path) => _cache.get(path);
+
+  /// In-flight background parses, one per path (two sheets of one file — or a
+  /// rebuild mid-parse — share a single isolate run).
+  static final Map<String, Future<DxfDrawing?>> _inFlight = {};
+
+  /// The drawing for [path], parsed on a background isolate when it is not
+  /// already cached fresh; the result lands in the same stamped cache the
+  /// synchronous paths ([cachedDrawing], the underlay snap) read.
+  static Future<DxfDrawing?> loadAsync(String path) {
+    final (hit, value) = _cache.peek(path);
+    if (hit) return Future.value(value);
+    return _inFlight[path] ??= () async {
+      final stamp = fileStamp(path);
+      try {
+        final drawing = await Isolate.run(() => _parseFile(path));
+        _cache.store(path, stamp, drawing);
+        return drawing;
+      } catch (_) {
+        _cache.store(path, stamp, null);
+        return null;
+      } finally {
+        unawaited(_inFlight.remove(path));
+      }
+    }();
+  }
 
   /// Test seam: prime the cache so a widget test can render without disk I/O.
   static void cacheForTest(String path, DxfDrawing? drawing) =>
@@ -71,15 +112,69 @@ class DxfSheetPage extends StatefulWidget {
 class _DxfSheetPageState extends State<DxfSheetPage> {
   DxfDrawing? _reported;
 
+  /// The path whose drawing [_drawing] holds, and whether it has loaded.
+  String? _loadedPath;
+  bool _loaded = false;
+  DxfDrawing? _drawing;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(DxfSheetPage old) {
+    super.didUpdateWidget(old);
+    if (old.sheet.dxfPath != widget.sheet.dxfPath) _resolve();
+  }
+
+  /// Use the cached drawing at once when it is fresh (no placeholder frame —
+  /// a revisited sheet paints immediately); otherwise parse in the background
+  /// and show the loading page until it lands.
+  void _resolve() {
+    final path = widget.sheet.dxfPath;
+    _loadedPath = path;
+    if (path == null) {
+      _loaded = true;
+      _drawing = null;
+      return;
+    }
+    final (hit, value) = DxfSheetPage._cache.peek(path);
+    if (hit) {
+      _loaded = true;
+      _drawing = value;
+      return;
+    }
+    _loaded = false;
+    _drawing = null;
+    DxfSheetPage.loadAsync(path).then((drawing) {
+      if (!mounted || _loadedPath != path) return;
+      setState(() {
+        _loaded = true;
+        _drawing = drawing;
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final path = widget.sheet.dxfPath;
+    final strings = MechXStrings.of(context);
     if (path == null) {
-      return const _ErrorPage('No DXF path on sheet.');
+      return SheetLoadErrorPage(
+        message: strings(StringKey.sheetNoSourcePath),
+        onReplacePlan: widget.onReplacePlan,
+      );
     }
-    final drawing = DxfSheetPage._load(path);
+    if (!_loaded) return const SheetLoadingPage();
+    final drawing = _drawing;
     if (drawing == null || drawing.isEmpty) {
-      return const _ErrorPage('Could not load DXF, or it has no geometry.');
+      return SheetLoadErrorPage(
+        message: strings(StringKey.sheetDxfLoadFailed),
+        detail: path,
+        onReplacePlan: widget.onReplacePlan,
+      );
     }
     final frame = dxfMappingBounds(widget.sheet, drawing.bounds);
     final stored = widget.sheet.dxfFrame;
@@ -201,30 +296,4 @@ class _DxfPainter extends CustomPainter {
       old.frame.maxX != frame.maxX ||
       old.frame.minY != frame.minY ||
       old.frame.maxY != frame.maxY;
-}
-
-class _ErrorPage extends StatelessWidget {
-  final String message;
-  const _ErrorPage(this.message);
-
-  @override
-  Widget build(BuildContext context) {
-    return ColoredBox(
-      color: const Color(0xFFFFF3F3),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            message,
-            style: const TextStyle(
-              fontFamily: 'Roboto',
-              fontSize: 14,
-              color: Color(0xFFB00020),
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
-    );
-  }
 }

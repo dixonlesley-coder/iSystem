@@ -1160,24 +1160,37 @@ class ElectricalSystemSummary extends ConsumerWidget {
     final base = numeric ? MechXTypography.tabular(type.caption) : type.caption;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(key,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.caption.copyWith(color: colors.textMuted)),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          Flexible(
-            child: Text(value,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: base.copyWith(color: colors.textSecondary)),
-          ),
-        ],
+      // The value hugs the RIGHT edge like the mechanical `_kvRow`: laid out
+      // at its intrinsic width (capped at ~2/3 of the row so a long value
+      // wraps instead of starving the key), with the key taking the rest — an
+      // Expanded key + Flexible value split the row 50/50 and parked short
+      // values mid-row.
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final valueMax = constraints.hasBoundedWidth
+              ? constraints.maxWidth * 2 / 3
+              : double.infinity;
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: valueMax),
+                child: Text(value,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: base.copyWith(color: colors.textSecondary)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

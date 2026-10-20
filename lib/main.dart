@@ -10,7 +10,7 @@ import 'data/recovery.dart';
 import 'store/app_state.dart';
 import 'store/models/sheet.dart';
 import 'ui/canvas/hosted_dxf_sheet_page.dart';
-import 'ui/canvas/pdf_sheet_page.dart';
+import 'ui/canvas/hosted_pdf_sheet_page.dart';
 import 'ui/canvas/sheet_canvas.dart';
 import 'ui/shell/project_io.dart';
 
@@ -26,7 +26,7 @@ void main(List<String> args) async {
       sheetContentBuilderProvider.overrideWithValue(
         (BuildContext context, Sheet sheet) {
           if (sheet.pdfPath != null) {
-            return PdfSheetPage(sheet: sheet);
+            return HostedPdfSheetPage(sheet: sheet);
           }
           if (sheet.dxfPath != null) {
             // Round 24 — a plan revised in place (its extent changed) flags

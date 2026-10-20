@@ -271,7 +271,7 @@ class HeatmapLegend extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              'Residual pressure',
+              strings(StringKey.heatmapResidualPressure),
               style: type.caption.copyWith(color: colors.textSecondary),
             ),
             // L-2a: the Results card beside this legend verdicts on ZONE
@@ -298,7 +298,7 @@ class HeatmapLegend extends StatelessWidget {
                   Positioned.fill(
                     child: Container(
                       decoration: const BoxDecoration(
-                        borderRadius: BorderRadius.all(Radius.circular(4)),
+                        borderRadius: MechXRadii.small,
                         gradient: LinearGradient(
                           colors: [_kRampLow, _kRampMid, _kRampHigh],
                         ),
@@ -334,23 +334,34 @@ class HeatmapLegend extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Uniform ${bar(minKpa)}',
+                    strings.format(
+                        StringKey.heatmapUniformValue, {'value': bar(minKpa)}),
                     maxLines: 1,
                     softWrap: false,
                     style: type.mono.copyWith(color: colors.textMuted),
                   ),
-                  if (atFixtures) const SizedBox(width: MechXSpacing.xs),
+                  // A middot separates the figure from its verdict
+                  // ('Uniform 81 kPa · below 225 kPa target').
+                  if (atFixtures) ...[
+                    const SizedBox(width: MechXSpacing.xs),
+                    Text('·',
+                        style: type.mono.copyWith(color: colors.textMuted)),
+                    const SizedBox(width: MechXSpacing.xs),
+                  ],
                   // M9: an upfeed residual cannot fail this comparison, so it
                   // gets the honest neutral statement, never a green PASS.
                   if (atFixtures)
                     Text(
                       targetHeldByDesign
-                          ? 'held by design'
+                          ? strings(StringKey.heatmapVerdictHeldByDesign)
                           : low
-                          ? 'LOW'
+                          ? strings(StringKey.heatmapVerdictLow)
                           : pass
-                          ? 'PASS'
-                          : strings(StringKey.heatmapBelowTarget),
+                          ? strings(StringKey.heatmapVerdictPass)
+                          // The uniform state has no target tick on the
+                          // bar, so the verdict carries the figure itself.
+                          : strings.format(StringKey.heatmapBelowTargetValue,
+                              {'value': bar(targetKpa)}),
                       maxLines: 1,
                       softWrap: false,
                       style: type.mono.copyWith(
@@ -370,7 +381,8 @@ class HeatmapLegend extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    'Low ${bar(minKpa)}',
+                    strings.format(
+                        StringKey.heatmapLowValue, {'value': bar(minKpa)}),
                     maxLines: 1,
                     softWrap: false,
                     style: type.mono.copyWith(color: colors.textMuted),
@@ -381,7 +393,8 @@ class HeatmapLegend extends StatelessWidget {
                   // 'Low 55 kPaHigh 81 kPa'.
                   const SizedBox(width: MechXSpacing.md),
                   Text(
-                    'High ${bar(maxKpa)}',
+                    strings.format(
+                        StringKey.heatmapHighValue, {'value': bar(maxKpa)}),
                     maxLines: 1,
                     softWrap: false,
                     textAlign: TextAlign.right,

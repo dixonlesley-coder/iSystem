@@ -342,6 +342,24 @@ class BusyController extends Notifier<String?> {
   void clear() => state = null;
 }
 
+/// The name of the export currently running through `runExportGuarded`, or
+/// null when none is. While non-null a second export trigger is IGNORED (a
+/// double-click / a repeated accelerator must not open a second save dialog
+/// or interleave two writes), and the shared save-dialog seam
+/// (`pickExportSave`) raises the [busyProvider] pill as soon as the user has
+/// chosen a file — the slow part is the write, not the picker. Transient
+/// session state; never persisted.
+final exportInFlightProvider =
+    NotifierProvider<ExportInFlightController, String?>(
+        ExportInFlightController.new);
+
+class ExportInFlightController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? name) => state = name;
+}
+
 /// The file the open project lives in — set on a successful Open or Save, so
 /// Ctrl/Cmd+S saves IN PLACE instead of re-opening the OS dialog every time.
 /// Null until the project has a home (a brand-new project Save-As's first).

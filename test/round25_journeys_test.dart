@@ -278,7 +278,7 @@ void main() {
           of: find.byType(NavRail), matching: find.text('Building')));
       await tester.pumpAndSettle();
       // Level 2 sits at 4.0 + 3.25 = 7.25 m (FFL +7.25 on the drawings).
-      expect(find.text('elev +7.25 m', skipOffstage: false), findsOneWidget);
+      expect(find.text('FFL +7.25', skipOffstage: false), findsOneWidget);
       expect(find.text('3.25 m', skipOffstage: false), findsOneWidget);
       // Total 4.0 + 3.25 + 3.5 = 10.75 m.
       expect(find.text('10.75 m', skipOffstage: false), findsWidgets);

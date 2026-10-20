@@ -80,7 +80,11 @@ class _LayerSwitcherState extends ConsumerState<LayerSwitcher> {
               // J5 — the funnel filters the ACTIVE layer's services, so it
               // renders BESIDE that layer's segment (inside its hover/focus
               // region, so reaching for it never hides it).
-              showFilter: canFilter && layer == active,
+              // The funnel SLOT always rides the active entry (concealed when
+              // the layer has nothing to filter — electrical), so the row's
+              // width never changes as the active layer moves.
+              showFilter: layer == active,
+              filterAvailable: canFilter,
               filterOpen: _filterOpen,
               // An active filter (or an open one) pins the funnel visible —
               // a filter that applies must never hide its own control.
@@ -131,6 +135,10 @@ class _LayerSegment extends StatefulWidget {
 
   /// Whether this entry carries the active layer's per-service funnel.
   final bool showFilter;
+
+  /// Whether the layer actually has services to filter; false ⇒ the funnel
+  /// slot is reserved but concealed and inert.
+  final bool filterAvailable;
   final bool filterOpen;
 
   /// The funnel stays visible without hover (an open or applied filter).
@@ -147,6 +155,7 @@ class _LayerSegment extends StatefulWidget {
     required this.onToggleVisible,
     required this.onToggleLock,
     this.showFilter = false,
+    this.filterAvailable = true,
     this.filterOpen = false,
     this.filterPinned = false,
     this.onToggleFilter,
@@ -186,7 +195,7 @@ class _LayerSegmentState extends State<_LayerSegment> {
     final engaged = _hovered || _focused;
     final showEye = engaged || !w.visible;
     final showLock = !w.active && (engaged || w.locked);
-    final showFunnel = engaged || w.filterPinned;
+    final showFunnel = w.filterAvailable && (engaged || w.filterPinned);
     return MouseRegion(
       onEnter: (_) => setState(() => _hovered = true),
       onExit: (_) => setState(() => _hovered = false),
@@ -212,6 +221,9 @@ class _LayerSegmentState extends State<_LayerSegment> {
                       selected: w.active,
                       onTap: w.onSelect,
                       selectedWeight: FontWeight.w700,
+                      // The bold active label must not widen its entry (the
+                      // breadcrumb beside the switcher would jump).
+                      reserveSelectedWidth: true,
                     ),
                   ),
                   // The visibility TOGGLE — a distinct eye glyph the accent pill
