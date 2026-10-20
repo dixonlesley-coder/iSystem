@@ -309,4 +309,51 @@ void main() {
       expect(nodeInScope(net, 'a', 's1', {ServiceType.duct}), isTrue);
     });
   });
+
+  group('review fixes (Fable, batch 3)', () {
+    test('a chained click that snaps onto a node continues FROM the node, so '
+        'a typed length measures from it', () {
+      final c = make();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'N', sheetId: 's1', x: 500, y: 500, floorIndex: 0),
+      ]));
+      n.setService(cw);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(100, 500));
+      n.placeRunPoint('s1', 0, const Offset(492, 500)); // snaps onto N
+      final d = c.read(networkControllerProvider);
+      expect(d.network.edges.single.toId, 'N');
+      expect(d.pendingPoint, const Offset(500, 500));
+      // The smart bar's exact-length path: 300 px from the pending point.
+      n.placeRunPoint('s1', 0, d.pendingPoint! + const Offset(300, 0),
+          endSnapRadius: 0);
+      final e = c.read(networkControllerProvider).network.edges.last;
+      expect(e.fromId, 'N');
+      final net = c.read(networkControllerProvider).network;
+      expect((pos(net, e.toId) - pos(net, 'N')).distance, closeTo(300, 1e-9));
+    });
+
+    test('undoing a segment that TEED into a run re-anchors at the previous '
+        'point, not the far end of the split run', () {
+      final c = make();
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'X', sheetId: 's1', x: 0, y: 500, floorIndex: 0),
+        NetNode(id: 'Y', sheetId: 's1', x: 1000, y: 500, floorIndex: 0),
+      ], edges: [
+        NetEdge(id: 'run', fromId: 'X', toId: 'Y', service: cw),
+      ]));
+      n.setService(cw);
+      n.setTool(DrawTool.drawRun);
+      n.placeRunPoint('s1', 0, const Offset(500, 100));
+      n.placeRunPoint('s1', 0, const Offset(500, 505)); // tees into the run
+      expect(c.read(networkControllerProvider).network.edges.length, 3);
+      c.read(historyProvider.notifier).undo();
+      final d = c.read(networkControllerProvider);
+      expect(d.network.edges.length, 1);
+      expect(d.pendingPoint, const Offset(500, 100));
+      expect(n.chainSegmentCount, 0);
+    });
+  });
 }

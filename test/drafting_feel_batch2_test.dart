@@ -93,8 +93,9 @@ void main() {
       await click(tester, start);
       await tester.pump(const Duration(milliseconds: 50));
       expect(draw(c).pendingPoint, isNotNull);
-      // The bar claimed the keyboard after the frame that showed it.
-      expect(isTextEntryFocused(), isTrue);
+      // The CANVAS keeps the keyboard (review: a bar that claimed it killed
+      // mid-run Ctrl+Z / arrows); the drafting keys are forwarded to the bar.
+      expect(isTextEntryFocused(), isFalse);
       for (final k in [
         LogicalKeyboardKey.digit3,
         LogicalKeyboardKey.digit0,
@@ -118,7 +119,7 @@ void main() {
       // Esc from inside the bar still backs out: first the run, then the tool
       // (the keyboard is handed back to the canvas when the bar unmounts).
       await tester.pump(const Duration(milliseconds: 50));
-      expect(isTextEntryFocused(), isTrue);
+      expect(isTextEntryFocused(), isFalse);
       await tester.sendKeyEvent(LogicalKeyboardKey.digit7);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pump(const Duration(milliseconds: 50));
@@ -393,9 +394,12 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.f9);
       await tester.pump();
       expect(c.read(gridSnapProvider), isFalse);
-      // They also work while the smart input bar holds the keyboard.
+      // They also work while the smart input bar holds the keyboard (the
+      // drafter clicked into it to edit the typed length).
       await arm(tester, c, DrawTool.drawRun);
       await click(tester, canvasRect(tester).center);
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.byType(EditableText));
       await tester.pump(const Duration(milliseconds: 50));
       expect(isTextEntryFocused(), isTrue);
       await tester.sendKeyEvent(LogicalKeyboardKey.f8);
@@ -618,6 +622,75 @@ void main() {
           .setViewport(sheetId, vt.panned(const Offset(25, 10)));
       await tester.pump();
       expect(identical(tester.widget(find.byType(ZoomControls)), zoom0), isTrue);
+    });
+  });
+
+  group('review fixes (Fable, batch 3)', () {
+    testWidgets('mid-run, the canvas keeps the keyboard: Ctrl+Z undoes the '
+        'last segment (chain kept) and an arrow pans', (tester) async {
+      final c = await pumpApp(tester);
+      await arm(tester, c, DrawTool.drawRun);
+      final p0 = canvasRect(tester).center;
+      await click(tester, p0);
+      await click(tester, p0 + const Offset(150, 0));
+      expect(net(c).edges.length, 1);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyZ);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(net(c).edges, isEmpty, reason: 'Ctrl+Z undid the segment');
+      expect(draw(c).pendingPoint, isNotNull, reason: 'the chain continues');
+      final before = c.read(sheetViewportProvider(sheetId));
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(c.read(sheetViewportProvider(sheetId)), isNot(before),
+          reason: 'the arrow panned the canvas (no caret in a hidden field)');
+    });
+
+    testWidgets('releasing a held Space after typing a digit clears the pan '
+        'latch (the draw overlay takes clicks again)', (tester) async {
+      final c = await pumpApp(tester);
+      await arm(tester, c, DrawTool.drawRun);
+      await click(tester, canvasRect(tester).center);
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.space);
+      await tester.sendKeyEvent(LogicalKeyboardKey.digit3);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.space);
+      await tester.pump();
+      final ignoring = tester
+          .widgetList<IgnorePointer>(find.ancestor(
+              of: find.byType(DrawingOverlay),
+              matching: find.byType(IgnorePointer)))
+          .any((w) => w.ignoring);
+      expect(ignoring, isFalse);
+      expect(draw(c).pendingPoint, isNotNull,
+          reason: 'the release never finishes a run with a typed length');
+    });
+
+    testWidgets('a LEFT-to-right window fully around a riser foot selects '
+        'the riser too', (tester) async {
+      final c = await pumpApp(
+          tester,
+          build: (s) => Network(nodes: [
+                NetNode(id: 'r0', sheetId: s, x: 400, y: 300, floorIndex: 0),
+                NetNode(id: 'r1', sheetId: s, x: 400, y: 300, floorIndex: 1),
+              ], edges: const [
+                NetEdge(
+                    id: 'riser',
+                    fromId: 'r0',
+                    toId: 'r1',
+                    service: ServiceType.coldWater,
+                    kind: EdgeKind.riser),
+              ]));
+      final at = screenOf(tester, c, const Offset(400, 300));
+      final from = at + const Offset(-40, -40), to = at + const Offset(40, 40);
+      final g = await tester.startGesture(from, kind: PointerDeviceKind.mouse);
+      for (var i = 1; i <= 6; i++) {
+        await g.moveTo(Offset.lerp(from, to, i / 6)!);
+        await tester.pump();
+      }
+      await g.up();
+      await tester.pump();
+      expect(c.read(selectionProvider).edgeIds, contains('riser'));
     });
   });
 }

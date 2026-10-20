@@ -20,18 +20,17 @@ import 'snapping.dart';
 /// distance. With nothing typed it stays out of the way; idle (Select tool) it
 /// renders nothing at all, so the golden screenshots are byte-identical.
 ///
-/// H1 — typing reaches it by TWO routes that never double up:
-///   * it CLAIMS the keyboard (an explicit post-frame `requestFocus`, the
-///     `MechXTextField.autofocus` pattern — `EditableText.autofocus` is
-///     ignored once the canvas focus scope already has a focused child) every
-///     time the run's pending point appears or moves, so a click-type-Enter
-///     flow needs no mouse trip into the field;
-///   * the Layout canvas key handler forwards the drafting characters
-///     (digits . , - and a separating space) to [SmartInputBarState.insertText]
-///     while a run is pending, WHICHEVER node holds focus — consuming the key,
-///     so the platform's own text input never inserts it a second time. A
-///     digit therefore always types a length mid-run and never re-picks the
-///     service (which would drop the pending chain).
+/// H1 — the CANVAS keeps the keyboard while a run is drawn (one owner, so
+/// Ctrl+Z still undoes the last segment and the arrows still pan): the Layout
+/// canvas key handler forwards the drafting characters (digits . , - and a
+/// separating space), Backspace, Enter and Esc to this bar while a run is
+/// pending — consuming the key, so the platform's own text input never inserts
+/// it a second time. A digit therefore always types a length mid-run and never
+/// re-picks the service (which would drop the pending chain). Clicking INTO
+/// the field still focuses it for caret editing; Enter then places the point
+/// and hands the keyboard straight back to the canvas. (A review of the first
+/// cut, which made the bar CLAIM focus on every pending point, found it killed
+/// mid-run Ctrl+Z / Ctrl+Y and arrow-pan.)
 class SmartInputBar extends ConsumerStatefulWidget {
   final String sheetId;
   final int floorIndex;
@@ -52,11 +51,6 @@ class SmartInputBarState extends ConsumerState<SmartInputBar> {
   final TextEditingController _controller = TextEditingController();
   final FocusNode _focusNode = FocusNode(debugLabel: 'smart-input');
   String? _error;
-
-  /// The pending point the bar last claimed focus for (H1): a NEW / moved
-  /// pending point re-claims it (each click on the canvas hands the keyboard
-  /// to the canvas first).
-  Offset? _focusedFor;
 
   /// Whether nothing is typed (Enter / Space / Backspace then act on the RUN —
   /// finish it, pan, or undo its last point — instead of on the text).
@@ -159,17 +153,12 @@ class SmartInputBarState extends ConsumerState<SmartInputBar> {
         );
     _controller.clear();
     setState(() => _error = null);
-    _focusNode.requestFocus();
-  }
-
-  /// H1 — claim the keyboard after the frame that shows (or moves) the
-  /// pending point.
-  void _claimFocusFor(Offset pending) {
-    if (_focusedFor == pending) return;
-    _focusedFor = pending;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !_focusNode.hasFocus) _focusNode.requestFocus();
-    });
+    // Back to the canvas (the run's keyboard owner) if the field was clicked
+    // into for editing.
+    if (_focusNode.hasFocus) {
+      _focusNode.unfocus(
+          disposition: UnfocusDisposition.previouslyFocusedChild);
+    }
   }
 
   @override
@@ -179,7 +168,6 @@ class SmartInputBarState extends ConsumerState<SmartInputBar> {
     // Only while actively drawing a run from a pending point.
     if (drawing.tool != DrawTool.drawRun || drawing.pending == null) {
       // The chain ended: forget the typed text so the next run starts clean.
-      _focusedFor = null;
       _error = null;
       if (_controller.text.isNotEmpty) {
         // After the frame (the field is still mounted while this builds).
@@ -192,7 +180,6 @@ class SmartInputBarState extends ConsumerState<SmartInputBar> {
       }
       return const SizedBox.shrink();
     }
-    _claimFocusFor(drawing.pending!);
     final calibrated =
         ref.watch(projectControllerProvider).calibrationFor(widget.sheetId) !=
             null;
@@ -256,9 +243,8 @@ class SmartInputBarState extends ConsumerState<SmartInputBar> {
               child: EditableText(
                 controller: _controller,
                 focusNode: _focusNode,
-                // C4/H1: the field claims focus explicitly in build (see
-                // [_claimFocusFor]) — `autofocus` alone is ignored once the
-                // canvas scope already holds a focused child.
+                // H1: no autofocus — the canvas keeps the keyboard and
+                // forwards the drafting keys here (see the class doc).
                 onChanged: _onChanged,
                 maxLines: 1,
                 style: type.mono.copyWith(color: colors.textPrimary),

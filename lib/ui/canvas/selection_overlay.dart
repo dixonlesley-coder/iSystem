@@ -1849,7 +1849,10 @@ class _SelectionGestureLayerState
           final fromIn = nodeIds.contains(e.fromId);
           final toIn = nodeIds.contains(e.toId);
           if (e.kind == EdgeKind.riser) {
-            if (!windowMode && (fromIn || toIn)) edgeIds.add(e.id);
+            // A riser's whole on-plan footprint is the marker at its end on
+            // THIS floor, so a window fully around that marker encloses it —
+            // window and crossing agree (review: the window used to skip it).
+            if (fromIn || toIn) edgeIds.add(e.id);
             continue;
           }
           final hit = windowMode

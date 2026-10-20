@@ -364,6 +364,19 @@ class NetworkController extends Notifier<DrawingState> {
     _chainSegments = segments;
   }
 
+  /// H4 (review) — each chained placement's (tip AFTER, tip BEFORE): undoing
+  /// that step re-anchors the rubber band EXACTLY where the run was before it,
+  /// instead of inferring it from topology (a segment that teed into a run
+  /// used to re-anchor at the far end of the split run). Only consulted when
+  /// the top entry's AFTER is the live pending point; otherwise undo falls
+  /// back to the topology walk.
+  final List<(Offset, Offset)> _chainSteps = [];
+
+  void _pushChainStep(Offset before, Offset after, int segments) {
+    _recordChain(after, segments);
+    _chainSteps.add((after, before));
+  }
+
   void setService(ServiceType service) => state = DrawingState(
         network: state.network,
         service: service,
@@ -504,6 +517,7 @@ class NetworkController extends Notifier<DrawingState> {
         pendingSheetId: sheetId,
         pendingFloorIndex: floorIndex,
       );
+      _chainSteps.clear();
       _recordChain(start, 0);
       return;
     }
@@ -526,6 +540,13 @@ class NetworkController extends Notifier<DrawingState> {
         gridMetersPerPixel: gridMetersPerPixel,
         underlaySnap: underlaySnap,
         avoidServices: avoidServices);
+    // M1 (review) — the chain continues from where the end REALLY landed: the
+    // node / tee / underlay / grid point the click resolved to, never the raw
+    // click up to a snap radius off it (a typed length measured from there
+    // came out short by that offset). A fresh junction sits on the click
+    // itself, so free clicks are unchanged.
+    final endNode = nodes.firstWhere((n) => n.id == bId);
+    final tip = Offset(endNode.x, endNode.y);
     if (aId == bId) {
       // zero-length / same node — just advance the pending point. Any split the
       // resolve did was on a LOCAL copy; discarding it leaves state untouched.
@@ -534,11 +555,11 @@ class NetworkController extends Notifier<DrawingState> {
         network: state.network,
         service: state.service,
         tool: state.tool,
-        pendingPoint: world,
+        pendingPoint: tip,
         pendingSheetId: sheetId,
         pendingFloorIndex: floorIndex,
       );
-      _recordChain(world, segments);
+      _recordChain(tip, segments);
       return;
     }
     // B13: with ortho on, a snap to a node/tee/underlay candidate OFF the
@@ -550,13 +571,14 @@ class NetworkController extends Notifier<DrawingState> {
         Offset(aNode.x, aNode.y), world, bId, state.service, ortho: ortho);
     edges.add(NetEdge(id: _id('e'), fromId: aId, toId: connectTo, service: state.service));
     final segments = chainSegmentCount;
+    final before = state.pendingPoint!;
     _commit(
       Network(nodes: nodes, edges: edges),
-      pendingPoint: world, // chain from here
+      pendingPoint: tip, // chain from the resolved end
       pendingSheetId: sheetId,
       pendingFloorIndex: floorIndex,
     );
-    _recordChain(world, segments + 1);
+    _pushChainStep(before, tip, segments + 1);
   }
 
   /// M1 — where a draw endpoint at [world] WOULD land: [_resolveDrawEndpoint]
@@ -1046,9 +1068,17 @@ class NetworkController extends Notifier<DrawingState> {
     // C8: while chaining a run, undoing the last segment must KEEP the rubber
     // band so drawing continues — re-anchor the pending point at the segment's
     // OTHER endpoint (the prior chain anchor) instead of dropping the chain.
-    final pending = (state.tool == DrawTool.drawRun && state.pendingPoint != null)
-        ? _chainAnchorAfterUndo(current, previous, state.pendingPoint!)
-        : null;
+    Offset? pending;
+    if (state.tool == DrawTool.drawRun && state.pendingPoint != null) {
+      final top = _chainSteps.isEmpty ? null : _chainSteps.last;
+      if (top != null && top.$1 == state.pendingPoint) {
+        _chainSteps.removeLast();
+        pending = top.$2;
+      } else {
+        _chainSteps.clear();
+        pending = _chainAnchorAfterUndo(current, previous, state.pendingPoint!);
+      }
+    }
     final segments = chainSegmentCount;
     state = DrawingState(
       network: previous,
@@ -2359,11 +2389,16 @@ class NetworkController extends Notifier<DrawingState> {
       final end = nodes.firstWhere((n) => n.id == prevId);
       final tip = Offset(end.x, end.y);
       final segments = chainSegmentCount;
+      final before = state.pendingPoint;
       _commit(Network(nodes: nodes, edges: edges),
           pendingPoint: tip,
           pendingSheetId: sheetId,
           pendingFloorIndex: floorIndex);
-      _recordChain(tip, segments + 1);
+      if (before != null) {
+        _pushChainStep(before, tip, segments + 1);
+      } else {
+        _recordChain(tip, segments + 1);
+      }
     } else {
       _commit(Network(nodes: nodes, edges: edges));
     }

@@ -585,20 +585,26 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           ref.read(activeDisciplineProvider).isMechanical;
     }();
     if (event.logicalKey == LogicalKeyboardKey.space) {
+      // The release of a held Space ALWAYS clears the pan latch first — even
+      // when a length was typed while it was held (else the draw overlay stayed
+      // pointer-dead until the next Space press).
+      if (event is KeyUpEvent && _spaceHeld) {
+        final tap = _spaceTap;
+        _spaceTap = false;
+        setState(() => _spaceHeld = false);
+        // M2/L3 — a TAP of Space (no repeat, no drag) finishes the run, but
+        // never discards a typed length.
+        if (tap && runPending && (bar == null || bar.isEmpty)) {
+          _finishRunChain();
+        }
+        return KeyEventResult.handled;
+      }
       // A typed length takes its separating space ("3000 90").
       if (runPending && bar != null && !bar.isEmpty && !otherFieldFocused) {
         if (event is KeyDownEvent) bar.insertText(' ');
         return KeyEventResult.handled;
       }
-      if (event is KeyUpEvent) {
-        if (!_spaceHeld) return KeyEventResult.ignored;
-        final tap = _spaceTap;
-        _spaceTap = false;
-        setState(() => _spaceHeld = false);
-        // M2/L3 — a TAP of Space (no repeat, no drag) finishes the run.
-        if (tap && runPending) _finishRunChain();
-        return KeyEventResult.handled;
-      }
+      if (event is KeyUpEvent) return KeyEventResult.ignored;
       // D3: Space still PANS while placing the two calibration points; it is
       // blocked ONLY in the distance-entry phase, where the "Known distance"
       // text field is focused and could legitimately want the space bar.
