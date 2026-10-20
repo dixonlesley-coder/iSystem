@@ -460,7 +460,8 @@ AdvancedStudy computeAdvancedStudy(
       demandPower: Power(sys.supply.demandW),
       voltage: sys.supply.voltage,
       motors: gensetStartMotors(project),
-      utilitySub: powerOneLineUtilitySub(project, sys.supply.demandVa),
+      utilitySub: powerOneLineUtilitySub(project, sys.supply.demandVa,
+          voltage: sys.supply.voltage),
     );
   }
 
@@ -741,11 +742,23 @@ List<String> _aggregateVerify(List<List<String>?> lists) {
 /// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a
 /// DECLARED MV service (an explicit transformer rating or a dual-transformer
 /// service): `MV via TX <n x kVA>` from the SAME [serviceTransformer] the
-/// riser / overview / schedule print; null on an LV direct service (the
-/// builder's `<V> V LV` stands).
+/// riser / overview / schedule print; on an LV direct service the builder's
+/// `<V> V LV`, with the declared connection capacity appended when one is
+/// declared (Round 34), else null.
 String? powerOneLineUtilitySub(
-    ElectricalProject project, ApparentPower demandVa) {
-  if (!isDeclaredMvService(project)) return null;
+    ElectricalProject project, ApparentPower demandVa,
+    {Voltage voltage = const Voltage(400)}) {
+  if (!isDeclaredMvService(project)) {
+    // Round 34 (electrical-drawings-4-lv-power-one-line-omits-daya) — an LV
+    // service with a declared connection capacity states it, like the
+    // overview / riser supply head ('PLN 197 kVA'); nothing declared ⇒ null
+    // (the builder's bare '<V> V LV', byte-identical).
+    final cap = project.supplyCapacityVa;
+    if (cap == null || !(cap.inKilovoltAmperes > 0)) return null;
+    String n(double v) =>
+        v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+    return '${n(voltage.volts)} V LV · ${n(cap.inKilovoltAmperes)} kVA';
+  }
   final t = serviceTransformer(project, demandVa);
   if (t == null || t.kva <= 0) return 'MV via TX';
   String n(double v) =>

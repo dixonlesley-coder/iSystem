@@ -24,6 +24,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../electrical/containment.dart' show ConduitSpec;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../network/network.dart' show ServiceType;
@@ -177,6 +178,7 @@ Uint8List electricalSldDetailToPdf({
   DrawingChrome? chrome,
   Map<String, double>? breakerIcuKaByPanelId,
   Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
   String? projectName,
 }) {
   // Round 14 (drafting-visual-1) — [projectName] overrides the electrical
@@ -188,10 +190,13 @@ Uint8List electricalSldDetailToPdf({
       project: project,
       result: result,
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-      breakerKaByCircuitId: breakerKaByCircuitId);
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId);
   final minPt = sldSinglePageMinLabelPt(whole,
       chrome: chrome, projectName: pname, diagramTitle: diagramTitle);
-  if (result.order.length <= 1 || minPt >= kMinPlotLabelPt - 1e-9) {
+  // Round 34 — one page only when it really prints at the floor: a single
+  // TALL board below it now paginates by way range (was: always one page).
+  if (minPt >= kMinPlotLabelPt - 1e-9) {
     return electricalSldToPdf(
         project: project,
         sheet: whole,
@@ -208,7 +213,55 @@ Uint8List electricalSldDetailToPdf({
       chrome: chrome,
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
       breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
       projectName: pname);
+}
+
+/// Round 34 (electrical-drawings-4-tall-board-schedule-illegible) — ONE
+/// board's schedule as issuable sheets: `[whole]` when it prints at
+/// [kMinPlotLabelPt] on one A3 page, else the fewest equal WAY RANGES whose
+/// every page prints at the floor (first page: header + incomer; later pages
+/// 'LANJUTAN W<a>-W<b>'; the last: spares + TOTAL). The schedule rows sit
+/// between rules, so the plot fit cannot grow them — splitting is the only
+/// way a 36-way board's rows stay legible. Pure.
+List<SldSheet> electricalBoardScheduleSheets({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+  required String panelId,
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
+  String projectName = 'Untitled project',
+}) {
+  SldSheet build(({int lo, int hi})? r) => buildElectricalSld(
+      project: project,
+      result: result,
+      onlyPanelId: panelId,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
+      wayRange: r);
+  bool legible(SldSheet s) =>
+      sldSinglePageMinLabelPt(s,
+          chrome: chrome,
+          projectName: projectName,
+          diagramTitle: diagramTitle) >=
+      kMinPlotLabelPt - 1e-9;
+  final whole = build(null);
+  final ways = result.panels[panelId]?.circuits.length ?? 0;
+  if (ways <= 1 || legible(whole)) return [whole];
+  var pages = [whole];
+  for (var g = 2; g <= ways; g++) {
+    final size = (ways / g).ceil();
+    pages = [
+      for (var lo = 0; lo < ways; lo += size)
+        build((lo: lo, hi: math.min(lo + size, ways) - 1)),
+    ];
+    if (pages.every(legible)) break;
+  }
+  return pages;
 }
 
 String _sldPageContent({
@@ -505,6 +558,7 @@ Uint8List electricalSldToPdfPaginated({
   DrawingChrome? chrome,
   Map<String, double>? breakerIcuKaByPanelId,
   Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
   String? projectName,
 }) {
   final ids = result.order;
@@ -518,7 +572,8 @@ Uint8List electricalSldToPdfPaginated({
             project: project,
             result: result,
             breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-            breakerKaByCircuitId: breakerKaByCircuitId),
+            breakerKaByCircuitId: breakerKaByCircuitId,
+            containmentByCircuitId: containmentByCircuitId),
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
@@ -528,21 +583,31 @@ Uint8List electricalSldToPdfPaginated({
       ),
     ]);
   }
+  // Round 34 — a board too tall for one legible page continues on way-range
+  // pages; `Sheet i of N` runs across the whole set.
+  final sheets = <SldSheet>[
+    for (final id in ids)
+      ...electricalBoardScheduleSheets(
+          project: project,
+          result: result,
+          panelId: id,
+          diagramTitle: diagramTitle,
+          chrome: chrome,
+          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+          breakerKaByCircuitId: breakerKaByCircuitId,
+          containmentByCircuitId: containmentByCircuitId,
+          projectName: pname),
+  ];
   final pages = <String>[
-    for (var i = 0; i < ids.length; i++)
+    for (var i = 0; i < sheets.length; i++)
       _sldPageContent(
-        sheet: buildElectricalSld(
-            project: project,
-            result: result,
-            onlyPanelId: ids[i],
-            breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-            breakerKaByCircuitId: breakerKaByCircuitId),
+        sheet: sheets[i],
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
         chrome: chrome,
         sheetIndexOverride: i + 1,
-        sheetTotalOverride: ids.length,
+        sheetTotalOverride: sheets.length,
       ),
   ];
   return _assemblePdf(pages);
