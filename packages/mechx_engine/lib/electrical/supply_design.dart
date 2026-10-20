@@ -170,7 +170,14 @@ class SupplyDesign {
     if (k >= requiredKva) return (kva: k, units: 1);
   }
   final top = transformerKvaLadder.last;
-  return (kva: top, units: (requiredKva / top).ceil());
+  // Round 44 — n units on the smallest rung covering the per-unit share
+  // (2970 kVA ⇒ 2 × 1600, never 2 × 2500).
+  final n = (requiredKva / top).ceil();
+  final share = requiredKva / n;
+  for (final k in transformerKvaLadder) {
+    if (k >= share) return (kva: k, units: n);
+  }
+  return (kva: top, units: n);
 }
 
 /// Transformer full-load current on a winding at a given line voltage (A):

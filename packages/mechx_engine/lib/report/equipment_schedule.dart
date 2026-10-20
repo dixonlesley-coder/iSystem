@@ -439,7 +439,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       // Round 12 — sized by the SAME `sizeGenerator` the report's power
       // one-line uses, so a PRIME-mode set carries its 1.25× uplift here too.
       final sel = gen.kva != null
-          ? (unitKva: gen.kva!, units: 1)
+          ? (unitKva: gen.kva!, units: gen.units)
           : (demandVa != null && demandVa.inKilovoltAmperes > 0
               ? (() {
                   // Round 13 — max(fraction × demand, essential demand).

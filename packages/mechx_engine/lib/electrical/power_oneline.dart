@@ -414,7 +414,7 @@ PowerOneLine buildPowerOneLine(
 /// `gensetBackupDemandVa`), else the demand × backupFraction.
 GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     ApparentPower? backupDemand, Power? backupPower) {
-  final backup = gen.kva ??
+  final backup = gen.totalKva ??
       backupDemand ??
       ApparentPower(demand.voltAmperes * gen.backupFraction);
   return sizeGenerator(
@@ -422,6 +422,7 @@ GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     mode: gen.mode,
     transfer: gen.transfer,
     forcedKva: gen.kva,
+    forcedUnits: gen.units,
     backupPower: backupPower,
   );
 }

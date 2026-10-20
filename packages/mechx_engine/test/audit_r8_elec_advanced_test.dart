@@ -254,24 +254,29 @@ void main() {
   });
 
   group('r8-5 saturating ladders are flagged', () {
-    test('genset 3200 kVA ⇒ ceil(3200/2500) = 2 × 2500 kVA', () {
+    // Re-derived Round 44 — n = ceil(3200/2500) = 2 sets on the SMALLEST
+    // rung covering 3200/2 = 1600 kVA: 2 × 2000 kVA (never 2 × 2500).
+    test('genset 3200 kVA ⇒ 2 sets of the 2000 kVA rung', () {
       final g = sizeGenerator(ApparentPower.kilovoltAmperes(3200));
       expect(g.units, 2);
       expect(g.ladderExceeded, isTrue);
       expect(g.ratingKva.inKilovoltAmperes * g.units, greaterThanOrEqualTo(3200));
-      expect(g.note, contains('2 x 2500 kVA'));
+      expect(g.ratingKva.inKilovoltAmperes, 2000);
+      expect(g.note, contains('2 x 2000 kVA'));
       expect(sizeGenerator(ApparentPower.kilovoltAmperes(400)).units, 1);
     });
 
-    test('transformer: 3 MVA / 0.8 = 3750 kVA ⇒ 2 × 2500 kVA', () {
+    // Re-derived Round 44 — 3750 kVA ⇒ n = 2 on the smallest rung covering
+    // 1875 kVA: 2 × 2000 kVA.
+    test('transformer: 3 MVA / 0.8 = 3750 kVA ⇒ 2 × 2000 kVA', () {
       final s = determineSupply(ApparentPower.kilovoltAmperes(3000));
       expect(s.ladderExceeded, isTrue);
       expect(s.units, 2);
-      expect(s.transformerKva, 2500);
-      // Loading per unit = 3000 / (2·2500) = 60 % ≤ the 80 % basis.
+      expect(s.transformerKva, 2000);
+      // Loading per unit = 3000 / (2·2000) = 75 % ≤ the 80 % basis.
       expect(3000 / (s.units * s.transformerKva!),
           lessThanOrEqualTo(transformerLoadingFactor));
-      expect(s.note, contains('2 x 2500 kVA'));
+      expect(s.note, contains('2 x 2000 kVA'));
     });
 
     test('CT: 2887 A > 2500 A top primary ⇒ flagged', () {
@@ -393,16 +398,17 @@ void main() {
     });
 
     test('power one-line: "n x 2500 kVA" + start dip screened on n × 2500', () {
-      // 3200 kVA standby ⇒ ceil(3200/2500) = 2 sets; the start-dip screen runs
-      // on the paralleled 5000 kVA, not one 2500 kVA set. Pick (by search over
+      // 3200 kVA standby ⇒ ceil(3200/2500) = 2 sets of the 2000 kVA rung
+      // (Round 44); the start-dip screen runs on the paralleled 4000 kVA,
+      // not one 2000 kVA set. Pick (by search over
       // the engine's own screen) a DOL motor that FAILS on one 2500 kVA set but
       // PASSES on the pair — the one-line must not tag it 'start dip … over'.
       GensetMotor? motor;
       for (var kw = 50.0; kw <= 3000; kw += 25) {
         final m = GensetMotor(name: 'Chiller', shaftPower: Power.kiloWatts(kw));
-        final one = assessGensetStart(ApparentPower.kilovoltAmperes(2500),
+        final one = assessGensetStart(ApparentPower.kilovoltAmperes(2000),
             motors: [m]);
-        final two = assessGensetStart(ApparentPower.kilovoltAmperes(5000),
+        final two = assessGensetStart(ApparentPower.kilovoltAmperes(4000),
             motors: [m]);
         if (!one.acceptable && two.acceptable) {
           motor = m;
@@ -416,7 +422,7 @@ void main() {
         motors: [motor!],
       );
       final gen = ol.nodes.firstWhere((node) => node.id == 'gen');
-      expect(gen.sub, startsWith('2 x 2500 kVA'));
+      expect(gen.sub, startsWith('2 x 2000 kVA'));
       expect(gen.sub, isNot(contains('start dip')));
     });
   });

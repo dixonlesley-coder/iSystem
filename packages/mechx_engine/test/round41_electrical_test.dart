@@ -354,7 +354,9 @@ void main() {
     test('BOM takes off 2 x run length of the lead cable', () {
       final bom = buildBom(sys);
       final lead = bom.lines
-          .where((l) => l.description.contains('motor leads'))
+          .where((l) =>
+              l.category == PartCategory.cable &&
+              l.description.contains('motor leads'))
           .toList();
       expect(lead, hasLength(1));
       expect(lead.single.qty, 2 * 55);

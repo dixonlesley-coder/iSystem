@@ -949,6 +949,7 @@ Map<String, dynamic> _sourcesToJson(ElectricalSources s) => {
       if (s.generator != null) 'generator': {
           if (s.generator!.kva != null)
             'kva': s.generator!.kva!.voltAmperes,
+          if (s.generator!.units != 1) 'units': s.generator!.units,
           'backupFraction': s.generator!.backupFraction,
           'mode': s.generator!.mode.name,
           'transfer': s.generator!.transfer.name,
@@ -975,6 +976,12 @@ ElectricalSources _sourcesFromJson(Map<String, dynamic> json) {
       kva: g['kva'] == null
           ? null
           : ApparentPower((g['kva'] as num).toDouble()),
+      // Round 44 — tolerant: absent / non-integer / < 1 ⇒ one set.
+      units: (g['units'] is num &&
+              (g['units'] as num).isFinite &&
+              (g['units'] as num) >= 1)
+          ? (g['units'] as num).floor()
+          : 1,
       backupFraction: (g['backupFraction'] as num?)?.toDouble() ?? 1.0,
       mode: _enumOr(GeneratorMode.values, g['mode'], GeneratorMode.standby),
       transfer: _enumOr(

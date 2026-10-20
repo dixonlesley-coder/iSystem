@@ -1497,6 +1497,18 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                         ),
                       ),
                     ),
+                    // Round 44 — a forced plant of n paralleled sets.
+                    if (gen.kva != null)
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalGensetUnits),
+                        child: ElectricalNumInput(
+                          value: gen.units.toDouble(),
+                          min: 1,
+                          max: 16,
+                          onChanged: (v) => ctrl.setGeneratorUnits(v.round()),
+                        ),
+                      ),
                     ElectricalField(
                       label: context.strings(StringKey.electricalGensetMode),
                       child: ElectricalEnumPicker<GeneratorMode>(

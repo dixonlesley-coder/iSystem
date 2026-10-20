@@ -40,7 +40,6 @@ import '../electrical/sources.dart'
         BatteryChemistryInfo,
         GeneratorModeInfo,
         kGeneratorPf,
-        selectGeneratorUnits,
         GeneratorSource,
         sizeGenerator,
         sizeBattery;
@@ -1812,25 +1811,6 @@ String _supplyHeadLabel(ElectricalProject project,
 /// demand kVA, capped at 100 (an oversized set still backs the whole load, it
 /// does not back 250% of it). Null when there is no demand or no rating — no
 /// honest ratio to print, so nothing is printed.
-/// A genset-ladder kVA figure that NEVER saturates silently (audit r8-5):
-/// below the top rung it is the single standard rating (`500`); above it,
-/// `n x 2500` paralleled sets. [totalKva] is the paralleled capacity (what the
-/// coverage % compares), [text] the printable figure (no unit). An explicit
-/// [forced] rating is printed verbatim as one set.
-({double totalKva, String text}) _ladderKva(ApparentPower required,
-    {ApparentPower? forced}) {
-  if (forced != null) {
-    final k = forced.inKilovoltAmperes;
-    return (totalKva: k, text: _num(k));
-  }
-  final sel = selectGeneratorUnits(required);
-  final unit = sel.unitKva.inKilovoltAmperes;
-  return (
-    totalKva: unit * sel.units,
-    text: sel.units > 1 ? '${sel.units} x ${_num(unit)}' : _num(unit),
-  );
-}
-
 /// Round 16 — the transformer figure for the drawings: [serviceTransformer]
 /// (`n x <kVA>` when the study needs several units).
 ({double totalKva, String text})? _transformerFig(
@@ -1854,7 +1834,12 @@ String _supplyHeadLabel(ElectricalProject project,
 /// only 0.8 × its kVA in kW, so a load above cos φ 0.8 is kW-limited.
 ({double totalKva, String text}) _gensetKva(
     ApparentPower backupVa, GeneratorSource gen, Power backupW) {
-  if (gen.kva != null) return _ladderKva(backupVa, forced: gen.kva);
+  if (gen.kva != null) {
+    // Round 44 — a forced plant of n sets prints `n x <kVA>`.
+    final k = gen.kva!.inKilovoltAmperes;
+    final n = gen.units;
+    return (totalKva: k * n, text: n > 1 ? '$n x ${_num(k)}' : _num(k));
+  }
   final r = sizeGenerator(backupVa, mode: gen.mode, backupPower: backupW);
   final unit = r.ratingKva.inKilovoltAmperes;
   return (

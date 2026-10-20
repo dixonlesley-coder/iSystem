@@ -212,11 +212,18 @@ class NeutralPeBars {
   /// 0 when no oversize was applied.
   final double triplenFraction;
 
+  /// Round 44 — the neutral bar is LARGER than the phase bar (the triplen
+  /// current, not the phase bar's own withstand / incomer floor, governed).
+  /// A factor > 1 with `oversized == false` means the full-size neutral of a
+  /// withstand-governed phase bar already carries `factor × I`.
+  final bool oversized;
+
   const NeutralPeBars({
     required this.neutralCsaMm2,
     required this.neutralAmpacityA,
     required this.peCsaMm2,
     this.neutralOversizeFactor = 1,
     this.triplenFraction = 0,
+    this.oversized = false,
   });
 }

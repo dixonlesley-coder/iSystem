@@ -98,7 +98,7 @@ List<BomLine> advancedBomLines({
   if (gen != null) {
     final demand = sys.supply.demandVa.inKilovoltAmperes;
     final sel = gen.kva != null
-        ? (kva: gen.kva!.inKilovoltAmperes, units: 1)
+        ? (kva: gen.kva!.inKilovoltAmperes, units: gen.units)
         : demand > 0
             ? (() {
                 final r = sizeGenerator(gensetBackupDemandVa(project, sys),
@@ -116,15 +116,32 @@ List<BomLine> advancedBomLines({
         category: PartCategory.accessory,
         priceKey: '${kElecPriceKeyPrefix}genset:${kva}kva',
       ));
+      // Round 44 (electrical-sim-9-paralleled-units-take-top-rung) — the
+      // transfer switch carries the PARALLELED bus (units × per-set kVA),
+      // and paralleled sets need a synchronising panel.
+      final plant = sel.units > 1
+          ? '${sel.units} x $kva kVA (${_fmt((sel.kva * sel.units).roundToDouble())} kVA)'
+          : '$kva kVA';
+      final plantKey = _fmt((sel.kva * sel.units).roundToDouble());
       lines.add(BomLine(
         description: gen.transfer == GeneratorTransfer.ats
-            ? 'Automatic transfer switch (ATS) for $kva kVA genset — G-01'
-            : 'Manual changeover switch (COS) for $kva kVA genset — G-01',
+            ? 'Automatic transfer switch (ATS) for $plant genset — G-01'
+            : 'Manual changeover switch (COS) for $plant genset — G-01',
         qty: 1,
         category: PartCategory.accessory,
         priceKey: '${kElecPriceKeyPrefix}transfer:${gen.transfer.name}:'
-            '${kva}kva',
+            '${plantKey}kva',
       ));
+      if (sel.units > 1) {
+        lines.add(BomLine(
+          description: 'Genset synchronising panel ${sel.units} x $kva kVA '
+              '— G-01',
+          qty: 1,
+          category: PartCategory.accessory,
+          priceKey: '${kElecPriceKeyPrefix}synchronising-panel:'
+              '${sel.units}x${kva}kva',
+        ));
+      }
     }
   }
 

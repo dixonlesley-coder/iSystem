@@ -749,6 +749,26 @@ List<BomLine> _panelLines(
             location: c.name,
           ));
         }
+        // Round 44 (elec-report-bom-3-star-delta-lead-lugs-missing) — the
+        // lead cables are the FIELD run since Round 42, so their
+        // terminations are bought too: per lead cable 3 phase conductors +
+        // its PE, one lug at EACH end, on every lead run (the supply lug
+        // block below only counts the short internal link).
+        final leadLugs = <double, int>{};
+        for (final sz in [leads.csaMm2, leads.csaMm2, leads.csaMm2, pe]) {
+          if (sz < _skunMinCsaMm2) continue;
+          leadLugs[sz] = (leadLugs[sz] ?? 0) + 1;
+        }
+        for (final e in leadLugs.entries) {
+          lines.add(BomLine(
+            description:
+                'Cable lug (skun) ${_fmt(e.key)} mm² — ${c.name} motor leads',
+            location: c.name,
+            qty: (e.value * 2 * leadRuns).toDouble(),
+            category: PartCategory.accessory,
+            priceKey: '${kElecPriceKeyPrefix}accessory:lug-${_fmt(e.key)}',
+          ));
+        }
       }
 
       // ── Wiring accessories (estimate) ──────────────────────────────────────

@@ -565,8 +565,11 @@ void main() {
     final r = computePanel(p, board);
     final w = r.warnings.firstWhere((w) => w.code == 'harmonics-neutral-oversize');
     expect(w.severity, WarningSeverity.info);
-    // The message is unchanged — it still names the applied oversize.
-    expect(w.message, contains('neutral bar oversized to'));
+    // Re-derived Round 44 — two 2 kW 1φ VFD ways ≈ 11.6 A on their lines,
+    // × 1.73 ≈ 20 A: the full-size phase bar already carries the triplen
+    // neutral current, so the note says so instead of claiming an oversize.
+    expect(r.neutralPeBars.oversized, isFalse);
+    expect(w.message, contains('already carries it'));
     expect(r.neutralPeBars.neutralCsaMm2,
         greaterThan(r.busbar.csaMm2 * 0.999)); // grown, not shrunk
   });

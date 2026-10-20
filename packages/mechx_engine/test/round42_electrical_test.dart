@@ -343,7 +343,9 @@ void main() {
       expect(leads.runsPerPhase ?? 1, 1);
       final lines = buildBom(sys, parts: fullCatalog())
           .lines
-          .where((l) => l.description.contains('motor leads'))
+          .where((l) =>
+              l.category == PartCategory.cable &&
+              l.description.contains('motor leads'))
           .toList();
       final live = lines.where((l) => !l.description.contains('PE')).single;
       final pe = lines.where((l) => l.description.contains('PE')).single;

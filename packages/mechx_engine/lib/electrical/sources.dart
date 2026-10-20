@@ -55,14 +55,22 @@ ApparentPower selectGeneratorKva(ApparentPower required) {
 
 /// Genset rating + parallel-set count covering [required]: the smallest
 /// ladder rung when one set suffices, else `n = ceil(required / top)` sets of
-/// the largest rung — never a single set BELOW the requirement (audit r8: the
+/// the smallest rung covering `required / n` (Round 44) — never a single set
+/// BELOW the requirement (audit r8: the
 /// ladder used to saturate silently at 2500 kVA).
 ({ApparentPower unitKva, int units}) selectGeneratorUnits(
     ApparentPower required) {
   final reqKva = required.inKilovoltAmperes;
   final top = kGeneratorKva.last;
   if (reqKva <= top) return (unitKva: selectGeneratorKva(required), units: 1);
-  return (unitKva: ApparentPower.kilovoltAmperes(top), units: (reqKva / top).ceil());
+  // Round 44 — n sets on the SMALLEST rung that n sets cover (2970 kVA ⇒
+  // 2 × 1500, never 2 × 2500): n = ceil(required / top) is the fewest sets,
+  // and the per-set share required / n ≤ top always has a covering rung.
+  final n = (reqKva / top).ceil();
+  return (
+    unitKva: selectGeneratorKva(ApparentPower.kilovoltAmperes(reqKva / n)),
+    units: n
+  );
 }
 
 /* ------------------------------ Genset dip -------------------------------- */
@@ -172,7 +180,9 @@ Power selectInverterKw(Power required) {
   final reqKw = required.inKiloWatts;
   final top = kInverterKw.last;
   if (reqKw <= top) return (unitKw: selectInverterKw(required), units: 1);
-  return (unitKw: Power.kiloWatts(top), units: (reqKw / top).ceil());
+  // Round 44 — the smallest rung n units cover (see selectGeneratorUnits).
+  final n = (reqKw / top).ceil();
+  return (unitKw: selectInverterKw(Power.kiloWatts(reqKw / n)), units: n);
 }
 
 /// "250 kW" for one unit, "5 x 250 kW" for paralleled units (ASCII).
@@ -229,8 +239,18 @@ extension GeneratorModeInfo on GeneratorMode {
 
 /// Standby/prime generator request.
 class GeneratorSource {
-  /// Optional user-forced rating; when set, the ladder selection is skipped.
+  /// Optional user-forced PER-SET rating; when set, the ladder selection is
+  /// skipped.
   final ApparentPower? kva;
+
+  /// Round 44 — the number of paralleled sets of the forced [kva] (default
+  /// 1), so an engineer's `2 x 2000 kVA` plant is expressible. Ignored when
+  /// [kva] is null (the ladder picks the count).
+  final int units;
+
+  /// The forced plant's total capacity (`kva × units`), or null.
+  ApparentPower? get totalKva =>
+      kva == null ? null : ApparentPower(kva!.voltAmperes * units);
 
   /// Fraction of the building demand the genset must back up (0–1) when no
   /// explicit essential demand is supplied.
@@ -244,6 +264,7 @@ class GeneratorSource {
 
   const GeneratorSource({
     this.kva,
+    this.units = 1,
     this.backupFraction = 1.0,
     this.mode = GeneratorMode.standby,
     this.transfer = GeneratorTransfer.ats,
@@ -625,6 +646,7 @@ GeneratorResult sizeGenerator(
   GeneratorMode mode = GeneratorMode.standby,
   GeneratorTransfer transfer = GeneratorTransfer.ats,
   ApparentPower? forcedKva,
+  int forcedUnits = 1,
   Power? backupPower,
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
@@ -635,7 +657,7 @@ GeneratorResult sizeGenerator(
   final required =
       mode == GeneratorMode.prime ? governingKva * 1.25 : governingKva;
   final sel = forcedKva != null
-      ? (unitKva: forcedKva, units: 1)
+      ? (unitKva: forcedKva, units: forcedUnits < 1 ? 1 : forcedUnits)
       : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));
   final ratingKva = sel.unitKva;
   final units = sel.units;

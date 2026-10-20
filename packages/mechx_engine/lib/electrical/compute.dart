@@ -821,13 +821,18 @@ class _BusbarWayLoad {
   final bool threePhase;
   final PhaseAssignment phase;
   final bool breakBefore;
+
+  /// Round 44 — the way's own breaker rating (A): a section must carry the
+  /// largest outgoing device on it before that device trips.
+  final double deviceRatingA;
   const _BusbarWayLoad(
     this.id,
     this.designCurrentA,
     this.threePhase,
     this.phase,
-    this.breakBefore,
-  );
+    this.breakBefore, [
+    this.deviceRatingA = 0,
+  ]);
 }
 
 /// Worst-loaded phase's line current for a group of ways (A).
@@ -875,12 +880,19 @@ List<BusbarSectionResult> splitBusbarSections(
   void flush() {
     if (group.isEmpty) return;
     final currentA = roundTo(_sectionWorstPhaseA(group, system), 1);
+    // Round 44 (electrical-sim-9-busbar-section-below-outgoing-device) — a
+    // section is rated for the largest outgoing DEVICE it carries (like the
+    // main bus for its incomer, IEC 61439-1): a 1764 A way on a 2000 A ACB
+    // can draw 2000 A through its section before the ACB trips.
+    final deviceFloorA =
+        group.fold<double>(0, (m, w) => math.max(m, w.deviceRatingA));
     sections.add(BusbarSectionResult(
       index: sections.length + 1,
       circuitIds: group.map((w) => w.id).toList(),
       ways: group.length,
       sectionCurrent: Current(currentA),
       busbar: sizeBusbar(profile, Current(currentA),
+          minAmpacityA: Current(deviceFloorA),
           minCsaMm2: minCsaMm2, faultKa: faultKa, clearingTimeS: clearingTimeS),
       manualBreak: groupManual,
     ));
@@ -2728,6 +2740,9 @@ ElectricalPanelResult computePanel(
     profile: profile,
     neutralOversizeFactor: nFactor,
     triplenFraction: triplenFraction,
+    // Round 44 — the factor scales the CURRENT, never a withstand-floored
+    // section.
+    phaseSizingCurrentA: incomerSizingCurrentA,
   );
 
   // Split the panel bus into capacity-bounded sections (each floored at the same
@@ -2754,6 +2769,7 @@ ElectricalPanelResult computePanel(
                 : PhaseAssignment.l1;
           }(),
           branches[i].busbarBreakBefore,
+          comps[i].result.breaker.ratingA.amperes,
         ),
       // Reserved spare ways occupy busbar way-capacity (so the bus is split into
       // enough sections to host them) but carry no load. spareWaysReserved = 0
@@ -2811,8 +2827,7 @@ ElectricalPanelResult computePanel(
       message: '${panel.name}: single-phase non-linear load '
           '(${(triplenFraction * 100).round()}%) raises triplen-harmonic '
           'neutral current to ~${neutralPe.neutralOversizeFactor}x phase — '
-          'neutral bar oversized to ${_num(neutralPe.neutralCsaMm2)} mm² '
-          '(phase bar ${_num(busbar.csaMm2)} mm²).',
+          '${neutralPe.oversized ? 'neutral bar oversized to ${_num(neutralPe.neutralCsaMm2)} mm² (phase bar ${_num(busbar.csaMm2)} mm²)' : 'the full-size ${_num(neutralPe.neutralCsaMm2)} mm² neutral bar (the phase bar, sized for the fault withstand / incomer) already carries it'}.',
       panelId: panel.id,
     ));
   }
