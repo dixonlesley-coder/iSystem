@@ -124,6 +124,13 @@ class ElectricalCircuitResult {
   /// recompute In / Iz / Vd from.
   Current get runCurrentA => runCurrent ?? designCurrent;
 
+  /// Round 38 (elec-ui-drawings-2) — a 3φ FEEDER's per-line currents (A,
+  /// L1 / L2 / L3): the fed board's diversified lines exactly as they enter
+  /// this board's phase balance. Null for every other way (a balanced 3φ way
+  /// loads its three lines with [designCurrent]). The schedule prints these in
+  /// R / S / T so the column sums to the board TOTAL.
+  final List<double>? lineCurrentsA;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -142,6 +149,7 @@ class ElectricalCircuitResult {
     this.connectedW,
     this.points = 1,
     this.runCurrent,
+    this.lineCurrentsA,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -169,6 +177,7 @@ class ElectricalCircuitResult {
         connectedW: connectedW,
         points: points,
         runCurrent: runCurrent,
+        lineCurrentsA: lineCurrentsA,
       );
 }
 
@@ -349,6 +358,23 @@ class ElectricalPanelResult {
 
   final PhaseBalanceResult phaseBalance;
 
+  /// Round 38 (regression-feeder-lines-carry-session-phase-labels) — the
+  /// board's per-line currents from the UNSEEDED engine balance (no session
+  /// prior), i.e. a function of the document alone. [phaseBalance] prints the
+  /// session-sticky LABELLED lines (same worst phase, spread within the 1 A
+  /// stickiness threshold); every figure that sums lines ACROSS boards (the
+  /// alternator per-line basis) reads this one so a reopen never changes it.
+  /// Null on a hand-built result ⇒ readers fall back to [phaseBalance].
+  final PhaseBalanceResult? judgedPhaseBalance;
+
+  /// The unseeded engine assignment behind [judgedPhaseBalance]
+  /// (circuit id → line). Empty on a hand-built result.
+  final Map<String, PhaseAssignment> judgedAssignment;
+
+  /// [judgedPhaseBalance], else [phaseBalance].
+  PhaseBalanceResult get historyFreePhaseBalance =>
+      judgedPhaseBalance ?? phaseBalance;
+
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
   double get imbalancePercent => phaseBalance.imbalancePercent;
 
@@ -389,6 +415,8 @@ class ElectricalPanelResult {
     this.spareWaysReserved = 0,
     this.capacitorCurrentA = 0,
     required this.phaseBalance,
+    this.judgedPhaseBalance,
+    this.judgedAssignment = const {},
     required this.warnings,
     this.diversityFactor = 1.0,
   });

@@ -35,7 +35,7 @@ import '../units.dart';
 import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
-import 'compute.dart' show circuitIsThreePhase;
+import 'compute.dart' show circuitIsThreePhase, kThreePhaseServiceLineVoltageV;
 import 'containment.dart' show ConduitSpec, ContainmentResult, containmentFor;
 import 'control/starter.dart'
     show ControlAssembly, StarterType, applyStarterTemplate;
@@ -429,12 +429,28 @@ AdvancedStudy computeAdvancedStudy(
   // (two 1φ 5 kW heaters: 16 500 VA, never 10 600 VA / 15.3 A).
   final worstPhaseVa =
       worstPhaseDemandVa(project, sys, originPanelIds, roundCurrent: true);
-  final daya = supply.declared
+  var daya = supply.declared
       ? null
       : recommendedDaya(
           ApparentPower(math.max(
               sys.supply.demandVa.voltAmperes, worstPhaseVa)),
           sys.supply.system);
+  // Round 38 (elec-sizing-supply-3) — a single-phase supply whose demand
+  // outgrows the 1φ ladder moves to a 3φ step, but its 1φ root board still
+  // loads ONE phase of that service: size the step on the same 3φ per-phase
+  // basis `computeSystem` judges it on (√3·400·I), so declaring the
+  // recommendation never trips the engine's own judge.
+  if (daya != null &&
+      daya.system == ElectricalSystem.threePhase &&
+      sys.supply.system == ElectricalSystem.singlePhase) {
+    final va3 = worstPhaseDemandVa(project, sys, originPanelIds,
+        roundCurrent: true,
+        asSystem: ElectricalSystem.threePhase,
+        asVolts: kThreePhaseServiceLineVoltageV);
+    daya = recommendedDaya(
+        ApparentPower(math.max(sys.supply.demandVa.voltAmperes, va3)),
+        ElectricalSystem.threePhase);
+  }
   final powerFactor = powerFactorCorrection(
     sys,
     project,

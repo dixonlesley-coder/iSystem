@@ -28,7 +28,13 @@ import 'model.dart' show ElectricalProject, ElectricalSystem;
 
 /// Maximum demand (kVA) served at low voltage before MV + transformer is
 /// needed. // VERIFY — secondary source (Indonesian PLN LV practice ≈ 200 kVA).
-const double lvSupplyLimitKva = 200;
+///
+/// Round 38 (elec-sizing-supply-2) — ONE LV ceiling: the PLN TR ladder top
+/// [plnLvServiceCeilingVa] (197 kVA) that `declaredServiceTransformer` /
+/// `isDeclaredMvService` and [recommendedDaya] use. A separate 200 kVA here
+/// let a 198 kVA demand read 'LV direct' while declaring the recommended LV
+/// daya flipped the project to an MV service.
+const double lvSupplyLimitKva = plnLvServiceCeilingVa / 1000;
 
 /// Standard Indonesian MV distribution voltage (V).
 /// // VERIFY — secondary source (PLN TM 20 kV).
@@ -358,6 +364,9 @@ List<double> dayaTiers(ElectricalSystem system) =>
       ? const [ElectricalSystem.threePhase]
       : const [ElectricalSystem.singlePhase, ElectricalSystem.threePhase]) {
     for (final t in dayaTiers(sys)) {
+      // Round 38 — never recommend an LV step above the LV service ceiling
+      // (the 233 kVA step): declaring it would make the service MV.
+      if (t > plnLvServiceCeilingVa + 1e-9) break;
       if (t >= demand.voltAmperes) return (va: t, system: sys);
     }
   }

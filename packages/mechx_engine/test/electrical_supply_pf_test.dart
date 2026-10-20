@@ -32,9 +32,13 @@ void main() {
       expect(s.verifyItems, isNotEmpty);
     });
 
-    test('demand at the 200 kVA ceiling is still LV (<=)', () {
-      final s = determineSupply(ApparentPower.kilovoltAmperes(200));
+    test('demand at the 197 kVA LV ceiling is still LV (<=), above it MV', () {
+      // Round 38 — ONE LV ceiling: the PLN TR ladder top (197 000 VA), the
+      // same figure the declared-MV predicate and the recommended daya use.
+      final s = determineSupply(ApparentPower.kilovoltAmperes(197));
       expect(s.lvOrMv, SupplyLevel.lv);
+      expect(determineSupply(ApparentPower.kilovoltAmperes(198)).lvOrMv,
+          SupplyLevel.mv);
     });
 
     test('demand > 200 kVA -> MV + a transformer off the ladder, FLC checked',
@@ -131,7 +135,9 @@ void main() {
         for (final sys in ElectricalSystem.values) {
           final d = recommendedDayaVa(ApparentPower(va), sys);
           if (d != null) expect(d, greaterThanOrEqualTo(va));
-          if (va <= 233000) expect(d, isNotNull);
+          // Round 38 — the LV catalogue stops at the 197 kVA LV ceiling.
+          if (va <= 197000) expect(d, isNotNull);
+          if (va > 197000) expect(d, isNull);
         }
       }
     });

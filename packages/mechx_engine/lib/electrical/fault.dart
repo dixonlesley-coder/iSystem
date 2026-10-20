@@ -1176,8 +1176,12 @@ FaultStudyResult faultStudy(
             message:
                 '${panelResult.name} / ${c.name}: earth-fault loop Zs '
                 '${_fmt(zsOhm)} Ω exceeds the ${_fmt(zsMaxOhm)} Ω limit for '
-                'disconnection in ${_fmt(tDisc)} s — shorten the run, increase '
-                'the CSA${c.rcd.required ? '' : ', or fit an RCD'}.',
+                'disconnection in ${_fmt(tDisc)} s — shorten the run, '
+                'increase the CSA (cable override)'
+                // Round 38 (elec-protection-ads-advice-fit-rcd-impossible)
+                // — the model has no RCD request on a TN way, so the only
+                // levers named are the ones the tool provides.
+                '${c.breaker.deviceClass == BreakerClass.mcb ? ', or a lower trip curve / rating (breaker override)' : ', or a lower rating (breaker override)'}.',
             panelId: panelId,
             circuitId: c.circuitId,
           ));
@@ -1358,7 +1362,13 @@ FaultStudyResult faultStudy(
         circuitId: feederCircuitId,
       ));
     }
-    if (!icsAdequate && !icsWarned.contains('$parentId|$feederCircuitId')) {
+    // Round 38 (elec-protection-ics-warning-when-icu-short) — only an
+    // Icu-ADEQUATE device can be short on Ics (as the per-way pass); an
+    // Icu-short feeder already carries the breaking-capacity error, and a
+    // '100 % Ics' advice on it contradicts that error.
+    if (icuAdequate &&
+        !icsAdequate &&
+        !icsWarned.contains('$parentId|$feederCircuitId')) {
       final w = _icsShortfall(
           label: feeder.name,
           icuKa: icu,

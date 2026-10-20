@@ -147,12 +147,13 @@ List<BomLine> advancedBomLines({
       priceKey: '${kElecPriceKeyPrefix}capacitor-bank:${k}kvar',
     ));
   }
-  // The PF study's RECOMMENDED bank (APFC), unless an installed bank covers it.
+  // The PF study's RECOMMENDED bank (APFC). Round 38 (regression-
+  // recommended-pfc-bank-dropped-from-bom) — `bankKvar` is already the
+  // FURTHER correction net of the installed compensation (the study subtracts
+  // it), so it is never compared with the installed kvar: a 55 kvar bank and
+  // a recommended further 50 kvar bank are both bought.
   final pf = powerFactor;
-  if (pf != null &&
-      pf.needed &&
-      pf.bankKvar > 0 &&
-      installedKvar + 1e-9 < pf.bankKvar) {
+  if (pf != null && pf.needed && pf.bankKvar > 0) {
     final banks = pf.banks < 1 ? 1 : pf.banks;
     final per = pf.bankKvar / banks;
     final k = _fmt(double.parse(per.toStringAsFixed(1)));

@@ -28,6 +28,7 @@ library;
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../electrical/genset_backup.dart' show isEssentialByName;
 import '../electrical/geo_length.dart';
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
@@ -35,6 +36,7 @@ import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
 import 'drawing_chrome.dart';
 import 'electrical_dxf_export.dart' show SldDxfLayers;
+import 'electrical_sld_drawing.dart' show essentialPanelIds;
 import 'plan_annotation_layout.dart' show planOverlapWarning;
 import 'plan_symbols.dart'
     show
@@ -148,6 +150,34 @@ class ElectricalPlanData {
 /// length, `UP`/`DN`) AND listed in [ElectricalPlanData.unplaced] — never given
 /// a fabricated on-sheet position, never silently dropped. A panel / load with
 /// no placement AT ALL is likewise listed, not invented.
+/// The essential board set over the MODEL alone (no solved result): a board
+/// is essential when it, or any board feeding it, carries the explicit
+/// `essential` flag or an emergency name — the [essentialPanelIds] rule.
+Set<String> _modelEssentialPanelIds(ElectricalProject project) {
+  final byId = {for (final p in project.panels) p.id: p};
+  final parentOf = <String, String>{};
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final f = c.feedsPanelId;
+      if (f != null && byId.containsKey(f)) parentOf[f] = p.id;
+    }
+  }
+  final out = <String>{};
+  for (final p in project.panels) {
+    final seen = <String>{};
+    String? cur = p.id;
+    while (cur != null && seen.add(cur)) {
+      final b = byId[cur];
+      if (b != null && (b.essential || isEssentialByName(b.name))) {
+        out.add(p.id);
+        break;
+      }
+      cur = parentOf[cur];
+    }
+  }
+  return out;
+}
+
 ElectricalPlanData buildElectricalPlanData({
   required ElectricalProject project,
   ElectricalSystemResult? result,
@@ -169,6 +199,13 @@ ElectricalPlanData buildElectricalPlanData({
     return l.meters > 0 ? planLengthLabel(l) : null;
   }
 
+  // Round 38 (elec-ui-drawings-3) — ONE essential set with the overview /
+  // riser / schedule: the explicit flag, an emergency NAME (DARURAT /
+  // EMERGENCY …) and every board fed from an essential one. Without a solved
+  // result the same rule runs over the model's feeder tree.
+  final ess = result != null
+      ? essentialPanelIds(project, result)
+      : _modelEssentialPanelIds(project);
   final nodes = <ElectricalPlanNode>[];
   final routes = <ElectricalPlanRoute>[];
   final risers = <ElectricalPlanRiser>[];
@@ -223,7 +260,7 @@ ElectricalPlanData buildElectricalPlanData({
         tag: tag,
         sub: sub,
         kind: ElectricalPlanNodeKind.panel,
-        essential: p.essential,
+        essential: ess.contains(p.id),
       ));
     } else if (pos == null) {
       unplacedPanels.add(tag);
@@ -236,7 +273,8 @@ ElectricalPlanData buildElectricalPlanData({
         // when only ONE end is here it becomes an off-sheet riser mark there.
         final target = panelById[c.feedsPanelId];
         final tpos = target?.layoutPos;
-        final ess = p.essential || (target?.essential ?? false);
+        final routeEss = ess.contains(p.id) ||
+            (target != null && ess.contains(target.id));
         if (onSheet(pos) && onSheet(tpos)) {
           routes.add(ElectricalPlanRoute(
             x1: pos!.x,
@@ -244,12 +282,12 @@ ElectricalPlanData buildElectricalPlanData({
             x2: tpos!.x,
             y2: tpos.y,
             label: routeLabel(pos, tpos),
-            essential: ess,
+            essential: routeEss,
           ));
         } else if (onSheet(pos) && target != null && tpos != null) {
-          offSheetRiser(pos!, tpos, 'ke', tagOf(target), ess);
+          offSheetRiser(pos!, tpos, 'ke', tagOf(target), routeEss);
         } else if (onSheet(tpos) && target != null) {
-          offSheetRiser(tpos!, pos, 'dari', tag, ess);
+          offSheetRiser(tpos!, pos, 'dari', tag, routeEss);
         }
         continue;
       }
@@ -266,7 +304,7 @@ ElectricalPlanData buildElectricalPlanData({
                   '${cr.breaker.ratingA.amperes.round()}A'
               : null,
           kind: ElectricalPlanNodeKind.load,
-          essential: p.essential || c.lifeSafety,
+          essential: ess.contains(p.id) || c.lifeSafety,
         ));
         // The drop from its panel (drawn only when the panel is on-sheet too).
         if (onSheet(pos)) {
@@ -276,7 +314,7 @@ ElectricalPlanData buildElectricalPlanData({
             x2: lp.x,
             y2: lp.y,
             label: routeLabel(pos, lp),
-            essential: p.essential || c.lifeSafety,
+            essential: ess.contains(p.id) || c.lifeSafety,
           ));
         }
       } else if (lp == null) {
