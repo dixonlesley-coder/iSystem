@@ -82,8 +82,8 @@ bool nodeInScope(
   if (sheetId != null && node.sheetId != sheetId) return false;
   if (inertServices.isEmpty) return true;
   var touched = false;
-  for (final e in net.edges) {
-    if (e.fromId != nodeId && e.toId != nodeId) continue;
+  // P2 — the indexed incidence, not a whole-edge scan per node.
+  for (final e in net.edgesAt(nodeId)) {
     touched = true;
     if (!inertServices.contains(e.service)) return true;
   }

@@ -156,6 +156,10 @@ class CanvasAutoPanController extends Notifier<Offset?> {
   @override
   Offset? build() => null;
 
+  /// Whether a draw gesture currently holds the probe (P14 — lets a teardown
+  /// path skip a no-op write instead of touching the provider mid-build).
+  bool get isActive => state != null;
+
   void set(Offset? p) {
     if (state != p) state = p;
   }

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +19,19 @@ import 'snapping.dart';
 /// optionally a bearing), and on Enter places the next point at exactly that
 /// distance. With nothing typed it stays out of the way; idle (Select tool) it
 /// renders nothing at all, so the golden screenshots are byte-identical.
+///
+/// H1 — typing reaches it by TWO routes that never double up:
+///   * it CLAIMS the keyboard (an explicit post-frame `requestFocus`, the
+///     `MechXTextField.autofocus` pattern — `EditableText.autofocus` is
+///     ignored once the canvas focus scope already has a focused child) every
+///     time the run's pending point appears or moves, so a click-type-Enter
+///     flow needs no mouse trip into the field;
+///   * the Layout canvas key handler forwards the drafting characters
+///     (digits . , - and a separating space) to [SmartInputBarState.insertText]
+///     while a run is pending, WHICHEVER node holds focus — consuming the key,
+///     so the platform's own text input never inserts it a second time. A
+///     digit therefore always types a length mid-run and never re-picks the
+///     service (which would drop the pending chain).
 class SmartInputBar extends ConsumerStatefulWidget {
   final String sheetId;
   final int floorIndex;
@@ -28,13 +43,72 @@ class SmartInputBar extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<SmartInputBar> createState() => _SmartInputBarState();
+  ConsumerState<SmartInputBar> createState() => SmartInputBarState();
 }
 
-class _SmartInputBarState extends ConsumerState<SmartInputBar> {
+/// Public so the Layout canvas key handler (which owns the keyboard routing,
+/// H1/H4/M2) can type into / commit / query the bar via a [GlobalKey].
+class SmartInputBarState extends ConsumerState<SmartInputBar> {
   final TextEditingController _controller = TextEditingController();
-  final FocusNode _focusNode = FocusNode();
+  final FocusNode _focusNode = FocusNode(debugLabel: 'smart-input');
   String? _error;
+
+  /// The pending point the bar last claimed focus for (H1): a NEW / moved
+  /// pending point re-claims it (each click on the canvas hands the keyboard
+  /// to the canvas first).
+  Offset? _focusedFor;
+
+  /// Whether nothing is typed (Enter / Space / Backspace then act on the RUN —
+  /// finish it, pan, or undo its last point — instead of on the text).
+  bool get isEmpty => _controller.text.isEmpty;
+
+  /// Whether the field itself holds the keyboard.
+  bool get hasKeyboardFocus => _focusNode.hasFocus;
+
+  /// Insert [text] at the caret (replacing any selection) — the canvas
+  /// handler's forwarding route.
+  void insertText(String text) {
+    final v = _controller.value;
+    final sel = v.selection.isValid
+        ? v.selection
+        : TextSelection.collapsed(offset: v.text.length);
+    final next = v.text.replaceRange(sel.start, sel.end, text);
+    _controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: sel.start + text.length),
+    );
+    _onChanged(next);
+  }
+
+  /// Delete the character before the caret (or the selection).
+  void deleteBackward() {
+    final v = _controller.value;
+    if (v.text.isEmpty) return;
+    final sel = v.selection.isValid
+        ? v.selection
+        : TextSelection.collapsed(offset: v.text.length);
+    final start = sel.isCollapsed ? math.max(0, sel.start - 1) : sel.start;
+    final next = v.text.replaceRange(start, sel.end, '');
+    _controller.value = TextEditingValue(
+      text: next,
+      selection: TextSelection.collapsed(offset: start),
+    );
+    _onChanged(next);
+  }
+
+  /// Place the typed length (the Enter action). No-op on empty text.
+  void commit() => _commit();
+
+  void _onChanged(String text) {
+    if (_error != null) setState(() => _error = null);
+    // B25 — seed the Alt parallel-offset lock with the last valid typed
+    // length, so 'type an offset, then Alt over a wall' works.
+    final parsed = parseDrawingInput(text, indonesian: _indonesian);
+    if (parsed.ok) {
+      ref.read(parallelOffsetProvider.notifier).set(parsed.lengthMm!);
+    }
+    setState(() {}); // refresh the live preview
+  }
 
   @override
   void dispose() {
@@ -88,13 +162,37 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
     _focusNode.requestFocus();
   }
 
+  /// H1 — claim the keyboard after the frame that shows (or moves) the
+  /// pending point.
+  void _claimFocusFor(Offset pending) {
+    if (_focusedFor == pending) return;
+    _focusedFor = pending;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_focusNode.hasFocus) _focusNode.requestFocus();
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
-    final drawing = ref.watch(networkControllerProvider);
+    final drawing = ref.watch(networkControllerProvider
+        .select((d) => (tool: d.tool, pending: d.pendingPoint)));
     // Only while actively drawing a run from a pending point.
-    if (drawing.tool != DrawTool.drawRun || drawing.pendingPoint == null) {
+    if (drawing.tool != DrawTool.drawRun || drawing.pending == null) {
+      // The chain ended: forget the typed text so the next run starts clean.
+      _focusedFor = null;
+      _error = null;
+      if (_controller.text.isNotEmpty) {
+        // After the frame (the field is still mounted while this builds).
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted &&
+              ref.read(networkControllerProvider).pendingPoint == null) {
+            _controller.clear();
+          }
+        });
+      }
       return const SizedBox.shrink();
     }
+    _claimFocusFor(drawing.pending!);
     final calibrated =
         ref.watch(projectControllerProvider).calibrationFor(widget.sheetId) !=
             null;
@@ -142,9 +240,12 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
           SizedBox(
             width: 96,
             child: Focus(
-              // Submit on Enter without the canvas swallowing the key.
+              // Submit on Enter without the canvas swallowing the key. With
+              // nothing typed the Enter bubbles on to the canvas, which
+              // FINISHES the run (M2).
               onKeyEvent: (_, event) {
                 if (event is KeyDownEvent &&
+                    !isEmpty &&
                     (event.logicalKey == LogicalKeyboardKey.enter ||
                         event.logicalKey == LogicalKeyboardKey.numpadEnter)) {
                   _commit();
@@ -155,25 +256,10 @@ class _SmartInputBarState extends ConsumerState<SmartInputBar> {
               child: EditableText(
                 controller: _controller,
                 focusNode: _focusNode,
-                // C4: grab focus the moment the bar appears (a run chain is
-                // live), so "click a point, type 3000, Enter" works without
-                // first mousing into the 96-px field. The field only enters the
-                // tree while drawing, so idle focus is untouched; canvas clicks
-                // (pointer) keep working regardless of who holds key focus.
-                autofocus: true,
-                onChanged: (text) {
-                  if (_error != null) setState(() => _error = null);
-                  // B25 — seed the Alt parallel-offset lock with the last valid
-                  // typed length, so 'type an offset, then Alt over a wall' works.
-                  final parsed =
-                      parseDrawingInput(text, indonesian: _indonesian);
-                  if (parsed.ok) {
-                    ref
-                        .read(parallelOffsetProvider.notifier)
-                        .set(parsed.lengthMm!);
-                  }
-                  setState(() {}); // refresh the live preview
-                },
+                // C4/H1: the field claims focus explicitly in build (see
+                // [_claimFocusFor]) — `autofocus` alone is ignored once the
+                // canvas scope already holds a focused child.
+                onChanged: _onChanged,
                 maxLines: 1,
                 style: type.mono.copyWith(color: colors.textPrimary),
                 cursorColor: colors.accent,
