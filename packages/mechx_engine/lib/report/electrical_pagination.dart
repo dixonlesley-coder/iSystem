@@ -35,6 +35,20 @@ import 'riser_pagination.dart' show paginatedRiserSheets;
 
 /// The electrical riser as issuable PAGES, TOP floors first (see the library
 /// doc). `[whole]` when it already prints at [kMinPlotLabelPt].
+///
+/// Round 44 (regression-riser-width-bound-band-still-illegible) — a band
+/// too WIDE for the sheet (many boards side by side on one storey) cannot be
+/// fixed by any floor split, so two further steps run, only when the floor
+/// pagination leaves a page below the floor:
+///  1. TYPICAL collapse — on each illegible band, identical sibling leaf
+///     boards ([electricalRiserTypicalGroups]) are drawn as ONE node
+///     'PHB UNIT 101..116 (TIPIKAL x16)' (its feeder + fan-out drawn once);
+///  2. COLUMN pages — a band still illegible is split into board chunks of
+///     the largest size k that prints at [kMinPlotLabelPt] (binary search),
+///     each its own page whose gutter names the boards on the other sheets
+///     ('LANJUT (lembar lain): <first>..<last>'); a parent board on the same
+///     band rides every chunk. The `belowMinLabelPt` flag stays only as the
+///     backstop for a single board that cannot reach the floor by itself.
 List<SldSheet> paginatedElectricalRiserSheets({
   required ElectricalProject project,
   required ElectricalSystemResult result,
@@ -43,19 +57,205 @@ List<SldSheet> paginatedElectricalRiserSheets({
   DrawingChrome? chrome,
   String projectName = 'Untitled project',
   String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
-}) =>
-    paginatedRiserSheets(
-      build: (r) => buildElectricalRiser(
+}) {
+  double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
+      chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
+  bool legible(SldSheet s) => minPt(s) >= kMinPlotLabelPt - 1e-9;
+  SldSheet build(({int lo, int hi})? r,
+          {Set<String> hide = const {},
+          Map<String, String> names = const {},
+          Map<int, String> notes = const {}}) =>
+      buildElectricalRiser(
           project: project,
           result: result,
           building: building,
           sourceChain: sourceChain,
-          floorRange: r),
-      levelCount: electricalRiserBandCount(project, result, building),
-      chrome: chrome,
-      projectName: projectName,
-      diagramTitle: diagramTitle,
-    );
+          floorRange: r,
+          hidePanelIds: hide,
+          typicalNames: names,
+          bandNotes: notes);
+  final levels = electricalRiserBandCount(project, result, building);
+  List<SldSheet> floorPages(int a, int b,
+          {Set<String> hide = const {},
+          Map<String, String> names = const {}}) =>
+      paginatedRiserSheets(
+        build: (r) => build(
+            r == null
+                ? (a == 0 && b == levels - 1 ? null : (lo: a, hi: b))
+                : (lo: a + r.lo, hi: a + r.hi),
+            hide: hide,
+            names: names),
+        levelCount: b - a + 1,
+        chrome: chrome,
+        projectName: projectName,
+        diagramTitle: diagramTitle,
+      );
+
+  final plain = floorPages(0, levels - 1);
+  if (plain.every((p) => p.belowMinLabelPt == null)) return plain;
+
+  // 1. Typical collapse on the bands that are illegible on their own page.
+  final floorOf = electricalRiserFloorOf(project, result, building);
+  final nameOf = {for (final p in project.panels) p.id: p.name};
+  final illegibleBand = <int, bool>{};
+  bool bandIllegible(int f) =>
+      illegibleBand[f] ??= !legible(build((lo: f, hi: f)));
+  final hide = <String>{};
+  final names = <String, String>{};
+  for (final g in electricalRiserTypicalGroups(project, result, building)
+      .values) {
+    if (!bandIllegible(floorOf[g.first] ?? 0)) continue;
+    hide.addAll(g.skip(1));
+    names[g.first] =
+        electricalTypicalName([for (final id in g) nameOf[id] ?? id]);
+  }
+  final collapsed = hide.isEmpty
+      ? plain
+      : floorPages(0, levels - 1, hide: hide, names: names);
+  if (collapsed.every((p) => p.belowMinLabelPt == null)) return collapsed;
+
+  // 2. Column pages for each band still too wide BY ITSELF (judged with
+  // every other band's boards hidden, so a parent band is never blamed for
+  // its children's width).
+  final allIds = [
+    for (final id in result.order)
+      if (result.panels.containsKey(id) && !hide.contains(id)) id,
+  ];
+  final parentIds = <String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null) p.id,
+  };
+  final parentOfId = <String, String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null) c.feedsPanelId!: p.id,
+  };
+  String label(String id) => names[id] ?? nameOf[id] ?? id;
+  // Boards off band [f], except the ancestors of the band's boards (a
+  // feeder's parent stays: its legs + annotations are part of the width).
+  Set<String> notOn(int f) {
+    final keep = <String>{};
+    for (final id in allIds) {
+      if (floorOf[id] != f) continue;
+      for (var p = parentOfId[id]; p != null && keep.add(p);
+          p = parentOfId[p]) {}
+    }
+    return {
+      for (final id in allIds)
+        if (floorOf[id] != f && !keep.contains(id)) id,
+    };
+  }
+  // Per wide band: the boards that can be split (non-parents) and the chunk
+  // size k — the largest whose first chunk prints at the floor in isolation.
+  final chunkOf = <int, ({List<String> chunkable, int k})>{};
+  for (var f = 0; f < levels; f++) {
+    final others = notOn(f);
+    if (legible(
+        build((lo: f, hi: f), hide: {...hide, ...others}, names: names))) {
+      continue;
+    }
+    final chunkable = [
+      for (final id in allIds)
+        if (floorOf[id] == f && !parentIds.contains(id)) id,
+    ];
+    if (chunkable.length < 2) continue;
+    bool fits(int k) => legible(build((lo: f, hi: f),
+        hide: {...hide, ...others, ...chunkable.skip(k)}, names: names));
+    var lo = 1, hi = chunkable.length - 1, k = 1;
+    while (lo <= hi) {
+      final mid = (lo + hi) ~/ 2;
+      if (fits(mid)) {
+        k = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    chunkOf[f] = (chunkable: chunkable, k: k);
+  }
+  if (chunkOf.isEmpty) return collapsed;
+
+  // Everything beyond each wide band's FIRST chunk is drawn only on its own
+  // column page; the pages that still show the parent board name them.
+  final beyondFirst = <String>{
+    for (final c in chunkOf.values) ...c.chunkable.skip(c.k),
+  };
+  Map<int, String> parentNotes(Set<String> elsewhere) {
+    final byBand = <int, List<String>>{};
+    for (final id in allIds) {
+      if (!elsewhere.contains(id)) continue;
+      final par = parentOfId[id];
+      if (par == null) continue;
+      (byBand[floorOf[par] ?? 0] ??= []).add(id);
+    }
+    return {
+      for (final e in byBand.entries)
+        e.key: '${label(e.value.first)}..${label(e.value.last)}',
+    };
+  }
+
+  SldSheet flagged(SldSheet p) {
+    final pt = minPt(p);
+    return pt < kMinPlotLabelPt - 1e-9 ? p.withBelowMinLabelPt(pt) : p;
+  }
+
+  List<SldSheet> columnPages(int f) {
+    final c = chunkOf[f]!;
+    final out = <SldSheet>[];
+    for (var s = 0; s < c.chunkable.length; s += c.k) {
+      final e = s + c.k < c.chunkable.length ? s + c.k : c.chunkable.length;
+      final chunk = c.chunkable.sublist(s, e).toSet();
+      final onBand = [
+        for (final id in c.chunkable)
+          if (!chunk.contains(id)) id,
+      ];
+      final elsewhere = <String>{
+        ...beyondFirst.where((id) => floorOf[id] != f),
+        ...onBand,
+      };
+      out.add(flagged(build((lo: f, hi: f),
+          hide: {...hide, ...elsewhere},
+          names: names,
+          notes: onBand.isEmpty
+              ? const {}
+              : {f: '${label(onBand.first)}..${label(onBand.last)}'})));
+    }
+    return out;
+  }
+
+  final restNotes = parentNotes(beyondFirst);
+  List<SldSheet> restPages(int a, int b) => paginatedRiserSheets(
+        build: (r) => build(
+            r == null ? (lo: a, hi: b) : (lo: a + r.lo, hi: a + r.hi),
+            hide: {...hide, ...beyondFirst},
+            names: names,
+            notes: restNotes),
+        levelCount: b - a + 1,
+        chrome: chrome,
+        projectName: projectName,
+        diagramTitle: diagramTitle,
+      );
+
+  // Floors TOP first: each wide band contributes its column pages; the
+  // contiguous runs of other floors paginate by floor range as before.
+  final pages = <SldSheet>[];
+  var f = levels - 1;
+  while (f >= 0) {
+    if (chunkOf.containsKey(f)) {
+      pages.addAll(columnPages(f));
+      f--;
+      continue;
+    }
+    var a = f;
+    while (a - 1 >= 0 && !chunkOf.containsKey(a - 1)) {
+      a--;
+    }
+    pages.addAll(restPages(a, f));
+    f = a - 1;
+  }
+  return pages;
+}
 
 /// The building single-line OVERVIEW as issuable PAGES (see the library
 /// doc): `[whole]` when it prints at [kMinPlotLabelPt], else the top page +

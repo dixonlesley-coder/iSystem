@@ -9,21 +9,24 @@
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_bom.dart';
-import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
+import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/busbar.dart';
 import 'package:mechx_engine/electrical/catalog.dart' show PartCategory;
-import 'package:mechx_engine/electrical/containment.dart';
-import 'package:mechx_engine/electrical/fault.dart';
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/containment.dart';
 import 'package:mechx_engine/electrical/control/starter.dart';
+import 'package:mechx_engine/electrical/fault.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/power_oneline.dart';
-import 'package:mechx_engine/electrical/results.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/supply_design.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart' show kMinPlotLabelPt;
+import 'package:mechx_engine/report/electrical_pagination.dart';
+import 'package:mechx_engine/report/electrical_pdf_export.dart'
+    show sldSinglePageMinLabelPt;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -583,6 +586,94 @@ void main() {
           projectName: 'P', date: 'd', electrical: sys, electricalProject: pr));
       expect(rows.where((r) => r.category == EquipmentCategory.distributedSource),
           isEmpty);
+    });
+  });
+
+  // ── width-bound riser band: typical collapse, then column pages ───────────
+  group('regression-riser-width-bound-band-still-illegible', () {
+    ElectricalProject units(int n, {bool distinct = false}) =>
+        ElectricalProject(id: 'a', name: 'A', panels: [
+          ElectricalPanel(id: 'MDP', name: 'DB-L1', circuits: [
+            for (var i = 1; i <= n; i++)
+              ElectricalCircuit(
+                  id: 'f$i',
+                  name: 'Unit $i',
+                  loadKind: LoadKind.feeder,
+                  feedsPanelId: 'U$i',
+                  length: const Length(20)),
+          ]),
+          for (var i = 1; i <= n; i++)
+            ElectricalPanel(
+              id: 'U$i',
+              name: 'PHB UNIT ${100 + i}',
+              system: ElectricalSystem.singlePhase,
+              voltage: const Voltage(220),
+              sourceType: PanelSource.feeder,
+              fedByCircuitId: 'f$i',
+              circuits: [
+                // distinct ⇒ every unit a different make-up (no typical).
+                for (var k = 0; k < (distinct ? i : 4); k++)
+                  ElectricalCircuit(
+                      id: 'u$i-$k',
+                      name: 'Way $k',
+                      loadKind: k.isEven ? LoadKind.socket : LoadKind.lighting,
+                      loadW: distinct ? 300.0 + 37 * i + 11 * k : 1200,
+                      cosPhi: 0.9,
+                      phases: 1,
+                      length: const Length(8)),
+              ],
+            ),
+        ]);
+
+    for (final n in [8, 16, 24]) {
+      test('$n identical PHB UNIT boards: every page >= 7 pt via ONE typical '
+          'node', () {
+        final pr = units(n);
+        final r = computeSystem(_p, pr);
+        final pages = paginatedElectricalRiserSheets(project: pr, result: r);
+        for (final p in pages) {
+          expect(sldSinglePageMinLabelPt(p),
+              greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9));
+          expect(p.belowMinLabelPt, isNull);
+        }
+        final labels = [
+          for (final p in pages)
+            for (final x in p.prims)
+              if (x is SldLabel) x.text,
+        ];
+        expect(labels, contains('PHB UNIT 101..${100 + n} (TIPIKAL x$n)'));
+      });
+    }
+
+    test('distinct boards (no typical): column pages, every board drawn once, '
+        'each page >= 7 pt', () {
+      final pr = units(24, distinct: true);
+      final r = computeSystem(_p, pr);
+      expect(electricalRiserTypicalGroups(pr, r, null), isEmpty);
+      final pages = paginatedElectricalRiserSheets(project: pr, result: r);
+      expect(pages.length, greaterThan(1));
+      final drawn = <String>[];
+      for (final p in pages) {
+        expect(sldSinglePageMinLabelPt(p),
+            greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9));
+        for (final x in p.prims) {
+          if (x is SldLabel && x.text.startsWith('PHB UNIT ') && x.size == 10) {
+            drawn.add(x.text);
+          }
+        }
+      }
+      // Each of the 24 units appears on exactly one page.
+      expect(drawn.toSet().length, 24);
+      expect(drawn.length, 24);
+    });
+
+    test('a legible riser is byte-identical (no collapse, no columns)', () {
+      final pr = units(2);
+      final r = computeSystem(_p, pr);
+      final pages = paginatedElectricalRiserSheets(project: pr, result: r);
+      final whole = buildElectricalRiser(project: pr, result: r, sourceChain: true);
+      expect(pages, hasLength(1));
+      expect(pages.single.prims.length, whole.prims.length);
     });
   });
 }
