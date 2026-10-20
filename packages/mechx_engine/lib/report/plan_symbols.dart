@@ -461,6 +461,10 @@ String? fixturePlanCode(NetNode n,
     if (code != null) return code;
   }
   if (n.component == NodeComponent.floorDrain) return 'FD';
+  // Round 34 (fire-hvac-drawings-air-terminals-and-heads-carry-no-data) —
+  // fire outlets are coded too, so a reviewer can count them on the plan.
+  if (n.component == NodeComponent.hydrantBox) return 'HYD';
+  if (n.component == NodeComponent.hoseReel) return 'HR';
   return switch (n.fixture) {
     PlumbingFixture.waterClosetFlushValve ||
     PlumbingFixture.waterClosetFlushTank =>
@@ -528,7 +532,56 @@ const Map<String, String> kFixturePlanCodeNames = {
   'KS': 'kitchen sink',
   'HB': 'hose bibb',
   'FD': 'floor drain',
+  'HYD': 'hydrant box',
+  'HR': 'hose reel',
 };
+
+/// Round 34 (fire-hvac-drawings-air-terminals-and-heads-carry-no-data) — the
+/// installer's tag of an AIR TERMINAL (supply / linear diffuser, return /
+/// exhaust grille): its design airflow and, when chosen, its face size —
+/// `200 L/s 450x450`. Null for a node that is not an air terminal or carries
+/// no airflow (nothing honest to print). Pure ASCII, so PDF == DXF.
+String? airTerminalPlanTag(NetNode n) {
+  switch (n.component) {
+    case NodeComponent.supplyDiffuser:
+    case NodeComponent.linearDiffuser:
+    case NodeComponent.returnGrille:
+    case NodeComponent.exhaustGrille:
+      break;
+    default:
+      return null;
+  }
+  final q = n.airflow;
+  if (q == null ||
+      !q.cubicMetersPerSecond.isFinite ||
+      q.cubicMetersPerSecond <= 0) {
+    return null;
+  }
+  final ls = q.inLitersPerSecond;
+  final flow =
+      '${ls >= 10 ? ls.toStringAsFixed(0) : ls.toStringAsFixed(1)} L/s';
+  final w = n.faceWidthMm, h = n.faceHeightMm;
+  if (w != null && h != null && w > 0 && h > 0 && w.isFinite && h.isFinite) {
+    return '$flow ${w.round()}x${h.round()}';
+  }
+  return flow;
+}
+
+/// Round 34 — [airTerminalPlanTag] for every air terminal on ([sheetId],
+/// [floorIndex]) not already tagged in [nodeTags].
+Map<String, String> airTerminalPlanTags(Network net,
+    {required String sheetId,
+    required int floorIndex,
+    Map<String, String>? nodeTags}) {
+  final out = <String, String>{};
+  for (final n in net.nodes) {
+    if (n.sheetId != sheetId || n.floorIndex != floorIndex) continue;
+    if ((nodeTags?[n.id] ?? '').isNotEmpty) continue;
+    final t = airTerminalPlanTag(n);
+    if (t != null) out[n.id] = t;
+  }
+  return out;
+}
 
 /// Round 33 — the fixture-code tags of every node on ([sheetId],
 /// [floorIndex]) that carries a [fixturePlanCode] and no tag in [nodeTags].
@@ -568,6 +621,8 @@ List<String> planSheetNotes({
   String? floorName,
   double? gravitySlope,
   Map<String, EdgeSizing> sizing = const {},
+  double? sprinklerKFactor,
+  String? sprinklerHazard,
 }) {
   final notes = <String>[];
   final codes = fixtureTags.values.toSet().toList()
@@ -586,6 +641,23 @@ List<String> planSheetNotes({
       'FFL ${signedElevationText(floorFflM)}',
     ].join(' ');
     notes.add("CL = pipe centreline above this floor's FFL ($where)");
+  }
+  // Round 34 — a floor with sprinkler heads states the head basis once: the
+  // project K-factor (and hazard class) the remote-area check used, flagged
+  // VERIFY (head-model dependent, never a certified head selection).
+  final k = sprinklerKFactor;
+  if (k != null &&
+      k.isFinite &&
+      k > 0 &&
+      net.nodes.any((n) =>
+          n.component == NodeComponent.sprinklerHead &&
+          n.sheetId == sheetId &&
+          n.floorIndex == floorIndex)) {
+    final hazard = (sprinklerHazard == null || sprinklerHazard.isEmpty)
+        ? ''
+        : ', $sprinklerHazard';
+    notes.add('Sprinkler heads: K ${k.toStringAsFixed(0)} '
+        '(L/min/bar^0.5)$hazard - VERIFY head model');
   }
   final slope = gravitySlope;
   if (slope != null && slope > 0 && slope.isFinite) {

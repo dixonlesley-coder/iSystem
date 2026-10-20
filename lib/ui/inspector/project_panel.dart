@@ -1422,6 +1422,14 @@ DrawingChrome issuableChrome(
         : null,
     gravitySlope: ref.read(drainageSlopeProvider),
     sizing: ref.read(sizingProvider),
+    // Round 34 — the sprinkler head basis (K-factor + hazard class).
+    sprinklerKFactor: ref.read(firePerHeadKFactorProvider),
+    sprinklerHazard: switch (ref.read(fireHazardProvider)) {
+      FireHazardClass.lightHazard => 'light hazard',
+      FireHazardClass.ordinaryHazard1 => 'ordinary hazard 1',
+      FireHazardClass.ordinaryHazard2 => 'ordinary hazard 2',
+      FireHazardClass.extraHazard => 'extra hazard',
+    },
   );
   return DrawingChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
