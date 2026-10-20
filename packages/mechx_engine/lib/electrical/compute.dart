@@ -25,6 +25,7 @@ import '../standards/puil.dart';
 import '../units.dart';
 import 'busbar.dart';
 import 'cable_family.dart';
+import 'containment.dart' show effectiveInstallMethod;
 import 'control/starter.dart' show StarterType;
 import 'diversity_library.dart' show DiversityLibrary;
 import 'earthing.dart';
@@ -1112,13 +1113,8 @@ class ComputePanelOptions {
 /// panel method ('ground' → buried; 'air' → above-ground even if the panel is
 /// buried). Drives both the ampacity table and the temperature derating basis.
 CableInstallMethod _effectiveInstallMethod(
-    ElectricalCircuit c, ElectricalPanel panel) {
-  if (c.laying == 'ground') return CableInstallMethod.buried;
-  if (c.laying == 'air' && panel.installMethod == CableInstallMethod.buried) {
-    return CableInstallMethod.conduit;
-  }
-  return panel.installMethod;
-}
+        ElectricalCircuit c, ElectricalPanel panel) =>
+    effectiveInstallMethod(c, panel);
 
 /// The effective per-circuit demand (utilisation) factor: the occupancy-keyed
 /// diversity library value when [library] is supplied AND [diversityLibraryId]

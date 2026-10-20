@@ -19,7 +19,13 @@ import 'dart:math' as math;
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
 import '../electrical/containment.dart'
-    show ConduitSpec, conduitFillSingle, fieldCablesOf, sizeConduit;
+    show
+        ConduitSpec,
+        ContainmentRoute,
+        effectiveInstallMethod,
+        fieldCablesOf,
+        routeForInstallMethod,
+        sizeConduit;
 import '../electrical/control/starter.dart'
     show StarterType, effectiveStarterType;
 import '../electrical/earthing.dart'
@@ -288,7 +294,7 @@ int? _conduitMm(double csaMm2, bool threePhase) {
 /// fill-aware fallback above and the study-fed token below so the two can never
 /// disagree about what "no conduit" means.
 int? _conduitFromSpec(ConduitSpec spec) =>
-    spec.fillPct > conduitFillSingle * 100 ? null : spec.conduitSizeMm.round();
+    spec.issuesConduit ? spec.conduitSizeMm.round() : null;
 
 /// A cable label like `NYM 3x2.5` — the family from the circuit's explicit
 /// [ElectricalCircuit.cableType] when set, else the conventional default for its
@@ -797,9 +803,21 @@ SldSheet buildElectricalSld({
       // fill-aware ladder. Both return null for a cable no standard conduit
       // holds ⇒ `tray`.
       final studySpec = containmentByCircuitId?[c.circuitId];
-      final conduitMm = studySpec != null
-          ? _conduitFromSpec(studySpec)
-          : _conduitMm(fieldCablesOf(c).csaMm2, c.threePhase);
+      // Round 44 — the route follows the method the conductor was SIZED on
+      // (the study's route when supplied, else the model's): a tray / air
+      // sized cable is issued on tray, a clipped-direct one clipped.
+      final ownModel = modelById[p.panelId];
+      final route = studySpec?.route ??
+          (circuit != null && ownModel != null
+              ? routeForInstallMethod(
+                  effectiveInstallMethod(circuit, ownModel))
+              : ContainmentRoute.conduit);
+      final conduitMm = route != ContainmentRoute.conduit
+          ? null
+          : studySpec != null
+              ? _conduitFromSpec(studySpec)
+              : _conduitMm(fieldCablesOf(c).csaMm2, c.threePhase);
+      final clipped = route == ContainmentRoute.clipped;
       // H6: a way whose conductor exceeds the conduit range runs on cable tray /
       // ladder, not in conduit — print an explicit `tray` route token so EVERY
       // row states a route method (the code's own convention; never a silent
@@ -814,7 +832,9 @@ SldSheet buildElectricalSld({
       final conduitCount = runs > 1 ? '${runs}x ' : '';
       final conduit = conduitMm != null
           ? ' · ${conduitCount}PVC ${conduitMm}mm'
-          : ' · tray';
+          : clipped
+              ? ' · clipped'
+              : ' · tray';
       // Round 39 (elec-props-5) — a SPARE (CADANGAN) way has no load and no
       // cable to pull (the BOM buys none): its PENGHANTAR cell is '-', like
       // the headroom CADANGAN rows, and it contributes no conduit / tray.
@@ -823,7 +843,7 @@ SldSheet buildElectricalSld({
         // no route token
       } else if (conduitMm != null) {
         anyConduit = true;
-      } else {
+      } else if (!clipped) {
         anyTray = true;
       }
       // The run LENGTH the solve already used for this way (geo-derived when

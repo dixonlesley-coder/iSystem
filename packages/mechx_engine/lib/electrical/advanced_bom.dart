@@ -15,7 +15,7 @@ library;
 
 import 'bom.dart';
 import 'catalog.dart' show PartCategory;
-import 'containment.dart' show ContainmentResult, conduitFillSingle;
+import 'containment.dart' show ContainmentResult, ContainmentRoute;
 import 'control/starter.dart' show ControlAssembly, DeviceCategory;
 import 'electrode.dart' show ElectrodeDesign;
 import 'genset_backup.dart' show gensetBackupDemandVa, gensetBackupDemandW;
@@ -290,7 +290,10 @@ List<BomLine> containmentBomLines(
       if (c.loadKind == LoadKind.spare || c.lengthM <= 0) continue;
       final cc = specById[c.circuitId];
       if (cc == null) continue;
-      final fits = cc.conduit.fillPct <= conduitFillSingle * 100;
+      // Round 44 — a clipped-direct way (sized on method C) buys no
+      // containment; a tray / air way (method E) is laid on the tray.
+      if (cc.conduit.route == ContainmentRoute.clipped) continue;
+      final fits = cc.conduit.issuesConduit;
       if (fits) {
         final mm = cc.conduit.conduitSizeMm.round();
         // One conduit per FIELD cable — the study's count (a star-delta

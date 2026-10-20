@@ -35,8 +35,12 @@ import '../units.dart';
 import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
-import 'compute.dart' show circuitIsThreePhase, kThreePhaseServiceLineVoltageV;
-import 'containment.dart' show ConduitSpec, ContainmentResult, containmentFor;
+import 'compute.dart'
+    show
+        circuitIsThreePhase,
+        kThreePhaseServiceLineVoltageV;
+import 'containment.dart'
+    show ConduitSpec, ContainmentResult, containmentFor, effectiveInstallMethod;
 import 'control/motor_flc.dart' show motorFlc, motorFlc1ph;
 import 'control/starter.dart'
     show
@@ -401,7 +405,16 @@ AdvancedStudy computeAdvancedStudy(
     if (h != null && h.thdBand == ThdBand.high) anyHarmonicRich = true;
 
     // Containment.
-    containment[id] = containmentFor(panelResult);
+    // Round 44 — each way routed on the method its conductor was sized on.
+    containment[id] = containmentFor(panelResult,
+        methodOf: panelModel == null
+            ? null
+            : (cid) {
+                for (final c in panelModel.circuits) {
+                  if (c.id == cid) return effectiveInstallMethod(c, panelModel);
+                }
+                return panelModel.installMethod;
+              });
 
     // Enclosure — explicit panel heat wins; else summed control-device heat +
     // the load-dependent breaker/busbar I²R + a small base allowance. Floor gear when any VFD/soft-starter is present.

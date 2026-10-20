@@ -10,7 +10,9 @@ import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_bom.dart';
 import 'package:mechx_engine/electrical/bom.dart';
+import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/busbar.dart';
+import 'package:mechx_engine/electrical/containment.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -19,6 +21,7 @@ import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/results.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/supply_design.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -310,6 +313,83 @@ void main() {
         ];
         expectSectionsCarryDevices(computeSystem(_p, _board(ways)).panels['MDP']!);
       }
+    });
+  });
+
+  // ── the issued route follows the sizing method ────────────────────────────
+  group('electrical-sim-9-tray-sized-cable-issued-in-conduit', () {
+    ElectricalProject board(CableInstallMethod m) => _board([
+          const ElectricalCircuit(
+              id: 'w',
+              name: 'Load',
+              loadKind: LoadKind.general,
+              loadW: 79000,
+              cosPhi: 0.9,
+              phases: 3,
+              cableType: 'NYY',
+              length: Length(30)),
+        ], installMethod: m);
+    List<String> rowLabels(ElectricalProject pr, ElectricalSystemResult sys,
+            AdvancedStudy adv) =>
+        [
+          for (final p in buildElectricalPanelDetail(
+                  project: pr,
+                  result: sys,
+                  panelId: 'MDP',
+                  containmentByCircuitId: containmentByCircuitIdOf(adv))
+              .prims)
+            if (p is SldLabel) p.text,
+        ];
+
+    test('79 kW on a TRAY board: issued on tray, no conduit bought', () {
+      // Ib = 79 000 / (√3 × 400 × 0.9) = 126.7 A ⇒ In 160 A; the cable is
+      // sized on method E (tray), whose Iz the same cable would not reach in
+      // conduit (B1) — so the issued route must be the tray.
+      final pr = board(CableInstallMethod.tray);
+      final sys = computeSystem(_p, pr);
+      final w = _way(sys, 'w');
+      expect(w.runCurrentA.amperes, closeTo(126.7, 0.1));
+      final adv = computeAdvancedStudy(_p, pr, sys);
+      final cc = adv.containment['MDP']!.conduits.single;
+      expect(cc.conduit.route, ContainmentRoute.tray);
+      expect(cc.conduit.issuesConduit, isFalse);
+      final labels = rowLabels(pr, sys, adv);
+      expect(labels.any((t) => t.contains('PVC')), isFalse);
+      expect(labels.any((t) => t.contains(' · tray')), isTrue);
+      final bom = containmentBomLines(sys, adv.containment);
+      expect(bom.where((l) => l.description.contains('conduit')), isEmpty);
+      final tray = bom.singleWhere((l) => l.description.contains('tray'));
+      expect(tray.qty, 30);
+      // The engine-only schedule (no study map) agrees.
+      final bare = [
+        for (final p in buildElectricalPanelDetail(
+                project: pr, result: sys, panelId: 'MDP')
+            .prims)
+          if (p is SldLabel) p.text,
+      ];
+      expect(bare.any((t) => t.contains('PVC')), isFalse);
+    });
+
+    test('a CONDUIT board twin keeps its conduit (byte-identical route)', () {
+      final pr = board(CableInstallMethod.conduit);
+      final sys = computeSystem(_p, pr);
+      final adv = computeAdvancedStudy(_p, pr, sys);
+      final cc = adv.containment['MDP']!.conduits.single;
+      expect(cc.conduit.route, ContainmentRoute.conduit);
+      expect(rowLabels(pr, sys, adv).any((t) => t.contains(' · PVC ')), isTrue);
+      expect(
+          containmentBomLines(sys, adv.containment)
+              .where((l) => l.description.startsWith('PVC conduit')),
+          hasLength(1));
+    });
+
+    test('a WALL (clipped direct) board: clipped token, no containment', () {
+      final pr = board(CableInstallMethod.wall);
+      final sys = computeSystem(_p, pr);
+      final adv = computeAdvancedStudy(_p, pr, sys);
+      expect(rowLabels(pr, sys, adv).any((t) => t.contains(' · clipped')),
+          isTrue);
+      expect(containmentBomLines(sys, adv.containment), isEmpty);
     });
   });
 }
