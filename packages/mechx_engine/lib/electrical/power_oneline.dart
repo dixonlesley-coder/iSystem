@@ -398,11 +398,15 @@ PowerOneLine buildPowerOneLine(
 /// Size the generator for the one-line: a forced kVA wins, else the resolved
 /// [backupDemand] (Round 13 — `max(fraction × demand, essential demand)` from
 /// `gensetBackupDemandVa`), else the demand × backupFraction.
+///
+/// Round 47 (cross-surface-oneline-essential-bus-prints-forced-nameplate) —
+/// the forced nameplate picks the RATING only (via `forcedKva` / `forcedUnits`);
+/// the backup DEMAND stays the solved basis, so the 'Essential bus' figure and
+/// the 'backing N kVA' note never echo whatever nameplate was typed.
 GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     ApparentPower? backupDemand, Power? backupPower) {
-  final backup = gen.totalKva ??
-      backupDemand ??
-      ApparentPower(demand.voltAmperes * gen.backupFraction);
+  final backup =
+      backupDemand ?? ApparentPower(demand.voltAmperes * gen.backupFraction);
   return sizeGenerator(
     backup,
     mode: gen.mode,

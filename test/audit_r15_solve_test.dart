@@ -140,10 +140,22 @@ void main() {
       final b = long.read(solveProvider)!;
       expect(a.criticalNodeId, startsWith('W2_'));
       expect(b.requiredPumpHead.meters, closeTo(a.requiredPumpHead.meters, 1e-9));
-      // The source is the entry E (its residual IS the pump head), not a
-      // ground-floor fixture.
-      expect(a.residualPressure['E']!.pascals,
-          closeTo(pressureFromHead(a.requiredPumpHead).pascals, 1e-6));
+      // The source is the entry E, not a ground-floor fixture. Round 47 —
+      // the pump ASSUMED at E sits on the L0 floor SURFACE (0.0 m), so E
+      // itself, a bare main at the L0 ceiling, sees the pump head less that
+      // ceiling lift (zero friction between the pump and E).
+      final project = short.read(projectControllerProvider);
+      final eCeiling = nodeElevation(
+          short.read(networkControllerProvider).network.nodeById('E')!,
+          project.building,
+          project.mounting);
+      expect(eCeiling.meters, greaterThan(0));
+      expect(
+          a.residualPressure['E']!.pascals,
+          closeTo(
+              pressureFromHead(Head(a.requiredPumpHead.meters - eCeiling.meters))
+                  .pascals,
+              1e-6));
     });
   });
 

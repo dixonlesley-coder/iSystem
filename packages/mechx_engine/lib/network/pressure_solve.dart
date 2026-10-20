@@ -422,6 +422,21 @@ bool _applyInlineDevices({
   return reducedFlowing;
 }
 
+/// Round 47 (mech-convergence-2-assumed-upfeed-pump-at-ceiling-datum) — the
+/// datum of the pump an UPFEED solve ASSUMES at its source. When the picked
+/// source is not a drawn plant (a PDAM water meter / a bare entry leaf, both
+/// [NodeRole.main] and so read at their floor's CEILING by [nodeElevation])
+/// the pump that develops `requiredPumpHead` is assumed there, and a pump
+/// sits on its floor SURFACE — the same datum [nodeElevation] gives a drawn
+/// pump. Null for a drawn plant (its own elevation stands), so a meter-only
+/// drawing and the same drawing with the pump drawn at the meter size ONE
+/// head.
+Length? assumedPumpSourceElevation(NetNode? source, BuildingLevels building) {
+  if (source == null || source.role == NodeRole.plant) return null;
+  if (source.elevation != null || source.mountHeight != null) return null;
+  return building.elevationOf(source.floorIndex);
+}
+
 /// Solve a pressurized supply [service] tree fed from [sourceId].
 ///
 /// Walks the [service] subgraph from [sourceId] (BFS, skipping visited nodes
@@ -447,6 +462,7 @@ PressureSolution solvePressurized({
   MountingHeights mounting = const MountingHeights(),
   Pressure? prvSetpoint,
   Map<String, Head> moverHeads = const {},
+  Length? sourceElevation,
 }) {
   const profile = SniProfile();
   final hwC = profile.hazenWilliamsC(material);
@@ -464,9 +480,13 @@ PressureSolution solvePressurized({
         .add((edge: e, other: e.fromId));
   }
 
-  final sourceElevation = source == null
-      ? const Length(0)
-      : nodeElevation(source, building, mounting);
+  // Round 47 — an explicit [sourceElevation] (the ASSUMED pump's datum,
+  // [assumedPumpSourceElevation]) wins; null ⇒ the source node's own
+  // elevation (every drawn-plant solve byte-identical).
+  final sourceDatum = sourceElevation ??
+      (source == null
+          ? const Length(0)
+          : nodeElevation(source, building, mounting));
 
   // Friction along the GOVERNING path to each node, walking every edge in
   // its sized flow direction (mech-props-3 — see [orientedPathCost]); on a
@@ -522,7 +542,7 @@ PressureSolution solvePressurized({
       entry.key: () {
         final n = net.nodeById(entry.key);
         final elev = n == null
-            ? sourceElevation
+            ? sourceDatum
             : pressureJudgeElevation(n,
                 service: service,
                 building: building,
@@ -530,7 +550,7 @@ PressureSolution solvePressurized({
                 isLoadedOpenEnd: loadedEnds.contains(entry.key));
         return _NodeCost(
           Head(entry.value),
-          Length(elev.meters - sourceElevation.meters),
+          Length(elev.meters - sourceDatum.meters),
         );
       }(),
   };
