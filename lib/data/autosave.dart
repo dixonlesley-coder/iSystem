@@ -469,8 +469,18 @@ Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
     if (clean || encoded == c.read(autosaveMirrorProvider)) {
       return;
     }
-    c.read(autosaveMirrorProvider.notifier).set(encoded);
     final projectPath = c.read(currentProjectPathProvider);
+    final slot = recoveryPath ?? recoverySlotFor(projectPath);
+    // Round 48 (persist-io-1) — never overwrite a PENDING crash snapshot (the
+    // one the launch banner still offers) with this session's work: only its
+    // Restore or an explicit Discard may replace it.
+    final pending = c.read(recoveryDocProvider);
+    if (pending != null &&
+        (pending.recoveryPath ?? recoverySlotFor(pending.sourcePath)) ==
+            slot) {
+      return;
+    }
+    c.read(autosaveMirrorProvider.notifier).set(encoded);
     // R4: AWAIT the write. Un-awaited, the tick's future completed the instant
     // the write was scheduled, so `tickInFlight` cleared while the file IO was
     // still running — two slow ticks could then race the SAME `.tmp` / `.bak`
@@ -479,7 +489,7 @@ Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
     // documented overlap guard actually cover the write.
     await writeRecovery(
       doc,
-      path: recoveryPath ?? recoverySlotFor(projectPath),
+      path: slot,
       // Stash the source file so a Restore can re-link the file identity.
       sourcePath: projectPath,
     );

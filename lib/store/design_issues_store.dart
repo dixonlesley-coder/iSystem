@@ -22,6 +22,8 @@ import 'package:mechx_engine/report/riser_tags.dart'
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show kFireComponentMaxPressureKpa;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show CheckValveAmbiguity;
 import 'package:mechx_engine/standards/puil.dart';
@@ -38,7 +40,11 @@ import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
 import 'fire_store.dart'
-    show firePumpDutyProvider, fireSystemBasesProvider, sprinklerPumpCheckProvider;
+    show
+        fireOverPressureProvider,
+        firePumpDutyProvider,
+        fireSystemBasesProvider,
+        sprinklerPumpCheckProvider;
 import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
 import 'network_store.dart';
@@ -226,6 +232,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
   final sprinklerPump = ref.watch(sprinklerPumpCheckProvider);
   final fireBases = ref.watch(fireSystemBasesProvider);
+  final fireOverPressure = ref.watch(fireOverPressureProvider);
   final coolingMethod = ref.watch(coolingLoadMethodProvider);
   final rooms = ref.watch(roomAreasProvider);
   final hasRooms = rooms.isNotEmpty;
@@ -1263,6 +1270,33 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         'sprFlow': b.flow.inLitersPerSecond.toStringAsFixed(1),
         'hoseFlow': st.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
         'hoseHead': st.pumpHead.meters.toStringAsFixed(1),
+      }),
+      locate: pumpNode == null
+          ? null
+          : IssueLocation(pumpNode.sheetId, nodeId: pumpNode.id),
+    ));
+  }
+
+  // Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — a fire
+  // pump whose churn pressure exceeds the standard component rating
+  // (175 psi): judge-only, locatable to the duty pump.
+  for (final o in fireOverPressure) {
+    final b = o.basis;
+    final pumpNode = b.pumpIds.isEmpty ? null : net.nodeById(b.pumpIds.first);
+    final share = o.check.frictionShare;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'fire-system-over-pressure'
+          '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      title: str(StringKey.issueFireOverPressureTitle),
+      message: str.format(StringKey.issueFireOverPressureMessage, {
+        'churn': o.check.churnKpa.toStringAsFixed(0),
+        'limit': kFireComponentMaxPressureKpa.toStringAsFixed(0),
+        'head': b.head.meters.toStringAsFixed(1),
+        'share': share == null
+            ? ''
+            : str.format(StringKey.issueFireOverPressureShare,
+                {'pct': (share * 100).toStringAsFixed(0)}),
       }),
       locate: pumpNode == null
           ? null

@@ -57,6 +57,43 @@ Future<bool> confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
   }
 }
 
+/// Round 48 (persist-io-2) — where a torn project file is kept when its
+/// `.bak` is restored over it: `<path>.corrupt-<yyyyMMdd-HHmmss>`.
+String corruptSidecarPath(String path, DateTime at) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  final stamp = '${at.year}${two(at.month)}${two(at.day)}-'
+      '${two(at.hour)}${two(at.minute)}${two(at.second)}';
+  return '$path.corrupt-$stamp';
+}
+
+/// Round 48 (persist-io-1) — the recovery slots a Save / Open / New may clear,
+/// SPARING the slot that holds a PENDING crash-recovery snapshot (the one the
+/// launch banner is still offering): a crash-relaunch starts in the clean
+/// default project, so Open-recent / File > New / Save-as ran with no dialog
+/// and their `clearRecoverySlots([..., null])` deleted the only copy of the
+/// crashed untitled work. Only the banner's Restore or an explicit Discard
+/// drops a pending snapshot — or an action on the very file it belongs to
+/// ([target] == its `sourcePath`). [dropPending] says whether the in-memory
+/// [recoveryDocProvider] may be cleared too.
+({List<String?> paths, bool dropPending}) recoverySlotsToClear(
+    ProviderReader read, List<String?> paths,
+    {String? target}) {
+  final pending = read(recoveryDocProvider);
+  if (pending == null) return (paths: paths, dropPending: true);
+  if (target != null && pending.sourcePath == target) {
+    return (paths: paths, dropPending: true);
+  }
+  final pendingSlot =
+      pending.recoveryPath ?? recoverySlotFor(pending.sourcePath);
+  return (
+    paths: [
+      for (final p in paths)
+        if (recoverySlotFor(p) != pendingSlot) p,
+    ],
+    dropPending: false,
+  );
+}
+
 /// The directory part of [path], or null when it carries none. Tolerant of
 /// either separator (a FilePicker path may use `/` even on Windows).
 String? _dirOf(String? path) {
@@ -189,7 +226,8 @@ Future<void> newProject(BuildContext context, WidgetRef ref) async {
   ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(projectDirtyProvider.notifier).set(false);
   ref.read(loadErrorProvider.notifier).clear();
-  await clearRecoverySlots([priorPath, null]);
+  await clearRecoverySlots(
+      recoverySlotsToClear(ref.read, [priorPath, null]).paths);
   ref.read(statusMessageProvider.notifier).showStatus('New project');
 }
 
@@ -681,12 +719,14 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   ref.read(projectDirtyProvider.notifier).set(false);
   // Drop the recovery snapshot for the prior identity, the saved file, and the
   // shared untitled slot (a first save promotes from untitled to a named file).
-  await clearRecoverySlots([priorPath, full, null]);
+  final toClear =
+      recoverySlotsToClear(ref.read, [priorPath, full, null], target: full);
+  await clearRecoverySlots(toClear.paths);
   // `clearRecoverySlots` is an async file op — the tree can be disposed while it
   // is in flight (see the `finally` note). The remaining work is in-memory UI
   // bookkeeping that only matters while the app is alive, so drop it if gone.
   if (!ref.context.mounted) return;
-  ref.read(recoveryDocProvider.notifier).clear();
+  if (toClear.dropPending) ref.read(recoveryDocProvider.notifier).clear();
   // Remember this file in the machine-local MRU / last-open list, under the
   // name the project carries NOW (F9 may just have adopted the file stem).
   ref
@@ -802,11 +842,19 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
     final bak = File('$path.bak');
     try {
       if (!await target.exists()) {
-        throw const ProjectDocumentException('Project file is missing');
+        throw const ProjectDocumentException('Project file is missing',
+            tornWrite: true);
       }
       doc = await decodeAndRehydrateAsync(await target.readAsString());
     } on Object catch (original, stack) {
-      if (!await bak.exists()) rethrow;
+      // Round 48 (persist-io-2) — fall back to the backup ONLY for the shapes
+      // an interrupted save leaves (missing target, an unreadable file, torn
+      // JSON). A file this build must REFUSE — a newer format version, not a
+      // project at all — is reported untouched: falling back used to open the
+      // OLDER backup and overwrite the newer file with it.
+      final torn = original is FileSystemException ||
+          (original is ProjectDocumentException && original.tornWrite);
+      if (!torn || !await bak.exists()) rethrow;
       final bakSource = await bak.readAsString();
       ProjectDocument fromBak;
       try {
@@ -817,10 +865,14 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
       }
       doc = fromBak;
       restoredFromBackup = true;
-      // Put the good copy back in place. A torn/corrupt target is deleted
-      // first so the atomic writer does not displace it OVER the good `.bak`.
+      // Put the good copy back in place. A torn/corrupt target is moved
+      // aside first (never deleted — Round 48: it is kept as
+      // `<file>.corrupt-<stamp>` for inspection) so the atomic writer does not
+      // displace it OVER the good `.bak`.
       try {
-        if (await target.exists()) await target.delete();
+        if (await target.exists()) {
+          await target.rename(corruptSidecarPath(path, DateTime.now()));
+        }
         await atomicWriteString(path, bakSource);
       } catch (_) {
         // Best effort — the project is open from the backup either way.
@@ -841,8 +893,10 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
     read(projectDirtyProvider.notifier).set(false);
     // Drop any stale crash snapshot for THIS file, the project we left, and
     // the untitled slot.
-    await clearRecoverySlots([priorPath, path, null]);
-    read(recoveryDocProvider.notifier).clear();
+    final toClear =
+        recoverySlotsToClear(read, [priorPath, path, null], target: path);
+    await clearRecoverySlots(toClear.paths);
+    if (toClear.dropPending) read(recoveryDocProvider.notifier).clear();
     read(loadErrorProvider.notifier).clear();
     read(appSettingsProvider.notifier)
         .recordRecent(path, read(projectControllerProvider).name);

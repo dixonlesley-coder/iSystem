@@ -864,7 +864,18 @@ void main() {
       //   185.595 A ⇒ (189.355 − 180.805) / 185.595 = 4.61 % → 4.6 % (the
       //   real lines balance far better than the balanced-feeder fiction
       //   suggested).
-      expect(sys.panels['mdp']!.imbalancePercent, 4.6);
+      // Re-derived 2026-10-18 (Round 48): the MDP's parent-aware rotation now
+      // searches every cyclic relabelling of its fed boards on the MDP's own
+      // solved balance (LP-3's single-phase feeder included). It relabels
+      // LP-2 by one line ((16.5, 16.6, 17.2) -> (17.2, 16.5, 16.6)) and EP-1
+      // by one line ((71.3, 64.1, 64.1) -> (64.1, 71.3, 64.1)):
+      //   L1 = 15.75 + 15.48 + 49.385 + 38.07 + 64.1 = 182.785
+      //   L2 = 14.31 + 14.85 + 49.385 + 38.07 + 71.3 = 187.915
+      //   L3 = 14.76 + 14.94 + 32.81 + 33.93 + 64.1 = 160.54
+      //   LP-3 (25.545 A) -> the least-loaded L3 ⇒ 186.085 A; avg 185.595 A
+      //   ⇒ (187.915 − 182.785) / 185.595 = 2.76 % → 2.8 % (worst 187.9 A,
+      //   was 189.4 A).
+      expect(sys.panels['mdp']!.imbalancePercent, 2.8);
     });
 
     test('the worst-loaded phase is what the incomer is sized against', () {
@@ -1181,14 +1192,17 @@ void main() {
       // Round 37: the 3φ feeders carry their boards' REAL lines (group 3)
       // ⇒ worst phase 189.4 A; × 1.20 = 227.3 A → rung 250 A, still below the
       // 284.35 A service floor ⇒ 315 A.
-      expect(mdp.demandCurrent.amperes, 189.4);
+      // Round 48: the parent-aware rotation search relabels LP-2 + EP-1
+      // (group 3) ⇒ worst phase 187.9 A; × 1.20 = 225.5 A → rung 250 A,
+      // still below the 284.35 A floor ⇒ 315 A.
+      expect(mdp.demandCurrent.amperes, 187.9);
       expect(mdp.incomer.breaker.ratingA.amperes, 315);
       expect(mdp.incomer.breaker.deviceClass, BreakerClass.mccb);
       expect(mdp.incomer.poles, 4);
       // The demand-based rung the floor overrode (the pre-floor behaviour):
       expect(
         selectBreaker(profile,
-                designCurrent: const Current(227.28), loadKind: LoadKind.feeder)
+                designCurrent: const Current(225.48), loadKind: LoadKind.feeder)
             .ratingA
             .amperes,
         250,
@@ -1345,9 +1359,9 @@ void main() {
         expect(texts.where((t) => t == '-> $p'), isNotEmpty, reason: p);
       }
       // The TOTAL footer carries the demand + the honest imbalance figure
-      // (4.6 % since Round 43's exact-sum lines — group 3 derives it).
+      // (2.8 % since Round 48's rotation search — group 3 derives it).
       expect(texts.where((t) => t.contains('TOTAL')).single,
-          contains('imbalance 4.6%'));
+          contains('imbalance 2.8%'));
     });
 
     test('every panel builds its own detail sheet without throwing', () {

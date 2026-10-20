@@ -627,6 +627,31 @@ GensetStartResult assessGensetStart(
   );
 }
 
+/// Round 48 — the PRIME-duty headroom: a prime (continuous) set is sized on
+/// 1.25 × its governing backup kVA (`// VERIFY notAnSniClause`, ISO 8528-1
+/// prime vs standby practice). Standby covers the load directly (× 1.0).
+const double kGeneratorPrimeFactor = 1.25;
+
+/// The duty multiplier [requiredGeneratorKva] applies for [mode].
+double generatorDutyFactor(GeneratorMode mode) =>
+    mode == GeneratorMode.prime ? kGeneratorPrimeFactor : 1.0;
+
+/// Round 48 (regression-forced-prime-genset-judged-without-prime-uplift) —
+/// the ONE unsnapped kVA a generator must be rated for:
+/// `max(S_backup, P_backup / kGeneratorPf) × (prime ? 1.25 : 1.0)`.
+/// [sizeGenerator] selects its rung on it and [gensetBackupWarnings] judges a
+/// forced nameplate against it, so the engine never passes a forced set it
+/// would itself refuse to select. Pure.
+double requiredGeneratorKva(ApparentPower backupDemand,
+    {Power? backupPower, GeneratorMode mode = GeneratorMode.standby}) {
+  final backupKva = backupDemand.inKilovoltAmperes;
+  final backupKw = backupPower?.inKiloWatts;
+  final governingKva = backupKw != null && backupKw / kGeneratorPf > backupKva
+      ? backupKw / kGeneratorPf
+      : backupKva;
+  return governingKva * generatorDutyFactor(mode);
+}
+
 /// Size a standby/prime generator for a backup demand. Prime (continuous) duty
 /// needs ~25% headroom; standby covers the backup load directly. A user-forced
 /// [GeneratorSource.kva] is honoured verbatim (no ladder snap).
@@ -651,11 +676,8 @@ GeneratorResult sizeGenerator(
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
   final backupKw = backupPower?.inKiloWatts;
-  final governingKva = backupKw != null && backupKw / kGeneratorPf > backupKva
-      ? backupKw / kGeneratorPf
-      : backupKva;
   final required =
-      mode == GeneratorMode.prime ? governingKva * 1.25 : governingKva;
+      requiredGeneratorKva(backupDemand, backupPower: backupPower, mode: mode);
   final sel = forcedKva != null
       ? (unitKva: forcedKva, units: forcedUnits < 1 ? 1 : forcedUnits)
       : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));

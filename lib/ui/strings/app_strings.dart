@@ -692,6 +692,7 @@ enum StringKey {
   issueSprinklerFlowTitle,
   issueSprinklerHeadTitle,
   issueCombinedFireSprinklerGovernsTitle,
+  issueFireOverPressureTitle,
   issueElectricalTitle, // {code} = electricalWarningTitle(w.code)
   issueUnverifiedTitle, // {name} = the // VERIFY value's short label
   issueUnverifiedMessage, // {citation} = the value's source citation
@@ -782,6 +783,8 @@ enum StringKey {
   issueSprinklerFlowMessage, // {demand} {pump}
   issueSprinklerHeadMessage, // {need} {pump}
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
+  issueFireOverPressureMessage, // {churn} {limit} {head} {share}
+  issueFireOverPressureShare, // {pct}
 
   // H1 — Design issue pluralized nouns + batch-action labels
   // (issueBatchActionsProvider). Batch labels use plural(n, one, many) (bare
@@ -2150,6 +2153,7 @@ const Map<StringKey, String> _en = {
       'Sprinkler pressure exceeds the fire pump head',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
       'Combined fire pump rated on the sprinkler point',
+  StringKey.issueFireOverPressureTitle: 'Fire pump churn over-pressures components',
   StringKey.issueElectricalTitle: 'Electrical: {code}',
   StringKey.issueUnverifiedTitle: 'Unverified: {name}',
   StringKey.issueUnverifiedMessage:
@@ -2326,6 +2330,12 @@ const Map<StringKey, String> _en = {
       'The sprinkler system needs at least {need} m at the pump (static lift '
       'to the top-floor ceiling + branch-base pressure, before riser and main '
       'friction) but the fire pump head is {pump} m.',
+  StringKey.issueFireOverPressureMessage:
+      'The fire pump is rated at {head} m{share}; its churn (140 % of rated) '
+      'reaches {churn} kPa, above the {limit} kPa (175 psi) rating of standard '
+      'fire components. Upsize the index pipe to cut friction or zone the '
+      'system. (// VERIFY vs SNI 03-3989 / 03-1745.)',
+  StringKey.issueFireOverPressureShare: ', {pct} % of it pipe friction',
   StringKey.issueCombinedFireSprinklerGovernsMessage:
       'On this combined sprinkler + hydrant system the sprinkler head '
       '({sprHead} m) exceeds the standpipe head, so the pump is rated at the '
@@ -3724,6 +3734,8 @@ const Map<StringKey, String> _id = {
       'Tekanan sprinkler melebihi head pompa kebakaran',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
       'Pompa kebakaran gabungan diberi rating pada titik sprinkler',
+  StringKey.issueFireOverPressureTitle:
+      'Tekanan churn pompa kebakaran melampaui rating komponen',
   StringKey.issueElectricalTitle: 'Listrik: {code}',
   StringKey.issueUnverifiedTitle: 'Belum terverifikasi: {name}',
   StringKey.issueUnverifiedMessage:
@@ -3905,6 +3917,13 @@ const Map<StringKey, String> _id = {
       'Sistem sprinkler membutuhkan sedikitnya {need} m di pompa (angkat statis '
       'ke plafon lantai teratas + tekanan pangkal cabang, sebelum gesekan riser '
       'dan pipa utama) tetapi head pompa kebakaran {pump} m.',
+  StringKey.issueFireOverPressureMessage:
+      'Pompa kebakaran diberi rating {head} m{share}; churn-nya (140 % dari '
+      'rating) mencapai {churn} kPa, di atas rating {limit} kPa (175 psi) '
+      'komponen kebakaran standar. Perbesar pipa indeks untuk mengurangi '
+      'gesekan atau bagi sistem menjadi zona. (// VERIFY terhadap SNI 03-3989 '
+      '/ 03-1745.)',
+  StringKey.issueFireOverPressureShare: ', {pct} % di antaranya gesekan pipa',
   StringKey.issueCombinedFireSprinklerGovernsMessage:
       'Pada sistem gabungan sprinkler + hidran ini head sprinkler ({sprHead} m) '
       'melebihi head standpipe, sehingga pompa diberi rating pada debit '

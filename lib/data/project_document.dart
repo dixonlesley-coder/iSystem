@@ -27,7 +27,14 @@ import '../ui/canvas/viewport.dart';
 /// the UI can surface.
 class ProjectDocumentException implements Exception {
   final String message;
-  const ProjectDocumentException(this.message);
+
+  /// Round 48 (persist-io-2) — true only for the shapes an INTERRUPTED save
+  /// leaves (a missing target, or bytes that are not valid JSON — a torn /
+  /// truncated write). The Open path falls back to `<file>.bak` for these
+  /// alone; a readable file it must refuse (a newer format version, not a
+  /// project) is never replaced by an older backup.
+  final bool tornWrite;
+  const ProjectDocumentException(this.message, {this.tornWrite = false});
   @override
   String toString() => 'ProjectDocumentException: $message';
 }
@@ -1143,7 +1150,8 @@ class ProjectDocument {
     try {
       raw = jsonDecode(source);
     } on FormatException catch (e) {
-      throw ProjectDocumentException('File is not valid JSON: ${e.message}');
+      throw ProjectDocumentException('File is not valid JSON: ${e.message}',
+          tornWrite: true);
     }
     if (raw is! Map<String, dynamic>) {
       throw const ProjectDocumentException('Not an iSystem project file.');

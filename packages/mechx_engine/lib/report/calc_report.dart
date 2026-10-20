@@ -92,6 +92,11 @@ class CalcReportData {
   /// + duty/standby). Null ⇒ section skipped.
   final FirePumpRatingResult? firePumpRating;
 
+  /// Round 48 — the index-path friction (m) behind [firePumpRating]'s rated
+  /// head, when measured; only shapes the over-pressure line's friction
+  /// share. Null ⇒ the share is omitted.
+  final double? fireIndexFrictionM;
+
   /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
   /// the tag its schedule row and MDP way carry. Printed only when two or
@@ -190,6 +195,7 @@ class CalcReportData {
     this.standpipe,
     this.sprinklerRemoteArea,
     this.firePumpRating,
+    this.fireIndexFrictionM,
     this.fireSystems = const [],
     this.fan,
     this.exhaustFan,
@@ -678,6 +684,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
     final ra = d.sprinklerRemoteArea;
     final st = d.standpipe;
     final fp = d.firePumpRating;
+    final fireOverPressure = fp == null
+        ? null
+        : fireOverPressureCheck(
+            rating: fp, indexFrictionM: d.fireIndexFrictionM);
     blocks
       ..add(RptHeading(2, strings(RptStringKey.headingFireProtection)))
       ..add(RptKeyValue([
@@ -749,6 +759,24 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'verdict': fp.oversized
                   ? strings(RptStringKey.firePumpVerdictOversized)
                   : strings(RptStringKey.firePumpVerdictWithin),
+            })
+          ),
+        // Round 48 — the churn pressure against the standard component
+        // rating (judge-only; printed only when exceeded ⇒ byte-identical).
+        // Only a SPRINKLER-bearing design is judged on the 175 psi listing
+        // (the app's `fireOverPressureProvider` rule).
+        if (fp != null && sp != null && fireOverPressure!.over)
+          (
+            strings(RptStringKey.fireOverPressureKey),
+            strings.format(RptStringKey.fireOverPressureValue, {
+              'churn': fireOverPressure.churnKpa.toStringAsFixed(0),
+              'limit': kFireComponentMaxPressureKpa.toStringAsFixed(0),
+              'share': fireOverPressure.frictionShare == null
+                  ? ''
+                  : strings.format(RptStringKey.fireOverPressureShare, {
+                      'pct': (fireOverPressure.frictionShare! * 100)
+                          .toStringAsFixed(0),
+                    }),
             })
           ),
         // Round 30 (report-parity-2-1) — every drawn fire system's own pump.

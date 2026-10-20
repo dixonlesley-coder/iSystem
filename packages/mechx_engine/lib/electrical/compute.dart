@@ -745,6 +745,12 @@ const double kPhaseImbalanceReducibleMarginPercent = 1.0;
 /// freest re-run is the reference.
 const int kPhaseExactSearchMaxWays = 10;
 
+/// Round 48 — up to this many rotatable fed sub-boards under one parent, the
+/// R/S/T relabelling search (`computeSystem`'s parent-aware rotation and the
+/// reducibility floor's cyclic-permutation floor) is EXHAUSTIVE over every
+/// 3^k cyclic relabelling; above it, greedy seeds + coordinate descent.
+const int kRotationExhaustiveMaxBoards = 6;
+
 double _spread3(double a, double b, double c) =>
     math.max(a, math.max(b, c)) - math.min(a, math.min(b, c));
 
@@ -2342,14 +2348,19 @@ _CircuitComputation _computeCircuit(
 
 // ── panel computation ───────────────────────────────────────────────────────
 
-/// Compute all CORE sizing — per-circuit, phase balance, incomer, busbar (main
-/// + sections), neutral/PE bars, demand — for one panel. The ONLY constructor of
-/// [ElectricalPanelResult]. Ported from `computePanel.ts` (core slice).
-ElectricalPanelResult computePanel(
+/// Round 48 — a board's sized ways and the [_PhaseCircuit] list its phase
+/// balance runs on (shared by [computePanel] and `computeSystem`'s rotation
+/// search, which re-balances the SAME list with permuted feeder lines
+/// instead of re-sizing the board for every candidate).
+({
+  List<ElectricalCircuit> branches,
+  List<_CircuitComputation> comps,
+  List<_PhaseCircuit> phaseCircuits,
+}) _panelComps(
   ElectricalStandardsProfile profile,
-  ElectricalPanel panel, {
-  ComputePanelOptions opts = const ComputePanelOptions(),
-}) {
+  ElectricalPanel panel,
+  ComputePanelOptions opts,
+) {
   final branches =
       panel.circuits.where((c) => c.role == CircuitRole.branch).toList();
 
@@ -2384,6 +2395,21 @@ ElectricalPanelResult computePanel(
             : null,
       ),
   ];
+  return (branches: branches, comps: comps, phaseCircuits: phaseCircuits);
+}
+
+/// Compute all CORE sizing — per-circuit, phase balance, incomer, busbar (main
+/// + sections), neutral/PE bars, demand — for one panel. The ONLY constructor of
+/// [ElectricalPanelResult]. Ported from `computePanel.ts` (core slice).
+ElectricalPanelResult computePanel(
+  ElectricalStandardsProfile profile,
+  ElectricalPanel panel, {
+  ComputePanelOptions opts = const ComputePanelOptions(),
+}) {
+  final pcs = _panelComps(profile, panel, opts);
+  final branches = pcs.branches;
+  final comps = pcs.comps;
+  final phaseCircuits = pcs.phaseCircuits;
   final loadBalance = balancePhases(
     phaseCircuits,
     panel.system,
@@ -2516,38 +2542,120 @@ ElectricalPanelResult computePanel(
       const perms = [
         [0, 1, 2], [1, 2, 0], [2, 0, 1], //
       ];
-      final ordered = [...excesses]..sort((a, b) {
-          final byMax = b.$2.reduce(math.max).compareTo(a.$2.reduce(math.max));
-          return byMax != 0 ? byMax : a.$1.compareTo(b.$1);
-        });
-      final permBase = [0.0, 0.0, 0.0];
-      final moved = <String>[];
-      for (final (id, ex) in ordered) {
-        List<double>? bestL;
-        var bestIdx = 0;
+      // Round 48 (elec-convergence-2-parent-rotation-ignores-own-singles) —
+      // every candidate relabelling is judged WITH this board's own
+      // single-phase ways (through [minimumPhaseSpreadA] against the
+      // permuted base), never on the feeder excesses alone: a heaviest-first
+      // greedy blind to the singles printed 'inherent' at 91 % where a
+      // cyclic relabelling reached 13.3 %. Exhaustive over the 3^k
+      // relabellings while the work stays bounded, else the heaviest-first
+      // greedy refined by coordinate descent to a fixed point.
+      final singles = [
+        for (final cm in comps)
+          if (!cm.threePhase) _balanceCurrentA(cm.result),
+      ];
+      List<double> baseFor(List<int> pick) {
+        final b = [0.0, 0.0, 0.0];
+        for (var e = 0; e < excesses.length; e++) {
+          final ex = excesses[e].$2;
+          final perm = perms[pick[e]];
+          for (var j = 0; j < 3; j++) {
+            b[perm[j]] += ex[j];
+          }
+        }
+        return b;
+      }
+
+      final spreadCache = <String, double>{};
+      double spreadFor(List<int> pick) => spreadCache.putIfAbsent(
+          pick.join(','),
+          () => minimumPhaseSpreadA(singles, base: baseFor(pick)));
+      final nEx = excesses.length;
+      final identityPick = List<int>.filled(nEx, 0);
+      var bestPick = identityPick;
+      var bestSpread = spreadFor(identityPick);
+      final singleLeaves = math.pow(
+          3,
+          math.min(
+              singles.where((c) => c > 0).length, kPhaseExactSearchMaxWays));
+      if (nEx <= kRotationExhaustiveMaxBoards &&
+          math.pow(3, nEx) * singleLeaves <= 2e6) {
+        final pk = List<int>.filled(nEx, 0);
+        while (true) {
+          var i = nEx - 1;
+          while (i >= 0 && pk[i] == 2) {
+            pk[i] = 0;
+            i--;
+          }
+          if (i < 0) break;
+          pk[i]++;
+          final sp = spreadFor(pk);
+          if (sp < bestSpread - 1e-9) {
+            bestSpread = sp;
+            bestPick = [...pk];
+          }
+        }
+      } else {
+        // Heaviest-first greedy seed (the Round-46 construction).
+        final order = [for (var e = 0; e < nEx; e++) e]..sort((a, b) {
+            final byMax = excesses[b]
+                .$2
+                .reduce(math.max)
+                .compareTo(excesses[a].$2.reduce(math.max));
+            return byMax != 0
+                ? byMax
+                : excesses[a].$1.compareTo(excesses[b].$1);
+          });
+        final seed = List<int>.filled(nEx, 0);
+        final acc = [0.0, 0.0, 0.0];
         double rank(List<double> l) =>
             l.reduce(math.max) * 1e6 +
             (l.reduce(math.max) - l.reduce(math.min));
-        for (var k = 0; k < perms.length; k++) {
-          // Source line j of the fed board lands on parent line perms[k][j].
-          final onParent = [...permBase];
+        for (final e in order) {
+          List<double>? bestL;
+          var bestIdx = 0;
+          for (var k = 0; k < perms.length; k++) {
+            final onParent = [...acc];
+            for (var j = 0; j < 3; j++) {
+              onParent[perms[k][j]] += excesses[e].$2[j];
+            }
+            if (bestL == null || rank(onParent) < rank(bestL) - 1e-6) {
+              bestL = onParent;
+              bestIdx = k;
+            }
+          }
           for (var j = 0; j < 3; j++) {
-            onParent[perms[k][j]] += ex[j];
+            acc[j] = bestL![j];
           }
-          if (bestL == null || rank(onParent) < rank(bestL) - 1e-6) {
-            bestL = onParent;
-            bestIdx = k;
+          seed[e] = bestIdx;
+        }
+        if (spreadFor(seed) < bestSpread - 1e-9) {
+          bestPick = seed;
+          bestSpread = spreadFor(seed);
+        }
+        var improved = true;
+        var passes = 0;
+        while (improved && passes++ < 3 * nEx + 3) {
+          improved = false;
+          for (var e = 0; e < nEx; e++) {
+            for (var r = 0; r < 3; r++) {
+              if (r == bestPick[e]) continue;
+              final cand = [...bestPick]..[e] = r;
+              final sp = spreadFor(cand);
+              if (sp < bestSpread - 1e-9) {
+                bestPick = cand;
+                bestSpread = sp;
+                improved = true;
+              }
+            }
           }
         }
-        for (var j = 0; j < 3; j++) {
-          permBase[j] = bestL![j];
-        }
-        if (bestIdx != 0) moved.add(id);
       }
-      final permSpreadA = minimumPhaseSpreadA([
-        for (final cm in comps)
-          if (!cm.threePhase) _balanceCurrentA(cm.result),
-      ], base: permBase);
+      final moved = <String>[
+        for (var e = 0; e < nEx; e++)
+          if (bestPick[e] != 0) excesses[e].$1,
+      ];
+      final permSpreadA = bestSpread;
       final permPercent =
           avgA > 0 ? roundTo((permSpreadA / avgA) * 100, 1) : 0.0;
       if (moved.isNotEmpty &&
@@ -3307,26 +3415,24 @@ ElectricalSystemResult computeSystem(
   // Round 37 — and every fed 3φ board whose FOLD-2 neutral factor is above 1
   // (see [ComputePanelOptions.feederNeutralLoad]).
   final feederNeutralByPanel = <String, FedNeutralLoad>{};
-  ElectricalPanelResult solveFedLines(ElectricalPanel panel) => computePanel(
-        profile,
-        panel,
-        opts: ComputePanelOptions(
-          feederLoadW: feederLoadWByPanel[panel.id] ?? const {},
-          feederPowerFactor: panelPowerFactor,
-          feederCapacitorFloorA: capacitorFloorByPanel,
-          feederLineCurrentsA: feederLinesByPanel,
-          feederNeutralLoad: feederNeutralByPanel,
-          panelSystems: panelSystems,
-          earthingSystem: project.earthingSystem,
-          ttFeederRcd: ttFeederRcd,
-          calibrationBySheet: calibrationBySheet,
-          building: building,
-          panelById: byId,
-          diversityLibrary: diversityLibrary,
-          priorAssignment: prior[panel.id] ?? const {},
-          phaseReassignThresholdA: phaseReassignThresholdA,
-        ),
+  ComputePanelOptions fedOpts(ElectricalPanel panel) => ComputePanelOptions(
+        feederLoadW: feederLoadWByPanel[panel.id] ?? const {},
+        feederPowerFactor: panelPowerFactor,
+        feederCapacitorFloorA: capacitorFloorByPanel,
+        feederLineCurrentsA: feederLinesByPanel,
+        feederNeutralLoad: feederNeutralByPanel,
+        panelSystems: panelSystems,
+        earthingSystem: project.earthingSystem,
+        ttFeederRcd: ttFeederRcd,
+        calibrationBySheet: calibrationBySheet,
+        building: building,
+        panelById: byId,
+        diversityLibrary: diversityLibrary,
+        priorAssignment: prior[panel.id] ?? const {},
+        phaseReassignThresholdA: phaseReassignThresholdA,
       );
+  ElectricalPanelResult solveFedLines(ElectricalPanel panel) =>
+      computePanel(profile, panel, opts: fedOpts(panel));
   // The labelled assignment of every fed board solved by this pass.
   final fedBalance = <String, Map<String, PhaseAssignment>>{};
   Map<String, PhaseAssignment> assignmentOf(ElectricalPanelResult r) =>
@@ -3440,33 +3546,128 @@ ElectricalSystemResult computeSystem(
     // the feeder lines alone: the identity, the greedy that moves only
     // unlabelled boards, and the greedy that may relabel every board.
     final original = {for (final k in kids) k: feederLinesByPanel[k]!};
+    // Round 48 — the parent's ways are sized ONCE; each candidate only
+    // re-runs the parent's own phase balance ([balancePhases], the very
+    // assignment `computePanel` takes, its prior + stability threshold
+    // included) with the rotated feeder lines substituted. A cyclic
+    // relabelling never changes a fed board's worst line, so the feeder's
+    // sizing current — and every other way — is candidate-invariant.
+    final parentPcs =
+        _panelComps(profile, parent, fedOpts(parent)).phaseCircuits;
+    final kidIndex = {for (var i = 0; i < kids.length; i++) kids[i]: i};
+    final feederKid = <String, int>{
+      for (final c in parent.circuits)
+        if (c.role == CircuitRole.branch &&
+            c.feedsPanelId != null &&
+            kidIndex.containsKey(c.feedsPanelId))
+          c.id: kidIndex[c.feedsPanelId]!,
+    };
     (double, double) parentScore(List<int> picks) {
-      for (var i = 0; i < kids.length; i++) {
-        feederLinesByPanel[kids[i]] = shifted(original[kids[i]]!, picks[i]);
-      }
-      final b = solveFedLines(parent).phaseBalance;
-      for (final k in kids) {
-        feederLinesByPanel[k] = original[k]!;
-      }
+      final pcs = [
+        for (final pc in parentPcs)
+          feederKid[pc.id] == null
+              ? pc
+              : _PhaseCircuit(pc.id, pc.threePhase, pc.currentA, pc.pinned,
+                  lines: shifted(original[kids[feederKid[pc.id]!]]!,
+                      picks[feederKid[pc.id]!])),
+      ];
+      final b = balancePhases(pcs, parent.system,
+          prior: prior[parentId] ?? const {},
+          reassignThresholdA: phaseReassignThresholdA);
       return score([b.l1, b.l2, b.l3]);
     }
 
+    // Round 48 (elec-convergence-2-parent-rotation-ignores-own-singles) —
+    // the greedy above scores feeder-line excess only and never sees the
+    // parent's OWN single-phase ways (placed afterwards), so three
+    // candidates (identity / greedy-unlabelled / greedy-all) left a 63 A
+    // incomer where a cyclic relabelling reached 40 A. Search the rotation
+    // space on the parent's SOLVED balance: exhaustively (3^k) for up to
+    // [kRotationExhaustiveMaxBoards] rotatable boards, else the greedy seeds
+    // refined by coordinate descent (re-rotate one board at a time, keep a
+    // strict improvement) to a fixed point. Candidates enumerate identity
+    // first, so ties keep the identity / the smaller relabelling.
+    final cache = <String, (double, double)>{};
+    (double, double) sc(List<int> p) =>
+        cache.putIfAbsent(p.join(','), () => parentScore(p));
     final identity = List<int>.filled(kids.length, 0);
-    final kept = greedy((k) => !labelled(k)).$1;
-    final all = greedy((_) => true).$1;
-    final sIdentity = parentScore(identity);
-    final sKept = _listEq(kept, identity) ? sIdentity : parentScore(kept);
-    var picks = better(sKept, sIdentity) ? kept : identity;
-    final sBase = better(sKept, sIdentity) ? sKept : sIdentity;
-    if (!_listEq(all, picks)) {
-      final sAll = parentScore(all);
-      final freeMove = !kids.asMap().entries.any((e) =>
-          labelled(e.value) && all[e.key] != picks[e.key]);
-      final gain = sBase.$1 - sAll.$1;
-      if (freeMove
-          ? better(sAll, sBase)
+    bool movesLabelled(List<int> p) {
+      for (var i = 0; i < kids.length; i++) {
+        if (p[i] != 0 && labelled(kids[i])) return true;
+      }
+      return false;
+    }
+
+    var bestUnl = identity;
+    var sUnl = sc(identity);
+    var bestAll = identity;
+    var sAll = sUnl;
+    if (kids.length <= kRotationExhaustiveMaxBoards) {
+      final p = List<int>.filled(kids.length, 0);
+      while (true) {
+        // Next candidate in lexicographic order (identity already scored).
+        var i = kids.length - 1;
+        while (i >= 0 && p[i] == 2) {
+          p[i] = 0;
+          i--;
+        }
+        if (i < 0) break;
+        p[i]++;
+        final s = sc(p);
+        if (better(s, sAll)) {
+          sAll = s;
+          bestAll = [...p];
+        }
+        if (!movesLabelled(p) && better(s, sUnl)) {
+          sUnl = s;
+          bestUnl = [...p];
+        }
+      }
+    } else {
+      List<int> descent(List<int> start, bool Function(int) free) {
+        var cur = [...start];
+        var sCur = sc(cur);
+        var improved = true;
+        var passes = 0;
+        while (improved && passes++ < 3 * kids.length + 3) {
+          improved = false;
+          for (var i = 0; i < kids.length; i++) {
+            if (!free(i)) continue;
+            for (var r = 0; r < 3; r++) {
+              if (r == cur[i]) continue;
+              final cand = [...cur]..[i] = r;
+              final s = sc(cand);
+              if (better(s, sCur)) {
+                cur = cand;
+                sCur = s;
+                improved = true;
+              }
+            }
+          }
+        }
+        return cur;
+      }
+
+      final kept = greedy((k) => !labelled(k)).$1;
+      if (better(sc(kept), sUnl)) bestUnl = kept;
+      bestUnl = descent(bestUnl, (i) => !labelled(kids[i]));
+      sUnl = sc(bestUnl);
+      final all = greedy((_) => true).$1;
+      bestAll = better(sc(all), sUnl) ? all : bestUnl;
+      bestAll = descent(bestAll, (_) => true);
+      sAll = sc(bestAll);
+      if (better(sUnl, sAll)) {
+        bestAll = bestUnl;
+        sAll = sUnl;
+      }
+    }
+    var picks = bestUnl;
+    if (!_listEq(bestAll, bestUnl)) {
+      final gain = sUnl.$1 - sAll.$1;
+      if (!movesLabelled(bestAll)
+          ? better(sAll, sUnl)
           : gain > math.max(phaseReassignThresholdA, 1e-9)) {
-        picks = all;
+        picks = bestAll;
       }
     }
     for (var i = 0; i < kids.length; i++) {

@@ -212,35 +212,37 @@ void main() {
       // imbalance = (15 - 9) / ((10+9+15)/3) · 100 = 6 / 11.3333 · 100 = 52.94
       expect(sp1.phaseBalance.imbalancePercent, closeTo(52.9, 1e-9));
 
-      // SP-2: 12.0 -> L1, 11.0 -> L2, 10.0 -> L3; every swap only permutes the
-      // three lines, so the 12 - 10 = 2 A spread never shrinks.
+      // SP-2: its own balance puts 12.0 / 11.0 / 10.0 A on three lines (every
+      // swap only permutes them, so the 12 - 10 = 2 A spread never shrinks).
+      // Round 48 — the MDP's parent-aware rotation then RELABELS SP-2 (SP-1
+      // keeps the identity) on the MDP's solved balance, its own 10 / 8 A
+      // singles included. The three-phase feeders load the MDP with each fed
+      // board's OWN lines; the MDP total is 34 + 33 + 18 = 85 A, so no
+      // assignment has a worst line below ceil(85 / 3) = 29 A (every current
+      // is whole). Rotating SP-2 by two lines (b1 -> L3, b2 -> L1, b3 -> L2)
+      // gives SP-2 (11, 10, 12) and the base (10+11, 9+10, 15+12) =
+      // (21, 19, 27); m1 (10 A) -> L2 (21, 29, 27), m2 (8 A) -> L1
+      // (29, 29, 27): worst 29 A, the floor. (The identity left (30, 30, 25).)
       final sp2 = plain.panels['SP2']!;
-      expect(phaseOf(sp2, 'b1'), PhaseAssignment.l1);
-      expect(phaseOf(sp2, 'b2'), PhaseAssignment.l2);
-      expect(phaseOf(sp2, 'b3'), PhaseAssignment.l3);
+      expect(phaseOf(sp2, 'b1'), PhaseAssignment.l3);
+      expect(phaseOf(sp2, 'b2'), PhaseAssignment.l1);
+      expect(phaseOf(sp2, 'b3'), PhaseAssignment.l2);
       // imbalance = (12 - 10) / ((12+11+10)/3) · 100 = 2 / 11 · 100 = 18.18
       expect(sp2.phaseBalance.imbalancePercent, closeTo(18.2, 1e-9));
 
-      // MDP — Round 37: each three-phase feeder loads the MDP lines with its
-      // fed board's OWN line currents (both boards are imbalanced):
-      //   f1 <- SP-1 (10, 9, 15), f2 <- SP-2 (12, 11, 10)
-      //   base lines before the singles: (22, 20, 25)
-      // m1 (10.0 A) goes to the least-loaded L2 -> (22, 30, 25), m2 (8.0 A)
-      // to L1 -> (30, 30, 25). The exact search agrees: m1 on L1 gives a
-      // 32 A worst, on L3 35 A, and m1 L2 / m2 L3 gives 33 A — so (30, 30,
-      // 25) is the minimum-worst assignment.
       final mdp = plain.panels['MDP']!;
       expect(phaseOf(mdp, 'f1'), PhaseAssignment.threePhase);
       expect(phaseOf(mdp, 'f2'), PhaseAssignment.threePhase);
       expect(phaseOf(mdp, 'm1'), PhaseAssignment.l2);
       expect(phaseOf(mdp, 'm2'), PhaseAssignment.l1);
       // Each feeder carries its fed board's WORST line (15.0 / 12.0 A), not
-      // the balanced 34/3 = 11.3 / 33/3 = 11.0 A.
+      // the balanced 34/3 = 11.3 / 33/3 = 11.0 A — a relabelling never
+      // changes it.
       expect(currentOf(mdp, 'f1'), closeTo(15.0, 1e-9));
       expect(currentOf(mdp, 'f2'), closeTo(12.0, 1e-9));
-      expect(mdp.phaseBalance.l1, closeTo(30.0, 1e-9));
-      expect(mdp.phaseBalance.l2, closeTo(30.0, 1e-9));
-      expect(mdp.phaseBalance.l3, closeTo(25.0, 1e-9));
+      expect(mdp.phaseBalance.l1, closeTo(29.0, 1e-9));
+      expect(mdp.phaseBalance.l2, closeTo(29.0, 1e-9));
+      expect(mdp.phaseBalance.l3, closeTo(27.0, 1e-9));
     });
 
     test('re-solving with the first solve own assignment changes nothing', () {

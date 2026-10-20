@@ -312,6 +312,8 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     sprinklerRemoteArea:
         sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
     firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
+    fireIndexFrictionM:
+        fireDrawn ? ref.read(governingFireBasisProvider)?.indexFrictionM : null,
     // Round 30 (report-parity-2-1) — each drawn fire system's own pump, under
     // the tag its schedule row / MDP way carry.
     fireSystems: fireDrawn

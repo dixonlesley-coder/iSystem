@@ -139,6 +139,9 @@ enum RptStringKey {
   firePumpValue, // {rated} {head} {churn} {overload} {motor} {verdict}
   firePumpVerdictOversized,
   firePumpVerdictWithin,
+  fireOverPressureKey,
+  fireOverPressureValue, // {churn} {limit} {share}
+  fireOverPressureShare, // {pct}
   fireJockeyKey,
   fireJockeyValue, // {lps} {m} {standby}
   fireJockeyStandby,
@@ -579,6 +582,12 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.firePumpVerdictOversized:
       'Motor above standard frame range - specify a custom motor or duty pairs',
   RptStringKey.firePumpVerdictWithin: 'Motor within standard frame range',
+  RptStringKey.fireOverPressureKey: 'Component pressure (churn)',
+  RptStringKey.fireOverPressureValue:
+      '{churn} kPa at churn exceeds the {limit} kPa (175 psi) rating of '
+          'standard fire components{share} - upsize the index pipe or zone '
+          'the system (VERIFY)',
+  RptStringKey.fireOverPressureShare: ' (friction {pct} % of the rated head)',
   RptStringKey.fireJockeyKey: 'Jockey pump:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pressure maintenance){standby}',
@@ -1061,6 +1070,12 @@ const Map<RptStringKey, String> kReportStringsId = {
       'Motor melebihi rentang frame standar - tentukan motor khusus atau '
           'pompa berpasangan',
   RptStringKey.firePumpVerdictWithin: 'Motor dalam rentang frame standar',
+  RptStringKey.fireOverPressureKey: 'Tekanan komponen (churn)',
+  RptStringKey.fireOverPressureValue:
+      '{churn} kPa saat churn melampaui rating {limit} kPa (175 psi) '
+          'komponen kebakaran standar{share} - perbesar pipa indeks atau '
+          'bagi sistem menjadi zona (VERIFY)',
+  RptStringKey.fireOverPressureShare: ' (gesekan {pct} % dari head rated)',
   RptStringKey.fireJockeyKey: 'Pompa jockey:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pemeliharaan tekanan){standby}',
