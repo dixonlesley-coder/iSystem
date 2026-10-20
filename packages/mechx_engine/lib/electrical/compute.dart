@@ -754,6 +754,72 @@ const int kRotationExhaustiveMaxBoards = 6;
 double _spread3(double a, double b, double c) =>
     math.max(a, math.max(b, c)) - math.min(a, math.min(b, c));
 
+/// Round 49 — the EXACT (unrounded) L1 / L2 / L3 sums of [circuits] under
+/// [assignment]: the very sums [balancePhases] rounds to 0.1 A for print, so
+/// a verdict can compare like with like.
+List<double> _exactLines(
+    List<_PhaseCircuit> circuits, Map<String, PhaseAssignment> assignment) {
+  final l = [0.0, 0.0, 0.0];
+  for (final c in circuits) {
+    if (c.threePhase) {
+      final ls = c.lines;
+      for (var k = 0; k < 3; k++) {
+        l[k] += ls?[k] ?? c.currentA;
+      }
+      continue;
+    }
+    final idx = switch (assignment[c.id]) {
+      PhaseAssignment.l2 => 1,
+      PhaseAssignment.l3 => 2,
+      _ => 0,
+    };
+    l[idx] += c.currentA;
+  }
+  return l;
+}
+
+/// Round 49 (elec-props-13-three-level-tree-never-rotated) — the boards a
+/// 'Rotate R/S/T at …' instruction must name for fed board [id]: [id] itself
+/// when it holds a single-phase way of its own, plus (recursively) every
+/// three-phase board below it whose feeder carries unequal lines — a
+/// mid-level riser SDB with only feeders has nothing of its own to relabel,
+/// its floor DBs do. Falls back to [id] when nothing below can be resolved.
+List<String> _rotationHolders(
+    String id, ComputePanelOptions opts, Set<String> seen) {
+  final p = opts.panelById[id];
+  if (p == null || !seen.add(id)) return [id];
+  var own = false;
+  final below = <String>[];
+  for (final c in p.circuits) {
+    if (c.role != CircuitRole.branch) continue;
+    final fed = c.feedsPanelId;
+    if (fed != null) {
+      final fedSystem =
+          opts.panelSystems[fed] ?? opts.panelById[fed]?.system;
+      if (fedSystem == ElectricalSystem.singlePhase) {
+        own = true;
+      } else if (opts.feederLineCurrentsA.containsKey(fed)) {
+        below.addAll(_rotationHolders(fed, opts, seen));
+      }
+      continue;
+    }
+    if (c.loadKind == LoadKind.spare || c.loadKind == LoadKind.capacitor) {
+      continue;
+    }
+    if (!circuitIsThreePhase(
+      panelSystem: p.system,
+      kind: c.loadKind,
+      loadW: c.loadW,
+      motorKw: c.motorKw,
+      phases: c.phases,
+    )) {
+      own = true;
+    }
+  }
+  final out = [if (own) id, ...below];
+  return out.isEmpty ? [id] : out;
+}
+
 /// The smallest line-current spread (A) ANY assignment of [currents] — the
 /// single-phase way currents of one three-phase board — could reach.
 ///
@@ -769,6 +835,11 @@ double _spread3(double a, double b, double c) =>
 /// reference; a board with that many single-phase ways balances to well inside
 /// the warning limit unless one load dominates, and there relocate/swap is
 /// already at the floor.
+///
+/// Round 49 — the figure is EXACT (unrounded): the reducibility verdict
+/// compares it against exact line sums, and rounding it first turned an
+/// inherent 200 % board into a phantom 'Unpin … 198.5 % is achievable'.
+/// Round only where it is displayed.
 double minimumPhaseSpreadA(
   List<double> currents, {
   int exactSearchMax = kPhaseExactSearchMaxWays,
@@ -784,7 +855,7 @@ double minimumPhaseSpreadA(
   final baseEqual = (base[0] - base[1]).abs() < 1e-12 &&
       (base[1] - base[2]).abs() < 1e-12;
   if (ways.isEmpty) {
-    return baseEqual ? 0 : roundTo(_spread3(base[0], base[1], base[2]), 1);
+    return baseEqual ? 0 : _spread3(base[0], base[1], base[2]);
   }
 
   if (ways.length <= exactSearchMax) {
@@ -807,19 +878,17 @@ double minimumPhaseSpreadA(
     }
 
     walk(0);
-    return roundTo(best, 1);
+    return best;
   }
 
-  final free = balancePhases(
-    [
-      if (!baseEqual)
-        _PhaseCircuit('#base', true, 0, null, lines: [...base]),
-      for (var i = 0; i < ways.length; i++)
-        _PhaseCircuit('#$i', false, ways[i], null),
-    ],
-    ElectricalSystem.threePhase,
-  );
-  return roundTo(_spread3(free.l1, free.l2, free.l3), 1);
+  final freeCircuits = [
+    if (!baseEqual) _PhaseCircuit('#base', true, 0, null, lines: [...base]),
+    for (var i = 0; i < ways.length; i++)
+      _PhaseCircuit('#$i', false, ways[i], null),
+  ];
+  final free = balancePhases(freeCircuits, ElectricalSystem.threePhase);
+  final l = _exactLines(freeCircuits, free.assignment);
+  return _spread3(l[0], l[1], l[2]);
 }
 
 // ── busbar section splitting ────────────────────────────────────────────────
@@ -2482,11 +2551,23 @@ ElectricalPanelResult computePanel(
   // assignment the engineer's; the session prior seed is the engine's own.
   final engineOwned = !branches.asMap().entries.any((e) =>
       !comps[e.key].threePhase && e.value.phaseOverride != null);
+  // Round 49 (elec-props-13-rounded-floor-phantom-unpin-warning) — the
+  // floor is judged on EXACT line sums, never on the 0.1 A-rounded printed
+  // lines (a 2.2 / 4.3 / 0.0 A board read 198.5 % 'achievable' against an
+  // exact 200 % — a 1.5 pp rounding artefact above the 1 pp margin).
+  var floorGainA = 0.0;
+  var marginA = 0.0;
   if (overImbalanceLimit) {
+    final exact = _exactLines(phaseCircuits, balance.assignment);
     // The average line current is assignment-invariant (the same total load is
     // shared out however the ways are placed), so the achievable imbalance is
     // the achievable SPREAD measured against the same average.
-    final avgA = (balance.l1 + balance.l2 + balance.l3) / 3;
+    final avgA = (exact[0] + exact[1] + exact[2]) / 3;
+    final actualSpreadA = _spread3(exact[0], exact[1], exact[2]);
+    final actualWorstA = math.max(exact[0], math.max(exact[1], exact[2]));
+    marginA = kPhaseImbalanceReducibleMarginPercent * avgA / 100;
+    double pct(double spreadA) =>
+        avgA > 0 ? roundTo((spreadA / avgA) * 100, 1) : 0.0;
     // Round 37 — 3φ feeders carrying an imbalanced fed board's lines are a
     // FIXED unequal base the singles are placed against.
     final base = [0.0, 0.0, 0.0];
@@ -2498,42 +2579,29 @@ ElectricalPanelResult computePanel(
         base[k] += ls[k] - m;
       }
     }
-    final bestSpreadA = minimumPhaseSpreadA([
+    var bestSpreadA = minimumPhaseSpreadA([
       for (final cm in comps)
         if (!cm.threePhase) _balanceCurrentA(cm.result),
     ], base: base);
-    bestImbalancePercent =
-        avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
     // Round 43 — the actual assignment is itself achievable, so the floor
-    // can never print ABOVE the actual figure (the floor reads 0.1 A-rounded
-    // spreads, the actual the exact line sums).
-    if (bestImbalancePercent > balance.imbalancePercent) {
-      bestImbalancePercent = balance.imbalancePercent;
-    }
-    imbalanceReducible = !engineOwned &&
-        bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
-            balance.imbalancePercent;
+    // can never sit ABOVE the actual figure.
+    if (bestSpreadA > actualSpreadA) bestSpreadA = actualSpreadA;
+    floorGainA = actualSpreadA - bestSpreadA;
+    bestImbalancePercent = math.min(pct(bestSpreadA), balance.imbalancePercent);
+    imbalanceReducible = !engineOwned && floorGainA > marginA + 1e-9;
     // Round 46 (drawings-7-phase-label-bias-inherent-verdict) — a fed
     // board's R/S/T labels are an engineer's choice too: relabelling a
     // sub-board (rotating which of its lines is light) permutes the lines its
-    // feeder brings here. The floor is therefore also taken with each fed
-    // board's lines PERMUTED (greedy, heaviest first, onto the lightest
-    // accumulated line — a constructive, achievable assignment); when that
-    // beats the actual figure by the margin, the imbalance is REDUCIBLE by
-    // rotating those boards, never 'inherent'. (Rotatable boards are already
-    // rotated by `computeSystem`; this names the ones it could not move — a
-    // phase pin below, or a gain within the stability threshold.)
-    final excesses = <(String, List<double>)>[];
+    // feeder brings here. (Rotatable boards are already rotated by
+    // `computeSystem`; this names the ones it could not move — a phase pin
+    // below, or a gain within the stability threshold.)
+    final excesses = <(String, int)>[];
     for (var i = 0; i < phaseCircuits.length; i++) {
       final pc = phaseCircuits[i];
       final ls = pc.lines;
       if (!pc.threePhase || ls == null) continue;
-      final m = ls.reduce(math.min);
-      if (ls.reduce(math.max) - m <= 1e-9) continue;
-      excesses.add((
-        branches[i].feedsPanelId!,
-        [for (final v in ls) v - m],
-      ));
+      if (ls.reduce(math.max) - ls.reduce(math.min) <= 1e-9) continue;
+      excesses.add((branches[i].feedsPanelId!, i));
     }
     if (!imbalanceReducible && excesses.isNotEmpty) {
       // Only the three CYCLIC relabellings — the same set
@@ -2542,44 +2610,65 @@ ElectricalPanelResult computePanel(
       const perms = [
         [0, 1, 2], [1, 2, 0], [2, 0, 1], //
       ];
-      // Round 48 (elec-convergence-2-parent-rotation-ignores-own-singles) —
-      // every candidate relabelling is judged WITH this board's own
-      // single-phase ways (through [minimumPhaseSpreadA] against the
-      // permuted base), never on the feeder excesses alone: a heaviest-first
-      // greedy blind to the singles printed 'inherent' at 91 % where a
-      // cyclic relabelling reached 13.3 %. Exhaustive over the 3^k
-      // relabellings while the work stays bounded, else the heaviest-first
-      // greedy refined by coordinate descent to a fixed point.
-      final singles = [
-        for (final cm in comps)
-          if (!cm.threePhase) _balanceCurrentA(cm.result),
-      ];
-      List<double> baseFor(List<int> pick) {
-        final b = [0.0, 0.0, 0.0];
-        for (var e = 0; e < excesses.length; e++) {
-          final ex = excesses[e].$2;
-          final perm = perms[pick[e]];
-          for (var j = 0; j < 3; j++) {
-            b[perm[j]] += ex[j];
-          }
+      // Round 49 (regression-rotation-vs-reducibility-objective /
+      // elec-props-13-rotate-advice-raises-worst-phase) — every candidate is
+      // scored with the SAME objective `rotateFedChildren` takes: this
+      // board's own solved balance (its singles placed by [balancePhases]
+      // with its prior + stability threshold against the permuted feeder
+      // lines), compared lexicographically on (worst line, spread). A
+      // relabelling that cuts the spread but RAISES the worst line — the
+      // figure the incomer, feeder and daya size on — is one the engine
+      // itself rejected and is never advised; spread alone (Round 46/48)
+      // printed 'Rotate R/S/T at DB-1 — 93.9 % achievable' for a relabel
+      // whose worst line rose from 34.6 to 34.7 A.
+      final scoreCache = <String, (double, double)>{};
+      (double, double) scoreFor(List<int> pick) =>
+          scoreCache.putIfAbsent(pick.join(','), () {
+            final pcs = [...phaseCircuits];
+            for (var e = 0; e < excesses.length; e++) {
+              final i = excesses[e].$2;
+              final pc = phaseCircuits[i];
+              final ls = pc.lines!;
+              final perm = perms[pick[e]];
+              final out = [0.0, 0.0, 0.0];
+              for (var j = 0; j < 3; j++) {
+                out[perm[j]] = ls[j];
+              }
+              pcs[i] = _PhaseCircuit(
+                  pc.id, pc.threePhase, pc.currentA, pc.pinned,
+                  lines: out);
+            }
+            final b = balancePhases(pcs, panel.system,
+                prior: opts.priorAssignment,
+                reassignThresholdA: opts.phaseReassignThresholdA);
+            final l = _exactLines(pcs, b.assignment);
+            return (
+              math.max(l[0], math.max(l[1], l[2])),
+              _spread3(l[0], l[1], l[2]),
+            );
+          });
+      bool better((double, double) a, (double, double) b) =>
+          a.$1 < b.$1 - 1e-9 ||
+          ((a.$1 - b.$1).abs() <= 1e-9 && a.$2 < b.$2 - 1e-9);
+      // Accepted only when it never raises this board's worst line and cuts
+      // the spread by more than the margin (both exact).
+      bool accepted((double, double) s) =>
+          s.$1 <= actualWorstA + 1e-9 &&
+          actualSpreadA - s.$2 > marginA + 1e-9;
+      final nEx = excesses.length;
+      List<int>? bestPick;
+      (double, double)? bestScore;
+      void consider(List<int> pick) {
+        if (pick.every((r) => r == 0)) return;
+        final s = scoreFor(pick);
+        if (!accepted(s)) return;
+        if (bestScore == null || better(s, bestScore!)) {
+          bestScore = s;
+          bestPick = [...pick];
         }
-        return b;
       }
 
-      final spreadCache = <String, double>{};
-      double spreadFor(List<int> pick) => spreadCache.putIfAbsent(
-          pick.join(','),
-          () => minimumPhaseSpreadA(singles, base: baseFor(pick)));
-      final nEx = excesses.length;
-      final identityPick = List<int>.filled(nEx, 0);
-      var bestPick = identityPick;
-      var bestSpread = spreadFor(identityPick);
-      final singleLeaves = math.pow(
-          3,
-          math.min(
-              singles.where((c) => c > 0).length, kPhaseExactSearchMaxWays));
-      if (nEx <= kRotationExhaustiveMaxBoards &&
-          math.pow(3, nEx) * singleLeaves <= 2e6) {
+      if (nEx <= kRotationExhaustiveMaxBoards) {
         final pk = List<int>.filled(nEx, 0);
         while (true) {
           var i = nEx - 1;
@@ -2589,19 +2678,16 @@ ElectricalPanelResult computePanel(
           }
           if (i < 0) break;
           pk[i]++;
-          final sp = spreadFor(pk);
-          if (sp < bestSpread - 1e-9) {
-            bestSpread = sp;
-            bestPick = [...pk];
-          }
+          consider(pk);
         }
       } else {
-        // Heaviest-first greedy seed (the Round-46 construction).
+        // Heaviest-first greedy seed (the Round-46 construction) refined by
+        // coordinate descent on the same (worst, spread) objective.
         final order = [for (var e = 0; e < nEx; e++) e]..sort((a, b) {
-            final byMax = excesses[b]
-                .$2
-                .reduce(math.max)
-                .compareTo(excesses[a].$2.reduce(math.max));
+            final la = phaseCircuits[excesses[a].$2].lines!;
+            final lb = phaseCircuits[excesses[b].$2].lines!;
+            final byMax = (lb.reduce(math.max) - lb.reduce(math.min))
+                .compareTo(la.reduce(math.max) - la.reduce(math.min));
             return byMax != 0
                 ? byMax
                 : excesses[a].$1.compareTo(excesses[b].$1);
@@ -2612,12 +2698,14 @@ ElectricalPanelResult computePanel(
             l.reduce(math.max) * 1e6 +
             (l.reduce(math.max) - l.reduce(math.min));
         for (final e in order) {
+          final ls = phaseCircuits[excesses[e].$2].lines!;
+          final m = ls.reduce(math.min);
           List<double>? bestL;
           var bestIdx = 0;
           for (var k = 0; k < perms.length; k++) {
             final onParent = [...acc];
             for (var j = 0; j < 3; j++) {
-              onParent[perms[k][j]] += excesses[e].$2[j];
+              onParent[perms[k][j]] += ls[j] - m;
             }
             if (bestL == null || rank(onParent) < rank(bestL) - 1e-6) {
               bestL = onParent;
@@ -2629,51 +2717,43 @@ ElectricalPanelResult computePanel(
           }
           seed[e] = bestIdx;
         }
-        if (spreadFor(seed) < bestSpread - 1e-9) {
-          bestPick = seed;
-          bestSpread = spreadFor(seed);
-        }
+        var cur = List<int>.filled(nEx, 0);
+        if (better(scoreFor(seed), scoreFor(cur))) cur = seed;
         var improved = true;
         var passes = 0;
         while (improved && passes++ < 3 * nEx + 3) {
           improved = false;
           for (var e = 0; e < nEx; e++) {
             for (var r = 0; r < 3; r++) {
-              if (r == bestPick[e]) continue;
-              final cand = [...bestPick]..[e] = r;
-              final sp = spreadFor(cand);
-              if (sp < bestSpread - 1e-9) {
-                bestPick = cand;
-                bestSpread = sp;
+              if (r == cur[e]) continue;
+              final cand = [...cur]..[e] = r;
+              if (better(scoreFor(cand), scoreFor(cur))) {
+                cur = cand;
                 improved = true;
               }
             }
           }
         }
+        consider(seed);
+        consider(cur);
       }
-      final moved = <String>[
-        for (var e = 0; e < nEx; e++)
-          if (bestPick[e] != 0) excesses[e].$1,
-      ];
-      final permSpreadA = bestSpread;
-      final permPercent =
-          avgA > 0 ? roundTo((permSpreadA / avgA) * 100, 1) : 0.0;
-      if (moved.isNotEmpty &&
-          permPercent + kPhaseImbalanceReducibleMarginPercent <
-              balance.imbalancePercent) {
+      final pick = bestPick;
+      if (pick != null) {
         imbalanceReducible = true;
-        // Named in the board's own circuit (schedule) order.
-        rotateBoardIds.addAll([
-          for (final (id, _) in excesses)
-            if (moved.contains(id)) id,
-        ]);
-        if (permPercent < bestImbalancePercent) {
-          bestImbalancePercent = permPercent;
+        // Named in the board's own circuit (schedule) order — and, for a
+        // mid-level board that holds no single-phase way of its own, the
+        // descendant boards that actually carry the ways to relabel.
+        final seen = <String>{};
+        for (var e = 0; e < nEx; e++) {
+          if (pick[e] == 0) continue;
+          for (final h in _rotationHolders(excesses[e].$1, opts, seen)) {
+            if (!rotateBoardIds.contains(h)) rotateBoardIds.add(h);
+          }
         }
+        bestImbalancePercent = pct(bestScore!.$2);
       }
     }
   }
-
   if (overImbalanceLimit && imbalanceReducible) {
     final pinnedWays = [
       for (var i = 0; i < comps.length; i++)
@@ -2708,9 +2788,8 @@ ElectricalPanelResult computePanel(
   // be carried out. Same threshold + same reducibility test as the warning path,
   // so exactly one of the two ever fires.
   if (overImbalanceLimit && !imbalanceReducible) {
-    final labelsKeptForStability = bestImbalancePercent +
-            kPhaseImbalanceReducibleMarginPercent <
-        balance.imbalancePercent;
+    // Round 49 — on the exact floor gain (see above), never the rounded %.
+    final labelsKeptForStability = floorGainA > marginA + 1e-9;
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance-inherent',
       severity: WarningSeverity.info,
@@ -3437,11 +3516,19 @@ ElectricalSystemResult computeSystem(
   final fedBalance = <String, Map<String, PhaseAssignment>>{};
   Map<String, PhaseAssignment> assignmentOf(ElectricalPanelResult r) =>
       {for (final c in r.circuits) c.circuitId: c.phase};
-  // A fed board whose ONLY imbalance is its own unpinned single-phase ways
-  // (no phase pin, no feeder carrying unequal lines, no capacitor bank): a
-  // cyclic relabelling R->S->T of those ways keeps its own spread AND worst
-  // line exactly, so only the PARENT's lines change.
-  bool rotatable(String id) {
+  // A fed board whose imbalance comes only from unpinned single-phase ways —
+  // its own, or (Round 49) those of the boards below it whose feeders carry
+  // unequal lines, each itself rotatable (no phase pin, no capacitor bank,
+  // no UPS anywhere in that sub-tree): a cyclic relabelling R->S->T of every
+  // such way in the sub-tree keeps each board's spread AND worst line
+  // exactly, so only the PARENT's lines change. Round 49 (elec-props-13-
+  // three-level-tree-never-rotated) — a riser SDB fed by imbalanced floor
+  // DBs used to be refused outright, so MDP -> SDB -> DB trees summed three
+  // identical label-biased patterns (MDP 30 / 15 / 15 A, a 32 A incomer
+  // where 20 / 20 / 20 A was reachable).
+  bool rotatable(String id, [Set<String>? seen]) {
+    final visiting = seen ?? <String>{};
+    if (!visiting.add(id)) return false;
     final panel = byId[id];
     if (panel == null || panel.upsBacked) return false;
     if (panel.system != ElectricalSystem.threePhase) return false;
@@ -3451,9 +3538,37 @@ ElectricalSystemResult computeSystem(
       if (c.loadKind == LoadKind.capacitor) return false;
       if (c.phaseOverride != null) return false;
       final fed = c.feedsPanelId;
-      if (fed != null && feederLinesByPanel.containsKey(fed)) return false;
+      if (fed != null &&
+          feederLinesByPanel.containsKey(fed) &&
+          !rotatable(fed, visiting)) {
+        return false;
+      }
     }
     return true;
+  }
+
+  // Every board a rotation of rotatable [id] relabels: [id] and (in post-
+  // order, children first) each board below it whose feeder carries unequal
+  // lines.
+  List<String> rotationSubtree(String id) {
+    final out = <String>[];
+    void walk(String b) {
+      final panel = byId[b];
+      if (panel == null) return;
+      for (final c in panel.circuits) {
+        final fed = c.feedsPanelId;
+        if (c.role == CircuitRole.branch &&
+            fed != null &&
+            feederLinesByPanel.containsKey(fed) &&
+            !out.contains(fed)) {
+          walk(fed);
+        }
+      }
+      if (!out.contains(b)) out.add(b);
+    }
+
+    walk(id);
+    return out;
   }
 
   PhaseAssignment rotated(PhaseAssignment a, int r) => switch (a) {
@@ -3540,7 +3655,9 @@ ElectricalSystemResult computeSystem(
       return (picks, acc);
     }
 
-    bool labelled(String k) => (prior[k] ?? const {}).isNotEmpty;
+    // A sub-tree is labelled when any board it relabels carries labels.
+    bool labelled(String k) =>
+        rotationSubtree(k).any((b) => (prior[b] ?? const {}).isNotEmpty);
     // Each candidate is judged on the PARENT's own solved balance (its
     // single-phase ways placed against the rotated feeder lines), never on
     // the feeder lines alone: the identity, the greedy that moves only
@@ -3673,16 +3790,23 @@ ElectricalSystemResult computeSystem(
     for (var i = 0; i < kids.length; i++) {
       final r = picks[i];
       if (r == 0) continue;
-      final k = kids[i];
-      prior[k] = {
-        for (final e in fedBalance[k]!.entries)
-          if (e.value != PhaseAssignment.threePhase) e.key: rotated(e.value, r),
-      };
-      final solved = solveFedLines(byId[k]!);
-      final b = solved.phaseBalance;
-      fedBalance[k] = assignmentOf(solved);
-      final d = byId[k]!.diversityFactor;
-      feederLinesByPanel[k] = [b.l1 * d, b.l2 * d, b.l3 * d];
+      // Round 49 — the whole sub-tree is relabelled by r and re-solved
+      // children first, so each mid-level board's feeder lines below are
+      // already the rotated ones when it is re-solved.
+      for (final b in rotationSubtree(kids[i])) {
+        final fb = fedBalance[b];
+        if (fb == null) continue;
+        prior[b] = {
+          for (final e in fb.entries)
+            if (e.value != PhaseAssignment.threePhase)
+              e.key: rotated(e.value, r),
+        };
+        final solved = solveFedLines(byId[b]!);
+        final bal = solved.phaseBalance;
+        fedBalance[b] = assignmentOf(solved);
+        final d = byId[b]!.diversityFactor;
+        feederLinesByPanel[b] = [bal.l1 * d, bal.l2 * d, bal.l3 * d];
+      }
     }
   }
 

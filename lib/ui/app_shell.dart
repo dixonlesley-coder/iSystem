@@ -1428,7 +1428,9 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
     _confirmTimer?.cancel();
     // Clear the snapshot's OWN per-project slot (not a stale global default);
     // falls back to the untitled slot when the path is unknown.
-    await clearRecovery(path: ref.read(recoveryDocProvider)?.recoveryPath);
+    // Round 49 — and the session sibling this session autosaved beside it.
+    await clearPendingRecovery(
+        path: ref.read(recoveryDocProvider)?.recoveryPath);
     ref.read(recoveryDocProvider.notifier).clear();
   }
 

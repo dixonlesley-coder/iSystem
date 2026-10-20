@@ -245,6 +245,13 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       }
     }
   }
+  // Each fire system's pump tag (its schedule row / MDP way tag), else a
+  // sequential FP-0i by its position among the systems.
+  final fireBases = ref.read(fireSystemBasesProvider);
+  final nodeTagMap = equipmentNodeTags(net);
+  String fireSystemTag(FireSystemBasis b) =>
+      (b.pumpIds.isEmpty ? null : nodeTagMap[b.pumpIds.first]) ??
+      'FP-${(fireBases.indexOf(b) + 1).toString().padLeft(2, '0')}';
   return CalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
@@ -312,18 +319,26 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     sprinklerRemoteArea:
         sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
     firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
-    fireIndexFrictionM:
-        fireDrawn ? ref.read(governingFireBasisProvider)?.indexFrictionM : null,
+    // Round 49 (regression-report-churn-not-per-system) — the over-pressure
+    // line per over SPRINKLER-bearing system on ITS OWN pump: the very list
+    // the Review raises ([fireOverPressureProvider]).
+    fireOverPressure: fireDrawn
+        ? [
+            for (final o in ref.read(fireOverPressureProvider))
+              FireOverPressureReportLine(
+                tag: fireSystemTag(o.basis),
+                churnKpa: o.check.churnKpa,
+                frictionShare: o.check.frictionShare,
+              ),
+          ]
+        : const [],
     // Round 30 (report-parity-2-1) — each drawn fire system's own pump, under
     // the tag its schedule row / MDP way carry.
     fireSystems: fireDrawn
         ? [
-            for (final (i, b) in ref.read(fireSystemBasesProvider).indexed)
+            for (final b in ref.read(fireSystemBasesProvider))
               FireSystemReportLine(
-                tag: (b.pumpIds.isEmpty
-                        ? null
-                        : equipmentNodeTags(net)[b.pumpIds.first]) ??
-                    'FP-${(i + 1).toString().padLeft(2, '0')}',
+                tag: fireSystemTag(b),
                 sprinklerOnly: b.sprinklerOnly,
                 rating: b.rating,
               ),
@@ -1055,7 +1070,8 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       final tag = nodeTags[id]!;
       final jockey = binding.fireJockeyPumpNodeIds.contains(id);
       final basis = bases[id];
-      final mainDuty = basis?.duty ?? firePump;
+      // Round 49 — a pump in SERIES is scheduled on its own stage duty.
+      final mainDuty = basis?.dutyFor(id) ?? firePump;
       final sysService = basis == null
           ? fireService
           : reportStringsFor(ref)(basis.sprinklerOnly

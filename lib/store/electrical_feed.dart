@@ -20,6 +20,8 @@ import 'package:mechx_engine/sizing/ejector.dart'
     show drawnEjectorPumpIds, duplexEjectorSets;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
+import 'package:mechx_engine/sizing/fire_index_friction.dart'
+    show fireParallelPumpSets, fireSystems;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show serviceComponentRoots;
 import 'package:mechx_engine/sizing/pump.dart' show PumpDuty;
@@ -465,16 +467,44 @@ Map<String, String> parallelStandbyPumps(
   final standby = <String>{};
   final jockey = <String>{};
   final assumed = <String>{};
+  int rank(String a, String b) {
+    final la = onLeg(a) ? 1 : 0;
+    final lb = onLeg(b) ? 1 : 0;
+    if (la != lb) return la - lb;
+    final d = boreOf(b).compareTo(boreOf(a));
+    if (d != 0) return d;
+    return a.compareTo(b);
+  }
+
+  // Round 49 (fire-convergence-series-booster-fire-pump-standby) — only
+  // pumps in PARALLEL (their legs share both ends, or a pump on a mirrored
+  // standby leg) are duty / standby / jockey of one another. A mid-level
+  // booster reached from the lower pump through the network is in SERIES:
+  // a duty machine of its own stage that must run for any upper-zone fire,
+  // never a standby at demand factor 0.
+  final systems = fireSystems(net);
+  final sets = <List<String>>[];
   for (final g in groups.values) {
     if (g.length < 2) continue;
-    final ranked = [...g]..sort((a, b) {
-        final la = onLeg(a) ? 1 : 0;
-        final lb = onLeg(b) ? 1 : 0;
-        if (la != lb) return la - lb;
-        final d = boreOf(b).compareTo(boreOf(a));
-        if (d != 0) return d;
-        return a.compareTo(b);
-      });
+    final sys = systems.where((s) => s.nodeIds.contains(g.first)).firstOrNull;
+    if (sys == null) {
+      sets.add(g);
+      continue;
+    }
+    final parts = fireParallelPumpSets(net, sys, g);
+    final overallDuty = ([...g]..sort(rank)).first;
+    final dutySet = parts.firstWhere((p) => p.contains(overallDuty));
+    for (final p in parts) {
+      if (!identical(p, dutySet) && p.every(onLeg)) {
+        dutySet.addAll(p);
+        p.clear();
+      }
+    }
+    sets.addAll(parts.where((p) => p.isNotEmpty));
+  }
+  for (final g in sets) {
+    if (g.length < 2) continue;
+    final ranked = [...g]..sort(rank);
     final duty = ranked.first;
     final rest = ranked.skip(1).toList();
     final dutyBore = boreOf(duty);
@@ -721,7 +751,8 @@ final equipmentNodeDutiesProvider =
       final basis = ref.watch(firePumpBasisByNodeProvider)[n.id];
       final jockey = bind.fireJockeyPumpNodeIds.contains(n.id);
       p = basis != null
-          ? (jockey ? basis.jockey : basis.duty)
+          // Round 49 — a pump in SERIES carries its own stage duty.
+          ? (jockey ? basis.jockey : basis.dutyFor(n.id))
           : jockey
               ? ref.watch(fireJockeyDutyProvider)
               : ref.watch(firePumpDutyProvider);

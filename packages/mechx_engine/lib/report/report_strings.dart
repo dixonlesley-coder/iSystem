@@ -140,6 +140,7 @@ enum RptStringKey {
   firePumpVerdictOversized,
   firePumpVerdictWithin,
   fireOverPressureKey,
+  fireOverPressureSystemKey, // {tag}
   fireOverPressureValue, // {churn} {limit} {share}
   fireOverPressureShare, // {pct}
   fireJockeyKey,
@@ -583,6 +584,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'Motor above standard frame range - specify a custom motor or duty pairs',
   RptStringKey.firePumpVerdictWithin: 'Motor within standard frame range',
   RptStringKey.fireOverPressureKey: 'Component pressure (churn)',
+  RptStringKey.fireOverPressureSystemKey: 'Component pressure (churn), {tag}',
   RptStringKey.fireOverPressureValue:
       '{churn} kPa at churn exceeds the {limit} kPa (175 psi) rating of '
           'standard fire components{share} - upsize the index pipe or zone '
@@ -1071,6 +1073,7 @@ const Map<RptStringKey, String> kReportStringsId = {
           'pompa berpasangan',
   RptStringKey.firePumpVerdictWithin: 'Motor dalam rentang frame standar',
   RptStringKey.fireOverPressureKey: 'Tekanan komponen (churn)',
+  RptStringKey.fireOverPressureSystemKey: 'Tekanan komponen (churn), {tag}',
   RptStringKey.fireOverPressureValue:
       '{churn} kPa saat churn melampaui rating {limit} kPa (175 psi) '
           'komponen kebakaran standar{share} - perbesar pipa indeks atau '

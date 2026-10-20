@@ -647,6 +647,30 @@ class SniProfile implements StandardsProfile {
               'outlet size (general practice), not an SNI 03-1745-2000 clause. '
               'The vertical standpipe takes the SNI 100 mm minimum.',
         ),
+        // Round 49 — mirrors kClassIIStandpipeFlowLpm /
+        // kMinHoseStationBranchDiameterMm / kMinClassIIRiserDiameterMm
+        // (fire_standpipe.dart).
+        const StandardValue<Object?>(
+          6.31,
+          unit: 'L/s',
+          citation: 'NFPA 14 Class II hose-station flow 100 gpm; a hose-reel-'
+              'only system is rated as Class II (NOT an SNI 03-1745 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A fire system whose only drawn outlets are hose reels is an '
+              'occupant hose-station (Class II) system: 100 gpm (6.31 L/s) '
+              'with no addition per riser, 450 kPa at the topmost outlet. Any '
+              'drawn hydrant box keeps the Class I 500 gpm / 690 kPa basis. '
+              'Confirm the hose-reel basis vs SNI 03-1745.',
+        ),
+        const StandardValue<Object?>(
+          40.0,
+          unit: 'mm',
+          citation: 'Class II hose-station run 40 mm / riser 50 mm (NFPA 14)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A hose-reel-only (Class II) system floors its runs at the 40 mm '
+              'hose-station size and its risers at 50 mm, not the Class I '
+              '65 mm / 100 mm. General practice, not an SNI 03-1745 clause.',
+        ),
         // Round 37 — mirrors kFdcMinBoreMm (fire_standpipe.dart).
         const StandardValue<Object?>(
           100.0,

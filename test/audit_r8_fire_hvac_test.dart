@@ -128,7 +128,12 @@ void main() {
     addTearDown(c.dispose);
     final b = c.read(projectControllerProvider).building;
     final remote = c.read(sprinklerRemoteAreaProvider);
-    final top = b.floors.length - 1;
+    // Round 49 (fire-convergence-zone-lift-is-whole-building) — the lift is
+    // the SYSTEM's own: its pump datum floor (0) to its highest sprinkler
+    // head's ceiling. The only head 'sh' is on floor 0, so the lift is floor
+    // 0's ceiling — not the top storey of the (default multi-storey)
+    // building, which no head of this system reaches.
+    const top = 0;
     final expected = b.ceilingElevationOf(top).meters -
         b.elevationOf(0).meters +
         remote.branchBasePressure.pascals / (1000 * 9.81);

@@ -48,6 +48,27 @@ class FireSystemReportLine {
   });
 }
 
+/// Round 49 (regression-report-churn-not-per-system) — one drawn
+/// SPRINKLER-bearing fire system whose pump churn exceeds the standard
+/// 175 psi component rating, judged on ITS OWN pump (the app's
+/// `fireOverPressureProvider`, the very list the Review raises), under the
+/// tag its schedule row carries. The report only renders it: a hydrant-only
+/// system is never judged here, and a sprinkler system beside a larger
+/// (non-governing) hydrant rating is never hidden by it.
+class FireOverPressureReportLine {
+  final String tag;
+  final double churnKpa;
+
+  /// Friction share of the system's rated head; null when unmeasured.
+  final double? frictionShare;
+
+  const FireOverPressureReportLine({
+    required this.tag,
+    required this.churnKpa,
+    this.frictionShare,
+  });
+}
+
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
 class CalcReportData {
@@ -92,10 +113,10 @@ class CalcReportData {
   /// + duty/standby). Null ⇒ section skipped.
   final FirePumpRatingResult? firePumpRating;
 
-  /// Round 48 — the index-path friction (m) behind [firePumpRating]'s rated
-  /// head, when measured; only shapes the over-pressure line's friction
-  /// share. Null ⇒ the share is omitted.
-  final double? fireIndexFrictionM;
+  /// Round 49 — every over-pressure SPRINKLER-bearing fire system, judged
+  /// per system ([FireOverPressureReportLine]). Empty ⇒ no line (EN/ID
+  /// byte-identical).
+  final List<FireOverPressureReportLine> fireOverPressure;
 
   /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
@@ -195,7 +216,7 @@ class CalcReportData {
     this.standpipe,
     this.sprinklerRemoteArea,
     this.firePumpRating,
-    this.fireIndexFrictionM,
+    this.fireOverPressure = const [],
     this.fireSystems = const [],
     this.fan,
     this.exhaustFan,
@@ -684,10 +705,6 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
     final ra = d.sprinklerRemoteArea;
     final st = d.standpipe;
     final fp = d.firePumpRating;
-    final fireOverPressure = fp == null
-        ? null
-        : fireOverPressureCheck(
-            rating: fp, indexFrictionM: d.fireIndexFrictionM);
     blocks
       ..add(RptHeading(2, strings(RptStringKey.headingFireProtection)))
       ..add(RptKeyValue([
@@ -763,19 +780,23 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
           ),
         // Round 48 — the churn pressure against the standard component
         // rating (judge-only; printed only when exceeded ⇒ byte-identical).
-        // Only a SPRINKLER-bearing design is judged on the 175 psi listing
-        // (the app's `fireOverPressureProvider` rule).
-        if (fp != null && sp != null && fireOverPressure!.over)
+        // Round 49 (regression-report-churn-not-per-system) — one line per
+        // over SPRINKLER-bearing system on ITS OWN pump (the Review's list),
+        // never the governing (possibly hydrant-only) rating; with two or
+        // more lines each names its pump tag.
+        for (final o in d.fireOverPressure)
           (
-            strings(RptStringKey.fireOverPressureKey),
+            d.fireOverPressure.length >= 2
+                ? strings.format(
+                    RptStringKey.fireOverPressureSystemKey, {'tag': o.tag})
+                : strings(RptStringKey.fireOverPressureKey),
             strings.format(RptStringKey.fireOverPressureValue, {
-              'churn': fireOverPressure.churnKpa.toStringAsFixed(0),
+              'churn': o.churnKpa.toStringAsFixed(0),
               'limit': kFireComponentMaxPressureKpa.toStringAsFixed(0),
-              'share': fireOverPressure.frictionShare == null
+              'share': o.frictionShare == null
                   ? ''
                   : strings.format(RptStringKey.fireOverPressureShare, {
-                      'pct': (fireOverPressure.frictionShare! * 100)
-                          .toStringAsFixed(0),
+                      'pct': (o.frictionShare! * 100).toStringAsFixed(0),
                     }),
             })
           ),

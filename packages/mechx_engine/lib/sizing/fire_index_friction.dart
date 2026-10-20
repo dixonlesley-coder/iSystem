@@ -22,12 +22,13 @@ library;
 
 import 'dart:collection' show SplayTreeSet;
 
+import 'package:mechx_engine/geometry/building.dart' show BuildingLevels;
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart'
     show kSprinklerBranchHazenC;
 import 'package:mechx_engine/sizing/fire_standpipe.dart'
-    show parallelStandpipeCount;
+    show StandpipeClass, kHoseOutletHeightM, parallelStandpipeCount;
 import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 import 'package:mechx_engine/units.dart';
 
@@ -57,6 +58,150 @@ class FireSystem {
     final n = parallelStandpipeCount(net, edges);
     return n < 1 ? 1 : n;
   }
+
+  /// Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — the
+  /// standpipe CLASS this system's drawn outlets make it: hose reels only ⇒
+  /// [StandpipeClass.classII] (occupant hose stations, 100 gpm / 450 kPa);
+  /// hose reels AND hydrant boxes ⇒ [StandpipeClass.classIII] (the 65 mm
+  /// outlet governs, so the Class I figures); anything else (hydrant boxes,
+  /// or no outlet drawn) ⇒ [StandpipeClass.classI]. `// VERIFY`
+  /// notAnSniClause (the hose-reel ⇒ Class II mapping, `SniProfile.
+  /// verifyChecklist`).
+  StandpipeClass standpipeClass(Network net) {
+    var reel = false;
+    var box = false;
+    for (final n in net.nodes) {
+      if (!nodeIds.contains(n.id)) continue;
+      if (n.component == NodeComponent.hoseReel) reel = true;
+      if (n.component == NodeComponent.hydrantBox) box = true;
+    }
+    if (reel && !box) return StandpipeClass.classII;
+    if (reel && box) return StandpipeClass.classIII;
+    return StandpipeClass.classI;
+  }
+
+  /// Round 49 (fire-convergence-zone-lift-is-whole-building) — the floor the
+  /// system's pump datum sits on: the LOWEST floor of its drawn fire pumps /
+  /// booster sets, else the lowest floor any of its nodes is on, else 0.
+  int datumFloor(Network net) {
+    int? pumpFloor;
+    int? anyFloor;
+    for (final n in net.nodes) {
+      if (!nodeIds.contains(n.id)) continue;
+      final f = n.floorIndex;
+      anyFloor = anyFloor == null || f < anyFloor ? f : anyFloor;
+      if (n.component == NodeComponent.pump ||
+          n.component == NodeComponent.boosterSet) {
+        pumpFloor = pumpFloor == null || f < pumpFloor ? f : pumpFloor;
+      }
+    }
+    return pumpFloor ?? anyFloor ?? 0;
+  }
+
+  /// Round 49 — the highest floor holding one of this system's terminals of
+  /// [kind] (hydrant: hydrant boxes / hose reels; sprinkler: heads), at or
+  /// below [belowFloor] − 1 when given. Null when none is drawn there.
+  int? topTerminalFloor(Network net, FireTerminalKind kind,
+      {int? belowFloor}) {
+    final servicesAt = <String, Set<ServiceType>>{};
+    for (final e in edges) {
+      (servicesAt[e.fromId] ??= {}).add(e.service);
+      (servicesAt[e.toId] ??= {}).add(e.service);
+    }
+    int? top;
+    for (final n in net.nodes) {
+      if (!nodeIds.contains(n.id)) continue;
+      if (n.role != NodeRole.fixture || isSupplyInletComponent(n.component)) {
+        continue;
+      }
+      final ok = switch (kind) {
+        FireTerminalKind.any => true,
+        FireTerminalKind.hydrant =>
+          servicesAt[n.id]?.contains(ServiceType.fireHydrant) ?? false,
+        FireTerminalKind.sprinkler =>
+          servicesAt[n.id]?.contains(ServiceType.fireSprinkler) ?? false,
+      };
+      if (!ok) continue;
+      if (belowFloor != null && n.floorIndex >= belowFloor) continue;
+      if (top == null || n.floorIndex > top) top = n.floorIndex;
+    }
+    return top;
+  }
+
+  /// Round 49 (fire-convergence-zone-lift-is-whole-building) — this
+  /// system's STATIC LIFT (m) for the [kind] basis: from its pump datum
+  /// floor's surface ([datumFloor], or [datumFloorOverride]) to its own
+  /// topmost terminal — a hose outlet [kHoseOutletHeightM] above its floor
+  /// ([FireTerminalKind.hydrant]) or a sprinkler at its floor's ceiling
+  /// ([FireTerminalKind.sprinkler]) — never the whole building's height: a
+  /// mid-level pump room serving L10-L19 lifts 30 m, not 60 m. With no
+  /// terminal of [kind] drawn (at or below [belowFloor] − 1 when given) the
+  /// legacy whole-building top floor is the target. Floors are clamped to
+  /// [building]; an empty building lifts 0.
+  double staticLiftM(
+    Network net,
+    BuildingLevels building,
+    FireTerminalKind kind, {
+    int? datumFloorOverride,
+    int? belowFloor,
+  }) {
+    final nFloors = building.floors.length;
+    if (nFloors == 0) return 0;
+    int clampF(int f) => f < 0 ? 0 : (f >= nFloors ? nFloors - 1 : f);
+    final datum = clampF(datumFloorOverride ?? datumFloor(net));
+    final top =
+        clampF(topTerminalFloor(net, kind, belowFloor: belowFloor) ?? nFloors - 1);
+    final base = building.elevationOf(datum).meters;
+    final target = kind == FireTerminalKind.sprinkler
+        ? building.ceilingElevationOf(top).meters
+        : building.elevationOf(top).meters + kHoseOutletHeightM;
+    final lift = target - base;
+    return lift > 0 ? lift : 0;
+  }
+}
+
+/// Round 49 (fire-convergence-series-booster-fire-pump-standby) — the two
+/// LEG ENDS of fire pump [pumpId] in [system]: walking from the pump along
+/// its fire pipes through bare degree-2 nodes and inline devices (valves,
+/// strainers — [isInlineDeviceComponent]) to the first node that is
+/// neither (a junction, a leaf, a tank, another pump). Two pumps whose legs
+/// share BOTH ends are a PARALLEL set (duty / standby / jockey, drawn
+/// between one suction and one discharge); pumps whose legs do not — one
+/// reached from the other through the network — are in SERIES (a mid-level
+/// booster), each a duty machine of its own stage. Sorted pair; a pump with
+/// fewer than two fire pipes repeats its only end (or itself).
+(String, String) fireDrawnPumpLegEnds(
+    Network net, FireSystem system, String pumpId) {
+  final adj = <String, List<NetEdge>>{};
+  for (final e in system.edges) {
+    (adj[e.fromId] ??= []).add(e);
+    (adj[e.toId] ??= []).add(e);
+  }
+  bool passThrough(String id) {
+    if ((adj[id]?.length ?? 0) != 2) return false;
+    final c = net.nodeById(id)?.component;
+    return c == null || isInlineDeviceComponent(c);
+  }
+
+  String walk(NetEdge first) {
+    var prev = pumpId;
+    var cur = first.fromId == pumpId ? first.toId : first.fromId;
+    var via = first;
+    final seen = <String>{pumpId};
+    while (passThrough(cur) && seen.add(cur)) {
+      final next = adj[cur]!.firstWhere((x) => x.id != via.id);
+      prev = cur;
+      via = next;
+      cur = next.fromId == prev ? next.toId : next.fromId;
+    }
+    return cur;
+  }
+
+  final legs = [for (final e in adj[pumpId] ?? const <NetEdge>[]) walk(e)];
+  if (legs.isEmpty) return (pumpId, pumpId);
+  if (legs.length == 1) return (legs.first, legs.first);
+  legs.sort();
+  return (legs.first, legs.last);
 }
 
 /// The connected fire networks of [net] (union over sprinkler + hydrant
@@ -230,4 +375,30 @@ double? fireIndexPathFrictionM({
     if (worst == null || v > worst) worst = v;
   }
   return worst;
+}
+
+/// Round 49 (fire-convergence-series-booster-fire-pump-standby) — [pumpIds]
+/// (fire pumps of [system]) partitioned into PARALLEL SETS: pumps whose legs
+/// share both ends ([fireDrawnPumpLegEnds]) form one set (duty + standby +
+/// jockey); a pump whose leg shares its ends with no other pump is a set of
+/// its own — a SERIES stage (a mid-level booster). Sets are ordered by their
+/// lowest pump floor, then their smallest pump id; each set's ids sorted.
+List<List<String>> fireParallelPumpSets(
+    Network net, FireSystem system, Iterable<String> pumpIds) {
+  final byEnds = <(String, String), List<String>>{};
+  for (final id in pumpIds) {
+    if (!system.nodeIds.contains(id)) continue;
+    (byEnds[fireDrawnPumpLegEnds(net, system, id)] ??= []).add(id);
+  }
+  int floorOf(String id) => net.nodeById(id)?.floorIndex ?? 0;
+  final sets = [
+    for (final g in byEnds.values) [...g]..sort(),
+  ];
+  int minFloor(List<String> g) =>
+      g.map(floorOf).reduce((a, b) => a < b ? a : b);
+  sets.sort((a, b) {
+    final f = minFloor(a).compareTo(minFloor(b));
+    return f != 0 ? f : a.first.compareTo(b.first);
+  });
+  return sets;
 }

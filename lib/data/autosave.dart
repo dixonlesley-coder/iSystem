@@ -470,15 +470,19 @@ Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
       return;
     }
     final projectPath = c.read(currentProjectPathProvider);
-    final slot = recoveryPath ?? recoverySlotFor(projectPath);
+    var slot = recoveryPath ?? recoverySlotFor(projectPath);
     // Round 48 (persist-io-1) — never overwrite a PENDING crash snapshot (the
     // one the launch banner still offers) with this session's work: only its
     // Restore or an explicit Discard may replace it.
+    // Round 49 (regression-autosave-no-protection-while-snapshot-pending) —
+    // and never leave this session unprotected either: while the pending
+    // snapshot owns the slot, this session's work goes to the slot's session
+    // sibling ([recoveryPartnerSlot]); the pending file stays byte-identical.
     final pending = c.read(recoveryDocProvider);
     if (pending != null &&
         (pending.recoveryPath ?? recoverySlotFor(pending.sourcePath)) ==
             slot) {
-      return;
+      slot = recoveryPartnerSlot(slot);
     }
     c.read(autosaveMirrorProvider.notifier).set(encoded);
     // R4: AWAIT the write. Un-awaited, the tick's future completed the instant

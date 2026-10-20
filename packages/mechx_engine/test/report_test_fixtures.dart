@@ -99,6 +99,20 @@ CalcReportData richMechData() {
       ratedFlow: standpipe.requiredFlow,
       ratedHead: standpipe.pumpHead,
     ),
+    // Round 49 — the fixture's combined (sprinkler-bearing) fire system's
+    // per-system over-pressure line, as the app's `fireOverPressureProvider`
+    // lists it: churn 1.4 x 96.3 m x 9.81 = 1323 kPa > 1210 kPa, no measured
+    // friction (no share) — the very line the Round-48 pins carry.
+    fireOverPressure: [
+      FireOverPressureReportLine(
+        tag: 'FP-01',
+        churnKpa: fireOverPressureCheck(
+                rating: checkFirePumpRating(
+                    ratedFlow: standpipe.requiredFlow,
+                    ratedHead: standpipe.pumpHead))
+            .churnKpa,
+      ),
+    ],
     fan: sizeFan(
         airflow: const FlowRate(0.15),
         totalStaticPressure: const Pressure(50),
