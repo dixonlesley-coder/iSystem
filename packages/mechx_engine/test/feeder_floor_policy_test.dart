@@ -418,7 +418,7 @@ void main() {
     final sys = computeSystem(p, project);
     final mdp = sys.panels['MDP'] ?? sys.panels['mdp']!;
 
-    test('PP-1: a board drawing 49.3 A on its worst line takes 50 mm2, '
+    test('PP-1: a board drawing 49.4 A on its worst line takes 50 mm2, '
         'never 150 mm2', () {
       // Re-derived 2026-10 (audit elec-core-4): PP-1's connected demand counts
       // each motor at its ELECTRICAL INPUT (shaft kW / η 0.88):
@@ -428,18 +428,21 @@ void main() {
       //   balanced Ib = 27 157.5 / (√3·400·0.89432) = 43.83 A
       // Re-derived 2026-10-18 (Round 37, electrical-sim-4-feeder-balanced-
       // phase-hides-fed-board-imbalance): the 3φ feeder carries PP-1's WORST
-      // line, not the balanced figure. PP-1 balances to 58.0 / 58.0 / 38.5 A
-      // (undiversified), so the feeder Ib = 58.0 × 0.85 = 49.3 A (> 43.83).
-      //   ⇒ LOAD-SIZED device = first rung ≥ 49.3 = 50 A.
+      // line, not the balanced figure. Round 43: PP-1's lines sum the EXACT
+      // way currents and round once — 3φ ways 6.736 + 21.226 + 10.613 =
+      // 38.575 A, + one 19.481 A heater on L1 and L2 ⇒ 58.056 → 58.1 / 58.1 /
+      // 38.6 A (undiversified; was 58.0 from rounded way figures), so the
+      // feeder Ib = 58.1 × 0.85 = 49.385 → 49.4 A (> 43.83).
+      //   ⇒ LOAD-SIZED device = first rung ≥ 49.4 = 50 A.
       // CABLE: MDP is 35 °C / grouping 6 / conduit ⇒ derating
-      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 49.3 = 61.6) = 61.6 A.
+      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 49.385 = 61.7) = 61.7 A.
       //   Conduit reads IEC B.52.4 B1: 35 mm² → 110 × 0.5358 = 58.9 A ✗;
       //   50 mm² → 134 × 0.5358 = 71.8 A ✓ ⇒ 50 mm², Iz 71.8 A.
       final f = _way(mdp, 'mdp-f-pp1');
-      expect(f.designCurrent.amperes, 49.3);
+      expect(f.designCurrent.amperes, 49.4);
       expect(f.cable.csaMm2, 50.0);
       expect(f.cable.deratedIz.amperes, closeTo(71.8, 0.05));
-      // The conductor is proportionate: 71.8/49.3 = 1.46 — one section step
+      // The conductor is proportionate: 71.8/49.4 = 1.45 — one section step
       // over the 1.25 continuous margin.
       expect(f.cable.deratedIz.amperes / f.designCurrent.amperes,
           lessThan(1.6));

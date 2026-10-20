@@ -4422,6 +4422,10 @@ const Map<String, (String, String)> _electricalWarningTitles = {
   'selectivity-partial': ('Partial selectivity', 'Selektivitas parsial'),
   'life-safety-cable':
       ('Life-safety cable type', 'Jenis kabel keselamatan jiwa'),
+  'life-safety-feeder-cable': (
+    'Life-safety feeder cable type',
+    'Jenis kabel penyulang keselamatan jiwa'
+  ),
   'life-safety-not-essential': (
     'Life-safety load on a normal supply',
     'Beban keselamatan jiwa pada suplai normal'

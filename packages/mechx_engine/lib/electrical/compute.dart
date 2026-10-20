@@ -86,12 +86,18 @@ const double kThreePhaseServiceLineVoltageV = 400;
 /// inviolable) and the rating is not the engineer's override. Otherwise the
 /// MCB is KEPT (it then needs back-up / cascade protection from the upstream
 /// device — see [mcbNeedsBackupProtection]).
+///
+/// Round 43 (electrical-sim-8-mccb-frame-raise-breaks-ads) — [allowFrameRaise]
+/// false keeps a sub-frame MCB (never raised to the 16 A MCCB frame): the
+/// caller (`computeSystem`) passes it for a FINAL way whose frame-raised
+/// rating fails the earth-fault loop (ADS) — a device-class rule must never
+/// create a safety non-compliance the load-sized device did not have.
 BreakerResult faultAwareBreakerClass(BreakerResult b, Current? busFault,
-    {Current? maxRatingA}) {
+    {Current? maxRatingA, bool allowFrameRaise = true}) {
   if (!_mcbBelowBusFault(b, busFault)) return b;
   var rating = b.ratingA.amperes;
   if (rating < kMccbMinFrameA - 1e-9) {
-    if (b.overridden) return b;
+    if (b.overridden || !allowFrameRaise) return b;
     if (maxRatingA != null && kMccbMinFrameA > maxRatingA.amperes + 1e-9) {
       return b;
     }
@@ -987,6 +993,12 @@ class ComputePanelOptions {
   /// cable's Iz caps the floor ⇒ byte-identical.
   final Map<String, double> feederBreakerCapA;
 
+  /// Round 43 (electrical-sim-8-mccb-frame-raise-breaks-ads) — FINAL way ids
+  /// whose MCCB frame raise ([kMccbMinFrameA]) is refused because the raised
+  /// rating fails ADS: the load-sized MCB is kept (cascade back-up info).
+  /// Derived by `computeSystem` from the fault study; empty ⇒ byte-identical.
+  final Set<String> mccbFrameRaiseRefusedIds;
+
   /// SERVICE-CAPACITY FLOOR (A) for the incomer + busbar of a SERVICE-ENTRANCE
   /// (root) panel — the line current of the declared connection capacity
   /// ([ElectricalProject.supplyCapacityVa], daya tersambung), derived by
@@ -1078,6 +1090,7 @@ class ComputePanelOptions {
     this.phaseReassignThresholdA = 0,
     this.feederBreakerFloorA = const {},
     this.feederBreakerCapA = const {},
+    this.mccbFrameRaiseRefusedIds = const {},
     this.serviceMinCurrentA,
     this.feederPowerFactor = const {},
   });
@@ -1226,14 +1239,14 @@ double _singlePhaseNonLinearFraction(List<_CircuitComputation> comps,
 /// from 61.5 A to 90.4 A and a 63 A incomer to 100 A). Its worst case is the
 /// bank switched OFF — the load alone — so it contributes 0 here.
 double _balanceCurrentA(ElectricalCircuitResult r) =>
-    r.loadKind == LoadKind.capacitor ? 0.0 : r.designCurrent.amperes;
+    r.loadKind == LoadKind.capacitor ? 0.0 : r.designCurrentSumA;
 
 /// Round 15 — the current a busbar SECTION must carry for one way: its design
 /// current, a capacitor bank at [kCapacitorSwitchingFactor] × its rated
 /// current, a feeder at least its fed board's capacitor switching current.
 double _busbarWayCurrentA(ElectricalCircuitResult r, ElectricalCircuit c,
     Map<String, double> feederCapacitorFloorA) {
-  var a = r.designCurrent.amperes;
+  var a = r.designCurrentSumA;
   if (c.loadKind == LoadKind.capacitor) a *= kCapacitorSwitchingFactor;
   final fed = c.feedsPanelId;
   final floor = fed != null ? feederCapacitorFloorA[fed] : null;
@@ -1975,62 +1988,30 @@ _CircuitComputation _computeCircuit(
   }
   // Round 38 — the device CLASS follows the bus fault (see
   // [faultAwareBreakerClass]).
+  final frameRaiseRefused = opts.mccbFrameRaiseRefusedIds.contains(c.id);
   breaker = faultAwareBreakerClass(breaker, opts.faultLevelA,
-      maxRatingA: cable.deratedIz);
+      maxRatingA: cable.deratedIz, allowFrameRaise: !frameRaiseRefused);
   if (mcbNeedsBackupProtection(breaker, opts.faultLevelA)) {
+    final why = frameRaiseRefused
+        ? 'a ${_num(kMccbMinFrameA)} A MCCB would fail the earth-fault loop '
+            '(ADS) on this run'
+        : 'its cable (Iz ${_num(roundTo(cable.deratedIz.amperes, 1))} A) '
+            'cannot carry a ${_num(kMccbMinFrameA)} A MCCB frame';
     warnings.add(ElectricalWarning(
       code: 'mcb-backup-protection-required',
       severity: WarningSeverity.info,
       message: '${c.name}: the ${_num(breaker.ratingA.amperes)} A way sits on '
           'a ${_num(roundTo(opts.faultLevelA!.amperes / 1000.0, 1))} kA bus, '
-          'above the MCB breaking-capacity range, and is below the '
-          '${_num(kMccbMinFrameA)} A MCCB frame its cable '
-          '(Iz ${_num(roundTo(cable.deratedIz.amperes, 1))} A) could carry — '
+          'above the MCB breaking-capacity range, and is kept as an MCB '
+          'because $why — '
           'it relies on back-up (cascade) protection by the upstream device '
-          '(IEC 60898-1 Annex D); verify the cascade combination or upsize the '
-          'cable for a 16 A MCCB.',
+          '(IEC 60898-1 Annex D); verify the cascade combination.',
       panelId: panel.id,
       circuitId: c.id,
     ));
   }
 
   final runsPerPhase = cable.runsPerPhase ?? 1;
-
-  // Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-leads)
-  // — a STAR-DELTA starter is wired to the motor's SIX winding terminals:
-  // the starter → motor section is TWO 3-core cables, each carrying the
-  // winding current Ib/√3 (I_line = √3 · I_winding in delta). One lead cable
-  // is sized here on that current (same family, laying, derating and
-  // minimum; In basis = the delta-leg overload setting ≈ the winding
-  // current, so Iz ≥ 1.25 × Ib/√3). Each lead carries a PE (the way's PE,
-  // capped at the lead section).
-  // Round 42 — the leads ARE the field run (the starter is in the board,
-  // [kStarDeltaInternalWiringM]): the way length, and the way's Vd is judged
-  // on them. // VERIFY (notAnSniClause): the lead Vd is judged at Ib/√3 on
-  // the 3φ formula (approximation).
-  CableResult? motorLeads;
-  if (starDeltaMotor) {
-    final leadIb = Current(sizingCurrent.amperes / math.sqrt(3));
-    motorLeads = sizeCable(
-      profile,
-      designCurrent: leadIb,
-      breakerRating: leadIb,
-      deratingFactor: df,
-      minSectionMm2: baseMin,
-      insulation: cableInsulation,
-      material: panel.material,
-      method: installMethod,
-      threePhase: true,
-      groupingCount: c.groupingCountOverride ?? panel.groupingCount,
-      vd: CableVoltageDropConstraint(
-        length: effectiveLength,
-        cosPhi: cosPhi,
-        threePhase: true,
-        voltage: Voltage(useVoltageV),
-        isLighting: false,
-      ),
-    );
-  }
 
   final supplyVd = voltageDrop(
     profile,
@@ -2043,11 +2024,61 @@ _CircuitComputation _computeCircuit(
     isLighting: c.isLighting,
     material: panel.material,
   );
+
+  // Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-leads)
+  // — a STAR-DELTA starter is wired to the motor's SIX winding terminals:
+  // the starter → motor section is TWO 3-core cables, each carrying the
+  // winding current Ib/√3 (I_line = √3 · I_winding in delta). One lead cable
+  // is sized here on that current (same family, laying and minimum; In basis
+  // = the delta-leg overload setting ≈ the winding current, so
+  // Iz ≥ 1.25 × Ib/√3). Each lead carries a PE (the way's PE, capped at the
+  // lead section).
+  // Round 42 — the leads ARE the field run (the starter is in the board,
+  // [kStarDeltaInternalWiringM]): the way length, and the way's Vd is judged
+  // on them.
+  // Round 43 — (1) the two lead cables run TOGETHER in one route, so each is
+  // one of 2·g grouped circuits (IEC 60364-5-52 Table B.52.17, the same
+  // parallel-run rule `sizeCable` applies to its own runs: the g-circuit
+  // factor inside `df` is swapped for the 2g one). // VERIFY notAnSniClause.
+  // (2) each winding sits between its OWN two lead conductors (U1 out, U2
+  // back), both carrying I_w, so the winding sees V_LL − 2·I_w·Z·L: the
+  // SINGLE-PHASE loop formula at I_w against 400 V — never the balanced 3φ
+  // √3 factor (2/√3 = 1.155 × low). (3) the lead is sized against the limit
+  // LESS the internal link's drop, so link + lead ≤ limit.
+  CableResult? motorLeads;
+  if (starDeltaMotor) {
+    final leadIb = Current(sizingCurrent.amperes / math.sqrt(3));
+    final g = math.max(1, c.groupingCountOverride ?? panel.groupingCount);
+    final leadDf =
+        df * groupingFactor(profile, 2 * g) / groupingFactor(profile, g);
+    motorLeads = sizeCable(
+      profile,
+      designCurrent: leadIb,
+      breakerRating: leadIb,
+      deratingFactor: leadDf,
+      minSectionMm2: baseMin,
+      insulation: cableInsulation,
+      material: panel.material,
+      method: installMethod,
+      threePhase: true,
+      groupingCount: 2 * g,
+      vd: CableVoltageDropConstraint(
+        length: effectiveLength,
+        cosPhi: cosPhi,
+        threePhase: false,
+        voltage: Voltage(useVoltageV),
+        isLighting: false,
+        limitPercent: math.max(0.0, supplyVd.limitPercent - supplyVd.dropPercent),
+      ),
+    );
+  }
+
   final VoltageDropResult vd;
   if (motorLeads == null) {
     vd = supplyVd;
   } else {
-    // The motor terminal sees the internal link's drop PLUS the lead run's.
+    // The motor terminal sees the internal link's drop PLUS the lead run's
+    // winding-loop drop 2·I_w·Z·L / V_LL.
     final leadRuns = motorLeads.runsPerPhase ?? 1;
     final leadVd = voltageDrop(
       profile,
@@ -2056,7 +2087,7 @@ _CircuitComputation _computeCircuit(
       length: effectiveLength,
       csaMm2: motorLeads.csaMm2,
       cosPhi: cosPhi,
-      threePhase: true,
+      threePhase: false,
       voltage: Voltage(useVoltageV),
       isLighting: false,
       material: panel.material,
@@ -2270,6 +2301,7 @@ _CircuitComputation _computeCircuit(
     name: c.name,
     loadKind: c.loadKind,
     designCurrent: designCurrent,
+    designCurrentExactA: ib.amperes,
     threePhase: threePhase,
     // single-phase assignment is finalised after balancing.
     phase: threePhase ? PhaseAssignment.threePhase : PhaseAssignment.l1,
@@ -2432,6 +2464,12 @@ ElectricalPanelResult computePanel(
     ], base: base);
     bestImbalancePercent =
         avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
+    // Round 43 — the actual assignment is itself achievable, so the floor
+    // can never print ABOVE the actual figure (the floor reads 0.1 A-rounded
+    // spreads, the actual the exact line sums).
+    if (bestImbalancePercent > balance.imbalancePercent) {
+      bestImbalancePercent = balance.imbalancePercent;
+    }
     imbalanceReducible = !engineOwned &&
         bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
             balance.imbalancePercent;
@@ -3318,7 +3356,8 @@ ElectricalSystemResult computeSystem(
   // pure function of the project + [feederBreakerFloorA], so it can be re-run
   // once with a selectivity floor applied (see the two-pass note after it).
   ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA,
-      [Map<String, double> feederBreakerCapA = const {}]) {
+      [Map<String, double> feederBreakerCapA = const {},
+      Set<String> mccbFrameRaiseRefusedIds = const {}]) {
     final warnings = <ElectricalWarning>[...baseWarnings];
     final panelFaultA = <String, double>{};
     final panelSourceZ = <String, Impedance>{};
@@ -3414,6 +3453,7 @@ ElectricalSystemResult computeSystem(
           phaseReassignThresholdA: phaseReassignThresholdA,
           feederBreakerFloorA: feederBreakerFloorA,
           feederBreakerCapA: feederBreakerCapA,
+          mccbFrameRaiseRefusedIds: mccbFrameRaiseRefusedIds,
           feederLineCurrentsA: feederLinesByPanel,
           feederNeutralLoad: feederNeutralByPanel,
           feederLargestRunA: largestRunByPanel,
@@ -3704,6 +3744,54 @@ ElectricalSystemResult computeSystem(
       }
     }
 
+    // Round 43 (electrical-sim-8-fire-path-feeder-not-frc-checked) — the
+    // fire-pump / life-safety supply must survive a fire from the source to
+    // the controller (NFPA 20 9.3 / 9.8, SNI 03-6574 practice): a FEEDER whose
+    // sub-tree holds any life-safety way is judged like the way itself — a
+    // null or non-FRC family raises the judge-only `life-safety-feeder-cable`
+    // warning on the parent board, locatable on the feeder way. A feeder that
+    // is itself flagged life-safety is already judged by `life-safety-cable`.
+    // Bottom-up over the post-order; never resizes. // VERIFY notAnSniClause.
+    final lifeBelow = <String, bool>{};
+    for (final id in postOrder) {
+      final panel = byId[id];
+      if (panel == null) continue;
+      var any = false;
+      for (final c in panel.circuits) {
+        final child = c.feedsPanelId;
+        if (child != null) {
+          if (lifeBelow[child] == true) any = true;
+          continue;
+        }
+        if (c.lifeSafety && c.loadKind != LoadKind.spare) any = true;
+      }
+      lifeBelow[id] = any;
+    }
+    for (final p in panels) {
+      final pr = results[p.id];
+      if (pr == null) continue;
+      for (final c in p.circuits) {
+        final child = c.feedsPanelId;
+        if (child == null || c.lifeSafety) continue;
+        if (lifeBelow[child] != true) continue;
+        if (c.cableType == 'FRC') continue;
+        final childName = byId[child]?.name ?? child;
+        final family = (c.cableType == null || c.cableType!.isEmpty)
+            ? defaultCableFamily(c.loadKind)
+            : c.cableType!;
+        pr.warnings.add(ElectricalWarning(
+          code: 'life-safety-feeder-cable',
+          severity: WarningSeverity.warning,
+          message: '${c.name}: feeder to $childName carries the fire-pump / '
+              'life-safety supply but is specified as $family — specify '
+              'fire-resistant cable (FRC/MICA) or a fire-rated route so the '
+              'supply survives a fire.',
+          panelId: p.id,
+          circuitId: c.id,
+        ));
+      }
+    }
+
     // Collect every panel's warnings into the system list (after augmentation).
     for (final id in postOrder.reversed) {
       final pr = results[id];
@@ -3909,10 +3997,50 @@ ElectricalSystemResult computeSystem(
     }
   }
 
+  // Round 43 (electrical-sim-8-mccb-frame-raise-breaks-ads) — the MCCB
+  // frame-minimum raise ([faultAwareBreakerClass], 6 A -> 16 A on a bus above
+  // the MCB ladder) is a device-CLASS rule; like the Round-40 coordination
+  // floor it must never create an ADS failure the load-sized device did not
+  // have. On TN, every FINAL way the raise reached (MCCB at the frame
+  // minimum, not overridden) that fails ADS is re-sized ONCE with the raise
+  // refused: the load-sized MCB is kept and the existing cascade info
+  // (`mcb-backup-protection-required`) names why. Refusing only ever lowers
+  // that way's own device (never a cable, a board current or another way),
+  // so one more pass is the fixed point. TT / no such way ⇒ verbatim.
+  ElectricalSystemResult frameAds(ElectricalSystemResult r,
+      Map<String, double> floors, Map<String, double> caps) {
+    final tn = r.earthing.system == EarthingSystem.tnS ||
+        r.earthing.system == EarthingSystem.tnCs;
+    if (!tn) return r;
+    final candidates = <String>[
+      for (final pr in r.panels.values)
+        for (final w in pr.circuits)
+          if (w.loadKind != LoadKind.feeder &&
+              w.breaker.deviceClass == BreakerClass.mccb &&
+              !w.breaker.overridden &&
+              (w.breaker.ratingA.amperes - kMccbMinFrameA).abs() < 1e-9)
+            w.circuitId,
+    ];
+    if (candidates.isEmpty) return r;
+    final origin = originFaultLevel ??
+        project.originFaultLevelA ??
+        estimatedServiceFaultLevelA(project, demand: r.supply.demandVa) ??
+        const Current(defaultLvUtilityFaultKa * 1000);
+    final f = faultStudy(r, project, profile, originFaultLevel: origin);
+    final refused = <String>{
+      for (final id in candidates)
+        if (f.circuits[id]?.adsOk == false) id,
+    };
+    if (refused.isEmpty) return r;
+    // A load-sized 16 A way is unaffected by the refusal (it converts to
+    // the same 16 A MCCB), so only a genuinely raised way changes.
+    return sizeAll(floors, caps, refused);
+  }
+
   // No feeder needed lifting (every single-panel project, and any project whose
   // feeders are overridden or already selective) ⇒ pass 1 IS the answer, handed
   // back as-is so nothing is recomputed and the output is byte-identical.
-  if (feederFloors.isEmpty) return pass1;
+  if (feederFloors.isEmpty) return frameAds(pass1, const {}, const {});
 
   // PASS 2 — exactly one more pass, and provably enough: each floor is derived
   // from a CHILD's incomer rating, which is sized from that child's own load-side
@@ -3972,5 +4100,5 @@ ElectricalSystemResult computeSystem(
     if (!changed) break;
     current = sizeAll(feederFloors, Map.of(caps));
   }
-  return current;
+  return frameAds(current, feederFloors, caps);
 }

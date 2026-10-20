@@ -46,12 +46,14 @@ ElectricalProject _project({bool ups = true}) => ElectricalProject(panels: [
     ]);
 
 void main() {
-  test('the fed board: 57.6 A per line, FOLD-2 factor 1.73', () {
+  test('the fed board: 57.7 A per line, FOLD-2 factor 1.73', () {
     final sys = computeSystem(_p, _project());
     final ups = sys.panels['ups']!;
-    expect(ups.phaseBalance.l1, closeTo(57.6, 0.05));
-    expect(ups.phaseBalance.l2, closeTo(57.6, 0.05));
-    expect(ups.phaseBalance.l3, closeTo(57.6, 0.05));
+    // 4 ways per line × 3000 / (231 × 0.9) = 4 × 14.430 = 57.72 → 57.7 A.
+    // Round 43: the line sums the EXACT way currents (was 4 × 14.4 = 57.6).
+    expect(ups.phaseBalance.l1, closeTo(57.7, 0.05));
+    expect(ups.phaseBalance.l2, closeTo(57.7, 0.05));
+    expect(ups.phaseBalance.l3, closeTo(57.7, 0.05));
     expect(ups.neutralPeBars.neutralOversizeFactor, closeTo(1.73, 1e-9));
   });
 

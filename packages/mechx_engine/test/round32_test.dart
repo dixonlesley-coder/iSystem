@@ -763,11 +763,12 @@ void main() {
 
   group('service-capacity judge reads the DIVERSIFIED current', () {
     // One 3φ 400 V root board, diversity 0.6, six 3φ 8 kW heaters (cos φ 1).
-    //   Undiversified: each way Ib = 8000 / (3·231 V) = 11.54 → 11.5 A (0.1 A
-    //   rounding), six ways = 69.0 A per line (the incomer basis).
-    //   Diversified:   28.8 kW → 69.0 × 0.6 = 41.4 A.
-    //   PLN 33 kVA limiter: 33000 / (√3·400) = 47.6 A ≥ 41.4 ⇒ no trip.
-    //   A 23 kVA service: 23000 / 692.8 = 33.2 A < 41.4 ⇒ trips.
+    //   Undiversified: each way Ib = 8000 / (√3·400 V) = 11.547 A; Round 43
+    //   — the line sums the EXACT way currents and rounds once: six ways =
+    //   69.28 → 69.3 A per line (the incomer basis; was 6 × 11.5 = 69.0).
+    //   Diversified:   28.8 kW → 69.3 × 0.6 = 41.58 → 41.6 A.
+    //   PLN 33 kVA limiter: 33000 / (√3·400) = 47.6 A ≥ 41.6 ⇒ no trip.
+    //   A 23 kVA service: 23000 / 692.8 = 33.2 A < 41.6 ⇒ trips.
     ElectricalProject project(double? capacityVa) => ElectricalProject(
           id: 'p',
           supplyCapacityVa:
@@ -804,8 +805,9 @@ void main() {
       final base = computeSystem(p, project(null));
       final mdp = base.panels['mdp']!;
       expect(mdp.demandW, closeTo(28800, 1e-6));
-      expect(mdp.demandCurrent.amperes, closeTo(69.0, 1e-9));
-      expect(mdp.diversifiedDemandCurrent.amperes, closeTo(41.4, 1e-9));
+      expect(mdp.demandCurrent.amperes, closeTo(69.3, 1e-9));
+      // 69.3 × 0.6 = 41.58 A (printed 41.6).
+      expect(mdp.diversifiedDemandCurrent.amperes, closeTo(41.58, 1e-9));
       final rec =
           computeAdvancedStudy(p, project(null), base).recommendedDayaVa!;
       expect(rec, greaterThanOrEqualTo(28800));
@@ -813,13 +815,13 @@ void main() {
       expect(svc(sys), isEmpty);
       // The incomer still sizes conservatively on the undiversified 69.3 A.
       expect(sys.panels['mdp']!.incomer.breaker.ratingA.amperes,
-          greaterThanOrEqualTo(69.0));
+          greaterThanOrEqualTo(69.3));
     });
 
     test('a 23 kVA service below the 28.8 kVA diversified demand trips', () {
       final w = svc(computeSystem(p, project(23000)));
       expect(w, hasLength(1));
-      expect(w.single.message, contains('diversified demand 41.4 A'));
+      expect(w.single.message, contains('diversified demand 41.6 A'));
     });
   });
 }

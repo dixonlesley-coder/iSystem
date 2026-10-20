@@ -349,11 +349,13 @@ void main() {
       ],
     );
     final sys = computeSystem(_p, proj);
-    // SDP worst phase = 3 × 28.9 A (each way 20 000/(√3·400) = 28.87 → 28.9)
-    // = 86.7 A UNdiversified; the feeder carries the diversified 36 kW ⇒
-    // 36 000/(√3·400) = 51.96 → 52.0 A ⇒ 63 A, judged against
-    // 86.7 × 0.6 = 52.0 A (was against the raw 86.7 A ⇒ a false warning).
-    expect(sys.panels['SDP']!.demandCurrent.amperes, 86.7);
+    // SDP worst phase = 3 × 28.868 A (each way 20 000/(√3·400)) = 86.60 →
+    // 86.6 A UNdiversified (Round 43: the exact way currents are summed and
+    // rounded once — never 3 × 28.9 = 86.7); the feeder carries the
+    // diversified 36 kW ⇒ 36 000/(√3·400) = 51.96 → 52.0 A ⇒ 63 A, judged
+    // against 86.60 × 0.6 = 51.96 A (was against the raw 86.6 A ⇒ a false
+    // warning).
+    expect(sys.panels['SDP']!.demandCurrent.amperes, 86.6);
     final f = sys.panels['MDP']!.circuits.single;
     expect(f.designCurrent.amperes, 52.0);
     expect(sys.panels['MDP']!.warnings.map((w) => w.code),

@@ -203,11 +203,12 @@ void main() {
       expect(p1.designCurrent.amperes, closeTo(roundTo(flc * 0.5, 1), 1e-9));
       // Its own device still sizes on the undiversified 57.88 A ⇒ ≥ 63 A.
       expect(p1.breaker.ratingA.amperes, greaterThanOrEqualTo(flc));
-      // Board demand current 2 × 28.9 = 57.8 A ⇒ incomer 63 A (was 125 A),
-      // identical to the watts entry.
+      // Board demand current 2 × 28.94 = 57.88 → 57.9 A (Round 43: the exact
+      // way currents summed and rounded once, never 2 × 28.9) ⇒ incomer 63 A
+      // (was 125 A), identical to the watts entry.
       final mccKw = kw.panels['MCC']!;
       final mccW = w.panels['MCC']!;
-      expect(mccKw.demandCurrent.amperes, closeTo(57.8, 1e-9));
+      expect(mccKw.demandCurrent.amperes, closeTo(roundTo(flc, 1), 1e-9));
       expect(mccKw.demandCurrent.amperes, mccW.demandCurrent.amperes);
       expect(mccKw.incomer.breaker.ratingA.amperes,
           mccW.incomer.breaker.ratingA.amperes);

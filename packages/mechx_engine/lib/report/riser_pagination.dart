@@ -51,9 +51,19 @@ List<SldSheet> paginatedRiserSheets({
 }) {
   double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
+  // Round 43 (electrical-sim-8-riser-floor-band-illegible) — a page whose
+  // floors are WIDTH-bound (17 boards side by side on one storey) cannot
+  // reach the plotted floor by any floor split: it is flagged with the size
+  // it really prints at, so the issued sheet says so instead of silently
+  // printing ~1.7 pt tags.
+  SldSheet flagged(SldSheet p) {
+    final pt = minPt(p);
+    return pt < kMinPlotLabelPt - 1e-9 ? p.withBelowMinLabelPt(pt) : p;
+  }
+
   final whole = build(null);
   if (levelCount <= 1 || minPt(whole) >= kMinPlotLabelPt - 1e-9) {
-    return [whole];
+    return [flagged(whole)];
   }
   // Round 40 (elec-drawings-5-riser-pagination-global-cap-shrinks-all-
   // pages) — paginate GREEDILY per chunk from floor 0 upward. Each floor's
@@ -89,6 +99,6 @@ List<SldSheet> paginatedRiserSheets({
     lo = hi + 1;
   }
   // One chunk spanning every floor IS the whole sheet.
-  if (pages.length == 1) return [whole];
-  return pages.reversed.toList();
+  if (pages.length == 1) return [flagged(whole)];
+  return [for (final p in pages.reversed) flagged(p)];
 }

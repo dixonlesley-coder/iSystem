@@ -179,6 +179,7 @@ Uint8List electricalSldDetailToPdf({
   Map<String, double>? breakerIcuKaByPanelId,
   Map<String, double>? breakerKaByCircuitId,
   Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
   String? projectName,
 }) {
   // Round 14 (drafting-visual-1) — [projectName] overrides the electrical
@@ -191,7 +192,8 @@ Uint8List electricalSldDetailToPdf({
       result: result,
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
       breakerKaByCircuitId: breakerKaByCircuitId,
-      containmentByCircuitId: containmentByCircuitId);
+      containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds);
   final minPt = sldSinglePageMinLabelPt(whole,
       chrome: chrome, projectName: pname, diagramTitle: diagramTitle);
   // Round 34 — one page only when it really prints at the floor: a single
@@ -214,6 +216,7 @@ Uint8List electricalSldDetailToPdf({
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
       breakerKaByCircuitId: breakerKaByCircuitId,
       containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds,
       projectName: pname);
 }
 
@@ -233,6 +236,7 @@ List<SldSheet> electricalBoardScheduleSheets({
   Map<String, double>? breakerIcuKaByPanelId,
   Map<String, double>? breakerKaByCircuitId,
   Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
   String projectName = 'Untitled project',
 }) {
   SldSheet build(({int lo, int hi})? r) => buildElectricalSld(
@@ -242,6 +246,7 @@ List<SldSheet> electricalBoardScheduleSheets({
       breakerIcuKaByPanelId: breakerIcuKaByPanelId,
       breakerKaByCircuitId: breakerKaByCircuitId,
       containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds,
       wayRange: r);
   bool legible(SldSheet s) =>
       sldSinglePageMinLabelPt(s,
@@ -420,6 +425,14 @@ String _sldPageContent({
         '${_n(_margin + 6)} ${_n(_pageH - _margin - 12)} Td '
         '(${_pdfText(overlapNote)}) Tj ET');
   }
+  // Round 43 — a page its pagination could not bring to the plotted floor.
+  final legNote = sldLegibilityWarning(sheet.belowMinLabelPt,
+      minPt: kMinPlotLabelPt);
+  if (legNote != null) {
+    cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
+        '${_n(_margin + 6)} ${_n(_pageH - _margin - (overlapNote != null ? 24 : 12))} Td '
+        '(${_pdfText(legNote)}) Tj ET');
+  }
 
   // ── Device legend (KETERANGAN, bottom-left) ─────────────────────────────────
   if (sheet.legend.isNotEmpty) {
@@ -559,6 +572,7 @@ Uint8List electricalSldToPdfPaginated({
   Map<String, double>? breakerIcuKaByPanelId,
   Map<String, double>? breakerKaByCircuitId,
   Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
   String? projectName,
 }) {
   final ids = result.order;
@@ -573,7 +587,8 @@ Uint8List electricalSldToPdfPaginated({
             result: result,
             breakerIcuKaByPanelId: breakerIcuKaByPanelId,
             breakerKaByCircuitId: breakerKaByCircuitId,
-            containmentByCircuitId: containmentByCircuitId),
+            containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds),
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
@@ -596,6 +611,7 @@ Uint8List electricalSldToPdfPaginated({
           breakerIcuKaByPanelId: breakerIcuKaByPanelId,
           breakerKaByCircuitId: breakerKaByCircuitId,
           containmentByCircuitId: containmentByCircuitId,
+          adsFailedCircuitIds: adsFailedCircuitIds,
           projectName: pname),
   ];
   final pages = <String>[

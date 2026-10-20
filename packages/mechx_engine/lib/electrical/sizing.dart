@@ -255,12 +255,19 @@ class CableVoltageDropConstraint {
   final Voltage voltage;
   final bool isLighting;
 
+  /// Round 43 — an optional tighter limit (%) the section must hold, for a
+  /// run that is only PART of the way (a star-delta motor lead judged against
+  /// the limit less the internal supply link's drop). Null ⇒ the profile
+  /// limit (3 % lighting / 5 % otherwise) ⇒ byte-identical.
+  final double? limitPercent;
+
   const CableVoltageDropConstraint({
     required this.length,
     required this.cosPhi,
     required this.threePhase,
     required this.voltage,
     required this.isLighting,
+    this.limitPercent,
   });
 }
 
@@ -320,19 +327,22 @@ CableResult sizeCable(
       ? df
       : df * groupingFactor(profile, g * runs) / groupingFactor(profile, g);
 
-  bool vdOk(double section, int runs) =>
-      vd == null ||
-      voltageDrop(
-        profile,
-        current: Current(designCurrent.amperes / runs),
-        length: vd.length,
-        csaMm2: section,
-        cosPhi: vd.cosPhi,
-        threePhase: vd.threePhase,
-        voltage: vd.voltage,
-        isLighting: vd.isLighting,
-        material: material,
-      ).withinLimit;
+  bool vdOk(double section, int runs) {
+    if (vd == null) return true;
+    final r = voltageDrop(
+      profile,
+      current: Current(designCurrent.amperes / runs),
+      length: vd.length,
+      csaMm2: section,
+      cosPhi: vd.cosPhi,
+      threePhase: vd.threePhase,
+      voltage: vd.voltage,
+      isLighting: vd.isLighting,
+      material: material,
+    );
+    final lim = vd.limitPercent;
+    return lim == null ? r.withinLimit : r.dropPercent <= lim + 1e-9;
+  }
 
   final ampacityRuleBase =
       'Iz {iz}A >= max(In ${_fmt(breakerRating.amperes)}A, '

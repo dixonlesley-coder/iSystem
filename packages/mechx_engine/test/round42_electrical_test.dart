@@ -246,9 +246,15 @@ void main() {
       expect(leadLine.qty, 2 * 55);
       final supply = cables.where((l) => !l.description.contains('leads'));
       expect(supply.single.qty, kStarDeltaInternalWiringM);
-      // Copper bought = leads (2 x 55 m x (3 x 120 + 120)) + the internal
+      // Copper bought = leads (2 x 55 m x (3 x 150 + PE)) + the internal
       // link (2 m x the supply make-up) — the supply at 55 m is gone.
-      expect(leads.csaMm2, 120);
+      // Round 43 re-derivation: Ib 289.4 A, I_w = 289.4/√3 = 167.1 A, Iz
+      // needed 1.25 x 167.1 = 208.9 A. The two lead cables are 2 grouped
+      // circuits (gf 0.80): 120 mm2 (Iz x 0.80 < 208.9 A) -> 150 mm2
+      // (deratedIz 209.6 A).
+      expect(leads.deratingFactor, closeTo(0.80, 1e-9));
+      expect(leads.deratedIz.amperes, greaterThanOrEqualTo(1.25 * 289.4 / math.sqrt(3)));
+      expect(leads.csaMm2, 150);
       expect(cables.map((l) => l.qty).fold<double>(0, (a, b) => a + b),
           2 * 55 + kStarDeltaInternalWiringM);
     });
@@ -264,8 +270,10 @@ void main() {
       expect(cc.count, 2);
       expect(cc.conduit.conduitSizeMm,
           sizeConduit(ch.motorLeads!.csaMm2, 4).conduitSizeMm);
-      // Vd = the internal link (Ib, 2 m, supply section) + each lead
-      // (Ib/√3, 55 m, lead section) on the 3φ formula.
+      // Vd = the internal link (Ib, 2 m, supply section) + the lead run.
+      // Round 43: each winding sits between its own two lead conductors, so
+      // the lead drop is the single-phase LOOP 2·I_w·Z·L at I_w = Ib/√3
+      // against 400 V (never the balanced √3 factor).
       final internal = voltageDrop(_p,
           current: ch.runCurrentA,
           length: const Length(kStarDeltaInternalWiringM),
@@ -279,7 +287,7 @@ void main() {
           length: const Length(55),
           csaMm2: ch.motorLeads!.csaMm2,
           cosPhi: 0.85,
-          threePhase: true,
+          threePhase: false,
           voltage: const Voltage(400),
           isLighting: false);
       expect(ch.voltageDrop.dropPercent,

@@ -194,7 +194,7 @@ List<BomLine> advancedBomLines({
     lines.add(BomLine(
       description:
           'SPD ${r.type.label} $conn Uc $uc V — ${panelName[id] ?? id}',
-          location: panelName[id] ?? id,
+      location: panelName[id] ?? id,
       qty: 1,
       category: PartCategory.accessory,
       priceKey: '${kElecPriceKeyPrefix}spd:${r.type.name}:${uc}v:'
@@ -308,7 +308,8 @@ List<BomLine> containmentBomLines(
 /// schedule draws: every 3-phase board carries V / A / Hz panel meters, a
 /// kWh meter (`kWh direct` whole-current, else CT-operated) and, when
 /// CT-operated, one CT set (3 CTs of the study's ratio + class). Single-phase
-/// final boards carry no metering (the schedule draws none). CTs stay
+/// final boards carry no metering unless sub-metered
+/// ([ElectricalPanel.submeter]: the kWh meter only, Round 43). CTs stay
 /// UNMATCHED on `elec:ct:<ratio>:<class>`: the catalogue CTs declare no
 /// accuracy class, so a revenue 0.5S CT can never be confirmed from it.
 List<BomLine> meteringBomLines(
@@ -318,29 +319,35 @@ List<BomLine> meteringBomLines(
   final out = <BomLine>[];
   final panels = [...project.panels]..sort((a, b) => a.id.compareTo(b.id));
   for (final p in panels) {
-    if (p.system != ElectricalSystem.threePhase) continue;
+    // Round 43 (electrical-sim-8-tenant-submeter-flag-ignored) — a
+    // SUB-METERED (tenant) board of any system carries its revenue kWh meter
+    // (+ CTs when CT-operated); the V / A / Hz panel instruments stay a
+    // 3-phase board's. A non-sub-metered 1φ board carries none.
+    final threePhase = p.system == ElectricalSystem.threePhase;
+    if (!threePhase && !p.submeter) continue;
     final m = metering[p.id];
     if (m == null) continue;
     final where = p.name;
-    for (final (label, key) in const [
-      ('Voltmeter', 'voltmeter'),
-      ('Ammeter', 'ammeter'),
-      ('Frequency meter', 'frequency'),
-    ]) {
-      out.add(BomLine(
-        description: '$label (panel) — $where',
-        location: where,
-        qty: 1,
-        category: PartCategory.accessory,
-        priceKey: '${kElecPriceKeyPrefix}meter:$key',
-      ));
-    }
+    if (threePhase)
+      for (final (label, key) in const [
+        ('Voltmeter', 'voltmeter'),
+        ('Ammeter', 'ammeter'),
+        ('Frequency meter', 'frequency'),
+      ]) {
+        out.add(BomLine(
+          description: '$label (panel) — $where',
+          location: where,
+          qty: 1,
+          category: PartCategory.accessory,
+          priceKey: '${kElecPriceKeyPrefix}meter:$key',
+        ));
+      }
     final direct = m.metering == MeteringKind.direct;
     out.add(BomLine(
       description: direct
           ? 'kWh meter, direct (whole-current) — $where'
           : 'kWh meter, CT-operated — $where',
-          location: where,
+      location: where,
       qty: 1,
       category: PartCategory.accessory,
       priceKey: '${kElecPriceKeyPrefix}meter:kwh:${direct ? 'direct' : 'ct'}',
@@ -350,8 +357,8 @@ List<BomLine> meteringBomLines(
       out.add(BomLine(
         description: 'Current transformer ${m.ctRatio}A cl.$cls'
             '${m.ladderExceeded ? ' (special ratio required)' : ''} — $where',
-            location: where,
-        qty: 3,
+        location: where,
+        qty: threePhase ? 3 : 1,
         category: PartCategory.accessory,
         priceKey: '${kElecPriceKeyPrefix}ct:${_keyToken(m.ctRatio!)}:'
             '${_keyToken(cls)}',
