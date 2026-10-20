@@ -1578,23 +1578,19 @@ List<AirSystem> airSystemsFor(
   return out;
 }
 
-/// The PRIMARY system of one air [service] (the largest delivered airflow) —
-/// zero (and no fan node) when nothing is sized.
-({FlowRate trunk, Pressure stat, String? fanNodeId}) _airSystem(
-  Network net,
-  Map<String, EdgeSizing> sizing,
-  ProjectState project,
-  ServiceType service, {
-  Set<String> parallelLegs = const {},
-}) {
-  final all = airSystemsFor(net, sizing, project, service,
-      parallelLegs: parallelLegs);
-  if (all.isEmpty) {
-    return (trunk: const FlowRate(0), stat: const Pressure(0), fanNodeId: null);
-  }
-  final s = all.first;
-  return (trunk: s.trunk, stat: s.stat, fanNodeId: s.fanNodeId);
-}
+/// Every drawn system of one air [service] ([airSystemsFor] over the live
+/// sizing), solved ONCE per edit — drafting-feel perf: the fan duties, the
+/// system roots and the air balance each used to re-run every duct-static
+/// solve for themselves.
+final airSystemsProvider =
+    Provider.family<List<AirSystem>, ServiceType>((ref, service) =>
+        airSystemsFor(
+          ref.watch(sizingNetworkProvider),
+          ref.watch(sizingProvider),
+          ref.watch(projectControllerProvider),
+          service,
+          parallelLegs: ref.watch(parallelLegEdgeIdsProvider),
+        ));
 
 /// mech-building-4 — the equipment INTERNAL static (filter + coil + casing) of
 /// the air unit a drawn duct system is rooted at: the drawn-network solve only
@@ -1623,12 +1619,8 @@ Pressure airUnitInternalStatic(NetNode? source) {
 /// duty instead of being dropped. Empty when nothing is sized.
 final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
-  final sizing = ref.watch(sizingProvider);
-  final project = ref.watch(projectControllerProvider);
-  final supplies = airSystemsFor(net, sizing, project, ServiceType.duct,
-      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
-  final rets = airSystemsFor(net, sizing, project, ServiceType.returnAir,
-      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
+  final supplies = ref.watch(airSystemsProvider(ServiceType.duct));
+  final rets = ref.watch(airSystemsProvider(ServiceType.returnAir));
   final supplyRoots = {for (final s in supplies) s.fanNodeId};
   final consumed = <String>{};
   final out = <String, FanDuty>{};
@@ -1705,12 +1697,8 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
 
 /// Round 11 — one EXHAUST fan duty per drawn exhaust system, keyed by its root.
 final exhaustFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
-  final net = ref.watch(sizingNetworkProvider);
-  final sizing = ref.watch(sizingProvider);
-  final project = ref.watch(projectControllerProvider);
   return {
-    for (final ex in airSystemsFor(net, sizing, project, ServiceType.exhaust,
-      parallelLegs: ref.watch(parallelLegEdgeIdsProvider)))
+    for (final ex in ref.watch(airSystemsProvider(ServiceType.exhaust)))
       ex.fanNodeId:
           sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat),
   };
@@ -1734,18 +1722,14 @@ final ductFanProvider = Provider<FanDuty?>((ref) {
 /// panel way and the schedule tag all name ONE drawn machine (audit r8).
 final airSystemRootNodesProvider =
     Provider<({String? supply, String? exhaust})>((ref) {
-  final net = ref.watch(sizingNetworkProvider);
-  final sizing = ref.watch(sizingProvider);
-  final project = ref.watch(projectControllerProvider);
-  final supply = _airSystem(net, sizing, project, ServiceType.duct,
-      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
-  final ret = _airSystem(net, sizing, project, ServiceType.returnAir,
-      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
-  final ex = _airSystem(net, sizing, project, ServiceType.exhaust,
-      parallelLegs: ref.watch(parallelLegEdgeIdsProvider));
+  String? primaryRoot(ServiceType service) {
+    final all = ref.watch(airSystemsProvider(service));
+    return all.isEmpty ? null : all.first.fanNodeId;
+  }
+
   return (
-    supply: supply.fanNodeId ?? ret.fanNodeId,
-    exhaust: ex.fanNodeId,
+    supply: primaryRoot(ServiceType.duct) ?? primaryRoot(ServiceType.returnAir),
+    exhaust: primaryRoot(ServiceType.exhaust),
   );
 });
 
@@ -1765,13 +1749,9 @@ final exhaustFanProvider = Provider<FanDuty?>((ref) {
 /// there's no sized air network.
 final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
   (ref) {
-    final net = ref.watch(sizingNetworkProvider);
-    final sizing = ref.watch(sizingProvider);
-    final project = ref.watch(projectControllerProvider);
-    double total(ServiceType service) =>
-        airSystemsFor(net, sizing, project, service,
-      parallelLegs: ref.watch(parallelLegEdgeIdsProvider))
-            .fold(0.0, (a, s) => a + s.trunk.inLitersPerSecond);
+    double total(ServiceType service) => ref
+        .watch(airSystemsProvider(service))
+        .fold(0.0, (a, s) => a + s.trunk.inLitersPerSecond);
     final supply = total(ServiceType.duct);
     final ret = total(ServiceType.returnAir);
     if (supply <= 0 && ret <= 0) return null;

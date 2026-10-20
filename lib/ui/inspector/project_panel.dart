@@ -1085,7 +1085,6 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // statement of its air handling). A room served by AC units schedules THOSE
   // units instead (below), so every scheduled unit has exactly one electrical
   // way and vice versa (audit r8 coupling-6).
-  final ducts = ref.read(ductSettingsProvider);
   final rooms = ref.read(roomAreasProvider);
   final usedNodeTags = nodeTags.values.toSet();
   // Round 27 (hvac-4-3) — a room's own row is dropped only when a drawn,
@@ -1093,15 +1092,10 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // never because some duct exists elsewhere in the project.
   final sizedEdgeIds = ref.read(sizingProvider).keys.toSet();
   final roomAirUnits = ref.read(roomAirUnitDutiesProvider);
+  final roomSizing = ref.read(roomSizingProvider);
   for (var i = 0; i < rooms.length; i++) {
     final r = rooms[i];
-    final cal = project.calibrationFor(r.sheetId);
-    final sizing = r.sizing(
-      cal?.metersPerPixel,
-      ductShape: ducts.shape,
-      ductMethod: ducts.method,
-      rooms: rooms,
-    );
+    final sizing = roomSizing[r.id];
     if (sizing == null) continue;
     // Round 11 (hvac-network-2) — an EXTRACT room (toilet / kitchen) is served
     // by an exhaust fan, never an AHU/FCU: scheduled as an EF row (stable per
@@ -1275,7 +1269,7 @@ void watchEquipmentSpecInputs(WidgetRef ref) {
   ref.watch(ductFanProvider);
   ref.watch(ductSettingsProvider);
   ref.watch(roomAreasProvider);
-  ref.watch(networkControllerProvider);
+  ref.watch(sizingNetworkProvider);
   ref.watch(exhaustFanProvider);
   ref.watch(coolingLoadMethodProvider);
   ref.watch(electricalResultProvider);
@@ -3901,8 +3895,9 @@ class _RoomsSection extends ConsumerWidget {
     if (rooms.isEmpty) return const SizedBox.shrink();
     final cal = ref.watch(projectControllerProvider).calibrationFor(sheet.id);
     final ducts = ref.watch(ductSettingsProvider);
+    final roomSizing = ref.watch(roomSizingProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
-    final nodes = ref.watch(networkControllerProvider).network.nodes;
+    final nodes = ref.watch(sizingNetworkProvider).nodes;
     // E6: the open master-detail row is the shared canvas selection.
     final sel = ref.watch(selectedAnnotationProvider);
     final expandedRoomId = (sel != null && sel.kind == AnnotationKind.room)
@@ -3953,12 +3948,7 @@ class _RoomsSection extends ConsumerWidget {
           for (final r in rooms) ...[
             Builder(
               builder: (context) {
-                final s = r.sizing(
-                  cal?.metersPerPixel,
-                  ductShape: ducts.shape,
-                  ductMethod: ducts.method,
-                  rooms: rooms,
-                );
+                final s = roomSizing[r.id];
                 // AC cooling — computed once so the compact row can flag an
                 // over-range unit and the expanded editor can detail it.
                 // Round 20 (hvac-3-1) — the units this room OWNS (smallest
@@ -4847,25 +4837,19 @@ class _FireSection extends ConsumerWidget {
     final standpipe = ref.watch(standpipeDesignProvider);
     final rating = ref.watch(firePumpRatingProvider);
     final ratedPoint = ref.watch(fireRatedPointProvider);
-    final hasHydrantEdges = ref
-        .watch(networkControllerProvider)
-        .network
+    final hasHydrantEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any((e) => e.service == ServiceType.fireHydrant);
-    final hasSprinklerEdges = ref
-        .watch(networkControllerProvider)
-        .network
+    final hasSprinklerEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any((e) => e.service == ServiceType.fireSprinkler);
     final standpipeRisers = drawnStandpipeRiserCount(
-        ref.watch(networkControllerProvider).network);
+        ref.watch(sizingNetworkProvider));
     // E11: the whole fire design derives from occupancy/height/hazard alone, so
     // it computes even with NO fire pipework drawn. Detect real sprinkler/
     // hydrant edges so the verdict is honest — a preliminary 'draft' from
     // building defaults, not a validated 'rated', until fire runs exist.
-    final hasFireEdges = ref
-        .watch(networkControllerProvider)
-        .network
+    final hasFireEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any(
           (e) =>
@@ -5121,7 +5105,7 @@ class _SelectionSection extends ConsumerWidget {
     final selection = ref.watch(selectionProvider);
     if (selection.isEmpty) return const SizedBox.shrink();
 
-    final net = ref.watch(networkControllerProvider).network;
+    final net = ref.watch(sizingNetworkProvider);
     final ctrl = ref.read(networkControllerProvider.notifier);
     final selCtrl = ref.read(selectionProvider.notifier);
 
@@ -5549,7 +5533,7 @@ class _SelectionSection extends ConsumerWidget {
     SelectionController selCtrl,
   ) {
     final project = ref.watch(projectControllerProvider);
-    final net = ref.watch(networkControllerProvider).network;
+    final net = ref.watch(sizingNetworkProvider);
     // Round 21 review — a node on a GRAVITY riser reads the same riser-end
     // datum its riser length is measured from (one engine helper, shared
     // with the Layout hover FFL chip).

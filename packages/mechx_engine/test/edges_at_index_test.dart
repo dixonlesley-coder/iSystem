@@ -41,11 +41,11 @@ void main() {
     const b = NetNode(id: 'b', sheetId: 's', x: 1, y: 0, floorIndex: 0);
     const e1 = NetEdge(
         id: 'e1', fromId: 'a', toId: 'b', service: ServiceType.coldWater);
-    final net1 = Network(nodes: const [a, b], edges: const [e1]);
+    const net1 = Network(nodes: [a, b], edges: [e1]);
     expect(net1.edgesAt('a').map((e) => e.id), ['e1']);
-    final net2 = net1.copyWith(edges: [
+    final net2 = net1.copyWith(edges: const [
       e1,
-      const NetEdge(
+      NetEdge(
           id: 'e2', fromId: 'b', toId: 'a', service: ServiceType.drainage),
     ]);
     expect(net2.edgesAt('a').map((e) => e.id), ['e1', 'e2']);

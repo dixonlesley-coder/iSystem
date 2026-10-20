@@ -315,6 +315,7 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
 
     final painter = _RoomPainter(
       rooms: mine,
+      roomSizing: ref.watch(roomSizingProvider),
       transform: transform,
       calibration: calibration,
       dragStart: widget.active ? _dragStart : null,
@@ -350,6 +351,10 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
 
 class _RoomPainter extends CustomPainter {
   final List<RoomArea> rooms;
+
+  /// The shared per-room sizing ([roomSizingProvider]) — never re-sized inside
+  /// paint (drafting-feel perf).
+  final Map<String, RoomAirResult?> roomSizing;
   final ViewportTransform transform;
   final ScaleCalibration? calibration;
   final Offset? dragStart;
@@ -360,6 +365,7 @@ class _RoomPainter extends CustomPainter {
 
   _RoomPainter({
     required this.rooms,
+    required this.roomSizing,
     required this.transform,
     required this.calibration,
     required this.dragStart,
@@ -370,7 +376,7 @@ class _RoomPainter extends CustomPainter {
   String _airflowLabel(RoomArea r) {
     final cal = calibration;
     if (cal == null) return 'set scale';
-    final s = r.sizing(cal.metersPerPixel, rooms: rooms);
+    final s = roomSizing[r.id];
     if (s == null) return r.name;
     final cfm = s.airflowCfm.round();
     final lps = s.airflow.inLitersPerSecond.round();
@@ -446,6 +452,7 @@ class _RoomPainter extends CustomPainter {
   @override
   bool shouldRepaint(_RoomPainter old) =>
       old.rooms != rooms ||
+      !identical(old.roomSizing, roomSizing) ||
       old.transform != transform ||
       old.calibration != calibration ||
       old.dragStart != dragStart ||

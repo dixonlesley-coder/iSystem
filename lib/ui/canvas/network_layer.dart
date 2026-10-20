@@ -75,9 +75,6 @@ class NetworkLayer extends ConsumerWidget {
     final sizing = ref.watch(sizingProvider);
     final showLabels = ref.watch(showSizingProvider);
     final selection = ref.watch(selectionProvider);
-    // Hover pre-highlight (E7): the single node/edge under the Select cursor,
-    // published by the gesture layer. Null at idle ⇒ no halo (byte-identical).
-    final hover = ref.watch(hoverTargetProvider);
     // Ids of air elements whose velocity is out of band — get an on-plan badge.
     final checks = ref.watch(airVelocityChecksProvider);
     final warningIds = <String>{
@@ -101,13 +98,15 @@ class NetworkLayer extends ConsumerWidget {
     // along its WHOLE chain (collinear segments merged) so couplings fall at true
     // stock-length boundaries (4 m PVC/PPR, 6 m steel), not reset per segment —
     // the efficiency engine for where joints (and so offcuts) land.
-    final edgeCuts = <String, _EdgeCut>{};
-    for (final chain in ref.watch(pipeChainsProvider)) {
-      for (final ce in chain.edges) {
-        edgeCuts[ce.edgeId] =
-            _EdgeCut(ce.offsetAtFromM, ce.offsetAtToM, chain.stockLengthM);
-      }
-    }
+    // Drafting-feel perf: derived once per chain list (not per pan / hover
+    // build — it spans every chain edge in the building).
+    final chains = ref.watch(pipeChainsProvider);
+    final edgeCuts = _edgeCutsCache[chains] ??= {
+      for (final chain in chains)
+        for (final ce in chain.edges)
+          ce.edgeId:
+              _EdgeCut(ce.offsetAtFromM, ce.offsetAtToM, chain.stockLengthM),
+    };
 
     // H5 — the LAID drainage design slope the sizer + calc report actually use
     // (`drainageSlopeProvider`, the Building-page input), NOT the dark
@@ -127,10 +126,10 @@ class NetworkLayer extends ConsumerWidget {
       hiddenServices = ref.watch(hiddenServicesProvider);
     }
 
-    return IgnorePointer(
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: _NetworkPainter(
+    _NetworkPainter painter({String? hoveredNodeId, String? hoveredEdgeId,
+            bool hoverOnly = false}) =>
+        _NetworkPainter(
+          hoverOnly: hoverOnly,
           net: net,
           sheetId: sheetId,
           floorIndex: floorIndex,
@@ -143,8 +142,8 @@ class NetworkLayer extends ConsumerWidget {
           selectedEdgeId: selection.edgeId,
           selectedNodeIds: selection.nodeIds,
           selectedEdgeIds: selection.edgeIds,
-          hoveredNodeId: hover?.nodeId,
-          hoveredEdgeId: hover?.edgeId,
+          hoveredNodeId: hoveredNodeId,
+          hoveredEdgeId: hoveredEdgeId,
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
@@ -153,10 +152,73 @@ class NetworkLayer extends ConsumerWidget {
           unsizedIds: unsizedIds,
           overCapacityIds: overCapacityIds,
           drainageSlope: drainageSlope,
-        ),
+        );
+
+    // Drafting-feel perf: the hover pre-highlight (E7) is its own thin layer
+    // UNDER the drawing (the halo was always painted beneath the element and
+    // its selection halo), so a hover change repaints one halo — never the
+    // whole floor — and the drawing itself sits behind its own repaint
+    // boundary, untouched by chrome / overlay repaints. Null hover ⇒ the halo
+    // layer paints nothing (idle byte-identical).
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Consumer(builder: (context, ref, _) {
+            final hover = ref.watch(hoverTargetProvider);
+            return CustomPaint(
+              size: Size.infinite,
+              painter: painter(
+                  hoverOnly: true,
+                  hoveredNodeId: hover?.nodeId,
+                  hoveredEdgeId: hover?.edgeId),
+            );
+          }),
+          RepaintBoundary(
+            child: CustomPaint(size: Size.infinite, painter: painter()),
+          ),
+        ],
       ),
     );
   }
+
+  static final Expando<Map<String, _EdgeCut>> _edgeCutsCache =
+      Expando<Map<String, _EdgeCut>>();
+}
+
+/// How far outside the canvas an element may sit and still be painted (screen
+/// px) — larger than the widest label chip / equipment tag drawn beside any
+/// element, so culling never changes a visible pixel nor a label collision.
+const double _kCullMargin = 240;
+
+/// Drafting-feel perf — the laid-out run-label painters, keyed by text (the
+/// style is fixed). Every repaint used to lay out every size label again; a
+/// floor's label vocabulary is small (DN15-CW · 3.2 m …), so a bounded cache
+/// turns that into a lookup. Cleared wholesale when full.
+final Map<String, TextPainter> _runLabelCache = <String, TextPainter>{};
+const int _kRunLabelCacheCap = 2048;
+
+TextPainter _runLabelPainter(String text) {
+  final hit = _runLabelCache[text];
+  if (hit != null) return hit;
+  if (_runLabelCache.length >= _kRunLabelCacheCap) {
+    for (final tp in _runLabelCache.values) {
+      tp.dispose();
+    }
+    _runLabelCache.clear();
+  }
+  return _runLabelCache[text] = TextPainter(
+    text: TextSpan(
+      text: text,
+      style: const TextStyle(
+        fontFamily: 'Roboto',
+        fontSize: 10.5,
+        color: Color(0xFFFFFFFF),
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
 }
 
 /// Opacity applied to a service whose discipline is visible but not the active
@@ -272,7 +334,12 @@ class _NetworkPainter extends CustomPainter {
   /// without it (tests / other hosts) is byte-identical.
   final double drainageSlope;
 
+  /// Paint ONLY the hover halos (the thin layer under the drawing); the full
+  /// drawing is painted by a second instance with no hover ids.
+  final bool hoverOnly;
+
   _NetworkPainter({
+    this.hoverOnly = false,
     required this.net,
     required this.sheetId,
     required this.floorIndex,
@@ -360,6 +427,14 @@ class _NetworkPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Drafting-feel perf — viewport culling: an element whose screen footprint
+    // misses the canvas by more than [_kCullMargin] (wider than any glyph, chip
+    // or tag drawn beside it) cannot put a single pixel on screen nor collide
+    // with an on-screen label, so skipping it leaves the picture identical
+    // while a zoomed-in view stops paying for the whole floor.
+    final cull = size.isFinite
+        ? (Offset.zero & size).inflate(_kCullMargin)
+        : Rect.largest;
     // Incidence collected while drawing pipes: per node, the screen-space unit
     // directions of the run pipes leaving it + the widest pipe + its opacity —
     // used to draw the right fitting (coupling / elbow / tee / cross / cap) where
@@ -408,6 +483,10 @@ class _NetworkPainter extends CustomPainter {
       if (outer > (nodeMaxOuter[b.id] ?? 0.0)) nodeMaxOuter[b.id] = outer;
     }
     final multiService = visibleServices.length > 1;
+    if (hoverOnly) {
+      _paintHoverHalos(canvas, nodeMaxOuter);
+      return;
+    }
 
     for (final e in net.edges) {
       final a = net.nodeById(e.fromId);
@@ -421,6 +500,7 @@ class _NetworkPainter extends CustomPainter {
         if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
         final pa = transform.worldToScreen(Offset(a.x, a.y));
         final pb = transform.worldToScreen(Offset(b.x, b.y));
+        if (!cull.overlaps(Rect.fromPoints(pa, pb))) continue;
         final s = sizing[e.id];
         final outer = _pipeOuterPx(s, e.service);
 
@@ -559,6 +639,7 @@ class _NetworkPainter extends CustomPainter {
         for (final n in [a, b]) {
           if (_onThisFloor(n)) {
             final mp = transform.worldToScreen(Offset(n.x, n.y));
+            if (!cull.contains(mp)) continue;
             // B16 — the riser glyph + its halos grow with the widest incident
             // pipe (floored so a thin riser keeps the compact marker).
             final markerR = glyphRadiusPx(nodeMaxOuter[n.id] ?? 0.0, 7.0);
@@ -596,18 +677,20 @@ class _NetworkPainter extends CustomPainter {
       if (n.component != null || n.role != NodeRole.main) continue;
       final j = joints[n.id];
       if (j == null) continue;
+      final fp = transform.worldToScreen(Offset(n.x, n.y));
+      if (!cull.contains(fp)) continue;
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
-      _paintFitting(
-          canvas, transform.worldToScreen(Offset(n.x, n.y)), j, n.fittingType);
+      _paintFitting(canvas, fp, j, n.fittingType);
     }
 
     // Nodes on top, drawn with a role-distinct glyph and a selection ring.
     for (final n in net.nodes) {
       if (!_onThisFloor(n)) continue;
+      final p = transform.worldToScreen(Offset(n.x, n.y));
+      if (!cull.contains(p)) continue;
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
-      final p = transform.worldToScreen(Offset(n.x, n.y));
       // B16 — the glyph radius grows with the widest incident pipe, floored to
       // the role's current compact size so a thin/unsized node is unchanged; the
       // hover/selection halos ride on it (only exceeding today's fixed sizes
@@ -1090,6 +1173,53 @@ class _NetworkPainter extends CustomPainter {
     }
   }
 
+  /// The E7 hover pre-highlight alone (the [hoverOnly] layer): the same halo
+  /// geometry the full paint used to draw beneath the hovered element.
+  void _paintHoverHalos(Canvas canvas, Map<String, double> nodeMaxOuter) {
+    final halo = Paint()..color = _kSelection.withAlpha(45);
+    final edgeId = hoveredEdgeId;
+    if (edgeId != null) {
+      final e = net.edgeById(edgeId);
+      final a = e == null ? null : net.nodeById(e.fromId);
+      final b = e == null ? null : net.nodeById(e.toId);
+      if (e != null && a != null && b != null && _serviceVisible(e.service)) {
+        if (e.kind == EdgeKind.run) {
+          if (_onThisFloor(a) && _onThisFloor(b)) {
+            canvas.drawLine(
+              transform.worldToScreen(Offset(a.x, a.y)),
+              transform.worldToScreen(Offset(b.x, b.y)),
+              Paint()
+                ..color = halo.color
+                ..strokeWidth = _pipeOuterPx(sizing[e.id], e.service) + 8
+                ..strokeCap = StrokeCap.round
+                ..style = PaintingStyle.stroke,
+            );
+          }
+        } else {
+          for (final n in [a, b]) {
+            if (!_onThisFloor(n)) continue;
+            final markerR = glyphRadiusPx(nodeMaxOuter[n.id] ?? 0.0, 7.0);
+            canvas.drawCircle(transform.worldToScreen(Offset(n.x, n.y)),
+                math.max(13.0, markerR + 5), halo);
+          }
+        }
+      }
+    }
+    final nodeId = hoveredNodeId;
+    if (nodeId != null) {
+      final n = net.nodeById(nodeId);
+      if (n != null && _onThisFloor(n) && _nodeLayer(n).visible) {
+        final incidentOuter = nodeMaxOuter[n.id] ?? 0.0;
+        final glyphR = n.component != null
+            ? glyphRadiusPx(incidentOuter, 9.0)
+            : glyphRadiusPx(
+                incidentOuter, n.role == NodeRole.main ? 3.0 : 4.5);
+        canvas.drawCircle(transform.worldToScreen(Offset(n.x, n.y)),
+            math.max(11.0, glyphR + 2), halo);
+      }
+    }
+  }
+
   /// B15 — the vertical sense of the risers of [svc] meeting at [n]: `up` when a
   /// riser rises to a higher floor from here, `down` when one drops, both when a
   /// riser passes through. Falls back to both when indeterminate so the marker
@@ -1274,18 +1404,7 @@ class _NetworkPainter extends CustomPainter {
   /// sized run never reads identical to an unsized one (B8).
   int? _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
       List<Rect> placedLabels) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: const TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 10.5,
-          color: Color(0xFFFFFFFF),
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    final tp = _runLabelPainter(text);
 
     final runLen = (pb - pa).distance;
     final boxW = tp.width + 8;
@@ -1366,6 +1485,7 @@ class _NetworkPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_NetworkPainter old) =>
+      old.hoverOnly != hoverOnly ||
       old.net != net ||
       old.transform != transform ||
       old.floorIndex != floorIndex ||

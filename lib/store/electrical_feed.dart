@@ -30,7 +30,6 @@ import 'app_state.dart'
     show
         CoolingLoadMethod,
         coolingLoadMethodProvider,
-        ductSettingsProvider,
         kSupplyService;
 import 'fire_store.dart';
 import '../ui/strings/app_strings.dart' show StringKey;
@@ -818,9 +817,8 @@ final roomAirUnitDutiesProvider =
     Provider<Map<String, ({RoomArea room, FanDuty duty})>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final rooms = ref.watch(roomAreasProvider);
-  final project = ref.watch(projectControllerProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
-  final ducts = ref.watch(ductSettingsProvider);
+  final roomSizing = ref.watch(roomSizingProvider);
   bool isAirUnit(NetNode n) =>
       n.component == NodeComponent.ahu || n.component == NodeComponent.fcu;
   final out = <String, ({RoomArea room, FanDuty duty})>{};
@@ -830,12 +828,7 @@ final roomAirUnitDutiesProvider =
         if (isAirUnit(n) && roomUnitOwnerId(n, rooms) == r.id) n,
     ];
     if (owned.isEmpty || owned.any((n) => duties.containsKey(n.id))) continue;
-    final sizing = r.sizing(
-      project.calibrationFor(r.sheetId)?.metersPerPixel,
-      ductShape: ducts.shape,
-      ductMethod: ducts.method,
-      rooms: rooms,
-    );
+    final sizing = roomSizing[r.id];
     if (sizing == null || sizing.extractOnly) continue;
     out[owned.first.id] = (room: r, duty: sizing.equipment);
   }

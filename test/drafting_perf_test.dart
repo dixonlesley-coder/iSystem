@@ -1,13 +1,15 @@
-import 'package:flutter/widgets.dart' show Offset;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/electrical_feed.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 
 import 'test_util.dart';
@@ -129,5 +131,42 @@ void main() {
     expect(identical(c.read(sizingProvider), before), isFalse);
     final moved = c.read(networkControllerProvider).network.nodeById(id)!;
     expect(moved.x, 600 + 6 * 4);
+  });
+
+  test('room air sizing is one shared result that a network edit never '
+      're-runs; a calibration change does', () {
+    final c = drawnProject();
+    addTearDown(c.dispose);
+    c.read(projectControllerProvider.notifier)
+        .setCalibration('s1', const ScaleCalibration(0.01));
+    final id = c.read(roomAreasProvider.notifier).add(
+        sheetId: 's1', floorIndex: 0, ax: 50, ay: 50, bx: 450, by: 350)!;
+    final sizing = c.read(roomSizingProvider);
+    expect(sizing[id], isNotNull);
+    // The Design Issues fan-in reads the same map.
+    c.read(designIssuesProvider);
+    expect(identical(c.read(roomSizingProvider), sizing), isTrue);
+
+    final n = c.read(networkControllerProvider.notifier);
+    n.moveNode(farNode(c), 520, 380);
+    expect(identical(c.read(roomSizingProvider), sizing), isTrue,
+        reason: 'a pipe edit must not re-size every room');
+
+    c.read(projectControllerProvider.notifier)
+        .setCalibration('s1', const ScaleCalibration(0.02));
+    final rescaled = c.read(roomSizingProvider);
+    expect(identical(rescaled, sizing), isFalse);
+    expect(rescaled[id]!.airflow.cubicMetersPerSecond,
+        greaterThan(sizing[id]!.airflow.cubicMetersPerSecond));
+  });
+
+  test('the unconnected-element defects are walked once per edit and shared '
+      'by the issue fan-in and its batch actions', () {
+    final c = drawnProject();
+    addTearDown(c.dispose);
+    final defects = c.read(networkElementDefectsProvider);
+    c.read(designIssuesProvider);
+    c.read(issueBatchActionsProvider);
+    expect(identical(c.read(networkElementDefectsProvider), defects), isTrue);
   });
 }
