@@ -8,6 +8,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/electrical_feed.dart';
+import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/fire_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
@@ -38,7 +40,8 @@ NetEdge _e(String id, String a, String b,
 /// 13 storeys x 3.5 m, ordinary hazard, calibrated at 0.01 m/px. GT -> HP ->
 /// header FH -> a hydrant stack with a hose box per floor; with [sprinkler]
 /// a sprinkler riser off FH serves 4 heads per floor.
-Network _tower({required bool sprinkler}) {
+Network _tower(
+    {required bool sprinkler, int stacks = 1, double sprinklerY = 400}) {
   final nodes = <NetNode>[
     _n('GT', 0, 0, role: NodeRole.plant, c: NodeComponent.groundTank),
     _n('HP', 50, 0, role: NodeRole.plant, c: NodeComponent.pump),
@@ -55,14 +58,25 @@ Network _tower({required bool sprinkler}) {
       ..add(f == 0
           ? _e('s0', 'FH', 'S0')
           : _e('r$f', 'S${f - 1}', 'S$f', k: EdgeKind.riser));
+    if (stacks > 1) {
+      nodes
+        ..add(_n('T$f', 250, 200, floor: f))
+        ..add(_n('HC$f', 300, 200,
+            floor: f, role: NodeRole.fixture, c: NodeComponent.hydrantBox));
+      edges
+        ..add(_e('hc$f', 'T$f', 'HC$f'))
+        ..add(f == 0
+            ? _e('t0', 'FH', 'T0')
+            : _e('tr$f', 'T${f - 1}', 'T$f', k: EdgeKind.riser));
+    }
     if (sprinkler) {
-      nodes.add(_n('Q$f', 150, 400, floor: f));
+      nodes.add(_n('Q$f', 150, sprinklerY, floor: f));
       edges.add(f == 0
           ? _e('q0', 'FH', 'Q0', s: ServiceType.fireSprinkler)
           : _e('qr$f', 'Q${f - 1}', 'Q$f',
               s: ServiceType.fireSprinkler, k: EdgeKind.riser));
       for (var h = 1; h <= 4; h++) {
-        nodes.add(_n('H$f-$h', 150 + 300.0 * h, 400,
+        nodes.add(_n('H$f-$h', 150 + 300.0 * h, sprinklerY,
             floor: f, role: NodeRole.fixture, c: NodeComponent.sprinklerHead));
         edges.add(_e('b$f-$h', h == 1 ? 'Q$f' : 'H$f-${h - 1}', 'H$f-$h',
             s: ServiceType.fireSprinkler));
@@ -104,6 +118,82 @@ FireSystemBasis _basis(Network net) {
 }
 
 void main() {
+  // Round 37 r2 — the literal rated point of the reviewer's 13-level probe
+  // (TWO hydrant stacks), so the hose-basis ARITHMETIC is guarded, not only
+  // the with/without-sprinkler equality:
+  //   static lift  = 12 x 3.5 + 1.2 (hose outlet)          = 43.2 m
+  //   friction     = max(15 m allowance, sized hydrant path ~8.9 m) = 15 m
+  //                  (the sprinkler riser's path is NEVER added)
+  //   residual     = 690 kPa / (1000 x 9.81)                = 70.336 m
+  //   head         = 43.2 + 15 + 70.336                     = 128.536 m
+  //   flow         = 500 + 250 gpm (two stacks) = 750 gpm   = 47.318 L/s
+  //   motor        = the NFPA 20 pick at that point          = 110 kW
+  test('the 13-level two-stack probe pins 128.54 m / 47.32 L/s / 110 kW, '
+      'with or without the sprinkler riser', () {
+    final expectedHead = 12 * 3.5 + 1.2 + 15 + 690e3 / (1000 * 9.81);
+    expect(expectedHead, closeTo(128.54, 0.005));
+    for (final sp in [false, true]) {
+      final b = _basis(_tower(sprinkler: sp, stacks: 2));
+      final r = 'sprinkler: $sp';
+      expect(b.standpipeRisers, 2, reason: r);
+      expect(b.head.meters, closeTo(expectedHead, 1e-6), reason: r);
+      expect(b.head.meters, closeTo(128.54, 0.005), reason: r);
+      expect(b.flow.inLitersPerSecond, closeTo(47.32, 0.005), reason: r);
+      expect(b.flow.inLitersPerSecond, closeTo(750 * 0.0630902, 1e-3),
+          reason: r);
+      expect(b.indexFrictionM, lessThan(15), reason: r);
+      expect(b.duty!.selectedMotor.watts, 110000, reason: r);
+      expect(b.sprinklerGovernsCombined, isFalse, reason: r);
+    }
+  });
+
+  // Round 37 r2 — the recorded 'larger head at its own flow, never both'
+  // decision rates a SPRINKLER-governed combined system at the small
+  // remote-area flow; that is now a judge-only Review warning. A 200 m
+  // sprinkler feed main (sized at up to 6 m/s) pushes the sprinkler head
+  // above the 128.54 m standpipe head.
+  test('a sprinkler-governed combined system raises combined-fire-sprinkler-'
+      'governs (locatable to the duty pump); a hose-governed one does not',
+      () {
+    ProviderContainer build(Network net) {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.read(projectControllerProvider.notifier)
+        ..setFloors(
+            [for (var i = 0; i < 13; i++) Floor('L$i', const Length(3.5))])
+        ..setCalibration('s1', const ScaleCalibration(0.01));
+      c.read(fireHazardProvider.notifier).set(FireHazardClass.ordinaryHazard1);
+      c.read(networkControllerProvider.notifier).loadNetwork(net);
+      // Settle the MEP -> electrical sync before the Review fan-in reads the
+      // electrical result (the sync writes the electrical project).
+      c.read(electricalProjectProvider);
+      c.read(mepAutoFeedCircuitsProvider);
+      return c;
+    }
+
+    final gov = build(_tower(sprinkler: true, sprinklerY: 20000));
+    final b = gov.read(firePumpBasisByNodeProvider)['HP']!;
+    expect(b.sprinklerGovernsCombined, isTrue);
+    expect(b.head.meters, greaterThan(b.standpipe!.pumpHead.meters));
+    expect(b.flow.inLitersPerSecond,
+        lessThan(b.standpipe!.requiredFlow.inLitersPerSecond));
+    final issues = gov
+        .read(designIssuesProvider)
+        .where((i) => i.kind == 'combined-fire-sprinkler-governs:HP')
+        .toList();
+    expect(issues, hasLength(1));
+    expect(issues.single.severity, IssueSeverity.warning);
+    expect(issues.single.locate?.nodeId, 'HP');
+    expect(issues.single.message, contains('31.5 L/s at 128.5 m'));
+
+    final hose = build(_tower(sprinkler: true));
+    expect(
+        hose
+            .read(designIssuesProvider)
+            .any((i) => i.kind.startsWith('combined-fire-sprinkler-governs')),
+        isFalse);
+  });
+
   test('the standpipe rated point is the same with and without the sprinkler '
       'riser drawn off the same header', () {
     final hydrantOnly = _basis(_tower(sprinkler: false));

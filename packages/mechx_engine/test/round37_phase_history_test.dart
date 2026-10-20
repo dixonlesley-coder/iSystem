@@ -113,4 +113,46 @@ void main() {
       expect(imbalanceCode(seeded), imbalanceCode(fresh), reason: reason);
     }
   });
+
+  // Round 37 r2 (edit-fuzz-3-2 residual) — the schedule footer prints the
+  // LABELLED (sticky) lines while the verdict reads the fresh solve. Ways
+  // (A) 9.9 / 1.0 / 2.9 / 8.4, labelled L3 / L1 / L2 / L1:
+  //   labelled  L1 1.0 + 8.4 = 9.4, L2 2.9, L3 9.9 → spread 7.0 / avg 7.4
+  //             = 94.6 %;
+  //   fresh     {9.9} / {8.4} / {1.0, 2.9} = 9.9 / 8.4 / 3.9 → 6.0 / 7.4
+  //             = 81.1 %.
+  // Same worst phase (9.9 A); the spread gain (1.0 A) does not beat the
+  // stickiness threshold, so the labels stay. The message now SAYS the two
+  // figures instead of printing a % the footer contradicts.
+  test('a labelled spread that differs from the judged one is named in the '
+      'imbalance message', () {
+    final panel = ElectricalPanel(id: 'LP', name: 'LP', circuits: [
+      load('w0', 9.9),
+      load('w1', 1.0),
+      load('w2', 2.9),
+      load('w3', 8.4),
+    ]);
+    final seeded = computePanel(p, panel,
+        opts: const ComputePanelOptions(priorAssignment: {
+          'w0': PhaseAssignment.l3,
+          'w1': PhaseAssignment.l1,
+          'w2': PhaseAssignment.l2,
+          'w3': PhaseAssignment.l1,
+        }, phaseReassignThresholdA: 1.0));
+    final fresh = computePanel(p, panel);
+    expect(seeded.phaseBalance.imbalancePercent, closeTo(94.6, 1e-9));
+    expect(fresh.phaseBalance.imbalancePercent, closeTo(81.1, 1e-9));
+    expect(worst(seeded), closeTo(worst(fresh), 1e-9));
+    final w = seeded.warnings
+        .firstWhere((w) => w.code.startsWith('phase-imbalance'));
+    expect(w.code, imbalanceCode(fresh));
+    expect(w.message, contains('unbalanced by 81.1%'));
+    expect(w.message, contains('labelled on this board read 94.6%'));
+    // Unseeded (and a mere relabelling): no note.
+    expect(
+        fresh.warnings
+            .firstWhere((w) => w.code.startsWith('phase-imbalance'))
+            .message,
+        isNot(contains('labelled')));
+  });
 }

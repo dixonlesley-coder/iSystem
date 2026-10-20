@@ -1926,6 +1926,25 @@ ElectricalPanelResult computePanel(
             judged.imbalancePercent;
   }
 
+  // Round 37 r2 (edit-fuzz-3-2 residual) — the schedule footer, inspector
+  // and report print the LABELLED (session-sticky) lines; the verdict above
+  // reads the unseeded `judged` lines. They share the worst phase (the
+  // balancer guarantees it) but the spread may differ by up to the 1.0 A
+  // stickiness threshold — so when the two differ the message says so and
+  // names the labelled figure, instead of silently printing a different %.
+  // A mere relabelling (the same three figures on other lines) is not a
+  // difference worth stating — compare the sorted lines.
+  final judgedSorted = [judged.l1, judged.l2, judged.l3]..sort();
+  final labelledSorted = [balance.l1, balance.l2, balance.l3]..sort();
+  final labelledDiffers = [
+    for (var k = 0; k < 3; k++) (judgedSorted[k] - labelledSorted[k]).abs()
+  ].any((d) => d > 1e-9);
+  final labelledNote = labelledDiffers
+      ? ' (Judged on the engine\'s fresh assignment; the phases currently '
+          'labelled on this board read ${balance.imbalancePercent}% — L1 '
+          '${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A — with the '
+          'same worst phase.)'
+      : '';
   if (overImbalanceLimit && imbalanceReducible) {
     final pinnedWays = [
       for (var i = 0; i < comps.length; i++)
@@ -1941,7 +1960,7 @@ ElectricalPanelResult computePanel(
       severity: WarningSeverity.warning,
       message: 'Phase loading is unbalanced by ${judged.imbalancePercent}% '
           '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A). '
-          '$action — $bestImbalancePercent% is achievable.',
+          '$action — $bestImbalancePercent% is achievable.$labelledNote',
       panelId: panel.id,
     ));
   }
@@ -1962,7 +1981,7 @@ ElectricalPanelResult computePanel(
           '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A) - '
           'inherent to the single-phase load set ($bestImbalancePercent% is the '
           'best any assignment reaches), so no redistribution helps; consider a '
-          'third leg or a 3-phase appliance.',
+          'third leg or a 3-phase appliance.$labelledNote',
       panelId: panel.id,
     ));
   }
@@ -2935,13 +2954,24 @@ ElectricalSystemResult computeSystem(
         rootResult.warnings.add(ElectricalWarning(
           code: 'service-capacity-below-demand',
           severity: WarningSeverity.warning,
+          // Round 37 r2 — on a dual-transformer service the single root
+          // sits on ONE section (coupler normally open), so the figure it is
+          // judged against is that section, never misstated as the declared
+          // total.
           message: '${rootResult.name}: diversified demand '
               '${_num(divA)} A on the worst-loaded '
-              'phase exceeds the declared connection capacity '
-              '${_num(serviceCapacityVa! / 1000)} kVA '
-              '(~${_num(roundTo(serviceMinCurrentA, 1))} A) — the utility '
-              'limiter would trip under the diversified demand; raise the '
-              'subscribed daya or shed load.',
+              'phase exceeds '
+              '${project.dualTransformer ? 'one ${_num(serviceCapacityVa! / 1000)} kVA section of the declared '
+                  '${_num(project.supplyCapacityVa!.voltAmperes / 1000)} kVA '
+                  'connection (bus coupler normally open, '
+                  '~${_num(roundTo(serviceMinCurrentA, 1))} A) — the section '
+                  'would trip under the diversified demand; raise the '
+                  'subscribed daya, split the load across both sections or '
+                  'shed load.' : 'the declared connection capacity '
+                  '${_num(serviceCapacityVa! / 1000)} kVA '
+                  '(~${_num(roundTo(serviceMinCurrentA, 1))} A) — the utility '
+                  'limiter would trip under the diversified demand; raise the '
+                  'subscribed daya or shed load.'}',
           panelId: rootId,
         ));
       }

@@ -184,6 +184,14 @@ class FireSystemBasis {
   final PumpDuty? duty;
   final PumpDuty? jockey;
 
+  /// Round 37 r2 — a COMBINED (sprinkler + hydrant) system whose sprinkler
+  /// HEAD exceeds the standpipe head: the pump is rated on the sprinkler point
+  /// (its small remote-area flow), so the standpipe flow ([standpipe]) at the
+  /// standpipe head is not a rated point — judge-only
+  /// `combined-fire-sprinkler-governs` (the Round-37 'larger head at its own
+  /// flow, never both' residual, surfaced rather than silent).
+  final bool sprinklerGovernsCombined;
+
   const FireSystemBasis({
     required this.system,
     required this.pumpIds,
@@ -196,6 +204,7 @@ class FireSystemBasis {
     this.standpipe,
     required this.duty,
     required this.jockey,
+    this.sprinklerGovernsCombined = false,
   });
 }
 
@@ -273,6 +282,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final Head head;
     final double? friction;
     FireStandpipeDesign? standpipe;
+    var sprinklerGoverns = false;
     ({FlowRate flow, Head head}) sprinklerPoint(double? f) =>
         sprinklerPumpRatedPoint(
           remote: remote,
@@ -300,6 +310,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           flow = sp.flow;
           head = sp.head;
           friction = sprinklerFriction;
+          sprinklerGoverns = true;
         } else {
           flow = st.requiredFlow;
           head = st.pumpHead;
@@ -330,6 +341,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       standpipe: standpipe,
       duty: dutyPump,
       jockey: jockey,
+      sprinklerGovernsCombined: sprinklerGoverns,
     ));
   }
   return out;
