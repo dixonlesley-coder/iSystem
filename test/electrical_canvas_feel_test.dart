@@ -512,6 +512,46 @@ void main() {
   });
 
   testWidgets(
+      'E5 — through the Layout host\'s REAL key routing: arrows nudge the '
+      'electrical multi-selection, Delete removes every member', (tester) async {
+    final container = await _pumpLayoutElectrical(tester);
+    final ctrl = container.read(electricalProjectProvider.notifier);
+    final a = ctrl.addPanelAt(name: 'A', tag: 'A', x: 0, y: 0);
+    final b = ctrl.addPanelAt(name: 'B', tag: 'B', x: 200, y: 0);
+    final layerRect = tester.getRect(_layer);
+    final ga = Offset(layerRect.left + layerRect.width * 0.3,
+        layerRect.top + layerRect.height * 0.3);
+    final gb = ga + const Offset(260, 120);
+    ctrl.setPanelLayoutPos(a, _at(_worldOf(tester, ga)));
+    ctrl.setPanelLayoutPos(b, _at(_worldOf(tester, gb)));
+    await tester.pump();
+    await tester.tapAt(ga);
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.tapAt(gb);
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    expect(container.read(electricalSelectionProvider)!.isMulti, isTrue);
+
+    final a0 = _panel(container, a).layoutPos!;
+    final b0 = _panel(container, b).layoutPos!;
+    final step = calibratedGridWorldStep(0.01);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.pump();
+    expect(_panel(container, a).layoutPos!.y, closeTo(a0.y + 2 * step, 1e-9));
+    expect(_panel(container, b).layoutPos!.y, closeTo(b0.y + 2 * step, 1e-9));
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    await tester.pump();
+    final ids =
+        container.read(electricalProjectProvider).panels.map((p) => p.id);
+    expect(ids, isNot(contains(a)));
+    expect(ids, isNot(contains(b)));
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets(
       'E5 — a blank-plan marquee selects the markers it encloses (window) '
       'and Ctrl+A selects every marker on the sheet', (tester) async {
     final container = await _pumpLayoutElectrical(tester);

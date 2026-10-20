@@ -750,6 +750,18 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       return KeyEventResult.handled;
     }
 
+    // E5 — the electrical LAYER's own keys (Ctrl/Cmd+A selects every marker
+    // on the sheet, Delete/Backspace removes a MULTI-selection in one undo
+    // step); a single selection falls through to the existing branches.
+    if (!ref.read(activeDisciplineProvider).isMechanical) {
+      final at = _currentSheetFloor();
+      if (at != null &&
+          handleElectricalLayerKey(ref, event,
+              sheetId: at.sheetId, floorIndex: at.floorIndex)) {
+        return KeyEventResult.handled;
+      }
+    }
+
     // Copy / paste / delete only act on the mechanical selection (the active
     // mechanical layer). The current sheet/floor mirror what _SharedSheet uses.
     final activeMechanical = ref.read(activeDisciplineProvider).isMechanical;
@@ -1101,9 +1113,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   /// grid step and consume the key; return false (so the canvas pans) when a
   /// text field owns the keyboard, the active layer isn't mechanical, or nothing
   /// is selected.
+  /// The current sheet and the floor it maps to, or null with no sheet.
+  ({String sheetId, int floorIndex})? _currentSheetFloor() {
+    final sheets = ref.read(sheetsControllerProvider);
+    final sheet = sheets.current;
+    if (sheet == null) return null;
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    return (sheetId: sheet.id, floorIndex: sheets.floorFor(sheet.id, levelCount));
+  }
+
   bool handleDirectionalKey(LogicalKeyboardKey key) {
     if (isTextEntryFocused()) return false;
-    if (!ref.read(activeDisciplineProvider).isMechanical) return false;
+    if (!ref.read(activeDisciplineProvider).isMechanical) {
+      // E5 — arrows nudge the electrical layer's selection (one undo step per
+      // burst); nothing movable selected ⇒ false, so the canvas pans.
+      final at = _currentSheetFloor();
+      if (at == null) return false;
+      return nudgeElectricalSelection(ref, key,
+          sheetId: at.sheetId, floorIndex: at.floorIndex);
+    }
     final sel = ref.read(selectionProvider);
     if (!sel.hasSelection) return false;
     final sheet = ref.read(sheetsControllerProvider).current;
