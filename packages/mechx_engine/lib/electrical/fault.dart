@@ -37,7 +37,7 @@ library;
 import 'dart:math' as math;
 
 import '../standards/puil.dart'
-    show BreakerClass, BreakerCurve, ConductorInsulation, ConductorMaterial,
+    show BreakerClass, BreakerClassCode, BreakerCurve, ConductorInsulation, ConductorMaterial,
         ElectricalStandardsProfile;
 import '../units.dart';
 import 'earthing.dart' show EarthingSystem;
@@ -1141,7 +1141,33 @@ FaultStudyResult faultStudy(
         warnings.add(wayIcs);
         icsWarned.add('$panelId|${c.circuitId}');
       }
-      if (!adequate) {
+      // Round 44 (regression-kept-cascade-mcb-raises-breaking-capacity-
+      // error) — an MCB the ENGINE kept on a bus above the MCB ladder (its
+      // cable cannot take, or ADS refuses, the 16 A MCCB frame — compute's
+      // `mcb-backup-protection-required` info) is protected by back-up
+      // (cascade) from the board's incomer: that is a combination to VERIFY
+      // against the manufacturer's cascade table, not an inadequate device.
+      // One judge-only warning names the upstream device and the back-up kA;
+      // an engineer-OVERRIDDEN MCB keeps the error.
+      final cascadeKept = !adequate &&
+          c.breaker.deviceClass == BreakerClass.mcb &&
+          !c.breaker.overridden &&
+          faultA / 1000.0 > breakingCapacityKa[BreakerClass.mcb]!.last + 1e-9;
+      if (cascadeKept) {
+        warnings.add(ElectricalWarning(
+          code: 'cascade-combination-unverified',
+          severity: WarningSeverity.warning,
+          message:
+              '${panelResult.name} / ${c.name}: the ${_fmt(c.breaker.ratingA.amperes)} A '
+              'MCB (${_fmt(ka)} kA) relies on back-up (cascade) protection by '
+              'the ${_fmt(incomer.ratingA.amperes)} A ${incomer.deviceClass.code} '
+              'incomer to reach the ${_fmt(faultKaRounded)} kA prospective '
+              'fault — confirm the combination in the manufacturer\'s cascade '
+              'table (IEC 60898-1 Annex D / IEC 60947-2 Annex A).',
+          panelId: panelId,
+          circuitId: c.circuitId,
+        ));
+      } else if (!adequate) {
         warnings.add(ElectricalWarning(
           code: 'breaking-capacity-inadequate',
           severity: WarningSeverity.error,

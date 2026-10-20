@@ -12,7 +12,9 @@ import 'package:mechx_engine/electrical/advanced_bom.dart';
 import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/busbar.dart';
+import 'package:mechx_engine/electrical/catalog.dart' show PartCategory;
 import 'package:mechx_engine/electrical/containment.dart';
+import 'package:mechx_engine/electrical/fault.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -390,6 +392,72 @@ void main() {
       expect(rowLabels(pr, sys, adv).any((t) => t.contains(' · clipped')),
           isTrue);
       expect(containmentBomLines(sys, adv.containment), isEmpty);
+    });
+  });
+
+  // ── an engine-kept cascade MCB is not a breaking-capacity ERROR ───────────
+  group('regression-kept-cascade-mcb-raises-breaking-capacity-error', () {
+    const ka38 = Current(38000);
+    ElectricalProject jockey({Current? override}) => _board([
+          ElectricalCircuit(
+            id: 'jp',
+            name: 'JP',
+            loadKind: LoadKind.pump,
+            motorKw: 3,
+            cosPhi: 0.85,
+            phases: 3,
+            lifeSafety: true,
+            starterType: StarterType.dol,
+            cableType: 'FRC',
+            breakerOverrideA: override,
+            length: const Length(40),
+          ),
+        ]);
+
+    test('Round-43 jockey (3 kW DOL, FRC, 40 m, 38 kA bus): no error, one '
+        'cascade warning naming the incomer and the back-up kA', () {
+      final pr = jockey();
+      final sys = computeSystem(_p, pr, originFaultLevel: ka38);
+      final w = _way(sys, 'jp');
+      expect(w.breaker.deviceClass, BreakerClass.mcb);
+      expect(w.breaker.overridden, isFalse);
+      // 38 kA > the MCB ladder top (25 kA) ⇒ kept MCB on back-up.
+      expect(sys.warnings.map((x) => x.code),
+          contains('mcb-backup-protection-required'));
+      final fs = faultStudy(sys, pr, _p, originFaultLevel: ka38);
+      final mine = fs.warnings.where((x) => x.circuitId == 'jp').toList();
+      expect(mine.where((x) => x.severity == WarningSeverity.error), isEmpty);
+      final cw = mine
+          .where((x) => x.code == 'cascade-combination-unverified')
+          .single;
+      expect(cw.severity, WarningSeverity.warning);
+      final inc = sys.panels['MDP']!.incomer.breaker;
+      expect(cw.message,
+          contains('${inc.ratingA.amperes.round()} A ${inc.deviceClass.code}'));
+      // The BOM names the cascade instead of flagging the device short.
+      final bom = buildBom(sys,
+          requiredIcuKaByPanelId: faultSpecifiedKa(fs).bus,
+          breakerKaByCircuitId: faultSpecifiedKa(fs).breakers);
+      final line = bom.lines.firstWhere((l) =>
+          l.category == PartCategory.breaker &&
+          l.description.startsWith('MCB ${w.breaker.ratingA.amperes.round()}A'));
+      expect(line.breakingCapacityShort, isFalse);
+      expect(line.description, contains('cascade'));
+    });
+
+    test('an OVERRIDDEN sub-kA MCB still errors', () {
+      final pr = jockey(override: const Current(10));
+      final sys = computeSystem(_p, pr, originFaultLevel: ka38);
+      final w = _way(sys, 'jp');
+      expect(w.breaker.overridden, isTrue);
+      expect(w.breaker.deviceClass, BreakerClass.mcb);
+      final fs = faultStudy(sys, pr, _p, originFaultLevel: ka38);
+      expect(
+          fs.warnings.where((x) =>
+              x.circuitId == 'jp' &&
+              x.code == 'breaking-capacity-inadequate' &&
+              x.severity == WarningSeverity.error),
+          hasLength(1));
     });
   });
 }

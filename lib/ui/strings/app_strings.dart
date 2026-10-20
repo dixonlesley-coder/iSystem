@@ -4508,6 +4508,15 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'Breaking capacity inadequate',
     'Kapasitas pemutusan tidak memadai'
   ),
+  // Round 44 — an engine-kept MCB relying on back-up (cascade) protection.
+  'cascade-combination-unverified': (
+    'Cascade combination to verify',
+    'Kombinasi kaskade perlu diverifikasi'
+  ),
+  'ups-not-sized': (
+    'UPS-backed board: no UPS sized',
+    'Panel ber-UPS: UPS belum diukur'
+  ),
   'ads-disconnection': (
     'Automatic disconnection not met',
     'Pemutusan otomatis tidak terpenuhi'
