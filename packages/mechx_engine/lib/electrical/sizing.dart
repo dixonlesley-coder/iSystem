@@ -293,6 +293,7 @@ CableResult sizeCable(
   bool threePhase = false,
   CableVoltageDropConstraint? vd,
   int groupingCount = 1,
+  double izRequiredMinA = 0,
 }) {
   double kha(double section) =>
       profile.ampacity(section, insulation: insulation, material: material, method: method).amperes;
@@ -302,6 +303,12 @@ CableResult sizeCable(
       : minSectionMm2;
   final factor = profile.continuousLoadFactor.value;
   final izRequired = math.max(breakerRating.amperes, factor * designCurrent.amperes);
+  // Round 38 — an extra TOTAL Iz floor (over all parallel runs) a caller may
+  // impose for a condition the phase current does not express (a feeder's
+  // harmonic NEUTRAL current, four loaded conductors). It only steers which
+  // section / run count is picked; the reported [CableResult.izRequired] stays
+  // the phase-protection basis max(In, factor × Ib). 0 ⇒ byte-identical.
+  final izSelect = math.max(izRequired, izRequiredMinA);
   final df = deratingFactor > 0 ? deratingFactor : 1.0;
   const parallelMaxRuns = 4;
   const parallelMinSection = 50.0;
@@ -335,7 +342,7 @@ CableResult sizeCable(
   for (var runs = 1; runs <= parallelMaxRuns; runs++) {
     final minSec =
         runs == 1 ? minByMaterial : math.max(minByMaterial, parallelMinSection);
-    final izRequiredPerRun = izRequired / runs;
+    final izRequiredPerRun = izSelect / runs;
     final dfRun = dfFor(runs);
     double? ampacityMinSection;
 

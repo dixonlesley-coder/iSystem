@@ -310,6 +310,21 @@ PowerFactorResult powerFactorCorrection(
     stepKvar = capacitorStepKvar(sel.kvar);
     steps = math.max(1, (bankKvar / stepKvar).round());
   }
+  // Round 38 (elec-sizing-supply-4) — the smallest automatic step must not
+  // exceed the reactive demand it corrects: a 10 kvar bank (5 kvar steps) on
+  // a 6.0 kW / pf 0.91 board (2.7 kvar of demand) runs the bus LEADING at
+  // pf 0.64 — never claim it "would raise it to 0.95". Below one step no
+  // automatic bank is recommended.
+  var belowSmallestStep = false;
+  var smallestStepKvar = 0.0;
+  if (bankKvar > 0 && stepKvar * tempDerate > residualKvar + 1e-9) {
+    belowSmallestStep = true;
+    smallestStepKvar = stepKvar;
+    bankKvar = 0;
+    stepKvar = 0;
+    steps = 0;
+    banks = 1;
+  }
 
   // A plain bank on a harmonic-rich bus risks parallel resonance with the
   // supply inductance — detuning reactors (typ. 7 %, 189 Hz) shift the
@@ -325,6 +340,14 @@ PowerFactorResult powerFactorCorrection(
       ? '${installedText}the bus runs LEADING at pf $existingPfR — the '
           'installed compensation exceeds the ${_round(kvar, 1)} kvar reactive '
           'demand; reduce the bank (or its automatic steps).'
+      : belowSmallestStep
+      ? '${installedText}Power factor $existingPfR is below the $targetPf '
+          'target, but the ${_round(residualKvar, 1)} kvar reactive demand is '
+          'below the smallest standard capacitor step '
+          '(${_fmt(smallestStepKvar)} kVAR) — an automatic bank would run the '
+          'bus leading, so none is recommended (correct at the load with a '
+          'fixed ~${_round(requiredKvar, 1)} kvar capacitor if the PLN tariff '
+          'requires it).'
       : installedText + (needed
       ? 'Power factor $existingPfR is below the $pfPenaltyThreshold PLN penalty '
           'threshold — fit ${banks > 1 ? '$banks x ${_fmt(bankKvar / banks)} kVAR '

@@ -261,10 +261,14 @@ double alternatorLineDemandVa(ElectricalProject project,
     final m = modelById[id];
     if (r == null || m == null) continue;
     if (m.system == ElectricalSystem.threePhase) {
+      // Round 38 — the UNSEEDED (history-free) lines: summing the
+      // session-sticky labels across boards made the genset size depend on
+      // the editing history (4.3 kVA live vs reopen on one document).
+      final b = r.historyFreePhaseBalance;
       final d = r.diversityFactor;
-      l1 += r.phaseBalance.l1 * d;
-      l2 += r.phaseBalance.l2 * d;
-      l3 += r.phaseBalance.l3 * d;
+      l1 += b.l1 * d;
+      l2 += b.l2 * d;
+      l3 += b.l3 * d;
       continue;
     }
     final a = r.diversifiedDemandCurrent.amperes;
@@ -272,10 +276,13 @@ double alternatorLineDemandVa(ElectricalProject project,
     final parent = feed == null ? null : sys.panels[feed.$1];
     PhaseAssignment? line;
     if (parent != null && parent.system == ElectricalSystem.threePhase) {
-      for (final cr in parent.circuits) {
-        if (cr.circuitId == feed!.$2) {
-          line = cr.phase;
-          break;
+      line = parent.judgedAssignment[feed!.$2];
+      if (line == null) {
+        for (final cr in parent.circuits) {
+          if (cr.circuitId == feed.$2) {
+            line = cr.phase;
+            break;
+          }
         }
       }
     }

@@ -214,9 +214,19 @@ void main() {
     );
     final r = computeSystem(p, project);
 
-    test('root-first order, no warnings', () {
+    test('root-first order; the only finding is the inverted incomer pair',
+        () {
       expect(r.order, ['MDP', 'SP']);
-      expect(r.warnings, isEmpty);
+      // Round 38 (elec-ui-drawings-6) — MDP's only load is SP: its incomer
+      // sizes on SP's diversified 8 kW = 8000 / (√3·400·1.0) = 11.5 A → 16 A,
+      // while the device-only selectivity floor lifts the feeder towards
+      // 1.6 × SP's 16 A incomer (25.6 A), held at the 25 A its cable
+      // protects — an outgoing device above its own incomer, now reported.
+      expect(r.warnings.map((w) => w.code), ['outgoing-exceeds-incomer']);
+      expect(r.warnings.single.circuitId, 'f1');
+      // The inversion is the engine's OWN selectivity floor (no override), so
+      // it is an INFO note naming the action — never a sign-off blocker.
+      expect(r.warnings.single.severity, WarningSeverity.info);
     });
 
     test('feeder carries the child panel\'s diversified demand (not raw 10 kW)',

@@ -483,6 +483,7 @@ SldSheet buildElectricalSld({
   // tray), so the KETERANGAN keys every abbreviation the schedule uses.
   final usedStarters = <StarterType>{};
   var anyRcd = false;
+  var anyRcdS = false;
   var anyConduit = false;
   var anyTray = false;
 
@@ -517,6 +518,28 @@ SldSheet buildElectricalSld({
     // chosen Icu rating when mapped, else the busbar-withstand prospective fault
     // at the bus, else the project origin fault level (N9); empty (⇒ byte-
     // identical) only when NONE of those is known — never fabricated.
+    // Round 38 (elec-ui-drawings-5) — a SINGLE-PHASE board's ways all solve
+    // to its one line (`l1` locally), but on the issued schedule that line is
+    // the phase its 1φ feeder takes on the parent board: print them under that
+    // phase (R / S / T), never always under R. Unknown (a root 1φ board, or a
+    // feeder not on one line) ⇒ the local assignment as before.
+    PhaseAssignment? boardLine;
+    if (!p.system.isThreePhase) {
+      final par = parentOf[id];
+      final parentModel = par == null ? null : modelById[par];
+      final feedId = parentModel?.circuits
+          .where((c) => c.feedsPanelId == id)
+          .firstOrNull
+          ?.id;
+      final fr = feedId == null
+          ? null
+          : result.panels[par]?.circuits
+              .where((r) => r.circuitId == feedId)
+              .firstOrNull;
+      if (fr != null && fr.phase != PhaseAssignment.threePhase) {
+        boardLine = fr.phase;
+      }
+    }
     final icuKa = _panelIcuKa(id, p, project, breakerIcuKaByPanelId);
     final kaSuffix = icuKa != null ? ' ${_num(icuKa)}kA' : '';
     if (icuKa != null) anyIcuKa = true;
@@ -554,8 +577,15 @@ SldSheet buildElectricalSld({
         '${p.name}$tag${isEssential ? ' · ESSENTIAL (GENSET)' : ''}$chunkNote',
         size: 13, bold: true, role: frameRole));
     final v = model?.voltage.volts ?? (p.system.isThreePhase ? 400 : 230);
-    final icw = p.busbar.withstand != null
-        ? '  Icw ${_num(p.busbar.withstand!.icwKa)}kA'
+    // Round 38 (elec-protection-icw-label-not-1s) — Icw is conventionally
+    // declared on a 1 s basis (IEC 61439-1); the withstand fold evaluates it
+    // at the device clearing time (0.1 s live), 1/√t larger. The duration is
+    // printed whenever it is not 1 s so an assembly is never ordered at a
+    // figure 3.16× its 1 s rating.
+    final w = p.busbar.withstand;
+    final icw = w != null
+        ? '  Icw ${_num(w.icwKa)}kA'
+            '${(w.durationS - 1).abs() > 1e-9 ? '/${_num(w.durationS)}s' : ''}'
         : '';
     if (firstChunk) prims.add(SldLabel(
         blockX + 8,
@@ -758,12 +788,16 @@ SldSheet buildElectricalSld({
       final starter = circuit?.starterType;
       if (starter != null) usedStarters.add(starter);
       if (c.rcd.required) anyRcd = true;
+      if (c.rcd.required && c.rcd.timeDelayed) anyRcdS = true;
       // The RCD / RCBO protection token (N10) — the SAME `RcdSpec` the calc
       // report prints (schedule + report agree), appended only when the way
       // actually carries an RCD (most sockets / TT finals). e.g. `RCD 30mA A`.
       final rcd = c.rcd.required
           ? ' · RCD ${c.rcd.ratingMa}mA'
               '${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
+              // Round 38 — the time-delayed (S-type) marker the BOM orders:
+              // the selectivity of a TT feeder RCD above 30 mA finals.
+              '${c.rcd.timeDelayed ? ' S' : ''}'
           : '';
       // The breaker cell leads with rating + phase, then the Icu suffix (when
       // fed), then the control / starter token, then the RCD token — so the kA
@@ -814,7 +848,21 @@ SldSheet buildElectricalSld({
           size: rowSize));
       // R/S/T loading band — the line current under the way's phase(s), each
       // cell carrying its phase role so the loading reads by colour at a glance.
-      final (r, s, t) = _phaseLoading(c.phase, ib);
+      // Round 38 (elec-ui-drawings-2) — a 3φ feeder to an imbalanced board
+      // prints that board's REAL per-line currents (the figures its phase
+      // balance — and so the TOTAL footer — carries), never its worst line
+      // on all three phases.
+      final lines = c.lineCurrentsA;
+      final (r, s, t) = c.phase == PhaseAssignment.threePhase &&
+              lines != null &&
+              lines.length == 3 &&
+              !capacitorCurrent
+          ? (_amps(lines[0]), _amps(lines[1]), _amps(lines[2]))
+          : _phaseLoading(
+              boardLine != null && c.phase == PhaseAssignment.l1
+                  ? boardLine
+                  : c.phase,
+              ib);
       if (r.isNotEmpty) {
         prims.add(SldLabel(
             blockX + _centredInCell(_cellRL, _cellRR, r, rowSize), rowY + 3, r,
@@ -881,6 +929,17 @@ SldSheet buildElectricalSld({
       prims.add(SldLabel(
           blockX + _centredInCell(_cellTL, _cellTR, l3, rowSize), footerY, l3,
           size: rowSize, bold: true, role: SldRole.phaseT));
+    } else if (boardLine != null && lastChunk) {
+      // The 1φ board's whole current, in its feeder's phase cell.
+      final a = _amps(p.phaseBalance.l1);
+      final (cl, cr, role) = switch (boardLine) {
+        PhaseAssignment.l2 => (_cellSL, _cellSR, SldRole.phaseS),
+        PhaseAssignment.l3 => (_cellTL, _cellTR, SldRole.phaseT),
+        _ => (_cellRL, _cellRR, SldRole.phaseR),
+      };
+      prims.add(SldLabel(
+          blockX + _centredInCell(cl, cr, a, rowSize), footerY, a,
+          size: rowSize, bold: true, role: role));
     }
 
     cursorY = blockY + blockH + _gapY;
@@ -1004,6 +1063,9 @@ SldSheet buildElectricalSld({
   if (anyRcd) {
     legend.add(const SldLegendEntry(
         'RCD', 'Residual current device (rated mA, RCD type)'));
+  }
+  if (anyRcdS) {
+    legend.add(const SldLegendEntry('S', 'Time-delayed RCD (selective)'));
   }
   if (anyConduit) {
     legend.add(const SldLegendEntry('PVC', 'PVC conduit, outer diameter mm'));

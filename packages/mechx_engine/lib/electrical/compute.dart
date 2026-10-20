@@ -35,6 +35,7 @@ import 'fault.dart'
     show
         Impedance,
         conductorImpedance,
+        breakingCapacityKa,
         coldMaxFaultImpedance,
         faultBasisLineVoltageV,
         feederNeutralImpedance,
@@ -49,7 +50,37 @@ import 'headroom.dart' show HeadroomSpec;
 import 'load_kind.dart';
 import 'model.dart';
 import 'panel_results.dart';
+import 'results.dart' show BreakerResult, CableResult;
 import 'sizing.dart';
+import 'supply_design.dart' show plnDayaVa1ph;
+
+/// The LV line voltage (V) of a PLN 3-phase service (230/400 V system) — the
+/// basis a declared 3φ-only daya is converted on when the service-entrance
+/// board is single-phase (Round 38). // VERIFY — secondarySource (PUIL /
+/// SPLN 1 nominal, the profile's `nominalLineVoltage`).
+const double kThreePhaseServiceLineVoltageV = 400;
+
+/// Round 38 (elec-protection-mcb-on-high-fault-bus) — a rating ≤ 63 A is an
+/// MCB only while the MCB breaking-capacity ladder (top rung
+/// `breakingCapacityKa[mcb].last`, 25 kA) covers the prospective fault at the
+/// bus it sits on; above that the SAME rating is specified as an MCCB (MCCB
+/// frames start at 16 A and reach 70 kA, so the fault study then specifies a
+/// rung that clears the fault instead of an un-actionable Icu error on every
+/// ≤ 63 A way of a ≥ ~700 kVA main board: 25e3·√3·400·0.04 = 693 kVA). The
+/// rating, curve and override flag are kept. An unknown bus fault (null / 0)
+/// keeps the rating-only class ⇒ byte-identical. Pure.
+// VERIFY — notAnSniClause (device-class practice, IEC 60898-1 vs 60947-2).
+BreakerResult faultAwareBreakerClass(BreakerResult b, Current? busFault) {
+  if (b.deviceClass != BreakerClass.mcb || busFault == null) return b;
+  final mcbTopKa = breakingCapacityKa[BreakerClass.mcb]!.last;
+  if (busFault.amperes / 1000.0 <= mcbTopKa + 1e-9) return b;
+  return BreakerResult(
+    ratingA: b.ratingA,
+    deviceClass: BreakerClass.mccb,
+    curve: b.curve,
+    overridden: b.overridden,
+  );
+}
 
 /// Practical building power factor used to convert demand kW → kVA for the
 /// supply summary (matches PanelMaker `ASSUMED_BUILDING_PF`). Not a PUIL clause.
@@ -1284,7 +1315,21 @@ _CircuitComputation _computeCircuit(
   // sub-board fed by an 80 A feeder under a 63 A main incomer.
   Current? undiversifiedFlc;
   if (c.flaOverrideA != null) {
-    undiversifiedFlc = c.flaOverrideA!;
+    // Round 38 (elec-sizing-supply-1) — the A5 FLA is minted ONCE at the
+    // minted phases + cos φ (`equipmentFullLoadCurrent` = loadCurrent(input
+    // W, terminal V, cos φ, 3φ)). Once the engineer TYPES the way's phases or
+    // cos φ (provenance flags), that mint is stale — a 3 kW pump set to 1φ was
+    // sized at its 3φ 5.7 A on a 6 A breaker instead of 17.0 A / 20 A. Re-derive
+    // it with the SAME formula on the way's effective phase, voltage and cos φ
+    // (identical to the mint for an untouched way ⇒ byte-identical).
+    undiversifiedFlc = (c.phasesUserSet || c.cosPhiUserSet)
+        ? loadCurrent(
+            power: Power(c.loadW),
+            voltage: Voltage(useVoltageV),
+            cosPhi: cosPhi,
+            threePhase: threePhase,
+          )
+        : c.flaOverrideA!;
   } else if (motorLike) {
     // Shaft kW → electrical input kW via the assumed efficiency (// VERIFY).
     undiversifiedFlc = loadCurrent(
@@ -1402,6 +1447,21 @@ _CircuitComputation _computeCircuit(
     overrideA: c.breakerOverrideA,
   );
 
+  // Round 38 (elec-ui-drawings-4) — a feeder-kind way with no target feeds
+  // nothing, yet it would be sized, scheduled and bought; a desynced / copied
+  // file is never silently scheduled. Judge-only.
+  if (c.loadKind == LoadKind.feeder &&
+      (c.feedsPanelId == null || c.feedsPanelId!.isEmpty)) {
+    warnings.add(ElectricalWarning(
+      code: 'feeder-without-target',
+      severity: WarningSeverity.warning,
+      message: '${c.name}: a feeder way that feeds no board — connect it to '
+          'the board it supplies, or change it to a spare / load way.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
+
   // elec-props-5 — a MANUAL breaker below the current it must carry
   // (Ib > In) trips on normal load. IEC 60364-4-43 / PUIL 2011 require
   // Ib ≤ In ≤ Iz; the In ≤ Iz half is already judged (cable-ampacity-
@@ -1469,24 +1529,25 @@ _CircuitComputation _computeCircuit(
   final fedNeutral = isFeeder && threePhase && c.feedsPanelId != null
       ? opts.feederNeutralLoad[c.feedsPanelId]
       : null;
-  var feederNeutralUpsized = false;
-  if (fedNeutral != null &&
-      fedNeutral.factor > 1 &&
-      def.needsNeutral &&
-      c.cableOverrideMm2 == null) {
+  // Round 38 (regression-feeder-neutral-upsize-stops-at-largest-single-core)
+  // — the neutral condition is sized through sizeCable's OWN parallel-run
+  // ladder (an extra total-Iz floor of neutralA / 0.86), so a neutral above
+  // the largest single section steps into 2..4 parallel runs; afterwards the
+  // condition is RE-CHECKED — also on a hand-overridden cable (never skipped)
+  // — and a neutral still above Iz × 0.86 is an ERROR, never an info note
+  // claiming it is carried.
+  if (fedNeutral != null && fedNeutral.factor > 1 && def.needsNeutral) {
     final neutralA = fedNeutral.factor * fedNeutral.worstPhaseA;
-    for (final sec in profile.standardSectionsMm2) {
-      if (cable.deratedIz.amperes * kFourLoadedConductorFactor >=
-          neutralA - 1e-9) {
-        break;
-      }
-      if (sec <= cable.csaMm2) continue;
-      cable = sizeCable(
+    bool carries(CableResult r) =>
+        r.deratedIz.amperes * kFourLoadedConductorFactor >= neutralA - 1e-9;
+    var upsized = false;
+    if (!carries(cable) && c.cableOverrideMm2 == null) {
+      final candidate = sizeCable(
         profile,
         designCurrent: sizingCurrent,
         breakerRating: loadBreaker.ratingA,
         deratingFactor: df,
-        minSectionMm2: math.max(minSection, sec),
+        minSectionMm2: minSection,
         insulation: cableInsulation,
         material: panel.material,
         method: installMethod,
@@ -1499,10 +1560,34 @@ _CircuitComputation _computeCircuit(
           voltage: Voltage(useVoltageV),
           isLighting: c.isLighting,
         ),
+        izRequiredMinA: neutralA / kFourLoadedConductorFactor,
       );
-      feederNeutralUpsized = true;
+      if (carries(candidate) && candidate.ampacityReached) {
+        cable = candidate;
+        upsized = true;
+      }
     }
-    if (feederNeutralUpsized) {
+    final runs = cable.runsPerPhase ?? 1;
+    final make = runs > 1
+        ? '${runs}x${_num(cable.csaMm2)} mm²'
+        : '${_num(cable.csaMm2)} mm²';
+    if (!carries(cable)) {
+      warnings.add(ElectricalWarning(
+        code: 'feeder-neutral-overloaded',
+        severity: WarningSeverity.error,
+        message: '${c.name}: the fed board\'s single-phase non-linear load '
+            'raises the feeder NEUTRAL current to ~${fedNeutral.factor}x its '
+            '${_num(roundTo(fedNeutral.worstPhaseA, 1))} A worst phase '
+            '(${_num(roundTo(neutralA, 1))} A), above the feeder cable\'s '
+            'Iz x $kFourLoadedConductorFactor = '
+            '${_num(roundTo(cable.deratedIz.amperes * kFourLoadedConductorFactor, 1))} A '
+            '($make, four loaded conductors, IEC 60364-5-52 Annex E) — the '
+            'neutral is overloaded; '
+            '${c.cableOverrideMm2 != null ? 'raise or clear the cable override' : 'split the board or reduce its non-linear load'}.',
+        panelId: panel.id,
+        circuitId: c.id,
+      ));
+    } else if (upsized) {
       warnings.add(ElectricalWarning(
         code: 'harmonics-neutral-oversize',
         severity: WarningSeverity.info,
@@ -1510,7 +1595,7 @@ _CircuitComputation _computeCircuit(
             'raises the feeder NEUTRAL current to ~${fedNeutral.factor}x its '
             '${_num(roundTo(fedNeutral.worstPhaseA, 1))} A worst phase '
             '(${_num(roundTo(neutralA, 1))} A) — feeder cable upsized to '
-            '${_num(cable.csaMm2)} mm² so Iz x $kFourLoadedConductorFactor '
+            '$make so Iz x $kFourLoadedConductorFactor '
             '(four loaded conductors, IEC 60364-5-52 Annex E) carries it with '
             'a full-size neutral.',
         panelId: panel.id,
@@ -1549,6 +1634,9 @@ _CircuitComputation _computeCircuit(
     // one case where Iz < In, and it is already an error-severity finding).
     if (floored.ratingA.amperes > breaker.ratingA.amperes) breaker = floored;
   }
+  // Round 38 — the device CLASS follows the bus fault (see
+  // [faultAwareBreakerClass]).
+  breaker = faultAwareBreakerClass(breaker, opts.faultLevelA);
 
   final runsPerPhase = cable.runsPerPhase ?? 1;
   final vd = voltageDrop(
@@ -1771,6 +1859,9 @@ _CircuitComputation _computeCircuit(
     connectedW: isFeeder ? loadW : circuitUndiversifiedW(c),
     points: c.points,
     runCurrent: Current(roundTo(feederRunCurrent.amperes, 1)),
+    lineCurrentsA: fedLines == null
+        ? null
+        : [for (final l in fedLines) roundTo(l, 1)],
   );
 
   return _CircuitComputation(
@@ -2033,10 +2124,13 @@ ElectricalPanelResult computePanel(
           ? capacitorFloorA
           : futureDemandCurrentA;
 
-  final incomerBreaker = selectBreaker(
-    profile,
-    designCurrent: Current(incomerSizingCurrentA),
-    loadKind: LoadKind.feeder,
+  final incomerBreaker = faultAwareBreakerClass(
+    selectBreaker(
+      profile,
+      designCurrent: Current(incomerSizingCurrentA),
+      loadKind: LoadKind.feeder,
+    ),
+    opts.faultLevelA,
   );
   final incomer = IncomerResult(
     breaker: incomerBreaker,
@@ -2058,6 +2152,46 @@ ElectricalPanelResult computePanel(
           'at MV.',
       panelId: panel.id,
     ));
+  }
+
+  // Round 38 (elec-ui-drawings-6) — JUDGE-ONLY: an outgoing way rated ABOVE
+  // its own board's incomer can never discriminate (the incomer always trips
+  // first) and inverts the incomer / outgoing pair on the issued schedule.
+  // When the inversion is the engine's OWN device-only selectivity floor (the
+  // way carries no breaker override and was floored towards 1.6 x the fed
+  // board's incomer), the design is not wrong — the rating chain simply needs
+  // this board's incomer raised to match; the finding is an INFO note naming
+  // that action, never a sign-off blocker (as `selectivity-partial` is
+  // suppressed for the engine's own floors). An override-caused inversion
+  // stays a warning.
+  final overrideById = {for (final b in branches) b.id: b.breakerOverrideA};
+  for (final cr in circuits) {
+    if (cr.breaker.ratingA.amperes >
+        incomerBreaker.ratingA.amperes + 1e-9) {
+      final engineFloor = overrideById[cr.circuitId] == null &&
+          opts.feederBreakerFloorA.containsKey(cr.circuitId);
+      warnings.add(ElectricalWarning(
+        code: 'outgoing-exceeds-incomer',
+        severity:
+            engineFloor ? WarningSeverity.info : WarningSeverity.warning,
+        message: engineFloor
+            ? '${panel.name} / ${cr.name}: the selectivity floor raised this '
+                'feeder to ${_num(cr.breaker.ratingA.amperes)} A, above the '
+                'board\'s own ${_num(incomerBreaker.ratingA.amperes)} A '
+                'incomer — raise the incomer to at least '
+                '${_num(cr.breaker.ratingA.amperes)} A (this board\'s '
+                'spare-capacity headroom) so the rating chain stays '
+                'consistent.'
+            : '${panel.name} / ${cr.name}: the outgoing '
+                '${_num(cr.breaker.ratingA.amperes)} A device is rated above '
+                'the board\'s own ${_num(incomerBreaker.ratingA.amperes)} A '
+                'incomer — the incomer always trips first, so the pair cannot '
+                'discriminate; lower the way (breaker override) or raise the '
+                'incomer.',
+        panelId: panel.id,
+        circuitId: cr.circuitId,
+      ));
+    }
   }
 
   // FOLD 1 — busbar short-circuit withstand: when the prospective fault at this
@@ -2218,6 +2352,14 @@ ElectricalPanelResult computePanel(
       imbalancePercent: balance.imbalancePercent,
       imbalanceReducible: imbalanceReducible,
     ),
+    judgedPhaseBalance: PhaseBalanceResult(
+      l1: judged.l1,
+      l2: judged.l2,
+      l3: judged.l3,
+      imbalancePercent: judged.imbalancePercent,
+      imbalanceReducible: imbalanceReducible,
+    ),
+    judgedAssignment: judged.assignment,
     warnings: warnings,
     diversityFactor: panel.diversityFactor,
   );
@@ -2366,13 +2508,25 @@ ElectricalSystemResult computeSystem(
   // Null capacity (the default) ⇒ no floor ⇒ byte-identical.
   final serviceCapacityVa = serviceEntranceCapacityVa(project);
   double? serviceMinCurrentA;
+  // Round 38 (elec-sizing-supply-3) — a declared daya ABOVE the single-phase
+  // PLN ladder exists only as a 3φ service, whose limiter passes
+  // VA / (√3·400) PER PHASE. A 1φ root board sits on ONE of those phases, so
+  // the floor and the judge convert on the 3φ basis (16.5 kVA ⇒ 23.8 A, never
+  // the 71.7 A the board's own 230 V basis gave — an 80 A incomer floor
+  // under a limiter that trips at 23.8 A).
+  var singlePhaseRootOnThreePhaseDaya = false;
   if (serviceCapacityVa != null && serviceCapacityVa > 0 && roots.length == 1) {
     final root = roots.first;
     final v = root.voltage.volts;
     if (v > 0) {
+      singlePhaseRootOnThreePhaseDaya =
+          root.system == ElectricalSystem.singlePhase &&
+              serviceCapacityVa > plnDayaVa1ph.last + 1e-9;
       // Round 35 — the ONE conversion shared with the recommended daya.
-      serviceMinCurrentA =
-          lineCurrentForCapacityA(serviceCapacityVa, root.system, v);
+      serviceMinCurrentA = singlePhaseRootOnThreePhaseDaya
+          ? lineCurrentForCapacityA(serviceCapacityVa,
+              ElectricalSystem.threePhase, kThreePhaseServiceLineVoltageV)
+          : lineCurrentForCapacityA(serviceCapacityVa, root.system, v);
     }
   }
 
@@ -2593,7 +2747,10 @@ ElectricalSystemResult computeSystem(
         phaseReassignThresholdA: phaseReassignThresholdA,
       ),
     );
-    final b = solved.phaseBalance;
+    // Round 38 (regression-feeder-lines-carry-session-phase-labels) — the
+    // UNSEEDED (history-free) lines, never the session-sticky labels: the
+    // parent's incomer must be a function of the document alone.
+    final b = solved.historyFreePhaseBalance;
     final d = panel.diversityFactor;
     if ((math.max(b.l1, math.max(b.l2, b.l3)) -
             math.min(b.l1, math.min(b.l2, b.l3))) >
@@ -2828,6 +2985,8 @@ ElectricalSystemResult computeSystem(
         spareWaysReserved: pr.spareWaysReserved,
         capacitorCurrentA: pr.capacitorCurrentA,
         phaseBalance: pr.phaseBalance,
+        judgedPhaseBalance: pr.judgedPhaseBalance,
+        judgedAssignment: pr.judgedAssignment,
         warnings: pr.warnings,
         diversityFactor: pr.diversityFactor,
       );
@@ -2944,6 +3103,21 @@ ElectricalSystemResult computeSystem(
     // incomer / busbar floor stays max(undiversified demand, service) —
     // conservative sizing is untouched. Never resizes; the honest fix is a
     // bigger subscription or shedding load.
+    if (serviceMinCurrentA != null && singlePhaseRootOnThreePhaseDaya) {
+      final rootResult = results[roots.first.id];
+      rootResult?.warnings.add(ElectricalWarning(
+        code: 'service-single-phase-root-on-three-phase-daya',
+        severity: WarningSeverity.warning,
+        message: '${rootResult.name}: the declared '
+            '${_num(serviceCapacityVa! / 1000)} kVA connection is above the '
+            'single-phase PLN ladder (${_num(plnDayaVa1ph.last / 1000)} kVA), '
+            'so it is a 3-phase service rated '
+            '~${_num(roundTo(serviceMinCurrentA, 1))} A per phase — a '
+            'single-phase root board loads only one of those phases. Make the '
+            'root board 3-phase, or declare a single-phase daya step.',
+        panelId: roots.first.id,
+      ));
+    }
     if (serviceMinCurrentA != null) {
       final rootId = roots.first.id;
       final rootResult = results[rootId];

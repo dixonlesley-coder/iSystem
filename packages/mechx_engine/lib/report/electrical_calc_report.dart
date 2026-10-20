@@ -499,6 +499,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
                   '${voltageDropOverLimit(c, isFeeder: feederIds.contains(c.circuitId)) ? ' ${strings(RptStringKey.verdictOver)}' : ''}',
               c.rcd.required
                   ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
+                      '${c.rcd.timeDelayed ? ' S' : ''}'
                   : '—',
             ],
         ],
