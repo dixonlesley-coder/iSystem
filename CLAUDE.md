@@ -1465,7 +1465,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   provider (issues, warnings, electrical feed, fire bases, workflow, anything
   heavier than a paint input) reads `sizingNetworkProvider` — never
   `networkControllerProvider` — so a K1 drag frame / held-arrow nudge never
-  re-runs it; only paint/hit-test widgets read the live network. Nothing that
+  re-runs it; only paint/hit-test widgets read the live network. EVERY pointer
+  drag on the mechanical canvas opens the K1 session (`beginDrag` beside its
+  `pushUndoSnapshot`, re-called per frame; `endDrag` on release / cancel);
+  `beginDrag` arms the settle timer itself (an open session never lacks one)
+  and undo / redo / load / restore close it — a freeze can never outlive the
+  gesture. A remounting canvas seeds `initialTransform` from the LIVE
+  `sheetsControllerProvider` viewport (a `ref.read`), never the lagging
+  `sheetsContentProvider` copy. Nothing that
   needs the sheet LIST watches the whole `sheetsControllerProvider` (every
   pan/zoom frame writes it): read `sheetsContentProvider`, and map screen <->
   world through `sheetViewportProvider(sheetId)`. Widgets that branch on a
@@ -1483,6 +1490,13 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (floors, groundIndex) — never key a memo on `ProjectState.building` (a fresh
   instance on every read). Canvas view keys (F / Ctrl ± 0 / arrows / hold-
   Space) go through the shared pure `ui/canvas/viewport_keys.dart`.
+  Layout drafting: one store predicate pair (`drawEndpointAdoptable` /
+  `drawTeeAccepts`) decides what a draw end can snap to for BOTH the preview
+  marker and the commit — never let the preview offer a connection the click
+  won't make. Per-floor node/run/riser lists for hit tests and snap search
+  come from `ui/canvas/floor_index.dart` (`floorIndexOf`, per-Network cache),
+  never a whole-building scan per pointer move. `orthoSnap` PROJECTS the
+  cursor onto the snapped axis (no overshoot).
 
 - **Round 36 — the alternator's own basis, full-backup dip, mixed-valve sets, canonical HW loops (2026-10-18)**: `gensetPhaseDemandVa` converts every backed board's worst-phase current on the SUPPLY's basis when it is 3φ (`worstPhaseDemandVa(asSystem:, asVolts:)`) — a 1φ essential board on a 3φ genset needs √3·V_LL·I (its whole current sits on one alternator phase), never V·I; the recommended-daya path keeps the board basis. `gensetStartMotors` restricts the dip screen to the essential sub-tree only when the set backs a FRACTION (`backupFraction < 1`, the power one-line's `essentialSplit` rule) — a full-backup set starts every motor whatever is marked essential. A duty/standby set with a check valve on only SOME legs is the Round-13 parallel set (valved feed mover legs group with the valveless ones by start + destination; all-valved sets keep the structural grouping) — never a Hardy–Cross split. Drawn HW recirculation loops are the CANONICAL set of simple cycles through the source / a plant / a check valve that run every flowing pipe in its solved direction (`_canonicalReturnCycles`) — never a spanning tree's fundamental cycles. Re-kinding a hand-entered motor / pump way to a W-sized kind clears its hidden `motorKw` (seeds `loadW` from shaft ÷ 0.88 when empty); the PF study and the HVAC starter / dip read `loadW` for non-motor ways (an MEP-derived way's `motorKw` stays authoritative). A TT feeder whose IΔn ladder is exhausted (`!ttFeederRcdSelective`) never claims 3 × discrimination and raises the judge-only `tt-rcd-not-selective`.
 - **Round 35 — one riser-end datum, no gravity reducer, per-phase service basis (2026-10-18)**: `riserEndElevation` reads `runConnectionElevation` for every NON-gravity riser (a datum-less AHU / supply / exhaust fan at its casing top, `MountingHeights.airUnitConnection` ceiling-capped; a ceiling terminal / sprinkler head at the ceiling) — the same datum a RUN leg uses, so a duct measures the same drawn as one riser or as run + riser; `displayedNodeElevation` reads the riser datum for ANY riser (gravity first); `nodeElevation` stays the pressure-solve STATIC datum. `_clampGravityNoReducer` runs UNCONDITIONALLY after the overrides: every auto drainage / rainwater edge is at least the largest bore discharging into it (followed up the sized flow tree, flagged `stackRaisedForBranch`, code minimum = the raised bore; a rainwater raise to an unsaturated governing edge carrying its whole flow clears `overCapacity`), a hand pick below the pipe above it is `belowCodeMinimum`; propagation stops at a pump / booster / ground tank / plant node (a force main keeps its own pumped bore). Never only realign a DFU table row. A service limiter / 3φ alternator is rated PER PHASE: the recommended PLN daya sizes on max(total VA, Σ roots' worst-phase VA at the judge's 0.1 A rounding) and the genset on max(balanced basis, `gensetPhaseDemandVa`), both through the ONE `lineCurrentForCapacityA` / `capacityForLineCurrentVa` pair the service-capacity floor uses — declaring the recommended daya never raises `service-capacity-below-demand`; a forced genset nameplate below the per-phase need raises the judge-only `genset-phase-overload`. Recorded (r35 review): the generalised gravity no-reducer clamp is property-tested on drainage only (its rainwater over-capacity clear reduces to the Round-19 downpipe->collector case); the per-phase genset basis is byte-identical on a balanced board only to ~35 VA (the demand current is carried at 0.1 A). The `genset-phase-overload` message prints the per-phase rating on the SUPPLY's own system.
