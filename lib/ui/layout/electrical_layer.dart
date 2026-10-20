@@ -52,6 +52,7 @@ import '../electrical/electrical_layout_view.dart'
         kLayoutPanelH,
         kLayoutLoadW,
         kLayoutLoadH,
+        layoutMarkerScale,
         LayoutPanelEdit,
         LayoutCircuitEdit,
         LayoutPanelMenu,
@@ -683,14 +684,15 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     final widgets = <Widget>[];
 
     final pTopLeft = vt.worldToScreen(Offset(pos.x, pos.y));
+    final ms = layoutMarkerScale(vt.scale);
     widgets.add(Positioned(
       // Keyed so a marker keeps its element (and an in-flight drag) while the
       // list around it changes.
       key: ValueKey('elec-layout-panel-${panel.id}'),
-      left: pTopLeft.dx - kLayoutPanelW * vt.scale / 2,
-      top: pTopLeft.dy - kLayoutPanelH * vt.scale / 2,
-      width: kLayoutPanelW * vt.scale,
-      height: kLayoutPanelH * vt.scale,
+      left: pTopLeft.dx - kLayoutPanelW * ms / 2,
+      top: pTopLeft.dy - kLayoutPanelH * ms / 2,
+      width: kLayoutPanelW * ms,
+      height: kLayoutPanelH * ms,
       child: Opacity(
         opacity: opacity,
         child: _LayoutNodeDraggable(
@@ -762,12 +764,13 @@ class ElectricalLayoutLayer extends ConsumerWidget {
       if (c.loadKind == LoadKind.feeder) continue;
       final cr = pr?.circuits.where((r) => r.circuitId == c.id).firstOrNull;
       final lScreen = vt.worldToScreen(Offset(lp.x, lp.y));
+      final ms = layoutMarkerScale(vt.scale);
       widgets.add(Positioned(
         key: ValueKey('elec-layout-load-${panel.id}-${c.id}'),
-        left: lScreen.dx - kLayoutLoadW * vt.scale / 2,
-        top: lScreen.dy - kLayoutLoadH * vt.scale / 2,
-        width: kLayoutLoadW * vt.scale,
-        height: kLayoutLoadH * vt.scale,
+        left: lScreen.dx - kLayoutLoadW * ms / 2,
+        top: lScreen.dy - kLayoutLoadH * ms / 2,
+        width: kLayoutLoadW * ms,
+        height: kLayoutLoadH * ms,
         child: Opacity(
           opacity: opacity,
           child: _LayoutNodeDraggable(
@@ -788,7 +791,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
             // Dropped ONTO another load on the SAME panel → CHAIN them (one
             // breaker); otherwise the live onMove already repositioned it.
             onDropAt: (w) {
-              final target = _loadDroppedOnto(panel, c.id, w);
+              final target = _loadDroppedOnto(panel, c.id, w, vt.scale);
               if (target != null) ctrl.mergeCircuit(panel.id, c.id, target);
             },
             child: ScaledWorldChild(
@@ -906,8 +909,10 @@ class ElectricalLayoutLayer extends ConsumerWidget {
   /// dragged load [draggedId] was released over (within ~one load-node width),
   /// or null. Used to CHAIN loads onto one breaker by dropping one onto another.
   String? _loadDroppedOnto(
-      ElectricalPanel panel, String draggedId, Offset world) {
-    final r = kLayoutLoadW; // ~one node width, in world px
+      ElectricalPanel panel, String draggedId, Offset world, double zoom) {
+    // ~one node width as DRAWN, in world px (a capped marker is smaller in
+    // world space than its nominal footprint).
+    final r = kLayoutLoadW * layoutMarkerScale(zoom) / zoom;
     final r2 = r * r;
     String? best;
     var bestD2 = r2;
@@ -1514,8 +1519,8 @@ class _LayerMarqueeState extends ConsumerState<_LayerMarquee> {
             rect,
             Rect.fromCenter(
               center: vt.worldToScreen(m.world),
-              width: m.size.width * vt.scale,
-              height: m.size.height * vt.scale,
+              width: m.size.width * layoutMarkerScale(vt.scale),
+              height: m.size.height * layoutMarkerScale(vt.scale),
             ),
             window: window))
           m.item,
@@ -1897,8 +1902,8 @@ class _FeederGripLayerState extends ConsumerState<_FeederGripLayer> {
     final c = vt.worldToScreen(Offset(pos.x, pos.y));
     return Rect.fromCenter(
       center: c,
-      width: kLayoutPanelW * vt.scale,
-      height: kLayoutPanelH * vt.scale,
+      width: kLayoutPanelW * layoutMarkerScale(vt.scale),
+      height: kLayoutPanelH * layoutMarkerScale(vt.scale),
     );
   }
 

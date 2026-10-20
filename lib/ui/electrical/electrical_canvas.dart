@@ -66,6 +66,7 @@ import '../canvas/canvas_grid.dart';
 import '../canvas/canvas_view.dart' show canvasFitRequestProvider;
 import '../canvas/marquee.dart';
 import '../canvas/scaled_world_child.dart';
+import '../canvas/snapping.dart' show AlignGuide, nearestAlignment;
 import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
 import '../canvas/viewport_easer.dart';
@@ -454,6 +455,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
   // null when no panel body drag is in flight.
   Map<String, Offset>? _panelDragWorld;
 
+  // Sibling-board alignment (drafting-feel follow-up): the board the drag
+  // grabbed, the top-left corners of every board NOT being dragged (captured
+  // at drag start), and the live guide the grabbed board is latched to (null
+  // when none — and always null at rest, so goldens never see it).
+  String? _panelDragGrab;
+  List<Offset> _alignTargets = const [];
+  AlignGuide? _alignGuide;
+
   // ── D2 parity — arrow-nudge COALESCING (mirrors `layout_canvas`) ────────────
   // Every arrow-key nudge used to `movePanels`, i.e. one `_commit` — so walking
   // a board ten steps across the canvas ate ten of the 200-cap undo stack and
@@ -541,6 +550,11 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
     _panelDragWorld = {
       for (final id in group) id: positions[id] ?? Offset.zero,
     };
+    _panelDragGrab = panelId;
+    _alignTargets = [
+      for (final e in positions.entries)
+        if (!group.contains(e.key)) e.value,
+    ];
   }
 
   /// S1 — the board follows the cursor on the grid LIVE (it used to track the
@@ -559,8 +573,29 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
     final current = {
       for (final p in ref.read(electricalProjectProvider).panels) p.id: p,
     };
+    // Alignment beats the grid on the axis it latches: the GRABBED board's
+    // top-left is compared with every other board's (a shared left edge = one
+    // column, a shared top edge = one row), within a screen-constant
+    // tolerance; the whole dragged group shifts by the same correction so a
+    // multi-board move keeps its own spacing.
+    var dx = 0.0, dy = 0.0;
+    AlignGuide? guide;
+    final grab = raw[_panelDragGrab];
+    if (grab != null && _alignTargets.isNotEmpty) {
+      final scale = _current.scale;
+      guide = nearestAlignment(_alignTargets, grab,
+          kPanelAlignScreenPx / (scale > 0 ? scale : 1.0));
+      if (guide != null) {
+        if (guide.horizontal) {
+          dy = guide.node.dy - _snapGrid(grab.dy);
+        } else {
+          dx = guide.node.dx - _snapGrid(grab.dx);
+        }
+      }
+    }
+    if (!_sameGuide(guide, _alignGuide)) setState(() => _alignGuide = guide);
     raw.forEach((id, w) {
-      final x = _snapGrid(w.dx), y = _snapGrid(w.dy);
+      final x = _snapGrid(w.dx) + dx, y = _snapGrid(w.dy) + dy;
       final p = current[id];
       if (p != null && p.x == x && p.y == y) return;
       _ctrl.setPanelPosition(id, x, y);
@@ -574,8 +609,19 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
       _placeDraggedPanels(map);
       _tryBodyDropConnect(map);
     }
+    _panelDragGrab = null;
+    _alignTargets = const [];
+    if (_alignGuide != null && mounted) setState(() => _alignGuide = null);
     _ctrl.endUndoableGesture();
   }
+
+  static bool _sameGuide(AlignGuide? a, AlignGuide? b) =>
+      identical(a, b) ||
+      (a != null &&
+          b != null &&
+          a.horizontal == b.horizontal &&
+          a.node == b.node &&
+          (a.horizontal ? a.point.dy == b.point.dy : a.point.dx == b.point.dx));
 
   /// BODY-DROP CONNECT — dropping an UNFED board on top of another board wires
   /// it as that board's sub-panel, the direct-manipulation counterpart of
@@ -1474,6 +1520,19 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
                     // a solid-edged WINDOW left-to-right, a dashed CROSSING
                     // right-to-left (the Layout / Riser convention). Ignores
                     // pointers so it never eats the drag it is tracking.
+                    // The sibling-alignment guide while a board is dragged.
+                    if (_alignGuide != null)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: PanelAlignGuidePainter(
+                              guide: _alignGuide!,
+                              transform: vt,
+                              color: colors.accent,
+                            ),
+                          ),
+                        ),
+                      ),
                     if (_marqueeStart != null && _marqueeCurrent != null)
                       Positioned.fill(
                         child: IgnorePointer(
@@ -3990,3 +4049,60 @@ class _CanvasDropPreviewPainter extends CustomPainter {
       old.color != color;
 }
 
+
+
+/// Screen-px tolerance within which a dragged board's top-left latches onto a
+/// sibling board's column (x) or row (y). Under the 16-unit grid step at 1:1,
+/// so it only takes over where a sibling sits off the dragged board's grid.
+const double kPanelAlignScreenPx = 10.0;
+
+/// The dashed alignment guide drawn while a board is dragged: a line along the
+/// shared edge from the sibling board's corner through the dragged board's,
+/// overshooting both by a little so it reads as a guide, not a feeder.
+class PanelAlignGuidePainter extends CustomPainter {
+  final AlignGuide guide;
+  final ViewportTransform transform;
+  final Color color;
+
+  PanelAlignGuidePainter({
+    required this.guide,
+    required this.transform,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = transform.worldToScreen(guide.node);
+    final b = transform.worldToScreen(guide.point);
+    const over = 24.0;
+    final Offset start, end;
+    if (guide.horizontal) {
+      final y = a.dy;
+      start = Offset(math.min(a.dx, b.dx) - over, y);
+      end = Offset(math.max(a.dx, b.dx) + over, y);
+    } else {
+      final x = a.dx;
+      start = Offset(x, math.min(a.dy, b.dy) - over);
+      end = Offset(x, math.max(a.dy, b.dy) + over);
+    }
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    const dash = 5.0, gap = 4.0;
+    final total = (end - start).distance;
+    if (total <= 0) return;
+    final dir = (end - start) / total;
+    for (var t = 0.0; t < total; t += dash + gap) {
+      canvas.drawLine(start + dir * t,
+          start + dir * math.min(t + dash, total), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(PanelAlignGuidePainter old) =>
+      old.guide.node != guide.node ||
+      old.guide.point != guide.point ||
+      old.guide.horizontal != guide.horizontal ||
+      old.transform != transform ||
+      old.color != color;
+}

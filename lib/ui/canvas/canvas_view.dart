@@ -10,6 +10,7 @@ import '../../store/smart_input_store.dart';
 import '../theme/design_tokens.dart';
 import 'canvas_grid.dart';
 import 'canvas_minimap.dart';
+import 'canvas_zoom_scope.dart';
 import 'viewport.dart';
 
 /// B30 — the screen-space edge band (px) inside which the live draw pointer
@@ -574,7 +575,14 @@ class CanvasViewState extends ConsumerState<CanvasView>
                             maxHeight: double.infinity,
                             child: SizedBox.fromSize(
                               size: widget.contentSize,
-                              child: RepaintBoundary(child: widget.child),
+                              child: RepaintBoundary(
+                                // The zoom, for sheet-space chrome that must
+                                // stay screen-sized (loading / error cards).
+                                child: CanvasZoomScope(
+                                  scale: vt.scale,
+                                  child: widget.child,
+                                ),
+                              ),
                             ),
                           ),
                         ),

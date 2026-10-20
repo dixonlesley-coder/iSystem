@@ -332,7 +332,7 @@ void main() {
       final texts = sheet.prims.whereType<SldLabel>().map((l) => l.text);
       final mdpLine = texts.firstWhere(
           (t) => t.contains('kW / ') && t.startsWith('${_amps(root)}A'));
-      final kva = RegExp(r'/ ([\d.]+)kVA').firstMatch(mdpLine)!.group(1)!;
+      final kva = RegExp(r'/ ([\d.]+) kVA').firstMatch(mdpLine)!.group(1)!;
       expect(double.parse(kva),
           closeTo(sys.supply.demandVa.voltAmperes / 1000, 0.051));
     });

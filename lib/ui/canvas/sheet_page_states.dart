@@ -5,6 +5,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_empty_state_card.dart';
+import 'canvas_zoom_scope.dart';
 
 /// Fixed caption ink for text drawn straight ON the drawing paper — the paper
 /// (`sheetPaper`) is light in BOTH themes, so a theme-variant label tier would
@@ -25,14 +26,17 @@ class SheetLoadingPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = _colorsOf(context);
-    final type = MechXTheme.maybeOf(context)?.typography ??
-        MechXTypography.standard;
+    final type =
+        MechXTheme.maybeOf(context)?.typography ?? MechXTypography.standard;
     return ColoredBox(
       color: colors.sheetPaper,
-      child: Center(
-        child: Text(
-          MechXStrings.of(context)(StringKey.sheetLoadingPlan),
-          style: type.caption.copyWith(color: kSheetPaperCaptionInk),
+      // The caption is chrome, not drawing: screen-sized at every zoom.
+      child: ScreenConstantLayer(
+        child: Center(
+          child: Text(
+            MechXStrings.of(context)(StringKey.sheetLoadingPlan),
+            style: type.caption.copyWith(color: kSheetPaperCaptionInk),
+          ),
         ),
       ),
     );
@@ -81,14 +85,18 @@ class SheetLoadErrorPage extends StatelessWidget {
     );
     return ColoredBox(
       color: colors.sheetPaper,
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(MechXSpacing.md),
-          // The card is content: opaque, on the theme's own surface — it
-          // needs a theme above it, which a bare test harness may lack.
-          child: MechXTheme.maybeOf(context) == null
-              ? MechXTheme(data: MechXThemeData.light, child: card)
-              : card,
+      // The card is chrome, not drawing: screen-sized at every zoom (it
+      // used to shrink to an illegible speck on a fitted A1 sheet).
+      child: ScreenConstantLayer(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(MechXSpacing.md),
+            // The card is content: opaque, on the theme's own surface — it
+            // needs a theme above it, which a bare test harness may lack.
+            child: MechXTheme.maybeOf(context) == null
+                ? MechXTheme(data: MechXThemeData.light, child: card)
+                : card,
+          ),
         ),
       ),
     );
