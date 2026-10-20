@@ -569,7 +569,11 @@ class ElectricalEnumPicker<T> extends StatelessWidget {
 class ElectricalToggleRow extends StatelessWidget {
   final String label;
   final bool value;
-  final ValueChanged<bool> onChanged;
+
+  /// Null renders the row read-only (greyed, no tap / key activation) — a
+  /// value that is shown but owned elsewhere (Round 40: an MEP-derived way's
+  /// life-safety duty follows the drawn machine).
+  final ValueChanged<bool>? onChanged;
   const ElectricalToggleRow({
     super.key,
     required this.label,
@@ -581,17 +585,18 @@ class ElectricalToggleRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Padding(
+    final change = onChanged;
+    final row = Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.md),
       // L3: this row drives every essential/UPS-backed/submeter/
       // dual-transformer/advanced-study toggle in the electrical inspectors —
       // wrap it in the shared focus ring so Tab reaches it and Enter/Space
       // fires the same toggle as a tap.
       child: MechXFocusRing(
-        onActivated: () => onChanged(!value),
+        onActivated: change == null ? null : () => change(!value),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () => onChanged(!value),
+          onTap: change == null ? null : () => change(!value),
           child: Row(
             children: [
               Expanded(
@@ -630,6 +635,7 @@ class ElectricalToggleRow extends StatelessWidget {
         ),
       ),
     );
+    return change == null ? Opacity(opacity: 0.5, child: row) : row;
   }
 }
 

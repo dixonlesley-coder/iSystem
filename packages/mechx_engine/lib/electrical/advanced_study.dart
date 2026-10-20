@@ -410,16 +410,42 @@ AdvancedStudy computeAdvancedStudy(
   // is recommended for a service not taken at LV.
   // Round 39 — the per-phase basis (below) is computed FIRST so the LV / MV
   // verdict is judged on the same figure the daya recommendation uses.
-  final worstPhaseVa =
-      worstPhaseDemandVa(project, sys, originPanelIds, roundCurrent: true);
+  final worstPhaseVa = worstPhaseDemandVa(project, sys, originPanelIds,
+      roundCurrent: true, withLargestMachine: true);
   final perPhaseBasisVa = sys.supply.system == ElectricalSystem.singlePhase
       ? worstPhaseDemandVa(project, sys, originPanelIds,
           roundCurrent: true,
+          withLargestMachine: true,
           asSystem: ElectricalSystem.threePhase,
           asVolts: kThreePhaseServiceLineVoltageV)
       : worstPhaseVa;
+  // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
+  // service each root board sits on ONE unit (coupler normally open, as the
+  // fault study models it), so the most loaded ROOT governs a section: its
+  // diversified VA, or its worst-phase basis when that is larger.
+  var largestSectionVa = 0.0;
+  String? largestSectionId;
+  if (project.dualTransformer && originPanelIds.length > 1) {
+    for (final id in originPanelIds) {
+      final r = sys.panels[id];
+      if (r == null) continue;
+      final va = math.max(
+          r.demandVaOrEstimate(),
+          worstPhaseDemandVa(project, sys, [id],
+              roundCurrent: true, withLargestMachine: true));
+      if (va > largestSectionVa + 1e-9 ||
+          (largestSectionId != null &&
+              (va - largestSectionVa).abs() <= 1e-9 &&
+              id.compareTo(largestSectionId) < 0)) {
+        largestSectionVa = va;
+        largestSectionId = id;
+      }
+    }
+  }
   final supply = determineSupply(
     sys.supply.demandVa,
+    largestSectionDemand:
+        largestSectionVa > 0 ? ApparentPower(largestSectionVa) : null,
     perPhaseDemand: ApparentPower(perPhaseBasisVa),
     dualTransformer: project.dualTransformer,
     // Round 29 — the ONE declared rating (a connection capacity above the
@@ -454,6 +480,7 @@ AdvancedStudy computeAdvancedStudy(
       sys.supply.system == ElectricalSystem.singlePhase) {
     final va3 = worstPhaseDemandVa(project, sys, originPanelIds,
         roundCurrent: true,
+        withLargestMachine: true,
         asSystem: ElectricalSystem.threePhase,
         asVolts: kThreePhaseServiceLineVoltageV);
     daya = recommendedDaya(
@@ -575,6 +602,24 @@ AdvancedStudy computeAdvancedStudy(
     verifyItems: verify,
     warnings: [
       ...gensetBackupWarnings(project, sys),
+      // Round 40 — a DECLARED transformer (or the most loaded section of a
+      // dual service) whose 80 %-loaded rating is below what it carries was
+      // only a note; it is now a judge-only warning (never resizes).
+      if (supply.declared && supply.declaredBelowDemand)
+        ElectricalWarning(
+          code: largestSectionId != null
+              ? 'section-transformer-overloaded'
+              : 'transformer-below-demand',
+          severity: WarningSeverity.warning,
+          message: supply.note,
+          panelId: largestSectionId,
+        ),
+      // Round 40 — a root incomer rated above the full-load current its
+      // transformer unit can deliver (one unit per section on a dual
+      // service) can never be loaded to its rating.
+      for (final w
+          in _incomerAboveTransformerFlc(project, sys, supply, originPanelIds))
+        w,
       // Round 17 — the service-size estimate is no longer clamped at 50 kA
       // (a clamp LOWERED the safety quantity); above the realistic LV device
       // ladder it is flagged so the engineer commissions a real study.
@@ -598,6 +643,44 @@ AdvancedStudy computeAdvancedStudy(
 // ───────────────────────────────────────────────────────────────────────────
 // Helpers.
 // ───────────────────────────────────────────────────────────────────────────
+
+/// Round 40 — `root-incomer-exceeds-transformer-flc`: each service-entrance
+/// board on a DECLARED transformer service whose incomer rating exceeds the
+/// LV full-load current of the unit feeding it (one unit per section on a
+/// dual service; the paralleled units otherwise). Judge-only.
+List<ElectricalWarning> _incomerAboveTransformerFlc(
+  ElectricalProject project,
+  ElectricalSystemResult sys,
+  SupplyDesign supply,
+  Set<String> originPanelIds,
+) {
+  final kva = supply.transformerKva;
+  if (!supply.declared || kva == null || kva <= 0) return const [];
+  final unitsPerRoot = project.dualTransformer && originPanelIds.length > 1
+      ? 1
+      : math.max(1, supply.units);
+  final flcA = unitsPerRoot * kva * 1000 / (math.sqrt(3) * 400);
+  final out = <ElectricalWarning>[];
+  for (final id in originPanelIds.toList()..sort()) {
+    final r = sys.panels[id];
+    if (r == null) continue;
+    final inA = r.incomer.breaker.ratingA.amperes;
+    if (inA > flcA + 1e-6) {
+      out.add(ElectricalWarning(
+        code: 'root-incomer-exceeds-transformer-flc',
+        severity: WarningSeverity.warning,
+        message: '${r.name}: the ${inA.round()} A incomer is above the '
+            '${flcA.round()} A full-load current of the '
+            '${unitsPerRoot > 1 ? '$unitsPerRoot x ' : ''}${kva.round()} kVA '
+            'transformer feeding it — the board can never be loaded to its '
+            'incomer rating; raise the transformer rating or move load to '
+            'the other section.',
+        panelId: id,
+      ));
+    }
+  }
+  return out;
+}
 
 /// True when a circuit is motor-like (so a starter assembly makes sense).
 bool _isMotorLike(ElectricalCircuit c) =>

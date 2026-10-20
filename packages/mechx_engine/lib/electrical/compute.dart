@@ -37,7 +37,10 @@ import 'fault.dart'
         conductorImpedance,
         breakingCapacityKa,
         coldMaxFaultImpedance,
+        defaultLvUtilityFaultKa,
+        estimatedServiceFaultLevelA,
         faultBasisLineVoltageV,
+        faultStudy,
         feederNeutralImpedance,
         selectivityRatio,
         solvedRunLengthM,
@@ -276,9 +279,193 @@ PhaseBalance balancePhases(
   // the document alone.
   final fresh = _balancePhasesOnce(circuits, system);
   double worst(PhaseBalance b) => math.max(b.l1, math.max(b.l2, b.l3));
-  return (worst(seededResult) - worst(fresh)).abs() > 1e-9
-      ? fresh
-      : seededResult;
+  final chosen =
+      (worst(seededResult) - worst(fresh)).abs() > 1e-9 ? fresh : seededResult;
+  // Round 40 (elec-props-6-phase-labels-not-restored-after-mep-add-remove) —
+  // never adopt a solve's labels WHOLESALE: among the assignments no worse
+  // than the chosen one (worst phase AND spread), take the one that moves the
+  // fewest ways off their prior (labelled) line. A transient load added then
+  // removed returns the board to its original labels instead of permanently
+  // swapping R and T on site. A chosen assignment already on every prior line
+  // is returned verbatim.
+  return _minimisePriorMoves(circuits, chosen, prior);
+}
+
+/// Round 40 — the assignment of the unpinned single-phase ways that is no
+/// worse than [chosen] (worst line AND spread, each within 1e-9) and leaves
+/// the fewest ways off their [prior] line (ties: lower worst, then lower
+/// spread, then [chosen]'s line for ways with no prior). Exact (branch and
+/// bound) up to [kPhaseExactSearchMaxWays] movable ways; above it a
+/// deterministic move / swap descent from [chosen]. A [chosen] with every
+/// prior-listed way on its prior line is returned as is.
+PhaseBalance _minimisePriorMoves(List<_PhaseCircuit> circuits,
+    PhaseBalance chosen, Map<String, PhaseAssignment> prior) {
+  const keys = [PhaseLine.l1, PhaseLine.l2, PhaseLine.l3];
+  int idxOf(PhaseAssignment? a) => switch (a) {
+        PhaseAssignment.l2 => 1,
+        PhaseAssignment.l3 => 2,
+        _ => 0,
+      };
+  final singles = circuits
+      .where((c) => !c.threePhase && c.pinned == null)
+      .toList()
+    ..sort((a, b) => a.id.compareTo(b.id));
+  final chosenPick = [
+    for (final c in singles) idxOf(chosen.assignment[c.id]),
+  ];
+  final priorPick = [
+    for (final c in singles)
+      switch (_priorLine(prior, c.id)) {
+        PhaseLine.l1 => 0,
+        PhaseLine.l2 => 1,
+        PhaseLine.l3 => 2,
+        null => -1,
+      },
+  ];
+  var anyOff = false;
+  for (var i = 0; i < singles.length; i++) {
+    if (priorPick[i] >= 0 && chosenPick[i] != priorPick[i]) anyOff = true;
+  }
+  if (!anyOff) return chosen;
+
+  final base = [0.0, 0.0, 0.0];
+  for (final c in circuits) {
+    if (c.threePhase) {
+      final ls = c.lines;
+      base[0] += ls?[0] ?? c.currentA;
+      base[1] += ls?[1] ?? c.currentA;
+      base[2] += ls?[2] ?? c.currentA;
+    } else if (c.pinned != null) {
+      base[c.pinned!.index] += c.currentA;
+    }
+  }
+  List<double> linesOf(List<int> pick) {
+    final l = [...base];
+    for (var i = 0; i < singles.length; i++) {
+      l[pick[i]] += singles[i].currentA;
+    }
+    return l;
+  }
+
+  double worstOf(List<double> l) => math.max(l[0], math.max(l[1], l[2]));
+  final chosenLines = linesOf(chosenPick);
+  final worstBound = worstOf(chosenLines) + 1e-9;
+  final spreadBound =
+      _spread3(chosenLines[0], chosenLines[1], chosenLines[2]) + 1e-9;
+  bool admissible(List<double> l) =>
+      worstOf(l) <= worstBound && _spread3(l[0], l[1], l[2]) <= spreadBound;
+  int movesOf(List<int> pick) {
+    var m = 0;
+    for (var i = 0; i < pick.length; i++) {
+      if (priorPick[i] >= 0 && pick[i] != priorPick[i]) m++;
+    }
+    return m;
+  }
+
+  // (moves off prior, worst, spread, moves off chosen for prior-less ways)
+  (int, double, double, int) score(List<int> pick) {
+    final l = linesOf(pick);
+    var other = 0;
+    for (var i = 0; i < pick.length; i++) {
+      if (priorPick[i] < 0 && pick[i] != chosenPick[i]) other++;
+    }
+    return (movesOf(pick), worstOf(l), _spread3(l[0], l[1], l[2]), other);
+  }
+
+  bool better((int, double, double, int) a, (int, double, double, int) b) {
+    if (a.$1 != b.$1) return a.$1 < b.$1;
+    if ((a.$2 - b.$2).abs() > 1e-9) return a.$2 < b.$2;
+    if ((a.$3 - b.$3).abs() > 1e-9) return a.$3 < b.$3;
+    return a.$4 < b.$4;
+  }
+
+  var best = [...chosenPick];
+  var bestScore = score(best);
+  if (singles.length <= kPhaseExactSearchMaxWays) {
+    final pick = List<int>.filled(singles.length, 0);
+    final lines = [...base];
+    void walk(int i, int moves) {
+      if (moves > bestScore.$1) return;
+      if (i == singles.length) {
+        if (!admissible(lines)) return;
+        final sc = score(pick);
+        if (better(sc, bestScore)) {
+          bestScore = sc;
+          best = [...pick];
+        }
+        return;
+      }
+      // Prior line first so the cheapest assignments are reached early.
+      final order = priorPick[i] >= 0
+          ? [
+              priorPick[i],
+              for (var p = 0; p < 3; p++)
+                if (p != priorPick[i]) p
+            ]
+          : const [0, 1, 2];
+      for (final p in order) {
+        pick[i] = p;
+        lines[p] += singles[i].currentA;
+        walk(i + 1, moves + (priorPick[i] >= 0 && p != priorPick[i] ? 1 : 0));
+        lines[p] -= singles[i].currentA;
+      }
+    }
+
+    walk(0, 0);
+  } else {
+    for (var pass = 0; pass < 40; pass++) {
+      var improved = false;
+      for (var i = 0; i < singles.length; i++) {
+        if (priorPick[i] < 0 || best[i] == priorPick[i]) continue;
+        final trial = [...best]..[i] = priorPick[i];
+        if (admissible(linesOf(trial)) && better(score(trial), bestScore)) {
+          best = trial;
+          bestScore = score(trial);
+          improved = true;
+          continue;
+        }
+        for (var j = 0; j < singles.length; j++) {
+          if (j == i || best[j] != priorPick[i]) continue;
+          final swap = [...best]
+            ..[i] = best[j]
+            ..[j] = best[i];
+          if (admissible(linesOf(swap)) && better(score(swap), bestScore)) {
+            best = swap;
+            bestScore = score(swap);
+            improved = true;
+            break;
+          }
+        }
+      }
+      if (!improved) break;
+    }
+  }
+  if (_listEq(best, chosenPick)) return chosen;
+
+  final assignment = <String, PhaseAssignment>{...chosen.assignment};
+  for (var i = 0; i < singles.length; i++) {
+    assignment[singles[i].id] = _lineAssign(keys[best[i]]);
+  }
+  final vals = linesOf(best);
+  final maxV = vals.reduce(math.max);
+  final minV = vals.reduce(math.min);
+  final avg = (vals[0] + vals[1] + vals[2]) / 3;
+  final imbalance = avg > 0 ? ((maxV - minV) / avg) * 100 : 0.0;
+  return PhaseBalance(
+    l1: roundTo(vals[0], 1),
+    l2: roundTo(vals[1], 1),
+    l3: roundTo(vals[2], 1),
+    imbalancePercent: roundTo(imbalance, 1),
+    assignment: assignment,
+  );
+}
+
+bool _listEq(List<int> a, List<int> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 PhaseBalance _balancePhasesOnce(
@@ -787,6 +974,14 @@ class ComputePanelOptions {
   /// alone ⇒ byte-identical.
   final Map<String, double> feederBreakerFloorA;
 
+  /// Round 40 (electrical-sim-5-selectivity-floor-breaks-ads) — the largest
+  /// rating (A) the selectivity floor may reach on a feeder way, keyed by
+  /// circuit id, so the discretionary coordination floor never pushes the
+  /// device past the earth-fault loop limit (ADS) the load-sized device met.
+  /// Derived by `computeSystem` from the fault study; empty ⇒ only the
+  /// cable's Iz caps the floor ⇒ byte-identical.
+  final Map<String, double> feederBreakerCapA;
+
   /// SERVICE-CAPACITY FLOOR (A) for the incomer + busbar of a SERVICE-ENTRANCE
   /// (root) panel — the line current of the declared connection capacity
   /// ([ElectricalProject.supplyCapacityVa], daya tersambung), derived by
@@ -848,7 +1043,18 @@ class ComputePanelOptions {
   /// (the default: no non-linear 1φ board anywhere) ⇒ byte-identical.
   final Map<String, FedNeutralLoad> feederNeutralLoad;
 
+  /// Round 40 (regression-largest-machine-floor-not-propagated-upstream) —
+  /// each fed board's [ElectricalPanelResult.largestDownstreamRunA] (the
+  /// largest single FINAL way's UNDIVERSIFIED running current on it or below
+  /// it), keyed by the child panel id a feeder serves, derived bottom-up by
+  /// `computeSystem`. The feeder's device + conductor floor at it (the
+  /// machine runs at that current through the feeder whatever its demand
+  /// factor), and this board's incomer counts it among its own ways. Empty
+  /// (the default) ⇒ byte-identical.
+  final Map<String, double> feederLargestRunA;
+
   const ComputePanelOptions({
+    this.feederLargestRunA = const {},
     this.feederNeutralLoad = const {},
     this.feederLineCurrentsA = const {},
     this.ttFeederRcd = const {},
@@ -866,6 +1072,7 @@ class ComputePanelOptions {
     this.priorAssignment = const {},
     this.phaseReassignThresholdA = 0,
     this.feederBreakerFloorA = const {},
+    this.feederBreakerCapA = const {},
     this.serviceMinCurrentA,
     this.feederPowerFactor = const {},
   });
@@ -1485,6 +1692,21 @@ _CircuitComputation _computeCircuit(
     final rated = capFloorA / kCapacitorSwitchingFactor;
     if (rated > feederRunCurrent.amperes) feederRunCurrent = Current(rated);
   }
+  // Round 40 (regression-largest-machine-floor-not-propagated-upstream) — a
+  // feeder carries at least the largest single machine below it at its
+  // UNDIVERSIFIED running current (one machine does not diversify against
+  // itself — the Round-39 incomer rule, carried up the tree). A 15 kW
+  // 0.7-pf welder at df 0.5 behind a feeder runs at 30.9 A whatever its
+  // 15.5 A diversified share; its feeder's device AND conductor size on it,
+  // and so does its voltage drop. Absent / covered ⇒ byte-identical.
+  final machineFloorA =
+      isFeeder ? opts.feederLargestRunA[c.feedsPanelId] : null;
+  if (machineFloorA != null && machineFloorA > sizingCurrent.amperes) {
+    sizingCurrent = Current(machineFloorA);
+    if (machineFloorA > feederRunCurrent.amperes) {
+      feederRunCurrent = Current(machineFloorA);
+    }
+  }
 
   // THE LOAD-SIZED DEVICE. Deliberately floor-free: the conductor below is sized
   // against THIS pick, so a coordination floor can never inflate copper (E3).
@@ -1670,12 +1892,19 @@ _CircuitComputation _computeCircuit(
       c.breakerOverrideA != null ? null : opts.feederBreakerFloorA[c.id];
   var breaker = loadBreaker;
   if (floorA != null) {
+    // Round 40 — the floor is ALSO capped by the earth-fault loop (ADS):
+    // a coordination floor must never create the safety non-compliance the
+    // load-sized device did not have ([ComputePanelOptions.feederBreakerCapA]).
+    final adsCapA = opts.feederBreakerCapA[c.id];
+    final capIz = adsCapA != null && adsCapA < cable.deratedIz.amperes
+        ? Current(adsCapA)
+        : cable.deratedIz;
     final floored = selectBreaker(
       profile,
       designCurrent: sizingCurrent,
       loadKind: c.loadKind,
       minRatingA: floorA,
-      maxRatingA: cable.deratedIz,
+      maxRatingA: capIz,
     );
     // The cap may only hold the floor back, never pull the device below the
     // rating the load itself demanded (the ampacity-impossible fallback is the
@@ -2166,16 +2395,29 @@ ElectricalPanelResult computePanel(
   // diversified worst line (it would trip on normal running). Feeders,
   // capacitor banks (their own floor above) and spare ways are excluded.
   // Byte-identical whenever the diversified worst line already covers it.
-  var largestWayRunA = 0.0;
+  //
+  // Round 40 — a FEEDER way counts with its fed board's largest downstream
+  // machine ([ComputePanelOptions.feederLargestRunA]), so the floor follows
+  // the machine up the tree: a 30.9 A welder behind a feeder no longer sits
+  // under a 16 A main incomer.
+  var ownWayRunA = 0.0;
+  var downstreamRunA = 0.0;
   for (var i = 0; i < comps.length; i++) {
     final b = branches[i];
-    if (b.feedsPanelId != null) continue;
+    if (b.feedsPanelId != null) {
+      final d = opts.feederLargestRunA[b.feedsPanelId] ?? 0;
+      if (d > downstreamRunA) downstreamRunA = d;
+      continue;
+    }
     final k = comps[i].result.loadKind;
     if (k == LoadKind.capacitor || k == LoadKind.spare) continue;
     final run = comps[i].result.runCurrentA.amperes;
-    if (run > largestWayRunA) largestWayRunA = run;
+    if (run > ownWayRunA) ownWayRunA = run;
   }
-  largestWayRunA = roundTo(largestWayRunA, 1);
+  ownWayRunA = roundTo(ownWayRunA, 1);
+  downstreamRunA = roundTo(downstreamRunA, 1);
+  final largestWayRunA = math.max(ownWayRunA, downstreamRunA);
+  final largestIsDownstream = downstreamRunA > ownWayRunA;
   final serviceGoverns = serviceFloorA > futureDemandCurrentA &&
       serviceFloorA >= capacitorFloorA &&
       serviceFloorA >= largestWayRunA;
@@ -2212,7 +2454,9 @@ ElectricalPanelResult computePanel(
         : capacitorGoverns
             ? 'capacitor-bank switching current'
             : largestWayGoverns
-                ? 'largest way running current'
+                ? (largestIsDownstream
+                    ? 'largest downstream machine running current'
+                    : 'largest way running current')
                 : '${headroomApplied ? 'future ' : ''}demand';
     warnings.add(ElectricalWarning(
       code: 'incomer-exceeds-range',
@@ -2422,6 +2666,7 @@ ElectricalPanelResult computePanel(
     headroomApplied: headroomApplied,
     spareWaysReserved: spareWaysReserved,
     capacitorCurrentA: capacitorFloorA,
+    largestDownstreamRunA: largestWayRunA,
     phaseBalance: PhaseBalanceResult(
       l1: balance.l1,
       l2: balance.l2,
@@ -2856,15 +3101,55 @@ ElectricalSystemResult computeSystem(
     }
   }
 
+  // Round 40 (regression-largest-machine-floor-not-propagated-upstream) —
+  // bottom-up, every FED board's largest single machine running current (its
+  // own final ways and every board below it), so the feeder supplying it, the
+  // parent incomer and the recommended daya floor at it. A final way's
+  // running current is a function of the way alone (load, cos phi, phase
+  // count, board voltage) — never of its parent or the fault level — so the
+  // very `computePanel` the sizing pass runs gives it.
+  final largestRunByPanel = <String, double>{};
+  for (final id in postOrder) {
+    final panel = byId[id];
+    if (panel == null || !parentOf.containsKey(id)) continue;
+    final solved = computePanel(
+      profile,
+      panel,
+      opts: ComputePanelOptions(
+        feederLoadW: feederLoadWByPanel[id] ?? const {},
+        feederPowerFactor: panelPowerFactor,
+        feederCapacitorFloorA: capacitorFloorByPanel,
+        feederLineCurrentsA: feederLinesByPanel,
+        feederNeutralLoad: feederNeutralByPanel,
+        feederLargestRunA: largestRunByPanel,
+        panelSystems: panelSystems,
+        earthingSystem: project.earthingSystem,
+        ttFeederRcd: ttFeederRcd,
+        calibrationBySheet: calibrationBySheet,
+        building: building,
+        panelById: byId,
+        diversityLibrary: diversityLibrary,
+        priorAssignment: prior[id] ?? const {},
+        phaseReassignThresholdA: phaseReassignThresholdA,
+      ),
+    );
+    if (solved.largestDownstreamRunA > 0) {
+      largestRunByPanel[id] = solved.largestDownstreamRunA;
+    }
+  }
+
   // True building connected load = leaf loads only (feeders are aggregations).
   // Round 32 — integer micro-watts: order-free (see [_micro]).
+  // Round 40 (electrical-sim-5-supply-connected-is-diversified) — the
+  // CONNECTED load is UNDIVERSIFIED ([circuitUndiversifiedW]): the same basis
+  // as every board's Round-30 'connected' figure, so the supply total equals
+  // the roots' connected sub-trees and stays above the diversified demand
+  // whenever any way carries a demand factor below 1.
   var connectedLoadMicroW = 0;
   for (final p in panels) {
     for (final c in p.circuits) {
       if (c.role == CircuitRole.branch && c.feedsPanelId == null) {
-        connectedLoadMicroW += _micro(circuitConnectedW(c,
-            library: diversityLibrary,
-            diversityLibraryId: p.diversityLibraryId));
+        connectedLoadMicroW += _micro(circuitUndiversifiedW(c));
       }
     }
   }
@@ -2897,7 +3182,8 @@ ElectricalSystemResult computeSystem(
   // voltage drop, the judge-only feeder check, supply summary, earthing) is a
   // pure function of the project + [feederBreakerFloorA], so it can be re-run
   // once with a selectivity floor applied (see the two-pass note after it).
-  ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA) {
+  ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA,
+      [Map<String, double> feederBreakerCapA = const {}]) {
     final warnings = <ElectricalWarning>[...baseWarnings];
     final panelFaultA = <String, double>{};
     final panelSourceZ = <String, Impedance>{};
@@ -2992,8 +3278,10 @@ ElectricalSystemResult computeSystem(
           priorAssignment: prior[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
           feederBreakerFloorA: feederBreakerFloorA,
+          feederBreakerCapA: feederBreakerCapA,
           feederLineCurrentsA: feederLinesByPanel,
           feederNeutralLoad: feederNeutralByPanel,
+          feederLargestRunA: largestRunByPanel,
           serviceMinCurrentA: roots.length == 1 && id == roots.first.id
               ? serviceMinCurrentA
               : null,
@@ -3069,6 +3357,7 @@ ElectricalSystemResult computeSystem(
         headroomApplied: pr.headroomApplied,
         spareWaysReserved: pr.spareWaysReserved,
         capacitorCurrentA: pr.capacitorCurrentA,
+        largestDownstreamRunA: pr.largestDownstreamRunA,
         phaseBalance: pr.phaseBalance,
         warnings: pr.warnings,
         diversityFactor: pr.diversityFactor,
@@ -3204,9 +3493,15 @@ ElectricalSystemResult computeSystem(
     if (serviceMinCurrentA != null) {
       final rootId = roots.first.id;
       final rootResult = results[rootId];
-      final divA = rootResult == null
+      final rawDivA = rootResult == null
           ? 0.0
           : roundTo(rootResult.diversifiedDemandCurrent.amperes, 1);
+      // Round 40 — the limiter must also pass the largest single machine on
+      // the service at its UNDIVERSIFIED running current (the figure that
+      // floors the incomer and the recommended daya).
+      final machineA = rootResult?.largestDownstreamRunA ?? 0.0;
+      final machineGoverns = machineA > rawDivA;
+      final divA = machineGoverns ? machineA : rawDivA;
       if (rootResult != null && divA > serviceMinCurrentA + 1e-9) {
         rootResult.warnings.add(ElectricalWarning(
           code: 'service-capacity-below-demand',
@@ -3215,7 +3510,8 @@ ElectricalSystemResult computeSystem(
           // sits on ONE section (coupler normally open), so the figure it is
           // judged against is that section, never misstated as the declared
           // total.
-          message: '${rootResult.name}: diversified demand '
+          message: '${rootResult.name}: '
+              '${machineGoverns ? 'the largest single machine running current' : 'diversified demand'} '
               '${_num(divA)} A on the worst-loaded '
               'phase exceeds '
               '${project.dualTransformer ? 'one ${_num(serviceCapacityVa! / 1000)} kVA section of the declared '
@@ -3468,5 +3764,56 @@ ElectricalSystemResult computeSystem(
   // So the floors computed from pass 1 are still the correct floors in pass 2,
   // and every flagged feeder emerges at or above `selectivityRatio ×` its child's
   // incomer (or clamped at the ladder top, reported honestly) — a fixed point.
-  return sizeAll(feederFloors);
+  final pass2 = sizeAll(feederFloors);
+
+  // Round 40 (electrical-sim-5-selectivity-floor-breaks-ads) — on a TN
+  // installation a raised device shrinks the earth-fault loop limit
+  // (Zs_max = 0.95·U0 / (multiple × In)), so a floored feeder can fail ADS on
+  // the very cable its load-sized device protected. Conductor / fault
+  // protection beats coordination: any floored feeder that fails ADS is
+  // capped one rung lower and re-sized, until it passes or falls back to the
+  // load-sized device (a failure there is the cable's own, reported as
+  // before — the floor never makes it worse). The
+  // cap moves only the device — the cables, and so every Zs, are identical
+  // across passes — and the floor TARGET stays recorded, so the residual
+  // partial selectivity is still reported (the feeder is not in
+  // [ElectricalSystemResult.feederFloorsApplied]). TT (RCD-cleared) or no
+  // ADS failure ⇒ pass 2 verbatim ⇒ byte-identical.
+  final isTn = pass2.earthing.system == EarthingSystem.tnS ||
+      pass2.earthing.system == EarthingSystem.tnCs;
+  if (!isTn) return pass2;
+  final faultOrigin = originFaultLevel ??
+      project.originFaultLevelA ??
+      estimatedServiceFaultLevelA(project, demand: pass2.supply.demandVa) ??
+      const Current(defaultLvUtilityFaultKa * 1000);
+  final ladder = profile.standardBreakerRatingsA;
+  final caps = <String, double>{};
+  var current = pass2;
+  for (var iter = 0; iter < ladder.length; iter++) {
+    final f =
+        faultStudy(current, project, profile, originFaultLevel: faultOrigin);
+    var changed = false;
+    for (final id in feederFloors.keys) {
+      final now = f.circuits[id];
+      if (now == null || now.adsOk != false) continue;
+      final parentId = feederParentOf[id];
+      final rNow = current.panels[parentId]?.circuits
+          .where((x) => x.circuitId == id)
+          .firstOrNull;
+      final rLoad = pass1.panels[parentId]?.circuits
+          .where((x) => x.circuitId == id)
+          .firstOrNull;
+      if (rNow == null || rLoad == null) continue;
+      final ratingNow = rNow.breaker.ratingA.amperes;
+      final loadRating = rLoad.breaker.ratingA.amperes;
+      if (ratingNow <= loadRating + 1e-9) continue;
+      final lower = ladder.lastWhere((x) => x < ratingNow - 1e-9,
+          orElse: () => loadRating);
+      caps[id] = lower < loadRating ? loadRating : lower;
+      changed = true;
+    }
+    if (!changed) break;
+    current = sizeAll(feederFloors, Map.of(caps));
+  }
+  return current;
 }

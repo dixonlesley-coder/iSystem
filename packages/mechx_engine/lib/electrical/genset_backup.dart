@@ -152,16 +152,26 @@ ApparentPower gensetBackupDemandVa(
 /// root board IS the service).
 double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
     Iterable<String> panelIds,
-    {bool roundCurrent = false, ElectricalSystem? asSystem, double? asVolts}) {
+    {bool roundCurrent = false,
+    ElectricalSystem? asSystem,
+    double? asVolts,
+    bool withLargestMachine = false}) {
   final modelById = {for (final p in project.panels) p.id: p};
   var va = 0.0;
   for (final id in panelIds) {
     final r = sys.panels[id];
     final m = modelById[id];
     if (r == null || m == null) continue;
-    final a = roundCurrent
+    var a = roundCurrent
         ? roundTo(r.diversifiedDemandCurrent.amperes, 1)
         : r.diversifiedDemandCurrent.amperes;
+    // Round 40 — a limiter must also pass the largest single machine on or
+    // below the board at its UNDIVERSIFIED running current (one machine does
+    // not diversify against itself; the same figure floors the incomer and
+    // the `service-capacity-below-demand` judge).
+    if (withLargestMachine && r.largestDownstreamRunA > a) {
+      a = r.largestDownstreamRunA;
+    }
     va += capacityForLineCurrentVa(
         a, asSystem ?? m.system, asVolts ?? m.voltage.volts);
   }
