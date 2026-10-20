@@ -131,8 +131,15 @@ void main() {
       // the generator stamp reads '· iSystem' (the product brand) instead of
       // '· MechX'. Verified as the SOLE delta by diffing against the
       // pre-change output. Line count unchanged.
-      expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0x0e4282b4);
+      // Re-baselined 2026-10-18 (Round 48 mech-convergence-3-fire-pressure-
+      // rating-unjudged): ONE line ADDED — the fixture's sprinkler-bearing
+      // fire pump (47.3 L/s @ 96.3 m rated) churns at 1.4 × 96.3 = 134.9 m =
+      // 9.81 × 134.9 = 1323 kPa > the 1210 kPa (175 psi) component rating, so
+      // the Fire section prints 'Component pressure (churn) 1323 kPa …'.
+      // Verified as the SOLE delta: dropping that line reproduces 0x0e4282b4
+      // exactly. Lines 94 -> 95.
+      expect(md.split('\n').length, 95);
+      expect(fnv1a32(md), 0xd2ca2618);
     });
   });
 
@@ -390,7 +397,14 @@ void main() {
       // 213 − 16 = 197; plus the electrical body's phase-balance precision
       // line (see the standalone pin). Verified as the SOLE deltas by diffing
       // against the pre-change output.
-      expect(md.split('\n').length, 197);
+      // Re-baselined 2026-10-18 (Round 48 mech-convergence-3-fire-pressure-
+      // rating-unjudged): ONE line ADDED — the fixture's sprinkler-bearing
+      // fire pump (47.3 L/s @ 96.3 m rated) churns at 1.4 × 96.3 = 134.9 m =
+      // 9.81 × 134.9 = 1323 kPa > the 1210 kPa (175 psi) component rating, so
+      // the Fire section prints 'Component pressure (churn) 1323 kPa …'.
+      // Verified as the SOLE delta: dropping that line reproduces 0x1ecdcdbc (with the rest of this pin)
+      // exactly. Lines 197 -> 198.
+      expect(md.split('\n').length, 198);
       // Re-baselined 2026-10-18 (Round 20 follow-up): the embedded
       // electrical way table's Length cell is `30.0 m` (planLengthLabel) — the
       // sole delta, as for the standalone electrical pin above.
@@ -401,7 +415,7 @@ void main() {
       // Re-baselined 2026-10-18 (Round 43): the embedded electrical body's
       // 71.9 % imbalance lines (see the standalone electrical pin) — sole
       // delta.
-      expect(fnv1a32(md), 0x1ecdcdbc);
+      expect(fnv1a32(md), 0xd0e4e060);
     });
   });
 

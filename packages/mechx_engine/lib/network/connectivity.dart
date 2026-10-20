@@ -21,6 +21,7 @@
 /// gravity component is never a defect here (see CLAUDE.md gravity-loop note).
 library;
 
+import '../sizing/fire_index_friction.dart' show isFireService;
 import '../sizing/network_sizing.dart' show airOpenBoundaryLeaves;
 import 'network.dart';
 
@@ -83,18 +84,31 @@ class NetworkComponentDefect {
 List<NetworkComponentDefect> networkConnectivityDefects(Network net) {
   final defects = <NetworkComponentDefect>[];
 
-  for (final service in net.edges.map((e) => e.service).toSet()) {
-    // Only pressurized + air have a meaningful source/plant; skip gravity.
-    if (service.regime == FlowRegime.gravity) continue;
-
-    // Per-service adjacency over every edge of the service.
+  // Round 48 (mech-convergence-3-combined-standpipe-false-no-source) — the
+  // two FIRE services form ONE adjacency class: a sprinkler branch tapped off
+  // a hydrant riser (the combined sprinkler/standpipe high-rise riser) is fed
+  // by the riser's fire pump, exactly as `fireSystems` / the fire stores read
+  // it. Every other service is its own class. Defects are still reported per
+  // SERVICE present in an unfed component, so kinds / locates stay stable.
+  Object classOf(ServiceType s) => isFireService(s) ? 'fire' : s;
+  final classes = <Object, Set<ServiceType>>{};
+  for (final e in net.edges) {
+    if (e.service.regime == FlowRegime.gravity) continue;
+    (classes[classOf(e.service)] ??= <ServiceType>{}).add(e.service);
+  }
+  for (final members in classes.values) {
+    // Adjacency over every edge of the class (runs and risers alike).
     final adjacency = <String, List<String>>{};
     final nodes = <String>{};
+    final nodesByService = <ServiceType, Set<String>>{};
     for (final e in net.edges) {
-      if (e.service != service) continue;
+      if (!members.contains(e.service)) continue;
       nodes..add(e.fromId)..add(e.toId);
       (adjacency[e.fromId] ??= []).add(e.toId);
       (adjacency[e.toId] ??= []).add(e.fromId);
+      (nodesByService[e.service] ??= <String>{})
+        ..add(e.fromId)
+        ..add(e.toId);
     }
 
     bool isPlant(String id) => net.nodeById(id)?.role == NodeRole.plant;
@@ -123,39 +137,46 @@ List<NetworkComponentDefect> networkConnectivityDefects(Network net) {
 
     // Round 25 — a degree-1 water meter on a cold/hot water service is the
     // mains connection (a direct-from-PDAM building draws no tank or pump).
-    final isWater =
-        service == ServiceType.coldWater || service == ServiceType.hotWater;
+    final isWater = members.contains(ServiceType.coldWater) ||
+        members.contains(ServiceType.hotWater);
     bool isMainsEntry(String id) =>
         isWater &&
         net.nodeById(id)?.component == NodeComponent.waterMeter &&
         (adjacency[id]?.length ?? 0) == 1;
     bool mainsFed(List<String> c) => c.any(isMainsEntry);
 
-    // A service "has a source somewhere" when any component carries a plant
+    // A class "has a source somewhere" when any component carries a plant
     // (or, on water, a mains meter).
     final serviceHasPlant =
         components.any((c) => c.any(isPlant) || mainsFed(c));
 
+    final ordered = members.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
     for (final component in components) {
       if (component.isEmpty) continue;
       if (component.any(isPlant)) continue; // this component is fed
-      if (mainsFed(component)) {
+      final kind = mainsFed(component)
+          ? NetworkDefectKind.mainsFed
+          // A plant-less component: an island if the class is otherwise
+          // fed, else the whole class has no source.
+          : serviceHasPlant
+              ? NetworkDefectKind.disconnectedIsland
+              : NetworkDefectKind.noSource;
+      for (final service in ordered) {
+        final own = nodesByService[service]!;
+        final ids = members.length == 1
+            ? component
+            : [
+                for (final id in component)
+                  if (own.contains(id)) id,
+              ];
+        if (ids.isEmpty) continue;
         defects.add(NetworkComponentDefect(
           service: service,
-          nodeIds: component,
-          kind: NetworkDefectKind.mainsFed,
+          nodeIds: ids,
+          kind: kind,
         ));
-        continue;
       }
-      // A plant-less component: an island if the service is otherwise fed,
-      // else the whole service has no source.
-      defects.add(NetworkComponentDefect(
-        service: service,
-        nodeIds: component,
-        kind: serviceHasPlant
-            ? NetworkDefectKind.disconnectedIsland
-            : NetworkDefectKind.noSource,
-      ));
     }
   }
 

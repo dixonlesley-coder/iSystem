@@ -1661,14 +1661,39 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         ..add(e.toId);
     }
   }
-  final dualSupplyNodes = coldNodes.intersection(hotNodes);
+  // Round 48 — a PLANT on both services (a water heater) is not a dual-fed
+  // fixture: it carries the hot side's draw onto the cold side whole (below).
+  final dualSupplyNodes = coldNodes
+      .intersection(hotNodes)
+      .where((n) => net.nodeById(n)?.role != NodeRole.plant)
+      .toSet();
   final dualFactor = profile.dualSupplyFixtureUnitFactor.value;
+  // Round 48 (mech-convergence-3-water-heater-cold-makeup-zero) — every litre
+  // of hot water enters through the heater's COLD feed. The hot pass (run
+  // before cold water, below) records, per heater plant rooting a hot-water
+  // component and sitting on a cold edge, the hot-side UBAP it carries
+  // ([heaterHotUnits], the dual-supply share already applied) and each
+  // dual-fed fixture's TOTAL UBAP ([heaterHotFixtures]). On the cold pass the
+  // heater bears that hot draw, so its feed sizes on it and the cold main
+  // upstream carries it too; where an edge carries BOTH a dual fixture's
+  // direct cold share and its hot share via the heater, the two combine to
+  // the fixture's total once (`f·X + f·X` -> `X`), so the building main
+  // carries the curve of the summed fixture totals.
+  final heaterHotUnits = <String, double>{};
+  final heaterHotFixtures = <String, Map<String, double>>{};
   bool isSanitary(ServiceType s) =>
       s == ServiceType.drainage || s == ServiceType.vent;
 
   // mech-building-3 — the VENT pass reads the DFU the drainage system carries
   // at each node a vent ties into, so drainage is always processed first.
   final services = net.edges.map((e) => e.service).toSet().toList();
+  // Round 48 — hot water before cold water (the heater's cold make-up).
+  if (services.contains(ServiceType.hotWater) &&
+      services.contains(ServiceType.coldWater)) {
+    services.remove(ServiceType.hotWater);
+    services.insert(
+        services.indexOf(ServiceType.coldWater), ServiceType.hotWater);
+  }
   if (services.contains(ServiceType.vent)) {
     services
       ..remove(ServiceType.vent)
@@ -1691,6 +1716,32 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     final useUbap =
         isWaterSupply(service) && leafFixtureUnits.containsKey(service);
     final fuPerLeaf = leafFixtureUnits[service] ?? 0.0;
+    // Round 48 — on cold water a heater plant bears its hot side's draw.
+    final svcFixtureUnits =
+        service == ServiceType.coldWater && heaterHotUnits.isNotEmpty
+            ? {
+                ...nodeFixtureUnits,
+                for (final h in heaterHotUnits.entries)
+                  h.key: (nodeFixtureUnits[h.key] ?? 0) + h.value,
+              }
+            : nodeFixtureUnits;
+    void noteHeater(String root, Map<String, double> units) {
+      if (service != ServiceType.hotWater) return;
+      if (!coldNodes.contains(root)) return;
+      if (net.nodeById(root)?.role != NodeRole.plant) return;
+      var total = 0.0;
+      final fixtures = <String, double>{};
+      for (final u in units.entries) {
+        if (u.value <= 0) continue;
+        total += u.value;
+        if (dualSupplyNodes.contains(u.key) && dualFactor > 0) {
+          fixtures[u.key] = u.value / dualFactor;
+        }
+      }
+      if (total <= 0) return;
+      heaterHotUnits[root] = (heaterHotUnits[root] ?? 0) + total;
+      (heaterHotFixtures[root] ??= {}).addAll(fixtures);
+    }
 
     final adjacency = <String, List<({String edgeId, String other})>>{};
     final nodes = <String>{};
@@ -1790,7 +1841,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     final explicitDemandKeys = isSanitary(service)
         ? drainageUnitsForService.keys.toSet()
         : useUbap
-            ? nodeFixtureUnits.keys.toSet()
+            ? svcFixtureUnits.keys.toSet()
             : nodeFlowDemand.keys.toSet();
 
     // Pick the root (= source/sink) for a component. Accumulation gives every
@@ -2439,7 +2490,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             var totalUbap = 0.0;
             for (final n in component) {
               if (n == root) continue;
-              final ubap = (nodeFixtureUnits[n] ??
+              final ubap = (svcFixtureUnits[n] ??
                       (bearsDefaultDemand(n) ? fuPerLeaf : 0.0)) *
                   (dualSupplyNodes.contains(n) ? dualFactor : 1.0);
               if (ubap > 0) {
@@ -2453,6 +2504,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               }
             }
             nodeUbapForBridges = nodeUbap;
+            noteHeater(root, nodeUbap);
             if (totalUbap > 0) {
               final totalFlow = profile
                   .probableFlowForFixtureUnits(totalUbap, system: serviceFlush)
@@ -2730,6 +2782,12 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               }
             }
           }
+          // Round 48 — a relief / yoke vent between a soil stack and its vent
+          // stack is floored at the smaller of the two stacks.
+          if (service == ServiceType.vent) {
+            _floorReliefVents(
+                net: net, sanitary: sanitary, ctx: ctx, edgeIds: edgeUnits.keys);
+          }
           // N17 — a stack must never size smaller than a branch discharging
           // into it (two different DFU tables can otherwise disagree). Only
           // meaningful for drainage (vent has one DFU table; this `service`
@@ -2857,11 +2915,12 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           // default for that water service.
           final terminalUnits = {
             for (final entry
-                in terminalMap(component, root, nodeFixtureUnits, fuPerLeaf)
+                in terminalMap(component, root, svcFixtureUnits, fuPerLeaf)
                     .entries)
               entry.key: entry.value *
                   (dualSupplyNodes.contains(entry.key) ? dualFactor : 1.0),
           };
+          noteHeater(root, terminalUnits);
           final edgeParents = <String, String>{};
           final edgeUnits = withClosing(accumulateFixtureUnits(
             net: net,
@@ -2871,6 +2930,50 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             edgeParent: edgeParents,
             deferredEdgeIds: deferred,
           ));
+          // Round 48 — a dual fixture's direct cold share and its hot share
+          // through a heater combine to its total once on every edge carrying
+          // both (the common root-ward path of the fixture and the heater).
+          if (service == ServiceType.coldWater &&
+              heaterHotFixtures.isNotEmpty) {
+            final parentEdgeOf = <String, String>{};
+            for (final pe in edgeParents.entries) {
+              final e = net.edgeById(pe.key);
+              if (e == null) continue;
+              parentEdgeOf[e.fromId == pe.value ? e.toId : e.fromId] = pe.key;
+            }
+            List<String> pathToRoot(String n) {
+              final out = <String>[];
+              final seenN = <String>{n};
+              var cur = n;
+              while (true) {
+                final pe = parentEdgeOf[cur];
+                if (pe == null) break;
+                out.add(pe);
+                final up = edgeParents[pe]!;
+                if (!seenN.add(up)) break;
+                cur = up;
+              }
+              return out;
+            }
+
+            final heaters = heaterHotFixtures.keys.toList()..sort();
+            for (final h in heaters) {
+              if (!terminalUnits.containsKey(h)) continue;
+              final hPath = pathToRoot(h).toSet();
+              final fx = heaterHotFixtures[h]!;
+              for (final f in [...fx.keys]..sort()) {
+                if (!terminalUnits.containsKey(f)) continue;
+                final overlap = (2 * dualFactor - 1) * fx[f]!;
+                if (overlap <= 0) continue;
+                for (final pe in pathToRoot(f)) {
+                  if (!hPath.contains(pe)) continue;
+                  final v = edgeUnits[pe];
+                  if (v == null) continue;
+                  edgeUnits[pe] = v - overlap < 0 ? 0.0 : v - overlap;
+                }
+              }
+            }
+          }
           fixtureUnitsOut?.addAll(edgeUnits);
           for (final entry in edgeUnits.entries) {
             allFlows[entry.key] = profile.probableFlowForFixtureUnits(
@@ -3275,9 +3378,78 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       (hydrantAdj[e.fromId] ??= []).add(e);
       (hydrantAdj[e.toId] ??= []).add(e);
     }
+    // Round 48 (mech-convergence-3-hydrant-ring-mixed-trunk-promotion) — a
+    // hydrant pipe ON A CYCLE (a yard ring main) is trunk wherever it sits:
+    // the governing hydrant may be fed round either arm, so the balanced
+    // share — below one box on the far side of the ring — is never its
+    // design flow. The `q > one box` test is a TREE heuristic (a pipe
+    // carrying more than one box must be a trunk); on a ring it promoted the
+    // two arms at the feed to the full 500 gpm while the far side kept
+    // ~0.6 L/s and sized DN65. Every ring edge now carries the standpipe
+    // flow of its component's stacks (conservatively: each arm sized for the
+    // full flow — the sectional-valve condition), so the ring is one bore
+    // and the index friction (`fireIndexPathFrictionM`) reads the full flow
+    // along the best arm — never below the equal-head split.
+    final onCycle = <String>{};
+    final ringStacks = <String, int>{};
+    {
+      final seenNode = <String>{};
+      for (final e0 in hydrantEdges) {
+        if (seenNode.contains(e0.fromId)) continue;
+        // The connected hydrant component holding e0.
+        final compNodes = <String>{e0.fromId};
+        final compEdges = <String, NetEdge>{};
+        final stack = [e0.fromId];
+        while (stack.isNotEmpty) {
+          final cur = stack.removeLast();
+          for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+            compEdges[x.id] = x;
+            final o = x.fromId == cur ? x.toId : x.fromId;
+            if (compNodes.add(o)) stack.add(o);
+          }
+        }
+        seenNode.addAll(compNodes);
+        if (compEdges.length <= compNodes.length - 1) continue; // a tree
+        final ids = compEdges.keys.toList()..sort();
+        final stacks = math.max(1,
+            parallelStandpipeCount(net, [for (final id in ids) compEdges[id]!]));
+        for (final id in ids) {
+          final e = compEdges[id]!;
+          if (e.fromId == e.toId) continue;
+          // e is on a cycle iff its ends stay connected without it.
+          final reach = <String>{e.fromId};
+          final st = [e.fromId];
+          var joined = false;
+          while (st.isNotEmpty && !joined) {
+            final cur = st.removeLast();
+            for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+              if (x.id == e.id) continue;
+              final o = x.fromId == cur ? x.toId : x.fromId;
+              if (o == e.toId) {
+                joined = true;
+                break;
+              }
+              if (reach.add(o)) st.add(o);
+            }
+          }
+          if (joined) {
+            onCycle.add(id);
+            ringStacks[id] = stacks;
+          }
+        }
+      }
+    }
     for (final e in hydrantEdges) {
       final q = allFlows[e.id];
       if (q == null) continue;
+      if (onCycle.contains(e.id)) {
+        final served = standpipeFlow(ringStacks[e.id]!);
+        allFlows[e.id] =
+            served.cubicMetersPerSecond < hydrantDesignFlow.cubicMetersPerSecond
+                ? served
+                : hydrantDesignFlow;
+        continue;
+      }
       final trunk = e.kind == EdgeKind.riser ||
           q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12;
       if (!trunk) continue;
@@ -3665,6 +3837,112 @@ const double _kDiameterEpsM = 1e-9;
 /// it (DN100 → DN65 → DN100 in the direction of flow). Vents use one DFU
 /// table (no stack/branch split) and are not touched. [raise] rebuilds the
 /// riser's sizing at the raised diameter (service-specific).
+/// Round 48 (mech-convergence-3-relief-vent-below-vent-stack) — a vent RUN
+/// whose one end is a DRAINAGE-stack node (on a drainage riser) and whose
+/// other end is a VENT-stack node (on a vent riser) ties the soil stack to its
+/// vent stack. When that tie is a RELIEF / YOKE vent — it relieves two or
+/// more storeys of the soil stack (the storeys since the previous tie, or the
+/// stack foot, are >= 2: the branch-interval spacing of IPC 908 / 914) — it is
+/// sized no smaller than the smaller of the soil stack (its bore at that
+/// storey: the largest drainage riser at the node) and the vent stack (its
+/// uniform bore): IPC 908.2 / 914.2, UPC 908 — never on its DFU share alone
+/// (DN65 on 45 DFU between two DN100 stacks). A per-storey tie is that
+/// storey's branch-vent connection and keeps its own DFU (Round 12). `//
+/// VERIFY notAnSniClause` (SniProfile.verifyChecklist). The raised size is
+/// the edge's code minimum, so a smaller hand pick is `belowCodeMinimum`. A
+/// run whose drainage end is itself on a vent riser (the stack-vent
+/// continuation) or whose ends are both vent-stack nodes (a header between
+/// two vent stacks, Round 26) is not a relief vent.
+void _floorReliefVents({
+  required Network net,
+  required Map<String, EdgeSizing> sanitary,
+  required SizingContext ctx,
+  required Iterable<String> edgeIds,
+}) {
+  final drainRiserMm = <String, double>{};
+  final ventRiserMm = <String, double>{};
+  // Soil-stack groups: nodes joined by drainage risers.
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while (parent[r] != null && parent[r] != r) {
+      r = parent[r]!;
+    }
+    return r;
+  }
+
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.riser) continue;
+    final s = sanitary[e.id];
+    if (s == null) continue;
+    final m = switch (e.service) {
+      ServiceType.drainage => drainRiserMm,
+      ServiceType.vent => ventRiserMm,
+      _ => null,
+    };
+    if (m == null) continue;
+    final mm = s.diameter.inMillimeters;
+    for (final n in [e.fromId, e.toId]) {
+      if (mm > (m[n] ?? 0)) m[n] = mm;
+    }
+    if (e.service == ServiceType.drainage) {
+      parent.putIfAbsent(e.fromId, () => e.fromId);
+      parent.putIfAbsent(e.toId, () => e.toId);
+      final ra = find(e.fromId), rb = find(e.toId);
+      if (ra != rb) parent[rb] = ra;
+    }
+  }
+  if (drainRiserMm.isEmpty || ventRiserMm.isEmpty) return;
+  int floorOf(String id) => net.nodeById(id)?.floorIndex ?? 0;
+  final footFloor = <String, int>{};
+  for (final n in drainRiserMm.keys) {
+    final g = find(n);
+    final f = floorOf(n);
+    if (f < (footFloor[g] ?? 1 << 30)) footFloor[g] = f;
+  }
+  // Candidate ties: (edge, drainage node, floor) per soil-stack group.
+  final ties = <String, List<(String, String, double)>>{};
+  for (final id in [...edgeIds]..sort()) {
+    final e = net.edgeById(id);
+    if (e == null || e.service != ServiceType.vent || e.kind != EdgeKind.run) {
+      continue;
+    }
+    if (sanitary[id] == null) continue;
+    for (final (d, v) in [(e.fromId, e.toId), (e.toId, e.fromId)]) {
+      final soil = drainRiserMm[d];
+      final stack = ventRiserMm[v];
+      if (soil == null || stack == null) continue;
+      if (ventRiserMm.containsKey(d)) continue; // stack-vent continuation
+      (ties[find(d)] ??= []).add((id, d, soil < stack ? soil : stack));
+      break;
+    }
+  }
+  for (final g in ties.keys.toList()..sort()) {
+    final list = ties[g]!
+      ..sort((x, y) {
+        final c = floorOf(x.$2).compareTo(floorOf(y.$2));
+        return c != 0 ? c : x.$1.compareTo(y.$1);
+      });
+    var below = footFloor[g] ?? 0;
+    for (final (id, d, floor) in list) {
+      final f = floorOf(d);
+      final relieved = f - below;
+      if (f > below) below = f;
+      if (relieved < 2) continue; // a per-storey branch-vent tie
+      final s = sanitary[id]!;
+      if (floor <= s.diameter.inMillimeters + 1e-9) continue;
+      final e = net.edgeById(id)!;
+      sanitary[id] = _sanitaryEdgeSizing(
+        e,
+        Diameter.mm(floor),
+        ctx,
+        codeMinimum: Diameter.mm(floor),
+        overCapacity: s.overCapacity,
+      );
+    }
+  }
+}
+
 void _clampDrainageStacksToBranches({
   required Network net,
   required Map<String, EdgeSizing> sanitary,

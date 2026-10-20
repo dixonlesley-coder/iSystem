@@ -334,3 +334,36 @@ PumpDuty firePumpDuty({
     motorOversized: rating.oversized,
   );
 }
+
+/// Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — the working
+/// pressure rating of standard listed fire-protection components (sprinkler
+/// heads, valves, fittings): 175 psi = 1207 kPa, taken as 1210 kPa.
+/// `// VERIFY notAnSniClause` — an NFPA 13 standard-pressure component
+/// limit, not an SNI 03-3989 / 03-1745 clause (SniProfile.verifyChecklist).
+const double kFireComponentMaxPressureKpa = 1210;
+
+/// Round 48 — the JUDGE-ONLY over-pressure check of one fire system: the
+/// pump's NFPA 20 CHURN pressure (its shut-off head, [FirePumpRatingResult]
+/// `churn` = 140 % of the rated head) against
+/// [kFireComponentMaxPressureKpa]. [frictionShare] is the index-path friction
+/// as a fraction of the rated head (null when unmeasured) — a large share
+/// says the pipe, not the building height, drives the pressure (upsize the
+/// index pipe or zone the system). Never resizes. Pure.
+({double churnKpa, double ratedKpa, bool over, double? frictionShare})
+    fireOverPressureCheck({
+  required FirePumpRatingResult rating,
+  double? indexFrictionM,
+  double maxComponentKpa = kFireComponentMaxPressureKpa,
+}) {
+  const rhoG = defaultWaterDensity * standardGravity;
+  final churnKpa = rhoG * rating.churn.head.meters / 1000;
+  final ratedKpa = rhoG * rating.ratedHead.meters / 1000;
+  final rated = rating.ratedHead.meters;
+  return (
+    churnKpa: churnKpa,
+    ratedKpa: ratedKpa,
+    over: churnKpa > maxComponentKpa + 1e-9,
+    frictionShare:
+        indexFrictionM == null || rated <= 0 ? null : indexFrictionM / rated,
+  );
+}

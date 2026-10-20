@@ -11,7 +11,7 @@ import '../units.dart' show ApparentPower, Power;
 import 'model.dart';
 import 'panel_results.dart';
 import 'sizing.dart' show roundTo;
-import 'sources.dart' show kGeneratorPf;
+import 'sources.dart' show generatorDutyFactor, kGeneratorPf;
 import 'ups.dart' show kUpsInputFactor;
 
 /// Round 45 (regression-ups-input-not-carried-to-genset) — the factor from a
@@ -402,8 +402,21 @@ List<ElectricalWarning> gensetBackupWarnings(
   // onto the WHOLE LV bus, the dip screen starts every motor).
   final fractionVa = sys.supply.demandVa.voltAmperes * gen.backupFraction;
   final fractionW = sys.supply.demandW * gen.backupFraction;
-  final balancedVa = essentialVa > fractionVa ? essentialVa : fractionVa;
-  final basisW = essentialW > fractionW ? essentialW : fractionW;
+  // Round 48 (regression-forced-prime-genset-judged-without-prime-uplift) —
+  // a PRIME set is sized on 1.25 × the governing basis
+  // ([requiredGeneratorKva]); judge the forced nameplate on that SAME
+  // headroom, or an 18 %-undersized prime set passes silently. Standby ⇒
+  // × 1.0 ⇒ byte-identical.
+  final duty = generatorDutyFactor(gen.mode);
+  final prime = duty > 1.0;
+  final balancedVa =
+      (essentialVa > fractionVa ? essentialVa : fractionVa) * duty;
+  final basisW = (essentialW > fractionW ? essentialW : fractionW) * duty;
+  final phaseNeedVa = phaseVa * duty;
+  final primeNote = prime
+      ? ' (prime duty needs ${((duty - 1) * 100).toStringAsFixed(0)} % '
+          'headroom)'
+      : '';
   final vaByEssential = essentialVa >= fractionVa;
   final wByEssential = essentialW >= fractionW;
   String kva(double va) => (va / 1000).toStringAsFixed(1);
@@ -417,7 +430,7 @@ List<ElectricalWarning> gensetBackupWarnings(
         code: 'genset-below-essential-demand',
         severity: WarningSeverity.warning,
         message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate is '
-            'below the ${kva(balancedVa)} kVA demand of '
+            'below the ${kva(balancedVa)} kVA$primeNote demand of '
             '${whose(vaByEssential)} it must carry — raise the genset rating '
             'or shed ${vaByEssential ? 'essential ' : ''}load.',
       ),
@@ -428,22 +441,22 @@ List<ElectricalWarning> gensetBackupWarnings(
         message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate '
             'delivers ${kva(deliveredW)} kW (at the rated pf '
             '${kGeneratorPf.toStringAsFixed(1)}), below the ${kva(basisW)} '
-            'kW real-power demand of ${whose(wByEssential)} — the engine is '
+            'kW$primeNote real-power demand of ${whose(wByEssential)} — the engine is '
             'overloaded; raise the genset rating or shed '
             '${wByEssential ? 'essential ' : ''}load.',
       ),
     // Round 35 — a 3φ alternator is rated PER PHASE: the heaviest line of
     // the backed boards must fit S / (√3·400). Judge-only.
     if (phaseVa > 0 &&
-        forced.voltAmperes + 1e-6 < phaseVa &&
-        _phaseBasisGoverns(project, sys, phaseVa, balancedVa))
+        forced.voltAmperes + 1e-6 < phaseNeedVa &&
+        _phaseBasisGoverns(project, sys, phaseNeedVa, balancedVa))
       ElectricalWarning(
         code: 'genset-phase-overload',
         severity: WarningSeverity.warning,
         message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate '
             'is rated ${(lineCurrentForCapacityA(forced.voltAmperes, sys.supply.system, sys.supply.voltage.volts)).toStringAsFixed(1)} A '
             'per phase, below the heaviest line of the boards it backs '
-            '(needs ${kva(phaseVa)} kVA of per-phase rating) — the alternator '
+            '(needs ${kva(phaseNeedVa)} kVA$primeNote of per-phase rating) — the alternator '
             'overloads on that phase; raise the genset rating or rebalance the '
             'single-phase load.',
       ),

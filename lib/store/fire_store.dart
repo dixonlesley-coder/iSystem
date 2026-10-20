@@ -137,6 +137,33 @@ final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
   return best;
 });
 
+/// Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — every drawn
+/// fire SYSTEM carrying sprinklers whose pump CHURN pressure (NFPA 20
+/// shut-off, 140 % of its rated head) exceeds the [kFireComponentMaxPressureKpa] (175 psi) rating of
+/// standard listed components, with the friction share of its rated head.
+/// JUDGE-ONLY (`fireOverPressureCheck`): the fire sizer caps velocity at
+/// 6 m/s, so a tall system can build half its rated head out of friction and
+/// churn at ~17 bar on DN40 pipe — the review says so, it never resizes.
+final fireOverPressureProvider = Provider<
+    List<
+        ({
+          FireSystemBasis basis,
+          ({double churnKpa, double ratedKpa, bool over, double? frictionShare})
+              check,
+        })>>((ref) {
+  return [
+    for (final b in ref.watch(fireSystemBasesProvider))
+      // The 175 psi limit is the SPRINKLER component listing (NFPA 13); a
+      // hydrant-only standpipe is built from high-pressure hose valves with
+      // pressure-regulating outlets (NFPA 14), so it is not judged here.
+      if (b.flow.cubicMetersPerSecond > 0 && b.system.hasSprinkler)
+        if (fireOverPressureCheck(
+                rating: b.rating, indexFrictionM: b.indexFrictionM)
+            case final c when c.over)
+          (basis: b, check: c),
+  ];
+});
+
 /// Round 29 (regression-report-standpipe-head-contradicts-rated-head) — the
 /// standpipe design the calc report PRINTS: the governing hydrant system's
 /// design (the SAME friction-inclusive head the fire-pump rating, schedule and

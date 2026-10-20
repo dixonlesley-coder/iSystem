@@ -443,9 +443,12 @@ class SniProfile implements StandardsProfile {
   /// the practice the profile cites (Noerbambang-Morimura; UPC 610.3 "for
   /// fixtures with both hot and cold supplies the separate loads are 3/4 of
   /// the total") assigns 0.75 to each, not 1.0 to both. `// VERIFY` against
-  /// SNI 8153 — general practice, not a confirmed SNI clause. NB: the engine
-  /// does not model the heater's cold make-up, so a cold main that also feeds
-  /// the water heater is not raised back to the full total (engineer review).
+  /// SNI 8153 — general practice, not a confirmed SNI clause. Round 48 — the
+  /// heater's cold make-up IS modelled on a tree cold network: the heater's
+  /// cold feed carries its hot side's draw, and an edge carrying both a
+  /// fixture's cold share and its hot share via the heater combines them to
+  /// the fixture's total once (a LOOPED cold ring adds the heater draw but
+  /// does not de-duplicate the overlap — conservative).
   StandardValue<double> get dualSupplyFixtureUnitFactor => const StandardValue(
         0.75,
         unit: 'x UBAP',
@@ -454,8 +457,8 @@ class SniProfile implements StandardsProfile {
         status: VerificationStatus.notAnSniClause,
         note: 'A fixture fed by BOTH cold and hot water loads 0.75 x its total '
             'UBAP onto each supply (general practice — confirm vs SNI 8153). '
-            'A cold main that also feeds the water heater is not raised back '
-            'to the full total by the engine.',
+            'A water heater\'s cold feed carries its hot draw, and the cold '
+            'main upstream carries each fixture\'s total once.',
       );
 
   @override
@@ -555,6 +558,19 @@ class SniProfile implements StandardsProfile {
               'small pit; a duplex set\'s standby leg is sized like its duty '
               'leg. Confirm vs SNI 8153.',
         ),
+        // Round 48 — the relief / yoke vent floor (network_sizing.dart
+        // `_floorReliefVents`).
+        const StandardValue<Object?>(
+          'min(soil stack, vent stack)',
+          unit: 'DN',
+          citation: 'IPC 908.2 / 914.2, UPC 908 — relief / yoke vent size '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A relief (yoke) vent tying a soil stack to its parallel vent '
+              'stack is sized no smaller than the smaller of the soil stack '
+              '(at that storey) and the vent stack, whatever its DFU share. '
+              'Confirm vs SNI 8153.',
+        ),
         dualSupplyFixtureUnitFactor,
         const StandardValue<Object?>(
           55.0,
@@ -598,6 +614,19 @@ class SniProfile implements StandardsProfile {
         // Values mirror kMinSprinklerPipeDiameterMm / kMinHydrantBranchDiameterMm
         // / kHoseOutletHeightM / kOverloadEfficiencyFactor (pinned equal by
         // test/audit_2026_10_fire_test.dart).
+        // Round 48 — `kFireComponentMaxPressureKpa` (fire_pump_rating.dart).
+        const StandardValue<Object?>(
+          1210.0,
+          unit: 'kPa',
+          citation: 'NFPA 13 — standard-pressure component rating 175 psi '
+              '(NOT an SNI 03-3989 / 03-1745 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A fire pump whose churn (shut-off, 140 % of the rated head) '
+              'pressure exceeds 1210 kPa (175 psi) over-pressures standard '
+              'listed sprinkler / hydrant components: upsize the index pipe '
+              'or zone the system. Judge-only. Confirm vs SNI 03-3989 / '
+              '03-1745.',
+        ),
         const StandardValue<Object?>(
           25.0,
           unit: 'mm',
