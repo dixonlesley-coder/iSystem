@@ -358,23 +358,6 @@ class ElectricalPanelResult {
 
   final PhaseBalanceResult phaseBalance;
 
-  /// Round 38 (regression-feeder-lines-carry-session-phase-labels) — the
-  /// board's per-line currents from the UNSEEDED engine balance (no session
-  /// prior), i.e. a function of the document alone. [phaseBalance] prints the
-  /// session-sticky LABELLED lines (same worst phase, spread within the 1 A
-  /// stickiness threshold); every figure that sums lines ACROSS boards (the
-  /// alternator per-line basis) reads this one so a reopen never changes it.
-  /// Null on a hand-built result ⇒ readers fall back to [phaseBalance].
-  final PhaseBalanceResult? judgedPhaseBalance;
-
-  /// The unseeded engine assignment behind [judgedPhaseBalance]
-  /// (circuit id → line). Empty on a hand-built result.
-  final Map<String, PhaseAssignment> judgedAssignment;
-
-  /// [judgedPhaseBalance], else [phaseBalance].
-  PhaseBalanceResult get historyFreePhaseBalance =>
-      judgedPhaseBalance ?? phaseBalance;
-
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
   double get imbalancePercent => phaseBalance.imbalancePercent;
 
@@ -415,8 +398,6 @@ class ElectricalPanelResult {
     this.spareWaysReserved = 0,
     this.capacitorCurrentA = 0,
     required this.phaseBalance,
-    this.judgedPhaseBalance,
-    this.judgedAssignment = const {},
     required this.warnings,
     this.diversityFactor = 1.0,
   });

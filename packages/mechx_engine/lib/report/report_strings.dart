@@ -215,6 +215,8 @@ enum RptStringKey {
   edbFaultBasisEstimate,
   edbFaultBasisDefault,
   edbFaultBasisSupplyStudy,
+  edbFaultBasisGenerator, // {xd}
+  edbFaultBasisInverter, // {m}
   headingSupplySummary,
   ssSystem,
   ssDiversifiedDemand,
@@ -650,6 +652,12 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.edbFaultBasisDefault: ' · _default — no service declared_',
   RptStringKey.edbFaultBasisSupplyStudy:
       ' · _estimated from the transformer the supply study selects for the demand (// VERIFY)_',
+  RptStringKey.edbFaultBasisGenerator:
+      " · _estimated from the generator's alternator (S / (sqrt3 x 400 V x Xd''), "
+      "Xd'' {xd} p.u.; the alternator datasheet governs) (// VERIFY)_",
+  RptStringKey.edbFaultBasisInverter:
+      ' · _estimated from the solar inverter ({m} x rated current, '
+      'current-limited; the inverter datasheet governs) (// VERIFY)_',
   RptStringKey.headingSupplySummary: 'Supply summary',
   RptStringKey.ssSystem: 'System:',
   RptStringKey.ssDiversifiedDemand: 'Diversified demand:',
@@ -1118,6 +1126,12 @@ const Map<RptStringKey, String> kReportStringsId = {
       ' · _bawaan — sambungan tidak dideklarasikan_',
   RptStringKey.edbFaultBasisSupplyStudy:
       ' · _perkiraan dari trafo yang dipilih studi pasokan untuk beban (// VERIFY)_',
+  RptStringKey.edbFaultBasisGenerator:
+      " · _perkiraan dari alternator genset (S / (sqrt3 x 400 V x Xd''), "
+      "Xd'' {xd} p.u.; lembar data alternator yang berlaku) (// VERIFY)_",
+  RptStringKey.edbFaultBasisInverter:
+      ' · _perkiraan dari inverter surya ({m} x arus pengenal, '
+      'dibatasi arus; lembar data inverter yang berlaku) (// VERIFY)_',
   RptStringKey.headingSupplySummary: 'Ringkasan pasokan',
   RptStringKey.ssSystem: 'Sistem:',
   RptStringKey.ssDiversifiedDemand: 'Permintaan terdiversifikasi:',

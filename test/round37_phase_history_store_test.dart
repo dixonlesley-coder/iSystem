@@ -1,8 +1,8 @@
 // Round 37 r2 — edit-fuzz-3-1, pinned at the STORE level.
 //
-// The live `electricalResultProvider` feeds the previous solve's phase
-// assignment back as `priorAssignments` (the session-only [PhasePriorCache],
-// stickiness 1.0 A). That memory is never written to `.mechx`, so the
+// The live `electricalResultProvider` seeds each solve with the previous
+// solve's phase assignment (stickiness 1.0 A). Since Round 39 r3 that prior
+// is PERSISTED on the document (`ElectricalCircuit.assignedPhase`), so the
 // incomer rating and its sizing current — the issued device — must read the
 // same live, after a sequence of edits, as they do after
 // buildDocument -> encode -> decode -> applyDocument into a fresh container
@@ -23,7 +23,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/autosave.dart';
 import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/electrical_store.dart';
-import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/units.dart';
@@ -147,19 +146,23 @@ void main() {
     }
   });
 
-  test('the store really does feed a prior (the cache is populated)', () {
+  test('the store PERSISTS the solved assignment on the document', () {
     final live = _c();
-    live.read(electricalProjectProvider.notifier).setProject(
-        ElectricalProject(panels: [
-          ElectricalPanel(id: 'lp', name: 'LP', circuits: [
-            _way('a', 10),
-            _way('b', 9),
-          ]),
-        ]));
+    final ctrl = live.read(electricalProjectProvider.notifier)
+      ..setProject(ElectricalProject(panels: [
+        ElectricalPanel(id: 'lp', name: 'LP', circuits: [
+          _way('a', 10),
+          _way('b', 9),
+        ]),
+      ]));
     _snap(live);
-    final prior = live.read(phasePriorCacheProvider).prior;
-    expect(prior['lp'], isNotNull);
-    expect(prior['lp']!.keys, containsAll(['a', 'b']));
-    expect(prior['lp']!['a'], isNot(PhaseAssignment.threePhase));
+    ctrl.setCircuit('lp', 'a', loadW: 231 * 10.5);
+    final ways = live.read(electricalProjectProvider).panels.single.circuits;
+    final solved = live.read(electricalResultProvider).panels['lp']!.circuits;
+    for (final w in ways) {
+      final r = solved.firstWhere((x) => x.circuitId == w.id);
+      expect(w.assignedPhase, isNotNull, reason: w.id);
+      expect(w.assignedPhase!.name, r.phase.name, reason: w.id);
+    }
   });
 }

@@ -1056,6 +1056,9 @@ enum StringKey {
   /// Round 22 — refusals for editing an MEP-DERIVED way / the MEP board,
   /// whose rows follow the equipment drawn on the plan.
   mepDerivedWayLocked,
+  /// Round 39 — refusal: two loads of different sizing bases (W vs motor kW,
+  /// a capacitor bank, a 3φ machine onto a 1φ way) cannot be merged.
+  mergeLoadBasisMismatch,
   mepDerivedWayMoveLocked,
   mepDerivedWayPositionLocked,
   mepBoardLocked,
@@ -2569,6 +2572,8 @@ const Map<StringKey, String> _en = {
       'MEP Equipment board removed — no equipment left',
   StringKey.mepDerivedWayLocked:
       'This way follows equipment on the plan — delete the equipment there to remove it',
+  StringKey.mergeLoadBasisMismatch:
+      'These loads cannot be merged — they are sized differently (motor, capacitor bank or 3-phase machine); keep them as separate ways',
   StringKey.mepDerivedWayMoveLocked:
       'This way follows equipment on the plan and stays on the MEP Equipment board — feed that board from the panel instead',
   StringKey.mepDerivedWayPositionLocked:
@@ -4143,6 +4148,8 @@ const Map<StringKey, String> _id = {
       'Panel Peralatan MEP dihapus — tidak ada peralatan tersisa',
   StringKey.mepDerivedWayLocked:
       'Jalur ini mengikuti peralatan di denah — hapus peralatannya di sana untuk menghapusnya',
+  StringKey.mergeLoadBasisMismatch:
+      'Beban ini tidak dapat digabung — dasar perhitungannya berbeda (motor, bank kapasitor, atau mesin 3 fasa); biarkan sebagai jalur terpisah',
   StringKey.mepDerivedWayMoveLocked:
       'Jalur ini mengikuti peralatan di denah dan tetap di Panel Peralatan MEP — suplai panel tersebut dari panel tujuan',
   StringKey.mepDerivedWayPositionLocked:

@@ -22,6 +22,7 @@ import '../electrical/genset_backup.dart'
     show gensetBackupDemandVa, gensetBackupDemandW;
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
+import '../electrical/power_factor.dart' show installedCapacitorBanks;
 import '../electrical/sources.dart' show sizeGenerator;
 import '../electrical/supply_design.dart' show serviceTransformer;
 import '../sizing/fan.dart';
@@ -461,14 +462,22 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       }
     }
 
-    final kvar = ep.capacitorBankKvar;
-    if (kvar != null && kvar > 0) {
+    // Round 39 (elec-reports-parity-3) — one CB-nn row per INSTALLED bank
+    // ([installedCapacitorBanks]: the capacitor ways per board, else the
+    // declared LV-bus bank) — the same kvar the BOM buys and the PF study
+    // credits.
+    final banks = installedCapacitorBanks(ep);
+    final boardName = {for (final p in ep.panels) p.id: p.name};
+    for (var i = 0; i < banks.length; i++) {
+      final b = banks[i];
+      final tag = 'CB-${(i + 1).toString().padLeft(2, '0')}';
+      final kv = b.kvar;
       rows.add(EquipmentScheduleRow(
-        tag: 'CB-01',
+        tag: tag,
         service: strings(RptStringKey.esCapBankService),
-        duty: '${_fmt(kvar, dp: 0)} kvar',
-        size: '',
-        modelSpec: specFor('CB-01'),
+        duty: '${_fmt(kv, dp: kv == kv.roundToDouble() ? 0 : 1)} kvar',
+        size: b.panelId == null ? '' : (boardName[b.panelId] ?? b.panelId!),
+        modelSpec: specFor(tag),
         qty: 1,
         category: EquipmentCategory.capacitorBank,
       ));

@@ -334,6 +334,8 @@ void main() {
           phases: 3,
           length: Length(10),
           flaOverrideA: Current(10),
+          // Round 39 — an A5 FLA is machine-owned (see compute.dart).
+          sourceEquipmentId: 'eq-heater',
         ),
       ],
     );

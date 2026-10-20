@@ -408,8 +408,19 @@ AdvancedStudy computeAdvancedStudy(
   // 5 ── Project-level passes.
   // Round 16 — a declared transformer IS the arrangement (MV), so no LV daya
   // is recommended for a service not taken at LV.
+  // Round 39 — the per-phase basis (below) is computed FIRST so the LV / MV
+  // verdict is judged on the same figure the daya recommendation uses.
+  final worstPhaseVa =
+      worstPhaseDemandVa(project, sys, originPanelIds, roundCurrent: true);
+  final perPhaseBasisVa = sys.supply.system == ElectricalSystem.singlePhase
+      ? worstPhaseDemandVa(project, sys, originPanelIds,
+          roundCurrent: true,
+          asSystem: ElectricalSystem.threePhase,
+          asVolts: kThreePhaseServiceLineVoltageV)
+      : worstPhaseVa;
   final supply = determineSupply(
     sys.supply.demandVa,
+    perPhaseDemand: ApparentPower(perPhaseBasisVa),
     dualTransformer: project.dualTransformer,
     // Round 29 — the ONE declared rating (a connection capacity above the
     // LV ceiling is a TM service on its snapped transformer).
@@ -427,8 +438,6 @@ AdvancedStudy computeAdvancedStudy(
   // inverse conversion, currents rounded as the judge rounds them) — so
   // declaring the recommended daya can never trip the engine's own judge
   // (two 1φ 5 kW heaters: 16 500 VA, never 10 600 VA / 15.3 A).
-  final worstPhaseVa =
-      worstPhaseDemandVa(project, sys, originPanelIds, roundCurrent: true);
   var daya = supply.declared
       ? null
       : recommendedDaya(

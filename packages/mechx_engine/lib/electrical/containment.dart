@@ -18,6 +18,7 @@ library;
 
 import 'dart:math' as math;
 
+import 'load_kind.dart' show LoadKind;
 import 'panel_results.dart' show ElectricalPanelResult;
 
 // ---------------------------------------------------------------------------
@@ -242,6 +243,8 @@ ConduitSpec sizeConduit(double csaMm2, int cores) {
 CableTraySpec sizeCableTray(ElectricalPanelResult panel) {
   final ods = <double>[];
   for (final c in panel.circuits) {
+    // Round 39 — a SPARE way pulls no cable (the BOM buys none).
+    if (c.loadKind == LoadKind.spare) continue;
     final od = cableOuterDiameterMm(c.cable.csaMm2, c.grounding.cores);
     if (od <= 0) continue;
     // A feeder sized as N parallel runs lays N cables on the tray, not one.
@@ -276,6 +279,9 @@ ContainmentResult containmentFor(ElectricalPanelResult panel) {
   for (final c in panel.circuits) {
     // A spare way (no cable) gets no conduit entry.
     if (c.cable.csaMm2 <= 0) continue;
+    // Round 39 (elec-props-5) — a SPARE (CADANGAN) way pulls no cable even
+    // though it is sized like a placeholder: no conduit (the BOM buys none).
+    if (c.loadKind == LoadKind.spare) continue;
     final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
     conduits.add(CircuitConduit(
       circuitId: c.circuitId,

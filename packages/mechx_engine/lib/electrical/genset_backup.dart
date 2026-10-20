@@ -261,10 +261,10 @@ double alternatorLineDemandVa(ElectricalProject project,
     final m = modelById[id];
     if (r == null || m == null) continue;
     if (m.system == ElectricalSystem.threePhase) {
-      // Round 38 — the UNSEEDED (history-free) lines: summing the
-      // session-sticky labels across boards made the genset size depend on
-      // the editing history (4.3 kVA live vs reopen on one document).
-      final b = r.historyFreePhaseBalance;
+      // Round 39 r3 — the ONE labelled assignment each board prints: the
+      // assignment is persisted in the document (`assignedPhase`), so the
+      // per-phase sum is a function of the document alone.
+      final b = r.phaseBalance;
       final d = r.diversityFactor;
       l1 += b.l1 * d;
       l2 += b.l2 * d;
@@ -276,13 +276,11 @@ double alternatorLineDemandVa(ElectricalProject project,
     final parent = feed == null ? null : sys.panels[feed.$1];
     PhaseAssignment? line;
     if (parent != null && parent.system == ElectricalSystem.threePhase) {
-      line = parent.judgedAssignment[feed!.$2];
-      if (line == null) {
-        for (final cr in parent.circuits) {
-          if (cr.circuitId == feed.$2) {
-            line = cr.phase;
-            break;
-          }
+      // Round 39 r3 — the labelled line the parent's schedule prints.
+      for (final cr in parent.circuits) {
+        if (cr.circuitId == feed!.$2) {
+          line = cr.phase;
+          break;
         }
       }
     }

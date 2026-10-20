@@ -14,7 +14,9 @@ library;
 
 import '../electrical/compute.dart' show serviceEntranceCapacityVa;
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
-import '../electrical/fault.dart' show faultStudyU0VerifyItem;
+import '../electrical/fault.dart'
+    show faultStudyU0VerifyItem, inverterFaultMultiple, kAlternatorXdPu;
+import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
@@ -23,6 +25,7 @@ import '../standards/puil.dart' show BreakerClassCode;
 import '../standards/sni.dart'
     show Revision, StandardValue, VerificationStatus;
 import '../units.dart' show Length;
+import 'electrical_sld_drawing.dart' show cableRunLabel;
 import 'plan_symbols.dart' show planLengthLabel;
 import 'report_blocks.dart';
 import 'report_strings.dart';
@@ -97,6 +100,16 @@ class ElectricalCalcReportData {
   /// omitted.
   final String? standardsProvenance;
 
+  /// Round 39 (elec-reports-parity-5) — the per-board INCOMER breaking
+  /// capacity (kA) the fault study specifies (`faultSpecifiedKa(...).incomers`,
+  /// the same map the board schedule and BOM receive). Null ⇒ no kA printed
+  /// (byte-identical).
+  final Map<String, double>? incomerKaByPanelId;
+
+  /// Round 39 — the per-way device breaking capacity (kA) the fault study
+  /// specifies (`faultSpecifiedKa(...).breakers`). Null ⇒ no kA printed.
+  final Map<String, double>? breakerKaByCircuitId;
+
   const ElectricalCalcReportData({
     required this.projectName,
     required this.date,
@@ -113,6 +126,8 @@ class ElectricalCalcReportData {
     this.revisions = const [],
     this.allWarnings,
     this.standardsProvenance,
+    this.incomerKaByPanelId,
+    this.breakerKaByCircuitId,
   });
 }
 
@@ -129,6 +144,27 @@ String _rating(double amperes) => '${_n(amperes)} A';
 
 /// Round 30 — a percentage at a fixed 0.1 (the warnings' own format).
 String _pct(double v) => v.toStringAsFixed(1);
+
+/// Round 39 (elec-reports-parity-6) — a voltage-drop percentage printed in
+/// the direction of its verdict: when the drop is OVER [limit] it is rounded
+/// UP to 0.1 (and to 0.01 when that would still print at the limit), so the
+/// printed figure always exceeds the printed limit next to 'OVER'. Pure.
+String vdropPctForVerdict(double v, {required double limit, required bool over}) {
+  if (!over) return _pct(v);
+  final up1 = (v * 10 - 1e-9).ceil() / 10;
+  if (up1 > limit + 1e-9) return up1.toStringAsFixed(1);
+  final up2 = (v * 100 - 1e-9).ceil() / 100;
+  return up2.toStringAsFixed(2);
+}
+
+/// Round 39 (elec-reports-parity-5) — the ' <n> kA' breaking-capacity token
+/// (and ' (< <Ik> kA)' when the specified rating is short of the bus's
+/// prospective fault), or '' when no rating is known.
+String _kaToken(double? ka, double? busFaultKa) {
+  if (ka == null || !ka.isFinite || ka <= 0) return '';
+  final short = busFaultKa != null && ka + 1e-9 < busFaultKa;
+  return ' ${_n(ka)} kA${short ? ' (< ${_n(busFaultKa)} kA)' : ''}';
+}
 
 /// Round 30 (report-parity-2-5) — the localized phase cell.
 String _phaseCell(PhaseAssignment p, ReportStrings strings) =>
@@ -221,6 +257,37 @@ enum FaultLevelBasis {
   /// Round 16 — nothing declared, but the demand needs an MV service: the
   /// fault of the transformer the supply study selects for it.
   supplyStudyEstimate,
+
+  /// Round 39 r2 — a GENERATOR primary supply: the alternator's own
+  /// S/(√3·400·Xd'') on its declared capacity (else the demand).
+  generatorEstimate,
+
+  /// Round 39 r2 — a SOLAR (inverter) primary supply: the inverter's
+  /// current-limited fault (a multiple of its rated current).
+  inverterEstimate,
+}
+
+/// Round 39 r2 — the provenance of a NON-explicit origin-fault estimate
+/// (`estimatedServiceFaultLevelA` returned a figure): a declared customer
+/// transformer is the service estimate; otherwise a generator / solar
+/// primary supply names its alternator / inverter basis; otherwise a
+/// declared capacity is the service estimate and nothing declared is the
+/// supply-study transformer. Mirrors the branch order of
+/// `estimatedServiceFaultLevelA`, so the printed basis is the one used.
+FaultLevelBasis serviceFaultEstimateBasis(ElectricalProject project) {
+  if ((project.transformerKva?.voltAmperes ?? 0) > 0) {
+    return FaultLevelBasis.serviceEstimate;
+  }
+  switch (project.supplyKind) {
+    case SupplyKind.generator:
+      return FaultLevelBasis.generatorEstimate;
+    case SupplyKind.solar:
+      return FaultLevelBasis.inverterEstimate;
+    case SupplyKind.pln:
+      return (project.supplyCapacityVa?.voltAmperes ?? 0) > 0
+          ? FaultLevelBasis.serviceEstimate
+          : FaultLevelBasis.supplyStudyEstimate;
+  }
 }
 
 /// The electrical **Design Basis / Inputs & Assumptions** register as a
@@ -267,6 +334,12 @@ RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
                 strings(RptStringKey.edbFaultBasisDefault),
               FaultLevelBasis.supplyStudyEstimate =>
                 strings(RptStringKey.edbFaultBasisSupplyStudy),
+              FaultLevelBasis.generatorEstimate =>
+                strings.format(RptStringKey.edbFaultBasisGenerator,
+                    {'xd': kAlternatorXdPu.toStringAsFixed(2)}),
+              FaultLevelBasis.inverterEstimate =>
+                strings.format(RptStringKey.edbFaultBasisInverter,
+                    {'m': inverterFaultMultiple.toStringAsFixed(1)}),
             }
       ),
     if (data.originFaultLevelA == null && data.busbarClearingTimeS != null)
@@ -387,6 +460,7 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
           'class': p.incomer.breaker.deviceClass.name.toUpperCase(),
           'poles': p.incomer.poles,
         }) +
+        _kaToken(data.incomerKaByPanelId?[id], p.busbar.withstand?.faultKa) +
         incomerOverRangeSuffix(p.incomer));
     final bus = p.busbar;
     final busGeom = bus.widthMm > 0 && bus.thicknessMm > 0
@@ -458,6 +532,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
       for (final mc in model?.circuits ?? const <ElectricalCircuit>[])
         if (mc.feedsPanelId != null) mc.id,
     };
+    final modelCircuitById = {
+      for (final mc in model?.circuits ?? const <ElectricalCircuit>[]) mc.id: mc,
+    };
     if (branches.isNotEmpty) {
       blocks.add(RptTable(
         [
@@ -486,17 +563,19 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
               // letter for MCBs only (as the board schedule + legend do, N12).
               '${_rating(c.breaker.ratingA.amperes)} '
                   '${c.breaker.deviceClass.name.toUpperCase()}'
-                  '${c.breaker.deviceClass.hasTripCurve ? '/${c.breaker.curve.name.toUpperCase()}' : ''}',
-              '${(c.cable.runsPerPhase ?? 1) > 1 ? '${c.cable.runsPerPhase}×' : ''}'
-                  '${_n(c.cable.csaMm2)} mm²',
+                  '${c.breaker.deviceClass.hasTripCurve ? '/${c.breaker.curve.name.toUpperCase()}' : ''}'
+                  '${_kaToken(data.breakerKaByCircuitId?[c.circuitId], p.busbar.withstand?.faultKa)}',
+              // Round 39 (elec-reports-parity-4) — the SAME conductor make-up
+              // the board schedule issues (family, cores, reduced N / PE,
+              // `Nx(...)` for parallel runs) — never a bare '4×300 mm²' that
+              // reads as one 4-core cable. A spare way pulls no cable.
+              _reportCableCell(c, modelCircuitById[c.circuitId]),
               // Run length (N8) — the figure that drove the printed Vdrop;
               // geo-derived when placed, else the manual length. Absent ⇒ '—'.
               // One 0.1 m length format across every deliverable (Round 20
               // follow-up): the board schedule prints the same figure.
               c.lengthM > 0 ? planLengthLabel(Length(c.lengthM)) : '—',
-              '${_pct(c.voltageDrop.dropPercent)}% '
-                  '(${_pct(c.cumulativeDropPercent)}%)'
-                  '${voltageDropOverLimit(c, isFeeder: feederIds.contains(c.circuitId)) ? ' ${strings(RptStringKey.verdictOver)}' : ''}',
+              _vdropCell(c, feederIds.contains(c.circuitId), strings),
               c.rcd.required
                   ? '${c.rcd.ratingMa} mA${c.rcd.type != null ? ' ${c.rcd.type!.name.toUpperCase()}' : ''}'
                       '${c.rcd.timeDelayed ? ' S' : ''}'
@@ -682,4 +761,38 @@ String _oneLineSub(String sub, ReportStrings strings) {
     return strings.format(RptStringKey.olVoltsLv, {'v': m.group(1)});
   }
   return sub;
+}
+
+
+/// Round 39 (elec-reports-parity-4) — the report's cable cell: the board
+/// schedule's own [cableRunLabel] when the model circuit is known, else
+/// `N x (<csa> mm²)` / `<csa> mm²`; a spare way '—'.
+String _reportCableCell(ElectricalCircuitResult c, ElectricalCircuit? model) {
+  if (c.loadKind == LoadKind.spare) return '—';
+  final runs = c.cable.runsPerPhase ?? 1;
+  if (model == null) {
+    final single = '${_n(c.cable.csaMm2)} mm²';
+    return runs > 1 ? '$runs x ($single)' : single;
+  }
+  return cableRunLabel(model, c.cable.csaMm2, c.threePhase,
+      cores: c.grounding.cores,
+      runs: c.cable.runsPerPhase,
+      peCsaMm2: c.grounding.peCsaMm2,
+      neutralCsaMm2: c.grounding.neutralCsaMm2);
+}
+
+/// Round 39 (elec-reports-parity-6) — the Vdrop cell: own + cumulative drop,
+/// each printed in its verdict's direction so 'OVER' never sits beside a
+/// figure that satisfies the limit.
+String _vdropCell(
+    ElectricalCircuitResult c, bool isFeeder, ReportStrings strings) {
+  final over = voltageDropOverLimit(c, isFeeder: isFeeder);
+  final limit = c.voltageDrop.limitPercent;
+  final ownOver = !c.voltageDrop.withinLimit;
+  final cumOver = over && !isFeeder && c.cumulativeDropPercent > limit + 1e-9;
+  final own = vdropPctForVerdict(c.voltageDrop.dropPercent,
+      limit: limit, over: ownOver);
+  final cum = vdropPctForVerdict(c.cumulativeDropPercent,
+      limit: limit, over: cumOver);
+  return '$own% ($cum%)${over ? ' ${strings(RptStringKey.verdictOver)}' : ''}';
 }
