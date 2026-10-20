@@ -372,8 +372,9 @@ double alternatorLineDemandVa(ElectricalProject project,
       unresolvedVa;
 }
 
-/// JUDGE-ONLY: a FORCED genset nameplate (`gen.kva`) below the essential
-/// sub-tree's demand cannot carry the boards it is designated to back. Never
+/// JUDGE-ONLY: a FORCED genset nameplate (`gen.kva`) below the backup basis
+/// (max(backup fraction × building demand, the essential sub-tree's demand)
+/// — Round 47) cannot carry the load it is designated to back. Never
 /// resizes — the engineer's nameplate stands.
 ///
 /// Two independent limits (Round 17, regression-forced-genset-kw-limit-
@@ -392,31 +393,44 @@ List<ElectricalWarning> gensetBackupWarnings(
   final essentialW = essentialDemandW(project, sys);
   final deliveredW = forced.voltAmperes * kGeneratorPf;
   final phaseVa = gensetPhaseDemandVa(project, sys);
-  // Fires only where the IMBALANCE raises the need above the balanced
-  // basis (the two balanced limits above already judge the rest).
+  // Round 47 (elec-convergence-forced-genset-below-full-backup-silent) — the
+  // forced plant is judged against the SAME basis the engine sizes and draws
+  // it on ([gensetBackupDemandVa] / [gensetBackupDemandW]): max(backup
+  // fraction × the building demand, the essential sub-tree). Judging it
+  // against the essential boards alone left a 50 kVA set silently picking up
+  // a 100 kVA bus at the default fraction 1.0 (the power one-line draws it
+  // onto the WHOLE LV bus, the dip screen starts every motor).
   final fractionVa = sys.supply.demandVa.voltAmperes * gen.backupFraction;
+  final fractionW = sys.supply.demandW * gen.backupFraction;
   final balancedVa = essentialVa > fractionVa ? essentialVa : fractionVa;
+  final basisW = essentialW > fractionW ? essentialW : fractionW;
+  final vaByEssential = essentialVa >= fractionVa;
+  final wByEssential = essentialW >= fractionW;
   String kva(double va) => (va / 1000).toStringAsFixed(1);
+  String whose(bool byEssential) => byEssential
+      ? 'the essential (genset-backed) boards'
+      : 'the building load it backs (backup fraction '
+          '${(gen.backupFraction * 100).toStringAsFixed(0)} %)';
   return [
-    if (essentialVa > 0 && forced.voltAmperes + 1e-6 < essentialVa)
+    if (balancedVa > 0 && forced.voltAmperes + 1e-6 < balancedVa)
       ElectricalWarning(
         code: 'genset-below-essential-demand',
         severity: WarningSeverity.warning,
         message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate is '
-            'below the ${kva(essentialVa)} kVA demand of the essential '
-            '(genset-backed) boards it must carry — raise the genset rating or '
-            'shed essential load.',
+            'below the ${kva(balancedVa)} kVA demand of '
+            '${whose(vaByEssential)} it must carry — raise the genset rating '
+            'or shed ${vaByEssential ? 'essential ' : ''}load.',
       ),
-    if (essentialW > 0 && deliveredW + 1e-6 < essentialW)
+    if (basisW > 0 && deliveredW + 1e-6 < basisW)
       ElectricalWarning(
         code: 'genset-below-essential-power',
         severity: WarningSeverity.warning,
         message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate '
             'delivers ${kva(deliveredW)} kW (at the rated pf '
-            '${kGeneratorPf.toStringAsFixed(1)}), below the ${kva(essentialW)} '
-            'kW real-power demand of the essential (genset-backed) boards — the '
-            'engine is overloaded; raise the genset rating or shed essential '
-            'load.',
+            '${kGeneratorPf.toStringAsFixed(1)}), below the ${kva(basisW)} '
+            'kW real-power demand of ${whose(wByEssential)} — the engine is '
+            'overloaded; raise the genset rating or shed '
+            '${wByEssential ? 'essential ' : ''}load.',
       ),
     // Round 35 — a 3φ alternator is rated PER PHASE: the heaviest line of
     // the backed boards must fit S / (√3·400). Judge-only.

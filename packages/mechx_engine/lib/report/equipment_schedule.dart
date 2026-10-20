@@ -26,7 +26,8 @@ import '../electrical/power_factor.dart'
     show PowerFactorResult, capacitorBanksToProcure, powerFactorCorrection;
 import '../electrical/power_oneline.dart'
     show distributedSourceInverters, sizeDistributedSources;
-import '../electrical/sources.dart' show BatteryChemistryInfo, sizeGenerator;
+import '../electrical/sources.dart'
+    show BatteryChemistryInfo, GeneratorMode, sizeGenerator;
 import '../electrical/supply_design.dart' show serviceTransformer;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
@@ -466,7 +467,12 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       if (sel != null && genKva != null && genKva.inKilovoltAmperes > 0) {
         rows.add(EquipmentScheduleRow(
           tag: 'G-01',
-          service: strings(RptStringKey.esGeneratorService),
+          // Round 47 — a PRIME set is scheduled as a prime generator: prime
+          // and standby are different nameplate ratings of one set, and the
+          // kVA here already carries the prime uplift.
+          service: strings(gen.mode == GeneratorMode.prime
+              ? RptStringKey.esGeneratorPrimeService
+              : RptStringKey.esGeneratorService),
           duty: '${_fmt(genKva.inKilovoltAmperes, dp: 0)} kVA',
           size: '',
           modelSpec: specFor('G-01'),

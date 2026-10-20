@@ -78,12 +78,13 @@ List<SldSheet> paginatedElectricalRiserSheets({
           Map<String, String> names = const {},
           Map<String, String> lengths = const {},
           Map<int, String> notes = const {},
-          Map<String, String> fedFrom = const {}}) =>
+          Map<String, String> fedFrom = const {},
+          bool spine = true}) =>
       buildElectricalRiser(
           project: project,
           result: result,
           building: building,
-          sourceChain: sourceChain,
+          sourceChain: sourceChain && spine,
           floorRange: r,
           hidePanelIds: hide,
           typicalNames: names,
@@ -281,7 +282,7 @@ List<SldSheet> paginatedElectricalRiserSheets({
     return parts.isEmpty ? null : parts.join(', ');
   }
 
-  SldSheet pageFor(int f, Set<String> members) {
+  SldSheet pageFor(int f, Set<String> members, {bool spine = true}) {
     final plan = pagePlan(f, f, members);
     final note = noteFor(f, members, plan.hide);
     return build((lo: f, hi: f),
@@ -289,12 +290,48 @@ List<SldSheet> paginatedElectricalRiserSheets({
         names: names,
         lengths: lengths,
         notes: note == null ? const {} : {f: note},
-        fedFrom: plan.fedFrom);
+        fedFrom: plan.fedFrom,
+        spine: spine);
   }
 
   final legibleUnit = <String, bool>{};
   bool unitLegible(int f, List<String> u) =>
       legibleUnit['$f|${u.join(',')}'] ??= legible(pageFor(f, u.toSet()));
+
+  // Greedy chunks of whole [units] on band [f]: each chunk the largest run
+  // of units that still prints at [kMinPlotLabelPt] (one unit is the floor).
+  List<List<String>> greedyChunks(int f, List<List<String>> units) {
+    bool fits(int i, int k) =>
+        legible(pageFor(f, {for (final u in units.sublist(i, i + k)) ...u}));
+    final chunks = <List<String>>[];
+    var prevK = 1;
+    var i = 0;
+    while (i < units.length) {
+      final remaining = units.length - i;
+      var k = 1;
+      final guess = math.min(prevK, remaining);
+      if (guess > 1 &&
+          fits(i, guess) &&
+          (guess == remaining || !fits(i, guess + 1))) {
+        k = guess;
+      } else {
+        var lo = 1, hi = remaining;
+        while (lo <= hi) {
+          final mid = (lo + hi) ~/ 2;
+          if (mid == 1 || fits(i, mid)) {
+            k = mid;
+            lo = mid + 1;
+          } else {
+            hi = mid - 1;
+          }
+        }
+      }
+      chunks.add([for (final u in units.sublist(i, i + k)) ...u]);
+      prevK = k;
+      i += k;
+    }
+    return chunks;
+  }
 
   // Per wide band: its (refined) units, then greedy chunks of whole units.
   final chunksOf = <int, List<List<String>>>{};
@@ -337,38 +374,39 @@ List<SldSheet> paginatedElectricalRiserSheets({
       if (!changed) break;
     }
     if (units.length < 2) continue;
-    bool fits(int i, int k) =>
-        legible(pageFor(f, {for (final u in units.sublist(i, i + k)) ...u}));
-    final chunks = <List<String>>[];
-    var prevK = 1;
-    var i = 0;
-    while (i < units.length) {
-      final remaining = units.length - i;
-      var k = 1;
-      final guess = math.min(prevK, remaining);
-      if (guess > 1 &&
-          fits(i, guess) &&
-          (guess == remaining || !fits(i, guess + 1))) {
-        k = guess;
-      } else {
-        var lo = 1, hi = remaining;
-        while (lo <= hi) {
-          final mid = (lo + hi) ~/ 2;
-          if (mid == 1 || fits(i, mid)) {
-            k = mid;
-            lo = mid + 1;
-          } else {
-            hi = mid - 1;
-          }
-        }
-      }
-      chunks.add([for (final u in units.sublist(i, i + k)) ...u]);
-      prevK = k;
-      i += k;
-    }
-    chunksOf[f] = chunks;
+    chunksOf[f] = greedyChunks(f, units);
   }
   if (chunksOf.isEmpty) return collapsed;
+
+  // Round 47 (regression-riser-pages-drop-upper-same-storey-boards-and-main-
+  // board) — a REFINED unit root (the main board, a sub-main above a chain of
+  // same-storey sub-mains) is in no chunk, and a column page keeps only the
+  // NEAREST same-band ancestor of its members, so the higher links — the
+  // main board, its incomer, the PLN source spine — used to be drawn on NO
+  // issued sheet while every column page pointed at them ('DARI (lembar
+  // lain): …'). Every board of a wide band drawn on none of its column pages
+  // is now drawn on an ANCESTOR page of that band, issued before its column
+  // pages, through the same [pageFor] (its same-storey children drawn
+  // elsewhere named in the gutter, its off-band parent / children as stubs),
+  // chunked greedily so each page still prints at the floor.
+  final ancestorChunksOf = <int, List<List<String>>>{};
+  for (final e in chunksOf.entries) {
+    final f = e.key;
+    final drawn = <String>{};
+    for (final chunk in e.value) {
+      final plan = pagePlan(f, f, chunk.toSet());
+      for (final id in allIds) {
+        if (floorOf[id] == f && !plan.hide.contains(id)) drawn.add(id);
+      }
+    }
+    final orphans = [
+      for (final id in allIds)
+        if (floorOf[id] == f && !drawn.contains(id)) id,
+    ];
+    if (orphans.isEmpty) continue;
+    ancestorChunksOf[f] =
+        greedyChunks(f, [for (final id in orphans) <String>[id]]);
+  }
 
   // Everything beyond each wide band's FIRST chunk is drawn only on its own
   // column page; the pages that still show the parent board name them.
@@ -398,9 +436,35 @@ List<SldSheet> paginatedElectricalRiserSheets({
         : p;
   }
 
-  List<SldSheet> columnPages(int f) => [
-        for (final chunk in chunksOf[f]!) flagged(pageFor(f, chunk.toSet())),
-      ];
+  // Round 47 — the source spine rides EXACTLY ONE issued sheet: a column page
+  // draws it only when it is the FIRST page of its band (ancestor pages
+  // first) that draws a root board on that band. A root kept on several
+  // column pages (a member of one chunk, the nearest same-band ancestor of
+  // another) used to repeat the whole PLN head on each; a root drawn only
+  // as a cropped off-band ancestor never carries it (its own band's page
+  // does).
+  final rootIds = <String>{
+    for (final id in allIds)
+      if (parentOfId[id] == null) id,
+  };
+  List<SldSheet> columnPages(int f) {
+    final chunks = [
+      ...?ancestorChunksOf[f],
+      ...chunksOf[f]!,
+    ];
+    var spineDrawn = false;
+    final out = <SldSheet>[];
+    for (final chunk in chunks) {
+      final members = chunk.toSet();
+      final hidden = pagePlan(f, f, members).hide;
+      final drawsRoot =
+          rootIds.any((r) => floorOf[r] == f && !hidden.contains(r));
+      final spine = drawsRoot && !spineDrawn;
+      if (spine) spineDrawn = true;
+      out.add(flagged(pageFor(f, members, spine: spine)));
+    }
+    return out;
+  }
 
   // Round 45 r2 — a REFINED unit root (a sub-main on the same storey as the
   // boards it feeds) is in no chunk: it rides every column page of its

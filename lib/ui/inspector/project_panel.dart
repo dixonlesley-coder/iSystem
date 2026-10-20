@@ -185,7 +185,10 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     if (movers.isNotEmpty)
       for (final p in scheduleData.pumps)
         if (p.service == rs(RptStringKey.esSvcDomesticWater) ||
-            p.service == rs(RptStringKey.esSvcTransferPump))
+            p.service == rs(RptStringKey.esSvcTransferPump) ||
+            // Round 47 — the standby machine is listed (labelled) too.
+            p.service == rs(RptStringKey.esSvcDomesticWaterStandby) ||
+            p.service == rs(RptStringKey.esSvcTransferPumpStandby))
           (tag: p.tag ?? '', service: p.service, duty: p.duty),
   ];
   // Round 16 (regression-report-fire-pump-without-fire-service) — the SAME
@@ -940,6 +943,33 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       ),
     );
   }
+  // Round 47 (cross-surface-standby-pump-missing-from-equipment-schedule) —
+  // a STANDBY supply pump on a mirrored parallel leg is the duty pump's
+  // machine (its MDP way carries demand factor 0, the riser and the takeoff
+  // count it), so it gets its own '(standby)' row under its plan tag — the
+  // schedule, the MDP, the riser and the BOM agree on the count.
+  final supplyStandby = binding.supplyStandbyPumpNodeIds;
+  for (final sid in supplyStandby.keys.toList()..sort()) {
+    if (movers.containsKey(sid)) continue;
+    final dutyId = supplyStandby[sid]!;
+    final duty = (dutyId == binding.supplyPumpNodeId
+            ? ref.read(pumpDutyProvider)
+            : null) ??
+        movers[dutyId] ??
+        ref.read(pumpDutyProvider);
+    if (duty == null) continue;
+    final tag = tagOfNode(sid) ?? nextPumpTag();
+    pumps.add(
+      PumpScheduleItem(
+        duty: duty,
+        service: reportStringsFor(ref)(transfers.contains(dutyId)
+            ? RptStringKey.esSvcTransferPumpStandby
+            : RptStringKey.esSvcDomesticWaterStandby),
+        tag: tag,
+        modelSpec: specs[tag],
+      ),
+    );
+  }
   // Round 30 (mech-sim-4-ejector-pump-no-duty-no-schedule) — one row per
   // drawn sewage ejector, under its plan tag, on the duty its MDP way is fed.
   // Round 31 — a duplex STANDBY ejector is the duty ejector's machine,
@@ -970,16 +1000,25 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       for (final id in binding.hwRecircPumpNodeIds)
         if (sys.nodeIds.contains(id)) id,
     ]..sort();
-    final tag = tagOfNode(onSys.isEmpty ? null : onSys.first) ??
-        'HWP-${(i + 1).toString().padLeft(2, '0')}';
-    pumps.add(
-      PumpScheduleItem(
-        duty: sys.design.pump,
-        service: reportStringsFor(ref)(RptStringKey.esSvcHwRecirc),
-        tag: tag,
-        modelSpec: specs[tag],
-      ),
-    );
+    // Round 47 — one row per DRAWN pump on the system (a parallel standby
+    // circulator designated '(standby)', the machine its df-0 MDP way is
+    // wired at), else the assumed HWP-0n.
+    final ids = onSys.isEmpty ? const <String?>[null] : onSys;
+    for (final id in ids) {
+      final tag =
+          tagOfNode(id) ?? 'HWP-${(i + 1).toString().padLeft(2, '0')}';
+      pumps.add(
+        PumpScheduleItem(
+          duty: sys.design.pump,
+          service: reportStringsFor(ref)(
+              id != null && binding.hwStandbyPumpNodeIds.contains(id)
+                  ? RptStringKey.esSvcHwRecircStandby
+                  : RptStringKey.esSvcHwRecirc),
+          tag: tag,
+          modelSpec: specs[tag],
+        ),
+      );
+    }
   }
   // The ONE fire-pump duty (NFPA 20 motor) shared with the electrical feed.
   final firePump = ref.read(firePumpDutyProvider);

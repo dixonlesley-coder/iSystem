@@ -89,6 +89,10 @@ final solveProvider = Provider<PressureSolution?>((ref) {
     // Round 22 (pressurized-3-2) — a drawn PRV holds the same setpoint on the
     // upfeed as on the downfeed, so the over-pressure remedy works.
     prvSetpoint: _prvSetpoint,
+    // Round 47 — a pump ASSUMED at a meter / bare entry sits on its floor
+    // surface, never the meter's ceiling datum (the drawn pump's datum).
+    sourceElevation:
+        assumedPumpSourceElevation(net.nodeById(source), project.building),
   );
 });
 
@@ -129,6 +133,8 @@ final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
     mounting: project.mounting,
     prvSetpoint: _prvSetpoint,
     moverHeads: heads,
+    sourceElevation:
+        assumedPumpSourceElevation(net.nodeById(source), project.building),
   );
 });
 
