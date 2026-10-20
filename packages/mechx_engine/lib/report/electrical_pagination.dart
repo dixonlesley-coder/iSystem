@@ -274,10 +274,6 @@ List<SldSheet> paginatedElectricalRiserSheets({
 
   // Everything beyond each wide band's FIRST chunk is drawn only on its own
   // column page; the pages that still show the parent board name them.
-  final beyondFirst = <String>{
-    for (final c in chunksOf.values)
-      for (final chunk in c.skip(1)) ...chunk,
-  };
   final firstChunkOf = <String>{
     for (final c in chunksOf.values) ...c.first,
   };
@@ -291,7 +287,9 @@ List<SldSheet> paginatedElectricalRiserSheets({
     }
     return {
       for (final e in byBand.entries)
-        e.key: '${label(e.value.first)}..${label(e.value.last)}',
+        e.key: e.value.length == 1
+            ? label(e.value.first)
+            : '${label(e.value.first)}..${label(e.value.last)}',
     };
   }
 
@@ -307,20 +305,21 @@ List<SldSheet> paginatedElectricalRiserSheets({
       final mine = chunk.toSet();
       // The gutter note names, PER PARENT of this chunk, its sibling boards
       // drawn on the other sheets (never a range spanning other parents).
+      // Round 45 r2 — a parent is any board feeding a unit ROOT of the chunk
+      // (its parent off the chunk): an off-band board, or a refined root on
+      // this band riding every column page of its children.
       final parts = <String>[];
       final parents = <String?>{
         for (final id in chunk)
-          if (parentOfId[id] == null || floorOf[parentOfId[id]] != f)
+          if (parentOfId[id] == null || !mine.contains(parentOfId[id]))
             parentOfId[id],
       };
       for (final par in parents) {
         final others = [
           for (final c in chunks)
-            for (final id in c)
-              if (!mine.contains(id) &&
-                  parentOfId[id] == par &&
-                  (par == null || floorOf[par] != f))
-                id,
+            if (!identical(c, chunk))
+              for (final id in c)
+                if (parentOfId[id] == par && !c.contains(par)) id,
         ];
         if (others.isEmpty) continue;
         parts.add(others.length == 1
@@ -333,7 +332,23 @@ List<SldSheet> paginatedElectricalRiserSheets({
     return out;
   }
 
-  final restNotes = parentNotes(beyondFirst);
+  // Round 45 r2 — a REFINED unit root (a sub-main on the same storey as the
+  // boards it feeds) is in no chunk: it rides every column page of its
+  // children. The rest pages keep it (with every same-band ancestor of a
+  // first-chunk board) so its off-band parent still draws the feeder and its
+  // LANJUT stub, and the gutter note names every board of a wide band that is
+  // drawn only on the column pages (not just the boards beyond the first
+  // chunk) — the parent's issued page never loses a board silently.
+  final keptOnRest = <String>{
+    ...firstChunkOf,
+    for (final m in firstChunkOf)
+      for (final id in ancestorsOf([m]))
+        if (floorOf[id] == floorOf[m]) id,
+  };
+  final restNotes = parentNotes({
+    for (final id in allIds)
+      if (chunksOf.containsKey(floorOf[id]) && !firstChunkOf.contains(id)) id,
+  });
   // The rest pages keep each wide band's FIRST chunk (off the page, it only
   // carries its parents' LANJUT stubs) and hide the other chunks.
   final restHide = <String>{
@@ -341,7 +356,7 @@ List<SldSheet> paginatedElectricalRiserSheets({
     for (final c in chunksOf.entries)
       for (final chunk in c.value.skip(1)) ...chunk,
     for (final id in allIds)
-      if (chunksOf.containsKey(floorOf[id]) && !firstChunkOf.contains(id)) id,
+      if (chunksOf.containsKey(floorOf[id]) && !keptOnRest.contains(id)) id,
   };
   List<SldSheet> restPages(int a, int b) => paginatedRiserSheets(
         build: (r) => build(
@@ -356,6 +371,9 @@ List<SldSheet> paginatedElectricalRiserSheets({
         diagramTitle: diagramTitle,
       );
 
+  final occupied = <int>{
+    for (final id in result.panels.keys) floorOf[id] ?? 0,
+  };
   // Floors TOP first: each wide band contributes its column pages; the
   // contiguous runs of other floors paginate by floor range as before.
   final pages = <SldSheet>[];
@@ -370,7 +388,18 @@ List<SldSheet> paginatedElectricalRiserSheets({
     while (a - 1 >= 0 && !chunksOf.containsKey(a - 1)) {
       a--;
     }
-    pages.addAll(restPages(a, f));
+    // Round 45 r2 — an EMPTY storey band at either end of the run is not
+    // issued as a sheet of its own (a run of only empty bands, e.g. the
+    // roof above a column-split top storey, spends no sheet at all); empty
+    // bands BETWEEN occupied ones stay, the riser passes through them.
+    var lo = a, hi = f;
+    while (lo <= hi && !occupied.contains(lo)) {
+      lo++;
+    }
+    while (hi >= lo && !occupied.contains(hi)) {
+      hi--;
+    }
+    if (lo <= hi) pages.addAll(restPages(lo, hi));
     f = a - 1;
   }
   return pages;

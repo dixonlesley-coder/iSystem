@@ -563,6 +563,99 @@ void main() {
     });
   });
 
+  // ── r2: a REFINED sub-main keeps its parent page honest ──────────────────
+  group('r45-r2-refined-root-named-on-parent-page', () {
+    test(
+        'MDP (GF) -> SDP-0 (L1) -> 30 UNIT boards (L1): the MDP page names '
+        'SDP-0, no empty ROOF-only sheet, every page >= 7 pt', () {
+      LayoutPos at(int f) => LayoutPos(sheetId: 's', floorIndex: f, x: 0, y: 0);
+      const n = 30;
+      final pr = ElectricalProject(id: 'p', name: 'P', panels: [
+        ElectricalPanel(
+            id: 'MDP',
+            name: 'MDP',
+            layoutPos: at(0),
+            circuits: const [
+              ElectricalCircuit(
+                  id: 'fs',
+                  name: 'S',
+                  loadKind: LoadKind.feeder,
+                  feedsPanelId: 'S0',
+                  length: Length(30)),
+            ]),
+        ElectricalPanel(id: 'S0', name: 'SDP-0', layoutPos: at(1), circuits: [
+          for (var i = 0; i < n; i++)
+            ElectricalCircuit(
+                id: 'fu$i',
+                name: 'U$i',
+                loadKind: LoadKind.feeder,
+                feedsPanelId: 'U$i',
+                length: Length(10.0 + i)),
+        ]),
+        for (var i = 0; i < n; i++)
+          ElectricalPanel(
+              id: 'U$i',
+              name: 'UNIT-$i',
+              layoutPos: at(1),
+              circuits: [
+                ElectricalCircuit(
+                    id: 'gu$i',
+                    name: 'G',
+                    loadKind: LoadKind.general,
+                    loadW: 1000.0 + 997 * (i % 40),
+                    cosPhi: 0.9,
+                    phases: 3,
+                    length: const Length(10)),
+              ]),
+      ]);
+      const building = BuildingLevels([
+        Floor('GF', Length(4)),
+        Floor('L1', Length(3.5)),
+        Floor('ROOF', Length(3)),
+      ]);
+      final r = computeSystem(_p, pr);
+      final pages = paginatedElectricalRiserSheets(
+          project: pr, result: r, building: building);
+      List<String> boards(SldSheet p) => [
+            for (final l in p.prims.whereType<SldLabel>())
+              if (l.size == 10 && l.bold) l.text,
+          ];
+      List<String> texts(SldSheet p) =>
+          [for (final l in p.prims.whereType<SldLabel>()) l.text];
+      final drawn = <String, int>{};
+      for (final p in pages) {
+        expect(sldSinglePageMinLabelPt(p),
+            greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9));
+        for (final b in boards(p)) {
+          drawn[b] = (drawn[b] ?? 0) + 1;
+        }
+        // No sheet is spent on an empty storey band alone.
+        expect(boards(p).where((b) => b != 'ROOF' && b != 'L1' && b != 'GF'),
+            isNotEmpty);
+      }
+      final mdpPage = pages.singleWhere((p) => boards(p).contains('MDP'));
+      // The parent's issued page names the sub-main drawn on the column
+      // pages (the r1 regression drew MDP alone: no feeder, stub or note).
+      expect(texts(mdpPage), contains('LANJUT (lembar lain):'));
+      expect(texts(mdpPage), contains('SDP-0'));
+      expect(texts(mdpPage), contains('LANJUT KE L1'));
+      for (var i = 0; i < n; i++) {
+        expect(drawn['UNIT-$i'], 1, reason: 'UNIT-$i');
+      }
+      expect(drawn['MDP'], 1);
+      // Recorded residual: the refined sub-main rides EVERY column page of
+      // its units (one per chunk), so it is drawn more than once.
+      final columnPages =
+          pages.where((p) => boards(p).any((b) => b.startsWith('UNIT-')));
+      expect(drawn['SDP-0'], columnPages.length);
+      expect(columnPages.length, greaterThan(1));
+      // Each column page names the sibling units drawn on the other sheets.
+      for (final p in columnPages) {
+        expect(texts(p), contains('LANJUT (lembar lain):'));
+      }
+    });
+  });
+
   group('electrical-sim-10-riser-export-crash-empty-band', () {
     test(
         'a page with its spine root hidden builds (no null check) and draws '

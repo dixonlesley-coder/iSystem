@@ -62,6 +62,9 @@ import 'results.dart'
         kStarDeltaInternalWiringM;
 import 'sizing.dart';
 import 'supply_design.dart' show plnDayaVa1ph;
+import 'ups.dart';
+
+export 'ups.dart' show kUpsEfficiency, kUpsRechargeAllowance, kUpsInputFactor;
 
 /// The LV line voltage (V) of a PLN 3-phase service (230/400 V system) — the
 /// basis a declared 3φ-only daya is converted on when the service-entrance
@@ -143,19 +146,6 @@ const double assumedBuildingPf = 0.85;
 /// sheath (IEC 60364-5-52 Annex E, Table E.52.1 reduction factor 0.86).
 /// A design rule, NOT an SNI/PUIL clause. // VERIFY (notAnSniClause)
 const double kFourLoadedConductorFactor = 0.86;
-
-/// Round 44 — a double-conversion UPS's input-to-output efficiency (the
-/// rectifier + inverter losses its supply carries). // VERIFY
-/// (notAnSniClause): typical online-UPS datasheet figure.
-const double kUpsEfficiency = 0.94;
-
-/// Round 44 — the battery-recharge allowance on the UPS input (× the
-/// output-loss-adjusted load). // VERIFY (notAnSniClause): typical 10 %.
-const double kUpsRechargeAllowance = 1.10;
-
-/// Round 44 — the factor from a UPS-backed board's output demand to the
-/// demand its feeder carries: `1 / η × recharge` (≈ 1.17).
-const double kUpsInputFactor = kUpsRechargeAllowance / kUpsEfficiency;
 
 /// Round 37 — a fed three-phase board's triplen-neutral condition, carried up
 /// to the FEEDER that supplies it: its FOLD-2 neutral factor (× phase

@@ -8,11 +8,11 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart' show ApparentPower, Power;
-import 'compute.dart' show kUpsInputFactor;
 import 'model.dart';
 import 'panel_results.dart';
 import 'sizing.dart' show roundTo;
 import 'sources.dart' show kGeneratorPf;
+import 'ups.dart' show kUpsInputFactor;
 
 /// Round 45 (regression-ups-input-not-carried-to-genset) — the factor from a
 /// board's OWN (output) demand to what the genset supplies for it: a
