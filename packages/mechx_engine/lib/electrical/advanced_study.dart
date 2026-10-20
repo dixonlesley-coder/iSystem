@@ -57,7 +57,8 @@ import 'genset_backup.dart'
         gensetBackedPanelIds,
         gensetBackupDemandVa,
         gensetBackupDemandW,
-        gensetBackupWarnings;
+        gensetBackupWarnings,
+        worstPhaseDemandVa;
 import 'harmonics.dart' show HarmonicsResult, ThdBand, estimateHarmonics;
 import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
@@ -415,9 +416,22 @@ AdvancedStudy computeAdvancedStudy(
     declaredKva: declaredServiceTransformer(project)?.kva,
     declaredUnits: declaredServiceTransformer(project)?.units,
   );
+  // Round 35 (elec-core-2-daya-ignores-worst-phase) — a PLN 3φ limiter trips
+  // PER PHASE at daya / (√3·400), and `computeSystem` judges a declared daya
+  // against the root's diversified WORST-phase current
+  // (`service-capacity-below-demand`). The recommendation sizes on the same
+  // basis — max(total demand VA, Σ roots' worst-phase VA through the exact
+  // inverse conversion, currents rounded as the judge rounds them) — so
+  // declaring the recommended daya can never trip the engine's own judge
+  // (two 1φ 5 kW heaters: 16 500 VA, never 10 600 VA / 15.3 A).
+  final worstPhaseVa =
+      worstPhaseDemandVa(project, sys, originPanelIds, roundCurrent: true);
   final daya = supply.declared
       ? null
-      : recommendedDaya(sys.supply.demandVa, sys.supply.system);
+      : recommendedDaya(
+          ApparentPower(math.max(
+              sys.supply.demandVa.voltAmperes, worstPhaseVa)),
+          sys.supply.system);
   final powerFactor = powerFactorCorrection(
     sys,
     project,

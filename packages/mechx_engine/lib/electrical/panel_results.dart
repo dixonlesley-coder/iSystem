@@ -479,3 +479,30 @@ class ElectricalSystemResult {
     this.feederFloorsCapped = const {},
   });
 }
+
+// ── Round 35 — one service-current basis (elec-core-2) ──────────────────────
+
+/// The line current (A) a supply of [va] passes at a board of [system] /
+/// [volts] — 3φ `VA / (√3·V_LL)`, 1φ `VA / V`. The ONE conversion the
+/// service-capacity floor / judge (`computeSystem`), the recommended PLN daya
+/// and the genset per-phase check share, so they can never disagree. Pure.
+double lineCurrentForCapacityA(
+        double va, ElectricalSystem system, double volts) =>
+    volts <= 0
+        ? 0
+        : system == ElectricalSystem.threePhase
+            ? va / (_sqrt3 * volts)
+            : va / volts;
+
+/// The exact inverse of [lineCurrentForCapacityA]: the apparent power (VA)
+/// whose per-phase rating is [amps] — 3φ `√3·V_LL·I`, 1φ `V·I`. A 3φ PLN
+/// limiter / alternator is rated PER PHASE, so the heaviest line governs:
+/// two 1φ 5 kW heaters (21.6 A on L1 and L2, 10 kVA in total) need
+/// √3·400·21.6 = 15.0 kVA of per-phase rating, not 10 kVA. Pure.
+double capacityForLineCurrentVa(
+        double amps, ElectricalSystem system, double volts) =>
+    system == ElectricalSystem.threePhase
+        ? _sqrt3 * volts * amps
+        : volts * amps;
+
+const double _sqrt3 = 1.7320508075688772;

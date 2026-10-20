@@ -8,6 +8,7 @@ library;
 import '../units.dart' show ApparentPower, Power;
 import 'model.dart';
 import 'panel_results.dart';
+import 'sizing.dart' show roundTo;
 import 'sources.dart' show kGeneratorPf;
 
 /// The name words that mark a board ESSENTIAL (on the genset-backed bus) in
@@ -115,6 +116,14 @@ double essentialDemandVa(ElectricalProject project, ElectricalSystemResult sys) 
 /// against a 120 kW essential board). A forced nameplate is NOT applied here —
 /// callers keep `gen.kva` winning, and [gensetBackupWarnings] judges it.
 /// No generator ⇒ the plain demand.
+///
+/// Round 35 (elec-core-2-genset-ignores-worst-phase) — a 3φ alternator is
+/// rated PER PHASE (S / (√3·400)), so each basis is also raised to the
+/// per-phase rating its HEAVIEST line needs ([gensetPhaseDemandVa]): two 1φ
+/// 7 kW heaters on a 3φ MDP (30.3 A on L1 and L2, 14 kVA in total) need
+/// √3·400·30.3 = 21.0 kVA, not the 17.5 kVA the balanced kW/0.8 gave (a
+/// 20 kVA set is 28.9 A per phase — a silent 5 % overload). A balanced board
+/// is unchanged (its worst-phase figure equals its demand VA).
 ApparentPower gensetBackupDemandVa(
     ElectricalProject project, ElectricalSystemResult sys) {
   final gen = project.sources?.generator;
@@ -122,7 +131,79 @@ ApparentPower gensetBackupDemandVa(
   if (gen == null) return ApparentPower(demand);
   final fractionVa = demand * gen.backupFraction;
   final essentialVa = essentialDemandVa(project, sys);
-  return ApparentPower(essentialVa > fractionVa ? essentialVa : fractionVa);
+  final balanced = essentialVa > fractionVa ? essentialVa : fractionVa;
+  final phase = gensetPhaseDemandVa(project, sys);
+  return ApparentPower(phase > balanced ? phase : balanced);
+}
+
+/// The per-phase VA a set of boards needs: Σ over [panelIds] of the
+/// [capacityForLineCurrentVa] of each board's DIVERSIFIED worst-phase current
+/// (√3·V_LL·I on a 3φ board, V·I on a 1φ board) — the inverse of the
+/// service-capacity judge's conversion. [roundCurrent] rounds each current to
+/// 0.1 A first, exactly as the judge does (the recommended daya must never
+/// disagree with it). Pure.
+double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
+    Iterable<String> panelIds,
+    {bool roundCurrent = false}) {
+  final modelById = {for (final p in project.panels) p.id: p};
+  var va = 0.0;
+  for (final id in panelIds) {
+    final r = sys.panels[id];
+    final m = modelById[id];
+    if (r == null || m == null) continue;
+    final a = roundCurrent
+        ? roundTo(r.diversifiedDemandCurrent.amperes, 1)
+        : r.diversifiedDemandCurrent.amperes;
+    va += capacityForLineCurrentVa(a, m.system, m.voltage.volts);
+  }
+  return va;
+}
+
+/// The root (utility-fed) board ids: no feeder way points at them.
+Set<String> _rootPanelIds(ElectricalProject project) {
+  final fed = <String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
+          c.feedsPanelId!,
+  };
+  return {
+    for (final p in project.panels)
+      if (!fed.contains(p.id) && p.fedByCircuitId == null) p.id,
+  };
+}
+
+/// The topmost genset-backed board ids (a backed board whose parent is not
+/// itself backed — its demand aggregates every board it feeds).
+Set<String> _topmostBackedPanelIds(ElectricalProject project) {
+  final backed = gensetBackedPanelIds(project);
+  if (backed.isEmpty) return const {};
+  final parentOf = <String, String>{};
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final fed = c.feedsPanelId;
+      if (fed != null && fed.isNotEmpty) parentOf[fed] = p.id;
+    }
+  }
+  return {
+    for (final id in backed)
+      if (!(parentOf[id] != null && backed.contains(parentOf[id]))) id,
+  };
+}
+
+/// Round 35 — the per-phase VA the genset must be rated for:
+/// `max(backupFraction × the roots' worst-phase VA, the topmost essential
+/// boards' worst-phase VA)` ([worstPhaseDemandVa]). 0 with no generator.
+double gensetPhaseDemandVa(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final gen = project.sources?.generator;
+  if (gen == null) return 0;
+  final fraction =
+      worstPhaseDemandVa(project, sys, _rootPanelIds(project)) *
+          gen.backupFraction;
+  final essential =
+      worstPhaseDemandVa(project, sys, _topmostBackedPanelIds(project));
+  return essential > fraction ? essential : fraction;
 }
 
 /// JUDGE-ONLY: a FORCED genset nameplate (`gen.kva`) below the essential
@@ -143,6 +224,11 @@ List<ElectricalWarning> gensetBackupWarnings(
   final essentialVa = essentialDemandVa(project, sys);
   final essentialW = essentialDemandW(project, sys);
   final deliveredW = forced.voltAmperes * kGeneratorPf;
+  final phaseVa = gensetPhaseDemandVa(project, sys);
+  // Fires only where the IMBALANCE raises the need above the balanced
+  // basis (the two balanced limits above already judge the rest).
+  final fractionVa = sys.supply.demandVa.voltAmperes * gen.backupFraction;
+  final balancedVa = essentialVa > fractionVa ? essentialVa : fractionVa;
   String kva(double va) => (va / 1000).toStringAsFixed(1);
   return [
     if (essentialVa > 0 && forced.voltAmperes + 1e-6 < essentialVa)
@@ -164,6 +250,21 @@ List<ElectricalWarning> gensetBackupWarnings(
             'kW real-power demand of the essential (genset-backed) boards — the '
             'engine is overloaded; raise the genset rating or shed essential '
             'load.',
+      ),
+    // Round 35 — a 3φ alternator is rated PER PHASE: the heaviest line of
+    // the backed boards must fit S / (√3·400). Judge-only.
+    if (phaseVa > 0 &&
+        forced.voltAmperes + 1e-6 < phaseVa &&
+        phaseVa > balancedVa + 1e-6)
+      ElectricalWarning(
+        code: 'genset-phase-overload',
+        severity: WarningSeverity.warning,
+        message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate '
+            'is rated ${(lineCurrentForCapacityA(forced.voltAmperes, ElectricalSystem.threePhase, sys.supply.voltage.volts)).toStringAsFixed(1)} A '
+            'per phase, below the heaviest line of the boards it backs '
+            '(needs ${kva(phaseVa)} kVA of per-phase rating) — the alternator '
+            'overloads on that phase; raise the genset rating or rebalance the '
+            'single-phase load.',
       ),
   ];
 }

@@ -3318,22 +3318,22 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             // stack ≥ collector clamp), so any smaller pick cannot carry it.
             minimumCompliant: entry.value.diameter);
   }
-  // Round 25 (drainage-4-1) — the N17 clamp ran on the AUTO sizes; a hand-
-  // OVERSIZED branch / stack / collector must not leave the pipe below it
-  // smaller in the direction of flow (IPC 704.2: no reduction in size in the
-  // direction of flow). Walk the post-override map downstream of every
-  // override: an auto edge is raised (flagged `stackRaisedForBranch`), an
-  // overridden edge smaller than an overridden pipe above it is flagged
-  // `belowCodeMinimum` (→ the gravity-below-code-minimum warning).
-  if (sizeOverrides.isNotEmpty) {
-    _clampGravityDownstreamOfOverrides(
-      net: net,
-      result: result,
-      edgeFlowFrom: edgeFlowFrom,
-      sizeOverrides: sizeOverrides,
-      ctx: ctx,
-    );
-  }
+  // Round 25 (drainage-4-1) / Round 35 (mech-props-4-stack-foot-reducer) —
+  // IPC 704.2: no reduction in size in the direction of flow. The N17 clamp
+  // only RAISES a stack to the branch above it; nothing raised the run BELOW
+  // a stack (a 3-DFU stack is DN50 on the stack table while the 3-DFU drain
+  // under it is DN40 on the branch table), nor the pipe below a hand-
+  // OVERSIZED branch. Walk the post-override map in sized flow order: an auto
+  // edge is raised to the largest bore discharging into it (flagged
+  // `stackRaisedForBranch`), an overridden edge smaller than a pipe above it
+  // is flagged `belowCodeMinimum` (-> the gravity-below-code-minimum warning).
+  _clampGravityNoReducer(
+    net: net,
+    result: result,
+    edgeFlowFrom: edgeFlowFrom,
+    sizeOverrides: sizeOverrides,
+    ctx: ctx,
+  );
   // M17 — a ring/grid whose Hardy–Cross balance never settled: every edge of
   // that component carries a PROVISIONAL split, so mark them all (after the
   // overrides, which preserve the flag either way).
@@ -3629,13 +3629,17 @@ void _clampDrainageStacksToBranches({
   }
 }
 
-/// Round 25 (drainage-4-1) — see the call site. Only sizes propagated from a
-/// hand OVERRIDE are enforced here (the auto sizes already passed the N17
-/// clamp), so a network with no gravity override is byte-identical. Topology:
-/// each gravity edge's flow comes FROM its away-from-outfall node
+/// Round 25 (drainage-4-1) / Round 35 — see the call site. Topology: each
+/// gravity edge's flow comes FROM its away-from-outfall node
 /// ([edgeFlowFrom]); the edges upstream of edge e are those whose flow
-/// arrives at e's from-node.
-void _clampGravityDownstreamOfOverrides({
+/// arrives at e's from-node. Propagation STOPS at a mover / pit / plant node
+/// (pump, booster set, ground tank, any plant role): an ejector's force main
+/// is a pumped bore with its own floor (`kEjectorForceMainMinBoreMm`), never
+/// the gravity bore that fills the pit. The RESULT sizes are the governing
+/// bores (auto picks after the N17 clamp, hand picks as drawn), so a raise
+/// high in the tree propagates all the way to the outfall.
+/// `// VERIFY notAnSniClause` (IPC 704.2 general practice).
+void _clampGravityNoReducer({
   required Network net,
   required Map<String, EdgeSizing> result,
   required Map<String, String> edgeFlowFrom,
@@ -3644,7 +3648,21 @@ void _clampGravityDownstreamOfOverrides({
 }) {
   bool isGravity(ServiceType s) =>
       s == ServiceType.drainage || s == ServiceType.rainwater;
-  // node → gravity edges whose flow ARRIVES at it (their root-side endpoint).
+  bool stopsPropagation(String nodeId) {
+    final n = net.nodeById(nodeId);
+    if (n == null) return true;
+    if (n.role == NodeRole.plant) return true;
+    switch (n.component) {
+      case NodeComponent.pump:
+      case NodeComponent.boosterSet:
+      case NodeComponent.groundTank:
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  // node -> gravity edges whose flow ARRIVES at it (their root-side endpoint).
   final arriving = <String, List<NetEdge>>{};
   for (final e in net.edges) {
     if (!isGravity(e.service) || !result.containsKey(e.id)) continue;
@@ -3653,47 +3671,88 @@ void _clampGravityDownstreamOfOverrides({
     final to = from == e.fromId ? e.toId : e.fromId;
     (arriving[to] ??= []).add(e);
   }
-  // The largest OVERRIDDEN bore upstream of an edge (its own excluded),
-  // memoised; the in-progress guard breaks a gravity loop's closing edge.
-  final memo = <String, double>{};
+  // upstream(e) = (the largest bore discharging into e, followed all the way
+  // up the tree, the edge whose own bore sets it). Memoised; the in-progress
+  // guard breaks a gravity loop's closing edge.
+  final memoUp = <String, (double, String?)>{};
   final busy = <String>{};
-  double overrideAbove(NetEdge e) {
-    final cached = memo[e.id];
+  (double, String?) upstream(NetEdge e) {
+    final cached = memoUp[e.id];
     if (cached != null) return cached;
-    if (!busy.add(e.id)) return 0;
+    if (!busy.add(e.id)) return (0, null);
     var m = 0.0;
+    String? gov;
     final from = edgeFlowFrom[e.id];
-    for (final up in arriving[from] ?? const <NetEdge>[]) {
-      if (up.id == e.id || up.service != e.service) continue;
-      if (sizeOverrides.containsKey(up.id)) {
-        m = math.max(m, result[up.id]!.diameter.meters);
+    if (from != null && !stopsPropagation(from)) {
+      for (final up in arriving[from] ?? const <NetEdge>[]) {
+        if (up.id == e.id || up.service != e.service) continue;
+        final own = result[up.id]!.diameter.meters;
+        final above = upstream(up);
+        final eff = math.max(own, above.$1);
+        if (eff > m + _kDiameterEpsM) {
+          m = eff;
+          gov = own >= eff - _kDiameterEpsM ? up.id : above.$2;
+        }
       }
-      m = math.max(m, overrideAbove(up));
     }
     busy.remove(e.id);
-    return memo[e.id] = m;
+    return memoUp[e.id] = (m, gov);
   }
 
+  // Resolve every figure on the UNRAISED map first, then write.
+  final raises = <String, (double, String?)>{};
   for (final e in net.edges) {
     if (!isGravity(e.service)) continue;
     final sized = result[e.id];
     if (sized == null || edgeFlowFrom[e.id] == null) continue;
-    final need = overrideAbove(e);
-    if (need <= sized.diameter.meters + _kDiameterEpsM) continue;
+    final up = upstream(e);
+    if (up.$1 > sized.diameter.meters + _kDiameterEpsM) raises[e.id] = up;
+  }
+  for (final entry in raises.entries) {
+    final e = net.edgeById(entry.key)!;
+    final sized = result[e.id]!;
     if (sizeOverrides.containsKey(e.id)) {
-      // A hand pick smaller than a hand pick above it: a code violation the
-      // engineer's own picks create — flagged, never silently resized.
+      // A hand pick smaller than the pipe above it: a code violation the
+      // engineer's own pick creates — flagged, never silently resized.
       result[e.id] = sized.withGravityFlags(belowMinimum: true);
-    } else {
-      final raised = Diameter(need);
-      result[e.id] = applySizeOverride(sized, raised,
-              ctx: ctx,
-              edge: e,
-              codeMinimum: raised,
-              manningRun: e.service == ServiceType.rainwater &&
-                  e.kind != EdgeKind.riser)
-          .withGravityFlags(raised: true);
+      continue;
     }
+    final raised = Diameter(entry.value.$1);
+    final govId = entry.value.$2;
+    final governing = govId == null ? null : result[govId];
+    var next = applySizeOverride(sized, raised,
+            ctx: ctx,
+            edge: e,
+            codeMinimum: raised,
+            manningRun:
+                e.service == ServiceType.rainwater && e.kind != EdgeKind.riser)
+        .withGravityFlags(raised: true);
+    // Round 19 rule, generalised — a rainwater edge raised to the bore of an
+    // UNSATURATED governing edge that carries at least its whole flow is
+    // proven to carry it: the table-top over-capacity flag clears.
+    if (e.service == ServiceType.rainwater &&
+        next.overCapacity &&
+        governing != null &&
+        !governing.overCapacity &&
+        governing.flow.cubicMetersPerSecond >=
+            sized.flow.cubicMetersPerSecond * (1 - 1e-9) &&
+        raised.meters >= governing.diameter.meters - _kDiameterEpsM) {
+      next = EdgeSizing(
+        edgeId: next.edgeId,
+        service: next.service,
+        flow: next.flow,
+        diameter: next.diameter,
+        velocity: next.velocity,
+        overCapacity: false,
+        stackRaisedForBranch: next.stackRaisedForBranch,
+        flowFromId: next.flowFromId,
+        selfCleansingOk: next.selfCleansingOk,
+        loopUnbalanced: next.loopUnbalanced,
+        demandCurveExtrapolated: next.demandCurveExtrapolated,
+        belowCodeMinimum: next.belowCodeMinimum,
+      );
+    }
+    result[e.id] = next;
   }
 }
 
