@@ -380,6 +380,15 @@ class CanvasViewState extends ConsumerState<CanvasView>
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    // The middle press is over: a later trackpad pan / pinch (which arrives
+    // with NO pointer-down) must not inherit it (review: it stayed dead after
+    // any middle pan).
+    _middlePointer = false;
+    if (_grabbing) setState(() => _grabbing = false);
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _middlePointer = false;
     if (_grabbing) setState(() => _grabbing = false);
   }
 
@@ -510,6 +519,7 @@ class CanvasViewState extends ConsumerState<CanvasView>
         child: Listener(
           onPointerDown: _onPointerDown,
           onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onScaleStart: _onScaleStart,

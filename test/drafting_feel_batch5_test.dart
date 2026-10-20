@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/base_point_command_store.dart';
+import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx/store/history_store.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/selection_store.dart';
@@ -237,9 +239,12 @@ void main() {
       expect(tester.takeException(), isNull);
       expect(at(c, 'a'), const Offset(300, 300),
           reason: 'the preview moves nothing');
-      // The target click lands a few px off node x: the node snap wins.
+      // The target click lands a few px off node x: the node snap wins, and
+      // the moved end that lands ON x JOINS it (review: no stacked twin).
       await click(tester, target);
-      expect(at(c, 'a'), const Offset(600, 300));
+      final net = c.read(networkControllerProvider).network;
+      expect(net.nodeById('a'), isNull, reason: 'a joined x');
+      expect(net.edgeById('e1')!.fromId, 'x');
       expect(at(c, 'b'), const Offset(700, 300));
     });
 
@@ -507,5 +512,87 @@ void main() {
     ]) {
       expect(docs, contains(k));
     }
+  });
+
+  group('review fixes (Fable, batch 5)', () {
+    testWidgets('two quick SHORT middle-drags pan twice — never zoom extents',
+        (tester) async {
+      final c = await pumpApp(tester, build: twoNodeRun);
+      final before = c.read(sheetViewportProvider(sheetId))!;
+      final p = canvasRect(tester).center;
+      for (var i = 0; i < 2; i++) {
+        final g = await tester.startGesture(p,
+            kind: PointerDeviceKind.mouse, buttons: kMiddleMouseButton);
+        await g.moveBy(const Offset(20, 0));
+        await tester.pump();
+        await g.up();
+        await tester.pump(const Duration(milliseconds: 40));
+      }
+      await tester.pump(const Duration(milliseconds: 600));
+      final vt = c.read(sheetViewportProvider(sheetId))!;
+      expect(vt.scale, before.scale, reason: 'no zoom extents');
+      expect(vt.offset.dx - before.offset.dx, closeTo(40, 1e-6));
+    });
+
+    testWidgets('a trackpad pan still works after a middle-button press on '
+        'a host-owned-middle canvas', (tester) async {
+      ViewportTransform? live;
+      await tester.pumpWidget(ProviderScope(
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: CanvasView(
+            contentSize: const Size(1000, 800),
+            initialTransform: const ViewportTransform(),
+            onTransformChanged: (t) => live = t,
+            background: const Color(0xFF000000),
+            externalMiddlePan: true,
+            child: const SizedBox(width: 1000, height: 800),
+          ),
+        ),
+      ));
+      await tester.pump();
+      final p = tester.getCenter(find.byType(CanvasView));
+      final m = await tester.startGesture(p,
+          kind: PointerDeviceKind.mouse, buttons: kMiddleMouseButton);
+      await m.up();
+      await tester.pump();
+      final before = live ?? const ViewportTransform();
+      final pad = await tester.createGesture(kind: PointerDeviceKind.trackpad);
+      await pad.panZoomStart(p);
+      await tester.pump();
+      await pad.panZoomUpdate(p, pan: const Offset(0, 50));
+      await tester.pump();
+      await pad.panZoomEnd();
+      await tester.pump();
+      expect((live ?? before).offset.dy - before.offset.dy,
+          isNot(closeTo(0, 1e-6)),
+          reason: 'the trackpad pan reached the canvas');
+    });
+
+    testWidgets('G during scale-point picking arms nothing; leaving the '
+        'mechanical layer cancels an armed command', (tester) async {
+      final c = await pumpApp(tester, build: twoNodeRun);
+      c.read(selectionProvider.notifier).selectEdge('e1');
+      c.read(calibrationControllerProvider.notifier).start();
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyG);
+      await tester.pump();
+      expect(c.read(basePointCommandProvider), isNull);
+      c.read(calibrationControllerProvider.notifier).cancel();
+      await tester.pump();
+
+      c.read(selectionProvider.notifier).selectEdge('e1');
+      await click(tester, canvasRect(tester).topLeft + const Offset(40, 300));
+      c.read(selectionProvider.notifier).selectEdge('e1');
+      await tester.pump();
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyG);
+      await tester.pump();
+      expect(c.read(basePointCommandProvider), isNotNull);
+      c
+          .read(activeDisciplineProvider.notifier)
+          .set(DisciplineLayer.electrical);
+      await tester.pump();
+      expect(c.read(basePointCommandProvider), isNull);
+    });
   });
 }

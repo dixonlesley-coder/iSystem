@@ -445,4 +445,64 @@ void main() {
       expect(c.read(endpointStretchProvider), isNull);
     });
   });
+
+  group('review fixes (Fable, batch 5)', () {
+    test('a Move that lands a free run end ON a node joins it (one step); a '
+        'free placement never joins; another service never joins', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's', x: 100, y: 0, floorIndex: 0),
+        NetNode(id: 't', sheetId: 's', x: 300, y: 50, floorIndex: 0),
+        NetNode(id: 'u', sheetId: 's', x: 300, y: 300, floorIndex: 0),
+        NetNode(id: 'd', sheetId: 's', x: 600, y: 50, floorIndex: 0),
+        NetNode(id: 'd2', sheetId: 's', x: 700, y: 50, floorIndex: 0),
+      ], edges: [
+        NetEdge(id: 'ab', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+        NetEdge(id: 'tu', fromId: 't', toId: 'u', service: ServiceType.coldWater),
+        NetEdge(id: 'dd', fromId: 'd', toId: 'd2', service: ServiceType.drainage),
+      ]));
+      // Move node b (the run's free end) exactly onto t.
+      expect(n.translateSelection({'b'}, const {}, const Offset(200, 50)), isTrue);
+      var net = c.read(networkControllerProvider).network;
+      expect(net.nodeById('b'), isNull, reason: 'b joined t');
+      expect(net.edgeById('ab')!.toId, 't');
+      // One undo step brings b back.
+      c.read(historyProvider.notifier).undo();
+      net = c.read(networkControllerProvider).network;
+      expect(net.nodeById('b'), isNotNull);
+      expect(net.edgeById('ab')!.toId, 'b');
+      // A cold-water end dropped on a DRAINAGE junction stays separate.
+      n.translateSelection({'b'}, const {}, const Offset(500, 50));
+      net = c.read(networkControllerProvider).network;
+      expect(net.nodeById('b'), isNotNull);
+      expect(net.edgeById('ab')!.toId, 'b');
+    });
+
+    test('a Copy whose clone lands on a node joins it and returns only the '
+        'surviving ids', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      final n = c.read(networkControllerProvider.notifier);
+      n.loadNetwork(const Network(nodes: [
+        NetNode(id: 'a', sheetId: 's', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's', x: 100, y: 0, floorIndex: 0),
+        NetNode(id: 't', sheetId: 's', x: 100, y: 200, floorIndex: 0),
+        NetNode(id: 'u', sheetId: 's', x: 100, y: 400, floorIndex: 0),
+      ], edges: [
+        NetEdge(id: 'ab', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+        NetEdge(id: 'tu', fromId: 't', toId: 'u', service: ServiceType.coldWater),
+      ]));
+      final r = n.copySelectionBy(const {}, {'ab'}, const Offset(0, 200));
+      final net = c.read(networkControllerProvider).network;
+      expect(r.nodeIds.length, 1, reason: "the clone of b merged into t");
+      final e = net.edgeById(r.edgeIds.single)!;
+      expect({e.fromId, e.toId}.contains('t'), isTrue);
+      for (final id in r.nodeIds) {
+        expect(net.nodeById(id), isNotNull);
+      }
+    });
+  });
 }

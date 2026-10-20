@@ -3,6 +3,8 @@ import 'package:flutter/widgets.dart' show Offset;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'annotation_store.dart' show measureModeProvider, roomModeProvider, tankModeProvider;
+import 'calibration_store.dart';
+import 'layer_store.dart';
 import 'network_store.dart';
 import 'sheets_store.dart';
 import 'snap_settings_store.dart' show refLineModeProvider;
@@ -115,6 +117,17 @@ class BasePointCommandController extends Notifier<BasePointCommand?> {
         if (on) cancel();
       });
     }
+    // Leaving the mechanical layer (its keys / overlay / pill are mechanical-
+    // gated) or starting a calibration (which owns the clicks) backs out —
+    // an armed command must never silently resume later (review).
+    ref.listen<bool>(
+        activeDisciplineProvider.select((d) => d.isMechanical), (_, mech) {
+      if (!mech) cancel();
+    });
+    ref.listen<bool>(
+        calibrationControllerProvider.select((c) => c.isActive), (_, on) {
+      if (on) cancel();
+    });
     ref.listen<String?>(sheetsContentProvider.select((s) => s.current?.id),
         (_, id) {
       final c = state;

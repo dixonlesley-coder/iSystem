@@ -24,7 +24,6 @@ import 'dart:async';
 import 'package:flutter/gestures.dart'
     show
         HitTestResult,
-        kDoubleTapSlop,
         kDoubleTapTimeout,
         kMiddleMouseButton,
         PointerHoverEvent,
@@ -247,7 +246,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       final last = _lastMidDown;
       if (last != null &&
           now.difference(last.$1) <= kDoubleTapTimeout &&
-          (e.localPosition - last.$2).distance <= kDoubleTapSlop) {
+          (e.localPosition - last.$2).distance <= _kMidDoubleClickSlop) {
         _lastMidDown = null;
         _midPanning = false;
         zoomExtents(sheetId);
@@ -426,7 +425,8 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     if (!_midPanning) return;
     // A middle DRAG is a pan, never the first click of a double-click.
     final last = _lastMidDown;
-    if (last != null && (e.localPosition - last.$2).distance > kDoubleTapSlop) {
+    if (last != null &&
+        (e.localPosition - last.$2).distance > _kMidDoubleClickSlop) {
       _lastMidDown = null;
     }
     canvasKeyFor(sheetId).currentState?.panByScreen(e.localPosition - _midLast);
@@ -434,6 +434,12 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   }
 
   void midPanEnd() => _midPanning = false;
+
+  /// A mouse double-click's travel allowance — a short scrubbing PAN (two
+  /// quick middle drags) must never read as zoom-extents (review: the 100-px
+  /// touch double-tap slop made it fire). Any press that moved past this is a
+  /// drag and can't be the first click either (`midPanMove` clears it).
+  static const double _kMidDoubleClickSlop = 6;
 
   /// Mouse-wheel zoom, handled here (above the overlays) so the wheel signal
   /// isn't swallowed by an opaque overlay before it reaches the canvas.
@@ -1320,6 +1326,9 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   /// True when no tool/mode is active (Select, not drawing, no annotation mode)
   /// — the state in which Enter repeats the last tool.
   bool _isIdle() =>
+      // Placing the two scale points owns the clicks (review: G/C/T armed a
+      // hidden command there that stole the first click after calibration).
+      !ref.read(calibrationControllerProvider).isActive &&
       ref.read(networkControllerProvider).tool == DrawTool.select &&
       !ref.read(measureModeProvider) &&
       !ref.read(tankModeProvider) &&

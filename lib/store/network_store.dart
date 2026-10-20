@@ -3678,16 +3678,88 @@ class NetworkController extends Notifier<DrawingState> {
     final net = state.network;
     final ids = _selectionNodeSet(nodeIds, edgeIds);
     if (ids.isEmpty) return false;
-    _commit(Network(
-      nodes: [
-        for (final n in net.nodes)
-          ids.contains(n.id)
-              ? n.copyWith(x: n.x + delta.dx, y: n.y + delta.dy)
-              : n,
-      ],
-      edges: net.edges,
+    _commit(_joinCoincident(
+      Network(
+        nodes: [
+          for (final n in net.nodes)
+            ids.contains(n.id)
+                ? n.copyWith(x: n.x + delta.dx, y: n.y + delta.dy)
+                : n,
+        ],
+        edges: net.edges,
+      ),
+      ids,
     ));
     return true;
+  }
+
+  /// Base-point Move / Copy (review): a placed node that lands EXACTLY on an
+  /// existing node of the same sheet / floor JOINS it — the canvas's own drag-
+  /// end convention ([endNodeDragWithSnap]), so the 'Node' OSNAP marker the
+  /// target pick shows never promises a connection the command won't make
+  /// (two stacked, unconnected nodes would read as a loose end + an orphan in
+  /// Review). The join obeys the draw rule ([drawEndpointAdoptable]: a plain
+  /// run end never merges onto another service's junction), never merges two
+  /// placed nodes into each other, and drops an edge that would collapse to a
+  /// self-loop or duplicate an existing one. Exact coincidence only: the
+  /// target snap places the node ON the other one; a free click never joins.
+  Network _joinCoincident(Network net, Set<String> placed) {
+    final rename = <String, String>{};
+    for (final m in net.nodes) {
+      if (!placed.contains(m.id)) continue;
+      ServiceType? svc;
+      var mixed = false;
+      final mIsPlain = m.component == null && m.role == NodeRole.main;
+      for (final e in net.edgesAt(m.id)) {
+        if (svc != null && e.service != svc) mixed = true;
+        svc = e.service;
+      }
+      final drawService = mIsPlain && !mixed ? svc : null;
+      for (final n in net.nodes) {
+        if (placed.contains(n.id) || rename.containsValue(n.id)) continue;
+        if (n.sheetId != m.sheetId || n.floorIndex != m.floorIndex) continue;
+        if (n.x != m.x || n.y != m.y) continue;
+        if (drawService != null &&
+            !drawEndpointAdoptable(n, net.edgesAt(n.id),
+                drawService: drawService)) {
+          continue;
+        }
+        rename[m.id] = n.id;
+        break;
+      }
+    }
+    if (rename.isEmpty) return net;
+    (String, String, ServiceType, EdgeKind) keyOf(
+            String from, String to, NetEdge e) =>
+        from.compareTo(to) < 0
+            ? (from, to, e.service, e.kind)
+            : (to, from, e.service, e.kind);
+    // Only a RE-WIRED edge can be dropped (as a self-loop, or as a duplicate
+    // of a run already joining the same two nodes) — never an untouched one.
+    final seen = <(String, String, ServiceType, EdgeKind)>{
+      for (final e in net.edges)
+        if (!rename.containsKey(e.fromId) && !rename.containsKey(e.toId))
+          keyOf(e.fromId, e.toId, e),
+    };
+    final edges = <NetEdge>[];
+    for (final e in net.edges) {
+      if (!rename.containsKey(e.fromId) && !rename.containsKey(e.toId)) {
+        edges.add(e);
+        continue;
+      }
+      final from = rename[e.fromId] ?? e.fromId;
+      final to = rename[e.toId] ?? e.toId;
+      if (from == to) continue; // collapsed onto its own far end
+      if (!seen.add(keyOf(from, to, e))) continue;
+      edges.add(e.copyWith(fromId: from, toId: to));
+    }
+    return Network(
+      nodes: [
+        for (final n in net.nodes)
+          if (!rename.containsKey(n.id)) n,
+      ],
+      edges: edges,
+    );
   }
 
   /// COPY the [nodeIds]/[edgeIds] selection by [delta] (world px) in ONE undo
@@ -3726,13 +3798,23 @@ class NetworkController extends Notifier<DrawingState> {
       if (from == null || to == null) continue;
       newEdges.add(_cloneEdge(e, _id('e'), from, to));
     }
-    _commit(Network(
-      nodes: [...net.nodes, ...newNodes],
-      edges: [...net.edges, ...newEdges],
-    ));
+    final joined = _joinCoincident(
+      Network(
+        nodes: [...net.nodes, ...newNodes],
+        edges: [...net.edges, ...newEdges],
+      ),
+      {for (final n in newNodes) n.id},
+    );
+    _commit(joined);
     return (
-      nodeIds: {for (final n in newNodes) n.id},
-      edgeIds: {for (final e in newEdges) e.id},
+      nodeIds: {
+        for (final n in newNodes)
+          if (joined.nodeById(n.id) != null) n.id,
+      },
+      edgeIds: {
+        for (final e in newEdges)
+          if (joined.edgeById(e.id) != null) e.id,
+      },
     );
   }
 
