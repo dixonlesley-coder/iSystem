@@ -343,7 +343,7 @@ void main() {
     // diagram x moved, and the primed redo entry still intact.
     testWidgets(
         'select-to-inspect pushes NO undo step and keeps redo; a riser drag '
-        'moves the DIAGRAM only and records nothing', (tester) async {
+        'moves the DIAGRAM only, as ONE undoable layout step', (tester) async {
       await tester.pumpWidget(editHarness());
       await tester.pump();
 
@@ -391,8 +391,16 @@ void main() {
       expect(container.read(schematicLayoutProvider).xForId('lo', planX),
           isNot(200),
           reason: 'the elevation override carries the move');
-      expect(history.canUndo, isFalse);
-      expect(history.canRedo, isTrue);
+      // R3 RE-DERIVATION — the drag is now ONE riser-layout step on the global
+      // timeline (it forks history like any edit, so the primed redo goes);
+      // one undo returns the riser to its plan x, the plan untouched.
+      expect(history.canUndo, isTrue);
+      expect(history.canRedo, isFalse);
+      history.undo();
+      expect(container.read(schematicLayoutProvider).xForId('lo', planX), 200);
+      expect(
+          container.read(networkControllerProvider).network.nodeById('lo')!.x,
+          200);
     });
 
     testWidgets(
