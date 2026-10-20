@@ -1475,7 +1475,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   (`airSystemsProvider(service)`, `roomSizingProvider` — never re-size a room
   inside paint — `networkElementDefectsProvider`). The network drawing sits
   behind its own `RepaintBoundary`; the hover halo is a separate thin layer
-  under it, and the painter culls off-screen elements (240 px margin). Pinned
+  above it, and the painter culls off-screen elements (500 px margin — it
+  must exceed the label ladder's reach, or culling moves on-screen chips). Pinned
   in `test/drafting_perf_test.dart`.
   The Riser viewports are their own providers (`schematicAutoViewportProvider`
   / `schematicEditViewportProvider`) and the Auto painter is memoized on

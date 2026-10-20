@@ -589,15 +589,15 @@ void main() {
       ));
       await tester.pump();
 
-      // The drawing painter is the LAST CustomPaint (the first is the thin
-      // hover-halo layer beneath it, drafting-feel perf).
+      // The drawing painter is the FIRST CustomPaint (the second is the thin
+      // hover-halo layer above it, drafting-feel perf).
       CustomPainter painterNow() => (tester.widget<CustomPaint>(
             find
                 .descendant(
                   of: find.byType(NetworkLayer),
                   matching: find.byType(CustomPaint),
                 )
-                .last,
+                .first,
           ).painter)!;
 
       final before = painterNow();

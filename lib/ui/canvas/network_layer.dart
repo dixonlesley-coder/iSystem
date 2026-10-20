@@ -155,15 +155,19 @@ class NetworkLayer extends ConsumerWidget {
         );
 
     // Drafting-feel perf: the hover pre-highlight (E7) is its own thin layer
-    // UNDER the drawing (the halo was always painted beneath the element and
-    // its selection halo), so a hover change repaints one halo — never the
-    // whole floor — and the drawing itself sits behind its own repaint
-    // boundary, untouched by chrome / overlay repaints. Null hover ⇒ the halo
-    // layer paints nothing (idle byte-identical).
+    // ABOVE the drawing, so a hover change repaints one translucent halo —
+    // never the whole floor — and the drawing itself sits behind its own
+    // repaint boundary, untouched by chrome / overlay repaints. On top (not
+    // beneath) so the faint tint still reads over a wide, true-diameter main
+    // (beneath, only a 2-px rim of it survived). Null hover ⇒ the halo layer
+    // paints nothing (idle byte-identical).
     return IgnorePointer(
       child: Stack(
         fit: StackFit.expand,
         children: [
+          RepaintBoundary(
+            child: CustomPaint(size: Size.infinite, painter: painter()),
+          ),
           Consumer(builder: (context, ref, _) {
             final hover = ref.watch(hoverTargetProvider);
             return CustomPaint(
@@ -174,9 +178,6 @@ class NetworkLayer extends ConsumerWidget {
                   hoveredEdgeId: hover?.edgeId),
             );
           }),
-          RepaintBoundary(
-            child: CustomPaint(size: Size.infinite, painter: painter()),
-          ),
         ],
       ),
     );
@@ -187,9 +188,12 @@ class NetworkLayer extends ConsumerWidget {
 }
 
 /// How far outside the canvas an element may sit and still be painted (screen
-/// px) — larger than the widest label chip / equipment tag drawn beside any
-/// element, so culling never changes a visible pixel nor a label collision.
-const double _kCullMargin = 240;
+/// px). A culled run no longer registers its label chip, so the margin must
+/// exceed the farthest an off-screen chip can steer an on-screen one: the
+/// label ladder's reach (3 x the chip offset, at most ~73 px at the 120-px
+/// true-diameter cap) plus 1.5 x the widest chip (~150 px) ≈ 445 px. 500 keeps
+/// culling free of any visible pixel or label-placement change.
+const double _kCullMargin = 500;
 
 /// Drafting-feel perf — the laid-out run-label painters, keyed by text (the
 /// style is fixed). Every repaint used to lay out every size label again; a
