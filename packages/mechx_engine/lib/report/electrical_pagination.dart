@@ -102,21 +102,56 @@ List<SldSheet> paginatedElectricalOverviewSheets({
             for (final id in result.order)
               if (!hasParent.contains(id)) id,
           ];
+    if (minPt(whole) >= kMinPlotLabelPt - 1e-9) return [whole];
     final splittable = roots.any(hasGrandchildren);
-    if (!splittable || minPt(whole) >= kMinPlotLabelPt - 1e-9) {
-      return [whole];
+    final directCount =
+        roots.fold<int>(0, (n, r) => n + kidsOf(r).length);
+    if (!splittable && directCount < 2) return [whole];
+    final top = splittable
+        ? buildElectricalOverview(
+            project: project,
+            result: result,
+            sourceChain: sourceChain,
+            subtreeRootId: root,
+            maxDepth: 1)
+        : whole;
+    // Round 34 (electrical-drawings-4-overview-pagination-leaves-top-page-
+    // below-floor) — a wide FLAT tier is width-bound: cutting sub-trees left
+    // the depth-1 top page itself below the floor. Re-check it, and when it
+    // is still too small split the roots' direct sub-boards into the fewest
+    // equal chunks whose every page prints at the floor (the source spine
+    // rides the first chunk; a single-board chunk is the last resort).
+    var tops = [top];
+    if (minPt(top) < kMinPlotLabelPt - 1e-9) {
+      final direct = [
+        for (final r in roots) ...kidsOf(r),
+      ];
+      for (var g = 2; g <= direct.length; g++) {
+        final size = (direct.length / g).ceil();
+        final chunks = [
+          for (var i = 0; i < direct.length; i += size)
+            direct.sublist(i, (i + size).clamp(0, direct.length)).toSet(),
+        ];
+        final pages = [
+          for (var i = 0; i < chunks.length; i++)
+            buildElectricalOverview(
+                project: project,
+                result: result,
+                sourceChain: sourceChain && i == 0,
+                subtreeRootId: root,
+                maxDepth: splittable ? 1 : null,
+                rootChildIds: chunks[i]),
+        ];
+        tops = pages;
+        if (pages.every((p) => minPt(p) >= kMinPlotLabelPt - 1e-9)) break;
+      }
     }
-    final top = buildElectricalOverview(
-        project: project,
-        result: result,
-        sourceChain: sourceChain,
-        subtreeRootId: root,
-        maxDepth: 1);
     return [
-      top,
-      for (final r in roots)
-        for (final k in kidsOf(r))
-          if (kidsOf(k).isNotEmpty) ...pagesFor(k),
+      ...tops,
+      if (splittable)
+        for (final r in roots)
+          for (final k in kidsOf(r))
+            if (kidsOf(k).isNotEmpty) ...pagesFor(k),
     ];
   }
 

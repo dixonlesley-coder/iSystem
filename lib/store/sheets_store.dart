@@ -258,6 +258,9 @@ class SheetsController extends Notifier<SheetsState> {
       sizePx: source.sizePx,
       dxfFrame: source.dxfFrame,
       dxfLiveFrameAck: source.dxfLiveFrameAck,
+      // Round 34 — the SAME file declares the SAME units; dropping them made
+      // [transferCalibration] refuse a sheet's own duplicate.
+      dxfInsUnits: source.dxfInsUnits,
     );
     final sheets = [...state.sheets, duplicate];
     final sheetFloors = Map<String, int>.from(state.sheetFloors)
@@ -364,6 +367,9 @@ class SheetsController extends Notifier<SheetsState> {
       pageIndex: source.pageIndex,
       sizePx: keepFrame ? old.sizePx : source.sizePx,
       dxfFrame: keepFrame ? old.dxfFrame : source.dxfFrame,
+      // Round 34 — the replacement DXF's declared units (else, when the old
+      // frame is kept, the old file's), never silently dropped.
+      dxfInsUnits: source.dxfInsUnits ?? (keepFrame ? old.dxfInsUnits : null),
     );
     if (replaced == old) return;
     final sheets = [...state.sheets];

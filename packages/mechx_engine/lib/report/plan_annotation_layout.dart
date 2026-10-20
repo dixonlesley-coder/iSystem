@@ -613,6 +613,9 @@ PlanAnnotations layoutPlanAnnotations({
   final allNodeTags = <String, String>{
     ...fixturePlanTags(net,
         sheetId: sheetId, floorIndex: floorIndex, nodeTags: nodeTags),
+    // Round 34 — air terminals carry their airflow + face size.
+    ...airTerminalPlanTags(net,
+        sheetId: sheetId, floorIndex: floorIndex, nodeTags: nodeTags),
     ...?nodeTags,
   };
   if (allNodeTags.isNotEmpty) {

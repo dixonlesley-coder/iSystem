@@ -690,8 +690,9 @@ enum StringKey {
   issueCoolingInternalOnlyTitle,
   issueSprinklerFlowTitle,
   issueSprinklerHeadTitle,
-  issueElectricalTitle, // {code} = w.code.replaceAll('-', ' ')
+  issueElectricalTitle, // {code} = electricalWarningTitle(w.code)
   issueUnverifiedTitle, // {name} = the // VERIFY value's short label
+  issueUnverifiedMessage, // {citation} = the value's source citation
 
   // Unconnected-element checks (loose run/duct ends, orphans, unfed panels).
   issueUnconnectedLooseEndTitle,
@@ -1120,6 +1121,8 @@ enum StringKey {
   heatmapRealCheckPumpDuty,
   heatmapTarget,
   heatmapSniMin,
+  heatmapResidualAtFixtures,
+  heatmapResidualAtPipework,
   heatmapBelowTarget,
 
   // ── Import failures speak human (WORKFLOW-FRICTION I5) ────────────────────
@@ -1885,7 +1888,7 @@ const Map<StringKey, String> _en = {
   StringKey.reviewStatPanelsSized: 'Panels sized',
   StringKey.reviewStatBomLineItems: 'BOM line items',
   StringKey.reviewStatStockPipes: 'Stock pipes',
-  StringKey.reviewStatPipeRequired: 'Pipe required',
+  StringKey.reviewStatPipeRequired: 'Pipe (runs)',
   StringKey.reviewStatOffcutWaste: 'Offcut waste',
   StringKey.reviewStockNote:
       'Stock lengths: 4 m PVC/PPR, 6 m steel (sprinkler/hydrant), and duct '
@@ -1908,7 +1911,7 @@ const Map<StringKey, String> _en = {
   StringKey.reviewDesignSignoff: 'design sign-off',
   StringKey.reviewItemPass: 'PASS',
   StringKey.reviewItemReview: 'REVIEW',
-  StringKey.reviewPipeCutPlan: 'Pipe cut plan',
+  StringKey.reviewPipeCutPlan: 'Pipe cut plan - horizontal runs',
   StringKey.reviewConsumablesTitle: 'Consumables (estimate)',
   StringKey.reviewConsumablePvcCement: 'PVC solvent cement',
   StringKey.reviewConsumableDuctSealant: 'Duct joint sealant',
@@ -2112,6 +2115,9 @@ const Map<StringKey, String> _en = {
       'Sprinkler pressure exceeds the fire pump head',
   StringKey.issueElectricalTitle: 'Electrical: {code}',
   StringKey.issueUnverifiedTitle: 'Unverified: {name}',
+  StringKey.issueUnverifiedMessage:
+      'Confirm this value against {citation} before issue; the calc report '
+      'lists the full source note.',
   StringKey.issueUnconnectedLooseEndTitle: 'Unconnected run end',
   StringKey.issueUnconnectedLooseEndMessage:
       'This run ends at a bare junction — it is not joined to a fixture, '
@@ -2604,6 +2610,9 @@ const Map<StringKey, String> _en = {
   StringKey.heatmapRealCheckPumpDuty: 'the real check is the pump duty',
   StringKey.heatmapTarget: 'Target',
   StringKey.heatmapSniMin: 'SNI min',
+  StringKey.heatmapResidualAtFixtures: 'residual at fixtures',
+  StringKey.heatmapResidualAtPipework:
+      'residual at pipework (no fixture on this floor)',
   StringKey.heatmapBelowTarget: 'below target',
 
   // I5 — import failures speak human; the raw text rides the parenthetical.
@@ -3380,7 +3389,7 @@ const Map<StringKey, String> _id = {
   StringKey.reviewStatPanelsSized: 'Panel terhitung',
   StringKey.reviewStatBomLineItems: 'Item baris BOM',
   StringKey.reviewStatStockPipes: 'Batang pipa',
-  StringKey.reviewStatPipeRequired: 'Pipa diperlukan',
+  StringKey.reviewStatPipeRequired: 'Pipa (jalur)',
   StringKey.reviewStatOffcutWaste: 'Sisa potongan',
   StringKey.reviewStockNote:
       'Panjang batang: 4 m PVC/PPR, 6 m baja (sprinkler/hidran), dan bagian '
@@ -3403,7 +3412,7 @@ const Map<StringKey, String> _id = {
   StringKey.reviewDesignSignoff: 'pengesahan desain',
   StringKey.reviewItemPass: 'LULUS',
   StringKey.reviewItemReview: 'TINJAU',
-  StringKey.reviewPipeCutPlan: 'Rencana potong pipa',
+  StringKey.reviewPipeCutPlan: 'Rencana potong pipa - jalur horizontal',
   StringKey.reviewConsumablesTitle: 'Bahan habis pakai (perkiraan)',
   StringKey.reviewConsumablePvcCement: 'Semen pelarut PVC',
   StringKey.reviewConsumableDuctSealant: 'Sealant sambungan saluran',
@@ -3621,6 +3630,9 @@ const Map<StringKey, String> _id = {
       'Tekanan sprinkler melebihi head pompa kebakaran',
   StringKey.issueElectricalTitle: 'Listrik: {code}',
   StringKey.issueUnverifiedTitle: 'Belum terverifikasi: {name}',
+  StringKey.issueUnverifiedMessage:
+      'Konfirmasi nilai ini terhadap {citation} sebelum diterbitkan; laporan '
+      'perhitungan memuat catatan sumber lengkap.',
   StringKey.issueUnconnectedLooseEndTitle: 'Ujung jalur tidak terhubung',
   StringKey.issueUnconnectedLooseEndMessage:
       'Jalur ini berakhir di sambungan kosong — tidak tersambung ke fikstur, '
@@ -4124,6 +4136,9 @@ const Map<StringKey, String> _id = {
       'pemeriksaan sebenarnya ada pada duti pompa',
   StringKey.heatmapTarget: 'Target',
   StringKey.heatmapSniMin: 'Min. SNI',
+  StringKey.heatmapResidualAtFixtures: 'sisa tekanan di fixture',
+  StringKey.heatmapResidualAtPipework:
+      'sisa tekanan di pipa (tidak ada fixture di lantai ini)',
   StringKey.heatmapBelowTarget: 'di bawah target',
 
   // I5.
@@ -4251,6 +4266,86 @@ const Map<StringKey, String> _id = {
       'Suplai: langsung dari PDAM',
 };
 
+/// Round 34 — engine electrical warning code → (EN, ID) title. Keys are the
+/// stable `ElectricalWarning.code`s; the Review `kind` stays
+/// `electrical:<code>` so acknowledgements and compliance matching hold.
+const Map<String, (String, String)> _electricalWarningTitles = {
+  'non-selective': ('Breakers not selective', 'Pemutus tidak selektif'),
+  'selectivity-partial': ('Partial selectivity', 'Selektivitas parsial'),
+  'life-safety-cable':
+      ('Life-safety cable type', 'Jenis kabel keselamatan jiwa'),
+  'life-safety-not-essential': (
+    'Life-safety load on a normal supply',
+    'Beban keselamatan jiwa pada suplai normal'
+  ),
+  'fire-pump-protection':
+      ('Fire pump protection', 'Proteksi pompa kebakaran'),
+  'breaker-below-design-current':
+      ('Breaker below design current', 'Pemutus di bawah arus rencana'),
+  'single-phase-large-motor':
+      ('Large single-phase motor', 'Motor satu fasa besar'),
+  'voltage-drop-exceeded':
+      ('Voltage drop exceeded', 'Jatuh tegangan melebihi batas'),
+  'cumulative-voltage-drop-exceeded': (
+    'Cumulative voltage drop exceeded',
+    'Jatuh tegangan kumulatif melebihi batas'
+  ),
+  'cable-ampacity-inadequate':
+      ('Cable ampacity inadequate', 'KHA kabel tidak memadai'),
+  'phase-imbalance': ('Phase imbalance', 'Ketidakseimbangan fasa'),
+  'phase-imbalance-inherent':
+      ('Inherent phase imbalance', 'Ketidakseimbangan fasa bawaan'),
+  'incomer-exceeds-range':
+      ('Incomer beyond breaker range', 'Incomer melebihi rentang pemutus'),
+  'busbar-withstand-inadequate':
+      ('Busbar withstand inadequate', 'Ketahanan busbar tidak memadai'),
+  'harmonics-neutral-oversize': (
+    'Neutral oversized for harmonics',
+    'Netral diperbesar karena harmonisa'
+  ),
+  'feeder-phase-mismatch':
+      ('Feeder phase mismatch', 'Fasa feeder tidak sesuai'),
+  'feeder-cycle': ('Feeder loop', 'Feeder membentuk putaran'),
+  'feeder-below-fed-demand': (
+    'Feeder below the fed board demand',
+    'Feeder di bawah beban panel yang disuplai'
+  ),
+  'feeder-below-fed-headroom': (
+    'Feeder below the fed board reserve',
+    'Feeder di bawah cadangan panel yang disuplai'
+  ),
+  'service-capacity-below-demand': (
+    'Connection capacity below demand',
+    'Daya tersambung di bawah beban'
+  ),
+  'service-capacity-inadequate':
+      ('Service capacity inadequate', 'Kapasitas layanan tidak memadai'),
+  'service-fault-estimate-high': (
+    'High estimated fault level',
+    'Estimasi arus hubung singkat tinggi'
+  ),
+  'genset-below-essential-demand': (
+    'Genset below essential demand',
+    'Genset di bawah beban esensial'
+  ),
+  'genset-below-essential-power': (
+    'Genset below essential power',
+    'Daya genset di bawah beban esensial'
+  ),
+  'breaking-capacity-inadequate': (
+    'Breaking capacity inadequate',
+    'Kapasitas pemutusan tidak memadai'
+  ),
+  'ads-disconnection': (
+    'Automatic disconnection not met',
+    'Pemutusan otomatis tidak terpenuhi'
+  ),
+  'tt-no-earth-fault-protection': (
+    'No earth-fault protection (TT)',
+    'Tanpa proteksi gangguan tanah (TT)'
+  ),
+};
+
 /// The active string table for a locale. Exposed for tests; resolves a [key]
 /// against the active map, falling back to English for any missing translation.
 @immutable
@@ -4273,6 +4368,20 @@ class MechXStringsData {
   /// unused params ignored, so a template + call can never throw. Falls back to
   /// English like [call] — keep the `{name}` placeholders identical across the EN
   /// and ID templates so both substitute correctly.
+  /// Round 34 (ui-simplicity-5-electrical-titles-raw-codes) — the localized
+  /// human title for an engine electrical warning [code]
+  /// ('non-selective' → 'Breakers not selective' / 'Pemutus tidak
+  /// selektif'); an unknown code falls back to the humanized code so a new
+  /// engine warning is never blank.
+  String electricalWarningTitle(String code) {
+    final t = _electricalWarningTitles[code];
+    if (t == null) return code.replaceAll('-', ' ');
+    return switch (locale) {
+      AppLocale.en => t.$1,
+      AppLocale.id => t.$2,
+    };
+  }
+
   /// The 'apply scale to all sheets' status (Round 24 follow-up): ONE
   /// formatter for the Scale inspector button and the Review quick fix, so the
   /// two can never word it differently; [skipped] PDF <-> DXF targets are said.

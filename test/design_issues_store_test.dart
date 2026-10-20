@@ -790,7 +790,7 @@ void main() {
 
       final issues = c.read(designIssuesProvider);
       final issue = issues.firstWhere(
-        (i) => i.title == 'Electrical: cable ampacity inadequate',
+        (i) => i.title == 'Electrical: Cable ampacity inadequate',
         orElse: () => fail('expected an electrical ampacity DesignIssue'),
       );
       // error ⇒ critical, and it locates on the panel (not a sheet).

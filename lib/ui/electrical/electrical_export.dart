@@ -16,6 +16,9 @@ library;
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/advanced_study.dart'
+    show containmentByCircuitIdOf;
+import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
@@ -58,12 +61,14 @@ const String kNoEnergySourcesMessage =
 DrawingChrome electricalExportChrome(WidgetRef ref,
     {int sheetIndex = 1,
     int sheetTotal = 1,
+    int index = 1,
     DrawingSeries series = DrawingSeries.electricalDetail}) {
   final doc = ref.read(documentControlProvider);
   return DrawingChrome(
     sheetIndex: sheetIndex,
     sheetTotal: sheetTotal,
-    drawingNumber: sheetDrawingNumber(base: doc.documentNumber, series: series),
+    drawingNumber: sheetDrawingNumber(
+        base: doc.documentNumber, series: series, index: index),
     revisionNumber: doc.revisionTag,
     clientName: doc.clientName,
     drawnBy: doc.preparedBy,
@@ -71,6 +76,55 @@ DrawingChrome electricalExportChrome(WidgetRef ref,
     approvedBy: doc.approvedBy,
     dateString: DateTime.now().toIso8601String().split('T').first,
   );
+}
+
+/// Round 34 (electrical-drawings-4-standalone-layout-dwg-number) — the rail
+/// sheets that carry an ELECTRICAL LAYOUT plan (placed panels / loads), in
+/// rail order: the ONE list the submittal numbers its E-1xx layout sheets by
+/// and the standalone layout export positions its sheet in.
+List<String> electricalLayoutSheetIds(WidgetRef ref) {
+  final sheets = ref.read(sheetsControllerProvider);
+  final mech = ref.read(projectControllerProvider);
+  final project = ref.read(electricalProjectProvider);
+  final result = ref.read(electricalResultProvider);
+  return [
+    for (final s in sheets.sheets)
+      if (!buildElectricalPlanData(
+        project: project,
+        result: result,
+        sheetId: s.id,
+        floorIndex: sheets.floorFor(s.id, mech.building.levelCount),
+        calibrations: mech.calibrations,
+        building: mech.building,
+      ).isEmpty)
+        s.id,
+  ];
+}
+
+/// Round 34 — the layout export chrome of [sheetId]: numbered `E-10k` /
+/// `Sheet k of n` by its position among [electricalLayoutSheetIds] (the
+/// submittal's numbering, so a standalone sheet matches the Daftar Gambar).
+/// A sheet with no electrical content yet takes its rail position within
+/// that list (n + 1 total), never a flat E-101 / 1 of 1.
+DrawingChrome electricalLayoutChrome(WidgetRef ref, String sheetId) {
+  final ids = electricalLayoutSheetIds(ref);
+  final list = ids.contains(sheetId)
+      ? ids
+      : () {
+          final rail = [
+            for (final s in ref.read(sheetsControllerProvider).sheets) s.id,
+          ];
+          return [
+            for (final id in rail)
+              if (ids.contains(id) || id == sheetId) id,
+          ];
+        }();
+  final k = list.indexOf(sheetId) + 1;
+  return electricalExportChrome(ref,
+      series: DrawingSeries.electricalLayout,
+      index: k < 1 ? 1 : k,
+      sheetIndex: k < 1 ? 1 : k,
+      sheetTotal: list.isEmpty ? 1 : list.length);
 }
 
 /// C5 — the per-panel breaking-capacity map (panel id → Icu, kA) for the SLD
@@ -114,6 +168,12 @@ String? electricalSheetProjectName(WidgetRef ref) {
 /// (`MCB 25A 3ph 10kA`) — without it every way fell back to its panel's
 /// INCOMER frame rating (`16kA` on an MCB, a rating no MCB is built to). Only
 /// positive finite ratings are forwarded.
+/// Round 34 — the containment study's conduit per circuit (the ONE
+/// containment source): every schedule export + the live canvas pass it, so
+/// the app's `PVC <n>mm` token equals the study's, never the CSA ladder.
+Map<String, ConduitSpec> containmentByCircuit(WidgetRef ref) =>
+    containmentByCircuitIdOf(ref.read(electricalAdvancedProvider));
+
 Map<String, double> breakerKaByCircuit(WidgetRef ref) {
   final fault = ref.read(electricalAdvancedProvider).fault;
   return {
@@ -137,6 +197,7 @@ Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(
           result: result,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         );
         final dxf = electricalSldToDxf(
           sheet: sheet,
@@ -172,6 +233,7 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) => runExportGuarded(
           result: result,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
           chrome: electricalExportChrome(ref),
           diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
           projectName: electricalSheetProjectName(ref),
@@ -332,6 +394,7 @@ Future<void> exportElectricalPanelSchedulesPdf(WidgetRef ref) =>
           // set too, matching the single-sheet detail export.
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -455,9 +518,8 @@ Future<void> exportElectricalPlanPdf(WidgetRef ref) => runExportGuarded(
           projectName: electricalSheetProjectName(ref) ?? 'electrical',
           sheetName: sheet.name,
           dateString: DateTime.now().toIso8601String().split('T').first,
-          chrome: electricalExportChrome(ref,
-                  series: DrawingSeries.electricalLayout)
-              .withTitle(drawingSeriesTitle(DrawingSeries.electricalLayout,
+          chrome: electricalLayoutChrome(ref, sheet.id).withTitle(
+              drawingSeriesTitle(DrawingSeries.electricalLayout,
                   sheetName: sheet.name)),
           metersPerPixel: mech.calibrationFor(sheet.id)?.metersPerPixel,
           underlay: await buildPlanUnderlay(sheet),
@@ -500,9 +562,8 @@ Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
           building: mech.building,
         );
         final projectName = electricalSheetProjectName(ref) ?? 'electrical';
-        final chrome = electricalExportChrome(ref,
-                series: DrawingSeries.electricalLayout)
-            .withTitle(drawingSeriesTitle(DrawingSeries.electricalLayout,
+        final chrome = electricalLayoutChrome(ref, sheet.id).withTitle(
+            drawingSeriesTitle(DrawingSeries.electricalLayout,
                 sheetName: sheet.name));
         final metersPerPixel = mech.calibrationFor(sheet.id)?.metersPerPixel;
         final dxf = electricalPlanToDxf(

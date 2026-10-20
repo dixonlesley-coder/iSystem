@@ -511,6 +511,22 @@ final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
   return const {};
 });
 
+/// Round 34 (regression-heatmap-legend-range-includes-non-delivery-nodes) —
+/// the DELIVERY node ids of the field [residualByNodeProvider] renders (the
+/// fixtures / open draw-off ends the solve judges). The heatmap legend ranges
+/// and verdicts over these alone: a bare ceiling junction or a riser node sits
+/// ~2.6 m (~25 kPa) above any fixture, so it is never the 'residual at
+/// fixtures' the legend is captioned with. Same gating as
+/// [residualByNodeProvider] so the two can never describe different fields.
+final heatmapDeliveryNodeIdsProvider = Provider<Set<String>>((ref) {
+  final up = ref.watch(upfeedDeliveredProvider);
+  if (up != null) return up.deliveryNodeIds;
+  if (!ref.watch(gravityDownfeedDrawnProvider)) return const {};
+  final down = ref.watch(downfeedDeliveredProvider);
+  if (down != null) return down.deliveryNodeIds;
+  return const {};
+});
+
 /// Per-edge WATER / DRAINAGE velocity checks keyed by edge id — the non-air
 /// (pressurized / gravity) analogue of [airVelocityChecksProvider] (I3). Pipe
 /// velocity is a code-driven sizing input (SNI 03-7065-2005 caps supply velocity

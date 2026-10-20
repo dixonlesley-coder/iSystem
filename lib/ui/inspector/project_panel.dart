@@ -32,6 +32,7 @@ import 'package:mechx_engine/report/plan_symbols.dart'
         customFixturePlanTags,
         equipmentNodeTags,
         fixturePlanTags,
+        planLegendSymbols,
         planEdgeElevationLabels,
         planSheetNotes;
 import 'package:mechx_engine/report/report_blocks.dart';
@@ -107,7 +108,11 @@ import '../canvas/segment_palette.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart'
-    show breakerIcuKaByPanel, breakerKaByCircuit;
+    show
+        breakerIcuKaByPanel,
+        breakerKaByCircuit,
+        containmentByCircuit,
+        electricalLayoutSheetIds;
 import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart'
@@ -715,6 +720,7 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
           result: ref.read(electricalResultProvider),
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         ),
         caption: reportStringsFor(ref)(RptStringKey.capElecSld),
       ),
@@ -1422,12 +1428,23 @@ DrawingChrome issuableChrome(
         : null,
     gravitySlope: ref.read(drainageSlopeProvider),
     sizing: ref.read(sizingProvider),
+    // Round 34 — the sprinkler head basis (K-factor + hazard class).
+    sprinklerKFactor: ref.read(firePerHeadKFactorProvider),
+    sprinklerHazard: switch (ref.read(fireHazardProvider)) {
+      FireHazardClass.lightHazard => 'light hazard',
+      FireHazardClass.ordinaryHazard1 => 'ordinary hazard 1',
+      FireHazardClass.ordinaryHazard2 => 'ordinary hazard 2',
+      FireHazardClass.extraHazard => 'extra hazard',
+    },
   );
   return DrawingChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
     legendNotes: notes,
+    // Round 34 — the symbol key: every component glyph on this floor.
+    legendSymbols:
+        planLegendSymbols(net, sheetId: sheetId, floorIndex: floorIndex),
     // N19: the plan's drawing number is DERIVED per sheet — the mechanical plan
     // band `M-1xx`, running by RAIL POSITION — so sheet 1 is `M-101`, sheet 2
     // `M-102`, never one number on every plan. A manual `documentNumber`
@@ -1784,19 +1801,8 @@ Future<bool> writeSubmittalPackageToDir(
   // panels/loads), pre-collected so the k-th one is numbered E-10k with its
   // own SHEET k-of-n counter and listed on the Daftar Gambar (every elec plan
   // used to stamp E-101 / '1 of 1' and none was indexed).
-  final elecPlanSheetIds = <String>[];
-  for (final s in sheetsFm.sheets) {
-    final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
-    final ePlanFm = buildElectricalPlanData(
-      project: eProjectFm,
-      result: eResultFm,
-      sheetId: s.id,
-      floorIndex: fIdx,
-      calibrations: project.calibrations,
-      building: project.building,
-    );
-    if (!ePlanFm.isEmpty) elecPlanSheetIds.add(s.id);
-  }
+  // Round 34 — the ONE list the standalone layout export numbers by too.
+  final elecPlanSheetIds = electricalLayoutSheetIds(ref);
   DrawingChrome elecPlanChrome(String sheetId) {
     final k = elecPlanSheetIds.indexOf(sheetId) + 1;
     return DrawingChrome(
@@ -2013,6 +2019,7 @@ Future<bool> writeSubmittalPackageToDir(
             result: ref.read(electricalResultProvider),
             breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
             breakerKaByCircuitId: breakerKaByCircuit(ref),
+            containmentByCircuitId: containmentByCircuit(ref),
           ),
           caption: reportStringsFor(ref)(RptStringKey.capElecSld),
         ),
@@ -2351,6 +2358,7 @@ Future<bool> writeSubmittalPackageToDir(
         result: eResult,
         breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
         breakerKaByCircuitId: breakerKaByCircuit(ref),
+        containmentByCircuitId: containmentByCircuit(ref),
         chrome: sldChrome(DrawingSeries.electricalDetail),
         // Round 14 (drafting-visual-1) — ONE project name + the register
         // title on every electrical sheet of the package.
@@ -2369,6 +2377,7 @@ Future<bool> writeSubmittalPackageToDir(
           result: eResult,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         ),
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
         chrome: sldChrome(DrawingSeries.electricalDetail),
@@ -4434,6 +4443,22 @@ class _ResultsSection extends ConsumerWidget {
     // same gate the calc report prints on.
     final gravityDrawn = ref.watch(gravityDownfeedDrawnProvider);
     final downfeed = gravityDrawn ? ref.watch(downfeedProvider) : null;
+    // Round 34 — the DELIVERED field (drawn boosters at their sized duty) is
+    // what the heatmap, probe and Review read, so 'Top residual' reads it
+    // too; [downfeed] (unboosted) stays the booster-DUTY basis.
+    final delivered =
+        gravityDrawn ? ref.watch(downfeedDeliveredProvider) : null;
+    // Round 34 — the Round-32 split: below the SNI 8153 floor at some
+    // delivery node is a code failure (amber 'boost'); between the floor and
+    // the comfort target it is advisory, so the headline must not contradict
+    // the compliance PASS.
+    final sniFloors =
+        gravityDrawn ? ref.watch(downfeedSniFloorsProvider) : const <String, Pressure>{};
+    final belowSniFloor = delivered == null ||
+        sniFloors.isEmpty ||
+        worstSniShortfall(
+                floors: sniFloors, residual: delivered.residualPressure) !=
+            null;
     // Round 30 (r2) — water-network pumps only (a fire / sump pump is not a
     // water booster), the same evidence as the feed line above.
     final hasPumpDrawn =
@@ -4515,7 +4540,17 @@ class _ResultsSection extends ConsumerWidget {
         // zone card must never hide that gravity cannot deliver. With gravity
         // sufficient, the PRV-zone verdict shows only when a PRV station is
         // actually needed; otherwise the gravity verdict.
-        if (!downfeed.gravitySufficient) {
+        if (!downfeed.gravitySufficient && !belowSniFloor) {
+          // Round 34 — SNI minimum met at every delivery node; the comfort
+          // booster is a recommendation, carried by a muted row below.
+          headlineCard = ResultCard(
+            headline:
+                '${delivered.minResidual.inKiloPascals.toStringAsFixed(0)} kPa',
+            label: 'Top residual · SNI min met',
+            verdict: 'OK',
+            verdictColor: colors.success,
+          );
+        } else if (!downfeed.gravitySufficient) {
           headlineCard = ResultCard(
             headline:
                 '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m',
@@ -4622,13 +4657,40 @@ class _ResultsSection extends ConsumerWidget {
                     .copyWith(color: colors.textSecondary),
               ),
             ] else ...[
-              _kvRow(
-                context,
-                'Top residual',
-                downfeed == null
-                    ? '—'
-                    : '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa',
-              ),
+              // Round 34 — the DELIVERED top residual (the heatmap's and the
+              // probe's figure); omitted when the SNI-met card states it.
+              if (downfeed == null ||
+                  downfeed.gravitySufficient ||
+                  belowSniFloor)
+                _kvRow(
+                  context,
+                  'Top residual',
+                  delivered == null
+                      ? '—'
+                      : '${delivered.minResidual.inKiloPascals.toStringAsFixed(0)} kPa',
+                ),
+              // Round 34 — a drawn booster lifts the delivered field; the
+              // unboosted gravity figure stays visible, muted.
+              if (downfeed != null &&
+                  delivered != null &&
+                  (delivered.minResidual.inKiloPascals -
+                              downfeed.minResidual.inKiloPascals)
+                          .abs() >=
+                      0.5)
+                _kvRow(
+                  context,
+                  'Gravity only',
+                  '${downfeed.minResidual.inKiloPascals.toStringAsFixed(0)} kPa',
+                ),
+              if (downfeed != null &&
+                  !downfeed.gravitySufficient &&
+                  !belowSniFloor)
+                // The comfort booster, as a recommendation (SNI min met).
+                _kvRow(
+                  context,
+                  'Booster',
+                  '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m advised',
+                ),
               // Round 31 (ui-simplicity-4) — H8 on the downfeed branch too: a
               // figure the headline card already states is not repeated as a
               // supporting row. The booster card (or the 'gravity OK' card)
@@ -4648,7 +4710,7 @@ class _ResultsSection extends ConsumerWidget {
                   context,
                   'PRV zones',
                   !_zoneTableNeeded(zoneStatics)
-                      ? 'none (tank head OK)'
+                      ? 'none needed'
                       : '$prvStations · worst ${worstZone.toStringAsFixed(0)} kPa'
                             ' ${zonesOk ? 'OK' : 'over'}',
                 ),

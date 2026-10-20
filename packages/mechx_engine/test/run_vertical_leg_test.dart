@@ -233,4 +233,80 @@ void main() {
       expect(runCentrelineLabels(n, three).containsKey('e'), isFalse);
     });
   });
+
+  // Round 34 (fire-hvac-drawings-ahu-duct-drops-to-floor) — a floor-standing
+  // AHU / fan takes its ducts at the top of its casing, not at the slab.
+  group('air units connect at the casing top', () {
+    // L2-like storey: 4.0 m floor-to-floor, ceiling drop 0.3 ⇒ ceiling main at
+    // 3.70 m above the floor surface. AHU connection = 0 + 2.0 = 2.0 m
+    // (default airUnitConnection) ⇒ vertical leg 3.70 − 2.00 = 1.70 m.
+    const one = BuildingLevels([Floor('L2', Length(4))]);
+    for (final c in const [
+      NodeComponent.ahu,
+      NodeComponent.supplyFan,
+      NodeComponent.exhaustFan,
+    ]) {
+      test('${c.name}: 4.0 m duct + a 1.70 m leg (never the 3.70 m drop)', () {
+        final n = Network(nodes: [
+          NetNode(
+              id: 'u',
+              sheetId: 's0',
+              x: 0,
+              y: 0,
+              floorIndex: 0,
+              role: NodeRole.plant,
+              component: c),
+          const NetNode(id: 'm', sheetId: 's0', x: 400, y: 0, floorIndex: 0),
+        ], edges: const [
+          NetEdge(
+              id: 'd', fromId: 'u', toId: 'm', service: ServiceType.duct),
+        ]);
+        final e = n.edgeById('d')!;
+        expect(runVerticalLeg(e, n, building: one).meters, closeTo(1.70, 1e-9));
+        expect(
+            edgeLength(e, n, calibrationBySheet: cal, building: one).meters,
+            closeTo(4.0 + 1.70, 1e-9));
+        // The static datum (pump-head / riser physics) is unchanged.
+        expect(nodeElevation(n.nodeById('u')!, one).meters, 0);
+      });
+    }
+
+    test('a low storey caps the connection at the ceiling main (no leg)', () {
+      // 2.2 m storey ⇒ ceiling 1.90 m < 0 + 2.0 ⇒ connection 1.90 ⇒ leg 0.
+      const low = BuildingLevels([Floor('P', Length(2.2))]);
+      const n = Network(nodes: [
+        NetNode(
+            id: 'u',
+            sheetId: 's0',
+            x: 0,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.plant,
+            component: NodeComponent.ahu),
+        NetNode(id: 'm', sheetId: 's0', x: 400, y: 0, floorIndex: 0),
+      ], edges: [
+        NetEdge(id: 'd', fromId: 'u', toId: 'm', service: ServiceType.duct),
+      ]);
+      expect(runVerticalLeg(n.edgeById('d')!, n, building: low).meters, 0);
+    });
+
+    test('an explicit unit elevation still wins', () {
+      const n = Network(nodes: [
+        NetNode(
+            id: 'u',
+            sheetId: 's0',
+            x: 0,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.plant,
+            component: NodeComponent.ahu,
+            elevation: Length(0.5)),
+        NetNode(id: 'm', sheetId: 's0', x: 400, y: 0, floorIndex: 0),
+      ], edges: [
+        NetEdge(id: 'd', fromId: 'u', toId: 'm', service: ServiceType.duct),
+      ]);
+      expect(runVerticalLeg(n.edgeById('d')!, n, building: one).meters,
+          closeTo(3.70 - 0.5, 1e-9));
+    });
+  });
 }

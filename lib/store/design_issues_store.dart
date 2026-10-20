@@ -723,9 +723,17 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // compliance PASS on its own). We escalate only the edge-bearing ones; the
   // title is kept ('… calibrated') so the compliance roll-up and any title
   // match still catch it.
+  // Round 34 — only RUN edges count: a riser's length is the §10 true-
+  // elevation delta (golden rule 3), independent of any calibration, so a
+  // sheet holding only riser ends has nothing that sizes to zero and stays
+  // an advisory.
+  final nodeSheet = {for (final n in net.nodes) n.id: n.sheetId};
   final sheetsWithEdges = <String>{
-    for (final n in net.nodes)
-      if (net.edgesAt(n.id).isNotEmpty) n.sheetId,
+    for (final e in net.edges)
+      if (e.kind == EdgeKind.run) ...[
+        if (nodeSheet[e.fromId] != null) nodeSheet[e.fromId]!,
+        if (nodeSheet[e.toId] != null) nodeSheet[e.toId]!,
+      ],
   };
   for (final s in sheets.sheets) {
     if (project.calibrationFor(s.id) != null) continue;
@@ -803,6 +811,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // fed one is a branch that fell off the rooted tree. Both are detected by the
   // pure engine helper (read-only — never resizes). Locate via a representative
   // node's sheet. Gravity services are skipped (a drain has no source).
+  // Round 34 — the nodes of components already reported as no-source /
+  // island: their loose ends are the SAME defect, never a second and third
+  // row (one isolated 2-node riser read as three issues).
+  final componentReportedNodes = <String>{};
   for (final d in networkConnectivityDefects(net)) {
     final repId = d.representativeNodeId;
     final repNode = repId == null ? null : nodeById[repId];
@@ -858,6 +870,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         : str(StringKey.issueNetworkNoSourceTitle);
     final defectKind =
         d.isIsland ? 'network-island:$service' : 'no-source:$service';
+    componentReportedNodes.addAll(d.nodeIds);
     final nodeWord = pluralCount(
         n, str(StringKey.issueNounNodeOne), str(StringKey.issueNounNodeMany));
     final message = d.isIsland
@@ -884,6 +897,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // (a per-node `kind` so acking/fixing one never hides the others), locatable
   // via the node's sheet.
   for (final d in networkElementDefects(net)) {
+    // Round 34 — a loose end of a component already reported above is not
+    // repeated (orphans keep their own row).
+    if (!d.isOrphan && componentReportedNodes.contains(d.nodeId)) continue;
     final node = nodeById[d.nodeId];
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
@@ -1385,8 +1401,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       // 'Electrical: cable ampacity inadequate'), the engine message carries
       // the specifics.
       kind: 'electrical:${w.code}',
-      title: str.format(
-          StringKey.issueElectricalTitle, {'code': w.code.replaceAll('-', ' ')}),
+      // Round 34 — a localized human title, never the raw code.
+      title: str.format(StringKey.issueElectricalTitle,
+          {'code': str.electricalWarningTitle(w.code)}),
       message: w.message,
       locate: w.panelId == null
           ? null
@@ -1467,7 +1484,11 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       // [isVerify] stays the flag the compliance roll-up + provenance dot read.
       kind: 'verify:${v.citation}',
       title: str.format(StringKey.issueUnverifiedTitle, {'name': _verifyLabel(v)}),
-      message: v.note ?? v.citation,
+      // Round 34 (ui-simplicity-5-verify-rows-research-notes) — a short,
+      // localized action naming the source; the full provenance note (a
+      // research log) stays in the calc report's Unverified-values section.
+      message: str.format(
+          StringKey.issueUnverifiedMessage, {'citation': v.citation}),
       isVerify: true,
     ));
   }

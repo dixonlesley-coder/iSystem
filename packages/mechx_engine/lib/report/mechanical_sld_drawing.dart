@@ -214,6 +214,16 @@ SldSheet buildMechanicalRiserSld({
   // Round 16 — the solve's flow direction drives the FUNCTION suffix.
   final flowFromByEdge = flowFromBySizing(sizing);
 
+  // Round 34 (fire-hvac-drawings-riser-terminals-unreadable) — a floor
+  // carrying more than [kRiserTerminalCollapseMin] sprinkler heads / air
+  // terminals of one service draws only its floor TAKE-OFF on the riser; the
+  // terminals are counted in the per-floor BRANCHES fan-out (from the FULL
+  // network) instead of drawn and labelled one by one (each head used to be
+  // stated twice, on one collapsed band line, with leaders across floors).
+  final fullNetwork = network;
+  final Set<String>? fullVisible = _focusedNodeIds(fullNetwork, focus);
+  network = collapseRiserTerminals(network);
+
   // Visible node ids under the focus filter (endpoints of focused-service edges).
   final Set<String>? visible = _focusedNodeIds(network, focus);
   bool nodeVisible(NetNode n) => visible == null || visible.contains(n.id);
@@ -409,7 +419,15 @@ SldSheet buildMechanicalRiserSld({
   // colliding tag along an offset ladder, adding a leader when pulled far off
   // its anchor (B5). Fixed labels (gutter, fan-out) are reserved FIRST so the
   // movable band tags divert around them.
-  final placer = _LabelPlacer(prims);
+  final placer = _LabelPlacer(prims)
+    // Round 34 — a tag that lands in a different floor band than the
+    // element it names is counted unresolved (the sheet's overlap warning).
+    ..bandIndexAt = (double y) {
+      final rel = y - (_topPad + roofH);
+      if (rel < 0) return null;
+      final i = (rel / _bandH).floor();
+      return i >= bandCount ? null : i;
+    };
 
   // ── Floor bands: a baseline hairline + the FFL gutter label ─────────────────
   // Datum baselines stay THIN so a pipe run/riser (medium, below) reads as
@@ -432,6 +450,10 @@ SldSheet buildMechanicalRiserSld({
     // X1: the floor datum is ink too — a riser tag whose mid-point lands on the
     // band line used to print straight through it.
     placer.reserveLine(_gutterW, yBase, _gutterW + _drawW, yBase);
+    // Round 34 — a leader never crosses a floor datum (a tag printed in one
+    // band pointing at a node in another reads as the wrong floor's).
+    placer.reserveHardBox(
+        _gutterW, yBase - 0.25, _gutterW + _drawW, yBase + 0.25);
     final name = (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
@@ -445,8 +467,11 @@ SldSheet buildMechanicalRiserSld({
 
   // ── Per-floor branch fan-out: the fixtures each floor distributes ───────────
   // Reserved (fixed right-column stubs) before the movable band tags.
-  final fanOuts = floorFanOuts(network,
-      visibleNodeIds: visible, labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
+  // Round 34 — counted over the FULL network: collapsed terminals still
+  // appear here (the one place they are stated).
+  final fanOuts = floorFanOuts(fullNetwork,
+      visibleNodeIds: fullVisible,
+      labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
   const fanX = _gutterW + _drawW + 12;
   for (final fo in fanOuts) {
     if (fo.floorIndex < loFloor || fo.floorIndex > hiFloor) continue;
@@ -1036,6 +1061,109 @@ SldSheet buildMechanicalRiserSld({
 
 /// Node ids kept when one system is focused — endpoints of that service's edges
 /// (null ⇒ no filtering ⇒ the combined view). Mirrors the painter's filter.
+/// Round 34 — a floor collapses its terminals of one service on the riser
+/// sheet only beyond this many (a typical toilet with 2-3 diffusers / heads
+/// keeps them drawn). A drafting threshold, not a code value.
+const int kRiserTerminalCollapseMin = 3;
+
+/// Round 34 — the terminal components a riser sheet may collapse into the
+/// per-floor fan-out count: sprinkler heads and air terminals.
+const Set<NodeComponent> kRiserCollapsibleTerminals = {
+  NodeComponent.sprinklerHead,
+  NodeComponent.supplyDiffuser,
+  NodeComponent.linearDiffuser,
+  NodeComponent.returnGrille,
+  NodeComponent.exhaustGrille,
+};
+
+/// Round 34 (fire-hvac-drawings-riser-terminals-unreadable) — the network the
+/// riser sheet DRAWS: on every (floor, service) carrying more than
+/// [kRiserTerminalCollapseMin] [kRiserCollapsibleTerminals], those terminals
+/// are removed, then every bare junction left dangling by that removal is
+/// pruned back toward the riser — stopping at the floor TAKE-OFF (a node
+/// whose only remaining neighbour is a riser end or a drawn component such as
+/// a control valve / flow switch). Nothing else changes; a network with no
+/// such floor is returned as is (identical). Pure.
+Network collapseRiserTerminals(Network net) {
+  final count = <(int, ServiceType), int>{};
+  final serviceOf = <String, ServiceType>{};
+  for (final e in net.edges) {
+    for (final id in [e.fromId, e.toId]) {
+      serviceOf.putIfAbsent(id, () => e.service);
+    }
+  }
+  for (final n in net.nodes) {
+    if (!kRiserCollapsibleTerminals.contains(n.component)) continue;
+    final svc = serviceOf[n.id];
+    if (svc == null) continue;
+    final k = (n.floorIndex, svc);
+    count[k] = (count[k] ?? 0) + 1;
+  }
+  final removed = <String>{
+    for (final n in net.nodes)
+      if (kRiserCollapsibleTerminals.contains(n.component) &&
+          serviceOf[n.id] != null &&
+          (count[(n.floorIndex, serviceOf[n.id]!)] ?? 0) >
+              kRiserTerminalCollapseMin)
+        n.id,
+  };
+  if (removed.isEmpty) return net;
+  final byId = {for (final n in net.nodes) n.id: n};
+  final riserEnds = <String>{
+    for (final e in net.edges)
+      if (e.kind == EdgeKind.riser) ...[e.fromId, e.toId],
+  };
+  List<String> neighbours(String id) => [
+        for (final e in net.edges)
+          if (e.fromId == id && !removed.contains(e.toId))
+            e.toId
+          else if (e.toId == id && !removed.contains(e.fromId))
+            e.fromId,
+      ];
+  bool keepsTakeOff(String id) {
+    final n = byId[id];
+    return n == null || riserEnds.contains(id) || n.component != null;
+  }
+
+  // Prune dangling bare junctions that touched a removed node, iteratively,
+  // in id order (deterministic).
+  var frontier = <String>{
+    for (final e in net.edges)
+      if (removed.contains(e.fromId) && !removed.contains(e.toId))
+        e.toId
+      else if (removed.contains(e.toId) && !removed.contains(e.fromId))
+        e.fromId,
+  };
+  while (frontier.isNotEmpty) {
+    final next = <String>{};
+    for (final id in frontier.toList()..sort()) {
+      if (removed.contains(id)) continue;
+      final n = byId[id];
+      if (n == null || n.component != null || riserEnds.contains(id)) {
+        continue;
+      }
+      if (n.role != NodeRole.main) continue;
+      final nb = neighbours(id);
+      if (nb.length > 1) continue;
+      // The floor take-off: the stub into a riser end / a drawn device stays.
+      if (nb.length == 1 && keepsTakeOff(nb.single)) continue;
+      removed.add(id);
+      next.addAll(nb);
+    }
+    frontier = next;
+  }
+  return Network(
+    nodes: [
+      for (final n in net.nodes)
+        if (!removed.contains(n.id)) n
+    ],
+    edges: [
+      for (final e in net.edges)
+        if (!removed.contains(e.fromId) && !removed.contains(e.toId)) e
+    ],
+  );
+}
+
 Set<String>? _focusedNodeIds(Network network, ServiceType? focus) {
   if (focus == null) return null;
   final ids = <String>{};
@@ -1890,6 +2018,12 @@ class _LabelPlacer {
   /// plan pipeline's overlap warning instead of looking clean.
   int unresolvedCount = 0;
 
+  /// Round 34 — the floor band index of a sheet y (null outside the floor
+  /// bands: the roof band, the gutter rows, the callouts). When set, a tag
+  /// whose box centre lands in a different band than its anchor is counted
+  /// in [unresolvedCount].
+  int? Function(double y)? bandIndexAt;
+
   /// A label's box: cap height above the baseline PLUS a descender allowance
   /// of [_kDescenderFraction] × size below it (Round 17 — a leader skimming
   /// 0.3 units under a baseline used to pass 'clear' through the descenders
@@ -1931,6 +2065,13 @@ class _LabelPlacer {
     }
     for (final p in _hard) {
       total += _kInkWeight * p.overlap(r);
+    }
+    // Round 34 — a slot in another floor band than the element it names is
+    // worse than any overlap within the band: it reads as the wrong floor's.
+    final bandOf = bandIndexAt;
+    if (bandOf != null) {
+      final ab = bandOf(anchorY);
+      if (ab != null && bandOf((r.minY + r.maxY) / 2) != ab) total += 1e7;
     }
     if (withLeader) {
       final (ex, ey) = _leaderEnd(r, anchorX, anchorY);
@@ -2169,7 +2310,12 @@ class _LabelPlacer {
     final lx = defaultX + best.dx;
     final ly = defaultY + best.dy;
     final rect = _rectFor(lx, ly, text, size);
+    final bandOf = bandIndexAt;
+    final anchorBand = bandOf?.call(anchorY);
+    final labelBand = bandOf?.call((rect.minY + rect.maxY) / 2);
     if (!cleared && _labels.any((p) => rect.fusesWith(p, size))) {
+      unresolvedCount++;
+    } else if (anchorBand != null && labelBand != anchorBand) {
       unresolvedCount++;
     }
     _labels.add(rect);

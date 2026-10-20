@@ -19,6 +19,8 @@ import 'dart:typed_data';
 
 import '../geometry/dxf_drawing.dart';
 import '../network/network.dart';
+import 'plan_symbols.dart' show planComponentPrims;
+import 'sld_sheet.dart';
 
 /// The issuable-document parameters a caller stamps onto an exported drawing.
 /// All fields are optional; the renderers draw only the parts that are present,
@@ -47,6 +49,11 @@ class DrawingChrome {
   /// plan's fixture codes, its CL datum, the drain-fall rule). Empty ⇒
   /// byte-identical.
   final List<String> legendNotes;
+
+  /// Round 34 (fire-hvac-drawings-legend-lacks-symbols) — the plan-symbol
+  /// glyphs drawn on the sheet, each keyed in the legend with its glyph
+  /// ([planComponentPrims]) beside its label. Empty ⇒ byte-identical.
+  final List<NodeComponent> legendSymbols;
 
   /// Optional human label under the scale bar (e.g. `1 : 100` or `5 m`). The
   /// engine never computes a real-world scale (it has no calibration here); the
@@ -88,6 +95,7 @@ class DrawingChrome {
     this.northAngleRad = 0,
     this.legendServices = const [],
     this.legendNotes = const [],
+    this.legendSymbols = const [],
     this.scaleBarLabel,
     this.clientName,
     this.drawingTitle,
@@ -107,6 +115,7 @@ class DrawingChrome {
       sheetTotal == null &&
       legendServices.isEmpty &&
       legendNotes.isEmpty &&
+      legendSymbols.isEmpty &&
       clientName == null &&
       drawingTitle == null &&
       drawnBy == null &&
@@ -133,6 +142,7 @@ class DrawingChrome {
         northAngleRad: northAngleRad,
         legendServices: legendServices,
         legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: title,
@@ -155,6 +165,7 @@ class DrawingChrome {
           northAngleRad: northAngleRad,
           legendServices: legendServices,
           legendNotes: [...legendNotes, ...notes],
+          legendSymbols: legendSymbols,
           scaleBarLabel: scaleBarLabel,
           clientName: clientName,
           drawingTitle: drawingTitle,
@@ -164,6 +175,30 @@ class DrawingChrome {
           dateString: dateString,
           scaleText: scaleText,
         );
+
+  /// Round 34 — a copy with [symbols] as [legendSymbols] (every other field
+  /// kept); empty ⇒ this same object (byte-identical).
+  DrawingChrome withLegendSymbols(List<NodeComponent> symbols) =>
+      symbols.isEmpty
+          ? this
+          : DrawingChrome(
+              drawingNumber: drawingNumber,
+              revisionNumber: revisionNumber,
+              sheetIndex: sheetIndex,
+              sheetTotal: sheetTotal,
+              northAngleRad: northAngleRad,
+              legendServices: legendServices,
+              legendNotes: legendNotes,
+              legendSymbols: symbols,
+              scaleBarLabel: scaleBarLabel,
+              clientName: clientName,
+              drawingTitle: drawingTitle,
+              drawnBy: drawnBy,
+              checkedBy: checkedBy,
+              approvedBy: approvedBy,
+              dateString: dateString,
+              scaleText: scaleText,
+            );
 
   /// A copy with the sheet counter overridden (every other field kept). A
   /// paginated exporter builds one chrome and re-stamps the per-page `i of N`
@@ -178,6 +213,7 @@ class DrawingChrome {
         northAngleRad: northAngleRad,
         legendServices: legendServices,
         legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -401,12 +437,32 @@ String _pdfText(String raw) => pdfWinAnsiText(raw);
 /// Round 33 — the height of one [DrawingChrome.legendNotes] row (points).
 const double _kLegendNoteRowH = 10.0;
 
+/// Round 34 — the height of one [DrawingChrome.legendSymbols] row and its
+/// glyph size (points).
+const double _kLegendSymbolRowH = 13.0;
+const double _kLegendSymbolGlyph = 10.0;
+
+/// Round 34 — a stroked circle path (4 Bezier arcs, kappa 0.5523).
+String _pdfCirclePath(double cx, double cy, double r) {
+  const k = 0.5523;
+  final o = r * k;
+  return '${_n(cx + r)} ${_n(cy)} m '
+      '${_n(cx + r)} ${_n(cy + o)} ${_n(cx + o)} ${_n(cy + r)} ${_n(cx)} ${_n(cy + r)} c '
+      '${_n(cx - o)} ${_n(cy + r)} ${_n(cx - r)} ${_n(cy + o)} ${_n(cx - r)} ${_n(cy)} c '
+      '${_n(cx - r)} ${_n(cy - o)} ${_n(cx - o)} ${_n(cy - r)} ${_n(cx)} ${_n(cy - r)} c '
+      '${_n(cx + o)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - o)} ${_n(cx + r)} ${_n(cy)} c S\n';
+}
+
 String pdfLegend(
   DrawingChrome chrome, {
   required double originX,
   required double originY,
 }) {
-  if (chrome.legendServices.isEmpty && chrome.legendNotes.isEmpty) return '';
+  if (chrome.legendServices.isEmpty &&
+      chrome.legendNotes.isEmpty &&
+      chrome.legendSymbols.isEmpty) {
+    return '';
+  }
   final cs = StringBuffer();
   const rowH = 12.0;
   const swatchW = 18.0;
@@ -420,6 +476,33 @@ String pdfLegend(
         '(${_pdfText(notes[i])}) Tj ET');
   }
   originY = baseY;
+  // Round 34 — the symbol key rows (glyph + label) between the notes and
+  // the service swatches.
+  final symbols = chrome.legendSymbols;
+  if (symbols.isNotEmpty) {
+    cs.writeln('0 0 0 RG 0.6 w');
+    for (var i = 0; i < symbols.length; i++) {
+      final y = originY + (symbols.length - 1 - i) * _kLegendSymbolRowH;
+      final cy = y + 3;
+      for (final pr in planComponentPrims(symbols[i],
+          cx: originX + _kLegendSymbolGlyph / 2, cy: cy, size: _kLegendSymbolGlyph)) {
+        switch (pr) {
+          case final SldLine l:
+            cs.writeln('${_n(l.x1)} ${_n(2 * cy - l.y1)} m '
+                '${_n(l.x2)} ${_n(2 * cy - l.y2)} l S');
+          case final SldCircle c:
+            cs.write(_pdfCirclePath(c.cx, 2 * cy - c.cy, c.r));
+          case SldRect():
+          case SldLabel():
+            break; // never produced by the plan-symbol library
+        }
+      }
+      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+          '${_n(originX + 18 + 6)} ${_n(y)} Td '
+          '(${_pdfText(symbols[i].label)}) Tj ET');
+    }
+    originY += symbols.length * _kLegendSymbolRowH;
+  }
   // Title above the rows.
   final titleY = originY + chrome.legendServices.length * rowH + 4;
   cs.writeln('BT /F1 9 Tf 0 0 0 rg '
@@ -766,7 +849,8 @@ LabelBox? pdfLegendBox(
 }) {
   final n = chrome.legendServices.length;
   final notes = chrome.legendNotes;
-  if (n == 0 && notes.isEmpty) return null;
+  final symbols = chrome.legendSymbols;
+  if (n == 0 && notes.isEmpty && symbols.isEmpty) return null;
   var w = helveticaTextWidth('LEGEND', 9);
   for (final s in chrome.legendServices) {
     w = math.max(w, 18 + 6 + helveticaTextWidth(serviceChromeLabel(s), 8));
@@ -774,12 +858,21 @@ LabelBox? pdfLegendBox(
   for (final t in notes) {
     w = math.max(w, helveticaTextWidth(t, 7));
   }
+  for (final c in symbols) {
+    w = math.max(w, 18 + 6 + helveticaTextWidth(c.label, 8));
+  }
   return (
     minX: originX - 2,
     minY: originY - 3,
     maxX: originX + w + 2,
-    // the 9 pt title's cap + clearance, plus the note rows (Round 33)
-    maxY: originY + notes.length * _kLegendNoteRowH + n * 12.0 + 4 + 11,
+    // the 9 pt title's cap + clearance, plus the note rows (Round 33) and
+    // the symbol rows (Round 34)
+    maxY: originY +
+        notes.length * _kLegendNoteRowH +
+        symbols.length * _kLegendSymbolRowH +
+        n * 12.0 +
+        4 +
+        11,
   );
 }
 
@@ -1059,7 +1152,9 @@ String dxfPlanChrome(
 
   // Legend — bottom-left, below the extent, one swatch row per service.
   var ly = minY - 12 * u;
-  if (chrome.legendServices.isNotEmpty || chrome.legendNotes.isNotEmpty) {
+  if (chrome.legendServices.isNotEmpty ||
+      chrome.legendNotes.isNotEmpty ||
+      chrome.legendSymbols.isNotEmpty) {
     text(kDxfLayerLegend, minX, ly, txt, 'LEGEND');
     ly -= 7 * u;
     for (final svc in chrome.legendServices) {
@@ -1070,6 +1165,29 @@ String dxfPlanChrome(
               ? null
               : dxfLinetypeFor(svc));
       text(kDxfLayerLegend, minX + 15 * u, ly, txt, serviceChromeLabel(svc));
+      ly -= 6 * u;
+    }
+    // Round 34 — the symbol key: each glyph (the plan-symbol library, one
+    // geometry with the body) beside its label.
+    for (final c in chrome.legendSymbols) {
+      final cy = ly + txt / 2;
+      final g = 5 * u;
+      for (final pr in planComponentPrims(c, cx: minX + 6 * u, cy: cy, size: g)) {
+        switch (pr) {
+          case final SldLine l:
+            line(kDxfLayerLegend, l.x1, 2 * cy - l.y1, l.x2, 2 * cy - l.y2);
+          case final SldCircle cc:
+            _g(b, 0, 'CIRCLE');
+            _g(b, 8, kDxfLayerLegend);
+            _g(b, 10, cc.cx);
+            _g(b, 20, 2 * cy - cc.cy);
+            _g(b, 40, cc.r);
+          case SldRect():
+          case SldLabel():
+            break; // never produced by the plan-symbol library
+        }
+      }
+      text(kDxfLayerLegend, minX + 15 * u, ly, txt, c.label);
       ly -= 6 * u;
     }
     // Round 33 — the sheet notes under the swatch rows (PDF == DXF text).

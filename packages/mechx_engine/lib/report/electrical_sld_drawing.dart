@@ -121,12 +121,25 @@ String _amps(double v) => v.toStringAsFixed(1);
 /// Round 20 (drafting-visual-4-4) — whether any primitive is drawn in the
 /// ESSENTIAL role: the overview / riser legend keys 'Essential' only when the
 /// sheet shows an essential board or feeder.
-bool _anyEssentialPrim(List<SldPrim> prims) => prims.any((p) => switch (p) {
-      SldLine(:final role) => role == SldRole.essential,
-      SldRect(:final role) => role == SldRole.essential,
-      SldLabel(:final role) => role == SldRole.essential,
-      SldCircle(:final role) => role == SldRole.essential,
-    });
+bool _anyEssentialPrim(List<SldPrim> prims) =>
+    _anyRolePrim(prims, SldRole.essential);
+
+/// Round 34 (electrical-drawings-4-overview-legend-keys-unprinted) — whether
+/// any primitive is drawn in [role]: a legend keys only what is printed.
+bool _anyRolePrim(List<SldPrim> prims, SldRole role) =>
+    prims.any((p) => switch (p) {
+          SldLine(role: final r) => r == role,
+          SldRect(role: final r) => r == role,
+          SldLabel(role: final r) => r == role,
+          SldCircle(role: final r) => r == role,
+        });
+
+/// Round 34 — the legend wording of the source chain: 'MV' only when an MV
+/// service is declared (an LV direct service draws no MV element).
+String _sourceLegendText(ElectricalProject project) =>
+    isDeclaredMvService(project)
+        ? 'Utility / MV supply chain'
+        : 'Utility supply chain';
 
 /// A connected-load (DAYA) figure: `W` under 1 kW, else `kW`.
 String _watts(double w) => w >= 1000 ? '${_num(w / 1000)}kW' : '${_num(w)}W';
@@ -421,6 +434,7 @@ SldSheet buildElectricalSld({
   Map<String, double>? breakerIcuKaByPanelId,
   Map<String, double>? breakerKaByCircuitId,
   Map<String, ConduitSpec>? containmentByCircuitId,
+  ({int lo, int hi})? wayRange,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
   final circuitById = <String, ElectricalCircuit>{
@@ -453,6 +467,11 @@ SldSheet buildElectricalSld({
         ];
 
   final prims = <SldPrim>[];
+  // Round 34 (electrical-drawings-4-detail-schedule-no-essential-mark) — the
+  // SAME essential set the overview / riser / layout colour red: a board on
+  // the genset-backed supply is marked on its own schedule too.
+  final essential = essentialPanelIds(project, result);
+  var anyEssential = false;
   final usedCurves = <BreakerCurve>{};
   final usedClasses = <BreakerClass>{};
   final usedFamilies = <String>{};
@@ -480,6 +499,19 @@ SldSheet buildElectricalSld({
     if (p == null) continue;
     final model = modelById[id];
     final ways = p.circuits.length;
+    // Round 34 (electrical-drawings-4-tall-board-schedule-illegible) — a
+    // CONTINUATION page of one tall board ([wayRange], with [onlyPanelId]):
+    // the first chunk carries the header + incomer, every later chunk a
+    // 'LANJUTAN W<a>-W<b>' header, and only the last the spares + TOTAL.
+    final range = (onlyPanelId != null && wayRange != null) ? wayRange : null;
+    final wayIdx = range == null
+        ? [for (var i = 0; i < ways; i++) i]
+        : [
+            for (var i = range.lo; i <= range.hi && i < ways; i++)
+              if (i >= 0) i,
+          ];
+    final firstChunk = range == null || range.lo <= 0;
+    final lastChunk = range == null || range.hi >= ways - 1;
     // Breaking-capacity (Icu, kA) suffix for this board's devices — appended to
     // the incomer sub-line + every way's DEVICE cell. Resolves the fault study's
     // chosen Icu rating when mapped, else the busbar-withstand prospective fault
@@ -492,8 +524,8 @@ SldSheet buildElectricalSld({
     // ways; a footer row carries the panel TOTAL. Both extend the block height
     // so the busbar + rows stay inside the box. 0 reserved + no footer growth ⇒
     // geometry is byte-identical to the pre-enrichment block.
-    final spareWays = p.spareWaysReserved;
-    final bodyRows = math.max(1, ways) + spareWays;
+    final spareWays = lastChunk ? p.spareWaysReserved : 0;
+    final bodyRows = math.max(1, wayIdx.length) + spareWays;
     const footerH = _rowH; // the TOTAL footer line
     // Full single-line: indent by feeder depth. Single-panel detail filter:
     // re-origin to x=0 so the block frames cleanly in a panel rect.
@@ -504,19 +536,28 @@ SldSheet buildElectricalSld({
     boxTop[id] = (x: blockX, y: blockY);
     boxBottom[id] = blockY + blockH;
 
-    // Outer block.
-    prims.add(SldRect(blockX, blockY, _blockW, blockH));
+    // Outer block (Round 34: essential boards framed in the essential role).
+    final isEssential = essential.contains(id);
+    if (isEssential) anyEssential = true;
+    final frameRole = isEssential ? SldRole.essential : SldRole.normal;
+    prims.add(SldRect(blockX, blockY, _blockW, blockH, role: frameRole));
 
     // Header: name [tag] + the incomer / system / bus sub-line. The bus make-up
     // reads "Cu bus <csa>mm2" + (when the withstand fold ran) " Icw <kA>kA".
     final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
-    prims.add(SldLabel(blockX + 8, blockY + 16, '${p.name}$tag',
-        size: 13, bold: true));
+    final chunkNote = range == null || wayIdx.isEmpty
+        ? ''
+        : firstChunk
+            ? ' · W1-W${wayIdx.last + 1} (LANJUT)'
+            : ' · LANJUTAN W${wayIdx.first + 1}-W${wayIdx.last + 1}';
+    prims.add(SldLabel(blockX + 8, blockY + 16,
+        '${p.name}$tag${isEssential ? ' · ESSENTIAL (GENSET)' : ''}$chunkNote',
+        size: 13, bold: true, role: frameRole));
     final v = model?.voltage.volts ?? (p.system.isThreePhase ? 400 : 230);
     final icw = p.busbar.withstand != null
         ? '  Icw ${_num(p.busbar.withstand!.icwKa)}kA'
         : '';
-    prims.add(SldLabel(
+    if (firstChunk) prims.add(SldLabel(
         blockX + 8,
         blockY + 32,
         'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix'
@@ -536,7 +577,7 @@ SldSheet buildElectricalSld({
     // a CT note, the BRI `Diagram Panel` convention. Only on 3-phase boards
     // (single-phase final boards carry no metering). The meters draw as CIRCLE
     // symbols (the DXF convention), each with a centred letter.
-    if (p.system.isThreePhase) {
+    if (p.system.isThreePhase && firstChunk) {
       anyMetering = true;
       var mx = blockX + _blockW - 220;
       const my = 12.0; // within the header band
@@ -569,7 +610,9 @@ SldSheet buildElectricalSld({
     prims.add(SldLine(bx + 4, busTop, bx + 4, busBot, weight: SldWeight.thick));
     // Incomer breaker straddling the divider at the bus top (the topmost device
     // on the bus; named verbatim by the header sub-line "Incomer ...").
-    prims.add(SldRect(bx + 2 - _brW / 2, busTop - _brH / 2, _brW, _brH));
+    if (firstChunk) {
+      prims.add(SldRect(bx + 2 - _brW / 2, busTop - _brH / 2, _brW, _brH));
+    }
 
     // Column-header band (slot 0): the BRI `Diagram Panel` table columns. The
     // R / S / T headers carry their PHASE role so every renderer colours the
@@ -618,9 +661,10 @@ SldSheet buildElectricalSld({
     // count INCLUDES the PE core, so no separate earth conductor is added) | DAYA (connected W/kW) | KETERANGAN (load name / -> sub-panel) |
     // R/S/T (the line current on the way's phase(s) — the phase-loading band).
     const rowSize = 7.5;
-    for (var i = 0; i < ways; i++) {
+    for (var j = 0; j < wayIdx.length; j++) {
+      final i = wayIdx[j];
       final c = p.circuits[i];
-      final slot = 1 + i; // +1 for the column-header row
+      final slot = 1 + j; // +1 for the column-header row
       final rowY = busTop + 6 + slot * _rowH + _rowH / 2;
       // Stub from bus to breaker + the breaker symbol.
       prims.add(SldLine(bx + 4, rowY, bx + 28, rowY));
@@ -793,7 +837,7 @@ SldSheet buildElectricalSld({
 
     // CADANGAN (spare) ways — a stub + a GRUP no + a KETERANGAN label each.
     for (var s = 0; s < spareWays; s++) {
-      final slot = 1 + ways + s;
+      final slot = 1 + wayIdx.length + s;
       final rowY = busTop + 6 + slot * _rowH + _rowH / 2;
       prims.add(SldLine(bx + 4, rowY, bx + 28, rowY));
       prims.add(SldLabel(blockX + _colGrup, rowY + 3, 'W${ways + s + 1}',
@@ -822,10 +866,10 @@ SldSheet buildElectricalSld({
         ? '  ·  imbalance ${_num(p.imbalancePercent)}%'
         : '';
     final footerY = busBot + _rowH / 2 + 3;
-    prims.add(SldLabel(blockX + 8, footerY,
+    if (lastChunk) prims.add(SldLabel(blockX + 8, footerY,
         'TOTAL  ${_watts(p.demandW)} / ${_boardDemandCurrent(p)}$imbalance',
         size: 8.5, bold: true));
-    if (p.system.isThreePhase) {
+    if (p.system.isThreePhase && lastChunk) {
       final pb = p.phaseBalance;
       final l1 = _amps(pb.l1), l2 = _amps(pb.l2), l3 = _amps(pb.l3);
       prims.add(SldLabel(
@@ -889,6 +933,10 @@ SldSheet buildElectricalSld({
 
   // ── Device legend (KETERANGAN) entries for the symbols actually used ────────
   final legend = <SldLegendEntry>[];
+  if (anyEssential) {
+    legend.add(const SldLegendEntry(
+        'Essential', 'Board on the genset-backed (essential) supply'));
+  }
   if (usedClasses.contains(BreakerClass.mcb)) {
     legend.add(const SldLegendEntry('MCB', 'Miniature circuit breaker'));
   }
@@ -2155,6 +2203,7 @@ SldSheet buildElectricalOverview({
   bool sourceChain = false,
   String? subtreeRootId,
   int? maxDepth,
+  Set<String>? rootChildIds,
 }) {
   // children map over the feeder graph; parent + essential via shared helpers.
   final fullParentOf = _parentOf(project, result);
@@ -2190,6 +2239,32 @@ SldSheet buildElectricalOverview({
       for (final e in rel.entries)
         if (e.value <= maxDepth) e.key,
     };
+  }
+  // Round 34 (electrical-drawings-4-overview-pagination-leaves-top-page-
+  // below-floor) — [rootChildIds] restricts the page roots' DIRECT sub-boards
+  // to a chunk (a wide flat tier split across several top pages); every
+  // other sub-board of a root — and its sub-tree — is left to its own page
+  // (the root then carries its 'LANJUT KE DIAGRAM' note).
+  if (rootChildIds != null) {
+    final base = include ?? {for (final id in result.order) id};
+    final pageRoots = {
+      for (final id in base)
+        if (fullParentOf[id] == null || !base.contains(fullParentOf[id]))
+          id,
+    };
+    final drop = <String>{};
+    for (final r in pageRoots) {
+      for (final k in fullChildren[r] ?? const <String>[]) {
+        if (rootChildIds.contains(k)) continue;
+        final stack = [k];
+        while (stack.isNotEmpty) {
+          final id = stack.removeLast();
+          if (!drop.add(id)) continue;
+          stack.addAll(fullChildren[id] ?? const []);
+        }
+      }
+    }
+    include = base.difference(drop);
   }
   final order = [
     for (final id in result.order)
@@ -2299,10 +2374,33 @@ SldSheet buildElectricalOverview({
   final ovDefault = <String, (double, double)>{};
   final ovCleared = <String, bool>{};
   {
+    // Round 34 (electrical-drawings-4-overview-feeder-labels-struck-by-
+    // drops) — the vertical feeder lines are obstacles too (thin boxes): the
+    // parent's drop and every child's drop (and the source feed), so no tag
+    // is struck through by a feeder ('M|CB 63A'). An uncollided tag keeps its
+    // default anchor ⇒ sheets without crossings stay byte-identical.
+    const halfLine = 0.75;
+    _RiserBox vLine(double x, double y0, double y1) => _RiserBox(
+        x - halfLine, math.min(y0, y1), x + halfLine, math.max(y0, y1));
     final ovPlacer = _RiserLabelPlacer([
       for (final id in order)
         if (cx.containsKey(id))
           _RiserBox(cx[id]!, nodeY(id), cx[id]! + _ovW, nodeY(id) + _ovH),
+      for (final entry in children.entries)
+        if (cx.containsKey(entry.key))
+          for (final child in entry.value)
+            if (cx.containsKey(child)) ...[
+              vLine(cx[entry.key]! + _ovW / 2, nodeY(entry.key) + _ovH,
+                  (nodeY(entry.key) + _ovH + nodeY(child)) / 2),
+              vLine(cx[child]! + _ovW / 2,
+                  (nodeY(entry.key) + _ovH + nodeY(child)) / 2, nodeY(child)),
+            ],
+      if (spine != null)
+        for (final r in roots)
+          if (cx.containsKey(r)) ...[
+            vLine(spine.feedX, spine.feedY, (spine.feedY + nodeY(r)) / 2),
+            vLine(cx[r]! + _ovW / 2, (spine.feedY + nodeY(r)) / 2, nodeY(r)),
+          ],
     ]);
     final pending = <String>[];
     for (final entry in children.entries) {
@@ -2506,7 +2604,7 @@ SldSheet buildElectricalOverview({
   minY = math.min(minY, ovLabelMinY);
   maxY = math.max(maxY, ovLabelMaxY);
   // Page match notes (sub-tree / depth-cut pages only) extend the bounds.
-  if (subtreeRootId != null || maxDepth != null) {
+  if (subtreeRootId != null || maxDepth != null || rootChildIds != null) {
     for (final pr in prims) {
       if (pr is SldLabel &&
           (pr.text.startsWith('LANJUT KE DIAGRAM') ||
@@ -2530,11 +2628,12 @@ SldSheet buildElectricalOverview({
     maxX: maxX,
     maxY: maxY,
     legend: [
-      const SldLegendEntry('Normal', 'Normal supply'),
+      if (_anyRolePrim(prims, SldRole.normal))
+        const SldLegendEntry('Normal', 'Normal supply'),
       if (_anyEssentialPrim(prims))
         const SldLegendEntry('Essential', 'Essential / emergency supply'),
       if (sourceChain)
-        const SldLegendEntry('Source', 'Utility / MV supply chain'),
+        SldLegendEntry('Source', _sourceLegendText(project)),
       // The source spine draws the system-earthing mark, so surface it too.
       if (sourceChain) const SldLegendEntry('Earth', 'System earthing point'),
     ],
@@ -3693,12 +3792,13 @@ SldSheet buildElectricalRiser({
     maxX: maxX,
     maxY: maxY,
     legend: [
-      const SldLegendEntry('Normal', 'Normal supply'),
+      if (_anyRolePrim(prims, SldRole.normal))
+        const SldLegendEntry('Normal', 'Normal supply'),
       if (_anyEssentialPrim(prims))
         const SldLegendEntry('Essential', 'Essential / emergency supply'),
       const SldLegendEntry('FFL', 'Finished floor level (m)'),
       if (sourceChain)
-        const SldLegendEntry('Source', 'Utility / MV supply chain'),
+        SldLegendEntry('Source', _sourceLegendText(project)),
       // The source spine draws the system-earthing mark, so surface it too.
       if (sourceChain) const SldLegendEntry('Earth', 'System earthing point'),
     ],

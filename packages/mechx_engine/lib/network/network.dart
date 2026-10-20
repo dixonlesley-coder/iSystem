@@ -175,6 +175,14 @@ bool isNonDemandTerminal(NodeComponent? c) =>
     c == NodeComponent.airVent ||
     c == NodeComponent.fireExtinguisher;
 
+/// Round 34 (fire-hvac-drawings-fdc-drawn-and-sized-as-outlet) — a SUPPLY
+/// INLET: a fire department connection (siamese) is where the fire brigade
+/// pumps water INTO the system. It is never a draw-off point (no demand, never
+/// a delivery / critical node, never counted as a hydrant outlet) and its
+/// branch is oriented INTO the system, like a ground tank's fill line.
+bool isSupplyInletComponent(NodeComponent? c) =>
+    c == NodeComponent.fireDeptConnection;
+
 /// Round 33 (hydraulics-3-3) — INLINE DEVICES: a valve, meter, strainer or
 /// expansion tank is never a draw-off point, even drawn at a run's end (a
 /// PDAM water meter is the supply ENTRY of a mains-fed system).
@@ -864,7 +872,9 @@ double runPixelLength(NetEdge edge, Network net) {
 /// sprinkler head is a [NodeRole.fixture] for DEMAND, but it hangs AT the
 /// ceiling, not at the plumbing fixture height — so a run from a ceiling main
 /// to it has no vertical leg. Plumbing fixtures, water outlets, hose reels and
-/// hydrant boxes keep the fixture height. Pure.
+/// hydrant boxes keep the fixture height. Round 34: a datum-less AHU /
+/// supply fan / exhaust fan connects at [MountingHeights.airUnitConnection]
+/// above its floor surface (capped at the ceiling). Pure.
 Length runConnectionElevation(
   NetNode node,
   BuildingLevels building, [
@@ -878,6 +888,18 @@ Length runConnectionElevation(
       case NodeComponent.exhaustGrille:
       case NodeComponent.sprinklerHead:
         return building.ceilingElevationOf(node.floorIndex, mounting);
+      // Round 34 — a floor-standing air unit takes its ducts at the top of
+      // its casing ([MountingHeights.airUnitConnection] above its floor
+      // surface, never above the ceiling main), not at the slab: the full
+      // storey height used to ride every AHU duct as a phantom vertical leg.
+      case NodeComponent.ahu:
+      case NodeComponent.supplyFan:
+      case NodeComponent.exhaustFan:
+        final surface = nodeElevation(node, building, mounting).meters;
+        final ceiling =
+            building.ceilingElevationOf(node.floorIndex, mounting).meters;
+        return Length(
+            math.min(surface + mounting.airUnitConnection.meters, ceiling));
       default:
         break;
     }

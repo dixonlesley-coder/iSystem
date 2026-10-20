@@ -636,10 +636,15 @@ void main() {
     expect(sldSinglePageMinLabelPt(whole), lessThan(kMinPlotLabelPt));
     final pages =
         paginatedElectricalOverviewSheets(project: project, result: r);
-    expect(pages.length, 7); // the top page + one per SDP sub-tree
+    // Round 34 (electrical-drawings-4-overview-pagination-leaves-top-page-
+    // below-floor) — the depth-1 top page (MDP + 6 SDPs + the spine) is
+    // itself width-bound below the floor, so it splits into the fewest equal
+    // chunks that print at it: 2 top pages (SDP-1..3 with the spine, SDP-4..6)
+    // + one page per SDP sub-tree = 8 (was 7, the top page below 7 pt).
+    expect(pages.length, 8);
     for (final p in pages) {
       expect(sldSinglePageMinLabelPt(p),
-          greaterThan(sldSinglePageMinLabelPt(whole)));
+          greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9));
     }
     // Every board's node is drawn on exactly one page (the cut SDPs on the
     // top page; each SDP heads its own page too, as its sub-tree's root).
@@ -655,10 +660,13 @@ void main() {
         expect(n, 1, reason: 'LP-$i$k');
       }
     }
-    final top = pages.first.prims.whereType<SldLabel>().map((l) => l.text);
+    final top = [
+      for (final p in pages.take(2))
+        ...p.prims.whereType<SldLabel>().map((l) => l.text),
+    ];
     expect(top.where((t) => t.startsWith('LANJUT KE DIAGRAM SDP-')).length, 6);
     expect(
-        pages[1].prims.whereType<SldLabel>().any((l) => l.text == 'DARI MDP'),
+        pages[2].prims.whereType<SldLabel>().any((l) => l.text == 'DARI MDP'),
         isTrue);
   });
 
