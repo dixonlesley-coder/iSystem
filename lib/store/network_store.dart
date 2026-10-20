@@ -1039,6 +1039,7 @@ class NetworkController extends Notifier<DrawingState> {
   void undo() {
     if (_undo.isEmpty) return;
     _dragSnapshotPending = false;
+    ref.read(dragSessionProvider.notifier).endDrag();
     final current = state.network;
     final previous = _undo.removeLast();
     _redo.add(current);
@@ -1122,6 +1123,7 @@ class NetworkController extends Notifier<DrawingState> {
   void redo() {
     if (_redo.isEmpty) return;
     _dragSnapshotPending = false;
+    ref.read(dragSessionProvider.notifier).endDrag();
     _undo.add(state.network);
     state = DrawingState(
       network: _redo.removeLast(),
@@ -3707,6 +3709,9 @@ class NetworkController extends Notifier<DrawingState> {
   /// (`_seq`) is untouched — these paths only re-index / restore existing nodes,
   /// never mint new ids.
   void _setNetworkNoRecord(Network net) {
+    // A wholesale network replacement ends any drag session: the frozen
+    // snapshot belongs to the network being replaced.
+    ref.read(dragSessionProvider.notifier).endDrag();
     state = DrawingState(
       network: net,
       service: state.service,
@@ -3748,6 +3753,9 @@ class NetworkController extends Notifier<DrawingState> {
       if ((_tagSeq[p] ?? 1) <= v) _tagSeq[p] = v + 1;
     }
     _dragSnapshotPending = false;
+    // Opening a document ends any drag session (its frozen snapshot is the
+    // previous project's network — the heavy chain must size the loaded one).
+    this.ref.read(dragSessionProvider.notifier).endDrag();
     var seq = _maxLoadedSeq(net) + 1;
     if (nextSeq != null && nextSeq > seq) seq = nextSeq;
     final ref = maxReferencedSeq(referencedIds);
@@ -3846,18 +3854,31 @@ class DragSessionController extends Notifier<DragSession> {
     return const DragSession();
   }
 
-  /// Open a drag session (call at a genuine pointer-drag START): the heavy chain
-  /// freezes on the CURRENT network snapshot while the drag runs. Idempotent;
-  /// cancels any stale settle tick.
+  /// Open a drag session (call at a genuine pointer-drag START, and on each
+  /// drag frame — re-opening one that settled mid-gesture): the heavy chain
+  /// freezes on the CURRENT network snapshot while the drag runs. Idempotent.
+  ///
+  /// An open session ALWAYS carries the settle timer (the same one [tickDrag]
+  /// re-arms): a caller that begins a session and then mutates nothing (a
+  /// nudge on a stale selection, a drag cancelled before its first frame)
+  /// can never leave the heavy chain frozen on an old network.
   void beginDrag() {
+    if (!state.active) {
+      state = DragSession(
+        active: true,
+        tick: state.tick,
+        frozen: ref.read(networkControllerProvider).network,
+      );
+    }
+    _armSettle();
+  }
+
+  void _armSettle() {
     _throttle?.cancel();
-    _throttle = null;
-    if (state.active) return;
-    state = DragSession(
-      active: true,
-      tick: state.tick,
-      frozen: ref.read(networkControllerProvider).network,
-    );
+    _throttle = Timer(throttleInterval, () {
+      _throttle = null;
+      if (state.active) _close();
+    });
   }
 
   /// Record a drag frame. Debounces the settle: while the drag keeps moving (a
@@ -3870,11 +3891,7 @@ class DragSessionController extends Notifier<DragSession> {
   /// [beginDrag] — is byte-identical).
   void tickDrag() {
     if (!state.active) return;
-    _throttle?.cancel();
-    _throttle = Timer(throttleInterval, () {
-      _throttle = null;
-      if (state.active) _close();
-    });
+    _armSettle();
   }
 
   /// Close the drag session (call at pointer-drag END): the heavy chain refreshes

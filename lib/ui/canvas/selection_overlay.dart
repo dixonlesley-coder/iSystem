@@ -35,9 +35,11 @@ import 'viewport.dart';
 /// B28 — a lightweight, LOCAL "something is being dragged on this overlay"
 /// signal (node drag, endpoint resize, segment grip, outlet-nub pull, run
 /// move, or the marquee), used only to suppress the hover-measurement chip
-/// while a gesture is live. `dragSessionProvider` isn't a reliable proxy here
-/// (the mechanical canvas never calls its `beginDrag`); this is UI-only —
-/// never read by the engine or any sizing path.
+/// while a gesture is live. It is NOT `dragSessionProvider`: that K1 session
+/// (opened by every node / group / endpoint / grip / run drag here, closed on
+/// release or settle) gates the heavy sizing chain and also spans keyboard
+/// nudges and mid-drag settles; this is UI-only — never read by the engine or
+/// any sizing path.
 final canvasGestureActiveProvider =
     NotifierProvider<CanvasGestureActiveController, bool>(
   CanvasGestureActiveController.new,
@@ -191,11 +193,14 @@ class _NetworkSelectionOverlayState
     ref.read(canvasGestureActiveProvider.notifier).set(true);
     ref.read(selectionProvider.notifier).selectNode(id);
     ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+    // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+    ref.read(dragSessionProvider.notifier).beginDrag();
     final node = ref.read(networkControllerProvider).network.nodeById(id);
     _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
   }
 
   void _updateEndpointStretch(String id, double dxWorld, double dyWorld) {
+    ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
     final net = ref.read(networkControllerProvider).network;
     final node = net.nodeById(id);
     if (node == null) return;
@@ -213,6 +218,7 @@ class _NetworkSelectionOverlayState
 
   void _endEndpointStretch(String id, double scale, double snapWorld) {
     ref.read(canvasGestureActiveProvider.notifier).set(false);
+    ref.read(dragSessionProvider.notifier).endDrag();
     _nodeDragRaw = null;
     final gridOrtho =
         ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
@@ -253,6 +259,7 @@ class _NetworkSelectionOverlayState
     final from = _pullFrom;
     final now = _pullNow;
     ref.read(canvasGestureActiveProvider.notifier).set(false);
+    ref.read(dragSessionProvider.notifier).endDrag();
     setState(() {
       _pullFrom = null;
       _pullNow = null;
@@ -709,6 +716,8 @@ class _NetworkSelectionOverlayState
               ref.read(selectionProvider.notifier).selectNode(id);
             }
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+            // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+            ref.read(dragSessionProvider.notifier).beginDrag();
             // B10: seed the raw-drag tracker (only consumed by the single,
             // degree-1 ortho path below).
             final node =
@@ -716,6 +725,9 @@ class _NetworkSelectionOverlayState
             _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
           },
           onPanUpdate: (d) {
+            // K1 — each frame keeps (or, after a mid-drag pause settled it,
+            // re-opens) the drag session.
+            ref.read(dragSessionProvider.notifier).beginDrag();
             final sel = ref.read(selectionProvider);
             final ctrl = ref.read(networkControllerProvider.notifier);
             final dx = d.delta.dx / scale;
@@ -743,6 +755,7 @@ class _NetworkSelectionOverlayState
           },
           onPanEnd: (_) {
             ref.read(canvasGestureActiveProvider.notifier).set(false);
+            ref.read(dragSessionProvider.notifier).endDrag();
             _nodeDragRaw = null; // B10: end the raw-drag tracking
             final sel = ref.read(selectionProvider);
             // A group move is already committed live over the pushUndoSnapshot
@@ -861,10 +874,12 @@ class _NetworkSelectionOverlayState
           onPanCancel: stretch
               ? () {
                   ref.read(canvasGestureActiveProvider.notifier).set(false);
+                  ref.read(dragSessionProvider.notifier).endDrag();
                   _nodeDragRaw = null;
                 }
               : () {
                   ref.read(canvasGestureActiveProvider.notifier).set(false);
+                  ref.read(dragSessionProvider.notifier).endDrag();
                   setState(() {
                     _pullFrom = null;
                     _pullNow = null;
@@ -978,6 +993,8 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
           ref.read(canvasGestureActiveProvider.notifier).set(true);
           setState(() => _pressing = true);
           ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+          // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+          ref.read(dragSessionProvider.notifier).beginDrag();
           final node = ref
               .read(networkControllerProvider)
               .network
@@ -985,6 +1002,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
           _rawWorld = node == null ? null : Offset(node.x, node.y);
         },
         onPanUpdate: (d) {
+          ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
           final net = ref.read(networkControllerProvider).network;
           final node = net.nodeById(widget.nodeId);
           if (node == null) return;
@@ -1008,6 +1026,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         },
         onPanEnd: (_) {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           setState(() => _pressing = false);
           _rawWorld = null;
           // G2 — the resized endpoint also honours the magnetic grid (lowest
@@ -1055,6 +1074,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         },
         onPanCancel: () {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           _rawWorld = null;
           setState(() => _pressing = false);
         },
@@ -1150,16 +1170,23 @@ class _SegmentGripState extends ConsumerState<_SegmentGrip> {
           ref.read(canvasGestureActiveProvider.notifier).set(true);
           setState(() => _pressing = true);
           ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+          // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+          ref.read(dragSessionProvider.notifier).beginDrag();
         },
-        onPanUpdate: (d) => ref
-            .read(networkControllerProvider.notifier)
-            .dragSegment(widget.edgeId, d.delta / widget.scale),
+        onPanUpdate: (d) {
+          ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
+          ref
+              .read(networkControllerProvider.notifier)
+              .dragSegment(widget.edgeId, d.delta / widget.scale);
+        },
         onPanEnd: (_) {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           setState(() => _pressing = false);
         },
         onPanCancel: () {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           setState(() => _pressing = false);
         },
         child: Center(
@@ -1712,6 +1739,8 @@ class _SelectionGestureLayerState
             }
             ref.read(canvasGestureActiveProvider.notifier).set(true);
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+            // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+            ref.read(dragSessionProvider.notifier).beginDrag();
             setState(() => _runMoveNodes = movers);
             return;
           }
@@ -1732,6 +1761,7 @@ class _SelectionGestureLayerState
         // repaint through the network provider).
         final movers = _runMoveNodes;
         if (movers != null) {
+          ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
           ref.read(networkControllerProvider.notifier).moveMany(
                 movers,
                 details.delta.dx / transform.scale,
@@ -1744,6 +1774,7 @@ class _SelectionGestureLayerState
       },
       onPanCancel: () {
         ref.read(canvasGestureActiveProvider.notifier).set(false);
+        ref.read(dragSessionProvider.notifier).endDrag();
         // Clear any in-flight drag state (a cancelled run move keeps its live
         // translation + the recorded undo step, exactly like a cancelled
         // node/group drag — Ctrl+Z reverts it).
@@ -1758,6 +1789,7 @@ class _SelectionGestureLayerState
       },
       onPanEnd: (_) {
         ref.read(canvasGestureActiveProvider.notifier).set(false);
+        ref.read(dragSessionProvider.notifier).endDrag();
         // G5: a run/group move is already committed live over the
         // pushUndoSnapshot baseline (one undo step); nothing to snap on release
         // (mirrors the node handle's group-move path).

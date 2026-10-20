@@ -1127,6 +1127,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         ids.add(e.toId);
       }
     }
+    // A STALE selection (its ids undone / deleted away) moves nothing: let the
+    // arrow pan instead of pushing an empty undo step and opening a drag
+    // session that no move would ever tick.
+    ids.removeWhere((id) => net.nodeById(id) == null);
     if (ids.isEmpty) return false;
     final ctrl = ref.read(networkControllerProvider.notifier);
     // D2 — one undo step per nudge BURST: snapshot only when the burst OPENS,
@@ -1145,9 +1149,12 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     // drag session so the heavy sizing/solve chain stays frozen while the keys
     // keep coming and re-solves ONCE when they settle (moveMany ticks it),
     // instead of a full multi-floor solve per repeat that lags the cursor.
-    ref.read(dragSessionProvider.notifier).beginDrag();
+    // (beginDrag also arms the settle timer, so the session can never stay
+    // open without one.)
+    final session = ref.read(dragSessionProvider.notifier)..beginDrag();
     ctrl.moveMany(ids, dx, dy);
     _nudgeLastNetwork = ref.read(networkControllerProvider).network;
+    if (identical(_nudgeLastNetwork, net)) session.endDrag(); // moved nothing
     return true;
   }
 }
@@ -1489,7 +1496,14 @@ class _SharedSheet extends ConsumerWidget {
           child: CanvasView(
             key: host.canvasKeyFor(sheet.id),
             contentSize: sheet.sizePx,
-            initialTransform: sheetsState.viewportFor(sheet.id),
+            // The LIVE viewport (consumed only in CanvasView.initState): the
+            // content snapshot's viewports are stale by design (pan frames
+            // never rebuild it), so a remount after Layout -> Riser -> Layout
+            // must restore the user's last zoom/pan — never re-fit, and never
+            // paint the substrate at an old transform while the overlays map
+            // through the live `sheetViewportProvider`.
+            initialTransform:
+                ref.read(sheetsControllerProvider).viewportFor(sheet.id),
             background: colors.canvas,
             gridColor: colors.gridLine,
             // A calibrated sheet snaps the grid minors to a round 1-2-5 metre
