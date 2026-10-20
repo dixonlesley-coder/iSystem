@@ -41,9 +41,13 @@ void main() {
         contains(kFireComponentMaxPressureKpa));
   });
 
-  test('the calc report prints the over-pressure line only when exceeded', () {
+  test('the calc report prints one over-pressure line per over system', () {
+    // Round 49 (regression-report-churn-not-per-system) — the report renders
+    // the app's per-system judgement (each sprinkler-bearing system on its
+    // OWN pump); it never re-judges the governing rating. For a 123 m rated
+    // head: churn = 1.4 x 123 x 9.81 = 1689 kPa; friction 57.6 / 123 = 47 %.
     const profile = SniProfile();
-    String md(double head, {bool sprinkler = true}) =>
+    String md(List<FireOverPressureReportLine> over) =>
         buildCalcReportMarkdown(CalcReportData(
           projectName: 'P',
           date: 'd',
@@ -53,19 +57,33 @@ void main() {
           building: const BuildingLevels([Floor('L0', Length(3))]),
           feedStrategy: 'Upfeed pump',
           targetResidual: const Pressure(225000),
-          sprinkler: sprinkler
-              ? designSprinklerSystem(hazard: FireHazardClass.lightHazard)
-              : null,
+          sprinkler: designSprinklerSystem(hazard: FireHazardClass.lightHazard),
           firePumpRating: checkFirePumpRating(
-              ratedFlow: FlowRate.litersPerSecond(6), ratedHead: Head(head)),
-          fireIndexFrictionM: 57.6,
+              ratedFlow: FlowRate.litersPerSecond(6), ratedHead: const Head(123)),
+          fireOverPressure: over,
         ));
-    expect(md(123), contains('Component pressure (churn)'));
-    expect(md(123), contains('1689 kPa at churn exceeds the 1210 kPa'));
-    expect(md(123), contains('friction 47 % of the rated head'));
-    expect(md(40), isNot(contains('Component pressure (churn)')));
-    // A hydrant-only design is not judged on the sprinkler listing.
-    expect(md(123, sprinkler: false),
-        isNot(contains('Component pressure (churn)')));
+    final c = fireOverPressureCheck(
+        rating: checkFirePumpRating(
+            ratedFlow: FlowRate.litersPerSecond(6), ratedHead: const Head(123)),
+        indexFrictionM: 57.6);
+    final one = md([
+      FireOverPressureReportLine(
+          tag: 'FP-02', churnKpa: c.churnKpa, frictionShare: c.frictionShare),
+    ]);
+    expect(one, contains('Component pressure (churn)'));
+    expect(one, contains('1689 kPa at churn exceeds the 1210 kPa'));
+    expect(one, contains('friction 47 % of the rated head'));
+    // No over system (e.g. only a hydrant-only system is over, which the
+    // app never lists) ⇒ no line, whatever the governing rating's churn.
+    expect(md(const []), isNot(contains('Component pressure (churn)')));
+    // Two over systems ⇒ one line each, under its own pump tag.
+    final two = md(const [
+      FireOverPressureReportLine(tag: 'FP-01', churnKpa: 1300),
+      FireOverPressureReportLine(tag: 'FP-03', churnKpa: 1400),
+    ]);
+    expect(two, contains('Component pressure (churn), FP-01'));
+    expect(two, contains('Component pressure (churn), FP-03'));
+    expect(two, contains('1300 kPa at churn'));
+    expect(two, contains('1400 kPa at churn'));
   });
 }

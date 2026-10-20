@@ -159,8 +159,12 @@ void main() {
       );
     });
 
-    test('requiredFlow is 500 gpm', () {
-      expect(design.requiredFlow.inLitersPerMinute, closeTo(500.0 * gal, 1e-9));
+    test('requiredFlow is the Class II 100 gpm (Round 49)', () {
+      // Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — a
+      // Class II hose-station system demands NFPA 14's 100 gpm, not the
+      // Class I 500 gpm first-riser flow.
+      expect(design.requiredFlow.inLitersPerMinute, closeTo(100.0 * gal, 1e-9));
+      expect(design.minRiserDiameter.inMillimeters, 50);
     });
 
     test('topResidualPressure is 450 kPa (Class II)', () {

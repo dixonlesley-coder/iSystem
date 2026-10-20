@@ -30,13 +30,17 @@ import 'drainage_advisory.dart' show effectiveDrainageSlope, laidGravitySlope;
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'ejector.dart' as ejector;
+import 'fire_index_friction.dart' show fireSystems;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
     show
         kFdcMinBoreMm,
         kMaxFireVelocityMps,
+        kMinClassIIRiserDiameterMm,
+        kMinHoseStationBranchDiameterMm,
         kMinHydrantBranchDiameterMm,
         kMinRiserDiameterMm,
+        StandpipeClass,
         parallelStandpipeCount,
         standpipeFlow;
 import 'storm_sizing.dart' as storm;
@@ -100,7 +104,34 @@ class SizingContext {
     this.systemHeadStatic,
     this.systemResistanceK,
     this.airSystemResistanceK,
+    this.hoseStationEdgeIds = const {},
   });
+
+  /// Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — the
+  /// fire-HYDRANT edges of a hose-reel-only (Class II) fire system, filled by
+  /// the sizer from the network ([FireSystem.standpipeClass]): they floor at
+  /// the 40 mm hose-station run / 50 mm riser instead of the Class I 65 / 100
+  /// mm. Empty (the default) ⇒ every hydrant pipe keeps the Class I floors.
+  final Set<String> hoseStationEdgeIds;
+
+  /// This context with [ids] as its [hoseStationEdgeIds].
+  SizingContext withHoseStationEdges(Set<String> ids) => SizingContext(
+        maxSupplyVelocity: maxSupplyVelocity,
+        maxFireVelocity: maxFireVelocity,
+        maxDuctVelocity: maxDuctVelocity,
+        drainageSlope: drainageSlope,
+        drainageFillRatio: drainageFillRatio,
+        drainageManningN: drainageManningN,
+        pipeMaterial: pipeMaterial,
+        ductShape: ductShape,
+        ductMethod: ductMethod,
+        ductEqualFrictionPa: ductEqualFrictionPa,
+        ductAspectRatio: ductAspectRatio,
+        systemHeadStatic: systemHeadStatic,
+        systemResistanceK: systemResistanceK,
+        airSystemResistanceK: airSystemResistanceK,
+        hoseStationEdgeIds: ids,
+      );
 }
 
 /// Sizing outcome for one edge.
@@ -478,11 +509,18 @@ Map<String, double> accumulateFixtureUnits({
 ///    [kMinHydrantBranchDiameterMm] (65 mm).
 /// The velocity sizer still raises the size above the floor when the flow
 /// needs it. `// VERIFY` — see the constants' provenance.
-Diameter? fireMinimumDiameter(NetEdge edge) => switch (edge.service) {
+///
+/// Round 49 — a [hoseStation] hydrant pipe (a hose-reel-only Class II
+/// system) floors at [kMinClassIIRiserDiameterMm] (riser, 50 mm) /
+/// [kMinHoseStationBranchDiameterMm] (run, 40 mm).
+Diameter? fireMinimumDiameter(NetEdge edge, {bool hoseStation = false}) =>
+    switch (edge.service) {
       ServiceType.fireSprinkler => Diameter.mm(kMinSprinklerPipeDiameterMm),
       ServiceType.fireHydrant => Diameter.mm(edge.kind == EdgeKind.riser
-          ? kMinRiserDiameterMm
-          : kMinHydrantBranchDiameterMm),
+          ? (hoseStation ? kMinClassIIRiserDiameterMm : kMinRiserDiameterMm)
+          : (hoseStation
+              ? kMinHoseStationBranchDiameterMm
+              : kMinHydrantBranchDiameterMm)),
       _ => null,
     };
 
@@ -500,7 +538,8 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
             : ctx.maxSupplyVelocity,
         material: ctx.pipeMaterial,
         // Fire services floor at their code-minimum DN (null for water).
-        minDiameter: fireMinimumDiameter(edge),
+        minDiameter: fireMinimumDiameter(edge,
+            hoseStation: ctx.hoseStationEdgeIds.contains(edge.id)),
       );
       return EdgeSizing(
         edgeId: edge.id,
@@ -1621,6 +1660,19 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   Map<String, FlowRate> jockeyLegFlows = const {},
 }) {
   const profile = SniProfile();
+  // Round 49 — the hydrant edges of every hose-reel-only (Class II) fire
+  // system take the hose-station floors and the 100 gpm design flow.
+  final classIIHydrantEdgeIds = <String>{
+    for (final sys in fireSystems(net))
+      if (sys.hasHydrant &&
+          sys.standpipeClass(net) == StandpipeClass.classII)
+        for (final e in sys.edges)
+          if (e.service == ServiceType.fireHydrant) e.id,
+  };
+  if (classIIHydrantEdgeIds.isNotEmpty) {
+    ctx = ctx.withHoseStationEdges(
+        {...ctx.hoseStationEdgeIds, ...classIIHydrantEdgeIds});
+  }
   final allFlows = <String, FlowRate>{};
   final sanitary = <String, EdgeSizing>{}; // DFU-sized drainage/vent edges
   final stormSizing = <String, EdgeSizing>{}; // rainwater downpipes
@@ -3439,9 +3491,20 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         }
       }
     }
+    // Round 49 — a hose-reel-only (Class II) system's design flow is the
+    // 100 gpm hose-station figure, never the Class I standpipe flow.
+    final classIIFlow =
+        standpipeFlow(1, standpipeClass: StandpipeClass.classII);
     for (final e in hydrantEdges) {
       final q = allFlows[e.id];
       if (q == null) continue;
+      if (classIIHydrantEdgeIds.contains(e.id)) {
+        final trunk = onCycle.contains(e.id) ||
+            e.kind == EdgeKind.riser ||
+            q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12;
+        if (trunk) allFlows[e.id] = classIIFlow;
+        continue;
+      }
       if (onCycle.contains(e.id)) {
         final served = standpipeFlow(ringStacks[e.id]!);
         allFlows[e.id] =
@@ -3602,7 +3665,11 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         maxVelocity: ctx.maxFireVelocity,
         material: ctx.pipeMaterial,
         minDiameter: Diameter.mm(math.max(
-            kFdcMinBoreMm, fireMinimumDiameter(e)?.inMillimeters ?? 0)),
+            kFdcMinBoreMm,
+            fireMinimumDiameter(e,
+                        hoseStation: ctx.hoseStationEdgeIds.contains(e.id))
+                    ?.inMillimeters ??
+                0)),
       );
       result[e.id] = EdgeSizing(
         edgeId: e.id,

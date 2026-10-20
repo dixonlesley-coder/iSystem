@@ -52,6 +52,24 @@ String recoverySlotFor(String? projectPath) {
   return '${recoveryDir()}${Platform.pathSeparator}$key.mechx';
 }
 
+/// Round 49 (regression-autosave-no-protection-while-snapshot-pending) — the
+/// SESSION SIBLING of recovery slot [slot]: `<key>.session.mechx` beside a
+/// primary `<key>.mechx`, and back again for a sibling. While a PENDING crash
+/// snapshot (the one the launch banner still offers) owns this session's
+/// slot, the autosave loop writes this session's work to the partner instead
+/// of skipping — so a second crash with the banner still unresolved loses
+/// nothing. [findLatestRecovery] offers whichever of the two is newest.
+String recoveryPartnerSlot(String slot) {
+  const sib = '.session.mechx';
+  if (slot.endsWith(sib)) {
+    return '${slot.substring(0, slot.length - sib.length)}.mechx';
+  }
+  if (slot.endsWith('.mechx')) {
+    return '${slot.substring(0, slot.length - '.mechx'.length)}$sib';
+  }
+  return '$slot$sib';
+}
+
 /// Crash-recovery snapshot file for the CURRENT (untitled) project. The autosave
 /// loop writes the current project to a per-project slot ([recoverySlotFor])
 /// periodically; on launch, the most-recent snapshot is offered for recovery.
@@ -245,10 +263,28 @@ Future<void> clearRecovery({String? path}) async {
 /// per-project [recoverySlotFor] slot, deduplicated). Used by Save/Open, which
 /// may need to drop the snapshot for the prior identity, the new file, and the
 /// shared `untitled` slot in one go.
-Future<void> clearRecoverySlots(Iterable<String?> projectPaths) async {
-  final done = <String>{};
+///
+/// Round 49 — each slot's SESSION SIBLING ([recoveryPartnerSlot]) is cleared
+/// with it, except a slot in [spare] (a pending crash snapshot the banner
+/// still offers is never deleted by a Save / Open / New).
+Future<void> clearRecoverySlots(Iterable<String?> projectPaths,
+    {Set<String> spare = const {}}) async {
+  final done = <String>{...spare};
   for (final p in projectPaths) {
     final slot = recoverySlotFor(p);
-    if (done.add(slot)) await clearRecovery(path: slot);
+    for (final s in [slot, recoveryPartnerSlot(slot)]) {
+      if (done.add(s)) await clearRecovery(path: s);
+    }
   }
+}
+
+/// Round 49 — resolve a pending snapshot at [path] (the banner's Restore or
+/// Discard): clear it AND its session sibling ([recoveryPartnerSlot]) — the
+/// work this session autosaved beside it while it was pending is superseded
+/// by the resolution (Restore replaces the live work; after Discard the live
+/// work autosaves to the freed slot).
+Future<void> clearPendingRecovery({String? path}) async {
+  final base = path ?? recoveryFilePath();
+  await clearRecovery(path: base);
+  await clearRecovery(path: recoveryPartnerSlot(base));
 }

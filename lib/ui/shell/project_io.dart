@@ -75,23 +75,65 @@ String corruptSidecarPath(String path, DateTime at) {
 /// drops a pending snapshot — or an action on the very file it belongs to
 /// ([target] == its `sourcePath`). [dropPending] says whether the in-memory
 /// [recoveryDocProvider] may be cleared too.
-({List<String?> paths, bool dropPending}) recoverySlotsToClear(
-    ProviderReader read, List<String?> paths,
+///
+/// Round 49 — [spare] is the pending slot (never deleted, nor as anyone's
+/// session sibling) and [alsoClear] the pending slot's own session sibling
+/// when a spared path owned it: that file is THIS session's autosaved work
+/// ([recoveryPartnerSlot]), resolved by the Save / Open / New like any other.
+({
+  List<String?> paths,
+  bool dropPending,
+  Set<String> spare,
+  List<String> alsoClear,
+}) recoverySlotsToClear(ProviderReader read, List<String?> paths,
     {String? target}) {
   final pending = read(recoveryDocProvider);
-  if (pending == null) return (paths: paths, dropPending: true);
-  if (target != null && pending.sourcePath == target) {
-    return (paths: paths, dropPending: true);
+  if (pending == null) {
+    return (
+      paths: paths,
+      dropPending: true,
+      spare: const <String>{},
+      alsoClear: const <String>[],
+    );
   }
   final pendingSlot =
       pending.recoveryPath ?? recoverySlotFor(pending.sourcePath);
+  if (target != null && pending.sourcePath == target) {
+    return (
+      paths: paths,
+      dropPending: true,
+      spare: const <String>{},
+      alsoClear: [pendingSlot],
+    );
+  }
+  final kept = [
+    for (final p in paths)
+      if (recoverySlotFor(p) != pendingSlot) p,
+  ];
   return (
-    paths: [
-      for (final p in paths)
-        if (recoverySlotFor(p) != pendingSlot) p,
-    ],
+    paths: kept,
     dropPending: false,
+    spare: {pendingSlot},
+    alsoClear: [
+      if (kept.length != paths.length) recoveryPartnerSlot(pendingSlot),
+    ],
   );
+}
+
+/// Round 49 — clear what [recoverySlotsToClear] decided: its project slots
+/// (with their session siblings, sparing the pending snapshot) and the
+/// pending slot's own session sibling when it is this session's work.
+Future<void> clearRecoveryFor(
+    ({
+      List<String?> paths,
+      bool dropPending,
+      Set<String> spare,
+      List<String> alsoClear,
+    }) toClear) async {
+  await clearRecoverySlots(toClear.paths, spare: toClear.spare);
+  for (final s in toClear.alsoClear) {
+    if (!toClear.spare.contains(s)) await clearRecovery(path: s);
+  }
 }
 
 /// The directory part of [path], or null when it carries none. Tolerant of
@@ -226,8 +268,7 @@ Future<void> newProject(BuildContext context, WidgetRef ref) async {
   ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(projectDirtyProvider.notifier).set(false);
   ref.read(loadErrorProvider.notifier).clear();
-  await clearRecoverySlots(
-      recoverySlotsToClear(ref.read, [priorPath, null]).paths);
+  await clearRecoveryFor(recoverySlotsToClear(ref.read, [priorPath, null]));
   ref.read(statusMessageProvider.notifier).showStatus('New project');
 }
 
@@ -721,7 +762,7 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // shared untitled slot (a first save promotes from untitled to a named file).
   final toClear =
       recoverySlotsToClear(ref.read, [priorPath, full, null], target: full);
-  await clearRecoverySlots(toClear.paths);
+  await clearRecoveryFor(toClear);
   // `clearRecoverySlots` is an async file op — the tree can be disposed while it
   // is in flight (see the `finally` note). The remaining work is in-memory UI
   // bookkeeping that only matters while the app is alive, so drop it if gone.
@@ -895,7 +936,7 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
     // the untitled slot.
     final toClear =
         recoverySlotsToClear(read, [priorPath, path, null], target: path);
-    await clearRecoverySlots(toClear.paths);
+    await clearRecoveryFor(toClear);
     if (toClear.dropPending) read(recoveryDocProvider.notifier).clear();
     read(loadErrorProvider.notifier).clear();
     read(appSettingsProvider.notifier)

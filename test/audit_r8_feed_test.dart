@@ -129,10 +129,16 @@ void main() {
         .firstWhere((w) => w.sourceEquipmentId == 'node-FP');
     expect(way.lifeSafety, isTrue);
     expect(way.cableType, 'FRC');
-    expect(way.motorKw, closeTo(55, 1e-9));
-    // input = 55 000 / η 0.90 = 61 111 W; Ib = 61 111 / (√3·400·0.85) = 103.8 A
-    expect(way.loadW, closeTo(55000 / 0.90, 1e-6));
-    expect(way.flaOverrideA!.amperes, closeTo(103.8, 0.1));
+    // Round 49 (fire-convergence-zone-lift-is-whole-building) — the drawn
+    // pump is rated on ITS system: the only hose box is on floor 0, so the
+    // lift is 0 + 1.2 m (not the default building's top floor): head = 1.2 +
+    // 15 + 690 kPa / 9810 (70.34 m) = 86.54 m at 500 gpm (31.55 L/s);
+    // NFPA 20 overload 47.32 L/s at 0.65 x 86.54 = 56.25 m ⇒ 9810 x 0.04732
+    // x 56.25 / (0.70 x 0.85) = 43.9 kW ⇒ the 45 kW frame.
+    expect(way.motorKw, closeTo(45, 1e-9));
+    // input = 45 000 / η 0.90 = 50 000 W; Ib = 50 000 / (√3·400·0.85) = 84.9 A
+    expect(way.loadW, closeTo(45000 / 0.90, 1e-6));
+    expect(way.flaOverrideA!.amperes, closeTo(84.9, 0.1));
   });
 
   test('coupling-2: duty feed ON — each machine is ONE way, never two', () {

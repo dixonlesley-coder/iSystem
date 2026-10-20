@@ -76,6 +76,23 @@ const double kAdditionalRiserFlowLpm = 250.0 * _usGallonToLitre; // ≈ 946 L/mi
 /// SNI 03-1745-2000: the sum need not exceed 1250 gpm.
 const double kMaxStandpipeFlowLpm = 1250.0 * _usGallonToLitre; // ≈ 4732 L/min
 
+/// Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — the
+/// flow demand (L/min) of a CLASS II (occupant hose-station / hose-reel)
+/// standpipe system: NFPA 14 Class II 100 gpm (≈ 379 L/min, 6.31 L/s), with
+/// no addition per extra riser. A hose-reel-only system was rated as a Class I
+/// 500 gpm standpipe (31.5 L/s, 55 kW on a 3-storey shophouse).
+/// // VERIFY — NFPA 14 Class II, notAnSniClause (SNI 03-1745 hose-reel
+/// practice); surfaced via `SniProfile.verifyChecklist`.
+const double kClassIIStandpipeFlowLpm = 100.0 * _usGallonToLitre; // ≈ 379 L/min
+
+/// Round 49 — minimum riser (mm) of a CLASS II hose-station system (a 40 mm
+/// hose station on a 50 mm riser, NFPA 14). // VERIFY notAnSniClause.
+const double kMinClassIIRiserDiameterMm = 50.0;
+
+/// Round 49 — minimum horizontal run (mm) feeding a CLASS II 40 mm hose
+/// station / hose reel (the outlet size). // VERIFY notAnSniClause.
+const double kMinHoseStationBranchDiameterMm = 40.0;
+
 /// Minimum residual pressure at the most remote 65 mm (Class I/III) outlet, kPa.
 ///
 /// SNI 03-1745-2000: 6.9 bar (100 psi) at the farthest 65 mm hose connection.
@@ -158,8 +175,16 @@ double residualPressureKpa(StandpipeClass cls) {
 ///   risers = 3 → 1000 gpm ≈ 3785 L/min
 ///   risers = 4 → 1250 gpm ≈ 4732 L/min [500 + 3×250 — exactly the cap]
 ///   risers = 6 → 1250 gpm (cap applies)
-FlowRate standpipeFlow(int risers) {
+///
+/// Round 49 — a [StandpipeClass.classII] (hose-reel / hose-station only)
+/// system demands [kClassIIStandpipeFlowLpm] (100 gpm) whatever its riser
+/// count; Class I / III are unchanged.
+FlowRate standpipeFlow(int risers,
+    {StandpipeClass standpipeClass = StandpipeClass.classI}) {
   assert(risers >= 1, 'risers must be ≥ 1');
+  if (standpipeClass == StandpipeClass.classII) {
+    return FlowRate.litersPerMinute(kClassIIStandpipeFlowLpm);
+  }
   final lpm = (kFirstRiserFlowLpm + kAdditionalRiserFlowLpm * (risers - 1))
       .clamp(kFirstRiserFlowLpm, kMaxStandpipeFlowLpm);
   return FlowRate.litersPerMinute(lpm);
@@ -378,7 +403,7 @@ FireStandpipeDesign designStandpipe({
   );
 
   // Required system flow demand (SNI 03-1745-2000).
-  final requiredFlow = standpipeFlow(risers);
+  final requiredFlow = standpipeFlow(risers, standpipeClass: standpipeClass);
 
   // Minimum residual pressure at the topmost hose outlet for this class.
   final topResidual =
@@ -407,7 +432,9 @@ FireStandpipeDesign designStandpipe({
     standpipeClass: standpipeClass,
     requiredFlow: requiredFlow,
     topResidualPressure: topResidual,
-    minRiserDiameter: Diameter.mm(kMinRiserDiameterMm),
+    minRiserDiameter: Diameter.mm(standpipeClass == StandpipeClass.classII
+        ? kMinClassIIRiserDiameterMm
+        : kMinRiserDiameterMm),
     pumpHead: pumpHead,
     pumpHydraulicPower: pumpHydraulicPower,
     pumpShaftPower: pumpShaftPower,

@@ -364,8 +364,12 @@ final assumedFireJockeysProvider = Provider<Set<String>>(
   for (final id in roles.jockey) {
     final sys = systems.where((x) => x.nodeIds.contains(id)).firstOrNull;
     if (sys == null) continue;
-    final rated =
-        sys.hasHydrant ? standpipeFlow(sys.standpipeRisers(net)) : remoteAreaDemand;
+    // Round 49 — a hose-reel-only system's rated flow is its Class II
+    // hose-station flow.
+    final rated = sys.hasHydrant
+        ? standpipeFlow(sys.standpipeRisers(net),
+            standpipeClass: sys.standpipeClass(net))
+        : remoteAreaDemand;
     if (rated.cubicMetersPerSecond <= 0) continue;
     out[id] = FlowRate(rated.cubicMetersPerSecond * kJockeyFlowFraction);
   }

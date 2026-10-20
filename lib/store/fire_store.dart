@@ -1,14 +1,15 @@
+import 'dart:math' as math;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/sizing/fire_pump_rating.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/pump.dart';
-import 'package:mechx_engine/geometry/building.dart' show BuildingLevels;
 import 'package:mechx_engine/network/network.dart'
     show NetEdge, NodeComponent, ServiceType, edgeLength;
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
-import 'package:mechx_engine/units.dart' show FlowRate, Head;
+import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
 import 'network_store.dart';
 import 'project_store.dart';
@@ -80,17 +81,6 @@ final sprinklerRemoteAreaProvider = Provider<SprinklerRemoteAreaResult>((ref) {
   final k = ref.watch(firePerHeadKFactorProvider);
   return remoteAreaHydraulics(design: design, kFactor: k);
 });
-
-/// Static lift (m) from the fire-pump datum (floor 0) to the top-floor
-/// ceiling — the sprinkler lower-bound lift [sprinklerPumpCheckProvider] and
-/// the sprinkler-only rated point share.
-double _sprinklerStaticLiftM(BuildingLevels building) {
-  final top = building.floors.length - 1;
-  return top < 0
-      ? 0.0
-      : building.ceilingElevationOf(top).meters -
-          building.elevationOf(0).meters;
-}
 
 /// Round 17 (report-recompute-2-fire-sections-not-gated-per-system) — the
 /// fire pump's RATED POINT on the governing DRAWN system: the standpipe
@@ -219,6 +209,28 @@ class FireSystemBasis {
   /// flow, never both' residual, surfaced rather than silent).
   final bool sprinklerGovernsCombined;
 
+  /// Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — the
+  /// standpipe class the system's drawn outlets make it
+  /// ([FireSystem.standpipeClass]).
+  final StandpipeClass standpipeClass;
+
+  /// Round 49 (fire-convergence-zone-lift-is-whole-building) — the static
+  /// lift (m) the rated head carries: pump datum floor -> this system's own
+  /// topmost terminal ([FireSystem.staticLiftM]).
+  final double staticLiftM;
+
+  /// Round 49 (fire-convergence-series-booster-fire-pump-standby) — with
+  /// pumps in SERIES (a mid-level booster), each pump's OWN stage head and
+  /// duty: the lower stage is rated on its own zone (or the lift to the next
+  /// stage's suction), the upper on the remaining system head, so the stage
+  /// heads sum to [head]. Empty for a single-stage system (every pump then
+  /// takes [duty]).
+  final Map<String, Head> stageHeads;
+  final Map<String, PumpDuty> stageDuties;
+
+  /// The main duty of pump [pumpId]: its series-stage duty, else [duty].
+  PumpDuty? dutyFor(String pumpId) => stageDuties[pumpId] ?? duty;
+
   const FireSystemBasis({
     required this.system,
     required this.pumpIds,
@@ -232,6 +244,10 @@ class FireSystemBasis {
     required this.duty,
     required this.jockey,
     this.sprinklerGovernsCombined = false,
+    this.standpipeClass = StandpipeClass.classI,
+    this.staticLiftM = 0,
+    this.stageHeads = const {},
+    this.stageDuties = const {},
   });
 }
 
@@ -305,48 +321,66 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           );
     final sprinklerOnly = !sys.hasHydrant;
     final risers = sys.standpipeRisers(net);
+    // Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — a
+    // hose-reel-only system is a Class II (hose-station) standpipe.
+    final cls = sys.standpipeClass(net);
+    // Round 49 (fire-convergence-zone-lift-is-whole-building) — the lift is
+    // THIS system's: its pump datum floor -> its own topmost terminal (a
+    // mid-level pump room on a transfer tank serving L10-L19 lifts 30 m, not
+    // the whole 60 m building).
+    double liftTo(FireTerminalKind kind, {int? belowFloor}) =>
+        sys.staticLiftM(net, building, kind, belowFloor: belowFloor);
     final FlowRate flow;
     final Head head;
     final double? friction;
     FireStandpipeDesign? standpipe;
     var sprinklerGoverns = false;
-    ({FlowRate flow, Head head}) sprinklerPoint(double? f) =>
+    ({FlowRate flow, Head head}) sprinklerPoint(double? f, double liftM) =>
         sprinklerPumpRatedPoint(
           remote: remote,
-          staticLiftM: _sprinklerStaticLiftM(building),
+          staticLiftM: liftM,
           indexPathFriction: f == null ? null : Head(f),
         );
+    FireStandpipeDesign standpipeAt(double? f, double liftM) =>
+        designStandpipe(
+          risers: risers,
+          buildingHeight: Length(liftM),
+          standpipeClass: cls,
+          indexPathFriction: f == null ? null : Head(f),
+        );
+    final FireTerminalKind basisKind;
     if (sprinklerOnly) {
       friction = frictionTo(FireTerminalKind.sprinkler);
-      final p = sprinklerPoint(friction);
+      final p = sprinklerPoint(friction, liftTo(FireTerminalKind.sprinkler));
       flow = p.flow;
       head = p.head;
+      basisKind = FireTerminalKind.sprinkler;
     } else {
       final hydrantFriction = frictionTo(FireTerminalKind.hydrant);
-      final st = designStandpipe(
-        risers: risers,
-        buildingHeight: standpipeStaticLift(building),
-        indexPathFriction:
-            hydrantFriction == null ? null : Head(hydrantFriction),
-      );
+      final st =
+          standpipeAt(hydrantFriction, liftTo(FireTerminalKind.hydrant));
       standpipe = st;
       if (sys.hasSprinkler) {
         final sprinklerFriction = frictionTo(FireTerminalKind.sprinkler);
-        final sp = sprinklerPoint(sprinklerFriction);
+        final sp = sprinklerPoint(
+            sprinklerFriction, liftTo(FireTerminalKind.sprinkler));
         if (sp.head.meters > st.pumpHead.meters + 1e-9) {
           flow = sp.flow;
           head = sp.head;
           friction = sprinklerFriction;
           sprinklerGoverns = true;
+          basisKind = FireTerminalKind.sprinkler;
         } else {
           flow = st.requiredFlow;
           head = st.pumpHead;
           friction = hydrantFriction;
+          basisKind = FireTerminalKind.hydrant;
         }
       } else {
         flow = st.requiredFlow;
         head = st.pumpHead;
         friction = hydrantFriction;
+        basisKind = FireTerminalKind.hydrant;
       }
     }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
@@ -356,6 +390,66 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final jockey = dutyPump == null || rating.jockeyFlow.cubicMetersPerSecond <= 0
         ? null
         : sizePump(flow: rating.jockeyFlow, head: rating.jockeyHead);
+    // Round 49 (fire-convergence-series-booster-fire-pump-standby) — pumps
+    // in SERIES (parallel sets on different floors) each develop only their
+    // own STAGE: stage k is rated on the head its own zone (terminals below
+    // the next stage's floor) needs from the system datum, less the stages
+    // below it — or, with no terminal in its zone, the static lift to the
+    // next stage's suction; the top stage takes the rest of [head]. So the
+    // stage heads sum to the system head (never two pumps at the full head).
+    // Sets on one floor in series split their stage equally.
+    final stageHeads = <String, Head>{};
+    final stageDuties = <String, PumpDuty>{};
+    if (dutyPump != null && pumps.length >= 2 && building.floors.isNotEmpty) {
+      final sets = fireParallelPumpSets(net, sys, pumps);
+      int floorOf(List<String> g) => g
+          .map((id) => net.nodeById(id)?.floorIndex ?? 0)
+          .reduce((a, b) => a < b ? a : b);
+      final stages = <List<List<String>>>[];
+      for (final g in sets) {
+        if (stages.isNotEmpty && floorOf(stages.last.first) == floorOf(g)) {
+          stages.last.add(g);
+        } else {
+          stages.add([g]);
+        }
+      }
+      if (stages.length >= 2) {
+        final nF = building.floors.length;
+        int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
+        final datum = clampF(sys.datumFloor(net));
+        var below = 0.0;
+        for (var k = 0; k < stages.length; k++) {
+          double need;
+          if (k == stages.length - 1) {
+            need = head.meters;
+          } else {
+            final nextFloor = floorOf(stages[k + 1].first);
+            final zoneTop =
+                sys.topTerminalFloor(net, basisKind, belowFloor: nextFloor);
+            if (zoneTop == null) {
+              need = building.elevationOf(clampF(nextFloor)).meters -
+                  building.elevationOf(datum).meters;
+            } else {
+              final lift = liftTo(basisKind, belowFloor: nextFloor);
+              need = basisKind == FireTerminalKind.sprinkler
+                  ? sprinklerPoint(friction, lift).head.meters
+                  : standpipeAt(friction, lift).pumpHead.meters;
+            }
+          }
+          final stage = math.max(0.0, need - below);
+          below += stage;
+          final perSet = Head(stage / stages[k].length);
+          final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perSet);
+          final d = firePumpDuty(ratedFlow: flow, ratedHead: perSet, rating: r);
+          for (final g in stages[k]) {
+            for (final id in g) {
+              stageHeads[id] = perSet;
+              stageDuties[id] = d;
+            }
+          }
+        }
+      }
+    }
     out.add(FireSystemBasis(
       system: sys,
       pumpIds: pumps,
@@ -369,6 +463,10 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       duty: dutyPump,
       jockey: jockey,
       sprinklerGovernsCombined: sprinklerGoverns,
+      standpipeClass: cls,
+      staticLiftM: liftTo(basisKind),
+      stageHeads: stageHeads,
+      stageDuties: stageDuties,
     ));
   }
   return out;
@@ -479,18 +577,22 @@ final sprinklerPumpCheckProvider = Provider<
     return null;
   }
   final remote = ref.watch(sprinklerRemoteAreaProvider);
-  final lift =
-      _sprinklerStaticLiftM(ref.watch(projectControllerProvider).building);
+  final building = ref.watch(projectControllerProvider).building;
   const rhoG = 1000 * 9.81;
-  final required = lift + remote.branchBasePressure.pascals / rhoG;
   final demand = remote.remoteAreaDemand.inLitersPerSecond;
-  // The pump serving each sprinkler-bearing system.
-  final pumps = <PumpDuty>[];
+  // The pump serving each sprinkler-bearing system, judged against THAT
+  // system's own lift (Round 49 — pump datum floor -> its highest head's
+  // ceiling, never the whole building).
+  final pumps = <(PumpDuty, double)>[];
   for (final b in ref.watch(fireSystemBasesProvider)) {
     if (!b.system.hasSprinkler) continue;
     final own = b.pumpIds.isNotEmpty || b.system.hasHydrant;
     final pump = own ? b.duty : ref.watch(firePumpDutyProvider);
-    if (pump != null) pumps.add(pump);
+    final lift =
+        b.system.staticLiftM(net, building, FireTerminalKind.sprinkler);
+    if (pump != null) {
+      pumps.add((pump, lift + remote.branchBasePressure.pascals / rhoG));
+    }
   }
   if (pumps.isEmpty) return null;
   ({
@@ -501,7 +603,7 @@ final sprinklerPumpCheckProvider = Provider<
     bool flowShort,
     bool headShort,
   })? worst;
-  for (final pump in pumps) {
+  for (final (pump, required) in pumps) {
     final pumpLps = pump.flow.inLitersPerSecond;
     final r = (
       demandLps: demand,
@@ -524,7 +626,8 @@ final sprinklerPumpCheckProvider = Provider<
     final df = (demand - r.pumpLps) - (demand - worst.pumpLps);
     if (df > 1e-9 ||
         (df.abs() <= 1e-9 &&
-            (required - r.pumpHeadM) > (required - worst.pumpHeadM) + 1e-9)) {
+            (r.requiredHeadM - r.pumpHeadM) >
+                (worst.requiredHeadM - worst.pumpHeadM) + 1e-9)) {
       worst = r;
     }
   }

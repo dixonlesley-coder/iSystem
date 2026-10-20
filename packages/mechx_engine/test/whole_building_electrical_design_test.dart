@@ -816,7 +816,10 @@ void main() {
           greaterThan(kPhaseImbalanceWarnPercent)); // over the reporting limit
       expect(pp1.phaseBalance.imbalanceReducible, isFalse);
       // The achievable floor equals the actual spread — nothing to act on.
-      expect(minimumPhaseSpreadA(const [19.481, 19.481]), closeTo(19.5, 1e-9));
+      // Round 49 — the floor is EXACT (two equal ways ⇒ x / x / 0, spread
+      // = x = 19.481 A, no 0.1 A rounding before the verdict compares it).
+      expect(
+          minimumPhaseSpreadA(const [19.481, 19.481]), closeTo(19.481, 1e-9));
     });
 
     test('no phase-imbalance warning anywhere (none is reducible)', () {
