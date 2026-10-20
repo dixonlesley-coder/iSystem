@@ -47,6 +47,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
@@ -66,7 +67,8 @@ import '../canvas/viewport.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
-import 'electrical_export.dart' show breakerIcuKaByPanel, breakerKaByCircuit;
+import 'electrical_export.dart'
+    show breakerIcuKaByPanel, breakerKaByCircuit, containmentByCircuit;
 import 'electrical_format.dart';
 import 'electrical_palette.dart';
 import 'load_symbols.dart';
@@ -1094,6 +1096,8 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // suffix blank).
     final icuKaByPanel = breakerIcuKaByPanel(ref);
     final kaByCircuit = breakerKaByCircuit(ref);
+    // Round 34 — the containment study's conduit (canvas == export).
+    final conduitByCircuit = containmentByCircuit(ref);
     final positions = _positions(project, result);
     final rootId = serviceRootId(project, result);
     // ESSENTIAL (genset-backed / emergency) boards — propagated down the
@@ -1204,6 +1208,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                         result.panels,
                         icuKaByPanel,
                         kaByCircuit,
+                        conduitByCircuit,
                       ),
                     // D2: the marquee rectangle (empty-canvas left-drag), same
                     // translucent-accent visual language as the mechanical
@@ -1254,6 +1259,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     Map<String, ElectricalPanelResult> panels,
     Map<String, double> icuKaByPanel,
     Map<String, double> kaByCircuit,
+    Map<String, ConduitSpec> conduitByCircuit,
   ) {
     final scale = vt.scale;
     final tl = vt.worldToScreen(world);
@@ -1378,6 +1384,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               result: result,
               breakerIcuKaByPanelId: icuKaByPanel,
               breakerKaByCircuitId: kaByCircuit,
+              containmentByCircuitId: conduitByCircuit,
               selected: _selectedPanels.contains(panel.panelId),
               selectedCircuitId:
                   (_selection?.isCircuit ?? false) &&
@@ -2059,6 +2066,9 @@ class _PanelScheduleBody extends StatefulWidget {
   /// (circuit id -> chosen breaking capacity), so a way prints its own
   /// device rating, never the incomer frame's.
   final Map<String, double>? breakerKaByCircuitId;
+
+  /// Round 34 — the containment study's conduit per circuit.
+  final Map<String, ConduitSpec>? containmentByCircuitId;
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
 
@@ -2079,6 +2089,7 @@ class _PanelScheduleBody extends StatefulWidget {
     required this.result,
     required this.breakerIcuKaByPanelId,
     this.breakerKaByCircuitId,
+    this.containmentByCircuitId,
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onSelectWay,
@@ -2101,6 +2112,7 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
         panelId: widget.panel.panelId,
         breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
         breakerKaByCircuitId: widget.breakerKaByCircuitId,
+        containmentByCircuitId: widget.containmentByCircuitId,
       );
 
   /// Fit transform mapping the sheet bounds into [size] (matching
@@ -2314,6 +2326,9 @@ class _PanelCardNode extends StatefulWidget {
   /// (circuit id -> chosen breaking capacity), so a way prints its own
   /// device rating, never the incomer frame's.
   final Map<String, double>? breakerKaByCircuitId;
+
+  /// Round 34 — the containment study's conduit per circuit.
+  final Map<String, ConduitSpec>? containmentByCircuitId;
   final bool selected;
 
   /// The selected WAY on this panel (its schedule row is ringed — I5), or null.
@@ -2351,6 +2366,7 @@ class _PanelCardNode extends StatefulWidget {
     required this.result,
     required this.breakerIcuKaByPanelId,
     this.breakerKaByCircuitId,
+    this.containmentByCircuitId,
     required this.selected,
     required this.selectedCircuitId,
     required this.unfed,
@@ -2471,6 +2487,8 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
                             result: widget.result,
                             breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
                             breakerKaByCircuitId: widget.breakerKaByCircuitId,
+                            containmentByCircuitId:
+                                widget.containmentByCircuitId,
                             selectedCircuitId: widget.selectedCircuitId,
                             onSelectWay: widget.onSelectWay,
                             // Header-band tap selects the whole board — reuses

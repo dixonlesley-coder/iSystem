@@ -1888,7 +1888,7 @@ const Map<StringKey, String> _en = {
   StringKey.reviewStatPanelsSized: 'Panels sized',
   StringKey.reviewStatBomLineItems: 'BOM line items',
   StringKey.reviewStatStockPipes: 'Stock pipes',
-  StringKey.reviewStatPipeRequired: 'Pipe required (runs)',
+  StringKey.reviewStatPipeRequired: 'Pipe (runs)',
   StringKey.reviewStatOffcutWaste: 'Offcut waste',
   StringKey.reviewStockNote:
       'Stock lengths: 4 m PVC/PPR, 6 m steel (sprinkler/hydrant), and duct '
@@ -3389,7 +3389,7 @@ const Map<StringKey, String> _id = {
   StringKey.reviewStatPanelsSized: 'Panel terhitung',
   StringKey.reviewStatBomLineItems: 'Item baris BOM',
   StringKey.reviewStatStockPipes: 'Batang pipa',
-  StringKey.reviewStatPipeRequired: 'Pipa diperlukan (jalur)',
+  StringKey.reviewStatPipeRequired: 'Pipa (jalur)',
   StringKey.reviewStatOffcutWaste: 'Sisa potongan',
   StringKey.reviewStockNote:
       'Panjang batang: 4 m PVC/PPR, 6 m baja (sprinkler/hidran), dan bagian '

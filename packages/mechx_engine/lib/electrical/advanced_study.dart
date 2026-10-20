@@ -36,7 +36,7 @@ import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
 import 'compute.dart' show circuitIsThreePhase;
-import 'containment.dart' show ContainmentResult, containmentFor;
+import 'containment.dart' show ConduitSpec, ContainmentResult, containmentFor;
 import 'control/starter.dart'
     show ControlAssembly, StarterType, applyStarterTemplate;
 import 'diversity_library.dart' show diversityLibraryVerifyItems;
@@ -738,6 +738,16 @@ List<String> _aggregateVerify(List<List<String>?> lists) {
   }
   return out;
 }
+
+/// Round 34 (electrical-drawings-4-app-schedule-conduit-ladder-not-study) —
+/// the containment STUDY's conduit per circuit id (`circuitId -> ConduitSpec`),
+/// the ONE containment source every board schedule (canvas, PDF, DXF,
+/// submittal, report figure) passes to `buildElectricalSld`, so the printed
+/// `PVC <n>mm` token is the study's fill-checked size, never the CSA ladder.
+Map<String, ConduitSpec> containmentByCircuitIdOf(AdvancedStudy study) => {
+      for (final c in study.containment.values)
+        for (final cc in c.conduits) cc.circuitId: cc.conduit,
+    };
 
 /// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a
 /// DECLARED MV service (an explicit transformer rating or a dual-transformer

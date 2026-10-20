@@ -4,7 +4,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 

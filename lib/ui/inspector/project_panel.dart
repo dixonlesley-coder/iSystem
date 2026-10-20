@@ -108,7 +108,11 @@ import '../canvas/segment_palette.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../electrical/electrical_export.dart'
-    show breakerIcuKaByPanel, breakerKaByCircuit;
+    show
+        breakerIcuKaByPanel,
+        breakerKaByCircuit,
+        containmentByCircuit,
+        electricalLayoutSheetIds;
 import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
 import '../schematic/schematic_export.dart'
@@ -716,6 +720,7 @@ Future<void> exportMepUnifiedReportPdf(WidgetRef ref) => runExportGuarded(
           result: ref.read(electricalResultProvider),
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         ),
         caption: reportStringsFor(ref)(RptStringKey.capElecSld),
       ),
@@ -1796,19 +1801,8 @@ Future<bool> writeSubmittalPackageToDir(
   // panels/loads), pre-collected so the k-th one is numbered E-10k with its
   // own SHEET k-of-n counter and listed on the Daftar Gambar (every elec plan
   // used to stamp E-101 / '1 of 1' and none was indexed).
-  final elecPlanSheetIds = <String>[];
-  for (final s in sheetsFm.sheets) {
-    final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
-    final ePlanFm = buildElectricalPlanData(
-      project: eProjectFm,
-      result: eResultFm,
-      sheetId: s.id,
-      floorIndex: fIdx,
-      calibrations: project.calibrations,
-      building: project.building,
-    );
-    if (!ePlanFm.isEmpty) elecPlanSheetIds.add(s.id);
-  }
+  // Round 34 — the ONE list the standalone layout export numbers by too.
+  final elecPlanSheetIds = electricalLayoutSheetIds(ref);
   DrawingChrome elecPlanChrome(String sheetId) {
     final k = elecPlanSheetIds.indexOf(sheetId) + 1;
     return DrawingChrome(
@@ -2025,6 +2019,7 @@ Future<bool> writeSubmittalPackageToDir(
             result: ref.read(electricalResultProvider),
             breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
             breakerKaByCircuitId: breakerKaByCircuit(ref),
+            containmentByCircuitId: containmentByCircuit(ref),
           ),
           caption: reportStringsFor(ref)(RptStringKey.capElecSld),
         ),
@@ -2363,6 +2358,7 @@ Future<bool> writeSubmittalPackageToDir(
         result: eResult,
         breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
         breakerKaByCircuitId: breakerKaByCircuit(ref),
+        containmentByCircuitId: containmentByCircuit(ref),
         chrome: sldChrome(DrawingSeries.electricalDetail),
         // Round 14 (drafting-visual-1) — ONE project name + the register
         // title on every electrical sheet of the package.
@@ -2381,6 +2377,7 @@ Future<bool> writeSubmittalPackageToDir(
           result: eResult,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
           breakerKaByCircuitId: breakerKaByCircuit(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         ),
         diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
         chrome: sldChrome(DrawingSeries.electricalDetail),
@@ -4688,10 +4685,11 @@ class _ResultsSection extends ConsumerWidget {
               if (downfeed != null &&
                   !downfeed.gravitySufficient &&
                   !belowSniFloor)
+                // The comfort booster, as a recommendation (SNI min met).
                 _kvRow(
                   context,
-                  'Comfort',
-                  '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m booster recommended',
+                  'Booster',
+                  '+${downfeed.boosterHeadRequired.meters.toStringAsFixed(1)} m advised',
                 ),
               // Round 31 (ui-simplicity-4) — H8 on the downfeed branch too: a
               // figure the headline card already states is not repeated as a
