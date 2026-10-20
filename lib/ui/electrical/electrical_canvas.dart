@@ -75,7 +75,8 @@ import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'electrical_export.dart'
-    show breakerIcuKaByPanel, breakerKaByCircuit, containmentByCircuit;
+    show breakerIcuKaByPanel, breakerKaByCircuit, containmentByCircuit,
+        adsFailedCircuitIds;
 import 'electrical_format.dart';
 import 'electrical_palette.dart';
 import 'load_symbols.dart';
@@ -320,6 +321,10 @@ class _CanvasDerived {
   final Map<String, double> icuKaByPanel;
   final Map<String, double> kaByCircuit;
   final Map<String, ConduitSpec> conduitByCircuit;
+
+  /// Round 44 — the fault study's ways that FAIL automatic disconnection
+  /// (the issued schedule's ` Zs!` mark), so the live schedule agrees.
+  final Set<String> adsFailed;
   final SldSheet spine;
   final int nextPanelOrdinal;
 
@@ -334,6 +339,7 @@ class _CanvasDerived {
     required this.icuKaByPanel,
     required this.kaByCircuit,
     required this.conduitByCircuit,
+    required this.adsFailed,
     required this.spine,
     required this.nextPanelOrdinal,
   });
@@ -875,6 +881,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
       icuKaByPanel: breakerIcuKaByPanel(ref),
       kaByCircuit: breakerKaByCircuit(ref),
       conduitByCircuit: containmentByCircuit(ref),
+      adsFailed: adsFailedCircuitIds(ref),
       spine: buildElectricalSourceSpine(
           project: project, result: result, horizontal: true),
       nextPanelOrdinal: nextSubPanelOrdinal(project.panels),
@@ -1723,6 +1730,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
       derived.icuKaByPanel,
       derived.kaByCircuit,
       derived.conduitByCircuit,
+      derived.adsFailed,
       selected,
       selectedCircuitId,
       unfed,
@@ -1757,6 +1765,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
                   breakerIcuKaByPanelId: derived.icuKaByPanel,
                   breakerKaByCircuitId: derived.kaByCircuit,
                   containmentByCircuitId: derived.conduitByCircuit,
+                  adsFailedCircuitIds: derived.adsFailed,
                   selected: selected,
                   selectedCircuitId: selectedCircuitId,
                   unfed: unfed,
@@ -2453,6 +2462,9 @@ class _PanelScheduleBody extends StatefulWidget {
 
   /// Round 34 — the containment study's conduit per circuit.
   final Map<String, ConduitSpec>? containmentByCircuitId;
+
+  /// Round 44 — the ways failing ADS, marked ` Zs!` like the export.
+  final Set<String>? adsFailedCircuitIds;
   final ValueChanged<String> onWayDoubleTap;
   final void Function(String, Offset) onWayMenu;
 
@@ -2474,6 +2486,7 @@ class _PanelScheduleBody extends StatefulWidget {
     required this.breakerIcuKaByPanelId,
     this.breakerKaByCircuitId,
     this.containmentByCircuitId,
+    this.adsFailedCircuitIds,
     required this.onWayDoubleTap,
     required this.onWayMenu,
     required this.onSelectWay,
@@ -2505,6 +2518,7 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
       widget.breakerIcuKaByPanelId,
       widget.breakerKaByCircuitId,
       widget.containmentByCircuitId,
+      widget.adsFailedCircuitIds,
     );
     final memo = _sheetMemo;
     if (memo != null && _sheetMemoKey == key) return memo;
@@ -2517,6 +2531,7 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
       breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
       breakerKaByCircuitId: widget.breakerKaByCircuitId,
       containmentByCircuitId: widget.containmentByCircuitId,
+      adsFailedCircuitIds: widget.adsFailedCircuitIds,
     );
   }
 
@@ -2736,6 +2751,9 @@ class _PanelCardNode extends StatefulWidget {
 
   /// Round 34 — the containment study's conduit per circuit.
   final Map<String, ConduitSpec>? containmentByCircuitId;
+
+  /// Round 44 — the ways failing ADS, marked ` Zs!` like the export.
+  final Set<String>? adsFailedCircuitIds;
   final bool selected;
 
   /// The selected WAY on this panel (its schedule row is ringed — I5), or null.
@@ -2774,6 +2792,7 @@ class _PanelCardNode extends StatefulWidget {
     required this.breakerIcuKaByPanelId,
     this.breakerKaByCircuitId,
     this.containmentByCircuitId,
+    this.adsFailedCircuitIds,
     required this.selected,
     required this.selectedCircuitId,
     required this.unfed,
@@ -2896,6 +2915,7 @@ class _PanelCardNodeState extends State<_PanelCardNode> {
                             breakerKaByCircuitId: widget.breakerKaByCircuitId,
                             containmentByCircuitId:
                                 widget.containmentByCircuitId,
+                            adsFailedCircuitIds: widget.adsFailedCircuitIds,
                             selectedCircuitId: widget.selectedCircuitId,
                             onSelectWay: widget.onSelectWay,
                             // Header-band tap selects the whole board — reuses
