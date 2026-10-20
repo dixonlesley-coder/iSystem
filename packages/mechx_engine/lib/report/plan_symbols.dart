@@ -536,6 +536,25 @@ const Map<String, String> kFixturePlanCodeNames = {
   'HR': 'hose reel',
 };
 
+/// Round 34 (fire-hvac-drawings-legend-lacks-symbols) — the components whose
+/// plan glyph appears on ([sheetId], [floorIndex]), each once, in the enum's
+/// canonical order: the legend's symbol key ([DrawingChrome.legendSymbols]).
+/// Pure; no drawn component ⇒ empty.
+List<NodeComponent> planLegendSymbols(Network net,
+    {required String sheetId, required int floorIndex}) {
+  final present = <NodeComponent>{
+    for (final n in net.nodes)
+      if (n.sheetId == sheetId &&
+          n.floorIndex == floorIndex &&
+          n.component != null)
+        n.component!,
+  };
+  return [
+    for (final c in NodeComponent.values)
+      if (present.contains(c)) c,
+  ];
+}
+
 /// Round 34 (fire-hvac-drawings-air-terminals-and-heads-carry-no-data) — the
 /// installer's tag of an AIR TERMINAL (supply / linear diffuser, return /
 /// exhaust grille): its design airflow and, when chosen, its face size —
@@ -831,6 +850,155 @@ const List<double> _kAlongStations = [
 
 /// A run's linework as an obstacle segment in the output space.
 typedef LabelSegment = ({double x1, double y1, double x2, double y2});
+
+/// Round 34 (fire-hvac-drawings-double-line-duct-junctions) — one true-width
+/// duct run for [planDuctOutlines]: its end node ids, its centreline (a → b)
+/// in the caller's output space, and its half-width in the same units.
+typedef PlanDuctRun = ({
+  String id,
+  String fromId,
+  String toId,
+  double ax,
+  double ay,
+  double bx,
+  double by,
+  double half,
+});
+
+/// Round 34 (fire-hvac-drawings-double-line-duct-junctions) — the trimmed
+/// double-line OUTLINES of every [runs] entry (run id → its wall segments),
+/// the ONE geometry the plan PDF and the plan DXF both draw:
+///
+///  * at a node shared with other double-line runs, a run's walls are
+///    EXTENDED past the node by the largest half-width among those runs (so
+///    an elbow's outer walls meet in a square corner instead of a notch);
+///  * every wall is then CLIPPED by the (extended) rectangles of the runs it
+///    meets at a shared node, removing the part strictly inside one — a
+///    branch's walls stop at the trunk wall, the trunk wall breaks across the
+///    take-off opening, an elbow's inner walls stop at their crossing.
+///
+/// A run with no double-line neighbour keeps exactly [planDoubleLineOutline]'s
+/// two walls (byte-identical); ducts that merely cross (no shared node) are
+/// never clipped against each other. Pure.
+Map<String, List<LabelSegment>> planDuctOutlines(List<PlanDuctRun> runs) {
+  final atNode = <String, List<PlanDuctRun>>{};
+  for (final r in runs) {
+    (atNode[r.fromId] ??= []).add(r);
+    if (r.toId != r.fromId) (atNode[r.toId] ??= []).add(r);
+  }
+  double extAt(PlanDuctRun r, String node) {
+    var ext = 0.0;
+    for (final o in atNode[node] ?? const <PlanDuctRun>[]) {
+      if (o.id != r.id) ext = math.max(ext, o.half);
+    }
+    return ext;
+  }
+
+  // The extended rectangle of a run: centre line p0 → p1, unit direction u.
+  final rect = <String, ({double x0, double y0, double ux, double uy,
+      double len, double half})>{};
+  for (final r in runs) {
+    final dx = r.bx - r.ax, dy = r.by - r.ay;
+    final l = math.sqrt(dx * dx + dy * dy);
+    if (l <= 0 || !(r.half > 0)) continue;
+    final ux = dx / l, uy = dy / l;
+    final ea = extAt(r, r.fromId), eb = extAt(r, r.toId);
+    rect[r.id] = (
+      x0: r.ax - ux * ea,
+      y0: r.ay - uy * ea,
+      ux: ux,
+      uy: uy,
+      len: l + ea + eb,
+      half: r.half,
+    );
+  }
+
+  // Parameter interval (0..1) of segment (x1,y1)-(x2,y2) strictly inside a
+  // rectangle (shrunk by [eps]), or null.
+  (double, double)? inside(LabelSegment s, ({double x0, double y0, double ux,
+      double uy, double len, double half}) q) {
+    const eps = 1e-6;
+    // Local coordinates: along t, across n.
+    double along(double x, double y) => (x - q.x0) * q.ux + (y - q.y0) * q.uy;
+    double across(double x, double y) =>
+        -(x - q.x0) * q.uy + (y - q.y0) * q.ux;
+    final a1 = along(s.x1, s.y1), a2 = along(s.x2, s.y2);
+    final c1 = across(s.x1, s.y1), c2 = across(s.x2, s.y2);
+    var lo = 0.0, hi = 1.0;
+    bool clip(double p, double q0) {
+      // Keep where p*t <= q0 (Liang–Barsky).
+      if (p.abs() < 1e-12) return q0 > 0;
+      final t = q0 / p;
+      if (p < 0) {
+        if (t > hi) return false;
+        if (t > lo) lo = t;
+      } else {
+        if (t < lo) return false;
+        if (t < hi) hi = t;
+      }
+      return true;
+    }
+
+    final da = a2 - a1, dc = c2 - c1;
+    // A wall lying ALONG the rectangle's boundary (parallel, on a side or an
+    // end line) is not inside it: kept. Otherwise the exact bounds clip, so
+    // the trimmed ends land exactly on the neighbour's wall (no slivers).
+    if (dc.abs() < 1e-12 && c1.abs() >= q.half - eps) return null;
+    if (da.abs() < 1e-12 && (a1 <= eps || a1 >= q.len - eps)) return null;
+    if (!clip(-da, a1)) return null; // a >= 0
+    if (!clip(da, q.len - a1)) return null; // a <= len
+    if (!clip(-dc, c1 + q.half)) return null; // c >= -half
+    if (!clip(dc, q.half - c1)) return null; // c <= half
+    return hi - lo > 1e-9 ? (lo, hi) : null;
+  }
+
+  final out = <String, List<LabelSegment>>{};
+  for (final r in runs) {
+    final q = rect[r.id];
+    if (q == null) {
+      out[r.id] = const [];
+      continue;
+    }
+    final nx = -q.uy * q.half, ny = q.ux * q.half;
+    final x1 = q.x0, y1 = q.y0;
+    final x2 = q.x0 + q.ux * q.len, y2 = q.y0 + q.uy * q.len;
+    final walls = <LabelSegment>[
+      (x1: x1 + nx, y1: y1 + ny, x2: x2 + nx, y2: y2 + ny),
+      (x1: x1 - nx, y1: y1 - ny, x2: x2 - nx, y2: y2 - ny),
+    ];
+    // The runs met at a shared node (each once).
+    final others = <String>{
+      for (final o in atNode[r.fromId] ?? const <PlanDuctRun>[]) o.id,
+      for (final o in atNode[r.toId] ?? const <PlanDuctRun>[]) o.id,
+    }..remove(r.id);
+    final pieces = <LabelSegment>[];
+    for (final w in walls) {
+      var keep = <(double, double)>[(0.0, 1.0)];
+      for (final oid in others.toList()..sort()) {
+        final oq = rect[oid];
+        if (oq == null) continue;
+        final cut = inside(w, oq);
+        if (cut == null) continue;
+        keep = [
+          for (final (a, b) in keep) ...[
+            if (cut.$1 > a) (a, math.min(b, cut.$1)),
+            if (cut.$2 < b) (math.max(a, cut.$2), b),
+          ],
+        ].where((iv) => iv.$2 - iv.$1 > 1e-6).toList();
+      }
+      for (final (a, b) in keep) {
+        pieces.add((
+          x1: w.x1 + (w.x2 - w.x1) * a,
+          y1: w.y1 + (w.y2 - w.y1) * a,
+          x2: w.x1 + (w.x2 - w.x1) * b,
+          y2: w.y1 + (w.y2 - w.y1) * b,
+        ));
+      }
+    }
+    out[r.id] = pieces;
+  }
+  return out;
+}
 
 /// One positioned text line of a placed label: its [text] and the baseline
 /// START anchor ([x], [y]) in the y-up output space (rotation is the

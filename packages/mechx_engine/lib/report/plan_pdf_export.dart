@@ -612,6 +612,24 @@ Uint8List planToPdf({
     cs.writeln('[] 0 d'); // back to solid
   }
 
+  // Round 34 — the double-line ducts' junction-trimmed outlines.
+  final ductOutlines = planDuctOutlines([
+    for (final e in net.edges)
+      if (e.kind == EdgeKind.run && ductHalfPt[e.id] != null)
+        if (net.nodeById(e.fromId) case final a?)
+          if (net.nodeById(e.toId) case final c?)
+            if (onFloor(a) && onFloor(c))
+              (
+                id: e.id,
+                fromId: e.fromId,
+                toId: e.toId,
+                ax: tx(a.x),
+                ay: ty(a.y),
+                bx: tx(c.x),
+                by: ty(c.y),
+                half: ductHalfPt[e.id]!,
+              ),
+  ]);
   // Edges: lines (runs) + riser markers.
   for (final e in net.edges) {
     final a = net.nodeById(e.fromId);
@@ -627,8 +645,9 @@ Uint8List planToPdf({
         // Round 24 — true-width double-line duct (the outline at ±W/2).
         cs.writeln('${_n(kPdfStrokeWidths[0])} w');
         if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
-        for (final o in planDoubleLineOutline(
-            tx(a.x), ty(a.y), tx(c.x), ty(c.y), half)) {
+        // Round 34 — junction-trimmed (one geometry with the DXF).
+        for (final o in ductOutlines[e.id] ??
+            planDoubleLineOutline(tx(a.x), ty(a.y), tx(c.x), ty(c.y), half)) {
           cs.writeln('${_n(o.x1)} ${_n(o.y1)} m ${_n(o.x2)} ${_n(o.y2)} l S');
         }
         if (dash != null) cs.writeln('[] 0 d');

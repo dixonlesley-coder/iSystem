@@ -80,6 +80,18 @@ const kDxfLayerMFrame = 'M-FRAME';
 /// here instead of the electrical `E-BREAKER`.
 const kDxfLayerMDetail = 'M-DETAIL';
 
+// ── Fire-protection class layers (Round 34 — a fire riser is its own
+// discipline: F-*, never the mechanical M-*) ───────────────────────────────
+
+/// Fire-protection annotation text.
+const kDxfLayerFText = 'F-TEXT';
+
+/// Fire-protection sheet frame: title block + legend.
+const kDxfLayerFFrame = 'F-FRAME';
+
+/// Fire-protection device / detail graphics.
+const kDxfLayerFDetail = 'F-DETAIL';
+
 /// The DXF layer NAMESPACE an SLD render routes its prims onto. The electrical
 /// default is the `E-*` distribution-board set; the MECHANICAL riser (routed
 /// here via `sld_export.dart`) passes [mechanical] so a plumbing riser's text /
@@ -162,6 +174,32 @@ class SldDxfLayers {
     frameAci: 8,
     essentialAci: 7,
   );
+
+  /// Round 34 (fire-hvac-drawings-no-discipline-split) — the fire-protection
+  /// `F-*` namespace (sprinkler / hydrant risers), collapsed like
+  /// [mechanical].
+  static const fire = SldDxfLayers(
+    bus: kDxfLayerFDetail,
+    feeder: kDxfLayerFDetail,
+    device: kDxfLayerFDetail,
+    text: kDxfLayerFText,
+    frame: kDxfLayerFFrame,
+    essential: kDxfLayerFDetail,
+    busAci: 1,
+    feederAci: 1,
+    deviceAci: 1,
+    textAci: 7,
+    frameAci: 8,
+    essentialAci: 1,
+  );
+
+  /// Round 34 — the namespace a riser of [focus] renders onto: [fire] for a
+  /// sprinkler / hydrant riser, [mechanical] for everything else (incl. the
+  /// combined all-services sheet).
+  static SldDxfLayers forRiser(ServiceType? focus) =>
+      focus == ServiceType.fireSprinkler || focus == ServiceType.fireHydrant
+          ? fire
+          : mechanical;
 
   /// The de-duplicated class-layer table rows `(name, aci)` in a stable order
   /// (bus, feeder, device, text, frame, essential) — the first ACI seen for a

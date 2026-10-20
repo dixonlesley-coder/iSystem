@@ -60,13 +60,14 @@ String riserDiagramTitle(ServiceType? focus) {
     ServiceType.drainage => 'DIAGRAM SISTEM AIR KOTOR & BEKAS',
     ServiceType.vent => 'DIAGRAM SISTEM VEN',
     ServiceType.rainwater => 'DIAGRAM SISTEM AIR HUJAN',
-    ServiceType.duct ||
-    ServiceType.returnAir ||
-    ServiceType.exhaust =>
-      'AIR DUCT RISER DIAGRAM',
-    ServiceType.fireSprinkler ||
-    ServiceType.fireHydrant =>
-      'FIRE RISER DIAGRAM',
+    // Round 34 (fire-hvac-drawings-no-discipline-split) — one DISTINCT
+    // register title per system (two riser sheets never share a title),
+    // in the same Indonesian sheet language as plumbing.
+    ServiceType.duct => 'DIAGRAM DUCTING SUPPLY',
+    ServiceType.returnAir => 'DIAGRAM DUCTING RETURN',
+    ServiceType.exhaust => 'DIAGRAM DUCTING EXHAUST',
+    ServiceType.fireSprinkler => 'DIAGRAM SISTEM SPRINKLER',
+    ServiceType.fireHydrant => 'DIAGRAM SISTEM HIDRAN',
   };
 }
 
@@ -308,8 +309,9 @@ Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
           chrome: _riserChrome(ref, index: 1, total: 1),
           // N2: the live project name stamps the title-block PROJECT row.
           projectName: project.name.isEmpty ? null : project.name,
-          // N15: a plumbing riser DXF uses the M-* layer namespace, never E-*.
-          layers: SldDxfLayers.mechanical,
+          // N15: a plumbing riser DXF uses the M-* layer namespace, never E-*;
+          // Round 34: a fire riser its own F-* namespace.
+          layers: SldDxfLayers.forRiser(focus),
         );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
         final full = await pickExportSave(ref,
@@ -412,8 +414,9 @@ Future<void> exportMechanicalRiserSetDxf(
             chrome: _riserChrome(ref, index: i + 1, total: foci.length),
             // N2: the live project name on every sheet of the set.
             projectName: project.name.isEmpty ? null : project.name,
-            // N15: the M-* layer namespace, never E-*.
-            layers: SldDxfLayers.mechanical,
+            // N15: the M-* layer namespace, never E-*; Round 34: F-* for
+            // a fire riser.
+            layers: SldDxfLayers.forRiser(f),
           );
           await File('$stem-$code.dxf').writeAsString(dxf);
         }

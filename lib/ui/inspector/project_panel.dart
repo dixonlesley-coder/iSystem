@@ -32,6 +32,7 @@ import 'package:mechx_engine/report/plan_symbols.dart'
         customFixturePlanTags,
         equipmentNodeTags,
         fixturePlanTags,
+        planLegendSymbols,
         planEdgeElevationLabels,
         planSheetNotes;
 import 'package:mechx_engine/report/report_blocks.dart';
@@ -1436,6 +1437,9 @@ DrawingChrome issuableChrome(
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
     legendNotes: notes,
+    // Round 34 — the symbol key: every component glyph on this floor.
+    legendSymbols:
+        planLegendSymbols(net, sheetId: sheetId, floorIndex: floorIndex),
     // N19: the plan's drawing number is DERIVED per sheet — the mechanical plan
     // band `M-1xx`, running by RAIL POSITION — so sheet 1 is `M-101`, sheet 2
     // `M-102`, never one number on every plan. A manual `documentNumber`

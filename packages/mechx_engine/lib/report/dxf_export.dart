@@ -671,6 +671,24 @@ String _professionalDxf({
     g(21, tipy);
   }
 
+  // Round 34 — the double-line ducts' junction-trimmed outlines.
+  final ductOutlines = planDuctOutlines([
+    for (final e in net.edges)
+      if (e.kind == EdgeKind.run && ductHalfMm[e.id] != null)
+        if (net.nodeById(e.fromId) case final a?)
+          if (net.nodeById(e.toId) case final c?)
+            if (onFloor(a) && onFloor(c))
+              (
+                id: e.id,
+                fromId: e.fromId,
+                toId: e.toId,
+                ax: a.x * mmPerPx,
+                ay: -a.y * mmPerPx,
+                bx: c.x * mmPerPx,
+                by: -c.y * mmPerPx,
+                half: ductHalfMm[e.id]!,
+              ),
+  ]);
   // Edges: run LINEs (+ flow chevrons) and riser marker CIRCLEs, each at the
   // plotted marker size (R6: paper-sized like the plan PDF's).
   for (final e in net.edges) {
@@ -685,7 +703,9 @@ String _professionalDxf({
       final half = ductHalfMm[e.id];
       if (half != null) {
         // Round 24 — true-width double-line duct (outline at ±W/2, real mm).
-        for (final o in planDoubleLineOutline(ax, ay, cx, cy, half)) {
+        // Round 34 — junction-trimmed (one geometry with the PDF).
+        for (final o in ductOutlines[e.id] ??
+            planDoubleLineOutline(ax, ay, cx, cy, half)) {
           g(0, 'LINE');
           g(8, dxfLayerNameFor(e.service));
           g(6, dxfLinetypeFor(e.service));
