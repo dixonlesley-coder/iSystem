@@ -4,6 +4,8 @@ import 'dart:math' as math;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/plan_symbols.dart'
+    show equipmentNodeTags, equipmentTagPrefix;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show DuctShape, DuctSizingMethod;
 import 'package:mechx_engine/sizing/room_air.dart' show TerminalBank;
@@ -115,8 +117,89 @@ class NetworkController extends Notifier<DrawingState> {
 
   String _id(String prefix) => '$prefix${_seq++}';
 
+  /// Round 33 (engineer-walkthrough-equipment-tag-global-ordinal) — the next
+  /// equipment tag number per prefix (P / TK / AHU …). Monotonic like
+  /// [_seq]: a deleted P-01 is never re-issued (C6), undo does not roll it
+  /// back.
+  final Map<String, int> _tagSeq = {};
+
+  /// Round 33 — stamp a per-prefix [NetNode.tagNo] on every tag-bearing node
+  /// of [next] that is NEW (absent from [prev]) or changed prefix, or whose
+  /// number another node already holds (a pasted / duplicated clone carries
+  /// its source's number) — never on a legacy node (no number, unchanged
+  /// prefix: its tag keeps deriving from the id ordinal). Pure over the
+  /// controller's sequence; returns [next] itself when nothing changes.
+  Network _stampTags(Network prev, Network next) {
+    String? prefixOf(NetNode? n) =>
+        n?.component == null ? null : equipmentTagPrefix(n!.component!);
+    final used = <String, Set<int>>{};
+    final stamp = <int>[];
+    for (var i = 0; i < next.nodes.length; i++) {
+      final n = next.nodes[i];
+      final prefix = prefixOf(n);
+      if (prefix == null) continue;
+      final old = prev.nodeById(n.id);
+      final samePrefix = old != null && prefixOf(old) == prefix;
+      if (n.tagNo == null) {
+        if (samePrefix) continue; // legacy: ordinal-derived, untouched
+        stamp.add(i);
+        continue;
+      }
+      final kept = samePrefix && old.tagNo == n.tagNo;
+      if (kept && used.putIfAbsent(prefix, () => <int>{}).add(n.tagNo!)) {
+        continue;
+      }
+      stamp.add(i);
+    }
+    if (stamp.isEmpty) return next;
+    // Never collide with a number a legacy (ordinal) tag already shows.
+    final shown = equipmentNodeTags(next);
+    for (final e in shown.entries) {
+      final m = RegExp(r'^(.*)-(\d+)$').firstMatch(e.value);
+      if (m == null) continue;
+      final p = m.group(1)!, v = int.parse(m.group(2)!);
+      if ((_tagSeq[p] ?? 1) <= v &&
+          !stamp.any((i) => next.nodes[i].id == e.key)) {
+        _tagSeq[p] = v + 1;
+      }
+    }
+    final nodes = List<NetNode>.of(next.nodes);
+    for (final i in stamp) {
+      final prefix = prefixOf(nodes[i])!;
+      var no = _tagSeq[prefix] ?? 1;
+      final taken = used.putIfAbsent(prefix, () => <int>{});
+      while (taken.contains(no)) {
+        no++;
+      }
+      taken.add(no);
+      _tagSeq[prefix] = no + 1;
+      nodes[i] = nodes[i].copyWith(tagNo: no);
+    }
+    return Network(nodes: nodes, edges: next.edges);
+  }
+
+  /// Round 33 — the tag sequence entries to persist (`network.tagSeq`): only
+  /// prefixes whose next number runs ahead of the live numbers (empty for an
+  /// untouched file ⇒ byte-identical).
+  Map<String, int> get persistedTagSeq {
+    final live = <String, int>{};
+    for (final n in state.network.nodes) {
+      final c = n.component;
+      final no = n.tagNo;
+      if (c == null || no == null) continue;
+      final p = equipmentTagPrefix(c);
+      if (p == null) continue;
+      if (no + 1 > (live[p] ?? 1)) live[p] = no + 1;
+    }
+    return {
+      for (final e in _tagSeq.entries)
+        if (e.value > (live[e.key] ?? 1)) e.key: e.value,
+    };
+  }
+
   void _commit(Network next,
       {Offset? pendingPoint, String? pendingSheetId, int? pendingFloorIndex}) {
+    next = _stampTags(state.network, next);
     // K1 safety-net: any committing edit ends a live drag session, so a missed
     // endDrag can never leave the heavy chain frozen (no-op when none is open).
     ref.read(dragSessionProvider.notifier).endDrag();
@@ -147,6 +230,7 @@ class NetworkController extends Notifier<DrawingState> {
       _commit(next);
       return;
     }
+    next = _stampTags(state.network, next);
     // K1: end the throttle session on the drag's terminal commit (final refresh).
     ref.read(dragSessionProvider.notifier).endDrag();
     _dragSnapshotPending = false;
@@ -3469,9 +3553,22 @@ class NetworkController extends Notifier<DrawingState> {
   /// overrides typed for another machine) or inheriting its signed
   /// acknowledgement — exactly as in the never-saved session.
   void loadNetwork(Network net,
-      {int? nextSeq, Iterable<String> referencedIds = const []}) {
+      {int? nextSeq,
+      Iterable<String> referencedIds = const [],
+      Map<String, int> tagSeq = const {}}) {
     _undo.clear();
     _redo.clear();
+    // Round 33 — the equipment tag sequence: the saved counter, or one past
+    // every number the loaded tags already show (minted or ordinal-derived).
+    _tagSeq
+      ..clear()
+      ..addAll(tagSeq);
+    for (final t in equipmentNodeTags(net).values) {
+      final m = RegExp(r'^(.*)-(\d+)$').firstMatch(t);
+      if (m == null) continue;
+      final p = m.group(1)!, v = int.parse(m.group(2)!);
+      if ((_tagSeq[p] ?? 1) <= v) _tagSeq[p] = v + 1;
+    }
     _dragSnapshotPending = false;
     var seq = _maxLoadedSeq(net) + 1;
     if (nextSeq != null && nextSeq > seq) seq = nextSeq;

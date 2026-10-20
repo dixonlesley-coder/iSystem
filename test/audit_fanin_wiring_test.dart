@@ -9,6 +9,8 @@
 /// test is orchestration-level.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
@@ -24,6 +26,7 @@ import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/air_velocity.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart' show SizingContext;
 import 'package:mechx_engine/standards/sni.dart' show PlumbingFixture;
 import 'package:mechx_engine/standards/ventilation.dart' show RoomType;
 import 'package:mechx_engine/units.dart';
@@ -314,14 +317,12 @@ void main() {
       final c = _container();
       _calibrate(c);
       c.read(sheetsControllerProvider.notifier).loadDemoSheets();
-      // A lavatory branch (DFU 1) sizes to the branch table's minimum, DN40,
-      // and at the default 1:100 laid slope with Manning n = 0.010 the
-      // full-bore velocity is v = (1/n) * R^(2/3) * S^(1/2) with R = D/4:
-      //   DN40 -> R = 0.0100 -> R^(2/3) = 0.0464 -> v = 100*0.0464*0.1 = 0.46
-      // — under the 0.6 m/s self-cleansing floor. It is the smallest pipe the
-      // DFU table allows, so no pipe change can fix it: the engine leaves the
-      // flag true and the Review list stays quiet about it (the real levers,
-      // the laid slope and the grouped discharge, are separate inputs).
+      // A lavatory branch (DFU 1) sizes to the branch table's minimum, DN40.
+      // Round 33 — a ≤ DN65 branch is LAID at no flatter than 1:50, so with
+      // Manning n = 0.010 the full-bore velocity v = (1/n)·R^(2/3)·S^(1/2),
+      // R = D/4: DN40 -> 100 × 0.0464 × √0.02 = 0.656 m/s. It is the smallest
+      // pipe the DFU table allows, and the engine leaves the flag true and
+      // the Review list quiet about it.
       const basin = NetNode(
         id: 'wb',
         sheetId: 's1',
@@ -344,7 +345,8 @@ void main() {
 
       final sizing = c.read(sizingProvider)['br']!;
       expect(sizing.diameter.inMillimeters, closeTo(40, 1e-9));
-      expect(sizing.velocity.metersPerSecond, lessThan(0.6));
+      expect(sizing.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2), 1e-9));
       expect(sizing.selfCleansingOk, isTrue, reason: 'at the DFU minimum (G1)');
       expect(c.read(selfCleansingDefectsProvider), isEmpty);
 
@@ -363,13 +365,19 @@ void main() {
 
     test('a drainage branch hand-sized ABOVE the DFU minimum IS a locatable '
         'self-cleansing advisory, reported ONCE', () {
-      final c = _container();
+      // Round 33 — on a ROUGH pipe (Manning n = 0.015): the same lavatory
+      // branch (DFU 1 ⇒ DN40 minimum) hand-picked at DN50, laid at its 1:50
+      // minimum: v = (1/0.015) × 0.0539 × √0.02 = 0.508 m/s — under 0.6 m/s,
+      // and actionable by pipe (DN40 is compliant and runs faster), so the
+      // advisory fires. (At n = 0.010 every pipe laid at its own minimum fall
+      // clears 0.6 m/s.)
+      final c = ProviderContainer(overrides: [
+        sizingContextProvider.overrideWithValue(
+            const SizingContext(drainageManningN: 0.015)),
+      ]);
+      addTearDown(c.dispose);
       _calibrate(c);
       c.read(sheetsControllerProvider.notifier).loadDemoSheets();
-      // Same lavatory branch (DFU 1 ⇒ DN40 minimum), but hand-picked at DN50:
-      //   DN50 -> R = 0.0125 -> R^(2/3) = 0.0539 -> v = 100*0.0539*0.1 = 0.54
-      // still under 0.6 m/s — and now it IS actionable by pipe (DN40 is
-      // compliant and runs faster), so the advisory fires.
       const basin = NetNode(
         id: 'wb',
         sheetId: 's1',
@@ -624,42 +632,45 @@ void main() {
 
     // Round 9 (plumbing-rules-min-slope-threshold) — the floor is per pipe
     // size: the 1-DFU lavatory branch sizes DN40 (branch table), and a branch
-    // ≤ DN65 needs 2 % (1:50), so the 1:100 project default now FLAGS it;
-    // laying it at 1:50 clears it.
-    test('a DN40 branch at the 1:100 default flags; at 1:50 it is silent', () {
+    // ≤ DN65 needs 2 % (1:50). Round 33 — a drainage run is LAID at no
+    // flatter than its own floor (`laidGravitySlope`, the fall the plan
+    // prints), so the 1:100 project default lays the DN40 at 1:50 and the
+    // advisory judged at that fall stays silent; the drawing and the advisory
+    // can no longer contradict each other.
+    test('a DN40 branch at the 1:100 default is laid at 1:50: silent', () {
       final c = _container();
       seedDrainage(c);
       expect(c.read(drainageSlopeProvider), 0.01);
       expect(c.read(sizingProvider)['br']!.diameter.inMillimeters, 40);
       expect(
           c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
-          hasLength(1));
+          isEmpty);
       c.read(drainageSlopeProvider.notifier).set(0.02);
       expect(
           c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
           isEmpty);
     });
 
-    test('laying the branch at 1:250 trips it, and re-sizes on that gradient',
-        () {
+    test('the slope input reaches the sizer above the per-DN floor', () {
       final c = _container();
       seedDrainage(c);
       final vBefore = c.read(sizingProvider)['br']!.velocity.metersPerSecond;
 
-      // 1:250 = 0.004 m/m, under every per-DN minimum-slope threshold.
+      // 1:250 = 0.004 m/m, under every per-DN floor: the DN40 stays laid at
+      // its 1:50 minimum — same velocity, no advisory.
       c.read(drainageSlopeProvider.notifier).set(0.004);
       expect(c.read(drainageSlopeProvider), 0.004);
+      expect(
+          c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
+          isEmpty);
+      expect(c.read(sizingProvider)['br']!.velocity.metersPerSecond,
+          closeTo(vBefore, 1e-12));
 
-      final advisory = c
-          .read(designIssuesProvider)
-          .firstWhere((i) => i.kind == 'drainage-slope');
-      expect(advisory.severity, IssueSeverity.info);
-      expect(advisory.locate!.edgeId, 'br');
-
-      // The slope also reaches the SIZER: v scales with sqrt(S), so dropping
-      // 0.01 -> 0.004 scales the Manning velocity by sqrt(0.4) = 0.6325.
+      // A project slope STEEPER than the floor (1:25 = 0.04) is the laid
+      // fall: v scales with sqrt(S), sqrt(0.04 / 0.02) = 1.41421.
+      c.read(drainageSlopeProvider.notifier).set(0.04);
       final vAfter = c.read(sizingProvider)['br']!.velocity.metersPerSecond;
-      expect(vAfter, closeTo(vBefore * 0.632455, 1e-6));
+      expect(vAfter, closeTo(vBefore * 1.414214, 1e-6));
     });
   });
 

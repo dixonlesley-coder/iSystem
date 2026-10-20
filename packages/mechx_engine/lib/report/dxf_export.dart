@@ -15,6 +15,7 @@ library;
 import 'dart:math' as math;
 
 import '../network/network.dart';
+import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart';
 import '../units.dart';
 import 'drawing_chrome.dart';
@@ -240,7 +241,8 @@ String networkToDxf({
         // gradient (never hardcoded).
         final slope = (e.service.regime == FlowRegime.gravity &&
                 gravitySlope != null)
-            ? gravitySlopeLabel(gravitySlope)
+            ? gravitySlopeLabel(
+                laidGravitySlope(e, gravitySlope, s.diameter.inMillimeters))
             : null;
         final size = [
           _sizeLabel(e, s),
@@ -321,8 +323,9 @@ String networkToDxf({
     } else if (n.role == NodeRole.fixture) {
       emitPrims(planFixturePrims(cx: n.x, cy: -n.y, size: 16), layer, -n.y);
     }
-    // G1: the stable equipment tag (`P-01` …) as TEXT beside the glyph.
-    final eqTag = nodeTags?[n.id];
+    // G1: the stable equipment tag (`P-01` …) as TEXT beside the glyph;
+    // Round 33 — a plumbing fixture's plan code (WC / LAV …) likewise.
+    final eqTag = nodeTags?[n.id] ?? fixturePlanCode(n);
     if (eqTag != null && eqTag.isNotEmpty) {
       g(0, 'TEXT');
       g(8, layer);
@@ -523,6 +526,8 @@ String _professionalDxf({
       final s = sizing[e.id];
       return s != null ? _sizeLabel(e, s) : null;
     },
+    // Round 33 — the laid fall of a drainage run reads its own sized bore.
+    diameterMmOf: (e) => sizing[e.id]?.diameter.inMillimeters,
     // A run's real length: the caller's §10 map, else its calibrated
     // horizontal length (pixel length × m/px) — this path is always
     // calibrated, so the take-off length is never fabricated. A riser prints

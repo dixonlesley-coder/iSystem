@@ -566,6 +566,8 @@ Map<String, dynamic> _netNodeToJson(NetNode n) => {
       if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
         'fitting': n.fittingType!.name,
       if (n.autoPlacedRoomId != null) 'auto_room': n.autoPlacedRoomId,
+      // Round 33 — the per-prefix equipment tag number (additive).
+      if (n.tagNo != null) 'tag_no': n.tagNo,
     };
 
 NetNode _netNodeFromJson(Map n) => NetNode(
@@ -610,6 +612,11 @@ NetNode _netNodeFromJson(Map n) => NetNode(
       // Round 20 — the generating room of an auto-placed terminal. Tolerant:
       // absent / non-string ⇒ null ⇒ the ownership fallback.
       autoPlacedRoomId: n['auto_room'] is String ? n['auto_room'] as String : null,
+      // Round 33 — tolerant: absent / non-positive ⇒ null (the legacy
+      // node-id ordinal tag).
+      tagNo: n['tag_no'] is num && (n['tag_no'] as num) >= 1
+          ? (n['tag_no'] as num).toInt()
+          : null,
     );
 
 Map<String, dynamic> _netEdgeToJson(NetEdge e) => {
@@ -790,6 +797,11 @@ class ProjectDocument {
   /// an untouched file stays byte-identical.
   final int? networkNextSeq;
 
+  /// Round 33 — the per-prefix equipment tag sequence (`network.tagSeq`),
+  /// only the prefixes whose next number runs AHEAD of the live tag numbers
+  /// (a top-numbered machine was deleted). Empty ⇒ not written.
+  final Map<String, int> networkTagSeq;
+
   /// Round 28 (persist-undo-2-4) — the room id counter (`roomNextSeq`) when it
   /// runs ahead of the live room ids; null ⇒ not written.
   final int? roomNextSeq;
@@ -814,6 +826,7 @@ class ProjectDocument {
     this.referenceLines = const [],
     this.assets = const {},
     this.networkNextSeq,
+    this.networkTagSeq = const {},
     this.roomNextSeq,
   });
 
@@ -840,6 +853,7 @@ class ProjectDocument {
         referenceLines: referenceLines,
         assets: assets ?? this.assets,
         networkNextSeq: networkNextSeq,
+        networkTagSeq: networkTagSeq,
         roomNextSeq: roomNextSeq,
       );
 
@@ -895,6 +909,8 @@ class ProjectDocument {
                   s.dxfLiveFrameAck!.maxX,
                   s.dxfLiveFrameAck!.maxY,
                 ],
+              // Round 33 — the DXF $INSUNITS code (additive; absent ⇒ legacy).
+              if (s.dxfInsUnits != null) 'dxfInsUnits': s.dxfInsUnits,
             },
         ],
         'viewports': {
@@ -922,6 +938,7 @@ class ProjectDocument {
           'nodes': [for (final n in network.nodes) _netNodeToJson(n)],
           'edges': [for (final e in network.edges) _netEdgeToJson(e)],
           if (networkNextSeq != null) 'nextSeq': networkNextSeq,
+          if (networkTagSeq.isNotEmpty) 'tagSeq': networkTagSeq,
         },
       };
 
@@ -1012,6 +1029,9 @@ class ProjectDocument {
           sizePx: Size((s['w'] as num).toDouble(), (s['h'] as num).toDouble()),
           dxfFrame: _dxfFrameFromJson(s['dxfFrame']),
           dxfLiveFrameAck: _dxfFrameFromJson(s['dxfLiveFrameAck']),
+          dxfInsUnits: s['dxfInsUnits'] is num
+              ? (s['dxfInsUnits'] as num).toInt()
+              : null,
         ),
     ];
     final net = json['network'] as Map<String, dynamic>;
@@ -1108,6 +1128,12 @@ class ProjectDocument {
       referenceLines: referenceLines,
       assets: assets,
       networkNextSeq: _seqOrNull(net['nextSeq']),
+      networkTagSeq: {
+        if (net['tagSeq'] is Map)
+          for (final e in (net['tagSeq'] as Map).entries)
+            if (e.key is String && e.value is num && (e.value as num) >= 1)
+              e.key as String: (e.value as num).toInt(),
+      },
       roomNextSeq: _seqOrNull(json['roomNextSeq']),
     );
   }

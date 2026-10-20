@@ -21,6 +21,7 @@ import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/zoning.dart';
@@ -226,7 +227,10 @@ void main() {
         .nodes
         .firstWhere((n) => n.component == NodeComponent.ahu);
     final before = _mepBoard(c)!.circuits.single;
-    expect(before.name, NodeComponent.ahu.label);
+    // Round 33 — the way carries the machine's stable equipment tag.
+    String tagOf() => equipmentNodeTags(
+        c.read(networkControllerProvider).network)[node.id]!;
+    expect(before.name, '${NodeComponent.ahu.label} ${tagOf()}');
     net.setNodeComponent(node.id, NodeComponent.acSplitWall);
     await _settle(c);
     final after = _mepBoard(c)!.circuits.single;
@@ -239,7 +243,8 @@ void main() {
     expect(after.loadKind, fresh.loadKind);
     expect(after.loadKind, LoadKind.hvac);
     expect(after.cosPhi, fresh.cosPhi);
-    expect(after.name, NodeComponent.acSplitWall.label);
+    expect(after.name, '${NodeComponent.acSplitWall.label} ${tagOf()}');
+    expect(after.name, fresh.name);
     expect(after.flaOverrideA!.amperes, fresh.flaOverrideA!.amperes);
   });
 

@@ -112,8 +112,14 @@ class HeatmapLayer extends ConsumerWidget {
                 // M9: on the upfeed solve the residuals meet the target BY
                 // CONSTRUCTION (the pump head is defined as their max), so the
                 // legend must not print a green PASS off them.
+                // Round 33 — the DELIVERED upfeed field's verdict basis.
                 targetHeldByDesign:
-                    ref.watch(solveProvider)?.targetHeldByDesign ?? false),
+                    ref.watch(upfeedDeliveredProvider)?.targetHeldByDesign ??
+                        false,
+                // Round 33 — the SNI 8153 floor (the minimum) beside the
+                // comfort target, judged per node like Review.
+                sniFloorKpa: ref.watch(heatmapSniSummaryProvider).floorKpa,
+                belowSniFloor: ref.watch(heatmapSniSummaryProvider).belowFloor),
           ),
         ],
       ),
@@ -154,12 +160,24 @@ class HeatmapLegend extends StatelessWidget {
   /// PASS/LOW is a genuine check and is unchanged.
   final bool targetHeldByDesign;
 
+  /// Round 33 (regression-heatmap-legend-low-against-comfort-target) — the
+  /// SNI 8153 MINIMUM owed in this field (49 kPa at a faucet, 98 kPa with a
+  /// flush valve served); [targetKpa] is the COMFORT target above it. Null ⇒
+  /// unknown (legacy target-only verdict).
+  final double? sniFloorKpa;
+
+  /// Round 33 — some delivery node is below its OWN SNI floor (the per-node
+  /// judge Review uses): the only state that reads a red LOW.
+  final bool belowSniFloor;
+
   const HeatmapLegend(
       {super.key,
       required this.minKpa,
       required this.maxKpa,
       required this.targetKpa,
-      this.targetHeldByDesign = false});
+      this.targetHeldByDesign = false,
+      this.sniFloorKpa,
+      this.belowSniFloor = false});
 
   @override
   Widget build(BuildContext context) {
@@ -174,10 +192,20 @@ class HeatmapLegend extends StatelessWidget {
 
     // A residual passes when it meets the target the solve holds (a small
     // tolerance so a value pinned exactly at the target reads PASS).
-    final pass = minKpa >= targetKpa - 0.5;
     // Fractional position of the threshold along the min→max ramp; clamped so
     // an all-pass (target below min) tick pins left, an all-fail pins right.
     final span = maxKpa - minKpa;
+    final pass = minKpa >= targetKpa - 0.5;
+    // Round 33 — the verdict ladder: below an SNI floor ⇒ LOW (danger); SNI
+    // floor met but below the comfort target ⇒ 'below target' (warning);
+    // else PASS. With no floor known, below the target reads LOW (legacy).
+    final low = sniFloorKpa == null ? !pass : belowSniFloor;
+    final floor = sniFloorKpa;
+    final floorFrac = floor == null || span.abs() < 1e-9
+        ? null
+        : (floor - minKpa) / span;
+    final showFloorTick =
+        floorFrac != null && floorFrac >= 0.0 && floorFrac <= 1.0;
     final targetFrac =
         span.abs() < 1e-9 ? 0.0 : ((targetKpa - minKpa) / span).clamp(0.0, 1.0);
 
@@ -235,6 +263,17 @@ class HeatmapLegend extends StatelessWidget {
                         ),
                       ),
                     ),
+                  // Round 33 — the SNI minimum, when it lies on the bar.
+                  if (!uniform && showFloorTick)
+                    Positioned.fill(
+                      child: Align(
+                        alignment: Alignment(2 * floorFrac - 1, 0),
+                        child: Container(
+                          width: 2,
+                          color: colors.danger,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
@@ -257,17 +296,21 @@ class HeatmapLegend extends StatelessWidget {
                   // gets the honest neutral statement, never a green PASS.
                   Text(targetHeldByDesign
                       ? 'held by design'
-                      : pass
-                          ? 'PASS'
-                          : 'LOW',
+                      : low
+                          ? 'LOW'
+                          : pass
+                              ? 'PASS'
+                              : strings(StringKey.heatmapBelowTarget),
                       maxLines: 1,
                       softWrap: false,
                       style: type.mono.copyWith(
                           color: targetHeldByDesign
                               ? colors.textSecondary
-                              : pass
-                                  ? colors.success
-                                  : colors.danger)),
+                              : low
+                                  ? colors.danger
+                                  : pass
+                                      ? colors.success
+                                      : colors.warning)),
                 ],
               )
             else ...[
@@ -288,10 +331,20 @@ class HeatmapLegend extends StatelessWidget {
               ),
               const SizedBox(height: MechXSpacing.xxs),
               // The tick's meaning, labelled (the absolute code anchor).
-              Text('Min ${bar(targetKpa)}',
+              // Round 33 — the tick is the COMFORT target (never 'Min');
+              // the SNI minimum gets its own line when it is on the bar.
+              Text('${strings(StringKey.heatmapTarget)} ${bar(targetKpa)}',
                   maxLines: 1,
                   softWrap: false,
                   style: type.mono.copyWith(color: colors.textSecondary)),
+              if (showFloorTick)
+                Text('${strings(StringKey.heatmapSniMin)} ${bar(floor!)}',
+                    maxLines: 1,
+                    softWrap: false,
+                    style: type.mono.copyWith(
+                        color: belowSniFloor
+                            ? colors.danger
+                            : colors.textSecondary)),
               // G6 — a SPREAD field used to print that bare Min tick with no
               // caveat at all: on the upfeed solve every residual clears it by
               // construction, so an engineer reads a PASS off an unfalsifiable

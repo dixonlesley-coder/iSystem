@@ -90,7 +90,9 @@ void main() {
         // The UNTYPED character still follows the new unit.
         expect(now.loadKindUserSet, isFalse);
         expect(now.loadKind, fresh.loadKind);
-        expect(now.name, NodeComponent.acSplitWall.label);
+        // Round 33 — the minted name carries the machine's equipment tag.
+        expect(now.name, fresh.name);
+        expect(now.name, startsWith('${NodeComponent.acSplitWall.label} '));
         // Provenance round-trips in .mechx.
         final back = ElectricalCircuit.fromJson(now.toJson());
         expect(back.cosPhiUserSet, isTrue);

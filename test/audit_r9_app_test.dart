@@ -67,11 +67,14 @@ void main() {
       final levels = c.read(projectControllerProvider).floors.length;
       expect(levels, 5);
       final sheets = c.read(sheetsControllerProvider);
-      // Every sheet's floor is unchanged (p3..p5 pinned at 2), so the canvas
-      // filter (sheetId AND floorIndex) still shows p5's two nodes.
-      for (final id in ['p1', 'p2', 'p3', 'p4', 'p5']) {
+      // The sheet with WORK keeps its floor (p5 pinned at 2), so the canvas
+      // filter (sheetId AND floorIndex) still shows p5's two nodes. Round 33 —
+      // an EMPTY sheet keeps its rail-positional mapping: p4 now lands on
+      // the new floor 3 (it used to be pinned onto the old top floor too).
+      for (final id in ['p1', 'p2', 'p3', 'p5']) {
         expect(sheets.floorFor(id, levels), sheets0.floorFor(id, 3), reason: id);
       }
+      expect(sheets.floorFor('p4', levels), 3);
       final f = sheets.floorFor('p5', levels);
       final visible = c
           .read(networkControllerProvider)

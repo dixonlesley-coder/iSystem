@@ -92,11 +92,53 @@ final solveProvider = Provider<PressureSolution?>((ref) {
   );
 });
 
+/// Round 33 (hydraulics-3-2) — the UPFEED field the drawn system actually
+/// DELIVERS: the same solve with every sized non-transfer mover
+/// ([supplyMoverDutiesProvider]) developing its OWN duty head — the root
+/// pump at the source, each zone booster adding its head to what it serves
+/// (the upfeed twin of [downfeedDeliveredProvider]). With no sized mover it
+/// IS [solveProvider] (same object). [solveProvider] stays the single-source
+/// SIZING basis (its `requiredPumpHead` sizes the movers); the heatmap, the
+/// node probe, the over-pressure judge and the SNI-minimum judge read this.
+final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
+  final base = ref.watch(solveProvider);
+  if (base == null) return null;
+  final transfers = ref.watch(transferPumpNodeIdsProvider);
+  final heads = <String, Head>{
+    for (final e in ref.watch(supplyMoverDutiesProvider).entries)
+      if (!transfers.contains(e.key) && e.value.head.meters > 0)
+        e.key: e.value.head,
+  };
+  if (heads.isEmpty) return base;
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  final source = _pickSource(net, edges, project.building,
+      preferHighest: false, mounting: project.mounting);
+  if (source == null) return base;
+  return solvePressurized(
+    net: net,
+    service: kSupplyService,
+    sourceId: source,
+    edgeFlows: _supplyFlows(edges, sizing),
+    sizing: sizing,
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+    targetResidual: _targetResidual,
+    mounting: project.mounting,
+    prvSetpoint: _prvSetpoint,
+    moverHeads: heads,
+  );
+});
+
 /// mech-building-2 — upfeed DELIVERY nodes over the SNI fixture pressure
 /// limits (judge-only; see the engine's [upfeedOverPressure]). Empty on a
 /// downfeed (its PRV zones are the check there) or with no upfeed solve.
+/// Round 33 — judged on the DELIVERED field ([upfeedDeliveredProvider]): a
+/// root pump + zone booster no longer reads as one pump at the system head.
 final upfeedOverPressureProvider = Provider<List<UpfeedOverPressure>>((ref) {
-  final solution = ref.watch(solveProvider);
+  final solution = ref.watch(upfeedDeliveredProvider);
   if (solution == null) return const [];
   return upfeedOverPressure(solution);
 });
@@ -271,10 +313,157 @@ Pressure sniMinimumResidualAt({
       : profile.minResidualPressureFaucet.value;
 }
 
+/// Round 33 (regression-sni-minimum-judged-only-at-critical-node) — the SNI
+/// 8153 minimum owed at EVERY node of [nodeIds]: [sniMinimumResidualAt]'s
+/// path-derived floor for each node, from ONE id-ordered BFS tree rooted at
+/// [sourceId] (a node whose supply path — itself included — holds a flush
+/// valve owes 98 kPa, else 49 kPa). A node the tree does not reach reads its
+/// own fixture alone. The same recorded loop approximation as
+/// [sniMinimumResidualAt].
+Map<String, Pressure> sniMinimumResidualByNode({
+  required Network net,
+  required String? sourceId,
+  required Iterable<String> nodeIds,
+  required Set<String> flushValveNodeIds,
+  SniProfile profile = const SniProfile(),
+}) {
+  final valve = profile.minResidualPressureFlushValve.value;
+  final faucet = profile.minResidualPressureFaucet.value;
+  final flagged = <String, bool>{};
+  if (sourceId != null) {
+    final adj = <String, List<String>>{};
+    for (final e in _supplyEdges(net)) {
+      adj.putIfAbsent(e.fromId, () => []).add(e.toId);
+      adj.putIfAbsent(e.toId, () => []).add(e.fromId);
+    }
+    for (final l in adj.values) {
+      l.sort();
+    }
+    flagged[sourceId] = flushValveNodeIds.contains(sourceId);
+    final queue = <String>[sourceId];
+    for (var i = 0; i < queue.length; i++) {
+      final here = queue[i];
+      for (final next in adj[here] ?? const <String>[]) {
+        if (flagged.containsKey(next)) continue;
+        flagged[next] = flagged[here]! || flushValveNodeIds.contains(next);
+        queue.add(next);
+      }
+    }
+  }
+  return {
+    for (final id in nodeIds)
+      id: (flagged[id] ?? flushValveNodeIds.contains(id)) ? valve : faucet,
+  };
+}
+
+/// Round 33 — the delivery node with the LARGEST shortfall below its own SNI
+/// floor (null when every node meets its floor). Ties by node id.
+typedef SniShortfall = ({String nodeId, Pressure floor, Pressure residual});
+
+SniShortfall? worstSniShortfall({
+  required Map<String, Pressure> floors,
+  required Map<String, Pressure> residual,
+}) {
+  SniShortfall? worst;
+  var worstPa = 0.0;
+  final ids = floors.keys.toList()..sort();
+  for (final id in ids) {
+    final r = residual[id];
+    if (r == null) continue;
+    final short = floors[id]!.pascals - r.pascals;
+    if (short <= 1e-3) continue;
+    if (worst == null || short > worstPa + 1e-9) {
+      worst = (nodeId: id, floor: floors[id]!, residual: r);
+      worstPa = short;
+    }
+  }
+  return worst;
+}
+
+/// Round 33 — the per-delivery-node SNI floors of the DELIVERED upfeed field.
+final upfeedSniFloorsProvider = Provider<Map<String, Pressure>>((ref) {
+  final up = ref.watch(upfeedDeliveredProvider);
+  if (up == null) return const {};
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  return sniMinimumResidualByNode(
+    net: net,
+    sourceId: _pickSource(net, _supplyEdges(net), project.building,
+        preferHighest: false, mounting: project.mounting),
+    nodeIds: up.deliveryNodeIds,
+    flushValveNodeIds: ref.watch(supplyFlushValveNodeIdsProvider),
+  );
+});
+
+/// Round 33 — the per-delivery-node SNI floors of the DELIVERED downfeed
+/// field.
+final downfeedSniFloorsProvider = Provider<Map<String, Pressure>>((ref) {
+  final down = ref.watch(downfeedDeliveredProvider);
+  if (down == null) return const {};
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  return sniMinimumResidualByNode(
+    net: net,
+    sourceId: _pickSource(net, _supplyEdges(net), project.building,
+        preferHighest: true, mounting: project.mounting),
+    nodeIds: down.deliveryNodeIds,
+    flushValveNodeIds: ref.watch(supplyFlushValveNodeIdsProvider),
+  );
+});
+
+/// Round 33 — the SNI floor the heatmap / node probe judge each node against:
+/// the active feed's per-node floors ([residualByNodeProvider]'s field).
+final sniFloorByNodeProvider = Provider<Map<String, Pressure>>((ref) {
+  if (ref.watch(solveProvider) != null) {
+    return ref.watch(upfeedSniFloorsProvider);
+  }
+  if (!ref.watch(gravityDownfeedDrawnProvider)) return const {};
+  return ref.watch(downfeedSniFloorsProvider);
+});
+
+/// Round 33 (regression-heatmap-legend-low-against-comfort-target) — the ONE
+/// residual verdict ladder of the heatmap legend and the node probe: below
+/// the node's SNI 8153 floor ⇒ [low] (a code failure); at / above the floor
+/// but below the comfort target (500 Pa slack) ⇒ [belowTarget] (advisory);
+/// else [pass]. With no SNI floor known the legacy target-only verdict.
+enum ResidualVerdict { low, belowTarget, pass }
+
+ResidualVerdict residualVerdict({
+  required double residualPa,
+  required double targetPa,
+  double? sniFloorPa,
+}) {
+  if (sniFloorPa != null) {
+    if (residualPa < sniFloorPa - 1e-3) return ResidualVerdict.low;
+    if (residualPa < targetPa - 500) return ResidualVerdict.belowTarget;
+    return ResidualVerdict.pass;
+  }
+  return residualPa >= targetPa - 500
+      ? ResidualVerdict.pass
+      : ResidualVerdict.low;
+}
+
+/// Round 33 — what the heatmap legend states about the SNI floor: the most
+/// demanding floor owed in the field (98 kPa when a flush valve is served,
+/// else 49 kPa; null with no solved delivery node) and whether any delivery
+/// node falls below its OWN floor (the same per-node judge as Review).
+final heatmapSniSummaryProvider =
+    Provider<({double? floorKpa, bool belowFloor})>((ref) {
+  final floors = ref.watch(sniFloorByNodeProvider);
+  if (floors.isEmpty) return (floorKpa: null, belowFloor: false);
+  var floor = 0.0;
+  for (final f in floors.values) {
+    floor = math.max(floor, f.inKiloPascals);
+  }
+  final short = worstSniShortfall(
+      floors: floors, residual: ref.watch(residualByNodeProvider));
+  return (floorKpa: floor, belowFloor: short != null);
+});
+
 /// Round 32 (binding-1) — the SNI minimum at the UPFEED solve's critical node
 /// (null with no upfeed solve).
 final upfeedSniMinimumResidualProvider = Provider<Pressure?>((ref) {
-  final up = ref.watch(solveProvider);
+  final up = ref.watch(upfeedDeliveredProvider);
   if (up == null) return null;
   final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
@@ -309,7 +498,8 @@ final downfeedSniMinimumResidualProvider = Provider<Pressure?>((ref) {
 /// single field the heatmap renders (§12). Round 22: the downfeed field is the
 /// DELIVERED one ([downfeedDeliveredProvider], sized boosters running).
 final residualByNodeProvider = Provider<Map<String, Pressure>>((ref) {
-  final up = ref.watch(solveProvider);
+  // Round 33 (hydraulics-3-2) — the upfeed field is the DELIVERED one too.
+  final up = ref.watch(upfeedDeliveredProvider);
   if (up != null) return up.residualPressure;
   // Round 25 follow-up — a downfeed SETTING with no roof tank drawn has no
   // gravity source: its solve runs from a phantom (the highest node), so the
@@ -605,6 +795,30 @@ SupplyBooster? inlineSupplyBooster(
   return best;
 }
 
+/// Round 33 (hydraulics-3-1 / 3-4) — the supply DELIVERY nodes among
+/// [candidates] on the engine's ONE rule ([pressureDeliveryNodes]): delivery
+/// fixtures (never an air vent / cleanout) plus every open end the sizer
+/// loaded, else the open leaves.
+Set<String> _supplyDeliveryNodes(Network net, Iterable<String> candidates,
+    Map<String, EdgeSizing> sizing) {
+  final incident = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    if (e.service != kSupplyService) continue;
+    (incident[e.fromId] ??= []).add(e);
+    (incident[e.toId] ??= []).add(e);
+  }
+  final list = candidates.toList();
+  if (list.isEmpty) return const {};
+  return pressureDeliveryNodes(
+    net: net,
+    candidates: list,
+    degreeOf: (id) => incident[id]?.length ?? 0,
+    incidentEdges: (id) => incident[id] ?? const <NetEdge>[],
+    sizing: sizing,
+    fallbackToAll: false,
+  );
+}
+
 /// Round 15 — the head an inline booster must add: the largest shortfall of
 /// the residual below the target over the DELIVERY nodes it serves (every
 /// node reached from the booster without crossing its incoming pipe;
@@ -622,22 +836,9 @@ Head boosterShortfallHead({
 }) {
   final served = boosterServedNodes(net, booster.nodeId, booster.inEdgeId,
       sizing: sizing, excludeEdgeIds: excludeEdgeIds);
-  final degree = <String, int>{};
-  for (final e in net.edges) {
-    if (e.service != kSupplyService) continue;
-    degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
-    degree[e.toId] = (degree[e.toId] ?? 0) + 1;
-  }
-  var delivery = [
-    for (final id in served)
-      if (net.nodeById(id)?.role == NodeRole.fixture) id,
-  ];
-  if (delivery.isEmpty) {
-    delivery = [
-      for (final id in served)
-        if ((degree[id] ?? 0) == 1) id,
-    ];
-  }
+  // Round 33 (hydraulics-3-1) — the engine's ONE delivery rule (an air
+  // vent / cleanout is never a draw-off; a loaded open end is).
+  final delivery = _supplyDeliveryNodes(net, served, sizing ?? const {});
   var worstPa = double.negativeInfinity;
   for (final id in delivery) {
     final r = residual[id];
@@ -877,6 +1078,7 @@ Map<String, Head> seriesMoverHeads({
   required List<SupplyMover> movers,
   required Map<String, Pressure> residual,
   required Pressure target,
+  Map<String, EdgeSizing> sizing = const {},
 }) {
   final boosters = [
     for (final m in movers)
@@ -888,12 +1090,6 @@ Map<String, Head> seriesMoverHeads({
     final c = depth(a).compareTo(depth(b));
     return c != 0 ? c : a.nodeId.compareTo(b.nodeId);
   });
-  final degree = <String, int>{};
-  for (final e in net.edges) {
-    if (e.service != kSupplyService) continue;
-    degree[e.fromId] = (degree[e.fromId] ?? 0) + 1;
-    degree[e.toId] = (degree[e.toId] ?? 0) + 1;
-  }
   final heads = <String, double>{}; // head in Pa
   for (final m in boosters) {
     double upstream(String node) {
@@ -912,17 +1108,10 @@ Map<String, Head> seriesMoverHeads({
     ];
     bool ownedByDownstream(String n) =>
         downstream.any((d) => d.nodeId == n || d.served.contains(n));
-    var own = [
-      for (final n in m.served)
-        if (net.nodeById(n)?.role == NodeRole.fixture && !ownedByDownstream(n))
-          n,
-    ];
-    if (own.isEmpty) {
-      own = [
-        for (final n in m.served)
-          if ((degree[n] ?? 0) == 1 && !ownedByDownstream(n)) n,
-      ];
-    }
+    // Round 33 (hydraulics-3-1) — the engine's ONE delivery rule over the
+    // nodes no downstream booster serves.
+    final own = _supplyDeliveryNodes(net,
+        [for (final n in m.served) if (!ownedByDownstream(n)) n], sizing);
     var worst = double.negativeInfinity;
     for (final n in own) {
       final r = residual[n];
@@ -1012,7 +1201,16 @@ Head? transferPumpHead({
   }
   final tankNode = net.nodeById(tank);
   if (tankNode == null || source == null) return null;
-  var h = elevationOf(tankNode) - elevationOf(source);
+  // Round 33 (hydraulics-3-3) — a MAINS-fed transfer (PDAM meter -> pompa
+  // dorong -> roof tank): no storage upstream, so the pump lifts from its
+  // own elevation (the mains pressure is unknown — `// VERIFY`, conservative)
+  // whenever that sits below the entry node (a meter leaf reads its ceiling).
+  final pumpNode = net.nodeById(mover.nodeId);
+  var base = elevationOf(source);
+  if (!_isStorageTank(source) && pumpNode != null) {
+    base = math.min(base, elevationOf(pumpNode));
+  }
+  var h = elevationOf(tankNode) - base;
   for (final e in path) {
     final sz = sizing[e.id];
     if (sz == null) continue;
@@ -1096,7 +1294,11 @@ final supplyMoverDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
   }
   if (unboosted != null) {
     final heads = seriesMoverHeads(
-        net: net, movers: movers, residual: unboosted, target: _targetResidual);
+        net: net,
+        movers: movers,
+        residual: unboosted,
+        target: _targetResidual,
+        sizing: sizing);
     for (final m in movers) {
       final h = heads[m.nodeId];
       if (h == null || h.meters <= 0) continue;

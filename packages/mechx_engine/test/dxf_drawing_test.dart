@@ -71,8 +71,10 @@ void main() {
       expect(d.circles.single.radius, 10);
       expect(d.arcs.single.startDeg, 0);
       expect(d.arcs.single.endDeg, 90);
-      // circle spans 40..60, arc spans -5..5 → overall -5..60.
-      expect(d.bounds.minX, -5);
+      // circle spans 40..60; the 0..90° quarter arc of r 5 spans x 0..5 /
+      // y 0..5 (Round 33: its EXACT extent, no longer the full circle's
+      // -5..5) → overall 0..60.
+      expect(d.bounds.minX, 0);
       expect(d.bounds.maxX, 60);
     });
   });

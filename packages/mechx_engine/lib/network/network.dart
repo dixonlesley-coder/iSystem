@@ -165,6 +165,38 @@ enum NodeComponent {
   acDucted,
 }
 
+/// Round 33 (hydraulics-3-1) — the ONE non-demand TERMINAL predicate: a
+/// fixture-role component that is not a draw-off point — a cleanout (an
+/// access fitting), an air vent (an air-release valve / AAV), a fire
+/// extinguisher (not piped). The sizer gives it no load and the pressure
+/// solves owe it no residual (it is never a delivery / critical node).
+bool isNonDemandTerminal(NodeComponent? c) =>
+    c == NodeComponent.cleanout ||
+    c == NodeComponent.airVent ||
+    c == NodeComponent.fireExtinguisher;
+
+/// Round 33 (hydraulics-3-3) — INLINE DEVICES: a valve, meter, strainer or
+/// expansion tank is never a draw-off point, even drawn at a run's end (a
+/// PDAM water meter is the supply ENTRY of a mains-fed system).
+const Set<NodeComponent> kInlineDeviceComponents = {
+  NodeComponent.waterMeter,
+  NodeComponent.expansionTank,
+  NodeComponent.gateValve,
+  NodeComponent.checkValve,
+  NodeComponent.prv,
+  NodeComponent.strainer,
+  NodeComponent.balancingValve,
+};
+
+/// Round 33 — whether [c] is one of [kInlineDeviceComponents].
+bool isInlineDeviceComponent(NodeComponent? c) =>
+    c != null && kInlineDeviceComponents.contains(c);
+
+/// Round 33 (hydraulics-3-1) — a DELIVERY fixture: a fixture-role node that
+/// is a real draw-off point (not a [isNonDemandTerminal]).
+bool isDeliveryFixture(NetNode? n) =>
+    n != null && n.role == NodeRole.fixture && !isNonDemandTerminal(n.component);
+
 /// Round 31 (hvac-5-1) — the ONE supply-air terminal predicate: a supply
 /// diffuser or a LINEAR (slot) diffuser. Both carry the delivered airflow of
 /// a conditioned room; every room-served / stale / Auto-place test reads this
@@ -411,6 +443,14 @@ class NetNode {
   /// core never reads it; null ⇒ byte-identical.
   final String? autoPlacedRoomId;
 
+  /// Round 33 (engineer-walkthrough-equipment-tag-global-ordinal) — the
+  /// equipment TAG NUMBER this node was minted with, per tag prefix (the 1 of
+  /// `P-01`), so the first pump is P-01 however many fixtures were drawn
+  /// before it. Assigned once at mint from a per-prefix sequence that never
+  /// re-issues a deleted number (C6 stability); null on a legacy node (its
+  /// tag still derives from the node-id ordinal — unchanged). Additive.
+  final int? tagNo;
+
   const NetNode({
     required this.id,
     required this.sheetId,
@@ -431,6 +471,7 @@ class NetNode {
     this.faceHeightMm,
     this.fittingType,
     this.autoPlacedRoomId,
+    this.tagNo,
   });
 
   NetNode copyWith({
@@ -461,6 +502,8 @@ class NetNode {
     bool clearJunctionFitting = false,
     String? autoPlacedRoomId,
     bool clearAutoPlacedRoomId = false,
+    int? tagNo,
+    bool clearTagNo = false,
   }) =>
       NetNode(
         id: id,
@@ -492,6 +535,7 @@ class NetNode {
         autoPlacedRoomId: clearAutoPlacedRoomId
             ? null
             : (autoPlacedRoomId ?? this.autoPlacedRoomId),
+        tagNo: clearTagNo ? null : (tagNo ?? this.tagNo),
       );
 }
 

@@ -87,6 +87,77 @@ bool _legLeadsToEjector(Network net, NetEdge edge, String fromId,
   }
 }
 
+/// Round 33 (regression-ejector-pit-valve-reverses-force-main) — whether
+/// [n] is a SUCTION / discharge pass-through node: a main-role node with no
+/// component or an inline device ([kEjectorForceMainInlineComponents]).
+bool isEjectorPassThroughNode(NetNode? n) =>
+    n != null &&
+    n.role == NodeRole.main &&
+    (n.component == null ||
+        kEjectorForceMainInlineComponents.contains(n.component));
+
+/// Round 33 (regression-ejector-pit-valve-reverses-force-main) — the PIT the
+/// drawn ejector [pumpId] draws from: each of the pump's drainage legs walked
+/// through degree-2 pass-through nodes ([isEjectorPassThroughNode] — a
+/// suction gate valve, a strainer, a bare bend) until it reaches a ground
+/// tank. The pit's `chain` lists the leg's edges from the PIT to the pump
+/// with each edge's pit-side node (`from`). Several legs reaching a tank ⇒
+/// the shortest chain (a pit drawn straight on the pump wins), then the
+/// lower floor, then the id. Null when no leg reaches a ground tank. Pure;
+/// shared by [ejectorForceMainSteps], [duplexEjectorSets] and the sizer's
+/// ejector-pit pass-through rule (one definition of "the pit").
+({String pitId, List<({NetEdge edge, String from})> chain})? ejectorPitOf(
+    Network net, String pumpId) {
+  ({String pitId, List<({NetEdge edge, String from})> chain})? best;
+  for (final start in net.edgesAt(pumpId)) {
+    if (start.service != ServiceType.drainage) continue;
+    var here = pumpId;
+    var edge = start;
+    final walked = <({NetEdge edge, String to})>[];
+    final seen = <String>{pumpId};
+    String? pit;
+    while (true) {
+      final next = edge.fromId == here ? edge.toId : edge.fromId;
+      if (!seen.add(next)) break;
+      walked.add((edge: edge, to: next));
+      final nn = net.nodeById(next);
+      if (nn == null) break;
+      if (nn.component == NodeComponent.groundTank) {
+        pit = next;
+        break;
+      }
+      if (!isEjectorPassThroughNode(nn)) break;
+      final onward = [
+        for (final e in net.edgesAt(next))
+          if (e.service == ServiceType.drainage && e.id != edge.id) e,
+      ];
+      if (onward.length != 1) break;
+      here = next;
+      edge = onward.single;
+    }
+    if (pit == null) continue;
+    // Pit -> pump order, each edge with its pit-side node.
+    final chain = <({NetEdge edge, String from})>[
+      for (var i = walked.length - 1; i >= 0; i--)
+        (edge: walked[i].edge, from: walked[i].to),
+    ];
+    final cand = (pitId: pit, chain: chain);
+    final b = best;
+    if (b == null) {
+      best = cand;
+      continue;
+    }
+    var c = chain.length.compareTo(b.chain.length);
+    if (c == 0) {
+      c = (net.nodeById(pit)?.floorIndex ?? 0)
+          .compareTo(net.nodeById(b.pitId)?.floorIndex ?? 0);
+    }
+    if (c == 0) c = pit.compareTo(b.pitId);
+    if (c < 0) best = cand;
+  }
+  return best;
+}
+
 /// The drawn ejector pumps of [net]: a pump / booster set carrying a DRAINAGE
 /// edge and no supply / fire edge. Sorted by id.
 List<String> drawnEjectorPumpIds(Network net) {
@@ -126,7 +197,12 @@ List<({NetEdge edge, String to})> ejectorForceMainSteps(
   bool isPit(String id) =>
       net.nodeById(id)?.component == NodeComponent.groundTank;
   final ejectorIds = drawnEjectorPumpIds(net).toSet();
+  // Round 33 — the pit may sit behind a suction valve / strainer: its whole
+  // suction chain is skipped (never walked as the force main).
+  final pitOf = ejectorPitOf(net, pumpId);
+  final suctionEdgeId = pitOf?.chain.last.edge.id;
   final pitIds = <String>{
+    if (pitOf != null) pitOf.pitId,
     for (final e in incident)
       if (isPit(e.fromId == pumpId ? e.toId : e.fromId))
         e.fromId == pumpId ? e.toId : e.fromId,
@@ -134,7 +210,7 @@ List<({NetEdge edge, String to})> ejectorForceMainSteps(
   final steps = <({NetEdge edge, String to})>[];
   for (final start in incident) {
     final far = start.fromId == pumpId ? start.toId : start.fromId;
-    if (isPit(far)) continue;
+    if (isPit(far) || start.id == suctionEdgeId) continue;
     var edge = start;
     var here = pumpId;
     final seen = <String>{pumpId};
@@ -185,18 +261,27 @@ const double kEjectorForceMainMinBoreMm = 50.0;
 /// with each edge's upstream (pump-side) node.
 class DuplexEjectorLeg {
   final String pumpId;
-  final String pitEdgeId;
+
+  /// Round 33 — the leg's SUCTION chain, pit -> pump (one edge for a pit
+  /// drawn straight on the pump; more through a suction valve / strainer),
+  /// with each edge's pit-side node.
+  final List<String> pitEdgeIds;
+  final List<String> pitFromIds;
   final List<String> dischargeEdgeIds;
   final List<String> dischargeFromIds;
   const DuplexEjectorLeg({
     required this.pumpId,
-    required this.pitEdgeId,
+    required this.pitEdgeIds,
+    required this.pitFromIds,
     required this.dischargeEdgeIds,
     required this.dischargeFromIds,
   });
 
-  /// Every edge of the leg (pit edge first).
-  List<String> get edgeIds => [pitEdgeId, ...dischargeEdgeIds];
+  /// The suction edge touching the pump.
+  String get pitEdgeId => pitEdgeIds.last;
+
+  /// Every edge of the leg (suction chain first).
+  List<String> get edgeIds => [...pitEdgeIds, ...dischargeEdgeIds];
 }
 
 /// A duplex ('pompa sewage duplex') ejector set: two or more drawn ejectors
@@ -237,15 +322,12 @@ List<DuplexEjectorSet> duplexEjectorSets(Network net) {
     ];
     if (drain.length != 2) continue;
     String other(NetEdge e, String id) => e.fromId == id ? e.toId : e.fromId;
-    final pitEdges = [
-      for (final e in drain)
-        if (net.nodeById(other(e, pumpId))?.component ==
-            NodeComponent.groundTank)
-          e,
-    ];
-    if (pitEdges.length != 1) continue;
-    final pitEdge = pitEdges.single;
-    final pit = other(pitEdge, pumpId);
+    // Round 33 — the pit through its suction chain (a suction gate valve /
+    // strainer between pit and pump no longer breaks the set).
+    final pitOf = ejectorPitOf(net, pumpId);
+    if (pitOf == null) continue;
+    final pitEdge = pitOf.chain.last.edge;
+    final pit = pitOf.pitId;
     var edge = drain.firstWhere((e) => e.id != pitEdge.id);
     var here = pumpId;
     final ids = <String>[];
@@ -280,7 +362,8 @@ List<DuplexEjectorSet> duplexEjectorSets(Network net) {
       header: header,
       leg: DuplexEjectorLeg(
         pumpId: pumpId,
-        pitEdgeId: pitEdge.id,
+        pitEdgeIds: [for (final c in pitOf.chain) c.edge.id],
+        pitFromIds: [for (final c in pitOf.chain) c.from],
         dischargeEdgeIds: ids,
         dischargeFromIds: froms,
       ),

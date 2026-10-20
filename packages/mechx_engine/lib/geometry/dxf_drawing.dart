@@ -106,12 +106,24 @@ class DxfDrawing {
   /// surfaces it; never a silent partial plan.
   final bool truncated;
 
+  /// Round 33 (import-robustness-2-5) — true when the FILE itself ends
+  /// before its ENTITIES section does (no `0/ENDSEC`: an interrupted copy /
+  /// a killed conversion): the drawn plan may be missing geometry. Distinct
+  /// from [truncated] (the parser's own budget).
+  final bool incomplete;
+
+  /// Round 33 (import-robustness-2-1) — the HEADER `$INSUNITS` code (0 =
+  /// unitless / absent; 1 in, 2 ft, 4 mm, 5 cm, 6 m — [dxfUnitMetres]).
+  final int insUnits;
+
   const DxfDrawing({
     required this.polylines,
     required this.circles,
     required this.arcs,
     required this.bounds,
     this.truncated = false,
+    this.incomplete = false,
+    this.insUnits = 0,
   });
 
   bool get isEmpty => polylines.isEmpty && circles.isEmpty && arcs.isEmpty;
@@ -233,6 +245,10 @@ class _Acc {
   /// [DxfDrawing.truncated]).
   bool truncated = false;
 
+  /// Round 33 (import-robustness-2-3) — frozen / off layer names (never
+  /// drawn, never in the extents). Shared by the bounds-only scratch.
+  Set<String> hiddenLayers = const {};
+
   static bool _finitePt(DxfPoint p) => p.x.isFinite && p.y.isFinite;
 
   void _grow(double x, double y) {
@@ -290,11 +306,86 @@ class _Acc {
       arcs.add(a);
       count++;
     }
-    // Conservative box: the full circle (cheap, never under-estimates).
-    _grow(a.center.x - a.radius, a.center.y - a.radius);
-    _grow(a.center.x + a.radius, a.center.y + a.radius);
+    // Round 33 (import-robustness-2-2) — the arc's EXACT extent: both
+    // endpoints plus every axis extreme (0 / 90 / 180 / 270°) inside the CCW
+    // sweep; the full-circle box only for a sweep of 360° or more. The old
+    // full-circle box let a large-radius facade / road arc collapse the plan
+    // into a corner of the sheet.
+    final ext = dxfArcExtent(a);
+    _grow(ext.minX, ext.minY);
+    _grow(ext.maxX, ext.maxY);
   }
 }
+
+/// Round 33 (import-robustness-2-2) — the exact axis-aligned extent of [a]:
+/// its two endpoints plus each axis-extreme angle (0 / 90 / 180 / 270°) the
+/// CCW sweep [DxfArc.startDeg] → [DxfArc.endDeg] passes; the full circle's box
+/// when the sweep is 360° or more. Pure.
+DxfBounds dxfArcExtent(DxfArc a) {
+  final cx = a.center.x, cy = a.center.y, r = a.radius.abs();
+  var sweep = a.endDeg - a.startDeg;
+  if (sweep >= 360.0 - 1e-12) {
+    return DxfBounds(cx - r, cy - r, cx + r, cy + r);
+  }
+  sweep = ((sweep % 360) + 360) % 360;
+  if (sweep == 0 && a.endDeg != a.startDeg) {
+    return DxfBounds(cx - r, cy - r, cx + r, cy + r);
+  }
+  final start = ((a.startDeg % 360) + 360) % 360;
+  // Exact trig at the quadrant angles (cos 90° is 6e-17 in floating point).
+  double cosD(double deg) {
+    final q = deg / 90.0;
+    if ((q - q.roundToDouble()).abs() < 1e-12) {
+      return const [1.0, 0.0, -1.0, 0.0][q.round() % 4];
+    }
+    return math.cos(deg * math.pi / 180.0);
+  }
+
+  double sinD(double deg) => cosD(deg - 90.0);
+  double px(double deg) => cx + r * cosD(deg);
+  double py(double deg) => cy + r * sinD(deg);
+  var minX = math.min(px(start), px(start + sweep));
+  var maxX = math.max(px(start), px(start + sweep));
+  var minY = math.min(py(start), py(start + sweep));
+  var maxY = math.max(py(start), py(start + sweep));
+  for (var k = 0; k < 8; k++) {
+    final ang = k * 90.0; // 0..630 covers start + sweep < 720
+    if (ang < start || ang > start + sweep) continue;
+    switch (k % 4) {
+      case 0:
+        maxX = cx + r;
+      case 1:
+        maxY = cy + r;
+      case 2:
+        minX = cx - r;
+      case 3:
+        minY = cy - r;
+    }
+  }
+  return DxfBounds(minX, minY, maxX, maxY);
+}
+
+/// Round 33 (import-robustness-2-1) — metres per drawing unit for a DXF
+/// `$INSUNITS` [code]; null for unitless (0) or an unrecognised code.
+double? dxfUnitMetres(int code) => switch (code) {
+      1 => 0.0254, // inches
+      2 => 0.3048, // feet
+      4 => 0.001, // millimetres
+      5 => 0.01, // centimetres
+      6 => 1.0, // metres
+      7 => 1000.0, // kilometres
+      8 => 2.54e-8, // microinches
+      9 => 2.54e-5, // mils
+      10 => 0.9144, // yards
+      _ => null,
+    };
+
+/// Round 33 (import-robustness-2-8) — true when [contents] is a BINARY DXF
+/// (the `AutoCAD Binary DXF` sentinel AutoCAD's DXFOUT can still write):
+/// this reader handles ASCII DXF only, so the import says so instead of
+/// 'no importable geometry'.
+bool isBinaryDxf(String contents) =>
+    contents.startsWith('AutoCAD Binary DXF');
 
 /// Parse a DXF document's text [contents] into a [DxfDrawing]. Returns `null`
 /// when the file contains no drawable geometry (caller surfaces a friendly
@@ -304,7 +395,7 @@ DxfDrawing? parseDxf(String contents) {
   if (pairs.isEmpty) return null;
 
   final blocks = _collectBlocks(pairs);
-  final acc = _Acc();
+  final acc = _Acc()..hiddenLayers = _hiddenLayers(pairs);
 
   // Walk the top-level ENTITIES section (identity transform).
   final ent = _sectionRange(pairs, 'ENTITIES');
@@ -313,10 +404,22 @@ DxfDrawing? parseDxf(String contents) {
         pairs, ent.start, ent.end, _Xform.identity, blocks, 0, acc, const {});
   } else {
     // Some exporters omit the section wrapper — parse the whole stream as a
-    // best-effort fallback (block defs are still skipped via the depth/zero
-    // base handling below).
-    _parseEntities(
-        pairs, 0, pairs.length, _Xform.identity, blocks, 0, acc, const {});
+    // best-effort fallback. Round 33 (import-robustness-2-7): the BLOCKS
+    // section is EXCLUDED (its bodies are definitions, drawn only through an
+    // INSERT; walking them drew every block at its local origin), and so are
+    // the HEADER / TABLES / OBJECTS / CLASSES sections.
+    var from = 0;
+    for (final r in _sectionsToSkip(pairs)) {
+      if (r.start > from) {
+        _parseEntities(
+            pairs, from, r.start, _Xform.identity, blocks, 0, acc, const {});
+      }
+      from = r.end;
+    }
+    if (from < pairs.length) {
+      _parseEntities(
+          pairs, from, pairs.length, _Xform.identity, blocks, 0, acc, const {});
+    }
   }
 
   if (acc.polylines.isEmpty && acc.circles.isEmpty && acc.arcs.isEmpty) {
@@ -328,14 +431,90 @@ DxfDrawing? parseDxf(String contents) {
     arcs: acc.arcs,
     bounds: DxfBounds(acc.minX, acc.minY, acc.maxX, acc.maxY),
     truncated: acc.truncated,
+    incomplete: ent != null && !ent.terminated,
+    insUnits: _headerInt(pairs, r'$INSUNITS') ?? 0,
   );
+}
+
+/// Round 33 — every non-ENTITIES section (BLOCKS, HEADER, TABLES, OBJECTS,
+/// CLASSES, THUMBNAILIMAGE) as a [start-of-SECTION, past-ENDSEC) range, in
+/// stream order.
+List<_Range> _sectionsToSkip(List<_Pair> pairs) {
+  final out = <_Range>[];
+  for (var i = 0; i < pairs.length; i++) {
+    if (pairs[i].code != 0 || pairs[i].value.trim() != 'SECTION') continue;
+    if (i + 1 >= pairs.length || pairs[i + 1].code != 2) continue;
+    if (pairs[i + 1].value.trim() == 'ENTITIES') continue;
+    var j = i + 2;
+    while (j < pairs.length &&
+        !(pairs[j].code == 0 && pairs[j].value.trim() == 'ENDSEC')) {
+      j++;
+    }
+    final end = j < pairs.length ? j + 1 : pairs.length;
+    out.add(_Range(i, end));
+    i = end - 1;
+  }
+  return out;
+}
+
+/// Round 33 (import-robustness-2-1) — the integer value (group 70) of the
+/// HEADER variable [name] (`9/<name>`), else null.
+int? _headerInt(List<_Pair> pairs, String name) {
+  final header = _sectionRange(pairs, 'HEADER');
+  if (header == null) return null;
+  for (var i = header.start; i < header.end; i++) {
+    if (pairs[i].code == 9 && pairs[i].value.trim() == name) {
+      for (var j = i + 1; j < header.end && pairs[j].code != 9; j++) {
+        if (pairs[j].code == 70) return int.tryParse(pairs[j].value.trim());
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+/// Round 33 (import-robustness-2-3) — the layers CAD does NOT display: a
+/// LAYER table entry FROZEN (70 bit 1) or OFF (62 < 0). Entities on them are
+/// neither drawn nor counted in the extents (the classic 'zoom extents'
+/// stray object on an old frozen layer).
+Set<String> _hiddenLayers(List<_Pair> pairs) {
+  final tables = _sectionRange(pairs, 'TABLES');
+  if (tables == null) return const {};
+  final out = <String>{};
+  var i = tables.start;
+  while (i < tables.end) {
+    if (pairs[i].code == 0 && pairs[i].value.trim() == 'LAYER') {
+      String? name;
+      var flags = 0;
+      var color = 7;
+      var j = i + 1;
+      while (j < tables.end && pairs[j].code != 0) {
+        switch (pairs[j].code) {
+          case 2:
+            name = pairs[j].value.trim();
+          case 70:
+            flags = int.tryParse(pairs[j].value.trim()) ?? 0;
+          case 62:
+            color = int.tryParse(pairs[j].value.trim()) ?? 7;
+        }
+        j++;
+      }
+      if (name != null && ((flags & 1) != 0 || color < 0)) out.add(name);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return out;
 }
 
 /// Split the raw text into (code, value) pairs. Strict DXF is exactly one code
 /// line then one value line; we resync past stray blank/garbage lines so a
 /// slightly malformed file still reads.
 List<_Pair> _tokenize(String contents) {
-  final lines = contents.split('\n');
+  // Round 33 (import-robustness-2-8) — CRLF, LF and classic-Mac CR-only
+  // line ends all tokenise.
+  final lines = contents.split(RegExp(r'\r\n|\n|\r'));
   final pairs = <_Pair>[];
   var i = 0;
   while (i + 1 < lines.length) {
@@ -353,7 +532,11 @@ List<_Pair> _tokenize(String contents) {
 class _Range {
   final int start;
   final int end; // exclusive
-  const _Range(this.start, this.end);
+
+  /// Round 33 — false when the section ran to the end of the stream with no
+  /// `0/ENDSEC` (a cut-off file).
+  final bool terminated;
+  const _Range(this.start, this.end, {this.terminated = true});
 }
 
 /// Find the [start, end) pair-index range INSIDE a named section (between the
@@ -371,7 +554,7 @@ _Range? _sectionRange(List<_Pair> pairs, String name) {
             return _Range(start, j);
           }
         }
-        return _Range(start, pairs.length);
+        return _Range(start, pairs.length, terminated: false);
       }
     }
   }
@@ -438,6 +621,7 @@ void _parseEntities(
   _Acc acc,
   Set<String> ancestors,
 ) {
+  final hidden = acc.hiddenLayers;
   var i = start;
   while (i < end) {
     if (pairs[i].code != 0) {
@@ -456,6 +640,22 @@ void _parseEntities(
     // the layout's frame / title block, not the plan. Only checked at the top
     // level: block contents inherit the space of the INSERT that places them.
     final paper = depth == 0 && _first(body, 67) == 1;
+    // Round 33 (import-robustness-2-3) — an entity on a FROZEN / OFF layer is
+    // not displayed by CAD, so it is neither drawn nor counted in the
+    // extents. Block contents on layer '0' take the INSERT's layer, which is
+    // visible whenever the INSERT itself was expanded, so only a NAMED layer
+    // inside a block can hide its entity.
+    if (hidden.isNotEmpty) {
+      final layer = _firstStr(body, 8) ?? '0';
+      final inherits = depth > 0 && layer == '0';
+      if (!inherits && hidden.contains(layer)) {
+        if (type == 'POLYLINE') {
+          j = _emitOldPolyline(pairs, j, end, xform, false, acc, emit: false);
+        }
+        i = j;
+        continue;
+      }
+    }
 
     switch (type) {
       case 'LINE':
@@ -663,7 +863,8 @@ DxfBounds? _blockExtent(
   if (acc.blockExtents.containsKey(name)) return acc.blockExtents[name];
   // Reserve the slot first (a corrupt self-cycle can't recurse forever).
   acc.blockExtents[name] = null;
-  final scratch = _Acc._boundsOnly(acc.blockExtents);
+  final scratch = _Acc._boundsOnly(acc.blockExtents)
+    ..hiddenLayers = acc.hiddenLayers;
   _parseEntities(block.pairs, 0, block.pairs.length, _Xform.identity, blocks,
       depth + 1, scratch, nested);
   final ext = scratch._has

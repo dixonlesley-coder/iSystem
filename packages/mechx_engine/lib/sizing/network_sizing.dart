@@ -26,6 +26,7 @@ import '../network/hardy_cross.dart';
 import '../network/network.dart';
 import '../standards/sni.dart';
 import '../units.dart';
+import 'drainage_advisory.dart' show effectiveDrainageSlope, laidGravitySlope;
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'ejector.dart' as ejector;
@@ -614,10 +615,17 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
 /// stays true — the same gate the DFU path itself applies (see
 /// [_sanitaryEdgeSizing]). Default null ⇒ the pure velocity verdict, i.e.
 /// byte-identical for every existing caller.
+///
+/// Round 33 r2 — [edge] (when known) picks the laid fall through the ONE
+/// [laidGravitySlope] rule the auto-sizer ([_sanitaryEdgeSizing]) reads, so a
+/// hand-overridden drainage RISER keeps the project slope exactly like an
+/// auto-sized one (only a drainage RUN is steepened to its own minimum
+/// fall). Null ⇒ treated as a run (every in-engine caller passes its edge).
 EdgeSizing applySizeOverride(
   EdgeSizing sizing,
   Diameter override, {
   SizingContext? ctx,
+  NetEdge? edge,
   Diameter? codeMinimum,
   Diameter? minimumCompliant,
   bool manningRun = false,
@@ -639,7 +647,14 @@ EdgeSizing applySizeOverride(
     velocity = manningVelocity(
       manningN: ctx.drainageManningN,
       hydraulicRadius: Length(override.meters / 4.0),
-      slope: ctx.drainageSlope,
+      // Round 33 — a drainage pipe is laid at least at its own minimum fall.
+      slope: !isDrainage
+          ? ctx.drainageSlope
+          : edge != null
+              ? laidGravitySlope(
+                  edge, ctx.drainageSlope, override.inMillimeters)
+              : effectiveDrainageSlope(
+                  ctx.drainageSlope, override.inMillimeters),
     );
   } else {
     // v = Q / A at the overridden diameter (continuity); see velocityFromFlow.
@@ -699,8 +714,9 @@ Map<String, EdgeSizing> sizeNetwork(
     }
     final sized = sizeEdge(edge, flow, ctx);
     final override = sizeOverrides[edge.id];
-    result[edge.id] =
-        override == null ? sized : applySizeOverride(sized, override, ctx: ctx);
+    result[edge.id] = override == null
+        ? sized
+        : applySizeOverride(sized, override, ctx: ctx, edge: edge);
   }
   return result;
 }
@@ -803,8 +819,33 @@ String _pickComponentRoot({
     final comp = nodeOf(id)?.component;
     if (comp == null) return false;
     if (comp != NodeComponent.groundTank) return true;
-    return neighbours(id).any((m) =>
-        roleOf(m) == NodeRole.plant && isMoverComponent(nodeOf(m)?.component));
+    // Round 33 (regression-ejector-pit-valve-reverses-force-main) — the
+    // mover may sit behind a suction gate valve / strainer / bare bend: walk
+    // each leg through degree-2 pass-through nodes (the SAME rule as
+    // `ejector.ejectorPitOf`) to a pump / booster set.
+    bool leadsToMover(String m) {
+      var prev = id;
+      var cur = m;
+      final seen = <String>{id};
+      while (seen.add(cur)) {
+        final n = nodeOf(cur);
+        if (roleOf(cur) == NodeRole.plant && isMoverComponent(n?.component)) {
+          return true;
+        }
+        if (!ejector.isEjectorPassThroughNode(n) || degree(cur) != 2) {
+          return false;
+        }
+        final p = prev;
+        final next =
+            neighbours(cur).firstWhere((x) => x != p, orElse: () => '');
+        if (next.isEmpty) return false;
+        prev = cur;
+        cur = next;
+      }
+      return false;
+    }
+
+    return neighbours(id).any(leadsToMover);
   }
 
   // Round 14 (mech-props-3 recirc-pump-root / inline-booster-fan-phantom) — on
@@ -850,7 +891,27 @@ String _pickComponentRoot({
       final c = plantRank(a).compareTo(plantRank(b));
       return c != 0 ? c : byHeight(a, b);
     });
-  if (plants.isNotEmpty) return plants.first;
+  if (plants.isNotEmpty) {
+    // Round 33 (hydraulics-3-3) — a mains-fed roof tank (PDAM meter ->
+    // [pompa dorong] -> riser -> roof tank -> downfeed): a degree-1 WATER
+    // METER is the supply ENTRY, and an INLINE roof tank is storage the
+    // flow passes through. Rooting at the tank sized the fill line flowing
+    // BACK to the meter (a phantom draw-off there) and left the fill pump a
+    // bogus booster instead of a transfer pump.
+    final best = nodeOf(plants.first);
+    if ((service == ServiceType.coldWater || service == ServiceType.hotWater) &&
+        best?.component == NodeComponent.roofTank &&
+        degree(plants.first) >= 2) {
+      final meters = [
+        for (final id in leaves)
+          if (nodeOf(id)?.component == NodeComponent.waterMeter &&
+              !demandKeys.contains(id))
+            id,
+      ]..sort(byHeight);
+      if (meters.isNotEmpty) return meters.first;
+    }
+    return plants.first;
+  }
 
   int drawnRank(String id) => drawnFromIds.contains(id) ? 0 : 1;
   final supply = !gravity;
@@ -1351,12 +1412,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
   };
   final solveNet = standbyIds.isEmpty
       ? net
-      : Network(
-          nodes: net.nodes,
-          edges: [
-            for (final e in net.edges)
-              if (!standbyIds.contains(e.id)) e,
-          ]);
+      : Network(nodes: net.nodes, edges: [
+          for (final e in net.edges)
+            if (!standbyIds.contains(e.id)) e,
+        ]);
   final result = _autoSizeNetworkCore(
     solveNet,
     ctx,
@@ -1391,23 +1450,60 @@ Map<String, EdgeSizing> autoSizeNetwork(
   // floors already applied stay (the larger wins); a hand override is never
   // touched (its own `belowCodeMinimum` judge applies).
   const minBore = ejector.kEjectorForceMainMinBoreMm;
-  for (final pumpId in ejector.drawnEjectorPumpIds(solveNet)) {
-    for (final step in ejector.ejectorForceMainSteps(solveNet, pumpId)) {
-      final id = step.edge.id;
-      final sized = result[id];
-      if (sized == null ||
-          sizeOverrides.containsKey(id) ||
-          sized.service != ServiceType.drainage ||
-          sized.diameter.inMillimeters >= minBore - 1e-9) {
-        continue;
+  // Round 33 (regression-force-main-floor-reducer-downstream) — gravity
+  // drainage DOWNSTREAM of a force main carries the pumped discharge (and
+  // its 2 in solids) too, so it is never smaller than the force main (IPC
+  // 704.2: no reduction in the direction of flow). node -> the drainage
+  // edges whose SIZED flow leaves it.
+  final leaving = <String, List<NetEdge>>{};
+  for (final e in solveNet.edges) {
+    if (e.service != ServiceType.drainage) continue;
+    final from = result[e.id]?.flowFromId;
+    if (from != null) (leaving[from] ??= []).add(e);
+  }
+  void floorEdge(NetEdge edge, {required bool forceMain}) {
+    final id = edge.id;
+    final sized = result[id];
+    if (sized == null ||
+        sized.service != ServiceType.drainage ||
+        sized.diameter.inMillimeters >= minBore - 1e-9) {
+      return;
+    }
+    if (sizeOverrides.containsKey(id)) {
+      // A hand pick below the bore it receives: flagged, never resized (a
+      // force-main step override keeps its own judge, as before).
+      if (!forceMain) {
+        result[id] = sized.withGravityFlags(belowMinimum: true);
       }
-      final raised = _sanitaryEdgeSizing(step.edge, Diameter.mm(minBore), ctx,
-          codeMinimum: Diameter.mm(minBore),
-          overCapacity: sized.overCapacity);
-      result[id] = raised
-          .withGravityFlags(raised: sized.stackRaisedForBranch)
-          .withLoopUnbalanced(sized.loopUnbalanced)
-          .withFlowFrom(sized.flowFromId);
+      return;
+    }
+    final raised = _sanitaryEdgeSizing(edge, Diameter.mm(minBore), ctx,
+        codeMinimum: Diameter.mm(minBore), overCapacity: sized.overCapacity);
+    result[id] = raised
+        .withGravityFlags(raised: forceMain ? sized.stackRaisedForBranch : true)
+        .withLoopUnbalanced(sized.loopUnbalanced)
+        .withFlowFrom(sized.flowFromId);
+  }
+
+  for (final pumpId in ejector.drawnEjectorPumpIds(solveNet)) {
+    final steps = ejector.ejectorForceMainSteps(solveNet, pumpId);
+    for (final step in steps) {
+      floorEdge(step.edge, forceMain: true);
+    }
+    if (steps.isEmpty) continue;
+    final stepIds = {for (final s in steps) s.edge.id};
+    // Walk the sized flow from the force main's last node to the outfall.
+    var at = steps.last.to;
+    final seenNodes = <String>{pumpId};
+    while (seenNodes.add(at)) {
+      final out = [
+        for (final e in leaving[at] ?? const <NetEdge>[])
+          if (!stepIds.contains(e.id)) e,
+      ];
+      if (out.length != 1) break;
+      final e = out.single;
+      floorEdge(e, forceMain: false);
+      at = e.fromId == at ? e.toId : e.fromId;
     }
   }
 
@@ -1440,7 +1536,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
       final override = sizeOverrides[id];
       if (override != null) {
         m = applySizeOverride(m, override,
-                ctx: ctx, codeMinimum: m.diameter, minimumCompliant: m.diameter)
+                ctx: ctx,
+                edge: edge,
+                codeMinimum: m.diameter,
+                minimumCompliant: m.diameter)
             .withFlowFrom(fromId);
       }
       result[id] = m;
@@ -1450,7 +1549,13 @@ Map<String, EdgeSizing> autoSizeNetwork(
     }
 
     for (final leg in st.standby) {
-      mirror(leg.pitEdgeId, st.pitId, result[duty.pitEdgeId], duty.pitEdgeId);
+      // Round 33 — the suction chain (pit -> [valve] -> pump) mirrors the
+      // duty leg's edge by edge, oriented from the pit.
+      for (var i = 0; i < leg.pitEdgeIds.length; i++) {
+        final srcIds = duty.pitEdgeIds;
+        final srcId = srcIds[i < srcIds.length ? i : srcIds.length - 1];
+        mirror(leg.pitEdgeIds[i], leg.pitFromIds[i], result[srcId], srcId);
+      }
       for (var i = 0; i < leg.dischargeEdgeIds.length; i++) {
         final srcIds = duty.dischargeEdgeIds;
         final srcId = srcIds.isEmpty
@@ -1605,13 +1710,14 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     // and hand it the phantom default load.
     bool bearsDefaultDemand(String n) {
       final node = net.nodeById(n);
-      switch (node?.component) {
-        case NodeComponent.cleanout ||
-              NodeComponent.airVent ||
-              NodeComponent.fireExtinguisher:
-          return false;
-        default:
-          break;
+      // Round 33 — ONE non-demand predicate shared with the pressure solves
+      // (`isNonDemandTerminal`), and an INLINE DEVICE (meter, valve,
+      // strainer, expansion tank) is never a draw-off even at a run's end
+      // (hydraulics-3-3: a PDAM meter leaf drew a phantom default load and
+      // reversed the roof-tank fill line).
+      if (isNonDemandTerminal(node?.component) ||
+          isInlineDeviceComponent(node?.component)) {
+        return false;
       }
       if (node?.role == NodeRole.plant) return false;
       if (degree(n) == 1) return true;
@@ -3187,6 +3293,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         // true; only an OVERSIZED pick is judged on velocity alone.
         : applySizeOverride(entry.value, override,
             ctx: ctx,
+            edge: net.edgeById(entry.key),
             codeMinimum: entry.value.diameter,
             // Round 17 (gravity-3-1) — the auto pick is the DFU / WC-count /
             // trap / stack≥branch floor, so a smaller hand pick is flagged.
@@ -3334,12 +3441,15 @@ EdgeSizing _sanitaryEdgeSizing(
   bool overCapacity = false,
 }) {
   final isVent = edge.service == ServiceType.vent;
+  // Round 33 — at the fall the run is LAID at (≥ its own self-cleansing
+  // minimum), the same figure the plan prints.
   final v = isVent
       ? const Velocity(0)
       : manningVelocity(
           manningN: ctx.drainageManningN,
           hydraulicRadius: Length(diameter.meters / 4.0),
-          slope: ctx.drainageSlope,
+          slope:
+              laidGravitySlope(edge, ctx.drainageSlope, diameter.inMillimeters),
         );
   return EdgeSizing(
     edgeId: edge.id,
@@ -3545,6 +3655,7 @@ void _clampGravityDownstreamOfOverrides({
       final raised = Diameter(need);
       result[e.id] = applySizeOverride(sized, raised,
               ctx: ctx,
+              edge: e,
               codeMinimum: raised,
               manningRun: e.service == ServiceType.rainwater &&
                   e.kind != EdgeKind.riser)
@@ -4436,7 +4547,8 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       feeders.add(l);
     }
     if (!allMovers) continue;
-    returnFedChainKeys.add(([for (final x in ch.edges) x.id]..sort()).join('\u0000'));
+    returnFedChainKeys
+        .add(([for (final x in ch.edges) x.id]..sort()).join('\u0000'));
     for (final l in feeders) {
       returnFedPumps.addAll(l.pumpIds);
     }
@@ -5852,8 +5964,8 @@ Map<String, double> _bridgeFarSideSums({
   return out;
 }
 
-final _airOpenBoundaryCache = Expando<
-    (List<NetNode>, List<NetEdge>, int, int, Set<String>)>(
+final _airOpenBoundaryCache =
+    Expando<(List<NetNode>, List<NetEdge>, int, int, Set<String>)>(
   'airOpenBoundaryLeaves',
 );
 

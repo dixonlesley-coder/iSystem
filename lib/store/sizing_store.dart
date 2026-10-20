@@ -340,11 +340,21 @@ final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
   for (final e in net.edges) {
     if (e.service != ServiceType.drainage) continue;
     if (e.kind == EdgeKind.riser) continue; // slope is a horizontal-branch rule
+    // Round 33 — judged at the fall the run is LAID at (the plan prints
+    // the same `laidGravitySlope`: >= its own self-cleansing minimum), so
+    // the advisory never contradicts the issued drawing.
+    final d = sizing[e.id]?.diameter.inMillimeters;
     out.addAll(drainageAdvisories(
       edgeId: e.id,
-      slope: slope,
-      diameterMm: sizing[e.id]?.diameter.inMillimeters,
+      slope: laidGravitySlope(e, slope, d),
+      diameterMm: d,
     ));
+    // Round 33 r2 — a typed project fall flatter than this run's own floor
+    // was overridden by the drawing: say so (the min-slope check above can
+    // no longer fire for a drainage run, by construction).
+    final steeper =
+        laidSteeperAdvisory(edge: e, projectSlope: slope, diameterMm: d);
+    if (steeper != null) out.add(steeper);
   }
   for (final arm in trapArmRuns(net: net, sizing: sizing, lengthOf: lengthOf)) {
     final d = sizing[arm.firstEdgeId]?.diameter.inMillimeters;

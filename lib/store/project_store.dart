@@ -1,6 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show dxfUnitMetres;
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -395,16 +396,23 @@ class ProjectController extends Notifier<ProjectState> {
   /// keeps its elevation. Sheets whose floor does not move are untouched (no
   /// spurious explicit entries). No undo entry — the caller's structural
   /// snapshot captured the sheets. No sheets ⇒ no-op.
+  ///
+  /// Round 33 (engineer-walkthrough-sheet-floors-pinned-on-stack-growth) — only
+  /// a sheet carrying WORK ([sheetIdsWithWork]) is pinned: an EMPTY sheet keeps
+  /// its rail-positional mapping, so importing a 5-page set onto a 3-level
+  /// project and then adding levels maps pages 4-5 onto the new floors 4-5
+  /// (it used to pin them all onto the old top floor).
   void _pinSheetFloors(int oldLevelCount) {
     final sheets = ref.read(sheetsControllerProvider);
     if (sheets.sheets.isEmpty) return;
     final levels = state.floors.length;
     final next = Map<String, int>.from(sheets.sheetFloors);
+    final withWork = sheetIdsWithWork(ref.read);
     var changed = false;
     for (final sheet in sheets.sheets) {
       final old = sheets.floorFor(sheet.id, oldLevelCount);
       final now = sheets.floorFor(sheet.id, levels);
-      if (old != now) {
+      if (old != now && withWork.contains(sheet.id)) {
         next[sheet.id] = old;
         changed = true;
       }
@@ -672,9 +680,25 @@ final mountingProvider = Provider<MountingHeights>(
 ///   * DXF → DXF with both import frames known: `mpp_to = mpp_from ×
 ///     k_from / k_to`, k = content px per DXF world unit (each DXF is
 ///     normalised to its own extent, so the same CAD drawing unit maps to a
-///     different pixel). Assumes both files share the CAD drawing unit
-///     (mm on an architectural plan). // VERIFY
+///     different pixel). Round 33 (import-robustness-2-1): when BOTH files
+///     declare a `$INSUNITS` drawing unit the scale is converted between them
+///     (`× u_to / u_from`, u = metres per drawing unit — a metre DXF beside
+///     a millimetre one is no longer 1000× off); when exactly ONE declares a
+///     unit the transfer is refused (null). With neither declared both files
+///     are assumed to share the unit (mm on an architectural plan) — unless
+///     their content frames differ WILDLY (Round 33 r2: one drawing's world
+///     extent >= [kUnitlessFrameRatioLimit] × the other's, the signature of a
+///     metre file beside a millimetre one), which is refused rather than
+///     guessed. // VERIFY
 ///   * anything mixed (PDF ↔ DXF), or a DXF without a recorded frame: null.
+/// Round 33 r2 (import-robustness-2-1) — the world-extent ratio between two
+/// UNITLESS DXF sheets at or beyond which [transferCalibration] refuses to
+/// assume a shared drawing unit: a metre file beside a millimetre one differs
+/// 1000×, metre / centimetre 100×, foot / mm ~305×, while two floors of one
+/// plan (or a plan beside a part plan) stay well inside 100×. A heuristic
+/// boundary, `// VERIFY notAnSniClause` — never a unit claim.
+const double kUnitlessFrameRatioLimit = 100.0;
+
 ScaleCalibration? transferCalibration(
   ScaleCalibration source, {
   required Sheet from,
@@ -685,7 +709,22 @@ ScaleCalibration? transferCalibration(
   if (fromDxf != toDxf) return null;
   final kFrom = from.dxfContentPerWorld, kTo = to.dxfContentPerWorld;
   if (kFrom == null || kTo == null) return null;
-  final mpp = source.metersPerPixel * kFrom / kTo;
+  final uFrom = dxfUnitMetres(from.dxfInsUnits ?? 0);
+  final uTo = dxfUnitMetres(to.dxfInsUnits ?? 0);
+  if ((uFrom == null) != (uTo == null)) return null;
+  if (uFrom == null && uTo == null) {
+    // k = content px per world unit, so kFrom / kTo is the ratio of the two
+    // drawings' world extents (to / from) — 1000 for m beside mm.
+    final frameRatio = kFrom / kTo;
+    if (!frameRatio.isFinite ||
+        frameRatio <= 0 ||
+        frameRatio >= kUnitlessFrameRatioLimit ||
+        frameRatio <= 1 / kUnitlessFrameRatioLimit) {
+      return null;
+    }
+  }
+  final unitRatio = (uFrom != null && uTo != null) ? uTo / uFrom : 1.0;
+  final mpp = source.metersPerPixel * kFrom / kTo * unitRatio;
   if (!mpp.isFinite || mpp <= 0) return null;
   return ScaleCalibration(mpp);
 }

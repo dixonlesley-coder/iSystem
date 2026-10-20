@@ -186,6 +186,8 @@ ProjectDocument buildDocument(ProviderReader read) {
     // they run ahead of the live ids (a deleted top id), so a reload never
     // re-mints a deleted node / room id.
     networkNextSeq: read(networkControllerProvider.notifier).persistedNextSeq,
+    // Round 33 — the equipment tag sequence when it runs ahead of the tags.
+    networkTagSeq: read(networkControllerProvider.notifier).persistedTagSeq,
     roomNextSeq: read(roomAreasProvider.notifier).persistedNextSeq,
   );
 }
@@ -251,6 +253,7 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   read(networkControllerProvider.notifier).loadNetwork(
     doc.network,
     nextSeq: doc.networkNextSeq,
+    tagSeq: doc.networkTagSeq,
     referencedIds: [
       for (final a in doc.settings.acknowledgedIssues) a.key,
       for (final p in doc.electrical?.panels ?? const <ElectricalPanel>[])

@@ -58,19 +58,19 @@ String _curveStr(BreakerCurve c) => switch (c) {
       BreakerCurve.d => 'D',
     };
 
-/// Pick the catalogue breaker SKU that best fits a sized breaker: the smallest
-/// standard rating that COVERS the sized rating, preferring the right device
-/// class (MCB/MCCB), pole count and trip curve. A coarse rating-only match would
-/// grab a 1-pole part for a 3-pole breaker now the catalogue carries the
-/// 1P–4P × B/C/D matrix, so a mismatch on class/poles/curve outweighs a smaller
-/// rating (penalty 1000/100/10). A part that simply doesn't declare an attribute
-/// is treated as compatible (no penalty). Returns null when nothing covers it.
+/// Pick the catalogue breaker SKU for a sized breaker.
 ///
-/// [minBreakingKa] is the prospective fault at the device's board (kA): a part
-/// whose declared `breakingKa` is BELOW it is heavily penalised (5000 — above a
-/// class mismatch, so a 36 kA MCCB beats a 6 kA MCB at an 18 kA bus) so the
-/// BOM never prices a device the schedule's kA token rules out (audit r8).
-/// Null / 0 ⇒ the kA-blind ranking, byte-identical.
+/// Round 33 (engineer-walkthrough-bom-breaker-upsized-above-cable-iz) — the
+/// RATING and the BREAKING CAPACITY are hard requirements, never ranking
+/// penalties: only a part of EXACTLY the sized rating qualifies (a higher
+/// rating is a protection change — the cable's In <= Iz was checked at the
+/// sized rating, so an MCCB 40A bought for an MCB 32A on a 36 A cable leaves
+/// the cable unprotected), and a part whose declared `breakingKa` is below
+/// [minBreakingKa] (the kA the schedule specifies) never qualifies. Among
+/// the qualifying parts the device class (MCB/MCCB), pole count and trip
+/// curve rank (penalty 1000/100/10; an RCCB 2000); a part that doesn't
+/// declare an attribute is treated as compatible. Returns null when nothing
+/// qualifies — the line stays unmatched on its `elec:breaker:` price key.
 String? matchBreakerSku(
   BreakerResult breaker,
   List<Part> parts, {
@@ -91,27 +91,17 @@ Part? _matchBreaker(
   final wantCurve = _curveStr(breaker.curve);
   final need = breaker.ratingA.amperes;
 
-  final candidates = parts
-      .where((p) =>
-          p.category == PartCategory.breaker &&
-          p.ratingA != null &&
-          p.ratingA! >= need)
+  final candidates = _exactRatingBreakers(parts, need)
+      .where((p) => !_kaShort(p, minBreakingKa))
       .toList();
   if (candidates.isEmpty) return null;
 
-  final needKa = minBreakingKa ?? 0;
   int penalty(Part p) {
     var s = 0;
-    final ka = p.breakingKa;
-    if (needKa > 0 && ka != null && ka + 1e-9 < needKa) s += 5000;
     // An RCCB (residual-current only) is never an overcurrent breaker.
     if (p.deviceClass == 'RCCB') s += 2000;
     if (p.deviceClass != null && p.deviceClass != wantClass) s += 1000;
     if (p.poles != null && p.poles != poles) s += 100;
-    // Round 19 — a different RATING is a protection change (the cable's
-    // In <= Iz was checked at the sized rating), so it costs more than a
-    // different trip curve.
-    if ((p.ratingA! - need).abs() > 1e-9) s += 50;
     if (p.curve != null && p.curve != wantCurve) s += 10;
     return s;
   }
@@ -159,6 +149,15 @@ int _wayBreakerPoles(ElectricalCircuitResult c,
   if (c.loadKind == LoadKind.feeder && boardThreePhase) return 2;
   return 1;
 }
+
+/// Round 33 — the catalogue breakers of EXACTLY [needA] (the sized rating).
+List<Part> _exactRatingBreakers(List<Part> parts, double needA) => [
+      for (final p in parts)
+        if (p.category == PartCategory.breaker &&
+            p.ratingA != null &&
+            (p.ratingA! - needA).abs() <= 1e-9)
+          p,
+    ];
 
 /// True when [p] declares a breaking capacity below [minBreakingKa].
 bool _kaShort(Part? p, double? minBreakingKa) {
@@ -363,7 +362,13 @@ List<BomLine> _panelLines(
     final needKa = specifiedKa ?? minBreakingKa;
     final kaTag = (needKa ?? 0) > 0 ? ' ${_fmt(_r1(needKa!))}kA' : '';
     final part = _matchBreaker(b, parts, poles: poles, minBreakingKa: needKa);
-    final short = _kaShort(part, needKa);
+    // Round 33 — parts of the sized rating exist but none reaches the
+    // specified kA: the line stays unmatched AND is flagged (never priced as
+    // an adequate device, never merged with an adequate line).
+    final short = part == null &&
+        (needKa ?? 0) > 0 &&
+        _exactRatingBreakers(parts, b.ratingA.amperes)
+            .any((p) => _kaShort(p, needKa));
     final subst = _substitutionNote(part, b, poles);
     // The notes go BEFORE the trailing " — <location>" suffix, so
     // consolidation (which strips that suffix) keeps them on the merged line.

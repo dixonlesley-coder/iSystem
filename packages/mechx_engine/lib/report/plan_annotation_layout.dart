@@ -22,6 +22,7 @@ library;
 import 'dart:math' as math;
 
 import '../network/network.dart';
+import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../units.dart' show Length;
 import 'drawing_chrome.dart' show LabelBox, kMinPlotTextMm;
@@ -217,6 +218,7 @@ Map<String, PlanEdgeLabelText> composePlanEdgeLabels({
   Map<String, String>? edgeTags,
   Map<String, String>? edgeElevationLabels,
   double? gravitySlope,
+  double? Function(NetEdge e)? diameterMmOf,
 }) {
   final out = <String, PlanEdgeLabelText>{};
   for (final e in net.edges) {
@@ -228,7 +230,10 @@ Map<String, PlanEdgeLabelText> composePlanEdgeLabels({
     final slope = (e.kind == EdgeKind.run &&
             e.service.regime == FlowRegime.gravity &&
             gravitySlope != null)
-        ? gravitySlopeLabel(gravitySlope)
+        // Round 33 — the fall the run is LAID at (a ≤ DN65 drainage branch
+        // never prints flatter than its 1:50 minimum).
+        ? gravitySlopeLabel(
+            laidGravitySlope(e, gravitySlope, diameterMmOf?.call(e)))
         : null;
     final text = composePlanEdgeLabel(
       tag: edgeTags?[e.id],
@@ -602,10 +607,18 @@ PlanAnnotations layoutPlanAnnotations({
         anchorPoint: (x: px, y: py));
   }
 
-  if (nodeTags != null) {
+  // Round 33 (engineer-walkthrough-plan-fixtures-anonymous) — every plumbing
+  // fixture on the floor also carries its plan code (WC / LAV / SH / FD…)
+  // through the SAME placer as the equipment tags, so PDF == DXF.
+  final allNodeTags = <String, String>{
+    ...fixturePlanTags(net,
+        sheetId: sheetId, floorIndex: floorIndex, nodeTags: nodeTags),
+    ...?nodeTags,
+  };
+  if (allNodeTags.isNotEmpty) {
     for (final n in net.nodes) {
       if (!onFloor(n)) continue;
-      final tag = nodeTags[n.id];
+      final tag = allNodeTags[n.id];
       if (tag == null || tag.isEmpty) continue;
       final p = map(n.x, n.y);
       labels.add(PlanPlacedLabel(PlanLabelKind.equipment, n.id,

@@ -173,6 +173,7 @@ enum StringKey {
   busyExportingSubmittal, // {current} {total} — J2 per-sheet submittal export
   saveAssetsMissing, // {file} {count} — Round 10: plans that could not be embedded
   openRestoredFromBackup, // {file} — Round 10: opened the .bak after a torn save
+  openPlansNotRestored, // {count} {names} — Round 33: plans missing after Open
 
   // Unsaved-changes guard dialog (Open / Import / quit).
   confirmDiscardTitle,
@@ -682,6 +683,7 @@ enum StringKey {
   issueNetworkIslandTitle,
   issueNetworkNoSourceTitle,
   issueDrainageSlopeTitle,
+  issueDrainageLaidSteeperTitle,
   issueDrainageLengthTitle,
   issueDrainageCleanoutTitle,
   issueLegionellaTitle,
@@ -1116,6 +1118,9 @@ enum StringKey {
   // ── The heatmap says WHICH check is falsifiable (G6) ──────────────────────
   heatmapHeldByDesign,
   heatmapRealCheckPumpDuty,
+  heatmapTarget,
+  heatmapSniMin,
+  heatmapBelowTarget,
 
   // ── Import failures speak human (WORKFLOW-FRICTION I5) ────────────────────
   /// A plan import that threw a parse/format failure, mapped per file TYPE so
@@ -1427,6 +1432,8 @@ const Map<StringKey, String> _en = {
       'Saved {file}, but plans not embedded (source file missing): {count}',
   StringKey.openRestoredFromBackup:
       'Restored {file} from its backup after an interrupted save',
+  StringKey.openPlansNotRestored:
+      'Plans could not be restored ({count}): {names} - re-import them',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Unsaved changes',
@@ -2092,6 +2099,8 @@ const Map<StringKey, String> _en = {
   StringKey.issueNetworkIslandTitle: 'Network branch not connected',
   StringKey.issueNetworkNoSourceTitle: 'Network has no source',
   StringKey.issueDrainageSlopeTitle: 'Drainage slope below self-cleansing',
+  StringKey.issueDrainageLaidSteeperTitle:
+      'Drain laid steeper than the project fall',
   StringKey.issueDrainageLengthTitle: 'Trap arm too long',
   StringKey.issueDrainageCleanoutTitle: 'Drainage stack cleanout',
   StringKey.issueLegionellaTitle: 'Hot-water return temperature low',
@@ -2593,6 +2602,9 @@ const Map<StringKey, String> _en = {
   // G6 — the heatmap names the falsifiable check.
   StringKey.heatmapHeldByDesign: 'target held by design',
   StringKey.heatmapRealCheckPumpDuty: 'the real check is the pump duty',
+  StringKey.heatmapTarget: 'Target',
+  StringKey.heatmapSniMin: 'SNI min',
+  StringKey.heatmapBelowTarget: 'below target',
 
   // I5 — import failures speak human; the raw text rides the parenthetical.
   StringKey.importFailedDxfTemplate:
@@ -2915,6 +2927,8 @@ const Map<StringKey, String> _id = {
       'Tersimpan {file}, tetapi denah tidak tersemat (file sumber hilang): {count}',
   StringKey.openRestoredFromBackup:
       'Memulihkan {file} dari cadangan setelah penyimpanan terputus',
+  StringKey.openPlansNotRestored:
+      '{count} denah tidak dapat dipulihkan: {names} - impor ulang denah tersebut',
 
   // Unsaved-changes guard dialog.
   StringKey.confirmDiscardTitle: 'Perubahan belum disimpan',
@@ -3594,6 +3608,8 @@ const Map<StringKey, String> _id = {
   StringKey.issueNetworkIslandTitle: 'Cabang jaringan tidak terhubung',
   StringKey.issueNetworkNoSourceTitle: 'Jaringan tidak memiliki sumber',
   StringKey.issueDrainageSlopeTitle: 'Kemiringan drainase di bawah swa-bersih',
+  StringKey.issueDrainageLaidSteeperTitle:
+      'Drainase dipasang lebih curam dari kemiringan proyek',
   StringKey.issueDrainageLengthTitle: 'Lengan perangkap terlalu panjang',
   StringKey.issueDrainageCleanoutTitle: 'Cleanout tegak drainase',
   StringKey.issueLegionellaTitle: 'Suhu balik air panas rendah',
@@ -4106,6 +4122,9 @@ const Map<StringKey, String> _id = {
   StringKey.heatmapHeldByDesign: 'target ditahan oleh desain',
   StringKey.heatmapRealCheckPumpDuty:
       'pemeriksaan sebenarnya ada pada duti pompa',
+  StringKey.heatmapTarget: 'Target',
+  StringKey.heatmapSniMin: 'Min. SNI',
+  StringKey.heatmapBelowTarget: 'di bawah target',
 
   // I5.
   StringKey.importFailedDxfTemplate:

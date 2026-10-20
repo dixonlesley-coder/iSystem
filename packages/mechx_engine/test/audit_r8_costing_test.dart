@@ -306,23 +306,24 @@ void main() {
     });
 
     test('consolidation never drops a breaking-capacity shortfall', () {
-      // ONE breaker part (6 kA) serves every way on two boards: board A needs
-      // 3 kA (adequate), board B 10 kA (short). The shortfall must survive
-      // consolidation as its own flagged line naming the missed 10 kA.
-      const only = Part(
-        sku: 'MCB-X',
-        manufacturer: 'Generic',
-        category: PartCategory.breaker,
-        series: 'X',
-        model: 'X',
-        attributes: {
-          'ratingA': 1000,
-          'poles': 3,
-          'curve': 'C',
-          'deviceClass': 'MCB',
-          'breakingKa': 6,
-        },
-      );
+      // ONE 6 kA breaker line per sized rating serves every way on two
+      // boards: board A needs 3 kA (adequate), board B 10 kA (short). The
+      // shortfall must survive consolidation as its own flagged line naming
+      // the missed 10 kA. Round 33 — rating + kA are hard requirements, so
+      // board B's lines stay UNMATCHED (no part reaches 10 kA) and flagged.
+      Part only(double a) => Part(
+            sku: 'MCB-X-${a.toStringAsFixed(0)}',
+            manufacturer: 'Generic',
+            category: PartCategory.breaker,
+            series: 'X',
+            model: 'X',
+            attributes: {
+              'ratingA': a,
+              'curve': 'C',
+              'deviceClass': 'MCB',
+              'breakingKa': 6,
+            },
+          );
       ElectricalPanel board(String id) => ElectricalPanel(
             id: id,
             name: id.toUpperCase(),
@@ -348,8 +349,15 @@ void main() {
           panels: [board('a'), board('b')],
         ),
       );
+      final ratings = <double>{
+        for (final p in s.panels.values) ...[
+          p.incomer.breaker.ratingA.amperes,
+          for (final c in p.circuits) c.breaker.ratingA.amperes,
+        ],
+      };
       final bom = elec.buildBom(s,
-          parts: const [only], requiredIcuKaByPanelId: {'a': 3, 'b': 10});
+          parts: [for (final a in ratings) only(a)],
+          requiredIcuKaByPanelId: {'a': 3, 'b': 10});
       final breakers =
           bom.lines.where((l) => l.category == PartCategory.breaker).toList();
       final short = breakers.where((l) => l.breakingCapacityShort).toList();
@@ -357,8 +365,11 @@ void main() {
       expect(short, isNotEmpty);
       expect(ok, isNotEmpty);
       for (final l in short) {
-        expect(l.sku, 'MCB-X');
+        expect(l.sku, isNull);
         expect(l.description, contains('no catalogue part reaches 10kA'));
+      }
+      for (final l in ok) {
+        expect(l.sku, startsWith('MCB-X-'));
       }
       // Board B's 2 breakers (incomer + way) are all short; A's are all ok.
       expect(short.fold(0.0, (a, l) => a + l.qty), 2);

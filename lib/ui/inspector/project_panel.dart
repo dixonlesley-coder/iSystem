@@ -28,8 +28,14 @@ import 'package:mechx_engine/report/mep_report.dart';
 import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/plan_symbols.dart'
-    show equipmentNodeTags, planEdgeElevationLabels;
+    show
+        customFixturePlanTags,
+        equipmentNodeTags,
+        fixturePlanTags,
+        planEdgeElevationLabels,
+        planSheetNotes;
 import 'package:mechx_engine/report/report_blocks.dart';
+import 'package:mechx_engine/standards/custom_fixture.dart' show CustomFixture;
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
@@ -1384,10 +1390,44 @@ DrawingChrome issuableChrome(
 
   final idx = sheets.indexWhere((s) => s.id == sheetId);
   final doc = ref.read(documentControlProvider);
+  // Round 33 — the plan's sheet NOTES printed once in its legend (the same
+  // chrome feeds `planSheetPlot`, the plan PDF and the plan DXF, so all three
+  // reserve the same legend box): the fixture codes used on this floor, the
+  // floor-relative CL datum (the riser sheet states ABSOLUTE levels) and the
+  // per-DN drain-fall rule.
+  final project = ref.read(projectControllerProvider);
+  final floors = project.building.floors;
+  final hasCl = planEdgeElevationLabels(net, project.building,
+          mounting: ref.read(mountingProvider))
+      .keys
+      .any((id) {
+    final e = net.edgeById(id);
+    return e != null && (onFloor(e.fromId) || onFloor(e.toId));
+  });
+  final notes = planSheetNotes(
+    net: net,
+    sheetId: sheetId,
+    floorIndex: floorIndex,
+    fixtureTags: fixturePlanTags(net,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        nodeTags:
+            planExportNodeTags(net, ref.read(fixtureLibraryProvider))),
+    hasCentrelineLabels: hasCl,
+    floorFflM: floorIndex >= 0 && floorIndex < floors.length
+        ? project.building.elevationOf(floorIndex).meters
+        : null,
+    floorName: floorIndex >= 0 && floorIndex < floors.length
+        ? floors[floorIndex].name
+        : null,
+    gravitySlope: ref.read(drainageSlopeProvider),
+    sizing: ref.read(sizingProvider),
+  );
   return DrawingChrome(
     sheetIndex: idx >= 0 ? idx + 1 : null,
     sheetTotal: sheets.isNotEmpty ? sheets.length : null,
     legendServices: legend,
+    legendNotes: notes,
     // N19: the plan's drawing number is DERIVED per sheet — the mechanical plan
     // band `M-1xx`, running by RAIL POSITION — so sheet 1 is `M-101`, sheet 2
     // `M-102`, never one number on every plan. A manual `documentNumber`
@@ -1476,7 +1516,7 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     // G1: the stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
     // glyph, and G5: the laid gravity fall (1:N) folded into gravity-run size
     // labels — the same tokens the on-canvas plan shows, now on the issued DXF.
-    nodeTags: equipmentNodeTags(net),
+    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
     // H5: the LAID design slope the sizer + the report actually used
     // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
     // issued sheet must not contradict the signed report (see the contract note
@@ -1530,7 +1570,7 @@ Future<bool?> _writeDrawingPdf(WidgetRef ref) async {
     // G1: stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued PDF.
-    nodeTags: equipmentNodeTags(net),
+    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
     // H5: the LAID design slope the sizer + the report actually used
     // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
     // issued sheet must not contradict the signed report (see the contract note
@@ -1609,7 +1649,7 @@ Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // G1: stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued plan PDF.
-    nodeTags: equipmentNodeTags(net),
+    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
     // H5: the LAID design slope the sizer + the report actually used
     // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
     // issued sheet must not contradict the signed report (see the contract note
@@ -2164,7 +2204,8 @@ Future<bool> writeSubmittalPackageToDir(
       );
       // G1/G5: the equipment tags + gravity fall, shared by both plan formats
       // (the same tokens the on-canvas plan shows).
-      final nodeTags = equipmentNodeTags(net);
+      final nodeTags =
+          planExportNodeTags(net, ref.read(fixtureLibraryProvider));
       // H5: the LAID design slope from `drainageSlopeProvider` (the Building
       // page input the sizer + calc report already honour), so every bundled
       // submittal sheet stamps the SAME fall the report signs off on.
@@ -4560,9 +4601,13 @@ class _ResultsSection extends ConsumerWidget {
               _kvRow(
                 context,
                 'Pump head',
+                // Round 33 (hydraulics-3-2) — the head of the PRIMARY drawn
+                // pump (the same duty the motor ResultCard above is sized
+                // on), never the whole-system single-source head when a root
+                // pump + zone booster split it.
                 solution == null
                     ? '—'
-                    : '${solution.requiredPumpHead.meters.toStringAsFixed(1)} m',
+                    : '${(pump?.head ?? solution.requiredPumpHead).meters.toStringAsFixed(1)} m',
               ),
             ] else if (!gravityDrawn) ...[
               // Round 25 — no roof tank drawn: the drawn feed is the mains (or
@@ -5512,7 +5557,15 @@ class _SelectionSection extends ConsumerWidget {
             // Mirror the heatmap legend's 0.5 kPa slack (= 500 Pa), NOT 0.5 Pa —
             // both verdicts read the same targetResidualProvider, so they must use
             // the same-unit tolerance or a sub-target residual splits PASS vs LOW.
-            final pass = residual.pascals >= target.pascals - 500;
+            // Round 33 — the shared ladder: LOW only below this node's own
+            // SNI 8153 floor; floor met but under the comfort target reads
+            // 'below target' (advisory), never a red LOW against 225 kPa.
+            final sniFloor = ref.watch(sniFloorByNodeProvider)[node.id];
+            final v = residualVerdict(
+                residualPa: residual.pascals,
+                targetPa: target.pascals,
+                sniFloorPa: sniFloor?.pascals);
+            final pass = v == ResidualVerdict.pass;
             // M9 — on the UPFEED solve the pump head is DEFINED as the max of
             // (friction + elevation + target), so residual >= target is an
             // algebraic identity: no drawn network can make this probe read LOW.
@@ -5520,15 +5573,25 @@ class _SelectionSection extends ConsumerWidget {
             // lie the 'all sheets calibrated' row was. Say what is true instead —
             // the target is held BY DESIGN, and the falsifiable question (can a
             // real pump deliver the required head?) lives on the pump duty.
-            final held = ref.watch(solveProvider)?.targetHeldByDesign ?? false;
+            final held =
+                ref.watch(upfeedDeliveredProvider)?.targetHeldByDesign ?? false;
+            final targetTxt = '${context.strings(StringKey.heatmapTarget).toLowerCase()} '
+                '${target.inKiloPascals.toStringAsFixed(0)} kPa';
             final verdict = !isFixture
                 ? ''
                 : held
-                ? ' · target held by design (min '
-                      '${target.inKiloPascals.toStringAsFixed(0)} kPa) - '
+                ? ' · target held by design ($targetTxt) - '
                       '${context.strings(StringKey.heatmapRealCheckPumpDuty)}'
-                : ' · ${pass ? 'PASS' : 'LOW'} (min '
-                      '${target.inKiloPascals.toStringAsFixed(0)} kPa)';
+                : switch (v) {
+                    ResidualVerdict.low => sniFloor == null
+                        ? ' · LOW ($targetTxt)'
+                        : ' · LOW (${context.strings(StringKey.heatmapSniMin)} '
+                            '${sniFloor.inKiloPascals.toStringAsFixed(0)} kPa)',
+                    ResidualVerdict.belowTarget =>
+                      ' · ${context.strings(StringKey.heatmapBelowTarget)} '
+                          '($targetTxt)',
+                    ResidualVerdict.pass => ' · PASS ($targetTxt)',
+                  };
             return Padding(
               padding: const EdgeInsets.only(top: MechXSpacing.xxs),
               child: Text(
@@ -5540,6 +5603,8 @@ class _SelectionSection extends ConsumerWidget {
                         ? context.colors.textSecondary
                         : (pass
                               ? context.colors.success
+                              : v == ResidualVerdict.belowTarget
+                              ? context.colors.warning
                               : context.colors.danger),
                   ),
                 ),
@@ -6568,3 +6633,15 @@ String _fmtAch(double v) =>
 /// tank-fed zone with no PRV — no table.
 bool _zoneTableNeeded(List<DownfeedZoneStatic> statics) =>
     statics.any((z) => z.viaPrv || !z.withinLimit);
+
+/// Round 33 r2 (engineer-walkthrough-plan-fixtures-anonymous) — the node tags
+/// every plan export prints: the stable equipment tags (P-01 / TK-01 …) over
+/// the custom-library fixtures' short names, so a fixture typed from the user
+/// library is never anonymous on the issued plan (PDF == DXF — both read this
+/// one map). Built-in fixtures keep their WC / LAV codes inside the engine.
+Map<String, String> planExportNodeTags(
+        Network net, List<CustomFixture> library) =>
+    {
+      ...customFixturePlanTags(net, library),
+      ...equipmentNodeTags(net),
+    };

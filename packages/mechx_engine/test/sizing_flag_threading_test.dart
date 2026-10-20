@@ -357,50 +357,72 @@ void main() {
     // The self-cleansing minimum is 0.6 m/s, so DN40 and DN50 run BELOW it and
     // DN100 clears it — the band the audit measured (0.46–0.54 m/s "OK").
     //
+    // Round 33 — a ≤ DN65 drainage RUN is LAID at no flatter than its own
+    // 2 % (1:50) minimum (`laidGravitySlope`), so at the default 1 % project
+    // slope a DN40 / DN50 branch runs at √2 × the 1 % figure:
+    //   DN40 → 0.46416 × √2 = 0.65642 m/s;  DN50 → 0.53861 × √2 = 0.76171 m/s
+    // — both clear 0.6 m/s at the fall they are actually laid at.
+    //
     // G1 — running below 0.6 m/s is only REPORTED (selfCleansingOk == false)
     // when the chosen diameter EXCEEDS the DFU table's minimum for the load:
     // at the minimum no smaller compliant pipe exists, so the shortfall is not
     // actionable by pipe and the flag stays true (the slope / grouped
     // discharge are the real levers, and they live elsewhere).
     Map<String, EdgeSizing> sizeDrain(double dfu,
-            {Map<String, Diameter> sizeOverrides = const {}}) =>
+            {Map<String, Diameter> sizeOverrides = const {},
+            SizingContext ctx = const SizingContext()}) =>
         autoSizeNetwork(
           _twoNode(ServiceType.drainage),
-          const SizingContext(),
+          ctx,
           leafDemand: const {ServiceType.drainage: FlowRate(0)},
           nodeDrainageUnits: {'d': dfu},
           sizeOverrides: sizeOverrides,
         );
 
-    test('a DN40 branch AT the DFU minimum is not flagged (0.464 m/s)', () {
+    test('a DN40 branch AT the DFU minimum is not flagged (laid 1:50)', () {
       // Branch DFU table: dfu ≤ 1 ⇒ DN40 — the smallest compliant pipe for
-      // this load. It genuinely runs at 0.464 m/s (< 0.6), but no smaller pipe
-      // is allowed, so there is nothing the engineer could pick instead.
+      // this load, laid at its 2 % minimum: 0.46416 × √2 = 0.65642 m/s.
       final s = sizeDrain(1.0)['e']!;
       expect(s.diameter.inMillimeters, closeTo(40, 1e-9));
-      expect(s.velocity.metersPerSecond, closeTo(0.464158883361, 1e-9));
-      expect(s.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
+      expect(s.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2), 1e-9));
+      expect(s.velocity.metersPerSecond,
+          greaterThanOrEqualTo(kSelfCleansingVelocityMps));
       expect(s.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
+      // G1 still holds where the laid fall cannot help: a rough pipe (n =
+      // 0.015) DN40 at 2 % runs 0.65642 × 0.010/0.015 = 0.43761 m/s < 0.6,
+      // yet at the table minimum it is not flagged.
+      final r = sizeDrain(1.0,
+          ctx: const SizingContext(drainageManningN: 0.015))['e']!;
+      expect(r.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2) / 1.5, 1e-9));
+      expect(r.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
+      expect(r.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
     });
 
-    test('a DN50 branch AT the DFU minimum is not flagged (0.539 m/s)', () {
+    test('a DN50 branch AT the DFU minimum is not flagged (laid 1:50)', () {
       // Branch DFU table (Round 30, IPC 710.1(2)): 3 < dfu ≤ 6 ⇒ DN50, again
-      // the table minimum.
+      // the table minimum, laid at 2 %: 0.53861 × √2 = 0.76171 m/s.
       final s = sizeDrain(6.0)['e']!;
       expect(s.diameter.inMillimeters, closeTo(50, 1e-9));
-      expect(s.velocity.metersPerSecond, closeTo(0.538608672508, 1e-9));
+      expect(s.velocity.metersPerSecond,
+          closeTo(0.538608672508 * math.sqrt(2), 1e-9));
       expect(s.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
     });
 
     test('a hand pick ABOVE the DFU minimum that still runs slow IS flagged',
         () {
-      // DFU 1 ⇒ the table minimum is DN40 (0.46416 m/s). Hand-picking DN50
-      // keeps the run under 0.6 m/s (0.53861 m/s) but is now the ENGINEER's
-      // oversize, not the code's: a smaller compliant pipe (DN40) exists and
-      // runs faster, so the advisory is actionable and fires.
-      final s = sizeDrain(1.0, sizeOverrides: {'e': Diameter.mm(50)})['e']!;
+      // DFU 1 ⇒ the table minimum is DN40. On a rough pipe (n = 0.015) a
+      // hand-picked DN50 laid at its 2 % minimum runs 0.53861 × √2 × 0.010 /
+      // 0.015 = 0.50781 m/s — under 0.6 m/s, and the ENGINEER's oversize,
+      // not the code's: a smaller compliant pipe (DN40) exists and runs
+      // faster, so the advisory is actionable and fires.
+      final s = sizeDrain(1.0,
+          sizeOverrides: {'e': Diameter.mm(50)},
+          ctx: const SizingContext(drainageManningN: 0.015))['e']!;
       expect(s.diameter.inMillimeters, closeTo(50, 1e-9));
-      expect(s.velocity.metersPerSecond, closeTo(0.538608672508, 1e-9));
+      expect(s.velocity.metersPerSecond,
+          closeTo(0.538608672508 * math.sqrt(2) / 1.5, 1e-9));
       expect(s.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
       expect(s.selfCleansingOk, isFalse);
     });
@@ -734,14 +756,26 @@ void main() {
       // a hand-picked DN100 at 1:100 does clear 0.6 m/s.
       expect(out.selfCleansingOk, isTrue);
 
-      // The reverse direction too: overriding DOWN to DN40 fails the check.
+      // The reverse direction too: overriding DOWN to DN40 — Round 33: a
+      // DN40 is laid at its 2 % minimum (0.46416 × √2 = 0.65642 m/s), which
+      // clears 0.6 m/s; on a rough pipe (n = 0.015, × 2/3 = 0.43761 m/s) it
+      // fails the check.
       final down = applySizeOverride(
         base.withFlowFrom(null),
         Diameter.mm(40),
         ctx: ctx,
       );
-      expect(down.velocity.metersPerSecond, closeTo(0.464158883361, 1e-9));
-      expect(down.selfCleansingOk, isFalse);
+      expect(down.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2), 1e-9));
+      expect(down.selfCleansingOk, isTrue);
+      final rough = applySizeOverride(
+        base.withFlowFrom(null),
+        Diameter.mm(40),
+        ctx: const SizingContext(drainageManningN: 0.015),
+      );
+      expect(rough.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2) / 1.5, 1e-9));
+      expect(rough.selfCleansingOk, isFalse);
     });
 
     test('a VENT override still carries no velocity', () {
