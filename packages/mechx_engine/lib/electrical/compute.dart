@@ -2108,9 +2108,9 @@ ElectricalSystemResult computeSystem(
     final root = roots.first;
     final v = root.voltage.volts;
     if (v > 0) {
-      serviceMinCurrentA = root.system == ElectricalSystem.threePhase
-          ? serviceCapacityVa / (math.sqrt(3) * v)
-          : serviceCapacityVa / v;
+      // Round 35 — the ONE conversion shared with the recommended daya.
+      serviceMinCurrentA =
+          lineCurrentForCapacityA(serviceCapacityVa, root.system, v);
     }
   }
 

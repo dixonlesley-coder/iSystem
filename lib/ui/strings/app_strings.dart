@@ -4332,6 +4332,10 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'Genset below essential power',
     'Daya genset di bawah beban esensial'
   ),
+  'genset-phase-overload': (
+    'Genset overloaded on one phase',
+    'Genset kelebihan beban pada satu fasa'
+  ),
   'breaking-capacity-inadequate': (
     'Breaking capacity inadequate',
     'Kapasitas pemutusan tidak memadai'

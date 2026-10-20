@@ -695,8 +695,15 @@ Length gravityRiserEndElevation(
 /// The elevation a RISER [edge] reads at its end [node] — the ONE riser-end
 /// datum every riser length goes through ([edgeLength], the Riser canvas
 /// label, the Riser system summary): a gravity riser (drainage / vent /
-/// rainwater) reads [gravityRiserEndElevation], every other service
-/// [nodeElevation].
+/// rainwater) reads [gravityRiserEndElevation], every other service the
+/// height its pipe / duct actually MEETS the element —
+/// [runConnectionElevation] (Round 35, regression-1): a datum-less AHU /
+/// supply fan / exhaust fan at the top of its casing
+/// ([MountingHeights.airUnitConnection], ceiling-capped) and a ceiling-hung
+/// diffuser / grille / sprinkler head at the ceiling, exactly the datum a RUN
+/// leg uses — so one physical duct measures the same whether it is drawn as a
+/// single riser or as a run + riser. [nodeElevation] stays the STATIC datum
+/// of the pressure solves.
 Length riserEndElevation(
   NetEdge edge,
   NetNode node,
@@ -705,12 +712,13 @@ Length riserEndElevation(
 ]) =>
     edge.service.regime == FlowRegime.gravity
         ? gravityRiserEndElevation(node, building, mounting, edge.service)
-        : nodeElevation(node, building, mounting);
+        : runConnectionElevation(node, building, mounting);
 
 /// The elevation a node is SHOWN at (inspector readout, hover FFL chip): a
-/// node on a GRAVITY riser reads the same riser-end datum its riser length is
-/// measured from ([riserEndElevation] — a bare stack junction sits under its
-/// floor's slab, not at its own ceiling); every other node reads
+/// node on ANY riser reads the same riser-end datum its riser length is
+/// measured from ([riserEndElevation] — a bare gravity stack junction sits
+/// under its floor's slab, an air unit at its casing top; Round 35); a
+/// gravity riser wins when a node sits on both kinds. Every other node reads
 /// [nodeElevation]. One helper so the two readouts can never disagree.
 Length displayedNodeElevation(
   Network net,
@@ -718,12 +726,18 @@ Length displayedNodeElevation(
   BuildingLevels building, [
   MountingHeights mounting = const MountingHeights(),
 ]) {
+  NetEdge? pressurized;
   for (final e in net.edges) {
-    if (e.kind == EdgeKind.riser &&
-        e.service.regime == FlowRegime.gravity &&
-        (e.fromId == node.id || e.toId == node.id)) {
+    if (e.kind != EdgeKind.riser || (e.fromId != node.id && e.toId != node.id)) {
+      continue;
+    }
+    if (e.service.regime == FlowRegime.gravity) {
       return riserEndElevation(e, node, building, mounting);
     }
+    pressurized ??= e;
+  }
+  if (pressurized != null) {
+    return riserEndElevation(pressurized, node, building, mounting);
   }
   return nodeElevation(node, building, mounting);
 }

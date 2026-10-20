@@ -309,4 +309,134 @@ void main() {
           closeTo(3.70 - 0.5, 1e-9));
     });
   });
+
+  // Round 35 (regression-1) — a duct RISER drawn straight from a datum-less
+  // AHU / fan reads the SAME casing-top connection a run leg does, so the one
+  // physical duct has one length however it is drawn.
+  group('air-unit risers measure from the casing top', () {
+    // Two 4.0 m storeys, ceiling drop 0.3:
+    //   L1 ceiling main = 4.0 − 0.3 = 3.70 m; L2 ceiling main = 8.0 − 0.3 = 7.70
+    //   AHU on L1 (surface 0.0) connects at 0.0 + 2.0 = 2.0 m
+    //   AHU on L2 (surface 4.0) connects at 4.0 + 2.0 = 6.0 m
+    const two = BuildingLevels([Floor('L1', Length(4)), Floor('L2', Length(4))]);
+    Network build(int ahuFloor) => Network(nodes: [
+          NetNode(
+              id: 'u',
+              sheetId: 's$ahuFloor',
+              x: 0,
+              y: 0,
+              floorIndex: ahuFloor,
+              role: NodeRole.plant,
+              component: NodeComponent.ahu),
+          const NetNode(id: 'm0', sheetId: 's0', x: 0, y: 0, floorIndex: 0),
+          const NetNode(id: 'm1', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+        ], edges: const [
+          // direct: AHU → L2 main as one riser
+          NetEdge(
+              id: 'direct',
+              fromId: 'u',
+              toId: 'm1',
+              service: ServiceType.duct,
+              kind: EdgeKind.riser),
+          // two-step: AHU -run-> L1 main (zero plan span) -riser-> L2 main
+          NetEdge(id: 'run', fromId: 'u', toId: 'm0', service: ServiceType.duct),
+          NetEdge(
+              id: 'up',
+              fromId: 'm0',
+              toId: 'm1',
+              service: ServiceType.duct,
+              kind: EdgeKind.riser),
+          NetEdge(
+              id: 'down',
+              fromId: 'u',
+              toId: 'm0',
+              service: ServiceType.duct,
+              kind: EdgeKind.riser),
+        ]);
+    double l(Network n, String id, BuildingLevels b) =>
+        edgeLength(n.edgeById(id)!, n, calibrationBySheet: cal, building: b)
+            .meters;
+
+    test('direct riser == run + riser (7.70 − 2.00 = 5.70 m, never 7.70)', () {
+      final n = build(0);
+      expect(l(n, 'direct', two), closeTo(7.70 - 2.0, 1e-9));
+      expect(l(n, 'run', two) + l(n, 'up', two), closeTo(1.70 + 4.00, 1e-9));
+      expect(l(n, 'direct', two),
+          closeTo(l(n, 'run', two) + l(n, 'up', two), 1e-9));
+      // The inspector readout equals the riser-length datum.
+      expect(displayedNodeElevation(n, n.nodeById('u')!, two).meters,
+          closeTo(2.0, 1e-9));
+      // The static datum the pressure solve uses is unchanged.
+      expect(nodeElevation(n.nodeById('u')!, two).meters, 0);
+    });
+
+    test('an upper-floor AHU dropping to a lower main: 6.0 − 3.7 = 2.30 m', () {
+      final n = build(1);
+      expect(l(n, 'down', two), closeTo(6.0 - 3.70, 1e-9));
+    });
+
+    test('a 2.2 m storey caps the connection at the ceiling', () {
+      // L1 2.2 m (ceiling 1.90 < 2.0 ⇒ connection 1.90), L2 4.0 m (ceiling
+      // 2.2 + 4.0 − 0.3 = 5.90) ⇒ riser 5.90 − 1.90 = 4.00 m.
+      const low =
+          BuildingLevels([Floor('P', Length(2.2)), Floor('L2', Length(4))]);
+      final n = build(0);
+      expect(l(n, 'direct', low), closeTo(5.90 - 1.90, 1e-9));
+    });
+
+    test('property: every drawing of the same duct measures the same', () {
+      // Seeded sweep over storey heights / ceiling drops: direct riser equals
+      // the run-leg + riser decomposition for every air-unit kind.
+      var seed = 35;
+      double next() {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+      }
+
+      for (var i = 0; i < 200; i++) {
+        final h0 = 2.0 + next() * 4.0;
+        final h1 = 2.5 + next() * 4.0;
+        final drop = 0.1 + next() * 0.6;
+        final b = BuildingLevels([Floor('A', Length(h0)), Floor('B', Length(h1))]);
+        final m = MountingHeights(ceilingDrop: Length(drop));
+        for (final c in const [
+          NodeComponent.ahu,
+          NodeComponent.supplyFan,
+          NodeComponent.exhaustFan,
+        ]) {
+          final n = Network(nodes: [
+            NetNode(
+                id: 'u',
+                sheetId: 's0',
+                x: 0,
+                y: 0,
+                floorIndex: 0,
+                role: NodeRole.plant,
+                component: c),
+            const NetNode(id: 'm0', sheetId: 's0', x: 0, y: 0, floorIndex: 0),
+            const NetNode(id: 'm1', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
+          ], edges: const [
+            NetEdge(
+                id: 'direct',
+                fromId: 'u',
+                toId: 'm1',
+                service: ServiceType.duct,
+                kind: EdgeKind.riser),
+            NetEdge(
+                id: 'run', fromId: 'u', toId: 'm0', service: ServiceType.duct),
+            NetEdge(
+                id: 'up',
+                fromId: 'm0',
+                toId: 'm1',
+                service: ServiceType.duct,
+                kind: EdgeKind.riser),
+          ]);
+          double ll(String id) => edgeLength(n.edgeById(id)!, n,
+                  calibrationBySheet: cal, building: b, mounting: m)
+              .meters;
+          expect(ll('direct'), closeTo(ll('run') + ll('up'), 1e-9));
+        }
+      }
+    });
+  });
 }
