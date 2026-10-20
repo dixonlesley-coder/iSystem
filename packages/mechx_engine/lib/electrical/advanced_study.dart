@@ -578,8 +578,23 @@ bool _isMotorLike(ElectricalCircuit c) =>
 
 /// Shaft kW for a motor circuit — the explicit [ElectricalCircuit.motorKw], else
 /// the connected load as a kW proxy (so an HVAC way with watts still sizes gear).
-double _motorKw(ElectricalCircuit c) =>
-    c.motorKw ?? (c.loadW > 0 ? c.loadW / 1000.0 : 0);
+///
+/// Round 36 (elec-props-4-stale-motorkw-after-rekind) — an HVAC way sizes on
+/// its `loadW` (compute reads `motorKw` only on motor / pump ways), so a
+/// hand-entered HVAC way's `motorKw` (left over from re-kinding a motor, and
+/// hidden by the inspector) never drives its starter or the genset dip while
+/// `loadW` is set. An MEP-derived way (`sourceEquipmentId` / `flaOverrideA`)
+/// keeps its authoritative machine `motorKw`.
+double _motorKw(ElectricalCircuit c) {
+  final loadKw = c.loadW > 0 ? c.loadW / 1000.0 : 0.0;
+  final m = c.motorKw;
+  if (m == null) return loadKw;
+  final mepDerived = (c.sourceEquipmentId != null &&
+          c.sourceEquipmentId!.isNotEmpty) ||
+      c.flaOverrideA != null;
+  if (c.loadKind == LoadKind.hvac && loadKw > 0 && !mepDerived) return loadKw;
+  return m;
+}
 
 /// The origin / service-entrance panel ids: EVERY panel that takes its supply
 /// directly from the utility — no feeder way points at it and it carries no
@@ -705,10 +720,20 @@ bool _hasFloorGear(
 /// designation names no sub-tree, so nothing says which motors it does not
 /// start: it screens every motor, like full backup (the safe direction — a
 /// silently skipped 110 kW DOL start on a 100 kVA set dips ~55 %).
+///
+/// Round 36 (elec-props-4-genset-dip-skips-motors-full-backup) — and only
+/// when the set does NOT back the whole load (`backupFraction < 1`). A
+/// full-backup set transfers the WHOLE bus (the power one-line draws no
+/// essential split for it — `essentialSplit` needs `backupFraction < 1`) and
+/// was sized on the whole demand, so after transfer it starts every motor:
+/// marking the fire-pump board essential (what `life-safety-not-essential`
+/// asks for) must never drop a 110 kW DOL chiller out of the dip screen.
 List<GensetMotor> gensetStartMotors(ElectricalProject project) {
   final motors = <GensetMotor>[];
   final essential = gensetBackedPanelIds(project);
-  final restrict = essential.isNotEmpty;
+  final gen = project.sources?.generator;
+  final restrict =
+      essential.isNotEmpty && (gen?.backupFraction ?? 1.0) < 1.0;
   for (final p in project.panels) {
     if (restrict && !essential.contains(p.id)) continue;
     for (final c in p.circuits) {

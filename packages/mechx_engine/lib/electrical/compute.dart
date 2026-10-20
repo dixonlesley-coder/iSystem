@@ -1414,6 +1414,30 @@ _CircuitComputation _computeCircuit(
     ttFeeder: c.feedsPanelId == null ? null : opts.ttFeederRcd[c.feedsPanelId],
   );
 
+  // Round 36 (elec-props-4-tt-rcd-ladder-saturates) — JUDGE-ONLY: a TT
+  // feeder RCD whose IΔn ladder is exhausted (≥ 5 cascaded RCD feeder levels)
+  // sits at the same sensitivity as the feeder RCD below it, so an earth fault
+  // downstream can trip it and black out everything it feeds.
+  if (isFeeder &&
+      rcd.required &&
+      rcd.timeDelayed &&
+      opts.earthingSystem == EarthingSystem.tt) {
+    final levels = opts.ttFeederRcd[c.feedsPanelId]?.rcdFeederLevelsBelow ?? 0;
+    if (!ttFeederRcdSelective(levels)) {
+      warnings.add(ElectricalWarning(
+        code: 'tt-rcd-not-selective',
+        severity: WarningSeverity.warning,
+        message: '${c.name}: TT feeder RCD at ${rcd.ratingMa} mA is not '
+            '≥ 3 × the ${ttFeederRcdMa(levels - 1)} mA feeder RCD below it '
+            '(the IΔn ladder is exhausted after $levels RCD feeder levels) — '
+            'an earth fault downstream can trip it; flatten the distribution '
+            'tree or rely on time-delay grading / an RCM.',
+        panelId: panel.id,
+        circuitId: c.id,
+      ));
+    }
+  }
+
   // A life-safety run with NO construction named is sized + printed on the
   // load kind's default family (NYY, PVC 70 °C) — the same spec gap as an
   // explicit non-FRC type, so it is surfaced too (audit r8 coupling-5).

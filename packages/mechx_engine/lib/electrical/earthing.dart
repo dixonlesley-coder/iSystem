@@ -362,6 +362,16 @@ int ttFeederRcdMa(int rcdFeederLevelsBelow) {
   return ladder[rcdFeederLevelsBelow.clamp(0, ladder.length - 1)];
 }
 
+/// Round 36 (elec-props-4-tt-rcd-ladder-saturates) — true when a TT feeder
+/// with [rcdFeederLevelsBelow] RCD feeder levels below it still keeps the
+/// ≥ 3 × IΔn discrimination ratio above the feeder RCD directly below it.
+/// The ladder tops out at 10 000 mA (it clamps — never throws), so a 5th
+/// level sits at the SAME IΔn as the one below: false there.
+bool ttFeederRcdSelective(int rcdFeederLevelsBelow) =>
+    rcdFeederLevelsBelow <= 0 ||
+    ttFeederRcdMa(rcdFeederLevelsBelow) >=
+        3 * ttFeederRcdMa(rcdFeederLevelsBelow - 1);
+
 /// Round 24 — the TOPOLOGY a TT feeder's RCD must respect, derived bottom-up
 /// over the board it feeds by `computeSystem`:
 ///   * [downstreamType] — the highest RCD type anywhere in the fed sub-tree
@@ -456,7 +466,14 @@ RcdSpec circuitRcd({
         ? 'TT feeder — time-delayed (S-type) RCD for earth-fault protection, '
             'selective above the downstream final RCDs (no ADS on the TT loop). '
             '// VERIFY'
-        : 'TT feeder — time-delayed RCD at $ma mA, ≥ 3 × the '
+        : !ttFeederRcdSelective(levels)
+            // Round 36 — the IΔn ladder is exhausted: never claim the ratio.
+            ? 'TT feeder — time-delayed RCD at $ma mA: the IΔn ladder is '
+                'exhausted, so ≥ 3 × discrimination above the '
+                '${ttFeederRcdMa(levels - 1)} mA feeder RCD below is NOT '
+                'achievable — rely on time-delay grading / an RCM, or flatten '
+                'the distribution tree. // VERIFY'
+            : 'TT feeder — time-delayed RCD at $ma mA, ≥ 3 × the '
             '${ttFeederRcdMa(levels - 1)} mA time-delayed feeder RCD below it '
             'and set to a LONGER delay than it (IEC 60364-5-53 §535.3 '
             'discrimination; no ADS on the TT loop). // VERIFY';

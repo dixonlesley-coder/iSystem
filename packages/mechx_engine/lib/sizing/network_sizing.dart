@@ -4742,26 +4742,52 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   // each pump's duty and sizing both legs on half the flow (DN15 at
   // 0.6278 L/s = 3.55 m/s). Discharge sets only (a set drawn toward the
   // root is a recirculation return, sized by the return rules).
+  //
+  // Round 36 (mech-props-5-duplex-mixed-valve-split) — a MIXED set (a check
+  // valve drawn on only some of the legs: GT -> P1 -> C1 -> HDR beside
+  // GT -> P2 -> HDR) is the same parallel set: the valved FEED mover legs
+  // (open, not returns) join the grouping with their pumps read off the leg.
+  // It used to fall to Hardy–Cross (the valveless grouping saw one leg, the
+  // valved structural grouping one valve): each pump took half the flow and
+  // both legs sized two DN small, calibration-dependent. An all-valved set
+  // stays with the Round-13 structural grouping in `build` (unchanged).
   final valvelessStandby = <_StandbyLeg>[];
   final valvelessStandbyDeferred = <String>{};
+  final mixedSetValveIds = <String>{};
   {
+    List<String> legPumps(_MoverLeg l) => l.pumpIds.isNotEmpty
+        ? l.pumpIds
+        : ([
+            for (final n in l.fromNodeIds.skip(1))
+              if (n != root && (isMover?.call(n) ?? false)) n,
+          ]..sort());
     (String, String) pumpPipes(_MoverLeg l) {
-      final p = l.pumpIds.first;
+      final p = legPumps(l).first;
       final i = l.fromNodeIds.indexOf(p);
       return (l.edgeIds[i - 1], l.edgeIds[i]);
     }
 
     final sets = <String, List<_MoverLeg>>{};
-    for (final l in valvelessByKey.values) {
-      if (closedValvelessKeys.contains(l.key)) continue;
+    for (final l in [
+      for (final l in valvelessByKey.values)
+        if (!closedValvelessKeys.contains(l.key)) l,
+      for (final l in moverLegs)
+        if (legPumps(l).isNotEmpty) l,
+    ]) {
       final dest = legDestination(l);
       if (dest == root) continue;
       (sets['${l.fromNodeIds.first}\u0000$dest'] ??= []).add(l);
     }
     for (final key in [...sets.keys]..sort()) {
       final group = sets[key]!
-        ..sort((a, b) => a.pumpIds.first.compareTo(b.pumpIds.first));
+        ..sort((a, b) => legPumps(a).first.compareTo(legPumps(b).first));
       if (group.length < 2) continue;
+      final valved = group.where((l) => l.valveIds.isNotEmpty).length;
+      // All-valved: the Round-13 structural set in `build`; mixed: here.
+      if (valved == group.length) continue;
+      for (final l in group) {
+        mixedSetValveIds.addAll(l.valveIds);
+      }
       final (dIn, dOut) = pumpPipes(group.first);
       for (final l in group.skip(1)) {
         final (sIn, sOut) = pumpPipes(l);
@@ -5297,7 +5323,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
         dist[c.upNode] != null && dist[c.downNode] == null;
     final byRegion = <int, List<_Cv>>{};
     for (final c in feeds) {
-      if (!isParallelDischarge(c)) continue;
+      if (!isParallelDischarge(c) || mixedSetValveIds.contains(c.id)) continue;
       (byRegion[region[c.downNode]!] ??= []).add(c);
     }
     // Round 27 r6 — and STRUCTURALLY: feed valves whose oriented legs run
@@ -5307,6 +5333,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     // unreached-region test above.
     final byLegEnds = <String, List<_Cv>>{};
     for (final c in feeds) {
+      if (mixedSetValveIds.contains(c.id)) continue;
       final x = legEnd(c.id, c.inE), y = legEnd(c.id, c.outE);
       if (x == y) continue;
       (byLegEnds['$x\u0000$y'] ??= []).add(c);
@@ -5331,6 +5358,8 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     final inParallel = {
       for (final g in parallelGroups)
         for (final c in g) c.id,
+      for (final c in feeds)
+        if (mixedSetValveIds.contains(c.id)) c.id,
     };
 
     // Duty/standby: the tree runs through the FIRST valve's leg of each set;

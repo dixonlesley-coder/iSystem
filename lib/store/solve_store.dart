@@ -2190,6 +2190,142 @@ bool _hasDrawnHotWaterPump(Network net, Set<String> nodeIds) {
   return false;
 }
 
+/// Round 36 — every simple cycle of [adj] through at least one return
+/// element ([isElement]: the source, a plant, a check valve) that runs every
+/// flowing pipe (sized Q > 0 with a `flowFromId`) in its solved direction.
+/// Each cycle is enumerated once — from its lowest-ranked element, elements
+/// ranked by id, DFS over nodes ranked above it — and deduped by edge set, so
+/// the RESULT is a set independent of ids / drawing order (they only order
+/// it: sorted by the cycle's sorted edge ids). Null when the enumeration
+/// budget is exceeded.
+List<List<NetEdge>>? _canonicalReturnCycles(
+  Map<String, List<NetEdge>> adj,
+  Map<String, EdgeSizing> sizing,
+  bool Function(String id) isElement, {
+  int maxCycles = 256,
+  int maxSteps = 200000,
+  bool directed = true,
+}) {
+  // A flowing edge may only be walked FROM its flow source.
+  String? flowFrom(NetEdge e) {
+    if (!directed) return null;
+    final z = sizing[e.id];
+    if (z == null || z.flowFromId == null) return null;
+    if (z.flow.inLitersPerSecond.abs() <= 1e-9) return null;
+    return z.flowFromId;
+  }
+
+  final elements = [
+    for (final id in adj.keys)
+      if (isElement(id)) id,
+  ]..sort();
+  final rank = <String, int>{
+    for (var i = 0; i < elements.length; i++) elements[i]: i,
+  };
+  int rankOf(String id) => rank[id] ?? elements.length;
+  final byKey = <String, List<NetEdge>>{};
+  var steps = 0;
+  var overBudget = false;
+  for (final s in elements) {
+    final rs = rankOf(s);
+    final pathNodes = <String>{s};
+    final pathEdges = <NetEdge>[];
+    void dfs(String n) {
+      if (overBudget) return;
+      for (final e in adj[n] ?? const <NetEdge>[]) {
+        if (++steps > maxSteps) {
+          overBudget = true;
+          return;
+        }
+        if (pathEdges.isNotEmpty && identical(pathEdges.last, e)) continue;
+        final f = flowFrom(e);
+        if (f != null && f != n) continue;
+        final m = e.fromId == n ? e.toId : e.fromId;
+        if (m == s) {
+          if (pathEdges.isEmpty) continue; // a self-loop
+          final cycle = [...pathEdges, e];
+          if ({for (final x in cycle) x.id}.length != cycle.length) continue;
+          final key = ([for (final x in cycle) x.id]..sort()).join('\u0000');
+          byKey.putIfAbsent(key, () => cycle);
+          if (byKey.length > maxCycles) {
+            overBudget = true;
+            return;
+          }
+          continue;
+        }
+        if (pathNodes.contains(m) || rankOf(m) <= rs) continue;
+        pathNodes.add(m);
+        pathEdges.add(e);
+        dfs(m);
+        pathEdges.removeLast();
+        pathNodes.remove(m);
+        if (overBudget) return;
+      }
+    }
+
+    dfs(s);
+    if (overBudget) return null;
+  }
+  // No flow-consistent loop (a balance that runs draw-off up a return —
+  // the ring split): every simple cycle through an element, still canonical.
+  if (directed && byKey.isEmpty) {
+    return _canonicalReturnCycles(adj, sizing, isElement,
+        maxCycles: maxCycles, maxSteps: maxSteps, directed: false);
+  }
+  final keys = byKey.keys.toList()..sort();
+  return [for (final k in keys) byKey[k]!];
+}
+
+/// The pre-Round-36 loop set: the fundamental cycles of a BFS spanning tree
+/// from [src] that pass a return element. Only the over-budget fallback.
+List<List<NetEdge>> _fundamentalReturnCycles(
+  Map<String, List<NetEdge>> adj,
+  String src,
+  bool Function(List<NetEdge>) isReturnCycle,
+) {
+  final returnCycles = <List<NetEdge>>[];
+  final parent = <String, NetEdge>{};
+  final depth = <String, int>{src: 0};
+  final queue = [src];
+  final treeEdgeIds = <String>{};
+  for (var i = 0; i < queue.length; i++) {
+    final n = queue[i];
+    for (final e in adj[n] ?? const <NetEdge>[]) {
+      final m = e.fromId == n ? e.toId : e.fromId;
+      if (depth.containsKey(m)) continue;
+      depth[m] = depth[n]! + 1;
+      parent[m] = e;
+      treeEdgeIds.add(e.id);
+      queue.add(m);
+    }
+  }
+  final seen = <String>{};
+  for (final n in queue) {
+    for (final e in adj[n] ?? const <NetEdge>[]) {
+      if (treeEdgeIds.contains(e.id) || !seen.add(e.id)) continue;
+      if (e.fromId == e.toId) continue;
+      var a = e.fromId;
+      var b = e.toId;
+      final up = <NetEdge>[];
+      final down = <NetEdge>[];
+      while (a != b) {
+        if (depth[a]! >= depth[b]!) {
+          final pe = parent[a]!;
+          up.add(pe);
+          a = pe.fromId == a ? pe.toId : pe.fromId;
+        } else {
+          final pe = parent[b]!;
+          down.add(pe);
+          b = pe.fromId == b ? pe.toId : pe.fromId;
+        }
+      }
+      final cycle = [...up.reversed, e, ...down];
+      if (isReturnCycle(cycle)) returnCycles.add(cycle);
+    }
+  }
+  return returnCycles;
+}
+
 HotWaterRecircLoop? _hotWaterRecircLoopOf(
   Network net,
   Map<String, EdgeSizing> sizing,
@@ -2253,48 +2389,27 @@ HotWaterRecircLoop? _hotWaterRecircLoopOf(
     return false;
   }
 
-  final returnCycles = <List<NetEdge>>[];
-  {
-    final parent = <String, NetEdge>{};
-    final depth = <String, int>{src: 0};
-    final queue = [src];
-    final treeEdgeIds = <String>{};
-    for (var i = 0; i < queue.length; i++) {
-      final n = queue[i];
-      for (final e in adj[n] ?? const <NetEdge>[]) {
-        final m = e.fromId == n ? e.toId : e.fromId;
-        if (depth.containsKey(m)) continue;
-        depth[m] = depth[n]! + 1;
-        parent[m] = e;
-        treeEdgeIds.add(e.id);
-        queue.add(m);
-      }
-    }
-    final seen = <String>{};
-    for (final n in queue) {
-      for (final e in adj[n] ?? const <NetEdge>[]) {
-        if (treeEdgeIds.contains(e.id) || !seen.add(e.id)) continue;
-        if (e.fromId == e.toId) continue;
-        var a = e.fromId;
-        var b = e.toId;
-        final up = <NetEdge>[];
-        final down = <NetEdge>[];
-        while (a != b) {
-          if (depth[a]! >= depth[b]!) {
-            final pe = parent[a]!;
-            up.add(pe);
-            a = pe.fromId == a ? pe.toId : pe.fromId;
-          } else {
-            final pe = parent[b]!;
-            down.add(pe);
-            b = pe.fromId == b ? pe.toId : pe.fromId;
-          }
-        }
-        final cycle = [...up.reversed, e, ...down];
-        if (isReturnCycle(cycle)) returnCycles.add(cycle);
-      }
-    }
-  }
+  // Round 36 (mech-props-5-hw-return-cycles-basis-dependent) — the return
+  // loops are a CANONICAL set, never the fundamental cycles of a spanning
+  // tree (a cycle basis is not canonical: with several return risers on a
+  // common header, which riser the BFS tree took decided whether a loop
+  // survived — the loop count, index loop and circulator head moved with an
+  // edge id or a bend on the header). A loop is a SIMPLE cycle of the
+  // circulated pipework that passes the source / a plant / a check valve
+  // ([isReturnCycle]) and runs every flowing (sized, Q > 0) pipe in its
+  // solved flow direction — water circulates one way round a loop, so a
+  // riser-to-riser ring (up one supply riser, down the other against its
+  // flow) or a cross cycle through two returns is never a loop. The SET is
+  // independent of ids and drawing order; ids only order it.
+  final returnCycles = _canonicalReturnCycles(adj, sizing, (id) {
+        final n = net.nodeById(id);
+        return roots[id] == id ||
+            n?.role == NodeRole.plant ||
+            n?.component == NodeComponent.checkValve;
+      }) ??
+      // Enumeration budget exceeded (a pathological drawing): the legacy
+      // fundamental-cycle basis, still deterministic for a given drawing.
+      _fundamentalReturnCycles(adj, src, isReturnCycle);
   if (returnCycles.isNotEmpty) {
     // Round 26 (hot-water-2-multi-loop-full-flow-one-loop) — the loops run in
     // PARALLEL: each carries the share of the circulating flow its own

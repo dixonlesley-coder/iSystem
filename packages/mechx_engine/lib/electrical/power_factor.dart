@@ -229,9 +229,20 @@ PowerFactorResult powerFactorCorrection(
       // bank must cancel is not understated by ~1/0.88.
       final motorLike =
           c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump;
-      final baseKw = (c.motorKw != null)
-          ? (motorLike ? c.motorKw! / kAssumedMotorEfficiency : c.motorKw!)
-          : c.loadW / 1000.0;
+      //
+      // Round 36 (elec-props-4-stale-motorkw-after-rekind) — a NON-motor way
+      // sizes on its `loadW` in compute (motorKw is read only on motor / pump
+      // ways), so a stray `motorKw` (left by re-kinding a motor to HVAC /
+      // general, hidden by the inspector) never becomes the bank's kW while
+      // `loadW` is set.
+      final double baseKw;
+      if (motorLike && c.motorKw != null) {
+        baseKw = c.motorKw! / kAssumedMotorEfficiency;
+      } else if (c.loadW > 0 || c.motorKw == null) {
+        baseKw = c.loadW / 1000.0;
+      } else {
+        baseKw = c.motorKw!;
+      }
       final loadKw = baseKw *
           effectiveDemandFactor(c,
               library: diversityLibrary,

@@ -1163,15 +1163,33 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     )) {
       return;
     }
-    _replaceCircuit(
-      panelId,
-      circuitId,
-      (c) => c.copyWith(
+    _replaceCircuit(panelId, circuitId, (c) {
+      // Round 36 (elec-props-4-stale-motorkw-after-rekind) — re-kinding a
+      // hand-entered motor / pump way to a kind that sizes on its W (HVAC,
+      // general, heating …) drops the motor power the inspector then hides:
+      // compute sizes the way on loadW while the starter, PF and genset-dip
+      // passes kept reading the stale motorKw (a 30 kW starter on a 5 kW
+      // way). When the way carries no W yet, the motor's electrical input
+      // (shaft ÷ the assumed efficiency) seeds it, so the load survives the
+      // edit. One edit, one undo step. An MEP-derived way's machine power
+      // stays authoritative.
+      final rekindedOffMotor = loadKind != null &&
+          loadKind != c.loadKind &&
+          loadKind != LoadKind.motor &&
+          loadKind != LoadKind.pump &&
+          motorKw == null &&
+          c.motorKw != null &&
+          (c.sourceEquipmentId == null || c.sourceEquipmentId!.isEmpty) &&
+          c.flaOverrideA == null;
+      final seededW = rekindedOffMotor && loadW == null && c.loadW <= 0
+          ? c.motorKw! * 1000 / kAssumedMotorEfficiency
+          : null;
+      return c.copyWith(
         name: name,
         loadKind: loadKind,
-        loadW: loadW,
+        loadW: loadW ?? seededW,
         motorKw: motorKw,
-        clearMotorKw: clearMotorKw,
+        clearMotorKw: clearMotorKw || rekindedOffMotor,
         cosPhi: cosPhi,
         demandFactor: demandFactor,
         // Round 23 (mep-bridge-5) — record provenance: a typed factor is the
@@ -1210,8 +1228,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         clearPhaseOverride: clearPhaseOverride,
         laying: laying,
         clearLaying: clearLaying,
-      ),
-    );
+      );
+    });
   }
 
   /// Bulk-pin the phase LINE of several ways on one panel (`circuitId → line`)

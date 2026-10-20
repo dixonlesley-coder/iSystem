@@ -4348,6 +4348,10 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'No earth-fault protection (TT)',
     'Tanpa proteksi gangguan tanah (TT)'
   ),
+  'tt-rcd-not-selective': (
+    'TT feeder RCD not selective',
+    'RCD feeder TT tidak selektif'
+  ),
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]
