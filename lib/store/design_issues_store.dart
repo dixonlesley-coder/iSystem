@@ -37,7 +37,8 @@ import 'app_state.dart';
 import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
-import 'fire_store.dart' show firePumpDutyProvider, sprinklerPumpCheckProvider;
+import 'fire_store.dart'
+    show firePumpDutyProvider, fireSystemBasesProvider, sprinklerPumpCheckProvider;
 import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
 import 'network_store.dart';
@@ -224,6 +225,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
   final sprinklerPump = ref.watch(sprinklerPumpCheckProvider);
+  final fireBases = ref.watch(fireSystemBasesProvider);
   final coolingMethod = ref.watch(coolingLoadMethodProvider);
   final rooms = ref.watch(roomAreasProvider);
   final hasRooms = rooms.isNotEmpty;
@@ -1236,6 +1238,35 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         'need': sprinklerPump.requiredHeadM.toStringAsFixed(1),
         'pump': sprinklerPump.pumpHeadM.toStringAsFixed(1),
       }),
+    ));
+  }
+
+  // ── 5a-ter. Combined fire system rated on its sprinkler point (warning) ───
+  // Round 37 r2 — a combined sprinkler + hydrant system is rated on the
+  // LARGER head at that basis's own flow (never Σ of the two conditions).
+  // When the sprinkler head wins, the rated point carries the small
+  // remote-area flow, so the hose (standpipe) flow at the standpipe head is
+  // not a rated point of the pump — judge-only, never resizes; locatable to
+  // the duty pump.
+  for (final b in fireBases) {
+    final st = b.standpipe;
+    if (!b.sprinklerGovernsCombined || st == null) continue;
+    final pumpNode =
+        b.pumpIds.isEmpty ? null : net.nodeById(b.pumpIds.first);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'combined-fire-sprinkler-governs'
+          '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      title: str(StringKey.issueCombinedFireSprinklerGovernsTitle),
+      message: str.format(StringKey.issueCombinedFireSprinklerGovernsMessage, {
+        'sprHead': b.head.meters.toStringAsFixed(1),
+        'sprFlow': b.flow.inLitersPerSecond.toStringAsFixed(1),
+        'hoseFlow': st.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+        'hoseHead': st.pumpHead.meters.toStringAsFixed(1),
+      }),
+      locate: pumpNode == null
+          ? null
+          : IssueLocation(pumpNode.sheetId, nodeId: pumpNode.id),
     ));
   }
 

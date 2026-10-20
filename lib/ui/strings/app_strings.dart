@@ -690,6 +690,7 @@ enum StringKey {
   issueCoolingInternalOnlyTitle,
   issueSprinklerFlowTitle,
   issueSprinklerHeadTitle,
+  issueCombinedFireSprinklerGovernsTitle,
   issueElectricalTitle, // {code} = electricalWarningTitle(w.code)
   issueUnverifiedTitle, // {name} = the // VERIFY value's short label
   issueUnverifiedMessage, // {citation} = the value's source citation
@@ -779,6 +780,7 @@ enum StringKey {
   issueCoolingInternalOnlyMessage,
   issueSprinklerFlowMessage, // {demand} {pump}
   issueSprinklerHeadMessage, // {need} {pump}
+  issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
 
   // H1 — Design issue pluralized nouns + batch-action labels
   // (issueBatchActionsProvider). Batch labels use plural(n, one, many) (bare
@@ -2113,6 +2115,8 @@ const Map<StringKey, String> _en = {
       'Sprinkler demand exceeds the fire pump flow',
   StringKey.issueSprinklerHeadTitle:
       'Sprinkler pressure exceeds the fire pump head',
+  StringKey.issueCombinedFireSprinklerGovernsTitle:
+      'Combined fire pump rated on the sprinkler point',
   StringKey.issueElectricalTitle: 'Electrical: {code}',
   StringKey.issueUnverifiedTitle: 'Unverified: {name}',
   StringKey.issueUnverifiedMessage:
@@ -2289,6 +2293,12 @@ const Map<StringKey, String> _en = {
       'The sprinkler system needs at least {need} m at the pump (static lift '
       'to the top-floor ceiling + branch-base pressure, before riser and main '
       'friction) but the fire pump head is {pump} m.',
+  StringKey.issueCombinedFireSprinklerGovernsMessage:
+      'On this combined sprinkler + hydrant system the sprinkler head '
+      '({sprHead} m) exceeds the standpipe head, so the pump is rated at the '
+      'sprinkler flow ({sprFlow} L/s). The hose flow {hoseFlow} L/s at '
+      '{hoseHead} m is not a rated point - select a pump whose curve covers '
+      'both conditions.',
   StringKey.issueLegionellaMessage:
       'Modelled recirculation return temperature '
           '{temp} °C is below the '
@@ -3628,6 +3638,8 @@ const Map<StringKey, String> _id = {
       'Kebutuhan sprinkler melebihi debit pompa kebakaran',
   StringKey.issueSprinklerHeadTitle:
       'Tekanan sprinkler melebihi head pompa kebakaran',
+  StringKey.issueCombinedFireSprinklerGovernsTitle:
+      'Pompa kebakaran gabungan diberi rating pada titik sprinkler',
   StringKey.issueElectricalTitle: 'Listrik: {code}',
   StringKey.issueUnverifiedTitle: 'Belum terverifikasi: {name}',
   StringKey.issueUnverifiedMessage:
@@ -3809,6 +3821,11 @@ const Map<StringKey, String> _id = {
       'Sistem sprinkler membutuhkan sedikitnya {need} m di pompa (angkat statis '
       'ke plafon lantai teratas + tekanan pangkal cabang, sebelum gesekan riser '
       'dan pipa utama) tetapi head pompa kebakaran {pump} m.',
+  StringKey.issueCombinedFireSprinklerGovernsMessage:
+      'Pada sistem gabungan sprinkler + hidran ini head sprinkler ({sprHead} m) '
+      'melebihi head standpipe, sehingga pompa diberi rating pada debit '
+      'sprinkler ({sprFlow} L/s). Debit selang {hoseFlow} L/s pada {hoseHead} m '
+      'bukan titik rating - pilih pompa yang kurvanya mencakup kedua kondisi.',
   StringKey.issueLegionellaMessage:
       'Suhu balik resirkulasi termodelkan {temp} °C berada di bawah batas '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '

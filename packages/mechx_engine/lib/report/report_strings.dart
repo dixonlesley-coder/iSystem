@@ -208,6 +208,8 @@ enum RptStringKey {
   edbOriginFaultValue, // {ka} {ct}
   edbClearingTime, // {s}
   edbClearingTimeKey,
+  edbServiceSectionKey,
+  edbServiceSectionValue, // {kva} {total}
   edbClearingTimeValue, // {s}
   edbFaultBasisExplicit,
   edbFaultBasisEstimate,
@@ -637,6 +639,10 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '**{ka} kA**{ct} (busbar short-circuit-withstand basis)',
   RptStringKey.edbClearingTime: ' · clearing time **{s} s**',
   RptStringKey.edbClearingTimeKey: 'Busbar clearing time:',
+  RptStringKey.edbServiceSectionKey: 'Service-entrance rating:',
+  RptStringKey.edbServiceSectionValue:
+      '**{kva} kVA per section** (dual transformer, coupler normally open — '
+      '{total} kVA declared in total)',
   RptStringKey.edbClearingTimeValue: '**{s} s**',
   RptStringKey.edbFaultBasisExplicit: ' · _project setting_',
   RptStringKey.edbFaultBasisEstimate:
@@ -1100,6 +1106,10 @@ const Map<RptStringKey, String> kReportStringsId = {
       '**{ka} kA**{ct} (dasar ketahanan hubung-singkat busbar)',
   RptStringKey.edbClearingTime: ' · waktu pemutusan **{s} s**',
   RptStringKey.edbClearingTimeKey: 'Waktu pemutusan busbar:',
+  RptStringKey.edbServiceSectionKey: 'Rating pintu masuk layanan:',
+  RptStringKey.edbServiceSectionValue:
+      '**{kva} kVA per seksi** (trafo ganda, kopel normal terbuka — total '
+      '{total} kVA dideklarasikan)',
   RptStringKey.edbClearingTimeValue: '**{s} s**',
   RptStringKey.edbFaultBasisExplicit: ' · _pengaturan proyek_',
   RptStringKey.edbFaultBasisEstimate:

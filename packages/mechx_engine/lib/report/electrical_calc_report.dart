@@ -12,6 +12,7 @@
 /// never hides provenance gaps (§8 / golden rule 6).
 library;
 
+import '../electrical/compute.dart' show serviceEntranceCapacityVa;
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
 import '../electrical/fault.dart' show faultStudyU0VerifyItem;
 import '../electrical/model.dart';
@@ -273,6 +274,17 @@ RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
         strings(RptStringKey.edbClearingTimeKey),
         strings.format(RptStringKey.edbClearingTimeValue,
             {'s': data.busbarClearingTimeS!.toStringAsFixed(2)})
+      ),
+    // Round 37 — a dual-transformer service rates its single service-entrance
+    // board on ONE section (coupler normally open), the fault basis's own.
+    if (data.project.dualTransformer &&
+        serviceEntranceCapacityVa(data.project) != null)
+      (
+        strings(RptStringKey.edbServiceSectionKey),
+        strings.format(RptStringKey.edbServiceSectionValue, {
+          'kva': _n(serviceEntranceCapacityVa(data.project)! / 1000),
+          'total': _n(data.project.supplyCapacityVa!.voltAmperes / 1000),
+        })
       ),
   ]);
 }

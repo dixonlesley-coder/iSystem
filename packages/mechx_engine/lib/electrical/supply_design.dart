@@ -203,6 +203,7 @@ SupplyDesign determineSupply(
   bool dualTransformer = false,
   ApparentPower? declaredKva,
   int? declaredUnits,
+  bool singleSectionCarriesAll = false,
 }) {
   final demandKva = _round1(demand.inKilovoltAmperes);
   final verify = <String>[
@@ -219,9 +220,24 @@ SupplyDesign determineSupply(
     final units = (declaredUnits != null && declaredUnits > 0)
         ? declaredUnits
         : (dualTransformer ? 2 : 1);
-    final carried = demand.inKilovoltAmperes / units;
+    // Round 37 r2 — a SINGLE service-entrance board on a dual service sits
+    // on ONE section (coupler normally open), so that section carries the
+    // whole demand — the basis the incomer floor and the
+    // `service-capacity-below-demand` judge use (never demand / 2).
+    final oneSection = dualTransformer && singleSectionCarriesAll && units > 1;
+    final carried = oneSection
+        ? demand.inKilovoltAmperes / (units / 2)
+        : demand.inKilovoltAmperes / units;
     final below = declared * transformerLoadingFactor < carried - 1e-9;
     final unitsText = units > 1 ? '$units × ' : '';
+    final carrierText = oneSection
+        ? 'the one section feeding the single service-entrance board '
+            '(coupler normally open) carries'
+        : units > 1
+            ? (dualTransformer && units == 2
+                ? 'each section carries'
+                : 'each unit carries')
+            : 'demand';
     return SupplyDesign(
       lvOrMv: SupplyLevel.mv,
       demandKva: demandKva,
@@ -237,9 +253,11 @@ SupplyDesign determineSupply(
           Current(_transformerFlc(declared, lvVoltage).amperes.roundToDouble()),
       note: 'Declared customer transformer: $unitsText${_fmtKva(declared)} kVA '
           'MV supply (20 kV) for the $demandKva kVA demand.'
+          '${oneSection ? ' One section feeds the single service-entrance '
+              'board (coupler normally open).' : ''}'
           '${below ? ' At ${(transformerLoadingFactor * 100).round()} % '
               'loading it carries ${_fmtKva(_round1(declared * transformerLoadingFactor))} kVA '
-              '— below the ${_fmtKva(_round1(carried))} kVA ${units > 1 ? (dualTransformer && units == 2 ? 'each section carries' : 'each unit carries') : 'demand'}; '
+              '— below the ${_fmtKva(_round1(carried))} kVA $carrierText; '
               'raise the rating.' : ''}',
       verifyItems: verify,
     );

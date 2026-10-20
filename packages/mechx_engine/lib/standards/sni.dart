@@ -618,6 +618,17 @@ class SniProfile implements StandardsProfile {
               'outlet size (general practice), not an SNI 03-1745-2000 clause. '
               'The vertical standpipe takes the SNI 100 mm minimum.',
         ),
+        // Round 37 — mirrors kFdcMinBoreMm (fire_standpipe.dart).
+        const StandardValue<Object?>(
+          100.0,
+          unit: 'mm',
+          citation: 'Fire-department connection (FDC) inlet pipe minimum',
+          status: VerificationStatus.notAnSniClause,
+          note:
+              'The FDC inlet pipe is sized on the system design flow the '
+              'brigade pumps in and never below 100 mm (4 in). NFPA 14 / '
+              'general practice, not an SNI 03-1745-2000 clause.',
+        ),
         const StandardValue<Object?>(
           1.2,
           unit: 'm',

@@ -33,6 +33,7 @@ import 'ejector.dart' as ejector;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
     show
+        kFdcMinBoreMm,
         kMaxFireVelocityMps,
         kMinHydrantBranchDiameterMm,
         kMinRiserDiameterMm,
@@ -760,6 +761,7 @@ String _pickComponentRoot({
   Set<String> riserTopIds = const {},
   Map<String, int> riserTopSpan = const {},
   Iterable<String> Function(String)? neighboursOf,
+  Set<String>? ejectorPitIds,
 }) {
   Iterable<String> neighbours(String id) =>
       neighboursOf?.call(id) ?? const <String>[];
@@ -819,6 +821,14 @@ String _pickComponentRoot({
     final comp = nodeOf(id)?.component;
     if (comp == null) return false;
     if (comp != NodeComponent.groundTank) return true;
+    // Round 37 (mech-sim-5-force-main-into-stp-unroots-building-drain) — a
+    // tank is an ejector PIT only when it is on a drawn ejector's SUCTION
+    // side: the one definition `ejector.ejectorPitOf` gives. A tank a force
+    // main DISCHARGES into (an STP / septic outfall fed by the ejector header)
+    // stays the sink root; the old any-neighbour walk reached the ejector
+    // through its discharge chain, unrooted the STP and sized the 12-storey
+    // building drain on 8 DFU (DN75, flow reversed) instead of 240.
+    if (ejectorPitIds != null) return ejectorPitIds.contains(id);
     // Round 33 (regression-ejector-pit-valve-reverses-force-main) — the
     // mover may sit behind a suction gate valve / strainer / bare bend: walk
     // each leg through degree-2 pass-through nodes (the SAME rule as
@@ -1159,6 +1169,18 @@ List<String> _gravityOutfalls({
 ///
 /// Round 15 — a TERMINAL air unit ([_isTerminalAirUnit]: FCU / AC units) is
 /// rank 4: a delivery point, never a peer of the AHU that feeds it.
+/// Round 37 — the ejector PIT ids of [net] on [service] (drainage only):
+/// the tank each drawn ejector pump draws from, by the ONE pit definition
+/// [ejector.ejectorPitOf] (its suction side). Null on any other service (the
+/// legacy pass-through walk applies there).
+Set<String>? ejectorPitIdsFor(Network net, ServiceType service) {
+  if (service != ServiceType.drainage) return null;
+  return {
+    for (final pump in ejector.drawnEjectorPumpIds(net))
+      if (ejector.ejectorPitOf(net, pump) case final pit?) pit.pitId,
+  };
+}
+
 int _supplyPlantRank(NodeComponent? comp, int degree) {
   if (comp == NodeComponent.groundTank) return degree == 1 ? 0 : 1;
   if (comp == NodeComponent.roofTank && degree == 1) return 2;
@@ -1255,6 +1277,7 @@ Map<String, String> serviceComponentRoots(
       riserTopIds: riserTops,
       riserTopSpan: riserTopSpan,
       neighboursOf: (n) => adjacency[n] ?? const <String>[],
+      ejectorPitIds: ejectorPitIdsFor(net, service),
     );
     for (final n in component) {
       out[n] = root;
@@ -1395,6 +1418,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Set<String>? checkValveAgainstPumpOut,
   Set<String>? moverAgainstBalanceOut,
   Set<String>? airIntakeLeavesOut,
+  Map<String, FlowRate> jockeyLegFlows = const {},
 }) {
   // Round 32 (binding-2) — a DUPLEX sewage ejector set (PIT -> EJ / EJ2 ->
   // header) is duty / standby, never a gravity ring: the standby legs are
@@ -1440,6 +1464,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
     checkValveAgainstPumpOut: checkValveAgainstPumpOut,
     moverAgainstBalanceOut: moverAgainstBalanceOut,
     airIntakeLeavesOut: airIntakeLeavesOut,
+    jockeyLegFlows: jockeyLegFlows,
   );
   if (!net.edges.any((e) => e.service == ServiceType.drainage)) return result;
 
@@ -1593,6 +1618,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   Set<String>? checkValveAgainstPumpOut,
   Set<String>? moverAgainstBalanceOut,
   Set<String>? airIntakeLeavesOut,
+  Map<String, FlowRate> jockeyLegFlows = const {},
 }) {
   const profile = SniProfile();
   final allFlows = <String, FlowRate>{};
@@ -1794,6 +1820,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           riserEndIds: riserEndIds,
           riserTopIds: riserTops,
           riserTopSpan: riserTopSpan,
+          ejectorPitIds: ejectorPitIdsFor(net, service),
           neighboursOf: (n) => [
             for (final l
                 in adjacency[n] ?? const <({String edgeId, String other})>[])
@@ -2168,6 +2195,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             closedMoverLegs: closedMoverLegs,
             returnChainEnvelope: service == ServiceType.hotWater,
             returnChainKeysOut: returnChainKeys,
+            jockeyMoverIds: jockeyLegFlows.keys.toSet(),
           );
       final cvPlans = (isLooped && regime == FlowRegime.pressurized)
           ? classify()
@@ -3356,9 +3384,12 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     var cur = inlet.id;
     var edge = incident.single;
     final seen = <String>{};
+    final chain = <NetEdge>[];
+    String? joinNode;
     while (seen.add(edge.id)) {
       if (result[edge.id] == null) break;
       edgeFlowFrom[edge.id] = cur;
+      chain.add(edge);
       final next = edge.fromId == cur ? edge.toId : edge.fromId;
       final nextNode = net.nodeById(next);
       final onward = [
@@ -3369,10 +3400,101 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           nextNode == null ||
           nextNode.role == NodeRole.plant ||
           nextNode.role == NodeRole.fixture) {
+        joinNode = next;
         break;
       }
       cur = next;
       edge = onward.single;
+    }
+    // Round 37 (mech-sim-5-fdc-line-sized-at-zero-flow) — the brigade pumps
+    // the SYSTEM design flow in through this chain: size it on the largest
+    // flow the system carries at the junction it joins (the header trunk:
+    // the standpipe total for a hydrant system, the remote-area flow for a
+    // sprinkler-only one), on the fire velocity cap, and never below the
+    // DN100 FDC minimum ([kFdcMinBoreMm], `// VERIFY`). A hand-picked size
+    // stays the engineer's. Still no demand / delivery node, flow inward.
+    final fire = edge.service == ServiceType.fireHydrant ||
+        edge.service == ServiceType.fireSprinkler;
+    if (!fire || joinNode == null || chain.isEmpty) continue;
+    final chainIds = {for (final e in chain) e.id};
+    var designLps = 0.0;
+    for (final e in net.edgesAt(joinNode)) {
+      if (chainIds.contains(e.id) || e.service != edge.service) continue;
+      final q = result[e.id]?.flow.inLitersPerSecond ?? 0;
+      if (q > designLps) designLps = q;
+    }
+    for (final e in chain) {
+      if (sizeOverrides.containsKey(e.id)) continue;
+      final r = water.sizeForFlow(
+        flow: FlowRate.litersPerSecond(designLps),
+        maxVelocity: ctx.maxFireVelocity,
+        material: ctx.pipeMaterial,
+        minDiameter: Diameter.mm(math.max(
+            kFdcMinBoreMm, fireMinimumDiameter(e)?.inMillimeters ?? 0)),
+      );
+      result[e.id] = EdgeSizing(
+        edgeId: e.id,
+        service: e.service,
+        flow: FlowRate.litersPerSecond(designLps),
+        diameter: r.diameter,
+        velocity: r.velocity,
+        overCapacity: r.overVelocity,
+      );
+    }
+  }
+  // Round 37 (mech-sim-5-jockey-leg-mirrors-main-pump-bore) — a JOCKEY pump
+  // in a parallel fire-pump set is a small pressure-maintenance machine, never
+  // a full-duty standby: its leg (the degree-2 chain through it, to the split
+  // / header junctions) leaves the mirror and is sized on the jockey's OWN
+  // duty flow ([jockeyLegFlows], supplied by the app from the governing fire
+  // basis), on the fire velocity cap with the 25 mm fire-pipe minimum
+  // ([kMinSprinklerPipeDiameterMm], `// VERIFY`). It never ranks as the duty
+  // leg (the classifier orders it last). A hand-picked size stays.
+  for (final MapEntry(key: moverId, value: q) in jockeyLegFlows.entries) {
+    final mover = net.nodeById(moverId);
+    if (mover == null) continue;
+    final legEdges = <NetEdge>[];
+    for (final start in net.edgesAt(moverId)) {
+      if (start.service != ServiceType.fireHydrant &&
+          start.service != ServiceType.fireSprinkler) {
+        continue;
+      }
+      var here = moverId;
+      var edge = start;
+      final seen = <String>{moverId};
+      while (true) {
+        legEdges.add(edge);
+        final next = edge.fromId == here ? edge.toId : edge.fromId;
+        if (!seen.add(next)) break;
+        final nn = net.nodeById(next);
+        final onward = [
+          for (final e in net.edgesAt(next))
+            if (e.id != edge.id && e.service == edge.service) e,
+        ];
+        if (nn == null || nn.role == NodeRole.plant || onward.length != 1) {
+          break;
+        }
+        here = next;
+        edge = onward.single;
+      }
+    }
+    for (final e in legEdges) {
+      parallelLegEdgeIdsOut?.remove(e.id);
+      if (sizeOverrides.containsKey(e.id) || result[e.id] == null) continue;
+      final r = water.sizeForFlow(
+        flow: q,
+        maxVelocity: ctx.maxFireVelocity,
+        material: ctx.pipeMaterial,
+        minDiameter: Diameter.mm(kMinSprinklerPipeDiameterMm),
+      );
+      result[e.id] = EdgeSizing(
+        edgeId: e.id,
+        service: e.service,
+        flow: q,
+        diameter: r.diameter,
+        velocity: r.velocity,
+        overCapacity: r.overVelocity,
+      );
     }
   }
   // Attach the read-only flow orientation last (after overrides), so the arrow
@@ -4025,6 +4147,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   Set<String> closedMoverLegs = const {},
   bool returnChainEnvelope = false,
   Set<String>? returnChainKeysOut,
+  Set<String> jockeyMoverIds = const {},
 }) {
   const none = [_CheckValvePlan(<String>{}, <_StandbyLeg>[])];
   final adj = <String, List<NetEdge>>{};
@@ -4780,11 +4903,28 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     }
     for (final key in [...sets.keys]..sort()) {
       final group = sets[key]!
-        ..sort((a, b) => legPumps(a).first.compareTo(legPumps(b).first));
+        ..sort((a, b) {
+          // Round 37 — a JOCKEY leg is never the duty (tree) leg of a set.
+          final ja = legPumps(a).any(jockeyMoverIds.contains) ? 1 : 0;
+          final jb = legPumps(b).any(jockeyMoverIds.contains) ? 1 : 0;
+          if (ja != jb) return ja - jb;
+          return legPumps(a).first.compareTo(legPumps(b).first);
+        });
       if (group.length < 2) continue;
       final valved = group.where((l) => l.valveIds.isNotEmpty).length;
       // All-valved: the Round-13 structural set in `build`; mixed: here.
-      if (valved == group.length) continue;
+      // Round 37 (regression-duty-standby-leg-with-two-check-valves-splits)
+      // — the structural grouping in `build` is per VALVE (each valve's leg
+      // ends stop at the next valve), so a leg holding TWO valves (a foot /
+      // suction valve + the discharge check) never formed a set and fell to
+      // a Hardy–Cross split (p1 0.347 / p2 0.306 L/s DN15 for curve(16) =
+      // 0.6533 L/s DN25). Grouping here is per LEG (one moverLeg per degree-2
+      // chain, whatever its valve count), so any set with a multi-valve leg
+      // is handled here.
+      if (valved == group.length &&
+          group.every((l) => l.valveIds.length == 1)) {
+        continue;
+      }
       for (final l in group) {
         mixedSetValveIds.addAll(l.valveIds);
       }
@@ -5346,14 +5486,27 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       for (final g in structural)
         for (final c in g) c.id,
     };
+    // Round 37 — a valve on a JOCKEY pump's leg sorts last, so the jockey is
+    // never the duty (tree) leg; else by valve id (unchanged).
+    final jockeyValves = <String>{
+      for (final l in moverLegsByKey.values)
+        if (l.fromNodeIds.any(jockeyMoverIds.contains)) ...l.valveIds,
+    };
+    int dutyFirst(_Cv x, _Cv y) {
+      final jx = jockeyValves.contains(x.id) ? 1 : 0;
+      final jy = jockeyValves.contains(y.id) ? 1 : 0;
+      if (jx != jy) return jx - jy;
+      return x.id.compareTo(y.id);
+    }
+
     final parallelGroups = <List<_Cv>>[
-      for (final g in structural) g..sort((x, y) => x.id.compareTo(y.id)),
+      for (final g in structural) g..sort(dutyFirst),
       for (final group in byRegion.values)
         if (group.every((c) => !inStructural.contains(c.id)) &&
             group.length >= 2 &&
             ({for (final c in group) legEnd(c.id, c.outE)}.length == 1 ||
                 group.every(legHasMover)))
-          group..sort((x, y) => x.id.compareTo(y.id)),
+          group..sort(dutyFirst),
     ]..sort((x, y) => x.first.id.compareTo(y.first.id));
     final inParallel = {
       for (final g in parallelGroups)

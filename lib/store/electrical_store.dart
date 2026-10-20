@@ -1359,13 +1359,30 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           c.motorKw != null &&
           (c.sourceEquipmentId == null || c.sourceEquipmentId!.isEmpty) &&
           c.flaOverrideA == null;
-      final seededW = rekindedOffMotor && loadW == null && c.loadW <= 0
-          ? c.motorKw! * 1000 / kAssumedMotorEfficiency
+      // Round 37 (regression-rekind-motor-to-spare-seeds-phantom-load) —
+      // only a LOAD-BEARING target kind is seeded: a spare / feeder way is
+      // zero-demand by definition (as `_newCircuit` mints it) and a capacitor
+      // way reads loadW as kvar, so seeding them left a phantom 34 kW (or a
+      // 34 kvar bank) on the board, incomer, feeders and genset demand.
+      final nonLoadTarget = loadKind == LoadKind.spare ||
+          loadKind == LoadKind.capacitor ||
+          loadKind == LoadKind.feeder;
+      final seededW =
+          rekindedOffMotor && !nonLoadTarget && loadW == null && c.loadW <= 0
+              ? c.motorKw! * 1000 / kAssumedMotorEfficiency
+              : null;
+      // A way re-kinded to spare / feeder carries no W of its own unless the
+      // same edit types one.
+      final zeroedW = loadKind != null &&
+              loadKind != c.loadKind &&
+              (loadKind == LoadKind.spare || loadKind == LoadKind.feeder) &&
+              loadW == null
+          ? 0.0
           : null;
       return c.copyWith(
         name: name,
         loadKind: loadKind,
-        loadW: loadW ?? seededW,
+        loadW: loadW ?? seededW ?? zeroedW,
         motorKw: motorKw,
         clearMotorKw: clearMotorKw || rekindedOffMotor,
         cosPhi: cosPhi,

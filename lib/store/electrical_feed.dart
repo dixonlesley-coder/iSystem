@@ -36,7 +36,8 @@ import '../ui/strings/app_strings.dart' show StringKey;
 import 'history_store.dart' show setSettingUndoable;
 import 'network_store.dart';
 import 'project_store.dart';
-import 'sizing_store.dart' show parallelLegEdgeIdsProvider, sizingProvider;
+import 'sizing_store.dart'
+    show assumedFireJockeysProvider, parallelLegEdgeIdsProvider, sizingProvider;
 import 'solve_store.dart';
 
 /// Nominal voltage the MEP equipment panel is fed at (3-phase). The derived FLA
@@ -273,7 +274,13 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     hwRecircPumpNodeIds: hwPumps,
     fireStandbyPumpNodeIds: roles.standby,
     fireJockeyPumpNodeIds: roles.jockey,
-    fireAssumedJockeyPumpNodeIds: roles.assumedJockey,
+    // Round 37 — a jockey the first solve only ASSUMED stays assumed after
+    // the re-solve gave it its own small bore.
+    fireAssumedJockeyPumpNodeIds: {
+      ...roles.assumedJockey,
+      for (final id in ref.watch(assumedFireJockeysProvider))
+        if (roles.jockey.contains(id)) id,
+    },
     supplyStandbyPumpNodeIds: supplyStandby,
     hwStandbyPumpNodeIds: hwStandby.keys.toSet(),
     ejectorStandbyPumpNodeIds: duplexEjectorStandbys(

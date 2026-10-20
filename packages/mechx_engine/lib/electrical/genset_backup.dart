@@ -214,15 +214,86 @@ double gensetPhaseDemandVa(
   if (gen == null) return 0;
   final threePhaseSupply =
       sys.supply.system == ElectricalSystem.threePhase;
-  final asSystem = threePhaseSupply ? sys.supply.system : null;
-  final asVolts = threePhaseSupply ? sys.supply.voltage.volts : null;
-  final fraction = worstPhaseDemandVa(project, sys, _rootPanelIds(project),
-          asSystem: asSystem, asVolts: asVolts) *
+  if (!threePhaseSupply) {
+    // A 1φ supply: every board is 1φ, the board basis is the alternator's.
+    final fraction =
+        worstPhaseDemandVa(project, sys, _rootPanelIds(project)) *
+            gen.backupFraction;
+    final essential =
+        worstPhaseDemandVa(project, sys, _topmostBackedPanelIds(project));
+    return essential > fraction ? essential : fraction;
+  }
+  final fraction = alternatorLineDemandVa(project, sys, _rootPanelIds(project)) *
       gen.backupFraction;
-  final essential = worstPhaseDemandVa(
-      project, sys, _topmostBackedPanelIds(project),
-      asSystem: asSystem, asVolts: asVolts);
+  final essential =
+      alternatorLineDemandVa(project, sys, _topmostBackedPanelIds(project));
   return essential > fraction ? essential : fraction;
+}
+
+/// Round 37 (regression-genset-1ph-boards-on-different-lines-summed) — the
+/// per-phase VA a 3φ alternator needs to carry [panelIds], accumulated per
+/// alternator LINE rather than per board: a 3φ board adds its diversified
+/// L1 / L2 / L3 currents (`phaseBalance × diversityFactor`), a 1φ board adds
+/// its whole diversified current to the line its feeding way occupies on the
+/// parent board (the way's solved phase). The heaviest line then converts
+/// once, `√3·V_LL·I_max` ([capacityForLineCurrentVa]). Three 1φ 30.4 A
+/// essential boards on L1 / L2 / L3 load each alternator phase with 30.4 A
+/// and need √3·400·30.4 = 21.1 kVA — the Round-36 per-board sum gave three
+/// times that (a 65 kVA set where a 33 kVA set carries 47.6 A per phase). A
+/// 1φ board whose line cannot be resolved (no parent, or the way is not on
+/// one line) keeps the conservative per-board term √3·V_LL·I. Pure.
+double alternatorLineDemandVa(ElectricalProject project,
+    ElectricalSystemResult sys, Iterable<String> panelIds) {
+  final volts = sys.supply.voltage.volts;
+  final modelById = {for (final p in project.panels) p.id: p};
+  // child panel id → (parent id, feeding circuit id)
+  final feedOf = <String, (String, String)>{};
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final fed = c.feedsPanelId;
+      if (fed != null && fed.isNotEmpty) feedOf[fed] = (p.id, c.id);
+    }
+  }
+  var l1 = 0.0, l2 = 0.0, l3 = 0.0;
+  var unresolvedVa = 0.0;
+  for (final id in panelIds) {
+    final r = sys.panels[id];
+    final m = modelById[id];
+    if (r == null || m == null) continue;
+    if (m.system == ElectricalSystem.threePhase) {
+      final d = r.diversityFactor;
+      l1 += r.phaseBalance.l1 * d;
+      l2 += r.phaseBalance.l2 * d;
+      l3 += r.phaseBalance.l3 * d;
+      continue;
+    }
+    final a = r.diversifiedDemandCurrent.amperes;
+    final feed = feedOf[id];
+    final parent = feed == null ? null : sys.panels[feed.$1];
+    PhaseAssignment? line;
+    if (parent != null && parent.system == ElectricalSystem.threePhase) {
+      for (final cr in parent.circuits) {
+        if (cr.circuitId == feed!.$2) {
+          line = cr.phase;
+          break;
+        }
+      }
+    }
+    switch (line) {
+      case PhaseAssignment.l1:
+        l1 += a;
+      case PhaseAssignment.l2:
+        l2 += a;
+      case PhaseAssignment.l3:
+        l3 += a;
+      default:
+        unresolvedVa += capacityForLineCurrentVa(
+            a, ElectricalSystem.threePhase, volts);
+    }
+  }
+  final worst = l1 > l2 ? (l1 > l3 ? l1 : l3) : (l2 > l3 ? l2 : l3);
+  return capacityForLineCurrentVa(worst, ElectricalSystem.threePhase, volts) +
+      unresolvedVa;
 }
 
 /// JUDGE-ONLY: a FORCED genset nameplate (`gen.kva`) below the essential

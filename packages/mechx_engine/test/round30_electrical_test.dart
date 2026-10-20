@@ -77,10 +77,15 @@ void main() {
       final adv = computeAdvancedStudy(p, pr, sys);
       expect(adv.supply.transformerKva, 500);
       expect(adv.supply.units, 2);
-      // Loading: each unit carries ~half the demand. 500 × 0.8 = 400 kVA
-      // against demand / 2 — compare on the SAME per-unit basis.
-      final half = sys.supply.demandVa.inKilovoltAmperes / 2;
-      expect(adv.supply.declaredBelowDemand, 500 * 0.8 < half - 1e-9);
+      // Loading: Round 37 r2 — this project has ONE service-entrance board,
+      // which sits on one section (coupler normally open), so that section
+      // carries the WHOLE demand (the incomer floor's and the
+      // service-capacity judge's basis too): 500 × 0.8 = 400 kVA against the
+      // 800 kVA demand ⇒ flagged. (Several roots keep demand / 2.)
+      final whole = sys.supply.demandVa.inKilovoltAmperes;
+      expect(whole, closeTo(800, 0.1));
+      expect(adv.supply.declaredBelowDemand, isTrue);
+      expect(adv.supply.declaredBelowDemand, 500 * 0.8 < whole - 1e-9);
       // Fault: one section's unit (coupler N.O.), never 2 × 1000 kVA:
       // 500e3 / (√3 · 400 · 0.04) = 18 042.2 A, floored at the study unit
       // and 16 kA.
