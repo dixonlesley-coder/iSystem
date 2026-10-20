@@ -81,17 +81,26 @@ String? matchBreakerSku(
         ?.sku;
 
 /// [matchBreakerSku] returning the matched [Part] (null when none covers).
+///
+/// Round 39 r3 — [incomer]: a board's MAIN device is never bought as a
+/// different breaker CLASS (an 'MCB 16A C 1P' for a scheduled 'MCCB 16A 4P')
+/// nor with FEWER poles (nor as an RCCB): such parts are disqualified, not
+/// merely ranked, so an incomer with no qualifying part stays unmatched on
+/// its own `elec:breaker:<class>:<A>:<poles>P[:kA]` price key — the same
+/// hard-requirement rule as the Round-33 exact rating.
 Part? _matchBreaker(
   BreakerResult breaker,
   List<Part> parts, {
   required int poles,
   double? minBreakingKa,
+  bool incomer = false,
 }) {
   final wantClass = _classStr(breaker.deviceClass);
   final wantCurve = _curveStr(breaker.curve);
   final need = breaker.ratingA.amperes;
 
   final candidates = _exactRatingBreakers(parts, need)
+      .where((p) => !incomer || _incomerCompatible(p, wantClass, poles))
       .where((p) => !_kaShort(p, minBreakingKa))
       .toList();
   if (candidates.isEmpty) return null;
@@ -149,6 +158,14 @@ int _wayBreakerPoles(ElectricalCircuitResult c,
   if (c.loadKind == LoadKind.feeder && boardThreePhase) return 2;
   return 1;
 }
+
+/// Round 39 r3 — true when [p] may serve as a board INCOMER of [wantClass]
+/// with [poles] poles: never an RCCB, never another declared class, never
+/// fewer declared poles. An undeclared attribute is not judged.
+bool _incomerCompatible(Part p, String wantClass, int poles) =>
+    p.deviceClass != 'RCCB' &&
+    (p.deviceClass == null || p.deviceClass == wantClass) &&
+    (p.poles == null || p.poles! >= poles);
 
 /// Round 33 — the catalogue breakers of EXACTLY [needA] (the sized rating).
 List<Part> _exactRatingBreakers(List<Part> parts, double needA) => [
@@ -358,16 +375,21 @@ List<BomLine> _panelLines(
   // figure — the one the schedule prints — never the raw bus fault (a 16 kA
   // MCCB has Ics 12 kA < a 16 kA fault, the study rules it out).
   BomLine breakerLine(String description, BreakerResult b, int poles,
-      {double? specifiedKa}) {
+      {double? specifiedKa, bool incomer = false}) {
     final needKa = specifiedKa ?? minBreakingKa;
     final kaTag = (needKa ?? 0) > 0 ? ' ${_fmt(_r1(needKa!))}kA' : '';
-    final part = _matchBreaker(b, parts, poles: poles, minBreakingKa: needKa);
+    final part = _matchBreaker(b, parts,
+        poles: poles, minBreakingKa: needKa, incomer: incomer);
     // Round 33 — parts of the sized rating exist but none reaches the
     // specified kA: the line stays unmatched AND is flagged (never priced as
-    // an adequate device, never merged with an adequate line).
+    // an adequate device, never merged with an adequate line). Round 39 r3 —
+    // for an incomer only the class / pole-compatible parts count.
     final short = part == null &&
         (needKa ?? 0) > 0 &&
         _exactRatingBreakers(parts, b.ratingA.amperes)
+            .where((p) =>
+                !incomer ||
+                _incomerCompatible(p, _classStr(b.deviceClass), poles))
             .any((p) => _kaShort(p, needKa));
     final subst = _substitutionNote(part, b, poles);
     // The notes go BEFORE the trailing " — <location>" suffix, so
@@ -411,6 +433,7 @@ List<BomLine> _panelLines(
     inc.breaker,
     inc.poles,
     specifiedKa: incomerKa,
+    incomer: true,
   ));
 
   // Enclosure — one per panel (the panel box itself; un-matched without an

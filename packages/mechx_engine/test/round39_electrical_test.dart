@@ -2,11 +2,13 @@
 //
 // Each group pins one confirmed finding with a first-principles derivation;
 // where a counterexample generalises, it is a seeded property.
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_bom.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/bom.dart';
+import 'package:mechx_engine/electrical/catalog.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/containment.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
@@ -214,7 +216,7 @@ void main() {
   });
 
   // ── 2b. (r2) two fed boards: the parent never depends on the labels ─────
-  group('regression-history-free-feeder-lines (two fed boards)', () {
+  group('regression-history-free-feeder-lines (two fed boards, r3)', () {
     ElectricalCircuit heater(String id, double a) => ElectricalCircuit(
           id: id,
           name: id,
@@ -258,51 +260,80 @@ void main() {
       board('A', 'fA'),
       board('B', 'fB'),
     ]);
-    PhaseAssignment rot(PhaseAssignment a) => switch (a) {
-          PhaseAssignment.l1 => PhaseAssignment.l2,
-          PhaseAssignment.l2 => PhaseAssignment.l3,
-          _ => PhaseAssignment.l1,
+    PhaseLine rot(PhaseAssignment a) => switch (a) {
+          PhaseAssignment.l1 => PhaseLine.l2,
+          PhaseAssignment.l2 => PhaseLine.l3,
+          _ => PhaseLine.l1,
         };
     final reopened = computeSystem(_p, project);
-    final judgedB = {
+    final engineB = {
       for (final c in reopened.panels['B']!.circuits) c.circuitId: c.phase,
     };
-    final live = computeSystem(_p, project,
-        priorAssignments: {
-          'B': {for (final e in judgedB.entries) e.key: rot(e.value)},
-        },
-        phaseReassignThresholdA: 1.0);
+    // Round 39 r3 — the document now CARRIES B's rotated labels (the
+    // persisted `assignedPhase` the live store wrote), so the rotation is
+    // part of the document, never session memory.
+    final rotated = project.withPanels([
+      for (final p in project.panels)
+        p.id != 'B'
+            ? p
+            : p.copyWith(circuits: [
+                for (final c in p.circuits)
+                  c.copyWith(assignedPhase: rot(engineB[c.id]!)),
+              ]),
+    ]);
+    final doc = computeSystem(_p, rotated, phaseReassignThresholdA: 1.0);
     double worst(PhaseBalanceResult b) => [b.l1, b.l2, b.l3].reduce(math.max);
 
-    test('reopen: MDP worst line 60 A, 63 A incomer (derivation)', () {
+    test('no persisted assignment: MDP worst line 60 A, 63 A incomer', () {
       final m = reopened.panels['MDP']!;
       expect(worst(m.phaseBalance), closeTo(60, 0.2));
       expect(m.incomer.breaker.ratingA.amperes, 63);
     });
 
-    test('a permuting prior leaves the MDP worst line + incomer unchanged',
-        () {
-      final a = reopened.panels['MDP']!, b = live.panels['MDP']!;
-      expect(worst(b.phaseBalance), closeTo(worst(a.phaseBalance), 1e-9));
-      expect(b.phaseBalance.l1, closeTo(a.phaseBalance.l1, 1e-9));
-      expect(b.phaseBalance.l2, closeTo(a.phaseBalance.l2, 1e-9));
-      expect(b.phaseBalance.l3, closeTo(a.phaseBalance.l3, 1e-9));
-      expect(b.incomer.breaker.ratingA.amperes,
-          a.incomer.breaker.ratingA.amperes);
-      expect(b.phaseBalance.imbalancePercent,
-          closeTo(a.phaseBalance.imbalancePercent, 1e-9));
-    });
-
-    test('B prints the history-free assignment (schedule == parent basis)',
-        () {
-      final b = live.panels['B']!;
+    test('(r3) the persisted labels: B prints them, the MDP sums them', () {
+      // B keeps its rotated labels (same worst line, a relabel never saves
+      // 1 A): 30 on L2, 20 on L3, 10 on L1. A (engine LPT): 30 L1, 20 L2,
+      // 10 L3. MDP: L1 30 + 10 = 40, L2 20 + 30 = 50, L3 10 + 20 = 30 A.
+      final b = doc.panels['B']!;
       for (final c in b.circuits) {
-        expect(c.phase, judgedB[c.circuitId], reason: c.circuitId);
+        expect(c.phase.name, rot(engineB[c.circuitId]!).name,
+            reason: c.circuitId);
       }
-      final row = _way(live, 'MDP', 'fB').lineCurrentsA!;
+      final row = _way(doc, 'MDP', 'fB').lineCurrentsA!;
       expect(row[0], closeTo(b.phaseBalance.l1, 1e-6));
       expect(row[1], closeTo(b.phaseBalance.l2, 1e-6));
       expect(row[2], closeTo(b.phaseBalance.l3, 1e-6));
+      final m = doc.panels['MDP']!;
+      expect(m.phaseBalance.l1, closeTo(40, 0.2));
+      expect(m.phaseBalance.l2, closeTo(50, 0.2));
+      expect(m.phaseBalance.l3, closeTo(30, 0.2));
+      expect(m.incomer.breaker.ratingA.amperes,
+          greaterThanOrEqualTo(worst(m.phaseBalance)));
+    });
+
+    test('(r3) the document alone decides: JSON round-trip == live', () {
+      final back = ElectricalProject.fromJson(
+          jsonDecode(jsonEncode(rotated.toJson())) as Map<String, dynamic>);
+      final again = computeSystem(_p, back, phaseReassignThresholdA: 1.0);
+      for (final id in ['MDP', 'A', 'B']) {
+        final x = doc.panels[id]!, y = again.panels[id]!;
+        expect(y.phaseBalance.l1, x.phaseBalance.l1, reason: id);
+        expect(y.phaseBalance.l2, x.phaseBalance.l2, reason: id);
+        expect(y.phaseBalance.l3, x.phaseBalance.l3, reason: id);
+        expect(y.incomer.breaker.ratingA.amperes,
+            x.incomer.breaker.ratingA.amperes, reason: id);
+      }
+      // ...and the persisted field IS the prior (== an explicit prior map).
+      final viaParam = computeSystem(_p, project,
+          priorAssignments: {
+            'B': {
+              for (final e in engineB.entries)
+                e.key: PhaseAssignment.values.byName(rot(e.value).name),
+            },
+          },
+          phaseReassignThresholdA: 1.0);
+      expect(viaParam.panels['MDP']!.phaseBalance.l2,
+          doc.panels['MDP']!.phaseBalance.l2);
     });
 
     test('a NON-permuting sticky result keeps its labels', () {
@@ -334,9 +365,6 @@ void main() {
       expect(x.circuits.firstWhere((c) => c.circuitId == 'x5').phase,
           PhaseAssignment.l2);
       expect(x.phaseBalance.l2, closeTo(25, 0.2));
-      // …while the parent-facing basis stays the history-free 30 / 20 / 15.
-      final j = x.parentFacingPhaseBalance;
-      expect(([j.l1, j.l2, j.l3]..sort())[1], closeTo(20, 0.2));
     });
   });
 
@@ -518,6 +546,94 @@ void main() {
       // Below the MCB ladder top nothing changes (byte-identical).
       expect(identical(faultAwareBreakerClass(b, const Current(10000)), b),
           isTrue);
+    });
+  });
+
+  // ── 4b. (r3) an incomer is never bought as another class / fewer poles ─
+  group('regression-bom-incomer-substituted-by-smaller-class', () {
+    // The scheduled incomer 'MCCB 16A 4P' (Round-39 fault-aware class on a
+    // 36 kA bus) used to be priced as the catalogue 'MCB 16A C 1P' — a class
+    // AND pole departure merely flagged deviceSubstituted. An incomer's class
+    // and pole count are hard requirements (like the Round-33 exact rating):
+    // with no compatible part it stays UNMATCHED on its own price key.
+    const project = ElectricalProject(
+      id: 'p',
+      name: 'P',
+      transformerKva: const ApparentPower(1000000),
+      panels: [
+        ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
+          ElectricalCircuit(
+              id: 'l',
+              name: 'Lights',
+              loadKind: LoadKind.lighting,
+              loadW: 300,
+              cosPhi: 0.9,
+              phases: 1,
+              length: const Length(10)),
+        ]),
+      ],
+    );
+    final sys = computeSystem(_p, project,
+        originFaultLevel: estimatedServiceFaultLevelA(project));
+    final inc = sys.panels['MDP']!.incomer;
+    Part breaker(String sku, String cls, int poles,
+            {double rating = 16, double? ka, String? curve}) =>
+        Part(
+          sku: sku,
+          manufacturer: 'Test',
+          category: PartCategory.breaker,
+          series: 'T',
+          model: '$cls ${rating}A ${poles}P',
+          attributes: {
+            'ratingA': rating,
+            'poles': poles,
+            'deviceClass': cls,
+            if (curve != null) 'curve': curve,
+            if (ka != null) 'breakingKa': ka,
+          },
+        );
+    BomLine incomerLine(List<Part> parts) =>
+        buildBom(sys, parts: parts, incomerKaByPanelId: const {'MDP': 50})
+            .lines
+            .singleWhere((l) => l.description.contains('incomer'));
+
+    test('premise: the schedule specifies MCCB 16A 4P', () {
+      expect(inc.breaker.deviceClass, BreakerClass.mccb);
+      expect(inc.breaker.ratingA.amperes, 16);
+      expect(inc.poles, 4);
+    });
+
+    test('only an MCB 16A C 1P in the catalogue => unmatched, own key', () {
+      final l = incomerLine([breaker('MCB1', 'MCB', 1, ka: 50, curve: 'C')]);
+      expect(l.sku, isNull);
+      expect(l.deviceSubstituted, isFalse);
+      expect(l.priceKey, '${kElecPriceKeyPrefix}breaker:MCCB:16A:4P:50kA');
+      expect(l.description, isNot(contains('catalogue part')));
+    });
+
+    test('an MCCB with FEWER poles (3P) never serves a 4P incomer', () {
+      final l = incomerLine([breaker('MCCB3', 'MCCB', 3, ka: 50)]);
+      expect(l.sku, isNull);
+      expect(l.priceKey, '${kElecPriceKeyPrefix}breaker:MCCB:16A:4P:50kA');
+    });
+
+    test('a compatible MCCB 16A 4P is bought (over an MCB of the rating)',
+        () {
+      final l = incomerLine([
+        breaker('MCB1', 'MCB', 1, ka: 50, curve: 'C'),
+        breaker('MCCB4', 'MCCB', 4, ka: 50),
+      ]);
+      expect(l.sku, 'MCCB4');
+      expect(l.deviceSubstituted, isFalse);
+    });
+
+    test('an incompatible part short of the kA does not flag the line short',
+        () {
+      // Only an MCB (disqualified) is short of 50 kA: the MCCB is simply
+      // absent from the catalogue, so the line is unmatched, not kA-short.
+      final l = incomerLine([breaker('MCB1', 'MCB', 1, ka: 10, curve: 'C')]);
+      expect(l.sku, isNull);
+      expect(l.breakingCapacityShort, isFalse);
     });
   });
 

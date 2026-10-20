@@ -6,6 +6,7 @@
 // sub-board's phase column, and an outgoing way above its incomer.
 //
 // Every expected figure is derived from first principles in the comments.
+import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -144,31 +145,35 @@ void main() {
     });
   });
 
-  group('feeder + alternator lines are history-free', () {
-    // Child DB (3φ): 1φ ways 31.9 / 0.8 / 24.9 / 30.4 A. Fresh optimum
-    // {31.9} / {30.4} / {24.9 + 0.8} = 31.9 / 30.4 / 25.7. The sticky prior
-    // A=L3, B=L1, C=L2, D=L1 at a 1.0 A threshold keeps 31.2 / 24.9 / 31.9
-    // (same 31.9 A worst — all the Round-37 wrapper guarantees).
-    const prior = {
-      'DB': {
-        'A': PhaseAssignment.l3,
-        'B': PhaseAssignment.l1,
-        'C': PhaseAssignment.l2,
-        'D': PhaseAssignment.l1,
-      },
+  group('feeder + alternator lines read the PERSISTED labels (r3)', () {
+    // Child DB (3φ): 1φ ways 31.9 / 0.8 / 24.9 / 30.4 A. Engine optimum
+    // {31.9} / {30.4} / {24.9 + 0.8} = 31.9 / 30.4 / 25.7. The document's
+    // persisted assignment A=L3, B=L1, C=L2, D=L1 (what the live store wrote)
+    // at the 1.0 A threshold keeps 31.2 / 24.9 / 31.9 — the same 31.9 A
+    // worst (the Round-37 wrapper) — and, since Round 39 r3, that labelled
+    // set is what the board prints AND what every parent / genset reads.
+    const labels = {
+      'A': PhaseLine.l3,
+      'B': PhaseLine.l1,
+      'C': PhaseLine.l2,
+      'D': PhaseLine.l1,
     };
-    ElectricalPanel db({String id = 'DB'}) => ElectricalPanel(
-            id: id,
-            name: id,
-            circuits: [
-              _amps('A', 31.9),
-              _amps('B', 0.8),
-              _amps('C', 24.9),
-              _amps('D', 30.4),
-            ]);
+    ElectricalPanel db({String id = 'DB', bool labelled = true}) =>
+        ElectricalPanel(id: id, name: id, circuits: [
+          for (final w in [
+            _amps('A', 31.9),
+            _amps('B', 0.8),
+            _amps('C', 24.9),
+            _amps('D', 30.4),
+          ])
+            labelled ? w.copyWith(assignedPhase: labels[w.id]) : w,
+        ]);
+    ElectricalProject reopen(ElectricalProject p) => ElectricalProject.fromJson(
+        jsonDecode(jsonEncode(p.toJson())) as Map<String, dynamic>);
 
-    test('MDP = 3φ feeder + one 15 A 1φ way: the incomer is 50 A live AND '
-        'after reopen (31.9 / 30.4 / 25.7 + 15.0 = 40.7 A worst)', () {
+    test('MDP = 3φ feeder + one 15 A 1φ way: the MDP sums the DB\'s '
+        'LABELLED lines (31.2 / 24.9 + 15 / 31.9 = 39.9 A worst), live == '
+        'reopened', () {
       final project = ElectricalProject(panels: [
         ElectricalPanel(id: 'MDP', name: 'MDP', circuits: [
           const ElectricalCircuit(
@@ -181,29 +186,56 @@ void main() {
         ]),
         db(),
       ]);
-      final live = computeSystem(_p, project,
-          priorAssignments: prior, phaseReassignThresholdA: 1.0);
-      final reopened = computeSystem(_p, project);
-      // Premise: the live DB keeps the sticky labels (a different spread).
+      final live = computeSystem(_p, project, phaseReassignThresholdA: 1.0);
+      final reopened =
+          computeSystem(_p, reopen(project), phaseReassignThresholdA: 1.0);
       final dbLive = live.panels['DB']!.phaseBalance;
-      expect([dbLive.l1, dbLive.l2, dbLive.l3]..sort(),
-          [closeTo(24.9, 1e-6), closeTo(31.2, 1e-6), closeTo(31.9, 1e-6)]);
+      expect(dbLive.l1, closeTo(31.2, 1e-6));
+      expect(dbLive.l2, closeTo(24.9, 1e-6));
+      expect(dbLive.l3, closeTo(31.9, 1e-6));
+      // The feeder row prints exactly the DB schedule's lines.
+      final row = live.panels['MDP']!.circuits
+          .firstWhere((c) => c.circuitId == 'f')
+          .lineCurrentsA!;
+      expect(row, [
+        closeTo(dbLive.l1, 1e-6),
+        closeTo(dbLive.l2, 1e-6),
+        closeTo(dbLive.l3, 1e-6),
+      ]);
+      // x (15 A) goes on the lightest labelled line (L2): 24.9 + 15 = 39.9.
+      final mdp = live.panels['MDP']!.phaseBalance;
+      expect(math.max(mdp.l1, math.max(mdp.l2, mdp.l3)), closeTo(39.9, 1e-6));
       for (final id in ['MDP', 'DB']) {
-        expect(live.panels[id]!.incomer.breaker.ratingA.amperes,
-            reopened.panels[id]!.incomer.breaker.ratingA.amperes,
+        final a = live.panels[id]!, b = reopened.panels[id]!;
+        expect(b.incomer.breaker.ratingA.amperes,
+            a.incomer.breaker.ratingA.amperes,
             reason: id);
+        expect(b.phaseBalance.l1, a.phaseBalance.l1, reason: id);
+        expect(b.phaseBalance.l2, a.phaseBalance.l2, reason: id);
+        expect(b.phaseBalance.l3, a.phaseBalance.l3, reason: id);
       }
-      final mdp = reopened.panels['MDP']!;
+      expect(live.panels['MDP']!.incomer.breaker.ratingA.amperes,
+          greaterThanOrEqualTo(39.9));
+      // Without a persisted assignment the engine optimum governs:
+      // 31.9 / 30.4 / 25.7 + 15 = 40.7 A worst -> 50 A.
+      final bare = computeSystem(
+          _p,
+          ElectricalProject(panels: [
+            project.panels.first,
+            db(labelled: false),
+          ]),
+          phaseReassignThresholdA: 1.0);
+      final m = bare.panels['MDP']!;
       expect(
-          math.max(mdp.phaseBalance.l1,
-              math.max(mdp.phaseBalance.l2, mdp.phaseBalance.l3)),
+          math.max(m.phaseBalance.l1,
+              math.max(m.phaseBalance.l2, m.phaseBalance.l3)),
           closeTo(40.7, 1e-6));
-      expect(mdp.incomer.breaker.ratingA.amperes, 50);
+      expect(m.incomer.breaker.ratingA.amperes, 50);
     });
 
-    test('genset per-phase basis: two roots (the DB board + a 10 A way '
-        'pinned to L3) ⇒ L3 = 25.7 + 10 = 35.7 A ⇒ √3·400·35.7 VA, with and '
-        'without the session prior', () {
+    test('genset per-phase basis: two roots (the labelled DB + a 10 A way '
+        'pinned to L3) ⇒ L3 = 31.9 + 10 = 41.9 A ⇒ √3·400·41.9 VA, live == '
+        'reopened', () {
       final project = ElectricalProject(
         sources: const ElectricalSources(
             generator: GeneratorSource(backupFraction: 1.0)),
@@ -213,32 +245,25 @@ void main() {
               id: 'B', name: 'B', circuits: [_amps('y', 10, pin: PhaseLine.l3)]),
         ],
       );
-      final live = computeSystem(_p, project,
-          priorAssignments: prior, phaseReassignThresholdA: 1.0);
-      final reopened = computeSystem(_p, project);
+      final live = computeSystem(_p, project, phaseReassignThresholdA: 1.0);
+      final back = reopen(project);
+      final reopened = computeSystem(_p, back, phaseReassignThresholdA: 1.0);
       final a = gensetPhaseDemandVa(project, live);
-      final b = gensetPhaseDemandVa(project, reopened);
-      expect(a, closeTo(b, 1e-6));
-      expect(b, closeTo(math.sqrt(3) * 400 * 35.7, 1.0));
+      expect(a, closeTo(gensetPhaseDemandVa(back, reopened), 1e-6));
+      expect(a, closeTo(math.sqrt(3) * 400 * 41.9, 1.0));
     });
 
-    test('seeded property: random child boards / priors ⇒ every incomer and '
-        'the genset basis are identical live and reopened', () {
+    test('seeded property: random child boards / persisted labels ⇒ every '
+        'incomer, the feeder row and the genset basis are identical live and '
+        'reopened, and the feeder row is the DB schedule', () {
       final rng = math.Random(380);
       for (var trial = 0; trial < 60; trial++) {
         final n = 2 + rng.nextInt(7);
         final ways = [
           for (var i = 0; i < n; i++)
-            _amps('w$i', (1 + rng.nextInt(400)) / 10.0)
+            _amps('w$i', (1 + rng.nextInt(400)) / 10.0).copyWith(
+                assignedPhase: PhaseLine.values[rng.nextInt(3)]),
         ];
-        final pr = {
-          for (final w in ways)
-            w.id: [
-              PhaseAssignment.l1,
-              PhaseAssignment.l2,
-              PhaseAssignment.l3
-            ][rng.nextInt(3)],
-        };
         final project = ElectricalProject(
           sources: const ElectricalSources(
               generator: GeneratorSource(backupFraction: 1.0)),
@@ -255,17 +280,26 @@ void main() {
             ElectricalPanel(id: 'DB', name: 'DB', circuits: ways),
           ],
         );
-        final live = computeSystem(_p, project,
-            priorAssignments: {'DB': pr}, phaseReassignThresholdA: 1.0);
-        final reopened = computeSystem(_p, project);
+        final live = computeSystem(_p, project, phaseReassignThresholdA: 1.0);
+        final back = reopen(project);
+        final reopened = computeSystem(_p, back, phaseReassignThresholdA: 1.0);
         for (final id in ['MDP', 'DB']) {
           expect(live.panels[id]!.incomer.breaker.ratingA.amperes,
               reopened.panels[id]!.incomer.breaker.ratingA.amperes,
               reason: 'trial $trial $id');
         }
         expect(gensetPhaseDemandVa(project, live),
-            closeTo(gensetPhaseDemandVa(project, reopened), 1e-6),
+            closeTo(gensetPhaseDemandVa(back, reopened), 1e-6),
             reason: 'trial $trial');
+        final dbb = live.panels['DB']!.phaseBalance;
+        final row = live.panels['MDP']!.circuits
+            .firstWhere((c) => c.circuitId == 'f')
+            .lineCurrentsA;
+        if (row != null) {
+          expect(row[0], closeTo(dbb.l1, 1e-6), reason: 'trial $trial');
+          expect(row[1], closeTo(dbb.l2, 1e-6), reason: 'trial $trial');
+          expect(row[2], closeTo(dbb.l3, 1e-6), reason: 'trial $trial');
+        }
       }
     });
   });

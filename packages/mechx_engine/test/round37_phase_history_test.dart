@@ -1,13 +1,14 @@
 // Round 37 (2026-10-18) — edit-fuzz-3-1 / edit-fuzz-3-2.
 //
-// The session-only phase memory (the previous solve's assignment, fed back as
-// `priorAssignment` with a 1.0 A stickiness threshold) is NEVER saved in the
-// .mechx file. So nothing that sizes or judges the board may depend on it:
+// The phase prior (the previous solve's assignment, fed back as
+// `priorAssignment` with a 1.0 A stickiness threshold):
 //
 //   * edit-fuzz-3-1 — the WORST phase (the incomer + busbar sizing current)
 //     of a seeded solve equals the unseeded solve's, whatever the prior;
-//   * edit-fuzz-3-2 — the phase-imbalance verdict (warning vs inherent info,
-//     `imbalanceReducible`) is the same seeded or not.
+//   * edit-fuzz-3-2 — superseded by Round 39 r3: the prior is now PERSISTED
+//     on the document (`assignedPhase`), so the imbalance verdict reads the
+//     SAME labelled lines the schedule prints (one figure, never a second
+//     unseeded one) and is a function of the document alone.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/compute.dart';
@@ -107,25 +108,40 @@ void main() {
       final reason = 'trial $trial: $prior';
       expect(worst(seeded), closeTo(worst(fresh), 1e-9), reason: reason);
       expect(seeded.incomer.breaker.ratingA.amperes, fresh.incomer.breaker.ratingA.amperes, reason: reason);
-      expect(seeded.phaseBalance.imbalanceReducible,
-          fresh.phaseBalance.imbalanceReducible,
-          reason: reason);
-      expect(imbalanceCode(seeded), imbalanceCode(fresh), reason: reason);
+      // Round 39 r3 — the verdict reads the LABELLED (seeded) lines: it
+      // fires exactly when the printed % is over the limit, its message
+      // prints that same %, and only a PIN makes it reducible.
+      final over = seeded.phaseBalance.imbalancePercent >
+          kPhaseImbalanceWarnPercent;
+      final code = imbalanceCode(seeded);
+      expect(code != null, over, reason: reason);
+      if (code != null) {
+        final w = seeded.warnings.firstWhere((w) => w.code == code);
+        expect(w.message,
+            contains('unbalanced by ${seeded.phaseBalance.imbalancePercent}%'),
+            reason: reason);
+      }
+      if (seeded.phaseBalance.imbalanceReducible) {
+        expect(circuits.any((c) => c.phases != 3 && c.phaseOverride != null),
+            isTrue,
+            reason: reason);
+      }
     }
   });
 
-  // Round 37 r2 (edit-fuzz-3-2 residual) — the schedule footer prints the
-  // LABELLED (sticky) lines while the verdict reads the fresh solve. Ways
+  // Round 39 r3 (replaces the Round 37 r2 two-figure note) — the verdict
+  // reads the SAME labelled lines the schedule footer prints. Ways
   // (A) 9.9 / 1.0 / 2.9 / 8.4, labelled L3 / L1 / L2 / L1:
   //   labelled  L1 1.0 + 8.4 = 9.4, L2 2.9, L3 9.9 → spread 7.0 / avg 7.4
   //             = 94.6 %;
   //   fresh     {9.9} / {8.4} / {1.0, 2.9} = 9.9 / 8.4 / 3.9 → 6.0 / 7.4
   //             = 81.1 %.
   // Same worst phase (9.9 A); the spread gain (1.0 A) does not beat the
-  // stickiness threshold, so the labels stay. The message now SAYS the two
-  // figures instead of printing a % the footer contradicts.
-  test('a labelled spread that differs from the judged one is named in the '
-      'imbalance message', () {
+  // stickiness threshold, so the labels stay. The message prints the ONE
+  // labelled figure and says the labels were kept for stability, naming the
+  // achievable 81.1 % floor (never claiming 94.6 % is that floor).
+  test('the imbalance message prints the labelled figure and the achievable '
+      'floor — one figure, no second judged one', () {
     final panel = ElectricalPanel(id: 'LP', name: 'LP', circuits: [
       load('w0', 9.9),
       load('w1', 1.0),
@@ -145,14 +161,17 @@ void main() {
     expect(worst(seeded), closeTo(worst(fresh), 1e-9));
     final w = seeded.warnings
         .firstWhere((w) => w.code.startsWith('phase-imbalance'));
-    expect(w.code, imbalanceCode(fresh));
-    expect(w.message, contains('unbalanced by 81.1%'));
-    expect(w.message, contains('labelled on this board read 94.6%'));
-    // Unseeded (and a mere relabelling): no note.
-    expect(
-        fresh.warnings
-            .firstWhere((w) => w.code.startsWith('phase-imbalance'))
-            .message,
-        isNot(contains('labelled')));
+    // No pin ⇒ the engine's own assignment ⇒ never "reducible".
+    expect(w.code, 'phase-imbalance-inherent');
+    expect(w.message, contains('unbalanced by 94.6%'));
+    expect(w.message, contains('(L1 9.4 A, L2 2.9 A, L3 9.9 A)'));
+    expect(w.message, contains('labelled phases are kept'));
+    expect(w.message, contains('81.1% is the best any assignment reaches'));
+    expect(w.message, isNot(contains('81.1% ('))); // no second line figure
+    // The unseeded board already sits AT the floor: no stability clause.
+    final f = fresh.warnings
+        .firstWhere((w) => w.code.startsWith('phase-imbalance'));
+    expect(f.message, contains('unbalanced by 81.1%'));
+    expect(f.message, isNot(contains('labelled phases are kept')));
   });
 }

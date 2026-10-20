@@ -268,10 +268,12 @@ PhaseBalance balancePhases(
   }
   // Round 37 (edit-fuzz-3-1) — phase STICKINESS may only keep a labelled
   // assignment whose WORST phase (the incomer + busbar sizing basis) equals
-  // the fresh, unseeded solve's. The prior map is session-only (never in
-  // .mechx), so a sticky assignment up to 1 A heavier sized a 40 A incomer
-  // live and 32 A after save + reopen. A spread-only difference (the labels on
-  // site) is still kept; a different worst phase never is.
+  // the fresh, unseeded solve's (stickiness never raises the sizing current:
+  // a sticky assignment up to 1 A heavier once sized a 40 A incomer where
+  // 32 A suffices). A spread-only difference (the labels on site) is still
+  // kept; a different worst phase never is. Round 39 r3 — the prior is the
+  // document's persisted `assignedPhase`, so either outcome is a function of
+  // the document alone.
   final fresh = _balancePhasesOnce(circuits, system);
   double worst(PhaseBalance b) => math.max(b.l1, math.max(b.l2, b.l3));
   return (worst(seededResult) - worst(fresh)).abs() > 1e-9
@@ -1030,35 +1032,6 @@ double _busbarWayCurrentA(ElectricalCircuitResult r, ElectricalCircuit c,
 /// by id), on the lowest tally (ties to the lower line). Load balance (l1/l2/
 /// l3) is untouched — a bank carries no balance current. A single-phase
 /// board, or one with no unpinned single-phase bank, returns [balance].
-/// Round 39 r2 — true when [panel] is a 3φ board fed (by a feeder way) from
-/// a 3φ parent that carries two or more feeder ways. [panelById] empty
-/// (a hand-built direct call) ⇒ false.
-bool _feedsIntoMultiFeederParent(
-    ElectricalPanel panel, Map<String, ElectricalPanel> panelById) {
-  if (panel.system != ElectricalSystem.threePhase) return false;
-  for (final parent in panelById.values) {
-    if (parent.id == panel.id) continue;
-    if (!parent.circuits.any((c) => c.feedsPanelId == panel.id)) continue;
-    if (parent.system != ElectricalSystem.threePhase) return false;
-    final feeders = parent.circuits
-        .where((c) => c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
-        .length;
-    return feeders >= 2;
-  }
-  return false;
-}
-
-/// Round 39 r2 — true when [a]'s line currents are a permutation of [b]'s
-/// (the same sorted triple within 1e-9).
-bool _sameSortedLines(PhaseBalance a, PhaseBalance b) {
-  final x = [a.l1, a.l2, a.l3]..sort();
-  final y = [b.l1, b.l2, b.l3]..sort();
-  for (var i = 0; i < 3; i++) {
-    if ((x[i] - y[i]).abs() > 1e-9) return false;
-  }
-  return true;
-}
-
 PhaseBalance _spreadSinglePhaseBanks(
   PhaseBalance balance, {
   required ElectricalPanel panel,
@@ -2027,35 +2000,11 @@ ElectricalPanelResult computePanel(
     panelSystems: opts.panelSystems,
   );
 
-  final judged = opts.priorAssignment.isEmpty
-      ? stickyBalance
-      : _spreadSinglePhaseBanks(
-          balancePhases(phaseCircuits, panel.system),
-          panel: panel,
-          branches: branches,
-          threePhaseOf: {
-            for (var i = 0; i < comps.length; i++)
-              comps[i].result.circuitId: comps[i].threePhase,
-          },
-          feederCapacitorFloorA: opts.feederCapacitorFloorA,
-          panelSystems: opts.panelSystems,
-        );
-  // Round 39 r2 (regression-history-free-feeder-lines) — a board fed by a
-  // 3φ feeder from a parent that feeds TWO OR MORE boards may never keep a
-  // session-sticky result that is a pure RELABELLING of the history-free
-  // lines: that parent sums its fed boards' lines position by position, so
-  // two permuted label sets moved its worst line / incomer with the editing
-  // history (MDP 50 A live vs 63 A after reopen on one document). Such a
-  // board adopts the UNSEEDED assignment — its schedule, its feeder row and
-  // the parent then share one document-only assignment. Everywhere else the
-  // labels stay sticky: a root board has no parent, and a parent of ONE fed
-  // board balances a permuted base to a permuted (same-worst-line) result.
-  // A sticky result that is NOT a permutation keeps its labels too.
-  final balance = opts.priorAssignment.isNotEmpty &&
-          _feedsIntoMultiFeederParent(panel, opts.panelById) &&
-          _sameSortedLines(stickyBalance, judged)
-      ? judged
-      : stickyBalance;
+  // Round 39 r3 — ONE assignment: the seeded (document-prior) balance is
+  // both what the board prints and what every verdict / parent reads. The
+  // prior is the document's persisted `assignedPhase`, so this is a function
+  // of the document alone (live == reopen) — no second, unseeded figure.
+  final balance = stickyBalance;
   final warnings = <ElectricalWarning>[];
   // Round 32 — integer micro-watts: the printed board kW is order-free.
   var connectedMicroW = 0;
@@ -2082,14 +2031,13 @@ ElectricalPanelResult computePanel(
   // still prints on the schedule TOTAL footer and in the panel inspector /
   // report — only the unactionable WARNING is dropped. The floor search runs
   // ONLY for a board already over the limit, so an even board costs nothing.
-  // Round 37 (edit-fuzz-3-2) — the verdict is judged on the UNSEEDED engine
-  // assignment, so a session-only prior seed (the engine's own earlier
-  // output, never saved) can neither raise nor hide the warning: the same
+  // Round 39 r3 — the verdict reads the SAME labelled lines the schedule
+  // prints; their prior is the document's persisted assignment, so the same
   // document reports the same verdict live and after reopen.
   final overImbalanceLimit = panel.system == ElectricalSystem.threePhase &&
-      judged.imbalancePercent > kPhaseImbalanceWarnPercent;
+      balance.imbalancePercent > kPhaseImbalanceWarnPercent;
   var imbalanceReducible = false;
-  var bestImbalancePercent = judged.imbalancePercent;
+  var bestImbalancePercent = balance.imbalancePercent;
   // elec-props-3 — with no phase PIN and no prior seed on any single, the
   // assignment is the ENGINE's own (exact for ≤ kPhaseExactSearchMaxWays
   // singles, by the min-worst-phase objective the incomer sizes on), so no
@@ -2102,7 +2050,7 @@ ElectricalPanelResult computePanel(
     // The average line current is assignment-invariant (the same total load is
     // shared out however the ways are placed), so the achievable imbalance is
     // the achievable SPREAD measured against the same average.
-    final avgA = (judged.l1 + judged.l2 + judged.l3) / 3;
+    final avgA = (balance.l1 + balance.l2 + balance.l3) / 3;
     // Round 37 — 3φ feeders carrying an imbalanced fed board's lines are a
     // FIXED unequal base the singles are placed against.
     final base = [0.0, 0.0, 0.0];
@@ -2122,28 +2070,9 @@ ElectricalPanelResult computePanel(
         avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
     imbalanceReducible = !engineOwned &&
         bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
-            judged.imbalancePercent;
+            balance.imbalancePercent;
   }
 
-  // Round 37 r2 (edit-fuzz-3-2 residual) — the schedule footer, inspector
-  // and report print the LABELLED (session-sticky) lines; the verdict above
-  // reads the unseeded `judged` lines. They share the worst phase (the
-  // balancer guarantees it) but the spread may differ by up to the 1.0 A
-  // stickiness threshold — so when the two differ the message says so and
-  // names the labelled figure, instead of silently printing a different %.
-  // A mere relabelling (the same three figures on other lines) is not a
-  // difference worth stating — compare the sorted lines.
-  final judgedSorted = [judged.l1, judged.l2, judged.l3]..sort();
-  final labelledSorted = [balance.l1, balance.l2, balance.l3]..sort();
-  final labelledDiffers = [
-    for (var k = 0; k < 3; k++) (judgedSorted[k] - labelledSorted[k]).abs()
-  ].any((d) => d > 1e-9);
-  final labelledNote = labelledDiffers
-      ? ' (Judged on the engine\'s fresh assignment; the phases currently '
-          'labelled on this board read ${balance.imbalancePercent}% — L1 '
-          '${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A — with the '
-          'same worst phase.)'
-      : '';
   if (overImbalanceLimit && imbalanceReducible) {
     final pinnedWays = [
       for (var i = 0; i < comps.length; i++)
@@ -2157,9 +2086,9 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance',
       severity: WarningSeverity.warning,
-      message: 'Phase loading is unbalanced by ${judged.imbalancePercent}% '
-          '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A). '
-          '$action — $bestImbalancePercent% is achievable.$labelledNote',
+      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A). '
+          '$action — $bestImbalancePercent% is achievable.',
       panelId: panel.id,
     ));
   }
@@ -2173,14 +2102,22 @@ ElectricalPanelResult computePanel(
   // be carried out. Same threshold + same reducibility test as the warning path,
   // so exactly one of the two ever fires.
   if (overImbalanceLimit && !imbalanceReducible) {
+    final labelsKeptForStability = bestImbalancePercent +
+            kPhaseImbalanceReducibleMarginPercent <
+        balance.imbalancePercent;
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance-inherent',
       severity: WarningSeverity.info,
-      message: 'Phase loading is unbalanced by ${judged.imbalancePercent}% '
-          '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A) - '
+      // Round 39 r3 — the % is the LABELLED (persisted) assignment's. When
+      // it sits above the achievable floor the labels were kept for
+      // stability (the re-labelling gain is within the threshold): say so,
+      // never claim the labelled spread is itself the floor.
+      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A) - '
+          '${labelsKeptForStability ? 'the labelled phases are kept (re-labelling would move installed ways for a spread gain within the ${opts.phaseReassignThresholdA} A stability threshold); ' : ''}'
           'inherent to the single-phase load set ($bestImbalancePercent% is the '
           'best any assignment reaches), so no redistribution helps; consider a '
-          'third leg or a 3-phase appliance.$labelledNote',
+          'third leg or a 3-phase appliance.',
       panelId: panel.id,
     ));
   }
@@ -2492,14 +2429,6 @@ ElectricalPanelResult computePanel(
       imbalancePercent: balance.imbalancePercent,
       imbalanceReducible: imbalanceReducible,
     ),
-    judgedPhaseBalance: PhaseBalanceResult(
-      l1: judged.l1,
-      l2: judged.l2,
-      l3: judged.l3,
-      imbalancePercent: judged.imbalancePercent,
-      imbalanceReducible: imbalanceReducible,
-    ),
-    judgedAssignment: judged.assignment,
     warnings: warnings,
     diversityFactor: panel.diversityFactor,
   );
@@ -2537,8 +2466,10 @@ ElectricalPanelResult computePanel(
 /// worst-phase demand exceeds what that capacity's limiter passes. Null (the default) ⇒
 /// no floor ⇒ byte-identical.
 ///
-/// PHASE STABILITY is opt-in: [priorAssignments] (`panelId → (circuitId → line)`,
-/// normally the previous solve's assignment) seeds each panel's balancer and,
+/// PHASE STABILITY: each way's persisted `assignedPhase` (Round 39 r3 — the
+/// document's own record of the last solve) plus any explicit
+/// [priorAssignments] (`panelId → (circuitId → line)`) seeds each panel's
+/// balancer and,
 /// with [phaseReassignThresholdA], stops a marginal gain from re-labelling an
 /// installed board. Empty / 0 (the defaults) ⇒ every panel balances from
 /// scratch ⇒ byte-identical.
@@ -2555,6 +2486,19 @@ ElectricalSystemResult computeSystem(
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
+  // Round 39 r3 — the phase-stability PRIOR is the document's persisted
+  // assignment (`ElectricalCircuit.assignedPhase`), so the balance is a
+  // function of the document alone; an explicit [priorAssignments] entry
+  // (tests / tools) overrides it per way.
+  final prior = <String, Map<String, PhaseAssignment>>{};
+  for (final p in panels) {
+    final m = <String, PhaseAssignment>{
+      for (final c in p.circuits)
+        if (c.assignedPhase != null) c.id: _lineAssign(c.assignedPhase!),
+      ...?priorAssignments[p.id],
+    };
+    if (m.isNotEmpty) prior[p.id] = m;
+  }
   // Topology warnings raised before any sizing — pass-invariant, so they seed
   // each sizing pass's warning list rather than accumulating across passes.
   final baseWarnings = <ElectricalWarning>[];
@@ -2820,7 +2764,7 @@ ElectricalSystemResult computeSystem(
           building: building,
           panelById: byId,
           diversityLibrary: diversityLibrary,
-          priorAssignment: priorAssignments[id] ?? const {},
+          priorAssignment: prior[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
         ),
       ).capacitorCurrentA;
@@ -2883,20 +2827,15 @@ ElectricalSystemResult computeSystem(
         building: building,
         panelById: byId,
         diversityLibrary: diversityLibrary,
-        priorAssignment: priorAssignments[id] ?? const {},
+        priorAssignment: prior[id] ?? const {},
         phaseReassignThresholdA: phaseReassignThresholdA,
       ),
     );
-    // Round 38 (regression-feeder-lines-carry-session-phase-labels) — the
-    // UNSEEDED (history-free) lines, never the session-sticky labels: the
-    // parent's incomer must be a function of the document alone.
-    // Round 39 — …except a pure RELABELLING: then the labelled lines (the
-    // fed board's printed TOTAL), so the parent's balance and the feeder
-    // row's R/S/T match the wiring the two issued schedules describe.
-    // Round 39 r2 — a board whose parent feeds two or more boards never
-    // keeps a relabelling (computePanel adopts the unseeded assignment), so
-    // a parent never sums two permuted label sets.
-    final b = solved.parentFacingPhaseBalance;
+    // Round 39 r3 — the fed board's LABELLED lines (its printed TOTAL): the
+    // assignment behind them is persisted in the document, so the parent's
+    // balance, its feeder row R/S/T and its incomer are a function of the
+    // document alone and always match the fed board's issued schedule.
+    final b = solved.phaseBalance;
     final d = panel.diversityFactor;
     if ((math.max(b.l1, math.max(b.l2, b.l3)) -
             math.min(b.l1, math.min(b.l2, b.l3))) >
@@ -3050,7 +2989,7 @@ ElectricalSystemResult computeSystem(
           building: building,
           panelById: byId,
           diversityLibrary: diversityLibrary,
-          priorAssignment: priorAssignments[id] ?? const {},
+          priorAssignment: prior[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
           feederBreakerFloorA: feederBreakerFloorA,
           feederLineCurrentsA: feederLinesByPanel,
@@ -3131,8 +3070,6 @@ ElectricalSystemResult computeSystem(
         spareWaysReserved: pr.spareWaysReserved,
         capacitorCurrentA: pr.capacitorCurrentA,
         phaseBalance: pr.phaseBalance,
-        judgedPhaseBalance: pr.judgedPhaseBalance,
-        judgedAssignment: pr.judgedAssignment,
         warnings: pr.warnings,
         diversityFactor: pr.diversityFactor,
       );

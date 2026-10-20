@@ -358,49 +358,6 @@ class ElectricalPanelResult {
 
   final PhaseBalanceResult phaseBalance;
 
-  /// Round 38 (regression-feeder-lines-carry-session-phase-labels) — the
-  /// board's per-line currents from the UNSEEDED engine balance (no session
-  /// prior), i.e. a function of the document alone. [phaseBalance] prints the
-  /// session-sticky LABELLED lines (same worst phase, spread within the 1 A
-  /// stickiness threshold); every figure that sums lines ACROSS boards (the
-  /// alternator per-line basis) reads this one so a reopen never changes it.
-  /// Null on a hand-built result ⇒ readers fall back to [phaseBalance].
-  final PhaseBalanceResult? judgedPhaseBalance;
-
-  /// The unseeded engine assignment behind [judgedPhaseBalance]
-  /// (circuit id → line). Empty on a hand-built result.
-  final Map<String, PhaseAssignment> judgedAssignment;
-
-  /// [judgedPhaseBalance], else [phaseBalance].
-  PhaseBalanceResult get historyFreePhaseBalance =>
-      judgedPhaseBalance ?? phaseBalance;
-
-  /// Round 39 (regression-history-free-feeder-lines-contradict-labelled-
-  /// subboard) — true when the session-sticky LABELLED lines are a pure
-  /// relabelling (permutation) of the history-free lines: the same sorted
-  /// triple within 1e-9.
-  bool get labelledIsPermutationOfJudged {
-    final j = judgedPhaseBalance;
-    if (j == null) return true;
-    final a = [phaseBalance.l1, phaseBalance.l2, phaseBalance.l3]..sort();
-    final b = [j.l1, j.l2, j.l3]..sort();
-    for (var i = 0; i < 3; i++) {
-      if ((a[i] - b[i]).abs() > 1e-9) return false;
-    }
-    return true;
-  }
-
-  /// Round 39 — the per-line currents a PARENT board balances this board's
-  /// feeder against (and its feeder row prints): the LABELLED lines when they
-  /// are a pure permutation of the history-free ones (so the parent agrees
-  /// with this board's issued schedule), else the history-free lines.
-  /// Round 39 r2 — that is reopen-deterministic because `computePanel` never
-  /// keeps a permuted sticky result on a board whose parent feeds two or
-  /// more boards (there labelled == history-free); a parent of ONE fed board
-  /// balances a permuted base to the same worst line / incomer.
-  PhaseBalanceResult get parentFacingPhaseBalance =>
-      labelledIsPermutationOfJudged ? phaseBalance : historyFreePhaseBalance;
-
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
   double get imbalancePercent => phaseBalance.imbalancePercent;
 
@@ -441,8 +398,6 @@ class ElectricalPanelResult {
     this.spareWaysReserved = 0,
     this.capacitorCurrentA = 0,
     required this.phaseBalance,
-    this.judgedPhaseBalance,
-    this.judgedAssignment = const {},
     required this.warnings,
     this.diversityFactor = 1.0,
   });
