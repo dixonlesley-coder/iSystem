@@ -142,9 +142,17 @@ ApparentPower gensetBackupDemandVa(
 /// service-capacity judge's conversion. [roundCurrent] rounds each current to
 /// 0.1 A first, exactly as the judge does (the recommended daya must never
 /// disagree with it). Pure.
+///
+/// Round 36 (regression-genset-1ph-essential-board-per-phase) — [asSystem] /
+/// [asVolts] convert every board's current on ONE supply basis instead of the
+/// board's own: a 1φ 230 V essential board fed from one line of a 3φ MDP puts
+/// its whole current on ONE phase of the 3φ alternator, which is rated
+/// S / (√3·400) per phase, so it needs √3·400·I — not the 230·I its own basis
+/// gives (one third of it). The daya path keeps the board basis (there the
+/// root board IS the service).
 double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
     Iterable<String> panelIds,
-    {bool roundCurrent = false}) {
+    {bool roundCurrent = false, ElectricalSystem? asSystem, double? asVolts}) {
   final modelById = {for (final p in project.panels) p.id: p};
   var va = 0.0;
   for (final id in panelIds) {
@@ -154,7 +162,8 @@ double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
     final a = roundCurrent
         ? roundTo(r.diversifiedDemandCurrent.amperes, 1)
         : r.diversifiedDemandCurrent.amperes;
-    va += capacityForLineCurrentVa(a, m.system, m.voltage.volts);
+    va += capacityForLineCurrentVa(
+        a, asSystem ?? m.system, asVolts ?? m.voltage.volts);
   }
   return va;
 }
@@ -194,15 +203,25 @@ Set<String> _topmostBackedPanelIds(ElectricalProject project) {
 /// Round 35 — the per-phase VA the genset must be rated for:
 /// `max(backupFraction × the roots' worst-phase VA, the topmost essential
 /// boards' worst-phase VA)` ([worstPhaseDemandVa]). 0 with no generator.
+///
+/// Round 36 — both terms are converted on the SUPPLY's (the alternator's)
+/// basis when it is 3φ, so a 1φ essential board contributes √3·V_LL·I (its
+/// whole current sits on one alternator phase). A 1φ supply keeps each
+/// board's own basis (every board is then 1φ).
 double gensetPhaseDemandVa(
     ElectricalProject project, ElectricalSystemResult sys) {
   final gen = project.sources?.generator;
   if (gen == null) return 0;
-  final fraction =
-      worstPhaseDemandVa(project, sys, _rootPanelIds(project)) *
-          gen.backupFraction;
-  final essential =
-      worstPhaseDemandVa(project, sys, _topmostBackedPanelIds(project));
+  final threePhaseSupply =
+      sys.supply.system == ElectricalSystem.threePhase;
+  final asSystem = threePhaseSupply ? sys.supply.system : null;
+  final asVolts = threePhaseSupply ? sys.supply.voltage.volts : null;
+  final fraction = worstPhaseDemandVa(project, sys, _rootPanelIds(project),
+          asSystem: asSystem, asVolts: asVolts) *
+      gen.backupFraction;
+  final essential = worstPhaseDemandVa(
+      project, sys, _topmostBackedPanelIds(project),
+      asSystem: asSystem, asVolts: asVolts);
   return essential > fraction ? essential : fraction;
 }
 
