@@ -2,6 +2,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/annotation_store.dart';
+import '../../store/base_point_command_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
@@ -11,6 +12,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import 'base_point_overlay.dart' show basePointKey, basePointModeLabel;
 import 'edge_context_menu.dart'
     show matchPropertiesArmedProvider, trimExtendArmedProvider;
 import 'service_style.dart';
@@ -38,6 +40,8 @@ class ModePill extends ConsumerWidget {
     // Done exit, so the armed state is never invisible.
     final trimArmed = ref.watch(trimExtendArmedProvider) != null;
     final brush = ref.watch(matchPropertiesArmedProvider);
+    // M8 — a live base-point Move / Copy / Rotate names its next pick.
+    final cmd = ref.watch(basePointCommandProvider);
 
     // The modes are mutually exclusive by the toolbar's design; resolve in
     // the same priority order the overlays mount. [keyHint] echoes the
@@ -97,6 +101,11 @@ class ModePill extends ConsumerWidget {
       escHint = false;
       swatch = serviceColor(brush.service);
       done = () => ref.read(matchPropertiesArmedProvider.notifier).disarm();
+    } else if (cmd != null) {
+      label = basePointModeLabel(cmd);
+      keyHint = basePointKey(cmd.kind);
+      freeAngle = !cmd.pickingBase && cmd.kind != BasePointCommandKind.rotate;
+      done = () => ref.read(basePointCommandProvider.notifier).cancel();
     }
     if (label == null) return const SizedBox.shrink();
 

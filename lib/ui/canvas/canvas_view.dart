@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show kMiddleMouseButton;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -83,6 +84,14 @@ class CanvasView extends ConsumerStatefulWidget {
   /// ⇒ byte-identical.
   final ValueNotifier<MinimapViewport?>? viewportSink;
 
+  /// The host pans middle-button drags itself (the Layout canvas does, from an
+  /// ancestor Listener above its opaque overlays) — so this canvas's own
+  /// scale gesture must NOT also pan a middle-button drag, or a drag over a
+  /// bare patch of canvas (where nothing above swallows the pointer) panned
+  /// twice as fast as the cursor. Default false: a standalone canvas keeps
+  /// panning every button itself.
+  final bool externalMiddlePan;
+
   const CanvasView({
     super.key,
     required this.contentSize,
@@ -95,6 +104,7 @@ class CanvasView extends ConsumerStatefulWidget {
     this.cursor,
     this.onDirectionalKey,
     this.viewportSink,
+    this.externalMiddlePan = false,
   });
 
   @override
@@ -220,6 +230,14 @@ class CanvasViewState extends ConsumerState<CanvasView>
     if (_viewportSize.isEmpty) return;
     final from = _current;
     if (from == target) return;
+    // The reduced-motion gate (OS 'disable animations' ⇒ jump, never ease).
+    final duration = MechXMotion.resolve(context, MechXMotion.medium);
+    if (duration == Duration.zero) {
+      _stopAnim();
+      _emit(target);
+      return;
+    }
+    _animCtrl.duration = duration;
     _animFrom = from;
     _animTo = target;
     _animCtrl
@@ -280,6 +298,30 @@ class CanvasViewState extends ConsumerState<CanvasView>
     _animateTo(ViewportTransform.fit(widget.contentSize, _viewportSize));
   }
 
+  /// Item 5 — ease the view to frame the world-px rectangle [world] (the drawn
+  /// network's extents — AutoCAD's ZOOM EXTENTS, double-middle-click), with
+  /// [padding] screen px around it. A rectangle thinner than [minWorldSide] on
+  /// either side (a single node, a straight run) is grown about its centre so
+  /// the zoom stays sane; the scale is clamped like every other zoom. No-op
+  /// before the first layout.
+  void fitWorldRect(Rect world,
+      {double padding = 48, double minWorldSide = 64}) {
+    if (_viewportSize.isEmpty) return;
+    final w = math.max(world.width, minWorldSide);
+    final h = math.max(world.height, minWorldSide);
+    final r = Rect.fromCenter(center: world.center, width: w, height: h);
+    final availW = math.max(1.0, _viewportSize.width - padding * 2);
+    final availH = math.max(1.0, _viewportSize.height - padding * 2);
+    final scale = math
+        .min(availW / r.width, availH / r.height)
+        .clamp(ViewportTransform.minScale, ViewportTransform.maxScale)
+        .toDouble();
+    _animateTo(ViewportTransform(
+      scale: scale,
+      offset: _viewportSize.center(Offset.zero) - r.center * scale,
+    ));
+  }
+
   /// Pan (keeping the current scale) so [world] (content px) lands at the
   /// viewport centre — the minimap tap / drag-to-navigate target (G1).
   /// IMMEDIATE (not eased): a minimap click/drag is DIRECT MANIPULATION (like a
@@ -324,7 +366,12 @@ class CanvasViewState extends ConsumerState<CanvasView>
     if (!_focus.hasPrimaryFocus) _focus.requestFocus();
   }
 
+  /// Whether the live pointer is a middle-button press (see
+  /// [CanvasView.externalMiddlePan]).
+  bool _middlePointer = false;
+
   void _onPointerDown(PointerDownEvent event) {
+    _middlePointer = event.buttons & kMiddleMouseButton != 0;
     _focus.requestFocus();
     if (!_grabbing) setState(() => _grabbing = true);
     // NB: middle-button PAN is driven from an ancestor Listener (see
@@ -339,12 +386,16 @@ class CanvasViewState extends ConsumerState<CanvasView>
   // ── Scale gesture (trackpad / touch / left-drag pan) ────────────────────────
 
   void _onScaleStart(ScaleStartDetails details) {
+    // A host-owned middle-button gesture (a pan, or the double-middle-click
+    // zoom-extents ease it just started) is not this canvas's to interrupt.
+    if (widget.externalMiddlePan && _middlePointer) return;
     _stopAnim();
     _lastScale = 1.0;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
     var vt = _current;
+    if (widget.externalMiddlePan && _middlePointer) return;
     if (details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
     }

@@ -10,6 +10,7 @@ import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/ai_copilot_store.dart';
+import '../../store/base_point_command_store.dart' show BasePointCommandKind;
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -19,6 +20,7 @@ import '../../store/sizing_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
+import 'base_point_overlay.dart' show startBasePointCommand;
 import 'offset_dialog.dart';
 
 /// Render a nominal size in inches as plain ASCII (no Unicode fractions, which
@@ -346,6 +348,28 @@ List<Widget> transformMenuRows(WidgetRef ref, VoidCallback close) {
   ];
 }
 
+/// M8 — the base-point command rows (AutoCAD MOVE / COPY / ROTATE with a
+/// picked base point), on the node AND run menus for a single element or a
+/// group. Each arms the command over the LIVE selection through the same
+/// [startBasePointCommand] the G / C / T keys use, then closes the menu (the
+/// next canvas click picks the base point). A trailing divider separates them
+/// from the element rows below.
+List<Widget> basePointMenuRows(WidgetRef ref, VoidCallback close) {
+  MechXMenuRow row(String label, BasePointCommandKind kind) => MechXMenuRow(
+        label: label,
+        onTap: () {
+          close();
+          startBasePointCommand(ref, kind);
+        },
+      );
+  return [
+    row('Move from base point   G', BasePointCommandKind.move),
+    row('Copy from base point   C', BasePointCommandKind.copy),
+    row('Rotate from base point   T', BasePointCommandKind.rotate),
+    const MechXMenuDivider(),
+  ];
+}
+
 class _NodeMenuLayer extends ConsumerWidget {
   final Offset anchor;
   final String nodeId;
@@ -394,6 +418,7 @@ class _NodeMenuLayer extends ConsumerWidget {
 
     final children = <Widget>[
       if (isMulti) ...transformMenuRows(ref, onDismiss),
+      ...basePointMenuRows(ref, onDismiss),
       if (!isMulti && isBareJunction) ...[
         const MechXMenuHeader('Fitting'),
         for (final f in JunctionFitting.values)
@@ -953,6 +978,7 @@ class _EdgeMenuPanel extends ConsumerWidget {
     if (selection.isMulti) {
       children.addAll(transformMenuRows(ref, close));
     }
+    children.addAll(basePointMenuRows(ref, close));
     // E2 — the SPAN is named on the row, and the whole-building variant is a
     // deliberate second choice rather than the silent default.
     children.add(MechXMenuRow(

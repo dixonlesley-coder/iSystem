@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show Offset;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
@@ -290,3 +291,23 @@ class HoverTargetController extends Notifier<HoverTarget?> {
 final hoverTargetProvider =
     NotifierProvider<HoverTargetController, HoverTarget?>(
         HoverTargetController.new);
+
+/// Item 6 — where the Select tool's cursor last hovered (world px on
+/// [sheetId]/[floorIndex]), so Shift+Space can cycle the pick among the
+/// elements under it. Published by the selection gesture layer on hover and
+/// cleared on exit; READ (never watched) by the Layout key handler, so a
+/// pointer move never rebuilds anything.
+typedef PickCursor = ({String sheetId, int floorIndex, Offset world});
+
+class PickCursorController extends Notifier<PickCursor?> {
+  @override
+  PickCursor? build() => null;
+
+  void set(PickCursor? cursor) {
+    if (state != cursor) state = cursor;
+  }
+}
+
+final pickCursorProvider =
+    NotifierProvider<PickCursorController, PickCursor?>(
+        PickCursorController.new);

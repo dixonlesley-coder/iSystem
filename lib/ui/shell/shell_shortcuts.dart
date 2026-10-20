@@ -232,8 +232,19 @@ const List<ShortcutGroup> kCanvasShortcutGroups = [
     ShortcutDoc('0 - 9', 'Type an exact length (mm)'),
     ShortcutDoc('Enter', 'Place the typed length / end the run'),
     ShortcutDoc('Space', 'End the run (hold to pan)'),
+    ShortcutDoc('@ x,y', 'Type a relative point (mm, +y is up)'),
+    ShortcutDoc('len < ang', 'Type a length at an angle (0 = east, CCW +)'),
     ShortcutDoc('Backspace', 'Undo the last point'),
     ShortcutDoc('Tab', 'Flip the route legs'),
+  ]),
+  ShortcutGroup('Base-point commands (Layout)', [
+    ShortcutDoc('G', 'Move the selection from a base point'),
+    ShortcutDoc('C', 'Copy the selection from a base point (repeats)'),
+    ShortcutDoc('T', 'Rotate the selection about a base point'),
+    ShortcutDoc('@ x,y', 'Type the displacement (mm), or len < ang'),
+    ShortcutDoc('0 - 9', 'Type the rotation angle (degrees, CCW +)'),
+    ShortcutDoc('Enter', 'Place the typed entry / end the command'),
+    ShortcutDoc('Esc', 'Clear the typed entry / cancel'),
   ]),
   ShortcutGroup('Selection (canvas)', [
     ShortcutDoc('Ctrl A', 'Select all on this floor'),
@@ -245,6 +256,8 @@ const List<ShortcutGroup> kCanvasShortcutGroups = [
     ShortcutDoc('Arrows', 'Nudge the selection'),
     ShortcutDoc('Shift R', 'Rotate the selection'),
     ShortcutDoc('Shift M', 'Mirror the selection'),
+    ShortcutDoc('Shift Space', 'Cycle the pick among overlapping elements'),
+    ShortcutDoc('Drag end + 0 - 9', 'Stretch a run end to a typed length'),
   ]),
   ShortcutGroup('View (canvas)', [
     ShortcutDoc('F', 'Fit the sheet'),
@@ -252,6 +265,7 @@ const List<ShortcutGroup> kCanvasShortcutGroups = [
     ShortcutDoc('Ctrl -', 'Zoom out'),
     ShortcutDoc('Ctrl 0', 'Actual size'),
     ShortcutDoc('Hold Space', 'Pan'),
+    ShortcutDoc('Double middle-click', 'Zoom to the drawing extents'),
     ShortcutDoc('Arrows', 'Pan (nothing selected)'),
   ]),
 ];
