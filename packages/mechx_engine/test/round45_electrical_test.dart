@@ -507,8 +507,9 @@ void main() {
         {bool allowParentRepeat = false}) {
       final drawn = <String, int>{};
       for (final p in pages) {
+        // Round 46 — the floor up to the plot fit's 1e-4 settling tolerance.
         expect(sldSinglePageMinLabelPt(p),
-            greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9));
+            greaterThanOrEqualTo(kMinPlotLabelPt - kRiserLegibleTolerancePt));
         expect(p.belowMinLabelPt, isNull);
         for (final x in p.prims) {
           if (x is SldLabel && x.size == 10 && x.bold) {
@@ -624,8 +625,9 @@ void main() {
           [for (final l in p.prims.whereType<SldLabel>()) l.text];
       final drawn = <String, int>{};
       for (final p in pages) {
+        // Round 46 — the floor up to the plot fit's 1e-4 settling tolerance.
         expect(sldSinglePageMinLabelPt(p),
-            greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9));
+            greaterThanOrEqualTo(kMinPlotLabelPt - kRiserLegibleTolerancePt));
         for (final b in boards(p)) {
           drawn[b] = (drawn[b] ?? 0) + 1;
         }

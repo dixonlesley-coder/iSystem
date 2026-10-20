@@ -103,6 +103,16 @@ List<String> electricalLayoutSheetIds(WidgetRef ref) {
   ];
 }
 
+/// Round 46 (drawings-7-layout-unplaced-count-projectwide) — whether the
+/// layout of [sheetId] lists the boards placed NOWHERE (no placed board up
+/// their feeder chain): the first layout sheet does (or any sheet when no
+/// sheet has electrical content yet), every other sheet's note is scoped to
+/// its own boards.
+bool electricalLayoutListsUnhomed(WidgetRef ref, String sheetId) {
+  final ids = electricalLayoutSheetIds(ref);
+  return ids.isEmpty || ids.first == sheetId;
+}
+
 /// Round 34 — the layout export chrome of [sheetId]: numbered `E-10k` /
 /// `Sheet k of n` by its position among [electricalLayoutSheetIds] (the
 /// submittal's numbering, so a standalone sheet matches the Daftar Gambar).
@@ -521,6 +531,7 @@ Future<void> exportElectricalPlanPdf(WidgetRef ref) => runExportGuarded(
           floorIndex: floorIndex,
           calibrations: mech.calibrations,
           building: mech.building,
+          listUnhomedUnplaced: electricalLayoutListsUnhomed(ref, sheet.id),
         );
         // Round 23 (elec-drafting-2-7) — the register title + the live
         // project name, exactly as the submittal package stamps this sheet.
@@ -571,6 +582,7 @@ Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
           floorIndex: floorIndex,
           calibrations: mech.calibrations,
           building: mech.building,
+          listUnhomedUnplaced: electricalLayoutListsUnhomed(ref, sheet.id),
         );
         final projectName = electricalSheetProjectName(ref) ?? 'electrical';
         final chrome = electricalLayoutChrome(ref, sheet.id).withTitle(
