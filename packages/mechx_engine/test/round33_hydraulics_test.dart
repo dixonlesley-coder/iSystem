@@ -55,8 +55,7 @@ const _target = Pressure(49033.25); // 0.5 kgf/cm² = 5.0 m
 Network _upfeed(String top) => Network(nodes: [
       _n('P', 0, 0, c: NodeComponent.pump),
       for (var i = 0; i < (top == 'none' ? 4 : 5); i++) _n('m$i', 100, i),
-      for (var i = 0; i < 4; i++)
-        _n('F$i', 200, i, role: NodeRole.fixture),
+      for (var i = 0; i < 4; i++) _n('F$i', 200, i, role: NodeRole.fixture),
       if (top == 'aav') _n('X4', 150, 4, c: NodeComponent.airVent),
       if (top == 'bare') _n('X4', 150, 4),
     ], edges: [
@@ -156,8 +155,7 @@ void main() {
   });
 
   group('a loaded open end is a delivery node (hydraulics-3-4)', () {
-    test('the bare L4 end is critical; no delivery residual below target',
-        () {
+    test('the bare L4 end is critical; no delivery residual below target', () {
       final net = _upfeed('bare');
       final sz = _size(net);
       // The sizer loads the bare end with the default demand.
@@ -172,10 +170,24 @@ void main() {
             greaterThanOrEqualTo(targetPa - 1e-6),
             reason: id);
       }
-      // X4 is a bare main on L4: its elevation is the L4 ceiling, 19.7 m
-      // (16 + 4 - 0.3), so the head is at least that lift + target.
-      expect(s.requiredPumpHead.meters,
-          greaterThan(19.7 + headFromPressure(_target).meters));
+      // Round 33 r2 — X4 is a bare main on L4 the sizer loaded with the
+      // DEFAULT TERMINAL demand (a fixture), so its residual is owed at the
+      // L4 FIXTURE height, 17.1 m (16 + 1.1), never the L4 ceiling 19.7 m
+      // (16 + 4 - 0.3) the main runs at: the head is that 17.1 m lift +
+      // friction + target, strictly below the ceiling reading (the friction
+      // P -> X4 is far under the 2.6 m difference on this short drawing).
+      final t = headFromPressure(_target).meters;
+      expect(s.requiredPumpHead.meters, greaterThan(17.1 + t));
+      expect(s.requiredPumpHead.meters, lessThan(19.7 + t));
+      // It is the critical node, so its residual is exactly the target.
+      expect(s.residualPressure['X4']!.pascals, closeTo(targetPa, 1e-6));
+      // Exact: the no-flow static at X4 is pump head - (judge elevation -
+      // pump elevation 0 m on the L0 surface), so it pins the 17.1 m.
+      expect(
+          s.noFlowStaticPressure['X4']!.pascals,
+          closeTo(
+              pressureFromHead(Head(s.requiredPumpHead.meters - 17.1)).pascals,
+              1e-6));
     });
   });
 
@@ -215,8 +227,8 @@ void main() {
 
     test('roots at the meter; the fill line carries the tank flow inward', () {
       final net = ruko();
-      final roots = serviceComponentRoots(net, _cw,
-          demandNodeIds: const {'W0', 'W1'});
+      final roots =
+          serviceComponentRoots(net, _cw, demandNodeIds: const {'W0', 'W1'});
       expect(roots['T'], 'WM');
       final sz = autoSizeNetwork(net, const SizingContext(),
           leafDemand: const {_cw: FlowRate(0.0002)},
@@ -309,9 +321,9 @@ void main() {
       // root pump develops 15 m instead of requiredPumpHead, and the booster
       // adds 3 m to every node it serves.
       expect(d.requiredPumpHead.meters, base.requiredPumpHead.meters);
-      final shift = pressureFromHead(
-              Head(base.requiredPumpHead.meters - rootHead.meters))
-          .pascals;
+      final shift =
+          pressureFromHead(Head(base.requiredPumpHead.meters - rootHead.meters))
+              .pascals;
       final boost = pressureFromHead(boosterHead).pascals;
       for (final id in ['m0', 'F0', 'F1', 'F2', 'm2']) {
         expect(d.residualPressure[id]!.pascals,

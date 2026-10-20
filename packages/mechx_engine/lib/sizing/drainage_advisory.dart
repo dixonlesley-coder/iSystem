@@ -68,10 +68,40 @@ double effectiveDrainageSlope(double projectSlope, double? diameterMm) {
 /// collector and every riser keep the project [projectSlope]. The ONE rule
 /// the sizer's velocity, the plan / canvas fall labels and the min-slope
 /// advisory read.
-double laidGravitySlope(NetEdge edge, double projectSlope, double? diameterMm) =>
+double laidGravitySlope(
+        NetEdge edge, double projectSlope, double? diameterMm) =>
     edge.service == ServiceType.drainage && edge.kind == EdgeKind.run
         ? effectiveDrainageSlope(projectSlope, diameterMm)
         : projectSlope;
+
+/// Round 33 r2 (engineer-walkthrough-plan-fall-below-own-minimum) — the
+/// one advisory the laid-fall rule owes: when [projectSlope] is flatter than
+/// the drainage RUN [edge]'s own self-cleansing floor at [diameterMm], the run
+/// is laid at that floor ([laidGravitySlope]) and this says so — e.g. 'project
+/// fall 1:250 is below the DN40 minimum; this run is laid at 1:50'. Null for
+/// a riser / vent / rainwater edge, an unknown or non-finite slope, or when
+/// the project slope already meets the floor (the drawing prints it as typed).
+/// JUDGE-ONLY — never resizes. `// VERIFY notAnSniClause` (the floors).
+DrainageAdvisory? laidSteeperAdvisory({
+  required NetEdge edge,
+  required double projectSlope,
+  double? diameterMm,
+}) {
+  if (edge.service != ServiceType.drainage || edge.kind != EdgeKind.run) {
+    return null;
+  }
+  if (!projectSlope.isFinite || projectSlope <= 0) return null;
+  final laid = laidGravitySlope(edge, projectSlope, diameterMm);
+  if (laid <= projectSlope + 1e-12) return null;
+  final dn = diameterMm == null ? '' : 'DN${diameterMm.round()} ';
+  return DrainageAdvisory(
+    edgeId: edge.id,
+    kind: DrainageAdvisoryKind.laidSteeperThanProject,
+    message: 'Project drainage fall 1:${(1 / projectSlope).round()} is below '
+        'the ${dn}self-cleansing minimum, so this run is laid (and printed) '
+        'at 1:${(1 / laid).round()} instead. (// VERIFY vs SNI 8153)',
+  );
+}
 
 /// Round 9 (plumbing-rules-developed-length-per-segment) — IPC Table 909.1
 /// maximum TRAP-ARM developed length (fixture trap weir → vent) by trap-arm
@@ -103,6 +133,12 @@ enum DrainageAdvisoryKind {
   /// The trap-arm developed length (fixture → first vented point) exceeds
   /// [maxTrapArmLengthM] for its diameter — risk of trap self-siphonage.
   developedLength,
+
+  /// Round 33 r2 — the project design fall is FLATTER than the run's own
+  /// self-cleansing minimum, so the run is drawn / sized / printed at that
+  /// minimum instead ([laidGravitySlope]); the engineer is told the drawing
+  /// overrode the typed slope (info, never a defect).
+  laidSteeperThanProject,
 }
 
 /// One advisory raised against a single drainage edge. Carries the [edgeId] so

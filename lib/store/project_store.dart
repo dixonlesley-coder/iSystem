@@ -685,8 +685,20 @@ final mountingProvider = Provider<MountingHeights>(
 ///     (`× u_to / u_from`, u = metres per drawing unit — a metre DXF beside
 ///     a millimetre one is no longer 1000× off); when exactly ONE declares a
 ///     unit the transfer is refused (null). With neither declared both files
-///     are assumed to share the unit (mm on an architectural plan). // VERIFY
+///     are assumed to share the unit (mm on an architectural plan) — unless
+///     their content frames differ WILDLY (Round 33 r2: one drawing's world
+///     extent >= [kUnitlessFrameRatioLimit] × the other's, the signature of a
+///     metre file beside a millimetre one), which is refused rather than
+///     guessed. // VERIFY
 ///   * anything mixed (PDF ↔ DXF), or a DXF without a recorded frame: null.
+/// Round 33 r2 (import-robustness-2-1) — the world-extent ratio between two
+/// UNITLESS DXF sheets at or beyond which [transferCalibration] refuses to
+/// assume a shared drawing unit: a metre file beside a millimetre one differs
+/// 1000×, metre / centimetre 100×, foot / mm ~305×, while two floors of one
+/// plan (or a plan beside a part plan) stay well inside 100×. A heuristic
+/// boundary, `// VERIFY notAnSniClause` — never a unit claim.
+const double kUnitlessFrameRatioLimit = 100.0;
+
 ScaleCalibration? transferCalibration(
   ScaleCalibration source, {
   required Sheet from,
@@ -700,6 +712,17 @@ ScaleCalibration? transferCalibration(
   final uFrom = dxfUnitMetres(from.dxfInsUnits ?? 0);
   final uTo = dxfUnitMetres(to.dxfInsUnits ?? 0);
   if ((uFrom == null) != (uTo == null)) return null;
+  if (uFrom == null && uTo == null) {
+    // k = content px per world unit, so kFrom / kTo is the ratio of the two
+    // drawings' world extents (to / from) — 1000 for m beside mm.
+    final frameRatio = kFrom / kTo;
+    if (!frameRatio.isFinite ||
+        frameRatio <= 0 ||
+        frameRatio >= kUnitlessFrameRatioLimit ||
+        frameRatio <= 1 / kUnitlessFrameRatioLimit) {
+      return null;
+    }
+  }
   final unitRatio = (uFrom != null && uTo != null) ? uTo / uFrom : 1.0;
   final mpp = source.metersPerPixel * kFrom / kTo * unitRatio;
   if (!mpp.isFinite || mpp <= 0) return null;

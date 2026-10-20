@@ -683,6 +683,7 @@ enum StringKey {
   issueNetworkIslandTitle,
   issueNetworkNoSourceTitle,
   issueDrainageSlopeTitle,
+  issueDrainageLaidSteeperTitle,
   issueDrainageLengthTitle,
   issueDrainageCleanoutTitle,
   issueLegionellaTitle,
@@ -2098,6 +2099,8 @@ const Map<StringKey, String> _en = {
   StringKey.issueNetworkIslandTitle: 'Network branch not connected',
   StringKey.issueNetworkNoSourceTitle: 'Network has no source',
   StringKey.issueDrainageSlopeTitle: 'Drainage slope below self-cleansing',
+  StringKey.issueDrainageLaidSteeperTitle:
+      'Drain laid steeper than the project fall',
   StringKey.issueDrainageLengthTitle: 'Trap arm too long',
   StringKey.issueDrainageCleanoutTitle: 'Drainage stack cleanout',
   StringKey.issueLegionellaTitle: 'Hot-water return temperature low',
@@ -3605,6 +3608,8 @@ const Map<StringKey, String> _id = {
   StringKey.issueNetworkIslandTitle: 'Cabang jaringan tidak terhubung',
   StringKey.issueNetworkNoSourceTitle: 'Jaringan tidak memiliki sumber',
   StringKey.issueDrainageSlopeTitle: 'Kemiringan drainase di bawah swa-bersih',
+  StringKey.issueDrainageLaidSteeperTitle:
+      'Drainase dipasang lebih curam dari kemiringan proyek',
   StringKey.issueDrainageLengthTitle: 'Lengan perangkap terlalu panjang',
   StringKey.issueDrainageCleanoutTitle: 'Cleanout tegak drainase',
   StringKey.issueLegionellaTitle: 'Suhu balik air panas rendah',

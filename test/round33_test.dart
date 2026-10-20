@@ -36,6 +36,8 @@ import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/hydraulics.dart' show pressureFromHead;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
+import 'package:mechx/ui/inspector/project_panel.dart' show planExportNodeTags;
+import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -362,6 +364,29 @@ void main() {
           closeTo(0.02 * (1684 / 40000) / (1684 / 20000), 1e-15));
     });
 
+    test('neither unit known but frames 1000x apart (m beside mm): refused',
+        () {
+      // Round 33 r2 — a 40 000-unit plan beside a 40-unit one is the
+      // metre / millimetre signature: k_from / k_to = (1684/40000) /
+      // (1684/40) = 1/1000, past the 1/100 limit ⇒ no silent 1000x scale.
+      expect(
+          transferCalibration(const ScaleCalibration(0.02),
+              from: sheet('a', 40000, 20000, null),
+              to: sheet('b', 40, 20, null)),
+          isNull);
+      expect(
+          transferCalibration(const ScaleCalibration(0.02),
+              from: sheet('a', 40, 20, 0), to: sheet('b', 40000, 20000, 0)),
+          isNull);
+      // 99x apart is still trusted (a site plan beside a part plan).
+      expect(
+          transferCalibration(const ScaleCalibration(0.02),
+              from: sheet('a', 9900, 4950, null),
+              to: sheet('b', 100, 50, null)),
+          isNotNull);
+      expect(kUnitlessFrameRatioLimit, 100);
+    });
+
     test(r'$INSUNITS round-trips in .mechx (additive)', () {
       final doc = ProjectDocument(
         projectName: 'P',
@@ -564,5 +589,30 @@ void main() {
       expect(isMepMintedCircuitName('Pump'), isTrue);
       expect(isMepMintedCircuitName('Booster pump room A'), isFalse);
     });
+  });
+
+  test('plan exports tag a custom-library fixture by its short name (r2)', () {
+    const net = Network(nodes: [
+      NetNode(
+          id: 'n1',
+          sheetId: 's',
+          x: 0,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.plant,
+          component: NodeComponent.pump),
+      NetNode(
+          id: 'n2',
+          sheetId: 's',
+          x: 10,
+          y: 0,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+          customFixtureId: 'cf1'),
+    ], edges: []);
+    final tags = planExportNodeTags(
+        net, const [CustomFixture(id: 'cf1', name: 'Ablution tap')]);
+    expect(tags['n2'], 'Ablution tap');
+    expect(tags['n1'], equipmentNodeTags(net)['n1']);
   });
 }

@@ -349,6 +349,12 @@ final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
       slope: laidGravitySlope(e, slope, d),
       diameterMm: d,
     ));
+    // Round 33 r2 — a typed project fall flatter than this run's own floor
+    // was overridden by the drawing: say so (the min-slope check above can
+    // no longer fire for a drainage run, by construction).
+    final steeper =
+        laidSteeperAdvisory(edge: e, projectSlope: slope, diameterMm: d);
+    if (steeper != null) out.add(steeper);
   }
   for (final arm in trapArmRuns(net: net, sizing: sizing, lengthOf: lengthOf)) {
     final d = sizing[arm.firstEdgeId]?.diameter.inMillimeters;

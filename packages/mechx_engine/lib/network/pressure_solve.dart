@@ -214,18 +214,21 @@ Set<String> _deliveryNodes(
   Iterable<String> reached,
   String sourceId,
   Map<String, List<({NetEdge edge, String other})>> adjacency,
-  Map<String, EdgeSizing> sizing,
-) =>
+  Map<String, EdgeSizing> sizing, {
+  Set<String>? loadedOpenEndsOut,
+}) =>
     pressureDeliveryNodes(
       net: net,
       candidates: reached,
       sourceId: sourceId,
       degreeOf: (id) => adjacency[id]?.length ?? 0,
       incidentEdges: (id) => [
-        for (final l in adjacency[id] ?? const <({NetEdge edge, String other})>[])
+        for (final l
+            in adjacency[id] ?? const <({NetEdge edge, String other})>[])
           l.edge,
       ],
       sizing: sizing,
+      loadedOpenEndsOut: loadedOpenEndsOut,
     );
 
 /// Round 33 (hydraulics-3-1 / 3-4) — the ONE delivery-node rule of the
@@ -238,13 +241,18 @@ Set<String> _deliveryNodes(
 ///      non-demand terminal or an inline device, whose single pipe the sizer
 ///      sized with flow ARRIVING at it ([EdgeSizing.flowFromId] the far end,
 ///      flow > 0) — the sizer gave it the default terminal demand, so it is
-///      owed the residual too (judged at its own elevation, the ceiling for
-///      a bare main end — conservative). A fill-line inlet (flow leaving it)
-///      is never one;
+///      owed the residual too, judged where that default terminal hangs
+///      ([pressureJudgeElevation]: fixture height for a bare cold / hot
+///      water end, never the ceiling the main itself runs at). A fill-line
+///      inlet (flow leaving it) is never one;
 ///   3. else every degree-1 leaf (legacy, a drawing with no sized flow);
 ///   4. else every candidate (degenerate — keeps the old behaviour), unless
 ///      [fallbackToAll] is false (a mover's served subset owes nothing then).
 /// [sourceId] is never a delivery node in rungs 1-3.
+///
+/// Round 33 r2 — [loadedOpenEndsOut], when given, receives exactly the
+/// rung-2 nodes (loaded open ends that are not fixtures) that end up in the
+/// returned set — the ones [pressureJudgeElevation] moves to fixture height.
 Set<String> pressureDeliveryNodes({
   required Network net,
   required Iterable<String> candidates,
@@ -253,8 +261,10 @@ Set<String> pressureDeliveryNodes({
   required Map<String, EdgeSizing> sizing,
   String? sourceId,
   bool fallbackToAll = true,
+  Set<String>? loadedOpenEndsOut,
 }) {
   final out = <String>{};
+  final loaded = <String>{};
   for (final id in candidates) {
     if (id == sourceId) continue;
     final n = net.nodeById(id);
@@ -276,15 +286,49 @@ Set<String> pressureDeliveryNodes({
         sz.flowFromId != id &&
         sz.flow.cubicMetersPerSecond > 0) {
       out.add(id);
+      loaded.add(id);
     }
   }
-  if (out.isNotEmpty) return out;
+  if (out.isNotEmpty) {
+    loadedOpenEndsOut?.addAll(loaded);
+    return out;
+  }
   final leaves = <String>{
     for (final id in candidates)
       if (id != sourceId && degreeOf(id) == 1) id,
   };
   if (leaves.isNotEmpty || !fallbackToAll) return leaves;
   return candidates.toSet();
+}
+
+/// Round 33 r2 (hydraulics-3-4) — the elevation a pressure solve judges
+/// [node] at. A LOADED open water end ([isLoadedOpenEnd]: a
+/// [pressureDeliveryNodes] rung-2 node — a bare `main` with no explicit
+/// elevation / mount height, on cold or hot water, whose one pipe the sizer
+/// sized with flow arriving)
+/// carries the sizer's DEFAULT TERMINAL demand — a fixture — so its residual
+/// is owed where a fixture hangs, the floor's fixture height (the same
+/// connection elevation [runConnectionElevation] gives a plumbing fixture),
+/// NOT the ceiling the main runs at: judging it 2.6 m higher demanded ~25 kPa
+/// more than any fixture there needs and failed the SNI floor beside a real
+/// outlet on the same main that passed. Every other node keeps
+/// [nodeElevation].
+Length pressureJudgeElevation(
+  NetNode node, {
+  required ServiceType service,
+  required BuildingLevels building,
+  MountingHeights mounting = const MountingHeights(),
+  required bool isLoadedOpenEnd,
+}) {
+  if (isLoadedOpenEnd &&
+      (service == ServiceType.coldWater || service == ServiceType.hotWater) &&
+      node.role == NodeRole.main &&
+      node.elevation == null &&
+      node.mountHeight == null &&
+      !isDeliveryFixture(node)) {
+    return building.fixtureElevationOf(node.floorIndex, mounting);
+  }
+  return nodeElevation(node, building, mounting);
 }
 
 /// Internal per-node accumulation along the path from the source.
@@ -466,12 +510,23 @@ PressureSolution solvePressurized({
     flowFromOf: (e) => sizing[e.id]?.flowFromId,
     edgeCost: edgeFrictionArriving,
   );
+  // (water-drainage-5: a ceiling main above its fixtures is not where the
+  // target residual is owed.)
+  final loadedEnds = <String>{};
+  final delivery = _deliveryNodes(
+      net, friction.keys, sourceId, adjacency, sizing,
+      loadedOpenEndsOut: loadedEnds);
   final costs = <String, _NodeCost>{
     for (final entry in friction.entries)
       entry.key: () {
         final n = net.nodeById(entry.key);
-        final elev =
-            n == null ? sourceElevation : nodeElevation(n, building, mounting);
+        final elev = n == null
+            ? sourceElevation
+            : pressureJudgeElevation(n,
+                service: service,
+                building: building,
+                mounting: mounting,
+                isLoadedOpenEnd: loadedEnds.contains(entry.key));
         return _NodeCost(
           Head(entry.value),
           Length(elev.meters - sourceElevation.meters),
@@ -481,9 +536,6 @@ PressureSolution solvePressurized({
 
   // requiredPumpHead = max over reachable DELIVERY nodes of
   //   friction-from-source + elevation-gain + target-as-head.
-  // (water-drainage-5: a ceiling main above its fixtures is not where the
-  // target residual is owed.)
-  final delivery = _deliveryNodes(net, costs.keys, sourceId, adjacency, sizing);
   var requiredPumpHead = targetHead.meters;
   var criticalNodeId = sourceId;
   costs.forEach((nodeId, cost) {
@@ -557,7 +609,9 @@ PressureSolution solvePressurized({
       if (id == sourceId) continue;
       final h = flowingHead[id];
       if (h == null) continue;
-      if (worst == null || h < worst || (h == worst && id.compareTo(criticalNodeId) < 0)) {
+      if (worst == null ||
+          h < worst ||
+          (h == worst && id.compareTo(criticalNodeId) < 0)) {
         worst = h;
         criticalNodeId = id;
       }
@@ -746,14 +800,22 @@ DownfeedSolution solveDownfeed({
 
   // residual(node) = tankStaticHead + (tankElev − nodeElev) − friction, as head.
   // The critical node is the least-served DELIVERY node (water-drainage-5).
-  final delivery = _deliveryNodes(net, friction.keys, tankId, adjacency, sizing);
+  final loadedEnds = <String>{};
+  final delivery = _deliveryNodes(net, friction.keys, tankId, adjacency, sizing,
+      loadedOpenEndsOut: loadedEnds);
   final flowingHead = <String, double>{};
   final staticHead = <String, double>{};
   friction.forEach((nodeId, f) {
     final n = net.nodeById(nodeId);
-    final nElev =
-        n == null ? tankElevation : nodeElevation(n, building, mounting);
-    final gravity = tankStaticHead.meters + (tankElevation.meters - nElev.meters);
+    final nElev = n == null
+        ? tankElevation
+        : pressureJudgeElevation(n,
+            service: service,
+            building: building,
+            mounting: mounting,
+            isLoadedOpenEnd: loadedEnds.contains(nodeId));
+    final gravity =
+        tankStaticHead.meters + (tankElevation.meters - nElev.meters);
     flowingHead[nodeId] = gravity - f;
     staticHead[nodeId] = gravity;
   });

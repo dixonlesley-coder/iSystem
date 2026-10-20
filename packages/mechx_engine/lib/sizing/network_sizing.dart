@@ -615,10 +615,17 @@ EdgeSizing sizeEdge(NetEdge edge, FlowRate flow, SizingContext ctx) {
 /// stays true — the same gate the DFU path itself applies (see
 /// [_sanitaryEdgeSizing]). Default null ⇒ the pure velocity verdict, i.e.
 /// byte-identical for every existing caller.
+///
+/// Round 33 r2 — [edge] (when known) picks the laid fall through the ONE
+/// [laidGravitySlope] rule the auto-sizer ([_sanitaryEdgeSizing]) reads, so a
+/// hand-overridden drainage RISER keeps the project slope exactly like an
+/// auto-sized one (only a drainage RUN is steepened to its own minimum
+/// fall). Null ⇒ treated as a run (every in-engine caller passes its edge).
 EdgeSizing applySizeOverride(
   EdgeSizing sizing,
   Diameter override, {
   SizingContext? ctx,
+  NetEdge? edge,
   Diameter? codeMinimum,
   Diameter? minimumCompliant,
   bool manningRun = false,
@@ -641,9 +648,13 @@ EdgeSizing applySizeOverride(
       manningN: ctx.drainageManningN,
       hydraulicRadius: Length(override.meters / 4.0),
       // Round 33 — a drainage pipe is laid at least at its own minimum fall.
-      slope: isDrainage
-          ? effectiveDrainageSlope(ctx.drainageSlope, override.inMillimeters)
-          : ctx.drainageSlope,
+      slope: !isDrainage
+          ? ctx.drainageSlope
+          : edge != null
+              ? laidGravitySlope(
+                  edge, ctx.drainageSlope, override.inMillimeters)
+              : effectiveDrainageSlope(
+                  ctx.drainageSlope, override.inMillimeters),
     );
   } else {
     // v = Q / A at the overridden diameter (continuity); see velocityFromFlow.
@@ -703,8 +714,9 @@ Map<String, EdgeSizing> sizeNetwork(
     }
     final sized = sizeEdge(edge, flow, ctx);
     final override = sizeOverrides[edge.id];
-    result[edge.id] =
-        override == null ? sized : applySizeOverride(sized, override, ctx: ctx);
+    result[edge.id] = override == null
+        ? sized
+        : applySizeOverride(sized, override, ctx: ctx, edge: edge);
   }
   return result;
 }
@@ -817,16 +829,15 @@ String _pickComponentRoot({
       final seen = <String>{id};
       while (seen.add(cur)) {
         final n = nodeOf(cur);
-        if (roleOf(cur) == NodeRole.plant &&
-            isMoverComponent(n?.component)) {
+        if (roleOf(cur) == NodeRole.plant && isMoverComponent(n?.component)) {
           return true;
         }
         if (!ejector.isEjectorPassThroughNode(n) || degree(cur) != 2) {
           return false;
         }
         final p = prev;
-        final next = neighbours(cur).firstWhere((x) => x != p,
-            orElse: () => '');
+        final next =
+            neighbours(cur).firstWhere((x) => x != p, orElse: () => '');
         if (next.isEmpty) return false;
         prev = cur;
         cur = next;
@@ -888,8 +899,7 @@ String _pickComponentRoot({
     // BACK to the meter (a phantom draw-off there) and left the fill pump a
     // bogus booster instead of a transfer pump.
     final best = nodeOf(plants.first);
-    if ((service == ServiceType.coldWater ||
-            service == ServiceType.hotWater) &&
+    if ((service == ServiceType.coldWater || service == ServiceType.hotWater) &&
         best?.component == NodeComponent.roofTank &&
         degree(plants.first) >= 2) {
       final meters = [
@@ -1402,12 +1412,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
   };
   final solveNet = standbyIds.isEmpty
       ? net
-      : Network(
-          nodes: net.nodes,
-          edges: [
-            for (final e in net.edges)
-              if (!standbyIds.contains(e.id)) e,
-          ]);
+      : Network(nodes: net.nodes, edges: [
+          for (final e in net.edges)
+            if (!standbyIds.contains(e.id)) e,
+        ]);
   final result = _autoSizeNetworkCore(
     solveNet,
     ctx,
@@ -1528,7 +1536,10 @@ Map<String, EdgeSizing> autoSizeNetwork(
       final override = sizeOverrides[id];
       if (override != null) {
         m = applySizeOverride(m, override,
-                ctx: ctx, codeMinimum: m.diameter, minimumCompliant: m.diameter)
+                ctx: ctx,
+                edge: edge,
+                codeMinimum: m.diameter,
+                minimumCompliant: m.diameter)
             .withFlowFrom(fromId);
       }
       result[id] = m;
@@ -3282,6 +3293,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         // true; only an OVERSIZED pick is judged on velocity alone.
         : applySizeOverride(entry.value, override,
             ctx: ctx,
+            edge: net.edgeById(entry.key),
             codeMinimum: entry.value.diameter,
             // Round 17 (gravity-3-1) — the auto pick is the DFU / WC-count /
             // trap / stack≥branch floor, so a smaller hand pick is flagged.
@@ -3436,8 +3448,8 @@ EdgeSizing _sanitaryEdgeSizing(
       : manningVelocity(
           manningN: ctx.drainageManningN,
           hydraulicRadius: Length(diameter.meters / 4.0),
-          slope: laidGravitySlope(
-              edge, ctx.drainageSlope, diameter.inMillimeters),
+          slope:
+              laidGravitySlope(edge, ctx.drainageSlope, diameter.inMillimeters),
         );
   return EdgeSizing(
     edgeId: edge.id,
@@ -3643,6 +3655,7 @@ void _clampGravityDownstreamOfOverrides({
       final raised = Diameter(need);
       result[e.id] = applySizeOverride(sized, raised,
               ctx: ctx,
+              edge: e,
               codeMinimum: raised,
               manningRun: e.service == ServiceType.rainwater &&
                   e.kind != EdgeKind.riser)
@@ -4534,7 +4547,8 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       feeders.add(l);
     }
     if (!allMovers) continue;
-    returnFedChainKeys.add(([for (final x in ch.edges) x.id]..sort()).join('\u0000'));
+    returnFedChainKeys
+        .add(([for (final x in ch.edges) x.id]..sort()).join('\u0000'));
     for (final l in feeders) {
       returnFedPumps.addAll(l.pumpIds);
     }
@@ -5950,8 +5964,8 @@ Map<String, double> _bridgeFarSideSums({
   return out;
 }
 
-final _airOpenBoundaryCache = Expando<
-    (List<NetNode>, List<NetEdge>, int, int, Set<String>)>(
+final _airOpenBoundaryCache =
+    Expando<(List<NetNode>, List<NetEdge>, int, int, Set<String>)>(
   'airOpenBoundaryLeaves',
 );
 

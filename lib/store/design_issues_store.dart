@@ -1149,6 +1149,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           str(StringKey.issueDrainageLengthTitle),
           'drainage-length'
         ),
+      DrainageAdvisoryKind.laidSteeperThanProject => (
+          str(StringKey.issueDrainageLaidSteeperTitle),
+          'drainage-laid-steeper'
+        ),
     };
     infos.add(DesignIssue(
       severity: IssueSeverity.info,

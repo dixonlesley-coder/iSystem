@@ -19,6 +19,7 @@ import '../geometry/building.dart';
 import '../network/network.dart';
 import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart' show EdgeSizing;
+import '../standards/custom_fixture.dart';
 import '../standards/sni.dart' show PlumbingFixture;
 import '../units.dart';
 import 'drawing_chrome.dart' show LabelBox;
@@ -446,7 +447,19 @@ int? _nodeIdOrdinal(String id) {
 /// (bathtub), KS (kitchen sink), HB (hose bibb), FD (floor drain). Null for
 /// anything else (equipment carries its own `P-01` tag). Pure; the plan PDF
 /// and DXF print it beside the fixture glyph (one placer, PDF == DXF).
-String? fixturePlanCode(NetNode n) {
+///
+/// Round 33 r2 — a node typed from the user fixture LIBRARY
+/// ([NetNode.customFixtureId] resolving in [customFixtures]) prints its
+/// short name ([customFixturePlanCode]) instead, so a custom fixture is never
+/// anonymous on the plan; an unresolved id falls back to the built-in rule.
+String? fixturePlanCode(NetNode n,
+    {Map<String, CustomFixture> customFixtures = const {}}) {
+  final customId = n.customFixtureId;
+  if (customId != null) {
+    final cf = customFixtures[customId];
+    final code = cf == null ? null : customFixturePlanCode(cf);
+    if (code != null) return code;
+  }
   if (n.component == NodeComponent.floorDrain) return 'FD';
   return switch (n.fixture) {
     PlumbingFixture.waterClosetFlushValve ||
@@ -460,6 +473,49 @@ String? fixturePlanCode(NetNode n) {
     PlumbingFixture.hoseBibb => 'HB',
     null => null,
   };
+}
+
+/// Round 33 r2 — the max length of a custom fixture's plan code.
+const int kCustomFixturePlanCodeMaxChars = 12;
+
+/// Round 33 r2 (engineer-walkthrough-plan-fixtures-anonymous) — the plan
+/// code of a user-library [fixture]: its NAME, reduced to plan-safe ASCII
+/// (letters, digits, space, `-`, `/`, `.`; runs of whitespace collapsed) and
+/// shortened to [kCustomFixturePlanCodeMaxChars] — cut at the last word break
+/// that fits, else hard. Self-describing, so it takes no legend entry. Null
+/// when nothing printable is left (the node then reads as an unnamed fixture).
+String? customFixturePlanCode(CustomFixture fixture) {
+  final ascii = fixture.name
+      .replaceAll(RegExp(r'[^A-Za-z0-9 ./-]'), ' ')
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .trim();
+  if (ascii.isEmpty) return null;
+  if (ascii.length <= kCustomFixturePlanCodeMaxChars) return ascii;
+  final head = ascii.substring(0, kCustomFixturePlanCodeMaxChars + 1);
+  final cut = head.lastIndexOf(' ');
+  return (cut > 0
+          ? ascii.substring(0, cut)
+          : ascii.substring(0, kCustomFixturePlanCodeMaxChars))
+      .trim();
+}
+
+/// Round 33 r2 — the plan codes of every node typed from the user fixture
+/// [library] (node id → [customFixturePlanCode]). The app merges these under
+/// the equipment tags it hands the plan PDF / DXF (`nodeTags`), so both
+/// formats print the custom name through the one placer.
+Map<String, String> customFixturePlanTags(
+    Network net, Iterable<CustomFixture> library) {
+  final byId = {for (final f in library) f.id: f};
+  if (byId.isEmpty) return const {};
+  final out = <String, String>{};
+  for (final n in net.nodes) {
+    final id = n.customFixtureId;
+    if (id == null) continue;
+    final f = byId[id];
+    final code = f == null ? null : customFixturePlanCode(f);
+    if (code != null) out[n.id] = code;
+  }
+  return out;
 }
 
 /// Round 33 — what each [fixturePlanCode] stands for (the plan legend key).
@@ -519,10 +575,10 @@ List<String> planSheetNotes({
       final ka = kFixturePlanCodeNames.keys.toList();
       return ka.indexOf(a).compareTo(ka.indexOf(b));
     });
+  // A custom-library code is its own name (self-describing): no key entry.
+  codes.removeWhere((c) => !kFixturePlanCodeNames.containsKey(c));
   if (codes.isNotEmpty) {
-    notes.add(codes
-        .map((c) => '$c ${kFixturePlanCodeNames[c] ?? c}')
-        .join(' - '));
+    notes.add(codes.map((c) => '$c ${kFixturePlanCodeNames[c]}').join(' - '));
   }
   if (hasCentrelineLabels && floorFflM != null && floorFflM.isFinite) {
     final where = [
@@ -663,7 +719,6 @@ String? gravitySlopeLabel(double slope) {
 // setting-out grid lines are a SOFT obstacle (a tag prefers not to cross one,
 // a leader never runs along one — nor along any other linework).
 
-
 /// Line pitch (× text size) of a two-line label block and of the escape rows.
 const double kPlanLabelLineFactor = 1.3;
 
@@ -693,7 +748,13 @@ const double _kLabelGapFactor = 0.2;
 /// in preference order: midpoint, quarters, then the 3/8 / 5/8 and eighth
 /// points. The first two match the original greedy ladder (mid, quarter).
 const List<double> _kAlongStations = [
-  0.5, 0.25, 0.75, 0.375, 0.625, 0.125, 0.875
+  0.5,
+  0.25,
+  0.75,
+  0.375,
+  0.625,
+  0.125,
+  0.875
 ];
 
 /// A run's linework as an obstacle segment in the output space.
@@ -903,11 +964,10 @@ bool _quadsOverlap(List<(double, double)> a, List<(double, double)> b) {
 
 /// Proper (crossing) intersection of two segments — shared endpoints and
 /// collinear touches do NOT count (a leader that starts on a junction is fine).
-bool _segmentsCross(
-    double ax, double ay, double bx, double by,
-    double cx, double cy, double dx, double dy) {
-  double orient(double px, double py, double qx, double qy, double rx,
-          double ry) =>
+bool _segmentsCross(double ax, double ay, double bx, double by, double cx,
+    double cy, double dx, double dy) {
+  double orient(
+          double px, double py, double qx, double qy, double rx, double ry) =>
       (qx - px) * (ry - py) - (qy - py) * (rx - px);
   final d1 = orient(cx, cy, dx, dy, ax, ay);
   final d2 = orient(cx, cy, dx, dy, bx, by);
@@ -1000,7 +1060,8 @@ LeaderedLabelPlacement placePlanLabel({
   // Line forms, in preference order. A label much longer than its run reads
   // as detached from it, so the split form goes first there.
   final single = [text];
-  final split = (splitLines != null && splitLines.length == 2) ? splitLines : null;
+  final split =
+      (splitLines != null && splitLines.length == 2) ? splitLines : null;
   final forms = <List<String>>[
     if (split != null && widthOf(text) > runLen * 1.15) split,
     single,
@@ -1056,8 +1117,7 @@ LeaderedLabelPlacement placePlanLabel({
     var hits = 0;
     for (final r in layout._runs) {
       if (r.id != null && r.id == ownRunId) continue;
-      if (_segHitsRect(
-          r.seg, ca, sa, b.cx, b.cy, b.halfW, b.v0, b.v1, clear)) {
+      if (_segHitsRect(r.seg, ca, sa, b.cx, b.cy, b.halfW, b.v0, b.v1, clear)) {
         hits++;
       }
     }
@@ -1311,8 +1371,8 @@ LeaderedLabelPlacement placePlanLabel({
         var crossings = 0;
         for (final r in layout._runs) {
           if (r.id != null && r.id == ownRunId) continue;
-          if (_segmentsCross(sx, sy, ex, ey, r.seg.x1, r.seg.y1, r.seg.x2,
-              r.seg.y2)) {
+          if (_segmentsCross(
+              sx, sy, ex, ey, r.seg.x1, r.seg.y1, r.seg.x2, r.seg.y2)) {
             crossings++;
           }
         }

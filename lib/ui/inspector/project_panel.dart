@@ -29,11 +29,13 @@ import 'package:mechx_engine/report/pdf_export.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/plan_symbols.dart'
     show
+        customFixturePlanTags,
         equipmentNodeTags,
         fixturePlanTags,
         planEdgeElevationLabels,
         planSheetNotes;
 import 'package:mechx_engine/report/report_blocks.dart';
+import 'package:mechx_engine/standards/custom_fixture.dart' show CustomFixture;
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
@@ -1409,7 +1411,8 @@ DrawingChrome issuableChrome(
     fixtureTags: fixturePlanTags(net,
         sheetId: sheetId,
         floorIndex: floorIndex,
-        nodeTags: equipmentNodeTags(net)),
+        nodeTags:
+            planExportNodeTags(net, ref.read(fixtureLibraryProvider))),
     hasCentrelineLabels: hasCl,
     floorFflM: floorIndex >= 0 && floorIndex < floors.length
         ? project.building.elevationOf(floorIndex).meters
@@ -1513,7 +1516,7 @@ Future<bool?> _writeDrawingDxf(WidgetRef ref) async {
     // G1: the stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
     // glyph, and G5: the laid gravity fall (1:N) folded into gravity-run size
     // labels — the same tokens the on-canvas plan shows, now on the issued DXF.
-    nodeTags: equipmentNodeTags(net),
+    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
     // H5: the LAID design slope the sizer + the report actually used
     // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
     // issued sheet must not contradict the signed report (see the contract note
@@ -1567,7 +1570,7 @@ Future<bool?> _writeDrawingPdf(WidgetRef ref) async {
     // G1: stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued PDF.
-    nodeTags: equipmentNodeTags(net),
+    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
     // H5: the LAID design slope the sizer + the report actually used
     // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
     // issued sheet must not contradict the signed report (see the contract note
@@ -1646,7 +1649,7 @@ Future<bool?> _writeAnnotatedPlanPdf(WidgetRef ref) async {
     // G1: stable equipment tags (P-01 / TK-01 / AHU-01 …) beside each plant
     // glyph, and G5: the laid gravity fall (1:N) on gravity-run size labels —
     // the same tokens the on-canvas plan shows, now on the issued plan PDF.
-    nodeTags: equipmentNodeTags(net),
+    nodeTags: planExportNodeTags(net, ref.read(fixtureLibraryProvider)),
     // H5: the LAID design slope the sizer + the report actually used
     // (`drainageSlopeProvider`), never the dark `SizingContext` default — the
     // issued sheet must not contradict the signed report (see the contract note
@@ -2201,7 +2204,8 @@ Future<bool> writeSubmittalPackageToDir(
       );
       // G1/G5: the equipment tags + gravity fall, shared by both plan formats
       // (the same tokens the on-canvas plan shows).
-      final nodeTags = equipmentNodeTags(net);
+      final nodeTags =
+          planExportNodeTags(net, ref.read(fixtureLibraryProvider));
       // H5: the LAID design slope from `drainageSlopeProvider` (the Building
       // page input the sizer + calc report already honour), so every bundled
       // submittal sheet stamps the SAME fall the report signs off on.
@@ -6629,3 +6633,15 @@ String _fmtAch(double v) =>
 /// tank-fed zone with no PRV — no table.
 bool _zoneTableNeeded(List<DownfeedZoneStatic> statics) =>
     statics.any((z) => z.viaPrv || !z.withinLimit);
+
+/// Round 33 r2 (engineer-walkthrough-plan-fixtures-anonymous) — the node tags
+/// every plan export prints: the stable equipment tags (P-01 / TK-01 …) over
+/// the custom-library fixtures' short names, so a fixture typed from the user
+/// library is never anonymous on the issued plan (PDF == DXF — both read this
+/// one map). Built-in fixtures keep their WC / LAV codes inside the engine.
+Map<String, String> planExportNodeTags(
+        Network net, List<CustomFixture> library) =>
+    {
+      ...customFixturePlanTags(net, library),
+      ...equipmentNodeTags(net),
+    };
