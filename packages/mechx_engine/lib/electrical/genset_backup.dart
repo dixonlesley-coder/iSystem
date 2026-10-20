@@ -345,7 +345,8 @@ double alternatorLineDemandVa(ElectricalProject project,
 List<ElectricalWarning> gensetBackupWarnings(
     ElectricalProject project, ElectricalSystemResult sys) {
   final gen = project.sources?.generator;
-  final forced = gen?.kva;
+  // Round 44 — the forced PLANT capacity (per-set kVA × paralleled sets).
+  final forced = gen?.totalKva;
   if (gen == null || forced == null) return const [];
   final essentialVa = essentialDemandVa(project, sys);
   final essentialW = essentialDemandW(project, sys);

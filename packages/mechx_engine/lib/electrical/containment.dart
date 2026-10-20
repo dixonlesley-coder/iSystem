@@ -18,8 +18,42 @@ library;
 
 import 'dart:math' as math;
 
+import '../standards/puil.dart' show CableInstallMethod;
 import 'load_kind.dart' show LoadKind;
+import 'model.dart' show ElectricalCircuit, ElectricalPanel;
 import 'panel_results.dart' show ElectricalCircuitResult, ElectricalPanelResult;
+
+/// Round 44 (electrical-sim-9-tray-sized-cable-issued-in-conduit) — the
+/// route a way's cable is ISSUED on, following the installation method its
+/// conductor was SIZED on: a cable sized for tray / free air (IEC method E)
+/// or clipped direct (method C) carries more current than the same cable in
+/// conduit (B1), so issuing it in conduit would leave In above the as-built
+/// Iz. Conduit / trunking / buried (a duct) keep the conduit.
+enum ContainmentRoute { conduit, tray, clipped }
+
+/// The installation method a way's conductor is SIZED on (compute.dart's
+/// sizing basis; the containment route follows it — Round 44): a way laid
+/// in ground is buried; an 'air' way on a buried board runs in conduit;
+/// else the board's method.
+CableInstallMethod effectiveInstallMethod(
+    ElectricalCircuit c, ElectricalPanel panel) {
+  if (c.laying == 'ground') return CableInstallMethod.buried;
+  if (c.laying == 'air' && panel.installMethod == CableInstallMethod.buried) {
+    return CableInstallMethod.conduit;
+  }
+  return panel.installMethod;
+}
+
+/// The route the sizing basis [method] implies.
+ContainmentRoute routeForInstallMethod(CableInstallMethod method) =>
+    switch (method) {
+      CableInstallMethod.tray || CableInstallMethod.air => ContainmentRoute.tray,
+      CableInstallMethod.wall => ContainmentRoute.clipped,
+      CableInstallMethod.conduit ||
+      CableInstallMethod.trunking ||
+      CableInstallMethod.buried =>
+        ContainmentRoute.conduit,
+    };
 
 // ---------------------------------------------------------------------------
 // Local standards constants (kept local to stay file-disjoint; folding into
@@ -104,11 +138,22 @@ class ConduitSpec {
   /// when the cable is larger than the widest standard conduit.
   final double fillPct;
 
+  /// Round 44 — the route this way is issued on. A non-[ContainmentRoute
+  /// .conduit] route lays NO conduit whatever [conduitSizeMm] says (the size
+  /// is the would-be bore, kept for reference only).
+  final ContainmentRoute route;
+
   const ConduitSpec({
     required this.cableOdMm,
     required this.conduitSizeMm,
     required this.fillPct,
+    this.route = ContainmentRoute.conduit,
   });
+
+  /// True when a conduit is actually ISSUED: the conduit route and the cable
+  /// within the single-cable fill limit.
+  bool get issuesConduit =>
+      route == ContainmentRoute.conduit && fillPct <= conduitFillSingle * 100;
 }
 
 /// Cable-tray sizing result for one panel's outgoing cables.
@@ -290,7 +335,12 @@ CableTraySpec sizeCableTray(ElectricalPanelResult panel) {
 /// Containment take-off for a panel: a conduit per outgoing circuit CABLE (a
 /// way sized as N parallel runs gets N conduits, one cable each) plus the
 /// single tray that carries them all.
-ContainmentResult containmentFor(ElectricalPanelResult panel) {
+///
+/// Round 44 — [methodOf] (circuit id → the installation method the way's
+/// conductor was sized on) routes each way: tray / air ⇒ tray, wall ⇒
+/// clipped direct, else conduit. Null ⇒ every way in conduit (legacy).
+ContainmentResult containmentFor(ElectricalPanelResult panel,
+    {CableInstallMethod? Function(String circuitId)? methodOf}) {
   final conduits = <CircuitConduit>[];
   for (final c in panel.circuits) {
     // A spare way (no cable) gets no conduit entry.
@@ -299,10 +349,21 @@ ContainmentResult containmentFor(ElectricalPanelResult panel) {
     // though it is sized like a placeholder: no conduit (the BOM buys none).
     if (c.loadKind == LoadKind.spare) continue;
     final f = fieldCablesOf(c);
+    final method = methodOf?.call(c.circuitId);
+    final route = method == null
+        ? ContainmentRoute.conduit
+        : routeForInstallMethod(method);
+    final spec = sizeConduit(f.csaMm2, f.cores);
     conduits.add(CircuitConduit(
       circuitId: c.circuitId,
       name: c.name,
-      conduit: sizeConduit(f.csaMm2, f.cores),
+      conduit: route == ContainmentRoute.conduit
+          ? spec
+          : ConduitSpec(
+              cableOdMm: spec.cableOdMm,
+              conduitSizeMm: spec.conduitSizeMm,
+              fillPct: spec.fillPct,
+              route: route),
       count: f.count,
     ));
   }

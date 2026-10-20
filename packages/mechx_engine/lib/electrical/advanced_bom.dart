@@ -13,9 +13,10 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import '../units.dart' show Power;
 import 'bom.dart';
 import 'catalog.dart' show PartCategory;
-import 'containment.dart' show ContainmentResult, conduitFillSingle;
+import 'containment.dart' show ContainmentResult, ContainmentRoute;
 import 'control/starter.dart' show ControlAssembly, DeviceCategory;
 import 'electrode.dart' show ElectrodeDesign;
 import 'genset_backup.dart' show gensetBackupDemandVa, gensetBackupDemandW;
@@ -24,7 +25,10 @@ import 'metering.dart' show MeteringKind, MeteringSpec;
 import 'model.dart' show ElectricalProject, ElectricalSystem;
 import 'panel_results.dart' show ElectricalSystemResult;
 import 'power_factor.dart' show PowerFactorResult, capacitorBanksToProcure;
-import 'sources.dart' show GeneratorTransfer, sizeGenerator;
+import 'power_oneline.dart'
+    show distributedSourceInverters, sizeDistributedSources;
+import 'sources.dart'
+    show BatteryChemistryInfo, GeneratorTransfer, sizeGenerator;
 import 'spd.dart' show SpdRecommendation, SpdTypeLabel;
 import 'supply_design.dart' show serviceTransformer;
 
@@ -98,7 +102,7 @@ List<BomLine> advancedBomLines({
   if (gen != null) {
     final demand = sys.supply.demandVa.inKilovoltAmperes;
     final sel = gen.kva != null
-        ? (kva: gen.kva!.inKilovoltAmperes, units: 1)
+        ? (kva: gen.kva!.inKilovoltAmperes, units: gen.units)
         : demand > 0
             ? (() {
                 final r = sizeGenerator(gensetBackupDemandVa(project, sys),
@@ -116,17 +120,39 @@ List<BomLine> advancedBomLines({
         category: PartCategory.accessory,
         priceKey: '${kElecPriceKeyPrefix}genset:${kva}kva',
       ));
+      // Round 44 (electrical-sim-9-paralleled-units-take-top-rung) — the
+      // transfer switch carries the PARALLELED bus (units × per-set kVA),
+      // and paralleled sets need a synchronising panel.
+      final plant = sel.units > 1
+          ? '${sel.units} x $kva kVA (${_fmt((sel.kva * sel.units).roundToDouble())} kVA)'
+          : '$kva kVA';
+      final plantKey = _fmt((sel.kva * sel.units).roundToDouble());
       lines.add(BomLine(
         description: gen.transfer == GeneratorTransfer.ats
-            ? 'Automatic transfer switch (ATS) for $kva kVA genset — G-01'
-            : 'Manual changeover switch (COS) for $kva kVA genset — G-01',
+            ? 'Automatic transfer switch (ATS) for $plant genset — G-01'
+            : 'Manual changeover switch (COS) for $plant genset — G-01',
         qty: 1,
         category: PartCategory.accessory,
         priceKey: '${kElecPriceKeyPrefix}transfer:${gen.transfer.name}:'
-            '${kva}kva',
+            '${plantKey}kva',
       ));
+      if (sel.units > 1) {
+        lines.add(BomLine(
+          description: 'Genset synchronising panel ${sel.units} x $kva kVA '
+              '— G-01',
+          qty: 1,
+          category: PartCategory.accessory,
+          priceKey: '${kElecPriceKeyPrefix}synchronising-panel:'
+              '${sel.units}x${kva}kva',
+        ));
+      }
     }
   }
+
+  // ── Round 44 (elec-report-bom-3-battery-inverter-pv-never-taken-off) — the
+  // battery bank, PV modules and their inverter(s), sized by the SAME
+  // [sizeDistributedSources] the power one-line draws, so BOM == one-line.
+  lines.addAll(distributedSourceBomLines(project, sys));
 
   // ── Round 37 (electrical-sim-4-capacitor-bank-missing-from-bom) — the
   // capacitor bank(s) and the customer transformer(s) the study, schedule and
@@ -249,6 +275,61 @@ List<BomLine> advancedBomLines({
   return lines;
 }
 
+/// Round 44 — the distributed-source take-off: a battery bank (installed
+/// kWh, chemistry), the PV modules (qty × Wp) and the inverter(s) — one
+/// hybrid inverter when PV + battery share it, else each source's own —
+/// sized by [sizeDistributedSources] on the building demand (the power
+/// one-line's basis). No sources ⇒ no lines (byte-identical).
+List<BomLine> distributedSourceBomLines(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final src = project.sources;
+  if (src == null || (src.solar == null && src.battery == null)) {
+    return const [];
+  }
+  final ds = sizeDistributedSources(src,
+      demand: sys.supply.demandVa, demandPower: Power(sys.supply.demandW));
+  final out = <BomLine>[];
+  final b = ds.battery;
+  if (b != null && b.installedKwh.inKilowattHours > 0) {
+    final kwh = _fmt((b.installedKwh.inKilowattHours * 100).round() / 100);
+    final mod = _fmt((b.moduleKwh.inKilowattHours * 100).round() / 100);
+    out.add(BomLine(
+      description: 'Battery bank $kwh kWh ${b.chemistry.label} '
+          '(${b.moduleCount} x $mod kWh modules) — BAT-01',
+      qty: 1,
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}battery:${kwh}kwh:'
+          '${b.chemistry.name}',
+    ));
+  }
+  final s = ds.solar;
+  if (s != null && s.panelCount > 0) {
+    out.add(BomLine(
+      description: 'PV module ${s.panelWp} Wp '
+          '(array ${_fmt((s.arrayKwp.inKiloWatts * 100).round() / 100)} kWp) '
+          '— PV-01',
+      qty: s.panelCount.toDouble(),
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}pv-module:${s.panelWp}wp',
+    ));
+  }
+  for (final inv in distributedSourceInverters(ds)) {
+    final kw = _fmt(inv.unitKw.inKiloWatts);
+    final label = switch (inv.kind) {
+      'hybrid' => 'Hybrid inverter',
+      'pv' => 'PV inverter',
+      _ => 'Battery inverter',
+    };
+    out.add(BomLine(
+      description: '$label $kw kW — INV-01',
+      qty: inv.units.toDouble(),
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}inverter:${inv.kind}:${kw}kw',
+    ));
+  }
+  return out;
+}
+
 /// Round 41 — the CONTAINMENT take-off: every non-spare way's run, routed
 /// exactly as its board-schedule row prints it (the containment study's
 /// conduit when one holds the cable — `· [N x ]PVC <mm>mm · <L> m` — else
@@ -273,7 +354,10 @@ List<BomLine> containmentBomLines(
       if (c.loadKind == LoadKind.spare || c.lengthM <= 0) continue;
       final cc = specById[c.circuitId];
       if (cc == null) continue;
-      final fits = cc.conduit.fillPct <= conduitFillSingle * 100;
+      // Round 44 — a clipped-direct way (sized on method C) buys no
+      // containment; a tray / air way (method E) is laid on the tray.
+      if (cc.conduit.route == ContainmentRoute.clipped) continue;
+      final fits = cc.conduit.issuesConduit;
       if (fits) {
         final mm = cc.conduit.conduitSizeMm.round();
         // One conduit per FIELD cable — the study's count (a star-delta

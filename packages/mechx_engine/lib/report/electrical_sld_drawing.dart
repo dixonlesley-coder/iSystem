@@ -19,7 +19,13 @@ import 'dart:math' as math;
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
 import '../electrical/containment.dart'
-    show ConduitSpec, conduitFillSingle, fieldCablesOf, sizeConduit;
+    show
+        ConduitSpec,
+        ContainmentRoute,
+        effectiveInstallMethod,
+        fieldCablesOf,
+        routeForInstallMethod,
+        sizeConduit;
 import '../electrical/control/starter.dart'
     show StarterType, effectiveStarterType;
 import '../electrical/earthing.dart'
@@ -40,7 +46,6 @@ import '../electrical/sources.dart'
         BatteryChemistryInfo,
         GeneratorModeInfo,
         kGeneratorPf,
-        selectGeneratorUnits,
         GeneratorSource,
         sizeGenerator,
         sizeBattery;
@@ -289,7 +294,7 @@ int? _conduitMm(double csaMm2, bool threePhase) {
 /// fill-aware fallback above and the study-fed token below so the two can never
 /// disagree about what "no conduit" means.
 int? _conduitFromSpec(ConduitSpec spec) =>
-    spec.fillPct > conduitFillSingle * 100 ? null : spec.conduitSizeMm.round();
+    spec.issuesConduit ? spec.conduitSizeMm.round() : null;
 
 /// A cable label like `NYM 3x2.5` — the family from the circuit's explicit
 /// [ElectricalCircuit.cableType] when set, else the conventional default for its
@@ -798,9 +803,21 @@ SldSheet buildElectricalSld({
       // fill-aware ladder. Both return null for a cable no standard conduit
       // holds ⇒ `tray`.
       final studySpec = containmentByCircuitId?[c.circuitId];
-      final conduitMm = studySpec != null
-          ? _conduitFromSpec(studySpec)
-          : _conduitMm(fieldCablesOf(c).csaMm2, c.threePhase);
+      // Round 44 — the route follows the method the conductor was SIZED on
+      // (the study's route when supplied, else the model's): a tray / air
+      // sized cable is issued on tray, a clipped-direct one clipped.
+      final ownModel = modelById[p.panelId];
+      final route = studySpec?.route ??
+          (circuit != null && ownModel != null
+              ? routeForInstallMethod(
+                  effectiveInstallMethod(circuit, ownModel))
+              : ContainmentRoute.conduit);
+      final conduitMm = route != ContainmentRoute.conduit
+          ? null
+          : studySpec != null
+              ? _conduitFromSpec(studySpec)
+              : _conduitMm(fieldCablesOf(c).csaMm2, c.threePhase);
+      final clipped = route == ContainmentRoute.clipped;
       // H6: a way whose conductor exceeds the conduit range runs on cable tray /
       // ladder, not in conduit — print an explicit `tray` route token so EVERY
       // row states a route method (the code's own convention; never a silent
@@ -815,7 +832,9 @@ SldSheet buildElectricalSld({
       final conduitCount = runs > 1 ? '${runs}x ' : '';
       final conduit = conduitMm != null
           ? ' · ${conduitCount}PVC ${conduitMm}mm'
-          : ' · tray';
+          : clipped
+              ? ' · clipped'
+              : ' · tray';
       // Round 39 (elec-props-5) — a SPARE (CADANGAN) way has no load and no
       // cable to pull (the BOM buys none): its PENGHANTAR cell is '-', like
       // the headroom CADANGAN rows, and it contributes no conduit / tray.
@@ -824,7 +843,7 @@ SldSheet buildElectricalSld({
         // no route token
       } else if (conduitMm != null) {
         anyConduit = true;
-      } else {
+      } else if (!clipped) {
         anyTray = true;
       }
       // The run LENGTH the solve already used for this way (geo-derived when
@@ -1812,25 +1831,6 @@ String _supplyHeadLabel(ElectricalProject project,
 /// demand kVA, capped at 100 (an oversized set still backs the whole load, it
 /// does not back 250% of it). Null when there is no demand or no rating — no
 /// honest ratio to print, so nothing is printed.
-/// A genset-ladder kVA figure that NEVER saturates silently (audit r8-5):
-/// below the top rung it is the single standard rating (`500`); above it,
-/// `n x 2500` paralleled sets. [totalKva] is the paralleled capacity (what the
-/// coverage % compares), [text] the printable figure (no unit). An explicit
-/// [forced] rating is printed verbatim as one set.
-({double totalKva, String text}) _ladderKva(ApparentPower required,
-    {ApparentPower? forced}) {
-  if (forced != null) {
-    final k = forced.inKilovoltAmperes;
-    return (totalKva: k, text: _num(k));
-  }
-  final sel = selectGeneratorUnits(required);
-  final unit = sel.unitKva.inKilovoltAmperes;
-  return (
-    totalKva: unit * sel.units,
-    text: sel.units > 1 ? '${sel.units} x ${_num(unit)}' : _num(unit),
-  );
-}
-
 /// Round 16 — the transformer figure for the drawings: [serviceTransformer]
 /// (`n x <kVA>` when the study needs several units).
 ({double totalKva, String text})? _transformerFig(
@@ -1854,7 +1854,12 @@ String _supplyHeadLabel(ElectricalProject project,
 /// only 0.8 × its kVA in kW, so a load above cos φ 0.8 is kW-limited.
 ({double totalKva, String text}) _gensetKva(
     ApparentPower backupVa, GeneratorSource gen, Power backupW) {
-  if (gen.kva != null) return _ladderKva(backupVa, forced: gen.kva);
+  if (gen.kva != null) {
+    // Round 44 — a forced plant of n sets prints `n x <kVA>`.
+    final k = gen.kva!.inKilovoltAmperes;
+    final n = gen.units;
+    return (totalKva: k * n, text: n > 1 ? '$n x ${_num(k)}' : _num(k));
+  }
   final r = sizeGenerator(backupVa, mode: gen.mode, backupPower: backupW);
   final unit = r.ratingKva.inKilovoltAmperes;
   return (
@@ -3325,6 +3330,9 @@ SldSheet buildElectricalRiser({
   MountingHeights mounting = const MountingHeights(),
   bool sourceChain = false,
   ({int lo, int hi})? floorRange,
+  Set<String> hidePanelIds = const {},
+  Map<String, String> typicalNames = const {},
+  Map<int, String> bandNotes = const {},
 }) {
   final parentOf = _parentOf(project, result);
   final essential = essentialPanelIds(project, result);
@@ -3351,27 +3359,10 @@ SldSheet buildElectricalRiser({
   final hasFloors = building != null && building.levelCount > 0;
   final levelCount = hasFloors ? building.levelCount : (maxDepth + 1);
 
-  // Floor index per panel (0 = lowest). With real floors: the panel's
-  // layoutPos.floorIndex (clamped), else a depth-derived tier (root highest).
-  // In tier mode: the depth tier itself, root at the top band.
-  int floorOf(String id) {
-    if (hasFloors) {
-      final lp = panelModelById[id]?.layoutPos;
-      if (lp != null) {
-        return lp.floorIndex.clamp(0, levelCount - 1);
-      }
-      // Round 15 (drafting-visual-2-4) — unplaced ⇒ a depth tier RISING from
-      // the service-entrance (GROUND) floor: the PLN-fed root sits at the
-      // entrance and each feeder depth climbs one floor (riser convention).
-      // It used to land the root on the TOP floor stamped with that floor's
-      // real FFL (+7.50) — a fabricated location — with Ground left empty.
-      final d = depth[id] ?? 0;
-      return (building.groundIndex + d).clamp(0, levelCount - 1);
-    }
-    // No floors ⇒ tier mode: root (depth 0) at the top band (highest index).
-    final d = depth[id] ?? 0;
-    return (levelCount - 1 - d).clamp(0, levelCount - 1);
-  }
+  // Floor index per panel (0 = lowest) — the ONE rule
+  // ([electricalRiserFloorOf]) the riser pagination shares.
+  final floorIndex = electricalRiserFloorOf(project, result, building);
+  int floorOf(String id) => floorIndex[id] ?? 0;
 
   // Elevation→y: the highest floor maps to the smallest y. With a degenerate
   // (zero-span) building use a fixed band height so we never divide by zero.
@@ -3419,6 +3410,9 @@ SldSheet buildElectricalRiser({
   final byFloor = <int, List<String>>{};
   for (final id in result.order) {
     if (!result.panels.containsKey(id)) continue;
+    // Round 44 — a board collapsed into a TYPICAL node, or drawn on another
+    // column page of a width-bound band, is not placed here.
+    if (hidePanelIds.contains(id)) continue;
     (byFloor[floorOf(id)] ??= []).add(id);
   }
 
@@ -3867,6 +3861,13 @@ SldSheet buildElectricalRiser({
       final tier = topIndex - i; // band i is depth `tier`
       prims.add(SldLabel(6, y + 17, 'Tier ${tier + 1}', size: 10, bold: true));
     }
+    // Round 44 — a width-bound band split into board COLUMN pages names the
+    // boards drawn on the other sheets.
+    final note = bandNotes[i];
+    if (note != null) {
+      prims.add(SldLabel(6, y + 47, 'LANJUT (lembar lain):', size: 7));
+      prims.add(SldLabel(6, y + 57, note, size: 7));
+    }
   }
 
   // Per-panel horizontal budget for the load-way fan-out stub labels below the
@@ -3893,7 +3894,7 @@ SldSheet buildElectricalRiser({
     final role = essential.contains(id) ? SldRole.essential : SldRole.normal;
     prims.add(SldRect(x, y, _ovW, _ovH, role: role));
     final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
-    prims.add(SldLabel(x + 7, y + 17, '${p.name}$tag',
+    prims.add(SldLabel(x + 7, y + 17, typicalNames[id] ?? '${p.name}$tag',
         size: 10, bold: true, role: role));
     prims.add(SldLabel(
         x + 7, y + 33, _compactNodeSubLine(p, model: panelModelById[id]),
@@ -4140,6 +4141,106 @@ SldPrim _shiftPrim(SldPrim p, double dx, double dy) => switch (p) {
 /// The number of floor BANDS [buildElectricalRiser] draws for [project] —
 /// the building's levels, else (no [building]) the feeder-depth tiers. The
 /// page chunker ([paginatedRiserSheets]) splits on this count.
+/// Round 44 — the riser BAND (floor index, 0 = lowest) each board is drawn
+/// on: its placed floor (clamped), else a depth tier rising from the
+/// service-entrance floor; with no building, the depth tier (root at the top
+/// band). The ONE floor rule [buildElectricalRiser] and its pagination share.
+Map<String, int> electricalRiserFloorOf(ElectricalProject project,
+    ElectricalSystemResult result, BuildingLevels? building) {
+  final parentOf = _parentOf(project, result);
+  final panelModelById = {for (final p in project.panels) p.id: p};
+  final depth = <String, int>{};
+  for (final id in result.order) {
+    final par = parentOf[id];
+    depth[id] = par == null ? 0 : (depth[par] ?? 0) + 1;
+  }
+  final maxDepth = depth.values.isEmpty ? 0 : depth.values.reduce(math.max);
+  final hasFloors = building != null && building.levelCount > 0;
+  final levelCount = hasFloors ? building.levelCount : (maxDepth + 1);
+  int floorOf(String id) {
+    if (hasFloors) {
+      final lp = panelModelById[id]?.layoutPos;
+      if (lp != null) {
+        return lp.floorIndex.clamp(0, levelCount - 1);
+      }
+      // Round 15 (drafting-visual-2-4) — unplaced ⇒ a depth tier RISING from
+      // the service-entrance (GROUND) floor: the PLN-fed root sits at the
+      // entrance and each feeder depth climbs one floor (riser convention).
+      // It used to land the root on the TOP floor stamped with that floor's
+      // real FFL (+7.50) — a fabricated location — with Ground left empty.
+      final d = depth[id] ?? 0;
+      return (building.groundIndex + d).clamp(0, levelCount - 1);
+    }
+    // No floors ⇒ tier mode: root (depth 0) at the top band (highest index).
+    final d = depth[id] ?? 0;
+    return (levelCount - 1 - d).clamp(0, levelCount - 1);
+  }
+
+  return {for (final id in result.order) id: floorOf(id)};
+}
+
+/// Round 44 (regression-riser-width-bound-band-still-illegible) — sibling
+/// boards a riser band may draw as ONE typical node: leaf boards (feeding
+/// nothing) on the same band, fed by the same parent with the same feeder
+/// annotation (cable + breaker), with the same incomer rating / poles, role
+/// and sorted way make-up (kind, rating, conductor). Each group of ≥ 2 is
+/// keyed by its first board (in riser order) → every member, in order.
+Map<String, List<String>> electricalRiserTypicalGroups(
+    ElectricalProject project,
+    ElectricalSystemResult result,
+    BuildingLevels? building) {
+  final parentOf = _parentOf(project, result);
+  final floorOf = electricalRiserFloorOf(project, result, building);
+  final essential = essentialPanelIds(project, result);
+  final (feederCircuitOf, feederResultOf) =
+      _feederLabelLookups(project, result, parentOf);
+  final hasChildren = {...parentOf.values};
+  final groups = <String, List<String>>{};
+  for (final id in result.order) {
+    final p = result.panels[id];
+    final par = parentOf[id];
+    if (p == null || par == null || hasChildren.contains(id)) continue;
+    final ways = [
+      for (final c in p.circuits)
+        '${c.loadKind.name}:${_num(c.breaker.ratingA.amperes)}:'
+            '${_num(c.cable.csaMm2)}:${c.threePhase}',
+    ]..sort();
+    final key = [
+      par,
+      floorOf[id],
+      essential.contains(id),
+      _num(p.incomer.breaker.ratingA.amperes),
+      p.incomer.poles,
+      _feederConnLabel(feederCircuitOf, feederResultOf, id,
+              parentThreePhase: _parentIsThreePhase(parentOf, result, id)) ??
+          '-',
+      ways.join(','),
+    ].join('|');
+    (groups[key] ??= []).add(id);
+  }
+  return {
+    for (final g in groups.values)
+      if (g.length >= 2) g.first: g,
+  };
+}
+
+/// The typical-node name for [names] (≥ 2, riser order): the shared prefix
+/// up to its last space, then `<first>..<last> (TIPIKAL xN)` —
+/// 'PHB UNIT 101..116 (TIPIKAL x16)'.
+String electricalTypicalName(List<String> names) {
+  final a = names.first, b = names.last;
+  var n = 0;
+  while (n < a.length && n < b.length && a[n] == b[n]) {
+    n++;
+  }
+  final sp = a.substring(0, n).lastIndexOf(' ');
+  final pre = sp < 0 ? 0 : sp + 1;
+  final range = pre > 0
+      ? '${a.substring(0, pre)}${a.substring(pre)}..${b.substring(pre)}'
+      : '$a..$b';
+  return '$range (TIPIKAL x${names.length})';
+}
+
 int electricalRiserBandCount(ElectricalProject project,
     ElectricalSystemResult result, BuildingLevels? building) {
   if (building != null && building.levelCount > 0) return building.levelCount;

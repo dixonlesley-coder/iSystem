@@ -25,7 +25,7 @@ import '../standards/puil.dart'
 import 'catalog.dart';
 import 'earthing.dart' show RcdType, rcdTypeRank;
 import 'enclosure.dart' show EnclosureResult;
-import 'fault.dart' show FaultStudyResult;
+import 'fault.dart' show FaultStudyResult, breakingCapacityKa;
 import 'load_kind.dart' show LoadKind;
 import 'model.dart' show ElectricalSystemInfo;
 import 'panel_results.dart';
@@ -487,9 +487,19 @@ List<BomLine> _panelLines(
       return '${s.base}$note${s.suffix}';
     }
 
+    // Round 44 — an engine-kept MCB on a bus above the MCB ladder is
+    // back-up (cascade) protected by the upstream incomer (fault study:
+    // `cascade-combination-unverified`): never flagged short, but noted.
+    final mcbTop = breakingCapacityKa[BreakerClass.mcb]!.last;
+    final cascade = !incomer &&
+        b.deviceClass == BreakerClass.mcb &&
+        !b.overridden &&
+        (minBreakingKa ?? 0) > mcbTop + 1e-9;
+    final flagShort = short && !cascade;
     var desc = description;
     if (subst != null) desc = withNote(desc, subst);
-    if (short) desc = withNote(desc, ' (no catalogue part reaches$kaTag)');
+    if (cascade) desc = withNote(desc, ' (back-up protected (cascade, verify))');
+    if (flagShort) desc = withNote(desc, ' (no catalogue part reaches$kaTag)');
     // Round 24 — an UNMATCHED device names its specified kA in the line
     // itself, so two non-catalogue breakers differing only in breaking
     // capacity stay two orderable lines (and the BOM reader sees the kA).
@@ -508,7 +518,7 @@ List<BomLine> _panelLines(
               '${_fmt(b.ratingA.amperes)}A:${poles}P'
               '${(needKa ?? 0) > 0 ? ':${_fmt(_r1(needKa!))}kA' : ''}'
           : null,
-      breakingCapacityShort: short,
+      breakingCapacityShort: flagShort,
       deviceSubstituted: subst != null,
       location: location,
     );
@@ -747,6 +757,26 @@ List<BomLine> _panelLines(
                     '${reduced ? '3x${_fmt(leads.csaMm2)}+${_fmt(pe)}' : '4x${_fmt(leads.csaMm2)}'}'
                 : '$leadSku:$suffix',
             location: c.name,
+          ));
+        }
+        // Round 44 (elec-report-bom-3-star-delta-lead-lugs-missing) — the
+        // lead cables are the FIELD run since Round 42, so their
+        // terminations are bought too: per lead cable 3 phase conductors +
+        // its PE, one lug at EACH end, on every lead run (the supply lug
+        // block below only counts the short internal link).
+        final leadLugs = <double, int>{};
+        for (final sz in [leads.csaMm2, leads.csaMm2, leads.csaMm2, pe]) {
+          if (sz < _skunMinCsaMm2) continue;
+          leadLugs[sz] = (leadLugs[sz] ?? 0) + 1;
+        }
+        for (final e in leadLugs.entries) {
+          lines.add(BomLine(
+            description:
+                'Cable lug (skun) ${_fmt(e.key)} mm² — ${c.name} motor leads',
+            location: c.name,
+            qty: (e.value * 2 * leadRuns).toDouble(),
+            category: PartCategory.accessory,
+            priceKey: '${kElecPriceKeyPrefix}accessory:lug-${_fmt(e.key)}',
           ));
         }
       }

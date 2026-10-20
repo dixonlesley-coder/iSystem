@@ -24,11 +24,13 @@ import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
 import '../electrical/power_factor.dart'
     show PowerFactorResult, capacitorBanksToProcure, powerFactorCorrection;
-import '../electrical/sources.dart' show sizeGenerator;
+import '../electrical/power_oneline.dart'
+    show distributedSourceInverters, sizeDistributedSources;
+import '../electrical/sources.dart' show BatteryChemistryInfo, sizeGenerator;
 import '../electrical/supply_design.dart' show serviceTransformer;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
-import '../units.dart' show ApparentPower;
+import '../units.dart' show ApparentPower, Power;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 
@@ -44,6 +46,9 @@ enum EquipmentCategory {
   transformer,
   generator,
   capacitorBank,
+
+  /// Round 44 — battery bank, PV array and their inverter(s).
+  distributedSource,
 }
 
 extension EquipmentCategoryInfo on EquipmentCategory {
@@ -57,6 +62,7 @@ extension EquipmentCategoryInfo on EquipmentCategory {
         EquipmentCategory.transformer => 'Transformer',
         EquipmentCategory.generator => 'Standby generator',
         EquipmentCategory.capacitorBank => 'Capacitor bank',
+        EquipmentCategory.distributedSource => 'Battery, PV & inverters',
       };
 }
 
@@ -439,7 +445,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       // Round 12 — sized by the SAME `sizeGenerator` the report's power
       // one-line uses, so a PRIME-mode set carries its 1.25× uplift here too.
       final sel = gen.kva != null
-          ? (unitKva: gen.kva!, units: 1)
+          ? (unitKva: gen.kva!, units: gen.units)
           : (demandVa != null && demandVa.inKilovoltAmperes > 0
               ? (() {
                   // Round 13 — max(fraction × demand, essential demand).
@@ -501,6 +507,58 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
         category: EquipmentCategory.capacitorBank,
       ));
     }
+
+    // Round 44 — BAT-01 / PV-01 / INV-01 from the ONE distributed-source
+    // sizing the power one-line draws and the BOM buys.
+    final src = ep.sources;
+    final sys = data.electrical;
+    if (src != null &&
+        sys != null &&
+        (src.solar != null || src.battery != null)) {
+      final ds = sizeDistributedSources(src,
+          demand: sys.supply.demandVa, demandPower: Power(sys.supply.demandW));
+      final b = ds.battery;
+      if (b != null && b.installedKwh.inKilowattHours > 0) {
+        rows.add(EquipmentScheduleRow(
+          tag: 'BAT-01',
+          service: strings(RptStringKey.esBatteryService),
+          duty: '${_fmt(b.installedKwh.inKilowattHours, dp: 1)} kWh '
+              '${b.chemistry.label}',
+          size: '${b.moduleCount} x '
+              '${_fmt(b.moduleKwh.inKilowattHours, dp: 2)} kWh',
+          modelSpec: specFor('BAT-01'),
+          qty: 1,
+          category: EquipmentCategory.distributedSource,
+        ));
+      }
+      final s = ds.solar;
+      if (s != null && s.panelCount > 0) {
+        rows.add(EquipmentScheduleRow(
+          tag: 'PV-01',
+          service: strings(RptStringKey.esPvService),
+          duty: '${_fmt(s.arrayKwp.inKiloWatts, dp: 1)} kWp',
+          size: '${s.panelCount} x ${s.panelWp} Wp',
+          modelSpec: specFor('PV-01'),
+          qty: 1,
+          category: EquipmentCategory.distributedSource,
+        ));
+      }
+      final invs = distributedSourceInverters(ds);
+      for (var i = 0; i < invs.length; i++) {
+        final inv = invs[i];
+        final tag = 'INV-${(i + 1).toString().padLeft(2, '0')}';
+        rows.add(EquipmentScheduleRow(
+          tag: tag,
+          service: '${strings(RptStringKey.esInverterService)} '
+              '(${inv.kind})',
+          duty: '${_fmt(inv.unitKw.inKiloWatts, dp: 0)} kW',
+          size: '',
+          modelSpec: specFor(tag),
+          qty: inv.units,
+          category: EquipmentCategory.distributedSource,
+        ));
+      }
+    }
   }
 
   return rows;
@@ -522,6 +580,8 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
       EquipmentCategory.generator => strings(RptStringKey.catGenerator),
       EquipmentCategory.capacitorBank =>
         strings(RptStringKey.catCapacitorBank),
+      EquipmentCategory.distributedSource =>
+        strings(RptStringKey.catDistributedSource),
     };
 
 List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,

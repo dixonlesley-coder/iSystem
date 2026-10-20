@@ -1137,6 +1137,21 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final cur = state.sources?.generator ?? const GeneratorSource();
     setGenerator(GeneratorSource(
       kva: kva,
+      units: cur.units,
+      backupFraction: cur.backupFraction,
+      mode: cur.mode,
+      transfer: cur.transfer,
+    ));
+  }
+
+  /// Round 44 — set the number of paralleled sets of a FORCED genset
+  /// nameplate (`n x kVA`). Below 1 / non-finite ignored.
+  void setGeneratorUnits(int units) {
+    final cur = state.sources?.generator;
+    if (cur == null || units < 1 || units == cur.units) return;
+    setGenerator(GeneratorSource(
+      kva: cur.kva,
+      units: units,
       backupFraction: cur.backupFraction,
       mode: cur.mode,
       transfer: cur.transfer,
@@ -1148,6 +1163,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final cur = state.sources?.generator ?? const GeneratorSource();
     setGenerator(GeneratorSource(
       kva: cur.kva,
+      units: cur.units,
       backupFraction: cur.backupFraction,
       mode: mode,
       transfer: cur.transfer,
@@ -1159,6 +1175,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final cur = state.sources?.generator ?? const GeneratorSource();
     setGenerator(GeneratorSource(
       kva: cur.kva,
+      units: cur.units,
       backupFraction: cur.backupFraction,
       mode: cur.mode,
       transfer: transfer,

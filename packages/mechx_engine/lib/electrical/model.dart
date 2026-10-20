@@ -474,8 +474,12 @@ class ElectricalPanel {
   /// generator backup. Carried for the A8 sources / power-one-line pass.
   final bool essential;
 
-  /// Critical / UPS-backed board: backed by the battery bank in the A8 sources
-  /// pass (the topmost-flagged-demand tier).
+  /// Critical / UPS-backed board, supplied THROUGH a UPS. Round 44: its
+  /// feeder (and every board upstream) carries the UPS INPUT — the board's
+  /// diversified demand × `kUpsInputFactor` (÷ 0.94 efficiency × 1.10
+  /// recharge, `// VERIFY`) at a balanced rectifier draw — and an INFO
+  /// `ups-not-sized` states that no UPS unit / battery is sized or taken off
+  /// (enter the battery as a project source).
   final bool upsBacked;
 
   /// Tenant sub-metered board — picks direct vs CT revenue metering in the A8
@@ -949,6 +953,7 @@ Map<String, dynamic> _sourcesToJson(ElectricalSources s) => {
       if (s.generator != null) 'generator': {
           if (s.generator!.kva != null)
             'kva': s.generator!.kva!.voltAmperes,
+          if (s.generator!.units != 1) 'units': s.generator!.units,
           'backupFraction': s.generator!.backupFraction,
           'mode': s.generator!.mode.name,
           'transfer': s.generator!.transfer.name,
@@ -975,6 +980,12 @@ ElectricalSources _sourcesFromJson(Map<String, dynamic> json) {
       kva: g['kva'] == null
           ? null
           : ApparentPower((g['kva'] as num).toDouble()),
+      // Round 44 — tolerant: absent / non-integer / < 1 ⇒ one set.
+      units: (g['units'] is num &&
+              (g['units'] as num).isFinite &&
+              (g['units'] as num) >= 1)
+          ? (g['units'] as num).floor()
+          : 1,
       backupFraction: (g['backupFraction'] as num?)?.toDouble() ?? 1.0,
       mode: _enumOr(GeneratorMode.values, g['mode'], GeneratorMode.standby),
       transfer: _enumOr(

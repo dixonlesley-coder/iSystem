@@ -189,6 +189,11 @@ final electricalBomProvider = Provider<Bom>((ref) {
       spd: adv.spd,
       electrode: adv.electrode,
       powerFactor: adv.powerFactor,
+      // Round 44 — the containment (conduit / tray metres) and metering
+      // (V/A/Hz, kWh meters, CTs, tenant submeters) the issued schedules
+      // print are taken off here too: ONE takeoff with the advanced study.
+      containment: adv.containment,
+      metering: adv.metering,
     ),
   );
 });

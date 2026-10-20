@@ -322,14 +322,19 @@ void main() {
       // factor = √3 rounded 2 dp = 1.73.
       expect(npe.neutralOversizeFactor, 1.73);
       expect(npe.triplenFraction, 1.0);
-      // Neutral = smallest copper BAR ≥ phaseBar·1.73 (Round 11: the bar
-      // ladder, not the cable ladder).
-      final target = phaseBar * 1.73;
-      final expectedN = p.copperBusbarTable
-          .map((b) => b.csaMm2)
-          .firstWhere((s) => s >= target);
+      // Re-derived Round 44 — the factor scales the CURRENT: the neutral is
+      // max(phase bar, the smallest bar whose AMPACITY ≥ 1.73 × the sizing
+      // current). 4000 W / (220 × 0.9) = 20.2 A ⇒ 1.73 × 20.2 ≈ 35 A, which
+      // the smallest bar (the phase bar itself) already carries — so the
+      // full-size neutral is NOT grown (it used to be phase CSA × 1.73).
+      final needA = 1.73 * pr.busbar.totalCurrentA.amperes;
+      final ampBar = p.copperBusbarTable
+          .firstWhere((b) => b.ampacityA.amperes >= needA)
+          .csaMm2;
+      final expectedN = ampBar > phaseBar ? ampBar : phaseBar;
       expect(npe.neutralCsaMm2, expectedN);
-      expect(npe.neutralCsaMm2, greaterThan(phaseBar));
+      expect(npe.neutralCsaMm2, phaseBar);
+      expect(npe.oversized, isFalse);
       // Surfaced as a warning so it reaches the schedule.
       expect(
         sys.warnings.map((w) => w.code),

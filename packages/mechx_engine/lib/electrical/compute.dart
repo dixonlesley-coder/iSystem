@@ -25,6 +25,7 @@ import '../standards/puil.dart';
 import '../units.dart';
 import 'busbar.dart';
 import 'cable_family.dart';
+import 'containment.dart' show effectiveInstallMethod;
 import 'control/starter.dart' show StarterType;
 import 'diversity_library.dart' show DiversityLibrary;
 import 'earthing.dart';
@@ -142,6 +143,19 @@ const double assumedBuildingPf = 0.85;
 /// sheath (IEC 60364-5-52 Annex E, Table E.52.1 reduction factor 0.86).
 /// A design rule, NOT an SNI/PUIL clause. // VERIFY (notAnSniClause)
 const double kFourLoadedConductorFactor = 0.86;
+
+/// Round 44 — a double-conversion UPS's input-to-output efficiency (the
+/// rectifier + inverter losses its supply carries). // VERIFY
+/// (notAnSniClause): typical online-UPS datasheet figure.
+const double kUpsEfficiency = 0.94;
+
+/// Round 44 — the battery-recharge allowance on the UPS input (× the
+/// output-loss-adjusted load). // VERIFY (notAnSniClause): typical 10 %.
+const double kUpsRechargeAllowance = 1.10;
+
+/// Round 44 — the factor from a UPS-backed board's output demand to the
+/// demand its feeder carries: `1 / η × recharge` (≈ 1.17).
+const double kUpsInputFactor = kUpsRechargeAllowance / kUpsEfficiency;
 
 /// Round 37 — a fed three-phase board's triplen-neutral condition, carried up
 /// to the FEEDER that supplies it: its FOLD-2 neutral factor (× phase
@@ -821,13 +835,18 @@ class _BusbarWayLoad {
   final bool threePhase;
   final PhaseAssignment phase;
   final bool breakBefore;
+
+  /// Round 44 — the way's own breaker rating (A): a section must carry the
+  /// largest outgoing device on it before that device trips.
+  final double deviceRatingA;
   const _BusbarWayLoad(
     this.id,
     this.designCurrentA,
     this.threePhase,
     this.phase,
-    this.breakBefore,
-  );
+    this.breakBefore, [
+    this.deviceRatingA = 0,
+  ]);
 }
 
 /// Worst-loaded phase's line current for a group of ways (A).
@@ -875,12 +894,19 @@ List<BusbarSectionResult> splitBusbarSections(
   void flush() {
     if (group.isEmpty) return;
     final currentA = roundTo(_sectionWorstPhaseA(group, system), 1);
+    // Round 44 (electrical-sim-9-busbar-section-below-outgoing-device) — a
+    // section is rated for the largest outgoing DEVICE it carries (like the
+    // main bus for its incomer, IEC 61439-1): a 1764 A way on a 2000 A ACB
+    // can draw 2000 A through its section before the ACB trips.
+    final deviceFloorA =
+        group.fold<double>(0, (m, w) => math.max(m, w.deviceRatingA));
     sections.add(BusbarSectionResult(
       index: sections.length + 1,
       circuitIds: group.map((w) => w.id).toList(),
       ways: group.length,
       sectionCurrent: Current(currentA),
       busbar: sizeBusbar(profile, Current(currentA),
+          minAmpacityA: Current(deviceFloorA),
           minCsaMm2: minCsaMm2, faultKa: faultKa, clearingTimeS: clearingTimeS),
       manualBreak: groupManual,
     ));
@@ -1100,13 +1126,8 @@ class ComputePanelOptions {
 /// panel method ('ground' → buried; 'air' → above-ground even if the panel is
 /// buried). Drives both the ampacity table and the temperature derating basis.
 CableInstallMethod _effectiveInstallMethod(
-    ElectricalCircuit c, ElectricalPanel panel) {
-  if (c.laying == 'ground') return CableInstallMethod.buried;
-  if (c.laying == 'air' && panel.installMethod == CableInstallMethod.buried) {
-    return CableInstallMethod.conduit;
-  }
-  return panel.installMethod;
-}
+        ElectricalCircuit c, ElectricalPanel panel) =>
+    effectiveInstallMethod(c, panel);
 
 /// The effective per-circuit demand (utilisation) factor: the occupancy-keyed
 /// diversity library value when [library] is supplied AND [diversityLibraryId]
@@ -2728,6 +2749,9 @@ ElectricalPanelResult computePanel(
     profile: profile,
     neutralOversizeFactor: nFactor,
     triplenFraction: triplenFraction,
+    // Round 44 — the factor scales the CURRENT, never a withstand-floored
+    // section.
+    phaseSizingCurrentA: incomerSizingCurrentA,
   );
 
   // Split the panel bus into capacity-bounded sections (each floored at the same
@@ -2754,6 +2778,7 @@ ElectricalPanelResult computePanel(
                 : PhaseAssignment.l1;
           }(),
           branches[i].busbarBreakBefore,
+          comps[i].result.breaker.ratingA.amperes,
         ),
       // Reserved spare ways occupy busbar way-capacity (so the bus is split into
       // enough sections to host them) but carry no load. spareWaysReserved = 0
@@ -2811,8 +2836,7 @@ ElectricalPanelResult computePanel(
       message: '${panel.name}: single-phase non-linear load '
           '(${(triplenFraction * 100).round()}%) raises triplen-harmonic '
           'neutral current to ~${neutralPe.neutralOversizeFactor}x phase — '
-          'neutral bar oversized to ${_num(neutralPe.neutralCsaMm2)} mm² '
-          '(phase bar ${_num(busbar.csaMm2)} mm²).',
+          '${neutralPe.oversized ? 'neutral bar oversized to ${_num(neutralPe.neutralCsaMm2)} mm² (phase bar ${_num(busbar.csaMm2)} mm²)' : 'the full-size ${_num(neutralPe.neutralCsaMm2)} mm² neutral bar (the phase bar, sized for the fault withstand / incomer) already carries it'}.',
       panelId: panel.id,
     ));
   }
@@ -3043,6 +3067,11 @@ ElectricalSystemResult computeSystem(
   // Arithmetic VA (not phasor) — conservative: never above the true pf.
   final panelDemandVa = <String, double>{};
   final panelPowerFactor = <String, double>{};
+  // Round 44 (electrical-sim-9-ups-backed-board-sizes-no-ups) — a UPS-backed
+  // board is supplied THROUGH its UPS: what its feeder (and everything
+  // upstream) carries is the UPS INPUT = output ÷ η + battery recharge.
+  double upsIn(String? id) =>
+      (id != null && (byId[id]?.upsBacked ?? false)) ? kUpsInputFactor : 1.0;
   for (final id in postOrder) {
     final panel = byId[id];
     if (panel == null) continue;
@@ -3053,7 +3082,7 @@ ElectricalSystemResult computeSystem(
     for (final c in panel.circuits) {
       if (c.role != CircuitRole.branch) continue;
       final load = c.feedsPanelId != null
-          ? (panelDemandW[c.feedsPanelId] ?? 0)
+          ? (panelDemandW[c.feedsPanelId] ?? 0) * upsIn(c.feedsPanelId)
           : circuitConnectedW(c,
               library: diversityLibrary,
               diversityLibraryId: panel.diversityLibraryId);
@@ -3255,9 +3284,12 @@ ElectricalSystemResult computeSystem(
     // document alone and always match the fed board's issued schedule.
     final b = solved.phaseBalance;
     final d = panel.diversityFactor;
-    if ((math.max(b.l1, math.max(b.l2, b.l3)) -
-            math.min(b.l1, math.min(b.l2, b.l3))) >
-        1e-9) {
+    // Round 44 — a UPS-backed board's feeder carries the UPS INPUT (a
+    // balanced rectifier draw), never the output board's imbalanced lines.
+    if (!panel.upsBacked &&
+        (math.max(b.l1, math.max(b.l2, b.l3)) -
+                math.min(b.l1, math.min(b.l2, b.l3))) >
+            1e-9) {
       feederLinesByPanel[id] = [b.l1 * d, b.l2 * d, b.l3 * d];
     }
     final nb = solved.neutralPeBars;
@@ -3803,9 +3835,26 @@ ElectricalSystemResult computeSystem(
       }
     }
 
+    // Round 44 — a UPS-backed board: its supply is uplifted to the UPS input,
+    // but no UPS unit / battery is sized or taken off (judge-only INFO).
+    for (final p in panels) {
+      if (!p.upsBacked) continue;
+      warnings.add(ElectricalWarning(
+        code: 'ups-not-sized',
+        severity: WarningSeverity.info,
+        message: '${p.name}: UPS-backed board — its supply is sized on the '
+            'UPS input (output ÷ ${_num(kUpsEfficiency)} efficiency + '
+            '${_num(roundTo((kUpsRechargeAllowance - 1) * 100, 0))} % battery '
+            'recharge), but no UPS unit or battery is sized or taken off: '
+            'specify the UPS (kVA, autonomy) and enter its battery as a '
+            'source.',
+        panelId: p.id,
+      ));
+    }
+
     // Supply summary from the diversified demand presented by the root panel(s).
-    final rootDemandW =
-        roots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0));
+    final rootDemandW = roots.fold(
+        0.0, (s, p) => s + (panelDemandW[p.id] ?? 0) * upsIn(p.id));
     // Round 13 (elec-props-2-multiroot-earthing-first-root) — with several
     // utility-fed roots the SERVICE (supply system / voltage, main cable,
     // main earthing + bonding conductors) is governed by the LARGEST root, not
@@ -3829,8 +3878,9 @@ ElectricalSystemResult computeSystem(
     // 100 kVA genset was labelled 'backs 100 %'. Never below the demand W.
     var rootDemandVa = 0.0;
     for (final r in roots) {
-      final w = panelDemandW[r.id] ?? 0;
-      final va = panelDemandVa[r.id];
+      final w = (panelDemandW[r.id] ?? 0) * upsIn(r.id);
+      final va0 = panelDemandVa[r.id];
+      final va = va0 == null ? null : va0 * upsIn(r.id);
       rootDemandVa +=
           va != null && va > 0 ? math.max(va, w) : w / assumedBuildingPf;
     }

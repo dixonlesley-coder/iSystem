@@ -124,6 +124,7 @@ enum StringKey {
   electricalGenset,
   electricalGensetPresent,
   electricalGensetKva,
+  electricalGensetUnits,
   electricalGensetMode,
   electricalGensetTransfer,
   electricalTransformerKva,
@@ -1410,6 +1411,7 @@ const Map<StringKey, String> _en = {
   StringKey.electricalGenset: 'Standby generator (genset)',
   StringKey.electricalGensetPresent: 'Genset present',
   StringKey.electricalGensetKva: 'Genset rating (kVA, 0 = auto)',
+  StringKey.electricalGensetUnits: 'Sets in parallel',
   StringKey.electricalGensetMode: 'Genset mode',
   StringKey.electricalGensetTransfer: 'Transfer',
   StringKey.electricalTransformerKva: 'Transformer (kVA, 0 = auto)',
@@ -2968,6 +2970,7 @@ const Map<StringKey, String> _id = {
   StringKey.electricalGenset: 'Generator cadangan (genset)',
   StringKey.electricalGensetPresent: 'Genset tersedia',
   StringKey.electricalGensetKva: 'Daya genset (kVA, 0 = otomatis)',
+  StringKey.electricalGensetUnits: 'Jumlah set paralel',
   StringKey.electricalGensetMode: 'Mode genset',
   StringKey.electricalGensetTransfer: 'Transfer',
   StringKey.electricalTransformerKva: 'Trafo (kVA, 0 = otomatis)',
@@ -4504,6 +4507,15 @@ const Map<String, (String, String)> _electricalWarningTitles = {
   'breaking-capacity-inadequate': (
     'Breaking capacity inadequate',
     'Kapasitas pemutusan tidak memadai'
+  ),
+  // Round 44 — an engine-kept MCB relying on back-up (cascade) protection.
+  'cascade-combination-unverified': (
+    'Cascade combination to verify',
+    'Kombinasi kaskade perlu diverifikasi'
+  ),
+  'ups-not-sized': (
+    'UPS-backed board: no UPS sized',
+    'Panel ber-UPS: UPS belum diukur'
   ),
   'ads-disconnection': (
     'Automatic disconnection not met',

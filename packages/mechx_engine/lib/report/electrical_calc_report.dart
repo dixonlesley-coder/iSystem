@@ -493,7 +493,10 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     }
     pb.writeln(strings.format(RptStringKey.panelNeutralBar, {
       'n': _n(p.neutralPeBars.neutralCsaMm2),
-      'oversize': p.neutralPeBars.neutralOversizeFactor > 1
+      // Round 44 — '(xN triplen oversize)' only when the triplen current
+      // actually grew the bar beyond the phase bar.
+      'oversize': p.neutralPeBars.neutralOversizeFactor > 1 &&
+              p.neutralPeBars.oversized
           ? strings.format(RptStringKey.panelNeutralOversize,
               {'f': _n(p.neutralPeBars.neutralOversizeFactor)})
           : '',

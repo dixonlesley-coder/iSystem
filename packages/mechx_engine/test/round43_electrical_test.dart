@@ -732,8 +732,7 @@ void main() {
       expect(sldLegibilityWarning(1.7), contains('1.7 pt'));
     });
 
-    test('16 sub-boards side by side: every riser page prints >= 7 pt or '
-        'carries the note', () {
+    test('16 sub-boards side by side: every riser page prints >= 7 pt', () {
       final project = ElectricalProject(id: 'a', name: 'A', panels: [
         ElectricalPanel(id: 'MDP', name: 'DB-L1', circuits: [
           for (var i = 1; i <= 16; i++)
@@ -767,11 +766,14 @@ void main() {
       ]);
       final r = computeSystem(_p, project);
       final pages = paginatedElectricalRiserSheets(project: project, result: r);
+      // Re-derived Round 44 — the OR (">= 7 pt or carries the note") locked
+      // in an illegible issue; the 16 identical units now collapse to ONE
+      // typical node, so EVERY page prints at the plotted floor.
       for (final p in pages) {
         final pt = sldSinglePageMinLabelPt(p);
-        expect(pt >= kMinPlotLabelPt - 1e-9 || p.belowMinLabelPt != null,
-            isTrue,
+        expect(pt, greaterThanOrEqualTo(kMinPlotLabelPt - 1e-9),
             reason: '$pt pt');
+        expect(p.belowMinLabelPt, isNull);
       }
     });
   });
