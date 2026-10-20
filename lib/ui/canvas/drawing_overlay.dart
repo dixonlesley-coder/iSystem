@@ -96,7 +96,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     final ortho = ref.watch(orthoProvider);
     final routeKindPref = ref.watch(orthoRouteKindProvider);
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
+        ref.watch(sheetViewportProvider(widget.sheetId)) ??
             const ViewportTransform();
     final project = ref.watch(projectControllerProvider);
     final calibration = project.calibrationFor(widget.sheetId);
@@ -126,7 +126,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     final routeActive =
         drawing.tool == DrawTool.drawRun && pending != null && ortho && !shift;
 
-    final sheet = ref.watch(sheetsControllerProvider).sheetById(widget.sheetId);
+    final sheet = ref.watch(sheetsContentProvider).sheetById(widget.sheetId);
     final snapToPlan = ref.watch(snapToPlanProvider);
     final refLines = ref.watch(referenceLinesProvider);
     final underlaySvc = ref.read(underlaySnapServiceProvider);

@@ -120,7 +120,7 @@ class _MeasurementOverlayState extends ConsumerState<MeasurementOverlay> {
 
   @override
   Widget build(BuildContext context) {
-    final transform = ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
+    final transform = ref.watch(sheetViewportProvider(widget.sheetId)) ??
         const ViewportTransform();
     final all = ref.watch(measurementsProvider);
     final mine = [

@@ -38,7 +38,7 @@ class SheetRail extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(sheetsControllerProvider);
+    final state = ref.watch(sheetsContentProvider);
     final colors = context.colors;
     // ONE add affordance: the trailing '+' tile. Its tap is Import plan (the
     // add-or-replace flow); its right-click menu also offers the A6 multi-file
@@ -447,7 +447,7 @@ class _RailItemState extends ConsumerState<_RailItem> {
     // remap — or a silent pile-up when more sheets than floors default onto the
     // top — is visible at a glance, not invisible. 1-based, ASCII ("F3").
     final mappedFloor = ref
-        .watch(sheetsControllerProvider)
+        .watch(sheetsContentProvider)
         .floorFor(widget.sheet.id, project.building.levelCount);
     final bg = widget.selected
         ? colors.accentMuted

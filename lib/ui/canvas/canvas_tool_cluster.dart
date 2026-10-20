@@ -44,7 +44,9 @@ class CanvasToolCluster extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    final drawing = ref.watch(networkControllerProvider);
+    // Only the tool + service (not the network): a drag frame never rebuilds it.
+    final drawing = ref.watch(networkControllerProvider
+        .select((d) => (tool: d.tool, service: d.service)));
     final active = ref.watch(activeDisciplineProvider);
     final services = servicesFor(active);
     final tool = drawing.tool;

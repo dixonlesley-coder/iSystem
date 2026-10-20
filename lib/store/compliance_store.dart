@@ -299,7 +299,7 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
     // clock); it only rolls at midnight, which no open session cares about.
     date: DateTime.now().toIso8601String().split('T').first,
     nothingDesigned: ref.watch(_nothingDesignedProvider),
-    noSheets: ref.watch(sheetsControllerProvider).sheets.isEmpty,
+    noSheets: ref.watch(sheetsContentProvider).sheets.isEmpty,
     noPanels: ref.watch(electricalProjectProvider).panels.isEmpty,
     pressureJudged: ref.watch(_pressureJudgedProvider),
   );
@@ -336,7 +336,7 @@ final complianceCheckItemsProvider = Provider<ComplianceSummary>((ref) {
     strings: MechXStringsData(ref.watch(localeProvider)),
     date: DateTime.now().toIso8601String().split('T').first,
     nothingDesigned: ref.watch(_nothingDesignedProvider),
-    noSheets: ref.watch(sheetsControllerProvider).sheets.isEmpty,
+    noSheets: ref.watch(sheetsContentProvider).sheets.isEmpty,
     noPanels: ref.watch(electricalProjectProvider).panels.isEmpty,
     pressureJudged: ref.watch(_pressureJudgedProvider),
   );

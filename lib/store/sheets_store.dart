@@ -592,3 +592,25 @@ class SheetsController extends Notifier<SheetsState> {
 
 final sheetsControllerProvider =
     NotifierProvider<SheetsController, SheetsState>(SheetsController.new);
+
+/// The sheets state with VIEWPORT churn filtered out (drafting-feel perf):
+/// every pan / zoom frame writes [SheetsState.viewports], so a consumer that
+/// watched the whole [sheetsControllerProvider] for the sheet list / current
+/// sheet / floor mapping re-ran on every frame (the Design-Issues fan-in alone
+/// cost ~60 ms per pan frame on a 30-storey building). This provider notifies
+/// only when the sheet list, the current index or the sheet → floor mapping
+/// changes. Its [SheetsState.viewports] may lag the live view — read the live
+/// viewport through [sheetViewportProvider] instead.
+final sheetsContentProvider = Provider<SheetsState>((ref) {
+  ref.watch(sheetsControllerProvider
+      .select((s) => (s.sheets, s.currentIndex, s.sheetFloors)));
+  return ref.read(sheetsControllerProvider);
+});
+
+/// The live pan / zoom of ONE sheet (null until it has been framed). The
+/// fine-grained channel the canvas overlays map screen <-> world through, so a
+/// pan frame rebuilds only the viewport-dependent overlays, never the whole
+/// workspace.
+final sheetViewportProvider =
+    Provider.family<ViewportTransform?, String>((ref, sheetId) => ref.watch(
+        sheetsControllerProvider.select((s) => s.viewportFor(sheetId))));

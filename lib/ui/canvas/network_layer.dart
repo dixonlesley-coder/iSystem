@@ -68,7 +68,7 @@ class NetworkLayer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final net = ref.watch(networkControllerProvider).network;
-    final transform = ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
+    final transform = ref.watch(sheetViewportProvider(sheetId)) ??
         const ViewportTransform();
     // Sizing always drives the pipe WIDTH (so a pipe visibly grows with its DN);
     // the toggle only governs whether the size LABELS are drawn on top.
@@ -299,6 +299,14 @@ class _NetworkPainter extends CustomPainter {
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
 
+  /// Drafting-feel perf — the network-derived lookups every paint needs, built
+  /// ONCE per [Network] instance (a pan / zoom / hover repaint of the same
+  /// drawing reuses them; a drag frame rebuilds them in one O(E) pass). The per-
+  /// node layer + riser-sense queries used to scan EVERY edge in the building for
+  /// every node on the floor (O(nodes x edges) per paint).
+  static final Expando<_NetDerived> _derivedCache = Expando<_NetDerived>();
+  _NetDerived get _derived => _derivedCache[net] ??= _NetDerived(net);
+
   /// An edge is highlighted when it's the primary OR in the multi-selection set.
   bool _edgeSelected(String id) =>
       id == selectedEdgeId || selectedEdgeIds.contains(id);
@@ -339,8 +347,7 @@ class _NetworkPainter extends CustomPainter {
     var visible = false;
     var active = false;
     var touched = false;
-    for (final e in net.edges) {
-      if (e.fromId != n.id && e.toId != n.id) continue;
+    for (final e in _derived.incident(n.id)) {
       touched = true;
       // F4 — a node stays visible only while at least one touching edge's
       // service is itself visible (discipline shown AND not individually hidden).
@@ -375,10 +382,10 @@ class _NetworkPainter extends CustomPainter {
     // engine helper), and whether MULTIPLE distinct services are visible on this
     // floor: on a multi-service layer a run label carries its service code
     // (DN15-CW); on a single-service view it stays bare (DN15).
-    final riserTagById = riserTags(net, null);
+    final riserTagById = _derived.riserTagById;
     // G1: one stable equipment tag per plant/air-unit node (P-01 / TK-01 / …),
     // the SAME source the plan exporters + equipment schedule use.
-    final equipmentTagById = equipmentNodeTags(net);
+    final equipmentTagById = _derived.equipmentTagById;
     // G5/H5: the laid gravity fall as a `1:100` token — read from the LAID
     // design slope the sizer + calc report actually use (`drainageSlopeProvider`
     // → [drainageSlope]), never a hardcoded string nor the dark const default.
@@ -1090,9 +1097,8 @@ class _NetworkPainter extends CustomPainter {
   ({bool up, bool down}) _riserSenseAt(NetNode n, ServiceType svc) {
     var up = false;
     var down = false;
-    for (final e in net.edges) {
+    for (final e in _derived.incident(n.id)) {
       if (e.kind != EdgeKind.riser || e.service != svc) continue;
-      if (e.fromId != n.id && e.toId != n.id) continue;
       final other = net.nodeById(e.fromId == n.id ? e.toId : e.fromId);
       if (other == null) continue;
       if (other.floorIndex > n.floorIndex) {
@@ -1391,6 +1397,27 @@ class _NetworkPainter extends CustomPainter {
 
   static bool _sameStrSet(Set<String> a, Set<String> b) =>
       a.length == b.length && a.containsAll(b);
+}
+
+/// Network-derived paint lookups, memoized per [Network] instance by
+/// [_NetworkPainter._derivedCache]: the incident edges of every node (in edge-
+/// list order, so iteration order — and so the painted result — is unchanged)
+/// plus the riser / equipment tag maps.
+class _NetDerived {
+  _NetDerived(this.net) {
+    for (final e in net.edges) {
+      (_incident[e.fromId] ??= <NetEdge>[]).add(e);
+      if (e.toId != e.fromId) (_incident[e.toId] ??= <NetEdge>[]).add(e);
+    }
+  }
+
+  final Network net;
+  final Map<String, List<NetEdge>> _incident = {};
+
+  List<NetEdge> incident(String nodeId) => _incident[nodeId] ?? const [];
+
+  late final Map<String, String> riserTagById = riserTags(net, null);
+  late final Map<String, String> equipmentTagById = equipmentNodeTags(net);
 }
 
 /// One run edge's stock-coupling layout within its continuous pipe chain: the

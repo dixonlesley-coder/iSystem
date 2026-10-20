@@ -202,9 +202,9 @@ String _verifyLabel(StandardValue<Object?> v) {
 /// The aggregated list of design issues, warnings first then info. Read-only:
 /// it never mutates the network, the project, or any standard.
 final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider);
+  final sheets = ref.watch(sheetsContentProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
   // M3/M4 — the discipline-neutral over-capacity set (air + storm + water),
@@ -1634,7 +1634,7 @@ final openDesignIssueCountProvider = Provider<int>((ref) {
 /// edges that actually appear in the sizing map are considered, so an empty /
 /// fully-calibrated network returns 0 and the gate is inert.
 final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   final sizing = ref.watch(sizingProvider);
   var count = 0;
@@ -1666,7 +1666,7 @@ final exportHasZeroLengthEdgesProvider =
 /// instruction. Empty ⇒ the gate is inert (byte-identical). An edge whose
 /// endpoint node is missing contributes nothing (never invents a sheet).
 final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>[];
@@ -1751,9 +1751,9 @@ class IssueBatchAction {
 /// [designIssuesProvider] (not from issue titles). Empty when there's nothing to
 /// batch — so a clean design surfaces no actions.
 final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider);
+  final sheets = ref.watch(sheetsContentProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
   final str = MechXStringsData(ref.watch(localeProvider));

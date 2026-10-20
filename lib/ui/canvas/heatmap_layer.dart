@@ -36,7 +36,7 @@ class HeatmapLayer extends ConsumerWidget {
     if (residual.isEmpty) return const SizedBox.shrink();
     final net = ref.watch(networkControllerProvider).network;
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
+        ref.watch(sheetViewportProvider(sheetId)) ??
         const ViewportTransform();
 
     // Round 34 — the legend range (and the verdict) is the residual at the

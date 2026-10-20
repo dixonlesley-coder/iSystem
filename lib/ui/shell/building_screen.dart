@@ -60,7 +60,7 @@ class BuildingScreen extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final ctrl = ref.read(projectControllerProvider.notifier);
     final building = project.building;
-    final sheetsState = ref.watch(sheetsControllerProvider);
+    final sheetsState = ref.watch(sheetsContentProvider);
 
     // F10 — EVERY sheet (PDF page) mapped to a level, not just the first.
     // A floor may carry several plans (architectural + M&E, or a re-issue), and

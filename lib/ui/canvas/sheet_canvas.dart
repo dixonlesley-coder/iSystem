@@ -275,11 +275,8 @@ class PlaceholderSheetPage extends ConsumerWidget {
     // sheet-name title stays always (it's the sheet identity, not onboarding
     // copy), and the import affordance (DropOverlay, drawn separately in
     // SheetCanvas) is untouched either way.
-    final hasDrawnElements = ref
-        .watch(networkControllerProvider)
-        .network
-        .nodes
-        .any((n) => n.sheetId == sheet.id);
+    final hasDrawnElements = ref.watch(networkControllerProvider
+        .select((d) => d.network.nodes.any((n) => n.sheetId == sheet.id)));
     return DecoratedBox(
       decoration: BoxDecoration(
         color: colors.sheetPaper,

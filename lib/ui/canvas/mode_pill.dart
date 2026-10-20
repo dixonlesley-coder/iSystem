@@ -23,7 +23,9 @@ class ModePill extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final drawing = ref.watch(networkControllerProvider);
+    // Only the tool + service (not the network): a drag frame never rebuilds it.
+    final drawing = ref.watch(networkControllerProvider
+        .select((d) => (tool: d.tool, service: d.service)));
     final measure = ref.watch(measureModeProvider);
     final tank = ref.watch(tankModeProvider);
     final room = ref.watch(roomModeProvider);
@@ -50,7 +52,7 @@ class ModePill extends ConsumerWidget {
       // Say what the riser will CONNECT (C6): the floor span it spans to (up to
       // N+1, or down to N-1 on the top floor), mirroring `placeRiser`. The swatch
       // still carries the service colour.
-      final sheets = ref.watch(sheetsControllerProvider);
+      final sheets = ref.watch(sheetsContentProvider);
       final levelCount =
           ref.watch(projectControllerProvider).building.levelCount;
       final current = sheets.current;

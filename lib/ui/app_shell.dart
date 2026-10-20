@@ -433,7 +433,7 @@ class _DesignWorkspace extends ConsumerWidget {
 /// uses, so the inspector names a sheet exactly as the rest of the app does.
 /// Null when [pos]'s sheet no longer resolves (a stale/removed sheet id).
 String? _layoutPlacementLabel(WidgetRef ref, LayoutPos pos) {
-  final sheets = ref.watch(sheetsControllerProvider).sheets;
+  final sheets = ref.watch(sheetsContentProvider).sheets;
   final index = sheets.indexWhere((s) => s.id == pos.sheetId);
   if (index < 0) return null;
   final floors = ref.watch(projectControllerProvider).floors;
@@ -936,7 +936,7 @@ class _StatusBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheet = ref.watch(sheetsControllerProvider).current;
+    final sheet = ref.watch(sheetsContentProvider).current;
     final project = ref.watch(projectControllerProvider);
     final calibrated =
         sheet != null && project.calibrationFor(sheet.id) != null;

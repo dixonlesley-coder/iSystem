@@ -374,7 +374,7 @@ class _NetworkSelectionOverlayState
     final drawing = ref.watch(networkControllerProvider);
     final net = drawing.network;
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
+        ref.watch(sheetViewportProvider(sheetId)) ??
             const ViewportTransform();
     final selection = ref.watch(selectionProvider);
     final hover = ref.watch(hoverTargetProvider);
@@ -1505,7 +1505,7 @@ class _SelectionGestureLayerState
 
   @override
   Widget build(BuildContext context) {
-    final transform = ref.watch(sheetsControllerProvider).viewportFor(_sheetId) ??
+    final transform = ref.watch(sheetViewportProvider(_sheetId)) ??
         const ViewportTransform();
     // B18/B27 — an armed boundary pick or match-properties brush swaps the
     // cursor to a crosshair, mirroring the CAD "something is armed" cue.

@@ -253,8 +253,8 @@ const List<Floor> _kDefaultFloorStack = [
 ///  • Report    — a deliverable (report/drawing/BOM) was exported this session.
 final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider).sheets;
-  final edges = ref.watch(networkControllerProvider).network.edges;
+  final sheets = ref.watch(sheetsContentProvider).sheets;
+  final edges = ref.watch(sizingNetworkProvider).edges;
   final sizing = ref.watch(sizingProvider);
 
   // Round 17 follow-up (ui-journeys-3-stepper-size-ticked-on-zero-length) —
@@ -264,7 +264,7 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   // The SAME edge-bearing rule the Review's critical 'Sheet not calibrated'
   // uses (a sheet holding any node with an incident edge), so the stepper can
   // never tick Calibrate while Review shows that blocker.
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final liveSheetIds = {for (final s in sheets) s.id};
   final edgeNodeIds = {
     for (final e in edges) ...[e.fromId, e.toId],

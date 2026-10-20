@@ -946,6 +946,11 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     }
     _nudgeIdleTimer?.cancel();
     _nudgeIdleTimer = Timer(_kNudgeIdleWindow, _endNudgeBurst);
+    // Drafting-feel perf: a held arrow key auto-repeats ~30x/s — ride the K1
+    // drag session so the heavy sizing/solve chain stays frozen while the keys
+    // keep coming and re-solves ONCE when they settle (moveMany ticks it),
+    // instead of a full multi-floor solve per repeat that lags the cursor.
+    ref.read(dragSessionProvider.notifier).beginDrag();
     ctrl.moveMany(ids, dx, dy);
     _nudgeLastNetwork = ref.read(networkControllerProvider).network;
     return true;
@@ -963,7 +968,7 @@ class _LayoutTopBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheets = ref.watch(sheetsControllerProvider);
+    final sheets = ref.watch(sheetsContentProvider);
     final levelCount = ref.watch(projectControllerProvider).building.levelCount;
     final current = sheets.current;
 
@@ -1093,6 +1098,38 @@ String _floorLabel(
 
 /// The Layout zoom read-out ('57%'), or null before the sheet's first viewport
 /// is known (the label is then omitted rather than guessed).
+/// The minimap's node landmarks for one sheet/floor, value-compared so the
+/// minimap rebuilds only when a landmark on THIS sheet/floor actually moves.
+final _minimapMarkersProvider =
+    Provider.autoDispose.family<_Markers, (String, int)>((ref, key) {
+  final net = ref.watch(networkControllerProvider.select((d) => d.network));
+  return _Markers([
+    for (final n in net.nodes)
+      if (n.sheetId == key.$1 && n.floorIndex == key.$2) Offset(n.x, n.y),
+  ]);
+});
+
+/// A marker list with value equality (an unrelated edit — another floor, a
+/// property change — does not rebuild the minimap).
+class _Markers {
+  final List<Offset> points;
+  const _Markers(this.points);
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! _Markers || other.points.length != points.length) {
+      return false;
+    }
+    for (var i = 0; i < points.length; i++) {
+      if (other.points[i] != points[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hashAll(points);
+}
+
 String? _zoomPercent(ViewportTransform? vt) =>
     vt == null ? null : '${(vt.scale * 100).round()}%';
 
@@ -1103,7 +1140,10 @@ class _SharedSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    final sheetsState = ref.watch(sheetsControllerProvider);
+    // Drafting-feel perf: the CONTENT of the sheets state only — a pan / zoom
+    // frame must not rebuild this whole stack (the live viewport is read by the
+    // small consumers below that actually need it).
+    final sheetsState = ref.watch(sheetsContentProvider);
     final sheet = sheetsState.current;
 
     if (sheet == null) {
@@ -1179,11 +1219,12 @@ class _SharedSheet extends ConsumerWidget {
 
     final content = host.contentFor(sheet);
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
-    final drawing = ref.watch(networkControllerProvider).isDrawing;
+    final drawing =
+        ref.watch(networkControllerProvider.select((d) => d.isDrawing));
     // A4: has anything been drawn yet? The first-draw hint teaches the primary
     // gesture only until the very first node lands anywhere in the network.
-    final hasDrawing =
-        ref.watch(networkControllerProvider).network.nodes.isNotEmpty;
+    final hasDrawing = ref.watch(networkControllerProvider
+        .select((d) => d.network.nodes.isNotEmpty));
     final showHeatmap = ref.watch(showHeatmapProvider);
     final calibration =
         ref.watch(projectControllerProvider).calibrationFor(sheet.id);
@@ -1215,20 +1256,13 @@ class _SharedSheet extends ConsumerWidget {
     // G1: the network nodes on THIS sheet/floor are the minimap's content
     // landmarks (content-pixel space, mapped like the sheet substrate).
     final inspectorCollapsed = ref.watch(inspectorCollapsedProvider);
-    final net = ref.watch(networkControllerProvider).network;
-    final networkExists = net.nodes.isNotEmpty || net.edges.isNotEmpty;
+    // Drafting-feel perf: watch only the facts this stack branches on, so a
+    // drag frame (which replaces the network) does not rebuild every overlay.
+    final networkExists = ref.watch(networkControllerProvider.select(
+        (d) => d.network.nodes.isNotEmpty || d.network.edges.isNotEmpty));
     final drawSectionExpanded =
         ref.watch(sectionExpandedProvider(SectionKey('Draw', !networkExists)));
     final showToolCluster = inspectorCollapsed || !drawSectionExpanded;
-    final minimapMarkers = <Offset>[
-      for (final n in net.nodes)
-        if (n.sheetId == sheet.id && n.floorIndex == floorIndex)
-          Offset(n.x, n.y),
-    ];
-
-    // The shared viewport transform (persisted per-sheet) is what the electrical
-    // layer reads, so both disciplines ride the SAME pan/zoom.
-    final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
 
     // Hold-Space pan: the interactive overlays stand down (IgnorePointer) so a
     // left-drag reaches the CanvasView's pan, with the default grab cursor.
@@ -1305,8 +1339,12 @@ class _SharedSheet extends ConsumerWidget {
           Positioned.fill(
             child: IgnorePointer(
               ignoring: spaceHeld,
-              child: ElectricalLayoutLayer(
-                transform: vt,
+              // The shared viewport transform (persisted per-sheet) is what the
+              // electrical layer reads, so both disciplines ride the SAME
+              // pan/zoom — watched HERE so only this layer follows a pan frame.
+              child: Consumer(builder: (context, ref, _) => ElectricalLayoutLayer(
+                transform: ref.watch(sheetViewportProvider(sheet.id)) ??
+                    const ViewportTransform(),
                 sheetId: sheet.id,
                 floorIndex: floorIndex,
                 interactive: electricalActive,
@@ -1314,7 +1352,7 @@ class _SharedSheet extends ConsumerWidget {
                 onEditCircuit: host.onEditCircuit,
                 onPanelMenu: host.onPanelMenu,
                 onCircuitMenu: host.onCircuitMenu,
-              ),
+              )),
             ),
           ),
         // Measurement annotations — saved dimensions always render (when a
@@ -1467,16 +1505,17 @@ class _SharedSheet extends ConsumerWidget {
         Positioned(
           left: MechXSpacing.md,
           bottom: MechXSpacing.md,
-          child: ZoomControls(
+          child: Consumer(builder: (context, ref, _) => ZoomControls(
             onIn: () => host.canvasKeyFor(sheet.id).currentState?.zoomIn(),
             onOut: () => host.canvasKeyFor(sheet.id).currentState?.zoomOut(),
             onFit: () => host.canvasKeyFor(sheet.id).currentState?.fitView(),
             // Work item 9: the live zoom read-out (moved off the top bar);
             // tapping it eases back to 100%.
-            percentLabel: _zoomPercent(sheetsState.viewportFor(sheet.id)),
+            percentLabel:
+                _zoomPercent(ref.watch(sheetViewportProvider(sheet.id))),
             onResetZoom: () =>
                 host.canvasKeyFor(sheet.id).currentState?.zoomTo(1.0),
-          ),
+          )),
         ),
         // Persistent "(?) Canvas guide" (top-left) — the same affordance the
         // electrical canvas advertises, now lifted to the mechanical Layout
@@ -1512,15 +1551,20 @@ class _SharedSheet extends ConsumerWidget {
           top: MechXSpacing.sm,
           child: ValueListenableBuilder<MinimapViewport?>(
             valueListenable: host._minimapViewport,
-            builder: (context, vp, _) => CanvasMinimap(
+            builder: (context, vp, _) => Consumer(
+                builder: (context, ref, _) => CanvasMinimap(
               contentSize: sheet.sizePx,
-              markers: minimapMarkers,
+              // G1: the network nodes on THIS sheet/floor are the minimap's
+              // content landmarks (content-pixel space).
+              markers: ref
+                  .watch(_minimapMarkersProvider((sheet.id, floorIndex)))
+                  .points,
               viewport: vp,
               onRecenter: (world) => host
                   .canvasKeyFor(sheet.id)
                   .currentState
                   ?.centreOnWorld(world),
-            ),
+            )),
           ),
         ),
         // On-canvas tool cluster (left edge, vertically centred) — SWITCH the

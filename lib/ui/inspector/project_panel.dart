@@ -2790,7 +2790,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
   Widget _scaleSection(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    final currentSheet = ref.watch(sheetsControllerProvider).current;
+    final currentSheet = ref.watch(sheetsContentProvider).current;
     final project = ref.watch(projectControllerProvider);
     final calibration = currentSheet == null
         ? null
@@ -3311,7 +3311,14 @@ class _DrawSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final drawing = ref.watch(networkControllerProvider);
+    // Only what this section shows (tool, service, network-exists) — a drag
+    // frame replaces the network and must not rebuild the inspector.
+    final drawing = ref.watch(networkControllerProvider.select((d) => (
+          tool: d.tool,
+          service: d.service,
+          hasNetwork:
+              d.network.nodes.isNotEmpty || d.network.edges.isNotEmpty,
+        )));
     final ctrl = ref.read(networkControllerProvider.notifier);
     final ortho = ref.watch(orthoProvider);
 
@@ -3394,7 +3401,7 @@ class _DrawSection extends ConsumerWidget {
     // The user's own manual expand/collapse (sectionVisibilityProvider) always
     // wins over this default for the session.
     final networkExists =
-        drawing.network.nodes.isNotEmpty || drawing.network.edges.isNotEmpty;
+        drawing.hasNetwork;
 
     return DisclosureSection(
       name: 'Draw',
@@ -3733,7 +3740,7 @@ class _TanksSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheet = ref.watch(sheetsControllerProvider).current;
+    final sheet = ref.watch(sheetsContentProvider).current;
     if (sheet == null) return const SizedBox.shrink();
     final tanks = [
       for (final t in ref.watch(tankAreasProvider))
@@ -3884,7 +3891,7 @@ class _RoomsSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheet = ref.watch(sheetsControllerProvider).current;
+    final sheet = ref.watch(sheetsContentProvider).current;
     if (sheet == null) return const SizedBox.shrink();
     final allRooms = ref.watch(roomAreasProvider);
     final rooms = [
@@ -5156,7 +5163,7 @@ class _SelectionSection extends ConsumerWidget {
     // another floor's plan). Badge the header with the owning sheet and make the
     // body read-only in that state: the edit belongs where the element is. Null
     // (the normal case: the target is on the current sheet) ⇒ byte-identical.
-    final sheets = ref.watch(sheetsControllerProvider);
+    final sheets = ref.watch(sheetsContentProvider);
     final elsewhereId = owningSheetIfElsewhere(
       net,
       nodeId: selection.nodeId,
@@ -5226,7 +5233,7 @@ class _SelectionSection extends ConsumerWidget {
       net: net,
       nodeIds: selection.nodeIds,
       edgeIds: selection.edgeIds,
-      sheetId: ref.watch(sheetsControllerProvider).current?.id,
+      sheetId: ref.watch(sheetsContentProvider).current?.id,
       inertServices: ref.watch(inertServicesProvider),
     );
     final edgeIds = scope.edgeIds;

@@ -213,7 +213,7 @@ class FireSystemBasis {
 ///    loses ~1.4 m/m — a fixed 15 m printed heads 2x low).
 /// Ordered as [fireSystems]. Empty when no fire service is drawn.
 final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final systems = fireSystems(net);
   if (systems.isEmpty) return const [];
   final project = ref.watch(projectControllerProvider);
@@ -345,7 +345,7 @@ final firePumpRatingProvider = Provider<FirePumpRatingResult>((ref) {
 /// 55 kW life-safety way on the MDP of a building with no fire system is a
 /// wrong deliverable.
 final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   if (!net.edges.any((e) =>
       e.service == ServiceType.fireSprinkler ||
       e.service == ServiceType.fireHydrant)) {
@@ -408,7 +408,7 @@ final sprinklerPumpCheckProvider = Provider<
       bool flowShort,
       bool headShort,
     })?>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   if (!net.edges.any((e) => e.service == ServiceType.fireSprinkler)) {
     return null;
   }
