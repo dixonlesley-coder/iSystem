@@ -1351,7 +1351,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
     // the iOS sheet idiom — the Layout-canvas electrical layer path.
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       builder: (context, t, child) => Opacity(
         opacity: t,
@@ -1777,7 +1777,7 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
     // same iOS sheet idiom as the circuit inspector.
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       builder: (context, t, child) => Opacity(
         opacity: t,

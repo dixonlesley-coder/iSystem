@@ -220,6 +220,11 @@ const double kScheduleRowH = 20;
 double scheduleRowTop(int wayIndex) =>
     kScheduleHeaderH + 6 + kScheduleRowH + wayIndex * kScheduleRowH;
 
+/// E4 — debug-only count of [SldBoardSchedulePainter.paint] calls. The canvas
+/// perf pins assert a pan frame repaints no board schedule.
+@visibleForTesting
+int debugBoardSchedulePaintCount = 0;
+
 class SldBoardSchedulePainter extends CustomPainter {
   final SldSheet sheet;
   final Color ink;
@@ -242,6 +247,7 @@ class SldBoardSchedulePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    debugBoardSchedulePaintCount++;
     if (sheet.isEmpty || size.isEmpty) return;
     final content = Size(
       math.max(1.0, sheet.maxX - sheet.minX),

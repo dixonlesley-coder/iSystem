@@ -15,7 +15,7 @@ library;
 
 import 'dart:convert' show jsonEncode;
 
-import 'package:flutter/widgets.dart' show immutable, Offset;
+import 'package:flutter/widgets.dart' show immutable, Offset, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
@@ -155,23 +155,57 @@ class WorkspaceViewController extends Notifier<WorkspaceView> {
 /// A selected element on the unified Layout's electrical layer (I5) — a whole
 /// panel, or one circuit within a panel. Drives the marker selection ring, and
 /// Delete removes it via the existing [ElectricalProjectController] intents.
+///
+/// E5 (D2 parity) — a MULTI-selection (shift-click, marquee, Ctrl+A) keeps
+/// this element as its PRIMARY (what single-element consumers — the feeder
+/// grip, the inspector, the cross-view jump — act on) and carries the other
+/// members in [also]. A single selection has an empty [also], so every
+/// existing single-selection path is unchanged.
 @immutable
 class ElectricalSelection {
   final String panelId;
   final String? circuitId;
-  const ElectricalSelection.panel(this.panelId) : circuitId = null;
-  const ElectricalSelection.circuit(this.panelId, String this.circuitId);
+
+  /// The OTHER members of a multi-selection (never contains this element).
+  final Set<ElectricalSelection> also;
+  const ElectricalSelection.panel(this.panelId)
+      : circuitId = null,
+        also = const {};
+  const ElectricalSelection.circuit(this.panelId, String this.circuitId)
+      : also = const {};
+  const ElectricalSelection._(this.panelId, this.circuitId, this.also);
 
   bool get isCircuit => circuitId != null;
+
+  /// Whether more than one element is selected.
+  bool get isMulti => also.isNotEmpty;
+
+  /// This element alone (drops any multi-selection members).
+  ElectricalSelection get single => isMulti
+      ? ElectricalSelection._(panelId, circuitId, const {})
+      : this;
+
+  /// Every selected element, the primary first.
+  Iterable<ElectricalSelection> get members sync* {
+    yield single;
+    yield* also;
+  }
+
+  /// Whether [panelId] (+ [circuitId]) is among the selected elements.
+  bool contains(String panelId, [String? circuitId]) =>
+      members.any((m) => m.panelId == panelId && m.circuitId == circuitId);
 
   @override
   bool operator ==(Object other) =>
       other is ElectricalSelection &&
       other.panelId == panelId &&
-      other.circuitId == circuitId;
+      other.circuitId == circuitId &&
+      other.also.length == also.length &&
+      other.also.containsAll(also);
 
   @override
-  int get hashCode => Object.hash(panelId, circuitId);
+  int get hashCode =>
+      Object.hash(panelId, circuitId, Object.hashAllUnordered(also));
 }
 
 /// The selected element on the Layout electrical layer (null = nothing). Kept in
@@ -190,6 +224,41 @@ class ElectricalSelectionController extends Notifier<ElectricalSelection?> {
   void selectPanel(String id) => state = ElectricalSelection.panel(id);
   void selectCircuit(String panelId, String circuitId) =>
       state = ElectricalSelection.circuit(panelId, circuitId);
+
+  /// E5 — select exactly [items] (the first is the primary); empty clears.
+  /// Duplicates collapse.
+  void selectMany(Iterable<ElectricalSelection> items) {
+    final singles = <ElectricalSelection>[];
+    for (final i in items) {
+      final s = i.single;
+      if (!singles.contains(s)) singles.add(s);
+    }
+    if (singles.isEmpty) {
+      clear();
+      return;
+    }
+    state = ElectricalSelection._(
+        singles.first.panelId, singles.first.circuitId, {...singles.skip(1)});
+  }
+
+  /// E5 — shift-click: add [item] to the selection, or remove it when it is
+  /// already a member.
+  void toggle(ElectricalSelection item) {
+    final current = state;
+    final s = item.single;
+    if (current == null) {
+      state = s;
+      return;
+    }
+    final members = current.members.toList();
+    if (members.contains(s)) {
+      members.remove(s);
+    } else {
+      members.add(s);
+    }
+    selectMany(members);
+  }
+
   void clear() {
     if (state != null) state = null;
   }
@@ -353,6 +422,112 @@ final electricalProjectProvider =
   ElectricalProjectController.new,
 );
 
+/// E3 — an in-flight electrical DRAG on the Layout plan (a placed board / load
+/// marker being moved). While [frozen] is set, [electricalSizingProjectProvider]
+/// returns that drag-start snapshot, so the per-frame `setPanelLayoutPos` /
+/// `setLoadPos` writes that keep the markers + wiring live do NOT re-run the
+/// whole electrical solve (geo cable lengths) every frame; ending the session
+/// re-solves ONCE against the settled positions. The electrical analogue of the
+/// mechanical K1 `dragSessionProvider` (without its settle throttle: a marker
+/// move changes only cable lengths, which nobody reads mid-gesture).
+@immutable
+class ElectricalDragSession {
+  /// The sizing project captured when the drag began; null ⇒ no drag.
+  final ElectricalProject? frozen;
+  const ElectricalDragSession([this.frozen]);
+  bool get active => frozen != null;
+}
+
+class ElectricalDragSessionController extends Notifier<ElectricalDragSession> {
+  bool _disposed = false;
+
+  @override
+  ElectricalDragSession build() {
+    ref.onDispose(() => _disposed = true);
+    return const ElectricalDragSession();
+  }
+
+  /// Open a drag session (call at pointer-drag START) frozen on [sizing] —
+  /// the caller passes `ref.read(electricalSizingProjectProvider)` (this
+  /// notifier cannot read it: that provider depends on this one). Idempotent
+  /// while open.
+  void begin(ElectricalProject sizing) {
+    if (state.active) return;
+    state = ElectricalDragSession(sizing);
+  }
+
+  /// Close the session (pointer-drag END / cancel / unmount): the heavy chain
+  /// re-solves once against the live project. No-op when nothing is open.
+  void end() {
+    if (!state.active) return;
+    state = const ElectricalDragSession();
+  }
+
+  /// [end] on the next microtask — for a drag widget unmounted mid-gesture,
+  /// whose `dispose` must not write a provider. No-op once disposed.
+  void endDeferred() {
+    Future.microtask(() {
+      if (!_disposed) end();
+    });
+  }
+}
+
+/// The transient electrical drag session (never persisted) — see
+/// [ElectricalDragSession].
+final electricalDragSessionProvider =
+    NotifierProvider<ElectricalDragSessionController, ElectricalDragSession>(
+  ElectricalDragSessionController.new,
+);
+
+/// The last project [electricalSizingProjectProvider] handed out — a mutable
+/// holder read (never watched) by that provider, like [PhasePriorCache].
+class _SizingProjectMemo {
+  ElectricalProject? project;
+}
+
+final _sizingProjectMemoProvider =
+    Provider<_SizingProjectMemo>((_) => _SizingProjectMemo());
+
+/// E2/E3 — the electrical project the HEAVY chain reads (the A4 solve
+/// [electricalResultProvider], the A8 [electricalAdvancedProvider], the BOM,
+/// design issues, compliance). It differs from [electricalProjectProvider] in
+/// exactly two ways, both of which leave every solved figure unchanged:
+///
+///  * a SCHEMATIC move (single-line `ElectricalPanel.x` / `y` only — the engine
+///    never reads them, see the model doc) keeps handing out the previous
+///    instance, so dragging / nudging a board on the single-line re-solves
+///    NOTHING, during the drag or at rest. Recognised structurally: the store
+///    tags every project it produces by such a move with its parent
+///    ([ElectricalProjectController.isSchematicMoveOf]); any other edit is an
+///    untagged new instance and re-solves. A layout placement (`layoutPos` /
+///    `loadPos`) is NOT schematic — it drives the geo cable length;
+///  * during an [electricalDragSessionProvider] drag it returns the drag-start
+///    snapshot (one re-solve when the drag ends).
+///
+/// Paint / hit-test widgets that need live positions keep reading
+/// [electricalProjectProvider]; the stale `x`/`y` this may carry is never read
+/// by the engine or by any consumer of this provider.
+final electricalSizingProjectProvider = Provider<ElectricalProject>((ref) {
+  final frozen = ref.watch(electricalDragSessionProvider).frozen;
+  if (frozen != null) return frozen;
+  final live = ref.watch(electricalProjectProvider);
+  final memo = ref.read(_sizingProjectMemoProvider);
+  final last = memo.project;
+  if (last != null &&
+      ref
+          .read(electricalProjectProvider.notifier)
+          .isSchematicMoveOf(live, last)) {
+    return last;
+  }
+  memo.project = live;
+  return live;
+});
+
+/// Debug-only counter of electrical solves ([electricalResultProvider] builds)
+/// — the E2/E3 perf pins count re-solves per drag gesture with it.
+@visibleForTesting
+int debugElectricalSolveCount = 0;
+
 /// Derived: the sized whole-project result, recomputed by the pure A4 engine
 /// whenever the project (or the shared geometry it is placed on) changes.
 /// Read-only for the UI.
@@ -427,7 +602,10 @@ double effectiveBusbarClearingTimeS(ElectricalProject project) =>
 final electricalResultProvider = Provider<ElectricalSystemResult>(
   (ref) {
     final geo = ref.watch(projectControllerProvider);
-    final project = ref.watch(electricalProjectProvider);
+    // E2/E3 — the sizing projection: a single-line x/y move or an in-flight
+    // layout drag never re-runs this solve.
+    final project = ref.watch(electricalSizingProjectProvider);
+    debugElectricalSolveCount++;
     // PHASE STABILITY: seed the balancer with the LAST solve's assignment and
     // only let it re-label a way for a spread gain above [kPhaseStickinessA].
     // Read (never watch) — the cache is written below by this very build, and
@@ -484,7 +662,7 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
 final electricalAdvancedProvider = Provider<AdvancedStudy>(
   (ref) => computeAdvancedStudy(
     const PuilProfile(),
-    ref.watch(electricalProjectProvider),
+    ref.watch(electricalSizingProjectProvider),
     ref.watch(electricalResultProvider),
   ),
 );
@@ -1595,8 +1773,34 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// the mechanical canvas `moveNode`: no undo recording — pair with
   /// [pushUndoSnapshot] at drag start so the whole move is ONE undo step).
   /// No-op when the id is unknown.
-  void setPanelPosition(String id, double x, double y) =>
-      _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false);
+  void setPanelPosition(String id, double x, double y) {
+    final before = state;
+    _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false);
+    _markSchematicMove(before);
+  }
+
+  /// E2 — projects produced by a SCHEMATIC move (single-line `x`/`y` only)
+  /// remember the project they were derived from, so
+  /// [electricalSizingProjectProvider] can tell a move the engine never reads
+  /// from a real edit. An [Expando]: weak, never persisted, no identity leak.
+  static final Expando<ElectricalProject> _schematicParent =
+      Expando<ElectricalProject>('electrical-schematic-move');
+
+  void _markSchematicMove(ElectricalProject before) {
+    if (!identical(state, before)) _schematicParent[state] = before;
+  }
+
+  /// Whether [project] was reached from [ancestor] through schematic moves
+  /// ONLY (or is [ancestor] itself) — i.e. every solved figure of [ancestor]
+  /// holds for [project]. Bounded walk; anything untagged ⇒ false.
+  bool isSchematicMoveOf(ElectricalProject project, ElectricalProject ancestor) {
+    ElectricalProject? p = project;
+    for (var i = 0; p != null && i < 100000; i++) {
+      if (identical(p, ancestor)) return true;
+      p = _schematicParent[p];
+    }
+    return false;
+  }
 
   /// Move SEVERAL panels to absolute canvas positions in ONE undo step (D2 —
   /// the multi-select group arrow-nudge). The caller passes each panel's
@@ -1606,6 +1810,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// identical). One `_commit`, so a single Ctrl+Z restores every moved panel.
   void movePanels(Map<String, Offset> positions) {
     if (positions.isEmpty) return;
+    final before = state;
     _commit(_withProject(panels: [
       for (final p in state.panels)
         if (positions.containsKey(p.id))
@@ -1613,6 +1818,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ]));
+    _markSchematicMove(before);
   }
 
   /// Delete SEVERAL panels in ONE undo step (D2 — the multi-select Delete). The
@@ -1633,6 +1839,55 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           if (!set.contains(p.id)) p,
       ]),
     ));
+  }
+
+  /// E5 — delete a MIXED multi-selection from the Layout electrical layer
+  /// (whole boards and single ways) in ONE undo step, with the same hygiene as
+  /// the single intents: the feeder topology is sanitized inside the commit,
+  /// a locked MEP board and an MEP-derived way are refused (one status
+  /// message) and kept. A way whose board is also deleted goes with it.
+  /// Nothing deletable ⇒ no-op, no phantom undo entry.
+  void deleteLayoutSelection(
+      Iterable<({String panelId, String? circuitId})> items) {
+    final boards = <String>{};
+    final ways = <String, Set<String>>{};
+    var refusedBoard = false, refusedWay = false;
+    for (final i in items) {
+      final cid = i.circuitId;
+      if (cid == null) {
+        if (isMepBoardLocked(i.panelId)) {
+          refusedBoard = true;
+        } else {
+          boards.add(i.panelId);
+        }
+      } else if (isMepDerivedWay(i.panelId, cid)) {
+        refusedWay = true;
+      } else {
+        ways.putIfAbsent(i.panelId, () => <String>{}).add(cid);
+      }
+    }
+    if (refusedBoard) _refuse(StringKey.mepBoardLocked);
+    if (refusedWay) _refuse(StringKey.mepDerivedWayLocked);
+    final next = <ElectricalPanel>[];
+    var changed = false;
+    for (final p in state.panels) {
+      if (boards.contains(p.id)) {
+        changed = true;
+        continue;
+      }
+      final drop = ways[p.id];
+      if (drop != null && p.circuits.any((c) => drop.contains(c.id))) {
+        changed = true;
+        next.add(p.copyWith(circuits: [
+          for (final c in p.circuits)
+            if (!drop.contains(c.id)) c,
+        ]));
+      } else {
+        next.add(p);
+      }
+    }
+    if (!changed) return;
+    _commit(_withProject(panels: sanitizeFeederTopology(next)));
   }
 
   /// Add a new panel at a canvas position. When [fedByCircuitId] is given it is
