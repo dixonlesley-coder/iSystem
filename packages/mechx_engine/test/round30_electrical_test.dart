@@ -95,11 +95,13 @@ void main() {
       expect(isc, lessThan(1000000 / (math.sqrt(3) * 400 * 0.04)));
     });
 
-    test('above the ladder top: 3 465 kVA single service ⇒ 2 × 2500 kVA '
-        '(never one non-standard 3465 kVA unit)', () {
+    test('above the ladder top: 3 465 kVA single service ⇒ 2 units on the '
+        'smallest covering rung, 2 × 2000 kVA (never one non-standard 3465 '
+        'kVA unit; Round 45: never 2 × 2500 either)', () {
+      // n = ceil(3465 / 2500) = 2; share 1732.5 kVA ⇒ the 2000 kVA rung.
       final pr = _project(capVa: 3465000, loadW: 2000000);
       final d = declaredServiceTransformer(pr)!;
-      expect(d.kva.inKilovoltAmperes, 2500);
+      expect(d.kva.inKilovoltAmperes, 2000);
       expect(d.units, 2);
     });
 
@@ -133,10 +135,15 @@ void main() {
             expect(k, lessThan(cap / 1000 / sections), reason: '$cap');
           }
         } else {
-          expect(kva, transformerKvaLadder.last);
-          // n - 1 top units per section would not cover it.
-          expect((d.units ~/ sections - 1) * kva,
-              lessThan(cap / 1000 / sections), reason: '$cap');
+          // Round 45 — n = the fewest top-rung units per section, then the
+          // smallest rung covering the per-unit share.
+          final n = d.units ~/ sections;
+          final top = transformerKvaLadder.last;
+          expect((n - 1) * top, lessThan(cap / 1000 / sections),
+              reason: '$cap');
+          for (final k in transformerKvaLadder.where((k) => k < kva)) {
+            expect(k * n, lessThan(cap / 1000 / sections), reason: '$cap');
+          }
         }
       }
     });

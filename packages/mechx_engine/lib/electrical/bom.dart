@@ -25,7 +25,11 @@ import '../standards/puil.dart'
 import 'catalog.dart';
 import 'earthing.dart' show RcdType, rcdTypeRank;
 import 'enclosure.dart' show EnclosureResult;
-import 'fault.dart' show FaultStudyResult, breakingCapacityKa;
+import 'fault.dart'
+    show
+        FaultStudyResult,
+        cascadeBackupAvailable,
+        specifiedBreakerKa;
 import 'load_kind.dart' show LoadKind;
 import 'model.dart' show ElectricalSystemInfo;
 import 'panel_results.dart';
@@ -490,11 +494,21 @@ List<BomLine> _panelLines(
     // Round 44 — an engine-kept MCB on a bus above the MCB ladder is
     // back-up (cascade) protected by the upstream incomer (fault study:
     // `cascade-combination-unverified`): never flagged short, but noted.
-    final mcbTop = breakingCapacityKa[BreakerClass.mcb]!.last;
+    // Round 45 — the SAME predicate the fault study uses
+    // ([cascadeBackupAvailable]: a current-limiting, adequate MCCB incomer),
+    // on the same inputs (the bus fault, the incomer's specified kA).
+    final busKa = minBreakingKa ?? 0;
+    final inc = panel.incomer.breaker;
     final cascade = !incomer &&
-        b.deviceClass == BreakerClass.mcb &&
-        !b.overridden &&
-        (minBreakingKa ?? 0) > mcbTop + 1e-9;
+        busKa > 0 &&
+        cascadeBackupAvailable(
+            wayClass: b.deviceClass,
+            wayOverridden: b.overridden,
+            busFaultKa: busKa,
+            incomerClass: inc.deviceClass,
+            incomerKa: incomerKa ??
+                specifiedBreakerKa(
+                    inc.ratingA.amperes, inc.deviceClass, busKa));
     final flagShort = short && !cascade;
     var desc = description;
     if (subst != null) desc = withNote(desc, subst);

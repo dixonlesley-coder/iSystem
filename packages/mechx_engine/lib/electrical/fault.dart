@@ -232,6 +232,12 @@ const Map<BreakerCurve, double> curveTripMultiple = {
   BreakerCurve.d: 20,
 };
 
+/// Round 45 — the magnetic (instantaneous) release multiple of a standard
+/// thermal-magnetic MCCB / ACB, the figure ADS judges a non-MCB device at
+/// (never an MCB curve letter's band). // VERIFY — secondarySource (typical
+/// fixed / minimum-setting magnetic release of TM MCCBs, ~10 × In).
+const double kMccbMagneticTripMultiple = 10;
+
 /// Standard short-circuit breaking capacities (Icu, kA rms symmetrical) offered
 /// per device class. MCBs: 6/10 kA per IEC 60898 + industrial IEC 60947-2
 /// miniature 15/25 kA; MCCBs per IEC 60947-2 across common frames. Ascending.
@@ -282,7 +288,8 @@ const List<String> faultStudyVerifyItems = [
   faultStudyU0VerifyItem,
   'source X/R ratio (7) for the earth-fault loop split',
   'ADS voltage factor (0.95) and fault-temperature factor (1.28)',
-  'MCB curve trip multiples (B 5× / C 10× / D 20×)',
+  'MCB curve trip multiples (B 5× / C 10× / D 20×) and the MCCB magnetic '
+      'release (10×) the ADS check judges a non-MCB device at',
   'breaker breaking-capacity ladders (MCB 6–25 kA / MCCB 16–150 kA)',
   'selectivity discrimination ratios (partial 1.6× / total 2.5×) — a simplified '
       'time-current zone model, not manufacturer let-through / selectivity tables',
@@ -651,6 +658,32 @@ double specifiedBreakerKa(
   }
   return candidates.last;
 }
+
+/// Round 44/45 — the ONE "engine-kept MCB on back-up (cascade) protection"
+/// predicate, shared by the fault study (`cascade-combination-unverified`
+/// instead of `breaking-capacity-inadequate`) and the BOM (its `cascade` note
+/// instead of the kA-short flag), so the two can never disagree.
+///
+/// True only when an MCB the ENGINE kept (not overridden) sits on a bus above
+/// the MCB ladder top AND its upstream device CAN back it up: Round 45
+/// (regression-cascade-accepts-acb-backup) — the incomer must be a
+/// CURRENT-LIMITING moulded-case breaker (an ACB with short-time delay does
+/// not limit the let-through and appears in no MCB back-up table) whose own
+/// specified breaking capacity covers the bus fault. Otherwise the MCB is a
+/// genuinely inadequate device. // VERIFY (notAnSniClause): IEC 60947-2
+/// Annex A back-up needs a current-limiting upstream device.
+bool cascadeBackupAvailable({
+  required BreakerClass wayClass,
+  required bool wayOverridden,
+  required double busFaultKa,
+  required BreakerClass incomerClass,
+  required double incomerKa,
+}) =>
+    wayClass == BreakerClass.mcb &&
+    !wayOverridden &&
+    busFaultKa > breakingCapacityKa[BreakerClass.mcb]!.last + 1e-9 &&
+    incomerClass == BreakerClass.mccb &&
+    incomerKa + 1e-9 >= busFaultKa;
 
 /// True when an upstream breaker likely does NOT discriminate with a downstream
 /// one (its rating is below [selectivityRatio]× the downstream rating).
@@ -1149,7 +1182,18 @@ FaultStudyResult faultStudy(
       // against the manufacturer's cascade table, not an inadequate device.
       // One judge-only warning names the upstream device and the back-up kA;
       // an engineer-OVERRIDDEN MCB keeps the error.
+      // Round 45 — only behind a current-limiting, adequate MCCB incomer
+      // ([cascadeBackupAvailable]); an ACB or an inadequate incomer keeps
+      // the error, saying why.
       final cascadeKept = !adequate &&
+          cascadeBackupAvailable(
+              wayClass: c.breaker.deviceClass,
+              wayOverridden: c.breaker.overridden,
+              busFaultKa: faultA / 1000.0,
+              incomerClass: incomer.deviceClass,
+              incomerKa: incomerKa);
+      final keptWithoutBackup = !adequate &&
+          !cascadeKept &&
           c.breaker.deviceClass == BreakerClass.mcb &&
           !c.breaker.overridden &&
           faultA / 1000.0 > breakingCapacityKa[BreakerClass.mcb]!.last + 1e-9;
@@ -1174,7 +1218,13 @@ FaultStudyResult faultStudy(
           message:
               '${panelResult.name} / ${c.name}: breaker breaking capacity '
               '${_fmt(ka)} kA is below the prospective fault '
-              '${_fmt(faultKaRounded)} kA.',
+              '${_fmt(faultKaRounded)} kA.'
+              '${keptWithoutBackup ? ' Back-up (cascade) protection needs a '
+                  'current-limiting MCCB upstream whose own breaking capacity '
+                  'covers the fault: the ${_fmt(incomer.ratingA.amperes)} A '
+                  '${incomer.deviceClass.code} incomer'
+                  '${incomerAdequate ? '' : ' (itself inadequate)'} cannot '
+                  'back it up; specify a higher-Icu device.' : ''}',
           panelId: panelId,
           circuitId: c.circuitId,
         ));
@@ -1253,7 +1303,17 @@ FaultStudyResult faultStudy(
         disconnectionTimeS = tDisc;
         final multiples =
             tDisc >= 5.0 ? curveTripMultiple5s : curveTripMultiple;
-        final ia = (multiples[c.breaker.curve] ?? 10) *
+        // Round 45 (electrical-sim-10-mccb-raised-from-b-curve-ads-judged-
+        // at-5x) — the trip CURVE letters are MCB (IEC 60898) bands. A way
+        // the engine raised to an MCCB keeps its curve field but is issued as
+        // a plain 'MCCB <In>A' (no curve on the schedule or the BOM), so the
+        // fitted device is a standard thermal-magnetic MCCB whose magnetic
+        // release sits at ~10 × In: judge it at
+        // max(10, the curve's multiple) — never the B-curve 5 ×.
+        final m0 = multiples[c.breaker.curve] ?? 10;
+        final ia = (c.breaker.deviceClass == BreakerClass.mcb
+                ? m0
+                : math.max(kMccbMagneticTripMultiple, m0)) *
             c.breaker.ratingA.amperes;
         final zsMaxOcpd =
             ia > 0 ? (zsVoltageFactor * u0PhaseVoltageV) / ia : double.infinity;

@@ -76,7 +76,12 @@ List<SldSheet> paginatedRiserSheets({
   final singleMin = [
     for (var f = 0; f < levelCount; f++) minPt(build((lo: f, hi: f))),
   ];
+  // Round 45 — a floor whose own page REACHES the floor targets the floor
+  // itself: the plot fit caps labels at [kMinPlotLabelPt], so a legible
+  // floor reads exactly 7.0 and the 0.95 relaxation (meant only for a floor
+  // that cannot reach it alone) let a multi-floor page print at 6.65 pt.
   double floorTarget(int f) {
+    if (singleMin[f] >= kMinPlotLabelPt - 1e-9) return kMinPlotLabelPt - 1e-9;
     final cap = singleMin[f] * 0.95;
     return (cap < kMinPlotLabelPt ? cap : kMinPlotLabelPt) - 1e-9;
   }
