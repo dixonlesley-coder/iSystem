@@ -4369,6 +4369,23 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'TT feeder RCD not selective',
     'RCD feeder TT tidak selektif'
   ),
+  // Round 38.
+  'feeder-neutral-overloaded': (
+    'Feeder neutral overloaded',
+    'Netral feeder kelebihan beban'
+  ),
+  'service-single-phase-root-on-three-phase-daya': (
+    'Single-phase board on a 3-phase daya',
+    'Panel satu fasa pada daya tiga fasa'
+  ),
+  'feeder-without-target': (
+    'Feeder feeds no board',
+    'Feeder tidak menyuplai panel'
+  ),
+  'outgoing-exceeds-incomer': (
+    'Outgoing way above its incomer',
+    'Pemutus keluar melebihi incomer'
+  ),
 };
 
 /// The active string table for a locale. Exposed for tests; resolves a [key]

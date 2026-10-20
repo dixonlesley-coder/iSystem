@@ -85,6 +85,13 @@ void main() {
     // Sized on the 57.6 A phase current alone.
     expect(f.cable.deratedIz.amperes * kFourLoadedConductorFactor,
         lessThan(99.6));
-    expect(sys.warnings.where((w) => w.circuitId == 'f'), isEmpty);
+    // Round 38 — no NEUTRAL finding on the feeder (the selectivity floor's
+    // separate 'outgoing-exceeds-incomer' judge is not a neutral matter).
+    expect(
+        sys.warnings.where((w) =>
+            w.circuitId == 'f' &&
+            (w.code == 'harmonics-neutral-oversize' ||
+                w.code == 'feeder-neutral-overloaded')),
+        isEmpty);
   });
 }

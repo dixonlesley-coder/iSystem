@@ -1567,10 +1567,12 @@ void main() {
       for (final cc in copy.circuits) {
         expect(srcIds.contains(cc.id), isFalse);
       }
-      // The copied feeder dropped its target (a feeder supplies one panel).
-      final feeder =
-          copy.circuits.firstWhere((c0) => c0.loadKind == LoadKind.feeder);
-      expect(feeder.feedsPanelId == 'lp1', isFalse);
+      // The copied feeder dropped its target (a feeder supplies one panel)
+      // and — Round 38 — stopped being a feeder: a spare way, never a
+      // scheduled 'Feeder to LP-1' that feeds nothing.
+      expect(copy.circuits.where((c0) => c0.isFeeder), isEmpty);
+      expect(copy.circuits.where((c0) => c0.loadKind == LoadKind.spare),
+          isNotEmpty);
 
       // The copy sizes (appears in the result with an incomer).
       final r = c.read(electricalResultProvider).panels[copy.id];

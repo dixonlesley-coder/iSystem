@@ -307,7 +307,11 @@ void main() {
       expect(f.adsByRcd, isFalse);
       final w = fs.warnings.singleWhere((w) => w.code == 'ads-disconnection');
       expect(w.severity, WarningSeverity.error);
-      expect(w.message, contains('fit an RCD'));
+      // Round 38 — the advice names only the levers the tool provides (the
+      // model has no RCD request on a TN way): cable / breaker overrides.
+      expect(w.message, isNot(contains('fit an RCD')));
+      expect(w.message, contains('cable override'));
+      expect(w.message, contains('breaker override'));
     });
   });
 

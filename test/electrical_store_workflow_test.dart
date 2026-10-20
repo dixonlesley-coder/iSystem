@@ -519,9 +519,13 @@ void main() {
       c.read(electricalProjectProvider.notifier)
           .duplicateCircuit('mdp', 'mdp-f1');
 
-      final copy = panel(c, 'mdp')
-          .circuits
-          .firstWhere((w) => w.name.endsWith('(copy)'));
+      final ways = panel(c, 'mdp').circuits;
+      final copy = ways[ways.indexWhere((w) => w.id == 'mdp-f1') + 1];
+      // Round 38 — a copied feeder stops being a feeder: a SPARE way, never
+      // a scheduled 'Feeder to LP-1' that feeds nothing.
+      expect(copy.loadKind, LoadKind.spare);
+      expect(copy.isFeeder, isFalse);
+      final copyId = copy.id;
       // Was the `''` sentinel — which `sanitizeFeederTopology` treats as an
       // invalid target and DELETES, so the copy used to evaporate on the next
       // delete/reload. A real null is a genuine non-feeder that survives.
@@ -531,8 +535,7 @@ void main() {
       // Proof it survives the sanitizer: an unrelated delete keeps the copy.
       c.read(electricalProjectProvider.notifier)
           .deleteCircuit('mdp', 'mdp-c1');
-      expect(
-          panel(c, 'mdp').circuits.where((w) => w.name.endsWith('(copy)')),
+      expect(panel(c, 'mdp').circuits.where((w) => w.id == copyId),
           hasLength(1));
     });
 

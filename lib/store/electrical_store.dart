@@ -1305,13 +1305,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// A duplicated feeder drops its `feedsPanelId` (a feeder targets exactly one
   /// panel), so the copy is a genuine NON-feeder rather than a `''`-targeted
   /// stub the topology sanitizer would have to sweep away.
+  /// Round 38 (elec-ui-drawings-4) — a copied FEEDER way loses its target,
+  /// so it must stop being a feeder: it kept `LoadKind.feeder` and the
+  /// 'Feeder to X' name, and was sized, scheduled ('Feeder to LP-1' feeding
+  /// nothing) and bought. It becomes a SPARE way (no load), the honest
+  /// placeholder for the outgoing slot it occupies.
+  static ElectricalCircuit _detargetedFeederCopy(ElectricalCircuit copy,
+          {required bool wasFeeder}) =>
+      wasFeeder
+          ? copy.copyWith(
+              name: 'Spare', loadKind: LoadKind.spare, loadW: 0)
+          : copy;
+
   void duplicateCircuit(String panelId, String circuitId) {
     _replacePanel(panelId, (p) {
       final out = <ElectricalCircuit>[];
       for (final c in p.circuits) {
         out.add(c);
         if (c.id == circuitId) {
-          out.add(c.copyWith(
+          out.add(_detargetedFeederCopy(c.copyWith(
             id: _freshId('c'),
             name: '${c.name} (copy)',
             clearFeedsPanelId: true,
@@ -1319,7 +1331,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
             // ways claiming one machine would both be refreshed every sync.
             clearSourceEquipmentId: true,
             clearFlaOverrideA: true,
-          ));
+          ), wasFeeder: c.isFeeder));
         }
       }
       return p.copyWith(circuits: out);
@@ -1516,7 +1528,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     const off = 40.0;
     final circuits = [
       for (final c in src.circuits)
-        c.copyWith(
+        _detargetedFeederCopy(c.copyWith(
           id: _freshId('c'),
           // Drop a feeder's target (mirrors duplicateCircuit) — a genuine
           // non-feeder, not a `''`-targeted stub.
@@ -1528,7 +1540,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           // phantom load.
           clearSourceEquipmentId: true,
           clearFlaOverrideA: true,
-        ),
+        ), wasFeeder: c.isFeeder),
     ];
     final copy = src.copyWith(
       id: _freshId('panel'),
@@ -1844,6 +1856,49 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       return ConnectFeederResult.refused(
           '${to.tag ?? to.name} is already fed by another panel. '
           'Disconnect it first.');
+    }
+
+    // Round 38 (elec-ui-drawings-1) — the board ALREADY feeding the target is
+    // not a new connection. Re-running the connect used to strip the existing
+    // way (its typed length, cable family and overrides) and write a fresh
+    // 10 m default feeder, silently. The existing way is KEPT: only a stray
+    // second way claiming the child elsewhere (a desynced file) is dropped and
+    // the back-pointer re-aimed; with nothing to repair it is a pure no-op
+    // (no undo entry). The Feed-from chooser marks this row '(current)'.
+    final from = state.panels.firstWhere((p) => p.id == fromPanelId);
+    final existing = from.circuits
+            .where((c) => c.feedsPanelId == toPanelId && c.id == to.fedByCircuitId)
+            .firstOrNull ??
+        from.circuits.where((c) => c.feedsPanelId == toPanelId).firstOrNull;
+    if (existing != null) {
+      final strays = [
+        for (final p in state.panels)
+          for (final c in p.circuits)
+            if (c.feedsPanelId == toPanelId && c.id != existing.id) c.id,
+      ];
+      if (strays.isEmpty &&
+          to.fedByCircuitId == existing.id &&
+          to.sourceType == PanelSource.feeder) {
+        return const ConnectFeederResult.connected();
+      }
+      final repaired = [
+        for (final p in state.panels)
+          p.copyWith(
+            circuits: [
+              for (final c in p.circuits)
+                if (c.feedsPanelId != toPanelId || c.id == existing.id) c,
+            ],
+            sourceType: p.id == toPanelId ? PanelSource.feeder : null,
+            fedByCircuitId: p.id == toPanelId ? existing.id : null,
+          ),
+      ];
+      final next = _withProject(panels: repaired);
+      if (record) {
+        _commit(next);
+      } else {
+        state = next;
+      }
+      return const ConnectFeederResult.connected();
     }
 
     // The board currently feeding the target (for the "moved from …" caption).
