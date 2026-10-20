@@ -256,16 +256,23 @@ void main() {
       expect(w.single.panelId, 'LVMDP2');
     });
 
-    test('LVMDP2 incomer above one unit FLC (2309 A) is flagged', () {
+    // Round 41 — re-derived: the LVMDP2 incomer (1500 kVA / (sqrt(3) x 400)
+    // = 2165 A -> the 2500 A ACB rung) is the FIRST rung at or above one
+    // unit's FLC (2309 A -> 2500 A), i.e. the incomer a 1600 kVA unit's
+    // full load needs anyway — no FLC warning. The overload stays covered
+    // by `section-transformer-overloaded` above.
+    test('LVMDP2 incomer on the FLC own rung (2500 A) is not flagged', () {
       final flc = 1600e3 / (math.sqrt(3) * 400);
       expect(flc, closeTo(2309.4, 0.1));
       final inA = sys.panels['LVMDP2']!.incomer.breaker.ratingA.amperes;
       expect(inA, greaterThan(flc));
+      expect(inA, incomerRungForFlcA(_p, flc));
+      expect(inA, 2500);
       expect(
           adv.warnings.where((w) =>
               w.code == 'root-incomer-exceeds-transformer-flc' &&
               w.panelId == 'LVMDP2'),
-          hasLength(1));
+          isEmpty);
       expect(
           adv.warnings.where((w) =>
               w.code == 'root-incomer-exceeds-transformer-flc' &&

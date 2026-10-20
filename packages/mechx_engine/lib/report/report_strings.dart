@@ -309,6 +309,7 @@ enum RptStringKey {
   esTransformerService,
   esGeneratorService,
   esCapBankService,
+  esCapBankRecommendedService,
   esRoofTankService,
   esGroundTankService,
   esTankCapacityUnset,
@@ -759,6 +760,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esTransformerService: 'Distribution transformer',
   RptStringKey.esGeneratorService: 'Standby generator',
   RptStringKey.esCapBankService: 'PF-correction bank',
+  RptStringKey.esCapBankRecommendedService:
+      'PF-correction bank (APFC, recommended)',
   RptStringKey.esRoofTankService: 'Roof tank (water storage)',
   RptStringKey.esGroundTankService: 'Ground tank (water storage)',
   RptStringKey.esTankCapacityUnset: 'capacity not set',
@@ -1234,6 +1237,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esTransformerService: 'Transformator distribusi',
   RptStringKey.esGeneratorService: 'Genset cadangan',
   RptStringKey.esCapBankService: 'Bank kapasitor perbaikan faktor daya',
+  RptStringKey.esCapBankRecommendedService:
+      'Bank kapasitor APFC (rekomendasi)',
   RptStringKey.esRoofTankService: 'Tangki atap (penampungan air)',
   RptStringKey.esGroundTankService: 'Tangki bawah (penampungan air)',
   RptStringKey.esTankCapacityUnset: 'kapasitas belum diisi',

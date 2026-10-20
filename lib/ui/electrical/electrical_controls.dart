@@ -536,16 +536,34 @@ class ElectricalEnumPicker<T> extends StatelessWidget {
   final List<T> options;
   final String Function(T) label;
   final ValueChanged<T> onChanged;
+
+  /// Round 41 — false renders only the CURRENT value, inert (an MEP-derived
+  /// way's kind belongs to the drawn machine; the store refuses a change).
+  final bool enabled;
   const ElectricalEnumPicker({
     super.key,
     required this.value,
     required this.options,
     required this.label,
     required this.onChanged,
+    this.enabled = true,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (!enabled) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: IgnorePointer(
+          child: MechXSegment(
+            label: label(value),
+            selected: true,
+            selectedWeight: FontWeight.w600,
+            onTap: () {},
+          ),
+        ),
+      );
+    }
     return Wrap(
       spacing: MechXSpacing.xs,
       runSpacing: MechXSpacing.xs,

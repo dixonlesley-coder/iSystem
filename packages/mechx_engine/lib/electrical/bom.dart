@@ -176,11 +176,53 @@ List<Part> _exactRatingBreakers(List<Part> parts, double needA) => [
           p,
     ];
 
-/// True when [p] declares a breaking capacity below [minBreakingKa].
+/// Round 41 — a multi-core way's REDUCED make-up for its price key: the count
+/// of full-section conductors and a `+<csa>` (or `+<n>x<csa>`) suffix per
+/// reduced section, resolved exactly as the schedule's `cableLabel` does
+/// (live + neutral when present + PE inside the cable). Null when every
+/// conductor is at the phase section (the legacy `:nC` key stands).
+({int full, String suffix})? _reducedMakeup(
+    ElectricalCircuitResult c, int cores) {
+  final csa = c.cable.csaMm2;
+  final live = c.threePhase ? 3 : 1;
+  final peCsa = c.grounding.peCsaMm2;
+  final hasPe = peCsa > 0;
+  final hasN = cores - live - (hasPe ? 1 : 0) >= 1;
+  final nCsa = c.grounding.neutralCsaMm2 > 0 ? c.grounding.neutralCsaMm2 : csa;
+  final conductors = <double>[
+    for (var i = 0; i < live; i++) csa,
+    if (hasN) nCsa,
+    if (hasPe) peCsa,
+  ];
+  if (conductors.length != cores) return null;
+  final full = conductors.where((x) => (x - csa).abs() <= 1e-9).length;
+  if (full == conductors.length) return null;
+  final reduced = <double, int>{};
+  for (final x in conductors) {
+    if ((x - csa).abs() <= 1e-9) continue;
+    reduced[x] = (reduced[x] ?? 0) + 1;
+  }
+  final sizes = reduced.keys.toList()..sort((a, b) => b.compareTo(a));
+  final suffix = sizes
+      .map((s) => '+${reduced[s]! > 1 ? '${reduced[s]}x' : ''}${_fmt(s)}')
+      .join();
+  return (full: full, suffix: suffix);
+}
+
+/// True when [p] cannot be SHOWN to reach [minBreakingKa]: its declared
+/// breaking capacity is below it — or (Round 41, elec-report-bom-2-
+/// undeclared-ka-part-bought-at-specified-ka) it declares NO breaking
+/// capacity at all while one is specified. A part whose Icu the catalogue
+/// omits (LS TS400N: listings disagree 50 vs 65 kA, both below a specified
+/// 70 kA) used to pass ANY specified kA and was bought silently as adequate;
+/// like an untyped RCD part for a typed spec (Round 19) it now never
+/// qualifies, so the line stays unmatched on its `elec:breaker:` key and is
+/// flagged short. No specified kA ⇒ unchanged.
 bool _kaShort(Part? p, double? minBreakingKa) {
   final need = minBreakingKa ?? 0;
+  if (need <= 0) return false;
   final ka = p?.breakingKa;
-  return need > 0 && ka != null && ka + 1e-9 < need;
+  return ka == null || ka + 1e-9 < need;
 }
 
 /// Pick the catalogue RCCB / RCBO part for a way's residual-current device:
@@ -316,6 +358,21 @@ class BomLine {
   /// substitution is never silent.
   final bool deviceSubstituted;
 
+  /// Round 41 — a READ-TIME fallback pricelist key: the key this line was
+  /// priced by before a key refinement (a reduced-make-up cable's legacy
+  /// `SKU:nC`, a control device's role-less `elec:control:<category>…`), so a
+  /// pricelist saved before still prices it until re-priced. Null ⇒ none.
+  final String? legacyPriceKey;
+
+  /// Round 41 (elec-report-bom-2-way-name-dash-corrupts-bom-lines) — the way /
+  /// board this un-consolidated line belongs to, when [description] ends with
+  /// ` — <location>`. Kept EXPLICITLY so consolidation strips exactly that
+  /// suffix: a way NAME containing ' — ' (the app's own 'Lighting — zone 1'
+  /// templates) used to be cut inside the name by a `lastIndexOf(' — ')`, so
+  /// identical devices split across lines and notes landed mid-name. Null on
+  /// a consolidated (location-agnostic) line.
+  final String? location;
+
   const BomLine({
     required this.description,
     required this.qty,
@@ -325,7 +382,13 @@ class BomLine {
     String? priceKey,
     this.breakingCapacityShort = false,
     this.deviceSubstituted = false,
+    this.legacyPriceKey,
+    this.location,
   }) : priceKey = priceKey ?? sku;
+
+  /// The description WITHOUT its ` — <location>` suffix (the whole
+  /// description when the line carries no [location]).
+  String get baseDescription => splitBomLocation(description, location).base;
 
   BomLine copyWith({double? qty, int? runs}) => BomLine(
         description: description,
@@ -336,7 +399,30 @@ class BomLine {
         priceKey: priceKey,
         breakingCapacityShort: breakingCapacityShort,
         deviceSubstituted: deviceSubstituted,
+        legacyPriceKey: legacyPriceKey,
+        location: location,
       );
+}
+
+/// Round 41 — split a BOM [description] into its base text and the
+/// ` — <location>` suffix. With a known [location] only that exact suffix is
+/// split off (a ' — ' inside a way name stays part of the base); without one
+/// the legacy last-separator split applies (lines built without a location).
+({String base, String suffix}) splitBomLocation(
+    String description, String? location) {
+  if (location != null) {
+    final tail = ' — $location';
+    return description.endsWith(tail)
+        ? (
+            base: description.substring(0, description.length - tail.length),
+            suffix: tail,
+          )
+        : (base: description, suffix: '');
+  }
+  final i = description.lastIndexOf(' — ');
+  return i < 0
+      ? (base: description, suffix: '')
+      : (base: description.substring(0, i), suffix: description.substring(i));
 }
 
 /// Every electrical pricelist key minted for an UNMATCHED line starts with
@@ -375,7 +461,7 @@ List<BomLine> _panelLines(
   // figure — the one the schedule prints — never the raw bus fault (a 16 kA
   // MCCB has Ics 12 kA < a 16 kA fault, the study rules it out).
   BomLine breakerLine(String description, BreakerResult b, int poles,
-      {double? specifiedKa, bool incomer = false}) {
+      {double? specifiedKa, bool incomer = false, String? location}) {
     final needKa = specifiedKa ?? minBreakingKa;
     final kaTag = (needKa ?? 0) > 0 ? ' ${_fmt(_r1(needKa!))}kA' : '';
     final part = _matchBreaker(b, parts,
@@ -394,9 +480,10 @@ List<BomLine> _panelLines(
     final subst = _substitutionNote(part, b, poles);
     // The notes go BEFORE the trailing " — <location>" suffix, so
     // consolidation (which strips that suffix) keeps them on the merged line.
+    // Round 41 — split at the EXPLICIT location, never inside a way name.
     String withNote(String d, String note) {
-      final i = d.lastIndexOf(' — ');
-      return i < 0 ? '$d$note' : '${d.substring(0, i)}$note${d.substring(i)}';
+      final s = splitBomLocation(d, location);
+      return '${s.base}$note${s.suffix}';
     }
 
     var desc = description;
@@ -422,6 +509,7 @@ List<BomLine> _panelLines(
           : null,
       breakingCapacityShort: short,
       deviceSubstituted: subst != null,
+      location: location,
     );
   }
 
@@ -430,6 +518,7 @@ List<BomLine> _panelLines(
   lines.add(breakerLine(
     '${_classStr(inc.breaker.deviceClass)} ${_fmt(inc.breaker.ratingA.amperes)}A '
     '${inc.poles}P incomer — $pname',
+    location: pname,
     inc.breaker,
     inc.poles,
     specifiedKa: incomerKa,
@@ -447,6 +536,7 @@ List<BomLine> _panelLines(
         '${_fmt(enclosure.depthMm.roundToDouble())}';
     lines.add(BomLine(
       description: 'Enclosure $dims mm ${enclosure.ip} — $pname',
+      location: pname,
       qty: 1,
       category: PartCategory.enclosure,
       priceKey: '${kElecPriceKeyPrefix}enclosure:$dims',
@@ -454,6 +544,7 @@ List<BomLine> _panelLines(
   } else {
     lines.add(BomLine(
       description: 'Enclosure / panel board — $pname',
+      location: pname,
       qty: 1,
       category: PartCategory.enclosure,
       priceKey: '${kElecPriceKeyPrefix}enclosure',
@@ -476,6 +567,7 @@ List<BomLine> _panelLines(
       // an adjustable trip unit, so its line names no curve letter.
       '${c.breaker.deviceClass.hasTripCurve ? 'curve ${_curveStr(c.breaker.curve)} ' : ''}'
       '— ${c.name}',
+      location: c.name,
       c.breaker,
       poles,
       specifiedKa: breakerKaByCircuitId[c.circuitId],
@@ -520,6 +612,7 @@ List<BomLine> _panelLines(
         final liveSku = singleCoreSku(cableSku);
         lines.add(BomLine(
           description: 'Cable $spec ($live × 1C) — ${c.name}',
+          location: c.name,
           qty: runLengthM * runs * live,
           category: PartCategory.cable,
           sku: liveSku,
@@ -532,6 +625,7 @@ List<BomLine> _panelLines(
           lines.add(BomLine(
             description: 'Cable $family 1×'
                 '${_fmt(c.grounding.peCsaMm2)} mm² PE — ${c.name}',
+                location: c.name,
             qty: runLengthM * runs,
             category: PartCategory.cable,
             sku: peSku,
@@ -542,18 +636,68 @@ List<BomLine> _panelLines(
       } else {
         // MULTI-CORE: the SKU names family + CSA only, so the price key carries
         // the core count — a 5×50 prices apart from a 3×50.
+        //
+        // Round 41 (elec-report-bom-2-reduced-makeup-cable-priced-as-full-
+        // section) — and the MAKE-UP: a reduced neutral / PE is part of the
+        // cable (`NYY 4x240+120` is 1080 mm² of copper, not a 5x240's 1200),
+        // so the key names the full-section count and each reduced section
+        // (`NYY-240:4C+120`, `elec:cable:NYM:3x185+95`). A full-section cable
+        // keeps the legacy key (byte-identical); a reduced one falls back to
+        // the legacy `:nC` key at read time so a saved pricelist still applies.
+        final makeup = _reducedMakeup(c, cores);
+        final legacyKey = cableSku == null
+            ? '${kElecPriceKeyPrefix}cable:$family:'
+                '${cores}x${_fmt(c.cable.csaMm2)}'
+            : '$cableSku:${cores}C';
+        final key = makeup == null
+            ? legacyKey
+            : cableSku == null
+                ? '${kElecPriceKeyPrefix}cable:$family:'
+                    '${makeup.full}x${_fmt(c.cable.csaMm2)}${makeup.suffix}'
+                : '$cableSku:${makeup.full}C${makeup.suffix}';
         lines.add(BomLine(
           description: 'Cable $spec — ${c.name}',
+          location: c.name,
           qty: runLengthM * runs,
           category: PartCategory.cable,
           sku: cableSku,
           runs: runs,
           // Round 21 — an unmatched run keeps its OWN family on a
           // deterministic key (never another family's SKU).
-          priceKey: cableSku == null
+          priceKey: key,
+          legacyPriceKey: makeup == null ? null : legacyKey,
+        ));
+      }
+
+      // Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-
+      // leads) — a star-delta way's MOTOR LEADS: two 3-core (+PE) cables
+      // from the starter to the motor's six terminals, each on Ib/√3, at the
+      // way length (starter in the board, `// VERIFY`). Taken off apart
+      // from the supply cable above.
+      final leads = c.motorLeads;
+      if (leads != null) {
+        final leadRuns =
+            2 * ((leads.runsPerPhase ?? 1) > 1 ? leads.runsPerPhase! : 1);
+        final pe = c.motorLeadsPeCsaMm2 ?? leads.csaMm2;
+        final reduced = pe > 0 && (pe - leads.csaMm2).abs() > 1e-9;
+        final leadSpec = reduced
+            ? '$family 3×${_fmt(leads.csaMm2)} + ${_fmt(pe)} mm²'
+            : '$family 4×${_fmt(leads.csaMm2)} mm²';
+        final leadSku =
+            matchCableSku(leads.csaMm2, parts, cableType: family);
+        final suffix = reduced ? '3C+${_fmt(pe)}' : '4C';
+        lines.add(BomLine(
+          description: 'Cable $leadSpec motor leads (star-delta, '
+              '$leadRuns runs) — ${c.name}',
+          qty: runLengthM * leadRuns,
+          category: PartCategory.cable,
+          sku: leadSku,
+          runs: leadRuns,
+          priceKey: leadSku == null
               ? '${kElecPriceKeyPrefix}cable:$family:'
-                  '${cores}x${_fmt(c.cable.csaMm2)}'
-              : '$cableSku:${cores}C',
+                  '${reduced ? '3x${_fmt(leads.csaMm2)}+${_fmt(pe)}' : '4x${_fmt(leads.csaMm2)}'}'
+              : '$leadSku:$suffix',
+          location: c.name,
         ));
       }
 
@@ -568,12 +712,14 @@ List<BomLine> _panelLines(
         final switches = math.max(1, (points / _pointsPerSwitch).ceil());
         lines.add(BomLine(
           description: 'Light point — ${c.name}',
+          location: c.name,
           qty: points.toDouble(),
           category: PartCategory.accessory,
           priceKey: '${kElecPriceKeyPrefix}accessory:light-point',
         ));
         lines.add(BomLine(
           description: 'Light switch (saklar) — ${c.name}',
+          location: c.name,
           qty: switches.toDouble(),
           category: PartCategory.accessory,
           priceKey: '${kElecPriceKeyPrefix}accessory:light-switch',
@@ -583,6 +729,7 @@ List<BomLine> _panelLines(
             math.max(c.points, math.max(1, (c.connectedWOrLoad / _vaPerSocket).ceil()));
         lines.add(BomLine(
           description: 'Socket outlet (stop kontak) — ${c.name}',
+          location: c.name,
           qty: sockets.toDouble(),
           category: PartCategory.accessory,
           priceKey: '${kElecPriceKeyPrefix}accessory:socket-outlet',
@@ -618,6 +765,7 @@ List<BomLine> _panelLines(
         for (final e in bySize.entries) {
           lines.add(BomLine(
             description: 'Cable lug (skun) ${_fmt(e.key)} mm² — ${c.name}',
+            location: c.name,
             // Both ends of EVERY parallel run.
             qty: (e.value * 2 * runs).toDouble(),
             category: PartCategory.accessory,
@@ -653,6 +801,7 @@ List<BomLine> _panelLines(
             'RCD ${c.rcd.ratingMa} mA${c.rcd.type != null ? ' Type ${_rcdType(c.rcd.type!)}' : ''}'
             '${c.rcd.timeDelayed ? ' S' : ''} '
             '${rcdPoles}P$frameText — ${c.name}',
+            location: c.name,
         qty: 1,
         category: PartCategory.rcd,
         sku: rcdSku,
@@ -689,6 +838,7 @@ BomLine _busbarLine(BusbarResult b, String pname, {required bool threePhase}) {
   final ph = threePhase ? '3φ' : '1φ';
   return BomLine(
     description: 'Busbar set ($ph) $spec — $pname',
+    location: pname,
     qty: 1,
     category: PartCategory.busbar,
     priceKey: '${kElecPriceKeyPrefix}busbar:${threePhase ? 3 : 1}ph:'
@@ -699,12 +849,14 @@ BomLine _busbarLine(BusbarResult b, String pname, {required bool threePhase}) {
 List<BomLine> _neutralPeLines(NeutralPeBars np, String pname) => [
       BomLine(
         description: 'Neutral bar ${_fmt(np.neutralCsaMm2)} mm² — $pname',
+        location: pname,
         qty: 1,
         category: PartCategory.busbar,
         priceKey: '${kElecPriceKeyPrefix}neutral-bar:${_fmt(np.neutralCsaMm2)}',
       ),
       BomLine(
         description: 'PE / earth bar ${_fmt(np.peCsaMm2)} mm² — $pname',
+        location: pname,
         qty: 1,
         category: PartCategory.busbar,
         priceKey: '${kElecPriceKeyPrefix}pe-bar:${_fmt(np.peCsaMm2)}',
@@ -792,7 +944,7 @@ List<BomLine> _consolidate(List<BomLine> lines) {
   final byKey = <String, BomLine>{};
   final order = <String>[];
   for (final line in lines) {
-    final desc = _stripSuffix(line.description);
+    final desc = _stripSuffix(line);
     // A cable SKU names family + CSA only (`NYY-2.5`), NOT the core count or
     // make-up, so 3-, 4- and 5-core runs of one section would merge under the
     // first line's description. Cable lines therefore key on the SKU AND the
@@ -826,6 +978,7 @@ List<BomLine> _consolidate(List<BomLine> lines) {
         priceKey: line.priceKey,
         breakingCapacityShort: line.breakingCapacityShort,
         deviceSubstituted: line.deviceSubstituted,
+        legacyPriceKey: line.legacyPriceKey,
       );
       order.add(key);
     } else {
@@ -837,10 +990,8 @@ List<BomLine> _consolidate(List<BomLine> lines) {
 }
 
 /// Strip a trailing " — <suffix>" (the per-circuit / per-panel tag).
-String _stripSuffix(String s) {
-  final idx = s.lastIndexOf(' — ');
-  return idx >= 0 ? s.substring(0, idx).trimRight() : s;
-}
+String _stripSuffix(BomLine line) =>
+    splitBomLocation(line.description, line.location).base.trimRight();
 
 double _r1(double v) => (v * 10).round() / 10;
 

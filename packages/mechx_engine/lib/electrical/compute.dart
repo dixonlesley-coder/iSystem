@@ -1141,7 +1141,10 @@ double circuitConnectedW(
   // W of the panel, the feeders above it, the supply or the daya check (it
   // used to be summed as kW — a 20 kvar bank added +20 kW, +59 % on the
   // worked example). `power_factor.dart` already excludes it from leaf loads.
-  if (c.loadKind == LoadKind.capacitor) return 0;
+  // Round 41 — a spare way carries no load, whatever W / FLA it still holds.
+  if (c.loadKind == LoadKind.capacitor || c.loadKind == LoadKind.spare) {
+    return 0;
+  }
   final isMotor =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
@@ -1163,7 +1166,9 @@ double circuitConnectedW(
 /// electrical-input basis as [circuitConnectedW] before the demand factor (0
 /// for a capacitor bank). The accessory takeoff and the schedule DAYA read it.
 double circuitUndiversifiedW(ElectricalCircuit c) {
-  if (c.loadKind == LoadKind.capacitor) return 0;
+  if (c.loadKind == LoadKind.capacitor || c.loadKind == LoadKind.spare) {
+    return 0;
+  }
   final isMotor =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
@@ -1458,11 +1463,19 @@ bool _circuitIsNonLinear(ElectricalCircuit c) =>
 
 _CircuitComputation _computeCircuit(
   ElectricalStandardsProfile profile,
-  ElectricalCircuit c,
+  ElectricalCircuit way,
   ElectricalPanel panel,
   double df,
   ComputePanelOptions opts,
 ) {
+  // Round 41 (regression-rekind-bypasses-mep-machine-lock) — a SPARE way is
+  // zero-demand by definition (Round 39: no cable / load): a leftover W,
+  // shaft kW or A5 FLA from the machine it used to be never sizes it (a
+  // 15 kW pump re-kinded to Spare was still a 32 A way adding 17 kW).
+  final c = way.loadKind == LoadKind.spare &&
+          (way.loadW != 0 || way.motorKw != null || way.flaOverrideA != null)
+      ? way.copyWith(loadW: 0, clearMotorKw: true, clearFlaOverrideA: true)
+      : way;
   final loadW = _effectiveLoadW(c, panel, opts);
   final def = loadDefaults[c.loadKind]!;
   final isFeeder = c.isFeeder;
@@ -2132,6 +2145,50 @@ _CircuitComputation _computeCircuit(
     ));
   }
 
+  // Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-leads)
+  // — a STAR-DELTA starter is wired to the motor's SIX winding terminals:
+  // the starter → motor section is TWO 3-core cables, each carrying the
+  // winding current Ib/√3 (I_line = √3 · I_winding in delta). One lead cable
+  // is sized here on that current (same family, laying, derating and
+  // minimum; In basis = the delta-leg overload setting ≈ the winding
+  // current, so Iz ≥ 1.25 × Ib/√3) — the supply cable above is unchanged.
+  // Each lead carries a PE (the way's PE, capped at the lead section).
+  // // VERIFY (notAnSniClause): starter in the board ⇒ lead length = the way
+  // length; the lead Vd is judged at Ib/√3 on the 3φ formula (approximation).
+  CableResult? motorLeads;
+  double? motorLeadsPe;
+  final starDeltaMotor = !isFeeder &&
+      threePhase &&
+      c.starterType == StarterType.starDelta &&
+      (c.loadKind == LoadKind.motor ||
+          c.loadKind == LoadKind.pump ||
+          c.loadKind == LoadKind.hvac);
+  if (starDeltaMotor) {
+    final leadIb = Current(sizingCurrent.amperes / math.sqrt(3));
+    motorLeads = sizeCable(
+      profile,
+      designCurrent: leadIb,
+      breakerRating: leadIb,
+      deratingFactor: df,
+      minSectionMm2: baseMin,
+      insulation: cableInsulation,
+      material: panel.material,
+      method: installMethod,
+      threePhase: true,
+      groupingCount: c.groupingCountOverride ?? panel.groupingCount,
+      vd: CableVoltageDropConstraint(
+        length: effectiveLength,
+        cosPhi: cosPhi,
+        threePhase: true,
+        voltage: Voltage(useVoltageV),
+        isLighting: false,
+      ),
+    );
+    final wayPe =
+        grounding.peCsaMm2 > 0 ? grounding.peCsaMm2 : cable.csaMm2;
+    motorLeadsPe = math.min(wayPe, motorLeads.csaMm2);
+  }
+
   final result = ElectricalCircuitResult(
     circuitId: c.id,
     name: c.name,
@@ -2156,6 +2213,8 @@ _CircuitComputation _computeCircuit(
     lineCurrentsA: fedLines == null
         ? null
         : [for (final l in fedLines) roundTo(l, 1)],
+    motorLeads: motorLeads,
+    motorLeadsPeCsaMm2: motorLeadsPe,
   );
 
   return _CircuitComputation(
