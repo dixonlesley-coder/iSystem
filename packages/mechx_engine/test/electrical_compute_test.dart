@@ -224,6 +224,9 @@ void main() {
       // protects — an outgoing device above its own incomer, now reported.
       expect(r.warnings.map((w) => w.code), ['outgoing-exceeds-incomer']);
       expect(r.warnings.single.circuitId, 'f1');
+      // The inversion is the engine's OWN selectivity floor (no override), so
+      // it is an INFO note naming the action — never a sign-off blocker.
+      expect(r.warnings.single.severity, WarningSeverity.info);
     });
 
     test('feeder carries the child panel\'s diversified demand (not raw 10 kW)',

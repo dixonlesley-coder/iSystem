@@ -2157,17 +2157,37 @@ ElectricalPanelResult computePanel(
   // Round 38 (elec-ui-drawings-6) — JUDGE-ONLY: an outgoing way rated ABOVE
   // its own board's incomer can never discriminate (the incomer always trips
   // first) and inverts the incomer / outgoing pair on the issued schedule.
+  // When the inversion is the engine's OWN device-only selectivity floor (the
+  // way carries no breaker override and was floored towards 1.6 x the fed
+  // board's incomer), the design is not wrong — the rating chain simply needs
+  // this board's incomer raised to match; the finding is an INFO note naming
+  // that action, never a sign-off blocker (as `selectivity-partial` is
+  // suppressed for the engine's own floors). An override-caused inversion
+  // stays a warning.
+  final overrideById = {for (final b in branches) b.id: b.breakerOverrideA};
   for (final cr in circuits) {
     if (cr.breaker.ratingA.amperes >
         incomerBreaker.ratingA.amperes + 1e-9) {
+      final engineFloor = overrideById[cr.circuitId] == null &&
+          opts.feederBreakerFloorA.containsKey(cr.circuitId);
       warnings.add(ElectricalWarning(
         code: 'outgoing-exceeds-incomer',
-        severity: WarningSeverity.warning,
-        message: '${panel.name} / ${cr.name}: the outgoing '
-            '${_num(cr.breaker.ratingA.amperes)} A device is rated above the '
-            'board\'s own ${_num(incomerBreaker.ratingA.amperes)} A incomer — '
-            'the incomer always trips first, so the pair cannot discriminate; '
-            'lower the way (breaker override) or raise the incomer.',
+        severity:
+            engineFloor ? WarningSeverity.info : WarningSeverity.warning,
+        message: engineFloor
+            ? '${panel.name} / ${cr.name}: the selectivity floor raised this '
+                'feeder to ${_num(cr.breaker.ratingA.amperes)} A, above the '
+                'board\'s own ${_num(incomerBreaker.ratingA.amperes)} A '
+                'incomer — raise the incomer to at least '
+                '${_num(cr.breaker.ratingA.amperes)} A (this board\'s '
+                'spare-capacity headroom) so the rating chain stays '
+                'consistent.'
+            : '${panel.name} / ${cr.name}: the outgoing '
+                '${_num(cr.breaker.ratingA.amperes)} A device is rated above '
+                'the board\'s own ${_num(incomerBreaker.ratingA.amperes)} A '
+                'incomer — the incomer always trips first, so the pair cannot '
+                'discriminate; lower the way (breaker override) or raise the '
+                'incomer.',
         panelId: panel.id,
         circuitId: cr.circuitId,
       ));

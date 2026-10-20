@@ -668,10 +668,25 @@ void main() {
     expect(phaseTexts.where((t) => t == '0.0'), hasLength(2));
     // And the MDP incomer (32 A on 30.3 A) sits below the floored feeder:
     // an outgoing device above its own incomer is now reported.
-    expect(
-        sys.warnings.where(
-            (w) => w.code == 'outgoing-exceeds-incomer' && w.circuitId == 'f'),
-        hasLength(1));
+    final inv = sys.warnings.where(
+        (w) => w.code == 'outgoing-exceeds-incomer' && w.circuitId == 'f');
+    expect(inv, hasLength(1));
+    // Floored by the engine (no override) => info, not a blocker.
+    expect(inv.single.severity, WarningSeverity.info);
+  });
+
+  test('an OVERRIDE-caused outgoing-above-incomer stays a warning', () {
+    const project = ElectricalProject(panels: [
+      ElectricalPanel(id: 'db', name: 'DB', system: ElectricalSystem.singlePhase, circuits: [
+        ElectricalCircuit(id: 'a', name: 'Socket', loadKind: LoadKind.socket, loadW: 1000, length: Length(10)),
+        ElectricalCircuit(id: 'b', name: 'Big', loadKind: LoadKind.socket, loadW: 500, length: Length(10), breakerOverrideA: Current(63)),
+      ]),
+    ]);
+    final sys = computeSystem(_p, project);
+    final inv = sys.warnings.where(
+        (w) => w.code == 'outgoing-exceeds-incomer' && w.circuitId == 'b');
+    expect(inv, hasLength(1));
+    expect(inv.single.severity, WarningSeverity.warning);
   });
 
   test('the electrical layout plan colours the SAME essential set as the '
