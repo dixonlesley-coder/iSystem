@@ -117,6 +117,11 @@ List<FireSystem> fireSystems(Network net) {
 /// reaches has no length (an uncalibrated run — its friction is unknown, so
 /// the caller keeps the fixed allowance). C defaults to the clean-steel
 /// sprinkler branch figure ([kSprinklerBranchHazenC] = 120, `// VERIFY`).
+/// Round 37 — which fire terminals an index path may end at: every fixture
+/// ([any], the legacy rule), hydrant outlets only (the HOSE basis) or
+/// sprinkler heads only (the sprinkler basis).
+enum FireTerminalKind { any, hydrant, sprinkler }
+
 double? fireIndexPathFrictionM({
   required Network net,
   required FireSystem system,
@@ -124,6 +129,7 @@ double? fireIndexPathFrictionM({
   required Map<String, EdgeSizing> sizing,
   required double Function(NetEdge e) lengthOf,
   double hazenWilliamsC = kSprinklerBranchHazenC,
+  FireTerminalKind terminals = FireTerminalKind.any,
 }) {
   if (!system.nodeIds.contains(pumpId)) return null;
   final adj = <String, List<NetEdge>>{};
@@ -185,18 +191,40 @@ double? fireIndexPathFrictionM({
           !(lengthOf(e) > 0))) {
     return null;
   }
+  // Round 37 (mech-sim-5-combined-fire-pump-head-adds-sprinkler-friction-
+  // to-standpipe) — a COMBINED system's hose basis and sprinkler basis are
+  // two operating conditions: the hydrant basis reads only hydrant outlets'
+  // paths, the sprinkler basis only sprinkler heads' paths. Mixing them added
+  // the sprinkler riser's friction at its 6 L/s duty to the 47 L/s hose duty
+  // at 6.9 bar (+27.5 m on a 13-level tower).
+  final servicesAt = <String, Set<ServiceType>>{};
+  for (final e in system.edges) {
+    (servicesAt[e.fromId] ??= {}).add(e.service);
+    (servicesAt[e.toId] ??= {}).add(e.service);
+  }
+  bool keep(NetNode n) => switch (terminals) {
+        FireTerminalKind.any => true,
+        FireTerminalKind.hydrant =>
+          servicesAt[n.id]?.contains(ServiceType.fireHydrant) ?? false,
+        FireTerminalKind.sprinkler =>
+          servicesAt[n.id]?.contains(ServiceType.fireSprinkler) ?? false,
+      };
   final fixtures = <String>{
     for (final n in net.nodes)
-      if (system.nodeIds.contains(n.id) && n.role == NodeRole.fixture) n.id,
+      if (system.nodeIds.contains(n.id) &&
+          n.role == NodeRole.fixture &&
+          !isSupplyInletComponent(n.component) &&
+          keep(n))
+        n.id,
   };
-  final terminals = fixtures.isNotEmpty
+  final terminals0 = fixtures.isNotEmpty
       ? fixtures
       : {
           for (final MapEntry(key: n, value: es) in adj.entries)
             if (es.length == 1 && n != pumpId) n,
         };
   double? worst;
-  for (final t in terminals) {
+  for (final t in terminals0) {
     final v = d[t];
     if (v == null) continue;
     if (worst == null || v > worst) worst = v;

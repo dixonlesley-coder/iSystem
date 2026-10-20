@@ -415,39 +415,38 @@ void main() {
     final sys = computeSystem(p, project);
     final mdp = sys.panels['MDP'] ?? sys.panels['mdp']!;
 
-    test('PP-1: a board drawing 43.8 A no longer takes 150 mm2', () {
+    test('PP-1: a board drawing 49.3 A on its worst line takes 50 mm2, '
+        'never 150 mm2', () {
       // Re-derived 2026-10 (audit elec-core-4): PP-1's connected demand counts
       // each motor at its ELECTRICAL INPUT (shaft kW / η 0.88):
       //   connected = 6000×0.7 + 4500 + 4500 + 11 000/0.88 + 5500/0.88
       //             = 4200 + 9000 + 12 500 + 6250 = 31 950 W
       //   demand    = 31 950 × 0.85 (board diversity) = 27 157.5 W
-      // Round-7 elec-props-2: the feeder converts it at PP-1's REAL power
-      // factor, not the feeder default 0.85:
-      //   VA = 4200/0.9 + 4500/1.0 + 4500/1.0 + 12 500/0.85 + 6250/0.85
-      //      = 4666.67 + 9000 + 14 705.88 + 7352.94 = 35 725.49 VA
-      //   pf = 31 950 / 35 725.49 = 0.89432
-      //   Ib = 27 157.5 / (√3·400·0.89432) = 27 157.5 / 619.61 = 43.83 → 43.8 A
-      //   ⇒ LOAD-SIZED device = first rung ≥ 43.83 = 50 A.
+      //   balanced Ib = 27 157.5 / (√3·400·0.89432) = 43.83 A
+      // Re-derived 2026-10-18 (Round 37, electrical-sim-4-feeder-balanced-
+      // phase-hides-fed-board-imbalance): the 3φ feeder carries PP-1's WORST
+      // line, not the balanced figure. PP-1 balances to 58.0 / 58.0 / 38.5 A
+      // (undiversified), so the feeder Ib = 58.0 × 0.85 = 49.3 A (> 43.83).
+      //   ⇒ LOAD-SIZED device = first rung ≥ 49.3 = 50 A.
       // CABLE: MDP is 35 °C / grouping 6 / conduit ⇒ derating
-      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 43.83 = 54.79) = 54.79 A.
-      //   Re-derived Round 11 — conduit reads IEC B.52.4 B1:
-      //   25 mm² → 89 × 0.5358 = 47.7 A ✗; 35 mm² → 110 × 0.5358 = 58.9 A ✓
-      //   ⇒ 35 mm², Iz 58.9 A (the old policy landed on 150 mm²).
+      //   0.94 × 0.57 = 0.5358. Iz ≥ max(50, 1.25 × 49.3 = 61.6) = 61.6 A.
+      //   Conduit reads IEC B.52.4 B1: 35 mm² → 110 × 0.5358 = 58.9 A ✗;
+      //   50 mm² → 134 × 0.5358 = 71.8 A ✓ ⇒ 50 mm², Iz 71.8 A.
       final f = _way(mdp, 'mdp-f-pp1');
-      expect(f.designCurrent.amperes, 43.8);
-      expect(f.cable.csaMm2, 35.0);
-      expect(f.cable.deratedIz.amperes, closeTo(58.9, 0.05));
-      // The conductor is proportionate: 58.9/43.8 = 1.35 — one section step
+      expect(f.designCurrent.amperes, 49.3);
+      expect(f.cable.csaMm2, 50.0);
+      expect(f.cable.deratedIz.amperes, closeTo(71.8, 0.05));
+      // The conductor is proportionate: 71.8/49.3 = 1.46 — one section step
       // over the 1.25 continuous margin.
       expect(f.cable.deratedIz.amperes / f.designCurrent.amperes,
           lessThan(1.6));
 
       // DEVICE: PP-1's incomer is 80 A (58.0 A worst phase × 1.25 headroom ⇒
       // 72.5 ⇒ rung 80), so the floor target is 1.6 × 80 = 128 ⇒ rung 160 A.
-      // The cap is Iz 58.9 ⇒ the largest rung ≤ 58.9 is 50 A, so the floor
-      // cannot lift the device at all (CAP-limited ⇒ not listed).
+      // The cap is Iz 71.8 ⇒ the largest rung ≤ 71.8 is 63 A: the floor lifts
+      // the device 50 → 63 A but is CAP-limited ⇒ not listed.
       expect(sys.panels['pp1']!.incomer.breaker.ratingA.amperes, 80);
-      expect(f.breaker.ratingA.amperes, 50);
+      expect(f.breaker.ratingA.amperes, 63);
       expect(sys.feederFloorsApplied, isNot(contains('mdp-f-pp1')));
     });
 
@@ -478,12 +477,18 @@ void main() {
 
     test('no MDP feeder carries more than 1.6x the ampacity its load needs', () {
       // The blunt copper-inflation guard: every feeder conductor is within one
-      // section step of what its own design current asks for.
+      // section step of the ampacity its own load NEEDS — max(In_load,
+      // 1.25 × Ib) ([CableResult.izRequired]). Re-derived 2026-10-18 (Round
+      // 37): a feeder now carries its fed board's worst line, so LP-1 draws
+      // 17.5 × 0.9 = 15.8 A and needs Iz ≥ 1.25 × 15.8 = 19.7 A; 6 mm² gives
+      // 36 × 0.5358 = 19.3 A ✗ (by 0.4 A), 10 mm² 50 × 0.5358 = 26.8 A ✓ —
+      // 26.8 / 19.7 = 1.36, one section step (26.8 / 15.8 = 1.70 against the
+      // bare Ib, which ignores the 1.25 continuous margin every run carries).
       for (final c in mdp.circuits) {
-        expect(c.cable.deratedIz.amperes / c.designCurrent.amperes,
-            lessThan(1.6),
+        final need = c.cable.izRequired!.amperes;
+        expect(c.cable.deratedIz.amperes / need, lessThan(1.6),
             reason: '${c.name}: Iz ${c.cable.deratedIz.amperes} A for '
-                'Ib ${c.designCurrent.amperes} A on ${c.cable.csaMm2} mm2');
+                'Iz required $need A on ${c.cable.csaMm2} mm2');
       }
     });
 

@@ -496,6 +496,7 @@ AdvancedStudy computeAdvancedStudy(
         controlAssemblies: controlAssemblies,
         spd: spd,
         electrode: electrode,
+        powerFactor: powerFactor,
       ));
 
   // Aggregate every sub-result's provenance honesty surface.

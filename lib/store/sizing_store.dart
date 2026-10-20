@@ -1,5 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/fire_index_friction.dart' show fireSystems;
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show kJockeyFlowFraction;
+import 'package:mechx_engine/sizing/fire_standpipe.dart' show standpipeFlow;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -9,6 +13,7 @@ import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'app_state.dart';
+import 'electrical_feed.dart' show parallelFirePumpRoles;
 import 'fire_store.dart';
 import 'fixture_library_store.dart';
 import 'network_store.dart';
@@ -132,6 +137,7 @@ final sizingDetailProvider = Provider<
       Set<String> checkValveFeedsRing,
       Map<String, CheckValveAmbiguity> checkValveAmbiguous,
       Set<String> moverAgainstBalance,
+      Set<String> assumedJockeys,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   if (net.edges.isEmpty) {
@@ -144,6 +150,7 @@ final sizingDetailProvider = Provider<
       checkValveFeedsRing: const <String>{},
       checkValveAmbiguous: const <String, CheckValveAmbiguity>{},
       moverAgainstBalance: const <String>{},
+      assumedJockeys: const <String>{},
     );
   }
   final occupancy = ref.watch(occupancyProvider);
@@ -245,7 +252,14 @@ final sizingDetailProvider = Provider<
   final checkValveAmbiguous = <String, CheckValveAmbiguity>{};
   final checkValveAgainstPump = <String>{};
   final moverAgainstBalance = <String>{};
-  final sizing = autoSizeNetwork(
+  Map<String, EdgeSizing> solve(Map<String, FlowRate> jockeyLegFlows) {
+    fixtureUnits.clear();
+    parallelLegs.clear();
+    checkValveFeedsRing.clear();
+    checkValveAmbiguous.clear();
+    checkValveAgainstPump.clear();
+    moverAgainstBalance.clear();
+    return autoSizeNetwork(
     net,
     // The one sizing context (duct settings + the laid drainage slope).
     ref.watch(sizingContextProvider),
@@ -280,7 +294,20 @@ final sizingDetailProvider = Provider<
     checkValveAmbiguousOut: checkValveAmbiguous,
     checkValveAgainstPumpOut: checkValveAgainstPump,
     moverAgainstBalanceOut: moverAgainstBalance,
+    jockeyLegFlows: jockeyLegFlows,
   );
+  }
+
+  var sizing = solve(const {});
+  // Round 37 (mech-sim-5-jockey-leg-mirrors-main-pump-bore) — the jockey of a
+  // parallel fire-pump set is identified from the SIZED bores
+  // ([parallelFirePumpRoles], the same rule the panel feed uses), so the
+  // sizer runs once more with each jockey's own duty flow — 1 % of its fire
+  // system's rated flow ([kJockeyFlowFraction], the NFPA 20 figure the
+  // printed jockey duty carries) — instead of the mirrored full set flow.
+  final jockeys = _jockeyLegFlows(
+      net, sizing, {...parallelLegs}, sprinklerRemote.remoteAreaDemand);
+  if (jockeys.flows.isNotEmpty) sizing = solve(jockeys.flows);
   // Round 27 r7 — a mover-leg valve whose balance runs against its pump is
   // named on the same advisory kind with its own message.
   for (final id in checkValveAgainstPump) {
@@ -295,8 +322,55 @@ final sizingDetailProvider = Provider<
     checkValveFeedsRing: checkValveFeedsRing,
     checkValveAmbiguous: checkValveAmbiguous,
     moverAgainstBalance: moverAgainstBalance,
+    assumedJockeys: jockeys.assumed,
   );
 });
+
+/// Round 37 — fire jockeys the FIRST solve could only ASSUME (nothing drawn
+/// tells the parallel pumps apart). The re-solve gives the jockey its own
+/// small bore, so the bore-based role rule then reads it as drawn; this keeps
+/// the assumption honest for the Review advisory.
+final assumedFireJockeysProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).assumedJockeys);
+
+/// Round 37 — each JOCKEY pump of a parallel fire-pump set (by the sized
+/// bores, [parallelFirePumpRoles]) → its duty flow: [kJockeyFlowFraction] of
+/// its fire system's rated flow (the standpipe flow of a hydrant-bearing
+/// system, the remote-area demand of a sprinkler-only one). Empty when no
+/// jockey is designated.
+({Map<String, FlowRate> flows, Set<String> assumed}) _jockeyLegFlows(
+    Network net,
+    Map<String, EdgeSizing> sz,
+    Set<String> parallelLegs,
+    FlowRate remoteAreaDemand) {
+  const none = (flows: <String, FlowRate>{}, assumed: <String>{});
+  bool isFire(NetEdge e) =>
+      e.service == ServiceType.fireHydrant ||
+      e.service == ServiceType.fireSprinkler;
+  final firePumps = <String>{
+    for (final n in net.nodes)
+      if ((n.component == NodeComponent.pump ||
+              n.component == NodeComponent.boosterSet) &&
+          net.edgesAt(n.id).any(isFire))
+        n.id,
+  };
+  if (firePumps.length < 2) return none;
+  final roles = parallelFirePumpRoles(net, firePumps,
+      bore: (id) => sz[id]?.diameter.inMillimeters,
+      parallelLegEdgeIds: parallelLegs);
+  if (roles.jockey.isEmpty) return none;
+  final systems = fireSystems(net);
+  final out = <String, FlowRate>{};
+  for (final id in roles.jockey) {
+    final sys = systems.where((x) => x.nodeIds.contains(id)).firstOrNull;
+    if (sys == null) continue;
+    final rated =
+        sys.hasHydrant ? standpipeFlow(sys.standpipeRisers(net)) : remoteAreaDemand;
+    if (rated.cubicMetersPerSecond <= 0) continue;
+    out[id] = FlowRate(rated.cubicMetersPerSecond * kJockeyFlowFraction);
+  }
+  return (flows: out, assumed: roles.assumedJockey);
+}
 
 /// Round 11 — the demand-curve branch (flush tank / flush valve) the live
 /// water-supply sizing used, so a consumer re-diversifying a summed UBAP load

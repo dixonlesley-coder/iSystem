@@ -18,10 +18,13 @@ import 'catalog.dart' show PartCategory;
 import 'control/starter.dart' show ControlAssembly, DeviceCategory;
 import 'electrode.dart' show ElectrodeDesign;
 import 'genset_backup.dart' show gensetBackupDemandVa, gensetBackupDemandW;
+import 'load_kind.dart' show LoadKind;
 import 'model.dart' show ElectricalProject, ElectricalSystem;
 import 'panel_results.dart' show ElectricalSystemResult;
+import 'power_factor.dart' show PowerFactorResult;
 import 'sources.dart' show GeneratorTransfer, sizeGenerator;
 import 'spd.dart' show SpdRecommendation, SpdTypeLabel;
+import 'supply_design.dart' show serviceTransformer;
 
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
@@ -42,6 +45,7 @@ List<BomLine> advancedBomLines({
   Map<String, ControlAssembly> controlAssemblies = const {},
   Map<String, SpdRecommendation> spd = const {},
   ElectrodeDesign? electrode,
+  PowerFactorResult? powerFactor,
 }) {
   final lines = <BomLine>[];
   final circuitName = <String, String>{
@@ -105,6 +109,73 @@ List<BomLine> advancedBomLines({
             '${kva}kva',
       ));
     }
+  }
+
+  // ── Round 37 (electrical-sim-4-capacitor-bank-missing-from-bom) — the
+  // capacitor bank(s) and the customer transformer(s) the study, schedule and
+  // drawings size were never taken off, so the quotation under-priced real
+  // gear without even an unpriced line to count. ───────────────────────────
+  // The INSTALLED bank: every capacitor way's kvar per board, else the
+  // declared LV-bus bank ([ElectricalProject.capacitorBankKvar]) — the same
+  // bank is never counted twice.
+  var installedKvar = 0.0;
+  final bankPanelIds = [for (final p in project.panels) p.id]..sort();
+  for (final id in bankPanelIds) {
+    final p = project.panels.firstWhere((x) => x.id == id);
+    var kvar = 0.0;
+    for (final c in p.circuits) {
+      if (c.loadKind == LoadKind.capacitor && c.loadW > 0) kvar += c.loadW;
+    }
+    if (kvar <= 0) continue;
+    installedKvar += kvar / 1000;
+    final k = _fmt(double.parse((kvar / 1000).toStringAsFixed(1)));
+    lines.add(BomLine(
+      description: 'Capacitor bank $k kvar — ${panelName[id] ?? id}',
+      qty: 1,
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}capacitor-bank:${k}kvar',
+    ));
+  }
+  final declaredBank = project.capacitorBankKvar;
+  if (installedKvar <= 0 && declaredBank != null && declaredBank > 0) {
+    installedKvar = declaredBank;
+    final k = _fmt(double.parse(declaredBank.toStringAsFixed(1)));
+    lines.add(BomLine(
+      description: 'Capacitor bank $k kvar — LV main bus',
+      qty: 1,
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}capacitor-bank:${k}kvar',
+    ));
+  }
+  // The PF study's RECOMMENDED bank (APFC), unless an installed bank covers it.
+  final pf = powerFactor;
+  if (pf != null &&
+      pf.needed &&
+      pf.bankKvar > 0 &&
+      installedKvar + 1e-9 < pf.bankKvar) {
+    final banks = pf.banks < 1 ? 1 : pf.banks;
+    final per = pf.bankKvar / banks;
+    final k = _fmt(double.parse(per.toStringAsFixed(1)));
+    lines.add(BomLine(
+      description: 'Capacitor bank (APFC, recommended) $k kvar, '
+          '${pf.steps} steps${pf.detuned ? ', detuned 7 %' : ''}',
+      qty: banks.toDouble(),
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}capacitor-bank:${k}kvar'
+          '${pf.detuned ? ':detuned' : ''}',
+    ));
+  }
+  // The customer TRANSFORMER(s) of a declared / study MV service — the same
+  // [serviceTransformer] the schedule and drawings print.
+  final tx = serviceTransformer(project, sys.supply.demandVa);
+  if (tx != null && tx.kva > 0) {
+    final k = _fmt(tx.kva.roundToDouble());
+    lines.add(BomLine(
+      description: 'Transformer $k kVA',
+      qty: tx.units.toDouble(),
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}transformer:${k}kva',
+    ));
   }
 
   // ── Surge protective devices, one per recommending board ────────────────
