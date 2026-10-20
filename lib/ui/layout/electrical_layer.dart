@@ -222,7 +222,9 @@ final _markerGroupDragProvider =
 /// loads stay at their equipment) by the grabbed marker's delta.
 void _beginMarkerDrag(WidgetRef ref, ElectricalProjectController ctrl,
     ElectricalSelection grabbed, Offset grabbedWorld) {
-  ctrl.pushUndoSnapshot();
+  // One undo step, taken by the FIRST real move (a drag that snaps back onto
+  // its start records nothing).
+  ctrl.beginUndoableGesture();
   ref
       .read(electricalDragSessionProvider.notifier)
       .begin(ref.read(electricalSizingProjectProvider));
@@ -247,6 +249,7 @@ void _beginMarkerDrag(WidgetRef ref, ElectricalProjectController ctrl,
 }
 
 void _endMarkerDrag(WidgetRef ref, {bool deferred = false}) {
+  ref.read(electricalProjectProvider.notifier).endUndoableGesture();
   final group = ref.read(_markerGroupDragProvider);
   group.grabbedStart = null;
   group.starts = const {};

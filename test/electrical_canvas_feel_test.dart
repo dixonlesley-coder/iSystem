@@ -590,4 +590,92 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     expect(container.read(electricalSelectionProvider), isNull);
   });
+
+  // ══ Review fixes (Fable) ═══════════════════════════════════════════════════
+
+  testWidgets(
+      'a marker drag that snaps back onto its start records NO undo step '
+      '(Ctrl+Z still reverts the real edit before it)', (tester) async {
+    final container = await _pumpLayoutElectrical(tester);
+    final ctrl = container.read(electricalProjectProvider.notifier);
+    final mdp = ctrl.addPanelAt(name: 'MDP', tag: 'MDP', x: 0, y: 0);
+    final layerRect = tester.getRect(_layer);
+    final step = calibratedGridWorldStep(0.01);
+    final raw = _worldOf(tester,
+        Offset(layerRect.left + layerRect.width * 0.35,
+            layerRect.top + layerRect.height * 0.35));
+    // Placed exactly on a grid point, so a small drag snaps back to it.
+    final onGrid = Offset((raw.dx / step).round() * step,
+        (raw.dy / step).round() * step);
+    ctrl.setPanelLayoutPos(mdp, _at(onGrid));
+    await tester.pump();
+    final placed = container.read(electricalProjectProvider);
+
+    final at = _globalOf(tester, onGrid);
+    final g = await tester.startGesture(at, kind: PointerDeviceKind.mouse);
+    await tester.pump();
+    for (var i = 0; i < 3; i++) {
+      await g.moveBy(const Offset(2, 1));
+      await tester.pump();
+    }
+    await g.up();
+    await tester.pump();
+    expect(identical(container.read(electricalProjectProvider), placed), isTrue,
+        reason: 'the drag snapped back: nothing changed');
+
+    container.read(historyProvider.notifier).undo();
+    await tester.pump();
+    expect(identical(container.read(electricalProjectProvider), placed),
+        isFalse,
+        reason: 'Ctrl+Z reverted a REAL edit, not a phantom no-move drag step');
+    await tester.pump(const Duration(seconds: 4));
+  });
+
+  test('a lazy gesture step: nothing written ⇒ no step; several writes ⇒ '
+      'ONE step; an abandoned gesture never doubles a later edit', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final ctrl = c.read(electricalProjectProvider.notifier);
+    ctrl.setProject(sampleElectricalProject());
+    final history = c.read(historyProvider.notifier);
+    final p0 = c.read(electricalProjectProvider);
+
+    ctrl.beginUndoableGesture();
+    ctrl.endUndoableGesture();
+    expect(history.canUndo, isFalse);
+
+    ctrl.beginUndoableGesture();
+    ctrl.setPanelPosition('lp1', 100, 100);
+    ctrl.setPanelPosition('lp1', 140, 100);
+    ctrl.endUndoableGesture();
+    history.undo();
+    expect(identical(c.read(electricalProjectProvider), p0), isTrue);
+    expect(history.canUndo, isFalse, reason: 'exactly one step');
+
+    ctrl.beginUndoableGesture(); // never ended (an abandoned gesture)
+    ctrl.setName('Renamed');
+    history.undo();
+    expect(identical(c.read(electricalProjectProvider), p0), isTrue);
+    expect(history.canUndo, isFalse, reason: 'the rename was ONE step');
+  });
+
+  test('schematic-move tags stay depth 1: any two frames of one drag are moves '
+      'of each other; a real edit breaks the chain', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final ctrl = c.read(electricalProjectProvider.notifier);
+    ctrl.setProject(sampleElectricalProject());
+    final root = c.read(electricalProjectProvider);
+    final frames = <ElectricalProject>[];
+    for (var i = 1; i <= 50; i++) {
+      ctrl.setPanelPosition('lp1', i * 20.0, 40);
+      frames.add(c.read(electricalProjectProvider));
+    }
+    expect(ctrl.isSchematicMoveOf(frames.last, root), isTrue);
+    expect(ctrl.isSchematicMoveOf(frames.last, frames[3]), isTrue);
+    ctrl.setName('Edited');
+    final edited = c.read(electricalProjectProvider);
+    expect(ctrl.isSchematicMoveOf(edited, root), isFalse);
+    expect(ctrl.isSchematicMoveOf(edited, frames.last), isFalse);
+  });
 }

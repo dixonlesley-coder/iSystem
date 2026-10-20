@@ -748,6 +748,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// USER edit intent routes through here — programmatic replacements
   /// ([setProject] loads, [syncMepEquipment] derived syncs) deliberately don't.
   void _commit(ElectricalProject next) {
+    _gesture.project = null; // this commit IS the step (see pushUndoSnapshot)
     _undo.add(state);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
@@ -760,10 +761,39 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// the whole move collapses into a single undo step. Mirrors
   /// `NetworkController.pushUndoSnapshot`.
   void pushUndoSnapshot() {
-    _undo.add(state);
+    // An explicit step supersedes any lazily-pending gesture snapshot (an
+    // abandoned gesture must never push a second, stale entry later).
+    _gesture.project = null;
+    _pushSnapshot(state);
+  }
+
+  void _pushSnapshot(ElectricalProject snapshot) {
+    _undo.add(snapshot);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
     ref.read(historyProvider.notifier).record(UndoDomain.electrical);
+  }
+
+  /// A drag GESTURE's undo step, taken LAZILY: [beginUndoableGesture] notes
+  /// the pre-gesture project and the snapshot is pushed only by the FIRST
+  /// write that actually changes it, so a drag that snaps back to where it
+  /// started (S1 live grid snap) records no phantom Ctrl+Z step and keeps the
+  /// redo branch. [endUndoableGesture] closes the gesture (call on release /
+  /// cancel / dispose).
+  final _GestureSnapshot _gesture = _GestureSnapshot();
+
+  void beginUndoableGesture() => _gesture.project = state;
+
+  void endUndoableGesture() => _gesture.project = null;
+
+  @override
+  set state(ElectricalProject value) {
+    final pending = _gesture.project;
+    if (pending != null && !identical(value, pending)) {
+      _gesture.project = null;
+      _pushSnapshot(pending);
+    }
+    super.state = value;
   }
 
   /// Revert the most recent committed edit. Driven by the global
@@ -777,6 +807,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// derives (or drop ones it does).
   void undo() {
     if (_undo.isEmpty) return;
+    _gesture.project = null; // a history step ends any open drag gesture
     _redo.add(state);
     state = _undo.removeLast();
     resyncMepEquipment();
@@ -785,6 +816,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Replay the most recently undone edit (see [undo]).
   void redo() {
     if (_redo.isEmpty) return;
+    _gesture.project = null; // a history step ends any open drag gesture
     _undo.add(state);
     state = _redo.removeLast();
     resyncMepEquipment();
@@ -878,6 +910,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// IDENTITY-PRESERVING on clean input, so a healthy file loads byte-identical
   /// (and notifies exactly once).
   void setProject(ElectricalProject project) {
+    _gesture.project = null; // a load ends any open drag gesture
     _undo.clear();
     _redo.clear();
     // roundtrip-2 — a LOADED project (Open / File→New / recovery) starts from
@@ -1804,19 +1837,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       Expando<ElectricalProject>('electrical-schematic-move');
 
   void _markSchematicMove(ElectricalProject before) {
-    if (!identical(state, before)) _schematicParent[state] = before;
+    // Tag with the ROOT (the last project a real edit produced), never the
+    // immediate predecessor: the chain stays depth 1, so the intermediate
+    // drag frames are collectable and the check below is O(1) (review: a
+    // per-frame chain kept every frame of every drag reachable).
+    if (!identical(state, before)) {
+      _schematicParent[state] = _schematicParent[before] ?? before;
+    }
   }
 
   /// Whether [project] was reached from [ancestor] through schematic moves
   /// ONLY (or is [ancestor] itself) — i.e. every solved figure of [ancestor]
-  /// holds for [project]. Bounded walk; anything untagged ⇒ false.
+  /// holds for [project]: identical, a move of [ancestor], or a sibling move
+  /// of the same root. Anything untagged ⇒ false.
   bool isSchematicMoveOf(ElectricalProject project, ElectricalProject ancestor) {
-    ElectricalProject? p = project;
-    for (var i = 0; p != null && i < 100000; i++) {
-      if (identical(p, ancestor)) return true;
-      p = _schematicParent[p];
-    }
-    return false;
+    if (identical(project, ancestor)) return true;
+    final root = _schematicParent[project];
+    if (root == null) return false;
+    return identical(root, ancestor) ||
+        identical(root, _schematicParent[ancestor]);
   }
 
   /// Move SEVERAL panels to absolute canvas positions in ONE undo step (D2 —
@@ -3175,4 +3214,10 @@ bool isValidCircuitEdit({
       pos(length?.meters) &&
       pos(breakerOverrideA?.amperes) &&
       pos(cableOverrideMm2);
+}
+
+/// The pre-gesture project a lazy gesture undo step snapshots
+/// ([ElectricalProjectController.beginUndoableGesture]).
+class _GestureSnapshot {
+  ElectricalProject? project;
 }

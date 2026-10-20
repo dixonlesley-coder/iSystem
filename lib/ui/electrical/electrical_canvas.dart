@@ -523,7 +523,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
   void _beginPanelDrag(String panelId) {
     final positions = _positions(
         ref.read(electricalProjectProvider), ref.read(electricalResultProvider));
-    _ctrl.pushUndoSnapshot();
+    // One undo step, taken by the FIRST real change (move or body-drop
+    // connect) — a drag that snaps back onto its grid point records nothing.
+    _ctrl.beginUndoableGesture();
     // Drag the whole selection when the grabbed panel is part of a multi-select;
     // otherwise just this panel (and make it the selection, so the ring tracks).
     final group = (_selectedPanels.contains(panelId) && _selectedPanels.length > 1)
@@ -568,9 +570,11 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
   void _endPanelDrag() {
     final map = _panelDragWorld;
     _panelDragWorld = null;
-    if (map == null) return;
-    _placeDraggedPanels(map);
-    _tryBodyDropConnect(map);
+    if (map != null) {
+      _placeDraggedPanels(map);
+      _tryBodyDropConnect(map);
+    }
+    _ctrl.endUndoableGesture();
   }
 
   /// BODY-DROP CONNECT — dropping an UNFED board on top of another board wires
