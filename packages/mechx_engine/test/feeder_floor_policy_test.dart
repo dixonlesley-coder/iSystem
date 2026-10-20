@@ -103,6 +103,9 @@ ElectricalProject _twoBoard({
               phases: 3,
               length: const Length(10),
               flaOverrideA: loadFlaA,
+              // Round 39 — an A5 FLA is machine-owned (a parked, source-less
+              // way re-derives its current from loadW).
+              sourceEquipmentId: loadFlaA == null ? null : 'eq-load',
             ),
           ],
         ),

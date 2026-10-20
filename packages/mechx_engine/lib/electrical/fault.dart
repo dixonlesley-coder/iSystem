@@ -44,6 +44,7 @@ import 'earthing.dart' show EarthingSystem;
 import 'load_kind.dart' show LoadKind;
 import 'model.dart'
     show
+        SupplyKind,
         ElectricalCircuit,
         ElectricalPanel,
         ElectricalProject,
@@ -299,6 +300,28 @@ const String faultStudyMotorVerifyItem =
 /// [faultStudyVerifyItems] this pass (that would change every existing study's
 /// printed verify section) — surfacing it via `SniProfile.verifyChecklist` /
 /// `AdvancedStudy.verifyItems` is the RECORDED FOLLOW-UP.
+/// Round 39 — representative alternator sub-transient reactance Xd'' (p.u.)
+/// for the generator-plant fault estimate. // VERIFY — secondarySource
+/// (typical LV alternator 0.10–0.15 p.u.; the alternator datasheet governs).
+const double kAlternatorXdPu = 0.12;
+
+/// Round 39 — an inverter's fault contribution as a multiple of its rated
+/// current (current-limited, ~1.2–1.5 × In). // VERIFY — secondarySource
+/// (the inverter datasheet governs).
+const double inverterFaultMultiple = 1.5;
+
+/// Round 39 — the prospective 3φ fault (A) at the terminals of an on-site
+/// primary source of [sVa] VA: a generator S/(√3·400·Xd''), a solar
+/// inverter [inverterFaultMultiple] × S/(√3·400). Pure.
+double onSiteSourceFaultA(SupplyKind kind, double sVa) {
+  final ratedA = sVa / (math.sqrt(3) * serviceFaultLineVoltageV);
+  return switch (kind) {
+    SupplyKind.generator => ratedA / kAlternatorXdPu,
+    SupplyKind.solar => ratedA * inverterFaultMultiple,
+    SupplyKind.pln => ratedA / representativeTransformerZpu,
+  };
+}
+
 final List<String> serviceFaultEstimateVerifyItems = [
   'representative transformer impedance '
       '(${transformerImpedancePct.toStringAsFixed(0)} % p.u.) behind the service-size '
@@ -311,6 +334,10 @@ final List<String> serviceFaultEstimateVerifyItems = [
       '16 kA)',
   'service-size fault estimate review threshold (50 kA) and its 400 V LV '
       'reference voltage',
+  'generator / solar primary-supply fault estimate: alternator Xd\'\' '
+      '${kAlternatorXdPu.toStringAsFixed(2)} p.u. / inverter '
+      '${inverterFaultMultiple.toStringAsFixed(1)} x rated current — the '
+      'source datasheet governs',
 ];
 
 /// Estimate the prospective 3-phase symmetrical fault current at the SERVICE
@@ -383,6 +410,19 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
             serviceFaultLineVoltageV *
             representativeTransformerZpu);
     return Current(_round(iscA, 1));
+  }
+
+  // Round 39 (elec-ui-journeys-2-generator-supply-drawn-as-mv) — a GENERATOR
+  // or SOLAR (inverter) primary supply is never a utility: its fault is the
+  // source's own — the alternator's S/(√3·U·Xd'') or the inverter's
+  // [inverterFaultMultiple] × rated current — sized on the declared capacity,
+  // else the demand. Never the 16 kA utility default (that overstated the
+  // earth-fault current >5x and could PASS ADS that will not disconnect).
+  if (project.supplyKind != SupplyKind.pln) {
+    final cap = project.supplyCapacityVa?.voltAmperes;
+    final sVa = (cap != null && cap > 0) ? cap : demand?.voltAmperes;
+    if (sVa == null || sVa <= 0) return null;
+    return Current(_round(onSiteSourceFaultA(project.supplyKind, sVa), 1));
   }
 
   // 2. LV direct service ⇒ a rung off the declared connection capacity.

@@ -22,10 +22,7 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart'
-    show
-        defaultLvUtilityFaultKa,
-        estimatedServiceFaultLevelA,
-        hasDeclaredServiceSize;
+    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
 import 'package:mechx_engine/electrical/geo_length.dart';
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -36,7 +33,7 @@ import 'package:mechx_engine/electrical/panel_templates.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/topology.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart'
-    show FaultLevelBasis;
+    show FaultLevelBasis, serviceFaultEstimateBasis;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -86,34 +83,14 @@ const Length kDefaultCircuitLength = Length(10);
 /// this, an installed board keeps its labelled phases.
 const double kPhaseStickinessA = 1.0;
 
-/// A session-only memo of the last solve's phase assignment
-/// (`panelId → (circuitId → line)`), fed back into the next `computeSystem` as
-/// its `priorAssignments` so an unchanged board re-solves to the phases already
-/// labelled on site instead of re-shuffling every time a neighbouring way is
-/// edited.
-///
-/// SESSION-ONLY BY DESIGN: this is SOLVER OUTPUT, and solver output is never
-/// persisted to `.mechx` (the file holds inputs; the result is always
-/// re-derived). Persisting it would freeze one machine's balancing run into the
-/// document and make the file's phases depend on the order edits happened in.
-/// The DURABLE story is [ElectricalProjectController.pinPanelPhases], which
-/// writes a real `phaseOverride` INPUT on each way — that is what survives a
-/// save/reload and what an issued schedule is built from. This cache only stops
-/// mid-session churn.
-///
-/// Mutable-by-design holder behind a plain [Provider] so the result provider can
-/// `ref.read` (never `watch`) it — writing the cache must not invalidate the
-/// provider that wrote it.
-class PhasePriorCache {
-  Map<String, Map<String, PhaseAssignment>> prior = const {};
-}
-
-/// The per-container [PhasePriorCache]. One instance per [ProviderContainer]
-/// (a fresh app/test container starts from no prior); because the app's root
-/// container lives for the whole process, loading a project
-/// ([ElectricalProjectController.setProject]) also clears it — no
-/// cross-project leakage.
-final phasePriorCacheProvider = Provider<PhasePriorCache>((_) => PhasePriorCache());
+/// Round 39 r3 — the phase assignment a solve gives each single-phase way is
+/// PERSISTED in the document (`ElectricalCircuit.assignedPhase`, written by
+/// [ElectricalProjectController] on every mutation — [stampAssignedPhases])
+/// and read back as the balancer's prior by `computeSystem`. The document
+/// alone therefore determines every board's R/S/T, its incomer, the parent's
+/// feeder rows and the genset per-phase basis — live AND after reopen. (The
+/// former session-only `PhasePriorCache` made live and reopened projects
+/// differ.)
 
 /// The fixed id of the machine-owned "MEP Equipment" panel — the board
 /// auto-synced from the motorised equipment placed on the plan
@@ -409,9 +386,9 @@ const double _liveBusbarClearingTimeS = 0.1;
   if (est != null) {
     return (
       amperes: est.amperes,
-      basis: hasDeclaredServiceSize(project)
-          ? FaultLevelBasis.serviceEstimate
-          : FaultLevelBasis.supplyStudyEstimate,
+      // Round 39 r2 — a generator / solar primary supply names its
+      // alternator / inverter basis (the engine's own branch order).
+      basis: serviceFaultEstimateBasis(project),
     );
   }
   return (
@@ -424,57 +401,95 @@ const double _liveBusbarClearingTimeS = 0.1;
 double effectiveBusbarClearingTimeS(ElectricalProject project) =>
     project.busbarClearingTimeS ?? _liveBusbarClearingTimeS;
 
-final electricalResultProvider = Provider<ElectricalSystemResult>(
-  (ref) {
-    final geo = ref.watch(projectControllerProvider);
-    final project = ref.watch(electricalProjectProvider);
-    // PHASE STABILITY: seed the balancer with the LAST solve's assignment and
-    // only let it re-label a way for a spread gain above [kPhaseStickinessA].
-    // Read (never watch) — the cache is written below by this very build, and
-    // watching it would loop.
-    final cache = ref.read(phasePriorCacheProvider);
-    ElectricalSystemResult solve(double originFaultA) => computeSystem(
-      const PuilProfile(),
-      project,
-      calibrationBySheet: geo.calibrations,
-      building: geo.building,
-      // Fold 1 — busbar short-circuit withstand: floor each bus to survive the
-      // prospective fault for the clearing time, not merely to carry the load
-      // current. The fault level + clearing time are project settings (Service &
-      // Earthing inspector). Fault-level fallback chain: an explicit
-      // [project.originFaultLevelA] always wins; else, when a service size is
-      // declared (transformer kVA or connection capacity/daya tersambung),
-      // [estimatedServiceFaultLevelA] derives a size-appropriate estimate (so a
-      // small domestic board no longer specifies against the same flat figure
-      // as a real substation); else the app default (16 kA) — so a project that
-      // declares nothing stays byte-identical. Clearing time keeps its own
-      // separate fallback (0.1 s) regardless of which fault-level tier applies.
-      originFaultLevel: Current(originFaultA),
-      busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
-      priorAssignments: cache.prior,
-      phaseReassignThresholdA: kPhaseStickinessA,
-    );
-    // Round 16 (supply-sources-undeclared-mv-fault-16ka) — a project that
-    // declares nothing but whose demand needs an MV service sizes its bus on
-    // the fault of the transformer the supply study selects: the demand does
-    // not depend on the fault level (only the busbar withstand floor does),
-    // so one re-solve at the demand-derived figure is exact.
-    final first = effectiveOriginFaultLevel(project);
-    var result = solve(first.amperes);
-    if (first.basis != FaultLevelBasis.explicit) {
-      final second =
-          effectiveOriginFaultLevel(project, demand: result.supply.demandVa);
-      if ((second.amperes - first.amperes).abs() > 1e-9) {
-        result = solve(second.amperes);
-      }
+/// The ONE live electrical solve (the result provider and the store's
+/// [stampAssignedPhases] share it, so the stamped assignment is the one the
+/// app displays). The phase-stability prior is the document's persisted
+/// `assignedPhase` (read by `computeSystem` itself) at the
+/// [kPhaseStickinessA] threshold.
+ElectricalSystemResult solveElectricalLive(
+    ElectricalProject project, ProjectState geo) {
+  ElectricalSystemResult solve(double originFaultA) => computeSystem(
+        const PuilProfile(),
+        project,
+        calibrationBySheet: geo.calibrations,
+        building: geo.building,
+        // Fold 1 — busbar short-circuit withstand: floor each bus to survive
+        // the prospective fault for the clearing time, not merely to carry
+        // the load current. Fault-level fallback chain: an explicit
+        // [project.originFaultLevelA] always wins; else, when a service size
+        // is declared, [estimatedServiceFaultLevelA] derives a
+        // size-appropriate estimate; else the app default (16 kA). Clearing
+        // time keeps its own separate fallback (0.1 s).
+        originFaultLevel: Current(originFaultA),
+        busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
+        phaseReassignThresholdA: kPhaseStickinessA,
+      );
+  // Round 16 (supply-sources-undeclared-mv-fault-16ka) — a project that
+  // declares nothing but whose demand needs an MV service sizes its bus on
+  // the fault of the transformer the supply study selects: the demand does
+  // not depend on the fault level (only the busbar withstand floor does),
+  // so one re-solve at the demand-derived figure is exact.
+  final first = effectiveOriginFaultLevel(project);
+  var result = solve(first.amperes);
+  if (first.basis != FaultLevelBasis.explicit) {
+    final second =
+        effectiveOriginFaultLevel(project, demand: result.supply.demandVa);
+    if ((second.amperes - first.amperes).abs() > 1e-9) {
+      result = solve(second.amperes);
     }
-    // Record THIS solve's assignment as the next one's prior.
-    cache.prior = {
-      for (final e in result.panels.entries)
-        e.key: {for (final c in e.value.circuits) c.circuitId: c.phase},
+  }
+  return result;
+}
+
+/// Round 39 r3 — write [result]'s solved line onto every single-phase way of
+/// [project] (`assignedPhase`; null on a three-phase way / one the result does
+/// not list). Identity-preserving: a panel whose ways already carry the solved
+/// lines is returned as the same instance, and an unchanged project is
+/// returned as [project] itself.
+ElectricalProject withAssignedPhases(
+    ElectricalProject project, ElectricalSystemResult result) {
+  PhaseLine? lineOf(PhaseAssignment? a) => switch (a) {
+        PhaseAssignment.l1 => PhaseLine.l1,
+        PhaseAssignment.l2 => PhaseLine.l2,
+        PhaseAssignment.l3 => PhaseLine.l3,
+        _ => null,
+      };
+  var changed = false;
+  final panels = <ElectricalPanel>[];
+  for (final p in project.panels) {
+    final solved = {
+      for (final c in result.panels[p.id]?.circuits ??
+          const <ElectricalCircuitResult>[])
+        c.circuitId: lineOf(c.phase),
     };
-    return result;
-  },
+    var panelChanged = false;
+    final circuits = <ElectricalCircuit>[];
+    for (final c in p.circuits) {
+      final line = solved[c.id];
+      if (line == c.assignedPhase) {
+        circuits.add(c);
+        continue;
+      }
+      panelChanged = true;
+      circuits.add(line == null
+          ? c.copyWith(clearAssignedPhase: true)
+          : c.copyWith(assignedPhase: line));
+    }
+    if (panelChanged) {
+      changed = true;
+      panels.add(p.copyWith(circuits: circuits));
+    } else {
+      panels.add(p);
+    }
+  }
+  return changed ? project.withPanels(panels) : project;
+}
+
+final electricalResultProvider = Provider<ElectricalSystemResult>(
+  (ref) => solveElectricalLive(
+    ref.watch(electricalProjectProvider),
+    ref.watch(projectControllerProvider),
+  ),
 );
 
 /// Derived: the bundled A8 advanced study (fault / supply / PF / control /
@@ -520,6 +535,12 @@ final electricalAllWarningsProvider = Provider<List<ElectricalWarning>>((ref) {
   return out;
 });
 
+/// Round 39 r3 — mutable holder for [ElectricalProjectController]'s verbatim
+/// write mode (the notifier itself is `@immutable`).
+class _RawWriteFlag {
+  bool on = false;
+}
+
 @immutable
 class ElectricalProjectController extends Notifier<ElectricalProject> {
   // Local snapshot stacks (the house undo pattern — mirrors NetworkController /
@@ -564,6 +585,44 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   bool get canUndo => _undo.isNotEmpty;
   bool get canRedo => _redo.isNotEmpty;
 
+  // Round 39 r3 — every forward mutation PERSISTS the solved phase
+  // assignment onto the document ([stampAssignedPhases]); only a load and an
+  // undo / redo / restore (a document the store already stamped, or one read
+  // from a file) is written verbatim.
+  final _RawWriteFlag _raw = _RawWriteFlag();
+
+  void _setRaw(ElectricalProject project) {
+    _raw.on = true;
+    try {
+      state = project;
+    } finally {
+      _raw.on = false;
+    }
+  }
+
+  @override
+  set state(ElectricalProject value) {
+    super.state = _raw.on ? value : stampAssignedPhases(value);
+  }
+
+  /// Round 39 r3 — the ONE bookkeeping write that makes the document fully
+  /// determine the phase balance: seed [next] with the assignment the app
+  /// currently DISPLAYS (ways the displayed solve does not list — new or
+  /// duplicated ids, a way moved to another board — start unassigned, exactly
+  /// like the former session cache), solve it with that prior, and persist the
+  /// solved line on every single-phase way (`assignedPhase`). Not an undo step
+  /// and not a settings edit — it rides the mutation that triggered it.
+  /// Identity-preserving when nothing changes.
+  ElectricalProject stampAssignedPhases(ElectricalProject next) {
+    if (identical(next, state)) return next;
+    final geo = ref.read(projectControllerProvider);
+    // The displayed solve of the CURRENT document (a read of the result
+    // provider from its own source notifier is a dependency cycle).
+    final displayed = solveElectricalLive(state, geo);
+    final seeded = withAssignedPhases(next, displayed);
+    return withAssignedPhases(seeded, solveElectricalLive(seeded, geo));
+  }
+
   /// The single forward-mutation funnel: snapshot the current project onto the
   /// undo stack, record this domain on the global timeline (which clears the
   /// global redo branch), clear the local redo stack, and apply [next]. Every
@@ -600,7 +659,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void undo() {
     if (_undo.isEmpty) return;
     _redo.add(state);
-    state = _undo.removeLast();
+    _setRaw(_undo.removeLast());
     resyncMepEquipment();
   }
 
@@ -608,7 +667,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void redo() {
     if (_redo.isEmpty) return;
     _undo.add(state);
-    state = _redo.removeLast();
+    _setRaw(_redo.removeLast());
     resyncMepEquipment();
   }
 
@@ -617,7 +676,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// compound floor-stack / sheet edit that moved electrical placements. Not
   /// for widgets. Re-synced against the live MEP feed like [undo].
   void restoreProject(ElectricalProject project) {
-    state = project;
+    _setRaw(project);
     resyncMepEquipment();
   }
 
@@ -702,16 +761,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setProject(ElectricalProject project) {
     _undo.clear();
     _redo.clear();
-    // roundtrip-2 — a LOADED project (Open / File→New / recovery) starts from
-    // no phase prior: the cache is keyed by panel/circuit id, ids recur across
-    // projects (mdp, lp-1, mep-equipment, template ids) and the root container
-    // lives for the whole process, so the previous project's R/S/T assignment
-    // used to seed — and, under the 1 A stickiness, stick on — the new one.
-    ref.read(phasePriorCacheProvider).prior = const {};
-    state = project;
+    // Round 39 r3 — a LOADED document is written verbatim (never re-stamped):
+    // its persisted `assignedPhase` is its own phase prior, so the reopened
+    // result equals the live one that was saved (roundtrip-2: nothing of the
+    // previous project's assignment can leak in — it lives in that document).
+    _setRaw(project);
     final panels = sanitizeFeederTopology(project.panels);
     if (!identical(panels, project.panels)) {
-      state = _withProject(panels: panels);
+      _setRaw(_withProject(panels: panels));
     }
   }
 
@@ -1313,8 +1370,25 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   static ElectricalCircuit _detargetedFeederCopy(ElectricalCircuit copy,
           {required bool wasFeeder}) =>
       wasFeeder
+          // Round 39 (regression-detargeted-feeder-copy-keeps-overrides) — the
+          // placeholder sizes like a palette spare: the feeder's breaker /
+          // cable / grouping / phase overrides, laying, cable family and
+          // starter belonged to the FED board's feed and must not survive
+          // (a 250 A override made a Spare way specified, bought and judged
+          // at 250 A).
           ? copy.copyWith(
-              name: 'Spare', loadKind: LoadKind.spare, loadW: 0)
+              name: 'Spare',
+              loadKind: LoadKind.spare,
+              loadW: 0,
+              clearBreakerOverrideA: true,
+              clearCableOverrideMm2: true,
+              clearGroupingCountOverride: true,
+              clearPhaseOverride: true,
+              clearLaying: true,
+              clearCableType: true,
+              clearStarterType: true,
+              clearMotorKw: true,
+            )
           : copy;
 
   void duplicateCircuit(String panelId, String circuitId) {
@@ -1395,6 +1469,50 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// (and motor kW, if any) sum onto the target; the target keeps its identity,
   /// cable type, phase and accessories. No-op when the two are the same, on
   /// different panels, missing, or either is a feeder (feeders aren't loads).
+  /// Round 39 (elec-ui-journeys-2-merge-drop-loses-load) — the way [src]
+  /// merged INTO [tgt], or null when the two cannot share one load basis
+  /// (the merge is then refused, never silently lossy):
+  ///   * a capacitor bank (its loadW is kvar) never merges in or out;
+  ///   * motor + motor (motor / pump kinds with a shaft kW) add their kW;
+  ///   * a motor source into a W-sized way adds its ELECTRICAL INPUT
+  ///     (kW × 1000 / [kAssumedMotorEfficiency]) to the target's W;
+  ///   * a W-sized source onto a motor way is refused (compute reads only the
+  ///     motor's kW there, so the watts would vanish);
+  ///   * a 3φ source onto a non-3φ way is refused.
+  /// The merged way is life-safety when either was. Pure.
+  static ElectricalCircuit? mergedLoadWay(
+      ElectricalCircuit src, ElectricalCircuit tgt) {
+    if (src.loadKind == LoadKind.capacitor ||
+        tgt.loadKind == LoadKind.capacitor) {
+      return null;
+    }
+    bool motorBasis(ElectricalCircuit c) =>
+        (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
+        c.motorKw != null;
+    if (src.phases == 3 && tgt.phases != 3) return null;
+    final srcMotor = motorBasis(src);
+    final tgtMotor = motorBasis(tgt);
+    final points = tgt.points + src.points; // chained outlet points add up
+    final lifeSafety = src.lifeSafety || tgt.lifeSafety;
+    if (srcMotor && tgtMotor) {
+      return tgt.copyWith(
+        loadW: tgt.loadW + src.loadW,
+        motorKw: tgt.motorKw! + src.motorKw!,
+        points: points,
+        lifeSafety: lifeSafety,
+      );
+    }
+    if (tgtMotor) return null;
+    final srcW = srcMotor
+        ? src.motorKw! * 1000 / kAssumedMotorEfficiency
+        : src.loadW;
+    return tgt.copyWith(
+      loadW: tgt.loadW + srcW,
+      points: points,
+      lifeSafety: lifeSafety,
+    );
+  }
+
   void mergeCircuit(String panelId, String sourceId, String targetId) {
     if (sourceId == targetId) return;
     ElectricalPanel? panel;
@@ -1418,14 +1536,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
     final src = source;
     final tgt = target;
-    final mergedMotorKw = (tgt.motorKw == null && src.motorKw == null)
-        ? null
-        : (tgt.motorKw ?? 0) + (src.motorKw ?? 0);
-    final merged = tgt.copyWith(
-      loadW: tgt.loadW + src.loadW,
-      points: tgt.points + src.points, // chained outlet points add up
-      motorKw: mergedMotorKw,
-    );
+    final merged = mergedLoadWay(src, tgt);
+    if (merged == null) {
+      _refuse(StringKey.mergeLoadBasisMismatch);
+      return;
+    }
     final panels = [
       for (final p in state.panels)
         if (p.id == panelId)

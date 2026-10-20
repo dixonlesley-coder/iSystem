@@ -1564,6 +1564,10 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                     // drop-a-floating-load flow) can become the 3-phase sub-board
                     // a design needs without delete-and-recreate (which would
                     // lose every way). EN literal — Wave 5 owns i18n.
+                    // Round 39 (elec-ui-journeys-2) — gated off the MEP
+                    // board, like the context-menu System row: its ways
+                    // follow the machines on the plan (3-phase 400 V mint).
+                    if (panel.id != kMepEquipmentPanelId)
                     ElectricalField(
                       label: 'Electrical system',
                       child: ElectricalEnumPicker<ElectricalSystem>(

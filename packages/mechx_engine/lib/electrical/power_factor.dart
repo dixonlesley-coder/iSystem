@@ -26,6 +26,36 @@ import 'model.dart'
     show CircuitRole, ElectricalCircuit, ElectricalProject;
 import 'panel_results.dart' show ElectricalSystemResult;
 
+/// Round 39 (elec-reports-parity-3) — one INSTALLED capacitor bank (kvar)
+/// on a board ([panelId]) or, when [panelId] is null, the declared LV-bus bank.
+typedef InstalledCapacitorBank = ({String? panelId, double kvar});
+
+/// Round 39 — the ONE definition of the installed capacitor banks, read by
+/// the equipment schedule, the source spine, the BOM and the PF study so the
+/// scheduled, drawn, bought and credited kvar can never disagree: every
+/// capacitor WAY's kvar per board (panels sorted by id), else — only when no
+/// way models a bank — the declared LV-bus bank
+/// ([ElectricalProject.capacitorBankKvar]). The same bank is never counted
+/// twice. Pure.
+List<InstalledCapacitorBank> installedCapacitorBanks(
+    ElectricalProject project) {
+  final banks = <InstalledCapacitorBank>[];
+  final ids = [for (final p in project.panels) p.id]..sort();
+  for (final id in ids) {
+    final p = project.panels.firstWhere((x) => x.id == id);
+    var w = 0.0;
+    for (final c in p.circuits) {
+      if (c.loadKind == LoadKind.capacitor && c.loadW > 0) w += c.loadW;
+    }
+    if (w > 0) banks.add((panelId: id, kvar: w / 1000));
+  }
+  final declared = project.capacitorBankKvar;
+  if (banks.isEmpty && declared != null && declared > 0) {
+    banks.add((panelId: null, kvar: declared));
+  }
+  return banks;
+}
+
 // ── Local reference constants (`// VERIFY`) ─────────────────────────────────
 
 /// Power factor below which a PLN reactive-power penalty applies.
@@ -276,14 +306,9 @@ PowerFactorResult powerFactorCorrection(
   // pf 0.75 and was told to fit a SECOND 75 kvar bank (150 kvar against
   // 105.8 kvar of demand — a leading bus).
   var installedRated = 0.0;
-  for (final panel in project.panels) {
-    for (final c in panel.circuits) {
-      if (c.loadKind == LoadKind.capacitor && c.loadW > 0) {
-        installedRated += c.loadW / 1000.0;
-      }
-    }
+  for (final b in installedCapacitorBanks(project)) {
+    installedRated += b.kvar;
   }
-  if (installedRated <= 0) installedRated = project.capacitorBankKvar ?? 0;
   final installedKvar = installedRated * tempDerate;
   final uncorrectedKva = _hypot(kw, kvar);
   final uncorrectedPf = uncorrectedKva > 0 ? kw / uncorrectedKva : 1.0;

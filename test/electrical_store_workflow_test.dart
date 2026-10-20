@@ -923,7 +923,7 @@ void main() {
     });
   });
 
-  group('phase-stability cache (session-only)', () {
+  group('phase-stability prior (persisted on the document, Round 39 r3)', () {
     // Three single-phase ways on a 3-phase board whose currents are 3 : 2 : 1.
     // The greedy balancer lands them L1 / L2 / L3. Growing the SMALLEST way
     // 10x re-orders a from-scratch solve completely (the big way takes L1), so
@@ -954,8 +954,9 @@ void main() {
       ctrl.setProject(fixture(c3LoadW: 1000));
 
       final first = phasesOf(c.read(electricalResultProvider));
-      // The cache captured that solve.
-      expect(c.read(phasePriorCacheProvider).prior['mdp'], first);
+      // A LOADED document is written verbatim — nothing stamped yet.
+      expect(proj(c).panels.single.circuits.map((w) => w.assignedPhase),
+          everyElement(isNull));
 
       // Grow c3 ten-fold — a genuine re-balance opportunity.
       ctrl.setCircuit('mdp', 'c3', loadW: 10000);
@@ -965,10 +966,27 @@ void main() {
       // so an installed board is not re-labelled behind the engineer's back.
       expect(second, first);
 
-      // …and this is NOT vacuous: a from-scratch solve of the SAME project
-      // (no prior, the engine default) reassigns at least one way.
-      final fresh = phasesOf(
-          computeSystem(const PuilProfile(), proj(c)));
+      // The edit PERSISTED the displayed assignment on every way.
+      PhaseAssignment asAssign(PhaseLine? l) => switch (l) {
+            PhaseLine.l1 => PhaseAssignment.l1,
+            PhaseLine.l2 => PhaseAssignment.l2,
+            PhaseLine.l3 => PhaseAssignment.l3,
+            null => PhaseAssignment.threePhase,
+          };
+      expect({
+        for (final w in proj(c).panels.single.circuits)
+          w.id: asAssign(w.assignedPhase),
+      }, second);
+
+      // …and this is NOT vacuous: a from-scratch solve of the SAME loads
+      // (no persisted assignment, the engine default) reassigns a way.
+      final stripped = ElectricalProject(id: 'p', name: 'P', panels: [
+        for (final p in proj(c).panels)
+          p.copyWith(circuits: [
+            for (final w in p.circuits) w.copyWith(clearAssignedPhase: true),
+          ]),
+      ]);
+      final fresh = phasesOf(computeSystem(const PuilProfile(), stripped));
       expect(fresh, isNot(second));
     });
 
@@ -996,7 +1014,8 @@ void main() {
           reason: 'a spread gain above kPhaseStickinessA must still be taken');
     });
 
-    test('the cache does NOT leak across containers', () {
+    test('the prior lives in the DOCUMENT: nothing leaks across containers',
+        () {
       final a = ProviderContainer();
       addTearDown(a.dispose);
       final b = ProviderContainer();
@@ -1017,8 +1036,11 @@ void main() {
 
       expect(cold, fresh);
       expect(cold, isNot(sticky)); // no cross-container bleed
-      expect(a.read(phasePriorCacheProvider),
-          isNot(same(b.read(phasePriorCacheProvider))));
+      // …while A's DOCUMENT (what a save writes) reproduces A's labels.
+      final reopened = phasesOf(computeSystem(
+          const PuilProfile(), a.read(electricalProjectProvider),
+          phaseReassignThresholdA: kPhaseStickinessA));
+      expect(reopened, sticky);
     });
   });
 }

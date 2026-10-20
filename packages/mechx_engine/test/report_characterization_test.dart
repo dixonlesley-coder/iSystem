@@ -179,7 +179,9 @@ void main() {
       // alone on L1), not the balanced 1500 / (√3·400·0.85) = 2.5 A.
       expect(
           md,
-          contains('| Feeder SP-1 | feeder | 7.6 A | 3ph | 16 A MCB/C | 4 mm² '
+          // Round 39 (elec-reports-parity-4): the Cable cell prints the
+          // board schedule's own make-up (family + cores), not a bare CSA.
+          contains('| Feeder SP-1 | feeder | 7.6 A | 3ph | 16 A MCB/C | NYY 5x4 mm2 '
               '| 30.0 m |'));
       // The warning section is INFO-only: `feeder-below-fed-demand` is cured by
       // the feeder floor, and both boards' imbalance is inherent (too few
@@ -251,7 +253,11 @@ void main() {
       // two phase-imbalance-inherent notes print the new figures. Verified as
       // the SOLE deltas by diffing against the pre-change output. Lines
       // unchanged.
-      expect(fnv1a32(md), 0xbdc184e3);
+      // Re-baselined 2026-10-18 (Round 39, elec-reports-parity-4): every way
+      // row's Cable cell prints the board schedule's `cableRunLabel`
+      // ('NYM 3x1.5 mm2', 'NYY 5x4 mm2', was '1.5 mm²' / '4 mm²'). Verified as
+      // the SOLE delta (incomers / Ib / Vdrop unchanged). Lines unchanged.
+      expect(fnv1a32(md), 0xbed04a0f);
     });
   });
 
@@ -383,7 +389,9 @@ void main() {
       // sole delta, as for the standalone electrical pin above.
       // Re-baselined 2026-10-18 (Round 37): the embedded electrical body's
       // feeder-line deltas (see the standalone electrical pin) — sole delta.
-      expect(fnv1a32(md), 0x82bae52a);
+      // Re-baselined 2026-10-18 (Round 39): the embedded electrical body's
+      // Cable cells (see the standalone electrical pin) — sole delta.
+      expect(fnv1a32(md), 0x5724e73a);
     });
   });
 

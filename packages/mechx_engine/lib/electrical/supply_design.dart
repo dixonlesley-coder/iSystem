@@ -22,7 +22,7 @@ import 'dart:math' as math;
 
 import '../units.dart';
 import 'fault.dart' show plnLvServiceCeilingVa;
-import 'model.dart' show ElectricalProject, ElectricalSystem;
+import 'model.dart' show ElectricalProject, ElectricalSystem, SupplyKind;
 
 // ── Local reference constants (`// VERIFY`) ─────────────────────────────────
 
@@ -210,8 +210,23 @@ SupplyDesign determineSupply(
   ApparentPower? declaredKva,
   int? declaredUnits,
   bool singleSectionCarriesAll = false,
+  ApparentPower? perPhaseDemand,
 }) {
   final demandKva = _round1(demand.inKilovoltAmperes);
+  // Round 39 (regression-lv-supply-verdict-without-any-lv-daya) — a PLN 3φ
+  // service is limited PER PHASE, so an undeclared service is judged (LV vs
+  // MV) and its transformer sized on max(total demand, the worst-phase basis
+  // √3·400·I_worst) — the SAME basis the daya recommendation uses, so the
+  // verdict reads LV exactly when an LV daya can carry the worst phase.
+  // Null ⇒ the total demand ⇒ byte-identical.
+  final perPhaseKva = perPhaseDemand?.inKilovoltAmperes ?? 0;
+  final perPhaseGoverns = perPhaseKva > demand.inKilovoltAmperes + 1e-9;
+  final basisKva =
+      perPhaseGoverns ? perPhaseKva : demand.inKilovoltAmperes;
+  final basisNote = perPhaseGoverns
+      ? ' The worst-phase basis (${_fmtKva(_round1(perPhaseKva))} kVA) '
+          'governs over the $demandKva kVA total.'
+      : '';
   final verify = <String>[
     'LV/MV threshold $lvSupplyLimitKva kVA — secondary source (verify vs PLN LV practice).',
   ];
@@ -269,14 +284,14 @@ SupplyDesign determineSupply(
     );
   }
 
-  if (!dualTransformer && demand.inKilovoltAmperes <= lvSupplyLimitKva) {
+  if (!dualTransformer && basisKva <= lvSupplyLimitKva) {
     return SupplyDesign(
       lvOrMv: SupplyLevel.lv,
       demandKva: demandKva,
       lvVoltage: lvVoltage,
       units: 0,
       note: 'Within the ${_fmtKva(lvSupplyLimitKva)} kVA low-voltage limit — '
-          'direct PLN LV connection (no transformer needed).',
+          'direct PLN LV connection (no transformer needed).$basisNote',
       verifyItems: verify,
     );
   }
@@ -293,7 +308,7 @@ SupplyDesign determineSupply(
     // behind a normally-open coupler. The fault level the boards see is ONE
     // unit's (the coupler never parallels them).
     final perUnitRequired =
-        (demand.inKilovoltAmperes / 2) / transformerLoadingFactor;
+        (basisKva / 2) / transformerLoadingFactor;
     final sel = _selectTransformerUnits(perUnitRequired);
     final kva = sel.kva;
     final exceeded = sel.units > 1;
@@ -315,12 +330,13 @@ SupplyDesign determineSupply(
           'the coupler and shed non-essential load onto the survivor. Fault '
           'level is one unit (coupler N.O.).'
           '${exceeded ? ' Each section needs ${sel.units} x ${_fmtKva(kva)} kVA '
-              '— the requirement exceeds the largest standard transformer.' : ''}',
+              '— the requirement exceeds the largest standard transformer.' : ''}'
+          '$basisNote',
       verifyItems: verify,
     );
   }
 
-  final requiredKva = demand.inKilovoltAmperes / transformerLoadingFactor;
+  final requiredKva = basisKva / transformerLoadingFactor;
   final sel = _selectTransformerUnits(requiredKva);
   final kva = sel.kva;
   final exceeded = sel.units > 1;
@@ -340,7 +356,8 @@ SupplyDesign determineSupply(
         '(20 kV) supply via '
         '${exceeded ? '${sel.units} x ${_fmtKva(kva)} kVA transformers (the '
             'requirement exceeds the largest standard rating)' : 'a ${_fmtKva(kva)} kVA transformer'} '
-        'and MV panel (incomer + metering + transformer feeder) is required.',
+        'and MV panel (incomer + metering + transformer feeder) is required.'
+        '$basisNote',
     verifyItems: verify,
   );
 }
@@ -431,6 +448,11 @@ ApparentPower? declaredServiceTransformerKva(ElectricalProject project) =>
   if (tx != null && tx.inKilovoltAmperes > 0) {
     return (kva: tx, units: dual ? 2 : 1);
   }
+  // Round 39 (elec-ui-journeys-2-generator-supply-drawn-as-mv) — only a PLN
+  // connection above the LV ceiling implies a customer MV transformer: a
+  // GENERATOR-plant or SOLAR primary supply is an LV source, whatever its
+  // capacity (no MVMDP / TRAFO behind an LV genset).
+  if (project.supplyKind != SupplyKind.pln) return null;
   final cap = project.supplyCapacityVa?.voltAmperes;
   if (cap == null || cap <= plnLvServiceCeilingVa) return null;
   final sections = dual ? 2 : 1;

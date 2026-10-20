@@ -70,17 +70,50 @@ const double kThreePhaseServiceLineVoltageV = 400;
 /// rating, curve and override flag are kept. An unknown bus fault (null / 0)
 /// keeps the rating-only class ⇒ byte-identical. Pure.
 // VERIFY — notAnSniClause (device-class practice, IEC 60898-1 vs 60947-2).
-BreakerResult faultAwareBreakerClass(BreakerResult b, Current? busFault) {
-  if (b.deviceClass != BreakerClass.mcb || busFault == null) return b;
-  final mcbTopKa = breakingCapacityKa[BreakerClass.mcb]!.last;
-  if (busFault.amperes / 1000.0 <= mcbTopKa + 1e-9) return b;
+///
+/// Round 39 (regression-fault-aware-class-mints-nonexistent-small-mccb) — an
+/// MCCB frame starts at [kMccbMinFrameA]: a converted rating below it is
+/// RAISED to the frame minimum (no 6 A / 10 A MCCB exists), but only while
+/// that stays ≤ [maxRatingA] (the way's cable derated Iz — In ≤ Iz is
+/// inviolable) and the rating is not the engineer's override. Otherwise the
+/// MCB is KEPT (it then needs back-up / cascade protection from the upstream
+/// device — see [mcbNeedsBackupProtection]).
+BreakerResult faultAwareBreakerClass(BreakerResult b, Current? busFault,
+    {Current? maxRatingA}) {
+  if (!_mcbBelowBusFault(b, busFault)) return b;
+  var rating = b.ratingA.amperes;
+  if (rating < kMccbMinFrameA - 1e-9) {
+    if (b.overridden) return b;
+    if (maxRatingA != null && kMccbMinFrameA > maxRatingA.amperes + 1e-9) {
+      return b;
+    }
+    rating = kMccbMinFrameA;
+  }
   return BreakerResult(
-    ratingA: b.ratingA,
+    ratingA: Current(rating),
     deviceClass: BreakerClass.mccb,
     curve: b.curve,
     overridden: b.overridden,
   );
 }
+
+/// Round 39 — the smallest MCCB frame rating (A). // VERIFY — notAnSniClause
+/// (manufacturer frame practice: MCCB ranges start at 16 A).
+const double kMccbMinFrameA = 16;
+
+bool _mcbBelowBusFault(BreakerResult b, Current? busFault) {
+  if (b.deviceClass != BreakerClass.mcb || busFault == null) return false;
+  final mcbTopKa = breakingCapacityKa[BreakerClass.mcb]!.last;
+  return busFault.amperes / 1000.0 > mcbTopKa + 1e-9;
+}
+
+/// Round 39 — true when [faultAwareBreakerClass] had to KEEP an MCB on a bus
+/// whose prospective fault exceeds the MCB breaking-capacity ladder (the way
+/// is below the MCCB frame minimum and its cable cannot take a 16 A MCCB):
+/// the MCB then relies on back-up (cascade) protection by the upstream
+/// device (IEC 60898-1 Annex D / IEC 60947-2 Annex A). Pure.
+bool mcbNeedsBackupProtection(BreakerResult chosen, Current? busFault) =>
+    _mcbBelowBusFault(chosen, busFault);
 
 /// Practical building power factor used to convert demand kW → kVA for the
 /// supply summary (matches PanelMaker `ASSUMED_BUILDING_PF`). Not a PUIL clause.
@@ -235,10 +268,12 @@ PhaseBalance balancePhases(
   }
   // Round 37 (edit-fuzz-3-1) — phase STICKINESS may only keep a labelled
   // assignment whose WORST phase (the incomer + busbar sizing basis) equals
-  // the fresh, unseeded solve's. The prior map is session-only (never in
-  // .mechx), so a sticky assignment up to 1 A heavier sized a 40 A incomer
-  // live and 32 A after save + reopen. A spread-only difference (the labels on
-  // site) is still kept; a different worst phase never is.
+  // the fresh, unseeded solve's (stickiness never raises the sizing current:
+  // a sticky assignment up to 1 A heavier once sized a 40 A incomer where
+  // 32 A suffices). A spread-only difference (the labels on site) is still
+  // kept; a different worst phase never is. Round 39 r3 — the prior is the
+  // document's persisted `assignedPhase`, so either outcome is a function of
+  // the document alone.
   final fresh = _balancePhasesOnce(circuits, system);
   double worst(PhaseBalance b) => math.max(b.l1, math.max(b.l2, b.l3));
   return (worst(seededResult) - worst(fresh)).abs() > 1e-9
@@ -1322,7 +1357,20 @@ _CircuitComputation _computeCircuit(
     // sized at its 3φ 5.7 A on a 6 A breaker instead of 17.0 A / 20 A. Re-derive
     // it with the SAME formula on the way's effective phase, voltage and cos φ
     // (identical to the mint for an untouched way ⇒ byte-identical).
-    undiversifiedFlc = (c.phasesUserSet || c.cosPhiUserSet)
+    //
+    // Round 39 (elec-ui-journeys-2) — the mint is ALSO stale when the way is
+    // no longer machine-owned (a PARKED way, `sourceEquipmentId` cleared: the
+    // engineer may retype its load for a replacement machine) or when it now
+    // runs at a different phase count / on a single-phase BOARD than the
+    // 3φ / 400 V it was minted at (`setPanelSystem`, a move onto a 1φ board):
+    // a 3529 W pump minted at 6.0 A must size at 3529 / (220 × 0.85) = 18.9 A
+    // on a 1φ 220 V board, and a parked row retyped to 15 kW at 25.5 A.
+    final mintStale = c.phasesUserSet ||
+        c.cosPhiUserSet ||
+        c.sourceEquipmentId == null ||
+        threePhase != (c.phases == 3) ||
+        refPanel.system == ElectricalSystem.singlePhase;
+    undiversifiedFlc = mintStale
         ? loadCurrent(
             power: Power(c.loadW),
             voltage: Voltage(useVoltageV),
@@ -1636,7 +1684,24 @@ _CircuitComputation _computeCircuit(
   }
   // Round 38 — the device CLASS follows the bus fault (see
   // [faultAwareBreakerClass]).
-  breaker = faultAwareBreakerClass(breaker, opts.faultLevelA);
+  breaker = faultAwareBreakerClass(breaker, opts.faultLevelA,
+      maxRatingA: cable.deratedIz);
+  if (mcbNeedsBackupProtection(breaker, opts.faultLevelA)) {
+    warnings.add(ElectricalWarning(
+      code: 'mcb-backup-protection-required',
+      severity: WarningSeverity.info,
+      message: '${c.name}: the ${_num(breaker.ratingA.amperes)} A way sits on '
+          'a ${_num(roundTo(opts.faultLevelA!.amperes / 1000.0, 1))} kA bus, '
+          'above the MCB breaking-capacity range, and is below the '
+          '${_num(kMccbMinFrameA)} A MCCB frame its cable '
+          '(Iz ${_num(roundTo(cable.deratedIz.amperes, 1))} A) could carry — '
+          'it relies on back-up (cascade) protection by the upstream device '
+          '(IEC 60898-1 Annex D); verify the cascade combination or upsize the '
+          'cable for a 16 A MCCB.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
 
   final runsPerPhase = cable.runsPerPhase ?? 1;
   final vd = voltageDrop(
@@ -1923,7 +1988,7 @@ ElectricalPanelResult computePanel(
   // unpinned single-phase capacitor banks and stacked them all on L1 (three
   // 10 kvar banks → 185.7 A on R, a 200 A incomer, S and T uncompensated).
   // A separate deterministic pass spreads them by their SWITCHING current.
-  final balance = _spreadSinglePhaseBanks(
+  final stickyBalance = _spreadSinglePhaseBanks(
     loadBalance,
     panel: panel,
     branches: branches,
@@ -1935,6 +2000,11 @@ ElectricalPanelResult computePanel(
     panelSystems: opts.panelSystems,
   );
 
+  // Round 39 r3 — ONE assignment: the seeded (document-prior) balance is
+  // both what the board prints and what every verdict / parent reads. The
+  // prior is the document's persisted `assignedPhase`, so this is a function
+  // of the document alone (live == reopen) — no second, unseeded figure.
+  final balance = stickyBalance;
   final warnings = <ElectricalWarning>[];
   // Round 32 — integer micro-watts: the printed board kW is order-free.
   var connectedMicroW = 0;
@@ -1961,27 +2031,13 @@ ElectricalPanelResult computePanel(
   // still prints on the schedule TOTAL footer and in the panel inspector /
   // report — only the unactionable WARNING is dropped. The floor search runs
   // ONLY for a board already over the limit, so an even board costs nothing.
-  // Round 37 (edit-fuzz-3-2) — the verdict is judged on the UNSEEDED engine
-  // assignment, so a session-only prior seed (the engine's own earlier
-  // output, never saved) can neither raise nor hide the warning: the same
+  // Round 39 r3 — the verdict reads the SAME labelled lines the schedule
+  // prints; their prior is the document's persisted assignment, so the same
   // document reports the same verdict live and after reopen.
-  final judged = opts.priorAssignment.isEmpty
-      ? balance
-      : _spreadSinglePhaseBanks(
-          balancePhases(phaseCircuits, panel.system),
-          panel: panel,
-          branches: branches,
-          threePhaseOf: {
-            for (var i = 0; i < comps.length; i++)
-              comps[i].result.circuitId: comps[i].threePhase,
-          },
-          feederCapacitorFloorA: opts.feederCapacitorFloorA,
-          panelSystems: opts.panelSystems,
-        );
   final overImbalanceLimit = panel.system == ElectricalSystem.threePhase &&
-      judged.imbalancePercent > kPhaseImbalanceWarnPercent;
+      balance.imbalancePercent > kPhaseImbalanceWarnPercent;
   var imbalanceReducible = false;
-  var bestImbalancePercent = judged.imbalancePercent;
+  var bestImbalancePercent = balance.imbalancePercent;
   // elec-props-3 — with no phase PIN and no prior seed on any single, the
   // assignment is the ENGINE's own (exact for ≤ kPhaseExactSearchMaxWays
   // singles, by the min-worst-phase objective the incomer sizes on), so no
@@ -1994,7 +2050,7 @@ ElectricalPanelResult computePanel(
     // The average line current is assignment-invariant (the same total load is
     // shared out however the ways are placed), so the achievable imbalance is
     // the achievable SPREAD measured against the same average.
-    final avgA = (judged.l1 + judged.l2 + judged.l3) / 3;
+    final avgA = (balance.l1 + balance.l2 + balance.l3) / 3;
     // Round 37 — 3φ feeders carrying an imbalanced fed board's lines are a
     // FIXED unequal base the singles are placed against.
     final base = [0.0, 0.0, 0.0];
@@ -2014,28 +2070,9 @@ ElectricalPanelResult computePanel(
         avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
     imbalanceReducible = !engineOwned &&
         bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
-            judged.imbalancePercent;
+            balance.imbalancePercent;
   }
 
-  // Round 37 r2 (edit-fuzz-3-2 residual) — the schedule footer, inspector
-  // and report print the LABELLED (session-sticky) lines; the verdict above
-  // reads the unseeded `judged` lines. They share the worst phase (the
-  // balancer guarantees it) but the spread may differ by up to the 1.0 A
-  // stickiness threshold — so when the two differ the message says so and
-  // names the labelled figure, instead of silently printing a different %.
-  // A mere relabelling (the same three figures on other lines) is not a
-  // difference worth stating — compare the sorted lines.
-  final judgedSorted = [judged.l1, judged.l2, judged.l3]..sort();
-  final labelledSorted = [balance.l1, balance.l2, balance.l3]..sort();
-  final labelledDiffers = [
-    for (var k = 0; k < 3; k++) (judgedSorted[k] - labelledSorted[k]).abs()
-  ].any((d) => d > 1e-9);
-  final labelledNote = labelledDiffers
-      ? ' (Judged on the engine\'s fresh assignment; the phases currently '
-          'labelled on this board read ${balance.imbalancePercent}% — L1 '
-          '${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A — with the '
-          'same worst phase.)'
-      : '';
   if (overImbalanceLimit && imbalanceReducible) {
     final pinnedWays = [
       for (var i = 0; i < comps.length; i++)
@@ -2049,9 +2086,9 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance',
       severity: WarningSeverity.warning,
-      message: 'Phase loading is unbalanced by ${judged.imbalancePercent}% '
-          '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A). '
-          '$action — $bestImbalancePercent% is achievable.$labelledNote',
+      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A). '
+          '$action — $bestImbalancePercent% is achievable.',
       panelId: panel.id,
     ));
   }
@@ -2065,14 +2102,22 @@ ElectricalPanelResult computePanel(
   // be carried out. Same threshold + same reducibility test as the warning path,
   // so exactly one of the two ever fires.
   if (overImbalanceLimit && !imbalanceReducible) {
+    final labelsKeptForStability = bestImbalancePercent +
+            kPhaseImbalanceReducibleMarginPercent <
+        balance.imbalancePercent;
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance-inherent',
       severity: WarningSeverity.info,
-      message: 'Phase loading is unbalanced by ${judged.imbalancePercent}% '
-          '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A) - '
+      // Round 39 r3 — the % is the LABELLED (persisted) assignment's. When
+      // it sits above the achievable floor the labels were kept for
+      // stability (the re-labelling gain is within the threshold): say so,
+      // never claim the labelled spread is itself the floor.
+      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
+          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A) - '
+          '${labelsKeptForStability ? 'the labelled phases are kept (re-labelling would move installed ways for a spread gain within the ${opts.phaseReassignThresholdA} A stability threshold); ' : ''}'
           'inherent to the single-phase load set ($bestImbalancePercent% is the '
           'best any assignment reaches), so no redistribution helps; consider a '
-          'third leg or a 3-phase appliance.$labelledNote',
+          'third leg or a 3-phase appliance.',
       panelId: panel.id,
     ));
   }
@@ -2114,15 +2159,39 @@ ElectricalPanelResult computePanel(
     panelSystems: opts.panelSystems,
     assignment: balance.assignment,
   );
+  // Round 39 (regression-outgoing-exceeds-incomer) — the incomer carries at
+  // least the largest single FINAL way's UNDIVERSIFIED running current: one
+  // machine does not diversify against itself, so a board whose only way is a
+  // 17 A machine at df 0.9 must not get a 16 A incomer sized on the 15.3 A
+  // diversified worst line (it would trip on normal running). Feeders,
+  // capacitor banks (their own floor above) and spare ways are excluded.
+  // Byte-identical whenever the diversified worst line already covers it.
+  var largestWayRunA = 0.0;
+  for (var i = 0; i < comps.length; i++) {
+    final b = branches[i];
+    if (b.feedsPanelId != null) continue;
+    final k = comps[i].result.loadKind;
+    if (k == LoadKind.capacitor || k == LoadKind.spare) continue;
+    final run = comps[i].result.runCurrentA.amperes;
+    if (run > largestWayRunA) largestWayRunA = run;
+  }
+  largestWayRunA = roundTo(largestWayRunA, 1);
   final serviceGoverns = serviceFloorA > futureDemandCurrentA &&
-      serviceFloorA >= capacitorFloorA;
+      serviceFloorA >= capacitorFloorA &&
+      serviceFloorA >= largestWayRunA;
   final capacitorGoverns = !serviceGoverns &&
-      capacitorFloorA > futureDemandCurrentA;
+      capacitorFloorA > futureDemandCurrentA &&
+      capacitorFloorA >= largestWayRunA;
+  final largestWayGoverns = !serviceGoverns &&
+      !capacitorGoverns &&
+      largestWayRunA > futureDemandCurrentA;
   final incomerSizingCurrentA = serviceGoverns
       ? roundTo(serviceFloorA, 1)
       : capacitorGoverns
           ? capacitorFloorA
-          : futureDemandCurrentA;
+          : largestWayGoverns
+              ? largestWayRunA
+              : futureDemandCurrentA;
 
   final incomerBreaker = faultAwareBreakerClass(
     selectBreaker(
@@ -2142,7 +2211,9 @@ ElectricalPanelResult computePanel(
         ? 'declared service capacity'
         : capacitorGoverns
             ? 'capacitor-bank switching current'
-            : '${headroomApplied ? 'future ' : ''}demand';
+            : largestWayGoverns
+                ? 'largest way running current'
+                : '${headroomApplied ? 'future ' : ''}demand';
     warnings.add(ElectricalWarning(
       code: 'incomer-exceeds-range',
       severity: WarningSeverity.error,
@@ -2168,15 +2239,21 @@ ElectricalPanelResult computePanel(
   for (final cr in circuits) {
     if (cr.breaker.ratingA.amperes >
         incomerBreaker.ratingA.amperes + 1e-9) {
-      final engineFloor = overrideById[cr.circuitId] == null &&
+      // Round 39 — any override-free inversion is the ENGINE's own device
+      // pick (the selectivity floor, a motor / capacitor switching factor),
+      // never an engineer error: INFO naming the incomer action. Only a way
+      // carrying a breaker override stays a sign-off WARNING.
+      final selectivityFloor =
           opts.feederBreakerFloorA.containsKey(cr.circuitId);
+      final engineFloor = overrideById[cr.circuitId] == null;
       warnings.add(ElectricalWarning(
         code: 'outgoing-exceeds-incomer',
         severity:
             engineFloor ? WarningSeverity.info : WarningSeverity.warning,
         message: engineFloor
-            ? '${panel.name} / ${cr.name}: the selectivity floor raised this '
-                'feeder to ${_num(cr.breaker.ratingA.amperes)} A, above the '
+            ? '${panel.name} / ${cr.name}: '
+                '${selectivityFloor ? 'the selectivity floor raised this feeder' : 'the engine sized this way'} '
+                'to ${_num(cr.breaker.ratingA.amperes)} A, above the '
                 'board\'s own ${_num(incomerBreaker.ratingA.amperes)} A '
                 'incomer — raise the incomer to at least '
                 '${_num(cr.breaker.ratingA.amperes)} A (this board\'s '
@@ -2352,14 +2429,6 @@ ElectricalPanelResult computePanel(
       imbalancePercent: balance.imbalancePercent,
       imbalanceReducible: imbalanceReducible,
     ),
-    judgedPhaseBalance: PhaseBalanceResult(
-      l1: judged.l1,
-      l2: judged.l2,
-      l3: judged.l3,
-      imbalancePercent: judged.imbalancePercent,
-      imbalanceReducible: imbalanceReducible,
-    ),
-    judgedAssignment: judged.assignment,
     warnings: warnings,
     diversityFactor: panel.diversityFactor,
   );
@@ -2397,8 +2466,10 @@ ElectricalPanelResult computePanel(
 /// worst-phase demand exceeds what that capacity's limiter passes. Null (the default) ⇒
 /// no floor ⇒ byte-identical.
 ///
-/// PHASE STABILITY is opt-in: [priorAssignments] (`panelId → (circuitId → line)`,
-/// normally the previous solve's assignment) seeds each panel's balancer and,
+/// PHASE STABILITY: each way's persisted `assignedPhase` (Round 39 r3 — the
+/// document's own record of the last solve) plus any explicit
+/// [priorAssignments] (`panelId → (circuitId → line)`) seeds each panel's
+/// balancer and,
 /// with [phaseReassignThresholdA], stops a marginal gain from re-labelling an
 /// installed board. Empty / 0 (the defaults) ⇒ every panel balances from
 /// scratch ⇒ byte-identical.
@@ -2415,6 +2486,19 @@ ElectricalSystemResult computeSystem(
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
+  // Round 39 r3 — the phase-stability PRIOR is the document's persisted
+  // assignment (`ElectricalCircuit.assignedPhase`), so the balance is a
+  // function of the document alone; an explicit [priorAssignments] entry
+  // (tests / tools) overrides it per way.
+  final prior = <String, Map<String, PhaseAssignment>>{};
+  for (final p in panels) {
+    final m = <String, PhaseAssignment>{
+      for (final c in p.circuits)
+        if (c.assignedPhase != null) c.id: _lineAssign(c.assignedPhase!),
+      ...?priorAssignments[p.id],
+    };
+    if (m.isNotEmpty) prior[p.id] = m;
+  }
   // Topology warnings raised before any sizing — pass-invariant, so they seed
   // each sizing pass's warning list rather than accumulating across passes.
   final baseWarnings = <ElectricalWarning>[];
@@ -2680,7 +2764,7 @@ ElectricalSystemResult computeSystem(
           building: building,
           panelById: byId,
           diversityLibrary: diversityLibrary,
-          priorAssignment: priorAssignments[id] ?? const {},
+          priorAssignment: prior[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
         ),
       ).capacitorCurrentA;
@@ -2743,14 +2827,15 @@ ElectricalSystemResult computeSystem(
         building: building,
         panelById: byId,
         diversityLibrary: diversityLibrary,
-        priorAssignment: priorAssignments[id] ?? const {},
+        priorAssignment: prior[id] ?? const {},
         phaseReassignThresholdA: phaseReassignThresholdA,
       ),
     );
-    // Round 38 (regression-feeder-lines-carry-session-phase-labels) — the
-    // UNSEEDED (history-free) lines, never the session-sticky labels: the
-    // parent's incomer must be a function of the document alone.
-    final b = solved.historyFreePhaseBalance;
+    // Round 39 r3 — the fed board's LABELLED lines (its printed TOTAL): the
+    // assignment behind them is persisted in the document, so the parent's
+    // balance, its feeder row R/S/T and its incomer are a function of the
+    // document alone and always match the fed board's issued schedule.
+    final b = solved.phaseBalance;
     final d = panel.diversityFactor;
     if ((math.max(b.l1, math.max(b.l2, b.l3)) -
             math.min(b.l1, math.min(b.l2, b.l3))) >
@@ -2904,7 +2989,7 @@ ElectricalSystemResult computeSystem(
           building: building,
           panelById: byId,
           diversityLibrary: diversityLibrary,
-          priorAssignment: priorAssignments[id] ?? const {},
+          priorAssignment: prior[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
           feederBreakerFloorA: feederBreakerFloorA,
           feederLineCurrentsA: feederLinesByPanel,
@@ -2985,8 +3070,6 @@ ElectricalSystemResult computeSystem(
         spareWaysReserved: pr.spareWaysReserved,
         capacitorCurrentA: pr.capacitorCurrentA,
         phaseBalance: pr.phaseBalance,
-        judgedPhaseBalance: pr.judgedPhaseBalance,
-        judgedAssignment: pr.judgedAssignment,
         warnings: pr.warnings,
         diversityFactor: pr.diversityFactor,
       );

@@ -109,6 +109,16 @@ class ElectricalCircuit {
   /// Pin a single-phase circuit to a line; excluded from auto-balancing.
   final PhaseLine? phaseOverride;
 
+  /// Round 39 r3 — the line the LAST solve ASSIGNED this single-phase way
+  /// (solver bookkeeping, distinct from the engineer's [phaseOverride] pin).
+  /// Persisted so the DOCUMENT fully determines the phase balance: every
+  /// solve — live and after reopen — seeds the balancer with it (the
+  /// phase-stability prior), so a board never re-labels on reopen and a
+  /// parent never sums a different label set than the fed board prints.
+  /// Written by the app store whenever a solve assigns a line; null on a
+  /// three-phase way or one never solved. Additive; absent ⇒ none.
+  final PhaseLine? assignedPhase;
+
   /// Force a busbar section break at this way (manual split).
   final bool busbarBreakBefore;
 
@@ -205,6 +215,7 @@ class ElectricalCircuit {
     this.breakerOverrideA,
     this.groupingCountOverride,
     this.phaseOverride,
+    this.assignedPhase,
     this.busbarBreakBefore = false,
     this.feedsPanelId,
     this.sourceEquipmentId,
@@ -254,6 +265,8 @@ class ElectricalCircuit {
     bool clearGroupingCountOverride = false,
     PhaseLine? phaseOverride,
     bool clearPhaseOverride = false,
+    PhaseLine? assignedPhase,
+    bool clearAssignedPhase = false,
     bool? busbarBreakBefore,
     String? feedsPanelId,
     bool clearFeedsPanelId = false,
@@ -298,6 +311,8 @@ class ElectricalCircuit {
             : (groupingCountOverride ?? this.groupingCountOverride),
         phaseOverride:
             clearPhaseOverride ? null : (phaseOverride ?? this.phaseOverride),
+        assignedPhase:
+            clearAssignedPhase ? null : (assignedPhase ?? this.assignedPhase),
         busbarBreakBefore: busbarBreakBefore ?? this.busbarBreakBefore,
         feedsPanelId:
             clearFeedsPanelId ? null : (feedsPanelId ?? this.feedsPanelId),
@@ -341,6 +356,7 @@ class ElectricalCircuit {
         if (groupingCountOverride != null)
           'groupingCountOverride': groupingCountOverride,
         if (phaseOverride != null) 'phaseOverride': phaseOverride!.name,
+        if (assignedPhase != null) 'assignedPhase': assignedPhase!.name,
         'busbarBreakBefore': busbarBreakBefore,
         if (feedsPanelId != null) 'feedsPanelId': feedsPanelId,
         if (sourceEquipmentId != null) 'sourceEquipmentId': sourceEquipmentId,
@@ -383,6 +399,7 @@ class ElectricalCircuit {
             : Current((json['breakerOverrideA'] as num).toDouble()),
         groupingCountOverride: (json['groupingCountOverride'] as num?)?.toInt(),
         phaseOverride: _enumOrNull(PhaseLine.values, json['phaseOverride']),
+        assignedPhase: _enumOrNull(PhaseLine.values, json['assignedPhase']),
         busbarBreakBefore: json['busbarBreakBefore'] == true,
         // Legacy files persisted duplicateCircuit's old '' sentinel for "no
         // feeder target" — normalize it to null (isFeeder relies on non-null).
@@ -823,6 +840,31 @@ class ElectricalProject {
     this.supplyKind = SupplyKind.pln,
     this.supplyCapacityVa,
   });
+
+  /// A copy with [panels] replaced and every other field carried through.
+  ElectricalProject withPanels(List<ElectricalPanel> panels) =>
+      ElectricalProject(
+        id: id,
+        name: name,
+        panels: panels,
+        earthingSystem: earthingSystem,
+        sources: sources,
+        dualTransformer: dualTransformer,
+        occupancy: occupancy,
+        soilResistivityOhmM: soilResistivityOhmM,
+        groundFlashDensity: groundFlashDensity,
+        externalLps: externalLps,
+        overheadSupply: overheadSupply,
+        buildingLengthM: buildingLengthM,
+        buildingWidthM: buildingWidthM,
+        buildingHeightM: buildingHeightM,
+        originFaultLevelA: originFaultLevelA,
+        busbarClearingTimeS: busbarClearingTimeS,
+        capacitorBankKvar: capacitorBankKvar,
+        transformerKva: transformerKva,
+        supplyKind: supplyKind,
+        supplyCapacityVa: supplyCapacityVa,
+      );
 
   /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse;
   /// optional fields are omitted when null so the file stays small + round-trips.
