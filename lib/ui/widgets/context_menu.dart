@@ -29,7 +29,7 @@ class MechXMenuEntrance extends StatelessWidget {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.0, end: 1.0),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.emphasized,
       child: child,
       builder: (context, t, child) => Opacity(
@@ -196,7 +196,7 @@ class _MechXMenuRowState extends State<MechXMenuRow> {
           behavior: HitTestBehavior.opaque,
           onTap: widget.onTap,
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             color: _hover ? colors.surfaceHover : const Color(0x00000000),
             padding: const EdgeInsets.symmetric(

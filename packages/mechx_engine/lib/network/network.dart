@@ -834,6 +834,8 @@ class Network {
   // there made sizing quadratic in the drawing.
   static final _nodeIndex = Expando<(int, Map<String, NetNode>)>();
   static final _edgeIndex = Expando<(int, Map<String, NetEdge>)>();
+  static final _incidenceIndex =
+      Expando<(int, Map<String, List<NetEdge>>)>();
 
   NetNode? nodeById(String id) {
     var idx = _nodeIndex[nodes];
@@ -859,8 +861,24 @@ class Network {
     return idx.$2[id];
   }
 
-  Iterable<NetEdge> edgesAt(String nodeId) =>
-      edges.where((e) => e.fromId == nodeId || e.toId == nodeId);
+  /// The edges touching [nodeId], in edge-list order (a self-loop once).
+  ///
+  /// Drafting-feel perf — served from a lazily built incidence index (the same
+  /// list-instance + length invalidation as [nodeById]); the linear scan made
+  /// every per-node caller (connectivity, riser tags, the Design-Issues fan-in,
+  /// the BOM) quadratic in the drawing.
+  Iterable<NetEdge> edgesAt(String nodeId) {
+    var idx = _incidenceIndex[edges];
+    if (idx == null || idx.$1 != edges.length) {
+      final m = <String, List<NetEdge>>{};
+      for (final e in edges) {
+        (m[e.fromId] ??= <NetEdge>[]).add(e);
+        if (e.toId != e.fromId) (m[e.toId] ??= <NetEdge>[]).add(e);
+      }
+      _incidenceIndex[edges] = idx = (edges.length, m);
+    }
+    return idx.$2[nodeId] ?? const <NetEdge>[];
+  }
 
   Network copyWith({List<NetNode>? nodes, List<NetEdge>? edges}) =>
       Network(nodes: nodes ?? this.nodes, edges: edges ?? this.edges);

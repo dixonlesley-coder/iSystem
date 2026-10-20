@@ -183,7 +183,7 @@ final electricalBomProvider = Provider<Bom>((ref) {
     // the designed control gear / genset + ATS / SPDs / earthing taken off.
     enclosureByPanelId: adv.enclosure,
     extraLines: advancedBomLines(
-      project: ref.watch(electricalProjectProvider),
+      project: ref.watch(electricalSizingProjectProvider),
       sys: sys,
       controlAssemblies: adv.controlAssemblies,
       spd: adv.spd,

@@ -32,8 +32,10 @@ void main() {
       expect(s.showDetails, isTrue);
       expect(s.showNotes, isTrue);
       expect(s.showHelp, isFalse);
-      expect(s.autoTransform, isNull);
-      expect(s.editTransform, isNull);
+      // R1 — the viewports live in their own providers, null until framed.
+      final c = makeContainer();
+      expect(c.read(schematicAutoViewportProvider), isNull);
+      expect(c.read(schematicEditViewportProvider), isNull);
     });
 
     test('setAutoFocus picks a service and clears back to null (All)', () {
@@ -66,19 +68,22 @@ void main() {
       expect(s.showTitleBlock, isFalse);
     });
 
-    test('viewport transforms round-trip without clobbering other fields', () {
+    test('viewport transforms round-trip in their own providers and never '
+        'notify the view-state watchers (R1)', () {
       final c = makeContainer();
       final ctrl = c.read(schematicViewProvider.notifier);
       const auto = ViewportTransform(scale: 2, offset: Offset(10, 20));
       const edit = ViewportTransform(scale: 0.5, offset: Offset(-5, -5));
       ctrl.setAutoFocus(ServiceType.vent);
-      ctrl.setAutoTransform(auto);
-      ctrl.setEditTransform(edit);
-      final s = c.read(schematicViewProvider);
-      expect(s.autoTransform, auto);
-      expect(s.editTransform, edit);
-      // A viewport write must preserve the filter (copyWith field independence).
-      expect(s.autoFocus, ServiceType.vent);
+      var viewStateNotifications = 0;
+      c.listen(schematicViewProvider, (_, _) => viewStateNotifications++);
+      c.read(schematicAutoViewportProvider.notifier).set(auto);
+      c.read(schematicEditViewportProvider.notifier).set(edit);
+      expect(c.read(schematicAutoViewportProvider), auto);
+      expect(c.read(schematicEditViewportProvider), edit);
+      // A viewport write leaves the view state (and its watchers) alone.
+      expect(viewStateNotifications, 0);
+      expect(c.read(schematicViewProvider).autoFocus, ServiceType.vent);
     });
 
     test('Edit discipline follows the service until picked; picking one '

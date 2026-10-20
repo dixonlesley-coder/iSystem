@@ -1461,6 +1461,80 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Frame-cost isolation (drafting-feel batch 1, 2026-10-20)**: an ANALYTIC
+  provider (issues, warnings, electrical feed, fire bases, workflow, anything
+  heavier than a paint input) reads `sizingNetworkProvider` — never
+  `networkControllerProvider` — so a K1 drag frame / held-arrow nudge never
+  re-runs it; only paint/hit-test widgets read the live network. EVERY pointer
+  drag on the mechanical canvas opens the K1 session (`beginDrag` beside its
+  `pushUndoSnapshot`, re-called per frame; `endDrag` on release / cancel);
+  `beginDrag` arms the settle timer itself (an open session never lacks one)
+  and undo / redo / load / restore close it — a freeze can never outlive the
+  gesture. A remounting canvas seeds `initialTransform` from the LIVE
+  `sheetsControllerProvider` viewport (a `ref.read`), never the lagging
+  `sheetsContentProvider` copy. Nothing that
+  needs the sheet LIST watches the whole `sheetsControllerProvider` (every
+  pan/zoom frame writes it): read `sheetsContentProvider`, and map screen <->
+  world through `sheetViewportProvider(sheetId)`. Widgets that branch on a
+  fact of the drawing state watch a `.select` record, not the whole state.
+  `Network.edgesAt` is indexed — never replace an edge in place (same rule as
+  `nodeById`). Derived results with several readers are ONE provider
+  (`airSystemsProvider(service)`, `roomSizingProvider` — never re-size a room
+  inside paint — `networkElementDefectsProvider`). The network drawing sits
+  behind its own `RepaintBoundary`; the hover halo is a separate thin layer
+  above it, and the painter culls off-screen elements (500 px margin — it
+  must exceed the label ladder's reach, or culling moves on-screen chips). Pinned
+  in `test/drafting_perf_test.dart`.
+  The Riser viewports are their own providers (`schematicAutoViewportProvider`
+  / `schematicEditViewportProvider`) and the Auto painter is memoized on
+  (floors, groundIndex) — never key a memo on `ProjectState.building` (a fresh
+  instance on every read). Canvas view keys (F / Ctrl ± 0 / arrows / hold-
+  Space) go through the shared pure `ui/canvas/viewport_keys.dart`.
+  Layout drafting: one store predicate pair (`drawEndpointAdoptable` /
+  `drawTeeAccepts`) decides what a draw end can snap to for BOTH the preview
+  marker and the commit — never let the preview offer a connection the click
+  won't make. Per-floor node/run/riser lists for hit tests and snap search
+  come from `ui/canvas/floor_index.dart` (`floorIndexOf`, per-Network cache),
+  never a whole-building scan per pointer move. `orthoSnap` PROJECTS the
+  cursor onto the snapped axis (no overshoot).
+  While a run is drawn the CANVAS owns the keyboard (Ctrl+Z / arrows keep
+  working); the smart bar is fed by forwarded keys and never auto-claims
+  focus. A chained placement's re-anchor point on undo comes from the
+  controller's explicit chain-step stack, not from topology.
+  Electrical: the heavy electrical chain reads `electricalSizingProjectProvider`
+  (single-line board x/y moves never re-solve — tag such writes with
+  `isSchematicMoveOf`, never route another edit through it); a Layout marker
+  drag runs inside `electricalDragSessionProvider`. Programmatic view changes
+  on the electrical / riser canvases ease through `ViewportEaser` (resolve-
+  gated). Shared canvas building blocks: `scaled_world_child.dart` (FittedBox
+  hit-testing for world-scaled widgets), `marquee.dart` (window/crossing).
+  A drag gesture's electrical undo step is LAZY (`beginUndoableGesture` /
+  `endUndoableGesture`) — a drag that changes nothing records nothing.
+  Commands (batch 5): a typed point never snaps; base-point Move / Copy /
+  Rotate are one undo step per placement, copies get fresh ids and keep their
+  own floors; rotation quarter turns stay trig-free (exact). The Layout host
+  owns middle drags (`CanvasView.externalMiddlePan`) and every programmatic
+  canvas view change passes `MechXMotion.resolve`.
+  A base-point Move / Copy that lands a node EXACTLY on another node joins it
+  (`_joinCoincident`, the drag-end convention) — never a stacked twin.
+  Polish (batch 6): floating chrome that sits over the sheet PAPER uses
+  `GlassSurface(overPaper: true)` (dark-mode legibility); every implicit
+  animation in a shared widget passes `MechXMotion.resolve`; Riser Auto labels
+  follow the one LOD rule (`riserLabelFontSize`: hidden < 3.5 px, capped > 2x);
+  an export raises the busy pill (`exportInFlightProvider`) and DXF sheets
+  parse off the UI isolate (`cachedDrawing` never parses — peek + background
+  load). An async command must run on a LONG-LIVED ref (palette commands use
+  the overlay's ref; `runExportGuarded` captures its notifiers before the
+  first await) — a disposed widget's ref throws.
+  Follow-up (rough edges): sheet-space CHROME that must read at a fixed
+  size (the loading / load-error pages) goes through `ScreenConstantLayer`
+  over the `CanvasZoomScope` the `CanvasView` publishes — never a widget
+  that scales with the drawing. A Layout electrical marker's box, hit rect,
+  marquee test and drop radius all read `layoutMarkerScale(zoom)` (capped at
+  `kLayoutMarkerMaxScale`). A dragged single-line board latches to sibling
+  columns / rows via the shared `nearestAlignment`; the guide is drag-time
+  only.
+
 - **Round 41 — own-rung FLC judge, machine-owned kind, fire-duty alarms, Y-D on winding current, BOM = schedule (2026-10-18)**: `root-incomer-exceeds-transformer-flc` fires only ABOVE the first breaker rung at or above the unit FLC (`incomerRungForFlcA`) and a dual service is judged per SECTION (`units / 2`) whatever the root count — never condemn the engine's own rung. An MEP-derived way's load KIND is refused like its power (`setCircuit`); a `LoadKind.spare` way carries 0 W / 0 A whatever W / motor kW / FLA it still holds. A life-safety motor / pump way (the schedule's `no-OL trip (fire)` gate) gets ALARM-ONLY overloads (`applyStarterTemplate(fireDuty:)`, `ControlDevice.tripDisabled`) — never a tripping class-10 relay. Star-delta: main + delta contactors on FLC × 0.58, star on FLC / 3 (`// VERIFY`); the way carries `motorLeads` (one of TWO lead cables on Ib/√3), printed `· leads 2x(...)` and taken off at 2 × run length. A breaker part that declares NO kA never matches a specified kA (`_kaShort`). The BOM takes off containment (conduit per trade size, tray per width), 3φ-board metering (V / A / Hz / kWh + 3 CTs) and the main bonding conductor; a reduced-make-up cable keys `SKU:<n>C+<csa>` with the legacy key as `BomLine.legacyPriceKey`; control devices key on their ROLE; capacitor banks to procure come from ONE `capacitorBanksToProcure` (BOM, schedule, spines); a BOM line's location suffix is the explicit `BomLine.location` (`splitBomLocation`), never `lastIndexOf(' — ')`. Recorded (r41 review): the star-delta motor-leads BOM line adds the 2 × run-length cable but no lugs for its 2 extra cable ends; a star-delta way of a single-core family (NYA/NYAF) prices its leads as one multi-core `SKU:4C` line while its supply cable takes the per-conductor path; the source-spine builders re-run `powerFactorCorrection` without the study's `harmonicRich` / diversity inputs (equal today — `harmonicRich` only sets `detuned`).
 - **Round 40 — the largest machine up the chain, machine-owned MEP ways, fewest-move labels, per-section transformers, ADS-capped selectivity (2026-10-18)**: one machine does not diversify against itself ANYWHERE upstream — `ElectricalPanelResult.largestDownstreamRunA` (own largest FINAL way running current, max'd with every fed board's, bottom-up pre-pass in `computeSystem`) floors the feeder's device AND conductor (`ComputePanelOptions.feederLargestRunA`), every incomer up the tree, the recommended daya and `service-capacity-below-demand` (`worstPhaseDemandVa(withLargestMachine:)`). `SupplySummary.connectedW` is UNDIVERSIFIED (`circuitUndiversifiedW`), the board 'connected' basis. A retyped parked way's Motor kW drops its minted FLA (loadW = kW × 1000 / 0.88; merge likewise); an MEP-DERIVED way's loadW / motorKw / lifeSafety are REFUSED (`mepDerivedWayMachineLocked`), never edited-then-reverted; deleting / moving the MEP board's last way drops the empty board + feeder (`_dropEmptyMepBoard`). `balancePhases` never adopts a solve's labels wholesale: among assignments no worse (worst AND spread) than the chosen one, the fewest ways off their prior line (`_minimisePriorMoves`). A dual service judges each section on the most loaded ROOT (`determineSupply(largestSectionDemand:)`, one unit per section — the fault model's topology), with `section-transformer-overloaded` / `root-incomer-exceeds-transformer-flc`. On TN the selectivity floor is capped below any rung that fails ADS (`feederBreakerCapA`, device only; the target stays recorded so selectivity-partial is still reported). Drawings: essential-parent feeders ride their own riser lane; a schedule kA below the bus fault prints `kA!`, an Ics shortfall ` Ics100`; >8 layout risers at one board rotate per lap; riser pages are greedy per floor run (a width-limited band shrinks only its own page); 'Source'/'Earth' keyed only when the spine is on the page; a side-source stack ends below its last text line. Recorded (r40 review): `_incomerAboveTransformerFlc` compares a single root on a dual service against the PARALLELED units' FLC (under-reports only, contrary to the one-section rule); `transformer-below-demand` is now a WARNING at 80–100 % loading, so a declared transformer in that band fails the electrical compliance row until acknowledged; the layout riser rotation repeats the lap-0 bearing on lap 4 (≥ 33 risers at one board); TN solves run one extra fault study + one pre-pass `computePanel` per fed board (no measurable cost on the whole-building suite).
 - **Round 39 — incomer ≥ largest machine, one LV basis, no phantom devices, one installed-bank set (2026-10-18)**: `computePanel` floors the incomer + busbar at the largest FINAL way's undiversified running current (one machine never diversifies against itself; feeders / capacitor / spare excluded); `outgoing-exceeds-incomer` is a WARNING only under a breaker override (any override-free inversion is the engine's own pick ⇒ INFO). r3 (orchestrator binding decision): the DOCUMENT fully determines the phase balance — each single-phase way's solved line is PERSISTED as `ElectricalCircuit.assignedPhase` (additive, tolerant `.mechx`, absent ⇒ none, distinct from the engineer's `phaseOverride` pin), written by `ElectricalProjectController.stampAssignedPhases` on every forward mutation (seeded from the DISPLAYED solve — ids it does not list start unassigned — then solved and stamped; a load / undo / redo / restore is written verbatim; never an undo or settings step) and read back by `computeSystem` as the balancer's prior (explicit `priorAssignments` override per way). There is ONE labelled assignment: the fed board's schedule, the parent's `feederLineCurrentsA` / feeder row R/S/T, the parent incomer, `alternatorLineDemandVa` and the imbalance %/gate all read `phaseBalance` (the history-free / judged / `parentFacingPhaseBalance` machinery is deleted); the gate still judges reducibility against `minimumPhaseSpreadA` and only a pin makes it reducible, and an inherent note whose labelled % sits above that floor says the labels were kept within the stability threshold. Pinned: `test/round39_r3_persisted_phase_test.dart` (300-trial store-edited multi-level trees == `buildDocument → applyDocument`, non-vacuous). An incomer is never matched to another breaker CLASS, an RCCB or fewer poles (`_matchBreaker(incomer:)`): no compatible part ⇒ unmatched on `elec:breaker:<class>:<A>:<poles>P[:kA]`. A generator / solar origin-fault estimate prints its own provenance (`serviceFaultEstimateBasis` → `FaultLevelBasis.generatorEstimate` / `inverterEstimate`). `determineSupply(perPhaseDemand:)` — LV vs MV and the undeclared transformer on max(total, √3·400·I_worst), so lv ⇔ an LV daya exists. `faultAwareBreakerClass` never mints an MCCB below `kMccbMinFrameA` (16 A): raised to 16 A when ≤ the cable Iz, else the MCB is kept + `mcb-backup-protection-required` info. A SPARE way prints no cable / conduit / length and gets no containment. Off-sheet feeder lengths are measured feeding → fed board. Unmatched RCD BOM lines key on their RCCB frame. `installedCapacitorBanks` is the ONE installed-bank source (schedule, spine, BOM, PF study). The calc report's cable cell is the schedule's `cableRunLabel`, it prints device kA when the `faultSpecifiedKa` maps are passed, and an OVER Vdrop rounds up (`vdropPctForVerdict`). An A5 FLA is re-derived from the way's own W when the way is source-less (parked), its phase count changed, or its board is 1φ; an FLA override in a fixture must carry a `sourceEquipmentId`. `mergedLoadWay` refuses a merge that would lose load (capacitor, W onto motor, 3φ onto non-3φ). A non-PLN `supplyKind` is never a declared MV service; its fault is the alternator S/(√3·400·0.12) or 1.5 × the inverter rating (`// VERIFY`). Round 39 r3 follow-up: GEOMETRY-ONLY intents (`setPanelPosition`, `movePanels`, `setPanelLayoutPos`, `_setLoadPos`, via `_setGeometry`) skip the two stamping solves — phase assignment never reads positions, so every drag frame stays one solve; a value-identical MEP re-sync (`_sameCircuits`) writes nothing, so an untouched pre-r3 file is not re-stamped and does not open dirty. Recorded (r3 review): `_incomerCompatible` treats an UNDECLARED part class / poles as not judged (every real catalogue part declares both); outgoing ways still substitute class / poles with the `deviceSubstituted` flag.

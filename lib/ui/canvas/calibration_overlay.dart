@@ -160,7 +160,7 @@ class _CalibrationOverlayState extends ConsumerState<CalibrationOverlay> {
     final colors = context.colors;
     final type = context.type;
     final cal = ref.watch(calibrationControllerProvider);
-    final transform = ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
+    final transform = ref.watch(sheetViewportProvider(widget.sheetId)) ??
         const ViewportTransform();
     final notifier = ref.read(calibrationControllerProvider.notifier);
 

@@ -35,7 +35,7 @@ import 'sizing_store.dart';
 ///   • air duct edges (mean velocity from the live sizing), and
 ///   • air terminals that have BOTH an airflow and a chosen face size.
 final airVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String, VelocityCheck>{};
 
@@ -112,7 +112,7 @@ final airWarningCountProvider = Provider<int>((ref) => ref
 /// size / face for the hand-routed network. An element that already carries a
 /// chosen size (edge `sizeOverride`, node face) is NOT listed.
 final airUnsizedProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
 
@@ -145,7 +145,7 @@ final airUnsizedCountProvider =
 /// velocity limit / friction target at that airflow). Empty when every air
 /// duct is in range ⇒ no issue.
 final airOverCapacityProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
@@ -167,7 +167,7 @@ final airOverCapacityProvider = Provider<Set<String>>((ref) {
 /// a clamped downpipe or an over-velocity riser is as visible as a clamped duct.
 /// Empty when every edge is in range ⇒ byte-identical.
 final overCapacityEdgesProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
@@ -184,7 +184,7 @@ final overCapacityEdgesProvider = Provider<Set<String>>((ref) {
 /// at 10 L/s issued silently. Empty when nothing is under-sized by hand ⇒
 /// byte-identical.
 final belowCodeMinimumEdgesProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
@@ -200,7 +200,7 @@ final belowCodeMinimumEdgesProvider = Provider<Set<String>>((ref) {
 /// engine forms the verdict on the DFU path; nothing consumed it. Empty ⇒
 /// byte-identical.
 final selfCleansingDefectsProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
@@ -216,7 +216,7 @@ final selfCleansingDefectsProvider = Provider<Set<String>>((ref) {
 /// (audit 2026-10 water-drainage-6). Empty for every in-range project ⇒
 /// byte-identical.
 final demandCurveExtrapolatedEdgesProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
@@ -232,7 +232,7 @@ final demandCurveExtrapolatedEdgesProvider = Provider<Set<String>>((ref) {
 /// was never achieved — so the split, and every size derived from it, is
 /// PROVISIONAL. Empty for trees and settled loops ⇒ byte-identical.
 final loopUnbalancedEdgesProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {

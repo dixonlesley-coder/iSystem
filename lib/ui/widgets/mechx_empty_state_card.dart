@@ -16,11 +16,17 @@ class MechXEmptyStateCard extends StatelessWidget {
   final String body;
   final List<Widget> actions;
 
+  /// An optional muted, secondary line beneath [body] — e.g. the raw error
+  /// text behind a load failure, kept available but visually quiet. Empty ⇒
+  /// nothing rendered (every existing card is unchanged).
+  final String detail;
+
   const MechXEmptyStateCard({
     super.key,
     required this.title,
     required this.body,
     this.actions = const [],
+    this.detail = '',
   });
 
   @override
@@ -47,6 +53,15 @@ class MechXEmptyStateCard extends StatelessWidget {
               body,
               style: type.body.copyWith(color: colors.textSecondary),
             ),
+            if (detail.isNotEmpty) ...[
+              const SizedBox(height: MechXSpacing.xs),
+              Text(
+                detail,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: type.caption.copyWith(color: colors.textMuted),
+              ),
+            ],
             if (actions.isNotEmpty) ...[
               const SizedBox(height: MechXSpacing.md),
               // Wrap (not Row) so multiple labelled buttons flow to a second

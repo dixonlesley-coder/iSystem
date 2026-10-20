@@ -532,7 +532,12 @@ class CommandPaletteOverlay extends ConsumerWidget {
             // Swallow taps on the card itself (don't dismiss).
             child: GestureDetector(
               onTap: () {},
-              child: const _PaletteCard(),
+              // Commands run on THIS overlay's ref + context: it stays
+              // mounted after the palette closes, while the card is disposed
+              // the moment a command runs — an async command (an export's
+              // save dialog) must never touch a disposed ref (review: it threw
+              // after the dialog and could wedge the export guard).
+              child: _PaletteCard(hostRef: ref, hostContext: context),
             ),
           ),
         ),
@@ -542,7 +547,11 @@ class CommandPaletteOverlay extends ConsumerWidget {
 }
 
 class _PaletteCard extends ConsumerStatefulWidget {
-  const _PaletteCard();
+  const _PaletteCard({required this.hostRef, required this.hostContext});
+
+  /// The long-lived overlay's ref / context the commands run on.
+  final WidgetRef hostRef;
+  final BuildContext hostContext;
 
   @override
   ConsumerState<_PaletteCard> createState() => _PaletteCardState();
@@ -573,7 +582,7 @@ class _PaletteCardState extends ConsumerState<_PaletteCard> {
   void _close() => ref.read(commandPaletteOpenProvider.notifier).close();
 
   List<_Command> _filtered() {
-    final all = _buildCommands(ref, context);
+    final all = _buildCommands(widget.hostRef, widget.hostContext);
     final recent = ref.read(recentCommandsProvider);
     // Recency rank: 0 = most-recently-run, larger = older, huge = never run.
     int recencyRank(_Command c) {

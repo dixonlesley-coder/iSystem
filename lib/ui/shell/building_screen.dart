@@ -6,6 +6,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/number_format.dart' show signedElevationText;
+import 'package:mechx_engine/report/riser_tags.dart' show fflLabel;
 
 import '../../store/app_state.dart'
     show
@@ -40,6 +41,7 @@ import '../widgets/mechx_segment.dart';
 import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
 import '../widgets/stepped_value_field.dart';
+import 'project_io.dart' show importPlan;
 
 /// The minimum tappable square for this page's glyph-only controls (B2). The
 /// GLYPH keeps its compact size; only the hit region grows, so aiming at a
@@ -60,7 +62,7 @@ class BuildingScreen extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final ctrl = ref.read(projectControllerProvider.notifier);
     final building = project.building;
-    final sheetsState = ref.watch(sheetsControllerProvider);
+    final sheetsState = ref.watch(sheetsContentProvider);
 
     // F10 — EVERY sheet (PDF page) mapped to a level, not just the first.
     // A floor may carry several plans (architectural + M&E, or a re-issue), and
@@ -101,8 +103,17 @@ class BuildingScreen extends ConsumerWidget {
             onHeightMinus: () => ctrl.nudgeFloorHeight(i, -0.1),
             onHeightPlus: () => ctrl.nudgeFloorHeight(i, 0.1),
             onHeightSet: (m) => ctrl.setFloorHeight(i, Length(m)),
+            // With NO plan in the project there is nothing to assign — the
+            // action becomes the import entry point (the same `importPlan` the
+            // sheet rail's '+' tile and Ctrl+I use) instead of a dead,
+            // disabled 'Assign'.
+            pickLabel: sheetsState.sheets.isEmpty
+                ? context.strings(StringKey.buildingImportPlan)
+                : sheetsForFloor(i).isEmpty
+                    ? context.strings(StringKey.buildingAssignPlan)
+                    : context.strings(StringKey.buildingChangePlan),
             onPickSheet: sheetsState.sheets.isEmpty
-                ? null
+                ? () => _importPlanForFloor(context, ref, i)
                 : () => _pickSheetForFloor(context, ref, i),
             onRemove: project.floors.length > 1
                 ? () => _removeLevel(context, ref, i)
@@ -307,6 +318,9 @@ class _LevelCard extends StatelessWidget {
   final VoidCallback onHeightPlus;
   final ValueChanged<double> onHeightSet;
   final VoidCallback? onPickSheet;
+
+  /// The plan action's label (Import plan… / Assign / Change).
+  final String pickLabel;
   final VoidCallback? onRemove;
 
   const _LevelCard({
@@ -318,6 +332,7 @@ class _LevelCard extends StatelessWidget {
     required this.onHeightPlus,
     required this.onHeightSet,
     required this.onPickSheet,
+    required this.pickLabel,
     required this.onRemove,
   });
 
@@ -352,9 +367,9 @@ class _LevelCard extends StatelessWidget {
               // B3: the elevation restates itself every time a height below it
               // changes — tabular figures keep the row from shuffling.
               // Round 25 — 2 dp through the SAME formatter the riser / FFL
-              // labels use, so a 3.25 m storey never reads 'elev 7.3 m' here
-              // beside 'FFL +7.25' on the drawings.
-              Text('elev ${signedElevationText(elevation.meters)} m',
+              // labels use; now the SAME notation too (the shared `fflLabel`),
+              // so a level reads 'FFL +7.25' here exactly as on the drawings.
+              Text(fflLabel(elevation.meters),
                   style: MechXTypography.tabular(type.caption)
                       .copyWith(color: colors.textMuted)),
               const SizedBox(width: MechXSpacing.xxs),
@@ -372,7 +387,8 @@ class _LevelCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Floor-to-floor height',
+                child: Text(
+                    context.strings(StringKey.buildingFloorToFloorHeight),
                     style: type.body.copyWith(color: colors.textSecondary)),
               ),
               SteppedValueField(
@@ -402,7 +418,7 @@ class _LevelCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Floor plan',
+                child: Text(context.strings(StringKey.buildingFloorPlan),
                     style: type.body.copyWith(color: colors.textSecondary)),
               ),
               Flexible(
@@ -424,7 +440,7 @@ class _LevelCard extends StatelessWidget {
               ),
               const SizedBox(width: MechXSpacing.sm),
               MechXButton(
-                label: sheets.isEmpty ? 'Assign' : 'Change',
+                label: pickLabel,
                 onPressed: onPickSheet,
               ),
             ],
@@ -1097,4 +1113,20 @@ class _GlyphButtonState extends State<_GlyphButton> {
 String trimmedMetres(double m) {
   final s = m.toStringAsFixed(2);
   return s.endsWith('0') ? s.substring(0, s.length - 1) : s;
+}
+
+/// 'Import plan…' on a level row (an empty project): the plan lands on THAT
+/// level — a single imported sheet is mapped to [floorIndex] (review: it used
+/// to land on the positional default, so 'Import plan…' on Level 2 still
+/// needed a 'Change'). A multi-page import keeps the page-per-floor default.
+Future<void> _importPlanForFloor(
+    BuildContext context, WidgetRef ref, int floorIndex) async {
+  final imported = await importPlan(context, ref);
+  if (!imported) return;
+  final sheets = ref.read(sheetsControllerProvider).sheets;
+  if (sheets.length == 1) {
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .setSheetFloor(sheets.single.id, floorIndex);
+  }
 }

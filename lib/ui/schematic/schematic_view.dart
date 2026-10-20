@@ -23,6 +23,7 @@ library;
 
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show mapEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -50,11 +51,13 @@ import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart';
 import '../../store/solve_store.dart';
+import '../canvas/canvas_view.dart' show canvasFitRequestProvider;
 import '../canvas/edge_context_menu.dart';
 import '../canvas/segment_symbols.dart';
 import '../canvas/service_style.dart';
 import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
+import '../canvas/viewport_keys.dart';
 import '../canvas/zoom_controls.dart';
 import '../shell/nav_rail.dart' show ShellSection, shellSectionProvider;
 import '../strings/app_strings.dart';
@@ -125,8 +128,7 @@ class _SchematicViewState extends ConsumerState<SchematicView> {
           service: vs.service,
           autoFocus: vs.autoFocus,
           presentServices: ref
-              .watch(networkControllerProvider)
-              .network
+              .watch(networkControllerProvider.select((s) => s.network))
               .edges
               .map((e) => e.service)
               .toSet(),
@@ -646,7 +648,7 @@ class _ToggleChipState extends State<_ToggleChip> {
         child: GestureDetector(
           onTap: widget.onTap,
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 2),
@@ -769,7 +771,7 @@ class _ServiceChip extends StatelessWidget {
         child: GestureDetector(
           onTap: onTap,
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.sm, vertical: MechXSpacing.xs + 1),
@@ -790,7 +792,7 @@ class _ServiceChip extends StatelessWidget {
                 ),
                 const SizedBox(width: MechXSpacing.xs),
                 AnimatedDefaultTextStyle(
-                  duration: MechXMotion.hover,
+                  duration: MechXMotion.resolve(context, MechXMotion.hover),
                   curve: MechXMotion.standard,
                   style: type.label.copyWith(
                       color: selected
@@ -839,56 +841,98 @@ class _AutoElevation extends ConsumerStatefulWidget {
   ConsumerState<_AutoElevation> createState() => _AutoElevationState();
 }
 
-class _AutoElevationState extends ConsumerState<_AutoElevation> {
-  /// Round 26 — the painter of the last build: its framed node layout is the
-  /// one the inferred-riser hit test reads.
+class _AutoElevationState extends ConsumerState<_AutoElevation>
+    with SingleTickerProviderStateMixin {
+  /// R1 — the MEMOIZED painter: rebuilt only when one of its inputs changes
+  /// ([_painterInputs] identity / value). A pan / zoom frame keeps the SAME
+  /// instance under a RepaintBoundary, so only the Transform above it moves —
+  /// no re-layout, no label-collision pass, no repaint of the diagram. Its
+  /// framed node layout is also the one the inferred-riser hit test reads.
   _AutoSchematicPainter? _painter;
+  /// The fit LOD bucket the last build settled on (no stored view yet).
+  double? _lastFitLabelZoom;
+  Object? _painterInputs;
 
+  /// The viewport (widget) size and the R5 world the diagram lays out in.
   Size _size = Size.zero;
+  Size _world = Size.zero;
   bool _hoverInferred = false;
-
-  // F2: the Auto diagram now zooms/pans through a ViewportTransform. The IDENTITY
-  // transform (scale 1, offset 0) renders the content at the fit-to-viewport base
-  // exactly as before, so a default project is byte-identical. The transform is
-  // sticky across workspace hops (F7) via [schematicViewProvider].
-  ViewportTransform? _transform;
 
   // Middle-button / trackpad pan tracking.
   bool _panning = false;
   Offset _lastPanPoint = Offset.zero;
   double _lastScale = 1.0;
 
-  /// Click tolerance (px) for hitting a dashed inferred connector.
-  static const double _hitTol = 9.0;
+  /// K1 — keyboard view control (F / Ctrl +-0 / arrows / hold Space).
+  final FocusNode _focus = FocusNode(debugLabel: 'riser-auto-canvas');
+  final SpacePanLatch _space = SpacePanLatch();
+  bool _grabbing = false;
+
+  /// V1 — programmatic changes (zoom buttons, Fit, keyboard zoom) ease.
+  late final _ViewportEaser _easer;
 
   @override
   void initState() {
     super.initState();
-    _transform = ref.read(schematicViewProvider).autoTransform;
+    _easer = _ViewportEaser(this, _emit);
   }
 
-  ViewportTransform get _current => _transform ?? const ViewportTransform();
+  /// Click tolerance (px) for hitting a dashed inferred connector.
+  static const double _hitTol = 9.0;
+
+  @override
+  void dispose() {
+    _easer.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  /// The fit framing of the R5 world — the IDENTITY whenever the building
+  /// fits the window (world == viewport), so a default launch renders exactly
+  /// as before. Also what Fit / F return to.
+  ViewportTransform get _fit =>
+      ViewportTransform.fit(_world, _size, padding: 0);
+
+  // F2: the Auto diagram zooms/pans through a ViewportTransform, sticky across
+  // workspace hops (F7) via [schematicAutoViewportProvider] — read, never
+  // watched here (R1): only [_ViewportTransformed] rebuilds per frame.
+  ViewportTransform get _current =>
+      ref.read(schematicAutoViewportProvider) ?? _fit;
 
   void _emit(ViewportTransform next) {
     if (next == _current) return;
-    setState(() => _transform = next);
-    ref.read(schematicViewProvider.notifier).setAutoTransform(next);
+    ref.read(schematicAutoViewportProvider.notifier).set(next);
   }
 
-  List<_InferredRiser> _inferred(Network net, int levels) {
-    if (!widget.inferRisers || _size.isEmpty) return const [];
-    // Round 26 — the SAME framed layout the painter draws.
-    final pos = _painter?.layoutNodePositions(_size) ??
-        _autoNodePositions(net, levels, _size, focus: widget.focus);
-    return _computeInferredRisers(net, pos, widget.focus);
+  /// A live gesture (wheel / drag / pinch / arrow pan): immediate, and it
+  /// cancels any in-flight eased change.
+  void _emitLive(ViewportTransform next) {
+    _easer.stop();
+    _emit(next);
+  }
+
+  void _animateTo(ViewportTransform target) {
+    if (_size.isEmpty) return;
+    _easer.animateTo(context, _current, target);
+  }
+
+  void _fitView() => _animateTo(_fit);
+
+  List<_InferredRiser> _inferred() {
+    final painter = _painter;
+    if (!widget.inferRisers || _world.isEmpty || painter == null) {
+      return const [];
+    }
+    // Round 26 — the SAME framed layout the painter draws (memoized, P1).
+    return painter.inferredRisers(_world);
   }
 
   /// Hit-test an inferred connector. [content] is a CONTENT-space point (the
   /// caller maps the screen point through the inverse transform first).
-  _InferredRiser? _hit(Offset content, Network net, int levels) {
+  _InferredRiser? _hit(Offset content) {
     _InferredRiser? best;
     var bestD = _hitTol;
-    for (final r in _inferred(net, levels)) {
+    for (final r in _inferred()) {
       final d = _distanceToInferred(r, content);
       if (d < bestD) {
         bestD = d;
@@ -898,8 +942,8 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
     return best;
   }
 
-  void _commit(Offset content, Network net, int levels) {
-    final r = _hit(content, net, levels);
+  void _commit(Offset content) {
+    final r = _hit(content);
     if (r == null) return;
     final added = ref
         .read(networkControllerProvider.notifier)
@@ -919,27 +963,35 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is PointerScrollEvent) {
       final factor = math.pow(1.0015, -event.scrollDelta.dy).toDouble();
-      _emit(_current.zoomedBy(factor, event.localPosition));
+      _emitLive(_current.zoomedBy(factor, event.localPosition));
     }
   }
 
   void _onPointerDown(PointerDownEvent event) {
+    _focus.requestFocus();
     if (event.buttons & kMiddleMouseButton != 0) {
       _panning = true;
       _lastPanPoint = event.localPosition;
     }
+    if (!_grabbing) setState(() => _grabbing = true);
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     if (_panning) {
-      _emit(_current.panned(event.localPosition - _lastPanPoint));
+      _emitLive(_current.panned(event.localPosition - _lastPanPoint));
       _lastPanPoint = event.localPosition;
     }
   }
 
-  void _onPointerUp(PointerUpEvent event) => _panning = false;
+  void _onPointerUp(PointerUpEvent event) {
+    _panning = false;
+    if (_grabbing) setState(() => _grabbing = false);
+  }
 
-  void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
+  void _onScaleStart(ScaleStartDetails details) {
+    _easer.stop();
+    _lastScale = 1.0;
+  }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
     var vt = _current;
@@ -956,15 +1008,105 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
     if (incremental != 1.0) {
       vt = vt.zoomedBy(incremental, details.localFocalPoint);
     }
-    if (vt != _current) _emit(vt);
+    if (vt != _current) _emitLive(vt);
+  }
+
+  // ── Keyboard (K1) ────────────────────────────────────────────────────────────
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (isTextEntryFocused()) return KeyEventResult.ignored;
+    if (_space.handle(event)) {
+      setState(() {}); // cursor: grab while held
+      return KeyEventResult.handled;
+    }
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.escape &&
+        widget.showHelp) {
+      widget.onToggleHelp();
+      return KeyEventResult.handled;
+    }
+    if (_size.isEmpty) return KeyEventResult.ignored;
+    final kb = HardwareKeyboard.instance;
+    final intent = viewportIntentForKey(event,
+        mod: kb.isControlPressed || kb.isMetaPressed,
+        shift: kb.isShiftPressed,
+        alt: kb.isAltPressed);
+    if (intent == null) return KeyEventResult.ignored;
+    final next = intent is ViewportFit
+        ? _fit
+        : applyViewportIntent(intent, _current,
+            contentSize: _world, viewportSize: _size, fitPadding: 0);
+    intent.eased ? _animateTo(next) : _emitLive(next);
+    return KeyEventResult.handled;
+  }
+
+  /// The painter for the current inputs — the previous INSTANCE when nothing
+  /// it draws changed (R1), so the diagram layer is reused.
+  _AutoSchematicPainter _painterFor({
+    required Network network,
+    required Map<String, EdgeSizing> sizing,
+    required (List<Floor>, int) levels,
+    required BuildingLevels building,
+    required MechXColors colors,
+    required bool downfeed,
+    required Map<String, String> riserTagsById,
+    required Map<String, String> detailByNode,
+    required Set<String> transferPumpNodeIds,
+    required bool hotWaterRecirc,
+    required double rightOverlayWidth,
+    required double labelZoom,
+  }) {
+    final inputs = (
+      network,
+      sizing,
+      levels,
+      colors,
+      widget.focus,
+      widget.inferRisers,
+      downfeed,
+      riserTagsById,
+      detailByNode,
+      transferPumpNodeIds,
+      widget.showDetails,
+      hotWaterRecirc,
+      rightOverlayWidth,
+      labelZoom,
+    );
+    final cached = _painter;
+    if (cached != null && inputs == _painterInputs) return cached;
+    _painterInputs = inputs;
+    return _painter = _AutoSchematicPainter(
+      network: network,
+      sizing: sizing,
+      building: building,
+      colors: colors,
+      focus: widget.focus,
+      inferRisers: widget.inferRisers,
+      downfeed: downfeed,
+      riserTagsById: riserTagsById,
+      detailByNode: detailByNode,
+      transferPumpNodeIds: transferPumpNodeIds,
+      showDetails: widget.showDetails,
+      hotWaterRecirc: hotWaterRecirc,
+      rightOverlayWidth: rightOverlayWidth,
+      labelZoom: labelZoom,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final network = ref.watch(networkControllerProvider).network;
+    final network =
+        ref.watch(networkControllerProvider.select((s) => s.network));
     final sizing = ref.watch(sizingProvider);
-    final building = ref.watch(projectControllerProvider).building;
+    // R1: `ProjectState.building` is a fresh BuildingLevels on every read (no
+    // value equality), which made the memoized painter look stale on ANY
+    // rebuild — watch (and key the painter on) the floor list + datum instead.
+    final levels = ref.watch(
+        projectControllerProvider.select((p) => (p.floors, p.groundIndex)));
+    final building = BuildingLevels(levels.$1, groundIndex: levels.$2);
     final colors = context.colors;
+    // K1 — the palette's / F key's shared fit bump frames this canvas too.
+    ref.listen(canvasFitRequestProvider, (_, _) => _fitView());
 
     if (network.nodes.isEmpty) {
       // F8: the empty state carries a path forward — draw on the Layout canvas
@@ -998,7 +1140,23 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
         ),
       );
     }
-    final levels = building.levelCount;
+    final feedStrategy = ref.watch(feedStrategyProvider);
+    // Resolve the equipment detail suffix per node (tank m3 / pump-fan kW)
+    // here, provider-free in the painter — a datum is included only when it
+    // genuinely exists (equipmentDetail returns null otherwise).
+    // Round 12 — each node's OWN duty (the shared per-node map the issued
+    // riser + the panel feed read), never one system duty on every unit.
+    final detailByNode = ref.watch(riserEquipmentDetailsProvider);
+    final transferPumps = ref.watch(transferPumpNodeIdsProvider);
+    // G2: the hot-water recirculation loop exists when the engine sizes one
+    // (the provider is non-null) — draw the HWR return.
+    final hotWaterRecirc = ref.watch(hotWaterAssumedReturnProvider);
+    // R1: memoized per network — a fresh map here made every build repaint.
+    final tags = ref.watch(riserTagsProvider(widget.focus));
+    // Label LOD: only the QUANTISED zoom bucket is watched, so a pan frame
+    // (and a zoom frame inside one bucket) never rebuilds the diagram.
+    final watchedLabelZoom = ref.watch(schematicAutoViewportProvider
+        .select((vt) => vt == null ? null : riserLabelZoomBucket(vt.scale)));
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1006,47 +1164,57 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
           constraints.maxWidth.isFinite ? constraints.maxWidth : 800,
           constraints.maxHeight.isFinite ? constraints.maxHeight : 600,
         );
-        final feedStrategy = ref.watch(feedStrategyProvider);
-        // Resolve the equipment detail suffix per node (tank m3 / pump-fan kW)
-        // here, provider-free in the painter — a datum is included only when it
-        // genuinely exists (equipmentDetail returns null otherwise).
-        // Round 12 — each node's OWN duty (the shared per-node map the issued
-        // riser + the panel feed read), never one system duty on every unit.
-        final detailByNode = ref.watch(riserEquipmentDetailsProvider);
-        final vt = _current;
-        // The painted single-line, wrapped in the ViewportTransform (identity by
-        // default ⇒ byte-identical). The corner overlays below stay screen-fixed.
-        final painter = _AutoSchematicPainter(
-                  network: network,
-                  sizing: sizing,
-                  building: building,
-                  colors: colors,
-                  focus: widget.focus,
-                  inferRisers: widget.inferRisers,
-                  downfeed: feedStrategy == FeedStrategy.downfeed,
-                  riserTagsById: riserTags(network, widget.focus),
-                  detailByNode: detailByNode,
-                  transferPumpNodeIds: ref.watch(transferPumpNodeIdsProvider),
-                  showDetails: widget.showDetails,
-                  // G2: the hot-water recirculation loop exists when the engine
-                  // sizes one (the provider is non-null) — draw the HWR return.
-                  hotWaterRecirc: ref.watch(hotWaterAssumedReturnProvider),
-                  // Round 26 — the bottom-right notes / title block are kept
-                  // clear of the band diagram.
-                  rightOverlayWidth: (widget.showNotes || widget.showTitleBlock)
-                      ? _kAutoNotesReserve
-                      : 0,
-                );
-        _painter = painter;
+        _AutoSchematicPainter painterAt(double labelZoom) => _painterFor(
+              network: network,
+              sizing: sizing,
+              levels: levels,
+              building: building,
+              colors: colors,
+              downfeed: feedStrategy == FeedStrategy.downfeed,
+              riserTagsById: tags,
+              detailByNode: detailByNode,
+              transferPumpNodeIds: transferPumps,
+              hotWaterRecirc: hotWaterRecirc,
+              // Round 26 — the bottom-right notes / title block are kept clear
+              // of the band diagram.
+              rightOverlayWidth: (widget.showNotes || widget.showTitleBlock)
+                  ? _kAutoNotesReserve
+                  : 0,
+              labelZoom: labelZoom,
+            );
+        // With no stored view, start from the fit LOD bucket the previous
+        // build settled on, so a rebuild (hover, a tag tick) hits the painter
+        // memo instead of building a 1.0 painter and immediately replacing it
+        // (review: that defeated the R1 memo + the per-painter layout cache on
+        // every rebuild of a tall building).
+        var painter =
+            painterAt(watchedLabelZoom ?? _lastFitLabelZoom ?? 1.0);
+        // R5: the world the diagram lays out in (== the viewport unless the
+        // building is too tall for legible bands).
+        _world = painter.worldSizeFor(_size);
+        // No stored view yet: the canvas shows the FIT framing, so key the
+        // label LOD on the fit scale (1.0 — unchanged — whenever the
+        // building fits the window).
+        if (watchedLabelZoom == null) {
+          final fitZoom = riserLabelZoomBucket(_fit.scale);
+          if (fitZoom != painter.labelZoom) painter = painterAt(fitZoom);
+          _lastFitLabelZoom = fitZoom;
+        }
+        // The painted single-line in its own layer (RepaintBoundary) under the
+        // live ViewportTransform — the ONE widget that rebuilds per pan / zoom
+        // frame. Identity at rest whenever world == viewport ⇒ byte-identical.
         final content = ClipRect(
-          child: Transform.translate(
-            offset: vt.offset,
-            child: Transform.scale(
-              scale: vt.scale,
+          child: _ViewportTransformed(
+            viewport: schematicAutoViewportProvider,
+            fallback: _fit,
+            child: OverflowBox(
               alignment: Alignment.topLeft,
-              child: CustomPaint(
-                size: _size,
-                painter: painter,
+              minWidth: 0,
+              maxWidth: double.infinity,
+              minHeight: 0,
+              maxHeight: double.infinity,
+              child: RepaintBoundary(
+                child: CustomPaint(size: _world, painter: painter),
               ),
             ),
           ),
@@ -1055,37 +1223,49 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
         // (GestureDetector). When inferred risers are shown the dashed connectors
         // are CLICKABLE (one tap commits a real sized riser) — the hit-test maps
         // the screen point through the inverse transform into content space.
-        final body = Listener(
-          onPointerSignal: _onPointerSignal,
-          onPointerDown: _onPointerDown,
-          onPointerMove: _onPointerMove,
-          onPointerUp: _onPointerUp,
-          child: MouseRegion(
-            cursor: _hoverInferred
-                ? SystemMouseCursors.click
-                : SystemMouseCursors.grab,
-            onHover: !widget.inferRisers
-                ? null
-                : (e) {
-                    final over = _hit(_current.screenToWorld(e.localPosition),
-                            network, levels) !=
-                        null;
-                    if (over != _hoverInferred) {
-                      setState(() => _hoverInferred = over);
-                    }
-                  },
-            onExit: (_) {
-              if (_hoverInferred) setState(() => _hoverInferred = false);
-            },
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onScaleStart: _onScaleStart,
-              onScaleUpdate: _onScaleUpdate,
-              onTapUp: !widget.inferRisers
+        final body = Focus(
+          focusNode: _focus,
+          autofocus: true,
+          onKeyEvent: _onKey,
+          onFocusChange: (has) {
+            if (!has && _space.release()) setState(() {});
+          },
+          child: Listener(
+            onPointerSignal: _onPointerSignal,
+            onPointerDown: _onPointerDown,
+            onPointerMove: _onPointerMove,
+            onPointerUp: _onPointerUp,
+            child: MouseRegion(
+              cursor: _hoverInferred && !_space.held
+                  ? SystemMouseCursors.click
+                  : (_grabbing
+                      ? SystemMouseCursors.grabbing
+                      : SystemMouseCursors.grab),
+              onHover: !widget.inferRisers
                   ? null
-                  : (d) => _commit(
-                      _current.screenToWorld(d.localPosition), network, levels),
-              child: content,
+                  : (e) {
+                      final over =
+                          _hit(_current.screenToWorld(e.localPosition)) != null;
+                      if (over != _hoverInferred) {
+                        setState(() => _hoverInferred = over);
+                      }
+                    },
+              onExit: (_) {
+                if (_hoverInferred) setState(() => _hoverInferred = false);
+              },
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onScaleStart: _onScaleStart,
+                onScaleUpdate: _onScaleUpdate,
+                onTapUp: !widget.inferRisers
+                    ? null
+                    : (d) {
+                        // Hold-Space is a pan: never commit a riser on release.
+                        if (_space.held) return;
+                        _commit(_current.screenToWorld(d.localPosition));
+                      },
+                child: content,
+              ),
             ),
           ),
         );
@@ -1093,21 +1273,22 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
           children: [
             Positioned.fill(child: body),
             // F2: on-canvas zoom controls (bottom-left) — the same cluster the
-            // Edit / Layout / electrical canvases show. Fit resets to the
-            // identity base (which IS the fit-to-viewport render).
+            // Edit / Layout / electrical canvases show. Fit returns to the R5
+            // world framing (the identity whenever the building fits). V1: the
+            // three buttons ease like the Layout's (reduced motion: instant).
             Positioned(
               left: MechXSpacing.md,
               bottom: MechXSpacing.md,
               child: ZoomControls(
                 onIn: () =>
-                    _emit(_current.zoomedBy(1.2, _size.center(Offset.zero))),
-                onOut: () => _emit(
+                    _animateTo(_current.zoomedBy(1.2, _size.center(Offset.zero))),
+                onOut: () => _animateTo(
                     _current.zoomedBy(1 / 1.2, _size.center(Offset.zero))),
-                onFit: () => _emit(const ViewportTransform()),
+                onFit: _fitView,
               ),
             ),
             // The KETERANGAN / legend overlay now sits TOP-left (the bottom-left
-            // corner is taken by the F2 zoom cluster); a floating-chrome card
+            // corner is taken by the F2 zoom cluster); a drafting-chrome card
             // that lists the services actually drawn. Default OFF (export chrome).
             // Offset down to clear the shared (?) guide button (C3) that now sits
             // in the top-left corner.
@@ -1201,6 +1382,90 @@ class _AutoElevationState extends ConsumerState<_AutoElevation> {
   }
 }
 
+/// R1 — the ONE widget that rebuilds on a Riser pan / zoom frame: it watches
+/// the canvas's viewport provider and applies the transform to a [child] whose
+/// identity the parent keeps stable (so the framework never rebuilds — or,
+/// under its RepaintBoundary, repaints — the diagram beneath).
+class _ViewportTransformed extends ConsumerWidget {
+  final ProviderListenable<ViewportTransform?> viewport;
+
+  /// The view to use while the provider holds nothing yet (the host's fit).
+  final ViewportTransform fallback;
+  final Widget child;
+
+  const _ViewportTransformed({
+    required this.viewport,
+    required this.fallback,
+    required this.child,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final vt = ref.watch(viewport) ?? fallback;
+    return Transform.translate(
+      offset: vt.offset,
+      child: Transform.scale(
+        scale: vt.scale,
+        alignment: Alignment.topLeft,
+        child: child,
+      ),
+    );
+  }
+}
+
+/// V1 — eases a Riser canvas's PROGRAMMATIC viewport change (zoom buttons,
+/// Fit, keyboard zoom) from the current view to a target, like the Layout
+/// canvas's G4 tween (`CanvasView._animateTo`: [MechXMotion.medium] on
+/// [MechXMotion.standard]). The duration passes through [MechXMotion.resolve],
+/// so with reduced motion the change is applied at once. Live manipulation
+/// (wheel, drag, pinch, arrow pan) calls [stop] and writes directly.
+class _ViewportEaser {
+  _ViewportEaser(TickerProvider vsync, this._onTick)
+      : _ctrl = AnimationController(vsync: vsync, duration: MechXMotion.medium) {
+    _ctrl.addListener(_tick);
+  }
+
+  final AnimationController _ctrl;
+  final void Function(ViewportTransform) _onTick;
+  ViewportTransform? _from;
+  ViewportTransform? _to;
+
+  void animateTo(
+      BuildContext context, ViewportTransform from, ViewportTransform to) {
+    stop();
+    if (from == to) return;
+    final d = MechXMotion.resolve(context, MechXMotion.medium);
+    if (d == Duration.zero) {
+      _onTick(to);
+      return;
+    }
+    _from = from;
+    _to = to;
+    _ctrl
+      ..duration = d
+      ..reset()
+      ..forward();
+  }
+
+  void _tick() {
+    final from = _from, to = _to;
+    if (from == null || to == null) return;
+    final t = MechXMotion.standard.transform(_ctrl.value);
+    _onTick(ViewportTransform(
+      scale: from.scale + (to.scale - from.scale) * t,
+      offset: Offset.lerp(from.offset, to.offset, t)!,
+    ));
+  }
+
+  void stop() {
+    if (_ctrl.isAnimating) _ctrl.stop();
+    _from = null;
+    _to = null;
+  }
+
+  void dispose() => _ctrl.dispose();
+}
+
 // ---------------------------------------------------------------------------
 // Edit mode — interactive elevation: place / reposition / size risers
 // ---------------------------------------------------------------------------
@@ -1220,18 +1485,36 @@ class _EditElevation extends ConsumerStatefulWidget {
   ConsumerState<_EditElevation> createState() => _EditElevationState();
 }
 
-class _EditElevationState extends ConsumerState<_EditElevation> {
-  ViewportTransform? _transform;
+class _EditElevationState extends ConsumerState<_EditElevation>
+    with SingleTickerProviderStateMixin {
   Size _viewportSize = Size.zero;
   final FocusNode _focus = FocusNode(debugLabel: 'elevation-canvas');
 
-  // Middle-button pan tracking.
+  // Middle-button / hold-Space left-drag pan tracking.
   bool _panning = false;
   Offset _lastPanPoint = Offset.zero;
   double _lastScale = 1.0;
 
-  // In-flight horizontal riser drag (the grabbed riser).
-  String? _draggingRiser;
+  /// K1 — hold Space: a left-drag pans instead of marqueeing (there is no
+  /// other way to pan this canvas without a middle button).
+  final SpacePanLatch _space = SpacePanLatch();
+
+  /// V1 — programmatic viewport changes ease (reduced motion: instant).
+  late final _ViewportEaser _easer;
+
+  @override
+  void initState() {
+    super.initState();
+    _easer = _ViewportEaser(this, _emit);
+  }
+
+  // R3 — a press on a selected riser ARMS a drag; it only starts once the
+  // pointer travels past the platform pan slop (so a click's jitter never
+  // slides the riser), and the whole drag is ONE undo step.
+  String? _pressRiser;
+  Offset _pressPos = Offset.zero;
+  double _dragSlop = kTouchSlop;
+  bool _dragActive = false;
 
   // D5: batch horizontal move — each selected riser's node x at drag start, plus
   // the cursor world-x at start, so the whole selection moves by ONE shared
@@ -1250,29 +1533,51 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   // tint as the only drop feedback. Null when no card is over the canvas.
   int? _dragBandFloor;
 
+  /// V4 — the riser under the cursor (a hover halo + the move cursor). Null
+  /// when the pointer is over blank canvas. Gesture-time only.
+  String? _hoverRiser;
 
   /// World-px gap between adjacent floor bands. The vertical axis is laid out by
   /// floor index (true elevation order) at a fixed band height — the riser's
   /// REAL length is still the elevation delta (used for the label + sizing),
   /// this is only the on-screen band spacing.
   static const double _bandWorldH = 160;
-  static const double _worldWidth = 1200;
+
+  /// R4 — the minimum world width of the elevation frame (the historical fixed
+  /// frame), and the margin kept beyond the outermost node either side.
+  static const double _minWorldWidth = 1200;
+  static const double _worldMargin = 80;
+
+  /// K1 — one arrow-nudge step, in SCREEN px (so a nudge reads the same at
+  /// every zoom).
+  static const double _nudgeScreenPx = 8;
 
   @override
-  void initState() {
-    super.initState();
-    // F7: restore the sticky viewport if the workspace was hopped away and back.
-    _transform = ref.read(schematicViewProvider).editTransform;
+  void dispose() {
+    _easer.dispose();
+    _focus.dispose();
+    super.dispose();
   }
+
+  /// R4 — the world frame the floor lines span and Fit frames: at least the
+  /// historical 0..1200, grown to hold EVERY node at its diagram x (plan x, or
+  /// its elevation override) plus a margin — a riser drawn at plan x 2400 used
+  /// to sit beyond the floor lines and outside Fit.
+  Rect _contentRect() {
+    final net = ref.read(networkControllerProvider).network;
+    final n = ref.read(projectControllerProvider).building.levelCount;
+    final layout = ref.read(schematicLayoutProvider);
+    return _elevationContentRect(net, layout, n,
+        bandWorldH: _bandWorldH,
+        minWidth: _minWorldWidth,
+        margin: _worldMargin);
+  }
+
+  ViewportTransform _fitView() =>
+      _fitRect(_contentRect(), _viewportSize, padding: 40);
 
   ViewportTransform get _current =>
-      _transform ??
-      ViewportTransform.fit(_contentSize(), _viewportSize, padding: 40);
-
-  Size _contentSize() {
-    final n = ref.read(projectControllerProvider).building.levelCount;
-    return Size(_worldWidth, _bandWorldH * math.max(1, n));
-  }
+      ref.read(schematicEditViewportProvider) ?? _fitView();
 
   // Screen-y (world) of a floor band's centre — floor 0 at the bottom.
   double _bandCentreWorldY(int floorIndex, int levelCount) {
@@ -1281,24 +1586,34 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   }
 
   void _emit(ViewportTransform next) {
-    if (next == _transform) return;
-    setState(() => _transform = next);
-    // F7: persist so a hop away and back restores this viewport.
-    ref.read(schematicViewProvider.notifier).setEditTransform(next);
+    if (next == ref.read(schematicEditViewportProvider)) return;
+    // F7: persisted so a hop away and back restores this viewport.
+    ref.read(schematicEditViewportProvider.notifier).set(next);
+  }
+
+  void _emitLive(ViewportTransform next) {
+    _easer.stop();
+    _emit(next);
+  }
+
+  void _animateTo(ViewportTransform target) {
+    if (_viewportSize.isEmpty) return;
+    _easer.animateTo(context, _current, target);
   }
 
   void _maybeFit() {
-    if (_transform != null || _viewportSize.isEmpty) return;
+    if (ref.read(schematicEditViewportProvider) != null ||
+        _viewportSize.isEmpty) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || _transform != null || _viewportSize.isEmpty) return;
-      _emit(ViewportTransform.fit(_contentSize(), _viewportSize, padding: 40));
+      if (!mounted ||
+          ref.read(schematicEditViewportProvider) != null ||
+          _viewportSize.isEmpty) {
+        return;
+      }
+      _emit(_fitView());
     });
-  }
-
-  @override
-  void dispose() {
-    _focus.dispose();
-    super.dispose();
   }
 
   // ── Hit-testing ───────────────────────────────────────────────────────────
@@ -1338,18 +1653,21 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is PointerScrollEvent) {
       final factor = math.pow(1.0015, -event.scrollDelta.dy).toDouble();
-      _emit(_current.zoomedBy(factor, event.localPosition));
+      _emitLive(_current.zoomedBy(factor, event.localPosition));
     }
   }
 
   void _onPointerDown(PointerDownEvent event) {
     _focus.requestFocus();
-    if (event.buttons & kMiddleMouseButton != 0) {
-      _panning = true;
+    final primary = event.buttons & kPrimaryMouseButton != 0;
+    if (event.buttons & kMiddleMouseButton != 0 || (primary && _space.held)) {
+      // Middle-drag, or a left-drag while Space is held (K1), pans.
+      _easer.stop();
+      setState(() => _panning = true);
       _lastPanPoint = event.localPosition;
       return;
     }
-    if (event.buttons & kPrimaryMouseButton != 0) {
+    if (primary) {
       final w = _current.screenToWorld(event.localPosition);
       final hit = _riserAt(w, 16 / _current.scale);
       if (hit != null) {
@@ -1364,8 +1682,11 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
           selNotifier.selectEdge(hit);
         }
         if (ref.read(selectionProvider).containsEdge(hit)) {
-          _draggingRiser = hit;
-          _beginRiserDrag(w.dx);
+          // R3: ARM the drag; it starts past the slop in [_onPointerMove].
+          _pressRiser = hit;
+          _pressPos = event.localPosition;
+          _dragSlop = computePanSlop(
+              event.kind, MediaQuery.maybeGestureSettingsOf(context));
         }
       } else {
         // D5: empty-canvas left-drag draws a marquee (rubber-band multi-select).
@@ -1393,27 +1714,34 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
 
   void _onPointerMove(PointerMoveEvent event) {
     if (_panning) {
-      _emit(_current.panned(event.localPosition - _lastPanPoint));
+      _emitLive(_current.panned(event.localPosition - _lastPanPoint));
       _lastPanPoint = event.localPosition;
       return;
     }
-    final dragging = _draggingRiser;
-    if (dragging != null) {
-      // B3: this drag no longer edits the network — it moves the riser on the
-      // DIAGRAM only (`moveRiserHorizontal` writes the elevation-layout
-      // override, never the plan nodes). So there is nothing to snapshot (the
-      // old F3 deferred snapshot pushed a PHANTOM undo entry for a change the
-      // network never saw) and nothing heavy to throttle (no re-solve fires).
+    final pressed = _pressRiser;
+    if (pressed != null) {
+      if (!_dragActive) {
+        // R3: below the slop a press is still a click — nothing moves.
+        if ((event.localPosition - _pressPos).distance < _dragSlop) return;
+        _dragActive = true;
+        // The whole drag folds into ONE undo step (closed on pointer-up).
+        ref.read(schematicLayoutProvider.notifier).beginGesture();
+        // Measured from the PRESS point, so crossing the slop never jumps.
+        _beginRiserDrag(_current.screenToWorld(_pressPos).dx);
+      }
+      // B3: this drag moves the riser on the DIAGRAM only
+      // (`moveRiserHorizontal` writes the elevation-layout override, never the
+      // plan nodes), so nothing heavy re-runs while it is in flight.
       final w = _current.screenToWorld(event.localPosition);
       final ctrl = ref.read(networkControllerProvider.notifier);
       final base = _dragBaseX;
       if (base != null && base.isNotEmpty) {
         // D5: move the WHOLE selection by one shared delta (relative x offsets
-        // between risers preserved), one undo step.
+        // between risers preserved).
         final delta = w.dx - _dragBaseCursorX;
         base.forEach((id, x0) => ctrl.moveRiserHorizontal(id, x0 + delta));
       } else {
-        ctrl.moveRiserHorizontal(dragging, w.dx);
+        ctrl.moveRiserHorizontal(pressed, w.dx);
       }
       return;
     }
@@ -1422,18 +1750,30 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     }
   }
 
-  void _onPointerUp(PointerUpEvent event) {
-    _panning = false;
-    // B3: no throttle session to close — the riser drag is diagram-only, so it
-    // never begins one (nothing heavy re-runs while it is in flight).
-    _draggingRiser = null;
+  /// End any riser drag (one undo step when something moved).
+  void _endRiserDrag() {
+    if (_dragActive) {
+      ref.read(schematicLayoutProvider.notifier).endGesture();
+    }
+    _pressRiser = null;
+    _dragActive = false;
     _dragBaseX = null;
-    // D5: finalize the marquee → select every riser its box crosses.
+  }
+
+  void _onPointerUp(PointerUpEvent event) {
+    if (_panning) setState(() => _panning = false);
+    _endRiserDrag();
+    // D5: finalize the marquee → select the risers it captures.
     final start = _marqueeStart;
     final current = _marqueeCurrent;
     if (start != null && current != null) {
       final rect = Rect.fromPoints(start, current);
-      if (rect.width > 4 || rect.height > 4) _selectRisersInRect(rect);
+      if (rect.width > 4 || rect.height > 4) {
+        // V5: a LEFT-to-RIGHT drag is a WINDOW (a riser leg fully inside);
+        // RIGHT-to-LEFT a CROSSING (any leg the box touches) — the Layout's B26
+        // convention (ties favour the stricter window).
+        _selectRisersInRect(rect, window: current.dx >= start.dx);
+      }
       setState(() {
         _marqueeStart = null;
         _marqueeCurrent = null;
@@ -1441,26 +1781,31 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     }
   }
 
-  /// D5: union of the risers whose on-screen vertical leg crosses the marquee
-  /// [rect] (shift extends the current selection, else replaces it).
-  void _selectRisersInRect(Rect rect) {
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (_panning) setState(() => _panning = false);
+    _endRiserDrag();
+    if (_marqueeStart != null) {
+      setState(() {
+        _marqueeStart = null;
+        _marqueeCurrent = null;
+      });
+    }
+  }
+
+  /// D5 / V5: the risers the marquee [rect] captures — legs fully inside it
+  /// ([window]) or any leg it touches (crossing). Shift extends the current
+  /// selection, else replaces it.
+  void _selectRisersInRect(Rect rect, {required bool window}) {
     final net = ref.read(networkControllerProvider).network;
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
     final layout = ref.read(schematicLayoutProvider);
-    final vt = _current;
-    final hit = <String>{};
-    for (final e in net.edges) {
-      if (e.kind != EdgeKind.riser) continue;
-      final a = net.nodeById(e.fromId);
-      final b = net.nodeById(e.toId);
-      if (a == null || b == null) continue;
-      final yA = _bandCentreWorldY(a.floorIndex, levelCount);
-      final yB = _bandCentreWorldY(b.floorIndex, levelCount);
-      final ax = layout.xFor(a);
-      final p1 = vt.worldToScreen(Offset(ax, math.min(yA, yB)));
-      final p2 = vt.worldToScreen(Offset(ax, math.max(yA, yB)));
-      if (Rect.fromPoints(p1, p2).inflate(3).overlaps(rect)) hit.add(e.id);
-    }
+    final hit = riserIdsInScreenRect(
+      net,
+      rect,
+      window: window,
+      worldOf: (n) => _current.worldToScreen(
+          Offset(layout.xFor(n), _bandCentreWorldY(n.floorIndex, levelCount))),
+    );
     final shift = HardwareKeyboard.instance.isShiftPressed;
     if (shift) {
       ref.read(selectionProvider.notifier).addMulti(const {}, hit);
@@ -1469,12 +1814,15 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     }
   }
 
-  void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
+  void _onScaleStart(ScaleStartDetails details) {
+    _easer.stop();
+    _lastScale = 1.0;
+  }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // Single-pointer pan only when NOT dragging a riser or drawing a marquee
-    // (the Listener handles both); trackpad pinch always zooms.
-    if (_draggingRiser != null || _marqueeStart != null) return;
+    // Single-pointer pan only when NOT dragging a riser, drawing a marquee or
+    // panning (the Listener handles all three); trackpad pinch always zooms.
+    if (_pressRiser != null || _marqueeStart != null || _panning) return;
     var vt = _current;
     if (details.pointerCount > 1 && details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
@@ -1484,7 +1832,7 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     if (incremental != 1.0) {
       vt = vt.zoomedBy(incremental, details.localFocalPoint);
     }
-    if (vt != _current) _emit(vt);
+    if (vt != _current) _emitLive(vt);
   }
 
   void _onSecondaryTapUp(TapUpDetails details) {
@@ -1492,61 +1840,161 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     final hit = _riserAt(w, 16 / _current.scale);
     if (hit == null) return;
     ref.read(selectionProvider.notifier).selectEdge(hit);
-    showEdgeContextMenu(context, ref, hit, details.globalPosition);
+    final edge = ref.read(networkControllerProvider).network.edgeById(hit);
+    final layout = ref.read(schematicLayoutProvider);
+    final moved = edge != null &&
+        (layout.schematicXOverrides.containsKey(edge.fromId) ||
+            layout.schematicXOverrides.containsKey(edge.toId));
+    showEdgeContextMenu(
+      context,
+      ref,
+      hit,
+      details.globalPosition,
+      // R3: return a riser slid sideways on the diagram to its plan x (one
+      // undo step). Offered only when it actually carries a diagram offset.
+      extraActions: [
+        if (moved)
+          EdgeMenuAction(
+            'Reset position',
+            () => ref
+                .read(schematicLayoutProvider.notifier)
+                .resetNodes([edge.fromId, edge.toId]),
+          ),
+      ],
+    );
+  }
+
+  /// The riser edges in the current selection (the only elements Edit mode
+  /// selects / edits — runs are inert here, D3).
+  Set<String> _selectedRiserIds() {
+    final net = ref.read(networkControllerProvider).network;
+    return {
+      for (final id in ref.read(selectionProvider).edgeIds)
+        if (net.edgeById(id)?.kind == EdgeKind.riser) id,
+    };
+  }
+
+  /// K1 — nudge the selected risers sideways on the DIAGRAM by [dxScreen]
+  /// screen px (one undo step). False when nothing riser-shaped is selected
+  /// (the arrow then pans).
+  bool _nudgeSelection(double dxScreen) {
+    final ids = _selectedRiserIds();
+    if (ids.isEmpty) return false;
+    final net = ref.read(networkControllerProvider).network;
+    final layout = ref.read(schematicLayoutProvider);
+    final dx = dxScreen / _current.scale;
+    final next = <String, double>{};
+    for (final id in ids) {
+      final e = net.edgeById(id)!;
+      final a = net.nodeById(e.fromId);
+      if (a == null) continue;
+      final x = layout.xFor(a) + dx;
+      next[e.fromId] = x;
+      next[e.toId] = x;
+    }
+    ref.read(schematicLayoutProvider.notifier).setNodesXUndoable(next);
+    return true;
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     // B4: while a text field owns the keyboard, canvas shortcuts edit TEXT —
     // never the drawing (the shared guard the Layout/electrical canvases use).
     if (isTextEntryFocused()) return KeyEventResult.ignored;
-    final key = event.logicalKey;
-    final mod = HardwareKeyboard.instance.isControlPressed ||
-        HardwareKeyboard.instance.isMetaPressed;
-
-    // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
-    // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
-    // (AppShell._onHardwareKey). That handler's return value does NOT stop
-    // the framework delivering the same key down the focus chain, so acting
-    // here too undid / redid TWO steps per press. Consume the combo without
-    // acting so nothing further down this handler reacts to it.
-    if (mod &&
-        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
+    // K1: hold-Space pan (down AND up are tracked).
+    if (_space.handle(event)) {
+      setState(() {}); // the grab cursor
       return KeyEventResult.handled;
     }
+    final kb = HardwareKeyboard.instance;
+    final key = event.logicalKey;
+    final mod = kb.isControlPressed || kb.isMetaPressed;
 
-    // F4: the Esc ladder — close the help popover, else clear a selection, else
-    // return to the read-only Auto view.
-    if (key == LogicalKeyboardKey.escape) {
-      if (widget.showHelp) {
-        widget.onToggleHelp();
+    if (event is KeyDownEvent) {
+      // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
+      // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
+      // (AppShell._onHardwareKey). That handler's return value does NOT stop
+      // the framework delivering the same key down the focus chain, so acting
+      // here too undid / redid TWO steps per press. Consume the combo without
+      // acting so nothing further down this handler reacts to it.
+      if (mod &&
+          (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
         return KeyEventResult.handled;
       }
-      if (_marqueeStart != null) {
-        setState(() {
-          _marqueeStart = null;
-          _marqueeCurrent = null;
+
+      // F4: the Esc ladder — close the help popover, else clear a selection,
+      // else return to the read-only Auto view.
+      if (key == LogicalKeyboardKey.escape) {
+        if (widget.showHelp) {
+          widget.onToggleHelp();
+          return KeyEventResult.handled;
+        }
+        if (_marqueeStart != null) {
+          setState(() {
+            _marqueeStart = null;
+            _marqueeCurrent = null;
+          });
+          return KeyEventResult.handled;
+        }
+        if (ref.read(selectionProvider).hasSelection) {
+          ref.read(selectionProvider.notifier).clear();
+          return KeyEventResult.handled;
+        }
+        ref.read(schematicViewProvider.notifier).setMode(SchematicMode.auto);
+        return KeyEventResult.handled;
+      }
+
+      // R2: Delete removes EVERY selected riser (a marquee / Ctrl+A / shift
+      // set), not just the primary one — ONE undo step via `deleteMany`.
+      if (key == LogicalKeyboardKey.delete ||
+          key == LogicalKeyboardKey.backspace) {
+        final ids = _selectedRiserIds();
+        if (ids.isEmpty) return KeyEventResult.ignored;
+        final net = ref.read(networkControllerProvider).network;
+        ref
+            .read(networkControllerProvider.notifier)
+            .deleteMany(orphanedRiserEndpoints(net, ids), ids);
+        ref.read(selectionProvider.notifier).clear();
+        return KeyEventResult.handled;
+      }
+
+      // K1: Ctrl/Cmd+A selects every riser on the elevation (Edit shows the
+      // whole building, every service).
+      if (mod && key == LogicalKeyboardKey.keyA) {
+        final net = ref.read(networkControllerProvider).network;
+        ref.read(selectionProvider.notifier).setMulti(const {}, {
+          for (final e in net.edges)
+            if (e.kind == EdgeKind.riser) e.id,
         });
         return KeyEventResult.handled;
       }
-      if (ref.read(selectionProvider).hasSelection) {
-        ref.read(selectionProvider.notifier).clear();
-        return KeyEventResult.handled;
-      }
-      ref.read(schematicViewProvider.notifier).setMode(SchematicMode.auto);
-      return KeyEventResult.handled;
     }
 
-    if (key == LogicalKeyboardKey.delete ||
-        key == LogicalKeyboardKey.backspace) {
-      final sel = ref.read(selectionProvider);
-      if (sel.isEdge) {
-        ref.read(networkControllerProvider.notifier).deleteEdge(sel.edgeId!);
-        ref.read(selectionProvider.notifier).clear();
-        return KeyEventResult.handled;
-      }
+    // K1: the shared canvas view keys (F fit, Ctrl +/-/0, arrows).
+    if (_viewportSize.isEmpty) return KeyEventResult.ignored;
+    final intent = viewportIntentForKey(event,
+        mod: mod, shift: kb.isShiftPressed, alt: kb.isAltPressed);
+    if (intent == null) return KeyEventResult.ignored;
+    if (intent is ViewportPan && intent.nudgeCandidate) {
+      // A selection nudges sideways (risers have no free vertical — their
+      // length is the elevation delta); Up/Down and an empty selection pan.
+      final dx = switch (intent.arrow) {
+        LogicalKeyboardKey.arrowLeft => -_nudgeScreenPx,
+        LogicalKeyboardKey.arrowRight => _nudgeScreenPx,
+        _ => 0.0,
+      };
+      if (dx != 0 && _nudgeSelection(dx)) return KeyEventResult.handled;
     }
-    return KeyEventResult.ignored;
+    final rect = _contentRect();
+    final next = switch (intent) {
+      ViewportFit() => _fitView(),
+      ViewportActualSize() => ViewportTransform.actualSize(
+              rect.size, _viewportSize)
+          .panned(-rect.topLeft),
+      _ => applyViewportIntent(intent, _current,
+          contentSize: rect.size, viewportSize: _viewportSize),
+    };
+    intent.eased ? _animateTo(next) : _emitLive(next);
+    return KeyEventResult.handled;
   }
 
   // ── Palette drop ────────────────────────────────────────────────────────────
@@ -1652,16 +2100,48 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
     return null;
   }
 
+  /// V4 — the honest cursor: grab / grabbing while panning (Space held or a
+  /// middle drag), a sideways-move cursor over a draggable riser, else basic.
+  MouseCursor get _cursor {
+    if (_panning) return SystemMouseCursors.grabbing;
+    if (_space.held) return SystemMouseCursors.grab;
+    if (_pressRiser != null || _hoverRiser != null) {
+      return SystemMouseCursors.resizeLeftRight;
+    }
+    return SystemMouseCursors.basic;
+  }
+
+  void _onHover(PointerHoverEvent e) {
+    final hit = _space.held
+        ? null
+        : _riserAt(_current.screenToWorld(e.localPosition), 16 / _current.scale);
+    if (hit != _hoverRiser) setState(() => _hoverRiser = hit);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final network = ref.watch(networkControllerProvider).network;
+    final network =
+        ref.watch(networkControllerProvider.select((s) => s.network));
     final sizing = ref.watch(sizingProvider);
     final building = ref.watch(projectControllerProvider).building;
     final selection = ref.watch(selectionProvider);
     // B3: the diagram-only riser positions (empty unless one was dragged
     // sideways here). Watched so a drag repaints without touching the network.
     final schematicX = ref.watch(schematicLayoutProvider).schematicXOverrides;
+    // The live viewport — this canvas paints in screen space, so a pan frame
+    // repaints it (it is light; the heavy Auto diagram does not).
+    final watchedVt = ref.watch(schematicEditViewportProvider);
+    // K1 — the palette's / F key's shared fit bump frames this canvas too.
+    ref.listen(canvasFitRequestProvider,
+        (_, _) => _animateTo(_fitView()));
+    final content = _elevationContentRect(
+        network,
+        SchematicLayoutState(schematicXOverrides: schematicX),
+        building.levelCount,
+        bandWorldH: _bandWorldH,
+        minWidth: _minWorldWidth,
+        margin: _worldMargin);
 
     final canvas = Focus(
       focusNode: _focus,
@@ -1669,13 +2149,22 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       // without first clicking the canvas.
       autofocus: true,
       onKeyEvent: _onKey,
+      onFocusChange: (has) {
+        // The Space key-up lands elsewhere once focus leaves: drop the latch.
+        if (!has && _space.release()) setState(() {});
+      },
       child: MouseRegion(
-        cursor: SystemMouseCursors.basic,
+        cursor: _cursor,
+        onHover: _onHover,
+        onExit: (_) {
+          if (_hoverRiser != null) setState(() => _hoverRiser = null);
+        },
         child: Listener(
           onPointerSignal: _onPointerSignal,
           onPointerDown: _onPointerDown,
           onPointerMove: _onPointerMove,
           onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onScaleStart: _onScaleStart,
@@ -1685,7 +2174,8 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
               builder: (context, constraints) {
                 _viewportSize = constraints.biggest;
                 _maybeFit();
-                final vt = _current;
+                final vt = watchedVt ??
+                    _fitRect(content, _viewportSize, padding: 40);
                 return ClipRect(
                   child: CustomPaint(
                     size: _viewportSize,
@@ -1698,12 +2188,17 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                       transform: vt,
                       selectedEdgeIds: selection.edgeIds,
                       bandWorldH: _bandWorldH,
-                      worldWidth: _worldWidth,
+                      worldLeft: content.left,
+                      worldRight: content.right,
                       schematicX: schematicX,
                       highlightFloor: _dragBandFloor,
+                      hoverEdgeId: _hoverRiser,
                       marquee: (_marqueeStart != null && _marqueeCurrent != null)
                           ? Rect.fromPoints(_marqueeStart!, _marqueeCurrent!)
                           : null,
+                      marqueeWindow: _marqueeStart == null ||
+                          _marqueeCurrent == null ||
+                          _marqueeCurrent!.dx >= _marqueeStart!.dx,
                     ),
                   ),
                 );
@@ -1794,18 +2289,16 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
                     ),
                   ),
                 ),
-              // Zoom controls (bottom-left).
+              // Zoom controls (bottom-left). V1: they ease like the Layout's.
               Positioned(
                 left: MechXSpacing.md,
                 bottom: MechXSpacing.md,
                 child: ZoomControls(
-                  onIn: () => _emit(_current.zoomedBy(
+                  onIn: () => _animateTo(_current.zoomedBy(
                       1.2, _viewportSize.center(Offset.zero))),
-                  onOut: () => _emit(_current.zoomedBy(
+                  onOut: () => _animateTo(_current.zoomedBy(
                       1 / 1.2, _viewportSize.center(Offset.zero))),
-                  onFit: () => _emit(ViewportTransform.fit(
-                      _contentSize(), _viewportSize,
-                      padding: 40)),
+                  onFit: () => _animateTo(_fitView()),
                 ),
               ),
               // C3: the shared on-demand (?) guide (top-left) — the SAME
@@ -1843,6 +2336,86 @@ class _EditElevationState extends ConsumerState<_EditElevation> {
       ],
     );
   }
+}
+
+/// R4 — the Riser → Edit elevation's world frame: x from
+/// `min(0, leftmost diagram x − margin)` to `max(minWidth, rightmost + margin)`
+/// (every node at its diagram x — the override, else the plan x), y over the
+/// floor bands. A building drawn inside the historical 0..1200 frame keeps it
+/// exactly.
+Rect _elevationContentRect(
+  Network net,
+  SchematicLayoutState layout,
+  int levelCount, {
+  required double bandWorldH,
+  required double minWidth,
+  required double margin,
+}) {
+  var left = 0.0;
+  var right = minWidth;
+  for (final n in net.nodes) {
+    final x = layout.xFor(n);
+    if (!x.isFinite) continue;
+    left = math.min(left, x - margin);
+    right = math.max(right, x + margin);
+  }
+  return Rect.fromLTRB(left, 0, right, bandWorldH * math.max(1, levelCount));
+}
+
+/// [ViewportTransform.fit] for a world [content] rect that need not start at
+/// the origin.
+ViewportTransform _fitRect(Rect content, Size viewport, {double padding = 12}) {
+  final t = ViewportTransform.fit(content.size, viewport, padding: padding);
+  return ViewportTransform(
+      scale: t.scale, offset: t.offset - content.topLeft * t.scale);
+}
+
+/// V5 — the riser edges a marquee [rect] (screen space) captures: legs fully
+/// inside it when [window] (a left-to-right drag), else every leg it touches
+/// (crossing, right-to-left). [worldOf] maps a node to its SCREEN position.
+@visibleForTesting
+Set<String> riserIdsInScreenRect(
+  Network net,
+  Rect rect, {
+  required bool window,
+  required Offset Function(NetNode node) worldOf,
+}) {
+  final hit = <String>{};
+  for (final e in net.edges) {
+    if (e.kind != EdgeKind.riser) continue;
+    final a = net.nodeById(e.fromId);
+    final b = net.nodeById(e.toId);
+    if (a == null || b == null) continue;
+    final pa = worldOf(a);
+    final pb = worldOf(b);
+    // The riser's vertical leg sits at the FROM node's diagram x (the painter's
+    // L-route mid-x equals it whenever both ends share a column).
+    final top = Offset(pa.dx, math.min(pa.dy, pb.dy));
+    final bot = Offset(pa.dx, math.max(pa.dy, pb.dy));
+    final captured = window
+        ? rect.contains(top) && rect.contains(bot)
+        : Rect.fromPoints(top, bot).inflate(3).overlaps(rect);
+    if (captured) hit.add(e.id);
+  }
+  return hit;
+}
+
+/// R2 — the bare `main` junctions a riser delete would leave orphaned (every
+/// edge they touch is being deleted), so a keyboard delete of N risers prunes
+/// their endpoints exactly as the single-riser delete always did.
+@visibleForTesting
+Set<String> orphanedRiserEndpoints(Network net, Set<String> edgeIds) {
+  final out = <String>{};
+  for (final id in edgeIds) {
+    final e = net.edgeById(id);
+    if (e == null) continue;
+    for (final nid in [e.fromId, e.toId]) {
+      final n = net.nodeById(nid);
+      if (n == null || n.role != NodeRole.main) continue;
+      if (net.edgesAt(nid).every((x) => edgeIds.contains(x.id))) out.add(nid);
+    }
+  }
+  return out;
 }
 
 /// Payload dragged from the riser palette.
@@ -2140,7 +2713,9 @@ List<_InferredRiser> _computeInferredRisers(
     if (floors.length < 2) continue;
 
     // A node already risered (drawn) to [otherFloor] for this service.
-    bool drawnRiser(NetNode n, int otherFloor) => network.edges.any((e) {
+    // P1 — through the indexed incidence (`Network.edgesAt`), never a scan of
+    // every edge per node.
+    bool drawnRiser(NetNode n, int otherFloor) => network.edgesAt(n.id).any((e) {
           if (e.service != s || e.kind != EdgeKind.riser) return false;
           if (e.fromId == n.id) {
             return network.nodeById(e.toId)?.floorIndex == otherFloor;
@@ -2368,8 +2943,89 @@ Map<String, Offset>? autoSchematicLayoutPositions(
         ? painter.layoutNodePositions(size)
         : null;
 
+/// Test hook (P1): the Auto painter's memoized inferred risers for [size] —
+/// the SAME list instance until an input changes — or null for another
+/// painter.
+@visibleForTesting
+List<Object>? autoSchematicInferredRisers(CustomPainter? painter, Size size) =>
+    painter is _AutoSchematicPainter ? painter.inferredRisers(size) : null;
+
+/// Test hook (R6): the screen rects of every riser / run tag the Riser → Edit
+/// painter placed in its LAST paint (cleared at the start of each paint).
+@visibleForTesting
+final List<({Rect rect, bool riser})> debugEditTagRects = [];
+
+/// R1 / R5 / P1 — the Auto painter's memo of its own derived geometry. A
+/// painter instance is rebuilt only when one of its INPUTS changes (the widget
+/// memoizes it), so everything derived from those inputs and the laid-out size
+/// — the node layout, the R5 world size, the inferred risers — is computed once
+/// per (inputs, size) instead of per paint / per hover.
+class _AutoLayoutCache {
+  Size? layoutSize;
+  Map<String, Offset>? layout;
+  Size? worldFor;
+  Size? world;
+  Size? inferredSize;
+  List<_InferredRiser>? inferred;
+}
+
+/// R5 — the minimum WORLD-space height of one floor band on the Auto riser.
+/// The diagram is laid out in a world at least this tall per storey (fit to
+/// the window when the building is short — the at-rest render is unchanged —
+/// and taller than the window for a tall building), so zooming in reveals
+/// legible, fully laid-out bands instead of magnifying a crushed fit. Sized to
+/// hold the FFL label + a full fan-out column (24 + 5 rows x 11 px) with air.
+const double kAutoRiserMinBandWorldH = 96;
+
+/// R1 test hook — how many times ANY Auto riser painter has painted. A pan /
+/// zoom frame must not move it (the diagram sits under a RepaintBoundary and
+/// only its Transform changes).
+@visibleForTesting
+int debugAutoRiserPaintCount = 0;
+
+/// Riser Auto canvas LABEL level of detail. The diagram is painted once in
+/// world space and the live pan / zoom is a compositing [Transform.scale]
+/// (R1), so without a guard every label simply scales with the view: a
+/// zoomed-out building turned its 8–13 px labels into sub-pixel mush, and a
+/// deep zoom blew them up to poster size. These two constants + the two pure
+/// helpers below are the ONE label LOD for the canvas:
+///  * a label whose ON-SCREEN size would fall below
+///    [kRiserLabelMinScreenPx] is not drawn at all — a sub-legible smear, not
+///    merely small text: the threshold sits BELOW the fit scale of a tall
+///    building's 8 px labels (review: at 6 px a 12-storey fit at 0.56x dropped
+///    every 8/9 px label and left the pump-set box an empty frame; small-but-
+///    present at fit is the pre-LOD behaviour and stays);
+///  * above [kRiserLabelMaxZoom] the label is counter-scaled, so its on-screen
+///    size stops growing at ~[kRiserLabelMaxZoom]x its design size (the
+///    geometry keeps zooming; the text stays a readable annotation).
+const double kRiserLabelMinScreenPx = 3.5;
+const double kRiserLabelMaxZoom = 2;
+
+/// Quantises a live view [scale] into the LOD bucket the painter is keyed on,
+/// so a zoom gesture repaints the (heavy, memoised) diagram only when the
+/// bucket changes — never per frame (R1). Between 1x and [kRiserLabelMaxZoom]
+/// labels draw at their design size, so the whole band is ONE bucket (1.0 —
+/// the resting / fit view is byte-identical); below 1x it steps in 1/16ths;
+/// above the cap in quarter-octaves.
+double riserLabelZoomBucket(double scale) {
+  if (!scale.isFinite || scale <= 0) return 1.0;
+  if (scale < 1.0) return math.max(1 / 16, (scale * 16).floorToDouble() / 16);
+  if (scale <= kRiserLabelMaxZoom) return 1.0;
+  final quarterOctaves =
+      ((math.log(scale / kRiserLabelMaxZoom) / math.ln2) * 4).floorToDouble();
+  return kRiserLabelMaxZoom * math.pow(2, quarterOctaves / 4).toDouble();
+}
+
+/// The font size to paint a [base]-size label at for LOD bucket [zoom], or
+/// null when it would be illegibly small on screen (skip it).
+double? riserLabelFontSize(double base, double zoom) {
+  if (base * zoom < kRiserLabelMinScreenPx) return null;
+  if (zoom > kRiserLabelMaxZoom) return base * kRiserLabelMaxZoom / zoom;
+  return base;
+}
+
 class _AutoSchematicPainter extends CustomPainter {
-  const _AutoSchematicPainter({
+  _AutoSchematicPainter({
     required this.network,
     required this.sizing,
     required this.building,
@@ -2383,12 +3039,18 @@ class _AutoSchematicPainter extends CustomPainter {
     this.showDetails = true,
     this.hotWaterRecirc = false,
     this.rightOverlayWidth = 0,
+    this.labelZoom = 1.0,
   });
+
+  /// The label LOD bucket ([riserLabelZoomBucket] of the live view scale).
+  final double labelZoom;
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
   final BuildingLevels building;
   final MechXColors colors;
+
+  final _AutoLayoutCache _cache = _AutoLayoutCache();
 
   /// Round 26 (riser-drafting-3-2) — the width (px) of the screen-fixed
   /// bottom-right overlays (the system-NOTES card / title block) the band
@@ -2498,22 +3160,59 @@ class _AutoSchematicPainter extends CustomPainter {
   }
 
   /// The laid-out position of every visible node (the ONE layout the painter
-  /// and the widget's inferred-riser hit test share).
+  /// and the widget's inferred-riser hit test share). Memoized per [size].
   Map<String, Offset> layoutNodePositions(Size size) {
+    final c = _cache;
+    if (c.layout != null && c.layoutSize == size) return c.layout!;
     final left = _leftGutter(size);
-    return _autoNodePositions(network, building.levelCount, size,
+    c.layoutSize = size;
+    return c.layout = _autoNodePositions(network, building.levelCount, size,
         focus: focus,
         left: left,
         right: _rightReserve(size, left),
         bandsHeight: _bandsHeight(size));
   }
 
+  /// R5 — the WORLD size the diagram lays out in for a [viewport]: the
+  /// viewport itself whenever every floor band is at least
+  /// [kAutoRiserMinBandWorldH] tall (so a short building renders exactly as
+  /// before), else the viewport grown just enough in height that it is. The
+  /// band height depends on the reserved bottom callout strip, which depends
+  /// on the size, so the growth is settled in a couple of passes. Memoized.
+  Size worldSizeFor(Size viewport) {
+    final c = _cache;
+    if (c.world != null && c.worldFor == viewport) return c.world!;
+    var world = viewport;
+    if (!viewport.isEmpty) {
+      final n = building.levelCount.clamp(1, 999999);
+      for (var pass = 0; pass < 4; pass++) {
+        final bandH = _bandsHeight(world) / n;
+        if (bandH >= kAutoRiserMinBandWorldH - 0.01) break;
+        world = Size(
+            world.width, world.height + (kAutoRiserMinBandWorldH - bandH) * n);
+      }
+    }
+    c.worldFor = viewport;
+    return c.world = world;
+  }
+
+  /// P1 — the inferred risers for the layout at [size], memoized (the hover
+  /// hit test asked for them on every mouse move).
+  List<_InferredRiser> inferredRisers(Size size) {
+    final c = _cache;
+    if (c.inferred != null && c.inferredSize == size) return c.inferred!;
+    c.inferredSize = size;
+    return c.inferred =
+        _computeInferredRisers(network, layoutNodePositions(size), focus);
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
+    debugAutoRiserPaintCount++;
     final nodePos = layoutNodePositions(size);
     _paintBands(canvas, size);
-    if (inferRisers) _paintInferredRisers(canvas, nodePos);
+    if (inferRisers) _paintInferredRisers(canvas, size);
     // F6/R2: seed the label-collision list BEFORE any tag places, in the order
     // the diagram's fixed furniture wins: the per-floor FFL gutter labels, the
     // per-floor fan-out stub labels, and (R3) the detail-callout boxes, whose
@@ -2764,8 +3463,8 @@ class _AutoSchematicPainter extends CustomPainter {
   /// Dashed connectors between floors that share a service but have NO drawn
   /// riser of that service between them — a "you haven't routed this vertical
   /// yet" overlay, drawn dashed + faded so it's clearly inferred, not designed.
-  void _paintInferredRisers(Canvas canvas, Map<String, Offset> nodePos) {
-    for (final r in _computeInferredRisers(network, nodePos, focus)) {
+  void _paintInferredRisers(Canvas canvas, Size size) {
+    for (final r in inferredRisers(size)) {
       _dashedRiser(canvas, r.from, r.to, serviceColor(r.service));
     }
   }
@@ -3132,12 +3831,14 @@ class _AutoSchematicPainter extends CustomPainter {
   /// records its rect.
   void _drawBoxedTag(Canvas canvas, String text, Offset anchor, Color color,
       List<Rect> occupied) {
+    final fontSize = riserLabelFontSize(9, labelZoom);
+    if (fontSize == null) return; // illegible at this zoom (LOD)
     final tp = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
           fontFamily: 'Roboto',
-          fontSize: 9,
+          fontSize: fontSize,
           color: color,
           fontWeight: FontWeight.w600,
         ),
@@ -3189,8 +3890,10 @@ class _AutoSchematicPainter extends CustomPainter {
   /// when filtered, else the service of any edge touching the node, else neutral.
   Color _nodeColor(NetNode node) {
     if (focus != null) return serviceColor(focus!);
-    for (final e in network.edges) {
-      if (e.fromId == node.id || e.toId == node.id) return serviceColor(e.service);
+    // The first incident edge in edge-list order (the indexed incidence —
+    // identical to the old full scan, without the O(nodes x edges) cost).
+    for (final e in network.edgesAt(node.id)) {
+      return serviceColor(e.service);
     }
     return colors.textSecondary;
   }
@@ -3470,13 +4173,57 @@ class _AutoSchematicPainter extends CustomPainter {
         _hasWaterComponent(NodeComponent.boosterSet);
     if (!hasRoof && !hasGround && !hasPump) return null;
     const boxW = 250.0;
-    // Round 26 (riser-drafting-3-7) — the GROUND TANK row the issued callout
-    // prints grows the box (it used to be dropped from the preview).
-    final boxH = hasGround && hasPump ? 190.0 : 150.0;
+    // The box is exactly as tall as the rows it draws (Round 26 grew it for
+    // the GROUND TANK row; a fixed 150 / 190 px left a roof-tank-only detail
+    // two-thirds empty).
+    final boxH = _plantDetailHeight(
+        hasRoof: hasRoof, hasGround: hasGround, hasPump: hasPump);
     const pad = MechXSpacing.md;
     // Guard a too-narrow / too-short viewport.
     if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return null;
     return Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
+  }
+
+  /// The mover captions the detail prints (ONE source for the height and the
+  /// paint) — only the movers this (focused) sheet draws.
+  List<String> _plantMoverCaptions() {
+    final shown = _focusedNodeIds(network, focus);
+    return plantMoverCaptions(network,
+        detailByNodeId: detailByNode,
+        transferPumpNodeIds: transferPumpNodeIds,
+        include: (n) => shown == null || shown.contains(n.id));
+  }
+
+  /// The PUMP-SET DETAIL box height from the rows it holds — mirrors the row
+  /// arithmetic of [_paintPlantDetail] (title band 24, roof row 22 + 26 gap,
+  /// train glyph 22 with its abbrev line, 12 px per mover caption, the leg
+  /// label, the ground-tank row) plus a bottom pad.
+  double _plantDetailHeight(
+      {required bool hasRoof, required bool hasGround, required bool hasPump}) {
+    const glyph = 22.0, gl = 16.0, textH = 11.0, padBottom = MechXSpacing.sm;
+    var y = 24.0;
+    double bottom;
+    if (hasRoof) {
+      // The GRAVITASI label hangs just below the roof glyph.
+      bottom = y + glyph + (downfeed ? 1 + textH : 0);
+      y += glyph + 26;
+    } else {
+      bottom = y;
+    }
+    if (hasPump) {
+      final trainCy = y + glyph / 2;
+      final n = _plantMoverCaptions().length;
+      // The valve abbreviations under the train.
+      bottom = trainCy + gl / 2 + 2 + textH;
+      if (n > 0) bottom = trainCy + gl / 2 + 16 + 12 * (n - 1) + textH;
+      final hasLeg = (hasGround && hasRoof) || !downfeed;
+      final legY = trainCy + gl / 2 + 30 + math.max(0, 12 * (n - 1));
+      if (hasLeg) bottom = legY + textH;
+      if (hasGround) bottom = legY + 12 + glyph;
+    } else if (hasGround) {
+      bottom = y + glyph;
+    }
+    return bottom + padBottom;
   }
 
   void _paintPlantDetail(Canvas canvas, Size size) {
@@ -3599,11 +4346,7 @@ class _AutoSchematicPainter extends CustomPainter {
       // TRANSFER PUMP with its own kW, never a bare BOOSTER PUMP.
       // Round 32 r2 — only the movers this (focused) sheet draws, as the
       // export does.
-      final shown = _focusedNodeIds(network, focus);
-      final caps = plantMoverCaptions(network,
-          detailByNodeId: detailByNode,
-          transferPumpNodeIds: transferPumpNodeIds,
-          include: (n) => shown == null || shown.contains(n.id));
+      final caps = _plantMoverCaptions();
       var capDy = 0.0;
       for (final cap in caps) {
         _drawText(
@@ -4048,12 +4791,15 @@ class _AutoSchematicPainter extends CustomPainter {
     double? maxWidth,
     bool centered = false,
   }) {
+    // The ONE label LOD (see [riserLabelFontSize]).
+    final lodSize = riserLabelFontSize(fontSize, labelZoom);
+    if (lodSize == null) return;
     final tp = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
           fontFamily: 'Roboto',
-          fontSize: fontSize,
+          fontSize: lodSize,
           color: color,
           fontWeight: fontWeight,
         ),
@@ -4080,12 +4826,19 @@ class _AutoSchematicPainter extends CustomPainter {
       old.transferPumpNodeIds != transferPumpNodeIds ||
       old.showDetails != showDetails ||
       old.hotWaterRecirc != hotWaterRecirc ||
-      old.rightOverlayWidth != rightOverlayWidth;
+      old.rightOverlayWidth != rightOverlayWidth ||
+      old.labelZoom != labelZoom;
 }
 
 // ---------------------------------------------------------------------------
 // Edit-mode painter — world-space layout under a ViewportTransform
 // ---------------------------------------------------------------------------
+
+/// R6 — below this view scale the passive RUN size labels on the Riser → Edit
+/// elevation are hidden (level of detail): they are dimmed context for the
+/// risers, and at a zoomed-out scale they only crowd the riser labels. Riser
+/// labels (the interactive elements) always print.
+const double kEditRunLabelMinScale = 0.5;
 
 class _EditSchematicPainter extends CustomPainter {
   const _EditSchematicPainter({
@@ -4096,10 +4849,13 @@ class _EditSchematicPainter extends CustomPainter {
     required this.transform,
     required this.selectedEdgeIds,
     required this.bandWorldH,
-    required this.worldWidth,
+    required this.worldLeft,
+    required this.worldRight,
     required this.schematicX,
     this.highlightFloor,
+    this.hoverEdgeId,
     this.marquee,
+    this.marqueeWindow = true,
     this.mounting = const MountingHeights(),
   });
 
@@ -4122,14 +4878,25 @@ class _EditSchematicPainter extends CustomPainter {
   /// of one.
   final Set<String> selectedEdgeIds;
   final double bandWorldH;
-  final double worldWidth;
+
+  /// R4 — the world x-extent the floor lines span (the content frame: at least
+  /// 0..1200, grown to hold every node).
+  final double worldLeft;
+  final double worldRight;
 
   /// B3: the floor band to highlight as the live drop target (the riser base
   /// lands here). Null when no palette card is being dragged over the canvas.
   final int? highlightFloor;
 
+  /// V4: the riser under the cursor — a faint hover halo (gesture-time only).
+  final String? hoverEdgeId;
+
   /// D5: the in-flight marquee rectangle (screen space), or null.
   final Rect? marquee;
+
+  /// V5: the marquee's mode — a WINDOW (left-to-right, solid border) or a
+  /// CROSSING (right-to-left, dashed border), the Layout's B26 language.
+  final bool marqueeWindow;
 
   double _bandCentreWorldY(int floorIndex) {
     final inverted = (building.levelCount - 1) - floorIndex;
@@ -4142,30 +4909,47 @@ class _EditSchematicPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (size.isEmpty) return;
-    _paintBands(canvas, size);
-    _paintEdges(canvas);
-    _paintNodes(canvas);
-    // D5: the rubber-band marquee, same translucent-accent language as the
-    // Layout / electrical canvases.
+    debugEditTagRects.clear();
+    // R6: every label goes through ONE collision list — the floor gutter
+    // labels first (the orientation datum wins), then each node's glyph and
+    // label, then the riser / run tags as the edge pass places them.
+    final occupied = _paintBands(canvas, size);
+    final nodeLabels = _placeNodeLabels(occupied);
+    _paintEdges(canvas, occupied);
+    _paintNodes(canvas, nodeLabels);
+    // D5 / V5: the rubber-band marquee, the Layout canvas's language — a
+    // translucent accent fill with a solid (window) or dashed (crossing) edge.
     final m = marquee;
     if (m != null) {
-      canvas.drawRect(m, Paint()..color = colors.accent.withAlpha(28));
-      canvas.drawRect(
-        m,
-        Paint()
-          ..color = colors.accent
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1,
-      );
+      canvas.drawRect(m, Paint()..color = colors.accent.withAlpha(38));
+      final border = Paint()
+        ..color = colors.accent
+        ..strokeWidth = 1
+        ..style = PaintingStyle.stroke;
+      if (marqueeWindow) {
+        canvas.drawRect(m, border);
+      } else {
+        for (final (a, b) in [
+          (m.topLeft, m.topRight),
+          (m.topRight, m.bottomRight),
+          (m.bottomRight, m.bottomLeft),
+          (m.bottomLeft, m.topLeft),
+        ]) {
+          _dashedLine(canvas, a, b, border, dash: 5, gap: 3);
+        }
+      }
     }
   }
 
-  void _paintBands(Canvas canvas, Size size) {
+  /// Paints the floor lines + gutter labels; returns the labels' rects (the
+  /// collision seed).
+  List<Rect> _paintBands(Canvas canvas, Size size) {
     final n = building.levelCount;
     final gridPaint = Paint()
       ..color = colors.border.withAlpha(150)
       ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
+    final rects = <Rect>[];
 
     // Draw a horizontal floor line at each band's BOTTOM (the floor surface) and
     // a label, all in world coords mapped through the transform.
@@ -4177,14 +4961,14 @@ class _EditSchematicPainter extends CustomPainter {
       // (the drop preview) — obvious BEFORE releasing, and on the top-band case
       // it lights the real (redirected-down) base band rather than misleading.
       if (i == highlightFloor) {
-        final tl = transform.worldToScreen(Offset(0, bandTopWorldY));
-        final br = transform.worldToScreen(Offset(worldWidth, bandBotWorldY));
+        final tl = transform.worldToScreen(Offset(worldLeft, bandTopWorldY));
+        final br = transform.worldToScreen(Offset(worldRight, bandBotWorldY));
         canvas.drawRect(Rect.fromPoints(tl, br),
             Paint()..color = colors.accent.withAlpha(30));
       }
       // Floor surface line at the bottom of the band.
-      final leftS = transform.worldToScreen(Offset(0, bandBotWorldY));
-      final rightS = transform.worldToScreen(Offset(worldWidth, bandBotWorldY));
+      final leftS = transform.worldToScreen(Offset(worldLeft, bandBotWorldY));
+      final rightS = transform.worldToScreen(Offset(worldRight, bandBotWorldY));
       canvas.drawLine(leftS, rightS, gridPaint);
 
       final floor = building.floors[i];
@@ -4192,7 +4976,7 @@ class _EditSchematicPainter extends CustomPainter {
       // E6: shared FFL formatter — same term + precision as the exported gutter.
       final label = '${floor.name}  ${fflLabel(elevM)}';
       final labelAt = transform.worldToScreen(
-          Offset(8, bandBotWorldY - bandWorldH + 8 / transform.scale));
+          Offset(worldLeft + 8, bandBotWorldY - bandWorldH + 8 / transform.scale));
       // R2: ONE floor-gutter idiom across Auto + Edit — the label scale
       // (13 px / w500) in textSecondary, so the primary orientation datum is
       // legible on the dark canvas instead of a dim 12 px textMuted grey.
@@ -4205,14 +4989,123 @@ class _EditSchematicPainter extends CustomPainter {
         fontWeight: FontWeight.w500,
         maxWidth: size.width / 2,
       );
+      rects.add(estimateLabelRect(label, labelAt, 13));
     }
     // Top line (roof).
-    final topLeft = transform.worldToScreen(const Offset(0, 0));
-    final topRight = transform.worldToScreen(Offset(worldWidth, 0));
+    final topLeft = transform.worldToScreen(Offset(worldLeft, 0));
+    final topRight = transform.worldToScreen(Offset(worldRight, 0));
     canvas.drawLine(topLeft, topRight, gridPaint);
+    return rects;
   }
 
-  void _paintEdges(Canvas canvas) {
+  /// R6 — each labelled node's resolved (centred) label origin, placed through
+  /// the Auto painter's node-label ladder (below the glyph, further below,
+  /// above, then aside) in a deterministic order. Seeds [occupied] with every
+  /// glyph halo and placed label so the riser tags then dodge them.
+  Map<String, Offset> _placeNodeLabels(List<Rect> occupied) {
+    final pos = <String, Offset>{
+      for (final n in network.nodes) n.id: transform.worldToScreen(_worldOf(n)),
+    };
+    for (final n in network.nodes) {
+      final p = pos[n.id]!;
+      if (n.component != null) {
+        occupied.add(Rect.fromCircle(center: p, radius: 20.0 * 0.62));
+      } else if (n.role == NodeRole.fixture) {
+        occupied.add(Rect.fromCircle(center: p, radius: 6.0 + 2.5));
+      }
+    }
+    final ids = pos.keys.toList()
+      ..sort((a, b) {
+        final pa = pos[a]!, pb = pos[b]!;
+        final c = pa.dy.compareTo(pb.dy);
+        if (c != 0) return c;
+        final d = pa.dx.compareTo(pb.dx);
+        return d != 0 ? d : a.compareTo(b);
+      });
+    const candidates = <Offset>[
+      Offset(0, 0),
+      Offset(0, 11),
+      Offset(0, 22),
+      Offset(0, -38),
+      Offset(0, -49),
+      Offset(48, 0),
+      Offset(-48, 0),
+      Offset(48, 11),
+      Offset(-48, 11),
+    ];
+    final out = <String, Offset>{};
+    for (final id in ids) {
+      final node = network.nodeById(id);
+      if (node == null) continue;
+      final text = _nodeLabel(node);
+      if (text == null) continue;
+      final p = pos[id]!;
+      final anchor = Offset(p.dx, p.dy + 13);
+      final rect = estimateLabelRect(text, anchor, 9, centered: true);
+      final delta = resolveLabelDisplacement(rect, occupied, candidates);
+      occupied.add(rect.shift(delta));
+      out[id] = anchor + delta;
+    }
+    return out;
+  }
+
+  /// R6 — draw [text] at [origin] (its top-left, or its centre when
+  /// [centered]) displaced to the first collision-free slot of the run label
+  /// ladder along [runDirection] (never dropped: the least-overlapping slot
+  /// wins when none is clear). A label pushed off its anchor gets a hairline
+  /// leader back to [anchor] so it still reads as that run's tag.
+  void _placeAndDrawTag(
+    Canvas canvas,
+    List<Rect> occupied,
+    String text,
+    Offset origin, {
+    required Offset anchor,
+    required Offset runDirection,
+    required double fontSize,
+    required Color color,
+    required FontWeight fontWeight,
+    required bool riser,
+    bool centered = false,
+  }) {
+    final rect = estimateLabelRect(text, origin, fontSize, centered: centered);
+    final delta = resolveLabelDisplacement(
+      rect,
+      occupied,
+      runLabelNudgeCandidates(
+        runDirection: runDirection,
+        perpendicularOffset:
+            signedPerpendicularOffset(runDirection, rect.center - anchor),
+      ),
+    );
+    final placed = rect.shift(delta);
+    occupied.add(placed);
+    debugEditTagRects.add((rect: placed, riser: riser));
+    if (delta.distance > 16) {
+      final near = Offset(
+        anchor.dx.clamp(placed.left, placed.right),
+        anchor.dy.clamp(placed.top, placed.bottom),
+      );
+      canvas.drawLine(
+        anchor,
+        near,
+        Paint()
+          ..color = color.withAlpha(120)
+          ..strokeWidth = 0.75,
+      );
+    }
+    _drawText(
+      canvas,
+      text,
+      origin + delta,
+      fontSize: fontSize,
+      color: color,
+      fontWeight: fontWeight,
+      centered: centered,
+    );
+  }
+
+  void _paintEdges(Canvas canvas, List<Rect> occupied) {
+    final showRunLabels = transform.scale >= kEditRunLabelMinScale;
     for (final edge in network.edges) {
       final a = network.nodeById(edge.fromId);
       final b = network.nodeById(edge.toId);
@@ -4235,11 +5128,13 @@ class _EditSchematicPainter extends CustomPainter {
         ..lineTo(midX, toS.dy)
         ..lineTo(toS.dx, toS.dy);
 
-      if (selected) {
+      final hovered = !selected && edge.id == hoverEdgeId;
+      if (selected || hovered) {
         // Selection halo behind the line — a soft, blurred glow so the
         // selection 'floats' (Apple-soft) rather than reading as a hard band.
+        // V4: a hovered riser gets a fainter version of the same glow.
         final halo = Paint()
-          ..color = colors.accent.withAlpha(64)
+          ..color = colors.accent.withAlpha(selected ? 64 : 34)
           ..strokeWidth = 7
           ..style = PaintingStyle.stroke
           ..strokeCap = StrokeCap.round
@@ -4274,13 +5169,17 @@ class _EditSchematicPainter extends CustomPainter {
         final s = sizing[edge.id];
         final lenStr = '${lengthM.toStringAsFixed(1)} m';
         final label = s != null ? '${_sizeLabel(s)} · $lenStr' : lenStr;
-        _drawText(
+        _placeAndDrawTag(
           canvas,
+          occupied,
           label,
           mid + const Offset(8, -16),
+          anchor: mid,
+          runDirection: const Offset(0, 1),
           fontSize: 11,
           color: color,
           fontWeight: FontWeight.w600,
+          riser: true,
         );
       } else {
         // D3: a plain run/main is INERT in Edit mode (only risers select / size
@@ -4295,15 +5194,19 @@ class _EditSchematicPainter extends CustomPainter {
           ..strokeCap = StrokeCap.round;
         _dashedLine(canvas, fromS, toS, ghost);
         final s = sizing[edge.id];
-        if (s != null) {
+        if (s != null && showRunLabels) {
           final mid = Offset((fromS.dx + toS.dx) / 2, (fromS.dy + toS.dy) / 2);
-          _drawText(
+          _placeAndDrawTag(
             canvas,
+            occupied,
             _sizeLabel(s),
             mid + const Offset(0, -14),
+            anchor: mid,
+            runDirection: toS - fromS,
             fontSize: 10,
             color: color.withAlpha(120),
             fontWeight: FontWeight.w500,
+            riser: false,
             centered: true,
           );
         }
@@ -4328,14 +5231,13 @@ class _EditSchematicPainter extends CustomPainter {
     }
   }
 
-  /// A representative colour for [node]: the service of any edge touching it
-  /// (Edit shows every service — no focus), else neutral. Mirrors the Auto
-  /// painter's combined-view `_nodeColor`.
+  /// A representative colour for [node]: the service of the first edge
+  /// touching it in edge-list order (Edit shows every service — no focus), else
+  /// neutral. Mirrors the Auto painter's combined-view `_nodeColor`; served by
+  /// the indexed incidence, never a scan of every edge per node.
   Color _nodeColor(NetNode node) {
-    for (final e in network.edges) {
-      if (e.fromId == node.id || e.toId == node.id) {
-        return serviceColor(e.service);
-      }
+    for (final e in network.edgesAt(node.id)) {
+      return serviceColor(e.service);
     }
     return colors.textSecondary;
   }
@@ -4364,7 +5266,8 @@ class _EditSchematicPainter extends CustomPainter {
   /// Nodes carry their schematic symbol (equipment glyph / fixture drop-triangle
   /// / plain junction) + a label — reusing the Auto painter's treatment (B6), so
   /// the Edit surface reads like an engineered riser rather than anonymous dots.
-  void _paintNodes(Canvas canvas) {
+  /// [labelAt] holds each label's R6-resolved origin.
+  void _paintNodes(Canvas canvas, Map<String, Offset> labelAt) {
     const box = 20.0;
     for (final node in network.nodes) {
       final pos = transform.worldToScreen(_worldOf(node));
@@ -4399,7 +5302,7 @@ class _EditSchematicPainter extends CustomPainter {
         _drawText(
           canvas,
           label,
-          Offset(pos.dx, pos.dy + 13),
+          labelAt[node.id] ?? Offset(pos.dx, pos.dy + 13),
           fontSize: 9,
           color: colors.textMuted,
           fontWeight: FontWeight.w500,
@@ -4451,17 +5354,23 @@ class _EditSchematicPainter extends CustomPainter {
       old.mounting != mounting ||
       old.colors != colors ||
       old.transform != transform ||
+      // The diagram-only riser positions: a drag frame changes only these.
+      !mapEquals(old.schematicX, schematicX) ||
+      old.worldLeft != worldLeft ||
+      old.worldRight != worldRight ||
       old.selectedEdgeIds.length != selectedEdgeIds.length ||
       !old.selectedEdgeIds.containsAll(selectedEdgeIds) ||
       old.highlightFloor != highlightFloor ||
-      old.marquee != marquee;
+      old.hoverEdgeId != hoverEdgeId ||
+      old.marquee != marquee ||
+      old.marqueeWindow != marqueeWindow;
 }
 
 // ---------------------------------------------------------------------------
 // Canvas chrome (banner, zoom controls, help)
 // ---------------------------------------------------------------------------
 
-/// The KETERANGAN / legend overlay for the Auto single-line: a floating-glass
+/// The KETERANGAN / legend overlay for the Auto single-line: a flat drafting
 /// card listing the services actually drawn (colour swatch + code + full name).
 /// It is a pure render of [network] + [focus] — no clock, no engine call, no
 /// derived value (every swatch/code/name is a fixed lookup for an enum that is
@@ -4503,10 +5412,11 @@ class _AutoLegend extends StatelessWidget {
               if (network.edges.any((e) => e.service == s)) s,
           ];
     if (present.isEmpty) return const SizedBox.shrink();
-    return GlassSurface(
-      borderRadius: MechXRadii.card,
-      shadow: MechXShadow.popover,
-      edge: Border.all(color: colors.glassEdge),
+    // V3 (golden rule 8): the legend is drawing CONTENT that rides the export,
+    // not navigation chrome — the flat, opaque, hairline `_detailBox` treatment
+    // the NOTES card already wears (D8), never Liquid Glass.
+    return DecoratedBox(
+      decoration: _drawingAnnotationDecoration(colors),
       child: Padding(
         padding: const EdgeInsets.all(MechXSpacing.sm),
         child: Column(
@@ -4592,8 +5502,19 @@ class _AutoLegend extends StatelessWidget {
   }
 }
 
+/// D8 / V3 — the ONE decoration of every drafting annotation card on the Auto
+/// riser (legend, title block, system notes): the flat, opaque, hairline box
+/// the painter's `_detailBox` callouts use (radius 4, `colors.canvas` fill, a
+/// 1 px `colors.border` stroke, no blur / shadow). They are diagram CONTENT, so
+/// golden rule 8 keeps Liquid Glass off them.
+BoxDecoration _drawingAnnotationDecoration(MechXColors colors) => BoxDecoration(
+      color: colors.canvas,
+      borderRadius: const BorderRadius.all(Radius.circular(4)),
+      border: Border.all(color: colors.border),
+    );
+
 /// The bottom-right TITLE BLOCK overlay for the Auto single-line — a compact
-/// floating-glass card echoing a real drawing's kop gambar: the project NAME, an
+/// drafting-annotation card echoing a real drawing's kop gambar: the project NAME, an
 /// adaptive DRAWING TITLE (per the active system [focus] via [drawingTitleKey]),
 /// the DATE, and a sheet/system line.
 ///
@@ -4626,12 +5547,12 @@ class _TitleBlock extends ConsumerWidget {
     final sheetLine = '${context.strings(StringKey.schematicTitleSheet)} · '
         '${focus == null ? context.strings(StringKey.schematicSystemAll) : serviceLabel(focus!)}';
 
+    // V3 (golden rule 8): the title block is drawing CONTENT (it rides the
+    // export) — flat, opaque, hairline like the NOTES card, never Liquid Glass.
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 240),
-      child: GlassSurface(
-        borderRadius: MechXRadii.card,
-        shadow: MechXShadow.popover,
-        edge: Border.all(color: colors.glassEdge),
+      child: DecoratedBox(
+        decoration: _drawingAnnotationDecoration(colors),
         child: Padding(
           padding: const EdgeInsets.all(MechXSpacing.sm),
           child: Column(
@@ -4781,11 +5702,7 @@ class _SystemNotes extends ConsumerWidget {
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 240),
       child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: colors.canvas,
-          borderRadius: const BorderRadius.all(Radius.circular(4)),
-          border: Border.all(color: colors.border),
-        ),
+        decoration: _drawingAnnotationDecoration(colors),
         child: Padding(
           padding: const EdgeInsets.all(MechXSpacing.sm),
           child: Column(
@@ -4857,12 +5774,14 @@ class RiserSystemSummary extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final network = ref.watch(networkControllerProvider).network;
+    final network =
+        ref.watch(networkControllerProvider.select((s) => s.network));
     final building = ref.watch(projectControllerProvider).building;
     final mounting = ref.watch(mountingProvider);
-    final vs = ref.watch(schematicViewProvider);
     // The Auto diagram is focus-filtered; Edit always draws the whole network.
-    final focus = vs.mode == SchematicMode.auto ? vs.autoFocus : null;
+    // R1: only the focus is watched — never the whole view state.
+    final focus = ref.watch(schematicViewProvider
+        .select((v) => v.mode == SchematicMode.auto ? v.autoFocus : null));
 
     final edges = [
       for (final e in network.edges)
@@ -4882,8 +5801,11 @@ class RiserSystemSummary extends ConsumerWidget {
     // One tag per vertical riser stack. `riserTags` builds its map in a
     // deterministic service-then-x order, so the de-duped values keep that
     // reading order (CW-R1 · CW-R2 · HW-R1 …).
-    final tags =
-        riserTags(network, focus).values.toSet().toList(growable: false);
+    final tags = ref
+        .watch(riserTagsProvider(focus))
+        .values
+        .toSet()
+        .toList(growable: false);
 
     // Total riser length = Σ |elevation delta| over the focused riser edges —
     // the same derivation the Edit painter labels each riser with (§10).

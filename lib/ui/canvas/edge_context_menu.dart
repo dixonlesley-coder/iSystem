@@ -10,6 +10,7 @@ import 'package:mechx_engine/standards/pipe_products.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/ai_copilot_store.dart';
+import '../../store/base_point_command_store.dart' show BasePointCommandKind;
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -19,6 +20,7 @@ import '../../store/sizing_store.dart';
 import '../strings/app_strings.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
+import 'base_point_overlay.dart' show startBasePointCommand;
 import 'offset_dialog.dart';
 
 /// Render a nominal size in inches as plain ASCII (no Unicode fractions, which
@@ -207,6 +209,9 @@ void showEdgeContextMenu(
   // caller with no world coordinate handy — e.g. the riser schematic canvas —
   // is unaffected; the row simply doesn't apply there).
   Offset? world,
+  // Host-specific rows (e.g. the Riser elevation's 'Reset position'), listed
+  // first, above the size ladder. Empty (the default) ⇒ the menu is unchanged.
+  List<EdgeMenuAction> extraActions = const [],
 }) {
   final overlay = Overlay.of(context, rootOverlay: true);
   final theme = MechXTheme.of(context);
@@ -218,11 +223,21 @@ void showEdgeContextMenu(
         anchor: globalPosition,
         edgeId: edgeId,
         world: world,
+        extraActions: extraActions,
         onDismiss: () => entry.remove(),
       ),
     ),
   );
   overlay.insert(entry);
+}
+
+/// A host-supplied row for [showEdgeContextMenu] — a label and the action it
+/// runs (the menu closes after it).
+@immutable
+class EdgeMenuAction {
+  final String label;
+  final VoidCallback onTap;
+  const EdgeMenuAction(this.label, this.onTap);
 }
 
 /// Show the right-click menu for ANY node: the Fitting picker (Auto /
@@ -333,6 +348,28 @@ List<Widget> transformMenuRows(WidgetRef ref, VoidCallback close) {
   ];
 }
 
+/// M8 — the base-point command rows (AutoCAD MOVE / COPY / ROTATE with a
+/// picked base point), on the node AND run menus for a single element or a
+/// group. Each arms the command over the LIVE selection through the same
+/// [startBasePointCommand] the G / C / T keys use, then closes the menu (the
+/// next canvas click picks the base point). A trailing divider separates them
+/// from the element rows below.
+List<Widget> basePointMenuRows(WidgetRef ref, VoidCallback close) {
+  MechXMenuRow row(String label, BasePointCommandKind kind) => MechXMenuRow(
+        label: label,
+        onTap: () {
+          close();
+          startBasePointCommand(ref, kind);
+        },
+      );
+  return [
+    row('Move from base point   G', BasePointCommandKind.move),
+    row('Copy from base point   C', BasePointCommandKind.copy),
+    row('Rotate from base point   T', BasePointCommandKind.rotate),
+    const MechXMenuDivider(),
+  ];
+}
+
 class _NodeMenuLayer extends ConsumerWidget {
   final Offset anchor;
   final String nodeId;
@@ -381,6 +418,7 @@ class _NodeMenuLayer extends ConsumerWidget {
 
     final children = <Widget>[
       if (isMulti) ...transformMenuRows(ref, onDismiss),
+      ...basePointMenuRows(ref, onDismiss),
       if (!isMulti && isBareJunction) ...[
         const MechXMenuHeader('Fitting'),
         for (final f in JunctionFitting.values)
@@ -594,6 +632,7 @@ class _EdgeMenuLayer extends ConsumerWidget {
   final Offset anchor;
   final String edgeId;
   final Offset? world;
+  final List<EdgeMenuAction> extraActions;
   final VoidCallback onDismiss;
 
   const _EdgeMenuLayer({
@@ -601,6 +640,7 @@ class _EdgeMenuLayer extends ConsumerWidget {
     required this.edgeId,
     required this.onDismiss,
     this.world,
+    this.extraActions = const [],
   });
 
   @override
@@ -643,7 +683,11 @@ class _EdgeMenuLayer extends ConsumerWidget {
           width: menuWidth,
           child: ConstrainedBox(
             constraints: BoxConstraints(maxHeight: maxHeight),
-            child: _EdgeMenuPanel(edge: edge, onDismiss: onDismiss, world: world),
+            child: _EdgeMenuPanel(
+                edge: edge,
+                onDismiss: onDismiss,
+                world: world,
+                extraActions: extraActions),
           ),
         ),
       ],
@@ -655,8 +699,13 @@ class _EdgeMenuPanel extends ConsumerWidget {
   final NetEdge edge;
   final VoidCallback onDismiss;
   final Offset? world;
+  final List<EdgeMenuAction> extraActions;
 
-  const _EdgeMenuPanel({required this.edge, required this.onDismiss, this.world});
+  const _EdgeMenuPanel(
+      {required this.edge,
+      required this.onDismiss,
+      this.world,
+      this.extraActions = const []});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -723,6 +772,19 @@ class _EdgeMenuPanel extends ConsumerWidget {
     }
 
     final children = <Widget>[];
+
+    // Host-specific actions lead the menu (the size ladder below can be long
+    // enough to scroll, so a trailing row would be hidden).
+    for (final a in extraActions) {
+      children.add(MechXMenuRow(
+        label: a.label,
+        onTap: () {
+          a.onTap();
+          close();
+        },
+      ));
+    }
+    if (extraActions.isNotEmpty) children.add(const MechXMenuDivider());
 
     if (sizeMulti) {
       children.add(MechXMenuHeader('Apply to ${sizeIds.length} selected'));
@@ -916,6 +978,7 @@ class _EdgeMenuPanel extends ConsumerWidget {
     if (selection.isMulti) {
       children.addAll(transformMenuRows(ref, close));
     }
+    children.addAll(basePointMenuRows(ref, close));
     // E2 — the SPAN is named on the row, and the whole-building variant is a
     // deliberate second choice rather than the silent default.
     children.add(MechXMenuRow(

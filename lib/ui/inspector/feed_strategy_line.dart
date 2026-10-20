@@ -37,8 +37,8 @@ class FeedStrategyLine extends ConsumerWidget {
     // Round 30 — only WATER-network equipment is feed evidence (a fire pump
     // on the hydrant line is not a water booster); nothing drawn on the water
     // services ⇒ the setting as chosen.
-    final eq = drawnWaterFeedEquipment(
-        ref.watch(networkControllerProvider).network);
+    // The drag-frozen network (feed evidence never changes mid-drag).
+    final eq = drawnWaterFeedEquipment(ref.watch(sizingNetworkProvider));
     final hasPump = eq.hasPump;
     final StringKey key;
     if (strategy == FeedStrategy.upfeed) {

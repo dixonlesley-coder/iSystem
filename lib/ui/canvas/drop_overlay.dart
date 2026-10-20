@@ -424,7 +424,7 @@ class _DropOverlayState extends ConsumerState<DropOverlay> {
               Positioned.fill(
                 child: AnimatedOpacity(
                   opacity: active ? 1.0 : 0.0,
-                  duration: MechXMotion.hover,
+                  duration: MechXMotion.resolve(context, MechXMotion.hover),
                   curve: MechXMotion.standard,
                   child: DecoratedBox(
                     decoration: BoxDecoration(

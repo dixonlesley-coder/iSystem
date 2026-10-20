@@ -299,8 +299,8 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
     // clock); it only rolls at midnight, which no open session cares about.
     date: DateTime.now().toIso8601String().split('T').first,
     nothingDesigned: ref.watch(_nothingDesignedProvider),
-    noSheets: ref.watch(sheetsControllerProvider).sheets.isEmpty,
-    noPanels: ref.watch(electricalProjectProvider).panels.isEmpty,
+    noSheets: ref.watch(sheetsContentProvider).sheets.isEmpty,
+    noPanels: ref.watch(electricalSizingProjectProvider).panels.isEmpty,
     pressureJudged: ref.watch(_pressureJudgedProvider),
   );
 });
@@ -309,7 +309,7 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
 /// project has nothing to issue.
 final _nothingDesignedProvider = Provider<bool>((ref) =>
     ref.watch(sizingProvider).isEmpty &&
-    ref.watch(electricalProjectProvider).panels.isEmpty);
+    ref.watch(electricalSizingProjectProvider).panels.isEmpty);
 
 /// Round 25 — a supply pressure solve exists (upfeed, or a DRAWN roof-tank
 /// downfeed), so the 'Supply pressure' row has something to judge.
@@ -336,8 +336,8 @@ final complianceCheckItemsProvider = Provider<ComplianceSummary>((ref) {
     strings: MechXStringsData(ref.watch(localeProvider)),
     date: DateTime.now().toIso8601String().split('T').first,
     nothingDesigned: ref.watch(_nothingDesignedProvider),
-    noSheets: ref.watch(sheetsControllerProvider).sheets.isEmpty,
-    noPanels: ref.watch(electricalProjectProvider).panels.isEmpty,
+    noSheets: ref.watch(sheetsContentProvider).sheets.isEmpty,
+    noPanels: ref.watch(electricalSizingProjectProvider).panels.isEmpty,
     pressureJudged: ref.watch(_pressureJudgedProvider),
   );
 });

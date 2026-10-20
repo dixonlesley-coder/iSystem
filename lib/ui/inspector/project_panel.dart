@@ -416,11 +416,20 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
 /// conservative, and correct for any deliverable that could embed those runs.
 /// F4 — that blocker now NAMES the offending sheets (and points at the
 /// locatable Review > Design issues surface) instead of a bare `N element(s)`.
+///
+/// BUSY FEEDBACK: while an export runs it is recorded in
+/// [exportInFlightProvider] — a second trigger meanwhile is ignored — and once
+/// the user has picked a file (`pickExportSave`) the status-bar busy pill reads
+/// 'Exporting `name`...' until the write settles (cleared in `finally`, only if
+/// it is still this export's message).
 Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
   required Future<bool?> Function() write,
 }) async {
+  // One export at a time: a repeated click / accelerator while a write is in
+  // flight is a no-op, never a second dialog.
+  if (ref.read(exportInFlightProvider) != null) return;
   final strings = MechXStringsData(ref.read(localeProvider));
   if (ref.read(exportHasZeroLengthEdgesProvider)) {
     final n = ref.read(zeroLengthSizedEdgeCountProvider);
@@ -444,29 +453,46 @@ Future<void> runExportGuarded(
         );
     return;
   }
+  // Capture every notifier BEFORE the first await: if the widget that
+  // started the export is disposed meanwhile (a closed palette / sheet), its
+  // `ref` throws on use — the guard must still clear (review: a disposed ref
+  // in `finally` left every later export silently ignored).
+  final inFlight = ref.read(exportInFlightProvider.notifier);
+  final busy = ref.read(busyProvider.notifier);
+  final errors = ref.read(loadErrorProvider.notifier);
+  final status = ref.read(statusMessageProvider.notifier);
+  final exported = ref.read(reportExportedProvider.notifier);
+  inFlight.set(name);
   try {
     final wrote = await write();
     if (wrote == null) {
       // H3 — nothing to write is a REPORTABLE state, not a silent cancel.
-      ref
-          .read(loadErrorProvider.notifier)
-          .set(
-            strings.format(StringKey.exportNothingToExportTemplate, {
-              'name': name,
-            }),
-          );
+      errors.set(
+        strings.format(StringKey.exportNothingToExportTemplate, {
+          'name': name,
+        }),
+      );
       return;
     }
     if (wrote) {
-      ref.read(statusMessageProvider.notifier).showStatus('Exported $name');
+      status.showStatus('Exported $name');
       // The stepper's Report stage is DONE only once a deliverable actually
       // exists — this one line covers every export routed through here.
-      ref.read(reportExportedProvider.notifier).markExported();
+      exported.markExported();
     }
   } catch (e) {
-    ref.read(loadErrorProvider.notifier).set('Could not export $name: $e');
+    errors.set('Could not export $name: $e');
+  } finally {
+    inFlight.set(null);
+    // Clear the pill only if it is still OURS (a nested writer — the
+    // submittal package — may have replaced and cleared it already).
+    busy.clearIf(exportBusyMessage(strings, name));
   }
 }
+
+/// The busy-pill text for an export named [name].
+String exportBusyMessage(MechXStringsData strings, String name) =>
+    strings.format(StringKey.busyExporting, {'name': name});
 
 /// H4 — a save-dialog wrapper that REMEMBERS the last export directory: it opens
 /// the OS picker at the shared `lastExportDirProvider` folder (so a session's
@@ -502,6 +528,13 @@ Future<String?> pickExportSave(
   if (path == null) return null;
   final full = path.endsWith('.$ext') ? path : '$path.$ext';
   ref.read(lastExportDirProvider.notifier).rememberFile(full);
+  // The file is chosen — the slow part (building + writing the artifact)
+  // starts now, so an export in flight raises the busy pill.
+  final exporting = ref.read(exportInFlightProvider);
+  if (exporting != null) {
+    ref.read(busyProvider.notifier).set(exportBusyMessage(
+        MechXStringsData(ref.read(localeProvider)), exporting));
+  }
   return full;
 }
 
@@ -1090,7 +1123,6 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // statement of its air handling). A room served by AC units schedules THOSE
   // units instead (below), so every scheduled unit has exactly one electrical
   // way and vice versa (audit r8 coupling-6).
-  final ducts = ref.read(ductSettingsProvider);
   final rooms = ref.read(roomAreasProvider);
   final usedNodeTags = nodeTags.values.toSet();
   // Round 27 (hvac-4-3) — a room's own row is dropped only when a drawn,
@@ -1098,15 +1130,10 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // never because some duct exists elsewhere in the project.
   final sizedEdgeIds = ref.read(sizingProvider).keys.toSet();
   final roomAirUnits = ref.read(roomAirUnitDutiesProvider);
+  final roomSizing = ref.read(roomSizingProvider);
   for (var i = 0; i < rooms.length; i++) {
     final r = rooms[i];
-    final cal = project.calibrationFor(r.sheetId);
-    final sizing = r.sizing(
-      cal?.metersPerPixel,
-      ductShape: ducts.shape,
-      ductMethod: ducts.method,
-      rooms: rooms,
-    );
+    final sizing = roomSizing[r.id];
     if (sizing == null) continue;
     // Round 11 (hvac-network-2) — an EXTRACT room (toilet / kitchen) is served
     // by an exhaust fan, never an AHU/FCU: scheduled as an EF row (stable per
@@ -1283,7 +1310,7 @@ void watchEquipmentSpecInputs(WidgetRef ref) {
   ref.watch(ductFanProvider);
   ref.watch(ductSettingsProvider);
   ref.watch(roomAreasProvider);
-  ref.watch(networkControllerProvider);
+  ref.watch(sizingNetworkProvider);
   ref.watch(exhaustFanProvider);
   ref.watch(coolingLoadMethodProvider);
   ref.watch(electricalResultProvider);
@@ -2798,7 +2825,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
   Widget _scaleSection(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    final currentSheet = ref.watch(sheetsControllerProvider).current;
+    final currentSheet = ref.watch(sheetsContentProvider).current;
     final project = ref.watch(projectControllerProvider);
     final calibration = currentSheet == null
         ? null
@@ -2839,7 +2866,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                       color: calibration == null || stale
                           ? colors.warning
                           : colors.success,
-                      borderRadius: const BorderRadius.all(Radius.circular(4)),
+                      borderRadius: MechXRadii.small,
                     ),
                   ),
                   Expanded(
@@ -3319,7 +3346,14 @@ class _DrawSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final drawing = ref.watch(networkControllerProvider);
+    // Only what this section shows (tool, service, network-exists) — a drag
+    // frame replaces the network and must not rebuild the inspector.
+    final drawing = ref.watch(networkControllerProvider.select((d) => (
+          tool: d.tool,
+          service: d.service,
+          hasNetwork:
+              d.network.nodes.isNotEmpty || d.network.edges.isNotEmpty,
+        )));
     final ctrl = ref.read(networkControllerProvider.notifier);
     final ortho = ref.watch(orthoProvider);
 
@@ -3402,7 +3436,7 @@ class _DrawSection extends ConsumerWidget {
     // The user's own manual expand/collapse (sectionVisibilityProvider) always
     // wins over this default for the session.
     final networkExists =
-        drawing.network.nodes.isNotEmpty || drawing.network.edges.isNotEmpty;
+        drawing.hasNetwork;
 
     return DisclosureSection(
       name: 'Draw',
@@ -3741,7 +3775,7 @@ class _TanksSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheet = ref.watch(sheetsControllerProvider).current;
+    final sheet = ref.watch(sheetsContentProvider).current;
     if (sheet == null) return const SizedBox.shrink();
     final tanks = [
       for (final t in ref.watch(tankAreasProvider))
@@ -3892,7 +3926,7 @@ class _RoomsSection extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheet = ref.watch(sheetsControllerProvider).current;
+    final sheet = ref.watch(sheetsContentProvider).current;
     if (sheet == null) return const SizedBox.shrink();
     final allRooms = ref.watch(roomAreasProvider);
     final rooms = [
@@ -3902,8 +3936,9 @@ class _RoomsSection extends ConsumerWidget {
     if (rooms.isEmpty) return const SizedBox.shrink();
     final cal = ref.watch(projectControllerProvider).calibrationFor(sheet.id);
     final ducts = ref.watch(ductSettingsProvider);
+    final roomSizing = ref.watch(roomSizingProvider);
     final ctrl = ref.read(roomAreasProvider.notifier);
-    final nodes = ref.watch(networkControllerProvider).network.nodes;
+    final nodes = ref.watch(sizingNetworkProvider).nodes;
     // E6: the open master-detail row is the shared canvas selection.
     final sel = ref.watch(selectedAnnotationProvider);
     final expandedRoomId = (sel != null && sel.kind == AnnotationKind.room)
@@ -3954,12 +3989,7 @@ class _RoomsSection extends ConsumerWidget {
           for (final r in rooms) ...[
             Builder(
               builder: (context) {
-                final s = r.sizing(
-                  cal?.metersPerPixel,
-                  ductShape: ducts.shape,
-                  ductMethod: ducts.method,
-                  rooms: rooms,
-                );
+                final s = roomSizing[r.id];
                 // AC cooling — computed once so the compact row can flag an
                 // over-range unit and the expanded editor can detail it.
                 // Round 20 (hvac-3-1) — the units this room OWNS (smallest
@@ -4848,25 +4878,19 @@ class _FireSection extends ConsumerWidget {
     final standpipe = ref.watch(standpipeDesignProvider);
     final rating = ref.watch(firePumpRatingProvider);
     final ratedPoint = ref.watch(fireRatedPointProvider);
-    final hasHydrantEdges = ref
-        .watch(networkControllerProvider)
-        .network
+    final hasHydrantEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any((e) => e.service == ServiceType.fireHydrant);
-    final hasSprinklerEdges = ref
-        .watch(networkControllerProvider)
-        .network
+    final hasSprinklerEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any((e) => e.service == ServiceType.fireSprinkler);
     final standpipeRisers = drawnStandpipeRiserCount(
-        ref.watch(networkControllerProvider).network);
+        ref.watch(sizingNetworkProvider));
     // E11: the whole fire design derives from occupancy/height/hazard alone, so
     // it computes even with NO fire pipework drawn. Detect real sprinkler/
     // hydrant edges so the verdict is honest — a preliminary 'draft' from
     // building defaults, not a validated 'rated', until fire runs exist.
-    final hasFireEdges = ref
-        .watch(networkControllerProvider)
-        .network
+    final hasFireEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any(
           (e) =>
@@ -4968,7 +4992,7 @@ class _FireSection extends ConsumerWidget {
                 margin: const EdgeInsets.only(right: MechXSpacing.xs),
                 decoration: BoxDecoration(
                   color: colors.warning,
-                  borderRadius: const BorderRadius.all(Radius.circular(4)),
+                  borderRadius: MechXRadii.small,
                 ),
               ),
               Expanded(
@@ -5122,7 +5146,7 @@ class _SelectionSection extends ConsumerWidget {
     final selection = ref.watch(selectionProvider);
     if (selection.isEmpty) return const SizedBox.shrink();
 
-    final net = ref.watch(networkControllerProvider).network;
+    final net = ref.watch(sizingNetworkProvider);
     final ctrl = ref.read(networkControllerProvider.notifier);
     final selCtrl = ref.read(selectionProvider.notifier);
 
@@ -5164,7 +5188,7 @@ class _SelectionSection extends ConsumerWidget {
     // another floor's plan). Badge the header with the owning sheet and make the
     // body read-only in that state: the edit belongs where the element is. Null
     // (the normal case: the target is on the current sheet) ⇒ byte-identical.
-    final sheets = ref.watch(sheetsControllerProvider);
+    final sheets = ref.watch(sheetsContentProvider);
     final elsewhereId = owningSheetIfElsewhere(
       net,
       nodeId: selection.nodeId,
@@ -5234,7 +5258,7 @@ class _SelectionSection extends ConsumerWidget {
       net: net,
       nodeIds: selection.nodeIds,
       edgeIds: selection.edgeIds,
-      sheetId: ref.watch(sheetsControllerProvider).current?.id,
+      sheetId: ref.watch(sheetsContentProvider).current?.id,
       inertServices: ref.watch(inertServicesProvider),
     );
     final edgeIds = scope.edgeIds;
@@ -5550,7 +5574,7 @@ class _SelectionSection extends ConsumerWidget {
     SelectionController selCtrl,
   ) {
     final project = ref.watch(projectControllerProvider);
-    final net = ref.watch(networkControllerProvider).network;
+    final net = ref.watch(sizingNetworkProvider);
     // Round 21 review — a node on a GRAVITY riser reads the same riser-end
     // datum its riser length is measured from (one engine helper, shared
     // with the Layout hover FFL chip).

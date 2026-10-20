@@ -214,7 +214,7 @@ class _MechXTextFieldState extends State<MechXTextField> {
     return GestureDetector(
       onTap: _focusNode.requestFocus,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.sm,

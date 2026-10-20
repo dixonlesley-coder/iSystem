@@ -44,7 +44,9 @@ class CanvasToolCluster extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    final drawing = ref.watch(networkControllerProvider);
+    // Only the tool + service (not the network): a drag frame never rebuilds it.
+    final drawing = ref.watch(networkControllerProvider
+        .select((d) => (tool: d.tool, service: d.service)));
     final active = ref.watch(activeDisciplineProvider);
     final services = servicesFor(active);
     final tool = drawing.tool;
@@ -53,6 +55,8 @@ class CanvasToolCluster extends ConsumerWidget {
       borderRadius: MechXRadii.control,
       blurSigma: MechXGlass.blurSigmaLight,
       shadow: MechXShadow.card,
+      // Floats over the drawing paper — the legible over-paper glass.
+      overPaper: true,
       child: Padding(
         padding: const EdgeInsets.all(MechXSpacing.xs),
         child: SizedBox(
@@ -147,7 +151,7 @@ class _ToolChipState extends State<_ToolChip> {
           onTap: widget.onTap,
           behavior: HitTestBehavior.opaque,
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.xs + 2, vertical: MechXSpacing.xs + 1),
@@ -171,7 +175,9 @@ class _ToolChipState extends State<_ToolChip> {
                 Text(
                   widget.keyHint,
                   style: type.micro.copyWith(
-                      color: selected ? colors.accent : colors.textMuted,
+                      // A keycap is information (the shortcut), not decoration:
+                      // secondary label tier, never the 1.1:1 tertiary one.
+                      color: selected ? colors.accent : colors.textSecondary,
                       fontFamily: 'Roboto'),
                 ),
               ],
@@ -221,7 +227,7 @@ class _ServiceSwatchState extends State<_ServiceSwatch> {
           onTap: widget.onTap,
           behavior: HitTestBehavior.opaque,
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.xs + 1, vertical: MechXSpacing.xxs + 1),

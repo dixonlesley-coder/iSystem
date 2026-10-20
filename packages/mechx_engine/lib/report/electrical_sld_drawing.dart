@@ -1144,7 +1144,7 @@ SldSheet buildElectricalSld({
 
   final s = result.supply;
   final supplyNote = '${s.system.label}  ${_num(s.voltage.volts)}V  '
-      'demand ${_num(s.demandW / 1000)}kW / ${_num(s.demandVa.inKilovoltAmperes)}kVA';
+      'demand ${_num(s.demandW / 1000)} kW / ${_num(s.demandVa.inKilovoltAmperes)} kVA';
 
   return SldSheet(
     prims: prims,
@@ -1446,7 +1446,7 @@ bool _parentIsThreePhase(
   return pr?.system.isThreePhase ?? false;
 }
 
-/// The compact-node sub-line: `<In>A <poles>P · <kW>kW / <kVA>kVA` (the panel's
+/// The compact-node sub-line: `<In>A <poles>P · <kW> kW / <kVA> kVA` (the panel's
 /// incomer rating + diversified demand in both kW and kVA). Shared by the
 /// overview + riser so they read identically. ASCII-safe.
 ///
@@ -1459,7 +1459,7 @@ String _compactNodeSubLine(ElectricalPanelResult p, {ElectricalPanel? model}) {
   final head = '${_num(p.incomer.breaker.ratingA.amperes)}A '
       '${p.incomer.poles}P${incomerOverRangeSuffix(p.incomer, withNeeds: false)}';
   // Round 23 (elec-drafting-2-7) — a capacitor-only board carries no real
-  // power (Round 11): print its bank rating, never '0kW / 0kVA'. The bank's
+  // power (Round 11): print its bank rating, never '0 kW / 0 kVA'. The bank's
   // kvar is the MODEL way's rating (the solved way carries 0 W by design).
   var kvar = 0.0;
   for (final c in model?.circuits ?? const <ElectricalCircuit>[]) {
@@ -1468,8 +1468,8 @@ String _compactNodeSubLine(ElectricalPanelResult p, {ElectricalPanel? model}) {
   if (p.demandW <= 0 && kvar > 0) {
     return '$head · ${_num(kvar / 1000)} kvar';
   }
-  return '$head · ${_num(p.demandW / 1000)}kW / '
-      '${_num(p.demandVaOrEstimate(fallbackPf: _assumedPanelPf) / 1000)}kVA';
+  return '$head · ${_num(p.demandW / 1000)} kW / '
+      '${_num(p.demandVaOrEstimate(fallbackPf: _assumedPanelPf) / 1000)} kVA';
 }
 
 
@@ -2779,8 +2779,8 @@ SldSheet buildElectricalOverview({
 
   final s = result.supply;
   final supplyNote = '${s.system.label}  ${_num(s.voltage.volts)}V  '
-      'demand ${_num(s.demandW / 1000)}kW / '
-      '${_num(s.demandVa.inKilovoltAmperes)}kVA';
+      'demand ${_num(s.demandW / 1000)} kW / '
+      '${_num(s.demandVa.inKilovoltAmperes)} kVA';
 
   return SldSheet(
     prims: prims,
@@ -3985,8 +3985,8 @@ SldSheet buildElectricalRiser({
 
   final s = result.supply;
   final supplyNote = '${s.system.label}  ${_num(s.voltage.volts)}V  '
-      'demand ${_num(s.demandW / 1000)}kW / '
-      '${_num(s.demandVa.inKilovoltAmperes)}kVA';
+      'demand ${_num(s.demandW / 1000)} kW / '
+      '${_num(s.demandVa.inKilovoltAmperes)} kVA';
 
   return SldSheet(
     prims: prims,

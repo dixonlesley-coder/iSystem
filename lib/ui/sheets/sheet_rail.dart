@@ -38,7 +38,7 @@ class SheetRail extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(sheetsControllerProvider);
+    final state = ref.watch(sheetsContentProvider);
     final colors = context.colors;
     // ONE add affordance: the trailing '+' tile. Its tap is Import plan (the
     // add-or-replace flow); its right-click menu also offers the A6 multi-file
@@ -192,7 +192,7 @@ class _ImportPlanTileState extends State<_ImportPlanTile> {
             onSecondaryTapDown: (d) => _showMenu(d.globalPosition),
             behavior: HitTestBehavior.opaque,
             child: AnimatedContainer(
-              duration: MechXMotion.hover,
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
               curve: MechXMotion.standard,
               margin: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.xs,
@@ -211,7 +211,7 @@ class _ImportPlanTileState extends State<_ImportPlanTile> {
                 width: 34,
                 height: 42,
                 decoration: BoxDecoration(
-                  borderRadius: const BorderRadius.all(Radius.circular(3)),
+                  borderRadius: MechXRadii.small,
                   border: Border.all(color: colors.border),
                 ),
                 child: CustomPaint(
@@ -447,7 +447,7 @@ class _RailItemState extends ConsumerState<_RailItem> {
     // remap — or a silent pile-up when more sheets than floors default onto the
     // top — is visible at a glance, not invisible. 1-based, ASCII ("F3").
     final mappedFloor = ref
-        .watch(sheetsControllerProvider)
+        .watch(sheetsContentProvider)
         .floorFor(widget.sheet.id, project.building.levelCount);
     final bg = widget.selected
         ? colors.accentMuted
@@ -469,7 +469,7 @@ class _RailItemState extends ConsumerState<_RailItem> {
           onSecondaryTapDown: (d) => _showContextMenu(d.globalPosition),
           // Ease the hover / selection fill so switching sheets feels smooth.
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             margin: const EdgeInsets.symmetric(
               horizontal: MechXSpacing.xs,
@@ -581,7 +581,7 @@ class _MiniPage extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: colors.canvas,
-            borderRadius: const BorderRadius.all(Radius.circular(3)),
+            borderRadius: MechXRadii.small,
             border: border,
           ),
           child: Text(
@@ -600,7 +600,7 @@ class _MiniPage extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: colors.canvas,
-        borderRadius: const BorderRadius.all(Radius.circular(3)),
+        borderRadius: MechXRadii.small,
         border: border,
       ),
       child: Stack(
@@ -628,7 +628,7 @@ class _MiniPage extends StatelessWidget {
               decoration: BoxDecoration(
                 color: colors.surface.withAlpha(210),
                 borderRadius: const BorderRadius.only(
-                  topRight: Radius.circular(3),
+                  topRight: MechXRadii.xs,
                 ),
               ),
               child: Text(

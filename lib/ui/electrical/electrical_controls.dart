@@ -625,7 +625,7 @@ class ElectricalToggleRow extends StatelessWidget {
               ),
               const SizedBox(width: MechXSpacing.sm),
               AnimatedContainer(
-                duration: MechXMotion.fast,
+                duration: MechXMotion.resolve(context, MechXMotion.fast),
                 width: 36,
                 height: 20,
                 padding: const EdgeInsets.all(MechXSpacing.xxs),

@@ -21,7 +21,7 @@ import 'package:mechx_engine/units.dart';
 import '../ui/strings/app_strings.dart';
 import 'design_issues_store.dart' show zeroLengthSizedEdgeCountProvider;
 import 'electrical_store.dart'
-    show electricalProjectProvider, electricalResultProvider;
+    show electricalResultProvider, electricalSizingProjectProvider;
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -253,8 +253,8 @@ const List<Floor> _kDefaultFloorStack = [
 ///  • Report    — a deliverable (report/drawing/BOM) was exported this session.
 final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider).sheets;
-  final edges = ref.watch(networkControllerProvider).network.edges;
+  final sheets = ref.watch(sheetsContentProvider).sheets;
+  final edges = ref.watch(sizingNetworkProvider).edges;
   final sizing = ref.watch(sizingProvider);
 
   // Round 17 follow-up (ui-journeys-3-stepper-size-ticked-on-zero-length) —
@@ -264,7 +264,7 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   // The SAME edge-bearing rule the Review's critical 'Sheet not calibrated'
   // uses (a sheet holding any node with an incident edge), so the stepper can
   // never tick Calibrate while Review shows that blocker.
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final liveSheetIds = {for (final s in sheets) s.id};
   final edgeNodeIds = {
     for (final e in edges) ...[e.fromId, e.toId],
@@ -283,7 +283,7 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   // counts: a board with at least one way is drawn work, and with no
   // mechanical edge its solved result is the sizing (the calibrated /
   // zero-length guards stay scoped to the mechanical network).
-  final elecProject = ref.watch(electricalProjectProvider);
+  final elecProject = ref.watch(electricalSizingProjectProvider);
   final hasElectrical = elecProject.panels.any((p) => p.circuits.isNotEmpty);
   final elecSized = hasElectrical &&
       ref.watch(electricalResultProvider).panels.isNotEmpty;

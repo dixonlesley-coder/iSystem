@@ -31,12 +31,19 @@ class MechXSegment extends StatefulWidget {
   /// The label weight when [selected]. The unselected weight is always w500.
   final FontWeight selectedWeight;
 
+  /// Size the label for its SELECTED weight even while unselected (a hidden
+  /// [selectedWeight] copy reserves the width), so a row of segments whose
+  /// selected weight is heavier never changes width as the selection moves —
+  /// nothing beside it jumps. Default false ⇒ unchanged layout.
+  final bool reserveSelectedWidth;
+
   const MechXSegment({
     super.key,
     required this.label,
     required this.selected,
     required this.onTap,
     this.selectedWeight = FontWeight.w500,
+    this.reserveSelectedWidth = false,
   });
 
   @override
@@ -74,10 +81,10 @@ class _MechXSegmentState extends State<MechXSegment> {
           onTapCancel: () => setState(() => _down = false),
           child: AnimatedScale(
             scale: _down ? 0.97 : 1.0,
-            duration: MechXMotion.press,
+            duration: MechXMotion.resolve(context, MechXMotion.press),
             curve: MechXMotion.standard,
             child: AnimatedContainer(
-              duration: MechXMotion.hover,
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
               curve: MechXMotion.standard,
               padding: const EdgeInsets.symmetric(
                 horizontal: MechXSpacing.sm + 2,
@@ -90,17 +97,35 @@ class _MechXSegmentState extends State<MechXSegment> {
                   color: selected ? colors.accent : const Color(0x00000000),
                 ),
               ),
-              child: Text(
-                widget.label,
-                style: type.label.copyWith(
-                  color: selected ? colors.textPrimary : colors.textSecondary,
-                  fontWeight: selected ? widget.selectedWeight : FontWeight.w500,
-                ),
-              ),
+              child: _label(type, colors, selected),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  Widget _label(MechXTypography type, MechXColors colors, bool selected) {
+    final style = type.label.copyWith(
+      color: selected ? colors.textPrimary : colors.textSecondary,
+      fontWeight: selected ? widget.selectedWeight : FontWeight.w500,
+    );
+    if (!widget.reserveSelectedWidth) return Text(widget.label, style: style);
+    // Measure the label at the SELECTED weight and give the visible label at
+    // least that width (centred), so the segment is one width in both states.
+    final bold = TextPainter(
+      text: TextSpan(
+          text: widget.label,
+          style: type.label.copyWith(fontWeight: widget.selectedWeight)),
+      textDirection: TextDirection.ltr,
+      textScaler: MediaQuery.maybeTextScalerOf(context) ?? TextScaler.noScaling,
+      maxLines: 1,
+    )..layout();
+    final minWidth = bold.width.ceilToDouble();
+    bold.dispose();
+    return ConstrainedBox(
+      constraints: BoxConstraints(minWidth: minWidth),
+      child: Text(widget.label, style: style, textAlign: TextAlign.center),
     );
   }
 }

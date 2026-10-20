@@ -27,6 +27,18 @@ const double kLayoutPanelH = 56;
 const double kLayoutLoadW = 92;
 const double kLayoutLoadH = 58;
 
+/// Largest on-screen scale a plan marker reaches. Below it a marker tracks the
+/// zoom (it is placed equipment, sized to the plan); above it the marker stays
+/// this size, so zooming in to trace a wall never balloons a board into a
+/// slab that hides the plan it sits on (a panel marker tops out at 225 x 84 px).
+const double kLayoutMarkerMaxScale = 1.5;
+
+/// The on-screen scale of a plan marker at canvas [zoom] — the ONE figure the
+/// marker's layout box, its hit rect, the marquee and the drop-onto radius all
+/// use, so what is drawn is exactly what is hit.
+double layoutMarkerScale(double zoom) =>
+    zoom < kLayoutMarkerMaxScale ? zoom : kLayoutMarkerMaxScale;
+
 /// Callbacks the layout layer raises back to its host (the unified Layout
 /// canvas) to open the inspector / context menus over the one shared model.
 typedef LayoutPanelEdit = void Function(String panelId);

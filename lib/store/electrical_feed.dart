@@ -30,7 +30,6 @@ import 'app_state.dart'
     show
         CoolingLoadMethod,
         coolingLoadMethodProvider,
-        ductSettingsProvider,
         kSupplyService;
 import 'fire_store.dart';
 import '../ui/strings/app_strings.dart' show StringKey;
@@ -190,7 +189,7 @@ bool _onFireService(Set<ServiceType> s) =>
     s.contains(ServiceType.fireHydrant) || s.contains(ServiceType.fireSprinkler);
 
 final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final fire = <String>{};
   final supplyPumps = <String>[];
   final hwPumps = <String>{};
@@ -537,7 +536,7 @@ final mepEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   // ([placedEquipmentLoadsProvider]); a system rooted at a bare node gets its
   // own duty way here, so no solved airflow is silently dropped.
   final roots = ref.watch(airSystemRootNodesProvider);
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   bool isLoadNode(String id) =>
       net.nodeById(id)?.component?.isElectricalLoad ?? false;
   void addSecondary(Map<String, FanDuty> duties, String? primary,
@@ -708,7 +707,7 @@ double? _acRoomWatts(
 /// fan while the schedule prints each unit's own duty under the same tag.
 final equipmentNodeDutiesProvider =
     Provider<Map<String, ({Power motor, Power input})>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final bind = ref.watch(mepDutyBindingProvider);
 
   ({Power motor, Power input})? dutyFor(NetNode n) {
@@ -793,7 +792,7 @@ final equipmentNodeDutiesProvider =
 /// [equipmentNodeDutiesProvider] so the riser and the equipment schedule /
 /// panel feed print the same machine's duty under the same tag.
 final riserEquipmentDetailsProvider = Provider<Map<String, String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
   return {
     for (final node in net.nodes)
@@ -823,11 +822,10 @@ enum NodeLoadSource { explicit, solvedDuty, roomPk, roomAir, componentDefault }
 /// component default beside a 0.37 kW room-air row).
 final roomAirUnitDutiesProvider =
     Provider<Map<String, ({RoomArea room, FanDuty duty})>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final rooms = ref.watch(roomAreasProvider);
-  final project = ref.watch(projectControllerProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
-  final ducts = ref.watch(ductSettingsProvider);
+  final roomSizing = ref.watch(roomSizingProvider);
   bool isAirUnit(NetNode n) =>
       n.component == NodeComponent.ahu || n.component == NodeComponent.fcu;
   final out = <String, ({RoomArea room, FanDuty duty})>{};
@@ -837,12 +835,7 @@ final roomAirUnitDutiesProvider =
         if (isAirUnit(n) && roomUnitOwnerId(n, rooms) == r.id) n,
     ];
     if (owned.isEmpty || owned.any((n) => duties.containsKey(n.id))) continue;
-    final sizing = r.sizing(
-      project.calibrationFor(r.sheetId)?.metersPerPixel,
-      ductShape: ducts.shape,
-      ductMethod: ducts.method,
-      rooms: rooms,
-    );
+    final sizing = roomSizing[r.id];
     if (sizing == null || sizing.extractOnly) continue;
     out[owned.first.id] = (room: r, duty: sizing.equipment);
   }
@@ -866,7 +859,7 @@ class NodeFedLoad {
 /// default while the panel carries the room-PK or solved-duty load (it used
 /// to, and a look-and-leave then pinned that default as an override).
 final nodeFedLoadsProvider = Provider<Map<String, NodeFedLoad>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final rooms = ref.watch(roomAreasProvider);
   final project = ref.watch(projectControllerProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
@@ -946,7 +939,7 @@ final nodeFedLoadsProvider = Provider<Map<String, NodeFedLoad>>((ref) {
 /// component default). Keyed by the node id, so editing/moving the node
 /// updates its circuit in place.
 final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final bind = ref.watch(mepDutyBindingProvider);
   final fed = ref.watch(nodeFedLoadsProvider);
   // Round 33 — the stable equipment tags the mechanical sheets print.

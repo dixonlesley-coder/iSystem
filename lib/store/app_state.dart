@@ -340,6 +340,30 @@ class BusyController extends Notifier<String?> {
 
   void set(String? message) => state = message;
   void clear() => state = null;
+
+  /// Clear only when the pill still reads [message] (a nested writer may have
+  /// replaced it) — usable from a captured notifier after an await.
+  void clearIf(String message) {
+    if (state == message) state = null;
+  }
+}
+
+/// The name of the export currently running through `runExportGuarded`, or
+/// null when none is. While non-null a second export trigger is IGNORED (a
+/// double-click / a repeated accelerator must not open a second save dialog
+/// or interleave two writes), and the shared save-dialog seam
+/// (`pickExportSave`) raises the [busyProvider] pill as soon as the user has
+/// chosen a file — the slow part is the write, not the picker. Transient
+/// session state; never persisted.
+final exportInFlightProvider =
+    NotifierProvider<ExportInFlightController, String?>(
+        ExportInFlightController.new);
+
+class ExportInFlightController extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void set(String? name) => state = name;
 }
 
 /// The file the open project lives in — set on a successful Open or Save, so

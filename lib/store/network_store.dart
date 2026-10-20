@@ -29,6 +29,7 @@ import 'route_geometry.dart';
 import 'schematic_layout_store.dart';
 import 'selection_store.dart';
 import 'sheets_store.dart';
+import 'smart_input_store.dart' show canvasAutoPanProbeProvider;
 
 /// Active canvas tool.
 enum DrawTool { select, drawRun, drawRiser }
@@ -48,6 +49,83 @@ class _Clipboard {
   final List<NetEdge> edges;
   const _Clipboard(this.nodes, this.edges);
 }
+
+/// E1 — the ONE acceptance rule for a draw / pull endpoint ADOPTING an
+/// existing [node], given its [incident] edges, the services the caller is
+/// scoped away from ([avoidServices] — hidden / locked / inert) and the
+/// service being drawn ([drawService]). Shared by the store's commit
+/// (`NetworkController._snap`) and the on-canvas snap PREVIEW
+/// (`snapOrTeeMarked`), so the marker never promises a latch the commit
+/// refuses (H3):
+///
+///   * a node whose incident edges are ALL on an avoided service is not
+///     adoptable — it belongs to a network the caller is not editing;
+///   * a PLAIN junction (no component, `main` role) whose incident edges are
+///     all a DIFFERENT service is not adoptable by a draw endpoint — each
+///     service is its own network. Equipment / plant / fixture nodes stay
+///     adoptable across services on purpose (a roof tank feeds cold AND hot
+///     water; a WC carries its supply and its drain at one point).
+///
+/// A node with NO incident edge (a free fitting) is always adoptable. Both
+/// scopes empty ⇒ always true.
+bool drawEndpointAdoptable(
+  NetNode node,
+  Iterable<NetEdge> incident, {
+  Set<ServiceType> avoidServices = const {},
+  ServiceType? drawService,
+}) {
+  if (avoidServices.isEmpty && drawService == null) return true;
+  var count = 0;
+  var allAvoided = true;
+  var anyDrawService = false;
+  for (final e in incident) {
+    count++;
+    if (!avoidServices.contains(e.service)) allAvoided = false;
+    if (e.service == drawService) anyDrawService = true;
+  }
+  if (count == 0) return true; // bare junction — belongs to no service yet
+  if (avoidServices.isNotEmpty && allAvoided) return false;
+  if (drawService != null &&
+      !anyDrawService &&
+      node.component == null &&
+      node.role == NodeRole.main) {
+    return false; // a plain junction of another service — never latch onto it
+  }
+  return true;
+}
+
+/// Whether a draw endpoint may TEE INTO run [e] (split it at the projection):
+/// only a run (never a riser) of the SAME [service], never on an avoided one.
+/// Shared by the store's commit and the snap preview (H3) — a cold-water run
+/// never silently splits (or advertises splitting) a duct it crosses.
+bool drawTeeAccepts(
+  NetEdge e,
+  ServiceType? service, {
+  Set<ServiceType> avoidServices = const {},
+}) =>
+    e.kind != EdgeKind.riser &&
+    (service == null || e.service == service) &&
+    !avoidServices.contains(e.service);
+
+/// The canvas tools/modes the "repeat last tool" Enter can re-arm (M3).
+enum CanvasToolKind { run, riser, measure, tank, room }
+
+/// M3 — the last canvas tool/mode ARMED by any path (single-key shortcut, the
+/// Draw panel, the palette, the on-canvas tool cluster), so Enter on an idle
+/// canvas repeats it — the CAD "repeat last command". Transient session state,
+/// never persisted.
+class LastCanvasToolController extends Notifier<CanvasToolKind?> {
+  @override
+  CanvasToolKind? build() => null;
+
+  void record(CanvasToolKind tool) {
+    if (state != tool) state = tool;
+  }
+}
+
+final lastCanvasToolProvider =
+    NotifierProvider<LastCanvasToolController, CanvasToolKind?>(
+        LastCanvasToolController.new);
 
 /// Editable drawing state: the [network], the active [tool] + [service], and
 /// the transient [pendingPoint] (the first endpoint of a run being drawn, in
@@ -241,11 +319,63 @@ class NetworkController extends Notifier<DrawingState> {
     );
   }
 
-  void setTool(DrawTool tool) => state = DrawingState(
-        network: state.network,
-        service: state.service,
-        tool: tool, // pendingPoint cleared
-      );
+  /// Arm [tool] (clears any pending run). Arming a DRAW tool also drops the
+  /// pick-first selection (the AutoCAD draw-command convention): a selection
+  /// hidden behind the draw overlay must never be the target of a stray
+  /// Delete/Backspace while drafting. Every arming path (keys, Draw panel,
+  /// palette, tool cluster) lands here, so the run/riser it arms is recorded
+  /// as the tool Enter repeats ([lastCanvasToolProvider]). Leaving the Run tool
+  /// releases the B30 auto-pan probe HERE, outside the widget build that
+  /// unmounts the drawing overlay (P14).
+  void setTool(DrawTool tool) {
+    if (tool != DrawTool.drawRun) {
+      final autoPan = ref.read(canvasAutoPanProbeProvider.notifier);
+      if (autoPan.isActive) autoPan.set(null);
+    }
+    if (tool != DrawTool.select) {
+      if (!ref.read(selectionProvider).isEmpty) {
+        ref.read(selectionProvider.notifier).clear();
+      }
+      ref.read(lastCanvasToolProvider.notifier).record(
+          tool == DrawTool.drawRun ? CanvasToolKind.run : CanvasToolKind.riser);
+    }
+    state = DrawingState(
+      network: state.network,
+      service: state.service,
+      tool: tool, // pendingPoint cleared
+    );
+  }
+
+  /// H4 — how many committed segments (undo steps) the LIVE run chain has laid
+  /// since its start point: 0 when there is no pending point, when only the
+  /// start has been clicked, or when the pending point moved by any path that
+  /// is not a chained placement (the count is pinned to the pending point it
+  /// was recorded for, so a cancel / tool switch / redo invalidates it without
+  /// every such path having to reset it).
+  int get chainSegmentCount =>
+      state.pendingPoint != null && state.pendingPoint == _chainTip
+          ? _chainSegments
+          : 0;
+  int _chainSegments = 0;
+  Offset? _chainTip;
+
+  void _recordChain(Offset tip, int segments) {
+    _chainTip = tip;
+    _chainSegments = segments;
+  }
+
+  /// H4 (review) — each chained placement's (tip AFTER, tip BEFORE): undoing
+  /// that step re-anchors the rubber band EXACTLY where the run was before it,
+  /// instead of inferring it from topology (a segment that teed into a run
+  /// used to re-anchor at the far end of the split run). Only consulted when
+  /// the top entry's AFTER is the live pending point; otherwise undo falls
+  /// back to the topology walk.
+  final List<(Offset, Offset)> _chainSteps = [];
+
+  void _pushChainStep(Offset before, Offset after, int segments) {
+    _recordChain(after, segments);
+    _chainSteps.add((after, before));
+  }
 
   void setService(ServiceType service) => state = DrawingState(
         network: state.network,
@@ -287,24 +417,9 @@ class NetworkController extends Notifier<DrawingState> {
     ServiceType? drawService,
   }) {
     if (avoidServices.isEmpty && drawService == null) return true;
-    var incident = 0;
-    var allAvoided = true;
-    var anyDrawService = false;
-    for (final e in edges) {
-      if (e.fromId != node.id && e.toId != node.id) continue;
-      incident++;
-      if (!avoidServices.contains(e.service)) allAvoided = false;
-      if (e.service == drawService) anyDrawService = true;
-    }
-    if (incident == 0) return true; // bare junction — belongs to no service yet
-    if (avoidServices.isNotEmpty && allAvoided) return false;
-    if (drawService != null &&
-        !anyDrawService &&
-        node.component == null &&
-        node.role == NodeRole.main) {
-      return false; // a plain junction of another service — never latch onto it
-    }
-    return true;
+    return drawEndpointAdoptable(
+        node, edges.where((e) => e.fromId == node.id || e.toId == node.id),
+        avoidServices: avoidServices, drawService: drawService);
   }
 
   /// Snap to the NEAREST existing node on [sheetId]/[floorIndex] within
@@ -375,32 +490,35 @@ class NetworkController extends Notifier<DrawingState> {
     // Store-level backstop (Round 10): a non-finite world point would plant a
     // NaN/Infinity node the JSON encoder refuses (Save + autosave would throw).
     if (!world.dx.isFinite || !world.dy.isFinite) return;
-    if (state.pendingPoint == null) {
-      state = DrawingState(
-        network: state.network,
-        service: state.service,
-        tool: state.tool,
-        pendingPoint: world,
-        pendingSheetId: sheetId,
-        pendingFloorIndex: floorIndex,
-      );
-      return;
-    }
-
     // B1: the pending point belongs to the sheet/floor it was placed on. If the
     // engineer switched the active sheet (or its floor mapping) mid-run, that
     // pixel offset is meaningless here — committing an edge would resolve it
     // against THIS sheet's geometry and plant a phantom junction. Restart the
     // run at this click on the new sheet instead of drawing a cross-sheet edge.
-    if (!state.pendingOnSheet(sheetId, floorIndex)) {
+    if (state.pendingPoint == null ||
+        !state.pendingOnSheet(sheetId, floorIndex)) {
+      // M1 — the START resolves NOW, through the same endpoint resolution the
+      // commit uses (node > same-service tee > plan underlay > grid), so the
+      // chain starts ON the snapped feature: the rubber band, the ortho ray
+      // and a typed length all measure from the point the run will really
+      // leave — never from the raw click a few pixels off it (which used to
+      // commit a micro-jog edge once the second click re-snapped the start).
+      final start = _resolvedPoint(sheetId, floorIndex, world,
+          endSnapRadius ?? snapRadius, state.service,
+          gridSnap: gridSnap,
+          gridMetersPerPixel: gridMetersPerPixel,
+          underlaySnap: underlaySnap,
+          avoidServices: avoidServices);
       state = DrawingState(
         network: state.network,
         service: state.service,
         tool: state.tool,
-        pendingPoint: world,
+        pendingPoint: start,
         pendingSheetId: sheetId,
         pendingFloorIndex: floorIndex,
       );
+      _chainSteps.clear();
+      _recordChain(start, 0);
       return;
     }
 
@@ -422,17 +540,26 @@ class NetworkController extends Notifier<DrawingState> {
         gridMetersPerPixel: gridMetersPerPixel,
         underlaySnap: underlaySnap,
         avoidServices: avoidServices);
+    // M1 (review) — the chain continues from where the end REALLY landed: the
+    // node / tee / underlay / grid point the click resolved to, never the raw
+    // click up to a snap radius off it (a typed length measured from there
+    // came out short by that offset). A fresh junction sits on the click
+    // itself, so free clicks are unchanged.
+    final endNode = nodes.firstWhere((n) => n.id == bId);
+    final tip = Offset(endNode.x, endNode.y);
     if (aId == bId) {
       // zero-length / same node — just advance the pending point. Any split the
       // resolve did was on a LOCAL copy; discarding it leaves state untouched.
+      final segments = chainSegmentCount;
       state = DrawingState(
         network: state.network,
         service: state.service,
         tool: state.tool,
-        pendingPoint: world,
+        pendingPoint: tip,
         pendingSheetId: sheetId,
         pendingFloorIndex: floorIndex,
       );
+      _recordChain(tip, segments);
       return;
     }
     // B13: with ortho on, a snap to a node/tee/underlay candidate OFF the
@@ -443,12 +570,44 @@ class NetworkController extends Notifier<DrawingState> {
     final connectTo = _autoElbowEndpoint(nodes, edges, sheetId, floorIndex,
         Offset(aNode.x, aNode.y), world, bId, state.service, ortho: ortho);
     edges.add(NetEdge(id: _id('e'), fromId: aId, toId: connectTo, service: state.service));
+    final segments = chainSegmentCount;
+    final before = state.pendingPoint!;
     _commit(
       Network(nodes: nodes, edges: edges),
-      pendingPoint: world, // chain from here
+      pendingPoint: tip, // chain from the resolved end
       pendingSheetId: sheetId,
       pendingFloorIndex: floorIndex,
     );
+    _pushChainStep(before, tip, segments + 1);
+  }
+
+  /// M1 — where a draw endpoint at [world] WOULD land: [_resolveDrawEndpoint]
+  /// run on throw-away copies of the live lists (the id counter restored), so
+  /// the start of a run is resolved by exactly the commit's rule without
+  /// mutating anything.
+  Offset _resolvedPoint(
+    String sheetId,
+    int floorIndex,
+    Offset world,
+    double snapRadius,
+    ServiceType service, {
+    bool gridSnap = false,
+    double? gridMetersPerPixel,
+    Offset? Function(Offset world)? underlaySnap,
+    Set<ServiceType> avoidServices = const {},
+  }) {
+    final nodes = [...state.network.nodes];
+    final edges = [...state.network.edges];
+    final seq = _seq;
+    final id = _resolveDrawEndpoint(
+        nodes, edges, sheetId, floorIndex, world, snapRadius, service,
+        gridSnap: gridSnap,
+        gridMetersPerPixel: gridMetersPerPixel,
+        underlaySnap: underlaySnap,
+        avoidServices: avoidServices);
+    _seq = seq;
+    final n = nodes.firstWhere((n) => n.id == id);
+    return Offset(n.x, n.y);
   }
 
   /// The sheet id mapped to [floorIndex], or null when NO loaded sheet maps to
@@ -902,15 +1061,25 @@ class NetworkController extends Notifier<DrawingState> {
   void undo() {
     if (_undo.isEmpty) return;
     _dragSnapshotPending = false;
+    ref.read(dragSessionProvider.notifier).endDrag();
     final current = state.network;
     final previous = _undo.removeLast();
     _redo.add(current);
     // C8: while chaining a run, undoing the last segment must KEEP the rubber
     // band so drawing continues — re-anchor the pending point at the segment's
     // OTHER endpoint (the prior chain anchor) instead of dropping the chain.
-    final pending = (state.tool == DrawTool.drawRun && state.pendingPoint != null)
-        ? _chainAnchorAfterUndo(current, previous, state.pendingPoint!)
-        : null;
+    Offset? pending;
+    if (state.tool == DrawTool.drawRun && state.pendingPoint != null) {
+      final top = _chainSteps.isEmpty ? null : _chainSteps.last;
+      if (top != null && top.$1 == state.pendingPoint) {
+        _chainSteps.removeLast();
+        pending = top.$2;
+      } else {
+        _chainSteps.clear();
+        pending = _chainAnchorAfterUndo(current, previous, state.pendingPoint!);
+      }
+    }
+    final segments = chainSegmentCount;
     state = DrawingState(
       network: previous,
       service: state.service,
@@ -920,6 +1089,7 @@ class NetworkController extends Notifier<DrawingState> {
       pendingSheetId: pending == null ? null : state.pendingSheetId,
       pendingFloorIndex: pending == null ? null : state.pendingFloorIndex,
     );
+    if (pending != null) _recordChain(pending, math.max(0, segments - 1));
   }
 
   /// The chain anchor to re-pend after undoing a drawn segment: find the tip
@@ -943,21 +1113,47 @@ class NetworkController extends Notifier<DrawingState> {
     }
     if (tip == null) return null;
     final prevEdgeIds = {for (final e in previous.edges) e.id};
-    for (final e in current.edges) {
-      if (e.kind != EdgeKind.run || prevEdgeIds.contains(e.id)) continue;
-      final String? otherId = e.fromId == tip.id
-          ? e.toId
-          : (e.toId == tip.id ? e.fromId : null);
-      if (otherId == null) continue;
-      final anchor = current.nodeById(otherId);
-      if (anchor != null) return Offset(anchor.x, anchor.y);
+    // H2 — an undone step may be a multi-leg ortho ROUTE (or an auto-elbowed
+    // segment): walk back through its fresh BEND junctions (degree 2, absent
+    // before the step) to the point the step started from, so the chain
+    // re-anchors where it was before the step — never on a bend that the undo
+    // just removed. A node that existed before the step, or any tee / branch
+    // (degree != 2), ends the walk.
+    final prevNodeIds = {for (final n in previous.nodes) n.id};
+    String? otherEnd(NetEdge e, String id) =>
+        e.fromId == id ? e.toId : (e.toId == id ? e.fromId : null);
+    var at = tip.id;
+    final seen = <String>{};
+    NetNode? anchor;
+    while (true) {
+      NetEdge? step;
+      for (final e in current.edgesAt(at)) {
+        if (e.kind != EdgeKind.run || prevEdgeIds.contains(e.id)) continue;
+        if (seen.contains(e.id)) continue;
+        step = e;
+        break;
+      }
+      if (step == null) break;
+      seen.add(step.id);
+      final next = otherEnd(step, at);
+      if (next == null) break;
+      final node = current.nodeById(next);
+      if (node == null) break;
+      anchor = node;
+      final isBend = !prevNodeIds.contains(next) &&
+          node.role == NodeRole.main &&
+          node.component == null &&
+          current.edgesAt(next).length == 2;
+      if (!isBend) break;
+      at = next;
     }
-    return null;
+    return anchor == null ? null : Offset(anchor.x, anchor.y);
   }
 
   void redo() {
     if (_redo.isEmpty) return;
     _dragSnapshotPending = false;
+    ref.read(dragSessionProvider.notifier).endDrag();
     _undo.add(state.network);
     state = DrawingState(
       network: _redo.removeLast(),
@@ -2184,7 +2380,28 @@ class NetworkController extends Notifier<DrawingState> {
       prevId = toId;
     }
     if (!addedAny) return null;
-    _commit(Network(nodes: nodes, edges: edges));
+    // H2 — with the Run tool armed the route is one CLICK of a chained run,
+    // not a finished draw: keep the chain alive at the route's end (exactly
+    // like [placeRunPoint]), so the next click routes on from there instead of
+    // every second click ending the run. A programmatic route outside the Run
+    // tool still commits as a finished draw (no pending point).
+    if (state.tool == DrawTool.drawRun) {
+      final end = nodes.firstWhere((n) => n.id == prevId);
+      final tip = Offset(end.x, end.y);
+      final segments = chainSegmentCount;
+      final before = state.pendingPoint;
+      _commit(Network(nodes: nodes, edges: edges),
+          pendingPoint: tip,
+          pendingSheetId: sheetId,
+          pendingFloorIndex: floorIndex);
+      if (before != null) {
+        _pushChainStep(before, tip, segments + 1);
+      } else {
+        _recordChain(tip, segments + 1);
+      }
+    } else {
+      _commit(Network(nodes: nodes, edges: edges));
+    }
     return prevId;
   }
 
@@ -2433,8 +2650,14 @@ class NetworkController extends Notifier<DrawingState> {
   /// (one undo step) on success; false — mutating NOTHING — for a missing/riser
   /// edge, a non-positive length or scale, a degenerate (zero-length) run, or an
   /// ambiguous mover (both/neither end free and no valid [moveEndId]).
+  ///
+  /// [duringDrag] — the typed length that FINISHES an endpoint grip stretch
+  /// (item 2): the drag already pushed its undo snapshot, so the result lands
+  /// through [_commitDragEnd] — the drag and the typed length are ONE undo
+  /// step back to the pre-drag network.
   bool setRunLength(String edgeId, double metres, double metersPerPixel,
-      {String? moveEndId}) {
+      {String? moveEndId, bool duringDrag = false}) {
+    if (!metres.isFinite || !metersPerPixel.isFinite) return false;
     if (metres <= 0 || metersPerPixel <= 0) return false;
     final net = state.network;
     final e = net.edgeById(edgeId);
@@ -2471,7 +2694,11 @@ class NetworkController extends Notifier<DrawingState> {
       for (final n in net.nodes)
         n.id == moverId ? n.copyWith(x: nxpos, y: nypos) : n,
     ];
-    _commit(Network(nodes: nodes, edges: net.edges));
+    if (duringDrag) {
+      _commitDragEnd(Network(nodes: nodes, edges: net.edges));
+    } else {
+      _commit(Network(nodes: nodes, edges: net.edges));
+    }
     return true;
   }
 
@@ -2546,9 +2773,7 @@ class NetworkController extends Notifier<DrawingState> {
     var bestD2 = r2;
     var bestP = world;
     for (final e in edges) {
-      if (e.kind == EdgeKind.riser) continue;
-      if (e.service != service) continue;
-      if (avoidServices.contains(e.service)) continue;
+      if (!drawTeeAccepts(e, service, avoidServices: avoidServices)) continue;
       final a = nodes.where((n) => n.id == e.fromId).firstOrNull;
       final b = nodes.where((n) => n.id == e.toId).firstOrNull;
       if (a == null || b == null) continue;
@@ -3437,6 +3662,279 @@ class NetworkController extends Notifier<DrawingState> {
     _commit(Network(nodes: nodes, edges: net.edges));
   }
 
+  // ── Base-point transforms (M8 — AutoCAD MOVE / COPY / ROTATE) ──────────────
+
+  /// MOVE the [nodeIds]/[edgeIds] selection by [delta] (world px) in ONE undo
+  /// step — the commit of a base-point Move (base → target). The effective set
+  /// is [_selectionNodeSet] (edges follow their endpoints); a run joining a
+  /// moved node to an unmoved one stretches, exactly like a group drag. Floors,
+  /// elevations and ids are untouched. Returns false (recording nothing) for a
+  /// non-finite / zero delta or an empty set.
+  bool translateSelection(
+      Set<String> nodeIds, Set<String> edgeIds, Offset delta) {
+    if (!delta.dx.isFinite || !delta.dy.isFinite || delta == Offset.zero) {
+      return false;
+    }
+    final net = state.network;
+    final ids = _selectionNodeSet(nodeIds, edgeIds);
+    if (ids.isEmpty) return false;
+    _commit(_joinCoincident(
+      Network(
+        nodes: [
+          for (final n in net.nodes)
+            ids.contains(n.id)
+                ? n.copyWith(x: n.x + delta.dx, y: n.y + delta.dy)
+                : n,
+        ],
+        edges: net.edges,
+      ),
+      ids,
+    ));
+    return true;
+  }
+
+  /// Base-point Move / Copy (review): a placed node that lands EXACTLY on an
+  /// existing node of the same sheet / floor JOINS it — the canvas's own drag-
+  /// end convention ([endNodeDragWithSnap]), so the 'Node' OSNAP marker the
+  /// target pick shows never promises a connection the command won't make
+  /// (two stacked, unconnected nodes would read as a loose end + an orphan in
+  /// Review). The join obeys the draw rule ([drawEndpointAdoptable]: a plain
+  /// run end never merges onto another service's junction), never merges two
+  /// placed nodes into each other, and drops an edge that would collapse to a
+  /// self-loop or duplicate an existing one. Exact coincidence only: the
+  /// target snap places the node ON the other one; a free click never joins.
+  Network _joinCoincident(Network net, Set<String> placed) {
+    final rename = <String, String>{};
+    for (final m in net.nodes) {
+      if (!placed.contains(m.id)) continue;
+      ServiceType? svc;
+      var mixed = false;
+      final mIsPlain = m.component == null && m.role == NodeRole.main;
+      for (final e in net.edgesAt(m.id)) {
+        if (svc != null && e.service != svc) mixed = true;
+        svc = e.service;
+      }
+      final drawService = mIsPlain && !mixed ? svc : null;
+      for (final n in net.nodes) {
+        if (placed.contains(n.id) || rename.containsValue(n.id)) continue;
+        if (n.sheetId != m.sheetId || n.floorIndex != m.floorIndex) continue;
+        if (n.x != m.x || n.y != m.y) continue;
+        if (drawService != null &&
+            !drawEndpointAdoptable(n, net.edgesAt(n.id),
+                drawService: drawService)) {
+          continue;
+        }
+        rename[m.id] = n.id;
+        break;
+      }
+    }
+    if (rename.isEmpty) return net;
+    (String, String, ServiceType, EdgeKind) keyOf(
+            String from, String to, NetEdge e) =>
+        from.compareTo(to) < 0
+            ? (from, to, e.service, e.kind)
+            : (to, from, e.service, e.kind);
+    // Only a RE-WIRED edge can be dropped (as a self-loop, or as a duplicate
+    // of a run already joining the same two nodes) — never an untouched one.
+    final seen = <(String, String, ServiceType, EdgeKind)>{
+      for (final e in net.edges)
+        if (!rename.containsKey(e.fromId) && !rename.containsKey(e.toId))
+          keyOf(e.fromId, e.toId, e),
+    };
+    final edges = <NetEdge>[];
+    for (final e in net.edges) {
+      if (!rename.containsKey(e.fromId) && !rename.containsKey(e.toId)) {
+        edges.add(e);
+        continue;
+      }
+      final from = rename[e.fromId] ?? e.fromId;
+      final to = rename[e.toId] ?? e.toId;
+      if (from == to) continue; // collapsed onto its own far end
+      if (!seen.add(keyOf(from, to, e))) continue;
+      edges.add(e.copyWith(fromId: from, toId: to));
+    }
+    return Network(
+      nodes: [
+        for (final n in net.nodes)
+          if (!rename.containsKey(n.id)) n,
+      ],
+      edges: edges,
+    );
+  }
+
+  /// COPY the [nodeIds]/[edgeIds] selection by [delta] (world px) in ONE undo
+  /// step — one placement of a base-point Copy. Fresh ids exactly like
+  /// [paste] (the shared [_cloneNodeAt] / [_cloneEdge], so the field set can
+  /// never drift), connectivity kept WITHIN the copied set by [copySelection]'s
+  /// rule (the chosen nodes + both endpoints of every chosen edge; an edge is
+  /// copied only when both its endpoints are), and every node keeps its OWN
+  /// sheet + floor — a copied riser keeps its true span. The clipboard and the
+  /// selection are left alone (AutoCAD COPY-multiple places further copies
+  /// relative to the ORIGINALS). Returns the new ids; empty (nothing recorded)
+  /// for a non-finite / zero delta or an empty set.
+  ({Set<String> nodeIds, Set<String> edgeIds}) copySelectionBy(
+      Set<String> nodeIds, Set<String> edgeIds, Offset delta) {
+    const none = (nodeIds: <String>{}, edgeIds: <String>{});
+    if (!delta.dx.isFinite || !delta.dy.isFinite || delta == Offset.zero) {
+      return none;
+    }
+    final net = state.network;
+    final kept = _selectionNodeSet(nodeIds, edgeIds);
+    if (kept.isEmpty) return none;
+    final clones = <String, String>{};
+    final newNodes = <NetNode>[];
+    for (final n in net.nodes) {
+      if (!kept.contains(n.id)) continue;
+      final id = _id('n');
+      clones[n.id] = id;
+      newNodes.add(_cloneNodeAt(
+          n, id, n.sheetId, n.floorIndex, n.x + delta.dx, n.y + delta.dy));
+    }
+    final newEdges = <NetEdge>[];
+    for (final e in net.edges) {
+      if (!edgeIds.contains(e.id)) continue;
+      final from = clones[e.fromId];
+      final to = clones[e.toId];
+      if (from == null || to == null) continue;
+      newEdges.add(_cloneEdge(e, _id('e'), from, to));
+    }
+    final joined = _joinCoincident(
+      Network(
+        nodes: [...net.nodes, ...newNodes],
+        edges: [...net.edges, ...newEdges],
+      ),
+      {for (final n in newNodes) n.id},
+    );
+    _commit(joined);
+    return (
+      nodeIds: {
+        for (final n in newNodes)
+          if (joined.nodeById(n.id) != null) n.id,
+      },
+      edgeIds: {
+        for (final e in newEdges)
+          if (joined.edgeById(e.id) != null) e.id,
+      },
+    );
+  }
+
+  /// ROTATE the [nodeIds]/[edgeIds] selection by [angleDeg] about [pivot]
+  /// (world px) in ONE undo step — the commit of a base-point Rotate.
+  ///
+  /// [angleDeg] is the AutoCAD sense: COUNTER-clockwise positive as SEEN on the
+  /// plan. Screen y grows downward, so a visual CCW turn maps a pivot-relative
+  /// delta (dx, dy) to (dx·cos + dy·sin, −dx·sin + dy·cos) — 90° turns East
+  /// (1, 0) to North (0, −1).
+  ///
+  /// Exactness (the F2 contract): a whole number of QUARTER turns uses
+  /// [rotateSelection]'s trig-free swap/negate, so axis-aligned and 45° runs
+  /// stay bit-exact. An odd multiple of 45° goes through trig and then
+  /// re-squares every selected run that WAS exactly axis-aligned or exactly
+  /// diagonal: walking the selected edges breadth-first from the first node,
+  /// each child is placed at its parent plus the rotated delta with the minor
+  /// component zeroed (axis) or |dx| == |dy| forced (diagonal) — so an
+  /// orthogonal layout turned 45° is exactly diagonal, never off by an ulp
+  /// that ortho / the riser view would read as a skew. Any other angle is a
+  /// plain rotation. Plan-only: floors, elevations and ids are untouched (a
+  /// riser's two coincident ends map to one point, so it stays vertical).
+  /// Returns false (recording nothing) for a non-finite input, an empty set,
+  /// or a turn that moves nothing.
+  bool rotateSelectionAbout(Set<String> nodeIds, Set<String> edgeIds,
+      Offset pivot, double angleDeg) {
+    if (!angleDeg.isFinite || !pivot.dx.isFinite || !pivot.dy.isFinite) {
+      return false;
+    }
+    final net = state.network;
+    final ids = _selectionNodeSet(nodeIds, edgeIds);
+    if (ids.isEmpty) return false;
+    final quarters = angleDeg / 90.0;
+    final q = quarters.roundToDouble();
+    final Offset Function(Offset d) rot;
+    if ((quarters - q).abs() < 1e-12) {
+      final k = ((q % 4) + 4) % 4;
+      if (k == 0) return false;
+      rot = switch (k.toInt()) {
+        1 => (d) => Offset(d.dy, -d.dx),
+        2 => (d) => Offset(-d.dx, -d.dy),
+        _ => (d) => Offset(-d.dy, d.dx),
+      };
+    } else {
+      final rad = angleDeg * math.pi / 180.0;
+      final c = math.cos(rad), s = math.sin(rad);
+      rot = (d) => Offset(d.dx * c + d.dy * s, -d.dx * s + d.dy * c);
+    }
+    final next = <String, Offset>{
+      for (final n in net.nodes)
+        if (ids.contains(n.id)) n.id: pivot + rot(Offset(n.x, n.y) - pivot),
+    };
+    final eighths = angleDeg / 45.0;
+    if ((eighths - eighths.roundToDouble()).abs() < 1e-12 &&
+        (quarters - q).abs() >= 1e-12) {
+      _resquareRotated(net, ids, edgeIds, next, rot);
+    }
+    var moved = false;
+    final nodes = <NetNode>[];
+    for (final n in net.nodes) {
+      final p = next[n.id];
+      if (p == null) {
+        nodes.add(n);
+        continue;
+      }
+      if (p.dx != n.x || p.dy != n.y) moved = true;
+      nodes.add(n.copyWith(x: p.dx, y: p.dy));
+    }
+    if (!moved) return false;
+    _commit(Network(nodes: nodes, edges: net.edges));
+    return true;
+  }
+
+  /// The 45° re-squaring walk of [rotateSelectionAbout] (see there): rewrites
+  /// [next] in place so every selected run that was exactly axis-aligned or
+  /// diagonal before the turn is exactly diagonal / axis-aligned after it.
+  void _resquareRotated(Network net, Set<String> ids, Set<String> edgeIds,
+      Map<String, Offset> next, Offset Function(Offset d) rot) {
+    bool square(Offset d) =>
+        d.dx == 0 || d.dy == 0 || d.dx.abs() == d.dy.abs();
+    Offset snap(Offset d) {
+      final len = d.distance;
+      if (len == 0) return Offset.zero;
+      final tol = len * 1e-9;
+      if (d.dx.abs() <= tol) return Offset(0, d.dy);
+      if (d.dy.abs() <= tol) return Offset(d.dx, 0);
+      if ((d.dx.abs() - d.dy.abs()).abs() <= tol) {
+        final m = (d.dx.abs() + d.dy.abs()) / 2;
+        return Offset(d.dx.sign * m, d.dy.sign * m);
+      }
+      return d;
+    }
+
+    final placed = <String>{};
+    for (final start in net.nodes) {
+      if (!ids.contains(start.id) || placed.contains(start.id)) continue;
+      placed.add(start.id);
+      final queue = <String>[start.id];
+      while (queue.isNotEmpty) {
+        final pid = queue.removeAt(0);
+        final parent = net.nodeById(pid)!;
+        for (final e in net.edgesAt(pid)) {
+          if (!edgeIds.contains(e.id) && !(ids.contains(e.fromId) &&
+              ids.contains(e.toId))) {
+            continue;
+          }
+          final cid = e.fromId == pid ? e.toId : e.fromId;
+          if (!ids.contains(cid) || placed.contains(cid)) continue;
+          final child = net.nodeById(cid);
+          if (child == null) continue;
+          final d0 = Offset(child.x - parent.x, child.y - parent.y);
+          placed.add(cid);
+          queue.add(cid);
+          if (!square(d0)) continue; // keeps its plain rotated position
+          next[cid] = next[pid]! + snap(rot(d0));
+        }
+      }
+    }
+  }
+
   /// The bounding-box centre (in sheet/world px) of the nodes whose ids are in
   /// [ids]. [ids] is assumed non-empty and to reference live nodes.
   (double, double) _selectionCentre(Network net, Set<String> ids) {
@@ -3529,6 +4027,9 @@ class NetworkController extends Notifier<DrawingState> {
   /// (`_seq`) is untouched — these paths only re-index / restore existing nodes,
   /// never mint new ids.
   void _setNetworkNoRecord(Network net) {
+    // A wholesale network replacement ends any drag session: the frozen
+    // snapshot belongs to the network being replaced.
+    ref.read(dragSessionProvider.notifier).endDrag();
     state = DrawingState(
       network: net,
       service: state.service,
@@ -3570,6 +4071,9 @@ class NetworkController extends Notifier<DrawingState> {
       if ((_tagSeq[p] ?? 1) <= v) _tagSeq[p] = v + 1;
     }
     _dragSnapshotPending = false;
+    // Opening a document ends any drag session (its frozen snapshot is the
+    // previous project's network — the heavy chain must size the loaded one).
+    this.ref.read(dragSessionProvider.notifier).endDrag();
     var seq = _maxLoadedSeq(net) + 1;
     if (nextSeq != null && nextSeq > seq) seq = nextSeq;
     final ref = maxReferencedSeq(referencedIds);
@@ -3668,18 +4172,31 @@ class DragSessionController extends Notifier<DragSession> {
     return const DragSession();
   }
 
-  /// Open a drag session (call at a genuine pointer-drag START): the heavy chain
-  /// freezes on the CURRENT network snapshot while the drag runs. Idempotent;
-  /// cancels any stale settle tick.
+  /// Open a drag session (call at a genuine pointer-drag START, and on each
+  /// drag frame — re-opening one that settled mid-gesture): the heavy chain
+  /// freezes on the CURRENT network snapshot while the drag runs. Idempotent.
+  ///
+  /// An open session ALWAYS carries the settle timer (the same one [tickDrag]
+  /// re-arms): a caller that begins a session and then mutates nothing (a
+  /// nudge on a stale selection, a drag cancelled before its first frame)
+  /// can never leave the heavy chain frozen on an old network.
   void beginDrag() {
+    if (!state.active) {
+      state = DragSession(
+        active: true,
+        tick: state.tick,
+        frozen: ref.read(networkControllerProvider).network,
+      );
+    }
+    _armSettle();
+  }
+
+  void _armSettle() {
     _throttle?.cancel();
-    _throttle = null;
-    if (state.active) return;
-    state = DragSession(
-      active: true,
-      tick: state.tick,
-      frozen: ref.read(networkControllerProvider).network,
-    );
+    _throttle = Timer(throttleInterval, () {
+      _throttle = null;
+      if (state.active) _close();
+    });
   }
 
   /// Record a drag frame. Debounces the settle: while the drag keeps moving (a
@@ -3692,11 +4209,7 @@ class DragSessionController extends Notifier<DragSession> {
   /// [beginDrag] — is byte-identical).
   void tickDrag() {
     if (!state.active) return;
-    _throttle?.cancel();
-    _throttle = Timer(throttleInterval, () {
-      _throttle = null;
-      if (state.active) _close();
-    });
+    _armSettle();
   }
 
   /// Close the drag session (call at pointer-drag END): the heavy chain refreshes

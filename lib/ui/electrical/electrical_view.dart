@@ -213,9 +213,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           // single-line canvas's OWN selection (the same path G5's Issues drawer
           // uses), unlike electricalSelectionProvider which only the Layout
           // layer consumes (a no-op on the single-line tab this jump lands on).
-          _canvasKey.currentState?.focusIssue(req.panelId, circuitId: circuitId);
+          // V1 — the Locate framing eases from where the view was.
+          _canvasKey.currentState
+              ?.focusIssue(req.panelId, circuitId: circuitId, animate: true);
         } else {
-          _canvasKey.currentState?.focusPanelSchedule(req.panelId);
+          _canvasKey.currentState
+              ?.focusPanelSchedule(req.panelId, animate: true);
         }
         ref.read(electricalFocusProvider.notifier).clear();
       });
@@ -329,9 +332,13 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                 left: MechXSpacing.md,
                 bottom: MechXSpacing.md,
                 child: ZoomControls(
-                  onIn: () => _canvasKey.currentState?.zoomIn(),
-                  onOut: () => _canvasKey.currentState?.zoomOut(),
-                  onFit: () => _canvasKey.currentState?.fitView(),
+                  // V1 — the zoom buttons + Fit ease (the Layout G4 tween).
+                  onIn: () =>
+                      _canvasKey.currentState?.zoomIn(animate: true),
+                  onOut: () =>
+                      _canvasKey.currentState?.zoomOut(animate: true),
+                  onFit: () =>
+                      _canvasKey.currentState?.fitView(animate: true),
                 ),
               ),
               // Minimap (bottom-right) — tracks the live viewport + dragged
@@ -741,7 +748,7 @@ Future<String?> showApplyTemplateDialog(BuildContext context) {
     barrierLabel:
         context.strings(StringKey.electricalApplyTemplateBarrier),
     barrierColor: theme.colors.scrim,
-    transitionDuration: MechXMotion.appear,
+    transitionDuration: MechXMotion.resolve(context, MechXMotion.appear),
     pageBuilder: (ctx, _, _) => MechXTheme(
       data: theme,
       child: const Center(child: _ApplyTemplateDialog()),
@@ -839,7 +846,7 @@ class _TemplateRowState extends State<_TemplateRow> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: AnimatedContainer(
-          duration: MechXMotion.hover,
+          duration: MechXMotion.resolve(context, MechXMotion.hover),
           curve: MechXMotion.standard,
           margin: const EdgeInsets.only(bottom: MechXSpacing.xxs),
           padding: const EdgeInsets.symmetric(
@@ -1153,24 +1160,37 @@ class ElectricalSystemSummary extends ConsumerWidget {
     final base = numeric ? MechXTypography.tabular(type.caption) : type.caption;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(key,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.caption.copyWith(color: colors.textMuted)),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          Flexible(
-            child: Text(value,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: base.copyWith(color: colors.textSecondary)),
-          ),
-        ],
+      // The value hugs the RIGHT edge like the mechanical `_kvRow`: laid out
+      // at its intrinsic width (capped at ~2/3 of the row so a long value
+      // wraps instead of starving the key), with the key taking the rest — an
+      // Expanded key + Flexible value split the row 50/50 and parked short
+      // values mid-row.
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final valueMax = constraints.hasBoundedWidth
+              ? constraints.maxWidth * 2 / 3
+              : double.infinity;
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: valueMax),
+                child: Text(value,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: base.copyWith(color: colors.textSecondary)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1976,7 +1996,7 @@ class _WarningRowState extends State<_WarningRow> {
         behavior: HitTestBehavior.opaque,
         onTap: () => widget.onLocate(panelId, warning.circuitId),
         child: AnimatedContainer(
-          duration: MechXMotion.hover,
+          duration: MechXMotion.resolve(context, MechXMotion.hover),
           curve: MechXMotion.standard,
           padding: const EdgeInsets.symmetric(
             horizontal: MechXSpacing.xs,

@@ -13,6 +13,12 @@
 /// carries the moved positions (250 / 500 — the same +100 delta, relative offset
 /// preserved), and NO undo step is recorded (the network never changed, so the
 /// old snapshot was a phantom entry).
+///
+/// R3 / V5 RE-DERIVATION (riser drafting-feel) — the group drag is now ONE
+/// riser-LAYOUT step on the global timeline (diagram-only, so it never marks
+/// the project dirty), and one undo returns both risers to their plan x. The
+/// marquee is direction-sensitive like the Layout's B26: this test's box only
+/// TOUCHES the riser legs, so it is drawn right-to-left (a crossing).
 library;
 
 import 'package:flutter/widgets.dart';
@@ -20,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/electrical_store.dart' show workspaceViewProvider, WorkspaceView;
+import 'package:mechx/store/app_state.dart' show projectDirtyProvider;
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/schematic_layout_store.dart';
@@ -91,8 +98,8 @@ void main() {
     // (world == canvas-local px) so the risers' screen positions are exact.
     container.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
     container
-        .read(schematicViewProvider.notifier)
-        .setEditTransform(const ViewportTransform());
+        .read(schematicEditViewportProvider.notifier)
+        .set(const ViewportTransform());
     container.read(schematicViewProvider.notifier).setMode(SchematicMode.edit);
     await tester.pump();
 
@@ -113,10 +120,10 @@ void main() {
         .read(schematicLayoutProvider)
         .xForId(nodeId, planX(nodeId));
 
-    // ── Marquee across both riser legs (start on a blank spot) ────────────────
-    final m = await tester.startGesture(at(10, 200));
+    // ── Crossing marquee (right-to-left) across both riser legs ───────────────
+    final m = await tester.startGesture(at(500, 420));
     await tester.pump();
-    await m.moveTo(at(500, 420));
+    await m.moveTo(at(10, 200));
     await tester.pump();
     await m.up();
     await tester.pump();
@@ -139,12 +146,19 @@ void main() {
     expect(diagramX('r2lo'), 500);
     expect(diagramX('r2hi'), 500);
 
-    // ── B3: the PLAN geometry is untouched, and nothing was recorded ─────────
+    // ── B3: the PLAN geometry is untouched ───────────────────────────────────
     expect(planX('r1lo'), 150);
     expect(planX('r1hi'), 150);
     expect(planX('r2lo'), 400);
     expect(planX('r2hi'), 400);
-    expect(container.read(historyProvider.notifier).canUndo, isFalse,
-        reason: 'a diagram-only move must not push an undo entry');
+    // ── R3: the whole group drag is ONE undo step ─────────────────────────────
+    final history = container.read(historyProvider.notifier);
+    expect(history.canUndo, isTrue);
+    expect(container.read(projectDirtyProvider), isFalse,
+        reason: 'a diagram-only arrangement is never saved, so never dirty');
+    history.undo();
+    expect(diagramX('r1lo'), 150);
+    expect(diagramX('r2hi'), 400);
+    expect(history.canUndo, isFalse);
   });
 }

@@ -24,7 +24,6 @@ import 'package:mechx_engine/sizing/air_velocity.dart'
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show CheckValveAmbiguity;
-import 'package:mechx_engine/sizing/room_air.dart' show RoomAirResult;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
@@ -33,7 +32,7 @@ import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
-import 'annotation_store.dart' show roomAreasProvider, roomTerminalOwnerOf;
+import 'annotation_store.dart' show roomAreasProvider, roomSizingProvider, roomTerminalOwnerOf;
 import 'app_state.dart';
 import 'document_control_store.dart';
 import 'electrical_feed.dart' show mepDutyBindingProvider;
@@ -202,10 +201,16 @@ String _verifyLabel(StandardValue<Object?> v) {
 
 /// The aggregated list of design issues, warnings first then info. Read-only:
 /// it never mutates the network, the project, or any standard.
+/// The unconnected-element defects of the (drag-frozen) network, computed ONCE
+/// per edit for the issue fan-in and its batch actions (drafting-feel perf —
+/// each read used to re-walk the whole network).
+final networkElementDefectsProvider = Provider<List<NetworkElementDefect>>(
+    (ref) => networkElementDefects(ref.watch(sizingNetworkProvider)));
+
 final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider);
+  final sheets = ref.watch(sheetsContentProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
   // M3/M4 — the discipline-neutral over-capacity set (air + storm + water),
@@ -224,7 +229,6 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final coolingMethod = ref.watch(coolingLoadMethodProvider);
   final rooms = ref.watch(roomAreasProvider);
   final hasRooms = rooms.isNotEmpty;
-  final ductSettings = ref.watch(ductSettingsProvider);
   final docControl = ref.watch(documentControlProvider);
 
   // Wave 5a (H1) — every user-facing title/message resolves through the active
@@ -898,7 +902,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // (`networkElementDefects`) — never resizes. Each defect is its OWN warning
   // (a per-node `kind` so acking/fixing one never hides the others), locatable
   // via the node's sheet.
-  for (final d in networkElementDefects(net)) {
+  for (final d in ref.watch(networkElementDefectsProvider)) {
     // Round 34 — a loose end of a component already reported above is not
     // repeated (orphans keep their own row).
     if (!d.isOrphan && componentReportedNodes.contains(d.nodeId)) continue;
@@ -1285,13 +1289,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // warns). Summing every terminal inside every footprint counted a toilet's
   // exhaust grille as the surrounding office's extract (1.167 vs 1.000 m3/s on
   // freshly auto-placed terminals — a warning Auto-place can never clear).
-  final roomSizing = <String, RoomAirResult?>{
-    for (final r in rooms)
-      r.id: r.sizing(project.calibrationFor(r.sheetId)?.metersPerPixel,
-          ductShape: ductSettings.shape,
-          ductMethod: ductSettings.method,
-          rooms: rooms),
-  };
+  final roomSizing = ref.watch(roomSizingProvider);
   final terminalOwner = <String, String?>{
     for (final n in net.nodes)
       if ((isSupplyAirTerminal(n.component) ||
@@ -1300,6 +1298,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           n.airflow != null)
         n.id: roomTerminalOwnerOf(n, rooms),
   };
+  // Each room's terminals, bucketed ONCE in node order (the per-room scan of
+  // every node in the building was O(rooms x nodes) per edit).
+  final terminalsByRoom = <String, List<NetNode>>{};
+  for (final n in net.nodes) {
+    final owner = terminalOwner[n.id];
+    if (owner != null) (terminalsByRoom[owner] ??= <NetNode>[]).add(n);
+  }
   for (final r in rooms) {
     final sizing = roomSizing[r.id];
     if (sizing == null) continue;
@@ -1308,7 +1313,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     var supplyCount = 0;
     var extractCount = 0;
     String? firstTerminal;
-    for (final n in net.nodes) {
+    for (final n in terminalsByRoom[r.id] ?? const <NetNode>[]) {
       final c = n.component;
       final isSupply = isSupplyAirTerminal(c);
       final isExtract = c == NodeComponent.returnGrille ||
@@ -1455,7 +1460,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // fed by any feeder — a board wired to nothing. Detected read-only by the pure
   // engine (`electricalConnectivityDefects`). Located on the single-line via the
   // panel id (the Review row jumps to the Electrical workspace + focuses it).
-  final electricalProject = ref.watch(electricalProjectProvider);
+  final electricalProject = ref.watch(electricalSizingProjectProvider);
   for (final d in electricalConnectivityDefects(electricalProject)) {
     final panel =
         electricalProject.panels.where((p) => p.id == d.panelId).firstOrNull;
@@ -1665,7 +1670,7 @@ final openDesignIssueCountProvider = Provider<int>((ref) {
 /// edges that actually appear in the sizing map are considered, so an empty /
 /// fully-calibrated network returns 0 and the gate is inert.
 final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   final sizing = ref.watch(sizingProvider);
   var count = 0;
@@ -1697,7 +1702,7 @@ final exportHasZeroLengthEdgesProvider =
 /// instruction. Empty ⇒ the gate is inert (byte-identical). An edge whose
 /// endpoint node is missing contributes nothing (never invents a sheet).
 final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>[];
@@ -1782,9 +1787,9 @@ class IssueBatchAction {
 /// [designIssuesProvider] (not from issue titles). Empty when there's nothing to
 /// batch — so a clean design surfaces no actions.
 final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider);
+  final sheets = ref.watch(sheetsContentProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
   final str = MechXStringsData(ref.watch(localeProvider));
@@ -1858,7 +1863,7 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
       if (edgeIds.contains(id)) id,
   };
   final unconnected = <String>{
-    for (final d in networkElementDefects(net)) d.nodeId,
+    for (final d in ref.watch(networkElementDefectsProvider)) d.nodeId,
   };
   void addSelect(IssueBatchKind kind, StringKey template,
       {Set<String> n = const {}, Set<String> e = const {}}) {

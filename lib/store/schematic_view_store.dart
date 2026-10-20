@@ -9,14 +9,23 @@
 /// the `.mechx` file — a fresh session restarts from these defaults, so the
 /// golden screenshots (which never persist this) are unchanged. The defaults are
 /// byte-for-byte the widget's old initial values.
+///
+/// Riser drafting-feel (R1) — the two canvas VIEWPORTS live in their OWN
+/// providers ([schematicAutoViewportProvider] / [schematicEditViewportProvider]),
+/// not in [SchematicViewState]: a pan / zoom writes the viewport every frame,
+/// and when it lived here every watcher of the whole view state (the Riser
+/// workspace shell, its toolbar, the inspector's system summary) rebuilt per
+/// frame. Mirrors the Layout's `sheetViewportProvider` split.
 library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart' show ServiceType;
+import 'package:mechx_engine/report/riser_tags.dart' show riserTags;
 
 import '../ui/canvas/viewport.dart';
 import 'layer_store.dart' show DisciplineLayer, disciplineOf, servicesFor;
+import 'network_store.dart' show networkControllerProvider;
 
 /// Which mode the elevation surface is in — the read-only generated riser
 /// diagram (Auto) or the editable placement/sizing surface (Edit).
@@ -52,14 +61,6 @@ class SchematicViewState {
   /// Edit-mode help popover open flag.
   final bool showHelp;
 
-  /// The persisted Auto-view viewport (F2 zoom/pan). Null ⇒ the identity base
-  /// (the fit-to-viewport render, byte-identical to before F2).
-  final ViewportTransform? autoTransform;
-
-  /// The persisted Edit-view viewport (F7). Null ⇒ fit-to-content on first
-  /// layout (the prior behaviour).
-  final ViewportTransform? editTransform;
-
   const SchematicViewState({
     this.mode = SchematicMode.auto,
     this.service = ServiceType.coldWater,
@@ -71,8 +72,6 @@ class SchematicViewState {
     this.showDetails = true,
     this.showNotes = true,
     this.showHelp = false,
-    this.autoTransform,
-    this.editTransform,
   });
 
   /// The Edit-mode discipline actually shown — the picked one, else the
@@ -92,8 +91,6 @@ class SchematicViewState {
     bool? showDetails,
     bool? showNotes,
     bool? showHelp,
-    ViewportTransform? autoTransform,
-    ViewportTransform? editTransform,
   }) =>
       SchematicViewState(
         mode: mode ?? this.mode,
@@ -106,8 +103,6 @@ class SchematicViewState {
         showDetails: showDetails ?? this.showDetails,
         showNotes: showNotes ?? this.showNotes,
         showHelp: showHelp ?? this.showHelp,
-        autoTransform: autoTransform ?? this.autoTransform,
-        editTransform: editTransform ?? this.editTransform,
       );
 }
 
@@ -150,11 +145,6 @@ class SchematicViewController extends Notifier<SchematicViewState> {
   void setShowNotes(bool v) => state = state.copyWith(showNotes: v);
   void setShowHelp(bool v) => state = state.copyWith(showHelp: v);
   void toggleHelp() => setShowHelp(!state.showHelp);
-
-  void setAutoTransform(ViewportTransform t) =>
-      state = state.copyWith(autoTransform: t);
-  void setEditTransform(ViewportTransform t) =>
-      state = state.copyWith(editTransform: t);
 }
 
 /// Transient (session-only, never `.mechx`-persisted) Riser-workspace UI state.
@@ -162,3 +152,43 @@ final schematicViewProvider =
     NotifierProvider<SchematicViewController, SchematicViewState>(
   SchematicViewController.new,
 );
+
+/// One Riser canvas's sticky viewport (F2/F7). Null ⇒ the canvas frames its
+/// content on first layout (the Auto diagram's fit is the identity whenever the
+/// building fits the window, so a default launch is byte-identical).
+class SchematicViewportController extends Notifier<ViewportTransform?> {
+  @override
+  ViewportTransform? build() => null;
+
+  /// Publish [t]. A no-op (no notification) when it equals the current view.
+  void set(ViewportTransform t) {
+    if (state != t) state = t;
+  }
+}
+
+/// The Riser → Auto diagram's live pan / zoom. Written every pan / zoom frame,
+/// so ONLY the transform widget and the viewport-dependent hit tests read it —
+/// never the workspace shell (R1).
+final schematicAutoViewportProvider =
+    NotifierProvider<SchematicViewportController, ViewportTransform?>(
+  SchematicViewportController.new,
+);
+
+/// The Riser → Edit elevation's live pan / zoom (see
+/// [schematicAutoViewportProvider]).
+final schematicEditViewportProvider =
+    NotifierProvider<SchematicViewportController, ViewportTransform?>(
+  SchematicViewportController.new,
+);
+
+/// R1 — the riser stack tags (`CW-R1` …) for one diagram [focus] (null = the
+/// combined view), memoized per NETWORK: [riserTags] builds a fresh map each
+/// call, and the Auto painter's repaint check compares it by identity, so
+/// calling it in a build made every rebuild a full re-layout + repaint. The
+/// painter and the inspector's system summary read this one value.
+final riserTagsProvider =
+    Provider.family<Map<String, String>, ServiceType?>((ref, focus) {
+  final network =
+      ref.watch(networkControllerProvider.select((s) => s.network));
+  return riserTags(network, focus);
+});

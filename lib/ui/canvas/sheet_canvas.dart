@@ -37,7 +37,9 @@ class SheetCanvas extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(sheetsControllerProvider);
+    // Drafting-feel perf: the sheet CONTENT only — every pan / zoom frame
+    // writes the whole sheets state, and must not rebuild this stack.
+    final state = ref.watch(sheetsContentProvider);
     final colors = context.colors;
     final sheet = state.current;
 
@@ -75,7 +77,10 @@ class SheetCanvas extends ConsumerWidget {
             // Fresh CanvasView per sheet, seeded from its stored viewport.
             key: ValueKey(sheet.id),
             contentSize: sheet.sizePx,
-            initialTransform: state.viewportFor(sheet.id),
+            // The LIVE viewport, read once (CanvasView consumes it only in
+            // initState); the content snapshot's viewports are stale.
+            initialTransform:
+                ref.read(sheetsControllerProvider).viewportFor(sheet.id),
             background: colors.canvas,
             gridColor: colors.gridLine,
             onTransformChanged: (vt) => ref
@@ -275,11 +280,8 @@ class PlaceholderSheetPage extends ConsumerWidget {
     // sheet-name title stays always (it's the sheet identity, not onboarding
     // copy), and the import affordance (DropOverlay, drawn separately in
     // SheetCanvas) is untouched either way.
-    final hasDrawnElements = ref
-        .watch(networkControllerProvider)
-        .network
-        .nodes
-        .any((n) => n.sheetId == sheet.id);
+    final hasDrawnElements = ref.watch(networkControllerProvider
+        .select((d) => d.network.nodes.any((n) => n.sheetId == sheet.id)));
     return DecoratedBox(
       decoration: BoxDecoration(
         color: colors.sheetPaper,

@@ -21,7 +21,8 @@ import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/units.dart';
 
-import 'app_state.dart' show CoolingLoadMethod, coolingLoadMethodProvider;
+import 'app_state.dart'
+    show CoolingLoadMethod, coolingLoadMethodProvider, ductSettingsProvider;
 import 'history_store.dart';
 import 'project_store.dart';
 
@@ -918,6 +919,26 @@ double? _roomNum(Object? raw, {bool positive = false}) {
 
 final roomAreasProvider =
     NotifierProvider<RoomAreaController, List<RoomArea>>(RoomAreaController.new);
+
+/// Every room's air sizing ([RoomArea.sizing] over its own sheet scale, the
+/// project duct settings and the NET area against the other rooms), keyed by
+/// room id — null where the sheet is unscaled / the footprint degenerate.
+///
+/// Drafting-feel perf: it depends on the rooms, the calibrations and the duct
+/// settings ONLY — never the network — so a pipe edit no longer re-sizes every
+/// room, and the room painter / Design Issues / the electrical feed / the
+/// inspector share one result instead of each re-running `sizeRoomAir`.
+final roomSizingProvider = Provider<Map<String, RoomAirResult?>>((ref) {
+  final rooms = ref.watch(roomAreasProvider);
+  final calibrations =
+      ref.watch(projectControllerProvider.select((p) => p.calibrations));
+  final ducts = ref.watch(ductSettingsProvider);
+  return {
+    for (final r in rooms)
+      r.id: r.sizing(calibrations[r.sheetId]?.metersPerPixel,
+          ductShape: ducts.shape, ductMethod: ducts.method, rooms: rooms),
+  };
+});
 
 class RoomAreaController extends Notifier<List<RoomArea>> {
   int _seq = 0;

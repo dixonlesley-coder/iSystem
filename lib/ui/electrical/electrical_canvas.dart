@@ -47,6 +47,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/advanced_study.dart' show AdvancedStudy;
 import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
@@ -62,8 +63,14 @@ import '../../store/app_state.dart';
 import '../../store/electrical_canvas_store.dart';
 import '../../store/electrical_store.dart';
 import '../canvas/canvas_grid.dart';
+import '../canvas/canvas_view.dart' show canvasFitRequestProvider;
+import '../canvas/marquee.dart';
+import '../canvas/scaled_world_child.dart';
+import '../canvas/snapping.dart' show AlignGuide, nearestAlignment;
 import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
+import '../canvas/viewport_easer.dart';
+import '../canvas/viewport_keys.dart';
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -291,7 +298,74 @@ class ElectricalCanvas extends ConsumerStatefulWidget {
   ConsumerState<ElectricalCanvas> createState() => ElectricalCanvasState();
 }
 
-class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
+/// E4 — debug-only count of board-schedule sheets the live canvas BUILT
+/// (`buildElectricalPanelDetail` calls from a card). A pan / zoom-free frame,
+/// a hover, or a board drag must not build any: the perf pins read it.
+@visibleForTesting
+int debugCanvasPanelDetailBuildCount = 0;
+
+/// E4 — the per-(topology, solve, study) derivations the canvas reads every
+/// frame, memoized so a pan / zoom / drag frame recomputes none of them. Held
+/// against [project] — the instance they were derived from; a later project
+/// reached by schematic (single-line x/y) moves only reuses them, since none
+/// of them reads a board's x/y.
+class _CanvasDerived {
+  final ElectricalProject project;
+  final ElectricalSystemResult result;
+  final AdvancedStudy advanced;
+  final Map<String, Offset> auto;
+  final String? rootId;
+  final Set<String> essential;
+  final Set<String> fed;
+  final Map<String, double> icuKaByPanel;
+  final Map<String, double> kaByCircuit;
+  final Map<String, ConduitSpec> conduitByCircuit;
+  final SldSheet spine;
+  final int nextPanelOrdinal;
+
+  const _CanvasDerived({
+    required this.project,
+    required this.result,
+    required this.advanced,
+    required this.auto,
+    required this.rootId,
+    required this.essential,
+    required this.fed,
+    required this.icuKaByPanel,
+    required this.kaByCircuit,
+    required this.conduitByCircuit,
+    required this.spine,
+    required this.nextPanelOrdinal,
+  });
+}
+
+class ElectricalCanvasState extends ConsumerState<ElectricalCanvas>
+    with SingleTickerProviderStateMixin {
+  /// K1 — the hold-Space pan latch (shared canvas vocabulary).
+  final SpacePanLatch _space = SpacePanLatch();
+
+  /// V1 — programmatic view changes (zoom buttons, Fit, keyboard zoom, the
+  /// frame-this-board gestures) ease; live gestures stop it and write.
+  late final ViewportEaser _easer;
+
+  /// E4 — see [_CanvasDerived].
+  _CanvasDerived? _derived;
+
+  /// The newest project [_derived] was validated against (a schematic
+  /// descendant of `_derived.project`, or that instance) — so the chain walk
+  /// is one step per frame, never the whole drag.
+  ElectricalProject? _derivedSeen;
+
+  /// E4 — the resolved positions, memoized on (live project, result).
+  ElectricalProject? _posProject;
+  ElectricalSystemResult? _posResult;
+  Map<String, Offset> _posCache = const {};
+
+  /// E4 — each board's card subtree, reused (same widget instance ⇒ the
+  /// framework skips rebuilding it) while its inputs are unchanged, so a pan
+  /// frame re-positions cards without rebuilding or repainting them.
+  Map<String, ({Object key, Widget card})> _cardCache = const {};
+
   /// J1 — the local per-frame mirror of
   /// [electricalCanvasViewProvider]`.transform`. The provider is the sticky
   /// home (a workspace / tab hop destroys this State); this field is the fast
@@ -314,6 +388,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   @override
   void initState() {
     super.initState();
+    _easer = ViewportEaser(this, _setTransform);
     // J1 — restore the sticky viewport + selection from the transient store, so
     // a workspace / tab hop and back lands exactly where the user left off.
     final view = ref.read(electricalCanvasViewProvider);
@@ -379,6 +454,14 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   // D2: live group-drag world positions (id → world) captured at drag start;
   // null when no panel body drag is in flight.
   Map<String, Offset>? _panelDragWorld;
+
+  // Sibling-board alignment (drafting-feel follow-up): the board the drag
+  // grabbed, the top-left corners of every board NOT being dragged (captured
+  // at drag start), and the live guide the grabbed board is latched to (null
+  // when none — and always null at rest, so goldens never see it).
+  String? _panelDragGrab;
+  List<Offset> _alignTargets = const [];
+  AlignGuide? _alignGuide;
 
   // ── D2 parity — arrow-nudge COALESCING (mirrors `layout_canvas`) ────────────
   // Every arrow-key nudge used to `movePanels`, i.e. one `_commit` — so walking
@@ -446,8 +529,12 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
   // ── D2: panel body drag (single or group move) ──────────────────────────────
 
-  void _beginPanelDrag(String panelId, Map<String, Offset> positions) {
-    _ctrl.pushUndoSnapshot();
+  void _beginPanelDrag(String panelId) {
+    final positions = _positions(
+        ref.read(electricalProjectProvider), ref.read(electricalResultProvider));
+    // One undo step, taken by the FIRST real change (move or body-drop
+    // connect) — a drag that snaps back onto its grid point records nothing.
+    _ctrl.beginUndoableGesture();
     // Drag the whole selection when the grabbed panel is part of a multi-select;
     // otherwise just this panel (and make it the selection, so the ring tracks).
     final group = (_selectedPanels.contains(panelId) && _selectedPanels.length > 1)
@@ -463,23 +550,78 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     _panelDragWorld = {
       for (final id in group) id: positions[id] ?? Offset.zero,
     };
+    _panelDragGrab = panelId;
+    _alignTargets = [
+      for (final e in positions.entries)
+        if (!group.contains(e.key)) e.value,
+    ];
   }
 
+  /// S1 — the board follows the cursor on the grid LIVE (it used to track the
+  /// raw cursor and jump onto the grid at release). [_panelDragWorld] keeps
+  /// the RAW cursor-tracked positions; each frame writes their grid snap, and
+  /// only when a board actually crosses onto a new grid point. The move is a
+  /// schematic (x/y) move, so it re-solves nothing (E2).
   void _updatePanelDrag(Offset worldDelta) {
     final map = _panelDragWorld;
     if (map == null) return;
     map.updateAll((id, w) => w + worldDelta);
-    map.forEach((id, w) => _ctrl.setPanelPosition(id, w.dx, w.dy));
+    _placeDraggedPanels(map);
+  }
+
+  void _placeDraggedPanels(Map<String, Offset> raw) {
+    final current = {
+      for (final p in ref.read(electricalProjectProvider).panels) p.id: p,
+    };
+    // Alignment beats the grid on the axis it latches: the GRABBED board's
+    // top-left is compared with every other board's (a shared left edge = one
+    // column, a shared top edge = one row), within a screen-constant
+    // tolerance; the whole dragged group shifts by the same correction so a
+    // multi-board move keeps its own spacing.
+    var dx = 0.0, dy = 0.0;
+    AlignGuide? guide;
+    final grab = raw[_panelDragGrab];
+    if (grab != null && _alignTargets.isNotEmpty) {
+      final scale = _current.scale;
+      guide = nearestAlignment(_alignTargets, grab,
+          kPanelAlignScreenPx / (scale > 0 ? scale : 1.0));
+      if (guide != null) {
+        if (guide.horizontal) {
+          dy = guide.node.dy - _snapGrid(grab.dy);
+        } else {
+          dx = guide.node.dx - _snapGrid(grab.dx);
+        }
+      }
+    }
+    if (!_sameGuide(guide, _alignGuide)) setState(() => _alignGuide = guide);
+    raw.forEach((id, w) {
+      final x = _snapGrid(w.dx) + dx, y = _snapGrid(w.dy) + dy;
+      final p = current[id];
+      if (p != null && p.x == x && p.y == y) return;
+      _ctrl.setPanelPosition(id, x, y);
+    });
   }
 
   void _endPanelDrag() {
     final map = _panelDragWorld;
     _panelDragWorld = null;
-    if (map == null) return;
-    map.forEach((id, w) =>
-        _ctrl.setPanelPosition(id, _snapGrid(w.dx), _snapGrid(w.dy)));
-    _tryBodyDropConnect(map);
+    if (map != null) {
+      _placeDraggedPanels(map);
+      _tryBodyDropConnect(map);
+    }
+    _panelDragGrab = null;
+    _alignTargets = const [];
+    if (_alignGuide != null && mounted) setState(() => _alignGuide = null);
+    _ctrl.endUndoableGesture();
   }
+
+  static bool _sameGuide(AlignGuide? a, AlignGuide? b) =>
+      identical(a, b) ||
+      (a != null &&
+          b != null &&
+          a.horizontal == b.horizontal &&
+          a.node == b.node &&
+          (a.horizontal ? a.point.dy == b.point.dy : a.point.dx == b.point.dx));
 
   /// BODY-DROP CONNECT — dropping an UNFED board on top of another board wires
   /// it as that board's sub-panel, the direct-manipulation counterpart of
@@ -628,6 +770,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   @override
   void dispose() {
     _nudgeIdleTimer?.cancel();
+    _easer.dispose();
     _focus.dispose();
     super.dispose();
   }
@@ -658,34 +801,134 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     setState(() => _transform = next);
   }
 
+  /// A LIVE view change (wheel / drag / pinch / arrow pan): immediate, and it
+  /// cancels any in-flight eased change.
+  void _setTransformLive(ViewportTransform next) {
+    _easer.stop();
+    _setTransform(next);
+  }
+
+  /// A PROGRAMMATIC view change: eased (V1) when [animate], else immediate.
+  /// Reduced motion lands it at once either way ([MechXMotion.resolve]).
+  void _goTo(ViewportTransform target, {required bool animate}) {
+    if (!animate || _viewportSize.isEmpty) {
+      _easer.stop();
+      _setTransform(target);
+      return;
+    }
+    _easer.animateTo(context, _current, target);
+  }
+
   // ── Layout ─────────────────────────────────────────────────────────────────
 
   /// Resolve each panel's world position: saved `x,y` wins, else the
   /// deterministic tidy-tree auto-layout. Delegates to the shared
   /// [resolvePanelPositions] (so the minimap tracks the same dragged positions).
+  ///
+  /// E4 — memoized on (project, result) identity, and the auto-layout behind it
+  /// on the board topology ([_derive]), so a pan / zoom frame computes nothing
+  /// and a board drag recomputes only the x/y overlay (the same formula as
+  /// [resolvePanelPositions]).
   Map<String, Offset> _positions(
     ElectricalProject project,
     ElectricalSystemResult result,
-  ) =>
-      resolvePanelPositions(project, result);
+  ) {
+    if (identical(project, _posProject) && identical(result, _posResult)) {
+      return _posCache;
+    }
+    final auto = _derive(project, result).auto;
+    _posProject = project;
+    _posResult = result;
+    return _posCache = {
+      for (final p in project.panels)
+        p.id: (p.x != null && p.y != null)
+            ? Offset(p.x!, p.y!)
+            : (auto[p.id] ?? Offset.zero),
+    };
+  }
 
-  void _fit(Map<String, Offset> positions) {
+  /// E4 — the topology / solve / study derivations, recomputed only when the
+  /// result or the study changes or the project changed in more than board
+  /// x/y (see [_CanvasDerived]).
+  _CanvasDerived _derive(
+      ElectricalProject project, ElectricalSystemResult result) {
+    final advanced = ref.read(electricalAdvancedProvider);
+    final d = _derived;
+    if (d != null &&
+        identical(d.result, result) &&
+        identical(d.advanced, advanced)) {
+      final seen = _derivedSeen;
+      if (identical(project, seen)) return d;
+      if (seen != null && _ctrl.isSchematicMoveOf(project, seen)) {
+        _derivedSeen = project;
+        return d;
+      }
+    }
+    final next = _CanvasDerived(
+      project: project,
+      result: result,
+      advanced: advanced,
+      auto: autoLayout(project, result),
+      rootId: serviceRootId(project, result),
+      essential: essentialPanelIds(project, result),
+      fed: fedPanelIds(project),
+      icuKaByPanel: breakerIcuKaByPanel(ref),
+      kaByCircuit: breakerKaByCircuit(ref),
+      conduitByCircuit: containmentByCircuit(ref),
+      spine: buildElectricalSourceSpine(
+          project: project, result: result, horizontal: true),
+      nextPanelOrdinal: nextSubPanelOrdinal(project.panels),
+    );
+    _derived = next;
+    _derivedSeen = project;
+    return next;
+  }
+
+  void _fit(Map<String, Offset> positions, {bool animate = false}) {
     final t = _fitTransform(positions);
-    if (t != null) _setTransform(t);
+    if (t != null) _goTo(t, animate: animate);
   }
 
   /// The fit transform framing all panels + their PLN heads + load nodes within
   /// the viewport (null when nothing to frame).
   ViewportTransform? _fitTransform(Map<String, Offset> positions) {
-    if (positions.isEmpty || _viewportSize.isEmpty) return null;
+    if (_viewportSize.isEmpty) return null;
+    final bounds = _contentBounds(positions);
+    if (bounds == null) return null;
+    final content = Size(bounds.width + 80, bounds.height + 80);
+    final fitted = ViewportTransform.fit(content, _viewportSize, padding: 40);
+    // Re-anchor to the content's top-left (auto-layout starts near 0,0 but a
+    // saved layout may be offset).
+    return ViewportTransform(
+      scale: fitted.scale,
+      offset: fitted.offset -
+          Offset(bounds.left - 40, bounds.top - 40) * fitted.scale,
+    );
+  }
+
+  /// K1 — Ctrl/Cmd 0: the content at 100 %, centred in the viewport.
+  ViewportTransform? _actualSizeTransform(Map<String, Offset> positions) {
+    if (_viewportSize.isEmpty) return null;
+    final bounds = _contentBounds(positions);
+    if (bounds == null) return null;
+    return ViewportTransform(
+      scale: 1.0,
+      offset: _viewportSize.center(Offset.zero) - bounds.center,
+    );
+  }
+
+  /// The world rectangle framing all panels + their PLN heads / source chain +
+  /// load nodes (null when nothing to frame) — what Fit and actual size frame.
+  Rect? _contentBounds(Map<String, Offset> positions) {
+    if (positions.isEmpty) return null;
     final project = ref.read(electricalProjectProvider);
     final result = ref.read(electricalResultProvider);
     final panels = result.panels;
     // The horizontal source chain extends LEFT of the service-root board; reserve
     // room for it so it isn't clipped off the canvas's left edge.
-    final rootId = serviceRootId(project, result);
-    final spine = buildElectricalSourceSpine(
-        project: project, result: result, horizontal: true);
+    final derived = _derive(project, result);
+    final rootId = derived.rootId;
+    final spine = derived.spine;
     final spineW = spine.isEmpty ? 0.0 : (spine.maxX - spine.minX) + 14;
     var minX = double.infinity, minY = double.infinity;
     var maxX = -double.infinity, maxY = -double.infinity;
@@ -721,14 +964,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       maxY = math.max(maxY, p.dy + h);
     });
     if (!minX.isFinite) return null;
-    final content = Size(maxX - minX + 80, maxY - minY + 80);
-    final fitted = ViewportTransform.fit(content, _viewportSize, padding: 40);
-    // Re-anchor to the content's top-left (auto-layout starts near 0,0 but a
-    // saved layout may be offset).
-    return ViewportTransform(
-      scale: fitted.scale,
-      offset: fitted.offset - Offset(minX - 40, minY - 40) * fitted.scale,
-    );
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
   // ── Pointer / zoom ───────────────────────────────────────────────────────────
@@ -736,14 +972,19 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is PointerScrollEvent) {
       final factor = math.pow(1.0015, -event.scrollDelta.dy).toDouble();
-      _setTransform(_current.zoomedBy(factor, event.localPosition));
+      _setTransformLive(_current.zoomedBy(factor, event.localPosition));
     }
   }
 
   void _onPointerDown(PointerDownEvent event) {
     _focus.requestFocus();
-    if (event.buttons & kMiddleMouseButton != 0) {
-      _panning = true;
+    // Middle-drag pans; so does a left-drag while Space is held (K1 — a mouse
+    // without a middle button otherwise has no way to pan: a blank-canvas
+    // left-drag is the marquee). The cards ignore pointers while Space is held.
+    if (event.buttons & kMiddleMouseButton != 0 ||
+        (_space.held && event.buttons & kPrimaryButton != 0)) {
+      _easer.stop();
+      setState(() => _panning = true);
       _lastPanPoint = event.localPosition;
       return;
     }
@@ -804,7 +1045,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
   void _onPointerMove(PointerMoveEvent event) {
     if (_panning) {
-      _setTransform(_current.panned(event.localPosition - _lastPanPoint));
+      _setTransformLive(_current.panned(event.localPosition - _lastPanPoint));
       _lastPanPoint = event.localPosition;
       return;
     }
@@ -814,13 +1055,15 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    _panning = false;
+    if (_panning) setState(() => _panning = false);
     final start = _marqueeStart;
     final current = _marqueeCurrent;
     if (start != null && current != null) {
       final rect = Rect.fromPoints(start, current);
       // A tiny box is a click (onTap clears); only a real drag marquee-selects.
-      if (rect.width > 4 || rect.height > 4) _selectPanelsInRect(rect);
+      if (rect.width > 4 || rect.height > 4) {
+        _selectPanelsInRect(rect, window: marqueeIsWindow(start, current));
+      }
       setState(() {
         _marqueeStart = null;
         _marqueeCurrent = null;
@@ -828,9 +1071,22 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     }
   }
 
-  /// D2: union of the panels whose screen footprint overlaps the marquee [rect]
-  /// (shift-held extends the current selection, else replaces it).
-  void _selectPanelsInRect(Rect rect) {
+  /// A cancelled pointer (focus stolen, window lost) ends any pan / marquee.
+  void _onPointerCancel(PointerCancelEvent event) {
+    if (_panning || _marqueeStart != null) {
+      setState(() {
+        _panning = false;
+        _marqueeStart = null;
+        _marqueeCurrent = null;
+      });
+    }
+  }
+
+  /// D2: the panels the marquee [rect] catches (shift-held extends the current
+  /// selection, else replaces it). V5 — a left-to-right [window] takes only
+  /// boards fully inside it; a right-to-left crossing takes any it touches
+  /// (the Layout / Riser convention, [marqueeCatches]).
+  void _selectPanelsInRect(Rect rect, {required bool window}) {
     final project = ref.read(electricalProjectProvider);
     final result = ref.read(electricalResultProvider);
     final positions = _positions(project, result);
@@ -844,7 +1100,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       final h = panelFootprintLod(panel, lod);
       final tl = vt.worldToScreen(world);
       final r = Rect.fromLTWH(tl.dx, tl.dy, w * vt.scale, h * vt.scale);
-      if (r.overlaps(rect)) hit.add(id);
+      if (marqueeCatches(rect, r, window: window)) hit.add(id);
     });
     final shift = HardwareKeyboard.instance.isShiftPressed;
     setState(() {
@@ -857,8 +1113,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   void _onScaleStart(ScaleStartDetails details) => _lastScale = 1.0;
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // D2: don't pan while a marquee is being drawn (the Listener drives it).
-    if (_marqueeStart != null) return;
+    // D2: don't pan while a marquee is being drawn (the Listener drives it),
+    // nor while the Listener is already panning (middle / Space drag).
+    if (_marqueeStart != null || _panning) return;
     var vt = _current;
     if (details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
@@ -868,11 +1125,19 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     if (incremental != 1.0) {
       vt = vt.zoomedBy(incremental, details.localFocalPoint);
     }
-    _setTransform(vt);
+    _setTransformLive(vt);
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    // K1 — hold-Space pan, tracked on key-down AND key-up (the cursor shows
+    // the grab hand while held).
+    if (_space.handle(event, textEntryPossible: isTextEntryFocused())) {
+      setState(() {});
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
     // B4 — while the user is typing in a text field, every canvas shortcut
     // (Delete/Backspace on the selection, Ctrl+Z/Y, Esc) belongs to the field:
     // never let an editing keystroke mutate the drawing.
@@ -898,6 +1163,23 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
         (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
       return KeyEventResult.handled;
     }
+    // K1 — the shared canvas VIEW keys (`viewport_keys.dart`): F fit, Ctrl/Cmd
+    // +/- zoom, Ctrl/Cmd 0 actual size (eased), arrows pan. A fresh unmodified
+    // arrow with boards selected is a NUDGE instead (below).
+    final intent = viewportIntentForKey(
+      event,
+      mod: mod,
+      shift: HardwareKeyboard.instance.isShiftPressed,
+      alt: HardwareKeyboard.instance.isAltPressed,
+    );
+    if (intent != null &&
+        !(intent is ViewportPan &&
+            intent.nudgeCandidate &&
+            _selectedPanels.isNotEmpty)) {
+      _applyViewportIntent(intent);
+      return KeyEventResult.handled;
+    }
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
     // D2: arrow keys nudge the selected panel(s) by one grid step; a whole
     // BURST of them is one undo step (see [_endNudgeBurst]).
     if (_selectedPanels.isNotEmpty && isArrowKey) {
@@ -980,6 +1262,27 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     return KeyEventResult.ignored;
   }
 
+  /// K1 — resolve a keyboard [ViewportIntent] against this canvas: Fit and
+  /// actual size frame the CONTENT bounds (not a fixed world size), zoom steps
+  /// about the viewport centre, all three eased; a pan is immediate.
+  void _applyViewportIntent(ViewportIntent intent) {
+    if (_viewportSize.isEmpty) return;
+    final positions = _positions(
+        ref.read(electricalProjectProvider), ref.read(electricalResultProvider));
+    switch (intent) {
+      case ViewportFit():
+        _fit(positions, animate: true);
+      case ViewportActualSize():
+        final t = _actualSizeTransform(positions);
+        if (t != null) _goTo(t, animate: true);
+      case ViewportZoomBy(:final factor):
+        _goTo(_current.zoomedBy(factor, _viewportSize.center(Offset.zero)),
+            animate: true);
+      case ViewportPan(:final delta):
+        _setTransformLive(_current.panned(delta));
+    }
+  }
+
   // ── Feeder drag (panel outlet → another panel) ──────────────────────────────
 
   void _onFeederDragStart(String fromId, Offset globalPos) {
@@ -998,11 +1301,11 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     });
   }
 
-  void _onFeederDragUpdate(
-    Offset globalPos,
-    Map<String, Offset> positions,
-    Map<String, ElectricalPanelResult> panels,
-  ) {
+  void _onFeederDragUpdate(Offset globalPos) {
+    final result = ref.read(electricalResultProvider);
+    final positions =
+        _positions(ref.read(electricalProjectProvider), result);
+    final panels = result.panels;
     final box = context.findRenderObject() as RenderBox?;
     final local = box?.globalToLocal(globalPos) ?? globalPos;
     final hover = _panelAt(local, positions, panels, exclude: _feederFrom);
@@ -1089,35 +1392,44 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final colors = context.colors;
     final project = ref.watch(electricalProjectProvider);
     final result = ref.watch(electricalResultProvider);
-    // H3: the same per-panel breaking-capacity (Icu, kA) map the PDF/DXF export
-    // threads into the board schedule, so the live canvas + the exported sheet
-    // agree (the export builds the sheet with this map; the canvas previously
-    // called buildElectricalPanelDetail with none, leaving every on-screen kA
-    // suffix blank).
-    final icuKaByPanel = breakerIcuKaByPanel(ref);
-    final kaByCircuit = breakerKaByCircuit(ref);
-    // Round 34 — the containment study's conduit (canvas == export).
-    final conduitByCircuit = containmentByCircuit(ref);
+    // K1 — the palette / F-key Fit request reaches this canvas too.
+    ref.listen(canvasFitRequestProvider, (_, _) => fitView(animate: true));
+    // E4 — every per-(topology, solve, study) derivation is memoized
+    // ([_derive]); a pan / zoom / drag frame recomputes none of them.
+    // H3 / Round 34: the per-panel Icu, per-device kA and containment maps are
+    // the SAME ones the PDF/DXF export threads into the board schedule.
+    final derived = _derive(project, result);
     final positions = _positions(project, result);
-    final rootId = serviceRootId(project, result);
+    final rootId = derived.rootId;
     // ESSENTIAL (genset-backed / emergency) boards — propagated down the
     // emergency sub-tree — drive the red border + feeder colour, the riser
     // convention folded in from the removed Overview tab.
-    _essential = essentialPanelIds(project, result);
+    _essential = derived.essential;
     // The honest "is this board connected?" set — every panel some way actually
     // feeds (never the target's own back-pointer, which a desynced project can
     // contradict). Drives the fed / not-connected badge.
-    _fedPanels = fedPanelIds(project);
+    _fedPanels = derived.fed;
 
     return Focus(
       focusNode: _focus,
       autofocus: true,
       onKeyEvent: _onKey,
-      child: Listener(
+      // The Space key-up lands elsewhere once focus leaves: drop the latch.
+      onFocusChange: (has) {
+        if (!has && _space.release()) setState(() {});
+      },
+      child: MouseRegion(
+        // V4 — grab while Space is held, grabbing while a pan drags; otherwise
+        // defer to the cards (a board shows the move cursor).
+        cursor: _panning
+            ? SystemMouseCursors.grabbing
+            : (_space.held ? SystemMouseCursors.grab : MouseCursor.defer),
+        child: Listener(
         onPointerSignal: _onPointerSignal,
         onPointerDown: _onPointerDown,
         onPointerMove: _onPointerMove,
         onPointerUp: _onPointerUp,
+        onPointerCancel: _onPointerCancel,
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onScaleStart: _onScaleStart,
@@ -1184,44 +1496,51 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
                     Positioned.fill(
                       child: _CanvasDropTarget(
                         transform: vt,
-                        nextPanelOrdinal: nextSubPanelOrdinal(project.panels),
+                        nextPanelOrdinal: derived.nextPanelOrdinal,
                         controller: _ctrl,
                         onToast: (m) =>
                             ref.read(statusMessageProvider.notifier).showStatus(m),
                       ),
                     ),
                     // Panel cards + their load nodes + PLN heads (Flutter widgets
-                    // so they capture pointer events for edit/drag/menu).
-                    for (final panel in [
-                      for (final id in result.order)
-                        if (result.panels[id] != null) result.panels[id]!,
-                    ])
-                      ..._panelWidgets(
-                        panel,
-                        positions[panel.panelId] ?? Offset.zero,
-                        vt,
-                        lod,
-                        project,
-                        result,
-                        rootId,
-                        positions,
-                        result.panels,
-                        icuKaByPanel,
-                        kaByCircuit,
-                        conduitByCircuit,
+                    // so they capture pointer events for edit/drag/menu). While
+                    // Space is held they ignore pointers, so a left-drag over a
+                    // board pans instead of moving it (K1).
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        ignoring: _space.held,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          children: _buildPanelLayer(
+                              result, derived, positions, vt, lod),
+                        ),
                       ),
-                    // D2: the marquee rectangle (empty-canvas left-drag), same
-                    // translucent-accent visual language as the mechanical
-                    // canvas's rubber-band. Ignores pointers so it never eats
-                    // the drag it is tracking.
-                    if (_marqueeStart != null && _marqueeCurrent != null)
-                      Positioned.fromRect(
-                        rect: Rect.fromPoints(_marqueeStart!, _marqueeCurrent!),
+                    ),
+                    // D2: the marquee rectangle (empty-canvas left-drag) — V5:
+                    // a solid-edged WINDOW left-to-right, a dashed CROSSING
+                    // right-to-left (the Layout / Riser convention). Ignores
+                    // pointers so it never eats the drag it is tracking.
+                    // The sibling-alignment guide while a board is dragged.
+                    if (_alignGuide != null)
+                      Positioned.fill(
                         child: IgnorePointer(
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: colors.accent.withAlpha(28),
-                              border: Border.all(color: colors.accent),
+                          child: CustomPaint(
+                            painter: PanelAlignGuidePainter(
+                              guide: _alignGuide!,
+                              transform: vt,
+                              color: colors.accent,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (_marqueeStart != null && _marqueeCurrent != null)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: MarqueePainter(
+                              start: _marqueeStart!,
+                              now: _marqueeCurrent!,
+                              accent: colors.accent,
                             ),
                           ),
                         ),
@@ -1233,7 +1552,35 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
           ),
         ),
       ),
+      ),
     );
+  }
+
+  /// Every board's widgets, in solve order. E4: each card subtree is reused
+  /// from [_cardCache] while its inputs hold (see [_panelWidgets]).
+  List<Widget> _buildPanelLayer(
+    ElectricalSystemResult result,
+    _CanvasDerived derived,
+    Map<String, Offset> positions,
+    ViewportTransform vt,
+    PanelLod lod,
+  ) {
+    final nextCache = <String, ({Object key, Widget card})>{};
+    final out = <Widget>[];
+    for (final id in result.order) {
+      final panel = result.panels[id];
+      if (panel == null) continue;
+      out.addAll(_panelWidgets(
+        panel,
+        positions[id] ?? Offset.zero,
+        vt,
+        lod,
+        derived,
+        nextCache,
+      ));
+    }
+    _cardCache = nextCache;
+    return out;
   }
 
   /// The card footprint at the current LOD (full schedule when zoomed in, the
@@ -1252,15 +1599,15 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     Offset world,
     ViewportTransform vt,
     PanelLod lod,
-    ElectricalProject project,
-    ElectricalSystemResult result,
-    String? rootId,
-    Map<String, Offset> positions,
-    Map<String, ElectricalPanelResult> panels,
-    Map<String, double> icuKaByPanel,
-    Map<String, double> kaByCircuit,
-    Map<String, ConduitSpec> conduitByCircuit,
+    _CanvasDerived derived,
+    Map<String, ({Object key, Widget card})> nextCache,
   ) {
+    // The project the derivations were taken from: identical to the live one
+    // except (possibly) in board x/y, which nothing below reads — so a drag
+    // frame leaves every card's inputs, and the card, untouched.
+    final project = derived.project;
+    final result = derived.result;
+    final rootId = derived.rootId;
     final scale = vt.scale;
     final tl = vt.worldToScreen(world);
     final w = panelCardWidthLod(panel, lod);
@@ -1285,8 +1632,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     // (byte-identical). Tap / double-click either to open the Supply
     // inspector.
     if (isRoot) {
-      final spine = buildElectricalSourceSpine(
-          project: project, result: result, horizontal: true);
+      final spine = derived.spine;
       if (!spine.isEmpty) {
         // Place the chain's right edge a small gap LEFT of the root's left edge,
         // its baseline (y=0, the LV-main feed) on the board's vertical centre, so
@@ -1346,8 +1692,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               // capacity, earthing, genset / solar / battery, fault level).
               onTap: widget.onRequestSupply,
               onDoubleTap: widget.onRequestSupply,
-              child: _ScaledChild(
-                scale: scale,
+              child: ScaledWorldChild(
                 width: kGridSrcW,
                 height: kGridSrcH,
                 child: _GridSourceNode(voltage: panel.system),
@@ -1358,67 +1703,99 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
       }
     }
 
-    // The panel card.
+    // The panel card. E4: the subtree under the [Positioned] is reused (the
+    // SAME widget instance, so the framework skips it) while every input it
+    // shows is unchanged — a pan frame only moves the box, and its
+    // [RepaintBoundary] keeps the painted schedule as a layer, unrepainted.
+    final id = panel.panelId;
+    final selected = _selectedPanels.contains(id);
+    final selectedCircuitId =
+        (_selection?.isCircuit ?? false) && _selection!.panelId == id
+            ? _selection!.circuitId
+            : null;
+    final essential = _essential.contains(id);
+    final cardKey = (
+      panel,
+      lod,
+      scale,
+      project,
+      result,
+      derived.icuKaByPanel,
+      derived.kaByCircuit,
+      derived.conduitByCircuit,
+      selected,
+      selectedCircuitId,
+      unfed,
+      essential,
+      modelPanel?.upsBacked ?? false,
+      modelPanel?.submeter ?? false,
+      w,
+      cardH,
+    );
+    final cached = _cardCache[id];
+    final card = (cached != null && cached.key == cardKey)
+        ? cached.card
+        : RepaintBoundary(
+            child: _PanelDraggable(
+              // D2: route the body drag through the state so a grabbed panel
+              // that is part of a multi-selection moves the WHOLE selection in
+              // one undo step.
+              onDragStart: () => _beginPanelDrag(id),
+              onDragUpdate: (screenDelta) =>
+                  _updatePanelDrag(screenDelta / scale),
+              onDragEnd: _endPanelDrag,
+              child: ScaledWorldChild(
+                width: w,
+                height: cardH,
+                child: _PanelCardNode(
+                  panel: panel,
+                  lod: lod,
+                  scale: scale,
+                  cardWidth: w,
+                  project: project,
+                  result: result,
+                  breakerIcuKaByPanelId: derived.icuKaByPanel,
+                  breakerKaByCircuitId: derived.kaByCircuit,
+                  containmentByCircuitId: derived.conduitByCircuit,
+                  selected: selected,
+                  selectedCircuitId: selectedCircuitId,
+                  unfed: unfed,
+                  essential: essential,
+                  upsBacked: modelPanel?.upsBacked ?? false,
+                  submeter: modelPanel?.submeter ?? false,
+                  // The MEP Equipment board is machine-owned (auto-synced from
+                  // the plan). Badge it + reject palette drops (a dropped way
+                  // would be wiped on the next plan change) — G2.
+                  autoOwned: id == kMepEquipmentPanelId,
+                  onTap: () => _selectPanel(id),
+                  onDoubleTap: () => widget.onEditPanel(id),
+                  onMenu: (gp) => widget.onPanelMenu(id, gp),
+                  // Summary card → expand chevron frames the board schedule
+                  // (I7), eased (V1).
+                  onExpandSchedule: () => focusPanelSchedule(id, animate: true),
+                  // A way row → select it (ring / row highlight, Delete
+                  // removes); the header band selects the whole board; nothing
+                  // collapses on a stray tap (collapse is zoom-out only — G6).
+                  onSelectWay: (cid) => _selectCircuit(id, cid),
+                  onWayDoubleTap: (cid) => widget.onEditCircuit(id, cid),
+                  onWayMenu: (cid, gp) => widget.onCircuitMenu(id, cid, gp),
+                  onDropLoad: (load) => _dropLoadOnPanel(panel, load),
+                  onOutletDragStart: (gp) => _onFeederDragStart(id, gp),
+                  onOutletDragUpdate: _onFeederDragUpdate,
+                  onOutletDragEnd: _onFeederDragEnd,
+                ),
+              ),
+            ),
+          );
+    nextCache[id] = (key: cardKey, card: card);
     widgets.add(
       Positioned(
+        key: ValueKey('electrical-card-$id'),
         left: tl.dx,
         top: tl.dy,
         width: w * scale,
         height: cardH * scale,
-        child: _PanelDraggable(
-          // D2: route the body drag through the state so a grabbed panel that is
-          // part of a multi-selection moves the WHOLE selection in one undo step.
-          onDragStart: () => _beginPanelDrag(panel.panelId, positions),
-          onDragUpdate: (screenDelta) => _updatePanelDrag(screenDelta / scale),
-          onDragEnd: _endPanelDrag,
-          child: _ScaledChild(
-            scale: scale,
-            width: w,
-            height: cardH,
-            child: _PanelCardNode(
-              panel: panel,
-              lod: lod,
-              scale: scale,
-              cardWidth: w,
-              project: project,
-              result: result,
-              breakerIcuKaByPanelId: icuKaByPanel,
-              breakerKaByCircuitId: kaByCircuit,
-              containmentByCircuitId: conduitByCircuit,
-              selected: _selectedPanels.contains(panel.panelId),
-              selectedCircuitId:
-                  (_selection?.isCircuit ?? false) &&
-                          _selection!.panelId == panel.panelId
-                      ? _selection!.circuitId
-                      : null,
-              unfed: unfed,
-              essential: _essential.contains(panel.panelId),
-              upsBacked: modelPanel?.upsBacked ?? false,
-              submeter: modelPanel?.submeter ?? false,
-              // The MEP Equipment board is machine-owned (auto-synced from the
-              // plan). Badge it + reject palette drops (a dropped way would be
-              // wiped on the next plan change) — G2.
-              autoOwned: panel.panelId == kMepEquipmentPanelId,
-              onTap: () => _selectPanel(panel.panelId),
-              onDoubleTap: () => widget.onEditPanel(panel.panelId),
-              onMenu: (gp) => widget.onPanelMenu(panel.panelId, gp),
-              // Summary card → expand chevron frames the board schedule (I7).
-              onExpandSchedule: () => focusPanelSchedule(panel.panelId),
-              // A way row → select it (ring / row highlight, Delete removes);
-              // the header band selects the whole board; nothing collapses on a
-              // stray tap (collapse is zoom-out only — G6).
-              onSelectWay: (cid) => _selectCircuit(panel.panelId, cid),
-              onWayDoubleTap: (cid) => widget.onEditCircuit(panel.panelId, cid),
-              onWayMenu: (cid, gp) =>
-                  widget.onCircuitMenu(panel.panelId, cid, gp),
-              onDropLoad: (load) => _dropLoadOnPanel(panel, load, positions),
-              onOutletDragStart: (gp) => _onFeederDragStart(panel.panelId, gp),
-              onOutletDragUpdate: (gp) =>
-                  _onFeederDragUpdate(gp, positions, panels),
-              onOutletDragEnd: _onFeederDragEnd,
-            ),
-          ),
-        ),
+        child: card,
       ),
     );
 
@@ -1456,9 +1833,9 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
               // Converge both "reveal panel detail" gestures on the SAME
               // framing so a double-tap here lands exactly where the summary
               // card's expand chevron would.
-              onDoubleTap: () => focusPanelSchedule(panel.panelId),
-              child: _ScaledChild(
-                scale: scale,
+              onDoubleTap: () =>
+                  focusPanelSchedule(panel.panelId, animate: true),
+              child: ScaledWorldChild(
                 width: kLoadW,
                 height: kLoadNodeH,
                 child: _MergedLoadsNode(count: loadCount),
@@ -1484,11 +1861,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   ///  • any other card adds a way and toasts the sizing the engine just
   ///    produced for it (breaker · cable · Vd), read back from the freshly
   ///    recomputed result so the number is the real one, not a guess.
-  void _dropLoadOnPanel(
-    ElectricalPanelResult panel,
-    PaletteLoad load,
-    Map<String, Offset> positions,
-  ) {
+  void _dropLoadOnPanel(ElectricalPanelResult panel, PaletteLoad load) {
     // Reject a drop onto the machine-owned MEP board — it is rebuilt from the
     // plan, so a hand-added way would silently vanish (G2).
     if (panel.panelId == kMepEquipmentPanelId) {
@@ -1502,6 +1875,8 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
 
     if (load.kind == LoadKind.feeder) {
       final result = ref.read(electricalResultProvider);
+      final positions =
+          _positions(ref.read(electricalProjectProvider), result);
       final slot = _freeSlotRightOf(panel.panelId, null, positions, result);
       final newId = _ctrl.addFedPanelAt(
         fromPanelId: panel.panelId,
@@ -1568,15 +1943,20 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// Current zoom scale (exposed for tests / host LOD checks).
   double get currentScale => _current.scale;
 
-  void zoomIn() =>
-      _setTransform(_current.zoomedBy(1.2, _viewportSize.center(Offset.zero)));
-  void zoomOut() => _setTransform(
-    _current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)),
-  );
-  void fitView() {
+  /// Zoom in one step about the viewport centre. [animate] eases it (V1 —
+  /// the on-canvas zoom buttons); the default is the immediate programmatic
+  /// change tests and the golden harness rely on.
+  void zoomIn({bool animate = false}) => _goTo(
+      _current.zoomedBy(1.2, _viewportSize.center(Offset.zero)),
+      animate: animate);
+  void zoomOut({bool animate = false}) => _goTo(
+        _current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)),
+        animate: animate,
+      );
+  void fitView({bool animate = false}) {
     final project = ref.read(electricalProjectProvider);
     final result = ref.read(electricalResultProvider);
-    _fit(_positions(project, result));
+    _fit(_positions(project, result), animate: animate);
   }
 
   /// Frame a single panel's BOARD SCHEDULE — centre [panelId] at a scale past
@@ -1593,7 +1973,8 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// scale to whatever actually fits the viewport width (94%, leaving a slim
   /// margin), floored at [kLodThreshold] so the schedule LOD itself never
   /// drops back to the summary card even on a narrow canvas.
-  void focusPanelSchedule(String panelId, {double? scale}) {
+  void focusPanelSchedule(String panelId,
+      {double? scale, bool animate = false}) {
     final project = ref.read(electricalProjectProvider);
     final result = ref.read(electricalResultProvider);
     final pos = _positions(project, result)[panelId];
@@ -1605,10 +1986,13 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
     final fitWidthScale = _viewportSize.width * 0.94 / w;
     final s = math.max(kLodThreshold, math.min(desired, fitWidthScale));
     final worldCentre = Offset(pos.dx + w / 2, pos.dy + h / 2);
-    _setTransform(ViewportTransform(
-      scale: s,
-      offset: _viewportSize.center(Offset.zero) - worldCentre * s,
-    ));
+    _goTo(
+      ViewportTransform(
+        scale: s,
+        offset: _viewportSize.center(Offset.zero) - worldCentre * s,
+      ),
+      animate: animate,
+    );
   }
 
   /// Frame [panelId]'s board schedule AND select the offending element — the G5
@@ -1616,8 +2000,8 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   /// schedule row (Delete then removes it); a null [circuitId] selects the whole
   /// board. Framing no-ops when the panel / viewport isn't ready yet, but the
   /// selection is still applied so a subsequent frame lands on it.
-  void focusIssue(String panelId, {String? circuitId}) {
-    focusPanelSchedule(panelId);
+  void focusIssue(String panelId, {String? circuitId, bool animate = false}) {
+    focusPanelSchedule(panelId, animate: animate);
     setState(() {
       if (circuitId == null) {
         // A whole-board locate rings the panel (D2: panel selection is the
@@ -1660,7 +2044,7 @@ class ElectricalCanvasState extends ConsumerState<ElectricalCanvas> {
   void centreOn(Offset world) {
     if (_viewportSize.isEmpty) return;
     final s = _current.scale;
-    _setTransform(ViewportTransform(
+    _setTransformLive(ViewportTransform(
       scale: s,
       offset: _viewportSize.center(Offset.zero) - world * s,
     ));
@@ -2105,15 +2489,36 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
   /// The way ROW index the pointer is over (null = none) — drives the highlight.
   int? _hoveredRow;
 
+  /// E4 — the memoized sheet and the inputs it was built from. A row hover,
+  /// a card hover / selection change, or a parent rebuild with the same
+  /// inputs reuses the SAME [SldSheet] instance, so the schedule painter's
+  /// `shouldRepaint` (sheet identity) stays false.
+  SldSheet? _sheetMemo;
+  Object? _sheetMemoKey;
+
   /// The board-schedule sheet for this one panel, re-origined to (0,0).
-  SldSheet get _sheet => buildElectricalPanelDetail(
-        project: widget.project,
-        result: widget.result,
-        panelId: widget.panel.panelId,
-        breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
-        breakerKaByCircuitId: widget.breakerKaByCircuitId,
-        containmentByCircuitId: widget.containmentByCircuitId,
-      );
+  SldSheet get _sheet {
+    final key = (
+      widget.project,
+      widget.result,
+      widget.panel.panelId,
+      widget.breakerIcuKaByPanelId,
+      widget.breakerKaByCircuitId,
+      widget.containmentByCircuitId,
+    );
+    final memo = _sheetMemo;
+    if (memo != null && _sheetMemoKey == key) return memo;
+    debugCanvasPanelDetailBuildCount++;
+    _sheetMemoKey = key;
+    return _sheetMemo = buildElectricalPanelDetail(
+      project: widget.project,
+      result: widget.result,
+      panelId: widget.panel.panelId,
+      breakerIcuKaByPanelId: widget.breakerIcuKaByPanelId,
+      breakerKaByCircuitId: widget.breakerKaByCircuitId,
+      containmentByCircuitId: widget.containmentByCircuitId,
+    );
+  }
 
   /// Fit transform mapping the sheet bounds into [size] (matching
   /// [SldBoardSchedulePainter] so the hit-test agrees with the paint).
@@ -2221,6 +2626,8 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
                         essential: colors.danger,
                         hoveredRow: _hoveredRow,
                         highlight: colors.accent,
+                        phaseInks:
+                            SldPhaseInks.forBrightness(colors.brightness),
                       ),
                       child: const SizedBox.expand(),
                     ),
@@ -2307,7 +2714,7 @@ class _PanelCardNode extends StatefulWidget {
   final PanelLod lod;
 
   /// The live canvas zoom. The card is laid out in WORLD px inside a
-  /// [_ScaledChild], so anything that must keep a fixed SCREEN size (the outlet
+  /// [ScaledWorldChild], so anything that must keep a fixed SCREEN size (the outlet
   /// grab band) divides by this.
   final double scale;
 
@@ -3412,56 +3819,17 @@ class _PanelDraggable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onPanStart: (_) => onDragStart(),
-      onPanUpdate: (d) => onDragUpdate(d.delta),
-      onPanEnd: (_) => onDragEnd(),
-      child: child,
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// Scaled-child wrapper — lays the node out at its NATURAL (world-px) size then
-// scales it visually to fill the (already-scaled) `Positioned` box.
-// ════════════════════════════════════════════════════════════════════════════
-
-/// Lays [child] out at its natural world-px size ([width] x [height]) and scales
-/// it to fill the box it is given (which the caller sizes to `width * scale` x
-/// `height * scale`, so both axes scale by exactly `scale` — the paint is
-/// identical to a `Transform.scale`).
-///
-/// Implemented with a [FittedBox] rather than `Transform.scale` + `OverflowBox`
-/// because HIT TESTING has to survive the scale. `RenderBox.hitTest` refuses any
-/// position outside the box's OWN size, and an `OverflowBox` under tight
-/// constraints is sized to the SCALED box (e.g. 168 px) while its child is laid
-/// out at the natural size (e.g. 280 px) — so every pointer landing on the
-/// painted right-hand ~40 % of a zoomed-out node was silently dropped before it
-/// reached the child. That is what made the outlet handle feel half-dead and
-/// what leaked those drags to the canvas marquee. [FittedBox] carries a real
-/// paint transform that `hitTestChildren` inverts, so the whole painted node is
-/// live at every zoom. `clipBehavior` stays [Clip.none] (the default) so a node
-/// may still paint outside its box.
-class _ScaledChild extends StatelessWidget {
-  final double scale;
-  final double width;
-  final double height;
-  final Widget child;
-
-  const _ScaledChild({
-    required this.scale,
-    required this.width,
-    required this.height,
-    required this.child,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return FittedBox(
-      fit: BoxFit.fill,
-      alignment: Alignment.topLeft,
-      child: SizedBox(width: width, height: height, child: child),
+    // V4 — a board reads as movable (the way-row / outlet regions inside it
+    // carry their own cursors where they differ).
+    return MouseRegion(
+      cursor: SystemMouseCursors.move,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanStart: (_) => onDragStart(),
+        onPanUpdate: (d) => onDragUpdate(d.delta),
+        onPanEnd: (_) => onDragEnd(),
+        child: child,
+      ),
     );
   }
 }
@@ -3681,3 +4049,60 @@ class _CanvasDropPreviewPainter extends CustomPainter {
       old.color != color;
 }
 
+
+
+/// Screen-px tolerance within which a dragged board's top-left latches onto a
+/// sibling board's column (x) or row (y). Under the 16-unit grid step at 1:1,
+/// so it only takes over where a sibling sits off the dragged board's grid.
+const double kPanelAlignScreenPx = 10.0;
+
+/// The dashed alignment guide drawn while a board is dragged: a line along the
+/// shared edge from the sibling board's corner through the dragged board's,
+/// overshooting both by a little so it reads as a guide, not a feeder.
+class PanelAlignGuidePainter extends CustomPainter {
+  final AlignGuide guide;
+  final ViewportTransform transform;
+  final Color color;
+
+  PanelAlignGuidePainter({
+    required this.guide,
+    required this.transform,
+    required this.color,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final a = transform.worldToScreen(guide.node);
+    final b = transform.worldToScreen(guide.point);
+    const over = 24.0;
+    final Offset start, end;
+    if (guide.horizontal) {
+      final y = a.dy;
+      start = Offset(math.min(a.dx, b.dx) - over, y);
+      end = Offset(math.max(a.dx, b.dx) + over, y);
+    } else {
+      final x = a.dx;
+      start = Offset(x, math.min(a.dy, b.dy) - over);
+      end = Offset(x, math.max(a.dy, b.dy) + over);
+    }
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+    const dash = 5.0, gap = 4.0;
+    final total = (end - start).distance;
+    if (total <= 0) return;
+    final dir = (end - start) / total;
+    for (var t = 0.0; t < total; t += dash + gap) {
+      canvas.drawLine(start + dir * t,
+          start + dir * math.min(t + dash, total), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(PanelAlignGuidePainter old) =>
+      old.guide.node != guide.node ||
+      old.guide.point != guide.point ||
+      old.guide.horizontal != guide.horizontal ||
+      old.transform != transform ||
+      old.color != color;
+}

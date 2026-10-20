@@ -427,7 +427,7 @@ void main() {
         .toList();
     final sub = labels.firstWhere((t) => t.contains('kvar'));
     expect(sub, endsWith('300 kvar'));
-    expect(labels.where((t) => t.contains('0kW / 0kVA')), isEmpty);
+    expect(labels.where((t) => t.contains('0 kW / 0 kVA')), isEmpty);
   });
 
   group('elec-drafting-2-2 power one-line', () {

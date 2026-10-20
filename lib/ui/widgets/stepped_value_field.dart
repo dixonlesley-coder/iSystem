@@ -442,10 +442,10 @@ class _StepperGlyphButtonState extends State<_StepperGlyphButton> {
         : (_hover ? colors.textPrimary : colors.textSecondary);
     final glyph = AnimatedScale(
       scale: _down && enabled ? 0.9 : 1.0,
-      duration: MechXMotion.press,
+      duration: MechXMotion.resolve(context, MechXMotion.press),
       curve: MechXMotion.standard,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         width: 24,
         height: 24,

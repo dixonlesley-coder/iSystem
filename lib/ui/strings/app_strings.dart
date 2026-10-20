@@ -1248,6 +1248,27 @@ enum StringKey {
   schematicNotesFeedBooster,
   schematicNotesFeedMainsMeter,
   schematicNotesFeedMains,
+  trayNotOnSheet,
+  busyExporting,
+  sheetLoadingPlan,
+  sheetLoadFailedTitle,
+  sheetPdfLoadFailed,
+  sheetDxfLoadFailed,
+  sheetNoSourcePath,
+  sheetReplacePlan,
+  heatmapResidualPressure,
+  heatmapUniformValue,
+  heatmapLowValue,
+  heatmapHighValue,
+  heatmapVerdictLow,
+  heatmapVerdictPass,
+  heatmapVerdictHeldByDesign,
+  heatmapBelowTargetValue,
+  buildingImportPlan,
+  buildingAssignPlan,
+  buildingChangePlan,
+  buildingFloorToFloorHeight,
+  buildingFloorPlan,
 }
 
 /// English — the source language. These MUST match the inline literals being
@@ -2763,6 +2784,48 @@ const Map<StringKey, String> _en = {
       'Feed: direct mains (water meter)',
   StringKey.schematicNotesFeedMains:
       'Feed: direct mains',
+  StringKey.trayNotOnSheet:
+      'Not on this sheet',
+  StringKey.busyExporting:
+      'Exporting {name}...',
+  StringKey.sheetLoadingPlan:
+      'Loading plan…',
+  StringKey.sheetLoadFailedTitle:
+      'Plan could not be loaded',
+  StringKey.sheetPdfLoadFailed:
+      'The PDF for this sheet could not be opened — it may have been moved, renamed or damaged.',
+  StringKey.sheetDxfLoadFailed:
+      'The DXF for this sheet could not be read, or it holds no drawable geometry.',
+  StringKey.sheetNoSourcePath:
+      'This sheet has no plan file attached.',
+  StringKey.sheetReplacePlan:
+      'Replace plan…',
+  StringKey.heatmapResidualPressure:
+      'Residual pressure',
+  StringKey.heatmapUniformValue:
+      'Uniform {value}',
+  StringKey.heatmapLowValue:
+      'Low {value}',
+  StringKey.heatmapHighValue:
+      'High {value}',
+  StringKey.heatmapVerdictLow:
+      'LOW',
+  StringKey.heatmapVerdictPass:
+      'PASS',
+  StringKey.heatmapVerdictHeldByDesign:
+      'held by design',
+  StringKey.heatmapBelowTargetValue:
+      'below {value} target',
+  StringKey.buildingImportPlan:
+      'Import plan…',
+  StringKey.buildingAssignPlan:
+      'Assign',
+  StringKey.buildingChangePlan:
+      'Change',
+  StringKey.buildingFloorToFloorHeight:
+      'Floor-to-floor height',
+  StringKey.buildingFloorPlan:
+      'Floor plan',
 };
 
 /// Bahasa Indonesia. Any missing key falls back to [_en] at lookup time, so the
@@ -4301,6 +4364,48 @@ const Map<StringKey, String> _id = {
       'Suplai: langsung dari PDAM (meter air)',
   StringKey.schematicNotesFeedMains:
       'Suplai: langsung dari PDAM',
+  StringKey.trayNotOnSheet:
+      'Tidak di lembar ini',
+  StringKey.busyExporting:
+      'Mengekspor {name}...',
+  StringKey.sheetLoadingPlan:
+      'Memuat denah…',
+  StringKey.sheetLoadFailedTitle:
+      'Denah tidak dapat dimuat',
+  StringKey.sheetPdfLoadFailed:
+      'PDF untuk lembar ini tidak dapat dibuka — mungkin telah dipindah, diganti nama, atau rusak.',
+  StringKey.sheetDxfLoadFailed:
+      'DXF untuk lembar ini tidak dapat dibaca, atau tidak berisi geometri yang dapat digambar.',
+  StringKey.sheetNoSourcePath:
+      'Lembar ini tidak memiliki berkas denah.',
+  StringKey.sheetReplacePlan:
+      'Ganti denah…',
+  StringKey.heatmapResidualPressure:
+      'Tekanan sisa',
+  StringKey.heatmapUniformValue:
+      'Seragam {value}',
+  StringKey.heatmapLowValue:
+      'Rendah {value}',
+  StringKey.heatmapHighValue:
+      'Tinggi {value}',
+  StringKey.heatmapVerdictLow:
+      'RENDAH',
+  StringKey.heatmapVerdictPass:
+      'LULUS',
+  StringKey.heatmapVerdictHeldByDesign:
+      'ditahan oleh desain',
+  StringKey.heatmapBelowTargetValue:
+      'di bawah target {value}',
+  StringKey.buildingImportPlan:
+      'Impor denah…',
+  StringKey.buildingAssignPlan:
+      'Tetapkan',
+  StringKey.buildingChangePlan:
+      'Ubah',
+  StringKey.buildingFloorToFloorHeight:
+      'Tinggi antar lantai',
+  StringKey.buildingFloorPlan:
+      'Denah lantai',
 };
 
 /// Round 34 — engine electrical warning code → (EN, ID) title. Keys are the

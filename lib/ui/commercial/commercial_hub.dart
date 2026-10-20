@@ -12,9 +12,8 @@ import '../inspector/project_panel.dart'
     show pickExportSave, reportStringsFor, runExportGuarded;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
-import '../theme/mechx_theme.dart';
+import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
-import '../widgets/mechx_scrollbar.dart';
 import 'electrical_bom_view.dart';
 import 'pricelist_screen.dart';
 import 'quotation_view.dart';
@@ -31,57 +30,25 @@ class CommercialHub extends ConsumerStatefulWidget {
 }
 
 class _CommercialHubState extends ConsumerState<CommercialHub> {
-  // Owned so the themed scroll indicator (J1) can be dragged, not just shown.
-  final ScrollController _scrollController = ScrollController();
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-
-    return ColoredBox(
-      color: colors.background,
-      child: MechXScrollbar(
-        controller: _scrollController,
-        child: SingleChildScrollView(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(MechXSpacing.xl),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 920),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(context.strings(StringKey.commercialHubTitle),
-                    style: type.display.copyWith(color: colors.textPrimary)),
-                const SizedBox(height: MechXSpacing.sm),
-                Text(
-                  context.strings(StringKey.commercialHubLead),
-                  style: type.body.copyWith(color: colors.textSecondary),
-                ),
-                const SizedBox(height: MechXSpacing.lg),
-                const _ExportBar(),
-                const SizedBox(height: MechXSpacing.lg),
-                const MechanicalBomView(),
-                const SizedBox(height: MechXSpacing.xl),
-                const ElectricalBomView(),
-                const SizedBox(height: MechXSpacing.xl),
-                const PricelistScreen(),
-                const SizedBox(height: MechXSpacing.xl),
-                const QuotationView(),
-              ],
-            ),
-          ),
-        ),
-        ),
-      ),
+    // The SAME hub frame as Review / Projects / Building (HubScaffold, one
+    // 720-px column): its own 920-px column used to start the title ~100 px
+    // left of every other hub's, so switching hubs made the page jump.
+    return HubScaffold(
+      title: context.strings(StringKey.commercialHubTitle),
+      lead: context.strings(StringKey.commercialHubLead),
+      children: const [
+        _ExportBar(),
+        SizedBox(height: MechXSpacing.lg),
+        MechanicalBomView(),
+        SizedBox(height: MechXSpacing.xl),
+        ElectricalBomView(),
+        SizedBox(height: MechXSpacing.xl),
+        PricelistScreen(),
+        SizedBox(height: MechXSpacing.xl),
+        QuotationView(),
+      ],
     );
   }
 }
