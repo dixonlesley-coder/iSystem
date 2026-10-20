@@ -1520,7 +1520,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   Polish (batch 6): floating chrome that sits over the sheet PAPER uses
   `GlassSurface(overPaper: true)` (dark-mode legibility); every implicit
   animation in a shared widget passes `MechXMotion.resolve`; Riser Auto labels
-  follow the one LOD rule (`riserLabelFontSize`: hidden < 6 px, capped > 2x);
+  follow the one LOD rule (`riserLabelFontSize`: hidden < 3.5 px, capped > 2x);
   an export raises the busy pill (`exportInFlightProvider`) and DXF sheets
   parse off the UI isolate (`cachedDrawing` never parses — peek + background
   load). An async command must run on a LONG-LIVED ref (palette commands use
