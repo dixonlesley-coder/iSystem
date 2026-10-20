@@ -62,6 +62,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_scrollbar.dart';
+import '../widgets/mechx_tooltip.dart';
 
 /// Opacity applied when the electrical layer is a faded coordination layer.
 const double kElectricalFadedAlpha = 0.34;
@@ -1087,7 +1088,9 @@ class _WiringPainter extends CustomPainter {
         center: mid, width: tp.width + 10, height: tp.height + 6);
     canvas.drawRRect(
       RRect.fromRectAndRadius(rect, MechXRadii.xs),
-      Paint()..color = const Color(0xE015171B),
+      // A dark chip in BOTH themes (it sits on the light drawing paper):
+      // the dark palette's grouped background at ~0.88 alpha.
+      Paint()..color = MechXColors.dark.background.withAlpha(0xE0),
     );
     tp.paint(canvas, mid - Offset(tp.width / 2, tp.height / 2));
   }
@@ -1317,17 +1320,16 @@ class _LoadMarkerState extends State<_LoadMarker> {
                 Text(c.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: type.caption.copyWith(
+                    style: type.micro.copyWith(
                         color: colors.textPrimary,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 9)),
+                        fontWeight: FontWeight.w700)),
                 if (rating > 0)
                   Text(
                     util != null
                         ? '${fmtAmp0(rating)}A · ${util.round()}%'
                         : '${fmtAmp0(rating)}A',
-                    style:
-                        type.caption.copyWith(color: colors.textMuted, fontSize: 8),
+                    style: type.micro.copyWith(
+                        color: colors.textMuted, fontWeight: FontWeight.w500),
                   ),
               ],
             ),
@@ -2163,6 +2165,9 @@ class _FeederDragPainter extends CustomPainter {
 /// themed scroll indicator) rather than running the full height of the canvas.
 const double _kTrayMaxHeight = 360;
 
+/// The tray's fixed width (a 24-pt multiple of the 8-pt grid).
+const double _kTrayWidth = 192;
+
 class _UnplacedTray extends ConsumerWidget {
   final ElectricalProject project;
   final ElectricalSystemResult result;
@@ -2201,75 +2206,111 @@ class _UnplacedTray extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
+    // Group the unplaced LOADS by their board (model order), so each chip can
+    // show the distinguishing part — the load's own name — under a small
+    // board header, instead of '<board> · <load>' truncating the load away.
+    final loadsByBoard = <String, List<_TrayLoad>>{};
+    for (final t in unplacedLoads) {
+      (loadsByBoard[t.panelId] ??= []).add(t);
+    }
+
     return SizedBox(
-      width: 188,
-      // Liquid-Glass unplaced tray — floats over the layout canvas.
+      width: _kTrayWidth,
+      // Liquid-Glass unplaced tray — floats over the drawing paper, so it wears
+      // the legible over-paper glass.
       child: GlassSurface(
         borderRadius: MechXRadii.card,
         blurSigma: MechXGlass.blurSigmaLight,
         shadow: MechXShadow.popover,
+        overPaper: true,
         child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.sm, MechXSpacing.sm, MechXSpacing.sm, MechXSpacing.xs),
-            child: Text('Not on this sheet',
-                style: type.label.copyWith(
-                    color: colors.textPrimary, fontWeight: FontWeight.w700)),
-          ),
-          const SizedBox(height: MechXSpacing.xs),
-          // Cap the scroll region: a `SingleChildScrollView` under a bounded
-          // `maxHeight` shrinks to its content when short and scrolls when tall
-          // (J5), with a themed scroll indicator (J1).
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxHeight: _kTrayMaxHeight),
-            child: MechXScrollbar(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(MechXSpacing.sm, 0,
-                    MechXSpacing.sm, MechXSpacing.sm),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (final p in unplacedPanels)
-                      _TrayItem(
-                        label: p.tag ?? p.name,
-                        kind: _TrayKind.panel,
-                        // One-shot placement of a live-drag intent — snapshot
-                        // first so the placement is a single undo step.
-                        onPlaced: (pos, ctrl) => ctrl
-                          ..pushUndoSnapshot()
-                          ..setPanelLayoutPos(p.id, pos),
-                        // A board with NO ways and no placement is a dead stub
-                        // (an aborted drop / a deleted-out board). Offer to
-                        // remove it, so the tray can be cleaned up instead of
-                        // accumulating boards that will never be drawn. Boards
-                        // that still carry ways are NOT removable here — that
-                        // would be a destructive edit hidden on a chip.
-                        onRemove: p.circuits.isEmpty &&
-                                p.id != kMepEquipmentPanelId
-                            ? () => _removeStub(ref, p)
-                            : null,
-                      ),
-                    for (final t in unplacedLoads)
-                      _TrayItem(
-                        // Prefixed with its board's designation — with loads of
-                        // UNPLACED boards listed too, a bare way name ('Lighting')
-                        // no longer says which board it belongs to.
-                        label: '${t.panelLabel} · ${t.circuit.name}',
-                        kind: _TrayKind.load,
-                        onPlaced: (pos, ctrl) => ctrl
-                          ..pushUndoSnapshot()
-                          ..setLoadPos(t.panelId, t.circuit.id, pos),
-                      ),
-                  ],
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(MechXSpacing.sm,
+                  MechXSpacing.sm, MechXSpacing.sm, MechXSpacing.sm),
+              child: Text(context.strings(StringKey.trayNotOnSheet),
+                  style: type.label.copyWith(
+                      color: colors.textPrimary, fontWeight: FontWeight.w700)),
+            ),
+            // Cap the scroll region: a `SingleChildScrollView` under a bounded
+            // `maxHeight` shrinks to its content when short and scrolls when
+            // tall (J5), with a themed scroll indicator (J1).
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: _kTrayMaxHeight),
+              child: MechXScrollbar(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(MechXSpacing.sm, 0,
+                      MechXSpacing.sm, MechXSpacing.sm),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final p in unplacedPanels)
+                        _TrayItem(
+                          label: p.tag ?? p.name,
+                          kind: _TrayKind.panel,
+                          // One-shot placement of a live-drag intent —
+                          // snapshot first so the placement is a single undo
+                          // step.
+                          onPlaced: (pos, ctrl) => ctrl
+                            ..pushUndoSnapshot()
+                            ..setPanelLayoutPos(p.id, pos),
+                          // A board with NO ways and no placement is a dead
+                          // stub (an aborted drop / a deleted-out board).
+                          // Offer to remove it, so the tray can be cleaned up
+                          // instead of accumulating boards that will never be
+                          // drawn. Boards that still carry ways are NOT
+                          // removable here — that would be a destructive edit
+                          // hidden on a chip.
+                          onRemove: p.circuits.isEmpty &&
+                                  p.id != kMepEquipmentPanelId
+                              ? () => _removeStub(ref, p)
+                              : null,
+                        ),
+                      for (final group in loadsByBoard.values) ...[
+                        // The board header names the group once (a way of an
+                        // UNPLACED board still says which board it belongs
+                        // to); each chip then carries only the load name.
+                        _TrayGroupHeader(label: group.first.panelLabel),
+                        for (final t in group)
+                          _TrayItem(
+                            label: t.circuit.name,
+                            // The full designation stays one hover away.
+                            tooltip: '${t.panelLabel} · ${t.circuit.name}',
+                            kind: _TrayKind.load,
+                            onPlaced: (pos, ctrl) => ctrl
+                              ..pushUndoSnapshot()
+                              ..setLoadPos(t.panelId, t.circuit.id, pos),
+                          ),
+                      ],
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
+    );
+  }
+}
+
+/// A small board header above that board's unplaced loads in the tray.
+class _TrayGroupHeader extends StatelessWidget {
+  final String label;
+  const _TrayGroupHeader({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(
+          top: MechXSpacing.xs, bottom: MechXSpacing.xs),
+      child: Text(
+        label.toUpperCase(),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: context.type.micro.copyWith(color: context.colors.textSecondary),
       ),
     );
   }
@@ -2304,16 +2345,24 @@ class _TrayItem extends StatelessWidget {
   /// Null ⇒ no remove affordance, which is the case for everything real.
   final VoidCallback? onRemove;
 
+  /// The full designation shown on hover when [label] is a short form (a load
+  /// chip under its board header). Null ⇒ no tooltip.
+  final String? tooltip;
+
   const _TrayItem({
     required this.label,
     required this.kind,
     required this.onPlaced,
     this.onRemove,
+    this.tooltip,
   });
 
   @override
   Widget build(BuildContext context) {
-    final chip = _chip(context, dragging: false);
+    Widget chip = _chip(context, dragging: false);
+    if (tooltip != null) {
+      chip = MechXTooltip(message: tooltip!, child: chip);
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.xs),
       child: Draggable<_TrayPayload>(
@@ -2337,7 +2386,9 @@ class _TrayItem extends StatelessWidget {
     final dot = kind == _TrayKind.panel ? colors.accent : colors.success;
     final remove = withRemove ? onRemove : null;
     return Container(
-      padding: EdgeInsets.fromLTRB(8, 5, remove == null ? 8 : 3, 5),
+      // 8-pt grid: an 8 px side inset, a 4 px (half-step) vertical one.
+      padding: EdgeInsets.fromLTRB(MechXSpacing.sm, MechXSpacing.xs,
+          remove == null ? MechXSpacing.sm : MechXSpacing.xs, MechXSpacing.xs),
       decoration: BoxDecoration(
         color: dragging ? colors.surfaceHover : colors.background,
         borderRadius: MechXRadii.control,
@@ -2351,7 +2402,7 @@ class _TrayItem extends StatelessWidget {
             height: 8,
             decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: MechXSpacing.sm),
           Flexible(
             child: Text(label,
                 maxLines: 1,
@@ -2359,7 +2410,7 @@ class _TrayItem extends StatelessWidget {
                 style: type.label.copyWith(color: colors.textSecondary)),
           ),
           if (remove != null) ...[
-            const SizedBox(width: 4),
+            const SizedBox(width: MechXSpacing.xs),
             Semantics(
               button: true,
               label: 'Remove $label',
@@ -2369,8 +2420,8 @@ class _TrayItem extends StatelessWidget {
                 child: MouseRegion(
                   cursor: SystemMouseCursors.click,
                   child: SizedBox(
-                    width: 18,
-                    height: 18,
+                    width: MechXSpacing.md,
+                    height: MechXSpacing.md,
                     child: Center(
                       child: Text('×',
                           style: type.label.copyWith(color: colors.textMuted)),

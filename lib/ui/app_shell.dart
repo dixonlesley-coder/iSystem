@@ -573,15 +573,13 @@ Widget? buildElectricalInlineEditor(
 /// The right inspector shown when Electrical is the active Layout layer (C1):
 /// selection-first — the inline circuit / panel editor when a marker is
 /// double-clicked (driven by [electricalInspectorTargetProvider], the same
-/// target the standalone workspace uses), else the "Electrical layer" header +
-/// the Loads palette (drag onto the canvas).
+/// target the standalone workspace uses), else the Loads palette (drag onto
+/// the canvas).
 class _ElectricalInspectorColumn extends ConsumerWidget {
   const _ElectricalInspectorColumn();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
     void clear() =>
         ref.read(electricalInspectorTargetProvider.notifier).clear();
     final editor = buildElectricalInlineEditor(context, ref, clear);
@@ -591,19 +589,12 @@ class _ElectricalInspectorColumn extends ConsumerWidget {
     return SizedBox(
       width: ProjectPanel.width,
       // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(MechXSpacing.md, MechXSpacing.md,
-                MechXSpacing.md, MechXSpacing.xs),
-            child: Text(context.strings(StringKey.shellElectricalLayer),
-                style: type.subtitle.copyWith(color: colors.textPrimary)),
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          const Expanded(child: ElectricalPalette()),
-        ],
-      ),
+      // One inspector idiom across the DESIGN workspaces: the column opens
+      // straight onto its first section label (the palette's own LOADS
+      // heading), like the Layout inspector's BUILDING and the Riser's —
+      // the active layer is already named by the layer switcher, so a
+      // separate 'Electrical layer' title only repeated it.
+      child: const ElectricalPalette(),
     );
   }
 }
@@ -672,11 +663,11 @@ class _RiserInspectorColumn extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // C5: converge on the shared section-heading idiom
-            // (`MechXSectionLabel`) the main + electrical inspectors use, rather
-            // than a raw ad-hoc `Text` title with a bespoke type/colour.
-            const MechXSectionLabel('Riser'),
-            const SizedBox(height: MechXSpacing.md),
+            // C5: the shared section-heading idiom (`MechXSectionLabel`).
+            // One inspector idiom across the DESIGN workspaces: the column
+            // opens straight onto its first section (BUILDING), like the
+            // Layout inspector — the nav rail already names the workspace, so
+            // a 'Riser' label stacked over 'Building' only repeated it.
             // Building context (levels/height) → opens the Building page.
             const MechXSectionLabel('Building'),
             const SizedBox(height: MechXSpacing.xs),
@@ -782,47 +773,56 @@ class _TopBar extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            Text('iSystem',
-                style: type.title.copyWith(color: colors.textPrimary)),
-            // A hairline middot sets the product title apart from the project
-            // name — a clearer path-style hierarchy than a bare gap.
-            _titleDot(colors.textMuted),
-            Flexible(
-              child: Text(
-                projectName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.body.copyWith(color: colors.textMuted),
+            // The title group takes ALL the free space (left-aligned inside it)
+            // so the actions hug the bar's right edge — a Flexible title + a
+            // Spacer used to split the free space and park the actions mid-bar.
+            Expanded(
+              child: Row(
+                children: [
+                  Text('iSystem',
+                      style: type.title.copyWith(color: colors.textPrimary)),
+                  // A hairline middot sets the product title apart from the project
+                  // name — a clearer path-style hierarchy than a bare gap.
+                  _titleDot(colors.textMuted),
+                  Flexible(
+                    child: Text(
+                      projectName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.body.copyWith(color: colors.textMuted),
+                    ),
+                  ),
+                  // The document-app "edited" cue: a small accent dot while the work
+                  // differs from the last clean save (cleared eagerly on Save/Open;
+                  // false at rest so goldens are unchanged).
+                  if (dirty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: MechXSpacing.xs + 2),
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: colors.accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  // Where Ctrl/Cmd+S will land — the remembered file (post Save/Open).
+                  if (fileName != null) ...[
+                    _titleDot(colors.textMuted),
+                    Flexible(
+                      child: Text(
+                        fileName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: type.caption.copyWith(color: colors.textMuted),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            // The document-app "edited" cue: a small accent dot while the work
-            // differs from the last clean save (cleared eagerly on Save/Open;
-            // false at rest so goldens are unchanged).
-            if (dirty)
-              Padding(
-                padding: const EdgeInsets.only(left: MechXSpacing.xs + 2),
-                child: Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: colors.accent,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-            // Where Ctrl/Cmd+S will land — the remembered file (post Save/Open).
-            if (fileName != null) ...[
-              _titleDot(colors.textMuted),
-              Flexible(
-                child: Text(
-                  fileName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: type.caption.copyWith(color: colors.textMuted),
-                ),
-              ),
-            ],
-            const Spacer(),
+            const SizedBox(width: MechXSpacing.sm),
             // D1: a small, permanent entry point for the command palette, which
             // is otherwise reachable only via the invisible Ctrl/Cmd+K
             // accelerator. A quiet keycap pill (a hint, not a primary action)
@@ -1070,7 +1070,7 @@ class _StatusBar extends ConsumerWidget {
                       decoration: BoxDecoration(
                         color: colors.warning,
                         borderRadius:
-                            const BorderRadius.all(Radius.circular(4)),
+                            MechXRadii.small,
                       ),
                     ),
                   Flexible(
@@ -1543,7 +1543,7 @@ class _ErrorBanner extends ConsumerWidget {
                     decoration: BoxDecoration(
                       color: colors.danger,
                       borderRadius:
-                          const BorderRadius.all(Radius.circular(4)),
+                          MechXRadii.small,
                     ),
                   ),
                   Expanded(

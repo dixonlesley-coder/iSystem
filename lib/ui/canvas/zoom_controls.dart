@@ -12,7 +12,19 @@ import '../widgets/mechx_tooltip.dart';
 /// grouped, hairline-bordered, rounded pill (iOS map-style): each segment is
 /// transparent at rest and lifts to the soft fill on hover, divided by
 /// hairline separators.
+///
+/// HIT TARGETS: each control answers a [hitExtent] (40 px) square-or-wider
+/// target although the visible pill stays [visualHeight] (28 px) tall — the
+/// glass is drawn as a backdrop behind a row of 40-px-tall buttons, so the
+/// extra 6 px above / below the pill is transparent but tappable. Every
+/// button is at least [hitExtent] wide.
 class ZoomControls extends StatelessWidget {
+  /// The minimum tappable extent of each control (both axes).
+  static const double hitExtent = 40;
+
+  /// The visible pill height.
+  static const double visualHeight = 28;
+
   final VoidCallback onIn;
   final VoidCallback onOut;
   final VoidCallback onFit;
@@ -42,11 +54,21 @@ class ZoomControls extends StatelessWidget {
     // Liquid-Glass zoom cluster — a translucent blurred pill floating over the
     // canvas (iOS map-style), lifted by the card shadow.
     final strings = context.strings;
-    return GlassSurface(
-      borderRadius: MechXRadii.control,
-      blurSigma: MechXGlass.blurSigmaLight,
-      shadow: MechXShadow.card,
-      child: Row(
+    const band = (hitExtent - visualHeight) / 2;
+    return Stack(
+      children: [
+        // The visible glass pill, inset vertically inside the taller hit row.
+        const Positioned.fill(
+          top: band,
+          bottom: band,
+          child: GlassSurface(
+            borderRadius: MechXRadii.control,
+            blurSigma: MechXGlass.blurSigmaLight,
+            shadow: MechXShadow.card,
+            child: SizedBox.expand(),
+          ),
+        ),
+        Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           // L5/M4: each glyph is otherwise unlabeled icon-only chrome — a hover
@@ -68,7 +90,10 @@ class ZoomControls extends StatelessWidget {
           MechXTooltip(
             message: strings(StringKey.tooltipZoomOut),
             child: _IconBtn(
-              glyph: '-',
+              // U+2212 MINUS SIGN — the app's one minus glyph (the steppers'
+              // '−'), the typographic partner of '+' (an ASCII hyphen sat
+              // low and short beside it). Roboto carries it.
+              glyph: '−',
               onTap: onOut,
               semanticLabel: strings(StringKey.tooltipZoomOut),
             ),
@@ -104,7 +129,8 @@ class ZoomControls extends StatelessWidget {
             ),
           ),
         ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -117,7 +143,7 @@ class _Readout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        height: 28,
+        height: ZoomControls.hitExtent,
         padding: const EdgeInsets.symmetric(horizontal: MechXSpacing.sm),
         alignment: Alignment.center,
         child: Text(
@@ -177,22 +203,36 @@ class _IconBtnState extends State<_IconBtn> {
           onTapDown: (_) => setState(() => _down = true),
           onTapUp: (_) => setState(() => _down = false),
           onTapCancel: () => setState(() => _down = false),
-          child: AnimatedScale(
+          // The whole 40-px-tall column is the hit target (opaque); the hover
+          // fill paints only over the visible pill band.
+          behavior: HitTestBehavior.opaque,
+          child: SizedBox(
+            height: ZoomControls.hitExtent,
+            child: Center(
+              child: AnimatedScale(
             scale: _down ? 0.97 : 1.0,
-            duration: MechXMotion.press,
+            duration: MechXMotion.resolve(context, MechXMotion.press),
             curve: MechXMotion.standard,
             child: AnimatedContainer(
-              duration: MechXMotion.hover,
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
               curve: MechXMotion.standard,
               width: widget.mono
                   ? null
-                  : (widget.glyph.length > 1 ? 34 : 28),
+                  : (widget.glyph.length > 1 ? 44 : ZoomControls.hitExtent),
+              constraints: widget.mono
+                  ? const BoxConstraints(minWidth: ZoomControls.hitExtent)
+                  : null,
               padding: widget.mono
                   ? const EdgeInsets.symmetric(horizontal: MechXSpacing.sm)
                   : null,
-              height: 28,
+              height: ZoomControls.visualHeight,
               alignment: Alignment.center,
-              color: _hover ? colors.surfaceHover : const Color(0x00000000),
+              // Rounded: the fill now sits over the glass rather than being
+              // clipped by it, so it carries its own (inset) corners.
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                borderRadius: MechXRadii.small,
+              ),
               child: ExcludeSemantics(
                 // Decorative once the button carries a real label — hide it so
                 // a screen reader announces "Zoom in", not "plus".
@@ -205,6 +245,8 @@ class _IconBtnState extends State<_IconBtn> {
                           .copyWith(color: colors.textSecondary),
                 ),
               ),
+            ),
+          ),
             ),
           ),
         ),

@@ -1052,6 +1052,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
     required Set<String> transferPumpNodeIds,
     required bool hotWaterRecirc,
     required double rightOverlayWidth,
+    required double labelZoom,
   }) {
     final inputs = (
       network,
@@ -1067,6 +1068,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
       widget.showDetails,
       hotWaterRecirc,
       rightOverlayWidth,
+      labelZoom,
     );
     final cached = _painter;
     if (cached != null && inputs == _painterInputs) return cached;
@@ -1085,6 +1087,7 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
       showDetails: widget.showDetails,
       hotWaterRecirc: hotWaterRecirc,
       rightOverlayWidth: rightOverlayWidth,
+      labelZoom: labelZoom,
     );
   }
 
@@ -1148,6 +1151,10 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
     final hotWaterRecirc = ref.watch(hotWaterAssumedReturnProvider);
     // R1: memoized per network — a fresh map here made every build repaint.
     final tags = ref.watch(riserTagsProvider(widget.focus));
+    // Label LOD: only the QUANTISED zoom bucket is watched, so a pan frame
+    // (and a zoom frame inside one bucket) never rebuilds the diagram.
+    final watchedLabelZoom = ref.watch(schematicAutoViewportProvider
+        .select((vt) => vt == null ? null : riserLabelZoomBucket(vt.scale)));
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -1155,26 +1162,35 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
           constraints.maxWidth.isFinite ? constraints.maxWidth : 800,
           constraints.maxHeight.isFinite ? constraints.maxHeight : 600,
         );
-        final painter = _painterFor(
-          network: network,
-          sizing: sizing,
-          levels: levels,
-          building: building,
-          colors: colors,
-          downfeed: feedStrategy == FeedStrategy.downfeed,
-          riserTagsById: tags,
-          detailByNode: detailByNode,
-          transferPumpNodeIds: transferPumps,
-          hotWaterRecirc: hotWaterRecirc,
-          // Round 26 — the bottom-right notes / title block are kept clear of
-          // the band diagram.
-          rightOverlayWidth: (widget.showNotes || widget.showTitleBlock)
-              ? _kAutoNotesReserve
-              : 0,
-        );
+        _AutoSchematicPainter painterAt(double labelZoom) => _painterFor(
+              network: network,
+              sizing: sizing,
+              levels: levels,
+              building: building,
+              colors: colors,
+              downfeed: feedStrategy == FeedStrategy.downfeed,
+              riserTagsById: tags,
+              detailByNode: detailByNode,
+              transferPumpNodeIds: transferPumps,
+              hotWaterRecirc: hotWaterRecirc,
+              // Round 26 — the bottom-right notes / title block are kept clear
+              // of the band diagram.
+              rightOverlayWidth: (widget.showNotes || widget.showTitleBlock)
+                  ? _kAutoNotesReserve
+                  : 0,
+              labelZoom: labelZoom,
+            );
+        var painter = painterAt(watchedLabelZoom ?? 1.0);
         // R5: the world the diagram lays out in (== the viewport unless the
         // building is too tall for legible bands).
         _world = painter.worldSizeFor(_size);
+        // No stored view yet: the canvas shows the FIT framing, so key the
+        // label LOD on the fit scale (1.0 — unchanged — whenever the
+        // building fits the window).
+        if (watchedLabelZoom == null) {
+          final fitZoom = riserLabelZoomBucket(_fit.scale);
+          if (fitZoom != 1.0) painter = painterAt(fitZoom);
+        }
         // The painted single-line in its own layer (RepaintBoundary) under the
         // live ViewportTransform — the ONE widget that rebuilds per pan / zoom
         // frame. Identity at rest whenever world == viewport ⇒ byte-identical.
@@ -2958,6 +2974,43 @@ const double kAutoRiserMinBandWorldH = 96;
 @visibleForTesting
 int debugAutoRiserPaintCount = 0;
 
+/// Riser Auto canvas LABEL level of detail. The diagram is painted once in
+/// world space and the live pan / zoom is a compositing [Transform.scale]
+/// (R1), so without a guard every label simply scales with the view: a
+/// zoomed-out building turned its 8–13 px labels into sub-pixel mush, and a
+/// deep zoom blew them up to poster size. These two constants + the two pure
+/// helpers below are the ONE label LOD for the canvas:
+///  * a label whose ON-SCREEN size would fall below
+///    [kRiserLabelMinScreenPx] is not drawn at all;
+///  * above [kRiserLabelMaxZoom] the label is counter-scaled, so its on-screen
+///    size stops growing at ~[kRiserLabelMaxZoom]x its design size (the
+///    geometry keeps zooming; the text stays a readable annotation).
+const double kRiserLabelMinScreenPx = 6;
+const double kRiserLabelMaxZoom = 2;
+
+/// Quantises a live view [scale] into the LOD bucket the painter is keyed on,
+/// so a zoom gesture repaints the (heavy, memoised) diagram only when the
+/// bucket changes — never per frame (R1). Between 1x and [kRiserLabelMaxZoom]
+/// labels draw at their design size, so the whole band is ONE bucket (1.0 —
+/// the resting / fit view is byte-identical); below 1x it steps in 1/16ths;
+/// above the cap in quarter-octaves.
+double riserLabelZoomBucket(double scale) {
+  if (!scale.isFinite || scale <= 0) return 1.0;
+  if (scale < 1.0) return math.max(1 / 16, (scale * 16).floorToDouble() / 16);
+  if (scale <= kRiserLabelMaxZoom) return 1.0;
+  final quarterOctaves =
+      ((math.log(scale / kRiserLabelMaxZoom) / math.ln2) * 4).floorToDouble();
+  return kRiserLabelMaxZoom * math.pow(2, quarterOctaves / 4).toDouble();
+}
+
+/// The font size to paint a [base]-size label at for LOD bucket [zoom], or
+/// null when it would be illegibly small on screen (skip it).
+double? riserLabelFontSize(double base, double zoom) {
+  if (base * zoom < kRiserLabelMinScreenPx) return null;
+  if (zoom > kRiserLabelMaxZoom) return base * kRiserLabelMaxZoom / zoom;
+  return base;
+}
+
 class _AutoSchematicPainter extends CustomPainter {
   _AutoSchematicPainter({
     required this.network,
@@ -2973,7 +3026,11 @@ class _AutoSchematicPainter extends CustomPainter {
     this.showDetails = true,
     this.hotWaterRecirc = false,
     this.rightOverlayWidth = 0,
+    this.labelZoom = 1.0,
   });
+
+  /// The label LOD bucket ([riserLabelZoomBucket] of the live view scale).
+  final double labelZoom;
 
   final Network network;
   final Map<String, EdgeSizing> sizing;
@@ -3761,12 +3818,14 @@ class _AutoSchematicPainter extends CustomPainter {
   /// records its rect.
   void _drawBoxedTag(Canvas canvas, String text, Offset anchor, Color color,
       List<Rect> occupied) {
+    final fontSize = riserLabelFontSize(9, labelZoom);
+    if (fontSize == null) return; // illegible at this zoom (LOD)
     final tp = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
           fontFamily: 'Roboto',
-          fontSize: 9,
+          fontSize: fontSize,
           color: color,
           fontWeight: FontWeight.w600,
         ),
@@ -4101,13 +4160,57 @@ class _AutoSchematicPainter extends CustomPainter {
         _hasWaterComponent(NodeComponent.boosterSet);
     if (!hasRoof && !hasGround && !hasPump) return null;
     const boxW = 250.0;
-    // Round 26 (riser-drafting-3-7) — the GROUND TANK row the issued callout
-    // prints grows the box (it used to be dropped from the preview).
-    final boxH = hasGround && hasPump ? 190.0 : 150.0;
+    // The box is exactly as tall as the rows it draws (Round 26 grew it for
+    // the GROUND TANK row; a fixed 150 / 190 px left a roof-tank-only detail
+    // two-thirds empty).
+    final boxH = _plantDetailHeight(
+        hasRoof: hasRoof, hasGround: hasGround, hasPump: hasPump);
     const pad = MechXSpacing.md;
     // Guard a too-narrow / too-short viewport.
     if (size.width < boxW + 2 * pad || size.height < boxH + 2 * pad) return null;
     return Rect.fromLTWH(size.width - boxW - pad, pad, boxW, boxH);
+  }
+
+  /// The mover captions the detail prints (ONE source for the height and the
+  /// paint) — only the movers this (focused) sheet draws.
+  List<String> _plantMoverCaptions() {
+    final shown = _focusedNodeIds(network, focus);
+    return plantMoverCaptions(network,
+        detailByNodeId: detailByNode,
+        transferPumpNodeIds: transferPumpNodeIds,
+        include: (n) => shown == null || shown.contains(n.id));
+  }
+
+  /// The PUMP-SET DETAIL box height from the rows it holds — mirrors the row
+  /// arithmetic of [_paintPlantDetail] (title band 24, roof row 22 + 26 gap,
+  /// train glyph 22 with its abbrev line, 12 px per mover caption, the leg
+  /// label, the ground-tank row) plus a bottom pad.
+  double _plantDetailHeight(
+      {required bool hasRoof, required bool hasGround, required bool hasPump}) {
+    const glyph = 22.0, gl = 16.0, textH = 11.0, padBottom = MechXSpacing.sm;
+    var y = 24.0;
+    double bottom;
+    if (hasRoof) {
+      // The GRAVITASI label hangs just below the roof glyph.
+      bottom = y + glyph + (downfeed ? 1 + textH : 0);
+      y += glyph + 26;
+    } else {
+      bottom = y;
+    }
+    if (hasPump) {
+      final trainCy = y + glyph / 2;
+      final n = _plantMoverCaptions().length;
+      // The valve abbreviations under the train.
+      bottom = trainCy + gl / 2 + 2 + textH;
+      if (n > 0) bottom = trainCy + gl / 2 + 16 + 12 * (n - 1) + textH;
+      final hasLeg = (hasGround && hasRoof) || !downfeed;
+      final legY = trainCy + gl / 2 + 30 + math.max(0, 12 * (n - 1));
+      if (hasLeg) bottom = legY + textH;
+      if (hasGround) bottom = legY + 12 + glyph;
+    } else if (hasGround) {
+      bottom = y + glyph;
+    }
+    return bottom + padBottom;
   }
 
   void _paintPlantDetail(Canvas canvas, Size size) {
@@ -4230,11 +4333,7 @@ class _AutoSchematicPainter extends CustomPainter {
       // TRANSFER PUMP with its own kW, never a bare BOOSTER PUMP.
       // Round 32 r2 — only the movers this (focused) sheet draws, as the
       // export does.
-      final shown = _focusedNodeIds(network, focus);
-      final caps = plantMoverCaptions(network,
-          detailByNodeId: detailByNode,
-          transferPumpNodeIds: transferPumpNodeIds,
-          include: (n) => shown == null || shown.contains(n.id));
+      final caps = _plantMoverCaptions();
       var capDy = 0.0;
       for (final cap in caps) {
         _drawText(
@@ -4679,12 +4778,15 @@ class _AutoSchematicPainter extends CustomPainter {
     double? maxWidth,
     bool centered = false,
   }) {
+    // The ONE label LOD (see [riserLabelFontSize]).
+    final lodSize = riserLabelFontSize(fontSize, labelZoom);
+    if (lodSize == null) return;
     final tp = TextPainter(
       text: TextSpan(
         text: text,
         style: TextStyle(
           fontFamily: 'Roboto',
-          fontSize: fontSize,
+          fontSize: lodSize,
           color: color,
           fontWeight: fontWeight,
         ),
@@ -4711,7 +4813,8 @@ class _AutoSchematicPainter extends CustomPainter {
       old.transferPumpNodeIds != transferPumpNodeIds ||
       old.showDetails != showDetails ||
       old.hotWaterRecirc != hotWaterRecirc ||
-      old.rightOverlayWidth != rightOverlayWidth;
+      old.rightOverlayWidth != rightOverlayWidth ||
+      old.labelZoom != labelZoom;
 }
 
 // ---------------------------------------------------------------------------

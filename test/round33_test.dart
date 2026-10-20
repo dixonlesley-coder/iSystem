@@ -188,7 +188,9 @@ void main() {
       await t.pumpWidget(host(const HeatmapLegend(
           minKpa: 60, maxKpa: 60, targetKpa: 225, sniFloorKpa: 49)));
       expect(find.text('LOW'), findsNothing);
-      expect(find.text('below target'), findsOneWidget);
+      // The uniform state has no target tick, so the verdict names the
+      // target figure it is judged against.
+      expect(find.text('below 225 kPa target'), findsOneWidget);
     });
 
     testWidgets('a node below its floor reads LOW', (t) async {

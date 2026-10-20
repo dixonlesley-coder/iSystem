@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
+import '../shell/project_io.dart' show replaceSheetPlan;
 import 'dxf_sheet_page.dart';
 
 /// The app's DXF sheet content: a [DxfSheetPage] wired to the store so a plan
@@ -21,5 +22,7 @@ class HostedDxfSheetPage extends ConsumerWidget {
         onFrameChanged: (id, live) => ref
             .read(sheetsControllerProvider.notifier)
             .reportDxfFrameChanged(id, live),
+        // A plan that cannot be read offers the rail's 'Replace plan…' flow.
+        onReplacePlan: () => replaceSheetPlan(context, ref, sheet.id),
       );
 }

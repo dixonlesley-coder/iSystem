@@ -78,7 +78,7 @@ class _PaletteCardState<T extends Object> extends State<PaletteCard<T>> {
           child: AnimatedScale(
             // F7: the hover LIFT is the shared motion token, not a literal.
             scale: _hover ? MechXMotion.hoverLift : 1.0,
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             child: chip,
           ),

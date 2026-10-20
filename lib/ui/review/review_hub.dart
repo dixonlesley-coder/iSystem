@@ -321,6 +321,10 @@ class _ComplianceRow extends StatefulWidget {
   State<_ComplianceRow> createState() => _ComplianceRowState();
 }
 
+/// The compliance table's fixed verdict column (fits 'REVIEW' / 'TINJAU' at
+/// the caption size with room to spare).
+const double kComplianceVerdictColumnWidth = 64;
+
 class _ComplianceRowState extends State<_ComplianceRow> {
   bool _hover = false;
 
@@ -347,30 +351,39 @@ class _ComplianceRowState extends State<_ComplianceRow> {
               ),
             ),
           ),
+          // A three-column table: category | fixed-width verdict | detail.
+          // The verdict column has ONE width for every row (PASS and REVIEW
+          // line up as a column) and the detail reads left-aligned from a
+          // common edge — previously the detail was end-aligned and its
+          // varying width pushed each row's verdict to a different x.
           Expanded(
+            flex: 2,
             child: Text(item.category,
                 style: type.caption.copyWith(color: colors.textPrimary)),
           ),
-          Text(
-            item.pass
-                ? s(StringKey.reviewItemPass)
-                : s(StringKey.reviewItemReview),
-            style: type.caption.copyWith(
-              color: item.pass ? colors.success : colors.warning,
-            ),
-          ),
-          if (item.detail.isNotEmpty) ...[
-            const SizedBox(width: MechXSpacing.sm),
-            Flexible(
-              child: Text(
-                item.detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.end,
-                style: type.caption.copyWith(color: colors.textMuted),
+          const SizedBox(width: MechXSpacing.sm),
+          SizedBox(
+            width: kComplianceVerdictColumnWidth,
+            child: Text(
+              item.pass
+                  ? s(StringKey.reviewItemPass)
+                  : s(StringKey.reviewItemReview),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: type.caption.copyWith(
+                color: item.pass ? colors.success : colors.warning,
               ),
             ),
-          ],
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              item.detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ),
         ],
       ),
     );

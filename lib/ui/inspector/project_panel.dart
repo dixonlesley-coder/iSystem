@@ -411,11 +411,20 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
 /// conservative, and correct for any deliverable that could embed those runs.
 /// F4 — that blocker now NAMES the offending sheets (and points at the
 /// locatable Review > Design issues surface) instead of a bare `N element(s)`.
+///
+/// BUSY FEEDBACK: while an export runs it is recorded in
+/// [exportInFlightProvider] — a second trigger meanwhile is ignored — and once
+/// the user has picked a file (`pickExportSave`) the status-bar busy pill reads
+/// 'Exporting `name`...' until the write settles (cleared in `finally`, only if
+/// it is still this export's message).
 Future<void> runExportGuarded(
   WidgetRef ref, {
   required String name,
   required Future<bool?> Function() write,
 }) async {
+  // One export at a time: a repeated click / accelerator while a write is in
+  // flight is a no-op, never a second dialog.
+  if (ref.read(exportInFlightProvider) != null) return;
   final strings = MechXStringsData(ref.read(localeProvider));
   if (ref.read(exportHasZeroLengthEdgesProvider)) {
     final n = ref.read(zeroLengthSizedEdgeCountProvider);
@@ -439,6 +448,7 @@ Future<void> runExportGuarded(
         );
     return;
   }
+  ref.read(exportInFlightProvider.notifier).set(name);
   try {
     final wrote = await write();
     if (wrote == null) {
@@ -460,8 +470,19 @@ Future<void> runExportGuarded(
     }
   } catch (e) {
     ref.read(loadErrorProvider.notifier).set('Could not export $name: $e');
+  } finally {
+    ref.read(exportInFlightProvider.notifier).set(null);
+    // Clear the pill only if it is still OURS (a nested writer — the
+    // submittal package — may have replaced and cleared it already).
+    if (ref.read(busyProvider) == exportBusyMessage(strings, name)) {
+      ref.read(busyProvider.notifier).clear();
+    }
   }
 }
+
+/// The busy-pill text for an export named [name].
+String exportBusyMessage(MechXStringsData strings, String name) =>
+    strings.format(StringKey.busyExporting, {'name': name});
 
 /// H4 — a save-dialog wrapper that REMEMBERS the last export directory: it opens
 /// the OS picker at the shared `lastExportDirProvider` folder (so a session's
@@ -497,6 +518,13 @@ Future<String?> pickExportSave(
   if (path == null) return null;
   final full = path.endsWith('.$ext') ? path : '$path.$ext';
   ref.read(lastExportDirProvider.notifier).rememberFile(full);
+  // The file is chosen — the slow part (building + writing the artifact)
+  // starts now, so an export in flight raises the busy pill.
+  final exporting = ref.read(exportInFlightProvider);
+  if (exporting != null) {
+    ref.read(busyProvider.notifier).set(exportBusyMessage(
+        MechXStringsData(ref.read(localeProvider)), exporting));
+  }
   return full;
 }
 
@@ -2825,7 +2853,7 @@ class _ProjectPanelState extends ConsumerState<ProjectPanel> {
                       color: calibration == null || stale
                           ? colors.warning
                           : colors.success,
-                      borderRadius: const BorderRadius.all(Radius.circular(4)),
+                      borderRadius: MechXRadii.small,
                     ),
                   ),
                   Expanded(
@@ -4951,7 +4979,7 @@ class _FireSection extends ConsumerWidget {
                 margin: const EdgeInsets.only(right: MechXSpacing.xs),
                 decoration: BoxDecoration(
                   color: colors.warning,
-                  borderRadius: const BorderRadius.all(Radius.circular(4)),
+                  borderRadius: MechXRadii.small,
                 ),
               ),
               Expanded(

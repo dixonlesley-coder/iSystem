@@ -202,6 +202,29 @@ const double _kCullMargin = 500;
 final Map<String, TextPainter> _runLabelCache = <String, TextPainter>{};
 const int _kRunLabelCacheCap = 2048;
 
+/// The same bounded cache for the canvas's OTHER fixed-style labels — the
+/// warning-badge glyphs, riser tags and equipment tags — keyed by text AND
+/// style (a riser tag's colour is its service's), so a repaint never allocates
+/// and lays out a fresh [TextPainter] per badge / tag.
+final Map<(String, TextStyle), TextPainter> _styledLabelCache =
+    <(String, TextStyle), TextPainter>{};
+
+TextPainter _styledLabelPainter(String text, TextStyle style) {
+  final key = (text, style);
+  final hit = _styledLabelCache[key];
+  if (hit != null) return hit;
+  if (_styledLabelCache.length >= _kRunLabelCacheCap) {
+    for (final tp in _styledLabelCache.values) {
+      tp.dispose();
+    }
+    _styledLabelCache.clear();
+  }
+  return _styledLabelCache[key] = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+  )..layout();
+}
+
 TextPainter _runLabelPainter(String text) {
   final hit = _runLabelCache[text];
   if (hit != null) return hit;
@@ -823,18 +846,15 @@ class _NetworkPainter extends CustomPainter {
   void _warnBadge(Canvas canvas, Offset center) {
     canvas.drawCircle(center, 6, Paint()..color = const Color(0xFFFFFFFF));
     canvas.drawCircle(center, 5.5, Paint()..color = _kWarn);
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: '!',
-        style: TextStyle(
-          color: Color(0xFFFFFFFF),
-          fontSize: 9,
-          fontFamily: 'Roboto',
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      '!',
+      const TextStyle(
+        color: Color(0xFFFFFFFF),
+        fontSize: 9,
+        fontFamily: 'Roboto',
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
   }
 
@@ -851,18 +871,15 @@ class _NetworkPainter extends CustomPainter {
       ..lineTo(center.dx - 6.0, center.dy + 5.0)
       ..close();
     canvas.drawPath(tri, Paint()..color = _kOverCapacity);
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: '!',
-        style: TextStyle(
-          color: Color(0xFFFFFFFF),
-          fontSize: 8,
-          fontFamily: 'Roboto',
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      '!',
+      const TextStyle(
+        color: Color(0xFFFFFFFF),
+        fontSize: 8,
+        fontFamily: 'Roboto',
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     tp.paint(
         canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2 + 1.5));
   }
@@ -1296,18 +1313,15 @@ class _NetworkPainter extends CustomPainter {
   /// marker in the service [color], on a translucent chip for legibility — the
   /// plan↔riser cross-reference tag (E6). ASCII-only (Roboto-safe).
   void _riserTagLabel(Canvas canvas, Offset marker, String tag, Color color) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: tag,
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 9.5,
-          color: color,
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      tag,
+      TextStyle(
+        fontFamily: 'Roboto',
+        fontSize: 9.5,
+        color: color,
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     final left = marker.dx + 9;
     final top = marker.dy - tp.height / 2;
     final rect = Rect.fromLTWH(left - 2, top - 1, tp.width + 4, tp.height + 2);
@@ -1326,18 +1340,15 @@ class _NetworkPainter extends CustomPainter {
   /// ASCII-only (Roboto-safe).
   void _equipmentTagLabel(
       Canvas canvas, Offset glyph, String tag, List<Rect> placed) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: tag,
-        style: const TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 9.5,
-          color: Color(0xFF15171B),
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      tag,
+      const TextStyle(
+        fontFamily: 'Roboto',
+        fontSize: 9.5,
+        color: Color(0xFF15171B),
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     final boxW = tp.width + 6;
     final boxH = tp.height + 3;
     final candidates = <Offset>[

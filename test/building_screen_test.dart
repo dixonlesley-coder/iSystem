@@ -114,7 +114,7 @@ void main() {
     // Ground still reads 0.0; the new basement reads negative (default 3.5 m).
     expect(s.building.elevationOf(s.groundIndex).meters, 0.0);
     // Round 25 — elevations print at 2 dp (signedElevationText, like FFL).
-    expect(find.text('elev -3.50 m'), findsOneWidget);
+    expect(find.text('FFL -3.50'), findsOneWidget);
   });
 
   testWidgets('assigning a floor plan maps that sheet to the level',

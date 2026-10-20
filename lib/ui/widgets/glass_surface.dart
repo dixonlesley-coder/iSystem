@@ -40,6 +40,13 @@ class GlassSurface extends StatelessWidget {
   /// off for very short surfaces where the gradient would band.
   final bool sheen;
 
+  /// True for small floating chrome that sits over the drawing PAPER (the
+  /// on-canvas tool cluster, the legend chip, the unplaced tray): it paints
+  /// [MechXColors.glassFillOverPaper] / `glassSheenOverPaper`, which stay
+  /// legible over the near-white sheet in dark mode (and equal the standard
+  /// glass in light mode).
+  final bool overPaper;
+
   const GlassSurface({
     super.key,
     required this.child,
@@ -48,11 +55,16 @@ class GlassSurface extends StatelessWidget {
     this.edge,
     this.shadow,
     this.sheen = true,
+    this.overPaper = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final fill = overPaper ? colors.glassFillOverPaper : colors.glassFill;
+    final topSheen = overPaper
+        ? colors.glassSheenOverPaper
+        : colors.glassSheen.withAlpha(70);
     // The fill grades UP into the brighter sheen at the top edge, giving the
     // lens-like highlight; below ~55% it settles to the flat translucent fill.
     final decoration = BoxDecoration(
@@ -62,13 +74,13 @@ class GlassSurface extends StatelessWidget {
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
               colors: [
-                Color.alphaBlend(colors.glassSheen.withAlpha(70), colors.glassFill),
-                colors.glassFill,
+                Color.alphaBlend(topSheen, fill),
+                fill,
               ],
               stops: const [0.0, 0.55],
             )
           : null,
-      color: sheen ? null : colors.glassFill,
+      color: sheen ? null : fill,
       border: edge ??
           Border.all(color: colors.glassEdge, width: MechXGlass.edgeWidth),
     );

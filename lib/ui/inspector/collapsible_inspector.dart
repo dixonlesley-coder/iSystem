@@ -44,7 +44,7 @@ class CollapsibleInspector extends ConsumerWidget {
       edge: Border(
           left: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
       child: AnimatedContainer(
-      duration: MechXMotion.medium,
+      duration: MechXMotion.resolve(context, MechXMotion.medium),
       curve: MechXMotion.emphasized,
       width: width,
       // ClipRect so the body slides out (rather than overflowing) while the
@@ -84,7 +84,7 @@ class CollapsibleInspector extends ConsumerWidget {
                 width: expandedWidth,
                 child: AnimatedOpacity(
                   opacity: collapsed ? 0 : 1,
-                  duration: MechXMotion.appear,
+                  duration: MechXMotion.resolve(context, MechXMotion.appear),
                   curve: MechXMotion.standard,
                   child: child,
                 ),
@@ -139,7 +139,7 @@ class _ToggleStripState extends State<_ToggleStrip> {
               button: true,
               label: label,
               child: AnimatedContainer(
-                duration: MechXMotion.hover,
+                duration: MechXMotion.resolve(context, MechXMotion.hover),
                 curve: MechXMotion.standard,
                 width: CollapsibleInspector.collapsedWidth,
                 color: _hover ? colors.surfaceHover : const Color(0x00000000),
@@ -152,7 +152,7 @@ class _ToggleStripState extends State<_ToggleStrip> {
                 // direction matches the prior left-pointing painter exactly.)
                 child: AnimatedRotation(
                   turns: widget.collapsed ? 0.0 : 0.5,
-                  duration: MechXMotion.appear,
+                  duration: MechXMotion.resolve(context, MechXMotion.appear),
                   curve: MechXMotion.standard,
                   child: CustomPaint(
                     size: const Size(18, 18),

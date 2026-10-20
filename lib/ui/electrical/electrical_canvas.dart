@@ -2567,6 +2567,8 @@ class _PanelScheduleBodyState extends State<_PanelScheduleBody> {
                         essential: colors.danger,
                         hoveredRow: _hoveredRow,
                         highlight: colors.accent,
+                        phaseInks:
+                            SldPhaseInks.forBrightness(colors.brightness),
                       ),
                       child: const SizedBox.expand(),
                     ),

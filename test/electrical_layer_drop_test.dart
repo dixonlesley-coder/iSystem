@@ -309,13 +309,23 @@ void main() {
     final circuitId = ctrl.addCircuit(sub, kind: LoadKind.lighting);
     await tester.pump();
 
+    // The tray groups loads under their board's header and the chip carries
+    // the load's own name (its full 'SP-1 · <name>' designation is the chip's
+    // hover tooltip) — so the distinguishing part never truncates away.
+    final wayName = _panel(container, sub)
+        .circuits
+        .firstWhere((c) => c.id == circuitId)
+        .name;
     final chip = find.descendant(
       of: _layer,
-      matching: find.textContaining('SP-1 · '),
+      matching: find.text(wayName),
     );
     expect(chip, findsOneWidget,
         reason: 'REGRESSION: ways of an unplaced board were hidden from the '
             'tray entirely');
+    // 'SP-1' twice: the unplaced board's own chip + its group header.
+    expect(find.descendant(of: _layer, matching: find.text('SP-1')),
+        findsNWidgets(2));
 
     final layerRect = tester.getRect(_layer);
     final target = Offset(

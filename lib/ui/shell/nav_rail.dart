@@ -113,9 +113,7 @@ class NavRail extends ConsumerWidget {
     Widget group(String label) => Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            AnimatedSize(
-              duration: MechXMotion.appear,
-              curve: MechXMotion.standard,
+            _ReducedMotionSize(
               child: collapsed
                   ? const SizedBox(width: double.infinity)
                   : _GroupLabel(label,
@@ -133,7 +131,7 @@ class NavRail extends ConsumerWidget {
       // content, so just that side gets the hairline rim.
       edge: Border(right: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
       child: AnimatedContainer(
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       width: collapsed ? collapsedWidth : width,
       padding: const EdgeInsets.symmetric(
@@ -293,7 +291,7 @@ class _CollapseToggleState extends State<_CollapseToggle> {
           child: GestureDetector(
             onTap: widget.onTap,
             child: AnimatedContainer(
-              duration: MechXMotion.appear,
+              duration: MechXMotion.resolve(context, MechXMotion.appear),
               curve: MechXMotion.standard,
               padding: const EdgeInsets.all(MechXSpacing.xs),
               decoration: BoxDecoration(
@@ -433,7 +431,7 @@ class _NavItemState extends State<_NavItem> {
       // pops) — pair the appear idiom with the standard curve. The
       // accent-tinted fill stays the selection cue (no content-shifting
       // stripe, so at-rest pixels are unchanged).
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       padding: const EdgeInsets.symmetric(
         horizontal: MechXSpacing.xxs,
@@ -483,9 +481,7 @@ class _NavItemState extends State<_NavItem> {
                 ),
             ],
           ),
-          AnimatedSize(
-            duration: MechXMotion.appear,
-            curve: MechXMotion.standard,
+          _ReducedMotionSize(
             // The caption is decorative for accessibility — the button carries
             // the same name via `semanticLabel` below (so it reads once, in both
             // the expanded and collapsed states) — so hide the Text from the
@@ -575,7 +571,7 @@ class _CountBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
       decoration: BoxDecoration(
         color: color,
-        borderRadius: const BorderRadius.all(Radius.circular(7)),
+        borderRadius: MechXRadii.rounded,
       ),
       alignment: Alignment.center,
       child: Text(
@@ -770,4 +766,21 @@ class _GlyphPainter extends CustomPainter {
   @override
   bool shouldRepaint(_GlyphPainter old) =>
       old.glyph != glyph || old.color != color;
+}
+
+/// An [AnimatedSize] on the rail's appear idiom that honours reduced motion:
+/// with the OS setting on it renders the child UNWRAPPED (an AnimatedSize must
+/// not receive the zero duration [MechXMotion.resolve] returns — see its
+/// caveat), so the rail snaps between its expanded / collapsed layouts.
+class _ReducedMotionSize extends StatelessWidget {
+  final Widget child;
+  const _ReducedMotionSize({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = MechXMotion.resolve(context, MechXMotion.appear);
+    if (d == Duration.zero) return child;
+    return AnimatedSize(
+        duration: d, curve: MechXMotion.standard, child: child);
+  }
 }

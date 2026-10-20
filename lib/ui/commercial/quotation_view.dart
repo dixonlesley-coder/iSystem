@@ -114,7 +114,10 @@ class QuotationView extends ConsumerWidget {
                 q.materialSubtotal),
             _money(
                 context.strings.format(StringKey.commercialLabourHours,
-                    {'hours': CommercialFormat.hours(q.labourHours)}),
+                    {
+                      'hours': CommercialFormat.hours(
+                          q.labourHours, MechXStrings.of(context).locale)
+                    }),
                 q.labourSubtotal),
             _money(context.strings(StringKey.commercialItemOverhead),
                 q.overhead),
