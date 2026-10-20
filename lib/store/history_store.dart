@@ -15,6 +15,7 @@ import 'fire_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
 import 'reference_line_store.dart';
+import 'schematic_layout_store.dart';
 import 'sheets_store.dart';
 
 /// Which domain controller owns a recorded action. Each domain keeps its own
@@ -54,6 +55,14 @@ import 'sheets_store.dart';
 /// coordinator: the forward call registers how to undo and redo itself, and the
 /// timeline just runs them (mirrors the annotation/structural coordinators,
 /// whose stacks also live outside the controllers they revert).
+///
+/// [riserLayout] (riser drafting-feel R3) covers the Riser → Edit elevation's
+/// DIAGRAM-ONLY horizontal riser positions ([schematicLayoutProvider]) — a drag,
+/// a nudge or a 'Reset position' is one step on the shared timeline, so Ctrl+Z
+/// after sliding a riser sideways reverts the slide instead of an unrelated
+/// drawing edit. The overrides are transient (never in `.mechx`), so recording
+/// this domain does NOT flip the project's edited dot; it keeps its own local
+/// snapshot stack in [SchematicLayoutController] (the reference-line pattern).
 enum UndoDomain {
   network,
   project,
@@ -62,6 +71,7 @@ enum UndoDomain {
   structural,
   referenceLine,
   settings,
+  riserLayout,
 }
 
 /// A single, global undo/redo timeline across every domain. Domain controllers
@@ -87,7 +97,11 @@ class HistoryController extends Notifier<int> {
     // Eager "edited" flip (B9): the dirty dot must not lag the 15 s autosave
     // tick. A recorded mutation always diverges from the clean baseline, so a
     // boolean set is enough — no document encode on the hot mutation path.
-    ref.read(projectDirtyProvider.notifier).set(true);
+    // The riser-layout domain is the exception: its state is transient
+    // diagram arrangement (never saved), so it never makes the project dirty.
+    if (domain != UndoDomain.riserLayout) {
+      ref.read(projectDirtyProvider.notifier).set(true);
+    }
     state++;
   }
 
@@ -159,6 +173,9 @@ class HistoryController extends Notifier<int> {
       case UndoDomain.settings:
         final c = ref.read(settingsHistoryProvider.notifier);
         return redo ? c.canRedo : c.canUndo;
+      case UndoDomain.riserLayout:
+        final c = ref.read(schematicLayoutProvider.notifier);
+        return redo ? c.canRedo : c.canUndo;
     }
   }
 
@@ -192,6 +209,9 @@ class HistoryController extends Notifier<int> {
       case UndoDomain.settings:
         final c = ref.read(settingsHistoryProvider.notifier);
         redo ? c.redo() : c.undo();
+      case UndoDomain.riserLayout:
+        final c = ref.read(schematicLayoutProvider.notifier);
+        redo ? c.redo() : c.undo();
     }
   }
 
@@ -206,6 +226,7 @@ class HistoryController extends Notifier<int> {
     ref.read(annotationHistoryProvider.notifier).reset();
     ref.read(structuralHistoryProvider.notifier).reset();
     ref.read(settingsHistoryProvider.notifier).reset();
+    ref.read(schematicLayoutProvider.notifier).resetHistory();
     state++;
   }
 }
