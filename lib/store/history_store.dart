@@ -88,6 +88,11 @@ class HistoryController extends Notifier<int> {
   bool get canUndo => _past.isNotEmpty;
   bool get canRedo => _future.isNotEmpty;
 
+  /// The domain [undo] would revert next (null when the timeline is empty) —
+  /// lets a caller undo ONLY its own most-recent step (the Layout canvas's
+  /// Backspace-mid-run, H4) without reverting another domain's edit.
+  UndoDomain? get nextUndoDomain => _past.isEmpty ? null : _past.last;
+
   /// Record that [domain] just performed a forward (undoable) action. Clears the
   /// redo timeline — a new action forks history.
   void record(UndoDomain domain) {

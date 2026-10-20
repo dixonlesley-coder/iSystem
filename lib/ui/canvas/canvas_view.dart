@@ -316,6 +316,14 @@ class CanvasViewState extends ConsumerState<CanvasView>
 
   // ── Pointer (mouse) ────────────────────────────────────────────────────────
 
+  /// Hand the keyboard to the canvas (H5). The host calls it on EVERY pointer
+  /// down over the canvas stack — the opaque node handles / grips above this
+  /// widget swallow the pointer before [_onPointerDown] sees it, so a click on
+  /// a node used to leave the keyboard in whatever inspector field had it.
+  void requestKeyboardFocus() {
+    if (!_focus.hasPrimaryFocus) _focus.requestFocus();
+  }
+
   void _onPointerDown(PointerDownEvent event) {
     _focus.requestFocus();
     if (!_grabbing) setState(() => _grabbing = true);

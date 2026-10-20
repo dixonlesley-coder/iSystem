@@ -115,6 +115,28 @@ class SelectionController extends Notifier<Selection> {
     setMulti({...state.nodeIds, ...nodeIds}, {...state.edgeIds, ...edgeIds});
   }
 
+  /// L2 — SUBTRACT [nodeIds]/[edgeIds] from the current selection (the
+  /// Ctrl+Shift marquee, AutoCAD's Shift-remove). The primary collapses to a
+  /// remaining element when it was removed; empty input is a no-op.
+  void removeMulti(Set<String> nodeIds, Set<String> edgeIds) {
+    if (nodeIds.isEmpty && edgeIds.isEmpty) return;
+    final nodes = state.nodeIds.difference(nodeIds);
+    final edges = state.edgeIds.difference(edgeIds);
+    if (nodes.length == state.nodeIds.length &&
+        edges.length == state.edgeIds.length) {
+      return;
+    }
+    final keepPrimary = (state.nodeId != null && nodes.contains(state.nodeId)) ||
+        (state.edgeId != null && edges.contains(state.edgeId));
+    state = keepPrimary
+        ? Selection(
+            nodeId: state.nodeId,
+            edgeId: state.edgeId,
+            nodeIds: nodes,
+            edgeIds: edges)
+        : _afterRemove(nodes, edges);
+  }
+
   /// Select EVERYTHING on [sheetId]/[floorIndex] — every run edge (both
   /// endpoints on the floor) plus every on-floor node — optionally filtered to
   /// [services] (the active discipline layer's services, so Ctrl+A on the

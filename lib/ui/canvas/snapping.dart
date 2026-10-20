@@ -26,18 +26,22 @@ enum SnapKind {
   align,
 }
 
-/// Snap the segment [from]→[to] to the nearest 45° direction, preserving its
-/// length — the classic "ortho" constraint that keeps runs horizontal,
-/// vertical, or on a clean diagonal. Returns [to] unchanged for a zero-length
-/// segment.
+/// Snap the segment [from]→[to] to the nearest 45° direction — the classic
+/// "ortho" constraint that keeps runs horizontal, vertical, or on a clean
+/// diagonal. M6: the point is the PROJECTION of [to] onto that axis
+/// (`from + u·(v·u)`), the CAD ortho convention — the constrained end sits
+/// square under the cursor, never overshooting it (a length-preserving
+/// rotation lands |v| along the axis, i.e. past the cursor's foot by
+/// |v|·(1 − cos θ)). Returns [to] unchanged for a zero-length segment.
 Offset orthoSnap(Offset from, Offset to) {
   final v = to - from;
   if (v.dx == 0 && v.dy == 0) return to;
   const step = math.pi / 4; // 45°
   final snappedAngle = (math.atan2(v.dy, v.dx) / step).round() * step;
-  final length = v.distance;
-  return from +
-      Offset(math.cos(snappedAngle) * length, math.sin(snappedAngle) * length);
+  final u = Offset(math.cos(snappedAngle), math.sin(snappedAngle));
+  // |θ| <= 22.5° ⇒ v·u >= |v|·cos 22.5° > 0: never behind the anchor.
+  final along = v.dx * u.dx + v.dy * u.dy;
+  return from + u * along;
 }
 
 /// Off-ray distance (world px) below which an auto-elbow would be an invisible
