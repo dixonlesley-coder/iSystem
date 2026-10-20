@@ -30,7 +30,8 @@ import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
-import '../electrical/power_factor.dart' show installedCapacitorBanks;
+import '../electrical/power_factor.dart'
+    show capacitorBanksToProcure, installedCapacitorBanks, powerFactorCorrection;
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BreakerResult;
 import '../electrical/sources.dart'
@@ -806,7 +807,10 @@ SldSheet buildElectricalSld({
       final cable = isSpareWay
           ? '-'
           : '${cableRunLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores, runs: c.cable.runsPerPhase, peCsaMm2: c.grounding.peCsaMm2, neutralCsaMm2: c.grounding.neutralCsaMm2)}'
-              '$conduit$length';
+              '$conduit$length'
+              // Round 41 — a star-delta way's TWO motor-lead cables (the
+              // starter → motor six-terminal connection, each on Ib/√3).
+              '${c.motorLeads == null ? '' : ' · leads ${cableRunLabel(circuit, c.motorLeads!.csaMm2, true, cores: 4, runs: 2 * (c.motorLeads!.runsPerPhase ?? 1), peCsaMm2: c.motorLeadsPeCsaMm2)}'}';
       // DAYA in WATT (integer, dot thousands separator); a feeder (loadW 0) → '-'.
       // Round 19 — a capacitor way's loadW is its REACTIVE rating, so it prints
       // in kvar, never as WATT.
@@ -1199,6 +1203,42 @@ SldSheet buildElectricalPanelDetail({
 bool _hasCapacitorBank(ElectricalProject project) {
   final banks = installedCapacitorBanks(project);
   return banks.length == 1 && banks.first.panelId == null;
+}
+
+/// Round 41 (elec-report-bom-2-apfc-bank-bought-not-scheduled) — the LV-bus
+/// capacitor node the source spine draws, from the ONE
+/// [capacitorBanksToProcure] list the BOM buys and the schedule tabulates:
+/// the installed LV-bus bank ([_hasCapacitorBank]) and/or the PF study's
+/// RECOMMENDED APFC bank, labelled distinctly (`APFC (RECOMMENDED)`) so it is
+/// never mistaken for installed gear. Null ⇒ no node (byte-identical when no
+/// bank is installed on the bus and none is recommended).
+({String head, String sub, String compact})? _spineCapacitor(
+    ElectricalProject project, ElectricalSystemResult result) {
+  final installed = _hasCapacitorBank(project);
+  final rec = capacitorBanksToProcure(
+          project,
+          result.supply.demandW > 0
+              ? powerFactorCorrection(result, project)
+              : null)
+      .where((b) => b.recommended)
+      .firstOrNull;
+  if (!installed && rec == null) return null;
+  final recText = rec == null
+      ? null
+      : '${rec.units > 1 ? '${rec.units}x' : ''}${_num(rec.kvar)} kvar';
+  if (installed) {
+    final inst = '${_num(project.capacitorBankKvar!)} kvar';
+    return (
+      head: 'CAPACITOR BANK',
+      sub: recText == null ? inst : '$inst + $recText APFC rec.',
+      compact: recText == null ? 'CAP $inst' : 'CAP $inst + $recText rec.',
+    );
+  }
+  return (
+    head: 'APFC (RECOMMENDED)',
+    sub: recText!,
+    compact: 'APFC rec. $recText',
+  );
 }
 
 SldSheet buildElectricalSourceSpine({
@@ -1959,11 +1999,12 @@ const double _sideNodeBottom = 14;
     // a generic PF-correction bank" proxy is gone: declaring a genset or solar
     // array added a piece of plant to the issued single-line that the design
     // never specified (and the PF study may say none is needed).
-    if (_hasCapacitorBank(project)) {
+    final spineCap = _spineCapacitor(project, result);
+    if (spineCap != null) {
       final cy = lvMidY + 8 + _ovH / 2;
-      final capSub = '${_num(project.capacitorBankKvar!)} kvar';
+      final capSub = spineCap.sub;
       _emitCapacitor(prims, sideX + 14, cy, SldRole.source);
-      prims.add(SldLabel(sideX + 34, cy - 2, 'CAPACITOR BANK',
+      prims.add(SldLabel(sideX + 34, cy - 2, spineCap.head,
           size: 8.5, bold: true, role: SldRole.source));
       prims.add(SldLabel(sideX + 34, cy + 12, capSub,
           size: 7.5, role: SldRole.source));
@@ -2025,7 +2066,8 @@ const double _sideNodeBottom = 14;
     // solar, battery; each glyph carries its top/bottom lead offsets so the
     // drop connectors meet the symbols exactly.
     final dropX = sideX + 14;
-    final hasCap = _hasCapacitorBank(project);
+    final spineCap = _spineCapacitor(project, result);
+    final hasCap = spineCap != null;
     final anySide = project.sources?.generator != null ||
         hasCap ||
         project.sources?.solar != null ||
@@ -2069,11 +2111,11 @@ const double _sideNodeBottom = 14;
             cy + 13, pct != null ? cy + 24 : cy + 12, 7.5);
         cy += 58;
       }
-      if (hasCap) {
-        final capSub = '${_num(project.capacitorBankKvar!)} kvar';
+      if (spineCap != null) {
+        final capSub = spineCap.sub;
         connectTo(11, 11);
         _emitCapacitor(prims, dropX, cy, SldRole.source);
-        prims.add(SldLabel(dropX + 20, cy - 2, 'CAPACITOR BANK',
+        prims.add(SldLabel(dropX + 20, cy - 2, spineCap.head,
             size: 8.5, bold: true, role: SldRole.source));
         prims.add(SldLabel(dropX + 20, cy + 12, capSub,
             size: 7.5, role: SldRole.source));
@@ -2238,13 +2280,13 @@ const double _sideNodeBottom = 14;
     prevBottom = gcy + 13;
     nextCy += 58;
   }
-  if (_hasCapacitorBank(project)) {
-    final capSub = '${_num(project.capacitorBankKvar!)} kvar';
+  final spineCap = _spineCapacitor(project, result);
+  if (spineCap != null) {
     final ccy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, ccy - 11,
         weight: SldWeight.medium, role: role));
     _emitCapacitor(prims, lvX, ccy, role);
-    prims.add(SldLabel(lvX - 96, ccy + 2, 'CAP $capSub',
+    prims.add(SldLabel(lvX - 96, ccy + 2, spineCap.compact,
         size: 7.5, bold: true, role: role));
     prevBottom = ccy + 11;
     nextCy += 58;

@@ -22,7 +22,8 @@ import '../electrical/genset_backup.dart'
     show gensetBackupDemandVa, gensetBackupDemandW;
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
-import '../electrical/power_factor.dart' show installedCapacitorBanks;
+import '../electrical/power_factor.dart'
+    show PowerFactorResult, capacitorBanksToProcure, powerFactorCorrection;
 import '../electrical/sources.dart' show sizeGenerator;
 import '../electrical/supply_design.dart' show serviceTransformer;
 import '../sizing/fan.dart';
@@ -250,6 +251,12 @@ class EquipmentScheduleData {
   /// pump/fan rows (those keep their per-item [PumpScheduleItem.modelSpec]).
   final Map<String, String> modelSpecs;
 
+  /// Round 41 — the advanced study's power-factor result, so the schedule
+  /// lists the RECOMMENDED APFC bank the BOM buys ([capacitorBanksToProcure]).
+  /// Null ⇒ re-derived from [electrical] + [electricalProject] (the same
+  /// `powerFactorCorrection`, without the harmonic-rich detuning flag).
+  final PowerFactorResult? powerFactor;
+
   const EquipmentScheduleData({
     required this.projectName,
     required this.date,
@@ -260,6 +267,7 @@ class EquipmentScheduleData {
     this.electrical,
     this.electricalProject,
     this.modelSpecs = const {},
+    this.powerFactor,
   });
 }
 
@@ -465,20 +473,31 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     // Round 39 (elec-reports-parity-3) — one CB-nn row per INSTALLED bank
     // ([installedCapacitorBanks]: the capacitor ways per board, else the
     // declared LV-bus bank) — the same kvar the BOM buys and the PF study
-    // credits.
-    final banks = installedCapacitorBanks(ep);
+    // credits. Round 41 (elec-report-bom-2-apfc-bank-bought-not-scheduled) —
+    // plus the PF study's RECOMMENDED APFC bank, labelled as recommended, from
+    // the ONE [capacitorBanksToProcure] list the BOM and the spines read.
+    final pf = data.powerFactor ??
+        (data.electrical != null
+            ? powerFactorCorrection(data.electrical!, ep)
+            : null);
+    final banks = capacitorBanksToProcure(ep, pf);
     final boardName = {for (final p in ep.panels) p.id: p.name};
     for (var i = 0; i < banks.length; i++) {
       final b = banks[i];
       final tag = 'CB-${(i + 1).toString().padLeft(2, '0')}';
       final kv = b.kvar;
+      final kvText = '${_fmt(kv, dp: kv == kv.roundToDouble() ? 0 : 1)} kvar';
       rows.add(EquipmentScheduleRow(
         tag: tag,
-        service: strings(RptStringKey.esCapBankService),
-        duty: '${_fmt(kv, dp: kv == kv.roundToDouble() ? 0 : 1)} kvar',
+        service: strings(b.recommended
+            ? RptStringKey.esCapBankRecommendedService
+            : RptStringKey.esCapBankService),
+        duty: b.recommended
+            ? '$kvText APFC, ${b.steps} steps${b.detuned ? ', detuned' : ''}'
+            : kvText,
         size: b.panelId == null ? '' : (boardName[b.panelId] ?? b.panelId!),
         modelSpec: specFor(tag),
-        qty: 1,
+        qty: b.units,
         category: EquipmentCategory.capacitorBank,
       ));
     }

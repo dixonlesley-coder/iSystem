@@ -943,7 +943,13 @@ class ElectricalCircuitInspector extends StatelessWidget {
                     ),
                     ElectricalField(
                       label: context.strings(StringKey.electricalFieldLoadKind),
-                      child: ElectricalEnumPicker<LoadKind>(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                      ElectricalEnumPicker<LoadKind>(
+                        // Round 41 — the drawn machine owns its kind (the
+                        // store refuses a re-kind of an MEP-derived way).
+                        enabled: !_machineOwned,
                         value: circuit.loadKind,
                         options: const [
                           LoadKind.general,
@@ -969,6 +975,11 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           circuit.id,
                           loadKind: k,
                         ),
+                      ),
+                      if (_machineOwned)
+                        ElectricalHint(context.strings(
+                            StringKey.electricalFromDrawnMachine)),
+                        ],
                       ),
                     ),
                     // Round 40 — an MEP-derived way's power follows the drawn

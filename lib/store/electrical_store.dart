@@ -1243,10 +1243,19 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     // duty) IS the drawn equipment: the next MEP sync re-derives them, so a
     // typed value would size live and silently revert on the next drawing
     // change or reopen. Refuse the edit instead (atomic, like delete / move).
+    //
+    // Round 41 (regression-rekind-bypasses-mep-machine-lock) — the drawn
+    // machine owns its KIND too: a re-kind to Spare zeroed its W live (and
+    // the next sync silently restored it), to Capacitor it read the pump's
+    // W as kvar and dropped its demand for good. A kind CHANGE is refused;
+    // re-stating the current kind is a no-op provenance write (allowed).
+    final kindChange = loadKind != null &&
+        loadKind != _circuitKind(panelId, circuitId);
     if (isMepDerivedWay(panelId, circuitId) &&
         (loadW != null ||
             motorKw != null ||
             clearMotorKw ||
+            kindChange ||
             lifeSafety != null)) {
       _refuse(StringKey.mepDerivedWayMachineLocked);
       return;
@@ -2428,6 +2437,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       }
     }
     return false;
+  }
+
+  /// Round 41 — the current [LoadKind] of a way (null when not found).
+  LoadKind? _circuitKind(String panelId, String circuitId) {
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id == circuitId) return c.loadKind;
+      }
+    }
+    return null;
   }
 
   /// Round 22 — true when [panelId] is the MEP Equipment board and still holds

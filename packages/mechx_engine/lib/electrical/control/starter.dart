@@ -60,7 +60,8 @@ enum InterlockRelation { mutualExclusion, sequence, permissive }
 /// How a device slot in a starter template is sized.
 enum SizingRule {
   ac3FullFlc, // contactor at 100% motor FLC
-  ac3StarWinding, // contactor at 58% FLC (star)
+  ac3StarWinding, // star contactor at 33% FLC (Round 41; was 58%)
+  ac3DeltaWinding, // Y-D main / delta contactor at 58% FLC (winding current)
   overloadFlc, // overload set to FLC
   overloadStarFlc, // overload in delta leg, FLC × 0.58
   vfdOutput, // drive sized to FLC
@@ -158,14 +159,16 @@ const Map<StarterType, StarterTemplate> starterTemplates = {
     suitedKwRange: [7.5, 55],
     controlTransformerRequired: true,
     deviceSlots: [
+      // Round 41 — main (KM1) and delta (KM2) carry the winding current
+      // FLC/√3 (in series with the delta-leg overload), never 100 % FLC.
       DeviceSlot(
           role: 'main-contactor',
           category: DeviceCategory.contactor,
-          sizing: SizingRule.ac3FullFlc),
+          sizing: SizingRule.ac3DeltaWinding),
       DeviceSlot(
           role: 'delta-contactor',
           category: DeviceCategory.contactor,
-          sizing: SizingRule.ac3FullFlc),
+          sizing: SizingRule.ac3DeltaWinding),
       DeviceSlot(
           role: 'star-contactor',
           category: DeviceCategory.contactor,
@@ -469,6 +472,10 @@ class ControlDevice {
 
   final int qty;
 
+  /// Round 41 — true for a fire-duty (life-safety motor) overload relay that
+  /// ALARMS only and never opens the contactor (NFPA 20). Default false.
+  final bool tripDisabled;
+
   const ControlDevice({
     required this.id,
     required this.role,
@@ -478,6 +485,7 @@ class ControlDevice {
     this.heatLossW = 0,
     this.widthMm = 0,
     this.qty = 1,
+    this.tripDisabled = false,
   });
 }
 
@@ -621,6 +629,11 @@ const List<String> _baseVerifyItems = [
 ///   rating does; an overload set at 5 A would trip on every start.
 /// - [duty] (`jogging` = AC-4) enlarges the contactor frame and the trip class.
 /// - [variableTorque] (pump/fan) refines the VFD starting note.
+/// - [fireDuty] (Round 41) — a life-safety motor (fire pump, jockey, smoke
+///   fan): every overload slot becomes an ALARM-ONLY relay (role
+///   `overload-alarm`, [ControlDevice.tripDisabled]) — NFPA 20: a fire pump
+///   runs to destruction, so no thermal overload may trip it (the schedule's
+///   'no-OL trip (fire)'). Its setting is still stated (the alarm threshold).
 ControlAssembly applyStarterTemplate({
   required String circuitId,
   required StarterType starterType,
@@ -630,6 +643,7 @@ ControlAssembly applyStarterTemplate({
   StartingDuty duty = StartingDuty.normal,
   bool variableTorque = false,
   bool singlePhase = false,
+  bool fireDuty = false,
 }) {
   final flc = Current(_round(
       (singlePhase ? motorFlc1ph(motorKw, voltage) : motorFlc(motorKw, voltage))
@@ -683,43 +697,57 @@ ControlAssembly applyStarterTemplate({
           widthMm: _contactorWidth(sel.ac3A),
         ));
       case SizingRule.ac3StarWinding:
-        final sel = selectContactor(flc, starDelta: true, duty: duty);
+        final sel = selectContactor(flc,
+            currentFactor: starDeltaStarFactor, duty: duty);
         devices.add(ControlDevice(
           id: id,
           role: slot.role,
           category: slot.category,
           qty: slot.qty,
           targetRatingA: Current(sel.targetA),
-          rating: '${_num(sel.ac3A)} A AC-3 (star, 58% FLC)',
+          rating: '${_num(sel.ac3A)} A AC-3 (star, 33% FLC)',
+          heatLossW: sel.heatLossW,
+          widthMm: _contactorWidth(sel.ac3A),
+        ));
+      case SizingRule.ac3DeltaWinding:
+        final sel = selectContactor(flc, starDelta: true, duty: duty);
+        if (!sel.ok) {
+          warnings.add(
+              'No contactor frame covers ${sel.targetA} A for ${slot.role}');
+        }
+        devices.add(ControlDevice(
+          id: id,
+          role: slot.role,
+          category: slot.category,
+          qty: slot.qty,
+          targetRatingA: Current(sel.targetA),
+          rating: '${_num(sel.ac3A)} A AC-3 (winding, 58% FLC)',
           heatLossW: sel.heatLossW,
           widthMm: _contactorWidth(sel.ac3A),
         ));
       case SizingRule.overloadFlc:
-        final ol = selectOverload(flc, duty: duty);
-        devices.add(ControlDevice(
-          id: id,
-          role: slot.role,
-          category: slot.category,
-          qty: slot.qty,
-          targetRatingA: ol.settingA,
-          rating:
-              'set ${_num(ol.settingA.amperes)} A, class ${ol.tripClass.label}',
-          heatLossW: 0.5,
-          widthMm: 45,
-        ));
       case SizingRule.overloadStarFlc:
-        final ol = selectOverload(flc, inStarLeg: true, duty: duty);
+        final inDeltaLeg = slot.sizing == SizingRule.overloadStarFlc;
+        final ol = selectOverload(flc, inStarLeg: inDeltaLeg, duty: duty);
+        final setA = _num(ol.settingA.amperes);
+        final leg = inDeltaLeg ? ' (delta leg)' : '';
         devices.add(ControlDevice(
-          id: id,
-          role: slot.role,
+          // Round 41 — a fire-duty motor (NFPA 20: the fire pump runs to
+          // destruction) gets an ALARM-ONLY overload: it signals, it never
+          // opens the contactor — the schedule's 'no-OL trip (fire)'.
+          id: fireDuty ? '$circuitId:overload-alarm' : id,
+          role: fireDuty ? 'overload-alarm' : slot.role,
           category: slot.category,
           qty: slot.qty,
           targetRatingA: ol.settingA,
-          rating: 'set ${_num(ol.settingA.amperes)} A (delta leg), '
-              'class ${ol.tripClass.label}',
+          rating: fireDuty
+              ? 'alarm only, no trip (fire) - set $setA A$leg'
+              : 'set $setA A$leg, class ${ol.tripClass.label}',
           heatLossW: 0.5,
           widthMm: 45,
+          tripDisabled: fireDuty,
         ));
+        if (fireDuty) roleToId['overload'] = '$circuitId:overload-alarm';
       case SizingRule.vfdOutput:
         final v = selectVfd(flc);
         if (!v.ok) {

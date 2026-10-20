@@ -131,6 +131,18 @@ class ElectricalCircuitResult {
   /// R / S / T so the column sums to the board TOTAL.
   final List<double>? lineCurrentsA;
 
+  /// Round 41 (electrical-sim-6-star-delta-motor-has-one-cable-not-six-leads)
+  /// — a STAR-DELTA way's motor leads: the starter (in the board) is wired to
+  /// the motor's SIX winding terminals by TWO 3-core cables, each carrying the
+  /// winding current Ib/√3. This is ONE of those two cables (sized on Ib/√3,
+  /// same family / laying); the supply cable [cable] is unchanged. Null for
+  /// every other way.
+  final CableResult? motorLeads;
+
+  /// Round 41 — the PE section inside each motor-lead cable (the way's PE,
+  /// capped at the lead section). Null when [motorLeads] is null.
+  final double? motorLeadsPeCsaMm2;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -150,6 +162,8 @@ class ElectricalCircuitResult {
     this.points = 1,
     this.runCurrent,
     this.lineCurrentsA,
+    this.motorLeads,
+    this.motorLeadsPeCsaMm2,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -178,6 +192,8 @@ class ElectricalCircuitResult {
         points: points,
         runCurrent: runCurrent,
         lineCurrentsA: lineCurrentsA,
+        motorLeads: motorLeads,
+        motorLeadsPeCsaMm2: motorLeadsPeCsaMm2,
       );
 }
 

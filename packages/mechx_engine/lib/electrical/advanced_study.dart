@@ -269,6 +269,11 @@ AdvancedStudy computeAdvancedStudy(
         singlePhase: !threePhase,
         variableTorque:
             c.starterType == StarterType.vfd && c.loadKind == LoadKind.pump,
+        // Round 41 — the SAME gate as the schedule's 'no-OL trip (fire)'
+        // token and compute.dart's `fire-pump-protection` note, so the
+        // control spec / BOM never buys a tripping overload for a fire pump.
+        fireDuty: c.lifeSafety &&
+            (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump),
       );
       controlAssemblies[c.id] = assembly;
       for (final d in assembly.devices) {
@@ -552,6 +557,8 @@ AdvancedStudy computeAdvancedStudy(
         spd: spd,
         electrode: electrode,
         powerFactor: powerFactor,
+        containment: containment,
+        metering: metering,
       ));
 
   // Aggregate every sub-result's provenance honesty surface.
@@ -618,7 +625,8 @@ AdvancedStudy computeAdvancedStudy(
       // transformer unit can deliver (one unit per section on a dual
       // service) can never be loaded to its rating.
       for (final w
-          in _incomerAboveTransformerFlc(project, sys, supply, originPanelIds))
+          in _incomerAboveTransformerFlc(
+              profile, project, sys, supply, originPanelIds))
         w,
       // Round 17 — the service-size estimate is no longer clamped at 50 kA
       // (a clamp LOWERED the safety quantity); above the realistic LV device
@@ -648,7 +656,18 @@ AdvancedStudy computeAdvancedStudy(
 /// board on a DECLARED transformer service whose incomer rating exceeds the
 /// LV full-load current of the unit feeding it (one unit per section on a
 /// dual service; the paralleled units otherwise). Judge-only.
+///
+/// Round 41 (regression-incomer-above-tx-flc-fires-on-engine-own-rung):
+/// breakers come in rungs, so an incomer sized to carry the transformer's
+/// full load is the first rung AT OR ABOVE the FLC (630 kVA → 909 A → the
+/// 1000 A rung the Round-29 service-capacity floor itself picks). The
+/// warning fires only ABOVE that rung — never on the engine's own pick. A
+/// dual service is judged per SECTION whatever the root count (Round 37: a
+/// single root on a dual service sits on ONE section, coupler normally
+/// open — the basis of `serviceEntranceCapacityVa` and `determineSupply(
+/// singleSectionCarriesAll:)`), so a section is `units / 2` units.
 List<ElectricalWarning> _incomerAboveTransformerFlc(
+  ElectricalStandardsProfile profile,
   ElectricalProject project,
   ElectricalSystemResult sys,
   SupplyDesign supply,
@@ -656,20 +675,22 @@ List<ElectricalWarning> _incomerAboveTransformerFlc(
 ) {
   final kva = supply.transformerKva;
   if (!supply.declared || kva == null || kva <= 0) return const [];
-  final unitsPerRoot = project.dualTransformer && originPanelIds.length > 1
-      ? 1
-      : math.max(1, supply.units);
+  final units = math.max(1, supply.units);
+  final unitsPerRoot =
+      project.dualTransformer ? math.max(1, units ~/ 2) : units;
   final flcA = unitsPerRoot * kva * 1000 / (math.sqrt(3) * 400);
+  final rungA = incomerRungForFlcA(profile, flcA);
   final out = <ElectricalWarning>[];
   for (final id in originPanelIds.toList()..sort()) {
     final r = sys.panels[id];
     if (r == null) continue;
     final inA = r.incomer.breaker.ratingA.amperes;
-    if (inA > flcA + 1e-6) {
+    if (inA > rungA + 1e-6) {
       out.add(ElectricalWarning(
         code: 'root-incomer-exceeds-transformer-flc',
         severity: WarningSeverity.warning,
         message: '${r.name}: the ${inA.round()} A incomer is above the '
+            '${rungA.round()} A breaker rung matching the '
             '${flcA.round()} A full-load current of the '
             '${unitsPerRoot > 1 ? '$unitsPerRoot x ' : ''}${kva.round()} kVA '
             'transformer feeding it — the board can never be loaded to its '
@@ -680,6 +701,16 @@ List<ElectricalWarning> _incomerAboveTransformerFlc(
     }
   }
   return out;
+}
+
+/// Round 41 — the first breaker rung at or above a transformer's LV
+/// full-load current [flcA] (the profile ladder runs on to ACB frames);
+/// [flcA] itself when the ladder tops out below it.
+double incomerRungForFlcA(ElectricalStandardsProfile profile, double flcA) {
+  for (final r in profile.standardBreakerRatingsA) {
+    if (r >= flcA - 1e-6) return r;
+  }
+  return flcA;
 }
 
 /// True when a circuit is motor-like (so a starter assembly makes sense).

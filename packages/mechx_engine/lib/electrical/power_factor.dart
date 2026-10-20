@@ -56,6 +56,52 @@ List<InstalledCapacitorBank> installedCapacitorBanks(
   return banks;
 }
 
+/// Round 41 — one capacitor bank to PROCURE: an installed bank
+/// ([recommended] false, [units] 1) or the PF study's RECOMMENDED APFC bank
+/// on the LV main bus ([panelId] null, [recommended] true, [kvar] PER unit ×
+/// [units], [steps] automatic steps, [detuned] 7 % reactors).
+typedef ProcuredCapacitorBank = ({
+  String? panelId,
+  double kvar,
+  bool recommended,
+  int units,
+  int steps,
+  bool detuned,
+});
+
+/// Round 41 (elec-report-bom-2-apfc-bank-bought-not-scheduled) — the ONE list
+/// of capacitor banks the BOM buys, the equipment schedule tabulates and both
+/// source-spine builders draw: every [installedCapacitorBanks] entry, then —
+/// when the PF study says further correction is needed ([pf] `needed` and
+/// `bankKvar > 0`, already NET of the installed kvar) — the recommended APFC
+/// bank, flagged so no surface ever passes it off as installed gear. Pure.
+List<ProcuredCapacitorBank> capacitorBanksToProcure(
+    ElectricalProject project, PowerFactorResult? pf) {
+  final out = <ProcuredCapacitorBank>[
+    for (final b in installedCapacitorBanks(project))
+      (
+        panelId: b.panelId,
+        kvar: b.kvar,
+        recommended: false,
+        units: 1,
+        steps: 0,
+        detuned: false,
+      ),
+  ];
+  if (pf != null && pf.needed && pf.bankKvar > 0) {
+    final units = pf.banks < 1 ? 1 : pf.banks;
+    out.add((
+      panelId: null,
+      kvar: double.parse((pf.bankKvar / units).toStringAsFixed(1)),
+      recommended: true,
+      units: units,
+      steps: pf.steps,
+      detuned: pf.detuned,
+    ));
+  }
+  return out;
+}
+
 // ── Local reference constants (`// VERIFY`) ─────────────────────────────────
 
 /// Power factor below which a PLN reactive-power penalty applies.
