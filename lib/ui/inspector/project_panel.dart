@@ -1279,6 +1279,7 @@ List<({String tag, String service})> equipmentSpecTargets(WidgetRef ref) {
     EquipmentCategory.transformer,
     EquipmentCategory.generator,
     EquipmentCategory.capacitorBank,
+    EquipmentCategory.distributedSource,
   };
   return [
     for (final p in data.pumps) (tag: p.tag!, service: p.service),

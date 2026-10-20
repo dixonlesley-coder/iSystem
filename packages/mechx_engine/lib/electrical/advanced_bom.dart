@@ -13,6 +13,7 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import '../units.dart' show Power;
 import 'bom.dart';
 import 'catalog.dart' show PartCategory;
 import 'containment.dart' show ContainmentResult, ContainmentRoute;
@@ -24,7 +25,10 @@ import 'metering.dart' show MeteringKind, MeteringSpec;
 import 'model.dart' show ElectricalProject, ElectricalSystem;
 import 'panel_results.dart' show ElectricalSystemResult;
 import 'power_factor.dart' show PowerFactorResult, capacitorBanksToProcure;
-import 'sources.dart' show GeneratorTransfer, sizeGenerator;
+import 'power_oneline.dart'
+    show distributedSourceInverters, sizeDistributedSources;
+import 'sources.dart'
+    show BatteryChemistryInfo, GeneratorTransfer, sizeGenerator;
 import 'spd.dart' show SpdRecommendation, SpdTypeLabel;
 import 'supply_design.dart' show serviceTransformer;
 
@@ -145,6 +149,11 @@ List<BomLine> advancedBomLines({
     }
   }
 
+  // ── Round 44 (elec-report-bom-3-battery-inverter-pv-never-taken-off) — the
+  // battery bank, PV modules and their inverter(s), sized by the SAME
+  // [sizeDistributedSources] the power one-line draws, so BOM == one-line.
+  lines.addAll(distributedSourceBomLines(project, sys));
+
   // ── Round 37 (electrical-sim-4-capacitor-bank-missing-from-bom) — the
   // capacitor bank(s) and the customer transformer(s) the study, schedule and
   // drawings size were never taken off, so the quotation under-priced real
@@ -264,6 +273,61 @@ List<BomLine> advancedBomLines({
   lines.addAll(containmentBomLines(sys, containment));
   lines.addAll(meteringBomLines(project, metering));
   return lines;
+}
+
+/// Round 44 — the distributed-source take-off: a battery bank (installed
+/// kWh, chemistry), the PV modules (qty × Wp) and the inverter(s) — one
+/// hybrid inverter when PV + battery share it, else each source's own —
+/// sized by [sizeDistributedSources] on the building demand (the power
+/// one-line's basis). No sources ⇒ no lines (byte-identical).
+List<BomLine> distributedSourceBomLines(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final src = project.sources;
+  if (src == null || (src.solar == null && src.battery == null)) {
+    return const [];
+  }
+  final ds = sizeDistributedSources(src,
+      demand: sys.supply.demandVa, demandPower: Power(sys.supply.demandW));
+  final out = <BomLine>[];
+  final b = ds.battery;
+  if (b != null && b.installedKwh.inKilowattHours > 0) {
+    final kwh = _fmt((b.installedKwh.inKilowattHours * 100).round() / 100);
+    final mod = _fmt((b.moduleKwh.inKilowattHours * 100).round() / 100);
+    out.add(BomLine(
+      description: 'Battery bank $kwh kWh ${b.chemistry.label} '
+          '(${b.moduleCount} x $mod kWh modules) — BAT-01',
+      qty: 1,
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}battery:${kwh}kwh:'
+          '${b.chemistry.name}',
+    ));
+  }
+  final s = ds.solar;
+  if (s != null && s.panelCount > 0) {
+    out.add(BomLine(
+      description: 'PV module ${s.panelWp} Wp '
+          '(array ${_fmt((s.arrayKwp.inKiloWatts * 100).round() / 100)} kWp) '
+          '— PV-01',
+      qty: s.panelCount.toDouble(),
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}pv-module:${s.panelWp}wp',
+    ));
+  }
+  for (final inv in distributedSourceInverters(ds)) {
+    final kw = _fmt(inv.unitKw.inKiloWatts);
+    final label = switch (inv.kind) {
+      'hybrid' => 'Hybrid inverter',
+      'pv' => 'PV inverter',
+      _ => 'Battery inverter',
+    };
+    out.add(BomLine(
+      description: '$label $kw kW — INV-01',
+      qty: inv.units.toDouble(),
+      category: PartCategory.accessory,
+      priceKey: '${kElecPriceKeyPrefix}inverter:${inv.kind}:${kw}kw',
+    ));
+  }
+  return out;
 }
 
 /// Round 41 — the CONTAINMENT take-off: every non-spare way's run, routed

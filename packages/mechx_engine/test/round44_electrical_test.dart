@@ -20,10 +20,12 @@ import 'package:mechx_engine/electrical/control/starter.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/electrical/results.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/supply_design.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
+import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -516,6 +518,71 @@ void main() {
       expect(off.warnings.where((w) => w.code == 'ups-not-sized'), isEmpty);
       // The UPS-backed board's OWN schedule is the output side (unchanged).
       expect(on.panels['CR']!.demandW, off.panels['CR']!.demandW);
+    });
+  });
+
+  // ── battery / inverter / PV taken off + scheduled ─────────────────────────
+  group('elec-report-bom-3-battery-inverter-pv-never-taken-off', () {
+    ElectricalProject withSources(ElectricalSources? src) => ElectricalProject(
+          id: 'p',
+          name: 'P',
+          panels: _board([
+            const ElectricalCircuit(
+                id: 'h',
+                name: 'h',
+                loadKind: LoadKind.general,
+                loadW: 120000,
+                cosPhi: 0.9,
+                phases: 3,
+                length: Length(10)),
+          ]).panels,
+          sources: src,
+        );
+
+    test('battery 0.25 h + 200-panel PV: BOM + schedule == the one-line', () {
+      final pr = withSources(const ElectricalSources(
+          battery: BatterySource(autonomyHours: 0.25),
+          solar: SolarSource(panels: 200)));
+      final sys = computeSystem(_p, pr);
+      final adv = computeAdvancedStudy(_p, pr, sys);
+      final ds = sizeDistributedSources(pr.sources!,
+          demand: sys.supply.demandVa, demandPower: Power(sys.supply.demandW));
+      // Battery: critical load = demand W (120 kW) × 0.25 h ÷ DoD, snapped
+      // up to whole modules — the one-line's own figure.
+      final batt = ds.battery!;
+      expect(batt.installedKwh.inKilowattHours,
+          greaterThanOrEqualTo(120 * 0.25 - 1e-9));
+      final lines = adv.bom.lines;
+      final bl = lines.singleWhere((l) => l.description.startsWith('Battery bank'));
+      expect(bl.description,
+          contains('${(batt.installedKwh.inKilowattHours * 100).round() / 100}'));
+      final pv = lines.singleWhere((l) => l.description.startsWith('PV module'));
+      expect(pv.qty, 200);
+      // PV + battery ⇒ ONE hybrid inverter, the one-line's label.
+      final hinv = adv.powerOneLine!.nodes.singleWhere((n) => n.id == 'hinv');
+      final inv = lines.singleWhere((l) => l.description.contains('inverter'));
+      expect(inv.description, startsWith('Hybrid inverter'));
+      final i = distributedSourceInverters(ds).single;
+      expect(hinv.sub, inverterRatingLabel(i.unitKw, i.units));
+      expect(inv.qty, i.units);
+      // The equipment schedule lists BAT-01 / PV-01 / INV-01.
+      final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
+          projectName: 'P',
+          date: '2026-10-18',
+          electrical: sys,
+          electricalProject: pr));
+      expect(rows.map((r) => r.tag), containsAll(['BAT-01', 'PV-01', 'INV-01']));
+      expect(rows.singleWhere((r) => r.tag == 'INV-01').qty, i.units);
+    });
+
+    test('no sources: no source lines, no rows (byte-identical)', () {
+      final pr = withSources(null);
+      final sys = computeSystem(_p, pr);
+      expect(distributedSourceBomLines(pr, sys), isEmpty);
+      final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
+          projectName: 'P', date: 'd', electrical: sys, electricalProject: pr));
+      expect(rows.where((r) => r.category == EquipmentCategory.distributedSource),
+          isEmpty);
     });
   });
 }

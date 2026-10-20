@@ -182,27 +182,13 @@ PowerOneLine buildPowerOneLine(
               genResult.ratingKva.inKilovoltAmperes * genResult.units),
           motors: motors);
 
-  final solar = sources.solar;
-  final solarResult = solar == null
-      ? null
-      : sizeSolar(panelWp: solar.panelWp, panels: solar.panels, dcAcRatio: solar.dcAcRatio);
-
-  final batt = sources.battery;
-  // The battery backs the building demand × (1 − genset fraction is not applied
-  // here). Round 16 (supply-sources-battery-critical-load-pf) — its critical
-  // load is the REAL demand W ([demandPower]) when known: since Round 14
-  // demandVa is Σ W/cos φ per circuit, so demandVa × 0.8 no longer recovers
-  // the watts (a 90 kW load at cos φ 0.95 read as 75.8 kW — an 80 kW
-  // inverter islanding a 90 kW load). The assumed-PF conversion stays only
-  // as the fallback when no W figure is supplied.
-  final batteryResult = batt == null
-      ? null
-      : sizeBattery(demandPower ?? _demandToPower(demand),
-          autonomyHours: batt.autonomyHours, chemistry: batt.chemistry);
-
-  final solarOn = solarResult != null;
-  final battOn = batteryResult != null;
-  final hybrid = (sources.hybridInverter ?? (solarOn && battOn)) && (solarOn || battOn);
+  // Round 44 — ONE sizing of the distributed sources, shared with the BOM
+  // and the equipment schedule ([sizeDistributedSources]).
+  final ds = sizeDistributedSources(sources,
+      demand: demand, demandPower: demandPower);
+  final solarResult = ds.solar;
+  final batteryResult = ds.battery;
+  final hybrid = ds.hybrid;
 
   // Essential split: a genset that backs only a fraction transfers a dedicated
   // ESSENTIAL bus (non-hybrid topology); the battery then backs a CRITICAL bus.
@@ -425,6 +411,64 @@ GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     forcedUnits: gen.units,
     backupPower: backupPower,
   );
+}
+
+/// Round 44 (elec-report-bom-3-battery-inverter-pv-never-taken-off) — the
+/// distributed sources (PV array, battery bank) sized ONCE: the power
+/// one-line draws them, the BOM buys them and the equipment schedule lists
+/// them from this one call, so the three can never disagree.
+///
+/// The battery backs the building demand. Round 16 (supply-sources-battery-
+/// critical-load-pf) — its critical load is the REAL demand W
+/// ([demandPower]) when known; the assumed-PF conversion of [demand] stays
+/// only as the fallback. [hybrid] = PV + battery (or a forced hybrid) share
+/// ONE hybrid inverter.
+({SolarResult? solar, BatteryResult? battery, bool hybrid})
+    sizeDistributedSources(
+  ElectricalSources sources, {
+  required ApparentPower demand,
+  Power? demandPower,
+}) {
+  final solar = sources.solar;
+  final solarResult = solar == null
+      ? null
+      : sizeSolar(
+          panelWp: solar.panelWp,
+          panels: solar.panels,
+          dcAcRatio: solar.dcAcRatio);
+  final batt = sources.battery;
+  final batteryResult = batt == null
+      ? null
+      : sizeBattery(demandPower ?? _demandToPower(demand),
+          autonomyHours: batt.autonomyHours, chemistry: batt.chemistry);
+  final solarOn = solarResult != null;
+  final battOn = batteryResult != null;
+  final hybrid =
+      (sources.hybridInverter ?? (solarOn && battOn)) && (solarOn || battOn);
+  return (solar: solarResult, battery: batteryResult, hybrid: hybrid);
+}
+
+/// The inverter the distributed sources need: one HYBRID inverter (the
+/// larger of the PV / battery inverters, as the one-line labels it), else
+/// each DC source's own. Unit kW × units. Pure.
+List<({String kind, Power unitKw, int units})> distributedSourceInverters(
+    ({SolarResult? solar, BatteryResult? battery, bool hybrid}) ds) {
+  final s = ds.solar;
+  final b = ds.battery;
+  if (ds.hybrid) {
+    final sKw = s == null ? 0.0 : s.inverterKw.inKiloWatts * s.inverterUnits;
+    final bKw = b == null ? 0.0 : b.inverterKw.inKiloWatts * b.inverterUnits;
+    if (sKw <= 0 && bKw <= 0) return const [];
+    return sKw >= bKw && s != null
+        ? [(kind: 'hybrid', unitKw: s.inverterKw, units: s.inverterUnits)]
+        : [(kind: 'hybrid', unitKw: b!.inverterKw, units: b.inverterUnits)];
+  }
+  return [
+    if (s != null && s.inverterKw.inKiloWatts > 0)
+      (kind: 'pv', unitKw: s.inverterKw, units: s.inverterUnits),
+    if (b != null && b.inverterKw.inKiloWatts > 0)
+      (kind: 'battery', unitKw: b.inverterKw, units: b.inverterUnits),
+  ];
 }
 
 /// Convert an apparent-power demand to a real-power critical load for battery
