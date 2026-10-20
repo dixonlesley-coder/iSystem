@@ -1429,7 +1429,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // fed by any feeder — a board wired to nothing. Detected read-only by the pure
   // engine (`electricalConnectivityDefects`). Located on the single-line via the
   // panel id (the Review row jumps to the Electrical workspace + focuses it).
-  final electricalProject = ref.watch(electricalProjectProvider);
+  final electricalProject = ref.watch(electricalSizingProjectProvider);
   for (final d in electricalConnectivityDefects(electricalProject)) {
     final panel =
         electricalProject.panels.where((p) => p.id == d.panelId).firstOrNull;

@@ -16,7 +16,11 @@
 /// Styled with MechXTheme (no Material). The pure engine derives the geo length.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
+import 'package:flutter/services.dart'
+    show HardwareKeyboard, KeyDownEvent, KeyEvent, LogicalKeyboardKey;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/geo_length.dart';
@@ -31,7 +35,12 @@ import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
+import '../../store/network_store.dart' show orthoProvider;
 import '../../store/project_store.dart';
+import '../canvas/canvas_grid.dart' show calibratedGridWorldStep;
+import '../canvas/marquee.dart';
+import '../canvas/scaled_world_child.dart';
+import '../canvas/text_entry_guard.dart';
 import '../canvas/viewport.dart';
 import '../electrical/electrical_canvas.dart' show phaseColorFor;
 import '../electrical/electrical_format.dart';
@@ -193,6 +202,278 @@ void _toastNewPanel(
   }
 }
 
+/// The in-flight GROUP marker drag (E5): the grabbed marker's start and every
+/// co-moving member's start placement. Empty ⇒ a single-marker drag. A
+/// mutable holder read (never watched), like the store's caches.
+class _MarkerGroupDrag {
+  Offset? grabbedStart;
+  Map<ElectricalSelection, LayoutPos> starts = const {};
+}
+
+final _markerGroupDragProvider =
+    Provider<_MarkerGroupDrag>((_) => _MarkerGroupDrag());
+
+/// E3 — a placed marker drag opens ONE undo step and ONE electrical drag
+/// session: the per-frame placement writes keep the marker + wiring live, but
+/// the solve (geo cable lengths) re-runs once, on release.
+///
+/// E5 — grabbing a member of a multi-selection moves the WHOLE selection (the
+/// members placed on the same sheet + floor as the grabbed one; MEP-derived
+/// loads stay at their equipment) by the grabbed marker's delta.
+void _beginMarkerDrag(WidgetRef ref, ElectricalProjectController ctrl,
+    ElectricalSelection grabbed, Offset grabbedWorld) {
+  ctrl.pushUndoSnapshot();
+  ref.read(electricalDragSessionProvider.notifier).begin();
+  final group = ref.read(_markerGroupDragProvider);
+  group.grabbedStart = null;
+  group.starts = const {};
+  final sel = ref.read(electricalSelectionProvider);
+  if (sel == null ||
+      !sel.isMulti ||
+      !sel.contains(grabbed.panelId, grabbed.circuitId)) {
+    return;
+  }
+  final project = ref.read(electricalProjectProvider);
+  final grabbedPos = _placementOf(project, grabbed);
+  if (grabbedPos == null) return;
+  group.grabbedStart = grabbedWorld;
+  group.starts = {
+    for (final m in sel.members)
+      m: ?_movablePlacementOn(
+          project, m, grabbedPos.sheetId, grabbedPos.floorIndex),
+  };
+}
+
+void _endMarkerDrag(WidgetRef ref, {bool deferred = false}) {
+  final group = ref.read(_markerGroupDragProvider);
+  group.grabbedStart = null;
+  group.starts = const {};
+  final session = ref.read(electricalDragSessionProvider.notifier);
+  deferred ? session.endDeferred() : session.end();
+}
+
+/// Move the dragged marker to [world] — the whole group when a group drag is
+/// open, else just the grabbed marker via [single].
+void _moveMarkers(WidgetRef ref, ElectricalProjectController ctrl, Offset world,
+    {required VoidCallback single}) {
+  final group = ref.read(_markerGroupDragProvider);
+  final start = group.grabbedStart;
+  if (start == null || group.starts.isEmpty) {
+    single();
+    return;
+  }
+  final delta = world - start;
+  group.starts.forEach((m, pos) =>
+      _placeMember(ctrl, m, pos.copyWith(x: pos.x + delta.dx, y: pos.y + delta.dy)));
+}
+
+void _placeMember(
+    ElectricalProjectController ctrl, ElectricalSelection m, LayoutPos pos) {
+  if (m.isCircuit) {
+    ctrl.setLoadPos(m.panelId, m.circuitId!, pos);
+  } else {
+    ctrl.setPanelLayoutPos(m.panelId, pos);
+  }
+}
+
+/// The placement of a selected element (a board's `layoutPos`, a way's
+/// `loadPos`), or null when it is not placed.
+LayoutPos? _placementOf(ElectricalProject project, ElectricalSelection m) {
+  final panel = project.panels.where((p) => p.id == m.panelId).firstOrNull;
+  if (panel == null) return null;
+  if (!m.isCircuit) return panel.layoutPos;
+  return panel.circuits.where((c) => c.id == m.circuitId).firstOrNull?.loadPos;
+}
+
+/// [m]'s placement when it sits on [sheetId] / [floorIndex] AND may be moved
+/// by hand (an MEP-derived way's load is re-derived from its equipment node,
+/// Round 31 — never moved here); else null.
+LayoutPos? _movablePlacementOn(ElectricalProject project,
+    ElectricalSelection m, String sheetId, int floorIndex) {
+  final pos = _placementOf(project, m);
+  if (pos == null || pos.sheetId != sheetId || pos.floorIndex != floorIndex) {
+    return null;
+  }
+  if (m.isCircuit) {
+    final panel = project.panels.firstWhere((p) => p.id == m.panelId);
+    final c = panel.circuits.firstWhere((c) => c.id == m.circuitId);
+    if (c.sourceEquipmentId != null || c.loadKind == LoadKind.feeder) {
+      return null;
+    }
+  }
+  return pos;
+}
+
+/// Every marker the Layout electrical layer draws on [sheetId] / [floorIndex]:
+/// placed boards, and placed loads (never a feeder way).
+List<({ElectricalSelection item, Offset world, Size size})> _markersOn(
+    ElectricalProject project, String sheetId, int floorIndex) {
+  bool on(LayoutPos? p) =>
+      p != null && p.sheetId == sheetId && p.floorIndex == floorIndex;
+  return [
+    for (final p in project.panels) ...[
+      if (on(p.layoutPos))
+        (
+          item: ElectricalSelection.panel(p.id),
+          world: Offset(p.layoutPos!.x, p.layoutPos!.y),
+          size: const Size(kLayoutPanelW, kLayoutPanelH),
+        ),
+      for (final c in p.circuits)
+        if (on(c.loadPos) && c.loadKind != LoadKind.feeder)
+          (
+            item: ElectricalSelection.circuit(p.id, c.id),
+            world: Offset(c.loadPos!.x, c.loadPos!.y),
+            size: const Size(kLayoutLoadW, kLayoutLoadH),
+          ),
+    ],
+  ];
+}
+
+/// E5 — Ctrl/Cmd+A on the electrical layer: every marker on the sheet.
+void selectAllElectricalOnSheet(
+    WidgetRef ref, String sheetId, int floorIndex) {
+  ref.read(electricalSelectionProvider.notifier).selectMany([
+    for (final m
+        in _markersOn(ref.read(electricalProjectProvider), sheetId, floorIndex))
+      m.item,
+  ]);
+}
+
+/// The open arrow-nudge burst on the electrical layer (one undo step per
+/// burst — the D2 rule the mechanical layer and the single-line follow).
+class _LayerNudgeBurst {
+  Timer? idle;
+  ElectricalProject? last;
+  void close() {
+    idle?.cancel();
+    idle = null;
+    last = null;
+  }
+}
+
+final _layerNudgeBurstProvider = Provider<_LayerNudgeBurst>((ref) {
+  final burst = _LayerNudgeBurst();
+  ref.onDispose(burst.close);
+  return burst;
+});
+
+/// How long a nudge burst stays open after the last arrow key.
+const Duration _kLayerNudgeIdleWindow = Duration(milliseconds: 800);
+
+/// E5 — an arrow key with markers selected on the electrical layer nudges
+/// them one calibrated grid step (32 px uncalibrated, the mechanical step);
+/// a whole burst is ONE undo step. Returns whether it consumed the key (false
+/// ⇒ nothing movable selected, so the canvas pans). Members on another sheet
+/// / floor, and MEP-derived loads, stay put.
+bool nudgeElectricalSelection(
+  WidgetRef ref,
+  LogicalKeyboardKey key, {
+  required String sheetId,
+  required int floorIndex,
+}) {
+  if (isTextEntryFocused()) return false;
+  final sel = ref.read(electricalSelectionProvider);
+  if (sel == null) return false;
+  final cal = ref.read(projectControllerProvider).calibrationFor(sheetId);
+  final step = cal == null ? 32.0 : calibratedGridWorldStep(cal.metersPerPixel);
+  final Offset delta;
+  switch (key) {
+    case LogicalKeyboardKey.arrowLeft:
+      delta = Offset(-step, 0);
+    case LogicalKeyboardKey.arrowRight:
+      delta = Offset(step, 0);
+    case LogicalKeyboardKey.arrowUp:
+      delta = Offset(0, -step);
+    case LogicalKeyboardKey.arrowDown:
+      delta = Offset(0, step);
+    default:
+      return false;
+  }
+  final project = ref.read(electricalProjectProvider);
+  final movers = {
+    for (final m in sel.members)
+      m: ?_movablePlacementOn(project, m, sheetId, floorIndex),
+  };
+  if (movers.isEmpty) return false;
+  final ctrl = ref.read(electricalProjectProvider.notifier);
+  final burst = ref.read(_layerNudgeBurstProvider);
+  // One undo step per BURST: snapshot when it opens, and re-open whenever the
+  // project is no longer the one our own last nudge produced (an undo or any
+  // other edit landed between two keys).
+  if (burst.idle == null || !identical(burst.last, project)) {
+    ctrl.pushUndoSnapshot();
+  }
+  burst.idle?.cancel();
+  burst.idle = Timer(_kLayerNudgeIdleWindow, burst.close);
+  movers.forEach((m, pos) => _placeMember(
+      ctrl, m, pos.copyWith(x: pos.x + delta.dx, y: pos.y + delta.dy)));
+  burst.last = ref.read(electricalProjectProvider);
+  return true;
+}
+
+/// E5 — the electrical layer's key handling for the Layout host: Ctrl/Cmd+A
+/// selects every marker on the sheet; Delete / Backspace on a MULTI-selection
+/// removes every member in one undo step (a single selection is left to the
+/// host's existing branch). Any other key ends an open nudge burst. Returns
+/// whether it consumed [event].
+bool handleElectricalLayerKey(
+  WidgetRef ref,
+  KeyEvent event, {
+  required String sheetId,
+  required int floorIndex,
+}) {
+  if (event is! KeyDownEvent) return false;
+  final key = event.logicalKey;
+  final isArrow = key == LogicalKeyboardKey.arrowLeft ||
+      key == LogicalKeyboardKey.arrowRight ||
+      key == LogicalKeyboardKey.arrowUp ||
+      key == LogicalKeyboardKey.arrowDown;
+  if (!isArrow) ref.read(_layerNudgeBurstProvider).close();
+  if (isTextEntryFocused()) return false;
+  final mod = HardwareKeyboard.instance.isControlPressed ||
+      HardwareKeyboard.instance.isMetaPressed;
+  if (mod && key == LogicalKeyboardKey.keyA) {
+    selectAllElectricalOnSheet(ref, sheetId, floorIndex);
+    return true;
+  }
+  if (!mod &&
+      (key == LogicalKeyboardKey.delete ||
+          key == LogicalKeyboardKey.backspace)) {
+    final sel = ref.read(electricalSelectionProvider);
+    if (sel == null || !sel.isMulti) return false;
+    ref.read(electricalProjectProvider.notifier).deleteLayoutSelection([
+      for (final m in sel.members) (panelId: m.panelId, circuitId: m.circuitId),
+    ]);
+    ref.read(electricalSelectionProvider.notifier).clear();
+    return true;
+  }
+  return false;
+}
+
+/// S1 — the live grid snap for a dragged marker: the SAME magnetic-grid rule
+/// the mechanical drags use (ortho XOR Shift, a calibrated sheet, and a grid
+/// step of at least 6 screen px), onto the calibrated grid the canvas paints
+/// ([calibratedGridWorldStep]). Read at drag time, so toggling ortho / holding
+/// Shift mid-drag takes effect at once. Uncalibrated / off ⇒ the raw point.
+Offset Function(Offset) _gridSnapFor(
+    WidgetRef ref, String sheetId, double scale) {
+  return (raw) {
+    final mpp = ref
+        .read(projectControllerProvider)
+        .calibrationFor(sheetId)
+        ?.metersPerPixel;
+    final on =
+        ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
+    if (!on || mpp == null) return raw;
+    final step = calibratedGridWorldStep(mpp);
+    if (!(step > 0) || step * scale < 6.0) return raw;
+    return Offset(
+      (raw.dx / step).roundToDouble() * step,
+      (raw.dy / step).roundToDouble() * step,
+    );
+  };
+}
+
 /// The electrical layer painted over the shared sheet at [transform].
 ///
 /// When [interactive] is true it hosts the drop / drag / tap affordances and
@@ -232,7 +513,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
     // 220ms cross-fade (only the cheap Opacity wrapper re-runs per frame).
     return TweenAnimationBuilder<double>(
       tween: Tween<double>(end: interactive ? 1.0 : kElectricalFadedAlpha),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       child: _buildLayer(context, ref, 1.0),
       builder: (context, opacity, child) =>
@@ -307,6 +588,17 @@ class ElectricalLayoutLayer extends ConsumerWidget {
         ),
         // Drop targets + tray only when this layer is the active (editable) one.
         if (interactive) ...[
+          // E5 — blank-plan left-drag rubber-bands markers (window L->R /
+          // crossing R->L) and a blank tap clears the selection, the mechanical
+          // Select-tool parity. BELOW the drop targets (which are translucent
+          // to hit tests) so palette drops still find them.
+          Positioned.fill(
+            child: _LayerMarquee(
+              transform: vt,
+              sheetId: sheetId,
+              floorIndex: floorIndex,
+            ),
+          ),
           Positioned.fill(
             child: _SheetDropTarget(
               transform: vt,
@@ -334,7 +626,10 @@ class ElectricalLayoutLayer extends ConsumerWidget {
         // rubber band / hover verdict ring). Mounted ONLY while a whole PANEL is
         // selected, so an idle canvas with nothing selected is byte-identical;
         // the rubber band + rings exist only for the duration of a drag.
-        if (interactive && selection != null && !selection.isCircuit)
+        if (interactive &&
+            selection != null &&
+            !selection.isCircuit &&
+            !selection.isMulti)
           Positioned.fill(
             child: _FeederGripLayer(
               transform: vt,
@@ -383,6 +678,9 @@ class ElectricalLayoutLayer extends ConsumerWidget {
 
     final pTopLeft = vt.worldToScreen(Offset(pos.x, pos.y));
     widgets.add(Positioned(
+      // Keyed so a marker keeps its element (and an in-flight drag) while the
+      // list around it changes.
+      key: ValueKey('elec-layout-panel-${panel.id}'),
       left: pTopLeft.dx - kLayoutPanelW * vt.scale / 2,
       top: pTopLeft.dy - kLayoutPanelH * vt.scale / 2,
       width: kLayoutPanelW * vt.scale,
@@ -393,11 +691,16 @@ class ElectricalLayoutLayer extends ConsumerWidget {
           enabled: interactive,
           scale: vt.scale,
           world: Offset(pos.x, pos.y),
-          onDragStart: ctrl.pushUndoSnapshot,
-          onMove: (w) =>
-              ctrl.setPanelLayoutPos(panel.id, pos.copyWith(x: w.dx, y: w.dy)),
-          child: _ScaledLayoutChild(
-            scale: vt.scale,
+          onDragStart: () => _beginMarkerDrag(
+              ref, ctrl, ElectricalSelection.panel(panel.id),
+              Offset(pos.x, pos.y)),
+          onDragEnd: () => _endMarkerDrag(ref),
+          onDragAbandoned: () => _endMarkerDrag(ref, deferred: true),
+          snap: _gridSnapFor(ref, sheetId, vt.scale),
+          onMove: (w) => _moveMarkers(ref, ctrl, w,
+              single: () => ctrl.setPanelLayoutPos(
+                  panel.id, pos.copyWith(x: w.dx, y: w.dy))),
+          child: ScaledWorldChild(
             width: kLayoutPanelW,
             height: kLayoutPanelH,
             child: _PanelMarker(
@@ -405,10 +708,12 @@ class ElectricalLayoutLayer extends ConsumerWidget {
               result: pr,
               hasStudyError: errorPanelIds.contains(panel.id),
               detail: detail,
-              selected: selection != null &&
-                  !selection.isCircuit &&
-                  selection.panelId == panel.id,
-              onTap: () => selectionCtrl.selectPanel(panel.id),
+              selected: selection?.contains(panel.id) ?? false,
+              // E5 — Shift-click adds / removes the board from the
+              // selection; a plain click selects it alone.
+              onTap: () => HardwareKeyboard.instance.isShiftPressed
+                  ? selectionCtrl.toggle(ElectricalSelection.panel(panel.id))
+                  : selectionCtrl.selectPanel(panel.id),
               onDoubleTap: () => onEditPanel(panel.id),
               onMenu: (gp) => onPanelMenu(panel.id, gp),
               onDropLoad: (load) => _dropOnMarker(ref, context, ctrl, panel, load),
@@ -452,6 +757,7 @@ class ElectricalLayoutLayer extends ConsumerWidget {
       final cr = pr?.circuits.where((r) => r.circuitId == c.id).firstOrNull;
       final lScreen = vt.worldToScreen(Offset(lp.x, lp.y));
       widgets.add(Positioned(
+        key: ValueKey('elec-layout-load-${panel.id}-${c.id}'),
         left: lScreen.dx - kLayoutLoadW * vt.scale / 2,
         top: lScreen.dy - kLayoutLoadH * vt.scale / 2,
         width: kLayoutLoadW * vt.scale,
@@ -464,28 +770,33 @@ class ElectricalLayoutLayer extends ConsumerWidget {
             enabled: interactive && c.sourceEquipmentId == null,
             scale: vt.scale,
             world: Offset(lp.x, lp.y),
-            onDragStart: ctrl.pushUndoSnapshot,
-            onMove: (w) =>
-                ctrl.setLoadPos(panel.id, c.id, lp.copyWith(x: w.dx, y: w.dy)),
+            onDragStart: () => _beginMarkerDrag(
+                ref, ctrl, ElectricalSelection.circuit(panel.id, c.id),
+                Offset(lp.x, lp.y)),
+            onDragEnd: () => _endMarkerDrag(ref),
+            onDragAbandoned: () => _endMarkerDrag(ref, deferred: true),
+            snap: _gridSnapFor(ref, sheetId, vt.scale),
+            onMove: (w) => _moveMarkers(ref, ctrl, w,
+                single: () => ctrl.setLoadPos(
+                    panel.id, c.id, lp.copyWith(x: w.dx, y: w.dy))),
             // Dropped ONTO another load on the SAME panel → CHAIN them (one
             // breaker); otherwise the live onMove already repositioned it.
             onDropAt: (w) {
               final target = _loadDroppedOnto(panel, c.id, w);
               if (target != null) ctrl.mergeCircuit(panel.id, c.id, target);
             },
-            child: _ScaledLayoutChild(
-              scale: vt.scale,
+            child: ScaledWorldChild(
               width: kLayoutLoadW,
               height: kLayoutLoadH,
               child: _LoadMarker(
                 circuit: c,
                 result: cr,
                 detail: detail,
-                selected: selection != null &&
-                    selection.isCircuit &&
-                    selection.panelId == panel.id &&
-                    selection.circuitId == c.id,
-                onTap: () => selectionCtrl.selectCircuit(panel.id, c.id),
+                selected: selection?.contains(panel.id, c.id) ?? false,
+                onTap: () => HardwareKeyboard.instance.isShiftPressed
+                    ? selectionCtrl
+                        .toggle(ElectricalSelection.circuit(panel.id, c.id))
+                    : selectionCtrl.selectCircuit(panel.id, c.id),
                 onDoubleTap: () => onEditCircuit(panel.id, c.id),
                 onMenu: (gp) => onCircuitMenu(panel.id, c.id, gp),
               ),
@@ -915,7 +1226,7 @@ class _PanelMarkerState extends State<_PanelMarker> {
               // Subtle hover/drop lift signalling the marker is interactive.
               child: AnimatedScale(
                 scale: (_hover || _dropHover) ? MechXMotion.hoverLift : 1.0,
-                duration: MechXMotion.hover,
+                duration: MechXMotion.resolve(context, MechXMotion.hover),
                 curve: MechXMotion.standard,
                 child: body,
               ),
@@ -1034,7 +1345,7 @@ class _LoadMarkerState extends State<_LoadMarker> {
           // Subtle hover lift signalling the marker is interactive.
           child: AnimatedScale(
             scale: _hover ? MechXMotion.hoverLift : 1.0,
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             child: body,
           ),
@@ -1052,14 +1363,29 @@ class _LayoutNodeDraggable extends StatefulWidget {
   final double scale;
   final Offset world;
 
-  /// Fired once at drag start — the host pushes one undo snapshot here so the
-  /// whole move (live [onMove] updates don't record) is a single undo step.
+  /// Fired once at drag start — the host pushes one undo snapshot AND opens
+  /// the electrical drag session here, so the whole move (live [onMove]
+  /// updates don't record, and don't re-solve — E3) is a single undo step and
+  /// a single re-solve.
   final VoidCallback? onDragStart;
   final ValueChanged<Offset> onMove;
 
   /// Fired on release with the final world position — lets the host decide
   /// whether the node was dropped ONTO another (e.g. to chain loads).
   final ValueChanged<Offset>? onDropAt;
+
+  /// Fired once whenever a started drag finishes (released or cancelled), so
+  /// the host can close its drag session.
+  final VoidCallback? onDragEnd;
+
+  /// Fired instead of [onDragEnd] when the marker unmounts MID-drag (a sheet
+  /// switch, a layer toggle). Runs inside `dispose`, so the host must defer
+  /// any provider write it makes.
+  final VoidCallback? onDragAbandoned;
+
+  /// S1 — maps the RAW dragged world point to the point the marker sits at
+  /// (the live grid snap). Null ⇒ raw.
+  final Offset Function(Offset raw)? snap;
   final Widget child;
 
   const _LayoutNodeDraggable({
@@ -1069,6 +1395,9 @@ class _LayoutNodeDraggable extends StatefulWidget {
     this.onDragStart,
     required this.onMove,
     this.onDropAt,
+    this.onDragEnd,
+    this.onDragAbandoned,
+    this.snap,
     required this.child,
   });
 
@@ -1077,60 +1406,158 @@ class _LayoutNodeDraggable extends StatefulWidget {
 }
 
 class _LayoutNodeDraggableState extends State<_LayoutNodeDraggable> {
-  Offset? _dragWorld;
+  /// The RAW (unsnapped) cursor-tracked world point; null when not dragging.
+  /// The snap is applied on top of it every frame, so the marker steps from
+  /// grid point to grid point without the cursor drifting off it.
+  Offset? _rawWorld;
+  Offset? _placedWorld;
+
+  Offset _snapped(Offset raw) => widget.snap?.call(raw) ?? raw;
+
+  void _finish() {
+    _rawWorld = null;
+    _placedWorld = null;
+    widget.onDragEnd?.call();
+  }
+
+  @override
+  void dispose() {
+    // Unmounted mid-drag (sheet switch, layer toggle): the session must still
+    // close, or the electrical solve would stay frozen.
+    if (_rawWorld != null) widget.onDragAbandoned?.call();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.child;
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onPanStart: (_) {
-        widget.onDragStart?.call();
-        _dragWorld = widget.world;
-      },
-      onPanUpdate: (d) {
-        final next = (_dragWorld ?? widget.world) + d.delta / widget.scale;
-        _dragWorld = next;
-        widget.onMove(next);
-      },
-      onPanEnd: (_) {
-        final w = _dragWorld;
-        _dragWorld = null;
-        if (w != null) widget.onDropAt?.call(w);
-      },
-      child: widget.child,
+    return MouseRegion(
+      // V4 — a draggable marker says so.
+      cursor: SystemMouseCursors.move,
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onPanStart: (_) {
+          widget.onDragStart?.call();
+          _rawWorld = widget.world;
+          _placedWorld = widget.world;
+        },
+        onPanUpdate: (d) {
+          final raw = (_rawWorld ?? widget.world) + d.delta / widget.scale;
+          _rawWorld = raw;
+          final next = _snapped(raw);
+          if (next == _placedWorld) return;
+          _placedWorld = next;
+          widget.onMove(next);
+        },
+        onPanEnd: (_) {
+          final w = _placedWorld;
+          if (w != null) widget.onDropAt?.call(w);
+          _finish();
+        },
+        onPanCancel: () {
+          if (_rawWorld != null) _finish();
+        },
+        child: widget.child,
+      ),
     );
   }
 }
 
-// ── Scaled-child wrapper (lay out at natural world size, then visually scale) ──
+// ── Blank-plan marquee (E5) ──────────────────────────────────────────────────
 
-class _ScaledLayoutChild extends StatelessWidget {
-  final double scale;
-  final double width;
-  final double height;
-  final Widget child;
+/// The electrical layer's blank-plan gesture surface: a left-drag rubber-bands
+/// markers (V5 window left-to-right — fully inside; crossing right-to-left —
+/// any touched; Shift extends), a tap clears the selection. Translucent, like
+/// the mechanical Select-tool overlay, so the canvas below still sees what it
+/// owns; trackpad two-finger pans are left to the canvas (never a marquee).
+class _LayerMarquee extends ConsumerStatefulWidget {
+  final ViewportTransform transform;
+  final String sheetId;
+  final int floorIndex;
 
-  const _ScaledLayoutChild({
-    required this.scale,
-    required this.width,
-    required this.height,
-    required this.child,
+  const _LayerMarquee({
+    required this.transform,
+    required this.sheetId,
+    required this.floorIndex,
   });
 
   @override
+  ConsumerState<_LayerMarquee> createState() => _LayerMarqueeState();
+}
+
+class _LayerMarqueeState extends ConsumerState<_LayerMarquee> {
+  Offset? _start;
+  Offset? _now;
+
+  void _finish() {
+    final start = _start, now = _now;
+    setState(() {
+      _start = null;
+      _now = null;
+    });
+    if (start == null || now == null) return;
+    final rect = Rect.fromPoints(start, now);
+    if (rect.width <= 4 && rect.height <= 4) return;
+    final window = marqueeIsWindow(start, now);
+    final vt = widget.transform;
+    final hit = <ElectricalSelection>[
+      for (final m in _markersOn(ref.read(electricalProjectProvider),
+          widget.sheetId, widget.floorIndex))
+        if (marqueeCatches(
+            rect,
+            Rect.fromCenter(
+              center: vt.worldToScreen(m.world),
+              width: m.size.width * vt.scale,
+              height: m.size.height * vt.scale,
+            ),
+            window: window))
+          m.item,
+    ];
+    final ctrl = ref.read(electricalSelectionProvider.notifier);
+    final current = ref.read(electricalSelectionProvider);
+    if (HardwareKeyboard.instance.isShiftPressed && current != null) {
+      ctrl.selectMany([...current.members, ...hit]);
+    } else {
+      ctrl.selectMany(hit);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Transform.scale(
-      scale: scale,
-      alignment: Alignment.topLeft,
-      child: OverflowBox(
-        alignment: Alignment.topLeft,
-        minWidth: 0,
-        maxWidth: double.infinity,
-        minHeight: 0,
-        maxHeight: double.infinity,
-        child: SizedBox(width: width, height: height, child: child),
-      ),
+    final start = _start, now = _now;
+    return GestureDetector(
+      behavior: HitTestBehavior.translucent,
+      supportedDevices: const {
+        PointerDeviceKind.mouse,
+        PointerDeviceKind.touch,
+        PointerDeviceKind.stylus,
+        PointerDeviceKind.invertedStylus,
+      },
+      onTap: () => ref.read(electricalSelectionProvider.notifier).clear(),
+      onPanStart: (d) => setState(() {
+        _start = d.localPosition;
+        _now = d.localPosition;
+      }),
+      onPanUpdate: (d) => setState(() => _now = d.localPosition),
+      onPanEnd: (_) => _finish(),
+      onPanCancel: () {
+        if (_start != null) {
+          setState(() {
+            _start = null;
+            _now = null;
+          });
+        }
+      },
+      child: (start == null || now == null)
+          ? const SizedBox.expand()
+          : CustomPaint(
+              painter: MarqueePainter(
+                start: start,
+                now: now,
+                accent: context.colors.accent,
+              ),
+              child: const SizedBox.expand(),
+            ),
     );
   }
 }
@@ -1241,7 +1668,7 @@ class _SheetDropTargetState extends ConsumerState<_SheetDropTarget> {
               Positioned.fill(
                 child: AnimatedOpacity(
                   opacity: _active ? 1.0 : 0.0,
-                  duration: MechXMotion.hover,
+                  duration: MechXMotion.resolve(context, MechXMotion.hover),
                   curve: MechXMotion.standard,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
@@ -2005,7 +2432,7 @@ class _TrayDropTargetState extends ConsumerState<_TrayDropTarget> {
           ignoring: !_active,
           child: AnimatedOpacity(
             opacity: _active ? 1.0 : 0.0,
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             child: DecoratedBox(
               decoration: BoxDecoration(

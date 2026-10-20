@@ -21,7 +21,7 @@ import 'package:mechx_engine/units.dart';
 import '../ui/strings/app_strings.dart';
 import 'design_issues_store.dart' show zeroLengthSizedEdgeCountProvider;
 import 'electrical_store.dart'
-    show electricalProjectProvider, electricalResultProvider;
+    show electricalResultProvider, electricalSizingProjectProvider;
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -283,7 +283,7 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   // counts: a board with at least one way is drawn work, and with no
   // mechanical edge its solved result is the sizing (the calibrated /
   // zero-length guards stay scoped to the mechanical network).
-  final elecProject = ref.watch(electricalProjectProvider);
+  final elecProject = ref.watch(electricalSizingProjectProvider);
   final hasElectrical = elecProject.panels.any((p) => p.circuits.isNotEmpty);
   final elecSized = hasElectrical &&
       ref.watch(electricalResultProvider).panels.isNotEmpty;
