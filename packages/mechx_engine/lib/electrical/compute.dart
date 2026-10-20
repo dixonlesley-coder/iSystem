@@ -59,6 +59,38 @@ const double assumedBuildingPf = 0.85;
 // `load_kind.dart` as [kAssumedMotorEfficiency] so the power-factor pass reads
 // the SAME figure as the Ib derivation below.
 
+/// Round 37 — the current-carrying-capacity reduction for a cable whose
+/// NEUTRAL carries triplen-harmonic current: four loaded conductors in one
+/// sheath (IEC 60364-5-52 Annex E, Table E.52.1 reduction factor 0.86).
+/// A design rule, NOT an SNI/PUIL clause. // VERIFY (notAnSniClause)
+const double kFourLoadedConductorFactor = 0.86;
+
+/// Round 37 — a fed three-phase board's triplen-neutral condition, carried up
+/// to the FEEDER that supplies it: its FOLD-2 neutral factor (× phase
+/// current), its DIVERSIFIED worst-phase current (A) and its single-phase
+/// non-linear share (0–1).
+typedef FedNeutralLoad = ({
+  double factor,
+  double worstPhaseA,
+  double triplenFraction,
+});
+
+/// Round 37 (electrical-sim-4-dual-tx-single-root-floor-vs-fault-basis) —
+/// the declared connection capacity (VA) the SERVICE-ENTRANCE board of a
+/// single-root tree is rated for: the whole [ElectricalProject.supplyCapacityVa]
+/// on a single-transformer / LV service, ONE section's share (half) on a
+/// [ElectricalProject.dualTransformer] service. A single root board on a
+/// dual service sits on one section with the bus coupler normally open —
+/// the SAME one-section basis the fault estimate, the supply study and the
+/// device kA use (Round 30) — so it can never be offered more than that
+/// section (1 MVA dual: 500 kVA ⇒ 721.7 A ⇒ an 800 A incomer, never 1600 A
+/// specified at the one-section 18 kA). Null when nothing is declared.
+double? serviceEntranceCapacityVa(ElectricalProject project) {
+  final cap = project.supplyCapacityVa?.voltAmperes;
+  if (cap == null || cap <= 0) return null;
+  return project.dualTransformer ? cap / 2 : cap;
+}
+
 // ── phase determination ─────────────────────────────────────────────────────
 
 /// Whether a circuit is supplied three-phase. On a single-phase panel
@@ -96,7 +128,13 @@ class _PhaseCircuit {
   final bool threePhase;
   final double currentA;
   final PhaseLine? pinned;
-  const _PhaseCircuit(this.id, this.threePhase, this.currentA, this.pinned);
+
+  /// Round 37 — a 3φ FEEDER to an imbalanced 3φ board loads the parent's
+  /// lines with the fed board's own diversified L1 / L2 / L3 currents, not a
+  /// balanced Ib on each. Null ⇒ [currentA] on every line.
+  final List<double>? lines;
+  const _PhaseCircuit(this.id, this.threePhase, this.currentA, this.pinned,
+      {this.lines});
 }
 
 /// The balance assignment + per-line currents + imbalance.
@@ -159,6 +197,30 @@ PhaseBalance balancePhases(
   Map<String, PhaseAssignment> prior = const {},
   double reassignThresholdA = 0,
 }) {
+  final seededResult = _balancePhasesOnce(circuits, system,
+      prior: prior, reassignThresholdA: reassignThresholdA);
+  if (prior.isEmpty || system != ElectricalSystem.threePhase) {
+    return seededResult;
+  }
+  // Round 37 (edit-fuzz-3-1) — phase STICKINESS may only keep a labelled
+  // assignment whose WORST phase (the incomer + busbar sizing basis) equals
+  // the fresh, unseeded solve's. The prior map is session-only (never in
+  // .mechx), so a sticky assignment up to 1 A heavier sized a 40 A incomer
+  // live and 32 A after save + reopen. A spread-only difference (the labels on
+  // site) is still kept; a different worst phase never is.
+  final fresh = _balancePhasesOnce(circuits, system);
+  double worst(PhaseBalance b) => math.max(b.l1, math.max(b.l2, b.l3));
+  return (worst(seededResult) - worst(fresh)).abs() > 1e-9
+      ? fresh
+      : seededResult;
+}
+
+PhaseBalance _balancePhasesOnce(
+  List<_PhaseCircuit> circuits,
+  ElectricalSystem system, {
+  Map<String, PhaseAssignment> prior = const {},
+  double reassignThresholdA = 0,
+}) {
   final phases = <PhaseLine, double>{
     PhaseLine.l1: 0,
     PhaseLine.l2: 0,
@@ -181,12 +243,14 @@ PhaseBalance balancePhases(
     );
   }
 
-  // Three-phase ways load all lines equally.
+  // Three-phase ways load all lines equally — except a feeder to an
+  // imbalanced 3φ board, which carries that board's own line currents.
   for (final c in circuits) {
     if (c.threePhase) {
-      phases[PhaseLine.l1] = phases[PhaseLine.l1]! + c.currentA;
-      phases[PhaseLine.l2] = phases[PhaseLine.l2]! + c.currentA;
-      phases[PhaseLine.l3] = phases[PhaseLine.l3]! + c.currentA;
+      final ls = c.lines;
+      phases[PhaseLine.l1] = phases[PhaseLine.l1]! + (ls?[0] ?? c.currentA);
+      phases[PhaseLine.l2] = phases[PhaseLine.l2]! + (ls?[1] ?? c.currentA);
+      phases[PhaseLine.l3] = phases[PhaseLine.l3]! + (ls?[2] ?? c.currentA);
       assignment[c.id] = PhaseAssignment.threePhase;
     }
   }
@@ -356,9 +420,12 @@ PhaseBalance balancePhases(
     final curSpread = spread();
     final better = bestWorst < curWorst - 1e-9 ||
         (bestWorst <= curWorst + 1e-9 && bestSpread < curSpread - 1e-9);
+    // Round 37 — a lower WORST phase is always taken (stickiness never
+    // raises the sizing current); the threshold gates spread-only moves.
     final clearsStickiness = seeded.isEmpty ||
-        curWorst - bestWorst > reassignThresholdA ||
-        curSpread - bestSpread > reassignThresholdA;
+        curWorst - bestWorst > 1e-9 ||
+        (bestWorst <= curWorst + 1e-9 &&
+            curSpread - bestSpread > reassignThresholdA);
     if (bestPick != null && better && clearsStickiness) {
       phases
         ..[PhaseLine.l1] = base[PhaseLine.l1]!
@@ -431,13 +498,23 @@ double _spread3(double a, double b, double c) =>
 double minimumPhaseSpreadA(
   List<double> currents, {
   int exactSearchMax = kPhaseExactSearchMaxWays,
+  List<double> base = const [0, 0, 0],
 }) {
   final ways = currents.where((c) => c > 0).toList()
     ..sort((a, b) => b.compareTo(a));
-  if (ways.isEmpty) return 0;
+  // Round 37 — [base] is the FIXED per-line load of the 3φ ways that do not
+  // load their lines equally (a feeder to an imbalanced 3φ board carries that
+  // board's own L1 / L2 / L3): they shift the lines unequally, so they DO
+  // change the achievable spread. Equal base lines (the default) reproduce
+  // the original search exactly.
+  final baseEqual = (base[0] - base[1]).abs() < 1e-12 &&
+      (base[1] - base[2]).abs() < 1e-12;
+  if (ways.isEmpty) {
+    return baseEqual ? 0 : roundTo(_spread3(base[0], base[1], base[2]), 1);
+  }
 
   if (ways.length <= exactSearchMax) {
-    final lines = [0.0, 0.0, 0.0];
+    final lines = baseEqual ? [0.0, 0.0, 0.0] : [...base];
     var best = double.infinity;
     void walk(int i) {
       if (i == ways.length) {
@@ -446,8 +523,8 @@ double minimumPhaseSpreadA(
         return;
       }
       // Symmetry break: with three empty lines the heaviest way can sit on L1
-      // without loss of generality.
-      final lanes = i == 0 ? 1 : 3;
+      // without loss of generality (only when the base lines are equal).
+      final lanes = i == 0 && baseEqual ? 1 : 3;
       for (var p = 0; p < lanes; p++) {
         lines[p] += ways[i];
         walk(i + 1);
@@ -461,6 +538,8 @@ double minimumPhaseSpreadA(
 
   final free = balancePhases(
     [
+      if (!baseEqual)
+        _PhaseCircuit('#base', true, 0, null, lines: [...base]),
       for (var i = 0; i < ways.length; i++)
         _PhaseCircuit('#$i', false, ways[i], null),
     ],
@@ -681,7 +760,31 @@ class ComputePanelOptions {
   /// project) ⇒ the single-level rule ⇒ byte-identical.
   final Map<String, TtFeederRcdBasis> ttFeederRcd;
 
+  /// Round 37 (electrical-sim-4-feeder-balanced-phase-hides-fed-board-
+  /// imbalance) — each IMBALANCED three-phase fed board's DIVERSIFIED line
+  /// currents `[L1, L2, L3]` (A), keyed by the child panel id a feeder
+  /// serves, derived bottom-up by `computeSystem`. A 3φ feeder to such a
+  /// board loads the parent's phase balance with those three currents (so the
+  /// parent incomer / busbar, the recommended daya, the genset per-phase basis
+  /// and the service-capacity judge see the real worst line) and its own Ib /
+  /// Vd use the fed board's worst line. A balanced fed board (all three lines
+  /// equal) is absent ⇒ the balanced Ib exactly as before ⇒ byte-identical.
+  final Map<String, List<double>> feederLineCurrentsA;
+
+  /// Round 37 (electrical-sim-4-feeder-neutral-ignores-fed-board-triplen-
+  /// oversize) — each fed three-phase board whose FOLD-2 neutral factor is
+  /// above 1, keyed by the child panel id a feeder serves (see
+  /// [FedNeutralLoad]). The feeder's shared neutral carries `factor ×` the
+  /// fed worst-phase current, so its cable steps up until the derated Iz ×
+  /// [kFourLoadedConductorFactor] covers it (a full-size neutral, never a
+  /// reduced one), and the parent's own FOLD 2 counts the feeder current ×
+  /// the fed board's triplen share as single-phase non-linear load. Empty
+  /// (the default: no non-linear 1φ board anywhere) ⇒ byte-identical.
+  final Map<String, FedNeutralLoad> feederNeutralLoad;
+
   const ComputePanelOptions({
+    this.feederNeutralLoad = const {},
+    this.feederLineCurrentsA = const {},
     this.ttFeederRcd = const {},
     this.feederCapacitorFloorA = const {},
     this.feederLoadW = const {},
@@ -812,14 +915,22 @@ double _effectiveLoadW(
 /// panel's load that is single-phase AND non-linear (the triplen harmonics that
 /// sum arithmetically in the shared neutral). Spare ways carry no load. Mirrors
 /// PanelMaker `computeHarmonics` singlePhaseFraction. 0 ⇒ no oversize.
-double _singlePhaseNonLinearFraction(List<_CircuitComputation> comps) {
+double _singlePhaseNonLinearFraction(List<_CircuitComputation> comps,
+    {Map<String, double> feederTriplenShare = const {}}) {
   var total = 0.0;
   var singlePhaseNonLinear = 0.0;
   for (final cm in comps) {
     if (cm.result.loadKind == LoadKind.spare) continue;
     final w = math.max(0.0, _balanceCurrentA(cm.result));
     total += w;
-    if (cm.nonLinear && !cm.threePhase) singlePhaseNonLinear += w;
+    if (cm.nonLinear && !cm.threePhase) {
+      singlePhaseNonLinear += w;
+    } else {
+      // Round 37 — a feeder to a board whose 1φ non-linear share puts
+      // triplen current in ITS neutral carries that share up the tree.
+      final share = feederTriplenShare[cm.result.circuitId];
+      if (share != null) singlePhaseNonLinear += w * share;
+    }
   }
   if (total <= 0) return 0;
   return roundTo(singlePhaseNonLinear / total, 3);
@@ -1161,7 +1272,7 @@ _CircuitComputation _computeCircuit(
   final motorLike =
       (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
           c.motorKw != null;
-  final Current ib;
+  Current ib;
   // Round 13 (elec-props-2-motor-ib-undiversified) — the UNDIVERSIFIED full-
   // load current of a motor / A5-FLA way. Its own device + conductor size on
   // this (one machine does not diversify against itself), while its DESIGN
@@ -1199,6 +1310,16 @@ _CircuitComputation _computeCircuit(
       cosPhi: cosPhi,
       threePhase: threePhase,
     );
+  }
+  // Round 37 — a 3φ feeder carries its fed board's WORST line, never only
+  // the balanced W / (√3·V·pf): two 7 kW 1φ heaters on a 3φ sub-board put
+  // 30.3 A on L1 and L2, not 20.2 A. Its device, cable and Vd size on it.
+  final fedLines = isFeeder && threePhase && c.feedsPanelId != null
+      ? opts.feederLineCurrentsA[c.feedsPanelId]
+      : null;
+  if (fedLines != null) {
+    final worst = fedLines.reduce(math.max);
+    if (worst > ib.amperes) ib = Current(worst);
   }
   final designCurrent = Current(roundTo(ib.amperes, 1));
 
@@ -1316,7 +1437,7 @@ _CircuitComputation _computeCircuit(
   final cableInsulation =
       insulationForCableType(c.cableType, fallback: panel.insulation);
 
-  final cable = sizeCable(
+  var cable = sizeCable(
     profile,
     designCurrent: sizingCurrent,
     breakerRating: loadBreaker.ratingA,
@@ -1337,6 +1458,66 @@ _CircuitComputation _computeCircuit(
       isLighting: c.isLighting,
     ),
   );
+
+  // Round 37 (electrical-sim-4-feeder-neutral-ignores-fed-board-triplen-
+  // oversize) — a 3φ feeder to a board whose 1φ non-linear load raises the
+  // neutral current to `factor ×` phase carries that current in its OWN
+  // neutral core too; the phase breaker never sees it. Size the cable on the
+  // neutral condition (IEC 60364-5-52 Annex E, four loaded conductors:
+  // Iz × 0.86 ≥ factor × the fed worst phase), stepping the section up — a
+  // full-size neutral, never a reduced one.
+  final fedNeutral = isFeeder && threePhase && c.feedsPanelId != null
+      ? opts.feederNeutralLoad[c.feedsPanelId]
+      : null;
+  var feederNeutralUpsized = false;
+  if (fedNeutral != null &&
+      fedNeutral.factor > 1 &&
+      def.needsNeutral &&
+      c.cableOverrideMm2 == null) {
+    final neutralA = fedNeutral.factor * fedNeutral.worstPhaseA;
+    for (final sec in profile.standardSectionsMm2) {
+      if (cable.deratedIz.amperes * kFourLoadedConductorFactor >=
+          neutralA - 1e-9) {
+        break;
+      }
+      if (sec <= cable.csaMm2) continue;
+      cable = sizeCable(
+        profile,
+        designCurrent: sizingCurrent,
+        breakerRating: loadBreaker.ratingA,
+        deratingFactor: df,
+        minSectionMm2: math.max(minSection, sec),
+        insulation: cableInsulation,
+        material: panel.material,
+        method: installMethod,
+        threePhase: threePhase,
+        groupingCount: c.groupingCountOverride ?? panel.groupingCount,
+        vd: CableVoltageDropConstraint(
+          length: effectiveLength,
+          cosPhi: cosPhi,
+          threePhase: threePhase,
+          voltage: Voltage(useVoltageV),
+          isLighting: c.isLighting,
+        ),
+      );
+      feederNeutralUpsized = true;
+    }
+    if (feederNeutralUpsized) {
+      warnings.add(ElectricalWarning(
+        code: 'harmonics-neutral-oversize',
+        severity: WarningSeverity.info,
+        message: '${c.name}: the fed board\'s single-phase non-linear load '
+            'raises the feeder NEUTRAL current to ~${fedNeutral.factor}x its '
+            '${_num(roundTo(fedNeutral.worstPhaseA, 1))} A worst phase '
+            '(${_num(roundTo(neutralA, 1))} A) — feeder cable upsized to '
+            '${_num(cable.csaMm2)} mm² so Iz x $kFourLoadedConductorFactor '
+            '(four loaded conductors, IEC 60364-5-52 Annex E) carries it with '
+            'a full-size neutral.',
+        panelId: panel.id,
+        circuitId: c.id,
+      ));
+    }
+  }
 
   // E3/E4 — FEEDER SELECTIVITY FLOOR: DEVICE-ONLY, AMPACITY-CAPPED.
   //
@@ -1628,16 +1809,20 @@ ElectricalPanelResult computePanel(
       .toList();
 
   // Balance single-phase circuits across L1/L2/L3; pinned phases are honoured.
+  final phaseCircuits = [
+    for (var i = 0; i < comps.length; i++)
+      _PhaseCircuit(
+        comps[i].result.circuitId,
+        comps[i].threePhase,
+        _balanceCurrentA(comps[i].result),
+        branches[i].phaseOverride,
+        lines: comps[i].threePhase && branches[i].feedsPanelId != null
+            ? opts.feederLineCurrentsA[branches[i].feedsPanelId]
+            : null,
+      ),
+  ];
   final loadBalance = balancePhases(
-    [
-      for (var i = 0; i < comps.length; i++)
-        _PhaseCircuit(
-          comps[i].result.circuitId,
-          comps[i].threePhase,
-          _balanceCurrentA(comps[i].result),
-          branches[i].phaseOverride,
-        ),
-    ],
+    phaseCircuits,
     panel.system,
     prior: opts.priorAssignment,
     reassignThresholdA: opts.phaseReassignThresholdA,
@@ -1685,34 +1870,81 @@ ElectricalPanelResult computePanel(
   // still prints on the schedule TOTAL footer and in the panel inspector /
   // report — only the unactionable WARNING is dropped. The floor search runs
   // ONLY for a board already over the limit, so an even board costs nothing.
+  // Round 37 (edit-fuzz-3-2) — the verdict is judged on the UNSEEDED engine
+  // assignment, so a session-only prior seed (the engine's own earlier
+  // output, never saved) can neither raise nor hide the warning: the same
+  // document reports the same verdict live and after reopen.
+  final judged = opts.priorAssignment.isEmpty
+      ? balance
+      : _spreadSinglePhaseBanks(
+          balancePhases(phaseCircuits, panel.system),
+          panel: panel,
+          branches: branches,
+          threePhaseOf: {
+            for (var i = 0; i < comps.length; i++)
+              comps[i].result.circuitId: comps[i].threePhase,
+          },
+          feederCapacitorFloorA: opts.feederCapacitorFloorA,
+          panelSystems: opts.panelSystems,
+        );
   final overImbalanceLimit = panel.system == ElectricalSystem.threePhase &&
-      balance.imbalancePercent > kPhaseImbalanceWarnPercent;
+      judged.imbalancePercent > kPhaseImbalanceWarnPercent;
   var imbalanceReducible = false;
-  var bestImbalancePercent = balance.imbalancePercent;
+  var bestImbalancePercent = judged.imbalancePercent;
   // elec-props-3 — with no phase PIN and no prior seed on any single, the
   // assignment is the ENGINE's own (exact for ≤ kPhaseExactSearchMaxWays
   // singles, by the min-worst-phase objective the incomer sizes on), so no
   // re-assignment is an action the engineer could take: never "reducible".
+  // Round 37 (edit-fuzz-3-2) — only a real input (a PIN) makes the
+  // assignment the engineer's; the session prior seed is the engine's own.
   final engineOwned = !branches.asMap().entries.any((e) =>
-      !comps[e.key].threePhase &&
-      (e.value.phaseOverride != null ||
-          opts.priorAssignment.containsKey(e.value.id)));
+      !comps[e.key].threePhase && e.value.phaseOverride != null);
   if (overImbalanceLimit) {
     // The average line current is assignment-invariant (the same total load is
     // shared out however the ways are placed), so the achievable imbalance is
     // the achievable SPREAD measured against the same average.
-    final avgA = (balance.l1 + balance.l2 + balance.l3) / 3;
+    final avgA = (judged.l1 + judged.l2 + judged.l3) / 3;
+    // Round 37 — 3φ feeders carrying an imbalanced fed board's lines are a
+    // FIXED unequal base the singles are placed against.
+    final base = [0.0, 0.0, 0.0];
+    for (final pc in phaseCircuits) {
+      final ls = pc.lines;
+      if (!pc.threePhase || ls == null) continue;
+      final m = ls.reduce(math.min);
+      for (var k = 0; k < 3; k++) {
+        base[k] += ls[k] - m;
+      }
+    }
     final bestSpreadA = minimumPhaseSpreadA([
       for (final cm in comps)
         if (!cm.threePhase) _balanceCurrentA(cm.result),
-    ]);
+    ], base: base);
     bestImbalancePercent =
         avgA > 0 ? roundTo((bestSpreadA / avgA) * 100, 1) : 0.0;
     imbalanceReducible = !engineOwned &&
         bestImbalancePercent + kPhaseImbalanceReducibleMarginPercent <
-            balance.imbalancePercent;
+            judged.imbalancePercent;
   }
 
+  // Round 37 r2 (edit-fuzz-3-2 residual) — the schedule footer, inspector
+  // and report print the LABELLED (session-sticky) lines; the verdict above
+  // reads the unseeded `judged` lines. They share the worst phase (the
+  // balancer guarantees it) but the spread may differ by up to the 1.0 A
+  // stickiness threshold — so when the two differ the message says so and
+  // names the labelled figure, instead of silently printing a different %.
+  // A mere relabelling (the same three figures on other lines) is not a
+  // difference worth stating — compare the sorted lines.
+  final judgedSorted = [judged.l1, judged.l2, judged.l3]..sort();
+  final labelledSorted = [balance.l1, balance.l2, balance.l3]..sort();
+  final labelledDiffers = [
+    for (var k = 0; k < 3; k++) (judgedSorted[k] - labelledSorted[k]).abs()
+  ].any((d) => d > 1e-9);
+  final labelledNote = labelledDiffers
+      ? ' (Judged on the engine\'s fresh assignment; the phases currently '
+          'labelled on this board read ${balance.imbalancePercent}% — L1 '
+          '${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A — with the '
+          'same worst phase.)'
+      : '';
   if (overImbalanceLimit && imbalanceReducible) {
     final pinnedWays = [
       for (var i = 0; i < comps.length; i++)
@@ -1726,9 +1958,9 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance',
       severity: WarningSeverity.warning,
-      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
-          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A). '
-          '$action — $bestImbalancePercent% is achievable.',
+      message: 'Phase loading is unbalanced by ${judged.imbalancePercent}% '
+          '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A). '
+          '$action — $bestImbalancePercent% is achievable.$labelledNote',
       panelId: panel.id,
     ));
   }
@@ -1745,11 +1977,11 @@ ElectricalPanelResult computePanel(
     warnings.add(ElectricalWarning(
       code: 'phase-imbalance-inherent',
       severity: WarningSeverity.info,
-      message: 'Phase loading is unbalanced by ${balance.imbalancePercent}% '
-          '(L1 ${balance.l1} A, L2 ${balance.l2} A, L3 ${balance.l3} A) - '
+      message: 'Phase loading is unbalanced by ${judged.imbalancePercent}% '
+          '(L1 ${judged.l1} A, L2 ${judged.l2} A, L3 ${judged.l3} A) - '
           'inherent to the single-phase load set ($bestImbalancePercent% is the '
           'best any assignment reaches), so no redistribution helps; consider a '
-          'third leg or a 3-phase appliance.',
+          'third leg or a 3-phase appliance.$labelledNote',
       panelId: panel.id,
     ));
   }
@@ -1854,7 +2086,13 @@ ElectricalPanelResult computePanel(
   // exceed the phase current, so the neutral bar is oversized (IEC 60364-5-52
   // §523.6.3 / Annex E). A linear panel has no non-linear load ⇒ factor 1.0 ⇒
   // the neutral is byte-identical to the phase bar (the regression guard).
-  final triplenFraction = _singlePhaseNonLinearFraction(comps);
+  final triplenFraction = _singlePhaseNonLinearFraction(comps,
+      feederTriplenShare: {
+        for (final b in branches)
+          if (b.feedsPanelId != null &&
+              opts.feederNeutralLoad.containsKey(b.feedsPanelId))
+            b.id: opts.feederNeutralLoad[b.feedsPanelId]!.triplenFraction,
+      });
   final nFactor = roundTo(neutralOversizeFactor(triplenFraction), 2);
   final neutralPe = sizeNeutralPeBars(
     busbar.csaMm2,
@@ -2126,7 +2364,7 @@ ElectricalSystemResult computeSystem(
   // exactly ONE root — with several utility-fed boards the split of the
   // declared capacity between them is unknown, so nothing is fabricated.
   // Null capacity (the default) ⇒ no floor ⇒ byte-identical.
-  final serviceCapacityVa = project.supplyCapacityVa?.voltAmperes;
+  final serviceCapacityVa = serviceEntranceCapacityVa(project);
   double? serviceMinCurrentA;
   if (serviceCapacityVa != null && serviceCapacityVa > 0 && roots.length == 1) {
     final root = roots.first;
@@ -2296,6 +2534,86 @@ ElectricalSystemResult computeSystem(
     }
   }
 
+  // Round 37 (electrical-sim-4-feeder-balanced-phase-hides-fed-board-
+  // imbalance) — bottom-up DIVERSIFIED line currents of every IMBALANCED
+  // fed three-phase board, so the 3φ feeder supplying it carries those three
+  // currents into its parent's balance (and sizes on the worst one). A board
+  // can only be imbalanced when it holds a single-phase way or a feeder to an
+  // imbalanced / single-phase board, so only those are re-solved (with the
+  // very `computePanel` the sizing pass runs — its balance is a function of
+  // its own ways + the boards below it, never of its parent or the fault
+  // level). A 3φ-only tree solves nothing extra ⇒ byte-identical.
+  final feederLinesByPanel = <String, List<double>>{};
+  // Round 37 — and every fed 3φ board whose FOLD-2 neutral factor is above 1
+  // (see [ComputePanelOptions.feederNeutralLoad]).
+  final feederNeutralByPanel = <String, FedNeutralLoad>{};
+  for (final id in postOrder) {
+    final panel = byId[id];
+    if (panel == null || !parentOf.containsKey(id)) continue;
+    if (panel.system != ElectricalSystem.threePhase) continue;
+    final maybeImbalanced = panel.circuits.any((c) {
+      if (c.role != CircuitRole.branch) return false;
+      final fed = c.feedsPanelId;
+      if (fed != null) {
+        return panelSystems[fed] == ElectricalSystem.singlePhase ||
+            feederLinesByPanel.containsKey(fed) ||
+            feederNeutralByPanel.containsKey(fed);
+      }
+      if (c.loadKind == LoadKind.capacitor ||
+          c.loadKind == LoadKind.spare) {
+        return false;
+      }
+      return c.phaseOverride != null ||
+          !circuitIsThreePhase(
+            panelSystem: panel.system,
+            kind: c.loadKind,
+            loadW: c.loadW,
+            motorKw: c.motorKw,
+            phases: c.phases,
+          );
+    });
+    if (!maybeImbalanced) continue;
+    final solved = computePanel(
+      profile,
+      panel,
+      opts: ComputePanelOptions(
+        feederLoadW: feederLoadWByPanel[id] ?? const {},
+        feederPowerFactor: panelPowerFactor,
+        feederCapacitorFloorA: capacitorFloorByPanel,
+        feederLineCurrentsA: feederLinesByPanel,
+        feederNeutralLoad: feederNeutralByPanel,
+        panelSystems: panelSystems,
+        earthingSystem: project.earthingSystem,
+        ttFeederRcd: ttFeederRcd,
+        calibrationBySheet: calibrationBySheet,
+        building: building,
+        panelById: byId,
+        diversityLibrary: diversityLibrary,
+        priorAssignment: priorAssignments[id] ?? const {},
+        phaseReassignThresholdA: phaseReassignThresholdA,
+      ),
+    );
+    final b = solved.phaseBalance;
+    final d = panel.diversityFactor;
+    if ((math.max(b.l1, math.max(b.l2, b.l3)) -
+            math.min(b.l1, math.min(b.l2, b.l3))) >
+        1e-9) {
+      feederLinesByPanel[id] = [b.l1 * d, b.l2 * d, b.l3 * d];
+    }
+    final nb = solved.neutralPeBars;
+    if (nb.neutralOversizeFactor > 1) {
+      feederNeutralByPanel[id] = (
+        factor: nb.neutralOversizeFactor,
+        worstPhaseA: solved.diversifiedDemandCurrent.amperes,
+        triplenFraction: nb.triplenFraction,
+      );
+    }
+    if (solved.capacitorCurrentA > 0 &&
+        capacitorFloorByPanel.containsKey(id)) {
+      capacitorFloorByPanel[id] = solved.capacitorCurrentA;
+    }
+  }
+
   // True building connected load = leaf loads only (feeders are aggregations).
   // Round 32 — integer micro-watts: order-free (see [_micro]).
   var connectedLoadMicroW = 0;
@@ -2432,6 +2750,8 @@ ElectricalSystemResult computeSystem(
           priorAssignment: priorAssignments[id] ?? const {},
           phaseReassignThresholdA: phaseReassignThresholdA,
           feederBreakerFloorA: feederBreakerFloorA,
+          feederLineCurrentsA: feederLinesByPanel,
+          feederNeutralLoad: feederNeutralByPanel,
           serviceMinCurrentA: roots.length == 1 && id == roots.first.id
               ? serviceMinCurrentA
               : null,
@@ -2634,13 +2954,24 @@ ElectricalSystemResult computeSystem(
         rootResult.warnings.add(ElectricalWarning(
           code: 'service-capacity-below-demand',
           severity: WarningSeverity.warning,
+          // Round 37 r2 — on a dual-transformer service the single root
+          // sits on ONE section (coupler normally open), so the figure it is
+          // judged against is that section, never misstated as the declared
+          // total.
           message: '${rootResult.name}: diversified demand '
               '${_num(divA)} A on the worst-loaded '
-              'phase exceeds the declared connection capacity '
-              '${_num(serviceCapacityVa! / 1000)} kVA '
-              '(~${_num(roundTo(serviceMinCurrentA, 1))} A) — the utility '
-              'limiter would trip under the diversified demand; raise the '
-              'subscribed daya or shed load.',
+              'phase exceeds '
+              '${project.dualTransformer ? 'one ${_num(serviceCapacityVa! / 1000)} kVA section of the declared '
+                  '${_num(project.supplyCapacityVa!.voltAmperes / 1000)} kVA '
+                  'connection (bus coupler normally open, '
+                  '~${_num(roundTo(serviceMinCurrentA, 1))} A) — the section '
+                  'would trip under the diversified demand; raise the '
+                  'subscribed daya, split the load across both sections or '
+                  'shed load.' : 'the declared connection capacity '
+                  '${_num(serviceCapacityVa! / 1000)} kVA '
+                  '(~${_num(roundTo(serviceMinCurrentA, 1))} A) — the utility '
+                  'limiter would trip under the diversified demand; raise the '
+                  'subscribed daya or shed load.'}',
           panelId: rootId,
         ));
       }

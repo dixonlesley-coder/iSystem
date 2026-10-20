@@ -104,6 +104,16 @@ const double kMinRiserDiameterMm = 100.0;
 /// `SniProfile.verifyChecklist` (status `notAnSniClause`).
 const double kMinHydrantBranchDiameterMm = 65.0;
 
+/// Round 37 (mech-sim-5-fdc-line-sized-at-zero-flow) — minimum nominal
+/// diameter (mm) of the FIRE-DEPARTMENT-CONNECTION inlet pipe (the FDC and
+/// its unbranched chain to the system). The brigade pumps the system design
+/// flow in through it, so it is sized on that flow and never below 100 mm.
+///
+/// // VERIFY — NFPA 14 / general practice (FDC piping ≥ 100 mm), NOT an
+/// explicit SNI 03-1745-2000 clause. Surfaced via `SniProfile.verifyChecklist`
+/// (status `notAnSniClause`).
+const double kFdcMinBoreMm = 100.0;
+
 /// Height of a hose-cabinet landing valve above its own finished floor (m).
 ///
 /// // VERIFY — representative Indonesian hydrant-box mounting (≈ 0.9–1.5 m,

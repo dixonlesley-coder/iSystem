@@ -415,6 +415,9 @@ AdvancedStudy computeAdvancedStudy(
     // LV ceiling is a TM service on its snapped transformer).
     declaredKva: declaredServiceTransformer(project)?.kva,
     declaredUnits: declaredServiceTransformer(project)?.units,
+    // Round 37 r2 — a single root board on a dual service is judged against
+    // ONE section, like its incomer floor and the service-capacity judge.
+    singleSectionCarriesAll: originPanelIds.length == 1,
   );
   // Round 35 (elec-core-2-daya-ignores-worst-phase) — a PLN 3φ limiter trips
   // PER PHASE at daya / (√3·400), and `computeSystem` judges a declared daya
@@ -496,6 +499,7 @@ AdvancedStudy computeAdvancedStudy(
         controlAssemblies: controlAssemblies,
         spd: spd,
         electrode: electrode,
+        powerFactor: powerFactor,
       ));
 
   // Aggregate every sub-result's provenance honesty surface.

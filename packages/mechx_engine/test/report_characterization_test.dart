@@ -175,9 +175,11 @@ void main() {
       // Feeder way row, whole: SP-1's incomer is 10 A (its 1500 W AC unit draws
       // 7.6 A), so the feeder carries the selectivity floor 1.6 × 10 = 16 A —
       // the first rung at/above it — on the 4 mm² 3φ trunk minimum.
+      // Round 37: the 3φ feeder's Ib is SP-1's WORST line, 7.6 A (the AC unit
+      // alone on L1), not the balanced 1500 / (√3·400·0.85) = 2.5 A.
       expect(
           md,
-          contains('| Feeder SP-1 | feeder | 2.5 A | 3ph | 16 A MCB/C | 4 mm² '
+          contains('| Feeder SP-1 | feeder | 7.6 A | 3ph | 16 A MCB/C | 4 mm² '
               '| 30.0 m |'));
       // The warning section is INFO-only: `feeder-below-fed-demand` is cured by
       // the feeder floor, and both boards' imbalance is inherent (too few
@@ -240,7 +242,16 @@ void main() {
       // 0.1 precision ('L2 0.0 A · L3 0.0 A (imbalance 300.0 %)', was '0 A' /
       // '300 %'). Verified as the SOLE delta by diffing against the
       // pre-change output. Lines unchanged.
-      expect(fnv1a32(md), 0xda143cb1);
+      // Re-baselined 2026-10-18 (Round 37, feeder line currents): the 3φ
+      // feeder to SP-1 loads the MDP with SP-1's own lines (7.6 / 0 / 0 A), so
+      // the MDP singles balance against it — Lighting L3, Sockets L2, phase
+      // balance 7.6 / 15.3 / 9.2 A (72.0 %, was 17.8 / 11.7 / 2.5 A at
+      // 143.4 %), incomer 16 A (was 20 A), demand current 15.3 A, the feeder
+      // row Ib 7.6 A / Vd 0.5 % and the AC unit's cumulative drop 1.2 %; the
+      // two phase-imbalance-inherent notes print the new figures. Verified as
+      // the SOLE deltas by diffing against the pre-change output. Lines
+      // unchanged.
+      expect(fnv1a32(md), 0xbdc184e3);
     });
   });
 
@@ -370,7 +381,9 @@ void main() {
       // Re-baselined 2026-10-18 (Round 20 follow-up): the embedded
       // electrical way table's Length cell is `30.0 m` (planLengthLabel) — the
       // sole delta, as for the standalone electrical pin above.
-      expect(fnv1a32(md), 0xa40e604c);
+      // Re-baselined 2026-10-18 (Round 37): the embedded electrical body's
+      // feeder-line deltas (see the standalone electrical pin) — sole delta.
+      expect(fnv1a32(md), 0x82bae52a);
     });
   });
 
@@ -399,8 +412,11 @@ void main() {
 
     test('whole-document pin (FNV-1a + line count)', () {
       // Recorded 2026-07-02 against the pre-refactor string builder.
+      // Re-baselined 2026-10-18 (Round 37): the MDP row prints its 16 A
+      // incomer (was 20 A) — the MDP's real worst line is 15.3 A once the
+      // SP-1 feeder carries SP-1's own lines. Sole delta.
       expect(md.split('\n').length, 33);
-      expect(fnv1a32(md), 0x12a57440);
+      expect(fnv1a32(md), 0x80d42063);
     });
   });
 }

@@ -188,6 +188,7 @@ final electricalBomProvider = Provider<Bom>((ref) {
       controlAssemblies: adv.controlAssemblies,
       spd: adv.spd,
       electrode: adv.electrode,
+      powerFactor: adv.powerFactor,
     ),
   );
 });

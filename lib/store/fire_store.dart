@@ -184,6 +184,14 @@ class FireSystemBasis {
   final PumpDuty? duty;
   final PumpDuty? jockey;
 
+  /// Round 37 r2 — a COMBINED (sprinkler + hydrant) system whose sprinkler
+  /// HEAD exceeds the standpipe head: the pump is rated on the sprinkler point
+  /// (its small remote-area flow), so the standpipe flow ([standpipe]) at the
+  /// standpipe head is not a rated point — judge-only
+  /// `combined-fire-sprinkler-governs` (the Round-37 'larger head at its own
+  /// flow, never both' residual, surfaced rather than silent).
+  final bool sprinklerGovernsCombined;
+
   const FireSystemBasis({
     required this.system,
     required this.pumpIds,
@@ -196,6 +204,7 @@ class FireSystemBasis {
     this.standpipe,
     required this.duty,
     required this.jockey,
+    this.sprinklerGovernsCombined = false,
   });
 }
 
@@ -252,7 +261,12 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         dutyBore = bore;
       }
     }
-    final friction = duty == null
+    // Round 37 (mech-sim-5-combined-fire-pump-head-adds-sprinkler-
+    // friction-to-standpipe) — each basis reads the friction of ITS OWN
+    // terminals: the hose basis the hydrant outlets' index path, the
+    // sprinkler basis the heads'. A combined system computes both and the
+    // pump is rated on the larger HEAD at that basis's own flow (never Σ).
+    double? frictionTo(FireTerminalKind kind) => duty == null
         ? null
         : fireIndexPathFrictionM(
             net: net,
@@ -260,29 +274,53 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
             pumpId: duty,
             sizing: sizing,
             lengthOf: lengthOf,
+            terminals: kind,
           );
     final sprinklerOnly = !sys.hasHydrant;
     final risers = sys.standpipeRisers(net);
     final FlowRate flow;
     final Head head;
+    final double? friction;
     FireStandpipeDesign? standpipe;
+    var sprinklerGoverns = false;
+    ({FlowRate flow, Head head}) sprinklerPoint(double? f) =>
+        sprinklerPumpRatedPoint(
+          remote: remote,
+          staticLiftM: _sprinklerStaticLiftM(building),
+          indexPathFriction: f == null ? null : Head(f),
+        );
     if (sprinklerOnly) {
-      final p = sprinklerPumpRatedPoint(
-        remote: remote,
-        staticLiftM: _sprinklerStaticLiftM(building),
-        indexPathFriction: friction == null ? null : Head(friction),
-      );
+      friction = frictionTo(FireTerminalKind.sprinkler);
+      final p = sprinklerPoint(friction);
       flow = p.flow;
       head = p.head;
     } else {
+      final hydrantFriction = frictionTo(FireTerminalKind.hydrant);
       final st = designStandpipe(
         risers: risers,
         buildingHeight: standpipeStaticLift(building),
-        indexPathFriction: friction == null ? null : Head(friction),
+        indexPathFriction:
+            hydrantFriction == null ? null : Head(hydrantFriction),
       );
-      flow = st.requiredFlow;
-      head = st.pumpHead;
       standpipe = st;
+      if (sys.hasSprinkler) {
+        final sprinklerFriction = frictionTo(FireTerminalKind.sprinkler);
+        final sp = sprinklerPoint(sprinklerFriction);
+        if (sp.head.meters > st.pumpHead.meters + 1e-9) {
+          flow = sp.flow;
+          head = sp.head;
+          friction = sprinklerFriction;
+          sprinklerGoverns = true;
+        } else {
+          flow = st.requiredFlow;
+          head = st.pumpHead;
+          friction = hydrantFriction;
+        }
+      } else {
+        flow = st.requiredFlow;
+        head = st.pumpHead;
+        friction = hydrantFriction;
+      }
     }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
     final dutyPump = flow.cubicMetersPerSecond <= 0
@@ -303,6 +341,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       standpipe: standpipe,
       duty: dutyPump,
       jockey: jockey,
+      sprinklerGovernsCombined: sprinklerGoverns,
     ));
   }
   return out;

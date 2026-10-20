@@ -64,7 +64,11 @@ void main() {
     }
     expect(withFdc['ph']!.flow.inLitersPerSecond, closeTo(6.3, 1e-9));
     // The FDC branch carries no design draw-off and points INTO the header.
-    expect(withFdc['f0']!.flow.cubicMetersPerSecond, 0);
+    // Round 37 (mech-sim-5-fdc-line-sized-at-zero-flow): it is SIZED on the
+    // system flow the brigade pumps in — the largest flow at the header it
+    // joins (6.3 L/s here) — never below the DN100 FDC minimum.
+    expect(withFdc['f0']!.flow.inLitersPerSecond, closeTo(6.3, 1e-9));
+    expect(withFdc['f0']!.diameter.inMillimeters, greaterThanOrEqualTo(100));
     expect(withFdc['f0']!.flowFromId, 'F');
   });
 
@@ -80,7 +84,9 @@ void main() {
       expect(sized['ph']!.flow.inLitersPerSecond, closeTo(base, 1e-9));
       for (var i = 0; i <= bends; i++) {
         final e = sized['f$i']!;
-        expect(e.flow.cubicMetersPerSecond, 0);
+        // Round 37 — sized on the header's system flow, DN100 minimum.
+        expect(e.flow.inLitersPerSecond, closeTo(base, 1e-9));
+        expect(e.diameter.inMillimeters, greaterThanOrEqualTo(100));
         // Edge f_i joins (H | k_{i-1}) to (k_i | F): its far end is upstream.
         expect(e.flowFromId, i == bends ? 'F' : 'k$i', reason: 'f$i');
       }
