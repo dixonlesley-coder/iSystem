@@ -113,7 +113,7 @@ class BuildingScreen extends ConsumerWidget {
                     ? context.strings(StringKey.buildingAssignPlan)
                     : context.strings(StringKey.buildingChangePlan),
             onPickSheet: sheetsState.sheets.isEmpty
-                ? () => importPlan(context, ref)
+                ? () => _importPlanForFloor(context, ref, i)
                 : () => _pickSheetForFloor(context, ref, i),
             onRemove: project.floors.length > 1
                 ? () => _removeLevel(context, ref, i)
@@ -1113,4 +1113,20 @@ class _GlyphButtonState extends State<_GlyphButton> {
 String trimmedMetres(double m) {
   final s = m.toStringAsFixed(2);
   return s.endsWith('0') ? s.substring(0, s.length - 1) : s;
+}
+
+/// 'Import plan…' on a level row (an empty project): the plan lands on THAT
+/// level — a single imported sheet is mapped to [floorIndex] (review: it used
+/// to land on the positional default, so 'Import plan…' on Level 2 still
+/// needed a 'Change'). A multi-page import keeps the page-per-floor default.
+Future<void> _importPlanForFloor(
+    BuildContext context, WidgetRef ref, int floorIndex) async {
+  final imported = await importPlan(context, ref);
+  if (!imported) return;
+  final sheets = ref.read(sheetsControllerProvider).sheets;
+  if (sheets.length == 1) {
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .setSheetFloor(sheets.single.id, floorIndex);
+  }
 }

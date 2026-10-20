@@ -340,6 +340,12 @@ class BusyController extends Notifier<String?> {
 
   void set(String? message) => state = message;
   void clear() => state = null;
+
+  /// Clear only when the pill still reads [message] (a nested writer may have
+  /// replaced it) — usable from a captured notifier after an await.
+  void clearIf(String message) {
+    if (state == message) state = null;
+  }
 }
 
 /// The name of the export currently running through `runExportGuarded`, or

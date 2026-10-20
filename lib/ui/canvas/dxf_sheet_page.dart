@@ -70,8 +70,6 @@ class DxfSheetPage extends StatefulWidget {
     }
   }
 
-  static DxfDrawing? _load(String path) => _cache.get(path);
-
   /// In-flight background parses, one per path (two sheets of one file — or a
   /// rebuild mid-parse — share a single isolate run).
   static final Map<String, Future<DxfDrawing?>> _inFlight = {};
@@ -101,12 +99,20 @@ class DxfSheetPage extends StatefulWidget {
   static void cacheForTest(String path, DxfDrawing? drawing) =>
       _cache.prime(path, drawing);
 
-  /// The parsed drawing for [path] the painter uses, loading + caching it on
-  /// first access (null when the file is missing / empty / unparseable). The
-  /// B12 underlay snap index is built from THIS same cached drawing, so the snap
-  /// surface always matches the painted linework — no re-parse. Pure disk read;
-  /// safe to call off the paint path.
-  static DxfDrawing? cachedDrawing(String path) => _load(path);
+  /// The parsed drawing for [path] the painter uses, or null while it is not
+  /// parsed yet (or the file is missing / empty / unparseable). NEVER parses
+  /// on the calling (UI) isolate: a miss kicks [loadAsync] and returns null —
+  /// the snap service tolerates null and picks the drawing up on the next
+  /// gesture (review: a snap gesture during a large plan's background parse
+  /// used to re-parse it synchronously, the very freeze the isolate removed).
+  /// The B12 underlay snap index is built from THIS same cached drawing, so
+  /// the snap surface always matches the painted linework.
+  static DxfDrawing? cachedDrawing(String path) {
+    final (hit, value) = _cache.peek(path);
+    if (hit) return value;
+    unawaited(loadAsync(path));
+    return null;
+  }
 }
 
 class _DxfSheetPageState extends State<DxfSheetPage> {

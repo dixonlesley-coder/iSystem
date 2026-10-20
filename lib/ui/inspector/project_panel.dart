@@ -448,35 +448,40 @@ Future<void> runExportGuarded(
         );
     return;
   }
-  ref.read(exportInFlightProvider.notifier).set(name);
+  // Capture every notifier BEFORE the first await: if the widget that
+  // started the export is disposed meanwhile (a closed palette / sheet), its
+  // `ref` throws on use — the guard must still clear (review: a disposed ref
+  // in `finally` left every later export silently ignored).
+  final inFlight = ref.read(exportInFlightProvider.notifier);
+  final busy = ref.read(busyProvider.notifier);
+  final errors = ref.read(loadErrorProvider.notifier);
+  final status = ref.read(statusMessageProvider.notifier);
+  final exported = ref.read(reportExportedProvider.notifier);
+  inFlight.set(name);
   try {
     final wrote = await write();
     if (wrote == null) {
       // H3 — nothing to write is a REPORTABLE state, not a silent cancel.
-      ref
-          .read(loadErrorProvider.notifier)
-          .set(
-            strings.format(StringKey.exportNothingToExportTemplate, {
-              'name': name,
-            }),
-          );
+      errors.set(
+        strings.format(StringKey.exportNothingToExportTemplate, {
+          'name': name,
+        }),
+      );
       return;
     }
     if (wrote) {
-      ref.read(statusMessageProvider.notifier).showStatus('Exported $name');
+      status.showStatus('Exported $name');
       // The stepper's Report stage is DONE only once a deliverable actually
       // exists — this one line covers every export routed through here.
-      ref.read(reportExportedProvider.notifier).markExported();
+      exported.markExported();
     }
   } catch (e) {
-    ref.read(loadErrorProvider.notifier).set('Could not export $name: $e');
+    errors.set('Could not export $name: $e');
   } finally {
-    ref.read(exportInFlightProvider.notifier).set(null);
+    inFlight.set(null);
     // Clear the pill only if it is still OURS (a nested writer — the
     // submittal package — may have replaced and cleared it already).
-    if (ref.read(busyProvider) == exportBusyMessage(strings, name)) {
-      ref.read(busyProvider.notifier).clear();
-    }
+    busy.clearIf(exportBusyMessage(strings, name));
   }
 }
 

@@ -25,6 +25,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/layer_store.dart';
+import 'package:mechx/store/command_store.dart' show commandPaletteOpenProvider;
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/ui/canvas/canvas_minimap.dart';
 import 'package:mechx/ui/canvas/dxf_sheet_page.dart';
@@ -285,12 +286,16 @@ void main() {
     expect(find.text('MAP'), findsNothing);
   });
 
-  test('riser label LOD: hidden below 6 px, capped above 2x, 1.0 at rest', () {
+  test('riser label LOD: hidden only as a sub-legible smear (< 3.5 px), '
+      'capped above 2x, 1.0 at rest', () {
     expect(riserLabelZoomBucket(1.0), 1.0);
     expect(riserLabelZoomBucket(1.7), 1.0);
     expect(riserLabelFontSize(9, 1.0), 9);
-    // 8 px at 0.5x is 4 px on screen — skipped.
-    expect(riserLabelFontSize(8, riserLabelZoomBucket(0.5)), isNull);
+    // A 12-storey fit (~0.56x): the 8 px labels stay (4.5 px on screen) —
+    // review: dropping them emptied the pump-set box and the fan-out stubs.
+    expect(riserLabelFontSize(8, riserLabelZoomBucket(0.56)), 8);
+    // 8 px at 0.3x is 2.4 px of smear — skipped.
+    expect(riserLabelFontSize(8, riserLabelZoomBucket(0.3)), isNull);
     // Deep zoom: the on-screen size stops near 2x the design size.
     final z = riserLabelZoomBucket(8);
     final f = riserLabelFontSize(10, z)!;
@@ -323,4 +328,82 @@ void main() {
           reason: glyph);
     }
   });
+
+  group('review fixes (Fable, batch 6)', () {
+    testWidgets('the export guard clears even when the starting widget is '
+        'disposed mid-export (its ref then throws)', (tester) async {
+      final show = ValueNotifier<bool>(true);
+      late WidgetRef ref;
+      await tester.pumpWidget(ProviderScope(
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          child: ValueListenableBuilder<bool>(
+            valueListenable: show,
+            builder: (context, on, _) => on
+                ? Consumer(builder: (context, r, _) {
+                    ref = r;
+                    return const SizedBox.shrink();
+                  })
+                : const SizedBox.shrink(),
+          ),
+        ),
+      ));
+      final c = ProviderScope.containerOf(
+          tester.element(find.byType(ValueListenableBuilder<bool>)));
+      final gate = Completer<void>();
+      final run = runExportGuarded(ref, name: 'Calc report', write: () async {
+        await gate.future;
+        // Like pickExportSave after the OS dialog: uses the (now dead) ref.
+        ref.read(busyProvider);
+        return true;
+      });
+      await tester.pump();
+      expect(c.read(exportInFlightProvider), 'Calc report');
+      show.value = false; // the palette / sheet closes
+      await tester.pump();
+      gate.complete();
+      await run;
+      expect(c.read(exportInFlightProvider), isNull,
+          reason: 'a disposed ref must never wedge every later export');
+    });
+
+    testWidgets('a command-palette export runs on the long-lived overlay '
+        'ref: the cancelled dialog leaves no error and no stuck guard',
+        (tester) async {
+      final previous = FilePickerPlatform.instance;
+      FilePickerPlatform.instance = _SlowCancelPicker();
+      addTearDown(() => FilePickerPlatform.instance = previous);
+      setDesktopSurface(tester, size: const Size(1440, 900));
+      await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+      await tester.pump();
+      final c = ProviderScope.containerOf(
+          tester.element(find.byType(MechXApp)),
+          listen: false);
+      c.read(commandPaletteOpenProvider.notifier).open();
+      await tester.pump();
+      await tester.enterText(find.byType(EditableText).last, 'Export calc report');
+      await tester.pump();
+      await tester.tap(find.text('Export calc report').first);
+      await tester.pump(); // palette closes, the dialog is "open"
+      await tester.pump(const Duration(milliseconds: 300)); // user cancels
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      expect(c.read(exportInFlightProvider), isNull);
+    });
+  });
+}
+
+/// A save dialog the user cancels after a moment.
+class _SlowCancelPicker extends FilePickerPlatform {
+  @override
+  Future<String?> saveFile({
+    String? dialogTitle,
+    String? fileName,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Uint8List? bytes,
+    bool lockParentWindow = false,
+  }) =>
+      Future<String?>.delayed(const Duration(milliseconds: 200));
 }

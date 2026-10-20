@@ -849,6 +849,8 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
   /// no re-layout, no label-collision pass, no repaint of the diagram. Its
   /// framed node layout is also the one the inferred-riser hit test reads.
   _AutoSchematicPainter? _painter;
+  /// The fit LOD bucket the last build settled on (no stored view yet).
+  double? _lastFitLabelZoom;
   Object? _painterInputs;
 
   /// The viewport (widget) size and the R5 world the diagram lays out in.
@@ -1180,7 +1182,13 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
                   : 0,
               labelZoom: labelZoom,
             );
-        var painter = painterAt(watchedLabelZoom ?? 1.0);
+        // With no stored view, start from the fit LOD bucket the previous
+        // build settled on, so a rebuild (hover, a tag tick) hits the painter
+        // memo instead of building a 1.0 painter and immediately replacing it
+        // (review: that defeated the R1 memo + the per-painter layout cache on
+        // every rebuild of a tall building).
+        var painter =
+            painterAt(watchedLabelZoom ?? _lastFitLabelZoom ?? 1.0);
         // R5: the world the diagram lays out in (== the viewport unless the
         // building is too tall for legible bands).
         _world = painter.worldSizeFor(_size);
@@ -1189,7 +1197,8 @@ class _AutoElevationState extends ConsumerState<_AutoElevation>
         // building fits the window).
         if (watchedLabelZoom == null) {
           final fitZoom = riserLabelZoomBucket(_fit.scale);
-          if (fitZoom != 1.0) painter = painterAt(fitZoom);
+          if (fitZoom != painter.labelZoom) painter = painterAt(fitZoom);
+          _lastFitLabelZoom = fitZoom;
         }
         // The painted single-line in its own layer (RepaintBoundary) under the
         // live ViewportTransform — the ONE widget that rebuilds per pan / zoom
@@ -2981,11 +2990,15 @@ int debugAutoRiserPaintCount = 0;
 /// deep zoom blew them up to poster size. These two constants + the two pure
 /// helpers below are the ONE label LOD for the canvas:
 ///  * a label whose ON-SCREEN size would fall below
-///    [kRiserLabelMinScreenPx] is not drawn at all;
+///    [kRiserLabelMinScreenPx] is not drawn at all — a sub-legible smear, not
+///    merely small text: the threshold sits BELOW the fit scale of a tall
+///    building's 8 px labels (review: at 6 px a 12-storey fit at 0.56x dropped
+///    every 8/9 px label and left the pump-set box an empty frame; small-but-
+///    present at fit is the pre-LOD behaviour and stays);
 ///  * above [kRiserLabelMaxZoom] the label is counter-scaled, so its on-screen
 ///    size stops growing at ~[kRiserLabelMaxZoom]x its design size (the
 ///    geometry keeps zooming; the text stays a readable annotation).
-const double kRiserLabelMinScreenPx = 6;
+const double kRiserLabelMinScreenPx = 3.5;
 const double kRiserLabelMaxZoom = 2;
 
 /// Quantises a live view [scale] into the LOD bucket the painter is keyed on,
