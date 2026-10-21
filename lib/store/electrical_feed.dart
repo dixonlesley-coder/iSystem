@@ -484,23 +484,39 @@ Map<String, String> parallelStandbyPumps(
   // never a standby at demand factor 0.
   final systems = fireSystems(net);
   final sets = <List<String>>[];
+  // Round 51 r2 — the connectivity groups above walk THROUGH a tank, but
+  // [fireSystems] stops at one (a tank is a system boundary), so a group can
+  // hold pumps of several systems (a sprinkler pump and a hydrant pump drawn
+  // off one shared ground tank). Split each group per system first and pick
+  // every system's own duty pump — never one system for the whole group.
   for (final g in groups.values) {
     if (g.length < 2) continue;
-    final sys = systems.where((s) => s.nodeIds.contains(g.first)).firstOrNull;
-    if (sys == null) {
-      sets.add(g);
-      continue;
-    }
-    final parts = fireParallelPumpSets(net, sys, g);
-    final overallDuty = ([...g]..sort(rank)).first;
-    final dutySet = parts.firstWhere((p) => p.contains(overallDuty));
-    for (final p in parts) {
-      if (!identical(p, dutySet) && p.every(onLeg)) {
-        dutySet.addAll(p);
-        p.clear();
+    final bySystem = <int, List<String>>{};
+    final orphan = <String>[];
+    for (final id in g) {
+      final i = systems.indexWhere((s) => s.nodeIds.contains(id));
+      if (i < 0) {
+        orphan.add(id);
+      } else {
+        (bySystem[i] ??= []).add(id);
       }
     }
-    sets.addAll(parts.where((p) => p.isNotEmpty));
+    if (orphan.length >= 2) sets.add(orphan);
+    for (final MapEntry(key: i, value: sg) in bySystem.entries) {
+      if (sg.length < 2) continue;
+      final parts = fireParallelPumpSets(net, systems[i], sg);
+      if (parts.isEmpty) continue;
+      final overallDuty = ([...sg]..sort(rank)).first;
+      final dutySet =
+          parts.firstWhere((p) => p.contains(overallDuty), orElse: () => parts.first);
+      for (final p in parts) {
+        if (!identical(p, dutySet) && p.every(onLeg)) {
+          dutySet.addAll(p);
+          p.clear();
+        }
+      }
+      sets.addAll(parts.where((p) => p.isNotEmpty));
+    }
   }
   for (final g in sets) {
     if (g.length < 2) continue;

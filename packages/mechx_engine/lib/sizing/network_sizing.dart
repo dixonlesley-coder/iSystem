@@ -1664,8 +1664,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   // system take the hose-station floors and the 100 gpm design flow.
   final classIIHydrantEdgeIds = <String>{
     for (final sys in fireSystems(net))
-      if (sys.hasHydrant &&
-          sys.standpipeClass(net) == StandpipeClass.classII)
+      if (sys.hasHydrant && sys.standpipeClass(net) == StandpipeClass.classII)
         for (final e in sys.edges)
           if (e.service == ServiceType.fireHydrant) e.id,
   };
@@ -2838,7 +2837,10 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           // stack is floored at the smaller of the two stacks.
           if (service == ServiceType.vent) {
             _floorReliefVents(
-                net: net, sanitary: sanitary, ctx: ctx, edgeIds: edgeUnits.keys);
+                net: net,
+                sanitary: sanitary,
+                ctx: ctx,
+                edgeIds: edgeUnits.keys);
           }
           // N17 — a stack must never size smaller than a branch discharging
           // into it (two different DFU tables can otherwise disagree). Only
@@ -3463,8 +3465,10 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         seenNode.addAll(compNodes);
         if (compEdges.length <= compNodes.length - 1) continue; // a tree
         final ids = compEdges.keys.toList()..sort();
-        final stacks = math.max(1,
-            parallelStandpipeCount(net, [for (final id in ids) compEdges[id]!]));
+        final stacks = math.max(
+            1,
+            parallelStandpipeCount(
+                net, [for (final id in ids) compEdges[id]!]));
         for (final id in ids) {
           final e = compEdges[id]!;
           if (e.fromId == e.toId) continue;
@@ -3532,6 +3536,20 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       return false;
     }
 
+    // Round 51 (regression-class-i-combined-riser-not-floored-at-sprinkler-
+    // demand) — the same floor for a Class I / III trunk: a combined riser
+    // with sprinkler floor branches teed off it carries max(standpipe flow of
+    // its downstream stacks, the remote-area demand). An extra-hazard system
+    // (43 L/s) on a one-stack Class I riser (31.5 L/s) was sized and printed
+    // at the standpipe flow while the pump was rated on the sprinkler flow.
+    FlowRate withSprinklerFloor(NetEdge e, FlowRate flow) =>
+        sprinklerDemandCap != null &&
+                sprinklerDemandCap.cubicMetersPerSecond >
+                    flow.cubicMetersPerSecond &&
+                sprinklerDownstream(e)
+            ? sprinklerDemandCap
+            : flow;
+
     for (final e in hydrantEdges) {
       final q = allFlows[e.id];
       if (q == null) continue;
@@ -3553,10 +3571,11 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       }
       if (onCycle.contains(e.id)) {
         final served = standpipeFlow(ringStacks[e.id]!);
-        allFlows[e.id] =
+        allFlows[e.id] = withSprinklerFloor(
+            e,
             served.cubicMetersPerSecond < hydrantDesignFlow.cubicMetersPerSecond
                 ? served
-                : hydrantDesignFlow;
+                : hydrantDesignFlow);
         continue;
       }
       final trunk = e.kind == EdgeKind.riser ||
@@ -3591,7 +3610,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           flow = served;
         }
       }
-      allFlows[e.id] = flow;
+      allFlows[e.id] = withSprinklerFloor(e, flow);
     }
   }
   final result = sizeNetwork(net, allFlows, ctx, sizeOverrides: sizeOverrides);
