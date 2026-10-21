@@ -1724,12 +1724,9 @@ class NetworkController extends Notifier<DrawingState> {
       y: b.y + oy,
       floorIndex: b.floorIndex,
     );
-    final newEdge = NetEdge(
-      id: _id('e'),
-      fromId: na.id,
-      toId: nb.id,
-      service: edge.service,
-    );
+    // A parallel offset is a copy of the source run: it keeps the run's
+    // hand-picked size + material (Round 51), like every other clone path.
+    final newEdge = _cloneEdge(edge, _id('e'), na.id, nb.id);
     _commit(Network(
       nodes: [...state.network.nodes, na, nb],
       edges: [...state.network.edges, newEdge],
@@ -3222,13 +3219,11 @@ class NetworkController extends Notifier<DrawingState> {
       if (a == null || b == null) continue;
       if (a.sheetId != fromSheetId || a.floorIndex != fromFloor) continue;
       if (b.sheetId != fromSheetId || b.floorIndex != fromFloor) continue;
-      addedEdges.add(NetEdge(
-        id: _id('e'),
-        fromId: cloneNode(a),
-        toId: cloneNode(b),
-        service: e.service,
-        kind: EdgeKind.run,
-      ));
+      // The shared [_cloneEdge] carries the run's hand-picked size + pipe /
+      // duct material (Round 51): a duplicated floor is the source floor's
+      // content INTACT — never silently reverted to the auto pick / service
+      // default on every copy.
+      addedEdges.add(_cloneEdge(e, _id('e'), cloneNode(a), cloneNode(b)));
     }
     // Loose nodes: everything on the source floor no edge touches (J4). The run
     // loop already cloned every wired node, so these are the free-standing
