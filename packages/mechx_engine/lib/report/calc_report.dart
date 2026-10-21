@@ -464,8 +464,14 @@ String _mountingNote(ReportStrings s, {required bool ceilingDrop}) =>
 RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
     [ReportStrings strings = const ReportStrings.en()]) {
   final fireSystems = <String>[
-    if (d.sprinkler != null) strings(RptStringKey.dbFireSprinkler),
-    if (d.standpipe != null || d.fireGravity.any((g) => !g.sprinklerOnly))
+    if (d.sprinkler != null || d.fireSystems.any((f) => f.sprinklerOnly))
+      strings(RptStringKey.dbFireSprinkler),
+    // A drawn fire network with no pumped standpipe basis (a transfer pump
+    // filling a tank, a gravity hose-reel system) is still modelled: the
+    // register must not say 'none' above a Fire section that prints it.
+    if (d.standpipe != null ||
+        d.fireGravity.any((g) => !g.sprinklerOnly) ||
+        d.fireSystems.any((f) => !f.sprinklerOnly))
       strings(RptStringKey.dbFireStandpipe),
   ];
   return RptKeyValue([

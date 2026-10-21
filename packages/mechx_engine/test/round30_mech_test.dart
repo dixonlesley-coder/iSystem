@@ -364,7 +364,13 @@ void main() {
         targetResidual: const Pressure(225000),
         firePumpRating: standpipe,
       ));
-      expect(one, none);
+      // The Fire section is byte-identical; only the Design-basis register
+      // differs, because the one-system report names the drawn standpipe
+      // system where the bare-rating report (no system line) said 'none
+      // modelled' (Round 52 follow-up).
+      String fire(String md) => md.substring(md.indexOf('## Fire protection'));
+      expect(fire(one), fire(none));
+      expect(one, isNot(contains('none modelled')));
     });
   });
 }
