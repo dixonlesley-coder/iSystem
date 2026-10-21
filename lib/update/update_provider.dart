@@ -95,15 +95,12 @@ class UpdateController extends Notifier<UpdateStatus> {
     if (s is! UpdateDownloaded) return;
     if (isProjectDirty(ref.read)) {
       final projectPath = ref.read(currentProjectPathProvider);
-      var slot = recoveryPath ?? recoverySlotFor(projectPath);
-      // Round 49 — like the autosave loop: a PENDING crash snapshot owning
-      // the slot is never overwritten; this session's work goes beside it.
-      final pending = ref.read(recoveryDocProvider);
-      if (pending != null &&
-          (pending.recoveryPath ?? recoverySlotFor(pending.sourcePath)) ==
-              slot) {
-        slot = recoveryPartnerSlot(slot);
-      }
+      // Round 49 / 50 — like the autosave loop: a PENDING crash snapshot,
+      // and every unresolved snapshot of its family, is never overwritten;
+      // this session's work goes to a slot it owns or a free sibling.
+      final slot = sessionRecoverySlot(
+          ref.read, recoveryPath ?? recoverySlotFor(projectPath));
+      ref.read(sessionRecoverySlotsProvider.notifier).add(slot);
       await writeRecovery(
         buildDocument(ref.read),
         path: slot,

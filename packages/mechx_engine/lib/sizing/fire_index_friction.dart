@@ -383,19 +383,74 @@ double? fireIndexPathFrictionM({
 /// jockey); a pump whose leg shares its ends with no other pump is a set of
 /// its own — a SERIES stage (a mid-level booster). Sets are ordered by their
 /// lowest pump floor, then their smallest pump id; each set's ids sorted.
+///
+/// Round 50 (regression-1 / fire-convergence-2-jockey-on-downstream-tee) —
+/// equal leg ends are only how a set is RECOGNISED, not what makes pumps
+/// parallel: a pump room drawn with a suction and a discharge HEADER where
+/// each pump tees in at its own point (GT-S1-S2-S3, Si-FPi-Di, D1-D2-D3), or
+/// a jockey discharging onto a tee downstream of the main header, gives
+/// every pump distinct leg ends. Pumps on ONE floor are one pump room, so
+/// every leg-end part whose lowest pump floor is the same is MERGED into one
+/// set; only pumps on DIFFERENT floors (a series booster reached through the
+/// network) stay separate stages — the same floor rule the fire basis uses to
+/// group stages.
+///
+/// Round 50 r2 — a same-floor merge also needs the parts to sit between the
+/// SAME two pipe networks: each leg end is labelled by its PUMP-FREE
+/// connected part of the system (the fire pipework with every pump in
+/// [pumpIds] removed), and only parts whose (suction, discharge) label pair
+/// is equal merge. A pump room's headers join every suction pump-free (and
+/// every discharge), so it still merges; two INDEPENDENT machines on one
+/// floor (a sprinkler pump and a hydrant pump drawn off one shared tank)
+/// share only the suction side and stay separate duty machines; so does a
+/// same-floor series booster (its suction is the main pump's discharge).
 List<List<String>> fireParallelPumpSets(
     Network net, FireSystem system, Iterable<String> pumpIds) {
+  final pumps = {
+    for (final id in pumpIds)
+      if (system.nodeIds.contains(id)) id,
+  };
+  // Pump-free parts of the system (union-find over pipes touching no pump).
+  final parent = <String, String>{};
+  String find(String x) {
+    parent.putIfAbsent(x, () => x);
+    var r = x;
+    while (parent[r] != r) {
+      r = parent[r]!;
+    }
+    var c = x;
+    while (parent[c] != r) {
+      final next = parent[c]!;
+      parent[c] = r;
+      c = next;
+    }
+    return r;
+  }
+
+  for (final e in system.edges) {
+    if (pumps.contains(e.fromId) || pumps.contains(e.toId)) continue;
+    final a = find(e.fromId), b = find(e.toId);
+    if (a != b) parent[a] = b;
+  }
   final byEnds = <(String, String), List<String>>{};
-  for (final id in pumpIds) {
-    if (!system.nodeIds.contains(id)) continue;
+  for (final id in [...pumps]..sort()) {
     (byEnds[fireDrawnPumpLegEnds(net, system, id)] ??= []).add(id);
   }
   int floorOf(String id) => net.nodeById(id)?.floorIndex ?? 0;
-  final sets = [
-    for (final g in byEnds.values) [...g]..sort(),
-  ];
   int minFloor(List<String> g) =>
       g.map(floorOf).reduce((a, b) => a < b ? a : b);
+  // A leg end that is itself a pump (pumps drawn back-to-back) keeps its own
+  // id as its label.
+  String label(String end) => pumps.contains(end) ? end : find(end);
+  final byKey = <(int, String, String), List<String>>{};
+  for (final MapEntry(key: ends, value: g) in byEnds.entries) {
+    final a = label(ends.$1), b = label(ends.$2);
+    final pair = a.compareTo(b) <= 0 ? (a, b) : (b, a);
+    (byKey[(minFloor(g), pair.$1, pair.$2)] ??= []).addAll(g);
+  }
+  final sets = [
+    for (final g in byKey.values) [...g]..sort(),
+  ];
   sets.sort((a, b) {
     final f = minFloor(a).compareTo(minFloor(b));
     return f != 0 ? f : a.first.compareTo(b.first);

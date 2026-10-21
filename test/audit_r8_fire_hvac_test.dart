@@ -62,24 +62,29 @@ ProviderContainer _sprinklerNet(
 }
 
 void main() {
-  test('fire-hvac-3: Extra Hazard demand > the standpipe pump flow ⇒ warning',
-      () {
-    // Round 17 — the pump is STANDPIPE-rated only when a hydrant is drawn too
-    // (a sprinkler-only network now rates its pump on the sprinkler demand).
+  test(
+      'fire-hvac-3 / Round 50: Extra Hazard demand > the standpipe flow ⇒ '
+      'the combined pump is rated on the sprinkler flow (no shortfall)', () {
+    // Round 17 — the pump is STANDPIPE-rated only when a hydrant is drawn too.
+    // Round 50 (regression-3) — when the sprinkler remote-area flow exceeds
+    // the standpipe flow, the combined system's pump is rated on that FLOW
+    // at the larger of the two heads, so the EH demand (~43 L/s, above the
+    // 500 gpm = 31.5 L/s standpipe flow) is covered by construction and the
+    // judge (which used to flag the engine's own 31.5 L/s pick) is silent.
     final c = _sprinklerNet(withHydrant: true);
     addTearDown(c.dispose);
     c.read(fireHazardProvider.notifier).set(FireHazardClass.extraHazard);
     final remote = c.read(sprinklerRemoteAreaProvider);
     final pump = c.read(firePumpDutyProvider)!;
-    // The finding's numbers: EH demand ≈ 43 L/s vs the 500 gpm (31.5 L/s) pump.
-    expect(remote.remoteAreaDemand.inLitersPerSecond,
-        greaterThan(pump.flow.inLitersPerSecond));
+    expect(remote.remoteAreaDemand.inLitersPerSecond, greaterThan(31.5));
+    expect(pump.flow.inLitersPerSecond,
+        closeTo(remote.remoteAreaDemand.inLitersPerSecond, 1e-9));
     final chk = c.read(sprinklerPumpCheckProvider)!;
-    expect(chk.flowShort, isTrue);
+    expect(chk.flowShort, isFalse);
     expect(chk.demandLps, closeTo(remote.remoteAreaDemand.inLitersPerSecond, 1e-9));
     final issues = c.read(designIssuesProvider);
     expect(issues.any((i) => i.kind == 'sprinkler-flow-exceeds-fire-pump'),
-        isTrue);
+        isFalse);
   });
 
   test('Round 17: sprinkler-only ⇒ the pump is rated on the sprinkler demand',

@@ -692,6 +692,7 @@ enum StringKey {
   issueSprinklerFlowTitle,
   issueSprinklerHeadTitle,
   issueCombinedFireSprinklerGovernsTitle,
+  issueFireGravityHeadTitle,
   issueFireOverPressureTitle,
   issueElectricalTitle, // {code} = electricalWarningTitle(w.code)
   issueUnverifiedTitle, // {name} = the // VERIFY value's short label
@@ -783,6 +784,7 @@ enum StringKey {
   issueSprinklerFlowMessage, // {demand} {pump}
   issueSprinklerHeadMessage, // {need} {pump}
   issueCombinedFireSprinklerGovernsMessage, // {sprHead} {sprFlow} {hoseFlow} {hoseHead}
+  issueFireGravityHeadMessage, // {avail} {need}
   issueFireOverPressureMessage, // {churn} {limit} {head} {share}
   issueFireOverPressureShare, // {pct}
 
@@ -2153,6 +2155,8 @@ const Map<StringKey, String> _en = {
       'Sprinkler pressure exceeds the fire pump head',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
       'Combined fire pump rated on the sprinkler point',
+  StringKey.issueFireGravityHeadTitle:
+      'Gravity fire supply head insufficient',
   StringKey.issueFireOverPressureTitle: 'Fire pump churn over-pressures components',
   StringKey.issueElectricalTitle: 'Electrical: {code}',
   StringKey.issueUnverifiedTitle: 'Unverified: {name}',
@@ -2342,6 +2346,12 @@ const Map<StringKey, String> _en = {
       'sprinkler flow ({sprFlow} L/s). The hose flow {hoseFlow} L/s at '
       '{hoseHead} m is not a rated point - select a pump whose curve covers '
       'both conditions.',
+  StringKey.issueFireGravityHeadMessage:
+      'This fire system is fed by gravity from a roof tank (no fire pump '
+      'drawn). The tank leaves only {avail} m of head at the topmost terminal '
+      'after static drop and pipe friction, below the {need} m it needs. Raise '
+      'the tank or add a booster fire pump. (// VERIFY vs SNI 03-3989 / '
+      '03-1745.)',
   StringKey.issueLegionellaMessage:
       'Modelled recirculation return temperature '
           '{temp} °C is below the '
@@ -3734,6 +3744,8 @@ const Map<StringKey, String> _id = {
       'Tekanan sprinkler melebihi head pompa kebakaran',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
       'Pompa kebakaran gabungan diberi rating pada titik sprinkler',
+  StringKey.issueFireGravityHeadTitle:
+      'Head suplai kebakaran gravitasi tidak cukup',
   StringKey.issueFireOverPressureTitle:
       'Tekanan churn pompa kebakaran melampaui rating komponen',
   StringKey.issueElectricalTitle: 'Listrik: {code}',
@@ -3929,6 +3941,12 @@ const Map<StringKey, String> _id = {
       'melebihi head standpipe, sehingga pompa diberi rating pada debit '
       'sprinkler ({sprFlow} L/s). Debit selang {hoseFlow} L/s pada {hoseHead} m '
       'bukan titik rating - pilih pompa yang kurvanya mencakup kedua kondisi.',
+  StringKey.issueFireGravityHeadMessage:
+      'Sistem kebakaran ini disuplai gravitasi dari tangki atap (tanpa pompa '
+      'kebakaran tergambar). Tangki hanya menyisakan head {avail} m pada '
+      'terminal tertinggi setelah beda tinggi statis dan gesekan pipa, di '
+      'bawah {need} m yang dibutuhkan. Naikkan tangki atau tambahkan pompa '
+      'booster kebakaran. (// VERIFY vs SNI 03-3989 / 03-1745.)',
   StringKey.issueLegionellaMessage:
       'Suhu balik resirkulasi termodelkan {temp} °C berada di bawah batas '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '

@@ -1277,6 +1277,31 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // Round 50 (fire-convergence-2-gravity-roof-tank-fire-system-gets-phantom-
+  // pump) — a GRAVITY fire system (roof tank, no pump drawn) whose tank
+  // leaves less head at its most demanding terminal than it needs:
+  // judge-only, locatable to the tank.
+  for (final b in fireBases) {
+    if (!b.gravityHeadShort) continue;
+    final src = b.gravitySourceId == null
+        ? null
+        : net.nodeById(b.gravitySourceId!);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'fire-gravity-head-insufficient'
+          '${b.gravitySourceId == null ? '' : ':${b.gravitySourceId}'}',
+      title: str(StringKey.issueFireGravityHeadTitle),
+      message: str.format(StringKey.issueFireGravityHeadMessage, {
+        // Round 50 r2 — friction can exceed the static drop (a negative
+        // available head): print the head left, never below zero.
+        'avail': (b.gravityAvailableHeadM! < 0 ? 0.0 : b.gravityAvailableHeadM!)
+            .toStringAsFixed(1),
+        'need': b.gravityRequiredHeadM!.toStringAsFixed(1),
+      }),
+      locate: src == null ? null : IssueLocation(src.sheetId, nodeId: src.id),
+    ));
+  }
+
   // Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — a fire
   // pump whose churn pressure exceeds the standard component rating
   // (175 psi): judge-only, locatable to the duty pump.

@@ -70,6 +70,93 @@ String recoveryPartnerSlot(String slot) {
   return '$slot$sib';
 }
 
+/// Round 50 (regression-4) — the recovery slot FAMILY of a project key: the
+/// primary `<key>.mechx` (n = 0), the Round-49 session sibling
+/// `<key>.session.mechx` (n = 1) and further numbered siblings
+/// `<key>.session-<n>.mechx` (n >= 2). A second crash with the banner still
+/// unresolved leaves TWO unresolved snapshots in one family; the next
+/// session writes to a further sibling instead of overwriting either.
+String recoverySessionSlot(String slot, int n) {
+  final primary = recoveryPrimarySlot(slot);
+  if (n <= 0) return primary;
+  final stem = primary.endsWith('.mechx')
+      ? primary.substring(0, primary.length - '.mechx'.length)
+      : primary;
+  return n == 1 ? '$stem.session.mechx' : '$stem.session-$n.mechx';
+}
+
+final _sessionSuffix = RegExp(r'\.session(-\d+)?\.mechx$');
+
+/// The primary `<key>.mechx` of any member of a recovery slot family.
+String recoveryPrimarySlot(String slot) {
+  final m = _sessionSuffix.firstMatch(slot);
+  if (m == null) return slot;
+  return '${slot.substring(0, m.start)}.mechx';
+}
+
+/// True when [a] and [b] are members of one recovery slot family.
+bool sameRecoveryFamily(String a, String b) =>
+    recoveryPrimarySlot(a) == recoveryPrimarySlot(b);
+
+bool _slotOnDisk(String p) {
+  try {
+    return File(p).existsSync() || File('$p.bak').existsSync();
+  } catch (_) {
+    return false;
+  }
+}
+
+/// The members of [slot]'s family present on disk (the primary, the session
+/// sibling and any numbered siblings), sorted by name. Never throws.
+List<String> recoveryFamilyOnDisk(String slot) {
+  final primary = recoveryPrimarySlot(slot);
+  final out = <String>{};
+  if (_slotOnDisk(primary)) out.add(primary);
+  try {
+    final dir = File(primary).parent;
+    if (dir.existsSync()) {
+      for (final e in dir.listSync(followLinks: false)) {
+        if (e is! File) continue;
+        final path = e.path.endsWith('.bak')
+            ? e.path.substring(0, e.path.length - 4)
+            : e.path;
+        if (!path.endsWith('.mechx')) continue;
+        if (path != primary && sameRecoveryFamily(path, primary)) out.add(path);
+      }
+    }
+  } catch (_) {
+    // best effort
+  }
+  return out.toList()..sort();
+}
+
+/// Round 50 (regression-4) — the slot THIS session's autosave writes to when
+/// its own family slot is [slot]. While the PENDING snapshot ([pendingPath])
+/// is a member of the same family, every family member that exists on disk
+/// and was not written by this session ([written]) is an UNRESOLVED crash
+/// snapshot — never overwritten: the first family member that is not the
+/// pending one, not in [protected], and either written by this session or
+/// absent from disk is chosen (the primary, then `.session`, then
+/// `.session-2`, …). Outside that case [slot] itself, unless [protected].
+String chooseRecoverySessionSlot(
+  String slot, {
+  String? pendingPath,
+  Set<String> written = const {},
+  Set<String> protected = const {},
+}) {
+  final pendingInFamily =
+      pendingPath != null && sameRecoveryFamily(pendingPath, slot);
+  if (!pendingInFamily && !protected.contains(slot)) return slot;
+  for (var n = 0; n < 1000; n++) {
+    final c = recoverySessionSlot(slot, n);
+    if (c == pendingPath || protected.contains(c)) continue;
+    if (written.contains(c)) return c;
+    if (_slotOnDisk(c)) continue;
+    return c;
+  }
+  return recoverySessionSlot(slot, 1000);
+}
+
 /// Crash-recovery snapshot file for the CURRENT (untitled) project. The autosave
 /// loop writes the current project to a per-project slot ([recoverySlotFor])
 /// periodically; on launch, the most-recent snapshot is offered for recovery.
@@ -174,6 +261,35 @@ Future<String?> findLatestRecovery({String? dir}) async {
   }
 }
 
+/// Round 50 (regression-4) — the snapshot the launch banner OFFERS: the
+/// family of the most-recently-written snapshot ([findLatestRecovery]), and
+/// within it the OLDEST member — two crashes in a row with the banner left
+/// unresolved leave the first crash's work beside the second's, and the
+/// older one must surface first (the newer one stays protected on disk and
+/// is offered once the older one is resolved). Never throws.
+Future<String?> findRecoveryToOffer({String? dir}) async {
+  final latest = await findLatestRecovery(dir: dir);
+  if (latest == null) return null;
+  try {
+    String? best;
+    DateTime? bestAt;
+    for (final p in recoveryFamilyOnDisk(latest)) {
+      final f = File(p);
+      if (!f.existsSync()) continue;
+      final at = f.statSync().modified;
+      if (bestAt == null ||
+          at.isBefore(bestAt) ||
+          (at == bestAt && p.compareTo(best!) < 0)) {
+        best = p;
+        bestAt = at;
+      }
+    }
+    return best ?? latest;
+  } catch (_) {
+    return latest;
+  }
+}
+
 /// The launch-time state of the recovery snapshot. `unreadable` means a file
 /// EXISTS but could not be decoded (torn by an interrupted write / corrupt) —
 /// deliberately distinct from `absent` (a clean exit), so the shell can say
@@ -267,12 +383,25 @@ Future<void> clearRecovery({String? path}) async {
 /// Round 49 — each slot's SESSION SIBLING ([recoveryPartnerSlot]) is cleared
 /// with it, except a slot in [spare] (a pending crash snapshot the banner
 /// still offers is never deleted by a Save / Open / New).
+///
+/// Round 50 (regression-4) — every numbered sibling of the family is cleared
+/// too, and when [spare] holds a member of the family (a pending snapshot)
+/// NOTHING of that family is cleared here: its other members are unresolved
+/// crash snapshots, kept for the banner. This session's OWN members of such
+/// a family are cleared by the caller (`clearRecoveryFor`'s `alsoClear`,
+/// built from the session's written slots), the one place that knows them.
 Future<void> clearRecoverySlots(Iterable<String?> projectPaths,
     {Set<String> spare = const {}}) async {
   final done = <String>{...spare};
   for (final p in projectPaths) {
     final slot = recoverySlotFor(p);
-    for (final s in [slot, recoveryPartnerSlot(slot)]) {
+    if (spare.any((x) => sameRecoveryFamily(x, slot))) continue;
+    final members = [
+      slot,
+      recoveryPartnerSlot(slot),
+      ...recoveryFamilyOnDisk(slot),
+    ];
+    for (final s in members) {
       if (done.add(s)) await clearRecovery(path: s);
     }
   }
@@ -283,8 +412,16 @@ Future<void> clearRecoverySlots(Iterable<String?> projectPaths,
 /// work this session autosaved beside it while it was pending is superseded
 /// by the resolution (Restore replaces the live work; after Discard the live
 /// work autosaves to the freed slot).
-Future<void> clearPendingRecovery({String? path}) async {
+///
+/// Round 50 (regression-4) — only the members THIS session wrote
+/// ([sessionSlots]) are cleared beside it: another member of the family is
+/// an older, still-unresolved crash snapshot (two crashes with the banner
+/// left open), never deleted by resolving a different one.
+Future<void> clearPendingRecovery(
+    {String? path, Set<String> sessionSlots = const {}}) async {
   final base = path ?? recoveryFilePath();
   await clearRecovery(path: base);
-  await clearRecovery(path: recoveryPartnerSlot(base));
+  for (final s in sessionSlots) {
+    if (s != base && sameRecoveryFamily(s, base)) await clearRecovery(path: s);
+  }
 }

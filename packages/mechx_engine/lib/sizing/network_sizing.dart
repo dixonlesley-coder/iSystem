@@ -3495,6 +3495,43 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     // 100 gpm hose-station figure, never the Class I standpipe flow.
     final classIIFlow =
         standpipeFlow(1, standpipeClass: StandpipeClass.classII);
+    // Round 50 (regression-2) — the sizer accumulates per SERVICE, so a
+    // hydrant-service trunk NEVER carries the sprinkler branches teed off it
+    // (a combined riser: hose reels and sprinkler floor branches on one
+    // stack). A Class II trunk with sprinkler pipe hanging DOWNSTREAM of it
+    // in the solved flow direction therefore carries the sprinkler
+    // remote-area demand too: max(100 gpm hose station, the remote-area
+    // flow) — never the 6.31 L/s alone (12 L/s through DN50 is ~6.1 m/s, above
+    // the fire velocity cap). A hose-only sub-branch keeps the plain
+    // Class II flow.
+    final sprinklerNodes = <String>{
+      for (final e in net.edges)
+        if (e.service == ServiceType.fireSprinkler) ...[e.fromId, e.toId],
+    };
+    bool sprinklerDownstream(NetEdge e) {
+      if (sprinklerNodes.isEmpty) return false;
+      final from = edgeFlowFrom[e.id];
+      final starts = from == e.fromId
+          ? [e.toId]
+          : from == e.toId
+              ? [e.fromId]
+              : [e.fromId, e.toId];
+      for (final start in starts) {
+        final seen = <String>{start};
+        final st = [start];
+        while (st.isNotEmpty) {
+          final cur = st.removeLast();
+          if (sprinklerNodes.contains(cur)) return true;
+          for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+            if (x.id == e.id) continue;
+            final o = x.fromId == cur ? x.toId : x.fromId;
+            if (seen.add(o)) st.add(o);
+          }
+        }
+      }
+      return false;
+    }
+
     for (final e in hydrantEdges) {
       final q = allFlows[e.id];
       if (q == null) continue;
@@ -3502,7 +3539,16 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         final trunk = onCycle.contains(e.id) ||
             e.kind == EdgeKind.riser ||
             q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12;
-        if (trunk) allFlows[e.id] = classIIFlow;
+        if (trunk) {
+          var flow = classIIFlow;
+          if (sprinklerDemandCap != null &&
+              sprinklerDemandCap.cubicMetersPerSecond >
+                  flow.cubicMetersPerSecond &&
+              sprinklerDownstream(e)) {
+            flow = sprinklerDemandCap;
+          }
+          allFlows[e.id] = flow;
+        }
         continue;
       }
       if (onCycle.contains(e.id)) {
@@ -3679,6 +3725,102 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         velocity: r.velocity,
         overCapacity: r.overVelocity,
       );
+    }
+  }
+  // Round 50 (fire-convergence-2-roof-tank-feed-into-pumped-standpipe-
+  // unsized) — a ROOF TANK on a fire service that is not the component's
+  // root (a gravity feed into a pumped standpipe: RT -> check valve -> riser
+  // top) is a demand-free dead branch the tree leaves at zero flow, so its
+  // pipes fell out of the sizing — no size on the drawings and silently
+  // absent from the BOM. Whenever the pump is off the tank supplies the
+  // standpipe through it, so the chain (through bare / inline degree-2
+  // nodes) is sized on the largest flow the system carries at the junction
+  // it joins, oriented from the tank, on the fire velocity cap, never below
+  // the riser-grade fire minimum nor the bore of the pipe it joins (the FDC
+  // rule above, for an outlet source). A hand-picked size stays.
+  for (final tank in net.nodes) {
+    if (tank.component != NodeComponent.roofTank) continue;
+    for (final first in net.edgesAt(tank.id)) {
+      if (first.service != ServiceType.fireHydrant &&
+          first.service != ServiceType.fireSprinkler) {
+        continue;
+      }
+      if (result[first.id] != null) continue;
+      var cur = tank.id;
+      var edge = first;
+      final seen = <String>{tank.id};
+      final chain = <(NetEdge, String)>[];
+      String? joinNode;
+      while (true) {
+        if (result[edge.id] != null) break;
+        chain.add((edge, cur));
+        final next = edge.fromId == cur ? edge.toId : edge.fromId;
+        if (!seen.add(next)) break;
+        final onward = [
+          for (final e in net.edgesAt(next))
+            if (e.id != edge.id && e.service == edge.service) e,
+        ];
+        if (onward.any((e) => result[e.id] != null)) {
+          joinNode = next;
+          break;
+        }
+        final nn = net.nodeById(next);
+        if (onward.length != 1 ||
+            nn == null ||
+            nn.role == NodeRole.plant ||
+            nn.role == NodeRole.fixture) {
+          break;
+        }
+        cur = next;
+        edge = onward.single;
+      }
+      if (joinNode == null || chain.isEmpty) continue;
+      final chainIds = {for (final (e, _) in chain) e.id};
+      var designLps = 0.0;
+      var joinMm = 0.0;
+      for (final e in net.edgesAt(joinNode)) {
+        if (chainIds.contains(e.id) || e.service != first.service) continue;
+        final r = result[e.id];
+        if (r == null) continue;
+        final q = r.flow.inLitersPerSecond;
+        if (q > designLps + 1e-12 ||
+            ((q - designLps).abs() <= 1e-12 &&
+                r.diameter.inMillimeters > joinMm)) {
+          designLps = q;
+          joinMm = r.diameter.inMillimeters;
+        }
+      }
+      if (designLps <= 0) continue;
+      for (final (e, from) in chain) {
+        edgeFlowFrom[e.id] = from;
+        if (sizeOverrides.containsKey(e.id)) continue;
+        final asRiser = NetEdge(
+            id: e.id,
+            fromId: e.fromId,
+            toId: e.toId,
+            service: e.service,
+            kind: EdgeKind.riser);
+        final floorMm = math.max(
+            joinMm,
+            fireMinimumDiameter(asRiser,
+                        hoseStation: ctx.hoseStationEdgeIds.contains(e.id))
+                    ?.inMillimeters ??
+                0);
+        final r = water.sizeForFlow(
+          flow: FlowRate.litersPerSecond(designLps),
+          maxVelocity: ctx.maxFireVelocity,
+          material: ctx.pipeMaterial,
+          minDiameter: Diameter.mm(floorMm),
+        );
+        result[e.id] = EdgeSizing(
+          edgeId: e.id,
+          service: e.service,
+          flow: FlowRate.litersPerSecond(designLps),
+          diameter: r.diameter,
+          velocity: r.velocity,
+          overCapacity: r.overVelocity,
+        );
+      }
     }
   }
   // Round 37 (mech-sim-5-jockey-leg-mirrors-main-pump-bore) — a JOCKEY pump

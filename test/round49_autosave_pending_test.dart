@@ -103,7 +103,8 @@ void main() {
     final sibling = recoveryPartnerSlot(slot);
     expect(await _awaitFileContaining(sibling, 'NEW SESSION WORK'), isNotNull);
     timer.cancel();
-    await clearPendingRecovery(path: slot);
+    await clearPendingRecovery(
+        path: slot, sessionSlots: c.read(sessionRecoverySlotsProvider));
     expect(File(slot).existsSync(), isFalse);
     expect(File(sibling).existsSync(), isFalse);
   });
