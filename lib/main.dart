@@ -69,8 +69,14 @@ void main(List<String> args) async {
   // snapshot (torn by an interrupted write) is surfaced too — with a null doc —
   // so it is never silently indistinguishable from a clean exit. Then start the
   // periodic autosave loop (which writes to per-project slots).
-  final latest = await findLatestRecovery();
+  // Round 50 (regression-4) — within the newest snapshot's family the OLDEST
+  // unresolved one is offered first, and every family member on disk is
+  // protected from this session's autosave and Save / Open / New.
+  final latest = await findRecoveryToOffer();
   if (latest != null) {
+    container
+        .read(protectedRecoverySlotsProvider.notifier)
+        .set({...recoveryFamilyOnDisk(latest), latest});
     final recovered = await readRecoveryStatus(path: latest);
     if (recovered.status != RecoveryReadStatus.absent) {
       final savedAt = await recoverySnapshotMtime(path: latest);

@@ -88,36 +88,65 @@ String corruptSidecarPath(String path, DateTime at) {
 }) recoverySlotsToClear(ProviderReader read, List<String?> paths,
     {String? target}) {
   final pending = read(recoveryDocProvider);
+  // Round 50 (regression-4) — unresolved snapshots found at launch are never
+  // deleted by a Save / Open / New; in a family holding one, only the members
+  // THIS session wrote are cleared ([alsoClear]).
+  final protected = read(protectedRecoverySlotsProvider);
+  final written = read(sessionRecoverySlotsProvider);
+  List<String> ownWork(Set<String> spare) => [
+        for (final s in [...written]..sort())
+          if (!spare.contains(s) &&
+              paths.any((p) => sameRecoveryFamily(s, recoverySlotFor(p))))
+            s,
+      ];
   if (pending == null) {
+    final spare = {...protected};
     return (
       paths: paths,
       dropPending: true,
-      spare: const <String>{},
-      alsoClear: const <String>[],
+      spare: spare,
+      alsoClear: ownWork(spare),
     );
   }
   final pendingSlot =
       pending.recoveryPath ?? recoverySlotFor(pending.sourcePath);
   if (target != null && pending.sourcePath == target) {
+    final spare = {...protected}..remove(pendingSlot);
     return (
       paths: paths,
       dropPending: true,
-      spare: const <String>{},
-      alsoClear: [pendingSlot],
+      spare: spare,
+      alsoClear: [
+        pendingSlot,
+        for (final s in ownWork(spare))
+          if (s != pendingSlot) s,
+      ],
     );
   }
   final kept = [
     for (final p in paths)
       if (recoverySlotFor(p) != pendingSlot) p,
   ];
+  // Round 50 — this session's OWN work in the requested families (beside
+  // the pending snapshot too), never another unresolved member.
+  final spare = {pendingSlot, ...protected};
   return (
     paths: kept,
     dropPending: false,
-    spare: {pendingSlot},
-    alsoClear: [
-      if (kept.length != paths.length) recoveryPartnerSlot(pendingSlot),
-    ],
+    spare: spare,
+    alsoClear: ownWork(spare),
   );
+}
+
+/// Round 50 — drop the pending snapshot (an action on the very file it
+/// belongs to resolved it): it leaves the protected set and the banner.
+void dropPendingRecovery(ProviderReader read) {
+  final pending = read(recoveryDocProvider);
+  if (pending != null) {
+    read(protectedRecoverySlotsProvider.notifier).remove(
+        pending.recoveryPath ?? recoverySlotFor(pending.sourcePath));
+  }
+  read(recoveryDocProvider.notifier).clear();
 }
 
 /// Round 49 — clear what [recoverySlotsToClear] decided: its project slots
@@ -767,7 +796,7 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // is in flight (see the `finally` note). The remaining work is in-memory UI
   // bookkeeping that only matters while the app is alive, so drop it if gone.
   if (!ref.context.mounted) return;
-  if (toClear.dropPending) ref.read(recoveryDocProvider.notifier).clear();
+  if (toClear.dropPending) dropPendingRecovery(ref.read);
   // Remember this file in the machine-local MRU / last-open list, under the
   // name the project carries NOW (F9 may just have adopted the file stem).
   ref
@@ -937,7 +966,7 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
     final toClear =
         recoverySlotsToClear(read, [priorPath, path, null], target: path);
     await clearRecoveryFor(toClear);
-    if (toClear.dropPending) read(recoveryDocProvider.notifier).clear();
+    if (toClear.dropPending) dropPendingRecovery(read);
     read(loadErrorProvider.notifier).clear();
     read(appSettingsProvider.notifier)
         .recordRecent(path, read(projectControllerProvider).name);

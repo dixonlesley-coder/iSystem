@@ -7,8 +7,17 @@ import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/network/network.dart'
-    show NetEdge, NodeComponent, ServiceType, edgeLength;
+    show
+        NetEdge,
+        Network,
+        NodeComponent,
+        NodeRole,
+        ServiceType,
+        edgeLength,
+        isSupplyInletComponent,
+        nodeElevation;
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
 import 'network_store.dart';
@@ -110,7 +119,11 @@ final fireRatedPointProvider =
 /// rated point whenever a hydrant is drawn, else the sprinkler system with the
 /// largest flow / head. Null when no fire system is drawn.
 final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
-  final bases = ref.watch(fireSystemBasesProvider);
+  // Round 50 — a gravity-fed system has no pump: it never governs.
+  final bases = [
+    for (final b in ref.watch(fireSystemBasesProvider))
+      if (!b.gravityFed) b,
+  ];
   if (bases.isEmpty) return null;
   final hydrant = [
     for (final b in bases)
@@ -146,7 +159,9 @@ final fireOverPressureProvider = Provider<
       // The 175 psi limit is the SPRINKLER component listing (NFPA 13); a
       // hydrant-only standpipe is built from high-pressure hose valves with
       // pressure-regulating outlets (NFPA 14), so it is not judged here.
-      if (b.flow.cubicMetersPerSecond > 0 && b.system.hasSprinkler)
+      if (!b.gravityFed &&
+          b.flow.cubicMetersPerSecond > 0 &&
+          b.system.hasSprinkler)
         if (fireOverPressureCheck(
                 rating: b.rating, indexFrictionM: b.indexFrictionM)
             case final c when c.over)
@@ -231,6 +246,33 @@ class FireSystemBasis {
   /// The main duty of pump [pumpId]: its series-stage duty, else [duty].
   PumpDuty? dutyFor(String pumpId) => stageDuties[pumpId] ?? duty;
 
+  /// Round 50 (fire-convergence-2-gravity-roof-tank-fire-system-gets-
+  /// phantom-pump) — no fire pump / booster is drawn and every plant source
+  /// is a roof tank (or a plant at / above the topmost terminal): a GRAVITY
+  /// system. It has NO pump duty ([duty] / [jockey] null), never governs the
+  /// project fire pump, raises no churn over-pressure and feeds no fire-pump
+  /// way; it is judged on its available head instead.
+  final bool gravityFed;
+
+  /// The gravity source (the highest gravity tank) of a [gravityFed] system.
+  final String? gravitySourceId;
+
+  /// Head (m) left at the most demanding terminal of a [gravityFed] system:
+  /// source elevation − terminal elevation − the sized index-path friction
+  /// (0 when unmeasured — then an UPPER bound, so a shortfall is certain).
+  final double? gravityAvailableHeadM;
+
+  /// Head (m) that terminal needs (sprinkler: the remote-head pressure;
+  /// hydrant: the class residual), as P / (rho g).
+  final double? gravityRequiredHeadM;
+
+  /// True when [gravityAvailableHeadM] < [gravityRequiredHeadM].
+  bool get gravityHeadShort =>
+      gravityFed &&
+      gravityAvailableHeadM != null &&
+      gravityRequiredHeadM != null &&
+      gravityAvailableHeadM! < gravityRequiredHeadM! - 1e-9;
+
   const FireSystemBasis({
     required this.system,
     required this.pumpIds,
@@ -248,6 +290,10 @@ class FireSystemBasis {
     this.staticLiftM = 0,
     this.stageHeads = const {},
     this.stageDuties = const {},
+    this.gravityFed = false,
+    this.gravitySourceId,
+    this.gravityAvailableHeadM,
+    this.gravityRequiredHeadM,
   });
 }
 
@@ -364,7 +410,28 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         final sprinklerFriction = frictionTo(FireTerminalKind.sprinkler);
         final sp = sprinklerPoint(
             sprinklerFriction, liftTo(FireTerminalKind.sprinkler));
-        if (sp.head.meters > st.pumpHead.meters + 1e-9) {
+        if (sp.flow.cubicMetersPerSecond >
+            st.requiredFlow.cubicMetersPerSecond + 1e-12) {
+          // Round 50 (regression-3) — the sprinkler remote-area flow exceeds
+          // the standpipe flow (a Class II hose-reel standpipe at 100 gpm
+          // beside an OH sprinkler system needing ~12 L/s): rate on the
+          // sprinkler FLOW at the larger of the two heads, so ONE rated point
+          // covers both conditions (never a 6.3 L/s pump the engine's own
+          // sprinkler-vs-pump judge then warns against). The head is
+          // supplied by whichever basis needs more; the standpipe point is
+          // covered (flow and head both >=), so this is not the Round-37
+          // 'sprinkler governs' residual.
+          flow = sp.flow;
+          if (sp.head.meters > st.pumpHead.meters + 1e-9) {
+            head = sp.head;
+            friction = sprinklerFriction;
+            basisKind = FireTerminalKind.sprinkler;
+          } else {
+            head = st.pumpHead;
+            friction = hydrantFriction;
+            basisKind = FireTerminalKind.hydrant;
+          }
+        } else if (sp.head.meters > st.pumpHead.meters + 1e-9) {
           flow = sp.flow;
           head = sp.head;
           friction = sprinklerFriction;
@@ -384,7 +451,23 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       }
     }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
-    final dutyPump = flow.cubicMetersPerSecond <= 0
+    // Round 50 (fire-convergence-2-gravity-roof-tank-fire-system-gets-
+    // phantom-pump) — a system with no pump drawn whose every plant source
+    // is a roof tank (or a plant at / above its topmost terminal) is fed by
+    // GRAVITY: no pump is invented for it; it is judged on the head the tank
+    // leaves at its most demanding terminal.
+    final gravity = pumps.isEmpty
+        ? _gravityCheck(
+            sys: sys,
+            net: net,
+            project: project,
+            sizing: sizing,
+            remote: remote,
+            standpipeClass: cls,
+            lengthOf: lengthOf,
+          )
+        : null;
+    final dutyPump = gravity != null || flow.cubicMetersPerSecond <= 0
         ? null
         : firePumpDuty(ratedFlow: flow, ratedHead: head, rating: rating);
     final jockey = dutyPump == null || rating.jockeyFlow.cubicMetersPerSecond <= 0
@@ -397,7 +480,10 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     // below it — or, with no terminal in its zone, the static lift to the
     // next stage's suction; the top stage takes the rest of [head]. So the
     // stage heads sum to the system head (never two pumps at the full head).
-    // Sets on one floor in series split their stage equally.
+    // Round 50 (regression-1) — pumps on one floor are ONE parallel set
+    // ([fireParallelPumpSets] merges a pump room's leg-end parts), and every
+    // parallel duty / standby pump develops the WHOLE stage head (never a
+    // half each).
     final stageHeads = <String, Head>{};
     final stageDuties = <String, PumpDuty>{};
     if (dutyPump != null && pumps.length >= 2 && building.floors.isNotEmpty) {
@@ -438,7 +524,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           }
           final stage = math.max(0.0, need - below);
           below += stage;
-          final perSet = Head(stage / stages[k].length);
+          final perSet = Head(stage);
           final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perSet);
           final d = firePumpDuty(ratedFlow: flow, ratedHead: perSet, rating: r);
           for (final g in stages[k]) {
@@ -467,10 +553,93 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       staticLiftM: liftTo(basisKind),
       stageHeads: stageHeads,
       stageDuties: stageDuties,
+      gravityFed: gravity != null,
+      gravitySourceId: gravity?.sourceId,
+      gravityAvailableHeadM: gravity?.availableM,
+      gravityRequiredHeadM: gravity?.requiredM,
     ));
   }
   return out;
 });
+
+/// Round 50 — the gravity verdict of a pump-less fire system [sys], or null
+/// when it is not gravity-fed (no plant source, or a source below its
+/// terminals — a ground tank / mains-fed system keeps the suggested pump).
+/// Each terminal kind drawn is judged: available = the highest gravity
+/// source's elevation − the topmost terminal (a sprinkler at its floor's
+/// ceiling, a hose outlet [kHoseOutletHeightM] above its floor) − the sized
+/// index-path friction from the source ([fireIndexPathFrictionM], 0 when
+/// unmeasured); required = the remote-head pressure (sprinkler) or the class
+/// residual (hydrant) as P / (rho g). The worst margin is reported.
+({String sourceId, double availableM, double requiredM})? _gravityCheck({
+  required FireSystem sys,
+  required Network net,
+  required ProjectState project,
+  required Map<String, EdgeSizing> sizing,
+  required SprinklerRemoteAreaResult remote,
+  required StandpipeClass standpipeClass,
+  required double Function(NetEdge e) lengthOf,
+}) {
+  final building = project.building;
+  final nF = building.floors.length;
+  if (nF == 0) return null;
+  int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
+  const rhoG = 1000 * 9.81;
+  final kinds = [
+    if (sys.hasSprinkler) FireTerminalKind.sprinkler,
+    if (sys.hasHydrant) FireTerminalKind.hydrant,
+  ];
+  double targetOf(FireTerminalKind k) {
+    final top = clampF(sys.topTerminalFloor(net, k) ?? nF - 1);
+    return k == FireTerminalKind.sprinkler
+        ? building.ceilingElevationOf(top).meters
+        : building.elevationOf(top).meters + kHoseOutletHeightM;
+  }
+
+  final topTarget = kinds.map(targetOf).fold<double>(
+      double.negativeInfinity, (a, b) => a > b ? a : b);
+  String? best;
+  var bestElev = double.negativeInfinity;
+  var any = false;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id) || n.role != NodeRole.plant) continue;
+    if (isSupplyInletComponent(n.component)) continue;
+    any = true;
+    final z = nodeElevation(n, building, project.mounting).meters;
+    final gravitySource =
+        n.component == NodeComponent.roofTank || z >= topTarget - 1e-9;
+    if (!gravitySource) return null;
+    if (z > bestElev + 1e-9 ||
+        ((z - bestElev).abs() <= 1e-9 && best != null && n.id.compareTo(best) < 0)) {
+      best = n.id;
+      bestElev = z;
+    }
+  }
+  if (!any || best == null) return null;
+  double? worstAvail;
+  double? worstNeed;
+  for (final k in kinds) {
+    final f = fireIndexPathFrictionM(
+          net: net,
+          system: sys,
+          pumpId: best,
+          sizing: sizing,
+          lengthOf: lengthOf,
+          terminals: k,
+        ) ??
+        0.0;
+    final avail = bestElev - targetOf(k) - f;
+    final need = k == FireTerminalKind.sprinkler
+        ? remote.remoteHeadPressure.pascals / rhoG
+        : residualPressureKpa(standpipeClass) * 1000 / rhoG;
+    if (worstAvail == null || avail - need < worstAvail - worstNeed!) {
+      worstAvail = avail;
+      worstNeed = need;
+    }
+  }
+  if (worstAvail == null) return null;
+  return (sourceId: best, availableM: worstAvail, requiredM: worstNeed!);
+}
 
 /// Round 28 — each drawn fire pump -> the basis of its OWN fire system (its
 /// duty, jockey duty and service label), read by the panel feed, the
@@ -515,6 +684,10 @@ final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
       e.service == ServiceType.fireHydrant)) {
     return null;
   }
+  // Round 50 — every drawn fire system fed by gravity (a roof tank, no pump
+  // drawn): there is no fire pump to schedule or feed.
+  final bases = ref.watch(fireSystemBasesProvider);
+  if (bases.isNotEmpty && bases.every((b) => b.gravityFed)) return null;
   // Round 17 — rated on the governing DRAWN system (sprinkler-only ⇒ the
   // remote-area demand, else the standpipe).
   final rp = ref.watch(fireRatedPointProvider);
@@ -586,6 +759,10 @@ final sprinklerPumpCheckProvider = Provider<
   final pumps = <(PumpDuty, double)>[];
   for (final b in ref.watch(fireSystemBasesProvider)) {
     if (!b.system.hasSprinkler) continue;
+    // Round 50 — a gravity system is judged on its tank head
+    // ([FireSystemBasis.gravityHeadShort]), never against another system's
+    // pump or a phantom duty.
+    if (b.gravityFed) continue;
     final own = b.pumpIds.isNotEmpty || b.system.hasHydrant;
     final pump = own ? b.duty : ref.watch(firePumpDutyProvider);
     final lift =

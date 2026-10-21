@@ -1429,8 +1429,18 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
     // Clear the snapshot's OWN per-project slot (not a stale global default);
     // falls back to the untitled slot when the path is unknown.
     // Round 49 — and the session sibling this session autosaved beside it.
+    // Round 50 (regression-4) — only the siblings THIS session wrote; an
+    // older unresolved snapshot in the family stays for the next launch.
+    final path = ref.read(recoveryDocProvider)?.recoveryPath;
     await clearPendingRecovery(
-        path: ref.read(recoveryDocProvider)?.recoveryPath);
+        path: path, sessionSlots: ref.read(sessionRecoverySlotsProvider));
+    if (!mounted) return;
+    if (path != null) {
+      ref.read(protectedRecoverySlotsProvider.notifier).remove(path);
+    }
+    // The session's own snapshot files were cleared with it: let the next
+    // dirty tick rewrite them even when the work is unchanged.
+    ref.read(autosaveMirrorProvider.notifier).clear();
     ref.read(recoveryDocProvider.notifier).clear();
   }
 

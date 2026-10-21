@@ -3203,6 +3203,17 @@ ElectricalSystemResult computeSystem(
     };
     if (m.isNotEmpty) prior[p.id] = m;
   }
+  // Round 50 (elec-convergence-3) — the boards the DOCUMENT labels, snapped
+  // before any in-pass relabel writes `prior`: the sub-tree rotation below
+  // re-solves a rotated board with its new lines as `prior`, and those are
+  // the engine's OWN choice, never a persisted label the stability threshold
+  // protects. Reading the live map made a nested rotation count as labelled
+  // one level up, refusing a fresh document's own improvement (a 25 A MDP
+  // incomer solved as 32 A).
+  final docLabelled = {
+    for (final e in prior.entries)
+      if (e.value.isNotEmpty) e.key,
+  };
   // Topology warnings raised before any sizing — pass-invariant, so they seed
   // each sizing pass's warning list rather than accumulating across passes.
   final baseWarnings = <ElectricalWarning>[];
@@ -3655,9 +3666,10 @@ ElectricalSystemResult computeSystem(
       return (picks, acc);
     }
 
-    // A sub-tree is labelled when any board it relabels carries labels.
+    // A sub-tree is labelled when any board it relabels carries DOCUMENT
+    // labels (Round 50 — never the engine's own in-pass relabels).
     bool labelled(String k) =>
-        rotationSubtree(k).any((b) => (prior[b] ?? const {}).isNotEmpty);
+        rotationSubtree(k).any(docLabelled.contains);
     // Each candidate is judged on the PARENT's own solved balance (its
     // single-phase ways placed against the rotated feeder lines), never on
     // the feeder lines alone: the identity, the greedy that moves only

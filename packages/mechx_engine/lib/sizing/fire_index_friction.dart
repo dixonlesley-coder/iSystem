@@ -383,6 +383,17 @@ double? fireIndexPathFrictionM({
 /// jockey); a pump whose leg shares its ends with no other pump is a set of
 /// its own — a SERIES stage (a mid-level booster). Sets are ordered by their
 /// lowest pump floor, then their smallest pump id; each set's ids sorted.
+///
+/// Round 50 (regression-1 / fire-convergence-2-jockey-on-downstream-tee) —
+/// equal leg ends are only how a set is RECOGNISED, not what makes pumps
+/// parallel: a pump room drawn with a suction and a discharge HEADER where
+/// each pump tees in at its own point (GT-S1-S2-S3, Si-FPi-Di, D1-D2-D3), or
+/// a jockey discharging onto a tee downstream of the main header, gives
+/// every pump distinct leg ends. Pumps on ONE floor are one pump room, so
+/// every leg-end part whose lowest pump floor is the same is MERGED into one
+/// set; only pumps on DIFFERENT floors (a series booster reached through the
+/// network) stay separate stages — the same floor rule the fire basis uses to
+/// group stages.
 List<List<String>> fireParallelPumpSets(
     Network net, FireSystem system, Iterable<String> pumpIds) {
   final byEnds = <(String, String), List<String>>{};
@@ -391,11 +402,15 @@ List<List<String>> fireParallelPumpSets(
     (byEnds[fireDrawnPumpLegEnds(net, system, id)] ??= []).add(id);
   }
   int floorOf(String id) => net.nodeById(id)?.floorIndex ?? 0;
-  final sets = [
-    for (final g in byEnds.values) [...g]..sort(),
-  ];
   int minFloor(List<String> g) =>
       g.map(floorOf).reduce((a, b) => a < b ? a : b);
+  final byFloor = <int, List<String>>{};
+  for (final g in byEnds.values) {
+    (byFloor[minFloor(g)] ??= []).addAll(g);
+  }
+  final sets = [
+    for (final g in byFloor.values) [...g]..sort(),
+  ];
   sets.sort((a, b) {
     final f = minFloor(a).compareTo(minFloor(b));
     return f != 0 ? f : a.first.compareTo(b.first);

@@ -71,6 +71,58 @@ class RecoveryController extends Notifier<RecoverySnapshot?> {
   void clear() => state = null;
 }
 
+/// Round 50 (regression-4) — the recovery slots THIS session's autosave (or
+/// the updater backstop) has written. Only these may be cleared beside a
+/// pending snapshot when it is resolved, or by a Save / Open / New while one
+/// is pending: any other member of the pending snapshot's family is an older,
+/// still-unresolved crash snapshot.
+final sessionRecoverySlotsProvider =
+    NotifierProvider<RecoverySlotSetController, Set<String>>(
+  RecoverySlotSetController.new,
+);
+
+/// Round 50 (regression-4) — the UNRESOLVED crash snapshots found on disk at
+/// launch in the offered snapshot's family (the offered one included): never
+/// overwritten by this session's autosave and never deleted by a Save / Open
+/// / New — only the banner's Restore / Discard of the offered one resolves
+/// it ([RecoverySlotSetController.remove]); the rest are offered next launch.
+final protectedRecoverySlotsProvider =
+    NotifierProvider<RecoverySlotSetController, Set<String>>(
+  RecoverySlotSetController.new,
+);
+
+class RecoverySlotSetController extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const {};
+
+  void set(Set<String> slots) => state = Set.unmodifiable(slots);
+  void add(String slot) {
+    if (state.contains(slot)) return;
+    state = Set.unmodifiable({...state, slot});
+  }
+
+  void remove(String slot) {
+    if (!state.contains(slot)) return;
+    state = Set.unmodifiable({...state}..remove(slot));
+  }
+}
+
+/// Round 50 (regression-4) — the slot this session writes its recovery
+/// snapshot to, given its own per-project [slot]: never the pending snapshot
+/// the banner offers, never an unresolved older snapshot in its family
+/// ([chooseRecoverySessionSlot]).
+String sessionRecoverySlot(ProviderReader read, String slot) {
+  final pending = read(recoveryDocProvider);
+  return chooseRecoverySessionSlot(
+    slot,
+    pendingPath: pending == null
+        ? null
+        : (pending.recoveryPath ?? recoverySlotFor(pending.sourcePath)),
+    written: read(sessionRecoverySlotsProvider),
+    protected: read(protectedRecoverySlotsProvider),
+  );
+}
+
 /// Encoded JSON of the last state written to a real `.mechx` file (Save) or
 /// loaded from one (Open) — the "clean" baseline. The autosave loop compares
 /// against it so it never re-writes a recovery snapshot for work that is
@@ -470,21 +522,21 @@ Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
       return;
     }
     final projectPath = c.read(currentProjectPathProvider);
-    var slot = recoveryPath ?? recoverySlotFor(projectPath);
     // Round 48 (persist-io-1) — never overwrite a PENDING crash snapshot (the
     // one the launch banner still offers) with this session's work: only its
     // Restore or an explicit Discard may replace it.
     // Round 49 (regression-autosave-no-protection-while-snapshot-pending) —
     // and never leave this session unprotected either: while the pending
-    // snapshot owns the slot, this session's work goes to the slot's session
-    // sibling ([recoveryPartnerSlot]); the pending file stays byte-identical.
-    final pending = c.read(recoveryDocProvider);
-    if (pending != null &&
-        (pending.recoveryPath ?? recoverySlotFor(pending.sourcePath)) ==
-            slot) {
-      slot = recoveryPartnerSlot(slot);
-    }
+    // snapshot owns the slot, this session's work goes to a sibling slot.
+    // Round 50 (regression-4) — EVERY unresolved member of the pending
+    // snapshot's family is protected (two crashes with the banner left open
+    // leave the first crash's work in the primary and the second's in the
+    // sibling — whichever is offered, the other is never overwritten): this
+    // session writes to the first family member it owns or that is free.
+    final slot = sessionRecoverySlot(
+        c.read, recoveryPath ?? recoverySlotFor(projectPath));
     c.read(autosaveMirrorProvider.notifier).set(encoded);
+    c.read(sessionRecoverySlotsProvider.notifier).add(slot);
     // R4: AWAIT the write. Un-awaited, the tick's future completed the instant
     // the write was scheduled, so `tickInFlight` cleared while the file IO was
     // still running — two slow ticks could then race the SAME `.tmp` / `.bak`
