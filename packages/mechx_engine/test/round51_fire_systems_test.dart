@@ -146,23 +146,55 @@ void main() {
   });
 
   test('a bypass (both sides reached) is unreadable: null', () {
-    final net = Network(nodes: [
-      _n('GT', role: NodeRole.plant, c: NodeComponent.groundTank),
-      _n('A'),
-      _n('P1', role: NodeRole.plant, c: NodeComponent.pump),
-      _n('B'),
-      _n('P2', role: NodeRole.plant, c: NodeComponent.pump),
-      _n('C'),
-    ], edges: [
-      _e('ga', 'GT', 'A'),
-      _e('a1', 'A', 'P1'),
-      _e('1b', 'P1', 'B'),
-      _e('b2', 'B', 'P2'),
-      _e('2c', 'P2', 'C'),
-      _e('ca', 'C', 'A'), // P2's discharge returns to P1's suction
-    ]);
+    // GT -> A -P1-> B -P2-> C is a readable two-stage chain; P3 drawn A -> C
+    // bypasses P2, so by the time P2 is judged BOTH its sides (B from P1, C
+    // from P3) were reached in an earlier round: the `ra && rb` branch.
+    // A, B and C are real junctions (a hydrant box each), so every pump's
+    // leg ends stop there — never walk through to another pump (the
+    // back-to-back guard, a different null).
+    Network chain({required bool bypass}) => Network(nodes: [
+          _n('GT', role: NodeRole.plant, c: NodeComponent.groundTank),
+          _n('A'),
+          _n('B'),
+          _n('C'),
+          for (final j in ['A', 'B', 'C'])
+            _n('HB$j', role: NodeRole.fixture, c: NodeComponent.hydrantBox),
+          _n('P1', role: NodeRole.plant, c: NodeComponent.pump),
+          _n('P2', role: NodeRole.plant, c: NodeComponent.pump),
+          if (bypass) _n('P3', role: NodeRole.plant, c: NodeComponent.pump),
+        ], edges: [
+          _e('ga', 'GT', 'A'),
+          for (final j in ['A', 'B', 'C']) _e('hb$j', j, 'HB$j'),
+          _e('a1', 'A', 'P1'),
+          _e('1b', 'P1', 'B'),
+          _e('b2', 'B', 'P2'),
+          _e('2c', 'P2', 'C'),
+          if (bypass) ...[
+            _e('a3', 'A', 'P3'),
+            _e('3c', 'P3', 'C'),
+          ],
+        ]);
+
+    final plain = chain(bypass: false);
+    final ps = fireSystems(plain).single;
+    for (final id in ['P1', 'P2']) {
+      final ends = fireDrawnPumpLegEnds(plain, ps, id);
+      expect({ends.$1, ends.$2}.intersection({'P1', 'P2', 'P3'}), isEmpty);
+    }
+    final readable = fireSeriesPumpStages(
+        plain, ps, fireParallelPumpSets(plain, ps, ['P1', 'P2']));
+    expect(readable, isNotNull);
+    expect(readable!.map((s) => s.pumpIds.single), ['P1', 'P2']);
+
+    final net = chain(bypass: true);
     final sys = fireSystems(net).single;
-    final sets = fireParallelPumpSets(net, sys, ['P1', 'P2']);
+    for (final id in ['P1', 'P2', 'P3']) {
+      final ends = fireDrawnPumpLegEnds(net, sys, id);
+      expect({ends.$1, ends.$2}.intersection({'P1', 'P2', 'P3'}), isEmpty);
+    }
+    final sets = fireParallelPumpSets(net, sys, ['P1', 'P2', 'P3']);
+    // Three distinct (suction, discharge) pairs — no parallel merge hides it.
+    expect(sets, hasLength(3));
     expect(fireSeriesPumpStages(net, sys, sets), isNull);
   });
 }

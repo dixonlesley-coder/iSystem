@@ -458,4 +458,81 @@ void main() {
     // A hose-only sub-branch stays below the riser flow.
     expect(sz['hb0']!.flow.inLitersPerSecond, lessThan(demand));
   });
+
+  // Round 51 r2 — `parallelFirePumpRoles` groups pumps by FULL connectivity
+  // (through the tank) but the shared tank splits them into two systems: the
+  // group's duty must be resolved per system, whichever pump is listed first
+  // and whichever has the larger bore (it used to throw `No element`).
+  group('shared tank: per-system duty pumps, any node order', () {
+    Network sprinklerFirst(
+      Network net, {
+      NodeComponent? outlet,
+      String first = 'FPS',
+    }) => Network(
+      nodes: [
+        for (final n in net.nodes)
+          if (n.id == first) n,
+        for (final n in net.nodes)
+          if (n.id != first)
+            outlet != null && n.component == NodeComponent.hydrantBox
+                ? n.copyWith(component: outlet)
+                : n,
+      ],
+      edges: net.edges,
+    );
+
+    void expectBothDuty(ProviderContainer c) {
+      expect(() => c.read(sizingProvider), returnsNormally);
+      final bind = c.read(mepDutyBindingProvider);
+      expect(bind.fireStandbyPumpNodeIds, isEmpty);
+      expect(bind.fireJockeyPumpNodeIds, isEmpty);
+      expect(() => c.read(mepAutoFeedCircuitsProvider), returnsNormally);
+      final loads = c.read(placedEquipmentLoadsProvider);
+      double dfOf(String id) =>
+          loads.firstWhere((l) => l.id.contains(id)).demandFactor ?? 1.0;
+      expect(dfOf('FPS'), 1.0);
+      expect(dfOf('FPH'), 1.0);
+    }
+
+    test('hydrant boxes + OH2, the sprinkler pump listed first (the '
+        'larger-bore hydrant pump in the other system)', () {
+      final c = _container(
+        sprinklerFirst(_sharedTank(floors: 6, heads: 4)),
+        6,
+        h: 4,
+      );
+      c.read(fireHazardProvider.notifier).set(FireHazardClass.ordinaryHazard2);
+      final sz = c.read(sizingProvider);
+      // The pin is only meaningful when the group's larger-bore pump (its
+      // overall duty) is NOT in the first-listed pump's system: here the
+      // hydrant pump out-bores the first-listed sprinkler pump.
+      expect(
+        sz['ph']!.diameter.inMillimeters,
+        greaterThan(sz['ps']!.diameter.inMillimeters),
+      );
+      expectBothDuty(c);
+    });
+
+    test('hose-reel (Class II) hydrant pump listed first + a larger-bore '
+        'extra-hazard sprinkler pump off one tank', () {
+      final c = _container(
+        sprinklerFirst(
+          _sharedTank(floors: 6, heads: 4),
+          outlet: NodeComponent.hoseReel,
+          first: 'FPH',
+        ),
+        6,
+        h: 4,
+      );
+      c.read(fireHazardProvider.notifier).set(FireHazardClass.extraHazard);
+      final sz = c.read(sizingProvider);
+      // The hydrant pump is listed first but the extra-hazard sprinkler pump
+      // carries the larger bore (the whole group's duty).
+      expect(
+        sz['ps']!.diameter.inMillimeters,
+        greaterThan(sz['ph']!.diameter.inMillimeters),
+      );
+      expectBothDuty(c);
+    });
+  });
 }

@@ -141,4 +141,41 @@ void main() {
       }
     }
   });
+
+  // Round 51 r2 — `_appendFloorClones` now carries `e.kind` through
+  // `_cloneEdge` (it used to force `EdgeKind.run`). Its edge filter admits
+  // RUNS only, so a riser whose both ends sit on the source floor / sheet (a
+  // riser clamped onto one floor) is still never cloned — the copy can never
+  // turn into a riser, nor a riser into a run.
+  test('duplicate floor clones runs only: a clamped riser is not copied', () {
+    final c = makeContainer();
+    final n = c.read(networkControllerProvider.notifier);
+    NetNode node(String id, double x) =>
+        NetNode(id: id, sheetId: 's1', x: x, y: 0, floorIndex: 0);
+    n.loadNetwork(Network(nodes: [
+      node('a', 0),
+      node('b', 100),
+      node('c', 200),
+    ], edges: const [
+      NetEdge(id: 'run', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
+      NetEdge(
+          id: 'rsr',
+          fromId: 'b',
+          toId: 'c',
+          service: ServiceType.coldWater,
+          kind: EdgeKind.riser),
+    ]));
+    n.duplicateFloorToTargets(
+      fromSheetId: 's1',
+      fromFloor: 0,
+      targets: const [(sheetId: 's2', floor: 1)],
+    );
+    final net = c.read(networkControllerProvider).network;
+    final copies = [
+      for (final e in net.edges)
+        if (e.id != 'run' && e.id != 'rsr') e,
+    ];
+    expect(copies, hasLength(1));
+    expect(copies.single.kind, EdgeKind.run);
+  });
 }
