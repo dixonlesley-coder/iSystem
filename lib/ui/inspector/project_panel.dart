@@ -318,7 +318,11 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     standpipe: standpipe,
     sprinklerRemoteArea:
         sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
-    firePumpRating: fireDrawn ? ref.read(firePumpRatingProvider) : null,
+    // Round 50 r2 — no rating block for an all-gravity fire supply: the rated
+    // point there is only the advisory standpipe fallback (no pump drawn).
+    firePumpRating: fireDrawn && ref.read(firePumpDutyProvider) != null
+        ? ref.read(firePumpRatingProvider)
+        : null,
     // Round 49 (regression-report-churn-not-per-system) — the over-pressure
     // line per over SPRINKLER-bearing system on ITS OWN pump: the very list
     // the Review raises ([fireOverPressureProvider]).
@@ -4945,6 +4949,9 @@ class _FireSection extends ConsumerWidget {
     final standpipe = ref.watch(standpipeDesignProvider);
     final rating = ref.watch(firePumpRatingProvider);
     final ratedPoint = ref.watch(fireRatedPointProvider);
+    final gravityOnly = ref.watch(fireAllGravityFedProvider);
+    final gravityShort = gravityOnly &&
+        ref.watch(fireSystemBasesProvider).any((b) => b.gravityHeadShort);
     final hasHydrantEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any((e) => e.service == ServiceType.fireHydrant);
@@ -5011,6 +5018,17 @@ class _FireSection extends ConsumerWidget {
           // rating-curve verdict — 'rated' when the curve sits inside the standard
           // frame, 'oversized' when the largest standard motor is still below the
           // overload shaft power. Demotes the pump figure from the kv rows (H8).
+          if (hasFireEdges && gravityOnly)
+            // Round 50 r2 — an all-gravity fire supply (roof tank, no pump
+            // drawn) has no pump to rate: never headline the advisory
+            // standpipe fallback as a 'rated' fire pump.
+            ResultCard(
+              headline: 'No fire pump · gravity tank',
+              label: 'Fire supply (gravity)',
+              verdict: gravityShort ? 'head short' : 'gravity',
+              verdictColor: gravityShort ? colors.warning : colors.success,
+            )
+          else
           ResultCard(
             headline:
                 // The SELECTED NFPA 20 motor frame (it carries the overload

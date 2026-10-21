@@ -386,21 +386,21 @@ Future<void> clearRecovery({String? path}) async {
 ///
 /// Round 50 (regression-4) — every numbered sibling of the family is cleared
 /// too, and when [spare] holds a member of the family (a pending snapshot)
-/// ONLY the members this session wrote ([sessionSlots]) go: the family's
-/// other members are unresolved crash snapshots, kept for the banner.
+/// NOTHING of that family is cleared here: its other members are unresolved
+/// crash snapshots, kept for the banner. This session's OWN members of such
+/// a family are cleared by the caller (`clearRecoveryFor`'s `alsoClear`,
+/// built from the session's written slots), the one place that knows them.
 Future<void> clearRecoverySlots(Iterable<String?> projectPaths,
-    {Set<String> spare = const {},
-    Set<String> sessionSlots = const {}}) async {
+    {Set<String> spare = const {}}) async {
   final done = <String>{...spare};
   for (final p in projectPaths) {
     final slot = recoverySlotFor(p);
-    final guarded = spare.any((x) => sameRecoveryFamily(x, slot));
-    final members = guarded
-        ? [
-            for (final s in sessionSlots)
-              if (sameRecoveryFamily(s, slot)) s,
-          ]
-        : [slot, recoveryPartnerSlot(slot), ...recoveryFamilyOnDisk(slot)];
+    if (spare.any((x) => sameRecoveryFamily(x, slot))) continue;
+    final members = [
+      slot,
+      recoveryPartnerSlot(slot),
+      ...recoveryFamilyOnDisk(slot),
+    ];
     for (final s in members) {
       if (done.add(s)) await clearRecovery(path: s);
     }

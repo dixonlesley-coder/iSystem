@@ -4,8 +4,13 @@
 //   regression-2 / regression-3 (combined Class II + sprinkler)
 //   fire-convergence-2-gravity-roof-tank-fire-system-gets-phantom-pump
 //   fire-convergence-2-roof-tank-feed-into-pumped-standpipe-unsized
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx/store/layer_store.dart';
+import 'package:mechx/ui/inspector/project_panel.dart';
+import 'package:mechx/ui/theme/mechx_theme.dart';
+import 'package:mechx_engine/report/calc_report.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/electrical_feed.dart';
 import 'package:mechx/store/fire_store.dart';
@@ -19,6 +24,8 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/units.dart';
+
+import 'test_util.dart';
 
 NetNode _n(String id, double x,
         {int floor = 0,
@@ -159,6 +166,49 @@ void main() {
       expect(c.read(equipmentNodeDutiesProvider)['FP3']!.motor.watts,
           basis.jockey!.selectedMotor.watts);
     });
+  });
+
+  test('r2: a sprinkler pump and a hydrant pump drawn off one shared tank on '
+      'one floor are two duty machines, never duty + standby', () {
+    const sp = ServiceType.fireSprinkler;
+    final st = _stack('DH');
+    final net = Network(nodes: [
+      _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+      _n('FPH', 100, role: NodeRole.plant, c: NodeComponent.pump),
+      _n('DH', 200),
+      _n('FPS', 100, y: 300, role: NodeRole.plant, c: NodeComponent.pump),
+      _n('DS', 200, y: 300),
+      for (var f = 0; f < 3; f++) ...[
+        _n('R$f', 1500, y: 300, floor: f),
+        _n('SH$f', 1800,
+            y: 300,
+            floor: f,
+            role: NodeRole.fixture,
+            c: NodeComponent.sprinklerHead),
+      ],
+      ...st.$1,
+    ], edges: [
+      _e('gh', 'GT', 'FPH'),
+      _e('ph', 'FPH', 'DH'),
+      _e('gs', 'GT', 'FPS', s: sp),
+      _e('ps', 'FPS', 'DS', s: sp),
+      _e('dr', 'DS', 'R0', s: sp),
+      for (var f = 0; f < 3; f++) ...[
+        if (f > 0) _e('r$f', 'R${f - 1}', 'R$f', s: sp, k: EdgeKind.riser),
+        _e('sh$f', 'R$f', 'SH$f', s: sp),
+      ],
+      ...st.$2,
+    ]);
+    final c = _container(net, 3);
+    final bind = c.read(mepDutyBindingProvider);
+    expect(bind.firePumpNodeIds, {'FPH', 'FPS'});
+    expect(bind.fireStandbyPumpNodeIds, isEmpty);
+    expect(bind.fireJockeyPumpNodeIds, isEmpty);
+    final loads = c.read(placedEquipmentLoadsProvider);
+    double dfOf(String id) =>
+        loads.firstWhere((l) => l.id.contains(id)).demandFactor ?? 1.0;
+    expect(dfOf('FPH'), 1.0);
+    expect(dfOf('FPS'), 1.0);
   });
 
   group('combined hose-reel (Class II) + sprinkler system', () {
@@ -302,6 +352,72 @@ void main() {
       expect(
           issues.any((i) => i.kind.startsWith('fire-system-over-pressure')),
           isFalse);
+    });
+
+    test('r2: the issue never prints a negative available head', () {
+      final c = _container(gravity(), 25, h: 3);
+      final b = c.read(fireSystemBasesProvider).single;
+      // Friction exceeds the 0.3 m static drop: the raw figure is negative.
+      expect(b.gravityAvailableHeadM, lessThan(0));
+      final issue = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'fire-gravity-head-insufficient:RT');
+      expect(issue.message, contains(' 0.0 m'));
+      expect(issue.message, isNot(contains(RegExp(r' -\d'))));
+    });
+
+    testWidgets(
+        'r2: no phantom pump rating on the Fire inspector or the calc report',
+        (tester) async {
+      setDesktopSurface(tester);
+      late WidgetRef captured;
+      await tester.pumpWidget(ProviderScope(
+        child: MechXTheme(
+          data: MechXThemeData.dark,
+          child: Directionality(
+            textDirection: TextDirection.ltr,
+            child: Overlay(initialEntries: [
+              OverlayEntry(
+                builder: (_) => Consumer(builder: (context, ref, _) {
+                  captured = ref;
+                  return const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [ProjectPanel()],
+                  );
+                }),
+              ),
+            ]),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      final c = ProviderScope.containerOf(
+          tester.element(find.byType(ProjectPanel)),
+          listen: false);
+      c.read(projectControllerProvider.notifier)
+        ..setFloors([
+          for (var i = 0; i < 25; i++) Floor('L$i', const Length(3)),
+        ])
+        ..setCalibration('s1', const ScaleCalibration(0.01));
+      c.read(networkControllerProvider.notifier).loadNetwork(gravity());
+      c.read(activeDisciplineProvider.notifier).set(DisciplineLayer.fire);
+      await tester.pumpAndSettle();
+
+      expect(c.read(fireAllGravityFedProvider), isTrue);
+      // The rated point still falls back to the advisory standpipe, but no
+      // surface prints it as a pump.
+      expect(find.text('No fire pump · gravity tank'), findsOneWidget);
+      expect(find.text('head short'), findsOneWidget);
+      expect(find.text('rated'), findsNothing);
+      expect(find.text('oversized'), findsNothing);
+      expect(find.text('Fire pump (standpipe)'), findsNothing);
+      expect(find.text('Fire pump (sprinkler)'), findsNothing);
+
+      final data = buildMechanicalReportData(captured);
+      expect(data.firePumpRating, isNull);
+      final md = buildCalcReportMarkdown(data);
+      expect(md, isNot(contains('Fire-pump rating curve')));
+      expect(md, isNot(contains('Jockey pump')));
     });
 
     test('a roof-tank gravity feed into a pumped standpipe is sized and taken '

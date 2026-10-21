@@ -651,6 +651,17 @@ final firePumpBasisByNodeProvider = Provider<Map<String, FireSystemBasis>>(
   },
 );
 
+/// Round 50 r2 — true when fire systems are drawn and EVERY one is fed by
+/// gravity (a roof tank, no pump drawn). The rated point
+/// ([fireRatedPointProvider]) then falls back to the advisory standpipe
+/// design, so every surface that prints a fire-pump rating (the Fire
+/// inspector's headline, the calc report's rating block) must stand down on
+/// this — there is no pump to rate.
+final fireAllGravityFedProvider = Provider<bool>((ref) {
+  final bases = ref.watch(fireSystemBasesProvider);
+  return bases.isNotEmpty && bases.every((b) => b.gravityFed);
+});
+
 /// NFPA 20 fire-pump rating-curve check for the fire pump — churn / rated /
 /// overload duty points, motor selection on the governing point, jockey-pump
 /// recommendation, and duty/standby designation — at the governing DRAWN
@@ -686,8 +697,7 @@ final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
   }
   // Round 50 — every drawn fire system fed by gravity (a roof tank, no pump
   // drawn): there is no fire pump to schedule or feed.
-  final bases = ref.watch(fireSystemBasesProvider);
-  if (bases.isNotEmpty && bases.every((b) => b.gravityFed)) return null;
+  if (ref.watch(fireAllGravityFedProvider)) return null;
   // Round 17 — rated on the governing DRAWN system (sprinkler-only ⇒ the
   // remote-area demand, else the standpipe).
   final rp = ref.watch(fireRatedPointProvider);

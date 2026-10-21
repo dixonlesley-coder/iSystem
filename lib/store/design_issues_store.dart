@@ -1292,7 +1292,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           '${b.gravitySourceId == null ? '' : ':${b.gravitySourceId}'}',
       title: str(StringKey.issueFireGravityHeadTitle),
       message: str.format(StringKey.issueFireGravityHeadMessage, {
-        'avail': b.gravityAvailableHeadM!.toStringAsFixed(1),
+        // Round 50 r2 — friction can exceed the static drop (a negative
+        // available head): print the head left, never below zero.
+        'avail': (b.gravityAvailableHeadM! < 0 ? 0.0 : b.gravityAvailableHeadM!)
+            .toStringAsFixed(1),
         'need': b.gravityRequiredHeadM!.toStringAsFixed(1),
       }),
       locate: src == null ? null : IssueLocation(src.sheetId, nodeId: src.id),
