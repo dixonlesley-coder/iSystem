@@ -392,6 +392,7 @@ enum RptStringKey {
   esSvcFireSprinkler,
   esSvcFireStandbyPump,
   esSvcFireJockeyPump,
+  esSvcFireTransferPump,
   dbDrainageSlope,
   dbDrainageSlopeValue,
   pnPv,
@@ -444,6 +445,11 @@ enum RptStringKey {
   fireSystemPumpKey,
   fireSystemSprinkler,
   fireSystemStandpipe,
+  fireSystemTransfer,
+  fireGravityKey, // {system}
+  fireGravityValue, // {lps} {avail} {need} {verdict}
+  fireGravityOk,
+  fireGravityShort,
 }
 
 /// English — the source language. Every value MUST match the inline literal it
@@ -868,6 +874,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esSvcFireSprinkler: 'Fire sprinkler pump',
   RptStringKey.esSvcFireStandbyPump: 'Fire pump (standby)',
   RptStringKey.esSvcFireJockeyPump: 'Fire jockey pump',
+  RptStringKey.esSvcFireTransferPump: 'Fire tank transfer pump',
   RptStringKey.dbDrainageSlope: 'Drainage design slope:',
   RptStringKey.dbDrainageSlopeValue: '**1:{n}** (Manning n {manning}, design fill {fill})',
   RptStringKey.pnPv: 'PV array',
@@ -936,6 +943,12 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.fireSystemPumpKey: '{tag} — {system} pump rating curve (NFPA 20):',
   RptStringKey.fireSystemSprinkler: 'sprinkler',
   RptStringKey.fireSystemStandpipe: 'standpipe',
+  RptStringKey.fireSystemTransfer: 'tank transfer',
+  RptStringKey.fireGravityKey: 'Gravity fire supply ({system}, no pump):',
+  RptStringKey.fireGravityValue:
+      '{lps} L/s · head available {avail} m vs required {need} m · {verdict}',
+  RptStringKey.fireGravityOk: 'OK',
+  RptStringKey.fireGravityShort: 'SHORT - add a fire pump',
 };
 
 /// Bahasa Indonesia — natural consulting-report phrasing, reusing the
@@ -1359,6 +1372,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esSvcFireSprinkler: 'Pompa sprinkler kebakaran',
   RptStringKey.esSvcFireStandbyPump: 'Pompa kebakaran (cadangan)',
   RptStringKey.esSvcFireJockeyPump: 'Pompa jockey kebakaran',
+  RptStringKey.esSvcFireTransferPump: 'Pompa transfer tangki kebakaran',
   RptStringKey.dbDrainageSlope: 'Kemiringan desain drainase:',
   RptStringKey.dbDrainageSlopeValue: '**1:{n}** (Manning n {manning}, pengisian desain {fill})',
   RptStringKey.pnPv: 'larik PV',
@@ -1427,6 +1441,12 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.fireSystemPumpKey: '{tag} — kurva rating pompa {system} (NFPA 20):',
   RptStringKey.fireSystemSprinkler: 'sprinkler',
   RptStringKey.fireSystemStandpipe: 'hidran',
+  RptStringKey.fireSystemTransfer: 'transfer tangki',
+  RptStringKey.fireGravityKey: 'Suplai kebakaran gravitasi ({system}, tanpa pompa):',
+  RptStringKey.fireGravityValue:
+      '{lps} L/s · head tersedia {avail} m vs dibutuhkan {need} m · {verdict}',
+  RptStringKey.fireGravityOk: 'OK',
+  RptStringKey.fireGravityShort: 'KURANG - tambahkan pompa kebakaran',
 };
 
 /// Resolves a [RptStringKey] against a [ReportLocale], mirroring the app's

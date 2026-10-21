@@ -1346,7 +1346,7 @@ class ElectricalSupplyInspector extends ConsumerWidget {
     // app default — so the field shows the fault level the solve actually uses.
     // Round 16 — the SAME chain, incl. the demand-sized MV transformer.
     final effectiveOriginFaultLevelKa = effectiveOriginFaultLevel(project,
-                demand: ref.watch(electricalResultProvider).supply.demandVa)
+                result: ref.watch(electricalResultProvider))
             .amperes /
         1000;
 

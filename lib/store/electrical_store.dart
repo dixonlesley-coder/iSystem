@@ -547,9 +547,16 @@ const double _liveBusbarClearingTimeS = 0.1;
 /// declares nothing but NEEDS an MV service resolve to the transformer the
 /// supply study selects ([FaultLevelBasis.supplyStudyEstimate]) instead of
 /// the flat 16 kA.
+///
+/// Round 52 — pass the solved [result] instead: its demand AND the advanced
+/// study's own supply design ([studySupplyDesign]: the largest section / the
+/// per-phase basis), so the estimate is the fault of the transformer the
+/// supply note, one-line and riser print — never a smaller unit sized on the
+/// total demand split evenly.
 ({double amperes, FaultLevelBasis basis}) effectiveOriginFaultLevel(
     ElectricalProject project,
-    {ApparentPower? demand}) {
+    {ApparentPower? demand,
+    ElectricalSystemResult? result}) {
   final explicit = project.originFaultLevelA;
   if (explicit != null) {
     return (amperes: explicit.amperes, basis: FaultLevelBasis.explicit);
@@ -557,7 +564,9 @@ const double _liveBusbarClearingTimeS = 0.1;
   // Round 25 — the demand rides every tier: a declared capacity above the
   // PLN TR ceiling resolves to its own transformer's fault, never below the
   // study transformer for the demand.
-  final est = estimatedServiceFaultLevelA(project, demand: demand);
+  final est = estimatedServiceFaultLevelA(project,
+      demand: demand ?? result?.supply.demandVa,
+      supply: result == null ? null : studySupplyDesign(project, result));
   if (est != null) {
     return (
       amperes: est.amperes,
@@ -608,7 +617,7 @@ ElectricalSystemResult solveElectricalLive(
   var result = solve(first.amperes);
   if (first.basis != FaultLevelBasis.explicit) {
     final second =
-        effectiveOriginFaultLevel(project, demand: result.supply.demandVa);
+        effectiveOriginFaultLevel(project, result: result);
     if ((second.amperes - first.amperes).abs() > 1e-9) {
       result = solve(second.amperes);
     }

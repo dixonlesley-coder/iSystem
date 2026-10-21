@@ -55,6 +55,7 @@ import 'panel_results.dart'
 import 'results.dart' show kStarDeltaInternalWiringM;
 import 'supply_design.dart'
     show
+        SupplyDesign,
         declaredServiceTransformer,
         determineSupply,
         transformerImpedancePct;
@@ -413,7 +414,7 @@ final List<String> serviceFaultEstimateVerifyItems = [
 /// debt is carried in [serviceFaultEstimateVerifyItems] pending the follow-up
 /// that wires it into the honesty surfaces.
 Current? estimatedServiceFaultLevelA(ElectricalProject project,
-    {ApparentPower? demand}) {
+    {ApparentPower? demand, SupplyDesign? supply}) {
   // 1. Customer transformer declared ⇒ transformer-impedance-limited fault.
   final txVa = project.transformerKva?.voltAmperes;
   if (txVa != null && txVa > 0) {
@@ -465,7 +466,8 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
         (math.sqrt(3) *
             serviceFaultLineVoltageV *
             representativeTransformerZpu);
-    final studyA = demand == null ? null : _studyTransformerFaultA(project, demand);
+    final studyA =
+        demand == null ? null : _studyTransformerFaultA(project, demand, supply);
     return Current(_round(
         math.max(math.max(declaredA, studyA ?? 0),
             defaultLvUtilityFaultKa * 1000),
@@ -475,7 +477,7 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
   // 3. Nothing declared, but the demand needs a transformer ⇒ the unit the
   //    supply study itself selects (one section's units: coupler N.O.).
   if (demand != null) {
-    final studyA = _studyTransformerFaultA(project, demand);
+    final studyA = _studyTransformerFaultA(project, demand, supply);
     if (studyA != null) return Current(_round(studyA, 1));
   }
 
@@ -487,10 +489,21 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
 /// The fault (A, unrounded) of the transformer the supply study selects for
 /// [demand] (one section's units — a dual service's coupler is N.O.), or null
 /// when the demand needs no MV service.
-double? _studyTransformerFaultA(ElectricalProject project, ApparentPower demand) {
+///
+/// Round 52 (elec-convergence-4-undeclared-study-transformer-fault-not-the-
+/// printed-transformer) — when the caller passes the advanced study's own
+/// [studied] supply design (`studySupplyDesign`: the largest dual SECTION and
+/// the per-phase basis, the transformer the supply note / one-line / riser
+/// PRINT), that undeclared pick IS the unit: never a smaller one re-derived
+/// from the total demand split evenly (2 x 800 kVA printed, 500 kVA faulted).
+/// A DECLARED design is not used here (step 2 keeps max(declared, demand
+/// study)); without [studied] the demand-only pick stands.
+double? _studyTransformerFaultA(ElectricalProject project, ApparentPower demand,
+    [SupplyDesign? studied]) {
   if (demand.voltAmperes <= 0) return null;
-  final supply =
-      determineSupply(demand, dualTransformer: project.dualTransformer);
+  final supply = studied != null && !studied.declared
+      ? studied
+      : determineSupply(demand, dualTransformer: project.dualTransformer);
   final kva = supply.transformerKva;
   if (!supply.isMv || kva == null || kva <= 0) return null;
   final perSection = project.dualTransformer ? supply.units ~/ 2 : supply.units;

@@ -212,6 +212,16 @@ bool isDeliveryFixture(NetNode? n) =>
 bool isSupplyAirTerminal(NodeComponent? c) =>
     c == NodeComponent.supplyDiffuser || c == NodeComponent.linearDiffuser;
 
+/// Round 52 (plumbing-hvac-convergence-2-1) — an air SOURCE unit (AHU,
+/// supply fan, exhaust fan): it delivers / draws its system's air, so it is
+/// never an air TERMINAL carrying a design airflow of its own (that made it a
+/// demand-bearing fixture, re-rooted the system at a bare junction and
+/// doubled the trunk flow). FCU / AC units are terminal units, not sources.
+bool isAirSourceUnitComponent(NodeComponent? c) =>
+    c == NodeComponent.ahu ||
+    c == NodeComponent.supplyFan ||
+    c == NodeComponent.exhaustFan;
+
 extension NodeComponentInfo on NodeComponent {
   /// The vertical [NodeRole] this component takes when placed.
   NodeRole get role => switch (this) {
@@ -489,10 +499,13 @@ class NetNode {
     int? floorIndex,
     NodeRole? role,
     Length? elevation,
+    bool clearElevation = false,
     Length? mountHeight,
     bool clearMountHeight = false,
     PlumbingFixture? fixture,
+    bool clearFixture = false,
     FlowRate? airflow,
+    bool clearAirflow = false,
     String? customFixtureId,
     bool clearCustomFixtureId = false,
     double? roofAreaM2,
@@ -520,11 +533,11 @@ class NetNode {
         y: y ?? this.y,
         floorIndex: floorIndex ?? this.floorIndex,
         role: role ?? this.role,
-        elevation: elevation ?? this.elevation,
+        elevation: clearElevation ? null : (elevation ?? this.elevation),
         mountHeight:
             clearMountHeight ? null : (mountHeight ?? this.mountHeight),
-        fixture: fixture ?? this.fixture,
-        airflow: airflow ?? this.airflow,
+        fixture: clearFixture ? null : (fixture ?? this.fixture),
+        airflow: clearAirflow ? null : (airflow ?? this.airflow),
         customFixtureId: clearCustomFixtureId
             ? null
             : (customFixtureId ?? this.customFixtureId),

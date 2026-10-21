@@ -341,8 +341,10 @@ AdvancedStudy computeAdvancedStudy(
   // chain resolves the same way, so the device kA and the bus agree).
   // Round 25 — the demand rides every tier (a declared capacity above the
   // PLN TR ceiling never estimates below the study transformer's fault).
-  final serviceEstimate =
-      estimatedServiceFaultLevelA(project, demand: sys.supply.demandVa);
+  // Round 52 — the estimate reads the SAME supply study the advanced study
+  // prints ([studySupplyDesign]): the largest section / per-phase basis.
+  final serviceEstimate = estimatedServiceFaultLevelA(project,
+      demand: sys.supply.demandVa, supply: studySupplyDesign(project, sys));
   final serviceEstimateGoverns = originFaultLevel == null &&
       project.originFaultLevelA == null &&
       serviceEstimate != null;
@@ -463,52 +465,14 @@ AdvancedStudy computeAdvancedStudy(
   // is recommended for a service not taken at LV.
   // Round 39 — the per-phase basis (below) is computed FIRST so the LV / MV
   // verdict is judged on the same figure the daya recommendation uses.
-  final worstPhaseVa = worstPhaseDemandVa(project, sys, originPanelIds,
-      roundCurrent: true, withLargestMachine: true);
-  final perPhaseBasisVa = sys.supply.system == ElectricalSystem.singlePhase
-      ? worstPhaseDemandVa(project, sys, originPanelIds,
-          roundCurrent: true,
-          withLargestMachine: true,
-          asSystem: ElectricalSystem.threePhase,
-          asVolts: kThreePhaseServiceLineVoltageV)
-      : worstPhaseVa;
-  // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
-  // service each root board sits on ONE unit (coupler normally open, as the
-  // fault study models it), so the most loaded ROOT governs a section: its
-  // diversified VA, or its worst-phase basis when that is larger.
-  var largestSectionVa = 0.0;
-  String? largestSectionId;
-  if (project.dualTransformer && originPanelIds.length > 1) {
-    for (final id in originPanelIds) {
-      final r = sys.panels[id];
-      if (r == null) continue;
-      final va = math.max(
-          r.demandVaOrEstimate(),
-          worstPhaseDemandVa(project, sys, [id],
-              roundCurrent: true, withLargestMachine: true));
-      if (va > largestSectionVa + 1e-9 ||
-          (largestSectionId != null &&
-              (va - largestSectionVa).abs() <= 1e-9 &&
-              id.compareTo(largestSectionId) < 0)) {
-        largestSectionVa = va;
-        largestSectionId = id;
-      }
-    }
-  }
-  final supply = determineSupply(
-    sys.supply.demandVa,
-    largestSectionDemand:
-        largestSectionVa > 0 ? ApparentPower(largestSectionVa) : null,
-    perPhaseDemand: ApparentPower(perPhaseBasisVa),
-    dualTransformer: project.dualTransformer,
-    // Round 29 — the ONE declared rating (a connection capacity above the
-    // LV ceiling is a TM service on its snapped transformer).
-    declaredKva: declaredServiceTransformer(project)?.kva,
-    declaredUnits: declaredServiceTransformer(project)?.units,
-    // Round 37 r2 — a single root board on a dual service is judged against
-    // ONE section, like its incomer floor and the service-capacity judge.
-    singleSectionCarriesAll: originPanelIds.length == 1,
-  );
+  // Round 52 — the ONE assembly of the supply study's inputs (shared with
+  // the fault estimate, so the device kA ratings derive from the transformer
+  // this study prints).
+  final studied =
+      studySupplyInputs(project, sys, originPanelIds: originPanelIds);
+  final worstPhaseVa = studied.worstPhaseVa;
+  final supply = studied.supply;
+  final largestSectionId = studied.largestSectionId;
   // Round 35 (elec-core-2-daya-ignores-worst-phase) — a PLN 3φ limiter trips
   // PER PHASE at daya / (√3·400), and `computeSystem` judges a declared daya
   // against the root's diversified WORST-phase current
@@ -788,6 +752,83 @@ double _motorKw(ElectricalCircuit c) {
   if (c.loadKind == LoadKind.hvac && loadKw > 0 && !mepDerived) return loadKw;
   return m;
 }
+
+/// Round 52 (elec-convergence-4-undeclared-study-transformer-fault-not-the-
+/// printed-transformer) — the supply study of [sys]: [determineSupply] on the
+/// building demand, the largest dual-service SECTION (Round 40), the per-phase
+/// basis (Round 39) and the declared rating (Round 29) — the ONE assembly
+/// [computeAdvancedStudy] prints (supply note, power one-line, overview,
+/// riser) AND the fault estimate reads ([estimatedServiceFaultLevelA]
+/// `supply:`), so the fault study, busbar withstand and every specified device
+/// kA derive from the transformer actually issued, never a smaller unit sized
+/// on the total demand split evenly. [worstPhaseVa] / [perPhaseBasisVa] are
+/// the per-phase figures the daya recommendation also uses. Pure.
+({
+  SupplyDesign supply,
+  double worstPhaseVa,
+  double perPhaseBasisVa,
+  String? largestSectionId,
+}) studySupplyInputs(ElectricalProject project, ElectricalSystemResult sys,
+        {Set<String>? originPanelIds}) {
+  originPanelIds ??= originPanelIdsOf(sys, project);
+  final worstPhaseVa = worstPhaseDemandVa(project, sys, originPanelIds,
+      roundCurrent: true, withLargestMachine: true);
+  final perPhaseBasisVa = sys.supply.system == ElectricalSystem.singlePhase
+      ? worstPhaseDemandVa(project, sys, originPanelIds,
+          roundCurrent: true,
+          withLargestMachine: true,
+          asSystem: ElectricalSystem.threePhase,
+          asVolts: kThreePhaseServiceLineVoltageV)
+      : worstPhaseVa;
+  // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
+  // service each root board sits on ONE unit (coupler normally open, as the
+  // fault study models it), so the most loaded ROOT governs a section: its
+  // diversified VA, or its worst-phase basis when that is larger.
+  var largestSectionVa = 0.0;
+  String? largestSectionId;
+  if (project.dualTransformer && originPanelIds.length > 1) {
+    for (final id in originPanelIds) {
+      final r = sys.panels[id];
+      if (r == null) continue;
+      final va = math.max(
+          r.demandVaOrEstimate(),
+          worstPhaseDemandVa(project, sys, [id],
+              roundCurrent: true, withLargestMachine: true));
+      if (va > largestSectionVa + 1e-9 ||
+          (largestSectionId != null &&
+              (va - largestSectionVa).abs() <= 1e-9 &&
+              id.compareTo(largestSectionId) < 0)) {
+        largestSectionVa = va;
+        largestSectionId = id;
+      }
+    }
+  }
+  final supply = determineSupply(
+    sys.supply.demandVa,
+    largestSectionDemand:
+        largestSectionVa > 0 ? ApparentPower(largestSectionVa) : null,
+    perPhaseDemand: ApparentPower(perPhaseBasisVa),
+    dualTransformer: project.dualTransformer,
+    // Round 29 — the ONE declared rating (a connection capacity above the
+    // LV ceiling is a TM service on its snapped transformer).
+    declaredKva: declaredServiceTransformer(project)?.kva,
+    declaredUnits: declaredServiceTransformer(project)?.units,
+    // Round 37 r2 — a single root board on a dual service is judged against
+    // ONE section, like its incomer floor and the service-capacity judge.
+    singleSectionCarriesAll: originPanelIds.length == 1,
+  );
+  return (
+    supply: supply,
+    worstPhaseVa: worstPhaseVa,
+    perPhaseBasisVa: perPhaseBasisVa,
+    largestSectionId: largestSectionId,
+  );
+}
+
+/// Round 52 — [studySupplyInputs]' supply design alone.
+SupplyDesign studySupplyDesign(
+        ElectricalProject project, ElectricalSystemResult sys) =>
+    studySupplyInputs(project, sys).supply;
 
 /// The origin / service-entrance panel ids: EVERY panel that takes its supply
 /// directly from the utility — no feeder way points at it and it carries no

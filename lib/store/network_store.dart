@@ -1200,24 +1200,14 @@ class NetworkController extends Notifier<DrawingState> {
     final node = state.network.nodeById(id);
     if (node == null || node.role == role) return;
     final keepTerminal = role == NodeRole.fixture;
-    _replaceNode(NetNode(
-      id: node.id,
-      sheetId: node.sheetId,
-      x: node.x,
-      y: node.y,
-      floorIndex: node.floorIndex,
+    // Round 52 (plumbing-hvac-convergence-2-2) — copyWith + explicit clear
+    // flags, so no field (the persisted equipment [NetNode.tagNo], a custom
+    // fixture, a roof area) can be dropped by a role edit again.
+    _replaceNode(node.copyWith(
       role: role,
-      elevation: node.elevation,
-      mountHeight: node.mountHeight,
-      component: node.component,
-      tankCapacityLitres: node.tankCapacityLitres,
-      electricalLoadW: node.electricalLoadW,
-      faceWidthMm: node.faceWidthMm,
-      faceHeightMm: node.faceHeightMm,
-      fittingType: node.fittingType,
-      autoPlacedRoomId: node.autoPlacedRoomId,
-      fixture: keepTerminal ? node.fixture : null,
-      airflow: keepTerminal ? node.airflow : null,
+      clearFixture: !keepTerminal,
+      clearAirflow: !keepTerminal,
+      clearCustomFixtureId: !keepTerminal,
     ));
   }
 
@@ -1251,25 +1241,7 @@ class NetworkController extends Notifier<DrawingState> {
   /// [setNodeFixture], the batch [setNodesFixture] and the merge-on-drop path.
   NetNode _applyFixture(NetNode node, PlumbingFixture? fixture) {
     if (fixture == null) {
-      return NetNode(
-        id: node.id,
-        sheetId: node.sheetId,
-        x: node.x,
-        y: node.y,
-        floorIndex: node.floorIndex,
-        role: node.role,
-        elevation: node.elevation,
-        mountHeight: node.mountHeight,
-        component: node.component,
-        tankCapacityLitres: node.tankCapacityLitres,
-        electricalLoadW: node.electricalLoadW,
-        faceWidthMm: node.faceWidthMm,
-        faceHeightMm: node.faceHeightMm,
-        fittingType: node.fittingType,
-        autoPlacedRoomId: node.autoPlacedRoomId,
-        airflow: node.airflow,
-        roofAreaM2: node.roofAreaM2,
-      );
+      return node.copyWith(clearFixture: true, clearCustomFixtureId: true);
     }
     return node.copyWith(
       role: NodeRole.fixture,
@@ -1280,29 +1252,25 @@ class NetworkController extends Notifier<DrawingState> {
 
   /// Assign the design [airflow] at a node, marking it an air terminal
   /// (diffuser/grille). Pass null to clear it.
+  ///
+  /// Round 52 (plumbing-hvac-convergence-2-1) — an air SOURCE (AHU, supply /
+  /// exhaust fan — [isAirSourceUnitComponent]) is never an air terminal: an
+  /// airflow typed on it would make it a demand-bearing fixture, re-root its
+  /// system at a bare junction (the trunk carrying the unit's air twice) and
+  /// drop its solved duty — so a non-null airflow there is refused (clearing
+  /// one is allowed). A PLANT node keeps its role (an FCU / AC unit on a
+  /// duct is a terminal unit by its component, not by a fixture role).
   void setNodeAirflow(String id, FlowRate? airflow) {
     final node = state.network.nodeById(id);
     if (node == null) return;
-    _replaceNode(NetNode(
-      id: node.id,
-      sheetId: node.sheetId,
-      x: node.x,
-      y: node.y,
-      floorIndex: node.floorIndex,
-      role: airflow == null ? node.role : NodeRole.fixture,
-      elevation: node.elevation,
-      mountHeight: node.mountHeight,
-      component: node.component,
-      tankCapacityLitres: node.tankCapacityLitres,
-      electricalLoadW: node.electricalLoadW,
-      faceWidthMm: node.faceWidthMm,
-      faceHeightMm: node.faceHeightMm,
-      fittingType: node.fittingType,
-      autoPlacedRoomId: node.autoPlacedRoomId,
-      fixture: node.fixture,
+    if (airflow != null && isAirSourceUnitComponent(node.component)) return;
+    if (airflow == node.airflow) return;
+    _replaceNode(node.copyWith(
+      role: airflow == null || node.role == NodeRole.plant
+          ? node.role
+          : NodeRole.fixture,
       airflow: airflow,
-      customFixtureId: node.customFixtureId,
-      roofAreaM2: node.roofAreaM2,
+      clearAirflow: airflow == null,
     ));
   }
 
@@ -1330,29 +1298,11 @@ class NetworkController extends Notifier<DrawingState> {
     if (node == null) return;
     // Round 9 (mech-store-fuzz-8) — an unchanged elevation is a no-op.
     if (node.elevation == elevation) return;
-    // The fresh constructor is how `elevation` is cleared (copyWith has no
-    // clear flag); every other field is carried so setting an elevation never
-    // strips the node's component / mount height / tank / face / load.
-    _replaceNode(NetNode(
-      id: node.id,
-      sheetId: node.sheetId,
-      x: node.x,
-      y: node.y,
-      floorIndex: node.floorIndex,
-      role: node.role,
+    // Round 52 — copyWith + clearElevation keeps every other field (the
+    // persisted [NetNode.tagNo] included).
+    _replaceNode(node.copyWith(
       elevation: elevation,
-      mountHeight: node.mountHeight,
-      fixture: node.fixture,
-      airflow: node.airflow,
-      customFixtureId: node.customFixtureId,
-      roofAreaM2: node.roofAreaM2,
-      component: node.component,
-      tankCapacityLitres: node.tankCapacityLitres,
-      electricalLoadW: node.electricalLoadW,
-      faceWidthMm: node.faceWidthMm,
-      faceHeightMm: node.faceHeightMm,
-      fittingType: node.fittingType,
-      autoPlacedRoomId: node.autoPlacedRoomId,
+      clearElevation: elevation == null,
     ));
   }
 
@@ -1363,31 +1313,16 @@ class NetworkController extends Notifier<DrawingState> {
     final node = state.network.nodeById(id);
     if (node == null) return;
     // Assigning a custom fixture clears the built-in [fixture] (mutual
-    // exclusivity). The fresh constructor (with `fixture` omitted) is how we
-    // clear it — copyWith has no clear-fixture flag — while preserving the
-    // node's other fields (roofAreaM2, airflow, elevation).
-    _replaceNode(NetNode(
-      id: node.id,
-      sheetId: node.sheetId,
-      x: node.x,
-      y: node.y,
-      floorIndex: node.floorIndex,
+    // exclusivity); Round 52 — copyWith + clear flags preserve every other
+    // field (the persisted [NetNode.tagNo] included).
+    _replaceNode(node.copyWith(
       role: customFixtureId == null ? node.role : NodeRole.fixture,
-      elevation: node.elevation,
-      mountHeight: node.mountHeight,
-      component: node.component,
-      tankCapacityLitres: node.tankCapacityLitres,
-      electricalLoadW: node.electricalLoadW,
-      faceWidthMm: node.faceWidthMm,
-      faceHeightMm: node.faceHeightMm,
-      fittingType: node.fittingType,
-      autoPlacedRoomId: node.autoPlacedRoomId,
-      fixture: customFixtureId == null ? node.fixture : null,
-      airflow: node.airflow,
+      clearFixture: customFixtureId != null,
       customFixtureId: customFixtureId,
-      roofAreaM2: node.roofAreaM2,
+      clearCustomFixtureId: customFixtureId == null,
     ));
   }
+
 
   /// Set this node's [mountHeight] above its own floor — "how high on the wall"
   /// the fixture/outlet sits — which drives its true elevation and therefore its

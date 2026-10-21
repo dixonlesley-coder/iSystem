@@ -38,14 +38,42 @@ class FireSystemReportLine {
   /// True for a sprinkler-only system (else a standpipe / hydrant system).
   final bool sprinklerOnly;
 
-  /// The system's NFPA 20 rating check on its OWN demand.
+  /// The system's NFPA 20 rating check on its OWN demand (Round 52: a series
+  /// stage's line carries ITS stage rating, under its own duty pump's tag).
   final FirePumpRatingResult rating;
+
+  /// Round 52 — a TRANSFER pump filling a fire break tank (lift + friction to
+  /// the tank, no residual).
+  final bool transfer;
 
   const FireSystemReportLine({
     required this.tag,
     required this.sprinklerOnly,
     required this.rating,
+    this.transfer = false,
   });
+}
+
+/// Round 52 (fire-convergence-4-report-prints-phantom-class-i-pump-for-
+/// gravity-system) — one GRAVITY-fed fire system (a roof tank, no pump
+/// drawn): its own flow and the head its tank leaves at the most demanding
+/// terminal against the head that terminal needs. The report prints this
+/// verdict, never a pump rating for a system that has no pump.
+class FireGravityReportLine {
+  /// True for a sprinkler-only system (else a standpipe / hose system).
+  final bool sprinklerOnly;
+  final double flowLps;
+  final double availableM;
+  final double requiredM;
+
+  const FireGravityReportLine({
+    required this.sprinklerOnly,
+    required this.flowLps,
+    required this.availableM,
+    required this.requiredM,
+  });
+
+  bool get short => availableM < requiredM - 1e-9;
 }
 
 /// Round 49 (regression-report-churn-not-per-system) — one drawn
@@ -124,6 +152,15 @@ class CalcReportData {
   /// more systems are drawn (a single system's [firePumpRating] row is the
   /// same pump ⇒ byte-identical).
   final List<FireSystemReportLine> fireSystems;
+
+  /// Round 52 — every GRAVITY-fed fire system's head verdict. Empty ⇒ no line.
+  final List<FireGravityReportLine> fireGravity;
+
+  /// Round 52 — the jockey basis when [firePumpRating] is withheld (a
+  /// SERIES-staged governing system prints one rating line per stage
+  /// instead): the whole system's rating, whose jockey point the schedule's
+  /// jockey carries. Null ⇒ the jockey line reads [firePumpRating].
+  final FirePumpRatingResult? fireJockeyRating;
 
   final FanDuty? fan;
 
@@ -218,6 +255,8 @@ class CalcReportData {
     this.firePumpRating,
     this.fireOverPressure = const [],
     this.fireSystems = const [],
+    this.fireGravity = const [],
+    this.fireJockeyRating,
     this.fan,
     this.exhaustFan,
     this.supplyFans = const [],
@@ -425,7 +464,8 @@ RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
     [ReportStrings strings = const ReportStrings.en()]) {
   final fireSystems = <String>[
     if (d.sprinkler != null) strings(RptStringKey.dbFireSprinkler),
-    if (d.standpipe != null) strings(RptStringKey.dbFireStandpipe),
+    if (d.standpipe != null || d.fireGravity.any((g) => !g.sprinklerOnly))
+      strings(RptStringKey.dbFireStandpipe),
   ];
   return RptKeyValue([
     (
@@ -700,7 +740,9 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
   if (d.sprinkler != null ||
       d.standpipe != null ||
       d.sprinklerRemoteArea != null ||
-      d.firePumpRating != null) {
+      d.firePumpRating != null ||
+      d.fireSystems.length >= 2 ||
+      d.fireGravity.isNotEmpty) {
     final sp = d.sprinkler;
     final ra = d.sprinklerRemoteArea;
     final st = d.standpipe;
@@ -806,9 +848,11 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             (
               strings.format(RptStringKey.fireSystemPumpKey, {
                 'tag': fs.tag,
-                'system': strings(fs.sprinklerOnly
-                    ? RptStringKey.fireSystemSprinkler
-                    : RptStringKey.fireSystemStandpipe),
+                'system': strings(fs.transfer
+                    ? RptStringKey.fireSystemTransfer
+                    : fs.sprinklerOnly
+                        ? RptStringKey.fireSystemSprinkler
+                        : RptStringKey.fireSystemStandpipe),
               }),
               strings.format(RptStringKey.firePumpValue, {
                 'rated': fs.rating.ratedFlow.inLitersPerSecond
@@ -822,13 +866,31 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                     : strings(RptStringKey.firePumpVerdictWithin),
               })
             ),
-        if (fp != null)
+        // Round 52 — a gravity system's own head verdict (no pump drawn).
+        for (final g in d.fireGravity)
+          (
+            strings.format(RptStringKey.fireGravityKey, {
+              'system': strings(g.sprinklerOnly
+                  ? RptStringKey.fireSystemSprinkler
+                  : RptStringKey.fireSystemStandpipe),
+            }),
+            strings.format(RptStringKey.fireGravityValue, {
+              'lps': g.flowLps.toStringAsFixed(1),
+              'avail': (g.availableM < 0 ? 0.0 : g.availableM)
+                  .toStringAsFixed(1),
+              'need': g.requiredM.toStringAsFixed(1),
+              'verdict': strings(g.short
+                  ? RptStringKey.fireGravityShort
+                  : RptStringKey.fireGravityOk),
+            })
+          ),
+        if ((fp ?? d.fireJockeyRating) case final jr?)
           (
             strings(RptStringKey.fireJockeyKey),
             strings.format(RptStringKey.fireJockeyValue, {
-              'lps': fp.jockeyFlow.inLitersPerSecond.toStringAsFixed(2),
-              'm': fp.jockeyHead.meters.toStringAsFixed(0),
-              'standby': fp.standbyRecommended
+              'lps': jr.jockeyFlow.inLitersPerSecond.toStringAsFixed(2),
+              'm': jr.jockeyHead.meters.toStringAsFixed(0),
+              'standby': jr.standbyRecommended
                   ? strings(RptStringKey.fireJockeyStandby)
                   : '',
             })

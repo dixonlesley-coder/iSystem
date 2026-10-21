@@ -68,7 +68,7 @@ void main() {
         'index friction (= the rated head), not the 15 m allowance', () {
       final c = _c();
       _seedTower(c, cal: true);
-      final printed = c.read(reportStandpipeDesignProvider);
+      final printed = c.read(reportStandpipeDesignProvider)!;
       final rated = c.read(fireRatedPointProvider);
       final allowance = c.read(standpipeDesignProvider);
       final basis = c.read(firePumpBasisByNodeProvider)['HP']!;
@@ -87,7 +87,7 @@ void main() {
         () {
       final c = _c();
       _seedTower(c, cal: false);
-      expect(c.read(reportStandpipeDesignProvider).pumpHead.meters,
+      expect(c.read(reportStandpipeDesignProvider)!.pumpHead.meters,
           closeTo(c.read(standpipeDesignProvider).pumpHead.meters, 1e-9));
     });
   });

@@ -9,6 +9,7 @@ import 'package:mechx_engine/sizing/pump.dart';
 import 'package:mechx_engine/network/network.dart'
     show
         NetEdge,
+        NetNode,
         Network,
         NodeComponent,
         NodeRole,
@@ -120,9 +121,11 @@ final fireRatedPointProvider =
 /// largest flow / head. Null when no fire system is drawn.
 final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
   // Round 50 — a gravity-fed system has no pump: it never governs.
+  // Round 52 — nor does a TRANSFER system (a pump filling a break tank is
+  // not the fire pump the project is rated on).
   final bases = [
     for (final b in ref.watch(fireSystemBasesProvider))
-      if (!b.gravityFed) b,
+      if (!b.gravityFed && !b.transfer) b,
   ];
   if (bases.isEmpty) return null;
   final hydrant = [
@@ -147,26 +150,64 @@ final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
 /// JUDGE-ONLY (`fireOverPressureCheck`): the fire sizer caps velocity at
 /// 6 m/s, so a tall system can build half its rated head out of friction and
 /// churn at ~17 bar on DN40 pipe — the review says so, it never resizes.
+///
+/// Round 52 (fire-convergence-4-staged-sprinkler-system-false-over-
+/// pressure) — a SERIES (zoned) system is judged at every stage's discharge
+/// ([fireStagedOverPressureCheck]: the chain's churn heads less the static
+/// lift up to that stage), never 1.4 x the summed system head at one point;
+/// [pumpId] names the pump whose discharge sees the reported maximum (the
+/// system's duty pump for a single stage). A TRANSFER system is not judged.
 final fireOverPressureProvider = Provider<
     List<
         ({
           FireSystemBasis basis,
           ({double churnKpa, double ratedKpa, bool over, double? frictionShare})
               check,
+          String? pumpId,
         })>>((ref) {
-  return [
-    for (final b in ref.watch(fireSystemBasesProvider))
-      // The 175 psi limit is the SPRINKLER component listing (NFPA 13); a
-      // hydrant-only standpipe is built from high-pressure hose valves with
-      // pressure-regulating outlets (NFPA 14), so it is not judged here.
-      if (!b.gravityFed &&
-          b.flow.cubicMetersPerSecond > 0 &&
-          b.system.hasSprinkler)
-        if (fireOverPressureCheck(
-                rating: b.rating, indexFrictionM: b.indexFrictionM)
-            case final c when c.over)
-          (basis: b, check: c),
-  ];
+  final out = <({
+    FireSystemBasis basis,
+    ({double churnKpa, double ratedKpa, bool over, double? frictionShare})
+        check,
+    String? pumpId,
+  })>[];
+  for (final b in ref.watch(fireSystemBasesProvider)) {
+    // The 175 psi limit is the SPRINKLER component listing (NFPA 13); a
+    // hydrant-only standpipe is built from high-pressure hose valves with
+    // pressure-regulating outlets (NFPA 14), so it is not judged here.
+    if (b.gravityFed ||
+        b.transfer ||
+        b.flow.cubicMetersPerSecond <= 0 ||
+        !b.system.hasSprinkler) {
+      continue;
+    }
+    if (b.stages.length >= 2) {
+      final c = fireStagedOverPressureCheck(
+        stages: [
+          for (final st in b.stages)
+            FireStageLift(st.rating, st.suctionLiftM, st.upstream),
+        ],
+        systemRatedHeadM: b.head.meters,
+        indexFrictionM: b.indexFrictionM,
+      );
+      if (!c.over) continue;
+      out.add((
+        basis: b,
+        check: (
+          churnKpa: c.churnKpa,
+          ratedKpa: c.ratedKpa,
+          over: c.over,
+          frictionShare: c.frictionShare,
+        ),
+        pumpId: b.stages[c.stage].dutyPumpId,
+      ));
+      continue;
+    }
+    final c = fireOverPressureCheck(
+        rating: b.rating, indexFrictionM: b.indexFrictionM);
+    if (c.over) out.add((basis: b, check: c, pumpId: b.dutyPumpId));
+  }
+  return out;
 });
 
 /// Round 29 (regression-report-standpipe-head-contradicts-rated-head) — the
@@ -175,9 +216,29 @@ final fireOverPressureProvider = Provider<
 /// MDP way use), falling back to the friction-free [standpipeDesignProvider]
 /// only when no hydrant system basis exists. [standpipeDesignProvider] stays
 /// friction-free because it feeds the sizer (friction depends on sizing).
-final reportStandpipeDesignProvider = Provider<FireStandpipeDesign>((ref) {
-  final gov = ref.watch(governingFireBasisProvider);
-  return gov?.standpipe ?? ref.watch(standpipeDesignProvider);
+///
+/// Round 52 (fire-convergence-4-report-prints-phantom-class-i-pump-for-
+/// gravity-system) — NULLABLE: the standpipe of the hydrant-bearing PUMPED
+/// system (never gravity-fed, never a transfer) with the largest rated point;
+/// null when no such system exists — never the friction-free Class I
+/// default, which printed a 31.5 L/s / 91 m / 40 kW pump and a 100 mm riser
+/// for a gravity hose-reel system with no pump (and beside a sprinkler-only
+/// governing basis). The Fire inspector's advisory [standpipeDesignProvider]
+/// is untouched.
+final reportStandpipeDesignProvider = Provider<FireStandpipeDesign?>((ref) {
+  FireSystemBasis? best;
+  for (final b in ref.watch(fireSystemBasesProvider)) {
+    if (b.gravityFed || b.transfer || b.standpipe == null) continue;
+    if (best == null) {
+      best = b;
+      continue;
+    }
+    final f = b.flow.cubicMetersPerSecond - best.flow.cubicMetersPerSecond;
+    if (f > 1e-12 || (f.abs() <= 1e-12 && b.head.meters > best.head.meters)) {
+      best = b;
+    }
+  }
+  return best?.standpipe;
 });
 
 /// Round 28 — one connected fire SYSTEM (sprinkler + hydrant edges joined
@@ -246,6 +307,27 @@ class FireSystemBasis {
   /// The main duty of pump [pumpId]: its series-stage duty, else [duty].
   PumpDuty? dutyFor(String pumpId) => stageDuties[pumpId] ?? duty;
 
+  /// Round 52 (fire-convergence-4-series-stage-report-line-prints-system-
+  /// pump-under-booster-tag) — the system's DUTY pump (the largest sized
+  /// incident bore, ties to the lowest id — never a jockey / standby that
+  /// sorts first); null when no pump is drawn. Surfaces tag the system by it.
+  final String? dutyPumpId;
+
+  /// Round 52 — the series stages in topological order (each with its own
+  /// rating, duty pump, upstream stage and static lift from the datum); empty
+  /// for a single-stage system. The calc report prints one line per stage
+  /// and the over-pressure judge walks them ([fireStagedOverPressureCheck]).
+  final List<FireStageRating> stages;
+
+  /// Round 52 (regression-transfer-pump-into-tank-rated-whole-building-
+  /// standpipe) — a TRANSFER system: pumps drawn, no fire terminal, the
+  /// discharge ending at a storage tank above the pumps ([transferTankId]).
+  /// Rated on the lift to the tank + the sized friction to it, with NO hose /
+  /// sprinkler residual; it never governs the project fire pump and is never
+  /// judged for churn over-pressure.
+  final bool transfer;
+  final String? transferTankId;
+
   /// Round 50 (fire-convergence-2-gravity-roof-tank-fire-system-gets-
   /// phantom-pump) — no fire pump / booster is drawn and every plant source
   /// is a roof tank (or a plant at / above the topmost terminal): a GRAVITY
@@ -294,8 +376,56 @@ class FireSystemBasis {
     this.gravitySourceId,
     this.gravityAvailableHeadM,
     this.gravityRequiredHeadM,
+    this.dutyPumpId,
+    this.stages = const [],
+    this.transfer = false,
+    this.transferTankId,
   });
 }
+
+/// Round 52 — one SERIES stage of a fire system ([FireSystemBasis.stages]).
+class FireStageRating {
+  /// The stage's pumps (duty / standby / jockey of one stage), sorted.
+  final List<String> pumpIds;
+
+  /// Its duty pump (the largest sized incident bore, ties to the lowest id).
+  final String dutyPumpId;
+
+  /// The head this stage develops, its NFPA 20 rating and duty.
+  final Head head;
+  final FirePumpRatingResult rating;
+  final PumpDuty duty;
+
+  /// Index of the stage feeding this one; null at the source.
+  final int? upstream;
+
+  /// Static lift (m) from the system datum up to this stage's pumps.
+  final double suctionLiftM;
+
+  const FireStageRating({
+    required this.pumpIds,
+    required this.dutyPumpId,
+    required this.head,
+    required this.rating,
+    required this.duty,
+    required this.upstream,
+    required this.suctionLiftM,
+  });
+}
+
+/// Round 52 (regression-same-room-series-first-stage-rated-zero-head) — the
+/// smallest head any series fire-pump stage is rated on (m). A stage whose
+/// own derivation gives less (a same-room booster chain with no terminal on
+/// the interstage pipe — 0 m of floor lift) is clamped up to it: a 0 m /
+/// 0.37 kW life-safety fire pump is never a valid duty. `// VERIFY
+/// notAnSniClause` (a representative minimum, not a code figure).
+const double kMinFireStageHeadM = 5.0;
+
+/// Round 52 — the static lift (m) below which an interstage pipe with no
+/// terminal is not a readable stage boundary: the stage head cannot be read
+/// from the floor delta, so the remaining system head is split equally along
+/// the chain instead.
+const double kMinFireStageLiftM = 1.0;
 
 /// Round 28 (fire-3-sprinkler-pump-gets-standpipe-duty /
 /// fire-3-standpipe-stacks-counted-across-independent-systems /
@@ -312,7 +442,10 @@ class FireSystemBasis {
 /// Ordered as [fireSystems]. Empty when no fire service is drawn.
 final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
-  final systems = fireSystems(net);
+  // Round 52 (regression-shared-suction-header-pump-rooms-still-combined-
+  // duty) — the RATING systems: a pump-free suction header two independent
+  // pump rooms draw from splits them like a shared tank does.
+  final systems = fireRatingSystems(net);
   if (systems.isEmpty) return const [];
   final project = ref.watch(projectControllerProvider);
   final building = project.building;
@@ -325,20 +458,12 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         building: building,
         mounting: project.mounting,
       ).meters;
-  final out = <FireSystemBasis>[];
-  for (final sys in systems) {
-    final pumps = [
-      for (final n in net.nodes)
-        if (sys.nodeIds.contains(n.id) &&
-            (n.component == NodeComponent.pump ||
-                n.component == NodeComponent.boosterSet))
-          n.id,
-    ]..sort();
-    // The duty pump: the largest sized incident bore (a jockey sits on a
-    // small leg), ties to the lowest id.
+  // The duty pump of [ids]: the largest sized incident bore (a jockey sits on
+  // a small leg), ties to the lowest id.
+  String? dutyOf(FireSystem sys, Iterable<String> ids) {
     String? duty;
     var dutyBore = -1.0;
-    for (final p in pumps) {
+    for (final p in [...ids]..sort()) {
       var bore = 0.0;
       for (final e in sys.edges) {
         if (e.fromId != p && e.toId != p) continue;
@@ -350,6 +475,25 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         dutyBore = bore;
       }
     }
+    return duty;
+  }
+
+  final out = <FireSystemBasis>[];
+  for (final sys in systems) {
+    final pumps = [
+      for (final n in net.nodes)
+        if (sys.nodeIds.contains(n.id) &&
+            (n.component == NodeComponent.pump ||
+                n.component == NodeComponent.boosterSet))
+          n.id,
+    ]..sort();
+    final hasTerminal = sys.topTerminalFloor(net, FireTerminalKind.any) != null;
+    // Round 52 (regression-pumpless-tank-fragment-becomes-governing-phantom-
+    // pump) — a fragment with no pump AND no terminal (an FDC -> tank inlet
+    // pipe, a tank-to-tank equalising pipe behind the Round-51 tank boundary)
+    // is not a fire system to rate: no phantom pump is built for it.
+    if (pumps.isEmpty && !hasTerminal) continue;
+    final duty = dutyOf(sys, pumps);
     // Round 37 (mech-sim-5-combined-fire-pump-head-adds-sprinkler-
     // friction-to-standpipe) — each basis reads the friction of ITS OWN
     // terminals: the hose basis the hydrant outlets' index path, the
@@ -376,9 +520,9 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     // the whole 60 m building).
     double liftTo(FireTerminalKind kind, {int? belowFloor}) =>
         sys.staticLiftM(net, building, kind, belowFloor: belowFloor);
-    final FlowRate flow;
-    final Head head;
-    final double? friction;
+    FlowRate flow;
+    Head head;
+    double? friction;
     FireStandpipeDesign? standpipe;
     var sprinklerGoverns = false;
     ({FlowRate flow, Head head}) sprinklerPoint(double? f, double liftM) =>
@@ -450,6 +594,36 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         basisKind = FireTerminalKind.hydrant;
       }
     }
+    var staticLift = liftTo(basisKind);
+    // Round 52 (regression-transfer-pump-into-tank-rated-whole-building-
+    // standpipe) — a TRANSFER system (pumps, no terminal, discharging into a
+    // storage tank above them — a GT -> TP -> riser -> TT break tank) lifts
+    // water into the tank: rated on the static lift pump -> tank plus the
+    // sized friction to the tank, with NO hose / sprinkler residual and no
+    // 15 m allowance (never the whole-building Class I head).
+    final transferTank = pumps.isNotEmpty && !hasTerminal && duty != null
+        ? _transferDestinationTank(sys, net, project, duty)
+        : null;
+    if (transferTank != null) {
+      final pumpZ = nodeElevation(net.nodeById(duty!)!, building,
+              project.mounting)
+          .meters;
+      final tankZ =
+          nodeElevation(transferTank, building, project.mounting).meters;
+      final f = fireIndexPathFrictionM(
+        net: net,
+        system: sys,
+        pumpId: duty,
+        sizing: sizing,
+        lengthOf: lengthOf,
+        targetIds: {transferTank.id},
+      );
+      friction = f;
+      staticLift = math.max(0.0, tankZ - pumpZ);
+      head = Head(staticLift + math.max(0.0, f ?? 0.0));
+      standpipe = null;
+      sprinklerGoverns = false;
+    }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
     // Round 50 (fire-convergence-2-gravity-roof-tank-fire-system-gets-
     // phantom-pump) — a system with no pump drawn whose every plant source
@@ -470,7 +644,9 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final dutyPump = gravity != null || flow.cubicMetersPerSecond <= 0
         ? null
         : firePumpDuty(ratedFlow: flow, ratedHead: head, rating: rating);
-    final jockey = dutyPump == null || rating.jockeyFlow.cubicMetersPerSecond <= 0
+    final jockey = transferTank != null ||
+            dutyPump == null ||
+            rating.jockeyFlow.cubicMetersPerSecond <= 0
         ? null
         : sizePump(flow: rating.jockeyFlow, head: rating.jockeyHead);
     // Round 49 (fire-convergence-series-booster-fire-pump-standby) — pumps
@@ -486,8 +662,40 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     // half each).
     final stageHeads = <String, Head>{};
     final stageDuties = <String, PumpDuty>{};
-    if (dutyPump != null && pumps.length >= 2 && building.floors.isNotEmpty) {
+    final stagesOut = <FireStageRating>[];
+    void addStage(List<String> ids, double stageM, int? upstream,
+        double suctionLiftM) {
+      // Round 52 (regression-same-room-series-first-stage-rated-zero-head)
+      // — never a stage below [kMinFireStageHeadM].
+      final perSet = Head(math.max(kMinFireStageHeadM, stageM));
+      final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perSet);
+      final d = firePumpDuty(ratedFlow: flow, ratedHead: perSet, rating: r);
+      for (final id in ids) {
+        stageHeads[id] = perSet;
+        stageDuties[id] = d;
+      }
+      stagesOut.add(FireStageRating(
+        pumpIds: [...ids]..sort(),
+        dutyPumpId: dutyOf(sys, ids) ?? ([...ids]..sort()).first,
+        head: perSet,
+        rating: r,
+        duty: d,
+        upstream: upstream,
+        suctionLiftM: suctionLiftM,
+      ));
+    }
+
+    if (transferTank == null &&
+        dutyPump != null &&
+        pumps.length >= 2 &&
+        building.floors.isNotEmpty) {
       final sets = fireParallelPumpSets(net, sys, pumps);
+      final nF = building.floors.length;
+      int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
+      final datum = clampF(sys.datumFloor(net));
+      double liftToFloor(int f) =>
+          building.elevationOf(clampF(f)).meters -
+          building.elevationOf(datum).meters;
       // Round 51 (regression-same-floor-series-booster-full-head) — the
       // stage chain is read from the TOPOLOGY (a set follows the set whose
       // discharge part it takes suction from), never by floor: a ground-floor
@@ -497,9 +705,6 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       // as the fallback when the chain cannot be read.
       final topo = fireSeriesPumpStages(net, sys, sets);
       if (topo != null && topo.length >= 2) {
-        final nF = building.floors.length;
-        int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
-        final datum = clampF(sys.datumFloor(net));
         int floorOfStage(FirePumpStage st) => st.pumpIds
             .map((id) => net.nodeById(id)?.floorIndex ?? 0)
             .reduce((a, b) => a < b ? a : b);
@@ -518,6 +723,13 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           for (var k = 0; k < topo.length; k++)
             if (!topo.any((x) => x.upstream == k)) k,
         ];
+        // Stages from k to the deepest tip of its chain (k included).
+        final depth = <int, int>{};
+        int depthOf(int k) => depth[k] ??= 1 +
+            [
+              for (var x = 0; x < topo.length; x++)
+                if (topo[x].upstream == k) depthOf(x),
+            ].fold<int>(0, math.max);
         final cum = <int, double>{};
         for (var k = 0; k < topo.length; k++) {
           final st = topo[k];
@@ -536,19 +748,23 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           } else {
             final nextFloor =
                 downs.map(floorOfStage).reduce((a, b) => a < b ? a : b);
-            need = zoneNeed(st.discharge) ??
-                building.elevationOf(clampF(nextFloor)).meters -
-                    building.elevationOf(datum).meters;
+            final z = zoneNeed(st.discharge);
+            final floorLift = liftToFloor(nextFloor) - base;
+            if (z != null) {
+              need = z;
+            } else if (floorLift >= kMinFireStageLiftM) {
+              need = liftToFloor(nextFloor);
+            } else {
+              // Round 52 — no terminal on the interstage pipe and no floor
+              // lift to read (a same-room series chain): the remaining
+              // system head is split equally along the chain.
+              need = base + (head.meters - base) / depthOf(k);
+            }
           }
-          final stage = math.max(0.0, need - base);
+          final stage = math.max(kMinFireStageHeadM, need - base);
           cum[k] = base + stage;
-          final perSet = Head(stage);
-          final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perSet);
-          final d = firePumpDuty(ratedFlow: flow, ratedHead: perSet, rating: r);
-          for (final id in st.pumpIds) {
-            stageHeads[id] = perSet;
-            stageDuties[id] = d;
-          }
+          addStage(st.pumpIds, stage, st.upstream,
+              math.max(0.0, liftToFloor(floorOfStage(st))));
         }
       }
       int floorOf(List<String> g) => g
@@ -563,9 +779,6 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         }
       }
       if (topo == null && stages.length >= 2) {
-        final nF = building.floors.length;
-        int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
-        final datum = clampF(sys.datumFloor(net));
         var below = 0.0;
         for (var k = 0; k < stages.length; k++) {
           double need;
@@ -576,8 +789,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
             final zoneTop =
                 sys.topTerminalFloor(net, basisKind, belowFloor: nextFloor);
             if (zoneTop == null) {
-              need = building.elevationOf(clampF(nextFloor)).meters -
-                  building.elevationOf(datum).meters;
+              need = liftToFloor(nextFloor);
             } else {
               final lift = liftTo(basisKind, belowFloor: nextFloor);
               need = basisKind == FireTerminalKind.sprinkler
@@ -585,17 +797,11 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
                   : standpipeAt(friction, lift).pumpHead.meters;
             }
           }
-          final stage = math.max(0.0, need - below);
+          final stage = math.max(kMinFireStageHeadM, need - below);
           below += stage;
-          final perSet = Head(stage);
-          final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perSet);
-          final d = firePumpDuty(ratedFlow: flow, ratedHead: perSet, rating: r);
-          for (final g in stages[k]) {
-            for (final id in g) {
-              stageHeads[id] = perSet;
-              stageDuties[id] = d;
-            }
-          }
+          addStage([for (final g in stages[k]) ...g], stage,
+              k == 0 ? null : k - 1,
+              math.max(0.0, liftToFloor(floorOf(stages[k].first))));
         }
       }
     }
@@ -613,17 +819,47 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       jockey: jockey,
       sprinklerGovernsCombined: sprinklerGoverns,
       standpipeClass: cls,
-      staticLiftM: liftTo(basisKind),
+      staticLiftM: staticLift,
       stageHeads: stageHeads,
       stageDuties: stageDuties,
       gravityFed: gravity != null,
       gravitySourceId: gravity?.sourceId,
       gravityAvailableHeadM: gravity?.availableM,
       gravityRequiredHeadM: gravity?.requiredM,
+      dutyPumpId: duty,
+      stages: stagesOut,
+      transfer: transferTank != null,
+      transferTankId: transferTank?.id,
     ));
   }
   return out;
 });
+
+/// Round 52 (regression-transfer-pump-into-tank-rated-whole-building-
+/// standpipe) — the storage tank a terminal-less pumped fire system [sys]
+/// TRANSFERS into: the highest tank ([isFireSystemBoundary]) of the system
+/// sitting above its duty pump [pumpId] (ties to the lowest id), or null when
+/// none does (a suction tank at / below the pump is the source, not the
+/// destination).
+NetNode? _transferDestinationTank(
+    FireSystem sys, Network net, ProjectState project, String pumpId) {
+  final pump = net.nodeById(pumpId);
+  if (pump == null) return null;
+  final pumpZ = nodeElevation(pump, project.building, project.mounting).meters;
+  NetNode? best;
+  var bestZ = double.negativeInfinity;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id) || !isFireSystemBoundary(n)) continue;
+    final z = nodeElevation(n, project.building, project.mounting).meters;
+    if (z <= pumpZ + 1e-9) continue;
+    if (z > bestZ + 1e-9 ||
+        ((z - bestZ).abs() <= 1e-9 && best != null && n.id.compareTo(best.id) < 0)) {
+      best = n;
+      bestZ = z;
+    }
+  }
+  return best;
+}
 
 /// Round 50 — the gravity verdict of a pump-less fire system [sys], or null
 /// when it is not gravity-fed (no plant source, or a source below its
@@ -836,6 +1072,8 @@ final sprinklerPumpCheckProvider = Provider<
     // ([FireSystemBasis.gravityHeadShort]), never against another system's
     // pump or a phantom duty.
     if (b.gravityFed) continue;
+    // Round 52 — a transfer system fills a tank; it serves no head.
+    if (b.transfer) continue;
     final own = b.pumpIds.isNotEmpty || b.system.hasHydrant;
     final pump = own ? b.duty : ref.watch(firePumpDutyProvider);
     final lift =

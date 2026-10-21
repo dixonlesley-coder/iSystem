@@ -23,6 +23,11 @@ import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
 import '../standards/puil.dart';
 import '../units.dart';
+// Round 52 — the supply study's ONE assembly ([studySupplyDesign]) feeds the
+// fault estimate here too, so the ADS / selectivity fault origin is the
+// transformer the advanced study prints (a library cycle, legal in Dart: the
+// helper is a pure function of the solved result).
+import 'advanced_study.dart' show studySupplyDesign;
 import 'busbar.dart';
 import 'cable_family.dart';
 import 'containment.dart' show effectiveInstallMethod;
@@ -4647,7 +4652,9 @@ ElectricalSystemResult computeSystem(
     if (candidates.isEmpty) return r;
     final origin = originFaultLevel ??
         project.originFaultLevelA ??
-        estimatedServiceFaultLevelA(project, demand: r.supply.demandVa) ??
+        estimatedServiceFaultLevelA(project,
+            demand: r.supply.demandVa,
+            supply: studySupplyDesign(project, r)) ??
         const Current(defaultLvUtilityFaultKa * 1000);
     final f = faultStudy(r, project, profile, originFaultLevel: origin);
     final refused = <String>{
@@ -4692,7 +4699,9 @@ ElectricalSystemResult computeSystem(
   if (!isTn) return pass2;
   final faultOrigin = originFaultLevel ??
       project.originFaultLevelA ??
-      estimatedServiceFaultLevelA(project, demand: pass2.supply.demandVa) ??
+      estimatedServiceFaultLevelA(project,
+          demand: pass2.supply.demandVa,
+          supply: studySupplyDesign(project, pass2)) ??
       const Current(defaultLvUtilityFaultKa * 1000);
   final ladder = profile.standardBreakerRatingsA;
   final caps = <String, double>{};

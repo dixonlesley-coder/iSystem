@@ -421,6 +421,9 @@ void main() {
     // (49 × 4 + 1.2) lift + 70.34 m residual + 15 m allowance = 282.5 m;
     // overload 118.3 L/s @ 183.6 m ⇒ shaft = 9810 × 0.1183 × 183.6 / 0.595
     // ≈ 358 kW > the 315 kW ladder top.
+    // Round 52 — with no outlet drawn the lift target is the system's OWN
+    // highest node (never the whole-building fallback), so each stack is
+    // drawn up to L49 (one riser spanning L0 -> L49): the same 49 × 4 + 1.2 m.
     final c = ProviderContainer();
     addTearDown(c.dispose);
     _seed(c, floors: 50, h: 4.0);
@@ -429,7 +432,7 @@ void main() {
       _n('H', 50, 0),
       for (var s = 0; s < 4; s++) ...[
         _n('a$s', 100.0 + s * 100, 0),
-        _n('b$s', 100.0 + s * 100, 0, floor: 1),
+        _n('b$s', 100.0 + s * 100, 0, floor: 49),
       ],
     ], edges: [
       _e('p', 'P', 'H'),

@@ -367,3 +367,77 @@ const double kFireComponentMaxPressureKpa = 1210;
         indexFrictionM == null || rated <= 0 ? null : indexFrictionM / rated,
   );
 }
+
+/// Round 52 (fire-convergence-4-staged-sprinkler-system-false-over-
+/// pressure) — the JUDGE-ONLY over-pressure check of a fire system whose pumps
+/// run in SERIES ([stages], each with its own NFPA 20 [FirePumpRatingResult],
+/// the static lift [FireStageLift.suctionLiftM] from the system datum up to
+/// its pump, and the index of the stage feeding it, null at the source).
+/// The highest pressure any component sees is at a stage's DISCHARGE: the
+/// churn heads of every stage on its chain, less the static lift up to that
+/// stage's pump —
+///   P_k = rho g (sum_{j on chain <= k} churn_j - z_k)
+/// — never 1.4 x the summed system head at one point (that overstates a
+/// mid-level booster's discharge by the whole lift up to it). The maximum over
+/// the stages is reported with its stage index; [frictionShare] is the
+/// index-path friction over the system rated head ([systemRatedHeadM]). A
+/// single stage at z = 0 reduces exactly to [fireOverPressureCheck]. Pure.
+({
+  double churnKpa,
+  double ratedKpa,
+  bool over,
+  double? frictionShare,
+  int stage,
+}) fireStagedOverPressureCheck({
+  required List<FireStageLift> stages,
+  required double systemRatedHeadM,
+  double? indexFrictionM,
+  double maxComponentKpa = kFireComponentMaxPressureKpa,
+}) {
+  const rhoG = defaultWaterDensity * standardGravity;
+  var bestChurn = 0.0;
+  var bestRated = 0.0;
+  var bestStage = 0;
+  for (var k = 0; k < stages.length; k++) {
+    var churn = 0.0;
+    var rated = 0.0;
+    final seen = <int>{};
+    int? j = k;
+    while (j != null && j >= 0 && j < stages.length && seen.add(j)) {
+      churn += stages[j].rating.churn.head.meters;
+      rated += stages[j].rating.ratedHead.meters;
+      j = stages[j].upstream;
+    }
+    churn -= stages[k].suctionLiftM;
+    rated -= stages[k].suctionLiftM;
+    if (k == 0 || churn > bestChurn) {
+      bestChurn = churn;
+      bestRated = rated;
+      bestStage = k;
+    }
+  }
+  final churnKpa = rhoG * bestChurn / 1000;
+  return (
+    churnKpa: churnKpa,
+    ratedKpa: rhoG * bestRated / 1000,
+    over: churnKpa > maxComponentKpa + 1e-9,
+    frictionShare: indexFrictionM == null || systemRatedHeadM <= 0
+        ? null
+        : indexFrictionM / systemRatedHeadM,
+    stage: bestStage,
+  );
+}
+
+/// Round 52 — one series stage for [fireStagedOverPressureCheck].
+class FireStageLift {
+  /// The stage's own NFPA 20 rating (its stage head).
+  final FirePumpRatingResult rating;
+
+  /// Static lift (m) from the system datum up to the stage's pump.
+  final double suctionLiftM;
+
+  /// Index of the stage feeding this one; null at the source.
+  final int? upstream;
+
+  const FireStageLift(this.rating, this.suctionLiftM, this.upstream);
+}

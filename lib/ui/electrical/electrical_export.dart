@@ -646,11 +646,9 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               // Round 30 (report-parity-2-3) — with its verification tier.
               verifyItems: advanced.verifyItems,
               verifyChecklist: profile.verifyChecklist,
-              originFaultLevelA: effectiveOriginFaultLevel(project,
-                      demand: result.supply.demandVa)
+              originFaultLevelA: effectiveOriginFaultLevel(project, result: result)
                   .amperes,
-              faultLevelBasis: effectiveOriginFaultLevel(project,
-                      demand: result.supply.demandVa)
+              faultLevelBasis: effectiveOriginFaultLevel(project, result: result)
                   .basis,
               busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
               revisions: ref.read(documentControlProvider).revisions,
