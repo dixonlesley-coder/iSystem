@@ -111,6 +111,20 @@ final fireRatedPointProvider =
   if (best != null) {
     return (flow: best.flow, head: best.head, sprinklerOnly: best.sprinklerOnly);
   }
+  // Round 52 r2 — fire systems ARE drawn but none is a fire pump to rate
+  // (every one gravity-fed or a transfer fill): the point of a DRAWN system
+  // (the transfer pump's, else the gravity system's own demand) — never the
+  // advisory standpipe of a pump that does not exist. Every rating surface
+  // stands down on [fireAllGravityFedProvider] anyway.
+  final bases = ref.watch(fireSystemBasesProvider);
+  if (bases.isNotEmpty) {
+    final drawn = bases.firstWhere((b) => b.transfer, orElse: () => bases.first);
+    return (
+      flow: drawn.flow,
+      head: drawn.head,
+      sprinklerOnly: drawn.sprinklerOnly,
+    );
+  }
   final st = ref.watch(standpipeDesignProvider);
   return (flow: st.requiredFlow, head: st.pumpHead, sprinklerOnly: false);
 });
@@ -956,9 +970,18 @@ final firePumpBasisByNodeProvider = Provider<Map<String, FireSystemBasis>>(
 /// design, so every surface that prints a fire-pump rating (the Fire
 /// inspector's headline, the calc report's rating block) must stand down on
 /// this — there is no pump to rate.
+///
+/// Round 52 r2 (r52-review-transfer-exclusion-leaks-phantom-pump-into-report)
+/// — a TRANSFER system (a pump only filling a break / roof tank) is not a
+/// fire pump to rate either: with every system gravity-fed OR a transfer
+/// fill ([governingFireBasisProvider] null) there is no project fire pump,
+/// so [firePumpDutyProvider], the jockey and the report's rating block stand
+/// down instead of rating the advisory standpipe — a 55 kW pump no drawn
+/// machine carries. The transfer pump keeps its own schedule row / MDP way
+/// / report line on its own basis.
 final fireAllGravityFedProvider = Provider<bool>((ref) {
   final bases = ref.watch(fireSystemBasesProvider);
-  return bases.isNotEmpty && bases.every((b) => b.gravityFed);
+  return bases.isNotEmpty && bases.every((b) => b.gravityFed || b.transfer);
 });
 
 /// NFPA 20 fire-pump rating-curve check for the fire pump — churn / rated /

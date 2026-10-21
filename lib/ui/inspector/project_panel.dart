@@ -1093,7 +1093,17 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   }
   // The ONE fire-pump duty (NFPA 20 motor) shared with the electrical feed.
   final firePump = ref.read(firePumpDutyProvider);
-  if (firePump != null) {
+  // Round 52 r2 — a drawn fire pump on its OWN system basis (a TRANSFER
+  // pump filling a tank that gravity-feeds the only terminals) is scheduled
+  // even when there is no project fire pump to rate ([firePumpDutyProvider]
+  // null).
+  final fireBasesByNode = ref.read(firePumpBasisByNodeProvider);
+  if (firePump != null ||
+      net.nodes.any((n) =>
+          isPumpNode(n) &&
+          onFire(n) &&
+          nodeTags[n.id] != null &&
+          fireBasesByNode[n.id]?.duty != null)) {
     // Round 17 follow-up — a sprinkler-rated pump (no hydrant drawn) is a
     // SPRINKLER pump, never 'Pompa hidran kebakaran'.
     final fireService = reportStringsFor(ref)(
@@ -1108,7 +1118,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       for (final n in net.nodes)
         if (isPumpNode(n) && onFire(n) && nodeTags[n.id] != null) n.id,
     ]..sort();
-    if (drawn.isEmpty) {
+    if (drawn.isEmpty && firePump != null) {
       pumps.add(PumpScheduleItem(
         duty: firePump,
         service: fireService,
@@ -1119,13 +1129,14 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     final jockeyDuty = ref.read(fireJockeyDutyProvider);
     // Round 28 — each drawn pump on the duty and service of its OWN fire
     // system (a sprinkler pump on its own network is a sprinkler pump).
-    final bases = ref.read(firePumpBasisByNodeProvider);
+    final bases = fireBasesByNode;
     for (final id in drawn) {
       final tag = nodeTags[id]!;
       final jockey = binding.fireJockeyPumpNodeIds.contains(id);
       final basis = bases[id];
       // Round 49 — a pump in SERIES is scheduled on its own stage duty.
       final mainDuty = basis?.dutyFor(id) ?? firePump;
+      if (mainDuty == null) continue;
       final sysService = basis == null
           ? fireService
           : reportStringsFor(ref)(basis.transfer

@@ -150,7 +150,8 @@ class CalcReportData {
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
   /// the tag its schedule row and MDP way carry. Printed only when two or
   /// more systems are drawn (a single system's [firePumpRating] row is the
-  /// same pump ⇒ byte-identical).
+  /// same pump ⇒ byte-identical) — or, Round 52 r2, a lone line when
+  /// [firePumpRating] is null (the only pumped line is a tank transfer).
   final List<FireSystemReportLine> fireSystems;
 
   /// Round 52 — every GRAVITY-fed fire system's head verdict. Empty ⇒ no line.
@@ -742,6 +743,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       d.sprinklerRemoteArea != null ||
       d.firePumpRating != null ||
       d.fireSystems.length >= 2 ||
+      (d.firePumpRating == null && d.fireSystems.isNotEmpty) ||
       d.fireGravity.isNotEmpty) {
     final sp = d.sprinkler;
     final ra = d.sprinklerRemoteArea;
@@ -843,7 +845,11 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
             })
           ),
         // Round 30 (report-parity-2-1) — every drawn fire system's own pump.
-        if (d.fireSystems.length >= 2)
+        // Round 52 r2 — also a LONE line when no project rating block is
+        // printed (a transfer pump filling a tank that gravity-feeds the
+        // only terminals: the transfer line is the only pumped one).
+        if (d.fireSystems.length >= 2 ||
+            (fp == null && d.fireSystems.isNotEmpty))
           for (final fs in d.fireSystems)
             (
               strings.format(RptStringKey.fireSystemPumpKey, {
