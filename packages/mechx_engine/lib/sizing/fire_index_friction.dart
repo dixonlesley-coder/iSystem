@@ -101,8 +101,7 @@ class FireSystem {
   /// Round 49 — the highest floor holding one of this system's terminals of
   /// [kind] (hydrant: hydrant boxes / hose reels; sprinkler: heads), at or
   /// below [belowFloor] − 1 when given. Null when none is drawn there.
-  int? topTerminalFloor(Network net, FireTerminalKind kind,
-      {int? belowFloor}) {
+  int? topTerminalFloor(Network net, FireTerminalKind kind, {int? belowFloor}) {
     final servicesAt = <String, Set<ServiceType>>{};
     for (final e in edges) {
       (servicesAt[e.fromId] ??= {}).add(e.service);
@@ -149,8 +148,8 @@ class FireSystem {
     if (nFloors == 0) return 0;
     int clampF(int f) => f < 0 ? 0 : (f >= nFloors ? nFloors - 1 : f);
     final datum = clampF(datumFloorOverride ?? datumFloor(net));
-    final top =
-        clampF(topTerminalFloor(net, kind, belowFloor: belowFloor) ?? nFloors - 1);
+    final top = clampF(
+        topTerminalFloor(net, kind, belowFloor: belowFloor) ?? nFloors - 1);
     final base = building.elevationOf(datum).meters;
     final target = kind == FireTerminalKind.sprinkler
         ? building.ceilingElevationOf(top).meters
@@ -204,8 +203,24 @@ class FireSystem {
   return (legs.first, legs.last);
 }
 
+/// Round 51 (fire-convergence-3-shared-tank-merges-independent-sprinkler-
+/// and-hydrant-pumps-into-one-rating) — a STORAGE TANK (ground / roof tank)
+/// is a hydraulic break: the pressure on one side of it never reaches the
+/// other. [fireSystems] joins fire edges only through non-tank nodes, so a
+/// sprinkler pump and a hydrant pump drawn off one shared ground tank are two
+/// systems, each rated on its own terminals.
+bool isFireSystemBoundary(NetNode? n) =>
+    n != null &&
+    (n.component == NodeComponent.groundTank ||
+        n.component == NodeComponent.roofTank);
+
 /// The connected fire networks of [net] (union over sprinkler + hydrant
 /// edges), ordered by their smallest node id. Pure + deterministic.
+///
+/// Round 51 — the union runs only through NON-TANK nodes
+/// ([isFireSystemBoundary]); a tank belongs to EVERY system whose pipes touch
+/// it (its node id is in each system's [FireSystem.nodeIds]). A pipe between
+/// two tanks joins only those two tanks.
 List<FireSystem> fireSystems(Network net) {
   final parent = <String, String>{};
   String find(String x) {
@@ -226,7 +241,21 @@ List<FireSystem> fireSystems(Network net) {
     for (final e in net.edges)
       if (isFireService(e.service)) e,
   ];
+  bool tank(String id) => isFireSystemBoundary(net.nodeById(id));
+  // The node an edge joins its system through: a non-tank end (both ends
+  // non-tank are unioned), else the from-tank (a tank-to-tank pipe).
+  String anchor(NetEdge e) => !tank(e.fromId)
+      ? e.fromId
+      : !tank(e.toId)
+          ? e.toId
+          : e.fromId;
   for (final e in fire) {
+    final ta = tank(e.fromId), tb = tank(e.toId);
+    if (ta != tb) {
+      final x = ta ? e.toId : e.fromId;
+      parent.putIfAbsent(x, () => x);
+      continue;
+    }
     parent.putIfAbsent(e.fromId, () => e.fromId);
     parent.putIfAbsent(e.toId, () => e.toId);
     final a = find(e.fromId), b = find(e.toId);
@@ -235,7 +264,7 @@ List<FireSystem> fireSystems(Network net) {
   final nodes = <String, Set<String>>{};
   final edges = <String, List<NetEdge>>{};
   for (final e in fire) {
-    final r = find(e.fromId);
+    final r = find(anchor(e));
     (nodes[r] ??= <String>{})
       ..add(e.fromId)
       ..add(e.toId);
@@ -456,4 +485,160 @@ List<List<String>> fireParallelPumpSets(
     return f != 0 ? f : a.first.compareTo(b.first);
   });
   return sets;
+}
+
+/// Round 51 (regression-same-floor-series-booster-full-head) — one STAGE of a
+/// fire system's pump chain: the parallel pump set(s) [pumpIds] that take
+/// suction from one pump-free part of the system and discharge into another
+/// ([discharge], the pump-free pipework + terminals that stage serves
+/// directly), fed by the stage [upstream] (an index into the list, null for a
+/// stage drawing from the system's source).
+class FirePumpStage {
+  final List<String> pumpIds;
+  final FireSystem discharge;
+  final int? upstream;
+  const FirePumpStage(this.pumpIds, this.discharge, this.upstream);
+}
+
+/// Round 51 (regression-same-floor-series-booster-full-head) — the pump
+/// [sets] of [system] (from [fireParallelPumpSets]) ordered TOPOLOGICALLY
+/// along the flow, never by floor: every pump-free part of the system (the
+/// fire pipework with every pump removed) is a label; the source label is
+/// the part holding a non-pump plant (a tank / source — never a supply
+/// inlet); a set whose one label is already reached takes suction from it and
+/// discharges into its other label, so a ground-floor series booster
+/// (main pump discharge -> booster -> upper zone, both in one pump room)
+/// follows the main pump exactly as a booster drawn on the upper floor does.
+/// Sets between the SAME two labels are one stage (duty / standby on two
+/// floors). Stages are returned in breadth-first order from the source, each
+/// after the stage feeding it.
+///
+/// Null when the chain cannot be read from the topology — no source part, a
+/// pump whose two leg ends lie in one part or reach another pump directly, a
+/// set whose both labels are
+/// reached (a bypass), a set never reached, or a part fed by two different
+/// stages — the caller then keeps its legacy floor grouping.
+List<FirePumpStage>? fireSeriesPumpStages(
+    Network net, FireSystem system, List<List<String>> sets) {
+  final pumps = {for (final g in sets) ...g};
+  if (pumps.isEmpty) return null;
+  final parent = <String, String>{};
+  String find(String x) {
+    parent.putIfAbsent(x, () => x);
+    var r = x;
+    while (parent[r] != r) {
+      r = parent[r]!;
+    }
+    var c = x;
+    while (parent[c] != r) {
+      final next = parent[c]!;
+      parent[c] = r;
+      c = next;
+    }
+    return r;
+  }
+
+  for (final e in system.edges) {
+    if (pumps.contains(e.fromId) || pumps.contains(e.toId)) continue;
+    final a = find(e.fromId), b = find(e.toId);
+    if (a != b) parent[a] = b;
+  }
+  String label(String end) => pumps.contains(end) ? end : find(end);
+
+  // Each set's (unordered) label pair — every pump of a set shares it.
+  final pairs = <(String, String)>[];
+  for (final g in sets) {
+    if (g.isEmpty) return null;
+    final ends = fireDrawnPumpLegEnds(net, system, g.first);
+    final a = label(ends.$1), b = label(ends.$2);
+    // One part on both sides, or pumps drawn back-to-back (a leg end that is
+    // another pump — no pump-free part between them to order by): unreadable.
+    if (a == b || pumps.contains(a) || pumps.contains(b)) return null;
+    for (final id in g.skip(1)) {
+      final o = fireDrawnPumpLegEnds(net, system, id);
+      final oa = label(o.$1), ob = label(o.$2);
+      if (!((oa == a && ob == b) || (oa == b && ob == a))) return null;
+    }
+    pairs.add((a, b));
+  }
+
+  // Source labels: parts holding a non-pump, non-inlet plant node.
+  final sources = <String>{
+    for (final n in net.nodes)
+      if (system.nodeIds.contains(n.id) &&
+          !pumps.contains(n.id) &&
+          n.role == NodeRole.plant &&
+          !isSupplyInletComponent(n.component))
+        label(n.id),
+  };
+  if (sources.isEmpty) return null;
+
+  final reached = <String>{...sources};
+  final suction = <int, String>{};
+  final dischargeLabel = <int, String>{};
+  final order = <int>[];
+  var progress = true;
+  while (progress && order.length < sets.length) {
+    progress = false;
+    for (var i = 0; i < sets.length; i++) {
+      if (suction.containsKey(i)) continue;
+      final (a, b) = pairs[i];
+      final ra = reached.contains(a), rb = reached.contains(b);
+      // Both sides reached in an earlier round: a bypass / second feed.
+      // (Sets between the same two labels are reached in the SAME round —
+      // `reached` grows only after it — and grouped into one stage below.)
+      if (ra && rb) return null;
+      if (!ra && !rb) continue;
+      suction[i] = ra ? a : b;
+      dischargeLabel[i] = ra ? b : a;
+      order.add(i);
+      progress = true;
+    }
+    // Only now mark this round's discharges reached, so two sets touching a
+    // label in the same round are judged together.
+    for (final i in order) {
+      reached.add(dischargeLabel[i]!);
+    }
+  }
+  if (order.length < sets.length) return null;
+
+  // Group sets with the same (suction, discharge) into one stage.
+  final stageOfPair = <(String, String), int>{};
+  final stagePumps = <List<String>>[];
+  final stageSuction = <String>[];
+  final stageDischarge = <String>[];
+  for (final i in order) {
+    final key = (suction[i]!, dischargeLabel[i]!);
+    final k = stageOfPair[key];
+    if (k != null) {
+      stagePumps[k].addAll(sets[i]);
+      continue;
+    }
+    stageOfPair[key] = stagePumps.length;
+    stagePumps.add([...sets[i]]);
+    stageSuction.add(key.$1);
+    stageDischarge.add(key.$2);
+  }
+  // A part fed by two different stages: ambiguous.
+  if (stageDischarge.toSet().length != stageDischarge.length) return null;
+
+  final out = <FirePumpStage>[];
+  for (var k = 0; k < stagePumps.length; k++) {
+    final lab = stageDischarge[k];
+    final nodes = <String>{};
+    final edges = <NetEdge>[];
+    for (final e in system.edges) {
+      if (pumps.contains(e.fromId) || pumps.contains(e.toId)) continue;
+      if (find(e.fromId) != lab) continue;
+      nodes
+        ..add(e.fromId)
+        ..add(e.toId);
+      edges.add(e);
+    }
+    if (!pumps.contains(lab)) nodes.add(lab);
+    final up = stageDischarge.indexOf(stageSuction[k]);
+    out.add(FirePumpStage([...stagePumps[k]]..sort(), FireSystem(nodes, edges),
+        up < 0 ? null : up));
+  }
+  return out;
 }

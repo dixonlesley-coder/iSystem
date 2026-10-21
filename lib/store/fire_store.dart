@@ -488,6 +488,69 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final stageDuties = <String, PumpDuty>{};
     if (dutyPump != null && pumps.length >= 2 && building.floors.isNotEmpty) {
       final sets = fireParallelPumpSets(net, sys, pumps);
+      // Round 51 (regression-same-floor-series-booster-full-head) — the
+      // stage chain is read from the TOPOLOGY (a set follows the set whose
+      // discharge part it takes suction from), never by floor: a ground-floor
+      // series booster in the main pump room is a stage of its own, rated on
+      // the head above the main pump's zone (P1 93.5 m + P2 10.5 m, never
+      // both at the 104 m system head). The floor grouping below stays only
+      // as the fallback when the chain cannot be read.
+      final topo = fireSeriesPumpStages(net, sys, sets);
+      if (topo != null && topo.length >= 2) {
+        final nF = building.floors.length;
+        int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
+        final datum = clampF(sys.datumFloor(net));
+        int floorOfStage(FirePumpStage st) => st.pumpIds
+            .map((id) => net.nodeById(id)?.floorIndex ?? 0)
+            .reduce((a, b) => a < b ? a : b);
+        // The head the terminals of [zone] need from the system datum, or
+        // null when the zone holds no terminal of the basis kind.
+        double? zoneNeed(FireSystem zone) {
+          if (zone.topTerminalFloor(net, basisKind) == null) return null;
+          final lift = zone.staticLiftM(net, building, basisKind,
+              datumFloorOverride: datum);
+          return basisKind == FireTerminalKind.sprinkler
+              ? sprinklerPoint(friction, lift).head.meters
+              : standpipeAt(friction, lift).pumpHead.meters;
+        }
+
+        final tips = [
+          for (var k = 0; k < topo.length; k++)
+            if (!topo.any((x) => x.upstream == k)) k,
+        ];
+        final cum = <int, double>{};
+        for (var k = 0; k < topo.length; k++) {
+          final st = topo[k];
+          final base = st.upstream == null ? 0.0 : cum[st.upstream!] ?? 0.0;
+          final downs = [
+            for (final x in topo)
+              if (x.upstream == k) x,
+          ];
+          double need;
+          if (downs.isEmpty) {
+            // The top of a single chain develops the rest of the system head;
+            // a branch tip its own zone's need.
+            need = tips.length == 1
+                ? head.meters
+                : zoneNeed(st.discharge) ?? head.meters;
+          } else {
+            final nextFloor =
+                downs.map(floorOfStage).reduce((a, b) => a < b ? a : b);
+            need = zoneNeed(st.discharge) ??
+                building.elevationOf(clampF(nextFloor)).meters -
+                    building.elevationOf(datum).meters;
+          }
+          final stage = math.max(0.0, need - base);
+          cum[k] = base + stage;
+          final perSet = Head(stage);
+          final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perSet);
+          final d = firePumpDuty(ratedFlow: flow, ratedHead: perSet, rating: r);
+          for (final id in st.pumpIds) {
+            stageHeads[id] = perSet;
+            stageDuties[id] = d;
+          }
+        }
+      }
       int floorOf(List<String> g) => g
           .map((id) => net.nodeById(id)?.floorIndex ?? 0)
           .reduce((a, b) => a < b ? a : b);
@@ -499,7 +562,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           stages.add([g]);
         }
       }
-      if (stages.length >= 2) {
+      if (topo == null && stages.length >= 2) {
         final nF = building.floors.length;
         int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
         final datum = clampF(sys.datumFloor(net));

@@ -8,7 +8,6 @@
 // floors. Both now go through the shared `_cloneEdge`.
 import 'dart:math' as math;
 
-import 'package:flutter/painting.dart' show Offset;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/network_store.dart';
