@@ -208,8 +208,13 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       net.edges.any((e) => e.service == ServiceType.fireHydrant);
   // Round 29 — the governing hydrant system's design (friction-inclusive),
   // so the standpipe line agrees with the fire-pump rating beside it.
+  // Round 52 — nullable: no pumped hydrant system ⇒ no standpipe pump line
+  // (a gravity hose-reel system prints its gravity verdict instead).
   final standpipe =
       hydrantDrawn ? ref.read(reportStandpipeDesignProvider) : null;
+  final firePumpDrawnDuty = ref.read(firePumpDutyProvider);
+  final governingFire = ref.read(governingFireBasisProvider);
+  final governingStaged = (governingFire?.stages.length ?? 0) >= 2;
   final hwRecirc = ref.read(hotWaterRecircProvider);
   // Round 20 (drafting-visual-4-1) — the feed the report describes is the
   // DRAWN feed, on the same evidence as the riser sheet's `riserFeedNote`
@@ -249,9 +254,16 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   // sequential FP-0i by its position among the systems.
   final fireBases = ref.read(fireSystemBasesProvider);
   final nodeTagMap = equipmentNodeTags(net);
-  String fireSystemTag(FireSystemBasis b) =>
-      (b.pumpIds.isEmpty ? null : nodeTagMap[b.pumpIds.first]) ??
-      'FP-${(fireBases.indexOf(b) + 1).toString().padLeft(2, '0')}';
+  // Round 52 — tagged by the system's DUTY pump (never the alphabetically
+  // first id, which can be a jockey / standby or the series booster).
+  String fireSystemTag(FireSystemBasis b, [String? pumpId]) {
+    final id = pumpId ??
+        b.dutyPumpId ??
+        (b.pumpIds.isEmpty ? null : b.pumpIds.first);
+    return (id == null ? null : nodeTagMap[id]) ??
+        'FP-${(fireBases.indexOf(b) + 1).toString().padLeft(2, '0')}';
+  }
+
   return CalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
@@ -267,9 +279,12 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
       ...ductProductsVerifyChecklist,
       // Round 21 — the Class I residual only when a standpipe is drawn; a
       // sprinkler-only pump still prints its allowance + η basis.
-      if (hydrantDrawn)
+      // Round 52 — only when a standpipe design is actually printed (a
+      // gravity hose-reel system has no Class I pump to qualify), and the
+      // pump basis only when a fire pump is.
+      if (standpipe != null)
         ...standpipeVerifyChecklist
-      else if (fireDrawn)
+      else if (fireDrawn && firePumpDrawnDuty != null)
         ...firePumpBasisVerifyChecklist,
       if (hwRecirc != null) ...hotWaterRecircVerifyChecklist,
     ],
@@ -320,7 +335,15 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
         sprinklerDrawn ? ref.read(sprinklerRemoteAreaProvider) : null,
     // Round 50 r2 — no rating block for an all-gravity fire supply: the rated
     // point there is only the advisory standpipe fallback (no pump drawn).
-    firePumpRating: fireDrawn && ref.read(firePumpDutyProvider) != null
+    // Round 52 — a SERIES-staged governing system prints one rating line per
+    // stage ([fireSystems]) instead: no drawn machine carries the summed
+    // system head, so the single block is withheld (its jockey point still
+    // prints, from [fireJockeyRating]).
+    firePumpRating:
+        fireDrawn && firePumpDrawnDuty != null && !governingStaged
+            ? ref.read(firePumpRatingProvider)
+            : null,
+    fireJockeyRating: fireDrawn && firePumpDrawnDuty != null && governingStaged
         ? ref.read(firePumpRatingProvider)
         : null,
     // Round 49 (regression-report-churn-not-per-system) — the over-pressure
@@ -330,7 +353,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
         ? [
             for (final o in ref.read(fireOverPressureProvider))
               FireOverPressureReportLine(
-                tag: fireSystemTag(o.basis),
+                tag: fireSystemTag(o.basis, o.pumpId),
                 churnKpa: o.check.churnKpa,
                 frictionShare: o.check.frictionShare,
               ),
@@ -340,12 +363,40 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
     // the tag its schedule row / MDP way carry.
     fireSystems: fireDrawn
         ? [
-            for (final b in ref.read(fireSystemBasesProvider))
-              FireSystemReportLine(
-                tag: fireSystemTag(b),
-                sprinklerOnly: b.sprinklerOnly,
-                rating: b.rating,
-              ),
+            for (final b in fireBases)
+              // Round 52 — a gravity system has no pump to rate (its verdict
+              // is [fireGravity]); a staged system prints one line per stage
+              // under that stage's duty pump, on its own stage rating — the
+              // figures its schedule row and MDP way carry.
+              if (!b.gravityFed)
+                if (b.stages.length >= 2)
+                  for (final st in b.stages)
+                    FireSystemReportLine(
+                      tag: fireSystemTag(b, st.dutyPumpId),
+                      sprinklerOnly: b.sprinklerOnly,
+                      rating: st.rating,
+                    )
+                else
+                  FireSystemReportLine(
+                    tag: fireSystemTag(b),
+                    sprinklerOnly: b.sprinklerOnly,
+                    rating: b.rating,
+                    transfer: b.transfer,
+                  ),
+          ]
+        : const [],
+    fireGravity: fireDrawn
+        ? [
+            for (final b in fireBases)
+              if (b.gravityFed &&
+                  b.gravityAvailableHeadM != null &&
+                  b.gravityRequiredHeadM != null)
+                FireGravityReportLine(
+                  sprinklerOnly: b.sprinklerOnly,
+                  flowLps: b.flow.inLitersPerSecond,
+                  availableM: b.gravityAvailableHeadM!,
+                  requiredM: b.gravityRequiredHeadM!,
+                ),
           ]
         : const [],
     fan: reportFan,
@@ -376,8 +427,7 @@ ElectricalCalcReportData buildElectricalReportData(WidgetRef ref) {
   final eResult = ref.read(electricalResultProvider);
   final eAdvanced = ref.read(electricalAdvancedProvider);
   const eProfile = PuilProfile();
-  final effectiveFault = effectiveOriginFaultLevel(eProject,
-      demand: eResult.supply.demandVa);
+  final effectiveFault = effectiveOriginFaultLevel(eProject, result: eResult);
   return ElectricalCalcReportData(
     projectName: project.name,
     date: DateTime.now().toIso8601String().split('T').first,
@@ -1043,7 +1093,17 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   }
   // The ONE fire-pump duty (NFPA 20 motor) shared with the electrical feed.
   final firePump = ref.read(firePumpDutyProvider);
-  if (firePump != null) {
+  // Round 52 r2 — a drawn fire pump on its OWN system basis (a TRANSFER
+  // pump filling a tank that gravity-feeds the only terminals) is scheduled
+  // even when there is no project fire pump to rate ([firePumpDutyProvider]
+  // null).
+  final fireBasesByNode = ref.read(firePumpBasisByNodeProvider);
+  if (firePump != null ||
+      net.nodes.any((n) =>
+          isPumpNode(n) &&
+          onFire(n) &&
+          nodeTags[n.id] != null &&
+          fireBasesByNode[n.id]?.duty != null)) {
     // Round 17 follow-up — a sprinkler-rated pump (no hydrant drawn) is a
     // SPRINKLER pump, never 'Pompa hidran kebakaran'.
     final fireService = reportStringsFor(ref)(
@@ -1058,7 +1118,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
       for (final n in net.nodes)
         if (isPumpNode(n) && onFire(n) && nodeTags[n.id] != null) n.id,
     ]..sort();
-    if (drawn.isEmpty) {
+    if (drawn.isEmpty && firePump != null) {
       pumps.add(PumpScheduleItem(
         duty: firePump,
         service: fireService,
@@ -1069,18 +1129,21 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
     final jockeyDuty = ref.read(fireJockeyDutyProvider);
     // Round 28 — each drawn pump on the duty and service of its OWN fire
     // system (a sprinkler pump on its own network is a sprinkler pump).
-    final bases = ref.read(firePumpBasisByNodeProvider);
+    final bases = fireBasesByNode;
     for (final id in drawn) {
       final tag = nodeTags[id]!;
       final jockey = binding.fireJockeyPumpNodeIds.contains(id);
       final basis = bases[id];
       // Round 49 — a pump in SERIES is scheduled on its own stage duty.
       final mainDuty = basis?.dutyFor(id) ?? firePump;
+      if (mainDuty == null) continue;
       final sysService = basis == null
           ? fireService
-          : reportStringsFor(ref)(basis.sprinklerOnly
-              ? RptStringKey.esSvcFireSprinkler
-              : RptStringKey.esSvcFireStandpipe);
+          : reportStringsFor(ref)(basis.transfer
+              ? RptStringKey.esSvcFireTransferPump
+              : basis.sprinklerOnly
+                  ? RptStringKey.esSvcFireSprinkler
+                  : RptStringKey.esSvcFireStandpipe);
       pumps.add(PumpScheduleItem(
         duty: jockey
             ? (basis?.jockey ?? jockeyDuty ?? mainDuty)
@@ -5699,11 +5762,16 @@ class _SelectionSection extends ConsumerWidget {
         node.fixture != null ||
         node.customFixtureId != null ||
         (unconnected && !airTerminal);
-    final showAirflow =
-        airTouch ||
-        airTerminal ||
-        node.airflow != null ||
-        (unconnected && node.fixture == null && node.customFixtureId == null);
+    // Round 52 (plumbing-hvac-convergence-2-1) — an air SOURCE unit (AHU /
+    // supply or exhaust fan) is never an air terminal: no airflow stepper
+    // (unless a legacy airflow is there to clear).
+    final showAirflow = node.airflow != null ||
+        (!isAirSourceUnitComponent(node.component) &&
+            (airTouch ||
+                airTerminal ||
+                (unconnected &&
+                    node.fixture == null &&
+                    node.customFixtureId == null)));
     final showRoofArea =
         rainTouch ||
         node.roofAreaM2 != null ||

@@ -1307,7 +1307,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // (175 psi): judge-only, locatable to the duty pump.
   for (final o in fireOverPressure) {
     final b = o.basis;
-    final pumpNode = b.pumpIds.isEmpty ? null : net.nodeById(b.pumpIds.first);
+    // Round 52 — located at the pump whose discharge sees the maximum (a
+    // series stage's own duty pump), else the system's duty pump.
+    final pumpNode = o.pumpId != null
+        ? net.nodeById(o.pumpId!)
+        : b.pumpIds.isEmpty
+            ? null
+            : net.nodeById(b.pumpIds.first);
     final share = o.check.frictionShare;
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,

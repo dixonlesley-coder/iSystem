@@ -44,14 +44,22 @@ class FireSystem {
   /// Its fire edges (sprinkler + hydrant), in drawing order.
   final List<NetEdge> edges;
 
-  const FireSystem(this.nodeIds, this.edges);
+  /// Round 52 — the edges of a SHARED source part (a suction header two
+  /// independent pump rooms draw from) this system carries only as its
+  /// supply: they never decide the system's KIND ([hasHydrant] /
+  /// [hasSprinkler]). Empty for every system [fireSystems] returns; set only
+  /// on the sub-systems of [splitFireSystemAtSharedSource].
+  final Set<String> sourceEdgeIds;
+
+  const FireSystem(this.nodeIds, this.edges, {this.sourceEdgeIds = const {}});
 
   /// True when a hydrant / standpipe edge is part of this system.
-  bool get hasHydrant => edges.any((e) => e.service == ServiceType.fireHydrant);
+  bool get hasHydrant => edges.any((e) =>
+      e.service == ServiceType.fireHydrant && !sourceEdgeIds.contains(e.id));
 
   /// True when a sprinkler edge is part of this system.
-  bool get hasSprinkler =>
-      edges.any((e) => e.service == ServiceType.fireSprinkler);
+  bool get hasSprinkler => edges.any((e) =>
+      e.service == ServiceType.fireSprinkler && !sourceEdgeIds.contains(e.id));
 
   /// The standpipe stacks of THIS system that run in parallel (at least 1).
   int standpipeRisers(Network net) {
@@ -127,6 +135,18 @@ class FireSystem {
     return top;
   }
 
+  /// Round 52 — the highest floor any of this system's nodes sits on (at or
+  /// below [belowFloor] − 1 when given); null when none.
+  int? highestNodeFloor(Network net, {int? belowFloor}) {
+    int? top;
+    for (final n in net.nodes) {
+      if (!nodeIds.contains(n.id)) continue;
+      if (belowFloor != null && n.floorIndex >= belowFloor) continue;
+      if (top == null || n.floorIndex > top) top = n.floorIndex;
+    }
+    return top;
+  }
+
   /// Round 49 (fire-convergence-zone-lift-is-whole-building) — this
   /// system's STATIC LIFT (m) for the [kind] basis: from its pump datum
   /// floor's surface ([datumFloor], or [datumFloorOverride]) to its own
@@ -135,8 +155,12 @@ class FireSystem {
   /// ([FireTerminalKind.sprinkler]) — never the whole building's height: a
   /// mid-level pump room serving L10-L19 lifts 30 m, not 60 m. With no
   /// terminal of [kind] drawn (at or below [belowFloor] − 1 when given) the
-  /// legacy whole-building top floor is the target. Floors are clamped to
-  /// [building]; an empty building lifts 0.
+  /// Round 52 (regression-transfer-pump-into-tank-rated-whole-building-
+  /// standpipe) — with no terminal of [kind] drawn the target is this
+  /// system's OWN highest node (at or below [belowFloor] − 1 when given), never
+  /// the whole-building top floor: a transfer fragment GT -> TP -> TT(L10)
+  /// of a 20-storey tower lifts to L10, not L19. With no node at all the lift
+  /// is 0. Floors are clamped to [building]; an empty building lifts 0.
   double staticLiftM(
     Network net,
     BuildingLevels building,
@@ -148,8 +172,10 @@ class FireSystem {
     if (nFloors == 0) return 0;
     int clampF(int f) => f < 0 ? 0 : (f >= nFloors ? nFloors - 1 : f);
     final datum = clampF(datumFloorOverride ?? datumFloor(net));
-    final top = clampF(
-        topTerminalFloor(net, kind, belowFloor: belowFloor) ?? nFloors - 1);
+    final topRaw = topTerminalFloor(net, kind, belowFloor: belowFloor) ??
+        highestNodeFloor(net, belowFloor: belowFloor);
+    if (topRaw == null) return 0;
+    final top = clampF(topRaw);
     final base = building.elevationOf(datum).meters;
     final target = kind == FireTerminalKind.sprinkler
         ? building.ceilingElevationOf(top).meters
@@ -279,6 +305,104 @@ List<FireSystem> fireSystems(Network net) {
   return out;
 }
 
+/// Round 52 (regression-shared-suction-header-pump-rooms-still-combined-
+/// duty) — [system] split per INDEPENDENT pump room: when its pump chain
+/// ([fireSeriesPumpStages]) has two or more ROOT stages (stages drawing from
+/// the system's pump-free source part — a bare suction header both a
+/// sprinkler pump and a hydrant pump tee off), each root stage and every stage
+/// downstream of it is its own sub-system, carrying the shared source part as
+/// [FireSystem.sourceEdgeIds] (its supply, never its kind), the legs of its
+/// own pumps and the discharge parts of its own stages. The header is the
+/// same hydraulic break a shared tank is ([isFireSystemBoundary]): neither
+/// pump room's pressure reaches the other's terminals. Any other system
+/// (one pump room, a series chain, an unreadable chain) is returned as is.
+List<FireSystem> splitFireSystemAtSharedSource(Network net, FireSystem system) {
+  final pumps = [
+    for (final n in net.nodes)
+      if (system.nodeIds.contains(n.id) &&
+          (n.component == NodeComponent.pump ||
+              n.component == NodeComponent.boosterSet))
+        n.id,
+  ]..sort();
+  if (pumps.length < 2) return [system];
+  final sets = fireParallelPumpSets(net, system, pumps);
+  final topo = fireSeriesPumpStages(net, system, sets);
+  if (topo == null) return [system];
+  final roots = [
+    for (var k = 0; k < topo.length; k++)
+      if (topo[k].upstream == null) k,
+  ];
+  if (roots.length < 2) return [system];
+  final pumpSet = pumps.toSet();
+  final dischargeEdgeIds = <String>{
+    for (final st in topo)
+      for (final e in st.discharge.edges) e.id,
+  };
+  final sourceEdgeIds = <String>{
+    for (final e in system.edges)
+      if (!pumpSet.contains(e.fromId) &&
+          !pumpSet.contains(e.toId) &&
+          !dischargeEdgeIds.contains(e.id))
+        e.id,
+  };
+  // A root pump's SUCTION leg (pump -> a node of the shared source part) is
+  // supply too: its service never decides the pump room's kind.
+  final sourceNodes = <String>{
+    for (final e in system.edges)
+      if (sourceEdgeIds.contains(e.id)) ...[e.fromId, e.toId],
+  };
+  final suctionLegIds = <String>{
+    for (final e in system.edges)
+      if (pumpSet.contains(e.fromId) != pumpSet.contains(e.toId) &&
+          sourceNodes.contains(
+              pumpSet.contains(e.fromId) ? e.toId : e.fromId))
+        e.id,
+  };
+  final out = <FireSystem>[];
+  for (final r in roots) {
+    final stages = <int>{r};
+    var grew = true;
+    while (grew) {
+      grew = false;
+      for (var k = 0; k < topo.length; k++) {
+        final up = topo[k].upstream;
+        if (up != null && stages.contains(up) && stages.add(k)) grew = true;
+      }
+    }
+    final ownPumps = {for (final k in stages) ...topo[k].pumpIds};
+    final ownDischarge = {
+      for (final k in stages)
+        for (final e in topo[k].discharge.edges) e.id,
+    };
+    final edges = [
+      for (final e in system.edges)
+        if (sourceEdgeIds.contains(e.id) ||
+            ownDischarge.contains(e.id) ||
+            ownPumps.contains(e.fromId) ||
+            ownPumps.contains(e.toId))
+          e,
+    ];
+    out.add(FireSystem(
+      {for (final e in edges) ...[e.fromId, e.toId]},
+      edges,
+      sourceEdgeIds: {
+        for (final e in edges)
+          if (sourceEdgeIds.contains(e.id) || suctionLegIds.contains(e.id))
+            e.id,
+      },
+    ));
+  }
+  return out;
+}
+
+/// Round 52 — the fire systems each RATED on its own pump: [fireSystems]
+/// (in their order), each split per independent pump room
+/// ([splitFireSystemAtSharedSource], in root-stage order). [fireSystems]
+/// itself stays the edge partition the sizer reads.
+List<FireSystem> fireRatingSystems(Network net) => [
+      for (final s in fireSystems(net)) ...splitFireSystemAtSharedSource(net, s),
+    ];
+
 /// Hazen–Williams friction of the SIZED index path from [pumpId] over the
 /// fire [system], in metres: Dijkstra on each pipe's friction
 /// `hf = 10.67 L Q^1.852 / (C^1.852 D^4.87)` at its sized flow and bore
@@ -304,6 +428,7 @@ double? fireIndexPathFrictionM({
   required double Function(NetEdge e) lengthOf,
   double hazenWilliamsC = kSprinklerBranchHazenC,
   FireTerminalKind terminals = FireTerminalKind.any,
+  Set<String>? targetIds,
 }) {
   if (!system.nodeIds.contains(pumpId)) return null;
   final adj = <String, List<NetEdge>>{};
@@ -391,7 +516,10 @@ double? fireIndexPathFrictionM({
           keep(n))
         n.id,
   };
-  final terminals0 = fixtures.isNotEmpty
+  // Round 52 — an explicit target set (a transfer pump's destination tank).
+  final terminals0 = targetIds != null
+      ? targetIds
+      : fixtures.isNotEmpty
       ? fixtures
       : {
           for (final MapEntry(key: n, value: es) in adj.entries)

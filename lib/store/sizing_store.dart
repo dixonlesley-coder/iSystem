@@ -1,6 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/fire_index_friction.dart' show fireSystems;
+import 'package:mechx_engine/sizing/fire_index_friction.dart' show fireRatingSystems;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
     show kJockeyFlowFraction;
 import 'package:mechx_engine/sizing/fire_standpipe.dart' show standpipeFlow;
@@ -359,7 +359,7 @@ final assumedFireJockeysProvider = Provider<Set<String>>(
       bore: (id) => sz[id]?.diameter.inMillimeters,
       parallelLegEdgeIds: parallelLegs);
   if (roles.jockey.isEmpty) return none;
-  final systems = fireSystems(net);
+  final systems = fireRatingSystems(net);
   final out = <String, FlowRate>{};
   for (final id in roles.jockey) {
     final sys = systems.where((x) => x.nodeIds.contains(id)).firstOrNull;

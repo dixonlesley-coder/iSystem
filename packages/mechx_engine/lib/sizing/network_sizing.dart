@@ -30,7 +30,7 @@ import 'drainage_advisory.dart' show effectiveDrainageSlope, laidGravitySlope;
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'ejector.dart' as ejector;
-import 'fire_index_friction.dart' show fireSystems;
+import 'fire_index_friction.dart' show fireSystems, isFireSystemBoundary;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
     show
@@ -3508,9 +3508,20 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     // flow) — never the 6.31 L/s alone (12 L/s through DN50 is ~6.1 m/s, above
     // the fire velocity cap). A hose-only sub-branch keeps the plain
     // Class II flow.
+    //
+    // Round 52 (regression-hydrant-ring-floored-at-other-systems-sprinkler-
+    // demand-through-tank) — the walk is DOWNSTREAM only: a storage tank is a
+    // wall (never entered, never a sprinkler node — a separate sprinkler pump
+    // drawing from the same ground tank is another system, Round 51), and an
+    // edge with a solved direction is followed only away from the node the
+    // walk stands on, so a ring walk can never turn back up to the pump room
+    // and its suction tank.
+    bool isTank(String id) => isFireSystemBoundary(net.nodeById(id));
     final sprinklerNodes = <String>{
       for (final e in net.edges)
-        if (e.service == ServiceType.fireSprinkler) ...[e.fromId, e.toId],
+        if (e.service == ServiceType.fireSprinkler)
+          for (final id in [e.fromId, e.toId])
+            if (!isTank(id)) id,
     };
     bool sprinklerDownstream(NetEdge e) {
       if (sprinklerNodes.isEmpty) return false;
@@ -3521,6 +3532,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               ? [e.fromId]
               : [e.fromId, e.toId];
       for (final start in starts) {
+        if (isTank(start)) continue;
         final seen = <String>{start};
         final st = [start];
         while (st.isNotEmpty) {
@@ -3528,7 +3540,11 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           if (sprinklerNodes.contains(cur)) return true;
           for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
             if (x.id == e.id) continue;
+            final xf = edgeFlowFrom[x.id];
+            // An oriented edge flowing INTO [cur] is upstream of it.
+            if ((xf == x.fromId || xf == x.toId) && xf != cur) continue;
             final o = x.fromId == cur ? x.toId : x.fromId;
+            if (isTank(o)) continue;
             if (seen.add(o)) st.add(o);
           }
         }
