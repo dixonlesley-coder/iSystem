@@ -2249,13 +2249,20 @@ _CircuitComputation _computeCircuit(
       rcd.required &&
       rcd.timeDelayed &&
       opts.earthingSystem == EarthingSystem.tt) {
-    final levels = opts.ttFeederRcd[c.feedsPanelId]?.rcdFeederLevelsBelow ?? 0;
-    if (!ttFeederRcdSelective(levels)) {
+    final basis = opts.ttFeederRcd[c.feedsPanelId];
+    final levels = basis?.rcdFeederLevelsBelow ?? 0;
+    final below = basis?.maxDownstreamMa ?? 0;
+    // Round 55 — judged against the real IΔn below (finals included).
+    final selective = below > 0
+        ? ttFeederRcdSelectiveAbove(rcd.ratingMa, below)
+        : ttFeederRcdSelective(levels);
+    if (!selective) {
+      final belowMa = below > 0 ? below : ttFeederRcdMa(levels - 1);
       warnings.add(ElectricalWarning(
         code: 'tt-rcd-not-selective',
         severity: WarningSeverity.warning,
         message: '${c.name}: TT feeder RCD at ${rcd.ratingMa} mA is not '
-            '≥ 3 × the ${ttFeederRcdMa(levels - 1)} mA feeder RCD below it '
+            '≥ 3 × the $belowMa mA RCD below it '
             '(the IΔn ladder is exhausted after $levels RCD feeder levels) — '
             'an earth fault downstream can trip it; flatten the distribution '
             'tree or rely on time-delay grading / an RCM.',
@@ -3409,6 +3416,11 @@ ElectricalSystemResult computeSystem(
     final subType = <String, RcdType?>{};
     final subLifeOnly = <String, bool?>{}; // null ⇒ no load way below
     final subLevels = <String, int>{};
+    // Round 55 — the largest IΔn directly below a feeder to each board (its
+    // own final RCDs and the next feeder RCDs down), and the IΔn the feeder
+    // to that board therefore takes (0 ⇒ no tripping RCD on it).
+    final subBelowMa = <String, int>{};
+    final feederMa = <String, int>{};
     RcdType? maxType(RcdType? a, RcdType? b) => a == null
         ? b
         : (b == null ? a : (rcdTypeRank(b) > rcdTypeRank(a) ? b : a));
@@ -3419,6 +3431,7 @@ ElectricalSystemResult computeSystem(
       var anyLoad = false;
       var allLife = true;
       var levels = 0;
+      var belowMa = 0;
       for (final c in panel.circuits) {
         final child = c.feedsPanelId;
         if (child != null) {
@@ -3436,8 +3449,10 @@ ElectricalSystemResult computeSystem(
           best = maxType(best, subType[child]);
           if (!c.lifeSafety && lo != true) {
             levels = math.max(levels, childLevels + 1);
+            belowMa = math.max(belowMa, feederMa[child] ?? 0);
           } else {
             levels = math.max(levels, childLevels);
+            belowMa = math.max(belowMa, subBelowMa[child] ?? 0);
           }
           continue;
         }
@@ -3445,6 +3460,14 @@ ElectricalSystemResult computeSystem(
         anyLoad = true;
         if (c.lifeSafety) continue;
         allLife = false;
+        // The final's own TT RCD (a VFD drive 300 mA, fixed motors 100 mA,
+        // else 30 / 100 mA — at most 100 mA, which already sets the 300 mA
+        // floor of the feeder ladder, so the design current is not needed).
+        belowMa = math.max(
+            belowMa,
+            ttFinalRcdMa(c.loadKind,
+                designCurrent: const Current(64),
+                hasVfd: c.starterType == StarterType.vfd));
         best = maxType(
             best,
             recommendedRcdType(c.loadKind,
@@ -3454,12 +3477,15 @@ ElectricalSystemResult computeSystem(
       subType[id] = best;
       subLifeOnly[id] = anyLoad ? allLife : null;
       subLevels[id] = levels;
+      subBelowMa[id] = belowMa;
+      feederMa[id] = belowMa > 0 ? ttFeederRcdMaAbove(belowMa) : 0;
     }
     for (final child in parentOf.keys) {
       ttFeederRcd[child] = (
         downstreamType: subType[child],
         rcdFeederLevelsBelow: subLevels[child] ?? 0,
         lifeSafetyOnly: subLifeOnly[child] == true,
+        maxDownstreamMa: subBelowMa[child] ?? 0,
       );
     }
   }
@@ -4688,7 +4714,24 @@ ElectricalSystemResult computeSystem(
     if (refused.isEmpty) return r;
     // Refusing keeps each listed way's load-sized MCB (raised OR merely
     // converted): its Zs limit returns to the curve multiple.
-    return sizeAll(floors, caps, refused);
+    final kept = sizeAll(floors, caps, refused);
+    // Round 55 (regression-mccb-refusal-keeps-mcb-that-also-fails-ads) — a
+    // way whose load-sized MCB fails the earth-fault loop TOO gains nothing
+    // from the refusal: the MCB swaps an adequate-kA MCCB for a device below
+    // the bus fault (a cascade warning / breaking-capacity error) on top of
+    // the unchanged ADS error, under a note claiming the MCB was kept because
+    // the MCCB would fail. Such a way keeps the MCCB and its ONE defect, the
+    // `ads-disconnection` error. Refusal only changes the way's own device
+    // (its cable and Zs are untouched), so the MCB verdict read here is the
+    // final one: one more pass is the fixed point.
+    final f2 = faultStudy(kept, project, profile, originFaultLevel: origin);
+    final helps = <String>{
+      for (final id in refused)
+        if (f2.circuits[id]?.adsOk != false) id,
+    };
+    if (helps.length == refused.length) return kept;
+    if (helps.isEmpty) return r;
+    return sizeAll(floors, caps, helps);
   }
 
   // No feeder needed lifting (every single-panel project, and any project whose

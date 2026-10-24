@@ -420,11 +420,39 @@ bool ttFeederRcdSelective(int rcdFeederLevelsBelow) =>
 ///   * [lifeSafetyOnly] — every load way in the sub-tree is life-safety: a
 ///     tripping RCD on the feeder would defeat their deliberate RCD omission
 ///     (a fire pump must not stop on an earth fault).
+///   * [maxDownstreamMa] — Round 55: the largest IΔn (mA) of the RCDs
+///     DIRECTLY below the feeder (its fed board's own non-life-safety final
+///     ways, [ttFinalRcdMa], and the feeder RCDs one level down — through a
+///     feeder carrying no tripping RCD, the RCDs under it). The feeder takes
+///     the first IΔn rung ≥ 3 × that ([ttFeederRcdMaAbove]); 0 ⇒ the level
+///     ladder above.
 typedef TtFeederRcdBasis = ({
   RcdType? downstreamType,
   int rcdFeederLevelsBelow,
   bool lifeSafetyOnly,
+  int maxDownstreamMa,
 });
+
+/// Round 55 (elec-convergence-7-tt-feeder-rcd-not-3x-above-vfd-finals) — the
+/// IΔn (mA) of a TT feeder RCD above RCDs whose largest IΔn is
+/// [maxDownstreamMa]: the first rung of the standard series
+/// (300 / 1000 / 3000 / 10000 mA) that is ≥ 3 × [maxDownstreamMa] (IEC
+/// 60364-5-53 §535.3), at least 300 mA. A feeder over 300 mA VFD final RCDs
+/// takes 1000 mA — the level-count ladder issued 300 mA over them (1 : 1).
+/// Past the ladder top it clamps at 10 000 mA (see
+/// [ttFeederRcdSelectiveAbove]). // VERIFY
+int ttFeederRcdMaAbove(int maxDownstreamMa) {
+  const ladder = [300, 1000, 3000, 10000];
+  for (final r in ladder) {
+    if (r >= 3 * maxDownstreamMa) return r;
+  }
+  return ladder.last;
+}
+
+/// Round 55 — true when a feeder RCD of [ratingMa] keeps the ≥ 3 × IΔn ratio
+/// above the largest RCD directly below it ([maxDownstreamMa]).
+bool ttFeederRcdSelectiveAbove(int ratingMa, int maxDownstreamMa) =>
+    maxDownstreamMa <= 0 || ratingMa >= 3 * maxDownstreamMa;
 
 /// Decide whether a circuit needs an RCD, at what sensitivity, and which type.
 /// [ttFeeder] (a TT feeder only) carries the fed sub-tree's topology — see
@@ -505,27 +533,35 @@ RcdSpec circuitRcd({
     final raised = down != null && rcdTypeRank(down) > rcdTypeRank(own);
     final type = raised ? down : own;
     final levels = ttFeeder?.rcdFeederLevelsBelow ?? 0;
-    final ma = ttFeederRcdMa(levels);
+    final below = ttFeeder?.maxDownstreamMa ?? 0;
+    final ma = below > 0 ? ttFeederRcdMaAbove(below) : ttFeederRcdMa(levels);
+    final selective = below > 0
+        ? ttFeederRcdSelectiveAbove(ma, below)
+        : ttFeederRcdSelective(levels);
+    final belowMa = below > 0 ? below : ttFeederRcdMa(levels - 1);
     final typeNote = raised
         ? ' Type ${_rcdTypeCode(type)}: a Type ${_rcdTypeCode(type)} device '
             'downstream (EV / VFD) — a lower type here would be blinded by its '
             'smooth DC residual current.'
         : '';
-    final reason = levels == 0
-        ? 'TT feeder — time-delayed (S-type) RCD for earth-fault protection, '
-            'selective above the downstream final RCDs (no ADS on the TT loop). '
-            '// VERIFY'
-        : !ttFeederRcdSelective(levels)
-            // Round 36 — the IΔn ladder is exhausted: never claim the ratio.
-            ? 'TT feeder — time-delayed RCD at $ma mA: the IΔn ladder is '
-                'exhausted, so ≥ 3 × discrimination above the '
-                '${ttFeederRcdMa(levels - 1)} mA feeder RCD below is NOT '
-                'achievable — rely on time-delay grading / an RCM, or flatten '
-                'the distribution tree. // VERIFY'
+    // Round 55 — the reason names the IΔn it is actually selective above:
+    // a 300 mA feeder over 300 mA VFD finals used to claim 'selective above
+    // the downstream final RCDs'.
+    final reason = !selective
+        // Round 36 — the IΔn ladder is exhausted: never claim the ratio.
+        ? 'TT feeder — time-delayed RCD at $ma mA: the IΔn ladder is '
+            'exhausted, so ≥ 3 × discrimination above the '
+            '$belowMa mA RCD below is NOT '
+            'achievable — rely on time-delay grading / an RCM, or flatten '
+            'the distribution tree. // VERIFY'
+        : (below > 0 ? below <= 100 : levels == 0)
+            ? 'TT feeder — time-delayed (S-type) RCD for earth-fault '
+                'protection, selective above the downstream final RCDs (no '
+                'ADS on the TT loop). // VERIFY'
             : 'TT feeder — time-delayed RCD at $ma mA, ≥ 3 × the '
-            '${ttFeederRcdMa(levels - 1)} mA time-delayed feeder RCD below it '
-            'and set to a LONGER delay than it (IEC 60364-5-53 §535.3 '
-            'discrimination; no ADS on the TT loop). // VERIFY';
+                '$belowMa mA RCD below it '
+                'and set to a LONGER delay than it (IEC 60364-5-53 §535.3 '
+                'discrimination; no ADS on the TT loop). // VERIFY';
     return RcdSpec(
       required: true,
       ratingMa: ma,

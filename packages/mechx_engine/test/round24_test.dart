@@ -527,7 +527,13 @@ void main() {
           ],
         );
 
-    test('Type B on both feeders; 1000 mA above the 300 mA below', () {
+    // Round 55 — re-derived: the DB pump is VFD-fed, so its own final RCD is
+    // 300 mA Type B (Round 53, `ttFinalRcdMa`); the feeder above it must be
+    // >= 3 x 300 = 900 mA -> the 1000 mA rung, and the MDP feeder above that
+    // >= 3 x 1000 -> 3000 mA (the level ladder issued 300 / 1000, i.e. 1 : 1
+    // over the drive's RCD).
+    test('Type B on both feeders; 3000 mA above 1000 mA above the 300 mA '
+        'VFD final', () {
       final sys = computeSystem(_p, threeTier());
       expect(_way(sys, 'SDP', 'ev').rcd.type, RcdType.b);
       expect(_way(sys, 'DB', 'pump').rcd.type, RcdType.b);
@@ -535,13 +541,16 @@ void main() {
       final upper = _way(sys, 'MDP', 'mf').rcd;
       expect(lower.type, RcdType.b);
       expect(upper.type, RcdType.b);
-      expect(lower.ratingMa, 300);
-      expect(upper.ratingMa, 1000);
-      // ≥ 3 × IΔn discrimination at every level (300 ≥ 3 × 100 / 30 mA
-      // finals; 1000 ≥ 3 × 300).
+      expect(_way(sys, 'DB', 'pump').rcd.ratingMa, 300);
+      expect(lower.ratingMa, 1000);
+      expect(upper.ratingMa, 3000);
+      // ≥ 3 × IΔn discrimination at every level (1000 ≥ 3 × 300 mA VFD
+      // final; 3000 ≥ 3 × 1000).
+      expect(lower.ratingMa >= 3 * 300, isTrue);
       expect(upper.ratingMa >= 3 * lower.ratingMa, isTrue);
       expect(upper.timeDelayed && lower.timeDelayed, isTrue);
-      expect(upper.reason, contains('≥ 3 × the 300 mA'));
+      expect(upper.reason, contains('≥ 3 × the 1000 mA'));
+      expect(lower.reason, contains('≥ 3 × the 300 mA'));
     });
 
     test('the sensitivity ladder', () {

@@ -475,12 +475,19 @@ Map<String, String> parallelStandbyPumps(
   final standby = <String>{};
   final jockey = <String>{};
   final assumed = <String>{};
+  // Round 55 (fire-convergence-7-jockey-role-depends-on-node-id-order) —
+  // the LARGEST incident bore ranks first; being off a mirrored leg only
+  // breaks a bore tie. A pump on strictly smaller pipe than a sibling (a
+  // jockey drawn on hand-picked DN25) is never the duty pump, whichever leg
+  // the sizer's first solve took as its tree leg: ranking the leg first made
+  // the jockey the duty (90 kW way) and a main pump the jockey (1.1 kW way)
+  // whenever the jockey's id sorted first.
   int rank(String a, String b) {
+    final d = boreOf(b).compareTo(boreOf(a));
+    if (d != 0) return d;
     final la = onLeg(a) ? 1 : 0;
     final lb = onLeg(b) ? 1 : 0;
     if (la != lb) return la - lb;
-    final d = boreOf(b).compareTo(boreOf(a));
-    if (d != 0) return d;
     return a.compareTo(b);
   }
 

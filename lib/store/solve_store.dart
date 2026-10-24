@@ -6,6 +6,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart'
     show headFromPressure, headLossHazenWilliams, pressureFromHead;
 import 'package:mechx_engine/network/duct_static.dart';
+import 'package:mechx_engine/network/hot_water_pressure.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
 import 'package:mechx_engine/network/zoning.dart';
@@ -61,8 +62,35 @@ Map<String, FlowRate> _supplyFlows(
   };
 }
 
+/// Round 55 (plumbing-hvac-convergence-5-hot-water-never-pressure-solved) —
+/// the hot-water field carried through each heater from a solved cold field
+/// ([solveHotWaterFromHeaters]). Empty with no hot-water network.
+HotWaterField _hotWaterField(Network net, Map<String, EdgeSizing> sizing,
+        ProjectState project, Map<String, Pressure> residual,
+        Map<String, Pressure> noFlow) =>
+    solveHotWaterFromHeaters(
+      net: net,
+      coldResidual: residual,
+      coldNoFlow: noFlow,
+      sizing: sizing,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+      targetResidual: _targetResidual,
+      mounting: project.mounting,
+      prvSetpoint: _prvSetpoint,
+    );
+
 /// UPFEED node-pressure solve (pump pushing up from a low plant). Null when the
 /// strategy is downfeed or there is no supply network.
+///
+/// Round 55 (plumbing-hvac-convergence-5-hot-water-never-pressure-solved) —
+/// the hot-water network is solved too, through each heater from the cold
+/// residual at its inlet ([solveHotWaterFromHeaters]): the field carries the
+/// hot nodes, and when a heater's inlet falls short of what its hot index
+/// fixture needs the source head is raised by that shortfall
+/// (`requiredPumpHead = max(cold critical, cold path to the heater + hot
+/// critical)`) and the cold field re-solved at it. A cold-only project is
+/// byte-identical.
 final solveProvider = Provider<PressureSolution?>((ref) {
   if (ref.watch(feedStrategyProvider) != FeedStrategy.upfeed) return null;
   final net = ref.watch(sizingNetworkProvider);
@@ -73,7 +101,27 @@ final solveProvider = Provider<PressureSolution?>((ref) {
   final source = _pickSource(net, edges, project.building,
       preferHighest: false, mounting: project.mounting);
   if (source == null) return null;
+  final cold = _coldUpfeed(net, sizing, project, source, edges);
+  final hot = _hotWaterField(net, sizing, project, cold.residualPressure,
+      cold.noFlowStaticPressure);
+  if (hot.isEmpty) return cold;
+  if (hot.shortfall.meters <= 1e-9) {
+    return mergeHotWaterField(cold, hot, targetResidual: _targetResidual);
+  }
+  final raised = Head(cold.requiredPumpHead.meters + hot.shortfall.meters);
+  final coldAtRaised = _coldUpfeed(net, sizing, project, source, edges,
+      moverHeads: {source: raised});
+  final hotAtRaised = _hotWaterField(net, sizing, project,
+      coldAtRaised.residualPressure, coldAtRaised.noFlowStaticPressure);
+  return mergeHotWaterField(coldAtRaised, hotAtRaised,
+      targetResidual: _targetResidual,
+      requiredPumpHead: raised,
+      hotGoverns: true);
+});
 
+PressureSolution _coldUpfeed(Network net, Map<String, EdgeSizing> sizing,
+    ProjectState project, String source, List<NetEdge> edges,
+    {Map<String, Head> moverHeads = const {}}) {
   return solvePressurized(
     net: net,
     service: kSupplyService,
@@ -93,8 +141,9 @@ final solveProvider = Provider<PressureSolution?>((ref) {
     // surface, never the meter's ceiling datum (the drawn pump's datum).
     sourceElevation:
         assumedPumpSourceElevation(net.nodeById(source), project.building),
+    moverHeads: moverHeads,
   );
-});
+}
 
 /// Round 33 (hydraulics-3-2) — the UPFEED field the drawn system actually
 /// DELIVERS: the same solve with every sized non-transfer mover
@@ -121,21 +170,14 @@ final upfeedDeliveredProvider = Provider<PressureSolution?>((ref) {
   final source = _pickSource(net, edges, project.building,
       preferHighest: false, mounting: project.mounting);
   if (source == null) return base;
-  return solvePressurized(
-    net: net,
-    service: kSupplyService,
-    sourceId: source,
-    edgeFlows: _supplyFlows(edges, sizing),
-    sizing: sizing,
-    calibrationBySheet: project.calibrations,
-    building: project.building,
-    targetResidual: _targetResidual,
-    mounting: project.mounting,
-    prvSetpoint: _prvSetpoint,
-    moverHeads: heads,
-    sourceElevation:
-        assumedPumpSourceElevation(net.nodeById(source), project.building),
-  );
+  final cold = _coldUpfeed(net, sizing, project, source, edges,
+      moverHeads: heads);
+  // Round 55 — the delivered hot-water field through each heater.
+  return mergeHotWaterField(
+      cold,
+      _hotWaterField(net, sizing, project, cold.residualPressure,
+          cold.noFlowStaticPressure),
+      targetResidual: _targetResidual);
 });
 
 /// mech-building-2 — upfeed DELIVERY nodes over the SNI fixture pressure
@@ -208,7 +250,7 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
       preferHighest: true, mounting: project.mounting);
   if (tank == null) return null;
 
-  return solveDownfeed(
+  final cold = solveDownfeed(
     net: net,
     service: kSupplyService,
     tankId: tank,
@@ -223,6 +265,13 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
     // Round 17 — a drawn PRV holds target + the floor-branch friction margin.
     prvSetpoint: _prvSetpoint,
   );
+  // Round 55 — the hot-water field through each heater (a roof-tank hotel's
+  // top-floor hot showers are usually the index fixtures).
+  return mergeHotWaterDownfeed(
+      cold,
+      _hotWaterField(net, sizing, project, cold.residualPressure,
+          cold.noFlowStaticPressure),
+      targetResidual: _targetResidual);
 });
 
 /// Round 22 (pressurized-3-3) — the DOWNFEED field the drawn system actually
@@ -248,7 +297,7 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
   final tank = _pickSource(net, edges, project.building,
       preferHighest: true, mounting: project.mounting);
   if (tank == null) return base;
-  return solveDownfeed(
+  final cold = solveDownfeed(
     net: net,
     service: kSupplyService,
     tankId: tank,
@@ -261,6 +310,12 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
     prvSetpoint: _prvSetpoint,
     moverHeads: heads,
   );
+  // Round 55 — the delivered hot-water field through each heater.
+  return mergeHotWaterDownfeed(
+      cold,
+      _hotWaterField(net, sizing, project, cold.residualPressure,
+          cold.noFlowStaticPressure),
+      targetResidual: _targetResidual);
 });
 
 /// Round 32 (binding-1) — the SNI 8153 MINIMUM residual a solve's critical
@@ -831,10 +886,20 @@ SupplyBooster? inlineSupplyBooster(
 Set<String> _supplyDeliveryNodes(Network net, Iterable<String> candidates,
     Map<String, EdgeSizing> sizing) {
   final incident = <String, List<NetEdge>>{};
+  final hotIncident = <String, List<NetEdge>>{};
   for (final e in net.edges) {
+    if (e.service == ServiceType.hotWater) {
+      (hotIncident[e.fromId] ??= []).add(e);
+      (hotIncident[e.toId] ??= []).add(e);
+    }
     if (e.service != kSupplyService) continue;
     (incident[e.fromId] ??= []).add(e);
     (incident[e.toId] ??= []).add(e);
+  }
+  // Round 55 — a hot-water node a mover serves through its heater (it has no
+  // cold pipe) is judged on its own hot pipes; a cold-only project has none.
+  for (final en in hotIncident.entries) {
+    incident.putIfAbsent(en.key, () => en.value);
   }
   final list = candidates.toList();
   if (list.isEmpty) return const {};
@@ -1031,6 +1096,9 @@ List<SupplyMover> supplyMovers(
       if (n.role == NodeRole.fixture) n.id,
   });
   final out = <SupplyMover>[];
+  // Round 55 — a mover that serves a water heater serves its hot-water
+  // network too (every hot draw-off enters through the heater's cold feed).
+  final heaters = hotWaterHeaters(net);
   final ids = [
     for (final n in net.nodes)
       if (n.component == NodeComponent.pump ||
@@ -1076,12 +1144,16 @@ List<SupplyMover> supplyMovers(
     if (flow.cubicMetersPerSecond <= 0) continue;
     final served = boosterServedNodes(net, id, inEdge ?? '',
         sizing: sizing, excludeEdgeIds: excludeEdgeIds);
+    final transfer = served.any((n) => _isStorageTank(net.nodeById(n)));
+    for (final h in heaters.entries) {
+      if (served.contains(h.key)) served.addAll(h.value.difference({h.key}));
+    }
     out.add((
       nodeId: id,
       inEdgeId: inEdge,
       flow: flow,
       served: served,
-      transfer: served.any((n) => _isStorageTank(net.nodeById(n))),
+      transfer: transfer,
     ));
   }
   return out;

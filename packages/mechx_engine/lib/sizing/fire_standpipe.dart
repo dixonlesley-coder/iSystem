@@ -23,7 +23,7 @@ import 'dart:math' as math;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart'
-    show EdgeKind, NetEdge, Network, ServiceType;
+    show EdgeKind, NetEdge, Network, NodeComponent, NodeRole, ServiceType;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show fireRatingSystems, fireSystems;
 import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
@@ -254,11 +254,23 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   // union, and a component counts when it holds a hydrant riser OR a hydrant
   // pipe tees off one of its nodes ABOVE its lowest floor (a sprinkler riser
   // teed only at its base off a hydrant header is no stack).
+  //
+  // Round 55 (regression-hydrant-cross-tie-adds-phantom-standpipe-stack) —
+  // the hydrant pipe teed off the sprinkler riser must reach a HOSE OUTLET
+  // (hydrant box / hose reel) of its own: a top-floor cross-tie from a
+  // hydrant stack to a sprinkler riser touched that riser above its base and
+  // counted it as a second stack (750 gpm and DN125 on a 500 gpm pump). The
+  // hydrant branch region reached from the node (hydrant edges only, never
+  // through a riser node or a plant) counts when it holds an outlet and
+  // touches NO other riser component — a pipe joining another stack is a
+  // cross-tie, not this riser's outlet.
   final edgeList = edges.toList();
-  final hydrantEnds = <String>{
-    for (final e in edgeList)
-      if (e.service == ServiceType.fireHydrant) ...[e.fromId, e.toId],
-  };
+  final hydrantAdj = <String, List<String>>{};
+  for (final e in edgeList) {
+    if (e.service != ServiceType.fireHydrant) continue;
+    (hydrantAdj[e.fromId] ??= []).add(e.toId);
+    (hydrantAdj[e.toId] ??= []).add(e.fromId);
+  }
   final risers = <NetEdge>[
     for (final e in edgeList)
       if ((e.service == ServiceType.fireHydrant ||
@@ -287,11 +299,43 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     lo[root] = math.min(lo[root] ?? f, f);
     hi[root] = math.max(hi[root] ?? f, f);
   }
+  final nodeById = {for (final n in net.nodes) n.id: n};
+  bool isHoseOutlet(String id) {
+    final n = nodeById[id];
+    return n != null &&
+        n.role == NodeRole.fixture &&
+        (n.component == NodeComponent.hydrantBox ||
+            n.component == NodeComponent.hoseReel);
+  }
+
+  // Does a hydrant branch leaving [start] (a node of riser component [root])
+  // reach an outlet of its own?
+  bool feedsOwnOutlet(String start, String root) {
+    var outlet = false;
+    final seen = <String>{start};
+    final queue = [start];
+    for (var i = 0; i < queue.length; i++) {
+      for (final o in hydrantAdj[queue[i]] ?? const <String>[]) {
+        if (!seen.add(o)) continue;
+        if (parent.containsKey(o)) {
+          // Another riser component: a cross-tie, never this riser's outlet.
+          if (find(o) != root) return false;
+          continue;
+        }
+        if (isHoseOutlet(o)) outlet = true;
+        if (nodeById[o]?.role == NodeRole.plant) continue;
+        queue.add(o);
+      }
+    }
+    return outlet;
+  }
+
   final isStack = <String>{};
   for (final id in parent.keys) {
     final root = find(id);
+    if (isStack.contains(root)) continue;
     if (hydrantRiserNodes.contains(id) ||
-        (hydrantEnds.contains(id) && (floorOf[id] ?? 0) > lo[root]!)) {
+        ((floorOf[id] ?? 0) > lo[root]! && feedsOwnOutlet(id, root))) {
       isStack.add(root);
     }
   }
