@@ -343,8 +343,10 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
         fireDrawn && firePumpDrawnDuty != null && !governingStaged
             ? ref.read(firePumpRatingProvider)
             : null,
+    // Round 54 — the jockey line of a staged system reads its ROOT stage's
+    // curve (the figure the drawn jockey's schedule row / MDP way carry).
     fireJockeyRating: fireDrawn && firePumpDrawnDuty != null && governingStaged
-        ? ref.read(firePumpRatingProvider)
+        ? governingFire!.jockeyRating
         : null,
     // Round 49 (regression-report-churn-not-per-system) — the over-pressure
     // line per over SPRINKLER-bearing system on ITS OWN pump: the very list

@@ -200,6 +200,29 @@ const Set<NodeComponent> kInlineDeviceComponents = {
 bool isInlineDeviceComponent(NodeComponent? c) =>
     c != null && kInlineDeviceComponents.contains(c);
 
+/// Round 54 (plumbing-hvac-convergence-4-downfeed-source-picks-top-storey-
+/// heater) — how plant [n] ranks as the GRAVITY SOURCE of a downfeed water
+/// network (lower is better): 0 a roof tank; 1 any other plant that is not an
+/// inline device and touches no hot-water pipe ([hotWaterNodeIds]); 2
+/// anything else — a plant on a hot-water pipe is a WATER HEATER (the
+/// inspector's untyped 'Source / tank' drawn per unit), which on the top
+/// storey sits at the roof datum exactly like a roof tank but feeds nothing
+/// by gravity. Ranked before elevation, so a node id never decides between a
+/// heater and the tank.
+int downfeedSourceRank(NetNode n, Set<String> hotWaterNodeIds) {
+  if (n.component == NodeComponent.roofTank) return 0;
+  if (isInlineDeviceComponent(n.component) || hotWaterNodeIds.contains(n.id)) {
+    return 2;
+  }
+  return 1;
+}
+
+/// The nodes a hot-water pipe of [net] touches (for [downfeedSourceRank]).
+Set<String> hotWaterNodeIdsOf(Network net) => {
+      for (final e in net.edges)
+        if (e.service == ServiceType.hotWater) ...[e.fromId, e.toId],
+    };
+
 /// Round 33 (hydraulics-3-1) — a DELIVERY fixture: a fixture-role node that
 /// is a real draw-off point (not a [isNonDemandTerminal]).
 bool isDeliveryFixture(NetNode? n) =>

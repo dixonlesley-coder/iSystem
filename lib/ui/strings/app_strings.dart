@@ -4582,6 +4582,15 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'TT feeder RCD not selective',
     'RCD feeder TT tidak selektif'
   ),
+  // Round 54 — the TT Ra x IΔn judge on the designed electrode.
+  'tt-rcd-touch-voltage': (
+    'TT RCD touch voltage above 50 V',
+    'Tegangan sentuh RCD TT di atas 50 V'
+  ),
+  'tt-earth-fault-unchecked': (
+    'TT earth-fault protection unverified',
+    'Proteksi gangguan tanah TT belum diverifikasi'
+  ),
   // Round 38.
   'feeder-neutral-overloaded': (
     'Feeder neutral overloaded',

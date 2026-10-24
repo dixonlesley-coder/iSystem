@@ -248,10 +248,28 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     return r;
   }
 
+  // Round 54 (regression-hydrant-standpipe-flow-lost-on-sprinkler-drawn-
+  // riser) — a combined riser drawn on the SPRINKLER service with hydrant
+  // outlets teed off it is a standpipe stack too: sprinkler risers join the
+  // union, and a component counts when it holds a hydrant riser OR a hydrant
+  // pipe tees off one of its nodes ABOVE its lowest floor (a sprinkler riser
+  // teed only at its base off a hydrant header is no stack).
+  final edgeList = edges.toList();
+  final hydrantEnds = <String>{
+    for (final e in edgeList)
+      if (e.service == ServiceType.fireHydrant) ...[e.fromId, e.toId],
+  };
   final risers = <NetEdge>[
-    for (final e in edges)
-      if (e.service == ServiceType.fireHydrant && e.kind == EdgeKind.riser) e,
+    for (final e in edgeList)
+      if ((e.service == ServiceType.fireHydrant ||
+              e.service == ServiceType.fireSprinkler) &&
+          e.kind == EdgeKind.riser)
+        e,
   ];
+  final hydrantRiserNodes = <String>{
+    for (final e in risers)
+      if (e.service == ServiceType.fireHydrant) ...[e.fromId, e.toId],
+  };
   for (final e in risers) {
     parent.putIfAbsent(e.fromId, () => e.fromId);
     parent.putIfAbsent(e.toId, () => e.toId);
@@ -269,6 +287,16 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     lo[root] = math.min(lo[root] ?? f, f);
     hi[root] = math.max(hi[root] ?? f, f);
   }
+  final isStack = <String>{};
+  for (final id in parent.keys) {
+    final root = find(id);
+    if (hydrantRiserNodes.contains(id) ||
+        (hydrantEnds.contains(id) && (floorOf[id] ?? 0) > lo[root]!)) {
+      isStack.add(root);
+    }
+  }
+  lo.removeWhere((r, _) => !isStack.contains(r));
+  if (lo.isEmpty) return 0;
   // cover[f] = number of stacks spanning the storey interval (f, f+1).
   final cover = <int, int>{};
   var best = 0;

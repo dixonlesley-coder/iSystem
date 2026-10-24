@@ -811,6 +811,7 @@ String _pickComponentRoot({
   Map<String, int> riserTopSpan = const {},
   Iterable<String> Function(String)? neighboursOf,
   Set<String>? ejectorPitIds,
+  Map<String, int> fireSourceHops = const {},
 }) {
   Iterable<String> neighbours(String id) =>
       neighboursOf?.call(id) ?? const <String>[];
@@ -972,6 +973,32 @@ String _pickComponentRoot({
     return plants.first;
   }
 
+  // Round 54 (regression-cross-service-fire-flow-depends-on-drawn-direction)
+  // — a FIRE fragment with no plant of its own (a combined riser drawn as
+  // sprinkler pipe off a hydrant pump discharge, a riser piece drawn on the
+  // other fire service) is fed where it joins the rest of the fire network
+  // nearest a fire SOURCE ([fireSourceHops]: hops from the nearest tank /
+  // pump over BOTH fire services). Rooting it at the leaf the run was DRAWN
+  // FROM made the pump train's size depend on which way the riser was drawn
+  // (a DN25 pump discharge under a 31.5 L/s pump). Hops, then id: never the
+  // drawing direction.
+  if (isFireService(service) && fireSourceHops.isNotEmpty) {
+    final entries = [
+      for (final id in component)
+        if (fireSourceHops.containsKey(id) &&
+            roleOf(id) != NodeRole.fixture &&
+            // An inline mover never roots (the plant rung above already
+            // took any rootable plant).
+            roleOf(id) != NodeRole.plant &&
+            !demandKeys.contains(id))
+          id,
+    ]..sort((a, b) {
+        final c = fireSourceHops[a]!.compareTo(fireSourceHops[b]!);
+        return c != 0 ? c : a.compareTo(b);
+      });
+    if (entries.isNotEmpty) return entries.first;
+  }
+
   int drawnRank(String id) => drawnFromIds.contains(id) ? 0 : 1;
   final supply = !gravity;
   // Round 17 (regression-ducted-ac-intake-phantom-fan-way) — a bare leaf
@@ -1094,6 +1121,46 @@ String _pickComponentRoot({
   if (hub != null) return hub;
   if (leaves.isNotEmpty) return ([...leaves]..sort()).first;
   return ([...component]..sort()).first;
+}
+
+/// Round 54 — hops from the nearest fire SOURCE (a plant on a fire edge that
+/// is not an inlet nor a mover: a ground / roof tank; the pumps / booster sets
+/// only when no such plant is drawn) to every
+/// node of the fire network, walking BOTH fire services (multi-source BFS).
+/// A drawing direction never enters it. Empty when no fire source is drawn.
+Map<String, int> fireSourceHops(Network net) {
+  final adj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (!isFireService(e.service)) continue;
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final out = <String, int>{};
+  final queue = <String>[];
+  // The storage / source plants first; a pump or booster set is a machine
+  // the water passes THROUGH, a source only when nothing else is drawn.
+  for (final movers in [false, true]) {
+    for (final id in (adj.keys.toList()..sort())) {
+      final n = net.nodeById(id);
+      if (n == null || n.role != NodeRole.plant) continue;
+      if (isSupplyInletComponent(n.component)) continue;
+      final mover = n.component == NodeComponent.pump ||
+          n.component == NodeComponent.boosterSet;
+      if (mover != movers) continue;
+      out[id] = 0;
+      queue.add(id);
+    }
+    if (queue.isNotEmpty) break;
+  }
+  for (var i = 0; i < queue.length; i++) {
+    final cur = queue[i];
+    for (final o in adj[cur] ?? const <String>[]) {
+      if (out.containsKey(o)) continue;
+      out[o] = out[cur]! + 1;
+      queue.add(o);
+    }
+  }
+  return out;
 }
 
 /// Round 30 (r2) — for each riser TOP of [service], the number of storeys
@@ -1299,6 +1366,9 @@ Map<String, String> serviceComponentRoots(
       ? _riserTopSpans(net, service, riserTops)
       : const <String, int>{};
 
+  final fireHops = isFireService(service)
+      ? fireSourceHops(net)
+      : const <String, int>{};
   final out = <String, String>{};
   final seen = <String>{};
   for (final start in nodes) {
@@ -1327,6 +1397,7 @@ Map<String, String> serviceComponentRoots(
       riserTopSpan: riserTopSpan,
       neighboursOf: (n) => adjacency[n] ?? const <String>[],
       ejectorPitIds: ejectorPitIdsFor(net, service),
+      fireSourceHops: fireHops,
     );
     for (final n in component) {
       out[n] = root;
@@ -1681,6 +1752,21 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   // A system's shared SOURCE part ([FireSystem.sourceEdgeIds]) is never
   // flagged: it carries the largest design flow of the rooms it supplies.
   final ratingSystems = fireRatingSystems(net);
+  // Round 54 — fire-source hops (both fire services) for the root of a
+  // plant-less fire fragment, and the bare nodes where a fire pipe changes
+  // service (a hydrant main continuing as sprinkler pipe): such a leaf is a
+  // service change, never an outlet.
+  final fireHops = fireSourceHops(net);
+  final fireServiceChangeNodes = () {
+    final h = <String>{}, sp = <String>{};
+    for (final e in net.edges) {
+      if (e.service == ServiceType.fireHydrant) h.addAll([e.fromId, e.toId]);
+      if (e.service == ServiceType.fireSprinkler) {
+        sp.addAll([e.fromId, e.toId]);
+      }
+    }
+    return h.intersection(sp);
+  }();
   // A system's TRANSFER destination (Round 53): the tank above its pumps
   // when it draws no terminal (GT -> TP -> riser -> break tank).
   double elevationOf(NetNode n) => building != null
@@ -1903,6 +1989,16 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         return false;
       }
       if (node?.role == NodeRole.plant) return false;
+      // Round 54 — a bare fire leaf where the pipe continues on the OTHER fire
+      // service (a hydrant pump discharge joining a sprinkler-drawn combined
+      // riser) is a service change: it drew a phantom hydrant-box flow.
+      if (isFireService(service) &&
+          node != null &&
+          node.role != NodeRole.fixture &&
+          node.component == null &&
+          fireServiceChangeNodes.contains(n)) {
+        return false;
+      }
       if (degree(n) == 1) return true;
       return node != null && node.role == NodeRole.fixture;
     }
@@ -1974,6 +2070,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           riserTopIds: riserTops,
           riserTopSpan: riserTopSpan,
           ejectorPitIds: ejectorPitIdsFor(net, service),
+          fireSourceHops: fireHops,
           neighboursOf: (n) => [
             for (final l
                 in adjacency[n] ?? const <({String edgeId, String other})>[])
@@ -3560,19 +3657,27 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     //
     // Round 53 — the stacks are counted inside the ring edge's own rating
     // system (a ring never adds another pump room's stacks).
+    //
+    // Round 54 (regression-cross-service-pass-skips-unoriented-and-mixed-
+    // ring) — the ring is found over BOTH fire services: a yard ring closed
+    // through sprinkler-drawn arms is the same ring main, and every arm of a
+    // cycle that holds a hydrant pipe carries the ring flow whatever service
+    // it was drawn on (its size used to follow one sprinkler pipe's drawn
+    // direction: DN125 vs DN100). A cycle of sprinkler pipe only (a gridded
+    // sprinkler system) is no hydrant ring.
     final onCycle = <String>{};
     final ringEdgesOf = <String, List<NetEdge>>{};
     {
       final seenNode = <String>{};
       for (final e0 in hydrantEdges) {
         if (seenNode.contains(e0.fromId)) continue;
-        // The connected hydrant component holding e0.
+        // The connected fire component (both services) holding e0.
         final compNodes = <String>{e0.fromId};
         final compEdges = <String, NetEdge>{};
         final stack = [e0.fromId];
         while (stack.isNotEmpty) {
           final cur = stack.removeLast();
-          for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+          for (final x in fireAdj[cur] ?? const <NetEdge>[]) {
             compEdges[x.id] = x;
             final o = x.fromId == cur ? x.toId : x.fromId;
             if (compNodes.add(o)) stack.add(o);
@@ -3582,6 +3687,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         if (compEdges.length <= compNodes.length - 1) continue; // a tree
         final ids = compEdges.keys.toList()..sort();
         final comp = [for (final id in ids) compEdges[id]!];
+        final cyc = <String>{};
         for (final id in ids) {
           final e = compEdges[id]!;
           if (e.fromId == e.toId) continue;
@@ -3591,7 +3697,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           var joined = false;
           while (st.isNotEmpty && !joined) {
             final cur = st.removeLast();
-            for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+            for (final x in fireAdj[cur] ?? const <NetEdge>[]) {
               if (x.id == e.id) continue;
               final o = x.fromId == cur ? x.toId : x.fromId;
               if (o == e.toId) {
@@ -3601,10 +3707,36 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               if (reach.add(o)) st.add(o);
             }
           }
-          if (joined) {
-            onCycle.add(id);
-            ringEdgesOf[id] = comp;
+          if (joined) cyc.add(id);
+        }
+        // Group the cycle edges by shared nodes; a group is a hydrant ring
+        // only when it holds a hydrant pipe.
+        final groupOf = <String, int>{};
+        var g = 0;
+        for (final id in ids) {
+          if (!cyc.contains(id) || groupOf.containsKey(id)) continue;
+          final st = [id];
+          groupOf[id] = g;
+          while (st.isNotEmpty) {
+            final x = compEdges[st.removeLast()]!;
+            for (final end in [x.fromId, x.toId]) {
+              for (final y in fireAdj[end] ?? const <NetEdge>[]) {
+                if (!cyc.contains(y.id) || groupOf.containsKey(y.id)) continue;
+                groupOf[y.id] = g;
+                st.add(y.id);
+              }
+            }
           }
+          g++;
+        }
+        final hydrantGroups = <int>{
+          for (final id in cyc)
+            if (compEdges[id]!.service == ServiceType.fireHydrant) groupOf[id]!,
+        };
+        for (final id in cyc) {
+          if (!hydrantGroups.contains(groupOf[id])) continue;
+          onCycle.add(id);
+          ringEdgesOf[id] = comp;
         }
       }
     }
@@ -3653,6 +3785,27 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             ? sprinklerDemandCap
             : flow;
 
+    // The ring flow of a hydrant-ring edge [e] (either service): the
+    // standpipe flow of the stacks on its fire component inside its own
+    // rating system, never above the caller's design flow.
+    FlowRate ringFlow(NetEdge e) {
+      final home = homeOf(e);
+      final homeIds = home == null ? null : edgeIdsOf[home];
+      final ring = ringEdgesOf[e.id]!;
+      final stacks = math.max(
+          1,
+          parallelStandpipeCount(net, [
+            for (final x in ring)
+              if (homeIds == null || homeIds.contains(x.id)) x,
+          ]));
+      final served = standpipeFlow(stacks);
+      return withSprinklerFloor(
+          e,
+          served.cubicMetersPerSecond < hydrantDesignFlow.cubicMetersPerSecond
+              ? served
+              : hydrantDesignFlow);
+    }
+
     for (final e in hydrantEdges) {
       final q = allFlows[e.id];
       if (q == null) continue;
@@ -3680,19 +3833,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         continue;
       }
       if (onCycle.contains(e.id)) {
-        final ring = ringEdgesOf[e.id]!;
-        final stacks = math.max(
-            1,
-            parallelStandpipeCount(net, [
-              for (final x in ring)
-                if (homeHydrant == null || homeHydrant.contains(x.id)) x,
-            ]));
-        final served = standpipeFlow(stacks);
-        allFlows[e.id] = withSprinklerFloor(
-            e,
-            served.cubicMetersPerSecond < hydrantDesignFlow.cubicMetersPerSecond
-                ? served
-                : hydrantDesignFlow);
+        allFlows[e.id] = ringFlow(e);
         continue;
       }
       final trunk = e.kind == EdgeKind.riser ||
@@ -3733,6 +3874,61 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         }
       }
       allFlows[e.id] = withSprinklerFloor(e, flow);
+    }
+    // Round 54 (regression-hydrant-standpipe-flow-lost-on-sprinkler-drawn-
+    // riser) — the standpipe rules above read the HYDRANT service only, so a
+    // combined riser drawn as sprinkler pipe (hydrant boxes teed off it at
+    // every floor) kept its 12 L/s remote-area cap — and the pump suction /
+    // discharge with it (DN65 under a 31.5 L/s rating, ~9.5 m/s). Every fire
+    // pipe of a hydrant-bearing rating system, either service, that carries
+    // hydrant demand downstream of it is a trunk candidate: on a hydrant ring
+    // it carries the ring flow; otherwise, with two or more hydrant outlets
+    // downstream (or as a riser with one), it carries the standpipe flow of
+    // the stacks downstream of it (Class II: the 100 gpm hose-station flow),
+    // never above the caller's design flow, floored at the sprinkler demand
+    // when sprinkler pipe hangs below it. Only ever RAISES a flow. A source
+    // edge (a header shared by pump rooms) is left to the source rule below.
+    bool isHydrantOutlet(String id) {
+      final c = net.nodeById(id)?.component;
+      return c == NodeComponent.hydrantBox || c == NodeComponent.hoseReel;
+    }
+
+    for (final e in fireEdges) {
+      final q = allFlows[e.id];
+      if (q == null) continue;
+      final home = homeOf(e);
+      if (home == null || !home.hasHydrant) continue;
+      final classII = ownersOf[e.id]!.every(isClassII);
+      FlowRate target;
+      if (onCycle.contains(e.id)) {
+        if (e.service == ServiceType.fireHydrant) continue; // done above
+        target = classII ? classIIFlow : ringFlow(e);
+      } else {
+        final down = downstreamOf(e, scope: edgeIdsOf[home], unoriented: true);
+        final outlets = <String>{
+          for (final x in [e, ...down])
+            for (final end in [x.fromId, x.toId])
+              if (isHydrantOutlet(end)) end,
+        };
+        final trunk = outlets.length >= 2 ||
+            (e.kind == EdgeKind.riser && outlets.isNotEmpty);
+        if (!trunk) continue;
+        if (classII) {
+          target = classIIFlow;
+        } else {
+          final stacks =
+              math.max(1, parallelStandpipeCount(net, [e, ...down]));
+          final served = standpipeFlow(stacks);
+          target = served.cubicMetersPerSecond <
+                  hydrantDesignFlow.cubicMetersPerSecond
+              ? served
+              : hydrantDesignFlow;
+        }
+      }
+      target = withSprinklerFloor(e, target);
+      if (target.cubicMetersPerSecond > q.cubicMetersPerSecond + 1e-12) {
+        allFlows[e.id] = target;
+      }
     }
   }
   // Round 53 (regression-transfer-pump-rated-class-i-flow / fire-
@@ -3783,7 +3979,19 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     FlowRate? best;
     for (final s in ownersOf[e.id] ?? const <FireSystem>[]) {
       if (!s.sourceEdgeIds.contains(e.id)) continue;
-      final q = designFlowOf(s);
+      var q = designFlowOf(s);
+      // Round 54 (regression-source-edge-override-above-caller-hydrant-flow)
+      // — [hydrantDesignFlow] is the ceiling of every hydrant-bearing figure
+      // the sizer writes: a shared suction header / suction leg never carries
+      // more than the caller's design flow (it carried 47.3 L/s under a pump
+      // whose discharge the same caller capped at 31.5 L/s). A sprinkler-only
+      // room keeps its own remote-area demand uncapped.
+      if (q != null &&
+          hydrantDesignFlow != null &&
+          s.hasHydrant &&
+          q.cubicMetersPerSecond > hydrantDesignFlow.cubicMetersPerSecond) {
+        q = hydrantDesignFlow;
+      }
       if (q != null &&
           (best == null ||
               q.cubicMetersPerSecond > best.cubicMetersPerSecond)) {
@@ -3823,7 +4031,10 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         for (final s in owners) ...edgeIdsOf[s]!,
       };
       var best = q.cubicMetersPerSecond;
-      for (final x in downstreamOf(e, scope: scope.isEmpty ? null : scope)) {
+      // Round 54 — undecided (unoriented) pipes are walked too, so a fire
+      // pipe the tree left unoriented never hides the demand beyond it.
+      for (final x in downstreamOf(e,
+          scope: scope.isEmpty ? null : scope, unoriented: true)) {
         if (x.service == e.service) continue;
         final qx = allFlows[x.id]?.cubicMetersPerSecond ?? 0;
         if (qx > best + 1e-12) best = qx;

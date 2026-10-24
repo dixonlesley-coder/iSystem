@@ -609,8 +609,9 @@ final waterVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
 /// entry (never a ground-floor fixture, which used to win on elevation alone
 /// and route the solve through its own branch).
 ///
-/// DOWNFEED — the highest plant (the roof tank), ties by id; else the highest
-/// node, ties to a leaf, then id.
+/// DOWNFEED — the roof tank, else a non-heater plant ([downfeedSourceRank]),
+/// the highest first, ties by id; else the highest node, ties to a leaf, then
+/// id.
 String? _pickSource(
   Network net,
   List<NetEdge> edges,
@@ -669,10 +670,16 @@ String? _pickSource(
     return sizerRoot;
   }
 
-  // DOWNFEED 1. An explicit plant node wins (the highest, ties by id).
+  // DOWNFEED 1. An explicit plant node wins: a roof tank first, then a plant
+  // that is no water heater ([downfeedSourceRank] — Round 54: a top-storey
+  // heater ties the roof tank at the roof datum and used to win on its id),
+  // then the highest, ties by id.
   if (plants.isNotEmpty) {
+    final hot = hotWaterNodeIdsOf(net);
     plants.sort((a, b) {
-      final c = elev(b).compareTo(elev(a));
+      var c = downfeedSourceRank(a, hot).compareTo(downfeedSourceRank(b, hot));
+      if (c != 0) return c;
+      c = elev(b).compareTo(elev(a));
       return c != 0 ? c : a.id.compareTo(b.id);
     });
     return plants.first.id;
@@ -1839,8 +1846,13 @@ final downfeedTankElevationProvider = Provider<Length?>((ref) {
   // Round 26 — a PLANT above the top fixture (the invariant's wording): a
   // bare top-storey main junction (the highest node when no plant is drawn)
   // is not a tank, whatever its ceiling elevation.
-  final isGravityTank = node.component == NodeComponent.roofTank ||
-      (node.role == NodeRole.plant && elev.meters > topFixture.meters);
+  // Round 54 — a water heater (a plant on a hot-water pipe) above the top
+  // fixture is no gravity tank ([downfeedSourceRank]).
+  final rank = downfeedSourceRank(node, hotWaterNodeIdsOf(net));
+  final isGravityTank = rank == 0 ||
+      (node.role == NodeRole.plant &&
+          rank == 1 &&
+          elev.meters > topFixture.meters);
   return isGravityTank ? elev : null;
 });
 

@@ -558,6 +558,8 @@ FlowRate? fireTransferFedFlow(
 /// reaches has no length (an uncalibrated run — its friction is unknown, so
 /// the caller keeps the fixed allowance). C defaults to the clean-steel
 /// sprinkler branch figure ([kSprinklerBranchHazenC] = 120, `// VERIFY`).
+/// [frictionByTerminalOut], when given, receives the friction to every
+/// terminal the pump reaches (Round 54).
 /// Round 37 — which fire terminals an index path may end at: every fixture
 /// ([any], the legacy rule), hydrant outlets only (the HOSE basis) or
 /// sprinkler heads only (the sprinkler basis).
@@ -572,6 +574,7 @@ double? fireIndexPathFrictionM({
   double hazenWilliamsC = kSprinklerBranchHazenC,
   FireTerminalKind terminals = FireTerminalKind.any,
   Set<String>? targetIds,
+  Map<String, double>? frictionByTerminalOut,
 }) {
   if (!system.nodeIds.contains(pumpId)) return null;
   final adj = <String, List<NetEdge>>{};
@@ -672,6 +675,11 @@ double? fireIndexPathFrictionM({
   for (final t in terminals0) {
     final v = d[t];
     if (v == null) continue;
+    // Round 54 — the friction to EACH terminal, for a caller that must
+    // judge a terminal's own static head against its own friction (the
+    // gravity verdict): never pair the top terminal's lift with a far low
+    // terminal's friction.
+    frictionByTerminalOut?[t] = v;
     if (worst == null || v > worst) worst = v;
   }
   return worst;

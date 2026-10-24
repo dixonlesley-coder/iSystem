@@ -50,6 +50,8 @@ import 'control/starter.dart'
         effectiveStarterType;
 import 'control/starting.dart' show startingAnalysis;
 import 'diversity_library.dart' show diversityLibraryVerifyItems;
+import 'earthing.dart'
+    show EarthingSystem, kTtTouchVoltageLimitV, ttRcdTouchVoltageOk;
 import 'electrode.dart' show ElectrodeDesign, designElectrode;
 import 'enclosure.dart'
     show EnclosureResult, estimateEnclosure, switchgearLossW;
@@ -622,6 +624,7 @@ AdvancedStudy computeAdvancedStudy(
     verifyItems: verify,
     warnings: [
       ...gensetBackupWarnings(project, sys),
+      ...ttRcdTouchVoltageWarnings(project, sys, electrode),
       ...starterWarnings,
       // Round 40 — a DECLARED transformer (or the most loaded section of a
       // dual service) whose 80 %-loaded rating is below what it carries was
@@ -665,6 +668,59 @@ AdvancedStudy computeAdvancedStudy(
 // ───────────────────────────────────────────────────────────────────────────
 // Helpers.
 // ───────────────────────────────────────────────────────────────────────────
+
+/// Round 54 (regression-tt-rcd-touch-voltage-judge-dead) — JUDGE-ONLY: the TT
+/// RCD fault-protection condition Ra × IΔn <= 50 V (IEC 60364-4-41 411.5.3)
+/// against the DESIGNED electrode's achieved resistance ([electrode], from the
+/// project soil resistivity): every TT way that requires an RCD whose IΔn the
+/// electrode cannot meet raises `tt-rcd-touch-voltage` (never re-rated).
+/// Without a soil resistivity there is no site Ra: a single INFO
+/// `tt-earth-fault-unchecked` says the condition is unverified — it is never
+/// judged against the 5 ohm target, which passes every IΔn the engine mints.
+List<ElectricalWarning> ttRcdTouchVoltageWarnings(
+  ElectricalProject project,
+  ElectricalSystemResult sys,
+  ElectrodeDesign? electrode,
+) {
+  if (project.earthingSystem != EarthingSystem.tt) return const [];
+  final rcdWays = <(String, ElectricalCircuitResult)>[
+    for (final pid in sys.order)
+      if (sys.panels[pid] case final p?)
+        for (final c in p.circuits)
+          if (c.rcd.required) (pid, c),
+  ];
+  if (rcdWays.isEmpty) return const [];
+  if (electrode == null) {
+    return const [
+      ElectricalWarning(
+        code: 'tt-earth-fault-unchecked',
+        severity: WarningSeverity.info,
+        message: 'TT earth-fault protection unverified: enter the site soil '
+            'resistivity (Service & Earthing) so the earth electrode is '
+            'designed and each RCD is judged against Ra x IΔn <= 50 V '
+            '(IEC 60364-4-41 411.5.3).',
+      ),
+    ];
+  }
+  final ra = electrode.achieved.ohms;
+  final out = <ElectricalWarning>[];
+  for (final (pid, c) in rcdWays) {
+    if (ttRcdTouchVoltageOk(ra, c.rcd.ratingMa)) continue;
+    final v = ra * c.rcd.ratingMa / 1000.0;
+    out.add(ElectricalWarning(
+      code: 'tt-rcd-touch-voltage',
+      severity: WarningSeverity.warning,
+      message: '${c.name}: RCD ${c.rcd.ratingMa} mA x earth electrode '
+          '${ra.toStringAsFixed(1)} ohm = ${v.toStringAsFixed(1)} V exceeds '
+          'the ${kTtTouchVoltageLimitV.toStringAsFixed(0)} V touch-voltage '
+          'limit (IEC 60364-4-41 411.5.3): lower the electrode resistance '
+          'or the RCD IΔn.',
+      panelId: pid,
+      circuitId: c.circuitId,
+    ));
+  }
+  return out;
+}
 
 /// Round 40 — `root-incomer-exceeds-transformer-flc`: each service-entrance
 /// board on a DECLARED transformer service whose incomer rating exceeds the
