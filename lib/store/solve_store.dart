@@ -274,6 +274,19 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
       targetResidual: _targetResidual);
 });
 
+/// Round 56 — the head each sized NON-transfer supply mover develops
+/// ([supplyMoverDutiesProvider] less [transferPumpNodeIdsProvider]): the ONE
+/// map the delivered downfeed field ([downfeedDeliveredProvider]) and the
+/// zone table's datum ([effectiveDownfeedDatumProvider]) apply.
+final downfeedMoverHeadsProvider = Provider<Map<String, Head>>((ref) {
+  final transfers = ref.watch(transferPumpNodeIdsProvider);
+  return <String, Head>{
+    for (final e in ref.watch(supplyMoverDutiesProvider).entries)
+      if (!transfers.contains(e.key) && e.value.head.meters > 0)
+        e.key: e.value.head,
+  };
+});
+
 /// Round 22 (pressurized-3-3) — the DOWNFEED field the drawn system actually
 /// delivers: the gravity solve with every sized non-transfer mover
 /// ([supplyMoverDutiesProvider]) adding its head to what it serves. With no
@@ -283,12 +296,7 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
 final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
   final base = ref.watch(downfeedProvider);
   if (base == null) return null;
-  final transfers = ref.watch(transferPumpNodeIdsProvider);
-  final heads = <String, Head>{
-    for (final e in ref.watch(supplyMoverDutiesProvider).entries)
-      if (!transfers.contains(e.key) && e.value.head.meters > 0)
-        e.key: e.value.head,
-  };
+  final heads = ref.watch(downfeedMoverHeadsProvider);
   if (heads.isEmpty) return base;
   final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
@@ -1881,7 +1889,7 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
     building: project.building,
     mounting: project.mounting,
     maxStaticPressure: effective,
-    tankElevation: ref.watch(downfeedTankElevationProvider),
+    tankElevation: ref.watch(effectiveDownfeedDatumProvider),
     maxFixtureStatic: maxFix,
     lowestServedFloor: lowest ?? 0,
   );
@@ -1928,6 +1936,64 @@ final downfeedTankElevationProvider = Provider<Length?>((ref) {
   return isGravityTank ? elev : null;
 });
 
+/// Round 56 (plumbing-hvac-convergence-6-zone-table-ignores-drawn-downfeed-
+/// booster) — the gravity DATUM the downfeed zone table hangs from: the tank
+/// elevation ([downfeedTankElevationProvider]) PLUS the head of every sized
+/// non-transfer mover ([downfeedMoverHeadsProvider]) the tank's whole
+/// delivery passes through — a booster at the roof-tank outlet (RT -> BP ->
+/// riser) raises the static of every floor it serves, exactly as the
+/// delivered field ([downfeedDeliveredProvider]) applies it, so the zone
+/// table and the solve can never disagree (golden rule 5). A booster serving
+/// only part of the building (some delivery node is reached from the tank
+/// without passing it) leaves the datum unchanged. Null exactly when
+/// [downfeedTankElevationProvider] is (the gravity-source predicate is
+/// untouched); no mover drawn ⇒ that elevation verbatim.
+final effectiveDownfeedDatumProvider = Provider<Length?>((ref) {
+  final tankElevation = ref.watch(downfeedTankElevationProvider);
+  if (tankElevation == null) return null;
+  final heads = ref.watch(downfeedMoverHeadsProvider);
+  if (heads.isEmpty) return tankElevation;
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  if (edges.isEmpty) return tankElevation;
+  final tank = _pickSource(net, edges, project.building,
+      preferHighest: true, mounting: project.mounting);
+  if (tank == null) return tankElevation;
+  final adj = <String, List<String>>{};
+  for (final e in edges) {
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final delivery = <String>{
+    for (final id in adj.keys)
+      if (net.nodeById(id) case final n?
+          when n.role == NodeRole.fixture && !isNonDemandTerminal(n.component))
+        id,
+  };
+  if (delivery.isEmpty) return tankElevation;
+  // Does the tank reach any delivery node without passing [moverId]?
+  bool bypassed(String moverId) {
+    final seen = <String>{tank, moverId};
+    final queue = [tank];
+    for (var i = 0; i < queue.length; i++) {
+      for (final o in adj[queue[i]] ?? const <String>[]) {
+        if (!seen.add(o)) continue;
+        if (delivery.contains(o)) return true;
+        queue.add(o);
+      }
+    }
+    return false;
+  }
+
+  var lift = 0.0;
+  for (final e in heads.entries) {
+    if (e.key == tank || !adj.containsKey(e.key)) continue;
+    if (!bypassed(e.key)) lift += e.value.meters;
+  }
+  return lift > 0 ? Length(tankElevation.meters + lift) : tankElevation;
+});
+
 /// Per-zone PRV static profile (top residual → bottom static, within-limit) for
 /// a downfeed system holding [_targetResidual] at each zone top.
 final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
@@ -1939,7 +2005,7 @@ final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
     zones: zones,
     prvSetpoint: _prvSetpoint,
     maxStatic: const SniProfile().maxFixtureStaticPressure.value,
-    tankElevation: ref.watch(downfeedTankElevationProvider),
+    tankElevation: ref.watch(effectiveDownfeedDatumProvider),
   );
 });
 

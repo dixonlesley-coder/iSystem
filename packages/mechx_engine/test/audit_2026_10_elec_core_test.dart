@@ -186,6 +186,10 @@ void main() {
                   cosPhi: 0.85,
                   length: Length(manualM),
                   loadPos: loadPos,
+                  // Round 56 — the load-sized 2.5 mm2 pinned (an override
+                  // disables the ADS conductor growth), so this fixture keeps
+                  // judging the geo-length Zs it was built for.
+                  cableOverrideMm2: 2.5,
                 ),
               ],
             ),

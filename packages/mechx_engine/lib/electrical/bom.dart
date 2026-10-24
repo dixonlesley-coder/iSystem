@@ -24,7 +24,7 @@ import '../standards/puil.dart'
     show BreakerClass, BreakerClassCode, BreakerCurve;
 import 'catalog.dart';
 import 'earthing.dart' show RcdType, rcdTypeRank;
-import 'enclosure.dart' show EnclosureResult;
+import 'enclosure.dart' show EnclosureResult, maxInternalTempRiseK;
 import 'fault.dart'
     show
         FaultStudyResult,
@@ -559,8 +559,19 @@ List<BomLine> _panelLines(
     final dims = '${_fmt(enclosure.widthMm.roundToDouble())}x'
         '${_fmt(enclosure.heightMm.roundToDouble())}x'
         '${_fmt(enclosure.depthMm.roundToDouble())}';
+    // Round 56 (elec-convergence-8-enclosure-thermal-fail-silent-and-priced)
+    // — an envelope its own IEC 60890 check fails is named on the line (and,
+    // the description differing, keyed apart on consolidation): never priced
+    // as if it were adequate.
+    final hot = !enclosure.withinTempLimit || !enclosure.tempRiseK.isFinite;
+    final riseText = enclosure.tempRiseK.isFinite
+        ? '${enclosure.tempRiseK.toStringAsFixed(0)} K'
+        : 'n/a';
+    final hotNote = hot
+        ? ' (temp rise $riseText > ${_fmt(maxInternalTempRiseK)} K, verify)'
+        : '';
     lines.add(BomLine(
-      description: 'Enclosure $dims mm ${enclosure.ip} — $pname',
+      description: 'Enclosure $dims mm ${enclosure.ip}$hotNote — $pname',
       location: pname,
       qty: 1,
       category: PartCategory.enclosure,

@@ -441,7 +441,9 @@ double gensetPhaseDemandVa(
 /// Round 55 — [withLargestMachine] floors each board's line currents at its
 /// largest machine's undiversified running current
 /// ([ElectricalPanelResult.largestDownstreamRunA]): a machine never
-/// diversifies against itself on the alternator either.
+/// diversifies against itself on the alternator either. Round 56 — only on
+/// the lines that machine loads
+/// ([ElectricalPanelResult.largestDownstreamRunLinesA]).
 double alternatorLineDemandVa(ElectricalProject project,
     ElectricalSystemResult sys, Iterable<String> panelIds,
     {bool withLargestMachine = false}) {
@@ -481,10 +483,16 @@ double alternatorLineDemandVa(ElectricalProject project,
       // per-phase sum is a function of the document alone.
       final b = r.phaseBalance;
       final d = r.diversityFactor;
-      final floor = withLargestMachine ? r.largestDownstreamRunA : 0.0;
-      l1 += math.max(b.l1 * d, floor);
-      l2 += math.max(b.l2 * d, floor);
-      l3 += math.max(b.l3 * d, floor);
+      // Round 56 — the machine floors only the LINES it loads (a 1φ machine
+      // its own line, a 3φ machine all three), never all three lines at a
+      // single-phase machine's current.
+      final m = r.largestDownstreamRunA;
+      final v = withLargestMachine
+          ? (r.largestDownstreamRunLinesA ?? [m, m, m])
+          : const <double>[0, 0, 0];
+      l1 += math.max(b.l1 * d, v[0]);
+      l2 += math.max(b.l2 * d, v[1]);
+      l3 += math.max(b.l3 * d, v[2]);
       continue;
     }
     // Round 45 — a 1φ UPS draws its input from one line: × [kUpsInputFactor].

@@ -54,7 +54,12 @@ import 'earthing.dart'
     show EarthingSystem, kTtTouchVoltageLimitV, ttRcdTouchVoltageOk;
 import 'electrode.dart' show ElectrodeDesign, designElectrode;
 import 'enclosure.dart'
-    show EnclosureResult, estimateEnclosure, switchgearLossW;
+    show
+        EnclosureResult,
+        Ventilation,
+        estimateEnclosure,
+        maxInternalTempRiseK,
+        switchgearLossW;
 import 'fault.dart'
     show
         FaultStudyResult,
@@ -62,6 +67,7 @@ import 'fault.dart'
         estimatedServiceFaultLevelA,
         faultStudy,
         maxEstimatedServiceFaultKa,
+        onSiteSourceFaultA,
         serviceFaultEstimateVerifyItems,
         solvedRunLengthM;
 import 'genset_backup.dart'
@@ -76,7 +82,12 @@ import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
 import 'metering.dart' show MeteringSpec, meterFor;
 import 'model.dart'
-    show ElectricalCircuit, ElectricalPanel, ElectricalProject, ElectricalSystem;
+    show
+        ElectricalCircuit,
+        ElectricalPanel,
+        ElectricalProject,
+        ElectricalSystem,
+        SupplyKind;
 import 'panel_results.dart'
     show
         ElectricalCircuitResult,
@@ -87,7 +98,7 @@ import 'panel_results.dart'
 import 'power_factor.dart'
     show PowerFactorResult, isDriveFedCircuit, powerFactorCorrection;
 import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
-import 'sources.dart' show GensetMotor;
+import 'sources.dart' show GensetMotor, sizeGenerator;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
     show
@@ -197,6 +208,12 @@ class AdvancedStudy {
   /// the ONE electrical warning surface by the app. Empty by default.
   final List<ElectricalWarning> warnings;
 
+  /// Round 56 (elec-convergence-8-ads-never-judged-on-standby-genset-source)
+  /// — the genset-backed ways that pass ADS on the utility but FAIL it with
+  /// the standby genset as the origin ([gensetAdsCheck]); every printed
+  /// schedule marks them ' Zs!' like a utility failure. Empty by default.
+  final Set<String> gensetAdsFailedCircuitIds;
+
   const AdvancedStudy({
     required this.fault,
     required this.supply,
@@ -216,7 +233,16 @@ class AdvancedStudy {
     required this.bom,
     required this.verifyItems,
     this.warnings = const [],
+    this.gensetAdsFailedCircuitIds = const {},
   });
+
+  /// Every way failing automatic disconnection on ANY supply: the utility
+  /// fault study's failures plus [gensetAdsFailedCircuitIds].
+  Set<String> get adsFailedCircuitIds => {
+        for (final e in fault.circuits.entries)
+          if (e.value.adsOk == false) e.key,
+        ...gensetAdsFailedCircuitIds,
+      };
 }
 
 /// Run the whole advanced study over an already-solved system. Pure +
@@ -576,8 +602,12 @@ AdvancedStudy computeAdvancedStudy(
         metering: metering,
       ));
 
+  // Round 56 — ADS judged on the standby genset too (judge-only).
+  final onGenset = gensetAdsCheck(profile, project, sys, fault);
+
   // Aggregate every sub-result's provenance honesty surface.
   final verify = _aggregateVerify([
+    if (onGenset.judged) [gensetSustainedFaultVerifyItem],
     fault.verifyItems,
     supply.verifyItems,
     powerFactor.verifyItems,
@@ -603,6 +633,7 @@ AdvancedStudy computeAdvancedStudy(
   ]);
 
   return AdvancedStudy(
+    gensetAdsFailedCircuitIds: onGenset.failedIds,
     fault: fault,
     supply: supply,
     recommendedDayaVa: daya?.va,
@@ -624,6 +655,8 @@ AdvancedStudy computeAdvancedStudy(
     verifyItems: verify,
     warnings: [
       ...gensetBackupWarnings(project, sys),
+      ...onGenset.warnings,
+      ...enclosureTempRiseWarnings(sys, enclosure),
       ...ttRcdTouchVoltageWarnings(project, sys, electrode),
       ...starterWarnings,
       // Round 40 — a DECLARED transformer (or the most loaded section of a
@@ -668,6 +701,137 @@ AdvancedStudy computeAdvancedStudy(
 // ───────────────────────────────────────────────────────────────────────────
 // Helpers.
 // ───────────────────────────────────────────────────────────────────────────
+
+/// Round 56 — the INSTALLED standby genset (VA): a forced nameplate × its
+/// units, else the set the G-01 schedule / spine / BOM size
+/// ([sizeGenerator] over [gensetBackupDemandVa] / [gensetBackupDemandW]) ×
+/// its units. Null when the project has no generator or nothing to back.
+double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
+  final gen = project.sources?.generator;
+  if (gen == null) return null;
+  if (gen.kva != null) {
+    final v = gen.kva!.voltAmperes * (gen.units < 1 ? 1 : gen.units);
+    return v > 0 ? v : null;
+  }
+  if (sys.supply.demandVa.voltAmperes <= 0) return null;
+  final r = sizeGenerator(gensetBackupDemandVa(project, sys),
+      mode: gen.mode,
+      transfer: gen.transfer,
+      backupPower: gensetBackupDemandW(project, sys));
+  final v = r.ratingKva.voltAmperes * r.units;
+  return v > 0 ? v : null;
+}
+
+/// Round 56 (elec-convergence-8-ads-never-judged-on-standby-genset-source)
+/// — JUDGE-ONLY: IEC 60364-4-41 411.3.2 requires automatic disconnection
+/// under EVERY supply condition, and a life-safety board runs exactly when
+/// the standby genset carries it. On TN, every way of a genset-backed board
+/// ([gensetBackedPanelIds]; the whole installation for a full-backup set
+/// with nothing marked essential) is re-judged with the genset as the origin
+/// — the alternator sub-transient fault S/(√3·400·Xd'') of the installed set
+/// ([gensetPlantVa], [onSiteSourceFaultA], Xd'' `// VERIFY`). A way that
+/// passes on the utility but fails there raises the ERROR
+/// `ads-disconnection-on-genset` (never resizes). The sustained ~3 × FLC
+/// short-circuit current of an alternator without a PMG excitation is a
+/// harsher second basis, recorded as a `// VERIFY` item, not judged. A
+/// prime-power plant ([SupplyKind.generator]) is already the study origin.
+({bool judged, Set<String> failedIds, List<ElectricalWarning> warnings})
+    gensetAdsCheck(
+  ElectricalStandardsProfile profile,
+  ElectricalProject project,
+  ElectricalSystemResult sys,
+  FaultStudyResult utility,
+) {
+  const none =
+      (judged: false, failedIds: <String>{}, warnings: <ElectricalWarning>[]);
+  final gen = project.sources?.generator;
+  final tn = sys.earthing.system == EarthingSystem.tnS ||
+      sys.earthing.system == EarthingSystem.tnCs;
+  if (gen == null || !tn || project.supplyKind == SupplyKind.generator) {
+    return none;
+  }
+  var backed = gensetBackedPanelIds(project);
+  if (backed.isEmpty && gen.backupFraction >= 1 - 1e-9) {
+    backed = {for (final p in project.panels) p.id};
+  }
+  if (backed.isEmpty) return none;
+  final va = gensetPlantVa(project, sys);
+  if (va == null) return none;
+  final iscA = onSiteSourceFaultA(SupplyKind.generator, va);
+  final g = faultStudy(sys, project, profile, originFaultLevel: Current(iscA));
+  final kva = (va / 1000).toStringAsFixed(0);
+  final failed = <String>{};
+  final warnings = <ElectricalWarning>[];
+  for (final pid in sys.order) {
+    if (!backed.contains(pid)) continue;
+    final pr = sys.panels[pid];
+    if (pr == null) continue;
+    for (final w in pr.circuits) {
+      final onGen = g.circuits[w.circuitId];
+      if (onGen?.adsOk != false) continue;
+      if (utility.circuits[w.circuitId]?.adsOk == false) continue;
+      failed.add(w.circuitId);
+      final zs = onGen!.zsOhm;
+      final lim = onGen.zsMaxOhm;
+      warnings.add(ElectricalWarning(
+        code: 'ads-disconnection-on-genset',
+        severity: WarningSeverity.error,
+        message: '${w.name}: on the $kva kVA standby genset (alternator '
+            'fault ${(iscA / 1000).toStringAsFixed(1)} kA) the earth-fault '
+            'loop${zs != null && lim != null ? ' Zs ${zs.toStringAsFixed(3)} ohm exceeds the ${lim.toStringAsFixed(3)} ohm limit' : ' exceeds its limit'}'
+            ' — automatic disconnection is not met on genset supply '
+            '(IEC 60364-4-41 411.3.2): enlarge the cable, lower the device '
+            'rating, add an RCD, or size the set for the fault.',
+        panelId: pid,
+        circuitId: w.circuitId,
+      ));
+    }
+  }
+  return (judged: true, failedIds: failed, warnings: warnings);
+}
+
+/// Round 56 — the `// VERIFY` second genset fault basis [gensetAdsCheck]
+/// records but does not judge on.
+const String gensetSustainedFaultVerifyItem =
+    'standby genset ADS judged on the alternator sub-transient fault '
+    '(Xd\'\'); a set without PMG excitation sustains only ~3 x FLC — the '
+    'alternator decrement curve governs';
+
+/// Round 56 (elec-convergence-8-enclosure-thermal-fail-silent-and-priced)
+/// — JUDGE-ONLY: a board whose estimated enclosure rise ([estimateEnclosure],
+/// IEC 60890 power balance, `// VERIFY` estimate) exceeds
+/// [maxInternalTempRiseK] raises `enclosure-temp-rise-exceeded`. The
+/// envelope is never grown here (a larger cubicle would change every large
+/// board's W x H x D and price) — the engineer enlarges / ventilates it.
+List<ElectricalWarning> enclosureTempRiseWarnings(
+    ElectricalSystemResult sys, Map<String, EnclosureResult> enclosure) {
+  final out = <ElectricalWarning>[];
+  for (final id in sys.order) {
+    final e = enclosure[id];
+    if (e == null) continue;
+    if (e.withinTempLimit && e.tempRiseK.isFinite) continue;
+    final name = sys.panels[id]?.name ?? id;
+    final rise =
+        e.tempRiseK.isFinite ? '${e.tempRiseK.toStringAsFixed(0)} K' : 'n/a';
+    final vent = switch (e.ventilation) {
+      Ventilation.natural => 'natural ventilation',
+      Ventilation.fanFilter => 'a filter fan',
+      Ventilation.forced => 'forced ventilation',
+      Ventilation.heatExchanger => 'a heat exchanger / cooling unit',
+    };
+    out.add(ElectricalWarning(
+      code: 'enclosure-temp-rise-exceeded',
+      severity: WarningSeverity.warning,
+      message: '$name: estimated enclosure rise $rise > '
+          '${maxInternalTempRiseK.toStringAsFixed(0)} K in '
+          '${e.widthMm.toStringAsFixed(0)}x${e.heightMm.toStringAsFixed(0)}x'
+          '${e.depthMm.toStringAsFixed(0)} mm (IEC 60890, estimate) — '
+          'enlarge it / use a floor-standing cubicle / add $vent.',
+      panelId: id,
+    ));
+  }
+  return out;
+}
 
 /// Round 54 (regression-tt-rcd-touch-voltage-judge-dead) — JUDGE-ONLY: the TT
 /// RCD fault-protection condition Ra × IΔn <= 50 V (IEC 60364-4-41 411.5.3)

@@ -155,6 +155,12 @@ class ElectricalCircuitResult {
   /// capped at the lead section). Null when [motorLeads] is null.
   final double? motorLeadsPeCsaMm2;
 
+  /// Round 56 (regression-ads-fail-both-classes-no-csa-growth) — true when
+  /// the conductor was stepped up the section ladder by `computeSystem` so
+  /// the way meets automatic disconnection (IEC 60364-4-41): an ENGINE
+  /// floor, never the engineer's cable override (no '(set)' mark).
+  final bool cableRaisedForAds;
+
   const ElectricalCircuitResult({
     required this.circuitId,
     required this.name,
@@ -177,6 +183,7 @@ class ElectricalCircuitResult {
     this.lineCurrentsA,
     this.motorLeads,
     this.motorLeadsPeCsaMm2,
+    this.cableRaisedForAds = false,
   });
 
   /// Copy with a new phase assignment + cumulative drop (the only fields the
@@ -208,6 +215,7 @@ class ElectricalCircuitResult {
         lineCurrentsA: lineCurrentsA,
         motorLeads: motorLeads,
         motorLeadsPeCsaMm2: motorLeadsPeCsaMm2,
+        cableRaisedForAds: cableRaisedForAds,
       );
 }
 
@@ -394,6 +402,13 @@ class ElectricalPanelResult {
   /// daya. 0 (the default) on a hand-built result.
   final double largestDownstreamRunA;
 
+  /// Round 56 (regression-alternator-floor-all-lines-at-1ph-machine) — the
+  /// same machine as [largestDownstreamRunA] as a per-LINE vector [L1, L2,
+  /// L3] in this board's labelled frame: a 3φ machine loads all three lines,
+  /// a 1φ machine only the line it is assigned to (zeros elsewhere). Null on
+  /// a hand-built result ⇒ readers treat it as the scalar on every line.
+  final List<double>? largestDownstreamRunLinesA;
+
   final PhaseBalanceResult phaseBalance;
 
   /// Phase imbalance (%) — convenience alias of [phaseBalance.imbalancePercent].
@@ -436,6 +451,7 @@ class ElectricalPanelResult {
     this.spareWaysReserved = 0,
     this.capacitorCurrentA = 0,
     this.largestDownstreamRunA = 0,
+    this.largestDownstreamRunLinesA,
     required this.phaseBalance,
     required this.warnings,
     this.diversityFactor = 1.0,
