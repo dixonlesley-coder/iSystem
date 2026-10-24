@@ -37,15 +37,28 @@ library;
 import 'dart:math' as math;
 
 import '../standards/puil.dart'
-    show BreakerClass, BreakerCurve, ConductorInsulation, ConductorMaterial,
+    show BreakerClass, BreakerClassCode, BreakerCurve, ConductorInsulation, ConductorMaterial,
         ElectricalStandardsProfile;
 import '../units.dart';
 import 'earthing.dart' show EarthingSystem;
 import 'load_kind.dart' show LoadKind;
-import 'model.dart' show ElectricalCircuit, ElectricalPanel, ElectricalProject;
+import 'model.dart'
+    show
+        SupplyKind,
+        ElectricalCircuit,
+        ElectricalPanel,
+        ElectricalProject,
+        ElectricalSystemInfo;
 import 'panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, ElectricalSystemResult,
         ElectricalWarning, WarningSeverity;
+import 'results.dart' show kStarDeltaInternalWiringM;
+import 'supply_design.dart'
+    show
+        SupplyDesign,
+        declaredServiceTransformer,
+        determineSupply,
+        transformerImpedancePct;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Local standards constants (all // VERIFY — define here to stay file-disjoint
@@ -68,17 +81,31 @@ const double serviceFaultLineVoltageV = 400;
 /// an MV/LV distribution transformer, used to estimate the LV-side prospective
 /// fault when a customer transformer rating is declared but its nameplate Z% is
 /// not modelled. 4–6 % covers the common 100…2000 kVA distribution range, so 5 %
-/// is the representative middle; the REAL nameplate Z% governs (a 4 % unit
-/// delivers ~25 % MORE fault current than this estimate).
+/// is the representative middle; the REAL nameplate Z% governs.
+///
+/// Round 16 (supply-sources-undeclared-mv-fault-16ka) — ONE impedance for one
+/// transformer: this is now the supply study's own
+/// [transformerImpedancePct] (4 %), not a separate 5 %. The two used to
+/// disagree, and the 5 % estimate under-stated the fault the study's own 4 %
+/// unit delivers by 20 % — the unsafe direction for a breaking-capacity check
+/// (the LOWER impedance is the conservative one there).
 // VERIFY — secondarySource (representative distribution-transformer impedance;
 // the transformer test certificate governs. Not a PUIL/SNI clause).
-const double representativeTransformerZpu = 0.05;
+const double representativeTransformerZpu = transformerImpedancePct / 100;
 
-/// Upper clamp (kA) on the service-size fault estimate — the top of the device
-/// ladder a specifier realistically lands on for an LV board (see
-/// [breakingCapacityKa]). Above it the simplified estimate stops being useful
-/// and a real IEC 60909 study is required, so it is capped rather than printed.
-// VERIFY — notAnSniClause (a modelling clamp, not a standard value).
+/// Threshold (kA) above which the service-size fault estimate is flagged —
+/// the top of the device ladder a specifier realistically lands on for an LV
+/// board (see [breakingCapacityKa]). Above it the simplified estimate stops
+/// being a sufficient basis and a real IEC 60909 study + 65/70 kA-class gear
+/// are required.
+///
+/// Round 17 (protection-2-service-estimate-50ka-clamp-hides-fault) — this used
+/// to CLAMP the estimate, i.e. LOWER a safety quantity: from ~1386 kVA at the
+/// 4 % impedance (50e3·√3·400·0.04) every device kA token, the bus Icw check
+/// and the arc-flash energy were judged against 50 kA while the transformer
+/// delivers more (1600 kVA ⇒ 57.7 kA). The estimate is now returned UNCLAMPED
+/// and `computeAdvancedStudy` raises `service-fault-estimate-high` instead.
+// VERIFY — notAnSniClause (a modelling threshold, not a standard value).
 const double maxEstimatedServiceFaultKa = 50;
 
 /// Declared LV connection capacity ("daya tersambung", VA) at or below which a
@@ -139,6 +166,36 @@ const double zsVoltageFactor = 0.95;
 // correction; the 1.28 vs derived 1.295 rounding is an engineering choice).
 const double zsFaultTempFactor = 1.28;
 
+/// Resistance-temperature constant (°C) of a conductor material — the
+/// inferred zero-resistance temperature of the linear R(T) law
+/// R(T2)/R(T1) = (β + T2)/(β + T1): copper 234.5 °C, aluminium 228 °C
+/// (IEC 60287-1-1 / IEC 60228 α20 reciprocals).
+// VERIFY — secondarySource (IEC 60228 / IEC 60287 conductor constants).
+double conductorBetaC(ConductorMaterial material) =>
+    material == ConductorMaterial.aluminum ? 228.0 : 234.5;
+
+/// Factor scaling the profile's ~70 °C OPERATING conductor R (the
+/// `conductorResistanceOhmPerKm` table) down to 20 °C, the conductor
+/// temperature IEC 60909-0 prescribes for the MAXIMUM short-circuit current
+/// (the Icu / breaking-capacity basis). Copper: (234.5 + 20)/(234.5 + 70) =
+/// 254.5/304.5 = 0.83580; aluminium: 248/298 = 0.83221.
+///
+/// Round 17 (protection-2-max-fault-uses-70C-resistance) — the "cold"
+/// prospective-fault decay used to run on the 70 °C table, i.e. a ~20 % HIGH
+/// feeder R, understating every sub-board fault (a 20 m 16 mm² feeder off a
+/// 10 kA origin printed 5.86 kA and specified 6 kA MCBs for a 6.42 kA bus).
+/// The ADS earth-fault loop keeps the 70 °C table × [zsFaultTempFactor].
+// VERIFY — secondarySource (IEC 60909-0 §2.4 cmax / 20 °C conductor basis).
+double coldConductorResistanceFactor(ConductorMaterial material) {
+  final beta = conductorBetaC(material);
+  return (beta + 20) / (beta + 70);
+}
+
+/// [z70] (a 70 °C-table impedance) re-referred to 20 °C for the MAXIMUM fault:
+/// R scaled by [coldConductorResistanceFactor], X unchanged.
+Impedance coldMaxFaultImpedance(Impedance z70, ConductorMaterial material) =>
+    Impedance(z70.rOhm * coldConductorResistanceFactor(material), z70.xOhm);
+
 /// Current-based selectivity (discrimination) rule of thumb: an upstream device
 /// discriminates with a downstream one when its rating is ≥ 1.6× the downstream
 /// rating. Full selectivity needs manufacturer let-through curves; first pass.
@@ -176,6 +233,12 @@ const Map<BreakerCurve, double> curveTripMultiple = {
   BreakerCurve.d: 20,
 };
 
+/// Round 45 — the magnetic (instantaneous) release multiple of a standard
+/// thermal-magnetic MCCB / ACB, the figure ADS judges a non-MCB device at
+/// (never an MCB curve letter's band). // VERIFY — secondarySource (typical
+/// fixed / minimum-setting magnetic release of TM MCCBs, ~10 × In).
+const double kMccbMagneticTripMultiple = 10;
+
 /// Standard short-circuit breaking capacities (Icu, kA rms symmetrical) offered
 /// per device class. MCBs: 6/10 kA per IEC 60898 + industrial IEC 60947-2
 /// miniature 15/25 kA; MCCBs per IEC 60947-2 across common frames. Ascending.
@@ -183,7 +246,13 @@ const Map<BreakerCurve, double> curveTripMultiple = {
 // 400 V on the datasheet).
 const Map<BreakerClass, List<double>> breakingCapacityKa = {
   BreakerClass.mcb: [6, 10, 15, 25],
-  BreakerClass.mccb: [16, 25, 36, 50, 70],
+  // Round 42 (electrical-sim-7-mccb-icu-ladder-tops-at-70ka) — the IEC
+  // 60947-2 high-performance frames (L / V, 100 / 150 kA) exist: a 2000 kVA
+  // LVMDP (~72 kA) must have an achievable outgoing MCCB. // VERIFY
+  // (notAnSniClause).
+  BreakerClass.mccb: [16, 25, 36, 50, 70, 100, 150],
+  // Round 23 — ACB frames (IEC 60947-2 Icu, general practice, // VERIFY).
+  BreakerClass.acb: [50, 65, 80, 100],
 };
 
 /// Adiabatic constant k for a protective (PE) conductor (A·s^½/mm²) by material
@@ -204,20 +273,36 @@ const Map<ConductorMaterial, Map<ConductorInsulation, double>> peAdiabaticK = {
 
 /// The unverified-value labels this study introduces, for a report's
 /// "verify against the official PUIL / IEC text" section.
+///
+/// Round 29 (electrical-sim-3-motor-fault-contribution-claimed-not-applied) —
+/// the motor-infeed line ([faultStudyMotorVerifyItem]) is NOT in this base
+/// list: [faultStudy] appends it only when a motor contribution was actually
+/// folded in (> 0). Every report used to assert a basis the study never used
+/// (the default contribution is 0).
+/// Round 30 — the U0 basis line (a report that also prints the PUIL profile's
+/// own U0 entry prints it once).
+const String faultStudyU0VerifyItem =
+    'phase voltage U0 (230 V) for Zs / ADS limits';
+
 const List<String> faultStudyVerifyItems = [
   'default LV utility prospective fault level (16 kA)',
-  'phase voltage U0 (230 V) for Zs / ADS limits',
+  faultStudyU0VerifyItem,
   'source X/R ratio (7) for the earth-fault loop split',
   'ADS voltage factor (0.95) and fault-temperature factor (1.28)',
-  'MCB curve trip multiples (B 5× / C 10× / D 20×)',
-  'breaker breaking-capacity ladders (MCB 6–25 kA / MCCB 16–70 kA)',
+  'MCB curve trip multiples (B 5× / C 10× / D 20×) and the MCCB magnetic '
+      'release (10×) the ADS check judges a non-MCB device at',
+  'breaker breaking-capacity ladders (MCB 6–25 kA / MCCB 16–150 kA)',
   'selectivity discrimination ratios (partial 1.6× / total 2.5×) — a simplified '
       'time-current zone model, not manufacturer let-through / selectivity tables',
-  'estimated motor fault contribution (~6× FLA sub-transient pulse, ~100 ms) '
-      'folded into the prospective fault level',
   'Ics vs Icu service/ultimate breaking-capacity check (IEC 60947-2)',
   'PE adiabatic-k table (IEC 60364-5-54 Table 54.3)',
 ];
+
+/// Round 29 — the motor-infeed provenance line, emitted by [faultStudy] only
+/// when [faultStudy]'s `estimatedMotorFaultContributionA` is > 0.
+const String faultStudyMotorVerifyItem =
+    'estimated motor fault contribution (~6× FLA sub-transient pulse, ~100 ms) '
+    'folded into the prospective fault level';
 
 // ───────────────────────────────────────────────────────────────────────────
 // Service-size-derived prospective fault level.
@@ -228,14 +313,44 @@ const List<String> faultStudyVerifyItems = [
 /// [faultStudyVerifyItems] this pass (that would change every existing study's
 /// printed verify section) — surfacing it via `SniProfile.verifyChecklist` /
 /// `AdvancedStudy.verifyItems` is the RECORDED FOLLOW-UP.
-const List<String> serviceFaultEstimateVerifyItems = [
-  'representative transformer impedance (5 % p.u.) behind the service-size '
+/// Round 39 — representative alternator sub-transient reactance Xd'' (p.u.)
+/// for the generator-plant fault estimate. // VERIFY — secondarySource
+/// (typical LV alternator 0.10–0.15 p.u.; the alternator datasheet governs).
+const double kAlternatorXdPu = 0.12;
+
+/// Round 39 — an inverter's fault contribution as a multiple of its rated
+/// current (current-limited, ~1.2–1.5 × In). // VERIFY — secondarySource
+/// (the inverter datasheet governs).
+const double inverterFaultMultiple = 1.5;
+
+/// Round 39 — the prospective 3φ fault (A) at the terminals of an on-site
+/// primary source of [sVa] VA: a generator S/(√3·400·Xd''), a solar
+/// inverter [inverterFaultMultiple] × S/(√3·400). Pure.
+double onSiteSourceFaultA(SupplyKind kind, double sVa) {
+  final ratedA = sVa / (math.sqrt(3) * serviceFaultLineVoltageV);
+  return switch (kind) {
+    SupplyKind.generator => ratedA / kAlternatorXdPu,
+    SupplyKind.solar => ratedA * inverterFaultMultiple,
+    SupplyKind.pln => ratedA / representativeTransformerZpu,
+  };
+}
+
+final List<String> serviceFaultEstimateVerifyItems = [
+  'representative transformer impedance '
+      '(${transformerImpedancePct.toStringAsFixed(0)} % p.u.) behind the service-size '
       'fault estimate — the nameplate Z% governs',
   // ASCII in the printed label: a report PDF encodes WinAnsi, which has no
   // '≤' / '⇒' (they would garble to '?' — the Wave-7 separator defect).
   'service-entrance prospective-fault rungs by declared connection capacity '
-      '(up to 16.5 kVA: 6 kA / up to 197 kVA: 10 kA / above: 16 kA)',
-  'service-size fault estimate clamp (50 kA) and its 400 V LV reference voltage',
+      '(up to 16.5 kVA: 6 kA / up to 197 kVA: 10 kA / above: the declared '
+      'capacity\'s own transformer fault at the representative Z%, at least '
+      '16 kA)',
+  'service-size fault estimate review threshold (50 kA) and its 400 V LV '
+      'reference voltage',
+  'generator / solar primary-supply fault estimate: alternator Xd\'\' '
+      '${kAlternatorXdPu.toStringAsFixed(2)} p.u. / inverter '
+      '${inverterFaultMultiple.toStringAsFixed(1)} x rated current — the '
+      'source datasheet governs',
 ];
 
 /// Estimate the prospective 3-phase symmetrical fault current at the SERVICE
@@ -254,21 +369,36 @@ const List<String> serviceFaultEstimateVerifyItems = [
 ///
 ///    with S the transformer rating (VA), U_LL = [serviceFaultLineVoltageV] and
 ///    Zpu = [representativeTransformerZpu]. Worked example, a 630 kVA unit at
-///    5 %: 630000 / (1.732050808·400·0.05) = 630000 / 34.641016 = 18186.5 A.
+///    4 %: 630000 / (1.732050808·400·0.04) = 630000 / 27.712813 = 22733.2 A.
 ///    The utility impedance UPSTREAM of the transformer and the substation-to-
 ///    board cable are deliberately ignored — both only REDUCE the fault, so the
-///    estimate stays conservative. Clamped to [maxEstimatedServiceFaultKa].
+///    estimate stays conservative. NOT clamped (Round 17): above
+///    [maxEstimatedServiceFaultKa] the caller flags the estimate instead.
 ///
 /// 2. **[ElectricalProject.supplyCapacityVa] declared** (an LV direct service —
 ///    daya tersambung, no customer transformer): a conservative service-entrance
 ///    RUNG off the declared capacity, monotone non-decreasing —
 ///    ≤ [smallServiceCapacityCeilingVa] ⇒ [smallServiceFaultKa];
 ///    ≤ [plnLvServiceCeilingVa] ⇒ [lvServiceFaultKa];
-///    above the PLN TR ceiling with no declared transformer ⇒
-///    [defaultLvUtilityFaultKa] (no better claim available).
+///    above the PLN TR ceiling the service is fed at MV through its own
+///    transformer (Round 25): the fault is that transformer's, rated at the
+///    declared capacity (or the [demand], whichever is larger, through the
+///    supply study's own pick — step 3) by the same formula as step 1, and
+///    NEVER below [defaultLvUtilityFaultKa]. Declaring a 630 kVA service gives
+///    630000 / (1.732050808·400·0.04) = 22733.2 A — more information never
+///    LOWERS the safety quantity below the undeclared estimate.
 ///
-/// 3. **Nothing declared** ⇒ `null`. [ElectricalProject.dualTransformer] alone
-///    carries no rating to compute from, so it does NOT count as declared.
+/// 3. **Nothing declared, but the [demand] needs an MV service** (Round 16,
+///    supply-sources-undeclared-mv-fault-16ka) — when the caller passes the
+///    solved building demand and [determineSupply] selects a transformer for
+///    it (above the LV ceiling, or a [ElectricalProject.dualTransformer]
+///    service), the fault is that unit's, by the same formula: one SECTION's
+///    units (a dual service's coupler is normally open), e.g. an 800 kVA
+///    demand ⇒ 1000 kVA at 4 %: 1e6 / (1.732050808·400·0.04) = 36084.4 A —
+///    not the flat 16 kA, which specified every device kA token at under half
+///    the fault the study's own transformer delivers.
+///
+/// 4. **Nothing declared, LV demand** ⇒ `null`.
 ///
 /// A declared value that is zero or negative is treated as undeclared (it falls
 /// through to the next step). The returned current is rounded to 0.1 A.
@@ -283,7 +413,8 @@ const List<String> serviceFaultEstimateVerifyItems = [
 /// secondary-source distribution practice, none of it an SNI/PUIL clause. The
 /// debt is carried in [serviceFaultEstimateVerifyItems] pending the follow-up
 /// that wires it into the honesty surfaces.
-Current? estimatedServiceFaultLevelA(ElectricalProject project) {
+Current? estimatedServiceFaultLevelA(ElectricalProject project,
+    {ApparentPower? demand, SupplyDesign? supply}) {
   // 1. Customer transformer declared ⇒ transformer-impedance-limited fault.
   final txVa = project.transformerKva?.voltAmperes;
   if (txVa != null && txVa > 0) {
@@ -291,10 +422,20 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project) {
         (math.sqrt(3) *
             serviceFaultLineVoltageV *
             representativeTransformerZpu);
-    return Current(_round(
-      math.min(iscA, maxEstimatedServiceFaultKa * 1000.0),
-      1,
-    ));
+    return Current(_round(iscA, 1));
+  }
+
+  // Round 39 (elec-ui-journeys-2-generator-supply-drawn-as-mv) — a GENERATOR
+  // or SOLAR (inverter) primary supply is never a utility: its fault is the
+  // source's own — the alternator's S/(√3·U·Xd'') or the inverter's
+  // [inverterFaultMultiple] × rated current — sized on the declared capacity,
+  // else the demand. Never the 16 kA utility default (that overstated the
+  // earth-fault current >5x and could PASS ADS that will not disconnect).
+  if (project.supplyKind != SupplyKind.pln) {
+    final cap = project.supplyCapacityVa?.voltAmperes;
+    final sVa = (cap != null && cap > 0) ? cap : demand?.voltAmperes;
+    if (sVa == null || sVa <= 0) return null;
+    return Current(_round(onSiteSourceFaultA(project.supplyKind, sVa), 1));
   }
 
   // 2. LV direct service ⇒ a rung off the declared connection capacity.
@@ -306,13 +447,80 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project) {
     if (capacityVa <= plnLvServiceCeilingVa) {
       return Current.kiloamperes(lvServiceFaultKa);
     }
-    return Current.kiloamperes(defaultLvUtilityFaultKa);
+    // Round 25 — above the PLN TR ceiling: the declared capacity's own
+    // transformer fault, never below the study transformer for the demand
+    // (step 3) nor the flat 16 kA the rung used to return.
+    // Round 29 — that transformer is the SNAPPED unit the supply study,
+    // drawings and power one-line all print
+    // ([declaredServiceTransformerKva]: a 555 kVA daya ⇒ 630 kVA), never
+    // the raw daya figure (no 555 kVA unit exists).
+    // Round 30 — per-unit rating × the units one section parallels (a dual
+    // service's coupler is N.O. ⇒ one section's units only).
+    final declaredTx = declaredServiceTransformer(project);
+    final txKva = declaredTx == null
+        ? capacityVa
+        : declaredTx.kva.voltAmperes *
+            math.max(1,
+                project.dualTransformer ? declaredTx.units ~/ 2 : declaredTx.units);
+    final declaredA = txKva /
+        (math.sqrt(3) *
+            serviceFaultLineVoltageV *
+            representativeTransformerZpu);
+    final studyA =
+        demand == null ? null : _studyTransformerFaultA(project, demand, supply);
+    return Current(_round(
+        math.max(math.max(declaredA, studyA ?? 0),
+            defaultLvUtilityFaultKa * 1000),
+        1));
   }
 
-  // 3. Nothing declared (dualTransformer alone has no rating) ⇒ no claim; the
-  //    caller keeps its flat default.
+  // 3. Nothing declared, but the demand needs a transformer ⇒ the unit the
+  //    supply study itself selects (one section's units: coupler N.O.).
+  if (demand != null) {
+    final studyA = _studyTransformerFaultA(project, demand, supply);
+    if (studyA != null) return Current(_round(studyA, 1));
+  }
+
+  // 4. Nothing declared, LV demand (dualTransformer alone has no rating) ⇒
+  //    no claim; the caller keeps its flat default.
   return null;
 }
+
+/// The fault (A, unrounded) of the transformer the supply study selects for
+/// [demand] (one section's units — a dual service's coupler is N.O.), or null
+/// when the demand needs no MV service.
+///
+/// Round 52 (elec-convergence-4-undeclared-study-transformer-fault-not-the-
+/// printed-transformer) — when the caller passes the advanced study's own
+/// [studied] supply design (`studySupplyDesign`: the largest dual SECTION and
+/// the per-phase basis, the transformer the supply note / one-line / riser
+/// PRINT), that undeclared pick IS the unit: never a smaller one re-derived
+/// from the total demand split evenly (2 x 800 kVA printed, 500 kVA faulted).
+/// A DECLARED design is not used here (step 2 keeps max(declared, demand
+/// study)); without [studied] the demand-only pick stands.
+double? _studyTransformerFaultA(ElectricalProject project, ApparentPower demand,
+    [SupplyDesign? studied]) {
+  if (demand.voltAmperes <= 0) return null;
+  final supply = studied != null && !studied.declared
+      ? studied
+      : determineSupply(demand, dualTransformer: project.dualTransformer);
+  final kva = supply.transformerKva;
+  if (!supply.isMv || kva == null || kva <= 0) return null;
+  final perSection = project.dualTransformer ? supply.units ~/ 2 : supply.units;
+  final va = kva * 1000 * math.max(1, perSection);
+  return va /
+      (math.sqrt(3) *
+          serviceFaultLineVoltageV *
+          (supply.impedancePct ?? transformerImpedancePct) /
+          100);
+}
+
+/// Round 25 — true when the project DECLARES its service size (a customer
+/// transformer or a connection capacity), so a resolved estimate's basis is
+/// the declared service rather than the supply study.
+bool hasDeclaredServiceSize(ElectricalProject project) =>
+    (project.transformerKva?.voltAmperes ?? 0) > 0 ||
+    (project.supplyCapacityVa?.voltAmperes ?? 0) > 0;
 
 // ───────────────────────────────────────────────────────────────────────────
 // Impedance helpers.
@@ -368,12 +576,70 @@ double downstreamFaultA(double lineVoltageV, Impedance totalZ, double upstreamIs
   return math.min(isc, upstreamIscA);
 }
 
+/// Line-to-line basis voltage (V) a panel's SOURCE impedance is referred to.
+///
+/// A 3-phase board carries its line voltage in [ElectricalPanel.voltage]
+/// (400 V). A 1-phase board stores its PHASE-to-neutral voltage there (220 V,
+/// see `model.dart`), but it still hangs off the same 3-phase LV network whose
+/// origin fault is a 3-phase symmetrical figure — so its source impedance must
+/// be derived on the network's line basis ([serviceFaultLineVoltageV], 400 V),
+/// never on 220 V (that would give |Z| = 220/(√3·Isc), ~0.55× the real source
+/// impedance — an optimistic Zs and a fault mis-referred to the wrong voltage).
+double faultBasisLineVoltageV(ElectricalPanel panel) =>
+    panel.system.isThreePhase ? panel.voltage.volts : serviceFaultLineVoltageV;
+
+/// Prospective fault (A) at a SUB-panel bus fed through a feeder chain.
+///
+/// - **3-phase board**: the 3-phase symmetrical fault
+///   `V_LL / (√3·|Z_phase|)` ([downstreamFaultA]) — the neutral carries no
+///   current in a balanced 3-phase fault.
+/// - **1-phase board**: the only fault it can see is LINE-to-NEUTRAL, driven by
+///   U0 (the board's stored phase voltage) round the loop source + every
+///   feeder's phase leg + every feeder's neutral return:
+///   `U0 / |Z_phase + Z_neutral|`. (Feeding `220 V` into the 3-phase formula
+///   instead gave `127/|Z|` — ~40 % below the true L-N fault, which let an
+///   under-rated MCB pass the Icu check.)
+///
+/// Both are clamped to the upstream value (impedance only reduces the fault).
+/// [phasePathZ] = source Z + Σ feeder phase legs; [neutralPathZ] = Σ feeder
+/// neutral legs (the source neutral is not modelled — omitting it keeps the
+/// fault conservatively HIGH for the Icu check).
+double subPanelBusFaultA(
+  ElectricalPanel panel,
+  Impedance phasePathZ,
+  Impedance neutralPathZ,
+  double upstreamIscA,
+) {
+  if (panel.system.isThreePhase) {
+    return downstreamFaultA(panel.voltage.volts, phasePathZ, upstreamIscA);
+  }
+  final z = (phasePathZ + neutralPathZ).magnitude;
+  if (z <= 0) return upstreamIscA;
+  return math.min(panel.voltage.volts / z, upstreamIscA);
+}
+
+/// Neutral-leg impedance of a feeder run (Ω), per parallel run: the neutral
+/// conductor's section when the sizer recorded one, else the phase section
+/// (a full-size neutral — conservative-high fault for the Icu check).
+Impedance feederNeutralImpedance(
+  ElectricalStandardsProfile profile,
+  double phaseCsaMm2,
+  double neutralCsaMm2,
+  double lengthM,
+  ConductorMaterial material,
+  int runs,
+) {
+  final csa = neutralCsaMm2 > 0 ? neutralCsaMm2 : phaseCsaMm2;
+  final z = conductorImpedance(profile, csa, lengthM, material);
+  return Impedance(z.rOhm / runs, z.xOhm / runs);
+}
+
 /// Breaking capacity (kA) to specify for a device of [deviceClass] and [ratingA]:
 /// the smallest standard rating that covers [prospectiveKa], else the class
 /// maximum. Larger MCCB frames carry a rating-based floor.
 double breakerKa(double ratingA, BreakerClass deviceClass, double prospectiveKa) {
   final options = breakingCapacityKa[deviceClass]!;
-  final floorKa = deviceClass == BreakerClass.mccb && ratingA >= 400 ? 36.0 : 0.0;
+  final floorKa = deviceClass != BreakerClass.mcb && ratingA >= 400 ? 36.0 : 0.0;
   final pool = options.where((k) => k >= floorKa).toList();
   final candidates = pool.isNotEmpty ? pool : options;
   final maxKa = candidates.last;
@@ -382,6 +648,55 @@ double breakerKa(double ratingA, BreakerClass deviceClass, double prospectiveKa)
   }
   return maxKa;
 }
+
+/// Breaking capacity (kA) the study SPECIFIES for a device: the smallest
+/// standard Icu rung (honouring [breakerKa]'s large-frame floor) that covers the
+/// prospective fault for BOTH its ultimate capacity (Icu ≥ Isc) AND its service
+/// capacity (Ics = [serviceCapacityFraction]·Icu ≥ Isc, IEC 60947-2), else the
+/// class maximum.
+///
+/// Picking on Icu alone ([breakerKa]) and then judging Ics made the study
+/// condemn its own specification whenever the fault landed in
+/// (0.75·rung, rung] — e.g. every MCCB on an untouched 16 kA root bus (Icu 16,
+/// Ics 12 < 16). MCBs carry Ics = Icu, so their pick is unchanged.
+double specifiedBreakerKa(
+    double ratingA, BreakerClass deviceClass, double prospectiveKa) {
+  final options = breakingCapacityKa[deviceClass]!;
+  final floorKa = deviceClass != BreakerClass.mcb && ratingA >= 400 ? 36.0 : 0.0;
+  final pool = options.where((k) => k >= floorKa).toList();
+  final candidates = pool.isNotEmpty ? pool : options;
+  final ics = serviceCapacityFraction[deviceClass] ?? 1;
+  for (final k in candidates) {
+    if (k + 1e-9 >= prospectiveKa && k * ics + 1e-9 >= prospectiveKa) return k;
+  }
+  return candidates.last;
+}
+
+/// Round 44/45 — the ONE "engine-kept MCB on back-up (cascade) protection"
+/// predicate, shared by the fault study (`cascade-combination-unverified`
+/// instead of `breaking-capacity-inadequate`) and the BOM (its `cascade` note
+/// instead of the kA-short flag), so the two can never disagree.
+///
+/// True only when an MCB the ENGINE kept (not overridden) sits on a bus above
+/// the MCB ladder top AND its upstream device CAN back it up: Round 45
+/// (regression-cascade-accepts-acb-backup) — the incomer must be a
+/// CURRENT-LIMITING moulded-case breaker (an ACB with short-time delay does
+/// not limit the let-through and appears in no MCB back-up table) whose own
+/// specified breaking capacity covers the bus fault. Otherwise the MCB is a
+/// genuinely inadequate device. // VERIFY (notAnSniClause): IEC 60947-2
+/// Annex A back-up needs a current-limiting upstream device.
+bool cascadeBackupAvailable({
+  required BreakerClass wayClass,
+  required bool wayOverridden,
+  required double busFaultKa,
+  required BreakerClass incomerClass,
+  required double incomerKa,
+}) =>
+    wayClass == BreakerClass.mcb &&
+    !wayOverridden &&
+    busFaultKa > breakingCapacityKa[BreakerClass.mcb]!.last + 1e-9 &&
+    incomerClass == BreakerClass.mccb &&
+    incomerKa + 1e-9 >= busFaultKa;
 
 /// True when an upstream breaker likely does NOT discriminate with a downstream
 /// one (its rating is below [selectivityRatio]× the downstream rating).
@@ -487,14 +802,31 @@ class CircuitFaultResult {
   final double breakerKa;
 
   /// Earth-fault loop impedance Zs over the run (Ω) — TN only, else null.
+  /// Round 20: stored at 3 dp rounded in the direction of the ADS verdict
+  /// (up on a FAIL, down on a PASS) — see [zsMaxOhm].
   final double? zsOhm;
 
   /// Maximum Zs that still guarantees disconnection in time (Ω) — TN only.
+  ///
+  /// Round 20: VERDICT-DIRECTED 3-dp rounding, NOT the exact limit — floored
+  /// on a FAIL, ceiled on a PASS, so the printed pair always backs the
+  /// verdict. The same device can therefore print a limit up to 0.001 Ω
+  /// apart depending on the verdict (0.6828125 Ω prints 0.682 on a FAIL,
+  /// 0.683 on a PASS); recompute from the device data for the exact figure.
   final double? zsMaxOhm;
 
   /// True when ADS disconnects in time (Zs ≤ Zs_max) — TN only, else null
   /// (TT clears earth faults via the RCD, already modelled).
   final bool? adsOk;
+
+  /// Round 11 — true when the way's RCD (not its overcurrent device) is what
+  /// satisfies ADS in TN: IEC 60364-4-41 411.4.5 lets an RCD provide the
+  /// disconnection when Zs × IΔn ≤ U0. False otherwise (and for TT).
+  final bool adsByRcd;
+
+  /// Round 11 — the permitted disconnection time (s) the TN verdict was judged
+  /// against (0.4 or 5); null for TT.
+  final double? disconnectionTimeS;
 
   const CircuitFaultResult({
     required this.circuitId,
@@ -505,8 +837,36 @@ class CircuitFaultResult {
     this.zsOhm,
     this.zsMaxOhm,
     this.adsOk,
+    this.adsByRcd = false,
+    this.disconnectionTimeS,
   });
 }
+
+/// Round 11 — the magnetic multiple Ia/In that guarantees disconnection within
+/// the 5 s limit IEC 60364-4-41 411.3.2.3 permits for DISTRIBUTION circuits and
+/// TN FINAL circuits above 32 A (the 0.4 s [curveTripMultiple] applies to
+/// finals ≤ 32 A). A type D device clears inside 5 s at 10 × In (vs 20 × In for
+/// 0.4 s); B and C are unchanged (their 0.4 s multiple already sits in the
+/// instantaneous band). Using the 0.4 s multiple everywhere raised a false
+/// `ads-disconnection` ERROR on ordinary D-curve pump / motor runs.
+// VERIFY — secondarySource (BS 7671 Table 41.4 / IEC 60898 time-current
+// bands; not a PUIL clause).
+const Map<BreakerCurve, double> curveTripMultiple5s = {
+  BreakerCurve.b: 5,
+  BreakerCurve.c: 10,
+  BreakerCurve.d: 10,
+};
+
+/// The final-circuit rating (A) above which IEC 60364-4-41 411.3.2.3 allows the
+/// 5 s disconnection time in TN (finals ≤ this must clear in 0.4 s).
+// VERIFY — secondarySource (IEC 60364-4-41 Table 41.1 note, 32 A boundary).
+const double kAds04sMaxFinalRatingA = 32;
+
+/// The permitted ADS disconnection time (s) for a TN circuit (Round 11): 5 s for
+/// a distribution circuit (a feeder) or a final above [kAds04sMaxFinalRatingA],
+/// else 0.4 s.
+double adsDisconnectionTimeS({required bool isFeeder, required double ratingA}) =>
+    (isFeeder || ratingA > kAds04sMaxFinalRatingA + 1e-9) ? 5.0 : 0.4;
 
 /// Service-vs-ultimate breaking-capacity ratio (Ics/Icu) per device class.
 /// MCCBs are commonly rated Ics = 50–100 % Icu; small MCBs are effectively
@@ -517,6 +877,8 @@ class CircuitFaultResult {
 const Map<BreakerClass, double> serviceCapacityFraction = {
   BreakerClass.mcb: 1.0,
   BreakerClass.mccb: 0.75,
+  // An ACB's Ics is typically 100 % of Icu (IEC 60947-2, // VERIFY).
+  BreakerClass.acb: 1.0,
 };
 
 /// One upstream→downstream breaker pair examined for current discrimination.
@@ -599,6 +961,11 @@ double _round(double v, int dp) {
   return (v * f).roundToDouble() / f;
 }
 
+/// Round 20 — [v] rounded UP / DOWN to 3 dp (a 1e-9 milli-unit guard keeps an
+/// exactly representable 0.683 at 0.683 despite binary noise).
+double _ceil3(double v) => (v * 1000 - 1e-9).ceilToDouble() / 1000;
+double _floor3(double v) => (v * 1000 + 1e-9).floorToDouble() / 1000;
+
 /// Compute the protection / fault study over an already-solved system.
 ///
 /// [originFaultLevel] is the prospective 3-phase symmetrical fault current the
@@ -636,6 +1003,9 @@ FaultStudyResult faultStudy(
   // wording ⇒ byte-identical.
   final cappedFeeders = sys.feederFloorsCapped;
   final warnings = <ElectricalWarning>[];
+  // Round 26 — devices already given a service-capacity (Ics) warning in the
+  // per-way pass, so the feeder selectivity pass never repeats it.
+  final icsWarned = <String>{};
   final panelResults = <String, PanelFaultResult>{};
   final circuitResults = <String, CircuitFaultResult>{};
   final selectivity = <SelectivityResult>[];
@@ -665,10 +1035,21 @@ FaultStudyResult faultStudy(
     }
   }
 
-  // Per-panel prospective fault (A) + the source impedance backing it (for Zs),
-  // filled root→leaf so a child reads its parent's value.
+  // Per-panel prospective fault (A) + the source impedance backing it, filled
+  // root→leaf so a child reads its parent's value. Four running impedances:
+  //   - panelSourceZ  — COLD phase path (source + Σ feeder phase legs) for the
+  //     prospective fault (the conservative-high Icu basis);
+  //   - panelNeutralZ — COLD Σ feeder neutral legs (the 1-phase L-N fault's
+  //     return path);
+  //   - panelSourceZHot — the phase path with each FEEDER leg's R at the
+  //     fault temperature (×[zsFaultTempFactor]) — the earth-fault loop basis;
+  //   - panelPeZ — HOT Σ feeder PE legs: an earth fault on a sub-board circuit
+  //     returns through every upstream feeder's PE, not just its own.
   final panelFaultA = <String, double>{};
   final panelSourceZ = <String, Impedance>{};
+  final panelNeutralZ = <String, Impedance>{};
+  final panelSourceZHot = <String, Impedance>{};
+  final panelPeZ = <String, Impedance>{};
 
   // The earthing system is installation-wide (TN vs TT) — drives the ADS check.
   // TT clears earth faults via the RCD (already modelled), so its loop is relaxed.
@@ -681,42 +1062,77 @@ FaultStudyResult faultStudy(
     final panelModel = modelById[panelId];
     if (panelResult == null || panelModel == null) continue;
 
-    final lineVoltageV = panelModel.voltage.volts;
+    // Source impedance is referred to the LV network LINE voltage (a 1-phase
+    // board stores its 220 V phase voltage — see [faultBasisLineVoltageV]).
+    final basisV = faultBasisLineVoltageV(panelModel);
 
     // Prospective fault + source impedance at this bus.
     final double faultA;
     final Impedance sourceZ;
+    final Impedance neutralZ;
+    final Impedance sourceZHot;
+    final Impedance peReturnZ;
     final feederId = panelFeederCircuit[panelId];
     final parentId = panelParent[panelId];
     if (feederId == null || parentId == null) {
       // Root / utility-fed panel — origin fault level + its source impedance.
       faultA = originIscA;
-      sourceZ = sourceImpedanceFromIsc(originIscA, lineVoltageV);
+      sourceZ = sourceImpedanceFromIsc(originIscA, basisV);
+      neutralZ = const Impedance(0, 0);
+      sourceZHot = sourceZ;
+      peReturnZ = const Impedance(0, 0);
     } else {
       // Sub-panel — decay the parent fault through the feeder cable impedance.
       final upstreamIscA = panelFaultA[parentId] ?? originIscA;
       final upstreamSourceZ =
-          panelSourceZ[parentId] ?? sourceImpedanceFromIsc(originIscA, lineVoltageV);
+          panelSourceZ[parentId] ?? sourceImpedanceFromIsc(originIscA, basisV);
       final feederResult = _circuitById(sys.panels[parentId], feederId);
       final feederModel = _modelCircuitById(modelById[parentId], feederId);
       final csa = feederResult?.cable.csaMm2 ?? 0;
       final runs = (feederResult?.cable.runsPerPhase ?? 1) > 1
           ? feederResult!.cable.runsPerPhase!
           : 1;
-      final lengthM = feederModel?.length.meters ?? 0;
-      final single = conductorImpedance(profile, csa, lengthM, panelModel.material);
+      // The run the cable was SIZED on (geo when placed, else manual) and the
+      // PARENT's conductor material (the parent sized this feeder).
+      final lengthM = solvedRunLengthM(feederResult, feederModel);
+      final feederMaterial =
+          modelById[parentId]?.material ?? panelModel.material;
+      final single = conductorImpedance(profile, csa, lengthM, feederMaterial);
+      // 70 °C-table leg — the basis the HOT earth-fault loop scales below.
       final feederZ = Impedance(single.rOhm / runs, single.xOhm / runs);
-      sourceZ = upstreamSourceZ + feederZ;
-      faultA = downstreamFaultA(lineVoltageV, sourceZ, upstreamIscA);
+      // Round 17 — the MAXIMUM (Icu) prospective fault decays through the
+      // conductor at 20 °C (IEC 60909-0), not the 70 °C operating table.
+      sourceZ = upstreamSourceZ + coldMaxFaultImpedance(feederZ, feederMaterial);
+      neutralZ = (panelNeutralZ[parentId] ?? const Impedance(0, 0)) +
+          coldMaxFaultImpedance(
+              feederNeutralImpedance(profile, csa,
+                  feederResult?.grounding.neutralCsaMm2 ?? 0, lengthM,
+                  // elec-props-1 — the feeder's neutral is the PARENT's cable
+                  // (the same material the phase leg + Fold-1 use), never the
+                  // fed board's own bus material.
+                  feederMaterial, runs),
+              feederMaterial);
+      faultA = subPanelBusFaultA(panelModel, sourceZ, neutralZ, upstreamIscA);
+      // Earth-fault loop legs at the fault temperature (cold decay above).
+      sourceZHot = (panelSourceZHot[parentId] ?? upstreamSourceZ) +
+          Impedance(feederZ.rOhm * zsFaultTempFactor, feederZ.xOhm);
+      // elec-props-1 — the feeder's PE conductor runs in the PARENT's cable.
+      final pe0 = conductorImpedance(profile,
+          feederResult?.grounding.peCsaMm2 ?? 0, lengthM, feederMaterial);
+      peReturnZ = (panelPeZ[parentId] ?? const Impedance(0, 0)) +
+          Impedance(pe0.rOhm * zsFaultTempFactor / runs, pe0.xOhm / runs);
     }
     panelFaultA[panelId] = faultA;
     panelSourceZ[panelId] = sourceZ;
+    panelNeutralZ[panelId] = neutralZ;
+    panelSourceZHot[panelId] = sourceZHot;
+    panelPeZ[panelId] = peReturnZ;
 
     final faultKaRounded = _round(faultA / 1000.0, 2);
 
     // ── Incomer breaking-capacity adequacy ─────────────────────────────────
     final incomer = panelResult.incomer.breaker;
-    final incomerKa = breakerKa(
+    final incomerKa = specifiedBreakerKa(
       incomer.ratingA.amperes,
       incomer.deviceClass,
       faultA / 1000.0,
@@ -728,6 +1144,15 @@ FaultStudyResult faultStudy(
       incomerAdequate: incomerAdequate,
       incomerKa: incomerKa,
     );
+    final incomerIcs = incomerAdequate
+        ? _icsShortfall(
+            label: '${panelResult.name} incomer',
+            icuKa: incomerKa,
+            deviceClass: incomer.deviceClass,
+            faultKa: faultA / 1000.0,
+            panelId: panelId)
+        : null;
+    if (incomerIcs != null) warnings.add(incomerIcs);
     if (!incomerAdequate) {
       warnings.add(ElectricalWarning(
         code: 'breaking-capacity-inadequate',
@@ -743,20 +1168,76 @@ FaultStudyResult faultStudy(
     // ── Per-circuit: kA adequacy + Zs/ADS (TN) ─────────────────────────────
     for (final c in panelResult.circuits) {
       final cModel = _modelCircuitById(panelModel, c.circuitId);
-      final ka = breakerKa(
+      final ka = specifiedBreakerKa(
         c.breaker.ratingA.amperes,
         c.breaker.deviceClass,
         faultA / 1000.0,
       );
       final adequate = ka + 1e-9 >= faultA / 1000.0;
-      if (!adequate) {
+      final wayIcs = adequate
+          ? _icsShortfall(
+              label: '${panelResult.name} / ${c.name}',
+              icuKa: ka,
+              deviceClass: c.breaker.deviceClass,
+              faultKa: faultA / 1000.0,
+              panelId: panelId,
+              circuitId: c.circuitId)
+          : null;
+      if (wayIcs != null) {
+        warnings.add(wayIcs);
+        icsWarned.add('$panelId|${c.circuitId}');
+      }
+      // Round 44 (regression-kept-cascade-mcb-raises-breaking-capacity-
+      // error) — an MCB the ENGINE kept on a bus above the MCB ladder (its
+      // cable cannot take, or ADS refuses, the 16 A MCCB frame — compute's
+      // `mcb-backup-protection-required` info) is protected by back-up
+      // (cascade) from the board's incomer: that is a combination to VERIFY
+      // against the manufacturer's cascade table, not an inadequate device.
+      // One judge-only warning names the upstream device and the back-up kA;
+      // an engineer-OVERRIDDEN MCB keeps the error.
+      // Round 45 — only behind a current-limiting, adequate MCCB incomer
+      // ([cascadeBackupAvailable]); an ACB or an inadequate incomer keeps
+      // the error, saying why.
+      final cascadeKept = !adequate &&
+          cascadeBackupAvailable(
+              wayClass: c.breaker.deviceClass,
+              wayOverridden: c.breaker.overridden,
+              busFaultKa: faultA / 1000.0,
+              incomerClass: incomer.deviceClass,
+              incomerKa: incomerKa);
+      final keptWithoutBackup = !adequate &&
+          !cascadeKept &&
+          c.breaker.deviceClass == BreakerClass.mcb &&
+          !c.breaker.overridden &&
+          faultA / 1000.0 > breakingCapacityKa[BreakerClass.mcb]!.last + 1e-9;
+      if (cascadeKept) {
+        warnings.add(ElectricalWarning(
+          code: 'cascade-combination-unverified',
+          severity: WarningSeverity.warning,
+          message:
+              '${panelResult.name} / ${c.name}: the ${_fmt(c.breaker.ratingA.amperes)} A '
+              'MCB (${_fmt(ka)} kA) relies on back-up (cascade) protection by '
+              'the ${_fmt(incomer.ratingA.amperes)} A ${incomer.deviceClass.code} '
+              'incomer to reach the ${_fmt(faultKaRounded)} kA prospective '
+              'fault — confirm the combination in the manufacturer\'s cascade '
+              'table (IEC 60898-1 Annex D / IEC 60947-2 Annex A).',
+          panelId: panelId,
+          circuitId: c.circuitId,
+        ));
+      } else if (!adequate) {
         warnings.add(ElectricalWarning(
           code: 'breaking-capacity-inadequate',
           severity: WarningSeverity.error,
           message:
               '${panelResult.name} / ${c.name}: breaker breaking capacity '
               '${_fmt(ka)} kA is below the prospective fault '
-              '${_fmt(faultKaRounded)} kA.',
+              '${_fmt(faultKaRounded)} kA.'
+              '${keptWithoutBackup ? ' Back-up (cascade) protection needs a '
+                  'current-limiting MCCB upstream whose own breaking capacity '
+                  'covers the fault: the ${_fmt(incomer.ratingA.amperes)} A '
+                  '${incomer.deviceClass.code} incomer'
+                  '${incomerAdequate ? '' : ' (itself inadequate)'} cannot '
+                  'back it up; specify a higher-Icu device.' : ''}',
           panelId: panelId,
           circuitId: c.circuitId,
         ));
@@ -766,26 +1247,112 @@ FaultStudyResult faultStudy(
       double? zsOhm;
       double? zsMaxOhm;
       bool? adsOk;
+      var adsByRcd = false;
+      double? disconnectionTimeS;
       if (isTn) {
         final runs = (c.cable.runsPerPhase ?? 1) > 1 ? c.cable.runsPerPhase! : 1;
-        final lengthM = cModel?.length.meters ?? 0;
-        final phaseZ0 =
-            conductorImpedance(profile, c.cable.csaMm2, lengthM, panelModel.material);
-        final peZ0 = conductorImpedance(
-            profile, c.grounding.peCsaMm2, lengthM, panelModel.material);
-        // Fault-temperature R, parallel runs each carry their own PE.
-        final phaseZ = Impedance(
-            phaseZ0.rOhm * zsFaultTempFactor / runs, phaseZ0.xOhm / runs);
-        final peZ =
-            Impedance(peZ0.rOhm * zsFaultTempFactor / runs, peZ0.xOhm / runs);
-        final loop = sourceZ + phaseZ + peZ;
+        // Zs on the run the cable + Vd were sized on (geo-derived when placed),
+        // never the stale manual length.
+        final lengthM = solvedRunLengthM(c, cModel);
+        // Round 42 — a STAR-DELTA way's field run is its two motor-lead
+        // cables (the starter in the board, [kStarDeltaInternalWiringM] of
+        // internal supply link), plus the short internal link on the supply
+        // section. Round 43 correction: the earlier reading put a line's two
+        // lead conductors in PARALLEL for the phase path. They are not — at
+        // the motor they land on terminals of DIFFERENT windings (U1 / W2)
+        // and meet only through the winding impedance (the delta / star
+        // bridge is made at the starter contactors in the board), so a
+        // terminal earth fault is fed by ONE lead conductor per lead run.
+        // Only the PE return is genuinely parallel: both lead cables bond
+        // the motor frame to the board PE bar (2 × lead runs).
+        final leads = c.motorLeads;
+        final Impedance phaseZ;
+        final Impedance peZ;
+        if (leads == null) {
+          final phaseZ0 = conductorImpedance(
+              profile, c.cable.csaMm2, lengthM, panelModel.material);
+          final peZ0 = conductorImpedance(
+              profile, c.grounding.peCsaMm2, lengthM, panelModel.material);
+          // Fault-temperature R, parallel runs each carry their own PE.
+          phaseZ = Impedance(
+              phaseZ0.rOhm * zsFaultTempFactor / runs, phaseZ0.xOhm / runs);
+          peZ = Impedance(
+              peZ0.rOhm * zsFaultTempFactor / runs, peZ0.xOhm / runs);
+        } else {
+          final leadRuns = (leads.runsPerPhase ?? 1) > 1
+              ? leads.runsPerPhase!
+              : 1;
+          // Phase: one conductor per lead run; PE: both lead cables.
+          final leadPhasePaths = leadRuns;
+          final leadPePaths = 2 * leadRuns;
+          final leadPe = c.motorLeadsPeCsaMm2 ?? leads.csaMm2;
+          final lPh = conductorImpedance(
+              profile, leads.csaMm2, lengthM, panelModel.material);
+          final lPe =
+              conductorImpedance(profile, leadPe, lengthM, panelModel.material);
+          final iPh = conductorImpedance(profile, c.cable.csaMm2,
+              kStarDeltaInternalWiringM, panelModel.material);
+          final iPe = conductorImpedance(profile, c.grounding.peCsaMm2,
+              kStarDeltaInternalWiringM, panelModel.material);
+          phaseZ = Impedance(
+              lPh.rOhm * zsFaultTempFactor / leadPhasePaths +
+                  iPh.rOhm * zsFaultTempFactor / runs,
+              lPh.xOhm / leadPhasePaths + iPh.xOhm / runs);
+          peZ = Impedance(
+              lPe.rOhm * zsFaultTempFactor / leadPePaths +
+                  iPe.rOhm * zsFaultTempFactor / runs,
+              lPe.xOhm / leadPePaths + iPe.xOhm / runs);
+        }
+        // Loop = hot source/feeder phase path + every upstream feeder's PE
+        // return + this circuit's own phase + PE (elec-advanced-2).
+        final loop = sourceZHot + peReturnZ + phaseZ + peZ;
         final zs = loop.magnitude;
-        final ia = (curveTripMultiple[c.breaker.curve] ?? 10) *
+        // Round 11 — the magnetic multiple follows the PERMITTED disconnection
+        // time: 5 s for a feeder / a final > 32 A, 0.4 s otherwise.
+        final isFeeder =
+            cModel?.isFeeder ?? (c.loadKind == LoadKind.feeder);
+        final tDisc = adsDisconnectionTimeS(
+            isFeeder: isFeeder, ratingA: c.breaker.ratingA.amperes);
+        disconnectionTimeS = tDisc;
+        final multiples =
+            tDisc >= 5.0 ? curveTripMultiple5s : curveTripMultiple;
+        // Round 45 (electrical-sim-10-mccb-raised-from-b-curve-ads-judged-
+        // at-5x) — the trip CURVE letters are MCB (IEC 60898) bands. A way
+        // the engine raised to an MCCB keeps its curve field but is issued as
+        // a plain 'MCCB <In>A' (no curve on the schedule or the BOM), so the
+        // fitted device is a standard thermal-magnetic MCCB whose magnetic
+        // release sits at ~10 × In: judge it at
+        // max(10, the curve's multiple) — never the B-curve 5 ×.
+        final m0 = multiples[c.breaker.curve] ?? 10;
+        final ia = (c.breaker.deviceClass == BreakerClass.mcb
+                ? m0
+                : math.max(kMccbMagneticTripMultiple, m0)) *
             c.breaker.ratingA.amperes;
-        final zsMax = ia > 0 ? (zsVoltageFactor * u0PhaseVoltageV) / ia : double.infinity;
-        zsOhm = _round(zs, 3);
-        zsMaxOhm = zsMax.isFinite ? _round(zsMax, 3) : zsMax;
+        final zsMaxOcpd =
+            ia > 0 ? (zsVoltageFactor * u0PhaseVoltageV) / ia : double.infinity;
+        // Round 11 — an RCD on the way may provide ADS (IEC 60364-4-41
+        // 411.4.5: Zs × IΔn ≤ U0); the governing limit is the more lenient of
+        // the two devices, and the RCD is reported as the disconnecting device
+        // when only it satisfies the loop.
+        final idnA = c.rcd.required && c.rcd.ratingMa > 0
+            ? c.rcd.ratingMa / 1000.0
+            : 0.0;
+        final zsMaxRcd = idnA > 0
+            ? (zsVoltageFactor * u0PhaseVoltageV) / idnA
+            : 0.0;
+        final zsMax = zsMaxRcd > zsMaxOcpd ? zsMaxRcd : zsMaxOcpd;
         adsOk = zs <= zsMax + 1e-9;
+        // Round 20 (electrical-property-ads-message-rounds-to-equal) — the
+        // stored / printed 3-dp pair is rounded IN THE DIRECTION OF THE
+        // VERDICT, so the figures always back it up: a failure rounds Zs up
+        // and the limit down (never 'Zs 0.683 Ω exceeds the 0.683 Ω limit'),
+        // a pass rounds Zs down and the limit up (never a printed Zs above
+        // its printed limit on a PASS). Each figure moves < 0.001 Ω.
+        zsOhm = adsOk ? _floor3(zs) : _ceil3(zs);
+        zsMaxOhm = zsMax.isFinite
+            ? (adsOk ? _ceil3(zsMax) : _floor3(zsMax))
+            : zsMax;
+        adsByRcd = adsOk && zs > zsMaxOcpd + 1e-9;
         if (!adsOk) {
           warnings.add(ElectricalWarning(
             code: 'ads-disconnection',
@@ -793,8 +1360,12 @@ FaultStudyResult faultStudy(
             message:
                 '${panelResult.name} / ${c.name}: earth-fault loop Zs '
                 '${_fmt(zsOhm)} Ω exceeds the ${_fmt(zsMaxOhm)} Ω limit for '
-                'disconnection in time — shorten the run, increase the CSA, or '
-                'fit an RCD.',
+                'disconnection in ${_fmt(tDisc)} s — shorten the run, '
+                'increase the CSA (cable override)'
+                // Round 38 (elec-protection-ads-advice-fit-rcd-impossible)
+                // — the model has no RCD request on a TN way, so the only
+                // levers named are the ones the tool provides.
+                '${c.breaker.deviceClass == BreakerClass.mcb ? ', or a lower trip curve / rating (breaker override)' : ', or a lower rating (breaker override)'}.',
             panelId: panelId,
             circuitId: c.circuitId,
           ));
@@ -806,14 +1377,39 @@ FaultStudyResult faultStudy(
         // mechanism. (TT finals and feeders now get an RCD in `circuitRcd`, so
         // only a genuinely uncovered way, e.g. an RCD-exempt life-safety run,
         // reaches here.)
+        // Round 24 — an upstream FEEDER RCD does detect this way's earth
+        // fault: name it (and what it does to a life-safety way) instead of
+        // claiming the fault goes undetected.
+        ElectricalCircuitResult? upstreamRcd;
+        String? upstreamBoard;
+        for (var pid = panelId, hops = 0;
+            hops < sys.order.length && upstreamRcd == null;
+            hops++) {
+          final fid = panelFeederCircuit[pid];
+          final par = panelParent[pid];
+          if (fid == null || par == null) break;
+          final fr = _circuitById(sys.panels[par], fid);
+          if (fr != null && fr.rcd.required) {
+            upstreamRcd = fr;
+            upstreamBoard = sys.panels[par]?.name ?? par;
+          }
+          pid = par;
+        }
         warnings.add(ElectricalWarning(
           code: 'tt-no-earth-fault-protection',
           severity: WarningSeverity.warning,
-          message:
-              '${panelResult.name} / ${c.name}: TT circuit with no modelled '
-              'earth-fault protection — the high TT earth-loop impedance gives '
-              'no ADS by overcurrent and this way carries no RCD. Fit a '
-              'time-delayed/S-type RCD or verify the earth-loop disconnection.',
+          message: upstreamRcd == null
+              ? '${panelResult.name} / ${c.name}: TT circuit with no modelled '
+                  'earth-fault protection — the high TT earth-loop impedance gives '
+                  'no ADS by overcurrent and this way carries no RCD. Fit a '
+                  'time-delayed/S-type RCD or verify the earth-loop disconnection.'
+              : '${panelResult.name} / ${c.name}: TT circuit with no RCD of its '
+                  'own — its earth fault is cleared only by the upstream '
+                  '${upstreamRcd.rcd.ratingMa} mA RCD on $upstreamBoard / '
+                  '${upstreamRcd.name}, which disconnects that whole feeder'
+                  '${c.loadKind == LoadKind.pump || c.loadKind == LoadKind.motor ? ' (a life-safety pump stops with it)' : ''}. '
+                  'Fit a selective RCD on this way, or feed it from a board '
+                  'with no tripping RCD upstream.',
           panelId: panelId,
           circuitId: c.circuitId,
         ));
@@ -827,6 +1423,8 @@ FaultStudyResult faultStudy(
         breakerKa: ka,
         zsOhm: zsOhm,
         zsMaxOhm: zsMaxOhm,
+        adsByRcd: adsByRcd,
+        disconnectionTimeS: disconnectionTimeS,
         adsOk: adsOk,
       );
     }
@@ -850,7 +1448,7 @@ FaultStudyResult faultStudy(
     // the device is to remain usable. Icw: the upstream panel's busbar
     // short-time withstand must not be exceeded.
     final upstreamFaultKa = (panelFaultA[parentId] ?? originIscA) / 1000.0;
-    final icu = breakerKa(
+    final icu = specifiedBreakerKa(
       upstreamIn,
       feeder.breaker.deviceClass,
       upstreamFaultKa,
@@ -948,26 +1546,21 @@ FaultStudyResult faultStudy(
         circuitId: feederCircuitId,
       ));
     }
-    if (!icsAdequate) {
-      // E8d — the CODE is kept verbatim (a stable acknowledgement / compliance
-      // discriminator); only the wording is clarified. "Service capacity" here
-      // is the IEC 60947-2 DEVICE rating Ics (the fault a breaker can clear and
-      // stay in service after), NOT the PLN supply/connection capacity.
-      warnings.add(ElectricalWarning(
-        code: 'service-capacity-inadequate',
-        severity: WarningSeverity.warning,
-        message:
-            '${feeder.name}: DEVICE rated service short-circuit breaking '
-            'capacity Ics (~${_fmt(_round(icu * icsFraction, 1))} kA, '
-            '${(icsFraction * 100).round()} % of Icu ${_fmt(icu)} kA, IEC '
-            '60947-2) is below the ${_fmt(_round(upstreamFaultKa, 2))} kA '
-            'prospective fault at its bus — the breaker may survive one '
-            'clearance (Icu) but is not rated to remain in service afterwards; '
-            'specify a 100 % Ics device. (A device rating, not the PLN supply '
-            'connection capacity.)',
-        panelId: parentId,
-        circuitId: feederCircuitId,
-      ));
+    // Round 38 (elec-protection-ics-warning-when-icu-short) — only an
+    // Icu-ADEQUATE device can be short on Ics (as the per-way pass); an
+    // Icu-short feeder already carries the breaking-capacity error, and a
+    // '100 % Ics' advice on it contradicts that error.
+    if (icuAdequate &&
+        !icsAdequate &&
+        !icsWarned.contains('$parentId|$feederCircuitId')) {
+      final w = _icsShortfall(
+          label: feeder.name,
+          icuKa: icu,
+          deviceClass: feeder.breaker.deviceClass,
+          faultKa: upstreamFaultKa,
+          panelId: parentId,
+          circuitId: feederCircuitId);
+      if (w != null) warnings.add(w);
     }
   }
 
@@ -977,8 +1570,23 @@ FaultStudyResult faultStudy(
     circuits: circuitResults,
     selectivity: selectivity,
     warnings: warnings,
-    verifyItems: faultStudyVerifyItems,
+    verifyItems: motorA > 0 && baseIscA > 0
+        ? const [...faultStudyVerifyItems, faultStudyMotorVerifyItem]
+        : faultStudyVerifyItems,
   );
+}
+
+/// The run length (m) a circuit's impedance must be computed on: the SOLVED
+/// [ElectricalCircuitResult.lengthM] — the same run its cable + Vd were sized
+/// on (geo-derived when the panel and load are placed, else the manual length)
+/// — falling back to the model's manual length when the result carries none
+/// (0, e.g. a hand-built result). Using the manual length on a placed layout
+/// computed Zs/ADS and the downstream fault on a stale run (a 50 m placed run
+/// checked as the 10 m default ⇒ a failing ADS reported as a pass).
+double solvedRunLengthM(
+    ElectricalCircuitResult? result, ElectricalCircuit? model) {
+  if (result != null && result.lengthM > 0) return result.lengthM;
+  return model?.length.meters ?? 0;
 }
 
 ElectricalCircuitResult? _circuitById(ElectricalPanelResult? panel, String id) {
@@ -998,5 +1606,48 @@ ElectricalCircuit? _modelCircuitById(ElectricalPanel? panelModel, String id) {
   return null;
 }
 
+/// Round 26 (ics-unchecked-on-incomers-and-final-mccbs) — the ONE IEC
+/// 60947-2 service-capacity test, applied to EVERY device the study specifies
+/// (incomer, each way, each feeder): Ics = [serviceCapacityFraction]·Icu must
+/// cover the prospective fault at its bus. Null when adequate. The CODE stays
+/// `service-capacity-inadequate` (E8d — a stable acknowledgement / compliance
+/// discriminator). "Service capacity" is the DEVICE rating Ics (the fault a
+/// breaker can clear and stay in service after), NOT the PLN supply capacity.
+ElectricalWarning? _icsShortfall({
+  required String label,
+  required double icuKa,
+  required BreakerClass deviceClass,
+  required double faultKa,
+  required String? panelId,
+  String? circuitId,
+}) {
+  final icsFraction = serviceCapacityFraction[deviceClass] ?? 1;
+  if (icuKa * icsFraction + 1e-9 >= faultKa) return null;
+  return ElectricalWarning(
+    code: 'service-capacity-inadequate',
+    severity: WarningSeverity.warning,
+    message:
+        '$label: DEVICE rated service short-circuit breaking '
+        'capacity Ics (~${_fmt(_round(icuKa * icsFraction, 1))} kA, '
+        '${(icsFraction * 100).round()} % of Icu ${_fmt(icuKa)} kA, IEC '
+        '60947-2) is below the ${_fmt(_round(faultKa, 2))} kA '
+        'prospective fault at its bus — the breaker may survive one '
+        'clearance (Icu) but is not rated to remain in service afterwards; '
+        'specify a 100 % Ics device. (A device rating, not the PLN supply '
+        'connection capacity.)',
+    panelId: panelId,
+    circuitId: circuitId,
+  );
+}
+
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toString();
+
+/// Round 43 (elec-drawings-6-schedule-silent-on-iz-below-in-and-ads-fail) —
+/// the way ids whose earth-fault loop FAILS automatic disconnection
+/// (`CircuitFaultResult.adsOk == false`), the set the board schedule marks
+/// ` Zs!` ([buildElectricalSld]'s `adsFailedCircuitIds`). Pure.
+Set<String> adsFailedCircuitIdsOf(FaultStudyResult fault) => {
+      for (final e in fault.circuits.entries)
+        if (e.value.adsOk == false) e.key,
+    };

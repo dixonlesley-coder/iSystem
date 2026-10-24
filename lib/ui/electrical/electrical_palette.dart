@@ -22,6 +22,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_scrollbar.dart';
+import '../widgets/mechx_segment.dart';
 import '../widgets/palette_card.dart';
 import '../widgets/section_label.dart';
 import 'load_symbols.dart';
@@ -46,13 +47,73 @@ class PaletteLoad {
   const PaletteLoad(this.kind, {this.phases, this.loadW = 0, this.motorKw, this.panelTemplateId});
 }
 
+/// The session-sticky phase of the Loads palette's 1ph/3ph segment (1 or 3).
+/// Transient UI state — NOT persisted to `.mechx`; every launch starts at 1ph.
+class PalettePhaseNotifier extends Notifier<int> {
+  @override
+  int build() => 1;
+
+  /// Sets the segment's phase; anything other than 3 snaps to 1.
+  void set(int phases) => state = phases == 3 ? 3 : 1;
+}
+
+final palettePhaseProvider =
+    NotifierProvider<PalettePhaseNotifier, int>(PalettePhaseNotifier.new);
+
+/// The per-(kind, phase) defaults of the phase-variable cards — the values the
+/// former paired `(1φ)`/`(3φ)` cards carried, verbatim.
+const Map<(LoadKind, int), PaletteLoad> kPalettePhaseDefaults = {
+  (LoadKind.hvac, 1): PaletteLoad(LoadKind.hvac, phases: 1, loadW: 2500),
+  (LoadKind.hvac, 3): PaletteLoad(LoadKind.hvac, phases: 3, loadW: 5500),
+  (LoadKind.heating, 1): PaletteLoad(LoadKind.heating, phases: 1, loadW: 3000),
+  (LoadKind.heating, 3): PaletteLoad(LoadKind.heating, phases: 3, loadW: 9000),
+  (LoadKind.evCharger, 1):
+      PaletteLoad(LoadKind.evCharger, phases: 1, loadW: 7400),
+  (LoadKind.evCharger, 3):
+      PaletteLoad(LoadKind.evCharger, phases: 3, loadW: 22000),
+  (LoadKind.general, 1): PaletteLoad(LoadKind.general, phases: 1, loadW: 2000),
+  (LoadKind.general, 3): PaletteLoad(LoadKind.general, phases: 3, loadW: 7500),
+  (LoadKind.pump, 1): PaletteLoad(LoadKind.pump, phases: 1, motorKw: 0.75),
+  (LoadKind.pump, 3): PaletteLoad(LoadKind.pump, phases: 3, motorKw: 4),
+};
+
+/// THE one resolver for what a palette card drops — used by both the
+/// [Draggable] payload and the keyboard (Enter/Space) path, so the two can
+/// never diverge. A [phaseVariable] card takes the segment's [phase] from
+/// [kPalettePhaseDefaults]; a fixed card ignores [phase] and drops [base].
+PaletteLoad resolvePaletteLoad(
+  PaletteLoad base,
+  int phase, {
+  bool phaseVariable = false,
+}) {
+  if (!phaseVariable) return base;
+  return kPalettePhaseDefaults[(base.kind, phase == 3 ? 3 : 1)] ?? base;
+}
+
 /// A palette card descriptor (its label is a [StringKey] so the palette is
 /// localised — I6; new cards may use plain EN strings).
 class _Card {
   final Object label;  // StringKey or String (plain EN for new cards)
   final PaletteLoad load;
-  const _Card(this.label, this.load);
+
+  /// One card per kind whose phase follows the sticky 1ph/3ph segment.
+  final bool phaseVariable;
+  const _Card(this.label, this.load, {this.phaseVariable = false});
+
+  PaletteLoad resolve(int phase) =>
+      resolvePaletteLoad(load, phase, phaseVariable: phaseVariable);
+
+  /// A FIXED three-phase card (industrial socket, welding, capacitor) — shown
+  /// with a muted `3ph` tag so the segment's 1ph state can't mislead.
+  bool get fixedThreePhase => !phaseVariable && load.phases == 3;
 }
+
+/// Every palette card as (base payload, phaseVariable) — for tests.
+@visibleForTesting
+List<(PaletteLoad, bool)> get debugPaletteCards => [
+      for (final g in _groups)
+        for (final c in g.cards) (c.load, c.phaseVariable),
+    ];
 
 /// A palette group (a faint header + its cards).
 class _Group {
@@ -62,33 +123,20 @@ class _Group {
 }
 
 // The groups + cards, transcribed from PanelMaker (sub-panel = the feeder kind,
-// which the canvas turns into a new board on a blank drop).
+// which the canvas turns into a new board on a blank drop). The former
+// (1φ)/(3φ) card pairs are ONE phase-variable card each.
 const List<_Group> _groups = [
   _Group(StringKey.electricalPaletteLoads, [
     _Card(StringKey.electricalLoadLighting,
         PaletteLoad(LoadKind.lighting, loadW: 1200)),
     _Card(StringKey.electricalLoadSockets,
         PaletteLoad(LoadKind.socket, loadW: 2000)),
-    _Card(StringKey.electricalLoadAircon1,
-        PaletteLoad(LoadKind.hvac, phases: 1, loadW: 2500)),
-    _Card(StringKey.electricalLoadAircon3,
-        PaletteLoad(LoadKind.hvac, phases: 3, loadW: 5500)),
-    _Card(
-      StringKey.electricalLoadWaterHeater1,
-      PaletteLoad(LoadKind.heating, phases: 1, loadW: 3000),
-    ),
-    _Card(
-      StringKey.electricalLoadWaterHeater3,
-      PaletteLoad(LoadKind.heating, phases: 3, loadW: 9000),
-    ),
-    _Card(
-      StringKey.electricalLoadEv1,
-      PaletteLoad(LoadKind.evCharger, phases: 1, loadW: 7400),
-    ),
-    _Card(
-      StringKey.electricalLoadEv3,
-      PaletteLoad(LoadKind.evCharger, phases: 3, loadW: 22000),
-    ),
+    _Card(StringKey.electricalLoadAircon, PaletteLoad(LoadKind.hvac),
+        phaseVariable: true),
+    _Card(StringKey.electricalLoadWaterHeater, PaletteLoad(LoadKind.heating),
+        phaseVariable: true),
+    _Card(StringKey.electricalLoadEv, PaletteLoad(LoadKind.evCharger),
+        phaseVariable: true),
     _Card(
       StringKey.electricalLoadIndustrialSocket3,
       PaletteLoad(LoadKind.socket, phases: 3, loadW: 7500),
@@ -98,14 +146,8 @@ const List<_Group> _groups = [
       StringKey.electricalLoadWelding3,
       PaletteLoad(LoadKind.welding, phases: 3, loadW: 8000),
     ),
-    _Card(
-      StringKey.electricalLoadCustom1,
-      PaletteLoad(LoadKind.general, phases: 1, loadW: 2000),
-    ),
-    _Card(
-      StringKey.electricalLoadCustom3,
-      PaletteLoad(LoadKind.general, phases: 3, loadW: 7500),
-    ),
+    _Card(StringKey.electricalLoadCustom, PaletteLoad(LoadKind.general),
+        phaseVariable: true),
     _Card(
       StringKey.electricalCapacitorBank,
       PaletteLoad(LoadKind.capacitor, phases: 3, loadW: 0),
@@ -116,10 +158,8 @@ const List<_Group> _groups = [
         PaletteLoad(LoadKind.motor, motorKw: 5.5)),
     _Card(StringKey.electricalLoadMotorLarge,
         PaletteLoad(LoadKind.motor, motorKw: 15)),
-    _Card(StringKey.electricalLoadPump1,
-        PaletteLoad(LoadKind.pump, phases: 1, motorKw: 0.75)),
-    _Card(StringKey.electricalLoadPump3,
-        PaletteLoad(LoadKind.pump, phases: 3, motorKw: 4)),
+    _Card(StringKey.electricalLoadPump, PaletteLoad(LoadKind.pump),
+        phaseVariable: true),
     _Card(StringKey.electricalLoadFirePump,
         PaletteLoad(LoadKind.pump, motorKw: 15)),
   ]),
@@ -198,7 +238,7 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
       return;
     }
 
-    final load = card.load;
+    final load = card.resolve(ref.read(palettePhaseProvider));
     final cardLabel = card.label is String
         ? card.label as String
         : context.strings(card.label as StringKey);
@@ -243,6 +283,7 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final phase = ref.watch(palettePhaseProvider);
     return GlassSurface(
       // Floats over the electrical canvas; its left edge faces the diagram.
       edge: Border(
@@ -264,8 +305,26 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
             // shows the live "Loads" section label. The read-only projections
             // no longer host a dimmed copy of it at all — they show the
             // electrical system summary instead.
-            child: MechXSectionLabel(
-                context.strings(StringKey.electricalPaletteLoads)),
+            // The sticky 1ph/3ph segment rides the LOADS heading row: it sets
+            // the phase of every phase-variable card below (one card per kind).
+            child: Row(
+              children: [
+                Expanded(
+                  child: MechXSectionLabel(
+                      context.strings(StringKey.electricalPaletteLoads)),
+                ),
+                for (final ph in const [1, 3])
+                  MechXSegment(
+                    label: context.strings(ph == 1
+                        ? StringKey.electricalPalettePhase1
+                        : StringKey.electricalPalettePhase3),
+                    selected: phase == ph,
+                    selectedWeight: FontWeight.w600,
+                    onTap: () =>
+                        ref.read(palettePhaseProvider.notifier).set(ph),
+                  ),
+              ],
+            ),
           ),
           const SizedBox(height: MechXSpacing.sm),
           Expanded(
@@ -304,8 +363,16 @@ class _ElectricalPaletteState extends ConsumerState<ElectricalPalette> {
                           swatch: c.load.kind == LoadKind.feeder
                               ? colors.success
                               : colors.accent,
-                          data: c.load,
+                          data: c.resolve(phase),
                           fillWidth: true,
+                          trailing: c.fixedThreePhase
+                              ? Text(
+                                  context.strings(
+                                      StringKey.electricalPalettePhase3),
+                                  style: context.type.micro.copyWith(
+                                      color: colors.textMuted),
+                                )
+                              : null,
                           // L1: a keyboard alternative to dragging — Enter/Space
                           // on a focused card adds the way to the selected (or
                           // first) panel, mirroring the mechanical

@@ -177,12 +177,22 @@ double _ampacityOnlyCsa(
 /// step-up; [triplenFraction] is recorded for the report. With the default
 /// factor 1.0 the neutral is byte-identical to the phase bar (the regression
 /// guard for a linear panel).
+///
+/// Round 44 (electrical-sim-9-neutral-bar-double-counts-withstand) — the
+/// triplen factor is a CURRENT multiplier: with [phaseSizingCurrentA] given,
+/// the neutral is the larger of the phase bar (already floored at the
+/// short-circuit withstand section) and the smallest bar whose AMPACITY
+/// covers `factor × phaseSizingCurrentA` — never `phase CSA × factor`, which
+/// multiplied a withstand-governed section by a current ratio (a 75 mm² bar
+/// floored by a 17.84 kA fault became a 150 mm² neutral where 75 mm² covers
+/// both the fault and 1.73 × 77 A). Omitted ⇒ the legacy CSA basis.
 NeutralPeBars sizeNeutralPeBars(
   double phaseCsaMm2,
   Current phaseAmpacity, {
   ElectricalStandardsProfile? profile,
   double neutralOversizeFactor = 1,
   double triplenFraction = 0,
+  double? phaseSizingCurrentA,
 }) {
   final pe = phaseCsaMm2 <= 16
       ? phaseCsaMm2
@@ -190,16 +200,54 @@ NeutralPeBars sizeNeutralPeBars(
           ? 16.0
           : phaseCsaMm2 / 2;
 
-  // Triplen oversize: step the neutral up the standard ladder by the factor.
+  // Triplen oversize: step the neutral up the BUSBAR ladder by the factor.
+  //
+  // Round 11 — it used to step the CABLE ladder (`standardSectionsMm2`, which
+  // tops out at 300 mm²): any phase bar whose target exceeded 300 mm² found no
+  // rung, the neutral silently collapsed to the phase size and the factor /
+  // triplen fraction reported 1 / 0 — dropping the oversize (and its warning)
+  // on exactly the large UPS / IT boards FOLD 2 exists for, while smaller boards
+  // printed cable rungs (95, 120) as bar sections. It now steps the profile's
+  // copper flat-bar ladder, and beyond the largest bar falls back to the
+  // ceiling of the target — never to the phase size while the factor is > 1.
   var neutral = phaseCsaMm2;
-  if (profile != null && neutralOversizeFactor > 1 && phaseCsaMm2 > 0) {
-    final target = phaseCsaMm2 * neutralOversizeFactor;
-    for (final s in profile.standardSectionsMm2) {
-      if (s >= target) {
-        neutral = s;
+  if (profile != null &&
+      neutralOversizeFactor > 1 &&
+      phaseCsaMm2 > 0 &&
+      phaseSizingCurrentA != null &&
+      phaseSizingCurrentA > 0) {
+    final needA = neutralOversizeFactor * phaseSizingCurrentA;
+    double? rung;
+    for (final b in profile.copperBusbarTable) {
+      if (b.ampacityA.amperes + 1e-9 >= needA) {
+        rung = b.csaMm2;
         break;
       }
     }
+    final ampacityCsa =
+        rung ?? (needA / profile.copperCurrentDensityAPerMm2).ceilToDouble();
+    neutral = math.max(phaseCsaMm2, ampacityCsa);
+    // The factor is a property of the LOAD (it feeds the feeder neutral
+    // sizing upstream) — reported whenever it applies; whether the bar grew
+    // is [NeutralPeBars.oversized].
+    return NeutralPeBars(
+      neutralCsaMm2: roundTo(neutral, 1),
+      neutralAmpacityA: Current(roundTo(phaseAmpacity.amperes, 0)),
+      peCsaMm2: roundTo(math.max(pe, 6), 1),
+      neutralOversizeFactor: neutralOversizeFactor,
+      triplenFraction: triplenFraction,
+      oversized: neutral > phaseCsaMm2 + 1e-9,
+    );
+  } else if (profile != null && neutralOversizeFactor > 1 && phaseCsaMm2 > 0) {
+    final target = phaseCsaMm2 * neutralOversizeFactor;
+    double? rung;
+    for (final b in profile.copperBusbarTable) {
+      if (b.csaMm2 + 1e-9 >= target) {
+        rung = b.csaMm2;
+        break;
+      }
+    }
+    neutral = rung ?? target.ceilToDouble();
   }
   // The bar's continuous rating tracks the phase bar (the oversize is a thermal
   // headroom for the harmonic neutral RMS, not a higher continuous duty).
@@ -209,5 +257,6 @@ NeutralPeBars sizeNeutralPeBars(
     peCsaMm2: roundTo(math.max(pe, 6), 1),
     neutralOversizeFactor: neutral > phaseCsaMm2 ? neutralOversizeFactor : 1,
     triplenFraction: neutral > phaseCsaMm2 ? triplenFraction : 0,
+    oversized: neutral > phaseCsaMm2 + 1e-9,
   );
 }

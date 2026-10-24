@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/inspector_store.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/ui/inspector/disclosure_header.dart';
 import 'package:mechx/ui/inspector/result_card.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
@@ -51,7 +52,16 @@ void main() {
     expect(find.text('DRAW'), findsOneWidget);
     // E5: the plumbing-results section is 'Results' (was 'Network').
     expect(find.text('RESULTS'), findsOneWidget);
+    // The inspector is scoped to the ACTIVE layer: Plumbing (the default)
+    // shows Results, not Fire; activating Fire swaps in its section.
+    expect(find.text('FIRE'), findsNothing);
+    ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    ).read(activeDisciplineProvider.notifier).set(DisciplineLayer.fire);
+    await tester.pump();
     expect(find.text('FIRE'), findsOneWidget);
+    expect(find.text('RESULTS'), findsNothing);
   });
 
   testWidgets('a section starts expanded, collapses on tap, and re-expands',

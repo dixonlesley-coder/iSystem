@@ -23,17 +23,36 @@ class DisclosureSection extends ConsumerWidget {
   final bool defaultExpanded;
   final Widget child;
 
+  /// Optional display label for the header (e.g. a localized or counted
+  /// title); null shows [name]. [name] stays the stable expansion key.
+  final String? label;
+
   const DisclosureSection({
     super.key,
     required this.name,
     required this.child,
     this.defaultExpanded = true,
+    this.label,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final expanded =
         ref.watch(sectionExpandedProvider(SectionKey(name, defaultExpanded)));
+    // A reveal request naming this section scrolls its header to the top of
+    // the enclosing scrollable (after the frame, so a just-expanded body has
+    // laid out). No request at rest ⇒ nothing happens.
+    ref.listen<SectionRevealRequest?>(sectionRevealProvider, (_, next) {
+      if (next == null || next.name != name) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        Scrollable.ensureVisible(
+          context,
+          duration: MechXMotion.resolve(context, MechXMotion.fast),
+          curve: MechXMotion.standard,
+        );
+      });
+    });
     // Disclose the body only when expanded. Sized-out (not faded) when
     // collapsed so the panel stays compact and the canvas dominates.
     final body = expanded
@@ -57,7 +76,7 @@ class DisclosureSection extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _DisclosureHeaderBar(
-          label: name,
+          label: label ?? name,
           expanded: expanded,
           onTap: () => ref
               .read(sectionVisibilityProvider.notifier)

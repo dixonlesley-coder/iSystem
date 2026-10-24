@@ -29,6 +29,74 @@ import 'report_blocks.dart';
 import 'report_strings.dart';
 import 'riser_tags.dart' show elementTags;
 
+/// Round 30 (report-parity-2-1) — one drawn fire system's pump rating, for
+/// the calc report's per-system lines ([CalcReportData.fireSystems]).
+class FireSystemReportLine {
+  /// The duty pump's plan / schedule tag (`P-01`, `FP-01`).
+  final String tag;
+
+  /// True for a sprinkler-only system (else a standpipe / hydrant system).
+  final bool sprinklerOnly;
+
+  /// The system's NFPA 20 rating check on its OWN demand (Round 52: a series
+  /// stage's line carries ITS stage rating, under its own duty pump's tag).
+  final FirePumpRatingResult rating;
+
+  /// Round 52 — a TRANSFER pump filling a fire break tank (lift + friction to
+  /// the tank, no residual).
+  final bool transfer;
+
+  const FireSystemReportLine({
+    required this.tag,
+    required this.sprinklerOnly,
+    required this.rating,
+    this.transfer = false,
+  });
+}
+
+/// Round 52 (fire-convergence-4-report-prints-phantom-class-i-pump-for-
+/// gravity-system) — one GRAVITY-fed fire system (a roof tank, no pump
+/// drawn): its own flow and the head its tank leaves at the most demanding
+/// terminal against the head that terminal needs. The report prints this
+/// verdict, never a pump rating for a system that has no pump.
+class FireGravityReportLine {
+  /// True for a sprinkler-only system (else a standpipe / hose system).
+  final bool sprinklerOnly;
+  final double flowLps;
+  final double availableM;
+  final double requiredM;
+
+  const FireGravityReportLine({
+    required this.sprinklerOnly,
+    required this.flowLps,
+    required this.availableM,
+    required this.requiredM,
+  });
+
+  bool get short => availableM < requiredM - 1e-9;
+}
+
+/// Round 49 (regression-report-churn-not-per-system) — one drawn
+/// SPRINKLER-bearing fire system whose pump churn exceeds the standard
+/// 175 psi component rating, judged on ITS OWN pump (the app's
+/// `fireOverPressureProvider`, the very list the Review raises), under the
+/// tag its schedule row carries. The report only renders it: a hydrant-only
+/// system is never judged here, and a sprinkler system beside a larger
+/// (non-governing) hydrant rating is never hidden by it.
+class FireOverPressureReportLine {
+  final String tag;
+  final double churnKpa;
+
+  /// Friction share of the system's rated head; null when unmeasured.
+  final double? frictionShare;
+
+  const FireOverPressureReportLine({
+    required this.tag,
+    required this.churnKpa,
+    this.frictionShare,
+  });
+}
+
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
 class CalcReportData {
@@ -43,10 +111,24 @@ class CalcReportData {
   final String feedStrategy;
   final Pressure targetResidual;
   final PumpDuty? pump; // upfeed
+
+  /// Round 17 (report-recompute-2-report-omits-non-primary-supply-movers) —
+  /// EVERY drawn supply mover with its solved duty, under the SAME tag and
+  /// service the equipment schedule prints (root pump, zone boosters, the
+  /// transfer pump of a GT -> TP -> RT scheme). Non-empty ⇒ one tagged line per
+  /// mover replaces the single [pump] head / motor lines (which only ever
+  /// carried the primary non-transfer mover, so a pure transfer scheme printed
+  /// no pump at all). Empty (an undrawn upfeed pump) ⇒ the legacy lines.
+  final List<({String tag, String service, PumpDuty duty})> supplyPumps;
   final Head? boosterHead; // downfeed shortfall (null if n/a)
   final bool gravitySufficient;
   final List<DownfeedZoneStatic> zones;
   final HotWaterRecircDesign? hotWaterRecirc;
+
+  /// Round 26 (hot-water-2-separate-systems-merged) — the recirculation
+  /// designs of every FURTHER hot-water system (a second heater's wing), each
+  /// printed on its own line after [hotWaterRecirc]. Empty ⇒ unchanged.
+  final List<HotWaterRecircDesign> additionalHotWaterRecirc;
 
   final SprinklerDesign? sprinkler;
   final FireStandpipeDesign? standpipe;
@@ -59,7 +141,46 @@ class CalcReportData {
   /// + duty/standby). Null ⇒ section skipped.
   final FirePumpRatingResult? firePumpRating;
 
+  /// Round 49 — every over-pressure SPRINKLER-bearing fire system, judged
+  /// per system ([FireOverPressureReportLine]). Empty ⇒ no line (EN/ID
+  /// byte-identical).
+  final List<FireOverPressureReportLine> fireOverPressure;
+
+  /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
+  /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
+  /// the tag its schedule row and MDP way carry. Printed only when two or
+  /// more systems are drawn (a single system's [firePumpRating] row is the
+  /// same pump ⇒ byte-identical) — or, Round 52 r2, a lone line when
+  /// [firePumpRating] is null (the only pumped line is a tank transfer).
+  final List<FireSystemReportLine> fireSystems;
+
+  /// Round 52 — every GRAVITY-fed fire system's head verdict. Empty ⇒ no line.
+  final List<FireGravityReportLine> fireGravity;
+
+  /// Round 52 — the jockey basis when [firePumpRating] is withheld (a
+  /// SERIES-staged governing system prints one rating line per stage
+  /// instead): the whole system's rating, whose jockey point the schedule's
+  /// jockey carries. Null ⇒ the jockey line reads [firePumpRating].
+  final FirePumpRatingResult? fireJockeyRating;
+
   final FanDuty? fan;
+
+  /// The separate EXHAUST fan duty (toilet / kitchen extract system) — its own
+  /// trunk airflow against its own index-run static. Null ⇒ no exhaust rows
+  /// (byte-identical for a project without a sized exhaust system).
+  final FanDuty? exhaustFan;
+
+  /// Round 12 (report-recompute-second-ahu-missing) — EVERY supply-air unit
+  /// with its own duty, tagged (`AHU-01`, `AHU-02` …), the same per-root
+  /// duties the equipment schedule + electrical feed list. With TWO OR MORE
+  /// entries the HVAC section prints one tagged row per unit instead of the
+  /// single [fan] trunk rows, so a second AHU (often the higher static) is no
+  /// longer missing from the report. Empty / one entry ⇒ byte-identical.
+  final List<({String tag, FanDuty duty})> supplyFans;
+
+  /// The exhaust counterpart of [supplyFans] (`EF-01` …); ≥ 2 entries ⇒
+  /// tagged rows replace the single [exhaustFan] rows.
+  final List<({String tag, FanDuty duty})> exhaustFans;
   final double supplyAirflowLps;
   final double returnAirflowLps;
 
@@ -104,6 +225,15 @@ class CalcReportData {
   /// byte-identical legacy output.
   final MountingHeights? mounting;
 
+  /// Round 17 follow-up (gravity-3-6) — the laid drainage design slope (m/m)
+  /// that Manning-sizes the rainwater collectors and drives every drainage
+  /// velocity / self-cleansing verdict in this report, with the Manning n and
+  /// the design fill ratio of that sizing. Null ⇒ the Design-basis row is
+  /// omitted (legacy output byte-identical).
+  final double? drainageSlope;
+  final double drainageManningN;
+  final double drainageFillRatio;
+
   const CalcReportData({
     required this.projectName,
     required this.date,
@@ -114,15 +244,24 @@ class CalcReportData {
     required this.feedStrategy,
     required this.targetResidual,
     this.pump,
+    this.supplyPumps = const [],
     this.boosterHead,
     this.gravitySufficient = false,
     this.zones = const [],
     this.hotWaterRecirc,
+    this.additionalHotWaterRecirc = const [],
     this.sprinkler,
     this.standpipe,
     this.sprinklerRemoteArea,
     this.firePumpRating,
+    this.fireOverPressure = const [],
+    this.fireSystems = const [],
+    this.fireGravity = const [],
+    this.fireJockeyRating,
     this.fan,
+    this.exhaustFan,
+    this.supplyFans = const [],
+    this.exhaustFans = const [],
     this.supplyAirflowLps = 0,
     this.returnAirflowLps = 0,
     this.pumpOperatingPoint,
@@ -135,6 +274,9 @@ class CalcReportData {
     this.occupancy,
     this.revisions = const [],
     this.mounting,
+    this.drainageSlope,
+    this.drainageManningN = 0.010,
+    this.drainageFillRatio = 0.5,
   });
 }
 
@@ -214,6 +356,7 @@ List<RunScheduleRow> buildRunSchedule({
   required Map<String, EdgeSizing> sizing,
   required Map<String, Length> edgeLengths,
   Map<String, double> edgeFixtureUnits = const {},
+  BuildingLevels? building,
 }) {
   final drawnIndex = <String, int>{
     for (var i = 0; i < net.edges.length; i++) net.edges[i].id: i,
@@ -229,7 +372,7 @@ List<RunScheduleRow> buildRunSchedule({
       return drawnIndex[a.id]!.compareTo(drawnIndex[b.id]!);
     });
 
-  final tags = elementTags(net);
+  final tags = elementTags(net, building: building);
   final rows = <RunScheduleRow>[];
   for (final e in ordered) {
     final s = sizing[e.id]!;
@@ -240,7 +383,12 @@ List<RunScheduleRow> buildRunSchedule({
       sizeLabel: _edgeSizeLabel(s),
       fixtureUnits: edgeFixtureUnits[e.id],
       flowLps: s.flow.inLitersPerSecond,
-      velocityMs: s.velocity.metersPerSecond,
+      // Round 17 follow-up (gravity-3-5) — a drainage STACK's sized velocity
+      // is the horizontal Manning value at the laid slope, meaningless for a
+      // vertical pipe, so the column prints the dash (velocity 0).
+      velocityMs: e.service == ServiceType.drainage && e.kind == EdgeKind.riser
+          ? 0.0
+          : s.velocity.metersPerSecond,
       lengthM: edgeLengths[e.id]?.meters ?? 0.0,
       // M16 — carry the sizer's own "raised to match a branch" flag through to
       // the schedule (it had no consumer anywhere before).
@@ -262,6 +410,13 @@ String _statusTag(VerificationStatus st, ReportStrings s) => switch (st) {
       VerificationStatus.secondarySource => s(RptStringKey.statusSecondary),
       VerificationStatus.notAnSniClause => s(RptStringKey.statusNotSni),
     };
+
+/// The Building-table name of floor [index] (falls back to `index + 1` only
+/// for an index outside the building — never fabricates a name).
+String _floorName(BuildingLevels b, int index) =>
+    index >= 0 && index < b.floors.length
+        ? b.floors[index].name
+        : '${index + 1}';
 
 String _service(ServiceType type, ReportStrings s) => switch (type) {
       ServiceType.coldWater => s(RptStringKey.svcColdWater),
@@ -309,8 +464,15 @@ String _mountingNote(ReportStrings s, {required bool ceilingDrop}) =>
 RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
     [ReportStrings strings = const ReportStrings.en()]) {
   final fireSystems = <String>[
-    if (d.sprinkler != null) strings(RptStringKey.dbFireSprinkler),
-    if (d.standpipe != null) strings(RptStringKey.dbFireStandpipe),
+    if (d.sprinkler != null || d.fireSystems.any((f) => f.sprinklerOnly))
+      strings(RptStringKey.dbFireSprinkler),
+    // A drawn fire network with no pumped standpipe basis (a transfer pump
+    // filling a tank, a gravity hose-reel system) is still modelled: the
+    // register must not say 'none' above a Fire section that prints it.
+    if (d.standpipe != null ||
+        d.fireGravity.any((g) => !g.sprinklerOnly) ||
+        d.fireSystems.any((f) => !f.sprinklerOnly))
+      strings(RptStringKey.dbFireStandpipe),
   ];
   return RptKeyValue([
     (
@@ -353,6 +515,17 @@ RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
         'c': d.runoffCoefficient.toStringAsFixed(2),
       })
     ),
+    // Round 17 follow-up (gravity-3-6) — the slope every collector size and
+    // drainage velocity was computed at, so the report is reproducible.
+    if (d.drainageSlope != null && d.drainageSlope! > 0)
+      (
+        strings(RptStringKey.dbDrainageSlope),
+        strings.format(RptStringKey.dbDrainageSlopeValue, {
+          'n': (1.0 / d.drainageSlope!).round(),
+          'manning': d.drainageManningN.toStringAsFixed(3),
+          'fill': d.drainageFillRatio.toStringAsFixed(2),
+        })
+      ),
     (
       strings(RptStringKey.dbFireProtection),
       '**${fireSystems.isEmpty ? strings(RptStringKey.dbFireNoneModelled) : fireSystems.join(' + ')}**'
@@ -475,7 +648,18 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       .format(RptStringKey.wsFeedStrategy, {'strategy': d.feedStrategy}));
   ws.writeln(strings.format(RptStringKey.wsTargetResidual,
       {'kpa': d.targetResidual.inKiloPascals.toStringAsFixed(0)}));
-  if (d.pump != null) {
+  if (d.supplyPumps.isNotEmpty) {
+    for (final p in d.supplyPumps) {
+      final lps = p.duty.flow.inLitersPerSecond;
+      ws.writeln(strings.format(RptStringKey.wsPumpTagged, {
+        'tag': p.tag,
+        'service': p.service,
+        'lps': lps.toStringAsFixed(lps < 1 ? 2 : 1),
+        'm': p.duty.head.meters.toStringAsFixed(1),
+        'kw': p.duty.selectedMotor.inKiloWatts.toStringAsFixed(2),
+      }));
+    }
+  } else if (d.pump != null) {
     ws.writeln(strings.format(RptStringKey.wsPumpHead,
         {'m': d.pump!.head.meters.toStringAsFixed(1)}));
     ws.writeln(strings.format(RptStringKey.wsPumpMotor,
@@ -511,11 +695,15 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               {'m': d.boosterHead!.meters.toStringAsFixed(1)}),
     }));
   }
-  final hwr = d.hotWaterRecirc;
-  if (hwr != null) {
+  for (final hwr in [
+    if (d.hotWaterRecirc != null) d.hotWaterRecirc!,
+    ...d.additionalHotWaterRecirc,
+  ]) {
     ws.writeln(strings.format(RptStringKey.wsHotWaterRecirc, {
       'lps': hwr.recircFlow.inLitersPerSecond.toStringAsFixed(2),
-      'loop': hwr.loopHead.meters.toStringAsFixed(1),
+      // Round 16 — the loop LENGTH and the loop HEAD are separate figures.
+      'len': hwr.loopLength.meters.toStringAsFixed(1),
+      'head': hwr.loopHead.meters.toStringAsFixed(1),
       'kw': hwr.pump.selectedMotor.inKiloWatts.toStringAsFixed(2),
       'c': hwr.returnTempC.toStringAsFixed(0),
     }));
@@ -539,7 +727,11 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         [
           for (final z in d.zones)
             [
-              '${z.zone.bottomFloorIndex + 1}–${z.zone.topFloorIndex + 1}',
+              // Round 12 — the zone names the SAME floor names as the
+              // Building table (index + 1 read '3–5' for G..L2 above two
+              // basements).
+              '${_floorName(d.building, z.zone.bottomFloorIndex)}–'
+                  '${_floorName(d.building, z.zone.topFloorIndex)}',
               z.topResidual.inKiloPascals.toStringAsFixed(0),
               z.bottomStatic.inKiloPascals.toStringAsFixed(0),
               z.withinLimit
@@ -555,7 +747,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
   if (d.sprinkler != null ||
       d.standpipe != null ||
       d.sprinklerRemoteArea != null ||
-      d.firePumpRating != null) {
+      d.firePumpRating != null ||
+      d.fireSystems.length >= 2 ||
+      (d.firePumpRating == null && d.fireSystems.isNotEmpty) ||
+      d.fireGravity.isNotEmpty) {
     final sp = d.sprinkler;
     final ra = d.sprinklerRemoteArea;
     final st = d.standpipe;
@@ -566,9 +761,18 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
         if (sp != null)
           (
             strings.format(
-                RptStringKey.fireSprinklerKey, {'hazard': sp.hazard.name}),
+                RptStringKey.fireSprinklerKey, {'hazard': fireHazardLabel(sp.hazard, strings)}),
             strings.format(RptStringKey.fireSprinklerValue, {
-              'lps': sp.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+              // The issued system demand is the remote-area demand at the
+              // flow each head ACTUALLY discharges: when the head minimum
+              // pressure governs (always for light hazard), the head is
+              // uplifted to K·√Pmin and the area demand rises above
+              // density × area (LH: 4.71 vs 3.15 L/s). Density-governed
+              // designs are equal either way; without the hydraulic check the
+              // density × area figure stands.
+              'lps': (ra?.remoteAreaDemand ?? sp.requiredFlow)
+                  .inLitersPerSecond
+                  .toStringAsFixed(1),
               'count': sp.sprinklerCount,
             })
           ),
@@ -613,7 +817,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   : strings(RptStringKey.firePumpStandby),
             }),
             strings.format(RptStringKey.firePumpValue, {
-              'rated': fp.ratedFlow.inLitersPerSecond.toStringAsFixed(0),
+              'rated': fp.ratedFlow.inLitersPerSecond.toStringAsFixed(1),
               'head': fp.ratedHead.meters.toStringAsFixed(0),
               'churn': fp.churn.head.meters.toStringAsFixed(0),
               'overload': fp.overload.head.meters.toStringAsFixed(0),
@@ -624,13 +828,81 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                   : strings(RptStringKey.firePumpVerdictWithin),
             })
           ),
-        if (fp != null)
+        // Round 48 — the churn pressure against the standard component
+        // rating (judge-only; printed only when exceeded ⇒ byte-identical).
+        // Round 49 (regression-report-churn-not-per-system) — one line per
+        // over SPRINKLER-bearing system on ITS OWN pump (the Review's list),
+        // never the governing (possibly hydrant-only) rating; with two or
+        // more lines each names its pump tag.
+        for (final o in d.fireOverPressure)
+          (
+            d.fireOverPressure.length >= 2
+                ? strings.format(
+                    RptStringKey.fireOverPressureSystemKey, {'tag': o.tag})
+                : strings(RptStringKey.fireOverPressureKey),
+            strings.format(RptStringKey.fireOverPressureValue, {
+              'churn': o.churnKpa.toStringAsFixed(0),
+              'limit': kFireComponentMaxPressureKpa.toStringAsFixed(0),
+              'share': o.frictionShare == null
+                  ? ''
+                  : strings.format(RptStringKey.fireOverPressureShare, {
+                      'pct': (o.frictionShare! * 100).toStringAsFixed(0),
+                    }),
+            })
+          ),
+        // Round 30 (report-parity-2-1) — every drawn fire system's own pump.
+        // Round 52 r2 — also a LONE line when no project rating block is
+        // printed (a transfer pump filling a tank that gravity-feeds the
+        // only terminals: the transfer line is the only pumped one).
+        if (d.fireSystems.length >= 2 ||
+            (fp == null && d.fireSystems.isNotEmpty))
+          for (final fs in d.fireSystems)
+            (
+              strings.format(RptStringKey.fireSystemPumpKey, {
+                'tag': fs.tag,
+                'system': strings(fs.transfer
+                    ? RptStringKey.fireSystemTransfer
+                    : fs.sprinklerOnly
+                        ? RptStringKey.fireSystemSprinkler
+                        : RptStringKey.fireSystemStandpipe),
+              }),
+              strings.format(RptStringKey.firePumpValue, {
+                'rated': fs.rating.ratedFlow.inLitersPerSecond
+                    .toStringAsFixed(1),
+                'head': fs.rating.ratedHead.meters.toStringAsFixed(0),
+                'churn': fs.rating.churn.head.meters.toStringAsFixed(0),
+                'overload': fs.rating.overload.head.meters.toStringAsFixed(0),
+                'motor': fs.rating.selectedMotor.inKiloWatts.toStringAsFixed(1),
+                'verdict': fs.rating.oversized
+                    ? strings(RptStringKey.firePumpVerdictOversized)
+                    : strings(RptStringKey.firePumpVerdictWithin),
+              })
+            ),
+        // Round 52 — a gravity system's own head verdict (no pump drawn).
+        for (final g in d.fireGravity)
+          (
+            strings.format(RptStringKey.fireGravityKey, {
+              'system': strings(g.sprinklerOnly
+                  ? RptStringKey.fireSystemSprinkler
+                  : RptStringKey.fireSystemStandpipe),
+            }),
+            strings.format(RptStringKey.fireGravityValue, {
+              'lps': g.flowLps.toStringAsFixed(1),
+              'avail': (g.availableM < 0 ? 0.0 : g.availableM)
+                  .toStringAsFixed(1),
+              'need': g.requiredM.toStringAsFixed(1),
+              'verdict': strings(g.short
+                  ? RptStringKey.fireGravityShort
+                  : RptStringKey.fireGravityOk),
+            })
+          ),
+        if ((fp ?? d.fireJockeyRating) case final jr?)
           (
             strings(RptStringKey.fireJockeyKey),
             strings.format(RptStringKey.fireJockeyValue, {
-              'lps': fp.jockeyFlow.inLitersPerSecond.toStringAsFixed(2),
-              'm': fp.jockeyHead.meters.toStringAsFixed(0),
-              'standby': fp.standbyRecommended
+              'lps': jr.jockeyFlow.inLitersPerSecond.toStringAsFixed(2),
+              'm': jr.jockeyHead.meters.toStringAsFixed(0),
+              'standby': jr.standbyRecommended
                   ? strings(RptStringKey.fireJockeyStandby)
                   : '',
             })
@@ -640,23 +912,43 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
 
   // ── HVAC ──────────────────────────────────────────────────────────────────
   final fan = d.fan;
-  if (fan != null) {
-    final fop = d.fanOperatingPoint ?? fan.operatingPoint;
+  // Round 12 — one tagged row per unit when several supply/exhaust systems
+  // exist (each its own duty, as scheduled); a single system keeps the legacy
+  // trunk rows byte-identical.
+  (String, String) unitRow(({String tag, FanDuty duty}) u) => (
+        '${u.tag}:',
+        strings.format(RptStringKey.hvacFanUnitValue, {
+          'lps': u.duty.airflow.inLitersPerSecond.toStringAsFixed(0),
+          'pa': u.duty.totalStaticPressure.pascals.toStringAsFixed(0),
+          'kw': u.duty.selectedMotor.inKiloWatts.toStringAsFixed(2),
+        }),
+      );
+  final multiSupply = d.supplyFans.length >= 2;
+  final multiExhaust = d.exhaustFans.length >= 2;
+  final hasSupply = fan != null || multiSupply;
+  if (hasSupply) {
+    final fop = multiSupply || fan == null
+        ? null
+        : (d.fanOperatingPoint ?? fan.operatingPoint);
     blocks
       ..add(RptHeading(2, strings(RptStringKey.headingHvac)))
       ..add(RptKeyValue([
-        (
-          strings(RptStringKey.hvacTrunkAirflow),
-          '**${fan.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
-        ),
-        (
-          strings(RptStringKey.hvacFanStatic),
-          '**${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
-        ),
-        (
-          strings(RptStringKey.hvacFanMotor),
-          '**${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
-        ),
+        if (multiSupply)
+          for (final u in d.supplyFans) unitRow(u)
+        else ...[
+          (
+            strings(RptStringKey.hvacTrunkAirflow),
+            '**${fan!.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
+          ),
+          (
+            strings(RptStringKey.hvacFanStatic),
+            '**${fan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
+          ),
+          (
+            strings(RptStringKey.hvacFanMotor),
+            '**${fan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
+          ),
+        ],
         if (fop != null)
           (
             strings(RptStringKey.hvacOperatingPoint),
@@ -681,6 +973,30 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
           ),
       ]));
   }
+  final exFan = d.exhaustFan;
+  if (exFan != null || multiExhaust) {
+    if (!hasSupply) {
+      blocks.add(RptHeading(2, strings(RptStringKey.headingHvac)));
+    }
+    blocks.add(RptKeyValue([
+      if (multiExhaust)
+        for (final u in d.exhaustFans) unitRow(u)
+      else ...[
+        (
+          strings(RptStringKey.hvacExhaustAirflow),
+          '**${exFan!.airflow.inLitersPerSecond.toStringAsFixed(0)} L/s**'
+        ),
+        (
+          strings(RptStringKey.hvacExhaustStatic),
+          '**${exFan.totalStaticPressure.pascals.toStringAsFixed(0)} Pa**'
+        ),
+        (
+          strings(RptStringKey.hvacExhaustMotor),
+          '**${exFan.selectedMotor.inKiloWatts.toStringAsFixed(2)} kW**'
+        ),
+      ],
+    ]));
+  }
 
   // ── Storm / rainwater ───────────────────────────────────────────────────────
   blocks
@@ -688,7 +1004,8 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
     ..add(RptKeyValue([
       (
         strings(RptStringKey.stormRainfall),
-        '**${d.rainfallMmPerHr.toStringAsFixed(0)} mm/hr**'
+        strings.format(RptStringKey.stormRainfallValue,
+            {'mm': d.rainfallMmPerHr.toStringAsFixed(0)})
       ),
       (
         strings(RptStringKey.stormRunoffC),
@@ -760,7 +1077,7 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
           for (final f in d.fittings)
             [
               _service(f.service, strings),
-              f.type.name,
+              fittingTypeLabel(f.type, strings),
               // N18: air fittings quote Ø, piped fittings DN (no more DN-for-air).
               f.service.isAir ? 'Ø${f.diameterMm}' : 'DN${f.diameterMm}',
               '${f.count}'

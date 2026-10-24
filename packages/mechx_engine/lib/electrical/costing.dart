@@ -69,7 +69,27 @@ CostEstimate estimateCost(
   final out = <CostLine>[];
 
   for (final line in bom.lines) {
-    final unit = line.sku == null ? null : priceList[line.sku];
+    // Priced by the line's pricelist key (a multi-core cable's `SKU:nC`, an
+    // unmatched enclosure/busbar/RCD/accessory's `elec:` key — audit r8), with
+    // a read-time fallback to the bare SKU so a saved pricelist still applies.
+    final byKey = line.priceKey == null ? null : priceList[line.priceKey];
+    // Round 21 (bom-quote-4) — a sized enclosure key
+    // (`elec:enclosure:<W>x<H>x<D>`) falls back to a legacy bare
+    // `elec:enclosure` price, so a pricelist saved before still prices it.
+    final legacyEnclosure = byKey == null &&
+            (line.priceKey?.startsWith('${kElecPriceKeyPrefix}enclosure:') ??
+                false)
+        ? priceList['${kElecPriceKeyPrefix}enclosure']
+        : null;
+    // Round 41 — a refined key (reduced cable make-up, role-keyed control
+    // device) falls back to the key a saved pricelist used before.
+    final legacyKeyed = byKey == null && line.legacyPriceKey != null
+        ? priceList[line.legacyPriceKey]
+        : null;
+    final unit = byKey ??
+        legacyKeyed ??
+        legacyEnclosure ??
+        (line.sku == null ? null : priceList[line.sku]);
     if (unit == null) {
       unmatched += 1;
       out.add(CostLine(line: line, matched: false));

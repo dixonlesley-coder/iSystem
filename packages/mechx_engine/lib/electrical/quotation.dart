@@ -45,8 +45,17 @@ double assemblyHoursForCategory(PartCategory category) =>
     assemblyHoursPerUnit[category] ?? defaultAssemblyHours;
 
 /// Total assembly man-hours implied by a bill of materials (Σ hours × qty).
-double labourHoursForBom(Bom bom) => bom.lines
-    .fold(0.0, (s, l) => s + assemblyHoursForCategory(l.category) * l.qty);
+///
+/// A [PartCategory.cable] line is the exception: its `qty` is the pull length
+/// in METRES, while the cable standard is hours PER RUN (cut, dress, gland,
+/// terminate) — so it is multiplied by the line's run count
+/// ([BomLine.runs]), never by its metres (which booked 10 h for one 50 m run).
+double labourHoursForBom(Bom bom) => bom.lines.fold(
+    0.0,
+    (s, l) =>
+        s +
+        assemblyHoursForCategory(l.category) *
+            (l.category == PartCategory.cable ? l.runs : l.qty));
 
 // ── quotation result ─────────────────────────────────────────────────────────
 

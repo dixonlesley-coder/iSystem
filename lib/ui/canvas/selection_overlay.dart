@@ -17,6 +17,8 @@ import '../../store/project_store.dart';
 import '../../store/selection_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/sizing_store.dart' show sizingProvider;
+import '../../store/smart_input_store.dart' show endpointStretchProvider;
+import '../../store/snap_settings_store.dart' show gridSnapProvider;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -24,6 +26,7 @@ import '../widgets/stepped_value_field.dart';
 import 'canvas_grid.dart' show calibratedGridWorldStep;
 import 'drawing_overlay.dart' show RubberBandPainter, snapOrTeePoint;
 import 'edge_context_menu.dart';
+import 'floor_index.dart';
 import 'network_layer.dart' show pipeOuterPx;
 import 'service_style.dart';
 import 'snapping.dart';
@@ -33,9 +36,11 @@ import 'viewport.dart';
 /// B28 — a lightweight, LOCAL "something is being dragged on this overlay"
 /// signal (node drag, endpoint resize, segment grip, outlet-nub pull, run
 /// move, or the marquee), used only to suppress the hover-measurement chip
-/// while a gesture is live. `dragSessionProvider` isn't a reliable proxy here
-/// (the mechanical canvas never calls its `beginDrag`); this is UI-only —
-/// never read by the engine or any sizing path.
+/// while a gesture is live. It is NOT `dragSessionProvider`: that K1 session
+/// (opened by every node / group / endpoint / grip / run drag here, closed on
+/// release or settle) gates the heavy sizing chain and also spans keyboard
+/// nudges and mid-drag settles; this is UI-only — never read by the engine or
+/// any sizing path.
 final canvasGestureActiveProvider =
     NotifierProvider<CanvasGestureActiveController, bool>(
   CanvasGestureActiveController.new,
@@ -108,6 +113,22 @@ class _NetworkSelectionOverlayState
   bool _hoverChipDue = false;
   Timer? _hoverChipTimer;
 
+  /// P3 — the node-handle layer, built once per sheet/floor and reused (an
+  /// identical widget instance is never rebuilt by its parent).
+  _NodeHandlesLayer? _handlesLayer;
+  _SelectionGestureLayer? _gestureLayer;
+
+  @override
+  void didUpdateWidget(NetworkSelectionOverlay old) {
+    super.didUpdateWidget(old);
+    if (old.sheetId != widget.sheetId ||
+        old.floorIndex != widget.floorIndex ||
+        old.onFitView != widget.onFitView) {
+      _handlesLayer = null;
+      _gestureLayer = null;
+    }
+  }
+
   @override
   void dispose() {
     _hoverChipTimer?.cancel();
@@ -173,11 +194,33 @@ class _NetworkSelectionOverlayState
     ref.read(canvasGestureActiveProvider.notifier).set(true);
     ref.read(selectionProvider.notifier).selectNode(id);
     ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
-    final node = ref.read(networkControllerProvider).network.nodeById(id);
+    // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+    ref.read(dragSessionProvider.notifier).beginDrag();
+    final net = ref.read(networkControllerProvider).network;
+    final node = net.nodeById(id);
     _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
+    // Item 2 — publish the stretch so a typed length (smart bar, fed by the
+    // canvas key handler) can set the run's exact length mid-drag.
+    final edges = net.edgesAt(id);
+    if (edges.length == 1) {
+      ref.read(endpointStretchProvider.notifier).begin(id, edges.first.id);
+    }
+  }
+
+  /// Whether a typed length already finished this stretch (item 2): the rest
+  /// of the pointer drag is inert so the exact length survives the release.
+  bool get _stretchTyped => ref.read(endpointStretchProvider)?.typed ?? false;
+
+  void _cancelEndpointStretch() {
+    ref.read(canvasGestureActiveProvider.notifier).set(false);
+    ref.read(dragSessionProvider.notifier).endDrag();
+    ref.read(endpointStretchProvider.notifier).end();
+    _nodeDragRaw = null;
   }
 
   void _updateEndpointStretch(String id, double dxWorld, double dyWorld) {
+    if (_stretchTyped) return;
+    ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
     final net = ref.read(networkControllerProvider).network;
     final node = net.nodeById(id);
     if (node == null) return;
@@ -194,8 +237,11 @@ class _NetworkSelectionOverlayState
   }
 
   void _endEndpointStretch(String id, double scale, double snapWorld) {
-    ref.read(canvasGestureActiveProvider.notifier).set(false);
-    _nodeDragRaw = null;
+    final typed = _stretchTyped;
+    _cancelEndpointStretch();
+    // A typed length already committed this drag (one undo step with it):
+    // never let the release snap / merge the exact end somewhere else.
+    if (typed) return;
     final gridOrtho =
         ref.read(orthoProvider) ^ HardwareKeyboard.instance.isShiftPressed;
     final gridMpp = ref
@@ -203,6 +249,7 @@ class _NetworkSelectionOverlayState
         .calibrationFor(sheetId)
         ?.metersPerPixel;
     final gridSnap = gridOrtho &&
+        ref.read(gridSnapProvider) &&
         gridMpp != null &&
         calibratedGridWorldStep(gridMpp) * scale >= 6.0;
     final anchor =
@@ -234,6 +281,7 @@ class _NetworkSelectionOverlayState
     final from = _pullFrom;
     final now = _pullNow;
     ref.read(canvasGestureActiveProvider.notifier).set(false);
+    ref.read(dragSessionProvider.notifier).endDrag();
     setState(() {
       _pullFrom = null;
       _pullNow = null;
@@ -256,12 +304,16 @@ class _NetworkSelectionOverlayState
     final gridMpp =
         ref.read(projectControllerProvider).calibrationFor(sheetId)?.metersPerPixel;
     final gridSnap = effectiveOrtho &&
+        ref.read(gridSnapProvider) &&
         gridMpp != null &&
         calibratedGridWorldStep(gridMpp) * transform.scale >= 6.0;
     ref
         .read(networkControllerProvider.notifier)
         .drawRunFromNode(from, world,
             snapRadius: snapWorld,
+            // E1/H3 — never latch onto a hidden / locked service's node (the
+            // SAME inert set the preview's snap ring honours).
+            avoidServices: ref.read(inertServicesProvider),
             gridSnap: gridSnap,
             gridMetersPerPixel: gridMpp,
             // B13 — auto-elbow an off-ray snap target so the pulled main lands as
@@ -309,6 +361,22 @@ class _NetworkSelectionOverlayState
     _lastTapPos = local;
     _lastTapNodeId = nodeId;
     _lastTapEdgeId = edgeId;
+  }
+
+  /// A primary tap on a node's handle / grip. H6 — Shift TOGGLES the node in
+  /// the multi-selection (parity with the gesture layer's Shift-click, which
+  /// the opaque handle used to pre-empt by REPLACING the selection); a plain
+  /// tap selects it alone and feeds the double-click-to-open tracker.
+  void _tapNode(String id, Offset screen) {
+    if (HardwareKeyboard.instance.isShiftPressed) {
+      ref.read(selectionProvider.notifier).toggleNode(id);
+      resetTapTracking();
+      return;
+    }
+    ref.read(selectionProvider.notifier).selectNode(id);
+    // Second click on the same node within the double-tap window opens the
+    // inspector (see [registerElementTap]).
+    registerElementTap(screen, nodeId: id);
   }
 
   /// Forget the last tap (an empty-space tap never opens anything).
@@ -374,7 +442,7 @@ class _NetworkSelectionOverlayState
     final drawing = ref.watch(networkControllerProvider);
     final net = drawing.network;
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
+        ref.watch(sheetViewportProvider(sheetId)) ??
             const ViewportTransform();
     final selection = ref.watch(selectionProvider);
     final hover = ref.watch(hoverTargetProvider);
@@ -406,31 +474,30 @@ class _NetworkSelectionOverlayState
     // Drag-end snaps the node to a nearby node (merge) so a segment endpoint
     // "connects" to a fitting. A node whose every incident edge is inert gets no
     // handle (F1/F4).
+    //
+    // P3 — the handles live in their own [_NodeHandlesLayer], cached on this
+    // state, so a HOVER change (which rebuilds this widget for the outlet nubs
+    // + hover chip) never rebuilds every node's Positioned/GestureDetector.
     final snapWorld = 14 / transform.scale;
-    final handles = <Widget>[
-      for (final n in net.nodes)
-        if (_onFloor(n) && !_nodeInert(net, n.id, inert))
-          _dragHandle(ref, n.id, transform.worldToScreen(Offset(n.x, n.y)),
-              transform.scale, snapWorld),
-    ];
+    final handlesLayer = _handlesLayer ??= _NodeHandlesLayer(host: this);
 
     // Outlet nubs — the accent handle a mainline is pulled out of. C7: gated to
     // the HOVERED and SELECTED non-fixture nodes only (not every node always),
     // so a dense plan isn't peppered with blue confetti competing with the
-    // selection language.
+    // selection language. P2 — the cheap hovered/selected test runs FIRST; the
+    // inert test only for the few nodes that pass it.
     final hoveredNodeId = hover?.nodeId;
     final outlets = <Widget>[
-      for (final n in net.nodes)
-        if (_onFloor(n) &&
-            n.role != NodeRole.fixture &&
-            !_nodeInert(net, n.id, inert) &&
+      for (final n in floorIndexOf(net, sheetId, floorIndex).nodes)
+        if (n.role != NodeRole.fixture &&
             (n.id == hoveredNodeId ||
                 selection.containsNode(n.id) ||
                 selection.nodeId == n.id ||
                 // B11: keep the nub mounted while ITS pull is active, so the
                 // pointer leaving the 18px nub mid-pull never unmounts it (and
                 // kills the live pan gesture).
-                _pullFrom == n.id))
+                _pullFrom == n.id) &&
+            !_nodeInert(net, n.id, inert))
           _outletNub(n.id, transform.worldToScreen(Offset(n.x, n.y)), transform,
               isHovered: n.id == hoveredNodeId,
               // A free run endpoint's grip stretches (extend/trim) rather than
@@ -494,17 +561,11 @@ class _NetworkSelectionOverlayState
       }
     }
 
-    // B18/B27 — the armed-mode status pill: which action is armed and how to
-    // act on / exit it. Null when nothing is armed (no extra chrome at rest).
+    // B18/B27 — an armed boundary pick / brush suppresses the hover chip. The
+    // armed-mode status itself is the on-canvas ModePill's (M4: one pill, with
+    // its Esc / Done exit), not a second pill here.
     final trimArmed = ref.watch(trimExtendArmedProvider);
     final brushArmed = ref.watch(matchPropertiesArmedProvider);
-    String? armedHint;
-    if (trimArmed != null) {
-      armedHint = context.strings(StringKey.trimExtendArmedHint);
-    } else if (brushArmed != null) {
-      armedHint = context.strings.format(StringKey.matchPropertiesArmedHint,
-          {'service': serviceLabel(brushArmed.service)});
-    }
 
     // B28 — the transient hover-measurement chip: 'DN50 - 3.2 m' on a hovered
     // run, 'FFL +2.70' on a hovered node with an elevation. Suppressed while
@@ -515,8 +576,10 @@ class _NetworkSelectionOverlayState
     if (_hoverChipDue && !gestureActive && trimArmed == null && brushArmed == null) {
       final hoveredNode = hover?.nodeId == null ? null : net.nodeById(hover!.nodeId!);
       if (hoveredNode != null && _onFloor(hoveredNode)) {
-        final elev = nodeElevation(
-            hoveredNode, project.building, ref.watch(mountingProvider));
+        // Same datum as the node inspector (Round 21 follow-up): a bare
+        // gravity-stack junction reads its riser-end elevation.
+        final elev = displayedNodeElevation(
+            net, hoveredNode, project.building, ref.watch(mountingProvider));
         hoverChip = _HoverMeasurementChip(
           screen: transform.worldToScreen(Offset(hoveredNode.x, hoveredNode.y)),
           text: fflLabel(elev.meters),
@@ -583,7 +646,10 @@ class _NetworkSelectionOverlayState
         }
       }
       pullColor = serviceColor(incident ?? drawing.service);
-      final pt = snapOrTeePoint(net, sheetId, floorIndex, w, snapWorld);
+      // H3 — the ring honours the commit's acceptance rule: the run's own
+      // service (as `drawRunFromNode` resolves it) and the inert services.
+      final pt = snapOrTeePoint(net, sheetId, floorIndex, w, snapWorld,
+          drawService: incident ?? drawing.service, avoidServices: inert);
       pullSnapScreen = pt == null ? null : transform.worldToScreen(pt);
       // B13 — preview the auto-elbow L when ortho reaches an off-ray snap target
       // (matches the drawRunFromNode commit).
@@ -601,14 +667,14 @@ class _NetworkSelectionOverlayState
     return Stack(
       children: [
         Positioned.fill(
-          child: _SelectionGestureLayer(
+          child: _gestureLayer ??= _SelectionGestureLayer(
             sheetId: sheetId,
             floorIndex: floorIndex,
             onFitView: widget.onFitView,
             host: this,
           ),
         ),
-        ...handles,
+        Positioned.fill(child: handlesLayer),
         ...outlets,
         ...resizeHandles,
         ?midGrip,
@@ -631,7 +697,6 @@ class _NetworkSelectionOverlayState
             ),
           ),
         ?hoverChip,
-        if (armedHint != null) _ArmedHintPill(text: armedHint),
       ],
     );
   }
@@ -654,12 +719,7 @@ class _NetworkSelectionOverlayState
         onExit: (_) => ref.read(hoverTargetProvider.notifier).clear(),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () {
-            ref.read(selectionProvider.notifier).selectNode(id);
-            // Second click on the same node within the double-tap window opens
-            // the inspector (see [registerElementTap]).
-            registerElementTap(screen, nodeId: id);
-          },
+          onTap: () => _tapNode(id, screen),
           // Right-click ANY node → its context menu (fitting rows for a bare
           // junction, the face ladder for an air terminal, Select similar +
           // Delete for all) — the handle owns the pointer over the node.
@@ -678,6 +738,8 @@ class _NetworkSelectionOverlayState
               ref.read(selectionProvider.notifier).selectNode(id);
             }
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+            // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+            ref.read(dragSessionProvider.notifier).beginDrag();
             // B10: seed the raw-drag tracker (only consumed by the single,
             // degree-1 ortho path below).
             final node =
@@ -685,6 +747,9 @@ class _NetworkSelectionOverlayState
             _nodeDragRaw = node == null ? null : Offset(node.x, node.y);
           },
           onPanUpdate: (d) {
+            // K1 — each frame keeps (or, after a mid-drag pause settled it,
+            // re-opens) the drag session.
+            ref.read(dragSessionProvider.notifier).beginDrag();
             final sel = ref.read(selectionProvider);
             final ctrl = ref.read(networkControllerProvider.notifier);
             final dx = d.delta.dx / scale;
@@ -712,6 +777,7 @@ class _NetworkSelectionOverlayState
           },
           onPanEnd: (_) {
             ref.read(canvasGestureActiveProvider.notifier).set(false);
+            ref.read(dragSessionProvider.notifier).endDrag();
             _nodeDragRaw = null; // B10: end the raw-drag tracking
             final sel = ref.read(selectionProvider);
             // A group move is already committed live over the pushUndoSnapshot
@@ -728,6 +794,7 @@ class _NetworkSelectionOverlayState
                 .calibrationFor(sheetId)
                 ?.metersPerPixel;
             final gridSnap = gridOrtho &&
+                ref.read(gridSnapProvider) &&
                 gridMpp != null &&
                 calibratedGridWorldStep(gridMpp) * scale >= 6.0;
             // B12 — a dragged node also settles onto the plan underlay (above the
@@ -805,10 +872,7 @@ class _NetworkSelectionOverlayState
           // node centre — it must therefore carry the handle's TAP behaviour too
           // (select + the manual double-click-to-open path), or a second click on
           // a selected node would land on the grip and never reach the handle.
-          onTap: () {
-            ref.read(selectionProvider.notifier).selectNode(nodeId);
-            registerElementTap(screen, nodeId: nodeId);
-          },
+          onTap: () => _tapNode(nodeId, screen),
           onSecondaryTapUp: (d) {
             ref.read(selectionProvider.notifier).selectNode(nodeId);
             showNodeContextMenu(context, ref, nodeId, d.globalPosition);
@@ -829,13 +893,10 @@ class _NetworkSelectionOverlayState
               ? (_) => _endEndpointStretch(
                   nodeId, transform.scale, 14 / transform.scale)
               : (_) => _endPull(transform),
-          onPanCancel: stretch
-              ? () {
-                  ref.read(canvasGestureActiveProvider.notifier).set(false);
-                  _nodeDragRaw = null;
-                }
+          onPanCancel: stretch ? _cancelEndpointStretch
               : () {
                   ref.read(canvasGestureActiveProvider.notifier).set(false);
+                  ref.read(dragSessionProvider.notifier).endDrag();
                   setState(() {
                     _pullFrom = null;
                     _pullNow = null;
@@ -949,6 +1010,8 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
           ref.read(canvasGestureActiveProvider.notifier).set(true);
           setState(() => _pressing = true);
           ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+          // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+          ref.read(dragSessionProvider.notifier).beginDrag();
           final node = ref
               .read(networkControllerProvider)
               .network
@@ -956,6 +1019,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
           _rawWorld = node == null ? null : Offset(node.x, node.y);
         },
         onPanUpdate: (d) {
+          ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
           final net = ref.read(networkControllerProvider).network;
           final node = net.nodeById(widget.nodeId);
           if (node == null) return;
@@ -979,6 +1043,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         },
         onPanEnd: (_) {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           setState(() => _pressing = false);
           _rawWorld = null;
           // G2 — the resized endpoint also honours the magnetic grid (lowest
@@ -995,6 +1060,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
                   .calibrationFor(node.sheetId)
                   ?.metersPerPixel;
           final gridSnap = gridOrtho &&
+              ref.read(gridSnapProvider) &&
               gridMpp != null &&
               calibratedGridWorldStep(gridMpp) * widget.scale >= 6.0;
           // B12 — the resized endpoint also snaps onto the plan underlay (above
@@ -1025,6 +1091,7 @@ class _ResizeHandleState extends ConsumerState<_ResizeHandle> {
         },
         onPanCancel: () {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           _rawWorld = null;
           setState(() => _pressing = false);
         },
@@ -1120,16 +1187,23 @@ class _SegmentGripState extends ConsumerState<_SegmentGrip> {
           ref.read(canvasGestureActiveProvider.notifier).set(true);
           setState(() => _pressing = true);
           ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+          // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+          ref.read(dragSessionProvider.notifier).beginDrag();
         },
-        onPanUpdate: (d) => ref
-            .read(networkControllerProvider.notifier)
-            .dragSegment(widget.edgeId, d.delta / widget.scale),
+        onPanUpdate: (d) {
+          ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
+          ref
+              .read(networkControllerProvider.notifier)
+              .dragSegment(widget.edgeId, d.delta / widget.scale);
+        },
         onPanEnd: (_) {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           setState(() => _pressing = false);
         },
         onPanCancel: () {
           ref.read(canvasGestureActiveProvider.notifier).set(false);
+          ref.read(dragSessionProvider.notifier).endDrag();
           setState(() => _pressing = false);
         },
         child: Center(
@@ -1244,42 +1318,6 @@ class _RunLengthLabel extends ConsumerWidget {
 String _formatMeters(double m) =>
     m >= 10 ? '${m.toStringAsFixed(1)} m' : '${m.toStringAsFixed(2)} m';
 
-/// B18/B27 — the armed-mode status pill (top-centre, mirroring the F5 armed-
-/// placement hint): names which action is armed and how to act on / exit it.
-class _ArmedHintPill extends StatelessWidget {
-  final String text;
-  const _ArmedHintPill({required this.text});
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Positioned(
-      top: MechXSpacing.md + 40,
-      left: 0,
-      right: 0,
-      child: IgnorePointer(
-        child: Center(
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: MechXSpacing.sm + 2,
-              vertical: MechXSpacing.xs + 1,
-            ),
-            decoration: BoxDecoration(
-              color: colors.surface.withAlpha(240),
-              borderRadius: MechXRadii.control,
-              border: Border.all(color: colors.accent),
-              boxShadow: MechXShadow.card,
-            ),
-            child:
-                Text(text, style: type.label.copyWith(color: colors.textPrimary)),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// B28 — the transient hover-measurement chip (a run's size + length, or a
 /// node's FFL), positioned at the hovered element's screen anchor. Pointer-
 /// transparent so it never steals the hover that spawned it.
@@ -1329,13 +1367,81 @@ bool _isOnFloor(NetNode n, String sheetId, int floorIndex) =>
 /// equipment. Empty [inert] ⇒ always false (byte-identical, zero extra cost).
 bool _nodeInert(Network net, String nodeId, Set<ServiceType> inert) {
   if (inert.isEmpty) return false;
+  // P2 — the INDEXED incidence (`Network.edgesAt`), never a whole-edge scan:
+  // this runs per on-floor node per overlay build and per pointer move.
   var touched = false;
-  for (final e in net.edges) {
-    if (e.fromId != nodeId && e.toId != nodeId) continue;
+  for (final e in net.edgesAt(nodeId)) {
     touched = true;
     if (!inert.contains(e.service)) return false;
   }
   return touched;
+}
+
+/// Item 6 — EVERY element a click at [world] could mean, in the order a plain
+/// click resolves them: the nodes within the node hit radius (nearest first),
+/// then the runs / risers within their hit corridors (nearest first) — the
+/// same radii, corridors and inert filter as [_nodeAt] / [_edgeAt], so the
+/// first candidate is always what a click selects. Shift+Space walks the rest
+/// (coincident nodes, a node sitting on a run, crossing runs).
+List<HoverTarget> pickCandidatesAt(
+  Network net,
+  ViewportTransform transform,
+  Offset world,
+  String sheetId,
+  int floorIndex, {
+  Map<String, EdgeSizing>? sizing,
+  double? metersPerPixel,
+  Set<ServiceType> inertServices = const {},
+}) {
+  final idx = floorIndexOf(net, sheetId, floorIndex);
+  final nodeHitR = 13 / transform.scale;
+  // (distance, tie order, id). Ties break the way the click's own scans do:
+  // [_nodeAt] keeps the LAST of equally near nodes, [_edgeAt] the FIRST of
+  // equally near edges.
+  final nodes = <(double, int, String)>[];
+  for (var i = 0; i < idx.nodes.length; i++) {
+    final n = idx.nodes[i];
+    final dx = n.x - world.dx;
+    final dy = n.y - world.dy;
+    final d2 = dx * dx + dy * dy;
+    if (d2 > nodeHitR * nodeHitR) continue;
+    if (_nodeInert(net, n.id, inertServices)) continue;
+    nodes.add((d2, -i, n.id));
+  }
+  final edges = <(double, int, String)>[];
+  final riserHitR = 8 / transform.scale;
+  for (var i = 0; i < idx.edges.length; i++) {
+    final fe = idx.edges[i];
+    final e = fe.edge;
+    if (inertServices.contains(e.service)) continue;
+    if (e.kind == EdgeKind.run) {
+      final outer = pipeOuterPx(sizing?[e.id], e.service,
+          scale: transform.scale, metersPerPixel: metersPerPixel);
+      final hitR = math.max(8.0, outer / 2 + 4.0) / transform.scale;
+      final d = _distToSegment(
+          world, Offset(fe.a.x, fe.a.y), Offset(fe.b.x, fe.b.y));
+      if (d <= hitR) edges.add((d, i, e.id));
+    } else {
+      var best = double.infinity;
+      for (final n in [fe.a, fe.b]) {
+        if (!_isOnFloor(n, sheetId, floorIndex)) continue;
+        final d = (Offset(n.x, n.y) - world).distance;
+        if (d <= riserHitR && d < best) best = d;
+      }
+      if (best.isFinite) edges.add((best, i, e.id));
+    }
+  }
+  int byDist((double, int, String) a, (double, int, String) b) {
+    final c = a.$1.compareTo(b.$1);
+    return c != 0 ? c : a.$2.compareTo(b.$2);
+  }
+
+  nodes.sort(byDist);
+  edges.sort(byDist);
+  return [
+    for (final n in nodes) (nodeId: n.$3, edgeId: null),
+    for (final e in edges) (nodeId: null, edgeId: e.$3),
+  ];
 }
 
 /// Nearest node id on this floor within the node hit radius, or null. [inert]
@@ -1347,16 +1453,15 @@ String? _nodeAt(Network net, ViewportTransform transform, Offset world,
   final nodeHitR = 13 / transform.scale; // ≈13 screen px
   String? node;
   var best = nodeHitR * nodeHitR;
-  for (final n in net.nodes) {
-    if (!_isOnFloor(n, sheetId, floorIndex)) continue;
-    if (_nodeInert(net, n.id, inertServices)) continue;
+  // P10 — this floor's nodes only (memoised per network instance).
+  for (final n in floorIndexOf(net, sheetId, floorIndex).nodes) {
     final dx = n.x - world.dx;
     final dy = n.y - world.dy;
     final d2 = dx * dx + dy * dy;
-    if (d2 <= best) {
-      best = d2;
-      node = n.id;
-    }
+    if (d2 > best) continue; // cheap distance first, the inert test after
+    if (_nodeInert(net, n.id, inertServices)) continue;
+    best = d2;
+    node = n.id;
   }
   return node;
 }
@@ -1379,17 +1484,14 @@ String? _edgeAt(Network net, ViewportTransform transform, Offset world,
   final riserHitR = 8 / transform.scale;
   String? edge;
   var bestDist = double.infinity;
-  for (final e in net.edges) {
+  // P10 — this floor's runs + risers only (memoised per network instance).
+  for (final fe in floorIndexOf(net, sheetId, floorIndex).edges) {
+    final e = fe.edge;
     // F1/F4 — a locked-layer / hidden-service edge is inert to clicks.
     if (inertServices.contains(e.service)) continue;
-    final a = net.nodeById(e.fromId);
-    final b = net.nodeById(e.toId);
-    if (a == null || b == null) continue;
+    final a = fe.a;
+    final b = fe.b;
     if (e.kind == EdgeKind.run) {
-      if (!_isOnFloor(a, sheetId, floorIndex) ||
-          !_isOnFloor(b, sheetId, floorIndex)) {
-        continue;
-      }
       final outer = pipeOuterPx(sizing?[e.id], e.service,
           scale: transform.scale, metersPerPixel: metersPerPixel);
       final edgeHitR = math.max(8.0, outer / 2 + 4.0) / transform.scale;
@@ -1464,6 +1566,11 @@ class _SelectionGestureLayerState
     if (event is! KeyDownEvent || event.logicalKey != LogicalKeyboardKey.escape) {
       return false;
     }
+    // M4 — when the keyboard sits inside the canvas, the Esc ALSO reaches the
+    // Layout canvas key handler (a HardwareKeyboard handler never stops focus
+    // dispatch), which disarms first and stops there. Acting here too used to
+    // disarm AND let that handler clear the selection in the same press.
+    if (mounted && (Focus.maybeOf(context)?.hasFocus ?? false)) return false;
     var handled = false;
     if (ref.read(matchPropertiesArmedProvider) != null) {
       ref.read(matchPropertiesArmedProvider.notifier).disarm();
@@ -1503,7 +1610,7 @@ class _SelectionGestureLayerState
 
   @override
   Widget build(BuildContext context) {
-    final transform = ref.watch(sheetsControllerProvider).viewportFor(_sheetId) ??
+    final transform = ref.watch(sheetViewportProvider(_sheetId)) ??
         const ViewportTransform();
     // B18/B27 — an armed boundary pick or match-properties brush swaps the
     // cursor to a crosshair, mirroring the CAD "something is armed" cue.
@@ -1716,6 +1823,8 @@ class _SelectionGestureLayerState
             }
             ref.read(canvasGestureActiveProvider.notifier).set(true);
             ref.read(networkControllerProvider.notifier).pushUndoSnapshot();
+            // K1 — a pointer drag freezes the heavy chain until it settles/ends.
+            ref.read(dragSessionProvider.notifier).beginDrag();
             setState(() => _runMoveNodes = movers);
             return;
           }
@@ -1736,6 +1845,7 @@ class _SelectionGestureLayerState
         // repaint through the network provider).
         final movers = _runMoveNodes;
         if (movers != null) {
+          ref.read(dragSessionProvider.notifier).beginDrag(); // K1 frame
           ref.read(networkControllerProvider.notifier).moveMany(
                 movers,
                 details.delta.dx / transform.scale,
@@ -1748,6 +1858,7 @@ class _SelectionGestureLayerState
       },
       onPanCancel: () {
         ref.read(canvasGestureActiveProvider.notifier).set(false);
+        ref.read(dragSessionProvider.notifier).endDrag();
         // Clear any in-flight drag state (a cancelled run move keeps its live
         // translation + the recorded undo step, exactly like a cancelled
         // node/group drag — Ctrl+Z reverts it).
@@ -1762,6 +1873,7 @@ class _SelectionGestureLayerState
       },
       onPanEnd: (_) {
         ref.read(canvasGestureActiveProvider.notifier).set(false);
+        ref.read(dragSessionProvider.notifier).endDrag();
         // G5: a run/group move is already committed live over the
         // pushUndoSnapshot baseline (one undo step); nothing to snap on release
         // (mirrors the node handle's group-move path).
@@ -1771,9 +1883,13 @@ class _SelectionGestureLayerState
         }
         final start = _bandStart;
         final now = _bandNow;
-        // Shift held at EITHER end of the drag makes the marquee additive.
+        // Shift held at EITHER end of the drag makes the marquee additive; L2 —
+        // Ctrl/Cmd+Shift at release makes it SUBTRACT its capture instead.
         final additive =
             _bandAdditive || HardwareKeyboard.instance.isShiftPressed;
+        final subtract = additive &&
+            (HardwareKeyboard.instance.isControlPressed ||
+                HardwareKeyboard.instance.isMetaPressed);
         setState(() {
           _bandStart = null;
           _bandNow = null;
@@ -1793,31 +1909,52 @@ class _SelectionGestureLayerState
         final b = transform.screenToWorld(now);
         final rect = Rect.fromPoints(a, b);
         final inert = _inert;
+        final idx = floorIndexOf(net, _sheetId, _floor);
         final nodeIds = <String>{};
-        for (final n in net.nodes) {
-          if (!_isOnFloor(n, _sheetId, _floor)) continue;
+        for (final n in idx.nodes) {
+          if (!rect.contains(Offset(n.x, n.y))) continue;
           // F1/F4 — a rubber-band never grabs a locked-layer / hidden-service
           // node (parity with tap-select).
           if (_nodeInert(net, n.id, inert)) continue;
-          if (rect.contains(Offset(n.x, n.y))) nodeIds.add(n.id);
+          nodeIds.add(n.id);
         }
-        // A run edge is captured when BOTH endpoints fall inside the rect
-        // (window) or AT LEAST ONE does (crossing).
+        // A WINDOW captures a run whose BOTH endpoints fall inside the rect.
+        // M7 — a CROSSING captures every run the rect TOUCHES: an endpoint
+        // inside OR the segment cutting through it (a long run crossing the
+        // box with both ends outside), plus a RISER whose end on this floor
+        // lies inside (a riser is a point on the plan).
         final edgeIds = <String>{};
-        for (final e in net.edges) {
-          if (e.kind != EdgeKind.run) continue;
+        for (final fe in idx.edges) {
+          final e = fe.edge;
           // F1/F4 — a rubber-band never grabs a locked-layer / hidden-service
           // run, even when both endpoints are shared with visible edges and
           // thus land in nodeIds (parity with _edgeAt tap-select).
           if (inert.contains(e.service)) continue;
           final fromIn = nodeIds.contains(e.fromId);
           final toIn = nodeIds.contains(e.toId);
-          if (windowMode ? (fromIn && toIn) : (fromIn || toIn)) {
-            edgeIds.add(e.id);
+          if (e.kind == EdgeKind.riser) {
+            // A riser's whole on-plan footprint is the marker at its end on
+            // THIS floor, so a window fully around that marker encloses it —
+            // window and crossing agree (review: the window used to skip it).
+            if (fromIn || toIn) edgeIds.add(e.id);
+            continue;
           }
+          final hit = windowMode
+              ? (fromIn && toIn)
+              : (fromIn ||
+                  toIn ||
+                  segmentIntersectsRect(
+                      Offset(fe.a.x, fe.a.y), Offset(fe.b.x, fe.b.y), rect));
+          if (hit) edgeIds.add(e.id);
         }
         final sel = ref.read(selectionProvider.notifier);
-        additive ? sel.addMulti(nodeIds, edgeIds) : sel.setMulti(nodeIds, edgeIds);
+        if (subtract) {
+          sel.removeMulti(nodeIds, edgeIds);
+        } else if (additive) {
+          sel.addMulti(nodeIds, edgeIds);
+        } else {
+          sel.setMulti(nodeIds, edgeIds);
+        }
       },
       child: CustomPaint(
         size: Size.infinite,
@@ -1913,4 +2050,60 @@ double _distToSegment(Offset p, Offset a, Offset b) {
   final proj = Offset(a.dx + t * ab.dx, a.dy + t * ab.dy);
   return math.sqrt(
       (p.dx - proj.dx) * (p.dx - proj.dx) + (p.dy - proj.dy) * (p.dy - proj.dy));
+}
+
+/// M7 — whether segment [a]→[b] touches [rect] (closed): an endpoint inside,
+/// or any part of the segment crossing it — Liang–Barsky clipping, so a run
+/// cut through a corner counts too. Pure; used by the crossing marquee.
+@visibleForTesting
+bool segmentIntersectsRect(Offset a, Offset b, Rect rect) {
+  final dx = b.dx - a.dx, dy = b.dy - a.dy;
+  var t0 = 0.0, t1 = 1.0;
+  // Clip against each slab: p·t <= q.
+  bool clip(double p, double q) {
+    if (p == 0) return q >= 0; // parallel: inside iff on the right side
+    final t = q / p;
+    if (p < 0) {
+      if (t > t1) return false;
+      if (t > t0) t0 = t;
+    } else {
+      if (t < t0) return false;
+      if (t < t1) t1 = t;
+    }
+    return true;
+  }
+
+  return clip(-dx, a.dx - rect.left) &&
+      clip(dx, rect.right - a.dx) &&
+      clip(-dy, a.dy - rect.top) &&
+      clip(dy, rect.bottom - a.dy);
+}
+
+/// P3 — the per-node drag handles, split out of [NetworkSelectionOverlay] so a
+/// hover change (which only moves the outlet nubs / hover chip) never
+/// rebuilds them. Watches exactly what the handles depend on: the network,
+/// the sheet viewport and the inert services.
+class _NodeHandlesLayer extends ConsumerWidget {
+  final _NetworkSelectionOverlayState host;
+  const _NodeHandlesLayer({required this.host});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final net = ref.watch(networkControllerProvider.select((d) => d.network));
+    final transform = ref.watch(sheetViewportProvider(host.sheetId)) ??
+        const ViewportTransform();
+    final inert = ref.watch(inertServicesProvider);
+    final snapWorld = 14 / transform.scale;
+    // A node whose every incident edge is inert gets no handle (F1/F4).
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        for (final n in floorIndexOf(net, host.sheetId, host.floorIndex).nodes)
+          if (!_nodeInert(net, n.id, inert))
+            host._dragHandle(ref, n.id,
+                transform.worldToScreen(Offset(n.x, n.y)), transform.scale,
+                snapWorld),
+      ],
+    );
+  }
 }

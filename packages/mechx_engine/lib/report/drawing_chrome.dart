@@ -19,6 +19,8 @@ import 'dart:typed_data';
 
 import '../geometry/dxf_drawing.dart';
 import '../network/network.dart';
+import 'plan_symbols.dart' show planComponentPrims;
+import 'sld_sheet.dart';
 
 /// The issuable-document parameters a caller stamps onto an exported drawing.
 /// All fields are optional; the renderers draw only the parts that are present,
@@ -42,6 +44,16 @@ class DrawingChrome {
 
   /// The services to list in the legend colour/line key. Empty ⇒ no legend.
   final List<ServiceType> legendServices;
+
+  /// Round 33 — short text NOTES printed once under the legend rows (the
+  /// plan's fixture codes, its CL datum, the drain-fall rule). Empty ⇒
+  /// byte-identical.
+  final List<String> legendNotes;
+
+  /// Round 34 (fire-hvac-drawings-legend-lacks-symbols) — the plan-symbol
+  /// glyphs drawn on the sheet, each keyed in the legend with its glyph
+  /// ([planComponentPrims]) beside its label. Empty ⇒ byte-identical.
+  final List<NodeComponent> legendSymbols;
 
   /// Optional human label under the scale bar (e.g. `1 : 100` or `5 m`). The
   /// engine never computes a real-world scale (it has no calibration here); the
@@ -82,6 +94,8 @@ class DrawingChrome {
     this.sheetTotal,
     this.northAngleRad = 0,
     this.legendServices = const [],
+    this.legendNotes = const [],
+    this.legendSymbols = const [],
     this.scaleBarLabel,
     this.clientName,
     this.drawingTitle,
@@ -100,6 +114,8 @@ class DrawingChrome {
       sheetIndex == null &&
       sheetTotal == null &&
       legendServices.isEmpty &&
+      legendNotes.isEmpty &&
+      legendSymbols.isEmpty &&
       clientName == null &&
       drawingTitle == null &&
       drawnBy == null &&
@@ -116,6 +132,74 @@ class DrawingChrome {
     return '$i of $t';
   }
 
+  /// A copy with the TITLE row overridden (every other field kept) — Round 14:
+  /// a submittal plan stamps its register title ([drawingSeriesTitle]).
+  DrawingChrome withTitle(String? title) => DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: sheetIndex,
+        sheetTotal: sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: title,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
+  /// Round 33 — a copy with [notes] appended to [legendNotes] (every other
+  /// field kept); no notes ⇒ this same object (byte-identical).
+  DrawingChrome withLegendNotes(List<String> notes) => notes.isEmpty
+      ? this
+      : DrawingChrome(
+          drawingNumber: drawingNumber,
+          revisionNumber: revisionNumber,
+          sheetIndex: sheetIndex,
+          sheetTotal: sheetTotal,
+          northAngleRad: northAngleRad,
+          legendServices: legendServices,
+          legendNotes: [...legendNotes, ...notes],
+          legendSymbols: legendSymbols,
+          scaleBarLabel: scaleBarLabel,
+          clientName: clientName,
+          drawingTitle: drawingTitle,
+          drawnBy: drawnBy,
+          checkedBy: checkedBy,
+          approvedBy: approvedBy,
+          dateString: dateString,
+          scaleText: scaleText,
+        );
+
+  /// Round 34 — a copy with [symbols] as [legendSymbols] (every other field
+  /// kept); empty ⇒ this same object (byte-identical).
+  DrawingChrome withLegendSymbols(List<NodeComponent> symbols) =>
+      symbols.isEmpty
+          ? this
+          : DrawingChrome(
+              drawingNumber: drawingNumber,
+              revisionNumber: revisionNumber,
+              sheetIndex: sheetIndex,
+              sheetTotal: sheetTotal,
+              northAngleRad: northAngleRad,
+              legendServices: legendServices,
+              legendNotes: legendNotes,
+              legendSymbols: symbols,
+              scaleBarLabel: scaleBarLabel,
+              clientName: clientName,
+              drawingTitle: drawingTitle,
+              drawnBy: drawnBy,
+              checkedBy: checkedBy,
+              approvedBy: approvedBy,
+              dateString: dateString,
+              scaleText: scaleText,
+            );
+
   /// A copy with the sheet counter overridden (every other field kept). A
   /// paginated exporter builds one chrome and re-stamps the per-page `i of N`
   /// through this so each page's SHEET row reads its own number without the
@@ -128,6 +212,8 @@ class DrawingChrome {
         sheetTotal: total ?? sheetTotal,
         northAngleRad: northAngleRad,
         legendServices: legendServices,
+        legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
         scaleBarLabel: scaleBarLabel,
         clientName: clientName,
         drawingTitle: drawingTitle,
@@ -164,26 +250,52 @@ enum DrawingSeries {
   final int hundreds;
 }
 
+/// Round 14 (drafting-visual-1 / -6) — the ONE title of each drawing in an
+/// issued set, used by BOTH the Daftar Gambar register row and that sheet's
+/// own title block / heading, so a reviewer can match register to sheet. It
+/// used to be a hard-coded register string beside an exporter default
+/// ('ELECTRICAL SINGLE-LINE DIAGRAM' on three different sheets, 'MECHANICAL
+/// SINGLE-LINE DIAGRAM' against 'DIAGRAM RISER MEKANIKAL'). Bilingual (ID / EN),
+/// ASCII-only. A plan / layout title carries its [sheetName].
+String drawingSeriesTitle(DrawingSeries series, {String? sheetName}) {
+  final name = sheetName?.trim() ?? '';
+  String withName(String t) => name.isEmpty ? t : '$t - $name';
+  return switch (series) {
+    DrawingSeries.mechanicalPlan => withName('PLAN'),
+    DrawingSeries.mechanicalRiser =>
+      'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
+    DrawingSeries.electricalLayout => withName('DENAH INSTALASI LISTRIK'),
+    DrawingSeries.electricalDetail => 'DIAGRAM PANEL / ELECTRICAL SLD',
+    DrawingSeries.electricalOverview =>
+      'DIAGRAM SATU GARIS GEDUNG / BUILDING SINGLE-LINE',
+    DrawingSeries.electricalRiser => 'DIAGRAM RISER LISTRIK / ELECTRICAL RISER',
+    DrawingSeries.electricalPowerOneLine => 'DIAGRAM DAYA / POWER ONE-LINE',
+  };
+}
+
 /// Derive a UNIQUE per-sheet drawing number so an issued set never stamps one
-/// number on every sheet (N19). When [base] (the manual `documentNumber`) is
-/// non-empty the user has named the sheet explicitly, so it is honoured VERBATIM
-/// (the override). When [base] is blank the number is DERIVED from the sheet's
+/// number on every sheet (N19). The number is DERIVED from the sheet's
 /// [series] + a 1-based [index] within that band — `<prefix>-<hundreds><index2>`
-/// (`M-101`, `M-102`, `M-201`, `E-201`, `E-301`, `E-401`) — so a set left on the
-/// defaults still numbers every sheet uniquely by discipline/role/position
-/// instead of blank-on-every-sheet. Pure — the caller supplies the running
-/// index (a plan's rail position, a set sheet's ordinal). Indices past 99 keep
-/// the discipline band (`M-1100`), never bleeding into the next hundreds.
+/// (`M-101`, `M-102`, `M-201`, `E-201`, `E-301`, `E-401`). When [base] (the
+/// PROJECT-wide `documentNumber`) is non-empty it is a PREFIX —
+/// `<base>-<prefix>-<hundreds><index2>` (`BRI-MEP-01-M-101`) — never the
+/// verbatim number: Round 13 (export-files-4) — the field is ONE per project,
+/// so honouring it verbatim stamped the same number on every plan, riser and
+/// electrical sheet and on every Daftar Gambar row, the N19 defect returning
+/// as soon as the field was filled. The cover sheet keeps the bare base as
+/// its own number. Pure — the caller supplies the running index (a plan's rail
+/// position, a set sheet's ordinal). Indices past 99 keep the discipline band
+/// (`M-1100`), never bleeding into the next hundreds.
 String sheetDrawingNumber({
   String? base,
   required DrawingSeries series,
   int index = 1,
 }) {
   final b = base?.trim() ?? '';
-  if (b.isNotEmpty) return b;
   final i = index < 1 ? 1 : index;
-  return '${series.disciplinePrefix}-${series.hundreds}'
+  final own = '${series.disciplinePrefix}-${series.hundreds}'
       '${i.toString().padLeft(2, '0')}';
+  return b.isEmpty ? own : '$b-$own';
 }
 
 /// A named LANDSCAPE sheet size for the plan PDF exporters — ISO A-series,
@@ -255,42 +367,142 @@ String serviceChromeLabel(ServiceType s) => switch (s) {
 
 String _n(double v) => v.toStringAsFixed(2);
 
-/// WinAnsi (Latin-1) code points the chrome text (title block / legend / scale)
-/// legitimately emits, passed through as their own byte (code point == WinAnsi
-/// byte at these positions) so a `/WinAnsiEncoding` Helvetica renders the real
-/// glyph, not `?`: U+00B7 middle dot, U+00B0 degree, U+00B1 plus-minus,
-/// U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
-const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
+/// The WinAnsiEncoding byte for a Unicode code point, or null when the glyph
+/// is outside WinAnsi. Round 13 (export-files-7): the whole Latin-1 block
+/// U+00A0-U+00FF passes through as its own byte (é, ü, ×, ², °, ·, Ø …), and
+/// the Windows-1252 0x80-0x9F typographic slots map from their Unicode code
+/// points — en/em dash, curly quotes, bullet, ellipsis, euro … — so a client
+/// / project / sheet name pasted from Word no longer prints `?` on every
+/// issued title block. Printable ASCII is itself.
+int? winAnsiByte(int code) {
+  if (code >= 0x20 && code <= 0x7e) return code;
+  if (code >= 0xa0 && code <= 0xff) return code;
+  return _cp1252High[code];
+}
 
-/// Keep PDF text to WinAnsi-encodable characters (printable ASCII + the few
-/// Latin-1 glyphs above) and escape the three PDF string metacharacters — same
-/// rule the exporters use for their own text; anything else falls back to `?`.
-String _pdfText(String raw) {
+/// Windows-1252 0x80-0x9F: Unicode code point -> WinAnsi byte.
+const Map<int, int> _cp1252High = {
+  0x20AC: 0x80, // euro
+  0x201A: 0x82, // single low-9 quote
+  0x0192: 0x83, // f hook
+  0x201E: 0x84, // double low-9 quote
+  0x2026: 0x85, // ellipsis
+  0x2020: 0x86, // dagger
+  0x2021: 0x87, // double dagger
+  0x02C6: 0x88, // circumflex
+  0x2030: 0x89, // per mille
+  0x0160: 0x8A, // S caron
+  0x2039: 0x8B, // single left angle quote
+  0x0152: 0x8C, // OE
+  0x017D: 0x8E, // Z caron
+  0x2018: 0x91, // left single quote
+  0x2019: 0x92, // right single quote
+  0x201C: 0x93, // left double quote
+  0x201D: 0x94, // right double quote
+  0x2022: 0x95, // bullet
+  0x2013: 0x96, // en dash
+  0x2014: 0x97, // em dash
+  0x02DC: 0x98, // small tilde
+  0x2122: 0x99, // trade mark
+  0x0161: 0x9A, // s caron
+  0x203A: 0x9B, // single right angle quote
+  0x0153: 0x9C, // oe
+  0x017E: 0x9E, // z caron
+  0x0178: 0x9F, // Y diaeresis
+};
+
+/// Keep PDF text to WinAnsi-encodable characters ([winAnsiByte]) and escape
+/// the three PDF string metacharacters — ONE rule shared by every vector PDF
+/// exporter (chrome, plan, network, electrical single-line, electrical plan);
+/// only a character outside WinAnsi falls back to `?`. The returned string
+/// holds one char per output byte (code unit == WinAnsi byte), so the
+/// exporters' `latin1.encode` writes it verbatim. Printable ASCII input is
+/// unchanged (byte-identical).
+String pdfWinAnsiText(String raw) {
   final b = StringBuffer();
   for (final code in raw.runes) {
-    final c =
-        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
-            ? code
-            : 0x3f /* ? */;
+    final c = winAnsiByte(code) ?? 0x3f /* ? */;
     if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
     b.writeCharCode(c);
   }
   return b.toString();
 }
 
+String _pdfText(String raw) => pdfWinAnsiText(raw);
+
 // ── PDF chrome (content-stream fragments, page space y-up, points) ──────────
 
 /// A service-colour legend in the bottom-LEFT, one row per service: a short
 /// coloured swatch line + the service name. Grows UP from [originY].
+/// Round 33 — the height of one [DrawingChrome.legendNotes] row (points).
+const double _kLegendNoteRowH = 10.0;
+
+/// Round 34 — the height of one [DrawingChrome.legendSymbols] row and its
+/// glyph size (points).
+const double _kLegendSymbolRowH = 13.0;
+const double _kLegendSymbolGlyph = 10.0;
+
+/// Round 34 — a stroked circle path (4 Bezier arcs, kappa 0.5523).
+String _pdfCirclePath(double cx, double cy, double r) {
+  const k = 0.5523;
+  final o = r * k;
+  return '${_n(cx + r)} ${_n(cy)} m '
+      '${_n(cx + r)} ${_n(cy + o)} ${_n(cx + o)} ${_n(cy + r)} ${_n(cx)} ${_n(cy + r)} c '
+      '${_n(cx - o)} ${_n(cy + r)} ${_n(cx - r)} ${_n(cy + o)} ${_n(cx - r)} ${_n(cy)} c '
+      '${_n(cx - r)} ${_n(cy - o)} ${_n(cx - o)} ${_n(cy - r)} ${_n(cx)} ${_n(cy - r)} c '
+      '${_n(cx + o)} ${_n(cy - r)} ${_n(cx + r)} ${_n(cy - o)} ${_n(cx + r)} ${_n(cy)} c S\n';
+}
+
 String pdfLegend(
   DrawingChrome chrome, {
   required double originX,
   required double originY,
 }) {
-  if (chrome.legendServices.isEmpty) return '';
+  if (chrome.legendServices.isEmpty &&
+      chrome.legendNotes.isEmpty &&
+      chrome.legendSymbols.isEmpty) {
+    return '';
+  }
   final cs = StringBuffer();
   const rowH = 12.0;
   const swatchW = 18.0;
+  // Round 33 — the note rows sit BELOW the service rows (origin = the last
+  // note row), each a 7 pt text line.
+  final notes = chrome.legendNotes;
+  final baseY = originY + notes.length * _kLegendNoteRowH;
+  for (var i = 0; i < notes.length; i++) {
+    cs.writeln('BT /F1 7 Tf 0 0 0 rg '
+        '${_n(originX)} ${_n(baseY - (i + 1) * _kLegendNoteRowH)} Td '
+        '(${_pdfText(notes[i])}) Tj ET');
+  }
+  originY = baseY;
+  // Round 34 — the symbol key rows (glyph + label) between the notes and
+  // the service swatches.
+  final symbols = chrome.legendSymbols;
+  if (symbols.isNotEmpty) {
+    cs.writeln('0 0 0 RG 0.6 w');
+    for (var i = 0; i < symbols.length; i++) {
+      final y = originY + (symbols.length - 1 - i) * _kLegendSymbolRowH;
+      final cy = y + 3;
+      for (final pr in planComponentPrims(symbols[i],
+          cx: originX + _kLegendSymbolGlyph / 2, cy: cy, size: _kLegendSymbolGlyph)) {
+        switch (pr) {
+          case final SldLine l:
+            cs.writeln('${_n(l.x1)} ${_n(2 * cy - l.y1)} m '
+                '${_n(l.x2)} ${_n(2 * cy - l.y2)} l S');
+          case final SldCircle c:
+            cs.write(_pdfCirclePath(c.cx, 2 * cy - c.cy, c.r));
+          case SldRect():
+          case SldLabel():
+            break; // never produced by the plan-symbol library
+        }
+      }
+      cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+          '${_n(originX + 18 + 6)} ${_n(y)} Td '
+          '(${_pdfText(symbols[i].label)}) Tj ET');
+    }
+    originY += symbols.length * _kLegendSymbolRowH;
+  }
   // Title above the rows.
   final titleY = originY + chrome.legendServices.length * rowH + 4;
   cs.writeln('BT /F1 9 Tf 0 0 0 rg '
@@ -300,8 +512,15 @@ String pdfLegend(
   for (final s in chrome.legendServices) {
     final (r, g, b) = serviceChromeColor(s);
     cs.writeln('${_n(r)} ${_n(g)} ${_n(b)} RG');
+    // Round 17 (drafting-visual-3-5) — the swatch carries the service's OWN
+    // linetype (vent / return dashed, fire dash-dot), exactly as the plan body
+    // draws it; a solid vent swatch beside a dashed vent run disagreed with
+    // the cover's master legend. Solid services stay byte-identical.
+    final dash = serviceDashPatternPdf(s);
+    if (dash != null) cs.writeln('[${dash.map(_n).join(' ')}] 0 d');
     cs.writeln('${_n(originX)} ${_n(y + 3)} m '
         '${_n(originX + swatchW)} ${_n(y + 3)} l S');
+    if (dash != null) cs.writeln('[] 0 d');
     cs.writeln('BT /F1 8 Tf 0 0 0 rg '
         '${_n(originX + swatchW + 6)} ${_n(y)} Td '
         '(${_pdfText(serviceChromeLabel(s))}) Tj ET');
@@ -385,7 +604,13 @@ const List<int> _helveticaWidths = [
 ];
 
 /// Width of [s] at [size] pt in Helvetica (the title block's `/F1` font).
-double _helveticaTextWidth(String s, double size) {
+double _helveticaTextWidth(String s, double size) => helveticaTextWidth(s, size);
+
+/// Width of [s] at [size] (points, or any drawing unit — it is linear) in
+/// base-14 Helvetica, the `/F1` font every vector PDF sheet prints with. Public
+/// so the single-line plot fit (`sld_plot_fit.dart`) can measure a label's real
+/// extent instead of guessing a per-character advance. Pure.
+double helveticaTextWidth(String s, double size) {
   var units = 0;
   for (final c in s.codeUnits) {
     units += (c >= 0x20 && c <= 0x7e) ? _helveticaWidths[c - 0x20] : 556;
@@ -394,11 +619,11 @@ double _helveticaTextWidth(String s, double size) {
 }
 
 /// The largest font size (<= [maxSize], floored at [minSize]) at which [text]
-/// fits within [cellW] points in Helvetica — used to auto-shrink the title
-/// block's TITLE cell so a long drawing title (e.g.
-/// `DIAGRAM SISTEM AIR BERSIH & AIR KOTOR`) never bleeds past the fixed cell
-/// (Wave-7 residual). Returns [maxSize] VERBATIM when the text already fits, so
-/// a short/absent title keeps the 8 pt rendering byte-for-byte. Pure.
+/// fits within [cellW] points in Helvetica. The title block's TITLE cell now
+/// WRAPS a long title at 14 pt ([wrapTitleLines], drafting-6); this fit is its
+/// last resort for a single word too wide for the cell even at the 12 pt title
+/// minimum (Wave-7 residual: never bleed past the cell). Returns [maxSize]
+/// VERBATIM when the text already fits. Pure.
 double fitTitleFontSize(String text, double cellW,
     {double maxSize = 8, double minSize = 5}) {
   if (text.isEmpty || cellW <= 0) return maxSize;
@@ -407,6 +632,74 @@ double fitTitleFontSize(String text, double cellW,
   final scaled = maxSize * cellW / wMax;
   return scaled < minSize ? minSize : scaled;
 }
+
+// ── Plotted text minimums (drafting-6) ──────────────────────────────────────
+//
+// ISO 3098 sets 2.5 mm as the minimum nominal lettering height on a drawing.
+// The vector sheets print Helvetica, and these minimums apply that 2.5 mm to the
+// text BODY (the em height): 2.5 mm = 7.09 pt, rounded to 7.0 pt, which puts the
+// capitals at about 0.716 × 7 pt = 1.77 mm. That is ISO 3098's smallest standard
+// h step (1.8 mm) and matches the AutoCAD "2.5" annotation text style the
+// Indonesian issue sets are drafted with. It is a drafting STYLE convention, not
+// an engineering value, so there is no `// VERIFY` flag.
+
+/// Minimum plotted size (points) of any label on an issued A3 vector sheet. The
+/// single-line auto-fit (`sld_plot_fit.dart`) never lets a label plot below
+/// this when there is clear space for it, and the fixed page chrome (title-block
+/// field names, plan sub-labels) is set at this size or larger.
+const double kMinPlotLabelPt = 7.0;
+
+/// Plotted size (points) of the drawing TITLE in the [pdfTitleBlock]. ISO 7200
+/// asks for a sheet title noticeably larger than the body text. 14 pt is about
+/// 3.5 mm, and a long title WRAPS onto extra lines instead of shrinking.
+const double kTitleBlockTitlePt = 14.0;
+
+/// The smallest size the title-block TITLE may shrink to. A title only shrinks
+/// when ONE word is too wide for the cell at [kTitleBlockTitlePt], which is
+/// rare. Below this size the title is fitted to the cell (the
+/// [fitTitleFontSize] floor) so it never runs past the cell edge.
+const double kTitleBlockTitleMinPt = 12.0;
+
+/// Word-wrap [text] into lines that each fit within [cellW] points in Helvetica
+/// at [maxSize]. When a single word is wider than [cellW], the font is reduced
+/// just enough for that word, down to [minSize]; if the word still does not fit
+/// there, it is fitted to the cell ([fitTitleFontSize] floor, 5 pt). Returns the
+/// font size and the lines. Empty text ⇒ (`maxSize`, []). Pure.
+({double size, List<String> lines}) wrapTitleLines(String text, double cellW,
+    {double maxSize = kTitleBlockTitlePt,
+    double minSize = kTitleBlockTitleMinPt}) {
+  final words =
+      text.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+  if (words.isEmpty || cellW <= 0) return (size: maxSize, lines: const []);
+  var size = maxSize;
+  for (final w in words) {
+    final ww = _helveticaTextWidth(w, size);
+    if (ww > cellW) size = size * cellW / ww;
+  }
+  if (size < minSize) {
+    // One word does not fit even at the minimum: fit the widest word.
+    final widest = words.reduce((a, b) =>
+        _helveticaTextWidth(a, 1) >= _helveticaTextWidth(b, 1) ? a : b);
+    size = fitTitleFontSize(widest, cellW, maxSize: minSize);
+  }
+  final lines = <String>[];
+  var cur = '';
+  for (final w in words) {
+    final cand = cur.isEmpty ? w : '$cur $w';
+    if (cur.isNotEmpty && _helveticaTextWidth(cand, size) > cellW + 1e-9) {
+      lines.add(cur);
+      cur = w;
+    } else {
+      cur = cand;
+    }
+  }
+  if (cur.isNotEmpty) lines.add(cur);
+  return (size: size, lines: lines);
+}
+
+/// Width (points) of the [pdfTitleBlock] box, anchored at the bottom-right
+/// frame corner — public so an exporter can keep its labels off the block.
+const double kPdfTitleBlockWidth = 190.0;
 
 /// A boxed ISO-7200 title block in the bottom-RIGHT of the page. Rows are the
 /// filtered [_titleBlockRows]; each row is a small muted label cell + a value
@@ -428,9 +721,25 @@ double fitTitleFontSize(String text, double cellW,
   if (rows.isEmpty) return (ops: '', height: 0.0);
 
   const rowH = 13.0;
-  const blockW = 190.0; // ~ ISO-7200 width in points
+  const blockW = kPdfTitleBlockWidth; // ~ ISO-7200 width in points
   const labelW = 52.0; // the muted label cell width
-  final height = rows.length * rowH;
+  // drafting-6: the TITLE row carries the drawing title at kTitleBlockTitlePt
+  // (14 pt, ~3.5 mm), WRAPPED across as many lines as it needs, so that row
+  // grows taller. Every other row keeps the 13 pt pitch.
+  const titleCellW = blockW - labelW - 8;
+  const titleLineGap = 1.15; // line pitch as a multiple of the font size
+  final rowHeights = <double>[];
+  ({double size, List<String> lines})? titleWrap;
+  for (final (label, value) in rows) {
+    if (label == 'TITLE' && value.trim().isNotEmpty) {
+      final w = wrapTitleLines(value, titleCellW);
+      titleWrap = w;
+      rowHeights.add(math.max(rowH, w.lines.length * w.size * titleLineGap + 4));
+    } else {
+      rowHeights.add(rowH);
+    }
+  }
+  final height = rowHeights.fold(0.0, (a, b) => a + b);
   final x0 = pageW - margin - blockW;
   final yBottom = margin;
 
@@ -439,10 +748,10 @@ double fitTitleFontSize(String text, double cellW,
   // Outer box.
   cs.writeln('${_n(x0)} ${_n(yBottom)} ${_n(blockW)} ${_n(height)} re S');
   // Rows top-to-bottom (first present row at the top of the block).
+  var rowTop = yBottom + height;
   for (var i = 0; i < rows.length; i++) {
     final (label, value) = rows[i];
-    final rowTop = yBottom + height - i * rowH;
-    final rowBot = rowTop - rowH;
+    final rowBot = rowTop - rowHeights[i];
     // Horizontal rule between rows (the outer box already draws top + bottom).
     if (i > 0) {
       cs.writeln('${_n(x0)} ${_n(rowTop)} m ${_n(x0 + blockW)} ${_n(rowTop)} l S');
@@ -450,28 +759,42 @@ double fitTitleFontSize(String text, double cellW,
     // Vertical divider between the label + value cells.
     cs.writeln('${_n(x0 + labelW)} ${_n(rowBot)} m '
         '${_n(x0 + labelW)} ${_n(rowTop)} l S');
-    final ty = rowBot + 3.5;
-    // Muted label cell (grey, small).
-    cs.writeln('BT /F1 6 Tf 0.4 0.4 0.4 rg '
+    // The label sits at the TOP of its row (for a 13 pt row this is the same
+    // baseline as before, rowBot + 3.5).
+    final ty = rowTop - rowH + 3.5;
+    // Muted label cell (grey), at the minimum plotted size.
+    cs.writeln('BT /F1 ${_n(kMinPlotLabelPt)} Tf 0.4 0.4 0.4 rg '
         '${_n(x0 + 3)} ${_n(ty)} Td (${_pdfText(label)}) Tj ET');
     // Value cell (black). A blank sign-off cell (DRAWN/CHECKED/APPROVED with no
     // name) is a ruled cell for hand completion (N20) — its rules + label stay,
     // only the (empty) value TEXT is omitted.
     if (value.trim().isNotEmpty) {
-      // Wave-7 residual: a long TITLE would bleed past the fixed value cell —
-      // auto-shrink JUST the TITLE row's font to fit it. Every other row (and a
-      // title that already fits) stays at 8 pt, so the output is byte-identical
-      // for the common case.
-      final vsize = label == 'TITLE'
-          ? fitTitleFontSize(value, blockW - labelW - 8)
-          : 8.0;
-      final vsizeStr = vsize == 8.0 ? '8' : _n(vsize);
-      cs.writeln('BT /F1 $vsizeStr Tf 0 0 0 rg '
-          '${_n(x0 + labelW + 4)} ${_n(ty)} Td (${_pdfText(value)}) Tj ET');
+      if (label == 'TITLE' && titleWrap != null) {
+        final fs = titleWrap.size;
+        for (var k = 0; k < titleWrap.lines.length; k++) {
+          final by = rowTop - 2 - 0.9 * fs - k * fs * titleLineGap;
+          cs.writeln('BT /F1 ${_n(fs)} Tf 0 0 0 rg '
+              '${_n(x0 + labelW + 4)} ${_n(by)} Td '
+              '(${_pdfText(titleWrap.lines[k])}) Tj ET');
+        }
+      } else {
+        cs.writeln('BT /F1 8 Tf 0 0 0 rg '
+            '${_n(x0 + labelW + 4)} ${_n(ty)} Td (${_pdfText(value)}) Tj ET');
+      }
     }
+    rowTop = rowBot;
   }
   return (ops: cs.toString(), height: height);
 }
+
+/// Height (points) above the sheet frame line at which a framed plan sheet
+/// draws its [pdfScaleBarReal]. The bar's figures print 10 pt BELOW its base,
+/// so this keeps them inside the frame (drafting-9).
+const double kScaleBarFrameInset = 16.0;
+
+/// Gap (points) between the left frame line and a framed sheet's [pdfLegend],
+/// so the legend title and swatches don't sit on the frame (drafting-9).
+const double kLegendFrameInset = 8.0;
 
 /// The ladder of "nice" real scale-bar lengths, in metres, for
 /// [pdfScaleBarReal] — a drafting-office convention (not an SNI clause).
@@ -482,12 +805,9 @@ const _pdfScaleLadderM = <double>[1, 2, 5, 10, 20, 50, 100];
 /// nearest 120 pt, draws 4 alternating filled/open divisions, and figures the
 /// metre marks at 0 / mid / end. Centred on [centerX] at [baseY]. Returns ''
 /// when [pointsPerMeter] is not finite/positive (nothing honest to draw).
-String pdfScaleBarReal({
-  required double pointsPerMeter,
-  required double centerX,
-  required double baseY,
-}) {
-  if (!pointsPerMeter.isFinite || pointsPerMeter <= 0) return '';
+/// The ladder length (metres) [pdfScaleBarReal] draws at [pointsPerMeter] —
+/// the one whose drawn width lands nearest 120 pt.
+double _pdfScaleBarMetres(double pointsPerMeter) {
   const targetPt = 120.0;
   var bestM = _pdfScaleLadderM.first;
   var bestErr = double.infinity;
@@ -498,6 +818,83 @@ String pdfScaleBarReal({
       bestM = m;
     }
   }
+  return bestM;
+}
+
+/// Round 10 (mech-drawing-props-4) — the page box (points, y-up) the scale
+/// bar [pdfScaleBarReal] would draw centred on [centerX] at [baseY]: the bar
+/// plus its metre figures. Null when nothing would be drawn.
+LabelBox? pdfScaleBarBox({
+  required double pointsPerMeter,
+  required double centerX,
+  required double baseY,
+}) {
+  if (!pointsPerMeter.isFinite || pointsPerMeter <= 0) return null;
+  final barLen = _pdfScaleBarMetres(pointsPerMeter) * pointsPerMeter;
+  return (
+    minX: centerX - barLen / 2 - 4,
+    minY: baseY - 12,
+    maxX: centerX + barLen / 2 + 24, // the end figure (`100 m`) runs right
+    maxY: baseY + 6,
+  );
+}
+
+/// Round 10 (mech-drawing-props-4) — the page box (points, y-up) the
+/// [pdfLegend] block occupies with its origin at ([originX], [originY]): the
+/// swatch rows plus the `LEGEND` title above them. Null for an empty legend.
+LabelBox? pdfLegendBox(
+  DrawingChrome chrome, {
+  required double originX,
+  required double originY,
+}) {
+  final n = chrome.legendServices.length;
+  final notes = chrome.legendNotes;
+  final symbols = chrome.legendSymbols;
+  if (n == 0 && notes.isEmpty && symbols.isEmpty) return null;
+  var w = helveticaTextWidth('LEGEND', 9);
+  for (final s in chrome.legendServices) {
+    w = math.max(w, 18 + 6 + helveticaTextWidth(serviceChromeLabel(s), 8));
+  }
+  for (final t in notes) {
+    w = math.max(w, helveticaTextWidth(t, 7));
+  }
+  for (final c in symbols) {
+    w = math.max(w, 18 + 6 + helveticaTextWidth(c.label, 8));
+  }
+  return (
+    minX: originX - 2,
+    minY: originY - 3,
+    maxX: originX + w + 2,
+    // the 9 pt title's cap + clearance, plus the note rows (Round 33) and
+    // the symbol rows (Round 34)
+    maxY: originY +
+        notes.length * _kLegendNoteRowH +
+        symbols.length * _kLegendSymbolRowH +
+        n * 12.0 +
+        4 +
+        11,
+  );
+}
+
+/// Round 10 (mech-drawing-props-4) — the page box (points, y-up) the
+/// [pdfNorthArrow] of radius [r] at ([cx], [cy]) occupies at ANY bearing:
+/// the arrow's circle plus the `N` beyond its tip.
+LabelBox pdfNorthArrowBox({
+  required double cx,
+  required double cy,
+  double r = 16,
+}) {
+  final reach = r + 7 + 9; // the tip, the 'N' offset, its glyph
+  return (minX: cx - reach, minY: cy - reach, maxX: cx + reach, maxY: cy + reach);
+}
+
+String pdfScaleBarReal({
+  required double pointsPerMeter,
+  required double centerX,
+  required double baseY,
+}) {
+  if (!pointsPerMeter.isFinite || pointsPerMeter <= 0) return '';
+  final bestM = _pdfScaleBarMetres(pointsPerMeter);
   final barLen = bestM * pointsPerMeter;
   final divW = barLen / 4;
   const barH = 4.0;
@@ -568,7 +965,7 @@ String pdfNorthArrow(
 
 void _g(StringBuffer b, int code, Object value) {
   b.writeln(code);
-  b.writeln(value);
+  b.writeln(value is String ? dxfText(value) : value);
 }
 
 /// DXF chrome entities (legend / scale / north / title) placed near the
@@ -630,6 +1027,16 @@ String dxfChrome(
     _g(b, 1, _dxfText(serviceChromeLabel(s)));
     ly -= txt * 2.0;
   }
+  // Round 33 — the sheet notes under the swatch rows.
+  for (final t in chrome.legendNotes) {
+    _g(b, 0, 'TEXT');
+    _g(b, 8, 'legend');
+    _g(b, 10, minX);
+    _g(b, 20, ly - txt / 2);
+    _g(b, 40, txt * 0.8);
+    _g(b, 1, _dxfText(t));
+    ly -= txt * 1.8;
+  }
 
   // Scale bar — a divided LWPOLYLINE-free LINE bar on layer 'scale', under the
   // legend block.
@@ -685,12 +1092,211 @@ String dxfChrome(
   return b.toString();
 }
 
+/// Round 14 (drafting-visual-5) — the professional plan DXF's chrome layers,
+/// in the G-ANNO-* namespace the rest of the issued set uses (the legacy
+/// 'title' / 'legend' / 'scale' / 'north' names stay on the uncalibrated
+/// legacy path only).
+const kDxfLayerLegend = 'G-ANNO-LEGN';
+const kDxfLayerScale = 'G-ANNO-SCAL';
+const kDxfLayerNorth = 'G-ANNO-NRTH';
+
+/// Round 14 (drafting-visual-5) — the CALIBRATED plan DXF's chrome, sized in
+/// PAPER millimetres × [unitsPerPaperMm] (the plotted-scale denominator for a
+/// millimetre model) so it reads at the same size as the PDF beside it:
+///  * a LEGEND (bottom-left) and an HONEST graphic SCALE BAR whose length is a
+///    real-metre ladder rung (the PDF's own choice at that 1 : N) with
+///    `0` / `X/2 m` / `X m` figures and the `1 : N` text — the legacy bar was
+///    always 30 % of the drawing span with only 'SCALE' printed, so a CAD user
+///    measuring it got a meaningless length;
+///  * a NORTH arrow (top-right);
+///  * the SHARED ISO title block ([dxfTitleBlock]: PROJECT / TITLE / DWG NO /
+///    REV / SCALE / DATE / DRAWN / CHECKED / APPROVED / SHEET) below the
+///    extent, bottom-right — the plan DXF used to carry only its number and
+///    sheet counter, the one CAD deliverable a checker could not identify.
+/// All on the G-ANNO-* layers. With [plotDenominator] null (no ladder scale
+/// fits) no bar is drawn and the SCALE row reads `NTS`. Returns '' for an
+/// empty chrome.
+String dxfPlanChrome(
+  DrawingChrome chrome, {
+  required double minX,
+  required double minY,
+  required double maxX,
+  required double maxY,
+  required double unitsPerPaperMm,
+  required int? plotDenominator,
+  required String projectName,
+}) {
+  if (chrome.isEmpty) return '';
+  final b = StringBuffer();
+  final u = unitsPerPaperMm;
+  final txt = kMinPlotTextMm * u;
+  void line(String layer, double ax, double ay, double bx, double by,
+      {String? linetype}) {
+    _g(b, 0, 'LINE');
+    _g(b, 8, layer);
+    if (linetype != null) _g(b, 6, linetype);
+    _g(b, 10, ax);
+    _g(b, 20, ay);
+    _g(b, 11, bx);
+    _g(b, 21, by);
+  }
+
+  void text(String layer, double x, double y, double h, String t) {
+    _g(b, 0, 'TEXT');
+    _g(b, 8, layer);
+    _g(b, 10, x);
+    _g(b, 20, y);
+    _g(b, 40, h);
+    _g(b, 1, _dxfText(t));
+  }
+
+  // Legend — bottom-left, below the extent, one swatch row per service.
+  var ly = minY - 12 * u;
+  if (chrome.legendServices.isNotEmpty ||
+      chrome.legendNotes.isNotEmpty ||
+      chrome.legendSymbols.isNotEmpty) {
+    text(kDxfLayerLegend, minX, ly, txt, 'LEGEND');
+    ly -= 7 * u;
+    for (final svc in chrome.legendServices) {
+      line(kDxfLayerLegend, minX, ly + txt / 2, minX + 12 * u, ly + txt / 2,
+          // Round 17 — the swatch in the service's own linetype (declared by
+          // [dxfTablesSection]); CONTINUOUS stays the layer default.
+          linetype: dxfLinetypeFor(svc) == 'CONTINUOUS'
+              ? null
+              : dxfLinetypeFor(svc));
+      text(kDxfLayerLegend, minX + 15 * u, ly, txt, serviceChromeLabel(svc));
+      ly -= 6 * u;
+    }
+    // Round 34 — the symbol key: each glyph (the plan-symbol library, one
+    // geometry with the body) beside its label.
+    for (final c in chrome.legendSymbols) {
+      final cy = ly + txt / 2;
+      final g = 5 * u;
+      for (final pr in planComponentPrims(c, cx: minX + 6 * u, cy: cy, size: g)) {
+        switch (pr) {
+          case final SldLine l:
+            line(kDxfLayerLegend, l.x1, 2 * cy - l.y1, l.x2, 2 * cy - l.y2);
+          case final SldCircle cc:
+            _g(b, 0, 'CIRCLE');
+            _g(b, 8, kDxfLayerLegend);
+            _g(b, 10, cc.cx);
+            _g(b, 20, 2 * cy - cc.cy);
+            _g(b, 40, cc.r);
+          case SldRect():
+          case SldLabel():
+            break; // never produced by the plan-symbol library
+        }
+      }
+      text(kDxfLayerLegend, minX + 15 * u, ly, txt, c.label);
+      ly -= 6 * u;
+    }
+    // Round 33 — the sheet notes under the swatch rows (PDF == DXF text).
+    for (final t in chrome.legendNotes) {
+      text(kDxfLayerLegend, minX, ly, txt * 0.8, t);
+      ly -= 5 * u;
+    }
+    ly -= 4 * u;
+  }
+
+  // Honest scale bar — a real-metre rung (the PDF's own pick at 1 : N).
+  final n = plotDenominator;
+  if (n != null && n > 0) {
+    // Paper points per real metre at 1 : N (the PDF helper's basis).
+    final ptPerM = 1000 / n * 72 / 25.4;
+    final m = _pdfScaleBarMetres(ptPerM);
+    final barLen = m * 1000; // model millimetres
+    final barH = 1.5 * u;
+    final y0 = ly - barH;
+    line(kDxfLayerScale, minX, y0, minX + barLen, y0);
+    line(kDxfLayerScale, minX, y0 + barH, minX + barLen, y0 + barH);
+    for (var i = 0; i <= 4; i++) {
+      final x = minX + barLen * i / 4;
+      line(kDxfLayerScale, x, y0, x, y0 + barH);
+    }
+    String fig(double v) =>
+        v == v.roundToDouble() ? v.round().toString() : v.toString();
+    final fy = y0 - txt * 1.5;
+    text(kDxfLayerScale, minX, fy, txt, '0');
+    text(kDxfLayerScale, minX + barLen / 2, fy, txt, '${fig(m / 2)} m');
+    text(kDxfLayerScale, minX + barLen, fy, txt, '${fig(m)} m');
+    text(kDxfLayerScale, minX + barLen + 6 * u, y0, txt, '1 : $n');
+  }
+
+  // North arrow — top-right, beyond the extent.
+  final nx = maxX + 14 * u;
+  final ny = maxY - 10 * u;
+  final r = 8 * u;
+  final a = -chrome.northAngleRad;
+  final ca = math.cos(a), sa = math.sin(a);
+  final tipX = nx - r * sa, tipY = ny + r * ca;
+  final tailX = nx + r * sa, tailY = ny - r * ca;
+  line(kDxfLayerNorth, tailX, tailY, tipX, tipY);
+  text(kDxfLayerNorth, tipX, tipY + txt / 2, txt, 'N');
+
+  // The shared ISO title block, hung below the extent at the right.
+  final scaleRow = n != null && n > 0 ? '1 : $n' : 'NTS';
+  final rows = _titleBlockRows(chrome, projectName, scaleRow);
+  if (rows.isNotEmpty) {
+    final unit = txt / 1.2; // dxfTitleBlock: value text = unit × 1.2
+    final blockH = rows.length * unit * 1.2 * 2.4;
+    final top = minY - 12 * u;
+    b.write(dxfTitleBlock(chrome,
+        minX: minX,
+        minY: top - blockH,
+        maxX: maxX,
+        maxY: maxY,
+        projectName: projectName,
+        scaleTextOverride: scaleRow,
+        unit: unit));
+  }
+  return b.toString();
+}
+
 /// DXF group-1 text must avoid the control chars that would break the ASCII
 /// stream; keep it to printable ASCII.
-String _dxfText(String raw) {
+String _dxfText(String raw) => dxfText(raw);
+
+/// Round 27 — Helvetica's CAP height per em (0.718). DXF TEXT group 40 is the
+/// cap height, while the PDF writers print an em; a DXF label meant to match a
+/// PDF label of em E is written at E x this.
+const double kHelveticaCapHeightEm = 0.718;
+
+/// The ONE code-page-safe encoder for every DXF string value (drafting-5). An
+/// R12 DXF is read in the ANSI code page, so a raw UTF-8 `·` (C2 B7) displays
+/// as `Â·` in AutoCAD; every writer routes its string group values through
+/// here so the output is pure printable ASCII (no byte > 0x7E) while carrying
+/// the same information as the PDF:
+///   `·` (U+00B7)  → `-`   (the label separator)
+///   `Ø` / `ø`     → `%%c` (the AutoCAD diameter control code)
+///   `°`           → `%%d` (the AutoCAD degree control code)
+///   `²` / `³`     → `2` / `3`
+///   anything else outside printable ASCII → `?`.
+/// Printable-ASCII input is returned unchanged (byte-identical).
+String dxfText(String raw) {
+  var ascii = true;
+  for (final c in raw.codeUnits) {
+    if (c < 0x20 || c > 0x7e) {
+      ascii = false;
+      break;
+    }
+  }
+  if (ascii) return raw;
   final b = StringBuffer();
   for (final code in raw.runes) {
-    b.writeCharCode((code >= 0x20 && code <= 0x7e) ? code : 0x3f);
+    switch (code) {
+      case 0xB7:
+        b.write('-');
+      case 0xD8 || 0xF8:
+        b.write('%%c');
+      case 0xB0:
+        b.write('%%d');
+      case 0xB2:
+        b.write('2');
+      case 0xB3:
+        b.write('3');
+      default:
+        b.writeCharCode((code >= 0x20 && code <= 0x7e) ? code : 0x3f);
+    }
   }
   return b.toString();
 }
@@ -723,6 +1329,10 @@ const kDxfLayerAnno = 'G-ANNO-TEXT';
 /// DXF sheet-frame / title-block layer.
 const kDxfLayerFrame = 'G-ANNO-TTLB';
 
+/// DXF dimension layer (setting-out tie dimensions — extension lines, the
+/// offset dimension line, its oblique ticks and the figure), ACI 8 grey.
+const kDxfLayerDims = 'G-ANNO-DIMS';
+
 /// Nearest-ACI colour index per service, in the SAME hue family as the canvas
 /// `serviceChromeColor` (the single truth, E2). ACI base palette: 1 red,
 /// 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white, 8 grey; the extended
@@ -752,6 +1362,23 @@ List<double>? serviceDashPatternPdf(ServiceType s) => switch (s) {
         const [10, 3, 2, 3],
       _ => null,
     };
+
+/// Round 24 — the PAPER length of one dash on the issued PDF (the 6 pt dash
+/// of [serviceDashPatternPdf]'s DASHED pattern, 6 × 25.4 / 72 mm).
+const double kPlotDashPaperMm = 6 * 25.4 / 72;
+
+/// The model length of one dash in the shared LTYPE table ([dxfTablesSection]
+/// DASHED / DASHDOT: 12 drawing units).
+const double kDxfLtypeDashUnits = 12.0;
+
+/// Round 24 — the `$LTSCALE` a millimetre-model DXF needs so its 12-unit
+/// LTYPE dash plots at the PDF's paper dash ([kPlotDashPaperMm]):
+/// `12 × LTSCALE / N = 2.117 mm` ⇒ `LTSCALE = N × 2.117 / 12`, where
+/// [modelMmPerPaperMm] is the plotted-scale denominator N (model mm per paper
+/// mm). Without it AutoCAD's LTSCALE 1 plots a 12 mm MODEL dash at 1:100 as
+/// 0.12 mm — vent / return air / sprinkler / grid lines read solid.
+double dxfLtScaleFor(double modelMmPerPaperMm) =>
+    modelMmPerPaperMm * kPlotDashPaperMm / kDxfLtypeDashUnits;
 
 /// DXF line-type name per service, consistent with [serviceDashPatternPdf].
 String dxfLinetypeFor(ServiceType s) => switch (s) {
@@ -837,8 +1464,9 @@ String dxfTablesForServices(Iterable<ServiceType> services) {
 
 /// The DXF sibling of [pdfTitleBlock]: the same filtered [_titleBlockRows]
 /// rendered as LINEs + TEXT on [kDxfLayerFrame], anchored to the bottom-RIGHT
-/// of the [minX]/[minY]/[maxX]/[maxY] extent (DXF world, y-up). Returns ''
-/// when no row has a value.
+/// of the [minX]/[minY]/[maxX]/[maxY] extent (DXF world, y-up). [unit]
+/// overrides the extent-derived sizing unit (value text = 1.2 × unit). Returns
+/// '' when no row has a value.
 String dxfTitleBlock(
   DrawingChrome chrome, {
   required double minX,
@@ -847,6 +1475,7 @@ String dxfTitleBlock(
   required double maxY,
   required String projectName,
   String? scaleTextOverride,
+  double? unit,
 }) {
   final rows = _titleBlockRows(chrome, projectName, scaleTextOverride);
   if (rows.isEmpty) return '';
@@ -855,7 +1484,9 @@ String dxfTitleBlock(
   final spanX = (maxX - minX).abs();
   final spanY = (maxY - minY).abs();
   final span = math.max(math.max(spanX, spanY), 1.0);
-  final u = span / 40.0; // sizing unit, scales to the drawing extent
+  // Sizing unit: scales to the drawing extent, unless the caller sizes the
+  // block in paper millimetres (Round 14 — the calibrated plan DXF).
+  final u = unit ?? span / 40.0;
   final txt = u * 1.2; // value text height
   final rowH = txt * 2.4;
   final blockW = u * 16;
@@ -938,18 +1569,26 @@ class PlottedScale {
 /// calibration [metersPerPixel]. Returns the raw fit at `NTS` when
 /// uncalibrated, when there is no content, or when the plan is too large even
 /// for 1:1000. [paperLabel] names the ACTUAL paper in the snapped-scale text
-/// (`1 : N @ A2`). Pure — shared verbatim by `networkToPdf` / `planToPdf`.
+/// (`1 : N @ A2`). [minDenominator] (Round 14) floors the snapped `1 : N` for a
+/// set plotted at one shared scale; null ⇒ byte-identical. Pure — shared
+/// verbatim by `networkToPdf` / `planToPdf`.
 PlottedScale snapPlottedScale({
   required double rawScale,
   required double? metersPerPixel,
   required bool hasContent,
   required String paperLabel,
+  int? minDenominator,
 }) {
   var scale = rawScale;
   if (metersPerPixel != null && metersPerPixel > 0 && hasContent) {
     const mmPerPoint = 25.4 / 72; // PDF points → paper millimetres
     // The raw fit's plotted-scale denominator: real-world mm per paper mm.
-    final rawN = metersPerPixel * 1000 / (scale * mmPerPoint);
+    // Round 14 (drafting-visual-7) — a PROJECT-level [minDenominator] floors
+    // it, so every plan of one submittal shares the same 1 : N (never draws
+    // larger than the shared scale; a sheet that needs more room still snaps
+    // up on its own).
+    final rawN = math.max(metersPerPixel * 1000 / (scale * mmPerPoint),
+        (minDenominator ?? 0).toDouble());
     int? snappedN;
     for (final n in kPlanScaleLadder) {
       if (n >= rawN - 1e-9) {
@@ -969,13 +1608,35 @@ PlottedScale snapPlottedScale({
   return PlottedScale(scale, 'NTS', null);
 }
 
+/// The plotted text height (paper millimetres) a calibrated DXF plan writes
+/// its annotation at: ISO 3098's 2.5 mm minimum. A DXF TEXT height is the
+/// capital height, so this is 2.5 mm capitals on paper (drafting-6).
+const double kMinPlotTextMm = 2.5;
+
+/// The paper-millimetre drawing area of an A3 plan sheet: the page less the
+/// 40 pt frame margins, and less a 160 pt strip for the title block (the
+/// typical height of the [pdfTitleBlock] the plan PDFs reserve) on the height.
+const double _kA3PlanAvailWmm = (1190.55 - 2 * 40) * 25.4 / 72;
+const double _kA3PlanAvailHmm = (841.89 - 2 * 40 - 160) * 25.4 / 72;
+
+/// The standard plotted-scale denominator ([kPlanScaleLadder]) a plan whose
+/// world extent is [spanXmm] × [spanYmm] millimetres plots at on A3: the
+/// smallest rung that fits the extent into the A3 drawing area, the same
+/// snapping rule [snapPlottedScale] applies to the plan PDF. Null when the
+/// extent is empty or too large even for 1:1000 (then no honest scale exists).
+/// Pure.
+int? a3PlottedScaleDenominatorFor(double spanXmm, double spanYmm) {
+  if (!(spanXmm > 0 || spanYmm > 0)) return null;
+  final rawN = math.max(spanXmm / _kA3PlanAvailWmm, spanYmm / _kA3PlanAvailHmm);
+  for (final n in kPlanScaleLadder) {
+    if (n >= rawN - 1e-9) return n;
+  }
+  return null;
+}
+
 /// PDF stroke widths in points for the three A6 line-weight bands
 /// (index 0 small / 1 medium / 2 large). Unsized edges keep the legacy 1.4 w.
 const kPdfStrokeWidths = <double>[1.0, 1.6, 2.2];
-
-/// DXF group-370 lineweights (hundredths of a millimetre: 0.13 / 0.25 /
-/// 0.35 mm) for the same three bands.
-const kDxfLineweights = <int>[13, 25, 35];
 
 /// The A6 stroke band (0 small / 1 medium / 2 large) for a sized element.
 /// Pipes band on DN — small <= 50, medium <= 150; ducts on their largest
@@ -1111,17 +1772,28 @@ class VectorPlanUnderlay extends PlanUnderlay {
   @override
   final double sheetHeightPx;
 
+  /// Round 24 — the world frame the sheet was NORMALISED from at import
+  /// (`Sheet.dxfFrame`). A plan revised in place keeps that mapping, so the
+  /// underlay stays registered with the drawn nodes and the calibration;
+  /// null ⇒ the live drawing bounds (legacy sheets, byte-identical).
+  final DxfBounds? frame;
+
   const VectorPlanUnderlay({
     required this.drawing,
     required this.sheetWidthPx,
     required this.sheetHeightPx,
+    this.frame,
   });
+
+  /// The world bounds the fit maps from: [frame] when known, else the live
+  /// drawing bounds.
+  DxfBounds get mappingBounds => frame ?? drawing.bounds;
 
   /// The uniform DXF-world → sheet-pixel scale — the canvas rule verbatim:
   /// width ratio when the bounds width is non-degenerate, else the height
   /// ratio, else 1 (a degenerate drawing maps 1:1).
   double get worldToSheetScale {
-    final b = drawing.bounds;
+    final b = mappingBounds;
     final kx = b.width > 1e-9 ? sheetWidthPx / b.width : 0.0;
     final ky = b.height > 1e-9 ? sheetHeightPx / b.height : 0.0;
     if (kx != 0.0) return kx;
@@ -1132,7 +1804,7 @@ class VectorPlanUnderlay extends PlanUnderlay {
   /// `x' = (x − minX)·k`, `y' = (maxY − y)·k` — the exact map the canvas
   /// paints the DXF background with.
   (double, double) toSheetPx(double x, double y) {
-    final b = drawing.bounds;
+    final b = mappingBounds;
     final k = worldToSheetScale;
     return ((x - b.minX) * k, (b.maxY - y) * k);
   }
@@ -1284,7 +1956,7 @@ String dxfUnderlayEntities(
   double unitsPerSheetPx = 1.0,
 }) {
   final b = StringBuffer();
-  final bnd = u.drawing.bounds;
+  final bnd = u.mappingBounds;
   final k = u.worldToSheetScale * unitsPerSheetPx;
   (double, double) map(double x, double y) =>
       ((x - bnd.minX) * k, (y - bnd.maxY) * k);
@@ -1375,6 +2047,13 @@ String dxfUnderlayEntities(
       if (onFloor(a)) include(a);
       if (onFloor(c)) include(c);
     }
+  }
+  // Round 10 (mech-drawing-props-2) — the exporters draw EVERY node on the
+  // floor (a placed-but-unpiped pump / tank is a normal mid-design state), so
+  // every on-floor node joins the fit: an unconnected one used to print off
+  // the page on an underlay-less sheet.
+  for (final n in net.nodes) {
+    if (onFloor(n)) include(n);
   }
 
   if (underlay != null) {

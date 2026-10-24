@@ -38,7 +38,8 @@ import 'package:test/test.dart';
 
 /// A two-node, one-edge network of [service] (the smallest thing that can be
 /// auto-sized): a source root `r` and a demand leaf `d`.
-Network _twoNode(ServiceType service) => Network(
+Network _twoNode(ServiceType service, {EdgeKind kind = EdgeKind.run}) =>
+    Network(
       nodes: const [
         NetNode(id: 'r', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
         NetNode(
@@ -50,7 +51,9 @@ Network _twoNode(ServiceType service) => Network(
           role: NodeRole.fixture,
         ),
       ],
-      edges: [NetEdge(id: 'e', fromId: 'r', toId: 'd', service: service)],
+      edges: [
+        NetEdge(id: 'e', fromId: 'r', toId: 'd', service: service, kind: kind),
+      ],
     );
 
 void main() {
@@ -222,8 +225,10 @@ void main() {
     test('the confirmed false positive is clean (1200 × 900 at 4.56 m/s)', () {
       // Q = 4.92 m³/s, cap 5.0, aspect 1.5.
       //   A_req = 4.92 / 5.0        = 0.984 m²
-      //   H_ideal = √(0.984 / 1.5)  = 0.80994 m → 810 mm → rounds up to 900
+      //   H_ideal = √(0.984 / 1.5)  = 0.80994 m
       //   W_ideal = 1.5 × 0.80994   = 1.21491 m → 1215 mm → clamps to 1200
+      //   W clamped ⇒ H is re-solved against it: H = A_req / W = 0.984 / 1.2
+      //     = 0.820 m → 820 mm → rounds up to 900
       // The IDEAL width exceeds the largest standard side, which is what the
       // old test flagged — but the DELIVERED section is
       //   A = 1.200 × 0.900 = 1.08 m² → v = 4.92 / 1.08 = 4.5556 m/s ≤ 5.0.
@@ -240,8 +245,9 @@ void main() {
 
     test('a genuinely over-velocity clamped section still flags', () {
       // Q = 8.0 m³/s, cap 5.0, aspect 1.5.
-      //   A_req = 1.6 m²; H_ideal = √(1.6/1.5) = 1.0328 m → clamps to 1200
-      //   W_ideal = 1.5492 m → clamps to 1200
+      //   A_req = 1.6 m²; W_ideal = 1.5 × √(1.6/1.5) = 1.5492 m → clamps to 1200
+      //   W clamped ⇒ H = A_req / W = 1.6 / 1.2 = 1.333 m → 1333 mm, past the
+      //     largest side → clamps to 1200
       //   A = 1.2 × 1.2 = 1.44 m² → v = 8.0 / 1.44 = 5.5556 m/s > 5.0
       final r = sizeRectangularByVelocity(
         airflow: const FlowRate(8.0),
@@ -272,13 +278,15 @@ void main() {
 
   // ── M3 — storm over-capacity reaches EdgeSizing ────────────────────────────
 
+  // A DOWNPIPE is a riser edge: since audit 2026-10 water-drainage-2 only
+  // risers take the vertical downpipe table (a horizontal run is Manning).
   group('M3 · storm downpipe over-capacity reaches the edge', () {
     test('75 L/s exceeds the DN200 table top ⇒ overCapacity', () {
       // The largest tabulated downpipe carries 65 L/s at DN200; 75 L/s cannot
       // be carried by ANY single downpipe in the table, so the DN200 returned
       // is the table limit and the catchment must be split.
       final sized = autoSizeNetwork(
-        _twoNode(ServiceType.rainwater),
+        _twoNode(ServiceType.rainwater, kind: EdgeKind.riser),
         const SizingContext(),
         leafDemand: const {ServiceType.rainwater: FlowRate(0.075)},
       );
@@ -289,7 +297,7 @@ void main() {
     test('a catchment inside the table is NOT flagged', () {
       // 30 L/s is exactly the DN150 rated capacity (30.0 L/s ≥ 30.0).
       final sized = autoSizeNetwork(
-        _twoNode(ServiceType.rainwater),
+        _twoNode(ServiceType.rainwater, kind: EdgeKind.riser),
         const SizingContext(),
         leafDemand: const {ServiceType.rainwater: FlowRate(0.030)},
       );
@@ -349,58 +357,81 @@ void main() {
     // The self-cleansing minimum is 0.6 m/s, so DN40 and DN50 run BELOW it and
     // DN100 clears it — the band the audit measured (0.46–0.54 m/s "OK").
     //
+    // Round 33 — a ≤ DN65 drainage RUN is LAID at no flatter than its own
+    // 2 % (1:50) minimum (`laidGravitySlope`), so at the default 1 % project
+    // slope a DN40 / DN50 branch runs at √2 × the 1 % figure:
+    //   DN40 → 0.46416 × √2 = 0.65642 m/s;  DN50 → 0.53861 × √2 = 0.76171 m/s
+    // — both clear 0.6 m/s at the fall they are actually laid at.
+    //
     // G1 — running below 0.6 m/s is only REPORTED (selfCleansingOk == false)
     // when the chosen diameter EXCEEDS the DFU table's minimum for the load:
     // at the minimum no smaller compliant pipe exists, so the shortfall is not
     // actionable by pipe and the flag stays true (the slope / grouped
     // discharge are the real levers, and they live elsewhere).
     Map<String, EdgeSizing> sizeDrain(double dfu,
-            {Map<String, Diameter> sizeOverrides = const {}}) =>
+            {Map<String, Diameter> sizeOverrides = const {},
+            SizingContext ctx = const SizingContext()}) =>
         autoSizeNetwork(
           _twoNode(ServiceType.drainage),
-          const SizingContext(),
+          ctx,
           leafDemand: const {ServiceType.drainage: FlowRate(0)},
           nodeDrainageUnits: {'d': dfu},
           sizeOverrides: sizeOverrides,
         );
 
-    test('a DN40 branch AT the DFU minimum is not flagged (0.464 m/s)', () {
+    test('a DN40 branch AT the DFU minimum is not flagged (laid 1:50)', () {
       // Branch DFU table: dfu ≤ 1 ⇒ DN40 — the smallest compliant pipe for
-      // this load. It genuinely runs at 0.464 m/s (< 0.6), but no smaller pipe
-      // is allowed, so there is nothing the engineer could pick instead.
+      // this load, laid at its 2 % minimum: 0.46416 × √2 = 0.65642 m/s.
       final s = sizeDrain(1.0)['e']!;
       expect(s.diameter.inMillimeters, closeTo(40, 1e-9));
-      expect(s.velocity.metersPerSecond, closeTo(0.464158883361, 1e-9));
-      expect(s.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
+      expect(s.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2), 1e-9));
+      expect(s.velocity.metersPerSecond,
+          greaterThanOrEqualTo(kSelfCleansingVelocityMps));
       expect(s.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
+      // G1 still holds where the laid fall cannot help: a rough pipe (n =
+      // 0.015) DN40 at 2 % runs 0.65642 × 0.010/0.015 = 0.43761 m/s < 0.6,
+      // yet at the table minimum it is not flagged.
+      final r = sizeDrain(1.0,
+          ctx: const SizingContext(drainageManningN: 0.015))['e']!;
+      expect(r.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2) / 1.5, 1e-9));
+      expect(r.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
+      expect(r.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
     });
 
-    test('a DN50 branch AT the DFU minimum is not flagged (0.539 m/s)', () {
-      // Branch DFU table: 1 < dfu ≤ 3 ⇒ DN50, again the table minimum.
-      final s = sizeDrain(3.0)['e']!;
+    test('a DN50 branch AT the DFU minimum is not flagged (laid 1:50)', () {
+      // Branch DFU table (Round 30, IPC 710.1(2)): 3 < dfu ≤ 6 ⇒ DN50, again
+      // the table minimum, laid at 2 %: 0.53861 × √2 = 0.76171 m/s.
+      final s = sizeDrain(6.0)['e']!;
       expect(s.diameter.inMillimeters, closeTo(50, 1e-9));
-      expect(s.velocity.metersPerSecond, closeTo(0.538608672508, 1e-9));
+      expect(s.velocity.metersPerSecond,
+          closeTo(0.538608672508 * math.sqrt(2), 1e-9));
       expect(s.selfCleansingOk, isTrue, reason: 'at the DFU table minimum');
     });
 
     test('a hand pick ABOVE the DFU minimum that still runs slow IS flagged',
         () {
-      // DFU 1 ⇒ the table minimum is DN40 (0.46416 m/s). Hand-picking DN50
-      // keeps the run under 0.6 m/s (0.53861 m/s) but is now the ENGINEER's
-      // oversize, not the code's: a smaller compliant pipe (DN40) exists and
-      // runs faster, so the advisory is actionable and fires.
-      final s = sizeDrain(1.0, sizeOverrides: {'e': Diameter.mm(50)})['e']!;
+      // DFU 1 ⇒ the table minimum is DN40. On a rough pipe (n = 0.015) a
+      // hand-picked DN50 laid at its 2 % minimum runs 0.53861 × √2 × 0.010 /
+      // 0.015 = 0.50781 m/s — under 0.6 m/s, and the ENGINEER's oversize,
+      // not the code's: a smaller compliant pipe (DN40) exists and runs
+      // faster, so the advisory is actionable and fires.
+      final s = sizeDrain(1.0,
+          sizeOverrides: {'e': Diameter.mm(50)},
+          ctx: const SizingContext(drainageManningN: 0.015))['e']!;
       expect(s.diameter.inMillimeters, closeTo(50, 1e-9));
-      expect(s.velocity.metersPerSecond, closeTo(0.538608672508, 1e-9));
+      expect(s.velocity.metersPerSecond,
+          closeTo(0.538608672508 * math.sqrt(2) / 1.5, 1e-9));
       expect(s.velocity.metersPerSecond, lessThan(kSelfCleansingVelocityMps));
       expect(s.selfCleansingOk, isFalse);
     });
 
     test('a hand pick BELOW the DFU minimum keeps the verdict true', () {
-      // DFU 3 ⇒ minimum DN50; hand-picking DN40 is under the minimum (its own
+      // DFU 6 ⇒ minimum DN50; hand-picking DN40 is under the minimum (its own
       // code violation, not a self-cleansing finding) and runs FASTER, so the
       // self-cleansing flag stays true either way.
-      final s = sizeDrain(3.0, sizeOverrides: {'e': Diameter.mm(40)})['e']!;
+      final s = sizeDrain(6.0, sizeOverrides: {'e': Diameter.mm(40)})['e']!;
       expect(s.diameter.inMillimeters, closeTo(40, 1e-9));
       expect(s.selfCleansingOk, isTrue);
     });
@@ -458,7 +489,8 @@ void main() {
         _twoNode(ServiceType.drainage),
         const SizingContext(drainageSlope: 0.04),
         leafDemand: const {ServiceType.drainage: FlowRate(0)},
-        nodeDrainageUnits: const {'d': 3.0},
+        // 3 < 6 ≤ 6 DFU ⇒ DN50 (IPC 710.1(2), Round 30).
+        nodeDrainageUnits: const {'d': 6.0},
       );
       expect(
         sized['e']!.velocity.metersPerSecond,
@@ -470,17 +502,27 @@ void main() {
 
   // ── M11 — the clamped motor frame is flagged ───────────────────────────────
 
-  group('M11 · a clamped 75 kW motor is flagged on the duty', () {
-    test('a 90 kW-class pump duty reports motorOversized', () {
+  group('M11 · a clamped (largest-frame) motor is flagged on the duty', () {
+    test('an 84 kW pump duty selects the 90 kW IEC frame (Round 21)', () {
       // Q = 0.5 m³/s at H = 12 m, η_pump = 0.70:
       //   P_hyd   = ρ·g·Q·H = 1000 × 9.81 × 0.5 × 12 = 58 860 W
       //   P_shaft = 58 860 / 0.70                    = 84 085.714 W = 84.09 kW
-      // The largest standard frame is 75 kW ⇒ selectMotor CLAMPS.
+      // 75 < 84.09 ≤ 90 ⇒ the 90 kW frame, a real selection (no clamp).
       final duty = sizePump(flow: const FlowRate(0.5), head: const Head(12.0));
       expect(duty.hydraulicPower.watts, closeTo(58860.0, 1e-6));
       expect(duty.shaftPower.watts, closeTo(58860.0 / 0.70, 1e-6));
+      expect(duty.selectedMotor.inKiloWatts, closeTo(90.0, 1e-9));
+      expect(duty.motorOversized, isFalse);
+    });
+
+    test('a 336 kW pump duty reports motorOversized', () {
+      // Q = 2.0 m³/s at H = 12 m: P_hyd = 1000 × 9.81 × 2.0 × 12 = 235 440 W;
+      // P_shaft = 235 440 / 0.70 = 336 342.857 W > the largest 315 kW frame
+      // ⇒ selectMotor CLAMPS.
+      final duty = sizePump(flow: const FlowRate(2.0), head: const Head(12.0));
+      expect(duty.shaftPower.watts, closeTo(235440.0 / 0.70, 1e-6));
       expect(duty.shaftPower.inKiloWatts, greaterThan(standardMotorKw.last));
-      expect(duty.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
+      expect(duty.selectedMotor.inKiloWatts, closeTo(315.0, 1e-9));
       expect(duty.motorOversized, isTrue);
     });
 
@@ -493,18 +535,25 @@ void main() {
       expect(duty.motorOversized, isFalse);
     });
 
-    test('a 92 kW-class fan duty reports motorOversized', () {
+    test('a 92 kW fan duty selects the 110 kW frame; 369 kW clamps', () {
       // Q = 20 m³/s at Δp = 3000 Pa, η_fan = 0.65:
       //   P_air   = 20 × 3000       = 60 000 W
-      //   P_shaft = 60 000 / 0.65   = 92 307.692 W = 92.31 kW  > 75 kW
+      //   P_shaft = 60 000 / 0.65   = 92 307.692 W = 92.31 kW ⇒ 110 kW frame
       final duty = sizeFan(
         airflow: const FlowRate(20.0),
         totalStaticPressure: const Pressure(3000.0),
       );
       expect(duty.airPower.watts, closeTo(60000.0, 1e-6));
       expect(duty.shaftPower.watts, closeTo(60000.0 / 0.65, 1e-6));
-      expect(duty.selectedMotor.inKiloWatts, closeTo(75.0, 1e-9));
-      expect(duty.motorOversized, isTrue);
+      expect(duty.selectedMotor.inKiloWatts, closeTo(110.0, 1e-9));
+      expect(duty.motorOversized, isFalse);
+      // Q = 80 m³/s: P_shaft = 240 000 / 0.65 = 369 230.8 W > 315 kW ⇒ clamp.
+      final big = sizeFan(
+        airflow: const FlowRate(80.0),
+        totalStaticPressure: const Pressure(3000.0),
+      );
+      expect(big.selectedMotor.inKiloWatts, closeTo(315.0, 1e-9));
+      expect(big.motorOversized, isTrue);
     });
 
     test('an in-ladder fan duty does NOT', () {
@@ -520,10 +569,10 @@ void main() {
     });
 
     test('a duty landing exactly ON the largest frame is not oversized', () {
-      // The comparison is strict: 75.0 kW of shaft power selects the 75 kW
+      // The comparison is strict: 315.0 kW of shaft power selects the 315 kW
       // frame, which is a valid selection, not a clamp.
-      expect(motorOversizedFor(Power.kiloWatts(75.0)), isFalse);
-      expect(motorOversizedFor(Power.kiloWatts(75.0000001)), isTrue);
+      expect(motorOversizedFor(Power.kiloWatts(315.0)), isFalse);
+      expect(motorOversizedFor(Power.kiloWatts(315.0000001)), isTrue);
     });
   });
 
@@ -561,7 +610,7 @@ void main() {
     test('an asymmetric ring given ONE sweep reports converged == false', () {
       // Deliberately starving the solver proves the verdict is real: the seed
       // routes ALL demand down the tree (chord flow 0), so one correction on an
-      // asymmetric ring cannot drive |ΔQ| below the 1e-12 tolerance.
+      // asymmetric ring cannot drive |ΔQ| below the (relative) tolerance.
       final starved = balanceFlows(
         edges: ringEdges,
         root: 'A',
@@ -707,14 +756,26 @@ void main() {
       // a hand-picked DN100 at 1:100 does clear 0.6 m/s.
       expect(out.selfCleansingOk, isTrue);
 
-      // The reverse direction too: overriding DOWN to DN40 fails the check.
+      // The reverse direction too: overriding DOWN to DN40 — Round 33: a
+      // DN40 is laid at its 2 % minimum (0.46416 × √2 = 0.65642 m/s), which
+      // clears 0.6 m/s; on a rough pipe (n = 0.015, × 2/3 = 0.43761 m/s) it
+      // fails the check.
       final down = applySizeOverride(
         base.withFlowFrom(null),
         Diameter.mm(40),
         ctx: ctx,
       );
-      expect(down.velocity.metersPerSecond, closeTo(0.464158883361, 1e-9));
-      expect(down.selfCleansingOk, isFalse);
+      expect(down.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2), 1e-9));
+      expect(down.selfCleansingOk, isTrue);
+      final rough = applySizeOverride(
+        base.withFlowFrom(null),
+        Diameter.mm(40),
+        ctx: const SizingContext(drainageManningN: 0.015),
+      );
+      expect(rough.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2) / 1.5, 1e-9));
+      expect(rough.selfCleansingOk, isFalse);
     });
 
     test('a VENT override still carries no velocity', () {
@@ -736,7 +797,7 @@ void main() {
       // 75 L/s is past the DN200 table top; hand-overriding the pipe to DN200
       // must NOT erase the finding that no single downpipe carries the flow.
       final sized = autoSizeNetwork(
-        _twoNode(ServiceType.rainwater),
+        _twoNode(ServiceType.rainwater, kind: EdgeKind.riser),
         const SizingContext(),
         leafDemand: const {ServiceType.rainwater: FlowRate(0.075)},
         sizeOverrides: {'e': Diameter.mm(200)},

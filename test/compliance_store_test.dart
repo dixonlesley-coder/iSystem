@@ -56,8 +56,8 @@ void main() {
       expect(s.allPass, isFalse);
     });
 
-    test('an unclaimed issue title gets its own row (complete by construction)',
-        () {
+    test('an unclaimed info-only issue folds into ONE Advisory notes row '
+        '(complete by construction, never a defect title beside PASS)', () {
       final s = buildComplianceSummaryFrom(
         issues: const [
           DesignIssue(
@@ -65,14 +65,64 @@ void main() {
             title: 'Some future advisory',
             message: 'x',
           ),
+          DesignIssue(
+            severity: IssueSeverity.info,
+            title: 'Fixture type not set',
+            message: 'y',
+          ),
         ],
         electricalWarnings: const [],
         date: 'd',
       );
-      final row = _item(s, 'Some future advisory');
-      // Info severity ⇒ an advisory note, not a failure.
+      expect(s.items.any((i) => i.category == 'Some future advisory'),
+          isFalse);
+      expect(s.items.any((i) => i.category == 'Fixture type not set'),
+          isFalse);
+      final row = _item(s, 'Advisory notes');
+      // Info severity ⇒ advisory notes, not a failure: 2 notes, one row.
       expect(row.pass, isTrue);
-      expect(row.detail, '1 advisory note');
+      expect(row.detail, '2 advisory notes');
+    });
+
+    test('an unclaimed FAILING issue title keeps its own row', () {
+      final s = buildComplianceSummaryFrom(
+        issues: const [
+          DesignIssue(
+            severity: IssueSeverity.warning,
+            title: 'Some future finding',
+            message: 'x',
+          ),
+        ],
+        electricalWarnings: const [],
+        date: 'd',
+      );
+      final row = _item(s, 'Some future finding');
+      expect(row.pass, isFalse);
+      expect(row.detail, '1 finding');
+    });
+
+    test('an electrical WARNING blocks the electrical row like a mechanical '
+        'warning blocks its row (one rule)', () {
+      final s = buildComplianceSummaryFrom(
+        issues: const [],
+        electricalWarnings: const [
+          ElectricalWarning(
+            severity: WarningSeverity.warning,
+            code: 'phase-imbalance',
+            message: 'x',
+          ),
+          ElectricalWarning(
+            severity: WarningSeverity.info,
+            code: 'harmonics-neutral-oversize',
+            message: 'y',
+          ),
+        ],
+        date: 'd',
+      );
+      final row = _item(s, 'Electrical circuit sizing');
+      expect(row.pass, isFalse);
+      expect(row.detail, '1 warning, no errors');
+      expect(s.allPass, isFalse);
     });
 
     test('an error-severity electrical warning fails the electrical row', () {

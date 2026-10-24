@@ -18,15 +18,22 @@ import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart'
     show electricalSldSheetsToPdf;
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
+import 'package:mechx_engine/report/riser_pagination.dart'
+    show paginatedRiserSheets;
 import 'package:mechx_engine/report/riser_tags.dart'
-    show equipmentDetail, riserServiceCode;
+    show
+        drawnWaterFeedEquipment,
+        equipmentDetail,
+        riserFeedNote,
+        riserServiceCode;
 import 'package:mechx_engine/report/sld_export.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
-import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart' show Length;
 
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
+import '../../store/electrical_feed.dart' show riserEquipmentDetailsProvider;
 import '../../store/project_store.dart';
 import '../../store/network_store.dart';
 import '../../store/sizing_store.dart';
@@ -34,6 +41,7 @@ import '../../store/solve_store.dart';
 import '../inspector/project_panel.dart'
     show kDrawServices, pickExportSave, runExportGuarded;
 import '../strings/app_strings.dart';
+import '../strings/occupancy_label.dart';
 
 /// The title-block heading for the active system [focus] — a per-service riser
 /// title (Indonesian air-bersih convention) when one system is filtered, else
@@ -52,30 +60,32 @@ String riserDiagramTitle(ServiceType? focus) {
     ServiceType.drainage => 'DIAGRAM SISTEM AIR KOTOR & BEKAS',
     ServiceType.vent => 'DIAGRAM SISTEM VEN',
     ServiceType.rainwater => 'DIAGRAM SISTEM AIR HUJAN',
-    ServiceType.duct ||
-    ServiceType.returnAir ||
-    ServiceType.exhaust =>
-      'AIR DUCT RISER DIAGRAM',
-    ServiceType.fireSprinkler ||
-    ServiceType.fireHydrant =>
-      'FIRE RISER DIAGRAM',
+    // Round 34 (fire-hvac-drawings-no-discipline-split) — one DISTINCT
+    // register title per system (two riser sheets never share a title),
+    // in the same Indonesian sheet language as plumbing.
+    ServiceType.duct => 'DIAGRAM DUCTING SUPPLY',
+    ServiceType.returnAir => 'DIAGRAM DUCTING RETURN',
+    ServiceType.exhaust => 'DIAGRAM DUCTING EXHAUST',
+    ServiceType.fireSprinkler => 'DIAGRAM SISTEM SPRINKLER',
+    ServiceType.fireHydrant => 'DIAGRAM SISTEM HIDRAN',
   };
 }
 
 /// A short title-block supply note from the live feed strategy + the tanks
 /// actually present (honest — only mentions a tank/pump the network has).
 String _supplyNote(Network net, FeedStrategy feed) {
-  final hasRoofTank =
-      net.nodes.any((n) => n.component == NodeComponent.roofTank);
-  final hasGroundTank =
-      net.nodes.any((n) => n.component == NodeComponent.groundTank);
-  final hasPump = net.nodes.any((n) =>
-      n.component == NodeComponent.pump ||
-      n.component == NodeComponent.boosterSet);
+  // Round 30 — water-network equipment only (a fire pump is not a booster).
+  final eq = drawnWaterFeedEquipment(net);
+  final hasRoofTank = eq.hasRoofTank;
+  final hasGroundTank = eq.hasGroundTank;
+  final hasPump = eq.hasPump;
+  // Round 17 — the feed note follows the drawn equipment (no roof tank ⇒ no
+  // gravity downfeed), the shared engine `riserFeedNote`.
   final parts = <String>[
-    feed == FeedStrategy.downfeed
-        ? 'Feed: gravity downfeed'
-        : 'Feed: upfeed / booster',
+    riserFeedNote(
+        downfeed: feed == FeedStrategy.downfeed,
+        hasRoofTank: hasRoofTank,
+        hasPump: hasPump),
   ];
   if (hasRoofTank) parts.add('roof tank');
   if (hasGroundTank) parts.add('ground tank');
@@ -91,7 +101,7 @@ String _supplyNote(Network net, FeedStrategy feed) {
 List<String> _systemNotes(WidgetRef ref, Network net) {
   final feed = ref.read(feedStrategyProvider);
   final occupancy = ref.read(occupancyProvider);
-  final pump = ref.read(pumpDutyProvider);
+  final peakFlow = ref.read(supplyPeakFlowProvider);
 
   // Capacity of the first node with [component] carrying a stored capacity —
   // the shared engine `equipmentDetail` ('237 m3'), so the note matches the
@@ -108,29 +118,33 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
   // F9: assert '(roof tank)' ONLY when a roofTank actually exists in the
   // network (mirrors `_supplyNote`) — the KETERANGAN must never claim
   // equipment the design doesn't contain.
-  final hasRoofTank =
-      net.nodes.any((n) => n.component == NodeComponent.roofTank);
+  // Round 30 — water-network equipment only (a fire pump is not a booster).
+  final eq = drawnWaterFeedEquipment(net);
   final lines = <String>[
-    feed == FeedStrategy.downfeed
-        ? (hasRoofTank
-            ? 'Feed: gravity downfeed (roof tank)'
-            : 'Feed: gravity downfeed')
-        : 'Feed: upfeed / booster pump',
+    riserFeedNote(
+        downfeed: feed == FeedStrategy.downfeed,
+        hasRoofTank: eq.hasRoofTank,
+        hasPump: eq.hasPump,
+        hasWaterMeter: eq.hasWaterMeter,
+        detailed: true),
   ];
   final roofM3 = tankM3(NodeComponent.roofTank);
   if (roofM3 != null) lines.add('Roof tank: $roofM3');
   final groundM3 = tankM3(NodeComponent.groundTank);
   if (groundM3 != null) lines.add('Ground tank: $groundM3');
-  lines.add('Occupancy: ${switch (occupancy) {
-    Occupancy.private => 'Private',
-    Occupancy.public => 'Public',
-    Occupancy.assembly => 'Assembly',
-  }}');
-  // Peak design flow is upfeed-only (pumpDutyProvider null on downfeed). Never
+  // Round 29 (ui-journeys-3-occupancy-two-vocabularies) — the Building
+  // input's own label in the active locale (was the hard-coded English enum
+  // name 'Private', unlike the 'Residential' the engineer picked).
+  final str = MechXStringsData(ref.read(localeProvider));
+  lines.add(str.format(StringKey.schematicNotesOccupancy,
+      {'label': str(occupancyLabelKey(occupancy))}));
+  // Peak design flow is upfeed-only (supplyPeakFlowProvider null on
+  // downfeed) and is the BUILDING trunk flow, never an inline booster's
+  // partial flow (Round 15 r2). Never
   // fabricate a m3/day figure when no pump flow exists.
-  if (pump != null) {
+  if (peakFlow != null) {
     lines.add('Peak design flow: '
-        '${pump.flow.inLitersPerSecond.toStringAsFixed(1)} L/s');
+        '${peakFlow.inLitersPerSecond.toStringAsFixed(1)} L/s');
   }
   return lines;
 }
@@ -141,7 +155,11 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
 /// equipment detail suffixes (tank m3 / pump-fan kW), the KETERANGAN system
 /// notes, and the H101 detail callouts — so the issued sheet is always >= the
 /// preview. Public for the export wiring test.
-SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
+///
+/// Round 21 (riser-drafting-2-2) — [floorRange] builds one PAGE of a
+/// paginated riser ([buildLiveRiserPages]).
+SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
+    {({int lo, int hi})? floorRange}) {
   final project = ref.read(projectControllerProvider);
   final network = ref.read(networkControllerProvider).network;
   final sizing = ref.read(sizingProvider);
@@ -149,12 +167,8 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
   final feed = ref.read(feedStrategyProvider);
   // Per-node capacity/duty suffixes — the same provider-fed resolution the
   // canvas uses (`equipmentDetail` returns null when no datum exists).
-  final pump = ref.read(pumpDutyProvider);
-  final fan = ref.read(ductFanProvider);
-  final detailByNode = <String, String>{
-    for (final node in network.nodes)
-      node.id: ?equipmentDetail(node, supplyPump: pump, fan: fan),
-  };
+  // Round 12 — each node's OWN duty (fire pump / booster / per-root fan).
+  final detailByNode = ref.read(riserEquipmentDetailsProvider);
   // N6: the same §10 length-per-edge map the plan export builds — a run via the
   // sheet calibration, a riser via the true elevation delta — so every pipe
   // run/riser tag carries its take-off / prefab length on the issued sheet.
@@ -165,6 +179,7 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
         network,
         calibrationBySheet: project.calibrations,
         building: building,
+        mounting: project.mounting,
       ),
   };
   return buildMechanicalRiserSld(
@@ -178,6 +193,31 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
     edgeLengths: edgeLengths,
     notes: _systemNotes(ref, network),
     detailCallouts: true,
+    // drafting-7: the riser's equipment carries the SAME stable tag as the
+    // plan + the equipment schedule (P-08 · 2.2 kW).
+    nodeTags: equipmentNodeTags(network),
+    // Round 17 — the transfer pump is captioned TRANSFER PUMP on the sheet.
+    transferPumpNodeIds: ref.read(transferPumpNodeIdsProvider),
+    // Round 21 (riser-drafting-2-1) — the HWR recirculation return leg the
+    // canvas draws rides the issued sheet too (issued >= preview).
+    hotWaterRecirc: ref.read(hotWaterAssumedReturnProvider),
+    floorRange: floorRange,
+  );
+}
+
+/// Round 21 (riser-drafting-2-2) — the riser for [focus] as issuable PDF
+/// PAGES: one sheet when it prints at the 7 pt legibility floor, else the
+/// fewest floor-range pages that print as large as the sheet allows
+/// ([paginatedRiserSheets]; `LANJUT KE <floor>` match stubs at each break,
+/// the extras on the lowest-floor page). The DXF stays one sheet (CAD zooms).
+List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus) {
+  final project = ref.read(projectControllerProvider);
+  return paginatedRiserSheets(
+    build: (r) => buildLiveRiserSheet(ref, focus, floorRange: r),
+    levelCount: project.building.levelCount,
+    chrome: _riserChrome(ref, index: 1, total: 1),
+    projectName: project.name.isEmpty ? 'Untitled project' : project.name,
+    diagramTitle: riserDiagramTitle(focus),
   );
 }
 
@@ -187,7 +227,9 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus) {
 /// rows are omitted) plus today's date — the app formats the clock, the engine
 /// never reads it. N19: the drawing NUMBER is derived per sheet (mechanical
 /// riser band `M-2xx`, running by [index]) so a set never stamps one number on
-/// every sheet; the manual `documentNumber` remains the verbatim override.
+/// every sheet; a manual `documentNumber` becomes the PREFIX
+/// (`<documentNumber>-<series><index>`, e.g. `BRI-MEP-01-M-201`) — only the
+/// cover keeps the bare base.
 DrawingChrome _riserChrome(WidgetRef ref,
     {required int index, required int total}) {
   final doc = ref.read(documentControlProvider);
@@ -217,17 +259,29 @@ Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) =>
       ref,
       name: 'riser single-line (PDF)',
       write: () async {
-        final sheet = buildLiveRiserSheet(ref, focus);
+        final pages = buildLiveRiserPages(ref, focus);
         final project = ref.read(projectControllerProvider);
-        final bytes = sldSheetToPdf(
-          sheet: sheet,
-          title: 'iSystem mechanical single-line',
-          diagramTitle: riserDiagramTitle(focus),
-          chrome: _riserChrome(ref, index: 1, total: 1),
-          // N2: the live project name stamps the title-block PROJECT row
-          // (no more 'Untitled project' on the flagship riser sheet).
-          projectName: project.name.isEmpty ? null : project.name,
-        );
+        final bytes = pages.length == 1
+            ? sldSheetToPdf(
+                sheet: pages.single,
+                title: 'iSystem mechanical single-line',
+                diagramTitle: riserDiagramTitle(focus),
+                chrome: _riserChrome(ref, index: 1, total: 1),
+                // N2: the live project name stamps the title-block PROJECT
+                // row (no more 'Untitled project' on the flagship riser).
+                projectName: project.name.isEmpty ? null : project.name,
+              )
+            // Round 21 — a tall riser issues as a numbered page set.
+            : electricalSldSheetsToPdf(
+                sheets: pages,
+                title: 'iSystem mechanical single-line',
+                diagramTitles: [
+                  for (final _ in pages) riserDiagramTitle(focus),
+                ],
+                chrome: _riserChrome(ref, index: 1, total: pages.length),
+                projectName:
+                    project.name.isEmpty ? 'Untitled project' : project.name,
+              );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
         final full = await pickExportSave(ref,
             dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -255,8 +309,9 @@ Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
           chrome: _riserChrome(ref, index: 1, total: 1),
           // N2: the live project name stamps the title-block PROJECT row.
           projectName: project.name.isEmpty ? null : project.name,
-          // N15: a plumbing riser DXF uses the M-* layer namespace, never E-*.
-          layers: SldDxfLayers.mechanical,
+          // N15: a plumbing riser DXF uses the M-* layer namespace, never E-*;
+          // Round 34: a fire riser its own F-* namespace.
+          layers: SldDxfLayers.forRiser(focus),
         );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
         final full = await pickExportSave(ref,
@@ -301,11 +356,16 @@ Future<void> exportMechanicalRiserSetPdf(
       write: () async {
         final foci = _riserSetFoci(ref);
         final project = ref.read(projectControllerProvider);
+        // Round 21 — each system's riser paginated to legible pages.
+        final paged = [
+          for (final f in foci)
+            for (final page in buildLiveRiserPages(ref, f)) (f, page),
+        ];
         final bytes = electricalSldSheetsToPdf(
-          sheets: [for (final f in foci) buildLiveRiserSheet(ref, f)],
+          sheets: [for (final p in paged) p.$2],
           title: 'iSystem mechanical riser drawing set',
-          diagramTitles: [for (final f in foci) riserDiagramTitle(f)],
-          chrome: _riserChrome(ref, index: 1, total: foci.length),
+          diagramTitles: [for (final p in paged) riserDiagramTitle(p.$1)],
+          chrome: _riserChrome(ref, index: 1, total: paged.length),
           projectName:
               project.name.isEmpty ? 'Untitled project' : project.name,
         );
@@ -354,8 +414,9 @@ Future<void> exportMechanicalRiserSetDxf(
             chrome: _riserChrome(ref, index: i + 1, total: foci.length),
             // N2: the live project name on every sheet of the set.
             projectName: project.name.isEmpty ? null : project.name,
-            // N15: the M-* layer namespace, never E-*.
-            layers: SldDxfLayers.mechanical,
+            // N15: the M-* layer namespace, never E-*; Round 34: F-* for
+            // a fire riser.
+            layers: SldDxfLayers.forRiser(f),
           );
           await File('$stem-$code.dxf').writeAsString(dxf);
         }

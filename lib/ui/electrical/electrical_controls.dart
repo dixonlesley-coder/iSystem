@@ -7,6 +7,8 @@ library;
 
 import 'package:flutter/widgets.dart';
 
+import '../../store/app_state.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/context_menu.dart';
@@ -14,6 +16,7 @@ import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
 import '../widgets/mechx_segment.dart';
 import '../widgets/mechx_text_field.dart';
+import '../widgets/locale_number.dart';
 
 /// A labelled field row: a quiet sentence-case caption over its [child] input.
 class ElectricalField extends StatelessWidget {
@@ -123,8 +126,41 @@ class ElectricalNumInput extends StatefulWidget {
     this.enabled = true,
   });
 
-  static String _fmt(double v) =>
-      v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+  /// At-rest text for [v]. A NON-FINITE value (NaN / ±Infinity — which can
+  /// only reach here from a legacy/hand-edited model, since commits reject
+  /// them) renders as an empty field instead of throwing `toInt()` inside
+  /// build (Round 11: typing 'Infinity' used to crash the Supply inspector).
+  static String _fmt(double v) {
+    if (!v.isFinite) return '';
+    return v == v.roundToDouble() ? v.toInt().toString() : v.toString();
+  }
+
+  /// Pure commit gate shared by the numeric inputs (Round 11). Returns the
+  /// rejection caption for [v], or null when [v] is a FINITE number inside the
+  /// (independently optional) [min]/[max] bounds. `double.tryParse` accepts
+  /// 'NaN', 'Infinity' and '1e999' (→ Infinity), and NaN fails every
+  /// comparison, so finiteness is checked FIRST and each bound on its own — a
+  /// min-only field (`min: 0`) used to accept negatives because the range was
+  /// enforced only when BOTH bounds were set.
+  static String? rejectionFor(
+    double v, {
+    double? min,
+    double? max,
+    MechXStringsData strings = const MechXStringsData(AppLocale.en),
+  }) {
+    if (!v.isFinite) return strings(StringKey.numInputNotFinite);
+    final belowMin = min != null && v < min;
+    final aboveMax = max != null && v > max;
+    if (!belowMin && !aboveMax) return null;
+    if (min != null && max != null) {
+      return strings.format(
+          StringKey.numInputRange, {'min': _fmt(min), 'max': _fmt(max)});
+    }
+    if (belowMin) {
+      return strings.format(StringKey.numInputMin, {'min': _fmt(min)});
+    }
+    return strings.format(StringKey.numInputMax, {'max': _fmt(max!)});
+  }
 
   @override
   State<ElectricalNumInput> createState() => _ElectricalNumInputState();
@@ -154,7 +190,7 @@ class _ElectricalNumInputState extends State<ElectricalNumInput> {
       );
     }
     final field = MechXTextField(
-      value: ElectricalNumInput._fmt(widget.value),
+      value: _shown(context, widget.value),
       textStyle: type.mono,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       onChanged: (_) {
@@ -163,14 +199,23 @@ class _ElectricalNumInputState extends State<ElectricalNumInput> {
         if (_error != null) setState(() => _error = null);
       },
       onCommitted: (s) {
-        final v = double.tryParse(s.trim());
-        if (v == null) return;
-        if (widget.min != null &&
-            widget.max != null &&
-            (v < widget.min! || v > widget.max!)) {
-          setState(() => _error =
-              'Enter a value between ${ElectricalNumInput._fmt(widget.min!)} '
-              'and ${ElectricalNumInput._fmt(widget.max!)}');
+        // Round 17 follow-up — an untouched field never re-commits (the
+        // display is dot-decimal; re-reading it by the ID locale would turn
+        // `1.125` into 1125).
+        if (s.trim() == _shown(context, widget.value)) return;
+        // Locale-aware: in the ID UI `33.000` VA is 33 000, `0,85` is 0.85.
+        final v = parseLocaleNumber(s,
+            indonesian: context.strings.locale == AppLocale.id);
+        if (v == null) {
+          // A non-number used to be dropped with no message at all.
+          setState(
+              () => _error = context.strings(StringKey.numInputNotANumber));
+          return;
+        }
+        final rejection = ElectricalNumInput.rejectionFor(v,
+            min: widget.min, max: widget.max, strings: context.strings);
+        if (rejection != null) {
+          setState(() => _error = rejection);
           return;
         }
         if (v != widget.value) widget.onChanged(v);
@@ -208,7 +253,7 @@ class _ElectricalNumInputState extends State<ElectricalNumInput> {
 /// Empty text ⇒ `null` (cleared); a well-formed POSITIVE number ⇒ that value;
 /// anything else is ignored (the field blur-reverts, exactly like
 /// [ElectricalNumInput]). Commit-on-blur, so an override is one undo step.
-class ElectricalOptionalNumInput extends StatelessWidget {
+class ElectricalOptionalNumInput extends StatefulWidget {
   final double? value;
 
   /// Called with the parsed value, or `null` when the field was emptied — the
@@ -221,35 +266,86 @@ class ElectricalOptionalNumInput extends StatelessWidget {
   /// Round the committed value to a whole number (way counts, grouping counts).
   final bool integer;
 
+  /// Round 29 (ui-journeys-3-fault-level-pinned-no-auto) — a committed 0 (or
+  /// negative) hands the value back to the engine (`onChanged(null)`), the
+  /// '0 = auto' idiom of the genset / transformer fields; default false keeps
+  /// a non-positive entry ignored (an override of 0 A is nonsense).
+  final bool zeroClears;
+
   const ElectricalOptionalNumInput({
     super.key,
     required this.value,
     required this.onChanged,
     this.hint = 'Auto',
     this.integer = false,
+    this.zeroClears = false,
   });
+
+  @override
+  State<ElectricalOptionalNumInput> createState() =>
+      _ElectricalOptionalNumInputState();
+}
+
+class _ElectricalOptionalNumInputState
+    extends State<ElectricalOptionalNumInput> {
+  String? _error;
 
   @override
   Widget build(BuildContext context) {
     final type = context.type;
-    return MechXTextField(
-      value: value == null ? '' : ElectricalNumInput._fmt(value!),
-      hint: hint,
+    final colors = context.colors;
+    final value = widget.value;
+    final field = MechXTextField(
+      value: value == null ? '' : _shown(context, value),
+      hint: widget.hint,
       textStyle: type.mono,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      onChanged: (_) {
+        if (_error != null) setState(() => _error = null);
+      },
       onCommitted: (s) {
         final t = s.trim();
         if (t.isEmpty) {
-          if (value != null) onChanged(null);
+          if (value != null) widget.onChanged(null);
           return;
         }
-        final parsed = double.tryParse(t);
+        if (value != null && t == _shown(context, value)) return;
+        // Round 17 follow-up — locale-aware, and a non-number says so.
+        final parsed = parseLocaleNumber(t,
+            indonesian: context.strings.locale == AppLocale.id);
+        if (parsed == null) {
+          setState(
+              () => _error = context.strings(StringKey.numInputNotANumber));
+          return;
+        }
+        // Round 11: 'NaN' / 'Infinity' / '1e999' parse, and NaN <= 0 is false —
+        // reject non-finite with the field-error idiom instead of letting it
+        // reach the store (whose jsonEncode no-op guard threw uncaught).
+        if (!parsed.isFinite) {
+          setState(() => _error = context.strings(StringKey.numInputNotFinite));
+          return;
+        }
         // A non-positive override (0 A breaker, 0 mm² cable, 0 cables grouped)
         // is not a design input — reject it rather than committing nonsense.
-        if (parsed == null || parsed <= 0) return;
-        final v = integer ? parsed.roundToDouble() : parsed;
-        if (v != value) onChanged(v);
+        if (parsed <= 0) {
+          if (widget.zeroClears && value != null) widget.onChanged(null);
+          return;
+        }
+        final v = widget.integer ? parsed.roundToDouble() : parsed;
+        if (v != value) widget.onChanged(v);
       },
+    );
+    if (_error == null) return field;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        field,
+        Padding(
+          padding: const EdgeInsets.only(top: MechXSpacing.xxs),
+          child:
+              Text(_error!, style: type.caption.copyWith(color: colors.danger)),
+        ),
+      ],
     );
   }
 }
@@ -440,16 +536,34 @@ class ElectricalEnumPicker<T> extends StatelessWidget {
   final List<T> options;
   final String Function(T) label;
   final ValueChanged<T> onChanged;
+
+  /// Round 41 — false renders only the CURRENT value, inert (an MEP-derived
+  /// way's kind belongs to the drawn machine; the store refuses a change).
+  final bool enabled;
   const ElectricalEnumPicker({
     super.key,
     required this.value,
     required this.options,
     required this.label,
     required this.onChanged,
+    this.enabled = true,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (!enabled) {
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: IgnorePointer(
+          child: MechXSegment(
+            label: label(value),
+            selected: true,
+            selectedWeight: FontWeight.w600,
+            onTap: () {},
+          ),
+        ),
+      );
+    }
     return Wrap(
       spacing: MechXSpacing.xs,
       runSpacing: MechXSpacing.xs,
@@ -473,7 +587,11 @@ class ElectricalEnumPicker<T> extends StatelessWidget {
 class ElectricalToggleRow extends StatelessWidget {
   final String label;
   final bool value;
-  final ValueChanged<bool> onChanged;
+
+  /// Null renders the row read-only (greyed, no tap / key activation) — a
+  /// value that is shown but owned elsewhere (Round 40: an MEP-derived way's
+  /// life-safety duty follows the drawn machine).
+  final ValueChanged<bool>? onChanged;
   const ElectricalToggleRow({
     super.key,
     required this.label,
@@ -485,17 +603,18 @@ class ElectricalToggleRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
-    return Padding(
+    final change = onChanged;
+    final row = Padding(
       padding: const EdgeInsets.only(bottom: MechXSpacing.md),
       // L3: this row drives every essential/UPS-backed/submeter/
       // dual-transformer/advanced-study toggle in the electrical inspectors —
       // wrap it in the shared focus ring so Tab reaches it and Enter/Space
       // fires the same toggle as a tap.
       child: MechXFocusRing(
-        onActivated: () => onChanged(!value),
+        onActivated: change == null ? null : () => change(!value),
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
-          onTap: () => onChanged(!value),
+          onTap: change == null ? null : () => change(!value),
           child: Row(
             children: [
               Expanded(
@@ -506,7 +625,7 @@ class ElectricalToggleRow extends StatelessWidget {
               ),
               const SizedBox(width: MechXSpacing.sm),
               AnimatedContainer(
-                duration: MechXMotion.fast,
+                duration: MechXMotion.resolve(context, MechXMotion.fast),
                 width: 36,
                 height: 20,
                 padding: const EdgeInsets.all(MechXSpacing.xxs),
@@ -534,6 +653,7 @@ class ElectricalToggleRow extends StatelessWidget {
         ),
       ),
     );
+    return change == null ? Opacity(opacity: 0.5, child: row) : row;
   }
 }
 
@@ -677,3 +797,8 @@ class ElectricalChooserCard extends StatelessWidget {
   }
 }
 
+/// The value as the field SHOWS it — the locale's decimal mark, so an edit of
+/// the shown text reads back by the same locale rules (Round 18 follow-up).
+String _shown(BuildContext context, double v) => localizeNumberText(
+    ElectricalNumInput._fmt(v),
+    indonesian: context.strings.locale == AppLocale.id);

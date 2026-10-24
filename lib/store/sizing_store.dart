@@ -1,17 +1,27 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/fire_index_friction.dart' show fireRatingSystems;
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show kJockeyFlowFraction;
+import 'package:mechx_engine/sizing/fire_standpipe.dart' show standpipeFlow;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
+import 'package:mechx_engine/sizing/hot_water.dart'
+    show heatLossFromLength, kDefaultRecircReturnDiameter, sizeHotWaterRecirculation;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart';
+import 'package:mechx_engine/sizing/water_supply_sizing.dart' as water;
 import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'app_state.dart';
+import 'electrical_feed.dart' show parallelFirePumpRoles;
+import 'fire_store.dart';
 import 'fixture_library_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
+import 'solve_store.dart' show hotWaterRecircLoops;
 
 /// Roof catchment assumed per rainwater outlet until a per-outlet area is
 /// assigned. // VERIFY — refine with a real roof plan.
@@ -32,7 +42,8 @@ const Map<ServiceType, FlowRate> kDefaultLeafDemand = {
   ServiceType.drainage: FlowRate(0.0008), // 0.8 L/s per fixture
   ServiceType.vent: FlowRate(0.0004),
   ServiceType.rainwater: FlowRate(0.001),
-  ServiceType.fireSprinkler: FlowRate(0.0005),
+  // (No fireSprinkler entry: sizingProvider always supplies the hazard's own
+  // remote-head flow from sprinklerRemoteAreaProvider instead.)
   ServiceType.fireHydrant: FlowRate(0.005),
 };
 
@@ -50,11 +61,103 @@ const Map<ServiceType, double> kDefaultLeafFixtureUnits = {
 /// Each edge is routed to the correct §7 path and sized for its accumulated
 /// (per-branch) demand: water supply via accumulated fixture units → Hunter
 /// curve; other services via accumulated flows.
-final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
-  final net = ref.watch(sizingNetworkProvider);
-  if (net.edges.isEmpty) return const {};
-  final occupancy = ref.watch(occupancyProvider);
+/// The ONE [SizingContext] the network sizer runs with (Round 21 follow-up):
+/// every judge that re-checks a sized edge (e.g. the fire velocity cap in
+/// `waterVelocityChecksProvider`) reads its limits from HERE, so a judge can
+/// never apply a different cap than the sizer used.
+final sizingContextProvider = Provider<SizingContext>((ref) {
   final ducts = ref.watch(ductSettingsProvider);
+  return SizingContext(
+    ductShape: ducts.shape,
+    ductMethod: ducts.method,
+    // M13 — the laid drainage slope is a real design input
+    // (drainageSlopeProvider): it sets the Manning full-bore velocity behind
+    // every gravity size AND the self-cleansing verdict. Default 0.01 ⇒
+    // byte-identical.
+    drainageSlope: ref.watch(drainageSlopeProvider),
+  );
+});
+
+// Round 32: this provider is often FIRST built from inside another provider's
+// build (downfeedProvider, the SNI-minimum chain). A `ref.listen` on it, or on
+// anything derived from it, must never write Notifier state synchronously —
+// defer the write (a mounted-guarded microtask, as AppShell's first-auto-size
+// nudge does) or Riverpod asserts 'Providers are not allowed to modify other
+// providers during their initialization' (a hash-order flake in the goldens).
+final sizingProvider = Provider<Map<String, EdgeSizing>>(
+    (ref) => ref.watch(sizingDetailProvider).sizing);
+
+/// Round 9 (report-parity-run-schedule-fu-blank) — the accumulated fixture
+/// units (UBAP for water supply, DFU for drainage/vent) per TREE edge, recorded
+/// by the SAME [autoSizeNetwork] call that sized it (`fixtureUnitsOut`), so the
+/// calc report's run schedule prints the basis that drove each size.
+final edgeFixtureUnitsProvider = Provider<Map<String, double>>(
+    (ref) => ref.watch(sizingDetailProvider).fixtureUnits);
+
+/// Round 14 (regression-dutystandby-tank-root-doubles-pump-duty) — the edges
+/// the sizer gave a MIRRORED set flow (duty/standby standby legs, parallel
+/// peer-source bridges; `autoSizeNetwork(parallelLegEdgeIdsOut:)`). They carry
+/// the full set flow so each machine can run alone, but are not extra delivery:
+/// [sourceDeliveredFlow] skips them so a duty/standby set drawn straight from
+/// its ground tank is never sized on curve(2 × UBAP).
+final parallelLegEdgeIdsProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).parallelLegs);
+
+/// Round 27 r3 — hot-water cycle check valves the sizer read as a FEED (the
+/// drawn arrow does not point toward the heater) into a component the heater
+/// already feeds another way: the drawing a recirculation return with its
+/// arrow drawn backwards produces (`autoSizeNetwork(checkValveFeedsRingOut:)`).
+/// Judge-only — the valve is sized as drawn; Review names it.
+final checkValveFeedsRingProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).checkValveFeedsRing);
+
+/// Round 27 r5 — pressurized cycle check valves drawn with NO direction (both
+/// pipes into, or both out of, the valve node) -> how the sizer assumed them
+/// (closed return / plain pipe / standby-set leg / supply leg / envelope;
+/// `autoSizeNetwork(checkValveAmbiguousOut:)`), plus (Round 27 r7) every
+/// mover-leg valve whose balanced split runs against its drawn pump
+/// ([CheckValveAmbiguity.balanceAgainstPump], from `checkValveAgainstPumpOut`).
+/// Judge-only; Review names each.
+final checkValveAmbiguousProvider = Provider<Map<String, CheckValveAmbiguity>>(
+    (ref) => ref.watch(sizingDetailProvider).checkValveAmbiguous);
+
+/// Round 27 r8 — the PUMP nodes of VALVELESS mover legs (a pump drawn
+/// coherently on a chain with no check valve, on a ring) whose balanced
+/// split runs against the drawn pump: the leg is sized on the envelope of
+/// the leg closed and the leg open, in the pump's direction
+/// (`autoSizeNetwork(moverAgainstBalanceOut:)`). Judge-only; Review names
+/// each pump.
+final moverAgainstBalanceProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).moverAgainstBalance);
+
+/// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
+final sizingDetailProvider = Provider<
+    ({
+      Map<String, EdgeSizing> sizing,
+      Map<String, double> fixtureUnits,
+      FlushSystem flushSystem,
+      Set<String> flushValveNodeIds,
+      Set<String> parallelLegs,
+      Set<String> checkValveFeedsRing,
+      Map<String, CheckValveAmbiguity> checkValveAmbiguous,
+      Set<String> moverAgainstBalance,
+      Set<String> assumedJockeys,
+    })>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  if (net.edges.isEmpty) {
+    return (
+      sizing: const {},
+      fixtureUnits: const {},
+      flushSystem: FlushSystem.flushTank,
+      flushValveNodeIds: const <String>{},
+      parallelLegs: const <String>{},
+      checkValveFeedsRing: const <String>{},
+      checkValveAmbiguous: const <String, CheckValveAmbiguity>{},
+      moverAgainstBalance: const <String>{},
+      assumedJockeys: const <String>{},
+    );
+  }
+  final occupancy = ref.watch(occupancyProvider);
   final project = ref.watch(projectControllerProvider);
   const profile = SniProfile();
 
@@ -107,14 +210,29 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       else if (n.fixture != null)
         n.id: drainageFixtureUnit(n.fixture!),
   };
-  // If any assigned WC uses a flush valve (built-in OR a custom flush-valve
-  // fixture), size the supply on the valve curve.
-  final anyFlushValve = net.nodes.any((n) =>
-      n.fixture == PlumbingFixture.waterClosetFlushValve ||
-      (customFor(n)?.isFlushValve ?? false));
+  // Flush-valve WCs (built-in OR a custom flush-valve fixture). Round 27
+  // (residuals-6) — the engine picks the valve curve per cold-water SYSTEM
+  // (only a component holding one of these nodes; hot water never), so a
+  // valve WC on a public toilet core no longer re-curves the apartments'
+  // flush-tank system. [flushSystem] is the whole-project summary only.
+  final flushValveNodeIds = <String>{
+    for (final n in net.nodes)
+      if (n.fixture == PlumbingFixture.waterClosetFlushValve ||
+          (customFor(n)?.isFlushValve ?? false))
+        n.id,
+  };
+  final flushSystem = flushValveNodeIds.isNotEmpty
+      ? FlushSystem.flushValve
+      : FlushSystem.flushTank;
 
   // Rainwater leaves drain a default roof area at the design storm intensity
   // (per-outlet roof areas, when set, override this via nodeFlowDemand above).
+  // Sprinkler heads take the hazard's OWN per-head design flow (the remote
+  // head's discharge, K-floor uplifted — `remoteAreaHydraulics`) instead of a
+  // flat 0.5 L/s that understated every hazard 1.3-3x, and the accumulated
+  // sprinkler flow is capped at the one-design-area demand (only the remote
+  // area operates at once — the cross-main is not sized for every drawn head).
+  final sprinklerRemote = ref.watch(sprinklerRemoteAreaProvider);
   final leafDemand = <ServiceType, FlowRate>{
     ...kDefaultLeafDemand,
     ServiceType.rainwater: rainwaterDesignFlow(
@@ -122,6 +240,7 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       roofAreaM2: kDefaultRoofAreaPerOutlet,
       runoffCoefficient: runoffC,
     ),
+    ServiceType.fireSprinkler: sprinklerRemote.remoteHeadFlow,
   };
 
   // Manual per-segment nominal-size overrides (right-click "Set size"): the
@@ -131,62 +250,295 @@ final sizingProvider = Provider<Map<String, EdgeSizing>>((ref) {
       if (e.sizeOverride != null) e.id: e.sizeOverride!,
   };
 
-  return autoSizeNetwork(
+  final fixtureUnits = <String, double>{};
+  final parallelLegs = <String>{};
+  final checkValveFeedsRing = <String>{};
+  final checkValveAmbiguous = <String, CheckValveAmbiguity>{};
+  final checkValveAgainstPump = <String>{};
+  final moverAgainstBalance = <String>{};
+  Map<String, EdgeSizing> solve(Map<String, FlowRate> jockeyLegFlows) {
+    fixtureUnits.clear();
+    parallelLegs.clear();
+    checkValveFeedsRing.clear();
+    checkValveAmbiguous.clear();
+    checkValveAgainstPump.clear();
+    moverAgainstBalance.clear();
+    return autoSizeNetwork(
     net,
-    // M13 — the laid drainage slope is a real design input now
-    // (drainageSlopeProvider), not the dark const default: it sets the Manning
-    // full-bore velocity behind every gravity size AND the self-cleansing
-    // verdict. Default 0.01 ⇒ byte-identical.
-    SizingContext(
-      ductShape: ducts.shape,
-      ductMethod: ducts.method,
-      drainageSlope: ref.watch(drainageSlopeProvider),
-    ),
+    // The one sizing context (duct settings + the laid drainage slope).
+    ref.watch(sizingContextProvider),
     leafDemand: leafDemand,
     leafFixtureUnits: kDefaultLeafFixtureUnits,
     nodeFixtureUnits: nodeFixtureUnits,
     nodeDrainageUnits: nodeDrainageUnits,
     nodeFlowDemand: nodeFlowDemand,
     sizeOverrides: sizeOverrides,
-    flushSystem:
-        anyFlushValve ? FlushSystem.flushValve : FlushSystem.flushTank,
+    sprinklerDemandCap: sprinklerRemote.remoteAreaDemand,
+    // mech-building-5 — the hydrant riser/trunk carries the standpipe design
+    // flow the fire pump is sized on (one system, one flow), not Σ boxes.
+    hydrantDesignFlow: ref.watch(standpipeDesignProvider).requiredFlow,
+    flushSystem: flushSystem,
+    flushValveNodeIds: flushValveNodeIds,
     // Geometry lets looped (ring) mains balance their flow split against REAL
     // edge lengths — runs via calibration, risers via the §10 elevation delta.
     building: project.building,
     calibrationBySheet: project.calibrations,
+    // Audit 2026-10 water-drainage-8 — the project's mounting heights (F8)
+    // set the riser lengths of the ring-split basis, as on the drawings.
+    mounting: project.mounting,
+    // Audit water-drainage-7 residual — a custom fixture flagged as a water
+    // closet gets the same DN75 drain floor as a built-in WC type.
+    waterClosetNodeIds: {
+      for (final n in net.nodes)
+        if (customFor(n)?.isWaterCloset ?? false) n.id,
+    },
+    fixtureUnitsOut: fixtureUnits,
+    parallelLegEdgeIdsOut: parallelLegs,
+    checkValveFeedsRingOut: checkValveFeedsRing,
+    checkValveAmbiguousOut: checkValveAmbiguous,
+    checkValveAgainstPumpOut: checkValveAgainstPump,
+    moverAgainstBalanceOut: moverAgainstBalance,
+    jockeyLegFlows: jockeyLegFlows,
+  );
+  }
+
+  var sizing = solve(const {});
+  // Round 37 (mech-sim-5-jockey-leg-mirrors-main-pump-bore) — the jockey of a
+  // parallel fire-pump set is identified from the SIZED bores
+  // ([parallelFirePumpRoles], the same rule the panel feed uses), so the
+  // sizer runs once more with each jockey's own duty flow — 1 % of its fire
+  // system's rated flow ([kJockeyFlowFraction], the NFPA 20 figure the
+  // printed jockey duty carries) — instead of the mirrored full set flow.
+  final jockeys = _jockeyLegFlows(
+      net, sizing, {...parallelLegs}, sprinklerRemote.remoteAreaDemand,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters);
+  if (jockeys.flows.isNotEmpty) sizing = solve(jockeys.flows);
+  // Round 53 (plumbing-hvac-convergence-3-drawn-hw-return-sized-at-zero-
+  // flow) — a DRAWN hot-water return sits behind a RETURN check valve, so the
+  // sizer gives it zero draw-off (DN15, Round 27 r4) — but it carries the
+  // recirculation flow. Every pipe of a drawn recirculation loop is sized on
+  // at least its share of that flow ([_resizeDrawnRecircLoops]), so the
+  // issued return, the BOM, the riser and the circulator head (computed over
+  // these bores) agree — never 0.6 L/s pushed through DN15 at 3.4 m/s.
+  sizing = _resizeDrawnRecircLoops(
+    net,
+    sizing,
+    ref.watch(sizingContextProvider),
+    sizeOverrides: sizeOverrides,
+    lengthOf: (e) => edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+      mounting: project.mounting,
+    ).meters,
+    flowTempC: ref.watch(hotWaterFlowTempProvider),
+    deltaTK: ref.watch(hotWaterDeltaTProvider),
+  );
+  // Round 27 r7 — a mover-leg valve whose balance runs against its pump is
+  // named on the same advisory kind with its own message.
+  for (final id in checkValveAgainstPump) {
+    checkValveAmbiguous[id] = CheckValveAmbiguity.balanceAgainstPump;
+  }
+  return (
+    sizing: sizing,
+    fixtureUnits: fixtureUnits,
+    flushSystem: flushSystem,
+    flushValveNodeIds: flushValveNodeIds,
+    parallelLegs: parallelLegs,
+    checkValveFeedsRing: checkValveFeedsRing,
+    checkValveAmbiguous: checkValveAmbiguous,
+    moverAgainstBalance: moverAgainstBalance,
+    assumedJockeys: jockeys.assumed,
   );
 });
 
+/// Round 53 — [sizing] with every pipe of a DRAWN hot-water recirculation
+/// loop ([hotWaterRecircLoops] with a drawn return) carrying at least its
+/// share of the loop's recirculation flow (`Q = heat loss / (rho c dT)`,
+/// [sizeHotWaterRecirculation], the figure the circulator duty is computed
+/// on): a pipe whose sized flow is below that share (the zero-draw-off return
+/// behind its check valve) is re-sized on it under the supply velocity cap,
+/// never below the assumed-return bore, oriented round the loop. A hand-picked size stays. The
+/// assumed (undrawn) return is untouched.
+Map<String, EdgeSizing> _resizeDrawnRecircLoops(
+  Network net,
+  Map<String, EdgeSizing> sizing,
+  SizingContext ctx, {
+  required Map<String, Diameter> sizeOverrides,
+  required double Function(NetEdge e) lengthOf,
+  required double flowTempC,
+  required double deltaTK,
+}) {
+  if (!net.edges.any((e) => e.service == ServiceType.hotWater)) return sizing;
+  final loops = hotWaterRecircLoops(net, sizing, lengthOf: lengthOf);
+  Map<String, EdgeSizing>? out;
+  for (final loop in loops) {
+    if (loop.drawnLoopLengthM == null || loop.loopEdgeShares.isEmpty) continue;
+    final q = sizeHotWaterRecirculation(
+      heatLoss: heatLossFromLength(
+          loopLength: Length(loop.circulatedLengthM + loop.returnLengthM)),
+      loopLength: Length(loop.returnLengthM),
+      returnDiameter: kDefaultRecircReturnDiameter,
+      flowTempC: flowTempC,
+      allowableDropK: deltaTK,
+    ).recircFlow.cubicMetersPerSecond;
+    if (q <= 0) continue;
+    final ids = loop.loopEdgeShares.keys.toList()..sort();
+    for (final id in ids) {
+      if (sizeOverrides.containsKey(id)) continue;
+      final edge = net.edgeById(id);
+      final cur = (out ?? sizing)[id];
+      if (edge == null || cur == null) continue;
+      final share = FlowRate(q * loop.loopEdgeShares[id]!);
+      if (cur.flow.cubicMetersPerSecond >=
+          share.cubicMetersPerSecond - 1e-12) {
+        continue;
+      }
+      // Never below the bore the ASSUMED return is modelled at
+      // ([kDefaultRecircReturnDiameter], DN20 — `// VERIFY`): drawing the
+      // return never makes the design worse than not drawing it.
+      final r = water.sizeForFlow(
+        flow: share,
+        maxVelocity: ctx.maxSupplyVelocity,
+        material: ctx.pipeMaterial,
+        minDiameter: kDefaultRecircReturnDiameter,
+      );
+      out ??= {...sizing};
+      out[id] = EdgeSizing(
+        edgeId: id,
+        service: edge.service,
+        flow: share,
+        diameter: r.diameter,
+        velocity: r.velocity,
+        overCapacity: r.overVelocity,
+        flowFromId: loop.loopEdgeFrom[id] ?? cur.flowFromId,
+      );
+    }
+  }
+  return out ?? sizing;
+}
+
+/// Round 37 — fire jockeys the FIRST solve could only ASSUME (nothing drawn
+/// tells the parallel pumps apart). The re-solve gives the jockey its own
+/// small bore, so the bore-based role rule then reads it as drawn; this keeps
+/// the assumption honest for the Review advisory.
+final assumedFireJockeysProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).assumedJockeys);
+
+/// Round 37 — each JOCKEY pump of a parallel fire-pump set (by the sized
+/// bores, [parallelFirePumpRoles]) → its duty flow: [kJockeyFlowFraction] of
+/// its fire system's rated flow (the standpipe flow of a hydrant-bearing
+/// system, the remote-area demand of a sprinkler-only one). Empty when no
+/// jockey is designated.
+({Map<String, FlowRate> flows, Set<String> assumed}) _jockeyLegFlows(
+    Network net,
+    Map<String, EdgeSizing> sz,
+    Set<String> parallelLegs,
+    FlowRate remoteAreaDemand,
+    {double Function(NetNode n)? elevationOf}) {
+  const none = (flows: <String, FlowRate>{}, assumed: <String>{});
+  bool isFire(NetEdge e) =>
+      e.service == ServiceType.fireHydrant ||
+      e.service == ServiceType.fireSprinkler;
+  final firePumps = <String>{
+    for (final n in net.nodes)
+      if ((n.component == NodeComponent.pump ||
+              n.component == NodeComponent.boosterSet) &&
+          net.edgesAt(n.id).any(isFire))
+        n.id,
+  };
+  if (firePumps.length < 2) return none;
+  final roles = parallelFirePumpRoles(net, firePumps,
+      bore: (id) => sz[id]?.diameter.inMillimeters,
+      parallelLegEdgeIds: parallelLegs,
+      elevationOf: elevationOf);
+  if (roles.jockey.isEmpty) return none;
+  final systems = fireRatingSystems(net);
+  final out = <String, FlowRate>{};
+  for (final id in roles.jockey) {
+    final sys = systems.where((x) => x.nodeIds.contains(id)).firstOrNull;
+    if (sys == null) continue;
+    // Round 49 — a hose-reel-only system's rated flow is its Class II
+    // hose-station flow.
+    final rated = sys.hasHydrant
+        ? standpipeFlow(sys.standpipeRisers(net),
+            standpipeClass: sys.standpipeClass(net))
+        : remoteAreaDemand;
+    if (rated.cubicMetersPerSecond <= 0) continue;
+    out[id] = FlowRate(rated.cubicMetersPerSecond * kJockeyFlowFraction);
+  }
+  return (flows: out, assumed: roles.assumedJockey);
+}
+
+/// Round 11 — the demand-curve branch (flush tank / flush valve) the live
+/// water-supply sizing used, so a consumer re-diversifying a summed UBAP load
+/// (the pump at a tee'd discharge) reads the SAME curve the sizer did.
+final supplyFlushSystemProvider = Provider<FlushSystem>(
+    (ref) => ref.watch(sizingDetailProvider).flushSystem);
+
+/// Round 27 (residuals-6) — the flush-valve fixture nodes the sizer chose the
+/// demand curve from, per system: pair with `flushSystemForRoot` to read the
+/// curve of ONE supply system (the pump duties re-diversify on it).
+final supplyFlushValveNodeIdsProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).flushValveNodeIds);
+
 /// Advisory checks over the drawn DRAINAGE branches — a read-only judge layer
 /// (`drainage_advisory.dart`) that NEVER resizes. For each horizontal drainage
-/// run it flags a too-flat laid SLOPE (below the self-cleansing minimum) and an
-/// over-long developed length (trap-arm / self-siphonage risk), using the §10
-/// geometry length. Risers (vertical stacks) and vents are skipped — the slope
-/// rule is a horizontal-branch concern. All thresholds are `// VERIFY`.
+/// run it flags a laid SLOPE below the per-DN self-cleansing minimum (judged
+/// against the run's SIZED diameter), and for each fixture it walks the TRAP
+/// ARM — summing every drawn segment to the first vented point (vent / stack /
+/// root), so a branch split by the auto-elbow / tee-in tools is judged as one
+/// developed length — against the per-DN trap-arm limit (Round 9). Risers
+/// (vertical stacks) and vents are skipped. All thresholds are `// VERIFY`.
 ///
 /// Empty when there's no drainage network, so a project without drainage is
 /// byte-identical (no issues surfaced).
 final drainageAdvisoryProvider = Provider<List<DrainageAdvisory>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
+  final sizing = ref.watch(sizingProvider);
   // M13 — the laid design slope the SIZER used (drainageSlopeProvider), so the
   // advisory judges the project's real gradient instead of a const that could
   // never trip its own threshold. // VERIFY the min-slope threshold itself.
   final slope = ref.watch(drainageSlopeProvider); // m/m // VERIFY
+  double lengthOf(NetEdge e) => edgeLength(
+        e,
+        net,
+        calibrationBySheet: project.calibrations,
+        building: project.building,
+        mounting: project.mounting,
+      ).meters;
   final out = <DrainageAdvisory>[];
   for (final e in net.edges) {
     if (e.service != ServiceType.drainage) continue;
     if (e.kind == EdgeKind.riser) continue; // slope is a horizontal-branch rule
-    final lenM = edgeLength(
-      e,
-      net,
-      calibrationBySheet: project.calibrations,
-      building: project.building,
-    ).meters;
+    // Round 33 — judged at the fall the run is LAID at (the plan prints
+    // the same `laidGravitySlope`: >= its own self-cleansing minimum), so
+    // the advisory never contradicts the issued drawing.
+    final d = sizing[e.id]?.diameter.inMillimeters;
     out.addAll(drainageAdvisories(
       edgeId: e.id,
-      slope: slope,
-      developedLengthM: lenM > 0 ? lenM : null,
+      slope: laidGravitySlope(e, slope, d),
+      diameterMm: d,
+    ));
+    // Round 33 r2 — a typed project fall flatter than this run's own floor
+    // was overridden by the drawing: say so (the min-slope check above can
+    // no longer fire for a drainage run, by construction).
+    final steeper =
+        laidSteeperAdvisory(edge: e, projectSlope: slope, diameterMm: d);
+    if (steeper != null) out.add(steeper);
+  }
+  for (final arm in trapArmRuns(net: net, sizing: sizing, lengthOf: lengthOf)) {
+    final d = sizing[arm.firstEdgeId]?.diameter.inMillimeters;
+    if (d == null || arm.developedLengthM <= 0) continue;
+    out.addAll(drainageAdvisories(
+      edgeId: arm.firstEdgeId,
+      // Slope already judged per edge above — pass 0 so only the trap arm runs.
+      slope: 0,
+      developedLengthM: arm.developedLengthM,
+      diameterMm: d,
     ));
   }
   return out;

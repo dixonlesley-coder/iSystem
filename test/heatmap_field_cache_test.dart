@@ -22,6 +22,13 @@ void main() {
     final c = ProviderContainer();
     addTearDown(c.dispose);
     drawColdRun(c); // downfeed (default) fills the residual field
+    // Round 25 follow-up — a downfeed field needs a DRAWN gravity source: the
+    // run's start becomes the roof tank (no tank ⇒ no phantom field).
+    final net0 = c.read(networkControllerProvider).network;
+    final start = net0.nodes.firstWhere((n) => n.x == 0 && n.y == 0);
+    c
+        .read(networkControllerProvider.notifier)
+        .setNodeComponent(start.id, NodeComponent.roofTank);
     expect(c.read(residualByNodeProvider), isNotEmpty);
 
     const key = (

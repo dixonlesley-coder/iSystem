@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -13,7 +14,7 @@ import 'package:mechx/ui/theme/mechx_theme.dart';
 /// width: every endpoint renders whole, at any value width.
 ///
 /// Finding I2/E4 — the legend now also carries the ABSOLUTE pass anchor: the
-/// SNI target residual (a threshold tick + a "Min NN kPa" label on a spread
+/// SNI target residual (a threshold tick + a "Target NN kPa" label (Round 33: the tick is the COMFORT target, never 'Min') on a spread
 /// field; a PASS/LOW verdict on the uniform field), so the colours read against
 /// the code requirement, not just the view's own min/max.
 Future<void> _loadFonts() async {
@@ -90,7 +91,7 @@ void main() {
     _expectRendersWhole(tester, 'Low 3 kPa');
     _expectRendersWhole(tester, 'High 12345 kPa');
     // The absolute anchor is labelled (the threshold tick's meaning).
-    _expectRendersWhole(tester, 'Min 225 kPa');
+    _expectRendersWhole(tester, 'Target 225 kPa');
     // A genuinely spread field shows no uniform verdict / note.
     expect(find.text('PASS'), findsNothing);
     expect(find.text('LOW'), findsNothing);
@@ -106,9 +107,9 @@ void main() {
       const HeatmapLegend(
           minKpa: 230, maxKpa: 310, targetKpa: 225, targetHeldByDesign: true),
     ));
-    // The Min tick keeps its label — but it no longer stands alone: on the
+    // The Target tick keeps its label — but it no longer stands alone: on the
     // upfeed solve every residual clears it by construction.
-    _expectRendersWhole(tester, 'Min 225 kPa');
+    _expectRendersWhole(tester, 'Target 225 kPa');
     _expectRendersWhole(tester, 'target held by design');
     _expectRendersWhole(tester, '- the real check is the pump duty');
     // It is a statement, not a verdict — no green PASS is claimed.
@@ -120,7 +121,7 @@ void main() {
     await tester.pumpWidget(_host(
       const HeatmapLegend(minKpa: 230, maxKpa: 310, targetKpa: 225),
     ));
-    _expectRendersWhole(tester, 'Min 225 kPa');
+    _expectRendersWhole(tester, 'Target 225 kPa');
     expect(find.text('target held by design'), findsNothing);
     expect(find.text('- the real check is the pump duty'), findsNothing);
   });
@@ -135,5 +136,77 @@ void main() {
     expect(find.text('held by design'), findsOneWidget);
     expect(find.text('PASS'), findsNothing);
     _expectRendersWhole(tester, '- the real check is the pump duty');
+  });
+
+  // ---------------------------------------------------------------------
+  // Round 34 — the legend range is the residual AT FIXTURES.
+  // ---------------------------------------------------------------------
+  test(
+      'heatmapLegendRange ranges over delivery nodes only: a ceiling junction '
+      'sits 2.6 m x 9.81 kPa/m = 25.5 kPa above any fixture and must not '
+      'set Low', () {
+    // Golden-03 shape: bare junctions n0/n1 at 55.3 kPa (ceiling level), the
+    // delivery nodes (outlet + two open ends) at 80.8 kPa = minResidual.
+    final r = heatmapLegendRange(
+      residualKpa: const {'n0': 55.3, 'n1': 55.3, 'n11': 80.8, 'e1': 80.8},
+      deliveryNodeIds: const {'n11', 'e1', 'elsewhere'},
+    )!;
+    expect(r.atFixtures, isTrue);
+    expect(r.minKpa, 80.8);
+    expect(r.maxKpa, 80.8);
+    // A floor with only a junction falls back to the pipework, flagged.
+    final j = heatmapLegendRange(
+      residualKpa: const {'n7': 28.8},
+      deliveryNodeIds: const {'n11'},
+    )!;
+    expect(j.atFixtures, isFalse);
+    expect(j.minKpa, 28.8);
+    expect(heatmapLegendRange(residualKpa: const {}, deliveryNodeIds: const {}),
+        isNull);
+  });
+
+  // Seeded property: the legend Low is never below the lowest DELIVERY
+  // residual, whatever junction values are mixed in.
+  test('property: Low/High always equal the delivery min/max (seeded)', () {
+    final rnd = Random(34);
+    for (var trial = 0; trial < 200; trial++) {
+      final res = <String, double>{};
+      final delivery = <String>{};
+      final n = 1 + rnd.nextInt(12);
+      for (var i = 0; i < n; i++) {
+        res['n$i'] = rnd.nextDouble() * 300;
+        if (rnd.nextBool()) delivery.add('n$i');
+      }
+      final r = heatmapLegendRange(residualKpa: res, deliveryNodeIds: delivery)!;
+      final pool = delivery.isEmpty
+          ? res.values.toList()
+          : [for (final id in delivery) res[id]!];
+      expect(r.atFixtures, delivery.isNotEmpty);
+      expect(r.minKpa, pool.reduce(min));
+      expect(r.maxKpa, pool.reduce(max));
+    }
+  });
+
+  testWidgets(
+      'a sheet with no fixture captions the pipework and prints no PASS/LOW',
+      (tester) async {
+    await tester.pumpWidget(_host(const HeatmapLegend(
+        minKpa: 28.8, maxKpa: 28.8, targetKpa: 225, atFixtures: false)));
+    _expectRendersWhole(
+        tester, 'residual at pipework (no fixture on this floor)');
+    expect(find.text('residual at fixtures'), findsNothing);
+    expect(find.text('LOW'), findsNothing);
+    expect(find.text('PASS'), findsNothing);
+    _expectRendersWhole(tester, 'Uniform 29 kPa');
+  });
+
+  testWidgets(
+      'Low and High are separated by at least one 16 px spacer (never the '
+      'run-on "Low 55 kPaHigh 81 kPa")', (tester) async {
+    await tester.pumpWidget(_host(
+        const HeatmapLegend(minKpa: 55, maxKpa: 81, targetKpa: 225)));
+    final low = tester.getRect(find.text('Low 55 kPa'));
+    final high = tester.getRect(find.text('High 81 kPa'));
+    expect(high.left - low.right, greaterThanOrEqualTo(16.0 - 0.01));
   });
 }

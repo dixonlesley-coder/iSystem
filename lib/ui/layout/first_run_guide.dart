@@ -250,7 +250,7 @@ class _GuideEntrance extends StatelessWidget {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0.0, end: 1.0),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       child: child,
       builder: (context, t, child) => Opacity(

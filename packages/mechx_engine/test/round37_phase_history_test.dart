@@ -1,0 +1,177 @@
+// Round 37 (2026-10-18) — edit-fuzz-3-1 / edit-fuzz-3-2.
+//
+// The phase prior (the previous solve's assignment, fed back as
+// `priorAssignment` with a 1.0 A stickiness threshold):
+//
+//   * edit-fuzz-3-1 — the WORST phase (the incomer + busbar sizing current)
+//     of a seeded solve equals the unseeded solve's, whatever the prior;
+//   * edit-fuzz-3-2 — superseded by Round 39 r3: the prior is now PERSISTED
+//     on the document (`assignedPhase`), so the imbalance verdict reads the
+//     SAME labelled lines the schedule prints (one figure, never a second
+//     unseeded one) and is a function of the document alone.
+import 'dart:math' as math;
+
+import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/standards/puil.dart';
+import 'package:mechx_engine/units.dart';
+import 'package:test/test.dart';
+
+void main() {
+  const p = PuilProfile();
+
+  // 231 V phase voltage on a 400 V board: a cos phi 1 way of 231·A W draws A.
+  ElectricalCircuit load(String id, double amps, {PhaseLine? pin}) =>
+      ElectricalCircuit(
+        id: id,
+        name: id,
+        loadKind: LoadKind.socket,
+        loadW: 231 * amps,
+        cosPhi: 1,
+        phaseOverride: pin,
+        length: const Length(20),
+      );
+
+  double worst(ElectricalPanelResult r) => math.max(
+      r.phaseBalance.l1, math.max(r.phaseBalance.l2, r.phaseBalance.l3));
+
+  String? imbalanceCode(ElectricalPanelResult r) => r.warnings
+      .map((w) => w.code)
+      .where((c) => c.startsWith('phase-imbalance'))
+      .firstOrNull;
+
+  test('the reported live/reopen divergence: a 0.9 A heavier sticky worst '
+      'phase is never kept', () {
+    // Four single-phase ways (A): 12.6, 11.1, 9.6, 9.6 → total 42.9. Seed the
+    // memory with a deliberately heavy labelling: L1 {12.6, 9.6} 22.2,
+    // L2 {11.1, 9.6} 20.7, L3 {} 0. The optimum worst phase is 12.6 + 0 …
+    // i.e. {12.6} / {11.1} / {9.6, 9.6} = 19.2 A worst. Whatever the
+    // stickiness, the issued worst phase is the fresh optimum 19.2 A.
+    final panel = ElectricalPanel(id: 'LP', name: 'LP', circuits: [
+      load('a', 12.6),
+      load('b', 11.1),
+      load('c', 9.6),
+      load('d', 9.6),
+    ]);
+    final seeded = computePanel(p, panel,
+        opts: const ComputePanelOptions(priorAssignment: {
+          'a': PhaseAssignment.l1,
+          'b': PhaseAssignment.l2,
+          'c': PhaseAssignment.l1,
+          'd': PhaseAssignment.l2,
+        }, phaseReassignThresholdA: 1.0));
+    final fresh = computePanel(p, panel);
+    expect(worst(fresh), closeTo(19.2, 1e-9));
+    expect(worst(seeded), closeTo(worst(fresh), 1e-9));
+    expect(seeded.incomer.breaker.ratingA.amperes, fresh.incomer.breaker.ratingA.amperes);
+  });
+
+  test('seeded property: random boards / priors / pins — worst phase, incomer '
+      'and the imbalance verdict never depend on the session memory', () {
+    final rng = math.Random(37);
+    for (var trial = 0; trial < 300; trial++) {
+      final n = 2 + rng.nextInt(10); // 2..11 singles (exact + local search)
+      final circuits = <ElectricalCircuit>[];
+      final prior = <String, PhaseAssignment>{};
+      for (var i = 0; i < n; i++) {
+        final amps = (1 + rng.nextInt(250)) / 10.0; // 0.1 .. 25.0 A
+        final pin = rng.nextDouble() < 0.1
+            ? PhaseLine.values[rng.nextInt(3)]
+            : null;
+        circuits.add(load('w$i', amps, pin: pin));
+        if (rng.nextBool()) {
+          prior['w$i'] = [
+            PhaseAssignment.l1,
+            PhaseAssignment.l2,
+            PhaseAssignment.l3
+          ][rng.nextInt(3)];
+        }
+      }
+      if (rng.nextBool()) {
+        circuits.add(ElectricalCircuit(
+          id: 'm3',
+          name: 'm3',
+          loadKind: LoadKind.socket,
+          loadW: 400.0 * 1.732 * (1 + rng.nextInt(20)),
+          cosPhi: 1,
+          phases: 3,
+          length: const Length(20),
+        ));
+      }
+      final panel = ElectricalPanel(id: 'LP', name: 'LP', circuits: circuits);
+      final fresh = computePanel(p, panel);
+      final seeded = computePanel(p, panel,
+          opts: ComputePanelOptions(
+              priorAssignment: prior, phaseReassignThresholdA: 1.0));
+      final reason = 'trial $trial: $prior';
+      expect(worst(seeded), closeTo(worst(fresh), 1e-9), reason: reason);
+      expect(seeded.incomer.breaker.ratingA.amperes, fresh.incomer.breaker.ratingA.amperes, reason: reason);
+      // Round 39 r3 — the verdict reads the LABELLED (seeded) lines: it
+      // fires exactly when the printed % is over the limit, its message
+      // prints that same %, and only a PIN makes it reducible.
+      final over = seeded.phaseBalance.imbalancePercent >
+          kPhaseImbalanceWarnPercent;
+      final code = imbalanceCode(seeded);
+      expect(code != null, over, reason: reason);
+      if (code != null) {
+        final w = seeded.warnings.firstWhere((w) => w.code == code);
+        expect(w.message,
+            contains('unbalanced by ${seeded.phaseBalance.imbalancePercent}%'),
+            reason: reason);
+      }
+      if (seeded.phaseBalance.imbalanceReducible) {
+        expect(circuits.any((c) => c.phases != 3 && c.phaseOverride != null),
+            isTrue,
+            reason: reason);
+      }
+    }
+  });
+
+  // Round 39 r3 (replaces the Round 37 r2 two-figure note) — the verdict
+  // reads the SAME labelled lines the schedule footer prints. Ways
+  // (A) 9.9 / 1.0 / 2.9 / 8.4, labelled L3 / L1 / L2 / L1:
+  //   labelled  L1 1.0 + 8.4 = 9.4, L2 2.9, L3 9.9 → spread 7.0 / avg 7.4
+  //             = 94.6 %;
+  //   fresh     {9.9} / {8.4} / {1.0, 2.9} = 9.9 / 8.4 / 3.9 → 6.0 / 7.4
+  //             = 81.1 %.
+  // Same worst phase (9.9 A); the spread gain (1.0 A) does not beat the
+  // stickiness threshold, so the labels stay. The message prints the ONE
+  // labelled figure and says the labels were kept for stability, naming the
+  // achievable 81.1 % floor (never claiming 94.6 % is that floor).
+  test('the imbalance message prints the labelled figure and the achievable '
+      'floor — one figure, no second judged one', () {
+    final panel = ElectricalPanel(id: 'LP', name: 'LP', circuits: [
+      load('w0', 9.9),
+      load('w1', 1.0),
+      load('w2', 2.9),
+      load('w3', 8.4),
+    ]);
+    final seeded = computePanel(p, panel,
+        opts: const ComputePanelOptions(priorAssignment: {
+          'w0': PhaseAssignment.l3,
+          'w1': PhaseAssignment.l1,
+          'w2': PhaseAssignment.l2,
+          'w3': PhaseAssignment.l1,
+        }, phaseReassignThresholdA: 1.0));
+    final fresh = computePanel(p, panel);
+    expect(seeded.phaseBalance.imbalancePercent, closeTo(94.6, 1e-9));
+    expect(fresh.phaseBalance.imbalancePercent, closeTo(81.1, 1e-9));
+    expect(worst(seeded), closeTo(worst(fresh), 1e-9));
+    final w = seeded.warnings
+        .firstWhere((w) => w.code.startsWith('phase-imbalance'));
+    // No pin ⇒ the engine's own assignment ⇒ never "reducible".
+    expect(w.code, 'phase-imbalance-inherent');
+    expect(w.message, contains('unbalanced by 94.6%'));
+    expect(w.message, contains('(L1 9.4 A, L2 2.9 A, L3 9.9 A)'));
+    expect(w.message, contains('labelled phases are kept'));
+    expect(w.message, contains('81.1% is the best any assignment reaches'));
+    expect(w.message, isNot(contains('81.1% ('))); // no second line figure
+    // The unseeded board already sits AT the floor: no stability clause.
+    final f = fresh.warnings
+        .firstWhere((w) => w.code.startsWith('phase-imbalance'));
+    expect(f.message, contains('unbalanced by 81.1%'));
+    expect(f.message, isNot(contains('labelled phases are kept')));
+  });
+}

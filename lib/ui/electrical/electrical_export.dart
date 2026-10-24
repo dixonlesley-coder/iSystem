@@ -16,9 +16,15 @@ library;
 import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/advanced_study.dart'
+    show containmentByCircuitIdOf;
+import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
+import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
+import 'package:mechx_engine/report/electrical_pagination.dart'
+    show electricalOverviewToPdf, electricalRiserToPdf;
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
@@ -50,17 +56,20 @@ const String kNoEnergySourcesMessage =
 /// N19: the drawing NUMBER is DERIVED per drawing type — the per-panel/board
 /// detail single-line `E-201`, the building overview `E-301`, the floor-by-floor
 /// riser `E-401`, the power one-line `E-501` — via [series], so three different
-/// electrical drawings never all read `E-201`. The manual `documentNumber`
-/// remains the verbatim override.
+/// electrical drawings never all read `E-201`. A manual `documentNumber`
+/// becomes the PREFIX (`<documentNumber>-<series><index>`, e.g.
+/// `BRI-MEP-01-E-201`); only the cover keeps the bare base.
 DrawingChrome electricalExportChrome(WidgetRef ref,
     {int sheetIndex = 1,
     int sheetTotal = 1,
+    int index = 1,
     DrawingSeries series = DrawingSeries.electricalDetail}) {
   final doc = ref.read(documentControlProvider);
   return DrawingChrome(
     sheetIndex: sheetIndex,
     sheetTotal: sheetTotal,
-    drawingNumber: sheetDrawingNumber(base: doc.documentNumber, series: series),
+    drawingNumber: sheetDrawingNumber(
+        base: doc.documentNumber, series: series, index: index),
     revisionNumber: doc.revisionTag,
     clientName: doc.clientName,
     drawnBy: doc.preparedBy,
@@ -68,6 +77,65 @@ DrawingChrome electricalExportChrome(WidgetRef ref,
     approvedBy: doc.approvedBy,
     dateString: DateTime.now().toIso8601String().split('T').first,
   );
+}
+
+/// Round 34 (electrical-drawings-4-standalone-layout-dwg-number) — the rail
+/// sheets that carry an ELECTRICAL LAYOUT plan (placed panels / loads), in
+/// rail order: the ONE list the submittal numbers its E-1xx layout sheets by
+/// and the standalone layout export positions its sheet in.
+List<String> electricalLayoutSheetIds(WidgetRef ref) {
+  final sheets = ref.read(sheetsControllerProvider);
+  final mech = ref.read(projectControllerProvider);
+  final project = ref.read(electricalProjectProvider);
+  final result = ref.read(electricalResultProvider);
+  return [
+    for (final s in sheets.sheets)
+      if (!buildElectricalPlanData(
+        project: project,
+        result: result,
+        sheetId: s.id,
+        floorIndex: sheets.floorFor(s.id, mech.building.levelCount),
+        calibrations: mech.calibrations,
+        building: mech.building,
+      ).isEmpty)
+        s.id,
+  ];
+}
+
+/// Round 46 (drawings-7-layout-unplaced-count-projectwide) — whether the
+/// layout of [sheetId] lists the boards placed NOWHERE (no placed board up
+/// their feeder chain): the first layout sheet does (or any sheet when no
+/// sheet has electrical content yet), every other sheet's note is scoped to
+/// its own boards.
+bool electricalLayoutListsUnhomed(WidgetRef ref, String sheetId) {
+  final ids = electricalLayoutSheetIds(ref);
+  return ids.isEmpty || ids.first == sheetId;
+}
+
+/// Round 34 — the layout export chrome of [sheetId]: numbered `E-10k` /
+/// `Sheet k of n` by its position among [electricalLayoutSheetIds] (the
+/// submittal's numbering, so a standalone sheet matches the Daftar Gambar).
+/// A sheet with no electrical content yet takes its rail position within
+/// that list (n + 1 total), never a flat E-101 / 1 of 1.
+DrawingChrome electricalLayoutChrome(WidgetRef ref, String sheetId) {
+  final ids = electricalLayoutSheetIds(ref);
+  final list = ids.contains(sheetId)
+      ? ids
+      : () {
+          final rail = [
+            for (final s in ref.read(sheetsControllerProvider).sheets) s.id,
+          ];
+          return [
+            for (final id in rail)
+              if (ids.contains(id) || id == sheetId) id,
+          ];
+        }();
+  final k = list.indexOf(sheetId) + 1;
+  return electricalExportChrome(ref,
+      series: DrawingSeries.electricalLayout,
+      index: k < 1 ? 1 : k,
+      sheetIndex: k < 1 ? 1 : k,
+      sheetTotal: list.isEmpty ? 1 : list.length);
 }
 
 /// C5 — the per-panel breaking-capacity map (panel id → Icu, kA) for the SLD
@@ -91,6 +159,48 @@ Map<String, double> breakerIcuKaByPanel(WidgetRef ref) {
   };
 }
 
+/// Round 14 (drafting-visual-1) — the title-block PROJECT row every electrical
+/// drawing stamps: the LIVE project name (the same one the mechanical sheets,
+/// the cover and the Daftar Gambar carry), falling back to the electrical
+/// model's own name only when the project is unnamed. A prebuilt-sheet export
+/// (overview / riser) used to print 'Untitled project' beside a named set.
+String? electricalSheetProjectName(WidgetRef ref) {
+  final mech = ref.read(projectControllerProvider).name.trim();
+  if (mech.isNotEmpty) return mech;
+  final elec = ref.read(electricalProjectProvider).name.trim();
+  return elec.isEmpty ? null : elec;
+}
+
+/// Round 14 (elec-building-sim-3) — the per-DEVICE breaking-capacity map
+/// (circuit id -> kA) the fault study CHOSE for each way
+/// (`AdvancedStudy.fault.circuits[id].breakerKa`). Threaded beside
+/// [breakerIcuKaByPanel] into every board schedule (exports, the live canvas,
+/// the report figures) so an MCB way prints the MCB rating the study picked
+/// (`MCB 25A 3ph 10kA`) — without it every way fell back to its panel's
+/// INCOMER frame rating (`16kA` on an MCB, a rating no MCB is built to). Only
+/// positive finite ratings are forwarded.
+/// Round 34 — the containment study's conduit per circuit (the ONE
+/// containment source): every schedule export + the live canvas pass it, so
+/// the app's `PVC <n>mm` token equals the study's, never the CSA ladder.
+Map<String, ConduitSpec> containmentByCircuit(WidgetRef ref) =>
+    containmentByCircuitIdOf(ref.read(electricalAdvancedProvider));
+
+Map<String, double> breakerKaByCircuit(WidgetRef ref) {
+  final fault = ref.read(electricalAdvancedProvider).fault;
+  return {
+    for (final e in fault.circuits.entries)
+      if (e.value.breakerKa.isFinite && e.value.breakerKa > 0)
+        e.key: e.value.breakerKa,
+  };
+}
+
+/// Round 43 — the fault study's ways that FAIL automatic disconnection, so
+/// every issued board schedule marks them ` Zs!` (the same study the kA maps
+/// read). Round 56 — on ANY supply: the ways failing ADS only on the standby
+/// genset ([AdvancedStudy.gensetAdsFailedCircuitIds]) are marked too.
+Set<String> adsFailedCircuitIds(WidgetRef ref) =>
+    ref.read(electricalAdvancedProvider).adsFailedCircuitIds;
+
 /// Export the sized electrical single-line as a DXF drawing file.
 Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(
       ref,
@@ -104,10 +214,15 @@ Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(
           project: project,
           result: result,
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+          breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         );
         final dxf = electricalSldToDxf(
           sheet: sheet,
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
           chrome: electricalExportChrome(ref),
+          projectName: electricalSheetProjectName(ref),
         );
         return _save(ref, dxf,
             name: project.name,
@@ -129,14 +244,19 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) => runExportGuarded(
         // sheet 1 of 1 over the document-control title block (D3). The sheet
         // is built HERE so the fault study's breaking-capacity ratings reach
         // the device notation (C5).
-        final bytes = electricalSldToPdf(
+        // Round 10 (elec-drawing-props-3) — auto-paginates (one board per
+        // page) when the single sheet would print below the minimum plotted
+        // label size.
+        final bytes = electricalSldDetailToPdf(
           project: project,
-          sheet: buildElectricalSld(
-            project: project,
-            result: result,
-            breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-          ),
+          result: result,
+          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+          breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
           chrome: electricalExportChrome(ref),
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
+          projectName: electricalSheetProjectName(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -159,14 +279,16 @@ Future<void> exportElectricalOverviewPdf(WidgetRef ref) => runExportGuarded(
       write: () async {
         final project = ref.read(electricalProjectProvider);
         final result = ref.read(electricalResultProvider);
-        final bytes = electricalSldToPdf(
+        // Round 23 (elec-drafting-2-1) — sub-tree pages when one A3 sheet
+        // would print below the minimum plotted label size.
+        final bytes = electricalOverviewToPdf(
           project: project,
           result: result,
-          overview: true,
-          sourceChain: true,
           title: 'iSystem electrical single-line (overview)',
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
           chrome: electricalExportChrome(ref,
               series: DrawingSeries.electricalOverview),
+          projectName: electricalSheetProjectName(ref) ?? 'Untitled project',
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -193,8 +315,10 @@ Future<void> exportElectricalOverviewDxf(WidgetRef ref) => runExportGuarded(
             result: result,
             overview: true,
             sourceChain: true,
+            diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
             chrome: electricalExportChrome(ref,
-                series: DrawingSeries.electricalOverview));
+                series: DrawingSeries.electricalOverview),
+            projectName: electricalSheetProjectName(ref));
         return _save(ref, dxf,
             name: project.name,
             suffix: 'overview-sld',
@@ -216,13 +340,17 @@ Future<void> exportElectricalRiserPdf(WidgetRef ref) => runExportGuarded(
         final project = ref.read(electricalProjectProvider);
         final result = ref.read(electricalResultProvider);
         final building = ref.read(projectControllerProvider).building;
-        final sheet = buildElectricalRiser(
-            project: project, result: result, building: building);
-        final bytes = electricalSldToPdf(
-          sheet: sheet,
+        // Round 23 (elec-drafting-2-1) — floor-range pages with LANJUT KE
+        // match stubs when one A3 sheet would print below the label floor.
+        final bytes = electricalRiserToPdf(
+          project: project,
+          result: result,
+          building: building,
           title: 'iSystem electrical building riser',
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
           chrome:
               electricalExportChrome(ref, series: DrawingSeries.electricalRiser),
+          projectName: electricalSheetProjectName(ref) ?? 'Untitled project',
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -245,11 +373,16 @@ Future<void> exportElectricalRiserDxf(WidgetRef ref) => runExportGuarded(
         final result = ref.read(electricalResultProvider);
         final building = ref.read(projectControllerProvider).building;
         final sheet = buildElectricalRiser(
-            project: project, result: result, building: building);
+            project: project,
+            result: result,
+            building: building,
+            sourceChain: true);
         final dxf = electricalSldToDxf(
             sheet: sheet,
+            diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
             chrome: electricalExportChrome(ref,
-                series: DrawingSeries.electricalRiser));
+                series: DrawingSeries.electricalRiser),
+            projectName: electricalSheetProjectName(ref));
         return _save(ref, dxf,
             name: project.name,
             suffix: 'riser',
@@ -274,10 +407,15 @@ Future<void> exportElectricalPanelSchedulesPdf(WidgetRef ref) =>
           project: project,
           result: result,
           title: 'iSystem electrical panel schedules',
+          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
+          projectName: electricalSheetProjectName(ref),
           chrome: electricalExportChrome(ref),
           // The C5 device-notation kA (from the fault study) rides the schedule
           // set too, matching the single-sheet detail export.
           breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
+          breakerKaByCircuitId: breakerKaByCircuit(ref),
+          adsFailedCircuitIds: adsFailedCircuitIds(ref),
+          containmentByCircuitId: containmentByCircuit(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -311,11 +449,15 @@ Future<void> exportPowerOneLineDxf(WidgetRef ref) => runExportGuarded(
               .showStatus(kNoEnergySourcesMessage);
           return Future.value(false);
         }
+        // Round 23 (elec-drafting-2-7) — the SAME project name + register
+        // title the submittal package stamps on this sheet.
         final dxf = electricalSldToDxf(
           sheet: buildPowerOneLineSheet(oneLine),
-          diagramTitle: 'POWER ONE-LINE DIAGRAM',
+          diagramTitle:
+              drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
           chrome: electricalExportChrome(ref,
               series: DrawingSeries.electricalPowerOneLine),
+          projectName: electricalSheetProjectName(ref),
         );
         return _save(ref, dxf,
             name: project.name,
@@ -345,9 +487,11 @@ Future<void> exportPowerOneLinePdf(WidgetRef ref) => runExportGuarded(
         final bytes = electricalSldToPdf(
           sheet: buildPowerOneLineSheet(oneLine),
           title: 'iSystem power one-line',
-          diagramTitle: 'POWER ONE-LINE DIAGRAM',
+          diagramTitle:
+              drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
           chrome: electricalExportChrome(ref,
               series: DrawingSeries.electricalPowerOneLine),
+          projectName: electricalSheetProjectName(ref),
         );
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
@@ -387,14 +531,18 @@ Future<void> exportElectricalPlanPdf(WidgetRef ref) => runExportGuarded(
           floorIndex: floorIndex,
           calibrations: mech.calibrations,
           building: mech.building,
+          listUnhomedUnplaced: electricalLayoutListsUnhomed(ref, sheet.id),
         );
+        // Round 23 (elec-drafting-2-7) — the register title + the live
+        // project name, exactly as the submittal package stamps this sheet.
         final bytes = electricalPlanToPdf(
           data: data,
-          projectName: project.name.isEmpty ? 'electrical' : project.name,
+          projectName: electricalSheetProjectName(ref) ?? 'electrical',
           sheetName: sheet.name,
           dateString: DateTime.now().toIso8601String().split('T').first,
-          chrome:
-              electricalExportChrome(ref, series: DrawingSeries.electricalLayout),
+          chrome: electricalLayoutChrome(ref, sheet.id).withTitle(
+              drawingSeriesTitle(DrawingSeries.electricalLayout,
+                  sheetName: sheet.name)),
           metersPerPixel: mech.calibrationFor(sheet.id)?.metersPerPixel,
           underlay: await buildPlanUnderlay(sheet),
         );
@@ -434,13 +582,34 @@ Future<void> exportElectricalPlanDxf(WidgetRef ref) => runExportGuarded(
           floorIndex: floorIndex,
           calibrations: mech.calibrations,
           building: mech.building,
+          listUnhomedUnplaced: electricalLayoutListsUnhomed(ref, sheet.id),
         );
+        final projectName = electricalSheetProjectName(ref) ?? 'electrical';
+        final chrome = electricalLayoutChrome(ref, sheet.id).withTitle(
+            drawingSeriesTitle(DrawingSeries.electricalLayout,
+                sheetName: sheet.name));
+        final metersPerPixel = mech.calibrationFor(sheet.id)?.metersPerPixel;
         final dxf = electricalPlanToDxf(
           data: data,
-          projectName: project.name.isEmpty ? 'electrical' : project.name,
+          projectName: projectName,
           sheetName: sheet.name,
-          chrome:
-              electricalExportChrome(ref, series: DrawingSeries.electricalLayout),
+          chrome: chrome,
+          // Round 23 (elec-drafting-2-3) — world millimetres + the snapped
+          // 1 : N of the PDF twin (its own fit: underlay frame + the real
+          // title block), so the DXF and PDF stamp one scale.
+          metersPerPixel: metersPerPixel,
+          plottedScaleDenominator: metersPerPixel == null
+              ? null
+              : electricalPlanPlottedScaleDenominator(
+                  data: data,
+                  projectName: projectName,
+                  sheetName: sheet.name,
+                  dateString:
+                      DateTime.now().toIso8601String().split('T').first,
+                  chrome: chrome,
+                  metersPerPixel: metersPerPixel,
+                  underlay: await buildPlanUnderlay(sheet),
+                ),
         );
         return _save(ref, dxf,
             name: project.name,
@@ -467,10 +636,21 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               date: DateTime.now().toIso8601String().split('T').first,
               standardsName: profile.name,
               standardsRevision: profile.revision,
+              standardsProvenance: profile.provenanceNote,
               project: project,
               result: result,
               powerOneLine: advanced.powerOneLine,
+              // Round 12 — the PUIL KHA / derating / Vd debt beside the
+              // advanced-study items, and the EFFECTIVE fault basis the
+              // busbars were sized on (same chain as the live solve).
+              // Round 30 (report-parity-2-3) — with its verification tier.
               verifyItems: advanced.verifyItems,
+              verifyChecklist: profile.verifyChecklist,
+              originFaultLevelA: effectiveOriginFaultLevel(project, result: result)
+                  .amperes,
+              faultLevelBasis: effectiveOriginFaultLevel(project, result: result)
+                  .basis,
+              busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
               revisions: ref.read(documentControlProvider).revisions,
               // R1 — the issued report prints the SAME combined warning
               // surface Review + compliance show (core sizing warnings PLUS
@@ -478,6 +658,9 @@ Future<void> exportElectricalCalcReport(WidgetRef ref) => runExportGuarded(
               // TT findings), so an error-severity finding can no longer be on
               // screen but missing from the panel builder's document.
               allWarnings: ref.read(electricalAllWarningsProvider),
+              // Round 39 (elec-reports-parity-5) — each device's specified kA.
+              incomerKaByPanelId: faultSpecifiedKa(advanced.fault).incomers,
+              breakerKaByCircuitId: faultSpecifiedKa(advanced.fault).breakers,
             ),
             reportStringsFor(ref));
         return _save(ref, md,

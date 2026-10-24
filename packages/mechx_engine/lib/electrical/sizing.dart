@@ -71,15 +71,20 @@ double ambientFactor(
 }) =>
     interpolateTable(profile.ambientTempFactors(insulation), tempC);
 
-/// Grouping (bunching) correction factor for [count] grouped circuits — a direct
-/// lookup clamped at the table's last entry (NOT interpolated; matches PanelMaker).
+/// Grouping (bunching) correction factor for [count] grouped circuits — a step
+/// lookup (NOT interpolated): an exact rung reads its factor, a count BETWEEN
+/// rungs reads the NEXT-HIGHER rung's (smaller, conservative) factor — e.g. 10
+/// or 11 circuits read the 12-circuit column — and a count at/above the last
+/// rung reads the last rung (IEC 60364-5-52 Table B.52.17 gives no further
+/// reduction beyond 20 circuits).
 double groupingFactor(ElectricalStandardsProfile profile, int count) {
   final table = profile.groupingFactors;
   final n = math.max(1, count);
   final keys = table.keys.toList()..sort();
-  final last = keys.last;
-  if (n >= last) return table[last]!;
-  return table[n.toDouble()] ?? 1;
+  for (final k in keys) {
+    if (k >= n) return table[k]!;
+  }
+  return table[keys.last]!;
 }
 
 /// Soil thermal-resistivity correction — buried runs only.
@@ -250,18 +255,34 @@ class CableVoltageDropConstraint {
   final Voltage voltage;
   final bool isLighting;
 
+  /// Round 43 — an optional tighter limit (%) the section must hold, for a
+  /// run that is only PART of the way (a star-delta motor lead judged against
+  /// the limit less the internal supply link's drop). Null ⇒ the profile
+  /// limit (3 % lighting / 5 % otherwise) ⇒ byte-identical.
+  final double? limitPercent;
+
   const CableVoltageDropConstraint({
     required this.length,
     required this.cosPhi,
     required this.threePhase,
     required this.voltage,
     required this.isLighting,
+    this.limitPercent,
   });
 }
 
 /// Smallest standard section whose derated ampacity satisfies both Iz ≥ In and
 /// Iz ≥ factor·Ib (PUIL 125 %), respecting the minimum section, optionally also
 /// holding voltage drop within limit. Tries 1 then 2–4 parallel runs.
+///
+/// PARALLEL RUNS ARE A GROUP (IEC 60364-5-52 §523.5 / Table B.52.17): the n
+/// conductors-per-phase of one circuit lie in common containment, so each run
+/// is derated as one of `g·n` grouped circuits, where `g` is [groupingCount]
+/// (the circuit/panel grouping count already folded into [deratingFactor]).
+/// The per-run factor is therefore
+///   `df_run = df · groupingFactor(g·n) / groupingFactor(g)`
+/// (= `df · groupingFactor(n)` for g = 1), and it is what [CableResult.deratedIz]
+/// and [CableResult.deratingFactor] report. A single run (n = 1) is unchanged.
 ///
 /// NOTE: this first slice uses the generic per-method ampacity
 /// ([ElectricalStandardsProfile.ampacity]); the manufacturer per-family (NYY/
@@ -278,6 +299,8 @@ CableResult sizeCable(
   CableInstallMethod method = CableInstallMethod.conduit,
   bool threePhase = false,
   CableVoltageDropConstraint? vd,
+  int groupingCount = 1,
+  double izRequiredMinA = 0,
 }) {
   double kha(double section) =>
       profile.ampacity(section, insulation: insulation, material: material, method: method).amperes;
@@ -287,23 +310,39 @@ CableResult sizeCable(
       : minSectionMm2;
   final factor = profile.continuousLoadFactor.value;
   final izRequired = math.max(breakerRating.amperes, factor * designCurrent.amperes);
+  // Round 38 — an extra TOTAL Iz floor (over all parallel runs) a caller may
+  // impose for a condition the phase current does not express (a feeder's
+  // harmonic NEUTRAL current, four loaded conductors). It only steers which
+  // section / run count is picked; the reported [CableResult.izRequired] stays
+  // the phase-protection basis max(In, factor × Ib). 0 ⇒ byte-identical.
+  final izSelect = math.max(izRequired, izRequiredMinA);
   final df = deratingFactor > 0 ? deratingFactor : 1.0;
   const parallelMaxRuns = 4;
   const parallelMinSection = 50.0;
+  final g = math.max(1, groupingCount);
+  // Derating per run for [runs] parallel conductors grouped with the circuit's
+  // own `g` neighbours: swap the g-circuit grouping factor already inside `df`
+  // for the (g·runs)-circuit one.
+  double dfFor(int runs) => runs <= 1
+      ? df
+      : df * groupingFactor(profile, g * runs) / groupingFactor(profile, g);
 
-  bool vdOk(double section, int runs) =>
-      vd == null ||
-      voltageDrop(
-        profile,
-        current: Current(designCurrent.amperes / runs),
-        length: vd.length,
-        csaMm2: section,
-        cosPhi: vd.cosPhi,
-        threePhase: vd.threePhase,
-        voltage: vd.voltage,
-        isLighting: vd.isLighting,
-        material: material,
-      ).withinLimit;
+  bool vdOk(double section, int runs) {
+    if (vd == null) return true;
+    final r = voltageDrop(
+      profile,
+      current: Current(designCurrent.amperes / runs),
+      length: vd.length,
+      csaMm2: section,
+      cosPhi: vd.cosPhi,
+      threePhase: vd.threePhase,
+      voltage: vd.voltage,
+      isLighting: vd.isLighting,
+      material: material,
+    );
+    final lim = vd.limitPercent;
+    return lim == null ? r.withinLimit : r.dropPercent <= lim + 1e-9;
+  }
 
   final ampacityRuleBase =
       'Iz {iz}A >= max(In ${_fmt(breakerRating.amperes)}A, '
@@ -313,12 +352,13 @@ CableResult sizeCable(
   for (var runs = 1; runs <= parallelMaxRuns; runs++) {
     final minSec =
         runs == 1 ? minByMaterial : math.max(minByMaterial, parallelMinSection);
-    final izRequiredPerRun = izRequired / runs;
+    final izRequiredPerRun = izSelect / runs;
+    final dfRun = dfFor(runs);
     double? ampacityMinSection;
 
     for (final section in profile.standardSectionsMm2) {
       if (section < minSec) continue;
-      final deratedRun = kha(section) * df;
+      final deratedRun = kha(section) * dfRun;
       if (deratedRun < izRequiredPerRun) continue;
       ampacityMinSection ??= section;
       anyAmpacityReached = true;
@@ -331,13 +371,16 @@ CableResult sizeCable(
         csaMm2: section,
         baseKha: Current(kha(section)),
         deratedIz: Current(totalIz),
-        deratingFactor: roundTo(df, 3),
+        deratingFactor: roundTo(dfRun, 3),
         runsPerPhase: runs > 1 ? runs : null,
         vdDriven: vdDriven,
         appliedRule: (runs > 1 ? '$runs× parallel runs — ' : '') +
             (vdDriven
                 ? '$rule; upsized to hold Vd <= ${vd!.isLighting ? 3 : 5}%'
                 : rule),
+        izRequired: Current(izRequired),
+        izBasisCurrent: designCurrent,
+        continuousLoadFactor: factor,
       );
     }
   }
@@ -348,14 +391,18 @@ CableResult sizeCable(
   return CableResult(
     csaMm2: largest,
     baseKha: Current(kha(largest)),
-    deratedIz: Current(roundTo(kha(largest) * df * parallelMaxRuns, 1)),
-    deratingFactor: roundTo(df, 3),
+    deratedIz: Current(
+        roundTo(kha(largest) * dfFor(parallelMaxRuns) * parallelMaxRuns, 1)),
+    deratingFactor: roundTo(dfFor(parallelMaxRuns), 3),
     runsPerPhase: parallelMaxRuns,
     vdDriven: !ampacityImpossible,
     // ampacity-impossible ⇒ even 4× the largest section never met Iz, so the
     // breaker In now exceeds Iz (coordination violated). The vd-only fallback
     // DID reach ampacity (it is over-limit only on voltage drop).
     ampacityReached: !ampacityImpossible,
+    izRequired: Current(izRequired),
+    izBasisCurrent: designCurrent,
+    continuousLoadFactor: factor,
     appliedRule: ampacityImpossible
         ? 'exceeds-range: $parallelMaxRuns× largest standard section still below required Iz'
         : 'voltage-drop-exceeds-range: largest standard section still over the Vd limit',

@@ -1,11 +1,15 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show dxfUnitMetres;
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/units.dart';
 
+import 'floor_remap.dart';
 import 'history_store.dart';
+import 'models/sheet.dart';
 import 'network_store.dart';
+import 'sheets_store.dart';
 
 /// Editable project: name, the building's [floors] (the source of truth for
 /// riser/vertical length, §10), and per-sheet [calibrations] (px → real length,
@@ -106,9 +110,23 @@ class ProjectState {
       );
 }
 
+/// The default 3-level stack a brand-new project starts with — also the
+/// fallback for a document whose floor list is empty (Round 28
+/// persist-undo-2-5: never the previously open project's floors).
+const List<Floor> kDefaultProjectFloors = [
+  Floor('Ground', Length(4.0)),
+  Floor('Level 1', Length(3.5)),
+  Floor('Level 2', Length(3.5)),
+];
+
+/// The storey-height band every setter clamps to (m); a loaded document is
+/// clamped into it too (Round 28).
+const double kMinFloorHeightM = 0.5;
+const double kMaxFloorHeightM = 20.0;
+
 class ProjectController extends Notifier<ProjectState> {
-  static const double _minHeight = 0.5;
-  static const double _maxHeight = 20.0;
+  static const double _minHeight = kMinFloorHeightM;
+  static const double _maxHeight = kMaxFloorHeightM;
   // F8 — sane bounds for the two mounting heights (a main can hang from flush
   // with the slab to 1.5 m below it; a fixture connection sits between the
   // floor and head height). They bound typing, not physics.
@@ -123,11 +141,7 @@ class ProjectController extends Notifier<ProjectState> {
   @override
   ProjectState build() => const ProjectState(
         name: 'Untitled project',
-        floors: [
-          Floor('Ground', Length(4.0)),
-          Floor('Level 1', Length(3.5)),
-          Floor('Level 2', Length(3.5)),
-        ],
+        floors: kDefaultProjectFloors,
       );
 
   bool get canUndo => _undo.isNotEmpty;
@@ -178,7 +192,22 @@ class ProjectController extends Notifier<ProjectState> {
   }) {
     _undo.clear();
     _redo.clear();
-    final f = floors.isEmpty ? state.floors : floors;
+    // Round 28 (persist-undo-2-5) — a damaged (empty) floor list falls back
+    // to the DEFAULT stack, never the previously open project's floors (the
+    // same file used to load different elevations depending on what was open
+    // before), and every height is clamped into the setter band (a negative
+    // storey put the floor above below the one beneath it).
+    final f = floors.isEmpty
+        ? kDefaultProjectFloors
+        : [
+            for (final fl in floors)
+              Floor(
+                fl.name,
+                Length(fl.height.meters.isFinite && fl.height.meters > 0
+                    ? fl.height.meters.clamp(_minHeight, _maxHeight).toDouble()
+                    : 3.5),
+              ),
+          ];
     state = ProjectState(
       name: name,
       floors: f,
@@ -233,8 +262,16 @@ class ProjectController extends Notifier<ProjectState> {
     final added = [
       for (var k = 0; k < count; k++) Floor('Level ${base + k}', h),
     ];
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    final oldLevels = state.floors.length;
     state = state.copyWith(floors: [...state.floors, ...added]);
+    // Round 9 (mech-store-fuzz-1) — a sheet sitting on its rail position was
+    // CLAMPED to the old top floor; growing the stack would re-map it upward
+    // while its drawn work kept the old index (vanishing from its own plan,
+    // sizing at the wrong elevation). Pin it where its work is.
+    _pinSheetFloors(oldLevels);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           record: false,
@@ -257,17 +294,28 @@ class ProjectController extends Notifier<ProjectState> {
       for (var k = 0; k < count; k++)
         Floor('Basement ${existing + count - k}', h),
     ];
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    final oldLevels = state.floors.length;
     state = state.copyWith(
       floors: [...added, ...state.floors],
       groundIndex: state.groundIndex + count,
     );
+    _remapSheetFloors(oldLevels, insertedIndex: 0, insertedCount: count);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           insertedIndex: 0,
           insertedCount: count,
           record: false,
         );
+    // Rooms / tanks / measurements / electrical placements shift with the
+    // drawn work, inside the same structural snapshot.
+    final levels = state.floors.length;
+    remapFloorPlacedWork(
+        ref.read,
+        (_, fi) => shiftFloorIndex(fi,
+            levelCount: levels, insertedIndex: 0, insertedCount: count));
   }
 
   /// Replace the whole floor stack in ONE undo step (used by project templates /
@@ -283,15 +331,96 @@ class ProjectController extends Notifier<ProjectState> {
   /// empty network or a stack that only grew.
   void setFloors(List<Floor> floors) {
     if (floors.isEmpty) return;
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    // Round 9 (mech-store-fuzz-8) — re-applying the identical stack is a no-op,
+    // not a phantom undo step that also marks the project edited.
+    if (state.groundIndex == 0 && _sameFloors(floors, state.floors)) return;
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    // Round 9 (mech-store-fuzz-4) — a stack with FEWER floors drops the top
+    // floors exactly as [removeFloor] does (C2): the work drawn ON a dropped
+    // floor is deleted with it (callers count it with
+    // [NetworkController.elementsAboveFloor] and CONFIRM first), instead of
+    // being clamped onto the new top floor — which fused two floors' work at
+    // one elevation and collapsed every riser between them to zero length.
+    // Removing the TOP index shifts nothing below it, so each step is a pure
+    // delete; sheets on a dropped floor fall to the floor below.
+    for (var idx = state.floors.length - 1; idx >= floors.length; idx--) {
+      state = state.copyWith(
+        floors: state.floors.sublist(0, idx),
+        groundIndex: state.groundIndex.clamp(0, idx - 1),
+      );
+      _remapSheetFloors(idx + 1, removedIndex: idx);
+      ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
+            levelCount: idx,
+            removedIndex: idx,
+            record: false,
+          );
+      final levels = idx;
+      final removed = idx;
+      remapFloorPlacedWork(
+          ref.read,
+          (_, fi) => shiftFloorIndex(fi,
+              levelCount: levels, removedIndex: removed));
+    }
+    final oldLevels = state.floors.length;
     // A wholesale replace (template / sample / opened doc) is a fresh building —
     // reset the ground datum to the bottom (no basements). Callers that keep a
     // basement stack use [addFloorsOnTop] / [addBasement] instead.
     state = state.copyWith(floors: List<Floor>.from(floors), groundIndex: 0);
+    // Round 9 (mech-store-fuzz-1) — a growing stack must not re-map clamped
+    // sheets away from their drawn work.
+    _pinSheetFloors(oldLevels);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           record: false,
         );
+    final levels = state.floors.length;
+    remapFloorPlacedWork(
+        ref.read, (_, fi) => shiftFloorIndex(fi, levelCount: levels));
+  }
+
+  static bool _sameFloors(List<Floor> a, List<Floor> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// Round 9 (mech-store-fuzz-1) — after the stack grew from [oldLevelCount]
+  /// to the current size, PIN every sheet whose effective floor would change
+  /// (a rail-positional sheet that was clamped to the old top floor) as an
+  /// explicit mapping at its OLD floor, so the canvas (which filters on
+  /// sheetId AND floorIndex) keeps showing the work drawn on it and that work
+  /// keeps its elevation. Sheets whose floor does not move are untouched (no
+  /// spurious explicit entries). No undo entry — the caller's structural
+  /// snapshot captured the sheets. No sheets ⇒ no-op.
+  ///
+  /// Round 33 (engineer-walkthrough-sheet-floors-pinned-on-stack-growth) — only
+  /// a sheet carrying WORK ([sheetIdsWithWork]) is pinned: an EMPTY sheet keeps
+  /// its rail-positional mapping, so importing a 5-page set onto a 3-level
+  /// project and then adding levels maps pages 4-5 onto the new floors 4-5
+  /// (it used to pin them all onto the old top floor).
+  void _pinSheetFloors(int oldLevelCount) {
+    final sheets = ref.read(sheetsControllerProvider);
+    if (sheets.sheets.isEmpty) return;
+    final levels = state.floors.length;
+    final next = Map<String, int>.from(sheets.sheetFloors);
+    final withWork = sheetIdsWithWork(ref.read);
+    var changed = false;
+    for (final sheet in sheets.sheets) {
+      final old = sheets.floorFor(sheet.id, oldLevelCount);
+      final now = sheets.floorFor(sheet.id, levels);
+      if (old != now && withWork.contains(sheet.id)) {
+        next[sheet.id] = old;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .restoreState(sheets.copyWith(sheetFloors: next));
   }
 
   /// Remove the floor at [index] in ONE undo step. The floor removal AND the
@@ -312,7 +441,10 @@ class ProjectController extends Notifier<ProjectState> {
     if (index < 0 || index >= state.floors.length || state.floors.length <= 1) {
       return;
     }
-    ref.read(structuralHistoryProvider.notifier).recordFloorStackChange();
+    ref
+        .read(structuralHistoryProvider.notifier)
+        .recordFloorStackChange(sheets: true);
+    final oldLevels = state.floors.length;
     final floors = [...state.floors]..removeAt(index);
     // Removing a BELOW-ground floor slides the datum down one slot so the same
     // physical floor stays "ground"; removing ground-or-above leaves the datum
@@ -322,11 +454,59 @@ class ProjectController extends Notifier<ProjectState> {
             : state.groundIndex)
         .clamp(0, floors.length - 1);
     state = state.copyWith(floors: floors, groundIndex: nextGround);
+    _remapSheetFloors(oldLevels, removedIndex: index);
     ref.read(networkControllerProvider.notifier).remapNodesForFloorChange(
           levelCount: state.floors.length,
           removedIndex: index,
           record: false,
         );
+    // Annotations ON the removed floor are deleted with it (and electrical
+    // placements there un-placed); everything above drops one index.
+    final levels = state.floors.length;
+    remapFloorPlacedWork(
+        ref.read,
+        (_, fi) =>
+            shiftFloorIndex(fi, levelCount: levels, removedIndex: index));
+  }
+
+  /// roundtrip-1 — a stack edit that SHIFTS existing floor indices (a basement
+  /// insert, a floor removal) moves every drawn node with its physical floor;
+  /// each sheet's floor mapping must move the SAME way, or the canvas (which
+  /// matches sheetId AND floorIndex) and every per-sheet plan export lose the
+  /// sheet's work and relabel it a storey off. Applies [shiftFloorIndex] to each
+  /// sheet's effective floor (explicit override or rail position, against the
+  /// PRE-edit [oldLevelCount]) and writes the result as an explicit mapping,
+  /// WITHOUT a separate undo entry (the caller's structural snapshot captured
+  /// the sheets). A sheet whose own floor was removed falls to the floor below
+  /// (its drawn work went with the floor). No sheets ⇒ no-op.
+  void _remapSheetFloors(
+    int oldLevelCount, {
+    int? removedIndex,
+    int? insertedIndex,
+    int insertedCount = 0,
+  }) {
+    final sheets = ref.read(sheetsControllerProvider);
+    if (sheets.sheets.isEmpty) return;
+    final levels = state.floors.length;
+    final next = Map<String, int>.from(sheets.sheetFloors);
+    var changed = false;
+    for (final sheet in sheets.sheets) {
+      final old = sheets.floorFor(sheet.id, oldLevelCount);
+      final moved = shiftFloorIndex(old,
+              levelCount: levels,
+              removedIndex: removedIndex,
+              insertedIndex: insertedIndex,
+              insertedCount: insertedCount) ??
+          (old - 1).clamp(0, levels - 1);
+      if (moved != old || next.containsKey(sheet.id)) {
+        if (next[sheet.id] != moved) changed = true;
+        next[sheet.id] = moved;
+      }
+    }
+    if (!changed) return;
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .restoreState(sheets.copyWith(sheetFloors: next));
   }
 
   void renameFloor(int index, String name) {
@@ -354,6 +534,18 @@ class ProjectController extends Notifier<ProjectState> {
   }
 
   void setCalibration(String sheetId, ScaleCalibration calibration) {
+    // Round 10 — the single calibration chokepoint refuses a non-finite or
+    // non-positive scale: an Infinity/NaN metres-per-pixel turns every run
+    // length on the sheet non-finite and makes the project unsaveable (the
+    // JSON encoder rejects non-finite doubles).
+    final mpp = calibration.metersPerPixel;
+    if (!mpp.isFinite || !(mpp > 0)) return;
+    // Round 9 (mech-store-fuzz-8) — re-applying the same, non-stale scale is a
+    // no-op (no phantom undo step, no dirty flag).
+    if (state.calibrations[sheetId] == calibration &&
+        !state.staleCalibrations.contains(sheetId)) {
+      return;
+    }
     _snapshot();
     final next = Map<String, ScaleCalibration>.from(state.calibrations)
       ..[sheetId] = calibration;
@@ -379,6 +571,25 @@ class ProjectController extends Notifier<ProjectState> {
         staleCalibrations: {...state.staleCalibrations, sheetId});
   }
 
+  /// Drop every calibration (and stale flag) whose sheet id satisfies
+  /// [isGone], WITHOUT recording undo — a removed / replaced sheet must not
+  /// leave its scale behind for a later sheet that reuses its id (import ids
+  /// are filename-derived `stem#i`, so a re-import of a same-named revised plan
+  /// would otherwise inherit the OLD scale with no stale flag). Called from
+  /// compound sheet edits whose structural snapshot already captured the
+  /// project, so undo restores the scale. No-op when nothing matches.
+  void dropCalibrationsWhere(bool Function(String sheetId) isGone) {
+    if (!state.calibrations.keys.any(isGone) &&
+        !state.staleCalibrations.any(isGone)) {
+      return;
+    }
+    final next = Map<String, ScaleCalibration>.from(state.calibrations)
+      ..removeWhere((id, _) => isGone(id));
+    final nextStale = Set<String>.from(state.staleCalibrations)
+      ..removeWhere(isGone);
+    state = state.copyWith(calibrations: next, staleCalibrations: nextStale);
+  }
+
   /// J1 — clear [sheetId]'s stale-calibration flag WITHOUT changing its
   /// scale: the "Scale confirmed" action for an engineer who checked the
   /// replaced plan and confirmed the old scale still holds. Not undoable,
@@ -402,7 +613,21 @@ class ProjectController extends Notifier<ProjectState> {
   /// caller can default to the safe uncalibrated-only target set and confirm
   /// before overwriting a differing scale; see [uncalibratedAmong] /
   /// [differentlyCalibratedFrom]).
-  int applyCalibrationToAllSheets(String fromSheetId, {Set<String>? toSheetIds}) {
+  ///
+  /// Round 24 (import-2-1) — with [sheets] (id → [Sheet]) the scale is
+  /// TRANSFERRED per target through [transferCalibration]: a DXF sheet's pixel
+  /// is file-specific (each DXF is normalised so its longest extent is
+  /// `kDxfTargetExtent`), so a DXF → DXF copy is rescaled by the two content
+  /// frames, a PDF → PDF copy stays verbatim, and a mixed PDF ↔ DXF (or a DXF
+  /// with no recorded frame) is SKIPPED — its id added to [skippedOut] so the
+  /// caller can say so. Without [sheets] every target takes the figure
+  /// verbatim (legacy behaviour).
+  int applyCalibrationToAllSheets(
+    String fromSheetId, {
+    Set<String>? toSheetIds,
+    Map<String, Sheet> sheets = const {},
+    Set<String>? skippedOut,
+  }) {
     final source = state.calibrationFor(fromSheetId);
     if (source == null) return 0;
     final targets = toSheetIds ?? state.calibrations.keys.toSet();
@@ -410,11 +635,23 @@ class ProjectController extends Notifier<ProjectState> {
     // J1: a freshly-stamped calibration is a re-verification too — clear any
     // stale flag on a sheet this actually changes.
     final nextStale = Set<String>.from(state.staleCalibrations);
+    final fromSheet = sheets[fromSheetId];
     var changed = 0;
     for (final id in targets) {
       if (id == fromSheetId) continue;
-      if (next[id] == source) continue; // already this scale — no change
-      next[id] = source;
+      ScaleCalibration? cal = source;
+      if (sheets.isNotEmpty) {
+        final to = sheets[id];
+        cal = (fromSheet == null || to == null)
+            ? null
+            : transferCalibration(source, from: fromSheet, to: to);
+        if (cal == null) {
+          skippedOut?.add(id);
+          continue;
+        }
+      }
+      if (next[id] == cal) continue; // already this scale — no change
+      next[id] = cal;
       nextStale.remove(id);
       changed++;
     }
@@ -435,3 +672,59 @@ final projectControllerProvider =
 /// lengths and the report's design-basis rows can never disagree.
 final mountingProvider = Provider<MountingHeights>(
     (ref) => ref.watch(projectControllerProvider).mounting);
+
+/// Round 24 (import-2-1) — the scale [source] (measured on sheet [from])
+/// expressed on sheet [to], or null when it cannot be transferred honestly:
+///   * PDF / placeholder → PDF / placeholder: verbatim (both pixels are page
+///     points — the long-standing 'same plot scale' assumption);
+///   * DXF → DXF with both import frames known: `mpp_to = mpp_from ×
+///     k_from / k_to`, k = content px per DXF world unit (each DXF is
+///     normalised to its own extent, so the same CAD drawing unit maps to a
+///     different pixel). Round 33 (import-robustness-2-1): when BOTH files
+///     declare a `$INSUNITS` drawing unit the scale is converted between them
+///     (`× u_to / u_from`, u = metres per drawing unit — a metre DXF beside
+///     a millimetre one is no longer 1000× off); when exactly ONE declares a
+///     unit the transfer is refused (null). With neither declared both files
+///     are assumed to share the unit (mm on an architectural plan) — unless
+///     their content frames differ WILDLY (Round 33 r2: one drawing's world
+///     extent >= [kUnitlessFrameRatioLimit] × the other's, the signature of a
+///     metre file beside a millimetre one), which is refused rather than
+///     guessed. // VERIFY
+///   * anything mixed (PDF ↔ DXF), or a DXF without a recorded frame: null.
+/// Round 33 r2 (import-robustness-2-1) — the world-extent ratio between two
+/// UNITLESS DXF sheets at or beyond which [transferCalibration] refuses to
+/// assume a shared drawing unit: a metre file beside a millimetre one differs
+/// 1000×, metre / centimetre 100×, foot / mm ~305×, while two floors of one
+/// plan (or a plan beside a part plan) stay well inside 100×. A heuristic
+/// boundary, `// VERIFY notAnSniClause` — never a unit claim.
+const double kUnitlessFrameRatioLimit = 100.0;
+
+ScaleCalibration? transferCalibration(
+  ScaleCalibration source, {
+  required Sheet from,
+  required Sheet to,
+}) {
+  final fromDxf = from.dxfPath != null, toDxf = to.dxfPath != null;
+  if (!fromDxf && !toDxf) return source;
+  if (fromDxf != toDxf) return null;
+  final kFrom = from.dxfContentPerWorld, kTo = to.dxfContentPerWorld;
+  if (kFrom == null || kTo == null) return null;
+  final uFrom = dxfUnitMetres(from.dxfInsUnits ?? 0);
+  final uTo = dxfUnitMetres(to.dxfInsUnits ?? 0);
+  if ((uFrom == null) != (uTo == null)) return null;
+  if (uFrom == null && uTo == null) {
+    // k = content px per world unit, so kFrom / kTo is the ratio of the two
+    // drawings' world extents (to / from) — 1000 for m beside mm.
+    final frameRatio = kFrom / kTo;
+    if (!frameRatio.isFinite ||
+        frameRatio <= 0 ||
+        frameRatio >= kUnitlessFrameRatioLimit ||
+        frameRatio <= 1 / kUnitlessFrameRatioLimit) {
+      return null;
+    }
+  }
+  final unitRatio = (uFrom != null && uTo != null) ? uTo / uFrom : 1.0;
+  final mpp = source.metersPerPixel * kFrom / kTo * unitRatio;
+  if (!mpp.isFinite || mpp <= 0) return null;
+  return ScaleCalibration(mpp);
+}

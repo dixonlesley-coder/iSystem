@@ -25,7 +25,7 @@ library;
 
 import 'dart:math' as math;
 
-import '../standards/puil.dart' show BreakerClass;
+import '../standards/puil.dart' show BreakerClass, BreakerClassCode;
 import '../units.dart' show Power;
 import 'panel_results.dart' show ElectricalPanelResult;
 
@@ -82,6 +82,15 @@ const List<({double maxRatingA, double frameWidthMm})> mccbFrameBands = [
   (maxRatingA: double.infinity, frameWidthMm: 140),
 ];
 
+/// Representative ACB (air circuit breaker) frame width (mm). An ACB is a
+/// power-circuit-breaker frame far wider than any moulded case — a 3P
+/// draw-out ACB is ≈ 300–440 mm wide — so it is NEVER narrower than the widest
+/// MCCB band (Round 23 r2: an ACB incomer had fallen through to the narrow
+/// MCB-by-poles path and SHRANK the enclosure).
+// VERIFY (notAnSniClause): representative 3P draw-out ACB frame width, not a
+// specific manufacturer's certified drawing.
+const double acbFrameWidthMm = 330;
+
 /// Surface heat-transfer coefficient `k` for a painted sheet-steel enclosure
 /// wall under natural convection + radiation (W per m² per K).
 // VERIFY (notAnSniClause): IEC 60890 representative ≈ 5.5 W/m²K for painted steel.
@@ -111,6 +120,69 @@ Ventilation ventilationFor(double totalHeatW) {
   if (totalHeatW < 200) return Ventilation.fanFilter;
   if (totalHeatW < 500) return Ventilation.forced;
   return Ventilation.heatExchanger;
+}
+
+/// Representative power loss of one MCB pole carrying its rated current (W).
+// VERIFY (notAnSniClause): manufacturer data ≈ 2–4 W/pole at In for 6–63 A MCBs.
+const double mcbLossPerPoleW = 3;
+
+/// Representative power loss of one MCCB pole carrying its rated current (W).
+// VERIFY (notAnSniClause): manufacturer data ≈ 10–20 W/pole at In for MCCBs.
+const double mccbLossPerPoleW = 15;
+
+/// Representative power loss of one ACB pole carrying its rated current (W).
+// VERIFY (notAnSniClause): manufacturer data ≈ 40–100 W/pole at In for
+// 800–4000 A air circuit breakers.
+const double acbLossPerPoleW = 60;
+
+/// Copper resistivity at a representative busbar operating temperature (Ω·m)
+/// — 1.72e-8 at 20 °C × (1 + 0.00393 × 50 K) ≈ 2.06e-8 at 70 °C.
+// VERIFY (notAnSniClause): ρ_Cu(70 °C), IEC 60228 / IEC 61439 practice.
+const double copperResistivityOhmM = 1.72e-8 * (1 + 0.00393 * 50);
+
+/// Load-dependent switchgear dissipation of an assembly (W), the IEC 60890
+/// power-balance input that a flat allowance misses (audit r8 — a 1000 A board
+/// used to report a LOWER temperature rise than a 6 A one):
+///
+///   P = Σ_ways (Ib/In)² · P_pole · poles            (outgoing devices)
+///     + (I_demand/In_inc)² · P_pole · poles_inc       (incomer)
+///     + n_cond · I_demand² · ρ_Cu · L / A_bus          (busbar I²R)
+///
+/// with P_pole = [mcbLossPerPoleW] / [mccbLossPerPoleW] by device class, a way's
+/// poles = 3 when three-phase else 1, n_cond = 3 on a three-phase board else 2
+/// (L + N), and the busbar run L = the estimated enclosure height. Grows
+/// monotonically with load (every term is ∝ I²).
+double switchgearLossW(ElectricalPanelResult panel) {
+  double pole(BreakerClass c) => switch (c) {
+        BreakerClass.mcb => mcbLossPerPoleW,
+        BreakerClass.mccb => mccbLossPerPoleW,
+        BreakerClass.acb => acbLossPerPoleW,
+      };
+  double device(double i, double inA, BreakerClass c, int poles) {
+    if (inA <= 0) return 0;
+    final r = i / inA;
+    return r * r * pole(c) * poles;
+  }
+
+  var w = 0.0;
+  for (final c in panel.circuits) {
+    w += device(c.designCurrent.amperes, c.breaker.ratingA.amperes,
+        c.breaker.deviceClass, c.threePhase ? 3 : 1);
+  }
+  final demandA = panel.demandCurrent.amperes;
+  final inc = panel.incomer;
+  w += device(demandA, inc.breaker.ratingA.amperes, inc.breaker.deviceClass,
+      inc.poles);
+  final csaM2 = panel.busbar.csaMm2 * 1e-6;
+  if (csaM2 > 0) {
+    final modules = estimatePanelModules(panel);
+    final rows = math.max(1, (modules / modulesPerRow).ceil());
+    final lengthM =
+        _roundUpTo(rows * dinRowPitchMm + enclosureVerticalMarginMm, 50) / 1000;
+    final nCond = inc.poles >= 3 ? 3 : 2;
+    w += nCond * demandA * demandA * copperResistivityOhmM * lengthM / csaM2;
+  }
+  return w;
 }
 
 /// Sheet-metal body thickness (mm) as a function of the largest dimension.
@@ -167,8 +239,10 @@ double _effectiveAreaM2(double wMm, double hMm, double dMm) {
 /// RCD-protected — today's behaviour. MCCB-family devices are wide
 /// moulded-case frames: their width comes from their rating band
 /// ([mccbFrameBands]), converted to 18 mm module-equivalents and rounded up —
-/// their pole count does not drive the width. `deviceClass` is matched
-/// case-insensitively against `'MCCB'`; anything else (including a null/empty
+/// their pole count does not drive the width. An ACB (`'ACB'`) is a fixed
+/// [acbFrameWidthMm] power-breaker frame, never narrower than the widest MCCB
+/// band. `deviceClass` is matched case-insensitively against `'MCCB'` /
+/// `'ACB'` ([BreakerClassCode.code]); anything else (including a null/empty
 /// string) is treated as the narrow MCB-like default. A null/omitted
 /// `ratingA` for an MCCB falls back to the smallest (≤125 A) frame band.
 int deviceModules({
@@ -177,7 +251,11 @@ int deviceModules({
   double? ratingA,
   bool rcdRequired = false,
 }) {
-  if (deviceClass.toUpperCase() == 'MCCB') {
+  final cls = deviceClass.toUpperCase();
+  if (cls == BreakerClass.acb.code) {
+    return (acbFrameWidthMm / dinModuleWidthMm).ceil();
+  }
+  if (cls == BreakerClass.mccb.code) {
     final rating = ratingA ?? 0;
     for (final band in mccbFrameBands) {
       if (rating <= band.maxRatingA) {
@@ -189,11 +267,11 @@ int deviceModules({
   return poles + (rcdRequired ? rcdModules : 0);
 }
 
-/// Map a breaker's [BreakerClass] to the catalogue-style label ('MCB'/'MCCB')
+/// Map a breaker's [BreakerClass] to the catalogue-style label ('MCB'/'MCCB'/'ACB')
 /// [deviceModules] matches against — mirrors the schedule-label convention in
 /// `report/electrical_sld_drawing.dart`'s `_classCode` / `bom.dart`'s
 /// `_classStr` (kept local rather than shared to stay file-disjoint).
-String _classCode(BreakerClass c) => c == BreakerClass.mccb ? 'MCCB' : 'MCB';
+String _classCode(BreakerClass c) => c.code;
 
 /// Estimate the total DIN-module count for a panel result.
 ///
@@ -328,6 +406,9 @@ EnclosureResult estimateEnclosure(
           'enclosure manufacturer data.',
       'Sheet thickness, ventilation thresholds + IEC 60890 temp-rise (5.5 W/m²K, '
           '35 K) — verify against measured device losses + PUIL 2011.',
+      'Switchgear heat uses representative per-pole losses at In (MCB 3 W, '
+          'MCCB 15 W, scaled by (Ib/In)²) + busbar I²R (ρ_Cu at 70 °C over the '
+          'enclosure height) — verify against the manufacturer loss data.',
     ],
   );
 }

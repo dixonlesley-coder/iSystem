@@ -123,6 +123,19 @@ double maxCoveragePerSprinklerM2(FireHazardClass hazard) {
   }
 }
 
+/// Minimum nominal diameter (mm) of any drawn sprinkler pipe (branch line,
+/// cross-main, riser) in the network sizer.
+///
+/// The density/area flows above are tiny per head (≈ 0.6–1.5 L/s), so a plain
+/// velocity sizer would pick DN15/DN20 branch lines. Sprinkler pipe is laid at
+/// no smaller than 25 mm (1") steel — the head's own threaded outlet is 15 mm
+/// but the pipe feeding it is never below 1".
+///
+/// // VERIFY — NFPA 13 §8.15 / general practice ("1 in. minimum for steel
+/// pipe"), NOT an SNI 03-3989-2000 clause. Surfaced via
+/// `SniProfile.verifyChecklist` (status `notAnSniClause`).
+const double kMinSprinklerPipeDiameterMm = 25.0;
+
 // ── Result type ───────────────────────────────────────────────────────────────
 
 /// Output of [designSprinklerSystem]: the hydraulic demand for the design area.

@@ -26,6 +26,7 @@ import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_text_field.dart';
 
 /// The status-bar workflow stepper. Lays the five stages out horizontally with
 /// hairline connectors; the done stages are accented, the active one is
@@ -36,6 +37,9 @@ class WorkflowStepper extends ConsumerWidget {
   /// Navigate to where [stage] is carried out, through the existing providers.
   /// The status bar stays put — only the workspace section / view changes.
   void _goTo(BuildContext context, WidgetRef ref, WorkflowStage stage) {
+    // Round 14 — the chip never takes focus, so commit a focused field's
+    // pending edit before the screen holding it is swapped out.
+    MechXTextField.commitPendingEdit();
     switch (stage) {
       case WorkflowStage.calibrate:
         ref.read(shellSectionProvider.notifier).set(ShellSection.design);

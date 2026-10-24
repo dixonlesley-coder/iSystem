@@ -9,6 +9,7 @@ import 'package:mechx/data/project_document.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 
 /// F6 — reuse one imported floor plan across repeated building floors:
@@ -157,5 +158,62 @@ void main() {
     expect(state2.floorFor(newId, levelCount), 1); // floor mapping survives
     expect(proj2.calibrationFor(newId), const ScaleCalibration(0.0125));
     expect(proj2.calibrationFor('typical'), const ScaleCalibration(0.0125));
+  });
+
+  // Round 34 (regression-dxf-insunits-dropped-on-duplicate-and-replace) —
+  // the duplicate / replacement keeps the DXF's declared $INSUNITS, so
+  // transferCalibration never refuses a sheet's own duplicate.
+  group('Round 34 — declared DXF units survive duplicate / replace', () {
+    const mmPlan = Sheet(
+      id: 'a',
+      name: 'A',
+      dxfPath: '/plans/a.dxf',
+      pageIndex: 0,
+      sizePx: Size(2000, 1000),
+      dxfFrame: DxfBounds(0, 0, 40000, 20000),
+      dxfInsUnits: 4, // millimetres
+    );
+
+    test('the duplicate carries the units and receives the source scale', () {
+      final c = makeContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      sheets.loadSheets(const [mmPlan]);
+      final id = sheets.duplicateSheetToFloor('a', 1)!;
+      final dup = c.read(sheetsControllerProvider).sheetById(id)!;
+      expect(dup.dxfInsUnits, 4);
+      // SAME file, SAME frame, SAME units: content px per world unit equal on
+      // both sides (2000 / 40000), unit ratio 1 ⇒ the scale transfers 1:1.
+      final t = transferCalibration(const ScaleCalibration(0.02),
+          from: mmPlan, to: dup);
+      expect(t, isNotNull);
+      expect(t!.metersPerPixel, closeTo(0.02, 1e-12));
+    });
+
+    test('a replacement DXF keeps its own units (or the old file\'s)', () {
+      final c = makeContainer();
+      final sheets = c.read(sheetsControllerProvider.notifier);
+      sheets.loadSheets(const [mmPlan]);
+      sheets.replaceSheetSource(
+          'a',
+          const Sheet(
+              id: 'x',
+              name: 'rev',
+              dxfPath: '/plans/a-rev.dxf',
+              pageIndex: 0,
+              sizePx: Size(2000, 1000),
+              dxfFrame: DxfBounds(0, 0, 40000, 20000),
+              dxfInsUnits: 4));
+      expect(c.read(sheetsControllerProvider).sheetById('a')!.dxfInsUnits, 4);
+      // A replacement that declares nothing keeps the old frame AND units.
+      sheets.replaceSheetSource(
+          'a',
+          const Sheet(
+              id: 'y',
+              name: 'rev2',
+              dxfPath: '/plans/a-rev2.dxf',
+              pageIndex: 0,
+              sizePx: Size(2000, 1000)));
+      expect(c.read(sheetsControllerProvider).sheetById('a')!.dxfInsUnits, 4);
+    });
   });
 }

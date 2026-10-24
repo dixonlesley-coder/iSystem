@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart' show Brightness, Offset, Size;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
@@ -26,7 +27,14 @@ import '../ui/canvas/viewport.dart';
 /// the UI can surface.
 class ProjectDocumentException implements Exception {
   final String message;
-  const ProjectDocumentException(this.message);
+
+  /// Round 48 (persist-io-2) — true only for the shapes an INTERRUPTED save
+  /// leaves (a missing target, or bytes that are not valid JSON — a torn /
+  /// truncated write). The Open path falls back to `<file>.bak` for these
+  /// alone; a readable file it must refuse (a newer format version, not a
+  /// project) is never replaced by an older backup.
+  final bool tornWrite;
+  const ProjectDocumentException(this.message, {this.tornWrite = false});
   @override
   String toString() => 'ProjectDocumentException: $message';
 }
@@ -397,11 +405,14 @@ class DesignSettings {
         // Tolerant: only the known codes are accepted; anything else → 'en'.
         localeCode: json['locale'] == 'id' ? 'id' : 'en',
         priceList: _priceListFromJson(json['priceList']),
-        labourRatePerHour:
-            (json['labourRatePerHour'] as num?)?.toDouble() ?? 150000,
-        overheadPct: (json['overheadPct'] as num?)?.toDouble() ?? 10,
-        contingencyPct: (json['contingencyPct'] as num?)?.toDouble() ?? 5,
-        marginPct: (json['marginPct'] as num?)?.toDouble() ?? 15,
+        // Round 19 (persistence-2-3) — the commercial markups decode into
+        // the bands their setters enforce (rate ≥ 0, overhead / contingency
+        // 0–100 %, margin 0–99.9 %).
+        labourRatePerHour: _decodeClamped(
+            json['labourRatePerHour'], 150000, 0, double.maxFinite),
+        overheadPct: _decodeClamped(json['overheadPct'], 10, 0, 100),
+        contingencyPct: _decodeClamped(json['contingencyPct'], 5, 0, 100),
+        marginPct: _decodeClamped(json['marginPct'], 15, 0, 99.9),
         fixtureLibrary: _fixtureLibraryFromJson(json['fixtureLibrary']),
         // Tolerant: only the known method code is accepted.
         coolingLoadMethod:
@@ -561,6 +572,9 @@ Map<String, dynamic> _netNodeToJson(NetNode n) => {
       if (n.faceHeightMm != null) 'face_h_mm': n.faceHeightMm,
       if (n.fittingType != null && n.fittingType != JunctionFitting.auto)
         'fitting': n.fittingType!.name,
+      if (n.autoPlacedRoomId != null) 'auto_room': n.autoPlacedRoomId,
+      // Round 33 — the per-prefix equipment tag number (additive).
+      if (n.tagNo != null) 'tag_no': n.tagNo,
     };
 
 NetNode _netNodeFromJson(Map n) => NetNode(
@@ -580,22 +594,36 @@ NetNode _netNodeFromJson(Map n) => NetNode(
       fixture: n['fixture'] == null
           ? null
           : _enumOrNull(PlumbingFixture.values, n['fixture']),
-      airflow: n['airflow_lps'] == null
+      // Round 19 (persistence-2-3) — every numeric design field is decoded
+      // into the band its store setter / engine entry enforces: a negative
+      // roof area / airflow / tank / load or a non-positive face is DROPPED
+      // (null ⇒ the default), never fed to an engine assert that takes the
+      // whole sizing chain down (debug) or silently computes with it
+      // (release).
+      airflow: _decodeNonNegative(n['airflow_lps']) == null
           ? null
-          : FlowRate.litersPerSecond((n['airflow_lps'] as num).toDouble()),
+          : FlowRate.litersPerSecond(_decodeNonNegative(n['airflow_lps'])!),
       customFixtureId: n['customFixtureId'] as String?,
-      roofAreaM2: (n['roof_area_m2'] as num?)?.toDouble(),
+      roofAreaM2: _decodeNonNegative(n['roof_area_m2']),
       // Tolerant: absent / unknown ⇒ null ⇒ an ordinary node.
       component: n['component'] == null
           ? null
           : _enumOrNull(NodeComponent.values, n['component']),
-      tankCapacityLitres: (n['tank_l'] as num?)?.toDouble(),
-      electricalLoadW: (n['elec_w'] as num?)?.toDouble(),
-      faceWidthMm: (n['face_w_mm'] as num?)?.toDouble(),
-      faceHeightMm: (n['face_h_mm'] as num?)?.toDouble(),
+      tankCapacityLitres: _decodeNonNegative(n['tank_l']),
+      electricalLoadW: _decodeNonNegative(n['elec_w']),
+      faceWidthMm: _decodePositive(n['face_w_mm']),
+      faceHeightMm: _decodePositive(n['face_h_mm']),
       fittingType: n['fitting'] == null
           ? null
           : _enumOrNull(JunctionFitting.values, n['fitting']),
+      // Round 20 — the generating room of an auto-placed terminal. Tolerant:
+      // absent / non-string ⇒ null ⇒ the ownership fallback.
+      autoPlacedRoomId: n['auto_room'] is String ? n['auto_room'] as String : null,
+      // Round 33 — tolerant: absent / non-positive ⇒ null (the legacy
+      // node-id ordinal tag).
+      tagNo: n['tag_no'] is num && (n['tag_no'] as num) >= 1
+          ? (n['tag_no'] as num).toInt()
+          : null,
     );
 
 Map<String, dynamic> _netEdgeToJson(NetEdge e) => {
@@ -618,10 +646,33 @@ NetEdge _netEdgeFromJson(Map e) => NetEdge(
       kind: _enumOr(EdgeKind.values, e['kind'], EdgeKind.run),
       pipeProduct: _enumOrNull(PipeProduct.values, e['pipe_product']),
       ductProduct: _enumOrNull(DuctProduct.values, e['duct_product']),
-      sizeOverride: e['size_override_mm'] == null
+      // Round 19 — a zero / negative / non-finite size override is dropped
+      // (auto-size), never a 0 mm bore asserted on in every pressure solve.
+      sizeOverride: _decodePositive(e['size_override_mm']) == null
           ? null
-          : Diameter.mm((e['size_override_mm'] as num).toDouble()),
+          : Diameter.mm(_decodePositive(e['size_override_mm'])!),
     );
+
+/// Round 19 (persistence-2-3) — a stored number that must be FINITE and > 0,
+/// else null (the field's default).
+double? _decodePositive(Object? raw) {
+  final v = raw is num ? raw.toDouble() : null;
+  return (v != null && v.isFinite && v > 0) ? v : null;
+}
+
+/// Round 19 — a stored number that must be FINITE and ≥ 0, else null.
+double? _decodeNonNegative(Object? raw) {
+  final v = raw is num ? raw.toDouble() : null;
+  return (v != null && v.isFinite && v >= 0) ? v : null;
+}
+
+/// Round 19 — a stored number clamped into [lo, hi]; non-finite / absent ⇒
+/// [fallback].
+double _decodeClamped(Object? raw, double fallback, double lo, double hi) {
+  final v = raw is num ? raw.toDouble() : null;
+  if (v == null || !v.isFinite) return fallback;
+  return v.clamp(lo, hi).toDouble();
+}
 
 /// A named, re-stampable group of drawn nodes + edges (E5) — a reusable "block":
 /// the WC toilet group, the pump-room hookup, a shaft riser set. Persisted in
@@ -747,6 +798,21 @@ class ProjectDocument {
   /// the key; a build without the source files falls back to the paths.
   final Map<String, String> assets;
 
+  /// Round 28 (persist-undo-2-1) — the network id counter (`network.nextSeq`)
+  /// when it runs AHEAD of the live ids (a node / edge minted above the
+  /// highest live id was deleted). Null ⇒ implied by the ids, not written, so
+  /// an untouched file stays byte-identical.
+  final int? networkNextSeq;
+
+  /// Round 33 — the per-prefix equipment tag sequence (`network.tagSeq`),
+  /// only the prefixes whose next number runs AHEAD of the live tag numbers
+  /// (a top-numbered machine was deleted). Empty ⇒ not written.
+  final Map<String, int> networkTagSeq;
+
+  /// Round 28 (persist-undo-2-4) — the room id counter (`roomNextSeq`) when it
+  /// runs ahead of the live room ids; null ⇒ not written.
+  final int? roomNextSeq;
+
   const ProjectDocument({
     this.version = currentVersion,
     required this.projectName,
@@ -766,6 +832,9 @@ class ProjectDocument {
     this.rooms = const [],
     this.referenceLines = const [],
     this.assets = const {},
+    this.networkNextSeq,
+    this.networkTagSeq = const {},
+    this.roomNextSeq,
   });
 
   /// A copy with [sheets] (and optionally [assets]) replaced — used by asset
@@ -790,6 +859,9 @@ class ProjectDocument {
         rooms: rooms,
         referenceLines: referenceLines,
         assets: assets ?? this.assets,
+        networkNextSeq: networkNextSeq,
+        networkTagSeq: networkTagSeq,
+        roomNextSeq: roomNextSeq,
       );
 
   Map<String, dynamic> toJson() => {
@@ -829,6 +901,23 @@ class ProjectDocument {
               'pageIndex': s.pageIndex,
               'w': s.sizePx.width,
               'h': s.sizePx.height,
+              // Round 24 — the DXF import frame (additive; absent ⇒ legacy).
+              if (s.dxfFrame != null)
+                'dxfFrame': [
+                  s.dxfFrame!.minX,
+                  s.dxfFrame!.minY,
+                  s.dxfFrame!.maxX,
+                  s.dxfFrame!.maxY,
+                ],
+              if (s.dxfLiveFrameAck != null)
+                'dxfLiveFrameAck': [
+                  s.dxfLiveFrameAck!.minX,
+                  s.dxfLiveFrameAck!.minY,
+                  s.dxfLiveFrameAck!.maxX,
+                  s.dxfLiveFrameAck!.maxY,
+                ],
+              // Round 33 — the DXF $INSUNITS code (additive; absent ⇒ legacy).
+              if (s.dxfInsUnits != null) 'dxfInsUnits': s.dxfInsUnits,
             },
         ],
         'viewports': {
@@ -846,6 +935,7 @@ class ProjectDocument {
         'measurements': [for (final m in measurements) m.toJson()],
         'tanks': [for (final t in tanks) t.toJson()],
         'rooms': [for (final r in rooms) r.toJson()],
+        if (roomNextSeq != null) 'roomNextSeq': roomNextSeq,
         'referenceLines': [for (final r in referenceLines) r.toJson()],
         if (electrical != null) 'electrical': electrical!.toJson(),
         // Embedded source plans (base64), only when present ⇒ path-only projects
@@ -854,6 +944,8 @@ class ProjectDocument {
         'network': {
           'nodes': [for (final n in network.nodes) _netNodeToJson(n)],
           'edges': [for (final e in network.edges) _netEdgeToJson(e)],
+          if (networkNextSeq != null) 'nextSeq': networkNextSeq,
+          if (networkTagSeq.isNotEmpty) 'tagSeq': networkTagSeq,
         },
       };
 
@@ -874,11 +966,22 @@ class ProjectDocument {
       );
     }
     final project = json['project'] as Map<String, dynamic>;
+    // Round 28 (persist-undo-2-5) — each height is decoded into the setter
+    // band [0.5, 20] m (non-finite / non-positive ⇒ 3.5 m), like every other
+    // Round-19 decoder: a hand-damaged negative storey would otherwise put
+    // the floor above below the one beneath it. (An EMPTY list is left empty:
+    // `ProjectController.load` falls back to the default stack.)
+    double floorHeight(Object? raw) {
+      final v = raw is num ? raw.toDouble() : double.nan;
+      if (!v.isFinite || v <= 0) return 3.5;
+      return v.clamp(0.5, 20.0).toDouble();
+    }
+
     final floors = [
       for (final f in project['floors'] as List)
         Floor(
           (f as Map)['name'] as String,
-          Length((f['height_m'] as num).toDouble()),
+          Length(floorHeight(f['height_m'])),
         ),
     ];
     // Tolerant — absent on an older / no-basement file ⇒ ground at the bottom.
@@ -904,14 +1007,22 @@ class ProjectDocument {
       fixtureHeight: Length(mountM(
           project['fixtureHeightM'], defaultMounting.fixtureHeight.meters, 2.5)),
     );
+    // Round 19 (persistence-2-1) — tolerant like the viewport decode: a
+    // non-finite / non-positive metres-per-pixel (the store's
+    // `setCalibration` refuses those) is DROPPED, so the sheet loads
+    // uncalibrated and Review prompts a re-scale — instead of the
+    // ScaleCalibration assert refusing the whole file (debug) or every run
+    // on that sheet measuring negative (release).
     final calibrations = <String, ScaleCalibration>{
       for (final e in (project['calibrations'] as Map).entries)
-        e.key as String: ScaleCalibration((e.value as num).toDouble()),
+        if (_decodePositive(e.value) != null)
+          e.key as String: ScaleCalibration(_decodePositive(e.value)!),
     };
-    // J1: tolerant — absent on an older file ⇒ no stale flags.
+    // J1: tolerant — absent on an older file ⇒ no stale flags. A flag on a
+    // sheet whose calibration was dropped above is dropped with it.
     final staleCalibrations = <String>{
       for (final id in (project['staleCalibrations'] as List? ?? const []))
-        id as String,
+        if (calibrations.containsKey(id)) id as String,
     };
     final sheets = [
       for (final s in json['sheets'] as List)
@@ -923,6 +1034,11 @@ class ProjectDocument {
           dwgPath: s['dwgPath'] as String?,
           pageIndex: (s['pageIndex'] as num).toInt(),
           sizePx: Size((s['w'] as num).toDouble(), (s['h'] as num).toDouble()),
+          dxfFrame: _dxfFrameFromJson(s['dxfFrame']),
+          dxfLiveFrameAck: _dxfFrameFromJson(s['dxfLiveFrameAck']),
+          dxfInsUnits: s['dxfInsUnits'] is num
+              ? (s['dxfInsUnits'] as num).toInt()
+              : null,
         ),
     ];
     final net = json['network'] as Map<String, dynamic>;
@@ -937,13 +1053,24 @@ class ProjectDocument {
     if (rawViewports is Map) {
       rawViewports.forEach((key, v) {
         if (v is Map && v['scale'] is num) {
-          viewports[key as String] = ViewportTransform(
-            scale: (v['scale'] as num).toDouble(),
-            offset: Offset(
-              (v['dx'] as num?)?.toDouble() ?? 0,
-              (v['dy'] as num?)?.toDouble() ?? 0,
-            ),
-          );
+          // Round 10 (canvas-geometry-6) — tolerant load: a viewport whose
+          // scale is zero/negative/out of the canvas zoom range or whose
+          // offset is non-finite (hand-edited / corrupt file) would give
+          // Infinity world coordinates or a mirrored view. Drop it so the
+          // canvas fits as usual.
+          final scale = (v['scale'] as num).toDouble();
+          final dx = (v['dx'] as num?)?.toDouble() ?? 0;
+          final dy = (v['dy'] as num?)?.toDouble() ?? 0;
+          if (scale.isFinite &&
+              scale >= ViewportTransform.minScale &&
+              scale <= ViewportTransform.maxScale &&
+              dx.isFinite &&
+              dy.isFinite) {
+            viewports[key as String] = ViewportTransform(
+              scale: scale,
+              offset: Offset(dx, dy),
+            );
+          }
         }
       });
     }
@@ -1007,6 +1134,14 @@ class ProjectDocument {
       rooms: rooms,
       referenceLines: referenceLines,
       assets: assets,
+      networkNextSeq: _seqOrNull(net['nextSeq']),
+      networkTagSeq: {
+        if (net['tagSeq'] is Map)
+          for (final e in (net['tagSeq'] as Map).entries)
+            if (e.key is String && e.value is num && (e.value as num) >= 1)
+              e.key as String: (e.value as num).toInt(),
+      },
+      roomNextSeq: _seqOrNull(json['roomNextSeq']),
     );
   }
 
@@ -1015,7 +1150,8 @@ class ProjectDocument {
     try {
       raw = jsonDecode(source);
     } on FormatException catch (e) {
-      throw ProjectDocumentException('File is not valid JSON: ${e.message}');
+      throw ProjectDocumentException('File is not valid JSON: ${e.message}',
+          tornWrite: true);
     }
     if (raw is! Map<String, dynamic>) {
       throw const ProjectDocumentException('Not an iSystem project file.');
@@ -1029,4 +1165,26 @@ class ProjectDocument {
       throw ProjectDocumentException('Could not read project: $e');
     }
   }
+}
+
+/// Round 28 — a persisted id counter: a non-negative integer, else null
+/// (tolerant: a hand-damaged value falls back to the ids themselves).
+int? _seqOrNull(Object? raw) {
+  if (raw is! num || !raw.isFinite) return null;
+  final v = raw.toInt();
+  return v >= 0 ? v : null;
+}
+
+/// Round 24 — tolerant decode of a sheet's DXF import frame: four finite
+/// numbers with a positive extent, else null (the sheet falls back to the
+/// live drawing bounds, the pre-round-24 behaviour).
+DxfBounds? _dxfFrameFromJson(Object? raw) {
+  if (raw is! List || raw.length != 4) return null;
+  final v = <double>[];
+  for (final e in raw) {
+    if (e is! num || !e.toDouble().isFinite) return null;
+    v.add(e.toDouble());
+  }
+  final b = DxfBounds(v[0], v[1], v[2], v[3]);
+  return (b.width >= 0 && b.height >= 0 && b.isUsable) ? b : null;
 }

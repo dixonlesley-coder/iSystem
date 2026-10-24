@@ -68,7 +68,7 @@ class _LayerSwitcherState extends ConsumerState<LayerSwitcher> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          for (final layer in DisciplineLayer.values) ...[
+          for (final layer in DisciplineLayer.values)
             _LayerSegment(
               layer: layer,
               active: layer == active,
@@ -77,27 +77,30 @@ class _LayerSwitcherState extends ConsumerState<LayerSwitcher> {
               onSelect: () => activeCtrl.set(layer),
               onToggleVisible: () => visCtrl.toggle(layer),
               onToggleLock: () => lockCtrl.toggle(layer),
+              // J5 — the funnel filters the ACTIVE layer's services, so it
+              // renders BESIDE that layer's segment (inside its hover/focus
+              // region, so reaching for it never hides it).
+              // The funnel SLOT always rides the active entry (concealed when
+              // the layer has nothing to filter — electrical), so the row's
+              // width never changes as the active layer moves.
+              showFilter: layer == active,
+              filterAvailable: canFilter,
+              filterOpen: _filterOpen,
+              // An active filter (or an open one) pins the funnel visible —
+              // a filter that applies must never hide its own control.
+              filterPinned: _filterOpen ||
+                  activeServices.any((s) => hidden.contains(s)),
+              onToggleFilter: () => setState(() => _filterOpen = !_filterOpen),
+              filterChips: [
+                if (_filterOpen)
+                  for (final s in activeServices)
+                    _ServiceChip(
+                      service: s,
+                      hidden: hidden.contains(s),
+                      onTap: () => hideCtrl.toggle(s),
+                    ),
+              ],
             ),
-            // J5 — the funnel filters the ACTIVE layer's services, so it renders
-            // BESIDE that layer's segment. It used to trail the whole row (after
-            // Electrical), which read as an electrical control while it was
-            // filtering Plumbing.
-            if (canFilter && layer == active) ...[
-              const SizedBox(width: MechXSpacing.xxs),
-              _ServiceFilterToggle(
-                open: _filterOpen,
-                onTap: () => setState(() => _filterOpen = !_filterOpen),
-              ),
-              if (_filterOpen)
-                for (final s in activeServices)
-                  _ServiceChip(
-                    service: s,
-                    hidden: hidden.contains(s),
-                    onTap: () => hideCtrl.toggle(s),
-                  ),
-              const SizedBox(width: MechXSpacing.xxs),
-            ],
-          ],
         ],
       ),
     );
@@ -114,7 +117,14 @@ class _LayerSwitcherState extends ConsumerState<LayerSwitcher> {
 /// of N" in the app. The eye stays a DISTINCT on/off glyph (never the accent
 /// pill), so a viewer can tell "pick one" (active layer) from "flip each"
 /// (show/hide). The eye is a no-op for the active layer, which is always shown.
-class _LayerSegment extends StatelessWidget {
+///
+/// Quiet at rest: the eye, padlock and funnel are revealed only on hover or
+/// keyboard focus within the entry — or when they carry NON-DEFAULT state (a
+/// hidden layer keeps its struck eye, a locked layer its accent padlock, an
+/// applied/open service filter its funnel). A concealed glyph keeps its SIZE
+/// (`Visibility.maintainSize`) so the row width never changes on hover — no
+/// jitter, the breadcrumb never moves — and drops its hit target + semantics.
+class _LayerSegment extends StatefulWidget {
   final DisciplineLayer layer;
   final bool active;
   final bool visible;
@@ -122,6 +132,19 @@ class _LayerSegment extends StatelessWidget {
   final VoidCallback onSelect;
   final VoidCallback onToggleVisible;
   final VoidCallback onToggleLock;
+
+  /// Whether this entry carries the active layer's per-service funnel.
+  final bool showFilter;
+
+  /// Whether the layer actually has services to filter; false ⇒ the funnel
+  /// slot is reserved but concealed and inert.
+  final bool filterAvailable;
+  final bool filterOpen;
+
+  /// The funnel stays visible without hover (an open or applied filter).
+  final bool filterPinned;
+  final VoidCallback? onToggleFilter;
+  final List<Widget> filterChips;
 
   const _LayerSegment({
     required this.layer,
@@ -131,43 +154,119 @@ class _LayerSegment extends StatelessWidget {
     required this.onSelect,
     required this.onToggleVisible,
     required this.onToggleLock,
+    this.showFilter = false,
+    this.filterAvailable = true,
+    this.filterOpen = false,
+    this.filterPinned = false,
+    this.onToggleFilter,
+    this.filterChips = const [],
   });
+
+  @override
+  State<_LayerSegment> createState() => _LayerSegmentState();
+}
+
+class _LayerSegmentState extends State<_LayerSegment> {
+  bool _hovered = false;
+  bool _focused = false;
+
+  /// Conceal [child] without changing its footprint: hidden ⇒ no paint, no hit
+  /// target, no semantics; revealed ⇒ fades in (reduced-motion gated).
+  Widget _reveal(BuildContext context, bool shown, Widget child) =>
+      AnimatedOpacity(
+        opacity: shown ? 1 : 0,
+        duration: MechXMotion.resolve(context, MechXMotion.fast),
+        curve: MechXMotion.standard,
+        child: Visibility(
+          visible: shown,
+          maintainSize: true,
+          maintainAnimation: true,
+          maintainState: true,
+          maintainSemantics: false,
+          maintainInteractivity: false,
+          child: child,
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Padding(
-      padding: const EdgeInsets.only(right: MechXSpacing.xxs),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // The RADIO select — the shared tinted selected-segment idiom
-          // (keyboard focus + Enter/Space come free from MechXSegment).
-          MechXSegment(
-            label: layer.label,
-            selected: active,
-            onTap: onSelect,
-            selectedWeight: FontWeight.w700,
-          ),
-          // The visibility TOGGLE — a distinct eye glyph the accent pill never
-          // touches. Colour carries the layer's on/off/active state (the label
-          // stays identity-only).
-          _EyeToggle(
-            visible: visible,
-            color: active
-                ? colors.textPrimary
-                : (visible ? colors.textSecondary : colors.textMuted),
-            onTap: onToggleVisible,
-          ),
-          // F1 — the reference-layer LOCK. Shown only for a NON-active layer
-          // (the active layer is the one you edit and can never be locked); a
-          // locked layer still renders (faded) but is inert to clicks/drags.
-          if (!active)
-            _LockToggle(
-              locked: locked,
-              onTap: onToggleLock,
+    final w = widget;
+    final engaged = _hovered || _focused;
+    final showEye = engaged || !w.visible;
+    final showLock = !w.active && (engaged || w.locked);
+    final showFunnel = w.filterAvailable && (engaged || w.filterPinned);
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: Focus(
+        canRequestFocus: false,
+        skipTraversal: true,
+        onFocusChange: (f) => setState(() => _focused = f),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: MechXSpacing.xxs),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // The RADIO select — the shared tinted selected-segment idiom
+                  // (keyboard focus + Enter/Space come free from MechXSegment).
+                  // A hidden layer's name stays faded beside its struck eye.
+                  Opacity(
+                    opacity: (!w.visible && !w.active) ? 0.55 : 1,
+                    child: MechXSegment(
+                      label: w.layer.label,
+                      selected: w.active,
+                      onTap: w.onSelect,
+                      selectedWeight: FontWeight.w700,
+                      // The bold active label must not widen its entry (the
+                      // breadcrumb beside the switcher would jump).
+                      reserveSelectedWidth: true,
+                    ),
+                  ),
+                  // The visibility TOGGLE — a distinct eye glyph the accent pill
+                  // never touches. Colour carries the layer's on/off/active
+                  // state (the label stays identity-only).
+                  _reveal(
+                    context,
+                    showEye,
+                    _EyeToggle(
+                      visible: w.visible,
+                      color: w.active
+                          ? colors.textPrimary
+                          : (w.visible ? colors.textSecondary : colors.textMuted),
+                      onTap: w.onToggleVisible,
+                    ),
+                  ),
+                  // F1 — the reference-layer LOCK. Only for a NON-active layer
+                  // (the active layer is the one you edit and can never be
+                  // locked); a locked layer still renders (faded) but is inert.
+                  if (!w.active)
+                    _reveal(
+                      context,
+                      showLock,
+                      _LockToggle(locked: w.locked, onTap: w.onToggleLock),
+                    ),
+                ],
+              ),
             ),
-        ],
+            if (w.showFilter) ...[
+              const SizedBox(width: MechXSpacing.xxs),
+              _reveal(
+                context,
+                showFunnel,
+                _ServiceFilterToggle(
+                  open: w.filterOpen,
+                  onTap: w.onToggleFilter ?? () {},
+                ),
+              ),
+              ...w.filterChips,
+              const SizedBox(width: MechXSpacing.xxs),
+            ],
+          ],
+        ),
       ),
     );
   }

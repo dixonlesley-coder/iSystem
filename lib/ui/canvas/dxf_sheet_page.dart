@@ -1,11 +1,16 @@
-import 'dart:io';
+import 'dart:async';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
-import '../../data/dxf_import.dart' show dxfContentSize;
+import '../../data/dxf_import.dart' show dxfContentSize, dxfMappingBounds;
+import '../../data/file_stamped_cache.dart';
+import '../../data/dxf_text.dart';
 import '../../store/models/sheet.dart';
+import '../strings/app_strings.dart';
+import 'sheet_page_states.dart';
 
 /// Renders a DXF-backed [Sheet] as static vector linework filling its content
 /// box — the vector sibling of [PdfSheetPage]. The drawing is normalised into
@@ -18,8 +23,12 @@ import '../../store/models/sheet.dart';
 /// ([_superSample]× the content size, scaled back with a [FittedBox]) to keep
 /// the linework crisp when zoomed in to place nodes.
 ///
-/// Parsing is cached per path; a read/parse failure renders an inline message
-/// rather than throwing.
+/// Parsing is cached per path. A drawing not yet in the cache is parsed OFF the
+/// UI isolate ([Isolate.run] — the engine's `parseDxf` is pure Dart), showing
+/// the sheet-paper [SheetLoadingPage] meanwhile, so opening a large plan never
+/// freezes a frame; a cached drawing paints on the first frame as before. A
+/// read/parse failure renders the token [SheetLoadErrorPage] (with 'Replace
+/// plan…' when the host wires [onReplacePlan]) rather than throwing.
 class DxfSheetPage extends StatefulWidget {
   final Sheet sheet;
 
@@ -27,48 +36,165 @@ class DxfSheetPage extends StatefulWidget {
   /// sharp while keeping the rasterised layer bounded.
   static const double _superSample = 3.0;
 
-  const DxfSheetPage({super.key, required this.sheet});
+  /// Round 24 — called (once per detected change, after the frame) when the
+  /// file's LIVE extent no longer matches the sheet's import-time
+  /// [Sheet.dxfFrame] — the plan was revised in place — AND differs from the
+  /// extent already acknowledged on [Sheet.dxfLiveFrameAck]. The host records
+  /// the live extent and marks the calibration stale; the drawing keeps
+  /// painting through the stored frame.
+  final void Function(String sheetId, DxfBounds live)? onFrameChanged;
+
+  /// Re-point the sheet at another file — offered on the load-error page.
+  final VoidCallback? onReplacePlan;
+
+  const DxfSheetPage(
+      {super.key, required this.sheet, this.onFrameChanged, this.onReplacePlan});
 
   @override
   State<DxfSheetPage> createState() => _DxfSheetPageState();
 
-  /// Parse cache keyed by file path. A floor-plan DXF parses once and is reused
-  /// across rebuilds / sheet revisits. A `null` value = parsed-but-empty/failed.
-  static final Map<String, DxfDrawing?> _cache = {};
+  /// Parse cache keyed by file path AND the file's size/mtime stamp (Round
+  /// 10): a floor-plan DXF parses once and is reused across rebuilds / sheet
+  /// revisits, but a plan revised IN PLACE (same path) re-parses instead of
+  /// painting the stale revision. A `null` value = parsed-but-empty/failed.
+  static final FileStampedCache<DxfDrawing?> _cache =
+      FileStampedCache<DxfDrawing?>(_parseFile);
 
-  static DxfDrawing? _load(String path) {
-    if (_cache.containsKey(path)) return _cache[path];
-    DxfDrawing? drawing;
+  /// Read + parse [path] (null on any failure). Pure Dart — safe to run on a
+  /// background isolate.
+  static DxfDrawing? _parseFile(String path) {
     try {
-      drawing = parseDxf(File(path).readAsStringSync());
+      return parseDxf(readDxfTextSync(path));
     } catch (_) {
-      drawing = null;
+      return null;
     }
-    return _cache[path] = drawing;
+  }
+
+  /// In-flight background parses, one per path (two sheets of one file — or a
+  /// rebuild mid-parse — share a single isolate run).
+  static final Map<String, Future<DxfDrawing?>> _inFlight = {};
+
+  /// The drawing for [path], parsed on a background isolate when it is not
+  /// already cached fresh; the result lands in the same stamped cache the
+  /// synchronous paths ([cachedDrawing], the underlay snap) read.
+  static Future<DxfDrawing?> loadAsync(String path) {
+    final (hit, value) = _cache.peek(path);
+    if (hit) return Future.value(value);
+    return _inFlight[path] ??= () async {
+      final stamp = fileStamp(path);
+      try {
+        final drawing = await Isolate.run(() => _parseFile(path));
+        _cache.store(path, stamp, drawing);
+        return drawing;
+      } catch (_) {
+        _cache.store(path, stamp, null);
+        return null;
+      } finally {
+        unawaited(_inFlight.remove(path));
+      }
+    }();
   }
 
   /// Test seam: prime the cache so a widget test can render without disk I/O.
   static void cacheForTest(String path, DxfDrawing? drawing) =>
-      _cache[path] = drawing;
+      _cache.prime(path, drawing);
 
-  /// The parsed drawing for [path] the painter uses, loading + caching it on
-  /// first access (null when the file is missing / empty / unparseable). The
-  /// B12 underlay snap index is built from THIS same cached drawing, so the snap
-  /// surface always matches the painted linework — no re-parse. Pure disk read;
-  /// safe to call off the paint path.
-  static DxfDrawing? cachedDrawing(String path) => _load(path);
+  /// The parsed drawing for [path] the painter uses, or null while it is not
+  /// parsed yet (or the file is missing / empty / unparseable). NEVER parses
+  /// on the calling (UI) isolate: a miss kicks [loadAsync] and returns null —
+  /// the snap service tolerates null and picks the drawing up on the next
+  /// gesture (review: a snap gesture during a large plan's background parse
+  /// used to re-parse it synchronously, the very freeze the isolate removed).
+  /// The B12 underlay snap index is built from THIS same cached drawing, so
+  /// the snap surface always matches the painted linework.
+  static DxfDrawing? cachedDrawing(String path) {
+    final (hit, value) = _cache.peek(path);
+    if (hit) return value;
+    unawaited(loadAsync(path));
+    return null;
+  }
 }
 
 class _DxfSheetPageState extends State<DxfSheetPage> {
+  DxfDrawing? _reported;
+
+  /// The path whose drawing [_drawing] holds, and whether it has loaded.
+  String? _loadedPath;
+  bool _loaded = false;
+  DxfDrawing? _drawing;
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve();
+  }
+
+  @override
+  void didUpdateWidget(DxfSheetPage old) {
+    super.didUpdateWidget(old);
+    if (old.sheet.dxfPath != widget.sheet.dxfPath) _resolve();
+  }
+
+  /// Use the cached drawing at once when it is fresh (no placeholder frame —
+  /// a revisited sheet paints immediately); otherwise parse in the background
+  /// and show the loading page until it lands.
+  void _resolve() {
+    final path = widget.sheet.dxfPath;
+    _loadedPath = path;
+    if (path == null) {
+      _loaded = true;
+      _drawing = null;
+      return;
+    }
+    final (hit, value) = DxfSheetPage._cache.peek(path);
+    if (hit) {
+      _loaded = true;
+      _drawing = value;
+      return;
+    }
+    _loaded = false;
+    _drawing = null;
+    DxfSheetPage.loadAsync(path).then((drawing) {
+      if (!mounted || _loadedPath != path) return;
+      setState(() {
+        _loaded = true;
+        _drawing = drawing;
+      });
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final path = widget.sheet.dxfPath;
+    final strings = MechXStrings.of(context);
     if (path == null) {
-      return const _ErrorPage('No DXF path on sheet.');
+      return SheetLoadErrorPage(
+        message: strings(StringKey.sheetNoSourcePath),
+        onReplacePlan: widget.onReplacePlan,
+      );
     }
-    final drawing = DxfSheetPage._load(path);
+    if (!_loaded) return const SheetLoadingPage();
+    final drawing = _drawing;
     if (drawing == null || drawing.isEmpty) {
-      return const _ErrorPage('Could not load DXF, or it has no geometry.');
+      return SheetLoadErrorPage(
+        message: strings(StringKey.sheetDxfLoadFailed),
+        detail: path,
+        onReplacePlan: widget.onReplacePlan,
+      );
+    }
+    final frame = dxfMappingBounds(widget.sheet, drawing.bounds);
+    final stored = widget.sheet.dxfFrame;
+    final ack = widget.sheet.dxfLiveFrameAck;
+    final cb = widget.onFrameChanged;
+    final live = drawing.bounds;
+    if (cb != null &&
+        stored != null &&
+        !identical(_reported, drawing) &&
+        stored.differsFrom(live) &&
+        (ack == null || ack.differsFrom(live))) {
+      _reported = drawing;
+      final id = widget.sheet.id;
+      WidgetsBinding.instance.addPostFrameCallback((_) => cb(id, live));
     }
 
     final size = widget.sheet.sizePx;
@@ -82,7 +208,7 @@ class _DxfSheetPageState extends State<DxfSheetPage> {
         width: size.width * ss,
         height: size.height * ss,
         child: CustomPaint(
-          painter: _DxfPainter(drawing: drawing, scale: ss),
+          painter: _DxfPainter(drawing: drawing, frame: frame, scale: ss),
         ),
       ),
     );
@@ -95,11 +221,15 @@ class _DxfSheetPageState extends State<DxfSheetPage> {
 class _DxfPainter extends CustomPainter {
   final DxfDrawing drawing;
 
+  /// Round 24 — the world frame the content maps from (the sheet's import
+  /// frame, else the live bounds).
+  final DxfBounds frame;
+
   /// Extra supersample factor folded into the world→content map (the SizedBox is
   /// laid out this many times larger than the content slot).
   final double scale;
 
-  _DxfPainter({required this.drawing, required this.scale});
+  _DxfPainter({required this.drawing, required this.frame, required this.scale});
 
   static const Color _paper = Color(0xFFFFFFFF);
   static const Color _ink = Color(0xFF3A3F46);
@@ -108,7 +238,7 @@ class _DxfPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     canvas.drawRect(Offset.zero & size, Paint()..color = _paper);
 
-    final b = drawing.bounds;
+    final b = frame;
     // Uniform world→content scale (the same one the importer used to size the
     // sheet), times the supersample factor.
     final extentW = b.width, extentH = b.height;
@@ -166,31 +296,10 @@ class _DxfPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_DxfPainter old) =>
-      old.drawing != drawing || old.scale != scale;
-}
-
-class _ErrorPage extends StatelessWidget {
-  final String message;
-  const _ErrorPage(this.message);
-
-  @override
-  Widget build(BuildContext context) {
-    return ColoredBox(
-      color: const Color(0xFFFFF3F3),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            message,
-            style: const TextStyle(
-              fontFamily: 'Roboto',
-              fontSize: 14,
-              color: Color(0xFFB00020),
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
-    );
-  }
+      old.drawing != drawing ||
+      old.scale != scale ||
+      old.frame.minX != frame.minX ||
+      old.frame.maxX != frame.maxX ||
+      old.frame.minY != frame.minY ||
+      old.frame.maxY != frame.maxY;
 }

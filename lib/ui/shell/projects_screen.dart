@@ -7,24 +7,15 @@ import '../../data/app_settings.dart';
 import '../../store/project_store.dart';
 import '../inspector/disclosure_header.dart';
 import '../inspector/project_panel.dart'
-    show
-        ExportIdentityBar,
-        exportAnnotatedPlanPdf,
-        exportCalcReport,
-        exportCalcReportPdf,
-        exportDrawingDxf,
-        exportDrawingPdf,
-        exportEquipmentSchedule,
-        exportEquipmentSchedulePdf,
-        exportMepUnifiedReport,
-        exportMepUnifiedReportPdf,
-        exportSubmittalPackage;
+    show ExportIdentityBar, visibleEquipmentSpecTargetCount;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_text_field.dart';
+import 'document_control_card.dart';
+import 'export_sheet.dart' show AllExportsLink;
 import 'project_io.dart';
 import 'templates_dialog.dart';
 
@@ -42,12 +33,13 @@ class ProjectsScreen extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final ctrl = ref.read(projectControllerProvider.notifier);
     final recents = ref.watch(appSettingsProvider).mru;
+    // The equipment model/spec disclosure shows only once there is tagged
+    // mechanical equipment (the same gate the old inspector section used).
+    final specCount = visibleEquipmentSpecTargetCount(ref);
 
     return HubScaffold(
       title: 'Projects',
-      lead: 'Start a new project, reopen a recent one, and name + export the '
-          'current project here. Open and save .mechx files from the top bar; '
-          'autosave keeps a recovery snapshot between sessions.',
+      lead: context.strings(StringKey.projectsLead),
       children: [
         // ── Current project ──────────────────────────────────────────────
         Container(
@@ -83,6 +75,18 @@ class ProjectsScreen extends ConsumerWidget {
               // step. Per-keystroke it pushed 25 entries for "Gedung BRI
               // Cabang Jakarta", evicting real edits from the 200-entry stack.
               MechXTextField(value: project.name, onCommitted: ctrl.setName),
+              // Work item 4 (2026-10-17): the template prefill lives with the
+              // project it applies to — a quiet (non-primary) button here, not
+              // a separate card + explanatory paragraph. Also reachable from
+              // the command palette ('New from template').
+              const SizedBox(height: MechXSpacing.sm),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: MechXButton(
+                  label: context.strings(StringKey.projectsApplyTemplateButton),
+                  onPressed: () => showTemplatesDialog(context),
+                ),
+              ),
             ],
           ),
         ),
@@ -99,44 +103,37 @@ class ProjectsScreen extends ConsumerWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // H5: the document-control identity right at the export surface.
-              const ExportIdentityBar(),
-              const SizedBox(height: MechXSpacing.md),
-              // A5: a leading, visually-primary 'Export deliverables' group —
-              // the cross-discipline submittal package + the unified MEP
-              // report — ahead of the per-artifact rows below. No longer an
-              // accent button (A6 moves the page's one accent to 'New
-              // project'); it stays first and its own labelled group instead.
-              Text(context.strings(StringKey.reviewExportDeliverables),
-                  style: type.subtitle.copyWith(color: colors.textPrimary)),
-              const SizedBox(height: MechXSpacing.xs),
-              Wrap(
-                spacing: MechXSpacing.xs,
-                runSpacing: MechXSpacing.xs,
-                children: [
-                  MechXButton(
-                    label: 'Export submittal package...',
-                    onPressed: () => exportSubmittalPackage(ref),
+              // H5: the document-control identity right at the export surface —
+              // the Drawing no. / Revision / Client row, then (moved here off
+              // the Layout inspector) the DRAWN/CHECKED/APPROVED + revision
+              // block and the equipment model/spec editor as disclosures.
+              ExportIdentityBar(
+                footer: [
+                  const SizedBox(height: MechXSpacing.md),
+                  DisclosureSection(
+                    name: kSignOffSectionKey,
+                    label: context.strings(StringKey.projectsSignOffSection),
+                    defaultExpanded: false,
+                    child: const DocumentControlCard(),
                   ),
-                  MechXButton(
-                    label: context.strings(StringKey.inspectorExportMepReportMd),
-                    onPressed: () => exportMepUnifiedReport(ref),
-                  ),
-                  MechXButton(
-                    label: context
-                        .strings(StringKey.inspectorExportMepReportPdfBtn),
-                    onPressed: () => exportMepUnifiedReportPdf(ref),
-                  ),
+                  if (specCount > 0) ...[
+                    const SizedBox(height: MechXSpacing.sm),
+                    DisclosureSection(
+                      name: kEquipmentSpecSectionKey,
+                      label: context.strings.format(
+                          StringKey.projectsEquipmentSpecSection,
+                          {'n': specCount}),
+                      defaultExpanded: false,
+                      child: const EquipmentSpecCard(),
+                    ),
+                  ],
                 ],
               ),
-              const SizedBox(height: MechXSpacing.md),
-              // Per-artifact rows, grouped under labelled disclosures so the
-              // hub reads as a scannable set of clusters instead of one flat
-              // wall of same-weight buttons. P1: each group header names how
-              // many exports it holds — an inventory count derived from the
-              // group's own action list, never a hardcoded literal, so it can
-              // never drift from what's actually inside.
-              _exportGroups(context, ref),
+              const SizedBox(height: MechXSpacing.sm),
+              // Work item 8: every export (the submittal package, drawings,
+              // reports, data) lives in the ONE Export sheet (Ctrl/Cmd+E) —
+              // this card keeps the document-control identity + a link to it.
+              const AllExportsLink(),
             ],
           ),
         ),
@@ -169,129 +166,6 @@ class ProjectsScreen extends ConsumerWidget {
             ),
           ),
         ],
-        const SizedBox(height: MechXSpacing.md),
-        // ── Apply a building template (to the CURRENT project) ────────────
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(MechXSpacing.md),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: MechXRadii.card,
-            border: Border.all(color: colors.border),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(context.strings(StringKey.projectApplyBuildingTemplate),
-                  style: type.subtitle.copyWith(color: colors.textPrimary)),
-              const SizedBox(height: MechXSpacing.xs),
-              Text(
-                'Prefill floors, occupancy, fire hazard, and design rainfall '
-                'for a common building type on the CURRENT project (it does not '
-                'create a new one), then refine.',
-                style: type.caption.copyWith(color: colors.textMuted),
-              ),
-              const SizedBox(height: MechXSpacing.sm),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: MechXButton(
-                  label: 'Choose template...',
-                  onPressed: () => showTemplatesDialog(context),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// P1 — the three per-artifact export groups (Drawings / Reports / Data),
-  /// each header carrying a `(N)` count of the exports it actually holds so
-  /// a collapsed section never hides how much is inside. N is the real
-  /// length of that group's own action list — never a hardcoded literal —
-  /// so it can't drift if a group gains or loses an export.
-  Widget _exportGroups(BuildContext context, WidgetRef ref) {
-    final drawingsActions = <Widget>[
-      Align(
-        alignment: Alignment.centerLeft,
-        child: MechXButton(
-          label: context.strings(StringKey.inspectorExportDrawingDxf),
-          onPressed: () => exportDrawingDxf(ref),
-        ),
-      ),
-      _ExportRow(
-        label: context.strings(StringKey.inspectorExportDrawingPdf),
-        hint: context.strings(StringKey.projectsExportDrawingPdfHint),
-        onPressed: () => exportDrawingPdf(ref),
-      ),
-      _ExportRow(
-        label: context.strings(StringKey.inspectorExportAnnotatedPlanPdf),
-        hint: context.strings(StringKey.projectsExportAnnotatedPlanPdfHint),
-        onPressed: () => exportAnnotatedPlanPdf(ref),
-      ),
-    ];
-    final reportsActions = <Widget>[
-      MechXButton(
-        label: context.strings(StringKey.inspectorExportCalcReportMd),
-        onPressed: () => exportCalcReport(ref),
-      ),
-      MechXButton(
-        label: context.strings(StringKey.inspectorExportCalcReportPdfBtn),
-        onPressed: () => exportCalcReportPdf(ref),
-      ),
-    ];
-    final dataActions = <Widget>[
-      MechXButton(
-        label: context.strings(StringKey.inspectorExportEquipmentScheduleMd),
-        onPressed: () => exportEquipmentSchedule(ref),
-      ),
-      MechXButton(
-        label:
-            context.strings(StringKey.inspectorExportEquipmentSchedulePdfBtn),
-        onPressed: () => exportEquipmentSchedulePdf(ref),
-      ),
-    ];
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        DisclosureSection(
-          name: '${context.strings(StringKey.projectsExportGroupDrawings)}'
-              ' (${drawingsActions.length})',
-          defaultExpanded: false,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (var i = 0; i < drawingsActions.length; i++) ...[
-                if (i > 0) const SizedBox(height: MechXSpacing.xs),
-                drawingsActions[i],
-              ],
-            ],
-          ),
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        DisclosureSection(
-          name: '${context.strings(StringKey.projectsExportGroupReports)}'
-              ' (${reportsActions.length})',
-          defaultExpanded: false,
-          child: Wrap(
-            spacing: MechXSpacing.xs,
-            runSpacing: MechXSpacing.xs,
-            children: reportsActions,
-          ),
-        ),
-        const SizedBox(height: MechXSpacing.sm),
-        DisclosureSection(
-          name: '${context.strings(StringKey.projectsExportGroupData)}'
-              ' (${dataActions.length})',
-          defaultExpanded: false,
-          child: Wrap(
-            spacing: MechXSpacing.xs,
-            runSpacing: MechXSpacing.xs,
-            children: dataActions,
-          ),
-        ),
       ],
     );
   }
@@ -351,39 +225,6 @@ class _RecentRow extends StatelessWidget {
           MechXButton(label: 'Remove', tertiary: true, onPressed: onRemove),
         ],
       ),
-    );
-  }
-}
-
-/// A5: one export button plus a short clarifying caption underneath — used
-/// for the two near-identical plan-PDF rows (plain drawing vs annotated with
-/// real run/riser lengths) so the difference reads without opening either
-/// file.
-class _ExportRow extends StatelessWidget {
-  final String label;
-  final String hint;
-  final VoidCallback onPressed;
-
-  const _ExportRow({
-    required this.label,
-    required this.hint,
-    required this.onPressed,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: MechXButton(label: label, onPressed: onPressed),
-        ),
-        const SizedBox(height: MechXSpacing.xxs),
-        Text(hint, style: type.caption.copyWith(color: colors.textMuted)),
-      ],
     );
   }
 }

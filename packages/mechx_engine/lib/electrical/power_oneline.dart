@@ -127,6 +127,10 @@ PowerOneLine buildPowerOneLine(
   required ApparentPower demand,
   Voltage voltage = const Voltage(400),
   List<GensetMotor> motors = const <GensetMotor>[],
+  ApparentPower? backupDemand,
+  Power? backupPower,
+  Power? demandPower,
+  String? utilitySub,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -151,40 +155,40 @@ PowerOneLine buildPowerOneLine(
   edge('bus', 'main');
 
   // Utility (PLN). This domain feeds the bus at LV; MV/transformer topology is
-  // an A8 supply concern, deliberately out of scope here.
+  // an A8 supply concern, deliberately out of scope here. Round 23
+  // (elec-drafting-2-2) — [utilitySub] names a DECLARED MV service ('MV via
+  // TX 2 x 1600 kVA'), so the one-line never calls a tower's MV supply
+  // '400 V LV' while the riser of the same set draws its transformer.
   nodes.add(PowerNode(
     id: 'utility',
     kind: PowerNodeKind.utility,
     label: 'PLN utility',
-    sub: '${_fmt(voltage.volts)} V LV',
+    sub: utilitySub ?? '${_fmt(voltage.volts)} V LV',
   ));
   const utilityOut = 'utility';
 
   // Pre-size the configured sources.
   final gen = sources.generator;
   final genResult =
-      gen == null ? null : _sizeGen(gen, demand);
+      gen == null ? null : _sizeGen(gen, demand, backupDemand, backupPower);
   // Motor-start voltage-dip screen for the sized genset — annotated onto the
   // generator node so the one-line carries the load-acceptance verdict.
   final gensetStart = genResult == null
       ? null
-      : assessGensetStart(genResult.ratingKva, motors: motors);
+      // Paralleled sets share the start transient — screen the dip on the
+      // TOTAL running kVA, not one set (audit r8-5).
+      : assessGensetStart(
+          ApparentPower.kilovoltAmperes(
+              genResult.ratingKva.inKilovoltAmperes * genResult.units),
+          motors: motors);
 
-  final solar = sources.solar;
-  final solarResult = solar == null
-      ? null
-      : sizeSolar(panelWp: solar.panelWp, panels: solar.panels, dcAcRatio: solar.dcAcRatio);
-
-  final batt = sources.battery;
-  // The battery backs the building demand × (1 − genset fraction is not applied
-  // here); its critical load is the demand at the assumed PF for sizing.
-  final batteryResult = batt == null
-      ? null
-      : sizeBattery(_demandToPower(demand), autonomyHours: batt.autonomyHours, chemistry: batt.chemistry);
-
-  final solarOn = solarResult != null;
-  final battOn = batteryResult != null;
-  final hybrid = (sources.hybridInverter ?? (solarOn && battOn)) && (solarOn || battOn);
+  // Round 44 — ONE sizing of the distributed sources, shared with the BOM
+  // and the equipment schedule ([sizeDistributedSources]).
+  final ds = sizeDistributedSources(sources,
+      demand: demand, demandPower: demandPower);
+  final solarResult = ds.solar;
+  final batteryResult = ds.battery;
+  final hybrid = ds.hybrid;
 
   // Essential split: a genset that backs only a fraction transfers a dedicated
   // ESSENTIAL bus (non-hybrid topology); the battery then backs a CRITICAL bus.
@@ -203,7 +207,8 @@ PowerOneLine buildPowerOneLine(
       id: 'gen',
       kind: PowerNodeKind.generator,
       label: 'Generator',
-      sub: '${_fmt(genResult.ratingKva.inKilovoltAmperes)} kVA '
+      sub: '${genResult.units > 1 ? '${genResult.units} x ' : ''}'
+          '${_fmt(genResult.ratingKva.inKilovoltAmperes)} kVA '
           '${gen.mode.label}$dipTag',
     ));
     nodes.add(PowerNode(
@@ -313,7 +318,8 @@ PowerOneLine buildPowerOneLine(
         id: 'pvinv',
         kind: PowerNodeKind.pvInverter,
         label: 'PV inverter',
-        sub: '${_fmt(solarResult.inverterKw.inKiloWatts)} kW',
+        sub: inverterRatingLabel(
+            solarResult.inverterKw, solarResult.inverterUnits),
       ));
       edge('pv', 'pvinv');
       edge('pvinv', 'bus', 'AC');
@@ -350,7 +356,8 @@ PowerOneLine buildPowerOneLine(
         id: 'battinv',
         kind: PowerNodeKind.batteryInverter,
         label: 'Battery inverter',
-        sub: '${_fmt(batteryResult.inverterKw.inKiloWatts)} kW',
+        sub: inverterRatingLabel(
+            batteryResult.inverterKw, batteryResult.inverterUnits),
       ));
       edge('batt', 'battinv');
       if (essentialSplit) {
@@ -388,17 +395,84 @@ PowerOneLine buildPowerOneLine(
   return PowerOneLine(nodes: nodes, edges: edges, interlocks: interlocks);
 }
 
-/// Size the generator for the one-line: a forced kVA wins, else the demand ×
-/// backupFraction is the backup demand.
-GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand) {
-  final backup = gen.kva ??
-      ApparentPower(demand.voltAmperes * gen.backupFraction);
+/// Size the generator for the one-line: a forced kVA wins, else the resolved
+/// [backupDemand] (Round 13 — `max(fraction × demand, essential demand)` from
+/// `gensetBackupDemandVa`), else the demand × backupFraction.
+///
+/// Round 47 (cross-surface-oneline-essential-bus-prints-forced-nameplate) —
+/// the forced nameplate picks the RATING only (via `forcedKva` / `forcedUnits`);
+/// the backup DEMAND stays the solved basis, so the 'Essential bus' figure and
+/// the 'backing N kVA' note never echo whatever nameplate was typed.
+GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
+    ApparentPower? backupDemand, Power? backupPower) {
+  final backup =
+      backupDemand ?? ApparentPower(demand.voltAmperes * gen.backupFraction);
   return sizeGenerator(
     backup,
     mode: gen.mode,
     transfer: gen.transfer,
     forcedKva: gen.kva,
+    forcedUnits: gen.units,
+    backupPower: backupPower,
   );
+}
+
+/// Round 44 (elec-report-bom-3-battery-inverter-pv-never-taken-off) — the
+/// distributed sources (PV array, battery bank) sized ONCE: the power
+/// one-line draws them, the BOM buys them and the equipment schedule lists
+/// them from this one call, so the three can never disagree.
+///
+/// The battery backs the building demand. Round 16 (supply-sources-battery-
+/// critical-load-pf) — its critical load is the REAL demand W
+/// ([demandPower]) when known; the assumed-PF conversion of [demand] stays
+/// only as the fallback. [hybrid] = PV + battery (or a forced hybrid) share
+/// ONE hybrid inverter.
+({SolarResult? solar, BatteryResult? battery, bool hybrid})
+    sizeDistributedSources(
+  ElectricalSources sources, {
+  required ApparentPower demand,
+  Power? demandPower,
+}) {
+  final solar = sources.solar;
+  final solarResult = solar == null
+      ? null
+      : sizeSolar(
+          panelWp: solar.panelWp,
+          panels: solar.panels,
+          dcAcRatio: solar.dcAcRatio);
+  final batt = sources.battery;
+  final batteryResult = batt == null
+      ? null
+      : sizeBattery(demandPower ?? _demandToPower(demand),
+          autonomyHours: batt.autonomyHours, chemistry: batt.chemistry);
+  final solarOn = solarResult != null;
+  final battOn = batteryResult != null;
+  final hybrid =
+      (sources.hybridInverter ?? (solarOn && battOn)) && (solarOn || battOn);
+  return (solar: solarResult, battery: batteryResult, hybrid: hybrid);
+}
+
+/// The inverter the distributed sources need: one HYBRID inverter (the
+/// larger of the PV / battery inverters, as the one-line labels it), else
+/// each DC source's own. Unit kW × units. Pure.
+List<({String kind, Power unitKw, int units})> distributedSourceInverters(
+    ({SolarResult? solar, BatteryResult? battery, bool hybrid}) ds) {
+  final s = ds.solar;
+  final b = ds.battery;
+  if (ds.hybrid) {
+    final sKw = s == null ? 0.0 : s.inverterKw.inKiloWatts * s.inverterUnits;
+    final bKw = b == null ? 0.0 : b.inverterKw.inKiloWatts * b.inverterUnits;
+    if (sKw <= 0 && bKw <= 0) return const [];
+    return sKw >= bKw && s != null
+        ? [(kind: 'hybrid', unitKw: s.inverterKw, units: s.inverterUnits)]
+        : [(kind: 'hybrid', unitKw: b!.inverterKw, units: b.inverterUnits)];
+  }
+  return [
+    if (s != null && s.inverterKw.inKiloWatts > 0)
+      (kind: 'pv', unitKw: s.inverterKw, units: s.inverterUnits),
+    if (b != null && b.inverterKw.inKiloWatts > 0)
+      (kind: 'battery', unitKw: b.inverterKw, units: b.inverterUnits),
+  ];
 }
 
 /// Convert an apparent-power demand to a real-power critical load for battery
@@ -407,10 +481,16 @@ Power _demandToPower(ApparentPower demand) =>
     Power(demand.voltAmperes * kGeneratorPf);
 
 String? _hybridInverterSub(SolarResult? solar, BatteryResult? batt) {
-  final kw = [
-    solar?.inverterKw.inKiloWatts ?? 0,
-    batt?.inverterKw.inKiloWatts ?? 0,
-  ].reduce((a, b) => a > b ? a : b);
+  final s = solar == null
+      ? 0.0
+      : solar.inverterKw.inKiloWatts * solar.inverterUnits;
+  final b = batt == null
+      ? 0.0
+      : batt.inverterKw.inKiloWatts * batt.inverterUnits;
+  final kw = s > b ? s : b;
   if (kw <= 0) return null;
-  return '${_fmt(kw)} kW';
+  final pick = s >= b ? solar! : null;
+  return pick != null
+      ? inverterRatingLabel(pick.inverterKw, pick.inverterUnits)
+      : inverterRatingLabel(batt!.inverterKw, batt.inverterUnits);
 }

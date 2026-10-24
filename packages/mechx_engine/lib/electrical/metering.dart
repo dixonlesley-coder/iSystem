@@ -54,6 +54,11 @@ class MeteringSpec {
   /// CT accuracy class for revenue metering, when CT-operated.
   final String? ctClass;
 
+  /// True when the demand current exceeds the largest standard CT primary —
+  /// the [ctRatio] is then the ladder top and a special-ratio CT must be
+  /// specified (audit r8 — the ladder used to saturate silently).
+  final bool ladderExceeded;
+
   final String note;
 
   /// Honesty surface — the practice tier behind this selection.
@@ -65,6 +70,7 @@ class MeteringSpec {
     this.ctPrimaryA,
     this.ctRatio,
     this.ctClass,
+    this.ladderExceeded = false,
     required this.note,
     required this.verifyItems,
   });
@@ -94,14 +100,19 @@ MeteringSpec meterFor(Current demand) {
         orElse: () => ctPrimaryA.last,
       )!;
   final ratio = '${_num(primary)}/5';
+  final exceeded = a > ctPrimaryA.last;
   return MeteringSpec(
     metering: MeteringKind.ct,
     demandCurrent: demand,
     ctPrimaryA: primary,
     ctRatio: ratio,
     ctClass: meteringCtClass,
+    ladderExceeded: exceeded,
     note: 'CT-operated kWh metering, $ratio class $meteringCtClass '
-        '(demand current ${_num(_round(a, 1))} A).',
+        '(demand current ${_num(_round(a, 1))} A).'
+        '${exceeded ? ' CT ladder exceeded: the demand is above the largest '
+            'standard ${_num(ctPrimaryA.last)} A primary — specify a '
+            'special-ratio CT.' : ''}',
     verifyItems: _verifyItems,
   );
 }

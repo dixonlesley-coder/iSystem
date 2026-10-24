@@ -74,7 +74,7 @@ class _UpdateBannerState extends ConsumerState<UpdateBanner> {
     // Ease the banner in (slide up + fade) and out (fade), on the appear idiom,
     // so it never snaps into the corner. Hidden resolves to a zero-size box.
     return AnimatedSwitcher(
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       switchInCurve: MechXMotion.standard,
       switchOutCurve: MechXMotion.standard,
       transitionBuilder: (child, animation) => FadeTransition(
@@ -250,7 +250,7 @@ class _DismissLinkState extends State<_DismissLink> {
               vertical: MechXSpacing.xxs,
             ),
             child: AnimatedDefaultTextStyle(
-              duration: MechXMotion.hover,
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
               curve: MechXMotion.standard,
               style: type.caption.copyWith(color: fg),
               child: const Text('Dismiss'),
@@ -281,7 +281,7 @@ class _ProgressBar extends StatelessWidget {
           // jumping percent-by-percent (HIG: determinate progress eases).
           child: TweenAnimationBuilder<double>(
             tween: Tween<double>(begin: 0, end: fraction),
-            duration: MechXMotion.medium,
+            duration: MechXMotion.resolve(context, MechXMotion.medium),
             curve: MechXMotion.standard,
             builder: (context, value, _) => FractionallySizedBox(
               widthFactor: value.clamp(0.0, 1.0),

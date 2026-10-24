@@ -20,6 +20,7 @@ import 'dart:math' as math;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/bom.dart' show bomMaterialFor;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 
@@ -267,6 +268,12 @@ class PipeChain {
   final ServiceType service;
   final int diameterMm;
 
+  /// Resolved material CODE of every segment in the chain (PPR / PVC / CI /
+  /// HDPE / BS / BJLS / PU — [bomMaterialFor], the same code the BOM prices
+  /// under). A material change breaks the chain: you cannot cut PVC from a
+  /// PPR bar. Empty only for a hand-built chain that predates the field.
+  final String material;
+
   /// Stock / section length (m) of this chain's material (4/6 m pipe, 1.2/4 m
   /// duct) — couplings / flange joints fall at its multiples.
   final double stockLengthM;
@@ -275,6 +282,7 @@ class PipeChain {
   const PipeChain({
     required this.service,
     required this.diameterMm,
+    this.material = '',
     required this.stockLengthM,
     required this.lengthM,
     required this.edges,
@@ -296,10 +304,15 @@ List<PipeChain> buildPipeChains({
   required Map<String, EdgeSizing> sizing,
   required Map<String, ScaleCalibration> calibrationBySheet,
   required BuildingLevels building,
+  // Threaded for parity with the solve (audit water-drainage-8); chains are
+  // run-only (calibration lengths), so this never moves a figure today.
+  MountingHeights mounting = const MountingHeights(),
 }) {
-  // Group key per edge so a chain stays uniform (service, diameter AND stock
-  // length, so a BJLS→PU or PVC→steel transition breaks the chain).
-  ({ServiceType s, int mm, double stock})? groupOf(NetEdge e) {
+  // Group key per edge so a chain stays uniform (service, diameter, stock
+  // length AND material, so a BJLS→PU, PVC→steel or PPR→PVC transition breaks
+  // the chain — two materials of equal stock length used to merge into one
+  // pipe and one bar pool).
+  ({ServiceType s, int mm, double stock, String mat})? groupOf(NetEdge e) {
     if (e.kind != EdgeKind.run) return null;
     final es = sizing[e.id];
     if (es == null) return null;
@@ -307,6 +320,7 @@ List<PipeChain> buildPipeChains({
       s: e.service,
       mm: es.diameter.inMillimeters.round(),
       stock: stockLengthForEdge(e),
+      mat: bomMaterialFor(e),
     );
   }
 
@@ -325,7 +339,10 @@ List<PipeChain> buildPipeChains({
     pFrom[e.id] = Offset2(a.x, a.y);
     pTo[e.id] = Offset2(b.x, b.y);
     lenM[e.id] =
-        edgeLength(e, net, calibrationBySheet: calibrationBySheet, building: building)
+        edgeLength(e, net,
+                calibrationBySheet: calibrationBySheet,
+                building: building,
+                mounting: mounting)
             .meters;
   }
 
@@ -345,7 +362,7 @@ List<PipeChain> buildPipeChains({
     if (otherId == viaId) return null;
     final g1 = groupOf(runs[viaId]!)!;
     final g2 = groupOf(runs[otherId]!)!;
-    if (g1.s != g2.s || g1.mm != g2.mm || g1.stock != g2.stock) return null;
+    if (g1 != g2) return null;
     // Direction of the incoming edge AT this node (pointing INTO the node) and
     // of the outgoing edge LEAVING the node; collinear ⇒ small turn.
     final inDir = _dirAtNode(viaId, node, runs, pFrom, pTo, incoming: true);
@@ -402,6 +419,7 @@ List<PipeChain> buildPipeChains({
     chains.add(PipeChain(
       service: g.s,
       diameterMm: g.mm,
+      material: g.mat,
       stockLengthM: g.stock,
       lengthM: cum,
       edges: ordered,
@@ -410,28 +428,40 @@ List<PipeChain> buildPipeChains({
   return chains;
 }
 
-/// A diameter-grouped cut-plan summary for one (service, diameter) of pipe.
+/// A cut-plan summary for one (service, diameter, material) of pipe.
 class PipeCutGroup {
   final ServiceType service;
   final int diameterMm;
+
+  /// Material CODE of the group ([PipeChain.material]); each material is its
+  /// own bar pool. Empty only for a hand-built group without a material.
+  final String material;
   final double stockLengthM;
   final StockCutPlan plan;
   const PipeCutGroup({
     required this.service,
     required this.diameterMm,
+    this.material = '',
     required this.stockLengthM,
     required this.plan,
   });
 }
 
-/// Build the per-(service,diameter) cut plan from the merged chains: each chain
-/// is one continuous pipe whose length is a "piece" packed into that group's
-/// stock bars. Sorted by service then diameter.
+/// Build the per-(service,diameter,material) cut plan from the merged chains:
+/// each chain is one continuous pipe whose length is a "piece" packed into that
+/// group's stock bars. Materials never share a bar pool (a PPR offcut cannot
+/// supply a PVC piece). Sorted by service, then diameter, then material.
 List<PipeCutGroup> buildPipeCutPlan(List<PipeChain> chains) {
-  final byGroup = <({ServiceType s, int mm, double stock}), List<double>>{};
+  final byGroup =
+      <({ServiceType s, int mm, double stock, String mat}), List<double>>{};
   for (final c in chains) {
     if (c.lengthM <= 1e-9) continue;
-    (byGroup[(s: c.service, mm: c.diameterMm, stock: c.stockLengthM)] ??= [])
+    (byGroup[(
+      s: c.service,
+      mm: c.diameterMm,
+      stock: c.stockLengthM,
+      mat: c.material,
+    )] ??= [])
         .add(c.lengthM);
   }
   final groups = <PipeCutGroup>[
@@ -439,6 +469,7 @@ List<PipeCutGroup> buildPipeCutPlan(List<PipeChain> chains) {
       PipeCutGroup(
         service: entry.key.s,
         diameterMm: entry.key.mm,
+        material: entry.key.mat,
         stockLengthM: entry.key.stock,
         plan: planStockCuts(entry.value, entry.key.stock),
       ),
@@ -446,7 +477,9 @@ List<PipeCutGroup> buildPipeCutPlan(List<PipeChain> chains) {
   groups.sort((a, b) {
     final svc = a.service.index.compareTo(b.service.index);
     if (svc != 0) return svc;
-    return a.diameterMm.compareTo(b.diameterMm);
+    final dn = a.diameterMm.compareTo(b.diameterMm);
+    if (dn != 0) return dn;
+    return a.material.compareTo(b.material);
   });
   return groups;
 }

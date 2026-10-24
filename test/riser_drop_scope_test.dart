@@ -47,7 +47,7 @@ Future<ProviderContainer> _openRiserEdit(WidgetTester tester,
     c.read(sheetsControllerProvider.notifier).loadSheets(sheets);
   }
   c.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
-  c.read(schematicViewProvider.notifier).setEditTransform(
+  c.read(schematicEditViewportProvider.notifier).set(
         const ViewportTransform(),
       );
   c.read(schematicViewProvider.notifier).setMode(SchematicMode.edit);

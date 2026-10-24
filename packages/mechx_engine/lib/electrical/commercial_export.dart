@@ -79,7 +79,7 @@ String quotationToMarkdown(
     ..writeln('| Qty | Category | Description | SKU | Unit ($cur) | Total ($cur) |')
     ..writeln('| ---: | --- | --- | --- | ---: | ---: |');
   for (final l in estimate.lines) {
-    b.writeln('| ${_num(l.line.qty)} | ${l.line.category.name} | '
+    b.writeln('| ${quantity(l.line.qty)} | ${l.line.category.name} | '
         '${_md(l.line.description)} | ${_md(l.line.sku ?? '-')} | '
         '${l.unitPrice == null ? '-' : m(l.unitPrice!)} | '
         '${l.lineTotal == null ? '(unpriced)' : m(l.lineTotal!)} |');
@@ -91,7 +91,7 @@ String quotationToMarkdown(
     ..writeln('| Item | Amount ($cur) |')
     ..writeln('| --- | ---: |')
     ..writeln('| Material | ${m(quotation.materialSubtotal)} |')
-    ..writeln('| Labour (${_num(quotation.labourHours)} h) | '
+    ..writeln('| Labour (${quantity(quotation.labourHours)} h) | '
         '${m(quotation.labourSubtotal)} |')
     ..writeln('| Overhead | ${m(quotation.overhead)} |')
     ..writeln('| Contingency | ${m(quotation.contingency)} |')

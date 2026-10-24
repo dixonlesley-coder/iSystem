@@ -8,6 +8,7 @@ import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/electrical/electrical_palette.dart';
 import 'package:mechx/ui/inspector/collapsible_inspector.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/sheets/sheet_rail.dart';
@@ -136,7 +137,7 @@ void main() {
 
     // The electrical Loads column is the inspector now; it is still wrapped.
     expect(find.byType(CollapsibleInspector), findsOneWidget);
-    expect(find.text('Electrical layer'), findsOneWidget);
+    expect(find.byType(ElectricalPalette), findsOneWidget);
 
     await tester.tap(find.bySemanticsLabel('Collapse inspector'));
     await _settle(tester);

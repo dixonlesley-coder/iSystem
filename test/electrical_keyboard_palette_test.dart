@@ -126,4 +126,39 @@ void main() {
     expect(circuitsOn('mdp'), beforeMdp,
         reason: 'the unselected panel should be untouched');
   });
+
+  testWidgets(
+      'the 1ph/3ph segment sets the phase a keyboard-activated Air-con card '
+      'drops', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    container
+        .read(workspaceViewProvider.notifier)
+        .set(WorkspaceView.electrical);
+    container
+        .read(electricalProjectProvider.notifier)
+        .setProject(sampleElectricalProject());
+    await tester.pump();
+
+    expect(find.text('1ph'), findsOneWidget);
+    await tester.tap(find.text('3ph').first);
+    await tester.pump();
+    expect(container.read(palettePhaseProvider), 3);
+
+    await _focusAndActivate(tester, 'Air-con');
+    final added = container
+        .read(electricalProjectProvider)
+        .panels
+        .firstWhere((p) => p.id == 'mdp')
+        .circuits
+        .last;
+    expect(added.phases, 3);
+    expect(added.loadW, 5500);
+  });
 }

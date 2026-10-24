@@ -31,6 +31,7 @@ library;
 
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
 /// Specific heat capacity of water at constant pressure, c [J/(kg·K)].
@@ -63,6 +64,12 @@ class HotWaterRecircDesign {
   /// the return loop.
   final Head loopHead;
 
+  /// Round 16 — the RETURN-leg length the loop head was computed over (the
+  /// [sizeHotWaterRecirculation] `loopLength`), reported separately from the
+  /// head so the report never prints a head in metres of water as if it were
+  /// a pipe length.
+  final Length loopLength;
+
   /// Pump/motor selection for the recirculation duty point.
   final PumpDuty pump;
 
@@ -77,6 +84,7 @@ class HotWaterRecircDesign {
     required this.loopHead,
     required this.pump,
     required this.returnTempC,
+    this.loopLength = const Length(0),
   });
 
   /// `true` when the modelled [returnTempC] falls below the anti-Legionella
@@ -111,6 +119,8 @@ HotWaterRecircDesign sizeHotWaterRecirculation({
   double flowTempC = kHotWaterFlowTempC,
   double hazenWilliamsC = 150.0,
   double density = 1000.0,
+  List<({Length length, Diameter diameter})> supplyPath = const [],
+  List<double>? supplyPathFlowShares,
 }) {
   assert(heatLoss.watts >= 0, 'heatLoss must be non-negative');
   assert(allowableDropK > 0, 'allowableDropK must be positive');
@@ -125,12 +135,38 @@ HotWaterRecircDesign sizeHotWaterRecirculation({
 
   // Friction of driving that flow once around the return loop. Hazen–Williams
   // is the conventional plumbing friction law and folds roughness into C.
-  final loopHead = headLossHazenWilliams(
+  //
+  // Round 16 (plumbing-plant-hw-recirc-loop-head) — the circulating flow also
+  // passes OUT along the circulated supply pipework ([supplyPath], the index
+  // run from the heater, each segment at its OWN sized bore) before the return
+  // leg brings it back, so the loop head is Σ over those segments plus the
+  // return leg. Empty [supplyPath] ⇒ the return leg alone (byte-identical).
+  var loopHeadM = headLossHazenWilliams(
     flow: recircFlow,
     length: loopLength,
     diameter: returnDiameter,
     hazenWilliamsC: hazenWilliamsC,
-  );
+  ).meters;
+  // Round 26 (hot-water-2-multi-loop-full-flow-one-loop) — PARALLEL return
+  // loops each carry only their share of the circulating flow: segment i of
+  // the index loop carries `supplyPathFlowShares[i] × recircFlow` (a shared
+  // trunk the sum of the loops through it, an unshared riser its own loop's
+  // share). Null ⇒ every segment at the full flow (one loop, byte-identical).
+  assert(supplyPathFlowShares == null ||
+      supplyPathFlowShares.length == supplyPath.length);
+  for (var i = 0; i < supplyPath.length; i++) {
+    final seg = supplyPath[i];
+    if (seg.length.meters <= 0 || seg.diameter.meters <= 0) continue;
+    final share = supplyPathFlowShares?[i] ?? 1.0;
+    if (share <= 0) continue;
+    loopHeadM += headLossHazenWilliams(
+      flow: FlowRate(recircFlow.cubicMetersPerSecond * share),
+      length: seg.length,
+      diameter: seg.diameter,
+      hazenWilliamsC: hazenWilliamsC,
+    ).meters;
+  }
+  final loopHead = Head(loopHeadM);
 
   // Select the recirc pump for this (flow, head) duty point using the §8 pump
   // path's default pump/motor efficiencies.
@@ -148,6 +184,7 @@ HotWaterRecircDesign sizeHotWaterRecirculation({
     loopHead: loopHead,
     pump: pump,
     returnTempC: returnTempC,
+    loopLength: loopLength,
   );
 }
 
@@ -160,3 +197,41 @@ Power heatLossFromLength({
   double lossPerMetreW = 25.0, // W/m for insulated DN pipe // VERIFY
 }) =>
     Power(loopLength.meters * lossPerMetreW);
+
+/// Round 16 — the default inside diameter of an UNDRAWN recirculation return
+/// leg (a DN20 return is the common minimum). // VERIFY — confirm against the
+/// drawn return pipe when one is modelled.
+const Diameter kDefaultRecircReturnDiameter = Diameter(0.020);
+
+/// Round 26 (hot-water-2-house-fabricated-recirc-pump) — the developed length
+/// (heater → farthest hot-water fixture, m) above which a hot-water system is
+/// ASSUMED to need recirculation when no return is drawn. IPC 607.2 / UPC
+/// practice: circulation (or heat trace) where the developed length exceeds
+/// ~50 ft (15 m). At or below it (a house, a small wing) no recirc pump, way,
+/// HWR leg or report line is fabricated. `// VERIFY` notAnSniClause.
+const double kRecircMinDevelopedLengthM = 15.0;
+
+/// Round 12 (report-recompute-verify-items-incomplete) — the unverified
+/// constants behind the PRINTED hot-water recirculation line (loop heat loss →
+/// recirc flow), surfaced in the calc report's Unverified section.
+const List<StandardValue<Object?>> hotWaterRecircVerifyChecklist = [
+  StandardValue<Object?>(25.0,
+      unit: 'W/m',
+      citation: 'HW recirculation loop heat loss (heatLossFromLength default)',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Representative 25 W/m loss for insulated DN pipe — general '
+          'practice; verify against the insulation specification.'),
+  StandardValue<Object?>(waterSpecificHeat,
+      unit: 'J/(kg·K)',
+      citation: 'Specific heat of water cp',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Physical property 4186 J/(kg·K) at ~20 °C (varies slightly with '
+          'temperature) — not an SNI clause.'),
+  StandardValue<Object?>(kRecircMinDevelopedLengthM,
+      unit: 'm',
+      citation: 'IPC 607.2 / UPC — HW circulation threshold (developed length)',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Recirculation is assumed only when no return is drawn AND the '
+          'developed length heater → farthest fixture exceeds 15 m (~50 ft) — '
+          'general practice, not an SNI clause.'),
+];

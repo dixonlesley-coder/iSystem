@@ -180,16 +180,17 @@ void main() {
       leafDemand: const {},
       nodeDrainageUnits: const {'f1': 4.0, 'f2': 4.0}, // two WCs (flush tank)
     );
-    // Trunk carries 8 DFU → branch table row (≤12) = 75 mm; a single fixture
-    // branch carries 4 DFU → (≤6) = 65 mm.
-    expect(sized['t']!.diameter.inMillimeters, 75);
-    expect(sized['b1']!.diameter.inMillimeters, 65);
+    // Trunk carries 8 DFU → branch table row (≤12, 2½ in) = 65 mm; a single
+    // fixture branch carries 4 DFU → (≤6, 2 in) = 50 mm (IPC 710.1(2),
+    // Round 30). These are bare DFU loads (no WC node), so no WC floor.
+    expect(sized['t']!.diameter.inMillimeters, 65);
+    expect(sized['b1']!.diameter.inMillimeters, 50);
     expect(sized['t']!.service, ServiceType.drainage);
   });
 
   group('N17 — a drainage stack must never size smaller than a branch feeding it', () {
     // The branch and stack DFU tables disagree at dfu=20: the branch table's
-    // (20, 75) row gives 75 mm while the stack table's (24, 65) row (20 ≤ 24)
+    // (20, 75) row gives 75 mm while the stack table's (20, 65) row (20 ≤ 20)
     // gives only 65 mm for the SAME load — a stack carrying no more DFU than
     // the one branch discharging into it sizes smaller than that branch. This
     // is the exact DN65-stack/DN75-branch violation from the finding.
@@ -229,7 +230,7 @@ void main() {
       // Sanity: confirm the raw table disagreement this finding is about.
       expect(sized['B']!.diameter.inMillimeters, 75); // branch table (20,75)
       // The stack must be raised to match — not left at its own raw 65 mm
-      // (stack table (24,65)) — and the raise must be recorded.
+      // (stack table (20,65)) — and the raise must be recorded.
       expect(sized['R1']!.diameter.inMillimeters, 75);
       expect(sized['R1']!.stackRaisedForBranch, isTrue);
       // Velocity is recomputed at the RAISED diameter, not stale from 65 mm.
@@ -654,9 +655,18 @@ void main() {
         NetEdge(id: 'e', fromId: 'r', toId: 'd', service: ServiceType.duct),
       ],
     );
+    // Audit 2026-10 (air-hvac-4): at the default 1.0 Pa/m target BOTH methods
+    // now land on 600 × 400 (velocity: H = √(0.24/1.5) = 0.4 → 400, W = 600 —
+    // the old 700 × 400 velocity pick was floating-point noise, 1.5·0.4·1000 =
+    // 600.0000000000001 stepping past 600). The two only GENUINELY diverge
+    // when friction governs, so the fixture uses a 0.5 Pa/m target: 600 × 400
+    // carries ≈ 0.555 Pa/m (> 0.5) so equal friction steps to H = 450,
+    // W = roundUp(1.5·450 = 675) = 700 ⇒ 700 × 450 (≈ 0.286 Pa/m, 3.81 m/s),
+    // while velocity stays at the exact-fit 600 × 400.
     const ctx = SizingContext(
       ductShape: DuctShape.rectangular,
       ductMethod: DuctSizingMethod.equalFriction,
+      ductEqualFrictionPa: 0.5,
     );
     final sized = autoSizeNetwork(
       ductNet,

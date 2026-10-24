@@ -16,11 +16,16 @@ import 'package:mechx_engine/electrical/connectivity.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/network/connectivity.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/plan_symbols.dart' show equipmentNodeTags;
 import 'package:mechx_engine/report/riser_tags.dart'
     show drainageStackBasesLackingCleanout;
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show kFireComponentMaxPressureKpa;
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show CheckValveAmbiguity;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
@@ -29,9 +34,19 @@ import '../data/project_document.dart' show IssueAck;
 import '../ui/strings/app_strings.dart';
 import '../ui/strings/plural.dart';
 import 'air_warnings_store.dart';
+import 'annotation_store.dart' show roomAreasProvider, roomSizingProvider, roomTerminalOwnerOf;
 import 'app_state.dart';
 import 'document_control_store.dart';
+import 'electrical_feed.dart' show mepDutyBindingProvider;
 import 'electrical_store.dart';
+import 'fire_store.dart'
+    show
+        fireOverPressureProvider,
+        firePumpDutyProvider,
+        fireSystemBasesProvider,
+        kMinFireStageHeadM,
+        sprinklerPumpCheckProvider;
+import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
 import 'network_store.dart';
 import 'project_store.dart';
@@ -193,21 +208,35 @@ String _verifyLabel(StandardValue<Object?> v) {
 
 /// The aggregated list of design issues, warnings first then info. Read-only:
 /// it never mutates the network, the project, or any standard.
+/// The unconnected-element defects of the (drag-frozen) network, computed ONCE
+/// per edit for the issue fan-in and its batch actions (drafting-feel perf —
+/// each read used to re-walk the whole network).
+final networkElementDefectsProvider = Provider<List<NetworkElementDefect>>(
+    (ref) => networkElementDefects(ref.watch(sizingNetworkProvider)));
+
 final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider);
+  final sheets = ref.watch(sheetsContentProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
   // M3/M4 — the discipline-neutral over-capacity set (air + storm + water),
   // not the air-only view: a clamped downpipe / over-velocity supply pipe used
   // to be computed and dropped.
   final overCapacity = ref.watch(overCapacityEdgesProvider);
+  final belowCodeMinimum = ref.watch(belowCodeMinimumEdgesProvider);
   final waterVelocity = ref.watch(waterVelocityChecksProvider);
   final selfCleansing = ref.watch(selfCleansingDefectsProvider);
   final loopUnbalanced = ref.watch(loopUnbalancedEdgesProvider);
+  final demandExtrapolated = ref.watch(demandCurveExtrapolatedEdgesProvider);
   final drainAdvisories = ref.watch(drainageAdvisoryProvider);
   final legionellaReturnTempC = ref.watch(hotWaterLegionellaProvider);
+  final sprinklerPump = ref.watch(sprinklerPumpCheckProvider);
+  final fireBases = ref.watch(fireSystemBasesProvider);
+  final fireOverPressure = ref.watch(fireOverPressureProvider);
+  final coolingMethod = ref.watch(coolingLoadMethodProvider);
+  final rooms = ref.watch(roomAreasProvider);
+  final hasRooms = rooms.isNotEmpty;
   final docControl = ref.watch(documentControlProvider);
 
   // Wave 5a (H1) — every user-facing title/message resolves through the active
@@ -331,6 +360,19 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
           str(StringKey.issueDuctOverCapacityTitle),
           str(StringKey.issueDuctOverCapacityMessage),
         ),
+      // Audit 2026-10 wd-2 — a horizontal rainwater COLLECTOR is Manning-sized;
+      // past the largest drain it needs splitting, not more downpipes.
+      ServiceType.rainwater when edge.kind != EdgeKind.riser => (
+          'storm-collector-over-capacity',
+          str(StringKey.issueStormCollectorOverCapacityTitle),
+          str(StringKey.issueStormCollectorOverCapacityMessage),
+        ),
+      // Audit 2026-10 wd-4 — the DFU load is past the top row of its table.
+      ServiceType.drainage || ServiceType.vent => (
+          'drainage-over-capacity',
+          str(StringKey.issueDrainageOverCapacityTitle),
+          str(StringKey.issueDrainageOverCapacityMessage),
+        ),
       ServiceType.rainwater => (
           'storm-over-capacity',
           str(StringKey.issueStormOverCapacityTitle),
@@ -347,6 +389,22 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       kind: kind,
       title: title,
       message: message,
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
+  // ── 2b-i. Hand-picked gravity size BELOW the code minimum (warning) ───────
+  // Round 17 (gravity-3-1) — a drain / vent / downpipe override smaller than
+  // the DFU / WC-count / trap floor or the downpipe / Manning capacity.
+  for (final id in belowCodeMinimum) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'gravity-below-code-minimum',
+      title: str(StringKey.issueBelowCodeMinimumTitle),
+      message: str(StringKey.issueBelowCodeMinimumMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }
@@ -402,15 +460,26 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // genuinely exists. An ADVISORY, not a warning: the diameter is still legal,
   // and the honest remedies are the design slope (a Building-page input) or
   // grouping more discharge onto the branch.
+  //
+  // Service-aware: a RAINWATER collector carries no DFU table and no grouped
+  // fixture discharge — it is auto-sized on the storm runoff alone — so the
+  // drainage copy ("group more discharge onto the branch", "larger than the
+  // DFU minimum") is false for it. It gets its own kind + copy whose only
+  // lever is the one it genuinely has: the laid slope.
   for (final id in selfCleansing) {
     final edge = edgeById[id];
     if (edge == null) continue;
     final sheetId = sheetForEdge(edge);
+    final rainwater = edge.service == ServiceType.rainwater;
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
-      kind: 'drainage-self-cleansing',
-      title: str(StringKey.issueSelfCleansingTitle),
-      message: str(StringKey.issueSelfCleansingMessage),
+      kind: rainwater ? 'rainwater-self-cleansing' : 'drainage-self-cleansing',
+      title: str(rainwater
+          ? StringKey.issueRainwaterSelfCleansingTitle
+          : StringKey.issueSelfCleansingTitle),
+      message: str(rainwater
+          ? StringKey.issueRainwaterSelfCleansingMessage
+          : StringKey.issueSelfCleansingMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }
@@ -462,6 +531,23 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 2b-iii-b. Demand past the charted curve (audit 2026-10 wd-6, info) ─────
+  // The UBAP → flow curve is continued linearly beyond its last charted point
+  // (3000 UBAP) instead of clamping flat; the extrapolated flow is surfaced as
+  // an advisory so the engineer confirms the main / pump flow.
+  for (final id in demandExtrapolated) {
+    final edge = edgeById[id];
+    if (edge == null) continue;
+    final sheetId = sheetForEdge(edge);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'demand-curve-extrapolated',
+      title: str(StringKey.issueDemandCurveExtrapolatedTitle),
+      message: str(StringKey.issueDemandCurveExtrapolatedMessage),
+      locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
+    ));
+  }
+
   // ── 2b-iv. Unsettled ring: Hardy-Cross did not converge (M17, warning) ─────
   // The carried flow still satisfies continuity at every node, but the loop
   // head-loss balance was never achieved — so the split, and every size derived
@@ -470,17 +556,26 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final edge = edgeById[id];
     if (edge == null) continue;
     final sheetId = sheetForEdge(edge);
+    // Round 12 — on a GRAVITY service the flag marks a loop's CLOSING edge
+    // (nearest-outlet tree, sized on the larger adjacent load), not a
+    // Hardy–Cross non-convergence: say so.
+    final gravity = edge.service.regime == FlowRegime.gravity;
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: 'loop-unbalanced',
-      title: str(StringKey.issueLoopUnbalancedTitle),
-      message: str(StringKey.issueLoopUnbalancedMessage),
+      title: str(gravity
+          ? StringKey.issueGravityLoopTitle
+          : StringKey.issueLoopUnbalancedTitle),
+      message: str(gravity
+          ? StringKey.issueGravityLoopMessage
+          : StringKey.issueLoopUnbalancedMessage),
       locate: sheetId == null ? null : IssueLocation(sheetId, edgeId: id),
     ));
   }
 
   // ── 2b-v. Duty past the largest standard motor frame (M11, info) ───────────
-  // `selectMotor` CLAMPS at the 75 kW top of the standard ladder; without this
+  // `selectMotor` CLAMPS at the top of the standard ladder (315 kW since
+  // Round 21; 75 kW before); without this
   // the app printed a 75 kW motor for a 90 kW duty on the canvas, the schedule,
   // the BOM and the electrical feed with no hint the frame had saturated.
   // Non-locatable (it is a plant duty, not a drawn element).
@@ -499,6 +594,136 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       kind: 'pump-motor-oversized',
       title: str(StringKey.issueMotorOversizedTitle),
       message: str(StringKey.issuePumpMotorOversizedMessage),
+    ));
+  }
+  // Round 21 (fire-3-motor-ladder-clamp-feeds-electrical) — the fire pump
+  // too: its NFPA 20 governing point past the 315 kW ladder top.
+  if (ref.watch(firePumpDutyProvider)?.motorOversized ?? false) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'fire-pump-motor-oversized',
+      title: str(StringKey.issueMotorOversizedTitle),
+      message: str(StringKey.issueFirePumpMotorOversizedMessage),
+    ));
+  }
+  // Round 21 review (fire-3-parallel-fire-pumps) — three or more identical
+  // fire pumps: the last-drawn one was ASSUMED to be the jockey (fed a small
+  // pressure-maintenance duty). Name it so the engineer can confirm or draw
+  // the jockey on its own smaller leg.
+  final assumedJockeys =
+      ref.watch(mepDutyBindingProvider).fireAssumedJockeyPumpNodeIds.toList()
+        ..sort();
+  if (assumedJockeys.isNotEmpty) {
+    final tags = equipmentNodeTags(net);
+    for (final id in assumedJockeys) {
+      final n = net.nodeById(id);
+      if (n == null) continue;
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'fire-jockey-assumed:$id',
+        title: str(StringKey.issueFireJockeyAssumedTitle),
+        message: str.format(StringKey.issueFireJockeyAssumedMessage,
+            {'tag': tags[id] ?? id}),
+        locate: IssueLocation(n.sheetId, nodeId: id),
+      ));
+    }
+  }
+  // Round 53 (regression-stage-head-clamp-silent) — a series fire-pump
+  // stage whose own derivation was below the minimum stage head was raised
+  // to it: judge-only (the pump head is unchanged), locatable to the
+  // stage's duty pump.
+  {
+    final tags = equipmentNodeTags(net);
+    for (final b in fireBases) {
+      for (final st in b.stages) {
+        final from = st.clampedFromM;
+        if (from == null) continue;
+        final n = net.nodeById(st.dutyPumpId);
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'fire-stage-head-clamped:${st.dutyPumpId}',
+          title: str(StringKey.issueFireStageHeadClampedTitle),
+          message: str.format(StringKey.issueFireStageHeadClampedMessage, {
+            'tag': tags[st.dutyPumpId] ?? st.dutyPumpId,
+            'from': from.toStringAsFixed(2),
+            'min': kMinFireStageHeadM.toStringAsFixed(1),
+          }),
+          locate: n == null ? null : IssueLocation(n.sheetId, nodeId: n.id),
+        ));
+      }
+    }
+  }
+  // Round 27 r3 (binding check-valve decision) — the drawn direction of a
+  // check valve is authoritative: a hot-water valve read as a FEED into a
+  // loop the heater already feeds is sized as drawn (it carries draw-off).
+  // Topology cannot tell a genuine second feed from a recirculation return
+  // drawn backwards, so name it (judge-only) instead of re-reading it.
+  final feedsRing = ref.watch(checkValveFeedsRingProvider).toList()..sort();
+  for (final id in feedsRing) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'check-valve-feeds-ring:$id',
+      title: str(StringKey.issueCheckValveFeedsRingTitle),
+      message: str(StringKey.issueCheckValveFeedsRingMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
+  // Round 27 r5 (binding check-valve decision) — a cycle check valve drawn
+  // with NO direction cannot be read from topology: the sizer assumed it
+  // conservatively (closed return / plain pipe / standby leg). Name each so
+  // the engineer redraws it instead of trusting the assumption.
+  final ambiguousValves = ref.watch(checkValveAmbiguousProvider);
+  for (final id in ambiguousValves.keys.toList()..sort()) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'check-valve-ambiguous:$id',
+      // Round 27 r6 — a DRAWN valve pointing back at its own pump / the
+      // source is not direction-less: it carries its own title.
+      // Round 27 r7 — the envelope and the balance-against-pump readings
+      // carry their own titles too.
+      title: str(switch (ambiguousValves[id]!) {
+        CheckValveAmbiguity.drawnAgainstSupplyLeg =>
+          StringKey.issueCheckValveAgainstSupplyTitle,
+        CheckValveAmbiguity.envelope => StringKey.issueCheckValveEnvelopeTitle,
+        CheckValveAmbiguity.balanceAgainstPump =>
+          StringKey.issueCheckValveAgainstPumpTitle,
+        _ => StringKey.issueCheckValveAmbiguousTitle,
+      }),
+      message: str(switch (ambiguousValves[id]!) {
+        CheckValveAmbiguity.closedReturn =>
+          StringKey.issueCheckValveAmbiguousClosedMessage,
+        CheckValveAmbiguity.plainPipe =>
+          StringKey.issueCheckValveAmbiguousPipeMessage,
+        CheckValveAmbiguity.standbySet =>
+          StringKey.issueCheckValveAmbiguousStandbyMessage,
+        CheckValveAmbiguity.supplyLeg =>
+          StringKey.issueCheckValveAmbiguousSupplyMessage,
+        CheckValveAmbiguity.drawnAgainstSupplyLeg =>
+          StringKey.issueCheckValveAgainstSupplyMessage,
+        CheckValveAmbiguity.envelope =>
+          StringKey.issueCheckValveEnvelopeMessage,
+        CheckValveAmbiguity.balanceAgainstPump =>
+          StringKey.issueCheckValveAgainstPumpMessage,
+      }),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
+  // Round 27 r8 — a VALVELESS pump leg whose balanced split runs against
+  // the drawn pump: sized on the envelope (leg closed / leg open), never
+  // backwards through the pump. Named on the pump node.
+  for (final id in ref.watch(moverAgainstBalanceProvider).toList()..sort()) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'mover-against-balance:$id',
+      title: str(StringKey.issueMoverAgainstBalanceTitle),
+      message: str(StringKey.issueMoverAgainstBalanceMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
     ));
   }
   if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
@@ -537,9 +762,17 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // compliance PASS on its own). We escalate only the edge-bearing ones; the
   // title is kept ('… calibrated') so the compliance roll-up and any title
   // match still catch it.
+  // Round 34 — only RUN edges count: a riser's length is the §10 true-
+  // elevation delta (golden rule 3), independent of any calibration, so a
+  // sheet holding only riser ends has nothing that sizes to zero and stays
+  // an advisory.
+  final nodeSheet = {for (final n in net.nodes) n.id: n.sheetId};
   final sheetsWithEdges = <String>{
-    for (final n in net.nodes)
-      if (net.edgesAt(n.id).isNotEmpty) n.sheetId,
+    for (final e in net.edges)
+      if (e.kind == EdgeKind.run) ...[
+        if (nodeSheet[e.fromId] != null) nodeSheet[e.fromId]!,
+        if (nodeSheet[e.toId] != null) nodeSheet[e.toId]!,
+      ],
   };
   for (final s in sheets.sheets) {
     if (project.calibrationFor(s.id) != null) continue;
@@ -617,23 +850,73 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // fed one is a branch that fell off the rooted tree. Both are detected by the
   // pure engine helper (read-only — never resizes). Locate via a representative
   // node's sheet. Gravity services are skipped (a drain has no source).
+  // Round 34 — the nodes of components already reported as no-source /
+  // island: their loose ends are the SAME defect, never a second and third
+  // row (one isolated 2-node riser read as three issues).
+  final componentReportedNodes = <String>{};
   for (final d in networkConnectivityDefects(net)) {
     final repId = d.representativeNodeId;
     final repNode = repId == null ? null : nodeById[repId];
+    // The stable, locale-independent ack key keeps the enum identifier; the
+    // message prints the localized human service name (R6).
     final service = d.service.name;
+    final serviceName = str(_serviceNameKey(d.service));
     final n = d.nodeIds.length;
+    // Round 25 — a water network fed straight from the mains through a drawn
+    // meter is not a drawing defect: an ACKNOWLEDGEABLE info (the mains
+    // pressure is not modelled), never the blocking no-source warning that a
+    // direct-from-PDAM building could only clear by drawing a fake tank.
+    if (d.isMainsFed) {
+      // Round 29 (ui-journeys-3-feed-shown-three-ways) — on the UPFEED
+      // setting the solve sizes an assumed upfeed pump at the meter (the
+      // schedule + electrical feed carry it), so 'mains pressure is not
+      // modelled' would contradict them: ONE story — the pump is assumed,
+      // not drawn.
+      if (ref.watch(feedStrategyProvider) == FeedStrategy.upfeed &&
+          d.service == ServiceType.coldWater) {
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'upfeed-pump-assumed:$service',
+          title: str(StringKey.issueUpfeedAssumedTitle),
+          message: str.format(StringKey.issueUpfeedAssumedMessage, {
+            'service': serviceName,
+            'nodes': pluralCount(n, str(StringKey.issueNounNodeOne),
+                str(StringKey.issueNounNodeMany)),
+          }),
+          locate: repNode == null
+              ? null
+              : IssueLocation(repNode.sheetId, nodeId: repId),
+        ));
+        continue;
+      }
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'mains-fed:$service',
+        title: str(StringKey.issueMainsFedTitle),
+        message: str.format(StringKey.issueMainsFedMessage, {
+          'service': serviceName,
+          'nodes': pluralCount(n, str(StringKey.issueNounNodeOne),
+              str(StringKey.issueNounNodeMany)),
+        }),
+        locate: repNode == null
+            ? null
+            : IssueLocation(repNode.sheetId, nodeId: repId),
+      ));
+      continue;
+    }
     final title = d.isIsland
         ? str(StringKey.issueNetworkIslandTitle)
         : str(StringKey.issueNetworkNoSourceTitle);
     final defectKind =
         d.isIsland ? 'network-island:$service' : 'no-source:$service';
+    componentReportedNodes.addAll(d.nodeIds);
     final nodeWord = pluralCount(
         n, str(StringKey.issueNounNodeOne), str(StringKey.issueNounNodeMany));
     final message = d.isIsland
         ? str.format(StringKey.issueNetworkIslandMessage,
-            {'service': service, 'nodes': nodeWord})
+            {'service': serviceName, 'nodes': nodeWord})
         : str.format(StringKey.issueNetworkNoSourceMessage,
-            {'service': service, 'nodes': nodeWord});
+            {'service': serviceName, 'nodes': nodeWord});
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: defectKind,
@@ -652,7 +935,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // (`networkElementDefects`) — never resizes. Each defect is its OWN warning
   // (a per-node `kind` so acking/fixing one never hides the others), locatable
   // via the node's sheet.
-  for (final d in networkElementDefects(net)) {
+  for (final d in ref.watch(networkElementDefectsProvider)) {
+    // Round 34 — a loose end of a component already reported above is not
+    // repeated (orphans keep their own row).
+    if (!d.isOrphan && componentReportedNodes.contains(d.nodeId)) continue;
     final node = nodeById[d.nodeId];
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
@@ -711,6 +997,198 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     }
   }
 
+  // ── 3e. UPFEED fixture over-pressure (mech-building-2) ─────────────────────
+  // The downfeed PRV zones above are compliant by construction and say
+  // nothing about an UPFEED riser, whose pump delivers nearly its whole head
+  // to the lowest fixtures. Each delivery node whose flowing residual or
+  // no-flow static exceeds the SNI max fixture pressure is its own WARNING; at
+  // the mandatory pressure-relief threshold it is CRITICAL. Judge-only,
+  // locatable to the node.
+  final overPressure = ref.watch(upfeedOverPressureProvider);
+  if (overPressure.isNotEmpty) {
+    const sni = SniProfile();
+    final maxFixKpa = sni.maxFixtureStaticPressure.value.inKiloPascals;
+    final reliefKpa = sni.mandatoryPressureReliefThreshold.value.inKiloPascals;
+    final floors = project.building.floors;
+    for (final o in overPressure) {
+      final node = nodeById[o.nodeId];
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      warnings.add(DesignIssue(
+        severity:
+            o.overRelief ? IssueSeverity.critical : IssueSeverity.warning,
+        kind: 'upfeed-over-pressure:${o.nodeId}',
+        title: o.overRelief
+            ? str(StringKey.issueUpfeedOverReliefTitle)
+            : str(StringKey.issueUpfeedOverPressureTitle),
+        message: str.format(StringKey.issueUpfeedOverPressureMessage, {
+          'floor': floorName,
+          'flowing': o.flowing.inKiloPascals.toStringAsFixed(0),
+          'static': o.noFlow.inKiloPascals.toStringAsFixed(0),
+          'limit': maxFixKpa.toStringAsFixed(0),
+          'relief': reliefKpa.toStringAsFixed(0),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: o.nodeId),
+      ));
+    }
+  }
+
+  // ── 3f. DOWNFEED fixture over-pressure (Round 16) ─────────────────────────
+  // The zone table above assumes a PRV at every zone top; this judges what is
+  // DRAWN: the gravity solve holds each drawn PRV's setpoint, and any delivery
+  // node still over the SNI fixture maximum is a WARNING (CRITICAL at the
+  // mandatory relief threshold). Judge-only, locatable to the node.
+  final downOver = ref.watch(downfeedOverPressureProvider);
+  if (downOver.isNotEmpty) {
+    const sni = SniProfile();
+    final maxFixKpa = sni.maxFixtureStaticPressure.value.inKiloPascals;
+    final reliefKpa = sni.mandatoryPressureReliefThreshold.value.inKiloPascals;
+    final floors = project.building.floors;
+    for (final o in downOver) {
+      final node = nodeById[o.nodeId];
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      warnings.add(DesignIssue(
+        severity:
+            o.overRelief ? IssueSeverity.critical : IssueSeverity.warning,
+        kind: 'downfeed-over-pressure:${o.nodeId}',
+        title: o.overRelief
+            ? str(StringKey.issueDownfeedOverReliefTitle)
+            : str(StringKey.issueDownfeedOverPressureTitle),
+        message: str.format(StringKey.issueDownfeedOverPressureMessage, {
+          'floor': floorName,
+          'flowing': o.flowing.inKiloPascals.toStringAsFixed(0),
+          'static': o.noFlow.inKiloPascals.toStringAsFixed(0),
+          'limit': maxFixKpa.toStringAsFixed(0),
+          'relief': reliefKpa.toStringAsFixed(0),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: o.nodeId),
+      ));
+    }
+  }
+
+  // ── 3g. DOWNFEED below the target residual (Round 25) ─────────────────────
+  // A drawn roof tank whose gravity head (less friction) leaves the worst-
+  // served delivery node below the target residual needs a booster or a
+  // higher tank. Judged on what the drawn system DELIVERS (sized boosters
+  // running); the inspector card and the calc report already say 'boost', so
+  // Review / compliance must not stay silent (an under-pressure downfeed could
+  // print PASS). Judge-only, locatable to the critical node.
+  //
+  // Round 32 (binding-1) — TWO thresholds, ONE kind: the 225 kPa target is a
+  // COMFORT target; the SNI 8153 floor is the minimum delivery pressure at
+  // the critical node (49 kPa at a faucet, 98 kPa when a flush valve lies on
+  // its supply path — [downfeedSniMinimumResidualProvider]). Below the SNI
+  // floor ⇒ a blocking WARNING citing it; between floor and target ⇒ an
+  // acknowledgeable INFO advisory ('SNI minimum met, booster recommended').
+  // The kind stays `downfeed-below-target` so acks / compliance matching hold.
+  //
+  // Round 33 (regression-sni-minimum-judged-only-at-critical-node) — the SNI
+  // floor is judged at EVERY delivery node against its OWN floor
+  // ([downfeedSniFloorsProvider]): a flush-valve WC at 83 kPa elsewhere
+  // fails although the faucet-fed critical node meets its 49 kPa. Below any
+  // floor ⇒ the warning names the LARGEST shortfall node (its floor, its
+  // residual, locate); otherwise the info advisory at the critical node.
+  if (ref.watch(gravityDownfeedDrawnProvider)) {
+    final delivered = ref.watch(downfeedDeliveredProvider);
+    if (delivered != null && !delivered.gravitySufficient) {
+      final short = worstSniShortfall(
+          floors: ref.watch(downfeedSniFloorsProvider),
+          residual: delivered.residualPressure);
+      final belowSni = short != null;
+      final node = nodeById[short?.nodeId ?? delivered.criticalNodeId];
+      final floors = project.building.floors;
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      final sniMin = short?.floor ??
+          ref.watch(downfeedSniMinimumResidualProvider) ??
+          const SniProfile().minResidualPressureFaucet.value;
+      final residualShown = short?.residual ?? delivered.minResidual;
+      warnings.add(DesignIssue(
+        severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
+        kind: 'downfeed-below-target',
+        title: str(belowSni
+            ? StringKey.issueDownfeedBelowTargetTitle
+            : StringKey.issueDownfeedBelowComfortTitle),
+        message: str.format(
+            belowSni
+                ? StringKey.issueDownfeedBelowTargetMessage
+                : StringKey.issueDownfeedBelowComfortMessage,
+            {
+          'floor': floorName,
+          'sni': sniMin.inKiloPascals.toStringAsFixed(0),
+          'residual': residualShown.inKiloPascals.toStringAsFixed(0),
+          'target': ref
+              .watch(targetResidualProvider)
+              .inKiloPascals
+              .toStringAsFixed(0),
+          'head': delivered.boosterHeadRequired.meters.toStringAsFixed(1),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: node.id),
+      ));
+    }
+  }
+
+  // ── 3h. UPFEED below the target residual (Round 25 follow-up) ─────────────
+  // The upfeed pump is sized so every delivery node meets the target — unless
+  // a drawn reducing PRV cuts the field afterwards (Round 23:
+  // `targetHeldByDesign` false, critical node re-picked as the least-residual
+  // delivery node). Then the shortfall is a real finding: Review says so and
+  // the compliance 'Supply pressure' row claims it, never a vacuous PASS.
+  // Round 32 (binding-1) — the same SNI-floor / comfort-target split as 3g.
+  // Round 33 — judged on the DELIVERED upfeed field (drawn movers at their
+  // own duties, [upfeedDeliveredProvider]) with the per-node SNI floor.
+  final upfeed = ref.watch(upfeedDeliveredProvider);
+  if (upfeed != null && !upfeed.targetHeldByDesign) {
+    final target = ref.watch(targetResidualProvider);
+    final critical = upfeed.residualPressure[upfeed.criticalNodeId];
+    if (critical != null &&
+        critical.inKiloPascals < target.inKiloPascals - 0.5) {
+      final short = worstSniShortfall(
+          floors: ref.watch(upfeedSniFloorsProvider),
+          residual: upfeed.residualPressure);
+      final belowSni = short != null;
+      final worst = short?.residual ?? critical;
+      final node = nodeById[short?.nodeId ?? upfeed.criticalNodeId];
+      final floors = project.building.floors;
+      final floorName = node == null || floors.isEmpty
+          ? ''
+          : floors[node.floorIndex.clamp(0, floors.length - 1)].name;
+      final sniMin = short?.floor ??
+          ref.watch(upfeedSniMinimumResidualProvider) ??
+          const SniProfile().minResidualPressureFaucet.value;
+      warnings.add(DesignIssue(
+        severity: belowSni ? IssueSeverity.warning : IssueSeverity.info,
+        kind: 'upfeed-below-target',
+        title: str(belowSni
+            ? StringKey.issueUpfeedBelowTargetTitle
+            : StringKey.issueUpfeedBelowComfortTitle),
+        message: str.format(
+            belowSni
+                ? StringKey.issueUpfeedBelowTargetMessage
+                : StringKey.issueUpfeedBelowComfortMessage,
+            {
+          'floor': floorName,
+          'sni': sniMin.inKiloPascals.toStringAsFixed(0),
+          'residual': worst.inKiloPascals.toStringAsFixed(0),
+          'target': target.inKiloPascals.toStringAsFixed(0),
+        }),
+        locate: node == null
+            ? null
+            : IssueLocation(node.sheetId, nodeId: node.id),
+      ));
+    }
+  }
+
   // ── 4. Drainage advisories: too-flat slope / over-long branch (info) ────────
   // Each advisory is edge-locatable via the edge's `from` node sheet. Title is
   // fixed (golden-friendly); the engine message carries the specifics.
@@ -725,6 +1203,10 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       DrainageAdvisoryKind.developedLength => (
           str(StringKey.issueDrainageLengthTitle),
           'drainage-length'
+        ),
+      DrainageAdvisoryKind.laidSteeperThanProject => (
+          str(StringKey.issueDrainageLaidSteeperTitle),
+          'drainage-laid-steeper'
         ),
     };
     infos.add(DesignIssue(
@@ -765,6 +1247,263 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 5a-bis. Sprinkler demand vs the one scheduled fire pump (audit r8) ──────
+  // Judge-only: the fire pump is rated on the standpipe duty; a drawn sprinkler
+  // system whose design-area demand / pressure that pump cannot meet is a real
+  // design finding (warning — blocks a PASS, never acknowledgeable).
+  if (sprinklerPump != null && sprinklerPump.flowShort) {
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'sprinkler-flow-exceeds-fire-pump',
+      title: str(StringKey.issueSprinklerFlowTitle),
+      message: str.format(StringKey.issueSprinklerFlowMessage, {
+        'demand': sprinklerPump.demandLps.toStringAsFixed(1),
+        'pump': sprinklerPump.pumpLps.toStringAsFixed(1),
+      }),
+    ));
+  }
+  if (sprinklerPump != null && sprinklerPump.headShort) {
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'sprinkler-head-exceeds-fire-pump',
+      title: str(StringKey.issueSprinklerHeadTitle),
+      message: str.format(StringKey.issueSprinklerHeadMessage, {
+        'need': sprinklerPump.requiredHeadM.toStringAsFixed(1),
+        'pump': sprinklerPump.pumpHeadM.toStringAsFixed(1),
+      }),
+    ));
+  }
+
+  // ── 5a-ter. Combined fire system rated on its sprinkler point (warning) ───
+  // Round 37 r2 — a combined sprinkler + hydrant system is rated on the
+  // LARGER head at that basis's own flow (never Σ of the two conditions).
+  // When the sprinkler head wins, the rated point carries the small
+  // remote-area flow, so the hose (standpipe) flow at the standpipe head is
+  // not a rated point of the pump — judge-only, never resizes; locatable to
+  // the duty pump.
+  for (final b in fireBases) {
+    final st = b.standpipe;
+    if (!b.sprinklerGovernsCombined || st == null) continue;
+    final pumpNode =
+        b.pumpIds.isEmpty ? null : net.nodeById(b.pumpIds.first);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'combined-fire-sprinkler-governs'
+          '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      title: str(StringKey.issueCombinedFireSprinklerGovernsTitle),
+      message: str.format(StringKey.issueCombinedFireSprinklerGovernsMessage, {
+        'sprHead': b.head.meters.toStringAsFixed(1),
+        'sprFlow': b.flow.inLitersPerSecond.toStringAsFixed(1),
+        'hoseFlow': st.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+        'hoseHead': st.pumpHead.meters.toStringAsFixed(1),
+      }),
+      locate: pumpNode == null
+          ? null
+          : IssueLocation(pumpNode.sheetId, nodeId: pumpNode.id),
+    ));
+  }
+
+  // Round 50 (fire-convergence-2-gravity-roof-tank-fire-system-gets-phantom-
+  // pump) — a GRAVITY fire system (roof tank, no pump drawn) whose tank
+  // leaves less head at its most demanding terminal than it needs:
+  // judge-only, locatable to the tank.
+  for (final b in fireBases) {
+    if (!b.gravityHeadShort) continue;
+    final src = b.gravitySourceId == null
+        ? null
+        : net.nodeById(b.gravitySourceId!);
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'fire-gravity-head-insufficient'
+          '${b.gravitySourceId == null ? '' : ':${b.gravitySourceId}'}',
+      title: str(StringKey.issueFireGravityHeadTitle),
+      message: str.format(StringKey.issueFireGravityHeadMessage, {
+        // Round 50 r2 — friction can exceed the static drop (a negative
+        // available head): print the head left, never below zero.
+        'avail': (b.gravityAvailableHeadM! < 0 ? 0.0 : b.gravityAvailableHeadM!)
+            .toStringAsFixed(1),
+        'need': b.gravityRequiredHeadM!.toStringAsFixed(1),
+      }),
+      locate: src == null ? null : IssueLocation(src.sheetId, nodeId: src.id),
+    ));
+  }
+
+  // Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — a fire
+  // pump whose churn pressure exceeds the standard component rating
+  // (175 psi): judge-only, locatable to the duty pump.
+  for (final o in fireOverPressure) {
+    final b = o.basis;
+    // Round 52 — located at the pump whose discharge sees the maximum (a
+    // series stage's own duty pump), else the system's duty pump.
+    final pumpNode = o.pumpId != null
+        ? net.nodeById(o.pumpId!)
+        : b.pumpIds.isEmpty
+            ? null
+            : net.nodeById(b.pumpIds.first);
+    final share = o.check.frictionShare;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'fire-system-over-pressure'
+          '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      title: str(StringKey.issueFireOverPressureTitle),
+      message: str.format(StringKey.issueFireOverPressureMessage, {
+        'churn': o.check.churnKpa.toStringAsFixed(0),
+        'limit': kFireComponentMaxPressureKpa.toStringAsFixed(0),
+        'head': b.head.meters.toStringAsFixed(1),
+        'share': share == null
+            ? ''
+            : str.format(StringKey.issueFireOverPressureShare,
+                {'pct': (share * 100).toStringAsFixed(0)}),
+      }),
+      locate: pumpNode == null
+          ? null
+          : IssueLocation(pumpNode.sheetId, nodeId: pumpNode.id),
+    ));
+  }
+
+  // ── 5a-quater. Room terminals stale vs the room requirement (warning) ──────
+  // Round 17 follow-up (ui-journeys-3-room-terminals-stale-airflow) — Auto-
+  // place stamps a FIXED airflow on each terminal; changing the room's type,
+  // ACH or ceiling afterwards left the plan (duct sizing, fan duty, BOM) on the
+  // old airflow while the Rooms inspector / equipment schedule showed the new
+  // requirement — two airflows for one system, with no warning. Judge-only:
+  // for each scaled room carrying terminals with an airflow, the placed supply
+  // (diffusers) and extract (return / exhaust grilles) sums are compared with
+  // the room's sized banks; a > 1 % difference — or a now-extract-only room
+  // still carrying supply diffusers — warns, locatable to a terminal.
+  //
+  // Round 19 (regression-room-stale-nested-rooms-false-warning) — each
+  // terminal belongs to exactly ONE room: the smallest room containing it
+  // whose kind it serves (a supply diffuser / return grille → a conditioned
+  // room, an exhaust grille → an extract-only room), else the smallest room
+  // containing it at all (so a stale diffuser left in a now-extract room still
+  // warns). Summing every terminal inside every footprint counted a toilet's
+  // exhaust grille as the surrounding office's extract (1.167 vs 1.000 m3/s on
+  // freshly auto-placed terminals — a warning Auto-place can never clear).
+  final roomSizing = ref.watch(roomSizingProvider);
+  final terminalOwner = <String, String?>{
+    for (final n in net.nodes)
+      if ((isSupplyAirTerminal(n.component) ||
+              n.component == NodeComponent.returnGrille ||
+              n.component == NodeComponent.exhaustGrille) &&
+          n.airflow != null)
+        n.id: roomTerminalOwnerOf(n, rooms),
+  };
+  // Each room's terminals, bucketed ONCE in node order (the per-room scan of
+  // every node in the building was O(rooms x nodes) per edit).
+  final terminalsByRoom = <String, List<NetNode>>{};
+  for (final n in net.nodes) {
+    final owner = terminalOwner[n.id];
+    if (owner != null) (terminalsByRoom[owner] ??= <NetNode>[]).add(n);
+  }
+  for (final r in rooms) {
+    final sizing = roomSizing[r.id];
+    if (sizing == null) continue;
+    var placedSupply = 0.0;
+    var placedExtract = 0.0;
+    var supplyCount = 0;
+    var extractCount = 0;
+    String? firstTerminal;
+    for (final n in terminalsByRoom[r.id] ?? const <NetNode>[]) {
+      final c = n.component;
+      final isSupply = isSupplyAirTerminal(c);
+      final isExtract = c == NodeComponent.returnGrille ||
+          c == NodeComponent.exhaustGrille;
+      if (!isSupply && !isExtract) continue;
+      final q = n.airflow;
+      if (q == null) continue;
+      if (terminalOwner[n.id] != r.id) continue;
+      firstTerminal ??= n.id;
+      if (isSupply) {
+        placedSupply += q.cubicMetersPerSecond;
+        supplyCount++;
+      } else {
+        placedExtract += q.cubicMetersPerSecond;
+        extractCount++;
+      }
+    }
+    if (firstTerminal == null) continue;
+    final reqSupply =
+        sizing.supply.count * sizing.supply.airflowEach.cubicMetersPerSecond;
+    final reqExtract =
+        sizing.return_.count * sizing.return_.airflowEach.cubicMetersPerSecond;
+    bool stale(double placed, double required, int count) {
+      if (count == 0) return false; // that bank has nothing placed to judge
+      if (required <= 0) return placed > 0;
+      return (placed - required).abs() / required > 0.01;
+    }
+
+    final String? bank;
+    final double placed;
+    final double required;
+    if (stale(placedSupply, reqSupply, supplyCount)) {
+      bank = str(StringKey.issueRoomBankSupply);
+      placed = placedSupply;
+      required = reqSupply;
+    } else if (stale(placedExtract, reqExtract, extractCount)) {
+      bank = str(StringKey.issueRoomBankExtract);
+      placed = placedExtract;
+      required = reqExtract;
+    } else {
+      bank = null;
+      placed = 0;
+      required = 0;
+    }
+    if (bank == null) continue;
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'room-terminals-stale:${r.id}',
+      title: str(StringKey.issueRoomTerminalsStaleTitle),
+      message: str.format(StringKey.issueRoomTerminalsStaleMessage, {
+        'room': r.name.isEmpty ? r.id : r.name,
+        'placed': placed.toStringAsFixed(3),
+        'required': required.toStringAsFixed(3),
+        'bank': bank,
+      }),
+      locate: IssueLocation(r.sheetId, nodeId: firstTerminal),
+    ));
+  }
+
+  // ── 5a-quinquies. Room trunk over capacity (warning) ──────────────────────
+  // Round 27 (hvac-4-4) — a room whose airflow exceeds the largest standard
+  // trunk is CLAMPED by `sizeRoomAir` (`trunkOverCapacity`); the Rooms
+  // inspector used to print the clamped size as 'sized' with nothing in
+  // Review, unlike the drawn-network duct (`airOverCapacityProvider`).
+  for (final r in rooms) {
+    final sizing = roomSizing[r.id];
+    if (sizing == null || !sizing.trunkOverCapacity) continue;
+    final round = sizing.supplyDuctRound;
+    final rect = sizing.supplyDuctRect;
+    final size = round != null
+        ? 'D${round.diameter.inMillimeters.round()} mm'
+        : '${rect!.width.inMillimeters.round()}x'
+            '${rect.height.inMillimeters.round()} mm';
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'room-trunk-over-capacity:${r.id}',
+      title: str(StringKey.issueRoomTrunkOverCapacityTitle),
+      message: str.format(StringKey.issueRoomTrunkOverCapacityMessage, {
+        'room': r.name.isEmpty ? r.id : r.name,
+        'flow': sizing.airflow.cubicMetersPerSecond.toStringAsFixed(2),
+        'size': size,
+        'velocity': sizing.supplyDuctVelocity.metersPerSecond.toStringAsFixed(1),
+      }),
+      locate: IssueLocation(r.sheetId),
+    ));
+  }
+
+  // ── 5a-ter. AC basis honesty (audit r8 fire-hvac-4) ────────────────────────
+  // The 'Internal gains' basis omits envelope transmission + solar; while it is
+  // active (and rooms exist) the engineer is told so — an INFO advisory.
+  if (coolingMethod == CoolingLoadMethod.detailed && hasRooms) {
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'cooling-internal-gains-only',
+      title: str(StringKey.issueCoolingInternalOnlyTitle),
+      message: str(StringKey.issueCoolingInternalOnlyMessage),
+    ));
+  }
+
   // ── 5b. Electrical sizing warnings (fanned in from the solved system) ───────
   // Every ElectricalWarning the A4 orchestrator raises (cable-ampacity, voltage
   // drop, earthing, phase imbalance, …) becomes a DesignIssue so the one Review
@@ -789,8 +1528,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       // 'Electrical: cable ampacity inadequate'), the engine message carries
       // the specifics.
       kind: 'electrical:${w.code}',
-      title: str.format(
-          StringKey.issueElectricalTitle, {'code': w.code.replaceAll('-', ' ')}),
+      // Round 34 — a localized human title, never the raw code.
+      title: str.format(StringKey.issueElectricalTitle,
+          {'code': str.electricalWarningTitle(w.code)}),
       message: w.message,
       locate: w.panelId == null
           ? null
@@ -811,7 +1551,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // fed by any feeder — a board wired to nothing. Detected read-only by the pure
   // engine (`electricalConnectivityDefects`). Located on the single-line via the
   // panel id (the Review row jumps to the Electrical workspace + focuses it).
-  final electricalProject = ref.watch(electricalProjectProvider);
+  final electricalProject = ref.watch(electricalSizingProjectProvider);
   for (final d in electricalConnectivityDefects(electricalProject)) {
     final panel =
         electricalProject.panels.where((p) => p.id == d.panelId).firstOrNull;
@@ -871,7 +1611,11 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       // [isVerify] stays the flag the compliance roll-up + provenance dot read.
       kind: 'verify:${v.citation}',
       title: str.format(StringKey.issueUnverifiedTitle, {'name': _verifyLabel(v)}),
-      message: v.note ?? v.citation,
+      // Round 34 (ui-simplicity-5-verify-rows-research-notes) — a short,
+      // localized action naming the source; the full provenance note (a
+      // research log) stays in the calc report's Unverified-values section.
+      message: str.format(
+          StringKey.issueUnverifiedMessage, {'citation': v.citation}),
       isVerify: true,
     ));
   }
@@ -882,8 +1626,14 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   for (final v in const SniVentilationProfile().verifyChecklist) {
     addVerify(v);
   }
-  for (final v in const PuilProfile().verifyChecklist) {
-    addVerify(v);
+  // Round 31 (ui-simplicity-4) — the PUIL (electrical) verification debt is
+  // surfaced only once the project HAS electrical panels: a fresh project
+  // never shows a Review badge for electrical constants nothing uses. The
+  // electrical calc report keeps printing the full list (guardrail 6).
+  if (electricalProject.panels.isNotEmpty) {
+    for (final v in const PuilProfile().verifyChecklist) {
+      addVerify(v);
+    }
   }
 
   return [...criticals, ...warnings, ...infos];
@@ -931,19 +1681,40 @@ class AcknowledgedIssuesController extends Notifier<Map<String, IssueAck>> {
   /// Replace the whole map (used by `applyDocument` on load).
   void set(Map<String, IssueAck> acks) => state = Map.unmodifiable(acks);
 
+  /// Round 25 (ui-journeys-4-undo-skips-riser-drag-and-acknowledge) — every
+  /// forward acknowledgement edit is persisted in `.mechx`, so it records ONE
+  /// [UndoDomain.settings] step on the global timeline (a registered revert
+  /// pair restoring the previous map). Ctrl+Z after 'Acknowledge all' used to
+  /// revert an older, unrelated edit instead. [set] / [clear] (load, new
+  /// document) stay non-recording.
+  void _commit(Map<String, IssueAck> next) {
+    final previous = state;
+    final applied = Map<String, IssueAck>.unmodifiable(next);
+    state = applied;
+    ref.read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+          label: MechXStringsData(ref.read(localeProvider))(
+              StringKey.undoLabelAcknowledge),
+          undo: () => state = previous,
+          redo: () => state = applied,
+        ));
+  }
+
   /// Acknowledge one advisory by its [DesignIssue.key], recording who accepted
   /// it ([author]), an optional one-line [note], and the app-stamped [date]
   /// (the engine never reads the clock; the caller passes today's date).
   void acknowledge(String key,
           {String author = '', String note = '', String date = ''}) =>
-      state = Map.unmodifiable({
+      _commit({
         ...state,
         key: IssueAck(key: key, author: author, note: note, date: date),
       });
 
-  /// Withdraw an acknowledgement (the row blocks again).
-  void unacknowledge(String key) =>
-      state = Map.unmodifiable({...state}..remove(key));
+  /// Withdraw an acknowledgement (the row blocks again). A no-op (nothing
+  /// recorded) when [key] is not acknowledged.
+  void unacknowledge(String key) {
+    if (!state.containsKey(key)) return;
+    _commit({...state}..remove(key));
+  }
 
   /// Toggle the acknowledgement of [key].
   void toggle(String key,
@@ -954,15 +1725,17 @@ class AcknowledgedIssuesController extends Notifier<Map<String, IssueAck>> {
 
   /// Acknowledge every currently-OPEN acknowledgeable issue at once (the Review
   /// "Acknowledge all advisories" affordance), stamping them with ONE audit
-  /// record ([author]/[note]/[date]). [keys] is the set of acknowledgeable issue
-  /// keys the caller derived from [designIssuesProvider].
+  /// record ([author]/[note]/[date]) — ONE undo step. [keys] is the set of
+  /// acknowledgeable issue keys the caller derived from [designIssuesProvider].
   void acknowledgeAll(Iterable<String> keys,
-          {String author = '', String note = '', String date = ''}) =>
-      state = Map.unmodifiable({
-        ...state,
-        for (final k in keys)
-          k: IssueAck(key: k, author: author, note: note, date: date),
-      });
+      {String author = '', String note = '', String date = ''}) {
+    if (keys.isEmpty) return;
+    _commit({
+      ...state,
+      for (final k in keys)
+        k: IssueAck(key: k, author: author, note: note, date: date),
+    });
+  }
 
   void clear() => state = const {};
 }
@@ -988,7 +1761,7 @@ final openDesignIssueCountProvider = Provider<int>((ref) {
 /// edges that actually appear in the sizing map are considered, so an empty /
 /// fully-calibrated network returns 0 and the gate is inert.
 final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   final sizing = ref.watch(sizingProvider);
   var count = 0;
@@ -999,6 +1772,7 @@ final zeroLengthSizedEdgeCountProvider = Provider<int>((ref) {
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
+      mounting: project.mounting,
     );
     if (len.meters <= 0) count++;
   }
@@ -1019,7 +1793,7 @@ final exportHasZeroLengthEdgesProvider =
 /// instruction. Empty ⇒ the gate is inert (byte-identical). An edge whose
 /// endpoint node is missing contributes nothing (never invents a sheet).
 final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>[];
@@ -1031,6 +1805,7 @@ final zeroLengthSheetIdsProvider = Provider<List<String>>((ref) {
       net,
       calibrationBySheet: project.calibrations,
       building: project.building,
+      mounting: project.mounting,
     );
     if (len.meters > 0) continue;
     final sheetId = net.nodeById(e.fromId)?.sheetId;
@@ -1103,9 +1878,9 @@ class IssueBatchAction {
 /// [designIssuesProvider] (not from issue titles). Empty when there's nothing to
 /// batch — so a clean design surfaces no actions.
 final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider);
+  final sheets = ref.watch(sheetsContentProvider);
   final velocity = ref.watch(airVelocityChecksProvider);
   final unsized = ref.watch(airUnsizedProvider);
   final str = MechXStringsData(ref.watch(localeProvider));
@@ -1179,7 +1954,7 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
       if (edgeIds.contains(id)) id,
   };
   final unconnected = <String>{
-    for (final d in networkElementDefects(net)) d.nodeId,
+    for (final d in ref.watch(networkElementDefectsProvider)) d.nodeId,
   };
   void addSelect(IssueBatchKind kind, StringKey template,
       {Set<String> n = const {}, Set<String> e = const {}}) {
@@ -1242,3 +2017,18 @@ final issueBatchActionsProvider = Provider<List<IssueBatchAction>>((ref) {
 
   return actions;
 });
+
+/// The [StringKey] of a service's human, in-sentence name (R6) — what a
+/// design-issue message prints instead of the [ServiceType] identifier.
+StringKey _serviceNameKey(ServiceType s) => switch (s) {
+      ServiceType.coldWater => StringKey.issueServiceColdWater,
+      ServiceType.hotWater => StringKey.issueServiceHotWater,
+      ServiceType.drainage => StringKey.issueServiceDrainage,
+      ServiceType.vent => StringKey.issueServiceVent,
+      ServiceType.rainwater => StringKey.issueServiceRainwater,
+      ServiceType.duct => StringKey.issueServiceSupplyAir,
+      ServiceType.returnAir => StringKey.issueServiceReturnAir,
+      ServiceType.exhaust => StringKey.issueServiceExhaust,
+      ServiceType.fireSprinkler => StringKey.issueServiceSprinkler,
+      ServiceType.fireHydrant => StringKey.issueServiceHydrant,
+    };

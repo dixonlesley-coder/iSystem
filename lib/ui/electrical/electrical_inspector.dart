@@ -20,9 +20,12 @@ import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart'
     show ElectricalCircuitResult, ElectricalPanelResult, PhaseAssignment;
+import 'package:mechx_engine/report/electrical_calc_report.dart'
+    show vdropPctForVerdict;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
-    show breakerScheduleLabel, cableLabel;
-import 'package:mechx_engine/standards/puil.dart' show BreakerClass, PuilProfile;
+    show breakerScheduleLabel, cableRunLabel;
+import 'package:mechx_engine/standards/puil.dart'
+    show BreakerClassCode, PuilProfile;
 import 'package:mechx_engine/units.dart';
 
 import '../../store/electrical_store.dart';
@@ -78,11 +81,13 @@ List<ElectricalMenuAction> feedChooserItems({
   required List<({String id, String label})> candidates,
   required String? currentLabel,
   required void Function(String fromPanelId) onPick,
+  String currentSuffix = ' (current)',
 }) =>
     [
       for (final c in candidates)
         if (currentLabel != null && c.label == currentLabel)
-          ElectricalMenuAction('${c.label} (current)', () {}, selected: true)
+          ElectricalMenuAction('${c.label}$currentSuffix', () {},
+              selected: true)
         else
           ElectricalMenuAction(c.label, () => onPick(c.id)),
     ];
@@ -212,7 +217,7 @@ class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
       v == v.roundToDouble() ? v.round().toString() : v.toString();
 
   static String _cls(double ratingA) =>
-      _profile.breakerClassFor(ratingA) == BreakerClass.mcb ? 'MCB' : 'MCCB';
+      _profile.breakerClassFor(ratingA).code;
 
   String get _breakerValue {
     final ov = _circuit?.breakerOverrideA;
@@ -442,11 +447,15 @@ class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
           ElectricalMenuAction(
               context.strings(StringKey.electricalShowInSingleLine),
               widget.onShowInSingleLine!),
-        ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
-            () {
-          controller.deleteCircuit(target.panelId, target.circuitId);
-          onDone();
-        }, danger: true),
+        // Round 22 — an MEP-derived way follows its equipment on the plan;
+        // the store refuses its delete, so the menu does not offer it.
+        if (widget.circuit?.sourceEquipmentId == null &&
+            !controller.isMepDerivedWay(target.panelId, target.circuitId))
+          ElectricalMenuAction(context.strings(StringKey.electricalMenuDelete),
+              () {
+            controller.deleteCircuit(target.panelId, target.circuitId);
+            onDone();
+          }, danger: true),
       ],
     );
   }
@@ -547,6 +556,8 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
           ...feedChooserItems(
             candidates: widget.feedCandidates,
             currentLabel: widget.fedFromLabel,
+            currentSuffix:
+                context.strings(StringKey.electricalFeedCurrentSuffix),
             onPick: (id) {
               widget.onFeedFrom!(id);
               onDone();
@@ -656,11 +667,12 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
             controller.disconnectFeeder(panel.id);
             onDone();
           }),
-        ElectricalMenuAction(
-            context.strings(StringKey.electricalMenuDeletePanel), () {
-          controller.deletePanel(panel.id);
-          onDone();
-        }, danger: true),
+        if (!controller.isMepBoardLocked(panel.id))
+          ElectricalMenuAction(
+              context.strings(StringKey.electricalMenuDeletePanel), () {
+            controller.deletePanel(panel.id);
+            onDone();
+          }, danger: true),
       ],
     );
   }
@@ -738,6 +750,26 @@ class ElectricalCircuitInspector extends StatelessWidget {
   bool get _isMotor =>
       circuit.loadKind == LoadKind.motor || circuit.loadKind == LoadKind.pump;
 
+  /// Round 42 (elec-ui-journey-3-starter-survives-rekind-unclearable) — the
+  /// kinds whose starter the advanced study sizes + buys (motor / pump /
+  /// HVAC): the picker shows wherever the field has an effect, so it can
+  /// always be seen and cleared.
+  bool get _takesStarter => _isMotor || circuit.loadKind == LoadKind.hvac;
+
+  /// Round 42 (elec-props-8-star-delta-on-single-phase-way) — a star-delta
+  /// starter needs a three-phase motor: not offered on a way that solves
+  /// single-phase or sits on a single-phase board.
+  bool get _starDeltaPossible =>
+      (panelSystem ?? panel.system).isThreePhase &&
+      !(circuitResult != null ? !circuitResult!.threePhase : circuit.phases == 1);
+
+  /// Round 40 — an MEP-DERIVED way (it carries a `sourceEquipmentId`): its
+  /// machine power and life-safety duty follow the drawn equipment, so the
+  /// inspector shows them read-only (the store refuses the edit anyway).
+  bool get _machineOwned =>
+      circuit.sourceEquipmentId != null &&
+      circuit.sourceEquipmentId!.isNotEmpty;
+
   /// True when the length in force comes from the calibrated layout — the
   /// manual field is then READ-ONLY (editing it would be a lie: the geo length
   /// wins in `resolveCircuitLengthDetailed`).
@@ -788,11 +820,19 @@ class ElectricalCircuitInspector extends StatelessWidget {
     final poles = c.threePhase ? 3 : 1;
     final ka = breakerIcuKa;
     final icu = (ka != null && ka > 0) ? ' · Icu ${fmtNum(ka)}kA' : '';
+    // Round 42 (elec-ui-journey-3-inspector-protection-diverges-from-
+    // schedule) — the schedule's own inputs: a 1φ FEEDER off a 3φ board is a
+    // 2-pole device, and a time-delayed (TT feeder) RCD carries ' S'.
+    final twoPole = circuit.feedsPanelId != null &&
+        !c.threePhase &&
+        (panelSystem ?? panel.system).isThreePhase;
     final rcd = c.rcd.required
         ? ' · RCD ${c.rcd.ratingMa}mA'
             '${c.rcd.type != null ? ' ${fmtRcdType(c.rcd.type!)}' : ''}'
+            '${c.rcd.timeDelayed ? ' S' : ''}'
         : '';
-    return '${breakerScheduleLabel(c.breaker, poles)}$icu$rcd';
+    return '${breakerScheduleLabel(c.breaker, poles, twoPole: twoPole)}'
+        '$icu$rcd';
   }
 
   /// The read-only RESULT rows for this way — Ib, protection, cable, voltage
@@ -805,10 +845,20 @@ class ElectricalCircuitInspector extends StatelessWidget {
     final rows = <Widget>[];
     final c = circuitResult;
     if (c != null) {
+      // Round 17 follow-up — the RUN current the way's device, conductor and
+      // printed Vd are sized on (the electrical report's Ib), so In / Vd can be
+      // recomputed from the figure shown; the diversified design current (the
+      // phase-balance / incomer basis) follows when it differs.
       rows.add(ElectricalResultRow(
         label: 'Ib',
-        value: '${fmtNum(c.designCurrent.amperes)} A',
+        value: '${fmtNum(c.runCurrentA.amperes)} A',
       ));
+      if ((c.runCurrentA.amperes - c.designCurrent.amperes).abs() > 1e-9) {
+        rows.add(ElectricalResultRow(
+          label: context.strings(StringKey.electricalIbDiversified),
+          value: '${fmtNum(c.designCurrent.amperes)} A',
+        ));
+      }
       final protection = _protectionLine();
       if (protection != null) {
         rows.add(ElectricalResultRow(
@@ -822,14 +872,26 @@ class ElectricalCircuitInspector extends StatelessWidget {
         label: 'Cable',
         // G5: the REAL core count from the sized grounding, matching the
         // schedule's PENGHANTAR cell exactly.
-        value:
-            '${cableLabel(circuit, c.cable.csaMm2, c.threePhase, cores: c.grounding.cores)} mm2',
+        // Round 42 — a star-delta way's field run is its two motor leads
+        // (the schedule's PENGHANTAR cell).
+        value: c.motorLeads != null
+            ? 'leads ${cableRunLabel(circuit, c.motorLeads!.csaMm2, true, cores: 4, runs: 2 * (c.motorLeads!.runsPerPhase ?? 1), peCsaMm2: c.motorLeadsPeCsaMm2)}'
+            : cableRunLabel(circuit, c.cable.csaMm2, c.threePhase,
+                cores: c.grounding.cores,
+                runs: c.cable.runsPerPhase,
+                peCsaMm2: c.grounding.peCsaMm2,
+                neutralCsaMm2: c.grounding.neutralCsaMm2),
       ));
       final vd = c.voltageDrop;
+      // Round 42 — printed in its verdict's direction (the calc report's
+      // `vdropPctForVerdict`): an over-limit drop never reads AT the limit.
+      final isFeeder = circuit.feedsPanelId != null;
+      final cumOver = !isFeeder &&
+          c.cumulativeDropPercent > vd.limitPercent + 1e-9;
       rows.add(ElectricalResultRow(
         label: 'Vdrop',
-        value: '${vd.dropPercent.toStringAsFixed(1)} %'
-            ' · cum ${c.cumulativeDropPercent.toStringAsFixed(1)} %'
+        value: '${vdropPctForVerdict(vd.dropPercent, limit: vd.limitPercent, over: !vd.withinLimit)} %'
+            ' · cum ${vdropPctForVerdict(c.cumulativeDropPercent, limit: vd.limitPercent, over: cumOver)} %'
             ' (max ${fmtNum(vd.limitPercent)} %)',
         valueColor: vd.withinLimit ? null : colors.danger,
       ));
@@ -912,7 +974,13 @@ class ElectricalCircuitInspector extends StatelessWidget {
                     ),
                     ElectricalField(
                       label: context.strings(StringKey.electricalFieldLoadKind),
-                      child: ElectricalEnumPicker<LoadKind>(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                      ElectricalEnumPicker<LoadKind>(
+                        // Round 41 — the drawn machine owns its kind (the
+                        // store refuses a re-kind of an MEP-derived way).
+                        enabled: !_machineOwned,
                         value: circuit.loadKind,
                         options: const [
                           LoadKind.general,
@@ -939,30 +1007,70 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           loadKind: k,
                         ),
                       ),
+                      if (_machineOwned)
+                        ElectricalHint(context.strings(
+                            StringKey.electricalFromDrawnMachine)),
+                        ],
+                      ),
                     ),
+                    // Round 40 — an MEP-derived way's power follows the drawn
+                    // machine (the store refuses an edit); shown greyed with
+                    // the one place to change it named.
                     if (_isMotor)
                       ElectricalField(
                         label:
                             context.strings(StringKey.electricalFieldMotorPower),
-                        child: ElectricalNumInput(
-                          value: circuit.motorKw ?? 0,
-                          onChanged: (v) => controller.setCircuit(
-                            panel.id,
-                            circuit.id,
-                            motorKw: v,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            ElectricalNumInput(
+                              // Round 42 — a way still sized on its W (no
+                              // motor power yet) shows that load as shaft kW,
+                              // never a misleading 0.
+                              value: circuit.motorKw ??
+                                  (circuit.flaOverrideA == null
+                                      ? circuit.loadW *
+                                          kAssumedMotorEfficiency /
+                                          1000
+                                      : 0),
+                              enabled: !_machineOwned,
+                              // Round 11 — a negative shaft power is rejected
+                              // (the min-only bound is now enforced on its own).
+                              min: 0,
+                              onChanged: (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                motorKw: v,
+                              ),
+                            ),
+                            if (_machineOwned)
+                              ElectricalHint(context.strings(
+                                  StringKey.electricalFromDrawnMachine)),
+                          ],
                         ),
                       )
                     else
                       ElectricalField(
                         label: context.strings(StringKey.electricalFieldLoadW),
-                        child: ElectricalNumInput(
-                          value: circuit.loadW,
-                          onChanged: (v) => controller.setCircuit(
-                            panel.id,
-                            circuit.id,
-                            loadW: v,
-                          ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            ElectricalNumInput(
+                              value: circuit.loadW,
+                              enabled: !_machineOwned,
+                              // Round 11 — a negative load gave a negative Ib
+                              // that was SUBTRACTED from the board demand.
+                              min: 0,
+                              onChanged: (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                loadW: v,
+                              ),
+                            ),
+                            if (_machineOwned)
+                              ElectricalHint(context.strings(
+                                  StringKey.electricalFromDrawnMachine)),
+                          ],
                         ),
                       ),
                     // §10 — when both ends are placed on a calibrated sheet the
@@ -981,6 +1089,9 @@ class ElectricalCircuitInspector extends StatelessWidget {
                                 ? _lengthInForce.meters
                                 : circuit.length.meters,
                             enabled: !_lengthFromLayout,
+                            // Round 11 — a run is at least 0.1 m: zero or a
+                            // negative length made Vd% pass by construction.
+                            min: kMinCircuitRunLengthM,
                             onChanged: (v) => controller.setCircuit(
                               panel.id,
                               circuit.id,
@@ -1103,11 +1214,13 @@ class ElectricalCircuitInspector extends StatelessWidget {
                       label:
                           context.strings(StringKey.electricalToggleLifeSafety),
                       value: circuit.lifeSafety,
-                      onChanged: (v) => controller.setCircuit(
-                        panel.id,
-                        circuit.id,
-                        lifeSafety: v,
-                      ),
+                      onChanged: _machineOwned
+                          ? null
+                          : (v) => controller.setCircuit(
+                                panel.id,
+                                circuit.id,
+                                lifeSafety: v,
+                              ),
                     ),
                     // E4 — expert electrical parameters (power factor, demand
                     // factor, cable class) are demoted under a collapsed
@@ -1130,7 +1243,10 @@ class ElectricalCircuitInspector extends StatelessWidget {
                             // idiom below the field), not silently clamped.
                             child: ElectricalNumInput(
                               value: circuit.cosPhi,
-                              min: 0.0,
+                              // Round 11 — cos phi 0 is an unbounded current
+                              // (P / (U·0)); the engine silently sized it at
+                              // Ib 0 A, so the field's floor is 0.1.
+                              min: kMinCircuitCosPhi,
                               max: 1.0,
                               onChanged: (v) => controller.setCircuit(
                                 panel.id,
@@ -1263,16 +1379,19 @@ class ElectricalCircuitInspector extends StatelessWidget {
                           // schedule drafter appends as a control token
                           // (DOL / VFD / star-delta) on the way's DEVICE cell.
                           // "None" clears it back to a bare breaker cell.
-                          if (_isMotor)
+                          if (_takesStarter)
                             ElectricalField(
                               label: context
                                   .strings(StringKey.electricalFieldStarter),
                               child: ElectricalEnumPicker<StarterType?>(
                                 value: circuit.starterType,
-                                options: const [
+                                options: [
                                   null,
                                   StarterType.dol,
-                                  StarterType.starDelta,
+                                  if (_starDeltaPossible ||
+                                      circuit.starterType ==
+                                          StarterType.starDelta)
+                                    StarterType.starDelta,
                                   StarterType.reversing,
                                   StarterType.softStarter,
                                   StarterType.vfd,
@@ -1315,7 +1434,7 @@ class ElectricalCircuitInspector extends StatelessWidget {
     // the iOS sheet idiom — the Layout-canvas electrical layer path.
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       builder: (context, t, child) => Opacity(
         opacity: t,
@@ -1420,7 +1539,13 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
     if (r != null) {
       rows.add(ElectricalResultRow(
         label: 'Demand',
-        value: '${fmtAmp(r.demandCurrent.amperes)} · ${fmtKw(r.demandW)}',
+        // Round 19 — a diversified board pairs the DIVERSIFIED current with
+        // its diversified kW and labels the undiversified worst-phase sizing
+        // current (the schedule header's `div (max ph … undiv)` basis).
+        value: r.isDiversified
+            ? '${fmtAmp(r.diversifiedDemandCurrent.amperes)} div · max ph '
+                '${fmtAmp(r.demandCurrent.amperes)} · ${fmtKw(r.demandW)}'
+            : '${fmtAmp(r.demandCurrent.amperes)} · ${fmtKw(r.demandW)}',
       ));
       rows.add(ElectricalResultRow(
         label: 'Incomer',
@@ -1522,6 +1647,10 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                     // drop-a-floating-load flow) can become the 3-phase sub-board
                     // a design needs without delete-and-recreate (which would
                     // lose every way). EN literal — Wave 5 owns i18n.
+                    // Round 39 (elec-ui-journeys-2) — gated off the MEP
+                    // board, like the context-menu System row: its ways
+                    // follow the machines on the plan (3-phase 400 V mint).
+                    if (panel.id != kMepEquipmentPanelId)
                     ElectricalField(
                       label: 'Electrical system',
                       child: ElectricalEnumPicker<ElectricalSystem>(
@@ -1587,6 +1716,8 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                                 items: feedChooserItems(
                                   candidates: widget.feedCandidates,
                                   currentLabel: widget.fedFromLabel,
+                                  currentSuffix: context.strings(
+                                      StringKey.electricalFeedCurrentSuffix),
                                   onPick: (id) {
                                     widget.onFeedFrom!(id);
                                     setState(() => _feedChooser = false);
@@ -1733,7 +1864,7 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
     // same iOS sheet idiom as the circuit inspector.
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       builder: (context, t, child) => Opacity(
         opacity: t,

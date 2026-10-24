@@ -224,16 +224,63 @@ void main() {
   // ────────────────────────────────────────────────────────────────────────
 
   group('FOLD 2 — sizeNeutralPeBars triplen oversize (pure)', () {
-    test('factor 1.73 steps a 24 mm² phase bar up the ladder to 50 mm²', () {
-      // √3 ≈ 1.732; target = 24·1.732 = 41.57 → next standard section ≥ = 50.
+    test('factor 1.73 steps a 24 mm² phase bar up the BAR ladder to 45 mm²', () {
+      // Re-derived Round 11: the neutral steps the copper FLAT-BAR ladder
+      // (24, 45, 60, …), not the cable ladder (… 35, 50 …). target = 24·1.73
+      // = 41.52 → the first bar ≥ it is the 15×3 = 45 mm² bar.
       final n = sizeNeutralPeBars(24, const Current(110),
           profile: p, neutralOversizeFactor: 1.73, triplenFraction: 1.0);
-      expect(n.neutralCsaMm2, 50);
+      expect(n.neutralCsaMm2, 45);
       expect(n.neutralOversizeFactor, 1.73);
       expect(n.triplenFraction, 1.0);
       expect(n.peCsaMm2, 16); // PE unchanged (16 < 24 ≤ 35 ⇒ 16)
       // The bar's continuous rating still tracks the phase bar.
       expect(n.neutralAmpacityA.amperes, 110);
+    });
+
+    test('a 500 mm² bar (> the 300 mm² cable top) still oversizes: → 1000 mm²',
+        () {
+      // Round 11 regression: target = 500·1.73 = 865 mm² — beyond every CABLE
+      // rung, so the old ladder found nothing and the neutral collapsed to
+      // 500 mm² with factor 1 / fraction 0 (warning suppressed). The bar ladder
+      // gives 100×10 = 1000 mm².
+      final n = sizeNeutralPeBars(500, const Current(800),
+          profile: p, neutralOversizeFactor: 1.73, triplenFraction: 1.0);
+      expect(n.neutralCsaMm2, 1000);
+      expect(n.neutralOversizeFactor, 1.73);
+      expect(n.triplenFraction, 1.0);
+    });
+
+    test('beyond the largest bar the neutral is ceil(target), never the phase',
+        () {
+      // 1000 mm² · 1.73 = 1730 → no bar ≥ it → ceil(1730) = 1730 mm².
+      final n = sizeNeutralPeBars(1000, const Current(1430),
+          profile: p, neutralOversizeFactor: 1.73, triplenFraction: 1.0);
+      expect(n.neutralCsaMm2, 1730);
+      expect(n.neutralOversizeFactor, 1.73);
+    });
+
+    // Round 11 property: for EVERY bar on the ladder and every oversize factor
+    // > 1, the neutral is ≥ phase·factor, strictly larger than the phase bar,
+    // and either a real bar rung or (beyond the ladder) ceil(target) — the
+    // oversize is never silently dropped.
+    test('property: factor > 1 ⇒ neutral ≥ target, > phase, a bar or ceil', () {
+      final bars = [for (final b in p.copperBusbarTable) b.csaMm2];
+      for (final phase in bars) {
+        for (final f in const [1.1, 1.25, 1.5, 1.73]) {
+          final n = sizeNeutralPeBars(phase, const Current(100),
+              profile: p, neutralOversizeFactor: f, triplenFraction: 0.5);
+          final target = phase * f;
+          expect(n.neutralCsaMm2, greaterThanOrEqualTo(target - 1e-9),
+              reason: '$phase × $f');
+          expect(n.neutralCsaMm2, greaterThan(phase), reason: '$phase × $f');
+          final isBar = bars.contains(n.neutralCsaMm2);
+          expect(isBar || n.neutralCsaMm2 == target.ceilToDouble(), isTrue,
+              reason: '$phase × $f → ${n.neutralCsaMm2}');
+          expect(n.neutralOversizeFactor, f);
+          expect(n.triplenFraction, 0.5);
+        }
+      }
     });
 
     test('regression: factor 1.0 → neutral = phase bar (byte-identical)', () {
@@ -275,12 +322,19 @@ void main() {
       // factor = √3 rounded 2 dp = 1.73.
       expect(npe.neutralOversizeFactor, 1.73);
       expect(npe.triplenFraction, 1.0);
-      // Neutral = smallest standard section ≥ phaseBar·1.73.
-      final target = phaseBar * 1.73;
-      final expectedN =
-          p.standardSectionsMm2.firstWhere((s) => s >= target);
+      // Re-derived Round 44 — the factor scales the CURRENT: the neutral is
+      // max(phase bar, the smallest bar whose AMPACITY ≥ 1.73 × the sizing
+      // current). 4000 W / (220 × 0.9) = 20.2 A ⇒ 1.73 × 20.2 ≈ 35 A, which
+      // the smallest bar (the phase bar itself) already carries — so the
+      // full-size neutral is NOT grown (it used to be phase CSA × 1.73).
+      final needA = 1.73 * pr.busbar.totalCurrentA.amperes;
+      final ampBar = p.copperBusbarTable
+          .firstWhere((b) => b.ampacityA.amperes >= needA)
+          .csaMm2;
+      final expectedN = ampBar > phaseBar ? ampBar : phaseBar;
       expect(npe.neutralCsaMm2, expectedN);
-      expect(npe.neutralCsaMm2, greaterThan(phaseBar));
+      expect(npe.neutralCsaMm2, phaseBar);
+      expect(npe.oversized, isFalse);
       // Surfaced as a warning so it reaches the schedule.
       expect(
         sys.warnings.map((w) => w.code),

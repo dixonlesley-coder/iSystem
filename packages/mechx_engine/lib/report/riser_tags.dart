@@ -14,9 +14,11 @@
 /// app's `FeedStrategy` enum.
 library;
 
+import 'package:mechx_engine/geometry/building.dart' show BuildingLevels;
 import 'package:mechx_engine/network/network.dart';
-import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
-import 'package:mechx_engine/sizing/pump.dart' show PumpDuty;
+import 'package:mechx_engine/report/number_format.dart'
+    show signedElevationText;
+import 'package:mechx_engine/units.dart' show Power;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
 /// the single-line pipe tag (e.g. `100-CW-PPR-BOOSTER`).
@@ -52,7 +54,7 @@ String riserServiceCode(ServiceType s) => switch (s) {
 /// the exported [buildMechanicalRiserSld] SldSheet so the working view and the
 /// issued deliverable read the elevation identically (E6). [meters] is the SI
 /// elevation; this is a display formatter only (no unit maths).
-String fflLabel(double meters) => 'FFL +${meters.toStringAsFixed(2)}';
+String fflLabel(double meters) => 'FFL ${signedElevationText(meters)}';
 
 bool _isSupplyTank(NodeComponent? c) =>
     c == NodeComponent.groundTank || c == NodeComponent.pump ||
@@ -72,9 +74,31 @@ bool _serviceHasPump(Network net, ServiceType service) {
   return false;
 }
 
+/// Round 15 (drafting-visual-2-2) — true when [edge]'s connected component of
+/// its own service contains a ROOF TANK (the source a gravity downfeed hangs
+/// from). Pure BFS over the service's edges.
+bool _componentHasRoofTank(Network net, NetEdge edge) {
+  final adj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != edge.service) continue;
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final seen = <String>{edge.fromId};
+  final stack = [edge.fromId];
+  while (stack.isNotEmpty) {
+    final n = stack.removeLast();
+    if (net.nodeById(n)?.component == NodeComponent.roofTank) return true;
+    for (final m in adj[n] ?? const <String>[]) {
+      if (seen.add(m)) stack.add(m);
+    }
+  }
+  return false;
+}
+
 /// Best-effort FUNCTION classification for [edge] on the single-line.
 ///
-/// Returns null for air services and for any case that is NOT confidently
+/// Returns null for every service but cold / hot water, and for any case NOT confidently
 /// derivable (the tag then stays exactly `100-CW-PPR`). Heuristic — each rule is
 /// // VERIFY (drawing-convention inference, not an SNI clause):
 ///
@@ -90,10 +114,36 @@ bool _serviceHasPump(Network net, ServiceType service) {
 /// When two rules could fire prefer TRANSFER; if STILL ambiguous return null.
 // VERIFY heuristic — appends a function suffix only when confidently derivable;
 // ambiguous => null (no suffix). Drawing-convention inference, not an SNI clause.
+///
+/// Round 16 (regression-riser-function-transfer-scheme-mislabelled) — when
+/// the solve's recorded flow direction is supplied ([flowFrom]: edge id -> the
+/// node its flow comes FROM, i.e. `EdgeSizing.flowFromId`) and covers [edge],
+/// the function is read from the FLOW PATH instead of the two endpoints
+/// ([_flowFunction]): walking upstream to the first plant item, an edge fed
+/// through a pump / booster set is TRANSFER when a storage tank lies
+/// downstream of it (the tank-filling lift, its tank INLET included) and
+/// BOOSTER otherwise; an edge fed by a roof tank with no mover between is
+/// GRAVITASI (the down-risers included, whatever pump the service also has);
+/// fed from a ground tank (the suction) or from nothing known => null. The
+/// endpoint heuristic below stays the fallback for an edge the solve did not
+/// orient.
 RiserFunction? riserFunctionFor(Network net, NetEdge edge,
-    {required bool downfeed}) {
-  // Only piped (non-air) services carry a function suffix.
-  if (edge.service.regime == FlowRegime.air) return null;
+    {required bool downfeed, Map<String, String>? flowFrom}) {
+  // Round 17 (regression-flow-path-function-applies-to-fire-and-drainage) —
+  // GRAVITASI / BOOSTER / TRANSFER are DOMESTIC WATER (air bersih) terms (the
+  // drawing legend defines them as roof-tank gravity feed / booster-pumped
+  // supply / ground-to-roof transfer), so only cold / hot water carries one:
+  // a hydrant / sprinkler main is not a 'booster-pumped supply' and a sewage
+  // ejector lift to the STP is not a 'transfer to the roof tank'. Air, gravity
+  // drainage and fire services take no suffix on either path.
+  if (edge.service != ServiceType.coldWater &&
+      edge.service != ServiceType.hotWater) {
+    return null;
+  }
+  final up = flowFrom?[edge.id];
+  if (up != null && (up == edge.fromId || up == edge.toId)) {
+    return _flowFunction(net, edge, up, flowFrom!);
+  }
 
   final from = net.nodeById(edge.fromId);
   final to = net.nodeById(edge.toId);
@@ -141,6 +191,11 @@ RiserFunction? riserFunctionFor(Network net, NetEdge edge,
   // A run/riser directly downstream of a pump/boosterSet (an endpoint is one).
   // VERIFY: pumped/pressurized run downstream of a pump.
   final touchesPump = _isPumpish(fromC) || _isPumpish(toC);
+  // Round 12 (printed-parity-3) — the SUCTION run (ground tank → pump) is not
+  // boosted: only the discharge side is. No suffix (never a false BOOSTER).
+  final suction = (_isPumpish(fromC) && toC == NodeComponent.groundTank) ||
+      (_isPumpish(toC) && fromC == NodeComponent.groundTank);
+  if (suction) return null;
   if (touchesPump) return RiserFunction.booster;
 
   // Under UPFEED, an ASCENDING pressurized cold/hot-water riser is the booster
@@ -157,14 +212,81 @@ RiserFunction? riserFunctionFor(Network net, NetEdge edge,
   }
 
   // Under DOWNFEED, a distribution main / riser that is NOT downstream of a pump
-  // and the service is water => gravity from the roof tank.
+  // and the service is water => gravity from the roof tank — ONLY when a roof
+  // tank actually feeds that system (Round 15, drafting-visual-2-2: the
+  // feed-strategy SETTING alone used to stamp a meter-fed mains run of the
+  // bundled sample 'GRAVITASI — gravity feed from the roof tank').
   // VERIFY: downfeed distribution main fed from the roof tank.
-  if (downfeed && isWater && !_serviceHasPump(net, edge.service)) {
+  if (downfeed &&
+      isWater &&
+      !_serviceHasPump(net, edge.service) &&
+      _componentHasRoofTank(net, edge)) {
     return RiserFunction.gravitasi;
   }
 
   // Ambiguous — append nothing.
   return null;
+}
+
+/// The flow-path FUNCTION of [edge] whose flow comes from [up] (Round 16).
+/// See [riserFunctionFor]. Pure; guarded against cycles.
+// VERIFY drawing-convention inference, not an SNI clause.
+RiserFunction? _flowFunction(
+    Network net, NetEdge edge, String up, Map<String, String> flowFrom) {
+  final service = edge.service;
+  final down = up == edge.fromId ? edge.toId : edge.fromId;
+  String other(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
+  bool flowsInto(NetEdge e, String node) {
+    final f = flowFrom[e.id];
+    return f != null && f != node && (e.fromId == node || e.toId == node);
+  }
+
+  // First plant item upstream (against the flow), starting at [up].
+  NodeComponent? first;
+  var node = up;
+  var via = edge.id;
+  final seen = <String>{};
+  while (seen.add(node)) {
+    final c = net.nodeById(node)?.component;
+    if (_isPumpish(c) ||
+        c == NodeComponent.roofTank ||
+        c == NodeComponent.groundTank) {
+      first = c;
+      break;
+    }
+    NetEdge? inE;
+    for (final e in net.edgesAt(node)) {
+      if (e.service != service || e.id == via) continue;
+      if (flowsInto(e, node)) {
+        inE = e;
+        break;
+      }
+    }
+    if (inE == null) break;
+    via = inE.id;
+    node = other(inE, node);
+  }
+  if (first == null || first == NodeComponent.groundTank) return null;
+  if (first == NodeComponent.roofTank) return RiserFunction.gravitasi;
+
+  // Fed through a mover: TRANSFER when a storage tank lies downstream.
+  bool isStorage(String id) {
+    final c = net.nodeById(id)?.component;
+    return c == NodeComponent.roofTank || c == NodeComponent.groundTank;
+  }
+
+  final stack = [down];
+  final reached = <String>{down};
+  while (stack.isNotEmpty) {
+    final n = stack.removeLast();
+    if (isStorage(n)) return RiserFunction.transfer;
+    for (final e in net.edgesAt(n)) {
+      if (e.service != service || flowFrom[e.id] != n) continue;
+      final m = other(e, n);
+      if (reached.add(m)) stack.add(m);
+    }
+  }
+  return RiserFunction.booster;
 }
 
 /// Deterministic per-service riser TAG for every riser edge: service code + `R`
@@ -277,14 +399,37 @@ class _RiserRef {
 ///
 /// Pure + deterministic. Never fabricates — an absent floor / riser tag simply
 /// degrades to the service code.
+///
+/// Round 29 (drawings-3-7) — with the project [building] the floor token
+/// follows the building's GROUND-RELATIVE levels ([floorLocatorToken]: `B2`,
+/// `B1`, `GF`, `L1`, …), so a run on the sheet titled 'Lantai 4' reads
+/// `CW-L4` — matching the sheet title, the riser's FFL gutter and the
+/// ground-relative datum — never `CW-F5`. Without a building the legacy
+/// 1-based `F<n>` stands (byte-identical).
 String elementTagForEdge(
-    Network net, NetEdge edge, Map<String, String> riserTagByEdge) {
+    Network net, NetEdge edge, Map<String, String> riserTagByEdge,
+    {BuildingLevels? building}) {
   final code = riserServiceCode(edge.service);
   if (edge.kind == EdgeKind.riser) {
     return riserTagByEdge[edge.id] ?? code;
   }
   final floor = net.nodeById(edge.fromId)?.floorIndex;
-  return floor == null ? code : '$code-F${floor + 1}';
+  return floor == null ? code : '$code-${floorLocatorToken(floor, building)}';
+}
+
+/// Round 29 (drawings-3-7) — the floor LOCATOR token of a run tag: relative
+/// to the building's ground floor ([BuildingLevels.groundIndex], clamped into
+/// the stack) — basements `B<n>` (B1 directly below ground), the ground floor
+/// `GF`, upper floors `L<n>` (L1 directly above ground). Null [building] ⇒
+/// the legacy 1-based `F<floorIndex + 1>`.
+String floorLocatorToken(int floorIndex, BuildingLevels? building) {
+  if (building == null) return 'F${floorIndex + 1}';
+  final n = building.levelCount;
+  final g = n == 0 ? 0 : building.groundIndex.clamp(0, n - 1);
+  final rel = floorIndex - g;
+  if (rel < 0) return 'B${-rel}';
+  if (rel == 0) return 'GF';
+  return 'L$rel';
 }
 
 /// Per-edge stable element tags for the WHOLE [net] (N13), keyed by edge id: the
@@ -292,10 +437,11 @@ String elementTagForEdge(
 /// the ONE map threaded into the plan-drawing labels ([planToPdf]/[networkToDxf]
 /// `edgeTags`), the BOM tag column and the calc-report run schedule, so a
 /// run/riser reads the same tag on all four artifacts. Pure + deterministic.
-Map<String, String> elementTags(Network net) {
+Map<String, String> elementTags(Network net, {BuildingLevels? building}) {
   final risers = riserTags(net, null);
   return <String, String>{
-    for (final e in net.edges) e.id: elementTagForEdge(net, e, risers),
+    for (final e in net.edges)
+      e.id: elementTagForEdge(net, e, risers, building: building),
   };
 }
 
@@ -360,6 +506,208 @@ Map<String, double> riserLayoutPositions(Network net, {ServiceType? focus}) {
   };
 }
 
+/// Round 26 (riser-drafting-3-3) — the B5 COINCIDENT spread, shared by the
+/// issued riser and the live canvas: nodes on one floor that land on the same
+/// x (a WC and a lavatory sharing a plan x — an ordinary toilet layout) are
+/// nudged apart, centred on the shared point, deterministically by node id.
+/// [x] is each node's laid-out x and [floorOf] its floor; [step] is the
+/// consumer's spacing (drawing units / screen px). Returns the x SHIFT per
+/// node (absent ⇒ 0). Pure.
+Map<String, double> coincidentSpreadDx({
+  required Map<String, double> x,
+  required Map<String, int> floorOf,
+  required double step,
+}) {
+  final groups = <String, List<String>>{};
+  for (final e in x.entries) {
+    final f = floorOf[e.key];
+    if (f == null) continue;
+    (groups['$f:${e.value.round()}'] ??= <String>[]).add(e.key);
+  }
+  final out = <String, double>{};
+  for (final g in groups.values) {
+    if (g.length < 2) continue;
+    g.sort();
+    final baseX = x[g.first]!;
+    for (var i = 0; i < g.length; i++) {
+      final target = baseX + (i - (g.length - 1) / 2) * step;
+      out[g[i]] = target - x[g[i]]!;
+    }
+  }
+  return out;
+}
+
+/// Round 14 (drafting-visual-3) — the per-SERVICE horizontal LANE of the
+/// combined riser sheet, as a multiple of a consumer's lane pitch (the export
+/// uses [kRiserLanePitch] drawing units; the canvas scales the same fraction of
+/// its band height). Every node on a floor used to sit on the band centre
+/// whatever its service, so the HW branch was drawn ON the CW branch and the
+/// vent on the drainage run (their tags landing on the wrong pipe). Supply
+/// services rise above the band centre, gravity services drop below it.
+double riserServiceLane(ServiceType s) => switch (s) {
+      ServiceType.coldWater => 0,
+      ServiceType.hotWater => -1,
+      ServiceType.fireSprinkler => -1.6,
+      ServiceType.fireHydrant => -2.2,
+      ServiceType.duct => -2.8,
+      ServiceType.drainage => 1,
+      ServiceType.vent => 1.6,
+      ServiceType.rainwater => 2.2,
+      ServiceType.returnAir => 2.8,
+      ServiceType.exhaust => 3.4,
+    };
+
+/// The lane pitch (drawing units) the riser EXPORT applies to
+/// [riserServiceLane]; the band is 150 units tall, so the outermost lane
+/// (3.4 × 14 ≈ 48) stays inside it.
+const double kRiserLanePitch = 14;
+
+/// [kRiserLanePitch] as a fraction of the export's 150-unit floor band — the
+/// canvas Auto painter multiplies its own band height by this, so both
+/// surfaces offset each lane by the same share of a floor.
+const double kRiserLaneBandFraction = kRiserLanePitch / 150;
+
+/// Round 14 — each visible node's lane factor ([riserServiceLane] of the ONE
+/// service its visible edges carry) for the COMBINED riser sheet: ONE helper
+/// for the vector export and the on-canvas Auto painter (golden rule 5), so
+/// both separate CW / HW (and drainage / vent) runs identically. A node joined
+/// to several services (a fixture fed by CW and HW) stays on the band centre
+/// (lane 0). Empty — every node on the centre, byte-identical — for a
+/// single-service [focus] or a network drawing only one service.
+Map<String, double> riserServiceLanes(Network net, {ServiceType? focus}) {
+  if (focus != null) return const {};
+  final services = <String, Set<ServiceType>>{};
+  final all = <ServiceType>{};
+  for (final e in net.edges) {
+    all.add(e.service);
+    (services[e.fromId] ??= <ServiceType>{}).add(e.service);
+    (services[e.toId] ??= <ServiceType>{}).add(e.service);
+  }
+  if (all.length < 2) return const {};
+  return <String, double>{
+    for (final entry in services.entries)
+      if (entry.value.length == 1 && riserServiceLane(entry.value.single) != 0)
+        entry.key: riserServiceLane(entry.value.single),
+  };
+}
+
+/// Round 17 (drafting-visual-3-1) — the per-EDGE run-lane offset of the
+/// combined riser sheet: for each edge whose horizontal leg would NOT already
+/// sit on its own service's lane, the lane-factor delta (its
+/// [riserServiceLane] minus its FROM node's lane from [riserServiceLanes]).
+/// [riserServiceLanes] only lanes a node that carries ONE service, so on a
+/// real floor — a stack junction carrying D + V, a WC carrying CW + D — both
+/// endpoints sit on the band centre and a vent run was drawn exactly on top
+/// of the drainage run (their tags pointing at one line). Each consumer draws
+/// the horizontal leg at `fromY + delta × pitch` with short vertical drops
+/// into the multi-service endpoints. ONE helper for the vector export and the
+/// on-canvas Auto painter (golden rule 5). Empty — every run on its node's
+/// lane, byte-identical — for a single-service [focus] or a one-service
+/// network, and for every edge between single-service nodes.
+Map<String, double> riserEdgeLaneOffsets(Network net, {ServiceType? focus}) {
+  if (focus != null) return const {};
+  final all = {for (final e in net.edges) e.service};
+  if (all.length < 2) return const {};
+  final nodeLanes = riserServiceLanes(net, focus: focus);
+  final out = <String, double>{};
+  for (final e in net.edges) {
+    final delta = riserServiceLane(e.service) - (nodeLanes[e.fromId] ?? 0);
+    if (delta.abs() > 1e-9) out[e.id] = delta;
+  }
+  return out;
+}
+
+/// Round 30 (regression-feed-line-any-pump-counts) — the WATER-SUPPLY feed
+/// equipment the drawing carries: only nodes that are an endpoint of a
+/// cold / hot WATER edge count, so a fire pump on the hydrant line, a sump /
+/// ejector pump on drainage or a tank on another service never turns the water
+/// feed into 'booster pump'. The ONE evidence source for the inspector feed
+/// line, the riser export notes and the canvas notes card (Review's
+/// `mains-fed` / `upfeed-pump-assumed` infos are per cold-water component, so
+/// every surface now tells the same story).
+class WaterFeedEquipment {
+  const WaterFeedEquipment({
+    required this.anyWaterNode,
+    required this.hasRoofTank,
+    required this.hasGroundTank,
+    required this.hasPump,
+    required this.hasWaterMeter,
+  });
+
+  /// At least one node sits on a cold / hot water edge.
+  final bool anyWaterNode;
+  final bool hasRoofTank;
+  final bool hasGroundTank;
+
+  /// A pump or booster set on the water network.
+  final bool hasPump;
+  final bool hasWaterMeter;
+}
+
+/// [WaterFeedEquipment] for [net] — see that class.
+WaterFeedEquipment drawnWaterFeedEquipment(Network net) {
+  final ids = <String>{
+    for (final e in net.edges)
+      if (e.service == ServiceType.coldWater ||
+          e.service == ServiceType.hotWater) ...[e.fromId, e.toId],
+  };
+  var roof = false, ground = false, pump = false, meter = false;
+  for (final n in net.nodes) {
+    if (!ids.contains(n.id)) continue;
+    switch (n.component) {
+      case NodeComponent.roofTank:
+        roof = true;
+      case NodeComponent.groundTank:
+        ground = true;
+      case NodeComponent.pump || NodeComponent.boosterSet:
+        pump = true;
+      case NodeComponent.waterMeter:
+        meter = true;
+      default:
+        break;
+    }
+  }
+  return WaterFeedEquipment(
+    anyWaterNode: ids.isNotEmpty,
+    hasRoofTank: roof,
+    hasGroundTank: ground,
+    hasPump: pump,
+    hasWaterMeter: meter,
+  );
+}
+
+/// Round 17 (drafting-visual-3-4) — the riser sheet's FEED note, gated on the
+/// equipment the network actually carries (the evidence the Round-15
+/// GRAVITASI suffix rule uses), never on the feed-strategy SETTING alone: a
+/// gravity downfeed hangs from a ROOF TANK, so a downfeed-set project with no
+/// roof tank and no pump (the bundled meter-fed sample) is fed direct from the
+/// mains, and one with a pump but no roof tank is pumped. Upfeed is unchanged
+/// (an undrawn upfeed pump is still sized by the solve). [detailed] adds the
+/// '(roof tank)' / '(water meter)' qualifier the KETERANGAN box prints.
+// VERIFY drawing-convention wording, not an SNI clause.
+String riserFeedNote({
+  required bool downfeed,
+  required bool hasRoofTank,
+  required bool hasPump,
+  bool hasWaterMeter = false,
+  bool detailed = false,
+}) {
+  if (!downfeed) {
+    return detailed ? 'Feed: upfeed / booster pump' : 'Feed: upfeed / booster';
+  }
+  if (hasRoofTank) {
+    return detailed
+        ? 'Feed: gravity downfeed (roof tank)'
+        : 'Feed: gravity downfeed';
+  }
+  if (hasPump) {
+    return detailed ? 'Feed: booster pump (no roof tank)' : 'Feed: booster pump';
+  }
+  return detailed && hasWaterMeter
+      ? 'Feed: direct mains (water meter)'
+      : 'Feed: direct mains';
+}
+
 /// One grouped entry in a floor's fan-out: a fixture TYPE label and how many of
 /// that type the floor distributes (e.g. `WC` × 3). Grouping by type means a
 /// whole floor's fixture population fits in a few compact rows, so the riser
@@ -414,22 +762,30 @@ class FloorFanOut {
   });
 }
 
+/// The ONE motor-kW figure every mechanical drawing prints beside a pump /
+/// fan (Round 12, printed-parity-2): 2 dp below 1 kW (0.37 / 0.55 — the real
+/// IEC frames; 1 dp printed non-existent '0.4' / '0.6' kW frames), 1 dp from
+/// 1 kW up (1.1 / 5.5 / 55.0), matching the equipment schedule's figures.
+String motorKwText(Power motor) {
+  final kw = motor.inKiloWatts;
+  return '${kw < 1 ? kw.toStringAsFixed(2) : kw.toStringAsFixed(1)} kW';
+}
+
 /// The equipment detail SUFFIX drawn beside an equipment symbol on the
 /// single-line — a tank capacity (`237 m3`) or a duty (`5.5 kW`) — or null when
 /// no datum genuinely exists (the node then keeps its plain name, no fabricated
 /// value). HONEST: a tank's m3 is a direct conversion of the stored
-/// [NetNode.tankCapacityLitres]; a duty is shown only when the matching system
-/// duty provider is non-null.
+/// [NetNode.tankCapacityLitres]; a duty is shown only for the node's OWN
+/// solved [motor] — Round 12 (printed-parity-1): the caller resolves it per
+/// node (fire-piped pump → the NFPA 20 frame, the domestic source pump → the
+/// booster, each air unit → the system rooted at it), so one system duty is
+/// never stamped on every pump / air unit of that kind. Null [motor] ⇒ no
+/// duty suffix.
 ///
 /// Pure + Flutter-free (engine types only) so it is unit-testable in isolation
 /// and shared by the schematic painter AND the riser single-line EXPORT builder
 /// (`mechanical_sld_drawing.dart` `equipmentDetailByNodeId` — B1 parity).
-String? equipmentDetail(
-  NetNode node, {
-  PumpDuty? supplyPump,
-  FanDuty? fan,
-  PumpDuty? firePump,
-}) {
+String? equipmentDetail(NetNode node, {Power? motor}) {
   final c = node.component;
   if (c == null) return null;
   switch (c) {
@@ -447,21 +803,12 @@ String? equipmentDetail(
       return '$clean m3';
     case NodeComponent.pump:
     case NodeComponent.boosterSet:
-      // VERIFY: this is the SYSTEM supply-pump duty (one trunk pump), not a
-      // per-node solve — a project with several independent pumps would show the
-      // same duty on every pump node. Acceptable first pass (one supply pump is
-      // the norm); the fire pump is deliberately NOT attached here (no node-kind
-      // distinguishes a fire pump from a plumbing pump yet).
-      if (supplyPump == null) return null;
-      return '${supplyPump.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
     case NodeComponent.ahu:
     case NodeComponent.fcu:
     case NodeComponent.supplyFan:
     case NodeComponent.exhaustFan:
-      // VERIFY: same system-level caveat as the pump — the central duct-fan duty
-      // is attached to every air-unit node of this kind (no per-unit fan solve).
-      if (fan == null) return null;
-      return '${fan.selectedMotor.inKiloWatts.toStringAsFixed(1)} kW';
+      if (motor == null || motor.watts <= 0) return null;
+      return motorKwText(motor);
     default:
       return null;
   }

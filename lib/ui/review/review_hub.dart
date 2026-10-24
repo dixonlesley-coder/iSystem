@@ -9,15 +9,8 @@ import '../../store/electrical_store.dart';
 import '../../store/solve_store.dart';
 import '../canvas/service_style.dart';
 import '../inspector/project_panel.dart'
-    show
-        ExportIdentityBar,
-        exportCalcReport,
-        exportCalcReportPdf,
-        exportEquipmentSchedule,
-        exportEquipmentSchedulePdf,
-        exportMepUnifiedReport,
-        exportMepUnifiedReportPdf,
-        exportSubmittalPackage;
+    show ExportIdentityBar, exportSubmittalPackage;
+import '../shell/export_sheet.dart' show AllExportsLink;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -176,38 +169,9 @@ class _ExportDeliverablesCard extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: MechXSpacing.sm),
-          Wrap(
-            spacing: MechXSpacing.xs,
-            runSpacing: MechXSpacing.xs,
-            children: [
-              MechXButton(
-                label: s(StringKey.inspectorExportCalcReportMd),
-                onPressed: () => exportCalcReport(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportCalcReportPdfBtn),
-                onPressed: () => exportCalcReportPdf(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportMepReportMd),
-                onPressed: () => exportMepUnifiedReport(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportMepReportPdfBtn),
-                onPressed: () => exportMepUnifiedReportPdf(ref),
-              ),
-              MechXButton(
-                // H8: the MD export writes a spreadsheet CSV sibling too —
-                // the label says so.
-                label: s(StringKey.inspectorExportEquipmentScheduleMd),
-                onPressed: () => exportEquipmentSchedule(ref),
-              ),
-              MechXButton(
-                label: s(StringKey.inspectorExportEquipmentSchedulePdfBtn),
-                onPressed: () => exportEquipmentSchedulePdf(ref),
-              ),
-            ],
-          ),
+          // Work item 8: every single export lives in the ONE Export sheet —
+          // this card keeps only the primary package action + a link to it.
+          const AllExportsLink(),
           const SizedBox(height: MechXSpacing.sm),
           Text(
             s(StringKey.reviewSubmittalHint),
@@ -357,6 +321,10 @@ class _ComplianceRow extends StatefulWidget {
   State<_ComplianceRow> createState() => _ComplianceRowState();
 }
 
+/// The compliance table's fixed verdict column (fits 'REVIEW' / 'TINJAU' at
+/// the caption size with room to spare).
+const double kComplianceVerdictColumnWidth = 64;
+
 class _ComplianceRowState extends State<_ComplianceRow> {
   bool _hover = false;
 
@@ -383,30 +351,39 @@ class _ComplianceRowState extends State<_ComplianceRow> {
               ),
             ),
           ),
+          // A three-column table: category | fixed-width verdict | detail.
+          // The verdict column has ONE width for every row (PASS and REVIEW
+          // line up as a column) and the detail reads left-aligned from a
+          // common edge — previously the detail was end-aligned and its
+          // varying width pushed each row's verdict to a different x.
           Expanded(
+            flex: 2,
             child: Text(item.category,
                 style: type.caption.copyWith(color: colors.textPrimary)),
           ),
-          Text(
-            item.pass
-                ? s(StringKey.reviewItemPass)
-                : s(StringKey.reviewItemReview),
-            style: type.caption.copyWith(
-              color: item.pass ? colors.success : colors.warning,
-            ),
-          ),
-          if (item.detail.isNotEmpty) ...[
-            const SizedBox(width: MechXSpacing.sm),
-            Flexible(
-              child: Text(
-                item.detail,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.end,
-                style: type.caption.copyWith(color: colors.textMuted),
+          const SizedBox(width: MechXSpacing.sm),
+          SizedBox(
+            width: kComplianceVerdictColumnWidth,
+            child: Text(
+              item.pass
+                  ? s(StringKey.reviewItemPass)
+                  : s(StringKey.reviewItemReview),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: type.caption.copyWith(
+                color: item.pass ? colors.success : colors.warning,
               ),
             ),
-          ],
+          ),
+          Expanded(
+            flex: 3,
+            child: Text(
+              item.detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ),
         ],
       ),
     );
@@ -469,11 +446,14 @@ class _CutPlanCard extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      // Ducts size by Ø + the BJLS/PU section; pipes by DN.
+                      // Ducts size by Ø + the BJLS/PU section; pipes by DN +
+                      // material (each material is its own bar pool, so PPR
+                      // DN50 and PVC DN50 are separate rows).
                       g.service.isAir
                           ? '${serviceLabel(g.service)}  Ø${g.diameterMm}  '
                               '${g.stockLengthM == 4.0 ? 'PU' : 'BJLS'}'
-                          : '${serviceLabel(g.service)}  DN${g.diameterMm}',
+                          : '${serviceLabel(g.service)}  DN${g.diameterMm}'
+                              '${g.material.isEmpty ? '' : '  ${g.material}'}',
                       style:
                           type.caption.copyWith(color: colors.textSecondary),
                     ),

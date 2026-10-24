@@ -6,6 +6,8 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/plan_symbols.dart'
     show equipmentNodeTags, gravitySlopeLabel;
 import 'package:mechx_engine/report/riser_tags.dart';
+import 'package:mechx_engine/sizing/drainage_advisory.dart'
+    show laidGravitySlope;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
 import 'package:mechx_engine/standards/pipe_products.dart';
@@ -66,16 +68,13 @@ class NetworkLayer extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final net = ref.watch(networkControllerProvider).network;
-    final transform = ref.watch(sheetsControllerProvider).viewportFor(sheetId) ??
+    final transform = ref.watch(sheetViewportProvider(sheetId)) ??
         const ViewportTransform();
     // Sizing always drives the pipe WIDTH (so a pipe visibly grows with its DN);
     // the toggle only governs whether the size LABELS are drawn on top.
     final sizing = ref.watch(sizingProvider);
     final showLabels = ref.watch(showSizingProvider);
     final selection = ref.watch(selectionProvider);
-    // Hover pre-highlight (E7): the single node/edge under the Select cursor,
-    // published by the gesture layer. Null at idle ⇒ no halo (byte-identical).
-    final hover = ref.watch(hoverTargetProvider);
     // Ids of air elements whose velocity is out of band — get an on-plan badge.
     final checks = ref.watch(airVelocityChecksProvider);
     final warningIds = <String>{
@@ -99,13 +98,15 @@ class NetworkLayer extends ConsumerWidget {
     // along its WHOLE chain (collinear segments merged) so couplings fall at true
     // stock-length boundaries (4 m PVC/PPR, 6 m steel), not reset per segment —
     // the efficiency engine for where joints (and so offcuts) land.
-    final edgeCuts = <String, _EdgeCut>{};
-    for (final chain in ref.watch(pipeChainsProvider)) {
-      for (final ce in chain.edges) {
-        edgeCuts[ce.edgeId] =
-            _EdgeCut(ce.offsetAtFromM, ce.offsetAtToM, chain.stockLengthM);
-      }
-    }
+    // Drafting-feel perf: derived once per chain list (not per pan / hover
+    // build — it spans every chain edge in the building).
+    final chains = ref.watch(pipeChainsProvider);
+    final edgeCuts = _edgeCutsCache[chains] ??= {
+      for (final chain in chains)
+        for (final ce in chain.edges)
+          ce.edgeId:
+              _EdgeCut(ce.offsetAtFromM, ce.offsetAtToM, chain.stockLengthM),
+    };
 
     // H5 — the LAID drainage design slope the sizer + calc report actually use
     // (`drainageSlopeProvider`, the Building-page input), NOT the dark
@@ -125,10 +126,10 @@ class NetworkLayer extends ConsumerWidget {
       hiddenServices = ref.watch(hiddenServicesProvider);
     }
 
-    return IgnorePointer(
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: _NetworkPainter(
+    _NetworkPainter painter({String? hoveredNodeId, String? hoveredEdgeId,
+            bool hoverOnly = false}) =>
+        _NetworkPainter(
+          hoverOnly: hoverOnly,
           net: net,
           sheetId: sheetId,
           floorIndex: floorIndex,
@@ -141,8 +142,8 @@ class NetworkLayer extends ConsumerWidget {
           selectedEdgeId: selection.edgeId,
           selectedNodeIds: selection.nodeIds,
           selectedEdgeIds: selection.edgeIds,
-          hoveredNodeId: hover?.nodeId,
-          hoveredEdgeId: hover?.edgeId,
+          hoveredNodeId: hoveredNodeId,
+          hoveredEdgeId: hoveredEdgeId,
           layerFiltered: layerFiltered,
           visibleDisciplines: visible,
           activeDiscipline: active,
@@ -151,10 +152,100 @@ class NetworkLayer extends ConsumerWidget {
           unsizedIds: unsizedIds,
           overCapacityIds: overCapacityIds,
           drainageSlope: drainageSlope,
-        ),
+        );
+
+    // Drafting-feel perf: the hover pre-highlight (E7) is its own thin layer
+    // ABOVE the drawing, so a hover change repaints one translucent halo —
+    // never the whole floor — and the drawing itself sits behind its own
+    // repaint boundary, untouched by chrome / overlay repaints. On top (not
+    // beneath) so the faint tint still reads over a wide, true-diameter main
+    // (beneath, only a 2-px rim of it survived). Null hover ⇒ the halo layer
+    // paints nothing (idle byte-identical).
+    return IgnorePointer(
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          RepaintBoundary(
+            child: CustomPaint(size: Size.infinite, painter: painter()),
+          ),
+          Consumer(builder: (context, ref, _) {
+            final hover = ref.watch(hoverTargetProvider);
+            return CustomPaint(
+              size: Size.infinite,
+              painter: painter(
+                  hoverOnly: true,
+                  hoveredNodeId: hover?.nodeId,
+                  hoveredEdgeId: hover?.edgeId),
+            );
+          }),
+        ],
       ),
     );
   }
+
+  static final Expando<Map<String, _EdgeCut>> _edgeCutsCache =
+      Expando<Map<String, _EdgeCut>>();
+}
+
+/// How far outside the canvas an element may sit and still be painted (screen
+/// px). A culled run no longer registers its label chip, so the margin must
+/// exceed the farthest an off-screen chip can steer an on-screen one: the
+/// label ladder's reach (3 x the chip offset, at most ~73 px at the 120-px
+/// true-diameter cap) plus 1.5 x the widest chip (~150 px) ≈ 445 px. 500 keeps
+/// culling free of any visible pixel or label-placement change.
+const double _kCullMargin = 500;
+
+/// Drafting-feel perf — the laid-out run-label painters, keyed by text (the
+/// style is fixed). Every repaint used to lay out every size label again; a
+/// floor's label vocabulary is small (DN15-CW · 3.2 m …), so a bounded cache
+/// turns that into a lookup. Cleared wholesale when full.
+final Map<String, TextPainter> _runLabelCache = <String, TextPainter>{};
+const int _kRunLabelCacheCap = 2048;
+
+/// The same bounded cache for the canvas's OTHER fixed-style labels — the
+/// warning-badge glyphs, riser tags and equipment tags — keyed by text AND
+/// style (a riser tag's colour is its service's), so a repaint never allocates
+/// and lays out a fresh [TextPainter] per badge / tag.
+final Map<(String, TextStyle), TextPainter> _styledLabelCache =
+    <(String, TextStyle), TextPainter>{};
+
+TextPainter _styledLabelPainter(String text, TextStyle style) {
+  final key = (text, style);
+  final hit = _styledLabelCache[key];
+  if (hit != null) return hit;
+  if (_styledLabelCache.length >= _kRunLabelCacheCap) {
+    for (final tp in _styledLabelCache.values) {
+      tp.dispose();
+    }
+    _styledLabelCache.clear();
+  }
+  return _styledLabelCache[key] = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: TextDirection.ltr,
+  )..layout();
+}
+
+TextPainter _runLabelPainter(String text) {
+  final hit = _runLabelCache[text];
+  if (hit != null) return hit;
+  if (_runLabelCache.length >= _kRunLabelCacheCap) {
+    for (final tp in _runLabelCache.values) {
+      tp.dispose();
+    }
+    _runLabelCache.clear();
+  }
+  return _runLabelCache[text] = TextPainter(
+    text: TextSpan(
+      text: text,
+      style: const TextStyle(
+        fontFamily: 'Roboto',
+        fontSize: 10.5,
+        color: Color(0xFFFFFFFF),
+        fontWeight: FontWeight.w600,
+      ),
+    ),
+    textDirection: TextDirection.ltr,
+  )..layout();
 }
 
 /// Opacity applied to a service whose discipline is visible but not the active
@@ -270,7 +361,12 @@ class _NetworkPainter extends CustomPainter {
   /// without it (tests / other hosts) is byte-identical.
   final double drainageSlope;
 
+  /// Paint ONLY the hover halos (the thin layer under the drawing); the full
+  /// drawing is painted by a second instance with no hover ids.
+  final bool hoverOnly;
+
   _NetworkPainter({
+    this.hoverOnly = false,
     required this.net,
     required this.sheetId,
     required this.floorIndex,
@@ -296,6 +392,14 @@ class _NetworkPainter extends CustomPainter {
   });
 
   bool _onThisFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
+
+  /// Drafting-feel perf — the network-derived lookups every paint needs, built
+  /// ONCE per [Network] instance (a pan / zoom / hover repaint of the same
+  /// drawing reuses them; a drag frame rebuilds them in one O(E) pass). The per-
+  /// node layer + riser-sense queries used to scan EVERY edge in the building for
+  /// every node on the floor (O(nodes x edges) per paint).
+  static final Expando<_NetDerived> _derivedCache = Expando<_NetDerived>();
+  _NetDerived get _derived => _derivedCache[net] ??= _NetDerived(net);
 
   /// An edge is highlighted when it's the primary OR in the multi-selection set.
   bool _edgeSelected(String id) =>
@@ -337,8 +441,7 @@ class _NetworkPainter extends CustomPainter {
     var visible = false;
     var active = false;
     var touched = false;
-    for (final e in net.edges) {
-      if (e.fromId != n.id && e.toId != n.id) continue;
+    for (final e in _derived.incident(n.id)) {
       touched = true;
       // F4 — a node stays visible only while at least one touching edge's
       // service is itself visible (discipline shown AND not individually hidden).
@@ -351,6 +454,14 @@ class _NetworkPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Drafting-feel perf — viewport culling: an element whose screen footprint
+    // misses the canvas by more than [_kCullMargin] (wider than any glyph, chip
+    // or tag drawn beside it) cannot put a single pixel on screen nor collide
+    // with an on-screen label, so skipping it leaves the picture identical
+    // while a zoomed-in view stops paying for the whole floor.
+    final cull = size.isFinite
+        ? (Offset.zero & size).inflate(_kCullMargin)
+        : Rect.largest;
     // Incidence collected while drawing pipes: per node, the screen-space unit
     // directions of the run pipes leaving it + the widest pipe + its opacity —
     // used to draw the right fitting (coupling / elbow / tee / cross / cap) where
@@ -373,10 +484,10 @@ class _NetworkPainter extends CustomPainter {
     // engine helper), and whether MULTIPLE distinct services are visible on this
     // floor: on a multi-service layer a run label carries its service code
     // (DN15-CW); on a single-service view it stays bare (DN15).
-    final riserTagById = riserTags(net, null);
+    final riserTagById = _derived.riserTagById;
     // G1: one stable equipment tag per plant/air-unit node (P-01 / TK-01 / …),
     // the SAME source the plan exporters + equipment schedule use.
-    final equipmentTagById = equipmentNodeTags(net);
+    final equipmentTagById = _derived.equipmentTagById;
     // G5/H5: the laid gravity fall as a `1:100` token — read from the LAID
     // design slope the sizer + calc report actually use (`drainageSlopeProvider`
     // → [drainageSlope]), never a hardcoded string nor the dark const default.
@@ -399,6 +510,10 @@ class _NetworkPainter extends CustomPainter {
       if (outer > (nodeMaxOuter[b.id] ?? 0.0)) nodeMaxOuter[b.id] = outer;
     }
     final multiService = visibleServices.length > 1;
+    if (hoverOnly) {
+      _paintHoverHalos(canvas, nodeMaxOuter);
+      return;
+    }
 
     for (final e in net.edges) {
       final a = net.nodeById(e.fromId);
@@ -412,6 +527,7 @@ class _NetworkPainter extends CustomPainter {
         if (!_onThisFloor(a) || !_onThisFloor(b)) continue;
         final pa = transform.worldToScreen(Offset(a.x, a.y));
         final pb = transform.worldToScreen(Offset(b.x, b.y));
+        if (!cull.overlaps(Rect.fromPoints(pa, pb))) continue;
         final s = sizing[e.id];
         final outer = _pipeOuterPx(s, e.service);
 
@@ -513,9 +629,14 @@ class _NetworkPainter extends CustomPainter {
           if (tag != null) label = '$label  $tag';
           // G5: append the laid fall (`1:100`) on a gravity-regime run so the
           // soil/waste/rainwater branch shows its slope, not just its size.
+          // Round 33 — the fall the run is LAID at (a <= DN65 drainage
+          // branch never prints flatter than its 1:50 minimum), the SAME
+          // rule as the plan exporters.
           if (e.service.regime == FlowRegime.gravity &&
               gravitySlopeText != null) {
-            label = '$label  $gravitySlopeText';
+            final laid = gravitySlopeLabel(laidGravitySlope(
+                e, drainageSlope, s.diameter.inMillimeters));
+            label = '$label  ${laid ?? gravitySlopeText}';
           }
           labelSide = _label(canvas, pa, pb, outer, label, placedLabels);
         }
@@ -545,6 +666,7 @@ class _NetworkPainter extends CustomPainter {
         for (final n in [a, b]) {
           if (_onThisFloor(n)) {
             final mp = transform.worldToScreen(Offset(n.x, n.y));
+            if (!cull.contains(mp)) continue;
             // B16 — the riser glyph + its halos grow with the widest incident
             // pipe (floored so a thin riser keeps the compact marker).
             final markerR = glyphRadiusPx(nodeMaxOuter[n.id] ?? 0.0, 7.0);
@@ -582,18 +704,20 @@ class _NetworkPainter extends CustomPainter {
       if (n.component != null || n.role != NodeRole.main) continue;
       final j = joints[n.id];
       if (j == null) continue;
+      final fp = transform.worldToScreen(Offset(n.x, n.y));
+      if (!cull.contains(fp)) continue;
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
-      _paintFitting(
-          canvas, transform.worldToScreen(Offset(n.x, n.y)), j, n.fittingType);
+      _paintFitting(canvas, fp, j, n.fittingType);
     }
 
     // Nodes on top, drawn with a role-distinct glyph and a selection ring.
     for (final n in net.nodes) {
       if (!_onThisFloor(n)) continue;
+      final p = transform.worldToScreen(Offset(n.x, n.y));
+      if (!cull.contains(p)) continue;
       final layer = _nodeLayer(n);
       if (!layer.visible) continue;
-      final p = transform.worldToScreen(Offset(n.x, n.y));
       // B16 — the glyph radius grows with the widest incident pipe, floored to
       // the role's current compact size so a thin/unsized node is unchanged; the
       // hover/selection halos ride on it (only exceeding today's fixed sizes
@@ -722,18 +846,15 @@ class _NetworkPainter extends CustomPainter {
   void _warnBadge(Canvas canvas, Offset center) {
     canvas.drawCircle(center, 6, Paint()..color = const Color(0xFFFFFFFF));
     canvas.drawCircle(center, 5.5, Paint()..color = _kWarn);
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: '!',
-        style: TextStyle(
-          color: Color(0xFFFFFFFF),
-          fontSize: 9,
-          fontFamily: 'Roboto',
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      '!',
+      const TextStyle(
+        color: Color(0xFFFFFFFF),
+        fontSize: 9,
+        fontFamily: 'Roboto',
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     tp.paint(canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2));
   }
 
@@ -750,18 +871,15 @@ class _NetworkPainter extends CustomPainter {
       ..lineTo(center.dx - 6.0, center.dy + 5.0)
       ..close();
     canvas.drawPath(tri, Paint()..color = _kOverCapacity);
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: '!',
-        style: TextStyle(
-          color: Color(0xFFFFFFFF),
-          fontSize: 8,
-          fontFamily: 'Roboto',
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      '!',
+      const TextStyle(
+        color: Color(0xFFFFFFFF),
+        fontSize: 8,
+        fontFamily: 'Roboto',
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     tp.paint(
         canvas, Offset(center.dx - tp.width / 2, center.dy - tp.height / 2 + 1.5));
   }
@@ -1076,6 +1194,53 @@ class _NetworkPainter extends CustomPainter {
     }
   }
 
+  /// The E7 hover pre-highlight alone (the [hoverOnly] layer): the same halo
+  /// geometry the full paint used to draw beneath the hovered element.
+  void _paintHoverHalos(Canvas canvas, Map<String, double> nodeMaxOuter) {
+    final halo = Paint()..color = _kSelection.withAlpha(45);
+    final edgeId = hoveredEdgeId;
+    if (edgeId != null) {
+      final e = net.edgeById(edgeId);
+      final a = e == null ? null : net.nodeById(e.fromId);
+      final b = e == null ? null : net.nodeById(e.toId);
+      if (e != null && a != null && b != null && _serviceVisible(e.service)) {
+        if (e.kind == EdgeKind.run) {
+          if (_onThisFloor(a) && _onThisFloor(b)) {
+            canvas.drawLine(
+              transform.worldToScreen(Offset(a.x, a.y)),
+              transform.worldToScreen(Offset(b.x, b.y)),
+              Paint()
+                ..color = halo.color
+                ..strokeWidth = _pipeOuterPx(sizing[e.id], e.service) + 8
+                ..strokeCap = StrokeCap.round
+                ..style = PaintingStyle.stroke,
+            );
+          }
+        } else {
+          for (final n in [a, b]) {
+            if (!_onThisFloor(n)) continue;
+            final markerR = glyphRadiusPx(nodeMaxOuter[n.id] ?? 0.0, 7.0);
+            canvas.drawCircle(transform.worldToScreen(Offset(n.x, n.y)),
+                math.max(13.0, markerR + 5), halo);
+          }
+        }
+      }
+    }
+    final nodeId = hoveredNodeId;
+    if (nodeId != null) {
+      final n = net.nodeById(nodeId);
+      if (n != null && _onThisFloor(n) && _nodeLayer(n).visible) {
+        final incidentOuter = nodeMaxOuter[n.id] ?? 0.0;
+        final glyphR = n.component != null
+            ? glyphRadiusPx(incidentOuter, 9.0)
+            : glyphRadiusPx(
+                incidentOuter, n.role == NodeRole.main ? 3.0 : 4.5);
+        canvas.drawCircle(transform.worldToScreen(Offset(n.x, n.y)),
+            math.max(11.0, glyphR + 2), halo);
+      }
+    }
+  }
+
   /// B15 — the vertical sense of the risers of [svc] meeting at [n]: `up` when a
   /// riser rises to a higher floor from here, `down` when one drops, both when a
   /// riser passes through. Falls back to both when indeterminate so the marker
@@ -1083,9 +1248,8 @@ class _NetworkPainter extends CustomPainter {
   ({bool up, bool down}) _riserSenseAt(NetNode n, ServiceType svc) {
     var up = false;
     var down = false;
-    for (final e in net.edges) {
+    for (final e in _derived.incident(n.id)) {
       if (e.kind != EdgeKind.riser || e.service != svc) continue;
-      if (e.fromId != n.id && e.toId != n.id) continue;
       final other = net.nodeById(e.fromId == n.id ? e.toId : e.fromId);
       if (other == null) continue;
       if (other.floorIndex > n.floorIndex) {
@@ -1149,18 +1313,15 @@ class _NetworkPainter extends CustomPainter {
   /// marker in the service [color], on a translucent chip for legibility — the
   /// plan↔riser cross-reference tag (E6). ASCII-only (Roboto-safe).
   void _riserTagLabel(Canvas canvas, Offset marker, String tag, Color color) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: tag,
-        style: TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 9.5,
-          color: color,
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      tag,
+      TextStyle(
+        fontFamily: 'Roboto',
+        fontSize: 9.5,
+        color: color,
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     final left = marker.dx + 9;
     final top = marker.dy - tp.height / 2;
     final rect = Rect.fromLTWH(left - 2, top - 1, tp.width + 4, tp.height + 2);
@@ -1179,18 +1340,15 @@ class _NetworkPainter extends CustomPainter {
   /// ASCII-only (Roboto-safe).
   void _equipmentTagLabel(
       Canvas canvas, Offset glyph, String tag, List<Rect> placed) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: tag,
-        style: const TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 9.5,
-          color: Color(0xFF15171B),
-          fontWeight: FontWeight.w700,
-        ),
+    final tp = _styledLabelPainter(
+      tag,
+      const TextStyle(
+        fontFamily: 'Roboto',
+        fontSize: 9.5,
+        color: Color(0xFF15171B),
+        fontWeight: FontWeight.w700,
       ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    );
     final boxW = tp.width + 6;
     final boxH = tp.height + 3;
     final candidates = <Offset>[
@@ -1261,18 +1419,7 @@ class _NetworkPainter extends CustomPainter {
   /// sized run never reads identical to an unsized one (B8).
   int? _label(Canvas canvas, Offset pa, Offset pb, double outer, String text,
       List<Rect> placedLabels) {
-    final tp = TextPainter(
-      text: TextSpan(
-        text: text,
-        style: const TextStyle(
-          fontFamily: 'Roboto',
-          fontSize: 10.5,
-          color: Color(0xFFFFFFFF),
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    final tp = _runLabelPainter(text);
 
     final runLen = (pb - pa).distance;
     final boxW = tp.width + 8;
@@ -1353,6 +1500,7 @@ class _NetworkPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_NetworkPainter old) =>
+      old.hoverOnly != hoverOnly ||
       old.net != net ||
       old.transform != transform ||
       old.floorIndex != floorIndex ||
@@ -1384,6 +1532,27 @@ class _NetworkPainter extends CustomPainter {
 
   static bool _sameStrSet(Set<String> a, Set<String> b) =>
       a.length == b.length && a.containsAll(b);
+}
+
+/// Network-derived paint lookups, memoized per [Network] instance by
+/// [_NetworkPainter._derivedCache]: the incident edges of every node (in edge-
+/// list order, so iteration order — and so the painted result — is unchanged)
+/// plus the riser / equipment tag maps.
+class _NetDerived {
+  _NetDerived(this.net) {
+    for (final e in net.edges) {
+      (_incident[e.fromId] ??= <NetEdge>[]).add(e);
+      if (e.toId != e.fromId) (_incident[e.toId] ??= <NetEdge>[]).add(e);
+    }
+  }
+
+  final Network net;
+  final Map<String, List<NetEdge>> _incident = {};
+
+  List<NetEdge> incident(String nodeId) => _incident[nodeId] ?? const [];
+
+  late final Map<String, String> riserTagById = riserTags(net, null);
+  late final Map<String, String> equipmentTagById = equipmentNodeTags(net);
 }
 
 /// One run edge's stock-coupling layout within its continuous pipe chain: the

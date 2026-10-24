@@ -12,6 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/templates.dart';
+import 'package:mechx/ui/shell/projects_screen.dart';
 import 'package:mechx/ui/shell/templates_dialog.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 
@@ -64,4 +65,26 @@ void main() {
     // The template's floor stack was genuinely applied.
     expect(c.read(projectControllerProvider).floors, template.floors);
   });
+
+  testWidgets(
+      'Work item 4: the Projects page Project card button opens the template '
+      'dialog', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(
+      child: _HostedProjects(),
+    ));
+    await tester.pump();
+
+    expect(find.text('Apply a building template'), findsNothing);
+    await tester.tap(find.text('Apply building template...'));
+    await tester.pumpAndSettle();
+    expect(find.text('Apply a building template'), findsOneWidget);
+  });
+}
+
+class _HostedProjects extends StatelessWidget {
+  const _HostedProjects();
+
+  @override
+  Widget build(BuildContext context) => _host(const ProjectsScreen());
 }

@@ -19,6 +19,9 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../ui/strings/app_strings.dart';
+import 'design_issues_store.dart' show zeroLengthSizedEdgeCountProvider;
+import 'electrical_store.dart'
+    show electricalResultProvider, electricalSizingProjectProvider;
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sheets_store.dart';
@@ -36,9 +39,16 @@ class CommandPaletteController extends Notifier<bool> {
   @override
   bool build() => false;
 
-  void open() => state = true;
+  void open() {
+    _closeExportSheet(ref);
+    state = true;
+  }
+
   void close() => state = false;
-  void toggle() => state = !state;
+  void toggle() {
+    if (!state) _closeExportSheet(ref);
+    state = !state;
+  }
 }
 
 /// Whether the Keyboard-shortcuts reference sheet (F1) is open. Like the
@@ -53,9 +63,57 @@ class ShortcutsSheetController extends Notifier<bool> {
   @override
   bool build() => false;
 
-  void open() => state = true;
+  void open() {
+    _closeExportSheet(ref);
+    state = true;
+  }
+
   void close() => state = false;
-  void toggle() => state = !state;
+  void toggle() {
+    if (!state) _closeExportSheet(ref);
+    state = !state;
+  }
+}
+
+/// Closes the Export sheet when another shell overlay opens, so two scrims can
+/// never stack (the same exclusivity the palette and shortcuts sheet share).
+void _closeExportSheet(Ref ref) {
+  if (ref.read(exportSheetProvider) != null) {
+    ref.read(exportSheetProvider.notifier).close();
+  }
+}
+
+/// The groups of the ONE Export sheet (Ctrl/Cmd+E). [submittal] is the
+/// "no particular group" opening: the primary submittal-package action is
+/// focused and every group starts collapsed. The others pre-expand + focus
+/// that group — how each workspace's own Export button lands on its rows.
+enum ExportGroup { submittal, drawings, reports, data, electrical, commercial }
+
+/// Whether the Export sheet is open, and with which group preselected.
+/// `null` = closed (the default, so a fresh launch and the goldens render
+/// nothing). Transient UI state — never persisted.
+final exportSheetProvider =
+    NotifierProvider<ExportSheetController, ExportGroup?>(
+  ExportSheetController.new,
+);
+
+class ExportSheetController extends Notifier<ExportGroup?> {
+  @override
+  ExportGroup? build() => null;
+
+  /// Open the sheet with [group] pre-expanded (default: the submittal
+  /// action focused, groups collapsed). Closes the command palette and the
+  /// shortcuts sheet first.
+  void open([ExportGroup group = ExportGroup.submittal]) {
+    ref.read(commandPaletteOpenProvider.notifier).close();
+    ref.read(shortcutsSheetOpenProvider.notifier).close();
+    state = group;
+  }
+
+  void close() => state = null;
+
+  /// Ctrl/Cmd+E: open on the default group, or close when already open.
+  void toggle() => state == null ? open() : close();
 }
 
 /// The stable ids of recently-run palette commands, most-recent first, capped
@@ -136,6 +194,10 @@ class ReportExportedController extends Notifier<bool> {
   bool build() => false;
 
   void markExported() => state = true;
+
+  /// Back to un-exported — called when a document is applied (File > New /
+  /// Open / recovery), honouring "a fresh open starts un-exported" (Round 12).
+  void reset() => state = false;
 }
 
 /// Whether the engineer has opened the Building (floors) screen this session —
@@ -156,6 +218,13 @@ class BuildingVisitedController extends Notifier<bool> {
   void markVisited() {
     if (!state) state = true;
   }
+
+  /// Round 17 follow-up (ui-journeys-3-new-project-keeps-floors-tick) — a
+  /// document swap (File > New / Open) starts unvisited, like a cold launch:
+  /// the previous project's Building visit must not tick Floors for this one.
+  void reset() {
+    if (state) state = false;
+  }
 }
 
 /// The default floor stack seeded by `ProjectController.build()` — a fresh,
@@ -174,20 +243,50 @@ const List<Floor> _kDefaultFloorStack = [
 ///  • Calibrate — any loaded sheet has a calibration;
 ///  • Floors    — the engineer has engaged with the levels (visited/edited the
 ///    Building screen, or changed the stack away from the default seed);
-///  • Draw      — the network has at least one edge;
+///  • Draw      — the network has at least one edge, OR (Round 29) an
+///    electrical board carries at least one way — the welcome card promises
+///    'lay out pipes, ducts and panels';
 ///  • Size      — at least one edge is sized AND a sheet is calibrated (an
 ///    uncalibrated solve runs on 0.0 m lengths, so it is not a finished step);
+///    with NO mechanical edges, an electrical design whose ways are solved
+///    (the electrical result sizes every board) completes it too;
 ///  • Report    — a deliverable (report/drawing/BOM) was exported this session.
 final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   final project = ref.watch(projectControllerProvider);
-  final sheets = ref.watch(sheetsControllerProvider).sheets;
-  final edges = ref.watch(networkControllerProvider).network.edges;
+  final sheets = ref.watch(sheetsContentProvider).sheets;
+  final edges = ref.watch(sizingNetworkProvider).edges;
   final sizing = ref.watch(sizingProvider);
 
-  final calibrated =
-      sheets.any((s) => project.calibrationFor(s.id) != null);
+  // Round 17 follow-up (ui-journeys-3-stepper-size-ticked-on-zero-length) —
+  // with drawn work, Calibrate is done only when EVERY sheet carrying a drawn
+  // edge is calibrated (one calibrated page beside an uncalibrated page holding
+  // the whole network used to tick it); with no edges, any calibrated sheet.
+  // The SAME edge-bearing rule the Review's critical 'Sheet not calibrated'
+  // uses (a sheet holding any node with an incident edge), so the stepper can
+  // never tick Calibrate while Review shows that blocker.
+  final net = ref.watch(sizingNetworkProvider);
+  final liveSheetIds = {for (final s in sheets) s.id};
+  final edgeNodeIds = {
+    for (final e in edges) ...[e.fromId, e.toId],
+  };
+  final drawnSheets = {
+    for (final n in net.nodes)
+      if (edgeNodeIds.contains(n.id) && liveSheetIds.contains(n.sheetId))
+        n.sheetId,
+  };
+  final calibrated = drawnSheets.isEmpty
+      ? sheets.any((s) => project.calibrationFor(s.id) != null)
+      : drawnSheets.every((sid) => project.calibrationFor(sid) != null);
   final hasNetwork = edges.isNotEmpty;
   final sized = sizing.isNotEmpty;
+  // Round 29 (ui-journeys-3-stepper-ignores-electrical) — electrical work
+  // counts: a board with at least one way is drawn work, and with no
+  // mechanical edge its solved result is the sizing (the calibrated /
+  // zero-length guards stay scoped to the mechanical network).
+  final elecProject = ref.watch(electricalSizingProjectProvider);
+  final hasElectrical = elecProject.panels.any((p) => p.circuits.isNotEmpty);
+  final elecSized = hasElectrical &&
+      ref.watch(electricalResultProvider).panels.isNotEmpty;
   // A fresh project ships with the default 3-floor seed, so the old
   // `floors.length > 1` marked Floors DONE before the user touched anything —
   // the map lied on first contact (A2). "Floors" is honest only once the
@@ -207,7 +306,7 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
   return WorkflowState({
     WorkflowStage.calibrate: calibrated,
     WorkflowStage.floors: floorsSet,
-    WorkflowStage.draw: hasNetwork,
+    WorkflowStage.draw: hasNetwork || hasElectrical,
     // F11 — Size is honest only on a MEASURED network. Without a calibration
     // every horizontal run is 0.0 m (§10 makes the per-sheet scale the sole
     // source of horizontal length), so the sizing that "completed" is running
@@ -215,7 +314,14 @@ final workflowStageStateProvider = Provider<WorkflowState>((ref) {
     // stage off `sized` alone told the engineer a step was finished that the
     // deliverable itself contradicts — the same honesty class the Floors tick
     // was fixed for (A2).
-    WorkflowStage.size: sized && calibrated,
+    //
+    // Round 17 follow-up — and no SIZED run may still be 0.0 m (the export
+    // gate's own blocker).
+    WorkflowStage.size: hasNetwork
+        ? sized &&
+            calibrated &&
+            ref.watch(zeroLengthSizedEdgeCountProvider) == 0
+        : elecSized,
     WorkflowStage.report: ref.watch(reportExportedProvider),
   });
 });
