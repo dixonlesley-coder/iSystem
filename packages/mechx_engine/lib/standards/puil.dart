@@ -751,6 +751,22 @@ class PuilProfile implements ElectricalStandardsProfile {
         //  are now verified — promoted out of the checklist.)
         maxVoltageDropLighting,
         continuousLoadFactor,
+        // Round 53 (elec-convergence-5-tt-vfd-final-30ma-rcd).
+        const StandardValue<Object?>(
+          'TT final-circuit RCD sensitivity by load kind (VFD 300 mA Type B, '
+              'fixed motor / pump / HVAC 100 mA, others 30 mA up to 63 A)',
+          unit: 'mA',
+          citation: 'IEC 60364-4-41 411.5.3 (Ra x IΔn <= 50 V) / 411.3.3 '
+              '(30 mA additional protection) — general practice (not a PUIL '
+              'clause)',
+          verified: false,
+          status: VerificationStatus.notAnSniClause,
+          note: 'On TT the earth-fault condition is only Ra x IΔn <= 50 V; '
+              '30 mA is the additional protection of socket-outlets. A drive '
+              'is given 300 mA (its leakage trips a 30 mA device), fixed '
+              'motor-driven equipment 100 mA. Verify against the drive '
+              'maker\'s RCD recommendation.',
+        ),
         const StandardValue<Object?>(
           'copper busbar continuous ratings (single bar, ~30 °C rise)',
           unit: 'table',

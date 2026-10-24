@@ -2045,6 +2045,11 @@ typedef HotWaterRecircLoop = ({
   List<double>? indexFlowShares,
   double? drawnLoopLengthM,
   Set<String> nodeIds,
+  // Round 53 — on a DRAWN return: every loop edge's share of the
+  // recirculation flow (shared pipework the sum of its loops' shares) and
+  // the node the circulation enters it from. Empty for an assumed return.
+  Map<String, double> loopEdgeShares,
+  Map<String, String> loopEdgeFrom,
 });
 
 /// The PRIMARY loop of [hotWaterRecircLoops] — the single-system view. Null
@@ -2425,6 +2430,36 @@ HotWaterRecircLoop? _hotWaterRecircLoopOf(
         edgeShare[e.id] = (edgeShare[e.id] ?? 0) + shareOf[i];
       }
     }
+    // The circulation direction round each loop: the enumeration walks every
+    // flowing pipe from its flow source, so the walk order IS the direction
+    // (the first loop through an edge decides). A loop walked against its
+    // flowing pipes (the undirected fallback) is turned round.
+    final loopFrom = <String, String>{};
+    for (final c in returnCycles) {
+      // The cycle's start node: the end of the first edge not shared with
+      // the second (a 2-edge cycle starts at the first edge's fromId).
+      var at = c.length >= 2 &&
+              (c.first.fromId == c[1].fromId || c.first.fromId == c[1].toId)
+          ? c.first.toId
+          : c.first.fromId;
+      final from = <String, String>{};
+      var agree = 0;
+      for (final e in c) {
+        from[e.id] = at;
+        final z = sizing[e.id];
+        if (z != null &&
+            z.flowFromId != null &&
+            z.flow.inLitersPerSecond.abs() > 1e-9) {
+          agree += z.flowFromId == at ? 1 : -1;
+        }
+        at = e.fromId == at ? e.toId : e.fromId;
+      }
+      for (final e in c) {
+        final f = from[e.id]!;
+        loopFrom.putIfAbsent(
+            e.id, () => agree >= 0 ? f : (e.fromId == f ? e.toId : e.fromId));
+      }
+    }
     double dOf(NetEdge e) =>
         (sizing[e.id]?.diameter ?? kDefaultRecircReturnDiameter).meters;
     var bestI = 0;
@@ -2466,6 +2501,8 @@ HotWaterRecircLoop? _hotWaterRecircLoopOf(
           single ? null : [for (final e in index) edgeShare[e.id]!],
       drawnLoopLengthM: index.fold<double>(0, (a, e) => a + lengthOf(e)),
       nodeIds: nodeIds,
+      loopEdgeShares: edgeShare,
+      loopEdgeFrom: loopFrom,
     );
   }
 
@@ -2526,6 +2563,8 @@ HotWaterRecircLoop? _hotWaterRecircLoopOf(
     indexFlowShares: null,
     drawnLoopLengthM: null,
     nodeIds: nodeIds,
+    loopEdgeShares: const {},
+    loopEdgeFrom: const {},
   );
 }
 

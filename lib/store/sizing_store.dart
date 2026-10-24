@@ -6,8 +6,11 @@ import 'package:mechx_engine/sizing/fire_pump_rating.dart'
 import 'package:mechx_engine/sizing/fire_standpipe.dart' show standpipeFlow;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart';
+import 'package:mechx_engine/sizing/hot_water.dart'
+    show heatLossFromLength, kDefaultRecircReturnDiameter, sizeHotWaterRecirculation;
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart';
+import 'package:mechx_engine/sizing/water_supply_sizing.dart' as water;
 import 'package:mechx_engine/standards/custom_fixture.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -18,6 +21,7 @@ import 'fire_store.dart';
 import 'fixture_library_store.dart';
 import 'network_store.dart';
 import 'project_store.dart';
+import 'solve_store.dart' show hotWaterRecircLoops;
 
 /// Roof catchment assumed per rainwater outlet until a per-outlet area is
 /// assigned. // VERIFY — refine with a real roof plan.
@@ -306,8 +310,32 @@ final sizingDetailProvider = Provider<
   // system's rated flow ([kJockeyFlowFraction], the NFPA 20 figure the
   // printed jockey duty carries) — instead of the mirrored full set flow.
   final jockeys = _jockeyLegFlows(
-      net, sizing, {...parallelLegs}, sprinklerRemote.remoteAreaDemand);
+      net, sizing, {...parallelLegs}, sprinklerRemote.remoteAreaDemand,
+      elevationOf: (n) =>
+          nodeElevation(n, project.building, project.mounting).meters);
   if (jockeys.flows.isNotEmpty) sizing = solve(jockeys.flows);
+  // Round 53 (plumbing-hvac-convergence-3-drawn-hw-return-sized-at-zero-
+  // flow) — a DRAWN hot-water return sits behind a RETURN check valve, so the
+  // sizer gives it zero draw-off (DN15, Round 27 r4) — but it carries the
+  // recirculation flow. Every pipe of a drawn recirculation loop is sized on
+  // at least its share of that flow ([_resizeDrawnRecircLoops]), so the
+  // issued return, the BOM, the riser and the circulator head (computed over
+  // these bores) agree — never 0.6 L/s pushed through DN15 at 3.4 m/s.
+  sizing = _resizeDrawnRecircLoops(
+    net,
+    sizing,
+    ref.watch(sizingContextProvider),
+    sizeOverrides: sizeOverrides,
+    lengthOf: (e) => edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+      mounting: project.mounting,
+    ).meters,
+    flowTempC: ref.watch(hotWaterFlowTempProvider),
+    deltaTK: ref.watch(hotWaterDeltaTProvider),
+  );
   // Round 27 r7 — a mover-leg valve whose balance runs against its pump is
   // named on the same advisory kind with its own message.
   for (final id in checkValveAgainstPump) {
@@ -326,6 +354,72 @@ final sizingDetailProvider = Provider<
   );
 });
 
+/// Round 53 — [sizing] with every pipe of a DRAWN hot-water recirculation
+/// loop ([hotWaterRecircLoops] with a drawn return) carrying at least its
+/// share of the loop's recirculation flow (`Q = heat loss / (rho c dT)`,
+/// [sizeHotWaterRecirculation], the figure the circulator duty is computed
+/// on): a pipe whose sized flow is below that share (the zero-draw-off return
+/// behind its check valve) is re-sized on it under the supply velocity cap,
+/// never below the assumed-return bore, oriented round the loop. A hand-picked size stays. The
+/// assumed (undrawn) return is untouched.
+Map<String, EdgeSizing> _resizeDrawnRecircLoops(
+  Network net,
+  Map<String, EdgeSizing> sizing,
+  SizingContext ctx, {
+  required Map<String, Diameter> sizeOverrides,
+  required double Function(NetEdge e) lengthOf,
+  required double flowTempC,
+  required double deltaTK,
+}) {
+  if (!net.edges.any((e) => e.service == ServiceType.hotWater)) return sizing;
+  final loops = hotWaterRecircLoops(net, sizing, lengthOf: lengthOf);
+  Map<String, EdgeSizing>? out;
+  for (final loop in loops) {
+    if (loop.drawnLoopLengthM == null || loop.loopEdgeShares.isEmpty) continue;
+    final q = sizeHotWaterRecirculation(
+      heatLoss: heatLossFromLength(
+          loopLength: Length(loop.circulatedLengthM + loop.returnLengthM)),
+      loopLength: Length(loop.returnLengthM),
+      returnDiameter: kDefaultRecircReturnDiameter,
+      flowTempC: flowTempC,
+      allowableDropK: deltaTK,
+    ).recircFlow.cubicMetersPerSecond;
+    if (q <= 0) continue;
+    final ids = loop.loopEdgeShares.keys.toList()..sort();
+    for (final id in ids) {
+      if (sizeOverrides.containsKey(id)) continue;
+      final edge = net.edgeById(id);
+      final cur = (out ?? sizing)[id];
+      if (edge == null || cur == null) continue;
+      final share = FlowRate(q * loop.loopEdgeShares[id]!);
+      if (cur.flow.cubicMetersPerSecond >=
+          share.cubicMetersPerSecond - 1e-12) {
+        continue;
+      }
+      // Never below the bore the ASSUMED return is modelled at
+      // ([kDefaultRecircReturnDiameter], DN20 — `// VERIFY`): drawing the
+      // return never makes the design worse than not drawing it.
+      final r = water.sizeForFlow(
+        flow: share,
+        maxVelocity: ctx.maxSupplyVelocity,
+        material: ctx.pipeMaterial,
+        minDiameter: kDefaultRecircReturnDiameter,
+      );
+      out ??= {...sizing};
+      out[id] = EdgeSizing(
+        edgeId: id,
+        service: edge.service,
+        flow: share,
+        diameter: r.diameter,
+        velocity: r.velocity,
+        overCapacity: r.overVelocity,
+        flowFromId: loop.loopEdgeFrom[id] ?? cur.flowFromId,
+      );
+    }
+  }
+  return out ?? sizing;
+}
+
 /// Round 37 — fire jockeys the FIRST solve could only ASSUME (nothing drawn
 /// tells the parallel pumps apart). The re-solve gives the jockey its own
 /// small bore, so the bore-based role rule then reads it as drawn; this keeps
@@ -342,7 +436,8 @@ final assumedFireJockeysProvider = Provider<Set<String>>(
     Network net,
     Map<String, EdgeSizing> sz,
     Set<String> parallelLegs,
-    FlowRate remoteAreaDemand) {
+    FlowRate remoteAreaDemand,
+    {double Function(NetNode n)? elevationOf}) {
   const none = (flows: <String, FlowRate>{}, assumed: <String>{});
   bool isFire(NetEdge e) =>
       e.service == ServiceType.fireHydrant ||
@@ -357,7 +452,8 @@ final assumedFireJockeysProvider = Provider<Set<String>>(
   if (firePumps.length < 2) return none;
   final roles = parallelFirePumpRoles(net, firePumps,
       bore: (id) => sz[id]?.diameter.inMillimeters,
-      parallelLegEdgeIds: parallelLegs);
+      parallelLegEdgeIds: parallelLegs,
+      elevationOf: elevationOf);
   if (roles.jockey.isEmpty) return none;
   final systems = fireRatingSystems(net);
   final out = <String, FlowRate>{};

@@ -28,7 +28,11 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart'
     show kSprinklerBranchHazenC;
 import 'package:mechx_engine/sizing/fire_standpipe.dart'
-    show StandpipeClass, kHoseOutletHeightM, parallelStandpipeCount;
+    show
+        StandpipeClass,
+        kHoseOutletHeightM,
+        parallelStandpipeCount,
+        standpipeFlow;
 import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
 import 'package:mechx_engine/units.dart';
 
@@ -402,6 +406,145 @@ List<FireSystem> splitFireSystemAtSharedSource(Network net, FireSystem system) {
 List<FireSystem> fireRatingSystems(Network net) => [
       for (final s in fireSystems(net)) ...splitFireSystemAtSharedSource(net, s),
     ];
+
+/// Round 53 — true when [sys] draws at least one fire TERMINAL (a hydrant
+/// box / hose reel / sprinkler head, never an FDC inlet).
+bool fireSystemHasTerminal(Network net, FireSystem sys) =>
+    sys.topTerminalFloor(net, FireTerminalKind.any) != null;
+
+/// Round 53 (regression-shared-header-sizer-partitions-on-fireSystems) — the
+/// DESIGN FLOW of a terminal-bearing fire [sys], the ONE figure the sizer
+/// carries on its supply and the rating reads: a hydrant-bearing system's
+/// standpipe flow for ITS parallel stacks and ITS class
+/// ([FireSystem.standpipeRisers] / [FireSystem.standpipeClass]: a hose-reel
+/// tower is 100 gpm Class II, never the Class III of a merged drawing), and
+/// for a sprinkler-bearing one the remote-area demand [sprinklerDemand]; a
+/// combined system the larger of the two (both conditions are covered,
+/// Round 50). Null when [sys] has no terminal (a transfer fill, an FDC
+/// chain — [fireTransferFedFlow]).
+FlowRate? fireSystemDesignFlow(
+  Network net,
+  FireSystem sys, {
+  FlowRate? sprinklerDemand,
+}) {
+  if (!fireSystemHasTerminal(net, sys)) return null;
+  FlowRate? q;
+  if (sys.hasHydrant) {
+    q = standpipeFlow(sys.standpipeRisers(net),
+        standpipeClass: sys.standpipeClass(net));
+  }
+  if (sys.hasSprinkler &&
+      sprinklerDemand != null &&
+      sprinklerDemand.cubicMetersPerSecond > 0 &&
+      (q == null ||
+          sprinklerDemand.cubicMetersPerSecond > q.cubicMetersPerSecond)) {
+    q = sprinklerDemand;
+  }
+  return q;
+}
+
+/// Round 53 — the storage tank a TRANSFER system [sys] (pumps, no
+/// terminal) fills: the highest tank ([isFireSystemBoundary]) of [sys]
+/// sitting above its lowest pump ([elevationOf], metres; ties to the lowest
+/// id). Null when [sys] draws a terminal or no pump, or when no tank sits
+/// above the pumps (a suction tank at / below them is the source).
+NetNode? fireTransferDestinationTank(
+  Network net,
+  FireSystem sys,
+  double Function(NetNode n) elevationOf,
+) {
+  if (fireSystemHasTerminal(net, sys)) return null;
+  double? pumpZ;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id)) continue;
+    if (n.component != NodeComponent.pump &&
+        n.component != NodeComponent.boosterSet) {
+      continue;
+    }
+    final z = elevationOf(n);
+    if (pumpZ == null || z < pumpZ) pumpZ = z;
+  }
+  if (pumpZ == null) return null;
+  NetNode? best;
+  var bestZ = double.negativeInfinity;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id) || !isFireSystemBoundary(n)) continue;
+    final z = elevationOf(n);
+    if (z <= pumpZ + 1e-9) continue;
+    if (z > bestZ + 1e-9 ||
+        ((z - bestZ).abs() <= 1e-9 &&
+            best != null &&
+            n.id.compareTo(best.id) < 0)) {
+      best = n;
+      bestZ = z;
+    }
+  }
+  return best;
+}
+
+/// Round 53 — the terminal-bearing fire systems of [systems] a TRANSFER
+/// system [transfer] ultimately fills through its destination tank [tankId]:
+/// every other system drawing from that tank, and — when such a system is
+/// itself a transfer (a chain of break tanks, [destinationTankOf]) — what IT
+/// fills (cycles are cut). Ordered as [systems].
+List<FireSystem> fireTransferFedSystems(
+  Network net,
+  FireSystem transfer,
+  String tankId,
+  List<FireSystem> systems, {
+  String? Function(FireSystem s)? destinationTankOf,
+  Set<FireSystem>? visited,
+}) {
+  final seen = visited ?? <FireSystem>{};
+  seen.add(transfer);
+  final out = <FireSystem>[];
+  for (final s in systems) {
+    if (seen.contains(s) || !s.nodeIds.contains(tankId)) continue;
+    seen.add(s);
+    if (fireSystemHasTerminal(net, s)) {
+      out.add(s);
+      continue;
+    }
+    final next = destinationTankOf?.call(s);
+    if (next != null && next != tankId) {
+      out.addAll(fireTransferFedSystems(net, s, next, systems,
+          destinationTankOf: destinationTankOf, visited: seen));
+    }
+  }
+  return out;
+}
+
+/// Round 53 (regression-transfer-pump-rated-class-i-flow / fire-
+/// convergence-5-transfer-pump-rated-below-its-own-discharge-flow) — the flow
+/// a TRANSFER system [transfer] (pumps, no terminal) delivers into its
+/// destination tank [tankId] ([fireTransferDestinationTank]): the largest
+/// design flow ([fireSystemDesignFlow]) of the systems it fills
+/// ([fireTransferFedSystems]) — a hose-reel zone 6.3 L/s, a two-stack
+/// Class I zone 47.3 L/s — never the transfer fragment's own one-riser
+/// Class I figure. Null when nothing is fed. The pipe sizer and the pump
+/// rating both read this figure, so the transfer pipe, its friction, the
+/// pump and its MDP way agree. `// VERIFY` the NFPA 20 refill rule (150 % of
+/// the downstream rating when the break tank holds less than 30 min of it)
+/// is NOT applied: the tank capacity is not judged.
+FlowRate? fireTransferFedFlow(
+  Network net,
+  FireSystem transfer,
+  String tankId,
+  List<FireSystem> systems, {
+  FlowRate? sprinklerDemand,
+  String? Function(FireSystem s)? destinationTankOf,
+}) {
+  FlowRate? best;
+  for (final s in fireTransferFedSystems(net, transfer, tankId, systems,
+      destinationTankOf: destinationTankOf)) {
+    final q = fireSystemDesignFlow(net, s, sprinklerDemand: sprinklerDemand);
+    if (q != null &&
+        (best == null || q.cubicMetersPerSecond > best.cubicMetersPerSecond)) {
+      best = q;
+    }
+  }
+  return best;
+}
 
 /// Hazen–Williams friction of the SIZED index path from [pumpId] over the
 /// fire [system], in metres: Dijkstra on each pipe's friction

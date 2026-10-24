@@ -2224,6 +2224,27 @@ _CircuitComputation _computeCircuit(
     ttFeeder: c.feedsPanelId == null ? null : opts.ttFeederRcd[c.feedsPanelId],
   );
 
+  // Round 53 — JUDGE-ONLY: the TT RCD fault-protection condition Ra × IΔn
+  // ≤ 50 V (IEC 60364-4-41 411.5.3) against the electrode design target
+  // ([ElectricalStandardsProfile.maxEarthResistance]): a device whose IΔn the
+  // electrode cannot meet is named, never re-rated.
+  if (rcd.required &&
+      opts.earthingSystem == EarthingSystem.tt &&
+      !ttRcdTouchVoltageOk(
+          profile.maxEarthResistance.value.ohms, rcd.ratingMa)) {
+    warnings.add(ElectricalWarning(
+      code: 'tt-rcd-touch-voltage',
+      severity: WarningSeverity.warning,
+      message: '${c.name}: RCD ${rcd.ratingMa} mA x earth electrode '
+          '${profile.maxEarthResistance.value.ohms.toStringAsFixed(1)} ohm '
+          'exceeds the ${kTtTouchVoltageLimitV.toStringAsFixed(0)} V touch-'
+          'voltage limit (IEC 60364-4-41 411.5.3): lower the electrode '
+          'resistance or the RCD IΔn.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
+
   // Round 36 (elec-props-4-tt-rcd-ladder-saturates) — JUDGE-ONLY: a TT
   // feeder RCD whose IΔn ladder is exhausted (≥ 5 cascaded RCD feeder levels)
   // sits at the same sensitivity as the feeder RCD below it, so an earth fault

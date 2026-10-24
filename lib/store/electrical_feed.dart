@@ -21,7 +21,10 @@ import 'package:mechx_engine/sizing/ejector.dart'
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
-    show fireParallelPumpSets, fireSystems;
+    show
+        fireParallelPumpSets,
+        fireRatingSystems,
+        fireTransferDestinationTank;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show serviceComponentRoots;
 import 'package:mechx_engine/sizing/pump.dart' show PumpDuty;
@@ -192,6 +195,7 @@ bool _onFireService(Set<ServiceType> s) =>
 
 final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
   final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
   final fire = <String>{};
   final supplyPumps = <String>[];
   final hwPumps = <String>{};
@@ -232,6 +236,8 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
           bore: (edgeId) =>
               ref.watch(sizingProvider)[edgeId]?.diameter.inMillimeters,
           parallelLegEdgeIds: ref.watch(parallelLegEdgeIdsProvider),
+          elevationOf: (n) => nodeElevation(n, project.building, project.mounting)
+              .meters,
         );
   // Round 23 (mep-bridge-3) — supply pumps on a mirrored parallel standby leg
   // (series transfer + booster pumps are never on a leg, so they stay duty
@@ -423,7 +429,9 @@ Map<String, String> parallelStandbyPumps(
   Set<String> firePumps, {
   required double? Function(String edgeId) bore,
   Set<String> parallelLegEdgeIds = const {},
+  double Function(NetNode n)? elevationOf,
 }) {
+  final elev = elevationOf ?? (NetNode n) => n.floorIndex.toDouble();
   bool isFire(NetEdge e) =>
       e.service == ServiceType.fireHydrant ||
       e.service == ServiceType.fireSprinkler;
@@ -482,8 +490,20 @@ Map<String, String> parallelStandbyPumps(
   // booster reached from the lower pump through the network is in SERIES:
   // a duty machine of its own stage that must run for any upper-zone fire,
   // never a standby at demand factor 0.
-  final systems = fireSystems(net);
+  //
+  // Round 53 (regression-feed-role-partition-fireSystems) — the systems are
+  // the RATING systems ([fireRatingSystems], the partition the pump bases
+  // and the sizer's jockey legs read), so the duty / standby / jockey merge
+  // never spans two independent pump rooms teed off one suction header.
+  final systems = fireRatingSystems(net);
   final sets = <List<String>>[];
+  // Round 53 (regression-transfer-set-assumed-jockey-wired-at-default-kw) —
+  // a jockey maintains pressure on a CLOSED standpipe / sprinkler system; a
+  // TRANSFER system (no terminal, filling a break tank above its pumps —
+  // [fireTransferDestinationTank], [elevationOf] metres) has none,
+  // so its parallel pumps are duty + standby only (never an assumed jockey
+  // wired at a default 1.5 kW beside a 22 kW transfer pump).
+  final noJockey = <List<String>>{};
   // Round 51 r2 — the connectivity groups above walk THROUGH a tank, but
   // [fireSystems] stops at one (a tank is a system boundary), so a group can
   // hold pumps of several systems (a sprinkler pump and a hydrant pump drawn
@@ -515,7 +535,11 @@ Map<String, String> parallelStandbyPumps(
           p.clear();
         }
       }
-      sets.addAll(parts.where((p) => p.isNotEmpty));
+      final kept = parts.where((p) => p.isNotEmpty).toList();
+      sets.addAll(kept);
+      if (fireTransferDestinationTank(net, systems[i], elev) != null) {
+        noJockey.addAll(kept);
+      }
     }
   }
   for (final g in sets) {
@@ -524,11 +548,13 @@ Map<String, String> parallelStandbyPumps(
     final duty = ranked.first;
     final rest = ranked.skip(1).toList();
     final dutyBore = boreOf(duty);
+    final jockeyAllowed = !noJockey.contains(g);
     final small = {
-      for (final id in rest)
-        if (boreOf(id) < dutyBore - 1e-6) id,
+      if (jockeyAllowed)
+        for (final id in rest)
+          if (boreOf(id) < dutyBore - 1e-6) id,
     };
-    if (small.isEmpty && g.length >= 3) {
+    if (jockeyAllowed && small.isEmpty && g.length >= 3) {
       final byBore = [...rest]..sort((a, b) {
           final d = boreOf(a).compareTo(boreOf(b));
           if (d != 0) return d;

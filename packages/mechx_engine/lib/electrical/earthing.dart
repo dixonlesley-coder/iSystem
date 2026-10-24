@@ -352,6 +352,43 @@ EarthingResult computeEarthing(
   );
 }
 
+/// Round 53 (elec-convergence-5-tt-vfd-final-30ma-rcd) — the load kinds a
+/// TT final RCD treats as FIXED motor-driven equipment.
+bool _isFixedMotorKind(LoadKind k) =>
+    k == LoadKind.motor || k == LoadKind.pump || k == LoadKind.hvac;
+
+/// Round 53 (elec-convergence-5-tt-vfd-final-30ma-rcd) — the residual
+/// operating current IΔn (mA) of a TT FINAL way's RCD, chosen by what it
+/// feeds. The TT earth-fault condition is only Ra × IΔn ≤ 50 V (IEC
+/// 60364-4-41 411.5.3, judged by [ttRcdTouchVoltageOk]); 30 mA is the
+/// ADDITIONAL protection of socket-outlets (411.3.3), so:
+///  * a VFD-fed way ([hasVfd]) → 300 mA (its EMC filter and screened-cable
+///    leakage — tens of mA in service — trips a 30 mA device; drive makers
+///    specify 300 mA Type B);
+///  * fixed motor / pump / HVAC equipment → 100 mA, whatever its current (a
+///    fixed motor at 63 A and at 64 A gets the same device);
+///  * every other way keeps the legacy rule: 30 mA up to 63 A, else 100 mA.
+/// `// VERIFY notAnSniClause` (the kind → IΔn mapping is general practice).
+int ttFinalRcdMa(
+  LoadKind loadKind, {
+  required Current designCurrent,
+  bool hasVfd = false,
+}) {
+  if (hasVfd) return 300;
+  if (_isFixedMotorKind(loadKind)) return 100;
+  return designCurrent.amperes <= 63 ? 30 : 100;
+}
+
+/// Round 53 — the touch-voltage condition of RCD fault protection on a TT
+/// system, IEC 60364-4-41 411.5.3: Ra × IΔn ≤ 50 V, with Ra the electrode +
+/// protective-conductor resistance (Ω) and [ratingMa] the RCD's IΔn.
+bool ttRcdTouchVoltageOk(double raOhm, int ratingMa) =>
+    raOhm * ratingMa / 1000.0 <= kTtTouchVoltageLimitV + 1e-9;
+
+/// Round 53 — the conventional touch-voltage limit UL (V) of the TT RCD
+/// condition Ra × IΔn ≤ UL (IEC 60364-4-41 411.5.3, normal conditions).
+const double kTtTouchVoltageLimitV = 50;
+
 /// Round 24 — the TT feeder RCD sensitivity ladder (mA): a feeder with NO
 /// RCD-bearing feeder below it sits at 300 mA (≥ 3 × the 30 / 100 mA finals);
 /// each further RCD feeder level below steps it up the standard IΔn series
@@ -435,10 +472,22 @@ RcdSpec circuitRcd({
     );
   }
   if (earthingSystem == EarthingSystem.tt && isFinalCircuit) {
+    final ma = ttFinalRcdMa(loadKind,
+        designCurrent: designCurrent, hasVfd: hasVfd);
     return RcdSpec(
       required: true,
-      ratingMa: designCurrent.amperes <= 63 ? 30 : 100,
-      reason: 'TT system — RCD required for earth-fault protection.',
+      ratingMa: ma,
+      reason: hasVfd
+          ? 'TT system — RCD required for earth-fault protection; 300 mA '
+              'Type B for the drive (its EMC-filter and cable leakage trips a '
+              '30 mA device; IEC 60364-4-41 411.5 needs only Ra x IΔn <= 50 V). '
+              '// VERIFY'
+          : _isFixedMotorKind(loadKind)
+              ? 'TT system — RCD required for earth-fault protection; 100 mA '
+                  'for fixed motor-driven equipment (30 mA is the additional '
+                  'protection of socket-outlets, IEC 60364-4-41 411.3.3). '
+                  '// VERIFY'
+              : 'TT system — RCD required for earth-fault protection.',
       type: rcdType(),
     );
   }
