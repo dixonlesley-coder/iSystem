@@ -847,6 +847,30 @@ bool roomServedByDrawnAir(
 }
 
 String? roomTerminalOwnerOf(NetNode node, Iterable<RoomArea> rooms) {
+  final owner = _roomTerminalOwnerOf(node, rooms);
+  if (owner == null || node.autoPlacedRoomId == owner) return owner;
+  // Round 54 (plumbing-hvac-convergence-4-autoplace-deletes-hand-drawn-
+  // exhaust-grilles) — a terminal of the OTHER kind (an exhaust grille in a
+  // conditioned room — a cinema smoke exhaust, a kitchenette extract — or a
+  // supply diffuser / return grille in an extract-only room) that this room's
+  // Auto-place did not generate is not the room's: re-running Auto-place
+  // deleted the hand-drawn smoke-exhaust branch (grilles AND their ducts) and
+  // the stale judge added its air to the room's extract bank (13.000 vs
+  // 7.000 m3/s — a warning only that destructive re-run could clear). A
+  // terminal the room itself generated stays its own (a room retyped from
+  // office to toilet still warns about, and replaces, its old diffusers).
+  for (final r in rooms) {
+    if (r.id != owner) continue;
+    final extractRoom = isExtractRoomType(r.roomType);
+    final compatible = node.component == NodeComponent.exhaustGrille
+        ? extractRoom
+        : !extractRoom;
+    return compatible ? owner : null;
+  }
+  return owner;
+}
+
+String? _roomTerminalOwnerOf(NetNode node, Iterable<RoomArea> rooms) {
   final tag = node.autoPlacedRoomId;
   if (tag != null) {
     for (final r in rooms) {

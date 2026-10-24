@@ -291,6 +291,14 @@ class FireSystemBasis {
   final PumpDuty? duty;
   final PumpDuty? jockey;
 
+  /// Round 54 (fire-convergence-6-staged-system-jockey-rated-at-summed-
+  /// system-churn) — the NFPA 20 curve the JOCKEY is sized on: on a series-
+  /// staged system the ROOT stage's (the jockey sits on the stage-1
+  /// discharge, where the main pumps develop only that stage's churn), else
+  /// the system [rating].
+  final FirePumpRatingResult? stagedJockeyRating;
+  FirePumpRatingResult get jockeyRating => stagedJockeyRating ?? rating;
+
   /// Round 37 r2 — a COMBINED (sprinkler + hydrant) system whose sprinkler
   /// HEAD exceeds the standpipe head: the pump is rated on the sprinkler point
   /// (its small remote-area flow), so the standpipe flow ([standpipe]) at the
@@ -381,6 +389,7 @@ class FireSystemBasis {
     this.standpipe,
     required this.duty,
     required this.jockey,
+    this.stagedJockeyRating,
     this.sprinklerGovernsCombined = false,
     this.standpipeClass = StandpipeClass.classI,
     this.staticLiftM = 0,
@@ -682,7 +691,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final dutyPump = gravity != null || flow.cubicMetersPerSecond <= 0
         ? null
         : firePumpDuty(ratedFlow: flow, ratedHead: head, rating: rating);
-    final jockey = transferTank != null ||
+    var jockey = transferTank != null ||
             dutyPump == null ||
             rating.jockeyFlow.cubicMetersPerSecond <= 0
         ? null
@@ -847,6 +856,22 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         }
       }
     }
+    // Round 54 (fire-convergence-6-staged-system-jockey-rated-at-summed-
+    // system-churn) — on a series-staged system the jockey keeps the
+    // STAGE-1 discharge pressurised: 1 % of the rated flow at the ROOT
+    // stage's churn + 5 m (1.4 x 132.15 + 5 = 190.0 m on a two-stage tower),
+    // never 1.4 x the SUMMED system head + 5 m (254 m, 70 m above anything the
+    // main pumps develop there).
+    FirePumpRatingResult? stagedJockeyRating;
+    if (stagesOut.length >= 2) {
+      final root = stagesOut.firstWhere((st) => st.upstream == null,
+          orElse: () => stagesOut.first);
+      stagedJockeyRating = root.rating;
+      if (jockey != null) {
+        jockey =
+            sizePump(flow: rating.jockeyFlow, head: root.rating.jockeyHead);
+      }
+    }
     out.add(FireSystemBasis(
       system: sys,
       pumpIds: pumps,
@@ -859,6 +884,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       standpipe: standpipe,
       duty: dutyPump,
       jockey: jockey,
+      stagedJockeyRating: stagedJockeyRating,
       sprinklerGovernsCombined: sprinklerGoverns,
       standpipeClass: cls,
       staticLiftM: staticLift,
@@ -880,11 +906,12 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
 /// Round 50 — the gravity verdict of a pump-less fire system [sys], or null
 /// when it is not gravity-fed (no plant source, or a source below its
 /// terminals — a ground tank / mains-fed system keeps the suggested pump).
-/// Each terminal kind drawn is judged: available = the highest gravity
-/// source's elevation − the topmost terminal (a sprinkler at its floor's
-/// ceiling, a hose outlet [kHoseOutletHeightM] above its floor) − the sized
-/// index-path friction from the source ([fireIndexPathFrictionM], 0 when
-/// unmeasured); required = the remote-head pressure (sprinkler) or the class
+/// Each terminal kind drawn is judged: available = the least, over that
+/// kind's terminals, of the highest gravity source's elevation − the
+/// terminal's own elevation (a sprinkler at its floor's ceiling, a hose
+/// outlet [kHoseOutletHeightM] above its floor) − the sized friction of ITS
+/// path from the source ([fireIndexPathFrictionM]; unmeasured ⇒ the topmost
+/// terminal with no friction); required = the remote-head pressure (sprinkler) or the class
 /// residual (hydrant) as P / (rho g). The worst margin is reported.
 ({String sourceId, double availableM, double requiredM})? _gravityCheck({
   required FireSystem sys,
@@ -933,7 +960,22 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
   if (!any || best == null) return null;
   double? worstAvail;
   double? worstNeed;
+  // Round 54 (fire-convergence-6-gravity-head-check-subtracts-worst-
+  // friction-from-top-terminal-static) — judged PER TERMINAL: each terminal
+  // keeps the tank head above ITS OWN elevation less the friction of ITS OWN
+  // path. Pairing the top terminal's static head with the far low terminal's
+  // (worst) friction — two different terminals — raised a false 'head
+  // insufficient' on a satisfied system (a top floor beside the tank plus a
+  // long ground-floor run).
+  double terminalZ(String id, FireTerminalKind k) {
+    final f = clampF(net.nodeById(id)?.floorIndex ?? nF - 1);
+    return k == FireTerminalKind.sprinkler
+        ? building.ceilingElevationOf(f).meters
+        : building.elevationOf(f).meters + kHoseOutletHeightM;
+  }
+
   for (final k in kinds) {
+    final byTerminal = <String, double>{};
     final f = fireIndexPathFrictionM(
           net: net,
           system: sys,
@@ -941,9 +983,17 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           sizing: sizing,
           lengthOf: lengthOf,
           terminals: k,
+          frictionByTerminalOut: byTerminal,
         ) ??
         0.0;
-    final avail = bestElev - targetOf(k) - f;
+    var avail = bestElev - targetOf(k) - f;
+    if (byTerminal.isNotEmpty) {
+      avail = double.infinity;
+      for (final t in byTerminal.entries) {
+        final a = bestElev - terminalZ(t.key, k) - t.value;
+        if (a < avail) avail = a;
+      }
+    }
     final need = k == FireTerminalKind.sprinkler
         ? remote.remoteHeadPressure.pascals / rhoG
         : residualPressureKpa(standpipeClass) * 1000 / rhoG;
@@ -1043,7 +1093,12 @@ final firePumpDutyProvider = Provider<PumpDuty?>((ref) {
 /// whenever [firePumpDutyProvider] is (no fire service drawn).
 final fireJockeyDutyProvider = Provider<PumpDuty?>((ref) {
   if (ref.watch(firePumpDutyProvider) == null) return null;
-  final r = ref.watch(firePumpRatingProvider);
+  // Round 54 — a series-staged governing system's jockey sits on its root
+  // stage ([FireSystemBasis.jockeyRating]).
+  final g = ref.watch(governingFireBasisProvider);
+  final r = g != null && g.stages.length >= 2
+      ? g.jockeyRating
+      : ref.watch(firePumpRatingProvider);
   if (r.jockeyFlow.cubicMetersPerSecond <= 0) return null;
   return sizePump(flow: r.jockeyFlow, head: r.jockeyHead);
 });

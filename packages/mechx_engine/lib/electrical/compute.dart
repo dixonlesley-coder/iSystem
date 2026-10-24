@@ -46,6 +46,7 @@ import 'fault.dart'
         defaultLvUtilityFaultKa,
         estimatedServiceFaultLevelA,
         faultBasisLineVoltageV,
+        kMccbMagneticTripMultiple,
         faultStudy,
         feederNeutralImpedance,
         selectivityRatio,
@@ -101,12 +102,23 @@ const double kThreePhaseServiceLineVoltageV = 400;
 /// caller (`computeSystem`) passes it for a FINAL way whose frame-raised
 /// rating fails the earth-fault loop (ADS) — a device-class rule must never
 /// create a safety non-compliance the load-sized device did not have.
+///
+/// Round 54 (elec-convergence-6-mcb-class-swap-creates-ads-failure) — the
+/// CLASS change itself can fail ADS: a non-MCB device is judged at
+/// `max(10, curve multiple) × In` (`kMccbMagneticTripMultiple`), which halves a
+/// B-curve way's Zs limit (a 16 A 2.5 mm² 60 m life-safety lighting way:
+/// 1.368 ohm passes 0.95·230/(5·16) = 2.731 ohm as an MCB, fails
+/// 0.95·230/(10·16) = 1.365 ohm as the converted MCCB). So [allowClassChange]
+/// false keeps the load-sized MCB for ANY rating — the frame raise and the
+/// class change alike — and the way takes the existing back-up (cascade)
+/// path instead.
 BreakerResult faultAwareBreakerClass(BreakerResult b, Current? busFault,
-    {Current? maxRatingA, bool allowFrameRaise = true}) {
+    {Current? maxRatingA, bool allowClassChange = true}) {
   if (!_mcbBelowBusFault(b, busFault)) return b;
+  if (!allowClassChange) return b;
   var rating = b.ratingA.amperes;
   if (rating < kMccbMinFrameA - 1e-9) {
-    if (b.overridden || !allowFrameRaise) return b;
+    if (b.overridden) return b;
     if (maxRatingA != null && kMccbMinFrameA > maxRatingA.amperes + 1e-9) {
       return b;
     }
@@ -2081,11 +2093,11 @@ _CircuitComputation _computeCircuit(
   // [faultAwareBreakerClass]).
   final frameRaiseRefused = opts.mccbFrameRaiseRefusedIds.contains(c.id);
   breaker = faultAwareBreakerClass(breaker, opts.faultLevelA,
-      maxRatingA: cable.deratedIz, allowFrameRaise: !frameRaiseRefused);
+      maxRatingA: cable.deratedIz, allowClassChange: !frameRaiseRefused);
   if (mcbNeedsBackupProtection(breaker, opts.faultLevelA)) {
     final why = frameRaiseRefused
-        ? 'a ${_num(kMccbMinFrameA)} A MCCB would fail the earth-fault loop '
-            '(ADS) on this run'
+        ? 'an MCCB (magnetic trip at ${_num(kMccbMagneticTripMultiple)} x In) '
+            'would fail the earth-fault loop (ADS) on this run'
         : 'its cable (Iz ${_num(roundTo(cable.deratedIz.amperes, 1))} A) '
             'cannot carry a ${_num(kMccbMinFrameA)} A MCCB frame';
     warnings.add(ElectricalWarning(
@@ -2224,26 +2236,10 @@ _CircuitComputation _computeCircuit(
     ttFeeder: c.feedsPanelId == null ? null : opts.ttFeederRcd[c.feedsPanelId],
   );
 
-  // Round 53 — JUDGE-ONLY: the TT RCD fault-protection condition Ra × IΔn
-  // ≤ 50 V (IEC 60364-4-41 411.5.3) against the electrode design target
-  // ([ElectricalStandardsProfile.maxEarthResistance]): a device whose IΔn the
-  // electrode cannot meet is named, never re-rated.
-  if (rcd.required &&
-      opts.earthingSystem == EarthingSystem.tt &&
-      !ttRcdTouchVoltageOk(
-          profile.maxEarthResistance.value.ohms, rcd.ratingMa)) {
-    warnings.add(ElectricalWarning(
-      code: 'tt-rcd-touch-voltage',
-      severity: WarningSeverity.warning,
-      message: '${c.name}: RCD ${rcd.ratingMa} mA x earth electrode '
-          '${profile.maxEarthResistance.value.ohms.toStringAsFixed(1)} ohm '
-          'exceeds the ${kTtTouchVoltageLimitV.toStringAsFixed(0)} V touch-'
-          'voltage limit (IEC 60364-4-41 411.5.3): lower the electrode '
-          'resistance or the RCD IΔn.',
-      panelId: panel.id,
-      circuitId: c.id,
-    ));
-  }
+  // Round 54 (regression-tt-rcd-touch-voltage-judge-dead) — the TT
+  // Ra × IΔn <= 50 V judge moved to `computeAdvancedStudy`, which has the
+  // DESIGNED electrode (`designElectrode`); judged here against the constant
+  // 5 ohm target it could never fire (5 ohm x 10 A = 50 V passes).
 
   // Round 36 (elec-props-4-tt-rcd-ladder-saturates) — JUDGE-ONLY: a TT
   // feeder RCD whose IΔn ladder is exhausted (≥ 5 cascaded RCD feeder levels)
@@ -4661,13 +4657,20 @@ ElectricalSystemResult computeSystem(
     final tn = r.earthing.system == EarthingSystem.tnS ||
         r.earthing.system == EarthingSystem.tnCs;
     if (!tn) return r;
+    // Round 54 — every non-overridden FINAL MCCB within the MCB ladder
+    // (<= 63 A): the load-sized device of such a way was an MCB, so its class
+    // came from the fault rule (a 16 A / 20 A / 32 A way converts at the same
+    // rating and the conversion ALONE can fail ADS — the halved Zs limit).
+    final mcbTopA = profile.standardBreakerRatingsA
+        .where((a) => profile.breakerClassFor(a) == BreakerClass.mcb)
+        .fold<double>(0, math.max);
     final candidates = <String>[
       for (final pr in r.panels.values)
         for (final w in pr.circuits)
           if (w.loadKind != LoadKind.feeder &&
               w.breaker.deviceClass == BreakerClass.mccb &&
               !w.breaker.overridden &&
-              (w.breaker.ratingA.amperes - kMccbMinFrameA).abs() < 1e-9)
+              w.breaker.ratingA.amperes <= mcbTopA + 1e-9)
             w.circuitId,
     ];
     if (candidates.isEmpty) return r;
@@ -4683,8 +4686,8 @@ ElectricalSystemResult computeSystem(
         if (f.circuits[id]?.adsOk == false) id,
     };
     if (refused.isEmpty) return r;
-    // A load-sized 16 A way is unaffected by the refusal (it converts to
-    // the same 16 A MCCB), so only a genuinely raised way changes.
+    // Refusing keeps each listed way's load-sized MCB (raised OR merely
+    // converted): its Zs limit returns to the curve multiple.
     return sizeAll(floors, caps, refused);
   }
 
