@@ -171,6 +171,43 @@ Network _carPark(
   return Network(nodes: nodes, edges: edges);
 }
 
+/// Round 56 r2 - a TWO-storey building with two genuine hydrant stacks A and
+/// B, a box on both floors of each. [baseFed]: the main to B leaves from A's
+/// base node (GT -> FP -> A0 -> B0); else a header J feeds both bases.
+Network _twinStacks({required bool baseFed}) {
+  final nodes = <NetNode>[
+    _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+    _n('FP', 10, role: NodeRole.plant, c: NodeComponent.pump),
+    if (!baseFed) _n('J', 15),
+    _n('A0', 20),
+    _n('A1', 20, floor: 1),
+    _n('B0', 60),
+    _n('B1', 60, floor: 1),
+    _box('AB0', 25, 0),
+    _box('AB1', 25, 1),
+    _box('BB0', 65, 0),
+    _box('BB1', 65, 1),
+  ];
+  final edges = <NetEdge>[
+    _e('g', 'GT', 'FP'),
+    if (baseFed) ...[
+      _e('d', 'FP', 'A0'),
+      _e('ab', 'A0', 'B0'),
+    ] else ...[
+      _e('d', 'FP', 'J'),
+      _e('ja', 'J', 'A0'),
+      _e('jb', 'J', 'B0'),
+    ],
+    _e('ra', 'A0', 'A1', k: EdgeKind.riser),
+    _e('rb', 'B0', 'B1', k: EdgeKind.riser),
+    _e('ab0', 'A0', 'AB0'),
+    _e('ab1', 'A1', 'AB1'),
+    _e('bb0', 'B0', 'BB0'),
+    _e('bb1', 'B1', 'BB1'),
+  ];
+  return Network(nodes: nodes, edges: edges);
+}
+
 Network _flipShuffle(Network net, math.Random rnd) {
   final edges = [
     for (final e in net.edges)
@@ -237,6 +274,24 @@ void main() {
         expect(standpipeFlow(n).inLitersPerSecond,
             closeTo(500 * 3.785411784 / 60, 1e-9));
       }
+    });
+
+    test(
+        'regression-twin-stack-base-fed-counts-one: two 2-storey stacks '
+        'count 2 fed from a stack base or a header (750 gpm)', () {
+      final rnd = math.Random(5602);
+      for (final baseFed in [true, false]) {
+        expect(drawnStandpipeRiserCount(_twinStacks(baseFed: baseFed)), 2,
+            reason: 'baseFed=$baseFed');
+        for (var t = 0; t < 50; t++) {
+          final net = _flipShuffle(_twinStacks(baseFed: baseFed), rnd);
+          expect(drawnStandpipeRiserCount(net), 2,
+              reason: 'baseFed=$baseFed trial $t');
+        }
+      }
+      // 750 gpm = 750 x 3.785411784 / 60 = 47.318 L/s.
+      expect(standpipeFlow(2).inLitersPerSecond,
+          closeTo(750 * 3.785411784 / 60, 1e-9));
     });
 
     test('a genuine second stack still counts (2)', () {

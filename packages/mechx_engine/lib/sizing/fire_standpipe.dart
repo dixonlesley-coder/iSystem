@@ -353,6 +353,13 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   // [edges] (the sizer's downstream walks) counts consistently.
   final fireAdj = <String, List<String>>{};
   final fullParent = <String, String>{};
+  final fireLinks = <String, List<(String, String)>>{};
+  final fullHydrantAdj = <String, List<String>>{};
+  final fireRisers = <NetEdge>[];
+  Set<String> ownRiserEdgeIds(Set<String> members) => {
+        for (final e in fireRisers)
+          if (members.contains(e.fromId) && members.contains(e.toId)) e.id,
+      };
   String findFull(String x) {
     var r = x;
     while (fullParent[r] != r) {
@@ -368,7 +375,14 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     }
     (fireAdj[e.fromId] ??= []).add(e.toId);
     (fireAdj[e.toId] ??= []).add(e.fromId);
+    (fireLinks[e.fromId] ??= []).add((e.toId, e.id));
+    (fireLinks[e.toId] ??= []).add((e.fromId, e.id));
+    if (e.service == ServiceType.fireHydrant) {
+      (fullHydrantAdj[e.fromId] ??= []).add(e.toId);
+      (fullHydrantAdj[e.toId] ??= []).add(e.fromId);
+    }
     if (e.kind != EdgeKind.riser) continue;
+    fireRisers.add(e);
     fullParent.putIfAbsent(e.fromId, () => e.fromId);
     fullParent.putIfAbsent(e.toId, () => e.toId);
     final a = findFull(e.fromId);
@@ -417,6 +431,48 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     return inlet;
   }
 
+  // The floors of the hose outlets a riser component feeds itself: an outlet
+  // AT a member, or one a hydrant branch leaving a member reaches before any
+  // other riser node (a wall) or a plant — an outlet ends the walk.
+  Set<int> ownOutletFloors(Set<String> members) {
+    final floors = <int>{};
+    for (final m in members) {
+      if (isHoseOutlet(m)) floors.add(floorOf[m] ?? 0);
+      final seen = <String>{...members};
+      final queue = [m];
+      for (var i = 0; i < queue.length; i++) {
+        for (final o in fullHydrantAdj[queue[i]] ?? const <String>[]) {
+          if (!seen.add(o)) continue;
+          if (fullParent.containsKey(o)) continue; // another riser: a wall
+          if (isHoseOutlet(o)) {
+            floors.add(floorOf[o] ?? 0);
+            continue;
+          }
+          if (nodeById[o]?.role == NodeRole.plant) continue;
+          queue.add(o);
+        }
+      }
+    }
+    return floors;
+  }
+
+  // Is the component on a ring: do its members stay joined through the fire
+  // network once its own riser edges are removed?
+  bool onRing(Set<String> members) {
+    final own = ownRiserEdgeIds(members);
+    final start = members.first;
+    final seen = <String>{start};
+    final queue = [start];
+    for (var i = 0; i < queue.length; i++) {
+      final cur = queue[i];
+      for (final (o, eid) in fireLinks[cur] ?? const <(String, String)>[]) {
+        if (own.contains(eid)) continue;
+        if (seen.add(o)) queue.add(o);
+      }
+    }
+    return members.every(seen.contains);
+  }
+
   bool isBranchDrop(String root) {
     final a = lo[root]!;
     if (hi[root]! != a + 1 || sources.isEmpty) return false;
@@ -425,6 +481,17 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
         if (find(id) == root) id,
     };
     final own = <String>{for (final id in members) findFull(id)};
+    // Round 56 r2 (regression-twin-stack-base-fed-counts-one) — a riser
+    // whose OWN hose outlets sit on two floors and that is on no ring is a
+    // genuine stack, however the source reaches it: in a two-storey building
+    // every stack is one storey, and the main to stack B commonly leaves
+    // from stack A's base node (or the pump sits at A's base) — B was then
+    // reachable only through A and dropped (500 gpm instead of 750 gpm).
+    // A ring leg down a ramp also carries a box at each end, but removing
+    // its own riser edges leaves its ends joined round the ring.
+    if (ownOutletFloors(members).length >= 2 && !onRing(members)) {
+      return false;
+    }
     // Nodes of every OTHER riser component spanning the storey (a, a+1).
     bool blocks(String id) {
       if (!fullParent.containsKey(id)) return false;
