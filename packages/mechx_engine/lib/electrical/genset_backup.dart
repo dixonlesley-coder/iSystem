@@ -8,6 +8,7 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart' show ApparentPower, Power;
+import 'load_kind.dart' show LoadKind;
 import 'model.dart';
 import 'panel_results.dart';
 import 'sizing.dart' show roundTo;
@@ -149,12 +150,145 @@ ApparentPower gensetBackupDemandVa(
   final gen = project.sources?.generator;
   final demand = sys.supply.demandVa.voltAmperes;
   if (gen == null) return ApparentPower(demand);
-  final fractionVa = demand * gen.backupFraction;
-  final essentialVa = essentialDemandVa(project, sys);
+  final fractionVa = _fractionVaFloored(project, sys, gen.backupFraction);
+  final essentialVa = _essentialVaFloored(project, sys);
   final balanced = essentialVa > fractionVa ? essentialVa : fractionVa;
   final phase = gensetPhaseDemandVa(project, sys);
   return ApparentPower(
       _phaseBasisGoverns(project, sys, phase, balanced) ? phase : balanced);
+}
+
+/// Round 55 (elec-convergence-7-genset-below-largest-backed-machine) — ONE
+/// machine does not diversify against itself on the genset either (the
+/// Round-40 rule every incomer, feeder, the daya and the service judge
+/// already follow): the essential basis is floored at each topmost backed
+/// board's LARGEST machine at its undiversified running current
+/// ([ElectricalPanelResult.largestDownstreamRunA], via [worstPhaseDemandVa]
+/// on the supply's basis). A 75 kW fire pump (144.7 A, √3·400·144.7 =
+/// 100.3 kVA) on an essential board diversified to 86.6 kVA used to get a
+/// 100 kVA standby set (80 kW, 144.3 A per phase) that cannot carry the pump
+/// alone. A board whose diversified demand already exceeds its largest
+/// machine is unchanged.
+double _essentialVaFloored(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final va = essentialDemandVa(project, sys);
+  final topmost = _topmostBackedPanelIds(project);
+  if (topmost.isEmpty) return va;
+  final floored = _machineFlooredVa(project, sys, topmost);
+  return floored > va ? floored : va;
+}
+
+/// The fraction-of-building basis, floored at the largest machine on the
+/// roots when the set backs the WHOLE building (fraction ≥ 1): a partial set
+/// is not designated to start any one machine.
+double _fractionVaFloored(
+    ElectricalProject project, ElectricalSystemResult sys, double fraction) {
+  final va = sys.supply.demandVa.voltAmperes * fraction;
+  if (fraction < 1 - 1e-9) return va;
+  final floored = _machineFlooredVa(project, sys, _rootPanelIds(project));
+  return floored > va ? floored : va;
+}
+
+/// Σ over [panelIds] of max(the board's own demand VA [× UPS input], the
+/// apparent power of the largest machine on or below it — one final way's
+/// UNDIVERSIFIED running current on its OWN basis: √3·V_LL·I for a 3φ way,
+/// U0·I for a 1φ way, so the balanced basis never re-counts a 1φ machine on
+/// all three lines (the per-phase basis [gensetPhaseDemandVa] judges that).
+/// A board with no machine above its diversified demand contributes exactly
+/// its demand VA.
+double _machineFlooredVa(ElectricalProject project, ElectricalSystemResult sys,
+    Iterable<String> panelIds) {
+  final modelById = {for (final p in project.panels) p.id: p};
+  var va = 0.0;
+  for (final id in panelIds) {
+    final r = sys.panels[id];
+    final m = modelById[id];
+    if (r == null || m == null) continue;
+    final board = _boardDemandVa(sys, r) * _upsIn(m);
+    final machine = m.upsBacked ? 0.0 : _largestMachineVa(project, sys, id);
+    va += machine > board ? machine : board;
+  }
+  return va;
+}
+
+double _largestMachineVa(
+    ElectricalProject project, ElectricalSystemResult sys, String rootId) {
+  final modelById = {for (final p in project.panels) p.id: p};
+  var best = 0.0;
+  for (final (pr, w) in _finalWaysBelow(project, sys, {rootId})) {
+    final threeBoard = pr.system == ElectricalSystem.threePhase;
+    final v = modelById[pr.panelId]?.voltage.volts ?? (threeBoard ? 400 : 230);
+    final x = w.threePhase
+        ? capacityForLineCurrentVa(
+            w.runCurrentA.amperes, ElectricalSystem.threePhase, v)
+        : w.runCurrentA.amperes * (threeBoard ? v / math.sqrt(3) : v);
+    if (x > best) best = x;
+  }
+  return best;
+}
+
+/// Every final (load) way on the boards [panelIds] and every board they
+/// feed; feeders, capacitor banks and spares excluded.
+Iterable<(ElectricalPanelResult, ElectricalCircuitResult)> _finalWaysBelow(
+    ElectricalProject project,
+    ElectricalSystemResult sys,
+    Set<String> panelIds) sync* {
+  final children = <String, List<String>>{};
+  for (final p in project.panels) {
+    for (final c in p.circuits) {
+      final fed = c.feedsPanelId;
+      if (fed != null && fed.isNotEmpty) {
+        (children[p.id] ??= <String>[]).add(fed);
+      }
+    }
+  }
+  final seen = <String>{};
+  final stack = [...panelIds];
+  while (stack.isNotEmpty) {
+    final id = stack.removeLast();
+    if (!seen.add(id)) continue;
+    stack.addAll(children[id] ?? const <String>[]);
+    final pr = sys.panels[id];
+    if (pr == null) continue;
+    for (final w in pr.circuits) {
+      if (w.loadKind == LoadKind.feeder ||
+          w.loadKind == LoadKind.capacitor ||
+          w.loadKind == LoadKind.spare) {
+        continue;
+      }
+      yield (pr, w);
+    }
+  }
+}
+
+/// Round 55 — the largest UNDIVERSIFIED input W of any one final way on the
+/// boards [panelIds] and every board they feed (the machine's own electrical
+/// input, `connectedWOrLoad`); feeders, capacitor banks and spares excluded.
+double _largestMachineW(ElectricalProject project, ElectricalSystemResult sys,
+    Set<String> panelIds) {
+  var best = 0.0;
+  for (final (_, w) in _finalWaysBelow(project, sys, panelIds)) {
+    final x = w.connectedWOrLoad;
+    if (x > best) best = x;
+  }
+  return best;
+}
+
+double _essentialWFloored(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final w = essentialDemandW(project, sys);
+  final topmost = _topmostBackedPanelIds(project);
+  if (topmost.isEmpty) return w;
+  final machine = _largestMachineW(project, sys, topmost);
+  return machine > w ? machine : w;
+}
+
+double _fractionWFloored(
+    ElectricalProject project, ElectricalSystemResult sys, double fraction) {
+  final w = sys.supply.demandW * fraction;
+  if (fraction < 1 - 1e-9) return w;
+  final machine = _largestMachineW(project, sys, _rootPanelIds(project));
+  return machine > w ? machine : w;
 }
 
 /// Round 43 — the per-phase basis governs only when it exceeds the balanced
@@ -271,18 +405,23 @@ double gensetPhaseDemandVa(
       sys.supply.system == ElectricalSystem.threePhase;
   if (!threePhaseSupply) {
     // A 1φ supply: every board is 1φ, the board basis is the alternator's.
+    // Round 55 — each backed board floored at its largest machine.
+    final full = gen.backupFraction >= 1 - 1e-9;
     final fraction = worstPhaseDemandVa(project, sys, _rootPanelIds(project),
-            upsInput: true) *
+            upsInput: true, withLargestMachine: full) *
         gen.backupFraction;
     final essential = worstPhaseDemandVa(
         project, sys, _topmostBackedPanelIds(project),
-        upsInput: true);
+        upsInput: true, withLargestMachine: true);
     return essential > fraction ? essential : fraction;
   }
-  final fraction = alternatorLineDemandVa(project, sys, _rootPanelIds(project)) *
+  final full = gen.backupFraction >= 1 - 1e-9;
+  final fraction = alternatorLineDemandVa(project, sys, _rootPanelIds(project),
+          withLargestMachine: full) *
       gen.backupFraction;
-  final essential =
-      alternatorLineDemandVa(project, sys, _topmostBackedPanelIds(project));
+  final essential = alternatorLineDemandVa(
+      project, sys, _topmostBackedPanelIds(project),
+      withLargestMachine: true);
   return essential > fraction ? essential : fraction;
 }
 
@@ -298,8 +437,14 @@ double gensetPhaseDemandVa(
 /// times that (a 65 kVA set where a 33 kVA set carries 47.6 A per phase). A
 /// 1φ board whose line cannot be resolved (no parent, or the way is not on
 /// one line) keeps the conservative per-board term √3·V_LL·I. Pure.
+///
+/// Round 55 — [withLargestMachine] floors each board's line currents at its
+/// largest machine's undiversified running current
+/// ([ElectricalPanelResult.largestDownstreamRunA]): a machine never
+/// diversifies against itself on the alternator either.
 double alternatorLineDemandVa(ElectricalProject project,
-    ElectricalSystemResult sys, Iterable<String> panelIds) {
+    ElectricalSystemResult sys, Iterable<String> panelIds,
+    {bool withLargestMachine = false}) {
   final volts = sys.supply.voltage.volts;
   final modelById = {for (final p in project.panels) p.id: p};
   // child panel id → (parent id, feeding circuit id)
@@ -336,13 +481,17 @@ double alternatorLineDemandVa(ElectricalProject project,
       // per-phase sum is a function of the document alone.
       final b = r.phaseBalance;
       final d = r.diversityFactor;
-      l1 += b.l1 * d;
-      l2 += b.l2 * d;
-      l3 += b.l3 * d;
+      final floor = withLargestMachine ? r.largestDownstreamRunA : 0.0;
+      l1 += math.max(b.l1 * d, floor);
+      l2 += math.max(b.l2 * d, floor);
+      l3 += math.max(b.l3 * d, floor);
       continue;
     }
     // Round 45 — a 1φ UPS draws its input from one line: × [kUpsInputFactor].
-    final a = r.diversifiedDemandCurrent.amperes * _upsIn(m);
+    var a = r.diversifiedDemandCurrent.amperes * _upsIn(m);
+    if (withLargestMachine && r.largestDownstreamRunA > a) {
+      a = r.largestDownstreamRunA;
+    }
     final feed = feedOf[id];
     final parent = feed == null ? null : sys.panels[feed.$1];
     PhaseAssignment? line;
@@ -389,8 +538,9 @@ List<ElectricalWarning> gensetBackupWarnings(
   // Round 44 — the forced PLANT capacity (per-set kVA × paralleled sets).
   final forced = gen?.totalKva;
   if (gen == null || forced == null) return const [];
-  final essentialVa = essentialDemandVa(project, sys);
-  final essentialW = essentialDemandW(project, sys);
+  // Round 55 — the SAME machine-floored basis the set is sized on.
+  final essentialVa = _essentialVaFloored(project, sys);
+  final essentialW = _essentialWFloored(project, sys);
   final deliveredW = forced.voltAmperes * kGeneratorPf;
   final phaseVa = gensetPhaseDemandVa(project, sys);
   // Round 47 (elec-convergence-forced-genset-below-full-backup-silent) — the
@@ -400,8 +550,8 @@ List<ElectricalWarning> gensetBackupWarnings(
   // against the essential boards alone left a 50 kVA set silently picking up
   // a 100 kVA bus at the default fraction 1.0 (the power one-line draws it
   // onto the WHOLE LV bus, the dip screen starts every motor).
-  final fractionVa = sys.supply.demandVa.voltAmperes * gen.backupFraction;
-  final fractionW = sys.supply.demandW * gen.backupFraction;
+  final fractionVa = _fractionVaFloored(project, sys, gen.backupFraction);
+  final fractionW = _fractionWFloored(project, sys, gen.backupFraction);
   // Round 48 (regression-forced-prime-genset-judged-without-prime-uplift) —
   // a PRIME set is sized on 1.25 × the governing basis
   // ([requiredGeneratorKva]); judge the forced nameplate on that SAME
@@ -475,8 +625,8 @@ Power gensetBackupDemandW(
   final gen = project.sources?.generator;
   final demandW = sys.supply.demandW;
   if (gen == null) return Power(demandW);
-  final fractionW = demandW * gen.backupFraction;
-  final essentialW = essentialDemandW(project, sys);
+  final fractionW = _fractionWFloored(project, sys, gen.backupFraction);
+  final essentialW = _essentialWFloored(project, sys);
   return Power(essentialW > fractionW ? essentialW : fractionW);
 }
 
