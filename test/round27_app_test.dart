@@ -391,7 +391,11 @@ void main() {
           .loadNetwork(hotel(backwards: false));
       await tester.pump();
       expect(c.read(checkValveFeedsRingProvider), isEmpty);
-      expect(c.read(sizingProvider)['ch']!.flow.inLitersPerSecond, 0);
+      // Zero DRAW-OFF: since Round 53 the drawn return carries only the
+      // recirculation flow, Q = 25 W/m x L / (rho c dT) over the circulated
+      // pipe — uncalibrated, the two 3 m risers: 25 x 6 / (1000 x 4186 x 5).
+      expect(c.read(sizingProvider)['ch']!.flow.inLitersPerSecond,
+          closeTo(25 * 6 / (1000 * 4186 * 5) * 1000, 1e-12));
       expect(
           c.read(designIssuesProvider).map((i) => i.kind),
           isNot(contains(startsWith('check-valve-feeds-ring'))));
@@ -413,7 +417,10 @@ void main() {
       expect(c.read(checkValveAmbiguousProvider),
           {'CV': CheckValveAmbiguity.closedReturn});
       expect(c.read(checkValveFeedsRingProvider), isEmpty);
-      expect(c.read(sizingProvider)['ch']!.flow.inLitersPerSecond, 0);
+      // Closed return: zero draw-off, the Round-53 recirculation flow only
+      // (25 W/m x 6 m of riser / (1000 x 4186 x 5 K)).
+      expect(c.read(sizingProvider)['ch']!.flow.inLitersPerSecond,
+          closeTo(25 * 6 / (1000 * 4186 * 5) * 1000, 1e-12));
       final issue = c
           .read(designIssuesProvider)
           .firstWhere((i) => i.kind == 'check-valve-ambiguous:CV');

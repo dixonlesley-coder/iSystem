@@ -44,6 +44,7 @@ import 'fire_store.dart'
         fireOverPressureProvider,
         firePumpDutyProvider,
         fireSystemBasesProvider,
+        kMinFireStageHeadM,
         sprinklerPumpCheckProvider;
 import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
@@ -625,6 +626,31 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
             {'tag': tags[id] ?? id}),
         locate: IssueLocation(n.sheetId, nodeId: id),
       ));
+    }
+  }
+  // Round 53 (regression-stage-head-clamp-silent) — a series fire-pump
+  // stage whose own derivation was below the minimum stage head was raised
+  // to it: judge-only (the pump head is unchanged), locatable to the
+  // stage's duty pump.
+  {
+    final tags = equipmentNodeTags(net);
+    for (final b in fireBases) {
+      for (final st in b.stages) {
+        final from = st.clampedFromM;
+        if (from == null) continue;
+        final n = net.nodeById(st.dutyPumpId);
+        infos.add(DesignIssue(
+          severity: IssueSeverity.info,
+          kind: 'fire-stage-head-clamped:${st.dutyPumpId}',
+          title: str(StringKey.issueFireStageHeadClampedTitle),
+          message: str.format(StringKey.issueFireStageHeadClampedMessage, {
+            'tag': tags[st.dutyPumpId] ?? st.dutyPumpId,
+            'from': from.toStringAsFixed(2),
+            'min': kMinFireStageHeadM.toStringAsFixed(1),
+          }),
+          locate: n == null ? null : IssueLocation(n.sheetId, nodeId: n.id),
+        ));
+      }
     }
   }
   // Round 27 r3 (binding check-valve decision) — the drawn direction of a

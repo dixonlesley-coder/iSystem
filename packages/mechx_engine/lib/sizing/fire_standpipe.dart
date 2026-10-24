@@ -25,7 +25,7 @@ import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart'
     show EdgeKind, NetEdge, Network, ServiceType;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
-    show fireSystems;
+    show fireRatingSystems, fireSystems;
 import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
@@ -211,9 +211,15 @@ FlowRate standpipeFlow(int risers,
 /// and one stack, are two 500 gpm systems, never one 750 gpm system (each
 /// pump rated 50 % high, contradicting the per-system trunk sizing). The
 /// per-system count is [FireSystem.standpipeRisers].
+///
+/// Round 53 (regression-shared-header-sizer-partitions-on-fireSystems) — the
+/// systems are the RATING systems ([fireRatingSystems]): two pump rooms
+/// teed off one bare suction header are two systems (one stack each), never
+/// one two-stack system (750 gpm on the header and a hose-reel tower sized
+/// as Class III).
 int drawnStandpipeRiserCount(Network net) {
   var best = 1;
-  for (final s in fireSystems(net)) {
+  for (final s in fireRatingSystems(net)) {
     best = math.max(best, parallelStandpipeCount(net, s.edges));
   }
   return best;

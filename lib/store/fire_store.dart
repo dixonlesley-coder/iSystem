@@ -416,6 +416,14 @@ class FireStageRating {
   /// Static lift (m) from the system datum up to this stage's pumps.
   final double suctionLiftM;
 
+  /// Round 53 (regression-stage-head-clamp-silent) — the head (m) this
+  /// stage's own derivation gave when it was below [kMinFireStageHeadM] and
+  /// [head] was raised to that minimum; null when not clamped. The following
+  /// stages are not reduced, so the stage heads then sum above the system
+  /// head — surfaced as the judge-only `fire-stage-head-clamped:<pumpId>`
+  /// info, never hidden.
+  final double? clampedFromM;
+
   const FireStageRating({
     required this.pumpIds,
     required this.dutyPumpId,
@@ -424,6 +432,7 @@ class FireStageRating {
     required this.duty,
     required this.upstream,
     required this.suctionLiftM,
+    this.clampedFromM,
   });
 }
 
@@ -492,6 +501,11 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     return duty;
   }
 
+  // Round 53 — one transfer-destination rule with the sizer
+  // ([fireTransferDestinationTank]: the highest tank above the system's
+  // lowest pump, a terminal-less system only).
+  NetNode? transferTankOf(FireSystem s) => fireTransferDestinationTank(net, s,
+      (n) => nodeElevation(n, building, project.mounting).meters);
   final out = <FireSystemBasis>[];
   for (final sys in systems) {
     final pumps = [
@@ -616,9 +630,19 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     // sized friction to the tank, with NO hose / sprinkler residual and no
     // 15 m allowance (never the whole-building Class I head).
     final transferTank = pumps.isNotEmpty && !hasTerminal && duty != null
-        ? _transferDestinationTank(sys, net, project, duty)
+        ? transferTankOf(sys)
         : null;
     if (transferTank != null) {
+      // Round 53 (regression-transfer-pump-rated-class-i-flow / fire-
+      // convergence-5-transfer-pump-rated-below-its-own-discharge-flow) —
+      // rated on the flow the zone it fills draws ([fireTransferFedFlow]: a
+      // 6.3 L/s hose-reel zone, a 47.3 L/s two-stack zone), the figure the
+      // sizer carries on the transfer pipe — never the fragment's own
+      // one-riser Class I 31.5 L/s. Nothing fed ⇒ the standpipe figure stays.
+      final fed = fireTransferFedFlow(net, sys, transferTank.id, systems,
+          sprinklerDemand: remote.remoteAreaDemand,
+          destinationTankOf: (s) => transferTankOf(s)?.id);
+      if (fed != null && fed.cubicMetersPerSecond > 0) flow = fed;
       final pumpZ = nodeElevation(net.nodeById(duty!)!, building,
               project.mounting)
           .meters;
@@ -681,6 +705,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         double suctionLiftM) {
       // Round 52 (regression-same-room-series-first-stage-rated-zero-head)
       // — never a stage below [kMinFireStageHeadM].
+      final clamped = stageM < kMinFireStageHeadM - 1e-9;
       final perSet = Head(math.max(kMinFireStageHeadM, stageM));
       final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perSet);
       final d = firePumpDuty(ratedFlow: flow, ratedHead: perSet, rating: r);
@@ -696,6 +721,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         duty: d,
         upstream: upstream,
         suctionLiftM: suctionLiftM,
+        clampedFromM: clamped ? math.max(0.0, stageM) : null,
       ));
     }
 
@@ -775,9 +801,10 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
               need = base + (head.meters - base) / depthOf(k);
             }
           }
-          final stage = math.max(kMinFireStageHeadM, need - base);
+          final raw = need - base;
+          final stage = math.max(kMinFireStageHeadM, raw);
           cum[k] = base + stage;
-          addStage(st.pumpIds, stage, st.upstream,
+          addStage(st.pumpIds, raw, st.upstream,
               math.max(0.0, liftToFloor(floorOfStage(st))));
         }
       }
@@ -811,9 +838,10 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
                   : standpipeAt(friction, lift).pumpHead.meters;
             }
           }
-          final stage = math.max(kMinFireStageHeadM, need - below);
+          final raw = need - below;
+          final stage = math.max(kMinFireStageHeadM, raw);
           below += stage;
-          addStage([for (final g in stages[k]) ...g], stage,
+          addStage([for (final g in stages[k]) ...g], raw,
               k == 0 ? null : k - 1,
               math.max(0.0, liftToFloor(floorOf(stages[k].first))));
         }
@@ -848,32 +876,6 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
   }
   return out;
 });
-
-/// Round 52 (regression-transfer-pump-into-tank-rated-whole-building-
-/// standpipe) — the storage tank a terminal-less pumped fire system [sys]
-/// TRANSFERS into: the highest tank ([isFireSystemBoundary]) of the system
-/// sitting above its duty pump [pumpId] (ties to the lowest id), or null when
-/// none does (a suction tank at / below the pump is the source, not the
-/// destination).
-NetNode? _transferDestinationTank(
-    FireSystem sys, Network net, ProjectState project, String pumpId) {
-  final pump = net.nodeById(pumpId);
-  if (pump == null) return null;
-  final pumpZ = nodeElevation(pump, project.building, project.mounting).meters;
-  NetNode? best;
-  var bestZ = double.negativeInfinity;
-  for (final n in net.nodes) {
-    if (!sys.nodeIds.contains(n.id) || !isFireSystemBoundary(n)) continue;
-    final z = nodeElevation(n, project.building, project.mounting).meters;
-    if (z <= pumpZ + 1e-9) continue;
-    if (z > bestZ + 1e-9 ||
-        ((z - bestZ).abs() <= 1e-9 && best != null && n.id.compareTo(best.id) < 0)) {
-      best = n;
-      bestZ = z;
-    }
-  }
-  return best;
-}
 
 /// Round 50 — the gravity verdict of a pump-less fire system [sys], or null
 /// when it is not gravity-fed (no plant source, or a source below its

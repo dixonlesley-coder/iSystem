@@ -30,7 +30,17 @@ import 'drainage_advisory.dart' show effectiveDrainageSlope, laidGravitySlope;
 import 'drainage_sizing.dart' as drain;
 import 'duct_sizing.dart' as duct;
 import 'ejector.dart' as ejector;
-import 'fire_index_friction.dart' show fireSystems, isFireSystemBoundary;
+import 'fire_index_friction.dart'
+    show
+        FireSystem,
+        fireRatingSystems,
+        fireSystemDesignFlow,
+        fireSystemHasTerminal,
+        fireTransferDestinationTank,
+        fireTransferFedFlow,
+        fireTransferFedSystems,
+        isFireService,
+        isFireSystemBoundary;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
     show
@@ -1662,11 +1672,52 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   const profile = SniProfile();
   // Round 49 — the hydrant edges of every hose-reel-only (Class II) fire
   // system take the hose-station floors and the 100 gpm design flow.
+  //
+  // Round 53 (regression-shared-header-sizer-partitions-on-fireSystems) —
+  // per RATING system ([fireRatingSystems], the partition the pump bases
+  // read): a hose-reel tower teed off the same bare suction header as a
+  // hydrant-box tower is its own Class II system, so its pump leg / risers /
+  // drops are sized as Class II (never the Class III of the merged drawing).
+  // A system's shared SOURCE part ([FireSystem.sourceEdgeIds]) is never
+  // flagged: it carries the largest design flow of the rooms it supplies.
+  final ratingSystems = fireRatingSystems(net);
+  // A system's TRANSFER destination (Round 53): the tank above its pumps
+  // when it draws no terminal (GT -> TP -> riser -> break tank).
+  double elevationOf(NetNode n) => building != null
+      ? nodeElevation(n, building, mounting).meters
+      : n.floorIndex.toDouble();
+  final transferTank = <FireSystem, String?>{
+    for (final s in ratingSystems)
+      s: fireTransferDestinationTank(net, s, elevationOf)?.id,
+  };
+  String? destinationTankOf(FireSystem s) => transferTank[s];
+  // A Class II hose-reel system — or a transfer system that fills ONLY
+  // Class II hose-reel zones (its pipe is a transfer line for a 100 gpm
+  // zone, never a Class I standpipe at DN100).
+  bool isClassII(FireSystem s) {
+    final tank = transferTank[s];
+    if (tank == null) {
+      return s.hasHydrant && s.standpipeClass(net) == StandpipeClass.classII;
+    }
+    final fed = fireTransferFedSystems(net, s, tank, ratingSystems,
+        destinationTankOf: destinationTankOf);
+    return fed.isNotEmpty && fed.every(isClassII);
+  }
+
+  final ownersOf = <String, List<FireSystem>>{};
+  for (final s in ratingSystems) {
+    for (final e in s.edges) {
+      (ownersOf[e.id] ??= []).add(s);
+    }
+  }
+  // A hydrant edge every owner of which is Class II (a shared header two
+  // rooms of different classes draw from is not).
   final classIIHydrantEdgeIds = <String>{
-    for (final sys in fireSystems(net))
-      if (sys.hasHydrant && sys.standpipeClass(net) == StandpipeClass.classII)
-        for (final e in sys.edges)
-          if (e.service == ServiceType.fireHydrant) e.id,
+    for (final e in net.edges)
+      if (e.service == ServiceType.fireHydrant &&
+          (ownersOf[e.id]?.isNotEmpty ?? false) &&
+          ownersOf[e.id]!.every(isClassII))
+        e.id,
   };
   if (classIIHydrantEdgeIds.isNotEmpty) {
     ctx = ctx.withHoseStationEdges(
@@ -3419,6 +3470,68 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       }
     }
   }
+  // Round 53 — the fire edges, their adjacency (both fire services) and the
+  // RATING system(s) each edge belongs to ([ratingSystems]; a shared source
+  // edge belongs to every pump room it supplies, any other edge to one).
+  bool isTank(String id) => isFireSystemBoundary(net.nodeById(id));
+  final fireEdges = [
+    for (final e in net.edges)
+      if (isFireService(e.service)) e,
+  ];
+  final fireAdj = <String, List<NetEdge>>{};
+  for (final e in fireEdges) {
+    (fireAdj[e.fromId] ??= []).add(e);
+    (fireAdj[e.toId] ??= []).add(e);
+  }
+  // The one rating system [e] is a NON-source edge of (null when none).
+  FireSystem? homeOf(NetEdge e) {
+    for (final s in ownersOf[e.id] ?? const <FireSystem>[]) {
+      if (!s.sourceEdgeIds.contains(e.id)) return s;
+    }
+    return null;
+  }
+
+  final edgeIdsOf = <FireSystem, Set<String>>{
+    for (final s in ratingSystems) s: {for (final e in s.edges) e.id},
+  };
+  // Every fire edge DOWNSTREAM of [e] (solved flow direction): the walk
+  // starts at e's downstream end (both ends for an unoriented [e] when
+  // [unoriented]), never follows an edge flowing INTO the node it stands on
+  // (nor, unless [unoriented], an edge with no solved direction), never
+  // enters a storage tank (a hydraulic break, Round 51) and stays inside
+  // [scope] (edge ids) when given.
+  List<NetEdge> downstreamOf(NetEdge e,
+      {Set<String>? scope, bool unoriented = false}) {
+    final from = edgeFlowFrom[e.id];
+    final oriented = from == e.fromId || from == e.toId;
+    if (!oriented && !unoriented) return const [];
+    final starts = !oriented
+        ? [e.fromId, e.toId]
+        : [from == e.fromId ? e.toId : e.fromId];
+    final out = <NetEdge>[];
+    final reached = <String>{e.id};
+    final seen = <String>{};
+    final st = [
+      for (final s in starts)
+        if (!isTank(s) && seen.add(s)) s,
+    ];
+    while (st.isNotEmpty) {
+      final cur = st.removeLast();
+      for (final x in fireAdj[cur] ?? const <NetEdge>[]) {
+        if (scope != null && !scope.contains(x.id)) continue;
+        final xf = edgeFlowFrom[x.id];
+        final xo = xf == x.fromId || xf == x.toId;
+        if (xo ? xf != cur : !unoriented) continue;
+        if (!reached.add(x.id)) continue;
+        out.add(x);
+        final o = x.fromId == cur ? x.toId : x.fromId;
+        if (isTank(o)) continue;
+        if (seen.add(o)) st.add(o);
+      }
+    }
+    return out;
+  }
+
   // Hydrant standpipe design flow (see the doc above).
   if (hydrantDesignFlow != null && hydrantDesignFlow.cubicMetersPerSecond > 0) {
     final perBox = (leafDemand[ServiceType.fireHydrant] ?? const FlowRate(0))
@@ -3444,8 +3557,11 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     // full flow — the sectional-valve condition), so the ring is one bore
     // and the index friction (`fireIndexPathFrictionM`) reads the full flow
     // along the best arm — never below the equal-head split.
+    //
+    // Round 53 — the stacks are counted inside the ring edge's own rating
+    // system (a ring never adds another pump room's stacks).
     final onCycle = <String>{};
-    final ringStacks = <String, int>{};
+    final ringEdgesOf = <String, List<NetEdge>>{};
     {
       final seenNode = <String>{};
       for (final e0 in hydrantEdges) {
@@ -3465,10 +3581,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         seenNode.addAll(compNodes);
         if (compEdges.length <= compNodes.length - 1) continue; // a tree
         final ids = compEdges.keys.toList()..sort();
-        final stacks = math.max(
-            1,
-            parallelStandpipeCount(
-                net, [for (final id in ids) compEdges[id]!]));
+        final comp = [for (final id in ids) compEdges[id]!];
         for (final id in ids) {
           final e = compEdges[id]!;
           if (e.fromId == e.toId) continue;
@@ -3490,7 +3603,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           }
           if (joined) {
             onCycle.add(id);
-            ringStacks[id] = stacks;
+            ringEdgesOf[id] = comp;
           }
         }
       }
@@ -3509,45 +3622,19 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     // the fire velocity cap). A hose-only sub-branch keeps the plain
     // Class II flow.
     //
-    // Round 52 (regression-hydrant-ring-floored-at-other-systems-sprinkler-
-    // demand-through-tank) — the walk is DOWNSTREAM only: a storage tank is a
-    // wall (never entered, never a sprinkler node — a separate sprinkler pump
-    // drawing from the same ground tank is another system, Round 51), and an
-    // edge with a solved direction is followed only away from the node the
-    // walk stands on, so a ring walk can never turn back up to the pump room
-    // and its suction tank.
-    bool isTank(String id) => isFireSystemBoundary(net.nodeById(id));
-    final sprinklerNodes = <String>{
-      for (final e in net.edges)
-        if (e.service == ServiceType.fireSprinkler)
-          for (final id in [e.fromId, e.toId])
-            if (!isTank(id)) id,
-    };
+    // Round 52 — the walk is DOWNSTREAM only and a storage tank is a wall.
+    //
+    // Round 53 (regression-sprinkler-floor-not-system-bounded) — the walk
+    // stays inside the edge's own RATING system ([homeOf]) and crosses both
+    // fire services (a sprinkler branch teed off a pump discharge drawn on
+    // either service): the sprinkler pipe of another pump room — reached only
+    // through a shared header, which is a source edge of both rooms — never
+    // floors this room's legs.
     bool sprinklerDownstream(NetEdge e) {
-      if (sprinklerNodes.isEmpty) return false;
-      final from = edgeFlowFrom[e.id];
-      final starts = from == e.fromId
-          ? [e.toId]
-          : from == e.toId
-              ? [e.fromId]
-              : [e.fromId, e.toId];
-      for (final start in starts) {
-        if (isTank(start)) continue;
-        final seen = <String>{start};
-        final st = [start];
-        while (st.isNotEmpty) {
-          final cur = st.removeLast();
-          if (sprinklerNodes.contains(cur)) return true;
-          for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
-            if (x.id == e.id) continue;
-            final xf = edgeFlowFrom[x.id];
-            // An oriented edge flowing INTO [cur] is upstream of it.
-            if ((xf == x.fromId || xf == x.toId) && xf != cur) continue;
-            final o = x.fromId == cur ? x.toId : x.fromId;
-            if (isTank(o)) continue;
-            if (seen.add(o)) st.add(o);
-          }
-        }
+      final home = homeOf(e);
+      for (final x in downstreamOf(e,
+          scope: home == null ? null : edgeIdsOf[home], unoriented: true)) {
+        if (x.service == ServiceType.fireSprinkler) return true;
       }
       return false;
     }
@@ -3569,6 +3656,13 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     for (final e in hydrantEdges) {
       final q = allFlows[e.id];
       if (q == null) continue;
+      final home = homeOf(e);
+      final homeHydrant = home == null
+          ? null
+          : {
+              for (final x in home.edges)
+                if (x.service == ServiceType.fireHydrant) x.id,
+            };
       if (classIIHydrantEdgeIds.contains(e.id)) {
         final trunk = onCycle.contains(e.id) ||
             e.kind == EdgeKind.riser ||
@@ -3586,7 +3680,14 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         continue;
       }
       if (onCycle.contains(e.id)) {
-        final served = standpipeFlow(ringStacks[e.id]!);
+        final ring = ringEdgesOf[e.id]!;
+        final stacks = math.max(
+            1,
+            parallelStandpipeCount(net, [
+              for (final x in ring)
+                if (homeHydrant == null || homeHydrant.contains(x.id)) x,
+            ]));
+        final served = standpipeFlow(stacks);
         allFlows[e.id] = withSprinklerFloor(
             e,
             served.cubicMetersPerSecond < hydrantDesignFlow.cubicMetersPerSecond
@@ -3603,6 +3704,10 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       // the standpipe flow of the stacks DOWNSTREAM of it (one stack ⇒ the
       // 500 gpm most-remote rating, SNI 03-1745 / NFPA 14). Never above the
       // caller's design flow.
+      //
+      // Round 53 — the downstream stacks are those of the edge's own rating
+      // system (the walk never crosses a shared header into another pump
+      // room's tower).
       var flow = hydrantDesignFlow;
       final from = edgeFlowFrom[e.id];
       if (from == e.fromId || from == e.toId) {
@@ -3614,6 +3719,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         while (stack.isNotEmpty) {
           final cur = stack.removeLast();
           for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+            if (homeHydrant != null && !homeHydrant.contains(x.id)) continue;
             if (!reached.add(x.id)) continue;
             downstream.add(x);
             final o = x.fromId == cur ? x.toId : x.fromId;
@@ -3628,6 +3734,106 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       }
       allFlows[e.id] = withSprinklerFloor(e, flow);
     }
+  }
+  // Round 53 (regression-transfer-pump-rated-class-i-flow / fire-
+  // convergence-5-transfer-pump-rated-below-its-own-discharge-flow) — a
+  // TRANSFER system (pumps, no terminal, discharging into a storage tank —
+  // GT -> TP -> riser -> break tank) carries what the zone it fills draws
+  // ([fireTransferFedFlow]): a hose-reel zone 6.3 L/s, a two-stack Class I
+  // zone 47.3 L/s — never its own one-riser Class I figure, nor the
+  // downstream stacks counted through the tank. Its destination tank is the
+  // tank above its pumps ([fireTransferDestinationTank], as the rating reads
+  // it). The rating reads the same figure, so the
+  // transfer pipe, its friction, the pump and its MDP way agree.
+  bool hasPump(FireSystem s) => s.nodeIds.any((id) {
+        final c = net.nodeById(id)?.component;
+        return c == NodeComponent.pump || c == NodeComponent.boosterSet;
+      });
+  final designFlowBySystem = <FireSystem, FlowRate?>{};
+  FlowRate? designFlowOf(FireSystem s) => designFlowBySystem.putIfAbsent(s, () {
+        // A caller that models no standpipe flow (no [hydrantDesignFlow])
+        // keeps the accumulated hydrant flows.
+        if (s.hasHydrant && hydrantDesignFlow == null) return null;
+        final own = fireSystemDesignFlow(net, s,
+            sprinklerDemand: sprinklerDemandCap);
+        if (own != null || !hasPump(s)) return own;
+        final tank = destinationTankOf(s);
+        if (tank == null) return null;
+        return fireTransferFedFlow(net, s, tank, ratingSystems,
+            sprinklerDemand: sprinklerDemandCap,
+            destinationTankOf: destinationTankOf);
+      });
+  for (final s in ratingSystems) {
+    if (fireSystemHasTerminal(net, s) || !hasPump(s)) continue;
+    final q = designFlowOf(s);
+    if (q == null) continue;
+    for (final e in s.edges) {
+      if (s.sourceEdgeIds.contains(e.id)) continue;
+      if (allFlows.containsKey(e.id)) allFlows[e.id] = q;
+    }
+  }
+  // Round 53 (regression-shared-header-sizer-partitions-on-fireSystems) — a
+  // SOURCE edge (the bare suction header two pump rooms tee off, and each
+  // room's suction leg) carries the LARGEST design flow of the rooms it
+  // supplies: both rooms never run on one fire event, so the header is sized
+  // for the larger room (31.5 L/s for a hydrant-box tower beside a 6.3 L/s
+  // hose-reel tower), never the 750 gpm two-stack total of a merged drawing.
+  // `// VERIFY` a joint-operation basis (both rooms at once) is not adopted.
+  for (final e in fireEdges) {
+    FlowRate? best;
+    for (final s in ownersOf[e.id] ?? const <FireSystem>[]) {
+      if (!s.sourceEdgeIds.contains(e.id)) continue;
+      final q = designFlowOf(s);
+      if (q != null &&
+          (best == null ||
+              q.cubicMetersPerSecond > best.cubicMetersPerSecond)) {
+        best = q;
+      }
+    }
+    if (best != null && allFlows.containsKey(e.id)) allFlows[e.id] = best;
+  }
+  // Round 53 (regression-cross-service-fire-suction-leg-zero-flow / fire-
+  // convergence-5-sprinkler-trunk-feeding-hydrant-not-floored-at-standpipe-
+  // flow) — the sizer accumulates per SERVICE, so a fire pipe drawn on one
+  // service never saw the water the OTHER service's pipes downstream of it
+  // draw: a hydrant pump's suction leg drawn as sprinkler pipe carried 0 L/s
+  // (DN25 under a 31.5 L/s pump), a sprinkler-drawn supply main feeding a
+  // hydrant branch carried the 12 L/s remote-area cap into a DN100 hydrant
+  // pipe (a reducer against the flow). Every fire edge now carries at least
+  // the largest flow of any OTHER-service fire pipe downstream of it (solved
+  // direction, through pumps, never through a storage tank, inside its own
+  // rating systems) — after the standpipe / remote-area assignment above, so
+  // both directions use one rule. Same-service pipes keep their own
+  // accumulation (a merge in a looped grid never inflates an arm). Pass 2
+  // repeats until nothing rises (a chain of service changes).
+  final mixedSystems = {
+    for (final s in ratingSystems)
+      if (s.edges.any((e) => e.service == ServiceType.fireHydrant) &&
+          s.edges.any((e) => e.service == ServiceType.fireSprinkler))
+        s,
+  };
+  for (var pass = 0; pass < 4 && mixedSystems.isNotEmpty; pass++) {
+    var changed = false;
+    for (final e in fireEdges) {
+      final q = allFlows[e.id];
+      if (q == null) continue;
+      final owners = ownersOf[e.id] ?? const <FireSystem>[];
+      if (!owners.any(mixedSystems.contains)) continue;
+      final scope = <String>{
+        for (final s in owners) ...edgeIdsOf[s]!,
+      };
+      var best = q.cubicMetersPerSecond;
+      for (final x in downstreamOf(e, scope: scope.isEmpty ? null : scope)) {
+        if (x.service == e.service) continue;
+        final qx = allFlows[x.id]?.cubicMetersPerSecond ?? 0;
+        if (qx > best + 1e-12) best = qx;
+      }
+      if (best > q.cubicMetersPerSecond + 1e-12) {
+        allFlows[e.id] = FlowRate(best);
+        changed = true;
+      }
+    }
+    if (!changed) break;
   }
   final result = sizeNetwork(net, allFlows, ctx, sizeOverrides: sizeOverrides);
   // DFU-sized drainage/vent and capacity-table rainwater downpipes are built
