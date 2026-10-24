@@ -20,7 +20,6 @@ import 'package:mechx_engine/electrical/advanced_study.dart'
     show containmentByCircuitIdOf;
 import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
-import 'package:mechx_engine/electrical/fault.dart' show adsFailedCircuitIdsOf;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
@@ -197,9 +196,10 @@ Map<String, double> breakerKaByCircuit(WidgetRef ref) {
 
 /// Round 43 — the fault study's ways that FAIL automatic disconnection, so
 /// every issued board schedule marks them ` Zs!` (the same study the kA maps
-/// read).
+/// read). Round 56 — on ANY supply: the ways failing ADS only on the standby
+/// genset ([AdvancedStudy.gensetAdsFailedCircuitIds]) are marked too.
 Set<String> adsFailedCircuitIds(WidgetRef ref) =>
-    adsFailedCircuitIdsOf(ref.read(electricalAdvancedProvider).fault);
+    ref.read(electricalAdvancedProvider).adsFailedCircuitIds;
 
 /// Export the sized electrical single-line as a DXF drawing file.
 Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(

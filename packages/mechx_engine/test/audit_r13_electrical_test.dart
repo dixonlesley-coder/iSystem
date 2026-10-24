@@ -428,7 +428,10 @@ void main() {
       final kva = double.parse(
           RegExp(r'([\d.]+) kVA').firstMatch(gen.sub!)!.group(1)!);
       expect(kva * 1000, greaterThanOrEqualTo(essentialVa));
-      expect(study.warnings, isEmpty);
+      // Round 56 — the study also judges ADS on the genset and the
+      // enclosure rise (120 kW heater boards); no GENSET-backup warning.
+      expect(study.warnings.where((w) => w.code.startsWith('genset-')),
+          isEmpty);
     });
 
     test('a forced nameplate below the essential demand is warned', () {
@@ -437,7 +440,10 @@ void main() {
       final study = computeAdvancedStudy(p, proj, sys);
       // 100 kVA < the 120 kVA essential VA (cos φ 1 heater), AND — Round 17,
       // the engine's kW limit — 0.8 × 100 = 80 kW < the 120 kW essential W.
-      expect(study.warnings.map((w) => w.code),
+      expect(
+          study.warnings
+              .map((w) => w.code)
+              .where((c) => c.startsWith('genset-')),
           ['genset-below-essential-demand', 'genset-below-essential-power']);
     });
   });

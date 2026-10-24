@@ -23,10 +23,18 @@ import 'dart:math' as math;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/hydraulics.dart';
 import 'package:mechx_engine/network/network.dart'
-    show EdgeKind, NetEdge, Network, NodeComponent, NodeRole, ServiceType;
+    show
+        EdgeKind,
+        NetEdge,
+        Network,
+        NodeComponent,
+        NodeRole,
+        ServiceType,
+        isSupplyInletComponent;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show fireRatingSystems, fireSystems;
-import 'package:mechx_engine/standards/sni.dart' show StandardValue, VerificationStatus;
+import 'package:mechx_engine/standards/sni.dart'
+    show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
 
 // ── Unit conversion ──────────────────────────────────────────────────────────
@@ -310,24 +318,135 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
 
   // Does a hydrant branch leaving [start] (a node of riser component [root])
   // reach an outlet of its own?
+  //
+  // Round 56 (regression-feedsOwnOutlet-walks-past-first-hose-outlet) — a
+  // hose outlet ENDS the walk (it is never walked through), and another
+  // riser component is a wall, never a disqualifier: a hydrant box drawn ON
+  // a cross-tie (S3 -> X -> H3) is still fed off this riser above its base,
+  // while a BARE tie (H5 -> S5) reaches no outlet before the other stack.
   bool feedsOwnOutlet(String start, String root) {
-    var outlet = false;
     final seen = <String>{start};
     final queue = [start];
     for (var i = 0; i < queue.length; i++) {
       for (final o in hydrantAdj[queue[i]] ?? const <String>[]) {
         if (!seen.add(o)) continue;
-        if (parent.containsKey(o)) {
-          // Another riser component: a cross-tie, never this riser's outlet.
-          if (find(o) != root) return false;
-          continue;
-        }
-        if (isHoseOutlet(o)) outlet = true;
+        if (parent.containsKey(o)) continue; // another riser: a wall
+        if (isHoseOutlet(o)) return true;
         if (nodeById[o]?.role == NodeRole.plant) continue;
         queue.add(o);
       }
     }
-    return outlet;
+    return false;
+  }
+
+  // Round 56 (fire-convergence-8-standpipe-stack-count-includes-ring-legs-
+  // pillar-drops-and-fdc-riser) — two kinds of hydrant riser are no stack:
+  //  * an INLET riser — the fire-department connection's drop to the pump
+  //    discharge: its branches above its base reach an inlet
+  //    ([isSupplyInletComponent]) and no hose outlet;
+  //  * a BRANCH DROP — a ONE-storey riser (a ring leg down a car-park ramp,
+  //    a drop to a pillar hydrant) the fire source reaches only THROUGH
+  //    another riser component spanning that same storey: it is that
+  //    stack's distribution, already sized by the ring / trunk rules, never
+  //    a second standpipe in parallel with it.
+  // Both are classified on the WHOLE drawn fire network, so a sub-list of
+  // [edges] (the sizer's downstream walks) counts consistently.
+  final fireAdj = <String, List<String>>{};
+  final fullParent = <String, String>{};
+  String findFull(String x) {
+    var r = x;
+    while (fullParent[r] != r) {
+      r = fullParent[r]!;
+    }
+    return r;
+  }
+
+  for (final e in net.edges) {
+    if (e.service != ServiceType.fireHydrant &&
+        e.service != ServiceType.fireSprinkler) {
+      continue;
+    }
+    (fireAdj[e.fromId] ??= []).add(e.toId);
+    (fireAdj[e.toId] ??= []).add(e.fromId);
+    if (e.kind != EdgeKind.riser) continue;
+    fullParent.putIfAbsent(e.fromId, () => e.fromId);
+    fullParent.putIfAbsent(e.toId, () => e.toId);
+    final a = findFull(e.fromId);
+    final b = findFull(e.toId);
+    if (a != b) fullParent[a] = b;
+  }
+  final fullLo = <String, int>{};
+  final fullHi = <String, int>{};
+  for (final id in fullParent.keys) {
+    final r = findFull(id);
+    final f = floorOf[id] ?? 0;
+    fullLo[r] = math.min(fullLo[r] ?? f, f);
+    fullHi[r] = math.max(fullHi[r] ?? f, f);
+  }
+  final sources = <String>[
+    for (final id in fireAdj.keys)
+      if (nodeById[id]?.role == NodeRole.plant &&
+          !isSupplyInletComponent(nodeById[id]?.component))
+        id,
+  ];
+
+  bool isInletRiser(String root) {
+    final members = [
+      for (final id in parent.keys)
+        if (find(id) == root) id,
+    ];
+    var inlet = false;
+    final seen = <String>{...members};
+    final queue = <String>[];
+    for (final id in members) {
+      if (isSupplyInletComponent(nodeById[id]?.component)) inlet = true;
+      if (isHoseOutlet(id)) return false;
+      if ((floorOf[id] ?? 0) > lo[root]!) queue.add(id);
+    }
+    for (var i = 0; i < queue.length; i++) {
+      for (final o in fireAdj[queue[i]] ?? const <String>[]) {
+        if (!seen.add(o)) continue;
+        if (fullParent.containsKey(o)) continue; // another riser: a wall
+        if (isHoseOutlet(o)) return false;
+        final n = nodeById[o];
+        if (isSupplyInletComponent(n?.component)) inlet = true;
+        if (n?.role == NodeRole.plant) continue;
+        queue.add(o);
+      }
+    }
+    return inlet;
+  }
+
+  bool isBranchDrop(String root) {
+    final a = lo[root]!;
+    if (hi[root]! != a + 1 || sources.isEmpty) return false;
+    final members = <String>{
+      for (final id in parent.keys)
+        if (find(id) == root) id,
+    };
+    final own = <String>{for (final id in members) findFull(id)};
+    // Nodes of every OTHER riser component spanning the storey (a, a+1).
+    bool blocks(String id) {
+      if (!fullParent.containsKey(id)) return false;
+      final r = findFull(id);
+      return !own.contains(r) && fullLo[r]! <= a && fullHi[r]! >= a + 1;
+    }
+
+    bool reaches({required bool blocked}) {
+      final seen = <String>{...sources};
+      final queue = [...sources];
+      for (var i = 0; i < queue.length; i++) {
+        final cur = queue[i];
+        if (members.contains(cur)) return true;
+        if (blocked && blocks(cur)) continue;
+        for (final o in fireAdj[cur] ?? const <String>[]) {
+          if (seen.add(o)) queue.add(o);
+        }
+      }
+      return false;
+    }
+
+    return reaches(blocked: false) && !reaches(blocked: true);
   }
 
   final isStack = <String>{};
@@ -339,6 +458,7 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
       isStack.add(root);
     }
   }
+  isStack.removeWhere((r) => isInletRiser(r) || isBranchDrop(r));
   lo.removeWhere((r, _) => !isStack.contains(r));
   if (lo.isEmpty) return 0;
   // cover[f] = number of stacks spanning the storey interval (f, f+1).
@@ -484,8 +604,7 @@ FireStandpipeDesign designStandpipe({
   final requiredFlow = standpipeFlow(risers, standpipeClass: standpipeClass);
 
   // Minimum residual pressure at the topmost hose outlet for this class.
-  final topResidual =
-      Pressure.kiloPascals(residualPressureKpa(standpipeClass));
+  final topResidual = Pressure.kiloPascals(residualPressureKpa(standpipeClass));
 
   // Convert residual pressure to an equivalent head of water (h = P / ρg).
   final residualHead = headFromPressure(topResidual);

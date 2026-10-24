@@ -1027,6 +1027,17 @@ List<BusbarSectionResult> splitBusbarSections(
 // ── per-circuit computation ─────────────────────────────────────────────────
 
 /// Options threaded into `computePanel` by `computeSystem`.
+/// Round 56 — the ADS conductor-growth bounds for a FINAL way
+/// (`computeSystem`): at most this many section rungs above the load-sized
+/// cable …
+const int kAdsCsaGrowthMaxRungs = 6;
+
+/// … and never above this section (mm²): a final way needing more is a
+/// design to rethink (a sub-board nearer the load), so the
+/// `ads-disconnection` error stands. `// VERIFY` notAnSniClause (a bound,
+/// not a code figure).
+const double kAdsCsaGrowthMaxMm2 = 35;
+
 class ComputePanelOptions {
   /// Aggregated downstream diversified demand (W) keyed by the child panel id a
   /// feeder serves.
@@ -1107,6 +1118,14 @@ class ComputePanelOptions {
   /// Derived by `computeSystem` from the fault study; empty ⇒ byte-identical.
   final Set<String> mccbFrameRaiseRefusedIds;
 
+  /// Round 56 (regression-ads-fail-both-classes-no-csa-growth) — per FINAL
+  /// way id, a conductor-section floor (mm²) `computeSystem` sets so a way
+  /// that fails ADS as both MCB and MCCB on its load-sized cable steps up the
+  /// section ladder until it disconnects in time. Applied like a cable
+  /// minimum but flagged [ElectricalCircuitResult.cableRaisedForAds] (never a
+  /// user override). Empty ⇒ byte-identical.
+  final Map<String, double> adsCsaFloorMm2;
+
   /// SERVICE-CAPACITY FLOOR (A) for the incomer + busbar of a SERVICE-ENTRANCE
   /// (root) panel — the line current of the declared connection capacity
   /// ([ElectricalProject.supplyCapacityVa], daya tersambung), derived by
@@ -1178,8 +1197,16 @@ class ComputePanelOptions {
   /// (the default) ⇒ byte-identical.
   final Map<String, double> feederLargestRunA;
 
+  /// Round 56 — each fed board's
+  /// [ElectricalPanelResult.largestDownstreamRunLinesA] (keyed like
+  /// [feederLargestRunA]): which LINES that machine loads, so this board's
+  /// own vector follows it through the feeder. Empty ⇒ the scalar on every
+  /// line.
+  final Map<String, List<double>> feederLargestRunLinesA;
+
   const ComputePanelOptions({
     this.feederLargestRunA = const {},
+    this.feederLargestRunLinesA = const {},
     this.feederNeutralLoad = const {},
     this.feederLineCurrentsA = const {},
     this.ttFeederRcd = const {},
@@ -1199,6 +1226,7 @@ class ComputePanelOptions {
     this.feederBreakerFloorA = const {},
     this.feederBreakerCapA = const {},
     this.mccbFrameRaiseRefusedIds = const {},
+    this.adsCsaFloorMm2 = const {},
     this.serviceMinCurrentA,
     this.feederPowerFactor = const {},
   });
@@ -1923,7 +1951,9 @@ _CircuitComputation _computeCircuit(
     trunk: isTrunk,
     threePhase: threePhase,
   );
-  final minSection = math.max(baseMin, c.cableOverrideMm2 ?? 0);
+  final userMinSection = math.max(baseMin, c.cableOverrideMm2 ?? 0);
+  final adsFloor = opts.adsCsaFloorMm2[c.id] ?? 0;
+  final minSection = math.max(userMinSection, adsFloor);
 
   final installMethod = _effectiveInstallMethod(c, panel);
   // The cable family (NYY/NYM/NYA/NYAF/FRC) sets the insulation temperature
@@ -2438,7 +2468,19 @@ _CircuitComputation _computeCircuit(
         : [for (final l in fedLines) roundTo(l, 1)],
     motorLeads: motorLeads,
     motorLeadsPeCsaMm2: motorLeadsPe,
+    cableRaisedForAds: adsFloor > userMinSection + 1e-9,
   );
+  if (result.cableRaisedForAds) {
+    warnings.add(ElectricalWarning(
+      code: 'cable-raised-for-ads',
+      severity: WarningSeverity.info,
+      message: '${c.name}: cable raised to ${_num(cable.csaMm2)} mm2 so the '
+          'earth-fault loop disconnects in time (IEC 60364-4-41 Zs limit); '
+          'the load alone needs a smaller section.',
+      panelId: panel.id,
+      circuitId: c.id,
+    ));
+  }
 
   return _CircuitComputation(
       result, warnings, loadW, threePhase, _circuitIsNonLinear(c));
@@ -2885,23 +2927,58 @@ ElectricalPanelResult computePanel(
   // machine ([ComputePanelOptions.feederLargestRunA]), so the floor follows
   // the machine up the tree: a 30.9 A welder behind a feeder no longer sits
   // under a 16 A main incomer.
+  //
+  // Round 56 (regression-alternator-floor-all-lines-at-1ph-machine) — the
+  // machine's LINES ride with it: a 3φ way (or any way on a 1φ board) loads
+  // [I, I, I], a 1φ way on a 3φ board only its assigned line; a feeder
+  // carries its fed board's vector (a 1φ fed board: its peak on the
+  // feeder's own line).
+  final threePhaseBoard = panel.system == ElectricalSystem.threePhase;
+  List<double> onLines(double a, PhaseAssignment? line, bool threePhaseWay) {
+    if (!threePhaseBoard || threePhaseWay) return [a, a, a];
+    return switch (line) {
+      PhaseAssignment.l1 => [a, 0, 0],
+      PhaseAssignment.l2 => [0, a, 0],
+      PhaseAssignment.l3 => [0, 0, a],
+      _ => [a, a, a],
+    };
+  }
+
   var ownWayRunA = 0.0;
   var downstreamRunA = 0.0;
+  var ownLines = const <double>[0, 0, 0];
+  var downstreamLines = const <double>[0, 0, 0];
   for (var i = 0; i < comps.length; i++) {
     final b = branches[i];
+    final id = comps[i].result.circuitId;
     if (b.feedsPanelId != null) {
       final d = opts.feederLargestRunA[b.feedsPanelId] ?? 0;
-      if (d > downstreamRunA) downstreamRunA = d;
+      if (d > downstreamRunA) {
+        downstreamRunA = d;
+        final fedVec = opts.feederLargestRunLinesA[b.feedsPanelId];
+        final threePhaseFeeder = comps[i].result.threePhase;
+        downstreamLines = threePhaseFeeder && fedVec != null && threePhaseBoard
+            ? [for (final x in fedVec) roundTo(x, 1)]
+            : onLines(d, balance.assignment[id], threePhaseFeeder);
+      }
       continue;
     }
     final k = comps[i].result.loadKind;
     if (k == LoadKind.capacitor || k == LoadKind.spare) continue;
     final run = comps[i].result.runCurrentA.amperes;
-    if (run > ownWayRunA) ownWayRunA = run;
+    if (run > ownWayRunA) {
+      ownWayRunA = run;
+      ownLines =
+          onLines(run, balance.assignment[id], comps[i].result.threePhase);
+    }
   }
   ownWayRunA = roundTo(ownWayRunA, 1);
   downstreamRunA = roundTo(downstreamRunA, 1);
   final largestWayRunA = math.max(ownWayRunA, downstreamRunA);
+  final largestWayRunLinesA = [
+    for (final x in downstreamRunA > ownWayRunA ? downstreamLines : ownLines)
+      roundTo(x, 1),
+  ];
   final largestIsDownstream = downstreamRunA > ownWayRunA;
   final serviceGoverns = serviceFloorA > futureDemandCurrentA &&
       serviceFloorA >= capacitorFloorA &&
@@ -3155,6 +3232,7 @@ ElectricalPanelResult computePanel(
     spareWaysReserved: spareWaysReserved,
     capacitorCurrentA: capacitorFloorA,
     largestDownstreamRunA: largestWayRunA,
+    largestDownstreamRunLinesA: largestWayRunLinesA,
     phaseBalance: PhaseBalanceResult(
       l1: balance.l1,
       l2: balance.l2,
@@ -3935,6 +4013,7 @@ ElectricalSystemResult computeSystem(
   // count, board voltage) — never of its parent or the fault level — so the
   // very `computePanel` the sizing pass runs gives it.
   final largestRunByPanel = <String, double>{};
+  final largestRunLinesByPanel = <String, List<double>>{};
   for (final id in postOrder) {
     final panel = byId[id];
     if (panel == null || !parentOf.containsKey(id)) continue;
@@ -3948,6 +4027,7 @@ ElectricalSystemResult computeSystem(
         feederLineCurrentsA: feederLinesByPanel,
         feederNeutralLoad: feederNeutralByPanel,
         feederLargestRunA: largestRunByPanel,
+        feederLargestRunLinesA: largestRunLinesByPanel,
         panelSystems: panelSystems,
         earthingSystem: project.earthingSystem,
         ttFeederRcd: ttFeederRcd,
@@ -3961,6 +4041,8 @@ ElectricalSystemResult computeSystem(
     );
     if (solved.largestDownstreamRunA > 0) {
       largestRunByPanel[id] = solved.largestDownstreamRunA;
+      final lines = solved.largestDownstreamRunLinesA;
+      if (lines != null) largestRunLinesByPanel[id] = lines;
     }
   }
 
@@ -4008,6 +4090,10 @@ ElectricalSystemResult computeSystem(
   // voltage drop, the judge-only feeder check, supply summary, earthing) is a
   // pure function of the project + [feederBreakerFloorA], so it can be re-run
   // once with a selectivity floor applied (see the two-pass note after it).
+  // Round 56 — the per-way ADS conductor floors (see the growth loop at the
+  // end); every [sizeAll] pass reads the current map.
+  final adsCsaFloors = <String, double>{};
+
   ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA,
       [Map<String, double> feederBreakerCapA = const {},
       Set<String> mccbFrameRaiseRefusedIds = const {}]) {
@@ -4107,9 +4193,11 @@ ElectricalSystemResult computeSystem(
           feederBreakerFloorA: feederBreakerFloorA,
           feederBreakerCapA: feederBreakerCapA,
           mccbFrameRaiseRefusedIds: mccbFrameRaiseRefusedIds,
+          adsCsaFloorMm2: Map.of(adsCsaFloors),
           feederLineCurrentsA: feederLinesByPanel,
           feederNeutralLoad: feederNeutralByPanel,
           feederLargestRunA: largestRunByPanel,
+          feederLargestRunLinesA: largestRunLinesByPanel,
           serviceMinCurrentA: roots.length == 1 && id == roots.first.id
               ? serviceMinCurrentA
               : null,
@@ -4186,6 +4274,7 @@ ElectricalSystemResult computeSystem(
         spareWaysReserved: pr.spareWaysReserved,
         capacitorCurrentA: pr.capacitorCurrentA,
         largestDownstreamRunA: pr.largestDownstreamRunA,
+        largestDownstreamRunLinesA: pr.largestDownstreamRunLinesA,
         phaseBalance: pr.phaseBalance,
         warnings: pr.warnings,
         diversityFactor: pr.diversityFactor,
@@ -4629,175 +4718,256 @@ ElectricalSystemResult computeSystem(
     );
   }
 
-  // PASS 1 — size the system with no coordination floor (exactly the historic
-  // single-pass behaviour).
-  final pass1 = sizeAll(const {});
+  // Round 56 (regression-ads-fail-both-classes-no-csa-growth) — the whole
+  // device / coordination pipeline below, as one function of the current
+  // [adsCsaFloors].
+  ElectricalSystemResult solveAll() {
+    // PASS 1 — size the system with no coordination floor (exactly the historic
+    // single-pass behaviour).
+    final pass1 = sizeAll(const {});
 
-  // FEEDER SELECTIVITY FLOOR. A feeder way and the incomer of the board it feeds
-  // are sized from the SAME diversified demand, so they routinely land on the
-  // same ladder rung — ratio 1.0, i.e. `nonSelective` by `fault.dart`'s
-  // [selectivityRatio] rule: a fault on the sub-board would trip the upstream
-  // feeder as readily as the board's own incomer. The sizer must not create the
-  // condition the fault study then warns about, so any such feeder is re-sized
-  // in a second pass at a floor of `selectivityRatio × the child's incomer`.
-  // Skipped for an explicitly overridden feeder — the engineer's rating stands
-  // verbatim, and the residual non-selectivity remains for `faultStudy` to flag.
-  //
-  // The floor moves the DEVICE ONLY, and only as far as the load-sized cable's
-  // ampacity permits (`_computeCircuit`): the conductor is sized from the load
-  // on both passes, so nothing about the cable — or the fault impedance derived
-  // from it — differs between the two.
-  final feederFloors = <String, double>{};
-  for (final p in panels) {
-    for (final c in p.circuits) {
-      final childId = c.feedsPanelId;
-      if (childId == null || c.breakerOverrideA != null) continue;
-      final childResult = pass1.panels[childId];
-      final feederResult = pass1.panels[p.id]?.circuits
-          .where((r) => r.circuitId == c.id)
-          .firstOrNull;
-      if (childResult == null || feederResult == null) continue;
-      // Whatever produced it (auto-sized, headroom-uplifted, or overridden) the
-      // child's incomer rating is the device the feeder must discriminate with.
-      final childIncomerA = childResult.incomer.breaker.ratingA.amperes;
-      if (childIncomerA <= 0) continue;
-      final floorA = selectivityRatio * childIncomerA;
-      if (feederResult.breaker.ratingA.amperes + 1e-9 < floorA) {
-        feederFloors[c.id] = floorA;
+    // FEEDER SELECTIVITY FLOOR. A feeder way and the incomer of the board it feeds
+    // are sized from the SAME diversified demand, so they routinely land on the
+    // same ladder rung — ratio 1.0, i.e. `nonSelective` by `fault.dart`'s
+    // [selectivityRatio] rule: a fault on the sub-board would trip the upstream
+    // feeder as readily as the board's own incomer. The sizer must not create the
+    // condition the fault study then warns about, so any such feeder is re-sized
+    // in a second pass at a floor of `selectivityRatio × the child's incomer`.
+    // Skipped for an explicitly overridden feeder — the engineer's rating stands
+    // verbatim, and the residual non-selectivity remains for `faultStudy` to flag.
+    //
+    // The floor moves the DEVICE ONLY, and only as far as the load-sized cable's
+    // ampacity permits (`_computeCircuit`): the conductor is sized from the load
+    // on both passes, so nothing about the cable — or the fault impedance derived
+    // from it — differs between the two.
+    final feederFloors = <String, double>{};
+    for (final p in panels) {
+      for (final c in p.circuits) {
+        final childId = c.feedsPanelId;
+        if (childId == null || c.breakerOverrideA != null) continue;
+        final childResult = pass1.panels[childId];
+        final feederResult = pass1.panels[p.id]?.circuits
+            .where((r) => r.circuitId == c.id)
+            .firstOrNull;
+        if (childResult == null || feederResult == null) continue;
+        // Whatever produced it (auto-sized, headroom-uplifted, or overridden) the
+        // child's incomer rating is the device the feeder must discriminate with.
+        final childIncomerA = childResult.incomer.breaker.ratingA.amperes;
+        if (childIncomerA <= 0) continue;
+        final floorA = selectivityRatio * childIncomerA;
+        if (feederResult.breaker.ratingA.amperes + 1e-9 < floorA) {
+          feederFloors[c.id] = floorA;
+        }
       }
     }
-  }
 
-  // Round 43 (electrical-sim-8-mccb-frame-raise-breaks-ads) — the MCCB
-  // frame-minimum raise ([faultAwareBreakerClass], 6 A -> 16 A on a bus above
-  // the MCB ladder) is a device-CLASS rule; like the Round-40 coordination
-  // floor it must never create an ADS failure the load-sized device did not
-  // have. On TN, every FINAL way the raise reached (MCCB at the frame
-  // minimum, not overridden) that fails ADS is re-sized ONCE with the raise
-  // refused: the load-sized MCB is kept and the existing cascade info
-  // (`mcb-backup-protection-required`) names why. Refusing only ever lowers
-  // that way's own device (never a cable, a board current or another way),
-  // so one more pass is the fixed point. TT / no such way ⇒ verbatim.
-  ElectricalSystemResult frameAds(ElectricalSystemResult r,
-      Map<String, double> floors, Map<String, double> caps) {
-    final tn = r.earthing.system == EarthingSystem.tnS ||
-        r.earthing.system == EarthingSystem.tnCs;
-    if (!tn) return r;
-    // Round 54 — every non-overridden FINAL MCCB within the MCB ladder
-    // (<= 63 A): the load-sized device of such a way was an MCB, so its class
-    // came from the fault rule (a 16 A / 20 A / 32 A way converts at the same
-    // rating and the conversion ALONE can fail ADS — the halved Zs limit).
-    final mcbTopA = profile.standardBreakerRatingsA
-        .where((a) => profile.breakerClassFor(a) == BreakerClass.mcb)
-        .fold<double>(0, math.max);
-    final candidates = <String>[
-      for (final pr in r.panels.values)
-        for (final w in pr.circuits)
-          if (w.loadKind != LoadKind.feeder &&
-              w.breaker.deviceClass == BreakerClass.mccb &&
-              !w.breaker.overridden &&
-              w.breaker.ratingA.amperes <= mcbTopA + 1e-9)
-            w.circuitId,
-    ];
-    if (candidates.isEmpty) return r;
-    final origin = originFaultLevel ??
+    // Round 43 (electrical-sim-8-mccb-frame-raise-breaks-ads) — the MCCB
+    // frame-minimum raise ([faultAwareBreakerClass], 6 A -> 16 A on a bus above
+    // the MCB ladder) is a device-CLASS rule; like the Round-40 coordination
+    // floor it must never create an ADS failure the load-sized device did not
+    // have. On TN, every FINAL way the raise reached (MCCB at the frame
+    // minimum, not overridden) that fails ADS is re-sized ONCE with the raise
+    // refused: the load-sized MCB is kept and the existing cascade info
+    // (`mcb-backup-protection-required`) names why. Refusing only ever lowers
+    // that way's own device (never a cable, a board current or another way),
+    // so one more pass is the fixed point. TT / no such way ⇒ verbatim.
+    ElectricalSystemResult frameAds(ElectricalSystemResult r,
+        Map<String, double> floors, Map<String, double> caps) {
+      final tn = r.earthing.system == EarthingSystem.tnS ||
+          r.earthing.system == EarthingSystem.tnCs;
+      if (!tn) return r;
+      // Round 54 — every non-overridden FINAL MCCB within the MCB ladder
+      // (<= 63 A): the load-sized device of such a way was an MCB, so its class
+      // came from the fault rule (a 16 A / 20 A / 32 A way converts at the same
+      // rating and the conversion ALONE can fail ADS — the halved Zs limit).
+      final mcbTopA = profile.standardBreakerRatingsA
+          .where((a) => profile.breakerClassFor(a) == BreakerClass.mcb)
+          .fold<double>(0, math.max);
+      final candidates = <String>[
+        for (final pr in r.panels.values)
+          for (final w in pr.circuits)
+            if (w.loadKind != LoadKind.feeder &&
+                w.breaker.deviceClass == BreakerClass.mccb &&
+                !w.breaker.overridden &&
+                w.breaker.ratingA.amperes <= mcbTopA + 1e-9)
+              w.circuitId,
+      ];
+      if (candidates.isEmpty) return r;
+      final origin = originFaultLevel ??
+          project.originFaultLevelA ??
+          estimatedServiceFaultLevelA(project,
+              demand: r.supply.demandVa,
+              supply: studySupplyDesign(project, r)) ??
+          const Current(defaultLvUtilityFaultKa * 1000);
+      final f = faultStudy(r, project, profile, originFaultLevel: origin);
+      final refused = <String>{
+        for (final id in candidates)
+          if (f.circuits[id]?.adsOk == false) id,
+      };
+      if (refused.isEmpty) return r;
+      // Refusing keeps each listed way's load-sized MCB (raised OR merely
+      // converted): its Zs limit returns to the curve multiple.
+      final kept = sizeAll(floors, caps, refused);
+      // Round 55 (regression-mccb-refusal-keeps-mcb-that-also-fails-ads) — a
+      // way whose load-sized MCB fails the earth-fault loop TOO gains nothing
+      // from the refusal: the MCB swaps an adequate-kA MCCB for a device below
+      // the bus fault (a cascade warning / breaking-capacity error) on top of
+      // the unchanged ADS error, under a note claiming the MCB was kept because
+      // the MCCB would fail. Such a way keeps the MCCB and its ONE defect, the
+      // `ads-disconnection` error. Refusal only changes the way's own device
+      // (its cable and Zs are untouched), so the MCB verdict read here is the
+      // final one: one more pass is the fixed point.
+      final f2 = faultStudy(kept, project, profile, originFaultLevel: origin);
+      final helps = <String>{
+        for (final id in refused)
+          if (f2.circuits[id]?.adsOk != false) id,
+      };
+      if (helps.length == refused.length) return kept;
+      if (helps.isEmpty) return r;
+      return sizeAll(floors, caps, helps);
+    }
+
+    // No feeder needed lifting (every single-panel project, and any project whose
+    // feeders are overridden or already selective) ⇒ pass 1 IS the answer, handed
+    // back as-is so nothing is recomputed and the output is byte-identical.
+    if (feederFloors.isEmpty) return frameAds(pass1, const {}, const {});
+
+    // PASS 2 — exactly one more pass, and provably enough: each floor is derived
+    // from a CHILD's incomer rating, which is sized from that child's own load-side
+    // demand (its circuit design currents × its diversity/headroom) and is
+    // therefore invariant under a change to its PARENT's feeder breaker or cable.
+    // So the floors computed from pass 1 are still the correct floors in pass 2,
+    // and every flagged feeder emerges at or above `selectivityRatio ×` its child's
+    // incomer (or clamped at the ladder top, reported honestly) — a fixed point.
+    final pass2 = sizeAll(feederFloors);
+
+    // Round 40 (electrical-sim-5-selectivity-floor-breaks-ads) — on a TN
+    // installation a raised device shrinks the earth-fault loop limit
+    // (Zs_max = 0.95·U0 / (multiple × In)), so a floored feeder can fail ADS on
+    // the very cable its load-sized device protected. Conductor / fault
+    // protection beats coordination: any floored feeder that fails ADS is
+    // capped one rung lower and re-sized, until it passes or falls back to the
+    // load-sized device (a failure there is the cable's own, reported as
+    // before — the floor never makes it worse). The
+    // cap moves only the device — the cables, and so every Zs, are identical
+    // across passes — and the floor TARGET stays recorded, so the residual
+    // partial selectivity is still reported (the feeder is not in
+    // [ElectricalSystemResult.feederFloorsApplied]). TT (RCD-cleared) or no
+    // ADS failure ⇒ pass 2 verbatim ⇒ byte-identical.
+    final isTn = pass2.earthing.system == EarthingSystem.tnS ||
+        pass2.earthing.system == EarthingSystem.tnCs;
+    if (!isTn) return pass2;
+    final faultOrigin = originFaultLevel ??
         project.originFaultLevelA ??
         estimatedServiceFaultLevelA(project,
-            demand: r.supply.demandVa,
-            supply: studySupplyDesign(project, r)) ??
+            demand: pass2.supply.demandVa,
+            supply: studySupplyDesign(project, pass2)) ??
         const Current(defaultLvUtilityFaultKa * 1000);
-    final f = faultStudy(r, project, profile, originFaultLevel: origin);
-    final refused = <String>{
-      for (final id in candidates)
-        if (f.circuits[id]?.adsOk == false) id,
-    };
-    if (refused.isEmpty) return r;
-    // Refusing keeps each listed way's load-sized MCB (raised OR merely
-    // converted): its Zs limit returns to the curve multiple.
-    final kept = sizeAll(floors, caps, refused);
-    // Round 55 (regression-mccb-refusal-keeps-mcb-that-also-fails-ads) — a
-    // way whose load-sized MCB fails the earth-fault loop TOO gains nothing
-    // from the refusal: the MCB swaps an adequate-kA MCCB for a device below
-    // the bus fault (a cascade warning / breaking-capacity error) on top of
-    // the unchanged ADS error, under a note claiming the MCB was kept because
-    // the MCCB would fail. Such a way keeps the MCCB and its ONE defect, the
-    // `ads-disconnection` error. Refusal only changes the way's own device
-    // (its cable and Zs are untouched), so the MCB verdict read here is the
-    // final one: one more pass is the fixed point.
-    final f2 = faultStudy(kept, project, profile, originFaultLevel: origin);
-    final helps = <String>{
-      for (final id in refused)
-        if (f2.circuits[id]?.adsOk != false) id,
-    };
-    if (helps.length == refused.length) return kept;
-    if (helps.isEmpty) return r;
-    return sizeAll(floors, caps, helps);
+    final ladder = profile.standardBreakerRatingsA;
+    final caps = <String, double>{};
+    var current = pass2;
+    for (var iter = 0; iter < ladder.length; iter++) {
+      final f =
+          faultStudy(current, project, profile, originFaultLevel: faultOrigin);
+      var changed = false;
+      for (final id in feederFloors.keys) {
+        final now = f.circuits[id];
+        if (now == null || now.adsOk != false) continue;
+        final parentId = feederParentOf[id];
+        final rNow = current.panels[parentId]?.circuits
+            .where((x) => x.circuitId == id)
+            .firstOrNull;
+        final rLoad = pass1.panels[parentId]?.circuits
+            .where((x) => x.circuitId == id)
+            .firstOrNull;
+        if (rNow == null || rLoad == null) continue;
+        final ratingNow = rNow.breaker.ratingA.amperes;
+        final loadRating = rLoad.breaker.ratingA.amperes;
+        if (ratingNow <= loadRating + 1e-9) continue;
+        final lower = ladder.lastWhere((x) => x < ratingNow - 1e-9,
+            orElse: () => loadRating);
+        caps[id] = lower < loadRating ? loadRating : lower;
+        changed = true;
+      }
+      if (!changed) break;
+      current = sizeAll(feederFloors, Map.of(caps));
+    }
+    return frameAds(current, feederFloors, caps);
   }
 
-  // No feeder needed lifting (every single-panel project, and any project whose
-  // feeders are overridden or already selective) ⇒ pass 1 IS the answer, handed
-  // back as-is so nothing is recomputed and the output is byte-identical.
-  if (feederFloors.isEmpty) return frameAds(pass1, const {}, const {});
-
-  // PASS 2 — exactly one more pass, and provably enough: each floor is derived
-  // from a CHILD's incomer rating, which is sized from that child's own load-side
-  // demand (its circuit design currents × its diversity/headroom) and is
-  // therefore invariant under a change to its PARENT's feeder breaker or cable.
-  // So the floors computed from pass 1 are still the correct floors in pass 2,
-  // and every flagged feeder emerges at or above `selectivityRatio ×` its child's
-  // incomer (or clamped at the ladder top, reported honestly) — a fixed point.
-  final pass2 = sizeAll(feederFloors);
-
-  // Round 40 (electrical-sim-5-selectivity-floor-breaks-ads) — on a TN
-  // installation a raised device shrinks the earth-fault loop limit
-  // (Zs_max = 0.95·U0 / (multiple × In)), so a floored feeder can fail ADS on
-  // the very cable its load-sized device protected. Conductor / fault
-  // protection beats coordination: any floored feeder that fails ADS is
-  // capped one rung lower and re-sized, until it passes or falls back to the
-  // load-sized device (a failure there is the cable's own, reported as
-  // before — the floor never makes it worse). The
-  // cap moves only the device — the cables, and so every Zs, are identical
-  // across passes — and the floor TARGET stays recorded, so the residual
-  // partial selectivity is still reported (the feeder is not in
-  // [ElectricalSystemResult.feederFloorsApplied]). TT (RCD-cleared) or no
-  // ADS failure ⇒ pass 2 verbatim ⇒ byte-identical.
-  final isTn = pass2.earthing.system == EarthingSystem.tnS ||
-      pass2.earthing.system == EarthingSystem.tnCs;
-  if (!isTn) return pass2;
-  final faultOrigin = originFaultLevel ??
+  // Round 56 — a FINAL way that still fails automatic disconnection after the
+  // class fixed point (as the MCB AND as the MCCB, IEC 60364-4-41) grows its
+  // CONDUCTOR: the section steps up the standard ladder one rung at a time
+  // (a lower loop impedance), the whole pipeline re-runs (the MCB / MCCB
+  // choice follows the new cable), and the way stops at the first rung that
+  // passes. Bounded: at most [kAdsCsaGrowthMaxRungs] rungs above its load-
+  // sized section and never above [kAdsCsaGrowthMaxMm2]; the ladder exhausted
+  // ⇒ the load-sized cable and the `ads-disconnection` error stand. Never an
+  // overridden cable or breaker, a feeder, a spare way, parallel runs or a
+  // star-delta way (its field run is the motor leads). TT / no failure ⇒ the
+  // first solve verbatim.
+  Current growOriginFor(ElectricalSystemResult r) =>
+      originFaultLevel ??
       project.originFaultLevelA ??
       estimatedServiceFaultLevelA(project,
-          demand: pass2.supply.demandVa,
-          supply: studySupplyDesign(project, pass2)) ??
+          demand: r.supply.demandVa, supply: studySupplyDesign(project, r)) ??
       const Current(defaultLvUtilityFaultKa * 1000);
-  final ladder = profile.standardBreakerRatingsA;
-  final caps = <String, double>{};
-  var current = pass2;
-  for (var iter = 0; iter < ladder.length; iter++) {
-    final f =
-        faultStudy(current, project, profile, originFaultLevel: faultOrigin);
-    var changed = false;
-    for (final id in feederFloors.keys) {
-      final now = f.circuits[id];
-      if (now == null || now.adsOk != false) continue;
-      final parentId = feederParentOf[id];
-      final rNow = current.panels[parentId]?.circuits
-          .where((x) => x.circuitId == id)
-          .firstOrNull;
-      final rLoad = pass1.panels[parentId]?.circuits
-          .where((x) => x.circuitId == id)
-          .firstOrNull;
-      if (rNow == null || rLoad == null) continue;
-      final ratingNow = rNow.breaker.ratingA.amperes;
-      final loadRating = rLoad.breaker.ratingA.amperes;
-      if (ratingNow <= loadRating + 1e-9) continue;
-      final lower = ladder.lastWhere((x) => x < ratingNow - 1e-9,
-          orElse: () => loadRating);
-      caps[id] = lower < loadRating ? loadRating : lower;
-      changed = true;
+  var result = solveAll();
+  final tnGrow = result.earthing.system == EarthingSystem.tnS ||
+      result.earthing.system == EarthingSystem.tnCs;
+  if (!tnGrow) return result;
+  final sections = profile.standardSectionsMm2;
+  final loadSized = <String, double>{};
+  final circuitModelById = <String, ElectricalCircuit>{
+    for (final p in panels)
+      for (final c in p.circuits) c.id: c,
+  };
+  for (var iter = 0; iter < kAdsCsaGrowthMaxRungs; iter++) {
+    final f = faultStudy(result, project, profile,
+        originFaultLevel: growOriginFor(result));
+    var grew = false;
+    for (final pr in result.panels.values) {
+      for (final w in pr.circuits) {
+        if (f.circuits[w.circuitId]?.adsOk != false) continue;
+        final m = circuitModelById[w.circuitId];
+        if (m == null ||
+            m.loadKind == LoadKind.feeder ||
+            m.loadKind == LoadKind.spare ||
+            m.feedsPanelId != null ||
+            m.cableOverrideMm2 != null ||
+            m.breakerOverrideA != null ||
+            m.starterType == StarterType.starDelta ||
+            (w.cable.runsPerPhase ?? 1) > 1) {
+          continue;
+        }
+        final now = w.cable.csaMm2;
+        final base = loadSized.putIfAbsent(w.circuitId, () => now);
+        final baseIdx = sections.indexWhere((x) => x + 1e-9 >= base);
+        final next = sections.where((x) => x > now + 1e-9).firstOrNull;
+        if (next == null ||
+            next > kAdsCsaGrowthMaxMm2 + 1e-9 ||
+            sections.indexOf(next) - baseIdx > kAdsCsaGrowthMaxRungs) {
+          continue;
+        }
+        adsCsaFloors[w.circuitId] = next;
+        grew = true;
+      }
     }
-    if (!changed) break;
-    current = sizeAll(feederFloors, Map.of(caps));
+    if (!grew) break;
+    result = solveAll();
   }
-  return frameAds(current, feederFloors, caps);
+  if (adsCsaFloors.isEmpty) return result;
+  // A way the bounded ladder could not bring to compliance keeps its
+  // load-sized cable and its `ads-disconnection` error (Round 55: the MCCB
+  // and its one defect) — never copper grown under a note claiming it
+  // disconnects in time.
+  final fEnd = faultStudy(result, project, profile,
+      originFaultLevel: growOriginFor(result));
+  final hopeless = [
+    for (final id in adsCsaFloors.keys)
+      if (fEnd.circuits[id]?.adsOk == false) id,
+  ];
+  if (hopeless.isEmpty) return result;
+  hopeless.forEach(adsCsaFloors.remove);
+  return solveAll();
 }

@@ -1856,8 +1856,11 @@ class _PanelAdvancedRow extends StatelessWidget {
     final bits = <String>[
       if (fault != null)
         '${fmtNum(fault.prospectiveFaultkA)} kA${fault.incomerAdequate ? '' : ' !'}',
+      // Round 56 — an envelope whose IEC 60890 rise check fails is marked
+      // ' !' (the kA idiom); the Review warning names the rise.
       if (encl != null)
-        '${fmtNum(encl.widthMm)}x${fmtNum(encl.heightMm)}x${fmtNum(encl.depthMm)}',
+        '${fmtNum(encl.widthMm)}x${fmtNum(encl.heightMm)}x${fmtNum(encl.depthMm)}'
+            '${encl.withinTempLimit && encl.tempRiseK.isFinite ? '' : ' !'}',
       if (spd != null) spd.type.label,
       // H4 — a CT-operated board (demand > the direct-metering limit) prints
       // the resolved CT ratio + revenue accuracy class ('CT 200/5A cl.0.5S'),

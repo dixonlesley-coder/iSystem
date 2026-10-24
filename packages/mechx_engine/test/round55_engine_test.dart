@@ -608,33 +608,61 @@ void main() {
           ],
         );
 
-    for (final len in [350.0, 450.0, 600.0]) {
+    // Round 56 (regression-ads-fail-both-classes-no-csa-growth) — re-derived:
+    // a 350 / 450 / 600 m way failing ADS as both MCB and MCCB on its load-
+    // sized 2.5 mm2 cable now GROWS its conductor to the first rung that
+    // meets the B6 MCB limit 0.95 x 230 / (5 x 6) = 7.283 ohm (the loop is
+    // cable-dominated, Zs ~ 1/csa: 450 m gives 10.22 ohm at 2.5 mm2 and
+    // 10.22 x 2.5 / 4 = 6.39 ~ 6.364 ohm at 4 mm2). The Round-55 rule (keep
+    // the MCCB and ONE ads-disconnection defect) now applies only once the
+    // bounded ladder is exhausted (the 3000 m way: 35 mm2 still fails).
+    for (final (len, csa) in [(350.0, 4.0), (450.0, 4.0), (600.0, 6.0)]) {
       test(
-          '300 W, ${len.toStringAsFixed(0)} m life-safety lighting way: Zs '
-          'above the B6 MCB limit 0.95 x 230 / (5 x 6) = 7.283 ohm, so it keeps '
-          'the MCCB and carries exactly one defect (ads-disconnection)', () {
+          '300 W, ${len.toStringAsFixed(0)} m life-safety lighting way: the '
+          'cable grows to ${csa.toStringAsFixed(0)} mm2 and the B6 MCB passes '
+          'ADS (Zs < 7.283 ohm), no ads-disconnection error', () {
         final pr = hotel(len);
         final fault = estimatedServiceFaultLevelA(pr)!;
         final sys = computeSystem(profile, pr, originFaultLevel: fault);
         final way = sys.panels['SDP']!.circuits.single;
         final f = faultStudy(sys, pr, profile, originFaultLevel: fault);
         final c = f.circuits['el']!;
-        expect(c.adsOk, isFalse);
-        // The B6 MCB limit: 0.95 x U0 / (5 x In).
         const mcbLimit = 0.95 * 230 / (5 * 6);
         expect(mcbLimit, closeTo(7.283, 1e-3));
-        expect(c.zsOhm!, greaterThan(mcbLimit));
-        expect(way.breaker.deviceClass, BreakerClass.mccb);
+        expect(c.adsOk, isTrue);
+        expect(c.zsOhm!, lessThan(mcbLimit));
+        expect(way.cable.csaMm2, csa);
+        expect(way.cableRaisedForAds, isTrue);
+        expect(way.breaker.deviceClass, BreakerClass.mcb);
+        expect(way.breaker.ratingA.amperes, 6);
         final codes = [
           for (final w in [...sys.warnings, ...f.warnings])
             if (w.circuitId == 'el') w.code,
         ];
-        expect(codes.where((x) => x == 'ads-disconnection'), hasLength(1));
-        expect(codes, isNot(contains('mcb-backup-protection-required')));
-        expect(codes, isNot(contains('cascade-combination-unverified')));
-        expect(codes, isNot(contains('breaking-capacity-inadequate')));
+        expect(codes, isNot(contains('ads-disconnection')));
+        expect(codes, contains('cable-raised-for-ads'));
       });
     }
+
+    test(
+        'the bounded ladder exhausted (3000 m: 35 mm2 still above 7.283 '
+        'ohm) keeps the load-sized cable, the MCCB and one ads defect', () {
+      final pr = hotel(3000);
+      final fault = estimatedServiceFaultLevelA(pr)!;
+      final sys = computeSystem(profile, pr, originFaultLevel: fault);
+      final way = sys.panels['SDP']!.circuits.single;
+      final f = faultStudy(sys, pr, profile, originFaultLevel: fault);
+      expect(f.circuits['el']!.adsOk, isFalse);
+      expect(way.cableRaisedForAds, isFalse);
+      expect(way.breaker.deviceClass, BreakerClass.mccb);
+      final codes = [
+        for (final w in [...sys.warnings, ...f.warnings])
+          if (w.circuitId == 'el') w.code,
+      ];
+      expect(codes.where((x) => x == 'ads-disconnection'), hasLength(1));
+      expect(codes, isNot(contains('cable-raised-for-ads')));
+      expect(codes, isNot(contains('mcb-backup-protection-required')));
+    });
 
     test('the Round-54 60 m / 16 A way still keeps its passing MCB', () {
       final pr = hotel(60, loadW: 6000, phases: 3);

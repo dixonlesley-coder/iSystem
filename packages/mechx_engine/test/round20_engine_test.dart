@@ -246,6 +246,10 @@ void main() {
             loadW: 300 + rnd.nextDouble() * 12000,
             cosPhi: 0.8 + rnd.nextDouble() * 0.2,
             length: Length(5 + rnd.nextDouble() * 150),
+            // Round 56 — half the ways pin a 2.5 mm2 minimum (an override
+            // disables the ADS conductor growth, which otherwise brings every
+            // failing way to compliance), so the sweep still exercises FAILs.
+            cableOverrideMm2: rnd.nextBool() ? 2.5 : null,
           ),
       ];
       final pr = ElectricalProject(id: 'p', name: 'P', panels: [

@@ -270,6 +270,10 @@ void main() {
                 length: const Length(66),
                 lifeSafety: lifeSafety,
                 cableType: lifeSafety ? 'FRC' : null,
+                // Round 56 — the life-safety (RCD-exempt) run pins its
+                // load-sized 2.5 mm2: an override disables the ADS conductor
+                // growth, so the MCB-alone failure stays the fixture.
+                cableOverrideMm2: lifeSafety ? 2.5 : null,
               ),
             ]),
           ],

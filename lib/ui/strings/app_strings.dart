@@ -4574,6 +4574,20 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'Automatic disconnection not met',
     'Pemutusan otomatis tidak terpenuhi'
   ),
+  // Round 56 — ADS judged on the standby genset; the ADS conductor growth;
+  // the enclosure temperature-rise verdict.
+  'ads-disconnection-on-genset': (
+    'Automatic disconnection not met on genset supply',
+    'Pemutusan otomatis tidak terpenuhi saat suplai genset'
+  ),
+  'cable-raised-for-ads': (
+    'Cable raised for automatic disconnection',
+    'Kabel diperbesar untuk pemutusan otomatis'
+  ),
+  'enclosure-temp-rise-exceeded': (
+    'Enclosure temperature rise exceeded',
+    'Kenaikan suhu enklosur melebihi batas'
+  ),
   'tt-no-earth-fault-protection': (
     'No earth-fault protection (TT)',
     'Tanpa proteksi gangguan tanah (TT)'
