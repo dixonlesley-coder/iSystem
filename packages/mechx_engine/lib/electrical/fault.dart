@@ -58,6 +58,7 @@ import 'supply_design.dart'
         SupplyDesign,
         declaredServiceTransformer,
         determineSupply,
+        serviceSections,
         transformerImpedancePct;
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -457,11 +458,11 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
     // Round 30 — per-unit rating × the units one section parallels (a dual
     // service's coupler is N.O. ⇒ one section's units only).
     final declaredTx = declaredServiceTransformer(project);
+    // Round 58 — one SECTION's units on an N-section service.
     final txKva = declaredTx == null
         ? capacityVa
         : declaredTx.kva.voltAmperes *
-            math.max(1,
-                project.dualTransformer ? declaredTx.units ~/ 2 : declaredTx.units);
+            math.max(1, declaredTx.units ~/ serviceSections(project));
     final declaredA = txKva /
         (math.sqrt(3) *
             serviceFaultLineVoltageV *
@@ -501,12 +502,26 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
 double? _studyTransformerFaultA(ElectricalProject project, ApparentPower demand,
     [SupplyDesign? studied]) {
   if (demand.voltAmperes <= 0) return null;
+  // Round 58 — an explicit N-section service: each section's unit is sized
+  // on its share of the demand (one unit per root board, never the whole
+  // demand on one paralleled bank).
+  final n = project.transformerUnits;
+  if (n != null && n > 1 && (studied == null || studied.declared)) {
+    final s = determineSupply(ApparentPower(demand.voltAmperes / n));
+    final k = s.transformerKva;
+    if (!s.isMv || k == null || k <= 0) return null;
+    return k * 1000 * math.max(1, s.units) /
+        (math.sqrt(3) *
+            serviceFaultLineVoltageV *
+            (s.impedancePct ?? transformerImpedancePct) /
+            100);
+  }
   final supply = studied != null && !studied.declared
       ? studied
       : determineSupply(demand, dualTransformer: project.dualTransformer);
   final kva = supply.transformerKva;
   if (!supply.isMv || kva == null || kva <= 0) return null;
-  final perSection = project.dualTransformer ? supply.units ~/ 2 : supply.units;
+  final perSection = supply.units ~/ serviceSections(project);
   final va = kva * 1000 * math.max(1, perSection);
   return va /
       (math.sqrt(3) *
@@ -1361,7 +1376,9 @@ FaultStudyResult faultStudy(
                 '${panelResult.name} / ${c.name}: earth-fault loop Zs '
                 '${_fmt(zsOhm)} Ω exceeds the ${_fmt(zsMaxOhm)} Ω limit for '
                 'disconnection in ${_fmt(tDisc)} s — shorten the run, '
-                'increase the CSA (cable override)'
+                // Round 58 — a star-delta way's loop is set by its motor
+                // leads, which the cable override sizes.
+                '${leads == null ? 'increase the CSA (cable override)' : 'increase the motor-lead CSA (the cable override sizes the motor leads)'}'
                 // Round 38 (elec-protection-ads-advice-fit-rcd-impossible)
                 // — the model has no RCD request on a TN way, so the only
                 // levers named are the ones the tool provides.
@@ -1500,7 +1517,15 @@ FaultStudyResult faultStudy(
                 'To reach the ${_fmt(selectivityRatio)}x target, increase the '
                 'feeder cable (then the device can rise); verify against '
                 'manufacturer curves otherwise.';
-    if (ns) {
+    // Round 58 (elec-convergence-10-ups-feeder-false-below-demand) — a UPS
+    // decouples its output from the feeder (an output-side fault is cleared
+    // by the UPS's own current limit / output devices, never by the feeder
+    // through the rectifier), so there is no discrimination pair to report.
+    final upsDecoupled = project.panels
+        .any((p) => p.id == childPanelId && p.upsBacked);
+    if (upsDecoupled) {
+      // No selectivity finding for a UPS-decoupled pair.
+    } else if (ns) {
       warnings.add(ElectricalWarning(
         code: 'non-selective',
         severity: WarningSeverity.warning,

@@ -67,7 +67,7 @@ import 'results.dart'
         VoltageDropResult,
         kStarDeltaInternalWiringM;
 import 'sizing.dart';
-import 'supply_design.dart' show plnDayaVa1ph;
+import 'supply_design.dart' show plnDayaVa1ph, serviceSections;
 import 'ups.dart';
 
 export 'ups.dart' show kUpsEfficiency, kUpsRechargeAllowance, kUpsInputFactor;
@@ -187,7 +187,8 @@ typedef FedNeutralLoad = ({
 double? serviceEntranceCapacityVa(ElectricalProject project) {
   final cap = project.supplyCapacityVa?.voltAmperes;
   if (cap == null || cap <= 0) return null;
-  return project.dualTransformer ? cap / 2 : cap;
+  // Round 58 — one section of an N-section service ([serviceSections]).
+  return cap / serviceSections(project);
 }
 
 // ── phase determination ─────────────────────────────────────────────────────
@@ -1982,12 +1983,16 @@ _CircuitComputation _computeCircuit(
       ? const Length(kStarDeltaInternalWiringM)
       : effectiveLength;
 
+  // Round 58 (elec-convergence-10-star-delta-ads-no-remedy) — on a
+  // star-delta way the cable override and the ADS growth floor size the
+  // FIELD run (the motor leads, below): the leads set the earth-fault loop.
+  // The 2 m internal link stays ampacity-sized on the PUIL minimum.
   var cable = sizeCable(
     profile,
     designCurrent: sizingCurrent,
     breakerRating: loadBreaker.ratingA,
     deratingFactor: df,
-    minSectionMm2: minSection,
+    minSectionMm2: starDeltaMotor ? baseMin : minSection,
     insulation: cableInsulation,
     material: panel.material,
     method: installMethod,
@@ -2197,7 +2202,7 @@ _CircuitComputation _computeCircuit(
       designCurrent: leadIb,
       breakerRating: leadIb,
       deratingFactor: leadDf,
-      minSectionMm2: baseMin,
+      minSectionMm2: minSection,
       insulation: cableInsulation,
       material: panel.material,
       method: installMethod,
@@ -2446,7 +2451,11 @@ _CircuitComputation _computeCircuit(
   if (motorLeads != null) {
     final wayPe =
         grounding.peCsaMm2 > 0 ? grounding.peCsaMm2 : cable.csaMm2;
-    motorLeadsPe = math.min(wayPe, motorLeads.csaMm2);
+    // Round 58 — a lead grown past the link (override / ADS growth) carries
+    // at least the PE its own section takes (IEC 60364-5-54 543.1), so the
+    // loop the growth was for actually drops; un-grown leads are unchanged.
+    motorLeadsPe = math.max(math.min(wayPe, motorLeads.csaMm2),
+        profile.peConductorSizeMm2(motorLeads.csaMm2));
   }
 
   final result = ElectricalCircuitResult(
@@ -2482,7 +2491,9 @@ _CircuitComputation _computeCircuit(
     warnings.add(ElectricalWarning(
       code: 'cable-raised-for-ads',
       severity: WarningSeverity.info,
-      message: '${c.name}: cable raised to ${_num(cable.csaMm2)} mm2 so the '
+      message: '${c.name}: '
+          '${motorLeads == null ? 'cable' : 'motor leads'} raised to '
+          '${_num((motorLeads ?? cable).csaMm2)} mm2 so the '
           'earth-fault loop disconnects in time (IEC 60364-4-41 Zs limit); '
           'the load alone needs a smaller section.',
       panelId: panel.id,
@@ -2492,6 +2503,20 @@ _CircuitComputation _computeCircuit(
 
   return _CircuitComputation(
       result, warnings, loadW, threePhase, _circuitIsNonLinear(c));
+}
+
+/// Round 58 (elec-convergence-10-ups-feeder-false-below-demand) — the
+/// balanced UPS INPUT current a UPS-backed board's feeder carries: the
+/// board's diversified demand VA x [kUpsInputFactor] (output / efficiency +
+/// battery recharge, `// VERIFY`) over sqrt3 x V (3φ) or V (1φ), at 0.1 A —
+/// the same basis the feeder is sized on. Null for a board without a UPS.
+double? _upsInputCurrentA(ElectricalPanel? panel, ElectricalPanelResult r) {
+  if (panel == null || !panel.upsBacked) return null;
+  final v = panel.voltage.volts;
+  if (v <= 0) return null;
+  final va = r.demandVaOrEstimate() * kUpsInputFactor;
+  final three = panel.system == ElectricalSystem.threePhase;
+  return roundTo(three ? va / (math.sqrt(3) * v) : va / v, 1);
 }
 
 // ── panel computation ───────────────────────────────────────────────────────
@@ -4314,14 +4339,21 @@ ElectricalSystemResult computeSystem(
         // the worst phase at the same diversity, so a perfectly balanced board
         // with diversity < 1 is no longer told its feeder is too small.
         final childDiversity = byId[childId]?.diversityFactor ?? 1.0;
-        final childDemandA =
+        // Round 58 (elec-convergence-10-ups-feeder-false-below-demand) — a
+        // UPS-backed board is fed THROUGH its UPS: the feeder carries the
+        // balanced rectifier INPUT it was sized on (Round 44), never the
+        // UPS output's worst phase.
+        final upsInputA = _upsInputCurrentA(byId[childId], childResult);
+        final childDemandA = upsInputA ??
             roundTo(childResult.demandCurrent.amperes * childDiversity, 1);
         final feederRatingA = feederResult.breaker.ratingA.amperes;
         if (childDemandA <= 0 || feederRatingA + 1e-9 >= childDemandA) continue;
         // Only offer "rebalance" when that board's imbalance is actually
         // reducible; an imbalance inherent to its single-phase loads leaves the
         // feeder rating (or splitting the load) as the honest fix.
-        final imbalance = childResult.phaseBalance.imbalancePercent;
+        final imbalance = upsInputA != null
+            ? 0.0
+            : childResult.phaseBalance.imbalancePercent;
         final cause = imbalance <= 0
             ? ' — raise the feeder rating'
             : childResult.phaseBalance.imbalanceReducible
@@ -4334,8 +4366,8 @@ ElectricalSystemResult computeSystem(
           severity: WarningSeverity.warning,
           message:
               '${c.name}: the feeder breaker is ${_num(feederRatingA)} A but '
-              '${childResult.name} draws ${_num(childDemandA)} A on its '
-              'worst-loaded phase$cause.',
+              '${childResult.name} draws ${_num(childDemandA)} A '
+              '${upsInputA != null ? 'at its UPS input' : 'on its worst-loaded phase'}$cause.',
           panelId: id,
           circuitId: c.id,
         ));
@@ -4367,9 +4399,11 @@ ElectricalSystemResult computeSystem(
         final multiplier =
             (child.headroom ?? HeadroomSpec.none).demandMultiplier;
         if (multiplier <= 1.0 + 1e-9) continue;
+        final upsInputA = _upsInputCurrentA(child, childResult);
         final futureA = roundTo(
-            childResult.demandCurrent.amperes *
-                child.diversityFactor *
+            (upsInputA ??
+                    childResult.demandCurrent.amperes *
+                        child.diversityFactor) *
                 multiplier,
             1);
         final feederRatingA = feederResult.breaker.ratingA.amperes;
@@ -4439,7 +4473,7 @@ ElectricalSystemResult computeSystem(
               '${machineGoverns ? 'the largest single machine running current' : 'diversified demand'} '
               '${_num(divA)} A on the worst-loaded '
               'phase exceeds '
-              '${project.dualTransformer ? 'one ${_num(serviceCapacityVa! / 1000)} kVA section of the declared '
+              '${serviceSections(project) > 1 ? 'one ${_num(serviceCapacityVa! / 1000)} kVA section of the declared '
                   '${_num(project.supplyCapacityVa!.voltAmperes / 1000)} kVA '
                   'connection (bus coupler normally open, '
                   '~${_num(roundTo(serviceMinCurrentA, 1))} A) — the section '
@@ -4753,6 +4787,10 @@ ElectricalSystemResult computeSystem(
       for (final c in p.circuits) {
         final childId = c.feedsPanelId;
         if (childId == null || c.breakerOverrideA != null) continue;
+        // Round 58 — a UPS decouples its output from the feeder: a fault on
+        // the UPS output board is cleared by the UPS / its output devices, so
+        // the feeder needs no discrimination target over that incomer.
+        if (byId[childId]?.upsBacked ?? false) continue;
         final childResult = pass1.panels[childId];
         final feederResult = pass1.panels[p.id]?.circuits
             .where((r) => r.circuitId == c.id)
@@ -4911,9 +4949,9 @@ ElectricalSystemResult computeSystem(
   // passes. Bounded: at most [kAdsCsaGrowthMaxRungs] rungs above its load-
   // sized section and never above [kAdsCsaGrowthMaxMm2]; the ladder exhausted
   // ⇒ the load-sized cable and the `ads-disconnection` error stand. Never an
-  // overridden cable or breaker, a feeder, a spare way, parallel runs or a
-  // star-delta way (its field run is the motor leads). TT / no failure ⇒ the
-  // first solve verbatim.
+  // overridden cable or breaker, a feeder, a spare way or parallel runs; a
+  // star-delta way grows its motor leads (its field run, Round 58). TT / no
+  // failure ⇒ the first solve verbatim.
   Current growOriginFor(ElectricalSystemResult r) =>
       originFaultLevel ??
       project.originFaultLevelA ??
@@ -4944,11 +4982,13 @@ ElectricalSystemResult computeSystem(
             m.feedsPanelId != null ||
             m.cableOverrideMm2 != null ||
             m.breakerOverrideA != null ||
-            m.starterType == StarterType.starDelta ||
-            (w.cable.runsPerPhase ?? 1) > 1) {
+            (w.cable.runsPerPhase ?? 1) > 1 ||
+            (w.motorLeads?.runsPerPhase ?? 1) > 1) {
           continue;
         }
-        final now = w.cable.csaMm2;
+        // Round 58 — a star-delta way grows its MOTOR LEADS (its field run
+        // and earth-fault loop), never the 2 m internal link.
+        final now = w.motorLeads?.csaMm2 ?? w.cable.csaMm2;
         final base = loadSized.putIfAbsent(w.circuitId, () => now);
         final baseIdx = sections.indexWhere((x) => x + 1e-9 >= base);
         final next = sections.where((x) => x > now + 1e-9).firstOrNull;

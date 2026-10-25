@@ -132,6 +132,9 @@ enum StringKey {
   electricalCapacitorKvar,
   electricalCapacitorKvarNote,
   electricalDualTransformer,
+  electricalTransformerSections,
+  electricalTransformerSectionsNote,
+  electricalDayaOnSite,
   electricalGensetModeStandby,
   electricalGensetModePrime,
   electricalGensetTransferAts,
@@ -1431,6 +1434,11 @@ const Map<StringKey, String> _en = {
       'Installed PF-correction bank. 0 shows the generic "PF correction" '
           'note. VERIFY against the PF target / step plan.',
   StringKey.electricalDualTransformer: 'Dual transformer (split bus)',
+  StringKey.electricalTransformerSections: 'Transformer sections',
+  StringKey.electricalTransformerSectionsNote:
+      'Separate transformers, never paralleled — one per service-entrance '
+      'board (e.g. one per building). 0 = one section (two when dual).',
+  StringKey.electricalDayaOnSite: 'On-site plant (no PLN daya)',
   StringKey.electricalGensetModeStandby: 'Standby',
   StringKey.electricalGensetModePrime: 'Prime',
   StringKey.electricalGensetTransferAts: 'ATS',
@@ -3012,6 +3020,11 @@ const Map<StringKey, String> _id = {
       'Bank koreksi PF terpasang. 0 menampilkan catatan "PF correction" '
           'umum. VERIFIKASI terhadap target / rencana langkah PF.',
   StringKey.electricalDualTransformer: 'Trafo ganda (bus terpisah)',
+  StringKey.electricalTransformerSections: 'Jumlah seksi trafo',
+  StringKey.electricalTransformerSectionsNote:
+      'Trafo terpisah, tidak pernah diparalel — satu per panel utama '
+      '(mis. satu per gedung). 0 = satu seksi (dua bila ganda).',
+  StringKey.electricalDayaOnSite: 'Pembangkit setempat (tanpa daya PLN)',
   StringKey.electricalGensetModeStandby: 'Cadangan',
   StringKey.electricalGensetModePrime: 'Utama',
   StringKey.electricalGensetTransferAts: 'ATS',

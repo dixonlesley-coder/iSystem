@@ -1461,6 +1461,21 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                     value: project.dualTransformer,
                     onChanged: ctrl.setDualTransformer,
                   ),
+                  // Round 58 — N separate transformer sections.
+                  ElectricalField(
+                    label: context
+                        .strings(StringKey.electricalTransformerSections),
+                    child: ElectricalNumInput(
+                      value: (project.transformerUnits ?? 0).toDouble(),
+                      min: 0,
+                      max: 32,
+                      onChanged: (v) => ctrl.setTransformerUnits(
+                        v >= 1 ? v.floor() : null,
+                      ),
+                    ),
+                  ),
+                  note(context
+                      .strings(StringKey.electricalTransformerSectionsNote)),
                 ]),
                 // ── Earthing ─────────────────────────────────────────────
                 section(kSupplyEarthingSectionKey,
@@ -1741,7 +1756,12 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
                         _WarningRow(warning: w, onLocate: onLocate),
                       const SizedBox(height: MechXSpacing.md),
                     ],
-                    _AdvancedBody(advanced: advanced, result: result),
+                    _AdvancedBody(
+                      advanced: advanced,
+                      result: result,
+                      supplyKind:
+                          ref.watch(electricalProjectProvider).supplyKind,
+                    ),
                   ],
                 ),
               ),
@@ -1754,7 +1774,11 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
 class _AdvancedBody extends StatelessWidget {
   final AdvancedStudy advanced;
   final ElectricalSystemResult result;
-  const _AdvancedBody({required this.advanced, required this.result});
+  final SupplyKind supplyKind;
+  const _AdvancedBody(
+      {required this.advanced,
+      required this.result,
+      this.supplyKind = SupplyKind.pln});
 
   @override
   Widget build(BuildContext context) {
@@ -1781,7 +1805,10 @@ class _AdvancedBody extends StatelessWidget {
       // LV daya to recommend (audit r8).
       _Metric(
         label: 'Daya tersambung',
-        value: supply.lvOrMv == SupplyLevel.mv ||
+        // Round 58 — an on-site genset / PV primary supply has no PLN daya.
+        value: supplyKind != SupplyKind.pln
+            ? context.strings(StringKey.electricalDayaOnSite)
+            : supply.lvOrMv == SupplyLevel.mv ||
                 advanced.recommendedDayaVa == null
             ? 'MV (no LV daya)'
             : '${(advanced.recommendedDayaVa! / 1000).toStringAsFixed(1)} kVA'

@@ -422,6 +422,137 @@ bool _applyInlineDevices({
   return reducedFlowing;
 }
 
+/// Round 58 (plumbing-hvac-convergence-8-pump-sized-on-prv-held-shortfall) —
+/// the nodes a drawn PRV HOLDS on the [service] network fed from [sourceId]:
+/// the same hop-BFS supply tree [_applyInlineDevices] shifts a PRV's subtree
+/// on. [heldBy] maps every node behind a PRV (the PRV node included) to the
+/// nearest PRV upstream of it; [inletOf] maps each PRV to its INLET node (its
+/// parent on that tree) and [inletEdgeOf] to the pipe arriving at it. A PRV
+/// holds its setpoint whatever head reaches it, so a mover upstream cannot
+/// move the residual of a held node — it owes the PRV's ARRIVAL (inlet less
+/// [supplyEdgeLossHead] of the inlet pipe) the setpoint instead. Pure.
+({
+  Map<String, String> heldBy,
+  Map<String, String> inletOf,
+  Map<String, NetEdge> inletEdgeOf,
+}) prvHeldNodes(
+  Network net, {
+  required ServiceType service,
+  required String sourceId,
+}) {
+  final adjacency = <String, List<({NetEdge edge, String other})>>{};
+  for (final e in net.edges) {
+    if (e.service != service) continue;
+    (adjacency[e.fromId] ??= []).add((edge: e, other: e.toId));
+    (adjacency[e.toId] ??= []).add((edge: e, other: e.fromId));
+  }
+  final heldBy = <String, String>{};
+  final inletOf = <String, String>{};
+  final inletEdgeOf = <String, NetEdge>{};
+  final seen = <String>{sourceId};
+  final queue = [sourceId];
+  for (var i = 0; i < queue.length; i++) {
+    final n = queue[i];
+    for (final l in adjacency[n] ?? const <({NetEdge edge, String other})>[]) {
+      final o = l.other;
+      if (!seen.add(o)) continue;
+      if (net.nodeById(o)?.component == NodeComponent.prv) {
+        heldBy[o] = o;
+        inletOf[o] = n;
+        inletEdgeOf[o] = l.edge;
+      } else if (heldBy[n] case final p?) {
+        heldBy[o] = p;
+      }
+      queue.add(o);
+    }
+  }
+  return (heldBy: heldBy, inletOf: inletOf, inletEdgeOf: inletEdgeOf);
+}
+
+/// Round 58 — the residual each drawn PRV's INLET node must carry for the
+/// PRV to ARRIVE at its [setpoint]: setpoint + the loss of the inlet pipe
+/// ([supplyEdgeLossHead]) + the rise from the inlet to the PRV (the same
+/// [pressureJudgeElevation] the solve's costs read), keyed by PRV id. Pure.
+Map<String, ({String inlet, Pressure owed})> prvInletOwedPressure({
+  required Network net,
+  required ServiceType service,
+  required ({
+    Map<String, String> heldBy,
+    Map<String, String> inletOf,
+    Map<String, NetEdge> inletEdgeOf,
+  }) held,
+  required Map<String, EdgeSizing> sizing,
+  required Pressure setpoint,
+  required Map<String, ScaleCalibration> calibrationBySheet,
+  required BuildingLevels building,
+  MountingHeights mounting = const MountingHeights(),
+}) {
+  final out = <String, ({String inlet, Pressure owed})>{};
+  for (final p in held.inletOf.entries) {
+    final edge = held.inletEdgeOf[p.key];
+    final prv = net.nodeById(p.key);
+    final inlet = net.nodeById(p.value);
+    if (edge == null || prv == null || inlet == null) continue;
+    final loss = supplyEdgeLossHead(
+      net: net,
+      edge: edge,
+      arrivingId: p.key,
+      sizing: sizing,
+      flow: sizing[edge.id]?.flow ?? const FlowRate(0),
+      length: edgeLength(edge, net,
+          calibrationBySheet: calibrationBySheet,
+          building: building,
+          mounting: mounting),
+    );
+    double z(NetNode n) => pressureJudgeElevation(n,
+            service: service,
+            building: building,
+            mounting: mounting,
+            isLoadedOpenEnd: false)
+        .meters;
+    final rise = z(prv) - z(inlet);
+    out[p.key] = (
+      inlet: p.value,
+      owed: Pressure(setpoint.pascals +
+          pressureFromHead(Head(loss.meters + rise)).pascals),
+    );
+  }
+  return out;
+}
+
+/// Round 58 — the head lost over [edge] arriving at [arrivingId]: the
+/// Hazen–Williams friction at [flow] over [length] at the sized bore (the
+/// edge's pipe product C, else the [material] default) plus the arriving
+/// node's minor loss K·v²/2g — exactly the per-edge term [solvePressurized]
+/// accumulates. Zero for an unsized edge.
+Head supplyEdgeLossHead({
+  required Network net,
+  required NetEdge edge,
+  required String arrivingId,
+  required Map<String, EdgeSizing> sizing,
+  required FlowRate flow,
+  required Length length,
+  PipeMaterial material = PipeMaterial.pvc,
+}) {
+  final s = sizing[edge.id];
+  if (s == null) return const Head(0);
+  final c = edge.pipeProduct != null
+      ? hazenWilliamsCFor(edge.pipeProduct!)
+      : const SniProfile().hazenWilliamsC(material);
+  var h = headLossHazenWilliams(
+    flow: flow,
+    length: length,
+    diameter: s.diameter,
+    hazenWilliamsC: c,
+  ).meters;
+  final k = net.nodeById(arrivingId)?.component?.minorLossK ?? 0;
+  if (k > 0) {
+    h += minorLossHead(k: k, velocity: velocityFromFlow(flow, s.diameter))
+        .meters;
+  }
+  return Head(h);
+}
+
 /// Round 47 (mech-convergence-2-assumed-upfeed-pump-at-ceiling-datum) — the
 /// datum of the pump an UPFEED solve ASSUMES at its source. When the picked
 /// source is not a drawn plant (a PDAM water meter / a bare entry leaf, both

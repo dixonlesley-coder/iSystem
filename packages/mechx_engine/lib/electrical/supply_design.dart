@@ -230,7 +230,16 @@ SupplyDesign determineSupply(
   bool singleSectionCarriesAll = false,
   ApparentPower? perPhaseDemand,
   ApparentPower? largestSectionDemand,
+  int? sections,
+  SupplyKind supplyKind = SupplyKind.pln,
+  ApparentPower? plantCapacity,
 }) {
+  // Round 58 — the separate-section count (null ⇒ 2 on a dual service, else
+  // 1: byte-identical). On a declared N-section service each unit carries its
+  // own root board.
+  final nSections = (sections != null && sections >= 1)
+      ? sections
+      : (dualTransformer ? 2 : 1);
   // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
   // service each root board sits on ONE unit (coupler normally open — the
   // fault model gives each section one unit's fault), so a section carries
@@ -265,20 +274,21 @@ SupplyDesign determineSupply(
     // sections; paralleled units above the ladder top).
     final units = (declaredUnits != null && declaredUnits > 0)
         ? declaredUnits
-        : (dualTransformer ? 2 : 1);
+        : nSections;
+    final sectioned = nSections > 1;
     // Round 37 r2 — a SINGLE service-entrance board on a dual service sits
     // on ONE section (coupler normally open), so that section carries the
     // whole demand — the basis the incomer floor and the
     // `service-capacity-below-demand` judge use (never demand / 2).
-    final oneSection = dualTransformer && singleSectionCarriesAll && units > 1;
+    final oneSection = sectioned && singleSectionCarriesAll && units > 1;
     final split = oneSection
-        ? demand.inKilovoltAmperes / (units / 2)
+        ? demand.inKilovoltAmperes / math.max(1, units ~/ nSections)
         : demand.inKilovoltAmperes / units;
     // Round 40 — the most loaded SECTION governs a dual service whose two
     // root boards are unequal (one unit per section on a 2-unit service).
-    final sectionGoverns = dualTransformer &&
+    final sectionGoverns = sectioned &&
         !oneSection &&
-        units == 2 &&
+        units == nSections &&
         sectionKva > split + 1e-9;
     final carried = sectionGoverns ? sectionKva : split;
     final below = declared * transformerLoadingFactor < carried - 1e-9;
@@ -290,7 +300,7 @@ SupplyDesign determineSupply(
             ? 'the most loaded section carries (its unit is '
                 '${(carried / declared * 100).round()} % of nameplate)'
             : units > 1
-                ? (dualTransformer && units == 2
+                ? (sectioned && units == nSections
                     ? 'each section carries'
                     : 'each unit carries')
                 : 'demand';
@@ -315,6 +325,25 @@ SupplyDesign determineSupply(
               'loading it carries ${_fmtKva(_round1(declared * transformerLoadingFactor))} kVA '
               '— below the ${_fmtKva(_round1(carried))} kVA $carrierText; '
               'raise the rating.' : ''}',
+      verifyItems: verify,
+    );
+  }
+
+  // Round 58 (elec-convergence-10-power-oneline-pln-on-genset-supply) — an
+  // on-site GENERATOR / SOLAR primary supply is an LV source whatever the
+  // demand (Round 39): no PLN connection, no daya, no transformer.
+  if (supplyKind != SupplyKind.pln) {
+    final plant = plantCapacity?.inKilovoltAmperes;
+    final label =
+        supplyKind == SupplyKind.generator ? 'genset' : 'solar PV';
+    return SupplyDesign(
+      lvOrMv: SupplyLevel.lv,
+      demandKva: demandKva,
+      lvVoltage: lvVoltage,
+      units: 0,
+      note: 'On-site $label primary supply'
+          '${plant != null && plant > 0 ? ' (${_fmtKva(plant)} kVA)' : ''} '
+          'for the $demandKva kVA demand — no PLN connection.',
       verifyItems: verify,
     );
   }
@@ -479,10 +508,11 @@ ApparentPower? declaredServiceTransformerKva(ElectricalProject project) =>
 /// unit, never 2 × the whole capacity. Null on an LV service.
 ({ApparentPower kva, int units})? declaredServiceTransformer(
     ElectricalProject project) {
-  final dual = project.dualTransformer;
   final tx = project.transformerKva;
+  // Round 58 — the section count ([serviceSections]): one unit per section.
+  final sections = serviceSections(project);
   if (tx != null && tx.inKilovoltAmperes > 0) {
-    return (kva: tx, units: dual ? 2 : 1);
+    return (kva: tx, units: sections);
   }
   // Round 39 (elec-ui-journeys-2-generator-supply-drawn-as-mv) — only a PLN
   // connection above the LV ceiling implies a customer MV transformer: a
@@ -491,11 +521,22 @@ ApparentPower? declaredServiceTransformerKva(ElectricalProject project) =>
   if (project.supplyKind != SupplyKind.pln) return null;
   final cap = project.supplyCapacityVa?.voltAmperes;
   if (cap == null || cap <= plnLvServiceCeilingVa) return null;
-  final sections = dual ? 2 : 1;
   final perSection = (cap / 1000) / sections;
   // Round 45 — the SAME covering-units rule as the supply study.
   final u = coveringTransformerUnits(perSection, tolerance: 1e-9);
   return (kva: ApparentPower.kilovoltAmperes(u.kva), units: sections * u.units);
+}
+
+/// Round 58 (elec-convergence-10-n-section-transformer-service-
+/// unrepresentable) — the number of SEPARATE (never paralleled) transformer
+/// sections on the service: [ElectricalProject.transformerUnits] when set,
+/// else 2 on a [ElectricalProject.dualTransformer] service, else 1. Each
+/// service-entrance board sits on one section; the fault, the loading judge
+/// and the service-entrance capacity all read ONE section.
+int serviceSections(ElectricalProject project) {
+  final n = project.transformerUnits;
+  if (n != null && n >= 1) return n;
+  return project.dualTransformer ? 2 : 1;
 }
 
 /// Round 29 — the ONE 'declared MV service' predicate: a declared transformer

@@ -107,6 +107,7 @@ import 'supply_design.dart'
         determineSupply,
         isDeclaredMvService,
         recommendedDaya,
+        serviceSections,
         serviceTransformer;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
@@ -509,7 +510,8 @@ AdvancedStudy computeAdvancedStudy(
   // inverse conversion, currents rounded as the judge rounds them) — so
   // declaring the recommended daya can never trip the engine's own judge
   // (two 1φ 5 kW heaters: 16 500 VA, never 10 600 VA / 15.3 A).
-  var daya = supply.declared
+  // Round 58 — no PLN daya on an on-site genset / PV primary supply.
+  var daya = supply.declared || project.supplyKind != SupplyKind.pln
       ? null
       : recommendedDaya(
           ApparentPower(math.max(
@@ -577,6 +579,9 @@ AdvancedStudy computeAdvancedStudy(
           sys: sys, assemblies: controlAssemblies),
       utilitySub: powerOneLineUtilitySub(project, sys.supply.demandVa,
           voltage: sys.supply.voltage),
+      // Round 58 — the head follows the primary supply (PLN / genset / PV).
+      supplyKind: project.supplyKind,
+      supplyCapacity: project.supplyCapacityVa,
     );
   }
 
@@ -910,8 +915,7 @@ List<ElectricalWarning> _incomerAboveTransformerFlc(
   final kva = supply.transformerKva;
   if (!supply.declared || kva == null || kva <= 0) return const [];
   final units = math.max(1, supply.units);
-  final unitsPerRoot =
-      project.dualTransformer ? math.max(1, units ~/ 2) : units;
+  final unitsPerRoot = math.max(1, units ~/ serviceSections(project));
   final flcA = unitsPerRoot * kva * 1000 / (math.sqrt(3) * 400);
   final rungA = incomerRungForFlcA(profile, flcA);
   final out = <ElectricalWarning>[];
@@ -1006,7 +1010,7 @@ double _motorKw(ElectricalCircuit c) {
   // diversified VA, or its worst-phase basis when that is larger.
   var largestSectionVa = 0.0;
   String? largestSectionId;
-  if (project.dualTransformer && originPanelIds.length > 1) {
+  if (serviceSections(project) > 1 && originPanelIds.length > 1) {
     for (final id in originPanelIds) {
       final r = sys.panels[id];
       if (r == null) continue;
@@ -1036,6 +1040,11 @@ double _motorKw(ElectricalCircuit c) {
     // Round 37 r2 — a single root board on a dual service is judged against
     // ONE section, like its incomer floor and the service-capacity judge.
     singleSectionCarriesAll: originPanelIds.length == 1,
+    // Round 58 — an N-section service judges each root on one unit.
+    sections: serviceSections(project),
+    // Round 58 — an on-site genset / PV primary supply has no PLN service.
+    supplyKind: project.supplyKind,
+    plantCapacity: project.supplyCapacityVa,
   );
   return (
     supply: supply,

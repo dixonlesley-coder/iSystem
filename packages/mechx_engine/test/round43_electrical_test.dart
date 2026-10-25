@@ -205,6 +205,10 @@ void main() {
         expect(w.voltageDrop.dropPercent, closeTo(_handVd(w), 0.011),
             reason: '$kw kW $len m');
         expect(w.voltageDrop.withinLimit, isTrue, reason: '$kw kW $len m');
+        // Round 58 — a lead raised by the TN ADS growth (the leads set the
+        // earth-fault loop) is floored above its load sizing: the
+        // smallest-section property holds for the load-sized leads only.
+        if (w.cableRaisedForAds) continue;
         // One rung smaller fails ampacity (grouped) or the 5 % budget.
         final i = ladder.indexOf(leads.csaMm2);
         if (i <= 0) continue;

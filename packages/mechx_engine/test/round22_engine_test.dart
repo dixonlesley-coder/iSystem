@@ -170,6 +170,12 @@ void main() {
             final x = 1000.0 * k + 50.0 * seg;
             for (var f = bounds[seg]; f <= bounds[seg + 1]; f++) {
               nodes.add(_n('s$k-$seg-$f', x, f));
+              // Round 58 — a stack carries hose outlets of its own: a
+              // hydrant box on every node of the segment.
+              nodes.add(_n('b$k-$seg-$f', x + 5, f,
+                  role: NodeRole.fixture, c: NodeComponent.hydrantBox));
+              edges.add(_e('bx$k-$seg-$f', 's$k-$seg-$f', 'b$k-$seg-$f',
+                  s: ServiceType.fireHydrant));
             }
             for (var f = bounds[seg]; f < bounds[seg + 1]; f++) {
               edges.add(_e('r$k-$seg-$f', 's$k-$seg-$f', 's$k-$seg-${f + 1}',

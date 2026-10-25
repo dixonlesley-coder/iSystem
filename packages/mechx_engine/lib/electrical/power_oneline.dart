@@ -12,6 +12,7 @@
 library;
 
 import '../units.dart';
+import 'model.dart' show SupplyKind;
 import 'sources.dart';
 
 /// What kind of node sits on the power one-line.
@@ -131,6 +132,8 @@ PowerOneLine buildPowerOneLine(
   Power? backupPower,
   Power? demandPower,
   String? utilitySub,
+  SupplyKind supplyKind = SupplyKind.pln,
+  ApparentPower? supplyCapacity,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -159,13 +162,18 @@ PowerOneLine buildPowerOneLine(
   // (elec-drafting-2-2) — [utilitySub] names a DECLARED MV service ('MV via
   // TX 2 x 1600 kVA'), so the one-line never calls a tower's MV supply
   // '400 V LV' while the riser of the same set draws its transformer.
-  nodes.add(PowerNode(
-    id: 'utility',
-    kind: PowerNodeKind.utility,
-    label: 'PLN utility',
-    sub: utilitySub ?? '${_fmt(voltage.volts)} V LV',
-  ));
-  const utilityOut = 'utility';
+  //
+  // Round 58 (elec-convergence-10-power-oneline-pln-on-genset-supply) — the
+  // head follows [supplyKind], the SAME primary supply the overview / riser
+  // spine prints: an on-site GENERATOR plant is 'GENSET SUPPLY <kVA>' (and
+  // `sources.generator` IS that plant — no second set, no ATS, no mains
+  // interlocks: there is no grid to transfer from), a SOLAR plant 'PV
+  // SUPPLY'. PLN ⇒ byte-identical.
+  final genPrimary = supplyKind == SupplyKind.generator;
+  final cap = supplyCapacity?.inKilovoltAmperes;
+  final capText = (cap != null && cap > 0) ? '${_fmt(cap)} kVA' : null;
+  final headId = supplyKind == SupplyKind.pln ? 'utility' : 'supply';
+  final utilityOut = headId;
 
   // Pre-size the configured sources.
   final gen = sources.generator;
@@ -182,6 +190,55 @@ PowerOneLine buildPowerOneLine(
               genResult.ratingKva.inKilovoltAmperes * genResult.units),
           motors: motors);
 
+  // The primary genset plant: the declared capacity when stated, else the
+  // sized set (units x rating) — the start-dip screen runs on that plant.
+  final plantKva = genPrimary
+      ? (cap != null && cap > 0
+          ? cap
+          : genResult == null
+              ? null
+              : genResult.ratingKva.inKilovoltAmperes * genResult.units)
+      : null;
+  final plantStart = plantKva == null || plantKva <= 0
+      ? null
+      : assessGensetStart(ApparentPower.kilovoltAmperes(plantKva),
+          motors: motors);
+  switch (supplyKind) {
+    case SupplyKind.pln:
+      nodes.add(PowerNode(
+        id: 'utility',
+        kind: PowerNodeKind.utility,
+        label: 'PLN utility',
+        sub: utilitySub ?? '${_fmt(voltage.volts)} V LV',
+      ));
+    case SupplyKind.generator:
+      final dip = (plantStart != null && !plantStart.acceptable)
+          ? ' · start dip ${plantStart.estimatedDipPct}% over'
+          : '';
+      final fig = capText ??
+          (genResult == null
+              ? null
+              : '${genResult.units > 1 ? '${genResult.units} x ' : ''}'
+                  '${_fmt(genResult.ratingKva.inKilovoltAmperes)} kVA');
+      final parts = [
+        if (fig != null) fig,
+        if (gen != null) gen.mode.label,
+      ];
+      nodes.add(PowerNode(
+        id: 'supply',
+        kind: PowerNodeKind.generator,
+        label: 'GENSET SUPPLY',
+        sub: parts.isEmpty && dip.isEmpty ? null : '${parts.join(' ')}$dip',
+      ));
+    case SupplyKind.solar:
+      nodes.add(PowerNode(
+        id: 'supply',
+        kind: PowerNodeKind.pv,
+        label: 'PV SUPPLY',
+        sub: capText,
+      ));
+  }
+
   // Round 44 — ONE sizing of the distributed sources, shared with the BOM
   // and the equipment schedule ([sizeDistributedSources]).
   final ds = sizeDistributedSources(sources,
@@ -193,12 +250,16 @@ PowerOneLine buildPowerOneLine(
   // Essential split: a genset that backs only a fraction transfers a dedicated
   // ESSENTIAL bus (non-hybrid topology); the battery then backs a CRITICAL bus.
   final essentialSplit =
-      gen != null && !hybrid && gen.backupFraction < 1.0;
+      gen != null && !genPrimary && !hybrid && gen.backupFraction < 1.0;
   var backedBus = 'bus';
 
   // Generator via ATS / COS, with the mains↔genset interlock.
   var gridOut = utilityOut;
-  if (genResult != null && gen != null) {
+  // On a genset primary supply the generator IS the head node above.
+  final genNodeId = genPrimary ? headId : 'gen';
+  if (genPrimary) {
+    if (!hybrid) edge(utilityOut, 'bus', 'genset');
+  } else if (genResult != null && gen != null) {
     final manualTransfer = gen.transfer.isManual;
     final dipTag = (gensetStart != null && !gensetStart.acceptable)
         ? ' · start dip ${gensetStart.estimatedDipPct}% over'
@@ -238,7 +299,7 @@ PowerOneLine buildPowerOneLine(
     interlocks.add(PowerInterlock(
       id: 'il-ats-mech',
       kind: PowerInterlockKind.mechanical,
-      aId: 'utility',
+      aId: headId,
       bId: 'gen',
       relation: PowerInterlockRelation.mutualExclusion,
       note: manualTransfer
@@ -248,7 +309,7 @@ PowerOneLine buildPowerOneLine(
     interlocks.add(PowerInterlock(
       id: 'il-ats-elec',
       kind: PowerInterlockKind.electrical,
-      aId: 'utility',
+      aId: headId,
       bId: 'gen',
       relation: PowerInterlockRelation.mutualExclusion,
       note: manualTransfer
@@ -295,12 +356,12 @@ PowerOneLine buildPowerOneLine(
       relation: PowerInterlockRelation.permissive,
       note: 'Anti-islanding + transfer: the hybrid inverter disconnects export on grid loss and re-feeds the essential bus from PV/battery (island/UPS mode).',
     ));
-    if (genResult != null) {
-      interlocks.add(const PowerInterlock(
+    if (genResult != null || genPrimary) {
+      interlocks.add(PowerInterlock(
         id: 'il-hybrid-gen',
         kind: PowerInterlockKind.electrical,
         aId: 'hinv',
-        bId: 'gen',
+        bId: genNodeId,
         relation: PowerInterlockRelation.permissive,
         note: 'On generator supply the hybrid inverter must stop exporting (charge-only / derate) — a standby genset cannot absorb reverse feed.',
       ));
@@ -333,12 +394,12 @@ PowerOneLine buildPowerOneLine(
             ? 'Hybrid: PV + battery island the essential bus on grid loss.'
             : 'Anti-islanding: the grid-tied PV inverter disconnects within ~2 s on grid loss.',
       ));
-      if (genResult != null) {
-        interlocks.add(const PowerInterlock(
+      if (genResult != null || genPrimary) {
+        interlocks.add(PowerInterlock(
           id: 'il-pv-gen',
           kind: PowerInterlockKind.electrical,
           aId: 'pvinv',
-          bId: 'gen',
+          bId: genNodeId,
           relation: PowerInterlockRelation.permissive,
           note: 'On generator supply the PV inverter must disconnect or derate — a standby genset cannot absorb reverse PV feed.',
         ));
