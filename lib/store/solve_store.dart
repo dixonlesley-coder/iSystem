@@ -1603,11 +1603,18 @@ FlowRate sourceDeliveredFlow(
 /// airflow its source delivers, its index-run static, and the node it is
 /// rooted at. Round 31 (hvac-5-3): [intake] is the part of [stat] spent on
 /// the unit's outdoor-air intake path (0 when none is drawn).
+///
+/// Round 62 (plumbing-hvac-convergence-12-inline-return-fan-gets-no-duty):
+/// [inlineFanIds] are the drawn INLINE movers (a supply / exhaust fan plant,
+/// not the root, no airflow of its own, not a terminal unit) inside a system
+/// rooted at another plant — a return fan between the grilles and the AHU,
+/// a booster on an AHU's supply duct. Each carries its own duty.
 typedef AirSystem = ({
   FlowRate trunk,
   Pressure stat,
   String fanNodeId,
   Pressure intake,
+  List<String> inlineFanIds,
 });
 
 /// Every drawn system of one air [service] — ONE per connected component,
@@ -1688,6 +1695,26 @@ List<AirSystem> airSystemsFor(
     // lowest-id rule used to hand the PAU fan's duty (and its panel way and
     // schedule tag) to an FCU whose id happened to sort first.
     var unit = root;
+    final inlineFans = <String>[];
+    if (net.nodeById(root)?.role == NodeRole.plant) {
+      for (final n in net.nodes) {
+        if (n.id == root || roots[n.id] != root) continue;
+        if (n.role != NodeRole.plant || n.airflow != null) continue;
+        if (n.component != NodeComponent.supplyFan &&
+            n.component != NodeComponent.exhaustFan) {
+          continue;
+        }
+        if (isTerminalAirUnit(n.component)) continue;
+        // A mirrored PEER source leg (duty / standby) keeps the Round-16
+        // peer rule; an inline mover sits on the system's own path.
+        final onLeg = net.edges.any((e) =>
+            e.service == service &&
+            parallelLegs.contains(e.id) &&
+            (e.fromId == n.id || e.toId == n.id));
+        if (!onLeg) inlineFans.add(n.id);
+      }
+      inlineFans.sort();
+    }
     if (net.nodeById(root)?.role != NodeRole.plant) {
       int rank(NetNode n) => switch (n.component) {
             NodeComponent.supplyFan || NodeComponent.exhaustFan => 0,
@@ -1729,6 +1756,7 @@ List<AirSystem> airSystemsFor(
       stat: s.totalStaticPressure,
       fanNodeId: unit,
       intake: s.intakeStaticPressure,
+      inlineFanIds: inlineFans,
     ));
   }
   out.sort((a, b) {
@@ -1820,10 +1848,15 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
         }
       }
     }
+    // Round 62 (regression-i0-fallback-consumes-peer-return) — the legacy
+    // primary pairing never adopts a return whose unit is a PEER plant on
+    // this supply's own component: that unit's return is its own (the
+    // Round-61 peer branch rates it), never the root's.
     if (ret == null &&
         i == 0 &&
         rets.isNotEmpty &&
-        !supplyRoots.contains(rets.first.fanNodeId)) {
+        !supplyRoots.contains(rets.first.fanNodeId) &&
+        !sameComponent(supplyCompOf, rets.first.fanNodeId, s.fanNodeId)) {
       ret = rets.first;
     }
     if (ret != null) consumed.add(ret.fanNodeId);
@@ -1833,7 +1866,11 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
     // intake) + max(intake, return) + internal. With no return the intake
     // stays in series with the supply (Round 27).
     final supplyIndexPa = s.stat.pascals - s.intake.pascals;
-    final inletPa = ret == null
+    // Round 62 — a return carried by its own drawn RETURN FAN costs the
+    // unit nothing on its inlet side beyond the intake: the return static is
+    // the return fan's (rated below).
+    final returnOnOwnFan = ret != null && ret.inlineFanIds.isNotEmpty;
+    final inletPa = ret == null || returnOnOwnFan
         ? s.intake.pascals
         : math.max(s.intake.pascals, ret.stat.pascals);
     out[s.fanNodeId] = sizeFan(
@@ -1841,6 +1878,28 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
       totalStaticPressure: Pressure(
           supplyIndexPa + inletPa + internalOf(s.fanNodeId).pascals),
     );
+  }
+  // Round 62 (plumbing-hvac-convergence-12-inline-return-fan-gets-no-duty)
+  // — every drawn INLINE fan of an air system rooted at another plant
+  // carries its own solved duty (so its panel way and schedule row are the
+  // machine's, never the 0.75 kW component default): a return fan moves its
+  // system's airflow against the return index static, a supply booster the
+  // supply index static (`// VERIFY` the series split between a booster and
+  // the unit is not modelled; both are rated conservatively).
+  for (final r in rets) {
+    for (final id in r.inlineFanIds) {
+      out[id] = sizeFan(airflow: r.trunk, totalStaticPressure: r.stat);
+    }
+  }
+  for (final s in supplies) {
+    for (final id in s.inlineFanIds) {
+      out.putIfAbsent(
+          id,
+          () => sizeFan(
+              airflow: s.trunk,
+              totalStaticPressure:
+                  Pressure(s.stat.pascals - s.intake.pascals)));
+    }
   }
   // Return-only systems still get a fan.
   for (final r in rets) {
@@ -2208,12 +2267,18 @@ class HotWaterRecircSystem {
   /// Every node of the hot-water component.
   final Set<String> nodeIds;
 
+  /// Round 62 — each DRAWN loop pipe's share of [design]'s recirculation
+  /// flow (the parallel-loop heat-loss split; empty for an assumed return).
+  /// A circulator on one of several return risers runs at its riser's share.
+  final Map<String, double> loopEdgeShares;
+
   const HotWaterRecircSystem({
     required this.rootId,
     required this.design,
     required this.drawnReturn,
     required this.assumedReturnLengthM,
     required this.nodeIds,
+    this.loopEdgeShares = const {},
   });
 }
 
@@ -2277,6 +2342,7 @@ final hotWaterRecircSystemsProvider =
       drawnReturn: drawn != null,
       assumedReturnLengthM: drawn == null ? loop.returnLengthM : 0,
       nodeIds: loop.nodeIds,
+      loopEdgeShares: loop.loopEdgeShares,
     ));
   }
   out.sort((a, b) {

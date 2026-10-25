@@ -86,6 +86,7 @@ import '../../store/electrical_feed.dart'
     show
         NodeLoadSource,
         acUnitShare,
+        hwCirculatorDutiesProvider,
         mepDutyBindingProvider,
         roomAirUnitDutiesProvider,
         nodeFedLoadsProvider;
@@ -1089,6 +1090,7 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
   // Round 26 (hot-water-2-separate-systems-merged) — one row per hot-water
   // system, under the pump drawn on THAT system (else HWP-0n).
   final recircSystems = ref.read(hotWaterRecircSystemsProvider);
+  final circulatorDuties = ref.read(hwCirculatorDutiesProvider);
   for (var i = 0; i < recircSystems.length; i++) {
     final sys = recircSystems[i];
     if (sys.design.pump.selectedMotor.watts <= 0) continue;
@@ -1105,7 +1107,9 @@ EquipmentScheduleData gatherEquipmentScheduleData(WidgetRef ref) {
           tagOfNode(id) ?? 'HWP-${(i + 1).toString().padLeft(2, '0')}';
       pumps.add(
         PumpScheduleItem(
-          duty: sys.design.pump,
+          // Round 62 — each circulator's own duty (its loop's share when
+          // several run on one system).
+          duty: (id == null ? null : circulatorDuties[id]) ?? sys.design.pump,
           service: reportStringsFor(ref)(
               id != null && binding.hwStandbyPumpNodeIds.contains(id)
                   ? RptStringKey.esSvcHwRecircStandby
