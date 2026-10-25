@@ -51,6 +51,7 @@ import 'fire_standpipe.dart'
         kMinHoseStationBranchDiameterMm,
         kMinHydrantBranchDiameterMm,
         kMinRiserDiameterMm,
+        kYardHydrantFlowLps,
         StandpipeClass,
         parallelStandpipeCount,
         standpipeFlow;
@@ -1744,6 +1745,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
     for (final st in sets)
       for (final leg in st.standby) ...leg.edgeIds,
   };
+  final ratedFlowByPump = <String, FlowRate>{};
   final solveNet = standbyIds.isEmpty
       ? net
       : Network(nodes: net.nodes, edges: [
@@ -1775,7 +1777,14 @@ Map<String, EdgeSizing> autoSizeNetwork(
     moverAgainstBalanceOut: moverAgainstBalanceOut,
     airIntakeLeavesOut: airIntakeLeavesOut,
     jockeyLegFlows: jockeyLegFlows,
+    firePumpRatedFlowOut: ratedFlowByPump,
   );
+  // Round 62 (regression-yard-raise-inflates-jockey-leg) — a jockey pump's
+  // leg was just sized on its own duty flow: the yard / suction raises below
+  // never touch it (nor walk through the jockey to the header above it).
+  final jockeyEdgeIds = <String>{
+    for (final id in jockeyLegFlows.keys) ...jockeyLegEdgeIds(net, id),
+  };
   // Round 61 (fire-convergence-13-fire-pump-suction-below-nfpa20) — the fire
   // pump's suction at 150 % flow within 4.57 m/s and both its suction and
   // discharge at the NFPA 20 Table 4.28(a) minimum (judge-and-raise only).
@@ -1784,9 +1793,14 @@ Map<String, EdgeSizing> autoSizeNetwork(
   // yard hydrant flow on a DN150 private main; before the suction rule,
   // which keys on the flow.
   firesuction.raiseYardHydrantMains(net, result, ctx,
-      overridden: sizeOverrides.keys.toSet());
+      overridden: sizeOverrides.keys.toSet(),
+      excludeEdgeIds: jockeyEdgeIds,
+      stopNodeIds: jockeyLegFlows.keys.toSet());
   firesuction.raiseFirePumpSuctionAndDischarge(net, result,
-      overridden: sizeOverrides.keys.toSet());
+      overridden: sizeOverrides.keys.toSet(),
+      excludeEdgeIds: jockeyEdgeIds,
+      stopNodeIds: jockeyLegFlows.keys.toSet(),
+      ratedFlowByPump: ratedFlowByPump);
   if (!net.edges.any((e) => e.service == ServiceType.drainage)) return result;
 
   // Round 32 (binding-2) — the solids-handling bore floor of every drawn
@@ -1940,6 +1954,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   Set<String>? moverAgainstBalanceOut,
   Set<String>? airIntakeLeavesOut,
   Map<String, FlowRate> jockeyLegFlows = const {},
+  Map<String, FlowRate>? firePumpRatedFlowOut,
 }) {
   const profile = SniProfile();
   // Round 49 — the hydrant edges of every hose-reel-only (Class II) fire
@@ -2642,6 +2657,15 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             returnChainKeysOut: returnChainKeys,
             jockeyMoverIds: jockeyLegFlows.keys.toSet(),
             legSizeOverrides: sizeOverrides,
+            nodeOrder: isFireService(service)
+                ? (a, b) {
+                    final na = net.nodeById(a), nb = net.nodeById(b);
+                    if (na == null || nb == null) {
+                      return naturalIdCompare(a, b);
+                    }
+                    return drawOrderCompare(na, nb);
+                  }
+                : null,
           );
       final cvPlans = (isLooped && regime == FlowRegime.pressurized)
           ? classify()
@@ -4304,6 +4328,42 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     }
     if (best != null && allFlows.containsKey(e.id)) allFlows[e.id] = best;
   }
+  // Round 62 (fire-convergence-14-pump-legs-sized-below-rated-flow) — the
+  // flow each drawn fire pump is RATED on (the system design flow the pump
+  // basis reads: the standpipe flow of its stacks capped at the caller's
+  // [hydrantDesignFlow], the sprinkler remote-area demand, a transfer
+  // system's fed zone; a drawn yard (pillar) hydrant at least the yard
+  // flow), so its NFPA 20 suction / discharge pipe is keyed on the pump it
+  // is, never on how many terminals happen to be drawn. Jockey pumps keep
+  // their own leg sizing.
+  final firePumpRated = <String, FlowRate>{};
+  {
+    for (final s in ratingSystems) {
+      var q = designFlowOf(s);
+      if (q != null &&
+          hydrantDesignFlow != null &&
+          s.hasHydrant &&
+          q.cubicMetersPerSecond > hydrantDesignFlow.cubicMetersPerSecond) {
+        q = hydrantDesignFlow;
+      }
+      if (s.yardHydrantIds(net).isNotEmpty &&
+          (q == null || q.cubicMetersPerSecond < kYardHydrantFlowLps / 1000)) {
+        q = const FlowRate(kYardHydrantFlowLps / 1000);
+      }
+      if (q == null || q.cubicMetersPerSecond <= 0) continue;
+      for (final id in s.nodeIds) {
+        final c = net.nodeById(id)?.component;
+        if (c != NodeComponent.pump && c != NodeComponent.boosterSet) continue;
+        if (jockeyLegFlows.containsKey(id)) continue;
+        final prev = firePumpRated[id];
+        if (prev == null ||
+            prev.cubicMetersPerSecond < q.cubicMetersPerSecond) {
+          firePumpRated[id] = q;
+        }
+      }
+    }
+  }
+  firePumpRatedFlowOut?.addAll(firePumpRated);
   // Round 53 (regression-cross-service-fire-suction-leg-zero-flow / fire-
   // convergence-5-sprinkler-trunk-feeding-hydrant-not-floored-at-standpipe-
   // flow) — the sizer accumulates per SERVICE, so a fire pipe drawn on one
@@ -4429,7 +4489,12 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     }
     for (final group in byEnds.values) {
       if (group.length < 2) continue;
-      group.sort((a, b) => a.$1.compareTo(b.$1));
+      // Round 62 — the duty is the first-DRAWN pump ([drawOrderCompare]).
+      group.sort((a, b) {
+        final na = net.nodeById(a.$1), nb = net.nodeById(b.$1);
+        if (na == null || nb == null) return naturalIdCompare(a.$1, b.$1);
+        return drawOrderCompare(na, nb);
+      });
       for (final (_, legIds) in group.skip(1)) {
         parallelLegEdgeIdsOut?.addAll(legIds);
       }
@@ -4550,6 +4615,16 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       if (chainIds.contains(e.id) || e.service != edge.service) continue;
       final q = result[e.id]?.flow.inLitersPerSecond ?? 0;
       if (q > designLps) designLps = q;
+    }
+    // Round 62 — and at least the rated flow of the system's pumps (the
+    // design flow the brigade supplements; the pump's own discharge carries
+    // it after the NFPA 20 pass).
+    for (final s in ratingSystems) {
+      if (!s.nodeIds.contains(joinNode)) continue;
+      for (final id in s.nodeIds) {
+        final q = firePumpRated[id]?.inLitersPerSecond ?? 0;
+        if (q > designLps) designLps = q;
+      }
     }
     for (final e in chain) {
       final override = sizeOverrides[e.id];
@@ -4679,31 +4754,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   for (final MapEntry(key: moverId, value: q) in jockeyLegFlows.entries) {
     final mover = net.nodeById(moverId);
     if (mover == null) continue;
-    final legEdges = <NetEdge>[];
-    for (final start in net.edgesAt(moverId)) {
-      if (start.service != ServiceType.fireHydrant &&
-          start.service != ServiceType.fireSprinkler) {
-        continue;
-      }
-      var here = moverId;
-      var edge = start;
-      final seen = <String>{moverId};
-      while (true) {
-        legEdges.add(edge);
-        final next = edge.fromId == here ? edge.toId : edge.fromId;
-        if (!seen.add(next)) break;
-        final nn = net.nodeById(next);
-        final onward = [
-          for (final e in net.edgesAt(next))
-            if (e.id != edge.id && e.service == edge.service) e,
-        ];
-        if (nn == null || nn.role == NodeRole.plant || onward.length != 1) {
-          break;
-        }
-        here = next;
-        edge = onward.single;
-      }
-    }
+    final legEdges = _jockeyLegEdges(net, moverId);
     for (final e in legEdges) {
       parallelLegEdgeIdsOut?.remove(e.id);
       final current = result[e.id];
@@ -5496,6 +5547,44 @@ class _CheckValvePlan {
           feedValves, feedsRingValveIds, returnValves, labels, moverLegs);
 }
 
+/// Round 37 — the LEG of a jockey mover [moverId]: the degree-2 chain of
+/// same-service fire pipe through it in both directions, up to the split /
+/// header junctions or a plant. Ordered as walked.
+List<NetEdge> _jockeyLegEdges(Network net, String moverId) {
+  final legEdges = <NetEdge>[];
+  for (final start in net.edgesAt(moverId)) {
+    if (start.service != ServiceType.fireHydrant &&
+        start.service != ServiceType.fireSprinkler) {
+      continue;
+    }
+    var here = moverId;
+    var edge = start;
+    final seen = <String>{moverId};
+    while (true) {
+      legEdges.add(edge);
+      final next = edge.fromId == here ? edge.toId : edge.fromId;
+      if (!seen.add(next)) break;
+      final nn = net.nodeById(next);
+      final onward = [
+        for (final e in net.edgesAt(next))
+          if (e.id != edge.id && e.service == edge.service) e,
+      ];
+      if (nn == null || nn.role == NodeRole.plant || onward.length != 1) {
+        break;
+      }
+      here = next;
+      edge = onward.single;
+    }
+  }
+  return legEdges;
+}
+
+/// Round 62 (regression-yard-raise-inflates-jockey-leg) — the edge ids of a
+/// jockey mover [moverId]'s leg (the chain the sizer sizes on the jockey's
+/// own duty flow); the yard-hydrant and suction / discharge raises skip them.
+Set<String> jockeyLegEdgeIds(Network net, String moverId) =>
+    {for (final e in _jockeyLegEdges(net, moverId)) e.id};
+
 /// Round 27 r7 — a MOVER leg (a pump / booster set / supply fan's chain of
 /// degree-2 nodes between two junctions, or between the source and its first
 /// junction) carrying feed check valve(s) [valveIds]: its edges in the
@@ -5666,8 +5755,20 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   Set<String>? returnChainKeysOut,
   Set<String> jockeyMoverIds = const {},
   Map<String, Diameter> legSizeOverrides = const {},
+  int Function(String a, String b)? nodeOrder,
 }) {
   const none = [_CheckValvePlan(<String>{}, <_StandbyLeg>[])];
+  // Round 62 (regression-duty-pick-sizer-vs-basis-disagree) — on a FIRE
+  // service leg ties go to the FIRST-DRAWN pump ([drawOrderCompare] via
+  // [nodeOrder]), the order the panel feed's roles and the fire basis read
+  // — never a String compare that put `n10` before `n9`.
+  // Without [nodeOrder] (every non-fire service) the legacy String order
+  // stays (byte-identical).
+  int order(String a, String b) {
+    final o = nodeOrder?.call(a, b) ?? 0;
+    return o != 0 ? o : a.compareTo(b);
+  }
+
   // Round 55 (fire-convergence-7-jockey-role-depends-on-node-id-order) — the
   // smallest HAND-PICKED bore on a leg (infinite for an auto-sized leg). A
   // leg the engineer drew on smaller pipe than a sibling (a jockey on DN25
@@ -6444,7 +6545,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
         : ([
             for (final n in l.fromNodeIds.skip(1))
               if (n != root && (isMover?.call(n) ?? false)) n,
-          ]..sort());
+          ]..sort(order));
     (String, String) pumpPipes(_MoverLeg l) {
       final p = legPumps(l).first;
       final i = l.fromNodeIds.indexOf(p);
@@ -6472,7 +6573,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
           // Round 55 — a hand-picked smaller leg sorts after a larger one.
           final bore = legBoreMm(b.edgeIds).compareTo(legBoreMm(a.edgeIds));
           if (bore != 0) return bore;
-          return legPumps(a).first.compareTo(legPumps(b).first);
+          return order(legPumps(a).first, legPumps(b).first);
         });
       if (group.length < 2) continue;
       final valved = group.where((l) => l.valveIds.isNotEmpty).length;
@@ -7066,6 +7167,23 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       }
       valveLegBore[c.id] = legBoreMm(legEdges);
     }
+    // The first-drawn mover on each valve's leg (the duty tie-break).
+    final valveLegPump = <String, String>{};
+    for (final l
+        in nodeOrder == null ? const <_MoverLeg>[] : moverLegsByKey.values) {
+      final pumps = [
+        ...l.pumpIds,
+        for (final n in l.fromNodeIds)
+          if (isMover?.call(n) ?? false) n,
+      ]..sort(order);
+      if (pumps.isEmpty) continue;
+      for (final v in l.valveIds) {
+        final cur = valveLegPump[v];
+        if (cur == null || order(pumps.first, cur) < 0) {
+          valveLegPump[v] = pumps.first;
+        }
+      }
+    }
     int dutyFirst(_Cv x, _Cv y) {
       final jx = jockeyValves.contains(x.id) ? 1 : 0;
       final jy = jockeyValves.contains(y.id) ? 1 : 0;
@@ -7073,7 +7191,9 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
       final bore = (valveLegBore[y.id] ?? double.infinity)
           .compareTo(valveLegBore[x.id] ?? double.infinity);
       if (bore != 0) return bore;
-      return x.id.compareTo(y.id);
+      // A total order: the leg's first-drawn pump (else the valve itself).
+      final k = order(valveLegPump[x.id] ?? x.id, valveLegPump[y.id] ?? y.id);
+      return k != 0 ? k : order(x.id, y.id);
     }
 
     final parallelGroups = <List<_Cv>>[

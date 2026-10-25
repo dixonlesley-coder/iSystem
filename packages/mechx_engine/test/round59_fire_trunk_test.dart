@@ -126,17 +126,20 @@ void main() {
 
   test(
       'a one-outlet roof stack: suction, discharge and run carry 31.545 L/s '
-      'like the riser (DN125 pump train, DN100 riser)', () {
+      'like the riser (DN125 pump train, DN100 stack)', () {
     final r = _size(_roofStation(), 4);
     for (final id in ['g', 'd', 'run', 'r1', 'r3']) {
       expect(r[id]!.flow.inLitersPerSecond, closeTo(oneStack, 1e-3),
           reason: id);
       // Round 61 — the pump train (suction g, discharge d -> run to the
       // riser foot) floors at the NFPA 20 Table 4.28(a) 500 gpm 5 in
-      // (DN125; suction at 150 % on DN100 is 6.02 m/s > 4.57); the riser
-      // keeps its Class I DN100.
+      // (DN125; suction at 150 % on DN100 is 6.02 m/s > 4.57). Round 62
+      // (regression-riser-discharge-below-nfpa20) — the first riser r1 is
+      // reached from the pump through degree-2 nodes only (J, R0: no
+      // header), so it is pump discharge piping too (DN125); the stack above
+      // it (r3) keeps its Class I DN100.
       expect(r[id]!.diameter.inMillimeters,
-          closeTo(id.startsWith('r') && id != 'run' ? 100 : 125, 1e-9),
+          closeTo(id == 'r3' ? 100 : 125, 1e-9),
           reason: id);
     }
   });

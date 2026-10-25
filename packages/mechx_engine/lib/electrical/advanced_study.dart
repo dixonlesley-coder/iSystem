@@ -35,10 +35,7 @@ import '../units.dart';
 import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
-import 'compute.dart'
-    show
-        circuitIsThreePhase,
-        kThreePhaseServiceLineVoltageV;
+import 'compute.dart' show circuitIsThreePhase, kThreePhaseServiceLineVoltageV;
 import 'containment.dart'
     show ConduitSpec, ContainmentResult, containmentFor, effectiveInstallMethod;
 import 'control/motor_flc.dart' show motorFlc, motorFlc1ph;
@@ -431,8 +428,7 @@ AdvancedStudy computeAdvancedStudy(
     // Harmonics — the VFD-driven (pump/fan) share the kind-only classifier can't
     // see is fed in from the control assemblies on this panel.
     final h = estimateHarmonics(panelResult, profile,
-        driveFedCircuitIds:
-            _driveFedCircuitIds(panelResult, panelModel));
+        driveFedCircuitIds: _driveFedCircuitIds(panelResult, panelModel));
     harmonics[id] = h;
     if (h != null && h.thdBand == ThdBand.high) anyHarmonicRich = true;
 
@@ -475,7 +471,8 @@ AdvancedStudy computeAdvancedStudy(
     if (atOrigin || parentId == null) {
       distFromSpd = 0;
     } else {
-      final ownLeg = (feederDistanceM[id] ?? 0) - (feederDistanceM[parentId] ?? 0);
+      final ownLeg =
+          (feederDistanceM[id] ?? 0) - (feederDistanceM[parentId] ?? 0);
       final parentProtected = spd[parentId]?.recommended ?? false;
       distFromSpd = (parentProtected ? 0 : (spdDistanceM[parentId] ?? 0)) +
           (ownLeg > 0 ? ownLeg : 0);
@@ -515,8 +512,8 @@ AdvancedStudy computeAdvancedStudy(
   var daya = supply.declared || project.supplyKind != SupplyKind.pln
       ? null
       : recommendedDaya(
-          ApparentPower(math.max(
-              sys.supply.demandVa.voltAmperes, worstPhaseVa)),
+          ApparentPower(
+              math.max(sys.supply.demandVa.voltAmperes, worstPhaseVa)),
           sys.supply.system);
   // Round 38 (elec-sizing-supply-3) — a single-phase supply whose demand
   // outgrows the 1φ ladder moves to a 3φ step, but its 1φ root board still
@@ -559,7 +556,8 @@ AdvancedStudy computeAdvancedStudy(
   }
   ElectrodeDesign? electrode;
   if (project.soilResistivityOhmM != null) {
-    electrode = designElectrode(soilResistivityOhmM: project.soilResistivityOhmM!);
+    electrode =
+        designElectrode(soilResistivityOhmM: project.soilResistivityOhmM!);
   }
 
   // Power one-line — only when the project carries energy sources. The motors
@@ -576,10 +574,10 @@ AdvancedStudy computeAdvancedStudy(
       backupPower: gensetBackupDemandW(project, sys),
       demandPower: Power(sys.supply.demandW),
       voltage: sys.supply.voltage,
-      motors: gensetStartMotors(project,
-          sys: sys, assemblies: controlAssemblies),
-      utilitySub: powerOneLineUtilitySub(project, sys,
-          voltage: sys.supply.voltage),
+      motors:
+          gensetStartMotors(project, sys: sys, assemblies: controlAssemblies),
+      utilitySub:
+          powerOneLineUtilitySub(project, sys, voltage: sys.supply.voltage),
       // Round 58 — the head follows the primary supply (PLN / genset / PV).
       supplyKind: project.supplyKind,
       supplyCapacity: project.supplyCapacityVa,
@@ -643,9 +641,8 @@ AdvancedStudy computeAdvancedStudy(
     fault: fault,
     supply: supply,
     recommendedDayaVa: daya?.va,
-    recommendedDayaThreePhase:
-        (daya?.system ?? ElectricalSystem.threePhase) ==
-            ElectricalSystem.threePhase,
+    recommendedDayaThreePhase: (daya?.system ?? ElectricalSystem.threePhase) ==
+        ElectricalSystem.threePhase,
     powerFactor: powerFactor,
     controlAssemblies: controlAssemblies,
     harmonics: harmonics,
@@ -680,9 +677,8 @@ AdvancedStudy computeAdvancedStudy(
       // Round 40 — a root incomer rated above the full-load current its
       // transformer unit can deliver (one unit per section on a dual
       // service) can never be loaded to its rating.
-      for (final w
-          in _incomerAboveTransformerFlc(
-              profile, project, sys, supply, originPanelIds))
+      for (final w in _incomerAboveTransformerFlc(
+          profile, project, sys, supply, originPanelIds))
         w,
       // Round 17 — the service-size estimate is no longer clamped at 50 kA
       // (a clamp LOWERED the safety quantity); above the realistic LV device
@@ -925,11 +921,37 @@ List<ElectricalWarning> _incomerAboveTransformerFlc(
   final flcA = unitsPerRoot * kva * 1000 / (math.sqrt(3) * 400);
   final rungA = incomerRungForFlcA(profile, flcA);
   final out = <ElectricalWarning>[];
+  final panelById = {for (final p in project.panels) p.id: p};
   for (final id in originPanelIds.toList()..sort()) {
     final r = sys.panels[id];
     if (r == null) continue;
     final inA = r.incomer.breaker.ratingA.amperes;
-    if (inA > rungA + 1e-6) {
+    // Round 62 (elec-convergence-14-flc-judge-condemns-undeclared-study-
+    // transformer-on-diversified-board) — an UNDECLARED study transformer is
+    // the engine's own pick, sized on the board's DIVERSIFIED worst-phase
+    // demand (× its headroom multiplier), while the incomer sizes on the
+    // UNDIVERSIFIED current: a board at diversity 0.6 (12 x 25 kW: 509 A
+    // undiversified -> 630 A incomer, 306 A diversified -> 315 kVA) was told
+    // to 'raise the transformer' the engineer never chose. Undeclared, it is
+    // judged on the basis the unit was sized on (still caught when a root
+    // carries more than its section's unit — Round 60); a DECLARED
+    // transformer keeps the incomer-rung judge.
+    final judgedA = supply.declared
+        ? inA
+        : math.max(
+                r.demandVaOrEstimate(),
+                worstPhaseDemandVa(project, sys, [id],
+                    roundCurrent: true,
+                    withLargestMachine: true,
+                    asSystem: sys.supply.system == ElectricalSystem.singlePhase
+                        ? ElectricalSystem.threePhase
+                        : null,
+                    asVolts: sys.supply.system == ElectricalSystem.singlePhase
+                        ? kThreePhaseServiceLineVoltageV
+                        : null)) *
+            (panelById[id]?.headroom?.demandMultiplier ?? 1.0) /
+            (math.sqrt(3) * 400);
+    if (judgedA > rungA + 1e-6) {
       out.add(ElectricalWarning(
         code: 'root-incomer-exceeds-transformer-flc',
         severity: WarningSeverity.warning,
@@ -976,9 +998,9 @@ double _motorKw(ElectricalCircuit c) {
   final loadKw = c.loadW > 0 ? c.loadW / 1000.0 : 0.0;
   final m = c.motorKw;
   if (m == null) return loadKw;
-  final mepDerived = (c.sourceEquipmentId != null &&
-          c.sourceEquipmentId!.isNotEmpty) ||
-      c.flaOverrideA != null;
+  final mepDerived =
+      (c.sourceEquipmentId != null && c.sourceEquipmentId!.isNotEmpty) ||
+          c.flaOverrideA != null;
   if (c.loadKind == LoadKind.hvac && loadKw > 0 && !mepDerived) return loadKw;
   return m;
 }
@@ -999,7 +1021,7 @@ double _motorKw(ElectricalCircuit c) {
   double perPhaseBasisVa,
   String? largestSectionId,
 }) studySupplyInputs(ElectricalProject project, ElectricalSystemResult sys,
-        {Set<String>? originPanelIds}) {
+    {Set<String>? originPanelIds}) {
   originPanelIds ??= originPanelIdsOf(sys, project);
   final worstPhaseVa = worstPhaseDemandVa(project, sys, originPanelIds,
       roundCurrent: true, withLargestMachine: true);
@@ -1047,24 +1069,24 @@ double _motorKw(ElectricalCircuit c) {
   SupplyDesign study(double basisVa, double sectionVa,
           {String basisLabel = 'worst-phase basis'}) =>
       determineSupply(
-    sys.supply.demandVa,
-    largestSectionDemand: sectionVa > 0 ? ApparentPower(sectionVa) : null,
-    perPhaseDemand: ApparentPower(basisVa),
-    basisLabel: basisLabel,
-    dualTransformer: project.dualTransformer,
-    // Round 29 — the ONE declared rating (a connection capacity above the
-    // LV ceiling is a TM service on its snapped transformer).
-    declaredKva: declaredServiceTransformer(project)?.kva,
-    declaredUnits: declaredServiceTransformer(project)?.units,
-    // Round 37 r2 — a single root board on a dual service is judged against
-    // ONE section, like its incomer floor and the service-capacity judge.
-    singleSectionCarriesAll: oneRoot,
-    // Round 58 — an N-section service judges each root on one unit.
-    sections: serviceSections(project),
-    // Round 58 — an on-site genset / PV primary supply has no PLN service.
-    supplyKind: project.supplyKind,
-    plantCapacity: project.supplyCapacityVa,
-  );
+        sys.supply.demandVa,
+        largestSectionDemand: sectionVa > 0 ? ApparentPower(sectionVa) : null,
+        perPhaseDemand: ApparentPower(basisVa),
+        basisLabel: basisLabel,
+        dualTransformer: project.dualTransformer,
+        // Round 29 — the ONE declared rating (a connection capacity above the
+        // LV ceiling is a TM service on its snapped transformer).
+        declaredKva: declaredServiceTransformer(project)?.kva,
+        declaredUnits: declaredServiceTransformer(project)?.units,
+        // Round 37 r2 — a single root board on a dual service is judged against
+        // ONE section, like its incomer floor and the service-capacity judge.
+        singleSectionCarriesAll: oneRoot,
+        // Round 58 — an N-section service judges each root on one unit.
+        sections: serviceSections(project),
+        // Round 58 — an on-site genset / PV primary supply has no PLN service.
+        supplyKind: project.supplyKind,
+        plantCapacity: project.supplyCapacityVa,
+      );
   var supply = study(perPhaseBasisVa, largestSectionVa);
   // Round 61 (regression-undeclared-study-transformer-flagged-against-
   // headroom-incomer) — a root board reserving future-load headroom has its
@@ -1303,8 +1325,7 @@ List<GensetMotor> gensetStartMotors(
   final motors = <GensetMotor>[];
   final essential = gensetBackedPanelIds(project);
   final gen = project.sources?.generator;
-  final restrict =
-      essential.isNotEmpty && (gen?.backupFraction ?? 1.0) < 1.0;
+  final restrict = essential.isNotEmpty && (gen?.backupFraction ?? 1.0) < 1.0;
   final resultByCircuit = <String, ElectricalCircuitResult>{
     if (sys != null)
       for (final pr in sys.panels.values)
@@ -1341,15 +1362,14 @@ List<GensetMotor> gensetStartMotors(
             ? motorFlc(kw, p.voltage).amperes
             : motorFlc1ph(kw, Voltage(u0)).amperes;
         final ib = solved?.runCurrentA.amperes ?? 0;
-        final flc = Current(
-            ((ib > table ? ib : table) * 10).roundToDouble() / 10);
+        final flc =
+            Current(((ib > table ? ib : table) * 10).roundToDouble() / 10);
         startA = startingAnalysis(flc, starter ?? StarterType.dol)
             .startCurrentA
             .amperes;
       }
-      final startVa = threePhase
-          ? math.sqrt(3) * p.voltage.volts * startA
-          : u0 * startA;
+      final startVa =
+          threePhase ? math.sqrt(3) * p.voltage.volts * startA : u0 * startA;
       motors.add(GensetMotor(
         name: c.name,
         shaftPower: Power.kiloWatts(kw),
@@ -1360,7 +1380,6 @@ List<GensetMotor> gensetStartMotors(
   }
   return motors;
 }
-
 
 /// Map a [StarterType] to the loose string the genset dip screen expects (its
 /// `kStartKvaMultiple` keys: DOL / STAR_DELTA / SOFT_STARTER / VFD / …).

@@ -48,12 +48,11 @@ Map<String, EdgeSizing> _size(Network net) => autoSizeNetwork(
     );
 
 void main() {
-  test('one box + an FDC keeps the per-box flow on the trunk', () {
+  test('one box + an FDC leaves the trunk unchanged', () {
     final without = _size(_net());
     final withFdc = _size(_net(fdc: true));
-    // One hydrant outlet ⇒ per-box flow (6.3 L/s) on the pump trunk and the
-    // suction; adding the inlet must not count it as a 2nd outlet (which lifted
-    // the trunk to the 31.5 L/s standpipe figure, DN65 -> DN100).
+    // Adding the inlet must not count it as a 2nd outlet nor change any
+    // trunk flow or size.
     for (final id in ['tp', 'ph', 'hb']) {
       expect(withFdc[id]!.flow.inLitersPerSecond,
           closeTo(without[id]!.flow.inLitersPerSecond, 1e-9),
@@ -62,12 +61,17 @@ void main() {
           without[id]!.diameter.inMillimeters,
           reason: id);
     }
-    expect(withFdc['ph']!.flow.inLitersPerSecond, closeTo(6.3, 1e-9));
+    // Round 62 (fire-convergence-14-pump-legs-sized-below-rated-flow) — the
+    // pump's own suction / discharge pipe (tp, ph, and on through the bare
+    // header H to the box) carries the flow the pump is RATED on, the
+    // one-stack standpipe flow (31.5 L/s), however few outlets are drawn;
+    // the FDC tee does not end the discharge (an inlet is not a header).
+    expect(withFdc['ph']!.flow.inLitersPerSecond, closeTo(31.5, 1e-9));
     // The FDC branch carries no design draw-off and points INTO the header.
     // Round 37 (mech-sim-5-fdc-line-sized-at-zero-flow): it is SIZED on the
-    // system flow the brigade pumps in — the largest flow at the header it
-    // joins (6.3 L/s here) — never below the DN100 FDC minimum.
-    expect(withFdc['f0']!.flow.inLitersPerSecond, closeTo(6.3, 1e-9));
+    // system flow the brigade pumps in — the system's rated pump flow
+    // (31.5 L/s here, Round 62) — never below the DN100 FDC minimum.
+    expect(withFdc['f0']!.flow.inLitersPerSecond, closeTo(31.5, 1e-9));
     expect(withFdc['f0']!.diameter.inMillimeters, greaterThanOrEqualTo(100));
     expect(withFdc['f0']!.flowFromId, 'F');
   });

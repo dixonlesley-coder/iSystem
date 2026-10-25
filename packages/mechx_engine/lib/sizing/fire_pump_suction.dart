@@ -20,8 +20,7 @@ import '../hydraulics.dart' show velocityFromFlow;
 import '../network/network.dart';
 import '../standards/sni.dart' show StandardValue, VerificationStatus;
 import '../units.dart';
-import 'fire_standpipe.dart'
-    show kMinYardMainDiameterMm, kYardHydrantFlowLps;
+import 'fire_standpipe.dart' show kMinYardMainDiameterMm, kYardHydrantFlowLps;
 import 'network_sizing.dart' show EdgeSizing, SizingContext;
 import 'water_supply_sizing.dart' as water;
 
@@ -104,13 +103,25 @@ bool _isMover(NetNode? n) =>
 /// and bends — and on through a header where several pump legs merge — up to
 /// the first junction, terminal or riser) to at least the table's discharge
 /// size. Both are keyed
-/// on the edge's own sized flow (the pump's set flow). Edges in [overridden]
-/// keep their hand-picked size. Mutates [sizing] in place; returns the ids of
-/// the raised edges. Pure apart from that.
+/// on the larger of the edge's own sized flow and the RATED flow of the
+/// pump it serves ([ratedFlowByPump], Round 62: the system design flow the
+/// pump basis rates the pump on — a 500 gpm pump on one drawn hose box is
+/// still a 500 gpm pump), which the raised edge then carries. Edges in
+/// [overridden] keep their hand-picked size. Edges in [excludeEdgeIds] (a
+/// jockey pump's leg, sized on its own duty) are never touched, and pumps
+/// in [stopNodeIds] (the jockeys) are neither walked from nor through.
+/// Round 62 (regression-riser-discharge-below-nfpa20) — a RISER leaving the
+/// pump (directly, or through inline devices / bends, before any header) is
+/// pump discharge piping like a run; only a riser met past a discharge
+/// header is the standpipe's own. Mutates [sizing] in place; returns the
+/// ids of the raised edges. Pure apart from that.
 Set<String> raiseFirePumpSuctionAndDischarge(
   Network net,
   Map<String, EdgeSizing> sizing, {
   Set<String> overridden = const {},
+  Set<String> excludeEdgeIds = const {},
+  Set<String> stopNodeIds = const {},
+  Map<String, FlowRate> ratedFlowByPump = const {},
 }) {
   final raised = <String>{};
   final pumps = <String>{
@@ -119,11 +130,11 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         if (_isMover(net.nodeById(e.fromId))) e.fromId,
         if (_isMover(net.nodeById(e.toId))) e.toId,
       ],
-  };
+  }..removeAll(stopNodeIds);
   if (pumps.isEmpty) return raised;
   final adj = <String, List<NetEdge>>{};
   for (final e in net.edges) {
-    if (!_isFire(e)) continue;
+    if (!_isFire(e) || excludeEdgeIds.contains(e.id)) continue;
     (adj[e.fromId] ??= []).add(e);
     (adj[e.toId] ??= []).add(e);
   }
@@ -158,8 +169,41 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     return false;
   }
 
+  // A pipe leaving [from] along [e] that reaches a supply INLET (an FDC)
+  // through bare / inline degree-2 nodes only — the brigade's inlet chain
+  // joining the discharge main, which does not end the pump's discharge.
+  bool leadsToInlet(NetEdge e, String from) {
+    var cur = from;
+    var edge = e;
+    final walked = <String>{};
+    while (walked.add(edge.id)) {
+      final next = other(edge, cur);
+      final n = net.nodeById(next);
+      if (n != null && isSupplyInletComponent(n.component)) return true;
+      final links = adj[next] ?? const <NetEdge>[];
+      if (n == null || links.length != 2 || n.role == NodeRole.plant) {
+        return false;
+      }
+      cur = next;
+      edge = links.firstWhere((x) => x.id != edge.id);
+    }
+    return false;
+  }
+
   final suction = <String>{};
   final discharge = <String>{};
+  // The largest rated flow of the pumps whose suction / discharge walk
+  // reached each edge.
+  final rated = <String, FlowRate>{};
+  void rate(String edgeId, String pump) {
+    final q = ratedFlowByPump[pump];
+    if (q == null) return;
+    final cur = rated[edgeId];
+    if (cur == null || cur.cubicMetersPerSecond < q.cubicMetersPerSecond) {
+      rated[edgeId] = q;
+    }
+  }
+
   for (final p in [...pumps]..sort()) {
     // Suction: upstream through every node that is not a source (tank /
     // plant / inlet) or another mover.
@@ -170,6 +214,7 @@ Set<String> raiseFirePumpSuctionAndDischarge(
       for (final e in adj[cur] ?? const <NetEdge>[]) {
         if (!inflowAt(e, cur)) continue;
         suction.add(e.id);
+        rate(e.id, p);
         final up = other(e, cur);
         final n = net.nodeById(up);
         if (n == null || n.role == NodeRole.plant || _isMover(n)) continue;
@@ -192,16 +237,26 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     // to the first junction or terminal — and on through a DISCHARGE
     // HEADER (a junction where two or more pump legs merge, every pipe
     // into it coming from a mover) to the main it feeds.
-    final dstack = [p];
+    // (node, past a discharge header?)
+    final dstack = [(p, false)];
     final dseen = <String>{p};
     while (dstack.isNotEmpty) {
-      final cur = dstack.removeLast();
+      final (cur, pastHeader) = dstack.removeLast();
       for (final e in adj[cur] ?? const <NetEdge>[]) {
         if (!outflowAt(e, cur)) continue;
-        // The discharge piping ends where the standpipe / sprinkler riser
-        // begins (the riser keeps its own class sizing).
-        if (e.kind == EdgeKind.riser) continue;
+        // Past a header the discharge piping ends where the standpipe /
+        // sprinkler riser begins (the riser keeps its own class sizing);
+        // a riser leaving the pump itself is its discharge pipe (and the
+        // walk stops at its top).
+        if (e.kind == EdgeKind.riser) {
+          if (!pastHeader) {
+            discharge.add(e.id);
+            rate(e.id, p);
+          }
+          continue;
+        }
         discharge.add(e.id);
+        rate(e.id, p);
         final next = other(e, cur);
         final n = net.nodeById(next);
         if (n == null ||
@@ -210,14 +265,19 @@ Set<String> raiseFirePumpSuctionAndDischarge(
             _isMover(n)) {
           continue;
         }
-        final links = adj[next] ?? const <NetEdge>[];
+        final links = [
+          for (final x in adj[next] ?? const <NetEdge>[])
+            if (x.id == e.id || !leadsToInlet(x, next)) x,
+        ];
+        var header = pastHeader;
         if (links.length > 2) {
           final ins = links.where((x) => inflowAt(x, next)).toList();
           if (ins.length < 2 || !ins.every((x) => leadsToMover(x, next))) {
             continue;
           }
+          header = true;
         }
-        if (dseen.add(next)) dstack.add(next);
+        if (dseen.add(next)) dstack.add((next, header));
       }
     }
   }
@@ -226,7 +286,12 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     if (overridden.contains(id)) return;
     final s = sizing[id];
     if (s == null || s.flow.cubicMetersPerSecond <= 0) return;
-    final row = firePumpPipeRow(s.flow);
+    final r0 = rated[id];
+    final flow = r0 != null &&
+            r0.cubicMetersPerSecond > s.flow.cubicMetersPerSecond + 1e-12
+        ? r0
+        : s.flow;
+    final row = firePumpPipeRow(flow);
     final tableMm = _seriesAtLeast(
         math.min(maxMm, isSuction ? row.suctionMm : row.dischargeMm));
     var floorMm = math.max(s.diameter.inMillimeters, tableMm);
@@ -234,17 +299,17 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     if (isSuction) {
       final r = water.sizeForFlow(
         flow: FlowRate(
-            s.flow.cubicMetersPerSecond * kFirePumpSuctionOverloadFactor),
+            flow.cubicMetersPerSecond * kFirePumpSuctionOverloadFactor),
         maxVelocity: const Velocity(kFirePumpSuctionMaxVelocityMps),
         minDiameter: Diameter.mm(floorMm),
       );
       floorMm = math.max(floorMm, r.diameter.inMillimeters);
       over = over || r.overVelocity;
     }
-    if (floorMm <= s.diameter.inMillimeters + 1e-9) return;
-    final d = Diameter.mm(floorMm);
-    sizing[id] = s.withBore(d, velocityFromFlow(s.flow, d),
-        overCapacity: over);
+    if (floorMm <= s.diameter.inMillimeters + 1e-9 && flow == s.flow) return;
+    final d = Diameter.mm(math.max(floorMm, s.diameter.inMillimeters));
+    sizing[id] = s.withBore(d, velocityFromFlow(flow, d),
+        flow: flow, overCapacity: over);
     raised.add(id);
   }
 
@@ -274,11 +339,19 @@ double _seriesAtLeast(double mm) {
 /// bore; edges in [overridden] keep their size (their flow is still raised).
 /// A network with no pillar hydrant is untouched (byte-identical). Mutates
 /// [sizing]; returns the raised edge ids.
+///
+/// Round 62 (regression-yard-raise-inflates-jockey-leg) — edges in
+/// [excludeEdgeIds] (a jockey pump's leg, sized on its own 1 % duty) are
+/// never raised, and the downstream walk never passes a node in
+/// [stopNodeIds] (the jockey pump), so the suction header above a jockey is
+/// raised only through the main pumps.
 Set<String> raiseYardHydrantMains(
   Network net,
   Map<String, EdgeSizing> sizing,
   SizingContext ctx, {
   Set<String> overridden = const {},
+  Set<String> excludeEdgeIds = const {},
+  Set<String> stopNodeIds = const {},
 }) {
   final raised = <String>{};
   if (!net.nodes.any((n) => n.component == NodeComponent.pillarHydrant)) {
@@ -286,7 +359,7 @@ Set<String> raiseYardHydrantMains(
   }
   final out = <String, List<NetEdge>>{};
   for (final e in net.edges) {
-    if (!_isFire(e)) continue;
+    if (!_isFire(e) || excludeEdgeIds.contains(e.id)) continue;
     final from = sizing[e.id]?.flowFromId;
     if (from == null) continue;
     (out[from] ??= []).add(e);
@@ -298,6 +371,7 @@ Set<String> raiseYardHydrantMains(
     if (net.nodeById(id)?.component == NodeComponent.pillarHydrant) {
       return memo[id] = true;
     }
+    if (stopNodeIds.contains(id)) return memo[id] = false;
     if (!path.add(id)) return false;
     var any = false;
     for (final e in out[id] ?? const <NetEdge>[]) {
@@ -310,7 +384,7 @@ Set<String> raiseYardHydrantMains(
 
   const yard = FlowRate(kYardHydrantFlowLps / 1000);
   for (final e in net.edges) {
-    if (!_isFire(e)) continue;
+    if (!_isFire(e) || excludeEdgeIds.contains(e.id)) continue;
     final s = sizing[e.id];
     final from = s?.flowFromId;
     if (s == null || from == null) continue;
@@ -321,14 +395,14 @@ Set<String> raiseYardHydrantMains(
         : yard;
     if (overridden.contains(e.id)) {
       if (q != s.flow) {
-        sizing[e.id] = s.withBore(s.diameter, velocityFromFlow(q, s.diameter),
-            flow: q);
+        sizing[e.id] =
+            s.withBore(s.diameter, velocityFromFlow(q, s.diameter), flow: q);
         raised.add(e.id);
       }
       continue;
     }
-    final minMm = math.max(kMinYardMainDiameterMm,
-        ctx.fireMinimumFor(e)?.inMillimeters ?? 0.0);
+    final minMm = math.max(
+        kMinYardMainDiameterMm, ctx.fireMinimumFor(e)?.inMillimeters ?? 0.0);
     final r = water.sizeForFlow(
       flow: q,
       maxVelocity: ctx.maxFireVelocity,
