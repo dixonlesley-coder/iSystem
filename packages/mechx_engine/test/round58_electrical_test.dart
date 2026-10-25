@@ -149,11 +149,14 @@ ElectricalProject _island({SupplyKind kind = SupplyKind.generator}) =>
 
 /// A three-building campus: one root board per building (six 3φ 110 kW
 /// ways each), a declared 3750 kVA PLN connection.
-ElectricalProject _campus({int? units, ApparentPower? tx}) => ElectricalProject(
+ElectricalProject _campus(
+        {int? units, ApparentPower? tx, bool undeclared = false}) =>
+    ElectricalProject(
       id: 'c',
       name: 'Campus',
       earthingSystem: EarthingSystem.tnS,
-      supplyCapacityVa: tx == null ? const ApparentPower(3750e3) : null,
+      supplyCapacityVa:
+          tx == null && !undeclared ? const ApparentPower(3750e3) : null,
       transformerKva: tx,
       transformerUnits: units,
       panels: [
@@ -361,6 +364,43 @@ void main() {
       final fault = estimatedServiceFaultLevelA(pr,
           demand: sys.supply.demandVa, supply: st.supply)!;
       expect(fault.amperes, closeTo(legacyA, 0.1));
+    });
+
+    // Round 59 (regression-undeclared-n-section-service-ignores-sections) —
+    // nothing declared but 3 sections: each section carries ONE building,
+    // 6 x 110 kW at the default pf 0.85 = 776.5 kVA; / 0.8 loading = 970.6
+    // kVA => a 1000 kVA unit per section, Isc = 1e6 / (sqrt3 x 400 x 0.04)
+    // = 36 084 A — never one paralleled 2 x 1600 kVA bank on the whole
+    // 2329 kVA (57 735 A).
+    test('an UNDECLARED 3-section service: 3 x 1000 kVA, one-unit fault', () {
+      const perSectionA = 1e6 / (1.7320508075688772 * 400 * 0.04);
+      final pr = _campus(units: 3, undeclared: true);
+      final sys = computeSystem(_profile, pr);
+      final st = computeAdvancedStudy(_profile, pr, sys);
+      expect(st.supply.isMv, isTrue);
+      expect(st.supply.transformerKva, 1000);
+      expect(st.supply.units, 3);
+      expect(st.supply.note, contains('3 x 1000 kVA on separate sections'));
+      final fault = estimatedServiceFaultLevelA(pr,
+          demand: sys.supply.demandVa, supply: st.supply)!;
+      expect(fault.amperes, closeTo(perSectionA, 0.1));
+      // The no-study call (demand only) reads the same per-section rule.
+      expect(
+          estimatedServiceFaultLevelA(pr, demand: sys.supply.demandVa)!.amperes,
+          closeTo(perSectionA, 0.1));
+    });
+
+    test('an undeclared legacy campus (no sections) keeps one paralleled bank',
+        () {
+      const bankA = 3.2e6 / (1.7320508075688772 * 400 * 0.04);
+      final pr = _campus(undeclared: true);
+      final sys = computeSystem(_profile, pr);
+      final st = computeAdvancedStudy(_profile, pr, sys);
+      expect(st.supply.transformerKva, 1600);
+      expect(st.supply.units, 2);
+      final fault = estimatedServiceFaultLevelA(pr,
+          demand: sys.supply.demandVa, supply: st.supply)!;
+      expect(fault.amperes, closeTo(bankA, 0.1));
     });
 
     test('transformerUnits round-trips tolerantly in .mechx', () {

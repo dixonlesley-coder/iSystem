@@ -367,6 +367,46 @@ SupplyDesign determineSupply(
     ..add('Transformer kVA ladder — secondary source (IEC 60076 preferred '
         'ratings; verify the exact ratings against the chosen manufacturer).');
 
+  // Round 59 (regression-undeclared-n-section-service-ignores-sections) —
+  // an undeclared N-section service ([sections] > 1, e.g. a campus with one
+  // transformer per building) is studied per SECTION like the dual service
+  // (its N = 2 case): each unit carries its own root board (the largest
+  // section, never below an even share), on separate sections behind
+  // normally-open couplers, so the boards see ONE unit's fault. Sizing one
+  // paralleled bank on the whole demand overstated the origin fault ~60 %
+  // (2 x 1600 kVA = 57.7 kA where each section's 1000 kVA unit gives
+  // 36.1 kA) — optimistic ADS on every TN loop. (A dual service keeps its
+  // own note below: byte-identical.)
+  if (nSections > 1 && !(dualTransformer && nSections == 2)) {
+    final perUnitRequired =
+        math.max(basisKva / nSections, sectionKva) / transformerLoadingFactor;
+    final sel = _selectTransformerUnits(perUnitRequired);
+    final kva = sel.kva;
+    final exceeded = sel.units > 1;
+    return SupplyDesign(
+      lvOrMv: SupplyLevel.mv,
+      demandKva: demandKva,
+      lvVoltage: lvVoltage,
+      mvVoltage: mvV,
+      transformerKva: kva,
+      units: nSections * sel.units,
+      ladderExceeded: exceeded,
+      impedancePct: transformerImpedancePct,
+      primaryFlc: Current(_round1(_transformerFlc(kva, mvV).amperes)),
+      secondaryFlc:
+          Current(_transformerFlc(kva, lvVoltage).amperes.roundToDouble()),
+      note: 'Sectioned MV supply: $nSections x ${_fmtKva(kva)} kVA on '
+          'separate sections (couplers normally open). Each unit carries its '
+          'root board (~1/$nSections of the $demandKva kVA demand); fault '
+          'level is one unit (couplers N.O.).'
+          '${exceeded ? ' Each section needs ${sel.units} x ${_fmtKva(kva)} '
+              'kVA — the requirement exceeds the largest standard '
+              'transformer.' : ''}'
+          '$basisNote',
+      verifyItems: verify,
+    );
+  }
+
   if (dualTransformer) {
     // Two transformers, each sized for half the demand, on split bus sections
     // behind a normally-open coupler. The fault level the boards see is ONE

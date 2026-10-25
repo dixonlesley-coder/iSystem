@@ -402,8 +402,8 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   //  * no own outlet => no stack (a pump-room riser, a break-tank fill riser
   //    off the zone header carries no standpipe outlet);
   //  * a ONE-storey riser whose own outlets sit on ONE floor => a pillar /
-  //    branch drop, never a stack, whatever node feeds it (base, interior,
-  //    ring);
+  //    branch drop when it hangs off a fire-pipe cycle (Round 59,
+  //    [fedOffCycle]); off a tree header it is a stack;
   //  * a one-storey riser with own outlets on BOTH floors => a stack, unless
   //    it lies on a RING (its two ends stay joined with its own risers
   //    removed — a ring leg down a car-park ramp) AND the fire source reaches
@@ -533,6 +533,42 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     return onRing(root) && reaches(blocked: false) && !reaches(blocked: true);
   }
 
+  // Round 59 (regression-one-storey-twin-stacks-upper-boxes-count-one) — a
+  // ONE-storey riser whose own outlets sit on ONE floor is a pillar / branch
+  // drop only when it hangs off a fire-pipe CYCLE: one of its member nodes
+  // lies on a cycle of the fire network with the riser's OWN riser edges
+  // removed (the pillar ring or distribution ring the drops hang from, or the
+  // pump-room riser landing on a ring of indoor stacks). Two genuine
+  // one-storey standpipes teed off a TREE header / the pump discharge (a
+  // 2-storey mall, boxes on L1 only) are two stacks (750 gpm). Conservative
+  // side effect: a one-storey pillar drop off a dead-end (tree) yard main now
+  // counts as a stack (over-sizing only).
+  bool fedOffCycle(String root) {
+    final members = membersOf[root]!;
+    bool ownRiser(NetEdge x) =>
+        riserEdgeIds.contains(x.id) &&
+        members.contains(x.fromId) &&
+        members.contains(x.toId);
+    for (final m in members) {
+      for (final x in fireEdgeAdj[m] ?? const <NetEdge>[]) {
+        if (ownRiser(x)) continue;
+        final start = x.fromId == m ? x.toId : x.fromId;
+        if (start == m) continue;
+        final seen = <String>{start};
+        final queue = [start];
+        for (var i = 0; i < queue.length; i++) {
+          for (final y in fireEdgeAdj[queue[i]] ?? const <NetEdge>[]) {
+            if (y.id == x.id || ownRiser(y)) continue;
+            final o = y.fromId == queue[i] ? y.toId : y.fromId;
+            if (o == m) return true;
+            if (seen.add(o)) queue.add(o);
+          }
+        }
+      }
+    }
+    return false;
+  }
+
   final isStack = <String>{};
   // Round 58 — the storey a stack starts serving: the one just below its
   // LOWEST own outlet (never below its base). Beneath that the riser is a
@@ -543,8 +579,8 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   for (final root in membersOf.keys) {
     final floors = ownOutletFloors(root);
     if (floors.isEmpty) continue; // no own outlet: no stack
-    if (hi[root]! == lo[root]! + 1 && floors.length < 2) {
-      continue; // a one-storey drop to outlets on one floor
+    if (hi[root]! == lo[root]! + 1 && floors.length < 2 && fedOffCycle(root)) {
+      continue; // a one-storey drop off a ring to outlets on one floor
     }
     isStack.add(root);
     final minOut = floors.reduce(math.min);
