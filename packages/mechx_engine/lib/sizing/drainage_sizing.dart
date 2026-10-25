@@ -148,8 +148,10 @@ double _lookup(List<(double, double)> table, double dfu) {
 Diameter drainDiameterForDfu(double dfu, {required bool isStack}) =>
     Diameter.mm(_lookup(isStack ? _stackDfuTable : _branchDfuTable, dfu));
 
-/// Minimum vent diameter for [dfu] drainage fixture units (developed-length
-/// refinement is a // VERIFY TODO). // VERIFY against SNI 8153 vent table.
+/// Minimum vent diameter for [dfu] drainage fixture units. // VERIFY against
+/// SNI 8153 vent table. The developed-length column of the same UPC 703.2
+/// table is applied per vent STACK by the sizer (Round 58,
+/// [ventDiameterForLength]).
 ///
 /// Round 9 — when [servedDrainMm] (the diameter of the drain this vent
 /// serves) is given the vent is also floored at HALF that drain diameter,
@@ -177,6 +179,39 @@ bool drainDfuExceedsTable(double dfu, {required bool isStack}) =>
 
 /// Vent analogue of [drainDfuExceedsTable] (top row of the vent table).
 bool ventDfuExceedsTable(double dfu) => dfu > _ventDfuTable.last.$1;
+
+/// Round 58 (plumbing-hvac-convergence-8-vent-stack-developed-length-
+/// ignored) — UPC Table 703.2's MAXIMUM DEVELOPED LENGTH column for vent
+/// piping, (nominal mm, max length m): 1¼ in 45 ft, 1½ in 60 ft, 2 in 120 ft,
+/// 2½ in 180 ft, 3 in 212 ft, 4 in 300 ft, 5 in 390 ft, 6 in 510 ft (1 ft =
+/// 0.3048 m). `// VERIFY` notAnSniClause (in `SniProfile.verifyChecklist`).
+const List<(double, double)> kVentMaxDevelopedLengthM = [
+  (32, 45 * 0.3048),
+  (40, 60 * 0.3048),
+  (50, 120 * 0.3048),
+  (65, 180 * 0.3048),
+  (75, 212 * 0.3048),
+  (100, 300 * 0.3048),
+  (125, 390 * 0.3048),
+  (150, 510 * 0.3048),
+];
+
+/// Round 58 — the smallest vent diameter (mm) at or above [mm] whose UPC
+/// 703.2 maximum developed length covers [developedLengthM]; the table top
+/// (DN150) when even it is too short (see [ventLengthExceedsTable]).
+double ventDiameterForLength(double mm, double developedLengthM) {
+  for (final (d, maxL) in kVentMaxDevelopedLengthM) {
+    if (d + 1e-9 >= mm && developedLengthM <= maxL + 1e-9) return d;
+  }
+  return mm > kVentMaxDevelopedLengthM.last.$1
+      ? mm
+      : kVentMaxDevelopedLengthM.last.$1;
+}
+
+/// Round 58 — true when [developedLengthM] exceeds the DN150 row of UPC 703.2
+/// (155.4 m): the printed vent size is then the table limit.
+bool ventLengthExceedsTable(double developedLengthM) =>
+    developedLengthM > kVentMaxDevelopedLengthM.last.$2 + 1e-9;
 
 /// Minimum drain diameter (mm) for ANY drainage branch or stack that carries a
 /// water closet, whatever its DFU count (audit 2026-10 water-drainage-7). The

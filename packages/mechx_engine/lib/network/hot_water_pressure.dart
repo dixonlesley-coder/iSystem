@@ -128,6 +128,7 @@ HotWaterField solveHotWaterFromHeaters({
   MountingHeights mounting = const MountingHeights(),
   Pressure? prvSetpoint,
   Head heaterLoss = const Head(0),
+  Set<String> excludeShortfallHeaterIds = const {},
 }) {
   final heaters = hotWaterHeaters(net);
   if (heaters.isEmpty) return HotWaterField.empty;
@@ -174,7 +175,12 @@ HotWaterField solveHotWaterFromHeaters({
     delivery.addAll(flowing.deliveryNodeIds);
     // The hot index fixture's need at the heater outlet vs what arrives.
     final need = flowing.requiredPumpHead.meters;
-    if (flowing.deliveryNodeIds.isNotEmpty && need - inlet > shortfall) {
+    // Round 58 — a heater behind a holding PRV ([prvHeldNodes]) sees the
+    // PRV setpoint whatever the source develops: raising the source head
+    // cannot close its shortfall, so it never drives the source head.
+    if (flowing.deliveryNodeIds.isNotEmpty &&
+        !excludeShortfallHeaterIds.contains(heater) &&
+        need - inlet > shortfall) {
       shortfall = need - inlet;
     }
   }

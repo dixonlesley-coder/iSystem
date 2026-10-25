@@ -111,12 +111,19 @@ void main() {
   // ── fire-3-riser-count ────────────────────────────────────────────────────
   group('fire-3 drawn standpipe riser count', () {
     // Two separate hydrant stacks A / B (3 riser edges each) off one header.
+    // Round 58 — a stack is a riser with hose outlets of its own, so each
+    // carries a hydrant box on every floor.
     Network twoStacks() => Network(nodes: [
           _n('P', 0, 0, role: NodeRole.plant, c: NodeComponent.pump),
           _n('H', 50, 0),
           for (final s in ['A', 'B'])
-            for (var f = 0; f < 4; f++) _n('$s$f', s == 'A' ? 100 : 300, 0,
-                floor: f),
+            for (var f = 0; f < 4; f++) ...[
+              _n('$s$f', s == 'A' ? 100 : 300, 0, floor: f),
+              _n('${s}x$f', s == 'A' ? 110 : 310, 0,
+                  floor: f,
+                  role: NodeRole.fixture,
+                  c: NodeComponent.hydrantBox),
+            ],
         ], edges: [
           const NetEdge(
               id: 'p', fromId: 'P', toId: 'H', service: ServiceType.fireHydrant),
@@ -133,6 +140,12 @@ void main() {
                   toId: '$s${f + 1}',
                   service: ServiceType.fireHydrant,
                   kind: EdgeKind.riser),
+            for (var f = 0; f < 4; f++)
+              NetEdge(
+                  id: '${s}b$f',
+                  fromId: '$s$f',
+                  toId: '${s}x$f',
+                  service: ServiceType.fireHydrant),
           ],
         ]);
 

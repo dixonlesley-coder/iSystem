@@ -1228,6 +1228,15 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setDualTransformer(bool value) =>
       _commit(_withProject(dualTransformer: value));
 
+  /// Round 58 — the number of SEPARATE transformer sections (one unit per
+  /// service-entrance board, never paralleled). Null / < 1 ⇒ clear (the
+  /// legacy one section, two on a dual service). Non-finite input refused.
+  void setTransformerUnits(int? units) {
+    _commit((units == null || units < 1)
+        ? _withProject(clearTransformerUnits: true)
+        : _withProject(transformerUnits: units > 32 ? 32 : units));
+  }
+
   /// Rebuild the project carrying every field through, overriding only those
   /// supplied — so an edit to one field never silently drops the additive A8
   /// fields (sources / sites / dual-transformer / occupancy). A local helper
@@ -1250,6 +1259,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     SupplyKind? supplyKind,
     ApparentPower? supplyCapacityVa,
     bool clearSupplyCapacityVa = false,
+    int? transformerUnits,
+    bool clearTransformerUnits = false,
   }) =>
       ElectricalProject(
         id: state.id,
@@ -1282,6 +1293,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         supplyCapacityVa: clearSupplyCapacityVa
             ? null
             : (supplyCapacityVa ?? state.supplyCapacityVa),
+        transformerUnits: clearTransformerUnits
+            ? null
+            : (transformerUnits ?? state.transformerUnits),
       );
 
   /// Load the built-in sample project (a user action — undoable, so one

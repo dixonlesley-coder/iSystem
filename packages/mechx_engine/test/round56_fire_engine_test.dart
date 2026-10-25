@@ -391,13 +391,18 @@ void main() {
 
     test(
         'regression-pillar-drop-with-indoor-box-counts-as-stack: pillar '
-        'drops stay drops with an indoor box on the ring node', () {
+        'drops stay drops; with an indoor box on the ring node they are the '
+        'recorded conservative case (Round 58: own outlets on two floors)',
+        () {
       final rnd = math.Random(5702);
       for (final indoor in [false, true]) {
         for (final second in [false, true]) {
           final base =
               _carPark(pillars: true, indoorBoxes: indoor, secondStack: second);
-          final want = second ? 2 : 1;
+          // Round 58 — a one-storey riser whose own outlets sit on BOTH its
+          // floors (the indoor box IB_k on L1, the pillar box PH_k on L2) off
+          // no ring is a stack: HR + K? + the 4 drops over (L1, L2).
+          final want = (second ? 2 : 1) + (indoor ? 4 : 0);
           expect(drawnStandpipeRiserCount(base), want,
               reason: 'indoor=$indoor second=$second');
           for (var t = 0; t < 50; t++) {
@@ -406,9 +411,9 @@ void main() {
           }
         }
       }
-      // One stack: 500 gpm = 31.545 L/s on the pump discharge (DN100), never
-      // standpipeFlow(5) = 1250 gpm = 78.86 L/s.
-      final net = _carPark(pillars: true, indoorBoxes: true);
+      // Without the indoor box: one stack, 500 gpm = 31.545 L/s on the pump
+      // discharge (DN100), never standpipeFlow(5) = 1250 gpm = 78.86 L/s.
+      final net = _carPark(pillars: true);
       final r = autoSizeNetwork(
         net,
         const SizingContext(),

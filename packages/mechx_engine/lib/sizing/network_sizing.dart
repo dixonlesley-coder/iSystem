@@ -3044,6 +3044,24 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
                 sanitary: sanitary,
                 ctx: ctx,
                 edgeIds: edgeUnits.keys);
+            // Round 58 — UPC 703.2's maximum developed length per vent stack
+            // (the §10 elevation delta of its risers; no building ⇒ no
+            // length is known ⇒ skipped).
+            if (building != null) {
+              _floorVentStackLengths(
+                net: net,
+                sanitary: sanitary,
+                ctx: ctx,
+                edgeIds: edgeUnits.keys,
+                lengthM: (e) => edgeLength(
+                  e,
+                  net,
+                  calibrationBySheet: calibrationBySheet,
+                  building: building,
+                  mounting: mounting,
+                ).meters,
+              );
+            }
           }
           // N17 — a stack must never size smaller than a branch discharging
           // into it (two different DFU tables can otherwise disagree). Only
@@ -4785,6 +4803,73 @@ void _floorReliefVents({
         overCapacity: s.overCapacity,
       );
     }
+  }
+}
+
+/// Round 58 (plumbing-hvac-convergence-8-vent-stack-developed-length-
+/// ignored) — UPC Table 703.2 limits a vent's size by its DFU AND its
+/// MAXIMUM DEVELOPED LENGTH. Every connected vertical vent stack (vent riser
+/// edges joined through shared nodes, transitively) is measured end to end —
+/// the sum of its risers' §10 lengths — and each of its risers is raised to
+/// the smallest vent size whose length limit covers it
+/// ([drain.ventDiameterForLength]); past the DN150 row the riser is flagged
+/// `overCapacity`. A short stack is untouched (byte-identical). The stack's
+/// offset / base runs keep their own size (recorded residual).
+void _floorVentStackLengths({
+  required Network net,
+  required Map<String, EdgeSizing> sanitary,
+  required SizingContext ctx,
+  required Iterable<String> edgeIds,
+  required double Function(NetEdge e) lengthM,
+}) {
+  final risers = <NetEdge>[
+    for (final id in [...edgeIds]..sort())
+      if (net.edgeById(id) case final e?
+          when e.kind == EdgeKind.riser &&
+              e.service == ServiceType.vent &&
+              sanitary.containsKey(id))
+        e,
+  ];
+  if (risers.isEmpty) return;
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while (parent[r] != null && parent[r] != r) {
+      r = parent[r]!;
+    }
+    parent[x] = r;
+    return r;
+  }
+
+  for (final e in risers) {
+    parent.putIfAbsent(e.fromId, () => e.fromId);
+    parent.putIfAbsent(e.toId, () => e.toId);
+    final a = find(e.fromId), b = find(e.toId);
+    if (a != b) parent[a] = b;
+  }
+  final groupLength = <String, double>{};
+  for (final e in risers) {
+    final g = find(e.fromId);
+    final l = lengthM(e);
+    if (l.isFinite && l > 0) groupLength[g] = (groupLength[g] ?? 0) + l;
+  }
+  for (final e in risers) {
+    final total = groupLength[find(e.fromId)] ?? 0;
+    if (total <= 0) continue;
+    final s = sanitary[e.id]!;
+    final mm = s.diameter.inMillimeters;
+    final need = drain.ventDiameterForLength(mm, total);
+    final exceeds = drain.ventLengthExceedsTable(total);
+    if (need <= mm + 1e-9 && !exceeds) continue;
+    final d = Diameter.mm(need > mm ? need : mm);
+    sanitary[e.id] = _sanitaryEdgeSizing(
+      e,
+      d,
+      ctx,
+      stackRaisedForBranch: s.stackRaisedForBranch,
+      codeMinimum: d,
+      overCapacity: s.overCapacity || exceeds,
+    );
   }
 }
 

@@ -273,12 +273,6 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   // touches NO other riser component — a pipe joining another stack is a
   // cross-tie, not this riser's outlet.
   final edgeList = edges.toList();
-  final hydrantAdj = <String, List<String>>{};
-  for (final e in edgeList) {
-    if (e.service != ServiceType.fireHydrant) continue;
-    (hydrantAdj[e.fromId] ??= []).add(e.toId);
-    (hydrantAdj[e.toId] ??= []).add(e.fromId);
-  }
   final risers = <NetEdge>[
     for (final e in edgeList)
       if ((e.service == ServiceType.fireHydrant ||
@@ -314,29 +308,6 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
         n.role == NodeRole.fixture &&
         (n.component == NodeComponent.hydrantBox ||
             n.component == NodeComponent.hoseReel);
-  }
-
-  // Does a hydrant branch leaving [start] (a node of riser component [root])
-  // reach an outlet of its own?
-  //
-  // Round 56 (regression-feedsOwnOutlet-walks-past-first-hose-outlet) — a
-  // hose outlet ENDS the walk (it is never walked through), and another
-  // riser component is a wall, never a disqualifier: a hydrant box drawn ON
-  // a cross-tie (S3 -> X -> H3) is still fed off this riser above its base,
-  // while a BARE tie (H5 -> S5) reaches no outlet before the other stack.
-  bool feedsOwnOutlet(String start, String root) {
-    final seen = <String>{start};
-    final queue = [start];
-    for (var i = 0; i < queue.length; i++) {
-      for (final o in hydrantAdj[queue[i]] ?? const <String>[]) {
-        if (!seen.add(o)) continue;
-        if (parent.containsKey(o)) continue; // another riser: a wall
-        if (isHoseOutlet(o)) return true;
-        if (nodeById[o]?.role == NodeRole.plant) continue;
-        queue.add(o);
-      }
-    }
-    return false;
   }
 
   // Round 56 (fire-convergence-8-standpipe-stack-count-includes-ring-legs-
@@ -417,25 +388,125 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     return inlet;
   }
 
+  // Round 58 (regression-pillar-drops-off-riser-base-count-as-stacks /
+  // regression-top-fed-twin-stacks-count-one / fire-convergence-10-outletless-
+  // supply-riser-counted-as-standpipe-stack / fire-convergence-10-pillar-
+  // drops-reached-directly-counted-as-stacks) — a riser is decided by its OWN
+  // hose outlets first: the outlets at its member nodes or reached from a
+  // member over HYDRANT pipe (the whole drawn network, so a sub-list counts
+  // the same), a hose outlet ending the walk, a plant stopping it and every
+  // OTHER riser component a wall. A hydrant riser walks from every member (a
+  // base-level box is still this stack's outlet); a sprinkler-only riser from
+  // its members above its base (Round 54: a sprinkler riser teed only at its
+  // base off a hydrant header is no stack).
+  //  * no own outlet => no stack (a pump-room riser, a break-tank fill riser
+  //    off the zone header carries no standpipe outlet);
+  //  * a ONE-storey riser whose own outlets sit on ONE floor => a pillar /
+  //    branch drop, never a stack, whatever node feeds it (base, interior,
+  //    ring);
+  //  * a one-storey riser with own outlets on BOTH floors => a stack, unless
+  //    it lies on a RING (its two ends stay joined with its own risers
+  //    removed — a ring leg down a car-park ramp) AND the fire source reaches
+  //    it only through another riser spanning that storey (the Round-56 /
+  //    57 reach test, a riser's BASE node never blocking);
+  //  * a multi-storey riser with any own outlet => a stack, counted from
+  //    the storey just below its lowest own outlet (below that it is a
+  //    transfer main to a higher zone).
+  final fullHydrantAdj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.fireHydrant) continue;
+    (fullHydrantAdj[e.fromId] ??= []).add(e.toId);
+    (fullHydrantAdj[e.toId] ??= []).add(e.fromId);
+  }
+  final membersOf = <String, Set<String>>{};
+  for (final id in parent.keys) {
+    (membersOf[find(id)] ??= <String>{}).add(id);
+  }
+
+  Set<int> ownOutletFloors(String root) {
+    final members = membersOf[root]!;
+    final ownFull = <String>{for (final id in members) findFull(id)};
+    final hydrant = members.any(hydrantRiserNodes.contains);
+    final floors = <int>{};
+    final seen = <String>{...members};
+    final queue = <String>[];
+    for (final id in members) {
+      final f = floorOf[id] ?? 0;
+      if (!hydrant && f <= lo[root]!) continue;
+      if (isHoseOutlet(id)) floors.add(f);
+      queue.add(id);
+    }
+    for (var i = 0; i < queue.length; i++) {
+      for (final o in fullHydrantAdj[queue[i]] ?? const <String>[]) {
+        if (!seen.add(o)) continue;
+        if (fullParent.containsKey(o) && !ownFull.contains(findFull(o))) {
+          continue; // another riser: a wall
+        }
+        if (isHoseOutlet(o)) {
+          floors.add(floorOf[o] ?? 0);
+          continue; // an outlet ends the walk
+        }
+        if (nodeById[o]?.role == NodeRole.plant) continue;
+        queue.add(o);
+      }
+    }
+    return floors;
+  }
+
+  // Does the riser lie on a ring: its lowest and highest members stay joined
+  // over fire pipe with its OWN riser edges removed?
+  final riserEdgeIds = <String>{
+    for (final e in net.edges)
+      if (e.kind == EdgeKind.riser &&
+          (e.service == ServiceType.fireHydrant ||
+              e.service == ServiceType.fireSprinkler))
+        e.id,
+  };
+  final fireEdgeAdj = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.fireHydrant &&
+        e.service != ServiceType.fireSprinkler) {
+      continue;
+    }
+    (fireEdgeAdj[e.fromId] ??= []).add(e);
+    (fireEdgeAdj[e.toId] ??= []).add(e);
+  }
+  bool onRing(String root) {
+    final members = membersOf[root]!;
+    final bottom = <String>{
+      for (final id in members)
+        if ((floorOf[id] ?? 0) == lo[root]) id,
+    };
+    final top = <String>{
+      for (final id in members)
+        if ((floorOf[id] ?? 0) == hi[root]) id,
+    };
+    bool ownRiser(NetEdge x) =>
+        riserEdgeIds.contains(x.id) &&
+        members.contains(x.fromId) &&
+        members.contains(x.toId);
+    final seen = <String>{...bottom};
+    final queue = [...bottom];
+    for (var i = 0; i < queue.length; i++) {
+      for (final x in fireEdgeAdj[queue[i]] ?? const <NetEdge>[]) {
+        if (ownRiser(x)) continue;
+        final o = x.fromId == queue[i] ? x.toId : x.fromId;
+        if (top.contains(o)) return true;
+        if (seen.add(o)) queue.add(o);
+      }
+    }
+    return false;
+  }
+
   bool isBranchDrop(String root) {
     final a = lo[root]!;
     if (hi[root]! != a + 1 || sources.isEmpty) return false;
-    final members = <String>{
-      for (final id in parent.keys)
-        if (find(id) == root) id,
-    };
+    final members = membersOf[root]!;
     final own = <String>{for (final id in members) findFull(id)};
-    // Round 57 (regression-twin-stack-top-tie-base-fed-counts-one /
-    // regression-pillar-drop-with-indoor-box-counts-as-stack) — the decision
-    // is the hydraulic REACH alone (no own-outlet / ring exemption): a tee
-    // off another riser's BASE node (where its supply main lands) never
-    // blocks — the main to stack B commonly leaves from stack A's base, and
-    // B is then fed in parallel with A, not through it; only a riser's
-    // INTERIOR / TOP nodes are its distribution. Recorded caveat: a
-    // one-storey stack teed off a TALL riser's interior node (a podium stack
-    // off floor 3 of a tower riser) reads as that riser's branch drop even
-    // with outlets on both its floors — it is fed through the tower stack.
-    // Nodes of every OTHER riser component spanning the storey (a, a+1).
+    // Round 57 — the reach test: a tee off another riser's BASE node (where
+    // its supply main lands) never blocks; only a riser's INTERIOR / TOP
+    // nodes are its distribution. Nodes of every OTHER riser component
+    // spanning the storey (a, a+1).
     bool blocks(String id) {
       if (!fullParent.containsKey(id)) return false;
       final r = findFull(id);
@@ -459,17 +530,25 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
       return false;
     }
 
-    return reaches(blocked: false) && !reaches(blocked: true);
+    return onRing(root) && reaches(blocked: false) && !reaches(blocked: true);
   }
 
   final isStack = <String>{};
-  for (final id in parent.keys) {
-    final root = find(id);
-    if (isStack.contains(root)) continue;
-    if (hydrantRiserNodes.contains(id) ||
-        ((floorOf[id] ?? 0) > lo[root]! && feedsOwnOutlet(id, root))) {
-      isStack.add(root);
+  // Round 58 — the storey a stack starts serving: the one just below its
+  // LOWEST own outlet (never below its base). Beneath that the riser is a
+  // supply / transfer main to a higher zone (an upper-zone riser rising from
+  // the ground pump room past the lower zone), not a standpipe in parallel
+  // with the lower stack.
+  final serveFrom = <String, int>{};
+  for (final root in membersOf.keys) {
+    final floors = ownOutletFloors(root);
+    if (floors.isEmpty) continue; // no own outlet: no stack
+    if (hi[root]! == lo[root]! + 1 && floors.length < 2) {
+      continue; // a one-storey drop to outlets on one floor
     }
+    isStack.add(root);
+    final minOut = floors.reduce(math.min);
+    serveFrom[root] = math.max(lo[root]!, minOut - 1);
   }
   isStack.removeWhere((r) => isInletRiser(r) || isBranchDrop(r));
   lo.removeWhere((r, _) => !isStack.contains(r));
@@ -478,7 +557,7 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   final cover = <int, int>{};
   var best = 0;
   for (final root in lo.keys) {
-    final a = lo[root]!;
+    final a = serveFrom[root] ?? lo[root]!;
     final b = hi[root]!;
     if (b <= a) {
       // A riser drawn between two nodes on one floor still is a stack.

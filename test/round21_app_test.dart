@@ -183,14 +183,21 @@ void main() {
     c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
       _n('P', 0, 0, role: NodeRole.plant, c: NodeComponent.pump),
       _n('H', 50, 0),
+      // Round 58 — a stack is a riser with hose outlets of its own: a box
+      // on every floor of each.
       for (final s in ['A', 'B'])
-        for (var f = 0; f < 4; f++) _n('$s$f', s == 'A' ? 100 : 300, 0, floor: f),
+        for (var f = 0; f < 4; f++) ...[
+          _n('$s$f', s == 'A' ? 100 : 300, 0, floor: f),
+          _n('${s}x$f', s == 'A' ? 110 : 310, 0,
+              floor: f, role: NodeRole.fixture, c: NodeComponent.hydrantBox),
+        ],
     ], edges: [
       _e('p', 'P', 'H'),
       for (final s in ['A', 'B']) ...[
         _e('h$s', 'H', '${s}0'),
         for (var f = 0; f < 3; f++)
           _e('$s$f', '$s$f', '$s${f + 1}', k: EdgeKind.riser),
+        for (var f = 0; f < 4; f++) _e('${s}b$f', '$s$f', '${s}x$f'),
       ],
     ]));
     // 500 + 250 gpm = 750 gpm × 3.785411784 / 60 = 47.32 L/s.
@@ -430,15 +437,20 @@ void main() {
     c.read(networkControllerProvider.notifier).loadNetwork(Network(nodes: [
       _n('P', 0, 0, role: NodeRole.plant, c: NodeComponent.pump),
       _n('H', 50, 0),
+      // Round 58 — each stack carries its top hose outlet (a stack is a
+      // riser with outlets of its own): the lift is still 49 x 4 + 1.2 m.
       for (var s = 0; s < 4; s++) ...[
         _n('a$s', 100.0 + s * 100, 0),
         _n('b$s', 100.0 + s * 100, 0, floor: 49),
+        _n('x$s', 110.0 + s * 100, 0,
+            floor: 49, role: NodeRole.fixture, c: NodeComponent.hydrantBox),
       ],
     ], edges: [
       _e('p', 'P', 'H'),
       for (var s = 0; s < 4; s++) ...[
         _e('h$s', 'H', 'a$s'),
         _e('r$s', 'a$s', 'b$s', k: EdgeKind.riser),
+        _e('bx$s', 'b$s', 'x$s'),
       ],
     ]));
     // Build the electrical controller (and its MEP sync) up front.

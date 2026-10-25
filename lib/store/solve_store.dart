@@ -67,8 +67,10 @@ Map<String, FlowRate> _supplyFlows(
 /// ([solveHotWaterFromHeaters]). Empty with no hot-water network.
 HotWaterField _hotWaterField(Network net, Map<String, EdgeSizing> sizing,
         ProjectState project, Map<String, Pressure> residual,
-        Map<String, Pressure> noFlow) =>
+        Map<String, Pressure> noFlow,
+        {Set<String> excludeShortfallHeaterIds = const {}}) =>
     solveHotWaterFromHeaters(
+      excludeShortfallHeaterIds: excludeShortfallHeaterIds,
       net: net,
       coldResidual: residual,
       coldNoFlow: noFlow,
@@ -102,8 +104,17 @@ final solveProvider = Provider<PressureSolution?>((ref) {
       preferHighest: false, mounting: project.mounting);
   if (source == null) return null;
   final cold = _coldUpfeed(net, sizing, project, source, edges);
+  // Round 58 (plumbing-hvac-convergence-8-pump-sized-on-prv-held-shortfall)
+  // — a heater behind a holding PRV sees the setpoint whatever the source
+  // develops: its shortfall never raises the source head.
+  final heldHeaters = prvHeldNodes(net,
+          service: kSupplyService, sourceId: source)
+      .heldBy
+      .keys
+      .toSet();
   final hot = _hotWaterField(net, sizing, project, cold.residualPressure,
-      cold.noFlowStaticPressure);
+      cold.noFlowStaticPressure,
+      excludeShortfallHeaterIds: heldHeaters);
   if (hot.isEmpty) return cold;
   if (hot.shortfall.meters <= 1e-9) {
     return mergeHotWaterField(cold, hot, targetResidual: _targetResidual);
@@ -112,7 +123,8 @@ final solveProvider = Provider<PressureSolution?>((ref) {
   final coldAtRaised = _coldUpfeed(net, sizing, project, source, edges,
       moverHeads: {source: raised});
   final hotAtRaised = _hotWaterField(net, sizing, project,
-      coldAtRaised.residualPressure, coldAtRaised.noFlowStaticPressure);
+      coldAtRaised.residualPressure, coldAtRaised.noFlowStaticPressure,
+      excludeShortfallHeaterIds: heldHeaters);
   return mergeHotWaterField(coldAtRaised, hotAtRaised,
       targetResidual: _targetResidual,
       requiredPumpHead: raised,
@@ -1188,6 +1200,8 @@ Map<String, Head> seriesMoverHeads({
   required Map<String, Pressure> residual,
   required Pressure target,
   Map<String, EdgeSizing> sizing = const {},
+  Map<String, String> prvHeldBy = const {},
+  Map<String, ({String inlet, Pressure owed})> prvInlets = const {},
 }) {
   final boosters = [
     for (final m in movers)
@@ -1219,13 +1233,36 @@ Map<String, Head> seriesMoverHeads({
         downstream.any((d) => d.nodeId == n || d.served.contains(n));
     // Round 33 (hydraulics-3-1) — the engine's ONE delivery rule over the
     // nodes no downstream booster serves.
-    final own = _supplyDeliveryNodes(net,
-        [for (final n in m.served) if (!ownedByDownstream(n)) n], sizing);
+    // Round 58 (plumbing-hvac-convergence-8-pump-sized-on-prv-held-
+    // shortfall) — a delivery node behind a drawn PRV ([prvHeldNodes]) does
+    // not move with this mover's head (the PRV holds its setpoint): it is
+    // never in `own`; the mover owes the PRV's INLET the setpoint instead
+    // (below). The LOW verdict at such a fixture stays (remedy: setpoint /
+    // bore), never a phantom pump head.
+    final own = _supplyDeliveryNodes(
+        net,
+        [
+          for (final n in m.served)
+            if (!ownedByDownstream(n) && !prvHeldBy.containsKey(n)) n
+        ],
+        sizing);
     var worst = double.negativeInfinity;
     for (final n in own) {
       final r = residual[n];
       if (r == null) continue;
       worst = math.max(worst, target.pascals - (r.pascals + upstream(n)));
+    }
+    // Each drawn PRV this mover serves (not behind a downstream booster, nor
+    // behind another PRV): its inlet node is owed the setpoint plus the loss
+    // of the pipe arriving at the PRV ([prvInlets]).
+    for (final p in prvInlets.entries) {
+      if (!m.served.contains(p.key) || ownedByDownstream(p.key)) continue;
+      final inlet = p.value.inlet;
+      if (prvHeldBy.containsKey(inlet)) continue; // nested PRV
+      final r = residual[inlet];
+      if (r == null) continue;
+      worst = math.max(
+          worst, p.value.owed.pascals - (r.pascals + upstream(inlet)));
     }
     // The immediately-downstream boosters' inlets (not behind another one).
     for (final d in downstream) {
@@ -1392,6 +1429,23 @@ final supplyMoverDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
   // Series movers on the no-mover residual.
   final solution = ref.watch(solveProvider);
   Map<String, Pressure>? unboosted;
+  // Round 58 — the PRV-held nodes of the field the movers are sized on (a
+  // held heater's hot component rides with it).
+  final heldSource = _pickSource(net, _supplyEdges(net), project.building,
+      preferHighest: solution == null, mounting: project.mounting);
+  final held = heldSource == null
+      ? null
+      : prvHeldNodes(net, service: kSupplyService, sourceId: heldSource);
+  final heldBy = <String, String>{...?held?.heldBy};
+  if (heldBy.isNotEmpty) {
+    for (final h in hotWaterHeaters(net).entries) {
+      final p = heldBy[h.key];
+      if (p == null) continue;
+      for (final n in h.value) {
+        heldBy.putIfAbsent(n, () => p);
+      }
+    }
+  }
   if (solution != null) {
     final pH = pressureFromHead(solution.requiredPumpHead).pascals;
     unboosted = {
@@ -1407,7 +1461,20 @@ final supplyMoverDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
         movers: movers,
         residual: unboosted,
         target: _targetResidual,
-        sizing: sizing);
+        sizing: sizing,
+        prvHeldBy: heldBy,
+        prvInlets: held == null
+            ? const {}
+            : prvInletOwedPressure(
+                net: net,
+                service: kSupplyService,
+                held: held,
+                sizing: sizing,
+                setpoint: _prvSetpoint,
+                calibrationBySheet: project.calibrations,
+                building: project.building,
+                mounting: project.mounting,
+              ));
     for (final m in movers) {
       final h = heads[m.nodeId];
       if (h == null || h.meters <= 0) continue;

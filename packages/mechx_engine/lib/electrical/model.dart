@@ -822,6 +822,17 @@ class ElectricalProject {
   /// fault rung. Additive (default null ⇒ byte-identical).
   final ApparentPower? supplyCapacityVa;
 
+  /// Round 58 (elec-convergence-10-n-section-transformer-service-
+  /// unrepresentable) — the number of SEPARATE transformer sections on the
+  /// service: one unit per section, the sections never paralleled (each feeds
+  /// its own service-entrance board, e.g. one transformer per building of a
+  /// campus). Null = the legacy reading (one section, or two on a
+  /// [dualTransformer] service) ⇒ byte-identical. A declared connection
+  /// capacity is split across the sections; an explicit [transformerKva] is
+  /// the per-unit rating. Additive, tolerant in `.mechx` (absent / < 1 ⇒
+  /// null).
+  final int? transformerUnits;
+
   const ElectricalProject({
     this.id = '',
     this.name = '',
@@ -843,6 +854,7 @@ class ElectricalProject {
     this.transformerKva,
     this.supplyKind = SupplyKind.pln,
     this.supplyCapacityVa,
+    this.transformerUnits,
   });
 
   /// A copy with [panels] replaced and every other field carried through.
@@ -868,6 +880,7 @@ class ElectricalProject {
         transformerKva: transformerKva,
         supplyKind: supplyKind,
         supplyCapacityVa: supplyCapacityVa,
+        transformerUnits: transformerUnits,
       );
 
   /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse;
@@ -897,6 +910,7 @@ class ElectricalProject {
         if (supplyKind != SupplyKind.pln) 'supplyKind': supplyKind.name,
         if (supplyCapacityVa != null)
           'supplyCapacityVa': supplyCapacityVa!.voltAmperes,
+        if (transformerUnits != null) 'transformerUnits': transformerUnits,
         'panels': [for (final p in panels) p.toJson()],
       };
 
@@ -939,11 +953,20 @@ class ElectricalProject {
         supplyCapacityVa: json['supplyCapacityVa'] == null
             ? null
             : ApparentPower((json['supplyCapacityVa'] as num).toDouble()),
+        transformerUnits: _sectionsOrNull(json['transformerUnits']),
         panels: [
           for (final p in (json['panels'] as List? ?? const []))
             ElectricalPanel.fromJson(p as Map<String, dynamic>),
         ],
       );
+}
+
+/// Round 58 — a tolerant transformer-section count: a finite number >= 1
+/// (rounded down, capped at 32), else null (the legacy reading).
+int? _sectionsOrNull(Object? v) {
+  if (v is! num || !v.isFinite || v < 1) return null;
+  final n = v.floor();
+  return n > 32 ? 32 : n;
 }
 
 /// Serialize an [ElectricalSources] to JSON. `sources.dart` carries no codec

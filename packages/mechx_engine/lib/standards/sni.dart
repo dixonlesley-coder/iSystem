@@ -526,6 +526,17 @@ class SniProfile implements StandardsProfile {
               'DN32. Confirm vs the SNI 8153 vent table.',
         ),
         const StandardValue<Object?>(
+          36.6,
+          unit: 'm',
+          citation: 'UPC Table 703.2 — vent maximum developed length '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Vent stack length: a vent stack is raised until its '
+              'developed length is within DN32 13.7 m, DN40 18.3 m, DN50 '
+              '36.6 m, DN65 54.9 m, DN75 64.6 m, DN100 91.4 m, DN125 '
+              '118.9 m, DN150 155.4 m. Confirm vs the SNI 8153 vent table.',
+        ),
+        const StandardValue<Object?>(
           2.0,
           unit: 'WC',
           citation: 'IPC Table 710.1(2) footnote — water closets on a 3 in drain '
