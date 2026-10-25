@@ -189,6 +189,7 @@ final fireOverPressureProvider = Provider<
     String? pumpId,
     bool standpipe,
   })>[];
+  final net = ref.watch(sizingNetworkProvider);
   for (final b in ref.watch(fireSystemBasesProvider)) {
     // The 175 psi limit is the SPRINKLER component listing (NFPA 13).
     // Round 63 (fire-convergence-15-standpipe-system-pressure-unjudged) — a
@@ -201,7 +202,9 @@ final fireOverPressureProvider = Provider<
         (!b.system.hasSprinkler && !b.system.hasHydrant)) {
       continue;
     }
-    final standpipe = !b.system.hasSprinkler;
+    // Round 64 — a sprinkler-labelled pipe with no head is no sprinkler
+    // system: only a drawn head makes it sprinkler-rated.
+    final standpipe = !b.system.hasSprinklerHead(net);
     final limitKpa = standpipe
         ? kStandpipeMaxSystemPressureKpa
         : kFireComponentMaxPressureKpa;
@@ -622,7 +625,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     final sprinklerOnly = !sys.hasHydrant;
     final ratedOnSprinkler = sprinklerOnly ||
         (!hasBuildingStandpipe &&
-            sys.hasSprinkler &&
+            sys.hasSprinklerHead(net) &&
             sys.yardHydrantIds(net).isNotEmpty);
     final risers = sys.standpipeRisers(net);
     // Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — a
@@ -664,7 +667,9 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       final st =
           standpipeAt(hydrantFriction, liftTo(FireTerminalKind.hydrant));
       standpipe = st;
-      if (sys.hasSprinkler) {
+      // Round 64 — only a drawn HEAD gives a system a sprinkler point (a
+      // suction leg drawn on the sprinkler service is no remote area).
+      if (sys.hasSprinklerHead(net)) {
         final sprinklerFriction = frictionTo(FireTerminalKind.sprinkler);
         final sp = sprinklerPoint(
             sprinklerFriction, liftTo(FireTerminalKind.sprinkler));
@@ -743,7 +748,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           math.max(15.0, yf ?? 0.0)); // the designStandpipe allowance
       final hasHose = sys.topTerminalFloor(net, FireTerminalKind.hydrant) !=
           null;
-      if (!hasHose && !sys.hasSprinkler) {
+      if (!hasHose && !sys.hasSprinklerHead(net)) {
         flow = yardFlow;
         head = yardHead;
         friction = yf;
@@ -1131,7 +1136,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
   int clampF(int f) => f < 0 ? 0 : (f >= nF ? nF - 1 : f);
   const rhoG = 1000 * 9.81;
   final kinds = [
-    if (sys.hasSprinkler) FireTerminalKind.sprinkler,
+    if (sys.hasSprinklerHead(net)) FireTerminalKind.sprinkler,
     if (sys.hasHydrant) FireTerminalKind.hydrant,
   ];
   double targetOf(FireTerminalKind k) {
@@ -1350,7 +1355,7 @@ final sprinklerPumpCheckProvider = Provider<
   // ceiling, never the whole building).
   final pumps = <(PumpDuty, double)>[];
   for (final b in ref.watch(fireSystemBasesProvider)) {
-    if (!b.system.hasSprinkler) continue;
+    if (!b.system.hasSprinklerHead(net)) continue;
     // Round 50 — a gravity system is judged on its tank head
     // ([FireSystemBasis.gravityHeadShort]), never against another system's
     // pump or a phantom duty.

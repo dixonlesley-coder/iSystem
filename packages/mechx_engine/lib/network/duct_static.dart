@@ -65,6 +65,7 @@ DuctStaticSolution solveDuctStatic({
   Pressure terminalLoss = const Pressure(30),
   double fittingFactor = 1.3,
   MountingHeights mounting = const MountingHeights(),
+  Set<String> stopAtNodeIds = const {},
 }) {
   // Adjacency over THIS service only.
   final adjacency = <String, List<({NetEdge edge, String other})>>{};
@@ -164,9 +165,22 @@ DuctStaticSolution solveDuctStatic({
             ],
         };
 
+  // Round 64 (plumbing-hvac-convergence-14-branch-inline-fan-rated-on-
+  // whole-system) — the outward walk never continues PAST a node of
+  // [stopAtNodeIds] (a drawn inline fan on a branch: the path up to it is
+  // this fan's, the branch beyond it the inline fan's own). Empty ⇒
+  // byte-identical.
+  final walkAdjacency = stopAtNodeIds.isEmpty
+      ? outwardAdjacency
+      : {
+          for (final MapEntry(key: k, value: v) in outwardAdjacency.entries)
+            k: (k != fanNodeId && stopAtNodeIds.contains(k))
+                ? const <({NetEdge edge, String other})>[]
+                : v,
+        };
   final staticPa = orientedPathCost(
     sourceId: fanNodeId,
-    adjacency: outwardAdjacency,
+    adjacency: walkAdjacency,
     // Round 15 — the sizer records EXTRACT air (return / exhaust) in its
     // physical direction (grilles → fan); this walk runs OUTWARD from the
     // fan, so flip it back to the fan-outward orientation.

@@ -116,6 +116,9 @@ enum StringKey {
   electricalOriginFaultLevelNote,
   electricalBusbarClearingTime,
   electricalBusbarClearingTimeNote,
+  electricalSoilResistivity,
+  electricalSoilResistivityHint,
+  electricalSoilResistivityNote,
   electricalAutoValueHint,
 
   // Electrical — Sources editor (genset / capacitor / transformer / dual-tx).
@@ -683,6 +686,8 @@ enum StringKey {
   issueCheckValveAgainstPumpMessage,
   issueMoverAgainstBalanceTitle,
   issueMoverAgainstBalanceMessage,
+  issueFirePumpDrawnBackwardsTitle,
+  issueFirePumpDrawnBackwardsMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -1414,6 +1419,12 @@ const Map<StringKey, String> _en = {
       'Protective-device clearing time for the withstand '
           'thermal check (smaller = less oversize). Default 0.1 s.',
   StringKey.electricalAutoValueHint: 'Auto · {value}',
+  StringKey.electricalSoilResistivity: 'Soil resistivity (ohm.m)',
+  StringKey.electricalSoilResistivityHint: 'Not measured',
+  StringKey.electricalSoilResistivityNote:
+      'Site soil resistivity from a Wenner test. Sizes the earth electrode '
+          '(rods in the BOM) and, on TT, judges each RCD against '
+          'Ra x IΔn <= 50 V. Empty = no electrode designed.',
 
   // Electrical — Sources editor.
   StringKey.electricalSources: 'Sources',
@@ -2128,6 +2139,12 @@ const Map<StringKey, String> _en = {
       'pump\'s drawn direction, never backwards through the pump. Check the '
       'pump\'s head and the direction its pipes are drawn in, or draw a check '
       'valve on the leg.',
+  StringKey.issueFirePumpDrawnBackwardsTitle: 'Fire pump drawn backwards',
+  StringKey.issueFirePumpDrawnBackwardsMessage:
+      'This fire pump\'s pipes are drawn toward its supply tank. A fire pump '
+      'never runs toward its storage tank, so its pipework is sized with the '
+      'water leaving the tank through the pump. Redraw its two pipes in the '
+      'flow direction so the drawing\'s arrows match.',
   StringKey.issueFireStageHeadClampedTitle:
       'Series fire-pump stage raised to the minimum head',
   StringKey.issueFireStageHeadClampedMessage:
@@ -3016,6 +3033,12 @@ const Map<StringKey, String> _id = {
       'Waktu pemutusan perangkat proteksi untuk pemeriksaan ketahanan '
           'termal (lebih kecil = lebih sedikit pembesaran). Default 0,1 s.',
   StringKey.electricalAutoValueHint: 'Otomatis · {value}',
+  StringKey.electricalSoilResistivity: 'Resistivitas tanah (ohm.m)',
+  StringKey.electricalSoilResistivityHint: 'Belum diukur',
+  StringKey.electricalSoilResistivityNote:
+      'Resistivitas tanah lokasi dari uji Wenner. Menentukan elektroda '
+          'pembumian (batang di BOM) dan, pada TT, menilai setiap RCD '
+          'terhadap Ra x IΔn <= 50 V. Kosong = elektroda tidak dirancang.',
 
   // Electrical — Sources editor.
   StringKey.electricalSources: 'Sumber',
@@ -3741,6 +3764,13 @@ const Map<StringKey, String> _id = {
       'terbesar, dan kaki searah pompa yang digambar, tidak pernah mundur '
       'melalui pompa. Periksa head pompa dan arah gambar pipanya, atau '
       'gambar katup searah pada kaki tersebut.',
+  StringKey.issueFirePumpDrawnBackwardsTitle:
+      'Pompa kebakaran digambar terbalik',
+  StringKey.issueFirePumpDrawnBackwardsMessage:
+      'Pipa pompa kebakaran ini digambar menuju tangki pasokannya. Pompa '
+      'kebakaran tidak pernah mengalir ke arah tangki penyimpanannya, sehingga '
+      'pipanya diukur dengan air keluar dari tangki melalui pompa. Gambar '
+      'ulang kedua pipanya searah aliran agar panah gambar sesuai.',
   StringKey.issueFireStageHeadClampedTitle:
       'Tahap pompa kebakaran seri dinaikkan ke head minimum',
   StringKey.issueFireStageHeadClampedMessage:

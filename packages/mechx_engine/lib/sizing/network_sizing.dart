@@ -1070,7 +1070,24 @@ String _pickComponentRoot({
           roleOf(id) != NodeRole.fixture &&
           roleOf(id) != NodeRole.plant &&
           !demandKeys.contains(id));
-  if (plants.isNotEmpty && !inlineSinksOnly) {
+  // Round 64 (regression-sprinkler-drawn-suction-leg-oriented-pump-to-
+  // header) — a FIRE fragment whose only rootable plants are pumps / booster
+  // sets that are NOT themselves the fire source (a tank is drawn: the pump
+  // sits >= 1 hop from it over BOTH fire services) is fed THROUGH the other
+  // fire service: a pump room's suction leg drawn on the sprinkler service
+  // off a hydrant suction header. Rooting at the degree-1 pump solved the leg
+  // pump -> header (a reversed arrow, and the neighbour room's flow carried
+  // backwards up it). Such a fragment takes the source-hops rung below (the
+  // service-change join nearest the source), so the leg flows source -> pump.
+  final fedThroughOtherFireService = isFireService(service) &&
+      fireSourceHops.isNotEmpty &&
+      plants.isNotEmpty &&
+      plants.every((id) =>
+          isMoverComponent(nodeOf(id)?.component) &&
+          (fireSourceHops[id] ?? 0) > 0) &&
+      component.any((id) =>
+          fireJoinIds.contains(id) && roleOf(id) != NodeRole.plant);
+  if (plants.isNotEmpty && !inlineSinksOnly && !fedThroughOtherFireService) {
     // Round 33 (hydraulics-3-3) — a mains-fed roof tank (PDAM meter ->
     // [pompa dorong] -> riser -> roof tank -> downfeed): a degree-1 WATER
     // METER is the supply ENTRY, and an INLINE roof tank is storage the
@@ -2657,6 +2674,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             returnChainKeysOut: returnChainKeys,
             jockeyMoverIds: jockeyLegFlows.keys.toSet(),
             legSizeOverrides: sizeOverrides,
+            ignoreDrawnMoverDirection: isFireService(service),
             nodeOrder: isFireService(service)
                 ? (a, b) {
                     final na = net.nodeById(a), nb = net.nodeById(b);
@@ -4051,7 +4069,18 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       final home = homeOf(e);
       for (final x in downstreamOf(e,
           scope: home == null ? null : edgeIdsOf[home], unoriented: true)) {
-        if (x.service == ServiceType.fireSprinkler) return true;
+        if (x.service != ServiceType.fireSprinkler) continue;
+        // Round 64 — a sprinkler PIPE with no head beyond it (a suction leg
+        // or header drawn on the sprinkler service) is no remote area: the
+        // floor needs a drawn sprinkler TERMINAL downstream.
+        for (final end in [x.fromId, x.toId]) {
+          final n = net.nodeById(end);
+          if (n != null &&
+              n.role == NodeRole.fixture &&
+              !isSupplyInletComponent(n.component)) {
+            return true;
+          }
+        }
       }
       return false;
     }
@@ -5553,8 +5582,9 @@ class _CheckValvePlan {
 }
 
 /// Round 37 — the LEG of a jockey mover [moverId]: the degree-2 chain of
-/// same-service fire pipe through it in both directions, up to the split /
-/// header junctions or a plant. Ordered as walked.
+/// fire pipe through it in both directions, up to the split / header
+/// junctions (counted over BOTH fire services, Round 64) or a plant. Ordered
+/// as walked.
 List<NetEdge> _jockeyLegEdges(Network net, String moverId) {
   final legEdges = <NetEdge>[];
   for (final start in net.edgesAt(moverId)) {
@@ -5570,9 +5600,16 @@ List<NetEdge> _jockeyLegEdges(Network net, String moverId) {
       final next = edge.fromId == here ? edge.toId : edge.fromId;
       if (!seen.add(next)) break;
       final nn = net.nodeById(next);
+      // Round 64 (fire-convergence-16-jockey-leg-walk-swallows-duty-pump-
+      // suction-across-services) — EVERY fire pipe at the next node counts
+      // as onward (both fire services, the same union [fireSystems] makes):
+      // a shared suction header whose other pipes are on the other fire
+      // service is a junction, never a bend the walk passes through to a
+      // DUTY pump's suction (sized DN25 on the jockey flow, the NFPA 20
+      // raise skipped).
       final onward = [
         for (final e in net.edgesAt(next))
-          if (e.id != edge.id && e.service == edge.service) e,
+          if (e.id != edge.id && isFireService(e.service)) e,
       ];
       if (nn == null || nn.role == NodeRole.plant || onward.length != 1) {
         break;
@@ -5761,6 +5798,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   Set<String> jockeyMoverIds = const {},
   Map<String, Diameter> legSizeOverrides = const {},
   int Function(String a, String b)? nodeOrder,
+  bool ignoreDrawnMoverDirection = false,
 }) {
   const none = [_CheckValvePlan(<String>{}, <_StandbyLeg>[])];
   // Round 62 (regression-duty-pick-sizer-vs-basis-disagree) — on a FIRE
@@ -6199,7 +6237,10 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     int? rootSide;
     final r0 = sides[0].nodes.last == root, r1 = sides[1].nodes.last == root;
     if (r0 != r1) rootSide = r0 ? 0 : 1;
-    final pump = pumpInlet();
+    // Round 64 — on a FIRE service a pump never runs toward its storage
+    // tank: the drawn pump direction is ignored (the leg follows the
+    // incoherent-pump rule below: away from the source).
+    final pump = ignoreDrawnMoverDirection ? null : pumpInlet();
     final drawn = drawnInlet[id];
     int? inlet;
     var ret = false;
@@ -6325,6 +6366,14 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
                 ? -1
                 : 0;
         if (d == 0) continue; // an incoherently drawn mover: no reading
+        // Round 64 (fire-convergence-16-backwards-drawn-duty-standby-set-
+        // flows-into-suction-header) — on a FIRE service the drawn pump
+        // direction carries no reading either: a pump room drawn from the
+        // riser back toward the tank (every pump coherently backwards) was
+        // read as a set feeding the suction header (the tank main and the
+        // bulk main undersized, the NFPA 20 bores skipped). Every fire mover
+        // leg is oriented away from the source (the Round-60 rule below).
+        if (ignoreDrawnMoverDirection) continue;
         if (dir != null && dir != d) {
           coherent = false; // two coherent movers pointing opposite ways
           break;

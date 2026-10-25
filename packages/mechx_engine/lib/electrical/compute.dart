@@ -3595,7 +3595,15 @@ ElectricalSystemResult computeSystem(
       subLifeOnly[id] = anyLoad ? allLife : null;
       subLevels[id] = levels;
       subBelowMa[id] = belowMa;
-      feederMa[id] = belowMa > 0 ? ttFeederRcdMaAbove(belowMa) : 0;
+      // Round 64 (elec-convergence-16-tt-feeder-rcd-not-graded-over-empty-
+      // sub-board-feeder) — the IΔn the feeder to this board is ACTUALLY
+      // issued: `circuitRcd` falls back to the level ladder
+      // ([ttFeederRcdMa]) when nothing tripping sits below, so an empty
+      // (future) board's feeder still carries a 300 mA S device. Recording 0
+      // let the parent's feeder step from its finals alone — a second
+      // 300 mA S device directly above it, never discriminating.
+      feederMa[id] =
+          belowMa > 0 ? ttFeederRcdMaAbove(belowMa) : ttFeederRcdMa(levels);
     }
     for (final child in parentOf.keys) {
       ttFeederRcd[child] = (

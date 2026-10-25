@@ -65,6 +65,18 @@ class FireSystem {
   bool get hasSprinkler => edges.any((e) =>
       e.service == ServiceType.fireSprinkler && !sourceEdgeIds.contains(e.id));
 
+  /// Round 64 (regression-sprinkler-drawn-pipe-without-heads-rates-hydrant-
+  /// system-on-sprinkler-demand) — true when this system draws at least one
+  /// sprinkler TERMINAL (a head on a sprinkler pipe, [topTerminalFloor] with
+  /// [FireTerminalKind.sprinkler]). [hasSprinkler] only says a sprinkler-
+  /// service PIPE is drawn (the edge partition); a pipe labelled sprinkler
+  /// with no head anywhere never gives the system a sprinkler remote-area
+  /// basis — the rating, the sizer's design flow, the over-pressure judge and
+  /// the per-system terminal kinds all read THIS predicate.
+  bool hasSprinklerHead(Network net) =>
+      hasSprinkler &&
+      topTerminalFloor(net, FireTerminalKind.sprinkler) != null;
+
   /// The standpipe stacks of THIS system that run in parallel (at least 1).
   int standpipeRisers(Network net) {
     final n = parallelStandpipeCount(net, edges);
@@ -456,7 +468,7 @@ FlowRate? fireSystemDesignFlow(
       q = standpipeCap;
     }
   }
-  if (sys.hasSprinkler &&
+  if (sys.hasSprinklerHead(net) &&
       sprinklerDemand != null &&
       sprinklerDemand.cubicMetersPerSecond > 0 &&
       (q == null ||
@@ -946,4 +958,40 @@ List<FirePumpStage>? fireSeriesPumpStages(
         up < 0 ? null : up));
   }
   return out;
+}
+
+/// Round 64 (fire-convergence-16-backwards-drawn-duty-standby-set-flows-into-
+/// suction-header) — the fire pumps / booster sets drawn COHERENTLY backwards:
+/// exactly two fire pipes, one drawn into and one out of the pump, while the
+/// SOLVED flow ([sizing] `flowFromId`) passes through it the other way. The
+/// sizer orients every fire mover leg away from the fire source whatever its
+/// drawn direction (a fire pump never runs toward its storage tank), so these
+/// are drawing errors to name — judge-only, never a resize. Sorted ids.
+List<String> firePumpsDrawnBackwards(
+    Network net, Map<String, EdgeSizing> sizing) {
+  final out = <String>[];
+  for (final n in net.nodes) {
+    if (n.component != NodeComponent.pump &&
+        n.component != NodeComponent.boosterSet) {
+      continue;
+    }
+    final es = [
+      for (final e in net.edgesAt(n.id))
+        if (isFireService(e.service)) e,
+    ];
+    if (es.length != 2) continue;
+    final drawnIn = es.where((e) => e.toId == n.id).toList();
+    final drawnOut = es.where((e) => e.fromId == n.id).toList();
+    if (drawnIn.length != 1 || drawnOut.length != 1) continue;
+    final sIn = sizing[drawnIn.single.id], sOut = sizing[drawnOut.single.id];
+    if (sIn == null || sOut == null) continue;
+    // Solved: the drawn inlet carries flow AWAY from the pump and the drawn
+    // outlet carries it INTO the pump.
+    if (sIn.flowFromId == n.id &&
+        sOut.flowFromId != null &&
+        sOut.flowFromId != n.id) {
+      out.add(n.id);
+    }
+  }
+  return out..sort();
 }
