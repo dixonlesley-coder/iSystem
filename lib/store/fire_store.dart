@@ -753,19 +753,52 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       // both at the 104 m system head). The floor grouping below stays only
       // as the fallback when the chain cannot be read.
       final topo = fireSeriesPumpStages(net, sys, sets);
+      // Round 60 (fire-convergence-12-series-lower-stage-rated-with-whole-
+      // system-friction) — a LOWER stage's zone is priced on ITS OWN index
+      // path: the sized friction from the root stage's duty pump to the
+      // zone's own terminals of the basis kind (the larger of that and the
+      // 15 m allowance, inside the standpipe / sprinkler point), never the
+      // whole system's friction to the TOP terminal (a 35-storey series
+      // tower rated its lower stage 9.7 m high and the upper stage 9.7 m
+      // short). Unmeasured (null) ⇒ the allowance, as for the system.
+      double? zoneFrictionOf(bool Function(String id) inZone, String? from) {
+        if (friction == null || from == null) return friction;
+        final byTerminal = <String, double>{};
+        final f = fireIndexPathFrictionM(
+          net: net,
+          system: sys,
+          pumpId: from,
+          sizing: sizing,
+          lengthOf: lengthOf,
+          terminals: basisKind,
+          frictionByTerminalOut: byTerminal,
+        );
+        if (f == null) return friction;
+        double? worst;
+        for (final MapEntry(key: id, value: v) in byTerminal.entries) {
+          if (!inZone(id)) continue;
+          if (worst == null || v > worst) worst = v;
+        }
+        return worst ?? friction;
+      }
+
       if (topo != null && topo.length >= 2) {
         int floorOfStage(FirePumpStage st) => st.pumpIds
             .map((id) => net.nodeById(id)?.floorIndex ?? 0)
             .reduce((a, b) => a < b ? a : b);
+        final rootStage = topo.firstWhere((st) => st.upstream == null,
+            orElse: () => topo.first);
+        final rootPump = dutyOf(sys, rootStage.pumpIds);
         // The head the terminals of [zone] need from the system datum, or
         // null when the zone holds no terminal of the basis kind.
         double? zoneNeed(FireSystem zone) {
           if (zone.topTerminalFloor(net, basisKind) == null) return null;
           final lift = zone.staticLiftM(net, building, basisKind,
               datumFloorOverride: datum);
+          final zf = zoneFrictionOf(zone.nodeIds.contains, rootPump);
           return basisKind == FireTerminalKind.sprinkler
-              ? sprinklerPoint(friction, lift).head.meters
-              : standpipeAt(friction, lift).pumpHead.meters;
+              ? sprinklerPoint(zf, lift).head.meters
+              : standpipeAt(zf, lift).pumpHead.meters;
         }
 
         final tips = [
@@ -842,9 +875,14 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
               need = liftToFloor(nextFloor);
             } else {
               final lift = liftTo(basisKind, belowFloor: nextFloor);
+              // Round 60 — the zone's own friction (terminals below the
+              // next stage's floor), from the first stage's duty pump.
+              final zf = zoneFrictionOf(
+                  (id) => (net.nodeById(id)?.floorIndex ?? 0) < nextFloor,
+                  dutyOf(sys, [for (final g in stages.first) ...g]));
               need = basisKind == FireTerminalKind.sprinkler
-                  ? sprinklerPoint(friction, lift).head.meters
-                  : standpipeAt(friction, lift).pumpHead.meters;
+                  ? sprinklerPoint(zf, lift).head.meters
+                  : standpipeAt(zf, lift).pumpHead.meters;
             }
           }
           final raw = need - below;
