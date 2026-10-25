@@ -614,6 +614,10 @@ const List<String> _baseVerifyItems = [
       'nameplate (secondarySource).',
   'Contactor / overload / VFD ladders: IEC 60947-4-1 typical frames — verify '
       'against the chosen manufacturer catalogue (secondarySource).',
+  'Breaker trip curve: a VFD / soft-starter / star-delta motor way takes a '
+      'C-curve MCB (drive input ~1-1.5 x In, soft start ~3-4 x In, Y-D '
+      'transition ~2-3 x In), a DOL motor the D curve — manufacturer practice, '
+      'verify against the starter data sheet (notAnSniClause).',
 ];
 
 /// Round 42 (elec-props-8-star-delta-on-single-phase-way) — the starter the

@@ -31,7 +31,7 @@ import 'advanced_study.dart' show studySupplyDesign;
 import 'busbar.dart';
 import 'cable_family.dart';
 import 'containment.dart' show effectiveInstallMethod;
-import 'control/starter.dart' show StarterType;
+import 'control/starter.dart' show StarterType, effectiveStarterType;
 import 'diversity_library.dart' show DiversityLibrary;
 import 'earthing.dart';
 // `fault.dart` is a pure post-processing pass that imports neither this file nor
@@ -1872,11 +1872,18 @@ _CircuitComputation _computeCircuit(
 
   // THE LOAD-SIZED DEVICE. Deliberately floor-free: the conductor below is sized
   // against THIS pick, so a coordination floor can never inflate copper (E3).
+  // Round 57 — the trip curve follows the EFFECTIVE starter (a VFD / soft
+  // starter / star-delta motor way takes C, never the DOL D curve that
+  // halves its ADS loop limit — `breakerCurveFor`).
+  final wayStarter = c.starterType == null
+      ? null
+      : effectiveStarterType(c.starterType!, threePhase);
   final loadBreaker = selectBreaker(
     profile,
     designCurrent: sizingCurrent,
     loadKind: c.loadKind,
     overrideA: c.breakerOverrideA,
+    starterType: wayStarter,
   );
 
   // Round 38 (elec-ui-drawings-4) — a feeder-kind way with no target feeds
@@ -2113,6 +2120,7 @@ _CircuitComputation _computeCircuit(
       loadKind: c.loadKind,
       minRatingA: floorA,
       maxRatingA: capIz,
+      starterType: wayStarter,
     );
     // The cap may only hold the floor back, never pull the device below the
     // rating the load itself demanded (the ampacity-impossible fallback is the

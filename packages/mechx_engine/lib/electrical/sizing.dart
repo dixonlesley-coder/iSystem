@@ -10,6 +10,7 @@ import 'dart:math' as math;
 
 import '../standards/puil.dart';
 import '../units.dart';
+import 'control/starter.dart' show StarterType;
 import 'load_kind.dart';
 import 'results.dart';
 
@@ -93,7 +94,8 @@ double soilThermalFactor(
   CableInstallMethod method,
   double? soilThermalResistivityKmW,
 ) {
-  if (method != CableInstallMethod.buried || soilThermalResistivityKmW == null) {
+  if (method != CableInstallMethod.buried ||
+      soilThermalResistivityKmW == null) {
     return 1;
   }
   return interpolateTable(
@@ -116,9 +118,9 @@ double deratingFactor(
 }) {
   final double tempFactor;
   if (method == CableInstallMethod.buried) {
-    tempFactor =
-        interpolateTable(profile.groundTempFactors(insulation), groundTempC ?? 20) *
-            interpolateTable(profile.depthOfLayingFactors, depthM ?? 0.5);
+    tempFactor = interpolateTable(
+            profile.groundTempFactors(insulation), groundTempC ?? 20) *
+        interpolateTable(profile.depthOfLayingFactors, depthM ?? 0.5);
   } else {
     tempFactor = ambientFactor(profile, ambientC, insulation: insulation);
   }
@@ -149,8 +151,10 @@ VoltageDropResult voltageDrop(
   final sinPhi = math.sqrt(math.max(0, 1 - cosPhi * cosPhi));
   final factor = threePhase ? math.sqrt(3) : 2.0;
 
-  final dropV =
-      factor * current.amperes * length.meters * (rPerM * cosPhi + xPerM * sinPhi);
+  final dropV = factor *
+      current.amperes *
+      length.meters *
+      (rPerM * cosPhi + xPerM * sinPhi);
   final dropPercent = voltage.volts > 0 ? (dropV / voltage.volts) * 100 : 0.0;
   final limitPercent = isLighting ? 3.0 : 5.0;
 
@@ -163,6 +167,34 @@ VoltageDropResult voltageDrop(
 }
 
 // ── breaker selection ─────────────────────────────────────────────────────
+
+/// Round 57 (elec-convergence-9-vfd-softstart-motor-d-curve-forces-ads-
+/// copper) — the trip curve of a way's breaker. A motor-like way (motor /
+/// pump / HVAC) whose STARTER limits the inrush takes the C curve: a VFD
+/// draws ~1-1.5 x In at its input, a soft starter ~3-4 x In and a star-delta
+/// transition ~2-3 x In — all below the C curve's 5-10 x In magnetic band.
+/// A direct-on-line / reversing / pump-control / unknown starter keeps the
+/// kind's default (D for motor / pump). Pass the EFFECTIVE starter (a
+/// star-delta on a 1ph way is DOL — `effectiveStarterType`). Every other
+/// load kind keeps its default whatever starter it carries.
+// VERIFY — notAnSniClause: the inrush multiples are manufacturer practice
+// (drive / soft-starter / Y-D data sheets), not a PUIL clause.
+BreakerCurve breakerCurveFor(LoadKind kind, StarterType? starter) {
+  final d = loadDefaults[kind]!;
+  if (!d.motorLike) return d.curve;
+  switch (starter) {
+    case StarterType.vfd:
+    case StarterType.softStarter:
+    case StarterType.starDelta:
+      return BreakerCurve.c;
+    case StarterType.dol:
+    case StarterType.reversing:
+    case StarterType.pump:
+    case StarterType.ats:
+    case null:
+      return d.curve;
+  }
+}
 
 /// Smallest standard breaker rating that carries the design current (Ib ≤ In).
 /// A positive [overrideA] is used verbatim (marked overridden); [maxRatingA]
@@ -194,8 +226,9 @@ BreakerResult selectBreaker(
   Current? maxRatingA,
   Current? overrideA,
   double? minRatingA,
+  StarterType? starterType,
 }) {
-  final curve = loadDefaults[loadKind]!.curve;
+  final curve = breakerCurveFor(loadKind, starterType);
 
   if (overrideA != null && overrideA.amperes > 0) {
     return BreakerResult(
@@ -302,14 +335,17 @@ CableResult sizeCable(
   int groupingCount = 1,
   double izRequiredMinA = 0,
 }) {
-  double kha(double section) =>
-      profile.ampacity(section, insulation: insulation, material: material, method: method).amperes;
+  double kha(double section) => profile
+      .ampacity(section,
+          insulation: insulation, material: material, method: method)
+      .amperes;
 
   final minByMaterial = material == ConductorMaterial.aluminum
       ? math.max(minSectionMm2, profile.aluminiumMinSectionMm2)
       : minSectionMm2;
   final factor = profile.continuousLoadFactor.value;
-  final izRequired = math.max(breakerRating.amperes, factor * designCurrent.amperes);
+  final izRequired =
+      math.max(breakerRating.amperes, factor * designCurrent.amperes);
   // Round 38 — an extra TOTAL Iz floor (over all parallel runs) a caller may
   // impose for a condition the phase current does not express (a feeder's
   // harmonic NEUTRAL current, four loaded conductors). It only steers which
