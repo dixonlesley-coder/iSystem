@@ -638,6 +638,19 @@ class SniProfile implements StandardsProfile {
               'or zone the system. Judge-only. Confirm vs SNI 03-3989 / '
               '03-1745.',
         ),
+        // Round 63 — `kStandpipeMaxSystemPressureKpa` (fire_pump_rating.dart).
+        const StandardValue<Object?>(
+          2413.0,
+          unit: 'kPa',
+          citation: 'NFPA 14 7.2.1.1 — maximum pressure at any point of a '
+              'standpipe system 350 psi (SNI 03-1745 follows NFPA 14; not '
+              'confirmed verbatim)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A hydrant standpipe whose pump churn (shut-off, 140 % of the '
+              'rated head) exceeds 2413 kPa (350 psi) at any point must be '
+              'split into vertical pressure zones. Judge-only. Confirm vs '
+              'SNI 03-1745.',
+        ),
         const StandardValue<Object?>(
           25.0,
           unit: 'mm',

@@ -23,7 +23,7 @@ import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
-    show kFireComponentMaxPressureKpa;
+    show kFireComponentMaxPressureKpa, kStandpipeMaxSystemPressureKpa;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show CheckValveAmbiguity;
 import 'package:mechx_engine/standards/puil.dart';
@@ -1376,14 +1376,30 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
             ? null
             : net.nodeById(b.pumpIds.first);
     final share = o.check.frictionShare;
+    // Round 63 — a hydrant-only standpipe over the NFPA 14 350 psi system
+    // maximum is its own kind (split into pressure zones), keyed on the
+    // pump whose discharge sees the maximum.
+    final sp = o.standpipe;
+    final spPump = o.pumpId ?? (b.pumpIds.isEmpty ? null : b.pumpIds.first);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      kind: 'fire-system-over-pressure'
-          '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
-      title: str(StringKey.issueFireOverPressureTitle),
-      message: str.format(StringKey.issueFireOverPressureMessage, {
+      kind: sp
+          ? 'standpipe-system-over-pressure${spPump == null ? '' : ':$spPump'}'
+          : 'fire-system-over-pressure'
+              '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      title: str(sp
+          ? StringKey.issueStandpipeOverPressureTitle
+          : StringKey.issueFireOverPressureTitle),
+      message: str.format(
+          sp
+              ? StringKey.issueStandpipeOverPressureMessage
+              : StringKey.issueFireOverPressureMessage,
+          {
         'churn': o.check.churnKpa.toStringAsFixed(0),
-        'limit': kFireComponentMaxPressureKpa.toStringAsFixed(0),
+        'limit': (sp
+                ? kStandpipeMaxSystemPressureKpa
+                : kFireComponentMaxPressureKpa)
+            .toStringAsFixed(0),
         'head': b.head.meters.toStringAsFixed(1),
         'share': share == null
             ? ''

@@ -1950,27 +1950,105 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
         if (n.airflow != null || isTerminalAirUnit(n.component)) continue;
         final root = roots[n.id];
         if (root == null || root == n.id) continue;
-        final duty = out[root];
-        if (duty == null) continue;
-        if (net.nodeById(root)?.component != n.component) continue;
         final onLeg = net.edges.any((e) =>
             e.service == service &&
             legs.contains(e.id) &&
             (e.fromId == n.id || e.toId == n.id));
-        if (onLeg) out[n.id] = duty;
+        if (!onLeg) continue;
+        // Round 63 (plumbing-hvac-convergence-13-return-fan-on-peer-ahu-leg-
+        // gets-component-default) — a MOVER on a mirrored peer leg of a
+        // system whose path carries its own inline fan (AHU B's return fan
+        // beside AHU A's, on one shared return) is that inline fan's
+        // mirrored twin: the same duty, never the component default.
+        if (isAirMoverComponent(n.component) &&
+            net.nodeById(root)?.component != n.component) {
+          final sys = service == ServiceType.returnAir ? rets : supplies;
+          final compOf =
+              service == ServiceType.returnAir ? returnCompOf : supplyCompOf;
+          AirSystem? owner;
+          for (final r in sys) {
+            if (r.inlineFanIds.isNotEmpty &&
+                sameComponent(compOf, r.fanNodeId, n.id)) {
+              owner = r;
+              break;
+            }
+          }
+          if (owner != null) {
+            final twin = out[owner.inlineFanIds.first];
+            if (twin != null) {
+              out[n.id] = twin;
+              continue;
+            }
+          }
+        }
+        final duty = out[root];
+        if (duty == null) continue;
+        if (net.nodeById(root)?.component != n.component) continue;
+        out[n.id] = duty;
       }
     }
   }
   return out;
 });
 
+/// Round 63 — a drawn air MOVER (supply / exhaust fan plant).
+bool isAirMoverComponent(NodeComponent? c) =>
+    c == NodeComponent.supplyFan || c == NodeComponent.exhaustFan;
+
 /// Round 11 — one EXHAUST fan duty per drawn exhaust system, keyed by its root.
+///
+/// Round 63 (plumbing-hvac-convergence-13-exhaust-inline-fan-no-duty) — every
+/// drawn INLINE fan of an exhaust system ([AirSystem.inlineFanIds]) carries
+/// the system's airflow against its exhaust index static (the Round-62
+/// supply-booster / return-fan convention, `// VERIFY` the series split
+/// between the inline fan and the root fan is not modelled; both are rated
+/// conservatively on the full index static), and a mover on a mirrored PEER
+/// leg (duty / standby) carries the duty of the machine it mirrors — the
+/// root fan, or the system's inline fan — never the component default.
 final exhaustFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
-  return {
-    for (final ex in ref.watch(airSystemsProvider(ServiceType.exhaust)))
-      ex.fanNodeId:
-          sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat),
+  final net = ref.watch(sizingNetworkProvider);
+  final systems = ref.watch(airSystemsProvider(ServiceType.exhaust));
+  final out = <String, FanDuty>{
+    for (final ex in systems)
+      ex.fanNodeId: sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat),
   };
+  for (final ex in systems) {
+    for (final id in ex.inlineFanIds) {
+      out.putIfAbsent(
+          id, () => sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat));
+    }
+  }
+  final legs = ref.watch(parallelLegEdgeIdsProvider);
+  if (legs.isNotEmpty && systems.isNotEmpty) {
+    final compOf = serviceComponentRoots(net, ServiceType.exhaust,
+        demandNodeIds: {
+          for (final n in net.nodes)
+            if (n.airflow != null) n.id,
+        });
+    for (final n in net.nodes) {
+      if (out.containsKey(n.id) || n.role != NodeRole.plant) continue;
+      if (n.airflow != null || !isAirMoverComponent(n.component)) continue;
+      final onLeg = net.edges.any((e) =>
+          e.service == ServiceType.exhaust &&
+          legs.contains(e.id) &&
+          (e.fromId == n.id || e.toId == n.id));
+      if (!onLeg) continue;
+      final comp = compOf[n.id];
+      if (comp == null) continue;
+      for (final ex in systems) {
+        if (compOf[ex.fanNodeId] != comp) continue;
+        final rootNode = net.nodeById(ex.fanNodeId);
+        final twinId = ex.inlineFanIds.isNotEmpty &&
+                rootNode?.component != n.component
+            ? ex.inlineFanIds.first
+            : ex.fanNodeId;
+        final duty = out[twinId];
+        if (duty != null) out[n.id] = duty;
+        break;
+      }
+    }
+  }
+  return out;
 });
 
 /// Fan duty for the PRIMARY air system: its delivered airflow against the SUM

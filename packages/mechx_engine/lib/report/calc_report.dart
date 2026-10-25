@@ -112,10 +112,16 @@ class FireOverPressureReportLine {
   /// Friction share of the system's rated head; null when unmeasured.
   final double? frictionShare;
 
+  /// Round 63 — true for a hydrant-only STANDPIPE judged against the NFPA 14
+  /// system limit ([kStandpipeMaxSystemPressureKpa], 350 psi): its line says
+  /// 'split into pressure zones' instead of the sprinkler component rating.
+  final bool standpipe;
+
   const FireOverPressureReportLine({
     required this.tag,
     required this.churnKpa,
     this.frictionShare,
+    this.standpipe = false,
   });
 }
 
@@ -871,9 +877,16 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                 ? strings.format(
                     RptStringKey.fireOverPressureSystemKey, {'tag': o.tag})
                 : strings(RptStringKey.fireOverPressureKey),
-            strings.format(RptStringKey.fireOverPressureValue, {
+            strings.format(
+                o.standpipe
+                    ? RptStringKey.fireStandpipeOverPressureValue
+                    : RptStringKey.fireOverPressureValue,
+                {
               'churn': o.churnKpa.toStringAsFixed(0),
-              'limit': kFireComponentMaxPressureKpa.toStringAsFixed(0),
+              'limit': (o.standpipe
+                      ? kStandpipeMaxSystemPressureKpa
+                      : kFireComponentMaxPressureKpa)
+                  .toStringAsFixed(0),
               'share': o.frictionShare == null
                   ? ''
                   : strings.format(RptStringKey.fireOverPressureShare, {

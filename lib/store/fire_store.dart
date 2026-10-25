@@ -180,22 +180,31 @@ final fireOverPressureProvider = Provider<
           ({double churnKpa, double ratedKpa, bool over, double? frictionShare})
               check,
           String? pumpId,
+          bool standpipe,
         })>>((ref) {
   final out = <({
     FireSystemBasis basis,
     ({double churnKpa, double ratedKpa, bool over, double? frictionShare})
         check,
     String? pumpId,
+    bool standpipe,
   })>[];
   for (final b in ref.watch(fireSystemBasesProvider)) {
-    // The 175 psi limit is the SPRINKLER component listing (NFPA 13); a
-    // hydrant-only standpipe is built from high-pressure hose valves with
-    // pressure-regulating outlets (NFPA 14), so it is not judged here.
+    // The 175 psi limit is the SPRINKLER component listing (NFPA 13).
+    // Round 63 (fire-convergence-15-standpipe-system-pressure-unjudged) — a
+    // hydrant-only standpipe is judged against the NFPA 14 7.2.1.1 SYSTEM
+    // maximum (350 psi, [kStandpipeMaxSystemPressureKpa]) that forces
+    // vertical zoning; a combined system against the tighter sprinkler
+    // component rating (which covers the standpipe limit too).
     if (b.standsDown ||
         b.flow.cubicMetersPerSecond <= 0 ||
-        !b.system.hasSprinkler) {
+        (!b.system.hasSprinkler && !b.system.hasHydrant)) {
       continue;
     }
+    final standpipe = !b.system.hasSprinkler;
+    final limitKpa = standpipe
+        ? kStandpipeMaxSystemPressureKpa
+        : kFireComponentMaxPressureKpa;
     if (b.stages.length >= 2) {
       final c = fireStagedOverPressureCheck(
         stages: [
@@ -204,6 +213,7 @@ final fireOverPressureProvider = Provider<
         ],
         systemRatedHeadM: b.head.meters,
         indexFrictionM: b.indexFrictionM,
+        maxComponentKpa: limitKpa,
       );
       if (!c.over) continue;
       out.add((
@@ -215,12 +225,18 @@ final fireOverPressureProvider = Provider<
           frictionShare: c.frictionShare,
         ),
         pumpId: b.stages[c.stage].dutyPumpId,
+        standpipe: standpipe,
       ));
       continue;
     }
     final c = fireOverPressureCheck(
-        rating: b.rating, indexFrictionM: b.indexFrictionM);
-    if (c.over) out.add((basis: b, check: c, pumpId: b.dutyPumpId));
+        rating: b.rating,
+        indexFrictionM: b.indexFrictionM,
+        maxComponentKpa: limitKpa);
+    if (c.over) {
+      out.add(
+          (basis: b, check: c, pumpId: b.dutyPumpId, standpipe: standpipe));
+    }
   }
   return out;
 });
