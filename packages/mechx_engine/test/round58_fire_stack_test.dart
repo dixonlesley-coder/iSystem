@@ -377,4 +377,145 @@ void main() {
       }
     }
   });
+
+  _round60();
+}
+
+// ── Round 60 ────────────────────────────────────────────────────────────────
+//
+//   regression-tree-fed-pillar-drops-now-count-as-stacks — a one-storey
+//     riser whose own outlets sit on one floor is a drop when a TALL stack of
+//     its fire system serves that storey, ring-fed or off a dead-end (tree)
+//     yard main alike: deleting one ring pipe never flips the pump rating.
+//   regression-ring-fed-one-storey-twins-count-one — two one-storey stacks off
+//     an L0 ring with no taller stack are two standpipes (750 gpm).
+//   fire-convergence-12-wall-hydrant-on-ring-makes-one-storey-drops-standpipe-
+//     stacks — a wall hydrant on ANOTHER ring node is never a drop's own L0
+//     outlet (the base walk never steps onto another ring node).
+
+Network _without(Network net, String edgeId) => Network(
+    nodes: net.nodes, edges: [...net.edges.where((e) => e.id != edgeId)]);
+
+/// GT -> FP -> J; ring J - A0 - X - B0 - J on L0; one-storey risers A0->A1 /
+/// B0->B1, one box each on L1.
+Network _ringTwins() {
+  final nodes = <NetNode>[
+    _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+    _n('FP', 10, role: NodeRole.plant, c: NodeComponent.pump),
+    _n('J', 15),
+    _n('A0', 20),
+    _n('X', 40),
+    _n('B0', 60),
+    _n('A1', 20, floor: 1),
+    _n('B1', 60, floor: 1),
+    _box('AB1', 25, 1),
+    _box('BB1', 65, 1),
+  ];
+  final edges = <NetEdge>[
+    _e('g', 'GT', 'FP'),
+    _e('d', 'FP', 'J'),
+    _e('ja', 'J', 'A0'),
+    _e('ax', 'A0', 'X'),
+    _e('xb', 'X', 'B0'),
+    _e('bj', 'B0', 'J'),
+    _e('ar', 'A0', 'A1', k: EdgeKind.riser),
+    _e('br', 'B0', 'B1', k: EdgeKind.riser),
+    _e('ab1', 'A1', 'AB1'),
+    _e('bb1', 'B1', 'BB1'),
+  ];
+  return Network(nodes: nodes, edges: edges);
+}
+
+/// P -> ring A - B - C0 - D on L0; one-storey drops B->B1 / D->D1 to one L1
+/// box each; [wall] adds a wall hydrant teed off ring node A; [tallAtC] makes
+/// C0 the base of a 3-storey indoor stack C0..C2 with a box per floor.
+Network _ring4({required bool wall, required bool tallAtC}) {
+  final nodes = <NetNode>[
+    _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+    _n('P', 10, role: NodeRole.plant, c: NodeComponent.pump),
+    _n('A', 20),
+    _n('B', 60),
+    _n('D', 20),
+    _n('B1', 60, floor: 1),
+    _n('D1', 20, floor: 1),
+    _box('BB1', 65, 1),
+    _box('DB1', 25, 1),
+    if (!tallAtC) _n('C0', 60),
+    if (wall) _box('WA', 15, 0),
+  ];
+  final edges = <NetEdge>[
+    _e('g', 'GT', 'P'),
+    _e('pa', 'P', 'A'),
+    _e('ab', 'A', 'B'),
+    _e('bc', 'B', 'C0'),
+    _e('cd', 'C0', 'D'),
+    _e('da', 'D', 'A'),
+    _e('bd', 'B', 'B1', k: EdgeKind.riser),
+    _e('dd', 'D', 'D1', k: EdgeKind.riser),
+    _e('bb1', 'B1', 'BB1'),
+    _e('db1', 'D1', 'DB1'),
+    if (wall) _e('wa', 'A', 'WA'),
+  ];
+  if (tallAtC) _stack(nodes, edges, 'C', 60, top: 2);
+  return Network(nodes: nodes, edges: edges);
+}
+
+void _round60() {
+  const oneStack = 500 * 3.785411784 / 60; // 31.545 L/s
+  const twoStacks = 750 * 3.785411784 / 60; // 47.318 L/s
+
+  test(
+      'Round 60: pillar drops off a DEAD-END yard main stay drops — '
+      'pillarsOffBase 1 / hospital 2 / pump riser 2 with or without the ring '
+      'pipe', () {
+    final pillars = _without(_pillarsOffBase(), 'pr3');
+    expect(drawnStandpipeRiserCount(pillars), 1);
+    // standpipeFlow(1) = 500 gpm = 31.545 L/s, never the 1250 gpm cap.
+    expect(_dischargeLps(pillars, 4), closeTo(oneStack, 1e-3));
+    final hospital = _without(_hospitalRing(), 'q41');
+    expect(drawnStandpipeRiserCount(hospital), 2);
+    expect(_dischargeLps(hospital, 7), closeTo(twoStacks, 1e-3));
+    expect(drawnStandpipeRiserCount(_without(_pumpRiserToRing(), 'q41')), 2);
+  });
+
+  test(
+      'Round 60: one-storey twin stacks off an L0 RING count 2 '
+      '(750 gpm = 47.318 L/s), like the tree-fed twins', () {
+    final net = _ringTwins();
+    expect(drawnStandpipeRiserCount(net), 2);
+    expect(_dischargeLps(net, 2), closeTo(twoStacks, 1e-3));
+  });
+
+  test(
+      'Round 60: a wall hydrant on another ring node never turns a drop into '
+      'a stack', () {
+    // With a 3-storey indoor stack at C0 serving storey (0, 1), the drops at
+    // B / D are its distribution: 1 stack, wall hydrant or not.
+    expect(drawnStandpipeRiserCount(_ring4(wall: false, tallAtC: true)), 1);
+    expect(drawnStandpipeRiserCount(_ring4(wall: true, tallAtC: true)), 1);
+    // No taller stack: the two one-storey risers are standpipes of their
+    // own (the ring-twin rule) — and the wall hydrant changes nothing.
+    expect(drawnStandpipeRiserCount(_ring4(wall: false, tallAtC: false)), 2);
+    expect(drawnStandpipeRiserCount(_ring4(wall: true, tallAtC: false)), 2);
+  });
+
+  test(
+      'Round 60 seeded property: every drawing direction / order keeps each '
+      'tree / ring / wall-hydrant count', () {
+    final rnd = math.Random(6001);
+    final cases = <(String, Network, int)>[
+      ('pillars tree', _without(_pillarsOffBase(), 'pr3'), 1),
+      ('hospital tree', _without(_hospitalRing(), 'q41'), 2),
+      ('pump riser tree', _without(_pumpRiserToRing(), 'q41'), 2),
+      ('ring twins', _ringTwins(), 2),
+      ('ring4 wall tall', _ring4(wall: true, tallAtC: true), 1),
+      ('ring4 wall', _ring4(wall: true, tallAtC: false), 2),
+    ];
+    for (final (name, net, want) in cases) {
+      for (var t = 0; t < 60; t++) {
+        expect(drawnStandpipeRiserCount(_flipShuffle(net, rnd)), want,
+            reason: '$name trial $t');
+      }
+    }
+  });
 }
