@@ -6074,13 +6074,40 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
             : (ea.fromId == n && eb.toId == n)
                 ? -1
                 : 0;
-        if (d == 0 || (dir != null && dir != d)) {
-          coherent = false;
+        if (d == 0) continue; // an incoherently drawn mover: no reading
+        if (dir != null && dir != d) {
+          coherent = false; // two coherent movers pointing opposite ways
           break;
         }
         dir = d;
       }
-      if (!coherent || dir == null) continue;
+      if (!coherent) continue;
+      // Round 60 (fire-convergence-12-duty-standby-fire-pump-legs-split-
+      // when-pump-drawn-outward) — a leg whose movers are ALL drawn
+      // incoherently (both pipes out of, or both into, the pump: a pump
+      // room drawn from each pump outward) is oriented AWAY FROM THE SOURCE,
+      // exactly as the r7 rule orients an incoherent VALVED pump leg: the
+      // root end of a root chain, else the end the source reaches nearer in
+      // BEND-FREE hops with the leg's interior removed (the only end it
+      // reaches, when one). Never left a plain pipe for Hardy–Cross to split
+      // a duty / standby set as parallel pipes (each leg sized on half the
+      // flow one running pump pushes). A genuine tie stays a plain pipe.
+      if (dir == null) {
+        if (end0 == root) {
+          dir = 1;
+        } else if (end1 == root) {
+          dir = -1;
+        } else {
+          final h = distFrom(root, interior.toSet(), bendFree: true);
+          final h0 = h[end0], h1 = h[end1];
+          if (h0 != null && (h1 == null || h0 < h1 - 1e-9)) {
+            dir = 1;
+          } else if (h1 != null && (h0 == null || h1 < h0 - 1e-9)) {
+            dir = -1;
+          }
+        }
+      }
+      if (dir == null) continue;
       final legEdges = <String>[];
       final legFrom = <String>[];
       if (dir == 1) {

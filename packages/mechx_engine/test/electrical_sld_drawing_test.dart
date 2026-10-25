@@ -579,7 +579,9 @@ void main() {
       // Round 16 — the supply study's OWN pick: two units, each the smallest
       // IEC-ladder rating >= (demand / 2) / 0.8 (never the genset ladder at
       // 100 % of the whole demand).
-      final perUnit = r.supply.demandVa.inKilovoltAmperes / 2 / 0.8;
+      // Round 60 — with a SINGLE service-entrance board one section carries
+      // the whole demand: per unit >= demand / 0.8.
+      final perUnit = r.supply.demandVa.inKilovoltAmperes / 0.8;
       final kva = transformerKvaLadder.firstWhere((k) => k >= perUnit);
       final kvaText = '2 x ${kva == kva.roundToDouble() ? '${kva.toInt()}' : kva.toStringAsFixed(1)}';
       final joined = buildElectricalSourceSpine(project: dual, result: r)

@@ -67,7 +67,8 @@ import 'results.dart'
         VoltageDropResult,
         kStarDeltaInternalWiringM;
 import 'sizing.dart';
-import 'supply_design.dart' show plnDayaVa1ph, serviceSections;
+import 'supply_design.dart'
+    show declaredServiceTransformer, plnDayaVa1ph, serviceSections;
 import 'ups.dart';
 
 export 'ups.dart' show kUpsEfficiency, kUpsRechargeAllowance, kUpsInputFactor;
@@ -188,6 +189,11 @@ double? serviceEntranceCapacityVa(ElectricalProject project) {
   final cap = project.supplyCapacityVa?.voltAmperes;
   if (cap == null || cap <= 0) return null;
   // Round 58 — one section of an N-section service ([serviceSections]).
+  // Round 60 (regression-transformer-units-undeclared-lv-vs-dual-mv) — only
+  // a DECLARED transformer connection (an explicit rating, or a capacity
+  // above the LV ceiling — [declaredServiceTransformer]) is split across the
+  // sections; an LV daya is ONE PLN connection, never divided.
+  if (declaredServiceTransformer(project) == null) return cap;
   return cap / serviceSections(project);
 }
 

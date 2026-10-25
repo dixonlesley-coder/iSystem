@@ -69,10 +69,10 @@ void main() {
       expect(d.kva.inKilovoltAmperes, 500);
       expect(d.units, 2);
       final sys = computeSystem(p, pr);
-      final t = serviceTransformer(pr, sys.supply.demandVa)!;
+      final t = serviceTransformer(pr, sys)!;
       expect(t.kva, 500);
       expect(t.units, 2);
-      expect(powerOneLineUtilitySub(pr, sys.supply.demandVa),
+      expect(powerOneLineUtilitySub(pr, sys),
           'MV via TX 2 x 500 kVA');
       final adv = computeAdvancedStudy(p, pr, sys);
       expect(adv.supply.transformerKva, 500);

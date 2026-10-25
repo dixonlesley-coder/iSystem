@@ -16,6 +16,7 @@ library;
 
 import 'dart:math' as math;
 
+import '../electrical/advanced_study.dart' show serviceTransformer;
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
 import '../electrical/containment.dart'
@@ -52,8 +53,7 @@ import '../electrical/sources.dart'
         GeneratorSource,
         sizeGenerator,
         sizeBattery;
-import '../electrical/supply_design.dart'
-    show isDeclaredMvService, serviceTransformer;
+import '../electrical/supply_design.dart' show isDeclaredMvService;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart'
     show BreakerCurve, BreakerClass, BreakerClassCode;
@@ -1846,8 +1846,8 @@ String _supplyHeadLabel(ElectricalProject project,
 /// Round 16 — the transformer figure for the drawings: [serviceTransformer]
 /// (`n x <kVA>` when the study needs several units).
 ({double totalKva, String text})? _transformerFig(
-    ElectricalProject project, ApparentPower demandVa) {
-  final t = serviceTransformer(project, demandVa);
+    ElectricalProject project, ElectricalSystemResult result) {
+  final t = serviceTransformer(project, result);
   if (t == null) return null;
   return (
     totalKva: t.kva * t.units,
@@ -1968,7 +1968,7 @@ const double _sideNodeBottom = 14;
   // MV-chain transformer kVA — Round 16: the SAME [serviceTransformer] the
   // study and the schedule use (declared rating, else the dual-tx study pick
   // on the transformer ladder). Blank when neither is known.
-  final txFig = _transformerFig(project, demandVa);
+  final txFig = _transformerFig(project, result);
   final txLabel = (txFig != null && txFig.totalKva > 0)
       ? 'TRANSFORMER ${txFig.text} kVA'
       : 'TRANSFORMER';
@@ -2271,7 +2271,7 @@ const double _sideNodeBottom = 14;
   const role = SldRole.source;
   final demandVa = result.supply.demandVa;
   final isMv = _isMvService(project);
-  final txFig = _transformerFig(project, demandVa);
+  final txFig = _transformerFig(project, result);
   final txLabel = (txFig != null && txFig.totalKva > 0)
       ? 'TRAFO ${txFig.text} kVA'
       : 'TRAFO';

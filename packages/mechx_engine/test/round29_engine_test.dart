@@ -179,7 +179,7 @@ void main() {
           estimatedServiceFaultLevelA(pr, demand: sys.supply.demandVa)!
               .amperes,
           closeTo(isc, 0.05));
-      expect(powerOneLineUtilitySub(pr, sys.supply.demandVa),
+      expect(powerOneLineUtilitySub(pr, sys),
           'MV via TX 630 kVA');
       final labels = [
         for (final prim in buildElectricalOverview(
