@@ -862,7 +862,7 @@ List<ElectricalWarning> ttRcdTouchVoltageWarnings(
         code: 'tt-earth-fault-unchecked',
         severity: WarningSeverity.info,
         message: 'TT earth-fault protection unverified: enter the site soil '
-            'resistivity (Service & Earthing) so the earth electrode is '
+            'resistivity (Supply > Earthing) so the earth electrode is '
             'designed and each RCD is judged against Ra x IΔn <= 50 V '
             '(IEC 60364-4-41 411.5.3).',
       ),

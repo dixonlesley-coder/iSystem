@@ -22,6 +22,8 @@ import 'package:mechx_engine/report/riser_tags.dart'
 import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
+import 'package:mechx_engine/sizing/fire_index_friction.dart'
+    show firePumpsDrawnBackwards;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
     show kFireComponentMaxPressureKpa, kStandpipeMaxSystemPressureKpa;
 import 'package:mechx_engine/sizing/network_sizing.dart'
@@ -747,6 +749,20 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       locate: IssueLocation(n.sheetId, nodeId: id),
     ));
   }
+  // Round 64 — a fire pump drawn coherently backwards (toward its tank):
+  // the sizer orients it away from the source whatever its drawing, and the
+  // drawing error is named on the pump.
+  for (final id in firePumpsDrawnBackwards(net, ref.watch(sizingProvider))) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'fire-pump-drawn-backwards:$id',
+      title: str(StringKey.issueFirePumpDrawnBackwardsTitle),
+      message: str(StringKey.issueFirePumpDrawnBackwardsMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
   if (ref.watch(ductFanProvider)?.motorOversized ?? false) {
     infos.add(DesignIssue(
       severity: IssueSeverity.info,
@@ -1370,23 +1386,24 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final b = o.basis;
     // Round 52 — located at the pump whose discharge sees the maximum (a
     // series stage's own duty pump), else the system's duty pump.
-    final pumpNode = o.pumpId != null
-        ? net.nodeById(o.pumpId!)
-        : b.pumpIds.isEmpty
-            ? null
-            : net.nodeById(b.pumpIds.first);
+    // Round 64 (regression-over-pressure-kind-vs-locate-pump-fallback) — ONE
+    // pump for the locate, both kind strings and the report tag
+    // (project_panel's `fireSystemTag`): the stage pump, else the draw-order
+    // duty pump, else the first listed — never a String-sorted id beside a
+    // draw-order locate.
+    final pump = o.pumpId ??
+        b.dutyPumpId ??
+        (b.pumpIds.isEmpty ? null : b.pumpIds.first);
+    final pumpNode = pump == null ? null : net.nodeById(pump);
     final share = o.check.frictionShare;
     // Round 63 — a hydrant-only standpipe over the NFPA 14 350 psi system
     // maximum is its own kind (split into pressure zones), keyed on the
     // pump whose discharge sees the maximum.
     final sp = o.standpipe;
-    final spPump = o.pumpId ?? (b.pumpIds.isEmpty ? null : b.pumpIds.first);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      kind: sp
-          ? 'standpipe-system-over-pressure${spPump == null ? '' : ':$spPump'}'
-          : 'fire-system-over-pressure'
-              '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      kind: '${sp ? 'standpipe-system-over-pressure' : 'fire-system-over-pressure'}'
+          '${pump == null ? '' : ':$pump'}',
       title: str(sp
           ? StringKey.issueStandpipeOverPressureTitle
           : StringKey.issueFireOverPressureTitle),

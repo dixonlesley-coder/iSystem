@@ -1042,6 +1042,18 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         : _withProject(originFaultLevelA: a));
   }
 
+  /// Round 64 (elec-convergence-16-tt-soil-resistivity-unreachable) — set the
+  /// site SOIL RESISTIVITY (ohm.m) the earth-electrode design and the TT
+  /// Ra x IΔn <= 50 V judge read. Null / non-positive ⇒ clear (no electrode
+  /// designed, the `tt-earth-fault-unchecked` advisory). Non-finite refused.
+  /// One undo step.
+  void setSoilResistivity(double? ohmM) {
+    if (ohmM != null && !ohmM.isFinite) return;
+    _commit((ohmM == null || ohmM <= 0)
+        ? _withProject(clearSoilResistivity: true)
+        : _withProject(soilResistivityOhmM: ohmM));
+  }
+
   /// Set the busbar clearing time (s) for the Fold-1 withstand thermal check.
   /// Null resets to the app default (0.1 s). Non-positive values are ignored.
   void setBusbarClearingTime(double? s) {
@@ -1269,6 +1281,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     bool clearSupplyCapacityVa = false,
     int? transformerUnits,
     bool clearTransformerUnits = false,
+    double? soilResistivityOhmM,
+    bool clearSoilResistivity = false,
   }) =>
       ElectricalProject(
         id: state.id,
@@ -1278,7 +1292,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         sources: clearSources ? null : (sources ?? state.sources),
         dualTransformer: dualTransformer ?? state.dualTransformer,
         occupancy: state.occupancy,
-        soilResistivityOhmM: state.soilResistivityOhmM,
+        soilResistivityOhmM: clearSoilResistivity
+            ? null
+            : (soilResistivityOhmM ?? state.soilResistivityOhmM),
         groundFlashDensity: state.groundFlashDensity,
         externalLps: state.externalLps,
         overheadSupply: state.overheadSupply,

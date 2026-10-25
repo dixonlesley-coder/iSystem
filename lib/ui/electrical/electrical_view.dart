@@ -1491,6 +1491,19 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                     ),
                   ),
                   note(project.earthingSystem.note),
+                  // Round 64 — the site soil resistivity: designs the earth
+                  // electrode and (TT) the Ra x IΔn <= 50 V judge.
+                  ElectricalField(
+                    label: context.strings(StringKey.electricalSoilResistivity),
+                    child: ElectricalOptionalNumInput(
+                      value: project.soilResistivityOhmM,
+                      hint: context
+                          .strings(StringKey.electricalSoilResistivityHint),
+                      zeroClears: true,
+                      onChanged: ctrl.setSoilResistivity,
+                    ),
+                  ),
+                  note(context.strings(StringKey.electricalSoilResistivityNote)),
                 ]),
                 // ── Backup & on-site sources ─────────────────────────────
                 section(kSupplyBackupSectionKey, StringKey.electricalSupplyBackup,

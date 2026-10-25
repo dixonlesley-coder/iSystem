@@ -1609,13 +1609,33 @@ FlowRate sourceDeliveredFlow(
 /// not the root, no airflow of its own, not a terminal unit) inside a system
 /// rooted at another plant — a return fan between the grilles and the AHU,
 /// a booster on an AHU's supply duct. Each carries its own duty.
+///
+/// Round 64 (plumbing-hvac-convergence-14-branch-inline-fan-rated-on-whole-
+/// system): [inlineFanFlow] is the flow THROUGH each inline fan (the largest
+/// sized flow on its own incident ducts); [inlineFanBranchStat] the static of
+/// a BRANCH inline fan's own sub-tree (downstream index for supply, its
+/// grilles' index for extract air) — only for a fan off the trunk (its
+/// through-flow below [trunk]); a fan on every path keeps the Round-62
+/// conservative full-index convention. [statPastBranchFans] is [stat] with
+/// the walk stopped at every branch inline fan (what the system's own unit
+/// moves; == [stat] with none).
 typedef AirSystem = ({
   FlowRate trunk,
   Pressure stat,
   String fanNodeId,
   Pressure intake,
   List<String> inlineFanIds,
+  Map<String, FlowRate> inlineFanFlow,
+  Map<String, Pressure> inlineFanBranchStat,
+  Pressure statPastBranchFans,
 });
+
+/// Round 64 — true when inline fan [id] of [s] carries the system's whole
+/// airflow (it sits on every terminal's path).
+bool inlineFanOnTrunk(AirSystem s, String id) {
+  final q = s.inlineFanFlow[id]?.cubicMetersPerSecond ?? 0;
+  return q >= s.trunk.cubicMetersPerSecond * (1 - 1e-9) - 1e-12;
+}
 
 /// Every drawn system of one air [service] — ONE per connected component,
 /// each rooted at the SAME source the sizer accumulated from (plant → demand-
@@ -1751,12 +1771,59 @@ List<AirSystem> airSystemsFor(
         if (units.isNotEmpty) unit = units.first.id;
       }
     }
+    // Round 64 — the flow THROUGH each inline fan and, for a fan on a
+    // branch (carrying less than the trunk), the static of its own sub-tree.
+    final inlineFlow = <String, FlowRate>{};
+    for (final id in inlineFans) {
+      var q = 0.0;
+      for (final e in edges) {
+        if (e.fromId != id && e.toId != id) continue;
+        final f = flows[e.id]?.cubicMetersPerSecond ?? 0;
+        if (f > q) q = f;
+      }
+      inlineFlow[id] = FlowRate(q);
+    }
+    final branchStat = <String, Pressure>{};
+    for (final id in inlineFans) {
+      final q = inlineFlow[id]!.cubicMetersPerSecond;
+      if (q >= trunk.cubicMetersPerSecond * (1 - 1e-9) - 1e-12) continue;
+      final b = solveDuctStatic(
+        net: net,
+        service: service,
+        fanNodeId: id,
+        edgeFlows: flows,
+        sizing: sizing,
+        calibrationBySheet: project.calibrations,
+        building: project.building,
+        mounting: project.mounting,
+      );
+      // A supply booster's upstream (the AHU side) is not its own: its walk
+      // against the flow is reported as the 'intake' and dropped.
+      branchStat[id] = Pressure(
+          b.totalStaticPressure.pascals - b.intakeStaticPressure.pascals);
+    }
+    final pastBranch = branchStat.isEmpty
+        ? s.totalStaticPressure
+        : solveDuctStatic(
+            net: net,
+            service: service,
+            fanNodeId: root,
+            edgeFlows: flows,
+            sizing: sizing,
+            calibrationBySheet: project.calibrations,
+            building: project.building,
+            mounting: project.mounting,
+            stopAtNodeIds: branchStat.keys.toSet(),
+          ).totalStaticPressure;
     out.add((
       trunk: trunk,
       stat: s.totalStaticPressure,
       fanNodeId: unit,
       intake: s.intakeStaticPressure,
       inlineFanIds: inlineFans,
+      inlineFanFlow: inlineFlow,
+      inlineFanBranchStat: branchStat,
+      statPastBranchFans: pastBranch,
     ));
   }
   out.sort((a, b) {
@@ -1869,10 +1936,17 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
     // Round 62 — a return carried by its own drawn RETURN FAN costs the
     // unit nothing on its inlet side beyond the intake: the return static is
     // the return fan's (rated below).
-    final returnOnOwnFan = ret != null && ret.inlineFanIds.isNotEmpty;
-    final inletPa = ret == null || returnOnOwnFan
+    //
+    // Round 64 (plumbing-hvac-convergence-14) — only a return fan on EVERY
+    // grille's path (its through-flow the whole return trunk) carries the
+    // return; a fan on one BRANCH leaves the unit the return index over the
+    // paths it does not boost (the walk stopped at the branch fans).
+    final r0 = ret;
+    final returnOnOwnFan =
+        r0 != null && r0.inlineFanIds.any((id) => inlineFanOnTrunk(r0, id));
+    final inletPa = r0 == null || returnOnOwnFan
         ? s.intake.pascals
-        : math.max(s.intake.pascals, ret.stat.pascals);
+        : math.max(s.intake.pascals, r0.statPastBranchFans.pascals);
     out[s.fanNodeId] = sizeFan(
       airflow: s.trunk,
       totalStaticPressure: Pressure(
@@ -1886,19 +1960,33 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   // system's airflow against the return index static, a supply booster the
   // supply index static (`// VERIFY` the series split between a booster and
   // the unit is not modelled; both are rated conservatively).
+  //
+  // Round 64 (plumbing-hvac-convergence-14-branch-inline-fan-rated-on-whole-
+  // system) — a fan on one BRANCH moves only the flow THROUGH it against its
+  // own sub-tree's static, never the whole system's airflow (a 0.5 m3/s
+  // booster rated at 9.5 m3/s, three motor frames over).
   for (final r in rets) {
     for (final id in r.inlineFanIds) {
-      out[id] = sizeFan(airflow: r.trunk, totalStaticPressure: r.stat);
+      final branch = r.inlineFanBranchStat[id];
+      out[id] = branch == null
+          ? sizeFan(airflow: r.trunk, totalStaticPressure: r.stat)
+          : sizeFan(
+              airflow: r.inlineFanFlow[id]!, totalStaticPressure: branch);
     }
   }
   for (final s in supplies) {
     for (final id in s.inlineFanIds) {
+      final branch = s.inlineFanBranchStat[id];
       out.putIfAbsent(
           id,
-          () => sizeFan(
-              airflow: s.trunk,
-              totalStaticPressure:
-                  Pressure(s.stat.pascals - s.intake.pascals)));
+          () => branch == null
+              ? sizeFan(
+                  airflow: s.trunk,
+                  totalStaticPressure:
+                      Pressure(s.stat.pascals - s.intake.pascals))
+              : sizeFan(
+                  airflow: s.inlineFanFlow[id]!,
+                  totalStaticPressure: branch));
     }
   }
   // Return-only systems still get a fan.
@@ -2014,8 +2102,15 @@ final exhaustFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   };
   for (final ex in systems) {
     for (final id in ex.inlineFanIds) {
+      // Round 64 — a branch inline exhaust fan: its own flow + branch static.
+      final branch = ex.inlineFanBranchStat[id];
       out.putIfAbsent(
-          id, () => sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat));
+          id,
+          () => branch == null
+              ? sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat)
+              : sizeFan(
+                  airflow: ex.inlineFanFlow[id]!,
+                  totalStaticPressure: branch));
     }
   }
   final legs = ref.watch(parallelLegEdgeIdsProvider);
