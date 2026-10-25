@@ -628,6 +628,27 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       ));
     }
   }
+  // Round 61 (fire-convergence-13-dry-fdc-standpipe-phantom-55kw-pump) — a
+  // DRY (brigade-fed) fire system is not a missing source: one
+  // acknowledgeable info per system stating what the brigade must deliver
+  // at its inlet (the no-source warning for its component is dropped below).
+  for (final b in fireBases) {
+    if (!b.dry || b.dryInletId == null) continue;
+    final n = net.nodeById(b.dryInletId!);
+    final headM = b.dryRequiredInletHeadM ?? 0;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'brigade-fed:${b.dryInletId}',
+      title: str(StringKey.issueFireBrigadeFedTitle),
+      message: str.format(StringKey.issueFireBrigadeFedMessage, {
+        'tag': equipmentNodeTags(net)[b.dryInletId!] ?? 'FDC',
+        'lps': b.flow.inLitersPerSecond.toStringAsFixed(1),
+        'kpa': (headM * 9.81).toStringAsFixed(0),
+        'm': headM.toStringAsFixed(1),
+      }),
+      locate: n == null ? null : IssueLocation(n.sheetId, nodeId: n.id),
+    ));
+  }
   // Round 53 (regression-stage-head-clamp-silent) — a series fire-pump
   // stage whose own derivation was below the minimum stage head was raised
   // to it: judge-only (the pump head is unchanged), locatable to the
@@ -854,7 +875,21 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   // island: their loose ends are the SAME defect, never a second and third
   // row (one isolated 2-node riser read as three issues).
   final componentReportedNodes = <String>{};
+  // Round 61 — the nodes of DRY (brigade-fed) fire systems: fed through
+  // their FDC, never a no-source / island defect.
+  final dryFireNodes = <String>{
+    for (final b in ref.watch(fireSystemBasesProvider))
+      if (b.dry) ...b.system.nodeIds,
+  };
   for (final d in networkConnectivityDefects(net)) {
+    if (!d.isMainsFed &&
+        (d.service == ServiceType.fireHydrant ||
+            d.service == ServiceType.fireSprinkler) &&
+        d.nodeIds.isNotEmpty &&
+        d.nodeIds.every(dryFireNodes.contains)) {
+      componentReportedNodes.addAll(d.nodeIds);
+      continue;
+    }
     final repId = d.representativeNodeId;
     final repNode = repId == null ? null : nodeById[repId];
     // The stable, locale-independent ack key keeps the enum identifier; the

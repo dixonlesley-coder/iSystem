@@ -663,6 +663,8 @@ enum StringKey {
   issuePumpMotorOversizedMessage,
   issueFirePumpMotorOversizedMessage,
   issueFireJockeyAssumedTitle,
+  issueFireBrigadeFedTitle,
+  issueFireBrigadeFedMessage,
   issueFireJockeyAssumedMessage,
   issueFireStageHeadClampedTitle,
   issueFireStageHeadClampedMessage, // {tag} {from} {min}
@@ -2131,6 +2133,12 @@ const Map<StringKey, String> _en = {
       'is rated at the {min} m minimum stage head. The stage heads then add '
       'up to more than the system head; check the upper zone\'s pressure, or '
       'move the booster so its zone needs a real stage.',
+  StringKey.issueFireBrigadeFedTitle: 'Dry fire system (brigade-fed)',
+  StringKey.issueFireBrigadeFedMessage:
+      'No fire pump or tank is drawn: this fire system is fed by the fire '
+      'brigade through {tag}. The pumper must deliver {lps} L/s at {kpa} kPa '
+      '({m} m) at the connection. Confirm a dry system is intended, or draw '
+      'a fire pump and tank.',
   StringKey.issueFireJockeyAssumedTitle: 'Jockey fire pump assumed',
   StringKey.issueFireJockeyAssumedMessage:
       'Three or more identical fire pumps are drawn in parallel and nothing '
@@ -3731,6 +3739,14 @@ const Map<StringKey, String> _id = {
       'sehingga diberi rating pada head tahap minimum {min} m. Jumlah head '
       'tahap menjadi lebih besar dari head sistem; periksa tekanan zona atas, '
       'atau pindahkan booster agar zonanya memerlukan tahap yang nyata.',
+  StringKey.issueFireBrigadeFedTitle:
+      'Sistem kebakaran kering (dipasok mobil pemadam)',
+  StringKey.issueFireBrigadeFedMessage:
+      'Tidak ada pompa atau tangki kebakaran yang digambar: sistem kebakaran ini '
+      'dipasok mobil pemadam melalui {tag}. Mobil pompa harus memberikan '
+      '{lps} L/s pada {kpa} kPa ({m} m) di sambungan. Konfirmasikan bahwa '
+      'sistem kering memang dimaksudkan, atau gambar pompa dan tangki '
+      'kebakaran.',
   StringKey.issueFireJockeyAssumedTitle: 'Pompa jockey kebakaran diasumsikan',
   StringKey.issueFireJockeyAssumedMessage:
       'Tiga pompa kebakaran identik atau lebih digambar paralel tanpa pembeda, '

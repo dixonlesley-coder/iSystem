@@ -627,6 +627,7 @@ const Set<NodeComponent> kTakeoffComponents = {
   NodeComponent.hydrantBox,
   NodeComponent.hoseReel,
   NodeComponent.fireDeptConnection,
+  NodeComponent.pillarHydrant,
   NodeComponent.supplyDiffuser,
   NodeComponent.returnGrille,
   NodeComponent.exhaustGrille,
@@ -653,6 +654,7 @@ ServiceType _componentDefaultService(NodeComponent c) => switch (c) {
       NodeComponent.hydrantBox ||
       NodeComponent.hoseReel ||
       NodeComponent.fireDeptConnection ||
+      NodeComponent.pillarHydrant ||
       NodeComponent.fireExtinguisher =>
         ServiceType.fireHydrant,
       NodeComponent.roofDrain => ServiceType.rainwater,

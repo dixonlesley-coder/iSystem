@@ -413,11 +413,11 @@ Map<String, String> parallelStandbyPumps(
 /// Per group of two or more pumps:
 ///  * the DUTY pump is the one NOT on a mirrored parallel standby leg
 ///    ([parallelLegEdgeIds], the sizer's record), then the LARGEST incident
-///    bore ([bore], mm), then the lowest id;
+///    bore ([bore], mm), then the FIRST drawn ([drawOrderCompare]);
 ///  * a JOCKEY is any other pump whose largest incident bore is strictly
 ///    smaller than the duty pump's (a pressure-maintenance pump sits on a
 ///    small leg); with three or more pumps and no smaller leg, the
-///    smallest-bore remaining pump (tie: the HIGHEST id — the last drawn) is
+///    smallest-bore remaining pump (tie: the LAST drawn, [drawOrderCompare]) is
 ///    the jockey (the classic duty + standby + jockey pump room) — that pick
 ///    is an ASSUMPTION (nothing drawn tells the pumps apart), so it is also
 ///    returned in `assumedJockey` for the Review advisory;
@@ -482,13 +482,24 @@ Map<String, String> parallelStandbyPumps(
   // the sizer's first solve took as its tree leg: ranking the leg first made
   // the jockey the duty (90 kW way) and a main pump the jockey (1.1 kW way)
   // whenever the jockey's id sorted first.
+  // Round 61 (fire-convergence-13-assumed-jockey-picks-by-lexical-id-not-
+  // draw-order) — ties break on DRAW order ([drawOrderCompare]: tag number,
+  // then the natural id order `n9 < n10`), never a String compare that put
+  // the second-drawn pump of n8 / n9 / n10 last.
+  int byDraw(String a, String b) {
+    final na = net.nodeById(a);
+    final nb = net.nodeById(b);
+    if (na == null || nb == null) return naturalIdCompare(a, b);
+    return drawOrderCompare(na, nb);
+  }
+
   int rank(String a, String b) {
     final d = boreOf(b).compareTo(boreOf(a));
     if (d != 0) return d;
     final la = onLeg(a) ? 1 : 0;
     final lb = onLeg(b) ? 1 : 0;
     if (la != lb) return la - lb;
-    return a.compareTo(b);
+    return byDraw(a, b);
   }
 
   // Round 49 (fire-convergence-series-booster-fire-pump-standby) — only
@@ -565,7 +576,7 @@ Map<String, String> parallelStandbyPumps(
       final byBore = [...rest]..sort((a, b) {
           final d = boreOf(a).compareTo(boreOf(b));
           if (d != 0) return d;
-          return b.compareTo(a);
+          return byDraw(b, a);
         });
       small.add(byBore.first);
       assumed.add(byBore.first);

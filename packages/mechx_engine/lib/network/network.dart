@@ -141,6 +141,10 @@ enum NodeComponent {
   hydrantBox,
   hoseReel,
   fireDeptConnection,
+  // Round 61 — an OUTDOOR yard (pillar) hydrant (role: fixture) on the
+  // site's private fire main (SNI 03-1735 hidran halaman): rated and sized
+  // on the yard-hydrant basis, never as a Class I hose box.
+  pillarHydrant,
   // ── HVAC / ducting ──────────────────────────────────────────────────────
   // Air terminals (role: fixture — carry the airflow demand).
   supplyDiffuser,
@@ -261,6 +265,7 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.fireExtinguisher ||
         NodeComponent.hydrantBox ||
         NodeComponent.hoseReel ||
+        NodeComponent.pillarHydrant ||
         // A clean-water outlet is a delivery endpoint on the supply → fixture.
         NodeComponent.waterOutlet ||
         // HVAC air terminals carry the airflow demand → fixture.
@@ -307,6 +312,7 @@ extension NodeComponentInfo on NodeComponent {
         NodeComponent.hydrantBox => 'Hydrant box',
         NodeComponent.hoseReel => 'Hose reel',
         NodeComponent.fireDeptConnection => 'Fire dept. connection',
+        NodeComponent.pillarHydrant => 'Pillar hydrant',
         NodeComponent.supplyDiffuser => 'Supply diffuser',
         NodeComponent.returnGrille => 'Return grille',
         NodeComponent.exhaustGrille => 'Exhaust grille',
@@ -581,6 +587,56 @@ class NetNode {
             : (autoPlacedRoomId ?? this.autoPlacedRoomId),
         tagNo: clearTagNo ? null : (tagNo ?? this.tagNo),
       );
+}
+
+/// Round 61 (fire-convergence-13-assumed-jockey-picks-by-lexical-id-not-
+/// draw-order) — the ONE draw-order comparator for nodes: the persisted,
+/// monotonic equipment [NetNode.tagNo] first (both set), then a NATURAL id
+/// compare (digit runs compared as numbers, so the app's minted `n9` sorts
+/// before `n10`), then the plain String compare as the last resort. Negative
+/// when [a] was drawn first. Pure.
+int drawOrderCompare(NetNode a, NetNode b) {
+  final ta = a.tagNo;
+  final tb = b.tagNo;
+  if (ta != null && tb != null && ta != tb) return ta.compareTo(tb);
+  final n = naturalIdCompare(a.id, b.id);
+  if (n != 0) return n;
+  return a.id.compareTo(b.id);
+}
+
+/// Natural string order: runs of ASCII digits compare by numeric value
+/// (then by length, so `n01` and `n1` stay distinct), other characters by
+/// code unit. `n9 < n10 < pA`. Pure.
+int naturalIdCompare(String a, String b) {
+  bool isDigit(int c) => c >= 0x30 && c <= 0x39;
+  var i = 0;
+  var j = 0;
+  while (i < a.length && j < b.length) {
+    final ca = a.codeUnitAt(i);
+    final cb = b.codeUnitAt(j);
+    if (isDigit(ca) && isDigit(cb)) {
+      final si = i;
+      final sj = j;
+      while (i < a.length && isDigit(a.codeUnitAt(i))) {
+        i++;
+      }
+      while (j < b.length && isDigit(b.codeUnitAt(j))) {
+        j++;
+      }
+      final da = a.substring(si, i).replaceFirst(RegExp(r'^0+(?=.)'), '');
+      final db = b.substring(sj, j).replaceFirst(RegExp(r'^0+(?=.)'), '');
+      if (da.length != db.length) return da.length.compareTo(db.length);
+      final c = da.compareTo(db);
+      if (c != 0) return c;
+      final l = (i - si).compareTo(j - sj);
+      if (l != 0) return l;
+      continue;
+    }
+    if (ca != cb) return ca.compareTo(cb);
+    i++;
+    j++;
+  }
+  return (a.length - i).compareTo(b.length - j);
 }
 
 /// Round 45 (mech-convergence-1) — true when [n] carries DESIGN CONTENT a

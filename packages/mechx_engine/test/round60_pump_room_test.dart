@@ -128,14 +128,20 @@ void main() {
         // only the cap) => 0.0818 m => DN100.
         expect(q, closeTo(500 * 3.785411784 / 60, 1e-3));
       }
-      expect(ref['h0']!.diameter.inMillimeters, 100);
+      // Round 61 — the legs are the pumps' SUCTION / DISCHARGE and h0 the
+      // discharge header main: NFPA 20 Table 4.28(a) for the set flow —
+      // 500 gpm (hydrant) 5 in = DN125; 43.33 L/s = 687 gpm (sprinkler)
+      // the 750 gpm row 6 in = DN150 (suction at 150 %: 0.065 / 0.017671
+      // = 3.68 m/s <= 4.57 m/s).
+      final pumpRoomMm = sprinkler ? 150 : 125;
+      expect(ref['h0']!.diameter.inMillimeters, pumpRoomMm);
       final par = <String>{};
       final out =
           _size(_pumpRoom(outward: true, sprinkler: sprinkler), par);
       for (final id in legs) {
         expect(ref[id]!.flow.inLitersPerSecond, closeTo(q, 1e-9), reason: id);
         expect(out[id]!.flow.inLitersPerSecond, closeTo(q, 1e-9), reason: id);
-        expect(out[id]!.diameter.inMillimeters, 100, reason: id);
+        expect(out[id]!.diameter.inMillimeters, pumpRoomMm, reason: id);
       }
       // Two of the three legs are mirrored standbys, as in the coherent set.
       expect(par.length, 4);

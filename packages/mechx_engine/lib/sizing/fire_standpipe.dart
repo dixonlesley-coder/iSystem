@@ -129,6 +129,41 @@ const double kMinRiserDiameterMm = 100.0;
 /// `SniProfile.verifyChecklist` (status `notAnSniClause`).
 const double kMinHydrantBranchDiameterMm = 65.0;
 
+/// Round 61 (fire-convergence-13-yard-hydrants-rated-as-building-standpipe)
+/// — the YARD (pillar / hidran halaman) hydrant design flow: 38 L/s, the
+/// flow SNI 03-1735-2000 asks of the yard hydrant supply. `// VERIFY`
+/// secondarySource (the exact clause pending the official text).
+const double kYardHydrantFlowLps = 38.0;
+
+/// Round 61 — the residual at the yard hydrant outlet: 3.5 bar (350 kPa),
+/// SNI 03-1735-2000 hidran halaman. `// VERIFY` secondarySource.
+const double kYardHydrantResidualKpa = 350.0;
+
+/// Round 61 — the minimum bore of a private fire service main and of a yard
+/// hydrant lateral: 6 in (DN150), NFPA 24 10.1.1. `// VERIFY`
+/// notAnSniClause.
+const double kMinYardMainDiameterMm = 150.0;
+
+/// Round 61 — the unverified items behind the yard hydrant basis.
+const List<StandardValue<Object?>> yardHydrantVerifyChecklist = [
+  StandardValue<Object?>(kYardHydrantFlowLps,
+      unit: 'L/s',
+      citation: 'SNI 03-1735-2000 — yard (pillar) hydrant flow',
+      note: 'The yard hydrant supply delivers 38 L/s; secondary source '
+          'pending the official clause.'),
+  StandardValue<Object?>(kYardHydrantResidualKpa,
+      unit: 'kPa',
+      citation: 'SNI 03-1735-2000 — yard hydrant residual pressure',
+      note: '3.5 bar (350 kPa) at the yard hydrant outlet; secondary source '
+          'pending the official clause.'),
+  StandardValue<Object?>(kMinYardMainDiameterMm,
+      unit: 'mm',
+      citation: 'NFPA 24 10.1.1 — private fire service main minimum',
+      status: VerificationStatus.notAnSniClause,
+      note: 'Yard fire mains and hydrant laterals are at least 6 in (DN150) '
+          '(NFPA 24); confirm against the SNI 03-1735 practice adopted.'),
+];
+
 /// Round 37 (mech-sim-5-fdc-line-sized-at-zero-flow) — minimum nominal
 /// diameter (mm) of the FIRE-DEPARTMENT-CONNECTION inlet pipe (the FDC and
 /// its unbranched chain to the system). The brigade pumps the system design
@@ -491,11 +526,19 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   // its fire-system label (connectivity over fire pipe, never through a
   // storage tank — [isFireSystemBoundary]).
   final systemOf = _fireSystemLabels(net);
+  // Round 61 (regression-fire-system-label-tank-member-order) — a riser
+  // component's fire systems are the labels of its NON-tank members (a
+  // storage tank bounds systems and carries no label of its own), so the
+  // reading never depends on which member a Set happens to list first.
+  Set<int> systemLabelsOf(Iterable<String> members) => {
+        for (final id in members)
+          if (systemOf[id] != null) systemOf[id]!,
+      };
   final fullMembers = <String, Set<String>>{};
   for (final id in fullParent.keys) {
     (fullMembers[findFull(id)] ??= <String>{}).add(id);
   }
-  final tall = <(String, int, int, int?)>[]; // (root, from, to, system)
+  final tall = <(String, int, int, Set<int>)>[]; // (root, from, to, systems)
   for (final r in fullMembers.keys) {
     final members = fullMembers[r]!;
     final floors = outletFloorsOf(members,
@@ -504,7 +547,7 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     if (floors.isEmpty) continue;
     if (fullHi[r]! - fullLo[r]! < 2 && floors.length < 2) continue;
     final from = math.max(fullLo[r]!, floors.reduce(math.min) - 1);
-    tall.add((r, from, fullHi[r]!, systemOf[members.first]));
+    tall.add((r, from, fullHi[r]!, systemLabelsOf(members)));
   }
 
   // A ONE-storey riser whose own outlets sit on ONE floor is a pillar /
@@ -516,9 +559,9 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     final members = membersOf[root]!;
     final own = <String>{for (final id in members) findFull(id)};
     final a = lo[root]!;
-    final sys = systemOf[members.first];
+    final sys = systemLabelsOf(members);
     for (final (r, from, to, s) in tall) {
-      if (own.contains(r) || s != sys) continue;
+      if (own.contains(r) || !s.any(sys.contains)) continue;
       if (from <= a && to >= a + 1) return true;
     }
     return false;
@@ -703,8 +746,10 @@ Set<String> _fireRingNodes(Network net) {
 
 /// Round 60 — a fire-system label per fire node: connectivity over sprinkler
 /// + hydrant pipe that never passes THROUGH a storage tank
-/// ([isFireSystemBoundary]); a tank takes the label of the first system that
-/// reaches it. Pure + deterministic.
+/// ([isFireSystemBoundary]). Round 61 — a tank carries NO label (it used to
+/// take the label of whichever system dequeued it first, so a stack touching
+/// the tank inherited another system's label by edge order). Pure +
+/// deterministic.
 Map<String, int> _fireSystemLabels(Network net) {
   final byId = {for (final n in net.nodes) n.id: n};
   final adj = <String, List<String>>{};
@@ -726,9 +771,8 @@ Map<String, int> _fireSystemLabels(Network net) {
     final queue = [s];
     for (var i = 0; i < queue.length; i++) {
       final cur = queue[i];
-      if (isFireSystemBoundary(byId[cur])) continue;
       for (final o in adj[cur] ?? const <String>[]) {
-        if (label.containsKey(o)) continue;
+        if (label.containsKey(o) || isFireSystemBoundary(byId[o])) continue;
         label[o] = l;
         queue.add(o);
       }

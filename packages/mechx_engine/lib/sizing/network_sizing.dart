@@ -41,6 +41,7 @@ import 'fire_index_friction.dart'
         fireTransferFedSystems,
         isFireService,
         isFireSystemBoundary;
+import 'fire_pump_suction.dart' as firesuction;
 import 'fire_sprinkler.dart' show kMinSprinklerPipeDiameterMm;
 import 'fire_standpipe.dart'
     show
@@ -297,6 +298,27 @@ class EdgeSizing {
         overCapacity: overCapacity,
         stackRaisedForBranch: stackRaisedForBranch,
         flowFromId: fromId,
+        selfCleansingOk: selfCleansingOk,
+        loopUnbalanced: loopUnbalanced,
+        demandCurveExtrapolated: demandCurveExtrapolated,
+        belowCodeMinimum: belowCodeMinimum,
+      );
+
+  /// Round 61 — a copy at bore [d] (velocity [v]), every flag preserved
+  /// except [overCapacity] when given (the fire-pump suction raise).
+  EdgeSizing withBore(Diameter d, Velocity v,
+          {bool? overCapacity, FlowRate? flow}) =>
+      EdgeSizing(
+        edgeId: edgeId,
+        service: service,
+        flow: flow ?? this.flow,
+        diameter: d,
+        velocity: v,
+        width: width,
+        height: height,
+        overCapacity: overCapacity ?? this.overCapacity,
+        stackRaisedForBranch: stackRaisedForBranch,
+        flowFromId: flowFromId,
         selfCleansingOk: selfCleansingOk,
         loopUnbalanced: loopUnbalanced,
         demandCurveExtrapolated: demandCurveExtrapolated,
@@ -1754,6 +1776,17 @@ Map<String, EdgeSizing> autoSizeNetwork(
     airIntakeLeavesOut: airIntakeLeavesOut,
     jockeyLegFlows: jockeyLegFlows,
   );
+  // Round 61 (fire-convergence-13-fire-pump-suction-below-nfpa20) — the fire
+  // pump's suction at 150 % flow within 4.57 m/s and both its suction and
+  // discharge at the NFPA 20 Table 4.28(a) minimum (judge-and-raise only).
+  // Round 61 (fire-convergence-13-yard-hydrants-rated-as-building-
+  // standpipe) — every fire pipe feeding a yard (pillar) hydrant carries the
+  // yard hydrant flow on a DN150 private main; before the suction rule,
+  // which keys on the flow.
+  firesuction.raiseYardHydrantMains(net, result, ctx,
+      overridden: sizeOverrides.keys.toSet());
+  firesuction.raiseFirePumpSuctionAndDischarge(net, result,
+      overridden: sizeOverrides.keys.toSet());
   if (!net.edges.any((e) => e.service == ServiceType.drainage)) return result;
 
   // Round 32 (binding-2) — the solids-handling bore floor of every drawn

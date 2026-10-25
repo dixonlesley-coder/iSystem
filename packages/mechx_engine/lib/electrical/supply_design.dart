@@ -233,6 +233,7 @@ SupplyDesign determineSupply(
   int? sections,
   SupplyKind supplyKind = SupplyKind.pln,
   ApparentPower? plantCapacity,
+  String basisLabel = 'worst-phase basis',
 }) {
   // Round 58 — the separate-section count (null ⇒ 2 on a dual service, else
   // 1: byte-identical). On a declared N-section service each unit carries its
@@ -240,6 +241,14 @@ SupplyDesign determineSupply(
   final nSections = (sections != null && sections >= 1)
       ? sections
       : (dualTransformer ? 2 : 1);
+  // Round 61 (regression-dual-with-one-section-study-mv-nothing-printed-
+  // fault-doubled) — ONE section count: a dual flag is a dual service only
+  // when the service HAS two sections. An explicit `sections: 1` on a dual
+  // flag (the inspector's Dual ticked + 1 typed in Sections) is a single
+  // section — the LV exit / one unit, exactly as [isDeclaredMvService] and
+  // the printed transformer read it — never 2 units faulted as a paralleled
+  // pair on a service the drawings show as LV.
+  final dual = dualTransformer && nSections == 2;
   // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
   // service each root board sits on ONE unit (coupler normally open — the
   // fault model gives each section one unit's fault), so a section carries
@@ -258,7 +267,7 @@ SupplyDesign determineSupply(
   final basisKva =
       perPhaseGoverns ? perPhaseKva : demand.inKilovoltAmperes;
   final basisNote = perPhaseGoverns
-      ? ' The worst-phase basis (${_fmtKva(_round1(perPhaseKva))} kVA) '
+      ? ' The $basisLabel (${_fmtKva(_round1(perPhaseKva))} kVA) '
           'governs over the $demandKva kVA total.'
       : '';
   final verify = <String>[
@@ -286,11 +295,20 @@ SupplyDesign determineSupply(
         : demand.inKilovoltAmperes / units;
     // Round 40 — the most loaded SECTION governs a dual service whose two
     // root boards are unequal (one unit per section on a 2-unit service).
+    // Round 61 — and a service with paralleled units per section
+    // (`units` a multiple of the section count, e.g. 4 x 1600 kVA on a dual
+    // service): that section's units share its load, so each carries the
+    // section load / units-per-section — never the gate that skipped every
+    // service whose unit count differs from its section count.
+    final unitsPerSection =
+        sectioned && units % nSections == 0 ? units ~/ nSections : 0;
+    final sectionPerUnit =
+        unitsPerSection > 0 ? sectionKva / unitsPerSection : 0.0;
     final sectionGoverns = sectioned &&
         !oneSection &&
-        units == nSections &&
-        sectionKva > split + 1e-9;
-    final carried = sectionGoverns ? sectionKva : split;
+        unitsPerSection > 0 &&
+        sectionPerUnit > split + 1e-9;
+    final carried = sectionGoverns ? sectionPerUnit : split;
     final below = declared * transformerLoadingFactor < carried - 1e-9;
     final unitsText = units > 1 ? '$units × ' : '';
     final carrierText = oneSection
@@ -353,7 +371,7 @@ SupplyDesign determineSupply(
   // [sections] > 1) is a transformer (MV) service whatever the demand: it
   // never takes the direct-LV exit, so `transformerUnits = 2` and a dual
   // service are studied identically.
-  if (!dualTransformer && nSections <= 1 && basisKva <= lvSupplyLimitKva) {
+  if (!dual && nSections <= 1 && basisKva <= lvSupplyLimitKva) {
     return SupplyDesign(
       lvOrMv: SupplyLevel.lv,
       demandKva: demandKva,
@@ -391,7 +409,7 @@ SupplyDesign determineSupply(
   final perSectionKva = singleSectionCarriesAll
       ? basisKva
       : math.max(basisKva / nSections, sectionKva);
-  if (nSections > 1 && !(dualTransformer && nSections == 2)) {
+  if (nSections > 1 && !dual) {
     final perUnitRequired = perSectionKva / transformerLoadingFactor;
     final sel = _selectTransformerUnits(perUnitRequired);
     final kva = sel.kva;
@@ -422,7 +440,7 @@ SupplyDesign determineSupply(
     );
   }
 
-  if (dualTransformer) {
+  if (dual) {
     // Two transformers, each sized for half the demand, on split bus sections
     // behind a normally-open coupler. The fault level the boards see is ONE
     // unit's (the coupler never parallels them).
@@ -581,6 +599,62 @@ ApparentPower? declaredServiceTransformerKva(ElectricalProject project) =>
   // Round 45 — the SAME covering-units rule as the supply study.
   final u = coveringTransformerUnits(perSection, tolerance: 1e-9);
   return (kva: ApparentPower.kilovoltAmperes(u.kva), units: sections * u.units);
+}
+
+/// Round 61 (elec-convergence-13-roots-outnumber-sections-section-overload)
+/// — the least achievable load of the MOST loaded section when the
+/// service-entrance boards [loads] (VA or kVA, any one unit) are shared
+/// among [sections] separate transformer sections (each board on exactly one
+/// section, couplers normally open). With no more boards than sections every
+/// board can sit alone, so it is the largest board. With more boards than
+/// sections at least one section carries two or more (pigeonhole), so the
+/// figure is the optimum of the multiway partition: exact (branch and bound,
+/// boards largest first, empty sections symmetric) for up to
+/// [kSectionPartitionExactMax] boards, else the LPT greedy (largest board
+/// onto the lightest section) — an UPPER bound on the optimum, so the
+/// section is never sized below what it can be made to carry. Pure.
+const int kSectionPartitionExactMax = 12;
+
+double minimalMaxSectionLoad(List<double> loads, int sections) {
+  final xs = [for (final l in loads) if (l > 0) l]
+    ..sort((a, b) => b.compareTo(a));
+  if (xs.isEmpty) return 0;
+  if (sections <= 1) return xs.fold(0.0, (a, b) => a + b);
+  if (xs.length <= sections) return xs.first;
+  // LPT greedy — the upper bound (and the answer above the exact cap).
+  final greedy = List<double>.filled(sections, 0);
+  for (final x in xs) {
+    var k = 0;
+    for (var i = 1; i < sections; i++) {
+      if (greedy[i] < greedy[k]) k = i;
+    }
+    greedy[k] += x;
+  }
+  var best = greedy.reduce(math.max);
+  if (xs.length > kSectionPartitionExactMax) return best;
+  final total = xs.fold(0.0, (a, b) => a + b);
+  final lower = math.max(xs.first, total / sections);
+  final bins = List<double>.filled(sections, 0);
+  void place(int i, double currentMax) {
+    if (best <= lower + 1e-9) return;
+    if (i == xs.length) {
+      if (currentMax < best) best = currentMax;
+      return;
+    }
+    final seen = <double>{};
+    for (var k = 0; k < sections; k++) {
+      final next = bins[k] + xs[i];
+      if (next >= best - 1e-12) continue;
+      // Sections holding the same load are interchangeable.
+      if (!seen.add(bins[k])) continue;
+      bins[k] = next;
+      place(i + 1, math.max(currentMax, next));
+      bins[k] -= xs[i];
+    }
+  }
+
+  place(0, 0);
+  return best;
 }
 
 /// Round 58 (elec-convergence-10-n-section-transformer-service-

@@ -1785,11 +1785,40 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   final consumed = <String>{};
   final out = <String, FanDuty>{};
   Pressure internalOf(String root) => airUnitInternalStatic(net.nodeById(root));
+  // Round 61 (plumbing-hvac-convergence-11-shared-return-peer-unit-fan-
+  // static-dropped) — which drawn component each unit sits in, per service:
+  // a return SHARED by several units (each CRAH with its own supply, all on
+  // one hot-aisle return) is rooted at ONE of them, the others mirrored peer
+  // legs, so matching on the root alone gave every other unit no return
+  // static (13 % under-motored). A unit belongs to the return system whose
+  // component holds it — and, mirrored, a unit on a SHARED supply with its
+  // own return takes that supply's index static.
+  final airflowNodes = {
+    for (final n in net.nodes)
+      if (n.airflow != null) n.id,
+  };
+  final supplyCompOf =
+      serviceComponentRoots(net, ServiceType.duct, demandNodeIds: airflowNodes);
+  final returnCompOf = serviceComponentRoots(net, ServiceType.returnAir,
+      demandNodeIds: airflowNodes);
+  bool sameComponent(Map<String, String> compOf, String a, String b) {
+    final ca = compOf[a];
+    return ca != null && ca == compOf[b];
+  }
+
   for (var i = 0; i < supplies.length; i++) {
     final s = supplies[i];
     AirSystem? ret;
     for (final r in rets) {
       if (r.fanNodeId == s.fanNodeId) ret = r;
+    }
+    if (ret == null) {
+      for (final r in rets) {
+        if (sameComponent(returnCompOf, r.fanNodeId, s.fanNodeId)) {
+          ret = r;
+          break;
+        }
+      }
     }
     if (ret == null &&
         i == 0 &&
@@ -1816,6 +1845,27 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   // Return-only systems still get a fan.
   for (final r in rets) {
     if (consumed.contains(r.fanNodeId) || out.containsKey(r.fanNodeId)) {
+      continue;
+    }
+    // Round 61 — a unit with its own return that is a PEER source on a
+    // SHARED supply (rooted at another unit) sees that supply's index run
+    // too: (supply index excl. intake) + max(intake, return) + internal, at
+    // the supply's delivered airflow (the duty / standby convention).
+    AirSystem? sup;
+    for (final s in supplies) {
+      if (sameComponent(supplyCompOf, s.fanNodeId, r.fanNodeId)) {
+        sup = s;
+        break;
+      }
+    }
+    if (sup != null) {
+      out[r.fanNodeId] = sizeFan(
+        airflow: sup.trunk,
+        totalStaticPressure: Pressure(sup.stat.pascals -
+            sup.intake.pascals +
+            math.max(sup.intake.pascals, r.stat.pascals) +
+            internalOf(r.fanNodeId).pascals),
+      );
       continue;
     }
     out[r.fanNodeId] = sizeFan(
