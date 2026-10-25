@@ -98,7 +98,8 @@ Network _carPark(
     {bool ramp = false,
     bool pillars = false,
     bool fdc = false,
-    bool secondStack = false}) {
+    bool secondStack = false,
+    bool indoorBoxes = false}) {
   final nodes = <NetNode>[
     _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
     _n('FP', 10, role: NodeRole.plant, c: NodeComponent.pump),
@@ -144,6 +145,11 @@ Network _carPark(
       edges.add(_e('pd$k', 'P$k', 'PT$k', k: EdgeKind.riser));
       edges.add(_e('ph$k', 'PT$k', 'PH$k'));
       edges.add(_e('pr$k', 'P$k', 'P${(k + 1) % 4}'));
+      if (indoorBoxes) {
+        // Round 57: an indoor hose box on the L1 ring node too.
+        nodes.add(_box('IB$k', 295.0 + 40 * k, 1));
+        edges.add(_e('ib$k', 'P$k', 'IB$k'));
+      }
     }
     edges.add(_e('hp', 'HR1', 'P0'));
   }
@@ -174,7 +180,7 @@ Network _carPark(
 /// Round 56 r2 - a TWO-storey building with two genuine hydrant stacks A and
 /// B, a box on both floors of each. [baseFed]: the main to B leaves from A's
 /// base node (GT -> FP -> A0 -> B0); else a header J feeds both bases.
-Network _twinStacks({required bool baseFed}) {
+Network _twinStacks({required bool baseFed, bool topTie = false}) {
   final nodes = <NetNode>[
     _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
     _n('FP', 10, role: NodeRole.plant, c: NodeComponent.pump),
@@ -204,6 +210,8 @@ Network _twinStacks({required bool baseFed}) {
     _e('ab1', 'A1', 'AB1'),
     _e('bb0', 'B0', 'BB0'),
     _e('bb1', 'B1', 'BB1'),
+    // Round 57: a top-floor cross-tie between the two stacks.
+    if (topTie) _e('tt', 'A1', 'B1'),
   ];
   return Network(nodes: nodes, edges: edges);
 }
@@ -346,6 +354,73 @@ void main() {
     });
   });
 
+  // Round 57 — the branch-drop decision is the hydraulic reach alone; a tee
+  // off another riser's BASE node never blocks.
+  group('Round 57 stack count: reach-only branch drops', () {
+    test(
+        'regression-twin-stack-top-tie-base-fed-counts-one: twins count 2 '
+        'base- or header-fed, with or without a top tie (750 gpm)', () {
+      final rnd = math.Random(5701);
+      for (final baseFed in [true, false]) {
+        for (final topTie in [true, false]) {
+          final base = _twinStacks(baseFed: baseFed, topTie: topTie);
+          expect(drawnStandpipeRiserCount(base), 2,
+              reason: 'baseFed=$baseFed topTie=$topTie');
+          for (var t = 0; t < 50; t++) {
+            expect(drawnStandpipeRiserCount(_flipShuffle(base, rnd)), 2,
+                reason: 'baseFed=$baseFed topTie=$topTie trial $t');
+          }
+        }
+      }
+      // The base-fed, top-tied twin: the pump discharge carries
+      // standpipeFlow(2) = 750 x 3.785411784 / 60 = 47.318 L/s;
+      // d = sqrt(4 x 0.047318 / (pi x 6)) = 0.1002 m => DN125, never the
+      // 31.5 L/s DN100 of a single stack.
+      final net = _twinStacks(baseFed: true, topTie: true);
+      final r = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.fireHydrant: FlowRate(0.005)},
+        hydrantDesignFlow: standpipeFlow(drawnStandpipeRiserCount(net)),
+        building: _floors(2),
+      );
+      expect(r['d']!.flow.inLitersPerSecond,
+          closeTo(750 * 3.785411784 / 60, 1e-3));
+      expect(r['d']!.diameter.inMillimeters, 125);
+    });
+
+    test(
+        'regression-pillar-drop-with-indoor-box-counts-as-stack: pillar '
+        'drops stay drops with an indoor box on the ring node', () {
+      final rnd = math.Random(5702);
+      for (final indoor in [false, true]) {
+        for (final second in [false, true]) {
+          final base =
+              _carPark(pillars: true, indoorBoxes: indoor, secondStack: second);
+          final want = second ? 2 : 1;
+          expect(drawnStandpipeRiserCount(base), want,
+              reason: 'indoor=$indoor second=$second');
+          for (var t = 0; t < 50; t++) {
+            expect(drawnStandpipeRiserCount(_flipShuffle(base, rnd)), want,
+                reason: 'indoor=$indoor second=$second trial $t');
+          }
+        }
+      }
+      // One stack: 500 gpm = 31.545 L/s on the pump discharge (DN100), never
+      // standpipeFlow(5) = 1250 gpm = 78.86 L/s.
+      final net = _carPark(pillars: true, indoorBoxes: true);
+      final r = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.fireHydrant: FlowRate(0.005)},
+        hydrantDesignFlow: standpipeFlow(drawnStandpipeRiserCount(net)),
+        building: _floors(3),
+      );
+      expect(r['d']!.flow.inLitersPerSecond, closeTo(31.545, 1e-3));
+      expect(r['d']!.diameter.inMillimeters, 100);
+    });
+  });
+
   group('fire-convergence-8 combined riser drawn as sprinkler', () {
     // An 18-storey Class II zone: GT -> FP -> A -> riser R0..R17; on every
     // floor a hose reel teed off the riser by a hydrant pipe and a sprinkler
@@ -371,12 +446,12 @@ void main() {
               floor: f,
               role: NodeRole.fixture,
               c: NodeComponent.sprinklerHead));
-          edges.add(_e('s${f}_$j', 'R$f', 'SH${f}_$j',
-              s: ServiceType.fireSprinkler));
+          edges.add(
+              _e('s${f}_$j', 'R$f', 'SH${f}_$j', s: ServiceType.fireSprinkler));
         }
         if (f > 0) {
-          edges.add(
-              _e('r$f', 'R${f - 1}', 'R$f', s: riserService, k: EdgeKind.riser));
+          edges.add(_e('r$f', 'R${f - 1}', 'R$f',
+              s: riserService, k: EdgeKind.riser));
         }
       }
       return Network(nodes: nodes, edges: edges);
@@ -408,8 +483,7 @@ void main() {
         expect(hyd['r$f']!.diameter.inMillimeters, 50, reason: 'r$f');
       }
       for (final id in hyd.keys) {
-        expect(spr[id]!.diameter.inMillimeters,
-            hyd[id]!.diameter.inMillimeters,
+        expect(spr[id]!.diameter.inMillimeters, hyd[id]!.diameter.inMillimeters,
             reason: id);
         expect(spr[id]!.flow.cubicMetersPerSecond,
             closeTo(hyd[id]!.flow.cubicMetersPerSecond, 1e-12),
@@ -419,7 +493,8 @@ void main() {
       expect(spr['s0_0']!.diameter.inMillimeters, 25);
     });
 
-    test('fireMinimumDiameter: a standpipe sprinkler pipe takes the hydrant '
+    test(
+        'fireMinimumDiameter: a standpipe sprinkler pipe takes the hydrant '
         'floors of its class', () {
       const riser = NetEdge(
           id: 'e',

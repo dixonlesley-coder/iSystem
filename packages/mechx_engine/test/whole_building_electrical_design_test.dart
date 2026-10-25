@@ -1136,25 +1136,27 @@ void main() {
       );
     });
 
-    test('an 11 kW 3φ motor is ~21 A on a 25 A MCB curve D', () {
+    test('an 11 kW 3φ star-delta motor is ~21 A on a 25 A MCB curve C', () {
       // Shaft 11 kW / 0.88 assumed efficiency = 12.5 kW electrical input.
       // Ib = 12500 / (sqrt3 x 400 x 0.85) = 12500 / 588.897 = 21.23 A -> 21.2.
-      // First rung >= 21.23 is 25 A; motor ⇒ curve D.
+      // First rung >= 21.23 is 25 A. Round 57: the way is STAR-DELTA started
+      // (transition ~2-3 x In), so it takes curve C, not the DOL D curve.
       final c = _way(sys.panels['pp1']!, 'pp1-cmp');
       expect(c.designCurrent.amperes, 21.2);
       expect(c.breaker.ratingA.amperes, 25);
-      expect(c.breaker.curve, BreakerCurve.d);
+      expect(c.breaker.curve, BreakerCurve.c);
       expect(c.threePhase, isTrue);
       // The lift motor is the same machine on EP-1 — same answer.
       expect(_way(sys.panels['ep1']!, 'ep1-lift').breaker.ratingA.amperes, 25);
     });
 
-    test('a 15 kW 3φ fire pump is ~29 A on a 32 A curve D, FRC-cabled', () {
+    test('a 15 kW 3φ fire pump is ~29 A on a 32 A curve C, FRC-cabled', () {
       // 15 / 0.88 = 17.045 kW ⇒ 17045 / 588.897 = 28.94 A -> 28.9 A ⇒ 32 A.
+      // Round 57: star-delta started ⇒ curve C (Y-D transition ~2-3 x In).
       final c = _way(sys.panels['ep1']!, 'ep1-fp');
       expect(c.designCurrent.amperes, 28.9);
       expect(c.breaker.ratingA.amperes, 32);
-      expect(c.breaker.curve, BreakerCurve.d);
+      expect(c.breaker.curve, BreakerCurve.c);
       // FRC sizes on the 90 degC (XLPE) class, not the panel PVC default.
       expect(c.cable.csaMm2, 10.0);
       expect(c.cable.deratedIz.amperes, greaterThanOrEqualTo(32));
@@ -1627,9 +1629,11 @@ void main() {
       // note instead of being silently absent.
       final fp = _way(sys.panels['ep1']!, 'ep1-fp');
       expect(fp.breaker.ratingA.amperes, 32);
-      expect(fp.breaker.curve, BreakerCurve.d);
+      // Round 57: star-delta started ⇒ curve C (magnetic band 5-10 x In);
+      // the Y-D transition (~2-3 x Ib = 87 A) stays below 5 x 32 = 160 A.
+      expect(fp.breaker.curve, BreakerCurve.c);
       expect(fp.rcd.required, isFalse);
-      expect(fp.designCurrent.amperes * 6, lessThan(20 * 32));
+      expect(fp.designCurrent.amperes * 3, lessThan(5 * 32));
 
       final notes =
           everyWarning.where((w) => w.code == 'fire-pump-protection').toList();

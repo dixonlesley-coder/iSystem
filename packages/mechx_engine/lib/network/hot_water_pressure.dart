@@ -203,6 +203,36 @@ HotWaterField solveHotWaterFromHeaters({
 /// a hot delivery node below [targetResidual] (500 Pa slack, the verdict
 /// ladder's) clears [PressureSolution.targetHeldByDesign] and becomes the
 /// critical node when it is the least-served one.
+/// Round 57 (plumbing-hvac-convergence-7-dual-fixture-cold-pressure-masked-
+/// by-hot) — a dual-fed fixture (a shower on a cold AND a hot edge) is ONE
+/// node id in both fields, so a last-writer-wins spread let its hot figure
+/// replace the cold one and a hot-side PRV hid a cold over-pressure. Merge
+/// per JUDGE: the RESIDUAL (SNI floor / below-target / heatmap) takes the
+/// LEAST of the two services, the NO-FLOW STATIC (the over-pressure judge)
+/// the WORST (largest); a key in one map only passes through, so a
+/// cold-only project is byte-identical.
+Map<String, Pressure> mergeLeastResidual(
+    Map<String, Pressure> cold, Map<String, Pressure> hot) {
+  final out = {...cold};
+  hot.forEach((id, p) {
+    final c = out[id];
+    out[id] = c == null || p.pascals < c.pascals ? p : c;
+  });
+  return out;
+}
+
+/// The worst (largest) of the two services' no-flow static per node — see
+/// [mergeLeastResidual].
+Map<String, Pressure> mergeWorstStatic(
+    Map<String, Pressure> cold, Map<String, Pressure> hot) {
+  final out = {...cold};
+  hot.forEach((id, p) {
+    final c = out[id];
+    out[id] = c == null || p.pascals > c.pascals ? p : c;
+  });
+  return out;
+}
+
 PressureSolution mergeHotWaterField(
   PressureSolution cold,
   HotWaterField hot, {
@@ -229,14 +259,12 @@ PressureSolution mergeHotWaterField(
     }
   }
   return PressureSolution(
-    residualPressure: {...cold.residualPressure, ...hot.residual},
+    residualPressure: mergeLeastResidual(cold.residualPressure, hot.residual),
     requiredPumpHead: requiredPumpHead ?? cold.requiredPumpHead,
     criticalNodeId: critical,
     targetHeldByDesign: held,
-    noFlowStaticPressure: {
-      ...cold.noFlowStaticPressure,
-      ...hot.noFlowStatic,
-    },
+    noFlowStaticPressure:
+        mergeWorstStatic(cold.noFlowStaticPressure, hot.noFlowStatic),
     deliveryNodeIds: {...cold.deliveryNodeIds, ...hot.deliveryNodeIds},
   );
 }
@@ -260,17 +288,15 @@ DownfeedSolution mergeHotWaterDownfeed(
   final short = targetResidual.pascals - minR.pascals;
   final booster = short > 0 ? headFromPressure(Pressure(short)) : const Head(0);
   return DownfeedSolution(
-    residualPressure: {...cold.residualPressure, ...hot.residual},
+    residualPressure: mergeLeastResidual(cold.residualPressure, hot.residual),
     criticalNodeId: critical,
     minResidual: minR,
     boosterHeadRequired: booster.meters > cold.boosterHeadRequired.meters
         ? booster
         : cold.boosterHeadRequired,
     targetHeldByDesign: cold.targetHeldByDesign,
-    noFlowStaticPressure: {
-      ...cold.noFlowStaticPressure,
-      ...hot.noFlowStatic,
-    },
+    noFlowStaticPressure:
+        mergeWorstStatic(cold.noFlowStaticPressure, hot.noFlowStatic),
     deliveryNodeIds: {...cold.deliveryNodeIds, ...hot.deliveryNodeIds},
   );
 }
