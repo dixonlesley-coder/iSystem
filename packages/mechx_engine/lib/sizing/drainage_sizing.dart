@@ -72,32 +72,68 @@ double drainageFixtureUnit(PlumbingFixture fixture) {
 
 // Threshold tables: (maxDfu, diameterMm) ascending; pick the first row whose
 // maxDfu ≥ the accumulated DFU.
+// Round 30 (mech-sim-4-branch-dfu-table-shifted) — IPC Table 710.1(2)
+// horizontal fixture branch capacities paired with the RIGHT diameters:
+// 1½ in (DN40) 3 DFU, 2 in (DN50) 6, 2½ in (DN65) 12, 3 in (DN75) 20, 4 in
+// (DN100) 160. The previous rows had slid the diameter column down one row
+// (the duplicate (12,75),(20,75) gave it away), issuing every 2–12 DFU branch
+// one nominal size large. The trap / WC floors (kMinTrapDrainMm,
+// kMinWcDrainMm) still floor showers at DN50 and WCs at DN75.
 const List<(double, double)> _branchDfuTable = [
-  (1, 40),
-  (3, 50),
-  (6, 65),
-  (12, 75),
+  (3, 40),
+  (6, 50),
+  (12, 65),
   (20, 75),
   (160, 100),
   (360, 125),
   (620, 150),
+  // Round 17 (gravity-3-2) — IPC Table 710.1(2) continues past DN150, so a
+  // mid-rise building drain (≈ 840 DFU for a 12-storey office) sizes DN200
+  // instead of clamping at DN150 with an unactionable "split the load"
+  // message. // VERIFY against SNI 8153 (`notAnSniClause`).
+  (1400, 200),
+  (2500, 250),
+  (3900, 300),
 ];
 const List<(double, double)> _stackDfuTable = [
   (2, 40),
   (10, 50),
-  (24, 65),
+  // Round 30 (r2) — IPC 710.1(2) stacks <= 3 branch intervals: 2½ in
+  // carries 20 DFU (the old 24 was the > 3-interval 2 in figure one size up
+  // and sized a 21-24 DFU stack one nominal size SMALL). The 3 in row's 42
+  // stays below IPC's 48 — conservative. // VERIFY against SNI 8153.
+  (20, 65),
   (42, 75),
   (240, 100),
   (540, 125),
   (960, 150),
+  // Round 17 (gravity-3-2) — IPC Table 710.1(2) stack rows. // VERIFY.
+  (2200, 200),
+  (3800, 250),
+  (6000, 300),
 ];
+// Round 9 (plumbing-rules-vent-table-shifted) — UPC Table 703.2 vent maximum
+// units, paired with the RIGHT diameters: 1¼ in (DN32) carries 1 DFU, 1½ in
+// (DN40) 8, 2 in (DN50) 24, 2½ in (DN65) 48, 3 in (DN75) 84, 4 in (DN100) 256,
+// 5 in (DN125) 600, 6 in (DN150) 1380. The previous table had slid the
+// diameter column down one row (8 DFU → DN32), issuing every vent one nominal
+// size small. // VERIFY against SNI 8153 vent table.
 const List<(double, double)> _ventDfuTable = [
-  (8, 32),
-  (24, 40),
-  (84, 50),
-  (256, 75),
-  (600, 100),
+  (1, 32),
+  (8, 40),
+  (24, 50),
+  (48, 65),
+  (84, 75),
+  (256, 100),
+  (600, 125),
+  (1380, 150),
 ];
+
+/// Nominal vent pipe series (mm) the half-drain floor rounds UP into.
+const List<double> _ventSeriesMm = [32, 40, 50, 65, 75, 100, 125, 150];
+
+/// Smallest vent diameter permitted anywhere (1¼ in).
+const double kMinVentMm = 32.0;
 
 double _lookup(List<(double, double)> table, double dfu) {
   for (final (maxDfu, mm) in table) {
@@ -112,10 +148,117 @@ double _lookup(List<(double, double)> table, double dfu) {
 Diameter drainDiameterForDfu(double dfu, {required bool isStack}) =>
     Diameter.mm(_lookup(isStack ? _stackDfuTable : _branchDfuTable, dfu));
 
-/// Minimum vent diameter for [dfu] drainage fixture units (developed-length
-/// refinement is a // VERIFY TODO). // VERIFY against SNI 8153 vent table.
-Diameter ventDiameterForDfu(double dfu) =>
-    Diameter.mm(_lookup(_ventDfuTable, dfu));
+/// Minimum vent diameter for [dfu] drainage fixture units. // VERIFY against
+/// SNI 8153 vent table. The developed-length column of the same UPC 703.2
+/// table is applied per vent STACK by the sizer (Round 58,
+/// [ventDiameterForLength]).
+///
+/// Round 9 — when [servedDrainMm] (the diameter of the drain this vent
+/// serves) is given the vent is also floored at HALF that drain diameter,
+/// rounded UP into the vent series (IPC 906.2 / UPC 904.1: a vent is never
+/// smaller than ½ the drain it serves, nor smaller than 1¼ in) — e.g. a
+/// DN75 WC drain ⇒ ≥ 37.5 mm ⇒ DN40. // VERIFY (`notAnSniClause`).
+Diameter ventDiameterForDfu(double dfu, {double? servedDrainMm}) {
+  var mm = _lookup(_ventDfuTable, dfu);
+  if (servedDrainMm != null && servedDrainMm > 0) {
+    final half = servedDrainMm / 2.0;
+    final floor = _ventSeriesMm.firstWhere((v) => v >= half - 1e-9,
+        orElse: () => _ventSeriesMm.last);
+    if (floor > mm) mm = floor;
+  }
+  if (mm < kMinVentMm) mm = kMinVentMm;
+  return Diameter.mm(mm);
+}
+
+/// True when [dfu] exceeds the TOP row of the stack / branch DFU table, i.e.
+/// [drainDiameterForDfu] is returning the table's largest diameter as a CLAMP,
+/// not a size that carries the load (audit 2026-10 water-drainage-4). The
+/// sizing layer raises `EdgeSizing.overCapacity` from this.
+bool drainDfuExceedsTable(double dfu, {required bool isStack}) =>
+    dfu > (isStack ? _stackDfuTable : _branchDfuTable).last.$1;
+
+/// Vent analogue of [drainDfuExceedsTable] (top row of the vent table).
+bool ventDfuExceedsTable(double dfu) => dfu > _ventDfuTable.last.$1;
+
+/// Round 58 (plumbing-hvac-convergence-8-vent-stack-developed-length-
+/// ignored) — UPC Table 703.2's MAXIMUM DEVELOPED LENGTH column for vent
+/// piping, (nominal mm, max length m): 1¼ in 45 ft, 1½ in 60 ft, 2 in 120 ft,
+/// 2½ in 180 ft, 3 in 212 ft, 4 in 300 ft, 5 in 390 ft, 6 in 510 ft (1 ft =
+/// 0.3048 m). `// VERIFY` notAnSniClause (in `SniProfile.verifyChecklist`).
+const List<(double, double)> kVentMaxDevelopedLengthM = [
+  (32, 45 * 0.3048),
+  (40, 60 * 0.3048),
+  (50, 120 * 0.3048),
+  (65, 180 * 0.3048),
+  (75, 212 * 0.3048),
+  (100, 300 * 0.3048),
+  (125, 390 * 0.3048),
+  (150, 510 * 0.3048),
+];
+
+/// Round 58 — the smallest vent diameter (mm) at or above [mm] whose UPC
+/// 703.2 maximum developed length covers [developedLengthM]; the table top
+/// (DN150) when even it is too short (see [ventLengthExceedsTable]).
+double ventDiameterForLength(double mm, double developedLengthM) {
+  for (final (d, maxL) in kVentMaxDevelopedLengthM) {
+    if (d + 1e-9 >= mm && developedLengthM <= maxL + 1e-9) return d;
+  }
+  return mm > kVentMaxDevelopedLengthM.last.$1
+      ? mm
+      : kVentMaxDevelopedLengthM.last.$1;
+}
+
+/// Round 58 — true when [developedLengthM] exceeds the DN150 row of UPC 703.2
+/// (155.4 m): the printed vent size is then the table limit.
+bool ventLengthExceedsTable(double developedLengthM) =>
+    developedLengthM > kVentMaxDevelopedLengthM.last.$2 + 1e-9;
+
+/// Minimum drain diameter (mm) for ANY drainage branch or stack that carries a
+/// water closet, whatever its DFU count (audit 2026-10 water-drainage-7). The
+/// DFU tables alone would give a single 4-DFU flush-tank WC a DN50 stack /
+/// DN65 branch; UPC/IPC — the practice these tables follow — require ≥ 3 in
+/// (DN75) for a closet drain. // VERIFY against SNI 8153 (Indonesian practice
+/// commonly lays DN100); listed in `SniProfile.verifyChecklist`.
+const double kMinWcDrainMm = 75.0;
+
+/// Round 9 (plumbing-rules-wc-count-on-dn75) — a 3 in (DN75) HORIZONTAL
+/// branch may carry at most this many water closets (IPC Table 710.1(2)
+/// footnote / UPC 703.2 footnote); a third WC raises it to [kWcRowDrainMm].
+/// // VERIFY (`notAnSniClause`, IPC 710.1 footnote).
+const int kMaxWcOnDn75Branch = 2;
+
+/// A 3 in (DN75) STACK may carry at most this many water closets (IPC Table
+/// 710.1(2) footnote). // VERIFY (`notAnSniClause`, IPC 710.1 footnote).
+const int kMaxWcOnDn75Stack = 6;
+
+/// The drain floor once the WC count exceeds the DN75 limits above (4 in).
+const double kWcRowDrainMm = 100.0;
+
+/// Minimum drain diameter (mm) for an edge carrying [wcCount] water closets:
+/// none ⇒ 0 (no floor), 1..limit ⇒ [kMinWcDrainMm] (DN75), above the DN75
+/// branch/stack limit ⇒ [kWcRowDrainMm] (DN100).
+double minDrainMmForWcCount(int wcCount, {required bool isStack}) {
+  if (wcCount <= 0) return 0;
+  final limit = isStack ? kMaxWcOnDn75Stack : kMaxWcOnDn75Branch;
+  return wcCount > limit ? kWcRowDrainMm : kMinWcDrainMm;
+}
+
+/// Round 9 (plumbing-rules-floor-drain-dn40-stack) — the trap/outlet of a
+/// floor drain, shower or urinal is 2 in (DN50) minimum (IPC Table 709.1 /
+/// 1002, standard floor-drain bodies) and a drain may never be smaller than
+/// the trap it serves, so every edge downstream of such a terminal is floored
+/// here. // VERIFY (`notAnSniClause`).
+const double kMinTrapDrainMm = 50.0;
+
+/// True for the fixtures whose trap imposes the [kMinTrapDrainMm] floor.
+bool isDn50TrapFixture(PlumbingFixture fixture) =>
+    fixture == PlumbingFixture.shower ||
+    fixture == PlumbingFixture.urinalFlushTank;
+
+/// True for the fixtures that impose the [kMinWcDrainMm] floor.
+bool isWaterCloset(PlumbingFixture fixture) =>
+    fixture == PlumbingFixture.waterClosetFlushTank ||
+    fixture == PlumbingFixture.waterClosetFlushValve;
 
 // ── Partial-full hydraulics ───────────────────────────────────────────────────
 
@@ -264,8 +407,7 @@ DrainageSizingResult sizeForFlow({
     hydraulicRadius: Length(selected.meters / 4.0),
     slope: slope,
   );
-  final bool selfCleansing =
-      vFull.metersPerSecond >= kSelfCleansingVelocityMps;
+  final bool selfCleansing = vFull.metersPerSecond >= kSelfCleansingVelocityMps;
 
   return DrainageSizingResult(
     diameter: selected,

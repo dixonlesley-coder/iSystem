@@ -19,6 +19,11 @@
 /// report literal becomes translatable.
 library;
 
+import '../electrical/load_kind.dart';
+import '../electrical/power_oneline.dart';
+import '../sizing/bom.dart' show FittingType;
+import '../sizing/fire_sprinkler.dart' show FireHazardClass;
+
 /// The two languages the reports render in. Engine-local (the app maps its own
 /// `AppLocale` onto this at the boundary when it wires the locale through).
 enum ReportLocale { en, id }
@@ -91,6 +96,7 @@ enum RptStringKey {
   wsTargetResidual, // {kpa}
   wsPumpHead, // {m}
   wsPumpMotor, // {kw}
+  wsPumpTagged, // {tag} {service} {lps} {m} {kw}
   wsOperatingPoint, // {lps} {m} {pct} {match}
   wsMatchStable,
   wsMatchUnstable,
@@ -133,6 +139,11 @@ enum RptStringKey {
   firePumpValue, // {rated} {head} {churn} {overload} {motor} {verdict}
   firePumpVerdictOversized,
   firePumpVerdictWithin,
+  fireOverPressureKey,
+  fireOverPressureSystemKey, // {tag}
+  fireOverPressureValue, // {churn} {limit} {share}
+  fireStandpipeOverPressureValue, // {churn} {limit} {share}
+  fireOverPressureShare, // {pct}
   fireJockeyKey,
   fireJockeyValue, // {lps} {m} {standby}
   fireJockeyStandby,
@@ -141,6 +152,10 @@ enum RptStringKey {
   hvacTrunkAirflow,
   hvacFanStatic,
   hvacFanMotor,
+  hvacExhaustAirflow,
+  hvacExhaustStatic,
+  hvacExhaustMotor,
+  hvacFanUnitValue, // {lps} {pa} {kw}
   hvacOperatingPoint,
   hvacOperatingPointValue, // {lps} {pa} {pct} {match} {shutoff}
   hvacAirBalance,
@@ -197,6 +212,16 @@ enum RptStringKey {
   edbOriginFault,
   edbOriginFaultValue, // {ka} {ct}
   edbClearingTime, // {s}
+  edbClearingTimeKey,
+  edbServiceSectionKey,
+  edbServiceSectionValue, // {kva} {total}
+  edbClearingTimeValue, // {s}
+  edbFaultBasisExplicit,
+  edbFaultBasisEstimate,
+  edbFaultBasisDefault,
+  edbFaultBasisSupplyStudy,
+  edbFaultBasisGenerator, // {xd}
+  edbFaultBasisInverter, // {m}
   headingSupplySummary,
   ssSystem,
   ssDiversifiedDemand,
@@ -213,6 +238,7 @@ enum RptStringKey {
   panelNeutralBar, // {n} {oversize} {pe}
   panelNeutralOversize, // {f}
   panelDemand, // {c} {d} {a}
+  panelDemandCurrentSplit, // {div} {undiv}
   panelPhaseBalance, // {l1} {l2} {l3} {imb}
 
   // Circuit table.
@@ -269,11 +295,164 @@ enum RptStringKey {
   catTransformer,
   catGenerator,
   catCapacitorBank,
+  catDistributedSource,
+  catTanks,
   tblTag,
   tblDuty,
   tblModelSpec,
   tblQty,
   esClosingNote,
+
+  // ── Report CELLS / values (R3 reports-6: the procurement + calc bodies) ──────
+  sysThreePhase,
+  sysSinglePhase,
+  esPanelService, // {system}
+  esPanelDuty, // {kw}
+  esPanelSize, // {a}
+  esMotorSize, // {kw}
+  esAcDuty, // {btu} {pk}
+  esAcSize, // {kw}
+  esTransformerService,
+  esGeneratorService,
+  esGeneratorPrimeService,
+  esCapBankService,
+  esBatteryService,
+  esPvService,
+  esInverterService,
+  esCapBankRecommendedService,
+  esRoofTankService,
+  esGroundTankService,
+  esTankCapacityUnset,
+  earthNoteTnCs,
+  earthNoteTnS,
+  earthNoteTt,
+  earthTailRcd,
+  earthTailOcpd,
+  stormRainfallValue, // {mm}
+
+  // ── Round 9 — PDF chrome, doc titles, enum labels, app-supplied cells ──────
+  pdfPreparedBy,
+  pdfCheckedBy,
+  pdfApprovedBy,
+  pdfPageOf,
+  docCalcReport,
+  docMepReport,
+  docEquipSchedule,
+  headingDrawings,
+  capMechRiser,
+  capElecSld,
+  untitledProject,
+  feedUpfeed,
+  feedDownfeed,
+  feedBoosterNoTank,
+  feedDirectMains,
+  esSvcDomesticWater,
+  esSvcFireStandpipe,
+  esSvcMechVent,
+  esSvcExhaustVent,
+  esSvcTransferPump,
+  esSvcSewageEjector,
+  esSvcSewageEjectorStandby,
+  esSvcHwRecirc,
+  esSvcDomesticWaterStandby,
+  esSvcTransferPumpStandby,
+  esSvcHwRecircStandby,
+  warnLeadIn,
+  lkGeneral,
+  lkLighting,
+  lkSocket,
+  lkHeating,
+  lkHvac,
+  lkMotor,
+  lkPump,
+  lkEvCharger,
+  lkWelding,
+  lkCapacitor,
+  lkUps,
+  lkSpare,
+  lkFeeder,
+  pnUtility,
+  pnGenerator,
+  pnAts,
+  pnCos,
+  olMainLvBus,
+  olMainPanel,
+  olPlnUtility,
+  olGenerator,
+  olEssentialBus,
+  olHybridInverter,
+  olSolarArray,
+  olBattery,
+  olPvInverter,
+  olBatteryInverter,
+  olUpsCriticalBus,
+  olManualChangeover,
+  olTransferSwitch,
+  olVoltsLv,
+  olNoteLead,
+  esSvcFireSprinkler,
+  esSvcFireStandbyPump,
+  esSvcFireJockeyPump,
+  esSvcFireTransferPump,
+  dbDrainageSlope,
+  dbDrainageSlopeValue,
+  pnPv,
+  pnPvInverter,
+  pnBattery,
+  pnBatteryInverter,
+  pnHybridInverter,
+  pnBus,
+  pnMainPanel,
+  ilMechanical,
+  ilElectrical,
+  hazLight,
+  hazOh1,
+  hazOh2,
+  hazExtra,
+  fitElbow,
+  fitTee,
+  fitCross,
+  fitReducer,
+  // Round 30 (costing-2-7) — the MEP proposal (mepQuotationToMarkdown).
+  mqTitle,
+  mqMechBom,
+  mqElecBom,
+  mqMechHead,
+  mqElecHead,
+  mqUnpriced,
+  mqQuotation,
+  mqQuoteHead,
+  mqMechMaterial,
+  mqElecMaterial,
+  mqMaterialSubtotal,
+  mqLabour,
+  mqOverhead,
+  mqContingency,
+  mqMargin,
+  mqGrandTotal,
+  mqUnmeasuredNote,
+  mqUnpricedNote,
+  mqAssumedNote,
+  mqEquipmentNote,
+  // Round 30 (report-parity-2-5) — the last EN tokens of the ID electrical
+  // report: severity tags, the 3-phase cell, the genset mode words.
+  sevError,
+  sevWarn,
+  sevInfo,
+  phaseCell3ph,
+  olGenStandby,
+  olGenPrime,
+  // Round 30 (report-parity-2-1) — one fire-pump rating line per system.
+  fireSystemPumpKey,
+  fireSystemSprinkler,
+  fireSystemStandpipe,
+  fireSystemTransfer,
+  fireGravityKey, // {system}
+  fireGravityValue, // {lps} {avail} {need} {verdict}
+  fireGravityOk,
+  fireGravityShort,
+  fireDryKey, // {system}
+  fireDryValue, // {lps} {m} {kpa}
 }
 
 /// English — the source language. Every value MUST match the inline literal it
@@ -292,7 +471,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
 
   // Mechanical.
   RptStringKey.calcTitle: 'MEP Calculation Report — {name}',
-  RptStringKey.calcGenerated: '_Generated {date} · MechX_',
+  RptStringKey.calcGenerated: '_Generated {date} · iSystem_',
   // N25 — a governed standards statement, not an unqualified "superseded"
   // admission. {rev} is intentionally no longer echoed here (it carried the
   // provenance blob); per-value provenance still prints in the Unverified
@@ -353,6 +532,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.wsTargetResidual: '- Target fixture residual: **{kpa} kPa**',
   RptStringKey.wsPumpHead: '- Pump head: **{m} m**',
   RptStringKey.wsPumpMotor: '- Pump motor: **{kw} kW**',
+  RptStringKey.wsPumpTagged:
+      '- Pump {tag} ({service}): **{lps} L/s @ {m} m**, motor **{kw} kW**',
   RptStringKey.wsOperatingPoint:
       '- Operating point (system × pump curve): **{lps} L/s** @ **{m} m** '
           '({pct} % of design flow) · {match} '
@@ -371,8 +552,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.wsDownfeedGravity: '**gravity sufficient**',
   RptStringKey.wsDownfeedBooster: 'booster **+{m} m**',
   RptStringKey.wsHotWaterRecirc:
-      '- Hot-water recirculation: **{lps} L/s** · loop {loop} m · '
-          'pump {kw} kW · return {c} °C',
+      '- Hot-water recirculation: **{lps} L/s** · return loop {len} m · '
+          'head {head} m · pump {kw} kW · return {c} °C',
   RptStringKey.wsLegionella:
       '  - ⚠ Modelled return temperature {c} °C is below the anti-Legionella '
           'floor (~55 °C). Reduce the loop temperature drop or add trace '
@@ -396,7 +577,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
       'Remote head OK - demand governed by head minimum pressure, not density',
   RptStringKey.fireStandpipeKey: 'Standpipe:',
   RptStringKey.fireStandpipeValue:
-      '**{lps} L/s** · fire pump {m} m · {kw} kW · min riser {mm} mm',
+      '**{lps} L/s** · fire pump {m} m · {kw} kW shaft at rated point · '
+          'min riser {mm} mm',
   RptStringKey.firePumpKey: 'Fire-pump rating curve (NFPA 20, {des} pump):',
   RptStringKey.firePumpDuty: 'duty',
   RptStringKey.firePumpStandby: 'standby',
@@ -410,6 +592,17 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.firePumpVerdictOversized:
       'Motor above standard frame range - specify a custom motor or duty pairs',
   RptStringKey.firePumpVerdictWithin: 'Motor within standard frame range',
+  RptStringKey.fireOverPressureKey: 'Component pressure (churn)',
+  RptStringKey.fireOverPressureSystemKey: 'Component pressure (churn), {tag}',
+  RptStringKey.fireOverPressureValue:
+      '{churn} kPa at churn exceeds the {limit} kPa (175 psi) rating of '
+          'standard fire components{share} - upsize the index pipe or zone '
+          'the system (VERIFY)',
+  RptStringKey.fireOverPressureShare: ' (friction {pct} % of the rated head)',
+  RptStringKey.fireStandpipeOverPressureValue:
+      '{churn} kPa at churn exceeds the {limit} kPa (350 psi) maximum '
+          'standpipe system pressure{share} - split the standpipe into '
+          'pressure zones (VERIFY)',
   RptStringKey.fireJockeyKey: 'Jockey pump:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pressure maintenance){standby}',
@@ -418,6 +611,11 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.hvacTrunkAirflow: 'Trunk airflow:',
   RptStringKey.hvacFanStatic: 'Fan total static:',
   RptStringKey.hvacFanMotor: 'Fan motor:',
+  RptStringKey.hvacExhaustAirflow: 'Exhaust airflow:',
+  RptStringKey.hvacExhaustStatic: 'Exhaust fan total static:',
+  RptStringKey.hvacExhaustMotor: 'Exhaust fan motor:',
+  RptStringKey.hvacFanUnitValue:
+      '**{lps} L/s** · total static {pa} Pa · motor **{kw} kW**',
   RptStringKey.hvacOperatingPoint: 'Operating point (system × fan curve):',
   RptStringKey.hvacOperatingPointValue:
       '**{lps} L/s** @ **{pa} Pa** ({pct} % of design flow) · {match} · '
@@ -440,7 +638,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.tblFitting: 'Fitting',
   RptStringKey.tblCount: 'Count',
   RptStringKey.headingRunSchedule: 'Run / riser schedule',
-  RptStringKey.tblFixtureUnits: 'FU',
+  RptStringKey.tblFixtureUnits: 'UBAP/DFU',
   RptStringKey.tblFlowLps: 'Flow (L/s)',
   RptStringKey.tblVelocityMs: 'Vel (m/s)',
   RptStringKey.runScheduleStackRaised:
@@ -475,6 +673,24 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.edbOriginFaultValue:
       '**{ka} kA**{ct} (busbar short-circuit-withstand basis)',
   RptStringKey.edbClearingTime: ' · clearing time **{s} s**',
+  RptStringKey.edbClearingTimeKey: 'Busbar clearing time:',
+  RptStringKey.edbServiceSectionKey: 'Service-entrance rating:',
+  RptStringKey.edbServiceSectionValue:
+      '**{kva} kVA per section** (dual transformer, coupler normally open — '
+      '{total} kVA declared in total)',
+  RptStringKey.edbClearingTimeValue: '**{s} s**',
+  RptStringKey.edbFaultBasisExplicit: ' · _project setting_',
+  RptStringKey.edbFaultBasisEstimate:
+      ' · _estimated from the declared service size (// VERIFY)_',
+  RptStringKey.edbFaultBasisDefault: ' · _default — no service declared_',
+  RptStringKey.edbFaultBasisSupplyStudy:
+      ' · _estimated from the transformer the supply study selects for the demand (// VERIFY)_',
+  RptStringKey.edbFaultBasisGenerator:
+      " · _estimated from the generator's alternator (S / (sqrt3 x 400 V x Xd''), "
+      "Xd'' {xd} p.u.; the alternator datasheet governs) (// VERIFY)_",
+  RptStringKey.edbFaultBasisInverter:
+      ' · _estimated from the solar inverter ({m} x rated current, '
+      'current-limited; the inverter datasheet governs) (// VERIFY)_',
   RptStringKey.headingSupplySummary: 'Supply summary',
   RptStringKey.ssSystem: 'System:',
   RptStringKey.ssDiversifiedDemand: 'Diversified demand:',
@@ -496,6 +712,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.panelNeutralOversize: ' (×{f} triplen oversize)',
   RptStringKey.panelDemand:
       '- Demand: connected {c} W, diversified {d} W, {a}',
+  RptStringKey.panelDemandCurrentSplit:
+      '{div} diversified (max phase {undiv} undiversified)',
   RptStringKey.panelPhaseBalance:
       '- Phase balance: L1 {l1} A · L2 {l2} A · L3 {l3} A (imbalance {imb} %)',
 
@@ -523,7 +741,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
 
   // Unified MEP.
   RptStringKey.mepTitle: 'MEP Building-Services Report — {name}',
-  RptStringKey.mepGenerated: '_Generated {date} · MechX (iSystem)_',
+  RptStringKey.mepGenerated: '_Generated {date} · iSystem_',
   RptStringKey.mepUnifiedIntro:
       'Unified mechanical · electrical · plumbing report.',
   RptStringKey.mepMechStandard: 'Mechanical / plumbing standard:',
@@ -553,6 +771,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.catTransformer: 'Transformer',
   RptStringKey.catGenerator: 'Standby generator',
   RptStringKey.catCapacitorBank: 'Capacitor bank',
+  RptStringKey.catDistributedSource: 'Battery, PV & inverters',
+  RptStringKey.catTanks: 'Tanks',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Duty',
   RptStringKey.tblModelSpec: 'Model / spec',
@@ -561,6 +781,185 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '_Model / spec is a placeholder for the engineer to complete from '
           'the selected manufacturer datasheet; iSystem sizes the duty, not the '
           'catalogue model._',
+  // Report cells / values (R3 reports-6) — EN byte-identical to the literals.
+  RptStringKey.sysThreePhase: '3-phase',
+  RptStringKey.sysSinglePhase: '1-phase',
+  RptStringKey.esPanelService: '{system} distribution',
+  RptStringKey.esPanelDuty: '{kw} kW demand',
+  RptStringKey.esPanelSize: '{a} A incomer',
+  RptStringKey.esMotorSize: '{kw} kW motor',
+  RptStringKey.esAcDuty: '{btu} BTU/h cooling ({pk} PK)',
+  RptStringKey.esAcSize: '{kw} kW input',
+  RptStringKey.esTransformerService: 'Distribution transformer',
+  RptStringKey.esGeneratorService: 'Standby generator',
+  RptStringKey.esGeneratorPrimeService: 'Prime generator',
+  RptStringKey.esCapBankService: 'PF-correction bank',
+  RptStringKey.esBatteryService: 'Battery energy storage',
+  RptStringKey.esPvService: 'Solar PV array',
+  RptStringKey.esInverterService: 'Inverter',
+  RptStringKey.esCapBankRecommendedService:
+      'PF-correction bank (APFC, recommended)',
+  RptStringKey.esRoofTankService: 'Roof tank (water storage)',
+  RptStringKey.esGroundTankService: 'Ground tank (water storage)',
+  RptStringKey.esTankCapacityUnset: 'capacity not set',
+  RptStringKey.earthNoteTnCs:
+      'Combined PEN from the source, split into separate N and PE at the '
+          'origin. Common PLN practice.',
+  RptStringKey.earthNoteTnS:
+      'Separate neutral and protective conductors throughout the installation.',
+  RptStringKey.earthNoteTt:
+      'Installation earthed via a local electrode; requires RCD protection. '
+          'Common for standalone/rural sites.',
+  RptStringKey.earthTailRcd:
+      ' Earth-fault loop impedance is high, so an RCD provides fault '
+          'protection on every final circuit.',
+  RptStringKey.earthTailOcpd:
+      ' Overcurrent devices clear earth faults; RCDs are still required for '
+          'socket-outlets and special locations.',
+  RptStringKey.stormRainfallValue: '**{mm} mm/hr**',
+  RptStringKey.pdfPreparedBy: 'Prepared by',
+  RptStringKey.pdfCheckedBy: 'Checked by',
+  RptStringKey.pdfApprovedBy: 'Approved by',
+  RptStringKey.pdfPageOf: 'Page {x} of {y}',
+  RptStringKey.docCalcReport: 'MEP Calculation Report',
+  RptStringKey.docMepReport: 'MEP Building-Services Report',
+  RptStringKey.docEquipSchedule: 'Equipment Schedule',
+  RptStringKey.headingDrawings: 'Drawings',
+  RptStringKey.capMechRiser: 'Mechanical riser single-line diagram',
+  RptStringKey.capElecSld: 'Electrical single-line diagram',
+  RptStringKey.untitledProject: 'Untitled project',
+  RptStringKey.feedUpfeed: 'Upfeed pump',
+  RptStringKey.feedDownfeed: 'Roof-tank downfeed',
+  // Round 20 — a downfeed SETTING with no roof tank drawn: the report names
+  // the drawn feed (the riser sheet's riserFeedNote), never a phantom tank.
+  RptStringKey.feedBoosterNoTank: 'Booster pump (no roof tank)',
+  RptStringKey.feedDirectMains: 'Direct mains',
+  RptStringKey.esSvcDomesticWater: 'Domestic water supply',
+  RptStringKey.esSvcFireStandpipe: 'Fire standpipe pump',
+  RptStringKey.esSvcMechVent: 'Mechanical ventilation',
+  RptStringKey.esSvcExhaustVent: 'Exhaust ventilation',
+  RptStringKey.esSvcTransferPump: 'Transfer pump (ground tank to roof tank)',
+  RptStringKey.esSvcSewageEjector: 'Sewage ejector (pit to building drain)',
+  RptStringKey.esSvcSewageEjectorStandby: 'Sewage ejector (standby)',
+  RptStringKey.esSvcHwRecirc: 'Hot-water recirculation',
+  RptStringKey.esSvcDomesticWaterStandby: 'Domestic water supply (standby)',
+  RptStringKey.esSvcTransferPumpStandby: 'Transfer pump (standby)',
+  RptStringKey.esSvcHwRecircStandby: 'Hot-water recirculation (standby)',
+  RptStringKey.warnLeadIn: '[{code}] ',
+  RptStringKey.lkGeneral: 'general',
+  RptStringKey.lkLighting: 'lighting',
+  RptStringKey.lkSocket: 'socket',
+  RptStringKey.lkHeating: 'heating',
+  RptStringKey.lkHvac: 'HVAC',
+  RptStringKey.lkMotor: 'motor',
+  RptStringKey.lkPump: 'pump',
+  RptStringKey.lkEvCharger: 'EV charger',
+  RptStringKey.lkWelding: 'welding',
+  RptStringKey.lkCapacitor: 'capacitor',
+  RptStringKey.lkUps: 'UPS',
+  RptStringKey.lkSpare: 'spare',
+  RptStringKey.lkFeeder: 'feeder',
+  RptStringKey.pnUtility: 'utility',
+  RptStringKey.pnGenerator: 'generator',
+  RptStringKey.pnAts: 'ATS',
+  RptStringKey.pnCos: 'COS',
+  RptStringKey.olMainLvBus: 'Main LV bus',
+  RptStringKey.olMainPanel: 'Main panel',
+  RptStringKey.olPlnUtility: 'PLN utility',
+  RptStringKey.olGenerator: 'Generator',
+  RptStringKey.olEssentialBus: 'Essential bus',
+  RptStringKey.olHybridInverter: 'Hybrid inverter',
+  RptStringKey.olSolarArray: 'Solar array',
+  RptStringKey.olBattery: 'Battery',
+  RptStringKey.olPvInverter: 'PV inverter',
+  RptStringKey.olBatteryInverter: 'Battery inverter',
+  RptStringKey.olUpsCriticalBus: 'UPS / critical bus',
+  RptStringKey.olManualChangeover: 'manual changeover',
+  RptStringKey.olTransferSwitch: 'transfer switch',
+  RptStringKey.olVoltsLv: '{v} V LV',
+  RptStringKey.olNoteLead: '(note in English) ',
+  RptStringKey.esSvcFireSprinkler: 'Fire sprinkler pump',
+  RptStringKey.esSvcFireStandbyPump: 'Fire pump (standby)',
+  RptStringKey.esSvcFireJockeyPump: 'Fire jockey pump',
+  RptStringKey.esSvcFireTransferPump: 'Fire tank transfer pump',
+  RptStringKey.dbDrainageSlope: 'Drainage design slope:',
+  RptStringKey.dbDrainageSlopeValue: '**1:{n}** (Manning n {manning}, design fill {fill})',
+  RptStringKey.pnPv: 'PV array',
+  RptStringKey.pnPvInverter: 'PV inverter',
+  RptStringKey.pnBattery: 'battery',
+  RptStringKey.pnBatteryInverter: 'battery inverter',
+  RptStringKey.pnHybridInverter: 'hybrid inverter',
+  RptStringKey.pnBus: 'bus',
+  RptStringKey.pnMainPanel: 'main panel',
+  RptStringKey.ilMechanical: 'mechanical',
+  RptStringKey.ilElectrical: 'electrical',
+  RptStringKey.hazLight: 'LH light hazard',
+  RptStringKey.hazOh1: 'OH1 ordinary hazard group 1',
+  RptStringKey.hazOh2: 'OH2 ordinary hazard group 2',
+  RptStringKey.hazExtra: 'EH extra hazard',
+  RptStringKey.fitElbow: 'elbow',
+  RptStringKey.fitTee: 'tee',
+  RptStringKey.fitCross: 'cross',
+  RptStringKey.fitReducer: 'reducer',
+  RptStringKey.mqTitle:
+      '# MEP proposal — {project}',
+  RptStringKey.mqMechBom:
+      '## Mechanical bill of materials',
+  RptStringKey.mqElecBom:
+      '## Electrical bill of materials',
+  RptStringKey.mqMechHead:
+      '| Qty | Unit | Item | Unit ({cur}) | Total ({cur}) |',
+  RptStringKey.mqElecHead:
+      '| Qty | Category | Description | SKU | Unit ({cur}) | Total ({cur}) |',
+  RptStringKey.mqUnpriced:
+      '(unpriced)',
+  RptStringKey.mqQuotation:
+      '## Quotation',
+  RptStringKey.mqQuoteHead:
+      '| Item | Amount ({cur}) |',
+  RptStringKey.mqMechMaterial:
+      'Mechanical material',
+  RptStringKey.mqElecMaterial:
+      'Electrical material',
+  RptStringKey.mqMaterialSubtotal:
+      'Material subtotal',
+  RptStringKey.mqLabour:
+      'Labour ({h} h)',
+  RptStringKey.mqOverhead:
+      'Overhead',
+  RptStringKey.mqContingency:
+      'Contingency',
+  RptStringKey.mqMargin:
+      'Margin',
+  RptStringKey.mqGrandTotal:
+      'Grand total',
+  RptStringKey.mqUnmeasuredNote:
+      '> {n} mechanical line(s) include runs on an uncalibrated sheet, measured at 0 m: their metres, material and labour are understated until the sheet is calibrated.',
+  RptStringKey.mqUnpricedNote:
+      '> {n} line(s) are unpriced (no price in the pricelist) and are excluded from the material subtotal ({mech} mechanical, {elec} electrical).',
+  RptStringKey.mqAssumedNote:
+      '> {n} mechanical line(s) are assumptions the calculation relies on but the drawing does not show (marked \'assumed\'): confirm them before ordering.',
+  RptStringKey.mqEquipmentNote:
+      '> {n} scheduled equipment item(s) (pumps, tanks, air units, fans, AC units) are listed by duty and priced per piece; an unpriced item is excluded from the subtotal.',
+  RptStringKey.sevError: 'ERROR',
+  RptStringKey.sevWarn: 'WARN',
+  RptStringKey.sevInfo: 'INFO',
+  RptStringKey.phaseCell3ph: '3ph',
+  RptStringKey.olGenStandby: 'Standby',
+  RptStringKey.olGenPrime: 'Prime (continuous)',
+  RptStringKey.fireSystemPumpKey: '{tag} — {system} pump rating curve (NFPA 20):',
+  RptStringKey.fireSystemSprinkler: 'sprinkler',
+  RptStringKey.fireSystemStandpipe: 'standpipe',
+  RptStringKey.fireSystemTransfer: 'tank transfer',
+  RptStringKey.fireGravityKey: 'Gravity fire supply ({system}, no pump):',
+  RptStringKey.fireGravityValue:
+      '{lps} L/s · head available {avail} m vs required {need} m · {verdict}',
+  RptStringKey.fireGravityOk: 'OK',
+  RptStringKey.fireGravityShort: 'SHORT - add a fire pump',
+  RptStringKey.fireDryKey: 'Dry fire supply ({system}, brigade-fed):',
+  RptStringKey.fireDryValue:
+      '{lps} L/s · {m} m ({kpa} kPa) required at the fire department '
+          'connection',
 };
 
 /// Bahasa Indonesia — natural consulting-report phrasing, reusing the
@@ -581,7 +980,7 @@ const Map<RptStringKey, String> kReportStringsId = {
 
   // Mechanical.
   RptStringKey.calcTitle: 'LAPORAN PERHITUNGAN MEP — {name}',
-  RptStringKey.calcGenerated: '_Dibuat {date} · MechX_',
+  RptStringKey.calcGenerated: '_Dibuat {date} · iSystem_',
   RptStringKey.calcStandardsBasis:
       '**Dasar standar:** {name}. Dirancang mengacu SNI 8153:2015; edisi 2025 '
           'telah terbit — perbedaan sedang ditinjau.',
@@ -604,7 +1003,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.dbTargetResidual: 'Target tekanan sisa fikstur:',
   RptStringKey.dbDesignRainfall: 'Curah hujan desain:',
   RptStringKey.dbDesignRainfallValue:
-      '**{mm} mm/hr** · runoff C **{c}** (metode rasional)',
+      '**{mm} mm/jam** · koefisien limpasan C **{c}** (metode rasional)',
   RptStringKey.dbFireProtection: 'Proteksi kebakaran:',
   RptStringKey.dbFireNoneModelled: 'tidak dimodelkan',
   RptStringKey.dbFireSprinkler: 'sprinkler',
@@ -637,6 +1036,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.wsTargetResidual: '- Target tekanan sisa fikstur: **{kpa} kPa**',
   RptStringKey.wsPumpHead: '- Head pompa: **{m} m**',
   RptStringKey.wsPumpMotor: '- Motor pompa: **{kw} kW**',
+  RptStringKey.wsPumpTagged:
+      '- Pompa {tag} ({service}): **{lps} L/s @ {m} m**, motor **{kw} kW**',
   RptStringKey.wsOperatingPoint:
       '- Titik operasi (sistem × kurva pompa): **{lps} L/s** @ **{m} m** '
           '({pct} % dari aliran desain) · {match} '
@@ -656,8 +1057,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.wsDownfeedGravity: '**gravitasi mencukupi**',
   RptStringKey.wsDownfeedBooster: 'booster **+{m} m**',
   RptStringKey.wsHotWaterRecirc:
-      '- Resirkulasi air panas: **{lps} L/s** · loop {loop} m · '
-          'pompa {kw} kW · balik {c} °C',
+      '- Resirkulasi air panas: **{lps} L/s** · loop balik {len} m · '
+          'tinggi tekan {head} m · pompa {kw} kW · balik {c} °C',
   RptStringKey.wsLegionella:
       '  - ⚠ Suhu balik termodelkan {c} °C berada di bawah ambang '
           'anti-Legionella (~55 °C). Kurangi penurunan suhu loop atau tambahkan '
@@ -682,7 +1083,8 @@ const Map<RptStringKey, String> kReportStringsId = {
           'bukan kerapatan',
   RptStringKey.fireStandpipeKey: 'Pipa tegak:',
   RptStringKey.fireStandpipeValue:
-      '**{lps} L/s** · pompa pemadam {m} m · {kw} kW · riser min {mm} mm',
+      '**{lps} L/s** · pompa pemadam {m} m · poros {kw} kW di titik rated · '
+          'riser min {mm} mm',
   RptStringKey.firePumpKey: 'Kurva rating pompa pemadam (NFPA 20, pompa {des}):',
   RptStringKey.firePumpDuty: 'utama',
   RptStringKey.firePumpStandby: 'cadangan',
@@ -694,6 +1096,17 @@ const Map<RptStringKey, String> kReportStringsId = {
       'Motor melebihi rentang frame standar - tentukan motor khusus atau '
           'pompa berpasangan',
   RptStringKey.firePumpVerdictWithin: 'Motor dalam rentang frame standar',
+  RptStringKey.fireOverPressureKey: 'Tekanan komponen (churn)',
+  RptStringKey.fireOverPressureSystemKey: 'Tekanan komponen (churn), {tag}',
+  RptStringKey.fireOverPressureValue:
+      '{churn} kPa saat churn melampaui rating {limit} kPa (175 psi) '
+          'komponen kebakaran standar{share} - perbesar pipa indeks atau '
+          'bagi sistem menjadi zona (VERIFY)',
+  RptStringKey.fireOverPressureShare: ' (gesekan {pct} % dari head rated)',
+  RptStringKey.fireStandpipeOverPressureValue:
+      '{churn} kPa saat churn melampaui tekanan maksimum sistem pipa tegak '
+          '{limit} kPa (350 psi){share} - bagi pipa tegak menjadi zona '
+          'tekanan (VERIFY)',
   RptStringKey.fireJockeyKey: 'Pompa jockey:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pemeliharaan tekanan){standby}',
@@ -702,6 +1115,11 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.hvacTrunkAirflow: 'Aliran udara utama:',
   RptStringKey.hvacFanStatic: 'Statis total kipas:',
   RptStringKey.hvacFanMotor: 'Motor kipas:',
+  RptStringKey.hvacExhaustAirflow: 'Aliran udara buang:',
+  RptStringKey.hvacExhaustStatic: 'Statis total kipas buang:',
+  RptStringKey.hvacExhaustMotor: 'Motor kipas buang:',
+  RptStringKey.hvacFanUnitValue:
+      '**{lps} L/s** · statis total {pa} Pa · motor **{kw} kW**',
   RptStringKey.hvacOperatingPoint: 'Titik operasi (sistem × kurva kipas):',
   RptStringKey.hvacOperatingPointValue:
       '**{lps} L/s** @ **{pa} Pa** ({pct} % dari aliran desain) · {match} · '
@@ -724,7 +1142,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.tblFitting: 'Sambungan',
   RptStringKey.tblCount: 'Jumlah',
   RptStringKey.headingRunSchedule: 'Jadwal saluran / riser',
-  RptStringKey.tblFixtureUnits: 'UBAP',
+  RptStringKey.tblFixtureUnits: 'UBAP/DFU',
   RptStringKey.tblFlowLps: 'Aliran (L/s)',
   RptStringKey.tblVelocityMs: 'Kecepatan (m/s)',
   RptStringKey.runScheduleStackRaised:
@@ -739,11 +1157,11 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.svcColdWater: 'Air dingin',
   RptStringKey.svcHotWater: 'Air panas',
   RptStringKey.svcDrainage: 'Drainase',
-  RptStringKey.svcVent: 'Vent',
+  RptStringKey.svcVent: 'Ven',
   RptStringKey.svcRainwater: 'Air hujan',
   RptStringKey.svcSupplyAir: 'Udara suplai',
   RptStringKey.svcReturnAir: 'Udara balik',
-  RptStringKey.svcExhaust: 'Exhaust',
+  RptStringKey.svcExhaust: 'Udara buang',
   RptStringKey.svcSprinkler: 'Sprinkler',
   RptStringKey.svcHydrant: 'Hidran',
 
@@ -760,15 +1178,34 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.edbOriginFaultValue:
       '**{ka} kA**{ct} (dasar ketahanan hubung-singkat busbar)',
   RptStringKey.edbClearingTime: ' · waktu pemutusan **{s} s**',
+  RptStringKey.edbClearingTimeKey: 'Waktu pemutusan busbar:',
+  RptStringKey.edbServiceSectionKey: 'Rating pintu masuk layanan:',
+  RptStringKey.edbServiceSectionValue:
+      '**{kva} kVA per seksi** (trafo ganda, kopel normal terbuka — total '
+      '{total} kVA dideklarasikan)',
+  RptStringKey.edbClearingTimeValue: '**{s} s**',
+  RptStringKey.edbFaultBasisExplicit: ' · _pengaturan proyek_',
+  RptStringKey.edbFaultBasisEstimate:
+      ' · _perkiraan dari ukuran sambungan yang dideklarasikan (// VERIFY)_',
+  RptStringKey.edbFaultBasisDefault:
+      ' · _bawaan — sambungan tidak dideklarasikan_',
+  RptStringKey.edbFaultBasisSupplyStudy:
+      ' · _perkiraan dari trafo yang dipilih studi pasokan untuk beban (// VERIFY)_',
+  RptStringKey.edbFaultBasisGenerator:
+      " · _perkiraan dari alternator genset (S / (sqrt3 x 400 V x Xd''), "
+      "Xd'' {xd} p.u.; lembar data alternator yang berlaku) (// VERIFY)_",
+  RptStringKey.edbFaultBasisInverter:
+      ' · _perkiraan dari inverter surya ({m} x arus pengenal, '
+      'dibatasi arus; lembar data inverter yang berlaku) (// VERIFY)_',
   RptStringKey.headingSupplySummary: 'Ringkasan pasokan',
   RptStringKey.ssSystem: 'Sistem:',
   RptStringKey.ssDiversifiedDemand: 'Permintaan terdiversifikasi:',
   RptStringKey.ssOriginDemand: 'Permintaan terdiversifikasi sumber:',
 
   RptStringKey.headingPanels: 'Panel',
-  RptStringKey.panelIncomer: '- Incomer: {rating} {class} {poles}P',
+  RptStringKey.panelIncomer: '- Pemutus masuk: {rating} {class} {poles}P',
   RptStringKey.panelMainBusbar:
-      '- Busbar utama: {geom}, ampacity {amp} — diatur oleh {reason}',
+      '- Busbar utama: {geom}, KHA {amp} — diatur oleh {reason}',
   RptStringKey.busbarReasonWithstand: 'ketahanan hubung-singkat',
   RptStringKey.busbarReasonContinuous: 'arus kontinu',
   RptStringKey.panelWithstand:
@@ -781,6 +1218,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.panelNeutralOversize: ' (×{f} pembesaran triplen)',
   RptStringKey.panelDemand:
       '- Permintaan: terpasang {c} W, terdiversifikasi {d} W, {a}',
+  RptStringKey.panelDemandCurrentSplit:
+      '{div} terdiversifikasi (fasa maks {undiv} tanpa diversitas)',
   RptStringKey.panelPhaseBalance:
       '- Keseimbangan fasa: L1 {l1} A · L2 {l2} A · L3 {l3} A '
           '(ketidakseimbangan {imb} %)',
@@ -809,7 +1248,7 @@ const Map<RptStringKey, String> kReportStringsId = {
 
   // Unified MEP.
   RptStringKey.mepTitle: 'Laporan Layanan Bangunan MEP — {name}',
-  RptStringKey.mepGenerated: '_Dibuat {date} · MechX (iSystem)_',
+  RptStringKey.mepGenerated: '_Dibuat {date} · iSystem_',
   RptStringKey.mepUnifiedIntro:
       'Laporan terpadu mekanikal · elektrikal · plambing.',
   RptStringKey.mepMechStandard: 'Standar mekanikal / plambing:',
@@ -839,6 +1278,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.catTransformer: 'Transformator',
   RptStringKey.catGenerator: 'Genset cadangan',
   RptStringKey.catCapacitorBank: 'Bank kapasitor',
+  RptStringKey.catDistributedSource: 'Baterai, PV & inverter',
+  RptStringKey.catTanks: 'Tangki',
   RptStringKey.tblTag: 'Tag',
   RptStringKey.tblDuty: 'Kapasitas',
   RptStringKey.tblModelSpec: 'Model / spesifikasi',
@@ -847,6 +1288,185 @@ const Map<RptStringKey, String> kReportStringsId = {
       '_Model / spesifikasi adalah tempat isian bagi insinyur untuk dilengkapi '
           'dari lembar data produsen terpilih; iSystem mengukur kapasitas, bukan '
           'model katalog._',
+  // Nilai / sel laporan (R3 reports-6).
+  RptStringKey.sysThreePhase: '3 fasa',
+  RptStringKey.sysSinglePhase: '1 fasa',
+  RptStringKey.esPanelService: 'Distribusi {system}',
+  RptStringKey.esPanelDuty: 'Permintaan {kw} kW',
+  RptStringKey.esPanelSize: 'Pemutus masuk {a} A',
+  RptStringKey.esMotorSize: 'Motor {kw} kW',
+  RptStringKey.esAcDuty: 'Pendinginan {btu} BTU/h ({pk} PK)',
+  RptStringKey.esAcSize: 'Daya masuk {kw} kW',
+  RptStringKey.esTransformerService: 'Transformator distribusi',
+  RptStringKey.esGeneratorService: 'Genset cadangan',
+  RptStringKey.esGeneratorPrimeService: 'Genset prime',
+  RptStringKey.esCapBankService: 'Bank kapasitor perbaikan faktor daya',
+  RptStringKey.esBatteryService: 'Penyimpanan energi baterai',
+  RptStringKey.esPvService: 'Larik PV surya',
+  RptStringKey.esInverterService: 'Inverter',
+  RptStringKey.esCapBankRecommendedService:
+      'Bank kapasitor APFC (rekomendasi)',
+  RptStringKey.esRoofTankService: 'Tangki atap (penampungan air)',
+  RptStringKey.esGroundTankService: 'Tangki bawah (penampungan air)',
+  RptStringKey.esTankCapacityUnset: 'kapasitas belum diisi',
+  RptStringKey.earthNoteTnCs:
+      'PEN gabungan dari sumber, dipisah menjadi N dan PE terpisah di titik '
+          'asal. Praktik umum PLN.',
+  RptStringKey.earthNoteTnS:
+      'Konduktor netral dan proteksi terpisah di seluruh instalasi.',
+  RptStringKey.earthNoteTt:
+      'Instalasi dibumikan melalui elektroda lokal; memerlukan proteksi RCD. '
+          'Umum untuk lokasi mandiri/pedesaan.',
+  RptStringKey.earthTailRcd:
+      ' Impedansi lingkar gangguan tanah tinggi, sehingga RCD memberikan '
+          'proteksi gangguan pada setiap sirkit akhir.',
+  RptStringKey.earthTailOcpd:
+      ' Gawai arus lebih memutus gangguan tanah; RCD tetap diperlukan untuk '
+          'kotak-kontak dan lokasi khusus.',
+  RptStringKey.stormRainfallValue: '**{mm} mm/jam**',
+  RptStringKey.pdfPreparedBy: 'Disiapkan oleh',
+  RptStringKey.pdfCheckedBy: 'Diperiksa oleh',
+  RptStringKey.pdfApprovedBy: 'Disetujui oleh',
+  RptStringKey.pdfPageOf: 'Halaman {x} dari {y}',
+  RptStringKey.docCalcReport: 'Laporan Perhitungan MEP',
+  RptStringKey.docMepReport: 'Laporan Utilitas Bangunan MEP',
+  RptStringKey.docEquipSchedule: 'Jadwal Peralatan',
+  RptStringKey.headingDrawings: 'Gambar',
+  RptStringKey.capMechRiser: 'Diagram satu garis riser mekanikal',
+  RptStringKey.capElecSld: 'Diagram satu garis kelistrikan',
+  RptStringKey.untitledProject: 'Proyek tanpa judul',
+  RptStringKey.feedUpfeed: 'Pompa upfeed',
+  RptStringKey.feedDownfeed: 'Downfeed tangki atap',
+  RptStringKey.feedBoosterNoTank: 'Pompa booster (tanpa tangki atap)',
+  RptStringKey.feedDirectMains: 'Langsung dari pipa induk',
+  RptStringKey.esSvcDomesticWater: 'Suplai air bersih',
+  RptStringKey.esSvcFireStandpipe: 'Pompa hidran kebakaran',
+  RptStringKey.esSvcMechVent: 'Ventilasi mekanis',
+  RptStringKey.esSvcExhaustVent: 'Ventilasi udara buang',
+  RptStringKey.esSvcTransferPump: 'Pompa transfer (tangki bawah ke tangki atap)',
+  RptStringKey.esSvcSewageEjector:
+      'Pompa ejektor air kotor (bak ke saluran gedung)',
+  RptStringKey.esSvcSewageEjectorStandby: 'Pompa ejektor air kotor (cadangan)',
+  RptStringKey.esSvcHwRecirc: 'Resirkulasi air panas',
+  RptStringKey.esSvcDomesticWaterStandby: 'Suplai air bersih (cadangan)',
+  RptStringKey.esSvcTransferPumpStandby: 'Pompa transfer (cadangan)',
+  RptStringKey.esSvcHwRecircStandby: 'Resirkulasi air panas (cadangan)',
+  RptStringKey.warnLeadIn: '[{code}] (pesan dalam bahasa Inggris) ',
+  RptStringKey.lkGeneral: 'umum',
+  RptStringKey.lkLighting: 'penerangan',
+  RptStringKey.lkSocket: 'kotak-kontak',
+  RptStringKey.lkHeating: 'pemanas',
+  RptStringKey.lkHvac: 'tata udara',
+  RptStringKey.lkMotor: 'motor',
+  RptStringKey.lkPump: 'pompa',
+  RptStringKey.lkEvCharger: 'pengisi daya EV',
+  RptStringKey.lkWelding: 'las',
+  RptStringKey.lkCapacitor: 'kapasitor',
+  RptStringKey.lkUps: 'UPS',
+  RptStringKey.lkSpare: 'cadangan',
+  RptStringKey.lkFeeder: 'pengumpan',
+  RptStringKey.pnUtility: 'utilitas',
+  RptStringKey.pnGenerator: 'genset',
+  RptStringKey.pnAts: 'ATS',
+  RptStringKey.pnCos: 'COS',
+  RptStringKey.olMainLvBus: 'Busbar utama TR',
+  RptStringKey.olMainPanel: 'Panel utama',
+  RptStringKey.olPlnUtility: 'Utilitas PLN',
+  RptStringKey.olGenerator: 'Genset',
+  RptStringKey.olEssentialBus: 'Busbar esensial',
+  RptStringKey.olHybridInverter: 'Inverter hibrida',
+  RptStringKey.olSolarArray: 'Larik PV',
+  RptStringKey.olBattery: 'Baterai',
+  RptStringKey.olPvInverter: 'Inverter PV',
+  RptStringKey.olBatteryInverter: 'Inverter baterai',
+  RptStringKey.olUpsCriticalBus: 'UPS / busbar kritis',
+  RptStringKey.olManualChangeover: 'pemindah manual',
+  RptStringKey.olTransferSwitch: 'saklar pemindah',
+  RptStringKey.olVoltsLv: '{v} V TR',
+  RptStringKey.olNoteLead: '(catatan dalam bahasa Inggris) ',
+  RptStringKey.esSvcFireSprinkler: 'Pompa sprinkler kebakaran',
+  RptStringKey.esSvcFireStandbyPump: 'Pompa kebakaran (cadangan)',
+  RptStringKey.esSvcFireJockeyPump: 'Pompa jockey kebakaran',
+  RptStringKey.esSvcFireTransferPump: 'Pompa transfer tangki kebakaran',
+  RptStringKey.dbDrainageSlope: 'Kemiringan desain drainase:',
+  RptStringKey.dbDrainageSlopeValue: '**1:{n}** (Manning n {manning}, pengisian desain {fill})',
+  RptStringKey.pnPv: 'larik PV',
+  RptStringKey.pnPvInverter: 'inverter PV',
+  RptStringKey.pnBattery: 'baterai',
+  RptStringKey.pnBatteryInverter: 'inverter baterai',
+  RptStringKey.pnHybridInverter: 'inverter hibrida',
+  RptStringKey.pnBus: 'bus',
+  RptStringKey.pnMainPanel: 'panel utama',
+  RptStringKey.ilMechanical: 'mekanis',
+  RptStringKey.ilElectrical: 'elektrik',
+  RptStringKey.hazLight: 'Bahaya Kebakaran Ringan',
+  RptStringKey.hazOh1: 'Bahaya Kebakaran Sedang Kelompok I',
+  RptStringKey.hazOh2: 'Bahaya Kebakaran Sedang Kelompok II',
+  RptStringKey.hazExtra: 'Bahaya Kebakaran Berat',
+  RptStringKey.fitElbow: 'belokan',
+  RptStringKey.fitTee: 'tee',
+  RptStringKey.fitCross: 'silang',
+  RptStringKey.fitReducer: 'reduser',
+  RptStringKey.mqTitle:
+      '# Penawaran MEP — {project}',
+  RptStringKey.mqMechBom:
+      '## Daftar material mekanis',
+  RptStringKey.mqElecBom:
+      '## Daftar material elektrik',
+  RptStringKey.mqMechHead:
+      '| Jml | Satuan | Item | Harga satuan ({cur}) | Jumlah ({cur}) |',
+  RptStringKey.mqElecHead:
+      '| Jml | Kategori | Uraian | SKU | Harga satuan ({cur}) | Jumlah ({cur}) |',
+  RptStringKey.mqUnpriced:
+      '(belum berharga)',
+  RptStringKey.mqQuotation:
+      '## Penawaran harga',
+  RptStringKey.mqQuoteHead:
+      '| Item | Jumlah ({cur}) |',
+  RptStringKey.mqMechMaterial:
+      'Material mekanis',
+  RptStringKey.mqElecMaterial:
+      'Material elektrik',
+  RptStringKey.mqMaterialSubtotal:
+      'Subtotal material',
+  RptStringKey.mqLabour:
+      'Upah kerja ({h} jam)',
+  RptStringKey.mqOverhead:
+      'Biaya umum',
+  RptStringKey.mqContingency:
+      'Biaya tak terduga',
+  RptStringKey.mqMargin:
+      'Margin',
+  RptStringKey.mqGrandTotal:
+      'Total keseluruhan',
+  RptStringKey.mqUnmeasuredNote:
+      '> {n} baris mekanis memuat jalur pada lembar yang belum dikalibrasi (terukur 0 m): panjang, material dan upahnya masih terlalu rendah sampai lembar dikalibrasi.',
+  RptStringKey.mqUnpricedNote:
+      '> {n} baris belum berharga (tidak ada harga di daftar harga) dan tidak termasuk dalam subtotal material ({mech} mekanis, {elec} elektrik).',
+  RptStringKey.mqAssumedNote:
+      '> {n} baris mekanis adalah asumsi perhitungan yang tidak tergambar (bertanda \'assumed\'): pastikan sebelum pemesanan.',
+  RptStringKey.mqEquipmentNote:
+      '> {n} item peralatan terjadwal (pompa, tangki, unit udara, kipas, unit AC) dicantumkan menurut kapasitas dan diberi harga per unit; item yang belum berharga tidak termasuk dalam subtotal.',
+  RptStringKey.sevError: 'GALAT',
+  RptStringKey.sevWarn: 'PERINGATAN',
+  RptStringKey.sevInfo: 'INFO',
+  RptStringKey.phaseCell3ph: '3 fasa',
+  RptStringKey.olGenStandby: 'Siaga',
+  RptStringKey.olGenPrime: 'Utama (kontinu)',
+  RptStringKey.fireSystemPumpKey: '{tag} — kurva rating pompa {system} (NFPA 20):',
+  RptStringKey.fireSystemSprinkler: 'sprinkler',
+  RptStringKey.fireSystemStandpipe: 'hidran',
+  RptStringKey.fireSystemTransfer: 'transfer tangki',
+  RptStringKey.fireGravityKey: 'Suplai kebakaran gravitasi ({system}, tanpa pompa):',
+  RptStringKey.fireGravityValue:
+      '{lps} L/s · head tersedia {avail} m vs dibutuhkan {need} m · {verdict}',
+  RptStringKey.fireGravityOk: 'OK',
+  RptStringKey.fireGravityShort: 'KURANG - tambahkan pompa kebakaran',
+  RptStringKey.fireDryKey:
+      'Suplai kebakaran kering ({system}, dipasok mobil pemadam):',
+  RptStringKey.fireDryValue:
+      '{lps} L/s · {m} m ({kpa} kPa) dibutuhkan di sambungan pemadam '
+          'kebakaran (FDC)',
 };
 
 /// Resolves a [RptStringKey] against a [ReportLocale], mirroring the app's
@@ -878,3 +1498,61 @@ class ReportStrings {
     return out;
   }
 }
+
+// ── Round 9 (report-parity-enum-names-leak) — localized enum labels ─────────
+// Raw Dart identifiers (`evCharger`, `ordinaryHazard1`…) used to print in
+// issued report bodies in BOTH locales. Each enum maps to a report string.
+
+/// Localized label for a [LoadKind] (the electrical way table's 'Type' cell).
+String loadKindLabel(LoadKind k, ReportStrings s) => s(switch (k) {
+      LoadKind.general => RptStringKey.lkGeneral,
+      LoadKind.lighting => RptStringKey.lkLighting,
+      LoadKind.socket => RptStringKey.lkSocket,
+      LoadKind.heating => RptStringKey.lkHeating,
+      LoadKind.hvac => RptStringKey.lkHvac,
+      LoadKind.motor => RptStringKey.lkMotor,
+      LoadKind.pump => RptStringKey.lkPump,
+      LoadKind.evCharger => RptStringKey.lkEvCharger,
+      LoadKind.welding => RptStringKey.lkWelding,
+      LoadKind.capacitor => RptStringKey.lkCapacitor,
+      LoadKind.ups => RptStringKey.lkUps,
+      LoadKind.spare => RptStringKey.lkSpare,
+      LoadKind.feeder => RptStringKey.lkFeeder,
+    });
+
+/// Localized label for a power one-line [PowerNodeKind].
+String powerNodeKindLabel(PowerNodeKind k, ReportStrings s) => s(switch (k) {
+      PowerNodeKind.utility => RptStringKey.pnUtility,
+      PowerNodeKind.generator => RptStringKey.pnGenerator,
+      PowerNodeKind.ats => RptStringKey.pnAts,
+      PowerNodeKind.pv => RptStringKey.pnPv,
+      PowerNodeKind.pvInverter => RptStringKey.pnPvInverter,
+      PowerNodeKind.battery => RptStringKey.pnBattery,
+      PowerNodeKind.batteryInverter => RptStringKey.pnBatteryInverter,
+      PowerNodeKind.hybridInverter => RptStringKey.pnHybridInverter,
+      PowerNodeKind.bus => RptStringKey.pnBus,
+      PowerNodeKind.mainPanel => RptStringKey.pnMainPanel,
+    });
+
+/// Localized label for a [PowerInterlockKind].
+String interlockKindLabel(PowerInterlockKind k, ReportStrings s) =>
+    s(switch (k) {
+      PowerInterlockKind.mechanical => RptStringKey.ilMechanical,
+      PowerInterlockKind.electrical => RptStringKey.ilElectrical,
+    });
+
+/// Localized label for a sprinkler [FireHazardClass] (SNI terms in ID).
+String fireHazardLabel(FireHazardClass h, ReportStrings s) => s(switch (h) {
+      FireHazardClass.lightHazard => RptStringKey.hazLight,
+      FireHazardClass.ordinaryHazard1 => RptStringKey.hazOh1,
+      FireHazardClass.ordinaryHazard2 => RptStringKey.hazOh2,
+      FireHazardClass.extraHazard => RptStringKey.hazExtra,
+    });
+
+/// Localized label for a BOM [FittingType].
+String fittingTypeLabel(FittingType t, ReportStrings s) => s(switch (t) {
+      FittingType.elbow => RptStringKey.fitElbow,
+      FittingType.tee => RptStringKey.fitTee,
+      FittingType.cross => RptStringKey.fitCross,
+      FittingType.reducer => RptStringKey.fitReducer,
+    });

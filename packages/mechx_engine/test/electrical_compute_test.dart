@@ -113,24 +113,32 @@ void main() {
     });
 
     test('connected / demand W', () {
-      // Connected = 1800 + 3000 + (7.5·1000) = 12 300 W; diversity 1 ⇒ demand =.
-      expect(r.connectedW, 12300);
-      expect(r.demandW, 12300);
+      // Connected = the ELECTRICAL INPUT of each way (2026-10 audit
+      // elec-core-4: a motor counts shaft kW ÷ the assumed η 0.88, the same
+      // basis as its own Ib, not the shaft kW):
+      //   1800 + 3000 + 7500/0.88 = 1800 + 3000 + 8522.73 = 13 322.73
+      //   → 13 323 W (engine rounds to the watt); diversity 1 ⇒ demand =.
+      expect(r.connectedW, 13323);
+      expect(r.demandW, 13323);
     });
 
     test('balanced phases + worst-phase demand current', () {
-      // 3φ motor loads every line at 14.5 A. Single-phase sorted desc:
-      //   sockets 14.4 → least-loaded line (all equal) → L1: L1 = 14.5+14.4 = 28.9
-      //   lighting 8.7 → least loaded (L2 or L3 = 14.5) → L2: L2 = 14.5+8.7 = 23.2
-      //   L3 = 14.5. Local search finds no smaller spread.
+      // 3φ motor loads every line at 14.472 A. Single-phase sorted desc:
+      //   sockets 14.430 → least-loaded line (all equal) → L1:
+      //     L1 = 14.472 + 14.430 = 28.902 → 28.9
+      //   lighting 8.658 → least loaded (L2 or L3) → L2:
+      //     L2 = 14.472 + 8.658 = 23.130 → 23.1
+      //   L3 = 14.472 → 14.5. Local search finds no smaller spread.
+      // Round 43: the lines sum the EXACT way currents and round ONCE
+      // (23.2 was 14.5 + 8.7, a sum of rounded figures).
       expect(r.phaseBalance.l1, closeTo(28.9, 1e-9));
-      expect(r.phaseBalance.l2, closeTo(23.2, 1e-9));
+      expect(r.phaseBalance.l2, closeTo(23.1, 1e-9));
       expect(r.phaseBalance.l3, closeTo(14.5, 1e-9));
       // Worst phase = 28.9 A drives the incomer + main bus.
       expect(r.demandCurrent.amperes, closeTo(28.9, 1e-9));
-      // avg = (28.9+23.2+14.5)/3 = 22.2; imbalance = (28.9-14.5)/22.2·100
-      //     = 14.4/22.2·100 = 64.86 % > 15 %.
-      expect(r.imbalancePercent, closeTo(64.86, 0.2));
+      // avg = (28.902+23.130+14.472)/3 = 22.168; imbalance =
+      //     (28.902-14.472)/22.168·100 = 14.430/22.168·100 = 65.09 % > 15 %.
+      expect(r.imbalancePercent, closeTo(65.09, 0.06));
       // …but NO warning: with exactly two single-phase ways (14.4 A + 8.7 A) on
       // three lines the alternatives are 23.1/0/0 (spread 23.1) or 14.4/8.7/0
       // (spread 14.4) — the balancer already took the better one, so the 64.9 %
@@ -210,26 +218,42 @@ void main() {
     );
     final r = computeSystem(p, project);
 
-    test('root-first order, no warnings', () {
+    test('root-first order; the only finding is the inverted incomer pair',
+        () {
       expect(r.order, ['MDP', 'SP']);
-      expect(r.warnings, isEmpty);
+      // Round 38 (elec-ui-drawings-6) — MDP's only load is SP: its incomer
+      // sizes on SP's diversified 8 kW = 8000 / (√3·400·1.0) = 11.5 A → 16 A,
+      // while the device-only selectivity floor lifts the feeder towards
+      // 1.6 × SP's 16 A incomer (25.6 A), held at the 25 A its cable
+      // protects — an outgoing device above its own incomer, now reported.
+      expect(r.warnings.map((w) => w.code), ['outgoing-exceeds-incomer']);
+      expect(r.warnings.single.circuitId, 'f1');
+      // The inversion is the engine's OWN selectivity floor (no override), so
+      // it is an INFO note naming the action — never a sign-off blocker.
+      expect(r.warnings.single.severity, WarningSeverity.info);
     });
 
     test('feeder carries the child panel\'s diversified demand (not raw 10 kW)',
         () {
       final feeder = byId(r.panels['MDP']!, 'f1');
-      // Ib = 8000 / (√3·400·0.85) = 13.583 → 13.6 A  (NOT 10 000-based 16.98).
-      expect(feeder.designCurrent.amperes, closeTo(13.6, 1e-9));
+      // Round-7 elec-props-2: the feeder converts SP's demand at SP's REAL
+      // power factor (one cos 1.0 heater ⇒ pf 1.0), not its own 0.85 default:
+      // Ib = 8000 / (√3·400·1.0) = 11.547 → 11.5 A  (NOT 10 000-based 14.4).
+      expect(feeder.designCurrent.amperes, closeTo(11.5, 1e-9));
       expect(feeder.threePhase, isTrue);
       // SELECTIVITY FLOOR (2026-07-30): the heater is 3φ (14.4 A on every line)
       // so SP's demand current is 14.4 A ⇒ its incomer is the first rung ≥ 14.4
       // = 16 A — the very rung the feeder's own 13.6 A would have picked (ratio
       // 1.0 ⇒ non-selective). The feeder is therefore floored at
-      // 1.6 × 16 = 25.6 A ⇒ first rung ≥ 25.6 = 32 A.
-      expect(feeder.breaker.ratingA.amperes, 32);
-      // Cable: Iz ≥ max(In 32, 1.25 × 13.583 = 16.98) = 32 A; the 3φ trunk
-      // minimum is 4 mm², whose B1 Cu/PVC KHA is 34 A ≥ 32 ⇒ still 4 mm².
+      // 1.6 × 16 = 25.6 A ⇒ first rung ≥ 25.6 = 32 A — but the floor is
+      // device-only and CAPPED at the load-sized cable's Iz (E3/E4).
+      // Cable (sized on the load): Iz ≥ max(In 16, 1.25 × 11.547 = 14.43) = 16
+      // A; the 3φ trunk minimum is 4 mm², whose B1 Cu/PVC KHA is 28 A (IEC
+      // Table B.52.4 B1, re-derived Round 11 — was the 34 A "in air" figure)
+      // ⇒ 4 mm², Iz 28 A. Cap: the largest rung ≤ 28 A is 25 A (32 > 28).
+      expect(feeder.breaker.ratingA.amperes, 25);
       expect(feeder.cable.csaMm2, 4);
+      expect(feeder.cable.deratedIz.amperes, 28);
     });
 
     test('SP demand + heater current', () {
@@ -256,8 +280,10 @@ void main() {
       expect(r.totalDemandW, 8000);
       expect(r.supply.connectedW, 10000); // leaf load only
       expect(r.supply.demandW, 8000);
-      // VA = demandW / assumed building PF 0.85 = 9411.8 → 9412 VA.
-      expect(r.supply.demandVa.voltAmperes, closeTo(9412, 1));
+      // Round 14 re-derivation: VA at the REAL per-circuit cos φ — SP's one
+      // cos φ 1.0 heater ⇒ 10 000 VA × 0.8 = 8000 VA, carried up the feeder at
+      // SP's pf 1.0 — not the old flat 8000 / 0.85 = 9412 VA.
+      expect(r.supply.demandVa.voltAmperes, closeTo(8000, 1));
       expect(r.supply.system, ElectricalSystem.threePhase);
     });
 

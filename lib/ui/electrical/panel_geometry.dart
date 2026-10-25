@@ -202,6 +202,33 @@ double panelFootprintLod(ElectricalPanelResult panel, PanelLod lod) =>
 double panelFootprint(ElectricalPanelResult panel, bool detail) =>
     panelFootprintLod(panel, detail ? PanelLod.schedule : PanelLod.summary);
 
+/// Round 12 (ui-journey-add-panel-overlaps) — where '+ Panel' drops the next
+/// board: left-aligned with the existing boards and [gap] BELOW the lowest
+/// card's footprint (its tallest LOD — the schedule — so no zoom level makes
+/// the cards overlap). The old fixed 40-unit diagonal step always landed a
+/// new ~758 × 94 card on top of the previous one. An empty project keeps the
+/// historic first slot (120, 120).
+Offset nextPanelDropSlot(
+  ElectricalProject project,
+  ElectricalSystemResult result, {
+  double gap = 40,
+}) {
+  final pos = resolvePanelPositions(project, result);
+  if (pos.isEmpty) return const Offset(120, 120);
+  var left = double.infinity;
+  var bottom = double.negativeInfinity;
+  for (final e in pos.entries) {
+    final r = result.panels[e.key];
+    final h = r == null
+        ? kPanelChrome + kPanelSummaryBodyH
+        : math.max(panelFootprintLod(r, PanelLod.schedule),
+            panelFootprintLod(r, PanelLod.summary));
+    left = math.min(left, e.value.dx);
+    bottom = math.max(bottom, e.value.dy + h);
+  }
+  return Offset(left, bottom + gap);
+}
+
 /// Resolve each panel's world position: a saved `x,y` wins, else the
 /// deterministic tidy-tree [autoLayout]. The single shared resolver used by the
 /// interactive single-line canvas AND the minimap (I8) so the minimap tracks

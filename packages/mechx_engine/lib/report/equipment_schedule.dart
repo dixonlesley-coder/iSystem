@@ -18,12 +18,20 @@
 /// flag // VERIFY — a tag and a quantity are bookkeeping, not engineering claims.
 library;
 
-import '../electrical/model.dart' show ElectricalProject, ElectricalSystemInfo;
+import '../electrical/advanced_study.dart' show serviceTransformer;
+import '../electrical/genset_backup.dart'
+    show gensetBackupDemandVa, gensetBackupDemandW;
+import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
-import '../electrical/sources.dart' show selectGeneratorKva;
+import '../electrical/power_factor.dart'
+    show PowerFactorResult, capacitorBanksToProcure, powerFactorCorrection;
+import '../electrical/power_oneline.dart'
+    show distributedSourceInverters, sizeDistributedSources;
+import '../electrical/sources.dart'
+    show BatteryChemistryInfo, GeneratorMode, sizeGenerator;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
-import '../units.dart' show ApparentPower;
+import '../units.dart' show ApparentPower, Power;
 import 'report_blocks.dart';
 import 'report_strings.dart';
 
@@ -34,10 +42,14 @@ enum EquipmentCategory {
   pump,
   fan,
   airHandling,
+  tank,
   panel,
   transformer,
   generator,
   capacitorBank,
+
+  /// Round 44 — battery bank, PV array and their inverter(s).
+  distributedSource,
 }
 
 extension EquipmentCategoryInfo on EquipmentCategory {
@@ -46,10 +58,12 @@ extension EquipmentCategoryInfo on EquipmentCategory {
         EquipmentCategory.pump => 'Pumps',
         EquipmentCategory.fan => 'Fans',
         EquipmentCategory.airHandling => 'Air-handling (AHU / FCU / AC)',
+        EquipmentCategory.tank => 'Tanks',
         EquipmentCategory.panel => 'Electrical panels',
         EquipmentCategory.transformer => 'Transformer',
         EquipmentCategory.generator => 'Standby generator',
         EquipmentCategory.capacitorBank => 'Capacitor bank',
+        EquipmentCategory.distributedSource => 'Battery, PV & inverters',
       };
 }
 
@@ -146,6 +160,65 @@ class FanScheduleItem {
   });
 }
 
+/// One placed AC unit (cassette / split-wall / ducted) to schedule — the same
+/// per-unit cooling share and electrical input the MEP→electrical feed sizes
+/// its panel way on, so every scheduled unit has exactly one electrical way
+/// (audit r8 coupling-6). Lands in the air-handling section.
+class AcScheduleItem {
+  final String tag;
+
+  /// Service / room the unit serves (e.g. "Room 1").
+  final String service;
+
+  /// The unit's share of the room cooling load (BTU/h).
+  final double coolingBtuPerHr;
+
+  /// Selected nominal capacity (PK).
+  final double pk;
+
+  /// Electrical input (W) — cooling ÷ COP, the panel way's load.
+  final double inputW;
+
+  final String? modelSpec;
+  final int qty;
+
+  const AcScheduleItem({
+    required this.tag,
+    required this.service,
+    required this.coolingBtuPerHr,
+    required this.pk,
+    required this.inputW,
+    this.modelSpec,
+    this.qty = 1,
+  });
+}
+
+/// Round 25 — one drawn storage tank (roof / ground) to schedule. The BOM
+/// leaves plant out because it is scheduled EQUIPMENT, so a drawn, tagged tank
+/// must reach the schedule (it used to reach no procurement surface at all).
+/// The capacity is the node's own [NetNode.tankCapacityLitres] — never
+/// fabricated (null ⇒ the row says 'capacity not set').
+class TankScheduleItem {
+  final String tag;
+
+  /// True for a roof tank, false for a ground tank.
+  final bool roof;
+
+  /// Effective capacity (litres); null ⇒ not set on the drawn node.
+  final double? capacityLitres;
+
+  final String? modelSpec;
+  final int qty;
+
+  const TankScheduleItem({
+    required this.tag,
+    required this.roof,
+    this.capacityLitres,
+    this.modelSpec,
+    this.qty = 1,
+  });
+}
+
 /// All inputs the equipment schedule tabulates. Empty lists ⇒ the section is
 /// skipped; an all-empty data set yields an "(no equipment scheduled)" note.
 class EquipmentScheduleData {
@@ -154,6 +227,13 @@ class EquipmentScheduleData {
 
   final List<PumpScheduleItem> pumps;
   final List<FanScheduleItem> fans;
+
+  /// Placed AC units (air-handling section, after the fan-duty rows). Empty ⇒
+  /// byte-identical.
+  final List<AcScheduleItem> acUnits;
+
+  /// Round 25 — drawn storage tanks (tanks section). Empty ⇒ byte-identical.
+  final List<TankScheduleItem> tanks;
 
   /// Solved electrical system whose panels become one schedule row each. Null ⇒
   /// the panel section is skipped.
@@ -178,28 +258,51 @@ class EquipmentScheduleData {
   /// pump/fan rows (those keep their per-item [PumpScheduleItem.modelSpec]).
   final Map<String, String> modelSpecs;
 
+  /// Round 41 — the advanced study's power-factor result, so the schedule
+  /// lists the RECOMMENDED APFC bank the BOM buys ([capacitorBanksToProcure]).
+  /// Null ⇒ re-derived from [electrical] + [electricalProject] (the same
+  /// `powerFactorCorrection`, without the harmonic-rich detuning flag).
+  final PowerFactorResult? powerFactor;
+
   const EquipmentScheduleData({
     required this.projectName,
     required this.date,
     this.pumps = const [],
     this.fans = const [],
+    this.acUnits = const [],
+    this.tanks = const [],
     this.electrical,
     this.electricalProject,
     this.modelSpecs = const {},
+    this.powerFactor,
   });
 }
 
 String _fmt(double v, {int dp = 1}) => v.toStringAsFixed(dp);
 
+/// Round 17 (report-recompute-2-schedule-flow-1dp) — a pump FLOW / HEAD cell:
+/// 1 dp at or above 1 (unchanged), 2 dp below it, so a 0.0709 L/s HW
+/// circulator no longer prints '0.1 L/s' (+41 %) nor a 0.036 L/s loop
+/// '0.0 L/s' — the calc report prints these at 2 dp too.
+String _fmtSmall(double v) => _fmt(v, dp: v.abs() < 1 ? 2 : 1);
+
 /// Sequential tag like "P-01", "F-02" — used when a source result carries none.
 String _seqTag(String prefix, int oneBasedIndex) =>
     '$prefix-${oneBasedIndex.toString().padLeft(2, '0')}';
 
+/// The localized system label (`3-phase` / `3 fasa`) for a schedule cell.
+String _systemLabel(ElectricalSystem s, ReportStrings strings) =>
+    s == ElectricalSystem.threePhase
+        ? strings(RptStringKey.sysThreePhase)
+        : strings(RptStringKey.sysSinglePhase);
+
 /// Build the ordered list of schedule rows from [data]. Pure — the same list
-/// backs both the Markdown renderer and any future PDF/CSV emitter.
+/// backs both the Markdown renderer and any future PDF/CSV emitter. The cell
+/// literals resolve through [strings] (default EN ⇒ byte-identical CSV/MD).
 List<EquipmentScheduleRow> buildEquipmentScheduleRows(
-  EquipmentScheduleData data,
-) {
+  EquipmentScheduleData data, [
+  ReportStrings strings = const ReportStrings.en(),
+]) {
   final rows = <EquipmentScheduleRow>[];
 
   // N23 (residual): the engineer-entered model/spec for a PANEL / apparatus row
@@ -216,9 +319,10 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
     rows.add(EquipmentScheduleRow(
       tag: item.tag ?? _seqTag('P', i + 1),
       service: item.service,
-      duty: '${_fmt(d.flow.inLitersPerSecond)} L/s @ '
-          '${_fmt(d.head.meters)} m',
-      size: '${_fmt(d.selectedMotor.inKiloWatts, dp: 2)} kW motor',
+      duty: '${_fmtSmall(d.flow.inLitersPerSecond)} L/s @ '
+          '${_fmtSmall(d.head.meters)} m',
+      size: strings.format(RptStringKey.esMotorSize,
+          {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',
       qty: item.qty,
       category: EquipmentCategory.pump,
@@ -239,11 +343,48 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       service: item.service,
       duty: '${_fmt(d.airflow.inLitersPerSecond, dp: 0)} L/s @ '
           '${_fmt(d.totalStaticPressure.pascals, dp: 0)} Pa',
-      size: '${_fmt(d.selectedMotor.inKiloWatts, dp: 2)} kW motor',
+      size: strings.format(RptStringKey.esMotorSize,
+          {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',
       qty: item.qty,
       category:
           isAhu ? EquipmentCategory.airHandling : EquipmentCategory.fan,
+    ));
+  }
+
+  // ── Placed AC units (air-handling) ─────────────────────────────────────────
+  for (final ac in data.acUnits) {
+    rows.add(EquipmentScheduleRow(
+      tag: ac.tag,
+      service: ac.service,
+      duty: strings.format(RptStringKey.esAcDuty, {
+        'btu': _fmt(ac.coolingBtuPerHr, dp: 0),
+        'pk': _fmt(ac.pk, dp: 1),
+      }),
+      size: strings.format(
+          RptStringKey.esAcSize, {'kw': _fmt(ac.inputW / 1000.0, dp: 2)}),
+      modelSpec: ac.modelSpec ?? '—',
+      qty: ac.qty,
+      category: EquipmentCategory.airHandling,
+    ));
+  }
+
+  // ── Storage tanks (Round 25) ─────────────────────────────────────────────
+  for (final t in data.tanks) {
+    final cap = t.capacityLitres;
+    rows.add(EquipmentScheduleRow(
+      tag: t.tag,
+      service: strings(t.roof
+          ? RptStringKey.esRoofTankService
+          : RptStringKey.esGroundTankService),
+      // ASCII 'm3' (WinAnsi PDF + Roboto-safe).
+      duty: cap != null && cap > 0
+          ? '${_fmt(cap / 1000.0, dp: 1)} m3'
+          : strings(RptStringKey.esTankCapacityUnset),
+      size: '',
+      modelSpec: t.modelSpec ?? specFor(t.tag),
+      qty: t.qty,
+      category: EquipmentCategory.tank,
     ));
   }
 
@@ -256,9 +397,14 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       final tag = (p.tag != null && p.tag!.isNotEmpty) ? p.tag! : p.name;
       rows.add(EquipmentScheduleRow(
         tag: tag,
-        service: '${p.system.label} distribution',
-        duty: '${_fmt(p.demandW / 1000.0, dp: 1)} kW demand',
-        size: '${_fmt(p.incomer.breaker.ratingA.amperes, dp: 0)} A incomer',
+        service: strings.format(RptStringKey.esPanelService,
+            {'system': _systemLabel(p.system, strings)}),
+        duty: strings.format(RptStringKey.esPanelDuty,
+            {'kw': _fmt(p.demandW / 1000.0, dp: 1)}),
+        // Round 24 — a saturated incomer says so on the procurement schedule.
+        size: strings.format(RptStringKey.esPanelSize,
+                {'a': _fmt(p.incomer.breaker.ratingA.amperes, dp: 0)}) +
+            incomerOverRangeSuffix(p.incomer),
         modelSpec: specFor(tag),
         qty: 1,
         category: EquipmentCategory.panel,
@@ -272,15 +418,17 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
   // spine). Each is emitted only when the model actually carries it.
   final ep = data.electricalProject;
   if (ep != null) {
-    final tx = ep.transformerKva;
-    if (tx != null && tx.inKilovoltAmperes > 0) {
+    // Round 16 — the SAME [serviceTransformer] the study + the spine use: the
+    // declared rating, else an undeclared dual-tx service's study pick.
+    final tx = serviceTransformer(ep, data.electrical);
+    if (tx != null) {
       rows.add(EquipmentScheduleRow(
         tag: 'TX-01',
-        service: 'Distribution transformer',
-        duty: '${_fmt(tx.inKilovoltAmperes, dp: 0)} kVA',
+        service: strings(RptStringKey.esTransformerService),
+        duty: '${_fmt(tx.kva, dp: 0)} kVA',
         size: '',
         modelSpec: specFor('TX-01'),
-        qty: ep.dualTransformer ? 2 : 1,
+        qty: tx.units,
         category: EquipmentCategory.transformer,
       ));
     }
@@ -291,35 +439,130 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
       // (backupFraction × diversified demand), exactly as the source spine does.
       // No result / no demand and no forced kVA ⇒ can't size ⇒ no row.
       final demandVa = data.electrical?.supply.demandVa;
-      final ApparentPower? genKva = gen.kva ??
-          (demandVa != null && demandVa.inKilovoltAmperes > 0
-              ? selectGeneratorKva(
-                  ApparentPower(demandVa.voltAmperes * gen.backupFraction))
+      // Past the top rung the requirement is n PARALLELED sets of the largest
+      // genset (audit r8-5) — the row carries the per-set kVA with qty = n,
+      // never one set silently below the requirement.
+      // Round 12 — sized by the SAME `sizeGenerator` the report's power
+      // one-line uses, so a PRIME-mode set carries its 1.25× uplift here too.
+      final sel = gen.kva != null
+          ? (unitKva: gen.kva!, units: gen.units)
+          : (demandVa != null && demandVa.inKilovoltAmperes > 0
+              ? (() {
+                  // Round 13 — max(fraction × demand, essential demand).
+                  final r = sizeGenerator(
+                      data.electrical != null
+                          ? gensetBackupDemandVa(ep, data.electrical!)
+                          : ApparentPower(
+                              demandVa.voltAmperes * gen.backupFraction),
+                      mode: gen.mode,
+                      // Round 16 — the set's kW limit (0.8 × kVA).
+                      backupPower: data.electrical != null
+                          ? gensetBackupDemandW(ep, data.electrical!)
+                          : null);
+                  return (unitKva: r.ratingKva, units: r.units);
+                })()
               : null);
-      if (genKva != null && genKva.inKilovoltAmperes > 0) {
+      final genKva = sel?.unitKva;
+      if (sel != null && genKva != null && genKva.inKilovoltAmperes > 0) {
         rows.add(EquipmentScheduleRow(
           tag: 'G-01',
-          service: 'Standby generator',
+          // Round 47 — a PRIME set is scheduled as a prime generator: prime
+          // and standby are different nameplate ratings of one set, and the
+          // kVA here already carries the prime uplift.
+          service: strings(gen.mode == GeneratorMode.prime
+              ? RptStringKey.esGeneratorPrimeService
+              : RptStringKey.esGeneratorService),
           duty: '${_fmt(genKva.inKilovoltAmperes, dp: 0)} kVA',
           size: '',
           modelSpec: specFor('G-01'),
-          qty: 1,
+          qty: sel.units,
           category: EquipmentCategory.generator,
         ));
       }
     }
 
-    final kvar = ep.capacitorBankKvar;
-    if (kvar != null && kvar > 0) {
+    // Round 39 (elec-reports-parity-3) — one CB-nn row per INSTALLED bank
+    // ([installedCapacitorBanks]: the capacitor ways per board, else the
+    // declared LV-bus bank) — the same kvar the BOM buys and the PF study
+    // credits. Round 41 (elec-report-bom-2-apfc-bank-bought-not-scheduled) —
+    // plus the PF study's RECOMMENDED APFC bank, labelled as recommended, from
+    // the ONE [capacitorBanksToProcure] list the BOM and the spines read.
+    final pf = data.powerFactor ??
+        (data.electrical != null
+            ? powerFactorCorrection(data.electrical!, ep)
+            : null);
+    final banks = capacitorBanksToProcure(ep, pf);
+    final boardName = {for (final p in ep.panels) p.id: p.name};
+    for (var i = 0; i < banks.length; i++) {
+      final b = banks[i];
+      final tag = 'CB-${(i + 1).toString().padLeft(2, '0')}';
+      final kv = b.kvar;
+      final kvText = '${_fmt(kv, dp: kv == kv.roundToDouble() ? 0 : 1)} kvar';
       rows.add(EquipmentScheduleRow(
-        tag: 'CB-01',
-        service: 'PF-correction bank',
-        duty: '${_fmt(kvar, dp: 0)} kvar',
-        size: '',
-        modelSpec: specFor('CB-01'),
-        qty: 1,
+        tag: tag,
+        service: strings(b.recommended
+            ? RptStringKey.esCapBankRecommendedService
+            : RptStringKey.esCapBankService),
+        duty: b.recommended
+            ? '$kvText APFC, ${b.steps} steps${b.detuned ? ', detuned' : ''}'
+            : kvText,
+        size: b.panelId == null ? '' : (boardName[b.panelId] ?? b.panelId!),
+        modelSpec: specFor(tag),
+        qty: b.units,
         category: EquipmentCategory.capacitorBank,
       ));
+    }
+
+    // Round 44 — BAT-01 / PV-01 / INV-01 from the ONE distributed-source
+    // sizing the power one-line draws and the BOM buys.
+    final src = ep.sources;
+    final sys = data.electrical;
+    if (src != null &&
+        sys != null &&
+        (src.solar != null || src.battery != null)) {
+      final ds = sizeDistributedSources(src,
+          demand: sys.supply.demandVa, demandPower: Power(sys.supply.demandW));
+      final b = ds.battery;
+      if (b != null && b.installedKwh.inKilowattHours > 0) {
+        rows.add(EquipmentScheduleRow(
+          tag: 'BAT-01',
+          service: strings(RptStringKey.esBatteryService),
+          duty: '${_fmt(b.installedKwh.inKilowattHours, dp: 1)} kWh '
+              '${b.chemistry.label}',
+          size: '${b.moduleCount} x '
+              '${_fmt(b.moduleKwh.inKilowattHours, dp: 2)} kWh',
+          modelSpec: specFor('BAT-01'),
+          qty: 1,
+          category: EquipmentCategory.distributedSource,
+        ));
+      }
+      final s = ds.solar;
+      if (s != null && s.panelCount > 0) {
+        rows.add(EquipmentScheduleRow(
+          tag: 'PV-01',
+          service: strings(RptStringKey.esPvService),
+          duty: '${_fmt(s.arrayKwp.inKiloWatts, dp: 1)} kWp',
+          size: '${s.panelCount} x ${s.panelWp} Wp',
+          modelSpec: specFor('PV-01'),
+          qty: 1,
+          category: EquipmentCategory.distributedSource,
+        ));
+      }
+      final invs = distributedSourceInverters(ds);
+      for (var i = 0; i < invs.length; i++) {
+        final inv = invs[i];
+        final tag = 'INV-${(i + 1).toString().padLeft(2, '0')}';
+        rows.add(EquipmentScheduleRow(
+          tag: tag,
+          service: '${strings(RptStringKey.esInverterService)} '
+              '(${inv.kind})',
+          duty: '${_fmt(inv.unitKw.inKiloWatts, dp: 0)} kW',
+          size: '',
+          modelSpec: specFor(tag),
+          qty: inv.units,
+          category: EquipmentCategory.distributedSource,
+        ));
+      }
     }
   }
 
@@ -336,16 +579,19 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
       EquipmentCategory.pump => strings(RptStringKey.catPumps),
       EquipmentCategory.fan => strings(RptStringKey.catFans),
       EquipmentCategory.airHandling => strings(RptStringKey.catAirHandling),
+      EquipmentCategory.tank => strings(RptStringKey.catTanks),
       EquipmentCategory.panel => strings(RptStringKey.catPanels),
       EquipmentCategory.transformer => strings(RptStringKey.catTransformer),
       EquipmentCategory.generator => strings(RptStringKey.catGenerator),
       EquipmentCategory.capacitorBank =>
         strings(RptStringKey.catCapacitorBank),
+      EquipmentCategory.distributedSource =>
+        strings(RptStringKey.catDistributedSource),
     };
 
 List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
     [ReportStrings strings = const ReportStrings.en()]) {
-  final rows = buildEquipmentScheduleRows(data);
+  final rows = buildEquipmentScheduleRows(data, strings);
   final blocks = <RptBlock>[
     RptHeading(1, strings(RptStringKey.headingEquipmentSchedule)),
     // The project/date pair uses a Markdown two-space hard break between the

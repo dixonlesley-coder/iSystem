@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show Offset;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
@@ -113,6 +114,28 @@ class SelectionController extends Notifier<Selection> {
   void addMulti(Set<String> nodeIds, Set<String> edgeIds) {
     if (nodeIds.isEmpty && edgeIds.isEmpty) return;
     setMulti({...state.nodeIds, ...nodeIds}, {...state.edgeIds, ...edgeIds});
+  }
+
+  /// L2 — SUBTRACT [nodeIds]/[edgeIds] from the current selection (the
+  /// Ctrl+Shift marquee, AutoCAD's Shift-remove). The primary collapses to a
+  /// remaining element when it was removed; empty input is a no-op.
+  void removeMulti(Set<String> nodeIds, Set<String> edgeIds) {
+    if (nodeIds.isEmpty && edgeIds.isEmpty) return;
+    final nodes = state.nodeIds.difference(nodeIds);
+    final edges = state.edgeIds.difference(edgeIds);
+    if (nodes.length == state.nodeIds.length &&
+        edges.length == state.edgeIds.length) {
+      return;
+    }
+    final keepPrimary = (state.nodeId != null && nodes.contains(state.nodeId)) ||
+        (state.edgeId != null && edges.contains(state.edgeId));
+    state = keepPrimary
+        ? Selection(
+            nodeId: state.nodeId,
+            edgeId: state.edgeId,
+            nodeIds: nodes,
+            edgeIds: edges)
+        : _afterRemove(nodes, edges);
   }
 
   /// Select EVERYTHING on [sheetId]/[floorIndex] — every run edge (both
@@ -268,3 +291,23 @@ class HoverTargetController extends Notifier<HoverTarget?> {
 final hoverTargetProvider =
     NotifierProvider<HoverTargetController, HoverTarget?>(
         HoverTargetController.new);
+
+/// Item 6 — where the Select tool's cursor last hovered (world px on
+/// [sheetId]/[floorIndex]), so Shift+Space can cycle the pick among the
+/// elements under it. Published by the selection gesture layer on hover and
+/// cleared on exit; READ (never watched) by the Layout key handler, so a
+/// pointer move never rebuilds anything.
+typedef PickCursor = ({String sheetId, int floorIndex, Offset world});
+
+class PickCursorController extends Notifier<PickCursor?> {
+  @override
+  PickCursor? build() => null;
+
+  void set(PickCursor? cursor) {
+    if (state != cursor) state = cursor;
+  }
+}
+
+final pickCursorProvider =
+    NotifierProvider<PickCursorController, PickCursor?>(
+        PickCursorController.new);

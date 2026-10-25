@@ -49,7 +49,7 @@ class CanvasGuideButton extends StatelessWidget {
           child: GestureDetector(
             onTap: onToggle,
             child: AnimatedContainer(
-              duration: MechXMotion.hover,
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
               curve: MechXMotion.standard,
               width: 26,
               height: 26,
@@ -104,7 +104,7 @@ class CanvasGuideLegend extends StatelessWidget {
     // Fade + slight scale-from-top-left on open, anchored to the (?) button.
     return TweenAnimationBuilder<double>(
       tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       builder: (context, t, child) => Opacity(
         opacity: t,

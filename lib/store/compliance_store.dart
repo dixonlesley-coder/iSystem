@@ -21,6 +21,9 @@ import '../ui/strings/plural.dart';
 import 'app_state.dart';
 import 'design_issues_store.dart';
 import 'electrical_store.dart';
+import 'sheets_store.dart';
+import 'sizing_store.dart';
+import 'solve_store.dart';
 
 /// Build the compliance pass/fail roll-up from the aggregated design [issues]
 /// and the solved electrical system's own [electricalWarnings]. Pure fan-in (no
@@ -45,6 +48,21 @@ ComplianceSummary buildComplianceSummaryFrom({
   // Defaults to English so the report-export path and pure tests that omit it
   // stay byte-identical.
   MechXStringsData strings = const MechXStringsData(AppLocale.en),
+  // Round 25 (ui-journeys-4-blank-project-pass-ready-to-issue) — what there
+  // is to judge. A row with nothing to judge prints 'n/a' instead of a
+  // vacuous 'all sheets calibrated' / 'no sizing errors', and an empty
+  // project (nothing sized, no panel) carries a failing 'Design content' row
+  // so it can never read 'PASS — ready to issue'. All default false ⇒ the
+  // pure / report callers that omit them stay byte-identical.
+  bool nothingDesigned = false,
+  bool noSheets = false,
+  bool noPanels = false,
+  // Round 25 (whole-building-2-downfeed-underpressure-silent) — true when a
+  // supply pressure solve exists (upfeed, or a DRAWN roof-tank downfeed): the
+  // 'Supply pressure' row then always prints (PASS 'target residual met', or
+  // the below-target findings). Default false ⇒ the row prints only when a
+  // pressure finding exists.
+  bool pressureJudged = false,
 }) {
   bool isFail(DesignIssue i) =>
       i.severity == IssueSeverity.warning ||
@@ -99,6 +117,14 @@ ComplianceSummary buildComplianceSummaryFrom({
   // sizing' row below (counted from the solved system directly) stays the
   // single source and nothing double-counts.
   claim((i) => i.kind.startsWith('electrical:'));
+  // Round 25 — a roof-tank downfeed below the target residual rolls into the
+  // named 'Supply pressure' row (it blocks PASS).
+  // Round 25 follow-up — the upfeed shortfall (a reducing PRV below the
+  // target) is claimed here too, so the row can never PASS a solve whose own
+  // `targetHeldByDesign` is false with a fixture short.
+  final pressureIssues = claim((i) =>
+      i.kind == 'downfeed-below-target' || i.kind == 'upfeed-below-target');
+  final pressureFails = pressureIssues.where(isFail).length;
 
   // Every other aggregated issue, grouped by title — duct over-capacity,
   // network connectivity, unsized air elements, drainage/Legionella
@@ -108,6 +134,9 @@ ComplianceSummary buildComplianceSummaryFrom({
     if (accounted.contains(i)) continue;
     remainder.putIfAbsent(i.title, () => []).add(i);
   }
+  final advisoryOnly = remainder.values
+      .where((g) => !g.any(isFail))
+      .fold<int>(0, (n, g) => n + g.length);
 
   // Electrical sizing: the solved system's own warning list (error severity —
   // e.g. cable-ampacity-inadequate — must fail the sign-off).
@@ -145,10 +174,16 @@ ComplianceSummary buildComplianceSummaryFrom({
   return ComplianceSummary(
     date: date,
     items: [
+      if (nothingDesigned)
+        ComplianceItem(strings(StringKey.complianceCategoryDesignContent),
+            pass: false,
+            detail: strings(StringKey.complianceDetailNothingDesigned)),
       ComplianceItem(strings(StringKey.complianceCategoryAirVelocity),
           pass: velocityWarnings == 0,
           detail: velocityWarnings == 0
-              ? strings(StringKey.complianceDetailAllWithinBand)
+              ? strings(nothingDesigned
+                  ? StringKey.complianceDetailNaNothingDrawn
+                  : StringKey.complianceDetailAllWithinBand)
               : strings.format(StringKey.complianceDetailOutOfBand,
                   {'n': '$velocityWarnings'})),
       ComplianceItem(strings(StringKey.complianceCategorySheetCalibration),
@@ -162,7 +197,23 @@ ComplianceSummary buildComplianceSummaryFrom({
               : blankUncalibrated != 0
                   ? strings.format(StringKey.complianceDetailBlankUncalibrated,
                       {'n': '$blankUncalibrated'})
-                  : strings(StringKey.complianceDetailAllCalibrated)),
+                  : strings(noSheets
+                      ? StringKey.complianceDetailNaNoSheets
+                      : StringKey.complianceDetailAllCalibrated)),
+      if (pressureJudged || pressureIssues.isNotEmpty)
+        ComplianceItem(strings(StringKey.complianceCategorySupplyPressure),
+            pass: pressureFails == 0,
+            // Round 32 (binding-1) — an info-only pressure finding is the
+            // SNI minimum met below the comfort target: the row PASSES and
+            // says so (only warning-severity items count as fails).
+            detail: pressureFails == 0
+                ? strings(pressureIssues.isEmpty
+                    ? StringKey.complianceDetailPressureMet
+                    : StringKey.complianceDetailPressureSniMet)
+                : pluralCount(
+                    pressureFails,
+                    strings(StringKey.complianceNounFindingOne),
+                    strings(StringKey.complianceNounFindingMany))),
       ComplianceItem(strings(StringKey.complianceCategoryStandardsVerification),
           pass: openUnverified == 0,
           detail: openUnverified == 0
@@ -180,23 +231,37 @@ ComplianceSummary buildComplianceSummaryFrom({
                     })
                   : strings.format(StringKey.complianceDetailOpenAck,
                       {'open': '$openUnverified', 'ack': '$ackUnverified'}))),
+      // Round 31 (ui-simplicity-4) — a per-title row only for a group holding
+      // a FAILING issue; info-only groups fold into ONE 'Advisory notes' row
+      // (a sign-off line titled 'Fixture type not set — PASS' read as a
+      // defect beside its own verdict).
       for (final e in remainder.entries)
-        ComplianceItem(e.key,
-            pass: !e.value.any(isFail),
-            detail: e.value.any(isFail)
-                ? pluralCount(
-                    e.value.where(isFail).length,
-                    strings(StringKey.complianceNounFindingOne),
-                    strings(StringKey.complianceNounFindingMany))
-                : pluralCount(
-                    e.value.length,
-                    strings(StringKey.complianceNounAdvisoryNoteOne),
-                    strings(StringKey.complianceNounAdvisoryNoteMany))),
+        if (e.value.any(isFail))
+          ComplianceItem(e.key,
+              pass: false,
+              detail: pluralCount(
+                  e.value.where(isFail).length,
+                  strings(StringKey.complianceNounFindingOne),
+                  strings(StringKey.complianceNounFindingMany))),
+      if (advisoryOnly > 0)
+        ComplianceItem(strings(StringKey.complianceCategoryAdvisoryNotes),
+            pass: true,
+            detail: pluralCount(
+                advisoryOnly,
+                strings(StringKey.complianceNounAdvisoryNoteOne),
+                strings(StringKey.complianceNounAdvisoryNoteMany))),
+      // Round 31 (ui-simplicity-4) — ONE rule for every category: a WARNING
+      // blocks the sign-off exactly like a mechanical warning does (the
+      // remainder rows' [isFail]); only info notes pass. It used to pass
+      // electrical warnings (PASS '5 warnings, no errors') while the same
+      // five read as yellow Warnings in the issue list below it.
       ComplianceItem(strings(StringKey.complianceCategoryElectricalSizing),
-          pass: eErrors == 0,
+          pass: eErrors == 0 && eWarns == 0,
           detail: eErrors == 0
               ? (eWarns == 0
-                  ? strings(StringKey.complianceDetailNoSizingErrors)
+                  ? strings(noPanels
+                      ? StringKey.complianceDetailNaNoPanels
+                      : StringKey.complianceDetailNoSizingErrors)
                   : strings.format(StringKey.complianceDetailWarningsNoErrors, {
                       'warnings': pluralCount(
                           eWarns,
@@ -233,8 +298,25 @@ final complianceSummaryProvider = Provider<ComplianceSummary>((ref) {
     // The verdict date is formatted app-side (the engine never reads the
     // clock); it only rolls at midnight, which no open session cares about.
     date: DateTime.now().toIso8601String().split('T').first,
+    nothingDesigned: ref.watch(_nothingDesignedProvider),
+    noSheets: ref.watch(sheetsContentProvider).sheets.isEmpty,
+    noPanels: ref.watch(electricalSizingProjectProvider).panels.isEmpty,
+    pressureJudged: ref.watch(_pressureJudgedProvider),
   );
 });
+
+/// Round 25 — nothing sized on the network and no electrical panel: an empty
+/// project has nothing to issue.
+final _nothingDesignedProvider = Provider<bool>((ref) =>
+    ref.watch(sizingProvider).isEmpty &&
+    ref.watch(electricalSizingProjectProvider).panels.isEmpty);
+
+/// Round 25 — a supply pressure solve exists (upfeed, or a DRAWN roof-tank
+/// downfeed), so the 'Supply pressure' row has something to judge.
+final _pressureJudgedProvider = Provider<bool>((ref) =>
+    ref.watch(solveProvider) != null ||
+    (ref.watch(gravityDownfeedDrawnProvider) &&
+        ref.watch(downfeedDeliveredProvider) != null));
 
 /// I4 — the on-screen compliance roll-up: the design CHECK rows only, WITHOUT
 /// the per-advisory acknowledgement log. The audit log (who accepted what, when,
@@ -253,5 +335,9 @@ final complianceCheckItemsProvider = Provider<ComplianceSummary>((ref) {
     // No `acks` ⇒ no acknowledgement-log rows.
     strings: MechXStringsData(ref.watch(localeProvider)),
     date: DateTime.now().toIso8601String().split('T').first,
+    nothingDesigned: ref.watch(_nothingDesignedProvider),
+    noSheets: ref.watch(sheetsContentProvider).sheets.isEmpty,
+    noPanels: ref.watch(electricalSizingProjectProvider).panels.isEmpty,
+    pressureJudged: ref.watch(_pressureJudgedProvider),
   );
 });

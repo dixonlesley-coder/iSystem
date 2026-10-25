@@ -204,6 +204,9 @@ void main() {
 
     test('unverified standards surface as info-level issues', () {
       final c = makeContainer();
+      // Round 31 — the PUIL debt (the pending secondarySource values) is
+      // surfaced once the project carries an electrical panel.
+      c.read(electricalProjectProvider.notifier).addPanel(name: 'DB');
       final infos = c
           .read(designIssuesProvider)
           .where((i) => i.isVerify)
@@ -362,6 +365,19 @@ void main() {
       expect(issue.severity, IssueSeverity.warning);
       expect(issue.locate, isNotNull);
       expect(issue.locate!.sheetId, sheetId);
+      // R6: the message names the service in words, never the enum
+      // identifier; the locale-independent ack kind keeps the identifier.
+      expect(issue.message, startsWith('The cold water component with 2 nodes'));
+      expect(issue.message, isNot(contains('coldWater')));
+      expect(issue.kind, 'no-source:coldWater');
+
+      // …and in Bahasa Indonesia.
+      c.read(localeProvider.notifier).set(AppLocale.id);
+      final id = c
+          .read(designIssuesProvider)
+          .firstWhere((i) => i.kind == 'no-source:coldWater');
+      expect(id.message, startsWith('Komponen air dingin dengan 2 simpul'));
+      expect(id.message, isNot(contains('coldWater')));
     });
 
     test('grouping still puts critical + warning before info', () {
@@ -387,11 +403,13 @@ void main() {
       expect(lastNonInfo, lessThan(firstInfo));
     });
 
-    test('an over-long drainage branch surfaces as an info issue (locatable)',
-        () {
+    // Round 9 — judged as a TRAP ARM: the leaf terminal (default 2 DFU →
+    // branch table 1 < 2 ≤ 3 ⇒ DN50) drains 40 m to the outlet, past the IPC
+    // 909.1 DN50 limit of 2.4 m.
+    test('an over-long trap arm surfaces as an info issue (locatable)', () {
       final c = makeContainer();
       const sheetId = 'sd';
-      // Calibrate so 100 px → 40 m (> the 32 m developed-length limit).
+      // Calibrate so 100 px → 40 m (far past any per-DN trap-arm limit).
       c.read(projectControllerProvider.notifier).setCalibration(
             sheetId,
             const ScaleCalibration(0.4), // 0.4 m/px
@@ -411,8 +429,8 @@ void main() {
           );
 
       final issue = c.read(designIssuesProvider).firstWhere(
-            (i) => i.title == 'Drainage branch too long',
-            orElse: () => fail('expected a drainage developed-length issue'),
+            (i) => i.title == 'Trap arm too long',
+            orElse: () => fail('expected a trap-arm developed-length issue'),
           );
       expect(issue.severity, IssueSeverity.info);
       expect(issue.locate, isNotNull);
@@ -662,12 +680,19 @@ void main() {
     // floor cannot be split, so the zoner emits it and the checker honestly
     // rejects it.
     //
-    // One floor × 20.0 m, ρg = 9810, targetResidual = 225 000 Pa.
-    //   budget = (392266 − 225000)/9810 ≈ 17.05 m
-    //   span = ceiling(0) − fixture(0) = (20.0 − 0.3) − 1.1 = 18.6 m > 17.05
-    //   bottomStatic = 225000 + 9810·18.6 = 407 466 Pa ≈ 407 kPa > 392 kPa
-    //   ⇒ withinLimit is false ⇒ an over-limit pressure zone.
-    List<Floor> tallFloors() => [Floor('Hall', const Length(20.0))];
+    // Round 22 (pressurized-3-1) — the TOP zone is fed by the roof tank's own
+    // head, so the indivisible over-limit zone is a PRV zone BELOW it:
+    // Hall 20.0 m (floor 0) under Upper 25.0 m (floor 1), roof (tank) 45.0 m,
+    // ρg = 9810, PRV setpoint 255 000 Pa (target 225 kPa + 30 kPa margin).
+    //   tank zone: floor 1 (always admitted); floor 0's fixture sees
+    //     45.0 − 1.1 = 43.9 m ⇒ 430.7 kPa > 392.3 ⇒ not tank-fed
+    //   PRV zone floor 0: span = (20.0 − 0.3) − 1.1 = 18.6 m (one storey —
+    //     indivisible) ⇒ bottomStatic = 255000 + 9810·18.6 = 437 466 Pa
+    //     ≈ 437 kPa > 392 kPa ⇒ withinLimit is false ⇒ an over-limit zone.
+    List<Floor> tallFloors() => [
+          Floor('Hall', const Length(20.0)),
+          Floor('Upper', const Length(25.0)),
+        ];
 
     test('an over-limit pressure zone surfaces a warning DesignIssue', () {
       final c = ProviderContainer();
@@ -682,7 +707,7 @@ void main() {
           reason: 'a tall building must flag its over-limit pressure zone');
       expect(zoneIssues.every((i) => i.severity == IssueSeverity.warning),
           isTrue);
-      // The message names the worst static + the SNI limit (407 kPa > 392 kPa).
+      // The message names the worst static + the SNI limit (437 kPa > 392 kPa).
       expect(zoneIssues.first.message, contains('kPa'));
     });
 
@@ -765,7 +790,7 @@ void main() {
 
       final issues = c.read(designIssuesProvider);
       final issue = issues.firstWhere(
-        (i) => i.title == 'Electrical: cable ampacity inadequate',
+        (i) => i.title == 'Electrical: Cable ampacity inadequate',
         orElse: () => fail('expected an electrical ampacity DesignIssue'),
       );
       // error ⇒ critical, and it locates on the panel (not a sheet).
@@ -867,8 +892,10 @@ void main() {
       final c = ProviderContainer();
       addTearDown(c.dispose);
 
-      // The default const standards profiles carry secondarySource // VERIFY
-      // items ⇒ the Standards row is REVIEW until they are acknowledged.
+      // The const PUIL profile carries secondarySource // VERIFY items
+      // (surfaced once a panel exists — Round 31) ⇒ the Standards row is
+      // REVIEW until they are acknowledged.
+      c.read(electricalProjectProvider.notifier).addPanel(name: 'DB');
       final open = c.read(complianceSummaryProvider);
       expect(open.allPass, isFalse);
 
@@ -896,6 +923,12 @@ void main() {
       final IssueAck sample = acks.values.first;
       expect(sample.author, 'LD');
       final summary = c.read(complianceSummaryProvider);
+      // Round 31 — the container now carries one electrical panel (it is what
+      // brings the PUIL register), so it is not an empty project ('Design
+      // content' passes); with every advisory accepted every row passes and
+      // the verdict is reachable.
+      expect(summary.items.where((i) => !i.pass).map((i) => i.category),
+          isEmpty);
       expect(summary.allPass, isTrue);
       final ackRows = summary.items.where((it) =>
           it.category.startsWith('Acknowledged:') &&

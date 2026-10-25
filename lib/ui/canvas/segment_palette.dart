@@ -5,6 +5,7 @@ import 'package:mechx_engine/standards/sni.dart' show PlumbingFixture;
 
 import '../../data/project_document.dart' show SavedAssembly;
 import '../../store/assemblies_store.dart';
+import '../../store/palette_placement_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
@@ -17,72 +18,10 @@ import '../widgets/palette_card.dart';
 import '../widgets/section_label.dart';
 import 'segment_symbols.dart';
 
-/// What a palette card drops onto the canvas. The drop overlay reads [kind] to
-/// pick the matching store add-action; [service] (a pipe segment) carries the
-/// service so a duct vs water segment lands correctly; [component] (a
-/// [PaletteItemKind.component]) carries which piece of equipment to drop.
-enum PaletteItemKind { pipeSegment, ductSegment, fitting, terminal, component }
-
-@immutable
-class PaletteItem {
-  final PaletteItemKind kind;
-
-  /// For [PaletteItemKind.pipeSegment]/[PaletteItemKind.ductSegment] — the
-  /// service the dropped segment carries. Null ⇒ use the active draw service.
-  final ServiceType? service;
-
-  /// For [PaletteItemKind.component] — which equipment node to drop.
-  final NodeComponent? component;
-
-  /// F5 — for [PaletteItemKind.terminal] — the PLUMBING FIXTURE the dropped
-  /// terminal represents, carried into the existing `addTerminal(fixture:)` /
-  /// `mergeOrAddTerminal(fixture:)` path so the node lands already typed (its
-  /// real UBAP + DFU loads) instead of silently sizing on the representative
-  /// 2.0-unit placeholder. Null ⇒ the generic, untyped Terminal card
-  /// (unchanged behaviour).
-  final PlumbingFixture? fixture;
-
-  const PaletteItem(this.kind, {this.service, this.component, this.fixture});
-
-  // VALUE equality (F5): the armed-placement provider compares the currently
-  // armed item against each card's item to draw the armed tint; a non-const
-  // component card rebuilds a fresh instance each frame, so identity equality
-  // would never match.
-  @override
-  bool operator ==(Object other) =>
-      other is PaletteItem &&
-      other.kind == kind &&
-      other.service == service &&
-      other.component == component &&
-      other.fixture == fixture;
-
-  @override
-  int get hashCode => Object.hash(kind, service, component, fixture);
-}
-
-/// F5 — the palette card ARMED for click-to-place-repeatedly. Non-null means
-/// each canvas click drops another instance of this item (through the SAME
-/// merge/snap add-actions a drag uses, in `drop_overlay.dart`); null is normal
-/// single-drag placement. Esc / a canvas right-click / re-clicking the armed
-/// card / picking another card disarms. Transient UI state — never persisted.
-///
-/// (Kept in the UI layer beside [PaletteItem], its payload type, rather than in
-/// the pure `network_store`: routing a UI type through the engine-typed store
-/// would invert the store↔UI layering.)
-final armedPlacementProvider =
-    NotifierProvider<ArmedPlacementController, PaletteItem?>(
-  ArmedPlacementController.new,
-);
-
-class ArmedPlacementController extends Notifier<PaletteItem?> {
-  @override
-  PaletteItem? build() => null;
-
-  /// Toggle: arming the already-armed item disarms it; a different item re-arms.
-  void toggle(PaletteItem item) => state = (state == item) ? null : item;
-
-  void disarm() => state = null;
-}
+// The palette payload + the armed-placement provider live in the store layer
+// (the data layer resets them on document load); re-exported so existing
+// `segment_palette.dart` importers keep compiling unchanged.
+export '../../store/palette_placement_store.dart';
 
 /// The mechanical node palette — a full, grouped, draggable node palette built
 /// to mirror the electrical Loads column ([ElectricalPalette]) so both canvases
@@ -372,6 +311,7 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.fireExtinguisher,
             NodeComponent.hydrantBox,
             NodeComponent.hoseReel,
+            NodeComponent.pillarHydrant,
             NodeComponent.fireDeptConnection,
           ]),
 

@@ -27,6 +27,7 @@ import 'electrical/electrical_inspector.dart';
 import 'electrical/electrical_palette.dart';
 import 'electrical/electrical_view.dart';
 import 'inspector/collapsible_inspector.dart';
+import 'inspector/feed_strategy_line.dart';
 import 'inspector/project_panel.dart';
 import 'layout/layout_canvas.dart';
 import 'review/review_hub.dart';
@@ -39,6 +40,7 @@ import 'shell/preferences_screen.dart';
 import 'shell/project_io.dart';
 import 'shell/projects_screen.dart';
 import 'shell/shell_shortcuts.dart';
+import 'shell/export_sheet.dart';
 import 'shell/shortcuts_sheet.dart';
 import 'sheets/sheet_rail.dart';
 import 'strings/app_strings.dart';
@@ -47,7 +49,7 @@ import 'theme/mechx_theme.dart';
 import 'widgets/glass_surface.dart';
 import 'widgets/mechx_button.dart';
 import 'widgets/mechx_focus_ring.dart';
-import 'widgets/mechx_tooltip.dart';
+import 'widgets/mechx_text_field.dart';
 import 'widgets/section_label.dart';
 import 'widgets/severity_glyph.dart';
 
@@ -86,42 +88,43 @@ class _AppShellState extends ConsumerState<AppShell> {
   /// Ctrl+1..8 / Ctrl+, (go to a destination). WHICH key means what is the pure,
   /// unit-tested table in `shell_shortcuts.dart`; this method only runs it.
   ///
-  /// Returns true when consumed so the focus system doesn't double-dispatch
-  /// the event to a focused canvas/field; everything else returns false and
-  /// flows through the normal focus chain untouched.
+  /// The return value only marks the platform event "handled" — it does NOT
+  /// stop the framework delivering the SAME key down the focus chain
+  /// (`KeyEventManager` dispatches to the focus system unconditionally). So a
+  /// combo run here must never also be acted on by a focused widget: the
+  /// canvases consume Ctrl+Z/Y without acting (Round 12), and overlays that
+  /// own Esc hold primary focus themselves.
   bool _onHardwareKey(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
-    // The shortcuts sheet carries no text field, so nothing inside it holds
-    // focus and the bubble-phase Esc listener would never see the key on a hub
-    // screen (the I1 dead spot). Close it here instead — pre-focus, but ONLY
-    // while it is open, so Esc otherwise reaches the canvases untouched.
-    final closingSheet = event.logicalKey == LogicalKeyboardKey.escape &&
-        ref.read(shortcutsSheetOpenProvider);
-    final command = closingSheet
-        ? null
-        : matchShellShortcut(
-            event.logicalKey,
-            mod: HardwareKeyboard.instance.isControlPressed ||
-                HardwareKeyboard.instance.isMetaPressed,
-            shift: HardwareKeyboard.instance.isShiftPressed,
-            alt: HardwareKeyboard.instance.isAltPressed,
-          );
-    if (!closingSheet && command == null) return false;
+    // Round 12 — Esc for the shortcuts / export sheets is NOT handled here:
+    // this pre-focus handler cannot stop the same Esc reaching the focused
+    // canvas (it cancelled the in-progress run). Each sheet holds primary
+    // focus while open and closes on its own Esc instead.
+    final command = matchShellShortcut(
+      event.logicalKey,
+      mod: HardwareKeyboard.instance.isControlPressed ||
+          HardwareKeyboard.instance.isMetaPressed,
+      shift: HardwareKeyboard.instance.isShiftPressed,
+      alt: HardwareKeyboard.instance.isAltPressed,
+    );
+    if (command == null) return false;
     // This handler is pre-focus and process-global, so it must stand down when
     // a modal route (a dialog / file picker) is on top of the shell — otherwise
     // Ctrl+O could stack a second confirm dialog over the first, or Ctrl+K
     // would toggle the palette behind the barrier. Only act when the shell's
     // own route is the current one.
     if (!(ModalRoute.of(context)?.isCurrent ?? true)) return false;
-    if (closingSheet) {
-      ref.read(shortcutsSheetOpenProvider.notifier).close();
-      return true;
-    }
     // A focused text field owns its own editing keys: Ctrl+Z/Y inside a field
     // must undo the FIELD (the framework's DefaultTextEditingShortcuts), never
     // the drawing. Everything else stays live while typing, as it does in every
     // desktop editor.
-    if (command!.deferToTextField && isTextEntryFocused()) return false;
+    if (command.deferToTextField && isTextEntryFocused()) return false;
+    // Round 12 (ui-journey-pending-field-edit-lost) — a non-field command
+    // (save, navigate, export…) first BLURS any focused field, so its
+    // commit-on-blur edit lands BEFORE the command runs (Ctrl+S used to save
+    // the old name; Ctrl+1..8 discarded the edit with the unmounted screen).
+    MechXTextField.commitPendingEdit();
+    if (isTextEntryFocused()) FocusManager.instance.primaryFocus?.unfocus();
     _run(command);
     return true;
   }
@@ -155,6 +158,10 @@ class _AppShellState extends ConsumerState<AppShell> {
       // writing an empty drawing.
       case ShellCommand.printPlan:
         exportAnnotatedPlanPdf(ref);
+      // The ONE Export sheet — every deliverable, grouped (opening it closes
+      // the palette / shortcuts sheet, so scrims never stack).
+      case ShellCommand.exportSheet:
+        ref.read(exportSheetProvider.notifier).toggle();
       // — Edit — the ONE global timeline, so Ctrl+Z reverts the genuinely most
       // recent edit across mechanical / electrical / annotation domains.
       case ShellCommand.undo:
@@ -216,9 +223,24 @@ class _AppShellState extends ConsumerState<AppShell> {
     // the (one-shot) nudge fires there too — acceptable, since the sizes shown
     // on the plan really were just auto-computed. AppShell is the
     // always-mounted host; the guard itself lives in `firstAutoSizeNudgeProvider`.
+    //
+    // Round 32 r2 — the Notifier write is DEFERRED to a microtask. The
+    // listener fires synchronously whenever `sizingProvider` first computes,
+    // and that first computation can happen INSIDE another provider's build
+    // (any derived provider — downfeed / SNI-minimum / advisories — that is
+    // flushed before a widget reads sizing). Writing a Notifier there trips
+    // Riverpod's "providers may not modify other providers during their
+    // initialization" assertion, and because the dependent flush order walks
+    // a hash map it did so nondeterministically. A microtask always runs
+    // after the current build/flush, so no provider build can ever write the
+    // nudge state.
     ref.listen(sizingProvider, (previous, next) {
       if ((previous == null || previous.isEmpty) && next.isNotEmpty) {
-        ref.read(firstAutoSizeNudgeProvider.notifier).maybeFire(next.length);
+        final count = next.length;
+        Future.microtask(() {
+          if (!mounted) return;
+          ref.read(firstAutoSizeNudgeProvider.notifier).maybeFire(count);
+        });
       }
     });
     // A2: latch "Building visited" the first time the engineer opens the
@@ -269,6 +291,7 @@ class _AppShellState extends ConsumerState<AppShell> {
           const UpdateBannerOverlay(),
           const CommandPaletteOverlay(),
           const ShortcutsSheetOverlay(),
+          const ExportSheetOverlay(),
           const CopilotOverlay(),
         ],
       ),
@@ -284,6 +307,17 @@ class _ShellBody extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Round 14 (regression-commit-on-dispose-deactivated-ref) — ANY section /
+    // view switch commits a focused commit-on-blur field's pending edit while
+    // the screen holding it is still mounted (the listener fires synchronously
+    // on the state change, before this body rebuilds and unmounts it). Covers
+    // every non-focus-taking navigation (workflow stepper chips, Review
+    // Locate jumps, palette commands…) in one place; the field itself no
+    // longer commits on teardown, where its host's ref is already deactivated.
+    ref.listen(shellSectionProvider,
+        (_, _) => MechXTextField.commitPendingEdit());
+    ref.listen(workspaceViewProvider,
+        (_, _) => MechXTextField.commitPendingEdit());
     final section = ref.watch(shellSectionProvider);
     switch (section) {
       case ShellSection.building:
@@ -399,7 +433,7 @@ class _DesignWorkspace extends ConsumerWidget {
 /// uses, so the inspector names a sheet exactly as the rest of the app does.
 /// Null when [pos]'s sheet no longer resolves (a stale/removed sheet id).
 String? _layoutPlacementLabel(WidgetRef ref, LayoutPos pos) {
-  final sheets = ref.watch(sheetsControllerProvider).sheets;
+  final sheets = ref.watch(sheetsContentProvider).sheets;
   final index = sheets.indexWhere((s) => s.id == pos.sheetId);
   if (index < 0) return null;
   final floors = ref.watch(projectControllerProvider).floors;
@@ -472,7 +506,8 @@ Widget? buildElectricalInlineEditor(
         lengthSource: resolved.source,
         effectiveLength: resolved.length,
         placementLabel: placementLabel,
-        onUnplace: loadPos == null
+        // Round 31 — an MEP-derived load follows its equipment: no un-place.
+        onUnplace: loadPos == null || circuit.sourceEquipmentId != null
             ? null
             : () => unplaceCircuitLoad(ref, context, panel.id, circuit.id),
         panelSystem: panel.system,
@@ -520,12 +555,10 @@ Widget? buildElectricalInlineEditor(
         onPinPhases: () => pinPanelPhasesTo(ref, context, panel.id),
       );
     }
-  } else if (target is ElectricalServiceTarget) {
-    // C1: the project-wide Service & Earthing / Sources / Advanced editors now
-    // render INLINE here (was a floating drawer over the canvas).
-    editor = ElectricalServiceInspector(onClose: clear);
-  } else if (target is ElectricalSourcesTarget) {
-    editor = ElectricalSourcesInspector(onClose: clear);
+  } else if (target is ElectricalSupplyTarget) {
+    // C1: the project-wide Supply / Advanced editors render INLINE here (was a
+    // floating drawer over the canvas).
+    editor = ElectricalSupplyInspector(onClose: clear);
   } else if (target is ElectricalAdvancedTarget) {
     editor = ElectricalAdvancedInspector(onClose: clear);
   }
@@ -540,15 +573,13 @@ Widget? buildElectricalInlineEditor(
 /// The right inspector shown when Electrical is the active Layout layer (C1):
 /// selection-first — the inline circuit / panel editor when a marker is
 /// double-clicked (driven by [electricalInspectorTargetProvider], the same
-/// target the standalone workspace uses), else the "Electrical layer" header +
-/// the Loads palette (drag onto the canvas).
+/// target the standalone workspace uses), else the Loads palette (drag onto
+/// the canvas).
 class _ElectricalInspectorColumn extends ConsumerWidget {
   const _ElectricalInspectorColumn();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
     void clear() =>
         ref.read(electricalInspectorTargetProvider.notifier).clear();
     final editor = buildElectricalInlineEditor(context, ref, clear);
@@ -558,19 +589,12 @@ class _ElectricalInspectorColumn extends ConsumerWidget {
     return SizedBox(
       width: ProjectPanel.width,
       // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(MechXSpacing.md, MechXSpacing.md,
-                MechXSpacing.md, MechXSpacing.xs),
-            child: Text(context.strings(StringKey.shellElectricalLayer),
-                style: type.subtitle.copyWith(color: colors.textPrimary)),
-          ),
-          const SizedBox(height: MechXSpacing.sm),
-          const Expanded(child: ElectricalPalette()),
-        ],
-      ),
+      // One inspector idiom across the DESIGN workspaces: the column opens
+      // straight onto its first section label (the palette's own LOADS
+      // heading), like the Layout inspector's BUILDING and the Riser's —
+      // the active layer is already named by the layer switcher, so a
+      // separate 'Electrical layer' title only repeated it.
+      child: const ElectricalPalette(),
     );
   }
 }
@@ -621,19 +645,16 @@ class _ElectricalWorkspaceInspectorColumn extends ConsumerWidget {
 }
 
 /// The right inspector shown on the RISER (Schematic) workspace (F1). A lean,
-/// riser-relevant column — the building context, the feed strategy that drives
-/// the riser's function tags (gravity vs booster), and a pointer to the
-/// on-canvas Auto/Edit riser tools — instead of the plan's DRAW inspector
+/// riser-relevant column — the building context, the (read-only) feed strategy
+/// that drives the riser's function tags (gravity vs booster), and the riser
+/// system summary — instead of the plan's DRAW inspector
 /// (whose tools + palette mutate the Layout canvas, invisible from here).
 class _RiserInspectorColumn extends ConsumerWidget {
   const _RiserInspectorColumn();
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
     final building = ref.watch(projectControllerProvider).building;
-    final strategy = ref.watch(feedStrategyProvider);
     return SizedBox(
       width: ProjectPanel.width,
       // Transparent: floats on the CollapsibleInspector's Liquid-Glass surface.
@@ -642,11 +663,11 @@ class _RiserInspectorColumn extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // C5: converge on the shared section-heading idiom
-            // (`MechXSectionLabel`) the main + electrical inspectors use, rather
-            // than a raw ad-hoc `Text` title with a bespoke type/colour.
-            const MechXSectionLabel('Riser'),
-            const SizedBox(height: MechXSpacing.md),
+            // C5: the shared section-heading idiom (`MechXSectionLabel`).
+            // One inspector idiom across the DESIGN workspaces: the column
+            // opens straight onto its first section (BUILDING), like the
+            // Layout inspector — the nav rail already names the workspace, so
+            // a 'Riser' label stacked over 'Building' only repeated it.
             // Building context (levels/height) → opens the Building page.
             const MechXSectionLabel('Building'),
             const SizedBox(height: MechXSpacing.xs),
@@ -658,93 +679,14 @@ class _RiserInspectorColumn extends ConsumerWidget {
                   .read(shellSectionProvider.notifier)
                   .set(ShellSection.building),
             ),
-            const SizedBox(height: MechXSpacing.lg),
-            // Feed strategy — the input that decides each riser's function tag
-            // (gravity downfeed vs upfeed/booster) on the diagram.
-            const MechXSectionLabel('Feed strategy'),
             const SizedBox(height: MechXSpacing.xs),
-            // C5: the two feed-strategy choices are a mutually-exclusive segment,
-            // so they wear the shared TINTED selected-segment idiom (accentMuted
-            // fill + accent border) used by the draw tools / service chips — not a
-            // solid-accent fill, so a single solid accent stays reserved for the
-            // primary action.
-            _TintedToggle(
-              label: 'Upfeed pump',
-              selected: strategy == FeedStrategy.upfeed,
-              onTap: () => setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
-            ),
-            const SizedBox(height: MechXSpacing.xs),
-            _TintedToggle(
-              label: 'Roof-tank downfeed',
-              selected: strategy == FeedStrategy.downfeed,
-              onTap: () =>
-                  setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
-            ),
+            // 2026-10-17: the feed strategy (which decides each riser's
+            // function tag) is a Building design input — reported read-only
+            // here, with a 'Change' link to the Building page.
+            const FeedStrategyLine(),
             const SizedBox(height: MechXSpacing.lg),
             const RiserSystemSummary(),
-            Text(
-              'Place, move and size risers on the canvas — switch Auto '
-              '(read-only diagram) and Edit on the toolbar above.',
-              style: type.caption.copyWith(color: colors.textMuted),
-            ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-/// A tinted selected-segment toggle (C5) — the shared idiom used by the draw
-/// tools / service chips: a soft `accentMuted` fill + accent border when
-/// selected, so a single SOLID accent stays reserved for the primary action.
-/// A local mirror of the (file-private) `_TintedToggle` in `project_panel.dart`
-/// — same styling, kept in step so the riser inspector reads as one app.
-class _TintedToggle extends StatelessWidget {
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  const _TintedToggle({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: MechXFocusRing(
-        onActivated: onTap,
-        borderRadius: MechXRadii.control,
-        child: GestureDetector(
-          onTap: onTap,
-          behavior: HitTestBehavior.opaque,
-          child: Container(
-            padding: EdgeInsets.symmetric(
-              // Match the default MechXButton padding, compensating the heavier
-              // selected border so the toggle never resizes between states.
-              horizontal: MechXSpacing.sm + 4 - (selected ? 1 : 0),
-              vertical: MechXSpacing.xs + 2 - (selected ? 1 : 0),
-            ),
-            decoration: BoxDecoration(
-              color: selected ? colors.accentMuted : colors.surfaceHover,
-              borderRadius: MechXRadii.control,
-              border: Border.all(
-                color: selected ? colors.accent : const Color(0x00000000),
-                width: selected ? 2 : 1,
-              ),
-            ),
-            child: Text(
-              label,
-              style: type.label.copyWith(
-                color: selected ? colors.accent : colors.textPrimary,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-              ),
-            ),
-          ),
         ),
       ),
     );
@@ -815,29 +757,11 @@ class _TopBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final state = ref.watch(sheetsControllerProvider);
-    final brightness = ref.watch(brightnessProvider);
     final projectName = ref.watch(projectControllerProvider).name;
     final dirty = ref.watch(projectDirtyProvider);
     final currentPath = ref.watch(currentProjectPathProvider);
     final fileName =
         currentPath?.split(Platform.pathSeparator).last;
-
-    // J3 (revised): the zoom pill reflects the Layout sheet's viewport — the
-    // only zoom this bar can read truthfully. On the Riser/Electrical
-    // workspaces (whose real zoom lives in their own canvases, which already
-    // carry their own zoom readouts) and on non-design screens, the pill is
-    // OMITTED entirely rather than showing a literal '—': those canvases own
-    // their zoom, and an em-dash readout reads as broken chrome, not as
-    // "not applicable". Absence is the honest state.
-    final section = ref.watch(shellSectionProvider);
-    final view = ref.watch(workspaceViewProvider);
-    final onLayout =
-        section == ShellSection.design && view == WorkspaceView.plan;
-    final current = state.current;
-    final vt =
-        (onLayout && current != null) ? state.viewportFor(current.id) : null;
-    final zoom = vt == null ? '—' : '${(vt.scale * 100).round()}%';
 
     return GlassSurface(
       // The top bar floats over the workspace; its bottom edge faces content.
@@ -849,47 +773,56 @@ class _TopBar extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            Text('iSystem',
-                style: type.title.copyWith(color: colors.textPrimary)),
-            // A hairline middot sets the product title apart from the project
-            // name — a clearer path-style hierarchy than a bare gap.
-            _titleDot(colors.textMuted),
-            Flexible(
-              child: Text(
-                projectName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.body.copyWith(color: colors.textMuted),
+            // The title group takes ALL the free space (left-aligned inside it)
+            // so the actions hug the bar's right edge — a Flexible title + a
+            // Spacer used to split the free space and park the actions mid-bar.
+            Expanded(
+              child: Row(
+                children: [
+                  Text('iSystem',
+                      style: type.title.copyWith(color: colors.textPrimary)),
+                  // A hairline middot sets the product title apart from the project
+                  // name — a clearer path-style hierarchy than a bare gap.
+                  _titleDot(colors.textMuted),
+                  Flexible(
+                    child: Text(
+                      projectName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: type.body.copyWith(color: colors.textMuted),
+                    ),
+                  ),
+                  // The document-app "edited" cue: a small accent dot while the work
+                  // differs from the last clean save (cleared eagerly on Save/Open;
+                  // false at rest so goldens are unchanged).
+                  if (dirty)
+                    Padding(
+                      padding: const EdgeInsets.only(left: MechXSpacing.xs + 2),
+                      child: Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: colors.accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  // Where Ctrl/Cmd+S will land — the remembered file (post Save/Open).
+                  if (fileName != null) ...[
+                    _titleDot(colors.textMuted),
+                    Flexible(
+                      child: Text(
+                        fileName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: type.caption.copyWith(color: colors.textMuted),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
-            // The document-app "edited" cue: a small accent dot while the work
-            // differs from the last clean save (cleared eagerly on Save/Open;
-            // false at rest so goldens are unchanged).
-            if (dirty)
-              Padding(
-                padding: const EdgeInsets.only(left: MechXSpacing.xs + 2),
-                child: Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: colors.accent,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-            // Where Ctrl/Cmd+S will land — the remembered file (post Save/Open).
-            if (fileName != null) ...[
-              _titleDot(colors.textMuted),
-              Flexible(
-                child: Text(
-                  fileName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: type.caption.copyWith(color: colors.textMuted),
-                ),
-              ),
-            ],
-            const Spacer(),
+            const SizedBox(width: MechXSpacing.sm),
             // D1: a small, permanent entry point for the command palette, which
             // is otherwise reachable only via the invisible Ctrl/Cmd+K
             // accelerator. A quiet keycap pill (a hint, not a primary action)
@@ -899,28 +832,9 @@ class _TopBar extends ConsumerWidget {
                   ref.read(commandPaletteOpenProvider.notifier).open(),
             ),
             const SizedBox(width: MechXSpacing.sm),
-            // Actions sit flush-right. The zoom read-out is a quiet pill: a
-            // soft tinted fill carries it, no hairline border — less visual
-            // mass than a fully-outlined chip (HIG). Only meaningful on
-            // Layout (see the J3 note above) — omitted entirely elsewhere.
-            if (onLayout) ...[
-              Container(
-                key: const ValueKey('zoom-pill'),
-                padding: const EdgeInsets.symmetric(
-                  horizontal: MechXSpacing.sm,
-                  vertical: MechXSpacing.xxs,
-                ),
-                decoration: BoxDecoration(
-                  color: colors.background,
-                  borderRadius: MechXRadii.control,
-                ),
-                child: Text(
-                  zoom,
-                  style: type.mono.copyWith(color: colors.textSecondary),
-                ),
-              ),
-              const SizedBox(width: MechXSpacing.sm),
-            ],
+            // Work item 9: the zoom read-out moved into the Layout canvas's
+            // ZoomControls (tap to reset); Import plan is the sheet rail's '+'
+            // tile; the theme toggle lives in Preferences + the palette.
             MechXButton(
               label: context.strings(StringKey.shellOpen),
               onPressed: () => openProject(context, ref),
@@ -935,21 +849,13 @@ class _TopBar extends ConsumerWidget {
               primary: dirty,
               onPressed: () => saveProject(ref),
             ),
-            const SizedBox(width: MechXSpacing.sm),
+            const SizedBox(width: MechXSpacing.xs),
+            // Work item 8: the ONE Export sheet (Ctrl/Cmd+E) — a quiet button
+            // beside Save, the single door to every deliverable.
             MechXButton(
-              label: context.strings(StringKey.shellImportPdf),
-              onPressed: () => importPlan(context, ref),
-            ),
-            const SizedBox(width: MechXSpacing.sm),
-            // F6: the theme toggle is DEMOTED from a full gray button (a visual
-            // peer of Save) to a compact, muted icon control so it stops
-            // competing with the primary action. Names the ACTION for a screen
-            // reader (act toward the opposite mode).
-            _ThemeToggleButton(
-              semanticLabel: brightness == Brightness.dark
-                  ? context.strings(StringKey.shellSwitchToLight)
-                  : context.strings(StringKey.shellSwitchToDark),
-              onTap: () => ref.read(brightnessProvider.notifier).toggle(),
+              label: context.strings(StringKey.exportSheetButton),
+              onPressed: () =>
+                  ref.read(exportSheetProvider.notifier).open(),
             ),
           ],
         ),
@@ -1023,110 +929,6 @@ class _PaletteHintButtonState extends State<_PaletteHintButton> {
   }
 }
 
-/// The demoted theme toggle (F6): a compact, muted icon control — the sibling
-/// of [_PaletteHintButton]'s quiet idiom — so the "switch appearance" action no
-/// longer reads as a gray-button peer of the primary Save. Transparent at rest
-/// (an iconic glyph, not a filled chip), it brightens on hover, is
-/// keyboard-focusable + Enter/Space-activatable via the shared focus ring, and
-/// announces its ACTION (switch to light / dark) to a screen reader. The glyph
-/// is custom-painted (no icon font) so it can never render as tofu.
-class _ThemeToggleButton extends StatefulWidget {
-  final String semanticLabel;
-  final VoidCallback onTap;
-  const _ThemeToggleButton({required this.semanticLabel, required this.onTap});
-
-  @override
-  State<_ThemeToggleButton> createState() => _ThemeToggleButtonState();
-}
-
-class _ThemeToggleButtonState extends State<_ThemeToggleButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    // L5/M4: the demoted, icon-only toggle previously only named itself for a
-    // screen reader (semanticLabel); a hover tooltip now shows the same text
-    // to a sighted mouse user too.
-    return MechXTooltip(
-      message: widget.semanticLabel,
-      child: Semantics(
-        button: true,
-        label: widget.semanticLabel,
-        child: MechXFocusRing(
-          borderRadius: MechXRadii.control,
-          onActivated: widget.onTap,
-          child: MouseRegion(
-            cursor: SystemMouseCursors.click,
-            onEnter: (_) => setState(() => _hover = true),
-            onExit: (_) => setState(() => _hover = false),
-            child: GestureDetector(
-              onTap: widget.onTap,
-              child: AnimatedContainer(
-                duration: MechXMotion.resolve(context, MechXMotion.hover),
-                curve: MechXMotion.standard,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: MechXSpacing.sm,
-                  vertical: MechXSpacing.xs,
-                ),
-                decoration: BoxDecoration(
-                  color: _hover ? colors.surfaceHover : const Color(0x00000000),
-                  borderRadius: MechXRadii.control,
-                ),
-                child: CustomPaint(
-                  size: const Size(16, 16),
-                  painter: _ThemeGlyphPainter(
-                    color: _hover ? colors.textSecondary : colors.textMuted,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The "appearance" (light/dark) mark: a ring with its left half filled — the
-/// conventional half-moon-in-a-circle theme glyph. Custom-painted from
-/// primitives (no icon font, no trig), so it never renders as tofu.
-class _ThemeGlyphPainter extends CustomPainter {
-  final Color color;
-  const _ThemeGlyphPainter({required this.color});
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-    final c = Offset(w * 0.5, h * 0.5);
-    final r = w * 0.30;
-    final stroke = Paint()
-      ..color = color
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.4
-      ..strokeCap = StrokeCap.round;
-    final fill = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(c, r, stroke);
-    // The left half: a semicircle (chord = 2·r, radius = r ⇒ exact half circle)
-    // closed back along the vertical diameter.
-    final leftHalf = Path()
-      ..moveTo(c.dx, c.dy - r)
-      ..arcToPoint(
-        Offset(c.dx, c.dy + r),
-        radius: Radius.circular(r),
-        clockwise: false,
-      )
-      ..close();
-    canvas.drawPath(leftHalf, fill);
-  }
-
-  @override
-  bool shouldRepaint(_ThemeGlyphPainter old) => old.color != color;
-}
-
 class _StatusBar extends ConsumerWidget {
   const _StatusBar();
 
@@ -1134,7 +936,7 @@ class _StatusBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheet = ref.watch(sheetsControllerProvider).current;
+    final sheet = ref.watch(sheetsContentProvider).current;
     final project = ref.watch(projectControllerProvider);
     final calibrated =
         sheet != null && project.calibrationFor(sheet.id) != null;
@@ -1147,6 +949,16 @@ class _StatusBar extends ConsumerWidget {
         .any((i) => i.isVerify);
 
     final caption = type.caption;
+    // Work item 4 (2026-10-17): the sheet + calibration status is stated ONCE.
+    // On Layout the sheet rail + the canvas breadcrumb ('· Not calibrated' /
+    // '· 1 : N') already carry it, and the hub sections have no sheet at all,
+    // so the left slot speaks only on the Riser / Electrical workspaces (no
+    // sheet rail there). Elsewhere it is an empty spacer that keeps the
+    // workflow stepper centred.
+    final section = ref.watch(shellSectionProvider);
+    final view = ref.watch(workspaceViewProvider);
+    final showSheetStatus = section == ShellSection.design &&
+        (view == WorkspaceView.schematic || view == WorkspaceView.electrical);
 
     return GlassSurface(
       // The status bar floats over the workspace; its top edge faces content.
@@ -1158,8 +970,13 @@ class _StatusBar extends ConsumerWidget {
         ),
         child: Row(
           children: [
-            // Left group: current sheet info (truncates first).
+            // Left group: current sheet info (truncates first) — Riser /
+            // Electrical only; an empty spacer elsewhere.
+            if (!showSheetStatus)
+              const Expanded(child: SizedBox())
+            else
             Expanded(
+              key: const ValueKey('status-sheet-slot'),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -1253,7 +1070,7 @@ class _StatusBar extends ConsumerWidget {
                       decoration: BoxDecoration(
                         color: colors.warning,
                         borderRadius:
-                            const BorderRadius.all(Radius.circular(4)),
+                            MechXRadii.small,
                       ),
                     ),
                   Flexible(
@@ -1611,7 +1428,19 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
     _confirmTimer?.cancel();
     // Clear the snapshot's OWN per-project slot (not a stale global default);
     // falls back to the untitled slot when the path is unknown.
-    await clearRecovery(path: ref.read(recoveryDocProvider)?.recoveryPath);
+    // Round 49 — and the session sibling this session autosaved beside it.
+    // Round 50 (regression-4) — only the siblings THIS session wrote; an
+    // older unresolved snapshot in the family stays for the next launch.
+    final path = ref.read(recoveryDocProvider)?.recoveryPath;
+    await clearPendingRecovery(
+        path: path, sessionSlots: ref.read(sessionRecoverySlotsProvider));
+    if (!mounted) return;
+    if (path != null) {
+      ref.read(protectedRecoverySlotsProvider.notifier).remove(path);
+    }
+    // The session's own snapshot files were cleared with it: let the next
+    // dirty tick rewrite them even when the work is unchanged.
+    ref.read(autosaveMirrorProvider.notifier).clear();
     ref.read(recoveryDocProvider.notifier).clear();
   }
 
@@ -1661,7 +1490,9 @@ class _RecoveryBannerState extends ConsumerState<_RecoveryBanner> {
                         // recovered work is still unsaved, so autosave should keep
                         // mirroring it after dismiss. (Recovery snapshots embed no
                         // assets, so rehydrate is a no-op here — kept for symmetry.)
-                        applyDocument(ref.read, rehydrateAssets(doc));
+                        final restored = rehydrateAssets(doc);
+                        rememberEmbeddedAssets(restored.assets);
+                        applyDocument(ref.read, restored);
                         // Re-link the file identity so the next Ctrl+S saves back
                         // to the source `.mechx` (not a Save-As fork) — when the
                         // file still exists. B2. (snapshot is promoted non-null
@@ -1724,7 +1555,7 @@ class _ErrorBanner extends ConsumerWidget {
                     decoration: BoxDecoration(
                       color: colors.danger,
                       borderRadius:
-                          const BorderRadius.all(Radius.circular(4)),
+                          MechXRadii.small,
                     ),
                   ),
                   Expanded(

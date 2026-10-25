@@ -72,6 +72,36 @@ class PressureZone {
 double maxZoneHeightMetres(Pressure maxStatic) =>
     headFromPressure(maxStatic).meters;
 
+// ── PRV setpoint ─────────────────────────────────────────────────────────────
+
+/// Friction allowance (kPa) a downfeed PRV is set ABOVE the target residual,
+/// so the fixtures on the PRV's own floor — reached through that floor's
+/// distribution branch — still clear the target once branch friction is paid.
+/// A 25 m DN20 floor branch serving 6 fixtures loses ~22 kPa (the probe that
+/// found the defect), so 30 kPa covers a typical floor run.
+// VERIFY — notAnSniClause (a design allowance, not an SNI value; the real
+// setpoint follows the PRV station's own floor friction).
+const double kPrvFrictionMarginKpa = 30;
+
+/// The setpoint a downfeed PRV holds (Round 17, regression-downfeed-prv-
+/// setpoint-equals-target): the target residual PLUS [kPrvFrictionMarginKpa],
+/// bounded to half the [maxFixtureStatic] − target window so a zone always
+/// keeps a positive span. Holding EXACTLY the pass threshold (the old default)
+/// put every zone-top fixture below it as soon as the floor branch had any
+/// friction — drawing the PRV the over-pressure warning asked for turned its
+/// own floor LOW. The SAME figure feeds the drawn-PRV solve, the zone sizing
+/// and the zone static table, so they cannot disagree.
+Pressure defaultPrvSetpoint({
+  required Pressure targetResidual,
+  required Pressure maxFixtureStatic,
+}) {
+  final window = maxFixtureStatic.pascals - targetResidual.pascals;
+  final margin = window > 0
+      ? (kPrvFrictionMarginKpa * 1000).clamp(0.0, window / 2)
+      : 0.0;
+  return Pressure(targetResidual.pascals + margin);
+}
+
 // ── PRV zone statics ─────────────────────────────────────────────────────────
 
 /// Static-pressure profile of one downfeed zone fed through a PRV (or the tank
@@ -89,11 +119,18 @@ class DownfeedZoneStatic {
   /// True when [bottomStatic] stays at or below the project limit.
   final bool withinLimit;
 
+  /// Round 22 (pressurized-3-1) — true when the zone is fed through a PRV
+  /// station at its top; false for the TOP zone fed straight from the roof
+  /// tank (its pressures are the tank's gravity head — a PRV cannot raise
+  /// pressure). Default true (the legacy every-zone-through-a-PRV table).
+  final bool viaPrv;
+
   const DownfeedZoneStatic({
     required this.zone,
     required this.topResidual,
     required this.bottomStatic,
     required this.withinLimit,
+    this.viaPrv = true,
   });
 }
 
@@ -104,18 +141,40 @@ class DownfeedZoneStatic {
 /// Feed elevation is the ceiling main at the zone's top floor; the bottom
 /// fixture sits at fixture height on the zone's lowest floor:
 ///   bottomStatic = prvSetpoint + ρg·(ceiling(top) − fixture(bottom)).
+///
+/// Round 22 (pressurized-3-1) — with [tankElevation] given, the zone holding
+/// the TOP storey is fed straight from the tank (no PRV — one cannot raise
+/// pressure): its top residual is the tank head at the zone-top ceiling main,
+/// `ρg·(tank − ceiling(top))`, and its bottom static the tank head at its
+/// lowest fixture, `ρg·(tank − fixture(bottom))` ([DownfeedZoneStatic.viaPrv]
+/// false). Null ⇒ the legacy every-zone-through-a-PRV table.
 List<DownfeedZoneStatic> downfeedZoneStatics({
   required BuildingLevels building,
   required List<PressureZone> zones,
   required Pressure prvSetpoint,
   required Pressure maxStatic,
   MountingHeights mounting = const MountingHeights(),
+  Length? tankElevation,
 }) {
   final out = <DownfeedZoneStatic>[];
   for (final z in zones) {
     final feed = building.ceilingElevationOf(z.topFloorIndex, mounting).meters;
     final bottom =
         building.fixtureElevationOf(z.bottomFloorIndex, mounting).meters;
+    if (tankElevation != null && z.topFloorIndex >= building.levelCount - 1) {
+      final t = tankElevation.meters;
+      final top = pressureFromHead(Head((t - feed).clamp(0.0, double.infinity)));
+      final bottomStatic =
+          pressureFromHead(Head((t - bottom).clamp(0.0, double.infinity)));
+      out.add(DownfeedZoneStatic(
+        zone: z,
+        topResidual: top,
+        bottomStatic: bottomStatic,
+        withinLimit: bottomStatic.pascals <= maxStatic.pascals,
+        viaPrv: false,
+      ));
+      continue;
+    }
     final span = (feed - bottom).clamp(0.0, double.infinity);
     final bottomStatic =
         Pressure(prvSetpoint.pascals + pressureFromHead(Head(span)).pascals);
@@ -163,20 +222,57 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
 /// 1.4 m), so the walk cannot admit a floor the old one rejected, and "already
 /// passed" means it does not reject a floor the old one admitted.
 ///
+/// TANK-FED TOP ZONE (Round 22, pressurized-3-1) — with [tankElevation] and
+/// [maxFixtureStatic] given, the top zone is fed straight from the roof tank:
+/// it admits floor f (top-down) while the tank's gravity head at f's fixture,
+/// `ρg·(tank − fixture(f))`, stays ≤ [maxFixtureStatic] — no PRV budget, since
+/// a PRV cannot raise pressure. Only the floors below it are walked on the
+/// PRV budget ([maxStaticPressure]). A building the tank head never
+/// over-pressures is ONE zone with no PRV station. Null ⇒ the legacy
+/// every-zone-on-the-PRV-budget walk.
+///
+/// LOWEST SERVED FLOOR (Round 30, mech-sim-4-phantom-basement-prv-zone) —
+/// [lowestServedFloor] stops the walk at the lowest floor a drawn supply
+/// network actually delivers to (a cold / hot water outlet): floors below it
+/// (fixture-less basements the riser merely passes) open no zone, so the
+/// report never specifies a PRV station that serves nothing. Default 0 (the
+/// legacy full-building walk — used when nothing is drawn) ⇒ byte-identical.
+///
 /// Returns zones ordered **top → bottom** (index 0 = highest zone).
 List<PressureZone> computeDownfeedZones({
   required BuildingLevels building,
   required Pressure maxStaticPressure,
   MountingHeights mounting = const MountingHeights(),
+  Length? tankElevation,
+  Pressure? maxFixtureStatic,
+  int lowestServedFloor = 0,
 }) {
   assert(building.levelCount > 0, 'building must have at least one floor');
+  final low = lowestServedFloor.clamp(0, building.levelCount - 1);
 
   final maxHeight = maxZoneHeightMetres(maxStaticPressure);
   final zones = <PressureZone>[];
 
   var zoneTop = building.levelCount - 1;
+  var start = building.levelCount - 1;
 
-  for (var f = building.levelCount - 1; f >= 0; f--) {
+  if (tankElevation != null && maxFixtureStatic != null) {
+    final tankSpan = maxZoneHeightMetres(maxFixtureStatic);
+    final top = building.levelCount - 1;
+    var bottom = top; // a storey is indivisible: the top floor always admits.
+    for (var f = top - 1; f >= low; f--) {
+      final head = tankElevation.meters -
+          building.fixtureElevationOf(f, mounting).meters;
+      if (head > tankSpan) break;
+      bottom = f;
+    }
+    zones.add(PressureZone(top, bottom));
+    if (bottom == low) return zones;
+    zoneTop = bottom - 1;
+    start = bottom - 1;
+  }
+
+  for (var f = start; f >= low; f--) {
     // The measured span of the candidate zone [zoneTop … f] — identical to the
     // one downfeedZoneStatics evaluates.
     final span = building.ceilingElevationOf(zoneTop, mounting).meters -
@@ -190,9 +286,9 @@ List<PressureZone> computeDownfeedZones({
       zoneTop = f;
     }
 
-    // Always close the last zone at floor 0.
-    if (f == 0) {
-      zones.add(PressureZone(zoneTop, 0));
+    // Always close the last zone at the lowest served floor.
+    if (f == low) {
+      zones.add(PressureZone(zoneTop, low));
     }
   }
 

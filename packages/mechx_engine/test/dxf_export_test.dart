@@ -1,7 +1,10 @@
+import 'dart:convert';
+
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/report/plan_pdf_export.dart';
 import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
 import 'package:mechx_engine/units.dart';
@@ -50,8 +53,8 @@ void main() {
       drawing: underlayDrawing, sheetWidthPx: 200, sheetHeightPx: 100);
 
   test('emits a valid DXF skeleton with a LINE on the service layer', () {
-    final dxf = networkToDxf(
-        net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
+    final dxf =
+        networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
     expect(dxf, contains('SECTION'));
     expect(dxf, contains('ENTITIES'));
     expect(dxf, contains('LINE'));
@@ -60,23 +63,23 @@ void main() {
   });
 
   test('run endpoints appear with Y negated (DXF up-is-positive)', () {
-    final dxf = networkToDxf(
-        net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
+    final dxf =
+        networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
     // The DN50 size label is placed on the run.
     expect(dxf, contains('DN50'));
   });
 
   test('a riser on the floor emits a CIRCLE marker', () {
-    final dxf = networkToDxf(
-        net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
+    final dxf =
+        networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
     expect(dxf, contains('CIRCLE'));
   });
 
   test('A5: a riser to a higher floor labels UP', () {
     // Riser b(floor 0) → c(floor 1); the on-floor marker is b, other end
     // higher → an 'UP' TEXT beside the circle.
-    final dxf = networkToDxf(
-        net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
+    final dxf =
+        networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
     expect(dxf, contains('\n1\nUP\n'));
   });
 
@@ -85,16 +88,23 @@ void main() {
     // pump body glyph (plain junctions are never dotted here).
     const pumpNet = Network(
       nodes: [
-        NetNode(id: 'p', sheetId: 's1', x: 0, y: 0, floorIndex: 0,
-            role: NodeRole.plant, component: NodeComponent.pump),
+        NetNode(
+            id: 'p',
+            sheetId: 's1',
+            x: 0,
+            y: 0,
+            floorIndex: 0,
+            role: NodeRole.plant,
+            component: NodeComponent.pump),
         NetNode(id: 'q', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
       ],
       edges: [
-        NetEdge(id: 'e', fromId: 'p', toId: 'q', service: ServiceType.coldWater),
+        NetEdge(
+            id: 'e', fromId: 'p', toId: 'q', service: ServiceType.coldWater),
       ],
     );
-    final dxf =
-        networkToDxf(net: pumpNet, sizing: const {}, sheetId: 's1', floorIndex: 0);
+    final dxf = networkToDxf(
+        net: pumpNet, sizing: const {}, sheetId: 's1', floorIndex: 0);
     expect(dxf, contains('CIRCLE')); // the pump body circle (no riser present)
   });
 
@@ -113,10 +123,10 @@ void main() {
       ),
     };
     int lineCount(String s) => '\nLINE\n'.allMatches(s).length;
-    final base = networkToDxf(
-        net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
-    final arrowed = networkToDxf(
-        net: net, sizing: oriented, sheetId: 's1', floorIndex: 0);
+    final base =
+        networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0);
+    final arrowed =
+        networkToDxf(net: net, sizing: oriented, sheetId: 's1', floorIndex: 0);
     expect(lineCount(arrowed), lineCount(base) + 2); // the two chevron arms
   });
 
@@ -139,8 +149,7 @@ void main() {
               '10\n0.0\n20\n-100.0\n11\n200.0\n21\n0.0\n'));
     });
 
-    test('re-emits CIRCLE + ARC natively, radius scaled, angles unchanged',
-        () {
+    test('re-emits CIRCLE + ARC natively, radius scaled, angles unchanged', () {
       // Centre (60,45) → sheet px (100,50) → DXF (100,−50); radii × k = 2.
       // The net map is translate + uniform scale, so the ARC's 30/120 deg
       // sweep carries over verbatim.
@@ -157,8 +166,8 @@ void main() {
 
     test('the underlay entities precede (sit under) the network entities', () {
       final dxf = withUnderlay();
-      expect(dxf.indexOf('G-ANNO-UNDR'),
-          lessThan(dxf.indexOf('\n8\ncoldWater')));
+      expect(
+          dxf.indexOf('G-ANNO-UNDR'), lessThan(dxf.indexOf('\n8\ncoldWater')));
     });
 
     test('null underlay keeps the legacy DXF byte-identical', () {
@@ -201,14 +210,18 @@ void main() {
     expect(
       networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0),
       equals(networkToDxf(
-          net: net, sizing: sizing, sheetId: 's1', floorIndex: 0, chrome: null)),
+          net: net,
+          sizing: sizing,
+          sheetId: 's1',
+          floorIndex: 0,
+          chrome: null)),
     );
   });
 
   test('only the requested sheet/floor is exported', () {
     // s2 has its own node but no edges on s1/floor0 beyond ours.
-    final dxf = networkToDxf(
-        net: net, sizing: sizing, sheetId: 's2', floorIndex: 0);
+    final dxf =
+        networkToDxf(net: net, sizing: sizing, sheetId: 's2', floorIndex: 0);
     // No run on s2 → no LINE, just the skeleton.
     expect(dxf, isNot(contains('LINE')));
     expect(dxf, contains('EOF'));
@@ -244,11 +257,14 @@ void main() {
       expect(dxf, isNot(contains('\n11\n100.0\n'))); // no raw pixels left
     });
 
-    test('HEADER declares millimetre units and metric measurement', () {
+    test('HEADER declares AC1009 and no post-R12 unit variables', () {
+      // Round 27 (export-files-2-4) — $INSUNITS (R2000) and $MEASUREMENT
+      // (R14) do not exist in R12; the coordinates stay 1:1 mm.
       final dxf = pro();
       expect(dxf, contains('HEADER'));
-      expect(dxf, contains('\$INSUNITS\n70\n4\n')); // 4 = millimetres
-      expect(dxf, contains('\$MEASUREMENT\n70\n1\n')); // 1 = metric
+      expect(dxf, contains('\$ACADVER\n1\nAC1009\n'));
+      expect(dxf, isNot(contains('INSUNITS')));
+      expect(dxf, isNot(contains('MEASUREMENT')));
     });
 
     test('TABLES defines LTYPE + named service/ANNO/FRAME layers', () {
@@ -261,11 +277,11 @@ void main() {
       expect(dxf, isNot(contains('coldWater'))); // no enum-name layers
     });
 
-    test('sized runs carry group 6 linetype + group 370 lineweight', () {
+    test('sized runs carry group 6 linetype, no R2000 group 370', () {
       final dxf = pro();
-      // Cold water is CONTINUOUS; DN50 is the small band → 0.13 mm.
+      // Cold water is CONTINUOUS. Round 27 — R12 has no lineweight group.
       expect(dxf, contains('\n6\nCONTINUOUS\n'));
-      expect(dxf, contains('\n370\n13\n'));
+      expect(dxf, isNot(contains('\n370\n')));
     });
 
     test('A1: the underlay layer joins the TABLES and coordinates are mm', () {
@@ -279,8 +295,8 @@ void main() {
           floorIndex: 0,
           metersPerPixel: 0.05,
           underlay: underlay);
-      expect(dxf,
-          contains('LAYER\n2\nG-ANNO-UNDR\n70\n0\n62\n8\n6\nCONTINUOUS'));
+      expect(
+          dxf, contains('LAYER\n2\nG-ANNO-UNDR\n70\n0\n62\n8\n6\nCONTINUOUS'));
       expect(
           dxf,
           contains('LINE\n8\nG-ANNO-UNDR\n62\n8\n'
@@ -335,7 +351,11 @@ void main() {
           floorIndex: 0,
           metersPerPixel: 0.05,
           edgeElevationLabels: const {'e': 'CL +2.70'});
-      expect(dxf, contains('DN50 - CL +2.70'));
+      // Audit 2026-10 drawing-output-7: the professional label is composed
+      // like the plan PDF's, so it now carries the run length too — the run is
+      // 100 px x 0.05 m/px = 5.0 m (no edgeLengths map ⇒ the calibrated
+      // horizontal fallback), printed '5 m', between the size and the CL.
+      expect(dxf, contains('DN50 - 5.0 m - CL +2.70'));
     });
 
     test('N4: the setting-out grid + a riser tie dimension are emitted', () {
@@ -354,6 +374,73 @@ void main() {
       expect(dxf, contains('G-ANNO-GRID')); // the grid layer + entities
       expect(dxf, contains('\n1\n2500\n')); // the riser tie dimension (mm)
       expect(dxf, contains('\n1\nA\n')); // a column bubble label
+      // drafting-4: the tie is a real dimension on its OWN grey layer — two
+      // extension lines + the offset dimension line + two oblique ticks (five
+      // LINEs) and the figure — never a bare LINE on the riser's ordinate.
+      expect(dxf, contains('G-ANNO-DIMS'));
+      expect('\n8\nG-ANNO-DIMS\n'.allMatches(dxf).length, 5 + 1,
+          reason: '5 LINEs + 1 TEXT on the dimension layer');
+    });
+
+    test('R4: the tie dimension sits on the SAME side as the plan PDF', () {
+      // One tie only: column B == the riser x (offset 0, skipped), row 1 at
+      // y = 50 px → the tie runs from (100, 50) UP the sheet to the riser at
+      // (100, 0). Both spaces are y-up, so with direction (ux, uy) the
+      // perpendicular (uy, −ux) offsets the dimension toward LARGER pixel x in
+      // both formats (it used to flip to the other side in the DXF).
+      const grid = ReferenceGrid(
+        columns: [GridAxis('B', 100)],
+        rows: [GridAxis('1', 50)],
+      );
+      final dxf = networkToDxf(
+          net: net,
+          sizing: sizing,
+          sheetId: 's1',
+          floorIndex: 0,
+          metersPerPixel: 0.05,
+          grid: grid);
+      final line =
+          RegExp(r'0\nLINE\n8\nG-ANNO-DIMS\n10\n(-?[\d.]+)\n20\n(-?[\d.]+)\n'
+              r'11\n(-?[\d.]+)\n21\n(-?[\d.]+)\n');
+      final lines = line
+          .allMatches(dxf)
+          .map((m) => [for (var i = 1; i <= 4; i++) double.parse(m.group(i)!)])
+          .toList();
+      expect(lines, hasLength(5));
+      final dxfDim = lines[2]; // ext, ext, DIMENSION LINE, tick, tick
+      const riserXmm = 100 * 0.05 * 1000; // 5000 mm
+      final dxfSide = ((dxfDim[0] + dxfDim[2]) / 2 - riserXmm).sign;
+
+      final pdf = latin1.decode(planToPdf(
+        net: net,
+        sizing: sizing,
+        edgeLengths: const {},
+        sheetId: 's1',
+        floorIndex: 0,
+        projectName: 'P',
+        sheetName: 'S',
+        dateString: '2026-10-17',
+        metersPerPixel: 0.05,
+        grid: grid,
+      ));
+      final start = pdf.indexOf('0.45 0.45 0.45 RG');
+      expect(start, greaterThanOrEqualTo(0));
+      final seg = RegExp(r'^(-?[\d.]+) (-?[\d.]+) m (-?[\d.]+) (-?[\d.]+) l S$',
+          multiLine: true);
+      final strokes = seg
+          .allMatches(pdf.substring(start))
+          .take(3)
+          .map((m) => [for (var i = 1; i <= 4; i++) double.parse(m.group(i)!)])
+          .toList();
+      final ext1 = strokes[0], pdfDim = strokes[2];
+      // The axis extension line starts 2 pt off the ordinate along the perp:
+      // its start x minus that 2 pt step recovers the ordinate x.
+      final perpX = (ext1[2] - ext1[0]) / 10; // ext1 is 10 pt along the perp
+      final ordinateX = ext1[0] - perpX * 2;
+      final pdfSide = ((pdfDim[0] + pdfDim[2]) / 2 - ordinateX).sign;
+
+      expect(dxfSide, 1.0, reason: 'DXF offset toward larger pixel x');
+      expect(pdfSide, dxfSide, reason: 'PDF and DXF agree on the side');
     });
 
     test('N5/N4: null map + null grid keep the professional DXF byte-identical',
@@ -386,7 +473,8 @@ void main() {
   group('N13 element tags', () {
     const tags = {'e': 'CW-F1', 'r': 'CW-R1'};
 
-    test('legacy pixel DXF: run label prepends the tag; riser marker gets a tag '
+    test(
+        'legacy pixel DXF: run label prepends the tag; riser marker gets a tag '
         'TEXT', () {
       final dxf = networkToDxf(
           net: net,
@@ -408,14 +496,17 @@ void main() {
           floorIndex: 0,
           metersPerPixel: 0.05,
           edgeTags: tags);
-      expect(dxf, contains('CW-F1 - DN50'));
+      // Audit 2026-10 drawing-output-7: the same `<tag> · <size> - <length>`
+      // composition as the plan PDF (100 px x 0.05 m/px = 5 m). The riser 'r'
+      // has no sizing and no length map entry, so its TEXT is the bare tag.
+      // Through the R12 code-page-safe encoder (drafting-5: '·' -> '-').
+      expect(dxf, contains(dxfText('CW-F1 · DN50 - 5.0 m')));
       expect(dxf, contains('\n1\nCW-R1\n'));
     });
 
     test('a null edgeTags map keeps both DXF paths byte-identical', () {
       expect(
-          networkToDxf(
-              net: net, sizing: sizing, sheetId: 's1', floorIndex: 0),
+          networkToDxf(net: net, sizing: sizing, sheetId: 's1', floorIndex: 0),
           equals(networkToDxf(
               net: net,
               sizing: sizing,
@@ -437,5 +528,37 @@ void main() {
               metersPerPixel: 0.05,
               edgeTags: null)));
     });
+  });
+
+  // ── drafting-5: the CAD deliverable is code-page safe ─────────────────────
+  group('drafting-5 DXF text encoding', () {
+    test('dxfText maps the non-ASCII drawing glyphs to R12-safe ASCII', () {
+      expect(dxfText('CW-R1 \u00b7 DN32'), 'CW-R1 - DN32');
+      expect(dxfText('\u00d8200'), '%%c200');
+      expect(dxfText('\u00f8200'), '%%c200');
+      expect(dxfText('90\u00b0'), '90%%d');
+      expect(dxfText('m\u00b2 m\u00b3'), 'm2 m3');
+      expect(dxfText('\u2192'), '?');
+      // Printable ASCII is byte-identical.
+      expect(dxfText('DN50 - 4.4 m'), 'DN50 - 4.4 m');
+    });
+
+    for (final mpp in [null, 0.05]) {
+      test('no byte above 0x7E + an R12 header (mpp=$mpp)', () {
+        final dxf = networkToDxf(
+            net: net,
+            sizing: sizing,
+            sheetId: 's1',
+            floorIndex: 0,
+            metersPerPixel: mpp,
+            // A middle-dot tag (the label separator the app's tags carry).
+            edgeTags: const {'e': 'CW-F1 \u00b7 L1', 'r': 'CW-R1 \u00b7 S'});
+        expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
+        expect(dxf, contains('CW-F1 - L1'));
+        if (mpp != null) {
+          expect(dxf, contains('9\n\$ACADVER\n1\nAC1009\n'));
+        }
+      });
+    }
   });
 }

@@ -91,7 +91,7 @@ void main() {
       expect(len.meters, closeTo(2.6, 1e-9));
     });
 
-    test('nodeElevation: main=ceiling, fixture=+1.1, plant=roof', () {
+    test('nodeElevation: main=ceiling, fixture=+1.1, untyped plant=own floor/roof', () {
       const main = NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 1);
       const fixture = NetNode(
           id: 'b', sheetId: 's1', x: 0, y: 0, floorIndex: 1,
@@ -102,8 +102,14 @@ void main() {
       // floor 1 surface = 4.0; ceiling = 4.0 + 3.5 − 0.3 = 7.2; fixture = 5.1.
       expect(nodeElevation(main, building).meters, closeTo(7.2, 1e-9));
       expect(nodeElevation(fixture, building).meters, closeTo(5.1, 1e-9));
-      // plant defaults to roof = total height = 11.0 m.
-      expect(nodeElevation(plant, building).meters, closeTo(11.0, 1e-9));
+      // Round 17 — an UNTYPED plant below the top storey sits on its own
+      // floor surface (floor 0 = 0.0 m); on the top storey it keeps the
+      // legacy roof datum = total height = 11.0 m.
+      expect(nodeElevation(plant, building).meters, closeTo(0.0, 1e-9));
+      final topPlant = NetNode(
+          id: 'c2', sheetId: 's1', x: 0, y: 0,
+          floorIndex: building.levelCount - 1, role: NodeRole.plant);
+      expect(nodeElevation(topPlant, building).meters, closeTo(11.0, 1e-9));
     });
 
     test('nodeElevation: per-node mountHeight places it on its floor wall', () {

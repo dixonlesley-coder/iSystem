@@ -16,6 +16,10 @@ import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/standards/sni.dart' show Revision;
 
+import '../ui/strings/app_strings.dart';
+import 'app_state.dart' show localeProvider;
+import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
+
 /// The user-editable document-control identity. Immutable; the controller
 /// replaces it on every edit.
 @immutable
@@ -72,9 +76,39 @@ class DocumentControlController extends Notifier<DocumentControl> {
   /// Replace the whole value (used by `applyDocument` on load).
   void set(DocumentControl value) => state = value;
 
+  /// Round 28 (persist-undo-2-3) — every user edit is persisted in `.mechx`
+  /// and printed on every issued sheet, so it records ONE
+  /// [UndoDomain.settings] step on the global timeline (a registered revert
+  /// pair), like an acknowledgement; an equal-value edit records nothing.
+  /// Ctrl+Z after a document-control edit used to revert an older, unrelated
+  /// design setting instead. [set] (load / new document) stays non-recording.
+  void _commit(DocumentControl next) {
+    final previous = state;
+    if (_signature(previous) == _signature(next)) return;
+    state = next;
+    ref.read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+          label: MechXStringsData(ref.read(localeProvider))(
+              StringKey.undoLabelDocumentControl),
+          undo: () => state = previous,
+          redo: () => state = next,
+        ));
+  }
+
+  // Round 29 — null encodes as a control character, never the string
+  // 'null' (typing a name literally 'null' over an empty field is a change).
+  static String _signature(DocumentControl d) => [
+        d.documentNumber ?? '\u0002',
+        d.revisionTag ?? '\u0002',
+        d.clientName ?? '\u0002',
+        d.preparedBy ?? '\u0002',
+        d.checkedBy ?? '\u0002',
+        d.approvedBy ?? '\u0002',
+        for (final r in d.revisions) '${r.date}\u0001${r.description}',
+      ].join('\u0000');
+
   /// Set / clear the document number. An empty/whitespace string clears it
   /// (stored as null, matching the persisted "absent ⇒ null" contract).
-  void setDocumentNumber(String? value) => state = DocumentControl(
+  void setDocumentNumber(String? value) => _commit(DocumentControl(
         documentNumber: _normalize(value),
         revisionTag: state.revisionTag,
         clientName: state.clientName,
@@ -82,9 +116,9 @@ class DocumentControlController extends Notifier<DocumentControl> {
         checkedBy: state.checkedBy,
         approvedBy: state.approvedBy,
         revisions: state.revisions,
-      );
+      ));
 
-  void setRevisionTag(String? value) => state = DocumentControl(
+  void setRevisionTag(String? value) => _commit(DocumentControl(
         documentNumber: state.documentNumber,
         revisionTag: _normalize(value),
         clientName: state.clientName,
@@ -92,9 +126,9 @@ class DocumentControlController extends Notifier<DocumentControl> {
         checkedBy: state.checkedBy,
         approvedBy: state.approvedBy,
         revisions: state.revisions,
-      );
+      ));
 
-  void setClientName(String? value) => state = DocumentControl(
+  void setClientName(String? value) => _commit(DocumentControl(
         documentNumber: state.documentNumber,
         revisionTag: state.revisionTag,
         clientName: _normalize(value),
@@ -102,9 +136,9 @@ class DocumentControlController extends Notifier<DocumentControl> {
         checkedBy: state.checkedBy,
         approvedBy: state.approvedBy,
         revisions: state.revisions,
-      );
+      ));
 
-  void setPreparedBy(String? value) => state = DocumentControl(
+  void setPreparedBy(String? value) => _commit(DocumentControl(
         documentNumber: state.documentNumber,
         revisionTag: state.revisionTag,
         clientName: state.clientName,
@@ -112,9 +146,9 @@ class DocumentControlController extends Notifier<DocumentControl> {
         checkedBy: state.checkedBy,
         approvedBy: state.approvedBy,
         revisions: state.revisions,
-      );
+      ));
 
-  void setCheckedBy(String? value) => state = DocumentControl(
+  void setCheckedBy(String? value) => _commit(DocumentControl(
         documentNumber: state.documentNumber,
         revisionTag: state.revisionTag,
         clientName: state.clientName,
@@ -122,9 +156,9 @@ class DocumentControlController extends Notifier<DocumentControl> {
         checkedBy: _normalize(value),
         approvedBy: state.approvedBy,
         revisions: state.revisions,
-      );
+      ));
 
-  void setApprovedBy(String? value) => state = DocumentControl(
+  void setApprovedBy(String? value) => _commit(DocumentControl(
         documentNumber: state.documentNumber,
         revisionTag: state.revisionTag,
         clientName: state.clientName,
@@ -132,18 +166,19 @@ class DocumentControlController extends Notifier<DocumentControl> {
         checkedBy: state.checkedBy,
         approvedBy: _normalize(value),
         revisions: state.revisions,
-      );
+      ));
 
   /// Append one revision row (date + description) to the history.
   void addRevision(String date, String description) {
-    state = state.copyWithRevisions([...state.revisions, Revision(date, description)]);
+    _commit(state.copyWithRevisions(
+        [...state.revisions, Revision(date, description)]));
   }
 
   /// Remove the revision at [index] (no-op if out of range).
   void removeRevisionAt(int index) {
     if (index < 0 || index >= state.revisions.length) return;
     final next = [...state.revisions]..removeAt(index);
-    state = state.copyWithRevisions(next);
+    _commit(state.copyWithRevisions(next));
   }
 
   /// `copyWith` only overrides a field when the new value is non-null, so a

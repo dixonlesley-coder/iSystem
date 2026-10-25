@@ -6,6 +6,8 @@ import 'package:mechx/store/history_store.dart';
 import 'package:mechx/ui/electrical/electrical_inspector.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/control/starter.dart';
+import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
@@ -369,5 +371,70 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.textContaining('System · '), findsNothing);
+  });
+
+  // ── Round 59 — star-delta: the Cable row is the MOTOR LEADS ────────────────
+
+  testWidgets(
+      'star-delta way: the row reads the motor-lead section (never the 2 m '
+      'internal link), the marked rung is the leads, and tapping it leaves '
+      'the leads unchanged after re-solve', (tester) async {
+    setDesktopSurface(tester);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    // 55 kW pump, star-delta, 40 m, TN-S on a 630 kVA transformer.
+    final s = seed(
+        container,
+        const ElectricalProject(
+          id: 'p',
+          name: 'Pump house',
+          earthingSystem: EarthingSystem.tnS,
+          transformerKva: ApparentPower(630e3),
+          panels: [
+            ElectricalPanel(
+              id: 'MDP',
+              name: 'MDP',
+              circuits: [
+                ElectricalCircuit(
+                  id: 'p1',
+                  name: 'Pompa',
+                  loadKind: LoadKind.pump,
+                  motorKw: 55,
+                  phases: 3,
+                  starterType: StarterType.starDelta,
+                  length: Length(40),
+                ),
+              ],
+            ),
+          ],
+        ));
+    final r = resultOf(s.result, 'p1');
+    final leads = r.motorLeads!.csaMm2;
+    // The internal link sizes on the full line current, each lead on
+    // Ib / sqrt3 — a different (larger) section for the 2 m link.
+    expect(r.cable.csaMm2, isNot(leads));
+    String fmt(double v) =>
+        v == v.roundToDouble() ? v.round().toString() : v.toString();
+
+    await pumpCircuitMenu(tester, container, s.controller,
+        circuitId: 'p1', circuitResult: r);
+    expect(find.text('Leads · ${fmt(leads)} mm2'), findsOneWidget);
+    expect(find.textContaining('Cable · '), findsNothing);
+
+    await tester.tap(find.text('Leads · ${fmt(leads)} mm2'));
+    await tester.pumpAndSettle();
+    expect(
+        find.text('Minimum section of the motor leads (star-delta) - '
+            'auto-sizing may pick larger.'),
+        findsOneWidget);
+    // The marked 'current' rung is the leads' section; tapping it floors the
+    // leads at their own size, so the re-solve keeps them unchanged.
+    await tester.tap(find.text('${fmt(leads)} mm2'));
+    await tester.pump();
+    expect(circuitOf(container, 'p1').cableOverrideMm2, leads);
+    final again = resultOf(
+        computeSystem(profile, container.read(electricalProjectProvider)),
+        'p1');
+    expect(again.motorLeads!.csaMm2, leads);
   });
 }

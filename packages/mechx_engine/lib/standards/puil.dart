@@ -46,8 +46,21 @@ enum RefMethod { b1, c, e, d }
 /// Trip curve (IEC 60898): B resistive/lighting, C general, D high-inrush.
 enum BreakerCurve { b, c, d }
 
-/// Breaker frame class — ≤63 A is an MCB, above it an MCCB.
-enum BreakerClass { mcb, mccb }
+/// Breaker frame class — ≤63 A is an MCB, ≤1600 A an MCCB, above that an ACB.
+enum BreakerClass { mcb, mccb, acb }
+
+/// Round 23 (elec-drafting-2-5) — the schedule / BOM class code of a breaker
+/// frame, and whether it carries a B/C/D trip curve (only an MCB does; an
+/// MCCB / ACB carries an adjustable trip unit).
+extension BreakerClassCode on BreakerClass {
+  String get code => switch (this) {
+        BreakerClass.mcb => 'MCB',
+        BreakerClass.mccb => 'MCCB',
+        BreakerClass.acb => 'ACB',
+      };
+
+  bool get hasTripCurve => this == BreakerClass.mcb;
+}
 
 /// A standard copper flat-bar size + its continuous rating.
 class CopperBarSize {
@@ -147,6 +160,11 @@ abstract interface class ElectricalStandardsProfile {
   /// Standard MCCB preferred ratings (A), IEC 60947-2 (R10).
   List<double> get mccbRatingsA;
 
+  /// Round 23 — air circuit breaker frames above the MCCB ladder (an LV main
+  /// for a > 1100 kVA service; a 1600 kVA transformer's 2309 A FLC takes the
+  /// 2500 A ACB).
+  List<double> get acbRatingsA;
+
   /// All breaker frame ratings, ascending.
   List<double> get standardBreakerRatingsA;
 
@@ -163,7 +181,10 @@ abstract interface class ElectricalStandardsProfile {
   /// Neutral conductor section (mm²); [reduced] halves above 16 mm².
   double neutralConductorSizeMm2(double phaseCsaMm2, {bool reduced});
 
-  /// Main earthing conductor (mm²): clamp(phasePE, 16..50).
+  /// Main earthing conductor (mm²) of a TT installation's electrode
+  /// conductor: clamp(phasePE, 16..50). A TN service's main earthing
+  /// conductor follows the service PE uncapped (`tnMainEarthingConductorMm2`
+  /// in `earthing.dart`, Round 24).
   double mainEarthingConductorMm2(double supplyPeMm2);
 
   /// Main protective-bonding conductor (mm²): max(6, PE/2), capped at 25.
@@ -213,18 +234,25 @@ class PuilProfile implements ElectricalStandardsProfile {
   @override
   String get name => 'PUIL — Persyaratan Umum Instalasi Listrik';
 
+  /// The short EDITION label (Round 9) — what a report head / PDF cover
+  /// prints after the standard's name. The sourcing story lives in
+  /// [provenanceNote], printed with the honesty surface instead.
   @override
-  String get revision =>
-      'PUIL 2011 (SNI 0225:2011, amd. 2020) values ported 2026-06 from the '
-      'PanelMaker reference app (Supreme Cable / SUCACO catalogues + '
-      'IEC 60364-5-52/54, IEC 60898/60947). All secondary-sourced — clauses '
-      'pending confirmation against the official PUIL PDF. A 2026-07 research '
-      'pass sharpened several citations (SNI IEC 60038:2013 for nominal '
-      'voltages, PUIL Tabel 41.1 for the U0/ADS disconnection-time basis, '
-      'spot-checked KHA/derating figures) but could NOT read the primary PUIL '
-      'text end-to-end (every external document host was blocked by this '
-      'environment\'s network egress policy that session) — nothing here was '
-      'promoted to sniVerbatim on the strength of that pass alone.';
+  String get revision => 'PUIL 2011 (SNI 0225:2011, amd. 2020)';
+
+  /// How these values were sourced and what is still unconfirmed — a
+  /// provenance note for the report's 'Unverified values' section (Round 9:
+  /// it used to BE [revision], so an ~80-word paragraph stood in as the
+  /// 'Standard:' line and the PDF cover's standards line).
+  String get provenanceNote =>
+      'Values ported 2026-06 from the PanelMaker reference app (Supreme Cable '
+      '/ SUCACO catalogues + IEC 60364-5-52/54, IEC 60898/60947). All '
+      'secondary-sourced — clauses pending confirmation against the official '
+      'PUIL PDF. A 2026-07 research pass sharpened several citations (SNI IEC '
+      '60038:2013 for nominal voltages, PUIL Tabel 41.1 for the U0/ADS '
+      'disconnection-time basis, spot-checked KHA/derating figures) but could '
+      'NOT read the primary PUIL text end-to-end — nothing here was promoted '
+      'to sniVerbatim on the strength of that pass alone.';
 
   // ── Supply / voltages ─────────────────────────────────────────────────────
 
@@ -372,29 +400,67 @@ class PuilProfile implements ElectricalStandardsProfile {
         CableInstallMethod.buried => RefMethod.d,
       };
 
-  // Base KHA, copper / PVC, 30 °C, reference method B1 (Supreme NYY "in air").
-  static final Map<double, double> _khaCuPvcB1 = {
+  // Base KHA, copper / PVC, 30 °C, METHOD E (Supreme NYY "in air" — the
+  // catalogue figures match IEC 60364-5-52 Table B.52.10 method E multicore,
+  // three loaded conductors). Round 11: this table used to be read for B1
+  // (conduit) and C (wall) as well, overrating every PVC conduit run 18–27 %
+  // (16 mm² read 80 A in conduit vs the IEC B1 68 A) while XLPE ranked by
+  // method — PVC/XLPE at B1 read 0.91 here vs 0.77 in IEC.
+  static final Map<double, double> _khaCuPvcE = {
     1.5: 18, 2.5: 25, 4: 34, 6: 44, 10: 60, 16: 80, 25: 105, 35: 130,
     50: 160, 70: 200, 95: 245, 120: 285, 150: 325, 185: 370, 240: 435, 300: 500,
   };
-  // Base KHA, copper / XLPE (90 °C), method B1 (~IEC 60364-5-52 Table B.52.4).
+  // Copper / PVC (70 °C), METHOD B1 (insulated conductors in conduit / trunking
+  // on a wall) — IEC 60364-5-52 Table B.52.4 column B1, THREE loaded conductors
+  // (the same 3-loaded basis as every XLPE column). Round 11.
+  // VERIFY — secondarySource (IEC table, not a PUIL clause).
+  static final Map<double, double> _khaCuPvcB1 = {
+    1.5: 15.5, 2.5: 21, 4: 28, 6: 36, 10: 50, 16: 68, 25: 89, 35: 110,
+    50: 134, 70: 171, 95: 207, 120: 239, 150: 262, 185: 296, 240: 346, 300: 394,
+  };
+  // Copper / PVC (70 °C), METHOD C (clipped direct to a surface) — IEC
+  // 60364-5-52 Table B.52.4 column C, THREE loaded conductors. Round 11.
+  // VERIFY — secondarySource (IEC table, not a PUIL clause).
+  static final Map<double, double> _khaCuPvcC = {
+    1.5: 17.5, 2.5: 24, 4: 32, 6: 41, 10: 57, 16: 76, 25: 96, 35: 119,
+    50: 144, 70: 184, 95: 223, 120: 259, 150: 299, 185: 341, 240: 403, 300: 464,
+  };
+  // Base KHA, copper / XLPE (90 °C), method B1 (~IEC 60364-5-52 Table B.52.5
+  // column B1, three loaded conductors).
   static final Map<double, double> _khaCuXlpeB1 = {
     1.5: 20, 2.5: 28, 4: 37, 6: 48, 10: 66, 16: 88, 25: 117, 35: 144,
     50: 175, 70: 222, 95: 269, 120: 312, 150: 358, 185: 408, 240: 481, 300: 553,
   };
-  // Copper/PVC by method C/E (== B1 "in air") and D (buried, "in ground").
+  // Copper/PVC by method D (buried).
+  //
+  // D is IEC 60364-5-52 Table B.52.4 column D1 (in duct in the ground,
+  // 20 °C ground, 2.5 K·m/W soil), THREE loaded conductors — the SAME basis as
+  // [_khaCuXlpeD] (Table B.52.5 D1, 3-loaded) and as the soil-thermal table
+  // (2.5 K·m/W = 1.0). The previous direct-in-ground catalogue figures
+  // (300 mm² = 465 A) sat on a different installation basis, which made 70 °C
+  // PVC read 16–27 % ABOVE 90 °C XLPE when buried — physically impossible on
+  // one basis — and pushed a buried FRC run up 1–2 copper sizes (2026-10 audit
+  // elec-core-5). // VERIFY — secondarySource (IEC table, not a PUIL clause).
   static final Map<double, double> _khaCuPvcD = {
-    1.5: 24, 2.5: 32, 4: 41, 6: 52, 10: 69, 16: 89, 25: 116, 35: 138,
-    50: 165, 70: 205, 95: 245, 120: 285, 150: 315, 185: 355, 240: 415, 300: 465,
+    1.5: 18, 2.5: 24, 4: 30, 6: 38, 10: 50, 16: 64, 25: 82, 35: 98,
+    50: 116, 70: 143, 95: 169, 120: 192, 150: 217, 185: 243, 240: 280, 300: 316,
   };
-  // Copper/XLPE by method.
+  // Copper/XLPE by method — every column THREE loaded conductors, matching
+  // [_khaCuXlpeB1] and [_khaCuXlpeD]: `ampacity()` has no loaded-conductor
+  // argument and the circuits sized here are overwhelmingly 3φ, so a 2-loaded
+  // column overrates every 3φ run (~15–19 %, NOT conservative). C is Table
+  // B.52.5 column C, 3-loaded; E is Table B.52.12 method E multicore, 3-loaded
+  // (the previous figures, 300 mm² C = 693 / E = 741, were the 2-loaded
+  // columns — 2026-10 audit elec-core-6). A single-phase run reads the 3-loaded
+  // figure too (conservative, as B1/D already do).
+  // VERIFY — secondarySource (IEC tables, not a PUIL clause).
   static final Map<double, double> _khaCuXlpeC = {
-    1.5: 24, 2.5: 33, 4: 45, 6: 58, 10: 80, 16: 107, 25: 138, 35: 171,
-    50: 209, 70: 269, 95: 328, 120: 382, 150: 441, 185: 506, 240: 599, 300: 693,
+    1.5: 22, 2.5: 30, 4: 40, 6: 52, 10: 71, 16: 96, 25: 119, 35: 147,
+    50: 179, 70: 229, 95: 278, 120: 322, 150: 371, 185: 424, 240: 500, 300: 576,
   };
   static final Map<double, double> _khaCuXlpeE = {
-    1.5: 26, 2.5: 36, 4: 49, 6: 63, 10: 86, 16: 115, 25: 149, 35: 185,
-    50: 225, 70: 289, 95: 352, 120: 410, 150: 473, 185: 542, 240: 641, 300: 741,
+    1.5: 23, 2.5: 32, 4: 42, 6: 54, 10: 75, 16: 100, 25: 127, 35: 158,
+    50: 192, 70: 246, 95: 298, 120: 346, 150: 399, 185: 456, 240: 538, 300: 621,
   };
   static final Map<double, double> _khaCuXlpeD = {
     1.5: 21, 2.5: 28, 4: 36, 6: 44, 10: 58, 16: 75, 25: 96, 35: 115,
@@ -418,9 +484,10 @@ class PuilProfile implements ElectricalStandardsProfile {
     double cu;
     if (insulation == ConductorInsulation.pvc) {
       cu = switch (ref) {
-        // C/E read the "in air" base table; D reads "in ground".
-        RefMethod.b1 || RefMethod.c || RefMethod.e =>
-          _khaCuPvcB1[sectionMm2] ?? 0,
+        // Round 11 — PVC ranks by method exactly like XLPE (B1 ≤ C ≤ E).
+        RefMethod.b1 => _khaCuPvcB1[sectionMm2] ?? 0,
+        RefMethod.c => _khaCuPvcC[sectionMm2] ?? 0,
+        RefMethod.e => _khaCuPvcE[sectionMm2] ?? 0,
         RefMethod.d => _khaCuPvcD[sectionMm2] ?? 0,
       };
     } else {
@@ -477,8 +544,17 @@ class PuilProfile implements ElectricalStandardsProfile {
 
   // Double keys can't be const map keys in Dart (no primitive equality), so
   // these are static final (built once) rather than const.
+  //
+  // IEC 60364-5-52 Table B.52.17 row 1 (bunched in air, on a surface, embedded
+  // or enclosed): 1..9 circuits, then the 12 / 16 / 20 columns. The 12/16/20
+  // rungs matter for PARALLEL runs — a feeder's n runs group with its own g
+  // neighbours as g·n circuits (sizeCable), which can exceed 9 (6 × 2 = 12); a
+  // table clamped at 9 would read 0.50 there and OVER-rate the cable.
+  // Counts between rungs read the NEXT-HIGHER rung (conservative), see
+  // [groupingFactor]. // VERIFY — secondarySource (IEC table, not a PUIL clause).
   static final Map<double, double> _groupingFactors = {
     1: 1.0, 2: 0.8, 3: 0.7, 4: 0.65, 5: 0.6, 6: 0.57, 7: 0.54, 8: 0.52, 9: 0.5,
+    12: 0.45, 16: 0.41, 20: 0.38,
   };
   static final Map<double, double> _soilThermalFactors = {
     1: 1.18, 1.5: 1.1, 2: 1.05, 2.5: 1.0, 3: 0.96,
@@ -526,13 +602,23 @@ class PuilProfile implements ElectricalStandardsProfile {
         80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600,
       ];
 
+  /// Round 23 (elec-drafting-2-5) — the standard ACB frame ladder (IEC
+  /// 60947-2 LV main frames, general practice, // VERIFY: secondarySource,
+  /// not a PUIL table). Without it a > 1100 kVA service printed a saturated
+  /// 'MCCB 1600A' incomer under its own larger demand.
   @override
-  List<double> get standardBreakerRatingsA =>
-      <double>[...mcbRatingsA, ...mccbRatingsA];
+  List<double> get acbRatingsA => const <double>[2000, 2500, 3200, 4000];
 
   @override
-  BreakerClass breakerClassFor(double ratingA) =>
-      ratingA <= 63 ? BreakerClass.mcb : BreakerClass.mccb;
+  List<double> get standardBreakerRatingsA =>
+      <double>[...mcbRatingsA, ...mccbRatingsA, ...acbRatingsA];
+
+  @override
+  BreakerClass breakerClassFor(double ratingA) => ratingA <= 63
+      ? BreakerClass.mcb
+      : ratingA <= 1600
+          ? BreakerClass.mccb
+          : BreakerClass.acb;
 
   @override
   BreakerCurve recommendedCurve({required bool lighting, required bool motor}) {
@@ -665,6 +751,22 @@ class PuilProfile implements ElectricalStandardsProfile {
         //  are now verified — promoted out of the checklist.)
         maxVoltageDropLighting,
         continuousLoadFactor,
+        // Round 53 (elec-convergence-5-tt-vfd-final-30ma-rcd).
+        const StandardValue<Object?>(
+          'TT final-circuit RCD sensitivity by load kind (VFD 300 mA Type B, '
+              'fixed motor / pump / HVAC 100 mA, others 30 mA up to 63 A)',
+          unit: 'mA',
+          citation: 'IEC 60364-4-41 411.5.3 (Ra x IΔn <= 50 V) / 411.3.3 '
+              '(30 mA additional protection) — general practice (not a PUIL '
+              'clause)',
+          verified: false,
+          status: VerificationStatus.notAnSniClause,
+          note: 'On TT the earth-fault condition is only Ra x IΔn <= 50 V; '
+              '30 mA is the additional protection of socket-outlets. A drive '
+              'is given 300 mA (its leakage trips a 30 mA device), fixed '
+              'motor-driven equipment 100 mA. Verify against the drive '
+              'maker\'s RCD recommendation.',
+        ),
         const StandardValue<Object?>(
           'copper busbar continuous ratings (single bar, ~30 °C rise)',
           unit: 'table',
@@ -693,20 +795,30 @@ class PuilProfile implements ElectricalStandardsProfile {
           unit: 'table',
           citation: '$_doc / IEC 60364-5-52 — Supreme Cable (SUCACO) catalogue',
           verified: false,
+          // Provenance (developer history, kept out of the issued note): a
+          // 2026-07 pass spot-checked one entry while document hosts were
+          // unreachable; the 2026-10 audit moved the buried PVC (D) and XLPE
+          // C/E columns onto the IEC 3-loaded basis; Round 11 (2026-10-18)
+          // gave PVC B1 / C their own Table B.52.4 columns.
           note: 'Transcribed from the Supreme NYY 0.6/1 kV catalogue '
-              '(IEC/SNI 60502-1). 2026-07 research pass: independently '
-              'spot-checked one entry (Cu/PVC method B1, 4 mm2 = 34 A) '
-              'against secondary sources reproducing Indonesian NYY KHA '
-              'tables — matched. Only 1 of 16 sections × 4 methods × 2 '
-              'insulations was checked (every document host was blocked by '
-              'this environment\'s network egress policy that session); the '
-              'full matrix still needs the manufacturer datasheet and the '
-              'PUIL ampacity table for the specific construction.',
+              '(IEC/SNI 60502-1). One entry (Cu/PVC method B1, 4 mm2 = 34 A) '
+              'was spot-checked against secondary sources reproducing '
+              'Indonesian NYY KHA tables and matched; the full matrix (16 '
+              'sections x 4 methods x 2 insulations) still needs the '
+              'manufacturer datasheet and the PUIL ampacity table for the '
+              'specific construction. The buried (D) PVC column and the XLPE '
+              'B1/C/D/E columns use the IEC 60364-5-52 three-loaded-conductor '
+              'basis (PVC Table B.52.4 D1; XLPE Table B.52.5 B1/C/D1 and Table '
+              'B.52.12 E), as do PVC B1 (conduit, 16 mm2 = 68 A) and C (wall, '
+              '76 A) from Table B.52.4; PVC method E keeps the Supreme NYY "in '
+              'air" catalogue figures (matching Table B.52.10 method E), so '
+              'every column ranks conduit <= wall <= air and XLPE >= PVC.',
         ),
         const StandardValue<Object?>(
           'ambient / grouping / soil-thermal derating factors',
           unit: 'table',
-          citation: 'IEC 60364-5-52 Tables B.52.14 / B.52.17 / B.52.16',
+          citation: 'IEC 60364-5-52 Tables B.52.14 / B.52.17 (row 1, 1-20 '
+              'circuits) / B.52.16',
           verified: false,
           note: '2026-07 research pass: spot-checked two Table B.52.14 '
               'ambient-correction points (XLPE @ 45 C = 0.87, PVC @ 50 C = '

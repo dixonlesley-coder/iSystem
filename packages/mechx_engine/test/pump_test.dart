@@ -129,9 +129,18 @@ void main() {
       expect(m.inKiloWatts, closeTo(0.37, 1e-9));
     });
 
-    test('75.001 kW shaft → returns 75 kW (largest, oversized condition)', () {
+    // Round 21 — the ladder continues past 75 kW to the IEC 90 kW frame.
+    test('75.001 kW shaft → the next IEC frame, 90 kW', () {
       final m = selectMotor(Power.kiloWatts(75.001));
-      expect(m.inKiloWatts, closeTo(75.0, 1e-9));
+      expect(m.inKiloWatts, closeTo(90.0, 1e-9));
+    });
+
+    test('315.001 kW shaft → returns 315 kW (largest, oversized condition)',
+        () {
+      final m = selectMotor(Power.kiloWatts(315.001));
+      expect(m.inKiloWatts, closeTo(315.0, 1e-9));
+      expect(motorOversizedFor(Power.kiloWatts(315.001)), isTrue);
+      expect(motorOversizedFor(Power.kiloWatts(315.0)), isFalse);
     });
 
     test('exactly 75 kW shaft → selects 75 kW motor', () {
@@ -143,8 +152,9 @@ void main() {
   // ── standardMotorKw list sanity checks ───────────────────────────────────
 
   group('standardMotorKw', () {
-    test('has 19 entries', () {
-      expect(standardMotorKw.length, 19);
+    // 19 frames 0.37..75 kW + the IEC 90/110/132/160/200/250/315 (Round 21).
+    test('has 26 entries', () {
+      expect(standardMotorKw.length, 26);
     });
 
     test('is strictly ascending', () {
@@ -158,9 +168,9 @@ void main() {
       }
     });
 
-    test('first entry is 0.37 kW and last is 75 kW', () {
+    test('first entry is 0.37 kW and last is 315 kW', () {
       expect(standardMotorKw.first, closeTo(0.37, 1e-9));
-      expect(standardMotorKw.last, closeTo(75.0, 1e-9));
+      expect(standardMotorKw.last, closeTo(315.0, 1e-9));
     });
   });
 }

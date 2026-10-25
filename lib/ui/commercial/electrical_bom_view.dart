@@ -72,7 +72,8 @@ class ElectricalBomView extends ConsumerWidget {
   CommercialRow _row(BuildContext context, BomLine line, Part? part) {
     final matched = line.sku != null;
     return CommercialRow(cells: [
-      CommercialCell.text(CommercialFormat.qty(line.qty)),
+      CommercialCell.text(
+          CommercialFormat.qty(line.qty, MechXStrings.of(context).locale)),
       CommercialCell.text(line.description),
       CommercialCell.text(part?.manufacturer ?? '-'),
       CommercialCell.text(line.sku ?? '-'),
@@ -166,7 +167,8 @@ class MechanicalBomView extends ConsumerWidget {
           rows: [
             for (final l in est.lines)
               CommercialRow(cells: [
-                CommercialCell.text(CommercialFormat.qty(l.qty)),
+                CommercialCell.text(CommercialFormat.qty(
+                    l.qty, MechXStrings.of(context).locale)),
                 CommercialCell.text(l.unit),
                 CommercialCell.text(l.description),
                 CommercialCell.widget(_PricedBadge(priced: l.priced)),

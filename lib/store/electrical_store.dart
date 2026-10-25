@@ -13,7 +13,9 @@
 /// stores (`solve_store.dart`).
 library;
 
-import 'package:flutter/widgets.dart' show immutable, Offset;
+import 'dart:convert' show jsonEncode;
+
+import 'package:flutter/widgets.dart' show immutable, Offset, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
@@ -30,6 +32,8 @@ import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/electrical/panel_templates.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/electrical/topology.dart';
+import 'package:mechx_engine/report/electrical_calc_report.dart'
+    show FaultLevelBasis, serviceFaultEstimateBasis;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 
@@ -79,38 +83,24 @@ const Length kDefaultCircuitLength = Length(10);
 /// this, an installed board keeps its labelled phases.
 const double kPhaseStickinessA = 1.0;
 
-/// A session-only memo of the last solve's phase assignment
-/// (`panelId → (circuitId → line)`), fed back into the next `computeSystem` as
-/// its `priorAssignments` so an unchanged board re-solves to the phases already
-/// labelled on site instead of re-shuffling every time a neighbouring way is
-/// edited.
-///
-/// SESSION-ONLY BY DESIGN: this is SOLVER OUTPUT, and solver output is never
-/// persisted to `.mechx` (the file holds inputs; the result is always
-/// re-derived). Persisting it would freeze one machine's balancing run into the
-/// document and make the file's phases depend on the order edits happened in.
-/// The DURABLE story is [ElectricalProjectController.pinPanelPhases], which
-/// writes a real `phaseOverride` INPUT on each way — that is what survives a
-/// save/reload and what an issued schedule is built from. This cache only stops
-/// mid-session churn.
-///
-/// Mutable-by-design holder behind a plain [Provider] so the result provider can
-/// `ref.read` (never `watch`) it — writing the cache must not invalidate the
-/// provider that wrote it.
-class PhasePriorCache {
-  Map<String, Map<String, PhaseAssignment>> prior = const {};
-}
-
-/// The per-container [PhasePriorCache]. One instance per [ProviderContainer]
-/// (so a fresh app/test container starts from no prior — no cross-project or
-/// cross-test leakage).
-final phasePriorCacheProvider = Provider<PhasePriorCache>((_) => PhasePriorCache());
+/// Round 39 r3 — the phase assignment a solve gives each single-phase way is
+/// PERSISTED in the document (`ElectricalCircuit.assignedPhase`, written by
+/// [ElectricalProjectController] on every mutation — [stampAssignedPhases])
+/// and read back as the balancer's prior by `computeSystem`. The document
+/// alone therefore determines every board's R/S/T, its incomer, the parent's
+/// feeder rows and the genset per-phase basis — live AND after reopen. (The
+/// former session-only `PhasePriorCache` made live and reopened projects
+/// differ.)
 
 /// The fixed id of the machine-owned "MEP Equipment" panel — the board
 /// auto-synced from the motorised equipment placed on the plan
 /// (`syncMepEquipment`). Exposed so the canvas can badge it "auto — from plan"
 /// and guard palette drops onto it (a user-dropped way there would be wiped).
 const String kMepEquipmentPanelId = 'mep-equipment';
+
+/// Round 22 — the deterministic id of the feeder [ElectricalProjectController.
+/// syncMepEquipment] auto-wires into the MEP board (one board ⇒ one id).
+const String kMepEquipmentFeederId = 'mep-equipment-feeder';
 
 /// Which whole-area workspace the center of the shell shows. Generalises the old
 /// binary plan/schematic toggle into a three-way selection (plan / schematic /
@@ -142,23 +132,57 @@ class WorkspaceViewController extends Notifier<WorkspaceView> {
 /// A selected element on the unified Layout's electrical layer (I5) — a whole
 /// panel, or one circuit within a panel. Drives the marker selection ring, and
 /// Delete removes it via the existing [ElectricalProjectController] intents.
+///
+/// E5 (D2 parity) — a MULTI-selection (shift-click, marquee, Ctrl+A) keeps
+/// this element as its PRIMARY (what single-element consumers — the feeder
+/// grip, the inspector, the cross-view jump — act on) and carries the other
+/// members in [also]. A single selection has an empty [also], so every
+/// existing single-selection path is unchanged.
 @immutable
 class ElectricalSelection {
   final String panelId;
   final String? circuitId;
-  const ElectricalSelection.panel(this.panelId) : circuitId = null;
-  const ElectricalSelection.circuit(this.panelId, String this.circuitId);
+
+  /// The OTHER members of a multi-selection (never contains this element).
+  final Set<ElectricalSelection> also;
+  const ElectricalSelection.panel(this.panelId)
+      : circuitId = null,
+        also = const {};
+  const ElectricalSelection.circuit(this.panelId, String this.circuitId)
+      : also = const {};
+  const ElectricalSelection._(this.panelId, this.circuitId, this.also);
 
   bool get isCircuit => circuitId != null;
+
+  /// Whether more than one element is selected.
+  bool get isMulti => also.isNotEmpty;
+
+  /// This element alone (drops any multi-selection members).
+  ElectricalSelection get single => isMulti
+      ? ElectricalSelection._(panelId, circuitId, const {})
+      : this;
+
+  /// Every selected element, the primary first.
+  Iterable<ElectricalSelection> get members sync* {
+    yield single;
+    yield* also;
+  }
+
+  /// Whether [panelId] (+ [circuitId]) is among the selected elements.
+  bool contains(String panelId, [String? circuitId]) =>
+      members.any((m) => m.panelId == panelId && m.circuitId == circuitId);
 
   @override
   bool operator ==(Object other) =>
       other is ElectricalSelection &&
       other.panelId == panelId &&
-      other.circuitId == circuitId;
+      other.circuitId == circuitId &&
+      other.also.length == also.length &&
+      other.also.containsAll(also);
 
   @override
-  int get hashCode => Object.hash(panelId, circuitId);
+  int get hashCode =>
+      Object.hash(panelId, circuitId, Object.hashAllUnordered(also));
 }
 
 /// The selected element on the Layout electrical layer (null = nothing). Kept in
@@ -177,6 +201,41 @@ class ElectricalSelectionController extends Notifier<ElectricalSelection?> {
   void selectPanel(String id) => state = ElectricalSelection.panel(id);
   void selectCircuit(String panelId, String circuitId) =>
       state = ElectricalSelection.circuit(panelId, circuitId);
+
+  /// E5 — select exactly [items] (the first is the primary); empty clears.
+  /// Duplicates collapse.
+  void selectMany(Iterable<ElectricalSelection> items) {
+    final singles = <ElectricalSelection>[];
+    for (final i in items) {
+      final s = i.single;
+      if (!singles.contains(s)) singles.add(s);
+    }
+    if (singles.isEmpty) {
+      clear();
+      return;
+    }
+    state = ElectricalSelection._(
+        singles.first.panelId, singles.first.circuitId, {...singles.skip(1)});
+  }
+
+  /// E5 — shift-click: add [item] to the selection, or remove it when it is
+  /// already a member.
+  void toggle(ElectricalSelection item) {
+    final current = state;
+    final s = item.single;
+    if (current == null) {
+      state = s;
+      return;
+    }
+    final members = current.members.toList();
+    if (members.contains(s)) {
+      members.remove(s);
+    } else {
+      members.add(s);
+    }
+    selectMany(members);
+  }
+
   void clear() {
     if (state != null) state = null;
   }
@@ -232,27 +291,18 @@ class ElectricalPanelTarget extends ElectricalInspectorTarget {
   int get hashCode => panelId.hashCode;
 }
 
-/// Show the project-wide Service & Earthing settings — earthing system, origin
-/// fault level, busbar clearing time + the MEP-duty feed (C1: was a floating
-/// `_AnimatedDrawerShell`, now an inline section in the shared inspector column).
+/// Show the ONE project-wide Supply inspector — utility (supply kind,
+/// connection capacity, transformer), earthing, backup & on-site sources
+/// (genset / capacitor / solar / battery) and the advanced fault-level inputs.
+/// Merges the former Service & Earthing + Sources targets (C1: an inline
+/// section in the shared inspector column, never a floating drawer).
 @immutable
-class ElectricalServiceTarget extends ElectricalInspectorTarget {
-  const ElectricalServiceTarget();
+class ElectricalSupplyTarget extends ElectricalInspectorTarget {
+  const ElectricalSupplyTarget();
   @override
-  bool operator ==(Object other) => other is ElectricalServiceTarget;
+  bool operator ==(Object other) => other is ElectricalSupplyTarget;
   @override
-  int get hashCode => (ElectricalServiceTarget).hashCode;
-}
-
-/// Show the SOURCE-chain editor — genset / transformer / capacitor / dual-tx
-/// (C1: was a floating drawer, now an inline section in the shared column).
-@immutable
-class ElectricalSourcesTarget extends ElectricalInspectorTarget {
-  const ElectricalSourcesTarget();
-  @override
-  bool operator ==(Object other) => other is ElectricalSourcesTarget;
-  @override
-  int get hashCode => (ElectricalSourcesTarget).hashCode;
+  int get hashCode => (ElectricalSupplyTarget).hashCode;
 }
 
 /// Show the read-only Issues & advanced-study review (C1: was a 420-px floating
@@ -289,16 +339,10 @@ class ElectricalInspectorTargetController
     state = ElectricalPanelTarget(panelId);
   }
 
-  /// Open the Service & Earthing inline section (C1).
-  void showService() {
+  /// Open the Supply inline section (utility / earthing / backup / advanced).
+  void showSupply() {
     _revealInspector();
-    state = const ElectricalServiceTarget();
-  }
-
-  /// Open the Sources inline section (C1).
-  void showSources() {
-    _revealInspector();
-    state = const ElectricalSourcesTarget();
+    state = const ElectricalSupplyTarget();
   }
 
   /// Toggle the Issues & advanced-study inline section (C1) — the toolbar's
@@ -355,6 +399,112 @@ final electricalProjectProvider =
   ElectricalProjectController.new,
 );
 
+/// E3 — an in-flight electrical DRAG on the Layout plan (a placed board / load
+/// marker being moved). While [frozen] is set, [electricalSizingProjectProvider]
+/// returns that drag-start snapshot, so the per-frame `setPanelLayoutPos` /
+/// `setLoadPos` writes that keep the markers + wiring live do NOT re-run the
+/// whole electrical solve (geo cable lengths) every frame; ending the session
+/// re-solves ONCE against the settled positions. The electrical analogue of the
+/// mechanical K1 `dragSessionProvider` (without its settle throttle: a marker
+/// move changes only cable lengths, which nobody reads mid-gesture).
+@immutable
+class ElectricalDragSession {
+  /// The sizing project captured when the drag began; null ⇒ no drag.
+  final ElectricalProject? frozen;
+  const ElectricalDragSession([this.frozen]);
+  bool get active => frozen != null;
+}
+
+class ElectricalDragSessionController extends Notifier<ElectricalDragSession> {
+  bool _disposed = false;
+
+  @override
+  ElectricalDragSession build() {
+    ref.onDispose(() => _disposed = true);
+    return const ElectricalDragSession();
+  }
+
+  /// Open a drag session (call at pointer-drag START) frozen on [sizing] —
+  /// the caller passes `ref.read(electricalSizingProjectProvider)` (this
+  /// notifier cannot read it: that provider depends on this one). Idempotent
+  /// while open.
+  void begin(ElectricalProject sizing) {
+    if (state.active) return;
+    state = ElectricalDragSession(sizing);
+  }
+
+  /// Close the session (pointer-drag END / cancel / unmount): the heavy chain
+  /// re-solves once against the live project. No-op when nothing is open.
+  void end() {
+    if (!state.active) return;
+    state = const ElectricalDragSession();
+  }
+
+  /// [end] on the next microtask — for a drag widget unmounted mid-gesture,
+  /// whose `dispose` must not write a provider. No-op once disposed.
+  void endDeferred() {
+    Future.microtask(() {
+      if (!_disposed) end();
+    });
+  }
+}
+
+/// The transient electrical drag session (never persisted) — see
+/// [ElectricalDragSession].
+final electricalDragSessionProvider =
+    NotifierProvider<ElectricalDragSessionController, ElectricalDragSession>(
+  ElectricalDragSessionController.new,
+);
+
+/// The last project [electricalSizingProjectProvider] handed out — a mutable
+/// holder read (never watched) by that provider, like [PhasePriorCache].
+class _SizingProjectMemo {
+  ElectricalProject? project;
+}
+
+final _sizingProjectMemoProvider =
+    Provider<_SizingProjectMemo>((_) => _SizingProjectMemo());
+
+/// E2/E3 — the electrical project the HEAVY chain reads (the A4 solve
+/// [electricalResultProvider], the A8 [electricalAdvancedProvider], the BOM,
+/// design issues, compliance). It differs from [electricalProjectProvider] in
+/// exactly two ways, both of which leave every solved figure unchanged:
+///
+///  * a SCHEMATIC move (single-line `ElectricalPanel.x` / `y` only — the engine
+///    never reads them, see the model doc) keeps handing out the previous
+///    instance, so dragging / nudging a board on the single-line re-solves
+///    NOTHING, during the drag or at rest. Recognised structurally: the store
+///    tags every project it produces by such a move with its parent
+///    ([ElectricalProjectController.isSchematicMoveOf]); any other edit is an
+///    untagged new instance and re-solves. A layout placement (`layoutPos` /
+///    `loadPos`) is NOT schematic — it drives the geo cable length;
+///  * during an [electricalDragSessionProvider] drag it returns the drag-start
+///    snapshot (one re-solve when the drag ends).
+///
+/// Paint / hit-test widgets that need live positions keep reading
+/// [electricalProjectProvider]; the stale `x`/`y` this may carry is never read
+/// by the engine or by any consumer of this provider.
+final electricalSizingProjectProvider = Provider<ElectricalProject>((ref) {
+  final frozen = ref.watch(electricalDragSessionProvider).frozen;
+  if (frozen != null) return frozen;
+  final live = ref.watch(electricalProjectProvider);
+  final memo = ref.read(_sizingProjectMemoProvider);
+  final last = memo.project;
+  if (last != null &&
+      ref
+          .read(electricalProjectProvider.notifier)
+          .isSchematicMoveOf(live, last)) {
+    return last;
+  }
+  memo.project = live;
+  return live;
+});
+
+/// Debug-only counter of electrical solves ([electricalResultProvider] builds)
+/// — the E2/E3 perf pins count re-solves per drag gesture with it.
+@visibleForTesting
+int debugElectricalSolveCount = 0;
+
 /// Derived: the sized whole-project result, recomputed by the pure A4 engine
 /// whenever the project (or the shared geometry it is placed on) changes.
 /// Read-only for the UI.
@@ -386,47 +536,147 @@ final electricalProjectProvider =
 /// // disconnection basis silently.
 const double _liveBusbarClearingTimeS = 0.1;
 
-final electricalResultProvider = Provider<ElectricalSystemResult>(
-  (ref) {
-    final geo = ref.watch(projectControllerProvider);
-    final project = ref.watch(electricalProjectProvider);
-    // PHASE STABILITY: seed the balancer with the LAST solve's assignment and
-    // only let it re-label a way for a spread gain above [kPhaseStickinessA].
-    // Read (never watch) — the cache is written below by this very build, and
-    // watching it would loop.
-    final cache = ref.read(phasePriorCacheProvider);
-    final result = computeSystem(
-      const PuilProfile(),
-      project,
-      calibrationBySheet: geo.calibrations,
-      building: geo.building,
-      // Fold 1 — busbar short-circuit withstand: floor each bus to survive the
-      // prospective fault for the clearing time, not merely to carry the load
-      // current. The fault level + clearing time are project settings (Service &
-      // Earthing inspector). Fault-level fallback chain: an explicit
-      // [project.originFaultLevelA] always wins; else, when a service size is
-      // declared (transformer kVA or connection capacity/daya tersambung),
-      // [estimatedServiceFaultLevelA] derives a size-appropriate estimate (so a
-      // small domestic board no longer specifies against the same flat figure
-      // as a real substation); else the app default (16 kA) — so a project that
-      // declares nothing stays byte-identical. Clearing time keeps its own
-      // separate fallback (0.1 s) regardless of which fault-level tier applies.
-      originFaultLevel: project.originFaultLevelA ??
-          estimatedServiceFaultLevelA(project) ??
-          const Current(defaultLvUtilityFaultKa * 1000),
-      busbarClearingTimeS:
-          project.busbarClearingTimeS ?? _liveBusbarClearingTimeS,
-      priorAssignments: cache.prior,
-      phaseReassignThresholdA: kPhaseStickinessA,
+/// The EFFECTIVE Fold-1 origin fault level the live solve sizes busbars on,
+/// with its provenance (Round 12, report-recompute-fault-basis-omitted):
+/// explicit project setting → [estimatedServiceFaultLevelA] from a declared
+/// service → the flat [defaultLvUtilityFaultKa]. The ONE chain shared by
+/// [electricalResultProvider] and the issued report's Design Basis, so the
+/// printed assumption can never differ from the one that sized the bus.
+///
+/// Round 16 — [demand] (the solved building demand VA) lets a project that
+/// declares nothing but NEEDS an MV service resolve to the transformer the
+/// supply study selects ([FaultLevelBasis.supplyStudyEstimate]) instead of
+/// the flat 16 kA.
+///
+/// Round 52 — pass the solved [result] instead: its demand AND the advanced
+/// study's own supply design ([studySupplyDesign]: the largest section / the
+/// per-phase basis), so the estimate is the fault of the transformer the
+/// supply note, one-line and riser print — never a smaller unit sized on the
+/// total demand split evenly.
+({double amperes, FaultLevelBasis basis}) effectiveOriginFaultLevel(
+    ElectricalProject project,
+    {ApparentPower? demand,
+    ElectricalSystemResult? result}) {
+  final explicit = project.originFaultLevelA;
+  if (explicit != null) {
+    return (amperes: explicit.amperes, basis: FaultLevelBasis.explicit);
+  }
+  // Round 25 — the demand rides every tier: a declared capacity above the
+  // PLN TR ceiling resolves to its own transformer's fault, never below the
+  // study transformer for the demand.
+  final est = estimatedServiceFaultLevelA(project,
+      demand: demand ?? result?.supply.demandVa,
+      supply: result == null ? null : studySupplyDesign(project, result));
+  if (est != null) {
+    return (
+      amperes: est.amperes,
+      // Round 39 r2 — a generator / solar primary supply names its
+      // alternator / inverter basis (the engine's own branch order).
+      basis: serviceFaultEstimateBasis(project),
     );
-    // Record THIS solve's assignment as the next one's prior.
-    cache.prior = {
-      for (final e in result.panels.entries)
-        e.key: {for (final c in e.value.circuits) c.circuitId: c.phase},
+  }
+  return (
+    amperes: defaultLvUtilityFaultKa * 1000,
+    basis: FaultLevelBasis.defaultValue,
+  );
+}
+
+/// The effective busbar clearing time (s) — explicit, else the live 0.1 s.
+double effectiveBusbarClearingTimeS(ElectricalProject project) =>
+    project.busbarClearingTimeS ?? _liveBusbarClearingTimeS;
+
+/// The ONE live electrical solve (the result provider and the store's
+/// [stampAssignedPhases] share it, so the stamped assignment is the one the
+/// app displays). The phase-stability prior is the document's persisted
+/// `assignedPhase` (read by `computeSystem` itself) at the
+/// [kPhaseStickinessA] threshold.
+ElectricalSystemResult solveElectricalLive(
+    ElectricalProject project, ProjectState geo) {
+  ElectricalSystemResult solve(double originFaultA) => computeSystem(
+        const PuilProfile(),
+        project,
+        calibrationBySheet: geo.calibrations,
+        building: geo.building,
+        // Fold 1 — busbar short-circuit withstand: floor each bus to survive
+        // the prospective fault for the clearing time, not merely to carry
+        // the load current. Fault-level fallback chain: an explicit
+        // [project.originFaultLevelA] always wins; else, when a service size
+        // is declared, [estimatedServiceFaultLevelA] derives a
+        // size-appropriate estimate; else the app default (16 kA). Clearing
+        // time keeps its own separate fallback (0.1 s).
+        originFaultLevel: Current(originFaultA),
+        busbarClearingTimeS: effectiveBusbarClearingTimeS(project),
+        phaseReassignThresholdA: kPhaseStickinessA,
+      );
+  // Round 16 (supply-sources-undeclared-mv-fault-16ka) — a project that
+  // declares nothing but whose demand needs an MV service sizes its bus on
+  // the fault of the transformer the supply study selects: the demand does
+  // not depend on the fault level (only the busbar withstand floor does),
+  // so one re-solve at the demand-derived figure is exact.
+  final first = effectiveOriginFaultLevel(project);
+  var result = solve(first.amperes);
+  if (first.basis != FaultLevelBasis.explicit) {
+    final second =
+        effectiveOriginFaultLevel(project, result: result);
+    if ((second.amperes - first.amperes).abs() > 1e-9) {
+      result = solve(second.amperes);
+    }
+  }
+  return result;
+}
+
+/// Round 39 r3 — write [result]'s solved line onto every single-phase way of
+/// [project] (`assignedPhase`; null on a three-phase way / one the result does
+/// not list). Identity-preserving: a panel whose ways already carry the solved
+/// lines is returned as the same instance, and an unchanged project is
+/// returned as [project] itself.
+ElectricalProject withAssignedPhases(
+    ElectricalProject project, ElectricalSystemResult result) {
+  PhaseLine? lineOf(PhaseAssignment? a) => switch (a) {
+        PhaseAssignment.l1 => PhaseLine.l1,
+        PhaseAssignment.l2 => PhaseLine.l2,
+        PhaseAssignment.l3 => PhaseLine.l3,
+        _ => null,
+      };
+  var changed = false;
+  final panels = <ElectricalPanel>[];
+  for (final p in project.panels) {
+    final solved = {
+      for (final c in result.panels[p.id]?.circuits ??
+          const <ElectricalCircuitResult>[])
+        c.circuitId: lineOf(c.phase),
     };
-    return result;
-  },
-);
+    var panelChanged = false;
+    final circuits = <ElectricalCircuit>[];
+    for (final c in p.circuits) {
+      final line = solved[c.id];
+      if (line == c.assignedPhase) {
+        circuits.add(c);
+        continue;
+      }
+      panelChanged = true;
+      circuits.add(line == null
+          ? c.copyWith(clearAssignedPhase: true)
+          : c.copyWith(assignedPhase: line));
+    }
+    if (panelChanged) {
+      changed = true;
+      panels.add(p.copyWith(circuits: circuits));
+    } else {
+      panels.add(p);
+    }
+  }
+  return changed ? project.withPanels(panels) : project;
+}
+
+final electricalResultProvider = Provider<ElectricalSystemResult>((ref) {
+  final geo = ref.watch(projectControllerProvider);
+  // E2/E3 — the sizing projection: a single-line x/y move or an in-flight
+  // layout drag never re-runs this solve.
+  final project = ref.watch(electricalSizingProjectProvider);
+  debugElectricalSolveCount++;
+  return solveElectricalLive(project, geo);
+});
 
 /// Derived: the bundled A8 advanced study (fault / supply / PF / control /
 /// harmonics / arc-flash / containment / enclosure / metering / SPD / lightning
@@ -435,7 +685,7 @@ final electricalResultProvider = Provider<ElectricalSystemResult>(
 final electricalAdvancedProvider = Provider<AdvancedStudy>(
   (ref) => computeAdvancedStudy(
     const PuilProfile(),
-    ref.watch(electricalProjectProvider),
+    ref.watch(electricalSizingProjectProvider),
     ref.watch(electricalResultProvider),
   ),
 );
@@ -457,16 +707,25 @@ final electricalAdvancedProvider = Provider<AdvancedStudy>(
 /// busbar-withstand finding, and it must never show twice.
 final electricalAllWarningsProvider = Provider<List<ElectricalWarning>>((ref) {
   final core = ref.watch(electricalResultProvider).warnings;
-  final fault = ref.watch(electricalAdvancedProvider).fault.warnings;
+  final advanced = ref.watch(electricalAdvancedProvider);
+  final fault = advanced.fault.warnings;
   final seen = <(String, String?, String?)>{};
   final out = <ElectricalWarning>[];
-  for (final w in [...core, ...fault]) {
+  // Round 13 — plus the advanced study's own judge-only warnings (a forced
+  // genset nameplate below the essential boards' demand).
+  for (final w in [...core, ...fault, ...advanced.warnings]) {
     final key = (w.code, w.panelId, w.circuitId);
     if (!seen.add(key)) continue;
     out.add(w);
   }
   return out;
 });
+
+/// Round 39 r3 — mutable holder for [ElectricalProjectController]'s verbatim
+/// write mode (the notifier itself is `@immutable`).
+class _RawWriteFlag {
+  bool on = false;
+}
 
 @immutable
 class ElectricalProjectController extends Notifier<ElectricalProject> {
@@ -489,20 +748,35 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     // once the engineer opts in (G1, [mepDutyFeedEnabledProvider]) — the
     // [mepAutoFeedCircuitsProvider] gates that. Default is placed-only, so an
     // untouched project with nothing placed has no MEP panel and is byte-
-    // identical to before. The listener fires on every change after build; a
-    // microtask does the initial sync (state can't be set during build()).
-    ref.listen(
-        mepAutoFeedCircuitsProvider, (_, next) => syncMepEquipment(next));
+    // identical to before. A microtask does the initial sync (state can't be
+    // set during build()).
+    //
     // The microtask can outlive the container (app quit / test teardown
     // disposing mid-flight) — reading a disposed container throws a StateError
     // on a platform-timing-dependent race (caught by the Windows release gate),
     // so it must no-op once this notifier is disposed.
     var disposed = false;
     ref.onDispose(() => disposed = true);
-    Future.microtask(() {
-      if (disposed) return;
-      syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
-    });
+    // Round 46 (mech-props-1-mep-sync-listener-writes-during-build) — the
+    // listener DEFERS its write like the initial sync (the Round 32 rule): the
+    // feed is first recomputed inside ANOTHER provider's build (the Review
+    // fan-in reading the electrical result after an equipment drop), where a
+    // synchronous `state =` is a Riverpod assertion. One pending microtask
+    // reads the LATEST feed, so a burst of edits syncs once (and the
+    // value-identical re-sync stays a no-op).
+    var syncPending = false;
+    void scheduleSync() {
+      if (syncPending) return;
+      syncPending = true;
+      Future.microtask(() {
+        syncPending = false;
+        if (disposed) return;
+        syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
+      });
+    }
+
+    ref.listen(mepAutoFeedCircuitsProvider, (_, _) => scheduleSync());
+    scheduleSync();
     // A2 — a fresh project is EMPTY: the fictional sample switchboard must
     // never leak into a real `.mechx` / BOM / quotation. The sample stays one
     // explicit click away ([resetToSample], the empty-state action).
@@ -512,12 +786,77 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   bool get canUndo => _undo.isNotEmpty;
   bool get canRedo => _redo.isNotEmpty;
 
+  // Round 39 r3 — every forward mutation PERSISTS the solved phase
+  // assignment onto the document ([stampAssignedPhases]); only a load and an
+  // undo / redo / restore (a document the store already stamped, or one read
+  // from a file) is written verbatim.
+  final _RawWriteFlag _raw = _RawWriteFlag();
+
+  void _setRaw(ElectricalProject project) {
+    _raw.on = true;
+    try {
+      state = project;
+    } finally {
+      _raw.on = false;
+    }
+  }
+
+  @override
+  set state(ElectricalProject value) {
+    // A GEOMETRY-ONLY write (a panel dragged on the single-line, a board or a
+    // load placed / moved on the layout — [_setGeometry]) cannot change any
+    // phase assignment: the balancer reads currents and topology, never
+    // positions, and the moved objects keep their `assignedPhase`. It skips
+    // both stamping solves — it runs on every drag frame.
+    final next =
+        (_raw.on || _geometry.on) ? value : stampAssignedPhases(value);
+    // The lazy gesture undo step ([beginUndoableGesture]): the first write
+    // that actually changes the pre-gesture project pushes its snapshot.
+    final pending = _gesture.project;
+    if (pending != null && !identical(next, pending)) {
+      _gesture.project = null;
+      _pushSnapshot(pending);
+    }
+    super.state = next;
+  }
+
+  final _RawWriteFlag _geometry = _RawWriteFlag();
+
+  /// Run a position-only mutation without re-stamping phases (see [state]).
+  void _setGeometry(void Function() write) {
+    _geometry.on = true;
+    try {
+      write();
+    } finally {
+      _geometry.on = false;
+    }
+  }
+
+  /// Round 39 r3 — the ONE bookkeeping write that makes the document fully
+  /// determine the phase balance: seed [next] with the assignment the app
+  /// currently DISPLAYS (ways the displayed solve does not list — new or
+  /// duplicated ids, a way moved to another board — start unassigned, exactly
+  /// like the former session cache), solve it with that prior, and persist the
+  /// solved line on every single-phase way (`assignedPhase`). Not an undo step
+  /// and not a settings edit — it rides the mutation that triggered it.
+  /// Identity-preserving when nothing changes.
+  ElectricalProject stampAssignedPhases(ElectricalProject next) {
+    if (identical(next, state)) return next;
+    final geo = ref.read(projectControllerProvider);
+    // The displayed solve of the CURRENT document (a read of the result
+    // provider from its own source notifier is a dependency cycle).
+    final displayed = solveElectricalLive(state, geo);
+    final seeded = withAssignedPhases(next, displayed);
+    return withAssignedPhases(seeded, solveElectricalLive(seeded, geo));
+  }
+
   /// The single forward-mutation funnel: snapshot the current project onto the
   /// undo stack, record this domain on the global timeline (which clears the
   /// global redo branch), clear the local redo stack, and apply [next]. Every
   /// USER edit intent routes through here — programmatic replacements
   /// ([setProject] loads, [syncMepEquipment] derived syncs) deliberately don't.
   void _commit(ElectricalProject next) {
+    _gesture.project = null; // this commit IS the step (see pushUndoSnapshot)
     _undo.add(state);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
@@ -530,26 +869,133 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// the whole move collapses into a single undo step. Mirrors
   /// `NetworkController.pushUndoSnapshot`.
   void pushUndoSnapshot() {
-    _undo.add(state);
+    // An explicit step supersedes any lazily-pending gesture snapshot (an
+    // abandoned gesture must never push a second, stale entry later).
+    _gesture.project = null;
+    _pushSnapshot(state);
+  }
+
+  void _pushSnapshot(ElectricalProject snapshot) {
+    _undo.add(snapshot);
     if (_undo.length > 200) _undo.removeAt(0);
     _redo.clear();
     ref.read(historyProvider.notifier).record(UndoDomain.electrical);
   }
 
+  /// A drag GESTURE's undo step, taken LAZILY: [beginUndoableGesture] notes
+  /// the pre-gesture project and the snapshot is pushed only by the FIRST
+  /// write that actually changes it, so a drag that snaps back to where it
+  /// started (S1 live grid snap) records no phantom Ctrl+Z step and keeps the
+  /// redo branch. [endUndoableGesture] closes the gesture (call on release /
+  /// cancel / dispose).
+  final _GestureSnapshot _gesture = _GestureSnapshot();
+
+  void beginUndoableGesture() => _gesture.project = state;
+
+  void endUndoableGesture() => _gesture.project = null;
+
+
   /// Revert the most recent committed edit. Driven by the global
   /// [historyProvider] (which owns cross-domain ordering) — not called
   /// directly by widgets.
+  ///
+  /// Round 23 (mep-bridge-4) — the restored snapshot is re-synced against the
+  /// LIVE MEP feed (idempotent, records no history): the MEP board is derived
+  /// from the drawing + the duty-feed switch, which an electrical undo does
+  /// not rewind, so a snapshot must never resurrect ways the feed no longer
+  /// derives (or drop ones it does).
   void undo() {
     if (_undo.isEmpty) return;
+    _gesture.project = null; // a history step ends any open drag gesture
     _redo.add(state);
-    state = _undo.removeLast();
+    _setRaw(_undo.removeLast());
+    resyncMepEquipment();
   }
 
   /// Replay the most recently undone edit (see [undo]).
   void redo() {
     if (_redo.isEmpty) return;
+    _gesture.project = null; // a history step ends any open drag gesture
     _undo.add(state);
-    state = _redo.removeLast();
+    _setRaw(_redo.removeLast());
+    resyncMepEquipment();
+  }
+
+  /// Restore a captured project WITHOUT recording undo and WITHOUT clearing
+  /// the local stacks — the structural coordinator's restore path for a
+  /// compound floor-stack / sheet edit that moved electrical placements. Not
+  /// for widgets. Re-synced against the live MEP feed like [undo].
+  void restoreProject(ElectricalProject project) {
+    _setRaw(project);
+    resyncMepEquipment();
+  }
+
+  /// Re-map every PLACED panel ([ElectricalPanel.layoutPos]) and circuit load
+  /// ([ElectricalCircuit.loadPos]) through [map] WITHOUT recording undo — a
+  /// floor-stack / sheet re-mapping carries the electrical placements with the
+  /// drawn work (`floor_remap.dart`). [map] returns the new position, the SAME
+  /// instance to leave it, or null to UN-PLACE it (its floor / sheet is gone).
+  /// No-op — state untouched — when nothing changes.
+  /// Round 33 — the sheet ids carrying an electrical PLACEMENT (a panel's
+  /// `layoutPos` or a way's `loadPos`). A method on the notifier so the
+  /// project controller can ask WITHOUT depending on this provider's state
+  /// (which watches the project — a read of it from there is a cycle).
+  Set<String> placedSheetIds() => {
+        for (final p in state.panels) ...[
+          if (p.layoutPos != null) p.layoutPos!.sheetId,
+          for (final c in p.circuits)
+            if (c.loadPos != null) c.loadPos!.sheetId,
+        ],
+      };
+
+  void remapLayoutPositions(LayoutPos? Function(LayoutPos pos) map) {
+    var changed = false;
+    final panels = <ElectricalPanel>[];
+    for (final p in state.panels) {
+      var panel = p;
+      final lp = p.layoutPos;
+      if (lp != null) {
+        final next = map(lp);
+        if (next == null) {
+          panel = panel.copyWith(clearLayoutPos: true);
+          changed = true;
+        } else if (next != lp) {
+          panel = panel.copyWith(layoutPos: next);
+          changed = true;
+        }
+      }
+      var circuitsChanged = false;
+      final circuits = <ElectricalCircuit>[];
+      for (final c in panel.circuits) {
+        final pos = c.loadPos;
+        // Round 22 (edit-fuzz-2-mep-loadpos-desync) — an MEP-DERIVED way's
+        // position is not the user's: it is re-derived from its equipment node
+        // (which the network remap has already moved) by [syncMepEquipment].
+        // Shifting it here too moved it twice (a phantom storey of cable) or,
+        // on a floor delete, un-placed it. [resyncMepEquipment] re-derives.
+        if (pos == null || c.sourceEquipmentId != null) {
+          circuits.add(c);
+          continue;
+        }
+        final next = map(pos);
+        if (next == null) {
+          circuits.add(c.copyWith(clearLoadPos: true));
+          circuitsChanged = true;
+        } else if (next != pos) {
+          circuits.add(c.copyWith(loadPos: next));
+          circuitsChanged = true;
+        } else {
+          circuits.add(c);
+        }
+      }
+      if (circuitsChanged) {
+        panel = panel.copyWith(circuits: circuits);
+        changed = true;
+      }
+      panels.add(panel);
+    }
+    if (!changed) return;
+    state = _withProject(panels: panels);
   }
 
   /// Replace the whole project (A6 persistence load / crash recovery). A loaded
@@ -563,12 +1009,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// IDENTITY-PRESERVING on clean input, so a healthy file loads byte-identical
   /// (and notifies exactly once).
   void setProject(ElectricalProject project) {
+    _gesture.project = null; // a load ends any open drag gesture
     _undo.clear();
     _redo.clear();
-    state = project;
+    // Round 39 r3 — a LOADED document is written verbatim (never re-stamped):
+    // its persisted `assignedPhase` is its own phase prior, so the reopened
+    // result equals the live one that was saved (roundtrip-2: nothing of the
+    // previous project's assignment can leak in — it lives in that document).
+    _setRaw(project);
     final panels = sanitizeFeederTopology(project.panels);
     if (!identical(panels, project.panels)) {
-      state = _withProject(panels: panels);
+      _setRaw(_withProject(panels: panels));
     }
   }
 
@@ -583,16 +1034,30 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// withstand). Null resets to the app default (16 kA). Non-positive values are
   /// ignored (the engine guards faultKa ≤ 0, but we avoid persisting garbage).
   void setOriginFaultLevel(Current? a) {
-    if (a != null && a.amperes <= 0) return;
+    // Round 11: NaN fails `<= 0`, Infinity passes it — a non-finite value
+    // persisted here made every later Save / autosave throw on encode.
+    if (a != null && (!a.amperes.isFinite || a.amperes <= 0)) return;
     _commit(a == null
         ? _withProject(clearOriginFaultLevelA: true)
         : _withProject(originFaultLevelA: a));
   }
 
+  /// Round 64 (elec-convergence-16-tt-soil-resistivity-unreachable) — set the
+  /// site SOIL RESISTIVITY (ohm.m) the earth-electrode design and the TT
+  /// Ra x IΔn <= 50 V judge read. Null / non-positive ⇒ clear (no electrode
+  /// designed, the `tt-earth-fault-unchecked` advisory). Non-finite refused.
+  /// One undo step.
+  void setSoilResistivity(double? ohmM) {
+    if (ohmM != null && !ohmM.isFinite) return;
+    _commit((ohmM == null || ohmM <= 0)
+        ? _withProject(clearSoilResistivity: true)
+        : _withProject(soilResistivityOhmM: ohmM));
+  }
+
   /// Set the busbar clearing time (s) for the Fold-1 withstand thermal check.
   /// Null resets to the app default (0.1 s). Non-positive values are ignored.
   void setBusbarClearingTime(double? s) {
-    if (s != null && s <= 0) return;
+    if (s != null && (!s.isFinite || s <= 0)) return;
     _commit(s == null
         ? _withProject(clearBusbarClearingTimeS: true)
         : _withProject(busbarClearingTimeS: s));
@@ -634,21 +1099,46 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   }
 
   /// Commit a rebuilt sources map (null collapses to a cleared field).
-  void _commitSources(ElectricalSources? next) => _commit(next == null
-      ? _withProject(clearSources: true)
-      : _withProject(sources: next));
+  void _commitSources(ElectricalSources? next) {
+    final project = next == null
+        ? _withProject(clearSources: true)
+        : _withProject(sources: next);
+    // Round 9 (elec-store-fuzz-6) — clearing an absent genset (or re-setting
+    // the same source) changes nothing: no phantom undo step / dirty flag.
+    if (jsonEncode(project.toJson()['sources']) ==
+        jsonEncode(state.toJson()['sources'])) {
+      return;
+    }
+    _commit(project);
+  }
 
   /// Set (or clear) the standby/prime generator on the source spine.
   void setGenerator(GeneratorSource? gen) => _commitSources(
       _sourcesWith(generator: gen, clearGenerator: gen == null));
 
   /// Set (or clear) the grid-tied / hybrid solar PV array on the source spine.
-  void setSolar(SolarSource? solar) =>
-      _commitSources(_sourcesWith(solar: solar, clearSolar: solar == null));
+  void setSolar(SolarSource? solar) {
+    // Round 11: a non-finite DC/AC ratio is not a design input (and would
+    // throw out of `_commitSources`' jsonEncode no-op guard).
+    // Round 19: nor is a non-positive ratio (arrayKwp / 0 = Infinity throws in
+    // the inverter selection), a negative module count or a 0 W module.
+    if (solar != null &&
+        (!solar.dcAcRatio.isFinite ||
+            solar.dcAcRatio <= 0 ||
+            solar.panels < 0 ||
+            solar.panelWp < 1)) {
+      return;
+    }
+    _commitSources(_sourcesWith(solar: solar, clearSolar: solar == null));
+  }
 
   /// Set (or clear) the backup battery bank on the source spine.
-  void setBattery(BatterySource? battery) => _commitSources(
-      _sourcesWith(battery: battery, clearBattery: battery == null));
+  void setBattery(BatterySource? battery) {
+    // Round 11: reject a non-finite autonomy before it reaches jsonEncode.
+    if (battery != null && !battery.autonomyHours.isFinite) return;
+    _commitSources(
+        _sourcesWith(battery: battery, clearBattery: battery == null));
+  }
 
   /// Set the building's PRIMARY supply kind (PLN grid / generator plant /
   /// solar plant) — re-labels the source-spine supply head, never a sizing
@@ -661,6 +1151,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the declared supply connection capacity (daya tersambung / plant
   /// rating). Null / non-positive ⇒ clear (no capacity printed).
   void setSupplyCapacityVa(ApparentPower? capacity) {
+    // Round 9 (elec-store-fuzz-6) — no-op when unchanged (incl. clearing a
+    // capacity that was never declared).
+    // Round 11: a non-finite capacity (e.g. '1e999' typed) is ignored, never
+    // persisted — it would make the project unsaveable.
+    if (capacity != null && !capacity.voltAmperes.isFinite) return;
+    final clear = capacity == null || capacity.voltAmperes <= 0;
+    if (clear && state.supplyCapacityVa == null) return;
+    if (!clear && state.supplyCapacityVa == capacity) return;
     _commit((capacity == null || capacity.voltAmperes <= 0)
         ? _withProject(clearSupplyCapacityVa: true)
         : _withProject(supplyCapacityVa: capacity));
@@ -669,10 +1167,27 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the genset rating (kVA). Null ⇒ auto-size from demand (the ladder
   /// snap); non-positive ignored. Preserves the genset's mode / transfer.
   void setGeneratorKva(ApparentPower? kva) {
-    if (kva != null && kva.voltAmperes <= 0) return;
+    if (kva != null && (!kva.voltAmperes.isFinite || kva.voltAmperes <= 0)) {
+      return;
+    }
     final cur = state.sources?.generator ?? const GeneratorSource();
     setGenerator(GeneratorSource(
       kva: kva,
+      units: cur.units,
+      backupFraction: cur.backupFraction,
+      mode: cur.mode,
+      transfer: cur.transfer,
+    ));
+  }
+
+  /// Round 44 — set the number of paralleled sets of a FORCED genset
+  /// nameplate (`n x kVA`). Below 1 / non-finite ignored.
+  void setGeneratorUnits(int units) {
+    final cur = state.sources?.generator;
+    if (cur == null || units < 1 || units == cur.units) return;
+    setGenerator(GeneratorSource(
+      kva: cur.kva,
+      units: units,
       backupFraction: cur.backupFraction,
       mode: cur.mode,
       transfer: cur.transfer,
@@ -684,6 +1199,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final cur = state.sources?.generator ?? const GeneratorSource();
     setGenerator(GeneratorSource(
       kva: cur.kva,
+      units: cur.units,
       backupFraction: cur.backupFraction,
       mode: mode,
       transfer: cur.transfer,
@@ -695,6 +1211,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final cur = state.sources?.generator ?? const GeneratorSource();
     setGenerator(GeneratorSource(
       kva: cur.kva,
+      units: cur.units,
       backupFraction: cur.backupFraction,
       mode: cur.mode,
       transfer: transfer,
@@ -704,6 +1221,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the installed PF-correction capacitor bank (kvar). Null / non-positive
   /// ⇒ clear (falls back to the advanced study's recommended kvar caption).
   void setCapacitorBankKvar(double? kvar) {
+    if (kvar != null && !kvar.isFinite) return; // Round 11 — never persist NaN.
     _commit((kvar == null || kvar <= 0)
         ? _withProject(clearCapacitorBankKvar: true)
         : _withProject(capacitorBankKvar: kvar));
@@ -712,6 +1230,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Set the explicit transformer rating (kVA). Null / non-positive ⇒ clear
   /// (falls back to the demand-derived ladder snap).
   void setTransformerKva(ApparentPower? kva) {
+    if (kva != null && !kva.voltAmperes.isFinite) return; // Round 11.
     _commit((kva == null || kva.voltAmperes <= 0)
         ? _withProject(clearTransformerKva: true)
         : _withProject(transformerKva: kva));
@@ -719,7 +1238,24 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   /// Force / clear the dual-transformer (split-bus) MV supply.
   void setDualTransformer(bool value) =>
-      _commit(_withProject(dualTransformer: value));
+      // Round 61 — keep the pair on ONE section count: ticking Dual over a
+      // typed single section (`transformerUnits` 1) clears that section
+      // count, so the service really is two sections.
+      _commit(_withProject(
+          dualTransformer: value,
+          clearTransformerUnits: value && state.transformerUnits == 1));
+
+  /// Round 58 — the number of SEPARATE transformer sections (one unit per
+  /// service-entrance board, never paralleled). Null / < 1 ⇒ clear (the
+  /// legacy one section, two on a dual service). Non-finite input refused.
+  void setTransformerUnits(int? units) {
+    _commit((units == null || units < 1)
+        ? _withProject(clearTransformerUnits: true)
+        : _withProject(
+            transformerUnits: units > 32 ? 32 : units,
+            // Round 61 — a single typed section is not a dual service.
+            dualTransformer: units == 1 ? false : null));
+  }
 
   /// Rebuild the project carrying every field through, overriding only those
   /// supplied — so an edit to one field never silently drops the additive A8
@@ -743,6 +1279,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     SupplyKind? supplyKind,
     ApparentPower? supplyCapacityVa,
     bool clearSupplyCapacityVa = false,
+    int? transformerUnits,
+    bool clearTransformerUnits = false,
+    double? soilResistivityOhmM,
+    bool clearSoilResistivity = false,
   }) =>
       ElectricalProject(
         id: state.id,
@@ -752,7 +1292,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         sources: clearSources ? null : (sources ?? state.sources),
         dualTransformer: dualTransformer ?? state.dualTransformer,
         occupancy: state.occupancy,
-        soilResistivityOhmM: state.soilResistivityOhmM,
+        soilResistivityOhmM: clearSoilResistivity
+            ? null
+            : (soilResistivityOhmM ?? state.soilResistivityOhmM),
         groundFlashDensity: state.groundFlashDensity,
         externalLps: state.externalLps,
         overheadSupply: state.overheadSupply,
@@ -775,6 +1317,9 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         supplyCapacityVa: clearSupplyCapacityVa
             ? null
             : (supplyCapacityVa ?? state.supplyCapacityVa),
+        transformerUnits: clearTransformerUnits
+            ? null
+            : (transformerUnits ?? state.transformerUnits),
       );
 
   /// Load the built-in sample project (a user action — undoable, so one
@@ -825,10 +1370,28 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       {bool record = true}) {
     _replacePanel(
       panelId,
-      (p) => p.copyWith(circuits: [
-        for (final c in p.circuits)
-          if (c.id == circuitId) f(c) else c,
-      ]),
+      (p) {
+        // Round 9 (elec-store-fuzz-6) — a transform that changes nothing (e.g.
+        // clearing an override the way never had) returns the SAME panel, so
+        // [_replacePanel]'s identity guard records no phantom undo step.
+        var changed = false;
+        final circuits = <ElectricalCircuit>[
+          for (final c in p.circuits)
+            if (c.id == circuitId)
+              () {
+                final n = f(c);
+                if (!identical(n, c) &&
+                    jsonEncode(n.toJson()) != jsonEncode(c.toJson())) {
+                  changed = true;
+                  return n;
+                }
+                return c;
+              }()
+            else
+              c,
+        ];
+        return changed ? p.copyWith(circuits: circuits) : p;
+      },
       record: record,
     );
   }
@@ -946,26 +1509,181 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     String? laying,
     bool clearLaying = false,
   }) {
-    _replaceCircuit(
-      panelId,
-      circuitId,
-      (c) => c.copyWith(
+    // Round 11 — the store is the last gate before the solver: a negative /
+    // non-finite load, length or override (typed, pasted or scripted) is not a
+    // design input. A negative W gave a NEGATIVE Ib that was subtracted from
+    // the board demand; a negative length a negative Vd% that "passed" the
+    // limit; cos phi 0 a silent 0 A way; NaN threw out of the jsonEncode no-op
+    // guard below. Reject the whole edit (one atomic intent) instead.
+    if (!isValidCircuitEdit(
+      loadW: loadW,
+      motorKw: motorKw,
+      cosPhi: cosPhi,
+      demandFactor: demandFactor,
+      length: length,
+      breakerOverrideA: breakerOverrideA,
+      cableOverrideMm2: cableOverrideMm2,
+    )) {
+      return;
+    }
+    // Round 40 (elec-props-6-mep-way-machine-fields-editable-then-silently-
+    // reverted) — an MEP-derived way's machine (its power and life-safety
+    // duty) IS the drawn equipment: the next MEP sync re-derives them, so a
+    // typed value would size live and silently revert on the next drawing
+    // change or reopen. Refuse the edit instead (atomic, like delete / move).
+    //
+    // Round 41 (regression-rekind-bypasses-mep-machine-lock) — the drawn
+    // machine owns its KIND too: a re-kind to Spare zeroed its W live (and
+    // the next sync silently restored it), to Capacitor it read the pump's
+    // W as kvar and dropped its demand for good. A kind CHANGE is refused;
+    // re-stating the current kind is a no-op provenance write (allowed).
+    final derivedWay = isMepDerivedWay(panelId, circuitId);
+    // Round 42 (regression-mep-kind-lock-traps-spare-rekinded-machine) — the
+    // safety net: re-kinding a derived way BACK to its drawn machine's own
+    // kind (the fresh mint's) is always allowed — it is the way out of a
+    // kind a parked / r40 edit left on it, never a departure from the
+    // machine.
+    final mintKind = derivedWay && loadKind != null
+        ? _mintKindOf(panelId, circuitId)
+        : null;
+    final kindChange = loadKind != null &&
+        loadKind != _circuitKind(panelId, circuitId) &&
+        loadKind != mintKind;
+    if (derivedWay &&
+        (loadW != null ||
+            motorKw != null ||
+            clearMotorKw ||
+            kindChange ||
+            lifeSafety != null)) {
+      _refuse(StringKey.mepDerivedWayMachineLocked);
+      return;
+    }
+    // Round 42 (elec-props-8-star-delta-on-single-phase-way) — a star-delta
+    // starter needs a three-phase motor; refuse it on a way that solves
+    // single-phase (the inspector does not offer it there).
+    if (starterType == StarterType.starDelta &&
+        _solvesSinglePhase(panelId, circuitId)) {
+      _refuse(StringKey.starDeltaNeedsThreePhase);
+      return;
+    }
+    _replaceCircuit(panelId, circuitId, (c) {
+      // Round 40 (regression-parked-way-retyped-motor-kw-ignored) — a PARKED
+      // MEP way (source removed) still carries the minted A5 FLA and input W
+      // of its old machine; compute reads those, never motorKw. Retyping its
+      // Motor kW (the only power field the inspector shows for a motor /
+      // pump) replaces the machine: the stale FLA is dropped and the input W
+      // follows the typed shaft kW (÷ the assumed efficiency), so every
+      // consumer (Ib, connected / demand W) agrees with the motor branch.
+      final parkedRetype = c.sourceEquipmentId == null &&
+          c.flaOverrideA != null &&
+          (motorKw != null || clearMotorKw);
+      final retypedW = parkedRetype && motorKw != null && loadW == null
+          ? motorKw * 1000 / kAssumedMotorEfficiency
+          : null;
+      // Round 36 (elec-props-4-stale-motorkw-after-rekind) — re-kinding a
+      // hand-entered motor / pump way to a kind that sizes on its W (HVAC,
+      // general, heating …) drops the motor power the inspector then hides:
+      // compute sizes the way on loadW while the starter, PF and genset-dip
+      // passes kept reading the stale motorKw (a 30 kW starter on a 5 kW
+      // way). When the way carries no W yet, the motor's electrical input
+      // (shaft ÷ the assumed efficiency) seeds it, so the load survives the
+      // edit. One edit, one undo step. An MEP-derived way's machine power
+      // stays authoritative.
+      final rekindedOffMotor = loadKind != null &&
+          loadKind != c.loadKind &&
+          loadKind != LoadKind.motor &&
+          loadKind != LoadKind.pump &&
+          motorKw == null &&
+          c.motorKw != null &&
+          (c.sourceEquipmentId == null || c.sourceEquipmentId!.isEmpty) &&
+          c.flaOverrideA == null;
+      // Round 37 (regression-rekind-motor-to-spare-seeds-phantom-load) —
+      // only a LOAD-BEARING target kind is seeded: a spare / feeder way is
+      // zero-demand by definition (as `_newCircuit` mints it) and a capacitor
+      // way reads loadW as kvar, so seeding them left a phantom 34 kW (or a
+      // 34 kvar bank) on the board, incomer, feeders and genset demand.
+      final nonLoadTarget = loadKind == LoadKind.spare ||
+          loadKind == LoadKind.capacitor ||
+          loadKind == LoadKind.feeder;
+      final seededW =
+          rekindedOffMotor && !nonLoadTarget && loadW == null && c.loadW <= 0
+              ? c.motorKw! * 1000 / kAssumedMotorEfficiency
+              : null;
+      // Round 42 (elec-ui-journey-3-rekind-to-motor-shows-zero-kw) — the
+      // mirror of the Round-36 seed: a W-sized way re-kinded ONTO a motor /
+      // pump (which sizes on its motor power, the only power field the
+      // inspector then shows) carries its load across as shaft kW (input W ×
+      // the assumed efficiency) and its W is cleared, so the 7.5 kW in force
+      // is the 6.6 kW shaft the inspector shows — one basis, one undo step.
+      final rekindedOntoMotor = loadKind != null &&
+          loadKind != c.loadKind &&
+          (loadKind == LoadKind.motor || loadKind == LoadKind.pump) &&
+          c.loadKind != LoadKind.motor &&
+          c.loadKind != LoadKind.pump &&
+          motorKw == null &&
+          loadW == null &&
+          c.motorKw == null &&
+          c.loadW > 0 &&
+          c.flaOverrideA == null &&
+          c.loadKind != LoadKind.capacitor;
+      final seededMotorKw = rekindedOntoMotor
+          ? c.loadW * kAssumedMotorEfficiency / 1000
+          : null;
+      // Round 42 (elec-ui-journey-3-starter-survives-rekind-unclearable) —
+      // a way re-kinded to a kind that takes no starter (anything but motor
+      // / pump / HVAC) drops its starter in the same edit: the field is
+      // hidden there and the schedule would print it on a heater.
+      final starterDropped = loadKind != null &&
+          loadKind != c.loadKind &&
+          loadKind != LoadKind.motor &&
+          loadKind != LoadKind.pump &&
+          loadKind != LoadKind.hvac &&
+          starterType == null &&
+          c.starterType != null;
+      // A way re-kinded to spare / feeder carries no W of its own unless the
+      // same edit types one.
+      final zeroedW = loadKind != null &&
+              loadKind != c.loadKind &&
+              (loadKind == LoadKind.spare || loadKind == LoadKind.feeder) &&
+              loadW == null
+          ? 0.0
+          : null;
+      return c.copyWith(
         name: name,
         loadKind: loadKind,
-        loadW: loadW,
-        motorKw: motorKw,
-        clearMotorKw: clearMotorKw,
+        loadW: loadW ?? retypedW ?? seededW ?? zeroedW ??
+            (rekindedOntoMotor ? 0.0 : null),
+        motorKw: motorKw ?? seededMotorKw,
+        clearMotorKw: clearMotorKw || rekindedOffMotor,
+        clearFlaOverrideA: parkedRetype,
         cosPhi: cosPhi,
         demandFactor: demandFactor,
+        // Round 23 (mep-bridge-5) — record provenance: a typed factor is the
+        // engineer's and the MEP sync never re-derives it.
+        demandFactorUserSet: demandFactor != null ? true : null,
+        // Round 23 r2 (mep-bridge-2) — the same provenance for the way's
+        // electrical character, so the MEP sync never reverts a typed value.
+        cosPhiUserSet: cosPhi != null ? true : null,
+        phasesUserSet: (phases != null || clearPhases) ? true : null,
+        loadKindUserSet: loadKind != null ? true : null,
         length: length,
         phases: phases,
         clearPhases: clearPhases,
         lifeSafety: lifeSafety,
-        isLighting: isLighting,
+        // Round 20 (electrical-property-lighting-flag-decoupled-from-kind) —
+        // re-kinding a way re-derives its lighting flag (the 3 % vs 5 %
+        // voltage-drop limit, PUIL) exactly as a new way gets it, unless the
+        // same edit sets the flag explicitly; the Lighting toggle stays an
+        // override AFTER the kind change. A socket re-kinded to Lighting
+        // kept isLighting = false and was judged (and sized) against 5 %.
+        isLighting: isLighting ??
+            (loadKind != null && loadKind != c.loadKind
+                ? loadKind == LoadKind.lighting
+                : null),
         cableType: cableType,
         clearCableType: clearCableType,
         starterType: starterType,
-        clearStarterType: clearStarterType,
+        clearStarterType: clearStarterType || starterDropped,
         breakerOverrideA: breakerOverrideA,
         clearBreakerOverrideA: clearBreakerOverrideA,
         cableOverrideMm2: cableOverrideMm2,
@@ -976,8 +1694,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         clearPhaseOverride: clearPhaseOverride,
         laying: laying,
         clearLaying: clearLaying,
-      ),
-    );
+      );
+    });
   }
 
   /// Bulk-pin the phase LINE of several ways on one panel (`circuitId → line`)
@@ -1007,9 +1725,18 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// commit — the child's stale `fedByCircuitId` back-pointer is cleared and it
   /// becomes utility-fed again, as ONE undo step. No-op (and no phantom undo
   /// entry) when either id is unknown.
+  ///
+  /// Round 22 (edit-fuzz-2-mep-edits-silently-reverted) — an MEP-DERIVED way
+  /// (`sourceEquipmentId != null`) is REFUSED with a status message: it follows
+  /// its equipment node, so [syncMepEquipment] would silently re-add it on the
+  /// next drawing edit or on reopen. Delete the equipment on the plan instead.
   void deleteCircuit(String panelId, String circuitId) {
     final panel = state.panels.where((p) => p.id == panelId).firstOrNull;
     if (panel == null || !panel.circuits.any((c) => c.id == circuitId)) return;
+    if (isMepDerivedWay(panelId, circuitId)) {
+      _refuse(StringKey.mepDerivedWayLocked);
+      return;
+    }
     final panels = <ElectricalPanel>[
       for (final p in state.panels)
         if (p.id == panelId)
@@ -1020,24 +1747,74 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ];
-    _commit(_withProject(panels: sanitizeFeederTopology(panels)));
+    _commit(_withProject(
+        panels: sanitizeFeederTopology(_dropEmptyMepBoard(panels))));
   }
+
+  /// Round 40 (elec-props-6-empty-mep-board-survives-last-way-delete) — the
+  /// MEP Equipment board removed when it holds NO way at all (no derived, no
+  /// parked, no hand-added way): exactly the board `syncMepEquipment` drops,
+  /// so deleting / moving its last way gives the same document a reopen
+  /// would (no phantom incomer, enclosure, feeder breaker and cable in the
+  /// BOM). The caller sweeps the dangling feeder with
+  /// [sanitizeFeederTopology] in the same commit (one undo step).
+  static List<ElectricalPanel> _dropEmptyMepBoard(
+          List<ElectricalPanel> panels) =>
+      panels.any((p) => p.id == kMepEquipmentPanelId && p.circuits.isEmpty)
+          ? [
+              for (final p in panels)
+                if (p.id != kMepEquipmentPanelId) p,
+            ]
+          : panels;
 
   /// Duplicate one circuit (fresh id, "(copy)" name), inserted just after it.
   /// A duplicated feeder drops its `feedsPanelId` (a feeder targets exactly one
   /// panel), so the copy is a genuine NON-feeder rather than a `''`-targeted
   /// stub the topology sanitizer would have to sweep away.
+  /// Round 38 (elec-ui-drawings-4) — a copied FEEDER way loses its target,
+  /// so it must stop being a feeder: it kept `LoadKind.feeder` and the
+  /// 'Feeder to X' name, and was sized, scheduled ('Feeder to LP-1' feeding
+  /// nothing) and bought. It becomes a SPARE way (no load), the honest
+  /// placeholder for the outgoing slot it occupies.
+  static ElectricalCircuit _detargetedFeederCopy(ElectricalCircuit copy,
+          {required bool wasFeeder}) =>
+      wasFeeder
+          // Round 39 (regression-detargeted-feeder-copy-keeps-overrides) — the
+          // placeholder sizes like a palette spare: the feeder's breaker /
+          // cable / grouping / phase overrides, laying, cable family and
+          // starter belonged to the FED board's feed and must not survive
+          // (a 250 A override made a Spare way specified, bought and judged
+          // at 250 A).
+          ? copy.copyWith(
+              name: 'Spare',
+              loadKind: LoadKind.spare,
+              loadW: 0,
+              clearBreakerOverrideA: true,
+              clearCableOverrideMm2: true,
+              clearGroupingCountOverride: true,
+              clearPhaseOverride: true,
+              clearLaying: true,
+              clearCableType: true,
+              clearStarterType: true,
+              clearMotorKw: true,
+            )
+          : copy;
+
   void duplicateCircuit(String panelId, String circuitId) {
     _replacePanel(panelId, (p) {
       final out = <ElectricalCircuit>[];
       for (final c in p.circuits) {
         out.add(c);
         if (c.id == circuitId) {
-          out.add(c.copyWith(
+          out.add(_detargetedFeederCopy(c.copyWith(
             id: _freshId('c'),
             name: '${c.name} (copy)',
             clearFeedsPanelId: true,
-          ));
+            // Round 9 (elec-store-fuzz-4) — the copy is a user-owned way: two
+            // ways claiming one machine would both be refreshed every sync.
+            clearSourceEquipmentId: true,
+            clearFlaOverrideA: true,
+          ), wasFeeder: c.isFeeder));
         }
       }
       return p.copyWith(circuits: out);
@@ -1061,7 +1838,24 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       if (c.id == circuitId) circuit = c;
     }
     if (circuit == null) return;
+    // Round 23 (regression-mep-move-off-board-duplicates-load) — an
+    // MEP-DERIVED way follows its equipment node: moved off the MEP board it
+    // would lose its source id, and the next sync would re-mint a second
+    // 'mep-<src>' way for the same machine (double demand, a duplicate circuit
+    // id). Refused like delete / merge; feed the MEP board from the target
+    // panel instead.
+    if (circuit.sourceEquipmentId != null) {
+      _refuse(StringKey.mepDerivedWayMoveLocked);
+      return;
+    }
     if (circuit.feedsPanelId == toPanelId) return; // would feed itself
+    // Round 9 (elec-store-fuzz-5) — moving a FEEDER way re-parents the board
+    // it feeds: refuse a move that would make a feeder cycle (the same rule
+    // `connectFeeder` enforces).
+    final fed = circuit.feedsPanelId;
+    if (fed != null && feederRefusalReason(toPanelId, fed) != null) {
+      return;
+    }
     final moved = circuit;
     final panels = [
       for (final p in state.panels)
@@ -1075,7 +1869,13 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         else
           p,
     ];
-    _commit(_withProject(panels: panels));
+    // Round 40 — moving the MEP board's last (hand-added / parked) way off
+    // it removes the empty board + its feeder, as a reopen would.
+    final pruned = _dropEmptyMepBoard(panels);
+    _commit(_withProject(
+        panels: identical(pruned, panels)
+            ? panels
+            : sanitizeFeederTopology(pruned)));
   }
 
   /// CHAIN one load onto another on the SAME panel — the [sourceId] circuit's
@@ -1084,6 +1884,59 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// (and motor kW, if any) sum onto the target; the target keeps its identity,
   /// cable type, phase and accessories. No-op when the two are the same, on
   /// different panels, missing, or either is a feeder (feeders aren't loads).
+  /// Round 39 (elec-ui-journeys-2-merge-drop-loses-load) — the way [src]
+  /// merged INTO [tgt], or null when the two cannot share one load basis
+  /// (the merge is then refused, never silently lossy):
+  ///   * a capacitor bank (its loadW is kvar) never merges in or out;
+  ///   * motor + motor (motor / pump kinds with a shaft kW) add their kW;
+  ///   * a motor source into a W-sized way adds its ELECTRICAL INPUT
+  ///     (kW × 1000 / [kAssumedMotorEfficiency]) to the target's W;
+  ///   * a W-sized source onto a motor way is refused (compute reads only the
+  ///     motor's kW there, so the watts would vanish);
+  ///   * a 3φ source onto a non-3φ way is refused.
+  /// The merged way is life-safety when either was. Pure.
+  static ElectricalCircuit? mergedLoadWay(
+      ElectricalCircuit src, ElectricalCircuit tgt) {
+    if (src.loadKind == LoadKind.capacitor ||
+        tgt.loadKind == LoadKind.capacitor) {
+      return null;
+    }
+    bool motorBasis(ElectricalCircuit c) =>
+        (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump) &&
+        c.motorKw != null;
+    if (src.phases == 3 && tgt.phases != 3) return null;
+    final srcMotor = motorBasis(src);
+    final tgtMotor = motorBasis(tgt);
+    final points = tgt.points + src.points; // chained outlet points add up
+    final lifeSafety = src.lifeSafety || tgt.lifeSafety;
+    if (srcMotor && tgtMotor) {
+      final kw = tgt.motorKw! + src.motorKw!;
+      // Round 40 — a target carrying a minted A5 FLA (a parked MEP way) is
+      // sized on its FLA / input W, never motorKw: the summed machine drops
+      // the stale FLA and its input W follows the summed shaft kW, so the
+      // source's kW is never silently lost.
+      final staleFla = tgt.flaOverrideA != null || src.flaOverrideA != null;
+      return tgt.copyWith(
+        loadW: staleFla
+            ? kw * 1000 / kAssumedMotorEfficiency
+            : tgt.loadW + src.loadW,
+        motorKw: kw,
+        clearFlaOverrideA: staleFla,
+        points: points,
+        lifeSafety: lifeSafety,
+      );
+    }
+    if (tgtMotor) return null;
+    final srcW = srcMotor
+        ? src.motorKw! * 1000 / kAssumedMotorEfficiency
+        : src.loadW;
+    return tgt.copyWith(
+      loadW: tgt.loadW + srcW,
+      points: points,
+      lifeSafety: lifeSafety,
+    );
+  }
+
   void mergeCircuit(String panelId, String sourceId, String targetId) {
     if (sourceId == targetId) return;
     ElectricalPanel? panel;
@@ -1098,17 +1951,20 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     }
     if (source == null || target == null) return;
     if (source.isFeeder || target.isFeeder) return; // feeders aren't loads
+    // Round 22 — MEP-derived ways follow their equipment (the sync would
+    // split a merge back apart): refused, like [deleteCircuit].
+    if (source.sourceEquipmentId != null || target.sourceEquipmentId != null) {
+      _refuse(StringKey.mepDerivedWayLocked);
+      return;
+    }
 
     final src = source;
     final tgt = target;
-    final mergedMotorKw = (tgt.motorKw == null && src.motorKw == null)
-        ? null
-        : (tgt.motorKw ?? 0) + (src.motorKw ?? 0);
-    final merged = tgt.copyWith(
-      loadW: tgt.loadW + src.loadW,
-      points: tgt.points + src.points, // chained outlet points add up
-      motorKw: mergedMotorKw,
-    );
+    final merged = mergedLoadWay(src, tgt);
+    if (merged == null) {
+      _refuse(StringKey.mergeLoadBasisMismatch);
+      return;
+    }
     final panels = [
       for (final p in state.panels)
         if (p.id == panelId)
@@ -1150,7 +2006,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// DELETE HYGIENE: the parent's feeder way now points at a board that no
   /// longer exists, so the survivors run through [sanitizeFeederTopology] INSIDE
   /// the same commit — the dangling feeder is dropped as ONE undo step.
+  ///
+  /// Round 22 — the MEP Equipment board is REFUSED while it holds MEP-derived
+  /// ways ([isMepBoardLocked]): the sync would re-create it.
   void deletePanel(String id) {
+    if (isMepBoardLocked(id)) {
+      _refuse(StringKey.mepBoardLocked);
+      return;
+    }
     // C5 — count the sanitize cascade's collateral BEFORE mutating, so the
     // status pill can name it: the parent's feeder way into the deleted board
     // is dropped, and any board the deleted one fed is silently re-rooted.
@@ -1204,12 +2067,19 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     const off = 40.0;
     final circuits = [
       for (final c in src.circuits)
-        c.copyWith(
+        _detargetedFeederCopy(c.copyWith(
           id: _freshId('c'),
           // Drop a feeder's target (mirrors duplicateCircuit) — a genuine
           // non-feeder, not a `''`-targeted stub.
           clearFeedsPanelId: true,
-        ),
+          // Round 9 (elec-store-fuzz-3) — a copied MEP-derived way is a
+          // USER-owned way seeded from the original's figures: the MEP sync
+          // only ever touches the MEP board, so a copy keeping the source id
+          // would double-count the machine and survive its deletion as a
+          // phantom load.
+          clearSourceEquipmentId: true,
+          clearFlaOverrideA: true,
+        ), wasFeeder: c.isFeeder),
     ];
     final copy = src.copyWith(
       id: _freshId('panel'),
@@ -1293,8 +2163,41 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// the mechanical canvas `moveNode`: no undo recording — pair with
   /// [pushUndoSnapshot] at drag start so the whole move is ONE undo step).
   /// No-op when the id is unknown.
-  void setPanelPosition(String id, double x, double y) =>
-      _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false);
+  void setPanelPosition(String id, double x, double y) {
+    final before = state;
+    _setGeometry(() =>
+        _replacePanel(id, (p) => p.copyWith(x: x, y: y), record: false));
+    _markSchematicMove(before);
+  }
+
+  /// E2 — projects produced by a SCHEMATIC move (single-line `x`/`y` only)
+  /// remember the project they were derived from, so
+  /// [electricalSizingProjectProvider] can tell a move the engine never reads
+  /// from a real edit. An [Expando]: weak, never persisted, no identity leak.
+  static final Expando<ElectricalProject> _schematicParent =
+      Expando<ElectricalProject>('electrical-schematic-move');
+
+  void _markSchematicMove(ElectricalProject before) {
+    // Tag with the ROOT (the last project a real edit produced), never the
+    // immediate predecessor: the chain stays depth 1, so the intermediate
+    // drag frames are collectable and the check below is O(1) (review: a
+    // per-frame chain kept every frame of every drag reachable).
+    if (!identical(state, before)) {
+      _schematicParent[state] = _schematicParent[before] ?? before;
+    }
+  }
+
+  /// Whether [project] was reached from [ancestor] through schematic moves
+  /// ONLY (or is [ancestor] itself) — i.e. every solved figure of [ancestor]
+  /// holds for [project]: identical, a move of [ancestor], or a sibling move
+  /// of the same root. Anything untagged ⇒ false.
+  bool isSchematicMoveOf(ElectricalProject project, ElectricalProject ancestor) {
+    if (identical(project, ancestor)) return true;
+    final root = _schematicParent[project];
+    if (root == null) return false;
+    return identical(root, ancestor) ||
+        identical(root, _schematicParent[ancestor]);
+  }
 
   /// Move SEVERAL panels to absolute canvas positions in ONE undo step (D2 —
   /// the multi-select group arrow-nudge). The caller passes each panel's
@@ -1304,13 +2207,15 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// identical). One `_commit`, so a single Ctrl+Z restores every moved panel.
   void movePanels(Map<String, Offset> positions) {
     if (positions.isEmpty) return;
-    _commit(_withProject(panels: [
+    final before = state;
+    _setGeometry(() => _commit(_withProject(panels: [
       for (final p in state.panels)
         if (positions.containsKey(p.id))
           p.copyWith(x: positions[p.id]!.dx, y: positions[p.id]!.dy)
         else
           p,
-    ]));
+    ])));
+    _markSchematicMove(before);
   }
 
   /// Delete SEVERAL panels in ONE undo step (D2 — the multi-select Delete). The
@@ -1319,6 +2224,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// parity). Empty ⇒ no-op.
   void deletePanels(Iterable<String> ids) {
     final set = ids.toSet();
+    // Round 22 — a locked MEP board stays (see [deletePanel]).
+    if (set.any(isMepBoardLocked)) {
+      set.removeWhere(isMepBoardLocked);
+      _refuse(StringKey.mepBoardLocked);
+    }
     if (set.isEmpty) return;
     _commit(_withProject(
       panels: sanitizeFeederTopology([
@@ -1326,6 +2236,55 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           if (!set.contains(p.id)) p,
       ]),
     ));
+  }
+
+  /// E5 — delete a MIXED multi-selection from the Layout electrical layer
+  /// (whole boards and single ways) in ONE undo step, with the same hygiene as
+  /// the single intents: the feeder topology is sanitized inside the commit,
+  /// a locked MEP board and an MEP-derived way are refused (one status
+  /// message) and kept. A way whose board is also deleted goes with it.
+  /// Nothing deletable ⇒ no-op, no phantom undo entry.
+  void deleteLayoutSelection(
+      Iterable<({String panelId, String? circuitId})> items) {
+    final boards = <String>{};
+    final ways = <String, Set<String>>{};
+    var refusedBoard = false, refusedWay = false;
+    for (final i in items) {
+      final cid = i.circuitId;
+      if (cid == null) {
+        if (isMepBoardLocked(i.panelId)) {
+          refusedBoard = true;
+        } else {
+          boards.add(i.panelId);
+        }
+      } else if (isMepDerivedWay(i.panelId, cid)) {
+        refusedWay = true;
+      } else {
+        ways.putIfAbsent(i.panelId, () => <String>{}).add(cid);
+      }
+    }
+    if (refusedBoard) _refuse(StringKey.mepBoardLocked);
+    if (refusedWay) _refuse(StringKey.mepDerivedWayLocked);
+    final next = <ElectricalPanel>[];
+    var changed = false;
+    for (final p in state.panels) {
+      if (boards.contains(p.id)) {
+        changed = true;
+        continue;
+      }
+      final drop = ways[p.id];
+      if (drop != null && p.circuits.any((c) => drop.contains(c.id))) {
+        changed = true;
+        next.add(p.copyWith(circuits: [
+          for (final c in p.circuits)
+            if (!drop.contains(c.id)) c,
+        ]));
+      } else {
+        next.add(p);
+      }
+    }
+    if (!changed) return;
+    _commit(_withProject(panels: sanitizeFeederTopology(next)));
   }
 
   /// Add a new panel at a canvas position. When [fedByCircuitId] is given it is
@@ -1522,6 +2481,49 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           'Disconnect it first.');
     }
 
+    // Round 38 (elec-ui-drawings-1) — the board ALREADY feeding the target is
+    // not a new connection. Re-running the connect used to strip the existing
+    // way (its typed length, cable family and overrides) and write a fresh
+    // 10 m default feeder, silently. The existing way is KEPT: only a stray
+    // second way claiming the child elsewhere (a desynced file) is dropped and
+    // the back-pointer re-aimed; with nothing to repair it is a pure no-op
+    // (no undo entry). The Feed-from chooser marks this row '(current)'.
+    final from = state.panels.firstWhere((p) => p.id == fromPanelId);
+    final existing = from.circuits
+            .where((c) => c.feedsPanelId == toPanelId && c.id == to.fedByCircuitId)
+            .firstOrNull ??
+        from.circuits.where((c) => c.feedsPanelId == toPanelId).firstOrNull;
+    if (existing != null) {
+      final strays = [
+        for (final p in state.panels)
+          for (final c in p.circuits)
+            if (c.feedsPanelId == toPanelId && c.id != existing.id) c.id,
+      ];
+      if (strays.isEmpty &&
+          to.fedByCircuitId == existing.id &&
+          to.sourceType == PanelSource.feeder) {
+        return const ConnectFeederResult.connected();
+      }
+      final repaired = [
+        for (final p in state.panels)
+          p.copyWith(
+            circuits: [
+              for (final c in p.circuits)
+                if (c.feedsPanelId != toPanelId || c.id == existing.id) c,
+            ],
+            sourceType: p.id == toPanelId ? PanelSource.feeder : null,
+            fedByCircuitId: p.id == toPanelId ? existing.id : null,
+          ),
+      ];
+      final next = _withProject(panels: repaired);
+      if (record) {
+        _commit(next);
+      } else {
+        state = next;
+      }
+      return const ConnectFeederResult.connected();
+    }
+
     // The board currently feeding the target (for the "moved from …" caption).
     // Prefer the panel owning the recorded back-pointer; fall back to the first
     // panel actually carrying a way that targets it, so a desynced file still
@@ -1679,26 +2681,40 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// No-op when the id is unknown. A LIVE-DRAG intent (called per pan-update),
   /// so it never records undo itself — callers [pushUndoSnapshot] at drag start
   /// / before a one-shot placement so the move is ONE undo step.
-  void setPanelLayoutPos(String panelId, LayoutPos? pos) => _replacePanel(
-        panelId,
-        (p) => pos == null
-            ? p.copyWith(clearLayoutPos: true)
-            : p.copyWith(layoutPos: pos),
-        record: false,
-      );
+  void setPanelLayoutPos(String panelId, LayoutPos? pos) =>
+      _setGeometry(() => _replacePanel(
+            panelId,
+            (p) => pos == null
+                ? p.copyWith(clearLayoutPos: true)
+                : p.copyWith(layoutPos: pos),
+            record: false,
+          ));
 
   /// Place / move one circuit's LOAD on the calibrated layout (or clear with a
   /// null [pos]). No-op when either id is unknown. A LIVE-DRAG intent — see
   /// [setPanelLayoutPos] for the undo pairing.
-  void setLoadPos(String panelId, String circuitId, LayoutPos? pos) =>
-      _replaceCircuit(
-        panelId,
-        circuitId,
-        (c) => pos == null
-            ? c.copyWith(clearLoadPos: true)
-            : c.copyWith(loadPos: pos),
-        record: false,
-      );
+  ///
+  /// Round 31 (stress-edits-2) — an MEP-DERIVED way's load sits at its
+  /// equipment node (re-derived on every MEP sync, Round 22), so moving or
+  /// un-placing it here is REFUSED (status toast, no change) instead of being
+  /// accepted live and silently reverted by the next sync / reopen.
+  void setLoadPos(String panelId, String circuitId, LayoutPos? pos) {
+    if (isMepDerivedWay(panelId, circuitId)) {
+      _refuse(StringKey.mepDerivedWayPositionLocked);
+      return;
+    }
+    _setLoadPos(panelId, circuitId, pos);
+  }
+
+  void _setLoadPos(String panelId, String circuitId, LayoutPos? pos) =>
+      _setGeometry(() => _replaceCircuit(
+            panelId,
+            circuitId,
+            (c) => pos == null
+                ? c.copyWith(clearLoadPos: true)
+                : c.copyWith(loadPos: pos),
+            record: false,
+          ));
 
   /// Add a new way to [panelId] already PLACED on the layout at [pos] — the
   /// drag-a-palette-card-onto-the-sheet-near-a-panel gesture. Same standards
@@ -1789,9 +2805,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// nuking the engineer's work every time the plan changes:
   ///
   ///   * a derived way whose source equipment still exists is REFRESHED in place
-  ///     — only the machine-owned load fields (`flaOverrideA`, `loadW`, `motorKw`)
-  ///     are re-derived; the user-set name / cableType / length / starterType /
-  ///     phases / life-safety are PRESERVED;
+  ///     — the machine-owned fields (`flaOverrideA`, `loadW`, `motorKw`,
+  ///     `loadPos`, `lifeSafety`, and a still-minted cable family) are
+  ///     re-derived ([_refreshedMepWay]); the user-set name / typed cableType /
+  ///     length / starterType / phases are PRESERVED;
   ///   * a derived way whose source equipment is GONE is **PARKED, not deleted**
   ///     (C1) — see below;
   ///   * a user-ADDED way on the panel (no `sourceEquipmentId`) is preserved;
@@ -1831,6 +2848,88 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// undo to a pre-sync snapshot simply predates the synced panel; the reactive
   /// listener re-asserts it on the next equipment change). H1: every pass that
   /// actually CHANGES the board narrates itself once via [_narrateMepSync].
+  /// Round 22 — true when [circuitId] on [panelId] is an MEP-DERIVED way
+  /// (carries a `sourceEquipmentId`): it follows its equipment node and is
+  /// refused by [deleteCircuit] / [mergeCircuit].
+  bool isMepDerivedWay(String panelId, String circuitId) {
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id == circuitId) return c.sourceEquipmentId != null;
+      }
+    }
+    return false;
+  }
+
+  /// Round 42 — the [LoadKind] the CURRENT MEP feed mints for a derived way
+  /// (matched on its source equipment), or null when the feed has none.
+  LoadKind? _mintKindOf(String panelId, String circuitId) {
+    String? source;
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id == circuitId) source = c.sourceEquipmentId;
+      }
+    }
+    if (source == null) return null;
+    for (final f in ref.read(mepAutoFeedCircuitsProvider)) {
+      if (f.sourceEquipmentId == source) return f.loadKind;
+    }
+    return null;
+  }
+
+  /// Round 42 — true when the way solves single-phase: the engine's own
+  /// phase rule ([circuitIsThreePhase], the one `computePanel` uses for a
+  /// final way) on the stored way.
+  bool _solvesSinglePhase(String panelId, String circuitId) {
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id != circuitId) continue;
+        if (c.feedsPanelId != null) return false;
+        return !circuitIsThreePhase(
+          panelSystem: p.system,
+          kind: c.loadKind,
+          loadW: c.loadW,
+          motorKw: c.motorKw,
+          phases: c.phases,
+        );
+      }
+    }
+    return false;
+  }
+
+  /// Round 41 — the current [LoadKind] of a way (null when not found).
+  LoadKind? _circuitKind(String panelId, String circuitId) {
+    for (final p in state.panels) {
+      if (p.id != panelId) continue;
+      for (final c in p.circuits) {
+        if (c.id == circuitId) return c.loadKind;
+      }
+    }
+    return null;
+  }
+
+  /// Round 22 — true when [panelId] is the MEP Equipment board and still holds
+  /// an MEP-derived way (the sync would re-create a deleted board).
+  bool isMepBoardLocked(String panelId) =>
+      panelId == kMepEquipmentPanelId &&
+      state.panels.any((p) =>
+          p.id == panelId &&
+          p.circuits.any((c) => c.sourceEquipmentId != null));
+
+  void _refuse(StringKey key) {
+    final s = MechXStringsData(ref.read(localeProvider));
+    ref.read(statusMessageProvider.notifier).showStatus(s(key));
+  }
+
+  /// Round 22 — re-run [syncMepEquipment] on the CURRENT MEP feed (read
+  /// fresh, so it reflects nodes just moved by a floor / sheet edit) — the
+  /// step that re-derives MEP-derived load positions after
+  /// [remapLayoutPositions] (which deliberately leaves them alone).
+  void resyncMepEquipment() =>
+      syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
+
   void syncMepEquipment(List<ElectricalCircuit> derived) {
     final existing =
         state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
@@ -1843,6 +2942,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     final derivedBySource = <String, ElectricalCircuit>{
       for (final c in derived)
         if (c.sourceEquipmentId != null) c.sourceEquipmentId!: c,
+    };
+
+    // Each source's position in the derived (mint) order — the order a fresh
+    // board would list the ways in.
+    final derivedIndex = <String, int>{
+      for (var i = 0; i < derived.length; i++)
+        if (derived[i].sourceEquipmentId != null)
+          derived[i].sourceEquipmentId!: i,
     };
 
     final merged = <ElectricalCircuit>[];
@@ -1875,11 +2982,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         }
         // Source still present → refresh ONLY the derived load fields, keeping
         // the user's name / cableType / length / starterType / phases / flags.
-        merged.add(c.copyWith(
-          loadW: fresh.loadW,
-          motorKw: fresh.motorKw,
-          flaOverrideA: fresh.flaOverrideA,
-        ));
+        merged.add(_refreshedMepWay(c, fresh));
         refreshed.add(src);
       }
     }
@@ -1887,16 +2990,44 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     // the parked way that same equipment left behind (matched on the
     // deterministic mint id), so a source that comes back does not arrive as a
     // second copy of its own load.
+    // Round 23 — circuit ids already used on ANOTHER board (e.g. a way a
+    // legacy build let the engineer move off the MEP board): minting the same
+    // 'mep-<src>' id again would count the machine twice under one id.
+    final foreignIds = <String>{
+      for (final p in state.panels)
+        if (p.id != kMepEquipmentPanelId)
+          for (final c in p.circuits) c.id,
+    };
     for (final c in derived) {
       final src = c.sourceEquipmentId;
       if (src == null || refreshed.contains(src)) continue;
+      if (foreignIds.contains(c.id)) {
+        refreshed.add(src);
+        continue;
+      }
       final parkedIndex = merged.indexWhere(
           (m) => m.sourceEquipmentId == null && m.id == c.id);
       if (parkedIndex >= 0) {
         merged[parkedIndex] = _readoptedMepWay(merged[parkedIndex], c);
         restored++;
       } else {
-        merged.add(c);
+        // roundtrip-3 — slot the (re-)minted way back at its DERIVED position
+        // (before the first surviving derived way that comes after it in the
+        // derived list), not at the end: a pristine way dropped when its
+        // source went away and re-minted when it returns (a feed-strategy
+        // toggle, or its undo) must land where it was, or the board's way
+        // order / GRUP numbering changes on an action that was reverted.
+        final k = derivedIndex[src]!;
+        final at = merged.indexWhere((m) {
+          final ms = m.sourceEquipmentId;
+          final mi = ms == null ? null : derivedIndex[ms];
+          return mi != null && mi > k;
+        });
+        if (at < 0) {
+          merged.add(c);
+        } else {
+          merged.insert(at, c);
+        }
         added.add(c);
       }
       refreshed.add(src);
@@ -1925,8 +3056,19 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       // fedByCircuitId ride through `copyWith`, and the parent's feeder way
       // lives on ANOTHER panel (untouched in `others`), so a hand-rewired MEP
       // feed survives every re-sync.
-      state = _withProject(
-          panels: [...others, existing.copyWith(circuits: merged)]);
+      // roundtrip-3 — the board keeps its place in the panel list (it used to
+      // be re-appended at the end on every sync).
+      // A value-identical re-sync (the on-open sync of a saved project, an
+      // unchanged feed) writes NOTHING: a phantom write would re-stamp the
+      // document and mark an untouched file dirty.
+      if (!_sameCircuits(existing.circuits, merged)) {
+        state = _withProject(panels: [
+          for (final p in state.panels)
+            p.id == kMepEquipmentPanelId
+                ? existing.copyWith(circuits: merged)
+                : p,
+        ]);
+      }
       _narrateMepSync(
         added: added,
         restored: restored,
@@ -1972,7 +3114,17 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       return;
     }
     final root = roots.single;
-    final feederId = _freshId('c');
+    // Round 22 (edit-fuzz-2-mep-feeder-id-regenerated) — a DETERMINISTIC id
+    // (only one MEP board can exist), so undo → redo of placing equipment
+    // re-creates the identical document and anything keyed by the feeder id
+    // (selection, inspector target, acknowledged issues) still resolves.
+    final taken = {
+      for (final p in others)
+        for (final c in p.circuits) c.id,
+    };
+    final feederId = taken.contains(kMepEquipmentFeederId)
+        ? _freshId('c')
+        : kMepEquipmentFeederId;
     state = _withProject(panels: [
       for (final p in others)
         if (p.id == root.id)
@@ -2096,7 +3248,7 @@ String _fmtKw(double kw) {
 /// (C1). Neutral ASCII, appended at most once — a parked way carries no
 /// `sourceEquipmentId`, so a later sync treats it as a hand-added way and never
 /// touches its name again.
-const String kMepParkedSuffix = ' (source removed)';
+const String kMepParkedSuffix = ElectricalCircuit.kMepParkedNameSuffix;
 
 /// [c] without its `sourceEquipmentId` and with the parked marker on its name —
 /// the way becomes user-owned, exactly as if the engineer had added it.
@@ -2133,6 +3285,13 @@ ElectricalCircuit _parkedMepWay(ElectricalCircuit c) => ElectricalCircuit(
       flaOverrideA: c.flaOverrideA,
       starterType: c.starterType,
       loadPos: c.loadPos,
+      demandFactorUserSet: c.demandFactorUserSet,
+      cosPhiUserSet: c.cosPhiUserSet,
+      phasesUserSet: c.phasesUserSet,
+      loadKindUserSet: c.loadKindUserSet,
+      // Round 25 — an unresolved LEGACY way stays legacy while parked, so the
+      // Round-24 migration still runs when it is re-adopted.
+      legacyProvenance: c.legacyProvenance,
     );
 
 /// A [parked] way re-claimed by the [fresh] derived circuit for the SAME source
@@ -2144,16 +3303,119 @@ ElectricalCircuit _readoptedMepWay(
   ElectricalCircuit parked,
   ElectricalCircuit fresh,
 ) =>
-    parked.copyWith(
-      name: parked.name.endsWith(kMepParkedSuffix)
-          ? parked.name
-              .substring(0, parked.name.length - kMepParkedSuffix.length)
-          : parked.name,
-      sourceEquipmentId: fresh.sourceEquipmentId,
-      loadW: fresh.loadW,
-      motorKw: fresh.motorKw,
-      flaOverrideA: fresh.flaOverrideA,
+    _refreshedMepWay(
+      parked.copyWith(
+        name: parked.name.endsWith(kMepParkedSuffix)
+            ? parked.name
+                .substring(0, parked.name.length - kMepParkedSuffix.length)
+            : parked.name,
+        sourceEquipmentId: fresh.sourceEquipmentId,
+      ),
+      fresh,
     );
+
+/// Round 24 r2 — every load kind the MEP auto-feed has ever minted
+/// (`MepLoadSourceInfo.circuitLoadKind`, incl. the pre-`hvac` `motor` for AC
+/// units): a legacy unflagged way carrying one of these is machine-owned.
+const Set<LoadKind> kMepMintedLoadKinds = {
+  LoadKind.motor,
+  LoadKind.pump,
+  LoadKind.hvac,
+};
+
+/// Round 9 (elec-store-fuzz-1/-2) — refresh an existing derived way [c] from
+/// the [fresh] mint for the same source: EVERY machine-derived field is
+/// re-derived — the load (`loadW` / `motorKw` / `flaOverrideA`), the plan
+/// position `loadPos` (it drives the geometric cable LENGTH: a pump moved on
+/// the plan used to keep its mint-time run, so Vd and the cable sized on a
+/// 1 m run instead of 31 m) and `lifeSafety` (a pump piped to the fire
+/// service AFTER it was minted as a supply pump is re-derived as a fire pump
+/// under the same source id). The cable family follows the mint ('FRC' for a
+/// life-safety way, none otherwise) ONLY while it is still a minted value
+/// (null, or FRC on a way that was life-safety); a family the engineer typed
+/// is kept. Name / length / starter / laying / overrides stay the engineer's.
+ElectricalCircuit _refreshedMepWay(
+  ElectricalCircuit c,
+  ElectricalCircuit fresh,
+) {
+  final mintedCable =
+      c.cableType == null || (c.lifeSafety && c.cableType == 'FRC');
+  // Round 21 / 23 — a machine way's 1 (duty) / 0 (standby) factor is
+  // machine-derived (re-derived when the duty/standby roles change). Round 23
+  // (mep-bridge-5): provenance, not inference — a factor the engineer TYPED
+  // (`demandFactorUserSet`) is never overwritten, even a 0 or 1; a legacy
+  // unflagged value other than 0 / 1 is also kept as the engineer's.
+  final mintedDemand =
+      !c.demandFactorUserSet && _isMintedDemandFactor(c, c.legacyProvenance);
+  // Round 23 (mep-bridge-2) — a component swap on the SAME node keeps the
+  // way id, so the electrical character (phases / load kind / cos phi) is
+  // re-derived from the fresh mint (a phase PIN stays the engineer's), and a
+  // name the app supplied follows the new unit. Round 23 r2 — provenance: a
+  // cos phi / phase count / load kind the engineer TYPED (`*UserSet`) is
+  // never overwritten by the re-derivation.
+  final mintedName = isMepMintedCircuitName(c.name);
+  // Round 24 — MIGRATION of a pre-flag (legacy) file: those builds never
+  // re-derived cos phi / phases / load kind, so an unflagged value that
+  // differs from the fresh mint may have been TYPED. Keep it and record the
+  // provenance (flag it user-set) instead of silently reverting it.
+  //
+  // Round 24 r2 — never INVENT provenance for a value a legacy build itself
+  // minted: a cos phi still at the historical mint ([defaultMotorCosPhi]) or a
+  // load kind the mint has ever produced ([kMepMintedLoadKinds] — e.g. an AC
+  // unit minted `motor` before it became `hvac`) is machine-owned and
+  // re-derives. A phase count has no historical-mint record, so a legacy phase
+  // count differing from today's mint is kept (conservative: never destroys a
+  // typed value, but may lock a since-changed machine pick — documented).
+  final legacy = c.legacyProvenance;
+  final cosUser = c.cosPhiUserSet ||
+      (legacy &&
+          (c.cosPhi - fresh.cosPhi).abs() > 1e-9 &&
+          (c.cosPhi - defaultMotorCosPhi).abs() > 1e-9);
+  final phasesUser = c.phasesUserSet || (legacy && c.phases != fresh.phases);
+  // Round 42 (regression-mep-kind-lock-traps-spare-rekinded-machine) — since
+  // Round 41 the drawn machine OWNS its kind (a kind change on a derived way
+  // is refused), so a kind left on a derived / re-adopted way — re-kinded to
+  // Spare while parked, or saved by an r40 build with `loadKindUserSet` —
+  // is MIGRATED back to the mint: the r40 provenance flag is superseded, and
+  // the Round-24 legacy keep no longer applies to the kind (a stored Spare
+  // zeroed a drawn 15 kW pump's demand for good, with every re-kind refused).
+  final demandUser = c.demandFactorUserSet || (legacy && !mintedDemand);
+  return c.copyWith(
+    name: mintedName ? fresh.name : null,
+    phases: phasesUser ? null : fresh.phases,
+    clearPhases: !phasesUser && fresh.phases == null,
+    loadKind: fresh.loadKind,
+    cosPhi: cosUser ? null : fresh.cosPhi,
+    demandFactor: mintedDemand ? fresh.demandFactor : null,
+    cosPhiUserSet: cosUser,
+    phasesUserSet: phasesUser,
+    loadKindUserSet: false,
+    demandFactorUserSet: demandUser,
+    legacyProvenance: false,
+    loadW: fresh.loadW,
+    motorKw: fresh.motorKw,
+    flaOverrideA: fresh.flaOverrideA,
+    clearFlaOverrideA: fresh.flaOverrideA == null,
+    lifeSafety: fresh.lifeSafety,
+    loadPos: fresh.loadPos,
+    clearLoadPos: fresh.loadPos == null,
+    cableType: mintedCable ? fresh.cableType : null,
+    clearCableType: mintedCable && fresh.cableType == null,
+  );
+}
+
+/// Round 25 — whether [c]'s unflagged demand factor is one the MEP feed
+/// itself could have minted. Today's mint produces 1 (duty) or 0 (standby)
+/// on any way, but before round 23 the feed minted 0 ONLY for a life-safety
+/// standby fire pump (Round 21): in a [legacy] (pre-flag) file a 0 on a
+/// NON-life-safety way can only have been TYPED (the manual standby
+/// workaround) — it is the engineer's, kept and flagged, never reverted to 1.
+bool _isMintedDemandFactor(ElectricalCircuit c, bool legacy) {
+  final isOne = (c.demandFactor - 1).abs() < 1e-9;
+  final isZero = c.demandFactor.abs() < 1e-9;
+  if (legacy && !c.lifeSafety) return isOne;
+  return isOne || isZero;
+}
 
 /// True when [c] is still EXACTLY as the MEP auto-feed minted it — the engineer
 /// has not renamed it and has set no override of any kind — so re-minting it
@@ -2166,7 +3428,8 @@ ElectricalCircuit _readoptedMepWay(
 ///   * `role`/`points`/`cosPhi`/`isLighting`/`demandFactor`/`busbarBreakBefore`
 ///     at the mint values (branch / 1 / [defaultMotorCosPhi] / false / 1 / false);
 ///   * `length` still the unmeasured-stub default the mint uses;
-///   * NO cableType / laying / cableOverrideMm2 / breakerOverrideA /
+///   * NO cableType (bar the FRC a life-safety way is minted on) / laying /
+///     cableOverrideMm2 / breakerOverrideA /
 ///     groupingCountOverride / phaseOverride / starterType / feedsPanelId.
 ///
 /// `loadW` / `motorKw` / `flaOverrideA` / `phases` / `lifeSafety` / `loadPos` are
@@ -2174,15 +3437,25 @@ ElectricalCircuit _readoptedMepWay(
 /// of the test. Anything that fails ANY of the above is parked, never dropped —
 /// the check is deliberately conservative in the engineer's favour.
 bool _isPristineDerivedWay(ElectricalCircuit c) =>
-    mepMintedCircuitNames.contains(c.name) &&
+    isMepMintedCircuitName(c.name) &&
     c.role == CircuitRole.branch &&
     c.points == 1 &&
     (c.cosPhi - defaultMotorCosPhi).abs() < 1e-9 &&
     !c.isLighting &&
-    (c.demandFactor - 1).abs() < 1e-9 &&
+    // Round 21 / 23 — a standby pump is MINTED at demand factor 0; a factor
+    // the engineer typed (even 0 / 1) makes the way theirs (parked, never
+    // dropped).
+    !c.demandFactorUserSet &&
+    _isMintedDemandFactor(c, c.legacyProvenance) &&
+    // Round 23 r2 — a typed cos phi / phases / load kind is the engineer's.
+    !c.cosPhiUserSet &&
+    !c.phasesUserSet &&
+    !c.loadKindUserSet &&
     !c.busbarBreakBefore &&
     (c.length.meters - kDefaultCircuitLength.meters).abs() < 1e-9 &&
-    c.cableType == null &&
+    // A life-safety way is MINTED on FRC (audit r8 coupling-5), so FRC there
+    // is the mint value, not an engineer override.
+    (c.cableType == null || (c.lifeSafety && c.cableType == 'FRC')) &&
     c.laying == null &&
     c.cableOverrideMm2 == null &&
     c.breakerOverrideA == null &&
@@ -2351,4 +3624,57 @@ ElectricalProject sampleElectricalProject() {
     earthingSystem: EarthingSystem.tnCs,
     panels: [mdp, lp1],
   );
+}
+
+/// Smallest run length the circuit inspector accepts (m). Round 11.
+const double kMinCircuitRunLengthM = 0.1;
+
+/// Smallest cos phi the circuit inspector accepts. Round 11 — cos phi → 0 is an
+/// unbounded current; 0.1 is far below any real load's power factor.
+const double kMinCircuitCosPhi = 0.1;
+
+/// Pure gate for [ElectricalProjectController.setCircuit]'s numeric fields
+/// (Round 11). Null means "keep" and always passes. Rejected: any non-finite
+/// value; a NEGATIVE load / motor kW / demand factor (zero stays legal — an
+/// excluded or not-yet-specified load); cos phi outside (0, 1] (cos phi 0 is an
+/// unbounded current that `loadCurrent` silently zeroed); a NON-POSITIVE run
+/// length (a zero / negative length makes Vd% trivially pass); and a
+/// non-positive breaker / cable override.
+bool isValidCircuitEdit({
+  double? loadW,
+  double? motorKw,
+  double? cosPhi,
+  double? demandFactor,
+  Length? length,
+  Current? breakerOverrideA,
+  double? cableOverrideMm2,
+}) {
+  bool nonNeg(double? v) => v == null || (v.isFinite && v >= 0);
+  bool pos(double? v) => v == null || (v.isFinite && v > 0);
+  return nonNeg(loadW) &&
+      nonNeg(motorKw) &&
+      nonNeg(demandFactor) &&
+      (cosPhi == null || (cosPhi.isFinite && cosPhi > 0 && cosPhi <= 1)) &&
+      pos(length?.meters) &&
+      pos(breakerOverrideA?.amperes) &&
+      pos(cableOverrideMm2);
+}
+
+/// Round 39 r3 follow-up — value equality of two way lists (the MEP re-sync's
+/// no-op test). Identical lists short-circuit; otherwise compared on their
+/// serialized form, which is the document's own notion of equality.
+bool _sameCircuits(List<ElectricalCircuit> a, List<ElectricalCircuit> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (identical(a[i], b[i])) continue;
+    if (jsonEncode(a[i].toJson()) != jsonEncode(b[i].toJson())) return false;
+  }
+  return true;
+}
+
+/// The pre-gesture project a lazy gesture undo step snapshots
+/// ([ElectricalProjectController.beginUndoableGesture]).
+class _GestureSnapshot {
+  ElectricalProject? project;
 }

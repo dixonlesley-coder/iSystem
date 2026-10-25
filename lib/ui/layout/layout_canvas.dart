@@ -22,15 +22,24 @@ library;
 import 'dart:async';
 
 import 'package:flutter/gestures.dart'
-    show kMiddleMouseButton, PointerScrollEvent, PointerSignalEvent;
+    show
+        HitTestResult,
+        kDoubleTapTimeout,
+        kMiddleMouseButton,
+        PointerHoverEvent,
+        PointerScrollEvent,
+        PointerSignalEvent;
+import 'package:flutter/rendering.dart' show RenderEditable;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
-import 'package:mechx_engine/network/network.dart' show Network;
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfBounds;
+import 'package:mechx_engine/network/network.dart' show EdgeKind, Network;
 
 import '../../data/app_settings.dart';
 import '../../store/annotation_store.dart';
+import '../../store/base_point_command_store.dart';
 import '../../store/app_state.dart';
 import '../../store/calibration_store.dart';
 import '../../store/electrical_focus_store.dart';
@@ -45,9 +54,11 @@ import '../../store/selection_scope.dart';
 import '../../store/selection_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/sheets_store.dart';
+import '../../store/sizing_store.dart' show sizingProvider;
 import '../../store/smart_input_store.dart';
 import '../../store/snap_settings_store.dart';
 import '../../store/solve_store.dart';
+import '../canvas/base_point_overlay.dart';
 import '../canvas/calibration_overlay.dart';
 import '../canvas/canvas_grid.dart' show calibratedGridWorldStep;
 import '../canvas/canvas_minimap.dart';
@@ -56,6 +67,9 @@ import '../canvas/canvas_view.dart';
 import '../canvas/text_entry_guard.dart';
 import '../canvas/drawing_overlay.dart';
 import '../canvas/drop_overlay.dart';
+import '../canvas/floor_index.dart';
+import '../canvas/edge_context_menu.dart'
+    show matchPropertiesArmedProvider, trimExtendArmedProvider;
 import '../canvas/heatmap_layer.dart';
 import '../canvas/measurement_overlay.dart';
 import '../canvas/mode_pill.dart';
@@ -66,12 +80,14 @@ import '../canvas/tank_overlay.dart';
 import '../canvas/room_overlay.dart';
 import '../canvas/network_layer.dart';
 import '../canvas/selection_overlay.dart';
+import '../canvas/service_style.dart' show serviceLabel;
 import '../canvas/sheet_canvas.dart' show sheetContentBuilderProvider;
 import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
 import '../electrical/electrical_inspector.dart';
 // The panel/circuit menu ACTION helpers, deliberately shared with the standalone
 // electrical workspace so the Layout menus can never drift from it.
+import '../format/scale_format.dart' show formatScaleShort;
 import '../electrical/electrical_view.dart'
     show
         feedingPanelLabel,
@@ -92,6 +108,18 @@ import 'electrical_layer.dart';
 import 'first_run_guide.dart';
 import 'layer_switcher.dart';
 
+/// The Layout canvas's per-sheet content cache key — every field the sheet's
+/// content widget renders from (Round 24 r2: a DXF -> DXF replace changes the
+/// key, so the new plan paints without a remount).
+@visibleForTesting
+String layoutContentCacheKey(Sheet sheet) {
+  String f(DxfBounds? b) =>
+      b == null ? '-' : '${b.minX},${b.minY},${b.maxX},${b.maxY}';
+  return '${sheet.id}:${sheet.pageIndex}:${sheet.pdfPath}:${sheet.dxfPath}:'
+      '${sheet.sizePx.width}x${sheet.sizePx.height}:'
+      '${f(sheet.dxfFrame)}:${f(sheet.dxfLiveFrameAck)}';
+}
+
 /// The unified Layout workspace: a top bar (layer switcher + sheet/floor
 /// selector) over the shared-substrate canvas, with the electrical edit overlays
 /// hosted on top.
@@ -102,13 +130,12 @@ class LayoutCanvas extends ConsumerStatefulWidget {
   ConsumerState<LayoutCanvas> createState() => _LayoutCanvasState();
 }
 
-/// The canvas tools/modes a single-key shortcut can arm (C3), so Enter can
-/// repeat the last one after a run finishes (the CAD "repeat last command").
-enum _CanvasTool { run, riser, measure, tank, room }
-
 class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
-  /// The last tool/mode armed via a shortcut, re-armed by Enter when idle (C3).
-  _CanvasTool? _lastTool;
+  /// H1 — the smart input bar's handle: the key handler forwards the drafting
+  /// characters to it while a run is pending (and asks it whether anything is
+  /// typed before treating Enter / Space / Backspace as RUN actions).
+  final GlobalKey<SmartInputBarState> _smartBarKey =
+      GlobalKey<SmartInputBarState>();
 
   /// Whether the persistent "(?) Canvas guide" popover is open. Transient UI
   /// chrome — never persisted; the (?) button is a small edge affordance, so the
@@ -132,6 +159,12 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   final Map<String, GlobalKey<CanvasViewState>> _canvasKeys = {};
   GlobalKey<CanvasViewState> canvasKeyFor(String id) =>
       _canvasKeys.putIfAbsent(id, () => GlobalKey<CanvasViewState>());
+
+  /// A STABLE per-sheet 'Fit view' callback (P3: the selection overlay caches
+  /// its layers and only rebuilds them when this identity changes).
+  final Map<String, VoidCallback> _fitViewFns = {};
+  VoidCallback fitViewFor(String id) => _fitViewFns.putIfAbsent(
+      id, () => () => canvasKeyFor(id).currentState?.fitView());
 
   /// The live canvas viewport (transform + size) the [CanvasView] publishes,
   /// listened to by the on-canvas minimap (G1). A single sink for the current
@@ -189,20 +222,224 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   /// edit overlays).
   bool _spaceHeld = false;
 
-  void midPanDown(PointerDownEvent e) {
+  /// L3 — a Space press that is still a TAP (no key-repeat yet, no pointer
+  /// press while held) while a run is pending: its key-up FINISHES the run
+  /// (M2). Holding Space (auto-repeat) or dragging with it down pans instead.
+  bool _spaceTap = false;
+
+  void midPanDown(PointerDownEvent e, String sheetId) {
+    // L3 — a pointer press while Space is held makes it a pan, not a tap.
+    _spaceTap = false;
+    // H5 — every press on the canvas stack hands the keyboard back to the
+    // canvas (the node handles / grips above the CanvasView swallow the
+    // pointer before its own focus grab), so Delete / tool keys act on the
+    // drawing after clicking a node — EXCEPT a press inside a text field on
+    // the canvas (the smart input bar, a run-length edit), which keeps it.
+    if (!_pressHitsTextField(e)) {
+      canvasKeyFor(sheetId).currentState?.requestKeyboardFocus();
+    }
     if (e.buttons & kMiddleMouseButton != 0) {
+      // Item 5 — a DOUBLE middle-click is AutoCAD's ZOOM EXTENTS: frame the
+      // drawn network on this sheet/floor (the whole sheet when none). The
+      // second press does not start a pan (a jitter would cancel the ease).
+      final now = DateTime.now();
+      final last = _lastMidDown;
+      if (last != null &&
+          now.difference(last.$1) <= kDoubleTapTimeout &&
+          (e.localPosition - last.$2).distance <= _kMidDoubleClickSlop) {
+        _lastMidDown = null;
+        _midPanning = false;
+        zoomExtents(sheetId);
+        return;
+      }
+      _lastMidDown = (now, e.localPosition);
       _midPanning = true;
       _midLast = e.localPosition;
     }
   }
 
+  /// Item 6 — record the cursor's world point on [sheetId] for Shift+Space.
+  void publishPickCursor(PointerHoverEvent e, String sheetId, int floorIndex) {
+    final t = ref.read(sheetViewportProvider(sheetId)) ??
+        const ViewportTransform();
+    ref.read(pickCursorProvider.notifier).set((
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      world: t.screenToWorld(e.localPosition),
+    ));
+  }
+
+  /// The last middle-button press (time + place), for the double-middle-click.
+  (DateTime, Offset)? _lastMidDown;
+
+  /// Item 5 — ZOOM EXTENTS: ease the canvas to the bounds of the drawn
+  /// network on [sheetId]'s floor (every node there, incl. riser ends), or
+  /// fit the whole sheet when nothing is drawn on it. Reduced motion jumps.
+  void zoomExtents(String sheetId) {
+    final canvas = canvasKeyFor(sheetId).currentState;
+    if (canvas == null) return;
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    final floor =
+        ref.read(sheetsContentProvider).floorFor(sheetId, levelCount);
+    final nodes = floorIndexOf(
+            ref.read(networkControllerProvider).network, sheetId, floor)
+        .nodes;
+    if (nodes.isEmpty) {
+      canvas.fitView();
+      return;
+    }
+    var minX = double.infinity, minY = double.infinity;
+    var maxX = -double.infinity, maxY = -double.infinity;
+    for (final n in nodes) {
+      if (n.x < minX) minX = n.x;
+      if (n.y < minY) minY = n.y;
+      if (n.x > maxX) maxX = n.x;
+      if (n.y > maxY) maxY = n.y;
+    }
+    canvas.fitWorldRect(Rect.fromLTRB(minX, minY, maxX, maxY));
+  }
+
+  /// Item 6 — the last Shift+Space cycle (where, which sheet, which index), so
+  /// repeated presses at the same spot walk on instead of restarting.
+  ({String sheetId, Offset world, int index})? _cycle;
+
+  /// Item 6 — Shift+Space: select the NEXT element under the cursor (the plain
+  /// click's pick is candidate 0, so the first press selects candidate 1),
+  /// wrapping; the hover halo follows it and the status pill says 'k of n'.
+  /// Repeated presses with the cursor still (within 4 screen px) keep walking.
+  void _cycleSelectionUnderCursor() {
+    if (!ref.read(activeDisciplineProvider).isMechanical) return;
+    if (!_isIdle() || ref.read(basePointCommandProvider) != null) return;
+    final cursor = ref.read(pickCursorProvider);
+    final sheet = ref.read(sheetsContentProvider).current;
+    final status = ref.read(statusMessageProvider.notifier);
+    if (cursor == null || sheet == null || cursor.sheetId != sheet.id) {
+      status.showStatus('Point at overlapping elements, then Shift+Space');
+      return;
+    }
+    final transform = ref.read(sheetViewportProvider(sheet.id)) ??
+        const ViewportTransform();
+    final candidates = pickCandidatesAt(
+      ref.read(networkControllerProvider).network,
+      transform,
+      cursor.world,
+      cursor.sheetId,
+      cursor.floorIndex,
+      sizing: ref.read(sizingProvider),
+      metersPerPixel: ref
+          .read(projectControllerProvider)
+          .calibrationFor(sheet.id)
+          ?.metersPerPixel,
+      inertServices: ref.read(inertServicesProvider),
+    );
+    if (candidates.length < 2) {
+      status.showStatus(candidates.isEmpty
+          ? 'Nothing under the cursor'
+          : 'Only one element under the cursor');
+      return;
+    }
+    final prev = _cycle;
+    final same = prev != null &&
+        prev.sheetId == sheet.id &&
+        (prev.world - cursor.world).distance * transform.scale <= 4;
+    final index = same ? (prev.index + 1) % candidates.length : 1;
+    _cycle = (sheetId: sheet.id, world: cursor.world, index: index);
+    final pick = candidates[index];
+    final sel = ref.read(selectionProvider.notifier);
+    if (pick.nodeId != null) {
+      sel.selectNode(pick.nodeId!);
+    } else {
+      sel.selectEdge(pick.edgeId!);
+    }
+    ref.read(hoverTargetProvider.notifier).set(pick);
+    status.showStatus('${index + 1} of ${candidates.length} under the cursor: '
+        '${_pickLabel(pick)}');
+  }
+
+  /// A short name for a cycled pick ('cold water run', 'node', 'pump').
+  String _pickLabel(HoverTarget pick) {
+    final net = ref.read(networkControllerProvider).network;
+    if (pick.edgeId != null) {
+      final e = net.edgeById(pick.edgeId!);
+      if (e == null) return 'run';
+      return '${serviceLabel(e.service).toLowerCase()} '
+          '${e.kind == EdgeKind.riser ? 'riser' : 'run'}';
+    }
+    final n = net.nodeById(pick.nodeId!);
+    final c = n?.component;
+    return c == null
+        ? 'node'
+        : c.name.replaceAllMapped(
+            RegExp('[A-Z]'), (m) => ' ${m[0]!.toLowerCase()}');
+  }
+
+  /// Whether [e] lands on an editable text field (its render object is on the
+  /// hit path).
+  bool _pressHitsTextField(PointerDownEvent e) {
+    final result = HitTestResult();
+    WidgetsBinding.instance.hitTestInView(result, e.position, e.viewId);
+    for (final entry in result.path) {
+      if (entry.target is RenderEditable) return true;
+    }
+    return false;
+  }
+
+  /// Hand the keyboard to the current sheet's canvas (after a keyboard action
+  /// that unmounts the focused smart input bar — Esc / Enter / Space finishing
+  /// a run — so the next key still reaches this handler).
+  void _focusCanvas() {
+    final id = ref.read(sheetsControllerProvider).current?.id;
+    if (id == null) return;
+    canvasKeyFor(id).currentState?.requestKeyboardFocus();
+  }
+
+  /// M2 — end the pending run chain (Esc semantics: the tool stays armed).
+  void _finishRunChain() {
+    ref.read(networkControllerProvider.notifier).cancelPending();
+    ref.read(orthoRouteKindProvider.notifier).reset();
+    _focusCanvas();
+  }
+
+  /// H4 — Backspace mid-run: undo the chain's LAST placed point. A laid
+  /// segment is reverted through the global timeline (the C8 path keeps the
+  /// rubber band, re-anchored at the previous point); with only the start
+  /// point clicked, the start itself is dropped. Never touches a selection.
+  void _undoLastRunPoint() {
+    final net = ref.read(networkControllerProvider.notifier);
+    final history = ref.read(historyProvider.notifier);
+    if (net.chainSegmentCount > 0 &&
+        history.nextUndoDomain == UndoDomain.network) {
+      history.undo();
+      return;
+    }
+    _finishRunChain();
+  }
+
+  /// The drafting characters the smart input bar accepts from the canvas
+  /// (H1): a length (digits, decimal / thousands separators, a sign) and —
+  /// M9 — the AutoCAD coordinate marks: `@` (relative), `<` (polar angle) and
+  /// `;` (the locale-safe x;y separator).
+  static final RegExp _smartInputChar = RegExp(r'^[0-9.,\-@<;]$');
+
   void midPanMove(PointerMoveEvent e, String sheetId) {
     if (!_midPanning) return;
+    // A middle DRAG is a pan, never the first click of a double-click.
+    final last = _lastMidDown;
+    if (last != null &&
+        (e.localPosition - last.$2).distance > _kMidDoubleClickSlop) {
+      _lastMidDown = null;
+    }
     canvasKeyFor(sheetId).currentState?.panByScreen(e.localPosition - _midLast);
     _midLast = e.localPosition;
   }
 
   void midPanEnd() => _midPanning = false;
+
+  /// A mouse double-click's travel allowance — a short scrubbing PAN (two
+  /// quick middle drags) must never read as zoom-extents (review: the 100-px
+  /// touch double-tap slop made it fire). Any press that moved past this is a
+  /// drag and can't be the first click either (`midPanMove` clears it).
+  static const double _kMidDoubleClickSlop = 6;
 
   /// Mouse-wheel zoom, handled here (above the overlays) so the wheel signal
   /// isn't swallowed by an opaque overlay before it reaches the canvas.
@@ -219,9 +456,18 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   /// page — which flashed its white placeholder while it re-resolved, so any
   /// pan/zoom/edit blanked the drawing. Returning the same instance lets the
   /// framework skip the PDF subtree entirely, so it stays put.
+  ///
+  /// Round 24 (r2) — keyed on the sheet's whole SOURCE identity (PDF path +
+  /// page, DXF path, content size, import frame and acknowledged live frame),
+  /// so a DXF -> DXF 'Replace plan...' repaints the new file / Sheet instead
+  /// of the cached old one; a superseded entry for the same sheet is evicted.
   final Map<String, Widget> _contentCache = {};
+  final Map<String, String> _contentKeyBySheet = {};
   Widget contentFor(Sheet sheet) {
-    final key = '${sheet.id}:${sheet.pageIndex}:${sheet.pdfPath}';
+    final key = layoutContentCacheKey(sheet);
+    final prev = _contentKeyBySheet[sheet.id];
+    if (prev != null && prev != key) _contentCache.remove(prev);
+    _contentKeyBySheet[sheet.id] = key;
     return _contentCache.putIfAbsent(
         key, () => ref.read(sheetContentBuilderProvider)(context, sheet));
   }
@@ -229,6 +475,21 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    // M3 — the annotation modes armed from ANY path (Draw panel buttons,
+    // palette, keys) are recorded as the tool Enter repeats; the run/riser
+    // tools record themselves in `NetworkController.setTool`.
+    void recordMode(bool? prev, bool next, CanvasToolKind kind) {
+      if (next && prev != true) {
+        ref.read(lastCanvasToolProvider.notifier).record(kind);
+      }
+    }
+
+    ref.listen<bool>(measureModeProvider,
+        (p, n) => recordMode(p, n, CanvasToolKind.measure));
+    ref.listen<bool>(
+        tankModeProvider, (p, n) => recordMode(p, n, CanvasToolKind.tank));
+    ref.listen<bool>(
+        roomModeProvider, (p, n) => recordMode(p, n, CanvasToolKind.room));
     return Focus(
       canRequestFocus: false,
       onKeyEvent: (_, event) => _onKey(event),
@@ -393,7 +654,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           // A placed load can be handed back to its manual length — the SAME
           // shared action the standalone electrical workspace's menu and the
           // inline circuit inspector run (one undo step + one toast).
-          hasLoadPos: circuit?.loadPos != null,
+          // Round 31 — an MEP-derived load follows its equipment: the
+          // 'Remove from layout' row is hidden for it.
+          hasLoadPos: circuit?.loadPos != null &&
+              circuit?.sourceEquipmentId == null,
           onUnplace: () => unplaceCircuitLoad(ref, context, t.panelId, t.circuitId),
           onShowInSingleLine: () =>
               _showInSingleLine(t.panelId, circuitId: t.circuitId),
@@ -460,20 +724,67 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     // is key-down only). Space is left alone while a text-entry surface could
     // legitimately want it (the smart input bar while drawing, the calibration
     // length field, the electrical circuit/panel editors).
+    final bar = _smartBarKey.currentState;
+    final smartBarFocused = bar?.hasKeyboardFocus ?? false;
+    // A text field OTHER than the smart input bar owns the keyboard.
+    final otherFieldFocused = isTextEntryFocused() && !smartBarFocused;
+    final runPending = () {
+      final d = ref.read(networkControllerProvider);
+      return d.tool == DrawTool.drawRun &&
+          d.pendingPoint != null &&
+          ref.read(activeDisciplineProvider).isMechanical;
+    }();
+    // The smart bar's live mode (run / base-point target / angle / stretch):
+    // non-null exactly while the bar has something to type for.
+    final barMode =
+        ref.read(activeDisciplineProvider).isMechanical ? bar?.mode : null;
+    // Item 6 — Shift+Space cycles the pick among the elements under the
+    // cursor (Select tool, nothing being typed). Checked before the pan latch
+    // so it never engages hold-Space pan.
+    if (event.logicalKey == LogicalKeyboardKey.space &&
+        HardwareKeyboard.instance.isShiftPressed &&
+        barMode == null &&
+        !otherFieldFocused &&
+        !_spaceHeld) {
+      if (event is KeyDownEvent) _cycleSelectionUnderCursor();
+      return KeyEventResult.handled;
+    }
     if (event.logicalKey == LogicalKeyboardKey.space) {
-      if (event is KeyUpEvent) {
-        if (!_spaceHeld) return KeyEventResult.ignored;
+      // The release of a held Space ALWAYS clears the pan latch first — even
+      // when a length was typed while it was held (else the draw overlay stayed
+      // pointer-dead until the next Space press).
+      if (event is KeyUpEvent && _spaceHeld) {
+        final tap = _spaceTap;
+        _spaceTap = false;
         setState(() => _spaceHeld = false);
+        // M2/L3 — a TAP of Space (no repeat, no drag) finishes the run, but
+        // never discards a typed length.
+        if (tap && runPending && (bar == null || bar.isEmpty)) {
+          _finishRunChain();
+        }
         return KeyEventResult.handled;
       }
+      // A typed length takes its separating space ("3000 90").
+      if (barMode != null && bar != null && !bar.isEmpty && !otherFieldFocused) {
+        if (event is KeyDownEvent) bar.insertText(' ');
+        return KeyEventResult.handled;
+      }
+      if (event is KeyUpEvent) return KeyEventResult.ignored;
       // D3: Space still PANS while placing the two calibration points; it is
       // blocked ONLY in the distance-entry phase, where the "Known distance"
       // text field is focused and could legitimately want the space bar.
+      // L3 — drawing no longer blocks it: hold-Space pans mid-run (the draw
+      // overlay stands down while held), a tap finishes the run.
       final textEntryPossible =
           ref.read(electricalInspectorTargetProvider) != null ||
           ref.read(calibrationControllerProvider).isEnteringDistance ||
-          ref.read(networkControllerProvider).isDrawing;
+          otherFieldFocused;
       if (textEntryPossible) return KeyEventResult.ignored;
+      if (event is KeyDownEvent) {
+        _spaceTap = runPending;
+      } else {
+        _spaceTap = false; // auto-repeat: the key is HELD — a pan
+      }
       if (!_spaceHeld) setState(() => _spaceHeld = true);
       return KeyEventResult.handled; // KeyDownEvent + KeyRepeatEvent
     }
@@ -507,6 +818,126 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       }
     }
 
+    // M5 — F8 ortho / F3 snap-to-plan / F9 grid snap (the AutoCAD function
+    // keys). Not text keys, so they work with the smart input bar focused.
+    if (!mod && ref.read(activeDisciplineProvider).isMechanical) {
+      String? toggled;
+      if (key == LogicalKeyboardKey.f8) {
+        ref.read(orthoProvider.notifier).toggle();
+        toggled = 'Ortho ${ref.read(orthoProvider) ? 'on' : 'off'}';
+      } else if (key == LogicalKeyboardKey.f3) {
+        ref.read(snapToPlanProvider.notifier).toggle();
+        toggled =
+            'Snap to plan ${ref.read(snapToPlanProvider) ? 'on' : 'off'}';
+      } else if (key == LogicalKeyboardKey.f9) {
+        ref.read(gridSnapProvider.notifier).toggle();
+        toggled = 'Grid snap ${ref.read(gridSnapProvider) ? 'on' : 'off'}';
+      }
+      if (toggled != null) {
+        ref.read(statusMessageProvider.notifier).showStatus(toggled);
+        return KeyEventResult.handled;
+      }
+    }
+
+    // M8 / item 2 — keys while a base-point command is armed or a run end is
+    // being stretched by its grip: the drafting characters type the target /
+    // angle / length into the smart bar (and are CONSUMED while the base is
+    // still being picked, so a digit never re-picks the service); Enter
+    // commits a typed entry or, with nothing typed, ENDS the command (AutoCAD
+    // COPY-multiple's exit); Backspace edits the typed text; Esc clears it,
+    // then backs out of the command; Delete is never destructive mid-command.
+    final cmd = ref.read(basePointCommandProvider);
+    final stretching = barMode == SmartBarMode.stretch;
+    if (!mod &&
+        !otherFieldFocused &&
+        (cmd != null || stretching) &&
+        ref.read(activeDisciplineProvider).isMechanical) {
+      final typing = barMode != null && barMode != SmartBarMode.run;
+      final ch = event.character;
+      if (ch != null && _smartInputChar.hasMatch(ch)) {
+        if (typing && bar != null) bar.insertText(ch);
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.enter ||
+          key == LogicalKeyboardKey.numpadEnter) {
+        if (typing && bar != null && !bar.isEmpty) {
+          bar.commit();
+        } else if (cmd != null && !stretching) {
+          ref.read(basePointCommandProvider.notifier).cancel();
+        }
+        _focusCanvas();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.backspace) {
+        if (bar != null && !bar.isEmpty) {
+          if (smartBarFocused) return KeyEventResult.ignored; // the field's
+          bar.deleteBackward();
+        }
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.escape) {
+        if (bar != null && !bar.isEmpty) {
+          bar.clear();
+        } else if (!stretching) {
+          ref.read(basePointCommandProvider.notifier).cancel();
+        }
+        _focusCanvas();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.delete) {
+        if (smartBarFocused && bar != null && !bar.isEmpty) {
+          return KeyEventResult.ignored; // forward-delete inside the field
+        }
+        return KeyEventResult.handled;
+      }
+    }
+
+    // H1/H4/M2 — keys while a DRAW tool is armed (mechanical layer), routed
+    // before the text-field guard because the smart input bar is the run's
+    // own field: drafting characters type the length (never re-pick the
+    // service and drop the chain); Enter places a typed length or FINISHES
+    // the run; Backspace edits the typed text or undoes the last placed
+    // point; Delete never deletes anything while drafting.
+    final drawTool = ref.read(networkControllerProvider).tool;
+    if (!mod &&
+        !otherFieldFocused &&
+        drawTool != DrawTool.select &&
+        ref.read(activeDisciplineProvider).isMechanical) {
+      final ch = event.character;
+      if (runPending &&
+          bar != null &&
+          ch != null &&
+          _smartInputChar.hasMatch(ch)) {
+        bar.insertText(ch);
+        return KeyEventResult.handled;
+      }
+      if (runPending &&
+          (key == LogicalKeyboardKey.enter ||
+              key == LogicalKeyboardKey.numpadEnter)) {
+        if (bar != null && !bar.isEmpty) {
+          bar.commit();
+        } else {
+          _finishRunChain();
+        }
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.backspace) {
+        if (bar != null && !bar.isEmpty && runPending) {
+          if (smartBarFocused) return KeyEventResult.ignored; // the field's
+          bar.deleteBackward();
+        } else if (runPending) {
+          _undoLastRunPoint();
+        }
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.delete) {
+        if (smartBarFocused && bar != null && !bar.isEmpty) {
+          return KeyEventResult.ignored; // forward-delete inside the field
+        }
+        return KeyEventResult.handled; // nothing destructive mid-draft
+      }
+    }
+
     // A focused text field owns its editing keys (B4): Backspace/Delete and
     // the select-all/clipboard/undo combos must edit the FIELD, not the
     // drawing. This ancestor Focus sits BELOW the app-root
@@ -526,15 +957,27 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
       return KeyEventResult.ignored;
     }
 
-    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
-      ref.read(historyProvider.notifier).undo();
+    // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
+    // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
+    // (AppShell._onHardwareKey). That handler's return value does NOT stop
+    // the framework delivering the same key down the focus chain, so acting
+    // here too undid / redid TWO steps per press. Consume the combo without
+    // acting so nothing further down this handler reacts to it.
+    if (mod &&
+        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
       return KeyEventResult.handled;
     }
-    if (mod &&
-        ((key == LogicalKeyboardKey.keyZ && shift) ||
-            key == LogicalKeyboardKey.keyY)) {
-      ref.read(historyProvider.notifier).redo();
-      return KeyEventResult.handled;
+
+    // E5 — the electrical LAYER's own keys (Ctrl/Cmd+A selects every marker
+    // on the sheet, Delete/Backspace removes a MULTI-selection in one undo
+    // step); a single selection falls through to the existing branches.
+    if (!ref.read(activeDisciplineProvider).isMechanical) {
+      final at = _currentSheetFloor();
+      if (at != null &&
+          handleElectricalLayerKey(ref, event,
+              sheetId: at.sheetId, floorIndex: at.floorIndex)) {
+        return KeyEventResult.handled;
+      }
     }
 
     // Copy / paste / delete only act on the mechanical selection (the active
@@ -655,7 +1098,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     // C3: single-key tool + service shortcuts — bare keys (no Ctrl/Meta),
     // guarded so a focused text field (calibration / smart input / inspector)
     // types normally. F fits the canvas; the rest are mechanical.
-    if (!mod && !isTextEntryFocused()) {
+    if (!mod && !otherFieldFocused) {
       // F2 selection transforms — Shift+R / Shift+M (Alt reverses the
       // direction/axis), checked BEFORE the bare-key tool shortcuts so plain
       // R/M keep arming the Run/Measure tools. One undo step per press; the
@@ -681,6 +1124,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         }
         return KeyEventResult.handled;
       }
+      // M8 — G / C / T arm the base-point Move / Copy / Rotate on the
+      // selection (AutoCAD MOVE / COPY / ROTATE; M and R already arm the
+      // Measure and Run tools). Only from the Select tool (or to restart a
+      // live command); with nothing in scope selected the status pill says so.
+      if (activeMechanical &&
+          !shifted &&
+          (key == LogicalKeyboardKey.keyG ||
+              key == LogicalKeyboardKey.keyC ||
+              key == LogicalKeyboardKey.keyT) &&
+          (_isIdle() || ref.read(basePointCommandProvider) != null)) {
+        startBasePointCommand(
+            ref,
+            key == LogicalKeyboardKey.keyG
+                ? BasePointCommandKind.move
+                : key == LogicalKeyboardKey.keyC
+                    ? BasePointCommandKind.copy
+                    : BasePointCommandKind.rotate);
+        return KeyEventResult.handled;
+      }
       // F fits via the shared fit-request seam so it works even when the
       // CanvasView itself doesn't hold focus (W3-P5; the command palette's Fit
       // action bumps the same provider).
@@ -698,36 +1160,39 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.keyR) {
-          _armTool(_CanvasTool.run);
+          _armTool(CanvasToolKind.run);
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.keyE) {
-          _armTool(_CanvasTool.riser);
+          _armTool(CanvasToolKind.riser);
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.keyM) {
-          _armTool(_CanvasTool.measure);
+          _armTool(CanvasToolKind.measure);
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.keyK) {
-          _armTool(_CanvasTool.tank);
+          _armTool(CanvasToolKind.tank);
           return KeyEventResult.handled;
         }
         if (key == LogicalKeyboardKey.keyB) {
-          _armTool(_CanvasTool.room);
+          _armTool(CanvasToolKind.room);
           return KeyEventResult.handled;
         }
-        // Enter repeats the last tool when idle (Select, no mode, not drawing).
+        // Enter repeats the last tool when idle (Select, no mode, not drawing)
+        // — M3: whichever path armed it (keys, Draw panel, palette, cluster).
         if (key == LogicalKeyboardKey.enter ||
             key == LogicalKeyboardKey.numpadEnter) {
-          if (_isIdle() && _lastTool != null) {
-            _armTool(_lastTool);
+          final last = ref.read(lastCanvasToolProvider);
+          if (_isIdle() && last != null) {
+            _armTool(last);
             return KeyEventResult.handled;
           }
           return KeyEventResult.ignored;
         }
-        // Number keys 1..N pick the active layer's Nth scoped service.
-        final digit = _serviceDigit(key);
+        // Number keys 1..N pick the active layer's Nth scoped service — only
+        // when no run is pending (mid-run a digit types a length, H1).
+        final digit = runPending ? null : _serviceDigit(key);
         if (digit != null) {
           final services = servicesFor(ref.read(activeDisciplineProvider));
           if (digit < services.length) {
@@ -745,6 +1210,16 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         ref.read(armedPlacementProvider.notifier).disarm();
         return KeyEventResult.handled;
       }
+      // M4 — an armed trim/extend boundary pick or match-properties brush is
+      // backed out of FIRST, alone: the selection it was armed from survives
+      // (a second Esc clears it).
+      if (activeMechanical &&
+          (ref.read(trimExtendArmedProvider) != null ||
+              ref.read(matchPropertiesArmedProvider) != null)) {
+        ref.read(trimExtendArmedProvider.notifier).disarm();
+        ref.read(matchPropertiesArmedProvider.notifier).disarm();
+        return KeyEventResult.handled;
+      }
       if (ref.read(electricalInspectorTargetProvider) != null ||
           _panelMenu != null ||
           _circuitMenu != null) {
@@ -760,8 +1235,7 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         return KeyEventResult.handled;
       }
       if (ref.read(networkControllerProvider).pendingPoint != null) {
-        ref.read(networkControllerProvider.notifier).cancelPending();
-        ref.read(orthoRouteKindProvider.notifier).reset();
+        _finishRunChain();
         return KeyEventResult.handled;
       }
       // Step out of any active canvas MODE back to Select — Esc must always
@@ -797,9 +1271,11 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
 
   /// Arm a canvas tool/mode via its shortcut (C3), enforcing the toolbar's
   /// mutual exclusion (a draw tool clears the measure/tank/room modes and vice
-  /// versa). [tool] null = Select. Remembers the last non-Select tool so Enter
-  /// can repeat it.
-  void _armTool(_CanvasTool? tool) {
+  /// versa). [tool] null = Select. The last non-Select tool is remembered in
+  /// [lastCanvasToolProvider] so Enter can repeat it.
+  void _armTool(CanvasToolKind? tool) {
+    // Any tool switch backs out of a live base-point command (M8).
+    ref.read(basePointCommandProvider.notifier).cancel();
     final net = ref.read(networkControllerProvider.notifier);
     final measure = ref.read(measureModeProvider.notifier);
     final tank = ref.read(tankModeProvider.notifier);
@@ -813,42 +1289,46 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         tank.set(false);
         room.set(false);
         net.setTool(DrawTool.select);
-      case _CanvasTool.run:
+      case CanvasToolKind.run:
         measure.set(false);
         tank.set(false);
         room.set(false);
         net.setTool(DrawTool.drawRun);
-        _lastTool = tool;
-      case _CanvasTool.riser:
+      case CanvasToolKind.riser:
         measure.set(false);
         tank.set(false);
         room.set(false);
         net.setTool(DrawTool.drawRiser);
-        _lastTool = tool;
-      case _CanvasTool.measure:
+      case CanvasToolKind.measure:
         net.setTool(DrawTool.select);
         tank.set(false);
         room.set(false);
         measure.set(true);
-        _lastTool = tool;
-      case _CanvasTool.tank:
+      case CanvasToolKind.tank:
         net.setTool(DrawTool.select);
         measure.set(false);
         room.set(false);
         tank.set(true);
-        _lastTool = tool;
-      case _CanvasTool.room:
+      case CanvasToolKind.room:
         net.setTool(DrawTool.select);
         measure.set(false);
         tank.set(false);
         room.set(true);
-        _lastTool = tool;
+    }
+    // M3 — the last armed tool/mode (the run/riser tools also record
+    // themselves in setTool; recording here covers the annotation modes even
+    // when they were already on).
+    if (tool != null) {
+      ref.read(lastCanvasToolProvider.notifier).record(tool);
     }
   }
 
   /// True when no tool/mode is active (Select, not drawing, no annotation mode)
   /// — the state in which Enter repeats the last tool.
   bool _isIdle() =>
+      // Placing the two scale points owns the clicks (review: G/C/T armed a
+      // hidden command there that stole the first click after calibration).
+      !ref.read(calibrationControllerProvider).isActive &&
       ref.read(networkControllerProvider).tool == DrawTool.select &&
       !ref.read(measureModeProvider) &&
       !ref.read(tankModeProvider) &&
@@ -875,9 +1355,25 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
   /// grid step and consume the key; return false (so the canvas pans) when a
   /// text field owns the keyboard, the active layer isn't mechanical, or nothing
   /// is selected.
+  /// The current sheet and the floor it maps to, or null with no sheet.
+  ({String sheetId, int floorIndex})? _currentSheetFloor() {
+    final sheets = ref.read(sheetsControllerProvider);
+    final sheet = sheets.current;
+    if (sheet == null) return null;
+    final levelCount = ref.read(projectControllerProvider).building.levelCount;
+    return (sheetId: sheet.id, floorIndex: sheets.floorFor(sheet.id, levelCount));
+  }
+
   bool handleDirectionalKey(LogicalKeyboardKey key) {
     if (isTextEntryFocused()) return false;
-    if (!ref.read(activeDisciplineProvider).isMechanical) return false;
+    if (!ref.read(activeDisciplineProvider).isMechanical) {
+      // E5 — arrows nudge the electrical layer's selection (one undo step per
+      // burst); nothing movable selected ⇒ false, so the canvas pans.
+      final at = _currentSheetFloor();
+      if (at == null) return false;
+      return nudgeElectricalSelection(ref, key,
+          sheetId: at.sheetId, floorIndex: at.floorIndex);
+    }
     final sel = ref.read(selectionProvider);
     if (!sel.hasSelection) return false;
     final sheet = ref.read(sheetsControllerProvider).current;
@@ -907,6 +1403,10 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
         ids.add(e.toId);
       }
     }
+    // A STALE selection (its ids undone / deleted away) moves nothing: let the
+    // arrow pan instead of pushing an empty undo step and opening a drag
+    // session that no move would ever tick.
+    ids.removeWhere((id) => net.nodeById(id) == null);
     if (ids.isEmpty) return false;
     final ctrl = ref.read(networkControllerProvider.notifier);
     // D2 — one undo step per nudge BURST: snapshot only when the burst OPENS,
@@ -921,8 +1421,16 @@ class _LayoutCanvasState extends ConsumerState<LayoutCanvas> {
     }
     _nudgeIdleTimer?.cancel();
     _nudgeIdleTimer = Timer(_kNudgeIdleWindow, _endNudgeBurst);
+    // Drafting-feel perf: a held arrow key auto-repeats ~30x/s — ride the K1
+    // drag session so the heavy sizing/solve chain stays frozen while the keys
+    // keep coming and re-solves ONCE when they settle (moveMany ticks it),
+    // instead of a full multi-floor solve per repeat that lags the cursor.
+    // (beginDrag also arms the settle timer, so the session can never stay
+    // open without one.)
+    final session = ref.read(dragSessionProvider.notifier)..beginDrag();
     ctrl.moveMany(ids, dx, dy);
     _nudgeLastNetwork = ref.read(networkControllerProvider).network;
+    if (identical(_nudgeLastNetwork, net)) session.endDrag(); // moved nothing
     return true;
   }
 }
@@ -938,7 +1446,7 @@ class _LayoutTopBar extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
     final type = context.type;
-    final sheets = ref.watch(sheetsControllerProvider);
+    final sheets = ref.watch(sheetsContentProvider);
     final levelCount = ref.watch(projectControllerProvider).building.levelCount;
     final current = sheets.current;
 
@@ -965,16 +1473,78 @@ class _LayoutTopBar extends ConsumerWidget {
           const SizedBox(width: MechXSpacing.sm),
           if (current != null)
             ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 200),
-              child: Text(
-                _floorLabel(sheets, current.id, current.name, levelCount),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: type.caption.copyWith(color: colors.textMuted),
+              constraints: const BoxConstraints(maxWidth: 300),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      _floorLabel(
+                          sheets, current.id, current.name, levelCount),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: type.caption.copyWith(color: colors.textMuted),
+                    ),
+                  ),
+                  _BreadcrumbScaleTail(sheet: current),
+                ],
               ),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Work item 4 (2026-10-17): the sheet's calibration state, stated ONCE beside
+/// the floor breadcrumb (the status bar no longer repeats it on Layout).
+/// Uncalibrated -> a tappable ' · Not calibrated' (warning) that starts
+/// calibration (Round 31: the only on-canvas statement — the top-centre pill
+/// and the Scale section's status row were dropped); a stale calibration -> a
+/// tappable ' · Re-verify scale' (warning); calibrated -> a quiet ' · 1 : N'.
+class _BreadcrumbScaleTail extends ConsumerWidget {
+  final Sheet sheet;
+  const _BreadcrumbScaleTail({required this.sheet});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = context.colors;
+    final type = context.type;
+    final project = ref.watch(projectControllerProvider);
+    final calibration = project.calibrationFor(sheet.id);
+    final stale = calibration != null && project.isCalibrationStale(sheet.id);
+    if (calibration != null && !stale) {
+      return Text(
+        '  ·  ${formatScaleShort(calibration.metersPerPixel, isPdf: sheet.pdfPath != null)}',
+        key: const ValueKey('breadcrumb-scale'),
+        maxLines: 1,
+        softWrap: false,
+        style: type.caption.copyWith(color: colors.textMuted),
+      );
+    }
+    final label = context.strings(stale
+        ? StringKey.layoutBreadcrumbReverifyScale
+        : StringKey.layoutBreadcrumbNotCalibrated);
+    void start() => ref.read(calibrationControllerProvider.notifier).start();
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(
+        onTap: start,
+        behavior: HitTestBehavior.opaque,
+        child: Semantics(
+          button: true,
+          excludeSemantics: true,
+          label: context.strings(StringKey.inspectorCalibrateScale),
+          onTap: start,
+          child: Text(
+            '  ·  $label',
+            key: const ValueKey('breadcrumb-calibrate'),
+            maxLines: 1,
+            softWrap: false,
+            style: type.caption.copyWith(color: colors.warning),
+          ),
+        ),
       ),
     );
   }
@@ -1004,6 +1574,43 @@ String _floorLabel(
 // the electrical layer, all on the same `sheetsControllerProvider` viewport.
 // ════════════════════════════════════════════════════════════════════════════
 
+/// The Layout zoom read-out ('57%'), or null before the sheet's first viewport
+/// is known (the label is then omitted rather than guessed).
+/// The minimap's node landmarks for one sheet/floor, value-compared so the
+/// minimap rebuilds only when a landmark on THIS sheet/floor actually moves.
+final _minimapMarkersProvider =
+    Provider.autoDispose.family<_Markers, (String, int)>((ref, key) {
+  final net = ref.watch(networkControllerProvider.select((d) => d.network));
+  return _Markers([
+    for (final n in net.nodes)
+      if (n.sheetId == key.$1 && n.floorIndex == key.$2) Offset(n.x, n.y),
+  ]);
+});
+
+/// A marker list with value equality (an unrelated edit — another floor, a
+/// property change — does not rebuild the minimap).
+class _Markers {
+  final List<Offset> points;
+  const _Markers(this.points);
+
+  @override
+  bool operator ==(Object other) {
+    if (other is! _Markers || other.points.length != points.length) {
+      return false;
+    }
+    for (var i = 0; i < points.length; i++) {
+      if (other.points[i] != points[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hashAll(points);
+}
+
+String? _zoomPercent(ViewportTransform? vt) =>
+    vt == null ? null : '${(vt.scale * 100).round()}%';
+
 class _SharedSheet extends ConsumerWidget {
   final _LayoutCanvasState host;
   const _SharedSheet({required this.host});
@@ -1011,7 +1618,10 @@ class _SharedSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = context.colors;
-    final sheetsState = ref.watch(sheetsControllerProvider);
+    // Drafting-feel perf: the CONTENT of the sheets state only — a pan / zoom
+    // frame must not rebuild this whole stack (the live viewport is read by the
+    // small consumers below that actually need it).
+    final sheetsState = ref.watch(sheetsContentProvider);
     final sheet = sheetsState.current;
 
     if (sheet == null) {
@@ -1087,11 +1697,12 @@ class _SharedSheet extends ConsumerWidget {
 
     final content = host.contentFor(sheet);
     final calibrating = ref.watch(calibrationControllerProvider).isActive;
-    final drawing = ref.watch(networkControllerProvider).isDrawing;
+    final drawing =
+        ref.watch(networkControllerProvider.select((d) => d.isDrawing));
     // A4: has anything been drawn yet? The first-draw hint teaches the primary
     // gesture only until the very first node lands anywhere in the network.
-    final hasDrawing =
-        ref.watch(networkControllerProvider).network.nodes.isNotEmpty;
+    final hasDrawing = ref.watch(networkControllerProvider
+        .select((d) => d.network.nodes.isNotEmpty));
     final showHeatmap = ref.watch(showHeatmapProvider);
     final calibration =
         ref.watch(projectControllerProvider).calibrationFor(sheet.id);
@@ -1111,6 +1722,8 @@ class _SharedSheet extends ConsumerWidget {
     final tankMode = ref.watch(tankModeProvider);
     final roomMode = ref.watch(roomModeProvider);
     final refLineMode = ref.watch(refLineModeProvider);
+    final commandActive =
+        ref.watch(basePointCommandProvider.select((c) => c != null));
 
     // G3/F3: the on-canvas tool cluster appears whenever the drawing TOOLS are
     // not otherwise reachable — the inspector collapsed (the canvas-focus state)
@@ -1123,20 +1736,13 @@ class _SharedSheet extends ConsumerWidget {
     // G1: the network nodes on THIS sheet/floor are the minimap's content
     // landmarks (content-pixel space, mapped like the sheet substrate).
     final inspectorCollapsed = ref.watch(inspectorCollapsedProvider);
-    final net = ref.watch(networkControllerProvider).network;
-    final networkExists = net.nodes.isNotEmpty || net.edges.isNotEmpty;
+    // Drafting-feel perf: watch only the facts this stack branches on, so a
+    // drag frame (which replaces the network) does not rebuild every overlay.
+    final networkExists = ref.watch(networkControllerProvider.select(
+        (d) => d.network.nodes.isNotEmpty || d.network.edges.isNotEmpty));
     final drawSectionExpanded =
         ref.watch(sectionExpandedProvider(SectionKey('Draw', !networkExists)));
     final showToolCluster = inspectorCollapsed || !drawSectionExpanded;
-    final minimapMarkers = <Offset>[
-      for (final n in net.nodes)
-        if (n.sheetId == sheet.id && n.floorIndex == floorIndex)
-          Offset(n.x, n.y),
-    ];
-
-    // The shared viewport transform (persisted per-sheet) is what the electrical
-    // layer reads, so both disciplines ride the SAME pan/zoom.
-    final vt = sheetsState.viewportFor(sheet.id) ?? const ViewportTransform();
 
     // Hold-Space pan: the interactive overlays stand down (IgnorePointer) so a
     // left-drag reaches the CanvasView's pan, with the default grab cursor.
@@ -1157,8 +1763,13 @@ class _SharedSheet extends ConsumerWidget {
       // Middle-button drag pans, mouse-wheel zooms — both handled above the
       // opaque overlays that would otherwise swallow the events.
       onPointerSignal: (e) => host.scrollZoom(e, sheet.id),
-      onPointerDown: host.midPanDown,
+      onPointerDown: (e) => host.midPanDown(e, sheet.id),
       onPointerMove: (e) => host.midPanMove(e, sheet.id),
+      // Item 6 — where Shift+Space cycles the pick. Published from HERE (an
+      // ancestor of every overlay) because the opaque node handles would
+      // hide a hover from the selection layer exactly where elements overlap.
+      // Read, never watched: a pointer move rebuilds nothing.
+      onPointerHover: (e) => host.publishPickCursor(e, sheet.id, floorIndex),
       onPointerUp: (_) => host.midPanEnd(),
       onPointerCancel: (_) => host.midPanEnd(),
       child: Stack(
@@ -1168,7 +1779,14 @@ class _SharedSheet extends ConsumerWidget {
           child: CanvasView(
             key: host.canvasKeyFor(sheet.id),
             contentSize: sheet.sizePx,
-            initialTransform: sheetsState.viewportFor(sheet.id),
+            // The LIVE viewport (consumed only in CanvasView.initState): the
+            // content snapshot's viewports are stale by design (pan frames
+            // never rebuild it), so a remount after Layout -> Riser -> Layout
+            // must restore the user's last zoom/pan — never re-fit, and never
+            // paint the substrate at an old transform while the overlays map
+            // through the live `sheetViewportProvider`.
+            initialTransform:
+                ref.read(sheetsControllerProvider).viewportFor(sheet.id),
             background: colors.canvas,
             gridColor: colors.gridLine,
             // A calibrated sheet snaps the grid minors to a round 1-2-5 metre
@@ -1181,6 +1799,8 @@ class _SharedSheet extends ConsumerWidget {
             // E2: arrows nudge the mechanical selection by the grid step; with
             // nothing selected the host returns false and the canvas pans.
             onDirectionalKey: host.handleDirectionalKey,
+            // The ancestor Listener pans middle-drags (above the overlays).
+            externalMiddlePan: true,
             // G1: publish the live viewport for the on-canvas minimap.
             viewportSink: host._minimapViewport,
             onTransformChanged: (t) => ref
@@ -1192,19 +1812,27 @@ class _SharedSheet extends ConsumerWidget {
         // Heatmap (mechanical solve) — only when a mechanical layer is visible.
         if (showHeatmap && mechanicalVisible)
           Positioned.fill(
-            child: HeatmapLayer(
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
-              contentSize: sheet.sizePx,
+            // P1 — every canvas layer paints into its OWN layer, so a repaint
+            // in one (a marquee frame, the rubber band, a hover chip) never
+            // re-runs another's painter (they used to share the app root's
+            // boundary: any repaint re-painted the whole floor's network).
+            child: RepaintBoundary(
+              child: HeatmapLayer(
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+                contentSize: sheet.sizePx,
+              ),
             ),
           ),
         // Mechanical network — layer-filtered (faded/hidden per discipline).
         if (mechanicalVisible)
           Positioned.fill(
-            child: NetworkLayer(
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
-              layerFiltered: true,
+            child: RepaintBoundary(
+              child: NetworkLayer(
+                sheetId: sheet.id,
+                floorIndex: floorIndex,
+                layerFiltered: true,
+              ),
             ),
           ),
         // Electrical layer — interactive when active, faded when a coordination
@@ -1213,8 +1841,12 @@ class _SharedSheet extends ConsumerWidget {
           Positioned.fill(
             child: IgnorePointer(
               ignoring: spaceHeld,
-              child: ElectricalLayoutLayer(
-                transform: vt,
+              // The shared viewport transform (persisted per-sheet) is what the
+              // electrical layer reads, so both disciplines ride the SAME
+              // pan/zoom — watched HERE so only this layer follows a pan frame.
+              child: Consumer(builder: (context, ref, _) => ElectricalLayoutLayer(
+                transform: ref.watch(sheetViewportProvider(sheet.id)) ??
+                    const ViewportTransform(),
                 sheetId: sheet.id,
                 floorIndex: floorIndex,
                 interactive: electricalActive,
@@ -1222,7 +1854,7 @@ class _SharedSheet extends ConsumerWidget {
                 onEditCircuit: host.onEditCircuit,
                 onPanelMenu: host.onPanelMenu,
                 onCircuitMenu: host.onCircuitMenu,
-              ),
+              )),
             ),
           ),
         // Measurement annotations — saved dimensions always render (when a
@@ -1230,63 +1862,74 @@ class _SharedSheet extends ConsumerWidget {
         // active (and never while drawing/calibrating).
         if (mechanicalVisible && !calibrating)
           Positioned.fill(
-            child: IgnorePointer(
+            child: RepaintBoundary(
+              child: IgnorePointer(
               ignoring: spaceHeld,
               child: MeasurementOverlay(
                 sheetId: sheet.id,
                 floorIndex: floorIndex,
                 active: mechanicalActive && measureMode && !drawing,
               ),
-            ),
+            )),
           ),
         // Tank areas — saved footprints always render (mechanical layer visible);
         // the tank tool captures a drag only when active.
         if (mechanicalVisible && !calibrating)
           Positioned.fill(
-            child: IgnorePointer(
+            child: RepaintBoundary(
+              child: IgnorePointer(
               ignoring: spaceHeld,
               child: TankOverlay(
                 sheetId: sheet.id,
                 floorIndex: floorIndex,
                 active: mechanicalActive && tankMode && !drawing,
               ),
-            ),
+            )),
           ),
         // Room/zone areas — saved footprints always render (mechanical layer
         // visible); the room tool captures a drag only when active.
         if (mechanicalVisible && !calibrating)
           Positioned.fill(
-            child: IgnorePointer(
+            child: RepaintBoundary(
+              child: IgnorePointer(
               ignoring: spaceHeld,
               child: RoomOverlay(
                 sheetId: sheet.id,
                 floorIndex: floorIndex,
                 active: mechanicalActive && roomMode && !drawing,
               ),
-            ),
+            )),
           ),
         // Reference lines (B12) — saved construction lines always render (a
         // mechanical layer visible); the Ref line trace tool captures clicks only
         // when active. They double as the plan snap surface + the N4 grid seed.
         if (mechanicalVisible && !calibrating)
           Positioned.fill(
-            child: IgnorePointer(
+            child: RepaintBoundary(
+              child: IgnorePointer(
               ignoring: spaceHeld,
               child: ReferenceLineOverlay(
                 sheetId: sheet.id,
                 active: mechanicalActive && refLineMode && !drawing,
               ),
-            ),
+            )),
           ),
         // Mechanical drawing / drop / selection overlays — ONLY when a mechanical
         // layer is active (so editing routes to the active discipline). The
         // selection/drop overlays stand down while the measure tool is on.
         if (mechanicalActive && drawing)
           Positioned.fill(
-            child: DrawingOverlay(
-              sheetId: sheet.id,
-              floorIndex: floorIndex,
-              levelCount: levelCount,
+            // L3 — hold-Space pans mid-draw: the draw overlay stands down so
+            // the drag reaches the CanvasView (the pending run is kept).
+            child: RepaintBoundary(
+              child: IgnorePointer(
+                ignoring: spaceHeld,
+                child: DrawingOverlay(
+                  sheetId: sheet.id,
+                  floorIndex: floorIndex,
+                  levelCount: levelCount,
+                ),
+              ),
             ),
           ),
         if (mechanicalActive &&
@@ -1297,13 +1940,14 @@ class _SharedSheet extends ConsumerWidget {
             !roomMode &&
             !refLineMode)
           Positioned.fill(
-            child: IgnorePointer(
-              ignoring: spaceHeld,
-              child: NetworkSelectionOverlay(
-                sheetId: sheet.id,
-                floorIndex: floorIndex,
-                onFitView: () =>
-                    host.canvasKeyFor(sheet.id).currentState?.fitView(),
+            child: RepaintBoundary(
+              child: IgnorePointer(
+                ignoring: spaceHeld,
+                child: NetworkSelectionOverlay(
+                  sheetId: sheet.id,
+                  floorIndex: floorIndex,
+                  onFitView: host.fitViewFor(sheet.id),
+                ),
               ),
             ),
           ),
@@ -1319,22 +1963,33 @@ class _SharedSheet extends ConsumerWidget {
             !roomMode &&
             !refLineMode)
           Positioned.fill(
-            child: IgnorePointer(
-              ignoring: spaceHeld,
-              child:
-                  DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
+            child: RepaintBoundary(
+              child: IgnorePointer(
+                ignoring: spaceHeld,
+                child:
+                    DropOverlay(sheetId: sheet.id, floorIndex: floorIndex),
+              ),
+            ),
+          ),
+        // M8 — a live base-point Move / Copy / Rotate owns the clicks (above
+        // the selection + drop overlays): base / target picks, the ghost and
+        // the rubber band. Mounted only while a command is armed.
+        if (mechanicalActive && commandActive && !drawing && !calibrating)
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: IgnorePointer(
+                ignoring: spaceHeld,
+                child: BasePointOverlay(
+                    sheetId: sheet.id, floorIndex: floorIndex),
+              ),
             ),
           ),
         if (calibrating)
           Positioned.fill(child: CalibrationOverlay(sheetId: sheet.id)),
-        // First-run calibrate nudge.
-        if (!calibrated && !calibrating)
-          const Positioned(
-            top: MechXSpacing.md,
-            left: 0,
-            right: 0,
-            child: Center(child: _CalibrateHint()),
-          ),
+        // Round 31 (ui-simplicity-4) — the top-centre 'Set drawing scale'
+        // pill is gone from Layout: the floor breadcrumb's tappable
+        // ' · Not calibrated' tail (rendered beside every Layout sheet) states
+        // the same condition and starts the same calibration.
         // A4: first-draw hint — a quiet, non-interactive nudge over a
         // calibrated-but-empty mechanical canvas teaching the primary draw
         // gesture. Shown only while idle (Select, no active mode) so it never
@@ -1379,11 +2034,19 @@ class _SharedSheet extends ConsumerWidget {
         Positioned(
           left: MechXSpacing.md,
           bottom: MechXSpacing.md,
-          child: ZoomControls(
+          child: Consumer(builder: (context, ref, _) => ZoomControls(
             onIn: () => host.canvasKeyFor(sheet.id).currentState?.zoomIn(),
             onOut: () => host.canvasKeyFor(sheet.id).currentState?.zoomOut(),
             onFit: () => host.canvasKeyFor(sheet.id).currentState?.fitView(),
-          ),
+            // Work item 9: the live zoom read-out (moved off the top bar);
+            // tapping it eases back to 100%.
+            // P13 — only the rounded % read-out: a pan frame (same zoom) no
+            // longer rebuilds the zoom cluster.
+            percentLabel: ref.watch(sheetViewportProvider(sheet.id)
+                .select(_zoomPercent)),
+            onResetZoom: () =>
+                host.canvasKeyFor(sheet.id).currentState?.zoomTo(1.0),
+          )),
         ),
         // Persistent "(?) Canvas guide" (top-left) — the same affordance the
         // electrical canvas advertises, now lifted to the mechanical Layout
@@ -1419,15 +2082,20 @@ class _SharedSheet extends ConsumerWidget {
           top: MechXSpacing.sm,
           child: ValueListenableBuilder<MinimapViewport?>(
             valueListenable: host._minimapViewport,
-            builder: (context, vp, _) => CanvasMinimap(
+            builder: (context, vp, _) => Consumer(
+                builder: (context, ref, _) => CanvasMinimap(
               contentSize: sheet.sizePx,
-              markers: minimapMarkers,
+              // G1: the network nodes on THIS sheet/floor are the minimap's
+              // content landmarks (content-pixel space).
+              markers: ref
+                  .watch(_minimapMarkersProvider((sheet.id, floorIndex)))
+                  .points,
               viewport: vp,
               onRecenter: (world) => host
                   .canvasKeyFor(sheet.id)
                   .currentState
                   ?.centreOnWorld(world),
-            ),
+            )),
           ),
         ),
         // On-canvas tool cluster (left edge, vertically centred) — SWITCH the
@@ -1446,20 +2114,23 @@ class _SharedSheet extends ConsumerWidget {
               alignment: Alignment.centerLeft,
               child: CanvasToolCluster(
                 onSelect: () => host._armTool(null),
-                onRun: () => host._armTool(_CanvasTool.run),
-                onRiser: () => host._armTool(_CanvasTool.riser),
+                onRun: () => host._armTool(CanvasToolKind.run),
+                onRiser: () => host._armTool(CanvasToolKind.riser),
               ),
             ),
           ),
-        // Smart input bar (bottom-centre) — precise length entry while drawing a
-        // run. Renders nothing unless a run is pending, so idle is unchanged.
-        if (mechanicalActive && drawing)
+        // Smart input bar (bottom-centre) — precise entry while drawing a run,
+        // placing a base-point Move / Copy / Rotate, or stretching a run end
+        // by its grip. Renders nothing unless one of those is live, so idle is
+        // unchanged.
+        if (mechanicalActive)
           Positioned(
             left: 0,
             right: 0,
             bottom: MechXSpacing.md,
             child: Center(
               child: SmartInputBar(
+                key: host._smartBarKey,
                 sheetId: sheet.id,
                 floorIndex: floorIndex,
               ),
@@ -1475,14 +2146,18 @@ class _SharedSheet extends ConsumerWidget {
 const _mechanicalLayerGuideItems = <String>[
   'Tool keys: V select · R run · E riser · M measure · K tank · B room',
   'Number keys 1-N pick the active layer service; Enter repeats the last tool',
-  'O toggles ortho; hold Shift while drawing for a free angle',
+  'O / F8 toggles ortho; hold Shift while drawing for a free angle',
+  'While drawing: type a length + Enter (or @x,y / length<angle, mm, 0 = east, CCW +); Enter or Space ends the run; Backspace undoes the last point',
+  'G / C / T move, copy or rotate the selection from a picked base point; click the target or type @x,y, length<angle or an angle + Enter',
+  'Dragging a run end? Type its length + Enter to set it exactly',
+  'Shift+Space cycles the pick among overlapping elements under the cursor',
   'Drag the blue outlet out of a hovered/selected node to lay a run',
   'Drag a Terminal onto a main to branch it (it tees into the run)',
   'Right-click a segment to set its size (inches) or material',
   'Drag a segment endpoint to resize it — it snaps to nearby fittings',
   'Left-click to select; Shift+click or rubber-band for multi-select',
   'Arrow keys nudge the selection; drag a selected node to move the group',
-  'Middle-drag or hold Space to pan; scroll to zoom; F fits the view',
+  'Middle-drag or hold Space to pan; scroll to zoom; F fits the view; double middle-click zooms to the drawing',
   'Risers drawn here stack vertically in the Riser view (left nav)',
 ];
 
@@ -1498,67 +2173,6 @@ const _electricalLayerGuideItems = <String>[
   // electrical model, just two different projections of it.
   'Panels and loads placed here also appear in the Electrical workspace (left nav)',
 ];
-
-/// A small tappable nudge over an uncalibrated sheet — starts scale calibration.
-class _CalibrateHint extends ConsumerWidget {
-  const _CalibrateHint();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: GestureDetector(
-        onTap: () => ref.read(calibrationControllerProvider.notifier).start(),
-        // Gentle scale-in + fade so the nudge arrives rather than pops.
-        child: const _EntranceScaleFade(
-          child: _CalibrateHintBody(),
-        ),
-      ),
-    );
-  }
-}
-
-/// The calibrate-nudge content (factored out so the entrance wrapper can be a
-/// const child).
-class _CalibrateHintBody extends StatelessWidget {
-  const _CalibrateHintBody();
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MechXSpacing.sm + 2,
-        vertical: MechXSpacing.xs + 1,
-      ),
-      decoration: BoxDecoration(
-        color: colors.surface.withAlpha(240),
-        borderRadius: MechXRadii.control,
-        border: Border.all(color: colors.warning),
-        boxShadow: MechXShadow.card,
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 7,
-            height: 7,
-            margin: const EdgeInsets.only(right: MechXSpacing.xs),
-            decoration: BoxDecoration(
-              color: colors.warning,
-              borderRadius: MechXRadii.small,
-            ),
-          ),
-          Text(
-            'Set drawing scale to measure runs',
-            style: type.label.copyWith(color: colors.textPrimary),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// A one-shot entrance: scales from ~0.94 → 1.0 and fades 0 → 1 over
 /// [MechXMotion.appear] the first (and only) time it's built. Transient motion

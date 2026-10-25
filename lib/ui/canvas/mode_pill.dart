@@ -2,14 +2,19 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/annotation_store.dart';
+import '../../store/base_point_command_store.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../../store/snap_settings_store.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import 'base_point_overlay.dart' show basePointKey, basePointModeLabel;
+import 'edge_context_menu.dart'
+    show matchPropertiesArmedProvider, trimExtendArmedProvider;
 import 'service_style.dart';
 
 /// A floating on-canvas MODE pill (top-centre): makes the active tool visible
@@ -23,11 +28,20 @@ class ModePill extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final drawing = ref.watch(networkControllerProvider);
+    // Only the tool + service (not the network): a drag frame never rebuilds it.
+    final drawing = ref.watch(networkControllerProvider
+        .select((d) => (tool: d.tool, service: d.service)));
     final measure = ref.watch(measureModeProvider);
     final tank = ref.watch(tankModeProvider);
     final room = ref.watch(roomModeProvider);
     final refLine = ref.watch(refLineModeProvider);
+    // M4 — the select-mode ARMED actions (B18 trim/extend boundary pick, B27
+    // match-properties brush) are modes too: named here with the same Esc /
+    // Done exit, so the armed state is never invisible.
+    final trimArmed = ref.watch(trimExtendArmedProvider) != null;
+    final brush = ref.watch(matchPropertiesArmedProvider);
+    // M8 — a live base-point Move / Copy / Rotate names its next pick.
+    final cmd = ref.watch(basePointCommandProvider);
 
     // The modes are mutually exclusive by the toolbar's design; resolve in
     // the same priority order the overlays mount. [keyHint] echoes the
@@ -36,6 +50,7 @@ class ModePill extends ConsumerWidget {
     String? label;
     String? keyHint;
     bool freeAngle = false;
+    bool escHint = true;
     Color? swatch;
     void Function()? done;
     if (drawing.tool == DrawTool.drawRun) {
@@ -50,7 +65,7 @@ class ModePill extends ConsumerWidget {
       // Say what the riser will CONNECT (C6): the floor span it spans to (up to
       // N+1, or down to N-1 on the top floor), mirroring `placeRiser`. The swatch
       // still carries the service colour.
-      final sheets = ref.watch(sheetsControllerProvider);
+      final sheets = ref.watch(sheetsContentProvider);
       final levelCount =
           ref.watch(projectControllerProvider).building.levelCount;
       final current = sheets.current;
@@ -76,6 +91,21 @@ class ModePill extends ConsumerWidget {
     } else if (refLine) {
       label = 'Ref line';
       done = () => ref.read(refLineModeProvider.notifier).set(false);
+    } else if (trimArmed) {
+      label = context.strings(StringKey.trimExtendArmedHint);
+      done = () => ref.read(trimExtendArmedProvider.notifier).disarm();
+    } else if (brush != null) {
+      // The brush hint already ends '· Esc exits' — no second Esc cue.
+      label = context.strings.format(StringKey.matchPropertiesArmedHint,
+          {'service': serviceLabel(brush.service)});
+      escHint = false;
+      swatch = serviceColor(brush.service);
+      done = () => ref.read(matchPropertiesArmedProvider.notifier).disarm();
+    } else if (cmd != null) {
+      label = basePointModeLabel(cmd);
+      keyHint = basePointKey(cmd.kind);
+      freeAngle = !cmd.pickingBase && cmd.kind != BasePointCommandKind.rotate;
+      done = () => ref.read(basePointCommandProvider.notifier).cancel();
     }
     if (label == null) return const SizedBox.shrink();
 
@@ -114,8 +144,10 @@ class ModePill extends ConsumerWidget {
               Text('Shift: free angle',
                   style: type.micro.copyWith(color: colors.textMuted)),
             ],
-            const SizedBox(width: MechXSpacing.xs + 2),
-            Text('Esc', style: type.micro.copyWith(color: colors.textMuted)),
+            if (escHint) ...[
+              const SizedBox(width: MechXSpacing.xs + 2),
+              Text('Esc', style: type.micro.copyWith(color: colors.textMuted)),
+            ],
             const SizedBox(width: MechXSpacing.sm),
             Container(width: 1, height: 16, color: colors.border),
             const SizedBox(width: MechXSpacing.sm),

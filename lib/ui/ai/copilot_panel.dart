@@ -24,25 +24,42 @@ class CopilotOverlay extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     if (!ref.watch(copilotOpenProvider)) return const SizedBox.shrink();
     final colors = context.colors;
+    // Round 12 (ui-journey-copilot-no-esc-focus-leak) — the overlay TAKES
+    // primary focus (the prompt field claims it on open; this ancestor sees
+    // its bubbling Esc), so Esc closes it like every other overlay and keystrokes no
+    // longer reach the canvas hidden behind the scrim (R armed a draw tool,
+    // Delete / Ctrl+V edited the drawing). Only Esc is consumed: other keys
+    // must stay unhandled so the prompt field still receives typed text.
     return Positioned.fill(
-      child: Stack(
-        children: [
-          // Scrim — tap outside to close.
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => ref.read(copilotOpenProvider.notifier).close(),
-              child: ColoredBox(color: colors.scrim),
+      child: Focus(
+        debugLabel: 'copilot-overlay',
+        onKeyEvent: (_, event) {
+          if (event is KeyDownEvent &&
+              event.logicalKey == LogicalKeyboardKey.escape) {
+            ref.read(copilotOpenProvider.notifier).close();
+            return KeyEventResult.handled;
+          }
+          return KeyEventResult.ignored;
+        },
+        child: Stack(
+          children: [
+            // Scrim — tap outside to close.
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => ref.read(copilotOpenProvider.notifier).close(),
+                child: ColoredBox(color: colors.scrim),
+              ),
             ),
-          ),
-          Positioned(
-            top: 0,
-            bottom: 0,
-            right: 0,
-            width: 340,
-            child: _CopilotPanel(),
-          ),
-        ],
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: 0,
+              width: 340,
+              child: _CopilotPanel(),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -55,7 +72,17 @@ class _CopilotPanel extends ConsumerStatefulWidget {
 
 class _CopilotPanelState extends ConsumerState<_CopilotPanel> {
   final TextEditingController _input = TextEditingController();
-  final FocusNode _focus = FocusNode();
+  final FocusNode _focus = FocusNode(debugLabel: 'copilot-prompt');
+
+  @override
+  void initState() {
+    super.initState();
+    // Round 12 — the prompt claims the keyboard on open (the canvas had kept
+    // primary focus behind the scrim).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
+  }
 
   @override
   void dispose() {

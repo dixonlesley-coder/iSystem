@@ -11,6 +11,8 @@
 /// Zero Flutter imports.
 library;
 
+import 'dart:math' as math;
+
 import '../standards/puil.dart'
     show CableInstallMethod, ConductorInsulation, ConductorMaterial;
 import '../units.dart';
@@ -107,6 +109,16 @@ class ElectricalCircuit {
   /// Pin a single-phase circuit to a line; excluded from auto-balancing.
   final PhaseLine? phaseOverride;
 
+  /// Round 39 r3 — the line the LAST solve ASSIGNED this single-phase way
+  /// (solver bookkeeping, distinct from the engineer's [phaseOverride] pin).
+  /// Persisted so the DOCUMENT fully determines the phase balance: every
+  /// solve — live and after reopen — seeds the balancer with it (the
+  /// phase-stability prior), so a board never re-labels on reopen and a
+  /// parent never sums a different label set than the fed board prints.
+  /// Written by the app store whenever a solve assigns a line; null on a
+  /// three-phase way or one never solved. Additive; absent ⇒ none.
+  final PhaseLine? assignedPhase;
+
   /// Force a busbar section break at this way (manual split).
   final bool busbarBreakBefore;
 
@@ -140,6 +152,49 @@ class ElectricalCircuit {
   /// space from any single-line canvas coordinate.
   final LayoutPos? loadPos;
 
+  /// Round 23 — true once the ENGINEER typed this way's [demandFactor]
+  /// (provenance, not inference): the MEP sync re-derives a machine way's
+  /// duty (1) / standby (0) factor only while this is false, so a typed 0 on a
+  /// fire pump is never silently reverted. Additive; persisted only when true.
+  final bool demandFactorUserSet;
+
+  /// Round 23 r2 (mep-bridge-2) — the same provenance for the way's
+  /// electrical CHARACTER: true once the engineer typed its [cosPhi] /
+  /// [phases] / [loadKind]. The MEP sync re-derives each of those from the
+  /// fresh mint (a component swap on the same node) only while its flag is
+  /// false, so a typed cos phi or phase count is never silently reverted on
+  /// the next drawing edit. Additive; persisted only when true.
+  final bool cosPhiUserSet;
+  final bool phasesUserSet;
+  final bool loadKindUserSet;
+
+  /// Round 24 — MIGRATION marker (never persisted as such): true when this
+  /// MEP-derived way ([sourceEquipmentId] set) was decoded from a file written
+  /// BEFORE the round-23 provenance flags existed (no [kMepProvenanceKey] in
+  /// its JSON). Pre-round-23 builds never re-derived a machine way's cos phi /
+  /// phases / load kind, so an unflagged value in such a file may be one the
+  /// engineer TYPED. The MEP sync resolves it on the first refresh: a value
+  /// that differs from the fresh mint is kept AND flagged user-set (golden
+  /// rule 7 — load old files tolerantly, migrate rather than break).
+  final bool legacyProvenance;
+
+  /// JSON key stamped on every MEP-derived way written by a build that
+  /// records provenance (round 24+). Its absence on an MEP way marks a legacy
+  /// (pre-flag) file ⇒ [legacyProvenance].
+  static const String kMepProvenanceKey = 'mepProvenance';
+
+  /// Round 25 — the ONE marker the MEP sync appends to a PARKED derived way
+  /// (its source equipment disappeared; `sourceEquipmentId` dropped). A parked
+  /// way is still an MEP way for provenance purposes: it can be re-adopted
+  /// when its source returns, so it carries [kMepProvenanceKey] too, and a
+  /// parked way decoded WITHOUT the key is [legacyProvenance].
+  static const String kMepParkedNameSuffix = ' (source removed)';
+
+  /// True when this way is MEP-owned for provenance: derived (source id set)
+  /// or parked (name carries [kMepParkedNameSuffix]).
+  bool get isMepProvenanced =>
+      sourceEquipmentId != null || name.endsWith(kMepParkedNameSuffix);
+
   const ElectricalCircuit({
     required this.id,
     required this.name,
@@ -160,12 +215,18 @@ class ElectricalCircuit {
     this.breakerOverrideA,
     this.groupingCountOverride,
     this.phaseOverride,
+    this.assignedPhase,
     this.busbarBreakBefore = false,
     this.feedsPanelId,
     this.sourceEquipmentId,
     this.flaOverrideA,
     this.starterType,
     this.loadPos,
+    this.demandFactorUserSet = false,
+    this.cosPhiUserSet = false,
+    this.phasesUserSet = false,
+    this.loadKindUserSet = false,
+    this.legacyProvenance = false,
   });
 
   /// True when this way is a feeder (explicit kind or it feeds a panel).
@@ -204,15 +265,24 @@ class ElectricalCircuit {
     bool clearGroupingCountOverride = false,
     PhaseLine? phaseOverride,
     bool clearPhaseOverride = false,
+    PhaseLine? assignedPhase,
+    bool clearAssignedPhase = false,
     bool? busbarBreakBefore,
     String? feedsPanelId,
     bool clearFeedsPanelId = false,
     String? sourceEquipmentId,
+    bool clearSourceEquipmentId = false,
     Current? flaOverrideA,
+    bool clearFlaOverrideA = false,
     StarterType? starterType,
     bool clearStarterType = false,
     LayoutPos? loadPos,
     bool clearLoadPos = false,
+    bool? demandFactorUserSet,
+    bool? cosPhiUserSet,
+    bool? phasesUserSet,
+    bool? loadKindUserSet,
+    bool? legacyProvenance,
   }) =>
       ElectricalCircuit(
         id: id ?? this.id,
@@ -241,14 +311,24 @@ class ElectricalCircuit {
             : (groupingCountOverride ?? this.groupingCountOverride),
         phaseOverride:
             clearPhaseOverride ? null : (phaseOverride ?? this.phaseOverride),
+        assignedPhase:
+            clearAssignedPhase ? null : (assignedPhase ?? this.assignedPhase),
         busbarBreakBefore: busbarBreakBefore ?? this.busbarBreakBefore,
         feedsPanelId:
             clearFeedsPanelId ? null : (feedsPanelId ?? this.feedsPanelId),
-        sourceEquipmentId: sourceEquipmentId ?? this.sourceEquipmentId,
-        flaOverrideA: flaOverrideA ?? this.flaOverrideA,
+        sourceEquipmentId: clearSourceEquipmentId
+            ? null
+            : (sourceEquipmentId ?? this.sourceEquipmentId),
+        flaOverrideA:
+            clearFlaOverrideA ? null : (flaOverrideA ?? this.flaOverrideA),
         starterType:
             clearStarterType ? null : (starterType ?? this.starterType),
         loadPos: clearLoadPos ? null : (loadPos ?? this.loadPos),
+        demandFactorUserSet: demandFactorUserSet ?? this.demandFactorUserSet,
+        cosPhiUserSet: cosPhiUserSet ?? this.cosPhiUserSet,
+        phasesUserSet: phasesUserSet ?? this.phasesUserSet,
+        loadKindUserSet: loadKindUserSet ?? this.loadKindUserSet,
+        legacyProvenance: legacyProvenance ?? this.legacyProvenance,
       );
 
   /// Serialize to a plain JSON map (enums by `.name`, typed quantities as raw
@@ -276,12 +356,22 @@ class ElectricalCircuit {
         if (groupingCountOverride != null)
           'groupingCountOverride': groupingCountOverride,
         if (phaseOverride != null) 'phaseOverride': phaseOverride!.name,
+        if (assignedPhase != null) 'assignedPhase': assignedPhase!.name,
         'busbarBreakBefore': busbarBreakBefore,
         if (feedsPanelId != null) 'feedsPanelId': feedsPanelId,
         if (sourceEquipmentId != null) 'sourceEquipmentId': sourceEquipmentId,
         if (flaOverrideA != null) 'flaOverrideA': flaOverrideA!.amperes,
         if (starterType != null) 'starterType': starterType!.name,
         if (loadPos != null) 'loadPos': loadPos!.toJson(),
+        if (demandFactorUserSet) 'demandFactorUserSet': true,
+        if (cosPhiUserSet) 'cosPhiUserSet': true,
+        if (phasesUserSet) 'phasesUserSet': true,
+        if (loadKindUserSet) 'loadKindUserSet': true,
+        // Round 24 — a provenance-aware MEP way says so; a legacy way that has
+        // not yet been resolved by a sync keeps its legacy status on re-save.
+        // Round 25 — a PARKED way (source removed) is stamped too, so a parked
+        // way written by a provenance-aware build is never mistaken for legacy.
+        if (isMepProvenanced && !legacyProvenance) kMepProvenanceKey: 1,
       };
 
   /// Tolerant decode: unknown enum names fall back to the field default,
@@ -309,6 +399,7 @@ class ElectricalCircuit {
             : Current((json['breakerOverrideA'] as num).toDouble()),
         groupingCountOverride: (json['groupingCountOverride'] as num?)?.toInt(),
         phaseOverride: _enumOrNull(PhaseLine.values, json['phaseOverride']),
+        assignedPhase: _enumOrNull(PhaseLine.values, json['assignedPhase']),
         busbarBreakBefore: json['busbarBreakBefore'] == true,
         // Legacy files persisted duplicateCircuit's old '' sentinel for "no
         // feeder target" — normalize it to null (isFeeder relies on non-null).
@@ -323,6 +414,15 @@ class ElectricalCircuit {
         loadPos: json['loadPos'] is Map<String, dynamic>
             ? LayoutPos.fromJson(json['loadPos'] as Map<String, dynamic>)
             : null,
+        demandFactorUserSet: json['demandFactorUserSet'] == true,
+        cosPhiUserSet: json['cosPhiUserSet'] == true,
+        phasesUserSet: json['phasesUserSet'] == true,
+        loadKindUserSet: json['loadKindUserSet'] == true,
+        legacyProvenance: (json['sourceEquipmentId'] is String ||
+                (json['name'] is String &&
+                    (json['name'] as String)
+                        .endsWith(kMepParkedNameSuffix))) &&
+            !json.containsKey(kMepProvenanceKey),
       );
 }
 
@@ -374,8 +474,12 @@ class ElectricalPanel {
   /// generator backup. Carried for the A8 sources / power-one-line pass.
   final bool essential;
 
-  /// Critical / UPS-backed board: backed by the battery bank in the A8 sources
-  /// pass (the topmost-flagged-demand tier).
+  /// Critical / UPS-backed board, supplied THROUGH a UPS. Round 44: its
+  /// feeder (and every board upstream) carries the UPS INPUT — the board's
+  /// diversified demand × `kUpsInputFactor` (÷ 0.94 efficiency × 1.10
+  /// recharge, `// VERIFY`) at a balanced rectifier draw — and an INFO
+  /// `ups-not-sized` states that no UPS unit / battery is sized or taken off
+  /// (enter the battery as a project source).
   final bool upsBacked;
 
   /// Tenant sub-metered board — picks direct vs CT revenue metering in the A8
@@ -688,9 +792,9 @@ class ElectricalProject {
   /// the LV main bus. Distinct from the advanced study's COMPUTED PF-correction
   /// recommendation (`power_factor.dart`): this is the engineer-supplied
   /// nameplate. When set it labels the CAPACITOR BANK source-spine node verbatim
-  /// (`CAPACITOR BANK <kvar> kvar`); when null the node falls back to the generic
-  /// "PF correction" caption. Drawing the node stays gated on `sources != null`
-  /// OR `capacitorBankKvar != null`. A drawing input only — it never feeds a
+  /// (`CAPACITOR BANK <kvar> kvar`). Round 14: the node is drawn ONLY when this
+  /// is > 0 — declaring a genset / solar source no longer implies a generic
+  /// "PF correction" bank on the issued single-line. A drawing input only — it never feeds a
   /// sizing path. // VERIFY — PF-target / step practice, not an SNI/PUIL clause.
   /// Additive (default null ⇒ byte-identical).
   final double? capacitorBankKvar;
@@ -718,6 +822,17 @@ class ElectricalProject {
   /// fault rung. Additive (default null ⇒ byte-identical).
   final ApparentPower? supplyCapacityVa;
 
+  /// Round 58 (elec-convergence-10-n-section-transformer-service-
+  /// unrepresentable) — the number of SEPARATE transformer sections on the
+  /// service: one unit per section, the sections never paralleled (each feeds
+  /// its own service-entrance board, e.g. one transformer per building of a
+  /// campus). Null = the legacy reading (one section, or two on a
+  /// [dualTransformer] service) ⇒ byte-identical. A declared connection
+  /// capacity is split across the sections; an explicit [transformerKva] is
+  /// the per-unit rating. Additive, tolerant in `.mechx` (absent / < 1 ⇒
+  /// null).
+  final int? transformerUnits;
+
   const ElectricalProject({
     this.id = '',
     this.name = '',
@@ -739,7 +854,34 @@ class ElectricalProject {
     this.transformerKva,
     this.supplyKind = SupplyKind.pln,
     this.supplyCapacityVa,
+    this.transformerUnits,
   });
+
+  /// A copy with [panels] replaced and every other field carried through.
+  ElectricalProject withPanels(List<ElectricalPanel> panels) =>
+      ElectricalProject(
+        id: id,
+        name: name,
+        panels: panels,
+        earthingSystem: earthingSystem,
+        sources: sources,
+        dualTransformer: dualTransformer,
+        occupancy: occupancy,
+        soilResistivityOhmM: soilResistivityOhmM,
+        groundFlashDensity: groundFlashDensity,
+        externalLps: externalLps,
+        overheadSupply: overheadSupply,
+        buildingLengthM: buildingLengthM,
+        buildingWidthM: buildingWidthM,
+        buildingHeightM: buildingHeightM,
+        originFaultLevelA: originFaultLevelA,
+        busbarClearingTimeS: busbarClearingTimeS,
+        capacitorBankKvar: capacitorBankKvar,
+        transformerKva: transformerKva,
+        supplyKind: supplyKind,
+        supplyCapacityVa: supplyCapacityVa,
+        transformerUnits: transformerUnits,
+      );
 
   /// Serialize to a plain JSON map. Enums by `.name`; the panels recurse;
   /// optional fields are omitted when null so the file stays small + round-trips.
@@ -768,6 +910,7 @@ class ElectricalProject {
         if (supplyKind != SupplyKind.pln) 'supplyKind': supplyKind.name,
         if (supplyCapacityVa != null)
           'supplyCapacityVa': supplyCapacityVa!.voltAmperes,
+        if (transformerUnits != null) 'transformerUnits': transformerUnits,
         'panels': [for (final p in panels) p.toJson()],
       };
 
@@ -810,11 +953,20 @@ class ElectricalProject {
         supplyCapacityVa: json['supplyCapacityVa'] == null
             ? null
             : ApparentPower((json['supplyCapacityVa'] as num).toDouble()),
+        transformerUnits: _sectionsOrNull(json['transformerUnits']),
         panels: [
           for (final p in (json['panels'] as List? ?? const []))
             ElectricalPanel.fromJson(p as Map<String, dynamic>),
         ],
       );
+}
+
+/// Round 58 — a tolerant transformer-section count: a finite number >= 1
+/// (rounded down, capped at 32), else null (the legacy reading).
+int? _sectionsOrNull(Object? v) {
+  if (v is! num || !v.isFinite || v < 1) return null;
+  final n = v.floor();
+  return n > 32 ? 32 : n;
 }
 
 /// Serialize an [ElectricalSources] to JSON. `sources.dart` carries no codec
@@ -824,6 +976,7 @@ Map<String, dynamic> _sourcesToJson(ElectricalSources s) => {
       if (s.generator != null) 'generator': {
           if (s.generator!.kva != null)
             'kva': s.generator!.kva!.voltAmperes,
+          if (s.generator!.units != 1) 'units': s.generator!.units,
           'backupFraction': s.generator!.backupFraction,
           'mode': s.generator!.mode.name,
           'transfer': s.generator!.transfer.name,
@@ -850,6 +1003,12 @@ ElectricalSources _sourcesFromJson(Map<String, dynamic> json) {
       kva: g['kva'] == null
           ? null
           : ApparentPower((g['kva'] as num).toDouble()),
+      // Round 44 — tolerant: absent / non-integer / < 1 ⇒ one set.
+      units: (g['units'] is num &&
+              (g['units'] as num).isFinite &&
+              (g['units'] as num) >= 1)
+          ? (g['units'] as num).floor()
+          : 1,
       backupFraction: (g['backupFraction'] as num?)?.toDouble() ?? 1.0,
       mode: _enumOr(GeneratorMode.values, g['mode'], GeneratorMode.standby),
       transfer: _enumOr(
@@ -862,10 +1021,19 @@ ElectricalSources _sourcesFromJson(Map<String, dynamic> json) {
   SolarSource? solar;
   final so = json['solar'];
   if (so is Map<String, dynamic>) {
+    // Round 19 (persistence-2-2) — tolerant decode: a non-finite / non-
+    // positive DC:AC ratio (a hand-edited 0 made arrayKwp / 0 = Infinity and
+    // threw inside the inverter selection, taking down the advanced study,
+    // the warning surface, the BOM and the quotation) falls back to the
+    // default; a negative module count clamps to 0, a module rating to ≥ 1 W.
+    double? numOf(Object? v) => v is num ? v.toDouble() : null;
+    final ratio = numOf(so['dcAcRatio']);
+    final wp = numOf(so['panelWp']);
+    final n = numOf(so['panels']);
     solar = SolarSource(
-      panelWp: (so['panelWp'] as num?)?.toInt() ?? 550,
-      panels: (so['panels'] as num?)?.toInt() ?? 0,
-      dcAcRatio: (so['dcAcRatio'] as num?)?.toDouble() ?? 1.2,
+      panelWp: (wp == null || !wp.isFinite) ? 550 : math.max(1, wp.toInt()),
+      panels: (n == null || !n.isFinite) ? 0 : math.max(0, n.toInt()),
+      dcAcRatio: (ratio != null && ratio.isFinite && ratio > 0) ? ratio : 1.2,
     );
   }
   BatterySource? battery;

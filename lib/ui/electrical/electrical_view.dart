@@ -21,8 +21,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
-import 'package:mechx_engine/electrical/fault.dart'
-    show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
 import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
 import 'package:mechx_engine/electrical/lightning.dart' show LpsLevelLabel;
 import 'package:mechx_engine/electrical/load_kind.dart';
@@ -47,6 +45,7 @@ import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/units.dart';
 
 import '../../store/app_state.dart';
+import '../../store/command_store.dart' show ExportGroup, exportSheetProvider;
 import '../../store/electrical_feed.dart';
 import '../../store/electrical_focus_store.dart';
 import '../../store/electrical_store.dart';
@@ -56,6 +55,7 @@ import '../../store/sheets_store.dart';
 import '../canvas/canvas_minimap.dart';
 import '../canvas/viewport.dart';
 import '../canvas/zoom_controls.dart';
+import '../inspector/disclosure_header.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
@@ -69,7 +69,6 @@ import '../widgets/section_label.dart';
 import '../widgets/severity_glyph.dart';
 import 'electrical_canvas.dart';
 import 'electrical_controls.dart';
-import 'electrical_export.dart';
 import 'electrical_format.dart';
 import 'electrical_inspector.dart'
     show
@@ -135,9 +134,6 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
   /// Whether the gesture-help popover is open.
   bool _showHelp = false;
 
-  /// Whether the Export menu (SLD / report / power one-line) is open.
-  bool _showExportMenu = false;
-
   /// The single-line canvas's live viewport (transform + size), published by
   /// the canvas so the minimap (I8) can draw a truthful viewport rectangle and
   /// pan-to-tap. A [ValueNotifier] so a pan repaints only the minimap, not the
@@ -163,16 +159,9 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     }
   }
 
-  /// Close the export menu and run the chosen export action against the live
-  /// providers (the file dialog + IO live in `electrical_export.dart`).
-  void _runExport(Future<void> Function(WidgetRef) action) {
-    setState(() => _showExportMenu = false);
-    action(ref);
-  }
-
   /// G4 — the electrical-workspace Esc ladder. Bubbles up from the canvas's own
   /// Focus (which clears any canvas selection first), then closes the topmost
-  /// open overlay: a context menu → the export popover → an open inspector /
+  /// open overlay: a context menu → an open inspector /
   /// drawer → the gesture-help popover. Every close path already exists as a
   /// `setState`; this just gives them a keyboard exit (they previously closed
   /// only by scrim / button). Non-Esc keys / an all-closed workspace bubble on.
@@ -188,11 +177,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       });
       return KeyEventResult.handled;
     }
-    if (_showExportMenu) {
-      setState(() => _showExportMenu = false);
-      return KeyEventResult.handled;
-    }
-    // Any open inline inspector section (circuit / panel / Service / Sources /
+    // Any open inline inspector section (circuit / panel / Supply /
     // Advanced) is one shared target — Esc clears it.
     if (ref.read(electricalInspectorTargetProvider) != null) {
       ref.read(electricalInspectorTargetProvider.notifier).clear();
@@ -228,9 +213,12 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
           // single-line canvas's OWN selection (the same path G5's Issues drawer
           // uses), unlike electricalSelectionProvider which only the Layout
           // layer consumes (a no-op on the single-line tab this jump lands on).
-          _canvasKey.currentState?.focusIssue(req.panelId, circuitId: circuitId);
+          // V1 — the Locate framing eases from where the view was.
+          _canvasKey.currentState
+              ?.focusIssue(req.panelId, circuitId: circuitId, animate: true);
         } else {
-          _canvasKey.currentState?.focusPanelSchedule(req.panelId);
+          _canvasKey.currentState
+              ?.focusPanelSchedule(req.panelId, animate: true);
         }
         ref.read(electricalFocusProvider.notifier).clear();
       });
@@ -243,13 +231,21 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _Toolbar(
-          warningCount: allWarnings.length,
+          // Round 31 (ui-simplicity-4) — the danger-toned 'Electrical issues
+          // (n)' counts what Review's Warnings group counts: warnings +
+          // errors, never the info notes.
+          warningCount: allWarnings
+              .where((w) => w.severity != WarningSeverity.info)
+              .length,
           tab: tab,
           onTab: (t) => ref.read(electricalTabProvider.notifier).set(t),
-          onService: _openService,
-          onSources: _openSources,
+          onSupply: _openSupply,
           onAddPanel: _addPanel,
-          onExport: () => setState(() => _showExportMenu = !_showExportMenu),
+          // Work item 8: Export opens the ONE Export sheet with its
+          // Electrical group pre-expanded.
+          onExport: () => ref
+              .read(exportSheetProvider.notifier)
+              .open(ExportGroup.electrical),
           onToggleAdvanced: () =>
               ref.read(electricalInspectorTargetProvider.notifier)
                   .toggleAdvanced(),
@@ -282,40 +278,17 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
         // Tap-away scrim behind any open menu / export popover. (The circuit /
         // panel editors no longer float here — they live in the sibling inline
         // inspector column, closed via its Close button or Esc.)
-        if (_panelMenu != null || _circuitMenu != null || _showExportMenu)
+        if (_panelMenu != null || _circuitMenu != null)
           Positioned.fill(
             child: Listener(
-              onPointerDown: (_) {
-                _closeOverlays();
-                if (_showExportMenu) setState(() => _showExportMenu = false);
-              },
+              onPointerDown: (_) => _closeOverlays(),
               behavior: HitTestBehavior.translucent,
               child: const SizedBox.expand(),
             ),
           ),
-        if (_showExportMenu)
-          Positioned(
-            top: 48,
-            right: MechXSpacing.md,
-            child: _ExportMenu(
-              onSld: () => _runExport(exportElectricalSldDxf),
-              onSldPdf: () => _runExport(exportElectricalSldPdf),
-              onSchedulesPdf: () =>
-                  _runExport(exportElectricalPanelSchedulesPdf),
-              onOverviewPdf: () => _runExport(exportElectricalOverviewPdf),
-              onOverviewDxf: () => _runExport(exportElectricalOverviewDxf),
-              onRiserPdf: () => _runExport(exportElectricalRiserPdf),
-              onRiserDxf: () => _runExport(exportElectricalRiserDxf),
-              onReport: () => _runExport(exportElectricalCalcReport),
-              onPowerOneLine: () => _runExport(exportPowerOneLineDxf),
-              onPowerOneLinePdf: () => _runExport(exportPowerOneLinePdf),
-              onPlanPdf: () => _runExport(exportElectricalPlanPdf),
-              onPlanDxf: () => _runExport(exportElectricalPlanDxf),
-            ),
-          ),
         if (_circuitMenu != null) _buildCircuitMenu(),
         if (_panelMenu != null) _buildPanelMenu(),
-        // C1: the Service & Earthing / Sources / Advanced-study editors no longer
+        // C1: the Supply / Advanced-study editors no longer
         // float here — like the circuit / panel editors they now render INLINE in
         // the sibling inspector column (driven by electricalInspectorTargetProvider).
       ],
@@ -351,8 +324,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                     _circuitMenu = _CircuitRef(panelId, circuitId);
                     _menuAt = _toLocal(gp);
                   }),
-                  onRequestService: _openService,
-                  onRequestSources: _openSources,
+                  onRequestSupply: _openSupply,
                 ),
               ),
               // Zoom controls (bottom-left).
@@ -360,9 +332,13 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                 left: MechXSpacing.md,
                 bottom: MechXSpacing.md,
                 child: ZoomControls(
-                  onIn: () => _canvasKey.currentState?.zoomIn(),
-                  onOut: () => _canvasKey.currentState?.zoomOut(),
-                  onFit: () => _canvasKey.currentState?.fitView(),
+                  // V1 — the zoom buttons + Fit ease (the Layout G4 tween).
+                  onIn: () =>
+                      _canvasKey.currentState?.zoomIn(animate: true),
+                  onOut: () =>
+                      _canvasKey.currentState?.zoomOut(animate: true),
+                  onFit: () =>
+                      _canvasKey.currentState?.fitView(animate: true),
                 ),
               ),
               // Minimap (bottom-right) — tracks the live viewport + dragged
@@ -412,7 +388,7 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
                 Positioned.fill(
                   child: Center(
                     child: _EmptyState(
-                      onSetUp: _openService,
+                      onSetUp: _openSupply,
                       onAddPanel: _addPanel,
                       onLoadSample: _controller.resetToSample,
                     ),
@@ -434,12 +410,14 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
       project: project,
       result: result,
       building: building,
+      // Round 17 — canvas/export parity: the live riser shows the supply.
+      sourceChain: true,
     );
     return _SldProjectionArea(
       sheetKey: _riserKey,
       sheet: sheet,
       empty: project.panels.isEmpty,
-      onSetUp: _openService,
+      onSetUp: _openSupply,
       onAddPanel: _addPanel,
       onLoadSample: _controller.resetToSample,
     );
@@ -458,27 +436,21 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
     // G8 — mint the first FREE SP-N ordinal (max+1 across existing names AND
     // tags), so deleting a board never lets a later add re-mint its
     // designation onto an issued schedule.
-    final n = nextSubPanelOrdinal(ref.read(electricalProjectProvider).panels);
+    final project = ref.read(electricalProjectProvider);
+    final n = nextSubPanelOrdinal(project.panels);
+    // Round 12 — below the lowest existing board, never on top of it.
+    final slot =
+        nextPanelDropSlot(project, ref.read(electricalResultProvider));
     _controller.addPanelAt(
       name: 'Sub-panel $n',
       tag: 'SP-$n',
-      x: 80 + n * 40,
-      y: 80 + n * 40,
+      x: slot.dx,
+      y: slot.dy,
     );
   }
 
-  void _openService() {
-    ref.read(electricalInspectorTargetProvider.notifier).showService();
-    if (_panelMenu != null || _circuitMenu != null) {
-      setState(() {
-        _panelMenu = null;
-        _circuitMenu = null;
-      });
-    }
-  }
-
-  void _openSources() {
-    ref.read(electricalInspectorTargetProvider.notifier).showSources();
+  void _openSupply() {
+    ref.read(electricalInspectorTargetProvider.notifier).showSupply();
     if (_panelMenu != null || _circuitMenu != null) {
       setState(() {
         _panelMenu = null;
@@ -561,7 +533,8 @@ class _ElectricalViewState extends ConsumerState<ElectricalView> {
               .editCircuit(ref0.panelId, ref0.circuitId);
           setState(() => _circuitMenu = null);
         },
-        hasLoadPos: loadPos != null,
+        // Round 31 — an MEP-derived load follows its equipment: no un-place.
+        hasLoadPos: loadPos != null && circuit?.sourceEquipmentId == null,
         onUnplace: () =>
             unplaceCircuitLoad(ref, context, ref0.panelId, ref0.circuitId),
         // Cross-view jump to the Layout electrical layer — only when the
@@ -749,6 +722,12 @@ void unplaceCircuitLoad(
   String circuitId,
 ) {
   final ctrl = ref.read(electricalProjectProvider.notifier);
+  // Round 31 (stress-edits-2) — an MEP-derived load follows its equipment:
+  // the store refuses (and narrates); no undo step is pushed for a no-op.
+  if (ctrl.isMepDerivedWay(panelId, circuitId)) {
+    ctrl.setLoadPos(panelId, circuitId, null);
+    return;
+  }
   ctrl.pushUndoSnapshot();
   ctrl.setLoadPos(panelId, circuitId, null);
   ref
@@ -769,7 +748,7 @@ Future<String?> showApplyTemplateDialog(BuildContext context) {
     barrierLabel:
         context.strings(StringKey.electricalApplyTemplateBarrier),
     barrierColor: theme.colors.scrim,
-    transitionDuration: MechXMotion.appear,
+    transitionDuration: MechXMotion.resolve(context, MechXMotion.appear),
     pageBuilder: (ctx, _, _) => MechXTheme(
       data: theme,
       child: const Center(child: _ApplyTemplateDialog()),
@@ -867,7 +846,7 @@ class _TemplateRowState extends State<_TemplateRow> {
         onTap: widget.onTap,
         behavior: HitTestBehavior.opaque,
         child: AnimatedContainer(
-          duration: MechXMotion.hover,
+          duration: MechXMotion.resolve(context, MechXMotion.hover),
           curve: MechXMotion.standard,
           margin: const EdgeInsets.only(bottom: MechXSpacing.xxs),
           padding: const EdgeInsets.symmetric(
@@ -893,8 +872,7 @@ class _Toolbar extends StatelessWidget {
   final int warningCount;
   final ElectricalTab tab;
   final ValueChanged<ElectricalTab> onTab;
-  final VoidCallback onService;
-  final VoidCallback onSources;
+  final VoidCallback onSupply;
   final VoidCallback onAddPanel;
   final VoidCallback onExport;
   final VoidCallback onToggleAdvanced;
@@ -904,8 +882,7 @@ class _Toolbar extends StatelessWidget {
     required this.warningCount,
     required this.tab,
     required this.onTab,
-    required this.onService,
-    required this.onSources,
+    required this.onSupply,
     required this.onAddPanel,
     required this.onExport,
     required this.onToggleAdvanced,
@@ -996,13 +973,11 @@ class _Toolbar extends StatelessWidget {
                     onPressed: onToggleAdvanced,
                   ),
                   MechXButton(
-                    label:
-                        context.strings(StringKey.electricalServiceEarthing),
-                    onPressed: onService,
-                  ),
-                  MechXButton(
-                    label: context.strings(StringKey.electricalSources),
-                    onPressed: onSources,
+                    // ONE Supply inspector (utility / earthing / backup /
+                    // advanced) — merges the former Service & Earthing and
+                    // Sources buttons.
+                    label: context.strings(StringKey.electricalSupply),
+                    onPressed: onSupply,
                   ),
                   MechXButton(
                     label: context.strings(StringKey.electricalAddPanel),
@@ -1027,201 +1002,6 @@ class _Toolbar extends StatelessWidget {
 }
 
 // ── Canvas chrome (zoom, minimap, help) ─────────────────────────────────────
-
-/// The Export popover (anchored under the toolbar's Export button) — single-line
-/// DXF, electrical report (Markdown) and power one-line DXF.
-class _ExportMenu extends StatelessWidget {
-  final VoidCallback onSld;
-  final VoidCallback onSldPdf;
-  final VoidCallback onSchedulesPdf;
-  final VoidCallback onOverviewPdf;
-  final VoidCallback onOverviewDxf;
-  final VoidCallback onRiserPdf;
-  final VoidCallback onRiserDxf;
-  final VoidCallback onReport;
-  final VoidCallback onPowerOneLine;
-  final VoidCallback onPowerOneLinePdf;
-  final VoidCallback onPlanPdf;
-  final VoidCallback onPlanDxf;
-  const _ExportMenu({
-    required this.onSld,
-    required this.onSldPdf,
-    required this.onSchedulesPdf,
-    required this.onOverviewPdf,
-    required this.onOverviewDxf,
-    required this.onRiserPdf,
-    required this.onRiserDxf,
-    required this.onReport,
-    required this.onPowerOneLine,
-    required this.onPowerOneLinePdf,
-    required this.onPlanPdf,
-    required this.onPlanDxf,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    // Pop-in: a brief scale-from-95% + fade, anchored at the top-right corner
-    // (under the Export button), so the popover feels like it grows from there.
-    return TweenAnimationBuilder<double>(
-      tween: Tween(begin: 0, end: 1),
-      duration: MechXMotion.appear,
-      curve: MechXMotion.standard,
-      builder: (context, t, child) => Opacity(
-        opacity: t,
-        child: Transform.scale(
-          scale: 0.95 + 0.05 * t,
-          alignment: Alignment.topRight,
-          child: child,
-        ),
-      ),
-      child: SizedBox(
-        width: 260,
-        child: GlassSurface(
-          borderRadius: MechXRadii.card,
-          blurSigma: MechXGlass.blurSigmaLight,
-          shadow: MechXShadow.popover,
-          child: Padding(
-            padding: const EdgeInsets.all(MechXSpacing.xs),
-            child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // H1 — the plan-accurate installation layout (denah instalasi
-            // listrik): panels + loads at their real placed positions on the
-            // floor plan, the drawing an Indonesian building-permit set requires.
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPlan),
-              sub: context.strings(StringKey.electricalExportSldPdf),
-              onTap: onPlanPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPlan),
-              sub: context.strings(StringKey.electricalExportSldDxf),
-              onTap: onPlanDxf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportSld),
-              sub: context.strings(StringKey.electricalExportSldDxf),
-              onTap: onSld,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportSld),
-              sub: context.strings(StringKey.electricalExportSldPdf),
-              onTap: onSldPdf,
-            ),
-            // The issuable schedule SET — one board schedule per page, real
-            // `Sheet i of t` counters (C1 pagination).
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportSchedules),
-              sub: context.strings(StringKey.electricalExportSchedulesPdf),
-              onTap: onSchedulesPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportOverview),
-              sub: context.strings(StringKey.electricalExportOverviewPdf),
-              onTap: onOverviewPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportOverview),
-              sub: context.strings(StringKey.electricalExportOverviewDxf),
-              onTap: onOverviewDxf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportRiser),
-              sub: context.strings(StringKey.electricalExportRiserPdf),
-              onTap: onRiserPdf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportRiser),
-              sub: context.strings(StringKey.electricalExportRiserDxf),
-              onTap: onRiserDxf,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportReport),
-              sub: context.strings(StringKey.electricalExportReportSub),
-              onTap: onReport,
-            ),
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPowerOneLine),
-              sub: context.strings(StringKey.electricalExportPowerOneLineSub),
-              onTap: onPowerOneLine,
-            ),
-            // C7 — the PDF companion (same shared SldSheet geometry as the DXF).
-            // Reuses the generic 'PDF (vector)' string; a dedicated
-            // power-one-line-PDF key is owned by app_strings.dart (see followUps).
-            _ExportRow(
-              label: context.strings(StringKey.electricalExportPowerOneLine),
-              sub: context.strings(StringKey.electricalExportSldPdf),
-              onTap: onPowerOneLinePdf,
-            ),
-          ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ExportRow extends StatefulWidget {
-  final String label;
-  final String sub;
-  final VoidCallback onTap;
-  const _ExportRow({
-    required this.label,
-    required this.sub,
-    required this.onTap,
-  });
-
-  @override
-  State<_ExportRow> createState() => _ExportRowState();
-}
-
-class _ExportRowState extends State<_ExportRow> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        behavior: HitTestBehavior.opaque,
-        child: AnimatedContainer(
-          duration: MechXMotion.hover,
-          curve: MechXMotion.standard,
-          padding: const EdgeInsets.symmetric(
-            horizontal: MechXSpacing.sm,
-            vertical: MechXSpacing.sm,
-          ),
-          decoration: BoxDecoration(
-            color: _hover ? colors.surfaceHover : const Color(0x00000000),
-            borderRadius: MechXRadii.control,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                widget.label,
-                style: type.label.copyWith(color: colors.textPrimary),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                widget.sub,
-                style: type.caption.copyWith(color: colors.textMuted),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// J6 — the electrical panel layout's padded world bounds, expressed as the
 /// shared [CanvasMinimap]'s CONTENT rectangle: the world point that maps to
@@ -1380,24 +1160,37 @@ class ElectricalSystemSummary extends ConsumerWidget {
     final base = numeric ? MechXTypography.tabular(type.caption) : type.caption;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xxs),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(key,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: type.caption.copyWith(color: colors.textMuted)),
-          ),
-          const SizedBox(width: MechXSpacing.xs),
-          Flexible(
-            child: Text(value,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.right,
-                style: base.copyWith(color: colors.textSecondary)),
-          ),
-        ],
+      // The value hugs the RIGHT edge like the mechanical `_kvRow`: laid out
+      // at its intrinsic width (capped at ~2/3 of the row so a long value
+      // wraps instead of starving the key), with the key taking the rest — an
+      // Expanded key + Flexible value split the row 50/50 and parked short
+      // values mid-row.
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final valueMax = constraints.hasBoundedWidth
+              ? constraints.maxWidth * 2 / 3
+              : double.infinity;
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(key,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.caption.copyWith(color: colors.textMuted)),
+              ),
+              const SizedBox(width: MechXSpacing.xs),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: valueMax),
+                child: Text(value,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: base.copyWith(color: colors.textSecondary)),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1428,14 +1221,18 @@ class _EmptyState extends StatelessWidget {
       padding: const EdgeInsets.all(MechXSpacing.lg),
       child: MechXEmptyStateCard(
         title: context.strings(StringKey.electricalEmptyTitle),
-        body: context.strings(StringKey.electricalEmptyBody),
+        // Round 25 — names the toolbar control through its OWN key, so the
+        // copy can never drift from the button again.
+        body: context.strings.format(StringKey.electricalEmptyBody, {
+          'supply': context.strings(StringKey.electricalSupply),
+        }),
         actions: [
           MechXButton(
             label: context.strings(StringKey.electricalAddPanel),
             onPressed: onAddPanel,
           ),
           MechXButton(
-            label: context.strings(StringKey.electricalServiceEarthing),
+            label: context.strings(StringKey.electricalSupply),
             onPressed: onSetUp,
           ),
           MechXButton(
@@ -1501,16 +1298,30 @@ class _SldProjectionArea extends StatelessWidget {
   }
 }
 
-// ── Service inspector ─────────────────────────────────────────────────────────
+// ── Supply inspector (utility / earthing / backup & on-site / advanced) ─────
 
-/// The project-wide Service & Earthing settings — earthing system, origin fault
-/// level, busbar clearing time + the MEP-duty feed. C1: an INLINE inspector
-/// section (transparent, floats on the shared column's Liquid-Glass), no longer
-/// a floating right-drawer. Opened via the toolbar 'Service & Earthing' button →
-/// [electricalInspectorTargetProvider] `showService`.
-class ElectricalServiceInspector extends ConsumerWidget {
+/// Stable [sectionVisibilityProvider] keys of the Supply inspector's four
+/// disclosures (the labels are localized; these keys never change).
+const String kSupplyUtilitySectionKey = 'electrical.supply.utility';
+const String kSupplyEarthingSectionKey = 'electrical.supply.earthing';
+const String kSupplyBackupSectionKey = 'electrical.supply.backup';
+const String kSupplyAdvancedSectionKey = 'electrical.supply.advanced';
+
+/// The ONE project-wide Supply inspector — merges the former Service &
+/// Earthing and Sources editors, regrouped in DECISION order under four
+/// disclosures: **Utility** (supply kind, connection capacity, transformer,
+/// dual transformer), **Earthing** (system + note), **Backup & on-site**
+/// (genset / capacitor / solar / battery — open by default only once a source
+/// exists) and **Advanced** (origin fault level, busbar clearing time, the
+/// MEP-duty feed — collapsed by default). Every field keeps its exact store
+/// intent through the field-preserving `_withProject`; no engine change. C1:
+/// an INLINE inspector section in the shared column (never a floating drawer).
+/// Opened via the toolbar 'Supply' button, the canvas supply chain / PLN head
+/// tap, or the command palette → [electricalInspectorTargetProvider]
+/// `showSupply`.
+class ElectricalSupplyInspector extends ConsumerWidget {
   final VoidCallback onClose;
-  const ElectricalServiceInspector({super.key, required this.onClose});
+  const ElectricalSupplyInspector({super.key, required this.onClose});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1518,6 +1329,9 @@ class ElectricalServiceInspector extends ConsumerWidget {
     final type = context.type;
     final project = ref.watch(electricalProjectProvider);
     final ctrl = ref.read(electricalProjectProvider.notifier);
+    final gen = project.sources?.generator;
+    final solar = project.sources?.solar;
+    final battery = project.sources?.battery;
 
     // G1 — the solved-duty MEP → electrical bridge. The equipment the mechanical
     // engine has already sized (pump / fan / fire-pump duties) surfaced as
@@ -1530,149 +1344,11 @@ class ElectricalServiceInspector extends ConsumerWidget {
     // explicit setting wins, else a declared service size (transformer kVA /
     // connection capacity) drives a size-appropriate estimate, else the flat
     // app default — so the field shows the fault level the solve actually uses.
-    final effectiveOriginFaultLevelKa = project.originFaultLevelA != null
-        ? project.originFaultLevelA!.amperes / 1000
-        : (estimatedServiceFaultLevelA(project)?.amperes ??
-                defaultLvUtilityFaultKa * 1000) /
-            1000;
-
-    return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.md,
-                MechXSpacing.md,
-                MechXSpacing.md,
-                MechXSpacing.sm + 4,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      context.strings(StringKey.electricalServiceEarthing),
-                      style: type.title.copyWith(color: colors.textPrimary),
-                    ),
-                  ),
-                  MechXButton(
-                    label: context.strings(StringKey.electricalClose),
-                    tertiary: true,
-                    onPressed: onClose,
-                  ),
-                ],
-              ),
-            ),
-            Container(height: 1, color: colors.border),
-            const SizedBox(height: MechXSpacing.xs),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(MechXSpacing.md),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    ElectricalField(
-                      label:
-                          context.strings(StringKey.electricalFieldEarthingSystem),
-                      child: ElectricalEnumPicker<EarthingSystem>(
-                        value: project.earthingSystem,
-                        options: EarthingSystem.values,
-                        label: (e) => e.label,
-                        onChanged: ctrl.setEarthingSystem,
-                      ),
-                    ),
-                    Text(
-                      project.earthingSystem.note,
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                    const SizedBox(height: MechXSpacing.md),
-                    ElectricalField(
-                      label: context.strings(
-                        StringKey.electricalOriginFaultLevel,
-                      ),
-                      child: ElectricalNumInput(
-                        value: effectiveOriginFaultLevelKa,
-                        onChanged: (v) =>
-                            ctrl.setOriginFaultLevel(Current(v * 1000)),
-                      ),
-                    ),
-                    Text(
-                      context.strings(StringKey.electricalOriginFaultLevelNote),
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                    const SizedBox(height: MechXSpacing.md),
-                    ElectricalField(
-                      label: context.strings(
-                        StringKey.electricalBusbarClearingTime,
-                      ),
-                      child: ElectricalNumInput(
-                        value: project.busbarClearingTimeS ?? 0.1,
-                        onChanged: ctrl.setBusbarClearingTime,
-                      ),
-                    ),
-                    Text(
-                      context.strings(
-                        StringKey.electricalBusbarClearingTimeNote,
-                      ),
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                    const SizedBox(height: MechXSpacing.md),
-                    Container(height: 1, color: colors.border),
-                    const SizedBox(height: MechXSpacing.md),
-                    // ── MEP equipment feed (G1) ──────────────────────────────
-                    Text(
-                      'MEP equipment feed',
-                      style: type.label.copyWith(color: colors.textPrimary),
-                    ),
-                    const SizedBox(height: MechXSpacing.sm),
-                    ElectricalToggleRow(
-                      label: 'Add solved MEP duties to panel',
-                      value: dutyFeedOn,
-                      onChanged: (on) =>
-                          ref.read(mepDutyFeedEnabledProvider.notifier).set(on),
-                    ),
-                    Text(
-                      duties.isEmpty
-                          ? 'No auto-sized pump / fan / fire-pump duty yet — '
-                              'draw and size the mechanical systems first. '
-                              'Equipment placed on the plan always feeds the '
-                              'MEP Equipment panel.'
-                          : 'Folds the app-sized ${duties.map((d) => d.name).join(', ')} '
-                              'into the MEP Equipment panel as sized circuits — '
-                              'no re-entry of the kW. Fire pumps carry life-safety '
-                              'treatment. Placed equipment always feeds the panel.',
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        );
-  }
-}
-
-// ── Sources editor (genset / capacitor / transformer / dual-tx) ─────────────
-
-/// Edit the SOURCE chain drawn above the panel tree (the overview / riser /
-/// interactive single-line head + the PDF / DXF exports — one
-/// `_buildSourceSpine` geometry). Genset present/rating/mode/transfer, the
-/// installed capacitor bank (kvar), an explicit transformer rating (kVA), and
-/// the dual-transformer split bus. All route through the store's
-/// field-preserving `_withProject`; the capacitor / transformer are drawing
-/// inputs only (// VERIFY, never a sizing path).
-class ElectricalSourcesInspector extends ConsumerWidget {
-  final VoidCallback onClose;
-  const ElectricalSourcesInspector({super.key, required this.onClose});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = context.colors;
-    final type = context.type;
-    final project = ref.watch(electricalProjectProvider);
-    final ctrl = ref.read(electricalProjectProvider.notifier);
-    final gen = project.sources?.generator;
-    final solar = project.sources?.solar;
-    final battery = project.sources?.battery;
+    // Round 16 — the SAME chain, incl. the demand-sized MV transformer.
+    final effectiveOriginFaultLevelKa = effectiveOriginFaultLevel(project,
+                result: ref.watch(electricalResultProvider))
+            .amperes /
+        1000;
 
     String genModeLabel(GeneratorMode m) => switch (m) {
           GeneratorMode.standby =>
@@ -1687,252 +1363,339 @@ class ElectricalSourcesInspector extends ConsumerWidget {
             context.strings(StringKey.electricalGensetTransferManual),
         };
 
-    return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.md,
-                MechXSpacing.md,
-                MechXSpacing.md,
-                MechXSpacing.sm + 4,
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      context.strings(StringKey.electricalSources),
-                      style: type.title.copyWith(color: colors.textPrimary),
-                    ),
-                  ),
-                  MechXButton(
-                    label: context.strings(StringKey.electricalClose),
-                    tertiary: true,
-                    onPressed: onClose,
-                  ),
-                ],
-              ),
+    Widget note(String text) =>
+        Text(text, style: type.caption.copyWith(color: colors.textMuted));
+    Widget subhead(String text) => Padding(
+          padding: const EdgeInsets.only(bottom: MechXSpacing.sm),
+          child:
+              Text(text, style: type.label.copyWith(color: colors.textPrimary)),
+        );
+    Widget divider() => Padding(
+          padding: const EdgeInsets.symmetric(vertical: MechXSpacing.md),
+          child: Container(height: 1, color: colors.border),
+        );
+    Widget section(String key, StringKey label, bool open, List<Widget> body) =>
+        Padding(
+          padding: const EdgeInsets.only(bottom: MechXSpacing.md),
+          child: DisclosureSection(
+            name: key,
+            label: context.strings(label),
+            defaultExpanded: open,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: body,
             ),
-            Container(height: 1, color: colors.border),
-            const SizedBox(height: MechXSpacing.xs),
-            Expanded(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.all(MechXSpacing.md),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // ── Supply (the head node of the source spine) ────────
-                    Text(
-                      'Supply',
-                      style: type.label.copyWith(color: colors.textPrimary),
+          ),
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            MechXSpacing.md,
+            MechXSpacing.md,
+            MechXSpacing.md,
+            MechXSpacing.sm + 4,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  context.strings(StringKey.electricalSupply),
+                  style: type.title.copyWith(color: colors.textPrimary),
+                ),
+              ),
+              MechXButton(
+                label: context.strings(StringKey.electricalClose),
+                tertiary: true,
+                onPressed: onClose,
+              ),
+            ],
+          ),
+        ),
+        Container(height: 1, color: colors.border),
+        const SizedBox(height: MechXSpacing.xs),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(MechXSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ── Utility (the head node of the source spine) ──────────
+                section(kSupplyUtilitySectionKey,
+                    StringKey.electricalSupplyUtility, true, [
+                  ElectricalField(
+                    label: context.strings(StringKey.electricalSupplySource),
+                    child: ElectricalEnumPicker<SupplyKind>(
+                      value: project.supplyKind,
+                      options: SupplyKind.values,
+                      label: (k) => k.label,
+                      onChanged: ctrl.setSupplyKind,
                     ),
-                    const SizedBox(height: MechXSpacing.sm),
-                    ElectricalField(
-                      label: 'Source',
-                      child: ElectricalEnumPicker<SupplyKind>(
-                        value: project.supplyKind,
-                        options: SupplyKind.values,
-                        label: (k) => k.label,
-                        onChanged: ctrl.setSupplyKind,
+                  ),
+                  ElectricalField(
+                    label: context.strings(StringKey.electricalSupplyCapacityVa),
+                    child: ElectricalNumInput(
+                      value: project.supplyCapacityVa?.voltAmperes ?? 0,
+                      onChanged: (v) => ctrl.setSupplyCapacityVa(
+                        v > 0 ? ApparentPower(v) : null,
                       ),
                     ),
+                  ),
+                  note(context.strings(StringKey.electricalSupplyCapacityNote)),
+                  const SizedBox(height: MechXSpacing.md),
+                  ElectricalField(
+                    label: context.strings(StringKey.electricalTransformerKva),
+                    child: ElectricalNumInput(
+                      value: project.transformerKva?.inKilovoltAmperes ?? 0,
+                      onChanged: (v) => ctrl.setTransformerKva(
+                        v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
+                      ),
+                    ),
+                  ),
+                  note(context.strings(StringKey.electricalTransformerKvaNote)),
+                  const SizedBox(height: MechXSpacing.md),
+                  ElectricalToggleRow(
+                    label: context.strings(StringKey.electricalDualTransformer),
+                    value: project.dualTransformer,
+                    onChanged: ctrl.setDualTransformer,
+                  ),
+                  // Round 58 — N separate transformer sections.
+                  ElectricalField(
+                    label: context
+                        .strings(StringKey.electricalTransformerSections),
+                    child: ElectricalNumInput(
+                      value: (project.transformerUnits ?? 0).toDouble(),
+                      min: 0,
+                      max: 32,
+                      onChanged: (v) => ctrl.setTransformerUnits(
+                        v >= 1 ? v.floor() : null,
+                      ),
+                    ),
+                  ),
+                  note(context
+                      .strings(StringKey.electricalTransformerSectionsNote)),
+                ]),
+                // ── Earthing ─────────────────────────────────────────────
+                section(kSupplyEarthingSectionKey,
+                    StringKey.electricalSupplyEarthing, true, [
+                  ElectricalField(
+                    label:
+                        context.strings(StringKey.electricalFieldEarthingSystem),
+                    child: ElectricalEnumPicker<EarthingSystem>(
+                      value: project.earthingSystem,
+                      options: EarthingSystem.values,
+                      label: (e) => e.label,
+                      onChanged: ctrl.setEarthingSystem,
+                    ),
+                  ),
+                  note(project.earthingSystem.note),
+                  // Round 64 — the site soil resistivity: designs the earth
+                  // electrode and (TT) the Ra x IΔn <= 50 V judge.
+                  ElectricalField(
+                    label: context.strings(StringKey.electricalSoilResistivity),
+                    child: ElectricalOptionalNumInput(
+                      value: project.soilResistivityOhmM,
+                      hint: context
+                          .strings(StringKey.electricalSoilResistivityHint),
+                      zeroClears: true,
+                      onChanged: ctrl.setSoilResistivity,
+                    ),
+                  ),
+                  note(context.strings(StringKey.electricalSoilResistivityNote)),
+                ]),
+                // ── Backup & on-site sources ─────────────────────────────
+                section(kSupplyBackupSectionKey, StringKey.electricalSupplyBackup,
+                    project.sources != null, [
+                  subhead(context.strings(StringKey.electricalGenset)),
+                  ElectricalToggleRow(
+                    label: context.strings(StringKey.electricalGensetPresent),
+                    value: gen != null,
+                    onChanged: (on) =>
+                        ctrl.setGenerator(on ? const GeneratorSource() : null),
+                  ),
+                  if (gen != null) ...[
                     ElectricalField(
-                      label: 'Connection capacity (VA)',
+                      label: context.strings(StringKey.electricalGensetKva),
                       child: ElectricalNumInput(
-                        value: project.supplyCapacityVa?.voltAmperes ?? 0,
-                        onChanged: (v) => ctrl.setSupplyCapacityVa(
-                          v > 0 ? ApparentPower(v) : null,
-                        ),
-                      ),
-                    ),
-                    Text(
-                      'The declared connection (daya tersambung) in VA - '
-                      'e.g. 2200 / 33000 / 197000 - labels the supply node '
-                      'and rates the main board incomer + bus at the '
-                      'capacity\'s line current; 0 = not set (demand sizes '
-                      'the incomer).',
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                    const SizedBox(height: MechXSpacing.sm),
-                    Container(height: 1, color: colors.border),
-                    const SizedBox(height: MechXSpacing.md),
-                    // ── Genset ────────────────────────────────────────────
-                    Text(
-                      context.strings(StringKey.electricalGenset),
-                      style: type.label.copyWith(color: colors.textPrimary),
-                    ),
-                    const SizedBox(height: MechXSpacing.sm),
-                    ElectricalToggleRow(
-                      label: context.strings(StringKey.electricalGensetPresent),
-                      value: gen != null,
-                      onChanged: (on) => ctrl
-                          .setGenerator(on ? const GeneratorSource() : null),
-                    ),
-                    if (gen != null) ...[
-                      ElectricalField(
-                        label:
-                            context.strings(StringKey.electricalGensetKva),
-                        child: ElectricalNumInput(
-                          value: gen.kva?.inKilovoltAmperes ?? 0,
-                          onChanged: (v) => ctrl.setGeneratorKva(
-                            v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
-                          ),
-                        ),
-                      ),
-                      ElectricalField(
-                        label:
-                            context.strings(StringKey.electricalGensetMode),
-                        child: ElectricalEnumPicker<GeneratorMode>(
-                          value: gen.mode,
-                          options: GeneratorMode.values,
-                          label: genModeLabel,
-                          onChanged: ctrl.setGeneratorMode,
-                        ),
-                      ),
-                      ElectricalField(
-                        label: context
-                            .strings(StringKey.electricalGensetTransfer),
-                        child: ElectricalEnumPicker<GeneratorTransfer>(
-                          value: gen.transfer,
-                          options: GeneratorTransfer.values,
-                          label: genTransferLabel,
-                          onChanged: ctrl.setGeneratorTransfer,
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: MechXSpacing.sm),
-                    Container(height: 1, color: colors.border),
-                    const SizedBox(height: MechXSpacing.md),
-                    // ── Solar PV ─────────────────────────────────────────
-                    Text(
-                      'Solar PV',
-                      style: type.label.copyWith(color: colors.textPrimary),
-                    ),
-                    const SizedBox(height: MechXSpacing.sm),
-                    ElectricalToggleRow(
-                      label: 'Solar PV present',
-                      value: solar != null,
-                      onChanged: (on) => ctrl.setSolar(
-                          on ? const SolarSource(panels: 20) : null),
-                    ),
-                    if (solar != null) ...[
-                      ElectricalField(
-                        label: 'Panels',
-                        child: ElectricalNumInput(
-                          value: solar.panels.toDouble(),
-                          min: 1,
-                          onChanged: (v) => ctrl.setSolar(SolarSource(
-                            panelWp: solar.panelWp,
-                            panels: v.round().clamp(1, 100000),
-                            dcAcRatio: solar.dcAcRatio,
-                          )),
-                        ),
-                      ),
-                      ElectricalField(
-                        label: 'Panel rating (Wp)',
-                        child: ElectricalNumInput(
-                          value: solar.panelWp.toDouble(),
-                          min: 1,
-                          onChanged: (v) => ctrl.setSolar(SolarSource(
-                            panelWp: v.round().clamp(1, 2000),
-                            panels: solar.panels,
-                            dcAcRatio: solar.dcAcRatio,
-                          )),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: MechXSpacing.sm),
-                    Container(height: 1, color: colors.border),
-                    const SizedBox(height: MechXSpacing.md),
-                    // ── Battery ──────────────────────────────────────────
-                    Text(
-                      'Battery',
-                      style: type.label.copyWith(color: colors.textPrimary),
-                    ),
-                    const SizedBox(height: MechXSpacing.sm),
-                    ElectricalToggleRow(
-                      label: 'Battery present',
-                      value: battery != null,
-                      onChanged: (on) => ctrl.setBattery(
-                          on ? const BatterySource(autonomyHours: 2) : null),
-                    ),
-                    if (battery != null) ...[
-                      ElectricalField(
-                        label: 'Chemistry',
-                        child: ElectricalEnumPicker<BatteryChemistry>(
-                          value: battery.chemistry,
-                          options: BatteryChemistry.values,
-                          label: (c) => c.label,
-                          onChanged: (c) => ctrl.setBattery(BatterySource(
-                            chemistry: c,
-                            autonomyHours: battery.autonomyHours,
-                          )),
-                        ),
-                      ),
-                      ElectricalField(
-                        label: 'Autonomy (h)',
-                        child: ElectricalNumInput(
-                          value: battery.autonomyHours,
-                          min: 0.1,
-                          onChanged: (v) => ctrl.setBattery(BatterySource(
-                            chemistry: battery.chemistry,
-                            autonomyHours: v <= 0 ? battery.autonomyHours : v,
-                          )),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: MechXSpacing.sm),
-                    Container(height: 1, color: colors.border),
-                    const SizedBox(height: MechXSpacing.md),
-                    // ── Transformer ──────────────────────────────────────
-                    ElectricalField(
-                      label:
-                          context.strings(StringKey.electricalTransformerKva),
-                      child: ElectricalNumInput(
-                        value: project.transformerKva?.inKilovoltAmperes ?? 0,
-                        onChanged: (v) => ctrl.setTransformerKva(
+                        value: gen.kva?.inKilovoltAmperes ?? 0,
+                        onChanged: (v) => ctrl.setGeneratorKva(
                           v > 0 ? ApparentPower.kilovoltAmperes(v) : null,
                         ),
                       ),
                     ),
-                    Text(
-                      context.strings(StringKey.electricalTransformerKvaNote),
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                    const SizedBox(height: MechXSpacing.md),
-                    // ── Capacitor bank ───────────────────────────────────
+                    // Round 44 — a forced plant of n paralleled sets.
+                    if (gen.kva != null)
+                      ElectricalField(
+                        label:
+                            context.strings(StringKey.electricalGensetUnits),
+                        child: ElectricalNumInput(
+                          value: gen.units.toDouble(),
+                          min: 1,
+                          max: 16,
+                          onChanged: (v) => ctrl.setGeneratorUnits(v.round()),
+                        ),
+                      ),
                     ElectricalField(
-                      label:
-                          context.strings(StringKey.electricalCapacitorKvar),
-                      child: ElectricalNumInput(
-                        value: project.capacitorBankKvar ?? 0,
-                        onChanged: (v) =>
-                            ctrl.setCapacitorBankKvar(v > 0 ? v : null),
+                      label: context.strings(StringKey.electricalGensetMode),
+                      child: ElectricalEnumPicker<GeneratorMode>(
+                        value: gen.mode,
+                        options: GeneratorMode.values,
+                        label: genModeLabel,
+                        onChanged: ctrl.setGeneratorMode,
                       ),
                     ),
-                    Text(
-                      context.strings(StringKey.electricalCapacitorKvarNote),
-                      style: type.caption.copyWith(color: colors.textMuted),
-                    ),
-                    const SizedBox(height: MechXSpacing.md),
-                    // ── Dual transformer ─────────────────────────────────
-                    ElectricalToggleRow(
-                      label: context
-                          .strings(StringKey.electricalDualTransformer),
-                      value: project.dualTransformer,
-                      onChanged: ctrl.setDualTransformer,
-                    ),
-                    const SizedBox(height: MechXSpacing.sm),
-                    Text(
-                      context.strings(StringKey.electricalSourcesNote),
-                      style: type.caption.copyWith(color: colors.textMuted),
+                    ElectricalField(
+                      label: context.strings(StringKey.electricalGensetTransfer),
+                      child: ElectricalEnumPicker<GeneratorTransfer>(
+                        value: gen.transfer,
+                        options: GeneratorTransfer.values,
+                        label: genTransferLabel,
+                        onChanged: ctrl.setGeneratorTransfer,
+                      ),
                     ),
                   ],
-                ),
-              ),
+                  divider(),
+                  ElectricalField(
+                    label: context.strings(StringKey.electricalCapacitorKvar),
+                    child: ElectricalNumInput(
+                      value: project.capacitorBankKvar ?? 0,
+                      onChanged: (v) =>
+                          ctrl.setCapacitorBankKvar(v > 0 ? v : null),
+                    ),
+                  ),
+                  note(context.strings(StringKey.electricalCapacitorKvarNote)),
+                  divider(),
+                  subhead(context.strings(StringKey.electricalSolarPv)),
+                  ElectricalToggleRow(
+                    label: context.strings(StringKey.electricalSolarPresent),
+                    value: solar != null,
+                    onChanged: (on) => ctrl
+                        .setSolar(on ? const SolarSource(panels: 20) : null),
+                  ),
+                  if (solar != null) ...[
+                    ElectricalField(
+                      label: context.strings(StringKey.electricalSolarPanels),
+                      child: ElectricalNumInput(
+                        value: solar.panels.toDouble(),
+                        min: 1,
+                        onChanged: (v) => ctrl.setSolar(SolarSource(
+                          panelWp: solar.panelWp,
+                          panels: v.round().clamp(1, 100000),
+                          dcAcRatio: solar.dcAcRatio,
+                        )),
+                      ),
+                    ),
+                    ElectricalField(
+                      label: context.strings(StringKey.electricalSolarPanelWp),
+                      child: ElectricalNumInput(
+                        value: solar.panelWp.toDouble(),
+                        min: 1,
+                        onChanged: (v) => ctrl.setSolar(SolarSource(
+                          panelWp: v.round().clamp(1, 2000),
+                          panels: solar.panels,
+                          dcAcRatio: solar.dcAcRatio,
+                        )),
+                      ),
+                    ),
+                  ],
+                  divider(),
+                  subhead(context.strings(StringKey.electricalBattery)),
+                  ElectricalToggleRow(
+                    label: context.strings(StringKey.electricalBatteryPresent),
+                    value: battery != null,
+                    onChanged: (on) => ctrl.setBattery(
+                        on ? const BatterySource(autonomyHours: 2) : null),
+                  ),
+                  if (battery != null) ...[
+                    ElectricalField(
+                      label: context.strings(StringKey.electricalBatteryChemistry),
+                      child: ElectricalEnumPicker<BatteryChemistry>(
+                        value: battery.chemistry,
+                        options: BatteryChemistry.values,
+                        label: (c) => c.label,
+                        onChanged: (c) => ctrl.setBattery(BatterySource(
+                          chemistry: c,
+                          autonomyHours: battery.autonomyHours,
+                        )),
+                      ),
+                    ),
+                    ElectricalField(
+                      label: context.strings(StringKey.electricalBatteryAutonomy),
+                      child: ElectricalNumInput(
+                        value: battery.autonomyHours,
+                        min: 0.1,
+                        onChanged: (v) => ctrl.setBattery(BatterySource(
+                          chemistry: battery.chemistry,
+                          autonomyHours: v <= 0 ? battery.autonomyHours : v,
+                        )),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: MechXSpacing.sm),
+                  note(context.strings(StringKey.electricalSourcesNote)),
+                ]),
+                // ── Advanced (fault level + clearing time + MEP feed) ────
+                section(kSupplyAdvancedSectionKey,
+                    StringKey.electricalSupplyAdvanced, false, [
+                  // Round 29 (ui-journeys-3-fault-level-pinned-no-auto) —
+                  // an OPTIONAL field: empty (or 0) = the estimate chain,
+                  // shown as the hint, so a typed value is visibly a pin and
+                  // can always be handed back (a pinned 10 kA used to stay
+                  // after a 1000 kVA transformer raised the real fault to
+                  // ~36 kA).
+                  ElectricalField(
+                    label: context.strings(StringKey.electricalOriginFaultLevel),
+                    child: ElectricalOptionalNumInput(
+                      value: project.originFaultLevelA == null
+                          ? null
+                          : project.originFaultLevelA!.amperes / 1000,
+                      hint: context.strings.format(
+                          StringKey.electricalAutoValueHint, {
+                        'value':
+                            '${effectiveOriginFaultLevelKa.toStringAsFixed(1)} kA',
+                      }),
+                      zeroClears: true,
+                      onChanged: (v) => ctrl.setOriginFaultLevel(
+                          v == null ? null : Current(v * 1000)),
+                    ),
+                  ),
+                  note(context.strings(StringKey.electricalOriginFaultLevelNote)),
+                  const SizedBox(height: MechXSpacing.md),
+                  ElectricalField(
+                    label:
+                        context.strings(StringKey.electricalBusbarClearingTime),
+                    child: ElectricalOptionalNumInput(
+                      value: project.busbarClearingTimeS,
+                      hint: context.strings.format(
+                          StringKey.electricalAutoValueHint, {'value': '0.1 s'}),
+                      zeroClears: true,
+                      onChanged: ctrl.setBusbarClearingTime,
+                    ),
+                  ),
+                  note(context
+                      .strings(StringKey.electricalBusbarClearingTimeNote)),
+                  divider(),
+                  // ── MEP equipment feed (G1) ──────────────────────────
+                  subhead(context.strings(StringKey.electricalMepFeed)),
+                  ElectricalToggleRow(
+                    label: context.strings(StringKey.electricalMepFeedToggle),
+                    value: dutyFeedOn,
+                    onChanged: (on) => setMepDutyFeedUndoable(ref.read, on),
+                  ),
+                  note(duties.isEmpty
+                      ? context.strings(StringKey.electricalMepFeedNoteEmpty)
+                      : context.strings.format(StringKey.electricalMepFeedNote, {
+                          'names': duties.map((d) => d.name).join(', '),
+                        })),
+                ]),
+              ],
             ),
-          ],
-        );
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -2006,7 +1769,12 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
                         _WarningRow(warning: w, onLocate: onLocate),
                       const SizedBox(height: MechXSpacing.md),
                     ],
-                    _AdvancedBody(advanced: advanced, result: result),
+                    _AdvancedBody(
+                      advanced: advanced,
+                      result: result,
+                      supplyKind:
+                          ref.watch(electricalProjectProvider).supplyKind,
+                    ),
                   ],
                 ),
               ),
@@ -2019,7 +1787,11 @@ class ElectricalAdvancedInspector extends ConsumerWidget {
 class _AdvancedBody extends StatelessWidget {
   final AdvancedStudy advanced;
   final ElectricalSystemResult result;
-  const _AdvancedBody({required this.advanced, required this.result});
+  final SupplyKind supplyKind;
+  const _AdvancedBody(
+      {required this.advanced,
+      required this.result,
+      this.supplyKind = SupplyKind.pln});
 
   @override
   Widget build(BuildContext context) {
@@ -2038,7 +1810,22 @@ class _AdvancedBody extends StatelessWidget {
       ),
       _Metric(
         label: 'Demand (kVA)',
-        value: '${(advanced.recommendedDayaVa / 1000).toStringAsFixed(1)} kVA',
+        value:
+            '${result.supply.demandVa.inKilovoltAmperes.toStringAsFixed(1)} kVA',
+      ),
+      // The PLN connected-power step (>= demand), labelled for what it is —
+      // never the demand. Beyond the LV ladder / on an MV service there is no
+      // LV daya to recommend (audit r8).
+      _Metric(
+        label: 'Daya tersambung',
+        // Round 58 — an on-site genset / PV primary supply has no PLN daya.
+        value: supplyKind != SupplyKind.pln
+            ? context.strings(StringKey.electricalDayaOnSite)
+            : supply.lvOrMv == SupplyLevel.mv ||
+                advanced.recommendedDayaVa == null
+            ? 'MV (no LV daya)'
+            : '${(advanced.recommendedDayaVa! / 1000).toStringAsFixed(1)} kVA'
+                '${advanced.recommendedDayaThreePhase ? ' 3ph' : ' 1ph'}',
       ),
       _Metric(label: 'Origin Isc', value: '${fmtNum(fault.originFaultkA)} kA'),
       _Metric(
@@ -2109,8 +1896,11 @@ class _PanelAdvancedRow extends StatelessWidget {
     final bits = <String>[
       if (fault != null)
         '${fmtNum(fault.prospectiveFaultkA)} kA${fault.incomerAdequate ? '' : ' !'}',
+      // Round 56 — an envelope whose IEC 60890 rise check fails is marked
+      // ' !' (the kA idiom); the Review warning names the rise.
       if (encl != null)
-        '${fmtNum(encl.widthMm)}x${fmtNum(encl.heightMm)}x${fmtNum(encl.depthMm)}',
+        '${fmtNum(encl.widthMm)}x${fmtNum(encl.heightMm)}x${fmtNum(encl.depthMm)}'
+            '${encl.withinTempLimit && encl.tempRiseK.isFinite ? '' : ' !'}',
       if (spd != null) spd.type.label,
       // H4 — a CT-operated board (demand > the direct-metering limit) prints
       // the resolved CT ratio + revenue accuracy class ('CT 200/5A cl.0.5S'),
@@ -2261,7 +2051,7 @@ class _WarningRowState extends State<_WarningRow> {
         behavior: HitTestBehavior.opaque,
         onTap: () => widget.onLocate(panelId, warning.circuitId),
         child: AnimatedContainer(
-          duration: MechXMotion.hover,
+          duration: MechXMotion.resolve(context, MechXMotion.hover),
           curve: MechXMotion.standard,
           padding: const EdgeInsets.symmetric(
             horizontal: MechXSpacing.xs,

@@ -97,6 +97,20 @@ class SldSheet {
   /// renderer in page space.
   final String supplyNote;
 
+  /// Round 29 (drawings-3-1) — annotations the builder could only place FUSED
+  /// into another label. Non-zero ⇒ the PDF / DXF renderers print the plan
+  /// pipeline's overlap warning ([planOverlapWarning]) so an illegible sheet
+  /// is never issued as if clean. 0 (the default) ⇒ byte-identical.
+  final int overlapCount;
+
+  /// Round 43 (electrical-sim-8-riser-floor-band-illegible) — the label size
+  /// (pt) this sheet prints at when its pagination could NOT reach
+  /// `kMinPlotLabelPt` (a width-bound band no floor split can shrink). Non-null
+  /// ⇒ the PDF / DXF renderers print [sldLegibilityWarning] on the sheet, so an
+  /// illegible page is never issued silently. Null (the default) ⇒
+  /// byte-identical.
+  final double? belowMinLabelPt;
+
   const SldSheet({
     required this.prims,
     required this.minX,
@@ -105,7 +119,30 @@ class SldSheet {
     required this.maxY,
     required this.legend,
     required this.supplyNote,
+    this.overlapCount = 0,
+    this.belowMinLabelPt,
   });
+
+  /// This sheet flagged as printing at [pt] (below the plotted floor).
+  SldSheet withBelowMinLabelPt(double pt) => SldSheet(
+        prims: prims,
+        minX: minX,
+        minY: minY,
+        maxX: maxX,
+        maxY: maxY,
+        legend: legend,
+        supplyNote: supplyNote,
+        overlapCount: overlapCount,
+        belowMinLabelPt: pt,
+      );
 
   bool get isEmpty => prims.isEmpty;
 }
+
+/// Round 43 — the legibility warning a sheet carrying
+/// [SldSheet.belowMinLabelPt] prints (EN + ID, ASCII). Null ⇒ nothing.
+String? sldLegibilityWarning(double? pt, {double minPt = 7}) => pt == null
+    ? null
+    : 'PERHATIAN: label tercetak ${pt.toStringAsFixed(1)} pt (< ${minPt.toStringAsFixed(0)} pt) / '
+        'labels print below ${minPt.toStringAsFixed(0)} pt - gunakan kertas lebih besar '
+        'atau pecah lembar / use a larger sheet or split';

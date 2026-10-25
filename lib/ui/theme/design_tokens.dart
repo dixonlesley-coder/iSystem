@@ -185,6 +185,21 @@ class MechXColors {
   final Color glassSheen;
   final Color glassEdge;
 
+  /// Glass for small floating chrome that sits over the DRAWING PAPER
+  /// (`sheetPaper`) rather than over the dark canvas — the on-canvas tool
+  /// cluster, the legend chip, the electrical unplaced tray. In dark mode the
+  /// translucent [glassFill] composited over the near-white paper lands on a
+  /// mid grey that the dark label tiers cannot read on (~1.1–2:1), so this
+  /// fill is near-opaque (≥ 0.9 alpha) and its top sheen is a faint
+  /// highlight — the chrome still reads as a glass layer (blur, rim, sheen)
+  /// while its labels keep ≥ 4.5:1. In light mode it equals [glassFill] /
+  /// the standard sheen, so light chrome is unchanged.
+  final Color glassFillOverPaper;
+
+  /// The top specular highlight colour of [glassFillOverPaper]'s gradient
+  /// (used AS IS — its alpha is the highlight strength).
+  final Color glassSheenOverPaper;
+
   const MechXColors({
     required this.brightness,
     required this.background,
@@ -207,6 +222,8 @@ class MechXColors {
     this.glassFill = const Color(0xCCFFFFFF),
     this.glassSheen = const Color(0xF2FFFFFF),
     this.glassEdge = const Color(0x40FFFFFF),
+    this.glassFillOverPaper = const Color(0xCCFFFFFF),
+    this.glassSheenOverPaper = const Color(0x46FFFFFF),
   });
 
   /// iOS light — systemGroupedBackground behind white cells, systemBlue accent,
@@ -235,6 +252,10 @@ class MechXColors {
     glassFill: Color(0xA6FFFFFF), // ~0.65 white
     glassSheen: Color(0xFFFFFFFF), // opaque top highlight
     glassEdge: Color(0x80FFFFFF), // ~0.50 white hairline
+    // Over the paper (light): identical to the standard glass + its 70-alpha
+    // sheen — light chrome already reads dark-on-white.
+    glassFillOverPaper: Color(0xA6FFFFFF),
+    glassSheenOverPaper: Color(0x46FFFFFF),
   );
 
   /// iOS dark — elevated grey cells on a near-black grouped background,
@@ -263,6 +284,11 @@ class MechXColors {
     glassFill: Color(0x99343438), // ~0.60 elevated grey
     glassSheen: Color(0x33FFFFFF), // ~0.20 white top highlight
     glassEdge: Color(0x40FFFFFF), // ~0.25 white hairline
+    // Over the paper (dark): a near-opaque elevated grey (0.94 alpha of
+    // `surface`) so the light paper never bleeds the chrome to a mid grey —
+    // textSecondary on it measures ~5:1, textPrimary ~11:1.
+    glassFillOverPaper: Color(0xF02C2C2E),
+    glassSheenOverPaper: Color(0x14FFFFFF), // ~0.08 white highlight
   );
 }
 

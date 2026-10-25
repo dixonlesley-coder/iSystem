@@ -331,7 +331,7 @@ void main() {
       expect(md, contains('## Run / riser schedule'));
       expect(
           md,
-          contains('| Service | Type | Tag | Size | FU | Flow (L/s) | '
+          contains('| Service | Type | Tag | Size | UBAP/DFU | Flow (L/s) | '
               'Vel (m/s) | Length (m) |'));
       // N13: the run's stable element tag is the service code + 1-based floor.
       // CW-F1 · DN32 · FU 12.0 · 2.50 L/s · 1.80 m/s · 6.0 m.

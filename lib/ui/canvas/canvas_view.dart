@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart' show kMiddleMouseButton;
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +10,7 @@ import '../../store/smart_input_store.dart';
 import '../theme/design_tokens.dart';
 import 'canvas_grid.dart';
 import 'canvas_minimap.dart';
+import 'canvas_zoom_scope.dart';
 import 'viewport.dart';
 
 /// B30 — the screen-space edge band (px) inside which the live draw pointer
@@ -83,6 +85,14 @@ class CanvasView extends ConsumerStatefulWidget {
   /// ⇒ byte-identical.
   final ValueNotifier<MinimapViewport?>? viewportSink;
 
+  /// The host pans middle-button drags itself (the Layout canvas does, from an
+  /// ancestor Listener above its opaque overlays) — so this canvas's own
+  /// scale gesture must NOT also pan a middle-button drag, or a drag over a
+  /// bare patch of canvas (where nothing above swallows the pointer) panned
+  /// twice as fast as the cursor. Default false: a standalone canvas keeps
+  /// panning every button itself.
+  final bool externalMiddlePan;
+
   const CanvasView({
     super.key,
     required this.contentSize,
@@ -95,6 +105,7 @@ class CanvasView extends ConsumerStatefulWidget {
     this.cursor,
     this.onDirectionalKey,
     this.viewportSink,
+    this.externalMiddlePan = false,
   });
 
   @override
@@ -220,6 +231,14 @@ class CanvasViewState extends ConsumerState<CanvasView>
     if (_viewportSize.isEmpty) return;
     final from = _current;
     if (from == target) return;
+    // The reduced-motion gate (OS 'disable animations' ⇒ jump, never ease).
+    final duration = MechXMotion.resolve(context, MechXMotion.medium);
+    if (duration == Duration.zero) {
+      _stopAnim();
+      _emit(target);
+      return;
+    }
+    _animCtrl.duration = duration;
     _animFrom = from;
     _animTo = target;
     _animCtrl
@@ -268,9 +287,40 @@ class CanvasViewState extends ConsumerState<CanvasView>
     _animateTo(_current.zoomedBy(1 / 1.2, _viewportSize.center(Offset.zero)));
   }
 
+  /// Ease to an absolute [scale] about the viewport centre (the zoom-% read-out
+  /// tap resets to 1.0) — the same G4 programmatic-viewport path as zoomIn/Out.
+  void zoomTo(double scale) {
+    if (_viewportSize.isEmpty) return;
+    _animateTo(_current.zoomedTo(scale, _viewportSize.center(Offset.zero)));
+  }
+
   void fitView() {
     if (_viewportSize.isEmpty) return;
     _animateTo(ViewportTransform.fit(widget.contentSize, _viewportSize));
+  }
+
+  /// Item 5 — ease the view to frame the world-px rectangle [world] (the drawn
+  /// network's extents — AutoCAD's ZOOM EXTENTS, double-middle-click), with
+  /// [padding] screen px around it. A rectangle thinner than [minWorldSide] on
+  /// either side (a single node, a straight run) is grown about its centre so
+  /// the zoom stays sane; the scale is clamped like every other zoom. No-op
+  /// before the first layout.
+  void fitWorldRect(Rect world,
+      {double padding = 48, double minWorldSide = 64}) {
+    if (_viewportSize.isEmpty) return;
+    final w = math.max(world.width, minWorldSide);
+    final h = math.max(world.height, minWorldSide);
+    final r = Rect.fromCenter(center: world.center, width: w, height: h);
+    final availW = math.max(1.0, _viewportSize.width - padding * 2);
+    final availH = math.max(1.0, _viewportSize.height - padding * 2);
+    final scale = math
+        .min(availW / r.width, availH / r.height)
+        .clamp(ViewportTransform.minScale, ViewportTransform.maxScale)
+        .toDouble();
+    _animateTo(ViewportTransform(
+      scale: scale,
+      offset: _viewportSize.center(Offset.zero) - r.center * scale,
+    ));
   }
 
   /// Pan (keeping the current scale) so [world] (content px) lands at the
@@ -309,7 +359,20 @@ class CanvasViewState extends ConsumerState<CanvasView>
 
   // ── Pointer (mouse) ────────────────────────────────────────────────────────
 
+  /// Hand the keyboard to the canvas (H5). The host calls it on EVERY pointer
+  /// down over the canvas stack — the opaque node handles / grips above this
+  /// widget swallow the pointer before [_onPointerDown] sees it, so a click on
+  /// a node used to leave the keyboard in whatever inspector field had it.
+  void requestKeyboardFocus() {
+    if (!_focus.hasPrimaryFocus) _focus.requestFocus();
+  }
+
+  /// Whether the live pointer is a middle-button press (see
+  /// [CanvasView.externalMiddlePan]).
+  bool _middlePointer = false;
+
   void _onPointerDown(PointerDownEvent event) {
+    _middlePointer = event.buttons & kMiddleMouseButton != 0;
     _focus.requestFocus();
     if (!_grabbing) setState(() => _grabbing = true);
     // NB: middle-button PAN is driven from an ancestor Listener (see
@@ -318,18 +381,31 @@ class CanvasViewState extends ConsumerState<CanvasView>
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    // The middle press is over: a later trackpad pan / pinch (which arrives
+    // with NO pointer-down) must not inherit it (review: it stayed dead after
+    // any middle pan).
+    _middlePointer = false;
+    if (_grabbing) setState(() => _grabbing = false);
+  }
+
+  void _onPointerCancel(PointerCancelEvent event) {
+    _middlePointer = false;
     if (_grabbing) setState(() => _grabbing = false);
   }
 
   // ── Scale gesture (trackpad / touch / left-drag pan) ────────────────────────
 
   void _onScaleStart(ScaleStartDetails details) {
+    // A host-owned middle-button gesture (a pan, or the double-middle-click
+    // zoom-extents ease it just started) is not this canvas's to interrupt.
+    if (widget.externalMiddlePan && _middlePointer) return;
     _stopAnim();
     _lastScale = 1.0;
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
     var vt = _current;
+    if (widget.externalMiddlePan && _middlePointer) return;
     if (details.focalPointDelta != Offset.zero) {
       vt = vt.panned(details.focalPointDelta);
     }
@@ -444,6 +520,7 @@ class CanvasViewState extends ConsumerState<CanvasView>
         child: Listener(
           onPointerDown: _onPointerDown,
           onPointerUp: _onPointerUp,
+          onPointerCancel: _onPointerCancel,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onScaleStart: _onScaleStart,
@@ -498,7 +575,14 @@ class CanvasViewState extends ConsumerState<CanvasView>
                             maxHeight: double.infinity,
                             child: SizedBox.fromSize(
                               size: widget.contentSize,
-                              child: RepaintBoundary(child: widget.child),
+                              child: RepaintBoundary(
+                                // The zoom, for sheet-space chrome that must
+                                // stay screen-sized (loading / error cards).
+                                child: CanvasZoomScope(
+                                  scale: vt.scale,
+                                  child: widget.child,
+                                ),
+                              ),
                             ),
                           ),
                         ),

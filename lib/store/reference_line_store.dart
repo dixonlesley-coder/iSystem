@@ -173,6 +173,12 @@ class ReferenceLineController extends Notifier<List<ReferenceLine>> {
     state = _redo.removeLast();
   }
 
+  /// Restore a captured list WITHOUT recording undo and WITHOUT clearing the
+  /// local stacks — the structural coordinator's restore path for a compound
+  /// sheet edit (a removed sheet prunes its reference lines). Not for widgets.
+  void restoreState(List<ReferenceLine> lines) =>
+      state = List.unmodifiable(lines);
+
   /// Replace the whole set (used when loading a `.mechx` document). A loaded
   /// document is a fresh baseline, so both local stacks clear (mirrors
   /// `NetworkController.loadNetwork` / `ElectricalProjectController.setProject`);

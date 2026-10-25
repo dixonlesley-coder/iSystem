@@ -8,14 +8,12 @@ import 'package:mechx/app.dart';
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/design_issues_store.dart';
-import 'package:mechx/store/document_control_store.dart';
-import 'package:mechx/store/inspector_store.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/ui/inspector/project_panel.dart';
-import 'package:mechx/ui/widgets/mechx_text_field.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/ventilation.dart' show RoomType;
@@ -74,7 +72,20 @@ void main() {
 
   testWidgets('uncalibrated sheet shows a calibration prompt', (tester) async {
     await _pumpAppWithDemoSheets(tester);
-    expect(find.textContaining('Not calibrated'), findsOneWidget);
+    // Round 31 — the uncalibrated state is stated ONCE by the Layout
+    // breadcrumb tail ('breadcrumb-calibrate'); the inspector's Scale section
+    // carries the 'Calibrate scale' action instead of repeating the status.
+    expect(
+        find.descendant(
+            of: find.byType(ProjectPanel),
+            matching: find.textContaining('Not calibrated')),
+        findsNothing);
+    expect(
+        find.descendant(
+            of: find.byType(ProjectPanel),
+            matching: find.text('Calibrate scale')),
+        findsOneWidget);
+    expect(find.byKey(const ValueKey('breadcrumb-calibrate')), findsOneWidget);
   });
 
   testWidgets(
@@ -133,53 +144,29 @@ void main() {
   });
 
   testWidgets(
-      'document control section is collapsed by default and commits edits '
-      'to the store', (tester) async {
+      'the Layout inspector no longer hosts Document control (moved to the '
+      'Projects page) and is scoped to the active layer', (tester) async {
     await _pumpAppWithDemoSheets(tester);
-
-    // Collapsed by default: the header shows, the fields do not — a blank
-    // launch stays canvas-focused (only the small header row is new).
-    expect(find.text('DOCUMENT CONTROL'), findsOneWidget);
-    expect(find.text('Document no.'), findsNothing);
+    expect(find.text('DOCUMENT CONTROL'), findsNothing);
+    expect(find.text('Prepared by'), findsNothing);
 
     final container = ProviderScope.containerOf(
-      tester.element(find.text('DOCUMENT CONTROL')),
+      tester.element(find.byType(MechXApp)),
       listen: false,
     );
-    container
-        .read(sectionVisibilityProvider.notifier)
-        .toggle('Document control', false);
+    // Plumbing (default): Results, no Fire / HVAC.
+    expect(find.text('RESULTS'), findsOneWidget);
+    expect(find.text('FIRE'), findsNothing);
+    expect(find.text('HVAC · DUCTING'), findsNothing);
+    // HVAC: its ducting section replaces Results.
+    container.read(activeDisciplineProvider.notifier).set(DisciplineLayer.hvac);
     await tester.pumpAndSettle();
-    expect(find.text('Document no.'), findsOneWidget);
-
-    // The six identity fields then the two add-revision fields, in build
-    // order. Typing commits straight into the store (the setter normalizes).
-    final fields = find.byType(MechXTextField);
-    expect(fields, findsNWidgets(8));
-    await tester.enterText(fields.at(0), 'M-101');
-    await tester.enterText(fields.at(1), 'B');
-    await tester.enterText(fields.at(2), 'PT Contoh');
-    expect(container.read(documentControlProvider).documentNumber, 'M-101');
-    expect(container.read(documentControlProvider).revisionTag, 'B');
-    expect(container.read(documentControlProvider).clientName, 'PT Contoh');
-
-    // An emptied field clears back to null (absent ⇒ row omitted downstream).
-    await tester.enterText(fields.at(1), '');
-    expect(container.read(documentControlProvider).revisionTag, isNull);
-
-    // Add a revision row through the editor: date + description + Add.
-    await tester.enterText(fields.at(6), '2026-07-02');
-    await tester.enterText(fields.at(7), 'Issued for review');
-    await tester.ensureVisible(find.text('Add revision'));
-    await tester.tap(find.text('Add revision'));
-    await tester.pumpAndSettle();
-
-    final revisions = container.read(documentControlProvider).revisions;
-    expect(revisions, hasLength(1));
-    expect(revisions.single.date, '2026-07-02');
-    expect(revisions.single.description, 'Issued for review');
-    // The row renders (date · description) with a remove glyph beside it.
-    expect(find.text('2026-07-02 · Issued for review'), findsOneWidget);
+    expect(find.text('HVAC · DUCTING'), findsOneWidget);
+    expect(find.text('RESULTS'), findsNothing);
+    expect(find.text('FIRE'), findsNothing);
+    // The fixed head (Building summary + Draw) survives every layer.
+    expect(find.text('BUILDING'), findsOneWidget);
+    expect(find.text('DRAW'), findsOneWidget);
   });
 
   testWidgets(
@@ -248,6 +235,8 @@ void main() {
     container
         .read(roomAreasProvider.notifier)
         .add(sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 400, by: 300);
+    // Rooms is an HVAC-layer section (the inspector is layer-scoped).
+    container.read(activeDisciplineProvider.notifier).set(DisciplineLayer.hvac);
     await tester.pump();
 
     // Collapsed master row: identity (name · type) + the headline CFM, no

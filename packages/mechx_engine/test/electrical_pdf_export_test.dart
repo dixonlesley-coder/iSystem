@@ -97,7 +97,8 @@ void main() {
     // Per-way drafter content: incomer breaker + a way row with cable + Ib.
     expect(s, contains('Incomer'));
     expect(s, contains('Lighting')); // the LP-1 way name
-    expect(s, contains('Ib')); // design current label
+    expect(s, contains('TOTAL')); // the schedule footer (Round 20: no Ib key)
+    expect(s, isNot(contains('(Ib)')));
     expect(s, contains('MCB')); // a breaker class in the legend / rows
   });
 
@@ -175,7 +176,12 @@ void main() {
     expect(s, contains('(PROJECT)'));
     expect(s, contains('(Test building)'));
     expect(s, contains('(TITLE)'));
-    expect(s, contains('(ELECTRICAL SINGLE-LINE DIAGRAM)'));
+    // drafting-6: the title prints at 14 pt and WRAPS in the 130 pt cell —
+    // 'ELECTRICAL SINGLE-LINE' is ~177 pt wide at 14 pt, so one word a line.
+    expect(s, contains('/F1 14.00 Tf 0 0 0 rg'));
+    expect(s, contains('(ELECTRICAL) Tj'));
+    expect(s, contains('(SINGLE-LINE) Tj'));
+    expect(s, contains('(DIAGRAM) Tj'));
     expect(s, contains('(CLIENT)'));
     expect(s, contains('(PT Contoh)'));
     expect(s, contains('(DATE)'));

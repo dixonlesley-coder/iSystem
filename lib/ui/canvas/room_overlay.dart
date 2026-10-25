@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
-import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/network/network.dart' show NodeComponent, isSupplyAirTerminal;
 import 'package:mechx_engine/sizing/room_air.dart';
 
 import '../../store/annotation_store.dart';
@@ -141,7 +141,7 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
     final net = ref.read(networkControllerProvider).network;
     var n = 0;
     for (final node in net.nodes) {
-      if (node.component != NodeComponent.supplyDiffuser &&
+      if (!isSupplyAirTerminal(node.component) &&
           node.component != NodeComponent.returnGrille) {
         continue;
       }
@@ -300,7 +300,7 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
   @override
   Widget build(BuildContext context) {
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
+        ref.watch(sheetViewportProvider(widget.sheetId)) ??
             const ViewportTransform();
     final all = ref.watch(roomAreasProvider);
     final mine = [
@@ -315,6 +315,7 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
 
     final painter = _RoomPainter(
       rooms: mine,
+      roomSizing: ref.watch(roomSizingProvider),
       transform: transform,
       calibration: calibration,
       dragStart: widget.active ? _dragStart : null,
@@ -350,6 +351,10 @@ class _RoomOverlayState extends ConsumerState<RoomOverlay> {
 
 class _RoomPainter extends CustomPainter {
   final List<RoomArea> rooms;
+
+  /// The shared per-room sizing ([roomSizingProvider]) — never re-sized inside
+  /// paint (drafting-feel perf).
+  final Map<String, RoomAirResult?> roomSizing;
   final ViewportTransform transform;
   final ScaleCalibration? calibration;
   final Offset? dragStart;
@@ -360,6 +365,7 @@ class _RoomPainter extends CustomPainter {
 
   _RoomPainter({
     required this.rooms,
+    required this.roomSizing,
     required this.transform,
     required this.calibration,
     required this.dragStart,
@@ -370,11 +376,12 @@ class _RoomPainter extends CustomPainter {
   String _airflowLabel(RoomArea r) {
     final cal = calibration;
     if (cal == null) return 'set scale';
-    final s = r.sizing(cal.metersPerPixel);
+    final s = roomSizing[r.id];
     if (s == null) return r.name;
     final cfm = s.airflowCfm.round();
     final lps = s.airflow.inLitersPerSecond.round();
-    return '${r.name} · $cfm CFM ($lps L/s) · ${airEquipmentLabel(r.equipmentKind)}';
+    // Round 11 — the SIZED unit (an extract room's is a plain exhaust fan).
+    return '${r.name} · $cfm CFM ($lps L/s) · ${airEquipmentLabel(s.equipmentKind)}';
   }
 
   void _drawRect(Canvas canvas, Offset aw, Offset bw,
@@ -445,6 +452,7 @@ class _RoomPainter extends CustomPainter {
   @override
   bool shouldRepaint(_RoomPainter old) =>
       old.rooms != rooms ||
+      !identical(old.roomSizing, roomSizing) ||
       old.transform != transform ||
       old.calibration != calibration ||
       old.dragStart != dragStart ||

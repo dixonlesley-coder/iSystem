@@ -55,40 +55,71 @@ void main() {
   });
 
   group('ampacity (KHA)', () {
-    test('Cu/PVC method B1 (conduit): 1.5→18, 16→80, 300→500 A', () {
-      expect(p.ampacity(1.5).amperes, 18.0);
-      expect(p.ampacity(16).amperes, 80.0);
-      expect(p.ampacity(300).amperes, 500.0);
+    test('Cu/PVC method B1 (conduit): 1.5→15.5, 16→68, 300→394 A', () {
+      // Re-derived Round 11: conduit is IEC 60364-5-52 Table B.52.4 column B1
+      // (3 loaded conductors) — no longer the Supreme "in air" (method E)
+      // catalogue figures 18 / 80 / 500 A, which overrated conduit 18–27 %.
+      expect(p.ampacity(1.5).amperes, 15.5);
+      expect(p.ampacity(16).amperes, 68.0);
+      expect(p.ampacity(300).amperes, 394.0);
     });
 
-    test('Cu/PVC buried (method D) reads the "in ground" column', () {
+    test('Cu/PVC buried (method D) reads the IEC D1 3-loaded column', () {
+      // Re-derived 2026-10 (audit elec-core-5): D is IEC 60364-5-52 Table
+      // B.52.4 column D1 (in duct in ground, 2.5 K·m/W, 3 loaded) — the SAME
+      // basis as the XLPE D column — not the direct-in-ground catalogue
+      // figures (1.5 = 24, 300 = 465) that read above 90 °C XLPE.
       expect(
         p.ampacity(1.5, method: CableInstallMethod.buried).amperes,
-        24.0, // in-ground beats in-air at small sections (soil heat-sink)
+        18.0,
       );
       expect(
         p.ampacity(300, method: CableInstallMethod.buried).amperes,
-        465.0, // and crosses below in-air at large sections
+        316.0,
       );
     });
 
-    test('Cu/XLPE method B1: 16 mm² → 88 A (higher than PVC 80)', () {
+    test('Cu/XLPE method B1: 16 mm² → 88 A (higher than PVC 68)', () {
       expect(
         p.ampacity(16, insulation: ConductorInsulation.xlpe).amperes,
         88.0,
       );
     });
 
-    test('aluminium derates copper by ×0.78: 16 mm² PVC = 80×0.78 = 62.4 A', () {
+    test('aluminium derates copper by ×0.78: 16 mm² PVC = 68×0.78 = 53.04 A',
+        () {
       expect(
         p.ampacity(16, material: ConductorMaterial.aluminum).amperes,
-        closeTo(62.4, 1e-9),
+        closeTo(53.04, 1e-9),
       );
     });
 
-    test('wall (C) and tray (E) PVC read the in-air base table', () {
-      expect(p.ampacity(50, method: CableInstallMethod.wall).amperes, 160.0);
+    test('wall (C) reads B.52.4 column C; tray (E) the in-air base table', () {
+      // Round 11: 50 mm² PVC — C (clipped direct) 144 A, E (free air) 160 A.
+      expect(p.ampacity(50, method: CableInstallMethod.wall).amperes, 144.0);
       expect(p.ampacity(50, method: CableInstallMethod.tray).amperes, 160.0);
+    });
+
+    // Round 11 property: for EVERY standard section, PVC ranks by installation
+    // method exactly as the physics does — conduit (B1) ≤ wall (C) ≤ free air
+    // (E) — and a 70 °C PVC conductor never out-rates a 90 °C XLPE one on the
+    // same method. (The old single PVC table read B1 == C == E.)
+    test('property: PVC conduit ≤ wall ≤ air, and PVC ≤ XLPE per method', () {
+      for (final csa in p.standardSectionsMm2) {
+        double a(CableInstallMethod m, ConductorInsulation ins) =>
+            p.ampacity(csa, method: m, insulation: ins).amperes;
+        final pvcB1 = a(CableInstallMethod.conduit, ConductorInsulation.pvc);
+        final pvcC = a(CableInstallMethod.wall, ConductorInsulation.pvc);
+        final pvcE = a(CableInstallMethod.air, ConductorInsulation.pvc);
+        expect(pvcB1, greaterThan(0), reason: '$csa mm² tabulated');
+        expect(pvcB1, lessThan(pvcC), reason: '$csa mm² B1 < C');
+        expect(pvcC, lessThan(pvcE), reason: '$csa mm² C < E');
+        for (final m in CableInstallMethod.values) {
+          expect(a(m, ConductorInsulation.pvc),
+              lessThanOrEqualTo(a(m, ConductorInsulation.xlpe)),
+              reason: '$csa mm² $m PVC ≤ XLPE');
+        }
+      }
     });
 
     test('unknown section → 0 A', () {
@@ -130,18 +161,28 @@ void main() {
   });
 
   group('protection ladders + curve', () {
-    test('MCB 6…63, MCCB 80…1600; combined ascending', () {
+    test('MCB 6…63, MCCB 80…1600, ACB 2000…4000; combined ascending', () {
       expect(p.mcbRatingsA.first, 6);
       expect(p.mcbRatingsA.last, 63);
       expect(p.mccbRatingsA.first, 80);
       expect(p.mccbRatingsA.last, 1600);
+      // Round 23 — the ACB frames above the MCCB ladder (a 1600 kVA service's
+      // 1 600 000 / (√3 · 400) = 2309 A FLC takes the 2500 A ACB).
+      expect(p.acbRatingsA, [2000, 2500, 3200, 4000]);
       expect(p.standardBreakerRatingsA.length,
-          p.mcbRatingsA.length + p.mccbRatingsA.length);
+          p.mcbRatingsA.length + p.mccbRatingsA.length + p.acbRatingsA.length);
+      final l = p.standardBreakerRatingsA;
+      for (var i = 1; i < l.length; i++) {
+        expect(l[i], greaterThan(l[i - 1]));
+      }
     });
 
-    test('class: ≤63 A MCB, above MCCB', () {
+    test('class: ≤63 A MCB, ≤1600 A MCCB, above ACB', () {
       expect(p.breakerClassFor(63), BreakerClass.mcb);
       expect(p.breakerClassFor(80), BreakerClass.mccb);
+      expect(p.breakerClassFor(1600), BreakerClass.mccb);
+      expect(p.breakerClassFor(2000), BreakerClass.acb);
+      expect(p.breakerClassFor(2000).code, 'ACB');
     });
 
     test('curve: lighting→B, motor→D, else C', () {

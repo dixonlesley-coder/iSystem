@@ -105,11 +105,18 @@ class MasterLegendEntry {
   final NodeComponent? component;
   final String code;
   final String meaning;
+
+  /// The service a SERVICES row keys (drafting-8). Its swatch line is drawn on
+  /// that service's riser-code layer, so the PDF strokes it in the service's
+  /// plan colour and the DXF puts it on the service's AIA layer: the key reads
+  /// the same as the coloured runs it explains. Null for non-service rows.
+  final ServiceType? service;
   const MasterLegendEntry({
     required this.kind,
     required this.code,
     required this.meaning,
     this.component,
+    this.service,
   });
 }
 
@@ -169,6 +176,7 @@ List<MasterLegendSection> buildMasterLegendSections({
               : LegendGlyphKind.line,
           code: riserServiceCode(s),
           meaning: serviceChromeLabel(s),
+          service: s,
         ),
   ];
   if (svcRows.isNotEmpty) {
@@ -254,7 +262,7 @@ double _centeredX(String text, double size, double cx) =>
 
 /// The submittal COVER SHEET: the project name, the document title, the
 /// discipline, and a framed identity block (client / drawing no / rev / date /
-/// sheet count / prepared-by), all as centred drawing primitives.
+/// drawing count / prepared-by), all as centred drawing primitives.
 SldSheet buildCoverSheet({
   required String projectName,
   String? clientName,
@@ -263,7 +271,7 @@ SldSheet buildCoverSheet({
   String? date,
   String discipline = 'MEP (Mekanikal - Elektrikal - Plambing)',
   String documentTitle = 'DESIGN SUBMITTAL / DOKUMEN PERENCANAAN',
-  int? sheetCount,
+  int? drawingCount,
   String? preparedBy,
 }) {
   const cx = _sheetW / 2;
@@ -295,8 +303,13 @@ SldSheet buildCoverSheet({
     if (revision != null && revision.trim().isNotEmpty)
       ('REVISI / REVISION', revision.trim()),
     if (date != null && date.trim().isNotEmpty) ('TANGGAL / DATE', date.trim()),
-    if (sheetCount != null)
-      ('JUMLAH LEMBAR / SHEETS', sheetCount.toString()),
+    // Round 17 (drafting-visual-3-8) — the figure is the number of DRAWINGS
+    // in the Daftar Gambar (a paginated board-schedule set is one drawing of
+    // several pages, and the three front-matter sheets are not drawings), so
+    // the row says so; 'JUMLAH LEMBAR / SHEETS' told a document controller a
+    // sheet count the issued PDFs did not match.
+    if (drawingCount != null)
+      ('JUMLAH GAMBAR / DRAWINGS', drawingCount.toString()),
     if (preparedBy != null && preparedBy.trim().isNotEmpty)
       ('DIGAMBAR / PREPARED BY', preparedBy.trim()),
   ];
@@ -491,7 +504,7 @@ List<SldSheet> buildSubmittalFrontMatter({
         revision: revision,
         date: date,
         preparedBy: preparedBy,
-        sheetCount: drawings.isEmpty ? null : drawings.length,
+        drawingCount: drawings.isEmpty ? null : drawings.length,
       ),
       buildDrawingListSheet(drawings, projectName: projectName),
       buildGeneralNotesSheet(
@@ -512,12 +525,16 @@ void _addLegendGlyph(
   required double cx,
   required double cy,
 }) {
+  // drafting-8: a service swatch rides its riser-code layer, which both
+  // renderers colour as that service (PDF stroke colour, DXF service layer).
+  final swatchLayer = e.service == null ? null : riserServiceCode(e.service!);
   switch (e.kind) {
     case LegendGlyphKind.line:
-      prims.add(SldLine(cx - 16, cy, cx + 16, cy, weight: SldWeight.medium));
+      prims.add(SldLine(cx - 16, cy, cx + 16, cy,
+          weight: SldWeight.thick, layer: swatchLayer));
     case LegendGlyphKind.lineDashed:
       prims.add(SldLine(cx - 16, cy, cx + 16, cy,
-          weight: SldWeight.medium, dashed: true));
+          weight: SldWeight.thick, layer: swatchLayer, dashed: true));
     case LegendGlyphKind.component:
       if (e.component != null) {
         prims.addAll(planComponentPrims(e.component!, cx: cx, cy: cy, size: 15));
@@ -525,18 +542,16 @@ void _addLegendGlyph(
     case LegendGlyphKind.fixtureTriangle:
       prims.addAll(planFixturePrims(cx: cx, cy: cy, size: 14));
     case LegendGlyphKind.riserUp:
-      // A riser marker (circle) + an upward tick — the plan's UP sense.
-      prims
-        ..add(SldCircle(cx, cy, 5))
-        ..add(SldLine(cx, cy - 5, cx, cy - 12))
-        ..add(SldLine(cx, cy - 12, cx - 4, cy - 7))
-        ..add(SldLine(cx, cy - 12, cx + 4, cy - 7));
     case LegendGlyphKind.riserDown:
+      // Round 29 (drawings-3-8) — EXACTLY the plan's riser-end mark: the
+      // service circle, the junction dot at its centre, and the 'UP' / 'DN'
+      // sense text beside it (plan PDF / DXF `ann.upDown`). The legend used
+      // to key an arrow-shaft glyph that no plan draws.
+      final sense = e.kind == LegendGlyphKind.riserUp ? 'UP' : 'DN';
       prims
-        ..add(SldCircle(cx, cy, 5))
-        ..add(SldLine(cx, cy + 5, cx, cy + 12))
-        ..add(SldLine(cx, cy + 12, cx - 4, cy + 7))
-        ..add(SldLine(cx, cy + 12, cx + 4, cy + 7));
+        ..add(SldCircle(cx - 8, cy, 5))
+        ..add(SldCircle(cx - 8, cy, 1))
+        ..add(SldLabel(cx - 1, cy + 3, sense, size: 7));
     case LegendGlyphKind.flowChevron:
       // A short shaft + an open chevron pointing right (flow direction).
       prims
@@ -575,6 +590,7 @@ String componentLegendCode(NodeComponent c) => switch (c) {
       NodeComponent.hydrantBox => 'HB',
       NodeComponent.hoseReel => 'HR',
       NodeComponent.fireDeptConnection => 'FDC',
+      NodeComponent.pillarHydrant => 'PH',
       NodeComponent.supplyDiffuser => 'SD',
       NodeComponent.returnGrille => 'RG',
       NodeComponent.exhaustGrille => 'EG',
@@ -616,6 +632,7 @@ String componentLegendName(NodeComponent c) => switch (c) {
       NodeComponent.hydrantBox => 'Hydrant box',
       NodeComponent.hoseReel => 'Hose reel',
       NodeComponent.fireDeptConnection => 'Fire dept. connection',
+      NodeComponent.pillarHydrant => 'Pillar (yard) hydrant',
       NodeComponent.supplyDiffuser => 'Supply air diffuser',
       NodeComponent.returnGrille => 'Return air grille',
       NodeComponent.exhaustGrille => 'Exhaust air grille',

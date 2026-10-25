@@ -127,6 +127,7 @@ void main() {
         .toSet();
     for (final absent in [
       'project-electrical-sld.pdf',
+      'project-electrical-sld.dxf',
       'project-electrical-overview-sld.pdf',
       'project-electrical-overview-sld.dxf',
       'project-electrical-riser.pdf',
@@ -163,6 +164,8 @@ void main() {
     for (final expected in [
       // Pre-existing.
       'project-electrical-sld.pdf',
+      // Round 20 (drafting-visual-4-3) — the board schedule in CAD too.
+      'project-electrical-sld.dxf',
       // I2 additions.
       'project-electrical-overview-sld.pdf',
       'project-electrical-overview-sld.dxf',

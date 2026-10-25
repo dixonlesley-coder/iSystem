@@ -7,6 +7,8 @@ import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import 'mechx_focus_ring.dart';
+import '../../store/app_state.dart' show AppLocale;
+import 'locale_number.dart';
 
 /// A shared numeric stepper: a `−` / `+` glyph-button pair flanking a mono
 /// value, with two ergonomics the hand-rolled inspector rows lacked —
@@ -107,6 +109,12 @@ class SteppedValueField extends StatefulWidget {
 
 class _SteppedValueFieldState extends State<SteppedValueField> {
   final TextEditingController _controller = TextEditingController();
+
+  /// [SteppedValueField.editSeed] as the editor SHOWS it — the locale's
+  /// decimal mark, so editing the seed reads back by the same locale rules
+  /// (Round 18 follow-up: ID `1.125` m re-read as 1125).
+  String get _seed => localizeNumberText(widget.editSeed,
+      indonesian: MechXStrings.of(context).locale == AppLocale.id);
   final FocusNode _editFocus = FocusNode();
   bool _editing = false;
   bool _cancelled = false;
@@ -126,13 +134,19 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
   /// ElectricalNumInput's wording when both bounds exist; a one-sided bound
   /// names the side it violated rather than pretending there is a range.
   String _rangeMessage() {
+    // Round 17 follow-up — the SAME localized numInput* templates the
+    // electrical fields use (EN degrades safely without a provider).
+    final strings = MechXStrings.of(context);
     final min = widget.min;
     final max = widget.max;
     if (min != null && max != null) {
-      return 'Enter a value between ${_fmt(min)} and ${_fmt(max)}';
+      return strings.format(
+          StringKey.numInputRange, {'min': _fmt(min), 'max': _fmt(max)});
     }
-    if (min != null) return 'Enter a value of ${_fmt(min)} or more';
-    return 'Enter a value of ${_fmt(max!)} or less';
+    if (min != null) {
+      return strings.format(StringKey.numInputMin, {'min': _fmt(min)});
+    }
+    return strings.format(StringKey.numInputMax, {'max': _fmt(max!)});
   }
 
   @override
@@ -160,7 +174,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
       _editing = true;
       _cancelled = false;
       _error = null;
-      _controller.text = widget.editSeed;
+      _controller.text = _seed;
       _controller.selection = TextSelection(
         baseOffset: 0,
         extentOffset: _controller.text.length,
@@ -174,6 +188,19 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
   void _commit() {
     if (!_editing) return;
     final raw = _controller.text.trim();
+    // Round 13 (ui-journey-2) — an UNTOUCHED edit is a no-op: clicking into
+    // the value and leaving must never write the seed back as an explicit
+    // value. It used to: a 'Mixed' multi-selection size box (seed '') blurred
+    // to onSubmit(null) and wiped every run's manual size; an Auto ACH or
+    // electrical-load field pinned its displayed default as an override.
+    // Explicitly clearing a NON-empty box still means "Auto" (onSubmit(null)).
+    if (raw == _seed.trim()) {
+      setState(() {
+        _editing = false;
+        _error = null;
+      });
+      return;
+    }
     if (raw.isEmpty) {
       setState(() {
         _editing = false;
@@ -182,13 +209,16 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
       widget.onSubmit(null);
       return;
     }
-    final parsed = double.tryParse(raw);
+    // Round 17 follow-up — locale-aware (ID `1.500` L is 1500, `2,5` is 2.5).
+    final strings = MechXStrings.of(context);
+    final parsed =
+        parseLocaleNumber(raw, indonesian: strings.locale == AppLocale.id);
     // Unparseable OR non-finite ⇒ REJECT with a message (G7); it used to revert
     // silently, so a typo read as "the app ate my number". double.tryParse
     // accepts 'NaN'/'Infinity'/'1e999', and NaN slips through a `< min / > max`
     // comparison (both are false) — it must never reach a store.
     if (parsed == null || !parsed.isFinite) {
-      setState(() => _error = 'Enter a number');
+      setState(() => _error = strings(StringKey.numInputNotANumber));
       return;
     }
     // Out of range ⇒ REJECT, don't clamp: the silent clamp changed the
@@ -271,6 +301,11 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
         widget.display,
         textAlign: widget.valueAlign,
         style: valueStyle,
+        // Round 13 — a long display (e.g. '0.49 kW · room PK') ellipsizes its
+        // TAIL in a narrow inspector column instead of overflowing the row.
+        maxLines: 1,
+        softWrap: false,
+        overflow: TextOverflow.ellipsis,
       );
       final tappable = MouseRegion(
         cursor: SystemMouseCursors.text,
@@ -294,7 +329,11 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
         ? strings(k)
         : '${strings(k)} ${widget.label}';
 
-    final row = Row(
+    // The display flexes (and ellipsizes) only under a BOUNDED width with no
+    // fixed value width — an unbounded host keeps the intrinsic row, so a
+    // Flexible never meets infinite constraints.
+    final flexValue = !_editing && widget.valueWidth == null;
+    final row = LayoutBuilder(builder: (context, constraints) => Row(
       mainAxisSize: MainAxisSize.min,
       children: [
         _StepperGlyphButton(
@@ -304,7 +343,10 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           semanticLabel: stepLabel(StringKey.a11yDecrease),
         ),
         SizedBox(width: widget.gap),
-        valueSlot,
+        if (flexValue && constraints.hasBoundedWidth)
+          Flexible(child: valueSlot)
+        else
+          valueSlot,
         SizedBox(width: widget.gap),
         _StepperGlyphButton(
           glyph: '+',
@@ -313,7 +355,7 @@ class _SteppedValueFieldState extends State<SteppedValueField> {
           semanticLabel: stepLabel(StringKey.a11yIncrease),
         ),
       ],
-    );
+    ));
     // The Column is ALWAYS present, even with no message: swapping between a
     // bare Row and a wrapped one would re-create the editor's element mid-edit
     // (dropping its focus + text-input connection the instant a rejection was
@@ -400,10 +442,10 @@ class _StepperGlyphButtonState extends State<_StepperGlyphButton> {
         : (_hover ? colors.textPrimary : colors.textSecondary);
     final glyph = AnimatedScale(
       scale: _down && enabled ? 0.9 : 1.0,
-      duration: MechXMotion.press,
+      duration: MechXMotion.resolve(context, MechXMotion.press),
       curve: MechXMotion.standard,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         width: 24,
         height: 24,

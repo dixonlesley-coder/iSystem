@@ -194,11 +194,12 @@ BTU/h + PK + per-unit recommendation — via `sizing/cooling_load.dart`);
 **calibration quality-of-life** (`ProjectController.applyCalibrationToAllSheets` copies one
 sheet's scale to all others in one undo step, surfaced as an 'Apply scale to all sheets'
 button in the Scale inspector when the current sheet is calibrated; the slim sheet rail shows
-a per-sheet calibrated/uncalibrated dot);
+a per-sheet calibrated/uncalibrated dot; the current sheet's state is stated ONCE — the Layout
+breadcrumb's tappable ' · Not calibrated' / ' · 1 : N' tail, the status bar only on Riser/Electrical);
 **project templates / smart defaults** (`store/templates.dart` `kBuildingTemplates` —
 Residential highrise / Office tower / Hospital / Retail shop, each prefilling floors +
-occupancy + fire hazard + design rainfall; a **'New from template'** dialog on the Projects
-screen applies them via `ProjectController.setFloors` + the occupancy/fire/rainfall provider
+occupancy + fire hazard + design rainfall; a **'New from template'** dialog (Projects page: a quiet 'Apply building template...' button in
+the Project card) applies them via `ProjectController.setFloors` + the occupancy/fire/rainfall provider
 `.set()` methods — additive, no `.mechx` change);
 **unified Design Issues review panel** (`store/design_issues_store.dart`
 `designIssuesProvider` — a read-only fan-in that aggregates every existing design warning
@@ -231,11 +232,12 @@ a PURE, unit-tested accelerator TABLE: `matchShellShortcut(key, {mod, shift, alt
 `switch` that runs the SAME entry points the top bar / nav rail / palette use, so an accelerator
 can never diverge from its clicked equivalent). Bindings: **Ctrl/Cmd+N** new · **O** open ·
 **S** / **Shift+S** save / save-as · **I** import plan · **P** export the annotated plan PDF
-(the app's "print", `runExportGuarded`) · **Z** / **Y** / **Shift+Z** undo/redo on the ONE
+(the app's "print", `runExportGuarded`) · **E** the ONE Export sheet · **Z** / **Y** / **Shift+Z** undo/redo on the ONE
 `historyProvider` timeline (now global, so undo works on the hub screens where nothing holds
-focus) · **K** / **Shift+P** command palette · **1..8** (+ numpad) the nav-rail destinations in
-rail order [Layout · Riser · Electrical · Building · Review · Commercial · Projects ·
-Preferences] · **,** Preferences · bare **F1** the shortcuts sheet. Two rules are part of the
+focus) · **K** / **Shift+P** command palette · **1..8** (+ numpad) the nav-rail destinations,
+DESTINATION-bound [1 Layout · 2 Riser · 3 Electrical · 4 Building · 5 Review · 6 Commercial ·
+7 Projects · 8 Preferences — kept when the rail was regrouped 2026-10-17; the F1 sheet lists the
+'Go to' rows in rail order, each with its own keycap] · **,** Preferences · bare **F1** the shortcuts sheet. Two rules are part of the
 table: **Alt NEVER matches** (Windows AltGr reports as Ctrl+Alt — swallowing it would eat real
 characters on an ID/EU layout) and `ShellCommand.deferToTextField` marks undo/redo as combos a
 focused field owns (the shell stands down via the shared `isTextEntryFocused()` so
@@ -249,12 +251,22 @@ byte-identical): the global bindings beside the CANVAS ones (tools V/R/E/M/K/B, 
 closes it pre-focus (it has no text field, so the bubble listener never sees the key on a hub
 screen) and opening either overlay closes the other. The palette carries matching keycaps + a
 'Keyboard shortcuts' command.
+**Trimmed top bar (2026-10-17)**: title/dirty dot/file name, `Ctrl K` hint, Open, Save, Export only —
+the zoom % lives in the Layout `ZoomControls` (tap = eased reset to 100% via `CanvasViewState.zoomTo`),
+Import plan is the sheet rail's trailing '+' tile (+ Ctrl+I / palette / empty state), and theme
+switching is Preferences + the palette `theme.toggle`.
+**ONE Export sheet (Ctrl/Cmd+E, 2026-10-17)** (`ui/shell/export_sheet.dart` over the transient
+`exportSheetProvider`, closed ⇒ renders nothing): identity bar + the primary submittal package +
+counted Drawings/Reports/Data/Electrical/Commercial groups, every row an existing guarded
+`exportXxx(ref)`. Opened from the top-bar 'Export', Ctrl+E, the palette, Review/Projects 'All
+exports...' and the Riser/Electrical toolbar Export buttons (which pre-expand their group) — the
+per-page export menus/button walls are gone.
 **Inspector clarity — collapsible sections + promoted headline results** (`ui/inspector/
 disclosure_header.dart` + `result_card.dart` + `store/inspector_store.dart`
 `sectionVisibilityProvider`): the dense `ProjectPanel`'s major sections (Draw / Tanks / Rooms /
 Results / Fire / HVAC — the sheet→floor control was dropped as redundant with the sheet rail, and
-the design INPUTS [occupancy/rainfall/runoff] moved to the Building setup page, leaving only the
-Show/Hide-sizes canvas toggle atop Results) are wrapped in a reusable `DisclosureSection` — a tappable
+the design INPUTS [occupancy/rainfall/runoff + the water FEED STRATEGY (2026-10-17; the Layout/Riser inspectors show only a read-only `FeedStrategyLine` with a Change link, palette: Switch feed strategy)] moved to the Building setup page, leaving only the
+Show/Hide-sizes canvas toggle atop Results; since 2026-10-17 the panel is LAYER-SCOPED — after the fixed Selection/Building/Scale/Draw head only the active discipline's sections show [Plumbing: Tanks+Results · Fire: Fire · HVAC: Rooms+HVAC], and Document control sign-off/revisions + the equipment model/spec editor moved to the Projects page's Document control card [`ui/shell/document_control_card.dart`, palette: Edit document control / Edit equipment specs]) are wrapped in a reusable `DisclosureSection` — a tappable
 header (replacing the section's `MechXSectionLabel`) with a custom-painted chevron that discloses
 its body only when expanded. Expansion is TRANSIENT UI state in `sectionVisibilityProvider` (a
 `Map<String,bool>` keyed by section name, read via the memoized `sectionExpandedProvider` family) —
@@ -264,6 +276,8 @@ headline results per sizing section are promoted to a bold `ResultCard` with a c
 success/warning/danger verdict (Network: pump motor kW, or PRV-zones worst-kPa OK/over; HVAC: fan
 static + motor), demoting the supporting key/value rows beneath; each card renders only when its
 result exists, so a blank launch is byte-identical (goldens shift only by the small chevron glyph).
+
+**Audit round 8 (2026-10-18) — fire/HVAC, advanced electrical, costing, MEP coupling**: judge-only sprinkler-vs-fire-pump Review warnings (`sprinkler-flow-exceeds-fire-pump` / `sprinkler-head-exceeds-fire-pump` via `sprinklerPumpCheckProvider`), the AC-load basis relabelled 'Internal gains (no envelope)' + a `cooling-internal-gains-only` advisory, life-safety electrical checks (`life-safety-cable`, `life-safety-not-essential`), the drawn plant node and its solved duty bound to ONE electrical way (`mepDutyBindingProvider`), material/W×H-aware mechanical price keys + `elec:` price keys for every electrical BOM line, and a locale-aware money input (`ui/commercial/money_input.dart` `parseMoneyInput`). See the §15 row for the full list + recorded residuals.
 
 ## Conventions
 
@@ -755,12 +769,14 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   **IEC 60617-style schematic symbols** (`ui/electrical/load_symbols.dart` `LoadSymbol`,
   shared with the Loads palette + the layout markers — one symbol language; replaced the
   old text-tag glyph box),
-  Loads palette (`Draggable<LoadKind>`), outlet-drag-to-feeder, minimap, zoom controls,
+  Loads palette (`Draggable<LoadKind>`; one card per load kind, a sticky `1ph`|`3ph`
+  segment [`palettePhaseProvider`] picks the phase of the phase-variable kinds), outlet-drag-to-feeder, minimap, zoom controls,
   Single-line / Power one-line tabs + canvas toolbar; additive `ElectricalPanel.x/y`
   (no math change). The app shell is now PanelMaker's **248-px left navigation rail**
-  (`ui/shell/nav_rail.dart`): DESIGN (Plan/Schematic/Electrical, still driven by
-  `workspaceViewProvider`) · Review · Commercial · pinned Projects/Preferences,
-  replacing the top-bar view switch (`ShellSection`).
+  (`ui/shell/nav_rail.dart`), grouped in workflow order (2026-10-17): SETUP (Projects ·
+  Building) · DESIGN (Layout/Riser/Electrical, still driven by `workspaceViewProvider`) ·
+  ISSUE (Review w/ badge · Commercial) · pinned Preferences (collapsed rail = same order,
+  no labels), replacing the top-bar view switch (`ShellSection`).
   **iOS / Apple-HIG visual polish landed** (token refresh in `ui/theme/design_tokens.dart`
   — systemBlue accent, grouped backgrounds + label tiers + hairline separators, continuous
   radii, soft `MechXShadow`, SF-like Roboto scale; `MechXButton` = the iOS filled/tinted
@@ -780,7 +796,7 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   **Unified one-PDF layered Layout canvas landed — the convergence** (`lib/store/layer_store.dart`
   + `lib/ui/layout/{layout_canvas,layer_switcher,electrical_layer}.dart`): the mechanical Plan
   and the electrical Layout merged into ONE **Layout** workspace on one shared PDF/viewport with
-  a **Plumbing · Fire · HVAC · Electrical** layer switcher + visibility toggles (PLUMBING is ONE
+  a **Plumbing · Fire · HVAC · Electrical** layer switcher + visibility toggles (the eye/lock/funnel reveal on hover/focus or when non-default; the legend chip rests collapsed) (PLUMBING is ONE
   unified layer — cold/hot water + drainage/vent + rainwater drawn together on one canvas, the
   elements separated by their `ServiceType` for the riser/sizing/reports downstream;
   `disciplineOf` maps all five plumbing services → `DisciplineLayer.plumbing`). The active layer edits
@@ -948,7 +964,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   lighting/socket ways have none); **(b) DAYA in WATT** — the cell switched from `_watts()` (kW) to the
   pure, unit-tested `_wattsId(double w)` → integer watts with the Indonesian DOT thousands separator +
   ` WATT` (`190 WATT`, `1.100 WATT`, `4.400 WATT`, `52.871 WATT`; rounds to the nearest watt, from the
-  solved `ElectricalCircuitResult.loadW`), a feeder (loadW 0) staying `-`; **(c) circle V/A/Hz meters** —
+  solved UNDIVERSIFIED connected load `ElectricalCircuitResult.connectedWOrLoad` since Round 25 — the
+  TOTAL footer stays the diversified demand), a feeder (loadW 0) staying `-`; **(c) circle V/A/Hz meters** —
   a new SEALED `SldCircle` primitive `{ cx, cy, r; weight; role }` replaces the boxed incomer-metering
   cluster on 3-phase boards with three small role-coloured CIRCLES (each a centred letter) + the kept `CT`
   note, handled EXHAUSTIVELY in all FOUR `SldPrim` switch sites (`electrical_sld_drawing.dart` overview/
@@ -1004,7 +1021,9 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   so the deep view reads as the clean left-to-right CAD board schedule — no redundant loads below it, no
   duplicated panel-name header. Regression-covered by golden **11_electrical_schedule.png** (the canvas
   `focusPanelSchedule(panelId)` frames one panel past the threshold). **Sources are
-  now first-class + editable:** a **Sources** toolbar button opens a `_SourcesEditor` drawer (genset
+  now first-class + editable:** (2026-10-17: the Sources + Service & Earthing editors are now ONE toolbar
+  **Supply** button → `ElectricalSupplyInspector` [`showSupply`; disclosures Utility · Earthing · Backup &
+  on-site · Advanced (collapsed)], also opened by the canvas supply-chain tap) a Sources editor (genset
   present/kVA[0=auto]/mode/transfer · capacitor kvar · transformer kVA · dual-transformer) wired through
   new store intents (`setGenerator`/`setGeneratorKva`/`setGeneratorMode`/`setGeneratorTransfer`/
   `setCapacitorBankKvar`/`setTransformerKva`/`setDualTransformer`) on the field-preserving `_withProject`
@@ -1217,7 +1236,10 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   builds the sheet from the live providers for the current Auto-view focus + an honest supply note, saved
   via the file picker, behind a new **Export** toolbar button + `_RiserExportMenu`. The legend + title
   block are now DRAWING CHROME that ride the EXPORT — the live-canvas `_showLegend`/`_showTitleBlock`
-  default OFF (the toolbar chips still preview them); Details/Notes stay ON. Goldens 04/09/10 shift only
+  default OFF (previewable from the toolbar's **Show** popover, which since 2026-10-17 holds
+  Details/Notes + an 'Export preview' Legend/Title block pair); Details/Notes stay ON. The Edit
+  toolbar's riser service picker is discipline-scoped (Plumbing/Fire/HVAC segment → that
+  discipline's service chips). Goldens 04/09/10 shift only
   by the decluttered working canvas + the Export button; electrical 05/06/08/11 BYTE-IDENTICAL. No
   `.mechx`/version change (export is build-time).
   **Mechanical ↔ electrical theme convergence landed (Apple-consistency pass):** the
@@ -1336,9 +1358,12 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   branch, never drops a label); an uncollided label keeps its exact legacy anchor ⇒ goldens
   byte-identical; sheet bounds widen only when displacement happened. (2) **service-size-derived
   device kA** — pure `estimatedServiceFaultLevelA(project)` in `electrical/fault.dart`: a declared
-  `transformerKva` gives the transformer-impedance-limited LV fault (`Isc = S/(√3·400·0.05 pu)`,
-  capped 50 kA, `// VERIFY`), a declared `supplyCapacityVa` gives conservative service-entrance
-  rungs (≤16.5 kVA → 6 kA, ≤197 kVA → 10 kA, above → 16 kA, all `// VERIFY`), nothing declared →
+  `transformerKva` gives the transformer-impedance-limited LV fault (`Isc = S/(√3·400·0.04 pu)`,
+  UNCLAMPED since Round 17 — above 50 kA the advanced study raises `service-fault-estimate-high`
+  instead of lowering the figure, `// VERIFY`), a declared `supplyCapacityVa` gives conservative service-entrance
+  rungs (≤16.5 kVA → 6 kA, ≤197 kVA → 10 kA, all `// VERIFY`) and — since Round 25 — ABOVE the PLN TR
+  ceiling its own transformer fault `max(S/(√3·400·0.04), the study transformer's fault for the demand,
+  16 kA)` (a declared 630 kVA ⇒ 22 733 A, never a flat 16 kA), nothing declared →
   null (caller keeps the flat 16 kA ⇒ untouched projects byte-identical). Wired as the middle
   tier of the Fold-1 fallback chain (explicit `originFaultLevelA` → estimate → 16 kA) in
   `electricalResultProvider`, the Service & Earthing field (shows the EFFECTIVE default), the
@@ -1436,6 +1461,647 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 ## Sizing-engine invariants (don't regress)
 
+- **Round 64 — a head makes a sprinkler system, fire pumps follow the water, headers on both services, reachable soil resistivity, issued-IΔn TT grading, branch fans on their branch (2026-10-18)**: a fire system has a sprinkler basis only with a drawn sprinkler TERMINAL (`FireSystem.hasSprinklerHead(net)`); `hasSprinkler` (any sprinkler PIPE) is the edge partition only — the design flow, the sizer's sprinkler floor (a sprinkler pipe with a fixture terminal downstream), the rating, the over-pressure limit, the lift kinds and the sprinkler-vs-pump judge all read the head predicate. A fire fragment whose only rootable plants are non-source pumps / booster sets and that holds a service-change join roots at that join (`fireSourceHops`), never at the pump. On FIRE services the drawn pump direction carries no reading (`_classifyLoopCheckValves(ignoreDrawnMoverDirection:)`): every fire mover leg is oriented away from the source (the Round-60 rule) and a coherently backwards pump is the judge-only info `fire-pump-drawn-backwards:<pumpId>` (`firePumpsDrawnBackwards`); hot water keeps the r7/r8 coherent-mover precedence. Pinned: fire sizes / flows / flowFromId invariant to flipping pump-leg pipes and to which fire service a pump room is drawn on (seeded, `round64_fire_test.dart`). A jockey leg walk counts every FIRE pipe at a node as onward (`_jockeyLegEdges`) — a shared header is a junction on either service. The over-pressure issue kind, locate and report tag share ONE pump (`pumpId ?? dutyPumpId ?? pumpIds.first`). The site soil resistivity is a store intent (`setSoilResistivity`) + a Supply > Earthing field — the electrode / Ra x IΔn judge is reachable from the app. A TT feeder's recorded IΔn (`feederMa`) is the one it is ISSUED (`ttFeederRcdMa(levels)` with nothing tripping below), so the feeder above an empty board's feeder grades over its 300 mA S device (seeded property). An inline air fan off the trunk (through-flow < trunk) is rated on the flow through it and its own sub-tree static (`AirSystem.inlineFanFlow` / `inlineFanBranchStat`); a fan on every path keeps the Round-62 full-index convention; a unit drops its return static only for a return fan carrying the whole return trunk, else it takes the return index past the branch fans (`solveDuctStatic(stopAtNodeIds:)`, `statPastBranchFans`). Recorded: the AHU / root exhaust fan is still rated on the full index run including a boosted branch (conservative, series split not modelled); a hydrant box drawn on a sprinkler pipe counts as a sprinkler terminal; changing the over-pressure kind to the duty pump re-keys an acknowledgement made against the old String-sorted pump id. Recorded (r64 review): the branch-fan static split is pinned structurally against the same `solveDuctStatic` the provider calls (only its flows are first-principles); the NFPA 20 discharge-header test still reads the solved `flowFromId` (no structural `leadsToMover` fallback); on fire services a backwards-drawn check valve beside a backwards-drawn pump raises both `drawnAgainstSupplyLeg` and `fire-pump-drawn-backwards` (two advisories for one drawing error); an acknowledgement saved against the old String-sorted `fire-system-over-pressure:<pumpIds.first>` key is orphaned when the duty pump differs; the AHU / root exhaust fan still rate on the full index run including a boosted branch; the lightning-study inputs remain unreachable from the app.
+- **Round 63 — the hydrant cap on the standpipe term, FDC chains end at any fire junction, the 350 psi standpipe limit, every drawn air mover rated (2026-10-18)**: the caller's `hydrantDesignFlow` caps ONLY the standpipe term of a system's design flow (`fireSystemDesignFlow(standpipeCap:)` / `fireTransferFedFlow(standpipeCap:)`), before the max with the sprinkler remote-area demand — never post-clamp a combined room's figure (its suction / rated flow / NFPA 20 row follow the sprinkler demand). The FDC inlet-chain walk counts every onward FIRE pipe whatever its service, and its join flow reads every fire pipe there — a hydrant / sprinkler service change is a junction, never part of the inlet chain. A pumped hydrant-only system is judged against `kStandpipeMaxSystemPressureKpa` (2413 kPa, 350 psi, NFPA 14 7.2.1.1, `// VERIFY notAnSniClause`) on the same churn / staged-churn checks (`standpipe-system-over-pressure:<pumpId>`, judge-only); sprinkler-bearing systems keep 1210 kPa. A mover on a mirrored air peer leg of a system carrying an inline fan takes that inline fan's duty (`isAirMoverComponent`), and every exhaust inline fan is rated at the exhaust trunk against the exhaust index static (`exhaustFanDutiesByRootProvider`, `// VERIFY` series split) — never the component default. Recorded (r63 review): `fire_store` calls `fireTransferFedFlow` without `standpipeCap` (harmless — the app's `hydrantDesignFlow` is the largest system's own standpipe figure, so the cap never bites in the app); `project_panel` and `design_issues_store` use slightly different pump-id fallbacks for the standpipe over-pressure kind vs locate (equivalent in every reachable case); the round's new pins are fixed probes, not seeded properties; an inline supply booster and its AHU are still both rated on the full supply index static (conservative over-rating of the series pair).
+- **Round 60 — drops against a taller stack, rings stop the base walk, one sectioned service, outward pump legs, zone friction per stage, run-beyond-foot outfalls, inline FCU floor (2026-10-18)**: a ONE-storey riser whose own outlets sit on one floor is a drop only when a TALL stack (own outlets, multi-storey or own outlets on >= 2 floors) of the SAME fire system (connectivity never through a storage tank) serves its storey — never decided by whether the main it hangs off is a ring (`fedOffCycle` is gone: deleting a ring pipe never flips a pump rating); with no tall stack it is a standpipe. A hydrant riser's BASE-member outlet walk never steps onto another ring node (`_fireRingNodes`, non-bridge fire edges with risers removed). `serviceSections(project) > 1` IS a transformer service (never the direct-LV exit; `isDeclaredMvService` includes it); only a declared transformer connection is split across sections (`serviceEntranceCapacityVa`). The printed transformer (BOM, TX-01, spine, power one-line) is `serviceTransformer(project, sys)` = the study's own pick — never re-derive one from the demand. A single service-entrance board on an undeclared sectioned service sits on one unit carrying the whole demand. An all-incoherent valveless mover leg is oriented away from the source (r7 rule), so parallel pump sets stay sets however the pump room was drawn. A lower series stage prices its zone on its own index friction (root stage pump -> the zone's terminals). A gravity outfall may sit a run chain beyond its stack foot (seeded with its outfall on a multi-outfall tree). An inline terminal air unit's own airflow is a floor (max(own, downstream)), never added on top of its diffusers. Recorded: a ring of pillar drops with no indoor stack counts each drop; the finding-5 "count 1 with no indoor stack" pin contradicts the ring-twin rule (2 kept, wall-hydrant-invariant); an undeclared single MV service prints no transformer. Recorded (r60 review): `_fireSystemLabels` labels a shared storage-tank node with the first system in sorted-id order while the taller-stack test reads `systemOf[members.first]` (Set insertion order), so a riser component containing a tank shared by two fire systems can read an edge-order-dependent label; a valveless mover chain with one coherent and one incoherently drawn pump now follows the coherent pump (was a plain pipe; the Round-27 r8 text says all movers must agree); `advanced_bom.dart` and `advanced_study.dart` import each other (function-level cycle); a single-storey yard of ring-fed pillar drops with no indoor stack now counts N stacks (over-sizing, capped at 1250 gpm); the series-stage pin uses a self-derived 6-storey tower, not the finding's 35-storey 140.94 / 57.70 m figures.
+- **Round 61 — one section count, the study transformer on the incomer's basis, pigeonhole sections, tank-free fire labels, draw-order pump roles, dry and yard fire systems, NFPA 20 pump pipe, shared returns (2026-10-18)**: `determineSupply` reads a dual flag as dual only when the service HAS two sections (`dual = dualTransformer && nSections == 2`): `transformerUnits: 1` on a dual flag is ONE section (LV exit / one unit, faulted as one unit), the same reading as `isDeclaredMvService`; the store keeps the pair consistent (ticking Dual clears a units value of 1, typing 1 clears Dual). An UNDECLARED MV study transformer is sized on each root's FUTURE (headroom-uplifted) basis, the basis its incomer sizes on (headroom never turns LV into MV), so `root-incomer-exceeds-transformer-flc` never condemns the engine's own pick. With more service-entrance boards than sections the most loaded section is the optimum multiway partition (`minimalMaxSectionLoad`: exact to 12 boards, LPT greedy above — an upper bound), never the single largest board; a declared service with units a multiple of its sections is judged per section (section load / units-per-section). A storage tank carries NO fire-system label (`_fireSystemLabels`); a riser component's systems are its non-tank members' labels and a drop is a drop only of a tall stack sharing one (order-free, seeded). Every fire-pump tie (duty, assumed jockey, a system's `dutyPumpId`) breaks on DRAW order (`drawOrderCompare`: `tagNo`, then the natural id order `n9 < n10`), never a String compare. A fire system with no pump and no tank whose only plants are FDCs is DRY (`FireSystemBasis.dry`, part of `standsDown` with gravity-fed / transfer): no duty / jockey / FP-01 / MDP way / churn judge; the Review raises the info `brigade-fed:<fdcId>` with the inlet head (lift + class residual + max(sized friction from the FDC, 15 m)) instead of `no-source`, and the report prints a `FireDryReportLine`. A YARD (pillar) hydrant is `NodeComponent.pillarHydrant` (fixture): never a hose outlet of the building standpipe (excluded from `FireTerminalKind.hydrant`); every fire pipe with one downstream carries >= `kYardHydrantFlowLps` (38 L/s, SNI 03-1735, `// VERIFY`) on >= DN150 (`kMinYardMainDiameterMm`, NFPA 24); a system with pillars is rated max(flow) at max(head) with the yard point (38 L/s at 350 kPa + max(friction, 15 m)), a yard-only system on it alone (no standpipe printed). A fire pump's SUCTION (upstream through bends / inline devices and suction headers to the tank) is sized on 1.5 x its flow at <= 4.57 m/s (NFPA 20 4.16.6) and with its DISCHARGE (to the first junction / terminal / riser, on through a header where >= 2 pump legs merge) floored at NFPA 20 Table 4.28(a) for its flow (`raiseFirePumpSuctionAndDischarge`, judge-and-raise only, overrides kept; 500 gpm => DN125 / DN125, 750 gpm => DN150). A unit on a SHARED return (peer leg) takes that return's static, and a unit with its own return that is a peer on a shared supply takes that supply's index static (`supplyFanDutiesByRootProvider`, component match via `serviceComponentRoots`). Recorded: the suction / discharge raise runs after sizing, so a riser's own class floor is untouched and a hand-overridden suction keeps its size (no warning yet); the yard flow is a FLOOR (max with the standpipe flow on a shared main, never their sum, `// VERIFY`); the sizer's own duty-leg pick for a parallel set still reads pump ids (legs are mirrored, so sizes agree). Recorded (r61 review): the sizer's own duty-leg pick for a parallel pump set is still id-sorted while the pump roles follow draw order (harmless today — mirrored legs are identical); the NFPA 20 discharge-bore walk stops at a riser edge, so a pump whose discharge pipe is a riser keeps the riser's class size and no hand-override-below-rule warning exists; when a shared supply's root unit has no return of its own the legacy `i == 0` fallback still consumes a peer unit's return; the 38 L/s / 350 kPa yard-hydrant figures are `// VERIFY` secondarySource.
+- **Round 62 — the pump train on its rated flow, jockey legs exempt, one duty rule, no phantom yard standpipe, the undeclared FLC judge on its own basis (2026-10-18)**: the NFPA 20 suction / discharge pass keys the Table 4.28(a) row, the 150 % velocity check and the stored flow on max(edge flow, the pump's RATED flow) — the rating system's `fireSystemDesignFlow` (hydrant capped at `hydrantDesignFlow`, a yard system >= 38 L/s), reported by the sizer core (`firePumpRatedFlowOut`); never key a pump's pipe on how many terminals are drawn. A jockey's leg (`jockeyLegEdgeIds`) is never raised by the yard or suction pass and neither walk passes a jockey. A riser reached from the pump before any discharge header is pump discharge piping; an FDC chain into the discharge main is not a header and is sized on at least the rated pump flow. On a FIRE service the sizer's parallel duty leg is the first-DRAWN pump's (`nodeOrder`, a TOTAL order — pump else valve id; a mixed key is non-transitive and breaks the bend property); non-fire services keep the valve-id order (a pump-keyed order exposes the mirror-by-index sensitivity of unequal legs — recorded). The fire basis `dutyOf` reads the feed's rank (bore, off the mirrored legs, draw order). Sprinklers + yard pillars with no hose outlet are rated on the sprinkler point then the yard point (`ratedOnSprinkler`; `sprinklerOnly` unchanged). An UNDECLARED study transformer is FLC-judged on the basis it was sized on (diversified worst-phase VA x headroom), a declared one on the incomer rung. The riser pagination never returns a flagged collapse: floor runs go through the `pagePlan` rest pages. A return-less root AHU never adopts a peer's return; inline return / booster fans (`AirSystem.inlineFanIds`) carry their own duty; HW standbys are mirrored-leg only and each running circulator takes its loop's normalised share (`hwCirculatorDutiesProvider`). Recorded: a supply booster and its AHU are both rated on the full supply index static (series split not modelled, conservative). Recorded (r62 review): fire_store `dutyOf` ranks bore > off-mirrored-leg > draw order while `parallelFirePumpRoles.rank` ranks off-leg > bore > draw order (they coincide in practice — a mirrored standby leg carries the duty bore; a seeded app property pins basis == feed — align literally in a follow-up); the undeclared-transformer FLC judge is near-vacuous by construction (it fires only on a root carrying more than its section's unit); non-fire services keep the legacy valve-id tie-break for the duty leg.
+- **Round 59 — stacks off a tree header, stack-fed trunks, per-section studies, whole offset vent stacks, inline gravity tanks, the cold make-up heater (2026-10-18)**: a ONE-storey riser whose own outlets sit on one floor is a branch / pillar drop only when it hangs off a fire-pipe CYCLE (`fedOffCycle` in `parallelStandpipeCount`: a member on a cycle with its own risers removed); off a tree header / the pump discharge it is a stack (conservative: a tree-fed pillar drop now counts). A hydrant (or Round-54 cross-service) pipe with a standpipe stack downstream (`parallelStandpipeCount(downstream) >= 1`) is a trunk whatever its accumulated flow — the run / pump legs to a one-outlet stack carry the stack's flow. An undeclared N-section service (`sections` > 1) is studied per SECTION in `determineSupply` (each unit = max(demand / N, largest section) / 0.8, units = N x per-section pick; the dual N = 2 branch byte-identical), and `_studyTransformerFaultA` has ONE per-section rule (`units ~/ serviceSections`) — never a paralleled bank on the whole demand. `_floorVentStackLengths` joins riser groups through an OFFSET run chain (one group's top to another's bottom on one storey, bare bends passed) — the developed length and the raise cover the whole stack. On a GRAVITY service a degree-1 sink beats an inline one, and an inline sink tank is pass-through when the component ends at a demand-free non-fixture leaf (`inlineSinksOnly`) — never root a building drain at an interceptor. On HOT water a heater on a cold-water edge (the make-up) roots before a heater fed only by hot pipe (`coldMakeupIds`). The electrical Cable menu row on a star-delta way reads `motorLeads` ('Leads'). Recorded (r59 review): two genuine one-storey stacks with L1-only boxes hanging off a RING main (J-A0-X-B0-J) still count 1 (500 gpm) — the remaining ring-fed under-count; the offset-stack vent test is uncalibrated (only the group merge is pinned; a calibrated offset was probe-verified to add its length); an undeclared service with `transformerUnits` set but a small demand returns LV with no transformer while `dualTransformer` forces MV (asymmetry, harmless today); `downstreamHydrant()` / `feedsStack()` now run per oriented hydrant edge (O(E x network) per solve).
+- **Round 57 — reach-only branch drops, starter-aware trip curves, worst-of-both dual fixtures (2026-10-18)**: `isBranchDrop` is the hydraulic reach test alone; another riser component blocks only at nodes above its own lowest floor (twin stacks, base- or header-fed, tied or not, count 2; pillar drops with indoor boxes on the ring stay drops). Recorded caveat: a one-storey stack teed off a TALL riser's interior node reads as that riser's branch drop. A motor-like way's breaker curve is `breakerCurveFor(kind, effective starter)`: VFD / soft starter / star-delta ⇒ C (`// VERIFY notAnSniClause`), DOL / reversing / pump / none ⇒ the kind default (D for motor / pump) — never read `loadDefaults[...].curve` directly for a way. The hot-water merges keep, per node shared by both services, the LEAST residual (`mergeLeastResidual`) and the WORST no-flow static (`mergeWorstStatic`) — never a last-writer-wins spread (a hot-side PRV hid a 503 kPa cold shower). Recorded: a star-delta way's motor-lead loop is not grown for ADS; no per-service 'cold · hot' probe line yet. Recorded (r57 review): twin stacks where B is fed from A's TOP node count 1, and a one-storey pillar drop teed off the BASE main beside a tall riser now counts as a stack (conservative); the C-curve for star-delta ways carries `// VERIFY notAnSniClause` (an open-transition changeover can see a brief transient above 5 x In); the ADS conductor-growth loop cost (up to 6 + 1 full re-solves on TN while a way cannot be fixed) is not yet bounded.
+- **Round 58 — own outlets decide a stack, motor leads take the ADS remedy, UPS-decoupled feeders, on-site primary supplies, N transformer sections, PRV-held nodes owe nothing, vent length (2026-10-18)**: `parallelStandpipeCount` decides every riser component by its OWN hose outlets (`ownOutletFloors`, the whole drawn network, an outlet ends the walk, plants stop it, other risers are walls; hydrant risers walk from every member, sprinkler-only risers from members above their base): no own outlet ⇒ no stack (fill / pump-room risers); a one-storey riser with own outlets on one floor ⇒ a pillar / branch drop whatever feeds it; one with outlets on both floors ⇒ a stack unless it lies on a ring AND the Round-57 reach test drops it (twins count 2 base-, header- and top-fed); a stack covers storeys from the one just below its lowest own outlet (below that a riser is a transfer main to a higher zone). Recorded conservative: a drop with an indoor box on its ring node counts. A star-delta way's cable override and the ADS growth floor size its MOTOR LEADS (never the 2 m link); a grown lead's PE is >= its own 543.1 section. A UPS-backed board's feeder is judged on the balanced UPS input (`_upsInputCurrentA`), and the UPS decouples it from selectivity (no floor, no `non-selective` / `selectivity-partial`). `buildPowerOneLine(supplyKind:)` draws an on-site genset plant as the head ('GENSET SUPPLY', no ATS / mains interlocks) and `determineSupply(supplyKind:)` an on-site LV design with no PLN daya. `serviceSections(project)` (`transformerUnits` ?? dual 2 ?? 1) is the ONE separate-section count: declared capacity split per section, each root judged and faulted on ONE unit. `seriesMoverHeads` drops PRV-held delivery nodes (`prvHeldNodes`) from a mover's own set and owes each served PRV's inlet node its setpoint + the inlet pipe loss + the rise to the PRV (`prvInletOwedPressure`); a held heater never raises the upfeed source. A vent stack is raised until UPC 703.2's developed-length column (`kVentMaxDevelopedLengthM`) covers the sum of its risers' §10 lengths (`_floorVentStackLengths`). Recorded (r58 review): the one-outlet-floor rule makes a one-storey riser with hose outlets on ONE floor a drop whatever feeds it, so in a 2-storey building two stacks whose only boxes are on L1 count 1 (500 gpm) where Round 57 counted 2 — structurally indistinguishable from a pillar drop (under-sizing direction); the findings' wording disagreed on whether one-floor risers keep the reach test — the implementation drops them regardless of reach (the only reading that passes the pillars-off-base pin); `_studyTransformerFaultA` splits demand/N for an undeclared service when `studied == null` (harmless — the engine path passes `studied`); on a star-delta way a cable override now floors only the leads, not the 2 m internal link (no test pins the '(set)' presentation).
+- **Round 56 — stacks are standpipes, combined risers take the standpipe floor, ADS grows copper, machines load their own lines, ADS on the genset, honest enclosures, boosted zones (2026-10-18)**: `feedsOwnOutlet` stops AT a hose outlet and another riser component is a wall (a box on a cross-tie still counts the riser). `parallelStandpipeCount` never counts an INLET riser (branches above its base reach an FDC and no hose outlet) nor a BRANCH DROP (a one-storey riser component the fire source reaches only through another riser component spanning that storey: ring legs down a ramp, pillar drops) — the reach alone decides (Round 57: a node of the other riser counts as a wall only ABOVE that riser's lowest floor — its base is where its supply main lands, so a stack fed from another stack's base is parallel, never a drop; the Round-56 r2 own-outlet / ring exemption is gone), classified on the whole fire network. A SPRINKLER pipe the Round-54 trunk pass makes a standpipe trunk is in `SizingContext.standpipeEdgeIds` and floors at its class's hydrant minimum (`fireMinimumDiameter(standpipe:)` via `ctx.fireMinimumFor`, every sizing site) — a combined pipe's minimum never depends on its drawn service. On TN a non-overridden FINAL way still failing ADS after the class fixed point steps its section up the ladder (`adsCsaFloorMm2`, `cableRaisedForAds`, INFO `cable-raised-for-ads`; at most 6 rungs / 35 mm2, the whole pipeline re-run so the MCB / MCCB choice follows the cable — cost: on TN one extra fault study at iteration 0 even when nothing fails, and up to 6 + 1 full device/coordination re-solves (`solveAll`: pass 1 + pass 2 + cap loop + frameAds, each with a fault study) when a final way fails); an exhausted ladder reverts to the load-sized cable with one `ads-disconnection` error. The largest-machine floor carries its LINES (`largestDownstreamRunLinesA`, bottom-up through `feederLargestRunLinesA`): `alternatorLineDemandVa(withLargestMachine:)` floors only the lines the machine loads. `gensetAdsCheck` judges every genset-backed way on the installed set's alternator fault (`gensetPlantVa`, Xd'' `// VERIFY`) — `ads-disconnection-on-genset` ERROR + `AdvancedStudy.adsFailedCircuitIds` (' Zs!'), judge-only. A failing IEC 60890 enclosure estimate raises `enclosure-temp-rise-exceeded` and its BOM line says so (keyed apart); the envelope is not grown. The downfeed zone table hangs off `effectiveDownfeedDatumProvider` = the tank + the head of every mover (`downfeedMoverHeadsProvider`, the delivered field's map) the tank's whole delivery passes through.
+- **Round 55 — joins root at terminals, outlets make stacks, MCCB kept when the MCB fails too, unsolved fire rooms sized, bore-ranked pump roles, TT RCD over the real IΔn, genset >= largest machine, hot water solved through the heater (2026-10-18)**: a plant-less fire fragment prefers its service-change JOIN (`fireServiceJoinNodes`) as root even when it is a terminal (a branch teed off a hose reel is fed through the reel). A sprinkler riser is a standpipe stack only when a hydrant branch off it above its base reaches a hose outlet of its own without touching another riser component (a cross-tie is not one; the ring rule still sizes the tied arm). `frameAds` keeps an MCB only when that MCB passes ADS — failing both ⇒ the MCCB and one `ads-disconnection` error. An unsolved fire pipe of a mixed system is oriented by `fireSourceHops` and raised by the cross-service pass (dead stubs stay unsized); raised parallel legs record their standbys. Pump roles rank the largest bore first; the tree leg is never a leg with a smaller hand-picked bore; an overridden jockey leg carries the jockey flow. An FDC chain is sized on a ring too. A TT feeder RCD takes the first rung >= 3 x the largest IΔn DIRECTLY below it (`maxDownstreamMa`: finals included — a VFD's 300 mA). The genset VA / W / per-phase bases are floored at each topmost backed board's largest final way (its own-basis VA, undiversified W), the fraction basis too at fraction 1. Every water pressure field carries the hot network solved from each heater's cold residual (`solveHotWaterFromHeaters`); upfeed sizing raises the source by the hot shortfall. Recorded: no ADS-driven CSA growth; hot circulator head / heater loss not modelled. Recorded (r55 review): a top-floor hydrant tie to a sprinkler riser closes a ring and the Round-48/54 ring rule still sizes that sprinkler arm at the one-stack 31.5 L/s DN100 (the phantom 750 gpm is gone; narrowing the ring rule is the owner's call); `feedsOwnOutlet` does not stop at the first hose outlet, so a box sitting on a cross-tie to another stack counts one stack where it should count two; `alternatorLineDemandVa(withLargestMachine:)` floors all three lines of a 3φ board at the largest machine whatever its phase count (over-sizing only, multi-board essential sums).
+- **Round 54 — drawing-free fire roots, standpipe trunks across services, the designed electrode, no class-made ADS failure (2026-10-18)**: a fire fragment with no plant of its own roots at its node nearest a fire source (`fireSourceHops`: hops over BOTH fire services from every non-inlet, non-mover fire plant — pumps only when nothing else is drawn — then id; an inline mover never roots) — never the leaf it was drawn from; a bare fire leaf where the pipe changes fire service bears no default demand. Every fire pipe of a hydrant-bearing rating system, either service, with >= 2 hydrant outlets downstream (or a riser with one) carries the standpipe flow of its downstream stacks (Class II 100 gpm), capped at the caller's `hydrantDesignFlow` (which also caps every hydrant-bearing source-edge figure); `parallelStandpipeCount` counts a sprinkler riser as a stack when a hydrant pipe tees off it above its lowest floor; a hydrant ring is found over both fire services (a cycle group holding a hydrant pipe — a sprinkler-only grid is none) and every arm carries the ring flow. Pinned: fire sizes / flows / directions invariant to flipping any fire pipe (seeded, `round54_engine_test.dart`). The TT Ra x IΔn <= 50 V judge runs in `computeAdvancedStudy` on the DESIGNED electrode (`ttRcdTouchVoltageWarnings`); no soil resistivity ⇒ one INFO `tt-earth-fault-unchecked` — never the 5 ohm target. `faultAwareBreakerClass(allowClassChange: false)` keeps the load-sized MCB for ANY rating and `frameAds` refuses every non-overridden final MCCB <= 63 A that fails ADS — the class change never creates an ADS failure. A series-staged fire system's jockey is sized on its ROOT stage (`FireSystemBasis.jockeyRating`). The gravity fire verdict is the least, over terminals, of tank − own elevation − own friction (`fireIndexPathFrictionM(frictionByTerminalOut:)`). The downfeed source ranks `downfeedSourceRank` (roof tank, then a non-heater plant, then a heater / inline device) before elevation. A room owns an other-kind air terminal only when its own Auto-place generated it (`roomTerminalOwnerOf`). Recorded (r54 review): the MCCB frame-raise refusal set includes final ways that would fail ADS as the load-sized MCB too — such a way keeps the MCB (still failing ADS) and also enters the breaking-capacity path (two defects where one was reported; growing the conductor to meet the MCCB Zs limit is not landed); `parallelStandpipeCount` counts a sprinkler riser as a stack when ANY hydrant edge end touches it above its lowest floor, so an upper-floor hydrant cross-tie adds a stack (conservative); finding 1 landed as drawing-free ROOT selection (`fireSourceHops`), pinned by a seeded property on trees only (rings by fixed drawings) — a fragment joining only at a demand-bearing node falls to the legacy root ladder; the new info `tt-earth-fault-unchecked` appears on every TT project with an RCD way and no soil resistivity.
+- **Round 53 — one fire partition, fire flow across services, transfer on the fed zone, drawn HW returns (2026-10-18)**: the sizer reads `fireRatingSystems` like the bases and the panel feed (`parallelFirePumpRoles`, `drawnStandpipeRiserCount`); `fireSystems` is only the tank-bounded union the split starts from. A hydrant edge is Class II only when every owning rating system is; trunk / ring stacks count inside the edge's own rating system; a SOURCE edge carries the largest `fireSystemDesignFlow` of the rooms it supplies (never their sum, `// VERIFY`). After the standpipe / remote-area assignment every fire edge carries at least the largest flow of an OTHER-service fire pipe downstream of it (solved direction, through pumps, never through a tank, inside its rating systems; same-service pipes keep their own accumulation). A terminal-less pumped system's destination is `fireTransferDestinationTank` (highest tank above its lowest pump — one rule, sizer and bases) and its pipe + pump carry `fireTransferFedFlow` (the zone the tank feeds); a transfer system has no jockey, drawn or assumed (a terminal-less pump room with no tank above it keeps the Round-21 roles). A series stage raised to `kMinFireStageHeadM` records `clampedFromM` and raises `fire-stage-head-clamped:<pumpId>` (info). A TT final RCD IΔn follows `ttFinalRcdMa` (VFD 300 mA, fixed motor / pump / HVAC 100 mA, else 30 mA <= 63 A) and Ra x IΔn <= 50 V is judged (`tt-rcd-touch-voltage`). A drawn hot-water recirculation loop's pipes carry at least their share of the recirculation flow (`sizingDetailProvider` post-pass, >= DN20, supply velocity cap) — the circulator head reads those bores, never DN15 at zero. Recorded (r53 review): the `tt-rcd-touch-voltage` judge reads the constant PUIL electrode target (5 Ohm), so with the engine's IΔn ladder (<= 3 A) it cannot fire until a real site Ra input exists; the source-edge override writes `fireSystemDesignFlow` onto a shared header / suction leg without the trunk's 'never above the caller's `hydrantDesignFlow`' cap (engine callers only — the app passes the per-rating-system max); the cross-service post-pass walks oriented edges only, so a fire pipe the tree left unoriented is never raised.
+- **Round 52 — fire systems rated on what is drawn; the fault on the printed transformer; node edits keep tags (2026-10-18)**: the fire BASES iterate `fireRatingSystems` (= `fireSystems`, each split per independent pump room by `splitFireSystemAtSharedSource` when the pump chain has >= 2 ROOT stages; the shared source part + each root's suction leg ride `FireSystem.sourceEdgeIds` and never decide `hasHydrant` / `hasSprinkler`); `fireSystems` stays the sizer's edge partition. A system with no pump AND no terminal is skipped (never a phantom pump). A terminal-less pumped system below a storage tank is a TRANSFER (`FireSystemBasis.transfer`): lift pump -> tank + the sized friction to the tank (`fireIndexPathFrictionM(targetIds:)`), no residual / allowance / jockey / stages, never governing, never churn-judged. `staticLiftM` with no terminal lifts to the system's OWN highest node (never `nFloors - 1`). Every series stage is >= `kMinFireStageHeadM` (5 m); a terminal-less interstage with < 1 m of floor lift splits the remaining head equally along its chain. The sprinkler-demand hydrant floor walks DOWNSTREAM only and never through a storage tank. A staged system is churn-judged per stage discharge (`fireStagedOverPressureCheck`), reported one line per stage (`FireSystemBasis.stages`) under each stage's duty pump; every surface tags a system by `dutyPumpId`, never `pumpIds.first`. `reportStandpipeDesignProvider` is nullable (a pumped hydrant basis only); gravity systems print `FireGravityReportLine`. The fault estimate's undeclared transformer is the advanced study's own (`studySupplyDesign` -> `estimatedServiceFaultLevelA(supply:)`, `effectiveOriginFaultLevel(result:)`), never a total-demand re-derivation. `setNodeAirflow` refuses an airflow on an air SOURCE (`isAirSourceUnitComponent`) and keeps a plant's role; node-edit intents rebuild with `NetNode.copyWith` (+ `clearElevation` / `clearFixture` / `clearAirflow`) — never the bare constructor, which drops `tagNo`. r2: `fireAllGravityFedProvider` = bases drawn and every one gravity-fed OR a transfer fill (none governs) — then no project fire pump / jockey / rating block exists; `fireRatedPointProvider` falls back to the advisory standpipe ONLY when no fire system is drawn (else a drawn system's own point); drawn fire pumps are scheduled on their own basis duty even with no project fire pump, and the report prints a lone per-system line when no rating block is. Recorded residuals: the 5 m stage clamp is silent; the sprinkler-demand floor does not restrict to the hydrant edge's own system; `electrical_feed` role partition reads `fireSystems`, the bases `fireRatingSystems`. Recorded (r52 r2 review): (fixed in the follow-up: the Design-basis register now names every drawn fire system line — a transfer-only hydrant system no longer reads 'none modelled'); the Fire inspector headline reads 'No fire pump · gravity tank' for a pure terminal-less transfer fill.
+- **Round 51 — tanks split fire systems, stages by topology, Class I combined riser at the sprinkler demand, clones keep run fields (2026-10-18)**: `fireSystems` unions fire edges only through NON-tank nodes (`isFireSystemBoundary`: ground / roof tank); a tank belongs to every system touching it, so two pump rooms off one tank are two `FireSystemBasis` rows, each rated on its own terminals — never one combined hydrant rating for a sprinkler pump. Series fire-pump stages come from `fireSeriesPumpStages` (pump-free parts as labels, the source part = a non-pump, non-inlet plant's; a set follows the set whose discharge part it takes suction from; a stage's zone = its own discharge part's terminals; the top of a single chain takes the rest of the system head) — never grouped by floor; the floor grouping is only the fallback when the chain is unreadable (null). Every hydrant TRUNK, Class I / III (tree + ring) as well as Class II, with sprinkler pipe downstream carries max(its standpipe flow, the remote-area demand). Every network clone path (copy / paste, assemblies, duplicate floor, offset run, splits) goes through `_cloneEdge` — a run's `sizeOverride` / `pipeProduct` / `ductProduct` are never dropped by a copy.
+- **Round 50 — one pump room, combined risers, gravity fire supplies, document-only labels, protected crash snapshots (2026-10-18)**: `fireParallelPumpSets` merges every leg-end part whose lowest pump floor is the same — pumps on ONE floor are one parallel set (duty / standby / jockey ranked across the whole room by `parallelFirePumpRoles`), only pumps on DIFFERENT floors are series stages, and each stage's pumps develop the WHOLE stage head (never split). A Class II hydrant TRUNK with sprinkler pipe downstream (solved flow direction) carries max(100 gpm, the sprinkler remote-area demand) — the sizer accumulates per service, so a hydrant riser never carries the sprinkler branches teed off it. A combined system whose sprinkler remote-area flow exceeds the standpipe flow is rated on that flow at the larger of the two heads (`sprinklerGovernsCombined` stays false: both points covered). A pump-less fire system whose every plant source is a roof tank (or a plant at / above its topmost terminal) is `FireSystemBasis.gravityFed`: no duty, never governing, no churn over-pressure, no FP-01 / fire-pump way (`firePumpDutyProvider` null when every system is gravity-fed), never judged against another system's pump; it raises `fire-gravity-head-insufficient:<tankId>` when tank elevation − top terminal − sized index friction (0 if unmeasured) < the remote-head pressure / class residual. A roof tank on a fire service that is not its component's root has its chain to the sized network sized on the joined junction's largest flow, ≥ the riser-grade fire minimum and the joined bore (never absent from sizing / the BOM). `rotateFedChildren` judges 'labelled' on the DOCUMENT's labels (`docLabelled`, snapped before the pass) — never the relabels a nested rotation wrote in the same pass (fresh document ⇒ threshold 1.0 == threshold 0). Recovery slots are a FAMILY (`<key>.mechx`, `.session.mechx`, `.session-<n>.mechx`): launch offers the OLDEST member of the newest snapshot's family and protects every member on disk; autosave / the updater write only to a slot this session owns or a free one (`chooseRecoverySessionSlot`); Restore / Discard / Save / Open / New clear only slots this session wrote (`sessionRecoverySlotsProvider`), never an unresolved snapshot. Round 50 r2: `fireAllGravityFedProvider` (every drawn fire system gravity-fed) — the rated point then falls back to the advisory standpipe, so the Fire inspector headline ('No fire pump · gravity tank', verdict gravity / head short) and the calc report's `firePumpRating` (gated on `firePumpDutyProvider != null`) never print a pump rating; the gravity-head message prints the available head clamped at 0. A same-floor `fireParallelPumpSets` merge also needs the parts' leg ends in the SAME pump-free networks (each leg end labelled by its connected part of the system with every pump removed): independent machines sharing only a tank stay separate duty machines, and a same-floor series booster is no longer a standby (it still takes the whole same-floor stage head — the stage split is by floor). `clearRecoverySlots` skips a family guarding a pending snapshot entirely; this session's own members go through `clearRecoveryFor`'s `alsoClear`. Recorded (r50 r2 review, queued for Round 51): two independent same-floor fire pumps in one connected system (a sprinkler pump and a hydrant pump off one shared tank) are two SETS but one STAGE in `fireSystemBasesProvider`, so `stageDuties` stays empty and both machines take the combined system duty (the hydrant 31.5 L/s point) — the sprinkler pump is fed and scheduled at the hydrant rating; the standpipe 'demand' rows still print under an all-gravity hydrant system (labelled demand, no pump).
+- **Round 48 — prime headroom judged, rotation on the parent's singles, one fire class, ring trunks, heater make-up, relief vents, fire churn, safe I/O (2026-10-18)**: a forced genset is judged on `requiredGeneratorKva` (max(S, P/0.8) × `generatorDutyFactor`: prime 1.25) — the figure `sizeGenerator` selects on (VA, kW and per-phase tests alike). `computeSystem`'s sub-board R/S/T rotation scores every cyclic relabelling on the PARENT's own `balancePhases` (its single-phase ways included; exhaustive 3^k to `kRotationExhaustiveMaxBoards` = 6, else greedy + coordinate descent; the parent's ways sized ONCE via `_panelComps`), and the reducibility floor's permutation floor searches the same space through `minimumPhaseSpreadA` with the board's singles — never a feeder-excess-only greedy. `networkConnectivityDefects` walks sprinkler + hydrant as ONE class (defects still per service). A hydrant edge on a CYCLE carries the standpipe flow of its component's stacks (each ring arm sized for the full flow); the per-box `q > one box` trunk test is for TREE edges only. Hot water sizes before cold: a heater plant rooting a hot component on a cold edge bears its hot UBAP on the cold service, and a tree cold edge carrying both a dual fixture's cold share and its hot share via the heater counts the fixture's total once; a plant on both services is never a dual-fed fixture. A vent RUN from a drainage-stack node to a vent-stack node relieving ≥ 2 soil-stack storeys is a relief / yoke vent floored at min(soil stack, vent stack) (`_floorReliefVents`, its code minimum); per-storey ties keep their own DFU. A SPRINKLER-bearing fire system whose NFPA 20 churn exceeds `kFireComponentMaxPressureKpa` (1210 kPa / 175 psi, `// VERIFY`) raises the judge-only `fire-system-over-pressure:<pumpId>` warning and a calc-report line (only when exceeded). Open / Save / New never clear a PENDING crash snapshot's slot (`recoverySlotsToClear`) unless the action targets its own file, autosave never overwrites it, and the Open `.bak` fallback fires only for a torn save (`ProjectDocumentException.tornWrite` / `FileSystemException`) — a newer-format file is refused untouched; a restored torn target is kept as `.corrupt-<stamp>`. Recorded (r48 review, queued for Round 49): the `computePanel` reducibility floor minimises SPREAD while `rotateFedChildren` minimises (worst line, then spread), so a few roots still raise the sign-off-blocking `phase-imbalance` 'Rotate R/S/T at <board>' for a relabel the engine rejected (3 / 300 seeded roots); `_autosaveTick` skips writing while a pending recovery snapshot holds this session's slot, so a relaunched untitled session has no crash protection until Restore / Discard; the calc report's fire 'Component pressure (churn)' reads the governing rating while `fireOverPressureProvider` judges per sprinkler-bearing system.
+- **Round 47 — every riser board on a sheet, one spine, forced gensets on the engine's basis, one pump head (2026-10-18)**: `paginatedElectricalRiserSheets` issues, before a wide band's column pages, ANCESTOR pages holding every board of that band drawn on none of its column pages (a refined unit root — the main board, the higher links of a same-storey sub-main chain), greedy-chunked through the same `pageFor` so each still prints at 7 pt; the source spine rides EXACTLY ONE sheet (a column page draws it only as the first page of its band that draws a root). Pinned by a seeded property (`round47_test.dart`): every non-TIPIKAL board drawn on >= 1 page, every `DARI (lembar lain)` parent drawn, the spine on one page. `gensetBackupWarnings` judges a FORCED nameplate against max(backup fraction × building demand, essential) in VA and in kW = 0.8 × kVA — the same basis `gensetBackupDemandVa` / `gensetBackupDemandW` size and the one-line draws, never the essential boards alone. The power one-line's `_sizeGen` passes the SOLVED backup demand; a forced nameplate picks only the rating (the 'Essential bus' figure never echoes the typed kVA). A prime set is scheduled 'Prime generator'. The equipment schedule carries one '(standby)' row per standby supply pump (`supplyStandbyPumpNodeIds`) and one row per drawn HW circulator (standbys labelled) — the count the MDP / riser / takeoff carry. An upfeed pump ASSUMED at a non-plant source (water meter / bare entry leaf, `NodeRole.main` ⇒ its floor's ceiling in `nodeElevation`) sizes from its floor SURFACE (`solvePressurized(sourceElevation:)` ← `assumedPumpSourceElevation`, the drawn pump's datum); a drawn plant (or an explicit elevation / mount height) keeps its own. Recorded (r47 review): the riser pagination property asserts COMPLETENESS (every non-TIPIKAL board drawn on some page, every DARI parent drawn), not legibility — a single-board page that cannot reach 7 pt still carries the Round-44 `belowMinLabelPt` backstop; a standby pump's schedule duty falls back to the primary `pumpDutyProvider` if its id were ever absent from the movers map (unreachable today).
+- **Round 46 — riser pages, lanes, parent-aware rotation (2026-10-18)**: every electrical riser PAGE goes through ONE `pagePlan(lo, hi, members)` (members + every drawn board's off-page children + each member's first off-page ancestor; on a column page only the NEAREST same-storey feeding board, a higher link named `DARI (lembar lain): <parent> > <board>`) and is judged on the sheet it issues (gutter note included, `noteFor` is a function of the page); a `floorRange` page is as wide as the bands it prints (cropped boards placed, never widening; a tag whose branch is cropped is dropped). Every PARENT board rides its own riser lane where its span overlaps another's (one parent / disjoint spans ⇒ byte-identical); a board fed on the sheet — or from another sheet through a `DARI` stub — leaves 8 below its centre-line (the stub is in the collinear check); collinear feeder runs of two boards count in `overlapCount`. `computeSystem` rotates a fed board whose only imbalance is its own singles onto the parent's lightest line (judged on the parent's own balance; persisted labels move only for a worst-line gain > `phaseReassignThresholdA`), and the parent's achievable floor relabels fed boards' lines by the same three cyclic rotations (reducible ⇒ 'Rotate R/S/T at …', never inherent). The layout's unplaced note is scoped to each board's HOME sheet. The MEP-sync listener write is deferred (never `state =` synchronously from a `ref.listen`).
+- **Round 43 — star-delta leads as wired, ADS-aware frame raise, exact board sums (2026-10-18)**: a star-delta way's TN loop takes the lead PHASE on ONE conductor per lead run (a line's two lead conductors meet only through the windings) and only the lead PE on both lead cables (2 × runs); the lead drop is the single-phase LOOP 2·I_w·Z·L at I_w = Ib/√3 against 400 V (never the balanced √3 factor) in BOTH the sizer and the judge, the lead sized against the limit LESS the internal link's drop (`CableVoltageDropConstraint.limitPercent`); the two lead cables are 2·g grouped circuits (`// VERIFY notAnSniClause`). The 6 → 16 A MCCB frame raise is refused (`mccbFrameRaiseRefusedIds`) for a final way it would push into an ADS failure — the MCB is kept with the cascade info. A board line / demand current / incomer / busbar section / TOTAL sums the EXACT way currents (`designCurrentExactA` / `designCurrentSumA`) and rounds once — never a sum of 0.1 A-printed way figures; the achievable-imbalance floor never prints above the actual; the genset per-phase basis governs only past the 0.05 A-per-board line quantisation. A sub-metered board of any system buys + prints its kWh meter; a non-FRC feeder carrying a life-safety sub-tree raises `life-safety-feeder-cable`. Issued schedules mark ` Iz!` / ` Zs!` (`adsFailedCircuitIdsOf`), riser LANJUT stubs dodge every kept label (else counted), chunked overview roots name sibling chunks, and a riser page still below `kMinPlotLabelPt` carries `SldSheet.belowMinLabelPt` + `sldLegibilityWarning`. Recorded (r43 review): a width-bound riser floor band (a typical apartment floor with many boards) is FLAGGED (`SldSheet.belowMinLabelPt` + `sldLegibilityWarning`) but not yet split into column chunks or a typical-board collapse, so such pages still issue near 1.7 pt; the live canvas schedule and the dev harness pass no `adsFailedCircuitIds`, so ' Zs!' prints only on the issued PDF / DXF (' Iz!' shows everywhere); a kept sub-frame MCB on a bus above the MCB kA range raises the breaking-capacity error beside the `mcb-backup-protection-required` info; `sizeCable.vdOk` compares the 2-dp-rounded drop on the tighter lead budget (≤ 0.005 % slack).
+- **Round 42 — machine-owned kind always returns, one star-delta field run, gear ≥ printed Ib, one starting basis (2026-10-18)**: an MEP sync ALWAYS re-derives a derived / re-adopted way's `loadKind` from the fresh mint and clears `loadKindUserSet` (`_refreshedMepWay`; the Round-24 legacy kind keep is superseded — a stored Spare would zero a drawn machine with every re-kind refused); `setCircuit` accepts a re-kind of a derived way back to its mint's kind. STAR-DELTA = the starter in the board: the supply cable is INTERNAL wiring (`kStarDeltaInternalWiringM` 2 m, `// VERIFY`, sized on ampacity, taken off at 2 m) and the FIELD run is the two motor leads at the way length — BOM, containment (`fieldCablesOf`), conduit metres (`CircuitConduit.count`), the schedule / report / inspector PENGHANTAR, the way Vd (internal + leads at Ib/√3) and Zs (leads on 2 × runs) all read the leads; NYA / NYAF leads are single cores (run × runs × 3 + PE). A star-delta starter on a 1φ way is DOL everywhere (`effectiveStarterType`) + judge-only `star-delta-single-phase`, refused by `setCircuit`, not offered by the inspector. Control gear sizes on max(table FLC, the way's solved `runCurrentA`) (`applyStarterTemplate(flcA:)`); the FLC table runs to 315 kW and scales ∝ kW above it (warned). The genset dip reads each motor's assembly starting current (`GensetMotor.startKva`), and `kStartKvaMultiple` is derived from `startingProfiles` (one starting table). `isDriveFedCircuit` is the ONE VFD predicate for the PF study (at `electronicLoadPf`) and harmonics. MCCB Icu ladder runs to 100 / 150 kA. Judge-only `service-cable-ampacity-inadequate` (a service beyond 4 parallel runs) and `breaker-override-nonstandard` (an off-ladder typed rating). A re-kind off motor / pump / HVAC clears `starterType`; a re-kind ONTO motor / pump seeds `motorKw = loadW × 0.88 / 1000` and clears loadW. The inspector protection token uses the schedule's 2-pole rule + ' S' RCD marker and prints Vd via `vdropPctForVerdict`. Recorded: for small motors the gear basis (table) sits above the printed Ib (safe direction); no lugs for motor leads; the feeder 4-run cap is a deliberate limit (no busduct model). Recorded (r42 review): the star-delta Zs/ADS loop takes the two lead cables in PARALLEL (the run / delta condition) — during the STAR phase one lead per line carries the fault, so the lead term is optimistic by up to ~2x for a fault while starting (safety-quantity follow-up); the board-schedule starter token is now gated to motor / pump / HVAC kinds (a starter stored on another kind no longer prints, consistent with the gear build).
+- **Frame-cost isolation (drafting-feel batch 1, 2026-10-20)**: an ANALYTIC
+  provider (issues, warnings, electrical feed, fire bases, workflow, anything
+  heavier than a paint input) reads `sizingNetworkProvider` — never
+  `networkControllerProvider` — so a K1 drag frame / held-arrow nudge never
+  re-runs it; only paint/hit-test widgets read the live network. EVERY pointer
+  drag on the mechanical canvas opens the K1 session (`beginDrag` beside its
+  `pushUndoSnapshot`, re-called per frame; `endDrag` on release / cancel);
+  `beginDrag` arms the settle timer itself (an open session never lacks one)
+  and undo / redo / load / restore close it — a freeze can never outlive the
+  gesture. A remounting canvas seeds `initialTransform` from the LIVE
+  `sheetsControllerProvider` viewport (a `ref.read`), never the lagging
+  `sheetsContentProvider` copy. Nothing that
+  needs the sheet LIST watches the whole `sheetsControllerProvider` (every
+  pan/zoom frame writes it): read `sheetsContentProvider`, and map screen <->
+  world through `sheetViewportProvider(sheetId)`. Widgets that branch on a
+  fact of the drawing state watch a `.select` record, not the whole state.
+  `Network.edgesAt` is indexed — never replace an edge in place (same rule as
+  `nodeById`). Derived results with several readers are ONE provider
+  (`airSystemsProvider(service)`, `roomSizingProvider` — never re-size a room
+  inside paint — `networkElementDefectsProvider`). The network drawing sits
+  behind its own `RepaintBoundary`; the hover halo is a separate thin layer
+  above it, and the painter culls off-screen elements (500 px margin — it
+  must exceed the label ladder's reach, or culling moves on-screen chips). Pinned
+  in `test/drafting_perf_test.dart`.
+  The Riser viewports are their own providers (`schematicAutoViewportProvider`
+  / `schematicEditViewportProvider`) and the Auto painter is memoized on
+  (floors, groundIndex) — never key a memo on `ProjectState.building` (a fresh
+  instance on every read). Canvas view keys (F / Ctrl ± 0 / arrows / hold-
+  Space) go through the shared pure `ui/canvas/viewport_keys.dart`.
+  Layout drafting: one store predicate pair (`drawEndpointAdoptable` /
+  `drawTeeAccepts`) decides what a draw end can snap to for BOTH the preview
+  marker and the commit — never let the preview offer a connection the click
+  won't make. Per-floor node/run/riser lists for hit tests and snap search
+  come from `ui/canvas/floor_index.dart` (`floorIndexOf`, per-Network cache),
+  never a whole-building scan per pointer move. `orthoSnap` PROJECTS the
+  cursor onto the snapped axis (no overshoot).
+  While a run is drawn the CANVAS owns the keyboard (Ctrl+Z / arrows keep
+  working); the smart bar is fed by forwarded keys and never auto-claims
+  focus. A chained placement's re-anchor point on undo comes from the
+  controller's explicit chain-step stack, not from topology.
+  Electrical: the heavy electrical chain reads `electricalSizingProjectProvider`
+  (single-line board x/y moves never re-solve — tag such writes with
+  `isSchematicMoveOf`, never route another edit through it); a Layout marker
+  drag runs inside `electricalDragSessionProvider`. Programmatic view changes
+  on the electrical / riser canvases ease through `ViewportEaser` (resolve-
+  gated). Shared canvas building blocks: `scaled_world_child.dart` (FittedBox
+  hit-testing for world-scaled widgets), `marquee.dart` (window/crossing).
+  A drag gesture's electrical undo step is LAZY (`beginUndoableGesture` /
+  `endUndoableGesture`) — a drag that changes nothing records nothing.
+  Commands (batch 5): a typed point never snaps; base-point Move / Copy /
+  Rotate are one undo step per placement, copies get fresh ids and keep their
+  own floors; rotation quarter turns stay trig-free (exact). The Layout host
+  owns middle drags (`CanvasView.externalMiddlePan`) and every programmatic
+  canvas view change passes `MechXMotion.resolve`.
+  A base-point Move / Copy that lands a node EXACTLY on another node joins it
+  (`_joinCoincident`, the drag-end convention) — never a stacked twin.
+  Polish (batch 6): floating chrome that sits over the sheet PAPER uses
+  `GlassSurface(overPaper: true)` (dark-mode legibility); every implicit
+  animation in a shared widget passes `MechXMotion.resolve`; Riser Auto labels
+  follow the one LOD rule (`riserLabelFontSize`: hidden < 3.5 px, capped > 2x);
+  an export raises the busy pill (`exportInFlightProvider`) and DXF sheets
+  parse off the UI isolate (`cachedDrawing` never parses — peek + background
+  load). An async command must run on a LONG-LIVED ref (palette commands use
+  the overlay's ref; `runExportGuarded` captures its notifiers before the
+  first await) — a disposed widget's ref throws.
+  Follow-up (rough edges): sheet-space CHROME that must read at a fixed
+  size (the loading / load-error pages) goes through `ScreenConstantLayer`
+  over the `CanvasZoomScope` the `CanvasView` publishes — never a widget
+  that scales with the drawing. A Layout electrical marker's box, hit rect,
+  marquee test and drop radius all read `layoutMarkerScale(zoom)` (capped at
+  `kLayoutMarkerMaxScale`). A dragged single-line board latches to sibling
+  columns / rows via the shared `nearestAlignment`; the guide is drag-time
+  only.
+
+- **Round 41 — own-rung FLC judge, machine-owned kind, fire-duty alarms, Y-D on winding current, BOM = schedule (2026-10-18)**: `root-incomer-exceeds-transformer-flc` fires only ABOVE the first breaker rung at or above the unit FLC (`incomerRungForFlcA`) and a dual service is judged per SECTION (`units / 2`) whatever the root count — never condemn the engine's own rung. An MEP-derived way's load KIND is refused like its power (`setCircuit`); a `LoadKind.spare` way carries 0 W / 0 A whatever W / motor kW / FLA it still holds. A life-safety motor / pump way (the schedule's `no-OL trip (fire)` gate) gets ALARM-ONLY overloads (`applyStarterTemplate(fireDuty:)`, `ControlDevice.tripDisabled`) — never a tripping class-10 relay. Star-delta: main + delta contactors on FLC × 0.58, star on FLC / 3 (`// VERIFY`); the way carries `motorLeads` (one of TWO lead cables on Ib/√3), printed `· leads 2x(...)` and taken off at 2 × run length. A breaker part that declares NO kA never matches a specified kA (`_kaShort`). The BOM takes off containment (conduit per trade size, tray per width), 3φ-board metering (V / A / Hz / kWh + 3 CTs) and the main bonding conductor; a reduced-make-up cable keys `SKU:<n>C+<csa>` with the legacy key as `BomLine.legacyPriceKey`; control devices key on their ROLE; capacitor banks to procure come from ONE `capacitorBanksToProcure` (BOM, schedule, spines); a BOM line's location suffix is the explicit `BomLine.location` (`splitBomLocation`), never `lastIndexOf(' — ')`. Recorded (r41 review): the star-delta motor-leads BOM line adds the 2 × run-length cable but no lugs for its 2 extra cable ends; a star-delta way of a single-core family (NYA/NYAF) prices its leads as one multi-core `SKU:4C` line while its supply cable takes the per-conductor path; the source-spine builders re-run `powerFactorCorrection` without the study's `harmonicRich` / diversity inputs (equal today — `harmonicRich` only sets `detuned`).
+- **Round 40 — the largest machine up the chain, machine-owned MEP ways, fewest-move labels, per-section transformers, ADS-capped selectivity (2026-10-18)**: one machine does not diversify against itself ANYWHERE upstream — `ElectricalPanelResult.largestDownstreamRunA` (own largest FINAL way running current, max'd with every fed board's, bottom-up pre-pass in `computeSystem`) floors the feeder's device AND conductor (`ComputePanelOptions.feederLargestRunA`), every incomer up the tree, the recommended daya and `service-capacity-below-demand` (`worstPhaseDemandVa(withLargestMachine:)`). `SupplySummary.connectedW` is UNDIVERSIFIED (`circuitUndiversifiedW`), the board 'connected' basis. A retyped parked way's Motor kW drops its minted FLA (loadW = kW × 1000 / 0.88; merge likewise); an MEP-DERIVED way's loadW / motorKw / lifeSafety are REFUSED (`mepDerivedWayMachineLocked`), never edited-then-reverted; deleting / moving the MEP board's last way drops the empty board + feeder (`_dropEmptyMepBoard`). `balancePhases` never adopts a solve's labels wholesale: among assignments no worse (worst AND spread) than the chosen one, the fewest ways off their prior line (`_minimisePriorMoves`). A dual service judges each section on the most loaded ROOT (`determineSupply(largestSectionDemand:)`, one unit per section — the fault model's topology), with `section-transformer-overloaded` / `root-incomer-exceeds-transformer-flc`. On TN the selectivity floor is capped below any rung that fails ADS (`feederBreakerCapA`, device only; the target stays recorded so selectivity-partial is still reported). Drawings: essential-parent feeders ride their own riser lane; a schedule kA below the bus fault prints `kA!`, an Ics shortfall ` Ics100`; >8 layout risers at one board rotate per lap; riser pages are greedy per floor run (a width-limited band shrinks only its own page); 'Source'/'Earth' keyed only when the spine is on the page; a side-source stack ends below its last text line. Recorded (r40 review): `_incomerAboveTransformerFlc` compares a single root on a dual service against the PARALLELED units' FLC (under-reports only, contrary to the one-section rule); `transformer-below-demand` is now a WARNING at 80–100 % loading, so a declared transformer in that band fails the electrical compliance row until acknowledged; the layout riser rotation repeats the lap-0 bearing on lap 4 (≥ 33 risers at one board); TN solves run one extra fault study + one pre-pass `computePanel` per fed board (no measurable cost on the whole-building suite).
+- **Round 44 — one takeoff, the route on the sizing method, paralleled sets on the smallest rung, a current-basis neutral, legible risers (2026-10-18)**: the app's `electricalBomProvider` passes the study's `containment` + `metering` to `advancedBomLines` (BOM == schedule: conduit / tray, meters, sub-meters, CTs); the live canvas board schedule receives `adsFailedCircuitIds` like every export. A non-overridden MCB on a bus above the MCB ladder top (the engine's cascade keep) is the judge-only WARNING `cascade-combination-unverified` (incomer + back-up kA named) and a non-short BOM line noted '(back-up protected (cascade, verify))' — never the `breaking-capacity-inadequate` error; an overridden one still errors. The containment ROUTE follows the method the conductor was sized on (`effectiveInstallMethod`, containment.dart, shared by compute): tray / air ⇒ tray (no conduit issued or bought), wall ⇒ clipped (no containment), conduit / trunking / buried ⇒ conduit — never issue a method-E-sized cable in conduit (`ConduitSpec.route` / `issuesConduit` in the study, schedule and BOM). Past a ladder top, n = ceil(required / top) units sit on the SMALLEST rung covering required / n (genset, inverter, transformer); the ATS / COS is rated on n × kVA and n > 1 sets buy a synchronising panel; `GeneratorSource.units` × `kva` (`totalKva`) is the forced plant on every surface. The FOLD-2 neutral bar is max(phase bar, the smallest bar whose AMPACITY ≥ factor × the sizing current) — never phase CSA × factor (a withstand-floored bar is not multiplied); the factor stays reported for the feeder neutral upstream, `NeutralPeBars.oversized` says whether the bar grew. A busbar SECTION is floored at its largest outgoing device rating. A `upsBacked` board's feeder (and everything upstream) carries the UPS input (× `kUpsInputFactor` = 1.10 / 0.94, `// VERIFY`, balanced) plus the INFO `ups-not-sized`. Battery / PV / inverters are sized ONCE (`sizeDistributedSources`) for the one-line, the BOM and BAT / PV / INV schedule rows. Star-delta lead cables are lugged (3 phase + PE, both ends, every lead run). A riser page still below `kMinPlotLabelPt` after the floor split first collapses identical sibling leaf boards to a TIPIKAL node, then splits a band too wide by itself into board column pages (largest legible chunk, ancestors kept, the others named in the gutter); `belowMinLabelPt` is the backstop only. Recorded (r44 review): a collapsed typical riser node drops the first board's `[tag]`; collapsed / column-paged board ids are hidden rather than listed per page for LANJUT / overlap bookkeeping (safe — their feeders are not drawn); the BOM cascade note keys on the panel bus kA (`minBreakingKa`) rather than the fault study's per-circuit need (equal today, a second predicate).
+- **Round 45 — UPS input to the genset, one covering-units transformer rule, current-limiting cascade, MCCB magnetic ADS, honest riser pages, content-keeping merges (2026-10-18)**: the genset reads a UPS-backed TOPMOST backed board at its UPS INPUT (`× kUpsInputFactor`) in `essentialDemandVa` / `essentialDemandW` / `gensetPhaseDemandVa` / `alternatorLineDemandVa` (a 3φ UPS board a balanced rectifier draw) — never its output; a UPS child of a backed parent is already in the parent's feeder load. `coveringTransformerUnits` is the ONE paralleled-transformer rule (study AND `declaredServiceTransformer`): n = ceil(required / top), the smallest rung covering required / n. `cascadeBackupAvailable` is the ONE cascade predicate (fault study AND BOM): a kept MCB is backed up only by an MCCB incomer whose own specified kA covers the bus — an ACB or an inadequate incomer keeps the error. ADS judges a non-MCB device at max(`kMccbMagneticTripMultiple` 10, its curve multiple) × In (the issued MCCB carries no curve). A TIPIKAL riser node groups only boards that print the same node (sub-line, fan-out rows, per-way loads, length-free feeder spec) and prints its members' feeder length range. Riser column pages split a band into UNITS (board fed from another band + same-band descendants; parents split too) and draw only the chunk + its own ancestor path; an empty band is skipped (r2: also an empty END band of a non-split run, so no sheet is spent on an empty roof); the spine root is chosen among DRAWN roots. r2: a REFINED unit root (a same-band sub-main) is kept on the rest pages with every same-band ancestor of a first-chunk board, and the rest-page note names every column-page-only board with an off-band parent — the parent's page always names it (it is drawn on every column page of its units: recorded residual). A floor whose own page reaches 7 pt targets 7 pt in `paginatedRiserSheets`. Node merges (`endNodeDragWithSnap`, `_joinCoincident`) keep the `nodeCarriesContent` node (its id, at the junction position) and never join two content-bearing nodes. Recorded (r45 r2 review): with TWO levels of same-band refinement (MDP -> SDP on L1 -> two sub-boards on L1 -> many units) a column page draws the chunk's ancestor path but hides the sibling sub-board and names only the sibling units, so one feeder of the drawn SDP is unnamed on that page; such a storey can issue one unit per page (legible, ~50 sheets for 50 units); an empty storey band can still take a page of its own; `genset_backup.dart` and `compute.dart` import each other (const-only cycle — move the UPS constants to a leaf file).
+- **Round 49 — one rotation objective on exact lines, sub-trees rotate, fire systems rated on their own zone / stage / class, no unprotected session (2026-10-18)**: the reducibility floor in `computePanel` judges EXACT line sums (`_exactLines`; `minimumPhaseSpreadA` returns the unrounded spread — round only for display) against an exact margin in amperes (`kPhaseImbalanceReducibleMarginPercent × avg`), so a two-way board (one line always empty) is inherent, never a phantom 'Unpin … 198.5 %'. The 'Rotate R/S/T at …' floor scores every cyclic relabelling with `rotateFedChildren`'s OWN objective — the parent's solved balance (`balancePhases` with its prior + stability threshold against the permuted feeder lines), lexicographic (worst line, spread) — and advises only a pick that never raises the worst line and cuts the spread by the margin; the printed achievable % is that pick's. `rotatable()` is recursive: a mid-level board qualifies when every unequal-line feeder below feeds a rotatable board (no pin / capacitor / UPS in the sub-tree); a rotation relabels the WHOLE sub-tree (`rotationSubtree`, re-solved children first), so MDP → SDB → DB trees rotate at the SDB (MDP 30/15/15 A ⇒ 20/20/20 A). A Rotate instruction names the boards that HOLD the single-phase ways (`_rotationHolders`). Fire: every `FireSystemBasis` lifts from ITS pump datum floor (`FireSystem.datumFloor`, the lowest drawn fire pump) to ITS own topmost terminal (`FireSystem.staticLiftM`: hose outlet + 1.2 m / sprinkler at the ceiling; no terminal ⇒ the whole-building top) — never the whole building; the sprinkler-vs-pump check uses the same per-system lift. Fire pumps are duty / standby / jockey only within a PARALLEL set (`fireParallelPumpSets`: legs sharing both ends through bare / inline nodes, or a mirrored-leg pump); pumps in different sets are SERIES duty machines (never df 0), each carrying its stage head (`FireSystemBasis.stageHeads` / `dutyFor`: lower stage = its own zone's need from the system datum, or the lift to the next stage's suction; top stage = the remaining system head; Σ = the system head). A hose-reel-only system is a Class II standpipe (`FireSystem.standpipeClass`: reels only ⇒ II, reels + boxes ⇒ III, else I): 100 gpm (`kClassIIStandpipeFlowLpm`), 450 kPa, risers ≥ DN50 / runs ≥ DN40 (`SizingContext.hoseStationEdgeIds`, filled by the sizer), all `// VERIFY notAnSniClause` in the checklist. The calc report's churn over-pressure line is per system (`CalcReportData.fireOverPressure` ← `fireOverPressureProvider`, the Review's list), never the governing rating. Autosave: while a PENDING crash snapshot owns this session's slot, the tick writes to the slot's session sibling (`recoveryPartnerSlot`: `<key>.session.mechx`) instead of skipping; Restore / Discard (`clearPendingRecovery`) and Save / Open / New (`clearRecoveryFor`, sparing the pending slot) clear it; the updater backstop follows the same rule. Recorded residuals: a series stage on the SAME floor as the one below shares its stage head equally; with two unresolved crashes in a row the third session's work goes to the primary slot and replaces the first crash's snapshot (the banner offered it for a whole session); the phase floors judge rotation on the parent's prior-sticky balance, so a relabelling whose gain hides inside the parent's own stability threshold is not advised. Recorded (r49 review): two valveless pumps from one tank teed into a header at two DIFFERENT points on the same floor no longer share leg ends, so both are full-duty ways (not duty + standby); a series fire set charges the whole index-path friction to the lower stage(s) and the top stage takes the remainder (stage heads sum to the system head; the per-stage friction split is approximate).
+- **Round 39 — incomer ≥ largest machine, one LV basis, no phantom devices, one installed-bank set (2026-10-18)**: `computePanel` floors the incomer + busbar at the largest FINAL way's undiversified running current (one machine never diversifies against itself; feeders / capacitor / spare excluded); `outgoing-exceeds-incomer` is a WARNING only under a breaker override (any override-free inversion is the engine's own pick ⇒ INFO). r3 (orchestrator binding decision): the DOCUMENT fully determines the phase balance — each single-phase way's solved line is PERSISTED as `ElectricalCircuit.assignedPhase` (additive, tolerant `.mechx`, absent ⇒ none, distinct from the engineer's `phaseOverride` pin), written by `ElectricalProjectController.stampAssignedPhases` on every forward mutation (seeded from the DISPLAYED solve — ids it does not list start unassigned — then solved and stamped; a load / undo / redo / restore is written verbatim; never an undo or settings step) and read back by `computeSystem` as the balancer's prior (explicit `priorAssignments` override per way). There is ONE labelled assignment: the fed board's schedule, the parent's `feederLineCurrentsA` / feeder row R/S/T, the parent incomer, `alternatorLineDemandVa` and the imbalance %/gate all read `phaseBalance` (the history-free / judged / `parentFacingPhaseBalance` machinery is deleted); the gate still judges reducibility against `minimumPhaseSpreadA` and only a pin makes it reducible, and an inherent note whose labelled % sits above that floor says the labels were kept within the stability threshold. Pinned: `test/round39_r3_persisted_phase_test.dart` (300-trial store-edited multi-level trees == `buildDocument → applyDocument`, non-vacuous). An incomer is never matched to another breaker CLASS, an RCCB or fewer poles (`_matchBreaker(incomer:)`): no compatible part ⇒ unmatched on `elec:breaker:<class>:<A>:<poles>P[:kA]`. A generator / solar origin-fault estimate prints its own provenance (`serviceFaultEstimateBasis` → `FaultLevelBasis.generatorEstimate` / `inverterEstimate`). `determineSupply(perPhaseDemand:)` — LV vs MV and the undeclared transformer on max(total, √3·400·I_worst), so lv ⇔ an LV daya exists. `faultAwareBreakerClass` never mints an MCCB below `kMccbMinFrameA` (16 A): raised to 16 A when ≤ the cable Iz, else the MCB is kept + `mcb-backup-protection-required` info. A SPARE way prints no cable / conduit / length and gets no containment. Off-sheet feeder lengths are measured feeding → fed board. Unmatched RCD BOM lines key on their RCCB frame. `installedCapacitorBanks` is the ONE installed-bank source (schedule, spine, BOM, PF study). The calc report's cable cell is the schedule's `cableRunLabel`, it prints device kA when the `faultSpecifiedKa` maps are passed, and an OVER Vdrop rounds up (`vdropPctForVerdict`). An A5 FLA is re-derived from the way's own W when the way is source-less (parked), its phase count changed, or its board is 1φ; an FLA override in a fixture must carry a `sourceEquipmentId`. `mergedLoadWay` refuses a merge that would lose load (capacitor, W onto motor, 3φ onto non-3φ). A non-PLN `supplyKind` is never a declared MV service; its fault is the alternator S/(√3·400·0.12) or 1.5 × the inverter rating (`// VERIFY`). Round 39 r3 follow-up: GEOMETRY-ONLY intents (`setPanelPosition`, `movePanels`, `setPanelLayoutPos`, `_setLoadPos`, via `_setGeometry`) skip the two stamping solves — phase assignment never reads positions, so every drag frame stays one solve; a value-identical MEP re-sync (`_sameCircuits`) writes nothing, so an untouched pre-r3 file is not re-stamped and does not open dirty. Recorded (r3 review): `_incomerCompatible` treats an UNDECLARED part class / poles as not judged (every real catalogue part declares both); outgoing ways still substitute class / poles with the `deviceSubstituted` flag.
+- **Round 38 — neutral through parallel runs, persisted lines (r3), fault-aware class, one LV ceiling (2026-10-18)**: a 3φ feeder to a FOLD-2 board sizes its neutral condition (Iz × 0.86 ≥ factor × the fed worst phase) through `sizeCable(izRequiredMinA:)` — parallel runs included — and re-checks it after sizing, a hand override included; still short ⇒ the ERROR `feeder-neutral-overloaded`, the info `harmonics-neutral-oversize` only when met. Anything summed ACROSS boards (the feeder-lines pre-pass, `alternatorLineDemandVa`) reads each board's labelled `phaseBalance`, whose prior is the document's persisted `assignedPhase` (Round 39 r3 — the r38 'unseeded lines' rule is superseded: there is no session memory left to diverge from). A ≤ 63 A device on a bus above the MCB ladder top (25 kA) is an MCCB (`faultAwareBreakerClass`, way + incomer). The LV ceiling is ONE figure, `plnLvServiceCeilingVa` (`lvSupplyLimitKva` derives from it; `recommendedDaya` never returns a step above it). A declared daya above the 1φ ladder on a 1φ root converts on the 3φ per-phase basis (`kThreePhaseServiceLineVoltageV`) + `service-single-phase-root-on-three-phase-daya`. A typed phases / cos φ re-derives a minted A5 FLA. The APFC line is bought whenever `pf.bankKvar > 0` (already net of installed kvar); no bank whose smallest step exceeds the residual kvar. `connectFeeder` onto the current parent keeps the existing way. A 3φ feeder's R/S/T cells print `lineCurrentsA`; a 1φ board prints in its feeder's phase cell. The layout plan uses `essentialPanelIds`. A copied feeder is a spare; `feeder-without-target` / `outgoing-exceeds-incomer` are judge-only. Schedule Icw prints `/<t>s` when t ≠ 1 s; RCD tokens carry ` S` when time-delayed. Orchestrator follow-up (r38 review): `outgoing-exceeds-incomer` is an INFO note naming the action (raise this board's incomer via its spare-capacity headroom) when the inversion is the engine's OWN device-only selectivity floor (no breaker override, way listed in `feederBreakerFloorA`) — never a sign-off blocker, like the suppressed `selectivity-partial`; an override-caused inversion stays a warning.
+- **Round 37 — lines, not boards; document-determined phases (r3); per-basis fire friction (2026-10-18)**: the genset per-phase need is the heaviest ALTERNATOR LINE (`alternatorLineDemandVa`: 3φ boards add their diversified L1/L2/L3, a 1φ board its current on its feeding way's solved line) — never a per-board sum. A 3φ feeder to an imbalanced 3φ board carries that board's diversified lines into the parent's balance and sizes its Ib / Vd on the worst one (`ComputePanelOptions.feederLineCurrentsA`; balanced boards absent ⇒ byte-identical); the achievable-imbalance floor counts that fixed unequal base (`minimumPhaseSpreadA(base:)`). A feeder to a board with FOLD-2 factor f > 1 sizes its cable on Iz × 0.86 ≥ f × the fed worst phase (full neutral) and passes the triplen share up (`feederNeutralLoad`). Phase stickiness never changes the WORST phase vs the unseeded solve, and only a PIN makes an assignment the engineer's (Round 39 r3: the prior is the document's persisted `assignedPhase`, and the imbalance verdict reads the same labelled lines the schedule prints). A single root on a dual-transformer service is floored on ONE section (`serviceEntranceCapacityVa`), the fault basis's own. `advancedBomLines` takes off capacitor banks (installed, else recommended) and service transformers. A re-kind to spare / feeder / capacitor never seeds the motor W. A parallel pump set is grouped per LEG (a two-valve leg is one leg). An inline ground tank is an ejector pit only on an ejector's SUCTION side (`ejectorPitIdsFor` / `ejectorPitOf`). The FDC chain is sized on the joined junction's largest flow, ≥ DN100 (`kFdcMinBoreMm`). A jockey leg (`jockeyLegFlows`) is never the duty leg nor mirrored and sizes on its own duty flow. Fire index friction is per BASIS (`FireTerminalKind`): hose = hydrant outlets, sprinkler = heads; the combined pump takes the larger head at its own flow.
+- **Round 37 r2 (2026-10-20)**: a single root on a dual-transformer service is judged on ONE section everywhere — the incomer floor, `service-capacity-below-demand` (worded 'one N kVA section of the declared M kVA connection') and the supply study (`determineSupply(singleSectionCarriesAll:)`, set when there is one origin board); never the declared total in one surface and the half in another. The phase memory is pinned at the store (`test/round37_phase_history_store_test.dart`: live == reopened incomer / sizing current / worst phase). (Superseded by Round 39 r3: one labelled figure, no second judged one.) A combined fire system rated on its sprinkler point raises `combined-fire-sprinkler-governs:<pumpId>` (judge-only). Recorded (r2 review): the two single-root predicates differ in source — the service judge counts panels fed by no `feedsPanelId`, the supply study `originPanelIdsOf` also excludes `fedByCircuitId` boards, so a board linked only by `fedByCircuitId` can make them disagree; the incomer floor / judge halve the RAW declared daya while `determineSupply` uses the ladder-snapped per-unit kVA (differ by a rung on an off-ladder daya); (closed by Round 39 r3) the footer and the warning gate now read the same labelled lines.
+- **Round 36 — the alternator's own basis, full-backup dip, mixed-valve sets, canonical HW loops (2026-10-18)**: `gensetPhaseDemandVa` converts every backed board's worst-phase current on the SUPPLY's basis when it is 3φ (`worstPhaseDemandVa(asSystem:, asVolts:)`) — a 1φ essential board on a 3φ genset needs √3·V_LL·I (its whole current sits on one alternator phase), never V·I; the recommended-daya path keeps the board basis. `gensetStartMotors` restricts the dip screen to the essential sub-tree only when the set backs a FRACTION (`backupFraction < 1`, the power one-line's `essentialSplit` rule) — a full-backup set starts every motor whatever is marked essential. A duty/standby set with a check valve on only SOME legs is the Round-13 parallel set (valved feed mover legs group with the valveless ones by start + destination; all-valved sets keep the structural grouping) — never a Hardy–Cross split. Drawn HW recirculation loops are the CANONICAL set of simple cycles through the source / a plant / a check valve that run every flowing pipe in its solved direction (`_canonicalReturnCycles`) — never a spanning tree's fundamental cycles. Re-kinding a hand-entered motor / pump way to a W-sized kind clears its hidden `motorKw` (seeds `loadW` from shaft ÷ 0.88 when empty); the PF study and the HVAC starter / dip read `loadW` for non-motor ways (an MEP-derived way's `motorKw` stays authoritative). A TT feeder whose IΔn ladder is exhausted (`!ttFeederRcdSelective`) never claims 3 × discrimination and raises the judge-only `tt-rcd-not-selective`.
+- **Round 35 — one riser-end datum, no gravity reducer, per-phase service basis (2026-10-18)**: `riserEndElevation` reads `runConnectionElevation` for every NON-gravity riser (a datum-less AHU / supply / exhaust fan at its casing top, `MountingHeights.airUnitConnection` ceiling-capped; a ceiling terminal / sprinkler head at the ceiling) — the same datum a RUN leg uses, so a duct measures the same drawn as one riser or as run + riser; `displayedNodeElevation` reads the riser datum for ANY riser (gravity first); `nodeElevation` stays the pressure-solve STATIC datum. `_clampGravityNoReducer` runs UNCONDITIONALLY after the overrides: every auto drainage / rainwater edge is at least the largest bore discharging into it (followed up the sized flow tree, flagged `stackRaisedForBranch`, code minimum = the raised bore; a rainwater raise to an unsaturated governing edge carrying its whole flow clears `overCapacity`), a hand pick below the pipe above it is `belowCodeMinimum`; propagation stops at a pump / booster / ground tank / plant node (a force main keeps its own pumped bore). Never only realign a DFU table row. A service limiter / 3φ alternator is rated PER PHASE: the recommended PLN daya sizes on max(total VA, Σ roots' worst-phase VA at the judge's 0.1 A rounding) and the genset on max(balanced basis, `gensetPhaseDemandVa`), both through the ONE `lineCurrentForCapacityA` / `capacityForLineCurrentVa` pair the service-capacity floor uses — declaring the recommended daya never raises `service-capacity-below-demand`; a forced genset nameplate below the per-phase need raises the judge-only `genset-phase-overload`. Recorded (r35 review): the generalised gravity no-reducer clamp is property-tested on drainage only (its rainwater over-capacity clear reduces to the Round-19 downpipe->collector case); the per-phase genset basis is byte-identical on a balanced board only to ~35 VA (the demand current is carried at 0.1 A). The `genset-phase-overload` message prints the per-phase rating on the SUPPLY's own system.
+- **Round 34 — fixtures-only legend, inlets, casing-top air connections, collapsed riser terminals, paged tall boards (2026-10-18)**: the heatmap legend ranges and verdicts over the on-sheet DELIVERY nodes (`heatmapDeliveryNodeIdsProvider`, gated like `residualByNodeProvider`; `heatmapLegendRange`), never a ceiling junction ~25 kPa above them; a sheet with none says 'pipework' and prints no PASS/LOW; the wash normalises to the same range. Results 'Top residual' is the DELIVERED downfeed field; the amber 'boost' headline only when a delivery node is below its SNI floor. A sheet holding only riser ends is never a critical calibration blocker (RUN edges only). An FDC (`isSupplyInletComponent`) is an INLET: no demand, never a delivery node or hydrant outlet, its chain oriented inward. A datum-less AHU / supply fan / exhaust fan connects its runs at `MountingHeights.airUnitConnection` (2.0 m, `// VERIFY notAnSniClause`, capped at the ceiling) — only the run leg; `nodeElevation` stays the floor surface. The issued riser draws a floor with > 3 heads / air terminals of one service as its take-off only (`collapseRiserTerminals`, counted in the fan-out); a riser tag off its anchor's band counts in `overlapCount`. Double-line ducts are trimmed at shared nodes by ONE `planDuctOutlines` (PDF == DXF). A board schedule below 7 pt pages by WAY RANGE (`electricalBoardScheduleSheets`), an overview top page below 7 pt by chunks (`rootChildIds`); every app schedule passes the containment study (`containmentByCircuitIdOf`); a standalone layout sheet is numbered by its position among layout sheets (`electricalLayoutChrome`). Recorded (r34 review): `collapseRiserTerminals` applies to the ISSUED riser sheet only — the live Riser canvas still draws every head / diffuser on a > 3-terminal floor (the two surfaces differ there); an electrical layout with NO electrical content takes its rail-position number and can collide with the submittal's E-101; the riser placer's +-0.25 floor-datum box forbids leadered slots for a node sitting ON the floor line (collisions are then counted in overlapCount).
+- **Round 33 — one delivery set, the SNI floor per node, the laid fall, exact breakers, stable tags (2026-10-18)**: the pressure solves and the app's mover / booster duties share ONE delivery rule (`pressureDeliveryNodes`): delivery fixtures (never a `isNonDemandTerminal` cleanout / air vent / extinguisher) PLUS every open leaf the sizer LOADED (flow arriving); a loaded bare cold / hot water end carries the sizer's default TERMINAL demand, so it is judged at the FIXTURE height (`pressureJudgeElevation`, r2), never the ceiling its main runs at; an inline device (`isInlineDeviceComponent`: meter, valves, strainer, expansion tank) is never a draw-off, and a degree-1 water meter roots a component whose best plant is an inline roof tank (the fill pump is a TRANSFER pump). The SNI 8153 minimum is judged at EVERY delivery node against its OWN floor (`sniMinimumResidualByNode` / `worstSniShortfall`, 98 kPa when a flush valve is on its path) — never only at the critical node; the heatmap legend and probe read the same `residualVerdict` ladder (LOW only below the SNI floor). With drawn movers the upfeed field is `upfeedDeliveredProvider` (`solvePressurized(moverHeads:)`: the source develops only its own mover's head); `solveProvider` stays the sizing basis. An ejector's pit is found through its suction chain (`ejectorPitOf`), and gravity pipe downstream of a force main is never below the DN50 bore. A drainage RUN is laid at `laidGravitySlope` = max(project slope, its self-cleansing floor) — the one figure the plan / canvas fall label, the Manning velocity (auto-sized AND hand-overridden: `applySizeOverride(edge:)`, so a riser keeps the project slope either way) and the min-slope advisory read; a project slope flatter than a run's floor raises the info `drainage-laid-steeper` (`laidSteeperAdvisory`). The BOM buys only an EXACT-rating breaker reaching the specified kA (else unmatched on its `elec:breaker:` key). Equipment tags number per prefix from `NetNode.tagNo` (monotonic `network.tagSeq`; legacy nodes keep the ordinal); a drawn machine's way is '<label> <tag>'. A stack-growth pin applies only to sheets with work (`sheetIdsWithWork`). Plan fixture codes include a custom-library fixture's short name (`customFixturePlanCode`, via the app's `planExportNodeTags`). DXF: `$INSUNITS` converts a transferred scale (one unit known ⇒ refused; neither known but world extents ≥ `kUnitlessFrameRatioLimit` (100×) apart ⇒ refused), an arc grows the bounds by its exact extent, frozen / off layers are invisible, a cut ENTITIES section is `incomplete` (a missing final `0/EOF` alone is not flagged — the geometry is complete), and a truncated gzip asset (ISIZE) is never extracted. Recorded cosmetic residual (r2 review): the node inspector header prints a loaded bare end's own `nodeElevation` (its ceiling) above a residual probe judged at the fixture height, without saying so.
+- **Round 32 — two pressure thresholds, duplex ejectors, one intake decision, honest drawings (2026-10-18)**: the supply-pressure judges (`downfeed-below-target` / `upfeed-below-target`, ONE kind each) raise a WARNING only below the SNI 8153 minimum at the critical node (`sniMinimumResidualAt`: 98 kPa when a flush-valve fixture lies on the source → critical supply PATH, else 49 kPa — never project-wide) and an acknowledgeable INFO between that minimum and the 225 kPa comfort target; compliance counts only the warning, and an info-only pressure row passes as 'SNI minimum met; below comfort target (advisory)'. A DUPLEX ejector set (`duplexEjectorSets`: ≥ 2 drawn ejectors, one pit, one header) is duty / standby, never a gravity ring: `autoSizeNetwork` sizes through the duty leg (lowest pump id) and mirrors it onto each standby leg (size, fixture units, flow pump → header, `parallelLegEdgeIdsOut`); every ejector force main is ≥ `kEjectorForceMainMinBoreMm` DN50 (`// VERIFY notAnSniClause`). The force-main walk treats a ground tank as the ejector side only when it is the start pump's OWN pit (an STP / septic outfall is the sewer's sink); one walk (`ejectorForceMainSteps`) feeds the duty and the bore floor. The air loose-end exemption IS the sizer's intake decision (`airOpenBoundaryLeaves` ← `autoSizeNetwork(airIntakeLeavesOut:)`) — never a parallel structural rule. `service-capacity-below-demand` judges the DIVERSIFIED worst-phase current (the incomer floor keeps max(undiversified, service)). Board totals sum integer micro-units (`_micro`) — order-free. Riser drawing: a paginated HW return leg spans every page its stack crosses (clamped to the band edge), closes once at the real stack top, its HWR PUMP rides the base page; the PUMP-SET DETAIL and every reference callout are gated on the DOMESTIC / focused service's own nodes (no caption fallback onto a fire pump); label boxes use the printed Helvetica advance (`mechRiserLabelWidth`) + 0.3 em clearance; EVERY proper leader/pipe crossing is charged in the leader tier — HARD for a leader > 28 units (blocks the early stop), SOFT for a shorter one (orders only slots that cannot clear). r2: a widget `ref.listen` must never write a Notifier synchronously (defer to a microtask) — a provider's first computation can run inside another provider's build; the app's duplex standbys ARE the engine's `duplexEjectorSets`; plant-detail captions are filtered to the sheet's drawn movers. Recorded (r32 review): a `ref.listen` on `sizingProvider` or anything derived from it must defer any Notifier write (microtask) — the provider is first built inside other providers' builds; a duplex ejector is recognised only when the pumps share BOTH one pit AND an onward header (a header joining only the two pumps is a dead end ⇒ no duplex, in engine and app alike); the soft leader-crossing pin on the M-201 harness sheet (<= 43) is a one-unit ratchet.
+- **Round 31 — force mains, duplex ejectors, air boundaries, phase accounting (2026-10-18)**:
+  the ejector force-main walk (`sizing/ejector.dart`) passes INLINE devices
+  (`kEjectorForceMainInlineComponents`: check / gate / balancing valve,
+  strainer, riser marker) and a duplex HEADER (legs back to another ejector /
+  the pit skipped) and ends only where gravity / fixture drainage joins, at a
+  fixture / plant or a dead end — a discharge valve never cuts the lift.
+  Ejectors on ONE pit are duty + standby (`duplexEjectorStandbys`: largest
+  drainage bore, then lowest id = duty; the standby way at the duty machine,
+  demand factor 0, 'Sewage ejector (standby)'). A supply-air terminal is
+  `isSupplyAirTerminal` (supply OR linear diffuser) everywhere a room is
+  judged served / stale / auto-placed. A bare air leaf reaching an air-unit
+  plant directly or through degree-2 dampers is an open boundary
+  (`isAirOpenBoundaryLeaf`), never a loose end. With a return rooted at the
+  same unit the fan static is (supply − intake) + max(intake, return) +
+  internal (`DuctStaticSolution.intakeStaticPressure`); with no return the
+  intake stays in series. `balancePhases`' relocate pass tracks the way's
+  CURRENT line after an accepted move — every reported line equals the sum
+  of the ways assigned to it (seeded property). An MEP-derived way's load
+  position is its equipment's: `setLoadPos` refuses it. The electrical
+  compliance row fails on a warning like every other row (one rule).
+- **Round 30 — declared daya per section, water-only feed evidence, stub-less vent stacks, IPC branch table, ejectors, equipment takeoff (2026-10-18)**: a declared PLN connection capacity is the TOTAL connection — `declaredServiceTransformer` splits it per dual section and above the ladder top returns `n x 2500 kVA` (an explicit `transformerKva` stays per-unit); `determineSupply(declaredUnits:)` judges loading on demand / units. Water feed wording (inspector, riser notes, canvas notes, pump-set detail, the calc report's feed line, the Results caption) reads ONLY `drawnWaterFeedEquipment` (nodes on a cold / hot water edge) — never any pump anywhere. A vent component with no free leaf roots at the vent-riser top (`riserTopIds`) whose riser chain spans the most storeys (`_riserTopSpans`), then the highest — a branch vent riser tied by a run into the stack top never roots (its tie keeps its own load); a stack whose top tie node is the tree root takes a virtual zero-length VTR carrying every load entering it (less a received header). The horizontal-branch DFU table is IPC 710.1(2) (DN40 3 · DN50 6 · DN65 12 · DN75 20 · DN100 160); the trap / WC floors still apply; the stack table's 2½ in row is IPC's <= 3-interval 20 DFU (DN75 above it). A pump / booster on the drainage service is a sewage EJECTOR with its own duty (`ejectorDutiesProvider`: pit DFU via the flush-tank curve, lift + friction of the force main) on the schedule and the MDP. A roof drain's leader run to a bare rainwater junction carries its drop (the only gravity run with a vertical leg). Downfeed zones stop at the lowest floor with a water DELIVERY node (`lowestServedFloor`). Drawn plant is quoted as `mech:equipment:<component>:<duty>` lines (never silently omitted); fittings add one elbow per run vertical leg (non-zero span) and none at plant nozzles; SPD keys carry the connection; assumed lines never join the cut plan. Electrical report: a board's 'connected' is its undiversified sub-tree; currents / percentages print at 0.1 (ratings keep their rung); every PUIL checklist value prints with its tier. Recorded residual (r2 review, conservative only): when a fixture's own branch vent riser spans the SAME storeys as a stub-less stack and ties into its top by a run, `_riserTopSpans` ties and the root falls to height / id, so the stub-less stack carries the combined load (4 x 22 DFU = 88 => DN100) where the stubbed drawing carries 68 => DN75; the tie run itself keeps its own load.
+- **Round 29 — per-system fire judges, one declared MV service, orderable earthing, legible drawings (2026-10-18)**: the sprinkler-vs-fire-pump judge (`sprinklerPumpCheckProvider`) compares each sprinkler-bearing fire system with ITS pump (`fireSystemBasesProvider` duty; the governing `firePumpDutyProvider` only for a sprinkler-only system with no pump drawn) — never another system's pump. The calc report's standpipe line is `reportStandpipeDesignProvider` (the governing hydrant basis' friction-inclusive `FireSystemBasis.standpipe`); `standpipeDesignProvider` stays friction-free for the sizer. A 1φ motor's control gear sizes on `motorFlc1ph` at U0 (`applyStarterTemplate(singlePhase:)`, the way's SOLVED phase). ONE declared-MV predicate: `isDeclaredMvService` / `declaredServiceTransformerKva` (explicit transformer, or a declared capacity above `plnLvServiceCeilingVa` snapped UP the transformer ladder) for the supply study, `serviceTransformer`, the drawings, the power one-line and the fault estimate. A verify item never claims a basis the study did not use (`faultStudyMotorVerifyItem` only when a motor infeed > 0 was passed). The TN main earthing conductor is an orderable make-up (one ladder conductor, else n parallel per-run PEs — `mainEarthingMakeup`, BOM qty n). Persisted settings text fields commit on blur / Enter (one settings undo step per edit). Run element tags read the building's ground-relative level (`floorLocatorToken`: `B<n>` / `GF` / `L<n>`; every artifact passes the building — no building ⇒ legacy `F<n>`). The mechanical riser never prints a tag FUSED into another without counting it (`SldSheet.overlapCount` → `planOverlapWarning` on the SLD PDF / DXF); paginated stubs are reserved before LANJUT labels; a duct tag clears its own outline (`placePlanLabel(ownHalfWidth:)`); MV side sources hang off a collector bus joined to the LV main; a beside-root riser spine's whole side stack sits above the supply row; a plan tag whose leader strikes a placed label is counted. Recorded residuals (r29 review): the service-capacity incomer / busbar floor still sizes on the RAW declared daya (555 kVA -> 801 A), not the snapped transformer kVA the study / fault / drawings share — defensible (the PLN limiter is set at the contract daya) but only coincidentally on the same rung; the motor fault infeed is still NOT folded into the Fold-1 chain (its verify line is now conditional on the uplift actually applying).
+- **Round 28 — the circulator envelope to a fixed point, a linear classifier, valveless pump sets + recirc returns, fire pumps per system, persisted counters (2026-10-18)**: the r8 balance-against-pump scenario (a) is ITERATED — legs that run against their pump in a closed solve join the closed set and the closed reading is re-solved while it grows (bounded by the mover-leg count; the per-leg fallback is not iterated), so a hotel with a circulator on every return riser never sizes a supply pipe below the OPEN network (seeded property, `round28_engine_test.dart`). Classifier cost stays near-linear: `distFrom` / the return plan's `dist1` are (distance, id) priority-queue Dijkstras (the SAME settle order ⇒ identical maps), `distFrom` is memoised, `disconnectsDemand` is a memoised BFS, the node predicates are resolved once per component into sets, and `Network.nodeById` / `edgeById` use a lazily built, length-stamped id index (never re-introduce a per-relaxation linear scan; pinned: 30 risers x 10 floors with return valves < 5x the valveless drawing). A duty/standby set drawn WITHOUT check valves (coherent valveless mover legs with the same two leg ends and direction, discharge sets only) is the Round-13 parallel set (tree through the first leg by pump id, the rest mirrored, `parallelLegEdgeIdsOut`). On hot water, beside a root chain carrying a coherent mover pointing AWAY from the heater, every valve-free, mover-free, demand-free root chain is a plausible valveless recirc RETURN: scenario (a) closes it with a pseudo return valve at its root end (`returnChainKeysOut`), enveloped with the balanced reading (supply main curve(8) DN20; this closes the r7 probe-4 residual — the pump legs now carry curve(8)). A pump-free valveless ROOT chain whose far junction is reached from every other side only through coherent valveless movers pointing INTO it is a RETURN chain (closes r8 residual (i): the ambiguous heater discharge beside it is a FEED). Fire: every connected fire network is its own SYSTEM (`fireSystems`): `drawnStandpipeRiserCount` = the largest system's stack count (independent towers never add); each drawn fire pump is rated on its OWN system (`firePumpBasisByNodeProvider` → panel feed + schedule; sprinkler-only system ⇒ remote-area flow + sprinkler label); on a calibrated drawing the friction term is max(15 m allowance basis, Hazen–Williams C 120 of the SIZED index path from the duty pump — `fireIndexPathFrictionM`, sprinkler basis with the remote HEAD pressure); an unmeasured flowing pipe ⇒ the allowance alone (more information never lowers the rated head). `.mechx` carries additive `network.nextSeq` / `roomNextSeq` only when the counter runs ahead of the live ids; a load also clears every id still referenced (parked `mep-node-n<k>` ways, acknowledgement keys, terminals' `autoPlacedRoomId`) — a reload never re-mints a deleted id. Fixture library, commercial pricelist / markups, saved assemblies, equipment model/spec and document control edits are ONE `UndoDomain.settings` step each (equal values record nothing; load `set` never records). Floor heights decode into [0.5, 20] m (non-finite / non-positive ⇒ 3.5); an empty floor list loads `kDefaultProjectFloors`; `CustomFixture` units decode finite >= 0. `Network.nodeById` / `edgeById` read an Expando index keyed on the list INSTANCE + length: never replace an element in place (`nodes[i] = ...`) — build a new list (every store mutation already does), or the index returns the old node. Persisting `network.nextSeq` means add-then-undo of the newest node leaves the document dirty (an autosave recovery snapshot) although the drawing matches the save — the deliberate price of stable ids. Recorded residual: the residuals-2 return-chain envelope skips a ONE-edge root chain, so a hot-water return landing on the heater by a single pipe from a degree >= 3 junction is not enveloped.
+- **Round 27 — feed vs return valves, vent chains, intake in series, net room area, per-system curves, R12-honest DXF (2026-10-18)**: cycle check valves follow the r3 BINDING rule (`_classifyLoopCheckValves`; hop / shortest-path draw-off heuristics failed review three times — topology alone cannot tell a mis-drawn return from a genuine second feed): the DRAWN direction is authoritative when unambiguous (one pipe into the valve node, one out); each valve is classified with ONLY ITSELF removed — root distance in the BEND-FREE hop metric (r8: `bendWeight`, a bare degree-2 node weighs nothing; r7: never calibrated metres or plan pixels) between its EFFECTIVE in- and out-neighbours (r8: the first non-bend node past any elbows): out-node strictly nearer ⇒ a RETURN (zero draw-off, the r4 cut + `returnPlan` on the remainder), otherwise (ties too) a FEED that is NEVER zeroed — a transparent pipe of the loop set, except a parallel duty/standby set onto one header (legs merging at ONE junction, or every leg with a mover), which keeps the Round-13 standby-leg rule; mixed sets zero exactly the returns. An AMBIGUOUSLY drawn valve follows the r5 conservative rule below (no longer the Round-15 topological orientation); a set of DRAWN returns that would cut a draw-off point off the source (self-contradictory, e.g. both duty/standby legs drawn header -> valve -> pump). A feed valve is one-way on every supply-path walk (`returnPlan`'s supply paths, its tree must reach each feed from its inlet; the return walk never enters a feed valve or its end nodes), and Hardy–Cross CLOSES a feed valve the balanced split would run against (zero flow, re-balanced while every draw-off stays fed). A HOT-WATER feed valve whose outlet the source still reaches with it and every return closed raises the judge-only info `check-valve-feeds-ring:<nodeId>` (EN+ID, locatable — 'if it is a recirculation return its arrow is drawn backwards'); a return drawn H -> CV -> RJ is sized AS DRAWN, never re-interpreted. A return CHAIN landing on the inline top fixture is return side; a landing from a tee keeps the ring split. `_uniformVentStacks` classifies runs as CHAINS through bare bend nodes; a VTR stub group TIED to no drainage node (no drainage node in it AND no vent run / chain from it to a drainage node) with >= 2 runs at its bottom is a header junction (never an offset) — an upper stack whose floor tie leaves its offset foot is still an offset (r2); a stack-top run to a bare non-riser node the air leaves through bounds the stack like a header; a run VTR is judged against its own stack top. `solveDuctStatic` ADDS the unit's intake path (sized flow arriving at the fan) to the supply index run. Room sizing / cooling / AC share / Auto-place use `RoomArea.netAreaM2` (footprint less the union of overlaps with STRICTLY smaller rooms; pass `rooms:`); a room's schedule row is dropped only when `roomServedByDrawnAir`; a clamped room trunk (`trunkOverCapacity`) is a `room-trunk-over-capacity:<id>` warning; the inspector face is `TerminalBank.faceMm`. The Hunter flush-VALVE branch applies per cold-water component holding a flush-valve node (`flushValveNodeIds` / `flushSystemForRoot`), never project-wide. DXFs declare AC1009: no group 370, no `$INSUNITS` / `$MEASUREMENT`; SLD DXF text height = PDF em x `kHelveticaCapHeightEm` (0.718); the SLD supply note wraps inside its title box; the layout DXF title block sits above the unplaced notes. **r4 (orchestrator sign-off, written into the rule):** (a) a FEED valve whose Hardy–Cross split would run against it is CLOSED (zero flow, re-balanced) — that is what a check valve does, so the seeded property asserts flow >= 0 in the drawn direction for every feed; (b) a set of drawn returns that would cut a draw-off point off the source falls back to the Round-15 topological orientation (drawn or ambiguous returns alike); (c) a valve CLOSED by the balance — or any feed valve left at zero flow — is treated EXACTLY like a classified RETURN for output: both legs at zero in its permitted direction, the pipes it isolates sized at ZERO flow (DN15 minimum, fixture units 0, `sizeZeroPockets`, walked from each side over unsized / zero pipes, never through another valve; inlet side oriented toward the valve, outlet side away) on calibrated AND uncalibrated drawings — never silently left out of the result (an exactly-zero balanced edge or a demand-free dead end used to drop the return pipework from the BOM / canvas / riser depending only on calibration) — and it never raises `check-valve-feeds-ring`. The same zero-pocket sizing applies behind every classified RETURN. (SUPERSEDED by r5 — `ambiguousInlet` is gone:) an AMBIGUOUSLY drawn valve was read with ONLY ITSELF removed (every other check valve a plain pipe, the rule-2 principle): strictly off every root -> draw-off path ⇒ the farther side is the inlet; else an adjacent mover; else a valve that only TIES a path (a return teed at the top fixture) reads the same farther-side way; only then the all-cut reading — cutting every valve let a heater DISCHARGE valve isolate the root and turn an ambiguous common return into a feed (hm 0.3237 vs curve(16) 0.6533 L/s). Residual inherent to the binding rule (recorded): a genuine second feed whose leg is LONGER (r8: in REAL nodes — tees / inline devices; bare elbows weigh nothing) than the alternative ring route to its entry junction reads as a RETURN and is zeroed (its leg sized at zero, never against the valve) — only the flow-against-valve half of the r2 hop residual is closed. **r5 (binding orchestrator decision for AMBIGUOUSLY drawn cycle check valves — both pipes into, or both out of, the valve node; four rounds of distance heuristics each failed review):** the intent cannot be recovered from topology or hop/metre distances, so the reading is CONSERVATIVE and structural: (1) a valve whose two leg ends (through bare degree-2 nodes / inline pumps, `legEnd`) are exactly those of another cycle valve is in a PARALLEL set onto one header (duty/standby, pump + bypass) — oriented by a DRAWN partner, else by the only leg end the root reaches with every cycle valve cut — and keeps the Round-13 standby-leg rule if it actually forms that set; (2) otherwise it is a CLOSED RETURN (zero draw-off, the r4 cut, its isolated pipes sized at zero DN15 / fu 0), so every main upstream carries the full peak, never under-sized; (3) unless closing it with the drawn returns cuts a draw-off point off the source — then a PLAIN PIPE (Hardy–Cross); valves that starve one only TOGETHER are reopened symmetrically (every valve whose reopening alone restores supply — a dual-feed ring through two ambiguous valves is two pipes), never by id order; (4) every ambiguous cycle valve raises the judge-only, locatable info `check-valve-ambiguous:<nodeId>` (EN+ID: direction ambiguous, how it was assumed — closed return / plain pipe / standby set — redraw its two pipes in the flow direction; `autoSizeNetwork(checkValveAmbiguousOut:)` -> `checkValveAmbiguousProvider`) and never `check-valve-feeds-ring`. A closed return's orientation is cosmetic; `returnPlan` walks from BOTH its sides, each start on its own, in a BEND-FREE metric (a bare degree-2 node weighs nothing — `bendWeight`), and a walk that lands on two points of ONE supply path (one downstream of the other on the shortest-path DAG) is a ring segment, not a return (extends nothing) — so for ambiguous valves the reading AND every pipe size are invariant to bare bends anywhere and the reading to calibration (seeded property). Behaviour change (intended): an ambiguous genuine second feed — even one that ties or shortens a draw-off path — now reads as a closed return (the first leg carries curve(total)); r4's tie branch read it as a return only without a valve on the first leg. `check-valve-feeds-ring` no longer names a correctly drawn discharge valve beside a backwards return: with several candidates, those on the source's shortest route to its nearest draw-off (heater / pump discharge) are dropped. Unambiguous valves keep the r3/r4 drawn-direction rule. **Residual (recorded, rule 2 — unambiguous valves):** rule 2 reads the bend-free hop metric since r8 (hops only since r7), so neither calibration nor bare elbows flip a reading (the r5-era calibrated flips — a 2-bend dual feed read RETURN at 4 m vs 3 m, a backwards top-of-riser return R3 -> CV -> S3 read return at 11 m vs 13 m — read exactly as uncalibrated; the 4-bend dual feed is a FEED as with 0 bends); only a genuine metric TIE broken by a REAL node (an inline device / tee / fixture added to one side) can still move a drawn valve's reading. **r6 (kept by r7):** a cycle check valve on a MOVER leg (a pump / booster set / supply fan between the valve and the next junction, through degree-2 nodes and inline devices) is NEVER zero-forced; a drawn valve pointing back at its own incoherently drawn pump is read as a feed and reported `drawnAgainstSupplyLeg` (its own Review title, EN+ID); parallel sets onto one header also form STRUCTURALLY (feed valves with the same two oriented leg ends), so a header also reached by a valve-free return keeps the Round-13 standby rule — the standby legs leave the Hardy–Cross loop set and mirror the duty leg (`mirrorStandbyLegs`, both paths); `supplyFan` is a mover. r6's choice of the source's discharge chain by the drawn PLAN route is GONE (a 30 px move of the return riser flipped it). **r7 (binding orchestrator decision — ORIENTATION PRECEDENCE, highest first):** (1) a DRAWN valve direction; (2) a MOVER on the valve's degree-2 leg drawn COHERENTLY (one pipe in, one out) orients the leg and every valve on it, ambiguous ones included, and is never overridden by root distance, metres, hops or chain choice — a coherent circulator drawn TOWARD the source on a root chain is a recirculation return (an ambiguous valve on it `closedReturn`, the supply main curve(8) = 0.4000 L/s DN20 as on 4e5e9d9, either pump position), every other mover leg a FEED; an incoherently drawn ("ambiguous") pump orients its leg away from the source — the root side of a root chain, else the end nearer the root in BEND-FREE hops with the leg removed, never metres; (3) STRUCTURAL root-chain cues only — a drawn valve pointing toward the root makes its chain a return (its ambiguous valves follow r5), one pointing away a discharge (its ambiguous valves feeds, `supplyLeg`); the only non-return chain out of the root is the discharge; (4) NO distances of any kind in classification (rule 2 reads hops; `nearestDrawOffVia` / plan pixels / metres deleted) — when two or more root chains stay plausible discharges with at least one UNDECIDED (only ambiguous valves: several such chains, or one beside a drawn-valve-only discharge — what a backwards return looks like), the sizer solves one scenario per undecided chain (it the discharge, the other undecided root valves closed; plus all closed beside a drawn-valve-only discharge; at most 4, else r5; a scenario whose closures starve a draw-off point is skipped; one survivor is read as is) and sizes EVERY edge of the component on the max |flow| over the surviving scenarios (direction and fixture units from that scenario), labelling those valves `CheckValveAmbiguity.envelope` (EN+ID 'Check valve direction unclear at the source — pipework sized for every plausible flow direction; draw the valve arrow to tighten'). A lone undecided chain beside only valveless / mover chains keeps r5 (closed unless that starves a draw-off point). MOVER LEGS ARE NEVER ZERO-FORCED OR REVERSED: a feed valve on a mover leg (off the root or between interior junctions) is exempt from the Hardy–Cross 'close a feed the balance runs against' path; when the solved flow runs against the leg's pump every leg edge stays open, sized on |flow| (mover duty = |flow|) oriented in the pump's direction (`_MoverLeg`, `orientMoverLegs`), and the valve is reported via `autoSizeNetwork(checkValveAgainstPumpOut:)` → the app labels it `balanceAgainstPump` on the same `check-valve-ambiguous:<id>` kind with its own EN+ID message ('Balance runs against the drawn pump'). The `check-valve-feeds-ring` trim reads plain hops (judge-only) and counts an envelope scenario's feed valve as a competitor that is never named, so the heater's own drawn discharge beside an ambiguous return is not named while a backwards return beside an ambiguous discharge is. `sizeZeroPockets` orients a zero-flow pipe the tree already holds (the first walk reaching it wins), never root-outward. Pinned drawing-invariantly (`round27_r7_check_valve_orientation_test.dart`): probe 1 (CVd + CV both ambiguous) => envelope, hm1 = curve(16) DN25 and each riser base curve(8) DN20 for return-riser offsets -20 / -10 / 0 / +20 px, a jogged main (M at y=60), calibrated or not, 2 or 3 risers, every edge == max(the two drawn readings); probe 5 (CVd ambiguous + H -> CV -> RJ) => envelope, discharge never zero, for every offset (r8: feeds-ring EMPTY — the winning reading of CV's pipes is the one where CV is the only feed); probes 3 / 4 and the drawn-back pump-leg valve as r6; the circulator-on-return (drawn or ambiguous CVr, both pump positions, calibrated or not); the reviewer's interior booster (T -> R0; R0 - R1 long; R0 - R2 - R3 short; R1 -> P -> CV -> R3) => leg flow > 0, direction R1 -> R3, reported, calibrated AND uncalibrated; a seeded property (pump legs off the root and interior, valved root chains) asserting every mover-leg valve passes flow (in its coherent pump's direction), every reading invariant to calibration, a jitter of every node's plan position and bare bends, and every size + zero-flow pocket invariant to a length-ratio-preserving redraw. Re-derived: the r4-regression hotel and the r5 'drawn discharge + ambiguous return' hotel are now the envelope (the supply keeps the open network, the return the feed reading — the mirror of probe 5, no distance may separate them); audit_r15's duty/standby flip trials keep the pumps' suction pipes drawn S -> P (a coherently backwards pump is honoured, not a drawing variant). **Residuals (recorded):** envelope sizing is conservative — it upsizes the alternate chain (a return sized as if it fed); probe 2 (an ambiguous valve on the real heater discharge beside a VALVELESS return) is topologically the r5 hotel with an ambiguous return, so it stays a closed return: the heater discharge and the supply main to the riser bases are DN15 until CVd is redrawn (named); a valveless duty/standby return (probe 4) still shares the heater outflow by Hardy–Cross, so each pump leg (duty, and the mirrored standby) is sized on 0.2215 L/s uncalibrated / 0.2402 L/s calibrated of curve(8) = 0.400 L/s — the valveless return carries the rest; whether the balance shuts a genuine (non-mover) feed valve, and every valveless ring split, follow real lengths by design (only the classification is drawing-free); rule 2 is bend-free (r8) — only a real node added to one side of a tie moves it; two ambiguous valves that starve a draw-off point only TOGETHER and sit on no root chain are still both reopened symmetrically. **r8 (binding orchestrator decision, builds on r7 — PRECEDENCE now: drawn valve > coherent mover INCLUDING a VALVELESS one > structural root-chain cue > envelope; a balance against a pump => envelope; rule 2 bend-free):** (1) BALANCE-AGAINST-PUMP ENVELOPE: a mover leg (valved OR valveless) whose balanced Hardy–Cross split runs against its coherently drawn pump is sized on the envelope of two scenarios — (a) the leg CLOSED (zero draw-off, the r4 closed-return treatment incl. `returnPlan` and `sizeZeroPockets`; a valved leg's valves become fixed returns, a valveless leg gets a pseudo return valve at its first pump: `_classifyLoopCheckValves(closedMoverLegs:)`, leg key = its sorted edge ids) and (b) the leg OPEN as balanced — every edge of the component on the larger |flow|; the leg itself carries (b)'s |flow| in the pump's direction (mover duty = that, never 0, never backwards through the pump). (a) is skipped when closing the leg starves a draw-off point (all against-legs closed together, else each alone). The tree path has no balance and keeps r7 (leg oriented + named). Pinned: the reviewer's header-return probe (H -> M -> S0..S3; S3 -> R3..R0 -> RJ -> CV -> Pr -> M, pump CV -> Pr -> M, CV drawn RJ -> CV or ambiguous, calibrated or not) => m = hm = curve(8) = 0.4000 L/s DN20 as on 4e5e9d9, the leg == the plain-ring flow in the pump direction, `CV` named; every edge == max(open network, plain ring). (2) VALVELESS MOVER LEGS ARE CLASSIFIER INPUTS: a pump / booster / supply fan drawn coherently (all movers on the chain agreeing) on a degree-2 chain with no check valve, on a cycle, is a `_MoverLeg` (`valveIds` empty, `pumpIds`); on a ROOT chain it is a structural cue — drawn toward the root the chain is a RETURN chain (not a candidate discharge, and never the path `check-valve-feeds-ring` judges a feed against), drawn away a discharge chain. (Superseded by Round 60, recorded Round 61: movers drawn incoherently carry no direction; a chain with >= 1 coherent mover follows it (two coherent movers disagreeing => plain pipe); a chain whose movers are ALL incoherent is oriented away from the source like an incoherent valved leg — the root end of a root chain, else the nearer end in bend-free hops with the leg removed; a tie => plain pipe.) A valveless leg against the balance gets the decision-1 envelope and the judge-only, locatable info `mover-against-balance:<pumpNodeId>` (EN+ID 'Balance runs against the drawn pump'; `autoSizeNetwork(moverAgainstBalanceOut:)` -> `moverAgainstBalanceProvider`). Pinned: P-A (ambiguous CVd + valveless circulator RJ -> Pr -> H) => CVd `supplyLeg` (a feed), hm1 = curve(16) = 0.6533 L/s DN25, each riser main curve(8) DN20, the pump leg in its drawn direction, `Pr` named; P-L (drawn CVd + the same circulator) => hm1 curve(16) DN25, feeds-ring does NOT name CVd; a valveless circulator drawn AWAY from the heater is a discharge chain (an ambiguous CVd beside it keeps r5: closed). (3) RULE 2 IS BEND-FREE: the root distance is the `bendWeight` metric (a bare degree-2 node weighs nothing) between the valve's EFFECTIVE neighbours (`pastBends`: the first non-bend node past any elbows), so adding elbows to a drawn leg never flips FEED / RETURN — the dual feed T -> V1 -> J1 / T -> 4 bends -> V2 -> J2 reads both FEEDS with identical flows at 0 and 4 bends (== the plain-pipe ring); the seeded property compares every FLOW on the bends variant. (4) ENVELOPE HONESTY: a scenario's side outputs (`checkValveAgainstPumpOut`, `moverAgainstBalanceOut`, `checkValveFeedsRingOut`, `checkValveAmbiguousOut` labels, `loopUnbalanced`, `parallelLegEdgeIdsOut`) are reported only from scenarios that WIN at least one edge of the element they name — a valve: its two pipes; a leg advisory: an edge of that leg (the degree-2 chain through the node); an edge flag: that edge (a label no scenario wins keeps the first reading's, so an ambiguous valve is always named). Re-derived: probe 5's feeds-ring is now EMPTY — reading (B), where CV is the hotel's only feed, wins CV's pipes; CVd keeps its envelope advisory. **Residual (recorded, rule 2 — unambiguous valves, r8):** only a genuine metric TIE broken by a REAL node (a tee / an inline device / a fixture) on one side can move a drawn valve's reading; the r4 long-second-feed residual now needs a leg longer in real nodes (three tees each feeding a fixture: c2 / zc 0, m1 curve(8), x1 curve(12)) — the same leg made of bare elbows is a FEED split as plain pipes. **r8 review residuals (recorded, not regressions vs 4e5e9d9):** (i) the valveless-mover structural cue is ROOT-CHAIN only — an ambiguous heater discharge beside a valveless return whose coherent circulators sit on INTERIOR legs (R{k}_0 -> Pr{k} -> RJ, then a pump-free RJ -> H root chain) still reads the discharge as the r5 closed return (heater discharge + riser mains DN15, `mover-against-balance` raised on each pump), while the same pumps on the RJ -> H chain give curve(16) DN25 — candidate extension: a valveless root chain reached only through coherent movers pointing toward the root is a return chain; (ii) a circulator return landing ON the root is a zeroed return chain while the identical return landing on the first header gets the r8 envelope and prints the plain-ring share as its duty (the supply main is curve(8) either way); (iii) cosmetic: zero-flow pipes of two identical zeroed standby return legs can carry opposite `flowFromId` (the r4 first-walk-wins orientation), sizes unaffected.
+- **Round 26 — one gravity-source rule, separate vent stacks, parallel recirc
+  loops, honest riser canvas (2026-10-18)**: `gravityDownfeedDrawnProvider` =
+  downfeed + a drawn supply network + a pickable source + a non-null
+  `downfeedTankElevationProvider` — the ONE Round-23 rule (a roof tank, or a
+  PLANT above the top-storey fixture; a bare top-floor main is never a tank),
+  so an untyped top-storey 'Source / tank' is judged like a roof tank. A vent
+  RUN joins two stack riser groups only as an OFFSET (one group's TOP to a
+  different group's BOTTOM on one storey); any other run between groups is a
+  HEADER that never merges them: it keeps its own load and bounds only the
+  stack it DRAINS; the stack that RECEIVES it splits at the junction — risers
+  above it (the shared stub to the VTR) keep their own combined load, the
+  stack below keeps its OWN soil stack's size, whichever way the header is
+  drawn (r2). Which end receives is read from the SOLVED vent tree (r3): the
+  header's root-side endpoint receives, the other stack's air leaves through
+  the header and it is drained — a dead stub above a mid-storey header (no
+  VTR of its own) never makes a stack 'receiving'. A loop-CLOSING header
+  (left out of the solved tree — a relief header below a roof header between
+  the same stacks) neither receives nor drains: its closing-rule load is a
+  conservative artifact, never subtracted from or bounding a stack (r4; it
+  used to thin a 40-DFU stack to DN50). An open VTR (a vent leaf at a
+  riser's upper end, or — r4 — a bare leaf reached by a RUN from a stack top
+  on the component's top storey, joined by nothing else) is load-free — the
+  second VTR of a headered pair never takes the 2-DFU leaf default — and a
+  run VTR is the stack's roof termination: it counts in the uniform stack
+  like a shared riser (its load less the header load entering the stack) and
+  never prints below the stack, so a degree-1 run VTR off the stack top
+  sizes the stack exactly as a VTR riser does. Recorded residuals (r4
+  review, pre-existing, under-size direction): a roof header whose one VTR
+  hangs from a BARE mid-header node (stack top -> HX -> other stack top,
+  HX -> VTR) leaves the top-floor tie bypassing every riser, so the stack
+  sizes one DN small; and the run-VTR rule keys on the COMPONENT's top
+  storey, so a component mixing a riser VTR and a run VTR misses the run one
+  (+1 DN on the other stack). A hotel return teed AT / BEYOND an inline top
+  fixture keeps the right trunk but Hardy–Cross shares draw-off up its return
+  risers, which can leave a second riser BASE one DN small. Pre-existing residual (r4): a vent component with NO VTR at all
+  sizes both headered stacks on the combined load (over-size on an invalid
+  design). RETURN check valves (r4, binding): when every cycle check valve
+  of a pressurized component is a RETURN valve its two edges are ALWAYS out
+  of the Hardy–Cross loop set and sized at zero draw-off, `flowFromId` in the
+  physical return direction (up-node -> valve -> down-node) — the Round-12
+  principle — whatever the return-side walk decides. The walk grows the
+  return side ONLY from each valve's upstream node through draw-off-free,
+  off-supply nodes over edges on no shortest root -> draw-off path; those
+  edges are deferred with the valve when the walk meets no DRAW-OFF node and
+  the remainder is a forest (hotel return trees teed at the riser top / a
+  bare branch tee keep their tree cut). When the walk meets a draw-off node
+  (a ring teed at a fixture or a bare tee between inline fixtures, a hotel
+  return teed AT or BEYOND an inline top fixture) the return side is not
+  grown and Hardy–Cross runs on the REMAINDER without the valve — never on
+  the network including it (r3 routed ~40 % of the peak forward through the
+  return valve and sized the heater feed one DN small). The walk heuristic
+  CANNOT discriminate a return riser from a ring segment — a hotel return
+  touching an inline top fixture and a ring whose tee-adjacent nodes are all
+  bare (fixtures on stubs, the commonest Run-tool drawing) are topologically
+  the same, and BOTH orientations of the ambiguity exist (the hotel then
+  splits draw-off up its return risers; the all-stub ring collapses to the
+  hop-count tree) — which is why the valve cut is unconditional: the heater
+  feed carries curve(total UBAP) and every valve edge 0 in every case; only
+  the ring-vs-return split of the ambiguous segment stays heuristic.
+  Hot-water recirculation is PER COMPONENT
+  (`hotWaterRecircSystemsProvider`; one way / schedule row / report line each,
+  a drawn HW pump takes its own system's duty; ONE primary = the largest
+  recirc flow ∝ circulated + assumed-return length, in the provider AND
+  `hotWaterRecircLoop`); parallel drawn loops carry
+  heat-loss SHARES (`supplyPathFlowShares`, shared trunks the sum, index loop
+  by Σ s^1.852·L/D^4.871); the index run is Dijkstra (never hop order); with
+  no return drawn AND no hot-water pump drawn, recirculation is assumed only
+  above `kRecircMinDevelopedLengthM` (15 m, IPC 607.2, `// VERIFY`) — a drawn
+  HW circulator is an explicit recirculation signal and is never silenced
+  (r2) — and the
+  assumed DN20 return + pump are taken off flagged `assumed`. The HWR leg is
+  drawn only for an ASSUMED return (`hotWaterAssumedReturnProvider`), one per
+  riser STACK, the HWR PUMP at the whole network's lowest HW riser node and
+  never beside a drawn HW pump. A partial genset with NO essential board
+  screens every motor (`gensetStartMotors` restricts only on an essential
+  designation). The diversity library never overrides `demandFactorUserSet`
+  or a 0 factor. The Ics test (`_icsShortfall`) runs on the incomer, every
+  way and every feeder, once per device. Live riser canvas: arrows are
+  `riserArrowPath` (apex at the tip) pointing along the SOLVED flow
+  (`riserFlowGoesUp`); the band diagram sits in a frame (left gutter for the
+  FFL / fan-out labels, right column for the plant detail + notes, bottom
+  strip for the callouts); coincident nodes spread by the shared
+  `coincidentSpreadDx`; node glyphs + labels and riser tags go through the
+  collision list; the fan-out is grouped (`WC x2`) and the plant detail
+  carries the ground tank.
+- **Round 25 — legacy provenance, honest fault estimates, connected daya, no
+  override reducers, uniform vent stacks, one drawn feed (2026-10-18)**: in a
+  LEGACY file a demand factor 0 on a NON-life-safety MEP way is typed (pre-r23
+  feeds minted 0 only on a life-safety standby) — kept, flagged, parked never
+  dropped (`_isMintedDemandFactor`); a PARKED way (`kMepParkedNameSuffix`) is
+  provenance-stamped like a derived one and stays legacy until re-adopted. Past
+  the DXF primitive cap an INSERT grows the bounds by its block's memoised
+  extent (4 transformed corners) — never re-walk a block body bounds-only. A
+  declared LV capacity above the PLN TR ceiling estimates its OWN transformer
+  fault (`S/(√3·400·0.04)`), never below the study transformer for the demand
+  nor 16 kA: more information never lowers a safety quantity. The accessory
+  takeoff and the schedule DAYA read the UNDIVERSIFIED
+  `ElectricalCircuitResult.connectedW`; `loadW` stays the diversified demand. A
+  gravity edge below a hand-OVERRIDDEN pipe is raised (or, if itself
+  overridden, flagged `belowCodeMinimum`) — no reducer in the direction of flow
+  (`_clampGravityDownstreamOfOverrides`). A vent offset run between two stack
+  riser groups and the base run to the soil-stack foot are part of the vent
+  stack (uniform size); a zero-seed vent tie stays an explicit 0 (no phantom
+  leaf DFU); a fixture vented at its own node has a 0 trap arm. ONE drawn-feed
+  predicate (`gravityDownfeedDrawnProvider`, a drawn gravity source — a roof
+  tank, or a PLANT above the top fixture, Round 26) gates the
+  inspector headline / rows, the report and the Review `downfeed-below-target`
+  warning (→ the 'Supply pressure' compliance row); a meter-fed water network is
+  the acknowledgeable `mains-fed:<service>` info, never `no-source`. An empty
+  project carries a failing 'Design content' compliance row (n/a details, never
+  PASS). Acknowledgements are ONE `UndoDomain.settings` step. Drawn tanks are
+  scheduled (`EquipmentCategory.tank`). The fire-duty note names an MCCB / ACB
+  by class (no curve letter) and a non-pump life-safety motor a 'motor way'.
+- **Round 24 — migration, honest drawings, TT RCD topology, import
+  integrity (2026-10-18)**: a `.mechx` MEP way without the `mepProvenance`
+  key is LEGACY (`ElectricalCircuit.legacyProvenance`, decode-time only): the
+  first sync keeps (and flags user-set) any cos phi / phases / load kind /
+  demand factor that differs from the mint (load kind superseded by Round 42:
+  the drawn machine owns its kind) — never revert a legacy file's
+  typed character. A sku-less BOM line consolidates on its `priceKey` too
+  (an unmatched breaker's kA never merges away). Every printed incomer goes
+  through `incomerOverRangeSuffix`. The plan DXF declares `$LTSCALE`
+  (`dxfLtScaleFor(N)`, dash = the PDF's 6 pt on paper); a sized duct ≥ 1 mm
+  wide on paper is drawn true-width double-line (`planDuctWidthM`); an
+  annotation that can only overprint is COUNTED (`unresolvedCount` →
+  `overlapCount`) and the sheet prints `planOverlapWarning` — never silent.
+  An off-sheet electrical feeder is an `ElectricalPlanRiser` + an unplaced
+  line, never dropped; electrical route figures use the shared plan placer.
+  A TT feeder RCD takes the highest RCD type below it, steps `ttFeederRcdMa`
+  per RCD-feeder level below (≥ 3 × IΔn), and is omitted (RCM) over a
+  life-safety-only sub-tree. A TN main earthing conductor is
+  `tnMainEarthingConductorMm2` (service PE × runs, uncapped); the 16..50
+  clamp is the TT electrode conductor only. SPD distance is from the nearest
+  upstream recommended SPD. A DXF coordinate that is not finite is absent;
+  polyface / mesh POLYLINEs are skipped; a budget-truncated parse sets
+  `DxfDrawing.truncated` (bounds complete) and the import says so. A DXF
+  sheet maps world → content through `Sheet.dxfFrame` (painter, snap,
+  underlay); a scale is transferred between sheets only via
+  `transferCalibration` (DXF → DXF rescaled by the frames, mixed skipped);
+  Replace-all keeps a surviving sheet-with-work on its old floor.
+  Round 24 r2: a frame change is flagged ONCE per real change — the
+  detector compares the live extent against `Sheet.dxfFrame` AND the
+  acknowledged `Sheet.dxfLiveFrameAck` (recorded with the stale flag by
+  `SheetsController.reportDxfFrameChanged`), so 'Scale confirmed' survives
+  remounts and reopens; the Layout content cache keys on the whole sheet
+  source (`layoutContentCacheKey`). A TT feeder's sub-tree RCD TYPE always
+  propagates upstream (a life-safety feeder skips only the level count).
+  A legacy MEP value equal to an old mint (`defaultMotorCosPhi`, a kind in
+  `kMepMintedLoadKinds`) is machine-owned, never flagged typed.
+  `DxfDrawing.truncated` only when an INSERT is actually refused (budget,
+  array cap or depth). The plan DXF double-lines ducts only on a real
+  plotted scale (`plotN != null`), like the PDF.
+- **Round 25 follow-up — no vacuous pressure PASS, no phantom tank**: the
+  compliance 'Supply pressure' row claims BOTH `downfeed-below-target` and
+  `upfeed-below-target` (raised when `solvePressurized` reports
+  `targetHeldByDesign` false and the critical delivery residual is below the
+  target — a reducing PRV). `residualByNodeProvider` (heatmap / probe) and
+  `downfeedOverPressureProvider` are empty on a downfeed setting with no roof
+  tank drawn (`gravityDownfeedDrawnProvider`).
+- **Every `BreakerClass` consumer is EXHAUSTIVE (Round 23 r2)**: an ACB is
+  never sized, timed or labelled as an MCB — switch on the enum / `.code`,
+  never `name == 'mccb' ? … : <mcb>`. ACB frame 330 mm (`acbFrameWidthMm`,
+  >= the widest MCCB band), ACB pole loss 60 W, arc-flash clearing time
+  `arcFlashClearingTimeS` MCB 0.05 / MCCB 0.2 / ACB 0.5 s (`// VERIFY`); a
+  BOM line names a curve letter only when `hasTripCurve`. Typed electrical
+  character is PROVENANCE: `setCircuit(cosPhi:/phases:/loadKind:)` sets
+  `cosPhiUserSet` / `phasesUserSet` / `loadKindUserSet` (like
+  `demandFactorUserSet`) and the MEP sync never re-derives a flagged field.
+  The electrical layout DXF stamps the PDF twin's own snapped `1 : N`
+  (`electricalPlanPlottedScaleDenominator` → `plottedScaleDenominator`).
+- **Round 23 — held-by-design is falsifiable, MEP ways stay put, issued documents stay legible (2026-10-18)**: `solvePressurized` claims `targetHeldByDesign` only while no drawn PRV REDUCED the field below the target — a reducing PRV re-picks the least-residual delivery node as critical and the verdict turns falsifiable. `downfeedTankElevationProvider` is non-null only for a REAL gravity source on downfeed (roof tank / plant above the top fixture; nothing drawn ⇒ the declared roof datum); upfeed and booster-only downfeeds use the PRV-budget walk. An MEP-derived way never leaves the MEP board (`moveCircuit` refuses) and the sync never mints an id another board holds; a refresh re-derives phases / load kind / cos φ / an app-supplied name; a demand factor is the engineer's once `demandFactorUserSet` (provenance, never value inference); standby pumps (fire, supply on a mirrored leg, parallel HW recirc) carry the duty machine at df 0; electrical undo / redo / restore re-sync the MEP board and the duty-feed switch is undoable. `ElectricalSystemResult.order` is PRE-order (siblings in model order). The breaker ladder runs on to ACB frames (2000-4000 A, `// VERIFY`) and a saturated incomer always prints `OVER RANGE`. Report PDFs: WinAnsi fonts, wrapped cover runs, whole-word table columns, figures never below 5 pt (tiled), headings keep with their body. Electrical riser / overview PDFs paginate below 7 pt (floor ranges / sub-trees); the layout DXF is in world mm when calibrated; one-line skip lanes never share a stretch.
+- **Round 22 — standpipe per riser, tank-fed top zone, inline devices on both
+  solves (2026-10-18)**: `hydrantDesignFlow` is the multi-riser TOTAL and
+  rides only the common supply; every hydrant riser / trunk carries
+  `standpipeFlow(n)` for the n stacks in parallel downstream of it (one stack
+  ⇒ 500 gpm). `drawnStandpipeRiserCount` counts PARALLEL stacks
+  (`parallelStandpipeCount`: max components over any storey interval) — a
+  jogged stack counts once. A bare VENT junction on the top storey reads the
+  roof (VTR); drainage / rainwater keep the under-slab datum. A paginated riser
+  prints each riser tag once (on its lower end's page) and draws a pass-through
+  on every page it spans. Every FFL goes through `signedElevationText`. The
+  downfeed TOP zone is fed by the tank head (`computeDownfeedZones(
+  tankElevation:, maxFixtureStatic:)`, `DownfeedZoneStatic.viaPrv` false) —
+  never budget it on a PRV setpoint; only zones below take PRV stations, and the
+  zone table shows only when one is needed (or a zone is over). Drawn PRVs hold
+  their setpoint on BOTH solves (`_applyInlineDevices`); a sized booster's head
+  is applied by `solveDownfeed(moverHeads:)` — the app's
+  `downfeedDeliveredProvider` feeds the heatmap / probe / over-pressure judge,
+  `downfeedProvider` stays the unboosted sizing input. Hot water always takes
+  the flush-TANK curve. MEP-derived ways' `loadPos` is never remapped by a
+  floor edit (re-derived by `resyncMepEquipment`), derived ways / the MEP board
+  refuse delete / merge, and the auto-wired MEP feeder id is
+  `kMepEquipmentFeederId`.
+- **Round 21 — nested rooms, fire pumps + pipe, family-true BOM, legible
+  risers, a gravity datum (2026-10-18)**: the generating-room tag
+  (`roomTerminalOwnerOf`) wins only outside a smaller same-kind room — a
+  terminal a later-drawn nested room contains is that room's, so the outer
+  room goes stale rather than silently doubling the air; Auto-place keeps the
+  legacy grid and substitutes only a blocked cell by the nearest free cell of
+  the first denser grid. `standardMotorKw` runs to 315 kW (IEC frames); a
+  fire-pump way sizes on `max(nameplate / η, governing input)` and a clamp
+  raises `fire-pump-motor-oversized`. The standpipe flow counts the DRAWN
+  hydrant riser stacks (`drawnStandpipeRiserCount`, ≥ 1) off the throttled
+  sizing network. Parallel fire pumps are duty / standby / jockey
+  (`parallelFirePumpRoles`): standby ways carry demand factor 0, the jockey
+  its own `fireJockeyDutyProvider` duty, one schedule row per drawn pump.
+  Fire pipe sizes on `maxFireVelocity` (6 m/s, `// VERIFY`) with the code
+  floors; domestic water keeps 2 m/s. A cable FAMILY never falls back to
+  another family's SKU (unmatched ⇒ `elec:cable:<family>:<n>x<csa>`);
+  enclosures price per W x H x D; `advancedBomLines` takes off control gear,
+  genset + ATS, SPDs, rods and the BC conductor. A mechanical BOM line counts
+  its `unmeasuredSegments` (any > 0 ⇒ flagged, never a measured total);
+  drawn components are taken off (`buildComponentTakeoff`), an inline
+  terminal sits on a tee, rect fittings key / print W x H. A riser PDF that
+  prints below 7 pt paginates (`paginatedRiserSheets` /
+  `buildMechanicalRiserSld(floorRange:)`, `LANJUT KE <floor>` stubs); the
+  issued riser carries the HWR leg whenever the canvas does. A GRAVITY riser
+  reads a bare stack junction under its floor's slab
+  (`gravityRiserEndElevation`: ceiling of the floor below; on the lowest
+  level the lowest SLAB — grade with no basement, the lowest basement slab
+  when `groundIndex > 0`); pressurized risers keep `nodeElevation`. Every
+  riser length — `edgeLength`, the Riser canvas label, the Riser summary
+  Σ, the node inspector elevation — goes through ONE `riserEndElevation` /
+  `riserElevationDelta` (canvas == BOM == export). A fire pipe's velocity
+  verdict uses the SAME `maxFireVelocity` the sizer used (never the 2.0 m/s
+  domestic cap); a fan group in the riser drawing is keyed by the shared
+  header whichever way its runs are drawn; an ASSUMED jockey fire pump
+  (≥ 3 identical pumps) raises the info `fire-jockey-assumed:<id>`.
+- **Round 20 — generating-room tags, owner rooms, undiversified phase,
+  drawn feed, verdict-backing figures (2026-10-18)**: an Auto-placed terminal
+  carries `NetNode.autoPlacedRoomId`; ownership is `roomTerminalOwnerOf`
+  (that tag while the terminal sits in the room, else
+  `roomTerminalOwnerId`) for BOTH the Auto-place clean-up and the stale
+  judge, and the outer room's grid never drops a terminal inside a nested
+  room of the same kind. AC units / AHU / FCU belong to their SMALLEST
+  containing room (`roomUnitOwnerId`, tie on id) in the feed, schedule and
+  Rooms inspector — never the first room in list order. A drawn AHU / FCU is
+  scheduled ONCE: its solved duct duty row, or — only when no unit the room
+  owns has a solved duty — the room-air row for the unit
+  `roomAirUnitDutiesProvider` names, which the panel also feeds
+  (`NodeLoadSource.roomAir`). The report's HVAC trunk is never an AC-rooted
+  system. A FINAL way's Auto phase reads its undiversified `c.loadW`
+  (diversity never moves a machine across the 3φ threshold); the `cap` cell
+  marker needs a capacitor way / capacitor-floored fed board. The calc
+  report's feed line, booster head and PRV zones follow the DRAWN feed (a
+  roof tank for 'downfeed'; else booster / direct mains, no head, no zones).
+  ADS 3-dp figures round in the verdict's direction. Re-kinding a way
+  re-derives `isLighting` unless the edit sets it. Riser leaders prefer a
+  square exit over a run along a pipe (second-tier cost, never above a label
+  collision). Schedule currents and every printed length use one fixed
+  0.1 precision; board legends key only printed tokens.
+- **Round 19 — recirc returns, one room per terminal, one essential set,
+  BOM = schedule, tolerant decode (2026-10-18)**: a hot-water cycle is the
+  drawn RETURN only when it passes through the source / a plant or carries a
+  check valve — a stub-fed ring main keeps the heater feed + the mirrored DN20
+  return (`hotWaterRecircLoop`). Each air terminal belongs to ONE room
+  (`roomTerminalOwnerId`: smallest COMPATIBLE room — diffuser / return grille →
+  conditioned, exhaust grille → extract-only — else smallest containing),
+  shared by the `room-terminals-stale` judge and Auto-place's idempotence
+  filter. Essential-by-name strips NEGATED words (NON / TIDAK / BUKAN +
+  essential word) and is read by genset backing, the SLD colours AND the
+  `life-safety-not-essential` judge. A rainwater downpipe raised to the bore of
+  an UNSATURATED collector carrying its whole flow clears the table-top
+  `overCapacity` (`// VERIFY notAnSniClause`). The BOM honours the schedule:
+  RCDs only of at least the specified type (B > F > A > AC; untyped parts never
+  satisfy a typed spec; S-type only for `RcdSpec.timeDelayed`), exact poles
+  first; breaker poles follow the schedule (1φ feeder off a 3φ board = 2P);
+  rating mismatch outranks curve; any class / rating / curve / pole departure
+  sets `BomLine.deviceSubstituted` + a `(catalogue part: …)` note and keys
+  apart on consolidation; lugs follow `grounding.cores` and each conductor's
+  own section. A diversified board prints its DIVERSIFIED current beside its kW
+  and labels the undiversified sizing current (`15.8A div (max ph 17.5A
+  undiv)`; diversity 1 ⇒ unchanged); a capacitor way / bank-only feeder prints
+  its run current marked `cap` and a bank's DAYA in kvar. The
+  `cable-ampacity-inadequate` message prints the failed `max(In, 1.25 × Ib)`
+  (`CableResult.izRequired`) and says `In > Iz` only when true. The `.mechx`
+  decoders drop / clamp out-of-band numbers (calibration ≤ 0, negative roof
+  area / airflow / tank / load, non-positive face / size override, room ACH /
+  ceiling, commercial markups, solar DC:AC ≤ 0) into the bands the store
+  setters enforce. The smart-input bar and the 1 : N scale type-in parse
+  through `parseLocaleNumber` too.
+- **Round 17 follow-up invariants**: a DRAWN hot-water return is part of the
+  circulated pipework, so `hotWaterRecircLoop` takes the drawn cycle as THE
+  loop (`returnLengthM` 0, `drawnLoopLengthM` = the cycle) — the mirrored DN20
+  return is only for tree-only HW; never add it on top of a drawn loop. A
+  gravity override smaller than the auto pick (the code minimum) sets
+  `EdgeSizing.belowCodeMinimum` (→ `belowCodeMinimumEdgesProvider` → the
+  `gravity-below-code-minimum` warning) — never let an override inherit the
+  auto pick's clean flags. The DFU tables run to DN300 (IPC 710.1(2),
+  `// VERIFY`); `overCapacity` only past the DN300 row. Roof / floor drains and
+  cleanouts sit ON their surface in `nodeElevation` (roof drain on the top
+  storey at the roof). No gravity invert / IL datum exists anywhere — the live
+  draw chip states the datum-free fall only. Gravity RISERS get no velocity
+  verdict and the inspector's drainage floor repeats `selfCleansingOk`. Every
+  printed fire-pump head is the governing `fireRatedPointProvider` point. The
+  inspector Ib is `runCurrentA` (the report's Ib). Essential-by-name is ONE
+  `isEssentialByName` (EN + ID words) for genset backing AND the SLD colours.
+  Every engineering number field parses through `parseLocaleNumber`
+  (ID `.` groups thousands) and never re-commits an untouched display.
+  A ghost node (its sheet's floor ≠ its floor) is re-homed onto the sheet
+  mapped to its floor after every sheet-mapping change; a kept-span clone
+  (paste with a riser, stamped assembly) puts each off-floor node on its
+  floor's sheet.
+- **Round 16 — movers in series, valves by topology, supply by one study**:
+  a cycle check valve is oriented TOPOLOGICALLY first (root-reachable side with
+  all cycle valves cut = inlet), the drawn direction only as the tie-break
+  (SUPERSEDED by the Round 27 r3 binding rule — see the Round 27 row: the
+  drawn direction is authoritative when unambiguous, each valve judged with
+  only itself removed; the all-cut topological reading survives only as the
+  last fallback for an ambiguous valve and for a self-contradictory set of
+  returns, so one duty/standby leg drawn header -> valve -> pump is now a
+  pinned, zeroed return);
+  an air-unit plant's bare intake leaf bears no load and carries the unit's
+  delivered airflow inward (`// VERIFY` 100 % OA); `riserFunctionFor` reads the
+  SOLVED flow path when `flowFrom` is supplied (TRANSFER = mover with a tank
+  downstream, GRAVITASI = roof tank with no mover between, never a tank inlet).
+  App: `supplyMoverDutiesProvider` is THE per-mover pump duty map (series heads
+  via `seriesMoverHeads`, transfer lift via `transferPumpHead`), read by the
+  feed, schedule and riser; `pumpDutyProvider` is its primary (largest-flow
+  non-transfer) entry. The HW recirc loop is circulated pipework only, head =
+  index run at own bores + DN20 return. An air system's unit is chosen by role
+  (fan → AHU, never a terminal unit). A packaged AC is fed its room-PK input.
+  Genset rating covers max(S, P/0.8); battery on demand W; installed kvar
+  enters the PF study; `determineSupply(declaredKva:)` / `serviceTransformer`
+  are the one transformer source; an undeclared MV demand takes the study
+  transformer's fault at the ONE 4 % impedance. A drawn PRV holds its setpoint
+  in `solveDownfeed`, and downfeed delivery nodes are over-pressure judged.
+- **Round 11 electrical rules (2026-10-18, seed suite
+  `round11_electrical_test.dart`)**: (1) PVC ampacity RANKS BY METHOD like XLPE
+  — conduit = IEC 60364-5-52 Table B.52.4 B1 (16 mm² = 68 A), wall = column C,
+  air / tray = the Supreme method-E table; PVC B1 ≤ C ≤ E and PVC ≤ XLPE per
+  method for every section (a property test) — never read the "in air" table for
+  conduit again. (2) A `LoadKind.capacitor` way draws NO real power:
+  `circuitConnectedW` returns 0 and `_balanceCurrentA` drops it from the phase
+  balance / incomer current (the bank OFF is the worst case); its own device +
+  conductor size on `kCapacitorSwitchingFactor` 1.43 × Ib (`// VERIFY`, IEC
+  60831-1 1.3 × 1.1). (3) The FOLD-2 neutral steps the profile's copper
+  FLAT-BAR ladder (`copperBusbarTable`), falling back to `ceil(target)` — never
+  the cable ladder, never collapsing to the phase size while the factor is > 1.
+  (4) TN ADS: the governing Zs limit is the more lenient of the overcurrent
+  device and the way's RCD (`Zs·IΔn ≤ U0`, IEC 60364-4-41 411.4.5,
+  `CircuitFaultResult.adsByRcd`), and the magnetic multiple follows the
+  PERMITTED disconnection time — 5 s (`curveTripMultiple5s`, D = 10 × In) for a
+  feeder or a final > 32 A, 0.4 s (`curveTripMultiple`) otherwise
+  (`adsDisconnectionTimeS`, `// VERIFY`). (5) A VFD way passes `hasVfd` to
+  `circuitRcd` (TT ⇒ Type B). (6) The genset motor-start dip screens only the
+  motors the genset STARTS: the essential sub-tree (`gensetBackedPanelIds`)
+  whenever the set backs a fraction or any board is essential
+  (`gensetStartMotors`).
+- **Source-delivered flow + one duty per air system (Round 11, `solve_store`)**:
+  a fan / pump duty runs on the flow LEAVING its source node —
+  `sourceDeliveredFlow` = Σ of the sized root-incident edge flows (water: the
+  summed UBAP re-diversified ONCE through the demand curve on the sizer's
+  `supplyFlushSystemProvider` branch, never below the largest branch; a single
+  incident edge is verbatim ⇒ single-trunk layouts byte-identical). Never size a
+  fan / pump on the single largest edge. Every connected component of an air
+  service is its own system (`airSystemsFor`, sorted largest first) with its own
+  duty (`supplyFanDutiesByRootProvider` / `exhaustFanDutiesByRootProvider`,
+  keyed by root); `ductFanProvider` / `exhaustFanProvider` are the PRIMARY
+  entries, the equipment schedule + the electrical feed consume every entry, and
+  `airBalanceProvider` sums all systems.
+- **Extract rooms (Round 11)**: a toilet / commercial kitchen
+  (`isExtractRoomType`) is sized `extractOnly` — the ACH airflow is an EXHAUST
+  bank (`RoomAirResult.return_`/`extract`) on a plain exhaust fan (duct + extract
+  grille loss only, no supply bank, no AHU/FCU duty) and auto-places
+  `exhaustGrille` nodes only. Its air is never supplied as conditioned air nor
+  recirculated (`// VERIFY notAnSniClause`, in the ventilation verify list).
+- **No non-finite value reaches the model (Round 11)**: every numeric field
+  commits through `ElectricalNumInput.rejectionFor` (finite first, then each of
+  `min` / `max` on its own) or rejects non-finite in the optional input; the
+  store setters (Supply/source intents, `setCircuit` via `isValidCircuitEdit`)
+  refuse NaN / Infinity / negative loads / non-positive lengths / cos phi
+  outside (0, 1]; formatters (`isFormattableScale`, `parseMoneyInput`,
+  `_fmt`/`_editValue`) never `round()`/`toInt()` a non-finite double. A NaN in
+  state makes `jsonEncode` throw, i.e. an unsaveable project — Save's baseline
+  encode is guarded too. The copilot decoder records malformed required fields
+  (`AiCommand.invalidFields`) and `_validate` rejects them, off-sheet points and
+  a floor ≠ the sheet's mapped floor; a no-op auto-place is a skip.
+- **Sizing is ORDER-INDEPENDENT (round 7 property suite `audit_r7_*`)**: shuffling
+  nodes/edges or renaming ids never changes a size, head or verdict. The root
+  ladder is physical + id-tie-broken (plants never bear leaf demand; gravity at
+  the lowest demand-free leaf, vent at the highest); looped-water BRIDGE edges
+  size on their own far-side UBAP; heads/fan static take the max upstream
+  friction over the SIZED flow direction (`oriented_paths.dart`); Hardy-Cross
+  uses a min-resistance spanning tree + a simultaneous Newton loop solve.
+
+- **A run's length includes its vertical leg (`network.dart` `runVerticalLeg` /
+  `edgeLength`)**: a RUN between nodes at different CONNECTION elevations
+  (`runConnectionElevation`: ceiling air terminals + sprinkler heads at the
+  ceiling, plumbing fixtures at fixture height; gravity drainage/vent/rainwater
+  runs carry no leg) is its calibrated horizontal span PLUS that elevation
+  delta — pipe the installer buys and friction the water sees (the static lift
+  stays a separate solve term, never double counted). The plan `CL` label
+  (`runCentrelineLabels` = `planEdgeElevationLabels`) states the hanging height
+  of the horizontal leg at the MAIN plus `drop N.NN m`, never the mean of the
+  two ends; an uncalibrated run stays zero (never a vertical-only figure).
+- **The PE is stated ONCE, inside the cable (`electrical_sld_drawing.dart`
+  `cableRunLabel`)**: `grounding.cores` counts live + N + PE, the earthing model
+  sizes that cable and the BOM procures it, so every schedule / feeder label
+  prints that count with no separate `+ NYA/BC` earth token
+  (`NYY 3x4 mm2`); parallel runs print `Nx(...)`. Round 19: callers pass the
+  solved `peCsaMm2` / `neutralCsaMm2`, so a reduced PE / neutral prints the
+  grouped make-up the BOM orders (`NYY 4x35+16 mm2`, `NYY 3x70+35 mm2`), never
+  every core at the phase section.
+- **Plan labels: one layout, gravity runs carry no CL**: the plan PDF and DXF
+  lay out every grid/UP-DN/tie/run/riser/equipment annotation through ONE
+  `layoutPlanAnnotations` (paper-mm units, the DXF takes the PDF's
+  `planSheetPlot` scale) and place tags via `placePlanLabel` (beside its own
+  run first, then a two-line split, then a capped leader); round sizes print `Ø`
+  in PDFs / `%%c` in DXF; gravity (drainage/vent/rainwater) runs print size +
+  length + `1:N` fall but never a `CL` (no sub-slab/invert model exists).
+- **Every DXF string goes through `dxfText`** (drawing_chrome.dart): R12/AC1009
+  with ASCII-only text (`·`→`-`, Ø→`%%c`, °→`%%d`), so AutoCAD never shows `Â·`.
+  Compare PDF==DXF label parity THROUGH the encoder.
+- **Fire pump: one governing duty**: `firePumpDutyProvider`'s `selectedMotor` is
+  the NFPA 20 pick (it carries the 150 % overload point) and its
+  `motorInputPower` is taken at that governing point; the electrical feed, the
+  FP-01 schedule row and the Fire inspector headline all read it.
+
+- **Plant elevation is role- AND component-aware (`network.dart` `nodeElevation`)**:
+  an explicit `elevation` / `mountHeight` wins; otherwise pump / groundTank /
+  boosterSet / AHU / supply+exhaust fan sit on their OWN floor surface, FCU and the
+  AC units at their floor's ceiling, and only a roofTank at `roofElevation`; an
+  UNTYPED plant ('Source / tank') sits on its own floor surface below the top
+  storey and at the roof only on the top storey (Round 17 — an L0 upfeed source
+  at the roof dropped the building height out of the pump head). Upfeed static lift therefore includes the building
+  height (audit 2026-10 wd-1 — it was ~70 % low). Plan `CL` labels render this
+  same elevation (`planSettingOutElevation`); only a roof-parked plant falls back
+  to its floor ceiling so no label exceeds the storey. Both pressure solves pick
+  the critical node from DELIVERY nodes (fixtures → open leaves → all) and every
+  length consumer threads the project `MountingHeights` (printed == solved).
+- **Round 17 invariants (protection, air intakes, riser drafting, fire basis)**:
+  the MAXIMUM (Icu / withstand) prospective fault decays through feeder R at
+  20 °C (`coldMaxFaultImpedance` = the 70 °C table × (β+20)/(β+70), IEC 60909-0)
+  in BOTH `faultStudy` and the Fold-1 decay — the ADS earth-fault loop alone
+  keeps 70 °C × `zsFaultTempFactor`; never feed the 70 °C table into an Icu
+  decay. A safety quantity is never clamped DOWN: the service-size fault
+  estimate is unclamped and flagged above `maxEstimatedServiceFaultKa`. The
+  earth-electrode array is BS 7430 in-line (`η = 1/(1 + λ(n)·α)`, never a fixed
+  η table). A FORCED genset is judged on kVA AND on kW = 0.8 × kVA
+  (`genset-below-essential-power`). The air INTAKE walk passes through degree-2
+  inline dampers to the bare leaf, and a bare leaf that is the intake of a
+  demand-free terminal air unit never roots (the unit does). The riser FUNCTION
+  suffix (GRAVITASI / BOOSTER / TRANSFER) is cold / hot water ONLY; every RUN
+  sits on its own service lane (`riserEdgeLaneOffsets`, export + canvas); the
+  feed note follows drawn equipment (`riserFeedNote`, never 'gravity downfeed'
+  without a roof tank); pump-set captions are one per domestic mover
+  (`plantMoverCaptions`, TRANSFER for a transfer pump). A downfeed PRV holds
+  `defaultPrvSetpoint` (target + 30 kPa, `// VERIFY`) in the drawn-PRV solve,
+  the zone sizing AND the zone table — one figure. Each calc-report fire
+  section is gated on ITS drawn system, and the fire pump is rated on the
+  governing DRAWN system (`fireRatedPointProvider`: sprinkler-only ⇒ the
+  remote-area demand at lift + branch pressure + 15 m). The calc report lists
+  every scheduled supply mover (`CalcReportData.supplyPumps`); the electrical
+  report's Ib is the way's RUN current (`ElectricalCircuitResult.runCurrentA`).
+- **Drain / vent code floors (Round 9, `drainage_sizing.dart` + `_sizeSanitaryEdge`)**: the vent table is UPC 703.2 (DN32 ≤ 1, DN40 ≤ 8, DN50 ≤ 24, DN65 ≤ 48, DN75 ≤ 84, DN100 ≤ 256, DN125 ≤ 600, DN150 ≤ 1380 DFU) and a vent is never below ½ the drain its load requires (`ventDiameterForDfu(servedDrainMm:)`); a drain carrying > 2 WCs on a run / > 6 on a riser floors at DN100 (`minDrainMmForWcCount`, the WC count accumulated down the tree), 1–2 at DN75; a drain downstream of a floor drain / shower / urinal floors at DN50 (`kMinTrapDrainMm`). All `// VERIFY notAnSniClause` in the checklist. The drainage advisories are per DN: min slope ≤ DN65 2 % / DN75–150 1 % / ≥ DN200 0.5 % (`minSelfCleansingSlopeFor`), and the length check is a TRAP-ARM walk (`trapArmRuns`, fixture → first vent/stack/root, summed over segments) against IPC 909.1 (`maxTrapArmLengthM`) — never one drawn segment against a flat limit. A zero-flow AIR edge is left unsized (`sizeNetwork`); the sizer records each tree edge's UBAP/DFU via `fixtureUnitsOut` (→ `edgeFixtureUnitsProvider`, the run schedule's basis column).
+- **Floor-stack edits keep sheets with their work (Round 9, `project_store.dart`)**: a growing stack pins every sheet whose clamped floor would move (`_pinSheetFloors`); a shrinking `setFloors` drops the top floors exactly like `removeFloor` (work deleted, never clamped onto the new top) and callers confirm with `elementsAboveFloor`. A pasted riser keeps its floor span (clamped; a riser clamped onto one floor is dropped). A dragged / trimmed PLAIN run end never joins another service's run (E1). The MEP sync refresh re-derives `loadPos`, `lifeSafety` and a still-minted cable family (`_refreshedMepWay`); copies off the MEP board are user-owned (no `sourceEquipmentId`); moving an MEP-derived way off it is refused (`mepDerivedWayMoveLocked`) — feed the MEP board from the target panel instead.
+- **Source-root ladder + parallel legs (`network_sizing.dart`, Round 14)**: on
+  a pressurized/air service the root is a degree-1 ground tank, then an INLINE
+  ground tank, then a degree-1 roof tank, then any other plant
+  (`_supplyPlantRank`); an INLINE pump / booster / supply-or-exhaust fan never
+  roots while another plant or a demand-free entry/outlet leaf exists (ties
+  never fall to node ids for these cases; `airSystemsFor` still reports the
+  drawn fan as the duty node). On drainage an inline ground tank beside a
+  pump/booster is an EJECTOR PIT ⇒ pass-through. Equal-rank degree-1 peer
+  sources mirror the root's outgoing flow onto their bridges, and every
+  mirrored leg (standby + peer) is recorded in `parallelLegEdgeIdsOut` —
+  `sourceDeliveredFlow(excludeEdgeIds:)` must skip them (one set flow, never
+  curve(2 × UBAP)).
+- **Terminals carry demand wherever they sit (`network_sizing.dart`)**: any
+  fixture-role component (except cleanout / airVent / fireExtinguisher) with no
+  explicit load takes the default terminal demand even when INLINE (degree 2);
+  rainwater RUNS size by gravity Manning (`drain.sizeForFlow`, flagged when it
+  saturates, self-cleansing judged) while rainwater RISERS keep the downpipe
+  table; DFU-table overload sets `overCapacity`; above 3000 UBAP the demand curve
+  extrapolates its last segment and flags `demandCurveExtrapolated`; a drain
+  carrying a WC (built-in or `CustomFixture.isWaterCloset`) floors at DN75
+  (`// VERIFY` UPC/IPC, `notAnSniClause`).
+- **Tree accumulation is order-free; loops, check valves, vents (Round 12,
+  `network_sizing.dart`)**: `accumulateFlows`/`accumulateFixtureUnits` run on
+  the deterministic BFS `serviceSpanningTree` (links sorted by edge id) — never
+  a recursive DFS whose drawing order decides the tree. A GRAVITY component is
+  rooted only at a SINK plant (ground tank / component-less plant, or a
+  DEGREE-1 pump/booster — an ejector pit IS the sink): an INLINE (degree ≥ 2)
+  sump pump / booster / air unit on a drainage net is pass-through. A gravity
+  loop's CLOSING edge is sized on the larger adjacent load and flagged
+  `loopUnbalanced` (never left unsized). A CHECK VALVE is a directional cut: a
+  looped pressurized component acyclic once its check-valve edges are cut
+  sizes as a tree with those edges traversed last (a HW recirc return carries
+  no draw-off; Hardy–Cross only for genuine rings). Every riser of a VENT
+  STACK carries the stack's largest load (uniform, IPC 916.1, `// VERIFY`);
+  rainwater downpipes are clamped ≥ the collector feeding them (N17 rule,
+  `stackRaisedForBranch`); a cleanout / air vent / extinguisher carries no
+  default load even as a LEAF.
+- **One duty per drawn machine on every printed surface (Round 12)**: the
+  riser equipment suffix reads `riserEquipmentDetailsProvider` (from
+  `equipmentNodeDutiesProvider`, the map the panel feed uses) and prints
+  `motorKwText` (2 dp below 1 kW); the fire pump everywhere is the engine's
+  `firePumpDuty` (rated-point hydraulics, NFPA 20 motor); the genset on every
+  drawing / G-01 is `sizeGenerator` (prime ×1.25); with root headroom the
+  main earthing follows the incomer RATING; the Design Basis prints the
+  EFFECTIVE fault level (`effectiveOriginFaultLevel`) with its provenance.
+- **Electrical fault/sizing share one length + one derating basis**: Zs/ADS and
+  the Fold-1 fault decay use the SOLVED run length (`solvedRunLengthM` — geo when
+  placed), the same the sizing/Vd used; parallel runs are group-derated
+  (`df·gf(g·n)/gf(g)`, grouping table to 20+ circuits — never saturate); a
+  1-phase board's bus fault is the L-N `U0/|Zph+Zn|`; Zs includes the upstream
+  feeders' PE return; single-phase A5 FLA uses U0 (230 V), never 400 V.
+
 - **Plumbing-rigour advisories + storm runoff C (additive, `// VERIFY`)**:
   `rainwaterDesignFlow` takes an optional `runoffCoefficient` (rational method
   `Q = C·i·A/3.6e6`, default **1.0** ⇒ byte-identical) threaded from the project
@@ -1481,6 +2147,33 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   so a fixture must never be chosen as root or its load vanishes. Demand is
   collected from *every* demand-bearing node (including inline degree-2
   fixtures/diffusers), not just leaves.
+  **Round 15 refinements:** a TERMINAL air unit (FCU / AC cassette / split /
+  ducted AC, `_isTerminalAirUnit`, supply rank 4) and any demand-bearing plant
+  never root a supply component while a source exists — they rank below free
+  entry leaves and inline movers (a stand-alone FCU still roots its own
+  diffuser run) and are never parallel-source peers. A DRAINAGE / RAINWATER
+  component with several riser-foot outfalls tied at the root's height
+  (`_gravityOutfalls`, ordered by plan position) seeds a multi-root tree
+  (`serviceSpanningTree(extraRootIds:)`): nearest-outfall split, no phantom
+  outfall load, the divide edge a flagged closing edge. A pressurized component
+  rooted at an inline GROUND TANK treats its mover-free, demand-free branch as
+  the FILL line (no default load, oriented into the tank). A cycle CHECK VALVE
+  whose two pipes are drawn ambiguously is oriented topologically (root-
+  reachable side with every cycle valve cut, else the adjacent pump) — drawing
+  direction is not geometry. RETURN / EXHAUST air record `flowFromId` in their
+  physical direction (grilles → fan); `duct_static` flips it back for its
+  fan-outward walk, and `sourceDeliveredFlow` counts only edges whose flow
+  leaves (supply) / arrives at (extract) the source. The app's upfeed solve
+  sources at the sizer's root when it is a plant (else the best `supplyPlantRank`
+  plant, else the sizer's entry — never a fixture), and an INLINE booster's duty
+  is sized on the flow THROUGH it (`supplyBoosterProvider`; head = the residual
+  shortfall at the fixtures it serves with no pump in the system — the gravity
+  solve on downfeed, the upfeed solve shifted to zero source head). A mover
+  whose served set (beyond its inlet pipe) holds a storage TANK is a TRANSFER
+  pump (GT -> TP -> RT downfeed), never a booster — no duty is fabricated.
+  `pumpDutyProvider` is the one drawn pump's duty (trunk, or the booster);
+  the KETERANGAN 'Peak design flow' reads the building trunk via
+  `supplyPeakFlowProvider` (upfeed-only), never the booster's partial flow.
 - **Units in reports**: typed quantities store SI base units (Pressure in Pa);
   a `StandardValue.unit` is a display label (e.g. "kPa"). Never print
   `value`+`unit` together — surface the human-readable `note`. (See
@@ -1637,10 +2330,25 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   entirely. The 1.6× basis stays `// VERIFY notAnSniClause`. Related policies
   from the same wave: a final `socket` way sizes its own device+cable on the
   UNdiversified load (aggregation keeps the demand factor, `// VERIFY` uniform
-  stop-kontak practice); a `lifeSafety` motor/pump way carries an INFO
+  stop-kontak practice) — since Round 11 EVERY final (non-feeder) way does
+  (one machine does not diversify against itself; motor / A5-FLA ways already
+  derive Ib undiversified); a `lifeSafety` motor/pump way carries an INFO
   `fire-pump-protection` note; an irreducible over-threshold imbalance carries
   an INFO `phase-imbalance-inherent` note; a feeder's voltage base (Ib and
   Vd%) is the FED panel's.
+- **One capacitor phase model (`electrical/compute.dart`, Round 14)**: a
+  capacitor way's phase decision reads its kvar (`c.loadW`), never its zeroed
+  demand W; a feeder to a capacitor board floors at that board's OWN solved
+  `capacitorCurrentA` (bottom-up `computePanel` pre-pass, same balance
+  assignment); the service cable + main earthing follow the root incomer
+  whenever it exceeds the demand-selected device (headroom, capacitor floor…).
+  The supply kVA is each root's diversified demand VA at the real per-circuit
+  cos φ (`panelDemandVa`, ≥ W; 0.85 only as fallback). Metering CT / meter
+  range size on `ElectricalPanelResult.meteringCurrent` = max(demand, busbar
+  sizing current). A spine CAPACITOR BANK is drawn only for
+  `capacitorBankKvar > 0`; an AC/FCU feed is `MepLoadSource.hvacUnit` →
+  `LoadKind.hvac`. Board schedules always receive the per-device
+  `breakerKaByCircuit` map beside the per-panel Icu map.
 - **Service-capacity floor (`electrical/compute.dart`) — the declared daya SIZES
   the service entrance**: a declared `ElectricalProject.supplyCapacityVa` (daya
   tersambung) is converted to its line current (3φ `VA/(√3·V_LL)`, 1φ `VA/V` —
@@ -1652,9 +2360,51 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   `// VERIFY notAnSniClause`. Per-circuit sizing is untouched; SEVERAL
   utility-fed roots ⇒ no floor (the capacity split is unknown — never
   fabricate); demand above the capacity keeps the larger demand-based incomer
-  and raises the judge-only `service-capacity-below-demand` warning (the
-  utility limiter would trip under full demand). Null capacity (the default)
+  and raises the judge-only `service-capacity-below-demand` warning when the
+  root's DIVERSIFIED worst-phase current exceeds the service current (Round 32
+  — the limiter trips on the diversified current, the basis the recommended
+  daya sizes on). Null capacity (the default)
   ⇒ byte-identical. Seed suite: `electrical_service_capacity_test.dart`.
+- **Capacitor ways floor their board + feeder (`electrical/compute.dart`, Round 13)**:
+  a capacitor bank adds NO demand W and NO balance current (Round 11 — its
+  leading current offsets the load, so for a mixed board bank-off governs), but
+  a board's incomer + busbar floor at `panelCapacitorFloorA` — the worst-line
+  sum of its own banks' rated current (Q/(√3·U) 3φ, Q/U0 1φ) × 1.43
+  (`kCapacitorSwitchingFactor`) plus every fed board's figure — and the feeder
+  supplying such a board floors its device + cable at the same current
+  (`ComputePanelOptions.feederCapacitorFloorA`, bottom-up in `computeSystem`).
+  No capacitor anywhere below ⇒ 0 ⇒ byte-identical.
+- **Motor / FLA design current is diversified; final-way Vd is not (Round 13)**:
+  a motor / A5-FLA way's `designCurrent` (balance, demand current, incomer) is
+  FLC × `effectiveDemandFactor` — the same basis `circuitConnectedW` feeds
+  upstream — while its own device + cable size on the undiversified FLC. Every
+  FINAL way's printed / cumulative voltage drop is computed on its
+  UNDIVERSIFIED running current (the current that flows when the machine runs);
+  a feeder keeps its aggregated Ib.
+- **Several utility roots: one governing service, every root an SPD origin
+  (Round 13)**: supply system / voltage, the main cable and the main earthing +
+  bonding conductors follow `governingRootPanel` (largest incomer rating, then
+  worst-phase demand current, then lowest id) — never panel list order; every
+  root (`originPanelIdsOf`) gets the origin SPD recommendation.
+- **Genset backs the essential sub-tree (`electrical/genset_backup.dart`, Round
+  13)**: the backup demand is `max(backupFraction × supply demandVa, the
+  topmost essential boards' demand W × the supply VA/W)` — ONE helper
+  (`gensetBackupDemandVa`) for the power one-line, both source-spine builders and
+  the G-01 schedule row. A forced nameplate wins but below the essential demand
+  raises the judge-only `genset-below-essential-demand` (`AdvancedStudy.warnings`
+  → `electricalAllWarningsProvider`). The PFC bank (`power_factor.dart`) sizes on
+  the DIVERSIFIED kW (library-aware demand factor × every upstream board's
+  diversity), the same demand the supply summary reports.
+- **Check valves cut by DIRECTION (`sizing/network_sizing.dart`, Round 13)**:
+  only cycle check valves count, classified by their drawn in → out edge
+  (`_classifyLoopCheckValves`): all RETURN valves ⇒ the Round-12 tree cut; all
+  PARALLEL DISCHARGE valves (duty/standby legs onto a header) ⇒ the tree runs
+  through the first leg and every standby leg carries the same full set flow;
+  anything else ⇒ Hardy–Cross as if no valve were drawn. (Superseded for the
+  classification by the Round 27 r3 binding rule — see the Round 27 row:
+  drawn direction authoritative, each valve judged with only itself
+  removed, returns zeroed, feeds transparent pipes.) A ground tank roots a
+  pressurized component at ANY degree.
 - **ONE electrical warning surface (`electricalAllWarningsProvider`)**: the
   fault study's warnings (`non-selective` / `selectivity-partial` /
   `breaking-capacity-inadequate` / `busbar-withstand-inadequate` /
@@ -1703,6 +2453,24 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   incomer/busbar/section count **byte-identical**. `ElectricalPanelResult` carries
   read-only `futureLoadW`/`headroomApplied`/`spareWaysReserved` for reporting. A spare
   allowance is the engineer's design input, not a PUIL clause (no standards table).
+  Round 15: the FEEDER and the boards upstream deliberately keep sizing on TODAY's
+  demand; when a feeder breaker is below its fed board's future worst-phase current
+  (`demandCurrent × diversity × multiplier`) the judge-only
+  `feeder-below-fed-headroom` warning says the reservation cannot be drawn.
+- **Per-board VA + capacitor current (Round 15, `electrical/compute.dart`)**:
+  `ElectricalPanelResult.demandVa` is each board's own diversified VA (Σ leaf W ÷ its
+  cos φ, feeders at their fed board's VA, × diversity, ≥ W; 0 on a bare `computePanel`
+  result — read `demandVaOrEstimate`). The genset's essential demand sums it over the
+  topmost backed boards and the overview/riser compact nodes print it, so a single-root
+  sheet shows ONE kVA. A CAPACITOR way's current is always Q/(√3·U) / Q/U0 (cos φ forced
+  to 1, also in `panelCapacitorFloorA`); a busbar SECTION carries a bank at its switching
+  current (× 1.43) and a feeder to a capacitor board at least that board's floor;
+  unpinned 1φ banks on a 3φ board are spread by switching current (largest-first, lowest
+  line) after the load balance. The BOM matches each breaker at the fault study's
+  SPECIFIED kA (`faultSpecifiedKa` → `incomerKaByPanelId` / `breakerKaByCircuitId`), and
+  the schedule's CT token is `meterFor(meteringCurrent)` (one ladder + 0.5S, `kWh direct`
+  ≤ 100 A). The fire-pump duty exists only when a fire service (sprinkler / hydrant
+  edge) is drawn.
 - **Electrical selectivity refinement (`electrical/fault.dart`)**: a coarse
   rating-ratio time-current ZONE model (`classifySelectivity`: non-selective <1.6× ≤
   partial <2.5× ≤ total) — a documented SIMPLIFIED stand-in for manufacturer
@@ -1722,6 +2490,37 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   before ⇒ **byte-identical**. Every factor is `secondarySource` `// VERIFY` (IEC
   60364-1 / NEC 220 practice, not a PUIL clause), surfaced via `diversityLibraryVerifyItems`
   (added to `AdvancedStudy.verifyItems` only when a panel references the library).
+- **Audit round 8 invariants (don't regress)**: the most-remote standpipe riser
+  is **500 gpm** (SNI 03-1745 / NFPA 14 — corrected from 550). The genset ladder
+  NEVER saturates silently: `sizeGenerator` / `selectGeneratorUnits` return
+  `n × 2500 kVA` past the top rung (`GeneratorResult.ratingKva` is then the
+  PER-SET rating), and every printed surface goes through them — the SLD
+  GENSET/TRANSFORMER nodes print `n x 2500 kVA` (coverage % on the paralleled
+  total), the schedule G-01 row prints the per-set kVA with qty = n, and the power
+  one-line screens the motor-start dip on the PARALLELED kVA; never print
+  `selectGeneratorKva` alone. Inverters, capacitor banks, transformers and CTs
+  flag saturation the same way. A solved MEP motor way sizes on
+  `max(operating, nameplate)` input. The sprinkler-vs-fire-pump check is
+  JUDGE-ONLY and its head is a LOWER BOUND (static lift + branch-base pressure,
+  no friction). Electrical BOM: a single-core cable family (NYA/NYAF,
+  `isSingleCoreCableFamily`) is bought per CONDUCTOR whatever part matched — it
+  never takes a non-single-core part (unmatched ⇒ `elec:cable:<family>:1x<csa>`);
+  multi-core cable prices on `SKU:nC`; every non-catalogue line carries an `elec:`
+  key; a breaker short of its board's prospective kA is flagged
+  `breakingCapacityShort` and consolidation keys it APART from an adequate line of
+  the same SKU (the flag can never be merged away). `parseMoneyInput` validates
+  thousands grouping on both the single- and mixed-separator paths.
+- **Drawing honesty (Round 10)**: the plan PDF and DXF compose every edge
+  label through ONE `composePlanEdgeLabels` (unsized runs included) and fit /
+  extent over EVERY on-floor node; an unconnected glyph goes on the neutral
+  `M-EQPM-NCON` DXF layer. Plan chrome (north arrow, legend, scale bar) is
+  reserved space, never overprinted. The SLD PDF renderer prints the plot
+  fit's label sizes exactly (no renderer floor — PDF == DXF); an issued detail
+  SLD auto-paginates (`electricalSldDetailToPdf`) whenever one A3 sheet would
+  print below `kMinPlotLabelPt`. Power one-line skip-tier edges ride a side
+  lane, never through an intermediate box. Every user-typed geometric number
+  (smart input, 1 : N, offset) must be FINITE; `setCalibration` /
+  `placeRunPoint` / `offsetEdgeParallel` are the store backstops.
 - **Persistence**: design settings (occupancy, feed, ducts, rainfall, fire
   hazard, theme) round-trip via `DesignSettings` in the `.mechx` file; autosave
   only writes recovery when the work differs from the last clean Save
@@ -1735,4 +2534,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
   path-based PDF/DXF renderers are unchanged. A DWG sheet embeds its CONVERTED
   DXF (portable without ODA). The autosave "clean baseline" signature stays the
   PATH-ONLY encode (autosave never embeds ⇒ recovery is lightweight, no phantom
-  recovery). Empty `assets` ⇒ byte-identical (no version bump).
+  recovery). Empty `assets` ⇒ byte-identical (no version bump). Round 10: a
+  re-Save falls back to the payload already embedded when a plan's source is
+  gone (never silently drops it) and warns when nothing could be embedded;
+  plan parse caches key on path + size/mtime (`FileStampedCache`); Open falls
+  back to `<file>.bak` after an interrupted atomic save.

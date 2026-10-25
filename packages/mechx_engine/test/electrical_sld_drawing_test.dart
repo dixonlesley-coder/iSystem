@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
@@ -6,9 +7,12 @@ import 'package:mechx_engine/electrical/earthing.dart'
     show EarthingSystem, EarthingSystemInfo;
 import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
+import 'package:mechx_engine/electrical/metering.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/results.dart' show BreakerResult;
 import 'package:mechx_engine/electrical/sources.dart';
+import 'package:mechx_engine/electrical/supply_design.dart'
+    show transformerKvaLadder;
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
 import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
@@ -242,7 +246,8 @@ void main() {
   test('legend lists the symbols actually used + a supply note', () {
     final codes = sheet.legend.map((e) => e.code).toList();
     expect(codes, contains('MCB'));
-    expect(codes, contains('Ib'));
+    // Round 20 — keyed from the PRINTED text: no row prints 'Ib', so no key.
+    expect(codes, isNot(contains('Ib')));
     expect(codes.any((c) => c.startsWith('Curve')), isTrue);
     expect(codes, contains('NYM'));
     expect(sheet.supplyNote, contains('kVA'));
@@ -571,18 +576,26 @@ void main() {
       const dual = ElectricalProject(
           id: 'd', name: 'Dual', dualTransformer: true, panels: basePanels);
       final r = computeSystem(profile, dual);
-      final kva = selectGeneratorKva(r.supply.demandVa).inKilovoltAmperes;
-      final kvaText =
-          kva == kva.roundToDouble() ? '${kva.toInt()}' : kva.toStringAsFixed(1);
+      // Round 16 — the supply study's OWN pick: two units, each the smallest
+      // IEC-ladder rating >= (demand / 2) / 0.8 (never the genset ladder at
+      // 100 % of the whole demand).
+      // Round 60 — with a SINGLE service-entrance board one section carries
+      // the whole demand: per unit >= demand / 0.8.
+      final perUnit = r.supply.demandVa.inKilovoltAmperes / 0.8;
+      final kva = transformerKvaLadder.firstWhere((k) => k >= perUnit);
+      final kvaText = '2 x ${kva == kva.roundToDouble() ? '${kva.toInt()}' : kva.toStringAsFixed(1)}';
       final joined = buildElectricalSourceSpine(project: dual, result: r)
           .prims
           .whereType<SldLabel>()
           .map((t) => t.text)
           .join('\n');
       expect(joined, contains('PLN MV STATION'));
-      expect(joined, contains('PANEL UTAMA TEGANGAN MENENGAH'));
+      // Round 15 (drafting-visual-2-7) — the long MV board name wraps onto
+      // two centred lines inside its box (it ran into the right border once
+      // the plot fit grew it to the minimum plotted size).
+      expect(joined, contains('PANEL UTAMA\nTEGANGAN MENENGAH'));
       expect(joined, contains('TRANSFORMER $kvaText kVA'));
-      expect(joined, contains('PANEL UTAMA TEGANGAN RENDAH'));
+      expect(joined, contains('PANEL UTAMA\nTEGANGAN RENDAH'));
     });
   });
 
@@ -678,7 +691,11 @@ void main() {
       final r = computeSystem(profile, small);
       final demandKva = r.supply.demandVa.inKilovoltAmperes;
       expect(demandKva, greaterThan(5)); // the premise: undersized set
-      final pct = (5 / demandKva * 100).round();
+      // Round 16 — the LESSER of the kVA ratio and the kW ratio (the set's
+      // kW rating is 0.8 × 5 kVA = 4 kW against the demand W).
+      final demandKw = r.supply.demandW / 1000;
+      final pct = (math.min(5 / demandKva, 5 * kGeneratorPf / demandKw) * 100)
+          .round();
       final v = labels(
           buildElectricalOverview(project: small, result: r, sourceChain: true));
       expect(v, contains('backs $pct% of load'));
@@ -702,7 +719,7 @@ void main() {
     });
 
     test('a battery source draws a BATTERY node sized on the power one-line '
-        'basis (demand at the genset PF)', () {
+        'basis (the real demand W)', () {
       const p = ElectricalProject(
         id: 's', name: 'S',
         sources:
@@ -712,8 +729,9 @@ void main() {
       final r = computeSystem(profile, p);
       // The SAME sizing call `buildPowerOneLine` makes, so the two surfaces
       // can never print different bank sizes.
+      // Round 16 — on the REAL demand W (not demandVa × 0.8).
       final sized = sizeBattery(
-        Power(r.supply.demandVa.voltAmperes * kGeneratorPf),
+        Power(r.supply.demandW),
         autonomyHours: 2,
       );
       final expected =
@@ -998,9 +1016,12 @@ void main() {
       final joined =
           s.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
       expect(joined, contains('GENSET'));
-      expect(joined, contains('CAPACITOR BANK'));
+      // Round 14 (elec-building-sim-5): a genset alone no longer implies a
+      // capacitor bank — none is specified (capacitorBankKvar null), so none
+      // is drawn.
+      expect(joined, isNot(contains('CAPACITOR BANK')));
       // Distributed sources do NOT declare an MV service: no fabricated MV
-      // main / transformer — the genset + capacitor hang off the LV head.
+      // main / transformer — the genset hangs off the LV head.
       expect(joined, isNot(contains('TEGANGAN MENENGAH')));
       expect(joined, isNot(contains('TRANSFORMER')));
     });
@@ -1145,10 +1166,15 @@ void main() {
       final joined = allLabels();
       // The socket way's 22 m + the lighting way's 30 m run lengths read on the
       // conductor cell — the same lengths that drove the printed Vdrop.
-      expect(joined, contains('22 m'));
-      expect(joined, contains('30 m'));
-      // A cable cell reads `... mm2 ... · <n> m` (length appended after cable).
-      expect(RegExp(r'mm2.* · \d+(\.\d+)? m').hasMatch(joined), isTrue);
+      // Round 20 (drafting-visual-4-7): ONE fixed 0.1 m precision, the same
+      // `planLengthLabel` the plan + riser tags use ('22.0 m', never '22 m'
+      // beside a '4.6 m' on the same sheet).
+      expect(joined, contains('22.0 m'));
+      expect(joined, contains('30.0 m'));
+      // A cable cell reads `... mm2 ... · <n>.<d> m` (length after cable).
+      expect(RegExp(r'mm2.* · \d+\.\d m').hasMatch(joined), isTrue);
+      // No bare integer length survives anywhere on the schedule.
+      expect(RegExp(r' · \d+ m(\n|$)').hasMatch(joined), isFalse);
     });
 
     test('N8 — the overview feeder label carries the feeder run length', () {
@@ -1156,7 +1182,7 @@ void main() {
       final feeder = ov.prims.whereType<SldLabel>().firstWhere(
           (l) => l.text.contains(' mm2 ') && l.text.contains('·'));
       // The LV feeder to LP-1 (24 m) reads on the feeder annotation.
-      expect(feeder.text, contains('24 m'));
+      expect(feeder.text, endsWith(' · 24.0 m'));
     });
 
     test('N9 — the incomer + every DEVICE cell carry a kA from the withstand '
@@ -1191,40 +1217,56 @@ void main() {
       expect('RCD '.allMatches(joined).length, 1);
     });
 
-    test('N11 — a 3-phase board prints a derived CT ratio + class, not a bare '
-        'CT glyph', () {
+    test('N11 — a 3-phase board prints the ADVANCED-STUDY metering spec '
+        '(one CT ladder + class across both deliverables)', () {
       final mdp = buildElectricalPanelDetail(
           project: wp, result: wpResult, panelId: 'MDP');
       final joined =
           mdp.prims.whereType<SldLabel>().map((t) => t.text).join('\n');
-      // A standard primary / 5 A secondary + class 1 metering accuracy.
-      expect(RegExp(r'CT \d+/5A cl\.1').hasMatch(joined), isTrue);
+      // Round 15 (elec-props-3-ct-token-two-ladders) — the schedule token is
+      // meterFor(meteringCurrent), the very spec the advanced study prints.
+      final spec = meterFor(wpResult.panels['MDP']!.meteringCurrent);
+      final token = spec.metering == MeteringKind.ct
+          ? 'CT ${spec.ctRatio}A cl.${spec.ctClass}'
+          : 'kWh direct';
+      expect(joined, contains(token));
+      expect(joined, isNot(contains('cl.1')));
       // The metering instruments are listed in the KETERANGAN legend.
       final codes = mdp.legend.map((e) => e.code).toList();
-      expect(codes, contains('CT'));
+      // Round 20 — 'CT' is keyed only when a CT-operated meter was printed
+      // (a 'kWh direct' board needs no CT key).
+      expect(codes,
+          spec.metering == MeteringKind.ct ? contains('CT') : isNot(contains('CT')));
       expect(codes, contains('V / A / Hz'));
     });
 
-    test('N11 — the CT primary is a standard rating at/above the demand current',
+    test('N11 — the metering spec: direct to 100 A, then the CT ladder (0.5S)',
         () {
+      // The three probe currents of the finding, derived off metering.dart:
+      //   42.5 A  ≤ 100 A direct limit          → whole-current kWh meter;
+      //   110.4 A → first ctPrimaryA ≥ 110.4 = 150 → CT 150/5, class 0.5S;
+      //   441.5 A → first ctPrimaryA ≥ 441.5 = 500 → CT 500/5, class 0.5S.
+      expect(meterFor(const Current(42.5)).metering, MeteringKind.direct);
+      final a = meterFor(const Current(110.4));
+      expect((a.ctRatio, a.ctClass), ('150/5', '0.5S'));
+      final b = meterFor(const Current(441.5));
+      expect((b.ctRatio, b.ctClass), ('500/5', '0.5S'));
+      // And the schedule's primary covers the board's metering current.
       final joined = buildElectricalPanelDetail(
               project: wp, result: wpResult, panelId: 'MDP')
           .prims
           .whereType<SldLabel>()
           .map((t) => t.text)
           .join('\n');
-      final primary =
-          int.parse(RegExp(r'CT (\d+)/5A').firstMatch(joined)!.group(1)!);
-      final demandA = wpResult.panels['MDP']!.demandCurrent.amperes;
-      // The CT primary covers the demand current (never understated)…
-      expect(primary, greaterThanOrEqualTo(demandA));
-      // …and is one of the IEC preferred values (not a fabricated ratio).
-      const ladder = {
-        5, 10, 15, 20, 25, 30, 40, 50, 60, 75, 100, 125, 150, 200, 250, 300, //
-        400, 500, 600, 750, 800, 1000, 1250, 1500, 1600, 2000, 2500, 3000, //
-        4000, 5000, 6300,
-      };
-      expect(ladder.contains(primary), isTrue);
+      final m = RegExp(r'CT (\d+)/5A').firstMatch(joined);
+      final meteringA = wpResult.panels['MDP']!.meteringCurrent.amperes;
+      if (meteringA > directMeterMaxA) {
+        final primary = int.parse(m!.group(1)!);
+        expect(primary, greaterThanOrEqualTo(meteringA));
+        expect(ctPrimaryA, contains(primary.toDouble()));
+      } else {
+        expect(joined, contains('kWh direct'));
+      }
     });
   });
 
