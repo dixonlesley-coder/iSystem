@@ -844,6 +844,7 @@ String _pickComponentRoot({
   Set<String>? ejectorPitIds,
   Map<String, int> fireSourceHops = const {},
   Set<String> fireJoinIds = const {},
+  Set<String> coldMakeupIds = const {},
 }) {
   Iterable<String> neighbours(String id) =>
       neighboursOf?.call(id) ?? const <String>[];
@@ -874,8 +875,14 @@ String _pickComponentRoot({
   //   0 degree-1 ground tank · 1 inline ground tank · 2 degree-1 roof tank ·
   //   3 any other plant (heater, AHU, terminus pump…) — and an INLINE mover
   //   (see [isInlineMover]) is never ranked with them at all.
+  //
+  // Round 59 (plumbing-hvac-convergence-9-inline-interceptor-roots-building-
+  // drain) — on a GRAVITY service a TERMINUS sink (degree 1: an STP / septic
+  // / sump at the outfall) beats an INLINE one (a grease interceptor or a
+  // rainwater-harvesting tank with an outlet pipe onward), mirroring the
+  // supply ladder; never the node id.
   int plantRank(String id) {
-    if (service.regime == FlowRegime.gravity) return 0;
+    if (service.regime == FlowRegime.gravity) return degree(id) <= 1 ? 0 : 1;
     return _supplyPlantRank(nodeOf(id)?.component, degree(id));
   }
 
@@ -980,10 +987,39 @@ String _pickComponentRoot({
           !isDeferredPlant(id))
         id,
   ]..sort((a, b) {
-      final c = plantRank(a).compareTo(plantRank(b));
-      return c != 0 ? c : byHeight(a, b);
+      var c = plantRank(a).compareTo(plantRank(b));
+      if (c != 0) return c;
+      // Round 59 (plumbing-hvac-convergence-9-series-solar-booster-heater-
+      // zero-makeup) — on HOT water the heater where the COLD make-up enters
+      // (a plant on a cold-water edge) is the source of the hot network; a
+      // heater fed only by hot pipe (an electric booster after a solar
+      // preheater) is a stage the hot water passes THROUGH. Rooting at the
+      // booster (lower, or first by id) sized the solar heater's cold make-up
+      // and the solar -> booster transfer at 0 L/s DN15 and left the hot draw
+      // off the cold main.
+      if (service == ServiceType.hotWater) {
+        c = (coldMakeupIds.contains(a) ? 0 : 1)
+            .compareTo(coldMakeupIds.contains(b) ? 0 : 1);
+        if (c != 0) return c;
+      }
+      return byHeight(a, b);
     });
-  if (plants.isNotEmpty) {
+  // Round 59 — an INLINE sink tank on a gravity service (a kitchen grease
+  // interceptor, an STP / harvesting tank with an outlet pipe to the city
+  // drain) is a node the flow passes THROUGH when the component also ends at
+  // a demand-free, non-fixture leaf (the outfall): rooting at the tank
+  // drained the whole building BACKWARDS into it and sized the sewer
+  // connection on the outfall leaf's phantom 2 DFU (DN40 where DN100 is
+  // needed), with the result depending on the node ids. A component with no
+  // such leaf (a closed system) keeps the inline tank as its sink.
+  final inlineSinksOnly = gravity &&
+      plants.isNotEmpty &&
+      plants.every((id) => degree(id) >= 2) &&
+      leaves.any((id) =>
+          roleOf(id) != NodeRole.fixture &&
+          roleOf(id) != NodeRole.plant &&
+          !demandKeys.contains(id));
+  if (plants.isNotEmpty && !inlineSinksOnly) {
     // Round 33 (hydraulics-3-3) — a mains-fed roof tank (PDAM meter ->
     // [pompa dorong] -> riser -> roof tank -> downfeed): a degree-1 WATER
     // METER is the supply ENTRY, and an INLINE roof tank is storage the
@@ -1430,6 +1466,12 @@ Map<String, String> serviceComponentRoots(
       isFireService(service) ? fireSourceHops(net) : const <String, int>{};
   final fireJoins =
       isFireService(service) ? fireServiceJoinNodes(net) : const <String>{};
+  final coldMakeup = service == ServiceType.hotWater
+      ? <String>{
+          for (final e in net.edges)
+            if (e.service == ServiceType.coldWater) ...[e.fromId, e.toId],
+        }
+      : const <String>{};
   final out = <String, String>{};
   final seen = <String>{};
   for (final start in nodes) {
@@ -1460,6 +1502,7 @@ Map<String, String> serviceComponentRoots(
       ejectorPitIds: ejectorPitIdsFor(net, service),
       fireSourceHops: fireHops,
       fireJoinIds: fireJoins,
+      coldMakeupIds: coldMakeup,
     );
     for (final n in component) {
       out[n] = root;
@@ -2125,6 +2168,8 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           ejectorPitIds: ejectorPitIdsFor(net, service),
           fireSourceHops: fireHops,
           fireJoinIds: fireServiceChangeNodes,
+          coldMakeupIds:
+              service == ServiceType.hotWater ? coldNodes : const <String>{},
           neighboursOf: (n) => [
             for (final l
                 in adjacency[n] ?? const <({String edgeId, String other})>[])
@@ -3888,10 +3933,46 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               for (final x in home.edges)
                 if (x.service == ServiceType.fireHydrant) x.id,
             };
+      // The hydrant pipe downstream of [e] (its solved flow direction, inside
+      // its own rating system); null when [e] is unoriented.
+      List<NetEdge>? downstreamHydrant() {
+        final from = edgeFlowFrom[e.id];
+        if (from != e.fromId && from != e.toId) return null;
+        final down = from == e.fromId ? e.toId : e.fromId;
+        final seen = <String>{down};
+        final reached = <String>{e.id};
+        final downstream = <NetEdge>[e];
+        final stack = [down];
+        while (stack.isNotEmpty) {
+          final cur = stack.removeLast();
+          for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
+            if (homeHydrant != null && !homeHydrant.contains(x.id)) continue;
+            if (!reached.add(x.id)) continue;
+            downstream.add(x);
+            final o = x.fromId == cur ? x.toId : x.fromId;
+            if (seen.add(o)) stack.add(o);
+          }
+        }
+        return downstream;
+      }
+
+      // Round 59 (fire-convergence-11-run-and-pump-legs-feeding-single-
+      // outlet-standpipe-sized-on-one-box) — a pipe carrying exactly one
+      // box's accumulated flow is still a TRUNK when a standpipe STACK lies
+      // downstream of it: the pump suction / discharge / feed main to a
+      // stack with ONE hose outlet (a roof hose station) carries that stack's
+      // standpipe flow by continuity — never the box's 5 L/s at DN65 under a
+      // 500 gpm pump (31.5 L/s through DN65 runs ~9.5 m/s).
+      final downstream = downstreamHydrant();
+      bool feedsStack() =>
+          downstream != null &&
+          downstream.any((x) => x.kind == EdgeKind.riser) &&
+          parallelStandpipeCount(net, downstream) >= 1;
       if (classIIHydrantEdgeIds.contains(e.id)) {
         final trunk = onCycle.contains(e.id) ||
             e.kind == EdgeKind.riser ||
-            q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12;
+            q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12 ||
+            feedsStack();
         if (trunk) {
           var flow = classIIFlow;
           if (sprinklerDemandCap != null &&
@@ -3909,7 +3990,8 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         continue;
       }
       final trunk = e.kind == EdgeKind.riser ||
-          q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12;
+          q.cubicMetersPerSecond > perBox * (1 + 1e-9) + 1e-12 ||
+          feedsStack();
       if (!trunk) continue;
       // Round 22 (regression-standpipe-every-riser-carries-total-flow) — the
       // multi-riser total (500 gpm + 250 gpm per additional riser) is the
@@ -3922,23 +4004,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       // system (the walk never crosses a shared header into another pump
       // room's tower).
       var flow = hydrantDesignFlow;
-      final from = edgeFlowFrom[e.id];
-      if (from == e.fromId || from == e.toId) {
-        final down = from == e.fromId ? e.toId : e.fromId;
-        final seen = <String>{down};
-        final reached = <String>{e.id};
-        final downstream = <NetEdge>[e];
-        final stack = [down];
-        while (stack.isNotEmpty) {
-          final cur = stack.removeLast();
-          for (final x in hydrantAdj[cur] ?? const <NetEdge>[]) {
-            if (homeHydrant != null && !homeHydrant.contains(x.id)) continue;
-            if (!reached.add(x.id)) continue;
-            downstream.add(x);
-            final o = x.fromId == cur ? x.toId : x.fromId;
-            if (seen.add(o)) stack.add(o);
-          }
-        }
+      if (downstream != null) {
         final stacks = math.max(1, parallelStandpipeCount(net, downstream));
         final served = standpipeFlow(stacks);
         if (served.cubicMetersPerSecond < flow.cubicMetersPerSecond) {
@@ -3993,8 +4059,13 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             for (final end in [x.fromId, x.toId])
               if (isHydrantOutlet(end)) end,
         };
+        // Round 59 — or a standpipe stack lies downstream (a run / pump leg
+        // feeding a one-outlet stack carries the stack's flow).
         final trunk = outlets.length >= 2 ||
-            (e.kind == EdgeKind.riser && outlets.isNotEmpty);
+            (e.kind == EdgeKind.riser && outlets.isNotEmpty) ||
+            (outlets.isNotEmpty &&
+                down.any((x) => x.kind == EdgeKind.riser) &&
+                parallelStandpipeCount(net, [e, ...down]) >= 1);
         if (!trunk) continue;
         markTrunk();
         if (classII) {
@@ -4813,8 +4884,10 @@ void _floorReliefVents({
 /// the sum of its risers' §10 lengths — and each of its risers is raised to
 /// the smallest vent size whose length limit covers it
 /// ([drain.ventDiameterForLength]); past the DN150 row the riser is flagged
-/// `overCapacity`. A short stack is untouched (byte-identical). The stack's
-/// offset / base runs keep their own size (recorded residual).
+/// `overCapacity`. A short stack is untouched (byte-identical). Round 59 —
+/// an OFFSET run chain between two riser groups (one group's top to the
+/// other's bottom on one storey) joins them into one stack: its length
+/// counts and it is raised with the risers. Base runs keep their own size.
 void _floorVentStackLengths({
   required Network net,
   required Map<String, EdgeSizing> sanitary,
@@ -4847,14 +4920,106 @@ void _floorVentStackLengths({
     final a = find(e.fromId), b = find(e.toId);
     if (a != b) parent[a] = b;
   }
+  // Round 59 (regression-vent-length-ignores-offset-stacks) — a vent stack
+  // that OFFSETS at a transfer storey (riser, run, riser) is ONE stack (the
+  // Round-25/26 uniform-stack rule): a vent RUN chain (through bare
+  // degree-2 bend nodes) from one riser group's TOP node to a different
+  // group's BOTTOM node on that same storey joins the two groups, its length
+  // counts in the developed length, and its runs are raised with the
+  // risers. Measuring the halves separately issued a 56 m stack at DN65
+  // (each ~28 m half under DN65's 54.86 m limit).
+  final groupNodes = <String, List<String>>{};
+  for (final id in parent.keys.toList()) {
+    (groupNodes[find(id)] ??= []).add(id);
+  }
+  int floorOf(String id) => net.nodeById(id)?.floorIndex ?? 0;
+  final loF = <String, int>{}, hiF = <String, int>{};
+  for (final g in groupNodes.entries) {
+    loF[g.key] = g.value.map(floorOf).reduce(math.min);
+    hiF[g.key] = g.value.map(floorOf).reduce(math.max);
+  }
+  final ventRuns = <String, List<NetEdge>>{};
+  for (final id in [...edgeIds]..sort()) {
+    final e = net.edgeById(id);
+    if (e == null ||
+        e.kind != EdgeKind.run ||
+        e.service != ServiceType.vent ||
+        !sanitary.containsKey(id)) {
+      continue;
+    }
+    (ventRuns[e.fromId] ??= []).add(e);
+    (ventRuns[e.toId] ??= []).add(e);
+  }
+  bool isBareBend(String id) {
+    if (parent.containsKey(id)) return false;
+    final n = net.nodeById(id);
+    return n != null &&
+        n.role == NodeRole.main &&
+        n.component == null &&
+        (ventRuns[id]?.length ?? 0) == 2;
+  }
+
+  final offsetRuns = <String, List<NetEdge>>{};
+  final pendingOffsets = <(String, String, List<NetEdge>)>[];
+  for (final g in groupNodes.keys.toList()..sort()) {
+    for (final top in groupNodes[g]!.toList()..sort()) {
+      if (floorOf(top) != hiF[g]) continue;
+      for (final first in ventRuns[top] ?? const <NetEdge>[]) {
+        final chain = <NetEdge>[first];
+        var prev = top;
+        var cur = first.fromId == top ? first.toId : first.fromId;
+        final seen = <String>{top};
+        while (isBareBend(cur) && seen.add(cur)) {
+          final next = ventRuns[cur]!.firstWhere((x) => x.id != chain.last.id);
+          chain.add(next);
+          prev = cur;
+          cur = next.fromId == prev ? next.toId : next.fromId;
+        }
+        if (!parent.containsKey(cur)) continue;
+        final h = find(cur);
+        if (h == find(top) ||
+            floorOf(cur) != loF[h] ||
+            floorOf(cur) != floorOf(top)) {
+          continue;
+        }
+        pendingOffsets.add((top, cur, chain));
+      }
+    }
+  }
+  final offsetLength = <String, double>{};
+  for (final (a, b, chain) in pendingOffsets) {
+    final ra = find(a), rb = find(b);
+    if (ra == rb) continue;
+    parent[ra] = rb;
+    // Carry the absorbed root's offset runs / length onto the new root.
+    offsetLength[rb] = (offsetLength[rb] ?? 0) + (offsetLength.remove(ra) ?? 0);
+    (offsetRuns[rb] ??= [])
+      ..addAll(offsetRuns.remove(ra) ?? const [])
+      ..addAll(chain);
+    for (final x in chain) {
+      final l = lengthM(x);
+      if (l.isFinite && l > 0) offsetLength[rb] = (offsetLength[rb] ?? 0) + l;
+    }
+  }
   final groupLength = <String, double>{};
   for (final e in risers) {
     final g = find(e.fromId);
     final l = lengthM(e);
     if (l.isFinite && l > 0) groupLength[g] = (groupLength[g] ?? 0) + l;
   }
-  for (final e in risers) {
-    final total = groupLength[find(e.fromId)] ?? 0;
+  for (final o in offsetLength.entries) {
+    final g = find(o.key);
+    groupLength[g] = (groupLength[g] ?? 0) + o.value;
+  }
+  final offsetRunGroup = <String, String>{
+    for (final o in offsetRuns.entries)
+      for (final x in o.value) x.id: find(o.key),
+  };
+  for (final e in [
+    ...risers,
+    for (final id in offsetRunGroup.keys.toList()..sort()) net.edgeById(id)!,
+  ]) {
+    final total = groupLength[offsetRunGroup[e.id] ?? find(e.fromId)] ?? 0;
     if (total <= 0) continue;
     final s = sanitary[e.id]!;
     final mm = s.diameter.inMillimeters;

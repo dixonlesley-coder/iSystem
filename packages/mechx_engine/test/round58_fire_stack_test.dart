@@ -107,6 +107,40 @@ Network _twins(String feed) {
   return Network(nodes: nodes, edges: edges);
 }
 
+/// Round 59 — two ONE-storey stacks A0->A1 / B0->B1 with a box on L1 ONLY
+/// (a 2-storey mall / factory), fed 'header' (FP -> J -> A0, B0) or 'base'
+/// (FP -> A0 -> B0). Neither drop hangs off a fire-pipe cycle, so each is a
+/// standpipe of its own: 2 stacks.
+Network _upperTwins(String feed) {
+  final nodes = <NetNode>[
+    _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+    _n('FP', 10, role: NodeRole.plant, c: NodeComponent.pump),
+    if (feed == 'header') _n('J', 15),
+    _n('A0', 20),
+    _n('A1', 20, floor: 1),
+    _box('AB1', 25, 1),
+    _n('B0', 60),
+    _n('B1', 60, floor: 1),
+    _box('BB1', 65, 1),
+  ];
+  final edges = <NetEdge>[
+    _e('g', 'GT', 'FP'),
+    if (feed == 'header') ...[
+      _e('d', 'FP', 'J'),
+      _e('ja', 'J', 'A0'),
+      _e('jb', 'J', 'B0'),
+    ] else ...[
+      _e('d', 'FP', 'A0'),
+      _e('ab', 'A0', 'B0'),
+    ],
+    _e('ar', 'A0', 'A1', k: EdgeKind.riser),
+    _e('br', 'B0', 'B1', k: EdgeKind.riser),
+    _e('ab1', 'A1', 'AB1'),
+    _e('bb1', 'B1', 'BB1'),
+  ];
+  return Network(nodes: nodes, edges: edges);
+}
+
 /// Repro A (16 storeys): the low-zone pump PL on L0 feeds header D; two
 /// stacks A / B (a box per floor) off D, and a plain fill riser
 /// D -> T0..T15 -> the break tank BT15 (no outlet).
@@ -276,6 +310,25 @@ void main() {
     }
   });
 
+  test(
+      'Round 59: one-storey twin stacks with L1 boxes only count 2 header- '
+      'and base-fed (750 gpm = 47.318 L/s, discharge DN125)', () {
+    for (final feed in ['header', 'base']) {
+      final net = _upperTwins(feed);
+      expect(drawnStandpipeRiserCount(net), 2, reason: feed);
+      expect(_dischargeLps(net, 2), closeTo(twoStacks, 1e-3), reason: feed);
+      final r = autoSizeNetwork(
+        net,
+        const SizingContext(),
+        leafDemand: const {ServiceType.fireHydrant: FlowRate(0.005)},
+        hydrantDesignFlow: standpipeFlow(drawnStandpipeRiserCount(net)),
+        building: _floors(2),
+      );
+      // d >= sqrt(4 x 0.047318 / (pi x 6)) = 0.1002 m => DN125.
+      expect(r['d']!.diameter.inMillimeters, closeTo(125, 1e-9), reason: feed);
+    }
+  });
+
   test('an outletless fill riser off the zone header is no stack: 2', () {
     final net = _fillRiser();
     expect(drawnStandpipeRiserCount(net), 2);
@@ -314,6 +367,8 @@ void main() {
       ('pumpRiserToRing', _pumpRiserToRing(), 2),
       ('hospitalRing', _hospitalRing(), 2),
       ('zoned', _zoned(), 1),
+      ('upperTwins header', _upperTwins('header'), 2),
+      ('upperTwins base', _upperTwins('base'), 2),
     ];
     for (final (name, net, want) in cases) {
       for (var t = 0; t < 60; t++) {

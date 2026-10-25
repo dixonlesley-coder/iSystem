@@ -502,23 +502,15 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
 double? _studyTransformerFaultA(ElectricalProject project, ApparentPower demand,
     [SupplyDesign? studied]) {
   if (demand.voltAmperes <= 0) return null;
-  // Round 58 — an explicit N-section service: each section's unit is sized
-  // on its share of the demand (one unit per root board, never the whole
-  // demand on one paralleled bank).
-  final n = project.transformerUnits;
-  if (n != null && n > 1 && (studied == null || studied.declared)) {
-    final s = determineSupply(ApparentPower(demand.voltAmperes / n));
-    final k = s.transformerKva;
-    if (!s.isMv || k == null || k <= 0) return null;
-    return k * 1000 * math.max(1, s.units) /
-        (math.sqrt(3) *
-            serviceFaultLineVoltageV *
-            (s.impedancePct ?? transformerImpedancePct) /
-            100);
-  }
+  // Round 59 (regression-undeclared-n-section-service-ignores-sections) —
+  // ONE per-section rule: the study itself sizes an N-section service per
+  // section ([determineSupply] `sections`), so the declared floor and the
+  // undeclared study both read one section's units below.
   final supply = studied != null && !studied.declared
       ? studied
-      : determineSupply(demand, dualTransformer: project.dualTransformer);
+      : determineSupply(demand,
+          dualTransformer: project.dualTransformer,
+          sections: serviceSections(project));
   final kva = supply.transformerKva;
   if (!supply.isMv || kva == null || kva <= 0) return null;
   final perSection = supply.units ~/ serviceSections(project);

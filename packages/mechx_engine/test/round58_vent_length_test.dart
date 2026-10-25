@@ -60,6 +60,55 @@ BuildingLevels _floors(int n) => BuildingLevels(
   return (net: Network(nodes: nodes, edges: edges), dfu: dfu);
 }
 
+/// Round 59 — the same 16-storey stack with a one-storey vent OFFSET at L8:
+/// risers V0..V8, a run V8 -> W8 ([bends] bare elbows between), risers
+/// W8..W15 and the VTR; storeys 0..7 tie into V, 8..15 into W.
+({Network net, Map<String, double> dfu}) _offsetStack(double dfuPerFloor,
+    {int bends = 0}) {
+  const storeys = 16;
+  final nodes = <NetNode>[_n('out', 0, 0)];
+  final edges = <NetEdge>[_e('sewer', 'out', 'S0', ServiceType.drainage)];
+  final dfu = <String, double>{};
+  for (var f = 0; f < storeys; f++) {
+    final v = f <= 7 ? 'V$f' : 'W$f';
+    nodes
+      ..add(_n('S$f', 100, f))
+      ..add(_n('fx$f', 200, f, role: NodeRole.fixture));
+    dfu['fx$f'] = dfuPerFloor;
+    edges
+      ..add(_e('fb$f', 'S$f', 'fx$f', ServiceType.drainage))
+      ..add(_e('rv$f', 'S$f', v, ServiceType.vent));
+    if (f > 0) {
+      edges.add(_e('s$f', 'S${f - 1}', 'S$f', ServiceType.drainage,
+          k: EdgeKind.riser));
+    }
+  }
+  for (var f = 0; f <= 8; f++) {
+    nodes.add(_n('V$f', 120, f));
+    if (f > 0) {
+      edges.add(
+          _e('v$f', 'V${f - 1}', 'V$f', ServiceType.vent, k: EdgeKind.riser));
+    }
+  }
+  for (var f = 8; f < storeys; f++) {
+    nodes.add(_n('W$f', 140, f));
+    if (f > 8) {
+      edges.add(
+          _e('v$f', 'W${f - 1}', 'W$f', ServiceType.vent, k: EdgeKind.riser));
+    }
+  }
+  var prev = 'V8';
+  for (var b = 0; b < bends; b++) {
+    nodes.add(_n('BB$b', 125.0 + b, 8));
+    edges.add(_e(b == 0 ? 'off' : 'off$b', prev, 'BB$b', ServiceType.vent));
+    prev = 'BB$b';
+  }
+  edges.add(_e(bends == 0 ? 'off' : 'off$bends', prev, 'W8', ServiceType.vent));
+  nodes.add(_n('VTR', 140, storeys));
+  edges.add(_e('vtr', 'W15', 'VTR', ServiceType.vent, k: EdgeKind.riser));
+  return (net: Network(nodes: nodes, edges: edges), dfu: dfu);
+}
+
 Map<String, EdgeSizing> _size(int storeys, double dfuPerFloor,
     {bool withBuilding = true}) {
   final t = _stack(storeys, dfuPerFloor);
@@ -93,6 +142,23 @@ void main() {
     final s = _size(16, 1.5);
     for (final id in ['v1', 'v8', 'v15', 'vtr']) {
       expect(s[id]!.diameter.inMillimeters, 75, reason: id);
+    }
+  });
+
+  test(
+      'Round 59: a 16 x 3.5 m stack OFFSET at L8 at 32 DFU is one 56 m stack '
+      '=> DN75 on every riser, the offset run and the VTR', () {
+    for (final bends in [0, 2]) {
+      final t = _offsetStack(2, bends: bends);
+      final s = autoSizeNetwork(t.net, const SizingContext(),
+          leafDemand: const {},
+          nodeDrainageUnits: t.dfu,
+          building: _floors(17));
+      // 8 risers V1..V8 + 7 risers W9..W15 + the VTR = 16 x 3.5 = 56.0 m
+      // (the uncalibrated offset adds 0 m) > DN65's 54.86 m => DN75.
+      for (final id in ['v1', 'v8', 'off', 'v9', 'v12', 'vtr']) {
+        expect(s[id]!.diameter.inMillimeters, 75, reason: '$id bends $bends');
+      }
     }
   });
 

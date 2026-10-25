@@ -227,10 +227,20 @@ class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
     return 'auto';
   }
 
+  /// Round 59 (regression-star-delta-cable-menu-shows-internal-link) — on a
+  /// star-delta way the FIELD cable is the two motor-lead runs (the issued
+  /// PENGHANTAR and the conductor the override floors); the solved `cable`
+  /// is the 2 m internal link. The row, its ladder mark and its note read the
+  /// leads, so the marked 'current' rung is never the link's section.
+  bool get _starDeltaLeads => _result?.motorLeads != null;
+
+  double? get _effectiveCableMm2 =>
+      _result?.motorLeads?.csaMm2 ?? _result?.cable.csaMm2;
+
   String get _cableValue {
     final ov = _circuit?.cableOverrideMm2;
     if (ov != null) return '${_num(ov)} mm2 (set)';
-    final r = _result?.cable.csaMm2;
+    final r = _effectiveCableMm2;
     if (r != null) return '${_num(r)} mm2';
     return 'auto';
   }
@@ -312,12 +322,15 @@ class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
 
   Widget _cablePage() {
     final c = _circuit!;
-    final effective = c.cableOverrideMm2 ?? _result?.cable.csaMm2;
+    final effective = c.cableOverrideMm2 ?? _effectiveCableMm2;
     return ElectricalMenu(
       scrollable: true,
       // The override is a FLOOR, exactly as the inspector's 'Min cable (mm2)'
-      // field labels it — the sizer may still go larger for ampacity/Vd.
-      note: 'Minimum section - auto-sizing may pick larger.',
+      // field labels it — the sizer may still go larger for ampacity/Vd. On a
+      // star-delta way it floors the motor LEADS (Round 58).
+      note: _starDeltaLeads
+          ? context.strings(StringKey.electricalLeadsMinimumNote)
+          : 'Minimum section - auto-sizing may pick larger.',
       items: [
         _back(),
         ElectricalMenuAction(
@@ -412,7 +425,10 @@ class _ElectricalCircuitMenuState extends State<ElectricalCircuitMenu> {
           ),
         if (_showCableRow)
           ElectricalMenuAction(
-            'Cable · $_cableValue',
+            _starDeltaLeads
+                ? '${context.strings(StringKey.electricalMenuLeads)} · '
+                    '$_cableValue'
+                : 'Cable · $_cableValue',
             () => setState(() => _page = _CircuitMenuPage.cable),
           ),
         if (_showPhaseRow)

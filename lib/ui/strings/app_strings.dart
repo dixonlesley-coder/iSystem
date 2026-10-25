@@ -999,6 +999,8 @@ enum StringKey {
   electricalCouldNotConnectFeeder,
   electricalShowOnLayout,
   electricalShowInSingleLine,
+  electricalMenuLeads,
+  electricalLeadsMinimumNote,
   electricalFeedFromEllipsis,
   electricalPinPhases,
   electricalBack,
@@ -2556,6 +2558,9 @@ const Map<StringKey, String> _en = {
   StringKey.electricalCouldNotConnectFeeder: 'Could not connect feeder.',
   StringKey.electricalShowOnLayout: 'Show on layout',
   StringKey.electricalShowInSingleLine: 'Show in single-line',
+  StringKey.electricalMenuLeads: 'Leads',
+  StringKey.electricalLeadsMinimumNote:
+      'Minimum section of the motor leads (star-delta) - auto-sizing may pick larger.',
   StringKey.electricalFeedFromEllipsis: 'Feed from…',
   StringKey.electricalPinPhases: 'Pin phases',
   StringKey.electricalBack: 'Back',
@@ -4168,6 +4173,9 @@ const Map<StringKey, String> _id = {
   StringKey.electricalCouldNotConnectFeeder: 'Tidak dapat menghubungkan penyuplai.',
   StringKey.electricalShowOnLayout: 'Tampilkan di tata letak',
   StringKey.electricalShowInSingleLine: 'Tampilkan di garis tunggal',
+  StringKey.electricalMenuLeads: 'Kabel motor',
+  StringKey.electricalLeadsMinimumNote:
+      'Penampang minimum kabel motor (bintang-segitiga) - ukuran otomatis dapat lebih besar.',
   StringKey.electricalFeedFromEllipsis: 'Disuplai dari…',
   StringKey.electricalPinPhases: 'Kunci fase',
   StringKey.electricalBack: 'Kembali',
