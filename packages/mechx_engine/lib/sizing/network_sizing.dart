@@ -4278,14 +4278,18 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         // A caller that models no standpipe flow (no [hydrantDesignFlow])
         // keeps the accumulated hydrant flows.
         if (s.hasHydrant && hydrantDesignFlow == null) return null;
-        final own =
-            fireSystemDesignFlow(net, s, sprinklerDemand: sprinklerDemandCap);
+        // Round 63 — [hydrantDesignFlow] caps the STANDPIPE term only
+        // (`standpipeCap`), never a combined room's sprinkler demand.
+        final own = fireSystemDesignFlow(net, s,
+            sprinklerDemand: sprinklerDemandCap,
+            standpipeCap: hydrantDesignFlow);
         if (own != null || !hasPump(s)) return own;
         final tank = destinationTankOf(s);
         if (tank == null) return null;
         return fireTransferFedFlow(net, s, tank, ratingSystems,
             sprinklerDemand: sprinklerDemandCap,
-            destinationTankOf: destinationTankOf);
+            destinationTankOf: destinationTankOf,
+            standpipeCap: hydrantDesignFlow);
       });
   for (final s in ratingSystems) {
     if (fireSystemHasTerminal(net, s) || !hasPump(s)) continue;
@@ -4307,19 +4311,14 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     FlowRate? best;
     for (final s in ownersOf[e.id] ?? const <FireSystem>[]) {
       if (!s.sourceEdgeIds.contains(e.id)) continue;
-      var q = designFlowOf(s);
       // Round 54 (regression-source-edge-override-above-caller-hydrant-flow)
-      // — [hydrantDesignFlow] is the ceiling of every hydrant-bearing figure
-      // the sizer writes: a shared suction header / suction leg never carries
-      // more than the caller's design flow (it carried 47.3 L/s under a pump
-      // whose discharge the same caller capped at 31.5 L/s). A sprinkler-only
-      // room keeps its own remote-area demand uncapped.
-      if (q != null &&
-          hydrantDesignFlow != null &&
-          s.hasHydrant &&
-          q.cubicMetersPerSecond > hydrantDesignFlow.cubicMetersPerSecond) {
-        q = hydrantDesignFlow;
-      }
+      // — [hydrantDesignFlow] is the ceiling of every STANDPIPE figure the
+      // sizer writes (a shared suction header never carries a 47.3 L/s
+      // two-stack total under a 31.5 L/s pump). Round 63: the cap is applied
+      // to the standpipe term inside [designFlowOf], so a combined room's
+      // sprinkler remote-area demand stays uncapped like a sprinkler-only
+      // room's.
+      final q = designFlowOf(s);
       if (q != null &&
           (best == null ||
               q.cubicMetersPerSecond > best.cubicMetersPerSecond)) {
@@ -4340,12 +4339,6 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   {
     for (final s in ratingSystems) {
       var q = designFlowOf(s);
-      if (q != null &&
-          hydrantDesignFlow != null &&
-          s.hasHydrant &&
-          q.cubicMetersPerSecond > hydrantDesignFlow.cubicMetersPerSecond) {
-        q = hydrantDesignFlow;
-      }
       if (s.yardHydrantIds(net).isNotEmpty &&
           (q == null || q.cubicMetersPerSecond < kYardHydrantFlowLps / 1000)) {
         q = const FlowRate(kYardHydrantFlowLps / 1000);
@@ -4585,9 +4578,19 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       chain.add(edge);
       final next = edge.fromId == cur ? edge.toId : edge.fromId;
       final nextNode = net.nodeById(next);
+      // Round 63 (fire-convergence-15-fdc-chain-walks-up-combined-main) —
+      // on a fire chain EVERY onward fire pipe counts, whatever its service:
+      // a join where a hydrant-drawn main meets sprinkler-drawn risers is a
+      // real junction (the [fireServiceChangeNodes] rule), so the walk ends
+      // there and never re-orients / re-sizes the main back toward the pumps.
+      final fireChain = isFireService(edge.service);
       final onward = [
         for (final e in net.edgesAt(next))
-          if (e.id != edge.id && e.service == edge.service) e,
+          if (e.id != edge.id &&
+              (fireChain
+                  ? isFireService(e.service)
+                  : e.service == edge.service))
+            e,
       ];
       if (onward.length != 1 ||
           nextNode == null ||
@@ -4612,7 +4615,9 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     final chainIds = {for (final e in chain) e.id};
     var designLps = 0.0;
     for (final e in net.edgesAt(joinNode)) {
-      if (chainIds.contains(e.id) || e.service != edge.service) continue;
+      // Round 63 — the largest flow of ANY fire pipe at the join (an FDC
+      // joining where only the other fire service continues is sized on it).
+      if (chainIds.contains(e.id) || !isFireService(e.service)) continue;
       final q = result[e.id]?.flow.inLitersPerSecond ?? 0;
       if (q > designLps) designLps = q;
     }

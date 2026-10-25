@@ -370,6 +370,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
                 tag: fireSystemTag(o.basis, o.pumpId),
                 churnKpa: o.check.churnKpa,
                 frictionShare: o.check.frictionShare,
+                standpipe: o.standpipe,
               ),
           ]
         : const [],

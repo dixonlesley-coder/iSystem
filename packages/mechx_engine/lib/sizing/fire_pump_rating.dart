@@ -342,6 +342,15 @@ PumpDuty firePumpDuty({
 /// limit, not an SNI 03-3989 / 03-1745 clause (SniProfile.verifyChecklist).
 const double kFireComponentMaxPressureKpa = 1210;
 
+/// Round 63 (fire-convergence-15-standpipe-system-pressure-unjudged) — the
+/// maximum pressure at any point of a STANDPIPE system: 350 psi = 2413 kPa
+/// (NFPA 14 7.2.1.1; SNI 03-1745 follows NFPA 14), the rule that forces a
+/// tall hydrant standpipe into vertical pressure zones. `// VERIFY
+/// notAnSniClause` (SniProfile.verifyChecklist). A hydrant-only system is
+/// judged against it; a sprinkler-bearing one against the tighter
+/// [kFireComponentMaxPressureKpa].
+const double kStandpipeMaxSystemPressureKpa = 2413;
+
 /// Round 48 — the JUDGE-ONLY over-pressure check of one fire system: the
 /// pump's NFPA 20 CHURN pressure (its shut-off head, [FirePumpRatingResult]
 /// `churn` = 140 % of the rated head) against

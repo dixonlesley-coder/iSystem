@@ -142,6 +142,7 @@ enum RptStringKey {
   fireOverPressureKey,
   fireOverPressureSystemKey, // {tag}
   fireOverPressureValue, // {churn} {limit} {share}
+  fireStandpipeOverPressureValue, // {churn} {limit} {share}
   fireOverPressureShare, // {pct}
   fireJockeyKey,
   fireJockeyValue, // {lps} {m} {standby}
@@ -598,6 +599,10 @@ const Map<RptStringKey, String> kReportStringsEn = {
           'standard fire components{share} - upsize the index pipe or zone '
           'the system (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (friction {pct} % of the rated head)',
+  RptStringKey.fireStandpipeOverPressureValue:
+      '{churn} kPa at churn exceeds the {limit} kPa (350 psi) maximum '
+          'standpipe system pressure{share} - split the standpipe into '
+          'pressure zones (VERIFY)',
   RptStringKey.fireJockeyKey: 'Jockey pump:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pressure maintenance){standby}',
@@ -1098,6 +1103,10 @@ const Map<RptStringKey, String> kReportStringsId = {
           'komponen kebakaran standar{share} - perbesar pipa indeks atau '
           'bagi sistem menjadi zona (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (gesekan {pct} % dari head rated)',
+  RptStringKey.fireStandpipeOverPressureValue:
+      '{churn} kPa saat churn melampaui tekanan maksimum sistem pipa tegak '
+          '{limit} kPa (350 psi){share} - bagi pipa tegak menjadi zona '
+          'tekanan (VERIFY)',
   RptStringKey.fireJockeyKey: 'Pompa jockey:',
   RptStringKey.fireJockeyValue:
       '{lps} L/s @ {m} m (pemeliharaan tekanan){standby}',

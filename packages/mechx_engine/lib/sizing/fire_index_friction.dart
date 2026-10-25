@@ -434,16 +434,27 @@ bool fireSystemHasTerminal(Network net, FireSystem sys) =>
 /// combined system the larger of the two (both conditions are covered,
 /// Round 50). Null when [sys] has no terminal (a transfer fill, an FDC
 /// chain — [fireTransferFedFlow]).
+///
+/// Round 63 (regression-combined-room-suction-capped-at-hydrant-flow) —
+/// [standpipeCap], when given, caps the STANDPIPE term only (the caller's
+/// hydrant design flow is the ceiling of the standpipe figure), BEFORE the
+/// max with the sprinkler remote-area demand: a combined room's sprinkler
+/// demand is never clipped to the hydrant flow.
 FlowRate? fireSystemDesignFlow(
   Network net,
   FireSystem sys, {
   FlowRate? sprinklerDemand,
+  FlowRate? standpipeCap,
 }) {
   if (!fireSystemHasTerminal(net, sys)) return null;
   FlowRate? q;
   if (sys.hasHydrant) {
     q = standpipeFlow(sys.standpipeRisers(net),
         standpipeClass: sys.standpipeClass(net));
+    if (standpipeCap != null &&
+        q.cubicMetersPerSecond > standpipeCap.cubicMetersPerSecond) {
+      q = standpipeCap;
+    }
   }
   if (sys.hasSprinkler &&
       sprinklerDemand != null &&
@@ -545,11 +556,13 @@ FlowRate? fireTransferFedFlow(
   List<FireSystem> systems, {
   FlowRate? sprinklerDemand,
   String? Function(FireSystem s)? destinationTankOf,
+  FlowRate? standpipeCap,
 }) {
   FlowRate? best;
   for (final s in fireTransferFedSystems(net, transfer, tankId, systems,
       destinationTankOf: destinationTankOf)) {
-    final q = fireSystemDesignFlow(net, s, sprinklerDemand: sprinklerDemand);
+    final q = fireSystemDesignFlow(net, s,
+        sprinklerDemand: sprinklerDemand, standpipeCap: standpipeCap);
     if (q != null &&
         (best == null || q.cubicMetersPerSecond > best.cubicMetersPerSecond)) {
       best = q;
