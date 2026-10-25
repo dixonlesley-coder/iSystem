@@ -348,7 +348,12 @@ SupplyDesign determineSupply(
     );
   }
 
-  if (!dualTransformer && basisKva <= lvSupplyLimitKva) {
+  // Round 60 (regression-transformer-units-undeclared-lv-vs-dual-mv) — a
+  // SECTIONED service (> 1 separate transformer section, a dual service or
+  // [sections] > 1) is a transformer (MV) service whatever the demand: it
+  // never takes the direct-LV exit, so `transformerUnits = 2` and a dual
+  // service are studied identically.
+  if (!dualTransformer && nSections <= 1 && basisKva <= lvSupplyLimitKva) {
     return SupplyDesign(
       lvOrMv: SupplyLevel.lv,
       demandKva: demandKva,
@@ -377,9 +382,17 @@ SupplyDesign determineSupply(
   // (2 x 1600 kVA = 57.7 kA where each section's 1000 kVA unit gives
   // 36.1 kA) — optimistic ADS on every TN loop. (A dual service keeps its
   // own note below: byte-identical.)
+  // Round 60 (elec-convergence-12-undeclared-sectioned-single-root-
+  // transformer-undersized) — a SINGLE service-entrance board sits on ONE
+  // section (couplers normally open, the fault model's one unit), so that
+  // unit carries the whole demand ([singleSectionCarriesAll]) — never an
+  // even share it cannot reach (Round 37 r2's one-section basis, now on the
+  // undeclared study too).
+  final perSectionKva = singleSectionCarriesAll
+      ? basisKva
+      : math.max(basisKva / nSections, sectionKva);
   if (nSections > 1 && !(dualTransformer && nSections == 2)) {
-    final perUnitRequired =
-        math.max(basisKva / nSections, sectionKva) / transformerLoadingFactor;
+    final perUnitRequired = perSectionKva / transformerLoadingFactor;
     final sel = _selectTransformerUnits(perUnitRequired);
     final kva = sel.kva;
     final exceeded = sel.units > 1;
@@ -397,8 +410,10 @@ SupplyDesign determineSupply(
           Current(_transformerFlc(kva, lvVoltage).amperes.roundToDouble()),
       note: 'Sectioned MV supply: $nSections x ${_fmtKva(kva)} kVA on '
           'separate sections (couplers normally open). Each unit carries its '
-          'root board (~1/$nSections of the $demandKva kVA demand); fault '
-          'level is one unit (couplers N.O.).'
+          '${singleSectionCarriesAll ? 'the single service-entrance board '
+              '(the whole $demandKva kVA demand)' : 'root board (~1/$nSections '
+              'of the $demandKva kVA demand)'}; fault level is one unit '
+          '(couplers N.O.).'
           '${exceeded ? ' Each section needs ${sel.units} x ${_fmtKva(kva)} '
               'kVA — the requirement exceeds the largest standard '
               'transformer.' : ''}'
@@ -411,8 +426,7 @@ SupplyDesign determineSupply(
     // Two transformers, each sized for half the demand, on split bus sections
     // behind a normally-open coupler. The fault level the boards see is ONE
     // unit's (the coupler never parallels them).
-    final perUnitRequired =
-        math.max(basisKva / 2, sectionKva) / transformerLoadingFactor;
+    final perUnitRequired = perSectionKva / transformerLoadingFactor;
     final sel = _selectTransformerUnits(perUnitRequired);
     final kva = sel.kva;
     final exceeded = sel.units > 1;
@@ -430,7 +444,9 @@ SupplyDesign determineSupply(
           Current(_transformerFlc(kva, lvVoltage).amperes.roundToDouble()),
       note: 'Dual-transformer MV supply: 2 × ${_fmtKva(kva)} kVA on split bus '
           'sections with a normally-open bus coupler. Each unit carries its '
-          'section (~half the $demandKva kVA demand); with one unit out, close '
+          'section (${singleSectionCarriesAll ? 'the one section feeding the '
+              'single service-entrance board carries the whole' : '~half the'}'
+          ' $demandKva kVA demand); with one unit out, close '
           'the coupler and shed non-essential load onto the survivor. Fault '
           'level is one unit (coupler N.O.).'
           '${exceeded ? ' Each section needs ${sel.units} x ${_fmtKva(kva)} kVA '
@@ -581,29 +597,10 @@ int serviceSections(ElectricalProject project) {
 
 /// Round 29 — the ONE 'declared MV service' predicate: a declared transformer
 /// ([declaredServiceTransformerKva], incl. a connection capacity above the LV
-/// ceiling) or a dual-transformer service.
+/// ceiling) or a SECTIONED service (Round 60: [serviceSections] > 1 — a
+/// dual-transformer service or `transformerUnits >= 2`, the ONE sectioned
+/// predicate the supply study also reads).
 bool isDeclaredMvService(ElectricalProject project) =>
-    declaredServiceTransformerKva(project) != null || project.dualTransformer;
+    declaredServiceTransformerKva(project) != null ||
+    serviceSections(project) > 1;
 
-/// Round 16 (supply-sources-dual-tx-spine-genset-ladder) — the service
-/// transformer the DRAWINGS and the equipment schedule print, from the SAME
-/// [determineSupply] the study reports: the declared rating when one is set
-/// (one unit, or two on a dual service), else — on an undeclared
-/// dual-transformer service — the study's own `2 × (demand / 2 / 0.8)` pick
-/// on the IEC [transformerKvaLadder] (never the genset ladder at 100 % of the
-/// whole demand). Null when the project declares no MV service, or an
-/// undeclared one has no demand to size from.
-({double kva, int units})? serviceTransformer(
-    ElectricalProject project, ApparentPower demand) {
-  final declared = declaredServiceTransformer(project);
-  final hasDeclared = declared != null;
-  if (!hasDeclared && !project.dualTransformer) return null;
-  if (!hasDeclared && demand.voltAmperes <= 0) return null;
-  final s = determineSupply(demand,
-      dualTransformer: project.dualTransformer,
-      declaredKva: declared?.kva,
-      declaredUnits: declared?.units);
-  final kva = s.transformerKva;
-  if (kva == null || kva <= 0) return null;
-  return (kva: kva, units: s.units);
-}

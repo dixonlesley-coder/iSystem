@@ -411,6 +411,34 @@ class EdgeSizing {
     if (visited.add(r)) order.add(r);
   }
   final parentOf = <String, ({String edgeId, String parent})>{};
+  // Round 60 (plumbing-hvac-convergence-10-rainwater-run-outfall-phantom-
+  // inlet) — on a MULTI-outfall gravity tree each outfall's short RUN chain
+  // to its stack foot (degree-2 nodes up to the first riser) is seeded with
+  // its outfall, so every stack foot starts the nearest-outfall split at the
+  // same depth: a run drawn beyond one downpipe's foot never moves a drain to
+  // the other downpipe. No extra root ⇒ untouched (byte-identical).
+  if (extraRootIds.isNotEmpty) {
+    for (final r in [...order]) {
+      var cur = r;
+      String? cameBy;
+      while (true) {
+        final links = [
+          for (final l in adjacency[cur] ?? none)
+            if (l.edgeId != cameBy) l,
+        ];
+        if (links.length != 1) break;
+        final l = links.single;
+        if (deferredEdgeIds.contains(l.edgeId)) break;
+        final edge = net.edgeById(l.edgeId);
+        if (edge == null || edge.kind != EdgeKind.run) break;
+        if (!visited.add(l.other)) break;
+        parentOf[l.other] = (edgeId: l.edgeId, parent: cur);
+        order.add(l.other);
+        cameBy = l.edgeId;
+        cur = l.other;
+      }
+    }
+  }
   var head = 0;
   while (true) {
     while (head < order.length) {
@@ -1338,15 +1366,50 @@ List<String> _gravityOutfalls({
   bool tiedWithRoot(NetNode n) =>
       n.floorIndex == rootNode.floorIndex &&
       (n.elevation?.meters ?? 0) == (rootNode.elevation?.meters ?? 0);
-  bool isStackFoot(String id) {
-    final links = incident(id);
-    if (links.length != 1) return false;
-    final edge = net.edgeById(links.single.edgeId);
-    if (edge == null || edge.kind != EdgeKind.riser) return false;
-    final me = net.nodeById(id), up = net.nodeById(links.single.other);
+  bool rises(NetEdge edge, String fromId) {
+    final me = net.nodeById(fromId),
+        up = net.nodeById(edge.fromId == fromId ? edge.toId : edge.fromId);
     if (me == null || up == null) return false;
     if (up.floorIndex != me.floorIndex) return up.floorIndex > me.floorIndex;
     return (up.elevation?.meters ?? 0) > (me.elevation?.meters ?? 0);
+  }
+
+  // Round 60 (plumbing-hvac-convergence-10-rainwater-run-outfall-phantom-
+  // inlet) — the outfall may sit a short RUN beyond the stack foot (the
+  // common drawing: downpipe foot -> run -> the outfall / inspection-chamber
+  // point): from the leaf, walk over RUN edges through bare degree-2
+  // junctions (no component, no demand, not a fixture / plant, tied at the
+  // root's height) until a riser RISING from the reached node. Missing it
+  // made the second outfall a phantom 5 L/s INLET sending water up its own
+  // downpipe and the whole roof down the other one.
+  bool isStackFoot(String id) {
+    var cur = id;
+    String? cameBy;
+    final seen = <String>{id};
+    while (true) {
+      final links = [
+        for (final l in incident(cur))
+          if (l.edgeId != cameBy) l,
+      ];
+      if (links.length != 1) return false;
+      final edge = net.edgeById(links.single.edgeId);
+      if (edge == null) return false;
+      if (edge.kind == EdgeKind.riser) return rises(edge, cur);
+      final next = links.single.other;
+      final n = net.nodeById(next);
+      if (n == null ||
+          !seen.add(next) ||
+          n.role == NodeRole.plant ||
+          n.role == NodeRole.fixture ||
+          n.component != null ||
+          demandKeys.contains(next) ||
+          degree(next) != 2 ||
+          !tiedWithRoot(n)) {
+        return false;
+      }
+      cur = next;
+      cameBy = edge.id;
+    }
   }
 
   final out = <NetNode>[rootNode];
@@ -3314,6 +3377,54 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           // default for the service.
           final terminalDemand =
               terminalMap(component, root, nodeFlowDemand, demand);
+          // Round 60 (plumbing-hvac-convergence-10-inline-fcu-airflow-double-
+          // counted) — an INLINE terminal air unit (FCU / AC unit) feeding
+          // its own diffusers DELIVERS their air: its rated airflow is the
+          // same air, never extra demand on top of them. Its own airflow is
+          // a FLOOR on the flow it passes on (max(own, downstream)), so it
+          // adds only max(0, own - downstream); a LEAF unit (nothing
+          // downstream) still bears its whole airflow. Root choice is
+          // untouched (it reads the demand keys, not these values).
+          if (service.isAir) {
+            final units = [
+              for (final id in component)
+                if (id != root &&
+                    _isTerminalAirUnit(net.nodeById(id)?.component) &&
+                    (terminalDemand[id]?.cubicMetersPerSecond ?? 0) > 0)
+                  id,
+            ];
+            if (units.isNotEmpty) {
+              final probeParents = <String, String>{};
+              final probe = accumulateFlows(
+                net: net,
+                service: service,
+                rootId: root,
+                terminalDemand: {
+                  ...terminalDemand,
+                  for (final u in units) u: const FlowRate(0),
+                },
+                edgeParent: probeParents,
+                deferredEdgeIds: deferred,
+              );
+              for (final u in units) {
+                // The flow beyond the unit = its own (zeroed) subtree: the
+                // edge whose child (non-parent end) is the unit.
+                double downstream = 0;
+                for (final MapEntry(key: eid, value: parent)
+                    in probeParents.entries) {
+                  if (parent == u) continue;
+                  final e = net.edgeById(eid);
+                  if (e == null || (e.fromId != u && e.toId != u)) continue;
+                  downstream = probe[eid]?.cubicMetersPerSecond ?? 0;
+                  break;
+                }
+                if (downstream <= 0) continue;
+                final own = terminalDemand[u]!.cubicMetersPerSecond;
+                terminalDemand[u] =
+                    FlowRate(own > downstream ? own - downstream : 0);
+              }
+            }
+          }
           final edgeParents = <String, String>{};
           allFlows.addAll(
             withClosing(accumulateFlows(
@@ -6074,13 +6185,40 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
             : (ea.fromId == n && eb.toId == n)
                 ? -1
                 : 0;
-        if (d == 0 || (dir != null && dir != d)) {
-          coherent = false;
+        if (d == 0) continue; // an incoherently drawn mover: no reading
+        if (dir != null && dir != d) {
+          coherent = false; // two coherent movers pointing opposite ways
           break;
         }
         dir = d;
       }
-      if (!coherent || dir == null) continue;
+      if (!coherent) continue;
+      // Round 60 (fire-convergence-12-duty-standby-fire-pump-legs-split-
+      // when-pump-drawn-outward) — a leg whose movers are ALL drawn
+      // incoherently (both pipes out of, or both into, the pump: a pump
+      // room drawn from each pump outward) is oriented AWAY FROM THE SOURCE,
+      // exactly as the r7 rule orients an incoherent VALVED pump leg: the
+      // root end of a root chain, else the end the source reaches nearer in
+      // BEND-FREE hops with the leg's interior removed (the only end it
+      // reaches, when one). Never left a plain pipe for Hardy–Cross to split
+      // a duty / standby set as parallel pipes (each leg sized on half the
+      // flow one running pump pushes). A genuine tie stays a plain pipe.
+      if (dir == null) {
+        if (end0 == root) {
+          dir = 1;
+        } else if (end1 == root) {
+          dir = -1;
+        } else {
+          final h = distFrom(root, interior.toSet(), bendFree: true);
+          final h0 = h[end0], h1 = h[end1];
+          if (h0 != null && (h1 == null || h0 < h1 - 1e-9)) {
+            dir = 1;
+          } else if (h1 != null && (h0 == null || h1 < h0 - 1e-9)) {
+            dir = -1;
+          }
+        }
+      }
+      if (dir == null) continue;
       final legEdges = <String>[];
       final legFrom = <String>[];
       if (dir == 1) {

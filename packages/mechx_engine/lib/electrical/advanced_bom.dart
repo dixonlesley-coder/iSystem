@@ -14,6 +14,7 @@
 library;
 
 import '../units.dart' show Power;
+import 'advanced_study.dart' show serviceTransformer;
 import 'bom.dart';
 import 'catalog.dart' show PartCategory;
 import 'containment.dart' show ContainmentResult, ContainmentRoute;
@@ -30,7 +31,6 @@ import 'power_oneline.dart'
 import 'sources.dart'
     show BatteryChemistryInfo, GeneratorTransfer, sizeGenerator;
 import 'spd.dart' show SpdRecommendation, SpdTypeLabel;
-import 'supply_design.dart' show serviceTransformer;
 
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
@@ -194,7 +194,7 @@ List<BomLine> advancedBomLines({
   }
   // The customer TRANSFORMER(s) of a declared / study MV service — the same
   // [serviceTransformer] the schedule and drawings print.
-  final tx = serviceTransformer(project, sys.supply.demandVa);
+  final tx = serviceTransformer(project, sys);
   if (tx != null && tx.kva > 0) {
     final k = _fmt(tx.kva.roundToDouble());
     lines.add(BomLine(

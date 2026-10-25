@@ -103,12 +103,12 @@ import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
     show
         SupplyDesign,
+        SupplyLevel,
         declaredServiceTransformer,
         determineSupply,
         isDeclaredMvService,
         recommendedDaya,
-        serviceSections,
-        serviceTransformer;
+        serviceSections;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
 
@@ -577,7 +577,7 @@ AdvancedStudy computeAdvancedStudy(
       voltage: sys.supply.voltage,
       motors: gensetStartMotors(project,
           sys: sys, assemblies: controlAssemblies),
-      utilitySub: powerOneLineUtilitySub(project, sys.supply.demandVa,
+      utilitySub: powerOneLineUtilitySub(project, sys,
           voltage: sys.supply.voltage),
       // Round 58 — the head follows the primary supply (PLN / genset / PV).
       supplyKind: project.supplyKind,
@@ -912,8 +912,13 @@ List<ElectricalWarning> _incomerAboveTransformerFlc(
   SupplyDesign supply,
   Set<String> originPanelIds,
 ) {
+  // Round 60 — undeclared study transformers are judged too (a single root
+  // board on an undeclared sectioned service once sat on a unit sized for
+  // demand / N, with nothing flagged).
   final kva = supply.transformerKva;
-  if (!supply.declared || kva == null || kva <= 0) return const [];
+  if (supply.lvOrMv != SupplyLevel.mv || kva == null || kva <= 0) {
+    return const [];
+  }
   final units = math.max(1, supply.units);
   final unitsPerRoot = math.max(1, units ~/ serviceSections(project));
   final flcA = unitsPerRoot * kva * 1000 / (math.sqrt(3) * 400);
@@ -1052,6 +1057,33 @@ double _motorKw(ElectricalCircuit c) {
     perPhaseBasisVa: perPhaseBasisVa,
     largestSectionId: largestSectionId,
   );
+}
+
+/// Round 16 (supply-sources-dual-tx-spine-genset-ladder) / Round 60
+/// (elec-convergence-12-printed-transformer-not-the-study-transformer) — the
+/// service transformer the DRAWINGS, the equipment schedule, the BOM and the
+/// power one-line print: EXACTLY the transformer the supply study picked
+/// ([studySupplyDesign] — its largest section, per-phase basis, section count
+/// and single-root rule, the transformer the origin fault and every device kA
+/// are specified against), never a second [determineSupply] re-derivation on
+/// the total demand alone. Only on a declared MV / sectioned service
+/// ([isDeclaredMvService]) — an undeclared single service draws no customer
+/// transformer (Round 19). A null [sys] (nothing solved) prints the declared
+/// rating only. Null when nothing is to be printed.
+({double kva, int units})? serviceTransformer(
+    ElectricalProject project, ElectricalSystemResult? sys) {
+  if (!isDeclaredMvService(project)) return null;
+  if (sys == null) {
+    final d = declaredServiceTransformer(project);
+    if (d == null || d.kva.inKilovoltAmperes <= 0) return null;
+    return (kva: d.kva.inKilovoltAmperes, units: d.units);
+  }
+  final s = studySupplyDesign(project, sys);
+  final kva = s.transformerKva;
+  if (s.lvOrMv != SupplyLevel.mv || kva == null || kva <= 0 || s.units < 1) {
+    return null;
+  }
+  return (kva: kva, units: s.units);
 }
 
 /// Round 52 — [studySupplyInputs]' supply design alone.
@@ -1314,7 +1346,7 @@ Map<String, ConduitSpec> containmentByCircuitIdOf(AdvancedStudy study) => {
 /// `<V> V LV`, with the declared connection capacity appended when one is
 /// declared (Round 34), else null.
 String? powerOneLineUtilitySub(
-    ElectricalProject project, ApparentPower demandVa,
+    ElectricalProject project, ElectricalSystemResult? sys,
     {Voltage voltage = const Voltage(400)}) {
   if (!isDeclaredMvService(project)) {
     // Round 34 (electrical-drawings-4-lv-power-one-line-omits-daya) — an LV
@@ -1327,7 +1359,7 @@ String? powerOneLineUtilitySub(
         v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
     return '${n(voltage.volts)} V LV · ${n(cap.inKilovoltAmperes)} kVA';
   }
-  final t = serviceTransformer(project, demandVa);
+  final t = serviceTransformer(project, sys);
   if (t == null || t.kva <= 0) return 'MV via TX';
   String n(double v) =>
       v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);

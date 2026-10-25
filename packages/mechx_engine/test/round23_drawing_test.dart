@@ -487,10 +487,10 @@ void main() {
 
     test('a declared MV service is never labelled "400 V LV"', () {
       const lv = ElectricalProject(id: 'l', name: 'L');
-      expect(powerOneLineUtilitySub(lv, const ApparentPower(500000)), isNull);
+      expect(powerOneLineUtilitySub(lv, null), isNull);
       const mv = ElectricalProject(
           id: 'm', name: 'M', transformerKva: ApparentPower(1600000));
-      final sub = powerOneLineUtilitySub(mv, const ApparentPower(900000))!;
+      final sub = powerOneLineUtilitySub(mv, null)!;
       expect(sub, 'MV via TX 1600 kVA');
       final ol = buildPowerOneLine(
           const ElectricalSources(generator: GeneratorSource()),

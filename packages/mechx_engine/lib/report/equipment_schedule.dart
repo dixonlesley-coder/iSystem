@@ -18,6 +18,7 @@
 /// flag // VERIFY — a tag and a quantity are bookkeeping, not engineering claims.
 library;
 
+import '../electrical/advanced_study.dart' show serviceTransformer;
 import '../electrical/genset_backup.dart'
     show gensetBackupDemandVa, gensetBackupDemandW;
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
@@ -28,7 +29,6 @@ import '../electrical/power_oneline.dart'
     show distributedSourceInverters, sizeDistributedSources;
 import '../electrical/sources.dart'
     show BatteryChemistryInfo, GeneratorMode, sizeGenerator;
-import '../electrical/supply_design.dart' show serviceTransformer;
 import '../sizing/fan.dart';
 import '../sizing/pump.dart';
 import '../units.dart' show ApparentPower, Power;
@@ -420,8 +420,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
   if (ep != null) {
     // Round 16 — the SAME [serviceTransformer] the study + the spine use: the
     // declared rating, else an undeclared dual-tx service's study pick.
-    final tx = serviceTransformer(
-        ep, data.electrical?.supply.demandVa ?? const ApparentPower(0));
+    final tx = serviceTransformer(ep, data.electrical);
     if (tx != null) {
       rows.add(EquipmentScheduleRow(
         tag: 'TX-01',

@@ -274,7 +274,11 @@ void main() {
     test('dual service: 2 × the study unit on spine, schedule and study', () {
       final p = _mdp(_ways(10, 45000, 0.9), dual: true);
       final sys = computeSystem(_profile, p);
-      final perUnit = sys.supply.demandVa.inKilovoltAmperes / 2 / 0.8;
+      // Round 60 — ONE service-entrance board sits on ONE section (coupler
+      // normally open), so each unit carries the whole demand:
+      // per unit >= demand / 0.8 (500 kVA / 0.8 = 625 ⇒ 630 kVA), never the
+      // demand / 2 share the lone root can never draw from the other unit.
+      final perUnit = sys.supply.demandVa.inKilovoltAmperes / 0.8;
       final unit = transformerKvaLadder.firstWhere((k) => k >= perUnit);
       final adv = computeAdvancedStudy(_profile, p, sys);
       expect(adv.supply.transformerKva, unit);

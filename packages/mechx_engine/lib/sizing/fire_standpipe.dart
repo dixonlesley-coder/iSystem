@@ -32,7 +32,7 @@ import 'package:mechx_engine/network/network.dart'
         ServiceType,
         isSupplyInletComponent;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
-    show fireRatingSystems, fireSystems;
+    show fireRatingSystems, fireSystems, isFireSystemBoundary;
 import 'package:mechx_engine/standards/sni.dart'
     show StandardValue, VerificationStatus;
 import 'package:mechx_engine/units.dart';
@@ -402,8 +402,9 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   //  * no own outlet => no stack (a pump-room riser, a break-tank fill riser
   //    off the zone header carries no standpipe outlet);
   //  * a ONE-storey riser whose own outlets sit on ONE floor => a pillar /
-  //    branch drop when it hangs off a fire-pipe cycle (Round 59,
-  //    [fedOffCycle]); off a tree header it is a stack;
+  //    branch drop when a TALL stack of its fire system serves that storey
+  //    (Round 60, replacing Round 59's fire-pipe-cycle test); with no such
+  //    stack it is a standpipe of its own;
   //  * a one-storey riser with own outlets on BOTH floors => a stack, unless
   //    it lies on a RING (its two ends stay joined with its own risers
   //    removed — a ring leg down a car-park ramp) AND the fire source reaches
@@ -423,34 +424,104 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     (membersOf[find(id)] ??= <String>{}).add(id);
   }
 
-  Set<int> ownOutletFloors(String root) {
-    final members = membersOf[root]!;
+  // Round 60 (fire-convergence-12-wall-hydrant-on-ring-makes-one-storey-
+  // drops-standpipe-stacks) — the nodes on a CYCLE of the fire network with
+  // every riser edge removed (the endpoints of its non-bridge edges): the
+  // ring mains. A walk seeded from a hydrant riser's BASE member never steps
+  // onto another ring node, so a wall hydrant elsewhere on the ring is never
+  // this drop's own L0 outlet; a box hanging off the base node through
+  // non-ring pipe still is (Round 58's base-level box rule).
+  final cycleNodes = _fireRingNodes(net);
+  final fullHydrantRiserNodes = <String>{
+    for (final e in net.edges)
+      if (e.service == ServiceType.fireHydrant && e.kind == EdgeKind.riser)
+        ...[e.fromId, e.toId],
+  };
+
+  Set<int> outletFloorsOf(Set<String> members,
+      {required bool hydrant, required int base}) {
     final ownFull = <String>{for (final id in members) findFull(id)};
-    final hydrant = members.any(hydrantRiserNodes.contains);
     final floors = <int>{};
-    final seen = <String>{...members};
-    final queue = <String>[];
-    for (final id in members) {
-      final f = floorOf[id] ?? 0;
-      if (!hydrant && f <= lo[root]!) continue;
-      if (isHoseOutlet(id)) floors.add(f);
-      queue.add(id);
-    }
-    for (var i = 0; i < queue.length; i++) {
-      for (final o in fullHydrantAdj[queue[i]] ?? const <String>[]) {
-        if (!seen.add(o)) continue;
-        if (fullParent.containsKey(o) && !ownFull.contains(findFull(o))) {
-          continue; // another riser: a wall
+    void walk(Iterable<String> seeds, {required bool fromBase}) {
+      final seen = <String>{...members};
+      final queue = <String>[...seeds];
+      for (var i = 0; i < queue.length; i++) {
+        for (final o in fullHydrantAdj[queue[i]] ?? const <String>[]) {
+          if (fromBase && cycleNodes.contains(o) && !members.contains(o)) {
+            continue; // another ring node: the ring's own outlets
+          }
+          if (!seen.add(o)) continue;
+          if (fullParent.containsKey(o) && !ownFull.contains(findFull(o))) {
+            continue; // another riser: a wall
+          }
+          if (isHoseOutlet(o)) {
+            floors.add(floorOf[o] ?? 0);
+            continue; // an outlet ends the walk
+          }
+          if (nodeById[o]?.role == NodeRole.plant) continue;
+          queue.add(o);
         }
-        if (isHoseOutlet(o)) {
-          floors.add(floorOf[o] ?? 0);
-          continue; // an outlet ends the walk
-        }
-        if (nodeById[o]?.role == NodeRole.plant) continue;
-        queue.add(o);
       }
     }
+
+    final upper = <String>[];
+    final lower = <String>[];
+    for (final id in members) {
+      final f = floorOf[id] ?? 0;
+      if (!hydrant && f <= base) continue;
+      if (isHoseOutlet(id)) floors.add(f);
+      (f <= base ? lower : upper).add(id);
+    }
+    walk(upper, fromBase: false);
+    walk(lower, fromBase: true);
     return floors;
+  }
+
+  Set<int> ownOutletFloors(String root) {
+    final members = membersOf[root]!;
+    return outletFloorsOf(members,
+        hydrant: members.any(hydrantRiserNodes.contains), base: lo[root]!);
+  }
+
+  // Round 60 (regression-tree-fed-pillar-drops-now-count-as-stacks /
+  // regression-ring-fed-one-storey-twins-count-one) — the TALL stacks of the
+  // whole drawn fire network: riser components with an own outlet that are
+  // multi-storey or carry own outlets on >= 2 floors, each with the storey
+  // span it serves (from the storey just below its lowest own outlet) and
+  // its fire-system label (connectivity over fire pipe, never through a
+  // storage tank — [isFireSystemBoundary]).
+  final systemOf = _fireSystemLabels(net);
+  final fullMembers = <String, Set<String>>{};
+  for (final id in fullParent.keys) {
+    (fullMembers[findFull(id)] ??= <String>{}).add(id);
+  }
+  final tall = <(String, int, int, int?)>[]; // (root, from, to, system)
+  for (final r in fullMembers.keys) {
+    final members = fullMembers[r]!;
+    final floors = outletFloorsOf(members,
+        hydrant: members.any(fullHydrantRiserNodes.contains),
+        base: fullLo[r]!);
+    if (floors.isEmpty) continue;
+    if (fullHi[r]! - fullLo[r]! < 2 && floors.length < 2) continue;
+    final from = math.max(fullLo[r]!, floors.reduce(math.min) - 1);
+    tall.add((r, from, fullHi[r]!, systemOf[members.first]));
+  }
+
+  // A ONE-storey riser whose own outlets sit on ONE floor is a pillar /
+  // branch drop when a TALL stack of its own fire system serves its storey
+  // (it is that stack's distribution — pillar drops off a ring or off a
+  // dead-end yard main alike); with no such stack it is a standpipe of its
+  // own (one-storey twin stacks, tree- or ring-fed, count each).
+  bool dropOfTallStack(String root) {
+    final members = membersOf[root]!;
+    final own = <String>{for (final id in members) findFull(id)};
+    final a = lo[root]!;
+    final sys = systemOf[members.first];
+    for (final (r, from, to, s) in tall) {
+      if (own.contains(r) || s != sys) continue;
+      if (from <= a && to >= a + 1) return true;
+    }
+    return false;
   }
 
   // Does the riser lie on a ring: its lowest and highest members stay joined
@@ -533,42 +604,6 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     return onRing(root) && reaches(blocked: false) && !reaches(blocked: true);
   }
 
-  // Round 59 (regression-one-storey-twin-stacks-upper-boxes-count-one) — a
-  // ONE-storey riser whose own outlets sit on ONE floor is a pillar / branch
-  // drop only when it hangs off a fire-pipe CYCLE: one of its member nodes
-  // lies on a cycle of the fire network with the riser's OWN riser edges
-  // removed (the pillar ring or distribution ring the drops hang from, or the
-  // pump-room riser landing on a ring of indoor stacks). Two genuine
-  // one-storey standpipes teed off a TREE header / the pump discharge (a
-  // 2-storey mall, boxes on L1 only) are two stacks (750 gpm). Conservative
-  // side effect: a one-storey pillar drop off a dead-end (tree) yard main now
-  // counts as a stack (over-sizing only).
-  bool fedOffCycle(String root) {
-    final members = membersOf[root]!;
-    bool ownRiser(NetEdge x) =>
-        riserEdgeIds.contains(x.id) &&
-        members.contains(x.fromId) &&
-        members.contains(x.toId);
-    for (final m in members) {
-      for (final x in fireEdgeAdj[m] ?? const <NetEdge>[]) {
-        if (ownRiser(x)) continue;
-        final start = x.fromId == m ? x.toId : x.fromId;
-        if (start == m) continue;
-        final seen = <String>{start};
-        final queue = [start];
-        for (var i = 0; i < queue.length; i++) {
-          for (final y in fireEdgeAdj[queue[i]] ?? const <NetEdge>[]) {
-            if (y.id == x.id || ownRiser(y)) continue;
-            final o = y.fromId == queue[i] ? y.toId : y.fromId;
-            if (o == m) return true;
-            if (seen.add(o)) queue.add(o);
-          }
-        }
-      }
-    }
-    return false;
-  }
-
   final isStack = <String>{};
   // Round 58 — the storey a stack starts serving: the one just below its
   // LOWEST own outlet (never below its base). Beneath that the riser is a
@@ -579,8 +614,10 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
   for (final root in membersOf.keys) {
     final floors = ownOutletFloors(root);
     if (floors.isEmpty) continue; // no own outlet: no stack
-    if (hi[root]! == lo[root]! + 1 && floors.length < 2 && fedOffCycle(root)) {
-      continue; // a one-storey drop off a ring to outlets on one floor
+    if (hi[root]! == lo[root]! + 1 &&
+        floors.length < 2 &&
+        dropOfTallStack(root)) {
+      continue; // a one-storey drop of a taller stack to outlets on one floor
     }
     isStack.add(root);
     final minOut = floors.reduce(math.min);
@@ -607,6 +644,97 @@ int parallelStandpipeCount(Network net, Iterable<NetEdge> edges) {
     }
   }
   return best;
+}
+
+/// Round 60 — the nodes on a cycle of the fire (sprinkler + hydrant) network
+/// with every RISER edge removed: the endpoints of its non-bridge edges
+/// (Tarjan bridge-finding, iterative). Pure.
+Set<String> _fireRingNodes(Network net) {
+  final adj = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.fireHydrant &&
+        e.service != ServiceType.fireSprinkler) {
+      continue;
+    }
+    if (e.kind == EdgeKind.riser || e.fromId == e.toId) continue;
+    (adj[e.fromId] ??= []).add(e);
+    (adj[e.toId] ??= []).add(e);
+  }
+  final disc = <String, int>{};
+  final low = <String, int>{};
+  final bridges = <String>{};
+  var t = 0;
+  final starts = adj.keys.toList()..sort();
+  for (final s in starts) {
+    if (disc.containsKey(s)) continue;
+    // Stack frames: (node, parent edge id, next adjacency index).
+    final stack = <(String, String?, int)>[(s, null, 0)];
+    disc[s] = low[s] = t++;
+    while (stack.isNotEmpty) {
+      final (u, pe, i) = stack.last;
+      final list = adj[u]!;
+      if (i < list.length) {
+        stack[stack.length - 1] = (u, pe, i + 1);
+        final e = list[i];
+        if (e.id == pe) continue;
+        final v = e.fromId == u ? e.toId : e.fromId;
+        if (!disc.containsKey(v)) {
+          disc[v] = low[v] = t++;
+          stack.add((v, e.id, 0));
+        } else {
+          low[u] = math.min(low[u]!, disc[v]!);
+        }
+      } else {
+        stack.removeLast();
+        if (stack.isNotEmpty) {
+          final p = stack.last.$1;
+          low[p] = math.min(low[p]!, low[u]!);
+          if (low[u]! > disc[p]!) bridges.add(pe!);
+        }
+      }
+    }
+  }
+  return <String>{
+    for (final list in adj.values)
+      for (final e in list)
+        if (!bridges.contains(e.id)) ...[e.fromId, e.toId],
+  };
+}
+
+/// Round 60 — a fire-system label per fire node: connectivity over sprinkler
+/// + hydrant pipe that never passes THROUGH a storage tank
+/// ([isFireSystemBoundary]); a tank takes the label of the first system that
+/// reaches it. Pure + deterministic.
+Map<String, int> _fireSystemLabels(Network net) {
+  final byId = {for (final n in net.nodes) n.id: n};
+  final adj = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != ServiceType.fireHydrant &&
+        e.service != ServiceType.fireSprinkler) {
+      continue;
+    }
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
+  }
+  final label = <String, int>{};
+  var next = 0;
+  final ids = adj.keys.toList()..sort();
+  for (final s in ids) {
+    if (label.containsKey(s) || isFireSystemBoundary(byId[s])) continue;
+    final l = next++;
+    label[s] = l;
+    final queue = [s];
+    for (var i = 0; i < queue.length; i++) {
+      final cur = queue[i];
+      if (isFireSystemBoundary(byId[cur])) continue;
+      for (final o in adj[cur] ?? const <String>[]) {
+        if (label.containsKey(o)) continue;
+        label[o] = l;
+        queue.add(o);
+      }
+    }
+  }
+  return label;
 }
 
 // ── Static lift from the building geometry ───────────────────────────────────

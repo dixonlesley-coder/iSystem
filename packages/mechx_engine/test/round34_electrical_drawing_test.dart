@@ -230,10 +230,10 @@ void main() {
   test('the LV power one-line states the declared connection capacity', () {
     final declared = _fan(2, capacity: const ApparentPower(197000));
     expect(
-        powerOneLineUtilitySub(declared, const ApparentPower(100000)),
+        powerOneLineUtilitySub(declared, null),
         '400 V LV · 197 kVA');
     // Nothing declared ⇒ null (the builder's bare '400 V LV').
-    expect(powerOneLineUtilitySub(_fan(2), const ApparentPower(100000)),
+    expect(powerOneLineUtilitySub(_fan(2), null),
         isNull);
   });
 }
