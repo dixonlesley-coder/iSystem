@@ -195,6 +195,13 @@ List<SldPrim> planComponentPrims(
       cir(0.50, 0.50, 0.28);
       cir(0.50, 0.50, 0.10);
       ln(0.10, 0.50, 0.22, 0.50);
+    case NodeComponent.pillarHydrant:
+      // A yard (pillar) hydrant: a barrel on a base with two side outlets.
+      rect(0.38, 0.24, 0.62, 0.80);
+      ln(0.26, 0.84, 0.74, 0.84);
+      ln(0.22, 0.50, 0.38, 0.50);
+      ln(0.62, 0.50, 0.78, 0.50);
+      cir(0.50, 0.18, 0.08);
     case NodeComponent.fireDeptConnection:
       // A Siamese FDC: two inlets with an arrow feeding in.
       cir(0.36, 0.50, 0.16);
@@ -465,6 +472,7 @@ String? fixturePlanCode(NetNode n,
   // fire outlets are coded too, so a reviewer can count them on the plan.
   if (n.component == NodeComponent.hydrantBox) return 'HYD';
   if (n.component == NodeComponent.hoseReel) return 'HR';
+  if (n.component == NodeComponent.pillarHydrant) return 'PH';
   return switch (n.fixture) {
     PlumbingFixture.waterClosetFlushValve ||
     PlumbingFixture.waterClosetFlushTank =>

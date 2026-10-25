@@ -111,20 +111,25 @@ void main() {
     // Equal head: Q1 / Q2 = (190 / 130)^(1 / 1.852); Q1 + Q2 = 31.545 L/s.
     const c = 120.0;
     final d = sized['a1']!.diameter;
-    double hw(double q, double l) => headLossHazenWilliams(
+    double hw(double q, double l, [Diameter? bore]) => headLossHazenWilliams(
             flow: FlowRate(q),
             length: Length(l),
-            diameter: d,
+            diameter: bore ?? d,
             hazenWilliamsC: c)
         .meters;
+    // Round 61 — the feed FP -> A is the pump DISCHARGE, floored at the
+    // NFPA 20 Table 4.28(a) 5 in (DN125) for 500 gpm: its friction is
+    // reckoned at its own bore.
+    final dFeed = sized['fa']!.diameter;
+    expect(dFeed.inMillimeters, 125);
     final q = design.cubicMetersPerSecond;
     final ratio = 1 / (1 + 1 / math.pow(190 / 130, 1 / 1.852));
     final q1 = q * ratio; // the short arm's share
-    final split = hw(q1, 130) + hw(q, len(net.edgeById('fa')!));
+    final split = hw(q1, 130) + hw(q, len(net.edgeById('fa')!), dFeed);
     expect(hw(q - q1, 190), closeTo(hw(q1, 130), 1e-6)); // equal head
     expect(f, greaterThanOrEqualTo(split));
     // The engine reads the full flow along the shorter arm (conservative).
-    final fullArm = hw(q, 130) + hw(q, len(net.edgeById('fa')!));
+    final fullArm = hw(q, 130) + hw(q, len(net.edgeById('fa')!), dFeed);
     expect(f, greaterThanOrEqualTo(fullArm - 1e-9));
   });
 

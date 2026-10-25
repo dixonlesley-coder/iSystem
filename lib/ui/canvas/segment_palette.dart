@@ -311,6 +311,7 @@ class SegmentPalette extends ConsumerWidget {
             NodeComponent.fireExtinguisher,
             NodeComponent.hydrantBox,
             NodeComponent.hoseReel,
+            NodeComponent.pillarHydrant,
             NodeComponent.fireDeptConnection,
           ]),
 

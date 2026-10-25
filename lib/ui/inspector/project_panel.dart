@@ -55,7 +55,10 @@ import 'package:mechx_engine/sizing/fire_standpipe.dart'
     show
         drawnStandpipeRiserCount,
         firePumpBasisVerifyChecklist,
-        standpipeVerifyChecklist;
+        standpipeVerifyChecklist,
+        yardHydrantVerifyChecklist;
+import 'package:mechx_engine/sizing/fire_pump_suction.dart'
+    show firePumpSuctionVerifyChecklist;
 import 'package:mechx_engine/sizing/hot_water.dart' show hotWaterRecircVerifyChecklist;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
@@ -286,6 +289,14 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
         ...standpipeVerifyChecklist
       else if (fireDrawn && firePumpDrawnDuty != null)
         ...firePumpBasisVerifyChecklist,
+      // Round 61 — the NFPA 20 suction velocity + Table 4.28(a) floors the
+      // drawn fire pumps' suction / discharge pipes were raised to.
+      if (fireDrawn && fireBases.any((b) => b.pumpIds.isNotEmpty))
+        ...firePumpSuctionVerifyChecklist,
+      // Round 61 — the yard (pillar) hydrant basis, when one is drawn.
+      if (fireDrawn &&
+          net.nodes.any((n) => n.component == NodeComponent.pillarHydrant))
+        ...yardHydrantVerifyChecklist,
       if (hwRecirc != null) ...hotWaterRecircVerifyChecklist,
     ],
     supplyFans: [
@@ -370,7 +381,7 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
               // is [fireGravity]); a staged system prints one line per stage
               // under that stage's duty pump, on its own stage rating — the
               // figures its schedule row and MDP way carry.
-              if (!b.gravityFed)
+              if (!b.gravityFed && !b.dry)
                 if (b.stages.length >= 2)
                   for (final st in b.stages)
                     FireSystemReportLine(
@@ -398,6 +409,18 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
                   flowLps: b.flow.inLitersPerSecond,
                   availableM: b.gravityAvailableHeadM!,
                   requiredM: b.gravityRequiredHeadM!,
+                ),
+          ]
+        : const [],
+    // Round 61 — a dry (brigade-fed) system's inlet requirement.
+    fireDry: fireDrawn
+        ? [
+            for (final b in fireBases)
+              if (b.dry && b.dryRequiredInletHeadM != null)
+                FireDryReportLine(
+                  sprinklerOnly: b.sprinklerOnly,
+                  flowLps: b.flow.inLitersPerSecond,
+                  inletHeadM: b.dryRequiredInletHeadM!,
                 ),
           ]
         : const [],
@@ -5017,6 +5040,10 @@ class _FireSection extends ConsumerWidget {
     final gravityOnly = ref.watch(fireAllGravityFedProvider);
     final gravityShort = gravityOnly &&
         ref.watch(fireSystemBasesProvider).any((b) => b.gravityHeadShort);
+    // Round 61 — every drawn fire system is DRY (brigade-fed through an
+    // FDC): no pump and no tank to headline.
+    final allDry = gravityOnly &&
+        ref.watch(fireSystemBasesProvider).every((b) => b.dry);
     final hasHydrantEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any((e) => e.service == ServiceType.fireHydrant);
@@ -5088,9 +5115,11 @@ class _FireSection extends ConsumerWidget {
             // drawn) has no pump to rate: never headline the advisory
             // standpipe fallback as a 'rated' fire pump.
             ResultCard(
-              headline: 'No fire pump · gravity tank',
-              label: 'Fire supply (gravity)',
-              verdict: gravityShort ? 'head short' : 'gravity',
+              headline: allDry
+                  ? 'No fire pump · brigade-fed'
+                  : 'No fire pump · gravity tank',
+              label: allDry ? 'Fire supply (dry)' : 'Fire supply (gravity)',
+              verdict: allDry ? 'dry' : (gravityShort ? 'head short' : 'gravity'),
               verdictColor: gravityShort ? colors.warning : colors.success,
             )
           else

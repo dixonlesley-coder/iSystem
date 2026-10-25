@@ -76,6 +76,28 @@ class FireGravityReportLine {
   bool get short => availableM < requiredM - 1e-9;
 }
 
+/// Round 61 (fire-convergence-13-dry-fdc-standpipe-phantom-55kw-pump) — a
+/// DRY (brigade-fed) fire system: no pump or tank drawn, fed through a fire
+/// department connection. The report states the flow and the head the
+/// brigade must deliver at the inlet, never a pump rating.
+class FireDryReportLine {
+  /// True for a sprinkler-only system (else a standpipe / hose system).
+  final bool sprinklerOnly;
+  final double flowLps;
+
+  /// Head (m) required at the inlet.
+  final double inletHeadM;
+
+  const FireDryReportLine({
+    required this.sprinklerOnly,
+    required this.flowLps,
+    required this.inletHeadM,
+  });
+
+  /// The same head as a pressure (kPa, water at 1000 kg/m3, g 9.81).
+  double get inletKpa => inletHeadM * 9.81;
+}
+
 /// Round 49 (regression-report-churn-not-per-system) — one drawn
 /// SPRINKLER-bearing fire system whose pump churn exceeds the standard
 /// 175 psi component rating, judged on ITS OWN pump (the app's
@@ -156,6 +178,10 @@ class CalcReportData {
 
   /// Round 52 — every GRAVITY-fed fire system's head verdict. Empty ⇒ no line.
   final List<FireGravityReportLine> fireGravity;
+
+  /// Round 61 — every DRY (brigade-fed) fire system's inlet requirement.
+  /// Empty ⇒ no line.
+  final List<FireDryReportLine> fireDry;
 
   /// Round 52 — the jockey basis when [firePumpRating] is withheld (a
   /// SERIES-staged governing system prints one rating line per stage
@@ -257,6 +283,7 @@ class CalcReportData {
     this.fireOverPressure = const [],
     this.fireSystems = const [],
     this.fireGravity = const [],
+    this.fireDry = const [],
     this.fireJockeyRating,
     this.fan,
     this.exhaustFan,
@@ -464,13 +491,16 @@ String _mountingNote(ReportStrings s, {required bool ceilingDrop}) =>
 RptKeyValue mechanicalDesignBasisBlock(CalcReportData d,
     [ReportStrings strings = const ReportStrings.en()]) {
   final fireSystems = <String>[
-    if (d.sprinkler != null || d.fireSystems.any((f) => f.sprinklerOnly))
+    if (d.sprinkler != null ||
+        d.fireSystems.any((f) => f.sprinklerOnly) ||
+        d.fireDry.any((f) => f.sprinklerOnly))
       strings(RptStringKey.dbFireSprinkler),
     // A drawn fire network with no pumped standpipe basis (a transfer pump
     // filling a tank, a gravity hose-reel system) is still modelled: the
     // register must not say 'none' above a Fire section that prints it.
     if (d.standpipe != null ||
         d.fireGravity.any((g) => !g.sprinklerOnly) ||
+        d.fireDry.any((g) => !g.sprinklerOnly) ||
         d.fireSystems.any((f) => !f.sprinklerOnly))
       strings(RptStringKey.dbFireStandpipe),
   ];
@@ -750,7 +780,8 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
       d.firePumpRating != null ||
       d.fireSystems.length >= 2 ||
       (d.firePumpRating == null && d.fireSystems.isNotEmpty) ||
-      d.fireGravity.isNotEmpty) {
+      d.fireGravity.isNotEmpty ||
+      d.fireDry.isNotEmpty) {
     final sp = d.sprinkler;
     final ra = d.sprinklerRemoteArea;
     final st = d.standpipe;
@@ -894,6 +925,20 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               'verdict': strings(g.short
                   ? RptStringKey.fireGravityShort
                   : RptStringKey.fireGravityOk),
+            })
+          ),
+        // Round 61 — a dry (brigade-fed) system's inlet requirement.
+        for (final g in d.fireDry)
+          (
+            strings.format(RptStringKey.fireDryKey, {
+              'system': strings(g.sprinklerOnly
+                  ? RptStringKey.fireSystemSprinkler
+                  : RptStringKey.fireSystemStandpipe),
+            }),
+            strings.format(RptStringKey.fireDryValue, {
+              'lps': g.flowLps.toStringAsFixed(1),
+              'm': g.inletHeadM.toStringAsFixed(1),
+              'kpa': g.inletKpa.toStringAsFixed(0),
             })
           ),
         if ((fp ?? d.fireJockeyRating) case final jr?)

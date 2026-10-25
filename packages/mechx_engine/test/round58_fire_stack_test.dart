@@ -312,7 +312,7 @@ void main() {
 
   test(
       'Round 59: one-storey twin stacks with L1 boxes only count 2 header- '
-      'and base-fed (750 gpm = 47.318 L/s, discharge DN125)', () {
+      'and base-fed (750 gpm = 47.318 L/s, discharge DN150)', () {
     for (final feed in ['header', 'base']) {
       final net = _upperTwins(feed);
       expect(drawnStandpipeRiserCount(net), 2, reason: feed);
@@ -324,8 +324,10 @@ void main() {
         hydrantDesignFlow: standpipeFlow(drawnStandpipeRiserCount(net)),
         building: _floors(2),
       );
-      // d >= sqrt(4 x 0.047318 / (pi x 6)) = 0.1002 m => DN125.
-      expect(r['d']!.diameter.inMillimeters, closeTo(125, 1e-9), reason: feed);
+      // d >= sqrt(4 x 0.047318 / (pi x 6)) = 0.1002 m => DN125 on
+      // velocity; Round 61 — the pump discharge floors at the NFPA 20
+      // Table 4.28(a) 750 gpm 6 in => DN150.
+      expect(r['d']!.diameter.inMillimeters, closeTo(150, 1e-9), reason: feed);
     }
   });
 

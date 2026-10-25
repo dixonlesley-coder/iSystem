@@ -1226,7 +1226,12 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
 
   /// Force / clear the dual-transformer (split-bus) MV supply.
   void setDualTransformer(bool value) =>
-      _commit(_withProject(dualTransformer: value));
+      // Round 61 — keep the pair on ONE section count: ticking Dual over a
+      // typed single section (`transformerUnits` 1) clears that section
+      // count, so the service really is two sections.
+      _commit(_withProject(
+          dualTransformer: value,
+          clearTransformerUnits: value && state.transformerUnits == 1));
 
   /// Round 58 — the number of SEPARATE transformer sections (one unit per
   /// service-entrance board, never paralleled). Null / < 1 ⇒ clear (the
@@ -1234,7 +1239,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   void setTransformerUnits(int? units) {
     _commit((units == null || units < 1)
         ? _withProject(clearTransformerUnits: true)
-        : _withProject(transformerUnits: units > 32 ? 32 : units));
+        : _withProject(
+            transformerUnits: units > 32 ? 32 : units,
+            // Round 61 — a single typed section is not a dual service.
+            dualTransformer: units == 1 ? false : null));
   }
 
   /// Rebuild the project carrying every field through, overriding only those

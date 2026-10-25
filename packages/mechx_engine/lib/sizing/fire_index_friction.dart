@@ -92,6 +92,15 @@ class FireSystem {
     return StandpipeClass.classI;
   }
 
+  /// Round 61 (fire-convergence-13-yard-hydrants-rated-as-building-
+  /// standpipe) — this system's drawn yard (pillar) hydrants, sorted.
+  List<String> yardHydrantIds(Network net) => [
+        for (final n in net.nodes)
+          if (nodeIds.contains(n.id) &&
+              n.component == NodeComponent.pillarHydrant)
+            n.id,
+      ]..sort();
+
   /// Round 49 (fire-convergence-zone-lift-is-whole-building) — the floor the
   /// system's pump datum sits on: the LOWEST floor of its drawn fire pumps /
   /// booster sets, else the lowest floor any of its nodes is on, else 0.
@@ -127,8 +136,11 @@ class FireSystem {
       }
       final ok = switch (kind) {
         FireTerminalKind.any => true,
+        // Round 61 — a yard (pillar) hydrant is no hose outlet of the
+        // building standpipe: it is rated on its own yard basis.
         FireTerminalKind.hydrant =>
-          servicesAt[n.id]?.contains(ServiceType.fireHydrant) ?? false,
+          n.component != NodeComponent.pillarHydrant &&
+              (servicesAt[n.id]?.contains(ServiceType.fireHydrant) ?? false),
         FireTerminalKind.sprinkler =>
           servicesAt[n.id]?.contains(ServiceType.fireSprinkler) ?? false,
       };
@@ -650,7 +662,8 @@ double? fireIndexPathFrictionM({
   bool keep(NetNode n) => switch (terminals) {
         FireTerminalKind.any => true,
         FireTerminalKind.hydrant =>
-          servicesAt[n.id]?.contains(ServiceType.fireHydrant) ?? false,
+          n.component != NodeComponent.pillarHydrant &&
+              (servicesAt[n.id]?.contains(ServiceType.fireHydrant) ?? false),
         FireTerminalKind.sprinkler =>
           servicesAt[n.id]?.contains(ServiceType.fireSprinkler) ?? false,
       };

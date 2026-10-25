@@ -10,6 +10,8 @@ import 'package:mechx_engine/network/network.dart'
     show
         NetEdge,
         NetNode,
+        drawOrderCompare,
+        naturalIdCompare,
         Network,
         NodeComponent,
         NodeRole,
@@ -139,7 +141,7 @@ final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
   // not the fire pump the project is rated on).
   final bases = [
     for (final b in ref.watch(fireSystemBasesProvider))
-      if (!b.gravityFed && !b.transfer) b,
+      if (!b.standsDown) b,
   ];
   if (bases.isEmpty) return null;
   final hydrant = [
@@ -189,8 +191,7 @@ final fireOverPressureProvider = Provider<
     // The 175 psi limit is the SPRINKLER component listing (NFPA 13); a
     // hydrant-only standpipe is built from high-pressure hose valves with
     // pressure-regulating outlets (NFPA 14), so it is not judged here.
-    if (b.gravityFed ||
-        b.transfer ||
+    if (b.standsDown ||
         b.flow.cubicMetersPerSecond <= 0 ||
         !b.system.hasSprinkler) {
       continue;
@@ -242,7 +243,7 @@ final fireOverPressureProvider = Provider<
 final reportStandpipeDesignProvider = Provider<FireStandpipeDesign?>((ref) {
   FireSystemBasis? best;
   for (final b in ref.watch(fireSystemBasesProvider)) {
-    if (b.gravityFed || b.transfer || b.standpipe == null) continue;
+    if (b.standsDown || b.standpipe == null) continue;
     if (best == null) {
       best = b;
       continue;
@@ -370,6 +371,32 @@ class FireSystemBasis {
   /// hydrant: the class residual), as P / (rho g).
   final double? gravityRequiredHeadM;
 
+  /// Round 61 (fire-convergence-13-dry-fdc-standpipe-phantom-55kw-pump) — a
+  /// DRY (brigade-fed) system: no pump and no tank drawn, its only plant(s)
+  /// fire department connections ([isSupplyInletComponent]). The fire
+  /// brigade's pumper supplies it, so — like a [gravityFed] system — it has
+  /// NO pump duty ([duty] / [jockey] null), never governs the project fire
+  /// pump, raises no churn over-pressure and feeds no fire-pump way; the
+  /// Review states the pressure the brigade must deliver at the inlet
+  /// ([dryRequiredInletHeadM]) instead of asking for a pump / tank a dry
+  /// riser design cannot add.
+  final bool dry;
+
+  /// The inlet (FDC) of a [dry] system that the required pressure is
+  /// reckoned from (the first drawn).
+  final String? dryInletId;
+
+  /// Head (m) the brigade must deliver at [dryInletId]: the static lift from
+  /// the inlet to the topmost terminal + the class residual (hose) or the
+  /// remote-head pressure (sprinkler) + the larger of the sized friction from
+  /// the inlet and the 15 m allowance — the point a pump at the inlet would
+  /// be rated on.
+  final double? dryRequiredInletHeadM;
+
+  /// True when this system has no pump of its own to rate: gravity-fed, a
+  /// transfer fill or a dry (brigade-fed) system.
+  bool get standsDown => gravityFed || transfer || dry;
+
   /// True when [gravityAvailableHeadM] < [gravityRequiredHeadM].
   bool get gravityHeadShort =>
       gravityFed &&
@@ -403,6 +430,9 @@ class FireSystemBasis {
     this.stages = const [],
     this.transfer = false,
     this.transferTankId,
+    this.dry = false,
+    this.dryInletId,
+    this.dryRequiredInletHeadM,
   });
 }
 
@@ -492,10 +522,19 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       ).meters;
   // The duty pump of [ids]: the largest sized incident bore (a jockey sits on
   // a small leg), ties to the lowest id.
+  int byDraw(String a, String b) {
+    final na = net.nodeById(a);
+    final nb = net.nodeById(b);
+    if (na == null || nb == null) return naturalIdCompare(a, b);
+    return drawOrderCompare(na, nb);
+  }
+
   String? dutyOf(FireSystem sys, Iterable<String> ids) {
     String? duty;
     var dutyBore = -1.0;
-    for (final p in [...ids]..sort()) {
+    // Round 61 — bore ties go to the FIRST drawn pump ([drawOrderCompare]),
+    // the same order the panel feed's duty / standby / jockey roles read.
+    for (final p in [...ids]..sort(byDraw)) {
       var bore = 0.0;
       for (final e in sys.edges) {
         if (e.fromId != p && e.toId != p) continue;
@@ -632,6 +671,57 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       }
     }
     var staticLift = liftTo(basisKind);
+    // Round 61 (fire-convergence-13-yard-hydrants-rated-as-building-
+    // standpipe) — drawn YARD (pillar) hydrants are rated on their own
+    // basis: [kYardHydrantFlowLps] at [kYardHydrantResidualKpa] at the
+    // hydrant, + the larger of the sized friction to them and the 15 m
+    // allowance. A yard-only system is rated on it alone; beside a building
+    // standpipe / sprinklers the pump covers max(flow) at max(head).
+    final yardIds = sys.yardHydrantIds(net);
+    if (yardIds.isNotEmpty && building.floors.isNotEmpty) {
+      final nF = building.floors.length;
+      final datum = building
+          .elevationOf(sys.datumFloor(net).clamp(0, nF - 1))
+          .meters;
+      var lift = 0.0;
+      for (final id in yardIds) {
+        final z =
+            nodeElevation(net.nodeById(id)!, building, project.mounting).meters;
+        lift = math.max(lift, z - datum);
+      }
+      final yf = duty == null
+          ? null
+          : fireIndexPathFrictionM(
+              net: net,
+              system: sys,
+              pumpId: duty,
+              sizing: sizing,
+              lengthOf: lengthOf,
+              targetIds: yardIds.toSet(),
+            );
+      const yardFlow = FlowRate(kYardHydrantFlowLps / 1000);
+      final yardHead = Head(lift +
+          kYardHydrantResidualKpa * 1000 / (1000 * 9.81) +
+          math.max(15.0, yf ?? 0.0)); // the designStandpipe allowance
+      final hasHose = sys.topTerminalFloor(net, FireTerminalKind.hydrant) !=
+          null;
+      if (!hasHose && !sys.hasSprinkler) {
+        flow = yardFlow;
+        head = yardHead;
+        friction = yf;
+        standpipe = null;
+        staticLift = lift;
+      } else {
+        if (yardFlow.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
+          flow = yardFlow;
+        }
+        if (yardHead.meters > head.meters + 1e-9) {
+          head = yardHead;
+          friction = yf;
+          staticLift = lift;
+        }
+      }
+    }
     // Round 52 (regression-transfer-pump-into-tank-rated-whole-building-
     // standpipe) — a TRANSFER system (pumps, no terminal, discharging into a
     // storage tank above them — a GT -> TP -> riser -> TT break tank) lifts
@@ -688,7 +778,41 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
             lengthOf: lengthOf,
           )
         : null;
-    final dutyPump = gravity != null || flow.cubicMetersPerSecond <= 0
+    // Round 61 — a DRY (brigade-fed) system: no pump, no tank, only fire
+    // department inlets. Rated at the inlet (what the brigade must supply),
+    // never a phantom pump.
+    final inlets = [
+      for (final n in net.nodes)
+        if (sys.nodeIds.contains(n.id) && isSupplyInletComponent(n.component))
+          n,
+    ]..sort(drawOrderCompare);
+    final otherPlant = net.nodes.any((n) =>
+        sys.nodeIds.contains(n.id) &&
+        n.role == NodeRole.plant &&
+        !isSupplyInletComponent(n.component));
+    final dry = pumps.isEmpty &&
+        gravity == null &&
+        hasTerminal &&
+        inlets.isNotEmpty &&
+        !otherPlant;
+    double? dryHeadM;
+    if (dry) {
+      final inlet = inlets.first;
+      final f = fireIndexPathFrictionM(
+        net: net,
+        system: sys,
+        pumpId: inlet.id,
+        sizing: sizing,
+        lengthOf: lengthOf,
+        terminals: basisKind,
+      );
+      final lift = sys.staticLiftM(net, building, basisKind,
+          datumFloorOverride: inlet.floorIndex);
+      dryHeadM = basisKind == FireTerminalKind.sprinkler
+          ? sprinklerPoint(f, lift).head.meters
+          : standpipeAt(f, lift).pumpHead.meters;
+    }
+    final dutyPump = gravity != null || dry || flow.cubicMetersPerSecond <= 0
         ? null
         : firePumpDuty(ratedFlow: flow, ratedHead: head, rating: rating);
     var jockey = transferTank != null ||
@@ -724,7 +848,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       }
       stagesOut.add(FireStageRating(
         pumpIds: [...ids]..sort(),
-        dutyPumpId: dutyOf(sys, ids) ?? ([...ids]..sort()).first,
+        dutyPumpId: dutyOf(sys, ids) ?? ([...ids]..sort(byDraw)).first,
         head: perSet,
         rating: r,
         duty: d,
@@ -936,6 +1060,9 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       stages: stagesOut,
       transfer: transferTank != null,
       transferTankId: transferTank?.id,
+      dry: dry,
+      dryInletId: dry ? inlets.first.id : null,
+      dryRequiredInletHeadM: dryHeadM,
     ));
   }
   return out;
@@ -1071,7 +1198,7 @@ final firePumpBasisByNodeProvider = Provider<Map<String, FireSystemBasis>>(
 /// / report line on its own basis.
 final fireAllGravityFedProvider = Provider<bool>((ref) {
   final bases = ref.watch(fireSystemBasesProvider);
-  return bases.isNotEmpty && bases.every((b) => b.gravityFed || b.transfer);
+  return bases.isNotEmpty && bases.every((b) => b.standsDown);
 });
 
 /// NFPA 20 fire-pump rating-curve check for the fire pump — churn / rated /
@@ -1190,6 +1317,8 @@ final sprinklerPumpCheckProvider = Provider<
     // ([FireSystemBasis.gravityHeadShort]), never against another system's
     // pump or a phantom duty.
     if (b.gravityFed) continue;
+    // Round 61 — a dry (brigade-fed) system has no pump to judge.
+    if (b.dry) continue;
     // Round 52 — a transfer system fills a tank; it serves no head.
     if (b.transfer) continue;
     final own = b.pumpIds.isNotEmpty || b.system.hasHydrant;

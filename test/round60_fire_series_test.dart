@@ -9,10 +9,12 @@
 // heads still sum to it.
 //
 // First principles (6 x 3.5 m, calibrated 0.01 m/px): GT -> P1 -> D1 -> low
-// riser (boxes L0-L2); D1 -> P2 -> 150 m discharge main -> D2 -> upper riser
-// (boxes L3-L5). One stack, Class I: 500 gpm = 31.545 L/s. On the DN100
-// discharge main J = 10.67 Q^1.852 / (C^1.852 D^4.87) at C 120 ~ 0.18 m/m, so
-// 150 m adds ~27 m to the TOP terminal's friction (> the 15 m allowance),
+// riser (boxes L0-L2); D1 -> P2 -> 300 m discharge main -> D2 -> upper riser
+// (boxes L3-L5). One stack, Class I: 500 gpm = 31.545 L/s. The main is P2's
+// DISCHARGE, so (Round 61) NFPA 20 Table 4.28(a) floors it at 5 in (DN125):
+// J = 10.67 Q^1.852 / (C^1.852 D^4.87) at C 120 ~ 0.18 x (100/125)^4.87 =
+// 0.061 m/m, so 300 m adds ~18 m to the TOP terminal's friction (> the 15 m
+// allowance; the 150 m of the Round-60 drawing gave only ~9 m on DN125),
 // while the low zone's short path stays under the allowance (15 m governs).
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -58,12 +60,12 @@ Network _tower() => Network(
     _n('P1', 100, role: NodeRole.plant, c: NodeComponent.pump),
     _n('D1', 200),
     _n('P2', 300, role: NodeRole.plant, c: NodeComponent.pump),
-    _n('D2', 15300),
+    _n('D2', 30300),
     for (var f = 0; f < 6; f++) ...[
-      _n('L$f', f < 3 ? 900 : 15300, floor: f),
+      _n('L$f', f < 3 ? 900 : 30300, floor: f),
       _n(
         'HB$f',
-        f < 3 ? 1000 : 15400,
+        f < 3 ? 1000 : 30400,
         floor: f,
         role: NodeRole.fixture,
         c: NodeComponent.hydrantBox,
@@ -118,7 +120,7 @@ void main() {
       terminals: FireTerminalKind.hydrant,
       targetIds: const {'HB0', 'HB1', 'HB2'},
     )!;
-    // The system friction (to the TOP box, past the 150 m main) is above the
+    // The system friction (to the TOP box, past the 300 m main) is above the
     // 15 m allowance; the low zone's own path is below it.
     expect(b.indexFrictionM!, greaterThan(allowance));
     expect(lowFriction, lessThan(allowance));

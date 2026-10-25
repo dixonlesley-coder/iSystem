@@ -326,7 +326,10 @@ void main() {
         for (final id in ['d', 't1', 't2']) {
           expect(r[id]!.flow.inLitersPerSecond, closeTo(31.545, 1e-3),
               reason: '$id ramp=$ramp');
-          expect(r[id]!.diameter.inMillimeters, 100, reason: id);
+          // Round 61 — the pump discharge d floors at the NFPA 20 Table
+          // 4.28(a) 5 in (DN125) for 500 gpm; the trunks keep DN100.
+          expect(r[id]!.diameter.inMillimeters, id == 'd' ? 125 : 100,
+              reason: id);
         }
         for (final e in r.values) {
           expect(e.flow.inLitersPerSecond, lessThan(31.546),
@@ -386,7 +389,9 @@ void main() {
       );
       expect(r['d']!.flow.inLitersPerSecond,
           closeTo(750 * 3.785411784 / 60, 1e-3));
-      expect(r['d']!.diameter.inMillimeters, 125);
+      // Round 61 — and the NFPA 20 Table 4.28(a) 750 gpm discharge is 6 in
+      // (DN150), above the DN125 the 6 m/s cap alone gives.
+      expect(r['d']!.diameter.inMillimeters, 150);
     });
 
     test(
@@ -422,7 +427,8 @@ void main() {
         building: _floors(3),
       );
       expect(r['d']!.flow.inLitersPerSecond, closeTo(31.545, 1e-3));
-      expect(r['d']!.diameter.inMillimeters, 100);
+      // Round 61 — the 500 gpm pump discharge: NFPA 20 5 in (DN125).
+      expect(r['d']!.diameter.inMillimeters, 125);
     });
   });
 

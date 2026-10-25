@@ -651,7 +651,13 @@ void main() {
           // cap (Round 21: 6 m/s; 31.54 L/s in DN100 = 4.02 m/s).
           expect(sized[id]!.velocity.metersPerSecond,
               lessThanOrEqualTo(kMaxFireVelocityMps));
-          expect(sized[id]!.diameter.inMillimeters, closeTo(100, 1e-9));
+          // Round 61 — 'feed' is the PUMP DISCHARGE: NFPA 20 Table
+          // 4.28(a) floors it at 5 in (DN125) for a 500 gpm pump; the
+          // riser keeps its Class I DN100 (31.54 L/s / 0.007854 m2 =
+          // 4.02 m/s <= 6 m/s).
+          expect(sized[id]!.diameter.inMillimeters,
+              closeTo(id == 'feed' ? 125 : 100, 1e-9),
+              reason: id);
         }
         expect(sized['box0']!.flow.cubicMetersPerSecond, closeTo(0.005, 1e-15));
         // Without the design flow the legacy Σ-boxes accumulation is unchanged.

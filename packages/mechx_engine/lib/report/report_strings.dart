@@ -450,6 +450,8 @@ enum RptStringKey {
   fireGravityValue, // {lps} {avail} {need} {verdict}
   fireGravityOk,
   fireGravityShort,
+  fireDryKey, // {system}
+  fireDryValue, // {lps} {m} {kpa}
 }
 
 /// English — the source language. Every value MUST match the inline literal it
@@ -949,6 +951,10 @@ const Map<RptStringKey, String> kReportStringsEn = {
       '{lps} L/s · head available {avail} m vs required {need} m · {verdict}',
   RptStringKey.fireGravityOk: 'OK',
   RptStringKey.fireGravityShort: 'SHORT - add a fire pump',
+  RptStringKey.fireDryKey: 'Dry fire supply ({system}, brigade-fed):',
+  RptStringKey.fireDryValue:
+      '{lps} L/s · {m} m ({kpa} kPa) required at the fire department '
+          'connection',
 };
 
 /// Bahasa Indonesia — natural consulting-report phrasing, reusing the
@@ -1447,6 +1453,11 @@ const Map<RptStringKey, String> kReportStringsId = {
       '{lps} L/s · head tersedia {avail} m vs dibutuhkan {need} m · {verdict}',
   RptStringKey.fireGravityOk: 'OK',
   RptStringKey.fireGravityShort: 'KURANG - tambahkan pompa kebakaran',
+  RptStringKey.fireDryKey:
+      'Suplai kebakaran kering ({system}, dipasok mobil pemadam):',
+  RptStringKey.fireDryValue:
+      '{lps} L/s · {m} m ({kpa} kPa) dibutuhkan di sambungan pemadam '
+          'kebakaran (FDC)',
 };
 
 /// Resolves a [RptStringKey] against a [ReportLocale], mirroring the app's

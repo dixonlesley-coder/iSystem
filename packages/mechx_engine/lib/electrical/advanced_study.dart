@@ -107,6 +107,7 @@ import 'supply_design.dart'
         declaredServiceTransformer,
         determineSupply,
         isDeclaredMvService,
+        minimalMaxSectionLoad,
         recommendedDaya,
         serviceSections;
 
@@ -1015,6 +1016,7 @@ double _motorKw(ElectricalCircuit c) {
   // diversified VA, or its worst-phase basis when that is larger.
   var largestSectionVa = 0.0;
   String? largestSectionId;
+  final rootSectionVa = <double>[];
   if (serviceSections(project) > 1 && originPanelIds.length > 1) {
     for (final id in originPanelIds) {
       final r = sys.panels[id];
@@ -1023,6 +1025,7 @@ double _motorKw(ElectricalCircuit c) {
           r.demandVaOrEstimate(),
           worstPhaseDemandVa(project, sys, [id],
               roundCurrent: true, withLargestMachine: true));
+      rootSectionVa.add(va);
       if (va > largestSectionVa + 1e-9 ||
           (largestSectionId != null &&
               (va - largestSectionVa).abs() <= 1e-9 &&
@@ -1031,12 +1034,23 @@ double _motorKw(ElectricalCircuit c) {
         largestSectionId = id;
       }
     }
+    // Round 61 (elec-convergence-13-roots-outnumber-sections-section-
+    // overload) — more service-entrance boards than sections: at least one
+    // section carries two boards (pigeonhole), so the most loaded section is
+    // the best achievable partition of the boards over the sections, never
+    // the single largest board. (Roots ≤ sections ⇒ the largest board ⇒
+    // byte-identical.)
+    largestSectionVa =
+        minimalMaxSectionLoad(rootSectionVa, serviceSections(project));
   }
-  final supply = determineSupply(
+  final oneRoot = originPanelIds.length == 1;
+  SupplyDesign study(double basisVa, double sectionVa,
+          {String basisLabel = 'worst-phase basis'}) =>
+      determineSupply(
     sys.supply.demandVa,
-    largestSectionDemand:
-        largestSectionVa > 0 ? ApparentPower(largestSectionVa) : null,
-    perPhaseDemand: ApparentPower(perPhaseBasisVa),
+    largestSectionDemand: sectionVa > 0 ? ApparentPower(sectionVa) : null,
+    perPhaseDemand: ApparentPower(basisVa),
+    basisLabel: basisLabel,
     dualTransformer: project.dualTransformer,
     // Round 29 — the ONE declared rating (a connection capacity above the
     // LV ceiling is a TM service on its snapped transformer).
@@ -1044,13 +1058,58 @@ double _motorKw(ElectricalCircuit c) {
     declaredUnits: declaredServiceTransformer(project)?.units,
     // Round 37 r2 — a single root board on a dual service is judged against
     // ONE section, like its incomer floor and the service-capacity judge.
-    singleSectionCarriesAll: originPanelIds.length == 1,
+    singleSectionCarriesAll: oneRoot,
     // Round 58 — an N-section service judges each root on one unit.
     sections: serviceSections(project),
     // Round 58 — an on-site genset / PV primary supply has no PLN service.
     supplyKind: project.supplyKind,
     plantCapacity: project.supplyCapacityVa,
   );
+  var supply = study(perPhaseBasisVa, largestSectionVa);
+  // Round 61 (regression-undeclared-study-transformer-flagged-against-
+  // headroom-incomer) — a root board reserving future-load headroom has its
+  // incomer sized on the UPLIFTED (future) current, so an UNDECLARED study
+  // transformer (the engine's own pick, which the engineer cannot 'raise')
+  // is sized on the same future basis: Σ roots max(demand VA, worst-phase
+  // VA) × that root's headroom multiplier. The pick then covers the incomer
+  // rung by construction (FLC ≥ future current / 0.8), and the Round-41 FLC
+  // judge never condemns it. Only an MV study is re-sized — headroom never
+  // turns an LV service into an MV one (the PLN limiter is set at today's
+  // daya). No headroom anywhere ⇒ byte-identical.
+  if (supply.lvOrMv == SupplyLevel.mv && !supply.declared) {
+    var futureBasisVa = 0.0;
+    final futureRootVa = <double>[];
+    var uplifted = false;
+    final panelById = {for (final p in project.panels) p.id: p};
+    for (final id in originPanelIds) {
+      final r = sys.panels[id];
+      if (r == null) continue;
+      final mult = panelById[id]?.headroom?.demandMultiplier ?? 1.0;
+      if (mult > 1.0 + 1e-12) uplifted = true;
+      final va = math.max(
+          r.demandVaOrEstimate(),
+          worstPhaseDemandVa(project, sys, [id],
+              roundCurrent: true,
+              withLargestMachine: true,
+              asSystem: sys.supply.system == ElectricalSystem.singlePhase
+                  ? ElectricalSystem.threePhase
+                  : null,
+              asVolts: sys.supply.system == ElectricalSystem.singlePhase
+                  ? kThreePhaseServiceLineVoltageV
+                  : null));
+      futureBasisVa += va * mult;
+      futureRootVa.add(va * mult);
+    }
+    if (uplifted && futureBasisVa > perPhaseBasisVa + 1e-9) {
+      supply = study(
+          futureBasisVa,
+          largestSectionVa > 0
+              ? math.max(largestSectionVa,
+                  minimalMaxSectionLoad(futureRootVa, serviceSections(project)))
+              : 0.0,
+          basisLabel: 'future-load (headroom) basis');
+    }
+  }
   return (
     supply: supply,
     worstPhaseVa: worstPhaseVa,

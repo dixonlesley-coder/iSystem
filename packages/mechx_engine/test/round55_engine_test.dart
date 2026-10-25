@@ -203,7 +203,13 @@ void main() {
         for (final id in ['g', 'd', 'ab', 'br']) {
           expect(r[id]!.flow.inLitersPerSecond, closeTo(12.0, 1e-9),
               reason: id);
-          expect(r[id]!.diameter.inMillimeters, 65, reason: id);
+          // Round 61 — the pump train (suction g, discharge d -> ab to the
+          // first fixture) floors at the NFPA 20 Table 4.28(a) size for a
+          // 12 L/s = 190 gpm pump (the 200 gpm row: 3 in / 3 in = DN80);
+          // the suction at 150 % on DN80 is 0.018 / 0.005027 = 3.58 m/s
+          // <= 4.57 m/s. The sprinkler branch br keeps DN65 on velocity.
+          expect(r[id]!.diameter.inMillimeters, id == 'br' ? 65 : 80,
+              reason: id);
           const v = 0.012 / (math.pi * 0.065 * 0.065 / 4);
           expect(v, closeTo(3.62, 0.01));
         }
@@ -243,7 +249,9 @@ void main() {
         // 500 gpm = 500 x 3.785411784 / 60 = 31.545 L/s.
         expect(r['d']!.flow.inLitersPerSecond, closeTo(31.545, 1e-3),
             reason: 'tie=$tie');
-        expect(r['d']!.diameter.inMillimeters, 100, reason: 'tie=$tie');
+        // Round 61 — the pump discharge floors at the NFPA 20 Table
+        // 4.28(a) 5 in (DN125) for a 500 gpm pump.
+        expect(r['d']!.diameter.inMillimeters, 125, reason: 'tie=$tie');
         // Without the tie the sprinkler riser carries its own 12 L/s remote
         // area (DN65, 3.6 m/s). With it, the tie closes a ring through the
         // sprinkler riser — the top hose outlet can be fed round that arm —
@@ -401,11 +409,17 @@ void main() {
           final r = run(_pumpRoom(room, riser, flip: flip), legs);
           // DN100: v = 0.0315 / (pi 0.1^2 / 4) = 4.01 m/s (inside 6 m/s).
           expect(0.0315 / (math.pi * 0.01 / 4), closeTo(4.01, 0.01));
+          // Round 61 — the pump room is the pumps' SUCTION (g, s1, s2:
+          // v150 on DN100 = 1.5 x 0.0315 / 0.007854 = 6.02 m/s > 4.57, on
+          // DN125 3.85 m/s) and DISCHARGE (d1, d2 and the header main dr):
+          // NFPA 20 Table 4.28(a) 500 gpm = 5 in / 5 in = DN125. The
+          // standpipe riser r1 keeps its Class I DN100.
           for (final id in ['g', 's1', 'd1', 's2', 'd2', 'dr', 'r1']) {
             expect(r[id], isNotNull, reason: id);
             expect(r[id]!.flow.inLitersPerSecond, closeTo(31.5, 1e-9),
                 reason: id);
-            expect(r[id]!.diameter.inMillimeters, 100, reason: id);
+            expect(r[id]!.diameter.inMillimeters, id == 'r1' ? 100 : 125,
+                reason: id);
           }
           // Oriented tank -> pumps -> header, whatever the drawing.
           expect(r['g']!.flowFromId, 'GT');
@@ -425,7 +439,8 @@ void main() {
         final r = run(_pumpRoom(room, riser, two: false), legs);
         for (final id in ['g', 's1', 'd1', 'dr']) {
           expect(r[id]!.flow.inLitersPerSecond, closeTo(31.5, 1e-9));
-          expect(r[id]!.diameter.inMillimeters, 100);
+          // Round 61 — suction / discharge at the NFPA 20 5 in (DN125).
+          expect(r[id]!.diameter.inMillimeters, 125, reason: id);
         }
         expect(legs, isEmpty);
       }
