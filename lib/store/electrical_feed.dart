@@ -27,7 +27,7 @@ import 'package:mechx_engine/sizing/fire_index_friction.dart'
         fireTransferDestinationTank;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show serviceComponentRoots;
-import 'package:mechx_engine/sizing/pump.dart' show PumpDuty;
+import 'package:mechx_engine/sizing/pump.dart' show PumpDuty, sizePump;
 import 'package:mechx_engine/units.dart';
 
 import 'annotation_store.dart';
@@ -263,6 +263,12 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
           onService: (e) => e.service == ServiceType.hotWater,
           bore: boreMm,
           parallelLegEdgeIds: legs,
+          // Round 62 (plumbing-hvac-convergence-12-per-riser-hw-circulators-
+          // classed-standby) — only a genuine parallel set (a pump on the
+          // sizer's mirrored standby leg) is duty / standby: one circulator
+          // per return riser is three RUNNING duty machines, never two
+          // standbys at demand factor 0.
+          legOnly: true,
         );
   if (supplyPump != null && supplyStandby.containsKey(supplyPump)) {
     supplyPump = supplyStandby[supplyPump];
@@ -296,6 +302,64 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
       drawnEjectorPumpIds(net),
     ),
   );
+});
+
+/// Round 62 (plumbing-hvac-convergence-12-per-riser-hw-circulators-classed-
+/// standby) — the duty each DRAWN hot-water circulator is scheduled and fed
+/// on. A system with ONE running circulator keeps the system duty
+/// (byte-identical); with several independent circulators (one per return
+/// riser) each runs at ITS loop's share of the system recirculation flow —
+/// the largest [HotWaterRecircSystem.loopEdgeShares] share of its own pipes
+/// (an equal split when its pipes carry no recorded share, `// VERIFY`) — at
+/// the system loop head. A standby circulator carries its duty pump's duty.
+final hwCirculatorDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
+  final bind = ref.watch(mepDutyBindingProvider);
+  if (bind.hwRecircPumpNodeIds.isEmpty) return const {};
+  final net = ref.watch(sizingNetworkProvider);
+  final standby = bind.hwStandbyPumpNodeIds;
+  final out = <String, PumpDuty>{};
+  for (final sys in ref.watch(hotWaterRecircSystemsProvider)) {
+    final onSys = [
+      for (final id in bind.hwRecircPumpNodeIds)
+        if (sys.nodeIds.contains(id)) id,
+    ]..sort();
+    final running = [
+      for (final id in onSys)
+        if (!standby.contains(id)) id,
+    ];
+    if (running.length <= 1) {
+      for (final id in onSys) {
+        out[id] = sys.design.pump;
+      }
+      continue;
+    }
+    final q = sys.design.recircFlow.cubicMetersPerSecond;
+    final raw = <String, double>{};
+    for (final id in running) {
+      var share = 0.0;
+      for (final e in net.edgesAt(id)) {
+        if (e.service != ServiceType.hotWater) continue;
+        final v = sys.loopEdgeShares[e.id] ?? 0.0;
+        if (v > share) share = v;
+      }
+      raw[id] = share;
+    }
+    // The running circulators together move the system flow: each its
+    // loop's share, normalised over the running set (the loop enumeration
+    // can count a pipe on several loops).
+    final total = raw.values.fold<double>(0, (a, b) => a + b);
+    final allShared = raw.values.every((v) => v > 0);
+    for (final id in running) {
+      final share = allShared && total > 0
+          ? raw[id]! / total
+          : 1 / running.length;
+      out[id] = sizePump(flow: FlowRate(q * share), head: sys.design.loopHead);
+    }
+    for (final id in onSys) {
+      out.putIfAbsent(id, () => out[running.first] ?? sys.design.pump);
+    }
+  }
+  return out;
 });
 
 /// Round 31 (regression-duplex-ejector-standby-full-demand) — the STANDBY
@@ -840,14 +904,9 @@ final equipmentNodeDutiesProvider =
         ref.watch(ejectorDutiesProvider)[
             bind.ejectorStandbyPumpNodeIds[n.id] ?? n.id];
     if (bind.hwRecircPumpNodeIds.contains(n.id)) {
-      // Round 26 — the duty of the hot-water SYSTEM this pump sits on.
-      p = null;
-      for (final sys in ref.watch(hotWaterRecircSystemsProvider)) {
-        if (sys.nodeIds.contains(n.id)) {
-          p = sys.design.pump;
-          break;
-        }
-      }
+      // Round 26 — the duty of the hot-water SYSTEM this pump sits on;
+      // Round 62 — at its own loop's share when several circulators run.
+      p = ref.watch(hwCirculatorDutiesProvider)[n.id];
     }
     // Round 11 (hvac-network-4) — ANY drawn air unit a system is rooted at
     // carries THAT system's duty (the primary one included), not only the

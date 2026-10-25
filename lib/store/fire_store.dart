@@ -25,7 +25,7 @@ import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
 import 'network_store.dart';
 import 'project_store.dart';
-import 'sizing_store.dart' show sizingProvider;
+import 'sizing_store.dart' show parallelLegEdgeIdsProvider, sizingProvider;
 
 /// Selected sprinkler hazard class (drives the sprinkler design).
 final fireHazardProvider =
@@ -529,24 +529,33 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     return drawOrderCompare(na, nb);
   }
 
+  // Round 62 (regression-duty-pick-sizer-vs-basis-disagree) — ONE rule
+  // with the panel feed's roles ([parallelFirePumpRoles]): the largest
+  // incident bore, then a pump OFF the sizer's mirrored standby legs, then
+  // the first drawn — so the calc report's tag names the pump the MDP and
+  // the schedule call duty, never the one they call '(standby)'.
+  final parallelLegs = ref.watch(parallelLegEdgeIdsProvider);
+  bool onLeg(FireSystem sys, String p) => sys.edges.any((e) =>
+      (e.fromId == p || e.toId == p) && parallelLegs.contains(e.id));
   String? dutyOf(FireSystem sys, Iterable<String> ids) {
-    String? duty;
-    var dutyBore = -1.0;
-    // Round 61 — bore ties go to the FIRST drawn pump ([drawOrderCompare]),
-    // the same order the panel feed's duty / standby / jockey roles read.
-    for (final p in [...ids]..sort(byDraw)) {
+    double boreOf(String p) {
       var bore = 0.0;
       for (final e in sys.edges) {
         if (e.fromId != p && e.toId != p) continue;
         final d = sizing[e.id]?.diameter.inMillimeters ?? 0.0;
         if (d > bore) bore = d;
       }
-      if (bore > dutyBore + 1e-9) {
-        duty = p;
-        dutyBore = bore;
-      }
+      return bore;
     }
-    return duty;
+
+    final ranked = [...ids]..sort((a, b) {
+        final d = boreOf(b).compareTo(boreOf(a));
+        if (d != 0) return d;
+        final la = onLeg(sys, a) ? 1 : 0, lb = onLeg(sys, b) ? 1 : 0;
+        if (la != lb) return la - lb;
+        return byDraw(a, b);
+      });
+    return ranked.isEmpty ? null : ranked.first;
   }
 
   // Round 53 — one transfer-destination rule with the sizer
@@ -585,7 +594,20 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
             lengthOf: lengthOf,
             terminals: kind,
           );
+    // Round 62 (fire-convergence-14-sprinkler-plus-yard-rated-as-phantom-
+    // class-i-standpipe) — a yard (pillar) hydrant sits on hydrant pipe but
+    // is no building standpipe: sprinklers + yard pillars with NO hose
+    // outlet are rated on the sprinkler point and the yard point (the yard
+    // block below), never on a phantom Class I standpipe lifted to the
+    // building top (75 kW and a false churn over-pressure for a 37 kW
+    // duty).
+    final hasBuildingStandpipe =
+        sys.topTerminalFloor(net, FireTerminalKind.hydrant) != null;
     final sprinklerOnly = !sys.hasHydrant;
+    final ratedOnSprinkler = sprinklerOnly ||
+        (!hasBuildingStandpipe &&
+            sys.hasSprinkler &&
+            sys.yardHydrantIds(net).isNotEmpty);
     final risers = sys.standpipeRisers(net);
     // Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — a
     // hose-reel-only system is a Class II (hose-station) standpipe.
@@ -615,7 +637,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           indexPathFriction: f == null ? null : Head(f),
         );
     final FireTerminalKind basisKind;
-    if (sprinklerOnly) {
+    if (ratedOnSprinkler) {
       friction = frictionTo(FireTerminalKind.sprinkler);
       final p = sprinklerPoint(friction, liftTo(FireTerminalKind.sprinkler));
       flow = p.flow;

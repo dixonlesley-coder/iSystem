@@ -376,7 +376,14 @@ List<SldSheet> paginatedElectricalRiserSheets({
     if (units.length < 2) continue;
     chunksOf[f] = greedyChunks(f, units);
   }
-  if (chunksOf.isEmpty) return collapsed;
+  // Round 62 (elec-convergence-14-riser-floor-runs-issued-below-7pt-when-
+  // each-band-is-legible) — no band needs column pages, yet the collapsed
+  // pages are still flagged: they were judged WITHOUT the page plan (every
+  // other band's boards and pass-through risers kept on each page), so a
+  // tower of non-identical floor boards issued 4-floor pages at 5.8 pt while
+  // each floor prints at 7 pt by itself. The floor runs below are issued
+  // through the same [pagePlan] geometry each band was judged legible on
+  // (the rest-page path below), never returned as the flagged collapse.
 
   // Round 47 (regression-riser-pages-drop-upper-same-storey-boards-and-main-
   // board) — a REFINED unit root (the main board, a sub-main above a chain of
