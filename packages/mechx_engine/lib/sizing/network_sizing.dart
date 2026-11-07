@@ -2225,6 +2225,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   Map<String, CheckValveAmbiguity>? checkValveAmbiguousOut,
   Set<String>? checkValveAgainstPumpOut,
   Set<String>? moverAgainstBalanceOut,
+  Set<String>? disagreeingSetMoversOut,
   Set<String>? airIntakeLeavesOut,
   Map<String, FlowRate> jockeyLegFlows = const {},
 }) {
@@ -2295,6 +2296,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
     checkValveAmbiguousOut: checkValveAmbiguousOut,
     checkValveAgainstPumpOut: checkValveAgainstPumpOut,
     moverAgainstBalanceOut: moverAgainstBalanceOut,
+    disagreeingSetMoversOut: disagreeingSetMoversOut,
     airIntakeLeavesOut: airIntakeLeavesOut,
     jockeyLegFlows: jockeyLegFlows,
     firePumpRatedFlowOut: ratedFlowByPump,
@@ -2500,6 +2502,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   Map<String, CheckValveAmbiguity>? checkValveAmbiguousOut,
   Set<String>? checkValveAgainstPumpOut,
   Set<String>? moverAgainstBalanceOut,
+  Set<String>? disagreeingSetMoversOut,
   Set<String>? airIntakeLeavesOut,
   Map<String, FlowRate> jockeyLegFlows = const {},
   Map<String, FlowRate>? firePumpRatedFlowOut,
@@ -3216,6 +3219,13 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             jockeyMoverIds: jockeyLegFlows.keys.toSet(),
             legSizeOverrides: sizeOverrides,
             ignoreDrawnMoverDirection: isFireService(service),
+            disagreeingSetMoversOut: disagreeingSetMoversOut,
+            // Round 69 r2 — on HOT water a supply pump and a return
+            // circulator between the SAME two junctions (H -> P -> J beside
+            // J -> Pr -> H) are topologically a disagreeing duty / standby
+            // set: the circulator is the drawn return, never a backwards
+            // standby, so hot water keeps every coherent drawn direction.
+            orientDisagreeingSets: service != ServiceType.hotWater,
             nodeOrder: isFireService(service)
                 ? (a, b) {
                     final na = net.nodeById(a), nb = net.nodeById(b);
@@ -6727,6 +6737,8 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   Map<String, Diameter> legSizeOverrides = const {},
   int Function(String a, String b)? nodeOrder,
   bool ignoreDrawnMoverDirection = false,
+  Set<String>? disagreeingSetMoversOut,
+  bool orientDisagreeingSets = true,
 }) {
   const none = [_CheckValvePlan(<String>{}, <_StandbyLeg>[])];
   // Round 62 (regression-duty-pick-sizer-vs-basis-disagree) — on a FIRE
@@ -7322,7 +7334,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   // head and the standby leg was sized on the return flow. A lone mover
   // keeps its drawn direction (a genuine recirculation / transfer reading).
   final disagreeingEnds = <String>{};
-  if (isMover != null) {
+  if (isMover != null && orientDisagreeingSets) {
     final dirsByEnds = <String, Set<int>>{};
     for (final p in [...adj.keys]..sort()) {
       final c = valvelessChain(p);
@@ -7335,6 +7347,21 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     }
     for (final e in dirsByEnds.entries) {
       if (e.value.length > 1) disagreeingEnds.add(e.key);
+    }
+    // Round 69 r2 — the movers of a disagreeing set, for the judge-only
+    // `parallel-pump-drawn-backwards` advisory: ONLY these are named (a lone
+    // pump drawn backwards on a tree, or a lone circulator, is not a set).
+    // Structural (scenario-independent), so a union over envelope scenarios
+    // is the same set.
+    if (disagreeingSetMoversOut != null && disagreeingEnds.isNotEmpty) {
+      for (final p in [...adj.keys]..sort()) {
+        final c = valvelessChain(p);
+        if (c == null || c.drawnDir == null) continue;
+        if (!disagreeingEnds.contains(endsKeyOf(c.ns.first, c.ns.last))) {
+          continue;
+        }
+        disagreeingSetMoversOut.add(p);
+      }
     }
   }
 

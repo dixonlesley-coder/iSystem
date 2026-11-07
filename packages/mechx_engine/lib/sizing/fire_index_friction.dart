@@ -1066,9 +1066,13 @@ List<String> firePumpsDrawnBackwards(
 /// the pumps / booster sets on a [service] pipe drawn COHERENTLY backwards
 /// against the SOLVED flow ([sizing] `flowFromId`): exactly two [service]
 /// pipes, one drawn in and one out, while the solved flow passes the other
-/// way. On domestic water the sizer honours a coherent drawn direction
-/// except inside a parallel set whose members disagree (oriented away from
-/// the source), so only those members are named. Judge-only. Sorted ids.
+/// way. On COLD water the sizer honours a coherent drawn direction except
+/// inside a parallel set whose members disagree (oriented away from the
+/// source); a tree ignores drawn direction altogether (Round 15), so a lone
+/// pump drawn backwards on a tree is listed here too. A domestic caller
+/// therefore names only the members of a disagreeing set — intersect with
+/// `autoSizeNetwork(disagreeingSetMoversOut:)` (Round 69 r2). Judge-only.
+/// Sorted ids.
 List<String> moversDrawnBackwards(Network net, Map<String, EdgeSizing> sizing,
     bool Function(ServiceType service) service) {
   final out = <String>[];

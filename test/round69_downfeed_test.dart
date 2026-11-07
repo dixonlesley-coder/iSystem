@@ -41,6 +41,8 @@ import 'package:mechx_engine/hydraulics.dart'
     show headFromPressure, pressureFromHead;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/zoning.dart' show defaultPrvSetpoint;
+import 'package:mechx_engine/sizing/fire_index_friction.dart'
+    show moversDrawnBackwards;
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
@@ -408,6 +410,120 @@ void main() {
         }
       },
     );
+  });
+
+  group('r2: only a disagreeing set member is named backwards', () {
+    // GT -> P -> J -> two lavatories (L0), on a TREE. Drawn forwards or
+    // with the pump pipes drawn riser-first (J -> P, P -> GT): a tree
+    // ignores drawn direction (Round 15), so both size identically, and a
+    // lone pump is no set member — never `parallel-pump-drawn-backwards`.
+    (List<NetNode>, List<NetEdge>) lone({required bool backwards}) => (
+      [
+        _n('GT', 0, 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+        _n('P', 50, 0, role: NodeRole.plant, c: NodeComponent.pump),
+        _n('J', 100, 0),
+        _fix('L1', 150, 0, 0),
+        _fix('L2', 150, 50, 0),
+      ],
+      [
+        if (backwards) ...[
+          _e('a', 'P', 'GT'),
+          _e('b', 'J', 'P'),
+        ] else ...[
+          _e('a', 'GT', 'P'),
+          _e('b', 'P', 'J'),
+        ],
+        _e('c', 'J', 'L1'),
+        _e('d', 'J', 'L2'),
+      ],
+    );
+
+    test('a lone backwards pump on a tree is not named', () {
+      final f = lone(backwards: false), b = lone(backwards: true);
+      final cf = _solve(f.$1, f.$2, floors: 2);
+      final cb = _solve(b.$1, b.$2, floors: 2);
+      final sf = cf.read(sizingProvider), sb = cb.read(sizingProvider);
+      for (final id in ['a', 'b', 'c', 'd']) {
+        expect(
+          sb[id]!.flow.inLitersPerSecond,
+          closeTo(sf[id]!.flow.inLitersPerSecond, 1e-12),
+          reason: id,
+        );
+        expect(sb[id]!.diameter.inMillimeters, sf[id]!.diameter.inMillimeters);
+        expect(sb[id]!.flowFromId, sf[id]!.flowFromId, reason: id);
+      }
+      // Non-vacuous: the drawing-vs-solved judge does list P (the drawn
+      // pipes run against the solved flow); only the set filter drops it.
+      expect(
+        moversDrawnBackwards(
+          Network(nodes: b.$1, edges: b.$2),
+          sb,
+          (s) => s == ServiceType.coldWater,
+        ),
+        ['P'],
+      );
+      expect(cb.read(disagreeingSetMoversProvider), isEmpty);
+      for (final x in [cf, cb]) {
+        expect(
+          x
+              .read(designIssuesProvider)
+              .where((i) => i.kind.startsWith('parallel-pump-drawn-backwards')),
+          isEmpty,
+        );
+      }
+    });
+
+    // A single-junction hot-water recirculation loop: heater H -> P -> J,
+    // J -> lavatory, and a valveless circulator drawn J -> Pr -> H. On hot
+    // water a supply pump and a return circulator between the SAME two
+    // junctions read as a disagreeing pair topologically, so the rule is
+    // gated off there: the circulator leg stays the drawn return (flow
+    // J -> Pr -> H), never a second feed, and Pr is never named.
+    test('hot water keeps a single-junction circulator as the return', () {
+      NetEdge hw(String id, String a, String b) => NetEdge(
+        id: id,
+        fromId: a,
+        toId: b,
+        service: ServiceType.hotWater,
+        kind: EdgeKind.run,
+      );
+      final c = _solve(
+        [
+          _n('H', 0, 0, role: NodeRole.plant),
+          _n('P', 50, 0, role: NodeRole.plant, c: NodeComponent.pump),
+          _n('J', 100, 0),
+          _fix('L', 150, 0, 0),
+          _n('Pr', 50, 50, role: NodeRole.plant, c: NodeComponent.pump),
+        ],
+        [
+          hw('h', 'H', 'P'),
+          hw('p', 'P', 'J'),
+          hw('l', 'J', 'L'),
+          hw('r1', 'J', 'Pr'),
+          hw('r2', 'Pr', 'H'),
+        ],
+        floors: 2,
+      );
+      final s = c.read(sizingProvider);
+      expect(s['r1']!.flowFromId, 'J');
+      expect(s['r2']!.flowFromId, 'Pr');
+      expect(s['p']!.flowFromId, 'P');
+      // The pre-r69 reading: the circulator leg on the r8 balance-against-
+      // pump envelope, named on the pump.
+      expect(c.read(moverAgainstBalanceProvider), {'Pr'});
+      expect(c.read(disagreeingSetMoversProvider), isEmpty);
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.kind.startsWith('parallel-pump-drawn-backwards')),
+        isEmpty,
+      );
+    });
+
+    test('the backwards duplex standby is a disagreeing set member', () {
+      final c = _solveTower(_tower(duplex: true, backwards: true));
+      expect(c.read(disagreeingSetMoversProvider), {'BP', 'BQ'});
+    });
   });
 
   group('finding 4: the tank-fed zone opens at the highest served floor', () {

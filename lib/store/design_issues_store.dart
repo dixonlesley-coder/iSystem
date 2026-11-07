@@ -787,11 +787,15 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   }
   // Round 69 — a duty / standby DOMESTIC-water pump drawn coherently
   // against its own parallel set: the sizer orients the set away from the
-  // source, and the drawing error is named on the pump.
+  // source, and the drawing error is named on the pump. Round 69 r2 — ONLY
+  // members of a disagreeing set: a lone pump drawn backwards on a tree
+  // (drawing direction is not geometry, Round 15) is not named.
+  final disagreeing = ref.watch(disagreeingSetMoversProvider);
   for (final id in moversDrawnBackwards(
       net,
       ref.watch(sizingProvider),
       (s) => s == ServiceType.coldWater || s == ServiceType.hotWater)) {
+    if (!disagreeing.contains(id)) continue;
     final n = net.nodeById(id);
     if (n == null) continue;
     infos.add(DesignIssue(
