@@ -105,21 +105,21 @@ void _expectSame(Map<String, EdgeSizing> r, Map<String, EdgeSizing> base,
 }
 
 // ── 1 ─────────────────────────────────────────────────────────────────────
-Network _upperRoom(NodeComponent tank) => _net([
+Network _upperRoom(NodeComponent tank, {int tankFloor = 4}) => _net([
       _n('GT', 0, r: _plant, c: NodeComponent.groundTank),
       _n('P1', 100, r: _plant, c: NodeComponent.pump),
       for (var f = 1; f <= 8; f++) ...[
         _n('X$f', 200, f: f),
         _n('B$f', 300, f: f, r: NodeRole.fixture, c: NodeComponent.hydrantBox),
       ],
-      _n('T', 0, f: 4, y: 50, r: _plant, c: tank),
+      _n('T', 0, f: tankFloor, y: 50, r: _plant, c: tank),
       _n('P2', 100, f: 4, y: 50, r: _plant, c: NodeComponent.pump),
     ], [
       ('s1', 'GT', 'P1', _run, _hy),
       ('d1', 'P1', 'X1', _riser, _hy),
       for (var f = 2; f <= 4; f++) ('r$f', 'X${f - 1}', 'X$f', _riser, _hy),
       ('t', 'X4', 'X5', _riser, _hy),
-      ('s2', 'T', 'P2', _run, _hy),
+      ('s2', 'T', 'P2', tankFloor == 4 ? _run : _riser, _hy),
       ('d2', 'P2', 'X5', _riser, _hy),
       for (var f = 6; f <= 8; f++) ('r$f', 'X${f - 1}', 'X$f', _riser, _hy),
       for (var f = 1; f <= 8; f++) ('b$f', 'X$f', 'B$f', _run, _hy),
@@ -224,6 +224,30 @@ void main() {
     test('the tank type never moves a size, flow or arrow', () {
       _expectSame(roof, ground, ground.keys, 'roof vs ground');
     });
+    // Round 68 (regression-4) — the suction tank drawn on the slab ABOVE
+    // the pump room (s2 a riser up to it): the roof-TYPED tank is reached
+    // through P2's own leg (no junction), so it is the suction tank, read
+    // exactly as a ground tank on any floor and as the same-floor drawing.
+    for (final tf in [5, 6]) {
+      test('the tank on L$tf (above the L4 pump) is still the suction', () {
+        final net = _upperRoom(NodeComponent.roofTank, tankFloor: tf);
+        final up = _size(net, 9);
+        final gUp = _size(
+            _upperRoom(NodeComponent.groundTank, tankFloor: tf), 9);
+        _expectPipe(up, 's2', mm: 125, lps: _q, from: 'T');
+        _expectPipe(up, 'd2', mm: 125, lps: _q, from: 'P2');
+        expect(firePumpsDrawnBackwards(net, up), isEmpty);
+        _expectSame(up, gUp, gUp.keys, 'roof L$tf vs ground L$tf');
+        for (final id in ground.keys) {
+          if (id == 's2') continue; // a riser here, a run on L4
+          expect(up[id]?.diameter.inMillimeters,
+              ground[id]?.diameter.inMillimeters,
+              reason: 'L$tf vs L4 $id DN');
+          expect(up[id]?.flowFromId, ground[id]?.flowFromId,
+              reason: 'L$tf vs L4 $id from');
+        }
+      });
+    }
   });
 
   group('2 — a series room via a break tank', () {

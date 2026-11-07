@@ -236,13 +236,16 @@ void main() {
       expect(b.note, contains('5 x 250 kW'));
     });
 
-    test('one-line: 1500 kVA × 0.8 = 1200 kW battery ⇒ "5 x 250 kW"', () {
+    // Re-derived Round 68 (elec-convergence-20) — the battery ENERGY stays
+    // on 1500 kVA × 0.8 = 1200 kW, but the inverter delivers the APPARENT
+    // power: max(1200 kW, 1500 kVA) = 1500 kVA ⇒ ceil(1500/250) = 6 × 250.
+    test('one-line: 1500 kVA demand ⇒ the inverter "6 x 250 kW"', () {
       final ol = buildPowerOneLine(
         const ElectricalSources(battery: BatterySource(autonomyHours: 0.25)),
         demand: ApparentPower.kilovoltAmperes(1500),
       );
       final inv = ol.nodes.firstWhere((n) => n.id == 'battinv');
-      expect(inv.sub, '5 x 250 kW');
+      expect(inv.sub, '6 x 250 kW');
     });
 
     test('within the ladder: one unit, label unchanged', () {
