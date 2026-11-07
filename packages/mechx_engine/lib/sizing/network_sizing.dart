@@ -4467,17 +4467,27 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         final seen = <String>{mover.id};
         while (true) {
           if (!inMixed(edge) || !allFlows.containsKey(edge.id)) break;
-          final ha = fireHops[edge.fromId], hb = fireHops[edge.toId];
-          if (ha != null && hb != null && ha != hb) {
-            final from = ha < hb ? edge.fromId : edge.toId;
-            if (edgeFlowFrom[edge.id] != from) {
-              edgeFlowFrom[edge.id] = from;
-              if (!freshFireEdgeIds.contains(edge.id)) {
-                reorientedFireEdgeIds.add(edge.id);
-              }
+          final next = edge.fromId == here ? edge.toId : edge.fromId;
+          // Round 66 r2 (regression-transfer-stage-discharge-reversed) —
+          // CONSERVATIVE gate: a leg pipe is turned only when its current
+          // arrow points back INTO the pump from the end with MORE source
+          // hops (a discharge leg drawn backwards through a standby). Never
+          // re-derive every leg pipe from the hops: `fireSourceHops` seeds
+          // every non-mover plant, so a transfer / series stage's
+          // DESTINATION tank sits at hop 0 and the hops fall along its
+          // discharge — re-orienting by "lower hop first" reversed the
+          // discharge main into the pump and dropped it below the NFPA 20
+          // floor.
+          final hHere = fireHops[here], hNext = fireHops[next];
+          if (hHere != null &&
+              hNext != null &&
+              hNext > hHere &&
+              edgeFlowFrom[edge.id] == next) {
+            edgeFlowFrom[edge.id] = here;
+            if (!freshFireEdgeIds.contains(edge.id)) {
+              reorientedFireEdgeIds.add(edge.id);
             }
           }
-          final next = edge.fromId == here ? edge.toId : edge.fromId;
           final nn = net.nodeById(next);
           final onward = [
             for (final x in fireAdj[next] ?? const <NetEdge>[])

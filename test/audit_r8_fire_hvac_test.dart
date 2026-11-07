@@ -151,6 +151,63 @@ void main() {
         isTrue);
   });
 
+  test(
+      'Round 66 r2: a pump-less sprinkler-only system with a hydrant-LABELLED '
+      'pipe (no hose outlet) is judged against the project fire pump', () {
+    const weak = PumpDuty(
+      flow: FlowRate(0.05),
+      head: Head(10),
+      hydraulicPower: Power(4900),
+      shaftPower: Power(7000),
+      motorInputPower: Power(7800),
+      selectedMotor: Power(7500),
+    );
+    final c = ProviderContainer(
+        overrides: [firePumpDutyProvider.overrideWith((ref) => weak)]);
+    addTearDown(c.dispose);
+    c.read(networkControllerProvider.notifier).loadNetwork(const Network(
+          nodes: [
+            NetNode(
+                id: 'src',
+                sheetId: 's1',
+                x: 0,
+                y: 0,
+                floorIndex: 0,
+                role: NodeRole.plant),
+            NetNode(id: 'j', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+            NetNode(
+                id: 'sh',
+                sheetId: 's1',
+                x: 200,
+                y: 0,
+                floorIndex: 0,
+                role: NodeRole.fixture,
+                component: NodeComponent.sprinklerHead),
+          ],
+          edges: [
+            // The pump-room pipe drawn on the HYDRANT service: no hose
+            // outlet anywhere, so the system is sprinkler-only.
+            NetEdge(
+                id: 'h',
+                fromId: 'src',
+                toId: 'j',
+                service: ServiceType.fireHydrant),
+            NetEdge(
+                id: 's',
+                fromId: 'j',
+                toId: 'sh',
+                service: ServiceType.fireSprinkler),
+          ],
+        ));
+    final chk = c.read(sprinklerPumpCheckProvider);
+    // The governing (project) fire pump is the one judged — before r2 the
+    // hydrant LABEL routed the check onto the pump-less system's own basis
+    // duty (6 L/s here) instead of the project fire pump.
+    expect(chk, isNotNull);
+    expect(chk!.pumpLps, closeTo(50, 1e-9));
+    expect(chk.headShort, isTrue);
+  });
+
   test('fire-hvac-3: no sprinkler drawn ⇒ no check at all', () {
     final c = ProviderContainer();
     addTearDown(c.dispose);

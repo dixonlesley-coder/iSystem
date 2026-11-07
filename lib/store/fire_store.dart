@@ -1376,7 +1376,10 @@ final sprinklerPumpCheckProvider = Provider<
     if (b.dry) continue;
     // Round 52 — a transfer system fills a tank; it serves no head.
     if (b.transfer) continue;
-    final own = b.pumpIds.isNotEmpty || b.system.hasHydrant;
+    // Round 66 r2 — the ONE standpipe predicate: a pump-less system whose
+    // pipes are hydrant-LABELLED but carry no hose outlet is a sprinkler-
+    // only system, judged against the project fire pump (Round 29).
+    final own = b.pumpIds.isNotEmpty || b.system.standpipeTermApplies(net);
     final pump = own ? b.duty : ref.watch(firePumpDutyProvider);
     final lift =
         b.system.staticLiftM(net, building, FireTerminalKind.sprinkler);
