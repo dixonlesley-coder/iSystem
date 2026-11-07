@@ -56,8 +56,8 @@ NetEdge _e(String id, String a, String b, Map<String, ServiceType> svc,
         {EdgeKind k = EdgeKind.run}) =>
     NetEdge(id: id, fromId: a, toId: b, service: svc[id] ?? _hy, kind: k);
 
-void _zone(List<NetNode> nodes, List<NetEdge> edges,
-    Map<String, ServiceType> svc) {
+void _zone(
+    List<NetNode> nodes, List<NetEdge> edges, Map<String, ServiceType> svc) {
   for (var f = 5; f <= 8; f++) {
     nodes
       ..add(_n('X$f', 500, floor: f))
@@ -147,8 +147,7 @@ void main() {
       expect(base['tr']!.flowFromId, 'T0');
     });
 
-    test('only s on the sprinkler service == all-hydrant (the regression)',
-        () {
+    test('only s on the sprinkler service == all-hydrant (the regression)', () {
       final r = _size(_transfer(const {'s': _sp}));
       expect(r['t']!.flowFromId, 'DS');
       expect(r['tr']!.flowFromId, 'T0');
@@ -157,10 +156,14 @@ void main() {
       _expectSame(r, base, 's sprinkler');
     });
 
-    // Recorded residual (pre-existing on 0e4a3fc, unchanged here): drawing
-    // g, d, t or tr ALONE on the sprinkler service still moves an arrow
-    // (and a DN125 -> DN100) — the fragment it ends roots at the hop-0
-    // tank. Only the drawing the Round-66 loop regressed is pinned.
+    // Round 66 r3 — with the destination tank no longer a hop seed, every
+    // pump-room pipe alone on the sprinkler service reads as all-hydrant
+    // (the Round-66 r2 recorded residual is closed).
+    test('any one pump-room pipe on the sprinkler service == all-hydrant', () {
+      for (final id in ['g', 's', 'd', 't', 'tr', 'o']) {
+        _expectSame(_size(_transfer({id: _sp})), base, '$id sprinkler');
+      }
+    });
   });
 
   group('series room (GT -> P1 -> break tank -> P2 -> upper zone)', () {
@@ -174,11 +177,10 @@ void main() {
       expect(base['s2']!.flowFromId, 'BT');
     });
 
-    // Recorded residual (pre-existing on 0e4a3fc): g, s, t or tr alone on
-    // the sprinkler service still moves an arrow / the lower discharge
-    // bore; the lower discharge leg and both upper-stage legs are pinned.
+    // Round 66 r3 — every pump-room pipe, the suction main and the lower
+    // discharge included (an r2 recorded residual, now closed).
     test('a pump-room pipe on the sprinkler service == all-hydrant', () {
-      for (final id in ['d', 's2', 'd2']) {
+      for (final id in ['g', 's', 'd', 't', 'tr', 's2', 'd2']) {
         _expectSame(_size(_series({id: _sp})), base, '$id sprinkler');
       }
     });

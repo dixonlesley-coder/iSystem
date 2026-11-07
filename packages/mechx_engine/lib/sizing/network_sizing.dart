@@ -1321,6 +1321,20 @@ Map<String, int> fireSourceHops(Network net) {
   }
   final out = <String, int>{};
   final queue = <String>[];
+  bool isMover(NetNode n) =>
+      n.role == NodeRole.plant &&
+      (n.component == NodeComponent.pump ||
+          n.component == NodeComponent.boosterSet);
+  // Round 66 r3 (regression-transfer-suction-reversed-by-destination-seed)
+  // — a storage tank the water reaches only by being PUMPED UP to it (a
+  // transfer pump's destination roof tank, a series stage's break tank) is
+  // never a hop seed: it sits above its component's lowest mover and no
+  // seed at / below that mover reaches it without passing a mover. Seeding
+  // it put the destination at hop 0, so the hops fell along the discharge
+  // AND (with a suction longer than the discharge) rose along the suction
+  // toward the pump — the mover-leg pass then reversed a correct suction
+  // and dropped the suction main below the NFPA 20 floor.
+  final excluded = _pumpedUpTanks(net, adj, isMover);
   // The storage / source plants first; a pump or booster set is a machine
   // the water passes THROUGH, a source only when nothing else is drawn.
   for (final movers in [false, true]) {
@@ -1328,9 +1342,8 @@ Map<String, int> fireSourceHops(Network net) {
       final n = net.nodeById(id);
       if (n == null || n.role != NodeRole.plant) continue;
       if (isSupplyInletComponent(n.component)) continue;
-      final mover = n.component == NodeComponent.pump ||
-          n.component == NodeComponent.boosterSet;
-      if (mover != movers) continue;
+      if (isMover(n) != movers) continue;
+      if (!movers && excluded.contains(id)) continue;
       out[id] = 0;
       queue.add(id);
     }
@@ -1345,6 +1358,76 @@ Map<String, int> fireSourceHops(Network net) {
     }
   }
   return out;
+}
+
+/// Round 66 r3 — the fire source plants (non-mover, non-inlet) of [adj]
+/// (the fire network's adjacency) that are filled only THROUGH a mover: a
+/// plant strictly above (floor, then explicit elevation) its connected
+/// component's lowest pump / booster set that is not joined, without passing
+/// a mover, to any source plant at / below that mover. A component without
+/// such a low source keeps every plant (nothing to tell the direction by).
+Set<String> _pumpedUpTanks(Network net, Map<String, List<String>> adj,
+    bool Function(NetNode n) isMover) {
+  (int, double) level(NetNode n) => (n.floorIndex, n.elevation?.meters ?? 0);
+  bool above((int, double) a, (int, double) b) =>
+      a.$1 > b.$1 || (a.$1 == b.$1 && a.$2 > b.$2 + 1e-9);
+  // Components over every fire edge, and mover-free parts.
+  final comp = <String, int>{}, part = <String, int>{};
+  void flood(Map<String, int> into, String start, int label,
+      {required bool stopAtMovers}) {
+    final stack = [start];
+    into[start] = label;
+    while (stack.isNotEmpty) {
+      final cur = stack.removeLast();
+      for (final o in adj[cur] ?? const <String>[]) {
+        if (into.containsKey(o)) continue;
+        final on = net.nodeById(o);
+        if (stopAtMovers && on != null && isMover(on)) continue;
+        into[o] = label;
+        stack.add(o);
+      }
+    }
+  }
+
+  final ids = adj.keys.toList()..sort();
+  var k = 0;
+  for (final id in ids) {
+    if (!comp.containsKey(id)) flood(comp, id, k++, stopAtMovers: false);
+  }
+  for (final id in ids) {
+    final n = net.nodeById(id);
+    if (n != null && isMover(n)) continue;
+    if (!part.containsKey(id)) flood(part, id, k++, stopAtMovers: true);
+  }
+  final lowestMover = <int, (int, double)>{};
+  final sources = <NetNode>[];
+  for (final id in ids) {
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    if (isMover(n)) {
+      final c = comp[id]!, l = level(n);
+      final cur = lowestMover[c];
+      if (cur == null || above(cur, l)) lowestMover[c] = l;
+    } else if (n.role == NodeRole.plant &&
+        !isSupplyInletComponent(n.component)) {
+      sources.add(n);
+    }
+  }
+  final lowParts = <int>{};
+  final lowComps = <int>{};
+  for (final n in sources) {
+    final m = lowestMover[comp[n.id]!];
+    if (m == null || above(level(n), m)) continue;
+    lowParts.add(part[n.id]!);
+    lowComps.add(comp[n.id]!);
+  }
+  return {
+    for (final n in sources)
+      if (lowComps.contains(comp[n.id]!) &&
+          above(level(n), lowestMover[comp[n.id]!]!) &&
+          !lowParts.contains(part[n.id]!))
+        n.id,
+  };
 }
 
 /// Round 30 (r2) — for each riser TOP of [service], the number of storeys
@@ -4468,22 +4551,20 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         while (true) {
           if (!inMixed(edge) || !allFlows.containsKey(edge.id)) break;
           final next = edge.fromId == here ? edge.toId : edge.fromId;
-          // Round 66 r2 (regression-transfer-stage-discharge-reversed) —
-          // CONSERVATIVE gate: a leg pipe is turned only when its current
-          // arrow points back INTO the pump from the end with MORE source
-          // hops (a discharge leg drawn backwards through a standby). Never
-          // re-derive every leg pipe from the hops: `fireSourceHops` seeds
-          // every non-mover plant, so a transfer / series stage's
-          // DESTINATION tank sits at hop 0 and the hops fall along its
-          // discharge — re-orienting by "lower hop first" reversed the
-          // discharge main into the pump and dropped it below the NFPA 20
-          // floor.
+          // Round 66 r3 — every leg pipe flows from its lower-hop end. The
+          // r2 conservative gate (turn only an arrow INTO the pump from the
+          // higher-hop end) is gone: it existed because `fireSourceHops`
+          // seeded a transfer / series stage's DESTINATION tank at hop 0,
+          // and it still reversed a correct suction whenever the pump sat
+          // nearer that tank than the suction tank. A pumped-up tank is no
+          // longer a seed (`_pumpedUpTanks`), so the hops grow from the
+          // source part along suction AND discharge alike.
           final hHere = fireHops[here], hNext = fireHops[next];
-          if (hHere != null &&
-              hNext != null &&
-              hNext > hHere &&
-              edgeFlowFrom[edge.id] == next) {
-            edgeFlowFrom[edge.id] = here;
+          final lower = hHere == null || hNext == null || hHere == hNext
+              ? null
+              : (hHere < hNext ? here : next);
+          if (lower != null && edgeFlowFrom[edge.id] != lower) {
+            edgeFlowFrom[edge.id] = lower;
             if (!freshFireEdgeIds.contains(edge.id)) {
               reorientedFireEdgeIds.add(edge.id);
             }
@@ -4556,8 +4637,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       ...raised,
       for (final e in fireEdges)
         if ((allFlows[e.id]?.cubicMetersPerSecond ?? 0) > 0 &&
-            (ownersOf[e.id] ?? const <FireSystem>[])
-                .any(mixedSystems.contains))
+            (ownersOf[e.id] ?? const <FireSystem>[]).any(mixedSystems.contains))
           e.id,
     };
     // Parallel pump legs among the raised pipes: pumps whose degree-2 legs
