@@ -610,6 +610,7 @@ AdvancedStudy computeAdvancedStudy(
         powerFactor: powerFactor,
         containment: containment,
         metering: metering,
+        profile: profile,
       ));
 
   // Round 56 — ADS judged on the standby genset too (judge-only).
@@ -758,18 +759,36 @@ double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
   if (gen == null || !tn || project.supplyKind == SupplyKind.generator) {
     return none;
   }
+  // Round 66 (regression-typed-genset-fraction-skips-genset-ads-judge) — with
+  // NO board designated essential the set can pick up ANY board, so every
+  // board is judged whatever backup fraction was typed (the Round-26 safe
+  // direction [gensetStartMotors] already follows). A typed fraction < 1
+  // with nothing designated judged nothing and the ERROR silently vanished.
   var backed = gensetBackedPanelIds(project);
-  if (backed.isEmpty && effectiveGeneratorBackupFraction(project) >= 1 - 1e-9) {
-    backed = {for (final p in project.panels) p.id};
-  }
+  final undesignated = backed.isEmpty;
+  if (undesignated) backed = {for (final p in project.panels) p.id};
   if (backed.isEmpty) return none;
   final va = gensetPlantVa(project, sys);
   if (va == null) return none;
+  final infos = <ElectricalWarning>[
+    if (undesignated &&
+        gen.backupFractionTyped != null &&
+        gen.backupFractionTyped! < 1 - 1e-9)
+      ElectricalWarning(
+        code: 'genset-backed-boards-undesignated',
+        severity: WarningSeverity.info,
+        message: 'The genset backs '
+            '${(gen.backupFractionTyped! * 100).toStringAsFixed(0)} % of '
+            'demand but no board is marked essential, so every board is '
+            'judged on the genset fault (the set can pick up any of them): '
+            'mark the boards the set backs as essential.',
+      ),
+  ];
   final iscA = onSiteSourceFaultA(SupplyKind.generator, va);
   final g = faultStudy(sys, project, profile, originFaultLevel: Current(iscA));
   final kva = (va / 1000).toStringAsFixed(0);
   final failed = <String>{};
-  final warnings = <ElectricalWarning>[];
+  final warnings = <ElectricalWarning>[...infos];
   for (final pid in sys.order) {
     if (!backed.contains(pid)) continue;
     final pr = sys.panels[pid];
@@ -1011,6 +1030,25 @@ double _motorKw(ElectricalCircuit c) {
   return m;
 }
 
+/// Round 66 (elec-convergence-18-single-phase-root-transformer-sized-on-va-
+/// not-line-current) — the per-phase basis VA of ONE service-entrance board
+/// on the 3-phase service ([worstPhaseDemandVa], rounded current, largest
+/// machine floored): a 3-phase board on its own system; a 1-phase board,
+/// whose whole current I sits on one line, at sqrt3 x 400 x I
+/// ([kThreePhaseServiceLineVoltageV]) — the apparent power a 3-phase unit
+/// must be rated for to carry I on that line. The ONE per-root figure the
+/// supply study, its section loads and [serviceSectionOfRoot] read. Pure.
+double rootServiceBasisVa(
+    ElectricalProject project, ElectricalSystemResult sys, String id) {
+  final m = project.panels.where((p) => p.id == id).firstOrNull;
+  final single = m?.system == ElectricalSystem.singlePhase;
+  return worstPhaseDemandVa(project, sys, [id],
+      roundCurrent: true,
+      withLargestMachine: true,
+      asSystem: single ? ElectricalSystem.threePhase : null,
+      asVolts: single ? kThreePhaseServiceLineVoltageV : null);
+}
+
 /// Round 52 (elec-convergence-4-undeclared-study-transformer-fault-not-the-
 /// printed-transformer) — the supply study of [sys]: [determineSupply] on the
 /// building demand, the largest dual-service SECTION (Round 40), the per-phase
@@ -1031,13 +1069,17 @@ double _motorKw(ElectricalCircuit c) {
   originPanelIds ??= originPanelIdsOf(sys, project);
   final worstPhaseVa = worstPhaseDemandVa(project, sys, originPanelIds,
       roundCurrent: true, withLargestMachine: true);
-  final perPhaseBasisVa = sys.supply.system == ElectricalSystem.singlePhase
-      ? worstPhaseDemandVa(project, sys, originPanelIds,
-          roundCurrent: true,
-          withLargestMachine: true,
-          asSystem: ElectricalSystem.threePhase,
-          asVolts: kThreePhaseServiceLineVoltageV)
-      : worstPhaseVa;
+  // Round 66 (elec-convergence-18-single-phase-root-transformer-sized-on-va-
+  // not-line-current) — every root is converted PER ROOT ([rootServiceBasisVa]):
+  // a 1-phase service-entrance board puts its whole current on ONE line of
+  // the 3-phase service, so its basis is sqrt3 x 400 x I (3x its own V x I)
+  // whichever root governs. The conversion used to apply only when the
+  // GOVERNING root was 1-phase, so a 1-phase board beside a 3-phase one was
+  // counted at 230 x I and the undeclared transformer under-sized.
+  var perPhaseBasisVa = 0.0;
+  for (final id in originPanelIds) {
+    perPhaseBasisVa += rootServiceBasisVa(project, sys, id);
+  }
   // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
   // service each root board sits on ONE unit (coupler normally open, as the
   // fault study models it), so the most loaded ROOT governs a section: its
@@ -1050,9 +1092,7 @@ double _motorKw(ElectricalCircuit c) {
       final r = sys.panels[id];
       if (r == null) continue;
       final va = math.max(
-          r.demandVaOrEstimate(),
-          worstPhaseDemandVa(project, sys, [id],
-              roundCurrent: true, withLargestMachine: true));
+          r.demandVaOrEstimate(), rootServiceBasisVa(project, sys, id));
       rootSectionVa.add(va);
       if (va > largestSectionVa + 1e-9 ||
           (largestSectionId != null &&
@@ -1115,16 +1155,7 @@ double _motorKw(ElectricalCircuit c) {
       final mult = panelById[id]?.headroom?.demandMultiplier ?? 1.0;
       if (mult > 1.0 + 1e-12) uplifted = true;
       final va = math.max(
-          r.demandVaOrEstimate(),
-          worstPhaseDemandVa(project, sys, [id],
-              roundCurrent: true,
-              withLargestMachine: true,
-              asSystem: sys.supply.system == ElectricalSystem.singlePhase
-                  ? ElectricalSystem.threePhase
-                  : null,
-              asVolts: sys.supply.system == ElectricalSystem.singlePhase
-                  ? kThreePhaseServiceLineVoltageV
-                  : null));
+          r.demandVaOrEstimate(), rootServiceBasisVa(project, sys, id));
       futureBasisVa += va * mult;
       futureRootVa.add(va * mult);
     }
@@ -1206,10 +1237,8 @@ Map<String, int> serviceSectionOfRoot(
   ];
   final loads = [
     for (final id in ids)
-      math.max(
-          sys.panels[id]!.demandVaOrEstimate(),
-          worstPhaseDemandVa(project, sys, [id],
-              roundCurrent: true, withLargestMachine: true)),
+      math.max(sys.panels[id]!.demandVaOrEstimate(),
+          rootServiceBasisVa(project, sys, id)),
   ];
   final bins = sectionAssignment(loads, n);
   final relabel = <int, int>{};

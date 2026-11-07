@@ -13,12 +13,16 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import '../standards/puil.dart'
+    show ElectricalStandardsProfile, PuilProfile;
 import '../units.dart' show Power;
-import 'advanced_study.dart' show serviceTransformer;
+import 'advanced_study.dart'
+    show originPanelIdsOf, serviceSectionOfRoot, serviceTransformer;
 import 'bom.dart';
 import 'catalog.dart' show PartCategory;
 import 'containment.dart' show ContainmentResult, ContainmentRoute;
 import 'control/starter.dart' show ControlAssembly, DeviceCategory;
+import 'earthing.dart' show EarthingSystem, tnMainEarthingConductor;
 import 'electrode.dart' show ElectrodeDesign;
 import 'genset_backup.dart' show gensetBackupDemandVa, gensetBackupDemandW;
 import 'load_kind.dart' show LoadKind;
@@ -28,6 +32,7 @@ import 'panel_results.dart' show ElectricalSystemResult;
 import 'power_factor.dart' show PowerFactorResult, capacitorBanksToProcure;
 import 'power_oneline.dart'
     show distributedSourceInverters, sizeDistributedSources;
+import 'sizing.dart' show sizeCable;
 import 'sources.dart'
     show BatteryChemistryInfo, GeneratorTransfer, sizeGenerator;
 import 'spd.dart' show SpdRecommendation, SpdTypeLabel;
@@ -54,6 +59,7 @@ List<BomLine> advancedBomLines({
   PowerFactorResult? powerFactor,
   Map<String, ContainmentResult> containment = const {},
   Map<String, MeteringSpec> metering = const {},
+  ElectricalStandardsProfile profile = const PuilProfile(),
 }) {
   final lines = <BomLine>[];
   final circuitName = <String, String>{
@@ -255,6 +261,72 @@ List<BomLine> advancedBomLines({
       category: PartCategory.accessory,
       priceKey: '${kElecPriceKeyPrefix}earthing:bc:$csa',
     ));
+  }
+
+  // ── Round 66 (elec-convergence-18-sectioned-service-one-main-earthing-set)
+  // On a SECTIONED service (N transformers, couplers normally open — the
+  // fault study's topology) each unit's star point is earthed by its own
+  // system-earthing conductor, sized on its OWN section's service: the
+  // section's largest root incomer, its service cable's PE (Table 54.7 /
+  // 543.1) summed over the parallel runs, as [tnMainEarthingConductor] makes
+  // it up for the main earthing conductor. The MET -> electrode conductor
+  // and the main bonding conductor stay single (one MET per installation,
+  // IEC 60364-5-54). One section ⇒ nothing added (byte-identical).
+  final sectionOf = serviceSectionOfRoot(project, sys);
+  if (sectionOf.isNotEmpty) {
+    final origin = originPanelIdsOf(sys, project);
+    // The section's governing root: the largest incomer, then lowest id.
+    final bySection = <int, String>{};
+    for (final id in sys.order) {
+      final sec = sectionOf[id];
+      final r = sys.panels[id];
+      if (sec == null || r == null || !origin.contains(id)) continue;
+      final cur = bySection[sec];
+      final a = r.incomer.breaker.ratingA.amperes;
+      final b = cur == null ? -1.0 : sys.panels[cur]!.incomer.breaker.ratingA
+          .amperes;
+      if (cur == null || a > b + 1e-9 ||
+          ((a - b).abs() <= 1e-9 && id.compareTo(cur) < 0)) {
+        bySection[sec] = id;
+      }
+    }
+    final tn = sys.earthing.system == EarthingSystem.tnS ||
+        sys.earthing.system == EarthingSystem.tnCs;
+    final secs = bySection.keys.toList()..sort();
+    for (final sec in secs) {
+      final id = bySection[sec]!;
+      final inA = sys.panels[id]!.incomer.breaker.ratingA;
+      double per;
+      int count;
+      if (tn) {
+        final cable = sizeCable(profile,
+            designCurrent: inA,
+            breakerRating: inA,
+            deratingFactor: 1,
+            minSectionMm2: 4);
+        final m = tnMainEarthingConductor(
+            profile, profile.peConductorSizeMm2(cable.csaMm2),
+            runsPerPhase: cable.runsPerPhase ?? 1);
+        per = m.perConductorMm2;
+        count = m.count;
+      } else {
+        per = sys.earthing.mainEarthingPerConductorMm2;
+        count = sys.earthing.mainEarthingConductorCount;
+      }
+      if (per <= 0) continue;
+      final csa = _fmt(per);
+      final board = panelName[id] ?? id;
+      lines.add(BomLine(
+        description: 'Transformer neutral (star-point) earthing conductor '
+            'BC 1x$csa mm² — TX-${sec + 1} section ($board) '
+            '${count > 1 ? '($count in parallel, lot each, run length per '
+                'site)' : '(lot, run length per site)'}',
+        location: board,
+        qty: count.toDouble(),
+        category: PartCategory.accessory,
+        priceKey: '${kElecPriceKeyPrefix}earthing:bc:$csa',
+      ));
+    }
   }
 
   // ── Round 41 (elec-report-bom-2-containment-metering-never-taken-off) ────
