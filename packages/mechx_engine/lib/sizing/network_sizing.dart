@@ -897,6 +897,7 @@ String _pickComponentRoot({
   Map<String, int> fireSourceHops = const {},
   Set<String> fireJoinIds = const {},
   Map<String, Set<String>> fireDischargeOnlyIds = const {},
+  Set<String> fireSuctionTankIds = const {},
   Set<String> coldMakeupIds = const {},
 }) {
   Iterable<String> neighbours(String id) =>
@@ -936,7 +937,9 @@ String _pickComponentRoot({
   // supply ladder; never the node id.
   int plantRank(String id) {
     if (service.regime == FlowRegime.gravity) return degree(id) <= 1 ? 0 : 1;
-    return _supplyPlantRank(nodeOf(id)?.component, degree(id));
+    return _supplyPlantRank(
+        _fireRankComponent(nodeOf(id)?.component, id, fireSuctionTankIds),
+        degree(id));
   }
 
   // Round 12 (mech-props-2 gravity-pump-root) — on a GRAVITY service only a
@@ -1351,6 +1354,8 @@ Set<String> fireServiceJoinNodes(Network net) {
   Set<String> destinations,
   Map<String, Set<String>> dischargeOnly,
   Map<String, Map<String, bool>> suctionStart,
+  Set<String> suctionTanks,
+  Map<String, Set<String>> breakTanks,
 }) fireHopSources(
   Network net, {
   double Function(NetNode n)? elevationOf,
@@ -1414,6 +1419,18 @@ Set<String> fireServiceJoinNodes(Network net) {
         (adj[nodeId]?.length ?? 0) == 1;
   }
 
+  bool isInletPlant(String nodeId) {
+    final n = net.nodeById(nodeId);
+    return n != null &&
+        n.role == NodeRole.plant &&
+        isSupplyInletComponent(n.component);
+  }
+
+  bool isTankPlant(String nodeId) {
+    final c = net.nodeById(nodeId)?.component;
+    return c == NodeComponent.groundTank || c == NodeComponent.roofTank;
+  }
+
   final settled = <String>{};
   var waitForPumped = true;
   while (settled.length < moverIds.length) {
@@ -1430,6 +1447,14 @@ Set<String> fireServiceJoinNodes(Network net) {
       final pumped = <String>{}, undecided = <String>{}, entries = <String>{};
       for (final MapEntry(key: edgeId, value: reached) in sides.entries) {
         if (interior[edgeId]!.any(isEntry)) entries.add(edgeId);
+        // Round 67 (regression-4-fdc-fed-pump-discharge-zero) — a side whose
+        // walk reaches a supply INLET (an FDC / brigade inlet) and no
+        // storage tank is an ENTRY side like a mains leaf: a roof standby on
+        // the other side (rank 2) never makes the pump's discharge its
+        // suction.
+        if (reached.any(isInletPlant) && !reached.any(isTankPlant)) {
+          entries.add(edgeId);
+        }
         for (final other in reached) {
           if (!sidesOf.containsKey(other)) continue;
           final legs = suctionStart[other];
@@ -1455,6 +1480,7 @@ Set<String> fireServiceJoinNodes(Network net) {
       }
       final (start, postpone) = _moverSuctionStart(
           net, sides, sources, pumpedInto[id] ?? const <String>{}, elev,
+          moverFloor: net.nodeById(id)!.floorIndex,
           interior: interior,
           pumpedSides: pumped,
           entrySides: entries,
@@ -1487,10 +1513,29 @@ Set<String> fireServiceJoinNodes(Network net) {
       if (onDischarge.contains(id) && !onSuction.contains(id))
         id: dischargeReach[id] ?? const <String>{},
   };
+  // Round 67 (regression-2-break-tank-fill-service-dependent) — a BREAK
+  // tank: a storage tank one decided mover's DISCHARGE fills and another
+  // mover draws from (GT -> P1 -> riser -> X4 -> T2 -> P2 -> upper riser).
+  // The water reaches it only by being pumped up to it, so it is never a
+  // hop seed while another source seeds (its hops grew down the lower riser
+  // top and reversed it), and — like a discharge-only tank — never roots a
+  // fragment holding the lower room's discharge pipe (a fill drawn on the
+  // other fire service rooted there and ran the fill backwards at a leaf
+  // demand). It still roots the upper room's own suction fragment.
+  final breakTanks = <String, Set<String>>{
+    for (final id in sources)
+      if (onDischarge.contains(id) &&
+          onSuction.contains(id) &&
+          isTankPlant(id))
+        id: dischargeReach[id] ?? const <String>{},
+  };
   final seeds = <String>[
     for (final id in (sources.toList()..sort()))
       if (!destinations.contains(id) && !dischargeOnly.containsKey(id)) id,
   ];
+  if (seeds.any((id) => !breakTanks.containsKey(id))) {
+    seeds.removeWhere(breakTanks.containsKey);
+  }
   // A MAINS-fed pump room (no source plant left to seed): the bare entry
   // leaves on the movers' decided suction sides (the city main connection —
   // a non-fixture, component-free node on one fire pipe) seed the hops, so
@@ -1504,14 +1549,30 @@ Set<String> fireServiceJoinNodes(Network net) {
       for (final id in inner[start] ?? const <String>{}) {
         if (isEntry(id)) entries.add(id);
       }
+      // Round 67 — a brigade inlet (FDC) on the decided suction side seeds
+      // the hops when no tank seed remains.
+      for (final id in sidesOf[m]?[start] ?? const <String>{}) {
+        if (isInletPlant(id)) entries.add(id);
+      }
     }
     seeds.addAll(entries.toList()..sort());
   }
+  // Round 67 — a ROOF-typed tank a decided mover draws from (on its suction
+  // side, never on any discharge side): the room's own break / suction tank,
+  // a source like a ground tank on the root ladder and the peer mirror.
+  final suctionTanks = <String>{
+    for (final id in onSuction)
+      if (!onDischarge.contains(id) &&
+          net.nodeById(id)?.component == NodeComponent.roofTank)
+        id,
+  };
   return (
     seeds: seeds,
     destinations: destinations,
     dischargeOnly: dischargeOnly,
     suctionStart: suctionStart,
+    suctionTanks: suctionTanks,
+    breakTanks: breakTanks,
   );
 }
 
@@ -1569,15 +1630,22 @@ Map<String, Set<String>> _moverSides(
   Set<String> sources,
   Set<String> pumpedInto,
   double Function(NetNode n) elevationOf, {
+  int? moverFloor,
   Map<String, Set<String>> interior = const {},
   Set<String> pumpedSides = const {},
   Set<String> entrySides = const {},
   Set<String> undecidedMoverSides = const {},
 }) {
   if (sides.length < 2) return (null, false);
+  // Round 67 — a roof-TYPED tank drawn on the mover's own floor (or below)
+  // is that room's break / suction tank, ranked like a ground tank: its
+  // `nodeElevation` is always the roof whatever floor it is drawn on, so the
+  // DRAWN floor decides. Only a roof tank on a higher floor is a gravity
+  // standby (rank 2).
   int kindRank(NetNode n) => switch (n.component) {
         NodeComponent.groundTank => 0,
-        NodeComponent.roofTank => 2,
+        NodeComponent.roofTank =>
+          moverFloor != null && n.floorIndex <= moverFloor ? 0 : 2,
         _ => 1,
       };
   int cmp((int, double) a, (int, double) b) {
@@ -1874,6 +1942,15 @@ Set<String>? ejectorPitIdsFor(Network net, ServiceType service) {
   };
 }
 
+/// Round 67 — the component a plant RANKS as on the supply ladder: a roof-
+/// typed tank a fire pump draws from ([fireSuctionTanks],
+/// `fireHopSources.suctionTanks`) is a suction source like a ground tank.
+NodeComponent? _fireRankComponent(
+        NodeComponent? comp, String id, Set<String> fireSuctionTanks) =>
+    comp == NodeComponent.roofTank && fireSuctionTanks.contains(id)
+        ? NodeComponent.groundTank
+        : comp;
+
 int _supplyPlantRank(NodeComponent? comp, int degree) {
   if (comp == NodeComponent.groundTank) return degree == 1 ? 0 : 1;
   if (comp == NodeComponent.roofTank && degree == 1) return 2;
@@ -1945,9 +2022,10 @@ Map<String, String> serviceComponentRoots(
 
   final fireHops =
       isFireService(service) ? fireSourceHops(net) : const <String, int>{};
-  final fireDischargeOnly = isFireService(service)
-      ? fireHopSources(net).dischargeOnly
-      : const <String, Set<String>>{};
+  final fireHopInfo = isFireService(service) ? fireHopSources(net) : null;
+  final fireDischargeOnly = fireHopInfo == null
+      ? const <String, Set<String>>{}
+      : {...fireHopInfo.dischargeOnly, ...fireHopInfo.breakTanks};
   final fireJoins =
       isFireService(service) ? fireServiceJoinNodes(net) : const <String>{};
   final coldMakeup = service == ServiceType.hotWater
@@ -1987,6 +2065,7 @@ Map<String, String> serviceComponentRoots(
       fireSourceHops: fireHops,
       fireJoinIds: fireJoins,
       fireDischargeOnlyIds: fireDischargeOnly,
+      fireSuctionTankIds: fireHopInfo?.suctionTanks ?? const <String>{},
       coldMakeupIds: coldMakeup,
     );
     for (final n in component) {
@@ -2145,11 +2224,34 @@ Map<String, EdgeSizing> autoSizeNetwork(
       for (final leg in st.standby) ...leg.edgeIds,
   };
   final ratedFlowByPump = <String, FlowRate>{};
-  final solveNet = standbyIds.isEmpty
+  // Round 67 (fire-convergence-19-test-line-to-tank-reverses-pump-
+  // discharge) — a fire pump TEST / recirculation line (the pumped header
+  // back to the tank the pumps draw from) is taken OUT of the solve: closed
+  // through the tank it made a cycle the spanning tree reached the header
+  // through, so the pumps' discharge ran backwards through their check
+  // valves and the test line became an unpumped 31.5 L/s gravity feed. It
+  // is added back after the solve at zero fire-event flow, oriented header
+  // -> tank ([fireTestLineChains]).
+  final testLines = net.edges.any((e) => isFireService(e.service))
+      ? fireTestLineChains(net,
+          elevationOf: building == null
+              ? null
+              : (n) => nodeElevation(n, building, mounting).meters)
+      : const <FireTestLine>[];
+  final testLineIds = <String>{
+    for (final t in testLines) ...t.edgeIds,
+  };
+  final fireNet = testLineIds.isEmpty
       ? net
       : Network(nodes: net.nodes, edges: [
           for (final e in net.edges)
-            if (!standbyIds.contains(e.id)) e,
+            if (!testLineIds.contains(e.id)) e,
+        ]);
+  final solveNet = standbyIds.isEmpty && testLineIds.isEmpty
+      ? net
+      : Network(nodes: net.nodes, edges: [
+          for (final e in net.edges)
+            if (!standbyIds.contains(e.id) && !testLineIds.contains(e.id)) e,
         ]);
   final result = _autoSizeNetworkCore(
     solveNet,
@@ -2182,7 +2284,7 @@ Map<String, EdgeSizing> autoSizeNetwork(
   // leg was just sized on its own duty flow: the yard / suction raises below
   // never touch it (nor walk through the jockey to the header above it).
   final jockeyEdgeIds = <String>{
-    for (final id in jockeyLegFlows.keys) ...jockeyLegEdgeIds(net, id),
+    for (final id in jockeyLegFlows.keys) ...jockeyLegEdgeIds(fireNet, id),
   };
   // Round 61 (fire-convergence-13-fire-pump-suction-below-nfpa20) — the fire
   // pump's suction at 150 % flow within 4.57 m/s and both its suction and
@@ -2191,15 +2293,43 @@ Map<String, EdgeSizing> autoSizeNetwork(
   // standpipe) — every fire pipe feeding a yard (pillar) hydrant carries the
   // yard hydrant flow on a DN150 private main; before the suction rule,
   // which keys on the flow.
-  firesuction.raiseYardHydrantMains(net, result, ctx,
+  firesuction.raiseYardHydrantMains(fireNet, result, ctx,
       overridden: sizeOverrides.keys.toSet(),
       excludeEdgeIds: jockeyEdgeIds,
       stopNodeIds: jockeyLegFlows.keys.toSet());
-  firesuction.raiseFirePumpSuctionAndDischarge(net, result,
+  firesuction.raiseFirePumpSuctionAndDischarge(fireNet, result,
       overridden: sizeOverrides.keys.toSet(),
       excludeEdgeIds: jockeyEdgeIds,
       stopNodeIds: jockeyLegFlows.keys.toSet(),
       ratedFlowByPump: ratedFlowByPump);
+  // The test lines carry no fire-event flow: sized at zero flow on the fire
+  // pipe minimum (a hand-picked size stays), flowing header -> tank.
+  for (final t in testLines) {
+    var from = t.joinId;
+    for (final id in t.edgeIds) {
+      final e = net.edgeById(id)!;
+      final r = water.sizeForFlow(
+        flow: const FlowRate(0),
+        maxVelocity: ctx.maxFireVelocity,
+        material: ctx.pipeMaterial,
+        minDiameter: ctx.fireMinimumFor(e),
+      );
+      final sized = EdgeSizing(
+        edgeId: id,
+        service: e.service,
+        flow: const FlowRate(0),
+        diameter: r.diameter,
+        velocity: r.velocity,
+        flowFromId: from,
+      );
+      final override = sizeOverrides[id];
+      result[id] = override == null
+          ? sized
+          : applySizeOverride(sized, override, ctx: ctx, edge: e)
+              .withFlowFrom(from);
+      from = e.fromId == from ? e.toId : e.fromId;
+    }
+  }
   if (!net.edges.any((e) => e.service == ServiceType.drainage)) return result;
 
   // Round 32 (binding-2) — the solids-handling bore floor of every drawn
@@ -2681,7 +2811,13 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           ejectorPitIds: ejectorPitIdsFor(net, service),
           fireSourceHops: fireHops,
           fireJoinIds: fireServiceChangeNodes,
-          fireDischargeOnlyIds: fireHopSeeds.dischargeOnly,
+          fireDischargeOnlyIds: {
+            ...fireHopSeeds.dischargeOnly,
+            ...fireHopSeeds.breakTanks,
+          },
+          fireSuctionTankIds: isFireService(service)
+              ? fireHopSeeds.suctionTanks
+              : const <String>{},
           coldMakeupIds:
               service == ServiceType.hotWater ? coldNodes : const <String>{},
           neighboursOf: (n) => [
@@ -3939,7 +4075,11 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             roleOf(root) == NodeRole.plant &&
             degree(root) == 1) {
           final rootNode = net.nodeById(root);
-          final rootRank = _supplyPlantRank(rootNode?.component, 1);
+          final suctionTanks = isFireService(service)
+              ? fireHopSeeds.suctionTanks
+              : const <String>{};
+          final rootRank = _supplyPlantRank(
+              _fireRankComponent(rootNode?.component, root, suctionTanks), 1);
           final rootEdge = adjacency[root]!.single.edgeId;
           final q = allFlows[rootEdge]?.cubicMetersPerSecond ?? 0.0;
           final units = fixtureUnitsOut?[rootEdge];
@@ -3953,8 +4093,17 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
                 if (n != root &&
                     roleOf(n) == NodeRole.plant &&
                     degree(n) == 1 &&
+                    // Round 67 — a break tank (filled by a lower room's
+                    // discharge) is where pumped water ARRIVES on this
+                    // fragment, never a parallel source of it.
+                    !(isFireService(service) &&
+                        fireHopSeeds.breakTanks.containsKey(n)) &&
                     !explicitDemandKeys.contains(n) &&
-                    _supplyPlantRank(net.nodeById(n)?.component, 1) == rootRank)
+                    _supplyPlantRank(
+                            _fireRankComponent(
+                                net.nodeById(n)?.component, n, suctionTanks),
+                            1) ==
+                        rootRank)
                   n,
           ]..sort();
           for (final s in q > 0 ? peers : const <String>[]) {
@@ -5182,29 +5331,35 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   // it joins, oriented from the tank, on the fire velocity cap, never below
   // the riser-grade fire minimum nor the bore of the pipe it joins (the FDC
   // rule above, for an outlet source). A hand-picked size stays.
+  //
+  // Round 67 (regression-5-roof-standby-feed-zero) — the tree now sizes the
+  // demand-free branch as a ZERO-flow leaf edge before this pass runs, so
+  // "already sized" means sized with flow ([carries]): a zero-flow entry is
+  // overwritten with the chain sizing. The chain and its join read EVERY
+  // fire pipe (a standby drawn on the sprinkler service onto a hydrant riser
+  // top joins it like the same service would — Round 63, the FDC rule).
+  bool carries(String id) =>
+      (result[id]?.flow.cubicMetersPerSecond ?? 0.0) > 1e-12;
   for (final tank in net.nodes) {
     if (tank.component != NodeComponent.roofTank) continue;
     for (final first in net.edgesAt(tank.id)) {
-      if (first.service != ServiceType.fireHydrant &&
-          first.service != ServiceType.fireSprinkler) {
-        continue;
-      }
-      if (result[first.id] != null) continue;
+      if (!isFireService(first.service)) continue;
+      if (carries(first.id)) continue;
       var cur = tank.id;
       var edge = first;
       final seen = <String>{tank.id};
       final chain = <(NetEdge, String)>[];
       String? joinNode;
       while (true) {
-        if (result[edge.id] != null) break;
+        if (carries(edge.id)) break;
         chain.add((edge, cur));
         final next = edge.fromId == cur ? edge.toId : edge.fromId;
         if (!seen.add(next)) break;
         final onward = [
           for (final e in net.edgesAt(next))
-            if (e.id != edge.id && e.service == edge.service) e,
+            if (e.id != edge.id && isFireService(e.service)) e,
         ];
-        if (onward.any((e) => result[e.id] != null)) {
+        if (onward.any((e) => carries(e.id))) {
           joinNode = next;
           break;
         }
@@ -5223,7 +5378,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       var designLps = 0.0;
       var joinMm = 0.0;
       for (final e in net.edgesAt(joinNode)) {
-        if (chainIds.contains(e.id) || e.service != first.service) continue;
+        if (chainIds.contains(e.id) || !isFireService(e.service)) continue;
         final r = result[e.id];
         if (r == null) continue;
         final q = r.flow.inLitersPerSecond;
@@ -5237,7 +5392,6 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       if (designLps <= 0) continue;
       for (final (e, from) in chain) {
         edgeFlowFrom[e.id] = from;
-        if (sizeOverrides.containsKey(e.id)) continue;
         final asRiser = NetEdge(
             id: e.id,
             fromId: e.fromId,
@@ -5252,7 +5406,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           material: ctx.pipeMaterial,
           minDiameter: Diameter.mm(floorMm),
         );
-        result[e.id] = EdgeSizing(
+        final sized = EdgeSizing(
           edgeId: e.id,
           service: e.service,
           flow: FlowRate.litersPerSecond(designLps),
@@ -5260,6 +5414,112 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           velocity: r.velocity,
           overCapacity: r.overVelocity,
         );
+        // A hand-picked size keeps the engineer's bore at the chain flow.
+        final override = sizeOverrides[e.id];
+        result[e.id] = override == null
+            ? sized
+            : applySizeOverride(sized, override, ctx: ctx, edge: e);
+      }
+    }
+  }
+  // Round 67 (regression-2-break-tank-fill-service-dependent) — a BREAK
+  // tank's FILL ([fireHopSources] `breakTanks`: a tank a lower room's
+  // discharge reaches and an upper room's mover draws from) carries what the
+  // tank's own movers draw out of it — the largest flow on its suction legs
+  // (never their sum: a duplex upper room runs one duty pump) — flowing INTO
+  // the tank, never below the largest bore it leaves at the lower riser. It
+  // is sized here on EVERY service assignment: drawn on the other fire
+  // service the fill was its own fragment, sized at a leaf demand or at zero.
+  for (final MapEntry(key: tankId, value: fedFrom)
+      in fireHopSeeds.breakTanks.entries) {
+    final suctionLegs = <NetEdge>[];
+    final fills = <(List<(NetEdge, String)>, String)>[];
+    for (final first in net.edgesAt(tankId)) {
+      if (!isFireService(first.service)) continue;
+      var cur = tankId;
+      var edge = first;
+      final seen = <String>{tankId};
+      final chain = <(NetEdge, String)>[];
+      String? end;
+      var toMover = false;
+      while (true) {
+        chain.add((edge, cur));
+        final next = edge.fromId == cur ? edge.toId : edge.fromId;
+        if (!seen.add(next)) break;
+        final nn = net.nodeById(next);
+        if (nn == null) break;
+        if (_isFireMover(nn)) {
+          toMover = true;
+          break;
+        }
+        final onward = [
+          for (final x in net.edgesAt(next))
+            if (x.id != edge.id && isFireService(x.service)) x,
+        ];
+        if (nn.role == NodeRole.plant || nn.role == NodeRole.fixture) break;
+        if (onward.length != 1) {
+          end = next;
+          break;
+        }
+        cur = next;
+        edge = onward.single;
+      }
+      if (toMover) {
+        suctionLegs.add(first);
+      } else if (end != null && fedFrom.contains(end)) {
+        fills.add((chain, end));
+      }
+    }
+    var q = 0.0;
+    for (final e in suctionLegs) {
+      final f = result[e.id]?.flow.inLitersPerSecond ?? 0;
+      if (f > q) q = f;
+    }
+    if (q <= 0) continue;
+    for (final (chain, joinNode) in fills) {
+      final chainIds = {for (final (e, _) in chain) e.id};
+      var joinMm = 0.0;
+      for (final x in net.edgesAt(joinNode)) {
+        if (chainIds.contains(x.id) || !isFireService(x.service)) continue;
+        final r = result[x.id];
+        if (r == null || r.flow.cubicMetersPerSecond <= 1e-12) continue;
+        if (r.diameter.inMillimeters > joinMm) {
+          joinMm = r.diameter.inMillimeters;
+        }
+      }
+      // Walk from the join toward the tank: each pipe flows from its node
+      // nearer the join.
+      final ordered = chain.reversed.toList();
+      var from = joinNode;
+      for (final (e, _) in ordered) {
+        edgeFlowFrom[e.id] = from;
+        from = e.fromId == from ? e.toId : e.fromId;
+        final asRiser = NetEdge(
+            id: e.id,
+            fromId: e.fromId,
+            toId: e.toId,
+            service: e.service,
+            kind: EdgeKind.riser);
+        final floorMm =
+            math.max(joinMm, ctx.fireMinimumFor(asRiser)?.inMillimeters ?? 0);
+        final r = water.sizeForFlow(
+          flow: FlowRate.litersPerSecond(q),
+          maxVelocity: ctx.maxFireVelocity,
+          material: ctx.pipeMaterial,
+          minDiameter: Diameter.mm(floorMm),
+        );
+        final sized = EdgeSizing(
+          edgeId: e.id,
+          service: e.service,
+          flow: FlowRate.litersPerSecond(q),
+          diameter: r.diameter,
+          velocity: r.velocity,
+          overCapacity: r.overVelocity,
+        );
+        final override = sizeOverrides[e.id];
+        result[e.id] = override == null
+            ? sized
+            : applySizeOverride(sized, override, ctx: ctx, edge: e);
       }
     }
   }
@@ -8530,4 +8790,118 @@ Set<String> airOpenBoundaryLeaves(Network net) {
   _airOpenBoundaryCache[net] =
       (net.nodes, net.edges, net.nodes.length, net.edges.length, frozen);
   return frozen;
+}
+
+
+/// Round 67 — a fire pump TEST / recirculation line ([fireTestLineChains]):
+/// its pipes in order from the pumped header [joinId] to the tank [tankId].
+typedef FireTestLine = ({List<String> edgeIds, String joinId, String tankId});
+
+/// Round 67 (fire-convergence-19-test-line-to-tank-reverses-pump-
+/// discharge) — the pump TEST / recirculation lines of [net]: a chain of fire
+/// pipes from a storage tank (ground / roof tank holding another fire pipe)
+/// through demand-free, non-plant degree-2 nodes (bare bends, valves, a flow
+/// meter) to a junction that — with the chain removed — lies on the
+/// DISCHARGE side of a fire mover whose SUCTION side reaches that same tank
+/// ([fireHopSources]). NFPA 20 requires such a line back to the reservoir;
+/// it carries the pump's TEST flow, never fire-event demand. A roof-tank
+/// standby (its only pipe the feed) and a break-tank fill (a different
+/// mover's suction tank) are never test lines.
+List<FireTestLine> fireTestLineChains(
+  Network net, {
+  double Function(NetNode n)? elevationOf,
+}) {
+  final adj = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    if (!isFireService(e.service)) continue;
+    (adj[e.fromId] ??= []).add(e);
+    (adj[e.toId] ??= []).add(e);
+  }
+  bool isTank(NetNode? n) =>
+      n != null &&
+      n.role == NodeRole.plant &&
+      (n.component == NodeComponent.groundTank ||
+          n.component == NodeComponent.roofTank);
+  final candidates = <FireTestLine>[];
+  for (final tank in net.nodes) {
+    if (!isTank(tank)) continue;
+    final at = adj[tank.id] ?? const <NetEdge>[];
+    if (at.length < 2) continue;
+    for (final first in at) {
+      final chain = <String>[];
+      var cur = tank.id;
+      var edge = first;
+      final seen = <String>{tank.id};
+      String? join;
+      while (true) {
+        chain.add(edge.id);
+        final next = edge.fromId == cur ? edge.toId : edge.fromId;
+        if (!seen.add(next)) break;
+        final nn = net.nodeById(next);
+        if (nn == null ||
+            nn.role == NodeRole.plant ||
+            nn.role == NodeRole.fixture) {
+          break;
+        }
+        final onward = [
+          for (final x in adj[next] ?? const <NetEdge>[])
+            if (x.id != edge.id) x,
+        ];
+        if (onward.length >= 2) {
+          join = next;
+          break;
+        }
+        if (onward.length != 1) break;
+        cur = next;
+        edge = onward.single;
+      }
+      if (join == null) continue;
+      candidates.add((
+        edgeIds: chain.reversed.toList(),
+        joinId: join,
+        tankId: tank.id,
+      ));
+    }
+  }
+  if (candidates.isEmpty) return const [];
+  // Each candidate is judged with ONLY its own chain removed (a duplex
+  // room's tank -> suction-header main is a candidate chain too, and
+  // removing it as well would cut the tank off the room).
+  final out = <FireTestLine>[];
+  for (final c in candidates) {
+    final stripIds = c.edgeIds.toSet();
+    final stripped = Network(nodes: net.nodes, edges: [
+      for (final e in net.edges)
+        if (!stripIds.contains(e.id)) e,
+    ]);
+    final hop = fireHopSources(stripped, elevationOf: elevationOf);
+    final sAdj = <String, List<NetEdge>>{};
+    for (final e in stripped.edges) {
+      if (!isFireService(e.service)) continue;
+      (sAdj[e.fromId] ??= []).add(e);
+      (sAdj[e.toId] ??= []).add(e);
+    }
+    var verified = false;
+    for (final MapEntry(key: moverId, value: legs)
+        in hop.suctionStart.entries) {
+      final interior = <String, Set<String>>{};
+      final sides = _moverSides(stripped, moverId, sAdj, interiorOut: interior);
+      final suctionReachesTank = legs.entries.any(
+          (l) => l.value && (sides[l.key]?.contains(c.tankId) ?? false));
+      // The join is on a discharge side that FEEDS the fire terminals (a
+      // duplex room's tank -> suction-header main, removed, turns the test
+      // line into a "suction" whose "discharge" is the bare header: never).
+      final dischargeHoldsJoin = legs.entries.any((l) =>
+          !l.value &&
+          (interior[l.key]?.contains(c.joinId) ?? false) &&
+          interior[l.key]!
+              .any((id) => stripped.nodeById(id)?.role == NodeRole.fixture));
+      if (suctionReachesTank && dischargeHoldsJoin) {
+        verified = true;
+        break;
+      }
+    }
+    if (verified) out.add(c);
+  }
+  return out;
 }
