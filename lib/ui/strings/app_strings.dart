@@ -4736,6 +4736,23 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'Automatic disconnection not met on genset supply',
     'Pemutusan otomatis tidak terpenuhi saat suplai genset'
   ),
+  // Round 72 — breaking capacity / withstand judged on the genset fault.
+  'breaking-capacity-inadequate-on-genset': (
+    'Breaking capacity inadequate on genset supply',
+    'Kapasitas pemutusan tidak memadai saat suplai genset'
+  ),
+  'service-capacity-inadequate-on-genset': (
+    'Service capacity inadequate on genset supply',
+    'Kapasitas layanan tidak memadai saat suplai genset'
+  ),
+  'cascade-combination-unverified-on-genset': (
+    'Cascade combination to verify on genset supply',
+    'Kombinasi kaskade perlu diverifikasi saat suplai genset'
+  ),
+  'busbar-withstand-inadequate-on-genset': (
+    'Busbar withstand inadequate on genset supply',
+    'Ketahanan busbar tidak memadai saat suplai genset'
+  ),
   'cable-raised-for-ads': (
     'Cable raised for automatic disconnection',
     'Kabel diperbesar untuk pemutusan otomatis'

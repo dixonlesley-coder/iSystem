@@ -365,6 +365,7 @@ bool _applyInlineDevices({
   required Map<String, double> staticHead,
   required double setpointHead,
   Map<String, Head> moverHeads = const {},
+  Map<String, String> datumTankOf = const {},
 }) {
   final devices = [
     for (final id in reached)
@@ -392,10 +393,20 @@ bool _applyInlineDevices({
     final c = (hop[a] ?? 0).compareTo(hop[b] ?? 0);
     return c != 0 ? c : a.compareTo(b);
   });
+  // Round 72 (plumbing-hvac-convergence-22-prv-on-break-tank-fill-shifts-
+  // tank-region) — a device only moves the head of nodes on its OWN free-
+  // surface datum ([datumTankOf]: node -> the break tank whose region it is
+  // in; absent = the source's). A PRV / booster on a break tank's FILL pipe
+  // shifts the fill pipe and the tank inlet, never the floors the tank feeds
+  // (their head restarts from the tank's own water surface). A device below
+  // the break tank shifts its own subtree of that region as before. Empty
+  // map (upfeed, a single-tank downfeed) ⇒ byte-identical.
   void shift(String root, double dFlow, double dStatic) {
+    final datum = datumTankOf[root];
     final stack = [root];
     while (stack.isNotEmpty) {
       final n = stack.removeLast();
+      if (datumTankOf[n] != datum) continue;
       final f = flowingHead[n];
       if (f != null) flowingHead[n] = f + dFlow;
       final st = staticHead[n];
@@ -446,6 +457,15 @@ bool _applyInlineDevices({
     (adjacency[e.fromId] ??= []).add((edge: e, other: e.toId));
     (adjacency[e.toId] ??= []).add((edge: e, other: e.fromId));
   }
+  // Round 72 — a non-source storage tank is a free water surface: nothing
+  // past it is held by a PRV upstream of it (a fill-line PRV protects the
+  // float valve, never the floors the tank feeds).
+  bool isBreakTank(String id) =>
+      id != sourceId &&
+      switch (net.nodeById(id)?.component) {
+        NodeComponent.groundTank || NodeComponent.roofTank => true,
+        _ => false,
+      };
   final heldBy = <String, String>{};
   final inletOf = <String, String>{};
   final inletEdgeOf = <String, NetEdge>{};
@@ -460,8 +480,8 @@ bool _applyInlineDevices({
         heldBy[o] = o;
         inletOf[o] = n;
         inletEdgeOf[o] = l.edge;
-      } else if (heldBy[n] case final p?) {
-        heldBy[o] = p;
+      } else if (!isBreakTank(n)) {
+        if (heldBy[n] case final p?) heldBy[o] = p;
       }
       queue.add(o);
     }
@@ -1101,6 +1121,7 @@ DownfeedSolution solveDownfeed({
     staticHead: staticHead,
     setpointHead: setpointHead,
     moverHeads: moverHeads,
+    datumTankOf: datumTank,
   );
 
   final residualPressure = <String, Pressure>{};
