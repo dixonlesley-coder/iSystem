@@ -37,6 +37,7 @@ import 'fire_index_friction.dart'
         fireRatingSystems,
         fireSystemDesignFlow,
         fireSystemHasTerminal,
+        fireSystems,
         fireTransferDestinationTank,
         fireTransferFedFlow,
         fireTransferFedSystems,
@@ -1585,6 +1586,261 @@ Set<String> fireServiceJoinNodes(Network net) {
   );
 }
 
+/// One edge of a fire pump ROOM ([_mirrorPeerPumpRoomsAcrossServices]):
+/// its id, the node its flow leaves, its role ('s' upstream of the room's
+/// mover, 'd' downstream) and the jockey pump of its leg (null for a main
+/// leg / the room's tank main / discharge main).
+typedef _RoomEdge = ({String id, String from, String role, String? jockey});
+
+/// Round 70 (regression-peer-room-mirror-breaks-on-service-change) — the
+/// Round-14/68/69 peer-source mirror walks ONE fire service's adjacency, so a
+/// pump room with a single pipe drawn on the other fire service (the tank
+/// main, one pump leg, the discharge main) stopped the walk: the peer room's
+/// legs and main came back unsized or at zero flow. This post-pass repeats
+/// it over the COMBINED fire network: every fire pump ROOM — a ground tank
+/// on one fire pipe (never a break / destination / discharge-only tank),
+/// its demand-free chain to a pump (simplex) or to a suction header with a
+/// parallel set of mover legs onto one discharge header, then the onward
+/// discharge main up to the first junction — of a fire system holding two
+/// or more rooms carries the room set flow: the largest main-edge flow of
+/// any of them (each peer room carries the WHOLE set flow while the other
+/// is isolated, the Round-14 convention), on at least the largest bore any
+/// room's pipe of the same role (upstream / downstream of the pump) took,
+/// oriented tank -> pumps -> main. A jockey leg carries its own jockey flow
+/// ([jockeyLegFlows]). Only ever raises a flow / bore and sets the outward
+/// direction; overridden edges keep their size. Every edge of a room other
+/// than the one already carrying the set flow on its tank main is recorded
+/// on [parallelLegEdgeIdsOut] (one set flow, counted once).
+void _mirrorPeerPumpRoomsAcrossServices(
+  Network net,
+  Map<String, EdgeSizing> result, {
+  Map<String, FlowRate> jockeyLegFlows = const {},
+  Set<String> overridden = const {},
+  Set<String>? parallelLegEdgeIdsOut,
+}) {
+  final adj = <String, List<NetEdge>>{};
+  for (final e in net.edges) {
+    if (!isFireService(e.service)) continue;
+    (adj[e.fromId] ??= []).add(e);
+    (adj[e.toId] ??= []).add(e);
+  }
+  if (adj.isEmpty) return;
+  int degree(String n) => adj[n]?.length ?? 0;
+  String other(NetEdge e, String n) => e.fromId == n ? e.toId : e.fromId;
+  bool isMover(String n) => switch (net.nodeById(n)?.component) {
+        NodeComponent.pump || NodeComponent.boosterSet => true,
+        _ => false,
+      };
+  // A node a room's chain may pass: bare / inline (never a fixture, a
+  // terminal, a plant other than a mover).
+  bool passable(String n) {
+    final node = net.nodeById(n);
+    if (node == null) return false;
+    if (isMover(n)) return true;
+    return node.role != NodeRole.fixture && node.role != NodeRole.plant;
+  }
+
+  final tanks0 = [
+    for (final n in net.nodes)
+      if (n.component == NodeComponent.groundTank && degree(n.id) == 1) n.id,
+  ];
+  if (tanks0.length < 2) return;
+  final hop = fireHopSources(net);
+  final excluded = <String>{
+    ...hop.destinations,
+    ...hop.breakTanks.keys,
+    ...hop.dischargeOnly.keys,
+  };
+
+  // A mover leg from [header] along [first]: its edges (role by position
+  // relative to the mover), the exit node and its jockey, or null.
+  ({List<_RoomEdge> edges, String exit, bool mover})? legFrom(
+      String header, NetEdge first) {
+    var at = header;
+    var e = first;
+    var seenMover = false;
+    String? jockey;
+    final seen = <String>{header};
+    final raw = <(String, String, bool)>[];
+    while (true) {
+      raw.add((e.id, at, seenMover));
+      at = other(e, at);
+      if (!seen.add(at)) return null;
+      if (degree(at) != 2) break;
+      if (!passable(at)) return null;
+      if (isMover(at)) {
+        seenMover = true;
+        if (jockeyLegFlows.containsKey(at)) jockey = at;
+      }
+      final prev = e;
+      e = adj[at]!.firstWhere((x) => x.id != prev.id);
+    }
+    return (
+      edges: [
+        for (final (id, from, after) in raw)
+          (id: id, from: from, role: after ? 'd' : 's', jockey: jockey),
+      ],
+      exit: at,
+      mover: seenMover,
+    );
+  }
+
+  // The room hanging off tank [t], or null.
+  List<_RoomEdge>? roomOf(String t) {
+    final out = <_RoomEdge>[];
+    var at = t;
+    var e = adj[t]!.single;
+    var seenMover = false;
+    final seen = <String>{t};
+    while (true) {
+      out.add((id: e.id, from: at, role: seenMover ? 'd' : 's', jockey: null));
+      at = other(e, at);
+      if (!seen.add(at)) return null;
+      if (degree(at) == 2) {
+        if (!passable(at)) return null;
+        if (isMover(at)) {
+          if (jockeyLegFlows.containsKey(at)) return null;
+          seenMover = true;
+        }
+        final prev = e;
+        e = adj[at]!.firstWhere((x) => x.id != prev.id);
+        continue;
+      }
+      if (degree(at) < 2) return null;
+      // A junction: past the pump it ends the room; before it, it must be
+      // a suction header with a parallel set of mover legs.
+      if (seenMover) return out;
+      if (!passable(at) || isMover(at)) return null;
+      final inEdge = e;
+      final legs = [
+        for (final x in adj[at]!)
+          if (x.id != inEdge.id) legFrom(at, x),
+      ];
+      if (legs.length < 2 || legs.any((l) => l == null || !l.mover)) {
+        return null;
+      }
+      final exit = legs.first!.exit;
+      if (legs.any((l) => l!.exit != exit) ||
+          degree(exit) != legs.length + 1 ||
+          !passable(exit) ||
+          isMover(exit)) {
+        return null;
+      }
+      if (!legs.any((l) => l!.edges.first.jockey == null)) return null;
+      for (final l in legs) {
+        out.addAll(l!.edges);
+      }
+      final legIds = {
+        for (final l in legs)
+          for (final x in l!.edges) x.id,
+      };
+      final onward = [
+        for (final x in adj[exit]!)
+          if (!legIds.contains(x.id)) x,
+      ];
+      if (onward.length != 1) return null;
+      e = onward.single;
+      at = exit;
+      seen.add(exit);
+      // The discharge main to the first junction.
+      while (true) {
+        out.add((id: e.id, from: at, role: 'd', jockey: null));
+        at = other(e, at);
+        if (!seen.add(at)) return null;
+        if (degree(at) != 2 || !passable(at) || isMover(at)) break;
+        final prev = e;
+        e = adj[at]!.firstWhere((x) => x.id != prev.id);
+      }
+      return out;
+    }
+  }
+
+  final rooms = <String, List<_RoomEdge>>{};
+  for (final t in tanks0) {
+    if (excluded.contains(t)) continue;
+    final r = roomOf(t);
+    if (r != null) rooms[t] = r;
+  }
+  if (rooms.length < 2) return;
+  // Rooms grouped by fire system (connected through non-tank nodes).
+  final systems = fireSystems(net);
+  final groups = <int, List<String>>{};
+  for (final t in [...rooms.keys]..sort()) {
+    final i = systems.indexWhere((s) => s.nodeIds.contains(t));
+    if (i >= 0) (groups[i] ??= []).add(t);
+  }
+  for (final tanks in groups.values) {
+    if (tanks.length < 2) continue;
+    var q = 0.0;
+    final bore = <String, double>{};
+    for (final t in tanks) {
+      for (final r in rooms[t]!) {
+        final s = result[r.id];
+        if (s == null) continue;
+        final key = r.jockey == null ? r.role : 'j${r.role}';
+        if (s.diameter.inMillimeters > (bore[key] ?? 0)) {
+          bore[key] = s.diameter.inMillimeters;
+        }
+        if (r.jockey == null && s.flow.cubicMetersPerSecond > q) {
+          q = s.flow.cubicMetersPerSecond;
+        }
+      }
+    }
+    if (q <= 0) continue;
+    // The room already carrying the set flow on its tank main (the tree's
+    // own root room) is the duty room; every other room is a peer.
+    String? duty;
+    for (final t in tanks) {
+      final f = result[rooms[t]!.first.id]?.flow.cubicMetersPerSecond ?? 0;
+      if (f >= q - 1e-12) {
+        duty = t;
+        break;
+      }
+    }
+    for (final t in tanks) {
+      for (final r in rooms[t]!) {
+        final edge = net.edgeById(r.id);
+        if (edge == null) continue;
+        final cur = result[r.id];
+        final flow = r.jockey == null
+            ? FlowRate(q)
+            : (jockeyLegFlows[r.jockey!] ?? cur?.flow ?? const FlowRate(0));
+        final key = r.jockey == null ? r.role : 'j${r.role}';
+        final refMm = bore[key] ?? cur?.diameter.inMillimeters ?? 0;
+        if (refMm <= 0) continue;
+        final keep = cur != null && overridden.contains(r.id);
+        final mm = keep
+            ? cur.diameter.inMillimeters
+            : math.max(refMm, cur?.diameter.inMillimeters ?? 0);
+        final raiseFlow = cur == null ||
+            (r.jockey == null
+                ? cur.flow.cubicMetersPerSecond < q - 1e-12
+                : (cur.flow.cubicMetersPerSecond - flow.cubicMetersPerSecond)
+                        .abs() >
+                    1e-12);
+        final grow = cur == null || mm > cur.diameter.inMillimeters + 1e-9;
+        final turn = cur?.flowFromId != r.from;
+        if (t != duty) parallelLegEdgeIdsOut?.add(r.id);
+        if (!raiseFlow && !grow && !turn) continue;
+        final f = raiseFlow ? flow : cur.flow;
+        final d = Diameter.mm(mm);
+        result[r.id] = cur == null
+            ? EdgeSizing(
+                edgeId: r.id,
+                service: edge.service,
+                flow: f,
+                diameter: d,
+                velocity: velocityFromFlow(f, d),
+                flowFromId: r.from,
+              )
+            : cur
+                .withBore(d, velocityFromFlow(f, d), flow: f)
+                .withFlowFrom(r.from);
+      }
+    }
+  }
+}
+
 /// Round 66 r4 — the plants reached from each fire edge at [moverId] (edge
 /// id -> plant ids), walking fire pipes with the mover removed, every other
 /// mover a wall and every plant an end of the walk.
@@ -2314,6 +2570,13 @@ Map<String, EdgeSizing> autoSizeNetwork(
   // standpipe) — every fire pipe feeding a yard (pillar) hydrant carries the
   // yard hydrant flow on a DN150 private main; before the suction rule,
   // which keys on the flow.
+  // Round 70 (regression-peer-room-mirror-breaks-on-service-change) — the
+  // peer pump rooms of one fire system mirrored over the COMBINED fire
+  // network (sprinkler + hydrant pipes), before the raises key on flows.
+  _mirrorPeerPumpRoomsAcrossServices(fireNet, result,
+      jockeyLegFlows: jockeyLegFlows,
+      overridden: sizeOverrides.keys.toSet(),
+      parallelLegEdgeIdsOut: parallelLegEdgeIdsOut);
   firesuction.raiseYardHydrantMains(fireNet, result, ctx,
       overridden: sizeOverrides.keys.toSet(),
       excludeEdgeIds: jockeyEdgeIds,
