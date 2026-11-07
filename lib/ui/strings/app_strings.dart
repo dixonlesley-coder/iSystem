@@ -119,6 +119,9 @@ enum StringKey {
   electricalSoilResistivity,
   electricalSoilResistivityHint,
   electricalSoilResistivityNote,
+  electricalGensetBackupPercent,
+  electricalGensetBackupPercentHint,
+  electricalGensetBackupPercentNote,
   electricalAutoValueHint,
 
   // Electrical — Sources editor (genset / capacitor / transformer / dual-tx).
@@ -1425,6 +1428,12 @@ const Map<StringKey, String> _en = {
       'Site soil resistivity from a Wenner test. Sizes the earth electrode '
           '(rods in the BOM) and, on TT, judges each RCD against '
           'Ra x IΔn <= 50 V. Empty = no electrode designed.',
+
+  StringKey.electricalGensetBackupPercent: 'Backs % of demand',
+  StringKey.electricalGensetBackupPercentHint: 'Auto',
+  StringKey.electricalGensetBackupPercentNote:
+      'Share of the building demand the genset carries. Auto = the boards '
+          'marked essential when any are, else the whole building.',
 
   // Electrical — Sources editor.
   StringKey.electricalSources: 'Sources',
@@ -3039,6 +3048,12 @@ const Map<StringKey, String> _id = {
       'Resistivitas tanah lokasi dari uji Wenner. Menentukan elektroda '
           'pembumian (batang di BOM) dan, pada TT, menilai setiap RCD '
           'terhadap Ra x IΔn <= 50 V. Kosong = elektroda tidak dirancang.',
+
+  StringKey.electricalGensetBackupPercent: 'Menanggung % beban',
+  StringKey.electricalGensetBackupPercentHint: 'Otomatis',
+  StringKey.electricalGensetBackupPercentNote:
+      'Porsi beban gedung yang ditanggung genset. Otomatis = panel yang '
+          'ditandai esensial bila ada, selain itu seluruh gedung.',
 
   // Electrical — Sources editor.
   StringKey.electricalSources: 'Sumber',

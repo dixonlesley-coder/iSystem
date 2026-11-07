@@ -204,6 +204,19 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     }
   }
 
+  // Round 65 — [e] leaves [node] past pump [pump]'s discharge header as a
+  // BRANCH off the onward main: its sized flow is under half the pump's
+  // rated flow while another outflow pipe of [node] carries the rated flow.
+  bool isBranchOffMain(NetEdge e, String node, String pump) {
+    final q = ratedFlowByPump[pump]?.cubicMetersPerSecond;
+    final own = sizing[e.id]?.flow.cubicMetersPerSecond;
+    if (q == null || own == null || q <= 0 || own >= 0.5 * q) return false;
+    return (adj[node] ?? const <NetEdge>[]).any((x) =>
+        x.id != e.id &&
+        outflowAt(x, node) &&
+        (sizing[x.id]?.flow.cubicMetersPerSecond ?? 0) >= q * (1 - 1e-9));
+  }
+
   for (final p in [...pumps]..sort()) {
     // Suction: upstream through every node that is not a source (tank /
     // plant / inlet) or another mover.
@@ -255,6 +268,14 @@ Set<String> raiseFirePumpSuctionAndDischarge(
           }
           continue;
         }
+        // Round 65 (fire-convergence-17-discharge-header-floor-leaks-into-
+        // sprinkler-branch) — past a header the discharge continues only
+        // into the header's onward MAIN. A branch off it that carries well
+        // under the pump's rated flow (< half) while another outflow of the
+        // same node carries the whole rated flow is a separate system's
+        // feed (a sprinkler riser teed off the hydrant pump's header): it
+        // keeps its own class size, never the pump's DN125 at 31.5 L/s.
+        if (pastHeader && isBranchOffMain(e, cur, p)) continue;
         discharge.add(e.id);
         rate(e.id, p);
         final next = other(e, cur);
@@ -382,6 +403,25 @@ Set<String> raiseYardHydrantMains(
     return memo[id] = any;
   }
 
+  // Round 65 (fire-convergence-17-yard-ring-arms-sized-by-drawn-service) —
+  // a LOOPED yard main: every arm of a fire cycle group (the non-bridge fire
+  // pipes of EITHER service, never joined through a storage tank or a jockey
+  // pump) that carries a pillar hydrant downstream of any of its arms is a
+  // ring supplying yard hydrants, so EVERY arm takes the full yard flow on
+  // the DN150 private main (the Round-48 'each ring arm sized for the full
+  // flow' convention) — whatever direction the Hardy-Cross split solved it.
+  // Raising only the arms whose own solved direction reached a pillar left
+  // DN65 / DN80 arms between DN150 arms whenever the ring was drawn on the
+  // sprinkler service and the split turned toward a sprinkler take-off.
+  final ringArms = _yardRingArms(net, sizing,
+      reachesPillar: (e) {
+        final from = sizing[e.id]?.flowFromId;
+        if (from == null) return false;
+        return down(e.fromId == from ? e.toId : e.fromId, <String>{});
+      },
+      excludeEdgeIds: excludeEdgeIds,
+      stopNodeIds: stopNodeIds);
+
   const yard = FlowRate(kYardHydrantFlowLps / 1000);
   for (final e in net.edges) {
     if (!_isFire(e) || excludeEdgeIds.contains(e.id)) continue;
@@ -389,7 +429,7 @@ Set<String> raiseYardHydrantMains(
     final from = s?.flowFromId;
     if (s == null || from == null) continue;
     final to = e.fromId == from ? e.toId : e.fromId;
-    if (!down(to, <String>{})) continue;
+    if (!ringArms.contains(e.id) && !down(to, <String>{})) continue;
     final q = s.flow.cubicMetersPerSecond >= yard.cubicMetersPerSecond
         ? s.flow
         : yard;
@@ -416,4 +456,110 @@ Set<String> raiseYardHydrantMains(
     raised.add(e.id);
   }
   return raised;
+}
+
+/// The arms of every fire CYCLE group (Round 65) that supplies a yard
+/// hydrant: the non-bridge fire pipes of either service, grouped by the
+/// cycles they lie on, kept when [reachesPillar] holds for at least one arm
+/// of the group (a pillar hydrant downstream along its solved direction). A
+/// storage tank never joins two cycles (each tank incidence is its own
+/// endpoint) and a pipe touching a node in [stopNodeIds] (a jockey) or listed
+/// in [excludeEdgeIds] is no arm. Deterministic: plain graph structure.
+Set<String> _yardRingArms(
+  Network net,
+  Map<String, EdgeSizing> sizing, {
+  required bool Function(NetEdge e) reachesPillar,
+  Set<String> excludeEdgeIds = const {},
+  Set<String> stopNodeIds = const {},
+}) {
+  bool isTank(String id) {
+    final c = net.nodeById(id)?.component;
+    return c == NodeComponent.groundTank || c == NodeComponent.roofTank;
+  }
+
+  final edges = <NetEdge>[
+    for (final e in net.edges)
+      if (_isFire(e) &&
+          !excludeEdgeIds.contains(e.id) &&
+          sizing[e.id] != null &&
+          !stopNodeIds.contains(e.fromId) &&
+          !stopNodeIds.contains(e.toId) &&
+          e.fromId != e.toId)
+        e,
+  ]..sort((a, b) => a.id.compareTo(b.id));
+  if (edges.length < 3) return const {};
+  // Endpoint key: a tank incidence is unique to its pipe.
+  String key(NetEdge e, String id) => isTank(id) ? '$id|tank|${e.id}' : id;
+  final adj = <String, List<(NetEdge, String)>>{};
+  for (final e in edges) {
+    final a = key(e, e.fromId), b = key(e, e.toId);
+    (adj[a] ??= []).add((e, b));
+    (adj[b] ??= []).add((e, a));
+  }
+  // Iterative Tarjan bridge search.
+  final disc = <String, int>{};
+  final low = <String, int>{};
+  final bridges = <String>{};
+  var time = 0;
+  for (final root in adj.keys.toList()..sort()) {
+    if (disc.containsKey(root)) continue;
+    // Frame: (node, parent edge id, next neighbour index).
+    final stack = <(String, String?, int)>[(root, null, 0)];
+    disc[root] = time;
+    low[root] = time;
+    time++;
+    while (stack.isNotEmpty) {
+      final (v, pe, i) = stack.removeLast();
+      final links = adj[v]!;
+      if (i < links.length) {
+        stack.add((v, pe, i + 1));
+        final (e, w) = links[i];
+        if (e.id == pe) continue;
+        if (!disc.containsKey(w)) {
+          disc[w] = time;
+          low[w] = time;
+          time++;
+          stack.add((w, e.id, 0));
+        } else {
+          low[v] = math.min(low[v]!, disc[w]!);
+        }
+      } else if (pe != null && stack.isNotEmpty) {
+        // Finished v: propagate to its parent (the frame now on top).
+        final u = stack.last.$1;
+        low[u] = math.min(low[u]!, low[v]!);
+        if (low[v]! > disc[u]!) bridges.add(pe);
+      }
+    }
+  }
+  // Union the endpoints of every non-bridge pipe into cycle groups.
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while ((parent[r] ?? r) != r) {
+      r = parent[r]!;
+    }
+    return r;
+  }
+
+  final cyc = [
+    for (final e in edges)
+      if (!bridges.contains(e.id)) e
+  ];
+  for (final e in cyc) {
+    final a = find(key(e, e.fromId)), b = find(key(e, e.toId));
+    if (a == b) continue;
+    if (a.compareTo(b) < 0) {
+      parent[b] = a;
+    } else {
+      parent[a] = b;
+    }
+  }
+  final groups = <String, List<NetEdge>>{};
+  for (final e in cyc) {
+    (groups[find(key(e, e.fromId))] ??= []).add(e);
+  }
+  return {
+    for (final g in groups.values)
+      if (g.any(reachesPillar)) ...g.map((e) => e.id),
+  };
 }

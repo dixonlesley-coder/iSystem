@@ -1174,7 +1174,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     setGenerator(GeneratorSource(
       kva: kva,
       units: cur.units,
-      backupFraction: cur.backupFraction,
+      backupFraction: cur.backupFractionTyped,
       mode: cur.mode,
       transfer: cur.transfer,
     ));
@@ -1188,7 +1188,28 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     setGenerator(GeneratorSource(
       kva: cur.kva,
       units: units,
-      backupFraction: cur.backupFraction,
+      backupFraction: cur.backupFractionTyped,
+      mode: cur.mode,
+      transfer: cur.transfer,
+    ));
+  }
+
+  /// Round 65 (elec-convergence-17-genset-backup-fraction-unreachable) — set
+  /// the fraction of the building demand the genset backs (0 < f <= 1), or
+  /// null for AUTO (`effectiveGeneratorBackupFraction`: the essential
+  /// sub-tree when any board is marked essential, else the whole building).
+  /// Non-finite / out-of-band ignored; no-op without a genset or unchanged.
+  void setGeneratorBackupFraction(double? fraction) {
+    if (fraction != null &&
+        (!fraction.isFinite || fraction <= 0 || fraction > 1)) {
+      return;
+    }
+    final cur = state.sources?.generator;
+    if (cur == null || cur.backupFractionTyped == fraction) return;
+    setGenerator(GeneratorSource(
+      kva: cur.kva,
+      units: cur.units,
+      backupFraction: fraction,
       mode: cur.mode,
       transfer: cur.transfer,
     ));
@@ -1200,7 +1221,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     setGenerator(GeneratorSource(
       kva: cur.kva,
       units: cur.units,
-      backupFraction: cur.backupFraction,
+      backupFraction: cur.backupFractionTyped,
       mode: mode,
       transfer: cur.transfer,
     ));
@@ -1212,7 +1233,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     setGenerator(GeneratorSource(
       kva: cur.kva,
       units: cur.units,
-      backupFraction: cur.backupFraction,
+      backupFraction: cur.backupFractionTyped,
       mode: cur.mode,
       transfer: transfer,
     ));
@@ -3093,6 +3114,21 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       for (final p in others)
         if (!fed.contains(p.id)) p,
     ];
+    // Round 65 (elec-convergence-17-mep-board-3ph-under-1ph-root) — the MEP
+    // board's SYSTEM is a service fact: it takes the supply's own system,
+    // never a 3-phase 400 V mint under a 1-phase root (an unclearable
+    // `feeder-phase-mismatch` ERROR on every 1-phase house / shop that drew
+    // a pump or a split AC). One root ⇒ that root's system + voltage; several
+    // roots ⇒ 1-phase only when every root is 1-phase; none ⇒ the 3-phase
+    // 400 V default. A machine above the 1-phase motor limit on a 1-phase
+    // board then raises the judge-only `single-phase-large-motor` warning.
+    final singlePhaseService = roots.isNotEmpty &&
+        roots.every((p) => p.system == ElectricalSystem.singlePhase);
+    final mepSystem = singlePhaseService
+        ? ElectricalSystem.singlePhase
+        : ElectricalSystem.threePhase;
+    final mepVoltage =
+        singlePhaseService ? roots.first.voltage : const Voltage(400);
     if (roots.length != 1) {
       state = _withProject(panels: [
         ...others,
@@ -3100,7 +3136,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           id: kMepEquipmentPanelId,
           name: 'MEP Equipment',
           tag: 'MEP',
-          voltage: const Voltage(400),
+          system: mepSystem,
+          voltage: mepVoltage,
           circuits: merged,
         ),
       ]);
@@ -3144,7 +3181,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         id: kMepEquipmentPanelId,
         name: 'MEP Equipment',
         tag: 'MEP',
-        voltage: const Voltage(400),
+        system: root.system,
+        voltage: root.system == ElectricalSystem.singlePhase
+            ? root.voltage
+            : const Voltage(400),
         sourceType: PanelSource.feeder,
         fedByCircuitId: feederId,
         circuits: merged,

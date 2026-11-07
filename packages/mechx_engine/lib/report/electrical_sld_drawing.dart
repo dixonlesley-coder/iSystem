@@ -16,7 +16,8 @@ library;
 
 import 'dart:math' as math;
 
-import '../electrical/advanced_study.dart' show serviceTransformer;
+import '../electrical/advanced_study.dart'
+    show serviceSectionOfRoot, serviceTransformer;
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
 import '../electrical/containment.dart'
@@ -53,7 +54,8 @@ import '../electrical/sources.dart'
         GeneratorSource,
         sizeGenerator,
         sizeBattery;
-import '../electrical/supply_design.dart' show isDeclaredMvService;
+import '../electrical/supply_design.dart'
+    show isDeclaredMvService, serviceSections;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart'
     show BreakerCurve, BreakerClass, BreakerClassCode;
@@ -1393,13 +1395,23 @@ SldSheet buildElectricalSourceSpine({
     maxY: maxY,
     // The spine always draws the system-earthing mark (the earth symbol was
     // drawn ⇒ the 'Earth' legend entry is included).
-    legend: const [
-      SldLegendEntry('Source', 'Utility supply chain'),
-      SldLegendEntry('Earth', 'System earthing point'),
+    legend: [
+      const SldLegendEntry('Source', 'Utility supply chain'),
+      const SldLegendEntry('Earth', 'System earthing point'),
+      // Round 65 r2 — a sectioned service's normally-open bus couplers.
+      if (_hasOpenCoupler(spine.prims)) _kCouplerLegend,
     ],
     supplyNote: '',
   );
 }
+
+/// Round 65 r2 — the legend key for a sectioned service's bus coupler.
+const SldLegendEntry _kCouplerLegend = SldLegendEntry(
+    'N.O.', 'Bus coupler, normally open (sections never paralleled)');
+
+/// Whether [prims] carry a normally-open bus coupler ([_emitOpenCoupler]).
+bool _hasOpenCoupler(List<SldPrim> prims) => prims.any(
+    (p) => p is SldLabel && p.text == 'N.O.' && p.role == SldRole.source);
 
 // ── ZOOMED-OUT building single-line (the whole distribution hierarchy) ───────
 
@@ -1845,14 +1857,55 @@ String _supplyHeadLabel(ElectricalProject project,
 /// honest ratio to print, so nothing is printed.
 /// Round 16 — the transformer figure for the drawings: [serviceTransformer]
 /// (`n x <kVA>` when the study needs several units).
-({double totalKva, String text})? _transformerFig(
+///
+/// Round 65 r2 (elec-convergence-17-sectioned-service-drawn-as-paralleled-
+/// transformers) — [perSectionText] is the rating of ONE section's unit(s)
+/// on a SECTIONED service ([serviceSections] > 1): the sections are drawn as
+/// separate transformers on separate LV sections joined by a normally-open
+/// coupler (the fault study rates every device on ONE section), never as
+/// `n x kVA` paralleled onto one LV main.
+({double totalKva, String text, String perSectionText})? _transformerFig(
     ElectricalProject project, ElectricalSystemResult result) {
   final t = serviceTransformer(project, result);
   if (t == null) return null;
+  final sections = serviceSections(project);
+  final perSection = math.max(1, t.units ~/ math.max(1, sections));
   return (
     totalKva: t.kva * t.units,
     text: t.units > 1 ? '${t.units} x ${_num(t.kva)}' : _num(t.kva),
+    perSectionText:
+        perSection > 1 ? '$perSection x ${_num(t.kva)}' : _num(t.kva),
   );
+}
+
+/// Round 65 r2 — the label of section [i]'s transformer ('TX-1 1600 kVA').
+String _sectionTxName(
+        ({double totalKva, String text, String perSectionText})? fig, int i,
+        {String prefix = 'TX'}) =>
+    (fig != null && fig.totalKva > 0)
+        ? '$prefix-${i + 1} ${fig.perSectionText} kVA'
+        : '$prefix-${i + 1}';
+
+/// Round 65 r2 — a normally-open bus coupler on a straight tie between two
+/// LV sections ([a] to [b] along the run at [at]; [vertical] runs it down a
+/// column): the tie with an OPEN blade in its middle and an 'N.O.' mark.
+void _emitOpenCoupler(
+    List<SldPrim> out, double a, double b, double at, SldRole role,
+    {bool vertical = false}) {
+  final m = (a + b) / 2;
+  if (vertical) {
+    out.add(SldLine(at, a, at, m - 7, weight: SldWeight.medium, role: role));
+    out.add(
+        SldLine(at, m - 7, at + 8, m + 6, weight: SldWeight.medium, role: role));
+    out.add(SldLine(at, m + 7, at, b, weight: SldWeight.medium, role: role));
+    out.add(SldLabel(at + 11, m + 3, 'N.O.', size: 7, role: role));
+  } else {
+    out.add(SldLine(a, at, m - 7, at, weight: SldWeight.medium, role: role));
+    out.add(
+        SldLine(m - 7, at, m + 6, at - 8, weight: SldWeight.medium, role: role));
+    out.add(SldLine(m + 7, at, b, at, weight: SldWeight.medium, role: role));
+    out.add(SldLabel(m - 8, at - 12, 'N.O.', size: 7, role: role));
+  }
 }
 
 /// The GENSET figure for the drawings, sized in ONE place (Round 12,
@@ -1937,6 +1990,37 @@ String? _gensetBackupPctLabel(
 /// descent (~1.6), which also clears every side glyph's half-height (≤ 13).
 const double _sideNodeBottom = 14;
 
+/// A built source spine: its prims, height, the default feed anchor and —
+/// Round 65 r2 — the feed x of each service-entrance board on a SECTIONED
+/// service (the column of the LV section [serviceSectionOfRoot] puts it on;
+/// empty ⇒ every root feeds from [feedX]).
+typedef _Spine = ({
+  List<SldPrim> prims,
+  double height,
+  double feedX,
+  double feedY,
+  Map<String, double> rootFeedX,
+});
+
+/// The feed x a root board's supply lead leaves the spine at.
+double _spineFeedX(_Spine s, String rootId) => s.rootFeedX[rootId] ?? s.feedX;
+
+/// Round 65 r2 — the vertical offset of a root's supply-lead ROW on a
+/// sectioned spine: each section's horizontal rides its own row (12 units
+/// apart, centred on the legacy mid row), so two sections' leads never merge
+/// into one line that would read as the sections paralleled. 0 when the
+/// spine has one section (byte-identical).
+double _spineRowDy(_Spine s, String rootId) {
+  final x = s.rootFeedX[rootId];
+  if (x == null) return 0;
+  final xs = s.rootFeedX.values.toSet().toList()..sort();
+  if (xs.length < 2) return 0;
+  return (xs.indexOf(x) - (xs.length - 1) / 2) * 12;
+}
+
+/// Round 65 r2 — pitch of the per-section transformer / LV-section columns.
+const double _sectionColPitch = _ovW + 40;
+
 /// Synthesize the utility source spine drawn ABOVE the panel tree (overview) or
 /// the top floor band (riser). On a DECLARED MV service (`_isMvService`):
 /// PLN MV STATION -> PANEL UTAMA TEGANGAN MENENGAH -> TRANSFORMER <kVA> ->
@@ -1954,7 +2038,7 @@ const double _sideNodeBottom = 14;
 /// snap to the genset ladder (`selectGeneratorUnits` — `n x 2500` past the
 /// top rung, never a silent saturation) against the building demand VA — all
 /// `// VERIFY`.
-({List<SldPrim> prims, double height, double feedX, double feedY})
+_Spine
     _buildSourceSpine(
   ElectricalProject project,
   ElectricalSystemResult result,
@@ -1964,6 +2048,12 @@ const double _sideNodeBottom = 14;
   final nodeX = centreX - _ovW / 2;
   final demandVa = result.supply.demandVa;
   final isMv = _isMvService(project);
+  // Round 65 r2 (elec-convergence-17) — a sectioned service ([serviceSections]
+  // > 1): one transformer and one LV section per section, the sections joined
+  // by normally-open bus couplers, each service-entrance board hung under the
+  // section the loading judge put it on.
+  final sections = serviceSections(project);
+  final sectioned = isMv && sections > 1;
 
   // MV-chain transformer kVA — Round 16: the SAME [serviceTransformer] the
   // study and the schedule use (declared rating, else the dual-tx study pick
@@ -1985,8 +2075,13 @@ const double _sideNodeBottom = 14;
     ),
     if (isMv) ...[
       (name: 'PANEL UTAMA TEGANGAN MENENGAH', sub: 'MV main', kind: 'bus'),
-      (name: txLabel, sub: null, kind: 'transformer'),
-      (name: 'PANEL UTAMA TEGANGAN RENDAH', sub: 'LV main', kind: 'bus'),
+      // Round 65 r2 — a SECTIONED service draws one transformer + one LV
+      // section per section below the MV main (after this loop), never one
+      // 'n x kVA' unit on one LV main.
+      if (!sectioned) ...[
+        (name: txLabel, sub: null, kind: 'transformer'),
+        (name: 'PANEL UTAMA TEGANGAN RENDAH', sub: 'LV main', kind: 'bus'),
+      ],
     ],
   ];
 
@@ -2034,10 +2129,61 @@ const double _sideNodeBottom = 14;
     prevBottom = y + _ovH;
     y += _ovH + _ovHGap;
   }
+  // The LV main's horizontal extent (the earth mark hangs off its left edge,
+  // the side sources' collector off its right edge).
+  var lvBoxLeft = nodeX;
+  var lvBoxRight = nodeX + _ovW;
+  var feedX = centreX;
+  final rootFeedX = <String, double>{};
+  if (sectioned) {
+    // MV bus below the MV main, one column per section: a drop into the
+    // section's transformer, the transformer, and the section's LV board;
+    // adjacent LV sections joined by a normally-open coupler.
+    final xs = [
+      for (var i = 0; i < sections; i++)
+        centreX + (i - (sections - 1) / 2) * _sectionColPitch,
+    ];
+    final mvBottom = prevBottom!;
+    final busY = mvBottom + _ovHGap / 2;
+    prims.add(SldLine(centreX, mvBottom, centreX, busY,
+        weight: SldWeight.medium, role: role));
+    prims.add(SldLine(xs.first, busY, xs.last, busY,
+        weight: SldWeight.medium, role: role));
+    final txY = y;
+    final lvY = txY + _ovH + _ovHGap;
+    final lvMid = lvY + _ovH / 2;
+    for (var i = 0; i < sections; i++) {
+      final x = xs[i];
+      prims.add(
+          SldLine(x, busY, x, txY, weight: SldWeight.medium, role: role));
+      _emitTransformer(prims, x, txY, _ovH, role);
+      prims.add(SldLabel(x + 22, txY + _ovH / 2 + 3, _sectionTxName(txFig, i),
+          size: 8.5, bold: true, role: role));
+      prims.add(SldLine(x, txY + _ovH, x, lvY,
+          weight: SldWeight.medium, role: role));
+      _emitPanelBox(
+          prims, x, lvMid, _ovW, _ovH - 8, 'LV SECTION ${i + 1}', role);
+      prims.add(SldLabel(x - _ovW / 2, lvY + _ovH + 7, 'LV main section',
+          size: 7.5, role: role));
+    }
+    // Normally-open bus couplers between adjacent sections: an open blade
+    // in the tie, marked N.O. — the sections are never paralleled.
+    for (var i = 0; i + 1 < sections; i++) {
+      _emitOpenCoupler(
+          prims, xs[i] + _ovW / 2, xs[i + 1] - _ovW / 2, lvMid, role);
+    }
+    lvBoxLeft = xs.first - _ovW / 2;
+    lvBoxRight = xs.last + _ovW / 2;
+    feedX = xs.first;
+    serviceSectionOfRoot(project, result).forEach((id, sec) {
+      rootFeedX[id] = xs[sec.clamp(0, sections - 1)];
+    });
+    y = lvY + _ovH + _ovHGap;
+  }
   final lvBottom = y - _ovHGap; // bottom of the last chain band
 
   final lvMidY = lvBottom - _ovH / 2;
-  final sideX = nodeX + _ovW + 60;
+  final sideX = lvBoxRight + 60;
   var stackBottom = lvBottom;
   if (isMv) {
     // MV: GENSET + CAPACITOR BANK hang off the LV-main bus to the right.
@@ -2046,7 +2192,7 @@ const double _sideNodeBottom = 14;
     // so the standby genset / PF bank / solar / battery are drawn CONNECTED
     // to the board they serve (the ties used to start 12 units above / below
     // the box, hanging in free air).
-    final collX = nodeX + _ovW + 20;
+    final collX = lvBoxRight + 20;
     final tieYs = <double>[];
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
@@ -2130,7 +2276,7 @@ const double _sideNodeBottom = 14;
     if (tieYs.isNotEmpty) {
       // The box -> collector stub at the LV main's mid-height, and the
       // collector spanning every tie (and that stub).
-      prims.add(SldLine(nodeX + _ovW, lvMidY, collX, lvMidY,
+      prims.add(SldLine(lvBoxRight, lvMidY, collX, lvMidY,
           weight: SldWeight.medium, role: SldRole.source));
       final top = math.min(lvMidY, tieYs.reduce(math.min));
       final bottom = math.max(lvMidY, tieYs.reduce(math.max));
@@ -2231,8 +2377,8 @@ const double _sideNodeBottom = 14;
   // service, at the SERVICE ENTRANCE (the supply head) on an LV one — the IEC
   // earth symbol hung to the LEFT (the side sources take the right side),
   // labelled with the installation earthing-system designation.
-  final earthX = isMv ? nodeX - 34 : centreX - 60;
-  prims.add(SldLine(isMv ? nodeX : centreX - 12, lvMidY, earthX, lvMidY,
+  final earthX = isMv ? lvBoxLeft - 34 : centreX - 60;
+  prims.add(SldLine(isMv ? lvBoxLeft : centreX - 12, lvMidY, earthX, lvMidY,
       weight: SldWeight.medium, role: SldRole.source));
   _emitEarth(prims, earthX, lvMidY, SldRole.source);
   // drafting-9: the designation hangs below the earth bars, starting 40 to the
@@ -2245,8 +2391,9 @@ const double _sideNodeBottom = 14;
   return (
     prims: prims,
     height: math.max(lvBottom, stackBottom),
-    feedX: centreX,
-    feedY: lvBottom
+    feedX: feedX,
+    feedY: lvBottom,
+    rootFeedX: rootFeedX,
   );
 }
 
@@ -2262,7 +2409,7 @@ const double _sideNodeBottom = 14;
 /// board codes (PLN / MVMDP / LVMDP) since a horizontal chain has no room for
 /// the full names; the transformer is the Δ-Y (DyN) two-winding symbol,
 /// panels are boxes — matching the EL10011003 DXF.
-({List<SldPrim> prims, double height, double feedX, double feedY})
+_Spine
     _buildSourceSpineH(
   ElectricalProject project,
   ElectricalSystemResult result,
@@ -2272,15 +2419,23 @@ const double _sideNodeBottom = 14;
   final demandVa = result.supply.demandVa;
   final isMv = _isMvService(project);
   final txFig = _transformerFig(project, result);
-  final txLabel = (txFig != null && txFig.totalKva > 0)
-      ? 'TRAFO ${txFig.text} kVA'
-      : 'TRAFO';
+  // Round 65 r2 (elec-convergence-17) — a sectioned service: the chain's row
+  // is SECTION 1 (its own transformer + LVMDP-1); the further sections are
+  // drawn as rows below, off one MV bus, their LV boards joined by
+  // normally-open couplers.
+  final sections = serviceSections(project);
+  final sectioned = isMv && sections > 1;
+  final txLabel = sectioned
+      ? _sectionTxName(txFig, 0, prefix: 'TRAFO')
+      : (txFig != null && txFig.totalKva > 0)
+          ? 'TRAFO ${txFig.text} kVA'
+          : 'TRAFO';
   final chain = <({String name, String kind})>[
     (name: _supplyHeadLabel(project, compact: true), kind: 'supply'),
     if (isMv) ...[
       (name: 'MVMDP', kind: 'bus'),
       (name: txLabel, kind: 'transformer'),
-      (name: 'LVMDP', kind: 'bus'),
+      (name: sectioned ? 'LVMDP-1' : 'LVMDP', kind: 'bus'),
     ],
   ];
 
@@ -2320,6 +2475,50 @@ const double _sideNodeBottom = 14;
     x += pitchX;
   }
   final lvX = x - pitchX; // the last chain node (feed-out to the root)
+  // Round 65 r2 — sections 2..n as rows below section 1.
+  var lastRowY = yMid;
+  if (sectioned) {
+    const rowPitch = 90.0;
+    final txX = lvX - pitchX;
+    final busX = txX - pitchX / 2; // the MV bus, between MVMDP and the TXs
+    lastRowY = yMid + (sections - 1) * rowPitch;
+    prims.add(SldLine(busX, yMid, busX, lastRowY,
+        weight: SldWeight.medium, role: role));
+    for (var i = 1; i < sections; i++) {
+      final ry = yMid + i * rowPitch;
+      prims.add(
+          SldLine(busX, ry, lvX, ry, weight: SldWeight.medium, role: role));
+      const r = 11.0;
+      _emitTransformerPair(
+          prims, txX - r * 0.62, ry, txX + r * 0.62, ry, r, role);
+      prims.add(SldLabel(txX - 30, ry + 28,
+          _sectionTxName(txFig, i, prefix: 'TRAFO'),
+          size: 8, bold: true, role: role));
+      _emitPanelBox(prims, lvX, ry, boxW, boxH, 'LVMDP-${i + 1}', role);
+    }
+    for (var i = 0; i + 1 < sections; i++) {
+      _emitOpenCoupler(prims, yMid + i * rowPitch + boxH / 2,
+          yMid + (i + 1) * rowPitch - boxH / 2, lvX, role,
+          vertical: true);
+    }
+    // Which service-entrance boards each section feeds (the canvas places
+    // the boards themselves to the right of the chain).
+    final bySection = <int, List<String>>{};
+    serviceSectionOfRoot(project, result).forEach((id, sec) {
+      final name = project.panels
+          .where((p) => p.id == id)
+          .map((p) => p.name)
+          .firstOrNull;
+      (bySection[sec] ??= []).add(name ?? id);
+    });
+    for (var i = 0; i < sections; i++) {
+      final names = bySection[i];
+      if (names == null || names.isEmpty) continue;
+      prims.add(SldLabel(lvX + boxW / 2 + 6, yMid + i * rowPitch - 4,
+          'feeds ${names.join(', ')}',
+          size: 7, role: role));
+    }
+  }
   if (!isMv) {
     // A short outgoing service lead so the lone head visibly feeds the root
     // board the canvas places to the right of the chain.
@@ -2333,10 +2532,11 @@ const double _sideNodeBottom = 14;
   // pitch, so the pre-existing genset/capacitor coordinates are unchanged and
   // the new solar/battery nodes simply extend the stack.
   final hasGen = project.sources?.generator != null;
-  var nextCy = yMid + 64; // the next side-node centre y
+  var nextCy = lastRowY + 64; // the next side-node centre y
   // Drop-line start: the LV-bus box bottom on the MV chain, the bowtie's
-  // lower edge on the LV head-only chain.
-  var prevBottom = isMv ? yMid + 17 : yMid + 10;
+  // lower edge on the LV head-only chain (the LAST section's box on a
+  // sectioned service).
+  var prevBottom = isMv ? lastRowY + 17 : yMid + 10;
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = gensetBackupDemandVa(project, result);
@@ -2419,7 +2619,13 @@ const double _sideNodeBottom = 14;
         size: 7, bold: true, role: role));
   }
 
-  return (prims: prims, height: yMid, feedX: lvX, feedY: yMid);
+  return (
+    prims: prims,
+    height: yMid,
+    feedX: lvX,
+    feedY: yMid,
+    rootFeedX: const <String, double>{},
+  );
 }
 
 /// Build the ZOOMED-OUT building single-line: every panel as a COMPACT node
@@ -2539,6 +2745,19 @@ SldSheet buildElectricalOverview({
     for (final id in order)
       if (!parentOf.containsKey(id)) id
   ];
+  // Round 65 r2 — on a sectioned service the roots are laid out grouped by
+  // the LV section that feeds them (stable within a section), so each
+  // section's leads stay beside its own column.
+  if (sourceChain) {
+    final sec = serviceSectionOfRoot(project, result);
+    if (sec.isNotEmpty) {
+      final rank = {for (var i = 0; i < roots.length; i++) roots[i]: i};
+      roots.sort((a, b) {
+        final c = (sec[a] ?? 0).compareTo(sec[b] ?? 0);
+        return c != 0 ? c : rank[a]!.compareTo(rank[b]!);
+      });
+    }
+  }
   final cx = <String, double>{};
   var nextLeafX = 0.0;
   const pitch = _ovW + _ovHGap;
@@ -2564,7 +2783,7 @@ SldSheet buildElectricalOverview({
 
   // ── Optional source spine, prepended above the tree ─────────────────────────
   var sourceOffsetY = 0.0;
-  ({List<SldPrim> prims, double height, double feedX, double feedY})? spine;
+  _Spine? spine;
   if (sourceChain) {
     // Centre the spine over the placed-tree x-extent (fall back to the node
     // width when empty).
@@ -2592,10 +2811,13 @@ SldSheet buildElectricalOverview({
       final zx = cx[r]! + _ovW / 2;
       final zy = nodeY(r);
       final role = essential.contains(r) ? SldRole.essential : SldRole.source;
-      final midY = (spine.feedY + zy) / 2;
-      prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, midY,
+      // Round 65 r2 — a sectioned service feeds each root from ITS section,
+      // on that section's own lead row.
+      final midY = (spine.feedY + zy) / 2 + _spineRowDy(spine, r);
+      final fx = _spineFeedX(spine, r);
+      prims.add(SldLine(fx, spine.feedY, fx, midY,
           weight: SldWeight.medium, role: SldRole.source));
-      prims.add(SldLine(spine.feedX, midY, zx, midY,
+      prims.add(SldLine(fx, midY, zx, midY,
           weight: SldWeight.medium, role: role));
       prims
           .add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
@@ -2638,8 +2860,11 @@ SldSheet buildElectricalOverview({
       if (spine != null)
         for (final r in roots)
           if (cx.containsKey(r)) ...[
-            vLine(spine.feedX, spine.feedY, (spine.feedY + nodeY(r)) / 2),
-            vLine(cx[r]! + _ovW / 2, (spine.feedY + nodeY(r)) / 2, nodeY(r)),
+            vLine(_spineFeedX(spine, r), spine.feedY,
+                (spine.feedY + nodeY(r)) / 2 + _spineRowDy(spine, r)),
+            vLine(cx[r]! + _ovW / 2,
+                (spine.feedY + nodeY(r)) / 2 + _spineRowDy(spine, r),
+                nodeY(r)),
           ],
     ]);
     final pending = <String>[];
@@ -2904,6 +3129,8 @@ SldSheet buildElectricalOverview({
       // The source spine draws the system-earthing mark, so surface it too.
       if (sourceChain && _anyRolePrim(prims, SldRole.source))
         const SldLegendEntry('Earth', 'System earthing point'),
+      // Round 65 r2 — a sectioned spine draws its bus couplers on this sheet.
+      if (sourceChain && _hasOpenCoupler(prims)) _kCouplerLegend,
     ],
     supplyNote: supplyNote,
   );
@@ -3450,7 +3677,7 @@ SldSheet buildElectricalRiser({
   // ── Optional source spine ───────────────────────────────────────────────────
   final prims = <SldPrim>[];
   var contentOffsetY = 0.0;
-  ({List<SldPrim> prims, double height, double feedX, double feedY})? spine;
+  _Spine? spine;
   // Round 23 (elec-drafting-2-6) — when every root board sits BELOW the top
   // band the spine is drawn beside the highest root's band (placed once the
   // band positions are final, below); only a top-band root keeps it above.
@@ -3477,7 +3704,12 @@ SldSheet buildElectricalRiser({
     }
   }
   if (sourceChain && !spineBeside && !rootsAllHidden) {
-    spine = _buildSourceSpine(project, result, _riserGutterW + 2 * _ovW);
+    // Round 65 r2 — a sectioned spine's leftmost LV section clears the
+    // floor gutter (2 sections ⇒ the historic centre, byte-identical).
+    final sec = _isMvService(project) ? serviceSections(project) : 1;
+    final spineCentreX = math.max(_riserGutterW + 2 * _ovW,
+        _riserGutterW + 40 + (sec - 1) / 2 * _sectionColPitch + _ovW / 2);
+    spine = _buildSourceSpine(project, result, spineCentreX);
     contentOffsetY = spine.height + _ovTierH;
     prims.addAll(spine.prims);
   }
@@ -3568,9 +3800,10 @@ SldSheet buildElectricalRiser({
     if (sp == null || spineBeside) return false;
     final zx = panelX[id]! + _ovW / 2;
     final zy = panelY[id]!;
-    final midY = (sp.feedY + zy) / 2;
-    return vBlocked(sp.feedX, sp.feedY, midY) ||
-        hBlocked(midY, sp.feedX, zx) ||
+    final midY = (sp.feedY + zy) / 2 + _spineRowDy(sp, id);
+    final fx = _spineFeedX(sp, id);
+    return vBlocked(fx, sp.feedY, midY) ||
+        hBlocked(midY, fx, zx) ||
         vBlocked(zx, midY, zy);
   }
 
@@ -3726,6 +3959,9 @@ SldSheet buildElectricalRiser({
       height: raw.height,
       feedX: raw.feedX + dx,
       feedY: raw.feedY + dy,
+      rootFeedX: {
+        for (final e in raw.rootFeedX.entries) e.key: e.value + dx,
+      },
     );
     spineGroup.addAll(shifted);
     prims.addAll(shifted);
@@ -3978,10 +4214,11 @@ SldSheet buildElectricalRiser({
       final zy = panelY[id]!;
       final rowY = busTrackOf['s:$id'];
       if (rowY == null) continue;
+      final fx = _spineFeedX(spine, id);
       final lead = [
-        SldLine(spine.feedX, spine.feedY, spine.feedX, rowY,
+        SldLine(fx, spine.feedY, fx, rowY,
             weight: SldWeight.medium, role: SldRole.source),
-        SldLine(spine.feedX, rowY, zx, rowY,
+        SldLine(fx, rowY, zx, rowY,
             weight: SldWeight.medium, role: SldRole.source),
         SldLine(zx, rowY, zx, zy,
             weight: SldWeight.medium, role: SldRole.source),
@@ -3994,14 +4231,15 @@ SldSheet buildElectricalRiser({
       if (parentOf.containsKey(id) || !panelX.containsKey(id)) continue;
       final zx = panelX[id]! + _ovW / 2;
       final zy = panelY[id]!;
-      final midY = (spine.feedY + zy) / 2;
+      final midY = (spine.feedY + zy) / 2 + _spineRowDy(spine, id);
       final straightBlocked = rootNeedsTrunk(id);
+      final fx = _spineFeedX(spine, id);
       if (!straightBlocked) {
         // The root sits on (or the drop clears) every band above it: the
         // legacy three-leg drop, byte-identical.
-        prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, midY,
+        prims.add(SldLine(fx, spine.feedY, fx, midY,
             weight: SldWeight.medium, role: SldRole.source));
-        prims.add(SldLine(spine.feedX, midY, zx, midY,
+        prims.add(SldLine(fx, midY, zx, midY,
             weight: SldWeight.medium, role: SldRole.source));
         prims.add(SldLine(zx, midY, zx, zy,
             weight: SldWeight.medium, role: SldRole.source));
@@ -4017,9 +4255,9 @@ SldSheet buildElectricalRiser({
       final topRowY = busTrackOf['top']!;
       // A root on the TOP band rides the same source row (one continuous path).
       final rootRowY = floorOf(id) == topIndex ? topRowY : busTrackOf['s:$id']!;
-      prims.add(SldLine(spine.feedX, spine.feedY, spine.feedX, topRowY,
+      prims.add(SldLine(fx, spine.feedY, fx, topRowY,
           weight: SldWeight.medium, role: SldRole.source));
-      prims.add(SldLine(spine.feedX, topRowY, trunkX, topRowY,
+      prims.add(SldLine(fx, topRowY, trunkX, topRowY,
           weight: SldWeight.medium, role: SldRole.source));
       prims.add(SldLine(trunkX, topRowY, trunkX, rootRowY,
           weight: SldWeight.medium, role: SldRole.source));
@@ -4358,6 +4596,8 @@ SldSheet buildElectricalRiser({
       // The source spine draws the system-earthing mark, so surface it too.
       if (sourceChain && _anyRolePrim(prims, SldRole.source))
         const SldLegendEntry('Earth', 'System earthing point'),
+      // Round 65 r2 — a sectioned spine draws its bus couplers on this sheet.
+      if (sourceChain && _hasOpenCoupler(prims)) _kCouplerLegend,
     ],
     supplyNote: supplyNote,
     overlapCount: stubOverlaps + feederLineOverlaps.length,
@@ -4593,17 +4833,31 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
   // is a DAG by construction; a per-node iteration cap guards any accidental
   // cycle so relaxation always terminates.
   final tier = <String, int>{for (final n in nodes) n.id: 0};
-  for (var pass = 0; pass < nodes.length; pass++) {
-    var changed = false;
-    for (final e in oneLine.edges) {
-      if (!byId.containsKey(e.from) || !byId.containsKey(e.to)) continue;
-      final want = tier[e.from]! + 1;
-      if (want > tier[e.to]!) {
-        tier[e.to] = want;
-        changed = true;
+  // Round 65 r2 — a bus COUPLER edge ([kPowerCouplerLabel]) is not a feed: it
+  // takes no part in the tiering and pulls both sections onto one row.
+  bool isCoupler(PowerEdge e) => e.label == kPowerCouplerLabel;
+  for (var round = 0; round < 2; round++) {
+    for (var pass = 0; pass < nodes.length; pass++) {
+      var changed = false;
+      for (final e in oneLine.edges) {
+        if (!byId.containsKey(e.from) || !byId.containsKey(e.to)) continue;
+        if (isCoupler(e)) {
+          final t = math.max(tier[e.from]!, tier[e.to]!);
+          if (tier[e.from] != t || tier[e.to] != t) {
+            tier[e.from] = t;
+            tier[e.to] = t;
+            changed = true;
+          }
+          continue;
+        }
+        final want = tier[e.from]! + 1;
+        if (want > tier[e.to]!) {
+          tier[e.to] = want;
+          changed = true;
+        }
       }
+      if (!changed) break;
     }
-    if (!changed) break;
   }
 
   // Group node ids by tier (insertion order preserved for stable packing).
@@ -4685,10 +4939,20 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
   }
   final colMid = colMinX.isFinite ? (colMinX + colMaxX) / 2 : 0.0;
   var laneL = 0, laneR = 0;
+  final txLaneOf = <String, ({int k, bool right})>{};
   for (final e in oneLine.edges) {
     final a = pos[e.from];
     final z = pos[e.to];
     if (a == null || z == null) continue;
+    // Round 65 r2 — a bus coupler: an OPEN tie between the two section
+    // boards' facing edges at mid-height (same row by construction).
+    if (isCoupler(e) && a.y == z.y) {
+      final left = a.x < z.x ? a : z;
+      final right = a.x < z.x ? z : a;
+      _emitOpenCoupler(prims, left.x + _polW, right.x, left.y + _polH / 2,
+          SldRole.source);
+      continue;
+    }
     final role = byId[e.to]!.kind == PowerNodeKind.mainPanel
         ? SldRole.normal
         : SldRole.source;
@@ -4722,8 +4986,18 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
             role);
       }
     } else {
-      final rightSide = ax > colMid;
-      final k = rightSide ? ++laneR : ++laneL;
+      // Round 65 r2 — the section transformers' MV feeds ('TX-i' into an LV
+      // section bus) all leave ONE utility: they share one lane (an MV trunk
+      // teeing to each transformer) instead of nesting lanes that cross.
+      final txFeed = label != null &&
+          label.startsWith('TX-') &&
+          byId[e.to]!.kind == PowerNodeKind.bus;
+      final shared = txFeed ? txLaneOf[e.from] : null;
+      final rightSide = shared?.right ?? ax > colMid;
+      final k = shared?.k ?? (rightSide ? ++laneR : ++laneL);
+      if (txFeed && shared == null) {
+        txLaneOf[e.from] = (k: k, right: rightSide);
+      }
       final laneX =
           rightSide ? colMaxX + _polLaneGap * k : colMinX - _polLaneGap * k;
       // Clear of the source's sub-label; each lane on a side turns on its own
@@ -4742,6 +5016,8 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
         placeLabel(
             label,
             [
+              // A shared transformer feed is named at its own drop.
+              if (txFeed) (zx + 4, zy - 3),
               for (var yy = y1 + 12; yy < y2; yy += 9)
                 (rightSide ? laneX + 3 : laneX - 3 - w, yy),
               (rightSide ? laneX + 3 : laneX - 3 - w, y1 - 3),
@@ -4825,10 +5101,11 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
     minY: minY,
     maxX: maxX,
     maxY: maxY,
-    legend: const [
-      SldLegendEntry('Source', 'Supply source / equipment'),
-      SldLegendEntry('G', 'Standby generator (genset)'),
-      SldLegendEntry('Board', 'Distribution board / bus'),
+    legend: [
+      const SldLegendEntry('Source', 'Supply source / equipment'),
+      const SldLegendEntry('G', 'Standby generator (genset)'),
+      const SldLegendEntry('Board', 'Distribution board / bus'),
+      if (_hasOpenCoupler(prims)) _kCouplerLegend,
     ],
     supplyNote: supplyNote,
   );

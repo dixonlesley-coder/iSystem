@@ -272,6 +272,12 @@ class ElectricalOptionalNumInput extends StatefulWidget {
   /// a non-positive entry ignored (an override of 0 A is nonsense).
   final bool zeroClears;
 
+  /// Round 65 r2 — an honest PERCENT / RATIO field: when set, a committed
+  /// value outside (0, [max]] is REJECTED with the field-error idiom (never
+  /// clamped, never silently ignored — the C6 rule); an empty field still
+  /// hands the value back to the engine (null). Wins over [zeroClears].
+  final double? max;
+
   const ElectricalOptionalNumInput({
     super.key,
     required this.value,
@@ -279,6 +285,7 @@ class ElectricalOptionalNumInput extends StatefulWidget {
     this.hint = 'Auto',
     this.integer = false,
     this.zeroClears = false,
+    this.max,
   });
 
   @override
@@ -323,6 +330,14 @@ class _ElectricalOptionalNumInputState
         // reach the store (whose jsonEncode no-op guard threw uncaught).
         if (!parsed.isFinite) {
           setState(() => _error = context.strings(StringKey.numInputNotFinite));
+          return;
+        }
+        // Round 65 r2 — a bounded field rejects out-of-band entries visibly.
+        final max = widget.max;
+        if (max != null && (parsed <= 0 || parsed > max)) {
+          setState(() => _error = context.strings.format(
+              StringKey.numInputRange,
+              {'min': '0', 'max': ElectricalNumInput._fmt(max)}));
           return;
         }
         // A non-positive override (0 A breaker, 0 mm² cable, 0 cables grouped)

@@ -20,7 +20,10 @@ library;
 
 import '../electrical/advanced_study.dart' show serviceTransformer;
 import '../electrical/genset_backup.dart'
-    show gensetBackupDemandVa, gensetBackupDemandW;
+    show
+        effectiveGeneratorBackupFraction,
+        gensetBackupDemandVa,
+        gensetBackupDemandW;
 import '../electrical/model.dart' show ElectricalProject, ElectricalSystem;
 import '../electrical/panel_results.dart';
 import '../electrical/power_factor.dart'
@@ -453,7 +456,8 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
                       data.electrical != null
                           ? gensetBackupDemandVa(ep, data.electrical!)
                           : ApparentPower(
-                              demandVa.voltAmperes * gen.backupFraction),
+                              demandVa.voltAmperes *
+                                  effectiveGeneratorBackupFraction(ep)),
                       mode: gen.mode,
                       // Round 16 — the set's kW limit (0.8 × kVA).
                       backupPower: data.electrical != null

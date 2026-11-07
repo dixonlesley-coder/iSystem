@@ -111,6 +111,11 @@ class PowerOneLine {
       nodes.any((n) => n.kind == PowerNodeKind.bus && n.id == 'ups-bus');
 }
 
+/// Round 65 r2 — the label of a normally-open BUS COUPLER edge between two
+/// LV sections of a sectioned service. The renderer draws it as an open tie
+/// between the two section boards on one row, never as a feeder.
+const String kPowerCouplerLabel = 'coupler N.O.';
+
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toString();
 
@@ -134,6 +139,17 @@ PowerOneLine buildPowerOneLine(
   String? utilitySub,
   SupplyKind supplyKind = SupplyKind.pln,
   ApparentPower? supplyCapacity,
+  // Round 65 — the EFFECTIVE backup fraction (`effectiveGeneratorBackupFraction`,
+  // resolved by the caller against the essential designation); null ⇒ the
+  // generator's own `backupFraction`.
+  double? backupFraction,
+  // Round 65 r2 — the number of SEPARATE transformer sections
+  // (`serviceSections`): above 1 the LV bus is SECTION 1 and every further
+  // section is its own bus node ('bus-s2' …) fed by its own transformer edge
+  // from the head, joined to the previous section by a normally-open coupler
+  // edge (+ a mechanical interlock row) — never one paralleled bus. 1 ⇒
+  // byte-identical.
+  int lvSections = 1,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -147,8 +163,10 @@ PowerOneLine buildPowerOneLine(
   nodes.add(PowerNode(
     id: 'bus',
     kind: PowerNodeKind.bus,
-    label: 'Main LV bus',
-    sub: '${_fmt(voltage.volts)} V',
+    label: lvSections > 1 ? 'LV section 1' : 'Main LV bus',
+    sub: lvSections > 1
+        ? '${_fmt(voltage.volts)} V · TX-1'
+        : '${_fmt(voltage.volts)} V',
   ));
   nodes.add(const PowerNode(
     id: 'main',
@@ -250,7 +268,10 @@ PowerOneLine buildPowerOneLine(
   // Essential split: a genset that backs only a fraction transfers a dedicated
   // ESSENTIAL bus (non-hybrid topology); the battery then backs a CRITICAL bus.
   final essentialSplit =
-      gen != null && !genPrimary && !hybrid && gen.backupFraction < 1.0;
+      gen != null &&
+      !genPrimary &&
+      !hybrid &&
+      (backupFraction ?? gen.backupFraction) < 1.0;
   var backedBus = 'bus';
 
   // Generator via ATS / COS, with the mains↔genset interlock.
@@ -450,6 +471,42 @@ PowerOneLine buildPowerOneLine(
           note: 'Battery inverter transfers the essential load on outage (UPS / island mode).',
         ));
       }
+    }
+  }
+
+  // Round 65 r2 — sections 2..n: each its own LV bus on its own transformer
+  // (a PLN head only — an on-site genset / PV plant has no transformer
+  // sections), tied to the previous section by a normally-open coupler.
+  // The section nodes go to the FRONT of the node list (highest section
+  // first), so the renderer packs them LEFT of section 1 on its row — their
+  // transformer lanes then come in from the left without crossing the
+  // section-1 transfer chain.
+  if (lvSections > 1 && supplyKind == SupplyKind.pln) {
+    for (var i = lvSections; i >= 2; i--) {
+      edge(headId, 'bus-s$i', 'TX-$i');
+    }
+    for (var i = 2; i <= lvSections; i++) {
+      final id = 'bus-s$i';
+      final prev = i == 2 ? 'bus' : 'bus-s${i - 1}';
+      nodes.insert(
+          0,
+          PowerNode(
+            id: id,
+            kind: PowerNodeKind.bus,
+            label: 'LV section $i',
+            sub: '${_fmt(voltage.volts)} V · TX-$i',
+          ));
+      edge(prev, id, kPowerCouplerLabel);
+      interlocks.add(PowerInterlock(
+        id: 'il-coupler-$i',
+        kind: PowerInterlockKind.mechanical,
+        aId: prev,
+        bId: id,
+        relation: PowerInterlockRelation.mutualExclusion,
+        note: 'Bus coupler normally open: LV sections ${i - 1} and $i are '
+            'never paralleled (each section carries its own transformer '
+            'fault); close the coupler only with one incomer open.',
+      ));
     }
   }
 

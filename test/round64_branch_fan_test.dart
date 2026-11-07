@@ -191,8 +191,11 @@ void main() {
     expect(ret.statPastBranchFans.pascals, greaterThan(sup.intake.pascals));
     final ahu = c.read(supplyFanDutiesByRootProvider)['ahu']!;
     // 250 Pa AHU internal allowance (`defaultInternalStatic`).
+    // Round 65 — the AHU's own supply index stops at the branch booster's
+    // inlet (`statPastBranchFans`; here the unboosted main governs, so it
+    // equals `stat`).
     final expectedPa =
-        sup.stat.pascals -
+        sup.statPastBranchFans.pascals -
         sup.intake.pascals +
         ret.statPastBranchFans.pascals +
         airUnitInternalStatic(

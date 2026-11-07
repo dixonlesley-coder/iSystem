@@ -1079,14 +1079,29 @@ String _pickComponentRoot({
   // pump -> header (a reversed arrow, and the neighbour room's flow carried
   // backwards up it). Such a fragment takes the source-hops rung below (the
   // service-change join nearest the source), so the leg flows source -> pump.
+  //
+  // Round 65 (regression-1) — only a join UPSTREAM of the pump (strictly
+  // fewer source hops than the nearest mover of the fragment) feeds it. A
+  // join DOWNSTREAM of the pump (its discharge main changing fire service at
+  // a header) is where the pump DELIVERS: rooting there oriented the
+  // discharge back into a dead-leaf pump and sized the whole pump train
+  // (tank main, suction, discharge) at zero flow.
+  final minMoverHops = plants.isEmpty
+      ? 0
+      : plants
+          .map((id) => fireSourceHops[id] ?? 0)
+          .reduce((a, b) => a < b ? a : b);
+  bool isUpstreamJoin(String id) =>
+      fireJoinIds.contains(id) &&
+      roleOf(id) != NodeRole.plant &&
+      (fireSourceHops[id] ?? (1 << 30)) < minMoverHops;
   final fedThroughOtherFireService = isFireService(service) &&
       fireSourceHops.isNotEmpty &&
       plants.isNotEmpty &&
       plants.every((id) =>
           isMoverComponent(nodeOf(id)?.component) &&
           (fireSourceHops[id] ?? 0) > 0) &&
-      component.any((id) =>
-          fireJoinIds.contains(id) && roleOf(id) != NodeRole.plant);
+      component.any(isUpstreamJoin);
   if (plants.isNotEmpty && !inlineSinksOnly && !fedThroughOtherFireService) {
     // Round 33 (hydraulics-3-3) — a mains-fed roof tank (PDAM meter ->
     // [pompa dorong] -> riser -> roof tank -> downfeed): a degree-1 WATER
@@ -1129,7 +1144,11 @@ String _pickComponentRoot({
   // terminal's own demand stays on the OTHER service's tree (it is a leaf
   // there); as this fragment's root it bears none here — never counted twice.
   if (isFireService(service) && fireSourceHops.isNotEmpty) {
-    bool isJoin(String id) => fireJoinIds.contains(id);
+    // Fed through another service (Round 65): only an UPSTREAM join may
+    // outrank the entry ladder — never the discharge-side header.
+    bool isJoin(String id) => fedThroughOtherFireService
+        ? isUpstreamJoin(id)
+        : fireJoinIds.contains(id);
     final entries = [
       for (final id in component)
         if (fireSourceHops.containsKey(id) &&

@@ -89,6 +89,23 @@ Set<String> gensetBackedPanelIds(ElectricalProject project) {
 }
 
 
+/// Round 65 (elec-convergence-17-genset-backup-fraction-unreachable-essential-
+/// only-set-sized-for-whole-building) — the backup fraction the genset is
+/// SIZED on: the engineer's typed fraction
+/// ([GeneratorSource.backupFractionTyped]) when there is one; else, with at
+/// least one board designated essential ([gensetBackedPanelIds]), 0 — the set
+/// backs the essential sub-tree only (`max(0 × building, essential)`); else
+/// 1.0, the whole building. Every sizing / dip-screen / one-line consumer
+/// reads this, never `GeneratorSource.backupFraction` directly. 1.0 with no
+/// generator.
+double effectiveGeneratorBackupFraction(ElectricalProject project) {
+  final gen = project.sources?.generator;
+  if (gen == null) return 1.0;
+  final typed = gen.backupFractionTyped;
+  if (typed != null) return typed;
+  return gensetBackedPanelIds(project).isNotEmpty ? 0.0 : 1.0;
+}
+
 /// The diversified apparent-power demand (VA) of the ESSENTIAL sub-tree(s) —
 /// the demand VA of each topmost genset-backed board (one whose parent is not
 /// itself backed; its demand already aggregates every board it feeds).
@@ -150,7 +167,7 @@ ApparentPower gensetBackupDemandVa(
   final gen = project.sources?.generator;
   final demand = sys.supply.demandVa.voltAmperes;
   if (gen == null) return ApparentPower(demand);
-  final fractionVa = _fractionVaFloored(project, sys, gen.backupFraction);
+  final fractionVa = _fractionVaFloored(project, sys, effectiveGeneratorBackupFraction(project));
   final essentialVa = _essentialVaFloored(project, sys);
   final balanced = essentialVa > fractionVa ? essentialVa : fractionVa;
   final phase = gensetPhaseDemandVa(project, sys);
@@ -406,19 +423,19 @@ double gensetPhaseDemandVa(
   if (!threePhaseSupply) {
     // A 1φ supply: every board is 1φ, the board basis is the alternator's.
     // Round 55 — each backed board floored at its largest machine.
-    final full = gen.backupFraction >= 1 - 1e-9;
+    final full = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
     final fraction = worstPhaseDemandVa(project, sys, _rootPanelIds(project),
             upsInput: true, withLargestMachine: full) *
-        gen.backupFraction;
+        effectiveGeneratorBackupFraction(project);
     final essential = worstPhaseDemandVa(
         project, sys, _topmostBackedPanelIds(project),
         upsInput: true, withLargestMachine: true);
     return essential > fraction ? essential : fraction;
   }
-  final full = gen.backupFraction >= 1 - 1e-9;
+  final full = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
   final fraction = alternatorLineDemandVa(project, sys, _rootPanelIds(project),
           withLargestMachine: full) *
-      gen.backupFraction;
+      effectiveGeneratorBackupFraction(project);
   final essential = alternatorLineDemandVa(
       project, sys, _topmostBackedPanelIds(project),
       withLargestMachine: true);
@@ -558,8 +575,8 @@ List<ElectricalWarning> gensetBackupWarnings(
   // against the essential boards alone left a 50 kVA set silently picking up
   // a 100 kVA bus at the default fraction 1.0 (the power one-line draws it
   // onto the WHOLE LV bus, the dip screen starts every motor).
-  final fractionVa = _fractionVaFloored(project, sys, gen.backupFraction);
-  final fractionW = _fractionWFloored(project, sys, gen.backupFraction);
+  final fractionVa = _fractionVaFloored(project, sys, effectiveGeneratorBackupFraction(project));
+  final fractionW = _fractionWFloored(project, sys, effectiveGeneratorBackupFraction(project));
   // Round 48 (regression-forced-prime-genset-judged-without-prime-uplift) —
   // a PRIME set is sized on 1.25 × the governing basis
   // ([requiredGeneratorKva]); judge the forced nameplate on that SAME
@@ -581,7 +598,7 @@ List<ElectricalWarning> gensetBackupWarnings(
   String whose(bool byEssential) => byEssential
       ? 'the essential (genset-backed) boards'
       : 'the building load it backs (backup fraction '
-          '${(gen.backupFraction * 100).toStringAsFixed(0)} %)';
+          '${(effectiveGeneratorBackupFraction(project) * 100).toStringAsFixed(0)} %)';
   return [
     if (balancedVa > 0 && forced.voltAmperes + 1e-6 < balancedVa)
       ElectricalWarning(
@@ -633,7 +650,7 @@ Power gensetBackupDemandW(
   final gen = project.sources?.generator;
   final demandW = sys.supply.demandW;
   if (gen == null) return Power(demandW);
-  final fractionW = _fractionWFloored(project, sys, gen.backupFraction);
+  final fractionW = _fractionWFloored(project, sys, effectiveGeneratorBackupFraction(project));
   final essentialW = _essentialWFloored(project, sys);
   return Power(essentialW > fractionW ? essentialW : fractionW);
 }

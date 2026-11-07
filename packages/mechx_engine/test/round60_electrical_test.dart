@@ -133,7 +133,11 @@ void main() {
       expect(tx.kva, kva);
       expect(tx.units, 3);
       final spine = _labels(buildElectricalSourceSpine(project: pr, result: s.sys));
-      expect(spine.join('\n'), contains('TRANSFORMER 3 x ${kva.toInt()} kVA'));
+      // Round 65 r2 — a sectioned service draws one transformer per section
+      // (never 'TRANSFORMER 3 x kVA' on one LV main).
+      for (var i = 1; i <= 3; i++) {
+        expect(spine, contains('TX-$i ${kva.toInt()} kVA'));
+      }
       final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
           projectName: 'P',
           date: '2026-10-18',
@@ -215,9 +219,13 @@ void main() {
         expect(printed, isNotNull, reason: 'trial $t');
         expect(printed!.kva, study.transformerKva, reason: 'trial $t');
         expect(printed.units, study.units, reason: 'trial $t');
+        // Round 65 — every trial is a SECTIONED service (dual => 2, else
+        // transformerUnits): the sub states the separate sections.
+        final sections = pr.transformerUnits ?? 2;
         expect(powerOneLineUtilitySub(pr, sys),
             'MV via TX ${printed.units > 1 ? '${printed.units} x ' : ''}'
-            '${printed.kva.toStringAsFixed(0)} kVA',
+            '${printed.kva.toStringAsFixed(0)} kVA'
+            ' · $sections sections, coupler N.O.',
             reason: 'trial $t');
         final bom = advancedBomLines(project: pr, sys: sys)
             .where((l) => (l.priceKey ?? '').contains('transformer'))

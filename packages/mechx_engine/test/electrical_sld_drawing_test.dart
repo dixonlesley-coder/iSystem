@@ -583,7 +583,9 @@ void main() {
       // the whole demand: per unit >= demand / 0.8.
       final perUnit = r.supply.demandVa.inKilovoltAmperes / 0.8;
       final kva = transformerKvaLadder.firstWhere((k) => k >= perUnit);
-      final kvaText = '2 x ${kva == kva.roundToDouble() ? '${kva.toInt()}' : kva.toStringAsFixed(1)}';
+      final kvaText = kva == kva.roundToDouble()
+          ? '${kva.toInt()}'
+          : kva.toStringAsFixed(1);
       final joined = buildElectricalSourceSpine(project: dual, result: r)
           .prims
           .whereType<SldLabel>()
@@ -594,8 +596,13 @@ void main() {
       // two centred lines inside its box (it ran into the right border once
       // the plot fit grew it to the minimum plotted size).
       expect(joined, contains('PANEL UTAMA\nTEGANGAN MENENGAH'));
-      expect(joined, contains('TRANSFORMER $kvaText kVA'));
-      expect(joined, contains('PANEL UTAMA\nTEGANGAN RENDAH'));
+      // Round 65 r2 — a sectioned (dual) service: one transformer + one LV
+      // section per section, a normally-open coupler between them.
+      expect(joined, contains('TX-1 $kvaText kVA'));
+      expect(joined, contains('TX-2 $kvaText kVA'));
+      expect(joined, contains('LV SECTION 1'));
+      expect(joined, contains('LV SECTION 2'));
+      expect(joined, contains('N.O.'));
     });
   });
 

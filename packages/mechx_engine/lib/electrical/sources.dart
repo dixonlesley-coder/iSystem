@@ -253,8 +253,19 @@ class GeneratorSource {
       kva == null ? null : ApparentPower(kva!.voltAmperes * units);
 
   /// Fraction of the building demand the genset must back up (0–1) when no
-  /// explicit essential demand is supplied.
-  final double backupFraction;
+  /// explicit essential demand is supplied — 1.0 when none was typed (the
+  /// legacy reading). Sizing reads `effectiveGeneratorBackupFraction`
+  /// (genset_backup.dart), which resolves an UNTYPED fraction against the
+  /// essential designation.
+  double get backupFraction => backupFractionTyped ?? 1.0;
+
+  /// Round 65 (elec-convergence-17-genset-backup-fraction-unreachable) — the
+  /// fraction the engineer TYPED (0 < f <= 1), or null when none was: an
+  /// untyped set with essential boards marked backs the essential sub-tree
+  /// only, never the whole building (the app's only reachable fraction used
+  /// to be the 1.0 default, so marking boards essential could never shrink
+  /// the set).
+  final double? backupFractionTyped;
 
   /// standby = intermittent (mains failure); prime = continuous (needs headroom).
   final GeneratorMode mode;
@@ -265,10 +276,10 @@ class GeneratorSource {
   const GeneratorSource({
     this.kva,
     this.units = 1,
-    this.backupFraction = 1.0,
+    double? backupFraction,
     this.mode = GeneratorMode.standby,
     this.transfer = GeneratorTransfer.ats,
-  });
+  }) : backupFractionTyped = backupFraction;
 }
 
 /// Grid-tied / hybrid solar PV request.

@@ -144,6 +144,27 @@ void main() {
       await _commit(tester, '25');
       expect(commits, [25]);
     });
+
+    // Round 65 r2 — the Supply > Backup 'Backs % of demand' field (max 100):
+    // an out-of-band percent is REJECTED with the field error, never clamped
+    // to 100 % (the C6 rule); blank still hands it back to Auto.
+    testWidgets('a bounded percent field rejects <= 0 and > max',
+        (tester) async {
+      setDesktopSurface(tester);
+      final commits = <double?>[];
+      await tester.pumpWidget(_host(ElectricalOptionalNumInput(
+          value: null, max: 100, onChanged: commits.add)));
+      await _commit(tester, '150');
+      expect(commits, isEmpty);
+      expect(find.text('Enter a value between 0 and 100'), findsOneWidget);
+      await _commit(tester, '-5');
+      expect(commits, isEmpty);
+      await _commit(tester, '0');
+      expect(commits, isEmpty);
+      await _commit(tester, '60');
+      expect(commits, [60]);
+      expect(find.text('Enter a value between 0 and 100'), findsNothing);
+    });
   });
 
   // ── the store gates ────────────────────────────────────────────────────────

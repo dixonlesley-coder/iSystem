@@ -72,8 +72,9 @@ void main() {
       final t = serviceTransformer(pr, sys)!;
       expect(t.kva, 500);
       expect(t.units, 2);
+      // Round 65 — a dual service is two SEPARATE sections (coupler N.O.).
       expect(powerOneLineUtilitySub(pr, sys),
-          'MV via TX 2 x 500 kVA');
+          'MV via TX 2 x 500 kVA · 2 sections, coupler N.O.');
       final adv = computeAdvancedStudy(p, pr, sys);
       expect(adv.supply.transformerKva, 500);
       expect(adv.supply.units, 2);
