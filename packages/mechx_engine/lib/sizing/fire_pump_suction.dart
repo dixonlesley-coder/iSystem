@@ -251,19 +251,23 @@ Set<String> raiseFirePumpSuctionAndDischarge(
     // to the first junction or terminal — and on through a DISCHARGE
     // HEADER (a junction where two or more pump legs merge, every pipe
     // into it coming from a mover) to the main it feeds.
-    // (node, past a discharge header?)
-    final dstack = [(p, false)];
+    // (node, past a discharge header?, is this node the header itself?)
+    final dstack = [(p, false, false)];
     final dseen = <String>{p};
     while (dstack.isNotEmpty) {
-      final (cur, pastHeader) = dstack.removeLast();
+      final (cur, pastHeader, atHeader) = dstack.removeLast();
       for (final e in adj[cur] ?? const <NetEdge>[]) {
         if (!outflowAt(e, cur)) continue;
         // Past a header the discharge piping ends where the standpipe /
         // sprinkler riser begins (the riser keeps its own class sizing);
         // a riser leaving the pump itself is its discharge pipe (and the
-        // walk stops at its top).
+        // walk stops at its top). Round 70 (regression-duplex-riser-main-
+        // skips-nfpa20-discharge) — a riser leaving the discharge HEADER
+        // itself is the pump set's discharge main too (the simplex room's
+        // riser off a bare degree-2 node is): only a riser reached past the
+        // header through a further junction keeps the standpipe's class size.
         if (e.kind == EdgeKind.riser) {
-          if (!pastHeader) {
+          if (!pastHeader || (atHeader && !isBranchOffMain(e, cur, p))) {
             discharge.add(e.id);
             rate(e.id, p);
           }
@@ -292,14 +296,16 @@ Set<String> raiseFirePumpSuctionAndDischarge(
             if (x.id == e.id || !leadsToInlet(x, next)) x,
         ];
         var header = pastHeader;
+        var isHeader = false;
         if (links.length > 2) {
           final ins = links.where((x) => inflowAt(x, next)).toList();
           if (ins.length < 2 || !ins.every((x) => leadsToMover(x, next))) {
             continue;
           }
           header = true;
+          isHeader = true;
         }
-        if (dseen.add(next)) dstack.add((next, header));
+        if (dseen.add(next)) dstack.add((next, header, isHeader));
       }
     }
   }
