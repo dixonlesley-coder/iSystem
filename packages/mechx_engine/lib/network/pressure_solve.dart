@@ -897,12 +897,25 @@ Map<String, Set<String>> downfeedTankRegions({
         NodeComponent.groundTank || NodeComponent.roofTank => true,
         _ => false,
       };
-  final tanks = <String>{};
+  // Only tanks on the SOURCE's own connected network (a separately fed
+  // podium's ground tank is never a break tank of the tower).
+  final adj = <String, List<String>>{};
   for (final e in net.edges) {
     if (e.service != service) continue;
-    if (isTank(e.fromId)) tanks.add(e.fromId);
-    if (isTank(e.toId)) tanks.add(e.toId);
+    (adj[e.fromId] ??= []).add(e.toId);
+    (adj[e.toId] ??= []).add(e.fromId);
   }
+  final comp = <String>{sourceTankId};
+  final queue = [sourceTankId];
+  for (var i = 0; i < queue.length; i++) {
+    for (final m in adj[queue[i]] ?? const <String>[]) {
+      if (comp.add(m)) queue.add(m);
+    }
+  }
+  final tanks = {
+    for (final id in comp)
+      if (isTank(id)) id,
+  };
   if (tanks.length < 2 || !tanks.contains(sourceTankId)) return const {};
   // Oriented adjacency: node -> the nodes its sized flow leaves to.
   final down = <String, List<String>>{};
