@@ -198,6 +198,251 @@ void _expectSameRoom(Map<String, EdgeSizing> r, Map<String, EdgeSizing> base,
   }
 }
 
+NetEdge _edge(String id, String a, String b, Map<String, ServiceType> svc,
+    Set<String> flip,
+    {EdgeKind k = EdgeKind.run, ServiceType s = _hy}) {
+  final f = flip.contains(id);
+  return NetEdge(
+      id: id,
+      fromId: f ? b : a,
+      toId: f ? a : b,
+      service: svc[id] ?? s,
+      kind: k);
+}
+
+/// GT (L0) -g- SH -s- P1 -d(riser)- X1 -r2(riser)- X2 -s2- P2 (L2)
+/// -d2(riser)- X3 -r4(riser)- X4; boxes B3 / B4 (+ B1 / B2 when
+/// [lowerBoxes]); RT (roof tank, L4) -o- X4; X3 -sh3(sprinkler)- H3. A
+/// [duplex] lower room is SH -sa/sb- P1a/P1b -da/db- DS -d(riser)- X1.
+/// Returns the network, the pump-room pipes and each one's upstream node.
+(Network, List<String>, Map<String, String>) _series({
+  bool duplex = false,
+  bool lowerBoxes = false,
+  bool sprinkler = true,
+  Map<String, ServiceType> svc = const {},
+  Set<String> flip = const {},
+  math.Random? shuffle,
+}) {
+  final nodes = <NetNode>[
+    _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+    _n('SH', 100),
+    if (duplex) ...[
+      _n('P1a', 200, role: NodeRole.plant, c: NodeComponent.pump),
+      _n('P1b', 200, y: 50, role: NodeRole.plant, c: NodeComponent.pump),
+      _n('DS', 300),
+    ] else
+      _n('P1', 200, role: NodeRole.plant, c: NodeComponent.pump),
+    _n('X1', 300, floor: 1),
+    _n('X2', 300, floor: 2),
+    _n('P2', 350, floor: 2, role: NodeRole.plant, c: NodeComponent.pump),
+    _n('X3', 400, floor: 3),
+    _n('X4', 400, floor: 4),
+    for (final f in [
+      if (lowerBoxes) ...[1, 2],
+      3,
+      4
+    ])
+      _n('B$f', 500,
+          floor: f, role: NodeRole.fixture, c: NodeComponent.hydrantBox),
+    _n('RT', 400,
+        floor: 4, y: 60, role: NodeRole.plant, c: NodeComponent.roofTank),
+    if (sprinkler)
+      _n('H3', 400,
+          floor: 3,
+          y: -60,
+          role: NodeRole.fixture,
+          c: NodeComponent.sprinklerHead),
+  ];
+  final room = <String>[];
+  final edges = <NetEdge>[];
+  void add(String id, String a, String b,
+      {EdgeKind k = EdgeKind.run, ServiceType s = _hy, bool inRoom = true}) {
+    if (inRoom) room.add(id);
+    edges.add(_edge(id, a, b, svc, flip, k: k, s: s));
+  }
+
+  add('g', 'GT', 'SH');
+  if (duplex) {
+    add('sa', 'SH', 'P1a');
+    add('sb', 'SH', 'P1b');
+    add('da', 'P1a', 'DS');
+    add('db', 'P1b', 'DS');
+    add('d', 'DS', 'X1', k: EdgeKind.riser);
+  } else {
+    add('s', 'SH', 'P1');
+    add('d', 'P1', 'X1', k: EdgeKind.riser);
+  }
+  add('r2', 'X1', 'X2', k: EdgeKind.riser);
+  add('s2', 'X2', 'P2');
+  add('d2', 'P2', 'X3', k: EdgeKind.riser);
+  add('r4', 'X3', 'X4', k: EdgeKind.riser);
+  for (final f in [
+    if (lowerBoxes) ...[1, 2],
+    3,
+    4
+  ]) {
+    add('b$f', 'X$f', 'B$f', inRoom: false);
+  }
+  add('o', 'RT', 'X4', inRoom: false);
+  if (sprinkler) add('sh3', 'X3', 'H3', s: _sp, inRoom: false);
+  if (shuffle != null) {
+    nodes.shuffle(shuffle);
+    edges.shuffle(shuffle);
+  }
+  return (
+    Network(nodes: nodes, edges: edges),
+    room,
+    {
+      'g': 'GT',
+      if (duplex) ...{
+        'sa': 'SH',
+        'sb': 'SH',
+        'da': 'P1a',
+        'db': 'P1b',
+        'd': 'DS'
+      } else ...{
+        's': 'SH',
+        'd': 'P1'
+      },
+      'r2': 'X1',
+      's2': 'X2',
+      'd2': 'P2',
+      'r4': 'X3',
+    },
+  );
+}
+
+/// GT (L0) -g- SH -s- P1 -d(riser)- X1 -r2- X2 -r3- X3 -s3- BS (booster
+/// set, L3) -d3(riser)- X4 -r5- X5 -r6- X6, a box on X1..X6, sprinkler
+/// heads off X1 and X5, RT (roof tank, L6) -o- X6.
+(Network, List<String>, Map<String, String>) _booster({
+  bool sprinkler = true,
+  Map<String, ServiceType> svc = const {},
+  Set<String> flip = const {},
+  math.Random? shuffle,
+}) {
+  final nodes = <NetNode>[
+    _n('GT', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+    _n('SH', 100),
+    _n('P1', 200, role: NodeRole.plant, c: NodeComponent.pump),
+    for (var f = 1; f <= 6; f++) ...[
+      _n('X$f', f <= 3 ? 300 : 400, floor: f),
+      _n('B$f', 500,
+          floor: f, role: NodeRole.fixture, c: NodeComponent.hydrantBox),
+    ],
+    _n('BS', 350, floor: 3, role: NodeRole.plant, c: NodeComponent.boosterSet),
+    _n('RT', 400,
+        floor: 6, y: 60, role: NodeRole.plant, c: NodeComponent.roofTank),
+    if (sprinkler) ...[
+      _n('H1', 300,
+          floor: 1,
+          y: -60,
+          role: NodeRole.fixture,
+          c: NodeComponent.sprinklerHead),
+      _n('H5', 400,
+          floor: 5,
+          y: -60,
+          role: NodeRole.fixture,
+          c: NodeComponent.sprinklerHead),
+    ],
+  ];
+  final room = <String>[];
+  final edges = <NetEdge>[];
+  void add(String id, String a, String b,
+      {EdgeKind k = EdgeKind.run, ServiceType s = _hy, bool inRoom = true}) {
+    if (inRoom) room.add(id);
+    edges.add(_edge(id, a, b, svc, flip, k: k, s: s));
+  }
+
+  add('g', 'GT', 'SH');
+  add('s', 'SH', 'P1');
+  add('d', 'P1', 'X1', k: EdgeKind.riser);
+  add('r2', 'X1', 'X2', k: EdgeKind.riser);
+  add('r3', 'X2', 'X3', k: EdgeKind.riser);
+  add('s3', 'X3', 'BS');
+  add('d3', 'BS', 'X4', k: EdgeKind.riser);
+  add('r5', 'X4', 'X5', k: EdgeKind.riser);
+  add('r6', 'X5', 'X6', k: EdgeKind.riser);
+  for (var f = 1; f <= 6; f++) {
+    add('b$f', 'X$f', 'B$f', inRoom: false);
+  }
+  add('o', 'RT', 'X6', inRoom: false);
+  if (sprinkler) {
+    add('sh1', 'X1', 'H1', s: _sp, inRoom: false);
+    add('sh5', 'X5', 'H5', s: _sp, inRoom: false);
+  }
+  if (shuffle != null) {
+    nodes.shuffle(shuffle);
+    edges.shuffle(shuffle);
+  }
+  return (
+    Network(nodes: nodes, edges: edges),
+    room,
+    const {
+      'g': 'GT', 's': 'SH', 'd': 'P1', 'r2': 'X1', 'r3': 'X2', //
+      's3': 'X3', 'd3': 'BS', 'r5': 'X4', 'r6': 'X5',
+    },
+  );
+}
+
+/// A MAINS-fed room (a bare entry leaf M, or a water meter WM) under a roof
+/// standby: M -g- SH -s- P -d- DS -r1(riser)- X1 -r2(riser)- X2, boxes
+/// B1 / B2, RT (roof tank, L2) -o- X2, a sprinkler head off X1.
+(Network, List<String>, Map<String, String>) _mainsRoof({
+  bool meter = false,
+  bool sprinkler = true,
+  Map<String, ServiceType> svc = const {},
+  Set<String> flip = const {},
+  math.Random? shuffle,
+}) {
+  final entry = meter ? 'WM' : 'M';
+  final nodes = <NetNode>[
+    _n(entry, 0, c: meter ? NodeComponent.waterMeter : null),
+    _n('SH', 100),
+    _n('P', 200, role: NodeRole.plant, c: NodeComponent.pump),
+    _n('DS', 300),
+    for (var f = 1; f <= 2; f++) ...[
+      _n('X$f', 300, floor: f),
+      _n('B$f', 400,
+          floor: f, role: NodeRole.fixture, c: NodeComponent.hydrantBox),
+    ],
+    _n('RT', 300,
+        floor: 2, y: 60, role: NodeRole.plant, c: NodeComponent.roofTank),
+    if (sprinkler)
+      _n('H1', 300,
+          floor: 1,
+          y: -60,
+          role: NodeRole.fixture,
+          c: NodeComponent.sprinklerHead),
+  ];
+  final room = <String>[];
+  final edges = <NetEdge>[];
+  void add(String id, String a, String b,
+      {EdgeKind k = EdgeKind.run, ServiceType s = _hy, bool inRoom = true}) {
+    if (inRoom) room.add(id);
+    edges.add(_edge(id, a, b, svc, flip, k: k, s: s));
+  }
+
+  add('g', entry, 'SH');
+  add('s', 'SH', 'P');
+  add('d', 'P', 'DS');
+  add('r1', 'DS', 'X1', k: EdgeKind.riser);
+  add('r2', 'X1', 'X2', k: EdgeKind.riser, inRoom: false);
+  add('b1', 'X1', 'B1', inRoom: false);
+  add('b2', 'X2', 'B2', inRoom: false);
+  add('o', 'RT', 'X2', inRoom: false);
+  if (sprinkler) add('sh1', 'X1', 'H1', s: _sp, inRoom: false);
+  if (shuffle != null) {
+    nodes.shuffle(shuffle);
+    edges.shuffle(shuffle);
+  }
+  return (
+    Network(nodes: nodes, edges: edges),
+    room,
+    {'g': entry, 's': 'SH', 'd': 'P', 'r1': 'DS'},
+  );
+}
+
 void main() {
   test('the reviewer repro: 2 storeys, 2-node suction, sprinkler at X1', () {
     final (net, _) = _repro(storeys: 2, suction: 2);
@@ -343,6 +588,134 @@ void main() {
           }
         }
         expect(firePumpsDrawnBackwards(net, r), isEmpty);
+      }
+    }
+  });
+
+  // --- Round 66 r4 follow-up: pumps in SERIES under a roof-tank standby, and
+  // a MAINS-fed room under one. A side the discharge of an already-decided
+  // pump feeds is a PUMPED source (rank 1, above a roof tank), and a bare /
+  // water-meter MAINS entry leaf on a side ranks the same: the series stage
+  // and the booster take suction from below, never from the roof tank.
+
+  test('series stage under a roof standby: P2 takes suction from P1', () {
+    for (final duplex in [false, true]) {
+      for (final lowerBoxes in [false, true]) {
+        final why = 'duplex $duplex lowerBoxes $lowerBoxes';
+        final (hy, room, from) =
+            _series(duplex: duplex, lowerBoxes: lowerBoxes, sprinkler: false);
+        final base = _size(hy, 5);
+        final (net, _, _) = _series(duplex: duplex, lowerBoxes: lowerBoxes);
+        final r = _size(net, 5);
+        for (final MapEntry(key: id, value: up) in from.entries) {
+          expect(base[id]!.flowFromId, up, reason: '$why all-hydrant $id');
+          expect(r[id]!.flowFromId, up, reason: '$why $id');
+        }
+        _expectSameRoom(r, base, room, why);
+        expect(firePumpsDrawnBackwards(net, r), isEmpty, reason: why);
+      }
+    }
+  });
+
+  test('6-storey: P1 on L0, booster set on L3, sprinklers at X1 / X5', () {
+    final (hy, room, from) = _booster(sprinkler: false);
+    final base = _size(hy, 7);
+    final (net, _, _) = _booster();
+    final r = _size(net, 7);
+    for (final MapEntry(key: id, value: up) in from.entries) {
+      expect(base[id]!.flowFromId, up, reason: 'all-hydrant $id');
+      expect(r[id]!.flowFromId, up, reason: id);
+    }
+    _expectSameRoom(r, base, room, 'booster');
+    expect(firePumpsDrawnBackwards(net, r), isEmpty);
+  });
+
+  test('mains-fed room under a roof standby: the entry leaf is the suction',
+      () {
+    for (final meter in [false, true]) {
+      for (final sprinkler in [false, true]) {
+        final why = 'meter $meter sprinkler $sprinkler';
+        final (net, room, from) =
+            _mainsRoof(meter: meter, sprinkler: sprinkler);
+        final r = _size(net, 3);
+        for (final MapEntry(key: id, value: up) in from.entries) {
+          expect(r[id]!.flowFromId, up, reason: '$why $id');
+          expect(r[id]!.flow.inLitersPerSecond, closeTo(31.545, 0.001),
+              reason: '$why $id');
+          expect(r[id]!.diameter.inMillimeters, 125, reason: '$why $id');
+        }
+        expect(firePumpsDrawnBackwards(net, r), isEmpty, reason: why);
+        if (sprinkler) {
+          final (hy, _, _) = _mainsRoof(meter: meter, sprinkler: false);
+          _expectSameRoom(r, _size(hy, 3), room, why);
+        }
+      }
+    }
+  });
+
+  test(
+      'seeded: series / booster / mains-fed rooms — services x drawn '
+      'direction x list order never move a pump-room size, flow or arrow', () {
+    final rnd = math.Random(665);
+    final variants = <(
+      (Network, List<String>, Map<String, String>) Function(
+          {Map<String, ServiceType> svc,
+          Set<String> flip,
+          math.Random? shuffle,
+          bool sprinkler}),
+      int,
+      String
+    )>[
+      for (final duplex in [false, true])
+        for (final lowerBoxes in [false, true])
+          (
+            ({svc = const {}, flip = const {}, shuffle, sprinkler = true}) =>
+                _series(
+                    duplex: duplex,
+                    lowerBoxes: lowerBoxes,
+                    svc: svc,
+                    flip: flip,
+                    shuffle: shuffle,
+                    sprinkler: sprinkler),
+            5,
+            'series duplex $duplex lowerBoxes $lowerBoxes'
+          ),
+      (
+        ({svc = const {}, flip = const {}, shuffle, sprinkler = true}) =>
+            _booster(
+                svc: svc, flip: flip, shuffle: shuffle, sprinkler: sprinkler),
+        7,
+        'booster'
+      ),
+      for (final meter in [false, true])
+        (
+          ({svc = const {}, flip = const {}, shuffle, sprinkler = true}) =>
+              _mainsRoof(
+                  meter: meter,
+                  svc: svc,
+                  flip: flip,
+                  shuffle: shuffle,
+                  sprinkler: sprinkler),
+          3,
+          'mains meter $meter'
+        ),
+    ];
+    for (final (build, floors, name) in variants) {
+      final (hy, room, _) = build(sprinkler: false);
+      final base = _size(hy, floors);
+      for (var t = 0; t < 10; t++) {
+        final svc = {
+          for (final id in room)
+            if (rnd.nextBool()) id: _sp,
+        };
+        final flip = {
+          for (final id in room)
+            if (rnd.nextBool()) id,
+        };
+        final (net, _, _) = build(
+            svc: svc, flip: flip, shuffle: math.Random(rnd.nextInt(1 << 30)));
+        _expectSameRoom(
+            _size(net, floors), base, room, '$name svc $svc flip $flip');
       }
     }
   });

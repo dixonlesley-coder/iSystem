@@ -1387,31 +1387,100 @@ Set<String> fireServiceJoinNodes(Network net) {
   final suctionStart = <String, Map<String, bool>>{};
   final onSuction = <String>{}, onDischarge = <String>{};
   final dischargeReach = <String, Set<String>>{};
-  for (final id in (adj.keys.toList()..sort())) {
-    final m = net.nodeById(id);
-    if (m == null || !_isFireMover(m)) continue;
+  // Each mover's sides (plants reached + walk interior), then decisions in
+  // SOURCE ORDER: a mover the discharge of an already-decided mover feeds
+  // takes suction from that side (a series stage / mid-riser booster), so
+  // movers are decided in passes, postponing one whose pick could still
+  // change; a pass with no progress decides the rest without that wait.
+  final moverIds = [
+    for (final id in (adj.keys.toList()..sort()))
+      if (net.nodeById(id) case final n? when _isFireMover(n)) id,
+  ];
+  final sidesOf = <String, Map<String, Set<String>>>{};
+  final interiorOf = <String, Map<String, Set<String>>>{};
+  for (final id in moverIds) {
     final interior = <String, Set<String>>{};
-    final sides = _moverSides(net, id, adj, interiorOut: interior);
-    // A side SEPARATED from the others by the mover (no node shared with
-    // another side's walk): a leg looping back to the mover itself, or a
-    // bypass around it, is no suction / discharge side of its own.
-    bool separated(String edgeId) => interior.entries.every((o) =>
-        o.key == edgeId || o.value.intersection(interior[edgeId]!).isEmpty);
-    final start = _moverSuctionStart(
-        net, sides, sources, pumpedInto[id] ?? const <String>{}, elev,
-        interior: interior);
-    if (start == null || !separated(start)) continue;
-    final legs = <String, bool>{};
-    for (final MapEntry(key: edgeId, value: reached) in sides.entries) {
-      if (!separated(edgeId)) continue;
-      legs[edgeId] = edgeId == start;
-      (edgeId == start ? onSuction : onDischarge).addAll(reached);
-      if (edgeId == start) continue;
-      for (final t in reached) {
-        (dischargeReach[t] ??= <String>{}).addAll(interior[edgeId]!);
+    sidesOf[id] = _moverSides(net, id, adj, interiorOut: interior);
+    interiorOf[id] = interior;
+  }
+  // A MAINS entry on a side: a bare (or water-meter) non-fixture node on
+  // exactly one fire pipe.
+  bool isEntry(String nodeId) {
+    final n = net.nodeById(nodeId);
+    return n != null &&
+        n.role != NodeRole.fixture &&
+        n.role != NodeRole.plant &&
+        (n.component == null || n.component == NodeComponent.waterMeter) &&
+        (adj[nodeId]?.length ?? 0) == 1;
+  }
+
+  final settled = <String>{};
+  var waitForPumped = true;
+  while (settled.length < moverIds.length) {
+    var progress = false;
+    for (final id in moverIds) {
+      if (settled.contains(id)) continue;
+      final sides = sidesOf[id]!;
+      final interior = interiorOf[id]!;
+      // A side SEPARATED from the others by the mover (no node shared with
+      // another side's walk): a leg looping back to the mover itself, or a
+      // bypass around it, is no suction / discharge side of its own.
+      bool separated(String edgeId) => interior.entries.every((o) =>
+          o.key == edgeId || o.value.intersection(interior[edgeId]!).isEmpty);
+      final pumped = <String>{}, undecided = <String>{}, entries = <String>{};
+      for (final MapEntry(key: edgeId, value: reached) in sides.entries) {
+        if (interior[edgeId]!.any(isEntry)) entries.add(edgeId);
+        for (final other in reached) {
+          if (!sidesOf.containsKey(other)) continue;
+          final legs = suctionStart[other];
+          if (legs == null) {
+            if (!settled.contains(other) &&
+                !sides.entries.every((x) => x.value.contains(other))) {
+              undecided.add(edgeId);
+            }
+            continue;
+          }
+          // `other`'s DISCHARGE (and not its suction) reaches this mover.
+          var onItsDischarge = false, onItsSuction = false;
+          for (final MapEntry(key: le, value: isSuction) in legs.entries) {
+            if (!sidesOf[other]![le]!.contains(id)) continue;
+            if (isSuction) {
+              onItsSuction = true;
+            } else {
+              onItsDischarge = true;
+            }
+          }
+          if (onItsDischarge && !onItsSuction) pumped.add(edgeId);
+        }
       }
+      final (start, postpone) = _moverSuctionStart(
+          net, sides, sources, pumpedInto[id] ?? const <String>{}, elev,
+          interior: interior,
+          pumpedSides: pumped,
+          entrySides: entries,
+          undecidedMoverSides: waitForPumped ? undecided : const {});
+      if (postpone) continue;
+      settled.add(id);
+      progress = true;
+      if (start == null || !separated(start)) continue;
+      final legs = <String, bool>{};
+      for (final MapEntry(key: edgeId, value: reached) in sides.entries) {
+        if (!separated(edgeId)) continue;
+        legs[edgeId] = edgeId == start;
+        (edgeId == start ? onSuction : onDischarge).addAll(reached);
+        if (edgeId == start) continue;
+        for (final t in reached) {
+          (dischargeReach[t] ??= <String>{}).addAll(interior[edgeId]!);
+        }
+      }
+      suctionStart[id] = legs;
     }
-    suctionStart[id] = legs;
+    if (!progress) {
+      if (!waitForPumped) break;
+      waitForPumped = false;
+    } else {
+      waitForPumped = true;
+    }
   }
   final dischargeOnly = <String, Set<String>>{
     for (final id in sources)
@@ -1433,13 +1502,7 @@ Set<String> fireServiceJoinNodes(Network net) {
       final inner = <String, Set<String>>{};
       _moverSides(net, m, adj, interiorOut: inner);
       for (final id in inner[start] ?? const <String>{}) {
-        final n = net.nodeById(id);
-        if (n != null &&
-            n.role == NodeRole.main &&
-            n.component == null &&
-            (adj[id]?.length ?? 0) == 1) {
-          entries.add(id);
-        }
+        if (isEntry(id)) entries.add(id);
       }
     }
     seeds.addAll(entries.toList()..sort());
@@ -1486,23 +1549,32 @@ Map<String, Set<String>> _moverSides(
 }
 
 /// Round 66 r4 — the side ([sides], edge id -> plants reached) at which a
-/// mover takes SUCTION, or null when undecided. A side reaching one of the
-/// tanks this mover pumps INTO ([pumpedInto]) is a discharge side. Among the
-/// other sides, the one source ([sources] plus every other system's
-/// destination tank) reaching side, else the unique best by the source it
-/// reaches (a ground tank, then another source plant, then a roof tank;
-/// then the lower by [elevationOf]); with no source on any side, the unique
-/// side that is not a discharge side when some side is one (a mains-fed
-/// pump room lifting into a tank).
-String? _moverSuctionStart(
+/// mover takes SUCTION: `(edge, false)` when decided, `(null, false)` when
+/// undecided, `(null, true)` to POSTPONE (a side reaching an undecided
+/// mover could still prove PUMPED and change the pick).
+///
+/// A side reaching one of the tanks this mover pumps INTO ([pumpedInto]) is
+/// a discharge side. Every other side is ranked by the best source it
+/// reaches: a ground tank 0; another source plant ([sources]), a side the
+/// discharge of an already-decided mover feeds ([pumpedSides] — the next
+/// stage of a series room) or a MAINS entry (a bare / water-meter leaf on
+/// one fire pipe, [entrySides]) 1; a roof tank 2 (a gravity standby is the
+/// weakest source); then the lower by [elevationOf]. The unique best side
+/// is the suction (a tie is undecided). With no source on any side, the
+/// unique side that is not a discharge side when some side is one, else the
+/// unique side holding no fire terminal when another holds one.
+(String?, bool) _moverSuctionStart(
   Network net,
   Map<String, Set<String>> sides,
   Set<String> sources,
   Set<String> pumpedInto,
   double Function(NetNode n) elevationOf, {
   Map<String, Set<String>> interior = const {},
+  Set<String> pumpedSides = const {},
+  Set<String> entrySides = const {},
+  Set<String> undecidedMoverSides = const {},
 }) {
-  if (sides.length < 2) return null;
+  if (sides.length < 2) return (null, false);
   int kindRank(NetNode n) => switch (n.component) {
         NodeComponent.groundTank => 0,
         NodeComponent.roofTank => 2,
@@ -1520,39 +1592,53 @@ String? _moverSuctionStart(
       if (sides[id]!.any(pumpedInto.contains)) id,
   };
   final best = <String, (int, double)>{};
+  void offer(String id, (int, double) r) {
+    final cur = best[id];
+    if (cur == null || cmp(r, cur) < 0) best[id] = r;
+  }
+
   for (final id in ids) {
     if (discharge.contains(id)) continue;
     for (final p in sides[id]!) {
       if (!sources.contains(p)) continue;
       final n = net.nodeById(p)!;
-      final r = (kindRank(n), elevationOf(n));
-      final cur = best[id];
-      if (cur == null || cmp(r, cur) < 0) best[id] = r;
+      offer(id, (kindRank(n), elevationOf(n)));
+    }
+    if (pumpedSides.contains(id) || entrySides.contains(id)) {
+      offer(id, (1, double.negativeInfinity));
     }
   }
-  if (best.isNotEmpty) {
-    String? at;
-    var tie = false;
-    for (final id in best.keys) {
-      if (at == null) {
-        at = id;
-        continue;
-      }
-      final c = cmp(best[id]!, best[at]!);
-      if (c < 0) {
-        at = id;
-        tie = false;
-      } else if (c == 0) {
-        tie = true;
-      }
+  String? at;
+  var tie = false;
+  for (final id in best.keys) {
+    if (at == null) {
+      at = id;
+      continue;
     }
-    return tie ? null : at;
+    final c = cmp(best[id]!, best[at]!);
+    if (c < 0) {
+      at = id;
+      tie = false;
+    } else if (c == 0) {
+      tie = true;
+    }
   }
+  // Postpone while a side reaching an undecided mover (other than the pick)
+  // could still prove pumped (rank 1) and match or beat the pick.
+  for (final id in undecidedMoverSides) {
+    if (id == at && !tie) continue;
+    if (discharge.contains(id) || pumpedSides.contains(id)) continue;
+    final pick = at == null ? null : best[at];
+    if (pick == null || pick.$1 >= 1) return (null, true);
+  }
+  if (at != null) return (tie ? null : at, false);
   final free = [
     for (final id in ids)
       if (!discharge.contains(id)) id,
   ];
-  if (discharge.isNotEmpty) return free.length == 1 ? free.single : null;
+  if (discharge.isNotEmpty) {
+    return (free.length == 1 ? free.single : null, false);
+  }
   // A MAINS-fed room (no tank anywhere): the side holding no fire terminal,
   // when another side holds one, is the suction (the city main entry).
   bool hasTerminal(String id) => (interior[id] ?? const <String>{})
@@ -1561,7 +1647,10 @@ String? _moverSuctionStart(
     for (final id in ids)
       if (!hasTerminal(id)) id,
   ];
-  return dry.length == 1 && dry.length < ids.length ? dry.single : null;
+  return (
+    dry.length == 1 && dry.length < ids.length ? dry.single : null,
+    false
+  );
 }
 
 bool _isFireMover(NetNode n) =>
@@ -4742,7 +4831,9 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     // wall and every plant an end ([_moverSuctionStart]); the side whose
     // reachable storage tank is the only one, or the best one (a ground tank
     // before a roof tank, then the lower by the sizer's `nodeElevation`),
-    // is the suction: its pipes flow toward the mover, the others' away.
+    // is the suction (a side a decided mover's discharge feeds, or a mains
+    // entry, outranks a roof tank — `fireHopSources`): its pipes flow
+    // toward the mover, the others' away.
     // An undecided mover keeps the hop rule.
     for (final mover in net.nodes) {
       if (mover.role != NodeRole.plant ||
@@ -4768,11 +4859,19 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           // stage destination tank is no longer a seed (`fireSourceHops`),
           // so the hops grow from the source along suction AND discharge.
           final hHere = fireHops[here], hNext = fireHops[next];
-          final lower = onSuction != null
-              ? (onSuction ? next : here)
-              : hHere == null || hNext == null || hHere == hNext
-                  ? null
-                  : (hHere < hNext ? here : next);
+          // Round 66 r4 — a pipe ending at ANOTHER decided mover takes that
+          // mover's own verdict (its suction flows into it, its discharge
+          // out of it): one pump's walk never overwrites the next stage's.
+          final nextVerdict = next == mover.id
+              ? null
+              : fireHopSeeds.suctionStart[next]?[edge.id];
+          final lower = nextVerdict != null
+              ? (nextVerdict ? here : next)
+              : onSuction != null
+                  ? (onSuction ? next : here)
+                  : hHere == null || hNext == null || hHere == hNext
+                      ? null
+                      : (hHere < hNext ? here : next);
           if (lower != null && edgeFlowFrom[edge.id] != lower) {
             edgeFlowFrom[edge.id] = lower;
             if (!freshFireEdgeIds.contains(edge.id)) {
