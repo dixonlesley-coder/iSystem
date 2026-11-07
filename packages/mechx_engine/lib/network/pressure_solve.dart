@@ -876,6 +876,79 @@ class DownfeedSolution {
 /// booster duty itself is sized on; the app solves a second, DELIVERED field
 /// with the sized heads for the heatmap, the node probe and the over-pressure
 /// judgement.
+/// Round 70 (plumbing-hvac-convergence-20-downfeed-break-tank-ignored) — the
+/// nodes each intermediate STORAGE tank (a ground / roof tank other than the
+/// downfeed source [sourceTankId]) feeds on the [service] network: walked
+/// from the tank along the SIZED flow direction (`flowFromId`), never through
+/// another storage tank, and never claiming a node the source tank itself
+/// feeds that way. A tank whose region holds no delivery node
+/// ([deliveryNodeIds] — a ground tank feeding only a transfer pump) is left
+/// out; a node fed by several intermediate tanks takes the highest. Empty for
+/// a single-tank downfeed. The downfeed solve takes each region's datum from
+/// its own tank (a free water surface restarts the static head). Pure.
+Map<String, Set<String>> downfeedTankRegions({
+  required Network net,
+  required ServiceType service,
+  required String sourceTankId,
+  required Map<String, EdgeSizing> sizing,
+  Set<String>? deliveryNodeIds,
+}) {
+  bool isTank(String id) => switch (net.nodeById(id)?.component) {
+        NodeComponent.groundTank || NodeComponent.roofTank => true,
+        _ => false,
+      };
+  final tanks = <String>{};
+  for (final e in net.edges) {
+    if (e.service != service) continue;
+    if (isTank(e.fromId)) tanks.add(e.fromId);
+    if (isTank(e.toId)) tanks.add(e.toId);
+  }
+  if (tanks.length < 2 || !tanks.contains(sourceTankId)) return const {};
+  // Oriented adjacency: node -> the nodes its sized flow leaves to.
+  final down = <String, List<String>>{};
+  for (final e in net.edges) {
+    if (e.service != service) continue;
+    final from = sizing[e.id]?.flowFromId;
+    if (from == e.fromId) {
+      (down[e.fromId] ??= []).add(e.toId);
+    } else if (from == e.toId) {
+      (down[e.toId] ??= []).add(e.fromId);
+    }
+  }
+  Set<String> regionOf(String t) {
+    final seen = <String>{t};
+    final stack = [t];
+    while (stack.isNotEmpty) {
+      final n = stack.removeLast();
+      for (final m in down[n] ?? const <String>[]) {
+        if (isTank(m) || !seen.add(m)) continue;
+        stack.add(m);
+      }
+    }
+    return seen..remove(t);
+  }
+
+  final source = regionOf(sourceTankId);
+  double elevOf(String id) => net.nodeById(id)?.floorIndex.toDouble() ?? 0;
+  final others = [
+    for (final t in tanks)
+      if (t != sourceTankId) t,
+  ]..sort((a, b) {
+      final c = elevOf(b).compareTo(elevOf(a));
+      return c != 0 ? c : a.compareTo(b);
+    });
+  final claimed = <String>{...source};
+  final result = <String, Set<String>>{};
+  for (final t in others) {
+    final r = regionOf(t).difference(claimed);
+    if (deliveryNodeIds != null && !r.any(deliveryNodeIds.contains)) continue;
+    if (r.isEmpty) continue;
+    claimed.addAll(r);
+    result[t] = r;
+  }
+  return result;
+}
+
 DownfeedSolution solveDownfeed({
   required Network net,
   required ServiceType service,
@@ -955,9 +1028,34 @@ DownfeedSolution solveDownfeed({
   final loadedEnds = <String>{};
   final delivery = _deliveryNodes(net, friction.keys, tankId, adjacency, sizing,
       loadedOpenEndsOut: loadedEnds);
+  // Round 70 (plumbing-hvac-convergence-20-downfeed-break-tank-ignored) —
+  // every OTHER storage tank the solve reaches has a free water surface:
+  // pressure below it restarts from that tank's own elevation, with friction
+  // measured from it ([downfeedTankRegions]). A transfer pump's riser into a
+  // tank is fill pipe. A single-tank downfeed is byte-identical.
+  final regions = downfeedTankRegions(
+    net: net,
+    service: service,
+    sourceTankId: tankId,
+    sizing: sizing,
+    deliveryNodeIds: delivery,
+  );
+  final datumTank = <String, String>{};
+  final regionFriction = <String, Map<String, double>>{};
+  for (final MapEntry(key: t, value: nodes) in regions.entries) {
+    regionFriction[t] = orientedPathCost(
+      sourceId: t,
+      adjacency: adjacency,
+      flowFromOf: (e) => sizing[e.id]?.flowFromId,
+      edgeCost: edgeFrictionArriving,
+    );
+    for (final id in nodes) {
+      datumTank[id] = t;
+    }
+  }
   final flowingHead = <String, double>{};
   final staticHead = <String, double>{};
-  friction.forEach((nodeId, f) {
+  friction.forEach((nodeId, f0) {
     final n = net.nodeById(nodeId);
     final nElev = n == null
         ? tankElevation
@@ -966,8 +1064,14 @@ DownfeedSolution solveDownfeed({
             building: building,
             mounting: mounting,
             isLoadedOpenEnd: loadedEnds.contains(nodeId));
-    final gravity =
-        tankStaticHead.meters + (tankElevation.meters - nElev.meters);
+    final t = datumTank[nodeId];
+    var f = f0;
+    var gravity = tankStaticHead.meters + (tankElevation.meters - nElev.meters);
+    if (t != null) {
+      final tn = net.nodeById(t)!;
+      gravity = nodeElevation(tn, building, mounting).meters - nElev.meters;
+      f = regionFriction[t]![nodeId] ?? f0;
+    }
     flowingHead[nodeId] = gravity - f;
     staticHead[nodeId] = gravity;
   });
