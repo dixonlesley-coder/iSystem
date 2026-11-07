@@ -134,6 +134,15 @@ class FireSystem {
   /// Round 49 (fire-convergence-zone-lift-is-whole-building) — the floor the
   /// system's pump datum sits on: the LOWEST floor of its drawn fire pumps /
   /// booster sets, else the lowest floor any of its nodes is on, else 0.
+  ///
+  /// Round 69 (fire-convergence-21-suction-tank-below-pump-floor-lift-
+  /// understated) — the water must be raised from the SUCTION tank: when a
+  /// storage tank feeding the pumps sits on a LOWER floor than the lowest
+  /// pump ([suctionTankBelowPumps] — a basement reservoir under a grade pump
+  /// room, a break tank on the slab below), the datum is that tank's floor
+  /// (its floor surface, conservative: the tank's water level is not
+  /// modelled). A tank at or above the pumps (positive suction) leaves the
+  /// datum on the pump floor (byte-identical).
   int datumFloor(Network net) {
     int? pumpFloor;
     int? anyFloor;
@@ -146,7 +155,71 @@ class FireSystem {
         pumpFloor = pumpFloor == null || f < pumpFloor ? f : pumpFloor;
       }
     }
+    if (pumpFloor != null) {
+      final tank = suctionTankBelowPumps(net);
+      if (tank != null) {
+        final tf = net.nodeById(tank)!.floorIndex;
+        if (tf < pumpFloor) return tf;
+      }
+    }
     return pumpFloor ?? anyFloor ?? 0;
+  }
+
+  /// Round 69 — the lowest storage tank (ground / roof tank) of this system
+  /// that FEEDS one of its fire pumps (reached from the pump over the
+  /// system's pipes without passing another pump / booster set or tank) and
+  /// sits on a floor BELOW the lowest such pump's floor: a suction-lift
+  /// arrangement (NFPA 20 4.14.3 asks for positive suction on a horizontal
+  /// split-case pump, `// VERIFY notAnSniClause`). Ties break on draw order
+  /// ([drawOrderCompare]). Null when every suction tank sits at or above
+  /// its pumps.
+  String? suctionTankBelowPumps(Network net) {
+    bool isMover(NodeComponent? c) =>
+        c == NodeComponent.pump || c == NodeComponent.boosterSet;
+    bool isTank(NodeComponent? c) =>
+        c == NodeComponent.groundTank || c == NodeComponent.roofTank;
+    final adj = <String, List<String>>{};
+    for (final e in edges) {
+      (adj[e.fromId] ??= []).add(e.toId);
+      (adj[e.toId] ??= []).add(e.fromId);
+    }
+    int? lowestPump;
+    for (final id in nodeIds) {
+      final n = net.nodeById(id);
+      if (n == null || !isMover(n.component)) continue;
+      if (lowestPump == null || n.floorIndex < lowestPump) {
+        lowestPump = n.floorIndex;
+      }
+    }
+    if (lowestPump == null) return null;
+    NetNode? best;
+    for (final id in nodeIds) {
+      final pump = net.nodeById(id);
+      if (pump == null || !isMover(pump.component)) continue;
+      final seen = <String>{id};
+      final queue = <String>[id];
+      for (var i = 0; i < queue.length; i++) {
+        final cur = queue[i];
+        for (final o in adj[cur] ?? const <String>[]) {
+          if (!seen.add(o)) continue;
+          final n = net.nodeById(o);
+          if (n == null) continue;
+          if (isTank(n.component)) {
+            if (n.floorIndex < lowestPump &&
+                (best == null ||
+                    n.floorIndex < best.floorIndex ||
+                    (n.floorIndex == best.floorIndex &&
+                        drawOrderCompare(n, best) < 0))) {
+              best = n;
+            }
+            continue; // never through a tank
+          }
+          if (isMover(n.component)) continue; // never through another pump
+          queue.add(o);
+        }
+      }
+    }
+    return best?.id;
   }
 
   /// Round 49 — the highest floor holding one of this system's terminals of
@@ -986,7 +1059,22 @@ List<FirePumpStage>? fireSeriesPumpStages(
 /// drawn direction (a fire pump never runs toward its storage tank), so these
 /// are drawing errors to name — judge-only, never a resize. Sorted ids.
 List<String> firePumpsDrawnBackwards(
-    Network net, Map<String, EdgeSizing> sizing) {
+        Network net, Map<String, EdgeSizing> sizing) =>
+    moversDrawnBackwards(net, sizing, isFireService);
+
+/// Round 69 (regression-duplex-booster-backwards-standby-collapses-duty) —
+/// the pumps / booster sets on a [service] pipe drawn COHERENTLY backwards
+/// against the SOLVED flow ([sizing] `flowFromId`): exactly two [service]
+/// pipes, one drawn in and one out, while the solved flow passes the other
+/// way. On COLD water the sizer honours a coherent drawn direction except
+/// inside a parallel set whose members disagree (oriented away from the
+/// source); a tree ignores drawn direction altogether (Round 15), so a lone
+/// pump drawn backwards on a tree is listed here too. A domestic caller
+/// therefore names only the members of a disagreeing set — intersect with
+/// `autoSizeNetwork(disagreeingSetMoversOut:)` (Round 69 r2). Judge-only.
+/// Sorted ids.
+List<String> moversDrawnBackwards(Network net, Map<String, EdgeSizing> sizing,
+    bool Function(ServiceType service) service) {
   final out = <String>[];
   for (final n in net.nodes) {
     if (n.component != NodeComponent.pump &&
@@ -995,7 +1083,7 @@ List<String> firePumpsDrawnBackwards(
     }
     final es = [
       for (final e in net.edgesAt(n.id))
-        if (isFireService(e.service)) e,
+        if (service(e.service)) e,
     ];
     if (es.length != 2) continue;
     final drawnIn = es.where((e) => e.toId == n.id).toList();

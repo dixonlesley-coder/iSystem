@@ -23,7 +23,7 @@ import 'package:mechx_engine/sizing/air_velocity.dart'
     show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/drainage_advisory.dart';
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
-    show firePumpsDrawnBackwards;
+    show firePumpsDrawnBackwards, moversDrawnBackwards;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
     show kFireComponentMaxPressureKpa, kStandpipeMaxSystemPressureKpa;
 import 'package:mechx_engine/sizing/network_sizing.dart'
@@ -760,6 +760,49 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       kind: 'fire-pump-drawn-backwards:$id',
       title: str(StringKey.issueFirePumpDrawnBackwardsTitle),
       message: str(StringKey.issueFirePumpDrawnBackwardsMessage),
+      locate: IssueLocation(n.sheetId, nodeId: id),
+    ));
+  }
+  // Round 69 (fire-convergence-21-suction-tank-below-pump-floor) — a fire
+  // pump room above its suction tank (a basement reservoir under a grade
+  // pump room): the lift is taken from the tank's floor, and the suction-
+  // lift arrangement is named on the duty pump (NFPA 20 4.14.3 positive
+  // suction, `// VERIFY`). Judge-only.
+  {
+    final named = <String>{};
+    for (final b in ref.watch(fireSystemBasesProvider)) {
+      final tank = b.system.suctionTankBelowPumps(net);
+      final pump = b.dutyPumpId ?? (b.pumpIds.isEmpty ? null : b.pumpIds.first);
+      if (tank == null || pump == null || !named.add(pump)) continue;
+      final n = net.nodeById(pump);
+      if (n == null) continue;
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'fire-pump-suction-lift:$pump',
+        title: str(StringKey.issueFirePumpSuctionLiftTitle),
+        message: str(StringKey.issueFirePumpSuctionLiftMessage),
+        locate: IssueLocation(n.sheetId, nodeId: pump),
+      ));
+    }
+  }
+  // Round 69 — a duty / standby DOMESTIC-water pump drawn coherently
+  // against its own parallel set: the sizer orients the set away from the
+  // source, and the drawing error is named on the pump. Round 69 r2 — ONLY
+  // members of a disagreeing set: a lone pump drawn backwards on a tree
+  // (drawing direction is not geometry, Round 15) is not named.
+  final disagreeing = ref.watch(disagreeingSetMoversProvider);
+  for (final id in moversDrawnBackwards(
+      net,
+      ref.watch(sizingProvider),
+      (s) => s == ServiceType.coldWater || s == ServiceType.hotWater)) {
+    if (!disagreeing.contains(id)) continue;
+    final n = net.nodeById(id);
+    if (n == null) continue;
+    infos.add(DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'parallel-pump-drawn-backwards:$id',
+      title: str(StringKey.issueParallelPumpDrawnBackwardsTitle),
+      message: str(StringKey.issueParallelPumpDrawnBackwardsMessage),
       locate: IssueLocation(n.sheetId, nodeId: id),
     ));
   }

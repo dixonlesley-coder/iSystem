@@ -158,11 +158,16 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
   Map<int, Length>? tankElevationByFloor,
 }) {
   final out = <DownfeedZoneStatic>[];
-  for (final z in zones) {
+  for (var i = 0; i < zones.length; i++) {
+    final z = zones[i];
     final feed = building.ceilingElevationOf(z.topFloorIndex, mounting).meters;
     final bottom =
         building.fixtureElevationOf(z.bottomFloorIndex, mounting).meters;
-    if (tankElevation != null && z.topFloorIndex >= building.levelCount - 1) {
+    // Round 69 — the tank-fed zone is the FIRST zone (it opens at the
+    // highest served floor, [computeDownfeedZones]' highestServedFloor), not
+    // only a zone holding the roof storey.
+    if (tankElevation != null &&
+        (i == 0 || z.topFloorIndex >= building.levelCount - 1)) {
       // Round 68 — each floor's own datum (the tank plus the head of the
       // mover set its delivery passes) when the caller gives one.
       final tTop =
@@ -251,6 +256,13 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
 /// serving L6..L19 beside one fixture fed straight off the tank); a floor
 /// absent from it reads [tankElevation]. Null ⇒ one datum (byte-identical).
 ///
+/// HIGHEST SERVED FLOOR (Round 69, plumbing-hvac-convergence-19) —
+/// [highestServedFloor] opens the walk at the highest floor the tank
+/// actually delivers to: storeys above it (a plant floor, or floors a
+/// separately walled booster serves) belong to no zone, so the tank-fed top
+/// zone's residual is read at its real top. Default null ⇒ the roof storey
+/// (`levelCount − 1`, byte-identical); clamped to [lowestServedFloor].
+///
 /// Returns zones ordered **top → bottom** (index 0 = highest zone).
 List<PressureZone> computeDownfeedZones({
   required BuildingLevels building,
@@ -259,20 +271,23 @@ List<PressureZone> computeDownfeedZones({
   Length? tankElevation,
   Pressure? maxFixtureStatic,
   int lowestServedFloor = 0,
+  int? highestServedFloor,
   Map<int, Length>? tankElevationByFloor,
 }) {
   assert(building.levelCount > 0, 'building must have at least one floor');
   final low = lowestServedFloor.clamp(0, building.levelCount - 1);
+  final high = (highestServedFloor ?? building.levelCount - 1)
+      .clamp(low, building.levelCount - 1);
 
   final maxHeight = maxZoneHeightMetres(maxStaticPressure);
   final zones = <PressureZone>[];
 
-  var zoneTop = building.levelCount - 1;
-  var start = building.levelCount - 1;
+  var zoneTop = high;
+  var start = high;
 
   if (tankElevation != null && maxFixtureStatic != null) {
     final tankSpan = maxZoneHeightMetres(maxFixtureStatic);
-    final top = building.levelCount - 1;
+    final top = high;
     var bottom = top; // a storey is indivisible: the top floor always admits.
     for (var f = top - 1; f >= low; f--) {
       final head = (tankElevationByFloor?[f] ?? tankElevation).meters -

@@ -130,6 +130,15 @@ final checkValveAmbiguousProvider = Provider<Map<String, CheckValveAmbiguity>>(
 final moverAgainstBalanceProvider = Provider<Set<String>>(
     (ref) => ref.watch(sizingDetailProvider).moverAgainstBalance);
 
+/// Round 69 r2 — the pumps / booster sets of a valveless PARALLEL SET (legs
+/// sharing both leg ends) whose members are drawn in DISAGREEING directions
+/// (`autoSizeNetwork(disagreeingSetMoversOut:)`): the sizer orients such a
+/// set away from the source. Only these may be named
+/// `parallel-pump-drawn-backwards` — a lone pump drawn backwards is not a
+/// set member. Structural; judge-only.
+final disagreeingSetMoversProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).disagreeingSetMovers);
+
 /// The one live sizing solve + its fixture-unit record (see [sizingProvider]).
 final sizingDetailProvider = Provider<
     ({
@@ -141,6 +150,7 @@ final sizingDetailProvider = Provider<
       Set<String> checkValveFeedsRing,
       Map<String, CheckValveAmbiguity> checkValveAmbiguous,
       Set<String> moverAgainstBalance,
+      Set<String> disagreeingSetMovers,
       Set<String> assumedJockeys,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
@@ -154,6 +164,7 @@ final sizingDetailProvider = Provider<
       checkValveFeedsRing: const <String>{},
       checkValveAmbiguous: const <String, CheckValveAmbiguity>{},
       moverAgainstBalance: const <String>{},
+      disagreeingSetMovers: const <String>{},
       assumedJockeys: const <String>{},
     );
   }
@@ -256,6 +267,7 @@ final sizingDetailProvider = Provider<
   final checkValveAmbiguous = <String, CheckValveAmbiguity>{};
   final checkValveAgainstPump = <String>{};
   final moverAgainstBalance = <String>{};
+  final disagreeingSetMovers = <String>{};
   Map<String, EdgeSizing> solve(Map<String, FlowRate> jockeyLegFlows) {
     fixtureUnits.clear();
     parallelLegs.clear();
@@ -263,6 +275,7 @@ final sizingDetailProvider = Provider<
     checkValveAmbiguous.clear();
     checkValveAgainstPump.clear();
     moverAgainstBalance.clear();
+    disagreeingSetMovers.clear();
     return autoSizeNetwork(
     net,
     // The one sizing context (duct settings + the laid drainage slope).
@@ -298,6 +311,7 @@ final sizingDetailProvider = Provider<
     checkValveAmbiguousOut: checkValveAmbiguous,
     checkValveAgainstPumpOut: checkValveAgainstPump,
     moverAgainstBalanceOut: moverAgainstBalance,
+    disagreeingSetMoversOut: disagreeingSetMovers,
     jockeyLegFlows: jockeyLegFlows,
   );
   }
@@ -350,6 +364,7 @@ final sizingDetailProvider = Provider<
     checkValveFeedsRing: checkValveFeedsRing,
     checkValveAmbiguous: checkValveAmbiguous,
     moverAgainstBalance: moverAgainstBalance,
+    disagreeingSetMovers: disagreeingSetMovers,
     assumedJockeys: jockeys.assumed,
   );
 });
