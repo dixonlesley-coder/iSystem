@@ -691,6 +691,10 @@ enum StringKey {
   issueMoverAgainstBalanceMessage,
   issueFirePumpDrawnBackwardsTitle,
   issueFirePumpDrawnBackwardsMessage,
+  issueParallelPumpDrawnBackwardsTitle,
+  issueParallelPumpDrawnBackwardsMessage,
+  issueFirePumpSuctionLiftTitle,
+  issueFirePumpSuctionLiftMessage,
   issueFanMotorOversizedMessage,
   issueDiffuserStrandedTitle,
   issueSheetNotCalibratedTitle,
@@ -2154,6 +2158,22 @@ const Map<StringKey, String> _en = {
       'never runs toward its storage tank, so its pipework is sized with the '
       'water leaving the tank through the pump. Redraw its two pipes in the '
       'flow direction so the drawing\'s arrows match.',
+  StringKey.issueFirePumpSuctionLiftTitle:
+      'Fire pump above its suction tank',
+  StringKey.issueFirePumpSuctionLiftMessage:
+      'This fire pump room sits on a higher floor than the tank it draws '
+      'from, so the pump works on a suction lift. The rated head is taken '
+      'from the tank\'s floor. NFPA 20 asks for positive suction on a '
+      'horizontal split-case fire pump: check the pump type, or move the pump '
+      'room down to the tank level.',
+  StringKey.issueParallelPumpDrawnBackwardsTitle:
+      'Duty / standby pump drawn backwards',
+  StringKey.issueParallelPumpDrawnBackwardsMessage:
+      'This pump shares both pipe ends with another pump of its set, but its '
+      'pipes are drawn the opposite way. A duty / standby set runs one way, so '
+      'the whole set is sized with the water leaving the source through every '
+      'pump. Redraw its two pipes in the flow direction so the drawing\'s '
+      'arrows match.',
   StringKey.issueFireStageHeadClampedTitle:
       'Series fire-pump stage raised to the minimum head',
   StringKey.issueFireStageHeadClampedMessage:
@@ -3786,6 +3806,22 @@ const Map<StringKey, String> _id = {
       'kebakaran tidak pernah mengalir ke arah tangki penyimpanannya, sehingga '
       'pipanya diukur dengan air keluar dari tangki melalui pompa. Gambar '
       'ulang kedua pipanya searah aliran agar panah gambar sesuai.',
+  StringKey.issueFirePumpSuctionLiftTitle:
+      'Pompa kebakaran di atas tangki isapnya',
+  StringKey.issueFirePumpSuctionLiftMessage:
+      'Ruang pompa kebakaran ini berada di lantai yang lebih tinggi daripada '
+      'tangki tempat ia mengisap, sehingga pompa bekerja dengan angkat isap. '
+      'Head rencana diambil dari lantai tangki. NFPA 20 meminta isap positif '
+      'untuk pompa kebakaran split-case horizontal: periksa jenis pompa, atau '
+      'pindahkan ruang pompa ke level tangki.',
+  StringKey.issueParallelPumpDrawnBackwardsTitle:
+      'Pompa duty / standby digambar terbalik',
+  StringKey.issueParallelPumpDrawnBackwardsMessage:
+      'Pompa ini berbagi kedua ujung pipa dengan pompa lain dalam setnya, '
+      'tetapi pipanya digambar berlawanan arah. Set duty / standby mengalir '
+      'satu arah, sehingga seluruh set diukur dengan air keluar dari sumber '
+      'melalui setiap pompa. Gambar ulang kedua pipanya searah aliran agar '
+      'panah gambar sesuai.',
   StringKey.issueFireStageHeadClampedTitle:
       'Tahap pompa kebakaran seri dinaikkan ke head minimum',
   StringKey.issueFireStageHeadClampedMessage:

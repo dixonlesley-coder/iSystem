@@ -2502,6 +2502,7 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
   }
   int? lowest;
   int? lowestAny;
+  int? highest;
   for (final n in net.nodes) {
     if (n.role != NodeRole.fixture || !waterIds.contains(n.id)) continue;
     // Round 68 — the fallback stays inside the tank's own connected cold /
@@ -2513,6 +2514,14 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
     }
     if (fedByTank != null && !fedByTank.contains(n.id)) continue;
     if (lowest == null || n.floorIndex < lowest) lowest = n.floorIndex;
+    // Round 69 (plumbing-hvac-convergence-19) — the highest floor a
+    // TANK-FED delivery fixture sits on: the tank-fed zone opens there, never
+    // at a roof storey only a walled booster (or nothing) serves.
+    if (fedByTank != null &&
+        !isNonDemandTerminal(n.component) &&
+        (highest == null || n.floorIndex > highest)) {
+      highest = n.floorIndex;
+    }
   }
   // Round 67 r2 — a tank walk that finds no fixture never falls to floor 0:
   // it keeps the pre-Round-67 lowest drawn water fixture.
@@ -2525,6 +2534,7 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
     tankElevationByFloor: ref.watch(downfeedDatumByFloorProvider),
     maxFixtureStatic: maxFix,
     lowestServedFloor: lowest ?? 0,
+    highestServedFloor: highest,
   );
 });
 
@@ -2663,8 +2673,9 @@ List<Set<String>> _tankMoverSets(Network net, Map<String, List<String>> adj,
 /// cold + hot graph ([_tankWaterGraph]), every pump / booster judged as its
 /// whole PARALLEL SET ([_tankMoverSets]). A set is a WALL (a booster zone
 /// hung off the tank, not part of the zoned riser) only when every fixture
-/// it alone serves lies on floors the tank reaches without it; a set whose
-/// served floors extend below the tank-only set is pipe — a tap or heater
+/// it alone serves lies on floors the tank reaches without it (Round 69: the
+/// literal floor-set test); a set serving any floor the tank alone does not
+/// reach is pipe — a tap or heater
 /// fed straight off the tank never walls the booster that serves the floors
 /// beneath it. [fed] = every node reached with the walls blocked; [pipeSets]
 /// the non-wall sets; [walls] the wall members.
@@ -2683,20 +2694,22 @@ List<Set<String>> _tankMoverSets(Network net, Map<String, List<String>> adj,
   final pipeSets = <Set<String>>[];
   for (final set in _tankMoverSets(net, g.adj, tank, component)) {
     final tankOnly = _tankReach(g.adj, tank, set).intersection(g.delivery);
-    int? tankOnlyMin;
-    for (final id in tankOnly) {
-      final f = net.nodeById(id)!.floorIndex;
-      if (tankOnlyMin == null || f < tankOnlyMin) tankOnlyMin = f;
-    }
-    final min = tankOnlyMin;
-    final extendsBelow = min == null ||
+    // Round 69 (regression-downfeed-wall-gravity-tap-walls-whole-booster-
+    // riser) — the LITERAL served-floor test: a set is a wall only when
+    // every floor it alone serves is a floor the tank also reaches without
+    // it. A gravity tap on a lower floor (ground-floor retail on its own
+    // drop) never walls the booster that serves L6..L18 above it.
+    final tankOnlyFloors = {
+      for (final id in tankOnly) net.nodeById(id)!.floorIndex,
+    };
+    final wall = tankOnlyFloors.isNotEmpty &&
         reachable
             .difference(tankOnly)
-            .any((id) => net.nodeById(id)!.floorIndex < min);
-    if (extendsBelow) {
-      pipeSets.add(set);
-    } else {
+            .every((id) => tankOnlyFloors.contains(net.nodeById(id)!.floorIndex));
+    if (wall) {
       walls.addAll(set);
+    } else {
+      pipeSets.add(set);
     }
   }
   return (

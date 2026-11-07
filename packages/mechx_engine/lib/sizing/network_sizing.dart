@@ -3349,9 +3349,16 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           for (final leg in cvPlan?.moverLegs ?? const <_MoverLeg>[])
             ...leg.valveIds,
         };
+        // Round 69 — the pipes of a PEER pump room's parallel set (and its
+        // discharge main) the peer-source mirror oriented out of the peer's
+        // own tank: the classifier's hop rule reads distance from the ONE
+        // tree root (the other room), so it would turn them back toward the
+        // root's room.
+        final peerOrientedEdges = <String>{};
         Set<String> orientMoverLegs(_CheckValvePlan? plan) {
           final againstKeys = <String>{};
           for (final leg in plan?.moverLegs ?? const <_MoverLeg>[]) {
+            if (leg.edgeIds.any(peerOrientedEdges.contains)) continue;
             var against = false;
             for (var i = 0; i < leg.edgeIds.length; i++) {
               final id = leg.edgeIds[i];
@@ -3482,37 +3489,160 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
                           rootRank)
                     n,
             ]..sort();
+            bool isMoverNode(String n) {
+              final c = net.nodeById(n)?.component;
+              return c == NodeComponent.pump || c == NodeComponent.boosterSet;
+            }
+
+            bool demandFree(String n) =>
+                !explicitDemandKeys.contains(n) && !bearsDefaultDemand(n);
+
+            // Round 69 (fire-convergence-21-peer-pump-room-with-parallel-
+            // set-unsized) — the peer's PARALLEL PUMP SET at [header] (the
+            // suction header its bridge stops at): every onward link of
+            // [header] (all but [inEdge]) a demand-free leg through degree-2
+            // nodes holding at least one mover, every leg landing on ONE
+            // discharge header (the Round-13 parallel-set convention).
+            // Returns the legs (each (edgeId, flow-from) in flow order, and
+            // its jockey flow when the leg holds a jockey pump) and the
+            // discharge header, or null.
+            ({
+              List<(List<(String, String)>, FlowRate?)> legs,
+              String exit,
+            })? parallelSetAt(String header, String? inEdge) {
+              final outs = [
+                for (final l in adjacency[header]!)
+                  if (l.edgeId != inEdge) l,
+              ];
+              if (outs.length < 2) return null;
+              String? exit;
+              final legs = <(List<(String, String)>, FlowRate?)>[];
+              for (final l0 in outs) {
+                final leg = <(String, String)>[(l0.edgeId, header)];
+                var at = l0.other, prev = l0.edgeId;
+                var mover = false;
+                FlowRate? jockey;
+                final seen = <String>{header};
+                while (degree(at) == 2 && at != root && seen.add(at)) {
+                  if (!demandFree(at)) return null;
+                  if (isMoverNode(at)) {
+                    mover = true;
+                    jockey ??= jockeyLegFlows[at];
+                  }
+                  final next =
+                      adjacency[at]!.firstWhere((l) => l.edgeId != prev);
+                  leg.add((next.edgeId, at));
+                  prev = next.edgeId;
+                  at = next.other;
+                }
+                if (!mover || at == header || at == root) return null;
+                if (exit != null && exit != at) return null;
+                exit = at;
+                legs.add((leg, jockey));
+              }
+              // The discharge header joins only the set's legs plus ONE
+              // onward pipe.
+              if (exit == null ||
+                  degree(exit) != legs.length + 1 ||
+                  !demandFree(exit)) {
+                return null;
+              }
+              return (legs: legs, exit: exit);
+            }
+
             for (final s in q > 0 ? peers : const <String>[]) {
               final bridge = <(String, String)>[]; // (edgeId, flow-from node)
+              final jockeyLegs = <(String, String, FlowRate)>[];
+              // The bridge edges reached through a parallel set.
+              final pastSet = <String>{};
               var cur = s;
               String? prevEdge;
               var reachedRoot = false;
+              final visitedHeaders = <String>{};
               while (true) {
                 final links = [
                   for (final l in adjacency[cur]!)
                     if (l.edgeId != prevEdge) l,
                 ];
-                if (links.length != 1) break;
-                final l = links.single;
-                bridge.add((l.edgeId, cur));
-                prevEdge = l.edgeId;
-                cur = l.other;
+                if (links.length != 1) {
+                  // Round 69 — a parallel pump set of this peer room: mirror
+                  // every main leg, the jockey leg at its own flow, then
+                  // resume at the discharge header.
+                  final set = visitedHeaders.add(cur) && isFireService(service)
+                      ? parallelSetAt(cur, prevEdge)
+                      : null;
+                  if (set == null) break;
+                  for (final (leg, jockey) in set.legs) {
+                    for (final (id, from) in leg) {
+                      if (jockey != null) {
+                        jockeyLegs.add((id, from, jockey));
+                      } else {
+                        bridge.add((id, from));
+                        pastSet.add(id);
+                      }
+                    }
+                  }
+                  final legEdges = {
+                    for (final (leg, _) in set.legs)
+                      for (final (id, _) in leg) id,
+                  };
+                  final onward = [
+                    for (final l in adjacency[set.exit]!)
+                      if (!legEdges.contains(l.edgeId)) l,
+                  ];
+                  if (onward.length != 1) break;
+                  final l = onward.single;
+                  bridge.add((l.edgeId, set.exit));
+                  pastSet.add(l.edgeId);
+                  prevEdge = l.edgeId;
+                  cur = l.other;
+                } else {
+                  final l = links.single;
+                  bridge.add((l.edgeId, cur));
+                  if (visitedHeaders.isNotEmpty) pastSet.add(l.edgeId);
+                  prevEdge = l.edgeId;
+                  cur = l.other;
+                }
                 if (cur == root) {
                   reachedRoot = true;
                   break;
                 }
-                if (degree(cur) != 2 ||
-                    explicitDemandKeys.contains(cur) ||
-                    bearsDefaultDemand(cur)) {
+                if (degree(cur) != 2 || !demandFree(cur)) {
+                  // A junction: it may still be this peer's suction header
+                  // (the set check above runs on the next pass).
+                  if (degree(cur) > 2 &&
+                      demandFree(cur) &&
+                      isFireService(service) &&
+                      !visitedHeaders.contains(cur) &&
+                      parallelSetAt(cur, prevEdge) != null) {
+                    continue;
+                  }
                   break;
                 }
               }
               if (reachedRoot) continue;
               for (final (id, from) in bridge) {
-                if ((allFlows[id]?.cubicMetersPerSecond ?? 0.0) >= q) continue;
+                if ((allFlows[id]?.cubicMetersPerSecond ?? 0.0) >= q) {
+                  // Round 69 — past a parallel set the peer room's pipes
+                  // still flow OUT of the peer source (the tree may have
+                  // run them backwards toward the root's room).
+                  if (pastSet.contains(id)) {
+                    edgeFlowFrom[id] = from;
+                    parallelLegEdgeIdsOut?.add(id);
+                    peerOrientedEdges.add(id);
+                  }
+                  continue;
+                }
+                if (pastSet.contains(id)) peerOrientedEdges.add(id);
                 allFlows[id] = FlowRate(q);
                 edgeFlowFrom[id] = from;
                 if (units != null) fixtureUnitsOut?[id] = units;
+                parallelLegEdgeIdsOut?.add(id);
+              }
+              for (final (id, from, jq) in jockeyLegs) {
+                allFlows[id] = jq;
+                edgeFlowFrom[id] = from;
+                peerOrientedEdges.add(id);
                 parallelLegEdgeIdsOut?.add(id);
               }
             }
@@ -7136,49 +7266,104 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     return false;
   }
 
+  // The valveless mover chain through [p] (end0 .. p .. end1 in drawing
+  // order) and its movers' coherent drawn direction (+1: end0 -> end1, -1:
+  // the reverse, 0: none readable, null: two coherent movers disagree), or
+  // null when [p] heads no valveless cycle leg.
+  ({
+    List<String> ns,
+    List<NetEdge> eds,
+    List<String> interior,
+    int? drawnDir,
+  })? valvelessChain(String p) {
+    if (p == root || !isMover!(p) || adj[p]!.length != 2) return null;
+    final es = adj[p]!;
+    final s0 = walk(p, es[0]), s1 = walk(p, es[1]);
+    final ns = <String>[...s0.nodes.reversed, p, ...s1.nodes];
+    final eds = <NetEdge>[...s0.edges.reversed, ...s1.edges];
+    final interior = ns.sublist(1, ns.length - 1);
+    if (interior.any(isCheckValve)) return null; // a valved leg (above)
+    final end0 = ns.first, end1 = ns.last;
+    if (end0 == end1 || interior.toSet().length != interior.length) {
+      return null; // a chain closing on itself: no leg ends
+    }
+    if (!connectedAvoiding(end0, end1, interior.toSet())) return null;
+    int? dir;
+    for (var i = 1; i < ns.length - 1; i++) {
+      final n = ns[i];
+      if (!isMover(n)) continue;
+      final ea = eds[i - 1], eb = eds[i];
+      final d = (ea.toId == n && eb.fromId == n)
+          ? 1
+          : (ea.fromId == n && eb.toId == n)
+              ? -1
+              : 0;
+      if (d == 0) continue; // an incoherently drawn mover: no reading
+      if (dir != null && dir != d) {
+        return (ns: ns, eds: eds, interior: interior, drawnDir: null);
+      }
+      dir = d;
+    }
+    return (ns: ns, eds: eds, interior: interior, drawnDir: dir ?? 0);
+  }
+
+  String endsKeyOf(String a, String b) =>
+      a.compareTo(b) <= 0 ? '$a\u0000$b' : '$b\u0000$a';
+
+  // Round 69 (regression-duplex-booster-backwards-standby-collapses-duty) —
+  // a PARALLEL SET of valveless mover legs (legs sharing both leg ends)
+  // whose coherent drawn directions DISAGREE (a duty booster drawn tank ->
+  // riser beside its standby drawn riser -> tank) carries no readable
+  // direction: a duty / standby pair runs one way, it never pumps the same
+  // water round in a circle. The whole set is oriented AWAY FROM THE SOURCE
+  // (the Round-60 incoherent-pump rule below, as Round 64 does for every
+  // fire leg): the backwards standby used to read as a return INTO the
+  // tank, the correctly drawn duty booster became a 'transfer' pump with no
+  // head and the standby leg was sized on the return flow. A lone mover
+  // keeps its drawn direction (a genuine recirculation / transfer reading).
+  final disagreeingEnds = <String>{};
+  if (isMover != null) {
+    final dirsByEnds = <String, Set<int>>{};
+    for (final p in [...adj.keys]..sort()) {
+      final c = valvelessChain(p);
+      final d = c?.drawnDir;
+      if (c == null || d == null || d == 0) continue;
+      final a = c.ns.first, b = c.ns.last;
+      // Normalised to the sorted-ends frame.
+      (dirsByEnds[endsKeyOf(a, b)] ??= <int>{})
+          .add(a.compareTo(b) <= 0 ? d : -d);
+    }
+    for (final e in dirsByEnds.entries) {
+      if (e.value.length > 1) disagreeingEnds.add(e.key);
+    }
+  }
+
   final valvelessByKey = <String, _MoverLeg>{};
   if (isMover != null) {
     for (final p in [...adj.keys]..sort()) {
-      if (p == root || !isMover(p) || adj[p]!.length != 2) continue;
-      final es = adj[p]!;
-      final s0 = walk(p, es[0]), s1 = walk(p, es[1]);
+      final chain = valvelessChain(p);
+      if (chain == null) continue;
       // The chain end0 .. p .. end1 in drawing order.
-      final ns = <String>[...s0.nodes.reversed, p, ...s1.nodes];
-      final eds = <NetEdge>[...s0.edges.reversed, ...s1.edges];
-      final interior = ns.sublist(1, ns.length - 1);
-      if (interior.any(isCheckValve)) continue; // a valved leg (above)
+      final ns = chain.ns;
+      final eds = chain.eds;
+      final interior = chain.interior;
       final end0 = ns.first, end1 = ns.last;
-      if (end0 == end1 || interior.toSet().length != interior.length) {
-        continue; // a chain closing on itself: no leg ends
-      }
-      if (!connectedAvoiding(end0, end1, interior.toSet())) continue;
-      int? dir; // +1: end0 -> end1, -1: end1 -> end0
-      var coherent = true;
-      for (var i = 1; i < ns.length - 1; i++) {
-        final n = ns[i];
-        if (!isMover(n)) continue;
-        final ea = eds[i - 1], eb = eds[i];
-        final d = (ea.toId == n && eb.fromId == n)
-            ? 1
-            : (ea.fromId == n && eb.toId == n)
-                ? -1
-                : 0;
-        if (d == 0) continue; // an incoherently drawn mover: no reading
-        // Round 64 (fire-convergence-16-backwards-drawn-duty-standby-set-
-        // flows-into-suction-header) — on a FIRE service the drawn pump
-        // direction carries no reading either: a pump room drawn from the
-        // riser back toward the tank (every pump coherently backwards) was
-        // read as a set feeding the suction header (the tank main and the
-        // bulk main undersized, the NFPA 20 bores skipped). Every fire mover
-        // leg is oriented away from the source (the Round-60 rule below).
-        if (ignoreDrawnMoverDirection) continue;
-        if (dir != null && dir != d) {
-          coherent = false; // two coherent movers pointing opposite ways
-          break;
-        }
-        dir = d;
-      }
-      if (!coherent) continue;
+      // Two coherent movers pointing opposite ways on one chain: no leg.
+      if (chain.drawnDir == null) continue;
+      // +1: end0 -> end1, -1: end1 -> end0.
+      // Round 64 (fire-convergence-16-backwards-drawn-duty-standby-set-
+      // flows-into-suction-header) — on a FIRE service the drawn pump
+      // direction carries no reading either: a pump room drawn from the
+      // riser back toward the tank (every pump coherently backwards) was
+      // read as a set feeding the suction header (the tank main and the
+      // bulk main undersized, the NFPA 20 bores skipped). Every fire mover
+      // leg is oriented away from the source (the Round-60 rule below).
+      // Round 69 — likewise a parallel set whose members disagree.
+      int? dir = (ignoreDrawnMoverDirection ||
+              chain.drawnDir == 0 ||
+              disagreeingEnds.contains(endsKeyOf(end0, end1)))
+          ? null
+          : chain.drawnDir;
       // Round 60 (fire-convergence-12-duty-standby-fire-pump-legs-split-
       // when-pump-drawn-outward) — a leg whose movers are ALL drawn
       // incoherently (both pipes out of, or both into, the pump: a pump
