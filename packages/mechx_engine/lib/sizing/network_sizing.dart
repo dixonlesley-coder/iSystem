@@ -3206,7 +3206,8 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       }
       final returnChainKeys = <String>{};
       List<_CheckValvePlan> classify(
-              [Set<String> closedMoverLegs = const {}]) =>
+              [Set<String> closedMoverLegs = const {},
+              Set<String>? hotWaterSetMoversOut]) =>
           _classifyLoopCheckValves(
             componentEdges: componentEdges,
             root: root,
@@ -3219,13 +3220,18 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             jockeyMoverIds: jockeyLegFlows.keys.toSet(),
             legSizeOverrides: sizeOverrides,
             ignoreDrawnMoverDirection: isFireService(service),
-            disagreeingSetMoversOut: disagreeingSetMoversOut,
+            disagreeingSetMoversOut:
+                hotWaterSetMoversOut ?? disagreeingSetMoversOut,
             // Round 69 r2 — on HOT water a supply pump and a return
             // circulator between the SAME two junctions (H -> P -> J beside
             // J -> Pr -> H) are topologically a disagreeing duty / standby
             // set: the circulator is the drawn return, never a backwards
             // standby, so hot water keeps every coherent drawn direction.
-            orientDisagreeingSets: service != ServiceType.hotWater,
+            // Round 70 — the set-oriented reading is still solved as an
+            // ENVELOPE scenario ([hotWaterSetMoversOut], below).
+            orientDisagreeingSets: service != ServiceType.hotWater ||
+                hotWaterSetMoversOut != null,
+            skipRootEndedSets: hotWaterSetMoversOut != null,
             nodeOrder: isFireService(service)
                 ? (a, b) {
                     final na = net.nodeById(a), nb = net.nodeById(b);
@@ -4430,6 +4436,26 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       for (final plan in cvPlans) {
         againstLegs.addAll(run(plan));
       }
+      // Round 70 (regression-hot-water-backwards-standby-leg-undersized) —
+      // on HOT water a valveless parallel set whose coherent drawn
+      // directions disagree is not oriented (a supply pump beside a return
+      // circulator has the same topology), but the set-oriented reading
+      // (every leg away from the source, each a full-duty machine) is solved
+      // as one more ENVELOPE scenario, so a backwards-drawn standby leg is
+      // never sized on the balance share. A set with a leg end ON the root
+      // (a circulator return landing on the heater itself) keeps the drawn
+      // recirculation reading alone (the Round-28 return-chain convention).
+      final hwSetMovers = <String>{};
+      final hwSetFirst = results.length;
+      if (service == ServiceType.hotWater && cvPlans.isNotEmpty) {
+        final oriented = classify(const {}, hwSetMovers);
+        if (hwSetMovers.isNotEmpty) {
+          for (final plan in oriented) {
+            run(plan);
+          }
+        }
+      }
+      final hwSetEnd = results.length;
       // Scenario (a): every leg that ran against its pump closed together;
       // when that starves a draw-off point, each leg closed on its own.
       //
@@ -4524,6 +4550,16 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
 
       bool wins(int i, Iterable<String> edgeIds) =>
           edgeIds.any((id) => winner[id] == i);
+      // Round 70 — a hot-water disagreeing-set member is named only when the
+      // set-oriented scenario wins its leg.
+      for (final p in [...hwSetMovers]..sort()) {
+        for (var i = hwSetFirst; i < hwSetEnd; i++) {
+          if (wins(i, legOf(p))) {
+            disagreeingSetMoversOut?.add(p);
+            break;
+          }
+        }
+      }
       for (var i = 0; i < results.length; i++) {
         final r = results[i];
         checkValveFeedsRingOut?.addAll([
@@ -6739,6 +6775,7 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
   bool ignoreDrawnMoverDirection = false,
   Set<String>? disagreeingSetMoversOut,
   bool orientDisagreeingSets = true,
+  bool skipRootEndedSets = false,
 }) {
   const none = [_CheckValvePlan(<String>{}, <_StandbyLeg>[])];
   // Round 62 (regression-duty-pick-sizer-vs-basis-disagree) — on a FIRE
@@ -7338,9 +7375,34 @@ List<_CheckValvePlan> _classifyLoopCheckValves({
     final dirsByEnds = <String, Set<int>>{};
     for (final p in [...adj.keys]..sort()) {
       final c = valvelessChain(p);
-      final d = c?.drawnDir;
-      if (c == null || d == null || d == 0) continue;
+      var d = c?.drawnDir;
+      if (c == null || d == null) continue;
       final a = c.ns.first, b = c.ns.last;
+      if (skipRootEndedSets && (a == root || b == root)) continue;
+      // Round 70 (regression-duplex-backwards-duty-beside-incoherent-
+      // standby) — an INCOHERENTLY drawn leg (both pipes into, or out of,
+      // its pump) records the direction the Round-60 rule gives it: away
+      // from the source (the root end of a root chain, else the end nearer
+      // the source in bend-free hops with the leg removed). A coherently
+      // backwards duty beside it then makes a disagreeing set; only a tie
+      // leaves the incoherent leg unrecorded.
+      if (d == 0) {
+        if (a == root) {
+          d = 1;
+        } else if (b == root) {
+          d = -1;
+        } else {
+          final h = distFrom(root, c.interior.toSet(), bendFree: true);
+          final h0 = h[a], h1 = h[b];
+          if (h0 != null && (h1 == null || h0 < h1 - 1e-9)) {
+            d = 1;
+          } else if (h1 != null && (h0 == null || h1 < h0 - 1e-9)) {
+            d = -1;
+          } else {
+            continue;
+          }
+        }
+      }
       // Normalised to the sorted-ends frame.
       (dirsByEnds[endsKeyOf(a, b)] ??= <int>{})
           .add(a.compareTo(b) <= 0 ? d : -d);
