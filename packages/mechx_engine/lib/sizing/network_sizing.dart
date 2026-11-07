@@ -1485,8 +1485,7 @@ Set<String> fireServiceJoinNodes(Network net) {
           moverFloor: net.nodeById(id)!.floorIndex,
           interior: interior,
           legSides: {
-            for (final MapEntry(key: edgeId, value: inner)
-                in interior.entries)
+            for (final MapEntry(key: edgeId, value: inner) in interior.entries)
               if (sides[edgeId]!.length == 1 &&
                   inner.every((nid) =>
                       (adj[nid]?.length ?? 0) <= 2 &&
@@ -1535,9 +1534,7 @@ Set<String> fireServiceJoinNodes(Network net) {
   // demand). It still roots the upper room's own suction fragment.
   final breakTanks = <String, Set<String>>{
     for (final id in sources)
-      if (onDischarge.contains(id) &&
-          onSuction.contains(id) &&
-          isTankPlant(id))
+      if (onDischarge.contains(id) && onSuction.contains(id) && isTankPlant(id))
         id: dischargeReach[id] ?? const <String>{},
   };
   final seeds = <String>[
@@ -3519,8 +3516,8 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             // standby, so hot water keeps every coherent drawn direction.
             // Round 70 — the set-oriented reading is still solved as an
             // ENVELOPE scenario ([hotWaterSetMoversOut], below).
-            orientDisagreeingSets: service != ServiceType.hotWater ||
-                hotWaterSetMoversOut != null,
+            orientDisagreeingSets:
+                service != ServiceType.hotWater || hotWaterSetMoversOut != null,
             skipRootEndedSets: hotWaterSetMoversOut != null,
             nodeOrder: isFireService(service)
                 ? (a, b) {
@@ -5958,8 +5955,8 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         // A standby chain an earlier pass already carried keeps at least
         // that flow and bore (only its direction was wrong).
         final prior = standby ? result[e.id] : null;
-        final chainLps = math.max(
-            designLps, prior?.flow.inLitersPerSecond ?? 0.0);
+        final chainLps =
+            math.max(designLps, prior?.flow.inLitersPerSecond ?? 0.0);
         final floorMm = math.max(
             math.max(joinMm, prior?.diameter.inMillimeters ?? 0.0),
             ctx.fireMinimumFor(asRiser)?.inMillimeters ?? 0);
@@ -9489,9 +9486,11 @@ Set<String> airOpenBoundaryLeaves(Network net) {
   return frozen;
 }
 
-
 /// Round 67 — a fire pump TEST / recirculation line ([fireTestLineChains]):
 /// its pipes in order from the pumped header [joinId] to the tank [tankId].
+/// Round 72 — for a header-to-header test loop / pump bypass `tankId` is the
+/// SUCTION-side end node the line returns to (the suction header), not a
+/// tank.
 typedef FireTestLine = ({List<String> edgeIds, String joinId, String tankId});
 
 /// Round 67 (fire-convergence-19-test-line-to-tank-reverses-pump-
@@ -9560,7 +9559,97 @@ List<FireTestLine> fireTestLineChains(
       ));
     }
   }
-  if (candidates.isEmpty) return const [];
+  // Round 72 (fire-convergence-24-test-loop-to-suction-header-bypasses-
+  // pump) — the second family: a closed-loop METERING test line / pump
+  // bypass drawn from the discharge header back to the SUCTION HEADER (NFPA
+  // 20 4.21.3.4 / 4.14.4). A chain of demand-free, non-plant, non-fixture
+  // degree-2 nodes between two non-plant JUNCTIONS (>= 2 onward pipes at
+  // each end) that lies on a cycle through a fire mover (the same
+  // biconnected block — a sprinkler grid's tee-to-tee branches never do, so
+  // only pump-room chains are judged). Verified below: with only the chain
+  // removed one end lies on a mover's terminal-feeding discharge side and
+  // the other on that SAME mover's suction side. For this family `tankId`
+  // carries the SUCTION-side end node (the line's far end), `joinId` the
+  // discharge-side end.
+  final headerCandidates = <({List<String> edgeIds, String a, String b})>[];
+  {
+    final fireEdges = [
+      for (final e in net.edges)
+        if (isFireService(e.service)) (e.id, e.fromId, e.toId),
+    ];
+    final blockOfEdge = <String, int>{};
+    final blockHasMover = <int>{};
+    final blocks = cycleBlocks(fireEdges);
+    for (var i = 0; i < blocks.length; i++) {
+      for (final id in blocks[i]) {
+        blockOfEdge[id] = i;
+        final e = net.edgeById(id)!;
+        for (final end in [e.fromId, e.toId]) {
+          if (net.nodeById(end) case final n? when _isFireMover(n)) {
+            blockHasMover.add(i);
+          }
+        }
+      }
+    }
+    bool passNode(String id) {
+      final n = net.nodeById(id);
+      return n != null &&
+          n.role != NodeRole.plant &&
+          n.role != NodeRole.fixture &&
+          (adj[id]?.length ?? 0) == 2;
+    }
+
+    bool junction(String id) {
+      final n = net.nodeById(id);
+      return n != null &&
+          n.role != NodeRole.plant &&
+          n.role != NodeRole.fixture &&
+          (adj[id]?.length ?? 0) >= 3;
+    }
+
+    final taken = <String>{};
+    final sortedEdges = [
+      for (final (id, _, _) in fireEdges)
+        if (blockHasMover.contains(blockOfEdge[id])) id,
+    ]..sort();
+    for (final startId in sortedEdges) {
+      if (taken.contains(startId)) continue;
+      final start = net.edgeById(startId)!;
+      // Walk each way from the seed edge through pass-through nodes.
+      ({List<String> edges, String end})? walk(String from, NetEdge e0) {
+        final edges = <String>[];
+        var cur = from;
+        var edge = e0;
+        final seen = <String>{from};
+        while (true) {
+          edges.add(edge.id);
+          final next = edge.fromId == cur ? edge.toId : edge.fromId;
+          if (!seen.add(next)) return null;
+          if (!passNode(next)) return (edges: edges, end: next);
+          final onward = [
+            for (final x in adj[next]!)
+              if (x.id != edge.id) x,
+          ];
+          cur = next;
+          edge = onward.single;
+        }
+      }
+
+      final fwd = walk(start.fromId, start);
+      final back = walk(start.toId, start);
+      if (fwd == null || back == null) continue;
+      // back.edges runs from the seed toward back.end; fwd toward fwd.end.
+      final ordered = <String>[
+        ...back.edges.reversed,
+        ...fwd.edges.skip(1),
+      ];
+      taken.addAll(ordered);
+      final a = back.end, b = fwd.end;
+      if (a == b || !junction(a) || !junction(b)) continue;
+      headerCandidates.add((edgeIds: ordered, a: a, b: b));
+    }
+  }
+  if (candidates.isEmpty && headerCandidates.isEmpty) return const [];
   // Each candidate is judged with ONLY its own chain removed (a duplex
   // room's tank -> suction-header main is a candidate chain too, and
   // removing it as well would cut the tank off the room).
@@ -9583,8 +9672,8 @@ List<FireTestLine> fireTestLineChains(
         in hop.suctionStart.entries) {
       final interior = <String, Set<String>>{};
       final sides = _moverSides(stripped, moverId, sAdj, interiorOut: interior);
-      final suctionReachesTank = legs.entries.any(
-          (l) => l.value && (sides[l.key]?.contains(c.tankId) ?? false));
+      final suctionReachesTank = legs.entries
+          .any((l) => l.value && (sides[l.key]?.contains(c.tankId) ?? false));
       // The join is on a discharge side that FEEDS the fire terminals (a
       // duplex room's tank -> suction-header main, removed, turns the test
       // line into a "suction" whose "discharge" is the bare header: never).
@@ -9599,6 +9688,55 @@ List<FireTestLine> fireTestLineChains(
       }
     }
     if (verified) out.add(c);
+  }
+  for (final c in headerCandidates) {
+    // A mover or tank on the chain would be a real parallel leg / a tank
+    // line: excluded by construction (plants never pass), re-checked here.
+    final stripIds = c.edgeIds.toSet();
+    final stripped = Network(nodes: net.nodes, edges: [
+      for (final e in net.edges)
+        if (!stripIds.contains(e.id)) e,
+    ]);
+    final hop = fireHopSources(stripped, elevationOf: elevationOf);
+    final sAdj = <String, List<NetEdge>>{};
+    for (final e in stripped.edges) {
+      if (!isFireService(e.service)) continue;
+      (sAdj[e.fromId] ??= []).add(e);
+      (sAdj[e.toId] ??= []).add(e);
+    }
+    FireTestLine? found;
+    for (final MapEntry(key: moverId, value: legs)
+        in hop.suctionStart.entries) {
+      final interior = <String, Set<String>>{};
+      final sides = _moverSides(stripped, moverId, sAdj, interiorOut: interior);
+      // A suction side's interior holds the suction header (its `sides`
+      // entry lists only the plants reached).
+      bool onSuction(String id) => legs.entries.any((l) =>
+          l.value &&
+          ((interior[l.key]?.contains(id) ?? false) ||
+              (sides[l.key]?.contains(id) ?? false)));
+      bool onDischarge(String id) => legs.entries
+          .any((l) => !l.value && (interior[l.key]?.contains(id) ?? false));
+      bool feedsTerminals(String id) => legs.entries.any((l) =>
+          !l.value &&
+          (interior[l.key]?.contains(id) ?? false) &&
+          interior[l.key]!
+              .any((x) => stripped.nodeById(x)?.role == NodeRole.fixture));
+      for (final (d, s) in [(c.a, c.b), (c.b, c.a)]) {
+        // Both ends on discharge sides ⇒ a real parallel discharge leg
+        // (kept as a Round-13 set), never a test loop.
+        if (feedsTerminals(d) && onSuction(s) && !onDischarge(s)) {
+          found = (
+            edgeIds: d == c.a ? c.edgeIds : c.edgeIds.reversed.toList(),
+            joinId: d,
+            tankId: s,
+          );
+          break;
+        }
+      }
+      if (found != null) break;
+    }
+    if (found != null) out.add(found);
   }
   return out;
 }

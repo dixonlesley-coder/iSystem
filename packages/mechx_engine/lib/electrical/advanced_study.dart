@@ -59,7 +59,9 @@ import 'enclosure.dart'
         switchgearLossW;
 import 'fault.dart'
     show
+        CircuitFaultResult,
         FaultStudyResult,
+        PanelFaultResult,
         defaultLvUtilityFaultKa,
         estimatedServiceFaultLevelA,
         faultStudy,
@@ -101,6 +103,7 @@ import 'power_oneline.dart'
         buildPowerOneLine,
         distributedSourceInverters,
         sizeDistributedSources;
+import 'results.dart' show BusbarWithstand;
 import 'sources.dart'
     show
         GensetMotor,
@@ -602,7 +605,24 @@ AdvancedStudy computeAdvancedStudy(
   // Breakers match parts whose breaking capacity covers the board's
   // prospective fault — the same fault study the schedule's kA tokens use.
   // Round 15 — each device matches its SPECIFIED kA (the schedule's figure).
-  final faultKa = faultSpecifiedKa(fault);
+  // Round 72 — the issued study: genset-backed devices specified (and
+  // judged) on the larger of the utility and the on-genset fault. ONE genset
+  // study, shared with the ADS judge below.
+  final gBasis = gensetFaultBasis(project, sys);
+  final gStudy = gBasis == null
+      ? null
+      : faultStudy(sys, project, profile,
+          originFaultLevel: Current(gBasis.iscA));
+  final issued = gStudy == null
+      ? fault
+      : mergeGensetFaultStudy(
+          utility: fault,
+          genset: gStudy,
+          sys: sys,
+          backed: gBasis!.backed,
+          gensetVa: gBasis.va,
+          gensetIscA: gBasis.iscA);
+  final faultKa = faultSpecifiedKa(issued);
   // Round 21 (bom-quote-4/-5) — each enclosure priced at its sized W x H x D,
   // and the designed control gear / genset / SPDs / earthing taken off too.
   final bom = buildBom(sys,
@@ -623,13 +643,14 @@ AdvancedStudy computeAdvancedStudy(
       ));
 
   // Round 56 — ADS judged on the standby genset too (judge-only).
-  final onGenset = gensetAdsCheck(profile, project, sys, fault);
+  final onGenset =
+      gensetAdsCheck(profile, project, sys, fault, gensetStudy: gStudy);
 
   // Aggregate every sub-result's provenance honesty surface.
   final verify = _aggregateVerify([
     if (onGenset.judged) [gensetSustainedFaultVerifyItem],
     if (powerOneLine?.gensetStart != null) [gensetStartDipVerifyItem],
-    fault.verifyItems,
+    issued.verifyItems,
     supply.verifyItems,
     powerFactor.verifyItems,
     for (final a in controlAssemblies.values) a.verifyItems,
@@ -655,7 +676,7 @@ AdvancedStudy computeAdvancedStudy(
 
   return AdvancedStudy(
     gensetAdsFailedCircuitIds: onGenset.failedIds,
-    fault: fault,
+    fault: issued,
     supply: supply,
     recommendedDayaVa: daya?.va,
     recommendedDayaThreePhase: (daya?.system ?? ElectricalSystem.threePhase) ==
@@ -866,6 +887,164 @@ String _kvaText(ApparentPower p) {
   return v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
 }
 
+/// Round 72 (elec-convergence-24-genset-max-fault-never-judged-for-breaking-
+/// capacity) — the ONE genset fault basis every on-genset judge reads: the
+/// boards the standby set can carry ([gensetBackedPanelIds]; every board for
+/// a full-backup set or when nothing is designated essential, Round 66 / 67),
+/// the installed plant VA ([gensetPlantVa]) and its alternator sub-transient
+/// fault S/(√3·400·Xd'') ([onSiteSourceFaultA], Xd'' `// VERIFY`). Null when
+/// no standby genset is drawn, it is the prime supply (already the study
+/// origin), or no plant VA resolves. Earthing-independent (breaking capacity
+/// is judged on TT too; ADS only on TN).
+({Set<String> backed, bool undesignated, double va, double iscA})?
+    gensetFaultBasis(ElectricalProject project, ElectricalSystemResult sys) {
+  final gen = project.sources?.generator;
+  if (gen == null || project.supplyKind == SupplyKind.generator) return null;
+  var backed = gensetBackedPanelIds(project);
+  final undesignated = backed.isEmpty;
+  final fullBackup = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
+  if (undesignated || fullBackup) {
+    backed = {for (final p in project.panels) p.id};
+  }
+  if (backed.isEmpty) return null;
+  final va = gensetPlantVa(project, sys);
+  if (va == null) return null;
+  // Round 71 — a 1-phase supply's set is a single-phase alternator.
+  final iscA = onSiteSourceFaultA(SupplyKind.generator, va,
+      singlePhaseU0: onSiteSinglePhaseU0(sys));
+  return (backed: backed, undesignated: undesignated, va: va, iscA: iscA);
+}
+
+/// Round 72 — the fault-study warning codes that judge a DEVICE's breaking
+/// capacity (re-judged on the genset supply by [mergeGensetFaultStudy]).
+const Set<String> _deviceKaCodes = {
+  'breaking-capacity-inadequate',
+  'service-capacity-inadequate',
+  'cascade-combination-unverified',
+};
+
+/// Round 72 (elec-convergence-24-genset-max-fault-never-judged-for-breaking-
+/// capacity) — the ISSUED fault study: a standby genset is a MAXIMUM-fault
+/// source too (IEC 60947-2 — a device must break the largest fault of every
+/// supply it can see). For every genset-backed board ([gensetFaultBasis]) the
+/// bus whose on-genset prospective fault ([genset], the alternator
+/// sub-transient Xd'' study) exceeds the utility one takes the genset figure
+/// AND the device kA [faultStudy] specified for it there (incomer + every
+/// way), so the schedule tokens, the BOM kA match and the quotation all
+/// specify a device covering BOTH supplies. ADS / Zs fields stay the
+/// utility's (the minimum-fault ADS judge on genset is [gensetAdsCheck]).
+/// Device kA warnings of a genset-governed device are the genset study's,
+/// re-coded `<code>-on-genset` (a device the ladder cannot reach, or an
+/// override); every other warning is the utility's. A busbar (main bus and
+/// each section) whose Fold-1 Icw is below the on-genset fault raises the
+/// ERROR `busbar-withstand-inadequate-on-genset` (judge-only — the bar is
+/// sized on the utility fault). An unbacked board, and any board whose
+/// genset fault does not exceed the utility one, is byte-identical.
+FaultStudyResult mergeGensetFaultStudy({
+  required FaultStudyResult utility,
+  required FaultStudyResult genset,
+  required ElectricalSystemResult sys,
+  required Set<String> backed,
+  required double gensetVa,
+  required double gensetIscA,
+}) {
+  final governs = <String>{}; // backed panels where the genset fault is higher
+  final panels = <String, PanelFaultResult>{...utility.panels};
+  for (final id in backed) {
+    final u = utility.panels[id];
+    final g = genset.panels[id];
+    if (u == null || g == null) continue;
+    if (g.prospectiveFaultkA > u.prospectiveFaultkA + 1e-9) {
+      governs.add(id);
+      panels[id] = g;
+    }
+  }
+  if (governs.isEmpty) return utility;
+  final circuits = <String, CircuitFaultResult>{...utility.circuits};
+  final govCircuits = <String>{};
+  for (final e in utility.circuits.entries) {
+    final u = e.value;
+    if (!governs.contains(u.panelId)) continue;
+    final g = genset.circuits[e.key];
+    if (g == null || g.faultkA <= u.faultkA + 1e-9) continue;
+    govCircuits.add(e.key);
+    circuits[e.key] = CircuitFaultResult(
+      circuitId: u.circuitId,
+      panelId: u.panelId,
+      faultkA: g.faultkA,
+      breakerAdequate: g.breakerAdequate,
+      breakerKa: g.breakerKa,
+      zsOhm: u.zsOhm,
+      zsMaxOhm: u.zsMaxOhm,
+      adsOk: u.adsOk,
+      adsByRcd: u.adsByRcd,
+      disconnectionTimeS: u.disconnectionTimeS,
+    );
+  }
+  bool genGoverned(ElectricalWarning w) =>
+      _deviceKaCodes.contains(w.code) &&
+      w.panelId != null &&
+      (w.circuitId == null
+          ? governs.contains(w.panelId)
+          : govCircuits.contains(w.circuitId));
+  final kva = (gensetVa / 1000).toStringAsFixed(0);
+  final on = 'On the $kva kVA standby genset (alternator fault '
+      "${(gensetIscA / 1000).toStringAsFixed(1)} kA, Xd'' basis): ";
+  final warnings = <ElectricalWarning>[
+    for (final w in utility.warnings)
+      if (!genGoverned(w)) w,
+    for (final w in genset.warnings)
+      if (genGoverned(w))
+        ElectricalWarning(
+          code: '${w.code}-on-genset',
+          severity: w.severity,
+          message: '$on${w.message}',
+          panelId: w.panelId,
+          circuitId: w.circuitId,
+        ),
+  ];
+  for (final id in sys.order) {
+    if (!governs.contains(id)) continue;
+    final pr = sys.panels[id];
+    if (pr == null) continue;
+    final gKa = panels[id]!.prospectiveFaultkA;
+    final bars = <(String, BusbarWithstand?)>[
+      (pr.name, pr.busbar.withstand),
+      if (pr.busbarSections.length > 1)
+        for (final s in pr.busbarSections)
+          ('${pr.name} busbar section ${s.index}', s.busbar.withstand),
+    ];
+    for (final (where, w) in bars) {
+      if (w == null || w.icwKa + 1e-6 >= gKa) continue;
+      warnings.add(ElectricalWarning(
+        code: 'busbar-withstand-inadequate-on-genset',
+        severity: WarningSeverity.error,
+        message: '$on$where: bar Icw ${w.icwKa.toStringAsFixed(2)} kA '
+            '(${w.durationS} s) is below the '
+            '${gKa.toStringAsFixed(2)} kA on-genset prospective fault — '
+            'size the bus for the genset fault, use parallel bars or add '
+            'current limiting.',
+        panelId: id,
+      ));
+    }
+  }
+  return FaultStudyResult(
+    originFaultkA: utility.originFaultkA,
+    panels: panels,
+    circuits: circuits,
+    selectivity: utility.selectivity,
+    warnings: warnings,
+    verifyItems: [...utility.verifyItems, gensetMaxFaultVerifyItem],
+  );
+}
+
+/// Round 72 — the `// VERIFY` basis [mergeGensetFaultStudy] specifies
+/// genset-backed devices and judges their bus withstand on.
+const String gensetMaxFaultVerifyItem =
+    "standby genset alternator sub-transient fault (Xd'' 0.12 pu) also "
+    'governs device breaking capacity (Icu / Ics) and busbar withstand (Icw) '
+    'on genset-backed boards';
+
 /// Round 56 (elec-convergence-8-ads-never-judged-on-standby-genset-source)
 /// — JUDGE-ONLY: IEC 60364-4-41 411.3.2 requires automatic disconnection
 /// under EVERY supply condition, and a life-safety board runs exactly when
@@ -885,37 +1064,20 @@ String _kvaText(ApparentPower p) {
   ElectricalStandardsProfile profile,
   ElectricalProject project,
   ElectricalSystemResult sys,
-  FaultStudyResult utility,
-) {
+  FaultStudyResult utility, {
+  FaultStudyResult? gensetStudy,
+}) {
   const none =
       (judged: false, failedIds: <String>{}, warnings: <ElectricalWarning>[]);
-  final gen = project.sources?.generator;
   final tn = sys.earthing.system == EarthingSystem.tnS ||
       sys.earthing.system == EarthingSystem.tnCs;
-  if (gen == null || !tn || project.supplyKind == SupplyKind.generator) {
-    return none;
-  }
-  // Round 66 (regression-typed-genset-fraction-skips-genset-ads-judge) — with
-  // NO board designated essential the set can pick up ANY board, so every
-  // board is judged whatever backup fraction was typed (the Round-26 safe
-  // direction [gensetStartMotors] already follows). A typed fraction < 1
-  // with nothing designated judged nothing and the ERROR silently vanished.
-  //
-  // Round 67 (elec-convergence-19-genset-ads-skips-full-backup-boards) — a
-  // set TYPED to back 100 % of demand carries the whole installation
-  // whatever is marked essential (its sizing, the motor-start dip screen
-  // [gensetStartMotors], the power one-line and the 'backs 100 % of load'
-  // spine all read it so): every board is judged on its fault. Only a
-  // typed fraction < 1 with an essential sub-tree narrows the judge.
-  var backed = gensetBackedPanelIds(project);
-  final undesignated = backed.isEmpty;
-  final fullBackup = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
-  if (undesignated || fullBackup) {
-    backed = {for (final p in project.panels) p.id};
-  }
-  if (backed.isEmpty) return none;
-  final va = gensetPlantVa(project, sys);
-  if (va == null) return none;
+  if (!tn) return none;
+  final basis = gensetFaultBasis(project, sys);
+  if (basis == null) return none;
+  final gen = project.sources!.generator!;
+  final backed = basis.backed;
+  final undesignated = basis.undesignated;
+  final va = basis.va;
   final infos = <ElectricalWarning>[
     if (undesignated &&
         gen.backupFractionTyped != null &&
@@ -930,10 +1092,9 @@ String _kvaText(ApparentPower p) {
             'mark the boards the set backs as essential.',
       ),
   ];
-  // Round 71 — a 1-phase supply's set is a single-phase alternator.
-  final iscA = onSiteSourceFaultA(SupplyKind.generator, va,
-      singlePhaseU0: onSiteSinglePhaseU0(sys));
-  final g = faultStudy(sys, project, profile, originFaultLevel: Current(iscA));
+  final iscA = basis.iscA;
+  final g = gensetStudy ??
+      faultStudy(sys, project, profile, originFaultLevel: Current(iscA));
   final kva = (va / 1000).toStringAsFixed(0);
   final failed = <String>{};
   final warnings = <ElectricalWarning>[...infos];
