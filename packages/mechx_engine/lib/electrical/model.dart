@@ -977,7 +977,11 @@ Map<String, dynamic> _sourcesToJson(ElectricalSources s) => {
           if (s.generator!.kva != null)
             'kva': s.generator!.kva!.voltAmperes,
           if (s.generator!.units != 1) 'units': s.generator!.units,
-          'backupFraction': s.generator!.backupFraction,
+          // Round 65 — only a TYPED fraction is written (an untyped set
+          // follows the essential designation); a legacy file's explicit
+          // value round-trips unchanged.
+          if (s.generator!.backupFractionTyped != null)
+            'backupFraction': s.generator!.backupFractionTyped,
           'mode': s.generator!.mode.name,
           'transfer': s.generator!.transfer.name,
         },
@@ -1009,7 +1013,12 @@ ElectricalSources _sourcesFromJson(Map<String, dynamic> json) {
               (g['units'] as num) >= 1)
           ? (g['units'] as num).floor()
           : 1,
-      backupFraction: (g['backupFraction'] as num?)?.toDouble() ?? 1.0,
+      // Round 65 — absent ⇒ untyped (null); a non-finite / out-of-band
+      // value is dropped to untyped too (0 < f <= 1).
+      backupFraction: () {
+        final v = (g['backupFraction'] as num?)?.toDouble();
+        return v != null && v.isFinite && v > 0 && v <= 1 ? v : null;
+      }(),
       mode: _enumOr(GeneratorMode.values, g['mode'], GeneratorMode.standby),
       transfer: _enumOr(
         GeneratorTransfer.values,

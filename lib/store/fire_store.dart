@@ -1333,6 +1333,20 @@ final fireJockeyDutyProvider = Provider<PumpDuty?>((ref) {
 /// only candidate). The worst short system is reported (flow deficit first,
 /// then head deficit); with none short, the tightest flow margin.
 /// Never resizes anything. Null when no sprinkler is drawn or no pump duty.
+/// Round 65 (regression-3) — a SPRINKLER SYSTEM is drawn only when a drawn
+/// fire system carries a sprinkler HEAD (`FireSystem.hasSprinklerHead`, the
+/// Round-64 basis rule) — never merely a pipe labelled sprinkler (a pump
+/// room's suction drawn on the sprinkler service feeds a hydrant riser).
+/// The ONE gate for the calc report's sprinkler design / remote-area check,
+/// the Fire inspector's sprinkler rows and the sprinkler-vs-pump judge.
+final sprinklerHeadDrawnProvider = Provider<bool>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  if (!net.edges.any((e) => e.service == ServiceType.fireSprinkler)) {
+    return false;
+  }
+  return fireRatingSystems(net).any((s) => s.hasSprinklerHead(net));
+});
+
 final sprinklerPumpCheckProvider = Provider<
     ({
       double demandLps,
@@ -1343,9 +1357,7 @@ final sprinklerPumpCheckProvider = Provider<
       bool headShort,
     })?>((ref) {
   final net = ref.watch(sizingNetworkProvider);
-  if (!net.edges.any((e) => e.service == ServiceType.fireSprinkler)) {
-    return null;
-  }
+  if (!ref.watch(sprinklerHeadDrawnProvider)) return null;
   final remote = ref.watch(sprinklerRemoteAreaProvider);
   final building = ref.watch(projectControllerProvider).building;
   const rhoG = 1000 * 9.81;

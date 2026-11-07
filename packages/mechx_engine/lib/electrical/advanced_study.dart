@@ -69,6 +69,7 @@ import 'fault.dart'
         solvedRunLengthM;
 import 'genset_backup.dart'
     show
+        effectiveGeneratorBackupFraction,
         gensetBackedPanelIds,
         gensetBackupDemandVa,
         gensetBackupDemandW,
@@ -581,6 +582,10 @@ AdvancedStudy computeAdvancedStudy(
       // Round 58 — the head follows the primary supply (PLN / genset / PV).
       supplyKind: project.supplyKind,
       supplyCapacity: project.supplyCapacityVa,
+      // Round 65 — the essential split follows the EFFECTIVE fraction.
+      backupFraction: effectiveGeneratorBackupFraction(project),
+      // Round 65 — a sectioned service's LV bus is split (coupler N.O.).
+      lvSections: serviceSections(project),
     );
   }
 
@@ -753,7 +758,7 @@ double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
     return none;
   }
   var backed = gensetBackedPanelIds(project);
-  if (backed.isEmpty && gen.backupFraction >= 1 - 1e-9) {
+  if (backed.isEmpty && effectiveGeneratorBackupFraction(project) >= 1 - 1e-9) {
     backed = {for (final p in project.panels) p.id};
   }
   if (backed.isEmpty) return none;
@@ -1325,7 +1330,11 @@ List<GensetMotor> gensetStartMotors(
   final motors = <GensetMotor>[];
   final essential = gensetBackedPanelIds(project);
   final gen = project.sources?.generator;
-  final restrict = essential.isNotEmpty && (gen?.backupFraction ?? 1.0) < 1.0;
+  // Round 65 — the EFFECTIVE fraction: an untyped set with essential boards
+  // marked backs (and starts) the essential sub-tree only.
+  final restrict = essential.isNotEmpty &&
+      gen != null &&
+      effectiveGeneratorBackupFraction(project) < 1.0;
   final resultByCircuit = <String, ElectricalCircuitResult>{
     if (sys != null)
       for (final pr in sys.panels.values)
@@ -1442,5 +1451,12 @@ String? powerOneLineUtilitySub(
   String n(double v) =>
       v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
   final fig = t.units > 1 ? '${t.units} x ${n(t.kva)}' : n(t.kva);
+  // Round 65 (elec-convergence-17-sectioned-service-drawn-as-paralleled-
+  // transformers) — a SECTIONED service says so: its units are never
+  // paralleled onto one bus (the fault basis is one unit per section).
+  final sections = serviceSections(project);
+  if (sections > 1) {
+    return 'MV via TX $fig kVA · $sections sections, coupler N.O.';
+  }
   return 'MV via TX $fig kVA';
 }

@@ -1525,6 +1525,25 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                         ),
                       ),
                     ),
+                    // Round 65 — the share of the building demand the set
+                    // backs; blank = Auto (the essential sub-tree when any
+                    // board is marked essential, else the whole building).
+                    ElectricalField(
+                      label: context
+                          .strings(StringKey.electricalGensetBackupPercent),
+                      child: ElectricalOptionalNumInput(
+                        value: gen.backupFractionTyped == null
+                            ? null
+                            : gen.backupFractionTyped! * 100,
+                        hint: context.strings(
+                            StringKey.electricalGensetBackupPercentHint),
+                        zeroClears: true,
+                        onChanged: (v) => ctrl.setGeneratorBackupFraction(
+                            v == null ? null : (v > 100 ? 1.0 : v / 100)),
+                      ),
+                    ),
+                    note(context
+                        .strings(StringKey.electricalGensetBackupPercentNote)),
                     // Round 44 — a forced plant of n paralleled sets.
                     if (gen.kva != null)
                       ElectricalField(

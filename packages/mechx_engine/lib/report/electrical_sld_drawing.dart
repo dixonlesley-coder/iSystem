@@ -53,7 +53,8 @@ import '../electrical/sources.dart'
         GeneratorSource,
         sizeGenerator,
         sizeBattery;
-import '../electrical/supply_design.dart' show isDeclaredMvService;
+import '../electrical/supply_design.dart'
+    show isDeclaredMvService, serviceSections;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart'
     show BreakerCurve, BreakerClass, BreakerClassCode;
@@ -1845,13 +1846,24 @@ String _supplyHeadLabel(ElectricalProject project,
 /// honest ratio to print, so nothing is printed.
 /// Round 16 — the transformer figure for the drawings: [serviceTransformer]
 /// (`n x <kVA>` when the study needs several units).
-({double totalKva, String text})? _transformerFig(
+///
+/// Round 65 (elec-convergence-17-sectioned-service-drawn-as-paralleled-
+/// transformers) — [sectionNote] is set on a SECTIONED service
+/// ([serviceSections] > 1): its units sit on SEPARATE LV sections joined by
+/// a normally-open bus coupler (the fault study rates every device on ONE
+/// unit's fault), so the drawing must never read `n x kVA` as n units
+/// paralleled onto one LV main.
+({double totalKva, String text, String? sectionNote})? _transformerFig(
     ElectricalProject project, ElectricalSystemResult result) {
   final t = serviceTransformer(project, result);
   if (t == null) return null;
+  final sections = serviceSections(project);
   return (
     totalKva: t.kva * t.units,
     text: t.units > 1 ? '${t.units} x ${_num(t.kva)}' : _num(t.kva),
+    sectionNote: sections > 1
+        ? '$sections separate sections · coupler N.O.'
+        : null,
   );
 }
 
@@ -1985,8 +1997,15 @@ const double _sideNodeBottom = 14;
     ),
     if (isMv) ...[
       (name: 'PANEL UTAMA TEGANGAN MENENGAH', sub: 'MV main', kind: 'bus'),
-      (name: txLabel, sub: null, kind: 'transformer'),
-      (name: 'PANEL UTAMA TEGANGAN RENDAH', sub: 'LV main', kind: 'bus'),
+      (name: txLabel, sub: txFig?.sectionNote, kind: 'transformer'),
+      (
+        name: 'PANEL UTAMA TEGANGAN RENDAH',
+        // Round 65 — a sectioned LV main is split, coupler normally open.
+        sub: serviceSections(project) > 1
+            ? 'LV main · ${serviceSections(project)} sections, coupler N.O.'
+            : 'LV main',
+        kind: 'bus'
+      ),
     ],
   ];
 
@@ -2006,6 +2025,11 @@ const double _sideNodeBottom = 14;
         // kVA label to the RIGHT of the windings.
         prims.add(SldLabel(centreX + 22, midY + 3, node.name,
             size: 8.5, bold: true, role: role));
+        // Round 65 — a sectioned service: the units are separate sections.
+        if (node.sub != null) {
+          prims.add(SldLabel(centreX + 22, midY + 15, node.sub!,
+              size: 7.5, role: role));
+        }
       case 'supply':
         // The incoming isolator (bowtie). On an LV head-only chain the label
         // moves ABOVE the symbol — the side-source trunk leaves at mid-height
@@ -2303,6 +2327,11 @@ const double _sideNodeBottom = 14;
         txSecondaryX = x + r * 0.62;
         prims.add(SldLabel(x - 30, yMid + 28, node.name,
             size: 8, bold: true, role: role));
+        // Round 65 — a sectioned service: separate sections, coupler N.O.
+        final note = txFig?.sectionNote;
+        if (note != null) {
+          prims.add(SldLabel(x - 30, yMid + 39, note, size: 7, role: role));
+        }
       case 'supply':
         // Incoming isolator (bowtie). On the MV chain the label sits below;
         // on the LV head-only chain it moves ABOVE the symbol — the side-

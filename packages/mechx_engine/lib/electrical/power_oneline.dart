@@ -134,6 +134,14 @@ PowerOneLine buildPowerOneLine(
   String? utilitySub,
   SupplyKind supplyKind = SupplyKind.pln,
   ApparentPower? supplyCapacity,
+  // Round 65 — the EFFECTIVE backup fraction (`effectiveGeneratorBackupFraction`,
+  // resolved by the caller against the essential designation); null ⇒ the
+  // generator's own `backupFraction`.
+  double? backupFraction,
+  // Round 65 — the number of SEPARATE transformer sections (`serviceSections`):
+  // above 1 the LV bus is drawn as sections joined by a normally-open
+  // coupler (never one paralleled bus). 1 ⇒ byte-identical.
+  int lvSections = 1,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -148,7 +156,9 @@ PowerOneLine buildPowerOneLine(
     id: 'bus',
     kind: PowerNodeKind.bus,
     label: 'Main LV bus',
-    sub: '${_fmt(voltage.volts)} V',
+    sub: lvSections > 1
+        ? '${_fmt(voltage.volts)} V · $lvSections sections, coupler N.O.'
+        : '${_fmt(voltage.volts)} V',
   ));
   nodes.add(const PowerNode(
     id: 'main',
@@ -250,7 +260,10 @@ PowerOneLine buildPowerOneLine(
   // Essential split: a genset that backs only a fraction transfers a dedicated
   // ESSENTIAL bus (non-hybrid topology); the battery then backs a CRITICAL bus.
   final essentialSplit =
-      gen != null && !genPrimary && !hybrid && gen.backupFraction < 1.0;
+      gen != null &&
+      !genPrimary &&
+      !hybrid &&
+      (backupFraction ?? gen.backupFraction) < 1.0;
   var backedBus = 'bus';
 
   // Generator via ATS / COS, with the mains↔genset interlock.

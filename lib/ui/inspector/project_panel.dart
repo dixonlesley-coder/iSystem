@@ -206,8 +206,11 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
   // Round 17 — each fire section is gated on ITS OWN drawn system: a
   // hydrant-only network printed a sprinkler design + remote-head check that
   // is not drawn, and the standpipe line rode a sprinkler-only network.
-  final sprinklerDrawn =
-      net.edges.any((e) => e.service == ServiceType.fireSprinkler);
+  //
+  // Round 65 (regression-3) — a sprinkler SYSTEM needs a drawn head: a
+  // sprinkler-labelled suction leg feeding a hydrant riser prints no
+  // sprinkler design beside the hydrant-rated pump.
+  final sprinklerDrawn = ref.read(sprinklerHeadDrawnProvider);
   final hydrantDrawn =
       net.edges.any((e) => e.service == ServiceType.fireHydrant);
   // Round 29 — the governing hydrant system's design (friction-inclusive),
@@ -5052,9 +5055,8 @@ class _FireSection extends ConsumerWidget {
     final hasHydrantEdges = ref.watch(sizingNetworkProvider)
         .edges
         .any((e) => e.service == ServiceType.fireHydrant);
-    final hasSprinklerEdges = ref.watch(sizingNetworkProvider)
-        .edges
-        .any((e) => e.service == ServiceType.fireSprinkler);
+    // Round 65 — a sprinkler system needs a drawn head (the report's gate).
+    final hasSprinklerEdges = ref.watch(sprinklerHeadDrawnProvider);
     final standpipeRisers = drawnStandpipeRiserCount(
         ref.watch(sizingNetworkProvider));
     // E11: the whole fire design derives from occupancy/height/hazard alone, so

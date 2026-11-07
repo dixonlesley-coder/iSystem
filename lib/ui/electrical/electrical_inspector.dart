@@ -617,10 +617,10 @@ class _ElectricalPanelMenuState extends State<ElectricalPanelMenu> {
             context.strings(StringKey.electricalPanelProperties),
             widget.onProperties),
         // In-place SYSTEM change (1ph 220 V / 3ph 400 V via `setPanelSystem`'s
-        // voltage snap) — not on the machine-owned MEP board, whose supply is
-        // derived from the plan, not chosen here.
-        if (panel.id != kMepEquipmentPanelId)
-          ElectricalMenuAction(
+        // voltage snap). Round 65 — offered on the MEP board too: its system
+        // is a SERVICE fact (a 1-phase house's MEP board is 1-phase), so an
+        // older file minted 3-phase under a 1-phase root can be corrected.
+        ElectricalMenuAction(
             'System · $_systemValue',
             () => setState(() => _systemChooser = true),
           ),
@@ -1663,10 +1663,9 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                     // drop-a-floating-load flow) can become the 3-phase sub-board
                     // a design needs without delete-and-recreate (which would
                     // lose every way). EN literal — Wave 5 owns i18n.
-                    // Round 39 (elec-ui-journeys-2) — gated off the MEP
-                    // board, like the context-menu System row: its ways
-                    // follow the machines on the plan (3-phase 400 V mint).
-                    if (panel.id != kMepEquipmentPanelId)
+                    // Round 65 — offered on the MEP board too (Round 39
+                    // gated it off): the board's system is a service fact,
+                    // so a 3-phase mint under a 1-phase root is correctable.
                     ElectricalField(
                       label: 'Electrical system',
                       child: ElectricalEnumPicker<ElectricalSystem>(

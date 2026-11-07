@@ -215,9 +215,13 @@ void main() {
         expect(printed, isNotNull, reason: 'trial $t');
         expect(printed!.kva, study.transformerKva, reason: 'trial $t');
         expect(printed.units, study.units, reason: 'trial $t');
+        // Round 65 — every trial is a SECTIONED service (dual => 2, else
+        // transformerUnits): the sub states the separate sections.
+        final sections = pr.transformerUnits ?? 2;
         expect(powerOneLineUtilitySub(pr, sys),
             'MV via TX ${printed.units > 1 ? '${printed.units} x ' : ''}'
-            '${printed.kva.toStringAsFixed(0)} kVA',
+            '${printed.kva.toStringAsFixed(0)} kVA'
+            ' · $sections sections, coupler N.O.',
             reason: 'trial $t');
         final bom = advancedBomLines(project: pr, sys: sys)
             .where((l) => (l.priceKey ?? '').contains('transformer'))

@@ -1923,7 +1923,14 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
         i == 0 &&
         rets.isNotEmpty &&
         !supplyRoots.contains(rets.first.fanNodeId) &&
-        !sameComponent(supplyCompOf, rets.first.fanNodeId, s.fanNodeId)) {
+        !sameComponent(supplyCompOf, rets.first.fanNodeId, s.fanNodeId) &&
+        // Round 65 (plumbing-hvac-convergence-15-return-fan-rooted-return-
+        // adopted-by-ahu) — a return system ROOTED at a drawn air mover (a
+        // return / relief fan plant) or at another drawn air unit belongs to
+        // that machine: it is rated below on its own trunk + static, never
+        // adopted by the primary AHU (which then carried a return static it
+        // never sees while the return fan went without a solved duty).
+        !_isDrawnAirMachine(net.nodeById(rets.first.fanNodeId))) {
       ret = rets.first;
     }
     if (ret != null) consumed.add(ret.fanNodeId);
@@ -1932,7 +1939,15 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
     // at max(intake, return), never their sum: (supply index excluding the
     // intake) + max(intake, return) + internal. With no return the intake
     // stays in series with the supply (Round 27).
-    final supplyIndexPa = s.stat.pascals - s.intake.pascals;
+    //
+    // Round 65 (regression-2) — the unit moves its air only up to a BRANCH
+    // inline fan's inlet: the branch beyond it is that booster's own static
+    // (rated below on `inlineFanBranchStat`). Rating the unit on the full
+    // index through the boosted branch counted that branch twice across the
+    // series pair (one motor frame over). [statPastBranchFans] == [stat]
+    // when no branch fan is drawn (a trunk-mounted fan keeps the recorded
+    // both-rated-on-the-full-static convention) => byte-identical.
+    final supplyIndexPa = s.statPastBranchFans.pascals - s.intake.pascals;
     // Round 62 — a return carried by its own drawn RETURN FAN costs the
     // unit nothing on its inlet side beyond the intake: the return static is
     // the return fan's (rated below).
@@ -2008,7 +2023,7 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
     if (sup != null) {
       out[r.fanNodeId] = sizeFan(
         airflow: sup.trunk,
-        totalStaticPressure: Pressure(sup.stat.pascals -
+        totalStaticPressure: Pressure(sup.statPastBranchFans.pascals -
             sup.intake.pascals +
             math.max(sup.intake.pascals, r.stat.pascals) +
             internalOf(r.fanNodeId).pascals),
@@ -2079,6 +2094,15 @@ final supplyFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   return out;
 });
 
+/// Round 65 — [n] is a drawn air MACHINE plant (a supply / exhaust fan, an
+/// AHU, or a terminal air unit) that owns the system rooted at it.
+bool _isDrawnAirMachine(NetNode? n) =>
+    n != null &&
+    n.role == NodeRole.plant &&
+    (isAirMoverComponent(n.component) ||
+        n.component == NodeComponent.ahu ||
+        isTerminalAirUnit(n.component));
+
 /// Round 63 — a drawn air MOVER (supply / exhaust fan plant).
 bool isAirMoverComponent(NodeComponent? c) =>
     c == NodeComponent.supplyFan || c == NodeComponent.exhaustFan;
@@ -2098,7 +2122,10 @@ final exhaustFanDutiesByRootProvider = Provider<Map<String, FanDuty>>((ref) {
   final systems = ref.watch(airSystemsProvider(ServiceType.exhaust));
   final out = <String, FanDuty>{
     for (final ex in systems)
-      ex.fanNodeId: sizeFan(airflow: ex.trunk, totalStaticPressure: ex.stat),
+      // Round 65 (regression-2) — the root fan pulls only up to each BRANCH
+      // inline fan's outlet; the boosted branch is that fan's own static.
+      ex.fanNodeId: sizeFan(
+          airflow: ex.trunk, totalStaticPressure: ex.statPastBranchFans),
   };
   for (final ex in systems) {
     for (final id in ex.inlineFanIds) {
