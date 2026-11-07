@@ -96,7 +96,12 @@ import 'panel_results.dart'
 import 'power_factor.dart'
     show PowerFactorResult, isDriveFedCircuit, powerFactorCorrection;
 import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
-import 'sources.dart' show GensetMotor, sizeGenerator;
+import 'sources.dart'
+    show
+        GensetMotor,
+        gensetStartFloorKva,
+        kMaxStartVoltageDipPct,
+        sizeGenerator;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
     show
@@ -619,6 +624,7 @@ AdvancedStudy computeAdvancedStudy(
   // Aggregate every sub-result's provenance honesty surface.
   final verify = _aggregateVerify([
     if (onGenset.judged) [gensetSustainedFaultVerifyItem],
+    if (powerOneLine?.gensetStart != null) [gensetStartDipVerifyItem],
     fault.verifyItems,
     supply.verifyItems,
     powerFactor.verifyItems,
@@ -666,6 +672,8 @@ AdvancedStudy computeAdvancedStudy(
     warnings: [
       ...gensetBackupWarnings(project, sys),
       ...onGenset.warnings,
+      ...gensetStartDipWarnings(project, powerOneLine,
+          rootPanelId: originPanelIds.isEmpty ? null : originPanelIds.first),
       ...enclosureTempRiseWarnings(sys, enclosure),
       ...ttRcdTouchVoltageWarnings(project, sys, electrode),
       ...starterWarnings,
@@ -726,9 +734,69 @@ double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
   final r = sizeGenerator(gensetBackupDemandVa(project, sys),
       mode: gen.mode,
       transfer: gen.transfer,
-      backupPower: gensetBackupDemandW(project, sys));
+      backupPower: gensetBackupDemandW(project, sys),
+      minKvaForStart: gensetStartFloorFor(project, sys));
   final v = r.ratingKva.voltAmperes * r.units;
   return v > 0 ? v : null;
+}
+
+/// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
+/// — the ONE motor-start floor every UNFORCED genset sizing passes to
+/// [sizeGenerator] (the power one-line, G-01, the BOM / ATS line, the
+/// spines and [gensetPlantVa]): the smallest set starting the limiting
+/// motor of [gensetStartMotors] within the 25 % dip limit. The assembly
+/// fallback in [gensetStartMotors] reads the same FLC basis as the control
+/// assembly, so callers without [assemblies] agree with the study.
+ApparentPower gensetStartFloorFor(
+  ElectricalProject project,
+  ElectricalSystemResult sys, {
+  Map<String, ControlAssembly> assemblies = const {},
+}) =>
+    gensetStartFloorKva(
+        gensetStartMotors(project, sys: sys, assemblies: assemblies));
+
+/// Round 70 — the honesty item for the motor-start dip screen that now
+/// sizes / judges the genset.
+const String gensetStartDipVerifyItem =
+    'Genset motor-start dip: the 25 % momentary-dip limit and the '
+    "voltage-divider model on Xd'' = 0.15 pu (ISO 8528-5 practice) are "
+    'representative — confirm against the alternator datasheet. '
+    '// VERIFY notAnSniClause';
+
+/// Round 70 — JUDGE-ONLY: the generator node of the power one-line failed
+/// its motor-start dip screen (a forced nameplate, or a declared primary
+/// genset plant, too small for its largest motor). An unforced set is sized
+/// up to the start floor, so this fires only on a typed / declared rating.
+/// ERROR when the limiting motor is a life-safety way (it must start on
+/// mains failure), else a warning. Placed on the root panel.
+List<ElectricalWarning> gensetStartDipWarnings(
+    ElectricalProject project, PowerOneLine? oneLine,
+    {String? rootPanelId}) {
+  final st = oneLine?.gensetStart;
+  if (st == null || st.acceptable) return const [];
+  final lifeSafety = project.panels.any((p) => p.circuits.any((c) =>
+      c.lifeSafety &&
+      c.name == st.limitingMotorName &&
+      st.limitingMotorName != null));
+  return [
+    ElectricalWarning(
+      code: 'genset-start-dip-exceeded',
+      severity: lifeSafety ? WarningSeverity.error : WarningSeverity.warning,
+      message: 'Genset ${_kvaText(st.gensetKva)} kVA: starting '
+          '${st.limitingMotorName ?? 'the largest motor'} '
+          '(${_kvaText(st.startingKva)} kVA) dips the voltage '
+          '${st.estimatedDipPct}% — above the '
+          '${kMaxStartVoltageDipPct.toStringAsFixed(0)}% limit. Use at least '
+          '${_kvaText(st.recommendedMinGensetKva)} kVA or a reduced-inrush '
+          'starter.',
+      panelId: rootPanelId,
+    ),
+  ];
+}
+
+String _kvaText(ApparentPower p) {
+  final v = p.inKilovoltAmperes;
+  return v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
 }
 
 /// Round 56 (elec-convergence-8-ads-never-judged-on-standby-genset-source)

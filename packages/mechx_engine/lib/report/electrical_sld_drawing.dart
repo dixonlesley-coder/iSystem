@@ -17,7 +17,7 @@ library;
 import 'dart:math' as math;
 
 import '../electrical/advanced_study.dart'
-    show serviceSectionOfRoot, serviceTransformer;
+    show gensetStartFloorFor, serviceSectionOfRoot, serviceTransformer;
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
 import '../electrical/containment.dart'
@@ -1410,8 +1410,8 @@ const SldLegendEntry _kCouplerLegend = SldLegendEntry(
     'N.O.', 'Bus coupler, normally open (sections never paralleled)');
 
 /// Whether [prims] carry a normally-open bus coupler ([_emitOpenCoupler]).
-bool _hasOpenCoupler(List<SldPrim> prims) => prims.any(
-    (p) => p is SldLabel && p.text == 'N.O.' && p.role == SldRole.source);
+bool _hasOpenCoupler(List<SldPrim> prims) => prims
+    .any((p) => p is SldLabel && p.text == 'N.O.' && p.role == SldRole.source);
 
 // ── ZOOMED-OUT building single-line (the whole distribution hierarchy) ───────
 
@@ -1895,14 +1895,14 @@ void _emitOpenCoupler(
   final m = (a + b) / 2;
   if (vertical) {
     out.add(SldLine(at, a, at, m - 7, weight: SldWeight.medium, role: role));
-    out.add(
-        SldLine(at, m - 7, at + 8, m + 6, weight: SldWeight.medium, role: role));
+    out.add(SldLine(at, m - 7, at + 8, m + 6,
+        weight: SldWeight.medium, role: role));
     out.add(SldLine(at, m + 7, at, b, weight: SldWeight.medium, role: role));
     out.add(SldLabel(at + 11, m + 3, 'N.O.', size: 7, role: role));
   } else {
     out.add(SldLine(a, at, m - 7, at, weight: SldWeight.medium, role: role));
-    out.add(
-        SldLine(m - 7, at, m + 6, at - 8, weight: SldWeight.medium, role: role));
+    out.add(SldLine(m - 7, at, m + 6, at - 8,
+        weight: SldWeight.medium, role: role));
     out.add(SldLine(m + 7, at, b, at, weight: SldWeight.medium, role: role));
     out.add(SldLabel(m - 8, at - 12, 'N.O.', size: 7, role: role));
   }
@@ -1918,14 +1918,19 @@ void _emitOpenCoupler(
 /// Round 16 — sized on the backup kW as well ([backupW]): a set delivers
 /// only 0.8 × its kVA in kW, so a load above cos φ 0.8 is kW-limited.
 ({double totalKva, String text}) _gensetKva(
-    ApparentPower backupVa, GeneratorSource gen, Power backupW) {
+    ApparentPower backupVa, GeneratorSource gen, Power backupW,
+    {ApparentPower? minKvaForStart}) {
   if (gen.kva != null) {
     // Round 44 — a forced plant of n sets prints `n x <kVA>`.
     final k = gen.kva!.inKilovoltAmperes;
     final n = gen.units;
     return (totalKva: k * n, text: n > 1 ? '$n x ${_num(k)}' : _num(k));
   }
-  final r = sizeGenerator(backupVa, mode: gen.mode, backupPower: backupW);
+  final r = sizeGenerator(backupVa,
+      mode: gen.mode,
+      backupPower: backupW,
+      // Round 70 — the set that starts its largest motor.
+      minKvaForStart: minKvaForStart);
   final unit = r.ratingKva.inKilovoltAmperes;
   return (
     totalKva: unit * r.units,
@@ -2038,8 +2043,7 @@ const double _sectionColPitch = _ovW + 40;
 /// snap to the genset ladder (`selectGeneratorUnits` — `n x 2500` past the
 /// top rung, never a silent saturation) against the building demand VA — all
 /// `// VERIFY`.
-_Spine
-    _buildSourceSpine(
+_Spine _buildSourceSpine(
   ElectricalProject project,
   ElectricalSystemResult result,
   double centreX,
@@ -2154,13 +2158,12 @@ _Spine
     final lvMid = lvY + _ovH / 2;
     for (var i = 0; i < sections; i++) {
       final x = xs[i];
-      prims.add(
-          SldLine(x, busY, x, txY, weight: SldWeight.medium, role: role));
+      prims.add(SldLine(x, busY, x, txY, weight: SldWeight.medium, role: role));
       _emitTransformer(prims, x, txY, _ovH, role);
       prims.add(SldLabel(x + 22, txY + _ovH / 2 + 3, _sectionTxName(txFig, i),
           size: 8.5, bold: true, role: role));
-      prims.add(SldLine(x, txY + _ovH, x, lvY,
-          weight: SldWeight.medium, role: role));
+      prims.add(
+          SldLine(x, txY + _ovH, x, lvY, weight: SldWeight.medium, role: role));
       _emitPanelBox(
           prims, x, lvMid, _ovW, _ovH - 8, 'LV SECTION ${i + 1}', role);
       prims.add(SldLabel(x - _ovW / 2, lvY + _ovH + 7, 'LV main section',
@@ -2197,8 +2200,9 @@ _Spine
     if (project.sources?.generator != null) {
       final gen = project.sources!.generator!;
       final backupVa = gensetBackupDemandVa(project, result);
-      final genFig =
-          _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
+      final genFig = _gensetKva(
+          backupVa, gen, gensetBackupDemandW(project, result),
+          minKvaForStart: gensetStartFloorFor(project, result));
       final genKva = genFig.totalKva;
       final gy = lvMidY - _ovH - 8;
       final gcy = gy + _ovH / 2;
@@ -2315,8 +2319,9 @@ _Spine
       if (project.sources?.generator != null) {
         final gen = project.sources!.generator!;
         final backupVa = gensetBackupDemandVa(project, result);
-        final genFig =
-            _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
+        final genFig = _gensetKva(
+            backupVa, gen, gensetBackupDemandW(project, result),
+            minKvaForStart: gensetStartFloorFor(project, result));
         final genKva = genFig.totalKva;
         connectTo(13, 13);
         _emitGenerator(prims, dropX, cy, 13, SldRole.source);
@@ -2409,8 +2414,7 @@ _Spine
 /// board codes (PLN / MVMDP / LVMDP) since a horizontal chain has no room for
 /// the full names; the transformer is the Δ-Y (DyN) two-winding symbol,
 /// panels are boxes — matching the EL10011003 DXF.
-_Spine
-    _buildSourceSpineH(
+_Spine _buildSourceSpineH(
   ElectricalProject project,
   ElectricalSystemResult result,
 ) {
@@ -2491,8 +2495,8 @@ _Spine
       const r = 11.0;
       _emitTransformerPair(
           prims, txX - r * 0.62, ry, txX + r * 0.62, ry, r, role);
-      prims.add(SldLabel(txX - 30, ry + 28,
-          _sectionTxName(txFig, i, prefix: 'TRAFO'),
+      prims.add(SldLabel(
+          txX - 30, ry + 28, _sectionTxName(txFig, i, prefix: 'TRAFO'),
           size: 8, bold: true, role: role));
       _emitPanelBox(prims, lvX, ry, boxW, boxH, 'LVMDP-${i + 1}', role);
     }
@@ -2540,8 +2544,9 @@ _Spine
   if (hasGen) {
     final gen = project.sources!.generator!;
     final backupVa = gensetBackupDemandVa(project, result);
-    final genFig =
-        _gensetKva(backupVa, gen, gensetBackupDemandW(project, result));
+    final genFig = _gensetKva(
+        backupVa, gen, gensetBackupDemandW(project, result),
+        minKvaForStart: gensetStartFloorFor(project, result));
     final genKva = genFig.totalKva;
     final gcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,
@@ -2817,8 +2822,8 @@ SldSheet buildElectricalOverview({
       final fx = _spineFeedX(spine, r);
       prims.add(SldLine(fx, spine.feedY, fx, midY,
           weight: SldWeight.medium, role: SldRole.source));
-      prims.add(SldLine(fx, midY, zx, midY,
-          weight: SldWeight.medium, role: role));
+      prims.add(
+          SldLine(fx, midY, zx, midY, weight: SldWeight.medium, role: role));
       prims
           .add(SldLine(zx, midY, zx, zy, weight: SldWeight.medium, role: role));
     }
@@ -2863,8 +2868,7 @@ SldSheet buildElectricalOverview({
             vLine(_spineFeedX(spine, r), spine.feedY,
                 (spine.feedY + nodeY(r)) / 2 + _spineRowDy(spine, r)),
             vLine(cx[r]! + _ovW / 2,
-                (spine.feedY + nodeY(r)) / 2 + _spineRowDy(spine, r),
-                nodeY(r)),
+                (spine.feedY + nodeY(r)) / 2 + _spineRowDy(spine, r), nodeY(r)),
           ],
     ]);
     final pending = <String>[];
@@ -4188,11 +4192,8 @@ SldSheet buildElectricalRiser({
   final offPageStubs = <String, SldLine>{
     for (final id in offPageFeedNotes.keys)
       if (panelX[id] != null && panelY[id] != null)
-        id: SldLine(
-            panelX[id]! + _ovW,
-            panelY[id]! + _ovH / 2,
-            panelX[id]! + _ovW + _riserPanelGap / 2 - 2,
-            panelY[id]! + _ovH / 2,
+        id: SldLine(panelX[id]! + _ovW, panelY[id]! + _ovH / 2,
+            panelX[id]! + _ovW + _riserPanelGap / 2 - 2, panelY[id]! + _ovH / 2,
             weight: SldWeight.medium,
             role: essential.contains(id) ? SldRole.essential : SldRole.normal),
   };
@@ -4949,8 +4950,8 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
     if (isCoupler(e) && a.y == z.y) {
       final left = a.x < z.x ? a : z;
       final right = a.x < z.x ? z : a;
-      _emitOpenCoupler(prims, left.x + _polW, right.x, left.y + _polH / 2,
-          SldRole.source);
+      _emitOpenCoupler(
+          prims, left.x + _polW, right.x, left.y + _polH / 2, SldRole.source);
       continue;
     }
     final role = byId[e.to]!.kind == PowerNodeKind.mainPanel

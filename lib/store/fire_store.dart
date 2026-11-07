@@ -582,6 +582,11 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
   // lowest pump, a terminal-less system only).
   NetNode? transferTankOf(FireSystem s) => fireTransferDestinationTank(net, s,
       (n) => nodeElevation(n, building, project.mounting).meters);
+  // Round 70 — the break tank a ZONE room also fills (the sizer's rule).
+  NetNode? fillTankOf(FireSystem s) => fireFillDestinationTank(net, s,
+      (n) => nodeElevation(n, building, project.mounting).meters);
+  String? destinationOf(FireSystem s) =>
+      transferTankOf(s)?.id ?? fillTankOf(s)?.id;
   final out = <FireSystemBasis>[];
   for (final sys in systems) {
     final pumps = [
@@ -783,7 +788,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       // one-riser Class I 31.5 L/s. Nothing fed ⇒ the standpipe figure stays.
       final fed = fireTransferFedFlow(net, sys, transferTank.id, systems,
           sprinklerDemand: remote.remoteAreaDemand,
-          destinationTankOf: (s) => transferTankOf(s)?.id);
+          destinationTankOf: destinationOf);
       if (fed != null && fed.cubicMetersPerSecond > 0) flow = fed;
       final pumpZ = nodeElevation(net.nodeById(duty!)!, building,
               project.mounting)
@@ -803,6 +808,38 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       head = Head(staticLift + math.max(0.0, f ?? 0.0));
       standpipe = null;
       sprinklerGoverns = false;
+    }
+    // Round 70 (fire-convergence-22-intermediate-zone-room-filling-next-
+    // break-tank-rated-on-own-zone-only) — a ZONE room that also fills the
+    // next break tank ([fireFillDestinationTank]) must deliver that tank's
+    // whole fed flow when the zone above is on fire: rated on the larger
+    // flow at the larger head (its own zone point, or the lift to the tank
+    // plus the sized friction to it) — the combined-room max-flow-at-max-head
+    // convention.
+    final fillTank = pumps.isNotEmpty && hasTerminal && duty != null
+        ? fillTankOf(sys)
+        : null;
+    if (fillTank != null) {
+      final fed = fireTransferFedFlow(net, sys, fillTank.id, systems,
+          sprinklerDemand: remote.remoteAreaDemand,
+          destinationTankOf: destinationOf);
+      if (fed != null && fed.cubicMetersPerSecond > flow.cubicMetersPerSecond) {
+        flow = fed;
+      }
+      final pumpZ = nodeElevation(net.nodeById(duty!)!, building,
+              project.mounting)
+          .meters;
+      final tankZ = nodeElevation(fillTank, building, project.mounting).meters;
+      final f = fireIndexPathFrictionM(
+        net: net,
+        system: sys,
+        pumpId: duty,
+        sizing: sizing,
+        lengthOf: lengthOf,
+        targetIds: {fillTank.id},
+      );
+      final fillHead = math.max(0.0, tankZ - pumpZ) + math.max(0.0, f ?? 0.0);
+      if (fillHead > head.meters + 1e-9) head = Head(fillHead);
     }
     final rating = checkFirePumpRating(ratedFlow: flow, ratedHead: head);
     // Round 50 (fire-convergence-2-gravity-roof-tank-fire-system-gets-

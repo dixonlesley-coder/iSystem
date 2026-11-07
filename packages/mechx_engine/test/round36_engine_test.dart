@@ -366,9 +366,11 @@ void main() {
             containsAll(['Chiller', 'Jockey']),
             reason: 'essential=$ess');
         final study = computeAdvancedStudy(_p, p, computeSystem(_p, p));
-        final sub =
-            study.powerOneLine!.nodeOfKind(PowerNodeKind.generator)!.sub!;
-        expect(sub, contains('start dip'), reason: 'essential=$ess: $sub');
+        // Round 70 — the screen names the chiller as the limiting motor (the
+        // unforced set is then sized up to start it).
+        final st = study.powerOneLine!.gensetStart!;
+        expect(st.limitingMotorName, 'Chiller', reason: 'essential=$ess');
+        expect(st.acceptable, isTrue, reason: 'essential=$ess');
       }
     });
 

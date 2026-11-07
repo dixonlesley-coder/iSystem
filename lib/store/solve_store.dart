@@ -2461,7 +2461,29 @@ final airBalanceProvider = Provider<({double supplyLps, double returnLps})?>(
 /// own gravity head keeps under the limit, with no PRV (a PRV cannot raise
 /// pressure); only the floors below it take PRV stations. A building the tank
 /// head never over-pressures is one zone with no PRV.
-final zonesProvider = Provider<List<PressureZone>>((ref) {
+/// Round 70 (plumbing-hvac-convergence-20-downfeed-break-tank-ignored) —
+/// the downfeed zone table PER FEEDING TANK: the source (roof) tank's zones
+/// first (its own datum, [effectiveDownfeedDatumProvider] /
+/// [downfeedDatumByFloorProvider]), then one group per intermediate BREAK
+/// tank ([downfeedTankRegions] over the sized cold-water network: the
+/// floors it feeds below its free surface), each zoned from its OWN
+/// elevation. A single-tank downfeed is one group (byte-identical).
+@immutable
+class DownfeedZoneGroup {
+  /// The tank this group hangs from (null: the source / declared datum).
+  final String? tankId;
+  final Length? tankElevation;
+  final Map<int, Length>? tankElevationByFloor;
+  final List<PressureZone> zones;
+  const DownfeedZoneGroup({
+    required this.tankId,
+    required this.tankElevation,
+    required this.tankElevationByFloor,
+    required this.zones,
+  });
+}
+
+final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
   final project = ref.watch(projectControllerProvider);
   final maxFix = const SniProfile().maxFixtureStaticPressure.value;
   final effective = Pressure(
@@ -2500,11 +2522,30 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
     tankComponent = w.component;
     fedByTank = w.fed;
   }
+  // Round 70 — the floors an intermediate break tank feeds are zoned from
+  // that tank, never from the source tank's datum.
+  final regions = tankId == null
+      ? const <String, Set<String>>{}
+      : downfeedTankRegions(
+          net: net,
+          service: ServiceType.coldWater,
+          sourceTankId: tankId,
+          sizing: ref.watch(sizingProvider),
+          deliveryNodeIds: {
+            for (final n in net.nodes)
+              if (n.role == NodeRole.fixture) n.id,
+          },
+        );
+  final regionOf = <String>{for (final r in regions.values) ...r};
+  if (fedByTank != null && regionOf.isNotEmpty) {
+    fedByTank = fedByTank.difference(regionOf);
+  }
   int? lowest;
   int? lowestAny;
   int? highest;
   for (final n in net.nodes) {
     if (n.role != NodeRole.fixture || !waterIds.contains(n.id)) continue;
+    if (regionOf.contains(n.id)) continue;
     // Round 68 — the fallback stays inside the tank's own connected cold /
     // hot component: never a fixture of another supply network.
     if (tankComponent == null || tankComponent.contains(n.id)) {
@@ -2526,17 +2567,65 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
   // Round 67 r2 — a tank walk that finds no fixture never falls to floor 0:
   // it keeps the pre-Round-67 lowest drawn water fixture.
   lowest ??= lowestAny;
-  return computeDownfeedZones(
-    building: project.building,
-    mounting: project.mounting,
-    maxStaticPressure: effective,
-    tankElevation: ref.watch(effectiveDownfeedDatumProvider),
-    tankElevationByFloor: ref.watch(downfeedDatumByFloorProvider),
-    maxFixtureStatic: maxFix,
-    lowestServedFloor: lowest ?? 0,
-    highestServedFloor: highest,
-  );
+  final groups = <DownfeedZoneGroup>[];
+  if (lowest != null || regionOf.isEmpty) {
+    final datum = ref.watch(effectiveDownfeedDatumProvider);
+    final byFloor = ref.watch(downfeedDatumByFloorProvider);
+    groups.add(DownfeedZoneGroup(
+      tankId: tankId,
+      tankElevation: datum,
+      tankElevationByFloor: byFloor,
+      zones: computeDownfeedZones(
+        building: project.building,
+        mounting: project.mounting,
+        maxStaticPressure: effective,
+        tankElevation: datum,
+        tankElevationByFloor: byFloor,
+        maxFixtureStatic: maxFix,
+        lowestServedFloor: lowest ?? 0,
+        highestServedFloor: highest,
+      ),
+    ));
+  }
+  // Round 70 — each break tank zones the floors it feeds from its own datum.
+  for (final MapEntry(key: t, value: nodes) in regions.entries) {
+    int? lo, hi;
+    for (final id in nodes) {
+      final n = net.nodeById(id);
+      if (n == null ||
+          n.role != NodeRole.fixture ||
+          isNonDemandTerminal(n.component)) {
+        continue;
+      }
+      if (lo == null || n.floorIndex < lo) lo = n.floorIndex;
+      if (hi == null || n.floorIndex > hi) hi = n.floorIndex;
+    }
+    if (lo == null) continue;
+    final elev =
+        nodeElevation(net.nodeById(t)!, project.building, project.mounting);
+    groups.add(DownfeedZoneGroup(
+      tankId: t,
+      tankElevation: elev,
+      tankElevationByFloor: null,
+      zones: computeDownfeedZones(
+        building: project.building,
+        mounting: project.mounting,
+        maxStaticPressure: effective,
+        tankElevation: elev,
+        maxFixtureStatic: maxFix,
+        lowestServedFloor: lo,
+        highestServedFloor: hi,
+      ),
+    ));
+  }
+  return groups;
 });
+
+/// The downfeed PRV zone table: every [downfeedZoneGroupsProvider] group's
+/// zones, the source tank's first.
+final zonesProvider = Provider<List<PressureZone>>((ref) => [
+      for (final g in ref.watch(downfeedZoneGroupsProvider)) ...g.zones,
+    ]);
 
 /// Round 22 (pressurized-3-1) — the elevation of the DOWNFEED source the zone
 /// table hangs from: the drawn tank the gravity solve picks (its role-aware
@@ -2808,16 +2897,20 @@ final effectiveDownfeedDatumProvider = Provider<Length?>((ref) {
 /// a downfeed system holding [_targetResidual] at each zone top.
 final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
   final project = ref.watch(projectControllerProvider);
-  final zones = ref.watch(zonesProvider);
-  return downfeedZoneStatics(
-    building: project.building,
-    mounting: project.mounting,
-    zones: zones,
-    prvSetpoint: _prvSetpoint,
-    maxStatic: const SniProfile().maxFixtureStaticPressure.value,
-    tankElevation: ref.watch(effectiveDownfeedDatumProvider),
-    tankElevationByFloor: ref.watch(downfeedDatumByFloorProvider),
-  );
+  // Round 70 — per feeding tank: each break tank's first zone is tank-fed
+  // from its own datum.
+  return [
+    for (final g in ref.watch(downfeedZoneGroupsProvider))
+      ...downfeedZoneStatics(
+        building: project.building,
+        mounting: project.mounting,
+        zones: g.zones,
+        prvSetpoint: _prvSetpoint,
+        maxStatic: const SniProfile().maxFixtureStaticPressure.value,
+        tankElevation: g.tankElevation,
+        tankElevationByFloor: g.tankElevationByFloor,
+      ),
+  ];
 });
 
 /// Bill of materials for the sized network.

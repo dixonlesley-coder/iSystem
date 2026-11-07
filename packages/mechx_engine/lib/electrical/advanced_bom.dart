@@ -13,11 +13,14 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
-import '../standards/puil.dart'
-    show ElectricalStandardsProfile, PuilProfile;
+import '../standards/puil.dart' show ElectricalStandardsProfile, PuilProfile;
 import '../units.dart' show Power;
 import 'advanced_study.dart'
-    show originPanelIdsOf, serviceSectionOfRoot, serviceTransformer;
+    show
+        gensetStartFloorFor,
+        originPanelIdsOf,
+        serviceSectionOfRoot,
+        serviceTransformer;
 import 'bom.dart';
 import 'catalog.dart' show PartCategory;
 import 'containment.dart' show ContainmentResult, ContainmentRoute;
@@ -114,7 +117,10 @@ List<BomLine> advancedBomLines({
                 final r = sizeGenerator(gensetBackupDemandVa(project, sys),
                     mode: gen.mode,
                     transfer: gen.transfer,
-                    backupPower: gensetBackupDemandW(project, sys));
+                    backupPower: gensetBackupDemandW(project, sys),
+                    // Round 70 — the set that starts its largest motor.
+                    minKvaForStart: gensetStartFloorFor(project, sys,
+                        assemblies: controlAssemblies));
                 return (kva: r.ratingKva.inKilovoltAmperes, units: r.units);
               })()
             : null;
@@ -283,9 +289,10 @@ List<BomLine> advancedBomLines({
       if (sec == null || r == null || !origin.contains(id)) continue;
       final cur = bySection[sec];
       final a = r.incomer.breaker.ratingA.amperes;
-      final b = cur == null ? -1.0 : sys.panels[cur]!.incomer.breaker.ratingA
-          .amperes;
-      if (cur == null || a > b + 1e-9 ||
+      final b =
+          cur == null ? -1.0 : sys.panels[cur]!.incomer.breaker.ratingA.amperes;
+      if (cur == null ||
+          a > b + 1e-9 ||
           ((a - b).abs() <= 1e-9 && id.compareTo(cur) < 0)) {
         bySection[sec] = id;
       }

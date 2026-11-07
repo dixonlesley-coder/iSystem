@@ -72,10 +72,14 @@ void main() {
       final pr = _gensetProject(0.5);
       final sys = computeSystem(p, pr);
       final adv = computeAdvancedStudy(p, pr, sys);
-      final sub = adv.powerOneLine!.nodes.firstWhere((n) => n.id == 'gen').sub;
-      // The 110 kW DOL start = 110 / 0.8 x 6 = 825 kVA on a set sized for half
-      // the load: far beyond the 25 % dip limit, so a verdict MUST print.
-      expect(sub, contains('start dip'));
+      // The 110 kW DOL chiller is the limiting motor of the screen. Round 70
+      // — an unforced set is sized up to start it (>= 3 z, z = 0.15 x its
+      // starting kVA), so the screen names the chiller and passes.
+      final st = adv.powerOneLine!.gensetStart!;
+      expect(st.limitingMotorName, 'Chiller');
+      expect(st.acceptable, isTrue);
+      expect(st.gensetKva.inKilovoltAmperes,
+          greaterThanOrEqualTo(3 * 0.15 * st.startingKva.inKilovoltAmperes));
     });
 
     test('property: with no essential board the screened set never depends '

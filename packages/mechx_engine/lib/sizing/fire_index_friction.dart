@@ -605,7 +605,93 @@ NetNode? fireTransferDestinationTank(
       bestZ = z;
     }
   }
+  return best ?? _sameLevelBreakTank(net, sys, elevationOf, pumpZ);
+}
+
+final Expando<List<FireSystem>> _fireSystemsMemo = Expando();
+
+/// Round 70 (fire-convergence-22-intermediate-zone-room-filling-next-break-
+/// tank-rated-on-own-zone-only) — the BREAK tank a TERMINAL-BEARING pumped
+/// system [sys] also fills: a mid-tower pump room serving its own zone AND
+/// lifting water into the next zone's break tank (BT1 -> P2 -> zone 2 + the
+/// fill riser to BT2 -> P3 -> zone 3). The highest storage tank of [sys]
+/// strictly above its lowest pump ([elevationOf], metres; ties to the
+/// lowest id) that ANOTHER fire system draws on through its own pump /
+/// booster — never [sys]'s own suction tank (at or below its pumps) nor a
+/// gravity standby tank no other room draws from. Null for a terminal-less
+/// system (that is [fireTransferDestinationTank]'s), with no pump, or when
+/// no such tank exists.
+NetNode? fireFillDestinationTank(
+  Network net,
+  FireSystem sys,
+  double Function(NetNode n) elevationOf,
+) {
+  if (!fireSystemHasTerminal(net, sys)) return null;
+  bool isMover(NetNode? n) =>
+      n != null &&
+      (n.component == NodeComponent.pump ||
+          n.component == NodeComponent.boosterSet);
+  double? pumpZ;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id) || !isMover(n)) continue;
+    final z = elevationOf(n);
+    if (pumpZ == null || z < pumpZ) pumpZ = z;
+  }
+  if (pumpZ == null) return null;
+  final all = _fireSystemsMemo[net] ??= fireSystems(net);
+  NetNode? best;
+  var bestZ = double.negativeInfinity;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id) || !isFireSystemBoundary(n)) continue;
+    final z = elevationOf(n);
+    if (z <= pumpZ + 1e-9) continue;
+    final drawnOn = all.any((o) =>
+        o.nodeIds.contains(n.id) &&
+        o.nodeIds.any((id) =>
+            !sys.nodeIds.contains(id) && isMover(net.nodeById(id))));
+    if (!drawnOn) continue;
+    if (z > bestZ + 1e-9 ||
+        ((z - bestZ).abs() <= 1e-9 &&
+            best != null &&
+            n.id.compareTo(best.id) < 0)) {
+      best = n;
+      bestZ = z;
+    }
+  }
   return best;
+}
+
+/// Round 70 (regression-same-floor-break-tank-transfer-zeroed) — a BREAK
+/// tank on the transfer pump's OWN level (pump room and break tank in one
+/// plant room): among the tanks of terminal-less [sys] at or below its
+/// lowest pump ([pumpZ]), the one tank that is also a member of ANOTHER fire
+/// system drawing on it (holding a mover or a terminal) is the tank [sys]
+/// fills — its suction tank feeds only [sys]. Structural (drawn directions
+/// and the fire service of each pipe never read); null when no tank, or more
+/// than one, qualifies (the legacy reading: no destination).
+NetNode? _sameLevelBreakTank(Network net, FireSystem sys,
+    double Function(NetNode n) elevationOf, double pumpZ) {
+  final all = _fireSystemsMemo[net] ??= fireSystems(net);
+  NetNode? found;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id) || !isFireSystemBoundary(n)) continue;
+    if ((elevationOf(n) - pumpZ).abs() > 1e-9) continue;
+    final drawnOn = all.any((o) =>
+        o.nodeIds.contains(n.id) &&
+        !o.nodeIds.containsAll(sys.nodeIds) &&
+        (fireSystemHasTerminal(net, o) ||
+            o.nodeIds.any((id) =>
+                id != n.id &&
+                !sys.nodeIds.contains(id) &&
+                switch (net.nodeById(id)?.component) {
+                  NodeComponent.pump || NodeComponent.boosterSet => true,
+                  _ => false,
+                })));
+    if (!drawnOn) continue;
+    if (found != null) return null; // ambiguous
+    found = n;
+  }
+  return found;
 }
 
 /// Round 53 — the terminal-bearing fire systems of [systems] a TRANSFER
@@ -629,6 +715,14 @@ List<FireSystem> fireTransferFedSystems(
     seen.add(s);
     if (fireSystemHasTerminal(net, s)) {
       out.add(s);
+      // Round 70 — a zone room that also fills the NEXT break tank
+      // ([fireFillDestinationTank], via [destinationTankOf]): what that tank
+      // feeds is filled through it too.
+      final fill = destinationTankOf?.call(s);
+      if (fill != null && fill != tankId) {
+        out.addAll(fireTransferFedSystems(net, s, fill, systems,
+            destinationTankOf: destinationTankOf, visited: seen));
+      }
       continue;
     }
     final next = destinationTankOf?.call(s);
