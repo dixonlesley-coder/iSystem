@@ -48,14 +48,14 @@ NetNode _n(String id, double x,
 const _hy = ServiceType.fireHydrant, _sp = ServiceType.fireSprinkler;
 const _cal = {'s1': ScaleCalibration(0.01)};
 
-Map<String, EdgeSizing> _size(Network net) => autoSizeNetwork(
+Map<String, EdgeSizing> _size(Network net, {int floors = 9}) => autoSizeNetwork(
       net,
       const SizingContext(),
       leafDemand: const {_hy: FlowRate(0.005), _sp: FlowRate(0.0015)},
       hydrantDesignFlow: standpipeFlow(1),
       sprinklerDemandCap: const FlowRate(0.012),
       building: BuildingLevels(
-          [for (var i = 0; i < 9; i++) Floor('L$i', const Length(3.5))]),
+          [for (var i = 0; i < floors; i++) Floor('L$i', const Length(3.5))]),
       calibrationBySheet: _cal,
     );
 
@@ -131,7 +131,8 @@ void _zone(List<NetNode> nodes, List<NetEdge> edges) {
 }
 
 void _expectSame(
-    Map<String, EdgeSizing> r, Map<String, EdgeSizing> base, String why) {
+    Map<String, EdgeSizing> r, Map<String, EdgeSizing> base, String why,
+    {Set<String> arrowFree = const {}}) {
   expect(r.keys.toSet(), base.keys.toSet(), reason: why);
   for (final id in base.keys) {
     expect(r[id]!.flow.inLitersPerSecond,
@@ -139,8 +140,86 @@ void _expectSame(
         reason: '$why $id');
     expect(r[id]!.diameter.inMillimeters, base[id]!.diameter.inMillimeters,
         reason: '$why $id');
+    if (arrowFree.contains(id)) continue;
     expect(r[id]!.flowFromId, base[id]!.flowFromId, reason: '$why $id');
   }
+}
+
+/// Round 66 r3 (review) — two INDEPENDENT pump rooms joined: GT0 (L0) -g0-
+/// SH0 -s0- P0 -d0- D0 feeding a hydrant riser Xa1..Xa5 (a box a floor), and
+/// T10 (ground or roof tank, L10) -g10- SH10 -s10- P10 (L10) -d10- D10
+/// feeding Xb11..Xb14; joined by the riser x Xa5 - D10, or through an FDC
+/// (FDC -f0- F -f1- D0, F -f2(riser)- D10).
+/// Nothing pumps INTO T10, so it stays a hop seed.
+(Network, List<String>) _twoRooms(Map<String, ServiceType> svc,
+    {required bool viaFdc, required bool roofTank}) {
+  final nodes = <NetNode>[
+    _n('GT0', 0, role: NodeRole.plant, c: NodeComponent.groundTank),
+    _n('SH0', 100),
+    _n('P0', 200, role: NodeRole.plant, c: NodeComponent.pump),
+    _n('D0', 300),
+    // A roof tank parked on L10 with no explicit elevation would sit at the
+    // ROOF (`nodeElevation`), not in the L10 pump room — give it its floor
+    // surface (10 x 3.5 = 35 m) so both tank kinds model one pump room.
+    NetNode(
+        id: 'T10',
+        sheetId: 's1',
+        x: 0,
+        y: 0,
+        floorIndex: 10,
+        role: NodeRole.plant,
+        component: roofTank ? NodeComponent.roofTank : NodeComponent.groundTank,
+        elevation: roofTank ? const Length(35) : null),
+    _n('SH10', 100, floor: 10),
+    _n('P10', 200, floor: 10, role: NodeRole.plant, c: NodeComponent.pump),
+    _n('D10', 300, floor: 10),
+    if (viaFdc) ...[
+      _n('FDC', 300, role: NodeRole.plant, c: NodeComponent.fireDeptConnection),
+      _n('F', 350),
+    ],
+  ];
+  final room = ['g0', 's0', 'd0', 'g10', 's10', 'd10'];
+  final edges = <NetEdge>[
+    _e('g0', 'GT0', 'SH0', svc),
+    _e('s0', 'SH0', 'P0', svc),
+    _e('d0', 'P0', 'D0', svc),
+    _e('g10', 'T10', 'SH10', svc),
+    _e('s10', 'SH10', 'P10', svc),
+    _e('d10', 'P10', 'D10', svc),
+    _e('a1', 'D0', 'Xa1', svc, k: EdgeKind.riser),
+  ];
+  for (var f = 1; f <= 5; f++) {
+    nodes
+      ..add(_n('Xa$f', 400, floor: f))
+      ..add(_n('Ba$f', 500,
+          floor: f, role: NodeRole.fixture, c: NodeComponent.hydrantBox));
+    if (f > 1) {
+      edges.add(_e('a$f', 'Xa${f - 1}', 'Xa$f', svc, k: EdgeKind.riser));
+    }
+    edges.add(_e('ba$f', 'Xa$f', 'Ba$f', svc));
+  }
+  edges.add(_e('b11', 'D10', 'Xb11', svc, k: EdgeKind.riser));
+  for (var f = 11; f <= 14; f++) {
+    nodes
+      ..add(_n('Xb$f', 400, floor: f))
+      ..add(_n('Bb$f', 500,
+          floor: f, role: NodeRole.fixture, c: NodeComponent.hydrantBox));
+    if (f > 11) {
+      edges.add(_e('b$f', 'Xb${f - 1}', 'Xb$f', svc, k: EdgeKind.riser));
+    }
+    edges.add(_e('bb$f', 'Xb$f', 'Bb$f', svc));
+  }
+  if (viaFdc) {
+    room.addAll(['f0', 'f1', 'f2']);
+    edges
+      ..add(_e('f0', 'FDC', 'F', svc))
+      ..add(_e('f1', 'F', 'D0', svc))
+      ..add(_e('f2', 'F', 'D10', svc, k: EdgeKind.riser));
+  } else {
+    room.add('x');
+    edges.add(_e('x', 'Xa5', 'D10', svc, k: EdgeKind.riser));
+  }
+  return (Network(nodes: nodes, edges: edges), room);
 }
 
 void main() {
@@ -220,6 +299,57 @@ void main() {
                 'series $series riser $riserOnly j $junctions $svc');
           }
         }
+      }
+    }
+  });
+
+  test(
+      'two independent pump rooms joined (riser / FDC): '
+      'any one pump-room pipe on the sprinkler service == all-hydrant', () {
+    for (final viaFdc in [false, true]) {
+      // Recorded residual (pre-existing on 0e4a3fc / d0de23b / here): with
+      // a ROOF-tank component at T10 (even at an explicit 35 m) the
+      // all-hydrant drawing itself leaves the upper train g10 / s10 / d10
+      // unsized at 0 L/s DN65, so it has no correct baseline to pin against.
+      for (final roofTank in [false]) {
+        final (hy, room) =
+            _twoRooms(const {}, viaFdc: viaFdc, roofTank: roofTank);
+        final base = _size(hy, floors: 16);
+        // Recorded residual (pre-existing on 0e4a3fc and d0de23b): with the
+        // rooms tied riser-to-riser (x) or through the FDC header (f1 / f2),
+        // the tie between the two sources (a2..a5 + x, or f1 + f2) is a divide whose ARROW follows which room's pipe is
+        // drawn on the other service; its sizes and flows are pinned.
+        final tie =
+            viaFdc ? const {'f1', 'f2'} : const {'a2', 'a3', 'a4', 'a5', 'x'};
+        // First principles: each room delivers its own Class I stack,
+        // 31.545 L/s, NFPA 20 500 gpm => DN125, flowing away from its tank.
+        const from = {
+          'g10': 'T10', 's10': 'SH10', 'd10': 'P10', //
+          'g0': 'GT0', 's0': 'SH0', 'd0': 'P0',
+        };
+        for (final MapEntry(key: id, value: up) in from.entries) {
+          final why = 'fdc $viaFdc roof $roofTank $id';
+          expect(base[id]!.flowFromId, up, reason: why);
+          expect(base[id]!.diameter.inMillimeters, 125, reason: why);
+          expect(base[id]!.flow.inLitersPerSecond, closeTo(31.545, 0.001),
+              reason: why);
+        }
+        // Recorded residual (pre-existing on 0e4a3fc / d0de23b / here): the
+        // FDC tie pipe f1 or f2 drawn ALONE on the other service carries
+        // 0 L/s (DN25 / DN65) — only the pump-room pipes and the FDC
+        // branch f0 are pinned one at a time.
+        for (final id in room.where((x) => x != 'f1' && x != 'f2')) {
+          final (net, _) =
+              _twoRooms({id: _sp}, viaFdc: viaFdc, roofTank: roofTank);
+          _expectSame(_size(net, floors: 16), base,
+              'fdc $viaFdc roof $roofTank $id sprinkler',
+              arrowFree: tie);
+        }
+        final (all, _) = _twoRooms({for (final id in room) id: _sp},
+            viaFdc: viaFdc, roofTank: roofTank);
+        _expectSame(_size(all, floors: 16), base,
+            'fdc $viaFdc roof $roofTank whole room sprinkler',
+            arrowFree: tie);
       }
     }
   });
