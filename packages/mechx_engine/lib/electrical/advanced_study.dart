@@ -937,9 +937,12 @@ const Set<String> _deviceKaCodes = {
 /// re-coded `<code>-on-genset` (a device the ladder cannot reach, or an
 /// override); every other warning is the utility's. A busbar (main bus and
 /// each section) whose Fold-1 Icw is below the on-genset fault raises the
-/// ERROR `busbar-withstand-inadequate-on-genset` (judge-only — the bar is
-/// sized on the utility fault). An unbacked board, and any board whose
-/// genset fault does not exceed the utility one, is byte-identical.
+/// ERROR `busbar-withstand-inadequate-on-genset` (judge-only; since Round 73
+/// `computeSystem` sizes every backed bar on max(utility, on-genset fault),
+/// so this fires only when even the largest standard bar falls short — the
+/// rule of the utility `busbar-withstand-inadequate`). An unbacked board,
+/// and any board whose genset fault does not exceed the utility one, is
+/// byte-identical.
 FaultStudyResult mergeGensetFaultStudy({
   required FaultStudyResult utility,
   required FaultStudyResult genset,
@@ -1015,7 +1018,12 @@ FaultStudyResult mergeGensetFaultStudy({
           ('${pr.name} busbar section ${s.index}', s.busbar.withstand),
     ];
     for (final (where, w) in bars) {
-      if (w == null || w.icwKa + 1e-6 >= gKa) continue;
+      if (w == null) continue;
+      // Round 73 — a bar FOLD 1 sized on this very fault carries its own
+      // unrounded verdict (`computeSystem` floors backed buses at the
+      // on-genset fault, so this fires only when no standard bar suffices).
+      final sizedOnIt = (w.faultKa - gKa).abs() < 1e-6;
+      if (sizedOnIt ? w.adequate : w.icwKa + 1e-6 >= gKa) continue;
       warnings.add(ElectricalWarning(
         code: 'busbar-withstand-inadequate-on-genset',
         severity: WarningSeverity.error,

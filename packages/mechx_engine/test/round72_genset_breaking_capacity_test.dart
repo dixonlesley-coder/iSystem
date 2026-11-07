@@ -214,28 +214,50 @@ void main() {
     expect(m.panels['MDP0']!.incomerKa, 36);
   });
 
-  test('busbar Icw below the on-genset fault is judged', () {
+  test(
+      'busbar Icw below the on-genset fault is judged (Round 73: only a bar '
+      'not sized on it)', () {
     final p = _dc();
-    // Fold-1 bus sized on the utility 22.73 kA at 1 s.
+    // Round 73 — FOLD 1 now sizes every backed bus on max(utility, genset):
+    // the engine's own pick withstands the 48.11 kA genset fault at 1 s.
     final sys = computeSystem(_profile, p,
         originFaultLevel: const Current(22730), busbarClearingTimeS: 1.0);
     final st = computeAdvancedStudy(_profile, p, sys,
         originFaultLevel: const Current(22730));
+    expect(
+        st.fault.warnings
+            .where((w) => w.code == 'busbar-withstand-inadequate-on-genset'),
+        isEmpty);
+    for (final pid in sys.order) {
+      final w = sys.panels[pid]!.busbar.withstand!;
+      expect(w.adequate, isTrue, reason: pid);
+      expect(w.faultKa,
+          greaterThanOrEqualTo(st.fault.panels[pid]!.prospectiveFaultkA - 1e-9),
+          reason: '$pid sized on the governing fault');
+    }
+    // The judge itself still stands: bars sized on the UTILITY fault only
+    // (the same project without its genset ⇒ identical cables) are named.
+    final utilityOnly = computeSystem(_profile, _dc(gen: null),
+        originFaultLevel: const Current(22730), busbarClearingTimeS: 1.0);
+    final g = faultStudy(utilityOnly, p, _profile,
+        originFaultLevel: Current(_iscKa(4.0e6) * 1000));
+    final u = faultStudy(utilityOnly, p, _profile,
+        originFaultLevel: const Current(22730));
+    final m = mergeGensetFaultStudy(
+        utility: u,
+        genset: g,
+        sys: utilityOnly,
+        backed: {for (final x in p.panels) x.id},
+        gensetVa: 4.0e6,
+        gensetIscA: _iscKa(4.0e6) * 1000);
     final bad = [
-      for (final w in st.fault.warnings)
+      for (final w in m.warnings)
         if (w.code == 'busbar-withstand-inadequate-on-genset') w.panelId,
     ];
     expect(bad, isNotEmpty, reason: 'MDP buses sized on 22.73 kA at 1 s');
-    for (final id in bad) {
-      final pr = sys.panels[id!]!;
-      expect(pr.busbar.withstand!.icwKa,
-          lessThan(st.fault.panels[id]!.prospectiveFaultkA));
-    }
-    // Every backed bus whose Icw is below its genset fault is named.
-    for (final pid in sys.order) {
-      final w = sys.panels[pid]!.busbar.withstand;
-      if (w == null) continue;
-      final gk = st.fault.panels[pid]!.prospectiveFaultkA;
+    for (final pid in utilityOnly.order) {
+      final w = utilityOnly.panels[pid]!.busbar.withstand!;
+      final gk = m.panels[pid]!.prospectiveFaultkA;
       if (w.icwKa + 1e-6 < gk) expect(bad, contains(pid));
     }
   });
