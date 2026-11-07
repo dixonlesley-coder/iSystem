@@ -27,7 +27,7 @@ import '../units.dart';
 // fault estimate here too, so the ADS / selectivity fault origin is the
 // transformer the advanced study prints (a library cycle, legal in Dart: the
 // helper is a pure function of the solved result).
-import 'advanced_study.dart' show serviceFaultEstimateFor;
+import 'advanced_study.dart' show gensetFaultBasis, serviceFaultEstimateFor;
 import 'busbar.dart';
 import 'cable_family.dart';
 import 'containment.dart' show effectiveInstallMethod;
@@ -62,6 +62,8 @@ import 'panel_results.dart';
 import 'results.dart'
     show
         BreakerResult,
+        BusbarResult,
+        BusbarWithstand,
         CableResult,
         VoltageDropResult,
         kStarDeltaInternalWiringM;
@@ -1061,6 +1063,14 @@ class ComputePanelOptions {
   /// fault's Icw demand; null/0 ⇒ no withstand floor (byte-identical sizing).
   final Current? faultLevelA;
 
+  /// Round 73 — the prospective fault at this bus with the standby GENSET as
+  /// the origin (alternator sub-transient Xd'' basis, `// VERIFY`), set by
+  /// `computeSystem` only on a genset-backed board whose on-genset fault
+  /// exceeds [faultLevelA]. FOLD 1 sizes the bar (main + sections) on
+  /// max([faultLevelA], this) — never the device class / kA rules, which keep
+  /// [faultLevelA]. Null (the default, every unbacked board) ⇒ byte-identical.
+  final Current? gensetWithstandFaultLevelA;
+
   /// Representative protective-device clearing time (s) for the busbar Icw check
   /// (a fault clears within this time, so Icw scales by 1/√t). Defaults to the
   /// conventional 1-second assembly-Icw basis.
@@ -1221,6 +1231,7 @@ class ComputePanelOptions {
     this.panelSystems = const {},
     this.earthingSystem = EarthingSystem.tnCs,
     this.faultLevelA,
+    this.gensetWithstandFaultLevelA,
     this.busbarClearingTimeS = busbarDefaultClearingTimeS,
     this.soilThermalResistivityKmW,
     this.calibrationBySheet = const {},
@@ -3119,9 +3130,21 @@ ElectricalPanelResult computePanel(
   // bus is known (propagated by `computeSystem`), the bar (main + every section)
   // is floored at the cross-section the fault's Icw demands, so it grows to
   // SURVIVE the fault, not merely carry the load. faultKa = 0 ⇒ no floor.
-  final faultKa = opts.faultLevelA != null && opts.faultLevelA!.amperes > 0
-      ? opts.faultLevelA!.amperes / 1000.0
+  final utilityFaultKa =
+      opts.faultLevelA != null && opts.faultLevelA!.amperes > 0
+          ? opts.faultLevelA!.amperes / 1000.0
+          : 0.0;
+  // Round 73 — a genset-backed bus is sized on the larger of the utility and
+  // the on-genset prospective fault, so the engine's own pick withstands both
+  // supplies (IEC 61439-1). Only with FOLD 1 enabled (utility fault known).
+  final gensetFaultKa = utilityFaultKa > 0 &&
+          opts.gensetWithstandFaultLevelA != null &&
+          opts.gensetWithstandFaultLevelA!.amperes / 1000.0 >
+              utilityFaultKa + 1e-9
+      ? opts.gensetWithstandFaultLevelA!.amperes / 1000.0
       : 0.0;
+  final gensetGovernsBus = gensetFaultKa > 0;
+  final faultKa = gensetGovernsBus ? gensetFaultKa : utilityFaultKa;
   final clearingTimeS = opts.busbarClearingTimeS;
 
   // Main bus rated for the incoming device (IEC 61439-1), not just demand. The
@@ -3199,15 +3222,26 @@ ElectricalPanelResult computePanel(
     clearingTimeS: clearingTimeS,
   );
 
+  // Round 73 — the UTILITY verdict of a bar sized on the genset fault (the
+  // genset verdict is `busbar-withstand-inadequate-on-genset`, judged by the
+  // advanced study's merge on the same bar).
+  BusbarWithstand? utilityWithstand(BusbarResult b) {
+    final w = b.withstand;
+    if (w == null || !gensetGovernsBus) return w;
+    return checkBusbarWithstand(profile, b.csaMm2, utilityFaultKa,
+        durationS: clearingTimeS);
+  }
+
   // Warn when even the largest standard bar cannot withstand the fault.
-  if (busbar.withstand != null && !busbar.withstand!.adequate) {
+  final mainUtilityW = utilityWithstand(busbar);
+  if (mainUtilityW != null && !mainUtilityW.adequate) {
     warnings.add(ElectricalWarning(
       code: 'busbar-withstand-inadequate',
       severity: WarningSeverity.error,
       message:
           '${panel.name}: even the largest standard bar (${busbar.csaMm2} mm², '
-          'Icw ${busbar.withstand!.icwKa} kA) is below the '
-          '${busbar.withstand!.faultKa} kA prospective fault — use parallel '
+          'Icw ${mainUtilityW.icwKa} kA) is below the '
+          '${mainUtilityW.faultKa} kA prospective fault — use parallel '
           'bars, brace the run, or add upstream current limiting.',
       panelId: panel.id,
     ));
@@ -3215,7 +3249,7 @@ ElectricalPanelResult computePanel(
   // A section bar carries its own (smaller) load, so it can fail withstand even
   // when the main bus passes — warn per inadequate section.
   for (final section in busbarSections) {
-    final w = section.busbar.withstand;
+    final w = utilityWithstand(section.busbar);
     if (w != null && !w.adequate) {
       final where = busbarSections.length > 1
           ? '${panel.name} busbar section ${section.index}'
@@ -4139,6 +4173,10 @@ ElectricalSystemResult computeSystem(
   // Round 56 — the per-way ADS conductor floors (see the growth loop at the
   // end); every [sizeAll] pass reads the current map.
   final adsCsaFloors = <String, double>{};
+  // Round 73 — the on-genset prospective bus fault (A) of each genset-backed
+  // board (filled after the first full solve, see the end); FOLD 1 sizes the
+  // bar on max(utility, this). Empty ⇒ byte-identical.
+  final gensetWithstandA = <String, double>{};
 
   ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA,
       [Map<String, double> feederBreakerCapA = const {},
@@ -4229,6 +4267,9 @@ ElectricalSystemResult computeSystem(
           earthingSystem: project.earthingSystem,
           ttFeederRcd: ttFeederRcd,
           faultLevelA: faultLevelA,
+          gensetWithstandFaultLevelA: gensetWithstandA.containsKey(id)
+              ? Current(gensetWithstandA[id]!)
+              : null,
           busbarClearingTimeS: busbarClearingTimeS,
           calibrationBySheet: calibrationBySheet,
           building: building,
@@ -4966,64 +5007,97 @@ ElectricalSystemResult computeSystem(
       project.originFaultLevelA ??
       serviceFaultEstimateFor(project, r) ??
       const Current(defaultLvUtilityFaultKa * 1000);
-  var result = solveAll();
-  final tnGrow = result.earthing.system == EarthingSystem.tnS ||
-      result.earthing.system == EarthingSystem.tnCs;
-  if (!tnGrow) return result;
-  final sections = profile.standardSectionsMm2;
-  final loadSized = <String, double>{};
-  final circuitModelById = <String, ElectricalCircuit>{
-    for (final p in panels)
-      for (final c in p.circuits) c.id: c,
-  };
-  for (var iter = 0; iter < kAdsCsaGrowthMaxRungs; iter++) {
-    final f = faultStudy(result, project, profile,
-        originFaultLevel: growOriginFor(result));
-    var grew = false;
-    for (final pr in result.panels.values) {
-      for (final w in pr.circuits) {
-        if (f.circuits[w.circuitId]?.adsOk != false) continue;
-        final m = circuitModelById[w.circuitId];
-        if (m == null ||
-            m.loadKind == LoadKind.feeder ||
-            m.loadKind == LoadKind.spare ||
-            m.feedsPanelId != null ||
-            m.cableOverrideMm2 != null ||
-            m.breakerOverrideA != null ||
-            (w.cable.runsPerPhase ?? 1) > 1 ||
-            (w.motorLeads?.runsPerPhase ?? 1) > 1) {
-          continue;
+  // Round 73 — the ADS conductor-growth fixed point (wrapped so the genset
+  // withstand pass below can follow it).
+  ElectricalSystemResult grownSolve() {
+    var result = solveAll();
+    final tnGrow = result.earthing.system == EarthingSystem.tnS ||
+        result.earthing.system == EarthingSystem.tnCs;
+    if (!tnGrow) return result;
+    final sections = profile.standardSectionsMm2;
+    final loadSized = <String, double>{};
+    final circuitModelById = <String, ElectricalCircuit>{
+      for (final p in panels)
+        for (final c in p.circuits) c.id: c,
+    };
+    for (var iter = 0; iter < kAdsCsaGrowthMaxRungs; iter++) {
+      final f = faultStudy(result, project, profile,
+          originFaultLevel: growOriginFor(result));
+      var grew = false;
+      for (final pr in result.panels.values) {
+        for (final w in pr.circuits) {
+          if (f.circuits[w.circuitId]?.adsOk != false) continue;
+          final m = circuitModelById[w.circuitId];
+          if (m == null ||
+              m.loadKind == LoadKind.feeder ||
+              m.loadKind == LoadKind.spare ||
+              m.feedsPanelId != null ||
+              m.cableOverrideMm2 != null ||
+              m.breakerOverrideA != null ||
+              (w.cable.runsPerPhase ?? 1) > 1 ||
+              (w.motorLeads?.runsPerPhase ?? 1) > 1) {
+            continue;
+          }
+          // Round 58 — a star-delta way grows its MOTOR LEADS (its field run
+          // and earth-fault loop), never the 2 m internal link.
+          final now = w.motorLeads?.csaMm2 ?? w.cable.csaMm2;
+          final base = loadSized.putIfAbsent(w.circuitId, () => now);
+          final baseIdx = sections.indexWhere((x) => x + 1e-9 >= base);
+          final next = sections.where((x) => x > now + 1e-9).firstOrNull;
+          if (next == null ||
+              next > kAdsCsaGrowthMaxMm2 + 1e-9 ||
+              sections.indexOf(next) - baseIdx > kAdsCsaGrowthMaxRungs) {
+            continue;
+          }
+          adsCsaFloors[w.circuitId] = next;
+          grew = true;
         }
-        // Round 58 — a star-delta way grows its MOTOR LEADS (its field run
-        // and earth-fault loop), never the 2 m internal link.
-        final now = w.motorLeads?.csaMm2 ?? w.cable.csaMm2;
-        final base = loadSized.putIfAbsent(w.circuitId, () => now);
-        final baseIdx = sections.indexWhere((x) => x + 1e-9 >= base);
-        final next = sections.where((x) => x > now + 1e-9).firstOrNull;
-        if (next == null ||
-            next > kAdsCsaGrowthMaxMm2 + 1e-9 ||
-            sections.indexOf(next) - baseIdx > kAdsCsaGrowthMaxRungs) {
-          continue;
-        }
-        adsCsaFloors[w.circuitId] = next;
-        grew = true;
       }
+      if (!grew) break;
+      result = solveAll();
     }
-    if (!grew) break;
-    result = solveAll();
+    if (adsCsaFloors.isEmpty) return result;
+    // A way the bounded ladder could not bring to compliance keeps its
+    // load-sized cable and its `ads-disconnection` error (Round 55: the MCCB
+    // and its one defect) — never copper grown under a note claiming it
+    // disconnects in time.
+    final fEnd = faultStudy(result, project, profile,
+        originFaultLevel: growOriginFor(result));
+    final hopeless = [
+      for (final id in adsCsaFloors.keys)
+        if (fEnd.circuits[id]?.adsOk == false) id,
+    ];
+    if (hopeless.isEmpty) return result;
+    hopeless.forEach(adsCsaFloors.remove);
+    return solveAll();
   }
-  if (adsCsaFloors.isEmpty) return result;
-  // A way the bounded ladder could not bring to compliance keeps its
-  // load-sized cable and its `ads-disconnection` error (Round 55: the MCCB
-  // and its one defect) — never copper grown under a note claiming it
-  // disconnects in time.
-  final fEnd = faultStudy(result, project, profile,
-      originFaultLevel: growOriginFor(result));
-  final hopeless = [
-    for (final id in adsCsaFloors.keys)
-      if (fEnd.circuits[id]?.adsOk == false) id,
-  ];
-  if (hopeless.isEmpty) return result;
-  hopeless.forEach(adsCsaFloors.remove);
+
+  final out = grownSolve();
+  // Round 73 (genset busbar withstand) — a standby genset is a maximum-fault
+  // source for every board it can carry ([gensetFaultBasis]: the essential
+  // sub-tree, or every board for a full-backup / undesignated set). FOLD 1
+  // sizes each such bar on max(utility fault, the on-genset fault at that
+  // bus) — the alternator sub-transient Xd'' study ([faultStudy] from the
+  // set's own fault, `// VERIFY`, the SAME study the advanced study's
+  // `mergeGensetFaultStudy` judges with) — so the engine's own pick
+  // withstands both supplies and `busbar-withstand-inadequate-on-genset`
+  // fires only when no standard bar can. The bar never changes a cable, a
+  // device, the demand or the genset size, so the on-genset fault read from
+  // the first solve is that of the re-solve (one more pass is the fixed
+  // point; the ADS growth floors are kept). No FOLD 1, no standby genset, or
+  // no backed bus whose on-genset fault exceeds its utility one ⇒ the first
+  // solve verbatim (byte-identical).
+  if (!applyWithstand) return out;
+  final gBasis = gensetFaultBasis(project, out);
+  if (gBasis == null) return out;
+  final gStudy =
+      faultStudy(out, project, profile, originFaultLevel: Current(gBasis.iscA));
+  for (final id in gBasis.backed) {
+    final gKa = gStudy.panels[id]?.prospectiveFaultkA;
+    final uKa = out.panels[id]?.busbar.withstand?.faultKa;
+    if (gKa == null || uKa == null || gKa <= uKa + 1e-9) continue;
+    gensetWithstandA[id] = gKa * 1000;
+  }
+  if (gensetWithstandA.isEmpty) return out;
   return solveAll();
 }
