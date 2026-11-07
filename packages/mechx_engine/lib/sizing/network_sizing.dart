@@ -36,6 +36,7 @@ import 'fire_index_friction.dart'
         FireSystem,
         fireRatingSystems,
         fireSystemDesignFlow,
+        fireFillDestinationTank,
         fireSystemHasTerminal,
         fireSystems,
         fireTransferDestinationTank,
@@ -2808,7 +2809,12 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     for (final s in ratingSystems)
       s: fireTransferDestinationTank(net, s, elevationOf)?.id,
   };
-  String? destinationTankOf(FireSystem s) => transferTank[s];
+  // Round 70 — a zone room that also fills the next break tank.
+  final fillTank = <FireSystem, String?>{
+    for (final s in ratingSystems)
+      s: fireFillDestinationTank(net, s, elevationOf)?.id,
+  };
+  String? destinationTankOf(FireSystem s) => transferTank[s] ?? fillTank[s];
   // A Class II hose-reel system — or a transfer system that fills ONLY
   // Class II hose-reel zones (its pipe is a transfer line for a 100 gpm
   // zone, never a Class I standpipe at DN100).
@@ -5333,6 +5339,21 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         final own = fireSystemDesignFlow(net, s,
             sprinklerDemand: sprinklerDemandCap,
             standpipeCap: hydrantDesignFlow);
+        // Round 70 (fire-convergence-22-intermediate-zone-room-filling-next-
+        // break-tank-rated-on-own-zone-only) — a zone room that ALSO fills
+        // the next break tank delivers the larger of its own zone flow and
+        // what that tank feeds (max, never the sum: one fire event).
+        final fill = fillTank[s];
+        if (own != null && fill != null && hasPump(s)) {
+          final fed = fireTransferFedFlow(net, s, fill, ratingSystems,
+              sprinklerDemand: sprinklerDemandCap,
+              destinationTankOf: destinationTankOf,
+              standpipeCap: hydrantDesignFlow);
+          if (fed != null &&
+              fed.cubicMetersPerSecond > own.cubicMetersPerSecond) {
+            return fed;
+          }
+        }
         if (own != null || !hasPump(s)) return own;
         final tank = destinationTankOf(s);
         if (tank == null) return null;
