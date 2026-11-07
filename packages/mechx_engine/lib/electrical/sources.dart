@@ -579,8 +579,7 @@ GensetStartResult assessGensetStart(
   const clause = 'ISO 8528-5 / IEC 60034-4';
   final genKva = _round(gensetKva.inKilovoltAmperes);
 
-  final candidates =
-      motors.where((m) => m.shaftPower.inKiloWatts > 0).toList();
+  final candidates = motors.where((m) => m.shaftPower.inKiloWatts > 0).toList();
   double startKvaOf(GensetMotor m) =>
       m.startKva?.inKilovoltAmperes ??
       motorRunningKva(m.shaftPower).inKilovoltAmperes *
@@ -638,6 +637,14 @@ GensetStartResult assessGensetStart(
   );
 }
 
+/// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
+/// — the smallest genset kVA that starts the limiting motor of [motors]
+/// within [kMaxStartVoltageDipPct] (the [assessGensetStart] recommendation,
+/// `z·(100 − limit)/limit`, z = start kVA × Xd''). 0 with no motor.
+ApparentPower gensetStartFloorKva(List<GensetMotor> motors) =>
+    assessGensetStart(const ApparentPower(1), motors: motors)
+        .recommendedMinGensetKva;
+
 /// Round 48 — the PRIME-duty headroom: a prime (continuous) set is sized on
 /// 1.25 × its governing backup kVA (`// VERIFY notAnSniClause`, ISO 8528-1
 /// prime vs standby practice). Standby covers the load directly (× 1.0).
@@ -684,11 +691,18 @@ GeneratorResult sizeGenerator(
   ApparentPower? forcedKva,
   int forcedUnits = 1,
   Power? backupPower,
+  ApparentPower? minKvaForStart,
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
   final backupKw = backupPower?.inKiloWatts;
-  final required =
+  // Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
+  // — an UNFORCED set is also large enough to start its largest motor
+  // within the dip limit ([gensetStartFloorKva]); a forced nameplate stays
+  // verbatim (judged, never resized). Null ⇒ byte-identical.
+  final loadRequired =
       requiredGeneratorKva(backupDemand, backupPower: backupPower, mode: mode);
+  final startRequired = minKvaForStart?.inKilovoltAmperes ?? 0;
+  final required = startRequired > loadRequired ? startRequired : loadRequired;
   final sel = forcedKva != null
       ? (unitKva: forcedKva, units: forcedUnits < 1 ? 1 : forcedUnits)
       : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));

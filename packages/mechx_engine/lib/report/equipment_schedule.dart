@@ -18,7 +18,8 @@
 /// flag // VERIFY — a tag and a quantity are bookkeeping, not engineering claims.
 library;
 
-import '../electrical/advanced_study.dart' show serviceTransformer;
+import '../electrical/advanced_study.dart'
+    show gensetStartFloorFor, serviceTransformer;
 import '../electrical/genset_backup.dart'
     show
         effectiveGeneratorBackupFraction,
@@ -339,8 +340,8 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
   for (final item in data.fans) {
     final d = item.duty;
     final isAhu = item.airHandling;
-    final tag = item.tag ??
-        (isAhu ? _seqTag('AHU', ++ahuSeq) : _seqTag('F', ++fanSeq));
+    final tag =
+        item.tag ?? (isAhu ? _seqTag('AHU', ++ahuSeq) : _seqTag('F', ++fanSeq));
     rows.add(EquipmentScheduleRow(
       tag: tag,
       service: item.service,
@@ -350,8 +351,7 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
           {'kw': _fmt(d.selectedMotor.inKiloWatts, dp: 2)}),
       modelSpec: item.modelSpec ?? '—',
       qty: item.qty,
-      category:
-          isAhu ? EquipmentCategory.airHandling : EquipmentCategory.fan,
+      category: isAhu ? EquipmentCategory.airHandling : EquipmentCategory.fan,
     ));
   }
 
@@ -402,8 +402,8 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
         tag: tag,
         service: strings.format(RptStringKey.esPanelService,
             {'system': _systemLabel(p.system, strings)}),
-        duty: strings.format(RptStringKey.esPanelDuty,
-            {'kw': _fmt(p.demandW / 1000.0, dp: 1)}),
+        duty: strings.format(
+            RptStringKey.esPanelDuty, {'kw': _fmt(p.demandW / 1000.0, dp: 1)}),
         // Round 24 — a saturated incomer says so on the procurement schedule.
         size: strings.format(RptStringKey.esPanelSize,
                 {'a': _fmt(p.incomer.breaker.ratingA.amperes, dp: 0)}) +
@@ -455,13 +455,16 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
                   final r = sizeGenerator(
                       data.electrical != null
                           ? gensetBackupDemandVa(ep, data.electrical!)
-                          : ApparentPower(
-                              demandVa.voltAmperes *
-                                  effectiveGeneratorBackupFraction(ep)),
+                          : ApparentPower(demandVa.voltAmperes *
+                              effectiveGeneratorBackupFraction(ep)),
                       mode: gen.mode,
                       // Round 16 — the set's kW limit (0.8 × kVA).
                       backupPower: data.electrical != null
                           ? gensetBackupDemandW(ep, data.electrical!)
+                          : null,
+                      // Round 70 — the set that starts its largest motor.
+                      minKvaForStart: data.electrical != null
+                          ? gensetStartFloorFor(ep, data.electrical!)
                           : null);
                   return (unitKva: r.ratingKva, units: r.units);
                 })()
@@ -587,8 +590,7 @@ String _categoryHeading(EquipmentCategory cat, ReportStrings strings) =>
       EquipmentCategory.panel => strings(RptStringKey.catPanels),
       EquipmentCategory.transformer => strings(RptStringKey.catTransformer),
       EquipmentCategory.generator => strings(RptStringKey.catGenerator),
-      EquipmentCategory.capacitorBank =>
-        strings(RptStringKey.catCapacitorBank),
+      EquipmentCategory.capacitorBank => strings(RptStringKey.catCapacitorBank),
       EquipmentCategory.distributedSource =>
         strings(RptStringKey.catDistributedSource),
     };
@@ -611,7 +613,10 @@ List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
 
   // One section per non-empty category, in enum order.
   for (final cat in EquipmentCategory.values) {
-    final inCat = [for (final r in rows) if (r.category == cat) r];
+    final inCat = [
+      for (final r in rows)
+        if (r.category == cat) r
+    ];
     if (inCat.isEmpty) continue;
     blocks
       ..add(RptHeading(2, _categoryHeading(cat, strings)))

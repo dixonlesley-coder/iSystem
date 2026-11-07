@@ -4670,6 +4670,11 @@ const Map<String, (String, String)> _electricalWarningTitles = {
     'Genset below essential demand',
     'Genset di bawah beban esensial'
   ),
+  // Round 70 — the set cannot start its largest motor within the dip limit.
+  'genset-start-dip-exceeded': (
+    'Genset cannot start its largest motor',
+    'Genset tidak mampu menyalakan motor terbesar'
+  ),
   // Round 40 — dual-transformer sections / declared transformer loading.
   'section-transformer-overloaded': (
     'Transformer section overloaded',

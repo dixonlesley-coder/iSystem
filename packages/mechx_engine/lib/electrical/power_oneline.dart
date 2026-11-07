@@ -90,10 +90,17 @@ class PowerOneLine {
   final List<PowerEdge> edges;
   final List<PowerInterlock> interlocks;
 
+  /// Round 70 — the motor-start dip screen of the generator node (the
+  /// standby set, or the primary genset plant), null when no genset is drawn.
+  /// [computeAdvancedStudy] raises `genset-start-dip-exceeded` from it, so a
+  /// ' · start dip NN% over' label never stands without a warning.
+  final GensetStartResult? gensetStart;
+
   const PowerOneLine({
     required this.nodes,
     required this.edges,
     required this.interlocks,
+    this.gensetStart,
   });
 
   /// First node of a kind, or null.
@@ -195,8 +202,10 @@ PowerOneLine buildPowerOneLine(
 
   // Pre-size the configured sources.
   final gen = sources.generator;
-  final genResult =
-      gen == null ? null : _sizeGen(gen, demand, backupDemand, backupPower);
+  final genResult = gen == null
+      ? null
+      : _sizeGen(gen, demand, backupDemand, backupPower,
+          minKvaForStart: gensetStartFloorKva(motors));
   // Motor-start voltage-dip screen for the sized genset — annotated onto the
   // generator node so the one-line carries the load-acceptance verdict.
   final gensetStart = genResult == null
@@ -259,16 +268,15 @@ PowerOneLine buildPowerOneLine(
 
   // Round 44 — ONE sizing of the distributed sources, shared with the BOM
   // and the equipment schedule ([sizeDistributedSources]).
-  final ds = sizeDistributedSources(sources,
-      demand: demand, demandPower: demandPower);
+  final ds =
+      sizeDistributedSources(sources, demand: demand, demandPower: demandPower);
   final solarResult = ds.solar;
   final batteryResult = ds.battery;
   final hybrid = ds.hybrid;
 
   // Essential split: a genset that backs only a fraction transfers a dedicated
   // ESSENTIAL bus (non-hybrid topology); the battery then backs a CRITICAL bus.
-  final essentialSplit =
-      gen != null &&
+  final essentialSplit = gen != null &&
       !genPrimary &&
       !hybrid &&
       (backupFraction ?? gen.backupFraction) < 1.0;
@@ -375,7 +383,8 @@ PowerOneLine buildPowerOneLine(
       aId: 'hinv',
       bId: 'bus',
       relation: PowerInterlockRelation.permissive,
-      note: 'Anti-islanding + transfer: the hybrid inverter disconnects export on grid loss and re-feeds the essential bus from PV/battery (island/UPS mode).',
+      note:
+          'Anti-islanding + transfer: the hybrid inverter disconnects export on grid loss and re-feeds the essential bus from PV/battery (island/UPS mode).',
     ));
     if (genResult != null || genPrimary) {
       interlocks.add(PowerInterlock(
@@ -384,7 +393,8 @@ PowerOneLine buildPowerOneLine(
         aId: 'hinv',
         bId: genNodeId,
         relation: PowerInterlockRelation.permissive,
-        note: 'On generator supply the hybrid inverter must stop exporting (charge-only / derate) — a standby genset cannot absorb reverse feed.',
+        note:
+            'On generator supply the hybrid inverter must stop exporting (charge-only / derate) — a standby genset cannot absorb reverse feed.',
       ));
     }
   } else {
@@ -422,7 +432,8 @@ PowerOneLine buildPowerOneLine(
           aId: 'pvinv',
           bId: genNodeId,
           relation: PowerInterlockRelation.permissive,
-          note: 'On generator supply the PV inverter must disconnect or derate — a standby genset cannot absorb reverse PV feed.',
+          note:
+              'On generator supply the PV inverter must disconnect or derate — a standby genset cannot absorb reverse PV feed.',
         ));
       }
     }
@@ -458,7 +469,8 @@ PowerOneLine buildPowerOneLine(
           aId: 'battinv',
           bId: 'ups-bus',
           relation: PowerInterlockRelation.sequence,
-          note: 'Double-conversion UPS: the critical bus rides the battery through any transfer gap (genset start, ATS changeover).',
+          note:
+              'Double-conversion UPS: the critical bus rides the battery through any transfer gap (genset start, ATS changeover).',
         ));
       } else {
         edge('battinv', backedBus, 'AC');
@@ -468,7 +480,8 @@ PowerOneLine buildPowerOneLine(
           aId: 'battinv',
           bId: backedBus,
           relation: PowerInterlockRelation.sequence,
-          note: 'Battery inverter transfers the essential load on outage (UPS / island mode).',
+          note:
+              'Battery inverter transfers the essential load on outage (UPS / island mode).',
         ));
       }
     }
@@ -510,7 +523,12 @@ PowerOneLine buildPowerOneLine(
     }
   }
 
-  return PowerOneLine(nodes: nodes, edges: edges, interlocks: interlocks);
+  return PowerOneLine(
+    nodes: nodes,
+    edges: edges,
+    interlocks: interlocks,
+    gensetStart: genPrimary ? plantStart : gensetStart,
+  );
 }
 
 /// Size the generator for the one-line: a forced kVA wins, else the resolved
@@ -522,7 +540,8 @@ PowerOneLine buildPowerOneLine(
 /// the backup DEMAND stays the solved basis, so the 'Essential bus' figure and
 /// the 'backing N kVA' note never echo whatever nameplate was typed.
 GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
-    ApparentPower? backupDemand, Power? backupPower) {
+    ApparentPower? backupDemand, Power? backupPower,
+    {ApparentPower? minKvaForStart}) {
   final backup =
       backupDemand ?? ApparentPower(demand.voltAmperes * gen.backupFraction);
   return sizeGenerator(
@@ -532,6 +551,7 @@ GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     forcedKva: gen.kva,
     forcedUnits: gen.units,
     backupPower: backupPower,
+    minKvaForStart: minKvaForStart,
   );
 }
 
@@ -603,12 +623,10 @@ Power _demandToPower(ApparentPower demand) =>
     Power(demand.voltAmperes * kGeneratorPf);
 
 String? _hybridInverterSub(SolarResult? solar, BatteryResult? batt) {
-  final s = solar == null
-      ? 0.0
-      : solar.inverterKw.inKiloWatts * solar.inverterUnits;
-  final b = batt == null
-      ? 0.0
-      : batt.inverterKw.inKiloWatts * batt.inverterUnits;
+  final s =
+      solar == null ? 0.0 : solar.inverterKw.inKiloWatts * solar.inverterUnits;
+  final b =
+      batt == null ? 0.0 : batt.inverterKw.inKiloWatts * batt.inverterUnits;
   final kw = s > b ? s : b;
   if (kw <= 0) return null;
   final pick = s >= b ? solar! : null;
