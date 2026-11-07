@@ -11,6 +11,8 @@ library;
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show Offset;
+import 'package:mechx_engine/electrical/advanced_study.dart'
+    show serviceSectionOfRoot;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 
@@ -269,6 +271,24 @@ String? serviceRootId(
       if (!fed.contains(p.id)) p,
   ];
   if (roots.isEmpty) return project.panels.first.id;
+  // Round 66 (regression-canvas-section-row-feeds-other-sections-board) — on
+  // a SECTIONED service the canvas spine's baseline row is SECTION 1
+  // (TRAFO-1 -> LVMDP-1), captioned with the boards [serviceSectionOfRoot]
+  // puts on section 1, so the board it is wired into is chosen among those:
+  // one section numbering on the canvas and the issued single-line (the
+  // demand order alone wired LVMDP-1 into section 2's board).
+  final sectionOf = serviceSectionOfRoot(project, result);
+  if (sectionOf.isNotEmpty) {
+    final first = [
+      for (final p in roots)
+        if (sectionOf[p.id] == 0) p,
+    ];
+    if (first.isNotEmpty) {
+      roots
+        ..clear()
+        ..addAll(first);
+    }
+  }
   // Prefer a root with feeder children, by descending demand.
   roots.sort((a, b) {
     final ad = result.panels[a.id]?.demandW ?? 0;

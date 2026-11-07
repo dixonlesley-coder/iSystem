@@ -22,6 +22,7 @@ import 'dart:math' as math;
 import '../geometry/building.dart';
 import '../geometry/scale_calibration.dart';
 import '../hydraulics.dart';
+import '../network/biconnected.dart' show cycleBlocks;
 import '../network/hardy_cross.dart';
 import '../network/network.dart';
 import '../standards/sni.dart';
@@ -4009,48 +4010,26 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         if (compEdges.length <= compNodes.length - 1) continue; // a tree
         final ids = compEdges.keys.toList()..sort();
         final comp = [for (final id in ids) compEdges[id]!];
-        final cyc = <String>{};
-        for (final id in ids) {
-          final e = compEdges[id]!;
-          if (e.fromId == e.toId) continue;
-          // e is on a cycle iff its ends stay connected without it.
-          final reach = <String>{e.fromId};
-          final st = [e.fromId];
-          var joined = false;
-          while (st.isNotEmpty && !joined) {
-            final cur = st.removeLast();
-            for (final x in fireAdj[cur] ?? const <NetEdge>[]) {
-              if (x.id == e.id) continue;
-              final o = x.fromId == cur ? x.toId : x.fromId;
-              if (o == e.toId) {
-                joined = true;
-                break;
-              }
-              if (reach.add(o)) st.add(o);
-            }
-          }
-          if (joined) cyc.add(id);
-        }
-        // Group the cycle edges by shared nodes; a group is a hydrant ring
-        // only when it holds a hydrant pipe.
+        // Round 66 (regression-yard-ring-arms-merge-cycles-at-articulation-
+        // node) — the cycle edges are grouped into biconnected BLOCKS
+        // ([cycleBlocks]); grouping them by shared nodes merged two cycles
+        // that touch at one node, so a sprinkler loop teed AT a hydrant-ring
+        // node was taken for part of the ring and carried the ring flow. A
+        // block is a hydrant ring only when it holds a hydrant pipe.
         final groupOf = <String, int>{};
-        var g = 0;
-        for (final id in ids) {
-          if (!cyc.contains(id) || groupOf.containsKey(id)) continue;
-          final st = [id];
-          groupOf[id] = g;
-          while (st.isNotEmpty) {
-            final x = compEdges[st.removeLast()]!;
-            for (final end in [x.fromId, x.toId]) {
-              for (final y in fireAdj[end] ?? const <NetEdge>[]) {
-                if (!cyc.contains(y.id) || groupOf.containsKey(y.id)) continue;
-                groupOf[y.id] = g;
-                st.add(y.id);
-              }
+        {
+          var g = 0;
+          for (final b in cycleBlocks([
+            for (final id in ids)
+              (id, compEdges[id]!.fromId, compEdges[id]!.toId),
+          ])) {
+            for (final id in b) {
+              groupOf[id] = g;
             }
+            g++;
           }
-          g++;
         }
+        final cyc = groupOf.keys.toSet();
         final hydrantGroups = <int>{
           for (final id in cyc)
             if (compEdges[id]!.service == ServiceType.fireHydrant) groupOf[id]!,
@@ -4143,6 +4122,13 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       final q = allFlows[e.id];
       if (q == null) continue;
       final home = homeOf(e);
+      // Round 66 (fire-convergence-18-hydrant-labelled-pump-room-rates-
+      // sprinkler-only-system-as-class-i-standpipe) — a hydrant-LABELLED
+      // pipe of a system with no standpipe basis (sprinkler heads, no hose
+      // outlet) carries no standpipe flow: the pump-room loop of a
+      // sprinkler-only system drawn on the hydrant service was a 'hydrant
+      // ring' carrying 31.5 L/s.
+      if (home != null && !home.standpipeTermApplies(net)) continue;
       final homeHydrant = home == null
           ? null
           : {
@@ -4255,7 +4241,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       final q = allFlows[e.id];
       if (q == null) continue;
       final home = homeOf(e);
-      if (home == null || !home.hasHydrant) continue;
+      if (home == null || !home.standpipeTermApplies(net)) continue;
       final classII = ownersOf[e.id]!.every(isClassII);
       void markTrunk() {
         if (e.service != ServiceType.fireSprinkler) return;
@@ -4325,7 +4311,9 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   FlowRate? designFlowOf(FireSystem s) => designFlowBySystem.putIfAbsent(s, () {
         // A caller that models no standpipe flow (no [hydrantDesignFlow])
         // keeps the accumulated hydrant flows.
-        if (s.hasHydrant && hydrantDesignFlow == null) return null;
+        if (s.standpipeTermApplies(net) && hydrantDesignFlow == null) {
+          return null;
+        }
         // Round 63 — [hydrantDesignFlow] caps the STANDPIPE term only
         // (`standpipeCap`), never a combined room's sprinkler demand.
         final own = fireSystemDesignFlow(net, s,
@@ -4437,16 +4425,74 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   // is written only when the water downstream of it raises it (a dead stub
   // stays unsized). The standby legs of a raised parallel set are recorded
   // like a mirrored leg below.
+  //
+  // Round 66 (fire-convergence-18-standby-discharge-unoriented-skips-nfpa20-
+  // floor) — a pipe whose own-service solve wrote a flow entry but NO
+  // direction (a zero-demand pump-room loop on the sprinkler service under a
+  // hydrant main) is just as unsolved: it is oriented and enters the pass
+  // the same way (it used to be raised to the riser flow but left
+  // unoriented, so the NFPA 20 pass never walked the standby discharge).
   final freshFireEdgeIds = <String>{};
+  // Round 66 (regression-duplex-pump-room-standby-suction-service-reverses-
+  // leg) — the pipes of every fire MOVER's degree-2 legs in a mixed system
+  // are oriented away from the fire source too (lower `fireSourceHops` end
+  // first — the Round-64 fire-mover rule): a standby pump whose suction was
+  // drawn on the other service is a degree-1 leaf of its discharge
+  // fragment, so that fragment's tree oriented the discharge leg INTO the
+  // pump (backwards through the standby) and the discharge header lost its
+  // second mover inflow (the NFPA 20 floor on the main past it).
+  final reorientedFireEdgeIds = <String>{};
   if (mixedSystems.isNotEmpty) {
+    bool inMixed(NetEdge e) =>
+        (ownersOf[e.id] ?? const <FireSystem>[]).any(mixedSystems.contains);
     for (final e in fireEdges) {
-      if (allFlows.containsKey(e.id)) continue;
-      final owners = ownersOf[e.id] ?? const <FireSystem>[];
-      if (!owners.any(mixedSystems.contains)) continue;
+      if (allFlows.containsKey(e.id) && edgeFlowFrom.containsKey(e.id)) {
+        continue;
+      }
+      if (!inMixed(e)) continue;
       final ha = fireHops[e.fromId], hb = fireHops[e.toId];
       if (ha == null || hb == null || ha == hb) continue;
       edgeFlowFrom[e.id] = ha < hb ? e.fromId : e.toId;
       freshFireEdgeIds.add(e.id);
+    }
+    for (final mover in net.nodes) {
+      if (mover.role != NodeRole.plant ||
+          (mover.component != NodeComponent.pump &&
+              mover.component != NodeComponent.boosterSet)) {
+        continue;
+      }
+      for (final start in fireAdj[mover.id] ?? const <NetEdge>[]) {
+        var here = mover.id;
+        var edge = start;
+        final seen = <String>{mover.id};
+        while (true) {
+          if (!inMixed(edge) || !allFlows.containsKey(edge.id)) break;
+          final ha = fireHops[edge.fromId], hb = fireHops[edge.toId];
+          if (ha != null && hb != null && ha != hb) {
+            final from = ha < hb ? edge.fromId : edge.toId;
+            if (edgeFlowFrom[edge.id] != from) {
+              edgeFlowFrom[edge.id] = from;
+              if (!freshFireEdgeIds.contains(edge.id)) {
+                reorientedFireEdgeIds.add(edge.id);
+              }
+            }
+          }
+          final next = edge.fromId == here ? edge.toId : edge.fromId;
+          final nn = net.nodeById(next);
+          final onward = [
+            for (final x in fireAdj[next] ?? const <NetEdge>[])
+              if (x.id != edge.id) x,
+          ];
+          if (!seen.add(next) ||
+              nn == null ||
+              nn.role == NodeRole.plant ||
+              onward.length != 1) {
+            break;
+          }
+          here = next;
+          edge = onward.single;
+        }
+      }
     }
   }
   for (var pass = 0; pass < 4 && mixedSystems.isNotEmpty; pass++) {
@@ -4465,7 +4511,12 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       // pipe the tree left unoriented never hides the demand beyond it.
       for (final x in downstreamOf(e,
           scope: scope.isEmpty ? null : scope, unoriented: true)) {
-        if (x.service == e.service) continue;
+        // Round 66 — a re-oriented pump leg carries its discharge: the
+        // water of EVERY pipe downstream (a standby leg drawn into the pump
+        // on its own service is a full-duty leg of the set).
+        if (x.service == e.service && !reorientedFireEdgeIds.contains(e.id)) {
+          continue;
+        }
         final qx = allFlows[x.id]?.cubicMetersPerSecond ?? 0;
         if (qx > best + 1e-12) best = qx;
       }
@@ -4476,7 +4527,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     }
     if (!changed) break;
   }
-  if (freshFireEdgeIds.isNotEmpty) {
+  if (freshFireEdgeIds.isNotEmpty || reorientedFireEdgeIds.isNotEmpty) {
     // An unsolved pipe nothing raised keeps no flow and no direction.
     final raised = <String>{
       for (final id in freshFireEdgeIds)
@@ -4485,6 +4536,20 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     for (final id in freshFireEdgeIds) {
       if (!raised.contains(id)) edgeFlowFrom.remove(id);
     }
+    // Round 66 — a parallel set is grouped over every carrying pipe of a
+    // mixed system (a pump leg already solved on its own service counts),
+    // and a group is recorded when at least one of its legs was raised or
+    // re-oriented here (a set fully solved as such keeps the tree path's
+    // record).
+    final touched = {...raised, ...reorientedFireEdgeIds};
+    final carrying = <String>{
+      ...raised,
+      for (final e in fireEdges)
+        if ((allFlows[e.id]?.cubicMetersPerSecond ?? 0) > 0 &&
+            (ownersOf[e.id] ?? const <FireSystem>[])
+                .any(mixedSystems.contains))
+          e.id,
+    };
     // Parallel pump legs among the raised pipes: pumps whose degree-2 legs
     // reach the same two junctions are one duty / standby set; the duty is
     // the lowest pump id (the tree path's "first leg by pump id"), every
@@ -4498,7 +4563,9 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         continue;
       }
       final at = fireAdj[pump.id] ?? const <NetEdge>[];
-      if (at.length != 2 || !at.every((e) => raised.contains(e.id))) continue;
+      if (at.length != 2 || !at.every((e) => carrying.contains(e.id))) {
+        continue;
+      }
       final legIds = <String>[];
       final ends = <String>[];
       for (final start in at) {
@@ -4517,7 +4584,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
               nn == null ||
               nn.role == NodeRole.plant ||
               onward.length != 1 ||
-              !raised.contains(onward.single.id)) {
+              !carrying.contains(onward.single.id)) {
             ends.add(next);
             break;
           }
@@ -4530,6 +4597,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     }
     for (final group in byEnds.values) {
       if (group.length < 2) continue;
+      if (!group.any((m) => m.$2.any(touched.contains))) continue;
       // Round 62 — the duty is the first-DRAWN pump ([drawOrderCompare]).
       group.sort((a, b) {
         final na = net.nodeById(a.$1), nb = net.nodeById(b.$1);

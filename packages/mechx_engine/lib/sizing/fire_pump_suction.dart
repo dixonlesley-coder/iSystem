@@ -17,6 +17,7 @@ library;
 import 'dart:math' as math;
 
 import '../hydraulics.dart' show velocityFromFlow;
+import '../network/biconnected.dart' show cycleBlocks;
 import '../network/network.dart';
 import '../standards/sni.dart' show StandardValue, VerificationStatus;
 import '../units.dart';
@@ -490,76 +491,20 @@ Set<String> _yardRingArms(
   if (edges.length < 3) return const {};
   // Endpoint key: a tank incidence is unique to its pipe.
   String key(NetEdge e, String id) => isTank(id) ? '$id|tank|${e.id}' : id;
-  final adj = <String, List<(NetEdge, String)>>{};
-  for (final e in edges) {
-    final a = key(e, e.fromId), b = key(e, e.toId);
-    (adj[a] ??= []).add((e, b));
-    (adj[b] ??= []).add((e, a));
-  }
-  // Iterative Tarjan bridge search.
-  final disc = <String, int>{};
-  final low = <String, int>{};
-  final bridges = <String>{};
-  var time = 0;
-  for (final root in adj.keys.toList()..sort()) {
-    if (disc.containsKey(root)) continue;
-    // Frame: (node, parent edge id, next neighbour index).
-    final stack = <(String, String?, int)>[(root, null, 0)];
-    disc[root] = time;
-    low[root] = time;
-    time++;
-    while (stack.isNotEmpty) {
-      final (v, pe, i) = stack.removeLast();
-      final links = adj[v]!;
-      if (i < links.length) {
-        stack.add((v, pe, i + 1));
-        final (e, w) = links[i];
-        if (e.id == pe) continue;
-        if (!disc.containsKey(w)) {
-          disc[w] = time;
-          low[w] = time;
-          time++;
-          stack.add((w, e.id, 0));
-        } else {
-          low[v] = math.min(low[v]!, disc[w]!);
-        }
-      } else if (pe != null && stack.isNotEmpty) {
-        // Finished v: propagate to its parent (the frame now on top).
-        final u = stack.last.$1;
-        low[u] = math.min(low[u]!, low[v]!);
-        if (low[v]! > disc[u]!) bridges.add(pe);
-      }
-    }
-  }
-  // Union the endpoints of every non-bridge pipe into cycle groups.
-  final parent = <String, String>{};
-  String find(String x) {
-    var r = x;
-    while ((parent[r] ?? r) != r) {
-      r = parent[r]!;
-    }
-    return r;
-  }
-
-  final cyc = [
-    for (final e in edges)
-      if (!bridges.contains(e.id)) e
+  // Round 66 (regression-yard-ring-arms-merge-cycles-at-articulation-node) —
+  // each cycle group is one biconnected BLOCK ([cycleBlocks]). A union of
+  // every non-bridge pipe's endpoints merged two cycles that share only one
+  // node (an articulation point), so a sprinkler loop teed AT a yard-ring
+  // node took the yard flow on DN150. A block of one pipe is a bridge.
+  final byId = {for (final e in edges) e.id: e};
+  final groups = [
+    for (final b in cycleBlocks([
+      for (final e in edges) (e.id, key(e, e.fromId), key(e, e.toId)),
+    ]))
+      [for (final id in b) byId[id]!],
   ];
-  for (final e in cyc) {
-    final a = find(key(e, e.fromId)), b = find(key(e, e.toId));
-    if (a == b) continue;
-    if (a.compareTo(b) < 0) {
-      parent[b] = a;
-    } else {
-      parent[a] = b;
-    }
-  }
-  final groups = <String, List<NetEdge>>{};
-  for (final e in cyc) {
-    (groups[find(key(e, e.fromId))] ??= []).add(e);
-  }
   return {
-    for (final g in groups.values)
+    for (final g in groups)
       if (g.any(reachesPillar)) ...g.map((e) => e.id),
   };
 }

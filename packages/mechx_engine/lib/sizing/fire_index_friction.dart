@@ -77,6 +77,24 @@ class FireSystem {
       hasSprinkler &&
       topTerminalFloor(net, FireTerminalKind.sprinkler) != null;
 
+  /// Round 66 (fire-convergence-18-hydrant-labelled-pump-room-rates-
+  /// sprinkler-only-system-as-class-i-standpipe) — true when this system
+  /// draws a building HOSE OUTLET (a hydrant box / hose reel on a hydrant
+  /// pipe, [topTerminalFloor] with [FireTerminalKind.hydrant]; a yard pillar
+  /// is none). [hasHydrant] only says a hydrant-service PIPE is drawn.
+  bool hasHoseOutlet(Network net) =>
+      hasHydrant && topTerminalFloor(net, FireTerminalKind.hydrant) != null;
+
+  /// Round 66 — whether the STANDPIPE term (the Class I/II/III flow, the
+  /// hose residual) applies to this system: a drawn hose outlet, or a
+  /// hydrant-pipe system with no sprinkler head (a yard-only system, a
+  /// terminal-less transfer fill — they keep their hydrant basis). The
+  /// mirror of [hasSprinklerHead]: a sprinkler-only system whose pump-room
+  /// pipes were drawn on the hydrant service has no standpipe basis (it was
+  /// rated, sized and fed as a 500 gpm Class I standpipe).
+  bool standpipeTermApplies(Network net) =>
+      hasHoseOutlet(net) || (hasHydrant && !hasSprinklerHead(net));
+
   /// The standpipe stacks of THIS system that run in parallel (at least 1).
   int standpipeRisers(Network net) {
     final n = parallelStandpipeCount(net, edges);
@@ -460,7 +478,7 @@ FlowRate? fireSystemDesignFlow(
 }) {
   if (!fireSystemHasTerminal(net, sys)) return null;
   FlowRate? q;
-  if (sys.hasHydrant) {
+  if (sys.standpipeTermApplies(net)) {
     q = standpipeFlow(sys.standpipeRisers(net),
         standpipeClass: sys.standpipeClass(net));
     if (standpipeCap != null &&

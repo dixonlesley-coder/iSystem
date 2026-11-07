@@ -622,7 +622,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
     // duty).
     final hasBuildingStandpipe =
         sys.topTerminalFloor(net, FireTerminalKind.hydrant) != null;
-    final sprinklerOnly = !sys.hasHydrant;
+    final sprinklerOnly = !sys.standpipeTermApplies(net);
     final ratedOnSprinkler = sprinklerOnly ||
         (!hasBuildingStandpipe &&
             sys.hasSprinklerHead(net) &&
@@ -1137,7 +1137,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
   const rhoG = 1000 * 9.81;
   final kinds = [
     if (sys.hasSprinklerHead(net)) FireTerminalKind.sprinkler,
-    if (sys.hasHydrant) FireTerminalKind.hydrant,
+    if (sys.standpipeTermApplies(net)) FireTerminalKind.hydrant,
   ];
   double targetOf(FireTerminalKind k) {
     final top = clampF(sys.topTerminalFloor(net, k) ?? nF - 1);

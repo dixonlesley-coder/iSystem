@@ -462,7 +462,7 @@ final assumedFireJockeysProvider = Provider<Set<String>>(
     if (sys == null) continue;
     // Round 49 — a hose-reel-only system's rated flow is its Class II
     // hose-station flow.
-    final rated = sys.hasHydrant
+    final rated = sys.standpipeTermApplies(net)
         ? standpipeFlow(sys.standpipeRisers(net),
             standpipeClass: sys.standpipeClass(net))
         : remoteAreaDemand;
