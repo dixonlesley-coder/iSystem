@@ -564,9 +564,14 @@ const double _liveBusbarClearingTimeS = 0.1;
   // Round 25 — the demand rides every tier: a declared capacity above the
   // PLN TR ceiling resolves to its own transformer's fault, never below the
   // study transformer for the demand.
-  final est = estimatedServiceFaultLevelA(project,
-      demand: demand ?? result?.supply.demandVa,
-      supply: result == null ? null : studySupplyDesign(project, result));
+  // Round 71 — with a solved [result] the ONE engine estimate
+  // ([serviceFaultEstimateFor]: the installed on-site plant + the supply's
+  // phase basis), so the app chain and the engine's ADS passes agree.
+  final est = result != null && demand == null
+      ? serviceFaultEstimateFor(project, result)
+      : estimatedServiceFaultLevelA(project,
+          demand: demand ?? result?.supply.demandVa,
+          supply: result == null ? null : studySupplyDesign(project, result));
   if (est != null) {
     return (
       amperes: est.amperes,

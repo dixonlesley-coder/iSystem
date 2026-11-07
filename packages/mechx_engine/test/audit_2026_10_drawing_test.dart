@@ -314,7 +314,7 @@ void main() {
           0.0);
     });
 
-    test('a datum-less ROOF tank on a lower sheet falls back to its ceiling',
+    test('a datum-less ROOF tank on a lower sheet reads its own floor',
         () {
       const rt = NetNode(
           id: 'rt',
@@ -324,10 +324,23 @@ void main() {
           floorIndex: 0,
           role: NodeRole.plant,
           component: NodeComponent.roofTank);
-      // Solve: roof datum 12.0 m; the plan label uses floor 0's ceiling 3.70 m.
-      expect(nodeElevation(rt, _threeStoreys).meters, 12.0);
-      expect(planSettingOutElevation(rt, _threeStoreys).meters,
-          closeTo(3.70, 1e-9));
+      // Round 71: a roof-typed tank below the top storey sits on its OWN
+      // floor surface (FFL 0.0 on G) in the solve AND on the plan label — one
+      // datum (golden rule 5); only the top-storey tank reads the roof.
+      expect(nodeElevation(rt, _threeStoreys).meters, 0.0);
+      expect(planSettingOutElevation(rt, _threeStoreys).meters, 0.0);
+      const top = NetNode(
+          id: 'rt2',
+          sheetId: 's',
+          x: 0,
+          y: 0,
+          floorIndex: 2,
+          role: NodeRole.plant,
+          component: NodeComponent.roofTank);
+      expect(nodeElevation(top, _threeStoreys).meters, 12.0);
+      // Top-storey roof datum: the plan label falls back to its ceiling.
+      expect(planSettingOutElevation(top, _threeStoreys).meters,
+          lessThan(12.0));
     });
   });
 

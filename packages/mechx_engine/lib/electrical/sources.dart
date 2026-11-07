@@ -355,8 +355,19 @@ class GensetMotor {
   /// estimate (a hand-built list).
   final ApparentPower? startKva;
 
+  /// Round 71 (regression-1) — the way this motor is fed from (null for a
+  /// hand-built list) and whether it is a LIFE-SAFETY way (it must start on
+  /// mains failure). The dip screen grades on these, never on [name].
+  final String? circuitId;
+  final bool lifeSafety;
+
   const GensetMotor(
-      {this.name, required this.shaftPower, this.starterType, this.startKva});
+      {this.name,
+      required this.shaftPower,
+      this.starterType,
+      this.startKva,
+      this.circuitId,
+      this.lifeSafety = false});
 }
 
 /// Outcome of a genset motor-starting voltage-dip screen.
@@ -379,6 +390,10 @@ class GensetStartResult {
   /// Smallest genset rating that holds the limiting motor's dip within limit.
   final ApparentPower recommendedMinGensetKva;
 
+  /// Round 71 (regression-1) — every LIFE-SAFETY motor whose OWN dip
+  /// exceeds [kMaxStartVoltageDipPct] (it need not be the limiting motor).
+  final List<GensetMotor> failingLifeSafetyMotors;
+
   final String note;
   final String clause;
 
@@ -389,6 +404,7 @@ class GensetStartResult {
     required this.estimatedDipPct,
     required this.acceptable,
     required this.recommendedMinGensetKva,
+    this.failingLifeSafetyMotors = const [],
     required this.note,
     required this.clause,
   });
@@ -610,6 +626,14 @@ GensetStartResult assessGensetStart(
 
   final estimatedDipPct = _round(_estimateDipPct(limitingStartKva, genKva));
   final acceptable = estimatedDipPct <= kMaxStartVoltageDipPct;
+  // Round 71 — each life-safety motor judged on its OWN dip (same rounding).
+  final failingLifeSafety = [
+    for (final m in candidates)
+      if (m.lifeSafety &&
+          _round(_estimateDipPct(startKvaOf(m), genKva)) >
+              kMaxStartVoltageDipPct)
+        m,
+  ];
   final recommendedMin =
       _round(_minGensetKvaForDip(limitingStartKva, kMaxStartVoltageDipPct));
 
@@ -632,6 +656,7 @@ GensetStartResult assessGensetStart(
     estimatedDipPct: estimatedDipPct,
     acceptable: acceptable,
     recommendedMinGensetKva: ApparentPower.kilovoltAmperes(recommendedMin),
+    failingLifeSafetyMotors: failingLifeSafety,
     note: note,
     clause: clause,
   );

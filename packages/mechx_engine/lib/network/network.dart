@@ -669,7 +669,9 @@ bool nodeCarriesContent(NetNode n) =>
 ///     floor surface, [NodeComponent.roofDrain] at the roof on the top storey
 ///     (its own floor surface below it);
 ///   • [NodeRole.plant]   → depends on WHAT the plant is ([NetNode.component]):
-///       – [NodeComponent.roofTank] → roof level (it sits on the roof slab);
+///       – [NodeComponent.roofTank] → roof level on the top storey (it sits
+///         on the roof slab); drawn BELOW the top storey, its own floor
+///         surface (a break / transfer-floor tank, Round 71);
 ///       – water plant that sits on its own floor — [NodeComponent.pump],
 ///         [NodeComponent.groundTank], [NodeComponent.boosterSet] — and the
 ///         floor-standing air plant ([NodeComponent.ahu],
@@ -753,8 +755,23 @@ Length nodeElevation(
             return building.elevationOf(node.floorIndex);
           }
           return building.roofElevation;
+        case NodeComponent.roofTank:
+          // Round 71 — a roof-typed tank drawn BELOW the top storey is a
+          // mid-height (break / transfer-floor) tank: it sits on its OWN
+          // floor's surface, like an untyped plant and a roof drain. Reading
+          // it at the roof put a break tank on L20 of 40 at 140 m (every
+          // floor it feeds over-pressured by its 70 m drop, a low fixture
+          // PASS) and rated the pump filling it to lift to the roof. On the
+          // top storey (one-level buildings too) it keeps the roof slab.
+          // VERIFY — notAnSniClause (a modelling datum; set the tank's
+          // elevation for a tank on a stand).
+          final top = building.levelCount - 1;
+          if (building.levelCount > 0 && node.floorIndex < top) {
+            return building.elevationOf(node.floorIndex);
+          }
+          return building.roofElevation;
         default:
-          // roofTank, and a plant with a non-plant component.
+          // A plant with a non-plant component.
           return building.roofElevation;
       }
   }

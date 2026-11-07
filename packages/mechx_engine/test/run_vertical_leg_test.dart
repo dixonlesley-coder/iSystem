@@ -223,14 +223,17 @@ void main() {
       expect(runCentrelineLabels(n, three)['e'], 'CL +3.70 drop 0.30 m');
     });
 
-    test('roof tank on a lower sheet: the 8.30 m leg is omitted, not level',
-        () {
+    test('roof tank on a lower sheet sits on its own floor (Round 71)', () {
+      // Round 71 — a roof-typed tank drawn below the top storey is a
+      // mid-height tank on its OWN floor surface (0.0 m on G), not the 12.0 m
+      // roof: the run's vertical leg is the ceiling main 3.70 − 0.0 = 3.70 m
+      // (was a phantom 12.0 − 3.7 = 8.30 m), and tag and label agree on it.
       final n = tankRun(0);
       final len = edgeLength(n.edgeById('e')!, n,
               calibrationBySheet: c, building: three)
           .meters;
-      expect(len, closeTo(2.0 + 8.3, 1e-9));
-      expect(runCentrelineLabels(n, three).containsKey('e'), isFalse);
+      expect(len, closeTo(2.0 + 3.7, 1e-9));
+      expect(runCentrelineLabels(n, three)['e'], 'CL +3.70 drop 3.70 m');
     });
   });
 

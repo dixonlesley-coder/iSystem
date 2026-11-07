@@ -327,8 +327,21 @@ const double inverterFaultMultiple = 1.5;
 /// Round 39 — the prospective 3φ fault (A) at the terminals of an on-site
 /// primary source of [sVa] VA: a generator S/(√3·400·Xd''), a solar
 /// inverter [inverterFaultMultiple] × S/(√3·400). Pure.
-double onSiteSourceFaultA(SupplyKind kind, double sVa) {
-  final ratedA = sVa / (math.sqrt(3) * serviceFaultLineVoltageV);
+///
+/// Round 71 (elec-convergence-23) — a SINGLE-PHASE on-site source (a 1-phase
+/// supply: [singlePhaseU0] its phase voltage) is rated on its own current
+/// S/U0: a generator S/(U0·Xd''), an inverter [inverterFaultMultiple] ×
+/// S/U0. A 10 kVA 1-phase 220 V set faults at 10000/220/0.12 = 378.8 A, never
+/// the 3-phase 400 V figure 10000/(√3·400)/0.12 = 120.3 A (3.15x low — the
+/// same set is SIZED on the single-phase board basis). The PLN transformer
+/// path keeps its 3-phase basis.
+double onSiteSourceFaultA(SupplyKind kind, double sVa,
+    {double? singlePhaseU0}) {
+  final onSite1ph =
+      singlePhaseU0 != null && singlePhaseU0 > 0 && kind != SupplyKind.pln;
+  final ratedA = onSite1ph
+      ? sVa / singlePhaseU0
+      : sVa / (math.sqrt(3) * serviceFaultLineVoltageV);
   return switch (kind) {
     SupplyKind.generator => ratedA / kAlternatorXdPu,
     SupplyKind.solar => ratedA * inverterFaultMultiple,
@@ -415,7 +428,10 @@ final List<String> serviceFaultEstimateVerifyItems = [
 /// debt is carried in [serviceFaultEstimateVerifyItems] pending the follow-up
 /// that wires it into the honesty surfaces.
 Current? estimatedServiceFaultLevelA(ElectricalProject project,
-    {ApparentPower? demand, SupplyDesign? supply}) {
+    {ApparentPower? demand,
+    SupplyDesign? supply,
+    double? onSitePlantVa,
+    double? singlePhaseU0}) {
   // 1. Customer transformer declared ⇒ transformer-impedance-limited fault.
   final txVa = project.transformerKva?.voltAmperes;
   if (txVa != null && txVa > 0) {
@@ -432,11 +448,24 @@ Current? estimatedServiceFaultLevelA(ElectricalProject project,
   // [inverterFaultMultiple] × rated current — sized on the declared capacity,
   // else the demand. Never the 16 kA utility default (that overstated the
   // earth-fault current >5x and could PASS ADS that will not disconnect).
+  //
+  // Round 71 (elec-convergence-23) — with no capacity declared the fault is
+  // the INSTALLED plant's ([onSitePlantVa]: the genset / inverter the power
+  // one-line prints and the BOM buys), not the bare demand (a 2.6 kVA kiosk
+  // demand on a printed 10 kVA set understated the fault ~3.8x); a 1-phase
+  // supply rates the source on [singlePhaseU0] ([onSiteSourceFaultA]).
   if (project.supplyKind != SupplyKind.pln) {
     final cap = project.supplyCapacityVa?.voltAmperes;
-    final sVa = (cap != null && cap > 0) ? cap : demand?.voltAmperes;
+    final sVa = (cap != null && cap > 0)
+        ? cap
+        : (onSitePlantVa != null && onSitePlantVa > 0)
+            ? onSitePlantVa
+            : demand?.voltAmperes;
     if (sVa == null || sVa <= 0) return null;
-    return Current(_round(onSiteSourceFaultA(project.supplyKind, sVa), 1));
+    return Current(_round(
+        onSiteSourceFaultA(project.supplyKind, sVa,
+            singlePhaseU0: singlePhaseU0),
+        1));
   }
 
   // 2. LV direct service ⇒ a rung off the declared connection capacity.

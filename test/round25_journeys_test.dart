@@ -42,7 +42,10 @@ ProviderContainer _c() {
 void main() {
   group('roof-tank downfeed below the target residual is reported', () {
     /// The sample (meter → lavatory → drain) with the meter turned into a
-    /// drawn ROOF TANK: a real gravity downfeed.
+    /// drawn ROOF TANK: a real gravity downfeed. Round 71 — a roof-typed tank
+    /// reads the roof only on the TOP storey (below it, its own floor), so
+    /// the converted meter is set on the roof datum explicitly (the plan
+    /// position is unchanged).
     ProviderContainer roofTankSample(List<Floor> floors) {
       final c = _c();
       loadSampleLayoutProjectTo(c.read);
@@ -54,7 +57,8 @@ void main() {
                 n.component == NodeComponent.waterMeter
                     ? n.copyWith(
                         component: NodeComponent.roofTank,
-                        role: NodeRole.plant)
+                        role: NodeRole.plant,
+                        elevation: BuildingLevels(floors).roofElevation)
                     : n,
             ],
             edges: net.edges,

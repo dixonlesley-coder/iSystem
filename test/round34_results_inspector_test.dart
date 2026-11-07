@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/compliance_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/network/network.dart';
 
@@ -21,12 +22,18 @@ import 'test_util.dart';
 
 /// The plumbing sample (meter → lavatory → drain) with the meter turned into
 /// a drawn ROOF TANK, optionally with a booster set inline on the supply.
+/// Round 71 — a roof-typed tank reads the roof only on the TOP storey, so the
+/// converted ground-floor meter is set on the roof datum explicitly.
 void _roofTank(ProviderContainer c, {bool booster = false}) {
   final net = c.read(networkControllerProvider).network;
+  final roof = c.read(projectControllerProvider).building.roofElevation;
   final nodes = [
     for (final n in net.nodes)
       n.component == NodeComponent.waterMeter
-          ? n.copyWith(component: NodeComponent.roofTank, role: NodeRole.plant)
+          ? n.copyWith(
+              component: NodeComponent.roofTank,
+              role: NodeRole.plant,
+              elevation: roof)
           : n,
   ];
   var edges = net.edges;

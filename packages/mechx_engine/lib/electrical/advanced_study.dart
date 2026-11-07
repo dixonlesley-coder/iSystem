@@ -95,7 +95,12 @@ import 'panel_results.dart'
         WarningSeverity;
 import 'power_factor.dart'
     show PowerFactorResult, isDriveFedCircuit, powerFactorCorrection;
-import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
+import 'power_oneline.dart'
+    show
+        PowerOneLine,
+        buildPowerOneLine,
+        distributedSourceInverters,
+        sizeDistributedSources;
 import 'sources.dart'
     show
         GensetMotor,
@@ -377,8 +382,7 @@ AdvancedStudy computeAdvancedStudy(
   // PLN TR ceiling never estimates below the study transformer's fault).
   // Round 52 — the estimate reads the SAME supply study the advanced study
   // prints ([studySupplyDesign]): the largest section / per-phase basis.
-  final serviceEstimate = estimatedServiceFaultLevelA(project,
-      demand: sys.supply.demandVa, supply: studySupplyDesign(project, sys));
+  final serviceEstimate = serviceFaultEstimateFor(project, sys);
   final serviceEstimateGoverns = originFaultLevel == null &&
       project.originFaultLevelA == null &&
       serviceEstimate != null;
@@ -719,6 +723,53 @@ AdvancedStudy computeAdvancedStudy(
 // Helpers.
 // ───────────────────────────────────────────────────────────────────────────
 
+/// Round 71 (elec-convergence-23) — the phase voltage an ON-SITE source of
+/// a single-phase supply is rated on (null on a 3-phase supply).
+double? onSiteSinglePhaseU0(ElectricalSystemResult sys) =>
+    sys.supply.system == ElectricalSystem.singlePhase
+        ? sys.supply.voltage.volts
+        : null;
+
+/// Round 71 (elec-convergence-23) — the INSTALLED on-site PRIMARY plant (VA)
+/// a generator / solar supply is fault-rated on: the declared capacity, else
+/// the set / inverter the power one-line prints and the BOM buys
+/// ([gensetPlantVa]; the distributed-source inverters at unity PF), else the
+/// demand. Null on a PLN supply or with nothing to rate.
+double? onSitePrimaryPlantVa(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  if (project.supplyKind == SupplyKind.pln) return null;
+  final cap = project.supplyCapacityVa?.voltAmperes;
+  if (cap != null && cap > 0) return cap;
+  if (project.supplyKind == SupplyKind.generator) {
+    final v = gensetPlantVa(project, sys);
+    if (v != null && v > 0) return v;
+  } else if (project.supplyKind == SupplyKind.solar &&
+      project.sources != null) {
+    final inv = distributedSourceInverters(sizeDistributedSources(
+        project.sources!,
+        demand: sys.supply.demandVa,
+        demandPower: Power(sys.supply.demandW)));
+    final kw =
+        inv.fold<double>(0, (a, x) => a + x.unitKw.inKiloWatts * x.units);
+    if (kw > 0) return kw * 1000;
+  }
+  final d = sys.supply.demandVa.voltAmperes;
+  return d > 0 ? d : null;
+}
+
+/// Round 71 (elec-convergence-23) — the ONE service-size fault estimate for a
+/// solved system: [estimatedServiceFaultLevelA] on the study's own supply
+/// design, the installed on-site plant ([onSitePrimaryPlantVa]) and the
+/// supply's phase basis. Every Fold-1 / ADS caller (compute's frame / growth
+/// passes, the advanced study, the app chain) reads it.
+Current? serviceFaultEstimateFor(
+        ElectricalProject project, ElectricalSystemResult sys) =>
+    estimatedServiceFaultLevelA(project,
+        demand: sys.supply.demandVa,
+        supply: studySupplyDesign(project, sys),
+        onSitePlantVa: onSitePrimaryPlantVa(project, sys),
+        singlePhaseU0: onSiteSinglePhaseU0(sys));
+
 /// Round 56 — the INSTALLED standby genset (VA): a forced nameplate × its
 /// units, else the set the G-01 schedule / spine / BOM size
 /// ([sizeGenerator] over [gensetBackupDemandVa] / [gensetBackupDemandW]) ×
@@ -767,28 +818,40 @@ const String gensetStartDipVerifyItem =
 /// its motor-start dip screen (a forced nameplate, or a declared primary
 /// genset plant, too small for its largest motor). An unforced set is sized
 /// up to the start floor, so this fires only on a typed / declared rating.
-/// ERROR when the limiting motor is a life-safety way (it must start on
-/// mains failure), else a warning. Placed on the root panel.
+/// ERROR when ANY life-safety motor fails on its OWN dip (it must start on
+/// mains failure — Round 71: graded on each motor's own life-safety flag and
+/// dip, never by matching the limiting motor's NAME), else a warning. Placed
+/// on the root panel.
 List<ElectricalWarning> gensetStartDipWarnings(
     ElectricalProject project, PowerOneLine? oneLine,
     {String? rootPanelId}) {
   final st = oneLine?.gensetStart;
   if (st == null || st.acceptable) return const [];
-  final lifeSafety = project.panels.any((p) => p.circuits.any((c) =>
-      c.lifeSafety &&
-      c.name == st.limitingMotorName &&
-      st.limitingMotorName != null));
+  final ls = st.failingLifeSafetyMotors;
+  final lsNames = [
+    for (final m in ls)
+      if (m.name != null &&
+          m.name!.isNotEmpty &&
+          m.name != st.limitingMotorName)
+        m.name!,
+  ];
+  final lsNote = lsNames.isEmpty
+      ? ''
+      : ' Life-safety ${lsNames.length == 1 ? 'motor' : 'motors'} '
+          '${lsNames.join(', ')} also '
+          '${lsNames.length == 1 ? 'fails' : 'fail'} to start within the '
+          'limit.';
   return [
     ElectricalWarning(
       code: 'genset-start-dip-exceeded',
-      severity: lifeSafety ? WarningSeverity.error : WarningSeverity.warning,
+      severity: ls.isNotEmpty ? WarningSeverity.error : WarningSeverity.warning,
       message: 'Genset ${_kvaText(st.gensetKva)} kVA: starting '
           '${st.limitingMotorName ?? 'the largest motor'} '
           '(${_kvaText(st.startingKva)} kVA) dips the voltage '
           '${st.estimatedDipPct}% — above the '
-          '${kMaxStartVoltageDipPct.toStringAsFixed(0)}% limit. Use at least '
-          '${_kvaText(st.recommendedMinGensetKva)} kVA or a reduced-inrush '
-          'starter.',
+          '${kMaxStartVoltageDipPct.toStringAsFixed(0)}% limit.$lsNote Use at '
+          'least ${_kvaText(st.recommendedMinGensetKva)} kVA or a '
+          'reduced-inrush starter.',
       panelId: rootPanelId,
     ),
   ];
@@ -863,7 +926,9 @@ String _kvaText(ApparentPower p) {
             'mark the boards the set backs as essential.',
       ),
   ];
-  final iscA = onSiteSourceFaultA(SupplyKind.generator, va);
+  // Round 71 — a 1-phase supply's set is a single-phase alternator.
+  final iscA = onSiteSourceFaultA(SupplyKind.generator, va,
+      singlePhaseU0: onSiteSinglePhaseU0(sys));
   final g = faultStudy(sys, project, profile, originFaultLevel: Current(iscA));
   final kva = (va / 1000).toStringAsFixed(0);
   final failed = <String>{};
@@ -1527,6 +1592,8 @@ List<GensetMotor> gensetStartMotors(
         shaftPower: Power.kiloWatts(kw),
         starterType: starter == null ? null : _starterString(starter),
         startKva: ApparentPower(startVa),
+        circuitId: c.id,
+        lifeSafety: c.lifeSafety,
       ));
     }
   }
