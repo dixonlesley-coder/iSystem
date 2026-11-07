@@ -1789,13 +1789,21 @@ void _mirrorPeerPumpRoomsAcrossServices(
     if (q <= 0) continue;
     // The room already carrying the set flow on its tank main (the tree's
     // own root room) is the duty room; every other room is a peer.
+    // Prefer the room whose tank main the core mirror did NOT already
+    // record as a peer bridge (the tree's root room).
     String? duty;
-    for (final t in tanks) {
-      final f = result[rooms[t]!.first.id]?.flow.cubicMetersPerSecond ?? 0;
-      if (f >= q - 1e-12) {
+    for (final pass in [0, 1]) {
+      for (final t in tanks) {
+        final first = rooms[t]!.first.id;
+        final f = result[first]?.flow.cubicMetersPerSecond ?? 0;
+        if (f < q - 1e-12) continue;
+        if (pass == 0 && (parallelLegEdgeIdsOut?.contains(first) ?? false)) {
+          continue;
+        }
         duty = t;
         break;
       }
+      if (duty != null) break;
     }
     for (final t in tanks) {
       for (final r in rooms[t]!) {

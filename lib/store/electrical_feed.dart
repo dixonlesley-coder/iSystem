@@ -586,6 +586,8 @@ Map<String, String> parallelStandbyPumps(
   // so its parallel pumps are duty + standby only (never an assumed jockey
   // wired at a default 1.5 kW beside a 22 kW transfer pump).
   final noJockey = <List<String>>{};
+  // Round 70 — a peer room's set: its own duty pump (already a standby).
+  final peerDutyAsStandby = <List<String>, String>{};
   // Round 51 r2 — the connectivity groups above walk THROUGH a tank, but
   // [fireSystems] stops at one (a tank is a system boundary), so a group can
   // hold pumps of several systems (a sprinkler pump and a hydrant pump drawn
@@ -611,15 +613,29 @@ Map<String, String> parallelStandbyPumps(
       final overallDuty = ([...sg]..sort(rank)).first;
       final dutySet =
           parts.firstWhere((p) => p.contains(overallDuty), orElse: () => parts.first);
+      // Round 70 (fire-convergence-22-peer-duplex-room-pump-wired-as-
+      // assumed-jockey) — a PEER pump room (every pump on a leg the sizer
+      // mirrors at the set flow) is classified on its OWN: its duty is a
+      // standby unit of the governing set (demand factor 0), its own jockey
+      // (a smaller leg) stays a jockey, and it is never merged into the
+      // governing set where the >= 3-pump assumed-jockey rule would make a
+      // full-size main pump of the peer room the 'jockey'.
+      final transfer = fireTransferDestinationTank(net, systems[i], elev) != null;
       for (final p in parts) {
-        if (!identical(p, dutySet) && p.every(onLeg)) {
-          dutySet.addAll(p);
-          p.clear();
+        if (identical(p, dutySet) || !p.every(onLeg)) continue;
+        final ranked = [...p]..sort(rank);
+        standby.add(ranked.first);
+        if (ranked.length >= 2) {
+          final peer = [...ranked];
+          sets.add(peer);
+          peerDutyAsStandby[peer] = ranked.first;
+          if (transfer) noJockey.add(peer);
         }
+        p.clear();
       }
       final kept = parts.where((p) => p.isNotEmpty).toList();
       sets.addAll(kept);
-      if (fireTransferDestinationTank(net, systems[i], elev) != null) {
+      if (transfer) {
         noJockey.addAll(kept);
       }
     }
@@ -627,7 +643,12 @@ Map<String, String> parallelStandbyPumps(
   for (final g in sets) {
     if (g.length < 2) continue;
     final ranked = [...g]..sort(rank);
-    final duty = ranked.first;
+    final duty = peerDutyAsStandby[g] ?? ranked.first;
+    if (peerDutyAsStandby.containsKey(g)) {
+      ranked
+        ..remove(duty)
+        ..insert(0, duty);
+    }
     final rest = ranked.skip(1).toList();
     final dutyBore = boreOf(duty);
     final jockeyAllowed = !noJockey.contains(g);
@@ -636,7 +657,12 @@ Map<String, String> parallelStandbyPumps(
         for (final id in rest)
           if (boreOf(id) < dutyBore - 1e-6) id,
     };
-    if (jockeyAllowed && small.isEmpty && g.length >= 3) {
+    // A peer room's pumps carried at the set flow are never an ASSUMED
+    // jockey (only a drawn smaller leg makes one).
+    if (jockeyAllowed &&
+        small.isEmpty &&
+        g.length >= 3 &&
+        !peerDutyAsStandby.containsKey(g)) {
       final byBore = [...rest]..sort((a, b) {
           final d = boreOf(a).compareTo(boreOf(b));
           if (d != 0) return d;
