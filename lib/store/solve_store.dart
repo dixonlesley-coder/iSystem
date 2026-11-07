@@ -82,14 +82,23 @@ HotWaterField _hotWaterField(Network net, Map<String, EdgeSizing> sizing,
       prvSetpoint: _prvSetpoint,
     );
 
+/// Round 67 r2 — one other supply component: its source + its nodes.
+typedef ExtraSupplyComponent = ({String source, Set<String> nodes});
+
 /// Round 67 (plumbing-hvac-convergence-17-second-supply-network-mover-
 /// unsized) — the SOURCE of every OTHER connected cold-water component (a
 /// podium's ground tank -> booster set beside a roof-tank tower): the
 /// component's own [_pickSource] (upfeed basis — the sizer root when it is a
 /// plant, else the best-ranked plant). [primary] is the source the main
-/// solve uses; its component is skipped. Sorted by id.
-List<String> _extraSupplySources(Network net, BuildingLevels building,
-    MountingHeights mounting, String? primary) {
+/// solve uses; its component is skipped. Sorted by source id.
+///
+/// Round 67 r2 — only a component with a REAL source is solved: its picked
+/// source is a plant, a water meter, or a bare degree-1 non-fixture leaf (a
+/// mains entry). A source-less fragment (fixtures on a stub, the sizer's
+/// bare junction root) is never given a fabricated zero-head field — the
+/// no-source connectivity warning covers it.
+List<ExtraSupplyComponent> _extraSupplySources(Network net,
+    BuildingLevels building, MountingHeights mounting, String? primary) {
   final edges = _supplyEdges(net);
   if (edges.isEmpty) return const [];
   final adj = <String, List<NetEdge>>{};
@@ -98,7 +107,7 @@ List<String> _extraSupplySources(Network net, BuildingLevels building,
     (adj[e.toId] ??= []).add(e);
   }
   final seen = <String>{};
-  final out = <String>[];
+  final out = <ExtraSupplyComponent>[];
   for (final start in (adj.keys.toList()..sort())) {
     if (!seen.add(start)) continue;
     final comp = <String>{start};
@@ -118,16 +127,28 @@ List<String> _extraSupplySources(Network net, BuildingLevels building,
     if (primary != null && comp.contains(primary)) continue;
     final src = _pickSource(net, compEdges.toList(), building,
         preferHighest: false, mounting: mounting);
-    if (src != null) out.add(src);
+    if (src == null) continue;
+    final node = net.nodeById(src);
+    if (node == null) continue;
+    final degree = compEdges
+        .where((e) => e.fromId == src || e.toId == src)
+        .length;
+    final isSource = node.role == NodeRole.plant ||
+        node.component == NodeComponent.waterMeter ||
+        (degree == 1 &&
+            node.role != NodeRole.fixture &&
+            node.component == null);
+    if (isSource) out.add((source: src, nodes: comp));
   }
-  out.sort();
+  out.sort((a, b) => a.source.compareTo(b.source));
   return out;
 }
 
 /// Round 67 — the other supply components' sources for the ACTIVE feed's
 /// main solve (the upfeed source, else the downfeed tank). Empty with one
 /// supply network.
-final extraSupplySourcesProvider = Provider<List<String>>((ref) {
+final extraSupplySourcesProvider =
+    Provider<List<ExtraSupplyComponent>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final project = ref.watch(projectControllerProvider);
   final edges = _supplyEdges(net);
@@ -149,8 +170,12 @@ typedef _ExtraField = ({
 /// into one field (their node keys are disjoint). [unboosted]: the
 /// ZERO-head field the movers are sized on (the solve's `requiredPumpHead`
 /// shifted out, as [supplyMoverDutiesProvider] does upfeed); else the
-/// DELIVERED field, each source developing only its own drawn mover's head
-/// ([moverHeads]; a tank or a meter develops none).
+/// DELIVERED field: a component with a drawn sized mover ([moverHeads]
+/// holds one of its nodes) develops only those heads; one with NONE keeps
+/// its own solve — the assumed pump at its source, the primary convention
+/// ([upfeedDeliveredProvider]: no heads ⇒ the base solve), never a
+/// zero-head field (Round 67 r2: a mains-fed podium read -81.6 kPa beside a
+/// tower and PASS alone).
 _ExtraField _extraSupplyField(Ref ref, Map<String, Head> moverHeads,
     {bool unboosted = false}) {
   final sources = ref.watch(extraSupplySourcesProvider);
@@ -164,15 +189,20 @@ _ExtraField _extraSupplyField(Ref ref, Map<String, Head> moverHeads,
   final sizing = ref.watch(sizingProvider);
   final project = ref.watch(projectControllerProvider);
   final edges = _supplyEdges(net);
-  for (final src in sources) {
-    final zeroHead = unboosted || moverHeads.isEmpty;
-    final sol = _coldUpfeed(net, sizing, project, src, edges,
-        moverHeads: zeroHead ? const {} : moverHeads);
-    // No mover head given: the solve develops `requiredPumpHead` at the
-    // source — shift it out (the zero-head field). With heads the source
-    // develops only its own drawn mover's head already.
+  for (final comp in sources) {
+    final ownHeads = unboosted
+        ? const <String, Head>{}
+        : <String, Head>{
+            for (final e in moverHeads.entries)
+              if (comp.nodes.contains(e.key)) e.key: e.value,
+          };
+    final sol = _coldUpfeed(net, sizing, project, comp.source, edges,
+        moverHeads: ownHeads);
+    // Unboosted: the solve develops `requiredPumpHead` at the source — shift
+    // it out (the zero-head field). Delivered: with own heads the source
+    // develops only them already; with none the assumed pump stays in.
     final shift =
-        zeroHead ? pressureFromHead(sol.requiredPumpHead).pascals : 0.0;
+        unboosted ? pressureFromHead(sol.requiredPumpHead).pascals : 0.0;
     for (final e in sol.residualPressure.entries) {
       residual[e.key] = Pressure(e.value.pascals - shift);
     }
@@ -2438,29 +2468,54 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
       (adj[e.fromId] ??= []).add(e.toId);
       (adj[e.toId] ??= []).add(e.fromId);
     }
+    // Round 67 r2 — a mover the tank's WHOLE delivery passes (a booster at
+    // the roof-tank outlet, RT -> BP -> riser: the Round-56 datum hangs off
+    // its head) is pipe to this walk; only a mover some delivery node
+    // bypasses (a booster zone, a separately pumped branch) is a wall.
+    final delivery = <String>{
+      for (final id in adj.keys)
+        if (net.nodeById(id) case final n?
+            when n.role == NodeRole.fixture &&
+                !isNonDemandTerminal(n.component))
+          id,
+    };
+    final passable = <String, bool>{};
+    bool wall(String id) {
+      final n = net.nodeById(id);
+      if (id == tankId ||
+          n == null ||
+          n.role != NodeRole.plant ||
+          (n.component != NodeComponent.pump &&
+              n.component != NodeComponent.boosterSet)) {
+        return false;
+      }
+      return !(passable[id] ??=
+          !_tankBypassesMover(adj, delivery, tankId, id));
+    }
+
     fedByTank = {tankId};
     final stack = [tankId];
     while (stack.isNotEmpty) {
       final id = stack.removeLast();
-      final n = net.nodeById(id);
-      if (id != tankId &&
-          n != null &&
-          n.role == NodeRole.plant &&
-          (n.component == NodeComponent.pump ||
-              n.component == NodeComponent.boosterSet)) {
-        continue;
-      }
+      if (wall(id)) continue;
       for (final o in adj[id] ?? const <String>[]) {
         if (fedByTank.add(o)) stack.add(o);
       }
     }
   }
   int? lowest;
+  int? lowestAny;
   for (final n in net.nodes) {
     if (n.role != NodeRole.fixture || !waterIds.contains(n.id)) continue;
+    if (lowestAny == null || n.floorIndex < lowestAny) {
+      lowestAny = n.floorIndex;
+    }
     if (fedByTank != null && !fedByTank.contains(n.id)) continue;
     if (lowest == null || n.floorIndex < lowest) lowest = n.floorIndex;
   }
+  // Round 67 r2 — a tank walk that finds no fixture never falls to floor 0:
+  // it keeps the pre-Round-67 lowest drawn water fixture.
+  lowest ??= lowestAny;
   return computeDownfeedZones(
     building: project.building,
     mounting: project.mounting,
@@ -2512,6 +2567,25 @@ final downfeedTankElevationProvider = Provider<Length?>((ref) {
   return isGravityTank ? elev : null;
 });
 
+/// Round 56 / Round 67 r2 — does the downfeed [tank] reach any [delivery]
+/// node over [adj] without passing [moverId]? False => the tank's WHOLE
+/// delivery passes the mover (a booster at the tank outlet, RT -> BP ->
+/// riser): the ONE predicate the zone datum ([effectiveDownfeedDatumProvider])
+/// and the zone table's served-floor walk ([zonesProvider]) share.
+bool _tankBypassesMover(Map<String, List<String>> adj, Set<String> delivery,
+    String tank, String moverId) {
+  final seen = <String>{tank, moverId};
+  final queue = [tank];
+  for (var i = 0; i < queue.length; i++) {
+    for (final o in adj[queue[i]] ?? const <String>[]) {
+      if (!seen.add(o)) continue;
+      if (delivery.contains(o)) return true;
+      queue.add(o);
+    }
+  }
+  return false;
+}
+
 /// Round 56 (plumbing-hvac-convergence-6-zone-table-ignores-drawn-downfeed-
 /// booster) — the gravity DATUM the downfeed zone table hangs from: the tank
 /// elevation ([downfeedTankElevationProvider]) PLUS the head of every sized
@@ -2548,24 +2622,12 @@ final effectiveDownfeedDatumProvider = Provider<Length?>((ref) {
         id,
   };
   if (delivery.isEmpty) return tankElevation;
-  // Does the tank reach any delivery node without passing [moverId]?
-  bool bypassed(String moverId) {
-    final seen = <String>{tank, moverId};
-    final queue = [tank];
-    for (var i = 0; i < queue.length; i++) {
-      for (final o in adj[queue[i]] ?? const <String>[]) {
-        if (!seen.add(o)) continue;
-        if (delivery.contains(o)) return true;
-        queue.add(o);
-      }
-    }
-    return false;
-  }
-
   var lift = 0.0;
   for (final e in heads.entries) {
     if (e.key == tank || !adj.containsKey(e.key)) continue;
-    if (!bypassed(e.key)) lift += e.value.meters;
+    if (!_tankBypassesMover(adj, delivery, tank, e.key)) {
+      lift += e.value.meters;
+    }
   }
   return lift > 0 ? Length(tankElevation.meters + lift) : tankElevation;
 });
