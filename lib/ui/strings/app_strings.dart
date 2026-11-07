@@ -748,6 +748,9 @@ enum StringKey {
   // the title-block Revision left blank).
   issueMainsFedTitle,
   issueMainsFedMessage,
+  // Round 71 r2 — a roof tank drawn below the top storey reads its floor.
+  issueRoofTankBelowTopTitle,
+  issueRoofTankBelowTopMessage, // {floor} {floors} {elevation}
   issueUpfeedAssumedTitle,
   issueUpfeedAssumedMessage,
   issueDownfeedBelowTargetTitle,
@@ -2282,6 +2285,13 @@ const Map<StringKey, String> _en = {
       'no flow from the roof tank, above the SNI max fixture pressure of '
       '{limit} kPa (pressure relief is mandatory from {relief} kPa). Draw a '
       'PRV on the riser above this zone.',
+  StringKey.issueRoofTankBelowTopTitle:
+      'Roof tank drawn below the top floor',
+  StringKey.issueRoofTankBelowTopMessage:
+      'This roof tank is drawn on "{floor}" ({floors}), so it is read at '
+      "that floor's surface ({elevation} m) as a break / transfer tank, not "
+      "at the roof. If it sits on the roof, move it to the top floor's "
+      'sheet or set its elevation.',
   StringKey.issueMainsFedTitle:
       'Fed from the mains (pressure not modelled)',
   StringKey.issueMainsFedMessage:
@@ -3938,6 +3948,13 @@ const Map<StringKey, String> _id = {
       '{static} kPa saat tanpa aliran dari tangki atap, di atas tekanan '
       'fikstur maksimum SNI {limit} kPa (pelepas tekanan wajib mulai {relief} '
       'kPa). Pasang PRV pada riser di atas zona ini.',
+  StringKey.issueRoofTankBelowTopTitle:
+      'Tangki atap digambar di bawah lantai teratas',
+  StringKey.issueRoofTankBelowTopMessage:
+      'Tangki atap ini digambar di "{floor}" ({floors}), sehingga dibaca '
+      'pada permukaan lantai tersebut ({elevation} m) sebagai tangki '
+      'transfer / break, bukan di atap. Jika tangki berada di atap, '
+      'pindahkan ke lembar lantai teratas atau isi elevasinya.',
   StringKey.issueMainsFedTitle:
       'Disuplai dari PDAM (tekanan tidak dimodelkan)',
   StringKey.issueMainsFedMessage:

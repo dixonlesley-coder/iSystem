@@ -21,7 +21,8 @@ import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
-import 'package:mechx_engine/electrical/panel_results.dart' show WarningSeverity;
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalWarning, WarningSeverity;
 import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -30,7 +31,11 @@ import 'package:test/test.dart';
 
 const _profile = PuilProfile();
 
-ElectricalProject _icu({ApparentPower? forced, double pumpKw = 75}) =>
+ElectricalProject _icu(
+        {ApparentPower? forced,
+        double pumpKw = 75,
+        String pumpName = 'Fire pump',
+        List<ElectricalCircuit> extraIcu = const []}) =>
     ElectricalProject(
       id: 'icu',
       name: 'ICU wing',
@@ -67,7 +72,7 @@ ElectricalProject _icu({ApparentPower? forced, double pumpKw = 75}) =>
             circuits: [
               ElectricalCircuit(
                   id: 'fp',
-                  name: 'Fire pump',
+                  name: pumpName,
                   loadKind: LoadKind.pump,
                   motorKw: pumpKw,
                   phases: 3,
@@ -110,6 +115,7 @@ ElectricalProject _icu({ApparentPower? forced, double pumpKw = 75}) =>
                   loadKind: LoadKind.lighting,
                   loadW: 1500,
                   length: Length(20)),
+              ...extraIcu,
             ]),
       ],
     );
@@ -175,8 +181,7 @@ void main() {
     for (var t = 0; t < 60; t++) {
       final kw = [5.5, 11.0, 22.0, 37.0, 55.0, 75.0, 110.0][rnd.nextInt(7)];
       final forced = rnd.nextBool()
-          ? ApparentPower(
-              1000.0 * [20, 50, 100, 150, 250, 400][rnd.nextInt(6)])
+          ? ApparentPower(1000.0 * [20, 50, 100, 150, 250, 400][rnd.nextInt(6)])
           : null;
       final st = _study(_icu(forced: forced, pumpKw: kw));
       final labelled = _genNode(st).sub?.contains('start dip') ?? false;
@@ -186,5 +191,95 @@ void main() {
       if (labelled) flagged++;
     }
     expect(flagged, greaterThan(0)); // non-vacuous
+  });
+
+  // Round 71 (regression-1) — the severity is graded on EACH motor's own
+  // life-safety flag and own dip, never by matching the limiting motor's
+  // NAME. A 90 kW DOL non-life-safety pump on the ICU board starts at
+  // ~755 kVA (z = 113.3, dip 113.3 / 263.3 = 43.0 % on 150 kVA) and is the
+  // limiting motor.
+  ElectricalCircuit chiller(String name) => ElectricalCircuit(
+      id: 'cp',
+      name: name,
+      loadKind: LoadKind.pump,
+      motorKw: 90,
+      phases: 3,
+      cosPhi: 0.88,
+      starterType: StarterType.dol,
+      length: const Length(20));
+  ElectricalWarning dipOf(AdvancedStudy st) =>
+      st.warnings.singleWhere((w) => w.code == 'genset-start-dip-exceeded');
+
+  test('(B) a failing life-safety motor that is NOT limiting is an ERROR', () {
+    final st = _study(_icu(
+        forced: const ApparentPower(150e3),
+        extraIcu: [chiller('Chiller pump')]));
+    final start = st.powerOneLine!.gensetStart!;
+    expect(start.limitingMotorName, 'Chiller pump');
+    expect(start.estimatedDipPct, closeTo(43.0, 0.3));
+    // The 75 kW fire pump's own dip ~38.6 % > 25 %: it must start on mains
+    // failure, so the screen blocks sign-off.
+    expect(start.failingLifeSafetyMotors.map((m) => m.circuitId), ['fp']);
+    final w = dipOf(st);
+    expect(w.severity, WarningSeverity.error);
+    expect(w.message, contains('Chiller pump'));
+    expect(w.message, contains('Fire pump'));
+  });
+
+  test('(A) a name shared with a passing life-safety motor is a WARNING', () {
+    // The 5.5 kW life-safety pump dips ~5 % (passes); the limiting 90 kW
+    // non-life-safety pump carries the SAME name.
+    final st = _study(_icu(
+        forced: const ApparentPower(150e3),
+        pumpKw: 5.5,
+        pumpName: 'Pump A',
+        extraIcu: [chiller('Pump A')]));
+    final start = st.powerOneLine!.gensetStart!;
+    expect(start.limitingMotorName, 'Pump A');
+    expect(start.acceptable, isFalse);
+    expect(start.failingLifeSafetyMotors, isEmpty);
+    expect(dipOf(st).severity, WarningSeverity.warning);
+  });
+
+  test('seeded: ERROR iff some life-safety motor fails on its own dip', () {
+    final rnd = math.Random(7171);
+    var errors = 0, warnings = 0;
+    for (var t = 0; t < 60; t++) {
+      final kw = [5.5, 11.0, 22.0, 37.0, 55.0, 75.0][rnd.nextInt(6)];
+      final other = [0.0, 22.0, 55.0, 90.0, 110.0][rnd.nextInt(5)];
+      final forced =
+          ApparentPower(1000.0 * [50, 100, 150, 250][rnd.nextInt(4)]);
+      final name = rnd.nextBool() ? 'Pump A' : 'Fire pump';
+      final st =
+          _study(_icu(forced: forced, pumpKw: kw, pumpName: name, extraIcu: [
+        if (other > 0)
+          ElectricalCircuit(
+              id: 'cp',
+              name: rnd.nextBool() ? name : 'Chiller pump',
+              loadKind: LoadKind.pump,
+              motorKw: other,
+              phases: 3,
+              cosPhi: 0.88,
+              starterType: StarterType.dol,
+              length: const Length(20)),
+      ]));
+      final start = st.powerOneLine!.gensetStart!;
+      if (start.acceptable) continue;
+      // Each motor's own dip, from the screen's own model:
+      // dip = 100 z / (S_gen + z), z = 0.15 S_start.
+      final lsFail = start.failingLifeSafetyMotors.isNotEmpty;
+      for (final m in start.failingLifeSafetyMotors) {
+        expect(m.lifeSafety, isTrue);
+        final z = m.startKva!.inKilovoltAmperes * 0.15;
+        expect(100 * z / (forced.inKilovoltAmperes + z), greaterThan(25));
+      }
+      final w = dipOf(st);
+      expect(
+          w.severity, lsFail ? WarningSeverity.error : WarningSeverity.warning,
+          reason: 'trial $t kw $kw other $other $forced');
+      lsFail ? errors++ : warnings++;
+    }
+    expect(errors, greaterThan(0));
+    expect(warnings, greaterThan(0));
   });
 }

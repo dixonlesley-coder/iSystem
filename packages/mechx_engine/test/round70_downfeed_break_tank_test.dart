@@ -43,12 +43,15 @@ NetEdge _e(String id, String a, String b, {EdgeKind k = EdgeKind.run}) =>
 final _b = BuildingLevels(
     [for (var i = 0; i < 40; i++) Floor('L$i', const Length(3.5))]);
 
-Network _tower({bool breakTank = true}) => Network(nodes: [
+Network _tower(
+        {bool breakTank = true,
+        NodeComponent btType = NodeComponent.groundTank}) =>
+    Network(nodes: [
       if (breakTank) ...[
         _n('GT', 0, 0, role: NodeRole.plant, c: NodeComponent.groundTank),
         _n('TP1', 20, 0, role: NodeRole.plant, c: NodeComponent.pump),
         for (var f = 0; f <= 20; f++) _n('U$f', 40, f),
-        _n('BT', 60, 20, role: NodeRole.plant, c: NodeComponent.groundTank),
+        _n('BT', 60, 20, role: NodeRole.plant, c: btType),
         _n('TP2', 80, 20, role: NodeRole.plant, c: NodeComponent.pump),
         for (var f = 20; f <= 39; f++) _n('V$f', 100, f),
         for (var f = 1; f <= 20; f++) ...[
@@ -90,7 +93,8 @@ Network _tower({bool breakTank = true}) => Network(nodes: [
 DownfeedSolution _solve(Network net, {bool friction = true}) {
   final sizing = autoSizeNetwork(net, const SizingContext(),
       leafDemand: const {ServiceType.coldWater: FlowRate(0.0002)},
-      building: _b, calibrationBySheet: const {'s1': ScaleCalibration(0.01)});
+      building: _b,
+      calibrationBySheet: const {'s1': ScaleCalibration(0.01)});
   return solveDownfeed(
     net: net,
     service: ServiceType.coldWater,
@@ -108,6 +112,26 @@ DownfeedSolution _solve(Network net, {bool friction = true}) {
 double _kpa(double head) => pressureFromHead(Head(head)).inKiloPascals;
 
 void main() {
+  group('Round 71: a roof-typed break tank reads its drawn floor', () {
+    for (final t in [NodeComponent.groundTank, NodeComponent.roofTank]) {
+      test('$t: WB10 332.6 / WB1 641.6 / WB19 23.5 kPa', () {
+        final net = _tower(btType: t);
+        expect(nodeElevation(net.nodeById('BT')!, _b).meters, 70.0);
+        final sol = _solve(net, friction: false);
+        // Static head from BT at 70 m: (70 - 36.1) = 33.9 m ~ 332.6 kPa;
+        // (70 - 4.6) = 65.4 m ~ 641.6 kPa; (70 - 67.6) = 2.4 m ~ 23.5 kPa
+        // (the engine's own head -> pressure conversion, `_kpa`).
+        expect(sol.noFlowStaticPressure['WB10']!.inKiloPascals,
+            closeTo(_kpa(70 - 36.1), 0.05));
+        expect(sol.noFlowStaticPressure['WB1']!.inKiloPascals,
+            closeTo(_kpa(70 - 4.6), 0.05));
+        expect(sol.noFlowStaticPressure['WB19']!.inKiloPascals,
+            closeTo(_kpa(70 - 67.6), 0.05));
+        expect(sol.noFlowStaticPressure['WB19']!.inKiloPascals, lessThan(49));
+      });
+    }
+  });
+
   test('the BT-fed floors are judged from the break tank (no friction)', () {
     final sol = _solve(_tower(), friction: false);
     // WB10: fixture at 10 x 3.5 + 1.1 = 36.1 m, BT at 70 m.
@@ -119,9 +143,9 @@ void main() {
     expect(sol.noFlowStaticPressure['WB19']!.inKiloPascals,
         closeTo(_kpa(70 - (19 * 3.5 + 1.1)), 0.05));
     // The RT-fed floors keep the roof datum (RT on L39 at 140 m).
-    final rt = nodeElevation(
-            _tower().nodeById('RT')!, _b, const MountingHeights())
-        .meters;
+    final rt =
+        nodeElevation(_tower().nodeById('RT')!, _b, const MountingHeights())
+            .meters;
     expect(sol.noFlowStaticPressure['WR25']!.inKiloPascals,
         closeTo(_kpa(rt - (25 * 3.5 + 1.1)), 0.05));
   });
@@ -152,3 +176,12 @@ void main() {
     }
   });
 }
+
+// Round 71 (regression-4 / plumbing-hvac-convergence-21) — the SAME tower
+// with the break tank typed 'Roof tank' (a natural name for an elevated
+// transfer-floor tank). `nodeElevation` read every roof-typed tank at the
+// roof (140 m), so the BT-fed floors were judged from 140 m: WB10 1019.3 kPa,
+// WB1 1328.3 kPa (+686.7 kPa = 70 m x rho g), and WB19 710.2 kPa read PASS
+// where (70 - 67.6) x 9.80665 = 23.5 kPa is below the 49 kPa SNI 8153
+// floor. A roof-typed tank below the top storey now sits on its own floor
+// surface, so both tank types give the same datum.

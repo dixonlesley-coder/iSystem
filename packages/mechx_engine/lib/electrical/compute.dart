@@ -27,7 +27,7 @@ import '../units.dart';
 // fault estimate here too, so the ADS / selectivity fault origin is the
 // transformer the advanced study prints (a library cycle, legal in Dart: the
 // helper is a pure function of the solved result).
-import 'advanced_study.dart' show studySupplyDesign;
+import 'advanced_study.dart' show serviceFaultEstimateFor;
 import 'busbar.dart';
 import 'cable_family.dart';
 import 'containment.dart' show effectiveInstallMethod;
@@ -44,7 +44,6 @@ import 'fault.dart'
         breakingCapacityKa,
         coldMaxFaultImpedance,
         defaultLvUtilityFaultKa,
-        estimatedServiceFaultLevelA,
         faultBasisLineVoltageV,
         kMccbMagneticTripMultiple,
         faultStudy,
@@ -4855,9 +4854,7 @@ ElectricalSystemResult computeSystem(
       if (candidates.isEmpty) return r;
       final origin = originFaultLevel ??
           project.originFaultLevelA ??
-          estimatedServiceFaultLevelA(project,
-              demand: r.supply.demandVa,
-              supply: studySupplyDesign(project, r)) ??
+          serviceFaultEstimateFor(project, r) ??
           const Current(defaultLvUtilityFaultKa * 1000);
       final f = faultStudy(r, project, profile, originFaultLevel: origin);
       final refused = <String>{
@@ -4919,9 +4916,7 @@ ElectricalSystemResult computeSystem(
     if (!isTn) return pass2;
     final faultOrigin = originFaultLevel ??
         project.originFaultLevelA ??
-        estimatedServiceFaultLevelA(project,
-            demand: pass2.supply.demandVa,
-            supply: studySupplyDesign(project, pass2)) ??
+        serviceFaultEstimateFor(project, pass2) ??
         const Current(defaultLvUtilityFaultKa * 1000);
     final ladder = profile.standardBreakerRatingsA;
     final caps = <String, double>{};
@@ -4969,8 +4964,7 @@ ElectricalSystemResult computeSystem(
   Current growOriginFor(ElectricalSystemResult r) =>
       originFaultLevel ??
       project.originFaultLevelA ??
-      estimatedServiceFaultLevelA(project,
-          demand: r.supply.demandVa, supply: studySupplyDesign(project, r)) ??
+      serviceFaultEstimateFor(project, r) ??
       const Current(defaultLvUtilityFaultKa * 1000);
   var result = solveAll();
   final tnGrow = result.earthing.system == EarthingSystem.tnS ||

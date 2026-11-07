@@ -1913,10 +1913,12 @@ Map<String, Set<String>> _moverSides(
 }) {
   if (sides.length < 2) return (null, false);
   // Round 67 — a roof-TYPED tank drawn on the mover's own floor (or below)
-  // is that room's break / suction tank, ranked like a ground tank: its
-  // `nodeElevation` is always the roof whatever floor it is drawn on, so the
-  // DRAWN floor decides. Only a roof tank on a higher floor is a gravity
-  // standby (rank 2).
+  // is that room's break / suction tank, ranked like a ground tank: the
+  // DRAWN floor decides (until Round 71 its `nodeElevation` read the roof
+  // whatever floor it was drawn on; since Round 71 it reads the drawn
+  // floor's surface on a non-top storey, but the rank still keys on the
+  // floor index, never the elevation). Only a roof tank on a higher floor is
+  // a gravity standby (rank 2).
   //
   // Round 68 (regression-4) — the TOPOLOGY decides first: a roof-typed tank
   // reached through the mover's own LEG ([legSides]: a side whose walk
@@ -1932,10 +1934,21 @@ Map<String, Set<String>> _moverSides(
             : 2,
         _ => 1,
       };
-  int cmp((int, double) a, (int, double) b) {
+  // Round 71 — a roof-typed tank ranked 0 ONLY by its drawn floor (reached
+  // past a junction, not on the mover's own leg) yields to a ground tank /
+  // a leg tank of the same rank BEFORE elevations are compared. Until Round
+  // 71 such a tank read the roof in `nodeElevation`, so the ground tank won
+  // the elevation tie by construction; now that a roof-typed tank reads its
+  // drawn floor, the same precedence is stated explicitly.
+  int subRank(NetNode n, String sideId) =>
+      n.component == NodeComponent.roofTank && !legSides.contains(sideId)
+          ? 1
+          : 0;
+  int cmp((int, int, double) a, (int, int, double) b) {
     if (a.$1 != b.$1) return a.$1.compareTo(b.$1);
-    if ((a.$2 - b.$2).abs() <= 1e-9) return 0;
-    return a.$2.compareTo(b.$2);
+    if (a.$2 != b.$2) return a.$2.compareTo(b.$2);
+    if ((a.$3 - b.$3).abs() <= 1e-9) return 0;
+    return a.$3.compareTo(b.$3);
   }
 
   final ids = sides.keys.toList()..sort();
@@ -1943,8 +1956,8 @@ Map<String, Set<String>> _moverSides(
     for (final id in ids)
       if (sides[id]!.any(pumpedInto.contains)) id,
   };
-  final best = <String, (int, double)>{};
-  void offer(String id, (int, double) r) {
+  final best = <String, (int, int, double)>{};
+  void offer(String id, (int, int, double) r) {
     final cur = best[id];
     if (cur == null || cmp(r, cur) < 0) best[id] = r;
   }
@@ -1954,10 +1967,10 @@ Map<String, Set<String>> _moverSides(
     for (final p in sides[id]!) {
       if (!sources.contains(p)) continue;
       final n = net.nodeById(p)!;
-      offer(id, (kindRank(n, id), elevationOf(n)));
+      offer(id, (kindRank(n, id), subRank(n, id), elevationOf(n)));
     }
     if (pumpedSides.contains(id) || entrySides.contains(id)) {
-      offer(id, (1, double.negativeInfinity));
+      offer(id, (1, 0, double.negativeInfinity));
     }
   }
   String? at;
@@ -5862,16 +5875,28 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
       (result[id]?.flow.cubicMetersPerSecond ?? 0.0) > 1e-12;
   for (final tank in net.nodes) {
     if (tank.component != NodeComponent.roofTank) continue;
+    // Round 71 (fire-convergence-23-roof-standby-riser-arrow-into-tank) — a
+    // GRAVITY STANDBY roof tank (reached only through a mover's discharge,
+    // [fireHopSources] `dischargeOnly`; never a suction / break /
+    // destination tank) only ever DELIVERS: drawn as a riser on the hydrant
+    // service its chain joins the standpipe riser component and the trunk
+    // pass already carried it, oriented riser-top -> tank (31.5 L/s pumped
+    // INTO the tank on the issued arrow). Such a chain is re-oriented from
+    // the tank whatever already carries it, at max(its flow, the join flow).
+    final standby = fireHopSeeds.dischargeOnly.containsKey(tank.id) &&
+        !fireHopSeeds.suctionTanks.contains(tank.id) &&
+        !fireHopSeeds.breakTanks.containsKey(tank.id) &&
+        !fireHopSeeds.destinations.contains(tank.id);
     for (final first in net.edgesAt(tank.id)) {
       if (!isFireService(first.service)) continue;
-      if (carries(first.id)) continue;
+      if (carries(first.id) && !standby) continue;
       var cur = tank.id;
       var edge = first;
       final seen = <String>{tank.id};
       final chain = <(NetEdge, String)>[];
       String? joinNode;
       while (true) {
-        if (carries(edge.id)) break;
+        if (carries(edge.id) && !standby) break;
         chain.add((edge, cur));
         final next = edge.fromId == cur ? edge.toId : edge.fromId;
         if (!seen.add(next)) break;
@@ -5879,11 +5904,23 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           for (final e in net.edgesAt(next))
             if (e.id != edge.id && isFireService(e.service)) e,
         ];
-        if (onward.any((e) => carries(e.id))) {
+        final nn = net.nodeById(next);
+        // Round 71 r2 — a STANDBY chain the trunk pass carried end to end
+        // (RT -o1 riser- M -o2 riser- X4 through a bare per-floor node, or a
+        // riser + run through a bend) runs on through every carrying
+        // degree-2 bare / inline node: it stops only at a real junction
+        // (two or more onward fire pipes) or a plant / fixture, so every
+        // chain pipe flows from the tank — never half the chain re-oriented
+        // and the other half still pointing back into the bare node.
+        final passThrough = standby &&
+            onward.length == 1 &&
+            nn != null &&
+            nn.role != NodeRole.plant &&
+            nn.role != NodeRole.fixture;
+        if (!passThrough && onward.any((e) => carries(e.id))) {
           joinNode = next;
           break;
         }
-        final nn = net.nodeById(next);
         if (onward.length != 1 ||
             nn == null ||
             nn.role == NodeRole.plant ||
@@ -5918,10 +5955,16 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             toId: e.toId,
             service: e.service,
             kind: EdgeKind.riser);
-        final floorMm =
-            math.max(joinMm, ctx.fireMinimumFor(asRiser)?.inMillimeters ?? 0);
+        // A standby chain an earlier pass already carried keeps at least
+        // that flow and bore (only its direction was wrong).
+        final prior = standby ? result[e.id] : null;
+        final chainLps = math.max(
+            designLps, prior?.flow.inLitersPerSecond ?? 0.0);
+        final floorMm = math.max(
+            math.max(joinMm, prior?.diameter.inMillimeters ?? 0.0),
+            ctx.fireMinimumFor(asRiser)?.inMillimeters ?? 0);
         final r = water.sizeForFlow(
-          flow: FlowRate.litersPerSecond(designLps),
+          flow: FlowRate.litersPerSecond(chainLps),
           maxVelocity: ctx.maxFireVelocity,
           material: ctx.pipeMaterial,
           minDiameter: Diameter.mm(floorMm),
@@ -5929,7 +5972,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         final sized = EdgeSizing(
           edgeId: e.id,
           service: e.service,
-          flow: FlowRate.litersPerSecond(designLps),
+          flow: FlowRate.litersPerSecond(chainLps),
           diameter: r.diameter,
           velocity: r.velocity,
           overCapacity: r.overVelocity,
@@ -5950,6 +5993,32 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
   // the tank, never below the largest bore it leaves at the lower riser. It
   // is sized here on EVERY service assignment: drawn on the other fire
   // service the fill was its own fragment, sized at a leaf demand or at zero.
+  // Round 71 (fire-convergence-23) — true when the fire pipe [via] leaving
+  // [node] runs through degree-2 bare / inline nodes to a fire mover (one
+  // pump leg of a suction header).
+  bool legReachesMover(String node, NetEdge via) {
+    var cur = node;
+    var edge = via;
+    final seen = <String>{node};
+    while (true) {
+      final next = edge.fromId == cur ? edge.toId : edge.fromId;
+      if (!seen.add(next)) return false;
+      final nn = net.nodeById(next);
+      if (nn == null) return false;
+      if (_isFireMover(nn)) return true;
+      if (nn.role == NodeRole.plant || nn.role == NodeRole.fixture) {
+        return false;
+      }
+      final onward = [
+        for (final x in net.edgesAt(next))
+          if (x.id != edge.id && isFireService(x.service)) x,
+      ];
+      if (onward.length != 1) return false;
+      cur = next;
+      edge = onward.single;
+    }
+  }
+
   for (final MapEntry(key: tankId, value: fedFrom)
       in fireHopSeeds.breakTanks.entries) {
     final suctionLegs = <NetEdge>[];
@@ -5978,6 +6047,16 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         ];
         if (nn.role == NodeRole.plant || nn.role == NodeRole.fixture) break;
         if (onward.length != 1) {
+          // Round 71 (fire-convergence-23) — a SUCTION HEADER (a duplex
+          // upper room: BT -u- US -> UP1 / UP2): every onward branch is a
+          // pump leg, so the chain into it is the tank's suction leg. It
+          // used to stop here as a non-leg, leaving `q` 0 and a fill drawn
+          // on the other fire service at DN25 / 0 L/s.
+          if (onward.length >= 2 &&
+              onward.every((x) => legReachesMover(next, x))) {
+            toMover = true;
+            break;
+          }
           end = next;
           break;
         }
