@@ -735,8 +735,9 @@ double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
 /// — JUDGE-ONLY: IEC 60364-4-41 411.3.2 requires automatic disconnection
 /// under EVERY supply condition, and a life-safety board runs exactly when
 /// the standby genset carries it. On TN, every way of a genset-backed board
-/// ([gensetBackedPanelIds]; the whole installation for a full-backup set
-/// with nothing marked essential) is re-judged with the genset as the origin
+/// ([gensetBackedPanelIds]; the whole installation for a full-backup set —
+/// a typed fraction of 1, or nothing marked essential, Round 67) is
+/// re-judged with the genset as the origin
 /// — the alternator sub-transient fault S/(√3·400·Xd'') of the installed set
 /// ([gensetPlantVa], [onSiteSourceFaultA], Xd'' `// VERIFY`). A way that
 /// passes on the utility but fails there raises the ERROR
@@ -764,9 +765,19 @@ double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
   // board is judged whatever backup fraction was typed (the Round-26 safe
   // direction [gensetStartMotors] already follows). A typed fraction < 1
   // with nothing designated judged nothing and the ERROR silently vanished.
+  //
+  // Round 67 (elec-convergence-19-genset-ads-skips-full-backup-boards) — a
+  // set TYPED to back 100 % of demand carries the whole installation
+  // whatever is marked essential (its sizing, the motor-start dip screen
+  // [gensetStartMotors], the power one-line and the 'backs 100 % of load'
+  // spine all read it so): every board is judged on its fault. Only a
+  // typed fraction < 1 with an essential sub-tree narrows the judge.
   var backed = gensetBackedPanelIds(project);
   final undesignated = backed.isEmpty;
-  if (undesignated) backed = {for (final p in project.panels) p.id};
+  final fullBackup = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
+  if (undesignated || fullBackup) {
+    backed = {for (final p in project.panels) p.id};
+  }
   if (backed.isEmpty) return none;
   final va = gensetPlantVa(project, sys);
   if (va == null) return none;
