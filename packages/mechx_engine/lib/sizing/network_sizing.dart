@@ -1913,10 +1913,12 @@ Map<String, Set<String>> _moverSides(
 }) {
   if (sides.length < 2) return (null, false);
   // Round 67 — a roof-TYPED tank drawn on the mover's own floor (or below)
-  // is that room's break / suction tank, ranked like a ground tank: its
-  // `nodeElevation` is always the roof whatever floor it is drawn on, so the
-  // DRAWN floor decides. Only a roof tank on a higher floor is a gravity
-  // standby (rank 2).
+  // is that room's break / suction tank, ranked like a ground tank: the
+  // DRAWN floor decides (until Round 71 its `nodeElevation` read the roof
+  // whatever floor it was drawn on; since Round 71 it reads the drawn
+  // floor's surface on a non-top storey, but the rank still keys on the
+  // floor index, never the elevation). Only a roof tank on a higher floor is
+  // a gravity standby (rank 2).
   //
   // Round 68 (regression-4) — the TOPOLOGY decides first: a roof-typed tank
   // reached through the mover's own LEG ([legSides]: a side whose walk
@@ -5902,11 +5904,23 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           for (final e in net.edgesAt(next))
             if (e.id != edge.id && isFireService(e.service)) e,
         ];
-        if (onward.any((e) => carries(e.id))) {
+        final nn = net.nodeById(next);
+        // Round 71 r2 — a STANDBY chain the trunk pass carried end to end
+        // (RT -o1 riser- M -o2 riser- X4 through a bare per-floor node, or a
+        // riser + run through a bend) runs on through every carrying
+        // degree-2 bare / inline node: it stops only at a real junction
+        // (two or more onward fire pipes) or a plant / fixture, so every
+        // chain pipe flows from the tank — never half the chain re-oriented
+        // and the other half still pointing back into the bare node.
+        final passThrough = standby &&
+            onward.length == 1 &&
+            nn != null &&
+            nn.role != NodeRole.plant &&
+            nn.role != NodeRole.fixture;
+        if (!passThrough && onward.any((e) => carries(e.id))) {
           joinNode = next;
           break;
         }
-        final nn = net.nodeById(next);
         if (onward.length != 1 ||
             nn == null ||
             nn.role == NodeRole.plant ||

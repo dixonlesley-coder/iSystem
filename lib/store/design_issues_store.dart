@@ -289,6 +289,36 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
+  // ── 0b. A roof tank drawn below the top storey (info, locatable) ──────────
+  // Round 71 r2 — `nodeElevation` reads a roof-typed tank drawn on a NON-top
+  // storey at that floor's surface (a break / transfer-floor tank). In a
+  // one-sheet project (the plan mapped to the ground floor, N floors
+  // declared) a tank dropped on the only sheet therefore sits at its floor,
+  // not the roof: every fixture can then read LOW against the target with
+  // nothing saying why. Say so where it sits (acknowledgeable; an explicit
+  // elevation / mount height is the engineer's datum and is not flagged).
+  if (levelCount > 1) {
+    final top = levelCount - 1;
+    for (final n in net.nodes) {
+      if (n.component != NodeComponent.roofTank) continue;
+      if (n.elevation != null || n.mountHeight != null) continue;
+      if (n.floorIndex < 0 || n.floorIndex >= top) continue;
+      final elev = nodeElevation(n, project.building).meters;
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'roof-tank-below-top:${n.id}',
+        title: str(StringKey.issueRoofTankBelowTopTitle),
+        message: str.format(StringKey.issueRoofTankBelowTopMessage, {
+          'floor': project.building.floors[n.floorIndex].name,
+          'floors': pluralCount(levelCount, str(StringKey.issueNounFloorOne),
+              str(StringKey.issueNounFloorMany)),
+          'elevation': elev.toStringAsFixed(2),
+        }),
+        locate: IssueLocation(n.sheetId, nodeId: n.id),
+      ));
+    }
+  }
+
   // ── 1. Out-of-band air velocities (warning, locatable) ──────────────────────
   final edgeById = <String, NetEdge>{for (final e in net.edges) e.id: e};
   for (final entry in velocity.entries) {

@@ -378,6 +378,11 @@ class GensetStartResult {
   /// Name of the worst (limiting) motor, if any.
   final String? limitingMotorName;
 
+  /// Round 71 r2 — the limiting motor itself (null with no motors). Callers
+  /// tell it apart from another motor by IDENTITY, never by [limitingMotorName]
+  /// (two ways can carry the same name).
+  final GensetMotor? limitingMotor;
+
   /// Starting apparent power of the limiting motor.
   final ApparentPower startingKva;
 
@@ -400,6 +405,7 @@ class GensetStartResult {
   const GensetStartResult({
     required this.gensetKva,
     this.limitingMotorName,
+    this.limitingMotor,
     required this.startingKva,
     required this.estimatedDipPct,
     required this.acceptable,
@@ -652,6 +658,7 @@ GensetStartResult assessGensetStart(
   return GensetStartResult(
     gensetKva: ApparentPower.kilovoltAmperes(genKva),
     limitingMotorName: limiting.name,
+    limitingMotor: limiting,
     startingKva: ApparentPower.kilovoltAmperes(_round(limitingStartKva)),
     estimatedDipPct: estimatedDipPct,
     acceptable: acceptable,

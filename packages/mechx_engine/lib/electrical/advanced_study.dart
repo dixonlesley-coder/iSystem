@@ -828,12 +828,16 @@ List<ElectricalWarning> gensetStartDipWarnings(
   final st = oneLine?.gensetStart;
   if (st == null || st.acceptable) return const [];
   final ls = st.failingLifeSafetyMotors;
-  final lsNames = [
+  // Round 71 r2 — the limiting motor is excluded by IDENTITY: a failing
+  // life-safety machine that merely shares the limiting motor's name is
+  // still named (an unnamed one is counted).
+  final others = [
     for (final m in ls)
-      if (m.name != null &&
-          m.name!.isNotEmpty &&
-          m.name != st.limitingMotorName)
-        m.name!,
+      if (!identical(m, st.limitingMotor)) m,
+  ];
+  final lsNames = [
+    for (final m in others)
+      (m.name != null && m.name!.isNotEmpty) ? m.name! : 'unnamed motor',
   ];
   final lsNote = lsNames.isEmpty
       ? ''
