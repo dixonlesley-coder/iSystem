@@ -285,11 +285,14 @@ void main() {
       expect(adv.supply.units, 2);
       final spine =
           _labels(buildElectricalSourceSpine(project: p, result: sys).prims);
-      expect(spine, contains('TRANSFORMER 2 x ${unit.toInt()} kVA'));
+      // Round 65 r2 — one transformer per SECTION (never a paralleled pair).
+      expect(spine, contains('TX-1 ${unit.toInt()} kVA'));
+      expect(spine, contains('TX-2 ${unit.toInt()} kVA'));
       final h = _labels(
           buildElectricalSourceSpine(project: p, result: sys, horizontal: true)
               .prims);
-      expect(h, contains('TRAFO 2 x ${unit.toInt()} kVA'));
+      expect(h, contains('TRAFO-1 ${unit.toInt()} kVA'));
+      expect(h, contains('TRAFO-2 ${unit.toInt()} kVA'));
       final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
           projectName: 'P',
           date: '2026-10-18',

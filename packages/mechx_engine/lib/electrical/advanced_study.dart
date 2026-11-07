@@ -107,6 +107,7 @@ import 'supply_design.dart'
         isDeclaredMvService,
         minimalMaxSectionLoad,
         recommendedDaya,
+        sectionAssignment,
         serviceSections;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
@@ -1185,6 +1186,40 @@ SupplyDesign studySupplyDesign(
 /// sub-board at 0 m and told an SPD was not recommended — and the verdict
 /// flipped with panel list order. Falls back to the first id in the solve
 /// order when no panel qualifies (a cyclic topology).
+/// Round 65 r2 (elec-convergence-17-sectioned-service-drawn-as-paralleled-
+/// transformers) — the transformer SECTION (0-based) each service-entrance
+/// board sits on, on a sectioned service ([serviceSections] > 1): the
+/// partition [sectionAssignment] realises over the SAME per-root loads the
+/// supply study judges a section on ([studySupplyInputs]: the root's
+/// diversified VA, or its worst-phase basis when larger). Sections are
+/// numbered in the order their first board appears in [ElectricalSystemResult
+/// .order], so the drawing's columns read left to right. Empty on a single
+/// section. Pure.
+Map<String, int> serviceSectionOfRoot(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final n = serviceSections(project);
+  if (n <= 1) return const {};
+  final origin = originPanelIdsOf(sys, project);
+  final ids = [
+    for (final id in sys.order)
+      if (origin.contains(id) && sys.panels[id] != null) id,
+  ];
+  final loads = [
+    for (final id in ids)
+      math.max(
+          sys.panels[id]!.demandVaOrEstimate(),
+          worstPhaseDemandVa(project, sys, [id],
+              roundCurrent: true, withLargestMachine: true)),
+  ];
+  final bins = sectionAssignment(loads, n);
+  final relabel = <int, int>{};
+  final out = <String, int>{};
+  for (var i = 0; i < ids.length; i++) {
+    out[ids[i]] = relabel.putIfAbsent(bins[i], () => relabel.length);
+  }
+  return out;
+}
+
 Set<String> originPanelIdsOf(
   ElectricalSystemResult sys,
   ElectricalProject project,

@@ -1537,9 +1537,12 @@ class ElectricalSupplyInspector extends ConsumerWidget {
                             : gen.backupFractionTyped! * 100,
                         hint: context.strings(
                             StringKey.electricalGensetBackupPercentHint),
-                        zeroClears: true,
+                        // Round 65 r2 — an honest percent field: an entry
+                        // outside (0, 100] is rejected with the field error,
+                        // never clamped (C6); blank = Auto.
+                        max: 100,
                         onChanged: (v) => ctrl.setGeneratorBackupFraction(
-                            v == null ? null : (v > 100 ? 1.0 : v / 100)),
+                            v == null ? null : v / 100),
                       ),
                     ),
                     note(context

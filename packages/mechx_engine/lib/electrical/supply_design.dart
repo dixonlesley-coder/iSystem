@@ -657,6 +657,91 @@ double minimalMaxSectionLoad(List<double> loads, int sections) {
   return best;
 }
 
+/// Round 65 r2 (elec-convergence-17-sectioned-service-drawn-as-paralleled-
+/// transformers) — WHICH section each service-entrance board sits on: the
+/// assignment that realises [minimalMaxSectionLoad] (the same LPT seed, the
+/// same exact branch and bound up to [kSectionPartitionExactMax] boards), so
+/// the drawing hangs every root under the section the loading judge assumed.
+/// Index-aligned with [loads]; a non-positive load joins the lightest
+/// section (it changes no maximum). Pure.
+List<int> sectionAssignment(List<double> loads, int sections) {
+  final out = List<int>.filled(loads.length, 0);
+  if (sections <= 1 || loads.isEmpty) return out;
+  final idx = [
+    for (var i = 0; i < loads.length; i++)
+      if (loads[i] > 0) i,
+  ]..sort((a, b) {
+      final c = loads[b].compareTo(loads[a]);
+      return c != 0 ? c : a.compareTo(b);
+    });
+  final xs = [for (final i in idx) loads[i]];
+  final bins = List<double>.filled(sections, 0);
+  var assign = List<int>.filled(xs.length, 0);
+  if (xs.length <= sections) {
+    for (var k = 0; k < xs.length; k++) {
+      assign[k] = k;
+      bins[k] = xs[k];
+    }
+  } else {
+    // LPT greedy — the upper bound (and the answer above the exact cap).
+    for (var k = 0; k < xs.length; k++) {
+      var b = 0;
+      for (var i = 1; i < sections; i++) {
+        if (bins[i] < bins[b]) b = i;
+      }
+      bins[b] += xs[k];
+      assign[k] = b;
+    }
+    var best = bins.reduce(math.max);
+    if (xs.length <= kSectionPartitionExactMax) {
+      final total = xs.fold(0.0, (a, b) => a + b);
+      final lower = math.max(xs.first, total / sections);
+      final work = List<double>.filled(sections, 0);
+      final cur = List<int>.filled(xs.length, 0);
+      void place(int i, double currentMax) {
+        if (best <= lower + 1e-9) return;
+        if (i == xs.length) {
+          if (currentMax < best) {
+            best = currentMax;
+            assign = List<int>.of(cur);
+          }
+          return;
+        }
+        final seen = <double>{};
+        for (var k = 0; k < sections; k++) {
+          final next = work[k] + xs[i];
+          if (next >= best - 1e-12) continue;
+          if (!seen.add(work[k])) continue;
+          work[k] = next;
+          cur[i] = k;
+          place(i + 1, math.max(currentMax, next));
+          work[k] -= xs[i];
+        }
+      }
+
+      place(0, 0);
+      for (var k = 0; k < sections; k++) {
+        bins[k] = 0;
+      }
+      for (var k = 0; k < xs.length; k++) {
+        bins[assign[k]] += xs[k];
+      }
+    }
+  }
+  for (var k = 0; k < idx.length; k++) {
+    out[idx[k]] = assign[k];
+  }
+  // Non-positive loads: onto the lightest section.
+  var light = 0;
+  for (var i = 1; i < sections; i++) {
+    if (bins[i] < bins[light]) light = i;
+  }
+  for (var i = 0; i < loads.length; i++) {
+    if (!(loads[i] > 0)) out[i] = light;
+  }
+  return out;
+}
+
 /// Round 58 (elec-convergence-10-n-section-transformer-service-
 /// unrepresentable) — the number of SEPARATE (never paralleled) transformer
 /// sections on the service: [ElectricalProject.transformerUnits] when set,

@@ -133,7 +133,11 @@ void main() {
       expect(tx.kva, kva);
       expect(tx.units, 3);
       final spine = _labels(buildElectricalSourceSpine(project: pr, result: s.sys));
-      expect(spine.join('\n'), contains('TRANSFORMER 3 x ${kva.toInt()} kVA'));
+      // Round 65 r2 — a sectioned service draws one transformer per section
+      // (never 'TRANSFORMER 3 x kVA' on one LV main).
+      for (var i = 1; i <= 3; i++) {
+        expect(spine, contains('TX-$i ${kva.toInt()} kVA'));
+      }
       final rows = buildEquipmentScheduleRows(EquipmentScheduleData(
           projectName: 'P',
           date: '2026-10-18',
