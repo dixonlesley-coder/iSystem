@@ -605,7 +605,42 @@ NetNode? fireTransferDestinationTank(
       bestZ = z;
     }
   }
-  return best;
+  return best ?? _sameLevelBreakTank(net, sys, elevationOf, pumpZ);
+}
+
+final Expando<List<FireSystem>> _fireSystemsMemo = Expando();
+
+/// Round 70 (regression-same-floor-break-tank-transfer-zeroed) — a BREAK
+/// tank on the transfer pump's OWN level (pump room and break tank in one
+/// plant room): among the tanks of terminal-less [sys] at or below its
+/// lowest pump ([pumpZ]), the one tank that is also a member of ANOTHER fire
+/// system drawing on it (holding a mover or a terminal) is the tank [sys]
+/// fills — its suction tank feeds only [sys]. Structural (drawn directions
+/// and the fire service of each pipe never read); null when no tank, or more
+/// than one, qualifies (the legacy reading: no destination).
+NetNode? _sameLevelBreakTank(Network net, FireSystem sys,
+    double Function(NetNode n) elevationOf, double pumpZ) {
+  final all = _fireSystemsMemo[net] ??= fireSystems(net);
+  NetNode? found;
+  for (final n in net.nodes) {
+    if (!sys.nodeIds.contains(n.id) || !isFireSystemBoundary(n)) continue;
+    if ((elevationOf(n) - pumpZ).abs() > 1e-9) continue;
+    final drawnOn = all.any((o) =>
+        o.nodeIds.contains(n.id) &&
+        !o.nodeIds.containsAll(sys.nodeIds) &&
+        (fireSystemHasTerminal(net, o) ||
+            o.nodeIds.any((id) =>
+                id != n.id &&
+                !sys.nodeIds.contains(id) &&
+                switch (net.nodeById(id)?.component) {
+                  NodeComponent.pump || NodeComponent.boosterSet => true,
+                  _ => false,
+                })));
+    if (!drawnOn) continue;
+    if (found != null) return null; // ambiguous
+    found = n;
+  }
+  return found;
 }
 
 /// Round 53 — the terminal-bearing fire systems of [systems] a TRANSFER

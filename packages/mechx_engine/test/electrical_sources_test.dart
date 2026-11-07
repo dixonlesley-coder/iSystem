@@ -221,16 +221,31 @@ void main() {
 
     test('an over-limit motor-start dip is tagged on the generator node', () {
       // A small genset with a big DOL motor: the dip exceeds 25% and is flagged.
-      const sources = ElectricalSources(generator: GeneratorSource());
+      // Round 70 — a FORCED 40 kVA nameplate is judged, never resized: a
+      // 30 kW DOL dips far beyond 25 % on it, so the node carries the tag.
+      const forced = ElectricalSources(
+          generator: GeneratorSource(kva: ApparentPower(40e3)));
       final ol = buildPowerOneLine(
-        sources,
+        forced,
         demand: ApparentPower.kilovoltAmperes(40),
         motors: const [GensetMotor(shaftPower: Power(30000))],
       );
       final gen = ol.nodeOfKind(PowerNodeKind.generator);
-      // demand 40 kVA → 40 kVA backup → ladder rung 40 kVA; 30 kW DOL dips far
-      // beyond 25%, so the node carries an "over" tag.
       expect(gen?.sub, contains('over'));
+      expect(ol.gensetStart!.acceptable, isFalse);
+      // Unforced, the set is sized up to the start floor 3 z (z = 0.15 x
+      // S_start): the 40 kVA load rung is no longer bought, and no tag.
+      final auto = buildPowerOneLine(
+        const ElectricalSources(generator: GeneratorSource()),
+        demand: ApparentPower.kilovoltAmperes(40),
+        motors: const [GensetMotor(shaftPower: Power(30000))],
+      );
+      final st = auto.gensetStart!;
+      expect(st.acceptable, isTrue);
+      expect(st.gensetKva.inKilovoltAmperes,
+          greaterThanOrEqualTo(3 * 0.15 * st.startingKva.inKilovoltAmperes));
+      expect(auto.nodeOfKind(PowerNodeKind.generator)?.sub,
+          isNot(contains('over')));
     });
 
     test('manual transfer genset → COS node + manual interlock note', () {
