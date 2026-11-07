@@ -543,7 +543,8 @@ GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
 /// The battery backs the building demand. Round 16 (supply-sources-battery-
 /// critical-load-pf) — its critical load is the REAL demand W
 /// ([demandPower]) when known; the assumed-PF conversion of [demand] stays
-/// only as the fallback. [hybrid] = PV + battery (or a forced hybrid) share
+/// only as the fallback. Round 68 — its inverter is selected on
+/// max(demand W, [demand] VA): the AC output is apparent-power limited. [hybrid] = PV + battery (or a forced hybrid) share
 /// ONE hybrid inverter.
 ({SolarResult? solar, BatteryResult? battery, bool hybrid})
     sizeDistributedSources(
@@ -562,7 +563,10 @@ GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
   final batteryResult = batt == null
       ? null
       : sizeBattery(demandPower ?? _demandToPower(demand),
-          autonomyHours: batt.autonomyHours, chemistry: batt.chemistry);
+          autonomyHours: batt.autonomyHours,
+          chemistry: batt.chemistry,
+          // Round 68 — the inverter on the apparent power it delivers.
+          apparentLoad: demand);
   final solarOn = solarResult != null;
   final battOn = batteryResult != null;
   final hybrid =

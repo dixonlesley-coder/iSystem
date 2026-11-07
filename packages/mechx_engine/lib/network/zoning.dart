@@ -155,6 +155,7 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
   required Pressure maxStatic,
   MountingHeights mounting = const MountingHeights(),
   Length? tankElevation,
+  Map<int, Length>? tankElevationByFloor,
 }) {
   final out = <DownfeedZoneStatic>[];
   for (final z in zones) {
@@ -162,10 +163,16 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
     final bottom =
         building.fixtureElevationOf(z.bottomFloorIndex, mounting).meters;
     if (tankElevation != null && z.topFloorIndex >= building.levelCount - 1) {
-      final t = tankElevation.meters;
-      final top = pressureFromHead(Head((t - feed).clamp(0.0, double.infinity)));
+      // Round 68 — each floor's own datum (the tank plus the head of the
+      // mover set its delivery passes) when the caller gives one.
+      final tTop =
+          (tankElevationByFloor?[z.topFloorIndex] ?? tankElevation).meters;
+      final tBottom =
+          (tankElevationByFloor?[z.bottomFloorIndex] ?? tankElevation).meters;
+      final top =
+          pressureFromHead(Head((tTop - feed).clamp(0.0, double.infinity)));
       final bottomStatic =
-          pressureFromHead(Head((t - bottom).clamp(0.0, double.infinity)));
+          pressureFromHead(Head((tBottom - bottom).clamp(0.0, double.infinity)));
       out.add(DownfeedZoneStatic(
         zone: z,
         topResidual: top,
@@ -238,6 +245,12 @@ List<DownfeedZoneStatic> downfeedZoneStatics({
 /// report never specifies a PRV station that serves nothing. Default 0 (the
 /// legacy full-building walk — used when nothing is drawn) ⇒ byte-identical.
 ///
+/// PER-FLOOR DATUM (Round 68, regression-2) — [tankElevationByFloor] gives
+/// the datum that actually serves each floor (the tank plus the head of the
+/// mover set that floor's delivery passes — a booster at the tank outlet
+/// serving L6..L19 beside one fixture fed straight off the tank); a floor
+/// absent from it reads [tankElevation]. Null ⇒ one datum (byte-identical).
+///
 /// Returns zones ordered **top → bottom** (index 0 = highest zone).
 List<PressureZone> computeDownfeedZones({
   required BuildingLevels building,
@@ -246,6 +259,7 @@ List<PressureZone> computeDownfeedZones({
   Length? tankElevation,
   Pressure? maxFixtureStatic,
   int lowestServedFloor = 0,
+  Map<int, Length>? tankElevationByFloor,
 }) {
   assert(building.levelCount > 0, 'building must have at least one floor');
   final low = lowestServedFloor.clamp(0, building.levelCount - 1);
@@ -261,7 +275,7 @@ List<PressureZone> computeDownfeedZones({
     final top = building.levelCount - 1;
     var bottom = top; // a storey is indivisible: the top floor always admits.
     for (var f = top - 1; f >= low; f--) {
-      final head = tankElevation.meters -
+      final head = (tankElevationByFloor?[f] ?? tankElevation).meters -
           building.fixtureElevationOf(f, mounting).meters;
       if (head > tankSpan) break;
       bottom = f;

@@ -1482,6 +1482,15 @@ Set<String> fireServiceJoinNodes(Network net) {
           net, sides, sources, pumpedInto[id] ?? const <String>{}, elev,
           moverFloor: net.nodeById(id)!.floorIndex,
           interior: interior,
+          legSides: {
+            for (final MapEntry(key: edgeId, value: inner)
+                in interior.entries)
+              if (sides[edgeId]!.length == 1 &&
+                  inner.every((nid) =>
+                      (adj[nid]?.length ?? 0) <= 2 &&
+                      net.nodeById(nid)?.role != NodeRole.fixture))
+                edgeId,
+          },
           pumpedSides: pumped,
           entrySides: entries,
           undecidedMoverSides: waitForPumped ? undecided : const {});
@@ -1632,6 +1641,7 @@ Map<String, Set<String>> _moverSides(
   double Function(NetNode n) elevationOf, {
   int? moverFloor,
   Map<String, Set<String>> interior = const {},
+  Set<String> legSides = const {},
   Set<String> pumpedSides = const {},
   Set<String> entrySides = const {},
   Set<String> undecidedMoverSides = const {},
@@ -1642,10 +1652,19 @@ Map<String, Set<String>> _moverSides(
   // `nodeElevation` is always the roof whatever floor it is drawn on, so the
   // DRAWN floor decides. Only a roof tank on a higher floor is a gravity
   // standby (rank 2).
-  int kindRank(NetNode n) => switch (n.component) {
+  //
+  // Round 68 (regression-4) — the TOPOLOGY decides first: a roof-typed tank
+  // reached through the mover's own LEG ([legSides]: a side whose walk
+  // passes no junction, the tank on the plain pipe chain from the mover) is
+  // the room's suction tank whatever floor it is drawn on (the usual tank on
+  // the slab above the pump room). Only a roof tank reached past a junction
+  // (a standby feed teed into the riser) falls to the drawn-floor test.
+  int kindRank(NetNode n, String sideId) => switch (n.component) {
         NodeComponent.groundTank => 0,
-        NodeComponent.roofTank =>
-          moverFloor != null && n.floorIndex <= moverFloor ? 0 : 2,
+        NodeComponent.roofTank => legSides.contains(sideId) ||
+                (moverFloor != null && n.floorIndex <= moverFloor)
+            ? 0
+            : 2,
         _ => 1,
       };
   int cmp((int, double) a, (int, double) b) {
@@ -1670,7 +1689,7 @@ Map<String, Set<String>> _moverSides(
     for (final p in sides[id]!) {
       if (!sources.contains(p)) continue;
       final n = net.nodeById(p)!;
-      offer(id, (kindRank(n), elevationOf(n)));
+      offer(id, (kindRank(n, id), elevationOf(n)));
     }
     if (pumpedSides.contains(id) || entrySides.contains(id)) {
       offer(id, (1, double.negativeInfinity));
@@ -3412,6 +3431,94 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         // SAME flow (and fixture units) as the duty leg's check valve, oriented
         // in its valve's pass direction (the tree / balance only ran through
         // one leg).
+        // Round 68 (fire-convergence-20-ring-pump-room-unsized) — ONE peer-
+        // source mirror for BOTH paths: the looped (Hardy–Cross) branch
+        // leaves a demand-free peer pump room's bridge at exactly zero
+        // flow (dropped from the result), so it runs after the balance as
+        // well; there the root's outgoing flow is the balanced |flow| on
+        // its single incident edge.
+        void mirrorPeerSources() {
+          // Round 14 (mech-props-3 parallel-sources-by-id) — PARALLEL SOURCES:
+          // several equal-rank degree-1 plants on one supply component (two
+          // ground-tank compartments, two AHUs at opposite ends of one duct). The
+          // tree can root at only one, so every OTHER source's bridge (its chain
+          // of demand-free degree-2 nodes up to the first junction / terminal)
+          // used to carry ZERO and print at the minimum size — which leg that was
+          // depended on the node ids. Each peer source must carry the whole set
+          // flow while the other is isolated, exactly like a standby leg, so its
+          // bridge mirrors the root's outgoing flow (and fixture units).
+          if (regime != FlowRegime.gravity &&
+              roleOf(root) == NodeRole.plant &&
+              degree(root) == 1) {
+            final rootNode = net.nodeById(root);
+            final suctionTanks = isFireService(service)
+                ? fireHopSeeds.suctionTanks
+                : const <String>{};
+            final rootRank = _supplyPlantRank(
+                _fireRankComponent(rootNode?.component, root, suctionTanks), 1);
+            final rootEdge = adjacency[root]!.single.edgeId;
+            final q = allFlows[rootEdge]?.cubicMetersPerSecond ?? 0.0;
+            final units = fixtureUnitsOut?[rootEdge];
+            // Round 15 (regression-parallel-source-mirror-treats-fcus-as-peers) —
+            // a terminal air unit (rank 4) is never a source peer (nor a source
+            // whose peers get mirrored), and a demand-bearing plant is a delivery
+            // point, not an isolated standby source.
+            final peers = [
+              if (rootRank < 4)
+                for (final n in component)
+                  if (n != root &&
+                      roleOf(n) == NodeRole.plant &&
+                      degree(n) == 1 &&
+                      // Round 67 — a break tank (filled by a lower room's
+                      // discharge) is where pumped water ARRIVES on this
+                      // fragment, never a parallel source of it.
+                      !(isFireService(service) &&
+                          fireHopSeeds.breakTanks.containsKey(n)) &&
+                      !explicitDemandKeys.contains(n) &&
+                      _supplyPlantRank(
+                              _fireRankComponent(
+                                  net.nodeById(n)?.component, n, suctionTanks),
+                              1) ==
+                          rootRank)
+                    n,
+            ]..sort();
+            for (final s in q > 0 ? peers : const <String>[]) {
+              final bridge = <(String, String)>[]; // (edgeId, flow-from node)
+              var cur = s;
+              String? prevEdge;
+              var reachedRoot = false;
+              while (true) {
+                final links = [
+                  for (final l in adjacency[cur]!)
+                    if (l.edgeId != prevEdge) l,
+                ];
+                if (links.length != 1) break;
+                final l = links.single;
+                bridge.add((l.edgeId, cur));
+                prevEdge = l.edgeId;
+                cur = l.other;
+                if (cur == root) {
+                  reachedRoot = true;
+                  break;
+                }
+                if (degree(cur) != 2 ||
+                    explicitDemandKeys.contains(cur) ||
+                    bearsDefaultDemand(cur)) {
+                  break;
+                }
+              }
+              if (reachedRoot) continue;
+              for (final (id, from) in bridge) {
+                if ((allFlows[id]?.cubicMetersPerSecond ?? 0.0) >= q) continue;
+                allFlows[id] = FlowRate(q);
+                edgeFlowFrom[id] = from;
+                if (units != null) fixtureUnitsOut?[id] = units;
+                parallelLegEdgeIdsOut?.add(id);
+              }
+            }
+          }
+        }
+
         void mirrorStandbyLegs(List<_StandbyLeg> legs) {
           for (final leg in legs) {
             var q = 0.0;
@@ -3651,6 +3758,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             if (useUbap) fixtureUnitsOut?[en.key] = 0;
           }
           mirrorStandbyLegs(hcStandby);
+          mirrorPeerSources();
           checkValveFeedsRingOut
               ?.removeAll([for (final c in closedValves) c.id]);
           sizeZeroPockets([...?cvPlan?.returnValves, ...closedValves]);
@@ -4062,85 +4170,7 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
 
         mirrorStandbyLegs(standbyLegs);
 
-        // Round 14 (mech-props-3 parallel-sources-by-id) — PARALLEL SOURCES:
-        // several equal-rank degree-1 plants on one supply component (two
-        // ground-tank compartments, two AHUs at opposite ends of one duct). The
-        // tree can root at only one, so every OTHER source's bridge (its chain
-        // of demand-free degree-2 nodes up to the first junction / terminal)
-        // used to carry ZERO and print at the minimum size — which leg that was
-        // depended on the node ids. Each peer source must carry the whole set
-        // flow while the other is isolated, exactly like a standby leg, so its
-        // bridge mirrors the root's outgoing flow (and fixture units).
-        if (regime != FlowRegime.gravity &&
-            roleOf(root) == NodeRole.plant &&
-            degree(root) == 1) {
-          final rootNode = net.nodeById(root);
-          final suctionTanks = isFireService(service)
-              ? fireHopSeeds.suctionTanks
-              : const <String>{};
-          final rootRank = _supplyPlantRank(
-              _fireRankComponent(rootNode?.component, root, suctionTanks), 1);
-          final rootEdge = adjacency[root]!.single.edgeId;
-          final q = allFlows[rootEdge]?.cubicMetersPerSecond ?? 0.0;
-          final units = fixtureUnitsOut?[rootEdge];
-          // Round 15 (regression-parallel-source-mirror-treats-fcus-as-peers) —
-          // a terminal air unit (rank 4) is never a source peer (nor a source
-          // whose peers get mirrored), and a demand-bearing plant is a delivery
-          // point, not an isolated standby source.
-          final peers = [
-            if (rootRank < 4)
-              for (final n in component)
-                if (n != root &&
-                    roleOf(n) == NodeRole.plant &&
-                    degree(n) == 1 &&
-                    // Round 67 — a break tank (filled by a lower room's
-                    // discharge) is where pumped water ARRIVES on this
-                    // fragment, never a parallel source of it.
-                    !(isFireService(service) &&
-                        fireHopSeeds.breakTanks.containsKey(n)) &&
-                    !explicitDemandKeys.contains(n) &&
-                    _supplyPlantRank(
-                            _fireRankComponent(
-                                net.nodeById(n)?.component, n, suctionTanks),
-                            1) ==
-                        rootRank)
-                  n,
-          ]..sort();
-          for (final s in q > 0 ? peers : const <String>[]) {
-            final bridge = <(String, String)>[]; // (edgeId, flow-from node)
-            var cur = s;
-            String? prevEdge;
-            var reachedRoot = false;
-            while (true) {
-              final links = [
-                for (final l in adjacency[cur]!)
-                  if (l.edgeId != prevEdge) l,
-              ];
-              if (links.length != 1) break;
-              final l = links.single;
-              bridge.add((l.edgeId, cur));
-              prevEdge = l.edgeId;
-              cur = l.other;
-              if (cur == root) {
-                reachedRoot = true;
-                break;
-              }
-              if (degree(cur) != 2 ||
-                  explicitDemandKeys.contains(cur) ||
-                  bearsDefaultDemand(cur)) {
-                break;
-              }
-            }
-            if (reachedRoot) continue;
-            for (final (id, from) in bridge) {
-              if ((allFlows[id]?.cubicMetersPerSecond ?? 0.0) >= q) continue;
-              allFlows[id] = FlowRate(q);
-              edgeFlowFrom[id] = from;
-              if (units != null) fixtureUnitsOut?[id] = units;
-              parallelLegEdgeIdsOut?.add(id);
-            }
-          }
-        }
+        mirrorPeerSources();
 
         // Round 27 r4 — the tree path's zero-flow check valves (every RETURN,
         // and a feed valve nothing downstream draws through) isolate the pipes
@@ -4503,26 +4533,44 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     // it was drawn on (its size used to follow one sprinkler pipe's drawn
     // direction: DN125 vs DN100). A cycle of sprinkler pipe only (a gridded
     // sprinkler system) is no hydrant ring.
+    //
+    // Round 68 (fire-convergence-20-ring-through-roof-tank) — a STORAGE
+    // TANK is a hydraulic break here as everywhere else ([isTank] in
+    // [downstreamOf], [isFireSystemBoundary], the yard-ring rule): the
+    // component walk never passes a tank, and each tank is split into one
+    // virtual copy per incident fire pipe before [cycleBlocks], so a loop
+    // closed only THROUGH a tank (one roof tank feeding both riser tops) is
+    // no ring.
     final onCycle = <String>{};
     final ringEdgesOf = <String, List<NetEdge>>{};
     {
       final seenNode = <String>{};
+      String endKey(NetEdge x, String id) => isTank(id) ? '$id#${x.id}' : id;
       for (final e0 in hydrantEdges) {
-        if (seenNode.contains(e0.fromId)) continue;
-        // The connected fire component (both services) holding e0.
-        final compNodes = <String>{e0.fromId};
+        final start = isTank(e0.fromId) ? e0.toId : e0.fromId;
+        if (isTank(start) || seenNode.contains(start)) continue;
+        // The connected fire component (both services) holding e0, never
+        // walked through a storage tank.
+        final compNodes = <String>{start};
         final compEdges = <String, NetEdge>{};
-        final stack = [e0.fromId];
+        final stack = [start];
         while (stack.isNotEmpty) {
           final cur = stack.removeLast();
           for (final x in fireAdj[cur] ?? const <NetEdge>[]) {
             compEdges[x.id] = x;
             final o = x.fromId == cur ? x.toId : x.fromId;
+            if (isTank(o)) continue;
             if (compNodes.add(o)) stack.add(o);
           }
         }
         seenNode.addAll(compNodes);
-        if (compEdges.length <= compNodes.length - 1) continue; // a tree
+        final virtualNodes = <String>{
+          for (final x in compEdges.values) ...[
+            endKey(x, x.fromId),
+            endKey(x, x.toId),
+          ],
+        };
+        if (compEdges.length <= virtualNodes.length - 1) continue; // a tree
         final ids = compEdges.keys.toList()..sort();
         final comp = [for (final id in ids) compEdges[id]!];
         // Round 66 (regression-yard-ring-arms-merge-cycles-at-articulation-
@@ -4536,7 +4584,11 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
           var g = 0;
           for (final b in cycleBlocks([
             for (final id in ids)
-              (id, compEdges[id]!.fromId, compEdges[id]!.toId),
+              (
+                id,
+                endKey(compEdges[id]!, compEdges[id]!.fromId),
+                endKey(compEdges[id]!, compEdges[id]!.toId),
+              ),
           ])) {
             for (final id in b) {
               groupOf[id] = g;

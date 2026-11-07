@@ -196,8 +196,41 @@ _ExtraField _extraSupplyField(Ref ref, Map<String, Head> moverHeads,
             for (final e in moverHeads.entries)
               if (comp.nodes.contains(e.key)) e.key: e.value,
           };
-    final sol = _coldUpfeed(net, sizing, project, comp.source, edges,
+    final cold = _coldUpfeed(net, sizing, project, comp.source, edges,
         moverHeads: ownHeads);
+    // Round 68 (plumbing-hvac-convergence-18-extra-supply-network-hot-water-
+    // unsolved) — the component's HOT network solved through its own
+    // heaters (only a heater this cold field reaches has an inlet residual),
+    // exactly as [solveProvider] does for the primary: with no drawn mover
+    // running, a heater inlet short of its hot index fixture raises the
+    // source head by that shortfall and the cold field is re-solved at it,
+    // so a podium booster beside a tower is sized on its hot showers too
+    // and its hot fixtures are judged. A PRV-held heater never raises it.
+    final heldHeaters = prvHeldNodes(net,
+            service: kSupplyService, sourceId: comp.source)
+        .heldBy
+        .keys
+        .toSet();
+    final hot = _hotWaterField(net, sizing, project, cold.residualPressure,
+        cold.noFlowStaticPressure,
+        excludeShortfallHeaterIds: heldHeaters);
+    final PressureSolution sol;
+    if (ownHeads.isEmpty && hot.shortfall.meters > 1e-9) {
+      final raised = Head(cold.requiredPumpHead.meters + hot.shortfall.meters);
+      final coldAtRaised = _coldUpfeed(
+          net, sizing, project, comp.source, edges,
+          moverHeads: {comp.source: raised});
+      sol = mergeHotWaterField(
+          coldAtRaised,
+          _hotWaterField(net, sizing, project, coldAtRaised.residualPressure,
+              coldAtRaised.noFlowStaticPressure,
+              excludeShortfallHeaterIds: heldHeaters),
+          targetResidual: _targetResidual,
+          requiredPumpHead: raised,
+          hotGoverns: true);
+    } else {
+      sol = mergeHotWaterField(cold, hot, targetResidual: _targetResidual);
+    }
     // Unboosted: the solve develops `requiredPumpHead` at the source — shift
     // it out (the zero-head field). Delivered: with own heads the source
     // develops only them already; with none the assumed pump stays in.
@@ -2458,57 +2491,25 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
           preferHighest: true, mounting: project.mounting)
       : null;
   Set<String>? fedByTank;
+  Set<String>? tankComponent;
   if (tankId != null && waterIds.contains(tankId)) {
-    final adj = <String, List<String>>{};
-    for (final e in net.edges) {
-      if (e.service != ServiceType.coldWater &&
-          e.service != ServiceType.hotWater) {
-        continue;
-      }
-      (adj[e.fromId] ??= []).add(e.toId);
-      (adj[e.toId] ??= []).add(e.fromId);
-    }
-    // Round 67 r2 — a mover the tank's WHOLE delivery passes (a booster at
-    // the roof-tank outlet, RT -> BP -> riser: the Round-56 datum hangs off
-    // its head) is pipe to this walk; only a mover some delivery node
-    // bypasses (a booster zone, a separately pumped branch) is a wall.
-    final delivery = <String>{
-      for (final id in adj.keys)
-        if (net.nodeById(id) case final n?
-            when n.role == NodeRole.fixture &&
-                !isNonDemandTerminal(n.component))
-          id,
-    };
-    final passable = <String, bool>{};
-    bool wall(String id) {
-      final n = net.nodeById(id);
-      if (id == tankId ||
-          n == null ||
-          n.role != NodeRole.plant ||
-          (n.component != NodeComponent.pump &&
-              n.component != NodeComponent.boosterSet)) {
-        return false;
-      }
-      return !(passable[id] ??=
-          !_tankBypassesMover(adj, delivery, tankId, id));
-    }
-
-    fedByTank = {tankId};
-    final stack = [tankId];
-    while (stack.isNotEmpty) {
-      final id = stack.removeLast();
-      if (wall(id)) continue;
-      for (final o in adj[id] ?? const <String>[]) {
-        if (fedByTank.add(o)) stack.add(o);
-      }
-    }
+    // Round 68 (regression-1/2/3) — the ONE tank walk the datum reads too
+    // ([_downfeedTankWalk]: cold + hot, movers as parallel SETS, a set a
+    // wall only when it serves no floor below the tank-only set).
+    final w = _downfeedTankWalk(net, tankId);
+    tankComponent = w.component;
+    fedByTank = w.fed;
   }
   int? lowest;
   int? lowestAny;
   for (final n in net.nodes) {
     if (n.role != NodeRole.fixture || !waterIds.contains(n.id)) continue;
-    if (lowestAny == null || n.floorIndex < lowestAny) {
-      lowestAny = n.floorIndex;
+    // Round 68 — the fallback stays inside the tank's own connected cold /
+    // hot component: never a fixture of another supply network.
+    if (tankComponent == null || tankComponent.contains(n.id)) {
+      if (lowestAny == null || n.floorIndex < lowestAny) {
+        lowestAny = n.floorIndex;
+      }
     }
     if (fedByTank != null && !fedByTank.contains(n.id)) continue;
     if (lowest == null || n.floorIndex < lowest) lowest = n.floorIndex;
@@ -2521,6 +2522,7 @@ final zonesProvider = Provider<List<PressureZone>>((ref) {
     mounting: project.mounting,
     maxStaticPressure: effective,
     tankElevation: ref.watch(effectiveDownfeedDatumProvider),
+    tankElevationByFloor: ref.watch(downfeedDatumByFloorProvider),
     maxFixtureStatic: maxFix,
     lowestServedFloor: lowest ?? 0,
   );
@@ -2567,51 +2569,19 @@ final downfeedTankElevationProvider = Provider<Length?>((ref) {
   return isGravityTank ? elev : null;
 });
 
-/// Round 56 / Round 67 r2 — does the downfeed [tank] reach any [delivery]
-/// node over [adj] without passing [moverId]? False => the tank's WHOLE
-/// delivery passes the mover (a booster at the tank outlet, RT -> BP ->
-/// riser): the ONE predicate the zone datum ([effectiveDownfeedDatumProvider])
-/// and the zone table's served-floor walk ([zonesProvider]) share.
-bool _tankBypassesMover(Map<String, List<String>> adj, Set<String> delivery,
-    String tank, String moverId) {
-  final seen = <String>{tank, moverId};
-  final queue = [tank];
-  for (var i = 0; i < queue.length; i++) {
-    for (final o in adj[queue[i]] ?? const <String>[]) {
-      if (!seen.add(o)) continue;
-      if (delivery.contains(o)) return true;
-      queue.add(o);
-    }
-  }
-  return false;
-}
-
-/// Round 56 (plumbing-hvac-convergence-6-zone-table-ignores-drawn-downfeed-
-/// booster) — the gravity DATUM the downfeed zone table hangs from: the tank
-/// elevation ([downfeedTankElevationProvider]) PLUS the head of every sized
-/// non-transfer mover ([downfeedMoverHeadsProvider]) the tank's whole
-/// delivery passes through — a booster at the roof-tank outlet (RT -> BP ->
-/// riser) raises the static of every floor it serves, exactly as the
-/// delivered field ([downfeedDeliveredProvider]) applies it, so the zone
-/// table and the solve can never disagree (golden rule 5). A booster serving
-/// only part of the building (some delivery node is reached from the tank
-/// without passing it) leaves the datum unchanged. Null exactly when
-/// [downfeedTankElevationProvider] is (the gravity-source predicate is
-/// untouched); no mover drawn ⇒ that elevation verbatim.
-final effectiveDownfeedDatumProvider = Provider<Length?>((ref) {
-  final tankElevation = ref.watch(downfeedTankElevationProvider);
-  if (tankElevation == null) return null;
-  final heads = ref.watch(downfeedMoverHeadsProvider);
-  if (heads.isEmpty) return tankElevation;
-  final net = ref.watch(sizingNetworkProvider);
-  final project = ref.watch(projectControllerProvider);
-  final edges = _supplyEdges(net);
-  if (edges.isEmpty) return tankElevation;
-  final tank = _pickSource(net, edges, project.building,
-      preferHighest: true, mounting: project.mounting);
-  if (tank == null) return tankElevation;
+/// Round 68 (regression-3) — the ONE graph both downfeed tank walks read
+/// ([downfeedDatumByFloorProvider] and [zonesProvider]): adjacency over cold
+/// AND hot water pipe, delivery = every cold / hot fixture that is a real
+/// draw-off (never an [isNonDemandTerminal]). A heater fed off the tank
+/// passes; the two walks can never disagree on what the tank reaches.
+({Map<String, List<String>> adj, Set<String> delivery}) _tankWaterGraph(
+    Network net) {
   final adj = <String, List<String>>{};
-  for (final e in edges) {
+  for (final e in net.edges) {
+    if (e.service != ServiceType.coldWater &&
+        e.service != ServiceType.hotWater) {
+      continue;
+    }
     (adj[e.fromId] ??= []).add(e.toId);
     (adj[e.toId] ??= []).add(e.fromId);
   }
@@ -2621,15 +2591,204 @@ final effectiveDownfeedDatumProvider = Provider<Length?>((ref) {
           when n.role == NodeRole.fixture && !isNonDemandTerminal(n.component))
         id,
   };
-  if (delivery.isEmpty) return tankElevation;
-  var lift = 0.0;
-  for (final e in heads.entries) {
-    if (e.key == tank || !adj.containsKey(e.key)) continue;
-    if (!_tankBypassesMover(adj, delivery, tank, e.key)) {
-      lift += e.value.meters;
+  return (adj: adj, delivery: delivery);
+}
+
+/// Every node the downfeed [tank] reaches over [adj] without passing a node
+/// of [blocked] (the tank included).
+Set<String> _tankReach(
+    Map<String, List<String>> adj, String tank, Set<String> blocked) {
+  final seen = <String>{tank};
+  final queue = [tank];
+  for (var i = 0; i < queue.length; i++) {
+    for (final o in adj[queue[i]] ?? const <String>[]) {
+      if (blocked.contains(o) || !seen.add(o)) continue;
+      queue.add(o);
     }
   }
-  return lift > 0 ? Length(tankElevation.meters + lift) : tankElevation;
+  return seen;
+}
+
+/// Round 68 (regression-1) — the pump / booster plants of the tank's
+/// [component] grouped into PARALLEL SETS by their two leg ends (the
+/// Round-13 convention: each mover walked through bare / inline degree-2
+/// nodes to its first junction, plant or fixture on each side). A duty /
+/// standby pair at the tank outlet (RT -> BP -> R19, RT -> BQ -> R19) is ONE
+/// set; movers in series are separate sets. Sorted, deterministic.
+List<Set<String>> _tankMoverSets(Network net, Map<String, List<String>> adj,
+    String tank, Set<String> component) {
+  bool isMover(String id) {
+    final n = net.nodeById(id);
+    return id != tank &&
+        n != null &&
+        n.role == NodeRole.plant &&
+        (n.component == NodeComponent.pump ||
+            n.component == NodeComponent.boosterSet);
+  }
+
+  String legEnd(String mover, String first) {
+    var prev = mover, cur = first;
+    final seen = <String>{mover};
+    while (seen.add(cur)) {
+      final n = net.nodeById(cur);
+      final links = adj[cur] ?? const <String>[];
+      if (n == null ||
+          n.role == NodeRole.plant ||
+          n.role == NodeRole.fixture ||
+          links.length != 2) {
+        return cur;
+      }
+      final next = links[0] == prev ? links[1] : links[0];
+      prev = cur;
+      cur = next;
+    }
+    return cur;
+  }
+
+  final byKey = <String, Set<String>>{};
+  for (final id in (component.toList()..sort())) {
+    if (!isMover(id)) continue;
+    final links = adj[id] ?? const <String>[];
+    final key = links.length == 2
+        ? ([legEnd(id, links[0]), legEnd(id, links[1])]..sort()).join('|')
+        : '#$id';
+    (byKey[key] ??= <String>{}).add(id);
+  }
+  return [for (final k in (byKey.keys.toList()..sort())) byKey[k]!];
+}
+
+/// Round 68 (regression-1/2/3) — the downfeed tank's served-floor walk,
+/// shared by [zonesProvider] and [downfeedDatumByFloorProvider] so the zone
+/// table and its datum read ONE notion of what the tank feeds: over the
+/// cold + hot graph ([_tankWaterGraph]), every pump / booster judged as its
+/// whole PARALLEL SET ([_tankMoverSets]). A set is a WALL (a booster zone
+/// hung off the tank, not part of the zoned riser) only when every fixture
+/// it alone serves lies on floors the tank reaches without it; a set whose
+/// served floors extend below the tank-only set is pipe — a tap or heater
+/// fed straight off the tank never walls the booster that serves the floors
+/// beneath it. [fed] = every node reached with the walls blocked; [pipeSets]
+/// the non-wall sets; [walls] the wall members.
+({
+  Map<String, List<String>> adj,
+  Set<String> delivery,
+  Set<String> component,
+  Set<String> fed,
+  Set<String> walls,
+  List<Set<String>> pipeSets,
+}) _downfeedTankWalk(Network net, String tank) {
+  final g = _tankWaterGraph(net);
+  final component = _tankReach(g.adj, tank, const {});
+  final reachable = component.intersection(g.delivery);
+  final walls = <String>{};
+  final pipeSets = <Set<String>>[];
+  for (final set in _tankMoverSets(net, g.adj, tank, component)) {
+    final tankOnly = _tankReach(g.adj, tank, set).intersection(g.delivery);
+    int? tankOnlyMin;
+    for (final id in tankOnly) {
+      final f = net.nodeById(id)!.floorIndex;
+      if (tankOnlyMin == null || f < tankOnlyMin) tankOnlyMin = f;
+    }
+    final min = tankOnlyMin;
+    final extendsBelow = min == null ||
+        reachable
+            .difference(tankOnly)
+            .any((id) => net.nodeById(id)!.floorIndex < min);
+    if (extendsBelow) {
+      pipeSets.add(set);
+    } else {
+      walls.addAll(set);
+    }
+  }
+  return (
+    adj: g.adj,
+    delivery: g.delivery,
+    component: component,
+    fed: _tankReach(g.adj, tank, walls),
+    walls: walls,
+    pipeSets: pipeSets,
+  );
+}
+
+/// Round 68 (regression-1/2/3) — the DOWNFEED datum per FLOOR: the tank
+/// elevation ([downfeedTankElevationProvider]) plus, for each floor, the
+/// head of every mover SET its delivery can only be reached through (the
+/// set's head = the max over its members in [downfeedMoverHeadsProvider],
+/// never the sum — a duty / standby pair lifts once; sets in series add).
+/// A floor takes the largest lift of its own delivery nodes; a floor with
+/// none (the riser only passes) the largest lift of the floors below it;
+/// a floor reached gravity-only the bare tank height. The delivered field
+/// ([downfeedDeliveredProvider]) applies exactly these heads, so the zone
+/// table and the solve can never disagree (golden rule 5). Null when no
+/// floor is lifted (the single tank datum, byte-identical).
+final downfeedDatumByFloorProvider = Provider<Map<int, Length>?>((ref) {
+  final tankElevation = ref.watch(downfeedTankElevationProvider);
+  if (tankElevation == null) return null;
+  final heads = ref.watch(downfeedMoverHeadsProvider);
+  if (heads.isEmpty) return null;
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  if (edges.isEmpty) return null;
+  final tank = _pickSource(net, edges, project.building,
+      preferHighest: true, mounting: project.mounting);
+  if (tank == null) return null;
+  // Round 68 — the tank's served-floor walk ([_downfeedTankWalk]): only the
+  // fixtures the zoned riser feeds (a booster ZONE hung off the tank — a
+  // wall set — neither lifts nor is lifted), and only the PIPE sets lift.
+  final w = _downfeedTankWalk(net, tank);
+  if (!w.adj.containsKey(tank)) return null;
+  final reachable = w.fed.intersection(w.delivery);
+  if (reachable.isEmpty) return null;
+  final lift = <String, double>{};
+  for (final set in w.pipeSets) {
+    var h = 0.0;
+    for (final id in set) {
+      final m = heads[id]?.meters ?? 0.0;
+      if (m > h) h = m;
+    }
+    if (h <= 0) continue;
+    final tankOnly = _tankReach(w.adj, tank, {...w.walls, ...set});
+    for (final id in reachable) {
+      if (!tankOnly.contains(id)) lift[id] = (lift[id] ?? 0.0) + h;
+    }
+  }
+  if (lift.isEmpty) return null;
+  final levels = project.building.levelCount;
+  final own = <int, double>{};
+  for (final id in reachable) {
+    final f = net.nodeById(id)!.floorIndex.clamp(0, levels - 1);
+    final l = lift[id] ?? 0.0;
+    if (l > (own[f] ?? -1)) own[f] = l;
+  }
+  final perFloor = List<double>.filled(levels, 0.0);
+  double? below;
+  for (var f = 0; f < levels; f++) {
+    final o = own[f];
+    perFloor[f] = o ?? below ?? 0.0;
+    if (o != null && (below == null || o > below)) below = o;
+  }
+  return {
+    for (var f = 0; f < levels; f++)
+      f: Length(tankElevation.meters + perFloor[f]),
+  };
+});
+
+/// Round 56 (plumbing-hvac-convergence-6-zone-table-ignores-drawn-downfeed-
+/// booster) — the gravity DATUM the downfeed zone table's TOP zone hangs
+/// from: the tank elevation ([downfeedTankElevationProvider]) PLUS the head
+/// of the mover set(s) the TOP storey's delivery passes
+/// ([downfeedDatumByFloorProvider] at the top floor; Round 68: a duty /
+/// standby pair lifts once, a fixture fed straight off the tank beside a
+/// tank-outlet booster no longer drops the lift). Null exactly when
+/// [downfeedTankElevationProvider] is; no mover drawn ⇒ that elevation
+/// verbatim.
+final effectiveDownfeedDatumProvider = Provider<Length?>((ref) {
+  final tankElevation = ref.watch(downfeedTankElevationProvider);
+  if (tankElevation == null) return null;
+  final byFloor = ref.watch(downfeedDatumByFloorProvider);
+  if (byFloor == null) return tankElevation;
+  final top = ref.watch(projectControllerProvider).building.levelCount - 1;
+  return byFloor[top] ?? tankElevation;
 });
 
 /// Per-zone PRV static profile (top residual → bottom static, within-limit) for
@@ -2644,6 +2803,7 @@ final zoneStaticsProvider = Provider<List<DownfeedZoneStatic>>((ref) {
     prvSetpoint: _prvSetpoint,
     maxStatic: const SniProfile().maxFixtureStaticPressure.value,
     tankElevation: ref.watch(effectiveDownfeedDatumProvider),
+    tankElevationByFloor: ref.watch(downfeedDatumByFloorProvider),
   );
 });
 

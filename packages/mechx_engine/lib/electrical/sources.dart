@@ -804,11 +804,20 @@ SolarResult sizeSolar({
 /// Energy = load × hours / (DoD × discharge-efficiency) → module count
 /// (round up). Backup autonomy only incurs the discharge path, so the round-trip
 /// charging loss is deliberately not applied.
+///
+/// Round 68 (elec-convergence-20-battery-hybrid-inverter-sized-on-kw-not-kva)
+/// — the ENERGY is the real power (kW × h), but the inverter's AC output is
+/// limited by its rated apparent power / current: it is selected on
+/// max([criticalLoad] W, [apparentLoad] VA) — the genset's max(S, P/0.8)
+/// basis — reading each ladder rung as its unity-PF kVA rating
+/// (`// VERIFY notAnSniClause`: a hybrid inverter's kVA = kW nameplate at
+/// cos phi 1). Null [apparentLoad] ⇒ the kW basis (byte-identical).
 BatteryResult sizeBattery(
   Power criticalLoad, {
   required double autonomyHours,
   BatteryChemistry chemistry = BatteryChemistry.lifepo4,
   Energy moduleKwh = kBatteryModuleLfp,
+  ApparentPower? apparentLoad,
 }) {
   final backupKw = criticalLoad.inKiloWatts;
   final dod = chemistry.depthOfDischarge;
@@ -818,7 +827,9 @@ BatteryResult sizeBattery(
   final moduleCount = math.max(1, _ceil(requiredKwh / modKwh));
   final installedKwh = _round(moduleCount * modKwh, 2);
   final usableKwh = _round(installedKwh * dod, 2);
-  final inv = selectInverterUnits(criticalLoad);
+  final va = apparentLoad?.voltAmperes ?? 0.0;
+  final vaGoverns = va > criticalLoad.watts + 1e-9;
+  final inv = selectInverterUnits(vaGoverns ? Power(va) : criticalLoad);
   final inverterKw = inv.unitKw;
 
   return BatteryResult(
@@ -836,11 +847,13 @@ BatteryResult sizeBattery(
         '${(kBatteryDischargeEfficiency * 100).round()}%) → '
         '${_round(requiredKwh, 1)} kWh ⇒ $moduleCount x ${_fmt(modKwh)} kWh = '
         '$installedKwh kWh; ${inverterRatingLabel(inverterKw, inv.units)} '
-        'inverter/charger${inv.units > 1 ? ' (paralleled — exceeds the largest '
-            'standard unit)' : ''}.',
+        'inverter/charger${vaGoverns ? ' (on the ${_round(va / 1000, 2)} kVA '
+            'apparent load)' : ''}${inv.units > 1 ? ' (paralleled — exceeds '
+            'the largest standard unit)' : ''}.',
     verifyItems: const <String>[
       'Battery DoD (LiFePO4 0.9 / lead-acid 0.5) + module kWh — confirm against the cell datasheet.',
       'Discharge-path efficiency (0.95) — confirm against the battery-inverter datasheet.',
+      'Inverter kVA = kW nameplate at unity PF, selected on max(kW, kVA) of the load — confirm the output kVA / current rating against the inverter datasheet.',
     ],
   );
 }
