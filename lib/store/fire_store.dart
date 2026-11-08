@@ -1015,11 +1015,29 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         sys.nodeIds.contains(n.id) &&
         n.role == NodeRole.plant &&
         !isSupplyInletComponent(n.component));
+    // Round 79 (fire-convergence-30-meter-fed-fire-system-phantom-pump-or-
+    // false-dry) — a degree-1 WATER METER on the fire pipework is a MAINS
+    // entry: the system is wet from the mains whether or not an FDC is also
+    // drawn, so it is never 'dry' (brigade-fed). It keeps the meter-fed
+    // reading (the Round-50 assumed fire pump at the meter, named by the
+    // `fire-pump-assumed:<service>` info) — the verdict and the MDP way can
+    // never depend on whether an FDC is drawn.
+    final mainsEntry = sys.nodeIds.any((id) {
+      if (net.nodeById(id)?.component != NodeComponent.waterMeter) {
+        return false;
+      }
+      var deg = 0;
+      for (final e in sys.edges) {
+        if (e.fromId == id || e.toId == id) deg++;
+      }
+      return deg == 1;
+    });
     final dry = pumps.isEmpty &&
         gravity == null &&
         hasTerminal &&
         inlets.isNotEmpty &&
-        !otherPlant;
+        !otherPlant &&
+        !mainsEntry;
     double? dryHeadM;
     if (dry) {
       final inlet = inlets.first;
@@ -1197,6 +1215,45 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           cum[k] = base + stage;
           addStage(st.pumpIds, raw, st.upstream,
               math.max(0.0, liftToFloor(floorOfStage(st))));
+        }
+      }
+      // Round 79 (regression-roof-booster-peer-rated-with-datum-lift) — a
+      // ROOT stage merged from peer pump rooms (Round 78: rooms drawing from
+      // DIFFERENT tanks into one network) rates each pump above its OWN
+      // suction source: a booster drawing from a roof tank develops the
+      // stage head less the rise of that tank above the system datum (it
+      // never lifts water it already has), clamped at
+      // [kMinFireStageHeadM]. A pump drawing from a tank at / below the
+      // datum keeps the full stage head; a standby on the same leg ends
+      // shares the suction part, so it takes the same figure. A root stage
+      // fed from ONE suction part (a single pump room) is untouched.
+      if (topo != null) {
+        final datumZ = building.elevationOf(datum).meters;
+        for (final st in topo) {
+          if (st.upstream != null) continue;
+          final keys = {
+            for (final id in st.pumpIds)
+              (st.suctionSourceIds[id] ?? const <String>[]).join(','),
+          };
+          if (keys.length < 2) continue;
+          for (final id in st.pumpIds) {
+            final srcs = [
+              for (final sid in st.suctionSourceIds[id] ?? const <String>[])
+                if (net.nodeById(sid) != null) net.nodeById(sid)!,
+            ];
+            if (srcs.isEmpty) continue;
+            final srcZ = srcs
+                .map((n) => nodeElevation(n, building, project.mounting).meters)
+                .reduce(math.min);
+            final rise = srcZ - datumZ;
+            if (rise <= 1e-9) continue;
+            final base = stageHeads[id]?.meters ?? head.meters;
+            final perPump = Head(math.max(kMinFireStageHeadM, base - rise));
+            final r = checkFirePumpRating(ratedFlow: flow, ratedHead: perPump);
+            stageHeads[id] = perPump;
+            stageDuties[id] =
+                firePumpDuty(ratedFlow: flow, ratedHead: perPump, rating: r);
+          }
         }
       }
       int floorOf(List<String> g) => g

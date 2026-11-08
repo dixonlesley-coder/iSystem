@@ -1020,7 +1020,17 @@ class FirePumpStage {
   final List<String> pumpIds;
   final FireSystem discharge;
   final int? upstream;
-  const FirePumpStage(this.pumpIds, this.discharge, this.upstream);
+
+  /// Round 79 (regression-roof-booster-peer-rated-with-datum-lift) — per
+  /// pump, the source plant nodes (tanks) of the part it takes SUCTION from.
+  /// A merged ROOT stage (Round 78 peer pump rooms) holds pumps drawing from
+  /// different tanks — a roof-tank booster beside the ground pump room — and
+  /// each develops only the head above its OWN suction source, never the
+  /// lift from the system datum it never sees. Sorted ids; empty when the
+  /// part holds no source plant (a downstream stage).
+  final Map<String, List<String>> suctionSourceIds;
+  const FirePumpStage(this.pumpIds, this.discharge, this.upstream,
+      {this.suctionSourceIds = const {}});
 }
 
 /// Round 51 (regression-same-floor-series-booster-full-head) — the pump
@@ -1086,14 +1096,16 @@ List<FirePumpStage>? fireSeriesPumpStages(
   }
 
   // Source labels: parts holding a non-pump, non-inlet plant node.
-  final sources = <String>{
-    for (final n in net.nodes)
-      if (system.nodeIds.contains(n.id) &&
-          !pumps.contains(n.id) &&
-          n.role == NodeRole.plant &&
-          !isSupplyInletComponent(n.component))
-        label(n.id),
-  };
+  final sourceIdsByLabel = <String, List<String>>{};
+  for (final n in net.nodes) {
+    if (system.nodeIds.contains(n.id) &&
+        !pumps.contains(n.id) &&
+        n.role == NodeRole.plant &&
+        !isSupplyInletComponent(n.component)) {
+      (sourceIdsByLabel[label(n.id)] ??= []).add(n.id);
+    }
+  }
+  final sources = sourceIdsByLabel.keys.toSet();
   if (sources.isEmpty) return null;
 
   final reached = <String>{...sources};
@@ -1168,6 +1180,11 @@ List<FirePumpStage>? fireSeriesPumpStages(
   // A part fed by two different stages: ambiguous.
   if (stageDischarge.toSet().length != stageDischarge.length) return null;
 
+  // Round 79 — each pump's own suction source plants.
+  final suctionOfPump = <String, String>{
+    for (final i in order)
+      for (final id in sets[i]) id: suction[i]!,
+  };
   final out = <FirePumpStage>[];
   for (var k = 0; k < stagePumps.length; k++) {
     final lab = stageDischarge[k];
@@ -1183,8 +1200,12 @@ List<FirePumpStage>? fireSeriesPumpStages(
     }
     if (!pumps.contains(lab)) nodes.add(lab);
     final up = stageDischarge.indexOf(stageSuction[k]);
-    out.add(FirePumpStage([...stagePumps[k]]..sort(), FireSystem(nodes, edges),
-        up < 0 ? null : up));
+    out.add(FirePumpStage(
+        [...stagePumps[k]]..sort(), FireSystem(nodes, edges), up < 0 ? null : up,
+        suctionSourceIds: {
+          for (final id in stagePumps[k])
+            id: [...?sourceIdsByLabel[suctionOfPump[id]]]..sort(),
+        }));
   }
   return out;
 }

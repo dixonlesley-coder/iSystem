@@ -71,7 +71,9 @@ import 'fault.dart'
         solvedRunLengthM;
 import 'genset_backup.dart'
     show
+        alternatorBasis,
         effectiveGeneratorBackupFraction,
+        serviceSystemOf,
         gensetBackedPanelIds,
         gensetBackupDemandVa,
         gensetBackupDemandW,
@@ -610,11 +612,14 @@ AdvancedStudy computeAdvancedStudy(
       // Round 16 — the genset's kW limit + the battery's real critical load.
       backupPower: gensetBackupDemandW(project, sys),
       demandPower: Power(sys.supply.demandW),
-      voltage: sys.supply.voltage,
+      // Round 79 — the bus / utility labels print the one service system
+      // ([serviceSystemOf]): a 3φ root beside a larger 1φ root is a 3φ
+      // 400 V service, never 'Main LV bus 230 V'.
+      voltage: serviceSystemOf(project, sys).voltage,
       motors:
           gensetStartMotors(project, sys: sys, assemblies: controlAssemblies),
-      utilitySub:
-          powerOneLineUtilitySub(project, sys, voltage: sys.supply.voltage),
+      utilitySub: powerOneLineUtilitySub(project, sys,
+          voltage: serviceSystemOf(project, sys).voltage),
       // Round 58 — the head follows the primary supply (PLN / genset / PV).
       supplyKind: project.supplyKind,
       supplyCapacity: project.supplyCapacityVa,
@@ -769,10 +774,16 @@ AdvancedStudy computeAdvancedStudy(
 
 /// Round 71 (elec-convergence-23) — the phase voltage an ON-SITE source of
 /// a single-phase supply is rated on (null on a 3-phase supply).
-double? onSiteSinglePhaseU0(ElectricalSystemResult sys) =>
-    sys.supply.system == ElectricalSystem.singlePhase
-        ? sys.supply.voltage.volts
-        : null;
+///
+/// Round 79 (regression-genset-fault-1ph-u0-on-3ph-alternator-ads-pass) —
+/// decided on the BOARDS the source feeds ([alternatorBasis]: any 3φ root
+/// or topmost backed board ⇒ a 3φ alternator), never on `sys.supply.system`
+/// alone (the governing root's): a set sized as a 3φ machine is faulted on
+/// S/(√3·400·Xd''), not the 3x larger S/(U0·Xd''), which passed ADS on ways
+/// that fail on the real alternator. An all-1φ service is byte-identical.
+double? onSiteSinglePhaseU0(
+        ElectricalProject project, ElectricalSystemResult sys) =>
+    alternatorBasis(project, sys).threePhase ? null : sys.supply.voltage.volts;
 
 /// Round 71 (elec-convergence-23) — the INSTALLED on-site PRIMARY plant (VA)
 /// a generator / solar supply is fault-rated on: the declared capacity, else
@@ -812,7 +823,7 @@ Current? serviceFaultEstimateFor(
         demand: sys.supply.demandVa,
         supply: studySupplyDesign(project, sys),
         onSitePlantVa: onSitePrimaryPlantVa(project, sys),
-        singlePhaseU0: onSiteSinglePhaseU0(sys));
+        singlePhaseU0: onSiteSinglePhaseU0(project, sys));
 
 /// Round 56 — the INSTALLED standby genset (VA): a forced nameplate × its
 /// units, else the set the G-01 schedule / spine / BOM size
@@ -934,7 +945,7 @@ String _kvaText(ApparentPower p) {
   if (va == null) return null;
   // Round 71 — a 1-phase supply's set is a single-phase alternator.
   final iscA = onSiteSourceFaultA(SupplyKind.generator, va,
-      singlePhaseU0: onSiteSinglePhaseU0(sys));
+      singlePhaseU0: onSiteSinglePhaseU0(project, sys));
   return (backed: backed, undesignated: undesignated, va: va, iscA: iscA);
 }
 

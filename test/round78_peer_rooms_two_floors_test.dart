@@ -15,7 +15,9 @@
 // therefore needs at least that head; reading the rooms as stages by floor
 // gave PA 3.5 m (clamped to 5 m, a 4 kW motor) and PB the remaining 50 m.
 // The ratings must equal the drawing with both rooms on floor 1 (computed
-// with the same datum) — no stage, no clamp, every pump the same machine.
+// with the same datum) — no stage, no clamp. Round 79: each room is rated
+// above its OWN suction tank — the floor-1 room's tank is 3.5 m above the
+// datum, so its pump develops the system head less 3.5 m.
 import 'dart:math' as math;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -129,19 +131,24 @@ void main() {
     expect(splitFireSystemAtSharedSource(net, sys), hasLength(1));
   });
 
-  test('two-floor mall: both rooms at the full system head, no stage', () {
+  test('two-floor mall: one root stage, each room above its own tank', () {
     final c = _c(_mall(floorA: 0, floorB: 1));
     final b = c.read(fireSystemBasesProvider).single;
     expect(b.pumpIds, unorderedEquals(['PA', 'PB']));
     expect(b.flow.inLitersPerSecond, closeTo(38.0, 0.01));
     expect(b.stages, isEmpty);
-    expect(b.stageHeads, isEmpty);
-    expect(b.stageDuties, isEmpty);
     // The yard point: 350 kPa (35.68 m) + 15 m + (3.5 + 1.1) m lift.
     expect(b.head.meters, closeTo(350000 / 9810 + 15 + 4.6, 0.05));
+    // Round 79 (regression-roof-booster-peer-rated-with-datum-lift) — room
+    // B draws from ITS OWN tank GB on floor 1, 3.5 m above the datum: PB
+    // develops the system head less that rise (35.68 + 15 + 1.1 m), never
+    // the floor-0 lift it never sees. PA keeps the full head.
+    expect(b.stageHeads.keys, ['PB']);
+    expect(b.stageHeads['PB']!.meters, closeTo(b.head.meters - 3.5, 1e-9));
     final duties = c.read(equipmentNodeDutiesProvider);
     final pa = duties['PA']!.motor.watts, pb = duties['PB']!.motor.watts;
-    expect(pa, pb);
+    expect(pb, lessThanOrEqualTo(pa));
+    expect(pb, greaterThanOrEqualTo(0.038 * 9810 * (b.head.meters - 3.5) / 0.7));
     // 38 L/s x 9810 x 55.28 m / 0.7 = 29.4 kW shaft => a 30 kW+ frame.
     expect(pa, greaterThanOrEqualTo(0.038 * 9810 * b.head.meters / 0.7));
     // One duty, the peer room's pump its standby.
@@ -157,7 +164,7 @@ void main() {
   });
 
   test('seeded: rooms on any two floors x service flips rate every pump at '
-      'the full head (== the same-floor reading)', () {
+      'the head above their own tank (== the same-floor reading)', () {
     final rnd = math.Random(7829);
     final flippable = ['ga', 'pa', 'xa', 'gb', 'pb', 'xb'];
     for (var t = 0; t < 10; t++) {
@@ -175,9 +182,19 @@ void main() {
       final datumLift = (1 - math.min(fa, fb)) * 3.5 + 1.1;
       expect(b.head.meters, closeTo(350000 / 9810 + 15 + datumLift, 0.05),
           reason: 'fa=$fa fb=$fb spr=$spr');
+      // Round 79 — each room above its OWN tank: a room on the upper floor
+      // (its tank 3.5 m above the datum) develops head − 3.5 m.
+      final lo = math.min(fa, fb);
+      for (final (id, f) in [('PA', fa), ('PB', fb)]) {
+        final want = b.head.meters - (f - lo) * 3.5;
+        expect(b.stageHeads[id]?.meters ?? b.head.meters, closeTo(want, 1e-9),
+            reason: '$id fa=$fa fb=$fb spr=$spr');
+      }
       final duties = c.read(equipmentNodeDutiesProvider);
-      expect(duties['PA']!.motor.watts, duties['PB']!.motor.watts,
-          reason: 'fa=$fa fb=$fb spr=$spr');
+      if (fa == fb) {
+        expect(duties['PA']!.motor.watts, duties['PB']!.motor.watts,
+            reason: 'fa=$fa fb=$fb spr=$spr');
+      }
       // Sizes are untouched by the rating fix: the ring main stays on the
       // yard floor (>= DN150).
       final sz = c.read(sizingProvider);

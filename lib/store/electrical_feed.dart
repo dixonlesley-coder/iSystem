@@ -149,6 +149,11 @@ class MepDutyBinding {
   /// [hwRecircPumpNodeIds].
   final Set<String> hwStandbyPumpNodeIds;
 
+  /// Round 79 — each hot-water STANDBY circulator mapped to the DUTY
+  /// circulator of its OWN parallel set ([parallelStandbyPumps]): a standby
+  /// is scheduled and fed at that pump's duty, never another riser's.
+  final Map<String, String> hwStandbyDutyOf;
+
   /// Round 31 (regression-duplex-ejector-standby-full-demand) — a sewage
   /// ejector that is the STANDBY of a duplex set (two or more ejectors on ONE
   /// pit discharging to ONE header — the engine's `duplexEjectorSets`,
@@ -177,6 +182,7 @@ class MepDutyBinding {
     this.fireAssumedJockeyPumpNodeIds = const {},
     this.supplyStandbyPumpNodeIds = const {},
     this.hwStandbyPumpNodeIds = const {},
+    this.hwStandbyDutyOf = const {},
     this.ejectorStandbyPumpNodeIds = const {},
   });
 }
@@ -297,6 +303,7 @@ final mepDutyBindingProvider = Provider<MepDutyBinding>((ref) {
     },
     supplyStandbyPumpNodeIds: supplyStandby,
     hwStandbyPumpNodeIds: hwStandby.keys.toSet(),
+    hwStandbyDutyOf: hwStandby,
     ejectorStandbyPumpNodeIds: duplexEjectorStandbys(
       net,
       drawnEjectorPumpIds(net),
@@ -356,7 +363,13 @@ final hwCirculatorDutiesProvider = Provider<Map<String, PumpDuty>>((ref) {
       out[id] = sizePump(flow: FlowRate(q * share), head: sys.design.loopHead);
     }
     for (final id in onSys) {
-      out.putIfAbsent(id, () => out[running.first] ?? sys.design.pump);
+      // Round 79 — a standby carries ITS OWN set's duty pump's duty.
+      out.putIfAbsent(
+          id,
+          () =>
+              out[bind.hwStandbyDutyOf[id]] ??
+              out[running.first] ??
+              sys.design.pump);
     }
   }
   return out;
@@ -398,8 +411,17 @@ Map<String, String> duplexEjectorStandbys(
 /// Round 23 (mep-bridge-3) — the STANDBY pumps among [pumps] (one service,
 /// [onService]), each mapped to the DUTY pump it backs up. Pure.
 ///
-/// Pumps are grouped by connected network of that service. In a group of two
-/// or more, the DUTY pump is the one NOT on a mirrored parallel leg
+/// Round 79 (plumbing-hvac-convergence-28-standby-pump-bound-to-another-
+/// sets-duty) — pumps are grouped by PARALLEL SET, never by connected
+/// network: a pump's set key is the two LEG ENDS its two [onService] pipes
+/// reach through degree-2 bare / inline-device nodes ([pumpLegEnds], the
+/// grouping the sizer's mirrored legs and `duplexEjectorSets` use). A hotel
+/// network holding a duplex transfer set GT -> TPa / TPb -> TJ AND a duplex
+/// roof booster RT -> BPa / BPb -> H is TWO sets: TPb backs TPa, BPb backs
+/// BPa — never every standby bound to the largest-bore pump of the network.
+/// A pump with no partner on the same leg ends stays a duty machine.
+///
+/// In a set of two or more, the DUTY pump is the one NOT on a mirrored parallel leg
 /// ([parallelLegEdgeIds]), then the largest incident bore, then the lowest id;
 /// every other pump is a standby of it. With [legOnly] only a pump actually
 /// incident to a parallel-leg edge is a standby (pumps in SERIES — a transfer
@@ -432,7 +454,11 @@ Map<String, String> parallelStandbyPumps(
   final groups = <String, List<String>>{};
   for (final id in pumps) {
     if (!parent.containsKey(id)) continue;
-    groups.putIfAbsent(find(id), () => []).add(id);
+    final ends = pumpLegEnds(net, id, onService);
+    final key = ends == null
+        ? '${find(id)}|$id'
+        : '${find(id)}|${ends.$1}|${ends.$2}';
+    groups.putIfAbsent(key, () => []).add(id);
   }
   double boreOf(String id) {
     var best = 0.0;
@@ -468,6 +494,51 @@ Map<String, String> parallelStandbyPumps(
     }
   }
   return out;
+}
+
+/// Round 79 — the two LEG ENDS of the pump [pumpId] on the [onService]
+/// pipework: from each of its two pipes, walk through degree-2 nodes that
+/// are bare (no component) or an inline device ([isInlineDeviceComponent])
+/// until a junction, a plant / fixture or another pump. Sorted pair; null
+/// when the pump does not sit on exactly two pipes of the service. Pure.
+(String, String)? pumpLegEnds(
+    Network net, String pumpId, bool Function(NetEdge e) onService) {
+  List<NetEdge> at(String id) => [
+        for (final e in net.edgesAt(id))
+          if (onService(e)) e,
+      ];
+  final start = at(pumpId);
+  if (start.length != 2) return null;
+  final ends = <String>[];
+  for (final first in start) {
+    var prev = pumpId;
+    var edge = first;
+    final seen = <String>{edge.id};
+    while (true) {
+      final cur = edge.fromId == prev ? edge.toId : edge.fromId;
+      final node = net.nodeById(cur);
+      final next = at(cur);
+      final passable = node != null &&
+          next.length == 2 &&
+          (node.component == null ||
+              isInlineDeviceComponent(node.component)) &&
+          node.role != NodeRole.plant &&
+          node.role != NodeRole.fixture;
+      if (!passable) {
+        ends.add(cur);
+        break;
+      }
+      final onward = next.firstWhere((e) => e.id != edge.id);
+      if (!seen.add(onward.id)) {
+        ends.add(cur);
+        break;
+      }
+      prev = cur;
+      edge = onward;
+    }
+  }
+  ends.sort();
+  return (ends[0], ends[1]);
 }
 
 /// Round 21 (fire-3-parallel-fire-pumps-each-full-duty) — classify the fire

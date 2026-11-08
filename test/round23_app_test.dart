@@ -344,12 +344,15 @@ void main() {
         bore: (_) => 25,
         legOnly: true);
     expect(out, isEmpty);
-    // Without legOnly (a hot-water recirc set) the lower-ranked pump of a
-    // connected pair (equal bores: the higher id) backs up the duty one.
+    // Round 79 (plumbing-hvac-convergence-28) — even without legOnly, pumps
+    // pair only within a PARALLEL SET (the same two leg ends): A sits on one
+    // pipe (no leg pair) and B's legs end at {A, X}, so two pumps in series
+    // are two duty machines, never a duty / standby pair (the old
+    // connected-network grouping paired them).
     final hw = parallelStandbyPumps(net, {'A', 'B'},
         onService: (e) => e.service == ServiceType.coldWater,
         bore: (_) => 25);
-    expect(hw, {'B': 'A'});
+    expect(hw, isEmpty);
   });
 
   // ── electrical undo re-syncs; the feed flip is undoable ──────────────────

@@ -755,6 +755,8 @@ enum StringKey {
   issueRoofTankBelowTopMessage, // {floor} {floors} {elevation}
   issueUpfeedAssumedTitle,
   issueUpfeedAssumedMessage,
+  issueFirePumpAssumedTitle,
+  issueFirePumpAssumedMessage,
   issueDownfeedBelowTargetTitle,
   issueDownfeedBelowTargetMessage,
   issueUpfeedBelowTargetTitle,
@@ -2304,6 +2306,9 @@ const Map<StringKey, String> _en = {
       'Fed from the mains (pressure not modelled)',
   StringKey.issueMainsFedMessage:
       'The {service} network ({nodes}) is fed straight from the mains through a water meter. The mains pressure is not modelled: confirm the PDAM pressure meets the target at the highest fixture.',
+  StringKey.issueFirePumpAssumedTitle: 'Fire pump assumed at the meter (not drawn)',
+  StringKey.issueFirePumpAssumedMessage:
+      'The {service} network ({nodes}) is fed from the mains through a water meter with no fire pump drawn: a fire pump is ASSUMED at the meter, rated {flow} L/s at {head} m, and carried on the equipment schedule and the electrical feed. The mains pressure is not modelled: draw the fire pump, or confirm the PDAM supply alone delivers that duty at the meter.',
   StringKey.issueUpfeedAssumedTitle: 'Upfeed pump assumed (not drawn)',
   StringKey.issueUpfeedAssumedMessage:
       'The {service} network ({nodes}) is set to upfeed but no pump is drawn: an upfeed pump is ASSUMED at the meter, sized on the peak flow and the head to the critical fixture, and carried on the equipment schedule and the electrical feed. Draw the pump where it will be installed.',
@@ -3980,6 +3985,10 @@ const Map<StringKey, String> _id = {
       'Disuplai dari PDAM (tekanan tidak dimodelkan)',
   StringKey.issueMainsFedMessage:
       'Jaringan {service} ({nodes}) disuplai langsung dari PDAM melalui meter air. Tekanan PDAM tidak dimodelkan: pastikan tekanannya memenuhi target di fikstur tertinggi.',
+  StringKey.issueFirePumpAssumedTitle:
+      'Pompa kebakaran diasumsikan di meter air (tidak digambar)',
+  StringKey.issueFirePumpAssumedMessage:
+      'Jaringan {service} ({nodes}) disuplai dari PDAM melalui meter air tanpa pompa kebakaran yang digambar: pompa kebakaran DIASUMSIKAN di meter air, berkapasitas {flow} L/s pada {head} m, serta dicantumkan di jadwal peralatan dan suplai listrik. Tekanan PDAM tidak dimodelkan: gambarkan pompa kebakaran, atau pastikan suplai PDAM sendiri memenuhi kapasitas tersebut di meter air.',
   StringKey.issueUpfeedAssumedTitle:
       'Pompa dorong diasumsikan (tidak digambar)',
   StringKey.issueUpfeedAssumedMessage:
