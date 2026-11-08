@@ -52,7 +52,7 @@ import 'fault.dart'
         solvedRunLengthM,
         sourceImpedanceFromIsc,
         subPanelBusFaultA;
-import 'genset_backup.dart' show isEssentialByName;
+import 'genset_backup.dart' show isEssentialByName, upsInputCurrentA;
 import 'geo_length.dart';
 import 'harmonics.dart' show neutralOversizeFactor;
 import 'headroom.dart' show HeadroomSpec;
@@ -2526,14 +2526,8 @@ _CircuitComputation _computeCircuit(
 /// board's diversified demand VA x [kUpsInputFactor] (output / efficiency +
 /// battery recharge, `// VERIFY`) over sqrt3 x V (3φ) or V (1φ), at 0.1 A —
 /// the same basis the feeder is sized on. Null for a board without a UPS.
-double? _upsInputCurrentA(ElectricalPanel? panel, ElectricalPanelResult r) {
-  if (panel == null || !panel.upsBacked) return null;
-  final v = panel.voltage.volts;
-  if (v <= 0) return null;
-  final va = r.demandVaOrEstimate() * kUpsInputFactor;
-  final three = panel.system == ElectricalSystem.threePhase;
-  return roundTo(three ? va / (math.sqrt(3) * v) : va / v, 1);
-}
+double? _upsInputCurrentA(ElectricalPanel? panel, ElectricalPanelResult r) =>
+    upsInputCurrentA(panel, r);
 
 // ── panel computation ───────────────────────────────────────────────────────
 
@@ -4562,13 +4556,22 @@ ElectricalSystemResult computeSystem(
     if (serviceMinCurrentA != null) {
       final rootId = roots.first.id;
       final rootResult = results[rootId];
+      // Round 77 (elec-convergence-28-ups-root-service-judges-on-output) —
+      // a UPS-backed service-entrance board is supplied THROUGH its UPS: the
+      // limiter carries the balanced UPS INPUT ([upsInputCurrentA], output /
+      // efficiency + recharge), the basis the supply demand and the
+      // recommended daya already use — never the output board's current.
+      final rootUps = roots.first.upsBacked;
       final rawDivA = rootResult == null
           ? 0.0
-          : roundTo(rootResult.diversifiedDemandCurrent.amperes, 1);
+          : rootUps
+              ? (upsInputCurrentA(roots.first, rootResult) ?? 0.0)
+              : roundTo(rootResult.diversifiedDemandCurrent.amperes, 1);
       // Round 40 — the limiter must also pass the largest single machine on
       // the service at its UNDIVERSIFIED running current (the figure that
       // floors the incomer and the recommended daya).
-      final machineA = rootResult?.largestDownstreamRunA ?? 0.0;
+      final machineA = (rootResult?.largestDownstreamRunA ?? 0.0) *
+          (rootUps ? kUpsInputFactor : 1.0);
       final machineGoverns = machineA > rawDivA;
       final divA = machineGoverns ? machineA : rawDivA;
       if (rootResult != null && divA > serviceMinCurrentA + 1e-9) {
@@ -4580,7 +4583,8 @@ ElectricalSystemResult computeSystem(
           // judged against is that section, never misstated as the declared
           // total.
           message: '${rootResult.name}: '
-              '${machineGoverns ? 'the largest single machine running current' : 'diversified demand'} '
+              '${machineGoverns ? 'the largest single machine running current' : 'diversified demand'}'
+              '${rootUps ? ' (UPS input)' : ''} '
               '${_num(divA)} A on the worst-loaded '
               'phase exceeds '
               '${serviceSections(project) > 1 ? 'one ${_num(serviceCapacityVa! / 1000)} kVA section of the declared '
