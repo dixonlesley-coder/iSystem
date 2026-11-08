@@ -3181,6 +3181,9 @@ ElectricalPanelResult computePanel(
     // Round 44 — the factor scales the CURRENT, never a withstand-floored
     // section.
     phaseSizingCurrentA: incomerSizingCurrentA,
+    // Round 75 — a parallel phase set's neutral / PE follow the same
+    // `n × top` rule (never one bar of the summed section).
+    phaseParallelBars: busbar.parallelBars,
   );
 
   // Split the panel bus into capacity-bounded sections (each floored at the same
@@ -3267,21 +3270,25 @@ ElectricalPanelResult computePanel(
   }
   // Round 74 (regression-2) — a bar past the standard flat-bar table is a
   // set of PARALLEL top-rung bars (`BusbarResult.parallelBars`); say so, so
-  // the issued schedule / BOM is never a silent non-standard section. Judge-
-  // only: the bar is already sized; the derating of parallel bars is the
-  // assembly manufacturer's to confirm (`// VERIFY notAnSniClause`).
+  // the issued schedule / BOM is never a silent non-standard section.
+  // Round 75 (regression-1) — an acknowledgeable INFO: the set is already
+  // rated on the DERATED `top × parallelBarFactor(n)` (never n × one bar),
+  // and the note is raised against the engine's OWN pick with no action the
+  // engineer can take — a WARNING made every 1600 A+ main board fail
+  // compliance permanently (`// VERIFY notAnSniClause`, the manufacturer
+  // confirms the derating).
   void beyondTable(BusbarResult b, String where) {
     if (b.parallelBars <= 1) return;
     final bar = '${_num(b.widthMm)}x${_num(b.thicknessMm)}';
     warnings.add(ElectricalWarning(
       code: 'busbar-beyond-standard-table',
-      severity: WarningSeverity.warning,
+      severity: WarningSeverity.info,
       message:
           '$where: ${_num(b.totalCurrentA.amperes)} A exceeds the largest '
           'standard bar — specified as ${b.parallelBars} x ($bar) parallel '
-          'bars (${_num(b.csaMm2)} mm2, ${_num(b.ampacityA.amperes)} A); '
-          'verify the parallel-bar derating with the assembly manufacturer, '
-          'or use a busway.',
+          'bars (${_num(b.csaMm2)} mm2), rated ${_num(b.ampacityA.amperes)} A '
+          'after the parallel-bar derating (x${parallelBarFactor(b.parallelBars)}); '
+          'confirm with the assembly manufacturer, or use a busway.',
       panelId: panel.id,
     ));
   }
@@ -3305,7 +3312,7 @@ ElectricalPanelResult computePanel(
       message: '${panel.name}: single-phase non-linear load '
           '(${(triplenFraction * 100).round()}%) raises triplen-harmonic '
           'neutral current to ~${neutralPe.neutralOversizeFactor}x phase — '
-          '${neutralPe.oversized ? 'neutral bar oversized to ${_num(neutralPe.neutralCsaMm2)} mm² (phase bar ${_num(busbar.csaMm2)} mm²)' : 'the full-size ${_num(neutralPe.neutralCsaMm2)} mm² neutral bar (the phase bar, sized for the fault withstand / incomer) already carries it'}.',
+          '${neutralPe.oversized ? 'neutral bar oversized to ${neutralBarSpec(neutralPe)} (phase bar ${_num(busbar.csaMm2)} mm²)' : 'the full-size ${_num(neutralPe.neutralCsaMm2)} mm² neutral bar (the phase bar, sized for the fault withstand / incomer) already carries it'}.',
       panelId: panel.id,
     ));
   }

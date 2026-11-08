@@ -9660,12 +9660,28 @@ List<FireTestLine> fireTestLineChains(
     }
   }
   if (candidates.isEmpty && headerCandidates.isEmpty) return const [];
-  // Each candidate is judged with ONLY its own chain removed (a duplex
-  // room's tank -> suction-header main is a candidate chain too, and
-  // removing it as well would cut the tank off the room).
-  final out = <FireTestLine>[];
-  for (final c in candidates) {
-    final stripIds = c.edgeIds.toSet();
+  // Round 75 (fire-convergence-26-two-test-loops-unrecognised-pump-bypass)
+  // — judging each candidate with ONLY its own chain removed failed as soon
+  // as a second loop was drawn: the other loop still short-circuited the
+  // pump (suction and discharge connected through it), so NO loop verified
+  // (a flow-meter loop to the tank beside a bypass to the suction header),
+  // or a series room's real trunk chains verified as "test lines" while
+  // another stage's loop bypassed them. Stripping ALL candidates at once is
+  // no answer either: a tank -> suction-header main and every riser segment
+  // of a pump-room block are candidates too, so the network falls apart.
+  // Each candidate is therefore judged with itself, every ACCEPTED line and
+  // every other LOOP-LIKE candidate (both ends at a pump-room header or a
+  // tank) whose removal does not SPLIT the network stripped (a loop always
+  // has a parallel path through its pump; a tank main whose loop is gone
+  // does not), to a fixed point; both candidate orders are tried so two
+  // loops sharing the tank never decide which of them keeps it fed. The
+  // verdict itself stays the fixture-side test (the join must feed the
+  // terminals), which a main never passes.
+  ({
+    Network stripped,
+    _TestLineMoverIndex ix,
+    Map<String, Map<String, bool>> suctionStart,
+  }) context(Set<String> stripIds) {
     final stripped = Network(nodes: net.nodes, edges: [
       for (final e in net.edges)
         if (!stripIds.contains(e.id)) e,
@@ -9677,11 +9693,23 @@ List<FireTestLine> fireTestLineChains(
       (sAdj[e.fromId] ??= []).add(e);
       (sAdj[e.toId] ??= []).add(e);
     }
-    var verified = false;
     final ix = _TestLineMoverIndex(
         stripped, (suctionStart: hop.suctionStart), sAdj);
+    return (stripped: stripped, ix: ix, suctionStart: hop.suctionStart);
+  }
+
+  // A tank-family candidate verified against one stripped context.
+  bool tankVerified(
+      FireTestLine c,
+      ({
+        Network stripped,
+        _TestLineMoverIndex ix,
+        Map<String, Map<String, bool>> suctionStart,
+      }) cx) {
+    final stripped = cx.stripped;
+    final ix = cx.ix;
     for (final MapEntry(key: moverId, value: legs)
-        in hop.suctionStart.entries) {
+        in cx.suctionStart.entries) {
       final interior = ix.interiorOf[moverId]!;
       final sides = ix.sidesOf[moverId]!;
       // Round 74 r2 — the tank may be reached from the suction side of any
@@ -9700,36 +9728,26 @@ List<FireTestLine> fireTestLineChains(
           (interior[l.key]?.contains(c.joinId) ?? false) &&
           interior[l.key]!
               .any((id) => stripped.nodeById(id)?.role == NodeRole.fixture));
-      if (suctionReachesTank && dischargeHoldsJoin) {
-        verified = true;
-        break;
-      }
+      if (suctionReachesTank && dischargeHoldsJoin) return true;
     }
-    if (verified) out.add(c);
+    return false;
   }
-  for (final c in headerCandidates) {
-    // A mover or tank on the chain would be a real parallel leg / a tank
-    // line: excluded by construction (plants never pass), re-checked here.
-    final stripIds = c.edgeIds.toSet();
-    final stripped = Network(nodes: net.nodes, edges: [
-      for (final e in net.edges)
-        if (!stripIds.contains(e.id)) e,
-    ]);
-    final hop = fireHopSources(stripped, elevationOf: elevationOf);
-    final sAdj = <String, List<NetEdge>>{};
-    for (final e in stripped.edges) {
-      if (!isFireService(e.service)) continue;
-      (sAdj[e.fromId] ??= []).add(e);
-      (sAdj[e.toId] ??= []).add(e);
-    }
-    FireTestLine? found;
+
+  // A header-family candidate verified (and oriented) against one context.
+  FireTestLine? headerVerified(
+      ({List<String> edgeIds, String a, String b}) c,
+      ({
+        Network stripped,
+        _TestLineMoverIndex ix,
+        Map<String, Map<String, bool>> suctionStart,
+      }) cx) {
+    final stripped = cx.stripped;
+    final ix = cx.ix;
     // Round 74 (regression-1) — a test loop from a series room's TOP
     // discharge header back to the FIRST stage's suction header is judged
     // against the whole series chain ([_TestLineMoverIndex]).
-    final ix = _TestLineMoverIndex(
-        stripped, (suctionStart: hop.suctionStart), sAdj);
     for (final MapEntry(key: moverId, value: legs)
-        in hop.suctionStart.entries) {
+        in cx.suctionStart.entries) {
       final interior = ix.interiorOf[moverId]!;
       final sides = ix.sidesOf[moverId]!;
       // A suction side's interior holds the suction header (its `sides`
@@ -9753,19 +9771,162 @@ List<FireTestLine> fireTestLineChains(
         if (feedsTerminals(d) &&
             !onDischarge(s) &&
             (onSuction(s) || onUpstreamSuction(s))) {
-          found = (
+          return (
             edgeIds: d == c.a ? c.edgeIds : c.edgeIds.reversed.toList(),
             joinId: d,
             tankId: s,
           );
-          break;
         }
       }
-      if (found != null) break;
     }
-    if (found != null) out.add(found);
+    return null;
   }
-  return out;
+
+  // Candidate keys: 't<i>' tank family, 'h<i>' header family.
+  final chainOf = <String, Set<String>>{
+    for (var i = 0; i < candidates.length; i++)
+      't$i': candidates[i].edgeIds.toSet(),
+    for (var i = 0; i < headerCandidates.length; i++)
+      'h$i': headerCandidates[i].edgeIds.toSet(),
+  };
+  final accepted = <String, FireTestLine>{};
+  FireTestLine? judge(String key, Set<String> stripIds,
+      [({
+        Network stripped,
+        _TestLineMoverIndex ix,
+        Map<String, Map<String, bool>> suctionStart,
+      })? shared]) {
+    final cx = shared ?? context(stripIds);
+    if (key.startsWith('t')) {
+      final c = candidates[int.parse(key.substring(1))];
+      return tankVerified(c, cx) ? c : null;
+    }
+    return headerVerified(headerCandidates[int.parse(key.substring(1))], cx);
+  }
+
+  // Candidate chain END nodes (a chain's interior pass-through nodes go with
+  // it when it is stripped).
+  final endsOf = <String, Set<String>>{
+    for (var i = 0; i < candidates.length; i++)
+      't$i': {candidates[i].tankId, candidates[i].joinId},
+    for (var i = 0; i < headerCandidates.length; i++)
+      'h$i': {headerCandidates[i].a, headerCandidates[i].b},
+  };
+  final fireEdgeList = [
+    for (final e in net.edges)
+      if (isFireService(e.service)) e,
+  ];
+  // Connected components of the fire network with [keys]' chains stripped
+  // (their interior nodes dropped with them).
+  int components(Set<String> keys) {
+    final goneEdges = {for (final k in keys) ...chainOf[k]!};
+    final goneNodes = <String>{};
+    for (final k in keys) {
+      for (final id in chainOf[k]!) {
+        final e = net.edgeById(id)!;
+        for (final n in [e.fromId, e.toId]) {
+          if (!endsOf[k]!.contains(n)) goneNodes.add(n);
+        }
+      }
+    }
+    final parent = <String, String>{};
+    String find(String x) {
+      var r = x;
+      while (parent[r] != r) {
+        r = parent[r]!;
+      }
+      var c = x;
+      while (parent[c] != r) {
+        final nx = parent[c]!;
+        parent[c] = r;
+        c = nx;
+      }
+      return r;
+    }
+
+    for (final e in fireEdgeList) {
+      for (final n in [e.fromId, e.toId]) {
+        if (!goneNodes.contains(n)) parent.putIfAbsent(n, () => n);
+      }
+    }
+    var count = parent.length;
+    for (final e in fireEdgeList) {
+      if (goneEdges.contains(e.id)) continue;
+      final ra = find(e.fromId), rb = find(e.toId);
+      if (ra != rb) {
+        parent[ra] = rb;
+        count--;
+      }
+    }
+    return count;
+  }
+
+  // A node at a pump-room header: a fire mover is reached from it along
+  // one of its pipes through pass-through nodes only (bends, valves).
+  final moverAdjacentMemo = <String, bool>{};
+  bool moverAdjacent(String id) => moverAdjacentMemo[id] ??= () {
+        for (final e0 in adj[id] ?? const <NetEdge>[]) {
+          var cur = id;
+          var edge = e0;
+          final seen = <String>{id};
+          while (true) {
+            final next = edge.fromId == cur ? edge.toId : edge.fromId;
+            if (!seen.add(next)) break;
+            final nn = net.nodeById(next);
+            if (nn == null) break;
+            if (_isFireMover(nn)) return true;
+            if (nn.role == NodeRole.plant ||
+                nn.role == NodeRole.fixture ||
+                (adj[next]?.length ?? 0) != 2) {
+              break;
+            }
+            cur = next;
+            edge = adj[next]!.firstWhere((x) => x.id != edge.id);
+          }
+        }
+        return false;
+      }();
+  // Only a LOOP-LIKE other candidate — every end at a pump-room header or
+  // a storage tank — is stripped beside the one judged: a riser segment
+  // (both ends mid-riser) on a cycle closed by a loop must stay, or the
+  // loop it would leave behind still short-circuits the pumps.
+  bool loopLike(String key) => endsOf[key]!
+      .every((n) => moverAdjacent(n) || isTank(net.nodeById(n)));
+
+  // Judge [key] with itself, every accepted line, and as many OTHER
+  // candidates as can be stripped WITHOUT splitting the network (in
+  // [order]) — every other loop that could still short-circuit the pumps
+  // is gone, while a tank -> suction-header main (whose removal would cut
+  // the tank off the room) stays.
+  FireTestLine? judgeIsolated(String key, List<String> order) {
+    final strip = <String>{key, ...accepted.keys};
+    final base = components(strip);
+    for (final d in order) {
+      if (strip.contains(d) || !loopLike(d)) continue;
+      if (components({...strip, d}) <= base) strip.add(d);
+    }
+    return judge(key, {for (final k in strip) ...chainOf[k]!});
+  }
+
+  final keys = chainOf.keys.toList();
+  final reversedKeys = keys.reversed.toList();
+  var grew = true;
+  while (grew) {
+    grew = false;
+    for (final key in keys) {
+      if (accepted.containsKey(key)) continue;
+      final line =
+          judgeIsolated(key, keys) ?? judgeIsolated(key, reversedKeys);
+      if (line != null) {
+        accepted[key] = line;
+        grew = true;
+      }
+    }
+  }
+  return [
+    for (final key in keys)
+      if (accepted[key] case final line?) line,
+  ];
 }
 
 /// Round 74 — each fire mover's sides on a test-line candidate's stripped
