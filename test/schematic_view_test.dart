@@ -12,9 +12,12 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/history_store.dart';
+import 'package:mechx/store/layer_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/schematic_layout_store.dart';
+import 'package:mechx/store/schematic_view_store.dart';
 import 'package:mechx/store/selection_store.dart';
+import 'package:mechx/ui/canvas/service_style.dart';
 import 'package:mechx/ui/canvas/viewport.dart';
 import 'package:mechx/ui/schematic/schematic_view.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
@@ -138,16 +141,20 @@ void main() {
 
       expect(tester.takeException(), isNull);
       // The legend is now DRAWING CHROME — OFF by default on the live canvas
-      // (it rides the export). So only the toolbar toggle button shows 'Legend'
-      // and 'Cold water' (the chip), with no legend card yet.
-      expect(find.text('Legend'), findsOneWidget);
+      // (it rides the export), and its toggle lives in the 'Show' popover
+      // (closed at rest). So no 'Legend' text yet; 'Cold water' is the chip.
+      expect(find.text('Legend'), findsNothing);
       expect(find.text('Cold water'), findsOneWidget);
 
-      // Tapping the toggle previews the legend overlay on the canvas.
+      // Open 'Show', then tick Legend to preview the overlay on the canvas.
+      await tester.tap(find.text('Show'));
+      await tester.pump();
+      expect(find.text('Legend'), findsOneWidget);
+      expect(find.text('Export preview'), findsOneWidget);
       await tester.tap(find.text('Legend'));
       await tester.pump();
 
-      // Now 'Legend' appears twice (toolbar button + legend card header).
+      // Now 'Legend' appears twice (popover row + legend card header).
       expect(find.text('Legend'), findsNWidgets(2));
       // Pipe tags are CustomPaint-only, so a found 'CW' Text widget proves the
       // legend (the only place 'CW' is a Flutter Text) rendered, and the full
@@ -207,7 +214,10 @@ void main() {
         ),
       ]));
       await tester.pump();
-      expect(find.text('Feed: gravity downfeed'), findsOneWidget);
+      // Round 17 (drafting-visual-3-4) — no roof tank and no pump ⇒ fed from
+      // the mains; never 'gravity downfeed' without the tank it hangs from.
+      expect(find.text('Feed: direct mains'), findsOneWidget);
+      expect(find.textContaining('gravity downfeed'), findsNothing);
       expect(find.textContaining('(roof tank)'), findsNothing);
     });
 
@@ -233,10 +243,10 @@ void main() {
       await tester.pump();
 
       // showDetails/showNotes default true at the store level, so the Notes
-      // card renders without any toolbar interaction. 'Notes' also labels the
-      // toolbar toggle chip, so there are two matches — the card's own title
-      // (muted caption, w600) is the second/last one.
-      expect(find.text('Notes'), findsNWidgets(2));
+      // card renders without any toolbar interaction. The 'Notes' toggle lives
+      // in the closed 'Show' popover, so the only match is the card's own
+      // title (muted caption, w600).
+      expect(find.text('Notes'), findsOneWidget);
       final notesTitle = find.text('Notes').last;
 
       // No Liquid-Glass ancestor between the Notes title and the SchematicView
@@ -333,7 +343,7 @@ void main() {
     // diagram x moved, and the primed redo entry still intact.
     testWidgets(
         'select-to-inspect pushes NO undo step and keeps redo; a riser drag '
-        'moves the DIAGRAM only and records nothing', (tester) async {
+        'moves the DIAGRAM only, as ONE undoable layout step', (tester) async {
       await tester.pumpWidget(editHarness());
       await tester.pump();
 
@@ -381,8 +391,72 @@ void main() {
       expect(container.read(schematicLayoutProvider).xForId('lo', planX),
           isNot(200),
           reason: 'the elevation override carries the move');
-      expect(history.canUndo, isFalse);
-      expect(history.canRedo, isTrue);
+      // R3 RE-DERIVATION — the drag is now ONE riser-layout step on the global
+      // timeline (it forks history like any edit, so the primed redo goes);
+      // one undo returns the riser to its plan x, the plan untouched.
+      expect(history.canUndo, isTrue);
+      expect(history.canRedo, isFalse);
+      history.undo();
+      expect(container.read(schematicLayoutProvider).xForId('lo', planX), 200);
+      expect(
+          container.read(networkControllerProvider).network.nodeById('lo')!.x,
+          200);
+    });
+
+    testWidgets(
+        'Edit picker is discipline-scoped: exactly servicesFor(discipline) '
+        'chips, and switching discipline re-selects a valid service',
+        (tester) async {
+      await tester.pumpWidget(editHarness());
+      await tester.pump();
+      final container = ProviderScope.containerOf(
+        tester.element(find.byType(SchematicView)),
+        listen: false,
+      );
+      await tester.tap(find.text('Edit'));
+      await tester.pump();
+
+      void expectChipsFor(DisciplineLayer d) {
+        final shown = servicesFor(d).toSet();
+        for (final s in ServiceType.values) {
+          expect(find.text(serviceLabel(s)),
+              shown.contains(s) ? findsOneWidget : findsNothing,
+              reason: '$s chip under ${d.label}');
+        }
+      }
+
+      // Default service cold water ⇒ the Plumbing discipline (5 chips).
+      expect(container.read(schematicViewProvider).effectiveEditDiscipline,
+          DisciplineLayer.plumbing);
+      expectChipsFor(DisciplineLayer.plumbing);
+      expect(servicesFor(DisciplineLayer.plumbing), hasLength(5));
+
+      // Fire: cold water isn't a fire service ⇒ the first fire service.
+      await tester.tap(find.text('Fire'));
+      await tester.pump();
+      expectChipsFor(DisciplineLayer.fire);
+      expect(container.read(schematicViewProvider).service,
+          servicesFor(DisciplineLayer.fire).first);
+
+      // HVAC: 3 chips, the first air service selected.
+      await tester.tap(find.text('HVAC'));
+      await tester.pump();
+      expectChipsFor(DisciplineLayer.hvac);
+      final hvacFirst = servicesFor(DisciplineLayer.hvac).first;
+      expect(container.read(schematicViewProvider).service, hvacFirst);
+
+      // Picking a different HVAC chip, then re-picking HVAC, keeps it.
+      final hvacSecond = servicesFor(DisciplineLayer.hvac)[1];
+      // (via the same onService the chip calls — the 1200-px harness's wide
+      // test font can push the 3rd chip under the Riser card)
+      container.read(schematicViewProvider.notifier).setService(hvacSecond);
+      await tester.pump();
+      expect(find.text(serviceLabel(hvacSecond)), findsOneWidget);
+      container
+          .read(schematicViewProvider.notifier)
+          .setEditDiscipline(DisciplineLayer.hvac);
+      expect(container.read(schematicViewProvider).service, hvacSecond);
+      expect(tester.takeException(), isNull);
     });
   });
 }

@@ -377,8 +377,8 @@ void main() {
     test('fittingsToCsv has a header and one row per line', () {
       final csv = fittingsToCsv(buildFittings(net: _net, sizing: _sizing));
       final lines = csv.trim().split('\n');
-      // N18: neutral column name (was nominal_dn_mm).
-      expect(lines.first, 'service,fitting,nominal_size_mm,count');
+      // N18: neutral column name (was nominal_dn_mm); Round 21: + material.
+      expect(lines.first, 'service,fitting,nominal_size_mm,material,count');
       expect(lines.length, greaterThan(1));
     });
   });
@@ -699,10 +699,12 @@ void main() {
       // N13: the tag column sits right after kind, before the floor column.
       expect(lines.first,
           'service,kind,tag,floor,nominal_size_mm,material,length_m,segments');
-      // Floor 0 → human 1 (tag CW-F1), floor 1 → human 2 (CW-F2), riser → the
-      // stack tag CW-R1 with an empty floor cell (all PPR).
-      expect(lines, contains('coldWater,run,CW-F1,1,25,PPR,5.00,1'));
-      expect(lines, contains('coldWater,run,CW-F2,2,25,PPR,3.00,1'));
+      // Floor 0 → human 1, floor 1 → human 2 in the floor column; Round 29 —
+      // the TAG reads the building's ground-relative level (ground index 0:
+      // floor 0 = GF, floor 1 = L1), riser → the stack tag CW-R1 with an
+      // empty floor cell (all PPR).
+      expect(lines, contains('coldWater,run,CW-GF,1,25,PPR,5.00,1'));
+      expect(lines, contains('coldWater,run,CW-L1,2,25,PPR,3.00,1'));
       expect(lines, contains('coldWater,riser,CW-R1,,50,PPR,3.50,1'));
     });
 
@@ -727,17 +729,18 @@ void main() {
         building: _building,
         groupByFloor: true,
       );
-      // Runs (floor-grouped): service code + 1-based floor.
+      // Runs (floor-grouped): service code + the building's ground-relative
+      // level (Round 29: GF, then L1 — the sheet-title numbering).
       expect(
           grouped
               .singleWhere((l) => l.kind == EdgeKind.run && l.floorIndex == 0)
               .tag,
-          'CW-F1');
+          'CW-GF');
       expect(
           grouped
               .singleWhere((l) => l.kind == EdgeKind.run && l.floorIndex == 1)
               .tag,
-          'CW-F2');
+          'CW-L1');
       // Riser: its per-service stack tag (same as riserTags), never a floor tag.
       expect(grouped.singleWhere((l) => l.kind == EdgeKind.riser).tag, 'CW-R1');
 
@@ -750,6 +753,79 @@ void main() {
       );
       expect(ungrouped.singleWhere((l) => l.kind == EdgeKind.run).tag, 'CW');
       expect(ungrouped.singleWhere((l) => l.kind == EdgeKind.riser).tag, 'CW-R1');
+    });
+  });
+
+  // Audit water-drainage-8: the BOM must measure a riser with the SAME
+  // MountingHeights the solve sizes on (autoSizeNetwork → edgeLength(mounting)),
+  // so the printed take-off equals the solved length.
+  //
+  // Riser m1 (main, floor 1) → f0 (fixture, floor 0):
+  //   default  (drop 0.3, fixture 1.1): ceiling(1) = 4.0 + 3.5 − 0.3 = 7.2 m,
+  //                                     fixture(0) = 0.0 + 1.1       = 1.1 m
+  //                                     length     = 7.2 − 1.1       = 6.1 m
+  //   project  (drop 0.5, fixture 0.6): ceiling(1) = 4.0 + 3.5 − 0.5 = 7.0 m,
+  //                                     fixture(0) = 0.0 + 0.6       = 0.6 m
+  //                                     length     = 7.0 − 0.6       = 6.4 m
+  group('buildBom — mounting heights (water-drainage-8)', () {
+    const m1 = NetNode(id: 'm1', sheetId: 's1', x: 0, y: 0, floorIndex: 1);
+    const f0 = NetNode(
+        id: 'f0',
+        sheetId: 's1',
+        x: 0,
+        y: 0,
+        floorIndex: 0,
+        role: NodeRole.fixture);
+    const r = NetEdge(
+      id: 'r',
+      fromId: 'm1',
+      toId: 'f0',
+      service: ServiceType.coldWater,
+      kind: EdgeKind.riser,
+    );
+    const net = Network(nodes: [m1, f0], edges: [r]);
+    const sizing = <String, EdgeSizing>{
+      'r': EdgeSizing(
+        edgeId: 'r',
+        service: ServiceType.coldWater,
+        flow: FlowRate(0.001),
+        diameter: Diameter(0.025),
+        velocity: Velocity(1.0),
+      ),
+    };
+    const mounting = MountingHeights(
+      ceilingDrop: Length(0.5),
+      fixtureHeight: Length(0.6),
+    );
+
+    test('default mounting keeps the legacy 6.1 m riser (byte-identical)', () {
+      final bom = buildBom(
+        net: net,
+        sizing: sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+      );
+      expect(bom.single.totalLength.meters, closeTo(6.1, 1e-9));
+    });
+
+    test('a project mounting moves the BOM riser to the solved 6.4 m', () {
+      final bom = buildBom(
+        net: net,
+        sizing: sizing,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+        mounting: mounting,
+      );
+      // The solve's own length primitive with the same inputs.
+      final solved = edgeLength(
+        r,
+        net,
+        calibrationBySheet: _calibrationBySheet,
+        building: _building,
+        mounting: mounting,
+      ).meters;
+      expect(solved, closeTo(6.4, 1e-9));
+      expect(bom.single.totalLength.meters, closeTo(solved, 1e-12));
     });
   });
 }

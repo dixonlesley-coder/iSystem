@@ -21,6 +21,15 @@ void main() {
     expect(match(LogicalKeyboardKey.keyP), ShellCommand.printPlan);
   });
 
+  test('Ctrl+E opens the ONE Export sheet; Ctrl+P keeps printing the plan', () {
+    expect(match(LogicalKeyboardKey.keyE), ShellCommand.exportSheet);
+    expect(match(LogicalKeyboardKey.keyP), ShellCommand.printPlan);
+    // Bare E stays the canvas riser tool; Shift / Alt variants are unbound.
+    expect(match(LogicalKeyboardKey.keyE, mod: false), isNull);
+    expect(match(LogicalKeyboardKey.keyE, shift: true), isNull);
+    expect(match(LogicalKeyboardKey.keyE, alt: true), isNull);
+  });
+
   test('undo / redo answer to both redo conventions', () {
     expect(match(LogicalKeyboardKey.keyZ), ShellCommand.undo);
     expect(match(LogicalKeyboardKey.keyY), ShellCommand.redo);
@@ -160,6 +169,7 @@ ShellCommand? _resolve(String keys) {
   const byToken = <String, LogicalKeyboardKey>{
     'F1': LogicalKeyboardKey.f1,
     ',': LogicalKeyboardKey.comma,
+    'E': LogicalKeyboardKey.keyE,
     'I': LogicalKeyboardKey.keyI,
     'K': LogicalKeyboardKey.keyK,
     'N': LogicalKeyboardKey.keyN,

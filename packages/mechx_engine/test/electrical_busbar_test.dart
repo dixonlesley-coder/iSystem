@@ -38,13 +38,17 @@ void main() {
       expect(b.ampacityA.amperes, 370);
     });
 
-    test('beyond the table → density estimate (1.3 A/mm²), bar dims 0', () {
+    test('beyond the table → n parallel top bars (Round 74)', () {
       final b = sizeBusbar(p, const Current(2000));
-      expect(b.widthMm, 0);
-      expect(b.thicknessMm, 0);
-      // csa = ceil(2000/1.3) = 1539; ampacity = round(1539·1.3) = 2001
-      expect(b.csaMm2, 1539);
-      expect(b.ampacityA.amperes, 2001);
+      // Re-derived Round 74 (was a 0×0 1539 mm² density estimate that could
+      // not be ordered) and Round 75 (parallel-bar derating): two parallel
+      // 100×10 bars carry 1.7 × 1430 = 2431 A ≥ 2000 A ⇒ n = 2, csa
+      // 2 × 1000 = 2000 mm², rated 2431 A (never 2 × 1430 = 2860 A).
+      expect(b.widthMm, 100);
+      expect(b.thicknessMm, 10);
+      expect(b.parallelBars, 2);
+      expect(b.csaMm2, 2000);
+      expect(b.ampacityA.amperes, 2431);
     });
   });
 

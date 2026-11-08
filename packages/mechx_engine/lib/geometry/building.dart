@@ -14,17 +14,32 @@ class MountingHeights {
   /// Height of a fixture connection above its own floor surface.
   final Length fixtureHeight;
 
+  /// Round 34 (fire-hvac-drawings-ahu-duct-drops-to-floor) — the height above
+  /// its own floor surface at which a datum-less FLOOR-STANDING air unit (AHU,
+  /// supply / exhaust fan) takes its duct connections: the top of the casing,
+  /// not the slab. Capped at the floor's ceiling (main) elevation. Used ONLY
+  /// for a run's vertical leg ([runConnectionElevation]); the unit's static
+  /// datum ([nodeElevation]) stays its floor surface. A representative
+  /// top-of-casing height, `// VERIFY notAnSniClause`.
+  final Length airUnitConnection;
+
   const MountingHeights({
     this.ceilingDrop = const Length(0.3),
     this.fixtureHeight = const Length(1.1),
+    this.airUnitConnection = const Length(2.0),
   });
 
   /// F8 — a copy with either height replaced (the app edits them one stepper at
   /// a time, and persists them per project).
-  MountingHeights copyWith({Length? ceilingDrop, Length? fixtureHeight}) =>
+  MountingHeights copyWith({
+    Length? ceilingDrop,
+    Length? fixtureHeight,
+    Length? airUnitConnection,
+  }) =>
       MountingHeights(
         ceilingDrop: ceilingDrop ?? this.ceilingDrop,
         fixtureHeight: fixtureHeight ?? this.fixtureHeight,
+        airUnitConnection: airUnitConnection ?? this.airUnitConnection,
       );
 
   /// Value equality, so a persisted/round-tripped set compares equal to the one
@@ -33,10 +48,12 @@ class MountingHeights {
   bool operator ==(Object other) =>
       other is MountingHeights &&
       other.ceilingDrop.meters == ceilingDrop.meters &&
-      other.fixtureHeight.meters == fixtureHeight.meters;
+      other.fixtureHeight.meters == fixtureHeight.meters &&
+      other.airUnitConnection.meters == airUnitConnection.meters;
 
   @override
-  int get hashCode => Object.hash(ceilingDrop.meters, fixtureHeight.meters);
+  int get hashCode => Object.hash(
+      ceilingDrop.meters, fixtureHeight.meters, airUnitConnection.meters);
 }
 
 /// One building level with its floor-to-floor [height].

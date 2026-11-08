@@ -140,31 +140,35 @@ void main() {
   });
 
   group('sizeCable (Iz ≥ max(In, 1.25·Ib))', () {
-    test('17 A / 20 A breaker, df 1.0, min 2.5 → 2.5 mm² (kha 25 ≥ 21.2)', () {
+    // Re-derived Round 11: conduit (B1) PVC reads IEC Table B.52.4 B1 —
+    // 2.5 mm² = 21 A < Iz_req = max(20, 1.25 × 16.98 = 21.23) = 21.23 A, so the
+    // pick steps to 4 mm² (28 A). (It read 2.5 mm² at the old "in air" 25 A.)
+    test('17 A / 20 A breaker, df 1.0, min 2.5 → 4 mm² (B1: 21 < 21.2 ≤ 28)', () {
       final c = sizeCable(p,
           designCurrent: const Current(16.9809),
           breakerRating: const Current(20),
           deratingFactor: 1.0,
           minSectionMm2: 2.5,
           threePhase: true);
-      expect(c.csaMm2, 2.5);
-      expect(c.baseKha.amperes, 25);
-      expect(c.deratedIz.amperes, 25);
+      expect(c.csaMm2, 4);
+      expect(c.baseKha.amperes, 28);
+      expect(c.deratedIz.amperes, 28);
       expect(c.vdDriven, isFalse);
       expect(c.runsPerPhase, isNull);
       // A normally-sized cable reaches its required ampacity.
       expect(c.ampacityReached, isTrue);
     });
 
-    test('derating 0.7 forces an upsize: 2.5→4 mm² (34×0.7 = 23.8 ≥ 21.2)', () {
+    // Round 11: 4 mm² B1 = 28 × 0.7 = 19.6 < 21.23 ⇒ 6 mm² = 36 × 0.7 = 25.2.
+    test('derating 0.7 forces an upsize: 4→6 mm² (36×0.7 = 25.2 ≥ 21.2)', () {
       final c = sizeCable(p,
           designCurrent: const Current(16.9809),
           breakerRating: const Current(20),
           deratingFactor: 0.7,
           minSectionMm2: 2.5,
           threePhase: true);
-      expect(c.csaMm2, 4);
-      expect(c.deratedIz.amperes, closeTo(23.8, 1e-6));
+      expect(c.csaMm2, 6);
+      expect(c.deratedIz.amperes, closeTo(25.2, 1e-6));
       expect(c.vdDriven, isFalse);
     });
 

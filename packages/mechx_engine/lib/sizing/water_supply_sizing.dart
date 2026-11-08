@@ -83,10 +83,14 @@ class WaterSupplySizingResult {
 ///
 /// [maxVelocity] defaults to [SniProfile.maxSupplyVelocity] (2.0 m/s).
 /// [material] governs the pipe-wall roughness used for friction.
+/// [minDiameter], when given, skips every DN below it (a code-minimum pipe
+/// size, e.g. the fire services' DN25 / DN65 / DN100 floors): the selection
+/// starts at the first DN >= [minDiameter]. Null => byte-identical.
 WaterSupplySizingResult sizeForFlow({
   required FlowRate flow,
   Velocity? maxVelocity,
   PipeMaterial material = PipeMaterial.pvc,
+  Diameter? minDiameter,
 }) {
   const profile = SniProfile();
   final maxV = maxVelocity ?? profile.maxSupplyVelocity.value;
@@ -97,7 +101,9 @@ WaterSupplySizingResult sizeForFlow({
   // the first DN that satisfies the limit is the smallest adequate size.
   Diameter chosen = Diameter.mm(standardPipeDiametersMm.last);
   var overVelocity = true;
+  final minMm = minDiameter?.inMillimeters;
   for (final nominalMm in standardPipeDiametersMm) {
+    if (minMm != null && nominalMm < minMm - 1e-9) continue;
     final candidate = Diameter.mm(nominalMm);
     final candidateVelocity = velocityFromFlow(flow, candidate);
     if (candidateVelocity.metersPerSecond <= maxV.metersPerSecond) {

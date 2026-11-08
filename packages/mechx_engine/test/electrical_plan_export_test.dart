@@ -128,9 +128,10 @@ void main() {
       // MDP->LP-1 feeder (same floor) + MDP->general-load drop = 2 routes.
       // The MDP->LP-2 feeder is off-sheet ⇒ NOT drawn.
       expect(data.routes.length, 2);
-      // MDP(100,100)->load(400,100) = 300 px × 0.02 = 6 m.
+      // MDP(100,100)->load(400,100) = 300 px × 0.02 = 6 m, printed in the
+      // one 0.1 m length format the board schedule uses (Round 21).
       final drop = data.routes.firstWhere((r) => r.x2 == 400 && r.y2 == 100);
-      expect(drop.label, '6 m');
+      expect(drop.label, '6.0 m');
     });
 
     test('lists unplaced items in the corner note, never a fake position', () {

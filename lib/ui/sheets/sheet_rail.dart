@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -37,14 +38,13 @@ class SheetRail extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(sheetsControllerProvider);
+    final state = ref.watch(sheetsContentProvider);
     final colors = context.colors;
-    final type = context.type;
-    // A6: an "Add sheets…" footer to append more plan files, shown only for a
-    // REAL project (any non-placeholder sheet). The golden/demo project seeds
-    // placeholder sheets only, so the footer stays hidden there and goldens are
-    // byte-identical; a production project (A1: always imported, never
-    // placeholder) always shows it.
+    // ONE add affordance: the trailing '+' tile. Its tap is Import plan (the
+    // add-or-replace flow); its right-click menu also offers the A6 multi-file
+    // "Add sheets from files…" append — offered only for a REAL project (any
+    // non-placeholder sheet), as the old footer was. The separate footer
+    // button (a second '+' beside the tile) is gone.
     final hasRealSheet = state.sheets.any((s) => !s.isPlaceholder);
 
     return SizedBox(
@@ -57,47 +57,32 @@ class SheetRail extends ConsumerWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Terse header: a count badge (the word "Sheets" doesn't fit the
-            // slim rail; the status bar already names the active sheet).
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                MechXSpacing.xs,
-                MechXSpacing.sm,
-                MechXSpacing.xs,
-                MechXSpacing.xs,
-              ),
-              child: Text(
-                '${state.sheets.length} SHT',
-                textAlign: TextAlign.center,
-                style: type.caption.copyWith(
-                  color: colors.textMuted,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ),
-            Container(height: 1, color: colors.border),
+            // Work item 4 (2026-10-17): no 'N SHT' count header — the tiles
+            // are numbered, so the count was a second statement of the same
+            // fact (the list's own vertical padding insets the first tile).
             Expanded(
               child: ListView.builder(
                 padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
-                itemCount: state.sheets.length,
-                itemBuilder: (context, i) => _RailItem(
-                  index: i,
-                  sheet: state.sheets[i],
-                  selected: i == state.currentIndex,
-                  onTap: () =>
-                      ref.read(sheetsControllerProvider.notifier).selectSheet(i),
-                ),
+                // Work item 9: +1 for the trailing '+' Import-plan tile (the
+                // import entry moved here off the top bar).
+                itemCount: state.sheets.length + 1,
+                itemBuilder: (context, i) => i == state.sheets.length
+                    ? _ImportPlanTile(
+                        onTap: () => importPlan(context, ref),
+                        onAddFiles: hasRealSheet
+                            ? () => addSheetsFromFiles(context, ref)
+                            : null,
+                      )
+                    : _RailItem(
+                        index: i,
+                        sheet: state.sheets[i],
+                        selected: i == state.currentIndex,
+                        onTap: () => ref
+                            .read(sheetsControllerProvider.notifier)
+                            .selectSheet(i),
+                      ),
               ),
             ),
-            if (hasRealSheet) ...[
-              Container(height: 1, color: colors.border),
-              Padding(
-                padding: const EdgeInsets.all(MechXSpacing.xs),
-                child: _AddSheetsButton(
-                  onTap: () => addSheetsFromFiles(context, ref),
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -105,64 +90,176 @@ class SheetRail extends ConsumerWidget {
   }
 }
 
-/// The slim "+ Add" footer affordance (A6) — appends more plan files via
-/// [addSheetsFromFiles]. A compact custom control (no Material) sized to the
-/// narrow rail; a "+" glyph over a terse label.
-class _AddSheetsButton extends StatefulWidget {
+/// The trailing '+' tile after the last sheet (work item 9): the rail's own
+/// door to Import plan (moved off the top bar). Same margin / padding / 34x42
+/// page geometry as a sheet tile, with a custom-painted plus (no icon font, so
+/// it can never tofu) — announced and tooltipped as "Import plan". The rail's
+/// ONLY add affordance: right-click offers Import plan… plus, when
+/// [onAddFiles] is set (a real project), the multi-file "Add sheets from
+/// files…" append.
+class _ImportPlanTile extends StatefulWidget {
   final VoidCallback onTap;
-  const _AddSheetsButton({required this.onTap});
+
+  /// The multi-file append (A6). Null ⇒ the menu offers only Import plan….
+  final VoidCallback? onAddFiles;
+  const _ImportPlanTile({required this.onTap, this.onAddFiles});
 
   @override
-  State<_AddSheetsButton> createState() => _AddSheetsButtonState();
+  State<_ImportPlanTile> createState() => _ImportPlanTileState();
 }
 
-class _AddSheetsButtonState extends State<_AddSheetsButton> {
+class _ImportPlanTileState extends State<_ImportPlanTile> {
   bool _hover = false;
+
+  /// The tile's right-click menu — the same root-overlay [MechXContextMenu] +
+  /// dismiss-barrier idiom as the per-sheet menu.
+  void _showMenu(Offset globalPosition) {
+    final overlay = Overlay.of(context, rootOverlay: true);
+    final theme = MechXTheme.of(context);
+    final strings = context.strings;
+    late OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (ctx) {
+        final size = MediaQuery.sizeOf(ctx);
+        const menuWidth = 220.0;
+        const menuHeight = 96.0;
+        final left = globalPosition.dx
+            .clamp(0.0, (size.width - menuWidth).clamp(0.0, size.width));
+        final top = globalPosition.dy
+            .clamp(0.0, (size.height - menuHeight).clamp(0.0, size.height));
+        return MechXTheme(
+          data: theme,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: entry.remove,
+                  onSecondaryTap: entry.remove,
+                  child: const SizedBox.expand(),
+                ),
+              ),
+              Positioned(
+                left: left,
+                top: top,
+                width: menuWidth,
+                child: MechXContextMenu(
+                  children: [
+                    MechXMenuRow(
+                      label: '${strings(StringKey.shellImportPdf)}…',
+                      onTap: () {
+                        entry.remove();
+                        widget.onTap();
+                      },
+                    ),
+                    if (widget.onAddFiles != null)
+                      MechXMenuRow(
+                        label: strings(StringKey.sheetRailAddFiles),
+                        onTap: () {
+                          entry.remove();
+                          widget.onAddFiles!();
+                        },
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    overlay.insert(entry);
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final type = context.type;
-    return MechXFocusRing(
-      borderRadius: MechXRadii.control,
-      onActivated: widget.onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setState(() => _hover = true),
-        onExit: (_) => setState(() => _hover = false),
-        child: GestureDetector(
-          onTap: widget.onTap,
-          behavior: HitTestBehavior.opaque,
-          child: AnimatedContainer(
-            duration: MechXMotion.hover,
-            curve: MechXMotion.standard,
-            padding: const EdgeInsets.symmetric(vertical: MechXSpacing.xs),
-            decoration: BoxDecoration(
-              color: _hover ? colors.surfaceHover : const Color(0x00000000),
-              borderRadius: MechXRadii.control,
-              border: Border.all(color: colors.border),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '+',
-                  style: type.body.copyWith(
-                    color: colors.accent,
-                    fontWeight: FontWeight.w700,
+    final label = context.strings(StringKey.shellImportPdf);
+    final Widget tile = MechXTooltip(
+      edge: MechXTooltipEdge.right,
+      message: label,
+      child: MechXFocusRing(
+        key: const ValueKey('sheet-rail-import'),
+        borderRadius: MechXRadii.control,
+        onActivated: widget.onTap,
+        semanticLabel: label,
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          onEnter: (_) => setState(() => _hover = true),
+          onExit: (_) => setState(() => _hover = false),
+          child: GestureDetector(
+            onTap: widget.onTap,
+            onSecondaryTapDown: (d) => _showMenu(d.globalPosition),
+            behavior: HitTestBehavior.opaque,
+            child: AnimatedContainer(
+              duration: MechXMotion.resolve(context, MechXMotion.hover),
+              curve: MechXMotion.standard,
+              margin: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.xs,
+                vertical: MechXSpacing.xxs,
+              ),
+              padding: const EdgeInsets.symmetric(
+                horizontal: MechXSpacing.xxs,
+                vertical: MechXSpacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: _hover ? colors.surfaceHover : const Color(0x00000000),
+                borderRadius: MechXRadii.control,
+              ),
+              alignment: Alignment.center,
+              child: Container(
+                width: 34,
+                height: 42,
+                decoration: BoxDecoration(
+                  borderRadius: MechXRadii.small,
+                  border: Border.all(color: colors.border),
+                ),
+                child: CustomPaint(
+                  painter: _PlusGlyph(
+                    color: _hover ? colors.accent : colors.textMuted,
                   ),
                 ),
-                Text(
-                  'Add',
-                  style: type.micro.copyWith(color: colors.textSecondary),
-                ),
-              ],
+              ),
             ),
           ),
         ),
       ),
     );
+    // Keyboard reach for the right-click rows: Shift+Enter on the focused tile
+    // runs the multi-file append directly (Enter/Space stays Import plan); the
+    // command palette offers the same 'Add sheets from files…' command.
+    final addFiles = widget.onAddFiles;
+    if (addFiles == null) return tile;
+    return CallbackShortcuts(
+      bindings: {
+        const SingleActivator(LogicalKeyboardKey.enter, shift: true): addFiles,
+        const SingleActivator(LogicalKeyboardKey.numpadEnter, shift: true):
+            addFiles,
+      },
+      child: tile,
+    );
   }
+}
+
+/// A centred plus, stroked from primitives.
+class _PlusGlyph extends CustomPainter {
+  final Color color;
+  const _PlusGlyph({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = size.center(Offset.zero);
+    const arm = 6.0;
+    final p = Paint()
+      ..color = color
+      ..strokeWidth = 1.5
+      ..strokeCap = StrokeCap.round;
+    canvas.drawLine(c - const Offset(arm, 0), c + const Offset(arm, 0), p);
+    canvas.drawLine(c - const Offset(0, arm), c + const Offset(0, arm), p);
+  }
+
+  @override
+  bool shouldRepaint(_PlusGlyph old) => old.color != color;
 }
 
 class _RailItem extends ConsumerStatefulWidget {
@@ -350,7 +447,7 @@ class _RailItemState extends ConsumerState<_RailItem> {
     // remap — or a silent pile-up when more sheets than floors default onto the
     // top — is visible at a glance, not invisible. 1-based, ASCII ("F3").
     final mappedFloor = ref
-        .watch(sheetsControllerProvider)
+        .watch(sheetsContentProvider)
         .floorFor(widget.sheet.id, project.building.levelCount);
     final bg = widget.selected
         ? colors.accentMuted
@@ -372,7 +469,7 @@ class _RailItemState extends ConsumerState<_RailItem> {
           onSecondaryTapDown: (d) => _showContextMenu(d.globalPosition),
           // Ease the hover / selection fill so switching sheets feels smooth.
           child: AnimatedContainer(
-            duration: MechXMotion.hover,
+            duration: MechXMotion.resolve(context, MechXMotion.hover),
             curve: MechXMotion.standard,
             margin: const EdgeInsets.symmetric(
               horizontal: MechXSpacing.xs,
@@ -398,10 +495,10 @@ class _RailItemState extends ConsumerState<_RailItem> {
                   selected: widget.selected,
                 ),
                 const SizedBox(height: MechXSpacing.xxs),
-                // Terse label, truncated to fit the slim rail.
+                // Terse label, up to two lines, truncated to fit the slim rail.
                 Text(
                   widget.sheet.name,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.center,
                   style: type.caption.copyWith(color: labelColor),
@@ -484,7 +581,7 @@ class _MiniPage extends StatelessWidget {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             color: colors.canvas,
-            borderRadius: const BorderRadius.all(Radius.circular(3)),
+            borderRadius: MechXRadii.small,
             border: border,
           ),
           child: Text(
@@ -503,7 +600,7 @@ class _MiniPage extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: colors.canvas,
-        borderRadius: const BorderRadius.all(Radius.circular(3)),
+        borderRadius: MechXRadii.small,
         border: border,
       ),
       child: Stack(
@@ -531,7 +628,7 @@ class _MiniPage extends StatelessWidget {
               decoration: BoxDecoration(
                 color: colors.surface.withAlpha(210),
                 borderRadius: const BorderRadius.only(
-                  topRight: Radius.circular(3),
+                  topRight: MechXRadii.xs,
                 ),
               ),
               child: Text(

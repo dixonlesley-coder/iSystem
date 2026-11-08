@@ -30,8 +30,10 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show Offset, Size;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/geometry/dxf_drawing.dart' show DxfDrawing;
 import 'package:pdfrx/pdfrx.dart';
 
+import '../../data/dxf_import.dart' show dxfMappingBounds;
 import '../../store/models/sheet.dart';
 import '../../store/reference_line_store.dart';
 import '../../store/sheets_store.dart';
@@ -151,7 +153,9 @@ class UnderlaySnapService {
   UnderlaySnapService();
 
   /// DXF/DWG vector index per source path (null = parsed-but-empty/failed).
-  final Map<String, UnderlaySnapIndex?> _vectorByPath = {};
+  final Map<String,
+          ({DxfDrawing? drawing, double w, double h, UnderlaySnapIndex? idx})>
+      _vectorByPath = {};
 
   /// PDF ink luminance maps, LRU-ordered by sheet id (most-recent last).
   final Map<String, _LumMap> _lumBySheet = {};
@@ -268,16 +272,30 @@ class UnderlaySnapService {
   UnderlaySnapIndex? _vectorIndexFor(Sheet sheet) {
     final path = sheet.dxfPath;
     if (path == null) return null;
-    final cached = _vectorByPath[path];
-    if (cached != null || _vectorByPath.containsKey(path)) return cached;
+    // Round 10 (import-pipeline-2) — the index is valid only for the SAME
+    // parsed drawing (the stamped parse cache returns a new object when the
+    // plan is revised in place) at the SAME content frame.
     final drawing = DxfSheetPage.cachedDrawing(path);
+    final cached = _vectorByPath[path];
+    if (cached != null &&
+        identical(cached.drawing, drawing) &&
+        cached.w == sheet.sizePx.width &&
+        cached.h == sheet.sizePx.height) {
+      return cached.idx;
+    }
     UnderlaySnapIndex? idx;
     if (drawing != null && !drawing.isEmpty) {
-      final t = UnderlayTransform.forSheet(
-          drawing.bounds, sheet.sizePx.width, sheet.sizePx.height);
+      // Round 24 — through the sheet's import frame, like the painter.
+      final t = UnderlayTransform.forSheet(dxfMappingBounds(sheet, drawing.bounds),
+          sheet.sizePx.width, sheet.sizePx.height);
       idx = UnderlaySnapIndex.fromDrawing(drawing, transform: t);
     }
-    _vectorByPath[path] = idx;
+    _vectorByPath[path] = (
+      drawing: drawing,
+      w: sheet.sizePx.width,
+      h: sheet.sizePx.height,
+      idx: idx,
+    );
     return idx;
   }
 

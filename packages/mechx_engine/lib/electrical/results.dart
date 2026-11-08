@@ -8,6 +8,16 @@ library;
 import '../standards/puil.dart' show BreakerClass, BreakerCurve;
 import '../units.dart';
 
+/// Round 42 (regression-star-delta-supply-cable-and-leads-both-bought-full-
+/// length) — the STAR-DELTA physical model: the starter sits IN THE BOARD,
+/// so the breaker → starter conductor is INTERNAL panel wiring of this
+/// nominal length (m) and the board → motor FIELD run is the two motor-lead
+/// cables at the way length. The internal link is sized on ampacity with its
+/// drop judged over this length; the takeoff, containment, Zs and the way's
+/// printed Vd all follow the lead run. // VERIFY (notAnSniClause): a typical
+/// cubicle wiring allowance, not a code figure.
+const double kStarDeltaInternalWiringM = 2.0;
+
 /// Voltage-drop over a cable run, with the applicable limit + pass/fail.
 class VoltageDropResult {
   /// Absolute drop (V).
@@ -83,6 +93,19 @@ class CableResult {
   /// Defaults true so a normally-sized cable is byte-identical.
   final bool ampacityReached;
 
+  /// The ampacity the sizer REQUIRED of the conductor (Round 19):
+  /// `max(In, continuousLoadFactor × Ib)` — the figure a failed
+  /// [ampacityReached] is judged against (it may exceed In for a large
+  /// continuous load). Null on a hand-built result.
+  final Current? izRequired;
+
+  /// The design current Ib the continuous-load term was taken on (Round 19).
+  final Current? izBasisCurrent;
+
+  /// The continuous-load factor applied to [izBasisCurrent] (1.25, a
+  /// `notAnSniClause` value — see `PuilProfile.continuousLoadFactor`).
+  final double? continuousLoadFactor;
+
   const CableResult({
     required this.csaMm2,
     required this.baseKha,
@@ -92,6 +115,9 @@ class CableResult {
     required this.vdDriven,
     required this.appliedRule,
     this.ampacityReached = true,
+    this.izRequired,
+    this.izBasisCurrent,
+    this.continuousLoadFactor,
   });
 }
 
@@ -118,6 +144,14 @@ class BusbarResult {
   /// when no fault level was supplied (the withstand fold was not applied).
   final BusbarWithstand? withstand;
 
+  /// Round 74 — how many parallel bars of [widthMm]×[thicknessMm] make up the
+  /// set (1 inside the standard table; > 1 past its top, where [csaMm2] and
+  /// [ampacityA] are the SUMMED make-up).
+  final int parallelBars;
+
+  /// One bar's cross-section (mm²).
+  double get barCsaMm2 => csaMm2 / parallelBars;
+
   const BusbarResult({
     required this.widthMm,
     required this.thicknessMm,
@@ -126,6 +160,7 @@ class BusbarResult {
     required this.totalCurrentA,
     this.sizingReason = BusbarSizingReason.ampacity,
     this.withstand,
+    this.parallelBars = 1,
   });
 }
 
@@ -186,11 +221,35 @@ class NeutralPeBars {
   /// 0 when no oversize was applied.
   final double triplenFraction;
 
+  /// Round 44 — the neutral bar is LARGER than the phase bar (the triplen
+  /// current, not the phase bar's own withstand / incomer floor, governed).
+  /// A factor > 1 with `oversized == false` means the full-size neutral of a
+  /// withstand-governed phase bar already carries `factor × I`.
+  final bool oversized;
+
+  /// Round 75 — the neutral bar is `neutralParallelBars` parallel top-rung
+  /// bars (past the standard table; 1 = a single tabulated bar).
+  final int neutralParallelBars;
+
+  /// Round 75 — the PE bar is `peParallelBars` parallel top-rung bars (1 =
+  /// a single bar).
+  final int peParallelBars;
+
+  /// Round 75 — geometry (mm) of the top-rung bar a parallel neutral / PE
+  /// set is made of (0 when neither is a parallel set).
+  final double setBarWidthMm;
+  final double setBarThicknessMm;
+
   const NeutralPeBars({
     required this.neutralCsaMm2,
     required this.neutralAmpacityA,
     required this.peCsaMm2,
     this.neutralOversizeFactor = 1,
     this.triplenFraction = 0,
+    this.oversized = false,
+    this.neutralParallelBars = 1,
+    this.peParallelBars = 1,
+    this.setBarWidthMm = 0,
+    this.setBarThicknessMm = 0,
   });
 }

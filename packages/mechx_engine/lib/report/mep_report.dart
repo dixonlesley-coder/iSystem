@@ -104,6 +104,32 @@ List<RptBlock> _demoteBlocks(List<RptBlock> blocks) {
   return blocks;
 }
 
+/// [blocks] minus their Revision-history section (the heading and the table
+/// right after it) — the unified report prints ONE merged history instead.
+List<RptBlock> _withoutRevisionHistory(
+    List<RptBlock> blocks, ReportStrings strings) {
+  final title = strings(RptStringKey.headingRevisionHistory);
+  // Round 30 (report-parity-2-6) — each embedded body's own Design Basis
+  // register (its heading + the one register block after it) is dropped
+  // too: the unified head already prints both disciplines' registers, so the
+  // same inputs used to print three times (and could drift apart).
+  final basis = strings(RptStringKey.headingDesignBasis);
+  final out = <RptBlock>[];
+  for (var i = 0; i < blocks.length; i++) {
+    final b = blocks[i];
+    if (b is RptHeading && b.text == title) {
+      if (i + 1 < blocks.length && blocks[i + 1] is RptTable) i++;
+      continue;
+    }
+    if (b is RptHeading && b.text == basis) {
+      if (i + 1 < blocks.length && blocks[i + 1] is! RptHeading) i++;
+      continue;
+    }
+    out.add(b);
+  }
+  return out;
+}
+
 /// Build the unified MEP building-services report as the neutral block list —
 /// the one content model behind both the Markdown render
 /// ([buildMepUnifiedReport]) and the PDF typesetter.
@@ -146,26 +172,39 @@ List<RptBlock> buildMepUnifiedReportBlocks({
 
     // ── Mechanical section (full body, demoted) ───────────────────────────────
     RptHeading(1, strings(RptStringKey.mepHeadingMechPlumb1)),
-    ..._demoteBlocks(buildCalcReportBlocks(mechanical, strings)),
+    ..._withoutRevisionHistory(
+        _demoteBlocks(buildCalcReportBlocks(mechanical, strings)), strings),
     // The legacy composer wrote a blank line after each embedded body (the
     // mechanical body ends its closing note without one).
     const RptMarkdown('\n'),
 
     // ── Electrical section (full body, demoted) ───────────────────────────────
     RptHeading(1, strings(RptStringKey.mepHeadingElectrical)),
-    ..._demoteBlocks(buildElectricalCalcReportBlocks(electrical, strings)),
+    ..._withoutRevisionHistory(
+        _demoteBlocks(buildElectricalCalcReportBlocks(electrical, strings)),
+        strings),
     const RptMarkdown('\n'),
   ];
 
   // ── Merged revision history ─────────────────────────────────────────────────
+  // Round 12 (report-recompute-mep-revisions-duplicated) — both disciplines
+  // are fed from the SAME document-control register, so the merge is
+  // DE-DUPLICATED on (date, description), first occurrence order kept, and
+  // the per-discipline tables inside the demoted bodies are dropped
+  // ([_withoutRevisionHistory]) — one revision prints once, not four times.
+  final seenRevisions = <(String, String)>{};
   final mergedRevisions = <Revision>[
-    ...mechanical.revisions,
-    ...electrical.revisions,
+    for (final r in [...mechanical.revisions, ...electrical.revisions])
+      if (seenRevisions.add((r.date, r.description))) r,
   ];
   if (mergedRevisions.isNotEmpty) {
+    // Round 23 (report-pdf-mep-duplicate-revision-heading) — ONE heading:
+    // the section is a top-level (H1) part of the unified report, so the
+    // shared table's own H2 is replaced rather than printed beneath it.
     blocks
       ..add(RptHeading(1, strings(RptStringKey.headingRevisionHistory)))
-      ..addAll(revisionHistoryBlocks(mergedRevisions, strings));
+      ..addAll(revisionHistoryBlocks(mergedRevisions, strings)
+          .where((b) => b is! RptHeading));
   }
 
   return blocks;

@@ -30,9 +30,14 @@ void main() {
       expect(motorFlc(7.5, const Voltage(380)).amperes, closeTo(16.3158, 1e-3));
     });
 
-    test('clamps below/above the table', () {
+    test('clamps below the table, scales above it (Round 42)', () {
       expect(motorFlc(0.1).amperes, closeTo(1.0, 1e-9)); // first row
-      expect(motorFlc(999).amperes, closeTo(435.0, 1e-9)); // last row
+      // Round 42 — the table runs to 315 kW (545 A); above it the top row
+      // scales ∝ kW: 999 kW → 545 × 999 / 315 = 1728.43 A (never clamps).
+      expect(motorFlc(315).amperes, closeTo(545.0, 1e-9));
+      expect(motorFlc(999).amperes, closeTo(545.0 * 999 / 315, 1e-9));
+      expect(motorFlcAboveTable(315), isFalse);
+      expect(motorFlcAboveTable(400), isTrue);
     });
 
     test('motorFlc1ph uses η·cosφ: 1.5 kW @ 230 V, η·cosφ = 0.65', () {
@@ -203,13 +208,23 @@ void main() {
       expect(a.devices.any((d) => d.role == 'control-transformer'), isTrue);
     });
 
-    test('three contactors: main + delta (full FLC) + star (58%)', () {
+    // Round 41 — re-derived: in a 6-lead Y-D starter the line (KM1) and delta
+    // (KM2) contactors carry the WINDING current FLC/√3 (≈ 0.58 FLC, in series
+    // with the delta-leg overload), the star contactor (KM3) FLC/3.
+    test('three contactors: main + delta (58% FLC) + star (33%)', () {
       final contactors =
           a.devices.where((d) => d.category == DeviceCategory.contactor).toList();
       expect(contactors.length, 3);
+      // 22 kW → FLC 42 A; main/delta target = 42 × 0.58 = 24.36 → 25 A frame.
+      for (final role in const ['main-contactor', 'delta-contactor']) {
+        final d = a.devices.firstWhere((d) => d.role == role);
+        expect(d.targetRatingA!.amperes, closeTo(24.4, 1e-9));
+        expect(d.rating, contains('25 A AC-3'));
+      }
       final star = a.devices.firstWhere((d) => d.role == 'star-contactor');
-      // 22 kW → FLC 42 A; star target = 42 × 0.58 = 24.36 → 25 A frame.
-      expect(star.rating, contains('25 A AC-3'));
+      // star target = 42 / 3 = 14.0 A → 18 A frame.
+      expect(star.targetRatingA!.amperes, closeTo(14.0, 1e-9));
+      expect(star.rating, contains('18 A AC-3'));
       expect(star.rating, contains('star'));
     });
 

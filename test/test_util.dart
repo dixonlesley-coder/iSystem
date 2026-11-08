@@ -5,7 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/recovery.dart' show appSupportDirOverride;
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx_engine/network/network.dart';
 
 /// One isolated app-support dir per test isolate (test file), created lazily.
 /// The app's machine-local state (settings + per-project crash-recovery
@@ -48,3 +50,29 @@ void seedDemoSheets(ProviderContainer c) =>
 /// real deliverables), so tests exercising the sample MDP/LP-1 seed it here.
 void seedSampleElectrical(ProviderContainer c) =>
     c.read(electricalProjectProvider.notifier).resetToSample();
+
+/// Round 15 (drafting-visual-2-5) — [net] plus a lone two-node HYDRANT run
+/// (`fh-a` → `fh-b`, off to the side, connected to nothing else). The
+/// standpipe fire pump is scheduled / electrically fed only when the project
+/// actually draws a fire service, so a test about that duty draws one.
+Network withFireHydrantRun([Network net = const Network()]) => Network(
+      nodes: [
+        ...net.nodes,
+        const NetNode(id: 'fh-a', sheetId: 's1', x: 5000, y: 5000, floorIndex: 0),
+        const NetNode(id: 'fh-b', sheetId: 's1', x: 5100, y: 5000, floorIndex: 0),
+      ],
+      edges: [
+        ...net.edges,
+        const NetEdge(
+            id: 'fh-run',
+            fromId: 'fh-a',
+            toId: 'fh-b',
+            service: ServiceType.fireHydrant),
+      ],
+    );
+
+/// Loads [withFireHydrantRun] of the container's CURRENT network.
+void drawFireHydrantRun(ProviderContainer c) {
+  final n = c.read(networkControllerProvider.notifier);
+  n.loadNetwork(withFireHydrantRun(c.read(networkControllerProvider).network));
+}

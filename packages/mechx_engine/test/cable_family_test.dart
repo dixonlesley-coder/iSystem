@@ -39,8 +39,8 @@ void main() {
   });
 
   group('the family changes the sized section via its KHA table', () {
-    // In-conduit (ref. method B1): PVC 16 mm² = 80 A, 25 mm² = 105 A;
-    // XLPE 16 mm² = 88 A. A run whose Iz must reach ≥ 85 A (here In = 85 A,
+    // In-conduit (ref. method B1): PVC 16 mm² = 68 A, 25 mm² = 89 A (IEC
+    // Table B.52.4 B1, Round 11); XLPE 16 mm² = 88 A. A run whose Iz must reach ≥ 85 A (here In = 85 A,
     // 1.25·Ib = 12.5 A → Iz_req = 85 A) forces PVC up to 25 mm², while the
     // 90 °C XLPE class fits 16 mm².
     CableResult size(ConductorInsulation ins) => sizeCable(
@@ -57,7 +57,7 @@ void main() {
       final r =
           size(insulationForCableType('NYY', fallback: ConductorInsulation.pvc));
       expect(r.csaMm2, 25);
-      expect(r.baseKha.amperes, 105);
+      expect(r.baseKha.amperes, 89);
     });
 
     test('FRC (XLPE, 90 °C) fits 16 mm² for the same duty', () {

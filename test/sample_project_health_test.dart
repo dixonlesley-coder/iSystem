@@ -90,15 +90,17 @@ void main() {
     // G3 (2026-07-31), re-derived from the sample: 'Feeder to LP-1' is the one
     // capped feeder, so its `non-selective` message must not send the engineer
     // after a bigger breaker (In <= Iz forbids it). Hand-derived numbers:
-    //   feeder Ib 23.8 A -> load rung 25 A; cable 4 mm2, KHA B1 = 34 A at
-    //   derating 1.00 -> Iz 34.0 A; the 40 A floor rung is above 34.0, so the
-    //   device stops at 32 A (the largest rung <= Iz) at 32/25 = 1.28x.
+    //   feeder Ib 23.8 A -> load rung 25 A; Iz_req = max(25, 1.25 x 23.8 =
+    //   29.75) = 29.75 A. Re-derived Round 11 — conduit PVC reads IEC B.52.4
+    //   B1: 4 mm2 = 28 A is short, 6 mm2 = 36 A at derating 1.00 -> Iz 36.0 A;
+    //   the 40 A floor rung is above 36.0, so the device stops at 32 A (the
+    //   largest rung <= Iz) at 32/25 = 1.28x.
     //   Target 1.6 x 25 = 40 A is well inside the 1600 A ladder, so the advice
     //   is the "increase the cable" variant, not the ladder-top one.
     final feeder = result.panels['mdp']!.circuits
         .firstWhere((c) => c.circuitId == 'mdp-f1');
-    expect(feeder.cable.csaMm2, 4);
-    expect(feeder.cable.deratedIz.amperes, closeTo(34.0, 1e-9));
+    expect(feeder.cable.csaMm2, 6);
+    expect(feeder.cable.deratedIz.amperes, closeTo(36.0, 1e-9));
     expect(feeder.breaker.ratingA.amperes, 32);
 
     final w = advanced.fault.warnings
@@ -106,8 +108,8 @@ void main() {
     expect(
       w.message,
       'Feeder to LP-1 (32 A) may not discriminate with Lighting Panel incomer '
-      '(25 A): the device is already at the largest rung the 4 mm2 feeder '
-      'cable protects (Iz 34.0 A). To reach the 1.6x target, increase the '
+      '(25 A): the device is already at the largest rung the 6 mm2 feeder '
+      'cable protects (Iz 36.0 A). To reach the 1.6x target, increase the '
       'feeder cable (then the device can rise); verify against manufacturer '
       'curves otherwise.',
     );

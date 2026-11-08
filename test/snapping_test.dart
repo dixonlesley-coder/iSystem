@@ -23,9 +23,30 @@ void main() {
     expect(r.dx.abs(), closeTo(r.dy.abs(), 1e-9));
   });
 
-  test('length is preserved', () {
+  test('M6: the cursor is PROJECTED onto the axis (no overshoot)', () {
+    // (100, 12) is ~6.8° off East -> snaps to the +x axis; the projection of
+    // v onto u = (1, 0) is v·u = 100, so the end lands at (100, 0) — under
+    // the cursor — not at |v| = 100.72 (the old length-preserving overshoot).
     final r = orthoSnap(from, const Offset(100, 12));
-    expect(r.distance, closeTo(const Offset(100, 12).distance, 1e-9));
+    expect(r.dx, closeTo(100, 1e-9));
+    expect(r.dy, closeTo(0, 1e-9));
+  });
+
+  test('M6: a 20 degree drag lands on the projection of the cursor', () {
+    // A 100 px drag at 20° (screen y down) snaps to the East axis; its foot is
+    // 100·cos 20° = 93.969 px out, while a rotation would put it at 100 px.
+    const deg = 20.0;
+    final c = Offset(100 * math.cos(deg * math.pi / 180),
+        100 * math.sin(deg * math.pi / 180));
+    final r = orthoSnap(from, c);
+    expect(r.dx, closeTo(100 * math.cos(deg * math.pi / 180), 1e-9));
+    expect(r.dy, closeTo(0, 1e-9));
+    // A 30° drag snaps to the 45° diagonal: foot = |v|·cos 15°, split equally.
+    final d = Offset(100 * math.cos(math.pi / 6), 100 * math.sin(math.pi / 6));
+    final r45 = orthoSnap(from, d);
+    final foot = 100 * math.cos(math.pi / 12);
+    expect(r45.dx, closeTo(foot / math.sqrt2, 1e-9));
+    expect(r45.dy, closeTo(foot / math.sqrt2, 1e-9));
   });
 
   test('zero-length segment is returned unchanged', () {

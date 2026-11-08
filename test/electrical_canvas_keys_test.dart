@@ -50,9 +50,9 @@ void main() {
     await tester.tap(find.text('Main Distribution Panel'));
     await tester.pump(const Duration(milliseconds: 400));
 
-    // Open the Service & Earthing drawer (its numeric fields are real
-    // EditableTexts) and focus one — the typing state under test.
-    final serviceButton = find.text('Service & Earthing');
+    // Open the Supply inspector (its numeric fields are real EditableTexts)
+    // and focus one — the typing state under test.
+    final serviceButton = find.text('Supply');
     await tester.ensureVisible(serviceButton);
     await tester.pump();
     await tester.tap(serviceButton);

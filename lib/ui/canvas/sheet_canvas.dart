@@ -3,7 +3,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../store/calibration_store.dart';
-import '../../store/history_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
@@ -38,7 +37,9 @@ class SheetCanvas extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final state = ref.watch(sheetsControllerProvider);
+    // Drafting-feel perf: the sheet CONTENT only — every pan / zoom frame
+    // writes the whole sheets state, and must not rebuild this stack.
+    final state = ref.watch(sheetsContentProvider);
     final colors = context.colors;
     final sheet = state.current;
 
@@ -76,7 +77,10 @@ class SheetCanvas extends ConsumerWidget {
             // Fresh CanvasView per sheet, seeded from its stored viewport.
             key: ValueKey(sheet.id),
             contentSize: sheet.sizePx,
-            initialTransform: state.viewportFor(sheet.id),
+            // The LIVE viewport, read once (CanvasView consumes it only in
+            // initState); the content snapshot's viewports are stale.
+            initialTransform:
+                ref.read(sheetsControllerProvider).viewportFor(sheet.id),
             background: colors.canvas,
             gridColor: colors.gridLine,
             onTransformChanged: (vt) => ref
@@ -145,18 +149,15 @@ class SheetCanvas extends ConsumerWidget {
     final key = event.logicalKey;
     final mod = HardwareKeyboard.instance.isControlPressed ||
         HardwareKeyboard.instance.isMetaPressed;
-    final shift = HardwareKeyboard.instance.isShiftPressed;
 
-    // Single global undo/redo timeline across all domains (Ctrl/Cmd+Z,
-    // Ctrl+Shift+Z or Ctrl+Y to redo) — reverts the genuinely most-recent edit.
-    if (mod && key == LogicalKeyboardKey.keyZ && !shift) {
-      ref.read(historyProvider.notifier).undo();
-      return KeyEventResult.handled;
-    }
+    // Round 12 (ui-journey-undo-redo-double-dispatch) — Ctrl/Cmd+Z / Y /
+    // Shift+Z are run ONCE, by the shell's pre-focus HardwareKeyboard handler
+    // (AppShell._onHardwareKey). That handler's return value does NOT stop
+    // the framework delivering the same key down the focus chain, so acting
+    // here too undid / redid TWO steps per press. Consume the combo without
+    // acting so nothing further down this handler reacts to it.
     if (mod &&
-        ((key == LogicalKeyboardKey.keyZ && shift) ||
-            key == LogicalKeyboardKey.keyY)) {
-      ref.read(historyProvider.notifier).redo();
+        (key == LogicalKeyboardKey.keyZ || key == LogicalKeyboardKey.keyY)) {
       return KeyEventResult.handled;
     }
 
@@ -279,11 +280,8 @@ class PlaceholderSheetPage extends ConsumerWidget {
     // sheet-name title stays always (it's the sheet identity, not onboarding
     // copy), and the import affordance (DropOverlay, drawn separately in
     // SheetCanvas) is untouched either way.
-    final hasDrawnElements = ref
-        .watch(networkControllerProvider)
-        .network
-        .nodes
-        .any((n) => n.sheetId == sheet.id);
+    final hasDrawnElements = ref.watch(networkControllerProvider
+        .select((d) => d.network.nodes.any((n) => n.sheetId == sheet.id)));
     return DecoratedBox(
       decoration: BoxDecoration(
         color: colors.sheetPaper,

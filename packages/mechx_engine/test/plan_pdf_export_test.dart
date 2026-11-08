@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:mechx_engine/geometry/dxf_drawing.dart';
@@ -77,7 +78,7 @@ void main() {
     final s = latin1.decode(build());
     expect(s, contains(' l S')); // a stroked line segment (the run)
     expect(s, contains('DN50')); // the run size label
-    expect(s, contains('30 m')); // the run length
+    expect(s, contains('30.0 m')); // the run length
     expect(s, contains('3.5 m')); // the riser length (on-floor end)
     expect(s, contains(' c\n')); // a bezier curve (riser circle / node dots)
     // Title block: project name then sheet + date.
@@ -402,7 +403,7 @@ void main() {
       edgeElevationLabels: const {'e0': 'CL +2.70'},
     ));
     // The run label now reads size - length - elevation, one token.
-    expect(s, contains('(DN50 - 30 m - CL +2.70) Tj'));
+    expect(s, contains('(DN50 - 30.0 m - CL +2.70) Tj'));
   });
 
   test('N5: null/absent elevation map leaves the bytes byte-identical', () {
@@ -463,6 +464,47 @@ void main() {
       // 0.02 m/px × 1000 = 1000 mm tie dimension.
       final s = latin1.decode(withGrid(mpp: 0.02));
       expect(s, contains('(1000) Tj'));
+    });
+
+    test('drafting-4: the tie is a real OFFSET dimension, not a bare line', () {
+      // The tie runs from row 1 (y=150) to the riser at (400, 200): a VERTICAL
+      // ordinate. It used to be one dark stroke ON that ordinate — where a pipe
+      // running toward the grid also lies. Now (grey, after `0.45 .. RG`):
+      // 2 extension lines, the dimension line offset 10 pt perpendicular, and
+      // 2 oblique 45-degree ticks — five strokes.
+      final s = latin1.decode(withGrid(mpp: 0.02));
+      final start = s.indexOf('0.45 0.45 0.45 RG');
+      expect(start, greaterThanOrEqualTo(0));
+      final seg = RegExp(
+          r'^(-?[\d.]+) (-?[\d.]+) m (-?[\d.]+) (-?[\d.]+) l S$',
+          multiLine: true);
+      final strokes = seg
+          .allMatches(s.substring(start))
+          .take(5)
+          .map((m) => [for (var i = 1; i <= 4; i++) double.parse(m.group(i)!)])
+          .toList();
+      expect(strokes, hasLength(5));
+      final ext1 = strokes[0], ext2 = strokes[1], dim = strokes[2];
+      double dist(double ax, double ay, double bx, double by) =>
+          math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by));
+      // Axis extension: starts 2 pt off the axis point, overshoots the
+      // dimension line by 2 pt ⇒ 10 + 2 - 2 = 10 pt long; the dimension line
+      // starts 8 pt from its start (offset 10 − gap 2).
+      expect(dist(ext1[0], ext1[1], ext1[2], ext1[3]), closeTo(10, 0.05));
+      expect(dist(ext1[0], ext1[1], dim[0], dim[1]), closeTo(8, 0.05));
+      // Riser extension: gapped 6 pt clear of the r=5 marker ⇒ 12 − 6 = 6 pt
+      // long, the dimension line's far end 4 pt from its start.
+      expect(dist(ext2[0], ext2[1], ext2[2], ext2[3]), closeTo(6, 0.05));
+      expect(dist(ext2[0], ext2[1], dim[2], dim[3]), closeTo(4, 0.05));
+      // The tie is vertical ⇒ the dimension line is vertical, offset in x.
+      expect(dim[0], closeTo(dim[2], 1e-6));
+      expect((dim[0] - (ext1[0] - (ext1[2] - ext1[0]) / 10 * 2)).abs(),
+          closeTo(10, 0.05));
+      // Both ticks are 45-degree obliques of length 2 × 2 = 4 pt.
+      for (final t in strokes.sublist(3)) {
+        expect(dist(t[0], t[1], t[2], t[3]), closeTo(4, 0.05));
+        expect((t[2] - t[0]).abs(), closeTo((t[3] - t[1]).abs(), 0.05));
+      }
     });
 
     test('no tie dimensions without a scale (would be fabricated)', () {
@@ -535,7 +577,7 @@ void main() {
       // The app passes elementTags(): the run e0 → CW-F1, the riser e1 → CW-R1.
       final s = latin1.decode(buildTagged(const {'e0': 'CW-F1', 'e1': 'CW-R1'}));
       // The tag rides in front of the size/length (middot is WinAnsi 0xB7).
-      expect(s, contains('CW-F1 · DN50 - 30 m'));
+      expect(s, contains('CW-F1 · DN50 - 30.0 m'));
       expect(s, contains('CW-R1 · '));
       // The riser marker label still carries the riser tag on-floor.
       expect(s, contains('CW-R1'));

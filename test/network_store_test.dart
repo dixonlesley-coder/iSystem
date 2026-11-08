@@ -2374,6 +2374,10 @@ void main() {
               kind: EdgeKind.riser),
         ],
       );
+      // Round 9 — stamped floors are clamped into the BUILDING (a node above
+      // the top floor is not a real place), so give the default 3-level stack
+      // a 4th level for the floor-2 → floor-3 span to land in.
+      c.read(projectControllerProvider.notifier).addFloor();
       // Stamp it starting at floor 2.
       n.stampAssembly(src.nodes, src.edges,
           sheetId: 's1', floorIndex: 2, world: const Offset(400, 400));

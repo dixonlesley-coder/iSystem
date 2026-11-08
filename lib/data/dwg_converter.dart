@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' show sha256;
+
 /// Outcome of a DWG → DXF conversion.
 enum DwgConvertStatus {
   /// Converted; [DwgConvertResult.dxfPath] points at the produced DXF.
@@ -59,7 +61,11 @@ class OdaDwgConverter implements DwgConverter {
   /// Output DXF version handed to ODA (a widely-compatible recent ACAD format).
   static const String outputVersion = 'ACAD2018';
 
-  const OdaDwgConverter();
+  /// Explicit converter binary (a test seam / caller override). Null ⇒ the
+  /// normal [resolveBinary] order.
+  final String? binaryOverride;
+
+  const OdaDwgConverter({this.binaryOverride});
 
   /// The converter executable name per platform.
   static String get _exeName =>
@@ -148,7 +154,7 @@ class OdaDwgConverter implements DwgConverter {
     }
 
     final appDir = File(Platform.resolvedExecutable).parent.path;
-    final binary = resolveBinary(
+    final binary = binaryOverride ?? resolveBinary(
           environment: Platform.environment,
           appDir: appDir,
           exists: (p) => File(p).existsSync(),
@@ -161,8 +167,13 @@ class OdaDwgConverter implements DwgConverter {
     final inDir = Directory(_join(outDir, 'in_$stamp'));
     final realOut = Directory(_join(outDir, 'out_$stamp'));
     try {
-      inDir.createSync(recursive: true);
-      realOut.createSync(recursive: true);
+      // Round 10 (import-pipeline-3) — the staging dirs are deterministic per
+      // path, so a previous conversion's DXF would still sit in `realOut` and a
+      // FAILED reconversion of a revised DWG read as success. Start clean.
+      for (final d in [inDir, realOut]) {
+        if (d.existsSync()) d.deleteSync(recursive: true);
+        d.createSync(recursive: true);
+      }
       final stem = _stem(src.uri.pathSegments.last);
       src.copySync(_join(inDir.path, '$stem.dwg'));
 
@@ -177,8 +188,23 @@ class OdaDwgConverter implements DwgConverter {
       }
 
       final produced = File(_join(realOut.path, '$stem.dxf'));
-      if (produced.existsSync()) {
-        return DwgConvertResult.ok(produced.path);
+      // A non-zero exit is a failure even when a file appeared (a partial
+      // write must never pass as a converted plan).
+      if (run.exitCode == 0 && produced.existsSync()) {
+        // Copy to a CONTENT-addressed folder so a sheet's dxfPath is never
+        // rewritten underneath it by a later conversion of the same DWG path
+        // (its stored sizePx/calibration belong to THESE bytes).
+        final bytes = produced.readAsBytesSync();
+        final id = '${sha256.convert(bytes)}_${bytes.length}';
+        final keepDir = Directory(_join(outDir, 'dxf_$id'));
+        keepDir.createSync(recursive: true);
+        final kept = File(_join(keepDir.path, '$stem.dxf'));
+        if (!kept.existsSync() || kept.lengthSync() != bytes.length) {
+          final tmp = File('${kept.path}.tmp');
+          tmp.writeAsBytesSync(bytes, flush: true);
+          tmp.renameSync(kept.path);
+        }
+        return DwgConvertResult.ok(kept.path);
       }
       return DwgConvertResult.failed(
         'DWG conversion produced no DXF '

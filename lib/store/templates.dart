@@ -4,8 +4,10 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
+import '../ui/strings/app_strings.dart';
 import 'app_state.dart';
 import 'fire_store.dart';
+import 'history_store.dart';
 import 'project_store.dart';
 
 /// A pure building descriptor — smart defaults for a common building type that
@@ -119,8 +121,9 @@ const List<BuildingTemplate> kBuildingTemplates = [
 /// existing intent methods: replace the floor stack ([ProjectController.setFloors]),
 /// set the [Occupancy], the [FireHazardClass], and the rainfall intensity.
 ///
-/// Each provider records its own undo step (per the per-domain undo
-/// architecture); calibration, drawn network, and the project name are left
+/// The floor swap and the three settings are ONE undo step (the settings
+/// revert rides the structural entry `setFloors` records), so a single Ctrl+Z
+/// fully reverts a template; calibration, drawn network, and the project name are left
 /// untouched. Templates are transient smart defaults — nothing is persisted as
 /// "the chosen template", only the resulting state (which round-trips normally).
 void applyTemplate(WidgetRef ref, BuildingTemplate template) =>
@@ -133,8 +136,33 @@ void applyTemplateTo(
   T Function<T>(ProviderListenable<T> provider) read,
   BuildingTemplate template,
 ) {
+  // Capture the design settings the template overwrites, so the floor swap
+  // AND the three settings revert together as ONE timeline step.
+  final prevOccupancy = read(occupancyProvider);
+  final prevHazard = read(fireHazardProvider);
+  final prevRainfall = read(rainfallIntensityProvider);
   read(projectControllerProvider.notifier).setFloors(template.floors);
-  read(occupancyProvider.notifier).set(template.occupancy);
-  read(fireHazardProvider.notifier).set(template.fireHazard);
-  read(rainfallIntensityProvider.notifier).set(template.rainfallMmPerHr);
+  void applySettings(Occupancy o, FireHazardClass h, double rain) {
+    read(occupancyProvider.notifier).set(o);
+    read(fireHazardProvider.notifier).set(h);
+    read(rainfallIntensityProvider.notifier).set(rain);
+  }
+
+  applySettings(
+      template.occupancy, template.fireHazard, template.rainfallMmPerHr);
+  final nextRainfall = read(rainfallIntensityProvider); // as clamped
+  final entry = SettingsUndoEntry(
+    label: MechXStringsData(read(localeProvider))(StringKey.undoLabelTemplate),
+    undo: () => applySettings(prevOccupancy, prevHazard, prevRainfall),
+    redo: () =>
+        applySettings(template.occupancy, template.fireHazard, nextRainfall),
+  );
+  // setFloors records ONE structural step for any non-empty stack — fold the
+  // settings revert INTO that step. (An empty stack records nothing, so the
+  // settings then stand alone as their own step.)
+  if (template.floors.isNotEmpty) {
+    read(structuralHistoryProvider.notifier).attachSettingsToLast(entry);
+  } else {
+    read(settingsHistoryProvider.notifier).record(entry);
+  }
 }

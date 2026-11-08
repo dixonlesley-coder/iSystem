@@ -2,7 +2,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/history_store.dart';
+import 'package:mechx/store/fire_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/project_store.dart';
+import 'package:mechx/ui/strings/app_strings.dart';
+import 'package:mechx_engine/geometry/scale_calibration.dart';
+import 'package:mechx_engine/sizing/fire_sprinkler.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/standards/sni.dart';
 
 /// D3 (WORKFLOW-FRICTION) — flipping the water feed strategy silently rewrites
 /// the whole pressure solve, the riser tags, the PRV zones and the pump duty,
@@ -108,5 +115,84 @@ void main() {
     hist.undo();
     // The stale tag was dropped and the NETWORK edit reverted instead.
     expect(c.read(networkControllerProvider).network.nodes, isEmpty);
+  });
+
+  test(
+      'an occupancy change is its own undo step — Ctrl+Z reverts IT, not the '
+      'earlier calibration', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final hist = c.read(historyProvider.notifier);
+    c
+        .read(projectControllerProvider.notifier)
+        .setCalibration('s', const ScaleCalibration(0.01));
+    expect(c.read(occupancyProvider), Occupancy.private);
+    setOccupancyUndoable(c.read, Occupancy.public);
+
+    hist.undo();
+    expect(c.read(occupancyProvider), Occupancy.private);
+    expect(c.read(projectControllerProvider).calibrationFor('s'), isNotNull,
+        reason: 'the scale survives — the setting was the most recent edit');
+    hist.redo();
+    expect(c.read(occupancyProvider), Occupancy.public);
+  });
+
+  test('every sizing-driving design input lands on the timeline and reverts',
+      () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final hist = c.read(historyProvider.notifier);
+    final rain0 = c.read(rainfallIntensityProvider);
+    final runoff0 = c.read(runoffCoefficientProvider);
+    final slope0 = c.read(drainageSlopeProvider);
+    final hwT0 = c.read(hotWaterFlowTempProvider);
+    final hwDt0 = c.read(hotWaterDeltaTProvider);
+    final hazard0 = c.read(fireHazardProvider);
+    final cooling0 = c.read(coolingLoadMethodProvider);
+    final duct0 = c.read(ductSettingsProvider);
+
+    setRainfallUndoable(c.read, rain0 + 25);
+    setRunoffCoefficientUndoable(c.read, 0.6);
+    setDrainageSlopeUndoable(c.read, 0.02);
+    setHotWaterFlowTempUndoable(c.read, hwT0 + 5);
+    setHotWaterDeltaTUndoable(c.read, hwDt0 + 2);
+    setFireHazardUndoable(c.read, FireHazardClass.lightHazard);
+    setCoolingLoadMethodUndoable(c.read, CoolingLoadMethod.detailed);
+    setDuctShapeUndoable(c.read, DuctShape.rectangular);
+    setDuctMethodUndoable(c.read, DuctSizingMethod.equalFriction);
+
+    // Nine steps, reverted newest-first.
+    for (var i = 0; i < 9; i++) {
+      hist.undo();
+    }
+    expect(hist.canUndo, isFalse);
+    expect(c.read(rainfallIntensityProvider), rain0);
+    expect(c.read(runoffCoefficientProvider), runoff0);
+    expect(c.read(drainageSlopeProvider), slope0);
+    expect(c.read(hotWaterFlowTempProvider), hwT0);
+    expect(c.read(hotWaterDeltaTProvider), hwDt0);
+    expect(c.read(fireHazardProvider), hazard0);
+    expect(c.read(coolingLoadMethodProvider), cooling0);
+    expect(c.read(ductSettingsProvider).shape, duct0.shape);
+    expect(c.read(ductSettingsProvider).method, duct0.method);
+  });
+
+  test('a stepper held at its clamp limit records no empty step', () {
+    final c = ProviderContainer();
+    addTearDown(c.dispose);
+    final hist = c.read(historyProvider.notifier);
+    setRainfallUndoable(c.read, 600); // the store's upper clamp
+    expect(hist.canUndo, isTrue);
+    hist.undo();
+    setRainfallUndoable(c.read, 600);
+    // A further "+" past the clamp stores the same 600 — nothing to undo.
+    final recorded = setSettingUndoable<double>(c.read,
+        get: () => c.read(rainfallIntensityProvider),
+        apply: (v) => c.read(rainfallIntensityProvider.notifier).set(v),
+        next: 625,
+        label: StringKey.undoLabelRainfall);
+    expect(recorded, isFalse);
+    hist.undo();
+    expect(hist.canUndo, isFalse, reason: 'only the one real 600 step existed');
   });
 }

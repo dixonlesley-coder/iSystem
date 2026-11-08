@@ -110,7 +110,7 @@ class _DuplicateFloorDialogState extends ConsumerState<_DuplicateFloorDialog> {
     final colors = context.colors;
     final type = context.type;
     final project = ref.watch(projectControllerProvider);
-    final sheets = ref.watch(sheetsControllerProvider);
+    final sheets = ref.watch(sheetsContentProvider);
     final levelCount = project.building.levelCount;
     final floors = project.floors;
 
@@ -588,7 +588,7 @@ class _PasteToFloorsDialogState extends ConsumerState<_PasteToFloorsDialog> {
     final colors = context.colors;
     final type = context.type;
     final project = ref.watch(projectControllerProvider);
-    final sheets = ref.watch(sheetsControllerProvider);
+    final sheets = ref.watch(sheetsContentProvider);
     final levelCount = project.building.levelCount;
     final floors = project.floors;
 
@@ -598,7 +598,7 @@ class _PasteToFloorsDialogState extends ConsumerState<_PasteToFloorsDialog> {
       if (id != null) sheetByFloor[f] = id;
     }
     String floorLabel(int f) =>
-        f < floors.length ? floors[floors.length - 1 - f].name : 'Floor $f';
+        f < floors.length ? floors[f].name : 'Floor ${f + 1}';
 
     final canApply = _targets.any(sheetByFloor.containsKey);
 

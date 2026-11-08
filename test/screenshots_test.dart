@@ -76,6 +76,19 @@ void main() {
     net.placeRunPoint('s1', 0, const Offset(1380, 360));
     net.setTool(DrawTool.drawRiser);
     net.placeRiser('s1', 0, const Offset(360, 360), 3);
+    // Continue the stack to the top storey so the roof tank sits on the roof
+    // level its gravity solve assumes (riser length = the elevation delta).
+    net.placeRiser('s2', 1, const Offset(360, 360), 3);
+    // Round 25 follow-up — the fixture is a roof-tank DOWNFEED (the default
+    // feed setting), so draw the tank: the riser's top node is the roof tank.
+    // Without it the feed is honestly 'Direct mains' and there is no gravity
+    // field to paint (the 03 heatmap used to show a phantom-tank field).
+    final topNode = container
+        .read(networkControllerProvider)
+        .network
+        .nodes
+        .reduce((a, b) => a.floorIndex >= b.floorIndex ? a : b);
+    net.setNodeComponent(topNode.id, NodeComponent.roofTank);
     // A clean-water outlet on a short branch off the main — exercises the new
     // readable faucet/drop icon so the golden confirms it renders on-canvas
     // (connected, so it's a real outlet rather than an orphaned marker).

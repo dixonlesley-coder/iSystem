@@ -14,6 +14,7 @@ import 'package:mechx_engine/units.dart';
 
 import '../../store/fixture_library_store.dart';
 import '../theme/design_tokens.dart';
+import '../strings/app_strings.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/mechx_button.dart';
 import '../widgets/mechx_focus_ring.dart';
@@ -68,6 +69,7 @@ class _FixtureLibraryDialogState extends ConsumerState<_FixtureLibraryDialog> {
   double _drainageUnits = 1;
   double? _mountingHeightM;
   bool _isFlushValve = false;
+  bool _isWaterCloset = false;
 
   int _seq = 0;
 
@@ -79,6 +81,7 @@ class _FixtureLibraryDialogState extends ConsumerState<_FixtureLibraryDialog> {
       _drainageUnits = 1;
       _mountingHeightM = null;
       _isFlushValve = false;
+      _isWaterCloset = false;
     });
   }
 
@@ -90,6 +93,7 @@ class _FixtureLibraryDialogState extends ConsumerState<_FixtureLibraryDialog> {
       _drainageUnits = f.drainageUnits;
       _mountingHeightM = f.defaultMountingHeight?.meters;
       _isFlushValve = f.isFlushValve;
+      _isWaterCloset = f.isWaterCloset;
     });
   }
 
@@ -106,6 +110,7 @@ class _FixtureLibraryDialogState extends ConsumerState<_FixtureLibraryDialog> {
       defaultMountingHeight:
           _mountingHeightM == null ? null : Length(_mountingHeightM!),
       isFlushValve: _isFlushValve,
+      isWaterCloset: _isWaterCloset,
     );
     if (_editingId == null) {
       ctrl.add(fixture);
@@ -231,6 +236,23 @@ class _FixtureLibraryDialogState extends ConsumerState<_FixtureLibraryDialog> {
                 primary: _isFlushValve,
                 onPressed: () =>
                     setState(() => _isFlushValve = !_isFlushValve),
+              ),
+            ],
+          ),
+          const SizedBox(height: MechXSpacing.sm),
+          // water-drainage-7 — a custom WC gets the DN75 drain floor.
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                    context.strings(StringKey.fixtureLibraryWaterCloset),
+                    style: type.body.copyWith(color: colors.textSecondary)),
+              ),
+              MechXButton(
+                label: _isWaterCloset ? 'Yes' : 'No',
+                primary: _isWaterCloset,
+                onPressed: () =>
+                    setState(() => _isWaterCloset = !_isWaterCloset),
               ),
             ],
           ),
@@ -431,10 +453,10 @@ class _GlyphState extends State<_Glyph> {
     final enabled = widget.onTap != null;
     final visual = AnimatedScale(
       scale: _down && enabled ? 0.9 : 1.0,
-      duration: MechXMotion.press,
+      duration: MechXMotion.resolve(context, MechXMotion.press),
       curve: MechXMotion.standard,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         width: 28,
         height: 28,

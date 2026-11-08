@@ -11,6 +11,9 @@
 ///     drainage / vent sizing path (cf. `drainageFixtureUnit`).
 ///   • [isFlushValve]  — whether this fixture is a direct flush-valve WC; if any
 ///     selected fixture is, supply sizing uses the flush-VALVE demand branch.
+///   • [isWaterCloset] — whether this fixture is a water closet; a drain
+///     carrying one is floored at DN75 (`kMinWcDrainMm`, water-drainage-7),
+///     like a built-in WC type.
 ///
 /// DELIBERATE SIMPLIFICATION: unlike the built-in table, which tiers the UBAP
 /// load by [Occupancy] (private / public / assembly), a custom fixture carries a
@@ -49,6 +52,12 @@ class CustomFixture {
   /// branch when present).
   final bool isFlushValve;
 
+  /// Whether this is a WATER CLOSET (any flush type): the app passes such
+  /// nodes to `autoSizeNetwork(waterClosetNodeIds:)` so every drainage edge
+  /// carrying one is floored at the WC minimum (DN75), exactly as a built-in
+  /// WC fixture is (audit water-drainage-7). Default false ⇒ byte-identical.
+  final bool isWaterCloset;
+
   const CustomFixture({
     required this.id,
     required this.name,
@@ -56,6 +65,7 @@ class CustomFixture {
     this.drainageUnits = 0,
     this.defaultMountingHeight,
     this.isFlushValve = false,
+    this.isWaterCloset = false,
   });
 
   CustomFixture copyWith({
@@ -66,6 +76,7 @@ class CustomFixture {
     Length? defaultMountingHeight,
     bool clearDefaultMountingHeight = false,
     bool? isFlushValve,
+    bool? isWaterCloset,
   }) =>
       CustomFixture(
         id: id ?? this.id,
@@ -76,6 +87,7 @@ class CustomFixture {
             ? null
             : (defaultMountingHeight ?? this.defaultMountingHeight),
         isFlushValve: isFlushValve ?? this.isFlushValve,
+        isWaterCloset: isWaterCloset ?? this.isWaterCloset,
       );
 
   /// Plain-map JSON (SI: [defaultMountingHeight] stored in metres).
@@ -87,6 +99,8 @@ class CustomFixture {
         if (defaultMountingHeight != null)
           'mountingHeight_m': defaultMountingHeight!.meters,
         'isFlushValve': isFlushValve,
+        // Additive: written only when set, so a legacy library is byte-identical.
+        if (isWaterCloset) 'isWaterCloset': true,
       };
 
   /// Tolerant decode: returns null when the entry lacks the mandatory [id] /
@@ -98,13 +112,23 @@ class CustomFixture {
     final name = raw['name'];
     if (id is! String || id.isEmpty || name is! String) return null;
     final mh = raw['mountingHeight_m'];
+    // Round 28 (persist-undo-2-5) — a load is a non-negative, finite number
+    // of fixture units (a hand-damaged -5 UBAP used to size its supply at
+    // Q = 0); anything else decodes to 0, the absent-value default.
+    double units(Object? v) {
+      final d = v is num ? v.toDouble() : 0.0;
+      return d.isFinite && d > 0 ? d : 0.0;
+    }
+
     return CustomFixture(
       id: id,
       name: name,
-      supplyUnits: (raw['supplyUnits'] as num?)?.toDouble() ?? 0,
-      drainageUnits: (raw['drainageUnits'] as num?)?.toDouble() ?? 0,
+      supplyUnits: units(raw['supplyUnits']),
+      drainageUnits: units(raw['drainageUnits']),
       defaultMountingHeight: mh is num ? Length(mh.toDouble()) : null,
       isFlushValve: raw['isFlushValve'] == true,
+      // Tolerant: absent / non-bool (an older file) ⇒ false.
+      isWaterCloset: raw['isWaterCloset'] == true,
     );
   }
 }

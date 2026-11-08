@@ -178,10 +178,18 @@ double _upsizeCsa(
 /// VFD-driven pumps/fans). When omitted, the share is derived from the circuit
 /// load kinds (UPS / welding). Returns `null` when the panel carries no
 /// non-linear load (nothing to report).
+///
+/// [driveFedCircuitIds] is the ADDITIVE alternative to [nonLinearFraction]:
+/// circuits known to be drive-fed (VFD) are counted as non-linear ON TOP OF
+/// the kind-derived UPS/welding share (each circuit counted once, split
+/// single/three-phase by its own `threePhase`), so adding a drive to a
+/// UPS-heavy board can never LOWER the non-linear fraction (audit r8 —
+/// the override form threw the UPS share away).
 HarmonicsResult? estimateHarmonics(
   ElectricalPanelResult panel,
   ElectricalStandardsProfile profile, {
   double? nonLinearFraction,
+  Set<String> driveFedCircuitIds = const {},
 }) {
   // Per-circuit demand proxy: use the breaker rating as the circuit weight
   // (the panel result does not carry per-circuit watts; rating tracks load).
@@ -198,7 +206,8 @@ HarmonicsResult? estimateHarmonics(
     if (c.grounding.neutralCsaMm2 > largestNeutral) {
       largestNeutral = c.grounding.neutralCsaMm2;
     }
-    if (isNonLinearKind(c.loadKind)) {
+    if (isNonLinearKind(c.loadKind) ||
+        driveFedCircuitIds.contains(c.circuitId)) {
       nonLinearW += w;
       if (c.threePhase) {
         threePhaseNonLinearW += w;

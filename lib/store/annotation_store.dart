@@ -5,11 +5,13 @@
 /// data.
 library;
 
+import 'dart:convert' show jsonEncode;
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/network/network.dart' show NodeComponent;
+import 'package:mechx_engine/network/network.dart'
+    show Network, NetNode, NodeComponent, ServiceType, isSupplyAirTerminal;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/cooling_load_detailed.dart'
     show DetailedCoolingLoadInputs, estimateDetailedCoolingLoad;
@@ -19,7 +21,8 @@ import 'package:mechx_engine/sizing/room_air.dart';
 import 'package:mechx_engine/standards/ventilation.dart';
 import 'package:mechx_engine/units.dart';
 
-import 'app_state.dart' show CoolingLoadMethod, coolingLoadMethodProvider;
+import 'app_state.dart'
+    show CoolingLoadMethod, coolingLoadMethodProvider, ductSettingsProvider;
 import 'history_store.dart';
 import 'project_store.dart';
 
@@ -51,6 +54,18 @@ class Measurement {
     final dy = by - ay;
     return math.sqrt(dx * dx + dy * dy);
   }
+
+  /// This measurement moved to building floor [fi] (a floor-stack / sheet
+  /// re-mapping carries annotations with the drawn work — `floor_remap.dart`).
+  Measurement withFloorIndex(int fi) => Measurement(
+        id: id,
+        sheetId: sheetId,
+        floorIndex: fi,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+      );
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -221,6 +236,20 @@ class TankArea {
         name: name ?? this.name,
       );
 
+  /// This tank moved to building floor [fi] (see [Measurement.withFloorIndex]).
+  TankArea withFloorIndex(int fi) => TankArea(
+        id: id,
+        sheetId: sheetId,
+        floorIndex: fi,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        depthM: depthM,
+        material: material,
+        name: name,
+      );
+
   /// Whether sheet-pixel ([px], [py]) on [pSheetId]/[pFloor] falls inside this
   /// tank's footprint (E6 — canvas hit-test to select/move).
   bool containsPoint(String pSheetId, int pFloor, double px, double py) {
@@ -352,9 +381,15 @@ class TankAreaController extends Notifier<List<TankArea>> {
   }
 
   void _update(String id, TankArea Function(TankArea) f) {
-    if (!state.any((t) => t.id == id)) return;
+    final cur = state.where((t) => t.id == id).firstOrNull;
+    if (cur == null) return;
+    // Round 13 (ui-journey-2) — a pick that changes nothing (re-tapping the
+    // selected material, '-' at the depth floor) records NO undo step; it used
+    // to spend one, so the engineer's real last edit needed a second Ctrl+Z.
+    final next = f(cur);
+    if (_sameAnnotation(cur.toJson(), next.toJson())) return;
     ref.read(annotationHistoryProvider.notifier).record();
-    state = [for (final t in state) if (t.id == id) f(t) else t];
+    state = [for (final t in state) if (t.id == id) next else t];
   }
 
   void removeById(String id) {
@@ -455,9 +490,61 @@ class RoomArea {
   double get widthPx => (bx - ax).abs();
   double get heightPx => (by - ay).abs();
 
-  /// Floor area (m²) given the sheet's metres-per-pixel.
+  /// Floor area (m²) given the sheet's metres-per-pixel — the GROSS
+  /// footprint, nested rooms included (see [netAreaM2]).
   double areaM2(double metersPerPixel) =>
       widthPx * heightPx * metersPerPixel * metersPerPixel;
+
+  /// Round 27 (hvac-4-2) — whether [other] is SMALLER than this room for the
+  /// nested-room rule: a strictly smaller gross footprint. Two equal
+  /// footprints are never nested in each other (a duplicated room keeps its
+  /// own sizing — the same rule as the smallest-room ownership tie).
+  bool _isSmallerRoom(RoomArea other) =>
+      other.widthPx * other.heightPx < widthPx * heightPx;
+
+  /// Round 27 (hvac-4-2) — the NET floor area (m²): the footprint less the
+  /// part covered by SMALLER rooms on the same sheet + floor (a meeting room
+  /// drawn inside an office; a partial overlap is clipped to the overlap).
+  /// The covered part is the UNION of those overlaps, so a room nested two
+  /// deep is subtracted once. A nested room owns its own terminals and AC
+  /// units, so it must own its own volume too: counting it in the outer room
+  /// as well sized the inner room's air and cooling twice (office airflow
+  /// +9.7 %, its cassette 120000 instead of 108000 BTU/h). No overlapping
+  /// smaller room ⇒ exactly [areaM2].
+  double netAreaM2(double metersPerPixel, Iterable<RoomArea> rooms) {
+    final gross = areaM2(metersPerPixel);
+    final loX = math.min(ax, bx), hiX = math.max(ax, bx);
+    final loY = math.min(ay, by), hiY = math.max(ay, by);
+    final clips = <(double, double, double, double)>[];
+    for (final r in rooms) {
+      if (r.id == id ||
+          r.sheetId != sheetId ||
+          r.floorIndex != floorIndex ||
+          !_isSmallerRoom(r)) {
+        continue;
+      }
+      final x0 = math.max(loX, math.min(r.ax, r.bx));
+      final x1 = math.min(hiX, math.max(r.ax, r.bx));
+      final y0 = math.max(loY, math.min(r.ay, r.by));
+      final y1 = math.min(hiY, math.max(r.ay, r.by));
+      if (x1 > x0 && y1 > y0) clips.add((x0, y0, x1, y1));
+    }
+    if (clips.isEmpty) return gross;
+    // Union of the overlap rectangles on the compressed grid of their edges.
+    final xs = {for (final c in clips) ...[c.$1, c.$3]}.toList()..sort();
+    final ys = {for (final c in clips) ...[c.$2, c.$4]}.toList()..sort();
+    var coveredPx = 0.0;
+    for (var i = 0; i + 1 < xs.length; i++) {
+      for (var j = 0; j + 1 < ys.length; j++) {
+        final cx = (xs[i] + xs[i + 1]) / 2, cy = (ys[j] + ys[j + 1]) / 2;
+        if (clips.any((c) => cx > c.$1 && cx < c.$3 && cy > c.$2 && cy < c.$4)) {
+          coveredPx += (xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]);
+        }
+      }
+    }
+    return math.max(
+        0.0, gross - coveredPx * metersPerPixel * metersPerPixel);
+  }
 
   /// Air-change rate actually applied: the [achOverride] if set, else the
   /// [roomType] default from the ventilation profile.
@@ -466,13 +553,17 @@ class RoomArea {
 
   /// Full air-side sizing for the room, or null when the sheet has no scale or
   /// the footprint is degenerate. Honours the project [ductShape]/[ductMethod].
+  ///
+  /// Round 27 (hvac-4-2) — pass the project's [rooms] so a smaller room drawn
+  /// inside this one is sized by itself, not twice ([netAreaM2]).
   RoomAirResult? sizing(
     double? metersPerPixel, {
     DuctShape ductShape = DuctShape.round,
     DuctSizingMethod ductMethod = DuctSizingMethod.velocity,
+    Iterable<RoomArea> rooms = const [],
   }) {
     if (metersPerPixel == null) return null;
-    final area = areaM2(metersPerPixel);
+    final area = netAreaM2(metersPerPixel, rooms);
     if (area <= 0 || ceilingHeightM <= 0) return null;
     const profile = SniVentilationProfile();
     return sizeRoomAir(
@@ -483,6 +574,9 @@ class RoomArea {
       grilleApplication: profile.grilleApplicationFor(roomType),
       ductShape: ductShape,
       ductMethod: ductMethod,
+      // Round 11 (hvac-network-2) — a toilet / kitchen is EXTRACTED: exhaust
+      // grilles + an exhaust fan, never supply nor recirculated return air.
+      extractOnly: isExtractRoomType(roomType),
     );
   }
 
@@ -507,9 +601,11 @@ class RoomArea {
   CoolingLoad? coolingLoad(
     double? metersPerPixel, {
     CoolingLoadMethod method = CoolingLoadMethod.simple,
+    Iterable<RoomArea> rooms = const [],
   }) {
     if (metersPerPixel == null) return null;
-    final area = areaM2(metersPerPixel);
+    // Round 27 (hvac-4-2) — the NET area: a nested room cools its own floor.
+    final area = netAreaM2(metersPerPixel, rooms);
     if (area <= 0 || ceilingHeightM <= 0) return null;
     if (method == CoolingLoadMethod.detailed) {
       final d = estimateDetailedCoolingLoad(DetailedCoolingLoadInputs(
@@ -582,6 +678,22 @@ class RoomArea {
         name: name ?? this.name,
       );
 
+  /// This room moved to building floor [fi] (see [Measurement.withFloorIndex]).
+  RoomArea withFloorIndex(int fi) => RoomArea(
+        id: id,
+        sheetId: sheetId,
+        floorIndex: fi,
+        ax: ax,
+        ay: ay,
+        bx: bx,
+        by: by,
+        roomType: roomType,
+        ceilingHeightM: ceilingHeightM,
+        achOverride: achOverride,
+        equipmentKind: equipmentKind,
+        name: name,
+      );
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'sheetId': sheetId,
@@ -629,8 +741,16 @@ class RoomArea {
       bx: bx.toDouble(),
       by: by.toDouble(),
       roomType: type,
-      ceilingHeightM: (raw['ceiling_m'] as num?)?.toDouble() ?? 3.0,
-      achOverride: (raw['ach'] as num?)?.toDouble(),
+      // Round 19 (persistence-2-3) — the bands the setters enforce
+      // ([RoomAreaController.setCeiling] 1.5–12 m, [setAch] 0.5–60): a
+      // non-positive / non-finite stored value falls back (ceiling 3.0 m, no
+      // ACH override), an out-of-band one clamps — never a 0 / negative ACH
+      // asserted on inside the room-air sizing.
+      ceilingHeightM:
+          _roomNum(raw['ceiling_m'], positive: true)?.clamp(1.5, 12).toDouble() ??
+              3.0,
+      achOverride:
+          _roomNum(raw['ach'], positive: true)?.clamp(0.5, 60).toDouble(),
       equipmentKind: kind,
       name: raw['name'] is String ? raw['name'] as String : 'Room',
     );
@@ -643,8 +763,206 @@ const Object _unset = Object();
 
 /// The project's designated room/zone areas. Mutated by the canvas room tool;
 /// read by the room overlay, the inspector editor, and the persistence layer.
+/// Round 19 (regression-room-stale-nested-rooms-false-warning) — the ONE room
+/// an air terminal ([component] at sheet-pixel [x],[y] on [sheetId]/[floor])
+/// belongs to among [rooms]: the smallest room containing it whose kind the
+/// terminal serves (a supply diffuser / return grille → a conditioned room, an
+/// exhaust grille → an extract-only room, `isExtractRoomType`), else the
+/// smallest room containing it at all; ties break on room id. Null when no room
+/// contains it. Shared by the Review stale check AND Auto-place's idempotence
+/// filter, so a toilet nested inside an office neither counts its exhaust
+/// grille as the office's extract nor has it deleted by re-placing the office.
+String? roomTerminalOwnerId(NodeComponent? component, String sheetId,
+    int floor, double x, double y, Iterable<RoomArea> rooms) {
+  RoomArea? best;
+  RoomArea? bestCompatible;
+  double areaOf(RoomArea r) => r.widthPx * r.heightPx;
+  bool smaller(RoomArea a, RoomArea? b) {
+    if (b == null) return true;
+    final d = areaOf(a) - areaOf(b);
+    if (d.abs() > 1e-9) return d < 0;
+    return a.id.compareTo(b.id) < 0;
+  }
+
+  for (final r in rooms) {
+    if (!r.containsNode(sheetId, floor, x, y)) continue;
+    if (smaller(r, best)) best = r;
+    final extractRoom = isExtractRoomType(r.roomType);
+    final compatible = component == NodeComponent.exhaustGrille
+        ? extractRoom
+        : !extractRoom;
+    if (compatible && smaller(r, bestCompatible)) bestCompatible = r;
+  }
+  return (bestCompatible ?? best)?.id;
+}
+
+/// Round 20 (regression-autoplace-nested-same-kind-room-stacks-terminals) —
+/// the owning room of an air-terminal NODE: the room whose Auto-place
+/// generated it ([NetNode.autoPlacedRoomId]) while the terminal still sits
+/// inside that room's footprint, else the geometric owner
+/// ([roomTerminalOwnerId], for hand-placed terminals or one dragged out of its
+/// room). With a meeting room nested in an open office, the office's grid can
+/// land a diffuser inside the meeting room; geometry alone gave it to the
+/// meeting room, so re-running the office's Auto-place neither deleted nor
+/// avoided it and stacked a second generation on top (+50 % air), and the
+/// stale judge under-counted the office / over-counted the meeting room.
+/// Round 21: the tag wins only OUTSIDE every nested same-kind room of the
+/// tagged room ([insideNestedSameKindRoom]); inside one the geometric owner
+/// (the nested room) takes it.
+/// Round 27 (hvac-4-3) — whether a DRAWN air system actually serves [room]:
+/// a terminal of the room's kind that the room OWNS ([roomTerminalOwnerOf] —
+/// an exhaust grille for an [extract] room, a supply diffuser / return grille
+/// otherwise) is connected to a SIZED duct of the matching service
+/// ([sizedEdgeIds]). The equipment schedule drops a room's own EF / AHU row
+/// only then: any exhaust (or supply) duct ANYWHERE in the project used to
+/// drop every room's row, so a ductless kitchen's 800 L/s exhaust fan
+/// vanished from the issued schedule once the toilets were piped.
+bool roomServedByDrawnAir(
+  RoomArea room,
+  Iterable<RoomArea> rooms,
+  Network net,
+  Set<String> sizedEdgeIds, {
+  required bool extract,
+}) {
+  // Round 31 (hvac-5-1): a linear diffuser serves a room exactly like a
+  // supply diffuser ([isSupplyAirTerminal]).
+  bool isTerminal(NodeComponent? c) => extract
+      ? c == NodeComponent.exhaustGrille
+      : isSupplyAirTerminal(c) || c == NodeComponent.returnGrille;
+  final services = extract
+      ? const {ServiceType.exhaust}
+      : const {ServiceType.duct, ServiceType.returnAir};
+  for (final n in net.nodes) {
+    if (!isTerminal(n.component)) continue;
+    if (roomTerminalOwnerOf(n, rooms) != room.id) continue;
+    for (final e in net.edges) {
+      if ((e.fromId == n.id || e.toId == n.id) &&
+          services.contains(e.service) &&
+          sizedEdgeIds.contains(e.id)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+String? roomTerminalOwnerOf(NetNode node, Iterable<RoomArea> rooms) {
+  final owner = _roomTerminalOwnerOf(node, rooms);
+  if (owner == null || node.autoPlacedRoomId == owner) return owner;
+  // Round 54 (plumbing-hvac-convergence-4-autoplace-deletes-hand-drawn-
+  // exhaust-grilles) — a terminal of the OTHER kind (an exhaust grille in a
+  // conditioned room — a cinema smoke exhaust, a kitchenette extract — or a
+  // supply diffuser / return grille in an extract-only room) that this room's
+  // Auto-place did not generate is not the room's: re-running Auto-place
+  // deleted the hand-drawn smoke-exhaust branch (grilles AND their ducts) and
+  // the stale judge added its air to the room's extract bank (13.000 vs
+  // 7.000 m3/s — a warning only that destructive re-run could clear). A
+  // terminal the room itself generated stays its own (a room retyped from
+  // office to toilet still warns about, and replaces, its old diffusers).
+  for (final r in rooms) {
+    if (r.id != owner) continue;
+    final extractRoom = isExtractRoomType(r.roomType);
+    final compatible = node.component == NodeComponent.exhaustGrille
+        ? extractRoom
+        : !extractRoom;
+    return compatible ? owner : null;
+  }
+  return owner;
+}
+
+String? _roomTerminalOwnerOf(NetNode node, Iterable<RoomArea> rooms) {
+  final tag = node.autoPlacedRoomId;
+  if (tag != null) {
+    for (final r in rooms) {
+      if (r.id == tag &&
+          r.containsNode(node.sheetId, node.floorIndex, node.x, node.y) &&
+          // Round 21 — the tag never hides a terminal that now sits inside a
+          // smaller same-kind room drawn AFTER the generating room's
+          // Auto-place: that point is the nested room's, so its own Auto-place
+          // replaces the terminal and the outer room goes stale (re-run it to
+          // move the terminal out) instead of silently doubling the air.
+          !insideNestedSameKindRoom(r, node.x, node.y, rooms)) {
+        return r.id;
+      }
+    }
+  }
+  return roomTerminalOwnerId(
+      node.component, node.sheetId, node.floorIndex, node.x, node.y, rooms);
+}
+
+/// Round 20 (hvac-3-1) — the ONE room a placed AC indoor unit ([node])
+/// belongs to among [rooms]: the SMALLEST room containing it, ties broken on
+/// room id; null when none contains it. The AC feed ([acUnitShare]), the
+/// equipment schedule and the Rooms inspector all count a room's units by this
+/// owner, so a cassette in a meeting room nested inside an office is the
+/// meeting room's unit only — never counted again in the office's split, and
+/// never fed the office's load because the office was drawn first.
+String? roomUnitOwnerId(NetNode node, Iterable<RoomArea> rooms) {
+  RoomArea? best;
+  for (final r in rooms) {
+    if (!r.containsNode(node.sheetId, node.floorIndex, node.x, node.y)) {
+      continue;
+    }
+    if (best == null) {
+      best = r;
+      continue;
+    }
+    final d = r.widthPx * r.heightPx - best.widthPx * best.heightPx;
+    if (d < -1e-9 || (d.abs() <= 1e-9 && r.id.compareTo(best.id) < 0)) {
+      best = r;
+    }
+  }
+  return best?.id;
+}
+
+/// Round 20 — true when ([x], [y]) on [room]'s sheet/floor falls inside a
+/// DIFFERENT, smaller room of the same air kind (both conditioned, or both
+/// extract-only): a nested room that sizes and places its own terminals, so
+/// [room]'s Auto-place grid must not drop a terminal there.
+bool insideNestedSameKindRoom(
+    RoomArea room, double x, double y, Iterable<RoomArea> rooms) {
+  final kind = isExtractRoomType(room.roomType);
+  final area = room.widthPx * room.heightPx;
+  for (final r in rooms) {
+    if (r.id == room.id) continue;
+    if (isExtractRoomType(r.roomType) != kind) continue;
+    if (r.widthPx * r.heightPx >= area) continue;
+    if (r.containsNode(room.sheetId, room.floorIndex, x, y)) return true;
+  }
+  return false;
+}
+
+/// Round 19 — a stored room number: finite (and > 0 when [positive]), else
+/// null.
+double? _roomNum(Object? raw, {bool positive = false}) {
+  final v = raw is num ? raw.toDouble() : null;
+  if (v == null || !v.isFinite) return null;
+  if (positive && v <= 0) return null;
+  return v;
+}
+
 final roomAreasProvider =
     NotifierProvider<RoomAreaController, List<RoomArea>>(RoomAreaController.new);
+
+/// Every room's air sizing ([RoomArea.sizing] over its own sheet scale, the
+/// project duct settings and the NET area against the other rooms), keyed by
+/// room id — null where the sheet is unscaled / the footprint degenerate.
+///
+/// Drafting-feel perf: it depends on the rooms, the calibrations and the duct
+/// settings ONLY — never the network — so a pipe edit no longer re-sizes every
+/// room, and the room painter / Design Issues / the electrical feed / the
+/// inspector share one result instead of each re-running `sizeRoomAir`.
+final roomSizingProvider = Provider<Map<String, RoomAirResult?>>((ref) {
+  final rooms = ref.watch(roomAreasProvider);
+  final calibrations =
+      ref.watch(projectControllerProvider.select((p) => p.calibrations));
+  final ducts = ref.watch(ductSettingsProvider);
+  return {
+    for (final r in rooms)
+      r.id: r.sizing(calibrations[r.sheetId]?.metersPerPixel,
+          ductShape: ducts.shape, ductMethod: ducts.method, rooms: rooms),
+  };
+});
 
 class RoomAreaController extends Notifier<List<RoomArea>> {
   int _seq = 0;
@@ -736,9 +1054,14 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
   }
 
   void _update(String id, RoomArea Function(RoomArea) f) {
-    if (!state.any((r) => r.id == id)) return;
+    final cur = state.where((r) => r.id == id).firstOrNull;
+    if (cur == null) return;
+    // Round 13 — a no-op edit (same room type, a clamp boundary) records no
+    // undo step (see [TankAreaController._update]).
+    final next = f(cur);
+    if (_sameAnnotation(cur.toJson(), next.toJson())) return;
     ref.read(annotationHistoryProvider.notifier).record();
-    state = [for (final r in state) if (r.id == id) f(r) else r];
+    state = [for (final r in state) if (r.id == id) next else r];
   }
 
   void removeById(String id) {
@@ -758,6 +1081,35 @@ class RoomAreaController extends Notifier<List<RoomArea>> {
       if (n != null && n >= _seq) _seq = n + 1;
     }
   }
+
+  /// Round 28 (persist-undo-2-4) — load a DOCUMENT's rooms: the counter
+  /// restarts from the document, past every live room id, the saved counter
+  /// ([nextSeq], `.mechx` `roomNextSeq`) and every room id still REFERENCED
+  /// by the drawing ([referencedIds]: the terminals' `autoPlacedRoomId`), so
+  /// a room drawn after a reload never re-uses a deleted room's id — and
+  /// never adopts (then deletes on Auto-place) the terminals tagged with it.
+  void load(List<RoomArea> rooms,
+      {int? nextSeq, Iterable<String?> referencedIds = const []}) {
+    _seq = 0;
+    set(rooms);
+    if (nextSeq != null && nextSeq > _seq) _seq = nextSeq;
+    for (final id in referencedIds) {
+      if (id == null || !id.startsWith('r')) continue;
+      final n = int.tryParse(id.substring(1));
+      if (n != null && n >= _seq) _seq = n + 1;
+    }
+  }
+
+  /// Round 28 — the counter to persist (`roomNextSeq`), or null when the live
+  /// room ids already imply it (an untouched file stays byte-identical).
+  int? get persistedNextSeq {
+    var implied = 0;
+    for (final r in state) {
+      final n = int.tryParse(r.id.replaceFirst('r', ''));
+      if (n != null && n >= implied) implied = n + 1;
+    }
+    return _seq > implied ? _seq : null;
+  }
 }
 
 /// M15 — the AC cooling load for one room (by [RoomArea.id]) computed on the
@@ -776,7 +1128,9 @@ final roomCoolingLoadProvider =
   final mpp =
       ref.watch(projectControllerProvider).calibrationFor(room.sheetId)
           ?.metersPerPixel;
-  return room.coolingLoad(mpp, method: ref.watch(coolingLoadMethodProvider));
+  return room.coolingLoad(mpp,
+      method: ref.watch(coolingLoadMethodProvider),
+      rooms: ref.watch(roomAreasProvider));
 });
 
 /// Whether the canvas room tool is active (drag to draw a room footprint).
@@ -936,3 +1290,9 @@ class AnnotationHistoryController extends Notifier<int> {
     state++;
   }
 }
+
+/// Two annotation records are the same edit-wise when their persisted form is
+/// identical (every field the `.mechx` file stores) — the no-op test for the
+/// tank/room `_update` (Round 13).
+bool _sameAnnotation(Map<String, dynamic> a, Map<String, dynamic> b) =>
+    jsonEncode(a) == jsonEncode(b);

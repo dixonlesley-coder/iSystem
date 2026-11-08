@@ -43,6 +43,13 @@ class AiCommand {
   /// For [AiCommandKind.suggest] — text-only advice, no mutation.
   final String? message;
 
+  /// Round 11 — the REQUIRED fields the decoder found missing, of the wrong
+  /// type, or non-finite (a model's `1e400` decodes to Infinity). Empty for a
+  /// well-formed command. A non-empty list makes the copilot's `_validate`
+  /// REJECT the command instead of the old silent default to (0, 0) on floor 0
+  /// — a malformed call must never become a real placement.
+  final List<String> invalidFields;
+
   const AiCommand({
     required this.kind,
     this.sheetId = '',
@@ -53,7 +60,18 @@ class AiCommand {
     this.service,
     this.roomId,
     this.message,
+    this.invalidFields = const [],
   });
+
+  /// Whether [kind] places a node at a point (and so REQUIRES floor / x / y).
+  static bool placesAtPoint(AiCommandKind kind) => switch (kind) {
+        AiCommandKind.placeComponent ||
+        AiCommandKind.placeTerminal ||
+        AiCommandKind.placeFitting ||
+        AiCommandKind.placeSegment =>
+          true,
+        AiCommandKind.autoPlaceRoomTerminals || AiCommandKind.suggest => false,
+      };
 
   /// A human-readable one-line description for the plan-review list.
   String get preview {
@@ -99,18 +117,54 @@ class AiCommand {
               orElse: () => null,
             );
     if (kind == null) return null;
-    double num_(Object? v) => v is num ? v.toDouble() : 0.0;
+    // Round 11 — a number is a FINITE num, or a numeric string (some models
+    // quote numbers); anything else (missing, wrong type, NaN / Infinity) is
+    // null and, for a placement, recorded in [invalidFields]. Never `toInt()` a
+    // non-finite num (that threw out of the response parser).
+    double? finiteNum(Object? v) {
+      final d = v is num
+          ? v.toDouble()
+          : v is String
+              ? double.tryParse(v.trim())
+              : null;
+      return d != null && d.isFinite ? d : null;
+    }
+
+    final needsPoint = placesAtPoint(kind);
+    final invalid = <String>[];
+    final x = finiteNum(args['x']);
+    final y = finiteNum(args['y']);
+    final floorD = finiteNum(args['floor']);
+    // The schema types floor as an INTEGER — a fractional floor is malformed.
+    final floorOk = floorD != null && floorD == floorD.roundToDouble();
+    if (needsPoint) {
+      if (!floorOk) invalid.add('floor');
+      if (x == null) invalid.add('x');
+      if (y == null) invalid.add('y');
+    }
     return AiCommand(
       kind: kind,
       sheetId: args['sheetId'] is String ? args['sheetId'] : '',
-      floor: args['floor'] is num ? (args['floor'] as num).toInt() : 0,
-      x: num_(args['x']),
-      y: num_(args['y']),
+      floor: floorOk ? floorD.toInt() : 0,
+      x: x ?? 0.0,
+      y: y ?? 0.0,
+      invalidFields: invalid,
       component: args['component'] is String ? args['component'] : null,
       service: args['service'] is String ? args['service'] : null,
       roomId: args['roomId'] is String ? args['roomId'] : null,
       message: args['message'] is String ? args['message'] : null,
     );
+  }
+
+  /// [fromJson] behind a guard, for the response parsers: the AI clients'
+  /// contract is "never throws — a typed AiResult", so ANY decode surprise
+  /// drops the one command instead of escaping `proposePlan` (Round 11).
+  static AiCommand? tryFromJson(String kindName, Map<dynamic, dynamic> args) {
+    try {
+      return fromJson(kindName, args);
+    } catch (_) {
+      return null;
+    }
   }
 }
 

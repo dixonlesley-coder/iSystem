@@ -18,10 +18,12 @@
 /// `PuilProfile` tables:
 ///   - breaker ladder: 6 10 16 20 25 32 40 50 63 | 80 100 125 160 200 250 315
 ///     400 500 630 800 1000 1250 1600 A;
-///   - KHA, Cu/PVC, reference method B1 (conduit): 1.5→18, 2.5→25, 4→34, 6→44,
+///   - KHA, Cu/PVC, reference method E (every fixture board is laid on tray —
+///     Round 11 split conduit B1 onto IEC B.52.4 B1, so the fixtures pin the
+///     method whose table these derivations use): 1.5→18, 2.5→25, 4→34, 6→44,
 ///     10→60, 16→80, 25→105, 35→130, 50→160, 70→200, 95→245, 120→285, 150→325,
 ///     185→370, 240→435, 300→500 A;
-///   - derating at the panel defaults (30 °C air, grouping 1, conduit) = 1.0;
+///   - derating at the panel defaults (30 °C air, grouping 1, tray) = 1.0;
 ///   - PUIL continuous-load factor 1.25 (Iz ≥ max(In, 1.25·Ib));
 ///   - 3φ trunk minimum section 4 mm².
 library;
@@ -98,7 +100,9 @@ void main() {
           designCurrent: const Current(50.5),
           loadKind: LoadKind.feeder,
           minRatingA: 9999);
-      expect(r.ratingA.amperes, 1600); // the ladder top
+      // The ladder top — the 4000 A ACB frame since Round 23.
+      expect(r.ratingA.amperes, p.standardBreakerRatingsA.last);
+      expect(r.ratingA.amperes, 4000);
     });
   });
 
@@ -123,6 +127,7 @@ void main() {
       name: 'Sub',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       sourceType: PanelSource.feeder,
       fedByCircuitId: 'f1',
       circuits: [
@@ -142,6 +147,7 @@ void main() {
       name: 'Main',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       circuits: [
         ElectricalCircuit(
           id: 'f1',
@@ -241,6 +247,7 @@ void main() {
       name: 'Sub',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       sourceType: PanelSource.feeder,
       fedByCircuitId: 'f1',
       circuits: [
@@ -260,6 +267,7 @@ void main() {
       name: 'Main',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       circuits: [
         ElectricalCircuit(
           id: 'f1',
@@ -298,16 +306,22 @@ void main() {
   // ── (3) an already-selective pair ⇒ no second pass ────────────────────────
   group('(3) an already-selective feeder is left exactly as pass 1 sized it',
       () {
-    // SP: 3φ heater 20 kW at cosφ 1.0 ⇒ Ib = 20 000/(√3·400) = 28.868 → 28.9 A
-    //   ⇒ SP incomer = first rung ≥ 28.9 = 32 A ⇒ floor would be 1.6×32 = 51.2.
-    // The feeder runs at a poor cosφ 0.5, so it already sizes well above that:
-    //   Ib(f1) = 20 000/(√3·400·0.5) = 57.735 A ⇒ 63 A ≥ 51.2 ⇒ NO floor is
-    //   derived, the floors map is empty and pass 1 IS the answer.
+    // Round-7 elec-props-2: a feeder now converts the fed board's demand at
+    // that board's REAL power factor, so it can no longer out-size its fed
+    // incomer by running at a poorer cos φ than the loads (the old premise of
+    // this case was exactly that defect). The already-selective pair is now a
+    // way whose NAMEPLATE FLA sits below its W-based current:
+    // SP: 3φ 20 kW at cosφ 1.0 with an A5 FLA of 10 A ⇒ SP's incomer sizes on
+    //   the FLA ⇒ first rung ≥ 10 = 10 A ⇒ the floor would be 1.6×10 = 16 A.
+    // The feeder carries SP's 20 kW demand at SP's pf 1.0:
+    //   Ib(f1) = 20 000/(√3·400·1.0) = 28.868 → 28.9 A ⇒ 32 A ≥ 16 ⇒ NO floor
+    //   is derived, the floors map is empty and pass 1 IS the answer.
     const sp = ElectricalPanel(
       id: 'SP',
       name: 'Sub',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       sourceType: PanelSource.feeder,
       fedByCircuitId: 'f1',
       circuits: [
@@ -319,6 +333,9 @@ void main() {
           cosPhi: 1.0,
           phases: 3,
           length: Length(10),
+          flaOverrideA: Current(10),
+          // Round 39 — an A5 FLA is machine-owned (see compute.dart).
+          sourceEquipmentId: 'eq-heater',
         ),
       ],
     );
@@ -327,12 +344,13 @@ void main() {
       name: 'Main',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       circuits: [
         ElectricalCircuit(
           id: 'f1',
           name: 'Feeder to SP',
           loadKind: LoadKind.feeder,
-          cosPhi: 0.5,
+          cosPhi: 1.0,
           length: Length(25),
           feedsPanelId: 'SP',
         ),
@@ -350,6 +368,7 @@ void main() {
       mdp,
       opts: const ComputePanelOptions(
         feederLoadW: {'SP': 20000},
+        feederPowerFactor: {'SP': 1.0},
         panelSystems: {
           'MDP': ElectricalSystem.threePhase,
           'SP': ElectricalSystem.threePhase,
@@ -360,10 +379,10 @@ void main() {
     final sys = computeSystem(p, project);
 
     test('premise: the pass-1 feeder already clears 1.6× the child incomer', () {
-      expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 32);
-      expect(_way(pass1Mdp, 'f1').designCurrent.amperes, closeTo(57.7, 1e-9));
-      expect(_way(pass1Mdp, 'f1').breaker.ratingA.amperes, 63);
-      expect(nonSelective(63, 32), isFalse); // 63 ≥ 1.6 × 32 = 51.2
+      expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 10);
+      expect(_way(pass1Mdp, 'f1').designCurrent.amperes, closeTo(28.9, 1e-9));
+      expect(_way(pass1Mdp, 'f1').breaker.ratingA.amperes, 32);
+      expect(nonSelective(32, 10), isFalse); // 32 ≥ 1.6 × 10 = 16
     });
 
     test('the system result reproduces the pass-1 sizing field for field', () {
@@ -375,8 +394,10 @@ void main() {
       expect(feeder.cable.deratedIz.amperes, ref.cable.deratedIz.amperes);
       expect(feeder.voltageDrop.dropPercent, ref.voltageDrop.dropPercent);
       expect(feeder.grounding.peCsaMm2, ref.grounding.peCsaMm2);
-      // Iz ≥ max(63, 1.25 × 57.735 = 72.17) = 72.17 ⇒ 16 mm² (80 A).
-      expect(feeder.cable.csaMm2, 16);
+      // Iz ≥ max(32, 1.25 × 28.868 = 36.08) = 36.08 A: 4 mm² (KHA 34 A) ✗ ⇒
+      // 6 mm², the first section clearing it.
+      expect(feeder.cable.csaMm2, 6);
+      expect(feeder.cable.deratedIz.amperes, greaterThanOrEqualTo(36.08));
     });
   });
 
@@ -414,17 +435,22 @@ void main() {
 
   // ── (5) a floor past the ladder top clamps, and says so honestly ──────────
   group('(5) a floor beyond the largest frame clamps to the ladder top', () {
-    // SP: 3φ heater 830 kW at cosφ 1.0 ⇒ Ib = 830 000/(√3·400) = 1198.0018 A
-    //   → 1198.0 A ⇒ SP incomer = first rung ≥ 1198.0 = 1250 A.
-    // Feeder f1 carries the same 830 kW at cosφ 1.0 ⇒ Ib = 1198.0 A ⇒ pass 1
+    // Re-derived 2026-10 (audit elec-core-3): n parallel runs of one circuit
+    // derate as a GROUP (groupingFactor(n): 2→0.8, 3→0.7, 4→0.65), so the old
+    // 830 kW furnace (Iz ≥ 1497.5 A) no longer fits even 4×300 (1300 A); the
+    // fixture moves to a load 4×300 can carry.
+    // SP: 3φ heater 706 kW at cosφ 1.0 ⇒ Ib = 706 000/(√3·400) = 1019.02 A
+    //   → 1019.0 A ⇒ SP incomer = first rung ≥ 1019.0 = 1250 A.
+    // Feeder f1 carries the same 706 kW at cosφ 1.0 ⇒ Ib = 1019.0 A ⇒ pass 1
     //   picks 1250 A, the child incomer's own rung (non-selective).
-    // FLOOR = 1.6 × 1250 = 2000 A — beyond the 1600 A ladder top, so the floor
-    //   itself clamps to 1600 A (never a throw).
-    // CABLE (load-sized, derating 1.00): Iz ≥ max(1250, 1.25 × 1198.0018 =
-    //   1497.5) = 1497.5 A. One run tops out at 300 mm² (500 A) and two runs at
-    //   1000 A, so it takes 3 parallel runs: 1497.5 / 3 = 499.2 A per run ⇒
-    //   300 mm² (500 A) ⇒ Iz = 3 × 500 = 1500 A.
-    // CAP = 1500 A ⇒ the largest rung ≤ 1500 is 1250 A: the clamped floor is
+    // FLOOR = 1.6 × 1250 = 2000 A — the 2000 A ACB rung since the Round-23
+    //   ACB ladder (it used to clamp to the old 1600 A MCCB top).
+    // CABLE (load-sized, single-run derating 1.00): Iz ≥ max(1250, 1.25 ×
+    //   1019.02 = 1273.8) = 1273.8 A. One run tops out at 300 mm² (500 A);
+    //   2 runs need 1273.8/2/0.8 = 796 A per run ✗; 3 runs 1273.8/3/0.7 =
+    //   606.6 A ✗; 4 runs 1273.8/4/0.65 = 489.9 A ⇒ 300 mm² (500 A)
+    //   ⇒ Iz = 4 × 500 × 0.65 = 1300 A.
+    // CAP = 1300 A ⇒ the largest rung ≤ 1300 is 1250 A: the clamped floor is
     //   ALSO out of the conductor's reach, so the device does not move at all
     //   and the residual non-selectivity (1250 / 1250 = 1.0) is left for the
     //   fault study. (The old policy grew the cable to 4 × 240 mm² to carry a
@@ -434,6 +460,7 @@ void main() {
       name: 'Sub',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       sourceType: PanelSource.feeder,
       fedByCircuitId: 'f1',
       circuits: [
@@ -441,7 +468,7 @@ void main() {
           id: 's1',
           name: 'Furnace',
           loadKind: LoadKind.heating,
-          loadW: 830000,
+          loadW: 706000,
           cosPhi: 1.0,
           phases: 3,
           length: Length(10),
@@ -453,6 +480,7 @@ void main() {
       name: 'Main',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       circuits: [
         ElectricalCircuit(
           id: 'f1',
@@ -473,17 +501,18 @@ void main() {
     final sys = computeSystem(p, project);
 
     test('premise: the child incomer sits two rungs below the top', () {
-      expect(sys.panels['SP']!.demandCurrent.amperes, closeTo(1198.0, 1e-9));
+      expect(sys.panels['SP']!.demandCurrent.amperes, closeTo(1019.0, 1e-9));
       expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 1250);
     });
 
     test('the feeder holds at the rung its load-sized conductor protects', () {
       final feeder = _way(sys.panels['MDP']!, 'f1');
       expect(feeder.breaker.ratingA.amperes, 1250);
-      // A real, protected conductor: 3× 300 mm² (500 A each) ⇒ Iz 1500 A.
+      // A real, protected conductor: 4× 300 mm² (500 A each, grouped at 0.65)
+      // ⇒ Iz 1300 A.
       expect(feeder.cable.csaMm2, 300);
-      expect(feeder.cable.runsPerPhase, 3);
-      expect(feeder.cable.deratedIz.amperes, closeTo(1500, 0.1));
+      expect(feeder.cable.runsPerPhase, 4);
+      expect(feeder.cable.deratedIz.amperes, closeTo(1300, 0.1));
       expect(feeder.cable.ampacityReached, isTrue);
       expect(feeder.cable.deratedIz.amperes,
           greaterThanOrEqualTo(feeder.breaker.ratingA.amperes));
@@ -509,6 +538,7 @@ void main() {
       name: 'Main',
       system: ElectricalSystem.threePhase,
       voltage: Voltage(400),
+      installMethod: CableInstallMethod.tray,
       circuits: [
         ElectricalCircuit(
           id: 'v1',
@@ -535,8 +565,11 @@ void main() {
     final r = computePanel(p, board);
     final w = r.warnings.firstWhere((w) => w.code == 'harmonics-neutral-oversize');
     expect(w.severity, WarningSeverity.info);
-    // The message is unchanged — it still names the applied oversize.
-    expect(w.message, contains('neutral bar oversized to'));
+    // Re-derived Round 44 — two 2 kW 1φ VFD ways ≈ 11.6 A on their lines,
+    // × 1.73 ≈ 20 A: the full-size phase bar already carries the triplen
+    // neutral current, so the note says so instead of claiming an oversize.
+    expect(r.neutralPeBars.oversized, isFalse);
+    expect(w.message, contains('already carries it'));
     expect(r.neutralPeBars.neutralCsaMm2,
         greaterThan(r.busbar.csaMm2 * 0.999)); // grown, not shrunk
   });

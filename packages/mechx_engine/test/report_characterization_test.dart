@@ -94,8 +94,52 @@ void main() {
       // range' (and the oversized branch now names the action). Verified as the
       // SOLE delta: replacing the new sentence with the old one in the rendered
       // document reproduces 0xccecab38 exactly. Line count unchanged.
-      expect(md.split('\n').length, 94);
-      expect(fnv1a32(md), 0x109a3516);
+      // Re-baselined 2026-10-17 (audit fire-4): ONE line changed — the fire-pump
+      // verdict. The fixture's pump (2 risers, 50.47 L/s @ 96.34 m) now derates
+      // its efficiency at 150 % flow (0.70 × 0.85): overload shaft =
+      // 0.975 × 68.14 kW / 0.85 = 78.2 kW > the 75 kW top frame, so the motor
+      // ladder saturates ('Motor above standard frame range - …'); the printed
+      // 75.0 kW is unchanged. Verified as the SOLE delta: substituting the old
+      // verdict back reproduces 0x109a3516 exactly. Line count unchanged.
+      // Re-baselined 2026-10-18 (audit r8 fire-hvac-2): the SNI 03-1745 /
+      // NFPA 14 most-remote riser is 500 gpm (was a web-seeded 550). The
+      // fixture's 2-riser standpipe drops 800 → 750 gpm = 47.32 L/s, so
+      // exactly the three fire lines move: standpipe 47.3 L/s · 63.9 kW
+      // (9810·0.04732·96.34/0.70); the rating row (rated 47 L/s, overload
+      // shaft 0.975·63.9/0.85 = 73.3 kW ≤ the 75 kW frame ⇒ 'Motor within
+      // standard frame range'); the jockey 1 % = 0.47 L/s. Line count
+      // unchanged.
+      // Re-baselined 2026-10-18 (Round 9 report-parity-enum-names-leak): the
+      // sprinkler line prints the hazard LABEL ('OH1 ordinary hazard group 1')
+      // instead of the raw Dart identifier 'ordinaryHazard1'. Verified as the
+      // SOLE delta: substituting the identifier back reproduces 0x4cc8f1a3.
+      // Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 12): exactly three lines move — the
+      // standpipe kW is labelled 'shaft at rated point' (printed-parity-4),
+      // the rating row prints the rated flow at 1 dp ('rated 47.3 L/s', the
+      // same figure as the standpipe line, not '47'), and the PRV zone rows
+      // name the Building-table floors ('L1–L2' / 'Ground–Ground', not the
+      // index+1 '2–3' / '1–1'). Verified as the SOLE delta: substituting the
+      // three old texts back reproduces 0x63072abe. Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 16 plumbing-plant-hw-recirc-loop-head):
+      // ONE line changed — the HW-recirculation line prints the return-loop
+      // LENGTH and the loop HEAD as separate figures ('return loop 30.0 m ·
+      // head 0.1 m') instead of the head under a 'loop … m' label. Verified as
+      // the SOLE delta: substituting the old line back reproduces 0xf972feb4.
+      // Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 20 drafting-visual-4-6): ONE line —
+      // the generator stamp reads '· iSystem' (the product brand) instead of
+      // '· MechX'. Verified as the SOLE delta by diffing against the
+      // pre-change output. Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 48 mech-convergence-3-fire-pressure-
+      // rating-unjudged): ONE line ADDED — the fixture's sprinkler-bearing
+      // fire pump (47.3 L/s @ 96.3 m rated) churns at 1.4 × 96.3 = 134.9 m =
+      // 9.81 × 134.9 = 1323 kPa > the 1210 kPa (175 psi) component rating, so
+      // the Fire section prints 'Component pressure (churn) 1323 kPa …'.
+      // Verified as the SOLE delta: dropping that line reproduces 0x0e4282b4
+      // exactly. Lines 94 -> 95.
+      expect(md.split('\n').length, 95);
+      expect(fnv1a32(md), 0xd2ca2618);
     });
   });
 
@@ -138,10 +182,14 @@ void main() {
       // Feeder way row, whole: SP-1's incomer is 10 A (its 1500 W AC unit draws
       // 7.6 A), so the feeder carries the selectivity floor 1.6 × 10 = 16 A —
       // the first rung at/above it — on the 4 mm² 3φ trunk minimum.
+      // Round 37: the 3φ feeder's Ib is SP-1's WORST line, 7.6 A (the AC unit
+      // alone on L1), not the balanced 1500 / (√3·400·0.85) = 2.5 A.
       expect(
           md,
-          contains('| Feeder SP-1 | feeder | 2.5 A | 3ph | 16 A MCB/C | 4 mm² '
-              '| 30 m |'));
+          // Round 39 (elec-reports-parity-4): the Cable cell prints the
+          // board schedule's own make-up (family + cores), not a bare CSA.
+          contains('| Feeder SP-1 | feeder | 7.6 A | 3ph | 16 A MCB/C | NYY 5x4 mm2 '
+              '| 30.0 m |'));
       // The warning section is INFO-only: `feeder-below-fed-demand` is cured by
       // the feeder floor, and both boards' imbalance is inherent (too few
       // single-phase ways for any assignment to even out) so the unactionable
@@ -149,7 +197,7 @@ void main() {
       // the irreducible figure as a note. No `- _WARN_:` bullet survives.
       expect(md, contains('## Warnings'));
       expect(md, isNot(contains('- _WARN_')));
-      expect(md, contains('- _INFO_: Phase loading is unbalanced by '));
+      expect(md, contains('- _INFO_: [phase-imbalance-inherent] Phase loading is unbalanced by '));
       expect(md, contains('inherent to the single-phase load set'));
       // Interlock bullet under its own sub-heading.
       expect(md,
@@ -186,8 +234,44 @@ void main() {
       // — 2 panel bullets + their 2 bullet-group lines, the restored
       // '## Warnings' heading + its blank line, and 2 system bullets + 1 blank
       // line (+9 lines: 78 -> 87).
+      // Re-baselined 2026-10-18 (Round 9): (a) the 'Standard:' line carries
+      // the short PUIL edition label — the ~80-word provenance paragraph moved
+      // to `PuilProfile.provenanceNote` (honesty surface); (b) the way table's
+      // Type cell prints the LoadKind label ('HVAC', not 'hvac'); (c) each
+      // warning names its code ('[phase-imbalance-inherent] '). Verified as the
+      // SOLE deltas: reverting (a)-(c) reproduces 0x775ce2e6. Lines unchanged.
+      // Re-baselined 2026-10-18 (Round 20 follow-up): the way table's Length
+      // cell prints the plan's one 0.1 m format (`planLengthLabel`, `30.0 m`)
+      // so the report agrees with the board schedule. Verified as the SOLE
+      // delta: reverting that one cell reproduces the previous pin. Lines
+      // unchanged.
       expect(md.split('\n').length, 87);
-      expect(fnv1a32(md), 0x775ce2e6);
+      // Re-baselined 2026-10-18 (Round 30, report-parity-2-4): the MDP
+      // phase-balance bullet prints its currents and imbalance at the fixed
+      // 0.1 precision ('L2 0.0 A · L3 0.0 A (imbalance 300.0 %)', was '0 A' /
+      // '300 %'). Verified as the SOLE delta by diffing against the
+      // pre-change output. Lines unchanged.
+      // Re-baselined 2026-10-18 (Round 37, feeder line currents): the 3φ
+      // feeder to SP-1 loads the MDP with SP-1's own lines (7.6 / 0 / 0 A), so
+      // the MDP singles balance against it — Lighting L3, Sockets L2, phase
+      // balance 7.6 / 15.3 / 9.2 A (72.0 %, was 17.8 / 11.7 / 2.5 A at
+      // 143.4 %), incomer 16 A (was 20 A), demand current 15.3 A, the feeder
+      // row Ib 7.6 A / Vd 0.5 % and the AC unit's cumulative drop 1.2 %; the
+      // two phase-imbalance-inherent notes print the new figures. Verified as
+      // the SOLE deltas by diffing against the pre-change output. Lines
+      // unchanged.
+      // Re-baselined 2026-10-18 (Round 39, elec-reports-parity-4): every way
+      // row's Cable cell prints the board schedule's `cableRunLabel`
+      // ('NYM 3x1.5 mm2', 'NYY 5x4 mm2', was '1.5 mm²' / '4 mm²'). Verified as
+      // the SOLE delta (incomers / Ib / Vdrop unchanged). Lines unchanged.
+      // Re-baselined 2026-10-18 (Round 43, elec-drawings-6-board-demand-sums-
+      // rounded-way-currents): the MDP lines sum the EXACT way currents and
+      // round once, so its imbalance reads 71.9 % (was 72.0 % from rounded
+      // way figures) in the phase-balance bullet and both
+      // phase-imbalance-inherent notes (whose achievable floor is capped at
+      // the actual figure). Verified as the SOLE deltas by diffing against
+      // the pre-change output (3 lines). Lines unchanged.
+      expect(fnv1a32(md), 0x57d92a45);
     });
   });
 
@@ -215,8 +299,10 @@ void main() {
         '### Electrical',
         '## Compliance summary',
         '# Mechanical & plumbing',
-        '## Design basis',
-        '## Revision history',
+        // Round 30 — each embedded body's own Design basis is dropped (the
+        // unified head prints both registers once).
+        // Round 12 — the per-discipline Revision-history tables are dropped
+        // from the demoted bodies; the unified report prints ONE merged one.
         // N25: ASCII heading in the embedded mechanical body.
         '## Unverified values',
         '## Building',
@@ -228,8 +314,6 @@ void main() {
         '## Bill of materials',
         '### Fittings (estimated)',
         '# Electrical',
-        '## Design basis',
-        '## Revision history',
         '## Supply summary',
         '## Panels',
         '### MDP [MDP] — 3-phase, 400 V',
@@ -242,8 +326,9 @@ void main() {
         // present — info-level content only.
         '## Warnings',
         '## Unverified values',
+        // Round 23 — ONE heading over the merged table (the shared table's
+        // own H2 used to print directly beneath the H1).
         '# Revision history',
-        '## Revision history',
       ]);
     });
 
@@ -274,8 +359,63 @@ void main() {
       // Re-baselined 2026-07-30 (audit E7): the embedded electrical body gained
       // the same +9 lines as the standalone pin (the irreducible-imbalance INFO
       // notes on both boards + the restored '## Warnings' section): 219 -> 228.
-      expect(md.split('\n').length, 228);
-      expect(fnv1a32(md), 0x47b44e65);
+      // Re-baselined 2026-10-17 (audit fire-4): the embedded mechanical body's
+      // fire-pump verdict now reports the saturated motor ladder (see the
+      // mechanical pin above); substituting the old verdict back reproduces
+      // 0x47b44e65 exactly. Line count unchanged.
+      // Re-baselined 2026-10-18 (audit r8 fire-hvac-2): the embedded
+      // mechanical body's three fire lines move with the 500 gpm riser flow
+      // (see the mechanical pin above). Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 9): the embedded bodies carry the
+      // standalone pins' deltas (hazard label; short PUIL edition label, incl.
+      // the design-basis 'Electrical standard' row; HVAC Type label; coded
+      // warnings). Reverting them reproduces 0xed1f728e. Lines unchanged.
+      // Re-baselined 2026-10-18 (Round 12): (a) the embedded mechanical body
+      // carries the standalone pin's three-line delta (standpipe 'shaft at
+      // rated point', rated flow at 1 dp, zone floor names); (b) the two
+      // per-discipline Revision-history sections inside the demoted bodies
+      // are dropped (report-recompute-mep-revisions-duplicated) — the
+      // mechanical one is heading + blank + header + separator + 2 rows +
+      // blank = 7 lines, the electrical one 6 (1 row) ⇒ 228 − 13 = 215. The
+      // merged '# Revision history' table keeps all three distinct rows.
+      // Re-baselined 2026-10-18 (Round 16): the embedded mechanical body's
+      // HW-recirculation line (see the mechanical pin above); substituting the
+      // old line back reproduces 0xdafbf026. Line count unchanged.
+      // Re-baselined 2026-10-18 (Round 20 drafting-visual-4-6): exactly two
+      // lines — the unified head's stamp '· MechX (iSystem)' and the embedded
+      // mechanical body's '· MechX' both read '· iSystem'. Verified as the
+      // SOLE delta by diffing against the pre-change output. Lines unchanged.
+      // Re-baselined 2026-10-18 (Round 23,
+      // report-pdf-mep-duplicate-revision-heading): the duplicate
+      // '## Revision history' line + its blank line under the merged H1 are
+      // dropped ⇒ 215 − 2 = 213; re-inserting them reproduces 0xe90c0dc0
+      // exactly (verified as the sole delta).
+      // Re-baselined 2026-10-18 (Round 30, report-parity-2-6): each embedded
+      // body's own '## Design basis' heading + register is dropped (the
+      // unified head prints both): mechanical 9 lines (heading, blank, 6
+      // rows, blank) + electrical 7 (heading, blank, 4 rows, blank) ⇒
+      // 213 − 16 = 197; plus the electrical body's phase-balance precision
+      // line (see the standalone pin). Verified as the SOLE deltas by diffing
+      // against the pre-change output.
+      // Re-baselined 2026-10-18 (Round 48 mech-convergence-3-fire-pressure-
+      // rating-unjudged): ONE line ADDED — the fixture's sprinkler-bearing
+      // fire pump (47.3 L/s @ 96.3 m rated) churns at 1.4 × 96.3 = 134.9 m =
+      // 9.81 × 134.9 = 1323 kPa > the 1210 kPa (175 psi) component rating, so
+      // the Fire section prints 'Component pressure (churn) 1323 kPa …'.
+      // Verified as the SOLE delta: dropping that line reproduces 0x1ecdcdbc (with the rest of this pin)
+      // exactly. Lines 197 -> 198.
+      expect(md.split('\n').length, 198);
+      // Re-baselined 2026-10-18 (Round 20 follow-up): the embedded
+      // electrical way table's Length cell is `30.0 m` (planLengthLabel) — the
+      // sole delta, as for the standalone electrical pin above.
+      // Re-baselined 2026-10-18 (Round 37): the embedded electrical body's
+      // feeder-line deltas (see the standalone electrical pin) — sole delta.
+      // Re-baselined 2026-10-18 (Round 39): the embedded electrical body's
+      // Cable cells (see the standalone electrical pin) — sole delta.
+      // Re-baselined 2026-10-18 (Round 43): the embedded electrical body's
+      // 71.9 % imbalance lines (see the standalone electrical pin) — sole
+      // delta.
+      expect(fnv1a32(md), 0xd0e4e060);
     });
   });
 
@@ -304,8 +444,11 @@ void main() {
 
     test('whole-document pin (FNV-1a + line count)', () {
       // Recorded 2026-07-02 against the pre-refactor string builder.
+      // Re-baselined 2026-10-18 (Round 37): the MDP row prints its 16 A
+      // incomer (was 20 A) — the MDP's real worst line is 15.3 A once the
+      // SP-1 feeder carries SP-1's own lines. Sole delta.
       expect(md.split('\n').length, 33);
-      expect(fnv1a32(md), 0x12a57440);
+      expect(fnv1a32(md), 0x80d42063);
     });
   });
 }

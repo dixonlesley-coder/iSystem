@@ -9,8 +9,8 @@ import 'data/autosave.dart';
 import 'data/recovery.dart';
 import 'store/app_state.dart';
 import 'store/models/sheet.dart';
-import 'ui/canvas/dxf_sheet_page.dart';
-import 'ui/canvas/pdf_sheet_page.dart';
+import 'ui/canvas/hosted_dxf_sheet_page.dart';
+import 'ui/canvas/hosted_pdf_sheet_page.dart';
 import 'ui/canvas/sheet_canvas.dart';
 import 'ui/shell/project_io.dart';
 
@@ -26,10 +26,13 @@ void main(List<String> args) async {
       sheetContentBuilderProvider.overrideWithValue(
         (BuildContext context, Sheet sheet) {
           if (sheet.pdfPath != null) {
-            return PdfSheetPage(sheet: sheet);
+            return HostedPdfSheetPage(sheet: sheet);
           }
           if (sheet.dxfPath != null) {
-            return DxfSheetPage(sheet: sheet);
+            // Round 24 — a plan revised in place (its extent changed) flags
+            // the sheet's calibration stale ('re-verify scale'), once per
+            // real change.
+            return HostedDxfSheetPage(sheet: sheet);
           }
           return PlaceholderSheetPage(sheet: sheet);
         },
@@ -66,8 +69,14 @@ void main(List<String> args) async {
   // snapshot (torn by an interrupted write) is surfaced too — with a null doc —
   // so it is never silently indistinguishable from a clean exit. Then start the
   // periodic autosave loop (which writes to per-project slots).
-  final latest = await findLatestRecovery();
+  // Round 50 (regression-4) — within the newest snapshot's family the OLDEST
+  // unresolved one is offered first, and every family member on disk is
+  // protected from this session's autosave and Save / Open / New.
+  final latest = await findRecoveryToOffer();
   if (latest != null) {
+    container
+        .read(protectedRecoverySlotsProvider.notifier)
+        .set({...recoveryFamilyOnDisk(latest), latest});
     final recovered = await readRecoveryStatus(path: latest);
     if (recovered.status != RecoveryReadStatus.absent) {
       final savedAt = await recoverySnapshotMtime(path: latest);

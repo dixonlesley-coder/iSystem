@@ -30,8 +30,8 @@ void main() {
 
     // The first-run orientation card pushes the empty-state actions below the
     // fold on the test surface — scroll it into view before tapping.
-    await tester.ensureVisible(find.text('Load sample project'));
-    await tester.tap(find.text('Load sample project'));
+    await tester.ensureVisible(find.text('Load plumbing sample'));
+    await tester.tap(find.text('Load plumbing sample'));
     await tester.pump();
 
     // The placeholder sheet exists.

@@ -191,7 +191,10 @@ String _connectionText(SpdConnection connection, double? npeUcV) {
 /// Recommend an SPD class, rating and connection for a location.
 ///
 /// Deterministic and pure. [feederDistanceM] is the feeder length from the
-/// origin SPD (only consulted for sub-distribution boards). [hasExternalLps] /
+/// NEAREST UPSTREAM SPD — the origin, or a sub-board that itself received a
+/// recommended SPD (Round 24: IEC 61643-12 / IEC 60364-5-534 measure the
+/// protective distance from the nearest SPD) — only consulted for
+/// sub-distribution boards. [hasExternalLps] /
 /// [overheadSupply] force a Type 1 device at the origin.
 SpdRecommendation recommendSpd({
   required bool atOrigin,
@@ -244,12 +247,12 @@ SpdRecommendation recommendSpd({
     }
   } else if (recommended) {
     note = 'Sub-board is ${_num(feederDistanceM)} m (> $secondarySpdDistanceM m) '
-        'from the origin SPD - fit a coordinated Type 2 here; add a Type 3 '
+        'from the nearest upstream SPD - fit a coordinated Type 2 here; add a Type 3 '
         'stage before sensitive equipment on long final circuits. '
         '${_connectionText(uc.connection, uc.npeUcV)}';
   } else {
-    note = 'Sub-board within $secondarySpdDistanceM m of the origin SPD - the '
-        'origin device still covers it; a local Type 2 is optional. '
+    note = 'Sub-board within $secondarySpdDistanceM m of the nearest upstream '
+        'SPD - that device still covers it; a local Type 2 is optional. '
         '${_connectionText(uc.connection, uc.npeUcV)}';
   }
 

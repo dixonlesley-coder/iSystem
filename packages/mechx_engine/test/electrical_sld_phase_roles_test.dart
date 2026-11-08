@@ -16,11 +16,11 @@ import 'package:test/test.dart';
 // The real "Menara Contoh" acceptance-harness fixture (MDP -> LP-1/PP-1/EMG),
 // same as the imbalance-footer test, so the phase assignments asserted against
 // are a solved, hand-reviewed project.
-import '../tool/generate_export_samples.dart' show buildElectrical;
+import '../tool/generate_export_samples.dart' show buildSampleElectrical;
 
 void main() {
   const profile = PuilProfile();
-  final project = buildElectrical();
+  final project = buildSampleElectrical();
   final result = computeSystem(profile, project);
 
   List<SldLabel> labels(SldSheet sheet) =>

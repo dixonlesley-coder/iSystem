@@ -247,6 +247,15 @@ void paintComponentSymbol(
       canvas.drawCircle(Offset(cx, cy), w * 0.28, p);
       canvas.drawCircle(Offset(cx, cy), w * 0.10, p);
       canvas.drawLine(Offset(w * 0.10, cy), Offset(w * 0.22, cy), p);
+    case NodeComponent.pillarHydrant:
+      // A yard (pillar) hydrant: a barrel on a base with two side outlets
+      // and a cap (the plan glyph's language).
+      canvas.drawRect(
+          Rect.fromLTWH(w * 0.38, h * 0.24, w * 0.24, h * 0.56), p);
+      canvas.drawLine(Offset(w * 0.26, h * 0.84), Offset(w * 0.74, h * 0.84), p);
+      canvas.drawLine(Offset(w * 0.22, cy), Offset(w * 0.38, cy), p);
+      canvas.drawLine(Offset(w * 0.62, cy), Offset(w * 0.78, cy), p);
+      canvas.drawCircle(Offset(cx, h * 0.18), w * 0.08, p);
     case NodeComponent.fireDeptConnection:
       // A Siamese FDC: two inlets with an arrow feeding in.
       canvas.drawCircle(Offset(w * 0.36, cy), w * 0.16, p);

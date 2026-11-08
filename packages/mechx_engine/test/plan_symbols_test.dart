@@ -179,7 +179,16 @@ void main() {
       expect(a.leaderAnchor, isNull); // first clears (upper)
       expect(b.leaderAnchor, isNull); // second clears (lower)
       expect(c.leaderAnchor, isNotNull); // third escaped → leadered
-      expect(c.leaderAnchor!.x, closeTo(15, 1e-9)); // the edge midpoint
+      // R5 RE-DERIVATION: the escape row is one line pitch out
+      // (d = 0.7·9 + 1.3·9 = 18), and its LEADER must not strike through tag
+      // `a` (box x 5.1..24.9 above the run). A perpendicular leader from the
+      // midpoint (x = 15) would cross it, as would the stations 7.5 / 22.5 /
+      // 11.25 / 18.75; the first station in preference order whose leader
+      // clears is the 1/8 point, x = 30 × 0.125 = 3.75.
+      expect(c.leaderAnchor!.x, closeTo(3.75, 1e-9));
+      expect(c.leaderEnd!.x, closeTo(3.75, 1e-9));
+      // Leader tip 0.15·9 short of the block's near edge: 18 − 1.35 = 16.65.
+      expect(c.leaderEnd!.y, closeTo(16.65, 1e-9));
       // All three boxes recorded — no label was dropped.
       expect(placed, hasLength(3));
     });

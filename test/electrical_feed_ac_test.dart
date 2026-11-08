@@ -51,6 +51,10 @@ void main() {
     expect(loads.single.mechanicalPower.watts, lessThan(1800));
     // Wall/cassette AC are single-phase.
     expect(loads.single.phases, 1);
+    // cooling ÷ COP is ALREADY electrical input — the circuit's connected load
+    // is that figure verbatim, never ÷ motor efficiency a second time.
+    expect(c.read(placedEquipmentCircuitsProvider).single.loadW,
+        closeTo(expected, 1e-6));
   });
 
   test('an explicit electricalLoadW override wins over the cooling-derived load',

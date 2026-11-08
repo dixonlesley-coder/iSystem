@@ -162,10 +162,10 @@ void main() {
     const bigProject =
         ElectricalProject(id: 'pr', name: 'Bldg', panels: [bigSp, mdp]);
     final sys = computeSystem(p, bigProject);
-    // A 50 kA origin fault: an MCCB Icu tops out at 70 kA (covers), but Ics at
-    // 0.75 × 70 = 52.5 kA only just covers; pushing to a higher fault undercuts.
+    // Re-derived Round 42 — the MCCB Icu ladder tops out at 150 kA, whose
+    // Ics is 0.75 × 150 = 112.5 kA; a 120 kA origin fault undercuts it.
     final study = faultStudy(sys, bigProject, p,
-        originFaultLevel: const Current(60000));
+        originFaultLevel: const Current(120000));
     final sel = study.selectivity.single;
     // Icu may still pass while Ics (service) is undercut → flagged.
     expect(sel.icsAdequate || sel.icuAdequate, isTrue);
@@ -191,8 +191,17 @@ void main() {
   test('fault study verify items list the simplified models', () {
     final sys = computeSystem(p, project);
     final study = faultStudy(sys, project, p);
+    // Round 29 — the motor-infeed line prints only when an infeed was
+    // actually folded in (the default contribution is 0).
     expect(
       study.verifyItems.any((s) => s.contains('motor fault contribution')),
+      isFalse,
+    );
+    final withMotor = faultStudy(sys, project, p,
+        estimatedMotorFaultContributionA: const Current(500));
+    expect(
+      withMotor.verifyItems
+          .any((s) => s.contains('motor fault contribution')),
       isTrue,
     );
     expect(

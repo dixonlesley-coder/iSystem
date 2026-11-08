@@ -124,7 +124,7 @@ void main() {
   });
 
   group('fromPumpDuty / fromFanDuty — duty mapping', () {
-    test('fromPumpDuty pulls selectedMotor + motorInputPower', () {
+    test('fromPumpDuty pulls selectedMotor + the NAMEPLATE input', () {
       // Size a real duty so the test exercises the engine primitives, then map it.
       // 5 l/s at 30 m head, default η_pump 0.70, η_motor 0.90:
       //   P_hyd   = ρ·g·Q·H = 1000·9.81·0.005·30      = 1471.5 W
@@ -143,20 +143,21 @@ void main() {
         name: 'Sized pump',
         source: MepLoadSource.supplyPump,
       );
-      // mechanicalPower = selectedMotor (2.2 kW), electricalInputPower = duty's.
+      // mechanicalPower = selectedMotor (2.2 kW). Audit r8 coupling-4: the way
+      // is sized on the motor NAMEPLATE, so the input is
+      //   max(operating 2335.7 W, nameplate 2200 / 0.90 = 2444.4 W) = 2444.4 W.
       expect(e.mechanicalPower.inKiloWatts, closeTo(2.2, 1e-9));
       expect(e.electricalInputPower, isNotNull);
-      expect(e.electricalInputPower!.watts,
-          closeTo(duty.motorInputPower.watts, 1e-9));
-      expect(e.inputPower.watts, closeTo(duty.motorInputPower.watts, 1e-9));
+      expect(e.electricalInputPower!.watts, closeTo(2200 / 0.90, 1e-9));
+      expect(e.inputPower.watts,
+          greaterThanOrEqualTo(duty.motorInputPower.watts));
 
-      // FLA from the duty's own motor-input power at 400 V, cosφ 0.85:
-      //   I = 2335.7 / (√3 · 400 · 0.85) = 3.966 A
+      // FLA at 400 V, cosφ 0.85: I = 2444.4 / (√3 · 400 · 0.85) = 4.151 A
       final fla = equipmentFullLoadCurrent(e, voltage: const Voltage(400));
-      expect(fla.amperes, closeTo(3.966, 0.01));
+      expect(fla.amperes, closeTo(4.151, 0.01));
     });
 
-    test('fromFanDuty pulls selectedMotor + motorInputPower', () {
+    test('fromFanDuty pulls selectedMotor + the NAMEPLATE input', () {
       // 2 m³/s at 500 Pa, default η_fan 0.65, η_motor 0.90:
       //   P_air   = Q·Δp = 2·500               = 1000 W
       //   P_shaft = 1000 / 0.65                = 1538.5 W
@@ -174,15 +175,37 @@ void main() {
         name: 'Sized fan',
         source: MepLoadSource.supplyFan,
       );
-      // mechanicalPower = selectedMotor (2.2 kW); the *input* power, which drives
-      // the FLA, is the duty's own motorInputPower (1709.4 W), independent of the
-      // rounded-up frame size.
+      // mechanicalPower = selectedMotor (2.2 kW); the input that drives the FLA
+      // is the larger of the operating point (1709.4 W) and the NAMEPLATE
+      // 2200 / 0.90 = 2444.4 W — protection and cable cover the rated motor.
       expect(e.mechanicalPower.inKiloWatts, closeTo(2.2, 1e-9));
-      expect(e.electricalInputPower!.watts,
-          closeTo(duty.motorInputPower.watts, 1e-9));
-      // I = 1709.4 / (√3 · 400 · 0.85) = 2.902 A
+      expect(e.electricalInputPower!.watts, closeTo(2200 / 0.90, 1e-9));
+      // I = 2444.4 / (√3 · 400 · 0.85) = 4.151 A
       final fla = equipmentFullLoadCurrent(e, voltage: const Voltage(400));
-      expect(fla.amperes, closeTo(2.902, 0.01));
+      expect(fla.amperes, closeTo(4.151, 0.01));
+    });
+  });
+
+  group('nameplate basis (audit r8 coupling-4) — seeded property', () {
+    test('input ≥ max(operating input, motor/η) for any duty', () {
+      var seed = 4;
+      double next() {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return seed / 0x7fffffff;
+      }
+
+      for (var i = 0; i < 200; i++) {
+        final duty = sizeFan(
+          airflow: FlowRate(0.05 + next() * 3),
+          totalStaticPressure: Pressure(20 + next() * 900),
+        );
+        final e = MepEquipmentLoad.fromFanDuty(duty,
+            id: 'f', name: 'f', source: MepLoadSource.exhaustFan);
+        expect(e.inputPower.watts,
+            greaterThanOrEqualTo(duty.motorInputPower.watts - 1e-9));
+        expect(e.inputPower.watts,
+            greaterThanOrEqualTo(duty.selectedMotor.watts / 0.90 - 1e-9));
+      }
     });
   });
 

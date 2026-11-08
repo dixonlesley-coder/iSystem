@@ -98,6 +98,15 @@ class RptMarkdown extends RptBlock {
   const RptMarkdown(this.raw);
 }
 
+/// Round 13 (export-files-6) — one Markdown TABLE cell: an unescaped `|`
+/// becomes `\|` (an engineer-typed model/spec such as `Trafindo 630 kVA |
+/// Dyn5` used to add columns to its row) and a line break becomes a space.
+/// Idempotent — an already-escaped `\|` is left as is. `report_pdf`
+/// un-escapes `\|`, so the PDF path is unaffected.
+String mdTableCell(String v) => v
+    .replaceAll(RegExp(r'(?<!\\)\|'), r'\|')
+    .replaceAll(RegExp(r'\r?\n'), ' ');
+
 /// Render [blocks] to Markdown. Each block emits its own trailing spacing
 /// (most end with a blank line; see the block docs), so the walk is a plain
 /// concatenation — this is what makes the legacy byte rhythm reproducible.
@@ -117,11 +126,11 @@ String renderRptMarkdown(List<RptBlock> blocks) {
         }
         b.writeln();
       case RptTable():
-        b.writeln('| ${block.headers.join(' | ')} |');
+        b.writeln('| ${block.headers.map(mdTableCell).join(' | ')} |');
         b.writeln(block.mdSeparator ??
             '| ${block.headers.map((_) => '---').join(' | ')} |');
         for (final row in block.rows) {
-          b.writeln('| ${row.join(' | ')} |');
+          b.writeln('| ${row.map(mdTableCell).join(' | ')} |');
         }
         b.writeln();
       case RptNote():

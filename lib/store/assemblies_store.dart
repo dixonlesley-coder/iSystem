@@ -17,6 +17,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 
 import '../data/project_document.dart' show SavedAssembly;
+import '../ui/strings/app_strings.dart';
+import 'app_state.dart' show localeProvider;
+import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 
 final assembliesProvider =
     NotifierProvider<AssembliesController, List<SavedAssembly>>(
@@ -38,9 +41,24 @@ class AssembliesController extends Notifier<List<SavedAssembly>> {
     _seq = _seqAfter(list);
   }
 
+  /// Round 28 (persist-undo-2-2) — saved assemblies are persisted in
+  /// `.mechx`, so each add / remove records ONE [UndoDomain.settings] step on
+  /// the global timeline. [set] (load) stays non-recording.
+  void _commit(List<SavedAssembly> next) {
+    final previous = state;
+    final applied = List<SavedAssembly>.unmodifiable(next);
+    state = applied;
+    ref.read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+          label: MechXStringsData(ref.read(localeProvider))(
+              StringKey.undoLabelAssemblies),
+          undo: () => state = previous,
+          redo: () => state = applied,
+        ));
+  }
+
   /// Add (or upsert by id) an assembly.
   void add(SavedAssembly assembly) {
-    state = List.unmodifiable([
+    _commit([
       for (final a in state)
         if (a.id != assembly.id) a,
       assembly,
@@ -50,7 +68,7 @@ class AssembliesController extends Notifier<List<SavedAssembly>> {
   /// Remove the assembly with [id] (no-op if absent).
   void remove(String id) {
     if (!state.any((a) => a.id == id)) return;
-    state = List.unmodifiable(state.where((a) => a.id != id));
+    _commit(state.where((a) => a.id != id).toList());
   }
 
   /// Capture the current [nodeIds]/[edgeIds] selection of [net] into a NEW named

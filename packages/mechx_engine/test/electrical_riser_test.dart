@@ -165,6 +165,44 @@ void main() {
     expect(roleIn(riser, 'MDP EMERGENCY'), SldRole.essential);
   });
 
+  test('drafting-3: the shared parent trunk is drawn once, never overpainted',
+      () {
+    // LVMDP feeds three normal boards + one essential board (EMG). Each feeder
+    // used to redraw the parent leg + channel on IDENTICAL coordinates in its
+    // own role, so whichever came last painted the trunk — the essential
+    // feeder made the whole LVMDP trunk red and the normal risers read as fed
+    // from the essential cable.
+    final riser = buildElectricalRiser(
+        project: project, result: result, building: building);
+    final feederLines = _feederLines(riser);
+    _expectNoRoleOverpaint(feederLines);
+    // The LVMDP's own outgoing leg (from its box's right edge, at its centre
+    // line) is shared by normal + essential feeders ⇒ the PARENT's role
+    // (normal), not the last-drawn essential feeder's.
+    final mdpRect = riser.prims.whereType<SldRect>().firstWhere((r) =>
+        riser.prims.whereType<SldLabel>().any((l) =>
+            l.bold && l.text.startsWith('LVMDP') && l.x == r.x + 7));
+    final leg = feederLines.firstWhere((l) =>
+        l.y1 == l.y2 &&
+        l.x1 == mdpRect.x + mdpRect.w &&
+        l.y1 == mdpRect.y + mdpRect.h / 2);
+    expect(leg.role, SldRole.normal);
+    // The EMG branch itself is still essential (red).
+    final emgRect = riser.prims.whereType<SldRect>().firstWhere(
+        (r) => r.role == SldRole.essential);
+    expect(
+        feederLines.where((l) =>
+            l.y1 == l.y2 &&
+            l.y1 == emgRect.y + emgRect.h / 2 &&
+            l.role == SldRole.essential),
+        isNotEmpty);
+  });
+
+  test('drafting-3: the overview merges its shared sibling bus too', () {
+    final overview = buildElectricalOverview(project: project, result: result);
+    _expectNoRoleOverpaint(_feederLines(overview));
+  });
+
   test('building: null degrades to feeder-depth tiers (no throw, still rects)',
       () {
     final sheet = buildElectricalRiser(project: project, result: result);
@@ -489,13 +527,12 @@ void main() {
       }
     });
 
-    test('a displaced annotation is leadered back to ITS branch; the tag that '
-        'never collided keeps the legacy anchor', () {
+    test('every displaced annotation is leadered back to ITS branch', () {
       final labels = feederLabels(sheet);
       // The legacy anchor of a fed board: its box right edge + 6, on the branch
       // (the box centre-line) less 4. Boards are 168 x 46 packed from x = 174
-      // (gutter 150 + gap 24) at a 192 pitch, band 0 top y = 300 (two bands
-      // above it at 150 each) ⇒ branch y = 300 + 23 = 323, anchors y = 319 and
+      // (gutter 150 + gap 24) at a 192 pitch, band 0 top y = 334 (two bands
+      // above it at 167 each) ⇒ branch y = 334 + 23 = 357, anchors y = 353 and
       // x in {540, 732, 924} for the boards at x = 366 / 558 / 750.
       final anchors = {
         for (final r in sheet.prims.whereType<SldRect>())
@@ -505,17 +542,31 @@ void main() {
           labels.where((l) => anchors.contains((l.x, l.y))).toList();
       final moved =
           labels.where((l) => !anchors.contains((l.x, l.y))).toList();
-      // The RIGHTMOST board has nothing beyond it, so its own tag never
-      // collided and must be untouched; the two behind it had to escape.
-      expect(kept.length, 1, reason: 'kept: ${kept.map((l) => l.text)}');
-      expect(kept.single.x, 924.0);
-      expect(kept.single.y, 319.0);
-      expect(moved, isNotEmpty);
+      // The two tags behind the rightmost board collide with it and escape.
+      // The RIGHTMOST board's own tag collides with no board, but its default
+      // slot runs PAST the feeder channel: each tag is 32 chars x 6.5 x 0.6 =
+      // 124.8 wide, so from x 924 it reaches 1048.8, while the channel sits at
+      // sheetMaxX + 40 = (174 + 4 x 192) + 40 = 982 — and that feeder's own
+      // riser leg spans the channel from the MDP bus row (334 - 12 = 322) down
+      // to the branch (357), right through the glyph box [346.5, 353]. The
+      // channel vertical is an obstacle (drawing-output residual), so that tag
+      // escapes to the first channel-column slot: (982 + 10, 357 - 4).
+      expect(kept, isEmpty, reason: 'kept: ${kept.map((l) => l.text)}');
+      expect(moved.length, 3);
+      expect(labels.any((l) => l.x == 992.0 && l.y == 353.0), isTrue);
 
       // Every moved tag gets a THIN leader ending exactly on it, starting on a
-      // board's branch line (a box centre-line).
+      // board's branch line: a box centre-line, or — when a sibling sits
+      // between that board and the channel (audit 2026-10 drawing-output-1) —
+      // a band BUS TRACK the branch jogs to, so the branch never runs through
+      // the sibling. Each jogged leg owns a track: the first 12 above the box
+      // tops, then 17 / 22 / 7 / 27 (5 apart) — here the MDP leg takes 288
+      // (300 - 12) and the two jogged child legs 283 and 278.
       final branchYs = {
-        for (final r in sheet.prims.whereType<SldRect>()) r.y + r.h / 2
+        for (final r in sheet.prims.whereType<SldRect>()) ...{
+          r.y + r.h / 2,
+          for (final off in const [12.0, 17.0, 22.0, 7.0, 27.0]) r.y - off,
+        }
       };
       for (final l in moved) {
         final leaders = sheet.prims.whereType<SldLine>().where((s) =>
@@ -531,8 +582,8 @@ void main() {
       }
     });
 
-    test('a single-board-per-band riser keeps EXACTLY the legacy anchors '
-        '(byte-identity guard)', () {
+    test('a single-board-per-band riser keeps the legacy anchor unless the '
+        'riser channel strikes the tag', () {
       // MDP (band 0) -> LP-1 (band 1) -> LP-2 (band 2): one board per band, so
       // no branch ever crosses a sibling and nothing may move.
       const chain = ElectricalProject(
@@ -574,28 +625,82 @@ void main() {
           project: chain, result: r, building: building);
       final labels = feederLabels(s);
       expect(labels.length, chain.panels.length - 1);
-      final anchors = {
-        for (final rc in s.prims.whereType<SldRect>())
-          (rc.x + rc.w + 6, rc.y + rc.h / 2 - 4)
-      };
       for (final l in labels) {
-        expect(anchors.contains((l.x, l.y)), isTrue,
-            reason: '"${l.text}" moved to ${l.x},${l.y}');
         expect(l.size, 6.5);
       }
       // Hand-derived: the sole board of each band sits at x = 174 (gutter 150 +
       // gap 24), box 168 wide ⇒ right edge 342 ⇒ anchor x 342 + 6 = 348; the
       // TOP band starts at y 0 and the branch is the box centre-line 46 / 2 =
-      // 23 ⇒ anchor y = 23 - 4 = 19.
-      expect(labels.any((l) => l.x == 348.0 && l.y == 19.0), isTrue);
-      // Nothing was displaced ⇒ no leader ends on any annotation.
-      for (final l in labels) {
-        expect(
-            s.prims.whereType<SldLine>().any((ln) =>
-                ln.weight == SldWeight.thin && ln.x2 == l.x && ln.y2 == l.y),
-            isFalse,
-            reason: 'unexpected leader for "${l.text}"');
-      }
+      // 23 ⇒ anchor y = 23 - 4 = 19. No board and no riser leg reaches that
+      // tag (the LP-1 -> LP-2 leg ends at y 23, below its glyph box), so it
+      // keeps the legacy anchor with no leader.
+      final top = labels.where((l) => l.x == 348.0 && l.y == 19.0).toList();
+      expect(top, hasLength(1));
+      bool leadered(SldLabel l) => s.prims.whereType<SldLine>().any((ln) =>
+          ln.weight == SldWeight.thin && ln.x2 == l.x && ln.y2 == l.y);
+      expect(leadered(top.single), isFalse);
+      // The MIDDLE band's tag (LP-1, branch y 167 + 23 = 190, anchor (348,
+      // 186)) is 32 x 6.5 x 0.6 = 124.8 wide ⇒ it would reach 472.8, past the
+      // channel at sheetMaxX + 40 = 366 + 40 = 406, where the LP-1 -> LP-2
+      // riser leg (y 23 .. 190) strikes through its glyph box [179.5, 186]. The
+      // channel vertical is an obstacle (drawing-output residual), so the tag
+      // escapes to the annotation column right of the OUTERMOST lane and gets
+      // a thin leader from its branch end on the channel (406, 190).
+      // Round 46 (drawings-7-riser-subfeeders-on-parent-channel) — LP-1 is
+      // itself fed on the sheet, so its own feeder leaves 8 below its
+      // centre-line (190 + 8 = 198) and runs 23 .. 198, overlapping the MDP's
+      // run 190 .. 357: it takes its own lane 406 + 12 = 418 (never the MDP's
+      // riser line), and the escaped tag sits at (418 + 10, 190 - 4).
+      final mid = labels.where((l) => l.x == 428.0 && l.y == 186.0).toList();
+      expect(mid, hasLength(1),
+          reason: labels.map((l) => '${l.x},${l.y}').join(' '));
+      expect(
+          s.prims.whereType<SldLine>().any((ln) =>
+              ln.weight == SldWeight.thin &&
+              ln.x1 == 406.0 &&
+              ln.y1 == 190.0 &&
+              ln.x2 == 428.0 &&
+              ln.y2 == 186.0),
+          isTrue);
+      // LP-1's outgoing riser rides lane 418 from its exit (198) up to the
+      // LP-2 branch (23); the MDP's stays on 406 (190 .. 357).
+      expect(
+          _feederLines(s).any((l) =>
+              l.x1 == 418.0 &&
+              l.x2 == 418.0 &&
+              {l.y1, l.y2}.containsAll({23.0, 198.0})),
+          isTrue);
+      expect(s.overlapCount, 0);
     });
   });
+}
+
+List<SldLine> _feederLines(SldSheet sheet) => sheet.prims
+    .whereType<SldLine>()
+    .where((l) => l.weight == SldWeight.medium)
+    .toList();
+
+/// No two feeder segments of DIFFERENT roles overlap along a positive length
+/// (collinear horizontals on one y, or collinear verticals on one x) — the
+/// overpaint that made a shared trunk's colour depend on draw order.
+void _expectNoRoleOverpaint(List<SldLine> feederLines) {
+  double overlap(double a1, double a2, double b1, double b2) =>
+      math.min(math.max(a1, a2), math.max(b1, b2)) -
+      math.max(math.min(a1, a2), math.min(b1, b2));
+  for (var i = 0; i < feederLines.length; i++) {
+    for (var j = i + 1; j < feederLines.length; j++) {
+      final a = feederLines[i], b = feederLines[j];
+      if (a.role == b.role) continue;
+      final aH = a.y1 == a.y2, bH = b.y1 == b.y2;
+      final aV = a.x1 == a.x2, bV = b.x1 == b.x2;
+      if (aH && bH && a.y1 == b.y1) {
+        expect(overlap(a.x1, a.x2, b.x1, b.x2), lessThanOrEqualTo(0),
+            reason: 'overlapping horizontals ${a.role}/${b.role} at y=${a.y1}');
+      }
+      if (aV && bV && a.x1 == b.x1 && !(aH || bH)) {
+        expect(overlap(a.y1, a.y2, b.y1, b.y2), lessThanOrEqualTo(0),
+            reason: 'overlapping verticals ${a.role}/${b.role} at x=${a.x1}');
+      }
+    }
+  }
 }

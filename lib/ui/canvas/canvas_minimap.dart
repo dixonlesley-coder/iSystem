@@ -21,6 +21,11 @@ typedef MinimapViewport = ({ViewportTransform transform, Size size});
 /// frame, the 'MAP' caption) uses this same fixed ink instead.
 const Color _paperInk = Color(0xFF9AA1AC);
 
+/// The 'MAP' caption's fixed ink — darker than [_paperInk] (which is a
+/// non-text frame stroke, where 3:1 suffices) so the TEXT reads at >= 4.5:1 on
+/// the fixed-light paper in both themes (~6:1 on `sheetPaper`).
+const Color _paperCaptionInk = Color(0xFF5F6670);
+
 /// A small on-canvas MINIMAP (G1) — a scaled overview of the fixed-size sheet
 /// ([contentSize]) with the drawn-content [markers] and the current viewport
 /// rectangle; tap or drag to recenter the canvas.
@@ -65,9 +70,18 @@ class CanvasMinimap extends StatelessWidget {
   });
 
   /// The minimap box: the sheet contained within a small max box at the sheet's
-  /// own aspect (no letterbox), so world↔mini is ONE uniform scale and the
-  /// painter + the tap hit-test agree.
+  /// own aspect, so world<->mini is ONE uniform scale and the painter + the
+  /// tap hit-test agree.
   static const double _maxW = 140, _maxH = 108;
+
+  /// A very wide (or tall) sheet would shrink the box to a sliver too thin to
+  /// read or hit; the box never goes below this on either axis — the sheet is
+  /// LETTERBOXED (centred) inside it at the same uniform scale.
+  static const double minBoxExtent = 48;
+
+  /// Below this on-screen paper height the 'MAP' caption is dropped (it would
+  /// crowd / overhang a thin letterboxed strip).
+  static const double captionMinPaperHeight = 36;
 
   double _fitScale() {
     if (contentSize.width <= 0 || contentSize.height <= 0) return 1;
@@ -79,10 +93,16 @@ class CanvasMinimap extends StatelessWidget {
     final colors = context.colors;
     final type = context.type;
     final s = _fitScale();
-    final box = Size(contentSize.width * s, contentSize.height * s);
-    if (box.isEmpty) return const SizedBox.shrink();
-    void recenter(Offset local) =>
-        onRecenter(Offset(local.dx / s, local.dy / s));
+    final paper = Size(contentSize.width * s, contentSize.height * s);
+    if (paper.isEmpty) return const SizedBox.shrink();
+    final box = Size(math.max(paper.width, minBoxExtent),
+        math.max(paper.height, minBoxExtent));
+    // Where the (letterboxed) paper sits inside the box.
+    final inset = Offset(
+        (box.width - paper.width) / 2, (box.height - paper.height) / 2);
+    void recenter(Offset local) => onRecenter(
+        Offset((local.dx - inset.dx) / s, (local.dy - inset.dy) / s));
+    final showCaption = paper.height >= captionMinPaperHeight;
     return Semantics(
       label: context.strings(StringKey.a11yMinimapHint),
       child: SizedBox.fromSize(
@@ -113,6 +133,7 @@ class CanvasMinimap extends StatelessWidget {
                       painter: _MinimapPainter(
                         contentSize: contentSize,
                         scale: s,
+                        inset: inset,
                         markers: markers,
                         viewport: viewport,
                         // B7: the sheet silhouette fills with the real sheet
@@ -129,17 +150,21 @@ class CanvasMinimap extends StatelessWidget {
                       ),
                     ),
                     // B7: a tiny caption so a first-time user can tell what
-                    // this box is without experimentally dragging it.
-                    Positioned(
-                      left: 4,
-                      top: 3,
-                      child: IgnorePointer(
-                        child: Text(
-                          'MAP',
-                          style: type.micro.copyWith(color: _paperInk),
+                    // this box is without experimentally dragging it — ON the
+                    // paper (so its fixed ink always has the light ground),
+                    // and only when the paper is tall enough to hold it.
+                    if (showCaption)
+                      Positioned(
+                        left: inset.dx + MechXSpacing.xs,
+                        top: inset.dy + 3,
+                        child: IgnorePointer(
+                          child: Text(
+                            'MAP',
+                            style:
+                                type.micro.copyWith(color: _paperCaptionInk),
+                          ),
                         ),
                       ),
-                    ),
                   ],
                 ),
               ),
@@ -154,6 +179,9 @@ class CanvasMinimap extends StatelessWidget {
 class _MinimapPainter extends CustomPainter {
   final Size contentSize;
   final double scale;
+
+  /// The paper's top-left inside the (possibly letterboxed) box.
+  final Offset inset;
   final List<Offset> markers;
   final MinimapViewport? viewport;
   final Color sheetFill, sheetEdge, marker, frame;
@@ -161,6 +189,7 @@ class _MinimapPainter extends CustomPainter {
   _MinimapPainter({
     required this.contentSize,
     required this.scale,
+    required this.inset,
     required this.markers,
     required this.viewport,
     required this.sheetFill,
@@ -171,6 +200,13 @@ class _MinimapPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.translate(inset.dx, inset.dy);
+    _paintSheet(canvas);
+    canvas.restore();
+  }
+
+  void _paintSheet(Canvas canvas) {
     // The sheet substrate — the whole box IS the sheet at [scale].
     final sheet =
         Rect.fromLTWH(0, 0, contentSize.width * scale, contentSize.height * scale);
@@ -209,6 +245,7 @@ class _MinimapPainter extends CustomPainter {
   bool shouldRepaint(_MinimapPainter old) =>
       old.contentSize != contentSize ||
       old.scale != scale ||
+      old.inset != inset ||
       old.markers != markers ||
       old.viewport != viewport ||
       old.marker != marker ||

@@ -101,12 +101,22 @@ class CopilotController extends Notifier<CopilotState> {
     state = const CopilotState(phase: CopilotPhase.thinking);
 
     final provider = ref.read(aiProviderProvider);
-    final result = await ref.read(aiClientProvider).proposePlan(AiRequest(
-          userText: text,
-          apiKey: ref.read(aiApiKeyProvider),
-          model: _effectiveModel(provider, ref.read(aiModelProvider)),
-          contextSummary: _buildContext(),
-        ));
+    // Round 11 — the client contract is "never throws", but a client (or a
+    // context build) that DOES throw used to leave the panel stuck on
+    // 'thinking' with no message. Map any throw to the error phase.
+    final AiResult result;
+    try {
+      result = await ref.read(aiClientProvider).proposePlan(AiRequest(
+            userText: text,
+            apiKey: ref.read(aiApiKeyProvider),
+            model: _effectiveModel(provider, ref.read(aiModelProvider)),
+            contextSummary: _buildContext(),
+          ));
+    } catch (e) {
+      state = CopilotState(
+          phase: CopilotPhase.error, message: 'The assistant failed: $e');
+      return;
+    }
 
     switch (result) {
       case AiOk(:final plan):
@@ -157,7 +167,14 @@ class CopilotController extends Notifier<CopilotState> {
         skipped.add('${cmd.preview} — $reason');
         continue;
       }
-      _apply(cmd);
+      // Round 11 — a command that turned out to place NOTHING (e.g. a room
+      // that cannot be sized) is a skip with a reason, never a silent
+      // "applied".
+      final noop = _apply(cmd);
+      if (noop != null) {
+        skipped.add('${cmd.preview} — $noop');
+        continue;
+      }
       applied++;
     }
     final outcome = ApplyOutcome(
@@ -185,8 +202,38 @@ class CopilotController extends Notifier<CopilotState> {
   String? _validate(AiCommand cmd) {
     final sheets = ref.read(sheetsControllerProvider).sheets;
     bool sheetKnown(String id) => sheets.any((s) => s.id == id);
+    final sheetsState = ref.read(sheetsControllerProvider);
     final levelCount = ref.read(projectControllerProvider).building.levelCount;
     bool floorOk(int f) => f >= 0 && f < levelCount;
+
+    // Round 11 — the point-placement frame. A malformed required field (missing,
+    // wrong type, non-finite) is rejected outright (it used to default to (0, 0)
+    // on floor 0, and an Infinity coordinate made the project unsaveable). The
+    // point must lie ON the target sheet's pixel extent, and the floor must be
+    // the floor that sheet is MAPPED to — the canvas filters on both sheet and
+    // floor, so a mismatched floor renders the node on no plan while sizing
+    // still counts it at the wrong elevation.
+    if (AiCommand.placesAtPoint(cmd.kind)) {
+      if (cmd.invalidFields.isNotEmpty) {
+        return 'missing or invalid ${cmd.invalidFields.join('/')}';
+      }
+      if (!cmd.x.isFinite || !cmd.y.isFinite) return 'non-finite coordinates';
+      if (!sheetKnown(cmd.sheetId)) return 'unknown sheet "${cmd.sheetId}"';
+      if (!floorOk(cmd.floor)) return 'floor ${cmd.floor} out of range';
+      final sheetFloor = sheetsState.floorFor(cmd.sheetId, levelCount);
+      if (cmd.floor != sheetFloor) {
+        return 'sheet "${cmd.sheetId}" is floor $sheetFloor, not ${cmd.floor}';
+      }
+      final size = sheets.firstWhere((s) => s.id == cmd.sheetId).sizePx;
+      if (size.width > 0 &&
+          size.height > 0 &&
+          (cmd.x < 0 ||
+              cmd.y < 0 ||
+              cmd.x > size.width ||
+              cmd.y > size.height)) {
+        return 'coordinates off sheet';
+      }
+    }
 
     switch (cmd.kind) {
       case AiCommandKind.placeComponent:
@@ -212,6 +259,13 @@ class CopilotController extends Notifier<CopilotState> {
         final rooms = ref.read(roomAreasProvider);
         if (cmd.roomId == null || !rooms.any((r) => r.id == cmd.roomId)) {
           return 'unknown room "${cmd.roomId ?? ''}"';
+        }
+        // Round 11 — auto-place sizes from the sheet scale: on an
+        // uncalibrated sheet it places nothing, so say so up front.
+        final room = rooms.firstWhere((r) => r.id == cmd.roomId);
+        if (ref.read(projectControllerProvider).calibrationFor(room.sheetId) ==
+            null) {
+          return 'room "${cmd.roomId}" is on an uncalibrated sheet';
         }
         return null;
       case AiCommandKind.suggest:
@@ -239,7 +293,10 @@ class CopilotController extends Notifier<CopilotState> {
 
   // ── Applying one command via the existing controllers ───────────────────────
 
-  void _apply(AiCommand cmd) {
+  /// Apply ONE validated command. Returns null when it changed the drawing, or
+  /// a short reason when it turned out to place nothing (Round 11 — so
+  /// [applyPlan] never counts a no-op as applied).
+  String? _apply(AiCommand cmd) {
     final net = ref.read(networkControllerProvider.notifier);
     final world = Offset(cmd.x, cmd.y);
     switch (cmd.kind) {
@@ -254,29 +311,33 @@ class CopilotController extends Notifier<CopilotState> {
         net.addSegment(cmd.sheetId, cmd.floor, world,
             service: _serviceByName(cmd.service));
       case AiCommandKind.autoPlaceRoomTerminals:
-        _applyAutoPlaceRoom(cmd.roomId);
+        return _applyAutoPlaceRoom(cmd.roomId);
       case AiCommandKind.suggest:
         break; // text-only, nothing to apply
     }
+    return null;
   }
 
-  void _applyAutoPlaceRoom(String? roomId) {
-    if (roomId == null) return;
+  String? _applyAutoPlaceRoom(String? roomId) {
+    if (roomId == null) return 'no room';
     final rooms = ref.read(roomAreasProvider);
     final room = rooms.where((r) => r.id == roomId).cast<RoomArea?>().firstWhere(
           (_) => true,
           orElse: () => null,
         );
-    if (room == null) return;
+    if (room == null) return 'unknown room "$roomId"';
     final cal = ref.read(projectControllerProvider).calibrationFor(room.sheetId);
-    if (cal == null) return;
+    if (cal == null) return 'room "$roomId" is on an uncalibrated sheet';
     final ducts = ref.read(ductSettingsProvider);
-    ref.read(networkControllerProvider.notifier).autoPlaceRoomTerminals(
-          room: room,
-          metersPerPixel: cal.metersPerPixel,
-          ductShape: ducts.shape,
-          ductMethod: ducts.method,
-        );
+    final placed =
+        ref.read(networkControllerProvider.notifier).autoPlaceRoomTerminals(
+              room: room,
+              metersPerPixel: cal.metersPerPixel,
+              ductShape: ducts.shape,
+              ductMethod: ducts.method,
+            );
+    if (placed.isEmpty) return 'room "$roomId" placed no terminals';
+    return null;
   }
 
   static NodeComponent? _componentByName(String? name) {
@@ -317,10 +378,13 @@ class CopilotController extends Notifier<CopilotState> {
           '${active.sizePx.height.round()} px)');
     }
     if (sheetsState.sheets.isNotEmpty) {
-      b.writeln('- sheets (id | name | w x h px):');
+      // Round 11 — each sheet's MAPPED floor: a placement's floor must equal
+      // its sheet's floor (the canvas filters on both), so state it.
+      b.writeln('- sheets (id | name | w x h px | floor index):');
       for (final s in sheetsState.sheets) {
         b.writeln('    ${s.id} | ${s.name} | '
-            '${s.sizePx.width.round()}x${s.sizePx.height.round()}');
+            '${s.sizePx.width.round()}x${s.sizePx.height.round()} | '
+            'floor ${sheetsState.floorFor(s.id, building.levelCount)}');
       }
     } else {
       b.writeln('- sheets: none imported yet');

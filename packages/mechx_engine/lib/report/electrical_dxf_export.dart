@@ -24,8 +24,22 @@ import 'dart:math' as math;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
-import 'drawing_chrome.dart' show DrawingChrome, dxfTablesSection;
+import '../network/network.dart' show ServiceType;
+import 'drawing_chrome.dart'
+    show
+        DrawingChrome,
+        kMinPlotLabelPt,
+        dxfLayerNameFor,
+        dxfLinetypeFor,
+        dxfTablesSection,
+        dxfText,
+        kHelveticaCapHeightEm,
+        serviceAciColorFor,
+        wrapTitleLines;
 import 'electrical_sld_drawing.dart';
+import 'plan_annotation_layout.dart' show planOverlapWarning;
+import 'riser_tags.dart' show riserServiceCode;
+import 'sld_plot_fit.dart';
 
 /// Box footprint (DXF units) for an auto-laid panel / node.
 const double _boxW = 200;
@@ -66,6 +80,18 @@ const kDxfLayerMFrame = 'M-FRAME';
 /// code like `CW`/`V`/`D`); everything else that has no explicit layer lands
 /// here instead of the electrical `E-BREAKER`.
 const kDxfLayerMDetail = 'M-DETAIL';
+
+// ── Fire-protection class layers (Round 34 — a fire riser is its own
+// discipline: F-*, never the mechanical M-*) ───────────────────────────────
+
+/// Fire-protection annotation text.
+const kDxfLayerFText = 'F-TEXT';
+
+/// Fire-protection sheet frame: title block + legend.
+const kDxfLayerFFrame = 'F-FRAME';
+
+/// Fire-protection device / detail graphics.
+const kDxfLayerFDetail = 'F-DETAIL';
 
 /// The DXF layer NAMESPACE an SLD render routes its prims onto. The electrical
 /// default is the `E-*` distribution-board set; the MECHANICAL riser (routed
@@ -150,6 +176,32 @@ class SldDxfLayers {
     essentialAci: 7,
   );
 
+  /// Round 34 (fire-hvac-drawings-no-discipline-split) — the fire-protection
+  /// `F-*` namespace (sprinkler / hydrant risers), collapsed like
+  /// [mechanical].
+  static const fire = SldDxfLayers(
+    bus: kDxfLayerFDetail,
+    feeder: kDxfLayerFDetail,
+    device: kDxfLayerFDetail,
+    text: kDxfLayerFText,
+    frame: kDxfLayerFFrame,
+    essential: kDxfLayerFDetail,
+    busAci: 1,
+    feederAci: 1,
+    deviceAci: 1,
+    textAci: 7,
+    frameAci: 8,
+    essentialAci: 1,
+  );
+
+  /// Round 34 — the namespace a riser of [focus] renders onto: [fire] for a
+  /// sprinkler / hydrant riser, [mechanical] for everything else (incl. the
+  /// combined all-services sheet).
+  static SldDxfLayers forRiser(ServiceType? focus) =>
+      focus == ServiceType.fireSprinkler || focus == ServiceType.fireHydrant
+          ? fire
+          : mechanical;
+
   /// The de-duplicated class-layer table rows `(name, aci)` in a stable order
   /// (bus, feeder, device, text, frame, essential) — the first ACI seen for a
   /// name wins, so the collapsed mechanical set lists `M-DETAIL` once. For the
@@ -170,19 +222,18 @@ class SldDxfLayers {
   }
 }
 
-/// DXF group-370 lineweight (1/100 mm) per [SldWeight] bucket.
-int _lineweightFor(SldWeight w) => switch (w) {
-      SldWeight.thin => 13,
-      SldWeight.medium => 25,
-      SldWeight.thick => 50,
-    };
+// Round 27 (export-files-2-4) — the file declares AC1009 (R12), which has
+// no per-entity lineweight (group 370 arrived with R2000): none is written.
+// The weight bucket of an un-layered line still rides its CLASS layer (bus /
+// feeder / device), which a CTB plots by layer.
 
 class _Dxf {
   final StringBuffer b = StringBuffer();
 
   void g(int code, Object value) {
     b.writeln(code);
-    b.writeln(value);
+    // drafting-5: every string value is code-page-safe ASCII (no raw `·`).
+    b.writeln(value is String ? dxfText(value) : value);
   }
 
   void begin() {
@@ -197,14 +248,12 @@ class _Dxf {
 
   /// A box (4 LINEs) with top-left at ([x],[y]) in screen space (Y negated).
   /// [color] is an optional ACI override (62) — null = inherit the layer colour.
-  /// [lineweight] is an optional group-370 width (1/100 mm).
   void box(String layer, double x, double y, double w, double h,
-      {int? color, int? lineweight}) {
+      {int? color}) {
     void line(double x1, double y1, double x2, double y2) {
       g(0, 'LINE');
       g(8, layer);
       if (color != null) g(62, color);
-      if (lineweight != null) g(370, lineweight);
       g(10, x1);
       g(20, -y1);
       g(11, x2);
@@ -228,24 +277,21 @@ class _Dxf {
     g(1, value);
   }
 
-  void circle(String layer, double cx, double cy, double r,
-      {int? color, int? lineweight}) {
+  void circle(String layer, double cx, double cy, double r, {int? color}) {
     g(0, 'CIRCLE');
     g(8, layer);
     if (color != null) g(62, color);
-    if (lineweight != null) g(370, lineweight);
     g(10, cx);
     g(20, -cy); // DXF Y negated, like box/text/connector
     g(40, r);
   }
 
   void connector(String layer, double x1, double y1, double x2, double y2,
-      {int? color, int? lineweight, String? linetype}) {
+      {int? color, String? linetype}) {
     g(0, 'LINE');
     g(8, layer);
     if (linetype != null) g(6, linetype);
     if (color != null) g(62, color);
-    if (lineweight != null) g(370, lineweight);
     g(10, x1);
     g(20, -y1);
     g(11, x2);
@@ -283,11 +329,17 @@ String electricalSldToDxf({
   // A prebuilt [sheet] wins; else `overview` = the ZOOMED-OUT building
   // single-line (compact panel tree, optional source spine); default = the
   // per-panel detail single-line.
-  final sheetResolved = sheet ??
+  final built = sheet ??
       (overview
           ? buildElectricalOverview(
               project: project!, result: result!, sourceChain: sourceChain)
           : buildElectricalSld(project: project!, result: result!));
+  // drafting-6: the SAME plot fit the PDF applies — labels grown in place to
+  // the minimum plotted size for an A3 fit-to-sheet plot, bounds covering each
+  // label's text — so the DXF and the PDF print the same label sizes.
+  final sheetResolved = fitSldSheetForPlot(built,
+          availW: kSldA3PlotAvailW, availH: kSldA3PlotAvailH)
+      .sheet;
 
   // Essential prims are drawn ACI red (1); source MV-chain blue (5); normal
   // inherits the layer colour (null). Phase-bearing schedule cells carry the
@@ -309,6 +361,7 @@ String electricalSldToDxf({
   // device/way graphics → device. Under the mechanical namespace bus/feeder/
   // device all collapse to M-DETAIL, so a plumbing riser never emits E-*.
   String lineLayer(SldLine l) =>
+      _serviceLayerFor(l.layer)?.$1 ??
       l.layer ??
       (l.role == SldRole.essential
           ? layers.essential
@@ -325,19 +378,37 @@ String electricalSldToDxf({
     switch (p) {
       case SldLine():
         d.connector(lineLayer(p), p.x1, p.y1, p.x2, p.y2,
-            color: colorFor(p.role),
-            lineweight: _lineweightFor(p.weight),
-            linetype: p.dashed ? 'DASHED' : null);
+            color: colorFor(p.role), linetype: p.dashed ? 'DASHED' : null);
       case SldRect():
-        d.box(shapeLayer(p.role), p.x, p.y, p.w, p.h,
-            color: colorFor(p.role), lineweight: _lineweightFor(p.weight));
+        d.box(shapeLayer(p.role), p.x, p.y, p.w, p.h, color: colorFor(p.role));
       case SldLabel():
+        // Round 27 (export-files-2-2) — DXF group 40 is the CAP height; the
+        // PDF prints this fitted label at em = p.size, whose Helvetica cap
+        // height is 0.718 em. The old 1.3 x em printed the DXF label ~1.8x
+        // the PDF's relative to the same geometry and overprinted the
+        // schedule columns the plot fit had cleared.
         d.text(layers.text, p.x, p.y, p.text,
-            size: p.size * 1.3, color: colorFor(p.role));
+            size: p.size * kHelveticaCapHeightEm, color: colorFor(p.role));
       case SldCircle():
-        d.circle(shapeLayer(p.role), p.cx, p.cy, p.r,
-            color: colorFor(p.role), lineweight: _lineweightFor(p.weight));
+        d.circle(shapeLayer(p.role), p.cx, p.cy, p.r, color: colorFor(p.role));
     }
+  }
+
+  // Round 29 (drawings-3-1) — the overlap warning above the drawing when the
+  // builder could only place some tags fused into others.
+  final overlapNote = planOverlapWarning(sheetResolved.overlapCount);
+  if (overlapNote != null) {
+    d.text(layers.frame, sheetResolved.minX, sheetResolved.minY - 16,
+        overlapNote,
+        size: 8);
+  }
+  // Round 43 — the page-legibility warning (see [SldSheet.belowMinLabelPt]).
+  final legNote = sldLegibilityWarning(sheetResolved.belowMinLabelPt,
+      minPt: kMinPlotLabelPt);
+  if (legNote != null) {
+    d.text(layers.frame, sheetResolved.minX,
+        sheetResolved.minY - (overlapNote != null ? 28 : 16), legNote,
+        size: 8);
   }
 
   // ── Model-space title block + legend, laid out below the drawing ────────────
@@ -347,7 +418,20 @@ String electricalSldToDxf({
   const rowH = 18.0;
   const tbW = 360.0;
   const labelW = 88.0;
-  final tbH = rows.isEmpty ? 96.0 : 84.0 + rows.length * rowH + 6.0;
+  // Round 27 (export-files-2-3) — the supply note is WORD-WRAPPED to the
+  // title box (tbW - 16, Helvetica metrics at the em whose cap height is the
+  // written size 10) instead of running out of the box into the LEGEND; each
+  // extra line grows the block by [noteLineH].
+  const noteSize = 10.0;
+  const noteLineH = 14.0;
+  const noteEm = noteSize / kHelveticaCapHeightEm;
+  final wrapped = wrapTitleLines(sheetResolved.supplyNote, tbW - 16,
+          maxSize: noteEm, minSize: noteEm)
+      .lines;
+  final noteLines = wrapped.isEmpty ? [sheetResolved.supplyNote] : wrapped;
+  final noteExtra = (noteLines.length - 1) * noteLineH;
+  final tbH =
+      (rows.isEmpty ? 96.0 : 84.0 + rows.length * rowH + 6.0) + noteExtra;
   final frameTop = sheetResolved.maxY + 60;
   // [projectName] overrides the derived name — a prebuilt sheet (mechanical
   // riser) carries no [project], so the app passes the live name to avoid the
@@ -361,12 +445,14 @@ String electricalSldToDxf({
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 44, diagramTitle,
       size: 12);
-  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 66,
-      sheetResolved.supplyNote,
-      size: 10);
+  for (var i = 0; i < noteLines.length; i++) {
+    d.text(layers.frame, sheetResolved.minX + 8,
+        frameTop + 66 + i * noteLineH, noteLines[i],
+        size: noteSize);
+  }
   if (rows.isNotEmpty) {
     final x0 = sheetResolved.minX;
-    const bandPad = 84.0; // band top, below the supply-note line
+    final bandPad = 84.0 + noteExtra; // band top, below the supply note
     final bandTop = frameTop + bandPad;
     final bandBot = bandTop + rows.length * rowH;
     // Band top rule + full-height label|value divider (the box bottom closes
@@ -409,15 +495,44 @@ String electricalSldToDxf({
   final classNames = {for (final (name, _) in classLayers) name};
   final explicit = <String>{
     for (final p in sheetResolved.prims)
-      if (p is SldLine && p.layer != null && !classNames.contains(p.layer))
+      if (p is SldLine &&
+          p.layer != null &&
+          _serviceLayerFor(p.layer) == null &&
+          !classNames.contains(p.layer))
         p.layer!,
   }.toList()
     ..sort();
+  // drafting-5: a per-service pipe layer (a riser service code `CW`/`D`/…)
+  // resolves to the SAME AIA layer + ACI colour + linetype the plan DXF uses
+  // (`P-DOM-CWS` ACI 5 …), so riser and plan DXFs share one layer vocabulary.
+  final serviceLayers = <(String, int, String)>{
+    for (final p in sheetResolved.prims)
+      if (p is SldLine && _serviceLayerFor(p.layer) != null)
+        _serviceLayerFor(p.layer)!,
+  }.toList()
+    ..sort((a, b) => a.$1.compareTo(b.$1));
   final tables = dxfTablesSection(layers: [
     for (final (name, aci) in classLayers) (name, aci, 'CONTINUOUS'),
+    ...serviceLayers,
     for (final name in explicit) (name, 7, 'CONTINUOUS'),
   ]);
-  return tables + d.toString();
+  // drafting-5: a minimal HEADER declaring the R12 format.
+  return '0\nSECTION\n2\nHEADER\n9\n\$ACADVER\n1\nAC1009\n0\nENDSEC\n' +
+      tables +
+      d.toString();
+}
+
+/// The plan DXF's AIA layer `(name, aci, linetype)` for an SLD line's explicit
+/// [layer] when it is a riser SERVICE CODE (`CW`, `HW`, `D`, `V`, …), else null
+/// (an ordinary explicit layer name, used as-is).
+(String, int, String)? _serviceLayerFor(String? layer) {
+  if (layer == null) return null;
+  for (final s in ServiceType.values) {
+    if (riserServiceCode(s) == layer) {
+      return (dxfLayerNameFor(s), serviceAciColorFor(s), dxfLinetypeFor(s));
+    }
+  }
+  return null;
 }
 
 /// The chrome's title-block rows for the DXF frame — CLIENT / DWG NO / REV /

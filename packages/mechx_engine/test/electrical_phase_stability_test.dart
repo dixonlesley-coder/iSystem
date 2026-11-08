@@ -2,7 +2,6 @@ import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
-import 'package:mechx_engine/electrical/sizing.dart' show roundTo;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
@@ -213,27 +212,37 @@ void main() {
       // imbalance = (15 - 9) / ((10+9+15)/3) · 100 = 6 / 11.3333 · 100 = 52.94
       expect(sp1.phaseBalance.imbalancePercent, closeTo(52.9, 1e-9));
 
-      // SP-2: 12.0 -> L1, 11.0 -> L2, 10.0 -> L3; every swap only permutes the
-      // three lines, so the 12 - 10 = 2 A spread never shrinks.
+      // SP-2: its own balance puts 12.0 / 11.0 / 10.0 A on three lines (every
+      // swap only permutes them, so the 12 - 10 = 2 A spread never shrinks).
+      // Round 48 — the MDP's parent-aware rotation then RELABELS SP-2 (SP-1
+      // keeps the identity) on the MDP's solved balance, its own 10 / 8 A
+      // singles included. The three-phase feeders load the MDP with each fed
+      // board's OWN lines; the MDP total is 34 + 33 + 18 = 85 A, so no
+      // assignment has a worst line below ceil(85 / 3) = 29 A (every current
+      // is whole). Rotating SP-2 by two lines (b1 -> L3, b2 -> L1, b3 -> L2)
+      // gives SP-2 (11, 10, 12) and the base (10+11, 9+10, 15+12) =
+      // (21, 19, 27); m1 (10 A) -> L2 (21, 29, 27), m2 (8 A) -> L1
+      // (29, 29, 27): worst 29 A, the floor. (The identity left (30, 30, 25).)
       final sp2 = plain.panels['SP2']!;
-      expect(phaseOf(sp2, 'b1'), PhaseAssignment.l1);
-      expect(phaseOf(sp2, 'b2'), PhaseAssignment.l2);
-      expect(phaseOf(sp2, 'b3'), PhaseAssignment.l3);
+      expect(phaseOf(sp2, 'b1'), PhaseAssignment.l3);
+      expect(phaseOf(sp2, 'b2'), PhaseAssignment.l1);
+      expect(phaseOf(sp2, 'b3'), PhaseAssignment.l2);
       // imbalance = (12 - 10) / ((12+11+10)/3) · 100 = 2 / 11 · 100 = 18.18
       expect(sp2.phaseBalance.imbalancePercent, closeTo(18.2, 1e-9));
 
-      // MDP: both feeders are three-phase, so they load L1/L2/L3 equally with
-      // F = Ib(f1) + Ib(f2) before any single-phase way is placed. m1 (10.0 A)
-      // then goes to L1 and m2 (8.0 A) to L2 (both lines still at F).
       final mdp = plain.panels['MDP']!;
       expect(phaseOf(mdp, 'f1'), PhaseAssignment.threePhase);
       expect(phaseOf(mdp, 'f2'), PhaseAssignment.threePhase);
-      expect(phaseOf(mdp, 'm1'), PhaseAssignment.l1);
-      expect(phaseOf(mdp, 'm2'), PhaseAssignment.l2);
-      final f = currentOf(mdp, 'f1') + currentOf(mdp, 'f2');
-      expect(mdp.phaseBalance.l1, closeTo(roundTo(f + 10.0, 1), 1e-9));
-      expect(mdp.phaseBalance.l2, closeTo(roundTo(f + 8.0, 1), 1e-9));
-      expect(mdp.phaseBalance.l3, closeTo(roundTo(f, 1), 1e-9));
+      expect(phaseOf(mdp, 'm1'), PhaseAssignment.l2);
+      expect(phaseOf(mdp, 'm2'), PhaseAssignment.l1);
+      // Each feeder carries its fed board's WORST line (15.0 / 12.0 A), not
+      // the balanced 34/3 = 11.3 / 33/3 = 11.0 A — a relabelling never
+      // changes it.
+      expect(currentOf(mdp, 'f1'), closeTo(15.0, 1e-9));
+      expect(currentOf(mdp, 'f2'), closeTo(12.0, 1e-9));
+      expect(mdp.phaseBalance.l1, closeTo(29.0, 1e-9));
+      expect(mdp.phaseBalance.l2, closeTo(29.0, 1e-9));
+      expect(mdp.phaseBalance.l3, closeTo(27.0, 1e-9));
     });
 
     test('re-solving with the first solve own assignment changes nothing', () {
@@ -287,14 +296,19 @@ void main() {
       'k6': PhaseAssignment.l3,
     };
 
-    test('a 0.4 A gain does not clear a 1.0 A threshold', () {
-      // From the wired state every RELOCATE is far worse (the smallest way is
-      // 5.4 A, so moving any of them opens a gap of at least 11.6 A against the
-      // 1.6 A spread). Exactly two SWAPS improve it, both by 0.4 A:
-      //   k1(L1,10.0) <-> k2(L3,9.8): L1 16.6, L3 15.4 -> spread 1.2 (-0.4)
-      //   k5(L1, 6.8) <-> k6(L3,5.4): L1 15.4, L3 16.6 -> spread 1.2 (-0.4)
-      // A swap moving a way off its prior line must beat 1.0 A, and 0.4 < 1.0,
-      // so both are rejected and the wired assignment survives verbatim.
+    test('Round 37: stickiness never keeps a heavier WORST phase', () {
+      // The wired worst phase is 16.8 A, but the board's optimum worst phase is
+      // 16.6 A: any line without k1 must hold k2 9.8 with k5 6.8 (= 16.6) or
+      // k4 7.0 (= 16.8), and k1 10.0 can only pair with k6 5.4 (15.4) below
+      // 16.6 — so {k2,k5} 16.6 / {k3,k4} 16.0 / {k1,k6} 15.4 is the unique
+      // minimum-worst partition. The incomer sizes on the worst phase and the
+      // prior map is session-only (never saved), so the 0.2 A heavier sticky
+      // assignment is NOT kept even though the spread gain (0.4 A) is below
+      // the 1.0 A threshold. Round 40 — the optimum PARTITION is labelled
+      // with the fewest ways off their wired line (never the fresh labels
+      // wholesale): k1 stays on L1 so {k1,k6} -> L1 (k6 moves), {k3,k4}
+      // stays on L2 (0 moves), {k2,k5} -> L3 (k5 moves) — 2 moves, against
+      // 4 for the fresh labels (k1/k6 L1, k2/k5 L2, k3/k4 L3).
       final r = computePanel(
         p,
         panel,
@@ -303,28 +317,85 @@ void main() {
           phaseReassignThresholdA: 1.0,
         ),
       );
-      expect(assignmentOf(r), prior);
-      expect(r.phaseBalance.l1, closeTo(16.8, 1e-9));
+      expect(assignmentOf(r), const <String, PhaseAssignment>{
+        'k1': PhaseAssignment.l1,
+        'k2': PhaseAssignment.l3,
+        'k3': PhaseAssignment.l2,
+        'k4': PhaseAssignment.l2,
+        'k5': PhaseAssignment.l3,
+        'k6': PhaseAssignment.l1,
+      });
+      expect(r.phaseBalance.l1, closeTo(15.4, 1e-9));
       expect(r.phaseBalance.l2, closeTo(16.0, 1e-9));
-      expect(r.phaseBalance.l3, closeTo(15.2, 1e-9));
-      // imbalance = (16.8 - 15.2) / (48/3) · 100 = 1.6 / 16 · 100 = 10.0 %
-      expect(r.phaseBalance.imbalancePercent, closeTo(10.0, 1e-9));
+      expect(r.phaseBalance.l3, closeTo(16.6, 1e-9));
+      // imbalance = (16.6 - 15.4) / 16 · 100 = 7.5 %
+      expect(r.phaseBalance.imbalancePercent, closeTo(7.5, 1e-9));
+    });
+
+    test('a spread-only gain below the threshold keeps the wired labels', () {
+      // k1 20.0 A dominates: every assignment's worst phase is 20.0 A (k1
+      // alone), so stickiness cannot move the sizing current. Wired:
+      //   L1 {k1} 20.0, L2 {k2 9.0, k4 6.6} 15.6, L3 {k3 8.0, k5 6.0} 14.0
+      // spread 20.0 - 14.0 = 6.0. The best re-labelling swaps k4 <-> k5
+      // (L2 15.0 / L3 14.6, spread 5.4) — a 0.6 A gain, below the 1.0 A
+      // threshold, so the wired assignment survives verbatim.
+      final dominated = ElectricalPanel(
+        id: 'LP',
+        name: 'LP',
+        circuits: [
+          load('k1', 20.0),
+          load('k2', 9.0),
+          load('k3', 8.0),
+          load('k4', 6.6),
+          load('k5', 6.0),
+        ],
+      );
+      const wired = <String, PhaseAssignment>{
+        'k1': PhaseAssignment.l1,
+        'k2': PhaseAssignment.l2,
+        'k3': PhaseAssignment.l3,
+        'k4': PhaseAssignment.l2,
+        'k5': PhaseAssignment.l3,
+      };
+      final r = computePanel(
+        p,
+        dominated,
+        opts: const ComputePanelOptions(
+          priorAssignment: wired,
+          phaseReassignThresholdA: 1.0,
+        ),
+      );
+      expect(assignmentOf(r), wired);
+      expect(r.phaseBalance.l1, closeTo(20.0, 1e-9));
+      expect(r.phaseBalance.l2, closeTo(15.6, 1e-9));
+      expect(r.phaseBalance.l3, closeTo(14.0, 1e-9));
     });
 
     test('computeSystem threads the per-panel prior slice', () {
+      // An OPTIMAL prior with different labels from the fresh greedy:
+      //   L1 {k2, k5} 16.6, L2 {k3, k4} 16.0, L3 {k1, k6} 15.4 (worst 16.6,
+      // spread 1.2 — the optimum) is kept verbatim.
+      const optimalPrior = <String, PhaseAssignment>{
+        'k1': PhaseAssignment.l3,
+        'k2': PhaseAssignment.l1,
+        'k3': PhaseAssignment.l2,
+        'k4': PhaseAssignment.l2,
+        'k5': PhaseAssignment.l1,
+        'k6': PhaseAssignment.l3,
+      };
       final project = ElectricalProject(id: 'prj', panels: [panel]);
       final r = computeSystem(
         p,
         project,
-        priorAssignments: const {'LP': prior},
+        priorAssignments: const {'LP': optimalPrior},
         phaseReassignThresholdA: 1.0,
       );
-      expect(assignmentOf(r.panels['LP']!), prior);
+      expect(assignmentOf(r.panels['LP']!), optimalPrior);
       // A prior for another panel id must not reach this one.
       final unrelated = computeSystem(
         p,
         project,
-        priorAssignments: const {'OTHER': prior},
+        priorAssignments: const {'OTHER': optimalPrior},
         phaseReassignThresholdA: 1.0,
       );
       expect(assignmentOf(unrelated.panels['LP']!),
@@ -405,7 +476,8 @@ void main() {
       expect(r.phaseBalance.l3, closeTo(6.0, 1e-9));
     });
 
-    test('adding a 12.0 A way moves three circuits despite the threshold', () {
+    test('adding a 12.0 A way rebalances (k3 moves) despite the threshold',
+        () {
       // Seed (10, 8, 6); the NEW way g (12.0 A) has no prior, so the greedy
       // drops it on the least-loaded line L3 -> (10, 8, 18), spread 10.0 A.
       // Relocate pass (descending g, k1, k2, k3):
@@ -413,13 +485,20 @@ void main() {
       //   k1 L1->L2 ( 0,18,18) 18.0 / L1->L3 (0,8,28) 28.0          -> reject
       //   k2 L2->L1 (18, 0,18) 18.0 / L2->L3 (10,0,26) 26.0         -> reject
       //   k3 L3->L1 (16, 8,12) 8.0: gain 10.0-8.0 = 2.0 > 1.0       -> ACCEPT
-      //      then L3->L2 (16,14,6) 10.0                             -> reject
-      // Swap pass on (16, 8, 12):
-      //   g<->k1 (18,8,10) 10.0, g<->k2 (16,12,8) 8.0                -> reject
-      //   k1<->k2: L1 16-10+8 = 14, L2 8-8+10 = 10 -> (14,10,12) spread 4.0,
-      //      gain 8.0-4.0 = 4.0 > 1.0                                -> ACCEPT
-      // Nothing improves on (14, 10, 12) in the next pass, so:
-      //   L1 {k2 8.0, k3 6.0} = 14.0   L2 {k1 10.0} = 10.0   L3 {g 12.0} = 12.0
+      //      then FROM ITS NEW LINE L1 (Round 31 — the relocate pass
+      //      tracks the current line): L1->L2 (10,14,12) spread 4.0,
+      //      gain 8.0-4.0 = 4.0 > 0 (k3 is already off its prior L3,
+      //      so no stickiness cost)                                -> ACCEPT
+      //      (the stale-`from` code subtracted 6 A from L3 a second time
+      //      here, reading a corrupt (16,14,6) and rejecting.)
+      // Swap pass on (10, 14, 12): every pair widens or ties the 4.0 A
+      // spread (g<->k1 (12,14,10) 4.0 ties, g<->k2 (10,18,8), g<->k3
+      // (10,20,6), k1<->k2 (8,16,12), k1<->k3 (6,18,12))          -> reject
+      // Next pass: no relocate / swap narrows 4.0. Exact search: ways
+      // 12 / 10 / 8 / 6 (sum 36) — the only 12 A subset is {g}, so no
+      // partition beats a 14 A worst phase, and every 14 A partition has
+      // spread >= 4 ⇒ (10, 14, 12) is kept:
+      //   L1 {k1 10.0} = 10.0   L2 {k2 8.0, k3 6.0} = 14.0   L3 {g 12.0} = 12.0
       final r = computePanel(
         p,
         ElectricalPanel(
@@ -432,14 +511,14 @@ void main() {
           phaseReassignThresholdA: 1.0,
         ),
       );
-      expect(phaseOf(r, 'k1'), PhaseAssignment.l2);
-      expect(phaseOf(r, 'k2'), PhaseAssignment.l1);
-      expect(phaseOf(r, 'k3'), PhaseAssignment.l1);
+      expect(phaseOf(r, 'k1'), PhaseAssignment.l1);
+      expect(phaseOf(r, 'k2'), PhaseAssignment.l2);
+      expect(phaseOf(r, 'k3'), PhaseAssignment.l2);
       expect(phaseOf(r, 'g'), PhaseAssignment.l3);
-      expect(r.phaseBalance.l1, closeTo(14.0, 1e-9));
-      expect(r.phaseBalance.l2, closeTo(10.0, 1e-9));
+      expect(r.phaseBalance.l1, closeTo(10.0, 1e-9));
+      expect(r.phaseBalance.l2, closeTo(14.0, 1e-9));
       expect(r.phaseBalance.l3, closeTo(12.0, 1e-9));
-      // imbalance = (14 - 10) / ((14+10+12)/3) · 100 = 4 / 12 · 100 = 33.3 %
+      // imbalance = (14 - 10) / ((10+14+12)/3) · 100 = 4 / 12 · 100 = 33.3 %
       expect(r.phaseBalance.imbalancePercent, closeTo(33.3, 1e-9));
     });
   });

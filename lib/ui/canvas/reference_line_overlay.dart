@@ -134,7 +134,7 @@ class _ReferenceLineOverlayState extends ConsumerState<ReferenceLineOverlay> {
   @override
   Widget build(BuildContext context) {
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
+        ref.watch(sheetViewportProvider(widget.sheetId)) ??
             const ViewportTransform();
     final all = ref.watch(referenceLinesProvider);
     final mine = [for (final r in all) if (r.sheetId == widget.sheetId) r];

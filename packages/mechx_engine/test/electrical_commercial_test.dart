@@ -186,9 +186,17 @@ void main() {
           .where((l) => l.description.startsWith('Cable lug'))
           .toList();
       expect(skun, isNotEmpty);
-      expect(skun.first.qty, 10); // 5 conductors (3L+N+PE) × 2 ends
+      // Round 19 — the lug count is the cable's OWN make-up: a motor way has
+      // no neutral, so 3L + PE = 4 conductors (grounding.cores) × 2 ends = 8
+      // (the old flat "5 per 3φ run" bought 2 lugs no conductor uses). The
+      // PE is at the phase section here (≤ 16 mm² ⇒ PE = S), so one line.
+      final c = r.circuits.single;
+      expect(c.grounding.cores, 4);
+      expect(c.cable.csaMm2, lessThanOrEqualTo(16));
+      expect(skun, hasLength(1));
+      expect(skun.first.qty, 8);
       // Sanity: the motor cable was indeed >= the 10 mm² skun threshold.
-      expect(r.circuits.single.cable.csaMm2, greaterThanOrEqualTo(10));
+      expect(c.cable.csaMm2, greaterThanOrEqualTo(10));
     });
   });
 
@@ -246,9 +254,8 @@ void main() {
         deviceClass: BreakerClass.mcb,
         curve: BreakerCurve.c,
       );
-      // Candidates ≥ 10 A include 1P {10,16,20,…} and 3P {16,25,…}. A 1P match
-      // (poles ok, penalty 0) beats a 3P match (penalty 100) even though both
-      // exist at 16 A; among 1P the smallest covering rating is 10 A.
+      // Round 33 — only the EXACT 10 A rating qualifies; the 1P C10 part
+      // (poles ok, curve ok, penalty 0) is the match.
       expect(matchBreakerSku(need, seedCatalog, poles: 1), 'A9F44110');
     });
 
@@ -263,22 +270,35 @@ void main() {
       expect(matchBreakerSku(need, seedCatalog, poles: 3), 'A9F44316');
     });
 
-    test('MCCB need 120 A 3P → smallest covering MCCB = NSX160F (LV430630)', () {
+    test('MCCB need 120 A 3P → no 120 A part ⇒ unmatched (never upsized)',
+        () {
       const need = BreakerResult(
         ratingA: Current(120),
         deviceClass: BreakerClass.mccb,
         curve: BreakerCurve.c,
       );
-      // MCCBs covering 120 A: NSX160F 160 A, NSX250F 250 A. Smallest = 160 A.
-      // (The MCBs top out at 63 A so they never cover 120 A anyway.)
-      expect(matchBreakerSku(need, seedCatalog, poles: 3), 'LV430630');
+      // Round 33 — the RATING is a hard requirement: the seed catalogue's
+      // MCCBs are NSX160F 160 A and NSX250F 250 A, neither the sized 120 A, so
+      // nothing qualifies (a 160 A device would not protect a cable sized for
+      // In = 120 A). The line stays unmatched on its `elec:breaker:` key.
+      expect(matchBreakerSku(need, seedCatalog, poles: 3), isNull);
+      // A sized 160 A MCCB matches NSX160F (LV430630) exactly.
+      const need160 = BreakerResult(
+        ratingA: Current(160),
+        deviceClass: BreakerClass.mccb,
+        curve: BreakerCurve.c,
+      );
+      expect(matchBreakerSku(need160, seedCatalog, poles: 3), 'LV430630');
     });
 
     test('cable section match prefers the construction type', () {
       // Need 2.5 mm² NYM → NYM-2.5 (same type) over the NYY ladder.
       expect(matchCableSku(2.5, seedCatalog, cableType: 'NYM'), 'NYM-2.5');
-      // Need 6 mm² with no NYM at 6 mm² → falls back to section-only = NYY-6.
-      expect(matchCableSku(6, seedCatalog, cableType: 'NYM'), 'NYY-6');
+      // Need 6 mm² with no NYM at 6 mm² → Round 21: NEVER another family's
+      // part (an NYM run is not bought as NYY) ⇒ unmatched (null).
+      expect(matchCableSku(6, seedCatalog, cableType: 'NYM'), isNull);
+      // With no family given, section-only matching still applies.
+      expect(matchCableSku(6, seedCatalog), 'NYY-6');
     });
   });
 

@@ -272,7 +272,7 @@ void main() {
   });
 
   group('R1 chip strip edge fade', () {
-    // The Edit-mode 'Riser service' strip inserts a ShaderMask ONLY when it
+    // The Edit-mode riser service strip inserts a ShaderMask ONLY when it
     // actually overflows; with room it renders as a bare scroll view (so a
     // strip with nothing to reveal can never be tinted). The whole app is
     // pumped because Edit mode mounts the Riser Draggable, which needs an
@@ -294,9 +294,13 @@ void main() {
       await tester.pump();
     }
 
-    testWidgets('fades when the ten service chips overflow a 1440 window',
+    // 2026-10-17: the Edit picker is discipline-scoped (at most 5 chips), so
+    // with real Roboto metrics it fits a 1440 window (golden 07). The fade is
+    // the safety net for a narrower window — probed here at 1100 with the
+    // wide test font, where the five Plumbing chips genuinely overflow.
+    testWidgets('fades when the service chips overflow a narrow window',
         (tester) async {
-      await pumpRiserEdit(tester, const Size(1440, 900));
+      await pumpRiserEdit(tester, const Size(1100, 900));
       expect(find.byType(ShaderMask), findsOneWidget);
     });
 

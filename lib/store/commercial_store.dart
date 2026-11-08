@@ -19,13 +19,21 @@ library;
 
 import 'package:flutter/widgets.dart' show immutable;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/electrical/advanced_bom.dart';
 import 'package:mechx_engine/electrical/bom.dart';
 import 'package:mechx_engine/electrical/catalog.dart';
 import 'package:mechx_engine/electrical/costing.dart';
 import 'package:mechx_engine/electrical/quotation.dart';
 import 'package:mechx_engine/report/mep_commercial.dart';
+import 'package:mechx_engine/sizing/bom.dart'
+    show ComponentLine, buildEquipmentTakeoff;
 
+import '../ui/strings/app_strings.dart';
+import 'app_state.dart' show localeProvider;
+import 'electrical_feed.dart' show riserEquipmentDetailsProvider;
 import 'electrical_store.dart';
+import 'network_store.dart' show sizingNetworkProvider;
+import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'solve_store.dart';
 
 /// The user-editable commercial inputs: the catalogue pricelist (`sku → unit
@@ -91,6 +99,36 @@ class CommercialController extends Notifier<CommercialSettings> {
   /// Replace the whole settings object (used by `applyDocument` on load).
   void set(CommercialSettings settings) => state = settings;
 
+  /// Round 28 (persist-undo-2-2) — the pricelist and markups are persisted in
+  /// `.mechx` and drive the issued quotation, so each user edit records ONE
+  /// [UndoDomain.settings] step (an edit that changes nothing records
+  /// nothing). [set] (load) stays non-recording.
+  void _commit(CommercialSettings next) {
+    final previous = state;
+    if (_same(previous, next)) return;
+    state = next;
+    ref.read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+          label: MechXStringsData(ref.read(localeProvider))(
+              StringKey.undoLabelPricelist),
+          undo: () => state = previous,
+          redo: () => state = next,
+        ));
+  }
+
+  static bool _same(CommercialSettings a, CommercialSettings b) {
+    if (a.labourRatePerHour != b.labourRatePerHour ||
+        a.overheadPct != b.overheadPct ||
+        a.contingencyPct != b.contingencyPct ||
+        a.marginPct != b.marginPct ||
+        a.priceList.length != b.priceList.length) {
+      return false;
+    }
+    for (final e in a.priceList.entries) {
+      if (b.priceList[e.key] != e.value) return false;
+    }
+    return true;
+  }
+
   /// Set / clear one part's unit price. A null or non-positive [price] removes
   /// the entry (so an empty cell un-prices the line rather than pinning 0).
   void setPrice(String sku, double? price) {
@@ -100,7 +138,7 @@ class CommercialController extends Notifier<CommercialSettings> {
     } else {
       next[sku] = price;
     }
-    state = state.copyWith(priceList: next);
+    _commit(state.copyWith(priceList: next));
   }
 
   /// Remove one part's price.
@@ -108,27 +146,57 @@ class CommercialController extends Notifier<CommercialSettings> {
 
   /// Replace the whole pricelist (e.g. paste / import).
   void setPriceList(Map<String, double> priceList) =>
-      state = state.copyWith(priceList: Map<String, double>.from(priceList));
+      _commit(state.copyWith(priceList: Map<String, double>.from(priceList)));
 
   void setLabourRate(double rate) =>
-      state = state.copyWith(labourRatePerHour: rate < 0 ? 0 : rate);
+      _commit(state.copyWith(labourRatePerHour: rate < 0 ? 0 : rate));
 
   void setOverheadPct(double pct) =>
-      state = state.copyWith(overheadPct: pct.clamp(0.0, 100.0));
+      _commit(state.copyWith(overheadPct: pct.clamp(0.0, 100.0)));
 
   void setContingencyPct(double pct) =>
-      state = state.copyWith(contingencyPct: pct.clamp(0.0, 100.0));
+      _commit(state.copyWith(contingencyPct: pct.clamp(0.0, 100.0)));
 
   void setMarginPct(double pct) =>
-      state = state.copyWith(marginPct: pct.clamp(0.0, 99.9));
+      _commit(state.copyWith(marginPct: pct.clamp(0.0, 99.9)));
 }
 
 /// Derived: the electrical bill of materials over the FULL multi-brand catalogue
 /// (so the matcher binds order codes from every brand), recomputed whenever the
 /// sized electrical result changes.
-final electricalBomProvider = Provider<Bom>(
-  (ref) => buildBom(ref.watch(electricalResultProvider), parts: fullCatalog()),
-);
+///
+/// Breakers match catalogue parts whose breaking capacity covers each board's
+/// prospective fault (the same fault study the schedule's kA tokens read —
+/// audit r8 costing-4), so the quote never prices a 6 kA MCB at an 18 kA bus.
+final electricalBomProvider = Provider<Bom>((ref) {
+  final adv = ref.watch(electricalAdvancedProvider);
+  final sys = ref.watch(electricalResultProvider);
+  // Round 15 — each device matches the SPECIFIED kA the schedule prints.
+  final ka = faultSpecifiedKa(adv.fault);
+  return buildBom(
+    sys,
+    parts: fullCatalog(),
+    requiredIcuKaByPanelId: ka.bus,
+    incomerKaByPanelId: ka.incomers,
+    breakerKaByCircuitId: ka.breakers,
+    // Round 21 (bom-quote-4/-5) — each enclosure at its sized W x H x D, and
+    // the designed control gear / genset + ATS / SPDs / earthing taken off.
+    enclosureByPanelId: adv.enclosure,
+    extraLines: advancedBomLines(
+      project: ref.watch(electricalSizingProjectProvider),
+      sys: sys,
+      controlAssemblies: adv.controlAssemblies,
+      spd: adv.spd,
+      electrode: adv.electrode,
+      powerFactor: adv.powerFactor,
+      // Round 44 — the containment (conduit / tray metres) and metering
+      // (V/A/Hz, kWh meters, CTs, tenant submeters) the issued schedules
+      // print are taken off here too: ONE takeoff with the advanced study.
+      containment: adv.containment,
+      metering: adv.metering,
+    ),
+  );
+});
 
 /// Derived: the priced material estimate — the BOM costed against the live
 /// pricelist. Unmatched lines (no sku, or a sku with no price) are kept but
@@ -160,10 +228,23 @@ final electricalQuotationProvider = Provider<Quotation>((ref) {
 /// pricelist by mechanical key, enriched with the pipe cut-plan (stock bars /
 /// waste). Unpriced lines contribute nothing and are counted, so the pricelist
 /// can prompt the user. Empty when nothing mechanical is sized ⇒ zero subtotal.
+/// Round 30 (costing-2-1) — the drawn PLANT (pumps, tanks, boosters, AHU /
+/// FCU, fans, AC units) taken off per piece by its duty — the same per-node
+/// detail the riser and the schedule print (tank m3 / the machine's motor
+/// kW) — so the quotation never silently omits the largest items.
+final equipmentTakeoffProvider = Provider<List<ComponentLine>>((ref) {
+  return buildEquipmentTakeoff(
+    net: ref.watch(sizingNetworkProvider),
+    dutyByNodeId: ref.watch(riserEquipmentDetailsProvider),
+  );
+});
+
 final mechanicalCostProvider = Provider<MechCostEstimate>((ref) {
   return estimateMechanicalCost(
     pipes: ref.watch(bomProvider),
     fittings: ref.watch(fittingsProvider),
+    components: ref.watch(componentTakeoffProvider),
+    equipment: ref.watch(equipmentTakeoffProvider),
     priceList: ref.watch(commercialSettingsProvider).priceList,
     cutPlan: ref.watch(pipeCutPlanProvider),
   );
@@ -183,6 +264,8 @@ final mepQuotationProvider = Provider<MepQuotation>((ref) {
     electricalBom: ref.watch(electricalBomProvider),
     mechanicalPipes: ref.watch(bomProvider),
     mechanicalFittings: ref.watch(fittingsProvider),
+    mechanicalComponents: ref.watch(componentTakeoffProvider),
+    mechanicalEquipment: ref.watch(equipmentTakeoffProvider),
     labourRate: settings.labourRatePerHour,
     overheadPct: settings.overheadPct,
     contingencyPct: settings.contingencyPct,

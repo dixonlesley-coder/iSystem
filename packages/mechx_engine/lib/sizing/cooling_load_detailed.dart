@@ -190,8 +190,18 @@ final class DetailedCoolingLoadInputs {
   });
 
   /// Number of occupants — explicit count, else density × floor area (rounded).
+  /// DISPLAY ONLY — the people gains use [resolvedOccupantsExact].
   int get resolvedOccupants =>
       occupantCount ?? (peopleDensityPerM2 * floorArea.squareMeters).round();
+
+  /// Occupant count used for the people GAINS — the explicit count, else the
+  /// FRACTIONAL density × floor area. Rounding a density-derived count to an
+  /// integer before multiplying biased small rooms low (a 4.9 m² room at
+  /// 0.1 p/m² rounded to 0 people and lost its whole 130 W people gain), the
+  /// unsafe direction for a coil duty, so the gain is taken on the exact value.
+  double get resolvedOccupantsExact =>
+      occupantCount?.toDouble() ??
+      peopleDensityPerM2 * floorArea.squareMeters;
 
   /// Ventilation airflow (m³/s) — explicit value, else ACH × volume / 3600.
   FlowRate get resolvedVentilationAirflow =>
@@ -270,7 +280,11 @@ final class DetailedCoolingLoad {
   /// Ventilation/infiltration latent gain (W).
   final double ventilationLatentW;
 
-  /// Number of occupants used for the people gains.
+  /// Occupant count for DISPLAY (the explicit count, else density × floor
+  /// area ROUNDED — [DetailedCoolingInputs.resolvedOccupants]). The people
+  /// gains are NOT computed from this integer: they use the fractional
+  /// [DetailedCoolingInputs.resolvedOccupantsExact], so a small room's gain is
+  /// never rounded away.
   final int occupants;
 
   /// Ventilation/infiltration airflow used (m³/s).
@@ -360,8 +374,9 @@ DetailedCoolingLoad estimateDetailedCoolingLoad(
 
   // Internal gains.
   final occupants = inputs.resolvedOccupants;
-  final peopleSensible = occupants * inputs.personSensibleW;
-  final peopleLatent = occupants * inputs.personLatentW;
+  final occupantsExact = inputs.resolvedOccupantsExact;
+  final peopleSensible = occupantsExact * inputs.personSensibleW;
+  final peopleLatent = occupantsExact * inputs.personLatentW;
   final lighting = inputs.lightingWPerM2 * inputs.floorArea.squareMeters;
   final equipment = inputs.equipmentWPerM2 * inputs.floorArea.squareMeters;
 

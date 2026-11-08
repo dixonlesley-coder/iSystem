@@ -2,18 +2,18 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
 import 'package:mechx_engine/report/mep_commercial.dart';
 
 import '../../store/app_state.dart';
 import '../../store/commercial_store.dart';
 import '../../store/project_store.dart';
 import '../inspector/project_panel.dart'
-    show pickExportSave, runExportGuarded;
+    show pickExportSave, reportStringsFor, runExportGuarded;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
-import '../theme/mechx_theme.dart';
+import '../widgets/hub_scaffold.dart';
 import '../widgets/mechx_button.dart';
-import '../widgets/mechx_scrollbar.dart';
 import 'electrical_bom_view.dart';
 import 'pricelist_screen.dart';
 import 'quotation_view.dart';
@@ -30,57 +30,25 @@ class CommercialHub extends ConsumerStatefulWidget {
 }
 
 class _CommercialHubState extends ConsumerState<CommercialHub> {
-  // Owned so the themed scroll indicator (J1) can be dragged, not just shown.
-  final ScrollController _scrollController = ScrollController();
-
-  @override
-  void dispose() {
-    _scrollController.dispose();
-    super.dispose();
-  }
-
   @override
   Widget build(BuildContext context) {
-    final colors = context.colors;
-    final type = context.type;
-
-    return ColoredBox(
-      color: colors.background,
-      child: MechXScrollbar(
-        controller: _scrollController,
-        child: SingleChildScrollView(
-        controller: _scrollController,
-        padding: const EdgeInsets.all(MechXSpacing.xl),
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 920),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(context.strings(StringKey.commercialHubTitle),
-                    style: type.display.copyWith(color: colors.textPrimary)),
-                const SizedBox(height: MechXSpacing.sm),
-                Text(
-                  context.strings(StringKey.commercialHubLead),
-                  style: type.body.copyWith(color: colors.textSecondary),
-                ),
-                const SizedBox(height: MechXSpacing.lg),
-                const _ExportBar(),
-                const SizedBox(height: MechXSpacing.lg),
-                const MechanicalBomView(),
-                const SizedBox(height: MechXSpacing.xl),
-                const ElectricalBomView(),
-                const SizedBox(height: MechXSpacing.xl),
-                const PricelistScreen(),
-                const SizedBox(height: MechXSpacing.xl),
-                const QuotationView(),
-              ],
-            ),
-          ),
-        ),
-        ),
-      ),
+    // The SAME hub frame as Review / Projects / Building (HubScaffold, one
+    // 720-px column): its own 920-px column used to start the title ~100 px
+    // left of every other hub's, so switching hubs made the page jump.
+    return HubScaffold(
+      title: context.strings(StringKey.commercialHubTitle),
+      lead: context.strings(StringKey.commercialHubLead),
+      children: const [
+        _ExportBar(),
+        SizedBox(height: MechXSpacing.lg),
+        MechanicalBomView(),
+        SizedBox(height: MechXSpacing.xl),
+        ElectricalBomView(),
+        SizedBox(height: MechXSpacing.xl),
+        PricelistScreen(),
+        SizedBox(height: MechXSpacing.xl),
+        QuotationView(),
+      ],
     );
   }
 }
@@ -97,63 +65,65 @@ class _ExportBar extends ConsumerWidget {
       children: [
         MechXButton(
           label: context.strings(StringKey.commercialExportBomCsv),
-          onPressed: () => _exportBomCsv(ref),
+          onPressed: () => exportMepBomCsv(ref),
         ),
         MechXButton(
           label: context.strings(StringKey.commercialExportProposalMd),
           primary: true,
-          onPressed: () => _exportProposalMarkdown(ref),
+          onPressed: () => exportMepProposalMarkdown(ref),
         ),
       ],
     );
   }
-
-  // Both commercial exports route through the shared export guard (H3): the
-  // zero-length completeness gate, cancel ⇒ no pill, success ⇒ the "Exported
-  // ..." confirmation, and an IO failure surfaces instead of no-oping.
-  Future<void> _exportBomCsv(WidgetRef ref) => runExportGuarded(
-        ref,
-        name: 'MEP BOM',
-        write: () async {
-          final name = ref.read(projectControllerProvider).name;
-          // The unified M+E+P BOM (mechanical pipe/duct + fittings, then the
-          // electrical catalogue lines) in ONE CSV.
-          final csv = mepBomToCsv(
-            ref.read(mechanicalCostProvider),
-            ref.read(electricalCostProvider),
-          );
-          final full = await pickExportSave(ref,
-              dialogTitle: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleElectricalBom),
-              fileName: '$name-mep-bom.csv',
-              ext: 'csv');
-          if (full == null) return false;
-          await File(full).writeAsString(csv);
-          return true;
-        },
-      );
-
-  Future<void> _exportProposalMarkdown(WidgetRef ref) => runExportGuarded(
-        ref,
-        name: 'quotation proposal',
-        write: () async {
-          final name = ref.read(projectControllerProvider).name;
-          // The unified M+E+P proposal — per-discipline BOM tables + the combined
-          // costed roll-up.
-          final md = mepQuotationToMarkdown(
-            ref.read(mepQuotationProvider),
-            mechanical: ref.read(mechanicalCostProvider),
-            electrical: ref.read(electricalCostProvider),
-            projectName: name,
-          );
-          final full = await pickExportSave(ref,
-              dialogTitle: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleElectricalProposal),
-              fileName: '$name-mep-proposal.md',
-              ext: 'md');
-          if (full == null) return false;
-          await File(full).writeAsString(md);
-          return true;
-        },
-      );
 }
+
+// Both commercial exports route through the shared export guard (H3): the
+// zero-length completeness gate, cancel ⇒ no pill, success ⇒ the "Exported
+// ..." confirmation, and an IO failure surfaces instead of no-oping.
+// Public so the Export sheet (Ctrl/Cmd+E) lists the same two rows.
+Future<void> exportMepBomCsv(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'MEP BOM',
+      write: () async {
+        final name = ref.read(projectControllerProvider).name;
+        // The unified M+E+P BOM (mechanical pipe/duct + fittings, then the
+        // electrical catalogue lines) in ONE CSV.
+        final csv = mepBomToCsv(
+          ref.read(mechanicalCostProvider),
+          ref.read(electricalCostProvider),
+        );
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleElectricalBom),
+            fileName: '$name-mep-bom.csv',
+            ext: 'csv');
+        if (full == null) return false;
+        await File(full).writeAsString(excelCsv(csv));
+        return true;
+      },
+    );
+
+Future<void> exportMepProposalMarkdown(WidgetRef ref) => runExportGuarded(
+      ref,
+      name: 'quotation proposal',
+      write: () async {
+        final name = ref.read(projectControllerProvider).name;
+        // The unified M+E+P proposal — per-discipline BOM tables + the combined
+        // costed roll-up.
+        final md = mepQuotationToMarkdown(
+          ref.read(mepQuotationProvider),
+          mechanical: ref.read(mechanicalCostProvider),
+          electrical: ref.read(electricalCostProvider),
+          projectName: name,
+          strings: reportStringsFor(ref),
+        );
+        final full = await pickExportSave(ref,
+            dialogTitle: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleElectricalProposal),
+            fileName: '$name-mep-proposal.md',
+            ext: 'md');
+        if (full == null) return false;
+        await File(full).writeAsString(md);
+        return true;
+      },
+    );

@@ -39,12 +39,14 @@ void main() {
     });
   });
 
-  group('invertLevelLabel (B29)', () {
-    test('start elevation minus slope x developed length', () {
-      // 3.00 m at slope 0.01 drops 0.03; start 0.0 -> -0.03.
-      expect(invertLevelLabel(0.0, 3.0, 0.01), 'IL -0.03');
-      // A 12 m run at 0.02 drops 0.24 from +1.5 -> +1.26.
-      expect(invertLevelLabel(1.5, 12.0, 0.02), 'IL 1.26');
+  group('fallLabel (B29, Round 17 follow-up)', () {
+    test('slope x developed length, datum-free', () {
+      // 3.00 m at slope 0.01 falls 0.03 m; 1/0.01 = 1:100.
+      expect(fallLabel(3.0, 0.01), 'fall 0.03 m @ 1:100');
+      // A 12 m run at 0.02 falls 0.24 m; 1/0.02 = 1:50.
+      expect(fallLabel(12.0, 0.02), 'fall 0.24 m @ 1:50');
+      // No fabricated invert: the readout never carries an 'IL' level.
+      expect(fallLabel(12.0, 0.02).contains('IL'), isFalse);
     });
   });
 
@@ -92,7 +94,7 @@ void main() {
     net.placeRunPoint('s1', 0, const Offset(300, 100)); // pending = (300,100)
   }
 
-  testWidgets('B21/B29: calibrated drainage draw shows polar + invert lines',
+  testWidgets('B21/B29: calibrated drainage draw shows polar + fall lines',
       (tester) async {
     final c = ProviderContainer();
     addTearDown(c.dispose);
@@ -103,12 +105,12 @@ void main() {
     final p = painterOf(tester);
     expect(p.polarText, isNotNull);
     expect(p.polarText, contains('m @'));
-    // Gravity service + calibrated + a start node ⇒ the invert line is present.
-    expect(p.ilText, isNotNull);
-    expect(p.ilText!.startsWith('IL '), isTrue);
+    // Gravity service + calibrated ⇒ the datum-free FALL line is present:
+    // the 100 px leg at 0.01 m/px is 1.00 m, which falls 0.01 m at 1:100.
+    expect(p.ilText, 'fall 0.01 m @ 1:100');
   });
 
-  testWidgets('B29: invert line is omitted on an uncalibrated sheet',
+  testWidgets('B29: fall line is omitted on an uncalibrated sheet',
       (tester) async {
     final c = ProviderContainer();
     addTearDown(c.dispose);

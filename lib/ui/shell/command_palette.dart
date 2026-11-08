@@ -24,10 +24,11 @@ import '../../store/calibration_store.dart';
 import '../../store/command_store.dart';
 import '../../store/electrical_store.dart';
 import '../../store/history_store.dart';
+import '../../store/inspector_store.dart';
 import '../../store/layer_store.dart';
 import '../../store/network_store.dart';
-import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../../store/snap_settings_store.dart' show refLineModeProvider;
 import '../inspector/project_panel.dart'
     show
         exportAnnotatedPlanPdf,
@@ -44,6 +45,7 @@ import '../shell/duplicate_floor_dialog.dart';
 import '../shell/nav_rail.dart';
 import '../shell/project_io.dart';
 import '../shell/templates_dialog.dart';
+import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../widgets/glass_surface.dart';
 import '../theme/mechx_theme.dart';
@@ -60,11 +62,16 @@ class _Command {
   final String shortcut;
   final VoidCallback run;
 
+  /// Extra titles matched like [title] but never shown — keeps a merged
+  /// command findable under its former names (e.g. 'Sources').
+  final List<String> aliases;
+
   const _Command({
     required this.id,
     required this.title,
     this.subtitle = '',
     this.shortcut = '',
+    this.aliases = const [],
     required this.run,
   });
 }
@@ -91,7 +98,22 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
     ref.read(measureModeProvider.notifier).set(measure);
     ref.read(tankModeProvider.notifier).set(tank);
     ref.read(roomModeProvider.notifier).set(room);
+    // Round 12 — the B12 ref-line trace is one of the exclusive modes too.
+    ref.read(refLineModeProvider.notifier).set(false);
     net.setTool(DrawTool.select);
+  }
+
+  // Round 12 (ui-journey-palette-tool-keeps-measure-mode) — the palette's draw
+  // tools go through the SAME mutual exclusion as the V/R/E keys and the Draw
+  // toolbar: every annotation mode (measure / tank / room / ref line) is
+  // cleared before the tool is set, so 'Tool: Select' after M no longer leaves
+  // Measure armed (canvas taps were still adding dimensions).
+  void armTool(DrawTool tool) {
+    ref.read(measureModeProvider.notifier).set(false);
+    ref.read(tankModeProvider.notifier).set(false);
+    ref.read(roomModeProvider.notifier).set(false);
+    ref.read(refLineModeProvider.notifier).set(false);
+    net.setTool(tool);
   }
 
   return [
@@ -119,6 +141,25 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Design view',
       shortcut: 'Ctrl+3',
       run: () => openDesign(WorkspaceView.electrical),
+    ),
+    // The ONE electrical Supply inspector (utility / earthing / backup /
+    // advanced). The former 'Service & Earthing' and 'Sources' editors were
+    // merged into it, so their titles stay as search aliases.
+    _Command(
+      id: 'electrical.supply',
+      title: context.strings(StringKey.paletteElectricalSupply),
+      subtitle: context.strings(StringKey.paletteElectricalSupplySubtitle),
+      aliases: [
+        context.strings(StringKey.electricalSupply),
+        context.strings(StringKey.electricalServiceEarthing),
+        context.strings(StringKey.electricalSources),
+        'Service & Earthing',
+        'Sources',
+      ],
+      run: () {
+        openDesign(WorkspaceView.electrical);
+        ref.read(electricalInspectorTargetProvider.notifier).showSupply();
+      },
     ),
     _Command(
       id: 'view.review',
@@ -153,6 +194,30 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Project hub + exports',
       shortcut: 'Ctrl+7',
       run: () => shell.set(ShellSection.projects),
+    ),
+    // Document control + equipment specs live on the Projects page (moved off
+    // the Layout inspector): jump there with the section already open.
+    _Command(
+      id: 'project.docControl',
+      title: context.strings(StringKey.paletteEditDocControl),
+      subtitle: context.strings(StringKey.paletteEditDocControlSub),
+      run: () {
+        ref
+            .read(sectionVisibilityProvider.notifier)
+            .set(kSignOffSectionKey, true);
+        shell.set(ShellSection.projects);
+      },
+    ),
+    _Command(
+      id: 'project.equipmentSpecs',
+      title: context.strings(StringKey.paletteEditEquipmentSpecs),
+      subtitle: context.strings(StringKey.paletteEditEquipmentSpecsSub),
+      run: () {
+        ref
+            .read(sectionVisibilityProvider.notifier)
+            .set(kEquipmentSpecSectionKey, true);
+        shell.set(ShellSection.projects);
+      },
     ),
     _Command(
       id: 'view.preferences',
@@ -197,7 +262,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       title: 'Tool: Select',
       subtitle: 'Draw tool',
       shortcut: 'V',
-      run: () => net.setTool(DrawTool.select),
+      run: () => armTool(DrawTool.select),
     ),
     _Command(
       id: 'tool.run',
@@ -206,7 +271,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       shortcut: 'R',
       run: () {
         openDesign(WorkspaceView.plan);
-        net.setTool(DrawTool.drawRun);
+        armTool(DrawTool.drawRun);
       },
     ),
     _Command(
@@ -216,7 +281,7 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       shortcut: 'E',
       run: () {
         openDesign(WorkspaceView.plan);
-        net.setTool(DrawTool.drawRiser);
+        armTool(DrawTool.drawRiser);
       },
     ),
     _Command(
@@ -268,37 +333,10 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Remove all drawn elements (undoable)',
       run: net.clear,
     ),
-    _Command(
-      id: 'floor.dupUp',
-      title: 'Duplicate floor up',
-      subtitle: "Copy this floor's runs to the floor above",
-      run: () {
-        final sheets = ref.read(sheetsControllerProvider);
-        final levelCount =
-            ref.read(projectControllerProvider).building.levelCount;
-        final current = sheets.current;
-        if (current == null) return;
-        final fromFloor = sheets.floorFor(current.id, levelCount);
-        final toFloor = fromFloor + 1;
-        if (toFloor >= levelCount) return;
-        // Resolve the destination by the sheet→floor MAPPING (a sheet may carry
-        // an explicit floor override, so list index need not equal floor index).
-        String? toSheetId;
-        for (final s in sheets.sheets) {
-          if (sheets.floorFor(s.id, levelCount) == toFloor) {
-            toSheetId = s.id;
-            break;
-          }
-        }
-        if (toSheetId == null) return;
-        net.duplicateFloor(
-          fromSheetId: current.id,
-          fromFloor: fromFloor,
-          toSheetId: toSheetId,
-          toFloor: toFloor,
-        );
-      },
-    ),
+    // Round 29 (ui-journeys-3-palette-dup-floor-up-silent) — the old
+    // 'Duplicate floor up' is gone: it failed silently three ways (no
+    // sheet, top floor, no plan above) and duplicated the dialog below,
+    // which covers it honestly (disabled 'no plan' targets + a status toast).
     _Command(
       id: 'floor.dupRange',
       title: 'Duplicate floor to…',
@@ -316,11 +354,29 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       title: 'Start calibration',
       subtitle: 'Mark a known distance on the sheet',
       run: () {
+        // Round 29 (ui-journeys-3-palette-calibrate-no-sheet) — the stepper's
+        // F12 guard: with no plan loaded the Layout shows its empty state
+        // (the calibration overlay never mounts), so an armed calibration
+        // would be invisible — send the engineer to Import instead.
+        if (ref.read(sheetsControllerProvider).sheets.isEmpty) {
+          importPlan(context, ref);
+          return;
+        }
         openDesign(WorkspaceView.plan);
         ref.read(calibrationControllerProvider.notifier).start();
       },
     ),
-    // — Deliverable exports —
+    // — Deliverable exports — the ONE Export sheet first (every deliverable,
+    // grouped), then the individual exports for type-to-run.
+    _Command(
+      id: 'export.sheet',
+      title: context.strings(StringKey.exportSheetPaletteCommand),
+      subtitle: context.strings(StringKey.exportSheetPaletteSubtitle),
+      shortcut: 'Ctrl+E',
+      // Runs AFTER the palette closes; opening the sheet would close the
+      // palette anyway (one scrim at a time).
+      run: () => ref.read(exportSheetProvider.notifier).open(),
+    ),
     _Command(
       id: 'export.calc',
       title: 'Export calc report',
@@ -397,6 +453,15 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       shortcut: 'Ctrl+I',
       run: () => importPlan(context, ref),
     ),
+    // The multi-file append (one plan file per floor) — the keyboard path to
+    // the sheet rail's right-click 'Add sheets from files…' row.
+    _Command(
+      id: 'project.addSheets',
+      title: context.strings(StringKey.sheetRailAddFiles),
+      subtitle: 'Append every picked PDF / DXF / DWG as new sheets',
+      aliases: const ['add sheets', 'multi file', 'append plans'],
+      run: () => addSheetsFromFiles(context, ref),
+    ),
     _Command(
       id: 'project.open',
       title: 'Open project',
@@ -425,6 +490,18 @@ List<_Command> _buildCommands(WidgetRef ref, BuildContext context) {
       subtitle: 'Pick a new file',
       shortcut: 'Ctrl+Shift+S',
       run: () => saveProject(ref, saveAs: true),
+    ),
+    // The heatmap what-if: flip upfeed <-> downfeed in one keystroke (the
+    // strategy itself is edited on the Building page's Design inputs card).
+    _Command(
+      id: 'project.feed.toggle',
+      title: context.strings(StringKey.paletteSwitchFeed),
+      run: () => setFeedStrategyUndoable(
+        ref.read,
+        ref.read(feedStrategyProvider) == FeedStrategy.upfeed
+            ? FeedStrategy.downfeed
+            : FeedStrategy.upfeed,
+      ),
     ),
     _Command(
       id: 'theme.toggle',
@@ -455,7 +532,12 @@ class CommandPaletteOverlay extends ConsumerWidget {
             // Swallow taps on the card itself (don't dismiss).
             child: GestureDetector(
               onTap: () {},
-              child: const _PaletteCard(),
+              // Commands run on THIS overlay's ref + context: it stays
+              // mounted after the palette closes, while the card is disposed
+              // the moment a command runs — an async command (an export's
+              // save dialog) must never touch a disposed ref (review: it threw
+              // after the dialog and could wedge the export guard).
+              child: _PaletteCard(hostRef: ref, hostContext: context),
             ),
           ),
         ),
@@ -465,7 +547,11 @@ class CommandPaletteOverlay extends ConsumerWidget {
 }
 
 class _PaletteCard extends ConsumerStatefulWidget {
-  const _PaletteCard();
+  const _PaletteCard({required this.hostRef, required this.hostContext});
+
+  /// The long-lived overlay's ref / context the commands run on.
+  final WidgetRef hostRef;
+  final BuildContext hostContext;
 
   @override
   ConsumerState<_PaletteCard> createState() => _PaletteCardState();
@@ -496,7 +582,7 @@ class _PaletteCardState extends ConsumerState<_PaletteCard> {
   void _close() => ref.read(commandPaletteOpenProvider.notifier).close();
 
   List<_Command> _filtered() {
-    final all = _buildCommands(ref, context);
+    final all = _buildCommands(widget.hostRef, widget.hostContext);
     final recent = ref.read(recentCommandsProvider);
     // Recency rank: 0 = most-recently-run, larger = older, huge = never run.
     int recencyRank(_Command c) {
@@ -523,7 +609,11 @@ class _PaletteCardState extends ConsumerState<_PaletteCard> {
     // by recency (a recently-run command wins an equal-score tie).
     final scored = <(int, int, _Command)>[];
     for (final c in all) {
-      final s = commandMatchScore(_query, c.title, c.subtitle);
+      var s = commandMatchScore(_query, c.title, c.subtitle);
+      for (final alias in c.aliases) {
+        final a = commandMatchScore(_query, alias);
+        if (a != null && (s == null || a > s)) s = a;
+      }
       if (s != null) scored.add((s, recencyRank(c), c));
     }
     scored.sort((a, b) {
@@ -708,9 +798,15 @@ class _CommandRow extends StatelessWidget {
               ),
               if (command.subtitle.isNotEmpty) ...[
                 const SizedBox(width: MechXSpacing.sm),
-                Text(
-                  command.subtitle,
-                  style: type.caption.copyWith(color: colors.textMuted),
+                // Round 29 — a long subtitle ellipsizes instead of
+                // overflowing the row (it was unconstrained).
+                Flexible(
+                  child: Text(
+                    command.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: type.caption.copyWith(color: colors.textMuted),
+                  ),
                 ),
               ],
               // Right-aligned keyboard-shortcut hint (a keycap), for the rows

@@ -9,6 +9,8 @@
 /// test is orchestration-level.
 library;
 
+import 'dart:math' as math;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/data/project_document.dart';
@@ -24,6 +26,7 @@ import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/air_velocity.dart';
+import 'package:mechx_engine/sizing/network_sizing.dart' show SizingContext;
 import 'package:mechx_engine/standards/sni.dart' show PlumbingFixture;
 import 'package:mechx_engine/standards/ventilation.dart' show RoomType;
 import 'package:mechx_engine/units.dart';
@@ -233,6 +236,10 @@ void main() {
         fromId: 'rd',
         toId: 'out',
         service: ServiceType.rainwater,
+        // A DOWNPIPE is a riser edge: since audit 2026-10 water-drainage-2
+        // only risers take the vertical downpipe table (a horizontal
+        // rainwater run is sized as a Manning gravity drain).
+        kind: EdgeKind.riser,
       );
       c.read(networkControllerProvider.notifier).loadNetwork(
           const Network(nodes: [drain, outlet], edges: [pipe]));
@@ -310,14 +317,12 @@ void main() {
       final c = _container();
       _calibrate(c);
       c.read(sheetsControllerProvider.notifier).loadDemoSheets();
-      // A lavatory branch (DFU 1) sizes to the branch table's minimum, DN40,
-      // and at the default 1:100 laid slope with Manning n = 0.010 the
-      // full-bore velocity is v = (1/n) * R^(2/3) * S^(1/2) with R = D/4:
-      //   DN40 -> R = 0.0100 -> R^(2/3) = 0.0464 -> v = 100*0.0464*0.1 = 0.46
-      // — under the 0.6 m/s self-cleansing floor. It is the smallest pipe the
-      // DFU table allows, so no pipe change can fix it: the engine leaves the
-      // flag true and the Review list stays quiet about it (the real levers,
-      // the laid slope and the grouped discharge, are separate inputs).
+      // A lavatory branch (DFU 1) sizes to the branch table's minimum, DN40.
+      // Round 33 — a ≤ DN65 branch is LAID at no flatter than 1:50, so with
+      // Manning n = 0.010 the full-bore velocity v = (1/n)·R^(2/3)·S^(1/2),
+      // R = D/4: DN40 -> 100 × 0.0464 × √0.02 = 0.656 m/s. It is the smallest
+      // pipe the DFU table allows, and the engine leaves the flag true and
+      // the Review list quiet about it.
       const basin = NetNode(
         id: 'wb',
         sheetId: 's1',
@@ -340,29 +345,39 @@ void main() {
 
       final sizing = c.read(sizingProvider)['br']!;
       expect(sizing.diameter.inMillimeters, closeTo(40, 1e-9));
-      expect(sizing.velocity.metersPerSecond, lessThan(0.6));
+      expect(sizing.velocity.metersPerSecond,
+          closeTo(0.464158883361 * math.sqrt(2), 1e-9));
       expect(sizing.selfCleansingOk, isTrue, reason: 'at the DFU minimum (G1)');
       expect(c.read(selfCleansingDefectsProvider), isEmpty);
 
       final issues = c.read(designIssuesProvider);
       expect(issues.where((i) => i.kind == 'drainage-self-cleansing'), isEmpty);
       // …and the gravity TOO-LOW velocity must not leak out as the other row
-      // either: the edge inspector still reports it honestly, but neither
-      // Review row can name an action here.
+      // either. Round 17 follow-up (gravity-3-5): the edge inspector now
+      // REPEATS the engine verdict instead of re-deriving it — at the code
+      // minimum no smaller pipe is allowed, so the 0.46 m/s figure prints as
+      // OK there too (it used to show a LOW defect Review and the report did
+      // not, pointing the wrong way: a bigger pipe would run slower).
       expect(issues.where((i) => i.kind.startsWith('water-velocity:')), isEmpty);
       expect(c.read(waterVelocityChecksProvider)['br']!.verdict,
-          VelocityBandVerdict.tooLow);
+          VelocityBandVerdict.ok);
     });
 
     test('a drainage branch hand-sized ABOVE the DFU minimum IS a locatable '
         'self-cleansing advisory, reported ONCE', () {
-      final c = _container();
+      // Round 33 — on a ROUGH pipe (Manning n = 0.015): the same lavatory
+      // branch (DFU 1 ⇒ DN40 minimum) hand-picked at DN50, laid at its 1:50
+      // minimum: v = (1/0.015) × 0.0539 × √0.02 = 0.508 m/s — under 0.6 m/s,
+      // and actionable by pipe (DN40 is compliant and runs faster), so the
+      // advisory fires. (At n = 0.010 every pipe laid at its own minimum fall
+      // clears 0.6 m/s.)
+      final c = ProviderContainer(overrides: [
+        sizingContextProvider.overrideWithValue(
+            const SizingContext(drainageManningN: 0.015)),
+      ]);
+      addTearDown(c.dispose);
       _calibrate(c);
       c.read(sheetsControllerProvider.notifier).loadDemoSheets();
-      // Same lavatory branch (DFU 1 ⇒ DN40 minimum), but hand-picked at DN50:
-      //   DN50 -> R = 0.0125 -> R^(2/3) = 0.0539 -> v = 100*0.0539*0.1 = 0.54
-      // still under 0.6 m/s — and now it IS actionable by pipe (DN40 is
-      // compliant and runs faster), so the advisory fires.
       const basin = NetNode(
         id: 'wb',
         sheetId: 's1',
@@ -409,6 +424,99 @@ void main() {
       // it used to read OK against an unreachable 3.0 m/s ceiling).
       expect(c.read(waterVelocityChecksProvider)['br']!.verdict,
           VelocityBandVerdict.tooLow);
+    });
+
+    test('a RAINWATER collector below self-cleansing gets its own kind and '
+        'slope-only copy, never the drainage DFU/discharge advice', () {
+      // A rainwater collector is auto-sized on the storm runoff alone: there is
+      // no DFU table minimum and no fixture discharge to group onto it, so the
+      // drainage copy would be false. The engine verdict is injected here (the
+      // fan-in is what is under test; the verdict is the engine's own flag).
+      final c = ProviderContainer(overrides: [
+        selfCleansingDefectsProvider.overrideWithValue(const {'rw', 'br'}),
+      ]);
+      addTearDown(c.dispose);
+      _calibrate(c);
+      c.read(sheetsControllerProvider.notifier).loadDemoSheets();
+      const nodes = [
+        NetNode(id: 'a', sheetId: 's1', x: 0, y: 0, floorIndex: 0),
+        NetNode(id: 'b', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+        NetNode(id: 'c', sheetId: 's1', x: 200, y: 0, floorIndex: 0),
+      ];
+      const edges = [
+        NetEdge(
+            id: 'rw', fromId: 'a', toId: 'b', service: ServiceType.rainwater),
+        NetEdge(
+            id: 'br', fromId: 'b', toId: 'c', service: ServiceType.drainage),
+      ];
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: nodes, edges: edges));
+
+      final issues = c.read(designIssuesProvider);
+      final rain =
+          issues.where((i) => i.kind == 'rainwater-self-cleansing').toList();
+      expect(rain.length, 1);
+      expect(rain.single.severity, IssueSeverity.info);
+      expect(rain.single.locate!.edgeId, 'rw');
+      expect(rain.single.title,
+          'Rainwater collector below self-cleansing velocity');
+      expect(rain.single.message, contains('steepen the laid slope'));
+      expect(rain.single.message, isNot(contains('discharge')));
+      expect(rain.single.message, isNot(contains('DFU')));
+      // The drainage branch keeps its own kind + copy.
+      final drain =
+          issues.where((i) => i.kind == 'drainage-self-cleansing').toList();
+      expect(drain.length, 1);
+      expect(drain.single.locate!.edgeId, 'br');
+      expect(drain.single.message, contains('group more discharge'));
+    });
+
+    test('a real auto-sized rainwater collector flagged by the ENGINE reaches '
+        'Review under the rainwater kind', () {
+      final c = _container();
+      _calibrate(c);
+      c.read(sheetsControllerProvider.notifier).loadDemoSheets();
+      // A tiny (2 m2) roof catchment drained by a horizontal collector: the
+      // engine sizes the collector on Manning (water-drainage-2) and lands on
+      // the smallest standard drain, DN50. At the default 1:100 slope,
+      // n = 0.010, DN50 full-bore:
+      //   R = 0.050/4 = 0.0125 m -> R^(2/3) = 0.0539
+      //   v = (1/0.010) * 0.0539 * sqrt(0.01) = 0.54 m/s  < 0.6
+      // so the collector is genuinely below self-cleansing.
+      const nodes = [
+        NetNode(
+          id: 'rd',
+          sheetId: 's1',
+          x: 0,
+          y: 0,
+          floorIndex: 0,
+          component: NodeComponent.roofDrain,
+          roofAreaM2: 2,
+        ),
+        NetNode(id: 'out', sheetId: 's1', x: 100, y: 0, floorIndex: 0),
+      ];
+      const edges = [
+        NetEdge(
+            id: 'col',
+            fromId: 'rd',
+            toId: 'out',
+            service: ServiceType.rainwater),
+      ];
+      c
+          .read(networkControllerProvider.notifier)
+          .loadNetwork(const Network(nodes: nodes, edges: edges));
+      final sized = c.read(sizingProvider)['col'];
+      expect(sized, isNotNull);
+      expect(sized!.diameter.inMillimeters, closeTo(50, 1e-9));
+      expect(sized.velocity.metersPerSecond, closeTo(0.539, 0.001));
+      expect(sized.selfCleansingOk, isFalse);
+      final issues = c.read(designIssuesProvider);
+      expect(issues.where((i) => i.kind == 'drainage-self-cleansing'), isEmpty);
+      final rain =
+          issues.where((i) => i.kind == 'rainwater-self-cleansing').toList();
+      expect(rain, hasLength(1));
+      expect(rain.single.locate!.edgeId, 'col');
     });
 
     test('an over-velocity pressurized run fans in as a water-velocity warning',
@@ -522,36 +630,47 @@ void main() {
           ));
     }
 
-    test('at the 1:100 default the advisory is silent (its threshold is 1:200)',
-        () {
+    // Round 9 (plumbing-rules-min-slope-threshold) — the floor is per pipe
+    // size: the 1-DFU lavatory branch sizes DN40 (branch table), and a branch
+    // ≤ DN65 needs 2 % (1:50). Round 33 — a drainage run is LAID at no
+    // flatter than its own floor (`laidGravitySlope`, the fall the plan
+    // prints), so the 1:100 project default lays the DN40 at 1:50 and the
+    // advisory judged at that fall stays silent; the drawing and the advisory
+    // can no longer contradict each other.
+    test('a DN40 branch at the 1:100 default is laid at 1:50: silent', () {
       final c = _container();
       seedDrainage(c);
       expect(c.read(drainageSlopeProvider), 0.01);
+      expect(c.read(sizingProvider)['br']!.diameter.inMillimeters, 40);
+      expect(
+          c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
+          isEmpty);
+      c.read(drainageSlopeProvider.notifier).set(0.02);
       expect(
           c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
           isEmpty);
     });
 
-    test('laying the branch at 1:250 trips it, and re-sizes on that gradient',
-        () {
+    test('the slope input reaches the sizer above the per-DN floor', () {
       final c = _container();
       seedDrainage(c);
       final vBefore = c.read(sizingProvider)['br']!.velocity.metersPerSecond;
 
-      // 1:250 = 0.004 m/m, under the engine's 0.005 minimum-slope threshold.
+      // 1:250 = 0.004 m/m, under every per-DN floor: the DN40 stays laid at
+      // its 1:50 minimum — same velocity, no advisory.
       c.read(drainageSlopeProvider.notifier).set(0.004);
       expect(c.read(drainageSlopeProvider), 0.004);
+      expect(
+          c.read(designIssuesProvider).where((i) => i.kind == 'drainage-slope'),
+          isEmpty);
+      expect(c.read(sizingProvider)['br']!.velocity.metersPerSecond,
+          closeTo(vBefore, 1e-12));
 
-      final advisory = c
-          .read(designIssuesProvider)
-          .firstWhere((i) => i.kind == 'drainage-slope');
-      expect(advisory.severity, IssueSeverity.info);
-      expect(advisory.locate!.edgeId, 'br');
-
-      // The slope also reaches the SIZER: v scales with sqrt(S), so dropping
-      // 0.01 -> 0.004 scales the Manning velocity by sqrt(0.4) = 0.6325.
+      // A project slope STEEPER than the floor (1:25 = 0.04) is the laid
+      // fall: v scales with sqrt(S), sqrt(0.04 / 0.02) = 1.41421.
+      c.read(drainageSlopeProvider.notifier).set(0.04);
       final vAfter = c.read(sizingProvider)['br']!.velocity.metersPerSecond;
-      expect(vAfter, closeTo(vBefore * 0.632455, 1e-6));
+      expect(vAfter, closeTo(vBefore * 1.414214, 1e-6));
     });
   });
 
@@ -569,6 +688,15 @@ void main() {
                 floorIndex: 0,
                 role: NodeRole.plant,
               ),
+              // Round 16 — a circulated MAIN (the recirculation keeps the
+              // main hot; the fixture branch is a dead leg it never reaches).
+              NetNode(
+                id: 'hwm',
+                sheetId: 's1',
+                x: 200,
+                y: 0,
+                floorIndex: 0,
+              ),
               NetNode(
                 id: 'hw1',
                 sheetId: 's1',
@@ -581,8 +709,14 @@ void main() {
             ],
             edges: [
               NetEdge(
-                id: 'hw',
+                id: 'hwmain',
                 fromId: 'hw0',
+                toId: 'hwm',
+                service: ServiceType.hotWater,
+              ),
+              NetEdge(
+                id: 'hw',
+                fromId: 'hwm',
                 toId: 'hw1',
                 service: ServiceType.hotWater,
               ),

@@ -26,6 +26,7 @@ import '../sizing/network_sizing.dart';
 import '../standards/duct_products.dart';
 import '../units.dart';
 import 'network.dart';
+import 'oriented_paths.dart';
 
 /// Result of [solveDuctStatic]: the fan total static pressure and the index
 /// (critical, longest-friction) terminal that sets it.
@@ -37,9 +38,19 @@ class DuctStaticSolution {
   /// Id of the index (worst-served) node.
   final String criticalNodeId;
 
+  /// Round 31 (hvac-5-3) — the part of [totalStaticPressure] spent on the
+  /// unit's outdoor-air INTAKE path (0 when none is drawn). Round 76 — the
+  /// SERIES-side static: the intake on supply air, the DISCHARGE side
+  /// (toward the root fan / the outlet louvre) on extract air. A caller that
+  /// combines this supply static with a RETURN drawn to the same unit takes
+  /// the intake and the return in PARALLEL (both enter the mixing box):
+  /// `(total - intake) + max(intake, return)`.
+  final Pressure intakeStaticPressure;
+
   const DuctStaticSolution({
     required this.totalStaticPressure,
     required this.criticalNodeId,
+    this.intakeStaticPressure = const Pressure(0),
   });
 }
 
@@ -55,6 +66,8 @@ DuctStaticSolution solveDuctStatic({
   required BuildingLevels building,
   Pressure terminalLoss = const Pressure(30),
   double fittingFactor = 1.3,
+  MountingHeights mounting = const MountingHeights(),
+  Set<String> stopAtNodeIds = const {},
 }) {
   // Adjacency over THIS service only.
   final adjacency = <String, List<({NetEdge edge, String other})>>{};
@@ -66,55 +79,136 @@ DuctStaticSolution solveDuctStatic({
         .add((edge: e, other: e.fromId));
   }
 
-  // BFS from the fan accumulating cumulative friction (Pa) along the tree path.
-  final staticPa = <String, double>{fanNodeId: 0.0};
-  final queue = <String>[fanNodeId];
-  var head = 0;
-  while (head < queue.length) {
-    final current = queue[head];
-    head++;
-    final currentStatic = staticPa[current]!;
-    final links = adjacency[current];
-    if (links == null) continue;
-    for (final link in links) {
-      if (staticPa.containsKey(link.other)) continue; // visited (tree)
-      final edge = link.edge;
-      var edgePa = 0.0;
-      final edgeSizing = sizing[edge.id];
-      if (edgeSizing != null) {
-        final flow = edgeFlows[edge.id] ?? const FlowRate(0);
-        final length = edgeLength(
-          edge,
-          net,
-          calibrationBySheet: calibrationBySheet,
-          building: building,
+  // Static (Pa) along the governing path from the fan, each duct walked in
+  // its sized flow direction (mech-props-3 — see [orientedPathCost]).
+  double edgePaArriving(NetEdge edge, String arriving) {
+    var edgePa = 0.0;
+    final edgeSizing = sizing[edge.id];
+    if (edgeSizing == null) return 0.0;
+    final flow = edgeFlows[edge.id] ?? const FlowRate(0);
+    final length = edgeLength(
+      edge,
+      net,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      mounting: mounting,
+    );
+    edgePa = ductFrictionPaPerMetre(
+          flow,
+          edgeSizing.diameter,
+          // Per-segment material → wall roughness ε. The product defaults by
+          // service (PU for AC supply/return, BJLS for exhaust) when unset.
+          roughness: ductRoughnessFor(effectiveDuctProductFor(edge)),
+        ) *
+        length.meters *
+        fittingFactor;
+    // Inline air restrictor (damper / VAV) we're arriving at: add its static
+    // loss C·ρv²/2 (velocity from the feeding duct), so it propagates to
+    // every downstream node — the air-path analogue of the valve minor
+    // loss. C = 0 (no component / not a restrictor) ⇒ no change.
+    final c = net.nodeById(arriving)?.component?.airLossC ?? 0;
+    if (c > 0) {
+      final w = edgeSizing.width;
+      final h = edgeSizing.height;
+      if (w != null && h != null && w.meters > 0 && h.meters > 0) {
+        // Rectangular duct: the restrictor's velocity pressure uses the
+        // TRUE section velocity Q/(W·H). The Huebscher equivalent diameter
+        // in `edgeSizing.diameter` is an equal-FRICTION equivalent whose
+        // circle is smaller than W·H, so it overstated v (~+18 % ρv²/2).
+        edgePa += c *
+            airVelocityPressurePa(
+                Velocity(flow.cubicMetersPerSecond / (w.meters * h.meters)));
+      } else {
+        edgePa += ductFittingLossPa(
+          c: c,
+          flow: flow,
+          diameter: edgeSizing.diameter,
         );
-        edgePa = ductFrictionPaPerMetre(
-              flow,
-              edgeSizing.diameter,
-              // Per-segment material → wall roughness ε. The product defaults by
-              // service (PU for AC supply/return, BJLS for exhaust) when unset.
-              roughness: ductRoughnessFor(effectiveDuctProductFor(edge)),
-            ) *
-            length.meters *
-            fittingFactor;
-        // Inline air restrictor (damper / VAV) we're arriving at: add its static
-        // loss C·ρv²/2 (velocity from the feeding duct), so it propagates to
-        // every downstream node — the air-path analogue of the valve minor
-        // loss. C = 0 (no component / not a restrictor) ⇒ no change.
-        final c = net.nodeById(link.other)?.component?.airLossC ?? 0;
-        if (c > 0) {
-          edgePa += ductFittingLossPa(
-            c: c,
-            flow: flow,
-            diameter: edgeSizing.diameter,
-          );
-        }
       }
-      staticPa[link.other] = currentStatic + edgePa;
-      queue.add(link.other);
+    }
+    return edgePa;
+  }
+
+  // Round 27 (hvac-4-1) — an air unit's OUTDOOR-AIR INTAKE (a duct whose
+  // sized flow ARRIVES at the fan: the Round-16 bare intake leaf, through
+  // any inline damper) is in SERIES with the supply index run through the
+  // fan: the fan pulls the air through the intake and pushes it through the
+  // supply. It used to be costed as one more outward branch, so the fan
+  // static took max(intake, supply index) instead of their sum (a long
+  // roof-louvre intake behind a short supply index run lost its whole
+  // friction from the motor selection). Walk the intake AGAINST the flow from
+  // the fan, take its worst path, and cost the supply on the rest.
+  //
+  // Round 76 (plumbing-hvac-convergence-25-exhaust-branch-fan-rated-on-main-
+  // fan-path) — the mirror rule on EXTRACT air: the fan's DISCHARGE side (the
+  // ducts whose physical sized flow LEAVES the fan, and everything beyond
+  // them — toward the root fan or the outlet louvre) is in SERIES with the
+  // grille-side index run. It used to be skipped, so the fan-outward walk
+  // fell back to undirected order and charged a BRANCH exhaust fan with the
+  // whole main-fan path, while a root fan's discharge stub was max'd against
+  // the grille index instead of added. Walked here with the flow and costed
+  // as the series-side static; a fan with no outlet-side duct ⇒ 0 Pa
+  // (byte-identical).
+  final extract = service.isExtractAir;
+  final intakeEdgeIds = <String>{};
+  var intakePa = 0.0;
+  {
+    final intakeCost = <String, double>{fanNodeId: 0.0};
+    final q = [fanNodeId];
+    for (var i = 0; i < q.length; i++) {
+      final n = q[i];
+      for (final link
+          in adjacency[n] ?? const <({NetEdge edge, String other})>[]) {
+        final from = sizing[link.edge.id]?.flowFromId;
+        // Supply: the intake ARRIVES at the fan (walk against the flow).
+        // Extract: the discharge LEAVES the fan (walk with the flow).
+        if (from != (extract ? n : link.other)) continue;
+        if (intakeCost.containsKey(link.other)) continue;
+        intakeEdgeIds.add(link.edge.id);
+        final c = intakeCost[n]! +
+            edgePaArriving(link.edge, extract ? link.other : n);
+        intakeCost[link.other] = c;
+        if (c > intakePa) intakePa = c;
+        q.add(link.other);
+      }
     }
   }
+  final outwardAdjacency = intakeEdgeIds.isEmpty
+      ? adjacency
+      : {
+          for (final MapEntry(key: k, value: v) in adjacency.entries)
+            k: [
+              for (final l in v)
+                if (!intakeEdgeIds.contains(l.edge.id)) l,
+            ],
+        };
+
+  // Round 64 (plumbing-hvac-convergence-14-branch-inline-fan-rated-on-
+  // whole-system) — the outward walk never continues PAST a node of
+  // [stopAtNodeIds] (a drawn inline fan on a branch: the path up to it is
+  // this fan's, the branch beyond it the inline fan's own). Empty ⇒
+  // byte-identical.
+  final walkAdjacency = stopAtNodeIds.isEmpty
+      ? outwardAdjacency
+      : {
+          for (final MapEntry(key: k, value: v) in outwardAdjacency.entries)
+            k: (k != fanNodeId && stopAtNodeIds.contains(k))
+                ? const <({NetEdge edge, String other})>[]
+                : v,
+        };
+  final staticPa = orientedPathCost(
+    sourceId: fanNodeId,
+    adjacency: walkAdjacency,
+    // Round 15 — the sizer records EXTRACT air (return / exhaust) in its
+    // physical direction (grilles → fan); this walk runs OUTWARD from the
+    // fan, so flip it back to the fan-outward orientation.
+    flowFromOf: (e) {
+      final f = sizing[e.id]?.flowFromId;
+      if (f == null || !e.service.isExtractAir) return f;
+      return f == e.fromId ? e.toId : (f == e.toId ? e.fromId : null);
+    },
+    edgeCost: edgePaArriving,
+  );
 
   // Index run = the node with the greatest accumulated friction.
   var worst = 0.0;
@@ -127,7 +221,8 @@ DuctStaticSolution solveDuctStatic({
   });
 
   return DuctStaticSolution(
-    totalStaticPressure: Pressure(worst + terminalLoss.pascals),
+    totalStaticPressure: Pressure(worst + intakePa + terminalLoss.pascals),
     criticalNodeId: criticalNodeId,
+    intakeStaticPressure: Pressure(intakePa),
   );
 }

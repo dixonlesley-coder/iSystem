@@ -32,11 +32,19 @@ ProviderContainer _containerOf(WidgetTester tester) =>
       listen: false,
     );
 
+/// The chip rests COLLAPSED (just the 'LEGEND >' header pill); one click on
+/// the header expands the key rows.
+Future<void> _expand(WidgetTester tester) async {
+  await tester.tap(find.text('LEGEND'));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('the ELECTRICAL layer keys R/S/T, feeder and essential supply',
       (tester) async {
     await tester.pumpWidget(_host());
     await tester.pump();
+    await _expand(tester);
 
     // Plumbing (the default active layer) keys its services, not phases.
     expect(find.text('Phase R'), findsNothing);
@@ -62,6 +70,7 @@ void main() {
       '(and disappear as they are hidden)', (tester) async {
     await tester.pumpWidget(_host());
     await tester.pump();
+    await _expand(tester);
 
     // All four layers start visible; Plumbing is active, so the other three
     // are ghosted reference layers.
@@ -90,10 +99,16 @@ void main() {
     expect(find.text('Cold water'), findsOneWidget);
   });
 
-  testWidgets('collapsing the chip hides every row but keeps the header',
+  testWidgets('the chip rests collapsed; one click expands, another collapses',
       (tester) async {
     await tester.pumpWidget(_host());
     await tester.pump();
+    // Default: header pill only — no rows over the drawing.
+    expect(find.text('LEGEND'), findsOneWidget);
+    expect(find.text('Cold water'), findsNothing);
+    expect(find.text('REFERENCE LAYERS'), findsNothing);
+
+    await _expand(tester);
     expect(find.text('Cold water'), findsOneWidget);
 
     _containerOf(tester).read(serviceLegendExpandedProvider.notifier).toggle();

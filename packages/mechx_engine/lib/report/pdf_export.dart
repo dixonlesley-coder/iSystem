@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import '../network/network.dart';
+import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart';
 import 'drawing_chrome.dart';
 import 'plan_symbols.dart';
@@ -34,7 +35,10 @@ String _sizeLabel(NetEdge e, EdgeSizing s) {
     return '${s.width!.inMillimeters.round()}x${s.height!.inMillimeters.round()}';
   }
   final mm = s.diameter.inMillimeters.round();
-  return e.service.isAir ? 'O$mm' : 'DN$mm';
+  // R5: the real diameter sign — WinAnsi 0xD8 in the PDF (pass-through in
+  // `_pdfText`), `%%c` in the DXF (via `dxfText`). The live canvas keeps its
+  // own ASCII `O` (Roboto lacks the glyph).
+  return e.service.isAir ? '\u00D8$mm' : 'DN$mm';
 }
 
 /// The A6 line-weight band for a sized edge — rectangular ducts band on their
@@ -48,28 +52,9 @@ int _strokeBand(EdgeSizing s) {
       sizeMm: s.diameter.inMillimeters, isDuct: s.service.isAir);
 }
 
-/// WinAnsi (Latin-1) code points the drawing labels legitimately emit, passed
-/// through as their own byte (code point == WinAnsi byte at these positions) so
-/// a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`: U+00B7
-/// middle-dot separator (SIZE·SERVICE / cable·conduit), U+00B0 degree, U+00B1
-/// plus-minus, U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
-const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
-
-/// Keep PDF text to WinAnsi-encodable characters (printable ASCII + the few
-/// Latin-1 glyphs above) and escape the three PDF string metacharacters so a
-/// sheet name or label never breaks the syntax; anything else falls back to `?`.
-String _pdfText(String raw) {
-  final b = StringBuffer();
-  for (final code in raw.runes) {
-    final c =
-        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
-            ? code
-            : 0x3f /* ? */;
-    if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
-    b.writeCharCode(c);
-  }
-  return b.toString();
-}
+/// One WinAnsi text rule for every vector PDF (Round 13): see
+/// [pdfWinAnsiText] in `drawing_chrome.dart`.
+String _pdfText(String raw) => pdfWinAnsiText(raw);
 
 String _n(double v) => v.toStringAsFixed(2);
 
@@ -316,7 +301,8 @@ Uint8List networkToPdf({
         // from the real ctx gradient the caller passes (never hardcoded).
         final slopeText = (e.service.regime == FlowRegime.gravity &&
                 gravitySlope != null)
-            ? gravitySlopeLabel(gravitySlope)
+            ? gravitySlopeLabel(
+                laidGravitySlope(e, gravitySlope, s.diameter.inMillimeters))
             : null;
         final label = slopeText != null
             ? '${_sizeLabel(e, s)} - $slopeText'
@@ -373,14 +359,19 @@ Uint8List networkToPdf({
             projectName: title,
             scaleTextOverride: scaleRow)
         .ops);
-    cs.write(pdfLegend(chrome, originX: margin, originY: margin + 28));
+    cs.write(pdfLegend(chrome,
+        originX: margin + kLegendFrameInset, originY: margin + 28));
     cs.write(pdfNorthArrow(chrome, cx: pageW - margin - 18, cy: pageH - margin - 40));
   }
   // The honest divided scale bar rides the calibration (A3): drawn ONLY when a
   // real points-per-metre exists — never at an arbitrary auto-fit ratio.
   if (pointsPerMeter != null) {
+    // drafting-9: on a framed (chrome) sheet the bar sits kScaleBarFrameInset
+    // above the frame line so its figures print INSIDE the frame.
     cs.write(pdfScaleBarReal(
-        pointsPerMeter: pointsPerMeter, centerX: pageW / 2, baseY: margin));
+        pointsPerMeter: pointsPerMeter,
+        centerX: pageW / 2,
+        baseY: hasChrome ? margin + kScaleBarFrameInset : margin));
   }
 
   // ── Object assembly with a byte-accurate cross-reference table ──────────────

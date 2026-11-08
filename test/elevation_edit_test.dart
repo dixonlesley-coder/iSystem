@@ -242,9 +242,9 @@ void main() {
       await tester.pump();
 
       expect(tester.takeException(), isNull);
-      // The palette card + the service picker label appear.
+      // The palette card + the discipline-scoped service picker appear.
       expect(find.text('Riser'), findsWidgets);
-      expect(find.text('Riser service'), findsOneWidget);
+      expect(find.text('Plumbing'), findsOneWidget);
     });
 
     testWidgets('Edit mode renders an interactive CustomPaint over a network',

@@ -138,7 +138,7 @@ class OpenAiAiClient implements AiClient {
         } catch (_) {
           continue;
         }
-        final cmd = AiCommand.fromJson(name, args);
+        final cmd = AiCommand.tryFromJson(name, args);
         if (cmd != null) commands.add(cmd);
       }
     }

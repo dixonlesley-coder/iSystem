@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:isolate';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:mechx_engine/electrical/model.dart' show ElectricalProject;
+import 'package:mechx_engine/electrical/model.dart'
+    show ElectricalPanel, ElectricalProject;
 
 import '../store/annotation_store.dart';
 import '../store/app_state.dart';
@@ -14,11 +15,17 @@ import '../store/electrical_store.dart';
 import '../store/equipment_spec_store.dart';
 import '../store/fire_store.dart';
 import '../store/assemblies_store.dart';
+import '../store/calibration_store.dart';
+import '../store/command_store.dart'
+    show buildingVisitedProvider, reportExportedProvider;
+import '../store/snap_settings_store.dart' show refLineModeProvider;
+import '../store/palette_placement_store.dart' show armedPlacementProvider;
 import '../store/fixture_library_store.dart';
 import '../store/history_store.dart';
 import '../store/network_store.dart';
 import '../store/project_store.dart';
 import '../store/reference_line_store.dart';
+import '../store/schematic_layout_store.dart';
 import '../store/sheets_store.dart';
 import '../ui/canvas/underlay_snap_service.dart';
 import 'project_document.dart';
@@ -62,6 +69,58 @@ class RecoveryController extends Notifier<RecoverySnapshot?> {
 
   void set(RecoverySnapshot? snapshot) => state = snapshot;
   void clear() => state = null;
+}
+
+/// Round 50 (regression-4) — the recovery slots THIS session's autosave (or
+/// the updater backstop) has written. Only these may be cleared beside a
+/// pending snapshot when it is resolved, or by a Save / Open / New while one
+/// is pending: any other member of the pending snapshot's family is an older,
+/// still-unresolved crash snapshot.
+final sessionRecoverySlotsProvider =
+    NotifierProvider<RecoverySlotSetController, Set<String>>(
+  RecoverySlotSetController.new,
+);
+
+/// Round 50 (regression-4) — the UNRESOLVED crash snapshots found on disk at
+/// launch in the offered snapshot's family (the offered one included): never
+/// overwritten by this session's autosave and never deleted by a Save / Open
+/// / New — only the banner's Restore / Discard of the offered one resolves
+/// it ([RecoverySlotSetController.remove]); the rest are offered next launch.
+final protectedRecoverySlotsProvider =
+    NotifierProvider<RecoverySlotSetController, Set<String>>(
+  RecoverySlotSetController.new,
+);
+
+class RecoverySlotSetController extends Notifier<Set<String>> {
+  @override
+  Set<String> build() => const {};
+
+  void set(Set<String> slots) => state = Set.unmodifiable(slots);
+  void add(String slot) {
+    if (state.contains(slot)) return;
+    state = Set.unmodifiable({...state, slot});
+  }
+
+  void remove(String slot) {
+    if (!state.contains(slot)) return;
+    state = Set.unmodifiable({...state}..remove(slot));
+  }
+}
+
+/// Round 50 (regression-4) — the slot this session writes its recovery
+/// snapshot to, given its own per-project [slot]: never the pending snapshot
+/// the banner offers, never an unresolved older snapshot in its family
+/// ([chooseRecoverySessionSlot]).
+String sessionRecoverySlot(ProviderReader read, String slot) {
+  final pending = read(recoveryDocProvider);
+  return chooseRecoverySessionSlot(
+    slot,
+    pendingPath: pending == null
+        ? null
+        : (pending.recoveryPath ?? recoverySlotFor(pending.sourcePath)),
+    written: read(sessionRecoverySlotsProvider),
+    protected: read(protectedRecoverySlotsProvider),
+  );
 }
 
 /// Encoded JSON of the last state written to a real `.mechx` file (Save) or
@@ -175,6 +234,13 @@ ProjectDocument buildDocument(ProviderReader read) {
     rooms: read(roomAreasProvider),
     // Traced reference lines (B12) round-trip with the project.
     referenceLines: read(referenceLinesProvider),
+    // Round 28 (persist-undo-2-1 / -4) — the id counters, written only when
+    // they run ahead of the live ids (a deleted top id), so a reload never
+    // re-mints a deleted node / room id.
+    networkNextSeq: read(networkControllerProvider.notifier).persistedNextSeq,
+    // Round 33 — the equipment tag sequence when it runs ahead of the tags.
+    networkTagSeq: read(networkControllerProvider.notifier).persistedTagSeq,
+    roomNextSeq: read(roomAreasProvider.notifier).persistedNextSeq,
   );
 }
 
@@ -232,10 +298,43 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
         viewports: doc.viewports,
         sheetFloors: doc.sheetFloors,
       );
-  read(networkControllerProvider.notifier).loadNetwork(doc.network);
+  // Round 28 (persist-undo-2-1) — the id counter also clears every id still
+  // REFERENCED by persisted records: parked MEP ways (`mep-node-n<k>`) and
+  // acknowledgement keys, so an older file without `nextSeq` never re-mints a
+  // deleted node's id either.
+  read(networkControllerProvider.notifier).loadNetwork(
+    doc.network,
+    nextSeq: doc.networkNextSeq,
+    tagSeq: doc.networkTagSeq,
+    referencedIds: [
+      for (final a in doc.settings.acknowledgedIssues) a.key,
+      for (final p in doc.electrical?.panels ?? const <ElectricalPanel>[])
+        for (final c in p.circuits) ...[
+          c.id,
+          if (c.sourceEquipmentId != null) c.sourceEquipmentId!,
+        ],
+    ],
+  );
   // An opened/restored document is a fresh baseline — clear the global timeline
   // to match the per-domain controllers clearing their own stacks on load.
   read(historyProvider.notifier).reset();
+  // Round 12 (ui-journey-new-project-keeps-session-state) — the previous
+  // project's SESSION state must not leak into the applied document: the
+  // Report stage starts un-exported, and no calibration / measure / tank /
+  // room / ref-line gesture, armed palette card or electrical inspector
+  // target survives (the next imported plan used to open straight into a
+  // calibration the user never started).
+  read(reportExportedProvider.notifier).reset();
+  // Round 17 follow-up — nor does the previous project's Building visit tick
+  // the Floors stage of this one.
+  read(buildingVisitedProvider.notifier).reset();
+  read(calibrationControllerProvider.notifier).cancel();
+  read(measureModeProvider.notifier).set(false);
+  read(tankModeProvider.notifier).set(false);
+  read(roomModeProvider.notifier).set(false);
+  read(refLineModeProvider.notifier).set(false);
+  read(armedPlacementProvider.notifier).disarm();
+  read(electricalInspectorTargetProvider.notifier).clear();
   final s = doc.settings;
   read(occupancyProvider.notifier).set(s.occupancy);
   read(feedStrategyProvider.notifier)
@@ -311,7 +410,13 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // Restore designated tank areas (absent on an older file ⇒ empty).
   read(tankAreasProvider.notifier).set(doc.tanks);
   // Restore designated room/zone areas (absent on an older file ⇒ empty).
-  read(roomAreasProvider.notifier).set(doc.rooms);
+  // Round 28 (persist-undo-2-4) — the room counter restarts from the
+  // document, past the saved counter and every terminal's generating-room tag.
+  read(roomAreasProvider.notifier).load(
+    doc.rooms,
+    nextSeq: doc.roomNextSeq,
+    referencedIds: [for (final n in doc.network.nodes) n.autoPlacedRoomId],
+  );
   // Restore traced reference lines (B12; absent on an older file ⇒ empty).
   read(referenceLinesProvider.notifier).set(doc.referenceLines);
   // Drop the underlay snap caches (vector/ink/reference indices) — they are keyed
@@ -323,6 +428,11 @@ void applyDocument(ProviderReader read, ProjectDocument doc) {
   // from the previous project doesn't surface as a phantom selection in the new
   // one (mirrors clearing the network selection on load).
   read(selectedAnnotationProvider.notifier).clear();
+  // Drop the diagram-only riser x overrides: they are keyed by node id, and node
+  // ids (n0, n1, …) restart per project, so a previous project's dragged riser
+  // positions must not re-apply to the new project's colliding ids — reopening
+  // re-lays the elevation out from the plan geometry.
+  read(schematicLayoutProvider.notifier).clear();
 }
 
 /// Start the periodic autosave loop: every [interval], snapshot the current
@@ -411,8 +521,22 @@ Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
     if (clean || encoded == c.read(autosaveMirrorProvider)) {
       return;
     }
-    c.read(autosaveMirrorProvider.notifier).set(encoded);
     final projectPath = c.read(currentProjectPathProvider);
+    // Round 48 (persist-io-1) — never overwrite a PENDING crash snapshot (the
+    // one the launch banner still offers) with this session's work: only its
+    // Restore or an explicit Discard may replace it.
+    // Round 49 (regression-autosave-no-protection-while-snapshot-pending) —
+    // and never leave this session unprotected either: while the pending
+    // snapshot owns the slot, this session's work goes to a sibling slot.
+    // Round 50 (regression-4) — EVERY unresolved member of the pending
+    // snapshot's family is protected (two crashes with the banner left open
+    // leave the first crash's work in the primary and the second's in the
+    // sibling — whichever is offered, the other is never overwritten): this
+    // session writes to the first family member it owns or that is free.
+    final slot = sessionRecoverySlot(
+        c.read, recoveryPath ?? recoverySlotFor(projectPath));
+    c.read(autosaveMirrorProvider.notifier).set(encoded);
+    c.read(sessionRecoverySlotsProvider.notifier).add(slot);
     // R4: AWAIT the write. Un-awaited, the tick's future completed the instant
     // the write was scheduled, so `tickInFlight` cleared while the file IO was
     // still running — two slow ticks could then race the SAME `.tmp` / `.bak`
@@ -421,7 +545,7 @@ Future<void> _autosaveTick(ProviderContainer c, String? recoveryPath) async {
     // documented overlap guard actually cover the write.
     await writeRecovery(
       doc,
-      path: recoveryPath ?? recoverySlotFor(projectPath),
+      path: slot,
       // Stash the source file so a Restore can re-link the file identity.
       sourcePath: projectPath,
     );

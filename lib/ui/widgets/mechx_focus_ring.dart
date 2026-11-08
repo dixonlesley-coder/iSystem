@@ -58,7 +58,7 @@ class _MechXFocusRingState extends State<MechXFocusRing> {
         ),
       },
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         decoration: BoxDecoration(
           borderRadius: widget.borderRadius,

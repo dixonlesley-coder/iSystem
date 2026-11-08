@@ -89,7 +89,9 @@ void main() {
         e.id: edgeLength(e, net,
             calibrationBySheet: calibrations, building: building),
     };
-    final tags = elementTags(net);
+    // Round 29 — every artifact threads the project building, so the run
+    // tag reads its ground-relative level (GF) everywhere.
+    final tags = elementTags(net, building: building);
 
     // 1) PLAN (annotated PDF): the tag rides each run/riser label.
     final planText = latin1.decode(planToPdf(
@@ -129,6 +131,7 @@ void main() {
       net: net,
       sizing: sizing,
       edgeLengths: edgeLengths,
+      building: building,
     );
 
     test('the riser reads CW-R1 on the plan, riser, BOM and schedule', () {
@@ -145,8 +148,8 @@ void main() {
       expect(schedule.singleWhere((r) => r.kind == EdgeKind.riser).tag, tag);
     });
 
-    test('the run reads CW-F1 on the plan, BOM and schedule', () {
-      const tag = 'CW-F1';
+    test('the run reads CW-GF on the plan, BOM and schedule', () {
+      const tag = 'CW-GF';
       expect(tags['run'], tag);
       expect(planText, contains(tag));
       expect(bom.singleWhere((l) => l.kind == EdgeKind.run).tag, tag);

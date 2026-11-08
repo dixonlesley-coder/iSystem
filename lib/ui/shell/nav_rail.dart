@@ -11,6 +11,7 @@ import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
 import '../widgets/glass_surface.dart';
 import '../widgets/mechx_focus_ring.dart';
+import '../widgets/mechx_text_field.dart';
 
 /// The top-level destination chosen in the left navigation rail. `design` shows
 /// the workspace area (Plan / Schematic / Electrical, driven by
@@ -54,8 +55,9 @@ enum _Glyph { plan, schematic, electrical, building, review, commercial, project
 
 /// PanelMaker's left navigation rail, mirrored for iSystem's M+E+P workspaces.
 ///
-/// A fixed-width vertical rail: a DESIGN group (Plan / Schematic / Electrical) →
-/// Review → Commercial, a spacer, then pinned Projects + Preferences. The active
+/// A fixed-width vertical rail in workflow order: SETUP (Projects / Building) →
+/// DESIGN (Layout / Riser / Electrical) → ISSUE (Review / Commercial), a spacer,
+/// then pinned Preferences. The active
 /// item is highlighted. Design items drive [workspaceViewProvider]; the rest set
 /// [shellSectionProvider].
 class NavRail extends ConsumerWidget {
@@ -106,6 +108,21 @@ class NavRail extends ConsumerWidget {
       sectionCtrl.set(ShellSection.design);
     }
 
+    // A group heading, hidden when collapsed (cross-fades out so the layout
+    // settles cleanly). F4: micro-scale — the `micro` token, not caption+9.
+    Widget group(String label) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _ReducedMotionSize(
+              child: collapsed
+                  ? const SizedBox(width: double.infinity)
+                  : _GroupLabel(label,
+                      style: type.micro.copyWith(color: colors.textMuted)),
+            ),
+            const SizedBox(height: MechXSpacing.xxs),
+          ],
+        );
+
     // The rail glides between EXPANDED (icon + caption) and COLLAPSED
     // (icon-only) — HIG: width changes ease, never pop. [appear]/[standard]
     // matches the selection-fill easing the items already use.
@@ -114,7 +131,7 @@ class NavRail extends ConsumerWidget {
       // content, so just that side gets the hairline rim.
       edge: Border(right: BorderSide(color: colors.glassEdge, width: MechXGlass.edgeWidth)),
       child: AnimatedContainer(
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       width: collapsed ? collapsedWidth : width,
       padding: const EdgeInsets.symmetric(
@@ -124,19 +141,28 @@ class NavRail extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // The DESIGN group label is hidden when collapsed (cross-fades out so
-          // the layout settles cleanly).
-          AnimatedSize(
-            duration: MechXMotion.appear,
-            curve: MechXMotion.standard,
-            child: collapsed
-                ? const SizedBox(width: double.infinity)
-                : _GroupLabel(strings(StringKey.navGroupDesign),
-                    // F4: the DESIGN group heading is micro-scale — route it
-                    // through the `micro` token instead of caption+`fontSize: 9`.
-                    style: type.micro.copyWith(color: colors.textMuted)),
+          // Workflow-ordered groups (2026-10-17): SETUP (Projects, Building) ->
+          // DESIGN (Layout, Riser, Electrical) -> ISSUE (Review, Commercial),
+          // with only Preferences pinned at the bottom. The Ctrl/Cmd+1..8
+          // accelerators stay DESTINATION-bound (shell_shortcuts.dart), so
+          // reordering the rail never moves a shipped binding.
+          group(strings(StringKey.navGroupSetup)),
+          _NavItem(
+            glyph: _Glyph.projects,
+            label: strings(StringKey.navProjects),
+            active: section == ShellSection.projects,
+            collapsed: collapsed,
+            onTap: () => sectionCtrl.set(ShellSection.projects),
           ),
-          const SizedBox(height: MechXSpacing.xxs),
+          _NavItem(
+            glyph: _Glyph.building,
+            label: strings(StringKey.navBuilding),
+            active: section == ShellSection.building,
+            collapsed: collapsed,
+            onTap: () => sectionCtrl.set(ShellSection.building),
+          ),
+          const SizedBox(height: MechXSpacing.xs),
+          group(strings(StringKey.navGroupDesign)),
           _NavItem(
             glyph: _Glyph.plan,
             // "Plan" relabelled to "Layout": this design view is now the unified
@@ -162,14 +188,8 @@ class NavRail extends ConsumerWidget {
             collapsed: collapsed,
             onTap: () => openDesign(WorkspaceView.electrical),
           ),
-          const SizedBox(height: MechXSpacing.sm),
-          _NavItem(
-            glyph: _Glyph.building,
-            label: strings(StringKey.navBuilding),
-            active: section == ShellSection.building,
-            collapsed: collapsed,
-            onTap: () => sectionCtrl.set(ShellSection.building),
-          ),
+          const SizedBox(height: MechXSpacing.xs),
+          group(strings(StringKey.navGroupIssue)),
           _NavItem(
             glyph: _Glyph.review,
             label: strings(StringKey.navReview),
@@ -195,13 +215,6 @@ class NavRail extends ConsumerWidget {
             onTap: () => sectionCtrl.set(ShellSection.commercial),
           ),
           const Spacer(),
-          _NavItem(
-            glyph: _Glyph.projects,
-            label: strings(StringKey.navProjects),
-            active: section == ShellSection.projects,
-            collapsed: collapsed,
-            onTap: () => sectionCtrl.set(ShellSection.projects),
-          ),
           _NavItem(
             glyph: _Glyph.preferences,
             label: strings(StringKey.navPreferences),
@@ -278,7 +291,7 @@ class _CollapseToggleState extends State<_CollapseToggle> {
           child: GestureDetector(
             onTap: widget.onTap,
             child: AnimatedContainer(
-              duration: MechXMotion.appear,
+              duration: MechXMotion.resolve(context, MechXMotion.appear),
               curve: MechXMotion.standard,
               padding: const EdgeInsets.all(MechXSpacing.xs),
               decoration: BoxDecoration(
@@ -379,6 +392,14 @@ class _NavItemState extends State<_NavItem> {
   // already show, so it never opens (and the goldens stay byte-identical).
   final OverlayPortalController _tip = OverlayPortalController();
 
+  /// Round 12 (ui-journey-pending-field-edit-lost) — commit a focused field's
+  /// pending edit before navigating (the rail never takes focus, so the field
+  /// would otherwise unmount with its edit uncommitted).
+  void _activate() {
+    MechXTextField.commitPendingEdit();
+    widget.onTap();
+  }
+
   void _setHover(bool v) {
     setState(() => _hover = v);
     if (widget.collapsed && v) {
@@ -410,7 +431,7 @@ class _NavItemState extends State<_NavItem> {
       // pops) — pair the appear idiom with the standard curve. The
       // accent-tinted fill stays the selection cue (no content-shifting
       // stripe, so at-rest pixels are unchanged).
-      duration: MechXMotion.appear,
+      duration: MechXMotion.resolve(context, MechXMotion.appear),
       curve: MechXMotion.standard,
       padding: const EdgeInsets.symmetric(
         horizontal: MechXSpacing.xxs,
@@ -460,9 +481,7 @@ class _NavItemState extends State<_NavItem> {
                 ),
             ],
           ),
-          AnimatedSize(
-            duration: MechXMotion.appear,
-            curve: MechXMotion.standard,
+          _ReducedMotionSize(
             // The caption is decorative for accessibility — the button carries
             // the same name via `semanticLabel` below (so it reads once, in both
             // the expanded and collapsed states) — so hide the Text from the
@@ -500,7 +519,7 @@ class _NavItemState extends State<_NavItem> {
     // restores the captions and the overlay never opens.
     final row = MechXFocusRing(
       borderRadius: const BorderRadius.all(MechXRadii.md),
-      onActivated: widget.onTap,
+      onActivated: _activate,
       // L4 (a11y): the button carries the destination name explicitly in BOTH
       // states — the visible caption (hidden from semantics above) is decorative
       // and would otherwise be swallowed by this button node's semantics
@@ -512,7 +531,7 @@ class _NavItemState extends State<_NavItem> {
         onEnter: (_) => _setHover(true),
         onExit: (_) => _setHover(false),
         child: GestureDetector(
-          onTap: widget.onTap,
+          onTap: _activate,
           child: item,
         ),
       ),
@@ -552,7 +571,7 @@ class _CountBadge extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
       decoration: BoxDecoration(
         color: color,
-        borderRadius: const BorderRadius.all(Radius.circular(7)),
+        borderRadius: MechXRadii.rounded,
       ),
       alignment: Alignment.center,
       child: Text(
@@ -747,4 +766,21 @@ class _GlyphPainter extends CustomPainter {
   @override
   bool shouldRepaint(_GlyphPainter old) =>
       old.glyph != glyph || old.color != color;
+}
+
+/// An [AnimatedSize] on the rail's appear idiom that honours reduced motion:
+/// with the OS setting on it renders the child UNWRAPPED (an AnimatedSize must
+/// not receive the zero duration [MechXMotion.resolve] returns — see its
+/// caveat), so the rail snaps between its expanded / collapsed layouts.
+class _ReducedMotionSize extends StatelessWidget {
+  final Widget child;
+  const _ReducedMotionSize({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    final d = MechXMotion.resolve(context, MechXMotion.appear);
+    if (d == Duration.zero) return child;
+    return AnimatedSize(
+        duration: d, curve: MechXMotion.standard, child: child);
+  }
 }

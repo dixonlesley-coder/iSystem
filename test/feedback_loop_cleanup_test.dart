@@ -44,8 +44,9 @@ void main() {
     await tester.pump();
 
     expect(find.text('Import loads'), findsNothing);
-    // The real export affordance stays.
-    expect(find.text('Export'), findsOneWidget);
+    // The real export affordance stays (the toolbar's, beside the top bar's
+    // own Export button — both open the ONE Export sheet).
+    expect(find.text('Export'), findsNWidgets(2));
   });
 
   testWidgets('the sheet rail renders its calibration glyph', (tester) async {

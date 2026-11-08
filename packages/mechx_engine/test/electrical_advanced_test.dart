@@ -355,41 +355,88 @@ void main() {
     });
 
     test('moist loam 100 Ω·m, target 5 Ω → multi-rod array', () {
-      // single rod ≈ 33.49 Ω. rawCount = ceil(33.49/(5·0.8)) = ceil(8.373) = 9.
-      // η(9): interpolate between (8,0.73) and (10,0.70): 0.73 + 0.5·(−0.03)
-      //      = 0.715. achieved = 33.49/(9·0.715) = 33.49/6.435 = 5.205 Ω.
-      // 5.205 > 5 → still just above target (honest result).
+      // Round 17 — BS 7430 in-line method R_n = R1(1 + λα)/n,
+      // α = ρ/(2π·R1·s) = 1/(ln(8L/d) − 1) at s = L = 1/6.31322 = 0.158398.
+      // single rod ≈ 33.4927 Ω.
+      //   n = 10: λ = 3.81 ⇒ 33.4927·(1 + 0.60350)/10 = 5.3706 > 5.
+      //   n = 11: λ = (2/11)(11·H10 − 10) = (2/11)(32.21865 − 10) = 4.03975
+      //          ⇒ 33.4927·(1 + 0.63989)/11 = 4.9931 Ω ≤ 5 ⇒ 11 rods.
+      // (The fixed η table stopped at 10 rods / 4.785 Ω — a non-compliant
+      // array reported as meeting 5 Ω.)
       final d = designElectrode(soilResistivityOhmM: 100);
       expect(d.singleRod.ohms, closeTo(33.49, 0.01));
-      expect(d.rodCount, 9);
-      expect(d.achieved.ohms, closeTo(5.205, 0.01));
-      expect(d.meetsTarget, isFalse);
+      expect(d.rodCount, 11);
+      expect(d.achieved.ohms, closeTo(4.993, 0.001));
+      expect(d.meetsTarget, isTrue);
       expect(d.targetOhm, 5);
     });
 
     test('marshy 30 Ω·m → 3 rods meet 5 Ω', () {
       // single rod = 30/(2π·3)·(ln1500 − 1) = 1.59155·6.31322 = 10.0478 Ω.
-      // rawCount = ceil(10.0478/4) = ceil(2.512) = 3. η(3)=0.82.
-      // achieved = 10.0478/(3·0.82) = 10.0478/2.46 = 4.085 Ω ≤ 5 → meets.
+      // n = 2: 10.0478·(1 + 1.00·0.158398)/2 = 5.8197 > 5;
+      // n = 3: 10.0478·(1 + 1.66·0.158398)/3 = 10.0478·1.26294/3 = 4.2299 Ω.
       final d = designElectrode(soilResistivityOhmM: 30);
       expect(d.singleRod.ohms, closeTo(10.05, 0.01));
       expect(d.rodCount, 3);
-      expect(d.achieved.ohms, closeTo(4.085, 0.01));
+      expect(d.achieved.ohms, closeTo(4.230, 0.001));
       expect(d.meetsTarget, isTrue);
     });
 
-    test('utilisationFactor interpolation', () {
-      expect(utilisationFactor(1), 1.0);
-      expect(utilisationFactor(4), 0.80);
-      expect(utilisationFactor(9), closeTo(0.715, 1e-9)); // mid 8→10
-      expect(utilisationFactor(20), 0.70); // clamps to last
+    test('utilisationFactor follows BS 7430 η = 1/(1 + λα)', () {
+      const alpha = 0.158398;
+      expect(utilisationFactor(1, alpha: alpha), 1.0);
+      // n = 4: 1/(1 + 2.15·0.158398) = 1/1.340556 = 0.745959.
+      expect(utilisationFactor(4, alpha: alpha), closeTo(0.745959, 2e-6));
+      // n = 10: 1/(1 + 3.81·0.158398) = 1/1.603496 = 0.623638.
+      expect(utilisationFactor(10, alpha: alpha), closeTo(0.623638, 1e-6));
+      // λ beyond the table: the equal-spacing pair sum (2/n)Σ(n − k)/k.
+      expect(bs7430Lambda(3), 1.66); // table (sum gives 1.667)
+      expect(bs7430Lambda(11), closeTo(4.03975, 1e-5));
+      // η is monotone non-increasing in n (more rods couple more).
+      for (var n = 2; n < 100; n++) {
+        expect(utilisationFactor(n + 1, alpha: alpha),
+            lessThanOrEqualTo(utilisationFactor(n, alpha: alpha)));
+      }
     });
 
     test('custom target loosens the array', () {
-      // target 10 Ω in 100 Ω·m: rawCount = ceil(33.49/(10·0.8)) = ceil(4.186) = 5.
+      // target 10 Ω in 100 Ω·m: n = 4: 33.4927·(1 + 2.15α)/4 = 11.225 > 10;
+      // n = 5: 33.4927·(1 + 2.54α)/5 = 33.4927·1.402331/5 = 9.3936 ≤ 10.
       final d = designElectrode(soilResistivityOhmM: 100, targetOhm: 10);
       expect(d.rodCount, 5);
+      expect(d.achieved.ohms, closeTo(9.394, 0.001));
       expect(d.meetsTarget, isTrue);
+    });
+
+    test('property: a reported pass is a BS 7430 pass for every soil', () {
+      // Seeded sweep 5..1000 Ω·m: whenever meetsTarget, the array re-derived
+      // independently from R1(1 + λα)/n is at or below the target, and n − 1
+      // rods would NOT meet it (minimality).
+      double lambda(int n) {
+        const table = {2: 1.00, 3: 1.66, 4: 2.15, 5: 2.54, 6: 2.87,
+            7: 3.15, 8: 3.39, 9: 3.61, 10: 3.81};
+        if (n <= 1) return 0;
+        final t = table[n];
+        if (t != null) return t;
+        var sum = 0.0;
+        for (var k = 1; k < n; k++) {
+          sum += (n - k) / k;
+        }
+        return 2 * sum / n;
+      }
+
+      for (var rho = 5.0; rho <= 1000; rho += 7.3) {
+        final d = designElectrode(soilResistivityOhmM: rho);
+        final r1 = d.singleRod.ohms;
+        final alpha = rho / (2 * 3.141592653589793 * r1 * d.spacingM);
+        double rn(int n) => r1 * (1 + lambda(n) * alpha) / n;
+        if (d.meetsTarget) {
+          expect(rn(d.rodCount), lessThanOrEqualTo(5 + 1e-9), reason: '$rho');
+          if (d.rodCount > 1) {
+            expect(rn(d.rodCount - 1), greaterThan(5), reason: '$rho');
+          }
+        }
+      }
     });
   });
 

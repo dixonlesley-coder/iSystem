@@ -78,6 +78,35 @@ void main() {
     expect(c.read(projectControllerProvider).floors.length, before);
   });
 
+  test(
+      'applyTemplateTo is ONE undo step: floors AND occupancy/fire/rainfall '
+      'revert together, and redo re-applies them', () {
+    final c = makeContainer();
+    final hist = c.read(historyProvider.notifier);
+    final floorsBefore = c.read(projectControllerProvider).floors.length;
+    final occBefore = c.read(occupancyProvider);
+    final hazardBefore = c.read(fireHazardProvider);
+    final rainBefore = c.read(rainfallIntensityProvider);
+    final hospital = kBuildingTemplates.firstWhere((t) => t.name == 'Hospital');
+
+    applyTemplateTo(c.read, hospital);
+    expect(c.read(occupancyProvider), Occupancy.assembly);
+
+    hist.undo();
+    expect(c.read(projectControllerProvider).floors.length, floorsBefore);
+    expect(c.read(occupancyProvider), occBefore);
+    expect(c.read(fireHazardProvider), hazardBefore);
+    expect(c.read(rainfallIntensityProvider), rainBefore);
+    expect(hist.canUndo, isFalse, reason: 'one step, not four');
+
+    hist.redo();
+    expect(c.read(projectControllerProvider).floors.length,
+        hospital.floors.length);
+    expect(c.read(occupancyProvider), Occupancy.assembly);
+    expect(c.read(fireHazardProvider), FireHazardClass.ordinaryHazard2);
+    expect(c.read(rainfallIntensityProvider), closeTo(250.0, 1e-9));
+  });
+
   test('setFloors ignores an empty list', () {
     final c = makeContainer();
     final before = c.read(projectControllerProvider).floors;

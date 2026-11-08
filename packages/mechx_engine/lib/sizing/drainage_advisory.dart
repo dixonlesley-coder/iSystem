@@ -18,30 +18,127 @@
 /// Pure Dart, zero Flutter imports (§12: engine is framework-free).
 library;
 
+import '../network/network.dart';
 import 'drainage_sizing.dart';
+import 'network_sizing.dart' show EdgeSizing;
 
-/// Minimum self-cleansing SLOPE for a small sanitary branch (m/m). A branch laid
-/// flatter than this is unlikely to reach the self-cleansing velocity at the
-/// design fill, regardless of the pipe chosen. 0.005 (1:200) is the widely-used
-/// floor for small branches; larger mains tolerate flatter grades.
-/// // VERIFY against SNI 8153:2015 (minimum gradient table).
+/// Minimum self-cleansing SLOPE (m/m) for the LARGEST mains (≥ DN200) — the
+/// most lenient floor, used when no diameter is known. 0.005 (1:200) is NOT a
+/// small-branch figure: small branches need far steeper grades (see
+/// [minSelfCleansingSlopeFor]). // VERIFY against SNI 8153:2015 (minimum
+/// gradient table).
 const double kMinSelfCleansingSlope = 0.005;
 
-/// Maximum recommended developed length (m) for an un-vented fixture branch /
-/// trap arm before self-siphonage and waste-of-grade become a concern. 32 m is a
-/// conventional horizontal-branch / developed-length figure; trap arms are far
-/// shorter still. // VERIFY against SNI 8153:2015 (trap-arm + developed-length
-/// limits, which depend on pipe size).
-const double kMaxDevelopedLengthM = 32.0;
+/// Round 9 (plumbing-rules-min-slope-threshold) — minimum laid slope for a
+/// branch ≤ DN65 (2 % ≈ ¼ in/ft; IPC 704.1, UPC 708, SNI 8153 practice).
+/// // VERIFY (`notAnSniClause`).
+const double kMinSlopeSmallBranch = 0.02;
+
+/// Minimum laid slope for a DN75–DN150 drain (1 % ≈ ⅛ in/ft; IPC 704.1).
+/// // VERIFY (`notAnSniClause`).
+const double kMinSlopeMediumDrain = 0.01;
+
+/// Minimum laid self-cleansing slope (m/m) for a drain of [diameterMm]:
+/// ≤ DN65 ⇒ [kMinSlopeSmallBranch] (2 %), DN75 up to (but below) DN200 ⇒
+/// [kMinSlopeMediumDrain] (1 %), ≥ DN200 ⇒ [kMinSelfCleansingSlope] (0.5 %).
+/// A null diameter (unknown) takes the most lenient floor.
+double minSelfCleansingSlopeFor(double? diameterMm) {
+  if (diameterMm == null) return kMinSelfCleansingSlope;
+  if (diameterMm <= 65.0 + 1e-9) return kMinSlopeSmallBranch;
+  if (diameterMm < 200.0 - 1e-9) return kMinSlopeMediumDrain;
+  return kMinSelfCleansingSlope;
+}
+
+/// Round 33 (engineer-walkthrough-plan-fall-below-own-minimum) — the fall a
+/// sanitary DRAINAGE run is actually LAID at: the project design slope, but
+/// never flatter than the run's own self-cleansing minimum
+/// ([minSelfCleansingSlopeFor]: ≤ DN65 at 2 % / 1:50, DN75–150 at 1 %,
+/// ≥ DN200 at 0.5 %). The one project slope cannot otherwise be both 1:50
+/// for a DN40 lavatory branch and 1:100 for a DN100 main, so the issued plan
+/// used to print '1:100' on a branch the app's own rule says must fall 1:50.
+/// `// VERIFY notAnSniClause` (the floors are IPC / UPC practice). Pure.
+double effectiveDrainageSlope(double projectSlope, double? diameterMm) {
+  final floor = minSelfCleansingSlopeFor(diameterMm);
+  if (!projectSlope.isFinite || projectSlope <= 0) return projectSlope;
+  return projectSlope > floor ? projectSlope : floor;
+}
+
+/// Round 33 — the laid fall of a gravity [edge] of [diameterMm]: a sanitary
+/// DRAINAGE run takes [effectiveDrainageSlope]; a vent, a rainwater
+/// collector and every riser keep the project [projectSlope]. The ONE rule
+/// the sizer's velocity, the plan / canvas fall labels and the min-slope
+/// advisory read.
+double laidGravitySlope(
+        NetEdge edge, double projectSlope, double? diameterMm) =>
+    edge.service == ServiceType.drainage && edge.kind == EdgeKind.run
+        ? effectiveDrainageSlope(projectSlope, diameterMm)
+        : projectSlope;
+
+/// Round 33 r2 (engineer-walkthrough-plan-fall-below-own-minimum) — the
+/// one advisory the laid-fall rule owes: when [projectSlope] is flatter than
+/// the drainage RUN [edge]'s own self-cleansing floor at [diameterMm], the run
+/// is laid at that floor ([laidGravitySlope]) and this says so — e.g. 'project
+/// fall 1:250 is below the DN40 minimum; this run is laid at 1:50'. Null for
+/// a riser / vent / rainwater edge, an unknown or non-finite slope, or when
+/// the project slope already meets the floor (the drawing prints it as typed).
+/// JUDGE-ONLY — never resizes. `// VERIFY notAnSniClause` (the floors).
+DrainageAdvisory? laidSteeperAdvisory({
+  required NetEdge edge,
+  required double projectSlope,
+  double? diameterMm,
+}) {
+  if (edge.service != ServiceType.drainage || edge.kind != EdgeKind.run) {
+    return null;
+  }
+  if (!projectSlope.isFinite || projectSlope <= 0) return null;
+  final laid = laidGravitySlope(edge, projectSlope, diameterMm);
+  if (laid <= projectSlope + 1e-12) return null;
+  final dn = diameterMm == null ? '' : 'DN${diameterMm.round()} ';
+  return DrainageAdvisory(
+    edgeId: edge.id,
+    kind: DrainageAdvisoryKind.laidSteeperThanProject,
+    message: 'Project drainage fall 1:${(1 / projectSlope).round()} is below '
+        'the ${dn}self-cleansing minimum, so this run is laid (and printed) '
+        'at 1:${(1 / laid).round()} instead. (// VERIFY vs SNI 8153)',
+  );
+}
+
+/// Round 9 (plumbing-rules-developed-length-per-segment) — IPC Table 909.1
+/// maximum TRAP-ARM developed length (fixture trap weir → vent) by trap-arm
+/// diameter: (max DN mm, max length m). 1¼ in 5 ft, 1½ in 6 ft, 2 in 8 ft,
+/// 3 in 12 ft, 4 in (and larger) 16 ft. // VERIFY (`notAnSniClause`).
+const List<(double, double)> kTrapArmLimits = [
+  (32, 1.5),
+  (40, 1.8),
+  (50, 2.4),
+  (75, 3.7),
+  (100, 4.9),
+];
+
+/// The [kTrapArmLimits] maximum developed length (m) for a trap arm of
+/// [diameterMm] (≥ DN100 takes the DN100 row).
+double maxTrapArmLengthM(double diameterMm) {
+  for (final (dn, len) in kTrapArmLimits) {
+    if (diameterMm <= dn + 1e-9) return len;
+  }
+  return kTrapArmLimits.last.$2;
+}
 
 /// Which advisory rule a [DrainageAdvisory] reports.
 enum DrainageAdvisoryKind {
-  /// The laid slope is below [kMinSelfCleansingSlope] — risk of solids settling.
+  /// The laid slope is below the per-DN floor [minSelfCleansingSlopeFor] —
+  /// risk of solids settling.
   minSlope,
 
-  /// The developed run length exceeds [kMaxDevelopedLengthM] — risk of trap
-  /// self-siphonage / loss of grade on an over-long branch.
+  /// The trap-arm developed length (fixture → first vented point) exceeds
+  /// [maxTrapArmLengthM] for its diameter — risk of trap self-siphonage.
   developedLength,
+
+  /// Round 33 r2 — the project design fall is FLATTER than the run's own
+  /// self-cleansing minimum, so the run is drawn / sized / printed at that
+  /// minimum instead ([laidGravitySlope]); the engineer is told the drawing
+  /// overrode the typed slope (info, never a defect).
+  laidSteeperThanProject,
 }
 
 /// One advisory raised against a single drainage edge. Carries the [edgeId] so
@@ -59,13 +156,17 @@ final class DrainageAdvisory {
   });
 }
 
-/// Run the advisory checks for one drainage [edgeId] given its [slope] (m/m, the
-/// gradient the branch is laid at) and its [developedLengthM] (the real run
-/// length from §10 geometry — pass `null`/0 to skip the length check).
+/// Run the advisory checks for one drainage [edgeId].
 ///
-/// [sizing] is the already-computed drainage result for the edge, accepted so a
-/// future refinement can judge against its velocity/diameter; the current checks
-/// key only off the slope and developed length and so leave it optional.
+///  • [slope] (m/m, the laid gradient) is judged against the per-DN floor
+///    [minSelfCleansingSlopeFor]([diameterMm]);
+///  • [developedLengthM], when given, is a TRAP-ARM developed length (the
+///    walk from a fixture to its first vented point — see [trapArmRuns]),
+///    judged against [maxTrapArmLengthM]([diameterMm]). It is NOT a single
+///    drawn segment's length: a run split into segments by the auto-elbow /
+///    tee-in tools must be summed by the caller. Skipped without a diameter.
+///
+/// [sizing] is accepted for future refinements and is unused.
 ///
 /// Returns zero, one, or two advisories. This NEVER resizes — it only judges the
 /// design inputs against the conventional limits above (all `// VERIFY`).
@@ -73,39 +174,130 @@ List<DrainageAdvisory> drainageAdvisories({
   required String edgeId,
   required double slope,
   double? developedLengthM,
+  double? diameterMm,
   DrainageSizingResult? sizing,
 }) {
   final out = <DrainageAdvisory>[];
 
-  // ── Minimum self-cleansing slope ──────────────────────────────────────────
-  // Flag a branch laid flatter than the conventional floor. We deliberately key
-  // off the laid SLOPE (not the result's full-bore velocity self-cleansing flag)
-  // because the slope is what the installer controls and what the code limits.
-  if (slope > 0 && slope < kMinSelfCleansingSlope) {
-    final pctMin = (kMinSelfCleansingSlope * 100).toStringAsFixed(1);
+  // ── Minimum self-cleansing slope (per DN) ─────────────────────────────────
+  final minSlope = minSelfCleansingSlopeFor(diameterMm);
+  if (slope > 0 && slope < minSlope - 1e-12) {
+    final pctMin = (minSlope * 100).toStringAsFixed(1);
     final pctSlope = (slope * 100).toStringAsFixed(2);
+    final dn = diameterMm == null ? '' : 'DN${diameterMm.round()} ';
     out.add(DrainageAdvisory(
       edgeId: edgeId,
       kind: DrainageAdvisoryKind.minSlope,
-      message: 'Drainage branch laid at $pctSlope% (1:'
+      message: '${dn}drainage branch laid at $pctSlope% (1:'
           '${(1 / slope).round()}) is below the ~$pctMin% '
-          '(1:${(1 / kMinSelfCleansingSlope).round()}) self-cleansing minimum — '
+          '(1:${(1 / minSlope).round()}) self-cleansing minimum for its size — '
           'risk of solids settling. Steepen the gradient. (// VERIFY vs SNI 8153)',
     ));
   }
 
-  // ── Developed length / trap-arm limit ─────────────────────────────────────
-  if (developedLengthM != null && developedLengthM > kMaxDevelopedLengthM) {
-    out.add(DrainageAdvisory(
-      edgeId: edgeId,
-      kind: DrainageAdvisoryKind.developedLength,
-      message: 'Drainage branch developed length '
-          '${developedLengthM.toStringAsFixed(1)} m exceeds the '
-          '~${kMaxDevelopedLengthM.toStringAsFixed(0)} m limit — risk of trap '
-          'self-siphonage / loss of grade. Add a vent or break the run. '
-          '(// VERIFY vs SNI 8153)',
-    ));
+  // ── Trap-arm developed length (per DN) ────────────────────────────────────
+  if (developedLengthM != null && diameterMm != null) {
+    final limit = maxTrapArmLengthM(diameterMm);
+    if (developedLengthM > limit + 1e-9) {
+      out.add(DrainageAdvisory(
+        edgeId: edgeId,
+        kind: DrainageAdvisoryKind.developedLength,
+        message: 'DN${diameterMm.round()} trap arm developed length '
+            '${developedLengthM.toStringAsFixed(1)} m (fixture to first vent) '
+            'exceeds the ~${limit.toStringAsFixed(1)} m limit for its size — '
+            'risk of trap self-siphonage. Add a vent closer to the fixture. '
+            '(// VERIFY vs SNI 8153)',
+      ));
+    }
   }
 
+  return out;
+}
+
+/// One fixture's trap arm: the first drainage edge leaving the fixture
+/// ([firstEdgeId], whose diameter is the trap-arm size) and the DEVELOPED
+/// length summed downstream until the first vented point.
+final class TrapArmRun {
+  final String fixtureNodeId;
+  final String firstEdgeId;
+  final double developedLengthM;
+  const TrapArmRun({
+    required this.fixtureNodeId,
+    required this.firstEdgeId,
+    required this.developedLengthM,
+  });
+}
+
+/// Round 9 — walk every DRAINAGE terminal (a degree-1 drainage node the flow
+/// leaves, per the sizer's [EdgeSizing.flowFromId]) downstream, summing
+/// [lengthOf] edge by edge, until the first VENTED point: a node with a vent
+/// edge incident, an endpoint of a drainage riser (the stack), or the root (no
+/// further downstream edge). Horizontal-only: a terminal whose first edge is
+/// itself a riser has a zero-length trap arm and is skipped.
+List<TrapArmRun> trapArmRuns({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+  required double Function(NetEdge edge) lengthOf,
+}) {
+  final drainEdges = [
+    for (final e in net.edges)
+      if (e.service == ServiceType.drainage) e,
+  ];
+  final byNode = <String, List<NetEdge>>{};
+  for (final e in drainEdges) {
+    (byNode[e.fromId] ??= []).add(e);
+    (byNode[e.toId] ??= []).add(e);
+  }
+  final ventNodes = <String>{
+    for (final e in net.edges)
+      if (e.service == ServiceType.vent) ...[e.fromId, e.toId],
+  };
+  bool vented(String n) =>
+      ventNodes.contains(n) ||
+      (byNode[n] ?? const []).any((e) => e.kind == EdgeKind.riser);
+
+  // Downstream edge out of node n: the drainage edge whose flow comes FROM n.
+  NetEdge? outOf(String n) {
+    for (final e in byNode[n] ?? const <NetEdge>[]) {
+      if (sizing[e.id]?.flowFromId == n) return e;
+    }
+    return null;
+  }
+
+  final out = <TrapArmRun>[];
+  for (final entry in byNode.entries) {
+    if (entry.value.length != 1) continue;
+    final first = entry.value.single;
+    if (sizing[first.id]?.flowFromId != entry.key) continue; // not a terminal
+    if (first.kind == EdgeKind.riser) continue;
+    // Round 25 (drainage-4-4) — a fixture vented AT its own node (an
+    // individual vent drawn from the fixture) has a ~0 trap arm: the vent is
+    // already at the trap, so the walk never starts.
+    if (ventNodes.contains(entry.key)) {
+      out.add(TrapArmRun(
+        fixtureNodeId: entry.key,
+        firstEdgeId: first.id,
+        developedLengthM: 0,
+      ));
+      continue;
+    }
+    var total = 0.0;
+    var edge = first;
+    var at = entry.key;
+    final seen = <String>{};
+    while (seen.add(edge.id)) {
+      total += lengthOf(edge);
+      at = edge.fromId == at ? edge.toId : edge.fromId;
+      if (vented(at)) break;
+      final next = outOf(at);
+      if (next == null || next.kind == EdgeKind.riser) break;
+      edge = next;
+    }
+    out.add(TrapArmRun(
+      fixtureNodeId: entry.key,
+      firstEdgeId: first.id,
+      developedLengthM: total,
+    ));
+  }
   return out;
 }

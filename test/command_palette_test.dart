@@ -248,4 +248,43 @@ void main() {
       expect(s.active, WorkflowStage.calibrate);
     });
   });
+
+  group('exportSheetProvider (work item 8)', () {
+    test('closed by default; open() defaults to the submittal group', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      expect(c.read(exportSheetProvider), isNull);
+      c.read(exportSheetProvider.notifier).open();
+      expect(c.read(exportSheetProvider), ExportGroup.submittal);
+      c.read(exportSheetProvider.notifier).open(ExportGroup.electrical);
+      expect(c.read(exportSheetProvider), ExportGroup.electrical);
+      c.read(exportSheetProvider.notifier).toggle();
+      expect(c.read(exportSheetProvider), isNull);
+      c.read(exportSheetProvider.notifier).toggle();
+      expect(c.read(exportSheetProvider), ExportGroup.submittal);
+    });
+
+    test('opening the sheet closes the palette and the shortcuts sheet, and '
+        'vice versa (one scrim at a time)', () {
+      final c = ProviderContainer();
+      addTearDown(c.dispose);
+      c.read(commandPaletteOpenProvider.notifier).open();
+      c.read(exportSheetProvider.notifier).open(ExportGroup.drawings);
+      expect(c.read(commandPaletteOpenProvider), isFalse);
+      expect(c.read(exportSheetProvider), ExportGroup.drawings);
+
+      c.read(commandPaletteOpenProvider.notifier).toggle();
+      expect(c.read(commandPaletteOpenProvider), isTrue);
+      expect(c.read(exportSheetProvider), isNull);
+
+      c.read(exportSheetProvider.notifier).open();
+      c.read(shortcutsSheetOpenProvider.notifier).open();
+      expect(c.read(exportSheetProvider), isNull);
+      expect(c.read(shortcutsSheetOpenProvider), isTrue);
+
+      c.read(exportSheetProvider.notifier).open();
+      expect(c.read(shortcutsSheetOpenProvider), isFalse);
+      expect(c.read(commandPaletteOpenProvider), isFalse);
+    });
+  });
 }

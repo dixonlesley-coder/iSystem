@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
+import 'package:mechx_engine/report/number_format.dart' as engine;
 
+import '../../store/app_state.dart' show AppLocale;
 import '../strings/app_strings.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -7,31 +9,38 @@ import '../theme/mechx_theme.dart';
 /// Shared number formatting for the commercial tables, so every surface prints
 /// quantities, prices and hours with the same decimals + thousands grouping and
 /// lines up under right-aligned, tabular-figure columns.
+///
+/// QUANTITIES (metres, pieces, hours) read in the UI [AppLocale] — EN
+/// `1,234.5 m`, ID `1.234,5 m` — because they are measurements the engineer
+/// reads in their own notation (a comma-decimal `20,2 m` on an English screen
+/// read as twenty-thousand-two). MONEY keeps the issued Indonesian notation
+/// (`1.181.250,00`) so the screen and the exported quotation never disagree.
 abstract final class CommercialFormat {
-  /// Quantity: integer when whole, else one decimal.
-  static String qty(double v) =>
-      v == v.roundToDouble() ? _grouped(v, 0) : _grouped(v, 1);
+  /// Quantity: integer when whole, else one decimal, in [locale]'s notation.
+  static String qty(double v, AppLocale locale) => _local(
+      v, v == v.roundToDouble() ? 0 : 1, locale);
 
-  /// Money / amount: always two decimals with thousands grouping.
+  /// Money / amount: always two decimals with thousands grouping (the issued
+  /// Indonesian notation, locale-independent).
   static String money(double v) => _grouped(v, 2);
 
-  /// Hours: always one decimal.
-  static String hours(double v) => _grouped(v, 1);
+  /// Hours: always one decimal, in [locale]'s notation (a quantity).
+  static String hours(double v, AppLocale locale) => _local(v, 1, locale);
 
-  /// Group the integer part with thousands separators and fix [decimals].
-  static String _grouped(double v, int decimals) {
-    final neg = v < 0;
-    final fixed = v.abs().toStringAsFixed(decimals);
-    final dot = fixed.indexOf('.');
-    final intPart = dot == -1 ? fixed : fixed.substring(0, dot);
-    final frac = dot == -1 ? '' : fixed.substring(dot);
-    final buf = StringBuffer();
-    for (var i = 0; i < intPart.length; i++) {
-      if (i > 0 && (intPart.length - i) % 3 == 0) buf.write(',');
-      buf.write(intPart[i]);
-    }
-    return '${neg ? '-' : ''}$buf$frac';
-  }
+  static String _local(double v, int decimals, AppLocale locale) =>
+      switch (locale) {
+        AppLocale.en => engine.money(v,
+            dp: decimals, groupSeparator: ',', decimalSeparator: '.'),
+        AppLocale.id => engine.money(v, dp: decimals),
+      };
+
+  /// Group the integer part and fix [decimals] — delegated to the engine's
+  /// issued notation (`report/number_format.dart` `money()`: `.` thousands,
+  /// `,` decimals), so the screen and the exported quotation never disagree
+  /// (audit r8 costing-3: the screen used to print `1,181,250.00` beside an
+  /// issued `1.181.250,00`).
+  static String _grouped(double v, int decimals) =>
+      engine.money(v, dp: decimals);
 }
 
 /// One column spec for a [CommercialTable]. [numeric] right-aligns the column

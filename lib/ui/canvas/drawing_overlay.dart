@@ -1,3 +1,4 @@
+import 'dart:async' show scheduleMicrotask;
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show listEquals;
@@ -19,6 +20,7 @@ import '../../store/reference_line_store.dart';
 import '../../store/snap_settings_store.dart';
 import '../strings/app_strings.dart';
 import 'canvas_grid.dart' show calibratedGridWorldStep, nearestGridIntersection;
+import 'floor_index.dart';
 import 'service_style.dart';
 import 'snapping.dart';
 import 'underlay_snap_service.dart';
@@ -84,7 +86,17 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
 
   @override
   void deactivate() {
-    _autoPan?.set(null);
+    // P14 — deactivate runs INSIDE the build that unmounts this overlay (a
+    // tool switch), where writing a provider throws. The tool-switch intent
+    // (`NetworkController.setTool`) already released the probe; any other
+    // teardown (calibration starting, a layer switch) defers the release past
+    // the build.
+    final autoPan = _autoPan;
+    if (autoPan != null && autoPan.isActive) {
+      scheduleMicrotask(() {
+        if (autoPan.isActive) autoPan.set(null);
+      });
+    }
     super.deactivate();
   }
 
@@ -96,13 +108,12 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     final ortho = ref.watch(orthoProvider);
     final routeKindPref = ref.watch(orthoRouteKindProvider);
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
+        ref.watch(sheetViewportProvider(widget.sheetId)) ??
             const ViewportTransform();
     final project = ref.watch(projectControllerProvider);
     final calibration = project.calibrationFor(widget.sheetId);
-    final building = project.building;
     // H5 — the LAID drainage design slope the sizer + calc report use (the
-    // Building-page input), feeding the live invert readout below.
+    // Building-page input), feeding the live fall readout below.
     final drainageSlope = ref.watch(drainageSlopeProvider);
     // E1 — the services currently INERT to canvas interaction (a locked
     // discipline layer's services + the individually hidden ones). Threaded into
@@ -127,42 +138,48 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     final routeActive =
         drawing.tool == DrawTool.drawRun && pending != null && ortho && !shift;
 
-    final sheet = ref.watch(sheetsControllerProvider).sheetById(widget.sheetId);
+    final sheet = ref.watch(sheetsContentProvider).sheetById(widget.sheetId);
     final snapToPlan = ref.watch(snapToPlanProvider);
     final refLines = ref.watch(referenceLinesProvider);
     final underlaySvc = ref.read(underlaySnapServiceProvider);
     final gridMpp = calibration?.metersPerPixel;
-    final gridEligible = gridMpp != null &&
+    // M5 — F9 switches the magnetic grid off (still ortho-gated below).
+    final gridEligible = ref.watch(gridSnapProvider) &&
+        gridMpp != null &&
         calibratedGridWorldStep(gridMpp) * transform.scale >= 6.0;
+    // P9 — this floor's nodes / runs, resolved once per network instance.
+    final floorIdx =
+        floorIndexOf(drawing.network, widget.sheetId, widget.floorIndex);
+    final floorRuns = floorIdx.runs;
 
     // Resolve the END snap for a raw world point, in the store's precedence
     // (node/tee > midpoint > underlay > align > grid). [orthoAnchor] keeps a
     // straight run on-axis for the underlay perpendicular/on-line candidates.
     _EndSnap resolveEnd(Offset raw, {Offset? orthoAnchor}) {
       // 1) Network node / tee (the store's own resolution) — classify it.
+      // H3 — the SAME acceptance rule the commit applies (service + inert).
       final teed = snapOrTeeMarked(
-          drawing.network, widget.sheetId, widget.floorIndex, raw, snapWorld);
+          drawing.network, widget.sheetId, widget.floorIndex, raw, snapWorld,
+          drawService: drawing.service, avoidServices: inertServices);
       if (teed != null && teed.kind == SnapKind.node) {
         return _EndSnap(teed.point, SnapKind.node);
       }
-      // 2) Exact run MIDPOINT (B24) — beats a plain tee when nearer.
+      // 2) Exact run MIDPOINT (B24) — beats a plain tee when nearer. Only a
+      // run the commit would tee into (same service, not inert) offers one.
       final runs = <(Offset, Offset)>[
-        for (final e in drawing.network.edges)
-          if (e.kind != EdgeKind.riser)
-            if (drawing.network.nodeById(e.fromId) case final a?)
-              if (drawing.network.nodeById(e.toId) case final b?)
-                if (a.sheetId == widget.sheetId &&
-                    a.floorIndex == widget.floorIndex &&
-                    b.sheetId == widget.sheetId &&
-                    b.floorIndex == widget.floorIndex)
-                  (Offset(a.x, a.y), Offset(b.x, b.y)),
+        for (final r in floorRuns)
+          if (drawTeeAccepts(r.edge, drawing.service,
+              avoidServices: inertServices))
+            (Offset(r.a.x, r.a.y), Offset(r.b.x, r.b.y)),
       ];
       final mid = nearestRunMidpoint(runs, raw, pickWorld);
       if (mid != null &&
           (teed == null || mid.distance <= (teed.point - raw).distance)) {
         return _EndSnap(mid.point, SnapKind.midpoint);
       }
-      if (teed != null) return _EndSnap(teed.point, teed.kind);
+      if (teed != null) {
+        return _EndSnap(teed.point, teed.kind, tee: teed.tee);
+      }
       // 3) Plan underlay (DXF wall / reference line / PDF ink) — carries its own
       // SnapKind (endpoint / intersection / perpendicular / refline / ink).
       if (sheet != null) {
@@ -174,9 +191,7 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
       }
       // 4) Alignment guide against existing nodes (B23) — low precedence.
       final nodeOffsets = <Offset>[
-        for (final n in drawing.network.nodes)
-          if (n.sheetId == widget.sheetId && n.floorIndex == widget.floorIndex)
-            Offset(n.x, n.y),
+        for (final n in floorIdx.nodes) Offset(n.x, n.y),
       ];
       final g = nearestAlignment(nodeOffsets, raw, pickWorld);
       if (g != null) {
@@ -274,22 +289,22 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
     String? ilText;
     if (pending != null && endHover != null) {
       polarText = polarLabel(pending, endHover, calibration);
-      // B29 — a live invert-level readout on a gravity service, only when the
-      // sheet is calibrated AND the run starts on a known node (honest omission
-      // otherwise: the invert can't be derived without a start elevation).
+      // B29, reworked Round 17 follow-up (gravity-3-4) — a live FALL readout
+      // on a gravity service when the sheet is calibrated: the drop this leg
+      // needs at the laid design slope. It used to print an 'IL' invert made
+      // up from the start node's WATER-SUPPLY elevation (a main at its
+      // ceiling, a fixture at +1.1 m) and always subtracted from the drawn
+      // start, so a run drawn from the stack outward showed inverts falling
+      // upstream. No invert / sub-slab datum exists (gravity plan labels carry
+      // no CL), so only the datum-free fall is stated.
       if (drawing.service.regime == FlowRegime.gravity && calibration != null) {
-        final startNode = _nodeNear(drawing.network, widget.sheetId,
-            widget.floorIndex, pending, snapWorld);
-        if (startNode != null) {
-          final startElev = nodeElevation(startNode, building).meters;
-          final devLenM =
-              calibration.lengthForPixels((endHover - pending).distance).meters;
-          // H5 — the LAID design slope from `drainageSlopeProvider`, never the
-          // dark `SizingContext` default: the live invert readout must agree
-          // with the fall stamped on the issued sheet. // VERIFY the gradient.
-          final slope = drainageSlope; // m/m // VERIFY
-          ilText = invertLevelLabel(startElev, devLenM, slope);
-        }
+        final devLenM =
+            calibration.lengthForPixels((endHover - pending).distance).meters;
+        // H5 — the LAID design slope from `drainageSlopeProvider`, never the
+        // dark `SizingContext` default: the live readout must agree with the
+        // fall stamped on the issued sheet. // VERIFY the gradient.
+        final slope = drainageSlope; // m/m // VERIFY
+        ilText = fallLabel(devLenM, slope);
       }
     }
 
@@ -434,6 +449,9 @@ class _DrawingOverlayState extends ConsumerState<DrawingOverlay> {
             bend: previewBend,
             snapScreen: ringPt != null ? transform.worldToScreen(ringPt) : null,
             snapKind: ringKind,
+            snapLabel: ringPt != null && end != null && end.kind != null
+                ? snapKindLabel(end.kind!, tee: end.tee)
+                : null,
             snapSegmentsScreen: snapSegmentsScreen,
             routeScreen: routeScreen,
             routeLabel: routeLabel,
@@ -479,8 +497,26 @@ class _EndSnap {
   /// to. Empty for a network/grid/ink snap with no straight source segment.
   final List<(Offset, Offset)> segments;
 
-  const _EndSnap(this.point, this.kind, {this.guide, this.segments = const []});
+  /// True when the snap is a TEE projection onto a network run (labelled
+  /// 'Tee', not 'Perpendicular' — the marker shape is shared).
+  final bool tee;
+
+  const _EndSnap(this.point, this.kind,
+      {this.guide, this.segments = const [], this.tee = false});
 }
+
+/// L1 — the OSNAP name chip text beside the marker (ASCII, AutoCAD's vocabulary).
+String snapKindLabel(SnapKind kind, {bool tee = false}) => switch (kind) {
+      SnapKind.node => 'Node',
+      SnapKind.endpoint => 'Endpoint',
+      SnapKind.midpoint => 'Midpoint',
+      SnapKind.intersection => 'Intersection',
+      SnapKind.perpendicular => tee ? 'Tee' : 'Perpendicular',
+      SnapKind.refline => 'Nearest',
+      SnapKind.ink => 'Plan line',
+      SnapKind.grid => 'Grid',
+      SnapKind.align => 'Aligned',
+    };
 
 /// A live B25 parallel-lock: the projected track plus the reference segment it
 /// runs parallel to.
@@ -534,33 +570,15 @@ class DrawParallelMark {
   return best;
 }
 
-/// The nearest network node to [world] within [radius], on [sheetId]/[floor], or
-/// null (B29 — the pending run's start node, for its elevation).
-NetNode? _nodeNear(
-  Network net,
-  String sheetId,
-  int floor,
-  Offset world,
-  double radius,
-) {
-  NetNode? best;
-  var bestD2 = radius * radius;
-  for (final n in net.nodes) {
-    if (n.sheetId != sheetId || n.floorIndex != floor) continue;
-    final d2 = (Offset(n.x, n.y) - world).distanceSquared;
-    if (d2 <= bestD2) {
-      bestD2 = d2;
-      best = n;
-    }
-  }
-  return best;
-}
-
-/// The B29 invert-level readout: the start node elevation minus the drop over
-/// the developed length so far (slope × length). Formatted 'IL -0.42'.
-String invertLevelLabel(double startElevM, double devLenM, double slope) {
-  final il = startElevM - slope * devLenM;
-  return 'IL ${il.toStringAsFixed(2)}';
+/// The B29 gravity FALL readout (Round 17 follow-up): the drop a leg of
+/// [devLenM] metres needs at [slope] (m/m), with the slope as `1:N`.
+/// Datum-free by design — e.g. 'fall 0.03 m @ 1:100'.
+String fallLabel(double devLenM, double slope) {
+  final fall = slope * devLenM;
+  final n = slope > 0 ? (1.0 / slope).round() : 0;
+  return n > 0
+      ? 'fall ${fall.toStringAsFixed(2)} m @ 1:$n'
+      : 'fall ${fall.toStringAsFixed(2)} m';
 }
 
 /// The B21 polar readout for the rubber band [pending]→[head]: calibrated
@@ -589,54 +607,77 @@ Offset? snapOrTeePoint(
   String sheetId,
   int floorIndex,
   Offset world,
-  double radiusWorld,
-) =>
-    snapOrTeeMarked(net, sheetId, floorIndex, world, radiusWorld)?.point;
+  double radiusWorld, {
+  ServiceType? drawService,
+  Set<ServiceType> avoidServices = const {},
+}) =>
+    snapOrTeeMarked(net, sheetId, floorIndex, world, radiusWorld,
+            drawService: drawService, avoidServices: avoidServices)
+        ?.point;
 
 /// As [snapOrTeePoint] but carrying the [SnapKind] the attach point represents:
 /// [SnapKind.node] for a real node, else [SnapKind.perpendicular] for a tee
-/// projection onto a run (the foot of the perpendicular). Used by the drawing
-/// overlay to pick the OSNAP marker (B24).
-({Offset point, SnapKind kind})? snapOrTeeMarked(
+/// projection onto a run (the foot of the perpendicular; [tee] true). Used by
+/// the drawing overlay to pick the OSNAP marker (B24).
+///
+/// H3 — the candidates pass the SAME acceptance rule the store's commit
+/// applies ([drawEndpointAdoptable] for a node, [drawTeeAccepts] for a tee):
+/// with a [drawService] a plain junction of another service is skipped and
+/// only a same-service run tees; [avoidServices] (hidden / locked) are never
+/// latched. Both unset ⇒ every node / run is a candidate (the old behaviour).
+/// P9 — iterates the memoised per-floor [floorIndexOf] lists, not the building.
+({Offset point, SnapKind kind, bool tee})? snapOrTeeMarked(
   Network net,
   String sheetId,
   int floorIndex,
   Offset world,
-  double radiusWorld,
-) {
+  double radiusWorld, {
+  ServiceType? drawService,
+  Set<ServiceType> avoidServices = const {},
+}) {
+  final idx = floorIndexOf(net, sheetId, floorIndex);
+  final scoped = drawService != null || avoidServices.isNotEmpty;
   final r2 = radiusWorld * radiusWorld;
   NetNode? bestNode;
   var bestNodeD2 = r2;
-  for (final n in net.nodes) {
-    if (n.sheetId != sheetId || n.floorIndex != floorIndex) continue;
+  for (final n in idx.nodes) {
     final dx = n.x - world.dx;
     final dy = n.y - world.dy;
     final d2 = dx * dx + dy * dy;
     if (d2 <= bestNodeD2) {
+      if (scoped &&
+          !drawEndpointAdoptable(n, net.edgesAt(n.id),
+              avoidServices: avoidServices, drawService: drawService)) {
+        continue;
+      }
       bestNodeD2 = d2;
       bestNode = n;
     }
   }
   if (bestNode != null) {
-    return (point: Offset(bestNode.x, bestNode.y), kind: SnapKind.node);
+    return (
+      point: Offset(bestNode.x, bestNode.y),
+      kind: SnapKind.node,
+      tee: false
+    );
   }
   Offset? bestP;
   var bestD2 = r2;
-  for (final e in net.edges) {
-    if (e.kind == EdgeKind.riser) continue;
-    final a = net.nodeById(e.fromId);
-    final b = net.nodeById(e.toId);
-    if (a == null || b == null) continue;
-    if (a.sheetId != sheetId || a.floorIndex != floorIndex) continue;
-    if (b.sheetId != sheetId || b.floorIndex != floorIndex) continue;
-    final p = _closestPointOnSegment(world, Offset(a.x, a.y), Offset(b.x, b.y));
+  for (final r in idx.runs) {
+    if (!drawTeeAccepts(r.edge, drawService, avoidServices: avoidServices)) {
+      continue;
+    }
+    final p = _closestPointOnSegment(
+        world, Offset(r.a.x, r.a.y), Offset(r.b.x, r.b.y));
     final d2 = (p - world).distanceSquared;
     if (d2 <= bestD2) {
       bestD2 = d2;
       bestP = p;
     }
   }
-  return bestP == null ? null : (point: bestP, kind: SnapKind.perpendicular);
+  return bestP == null
+      ? null
+      : (point: bestP, kind: SnapKind.perpendicular, tee: true);
 }
 
 /// Closest point on segment a→b to p (all world px).
@@ -674,6 +715,11 @@ class RubberBandPainter extends CustomPainter {
   /// e.g. the outlet-nub pull).
   final List<(Offset, Offset)> snapSegmentsScreen;
 
+  /// L1 — the OSNAP feature NAME ('Endpoint', 'Midpoint', 'Grid'…) drawn as a
+  /// tiny chip beside the marker, or null (the outlet-nub pull passes none ⇒
+  /// byte-identical).
+  final String? snapLabel;
+
   /// B17 — the multi-leg ortho route in screen space (>=2 points). When set the
   /// band draws the route polyline instead of a single segment / elbow.
   final List<Offset>? routeScreen;
@@ -709,6 +755,7 @@ class RubberBandPainter extends CustomPainter {
     this.bend,
     this.snapKind = SnapKind.refline,
     this.snapSegmentsScreen = const [],
+    this.snapLabel,
     this.routeScreen,
     this.routeLabel,
     this.guide,
@@ -772,7 +819,17 @@ class RubberBandPainter extends CustomPainter {
 
     // The OSNAP marker over the attach point.
     final snap = snapScreen;
-    if (snap != null) _paintMarker(canvas, snap, snapKind, color);
+    if (snap != null) {
+      _paintMarker(canvas, snap, snapKind, color);
+      final label = snapLabel;
+      if (label != null) {
+        // Below-left of the marker, clear of the polar chip (above-right of
+        // the band head) — small and quiet, like AutoCAD's OSNAP tooltip.
+        _paintChip(canvas, snap.translate(-14, 12), [label],
+            color.withAlpha(200), const Color(0xFFFFFFFF),
+            fontSize: 9.5);
+      }
+    }
 
     if (!active || pending == null) return;
     final a = transform.worldToScreen(pending!);
@@ -878,7 +935,8 @@ class RubberBandPainter extends CustomPainter {
   }
 
   void _paintChip(
-      Canvas canvas, Offset at, List<String> lines, Color bg, Color fg) {
+      Canvas canvas, Offset at, List<String> lines, Color bg, Color fg,
+      {double fontSize = 11}) {
     final painters = [
       for (final t in lines)
         TextPainter(
@@ -886,7 +944,7 @@ class RubberBandPainter extends CustomPainter {
             text: t,
             style: TextStyle(
               color: fg,
-              fontSize: 11,
+              fontSize: fontSize,
               fontFamily: 'Roboto',
               fontWeight: FontWeight.w600,
             ),
@@ -932,6 +990,7 @@ class RubberBandPainter extends CustomPainter {
       old.snapScreen != snapScreen ||
       old.snapKind != snapKind ||
       !listEquals(old.snapSegmentsScreen, snapSegmentsScreen) ||
+      old.snapLabel != snapLabel ||
       old.routeScreen != routeScreen ||
       old.routeLabel != routeLabel ||
       old.guide != guide ||

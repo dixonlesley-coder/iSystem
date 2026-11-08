@@ -14,11 +14,21 @@
 /// a project re-lays the elevation out from the plan geometry. That is the
 /// honest default for a purely visual gesture and keeps the project file (and
 /// its version) unchanged.
+///
+/// UNDOABLE (riser drafting-feel R3): a drag, an arrow nudge or a 'Reset
+/// position' is ONE [UndoDomain.riserLayout] step on the global timeline. The
+/// controller keeps its own snapshot stack of the override map (the
+/// reference-line local-stack pattern); a gesture brackets its frames with
+/// [SchematicLayoutController.beginGesture] / [SchematicLayoutController.endGesture]
+/// so a whole drag is one step and a drag that ends where it began records
+/// nothing.
 library;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
+
+import 'history_store.dart';
 
 /// The diagram-only horizontal positions, keyed by NODE id. A node with no entry
 /// simply uses its plan x, so an untouched project renders exactly as before.
@@ -43,6 +53,82 @@ class SchematicLayoutState {
 class SchematicLayoutController extends Notifier<SchematicLayoutState> {
   @override
   SchematicLayoutState build() => const SchematicLayoutState();
+
+  final List<Map<String, double>> _undo = [];
+  final List<Map<String, double>> _redo = [];
+
+  /// The pre-gesture override map while a [beginGesture] is open, else null.
+  Map<String, double>? _gestureBase;
+
+  bool get canUndo => _undo.isNotEmpty;
+  bool get canRedo => _redo.isNotEmpty;
+
+  /// Open a gesture (a drag): every [setNodesX] until [endGesture] folds into
+  /// ONE undo step. Re-opening an open gesture keeps the original base.
+  void beginGesture() => _gestureBase ??= state.schematicXOverrides;
+
+  /// Close the gesture opened by [beginGesture]: records one
+  /// [UndoDomain.riserLayout] step when the overrides actually changed, else
+  /// nothing (a click without a move is never an undo entry).
+  void endGesture() {
+    final base = _gestureBase;
+    _gestureBase = null;
+    if (base == null || mapEquals(base, state.schematicXOverrides)) return;
+    _pushUndo(base);
+  }
+
+  void _pushUndo(Map<String, double> before) {
+    _undo.add(before);
+    if (_undo.length > 200) _undo.removeAt(0);
+    _redo.clear();
+    ref.read(historyProvider.notifier).record(UndoDomain.riserLayout);
+  }
+
+  /// Run [mutate] as ONE undoable step (outside a drag gesture): an arrow
+  /// nudge, a 'Reset position'. No-op mutations record nothing.
+  void _step(void Function() mutate) {
+    if (_gestureBase != null) {
+      mutate();
+      return;
+    }
+    final before = state.schematicXOverrides;
+    mutate();
+    if (!identical(before, state.schematicXOverrides) &&
+        !mapEquals(before, state.schematicXOverrides)) {
+      _pushUndo(before);
+    }
+  }
+
+  /// [setNodesX] as its own undo step (an arrow nudge).
+  void setNodesXUndoable(Map<String, double> xByNodeId) =>
+      _step(() => setNodesX(xByNodeId));
+
+  /// [clearNodes] as its own undo step — the riser context menu's 'Reset
+  /// position' (the riser returns to its plan x).
+  void resetNodes(Iterable<String> nodeIds) =>
+      _step(() => clearNodes(nodeIds));
+
+  /// Revert the most recent layout step. Driven by the global history.
+  void undo() {
+    if (_undo.isEmpty) return;
+    _redo.add(state.schematicXOverrides);
+    state = SchematicLayoutState(schematicXOverrides: _undo.removeLast());
+  }
+
+  /// Replay the most recently undone layout step.
+  void redo() {
+    if (_redo.isEmpty) return;
+    _undo.add(state.schematicXOverrides);
+    state = SchematicLayoutState(schematicXOverrides: _redo.removeLast());
+  }
+
+  /// Drop both stacks (a document open / restore — called by the history
+  /// reset, like the other domain coordinators).
+  void resetHistory() {
+    _undo.clear();
+    _redo.clear();
+    _gestureBase = null;
+  }
 
   /// Set the elevation x of every node in [xByNodeId] (both endpoints of a
   /// dragged riser, or a whole multi-selection moved by one delta). A no-op —
@@ -83,7 +169,8 @@ class SchematicLayoutController extends Notifier<SchematicLayoutState> {
 }
 
 /// The elevation's diagram-only node positions. Read by the Riser → Edit view;
-/// written by `NetworkController.moveRiserHorizontal`.
+/// written by `NetworkController.moveRiserHorizontal` (inside a drag gesture)
+/// and the undoable nudge / reset intents above.
 final schematicLayoutProvider =
     NotifierProvider<SchematicLayoutController, SchematicLayoutState>(
         SchematicLayoutController.new);

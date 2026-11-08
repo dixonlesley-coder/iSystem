@@ -15,9 +15,12 @@
 /// Every expected value is hand-derived from the `PuilProfile` tables:
 ///   - breaker ladder: 6 10 16 20 25 32 40 50 63 | 80 100 125 160 200 250 315
 ///     400 500 630 800 1000 1250 1600 A;
-///   - KHA, Cu/PVC, reference method B1 (conduit): 4→34, 10→60, 16→80,
-///     300→500 A;
-///   - derating at the panel defaults (30 °C air, grouping 1, conduit) = 1.0;
+///   - KHA, Cu/PVC, reference method E (free air / tray — both boards are laid
+///     on tray here; Round 11 split conduit B1 onto IEC B.52.4 B1, so these
+///     fixtures pin the method whose table matches the derivations): 4→34,
+///     10→60, 16→80, 300→500 A;
+///   - derating at the panel defaults (30 °C air, grouping 1) = 1.0
+///     for a single run; n parallel runs group at groupingFactor(n);
 ///   - PUIL continuous-load factor 1.25 (Iz ≥ max(In, 1.25·Ib));
 ///   - 3φ trunk minimum section 4 mm².
 library;
@@ -33,6 +36,19 @@ import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
 const p = PuilProfile();
+
+/// A profile whose breaker ladder STOPS at the 1600 A MCCB frame (no ACB
+/// frames) — the premise of group (D): the 1.6x target lies beyond the
+/// largest frame. Since Round 23 the PUIL ladder runs on to the 4000 A ACB,
+/// where a cable-reachable child incomer (<= 1300 A here) can never push the
+/// target past the top; the message logic is still exercised on this ladder.
+class _MccbTopProfile extends PuilProfile {
+  const _MccbTopProfile();
+  @override
+  List<double> get acbRatingsA => const <double>[];
+}
+
+const pTop = _MccbTopProfile();
 
 ElectricalCircuitResult _way(ElectricalPanelResult r, String id) =>
     r.circuits.firstWhere((c) => c.circuitId == id);
@@ -50,6 +66,7 @@ ElectricalProject _twoBoard({required double loadW, Current? feederOverride}) =>
           name: 'Main',
           system: ElectricalSystem.threePhase,
           voltage: const Voltage(400),
+          installMethod: CableInstallMethod.tray,
           circuits: [
             ElectricalCircuit(
               id: 'f1',
@@ -67,6 +84,7 @@ ElectricalProject _twoBoard({required double loadW, Current? feederOverride}) =>
           name: 'Sub',
           system: ElectricalSystem.threePhase,
           voltage: const Voltage(400),
+          installMethod: CableInstallMethod.tray,
           sourceType: PanelSource.feeder,
           fedByCircuitId: 'f1',
           circuits: [
@@ -212,37 +230,44 @@ void main() {
 
   // ── (D) the 1.6× target itself above the ladder top ⇒ honest variant ──────
   group('(D) when no cable can reach the target, the message says so', () {
-    // SP: 830 kW 3φ at cosφ 1.0 ⇒ Ib = 830 000 / (√3·400) = 1198.0018 A →
-    //   1198.0 A ⇒ SP INCOMER = first rung ≥ 1198.0 = 1250 A; f1 the same.
-    // CABLE: Iz ≥ max(1250, 1.25 × 1198.0018 = 1497.5) = 1497.5 A. One run tops
-    //   out at 300 mm² (500 A), two at 1000 A ⇒ 3 parallel runs of 300 mm²
-    //   ⇒ Iz = 3 × 500 = 1500.0 A.
+    // Re-derived 2026-10 (audit elec-core-3): parallel runs of one circuit
+    // are a GROUP (IEC 60364-5-52 §523.5), so n runs derate by
+    // groupingFactor(n) (2→0.8, 3→0.7, 4→0.65). The old 830 kW fixture's
+    // 3×300 mm² "Iz 1500 A" was really 3·500·0.7 = 1050 A, and no make-up up to
+    // 4×300 (4·500·0.65 = 1300 A) carries its 1497.5 A requirement any more,
+    // so the premise moves to a load 4×300 CAN carry:
+    // SP: 706 kW 3φ at cosφ 1.0 ⇒ Ib = 706 000 / (√3·400) = 1019.02 A →
+    //   1019.0 A ⇒ SP INCOMER = first rung ≥ 1019.0 = 1250 A; f1 the same.
+    // CABLE: Iz ≥ max(1250, 1.25 × 1019.02 = 1273.8) = 1273.8 A. One run tops
+    //   out at 300 mm² (500 A); 2 runs → per run ≥ 1273.8/2/0.8 = 796 A ✗;
+    //   3 runs → 1273.8/3/0.7 = 606.6 A ✗; 4 runs → 1273.8/4/0.65 = 489.9 A
+    //   ⇒ 4 parallel runs of 300 mm² ⇒ Iz = 4 × 500 × 0.65 = 1300.0 A.
     // FLOOR target = 1.6 × 1250 = 2000 A — ABOVE the 1600 A ladder top, so the
-    //   floor rung clamps to 1600 A. CAP = largest rung ≤ 1500 = 1250 A.
-    //   1600 > 1500 ⇒ the cap bites (the device never leaves 1250 A), but even
+    //   floor rung clamps to 1600 A. CAP = largest rung ≤ 1300 = 1250 A.
+    //   1600 > 1300 ⇒ the cap bites (the device never leaves 1250 A), but even
     //   an infinite cable only buys the 1600 A top rung = 1.28× — so the advice
     //   must NOT be "increase the cable to reach 1.6×".
-    final project = _twoBoard(loadW: 830000);
-    final sys = computeSystem(p, project);
+    final project = _twoBoard(loadW: 706000);
+    final sys = computeSystem(pTop, project);
 
-    test('premise: 3 x 300 mm2 at Iz 1500 A, device held at 1250 A', () {
+    test('premise: 4 x 300 mm2 at Iz 1300 A, device held at 1250 A', () {
       final feeder = _way(sys.panels['MDP']!, 'f1');
       expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 1250);
       expect(feeder.breaker.ratingA.amperes, 1250);
       expect(feeder.cable.csaMm2, 300);
-      expect(feeder.cable.runsPerPhase, 3);
-      expect(feeder.cable.deratedIz.amperes, closeTo(1500.0, 1e-9));
+      expect(feeder.cable.runsPerPhase, 4);
+      expect(feeder.cable.deratedIz.amperes, closeTo(1300.0, 1e-9));
       expect(sys.feederFloorsCapped, {'f1'});
       expect(sys.feederFloorsApplied, isEmpty);
     });
 
     test('the message states the target is beyond the largest frame', () {
-      final msg = _nonSelectiveMessage(faultStudy(sys, project, p));
+      final msg = _nonSelectiveMessage(faultStudy(sys, project, pTop));
       expect(
         msg,
         'Feeder to SP (1250 A) may not discriminate with Sub incomer (1250 A): '
         'the device is already at the largest rung the 300 mm2 feeder cable '
-        'protects (Iz 1500.0 A). The 1.6x target (2000 A) is itself beyond the '
+        'protects (Iz 1300.0 A). The 1.6x target (2000 A) is itself beyond the '
         'largest standard frame (1600 A), so no cable increase reaches it - '
         'split the load or verify against manufacturer curves.',
       );

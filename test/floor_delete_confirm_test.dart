@@ -15,6 +15,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/history_store.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
@@ -191,6 +192,34 @@ void main() {
       expect(net.nodeById('a0'), isNull);
       expect(net.nodeById('b0'), isNull);
       expect(net.edges.any((e) => e.id == 'e0'), isFalse);
+    });
+
+    testWidgets(
+        'Round 13 — a level carrying ONLY a room + a tank still asks, naming '
+        'both', (tester) async {
+      final c = await openBuilding(tester);
+      // Nothing drawn: the old count (network only) was 0 ⇒ no dialog, and
+      // the room + tank vanished with the level.
+      c.read(roomAreasProvider.notifier).set(const [
+        RoomArea(
+            id: 'r0', sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 9, by: 9),
+      ]);
+      c.read(tankAreasProvider.notifier).set(const [
+        TankArea(
+            id: 't0', sheetId: 's1', floorIndex: 0, ax: 0, ay: 0, bx: 9, by: 9),
+      ]);
+      await tester.pump();
+      await tester.tap(find.text('×').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Delete Ground?'), findsOneWidget);
+      expect(
+          find.text('Ground carries 1 room, 1 tank — deleting the level '
+              'deletes them too.'),
+          findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(c.read(roomAreasProvider), hasLength(1));
+      expect(c.read(tankAreasProvider), hasLength(1));
     });
 
     testWidgets('a level with NOTHING drawn on it is removed straight away',

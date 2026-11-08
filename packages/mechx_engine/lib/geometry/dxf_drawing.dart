@@ -6,7 +6,15 @@
 ///
 /// Scope: the geometry an architectural floor plan is actually made of — `LINE`,
 /// `LWPOLYLINE`, the old `POLYLINE`/`VERTEX` pair, `CIRCLE`, `ARC`, and `INSERT`
-/// (translate · rotate · scale of a block). Text, dimensions, hatches, splines
+/// (translate · rotate · scale of a block, including the `70/71/44/45`
+/// column/row ARRAY form a DWG MINSERT is written as). Entities carry their
+/// Object Coordinate System: an extrusion of (0,0,-1) — what AutoCAD writes for
+/// MIRRORed ARC/CIRCLE/LWPOLYLINE/INSERT — is honoured as an X flip; any other
+/// (truly 3D) extrusion falls back to reading the coordinates as world XY.
+/// Paper-space entities (group `67 = 1`: the layout's title block / viewport
+/// frame) are skipped — only model space is the plan. A block that (directly or
+/// indirectly) inserts itself is not re-expanded, and INSERT expansion is
+/// budgeted, so a malformed file cannot hang the parse. Text, dimensions, hatches, splines
 /// and 3D entities are skipped (a background plan doesn't need them, and the
 /// engineer calibrates + redraws MEP on top). It is a DISPLAY substrate, never a
 /// source of calculation — like the PDF page it stands in for, real-world length
@@ -59,6 +67,28 @@ class DxfBounds {
 
   double get width => maxX - minX;
   double get height => maxY - minY;
+
+  /// Round 24 — true when every coordinate is finite and the box has a
+  /// positive extent on at least one axis (an importable plan).
+  bool get isUsable =>
+      minX.isFinite &&
+      minY.isFinite &&
+      maxX.isFinite &&
+      maxY.isFinite &&
+      (width > 0 || height > 0);
+
+  /// Round 24 — true when [other] differs from this box by more than a
+  /// relative [tolerance] of the larger extent (a plan revised in place whose
+  /// geometry grew / shrank / moved).
+  bool differsFrom(DxfBounds other, {double tolerance = 1e-6}) {
+    final ext = math.max(math.max(width, height),
+        math.max(other.width, other.height));
+    final tol = (ext > 0 ? ext : 1.0) * tolerance;
+    return (minX - other.minX).abs() > tol ||
+        (minY - other.minY).abs() > tol ||
+        (maxX - other.maxX).abs() > tol ||
+        (maxY - other.maxY).abs() > tol;
+  }
 }
 
 /// The parsed drawing: display primitives + the bounding box. The primitives
@@ -70,11 +100,30 @@ class DxfDrawing {
   final List<DxfArc> arcs;
   final DxfBounds bounds;
 
+  /// Round 24 — true when the primitive or INSERT budget stopped emission
+  /// before the whole file was read: some geometry is NOT drawn (the bounds
+  /// still cover it — a bounds-only pass continues past the cap). The import
+  /// surfaces it; never a silent partial plan.
+  final bool truncated;
+
+  /// Round 33 (import-robustness-2-5) — true when the FILE itself ends
+  /// before its ENTITIES section does (no `0/ENDSEC`: an interrupted copy /
+  /// a killed conversion): the drawn plan may be missing geometry. Distinct
+  /// from [truncated] (the parser's own budget).
+  final bool incomplete;
+
+  /// Round 33 (import-robustness-2-1) — the HEADER `$INSUNITS` code (0 =
+  /// unitless / absent; 1 in, 2 ft, 4 mm, 5 cm, 6 m — [dxfUnitMetres]).
+  final int insUnits;
+
   const DxfDrawing({
     required this.polylines,
     required this.circles,
     required this.arcs,
     required this.bounds,
+    this.truncated = false,
+    this.incomplete = false,
+    this.insUnits = 0,
   });
 
   bool get isEmpty => polylines.isEmpty && circles.isEmpty && arcs.isEmpty;
@@ -87,7 +136,16 @@ class _Pair {
   final String value;
   const _Pair(this.code, this.value);
 
-  double get d => double.tryParse(value.trim()) ?? 0.0;
+  double get d => df ?? 0.0;
+
+  /// Round 24 — the value as a FINITE double, else null: Dart parses `1e999`
+  /// as Infinity and `NaN` as NaN, and either would collapse the bounds (a
+  /// 1 × 1 px sheet) or paint a line to infinity. A non-finite coordinate is
+  /// treated as absent, so its entity is skipped.
+  double? get df {
+    final v = double.tryParse(value.trim());
+    return (v != null && v.isFinite) ? v : null;
+  }
 }
 
 /// 2×3 affine transform `[[a c e],[b d f]]`: `x' = a·x + c·y + e`,
@@ -120,6 +178,19 @@ class _Xform {
 
   /// Rotation contributed by the linear part, in degrees, for arc angles.
   double get rotationDeg => math.atan2(b, a) * 180.0 / math.pi;
+
+  /// Determinant of the linear part — negative for a MIRRORING transform
+  /// (which reverses an arc's sweep direction).
+  double get det => a * d - b * c;
+
+  /// True when the linear part is a pure rotation + uniform scale (no mirror,
+  /// no shear) — arc angles then simply shift by [rotationDeg].
+  bool get isConformal =>
+      (a - d).abs() <= 1e-12 * (a.abs() + d.abs() + 1) &&
+      (b + c).abs() <= 1e-12 * (b.abs() + c.abs() + 1);
+
+  /// X flip `(x, y) → (−x, y)`: the OCS → WCS map for extrusion (0,0,−1).
+  static const _Xform flipX = _Xform(-1, 0, 0, 1, 0, 0);
 }
 
 /// A block definition: its base point + the raw entity-pair slice (parsed lazily
@@ -134,6 +205,24 @@ class _Block {
 /// Accumulates emitted primitives + the running bounding box. Capped so a
 /// pathological / deeply-nested file can't exhaust memory.
 class _Acc {
+  _Acc() : boundsOnly = false, blockExtents = {};
+
+  /// Round 25 — a scratch accumulator that only measures a block's LOCAL
+  /// extent: it stores nothing ([full] is always true) and shares the
+  /// per-block extent memo with the main accumulator.
+  _Acc._boundsOnly(this.blockExtents) : boundsOnly = true;
+
+  final bool boundsOnly;
+
+  /// Round 25 — memoised per-block local extent (block coordinates, before
+  /// the INSERT transform; null = the block draws nothing). Past the
+  /// primitive cap an INSERT instance grows the bounds by the 4 transformed
+  /// corners of this box (a conservative superset — an affine image of a box
+  /// contains the image of everything inside it) instead of re-walking the
+  /// block body, so the bounds-only continuation costs O(instances), never
+  /// O(instances × block size).
+  final Map<String, DxfBounds?> blockExtents;
+
   final List<DxfPolyline> polylines = [];
   final List<DxfCircle> circles = [];
   final List<DxfArc> arcs = [];
@@ -141,11 +230,29 @@ class _Acc {
   double minX = 0, minY = 0, maxX = 0, maxY = 0;
   int count = 0;
 
-  static const int _maxPrimitives = 400000;
+  /// INSERT instances expanded so far (each array cell counts). Budgeted
+  /// separately from [count]: a geometry-free fan-out (A inserts B ×1000, B
+  /// inserts C ×1000) emits nothing, so the primitive cap alone never trips.
+  int inserts = 0;
 
-  bool get full => count >= _maxPrimitives;
+  static const int _maxPrimitives = 400000;
+  static const int maxInserts = 100000;
+
+  bool get full => boundsOnly || count >= _maxPrimitives;
+  bool get insertsSpent => inserts >= maxInserts;
+
+  /// Round 24 — set when a budget dropped geometry (see
+  /// [DxfDrawing.truncated]).
+  bool truncated = false;
+
+  /// Round 33 (import-robustness-2-3) — frozen / off layer names (never
+  /// drawn, never in the extents). Shared by the bounds-only scratch.
+  Set<String> hiddenLayers = const {};
+
+  static bool _finitePt(DxfPoint p) => p.x.isFinite && p.y.isFinite;
 
   void _grow(double x, double y) {
+    if (!x.isFinite || !y.isFinite) return;
     if (!_has) {
       minX = maxX = x;
       minY = maxY = y;
@@ -158,32 +265,127 @@ class _Acc {
     }
   }
 
+  // Round 24 — past the primitive cap an entity is no longer STORED, but its
+  // extent still grows the bounds (a cheap bounds-only pass), and the drawing
+  // is flagged truncated. A primitive with a non-finite point is dropped.
   void addPolyline(DxfPolyline p) {
-    if (full || p.points.isEmpty) return;
-    polylines.add(p);
-    count++;
+    if (p.points.isEmpty || !p.points.every(_finitePt)) return;
+    if (full) {
+      truncated = true;
+    } else {
+      polylines.add(p);
+      count++;
+    }
     for (final pt in p.points) {
       _grow(pt.x, pt.y);
     }
   }
 
   void addCircle(DxfCircle c) {
-    if (full) return;
-    circles.add(c);
-    count++;
+    if (!_finitePt(c.center) || !c.radius.isFinite) return;
+    if (full) {
+      truncated = true;
+    } else {
+      circles.add(c);
+      count++;
+    }
     _grow(c.center.x - c.radius, c.center.y - c.radius);
     _grow(c.center.x + c.radius, c.center.y + c.radius);
   }
 
   void addArc(DxfArc a) {
-    if (full) return;
-    arcs.add(a);
-    count++;
-    // Conservative box: the full circle (cheap, never under-estimates).
-    _grow(a.center.x - a.radius, a.center.y - a.radius);
-    _grow(a.center.x + a.radius, a.center.y + a.radius);
+    if (!_finitePt(a.center) ||
+        !a.radius.isFinite ||
+        !a.startDeg.isFinite ||
+        !a.endDeg.isFinite) {
+      return;
+    }
+    if (full) {
+      truncated = true;
+    } else {
+      arcs.add(a);
+      count++;
+    }
+    // Round 33 (import-robustness-2-2) — the arc's EXACT extent: both
+    // endpoints plus every axis extreme (0 / 90 / 180 / 270°) inside the CCW
+    // sweep; the full-circle box only for a sweep of 360° or more. The old
+    // full-circle box let a large-radius facade / road arc collapse the plan
+    // into a corner of the sheet.
+    final ext = dxfArcExtent(a);
+    _grow(ext.minX, ext.minY);
+    _grow(ext.maxX, ext.maxY);
   }
 }
+
+/// Round 33 (import-robustness-2-2) — the exact axis-aligned extent of [a]:
+/// its two endpoints plus each axis-extreme angle (0 / 90 / 180 / 270°) the
+/// CCW sweep [DxfArc.startDeg] → [DxfArc.endDeg] passes; the full circle's box
+/// when the sweep is 360° or more. Pure.
+DxfBounds dxfArcExtent(DxfArc a) {
+  final cx = a.center.x, cy = a.center.y, r = a.radius.abs();
+  var sweep = a.endDeg - a.startDeg;
+  if (sweep >= 360.0 - 1e-12) {
+    return DxfBounds(cx - r, cy - r, cx + r, cy + r);
+  }
+  sweep = ((sweep % 360) + 360) % 360;
+  if (sweep == 0 && a.endDeg != a.startDeg) {
+    return DxfBounds(cx - r, cy - r, cx + r, cy + r);
+  }
+  final start = ((a.startDeg % 360) + 360) % 360;
+  // Exact trig at the quadrant angles (cos 90° is 6e-17 in floating point).
+  double cosD(double deg) {
+    final q = deg / 90.0;
+    if ((q - q.roundToDouble()).abs() < 1e-12) {
+      return const [1.0, 0.0, -1.0, 0.0][q.round() % 4];
+    }
+    return math.cos(deg * math.pi / 180.0);
+  }
+
+  double sinD(double deg) => cosD(deg - 90.0);
+  double px(double deg) => cx + r * cosD(deg);
+  double py(double deg) => cy + r * sinD(deg);
+  var minX = math.min(px(start), px(start + sweep));
+  var maxX = math.max(px(start), px(start + sweep));
+  var minY = math.min(py(start), py(start + sweep));
+  var maxY = math.max(py(start), py(start + sweep));
+  for (var k = 0; k < 8; k++) {
+    final ang = k * 90.0; // 0..630 covers start + sweep < 720
+    if (ang < start || ang > start + sweep) continue;
+    switch (k % 4) {
+      case 0:
+        maxX = cx + r;
+      case 1:
+        maxY = cy + r;
+      case 2:
+        minX = cx - r;
+      case 3:
+        minY = cy - r;
+    }
+  }
+  return DxfBounds(minX, minY, maxX, maxY);
+}
+
+/// Round 33 (import-robustness-2-1) — metres per drawing unit for a DXF
+/// `$INSUNITS` [code]; null for unitless (0) or an unrecognised code.
+double? dxfUnitMetres(int code) => switch (code) {
+      1 => 0.0254, // inches
+      2 => 0.3048, // feet
+      4 => 0.001, // millimetres
+      5 => 0.01, // centimetres
+      6 => 1.0, // metres
+      7 => 1000.0, // kilometres
+      8 => 2.54e-8, // microinches
+      9 => 2.54e-5, // mils
+      10 => 0.9144, // yards
+      _ => null,
+    };
+
+/// Round 33 (import-robustness-2-8) — true when [contents] is a BINARY DXF
+/// (the `AutoCAD Binary DXF` sentinel AutoCAD's DXFOUT can still write):
+/// this reader handles ASCII DXF only, so the import says so instead of
+/// 'no importable geometry'.
+bool isBinaryDxf(String contents) =>
+    contents.startsWith('AutoCAD Binary DXF');
 
 /// Parse a DXF document's text [contents] into a [DxfDrawing]. Returns `null`
 /// when the file contains no drawable geometry (caller surfaces a friendly
@@ -193,17 +395,31 @@ DxfDrawing? parseDxf(String contents) {
   if (pairs.isEmpty) return null;
 
   final blocks = _collectBlocks(pairs);
-  final acc = _Acc();
+  final acc = _Acc()..hiddenLayers = _hiddenLayers(pairs);
 
   // Walk the top-level ENTITIES section (identity transform).
   final ent = _sectionRange(pairs, 'ENTITIES');
   if (ent != null) {
-    _parseEntities(pairs, ent.start, ent.end, _Xform.identity, blocks, 0, acc);
+    _parseEntities(
+        pairs, ent.start, ent.end, _Xform.identity, blocks, 0, acc, const {});
   } else {
     // Some exporters omit the section wrapper — parse the whole stream as a
-    // best-effort fallback (block defs are still skipped via the depth/zero
-    // base handling below).
-    _parseEntities(pairs, 0, pairs.length, _Xform.identity, blocks, 0, acc);
+    // best-effort fallback. Round 33 (import-robustness-2-7): the BLOCKS
+    // section is EXCLUDED (its bodies are definitions, drawn only through an
+    // INSERT; walking them drew every block at its local origin), and so are
+    // the HEADER / TABLES / OBJECTS / CLASSES sections.
+    var from = 0;
+    for (final r in _sectionsToSkip(pairs)) {
+      if (r.start > from) {
+        _parseEntities(
+            pairs, from, r.start, _Xform.identity, blocks, 0, acc, const {});
+      }
+      from = r.end;
+    }
+    if (from < pairs.length) {
+      _parseEntities(
+          pairs, from, pairs.length, _Xform.identity, blocks, 0, acc, const {});
+    }
   }
 
   if (acc.polylines.isEmpty && acc.circles.isEmpty && acc.arcs.isEmpty) {
@@ -214,14 +430,91 @@ DxfDrawing? parseDxf(String contents) {
     circles: acc.circles,
     arcs: acc.arcs,
     bounds: DxfBounds(acc.minX, acc.minY, acc.maxX, acc.maxY),
+    truncated: acc.truncated,
+    incomplete: ent != null && !ent.terminated,
+    insUnits: _headerInt(pairs, r'$INSUNITS') ?? 0,
   );
+}
+
+/// Round 33 — every non-ENTITIES section (BLOCKS, HEADER, TABLES, OBJECTS,
+/// CLASSES, THUMBNAILIMAGE) as a [start-of-SECTION, past-ENDSEC) range, in
+/// stream order.
+List<_Range> _sectionsToSkip(List<_Pair> pairs) {
+  final out = <_Range>[];
+  for (var i = 0; i < pairs.length; i++) {
+    if (pairs[i].code != 0 || pairs[i].value.trim() != 'SECTION') continue;
+    if (i + 1 >= pairs.length || pairs[i + 1].code != 2) continue;
+    if (pairs[i + 1].value.trim() == 'ENTITIES') continue;
+    var j = i + 2;
+    while (j < pairs.length &&
+        !(pairs[j].code == 0 && pairs[j].value.trim() == 'ENDSEC')) {
+      j++;
+    }
+    final end = j < pairs.length ? j + 1 : pairs.length;
+    out.add(_Range(i, end));
+    i = end - 1;
+  }
+  return out;
+}
+
+/// Round 33 (import-robustness-2-1) — the integer value (group 70) of the
+/// HEADER variable [name] (`9/<name>`), else null.
+int? _headerInt(List<_Pair> pairs, String name) {
+  final header = _sectionRange(pairs, 'HEADER');
+  if (header == null) return null;
+  for (var i = header.start; i < header.end; i++) {
+    if (pairs[i].code == 9 && pairs[i].value.trim() == name) {
+      for (var j = i + 1; j < header.end && pairs[j].code != 9; j++) {
+        if (pairs[j].code == 70) return int.tryParse(pairs[j].value.trim());
+      }
+      return null;
+    }
+  }
+  return null;
+}
+
+/// Round 33 (import-robustness-2-3) — the layers CAD does NOT display: a
+/// LAYER table entry FROZEN (70 bit 1) or OFF (62 < 0). Entities on them are
+/// neither drawn nor counted in the extents (the classic 'zoom extents'
+/// stray object on an old frozen layer).
+Set<String> _hiddenLayers(List<_Pair> pairs) {
+  final tables = _sectionRange(pairs, 'TABLES');
+  if (tables == null) return const {};
+  final out = <String>{};
+  var i = tables.start;
+  while (i < tables.end) {
+    if (pairs[i].code == 0 && pairs[i].value.trim() == 'LAYER') {
+      String? name;
+      var flags = 0;
+      var color = 7;
+      var j = i + 1;
+      while (j < tables.end && pairs[j].code != 0) {
+        switch (pairs[j].code) {
+          case 2:
+            name = pairs[j].value.trim();
+          case 70:
+            flags = int.tryParse(pairs[j].value.trim()) ?? 0;
+          case 62:
+            color = int.tryParse(pairs[j].value.trim()) ?? 7;
+        }
+        j++;
+      }
+      if (name != null && ((flags & 1) != 0 || color < 0)) out.add(name);
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  return out;
 }
 
 /// Split the raw text into (code, value) pairs. Strict DXF is exactly one code
 /// line then one value line; we resync past stray blank/garbage lines so a
 /// slightly malformed file still reads.
 List<_Pair> _tokenize(String contents) {
-  final lines = contents.split('\n');
+  // Round 33 (import-robustness-2-8) — CRLF, LF and classic-Mac CR-only
+  // line ends all tokenise.
+  final lines = contents.split(RegExp(r'\r\n|\n|\r'));
   final pairs = <_Pair>[];
   var i = 0;
   while (i + 1 < lines.length) {
@@ -239,7 +532,11 @@ List<_Pair> _tokenize(String contents) {
 class _Range {
   final int start;
   final int end; // exclusive
-  const _Range(this.start, this.end);
+
+  /// Round 33 — false when the section ran to the end of the stream with no
+  /// `0/ENDSEC` (a cut-off file).
+  final bool terminated;
+  const _Range(this.start, this.end, {this.terminated = true});
 }
 
 /// Find the [start, end) pair-index range INSIDE a named section (between the
@@ -257,7 +554,7 @@ _Range? _sectionRange(List<_Pair> pairs, String name) {
             return _Range(start, j);
           }
         }
-        return _Range(start, pairs.length);
+        return _Range(start, pairs.length, terminated: false);
       }
     }
   }
@@ -313,6 +610,7 @@ const int _maxInsertDepth = 8;
 
 /// Walk an entity-pair slice [start, end), emitting transformed primitives into
 /// [acc]. Each entity is the code-0 marker plus the pairs up to the next code 0.
+/// [ancestors] is the active block-expansion stack (cycle guard).
 void _parseEntities(
   List<_Pair> pairs,
   int start,
@@ -321,9 +619,11 @@ void _parseEntities(
   Map<String, _Block> blocks,
   int depth,
   _Acc acc,
+  Set<String> ancestors,
 ) {
+  final hidden = acc.hiddenLayers;
   var i = start;
-  while (i < end && !acc.full) {
+  while (i < end) {
     if (pairs[i].code != 0) {
       i++;
       continue;
@@ -336,27 +636,58 @@ void _parseEntities(
     }
     final body = pairs.sublist(i + 1, j);
 
+    // Paper space (67 = 1) lives in ENTITIES beside model space in R2000+ —
+    // the layout's frame / title block, not the plan. Only checked at the top
+    // level: block contents inherit the space of the INSERT that places them.
+    final paper = depth == 0 && _first(body, 67) == 1;
+    // Round 33 (import-robustness-2-3) — an entity on a FROZEN / OFF layer is
+    // not displayed by CAD, so it is neither drawn nor counted in the
+    // extents. Block contents on layer '0' take the INSERT's layer, which is
+    // visible whenever the INSERT itself was expanded, so only a NAMED layer
+    // inside a block can hide its entity.
+    if (hidden.isNotEmpty) {
+      final layer = _firstStr(body, 8) ?? '0';
+      final inherits = depth > 0 && layer == '0';
+      if (!inherits && hidden.contains(layer)) {
+        if (type == 'POLYLINE') {
+          j = _emitOldPolyline(pairs, j, end, xform, false, acc, emit: false);
+        }
+        i = j;
+        continue;
+      }
+    }
+
     switch (type) {
       case 'LINE':
-        _emitLine(body, xform, acc);
+        if (!paper) _emitLine(body, xform, acc);
         break;
       case 'LWPOLYLINE':
-        _emitLwPolyline(body, xform, acc);
+        if (!paper) _emitLwPolyline(body, xform.compose(_ocs(body)), acc);
         break;
       case 'POLYLINE':
         // Old-style polyline: vertices follow as VERTEX entities until SEQEND.
+        // Its extrusion sits on the POLYLINE header and applies to the run.
+        // Round 24 — a POLYFACE (70 bit 64) or polygon MESH (bit 16) is a 3D
+        // surface whose face records sit at (0,0,0): skipped like every other
+        // 3D entity (its vertices are still consumed).
         final closed = _flagBit(body, 70, 1);
-        final vEnd = _emitOldPolyline(pairs, j, end, xform, closed, acc);
+        final mesh = _flagBit(body, 70, 64) || _flagBit(body, 70, 16);
+        final vEnd = _emitOldPolyline(
+            pairs, j, end, xform.compose(_ocs(body)), closed, acc,
+            emit: !paper && !mesh);
         j = vEnd; // resume after SEQEND
         break;
       case 'CIRCLE':
-        _emitCircle(body, xform, acc);
+        if (!paper) _emitCircle(body, xform.compose(_ocs(body)), acc);
         break;
       case 'ARC':
-        _emitArc(body, xform, acc);
+        if (!paper) _emitArc(body, xform.compose(_ocs(body)), acc);
         break;
       case 'INSERT':
-        _emitInsert(body, xform, blocks, depth, acc);
+        if (!paper) {
+          _emitInsert(body, xform.compose(_ocs(body)), blocks, depth, acc,
+              ancestors);
+        }
         break;
       default:
         break; // TEXT, DIMENSION, HATCH, SPLINE, 3D… skipped
@@ -367,7 +698,8 @@ void _parseEntities(
 
 double? _first(List<_Pair> body, int code) {
   for (final p in body) {
-    if (p.code == code) return p.d;
+    // Round 24 — a non-finite value reads as ABSENT (the entity is skipped).
+    if (p.code == code) return p.df;
   }
   return null;
 }
@@ -377,6 +709,18 @@ String? _firstStr(List<_Pair> body, int code) {
     if (p.code == code) return p.value.trim();
   }
   return null;
+}
+
+/// The entity's OCS → WCS map in the plane: an extrusion of (0,0,−1) (group
+/// 230 < 0 with 210/220 absent or ~0) is an X flip; the default (0,0,1) or any
+/// other (truly 3D) normal is treated as identity — the previous behaviour.
+_Xform _ocs(List<_Pair> body) {
+  final nz = _first(body, 230);
+  if (nz == null || nz >= 0) return _Xform.identity;
+  final nx = _first(body, 210) ?? 0.0;
+  final ny = _first(body, 220) ?? 0.0;
+  if (nx.abs() > 1e-9 || ny.abs() > 1e-9) return _Xform.identity;
+  return _Xform.flipX;
 }
 
 bool _flagBit(List<_Pair> body, int code, int bit) {
@@ -397,9 +741,10 @@ void _emitLwPolyline(List<_Pair> body, _Xform x, _Acc acc) {
   double? px;
   for (final p in body) {
     if (p.code == 10) {
-      px = p.d;
+      px = p.df; // Round 24 — a non-finite vertex is skipped
     } else if (p.code == 20 && px != null) {
-      pts.add(x.apply(px, p.d));
+      final py = p.df;
+      if (py != null) pts.add(x.apply(px, py));
       px = null;
     }
   }
@@ -415,8 +760,9 @@ int _emitOldPolyline(
   int end,
   _Xform x,
   bool closed,
-  _Acc acc,
-) {
+  _Acc acc, {
+  bool emit = true,
+}) {
   final pts = <DxfPoint>[];
   var i = start;
   while (i < end) {
@@ -432,18 +778,33 @@ int _emitOldPolyline(
     if (type == 'VERTEX') {
       var j = i + 1;
       double? vx, vy;
+      var flags = 0;
+      var badCoord = false;
       while (j < end && pairs[j].code != 0) {
-        if (pairs[j].code == 10) vx = pairs[j].d;
-        if (pairs[j].code == 20) vy = pairs[j].d;
+        final c = pairs[j].code;
+        if (c == 10 || c == 20) {
+          final v = pairs[j].df;
+          if (v == null) badCoord = true;
+          if (c == 10) vx = v;
+          if (c == 20) vy = v;
+        }
+        if (c == 70) flags = pairs[j].d.toInt();
         j++;
       }
-      if (vx != null && vy != null) pts.add(x.apply(vx, vy));
+      // Round 24 — a polyface FACE record (70 bit 128 without bit 64) carries
+      // vertex indices, not a point (its 10/20 are 0,0): never a plan point.
+      final faceRecord = (flags & 128) != 0 && (flags & 64) == 0;
+      if (!faceRecord && !badCoord && vx != null && vy != null) {
+        pts.add(x.apply(vx, vy));
+      }
       i = j;
     } else {
       break; // unexpected — stop the vertex run
     }
   }
-  if (pts.isNotEmpty) acc.addPolyline(DxfPolyline(pts, closed: closed));
+  if (emit && pts.isNotEmpty) {
+    acc.addPolyline(DxfPolyline(pts, closed: closed));
+  }
   return i;
 }
 
@@ -457,9 +818,65 @@ void _emitArc(List<_Pair> body, _Xform x, _Acc acc) {
   final cx = _first(body, 10), cy = _first(body, 20), r = _first(body, 40);
   final a0 = _first(body, 50), a1 = _first(body, 51);
   if (cx == null || cy == null || r == null || a0 == null || a1 == null) return;
-  final rot = x.rotationDeg;
-  acc.addArc(DxfArc(x.apply(cx, cy), r * x.scale, a0 + rot, a1 + rot));
+  if (x.isConformal) {
+    // Rotation + uniform scale: the angles just shift (exact, the old path).
+    final rot = x.rotationDeg;
+    acc.addArc(DxfArc(x.apply(cx, cy), r * x.scale, a0 + rot, a1 + rot));
+    return;
+  }
+  // Mirror / non-uniform scale: map the arc's ENDPOINTS and read the angles
+  // back, so a mirrored door swing lands in the mirrored quadrant. A mirroring
+  // transform (det < 0) reverses the sweep, so swap start/end to keep the
+  // stored arc CCW (DxfArc's convention).
+  final c = x.apply(cx, cy);
+  double angleOf(double deg) {
+    final rad = deg * math.pi / 180.0;
+    final p = x.apply(cx + r * math.cos(rad), cy + r * math.sin(rad));
+    return math.atan2(p.y - c.y, p.x - c.x) * 180.0 / math.pi;
+  }
+
+  var s = angleOf(a0);
+  var e = angleOf(a1);
+  if (x.det < 0) {
+    final t = s;
+    s = e;
+    e = t;
+  }
+  s = ((s % 360) + 360) % 360;
+  var sweep = (((e - s) % 360) + 360) % 360;
+  // A full-circle arc (start ≡ end, distinct values) stays a full sweep.
+  if (sweep < 1e-9 && (a1 - a0).abs() > 1e-9) sweep = 360;
+  acc.addArc(DxfArc(c, r * x.scale, s, s + sweep));
 }
+
+/// Round 25 — [block]'s local extent (memoised on [acc.blockExtents]),
+/// measured ONCE by a bounds-only walk whose own nested INSERTs also use
+/// memoised extents, so measuring is linear in the block's own pairs.
+DxfBounds? _blockExtent(
+  String name,
+  _Block block,
+  Map<String, _Block> blocks,
+  int depth,
+  _Acc acc,
+  Set<String> nested,
+) {
+  if (acc.blockExtents.containsKey(name)) return acc.blockExtents[name];
+  // Reserve the slot first (a corrupt self-cycle can't recurse forever).
+  acc.blockExtents[name] = null;
+  final scratch = _Acc._boundsOnly(acc.blockExtents)
+    ..hiddenLayers = acc.hiddenLayers;
+  _parseEntities(block.pairs, 0, block.pairs.length, _Xform.identity, blocks,
+      depth + 1, scratch, nested);
+  final ext = scratch._has
+      ? DxfBounds(scratch.minX, scratch.minY, scratch.maxX, scratch.maxY)
+      : null;
+  acc.blockExtents[name] = ext;
+  return ext;
+}
+
+/// Largest column × row ARRAY expanded from one INSERT (the rest is dropped —
+/// the instances also count against the [_Acc.maxInserts] budget).
+const int _maxArrayInstances = 10000;
 
 void _emitInsert(
   List<_Pair> body,
@@ -467,12 +884,22 @@ void _emitInsert(
   Map<String, _Block> blocks,
   int depth,
   _Acc acc,
+  Set<String> ancestors,
 ) {
-  if (depth >= _maxInsertDepth) return;
   final name = _firstStr(body, 2);
   if (name == null) return;
+  // A block already on the active expansion stack would recurse into itself
+  // (AutoCAD refuses to save one; only a corrupt / hand-made file has it).
+  if (ancestors.contains(name)) return;
   final block = blocks[name];
   if (block == null) return;
+  // Round 24 (r2) — a real INSERT refused by the depth or insert budget drops
+  // geometry: flag it (and only then — a file with exactly [_Acc.maxInserts]
+  // INSERTs, none refused, is complete).
+  if (depth >= _maxInsertDepth || acc.insertsSpent) {
+    acc.truncated = true;
+    return;
+  }
 
   final ix = _first(body, 10) ?? 0;
   final iy = _first(body, 20) ?? 0;
@@ -490,9 +917,48 @@ void _emitInsert(
   // translate(-base) folded into e/f.
   final ex = ix - (ax * block.baseX + cx * block.baseY);
   final fy = iy - (bx * block.baseX + dy * block.baseY);
-  final insert = _Xform(ax, bx, cx, dy, ex, fy);
-  final child = x.compose(insert);
 
-  _parseEntities(block.pairs, 0, block.pairs.length, child, blocks, depth + 1,
-      acc);
+  // Array form (DWG MINSERT): 70/71 column/row counts, 44/45 spacing. The
+  // spacing runs along the INSERT's ROTATED axes in drawing units (not scaled
+  // by 41/42 — AutoCAD's MINSERT semantics). A plain INSERT is 1 × 1.
+  final cols = math.max(1, (_first(body, 70) ?? 1).toInt());
+  final rows = math.max(1, (_first(body, 71) ?? 1).toInt());
+  final colDx = _first(body, 44) ?? 0.0;
+  final rowDy = _first(body, 45) ?? 0.0;
+  final nested = {...ancestors, name};
+
+  var instances = 0;
+  for (var r = 0; r < rows; r++) {
+    for (var c = 0; c < cols; c++) {
+      if (instances >= _maxArrayInstances || acc.insertsSpent) {
+        acc.truncated = true;
+        return;
+      }
+      instances++;
+      acc.inserts++;
+      final ox = c * colDx, oy = r * rowDy;
+      final insert = _Xform(ax, bx, cx, dy, ex + cos * ox - sin * oy,
+          fy + sin * ox + cos * oy);
+      final child = x.compose(insert);
+      if (acc.full) {
+        // Round 25 — past the cap nothing more is stored: grow the bounds by
+        // the block's memoised extent instead of re-walking its body.
+        final ext = _blockExtent(name, block, blocks, depth, acc, nested);
+        if (ext != null) {
+          if (!acc.boundsOnly) acc.truncated = true;
+          for (final p in [
+            child.apply(ext.minX, ext.minY),
+            child.apply(ext.maxX, ext.minY),
+            child.apply(ext.minX, ext.maxY),
+            child.apply(ext.maxX, ext.maxY),
+          ]) {
+            acc._grow(p.x, p.y);
+          }
+        }
+        continue;
+      }
+      _parseEntities(block.pairs, 0, block.pairs.length, child, blocks,
+          depth + 1, acc, nested);
+    }
+  }
 }

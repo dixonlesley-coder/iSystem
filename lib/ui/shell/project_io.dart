@@ -19,7 +19,6 @@ import '../../data/recovery.dart';
 import '../../store/app_state.dart';
 import '../../store/electrical_store.dart';
 import '../../store/models/sheet.dart';
-import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
@@ -55,6 +54,114 @@ Future<bool> confirmDiscardIfDirty(BuildContext context, WidgetRef ref) async {
     case DiscardChoice.cancel:
     case null:
       return false;
+  }
+}
+
+/// Round 48 (persist-io-2) — where a torn project file is kept when its
+/// `.bak` is restored over it: `<path>.corrupt-<yyyyMMdd-HHmmss>`.
+String corruptSidecarPath(String path, DateTime at) {
+  String two(int v) => v.toString().padLeft(2, '0');
+  final stamp = '${at.year}${two(at.month)}${two(at.day)}-'
+      '${two(at.hour)}${two(at.minute)}${two(at.second)}';
+  return '$path.corrupt-$stamp';
+}
+
+/// Round 48 (persist-io-1) — the recovery slots a Save / Open / New may clear,
+/// SPARING the slot that holds a PENDING crash-recovery snapshot (the one the
+/// launch banner is still offering): a crash-relaunch starts in the clean
+/// default project, so Open-recent / File > New / Save-as ran with no dialog
+/// and their `clearRecoverySlots([..., null])` deleted the only copy of the
+/// crashed untitled work. Only the banner's Restore or an explicit Discard
+/// drops a pending snapshot — or an action on the very file it belongs to
+/// ([target] == its `sourcePath`). [dropPending] says whether the in-memory
+/// [recoveryDocProvider] may be cleared too.
+///
+/// Round 49 — [spare] is the pending slot (never deleted, nor as anyone's
+/// session sibling) and [alsoClear] the pending slot's own session sibling
+/// when a spared path owned it: that file is THIS session's autosaved work
+/// ([recoveryPartnerSlot]), resolved by the Save / Open / New like any other.
+({
+  List<String?> paths,
+  bool dropPending,
+  Set<String> spare,
+  List<String> alsoClear,
+}) recoverySlotsToClear(ProviderReader read, List<String?> paths,
+    {String? target}) {
+  final pending = read(recoveryDocProvider);
+  // Round 50 (regression-4) — unresolved snapshots found at launch are never
+  // deleted by a Save / Open / New; in a family holding one, only the members
+  // THIS session wrote are cleared ([alsoClear]).
+  final protected = read(protectedRecoverySlotsProvider);
+  final written = read(sessionRecoverySlotsProvider);
+  List<String> ownWork(Set<String> spare) => [
+        for (final s in [...written]..sort())
+          if (!spare.contains(s) &&
+              paths.any((p) => sameRecoveryFamily(s, recoverySlotFor(p))))
+            s,
+      ];
+  if (pending == null) {
+    final spare = {...protected};
+    return (
+      paths: paths,
+      dropPending: true,
+      spare: spare,
+      alsoClear: ownWork(spare),
+    );
+  }
+  final pendingSlot =
+      pending.recoveryPath ?? recoverySlotFor(pending.sourcePath);
+  if (target != null && pending.sourcePath == target) {
+    final spare = {...protected}..remove(pendingSlot);
+    return (
+      paths: paths,
+      dropPending: true,
+      spare: spare,
+      alsoClear: [
+        pendingSlot,
+        for (final s in ownWork(spare))
+          if (s != pendingSlot) s,
+      ],
+    );
+  }
+  final kept = [
+    for (final p in paths)
+      if (recoverySlotFor(p) != pendingSlot) p,
+  ];
+  // Round 50 — this session's OWN work in the requested families (beside
+  // the pending snapshot too), never another unresolved member.
+  final spare = {pendingSlot, ...protected};
+  return (
+    paths: kept,
+    dropPending: false,
+    spare: spare,
+    alsoClear: ownWork(spare),
+  );
+}
+
+/// Round 50 — drop the pending snapshot (an action on the very file it
+/// belongs to resolved it): it leaves the protected set and the banner.
+void dropPendingRecovery(ProviderReader read) {
+  final pending = read(recoveryDocProvider);
+  if (pending != null) {
+    read(protectedRecoverySlotsProvider.notifier).remove(
+        pending.recoveryPath ?? recoverySlotFor(pending.sourcePath));
+  }
+  read(recoveryDocProvider.notifier).clear();
+}
+
+/// Round 49 — clear what [recoverySlotsToClear] decided: its project slots
+/// (with their session siblings, sparing the pending snapshot) and the
+/// pending slot's own session sibling when it is this session's work.
+Future<void> clearRecoveryFor(
+    ({
+      List<String?> paths,
+      bool dropPending,
+      Set<String> spare,
+      List<String> alsoClear,
+    }) toClear) async {
+  await clearRecoverySlots(toClear.paths, spare: toClear.spare);
+  for (final s in toClear.alsoClear) {
+    if (!toClear.spare.contains(s)) await clearRecovery(path: s);
   }
 }
 
@@ -190,7 +297,7 @@ Future<void> newProject(BuildContext context, WidgetRef ref) async {
   ref.read(autosaveMirrorProvider.notifier).clear();
   ref.read(projectDirtyProvider.notifier).set(false);
   ref.read(loadErrorProvider.notifier).clear();
-  await clearRecoverySlots([priorPath, null]);
+  await clearRecoveryFor(recoverySlotsToClear(ref.read, [priorPath, null]));
   ref.read(statusMessageProvider.notifier).showStatus('New project');
 }
 
@@ -254,12 +361,16 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
   // the UI thread — either way, tell the user we're working.
   ref.read(busyProvider.notifier).set(MechXStringsData(ref.read(localeProvider))(
       isDwg ? StringKey.busyConvertingDwg : StringKey.busyImportingPlan));
+  // Round 24 — a plan that imported only partly (DXF budget) says so.
+  final warnings = <String>[];
   try {
     var sheets = isDwg
         ? await importDwg(path,
-            converter: const OdaDwgConverter(), outDir: dwgCacheDir())
+            converter: const OdaDwgConverter(),
+            outDir: dwgCacheDir(),
+            onWarning: warnings.add)
         : isDxf
-            ? await importDxf(path)
+            ? await importDxf(path, onWarning: warnings.add)
             : await importPdf(path);
     if (sheets.isEmpty) {
       ref
@@ -294,6 +405,9 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
         final added =
             ref.read(sheetsControllerProvider.notifier).addSheets(sheets);
         ref.read(loadErrorProvider.notifier).clear();
+        if (warnings.isNotEmpty) {
+          ref.read(loadErrorProvider.notifier).set(warnings.join(' '));
+        }
         // A5: jump to the first freshly-added sheet — the appended block starts
         // at index `existing` (the sheet count captured before the add).
         _revealImportedSheet(ref, existing);
@@ -311,14 +425,17 @@ Future<bool> importPlan(BuildContext context, WidgetRef ref,
     }
 
     // Replace-all: an empty project, or the explicit Replace choice.
-    ref.read(sheetsControllerProvider.notifier).loadSheets(sheets);
-    // Prune nodes orphaned onto sheets that no longer exist (one undo step,
-    // byte-identical no-op when nothing is orphaned) so phantom pipes can't
-    // invisibly pad the BOM / pressures / reports.
-    ref
-        .read(networkControllerProvider.notifier)
-        .pruneNodesNotOnSheets({for (final s in sheets) s.id});
+    // Swap the sheet list AND prune everything orphaned onto sheets that no
+    // longer exist — nodes, rooms, tanks, measurements, reference lines,
+    // calibrations, electrical placements — in ONE structural undo step
+    // (a non-recording plain load when nothing is discarded), so phantom work
+    // can't invisibly pad the BOM / schedules / reports, and a same-named
+    // revised plan gets a STALE scale flag instead of silently inheriting it.
+    ref.read(sheetsControllerProvider.notifier).replaceAllSheets(sheets);
     ref.read(loadErrorProvider.notifier).clear();
+    if (warnings.isNotEmpty) {
+      ref.read(loadErrorProvider.notifier).set(warnings.join(' '));
+    }
     // A5: reveal the imported plan on DESIGN → Layout at the first sheet.
     _revealImportedSheet(ref, 0);
     final n = sheets.length;
@@ -466,9 +583,12 @@ Future<void> addSheetsFromFiles(BuildContext context, WidgetRef ref) async {
 /// Revise a SINGLE sheet's plan IN PLACE (A5): pick a new PDF/DXF/DWG and swap
 /// [sheetId]'s source for it, KEEPING the sheet id — so its calibration and the
 /// drawn nodes that reference the id survive (the real plan-revision workflow,
-/// surfaced from the sheet rail's context menu). A multi-page PDF contributes
-/// its first page. No dirty-guard: nothing is destroyed (the id, calibration and
-/// network are preserved); only the underlay changes.
+/// surfaced from the sheet rail's context menu). Round 24 (import-2-4) — a
+/// multi-page replacement asks WHICH page replaces this sheet (single-select,
+/// the sheet's current page listed first), so a per-floor PDF set can be
+/// revised in place; cancelling the picker replaces nothing. No dirty-guard:
+/// nothing is destroyed (the id, calibration and network are preserved); only
+/// the underlay changes.
 Future<void> replaceSheetPlan(
     BuildContext context, WidgetRef ref, String sheetId) async {
   final picked =
@@ -486,12 +606,15 @@ Future<void> replaceSheetPlan(
           : 'PDF';
   ref.read(busyProvider.notifier).set(MechXStringsData(ref.read(localeProvider))(
       isDwg ? StringKey.busyConvertingDwg : StringKey.busyImportingPlan));
+  final warnings = <String>[];
   try {
     final sheets = isDwg
         ? await importDwg(path,
-            converter: const OdaDwgConverter(), outDir: dwgCacheDir())
+            converter: const OdaDwgConverter(),
+            outDir: dwgCacheDir(),
+            onWarning: warnings.add)
         : isDxf
-            ? await importDxf(path)
+            ? await importDxf(path, onWarning: warnings.add)
             : await importPdf(path);
     if (sheets.isEmpty) {
       ref
@@ -499,10 +622,24 @@ Future<void> replaceSheetPlan(
           .set('That $what had no importable geometry.');
       return;
     }
+    var chosen = sheets.first;
+    if (sheets.length > 1) {
+      final current =
+          ref.read(sheetsControllerProvider).sheetById(sheetId)?.pageIndex ?? 0;
+      final ordered = orderReplacementPages(sheets, current);
+      ref.read(busyProvider.notifier).clear();
+      if (!context.mounted) return;
+      final id = await showSheetPicker(context, ordered);
+      if (id == null) return; // cancelled — nothing replaced
+      chosen = ordered.firstWhere((s) => s.id == id, orElse: () => ordered.first);
+    }
     ref
         .read(sheetsControllerProvider.notifier)
-        .replaceSheetSource(sheetId, sheets.first);
+        .replaceSheetSource(sheetId, chosen);
     ref.read(loadErrorProvider.notifier).clear();
+    if (warnings.isNotEmpty) {
+      ref.read(loadErrorProvider.notifier).set(warnings.join(' '));
+    }
     ref.read(statusMessageProvider.notifier).showStatus('Plan replaced');
   } catch (e) {
     // I5 — the same human mapping as Import (this is the identical parse path).
@@ -598,16 +735,31 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   // against (autosave never embeds) — so a just-saved project leaves no phantom
   // recovery. The FILE on disk, however, embeds the source plans so it is
   // portable across machines.
-  final baseline = doc.encode();
+  //
+  // Round 11 — the encode runs INSIDE a guard: a non-finite double anywhere in
+  // the model (NaN / Infinity) makes `JsonEncoder` throw, and an uncaught throw
+  // here used to abort Save silently with nothing written. Surface it on the
+  // load-error banner instead so the engineer learns the save did not happen.
+  final String baseline;
+  try {
+    baseline = doc.encode();
+  } catch (e) {
+    if (ref.context.mounted) {
+      ref.read(loadErrorProvider.notifier).set('Could not save project: $e');
+    }
+    return;
+  }
   // Tell the user we're working: embedding gzips every plan, and even without
   // assets the write touches disk.
   ref
       .read(busyProvider.notifier)
       .set(MechXStringsData(ref.read(localeProvider))(StringKey.busySaving));
+  var missingAssets = 0;
   try {
     // Embed the source plans OFF the UI thread (the gzip+base64 of every plan is
     // a real window freeze on a large project) so the app stays responsive.
     final assets = await gatherSheetAssetsAsync(doc.sheets);
+    missingAssets = missingSheetAssetPaths(doc.sheets, assets).length;
     final portable = doc.withSheets(doc.sheets, assets: assets);
     // Atomic: a torn write can only ever hit the `.tmp` file; the previous
     // save survives as the target or its `.bak`.
@@ -637,20 +789,28 @@ Future<void> _saveProjectLocked(WidgetRef ref, {required bool saveAs}) async {
   ref.read(projectDirtyProvider.notifier).set(false);
   // Drop the recovery snapshot for the prior identity, the saved file, and the
   // shared untitled slot (a first save promotes from untitled to a named file).
-  await clearRecoverySlots([priorPath, full, null]);
+  final toClear =
+      recoverySlotsToClear(ref.read, [priorPath, full, null], target: full);
+  await clearRecoveryFor(toClear);
   // `clearRecoverySlots` is an async file op — the tree can be disposed while it
   // is in flight (see the `finally` note). The remaining work is in-memory UI
   // bookkeeping that only matters while the app is alive, so drop it if gone.
   if (!ref.context.mounted) return;
-  ref.read(recoveryDocProvider.notifier).clear();
+  if (toClear.dropPending) dropPendingRecovery(ref.read);
   // Remember this file in the machine-local MRU / last-open list, under the
   // name the project carries NOW (F9 may just have adopted the file stem).
   ref
       .read(appSettingsProvider.notifier)
       .recordRecent(full, ref.read(projectControllerProvider).name);
-  ref
-      .read(statusMessageProvider.notifier)
-      .showStatus('Saved ${full.split(Platform.pathSeparator).last}');
+  final savedName = full.split(Platform.pathSeparator).last;
+  // Round 10 (import-pipeline-1) — never claim a clean portable save when a
+  // plan could not be embedded (its source is gone AND nothing was embedded
+  // for it before): say so, with the count.
+  ref.read(statusMessageProvider.notifier).showStatus(missingAssets == 0
+      ? 'Saved $savedName'
+      : MechXStringsData(ref.read(localeProvider)).format(
+          StringKey.saveAssetsMissing,
+          {'file': savedName, 'count': missingAssets}));
 }
 
 /// Open a `.mechx` project, replacing the live state. Guards unsaved work first
@@ -671,7 +831,10 @@ Future<void> openProject(BuildContext context, WidgetRef ref) async {
 Future<void> openProjectPath(
     BuildContext context, WidgetRef ref, String path) async {
   if (!await confirmDiscardIfDirty(context, ref)) return;
-  if (!await File(path).exists()) {
+  // Round 10 (import-pipeline-4) — a missing target whose `.bak` survives (a
+  // save interrupted between the atomic writer's two renames) is NOT gone:
+  // the loader restores from the backup, so keep the MRU entry.
+  if (!await File(path).exists() && !await File('$path.bak').exists()) {
     ref
         .read(loadErrorProvider.notifier)
         .set('That project is no longer there:\n$path');
@@ -712,7 +875,7 @@ String? launchProjectPathFromArgs(List<String> args) {
 /// empty state) rather than surfacing a launch-time error banner.
 Future<void> openProjectAtLaunch(
     ProviderContainer container, String path) async {
-  if (!await File(path).exists()) return;
+  if (!await File(path).exists() && !await File('$path.bak').exists()) return;
   await _applyOpenedFileWith(container.read, path);
 }
 
@@ -733,12 +896,62 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
   read(busyProvider.notifier).set(
       MechXStringsData(read(localeProvider))(StringKey.busyOpeningProject));
   try {
-    final source = await File(path).readAsString();
     // Decode + extract any embedded source plans (gunzip + repoint the sheets
     // so a portable project renders even without the original plan files here)
     // TOGETHER off the UI thread — the exact freeze Save already fixed for its
     // symmetric asset-embedding work (see gatherSheetAssetsAsync).
-    final doc = await decodeAndRehydrateAsync(source);
+    //
+    // Round 10 (import-pipeline-4) — `atomicWriteString` promises that if the
+    // process dies between its two renames, the good copy in `<path>.bak` is
+    // what the open path falls back to. Honour it: when the target is missing
+    // or undecodable but the backup decodes, load the backup, put it back in
+    // place atomically, and tell the user.
+    ProjectDocument doc;
+    var restoredFromBackup = false;
+    final target = File(path);
+    final bak = File('$path.bak');
+    try {
+      if (!await target.exists()) {
+        throw const ProjectDocumentException('Project file is missing',
+            tornWrite: true);
+      }
+      doc = await decodeAndRehydrateAsync(await target.readAsString());
+    } on Object catch (original, stack) {
+      // Round 48 (persist-io-2) — fall back to the backup ONLY for the shapes
+      // an interrupted save leaves (missing target, an unreadable file, torn
+      // JSON). A file this build must REFUSE — a newer format version, not a
+      // project at all — is reported untouched: falling back used to open the
+      // OLDER backup and overwrite the newer file with it.
+      final torn = original is FileSystemException ||
+          (original is ProjectDocumentException && original.tornWrite);
+      if (!torn || !await bak.exists()) rethrow;
+      final bakSource = await bak.readAsString();
+      ProjectDocument fromBak;
+      try {
+        fromBak = await decodeAndRehydrateAsync(bakSource);
+      } on Object catch (_) {
+        // The backup is no better — report the ORIGINAL failure.
+        Error.throwWithStackTrace(original, stack);
+      }
+      doc = fromBak;
+      restoredFromBackup = true;
+      // Put the good copy back in place. A torn/corrupt target is moved
+      // aside first (never deleted — Round 48: it is kept as
+      // `<file>.corrupt-<stamp>` for inspection) so the atomic writer does not
+      // displace it OVER the good `.bak`.
+      try {
+        if (await target.exists()) {
+          await target.rename(corruptSidecarPath(path, DateTime.now()));
+        }
+        await atomicWriteString(path, bakSource);
+      } catch (_) {
+        // Best effort — the project is open from the backup either way.
+      }
+    }
+    // Round 10 (import-pipeline-1) — keep the embedded payloads (re-keyed by
+    // the extracted local paths) so a later Save survives the extraction
+    // being cleaned away.
+    replaceEmbeddedAssets(doc.assets);
     applyDocument(read, doc);
     // The just-loaded state is the clean baseline; capture its canonical
     // encoding so autosave won't immediately mirror it to recovery.
@@ -750,12 +963,30 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
     read(projectDirtyProvider.notifier).set(false);
     // Drop any stale crash snapshot for THIS file, the project we left, and
     // the untitled slot.
-    await clearRecoverySlots([priorPath, path, null]);
-    read(recoveryDocProvider.notifier).clear();
+    final toClear =
+        recoverySlotsToClear(read, [priorPath, path, null], target: path);
+    await clearRecoveryFor(toClear);
+    if (toClear.dropPending) dropPendingRecovery(read);
     read(loadErrorProvider.notifier).clear();
     read(appSettingsProvider.notifier)
         .recordRecent(path, read(projectControllerProvider).name);
-    read(statusMessageProvider.notifier).showStatus('Project opened');
+    read(statusMessageProvider.notifier).showStatus(restoredFromBackup
+        ? MechXStringsData(read(localeProvider)).format(
+            StringKey.openRestoredFromBackup,
+            {'file': path.split(Platform.pathSeparator).last})
+        : 'Project opened');
+    // Round 33 (import-robustness-2-4) — a plan that could not be restored
+    // (a corrupt / truncated embedded copy, or a path-only file whose plans
+    // are gone) is named, never a silent blank sheet behind 'Project opened'.
+    final missing = missingPlanSheetNames(doc);
+    if (missing.isNotEmpty) {
+      read(loadErrorProvider.notifier).set(MechXStringsData(
+              read(localeProvider))
+          .format(StringKey.openPlansNotRestored, {
+        'count': '${missing.length}',
+        'names': missing.join(', '),
+      }));
+    }
   } on ProjectDocumentException catch (e) {
     // Malformed/incompatible file — surface why, leave the project untouched.
     read(loadErrorProvider.notifier).set(e.message);
@@ -764,4 +995,13 @@ Future<void> _applyOpenedFileWith(ProviderReader read, String path) async {
   } finally {
     read(busyProvider.notifier).clear();
   }
+}
+
+/// Round 24 (import-2-4) — the pages of a multi-page replacement in picker
+/// order: the page at the replaced sheet's own [currentPageIndex] first (the
+/// likely revision of the same floor), the rest in page order. Pure.
+List<Sheet> orderReplacementPages(List<Sheet> pages, int currentPageIndex) {
+  final i = pages.indexWhere((s) => s.pageIndex == currentPageIndex);
+  if (i <= 0) return List<Sheet>.of(pages);
+  return [pages[i], ...pages.sublist(0, i), ...pages.sublist(i + 1)];
 }

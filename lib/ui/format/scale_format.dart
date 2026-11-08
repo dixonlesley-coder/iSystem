@@ -35,6 +35,18 @@ const List<int> kCommonPdfScaleDenominators = <int>[50, 100, 150, 200, 250, 500]
 /// readout, independent of any paper-unit assumption).
 int pixelsPerMetreFor(double metersPerPixel) => (1 / metersPerPixel).round();
 
+/// Whether [metersPerPixel] can be rendered as a scale readout (Round 11).
+/// Every readout rounds `1 / mpp` and `mpp × 72 / 0.0254` to an int, and
+/// `round()` THROWS on NaN / Infinity — so a non-finite mpp, a non-positive
+/// one, or one so small its reciprocal overflows (`1 / 1e-320 == Infinity`)
+/// reads as the dash instead of crashing a build (the calibration preview
+/// turned into an error widget when 'NaN' or '1e999' was typed).
+bool isFormattableScale(double metersPerPixel) =>
+    metersPerPixel.isFinite &&
+    metersPerPixel > 0 &&
+    (1 / metersPerPixel).isFinite &&
+    pdfScaleDenominatorFor(metersPerPixel).isFinite;
+
 /// One shared human-readable scale readout, replacing the three exponential
 /// dialects the app used to speak. For a PDF sheet ([isPdf] true) the pixel is a
 /// physical paper point, so the plotted `1 : N` ratio is meaningful and leads;
@@ -42,11 +54,20 @@ int pixelsPerMetreFor(double metersPerPixel) => (1 / metersPerPixel).round();
 /// paper-unit-free `1 m = N px` is honest. Plain ASCII — nothing that tofus in
 /// Roboto.
 String formatScaleReadout(double metersPerPixel, {required bool isPdf}) {
-  if (metersPerPixel <= 0) return '—';
+  if (!isFormattableScale(metersPerPixel)) return '—';
   final pxPerMetre = pixelsPerMetreFor(metersPerPixel);
   if (isPdf) {
     final n = pdfScaleDenominatorFor(metersPerPixel).round();
     return '1 : $n  (1 m = $pxPerMetre px)';
   }
   return '1 m = $pxPerMetre px';
+}
+
+/// The compact form of [formatScaleReadout] for tight chrome (the Layout
+/// breadcrumb): a PDF sheet reads just its plotted `1 : N`, any other sheet the
+/// paper-free `1 m = N px`. Same maths, the parenthetical dropped.
+String formatScaleShort(double metersPerPixel, {required bool isPdf}) {
+  if (!isFormattableScale(metersPerPixel)) return '—';
+  if (isPdf) return '1 : ${pdfScaleDenominatorFor(metersPerPixel).round()}';
+  return '1 m = ${pixelsPerMetreFor(metersPerPixel)} px';
 }

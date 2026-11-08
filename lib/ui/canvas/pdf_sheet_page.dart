@@ -2,6 +2,8 @@ import 'package:flutter/widgets.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../../store/models/sheet.dart';
+import '../strings/app_strings.dart';
+import 'sheet_page_states.dart';
 
 /// Renders a single PDF page as a static raster that fills its box.
 ///
@@ -18,35 +20,46 @@ import '../../store/models/sheet.dart';
 /// down with a [FittedBox] so it still occupies exactly [Sheet.sizePx] in canvas
 /// coordinates. The extra detail stays crisp until roughly [_superSample]× zoom.
 ///
-/// Errors during load are caught and shown as an inline text label so
-/// build never throws.
+/// While the document loads the slot shows the sheet-paper [SheetLoadingPage];
+/// a load failure is caught and shown as the token [SheetLoadErrorPage] (with
+/// 'Replace plan…' when [onReplacePlan] is wired), so build never throws.
 class PdfSheetPage extends StatelessWidget {
   final Sheet sheet;
+
+  /// Re-point the sheet at another file — offered on the load-error page.
+  final VoidCallback? onReplacePlan;
 
   /// How many times the page's native point resolution to rasterise at. 3×
   /// (≈216 DPI) keeps node placement crisp at deep zoom while staying well
   /// under pdfrx's 300-DPI cap; only the on-screen page(s) pay the memory.
   static const double _superSample = 3.0;
 
-  const PdfSheetPage({super.key, required this.sheet});
+  const PdfSheetPage({super.key, required this.sheet, this.onReplacePlan});
 
   @override
   Widget build(BuildContext context) {
     assert(sheet.pdfPath != null, 'PdfSheetPage requires a sheet with a pdfPath');
 
     final path = sheet.pdfPath;
+    final strings = MechXStrings.of(context);
     if (path == null) {
-      return const _ErrorPage('No PDF path on sheet.');
+      return SheetLoadErrorPage(
+        message: strings(StringKey.sheetNoSourcePath),
+        onReplacePlan: onReplacePlan,
+      );
     }
 
     return PdfDocumentViewBuilder.file(
       path,
-      errorBuilder: (context, error, _) =>
-          _ErrorPage('Could not load PDF:\n$error'),
+      errorBuilder: (context, error, _) => SheetLoadErrorPage(
+        message: strings(StringKey.sheetPdfLoadFailed),
+        detail: '$error',
+        onReplacePlan: onReplacePlan,
+      ),
       builder: (context, document) {
         if (document == null) {
-          // Still loading — show a neutral white placeholder.
-          return const ColoredBox(color: Color(0xFFFFFFFF));
+          // Still loading — the sheet's own paper + a quiet caption.
+          return const SheetLoadingPage();
         }
         // pageNumber is 1-based in pdfrx; Sheet.pageIndex is 0-based.
         final page = PdfPageView(
@@ -69,32 +82,6 @@ class PdfSheetPage extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-}
-
-class _ErrorPage extends StatelessWidget {
-  final String message;
-  const _ErrorPage(this.message);
-
-  @override
-  Widget build(BuildContext context) {
-    return ColoredBox(
-      color: const Color(0xFFFFF3F3),
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Text(
-            message,
-            style: const TextStyle(
-              fontFamily: 'Roboto',
-              fontSize: 14,
-              color: Color(0xFFB00020),
-            ),
-            textAlign: TextAlign.center,
-          ),
-        ),
-      ),
     );
   }
 }

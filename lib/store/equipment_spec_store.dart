@@ -21,6 +21,10 @@ library;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../ui/strings/app_strings.dart';
+import 'app_state.dart' show localeProvider;
+import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
+
 final equipmentModelSpecProvider =
     NotifierProvider<EquipmentModelSpecController, Map<String, String>>(
   EquipmentModelSpecController.new,
@@ -44,7 +48,19 @@ class EquipmentModelSpecController extends Notifier<Map<String, String>> {
     } else {
       next[tag] = trimmed;
     }
-    state = Map.unmodifiable(next);
+    // Round 28 (persist-undo-2-3) — one [UndoDomain.settings] step per real
+    // change (persisted + printed on the issued schedule); an equal value
+    // records nothing. [set] (load) stays non-recording.
+    if (state[tag] == next[tag]) return;
+    final previous = state;
+    final applied = Map<String, String>.unmodifiable(next);
+    state = applied;
+    ref.read(settingsHistoryProvider.notifier).record(SettingsUndoEntry(
+          label: MechXStringsData(ref.read(localeProvider))(
+              StringKey.undoLabelEquipmentSpec),
+          undo: () => state = previous,
+          redo: () => state = applied,
+        ));
   }
 
   /// The entered spec for [tag], or null when none was entered.

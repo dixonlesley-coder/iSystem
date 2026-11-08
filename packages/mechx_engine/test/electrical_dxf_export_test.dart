@@ -103,9 +103,12 @@ void main() {
 
     test('renders the professional single-line content as TEXT', () {
       expect(dxf, contains('TEXT'));
-      // The incomer breaker, a way row + Ib, and the title-block / legend frame.
+      // The incomer breaker, a way row + its TOTAL footer, and the title-block
+      // / legend frame. Round 20 — no 'Ib' legend key: the R/S/T cells print
+      // bare figures, so the key the sheet never prints is not drawn.
       expect(dxf, contains('Incomer'));
-      expect(dxf, contains('Ib '));
+      expect(dxf, contains('TOTAL'));
+      expect(dxf, isNot(contains('Ib  -  ')));
       expect(dxf, contains('ELECTRICAL SINGLE-LINE DIAGRAM'));
       expect(dxf, contains('LEGEND'));
       expect(dxf, contains('E-FRAME'));
@@ -134,11 +137,9 @@ void main() {
       expect(dxf, contains('2\nE-ESSENTIAL\n70\n0\n62\n1\n'));
     });
 
-    test('prims carry group-370 lineweights from their SldWeight', () {
-      // thick 50 (busbars), medium 25 (feeders), thin 13 (device graphics).
-      expect(dxf, contains('370\n50\n'));
-      expect(dxf, contains('370\n25\n'));
-      expect(dxf, contains('370\n13\n'));
+    test('no R2000 group-370 lineweights in the AC1009 file (Round 27)', () {
+      // The weight bucket rides the class layer of an un-layered line.
+      expect(dxf, isNot(contains('\n370\n')));
     });
 
     test('a dashed SldLine emits group 6 DASHED; an explicit layer wins', () {

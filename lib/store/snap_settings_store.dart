@@ -37,3 +37,20 @@ class RefLineModeController extends Notifier<bool> {
   void set(bool value) => state = value;
   void toggle() => state = !state;
 }
+
+/// M5 — whether the magnetic calibrated GRID contributes a snap (F9). Default
+/// ON. The grid stays the LOWEST-precedence snap and keeps its ortho gate: the
+/// effective grid snap is `gridSnap && effective ortho` (the B13/G2 contract —
+/// a free-angle Shift draw is never yanked onto a grid crossing), so with the
+/// default ON every drawing behaves exactly as before; F9 lets a drafter keep
+/// ortho while switching the grid pull off. Session-only, like Ortho.
+final gridSnapProvider =
+    NotifierProvider<GridSnapController, bool>(GridSnapController.new);
+
+class GridSnapController extends Notifier<bool> {
+  @override
+  bool build() => true;
+
+  void set(bool value) => state = value;
+  void toggle() => state = !state;
+}

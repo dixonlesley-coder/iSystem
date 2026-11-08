@@ -364,7 +364,7 @@ grow/shrink with zoom like real objects.
 - **Direction:** pipe stroke = max(minScreenPx, sizedDiameterWorld × zoom) via the calibrated
   scale (DN → m → sheet-px), node/fitting/riser glyphs sized in world units proportional to
   the incident pipe diameter with a minimum screen floor; reuse the B5 renderedWidth source so
-  hit corridors stay in sync; plan exports already carry true widths where sized.
+  hit corridors stay in sync; plan exports carry true-width double-line ducts since Round 24 (2026-10-18; before that they printed a single band-stroke centreline — this note was wrong).
 
 ### B17. Two-click orthogonal routing (auto-L/Z) with Tab leg-flip
 **HIGH** · effort M · gap · lens: user-approved queue (2026-07-07, product owner: 'queue them')

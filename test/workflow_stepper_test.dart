@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/electrical_store.dart';
+import 'package:mechx/store/inspector_store.dart';
 import 'package:mechx/ui/shell/command_palette.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx/ui/shell/workflow_stepper.dart';
@@ -179,5 +180,35 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.escape);
     await tester.pump();
     expect(container.read(commandPaletteOpenProvider), isFalse);
+  });
+
+  testWidgets(
+      'palette: Edit document control / Edit equipment specs open the '
+      'Projects page with that section expanded', (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+
+    for (final (query, key) in [
+      ('Edit document control', kSignOffSectionKey),
+      ('Edit equipment specs', kEquipmentSpecSectionKey),
+    ]) {
+      container.read(shellSectionProvider.notifier).set(ShellSection.design);
+      container.read(commandPaletteOpenProvider.notifier).open();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.enterText(find.byType(EditableText), query);
+      await tester.pump();
+      // The typed filter + the matching command row.
+      expect(find.text(query), findsNWidgets(2));
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pump();
+      expect(container.read(shellSectionProvider), ShellSection.projects);
+      expect(container.read(sectionVisibilityProvider)[key], isTrue);
+    }
   });
 }

@@ -1,11 +1,23 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+// ignore: implementation_imports
+import 'package:file_picker/src/platform/file_picker_platform_interface.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
 import 'package:mechx/store/app_state.dart'
-    show occupancyProvider, statusMessageProvider;
+    show
+        FeedStrategy,
+        feedStrategyProvider,
+        occupancyProvider,
+        statusMessageProvider;
+import 'package:mechx/store/electrical_store.dart'
+    show WorkspaceView, workspaceViewProvider;
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/inspector/feed_strategy_line.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx/ui/widgets/stepped_value_field.dart';
 import 'package:mechx_engine/geometry/building.dart' show MountingHeights;
@@ -106,7 +118,8 @@ void main() {
     expect(find.text('Basement 1'), findsOneWidget);
     // Ground still reads 0.0; the new basement reads negative (default 3.5 m).
     expect(s.building.elevationOf(s.groundIndex).meters, 0.0);
-    expect(find.text('elev -3.5 m'), findsOneWidget);
+    // Round 25 — elevations print at 2 dp (signedElevationText, like FFL).
+    expect(find.text('FFL -3.50'), findsOneWidget);
   });
 
   testWidgets('assigning a floor plan maps that sheet to the level',
@@ -288,4 +301,112 @@ void main() {
     // The two levels left planless say so honestly.
     expect(find.text('none'), findsNWidgets(2));
   });
+
+  testWidgets('the water feed strategy is a Building design input (2026-10-17)',
+      (tester) async {
+    await _openBuilding(tester);
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    expect(find.text('Water supply'), findsOneWidget);
+    expect(find.textContaining('Decides the whole water solve'), findsOneWidget);
+    final start = container.read(feedStrategyProvider);
+    final target = start == FeedStrategy.upfeed
+        ? 'Roof-tank downfeed'
+        : 'Upfeed pump';
+    await tester.ensureVisible(find.text(target));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text(target));
+    await tester.pump();
+    expect(container.read(feedStrategyProvider), isNot(start));
+    // D3 — the undoable setter still narrates the change.
+    expect(container.read(statusMessageProvider), startsWith('Water feed:'));
+  });
+
+  testWidgets('the inspector reports the feed read-only; Change opens Building',
+      (tester) async {
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    // The Riser inspector carries the always-visible Feed line.
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
+    await tester.pumpAndSettle();
+    final line = find.byType(FeedStrategyLine);
+    expect(line, findsOneWidget);
+    expect(find.descendant(of: line, matching: find.text('Feed')),
+        findsOneWidget);
+    // No inline toggles remain in the inspector.
+    expect(find.text('Feed strategy'), findsNothing);
+    await tester.tap(find.descendant(of: line, matching: find.text('Change')));
+    await tester.pump();
+    expect(container.read(shellSectionProvider), ShellSection.building);
+  });
+
+  testWidgets('review (batch 6): "Import plan…" on a level row of an empty '
+      'project lands the imported plan ON that level', (tester) async {
+    final dir = Directory.systemTemp.createTempSync('bld_import');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final dxf = File('${dir.path}/level2.dxf')
+      ..writeAsStringSync('0\nSECTION\n2\nENTITIES\n'
+          '0\nLINE\n8\n0\n10\n0\n20\n0\n11\n20000\n21\n0\n'
+          '0\nLINE\n8\n0\n10\n0\n20\n0\n11\n0\n21\n14000\n'
+          '0\nENDSEC\n0\nEOF\n');
+    final previous = FilePickerPlatform.instance;
+    FilePickerPlatform.instance = _PickOne(dxf.path);
+    addTearDown(() => FilePickerPlatform.instance = previous);
+
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final c = ProviderScope.containerOf(
+        tester.element(find.byType(MechXApp)),
+        listen: false);
+    await tester.tap(find.descendant(
+        of: find.byType(NavRail), matching: find.text('Building')));
+    await tester.pump();
+    // Rows list top first: Level 2 (index 2) is the first 'Import plan…'.
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Import plan…').first);
+      for (var i = 0; i < 20; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (c.read(sheetsControllerProvider).sheets.isNotEmpty) break;
+      }
+    });
+    await tester.pump();
+    final sheets = c.read(sheetsControllerProvider);
+    expect(sheets.sheets, hasLength(1));
+    final levels = c.read(projectControllerProvider).building.levelCount;
+    expect(sheets.floorFor(sheets.sheets.single.id, levels), 2);
+    await tester.pump(const Duration(seconds: 4));
+  });
+}
+
+/// A file dialog that "picks" [path].
+class _PickOne extends FilePickerPlatform {
+  final String path;
+  _PickOne(this.path);
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    int compressionQuality = 0,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+    bool cancelUploadOnWindowBlur = true,
+  }) async =>
+      FilePickerResult([
+        PlatformFile(path: path, name: path.split('/').last, size: 0),
+      ]);
 }

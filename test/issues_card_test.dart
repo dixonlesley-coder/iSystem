@@ -12,6 +12,7 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/reveal_store.dart';
 import 'package:mechx/store/selection_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/ui/inspector/project_panel.dart';
 import 'package:mechx/ui/review/issues_card.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx/ui/theme/mechx_theme.dart';
@@ -530,5 +531,87 @@ void main() {
     expect(ack.author, 'LD');
     expect(ack.note, 'accepted per memo');
     expect(ack.date, isNotEmpty); // app-stamped
+  });
+
+  testWidgets(
+      'locating a fire-sprinkler issue lands with the Fire layer active and '
+      'the layer-scoped inspector showing its Fire section', (tester) async {
+    setDesktopSurface(tester);
+    const sprinklerEdge = NetEdge(
+        id: 'fs1',
+        fromId: 'na',
+        toId: 'nb',
+        service: ServiceType.fireSprinkler);
+    const issue = DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: 'water-velocity',
+      title: 'Sprinkler velocity out of band',
+      message: 'A sprinkler run is too fast.',
+      locate: IssueLocation('s1', edgeId: 'fs1'),
+    );
+    await tester.pumpWidget(ProviderScope(
+      overrides: [designIssuesProvider.overrideWithValue(const [issue])],
+      child: MechXTheme(
+        data: MechXThemeData.dark,
+        child: Directionality(
+          textDirection: TextDirection.ltr,
+          // The inspector's palette cards are Draggables (need an Overlay).
+          child: Overlay(initialEntries: [
+            OverlayEntry(
+              builder: (_) => const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(width: 420, child: IssuesCard()),
+                  ProjectPanel(),
+                ],
+              ),
+            ),
+          ]),
+        ),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(IssuesCard)),
+      listen: false,
+    );
+    container.read(networkControllerProvider.notifier).loadNetwork(
+        const Network(nodes: [_nodeA, _nodeB], edges: [sprinklerEdge]));
+    await tester.pumpAndSettle();
+    // Plumbing (default) active: the inspector shows Results, not Fire.
+    expect(container.read(activeDisciplineProvider), DisciplineLayer.plumbing);
+    expect(find.text('FIRE'), findsNothing);
+
+    await tester.tap(find.text('Locate'));
+    await tester.pumpAndSettle();
+
+    expect(container.read(activeDisciplineProvider), DisciplineLayer.fire);
+    expect(find.text('FIRE'), findsOneWidget);
+    expect(find.text('RESULTS'), findsNothing);
+  });
+
+  testWidgets(
+      'locating a document-control advisory opens the Projects page with the '
+      'sign-off and revisions block expanded', (tester) async {
+    setDesktopSurface(tester);
+    const issue = DesignIssue(
+      severity: IssueSeverity.info,
+      kind: 'revision-tag-missing',
+      title: 'Revision tag missing',
+      message: 'History has rows but the title block tag is blank.',
+      locate: IssueLocation('', documentControl: true),
+    );
+    await tester.pumpWidget(_host(const [issue]));
+    await tester.pumpAndSettle();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(IssuesCard)),
+      listen: false,
+    );
+    await tester.tap(find.text('Locate'));
+    await tester.pump();
+    expect(container.read(shellSectionProvider), ShellSection.projects);
+    expect(container.read(sectionVisibilityProvider)[kSignOffSectionKey],
+        isTrue);
   });
 }

@@ -36,6 +36,25 @@ PipeJoinMethod joinMethodForService(ServiceType service) => switch (service) {
       _ => PipeJoinMethod.other,
     };
 
+/// The jointing method implied by a pipe MATERIAL code (the [bomMaterialFor]
+/// code: PVC → solvent weld; PPR / HDPE → heat fusion; BS / GI → threaded;
+/// CI → other [mechanical couplings]). Null for an unknown / empty code, so the
+/// caller falls back to the service default. Audit r8: a PVC-AW clean-water
+/// run is solvent-welded (needs cement) and HDPE drainage is fused (none),
+/// whatever the service's usual material.
+PipeJoinMethod? joinMethodForMaterial(String code) => switch (code) {
+      'PVC' => PipeJoinMethod.solventWeld,
+      'PPR' || 'HDPE' => PipeJoinMethod.heatFusion,
+      'BS' || 'GI' => PipeJoinMethod.threaded,
+      'CI' => PipeJoinMethod.other,
+      _ => null,
+    };
+
+/// The jointing method for a pipe of [service] in [material]: the material's
+/// method when known ([joinMethodForMaterial]), else the service default.
+PipeJoinMethod joinMethodFor(ServiceType service, String material) =>
+    joinMethodForMaterial(material) ?? joinMethodForService(service);
+
 /// Glued/threaded sockets a fitting presents (each is one made joint).
 int fittingSockets(FittingType type) => switch (type) {
       FittingType.elbow => 2,

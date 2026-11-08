@@ -128,20 +128,79 @@ BusbarResult sizeBusbar(
       );
     }
   }
-  // Beyond the table — estimate a section from the current density.
-  final density = profile.copperCurrentDensityAPerMm2;
-  final csa = math
-      .max((requiredA / density).ceil(), csaFloor.ceil())
-      .toDouble();
+  // Beyond the table — Round 74 (regression-2): n PARALLEL top-rung bars
+  // (an orderable make-up), never an invented 0×0 density-estimate section.
+  // Round 75 (regression-1) — the set is RATED at the derated
+  // `top × parallelBarFactor(n)` (proximity / skin effect: adjacent flat bars
+  // do not share current evenly), never n × the single-bar figure, and n is
+  // chosen on that derated rating (the withstand floor stays on the SUMMED
+  // section — the adiabatic Icw of n bars does add).
+  final set = parallelTopBarsFor(profile, requiredA, csaFloor);
+  final top = profile.copperBusbarTable.last;
   return BusbarResult(
-    widthMm: 0,
-    thicknessMm: 0,
-    csaMm2: csa,
-    ampacityA: Current(roundTo(csa * density, 0)),
+    widthMm: top.widthMm,
+    thicknessMm: top.thicknessMm,
+    csaMm2: set.csaMm2,
+    ampacityA: Current(roundTo(set.ampacityA, 0)),
     totalCurrentA: Current(roundTo(totalCurrent.amperes, 1)),
-    sizingReason: reasonFor(csa),
-    withstand: withstandFor(csa),
+    sizingReason: reasonFor(set.csaMm2),
+    withstand: withstandFor(set.csaMm2),
+    parallelBars: set.n,
   );
+}
+
+/// Round 75 (regression-1) — the current-sharing factor of n PARALLEL
+/// identical flat copper bars per phase: the set carries
+/// `parallelBarFactor(n) × the single-bar rating`, never n × (proximity and
+/// skin effect crowd the current into the outer bars).
+///   1 → 1.0 · 2 → 1.7 · 3 → 2.35 · 4 → 2.8 · n ≥ 5 → 0.7·n
+// VERIFY — notAnSniClause: DIN 43671-style ratios for vertical bars spaced
+// one bar thickness apart; the assembly manufacturer confirms. They compound
+// with the table's already-conservative 1430 A single 100×10 bar (DIN 43671
+// gives ≈1600–1800 A for a lone bar), so the derated set errs safe.
+double parallelBarFactor(int n) {
+  if (n <= 1) return 1.0;
+  switch (n) {
+    case 2:
+      return 1.7;
+    case 3:
+      return 2.35;
+    case 4:
+      return 2.8;
+    default:
+      return 0.7 * n;
+  }
+}
+
+/// Round 75 — the ONE past-the-table rule: the smallest count n ≥ 2 of
+/// parallel top-rung bars whose DERATED rating
+/// (`top × [parallelBarFactor]\(n)`) covers [requiredA] and whose SUMMED
+/// section covers [csaFloor]. Shared by the phase bar, the neutral bar and
+/// the PE bar so every issued bar past the table is an orderable
+/// `n × (100×10)` set.
+({int n, double csaMm2, double ampacityA}) parallelTopBarsFor(
+    ElectricalStandardsProfile profile, double requiredA, double csaFloor) {
+  final top = profile.copperBusbarTable.last;
+  final topA = top.ampacityA.amperes;
+  var n = math.max(2, (csaFloor / top.csaMm2 - 1e-9).ceil());
+  while (topA * parallelBarFactor(n) + 1e-9 < requiredA) {
+    n++;
+  }
+  return (n: n, csaMm2: n * top.csaMm2, ampacityA: topA * parallelBarFactor(n));
+}
+
+/// The smallest flat bar — a table rung, else an `n × top` parallel set —
+/// whose (derated) ampacity covers [requiredA] and whose section covers
+/// [csaFloor]. Round 75: the neutral / PE bars use it so they are never an
+/// invented section.
+({int n, double csaMm2, double ampacityA}) _barFor(
+    ElectricalStandardsProfile profile, double requiredA, double csaFloor) {
+  for (final b in profile.copperBusbarTable) {
+    if (b.ampacityA.amperes + 1e-9 >= requiredA && b.csaMm2 + 1e-9 >= csaFloor) {
+      return (n: 1, csaMm2: b.csaMm2, ampacityA: b.ampacityA.amperes);
+    }
+  }
+  return parallelTopBarsFor(profile, requiredA, csaFloor);
 }
 
 /// The cross-section the continuous-current duty ALONE would select (ignoring
@@ -158,9 +217,7 @@ double _ampacityOnlyCsa(
       return b.csaMm2;
     }
   }
-  return math
-      .max((requiredA / profile.copperCurrentDensityAPerMm2).ceil(), minCsaMm2.ceil())
-      .toDouble();
+  return parallelTopBarsFor(profile, requiredA, minCsaMm2).csaMm2;
 }
 
 /// Size the neutral and PE bars from the phase bar.
@@ -177,37 +234,128 @@ double _ampacityOnlyCsa(
 /// step-up; [triplenFraction] is recorded for the report. With the default
 /// factor 1.0 the neutral is byte-identical to the phase bar (the regression
 /// guard for a linear panel).
+///
+/// Round 44 (electrical-sim-9-neutral-bar-double-counts-withstand) — the
+/// triplen factor is a CURRENT multiplier: with [phaseSizingCurrentA] given,
+/// the neutral is the larger of the phase bar (already floored at the
+/// short-circuit withstand section) and the smallest bar whose AMPACITY
+/// covers `factor × phaseSizingCurrentA` — never `phase CSA × factor`, which
+/// multiplied a withstand-governed section by a current ratio (a 75 mm² bar
+/// floored by a 17.84 kA fault became a 150 mm² neutral where 75 mm² covers
+/// both the fault and 1.73 × 77 A). Omitted ⇒ the legacy CSA basis.
 NeutralPeBars sizeNeutralPeBars(
   double phaseCsaMm2,
   Current phaseAmpacity, {
   ElectricalStandardsProfile? profile,
   double neutralOversizeFactor = 1,
   double triplenFraction = 0,
+  double? phaseSizingCurrentA,
+  int phaseParallelBars = 1,
 }) {
-  final pe = phaseCsaMm2 <= 16
+  final peTarget = phaseCsaMm2 <= 16
       ? phaseCsaMm2
       : phaseCsaMm2 <= 35
           ? 16.0
           : phaseCsaMm2 / 2;
+  // Round 75 (elec-convergence-26) — past the standard table (a parallel
+  // phase set, or an S/2 above the largest bar) the PE bar is an orderable
+  // rung or an `n × top` set, never an invented section (a 3 × 1000 mm²
+  // phase set's S/2 = 1500 mm² is no bar). Inside the table: unchanged.
+  final peTop = profile?.copperBusbarTable.last.csaMm2;
+  final pePast = profile != null &&
+      (phaseParallelBars > 1 || (peTop != null && peTarget > peTop + 1e-9));
+  final peBar = pePast ? _barFor(profile, 0, peTarget) : null;
+  final pe = peBar?.csaMm2 ?? peTarget;
+  final peN = peBar?.n ?? 1;
 
-  // Triplen oversize: step the neutral up the standard ladder by the factor.
+  // Triplen oversize: step the neutral up the BUSBAR ladder by the factor.
+  //
+  // Round 11 — it used to step the CABLE ladder (`standardSectionsMm2`, which
+  // tops out at 300 mm²); it now steps the profile's copper flat-bar ladder.
+  // Round 75 (elec-convergence-26) — beyond the largest bar the neutral is
+  // the SAME parallel `n × top` set rule the phase bar follows
+  // ([parallelTopBarsFor], derated), never `needA / density` or
+  // `target.ceil()` (an invented 1221 mm² section no fabricator can order),
+  // and a parallel phase set's full-size neutral is that set (n bars), never
+  // one bar of the summed section.
   var neutral = phaseCsaMm2;
-  if (profile != null && neutralOversizeFactor > 1 && phaseCsaMm2 > 0) {
-    final target = phaseCsaMm2 * neutralOversizeFactor;
-    for (final s in profile.standardSectionsMm2) {
-      if (s >= target) {
-        neutral = s;
-        break;
-      }
+  var neutralN = phaseParallelBars;
+  var neutralA = phaseAmpacity.amperes;
+  if (profile != null &&
+      neutralOversizeFactor > 1 &&
+      phaseCsaMm2 > 0 &&
+      phaseSizingCurrentA != null &&
+      phaseSizingCurrentA > 0) {
+    final needA = neutralOversizeFactor * phaseSizingCurrentA;
+    // The phase bar (already floored at the withstand / incomer) is the
+    // floor; grow only when its rating cannot carry the triplen current.
+    if (phaseAmpacity.amperes + 1e-9 < needA) {
+      final bar = _barFor(profile, needA, phaseCsaMm2);
+      neutral = bar.csaMm2;
+      neutralN = bar.n;
+      neutralA = bar.ampacityA;
     }
+    // The factor is a property of the LOAD (it feeds the feeder neutral
+    // sizing upstream) — reported whenever it applies; whether the bar grew
+    // is [NeutralPeBars.oversized].
+    return NeutralPeBars(
+      neutralCsaMm2: roundTo(neutral, 1),
+      neutralAmpacityA: Current(roundTo(neutralA, 0)),
+      peCsaMm2: roundTo(math.max(pe, 6), 1),
+      neutralOversizeFactor: neutralOversizeFactor,
+      triplenFraction: triplenFraction,
+      oversized: neutral > phaseCsaMm2 + 1e-9,
+      neutralParallelBars: neutralN,
+      peParallelBars: peN,
+      setBarWidthMm:
+          neutralN > 1 || peN > 1 ? profile.copperBusbarTable.last.widthMm : 0,
+      setBarThicknessMm: neutralN > 1 || peN > 1
+          ? profile.copperBusbarTable.last.thicknessMm
+          : 0,
+    );
+  } else if (profile != null && neutralOversizeFactor > 1 && phaseCsaMm2 > 0) {
+    final target = phaseCsaMm2 * neutralOversizeFactor;
+    final bar = _barFor(profile, 0, target);
+    neutral = bar.csaMm2;
+    neutralN = bar.n;
+    neutralA = bar.ampacityA;
   }
-  // The bar's continuous rating tracks the phase bar (the oversize is a thermal
-  // headroom for the harmonic neutral RMS, not a higher continuous duty).
   return NeutralPeBars(
     neutralCsaMm2: roundTo(neutral, 1),
-    neutralAmpacityA: Current(roundTo(phaseAmpacity.amperes, 0)),
+    // Round 75 — the neutral bar's OWN rating (the phase bar's when it is
+    // full-size), never the phase bar's figure beside a larger neutral.
+    neutralAmpacityA: Current(roundTo(neutralA, 0)),
     peCsaMm2: roundTo(math.max(pe, 6), 1),
     neutralOversizeFactor: neutral > phaseCsaMm2 ? neutralOversizeFactor : 1,
     triplenFraction: neutral > phaseCsaMm2 ? triplenFraction : 0,
+    oversized: neutral > phaseCsaMm2 + 1e-9,
+    neutralParallelBars: neutralN,
+    peParallelBars: peN,
+    setBarWidthMm: profile != null && (neutralN > 1 || peN > 1)
+        ? profile.copperBusbarTable.last.widthMm
+        : 0,
+    setBarThicknessMm: profile != null && (neutralN > 1 || peN > 1)
+        ? profile.copperBusbarTable.last.thicknessMm
+        : 0,
   );
 }
+
+String _fmtMm(double v) =>
+    v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+
+/// Round 75 — the printed make-up of a bar: `<csa> mm²`, or for a parallel
+/// set `<n> × (<w>×<t> mm) (<csa> mm²)` — the form the phase busbar line
+/// already prints, so a neutral / PE set never reads as one summed bar.
+String barSetSpec(double csaMm2, int n, double widthMm, double thicknessMm) =>
+    n > 1 && widthMm > 0 && thicknessMm > 0
+        ? '$n × (${_fmtMm(widthMm)}×${_fmtMm(thicknessMm)} mm) '
+            '(${_fmtMm(csaMm2)} mm²)'
+        : '${_fmtMm(csaMm2)} mm²';
+
+/// The neutral bar's printed make-up (see [barSetSpec]).
+String neutralBarSpec(NeutralPeBars b) => barSetSpec(b.neutralCsaMm2,
+    b.neutralParallelBars, b.setBarWidthMm, b.setBarThicknessMm);
+
+/// The PE bar's printed make-up (see [barSetSpec]).
+String peBarSpec(NeutralPeBars b) => barSetSpec(
+    b.peCsaMm2, b.peParallelBars, b.setBarWidthMm, b.setBarThicknessMm);

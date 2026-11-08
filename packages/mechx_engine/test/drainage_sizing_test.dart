@@ -25,9 +25,14 @@ void main() {
       expect(drainageFixtureUnit(PlumbingFixture.hoseBibb), 0);
     });
 
-    test('branch diameter rises with DFU (40→65→100 mm)', () {
+    test('branch diameter rises with DFU (40→50→65→100 mm)', () {
+      // IPC Table 710.1(2) horizontal branch: 1½ in ≤ 3, 2 in ≤ 6,
+      // 2½ in ≤ 12, 3 in ≤ 20, 4 in ≤ 160 DFU.
       expect(drainDiameterForDfu(1, isStack: false).inMillimeters, 40);
-      expect(drainDiameterForDfu(6, isStack: false).inMillimeters, 65);
+      expect(drainDiameterForDfu(3, isStack: false).inMillimeters, 40);
+      expect(drainDiameterForDfu(6, isStack: false).inMillimeters, 50);
+      expect(drainDiameterForDfu(12, isStack: false).inMillimeters, 65);
+      expect(drainDiameterForDfu(20, isStack: false).inMillimeters, 75);
       expect(drainDiameterForDfu(150, isStack: false).inMillimeters, 100);
     });
 
@@ -36,10 +41,37 @@ void main() {
       expect(drainDiameterForDfu(240, isStack: true).inMillimeters, 100);
     });
 
-    test('vent diameter by DFU (8→32, 84→50, 256→75 mm)', () {
-      expect(ventDiameterForDfu(8).inMillimeters, 32);
-      expect(ventDiameterForDfu(84).inMillimeters, 50);
-      expect(ventDiameterForDfu(256).inMillimeters, 75);
+    // Round 9 — UPC Table 703.2 vent maximum units: DN32 1, DN40 8, DN50 24,
+    // DN65 48, DN75 84, DN100 256, DN125 600, DN150 1380.
+    test('vent diameter by DFU (UPC 703.2: 1→32, 8→40, 84→75, 256→100 mm)',
+        () {
+      expect(ventDiameterForDfu(1).inMillimeters, 32);
+      expect(ventDiameterForDfu(4).inMillimeters, 40);
+      expect(ventDiameterForDfu(8).inMillimeters, 40);
+      expect(ventDiameterForDfu(20).inMillimeters, 50);
+      expect(ventDiameterForDfu(40).inMillimeters, 65);
+      expect(ventDiameterForDfu(84).inMillimeters, 75);
+      expect(ventDiameterForDfu(200).inMillimeters, 100);
+      expect(ventDiameterForDfu(256).inMillimeters, 100);
+      expect(ventDiameterForDfu(600).inMillimeters, 125);
+      expect(ventDiameterForDfu(1380).inMillimeters, 150);
+    });
+
+    test('vent is floored at ½ the served drain, rounded up (IPC 906.2)', () {
+      // DN75 drain ⇒ 37.5 mm ⇒ DN40 even for a 1-DFU table pick of DN32.
+      expect(ventDiameterForDfu(1, servedDrainMm: 75).inMillimeters, 40);
+      // DN100 drain ⇒ 50 mm exactly ⇒ DN50.
+      expect(ventDiameterForDfu(1, servedDrainMm: 100).inMillimeters, 50);
+      // The table wins when it is larger (84 DFU → DN75 > ½·DN100).
+      expect(ventDiameterForDfu(84, servedDrainMm: 100).inMillimeters, 75);
+    });
+
+    test('WC-count drain floor (IPC 710.1(2) footnote)', () {
+      expect(minDrainMmForWcCount(0, isStack: false), 0);
+      expect(minDrainMmForWcCount(2, isStack: false), 75);
+      expect(minDrainMmForWcCount(3, isStack: false), 100);
+      expect(minDrainMmForWcCount(6, isStack: true), 75);
+      expect(minDrainMmForWcCount(7, isStack: true), 100);
     });
 
     test('diameter is monotonic non-decreasing in DFU', () {

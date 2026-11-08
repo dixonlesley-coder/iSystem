@@ -24,30 +24,19 @@ import 'dart:convert';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import '../electrical/containment.dart' show ConduitSpec;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
+import '../network/network.dart' show ServiceType;
 import 'drawing_chrome.dart';
 import 'electrical_sld_drawing.dart';
+import 'plan_annotation_layout.dart' show planOverlapWarning;
+import 'riser_tags.dart' show riserServiceCode;
+import 'sld_plot_fit.dart';
 
-/// WinAnsi (Latin-1) code points the single-line labels legitimately emit,
-/// passed through as their own byte (code point == WinAnsi byte at these
-/// positions) so a `/WinAnsiEncoding` Helvetica renders the real glyph, not `?`:
-/// U+00B7 middle-dot separator (device·starter / cable·conduit), U+00B0 degree,
-/// U+00B1 plus-minus, U+00B2/00B3 super-2/3, U+00D8/00F8 O-stroke.
-const _winAnsiPassThrough = {0xB0, 0xB1, 0xB2, 0xB3, 0xB7, 0xD8, 0xF8};
-
-String _pdfText(String raw) {
-  final b = StringBuffer();
-  for (final code in raw.runes) {
-    final c =
-        (code >= 0x20 && code <= 0x7e) || _winAnsiPassThrough.contains(code)
-            ? code
-            : 0x3f /* ? */;
-    if (c == 0x28 || c == 0x29 || c == 0x5c) b.writeCharCode(0x5c); // ( ) \
-    b.writeCharCode(c);
-  }
-  return b.toString();
-}
+/// One WinAnsi text rule for every vector PDF (Round 13): see
+/// [pdfWinAnsiText] in `drawing_chrome.dart`.
+String _pdfText(String raw) => pdfWinAnsiText(raw);
 
 String _n(double v) => v.toStringAsFixed(2);
 
@@ -65,6 +54,29 @@ double _weightPt(SldWeight w) => switch (w) {
 const String _phaseRRg = '0.79 0.16 0.16'; // R — red    (canvas 0xC92A2A)
 const String _phaseSRg = '0.80 0.50 0.03'; // S — amber  (canvas 0xE8990C)
 const String _phaseTRg = '0.10 0.44 0.76'; // T — blue   (canvas 0x1971C2)
+
+/// The service an [SldLine.layer] names when it is a riser SERVICE code (`CW`,
+/// `D`, `V`…), or null. The mechanical riser and the master legend tag their
+/// pipe lines this way; the DXF renderer already maps the same code to the
+/// service's AIA layer and colour.
+ServiceType? _serviceForLayer(String? layer) {
+  if (layer == null) return null;
+  for (final s in ServiceType.values) {
+    if (riserServiceCode(s) == layer) return s;
+  }
+  return null;
+}
+
+/// Stroke colour for an [SldLine]: a NORMAL-role line on a riser service-code
+/// layer prints in that service's plan colour (drafting-8), the SAME colour the
+/// plan PDFs and the DXF layer use, so a legend swatch and the runs it keys
+/// match. Every other line keeps its role colour.
+String _strokeRgForLine(SldLine l) {
+  final s = l.role == SldRole.normal ? _serviceForLayer(l.layer) : null;
+  if (s == null) return _strokeRgForRole(l.role);
+  final (r, g, b) = serviceChromeColor(s);
+  return '${_n(r)} ${_n(g)} ${_n(b)}';
+}
 
 String _strokeRgForRole(SldRole r) => switch (r) {
       SldRole.normal => '0.12 0.12 0.12',
@@ -98,6 +110,10 @@ const double _pageW = 1190.55; // A3 landscape, points (420 mm)
 const double _pageH = 841.89; // 297 mm
 const double _margin = 40.0;
 
+/// Clear space (points) kept between the sheet frame and the auto-fitted
+/// drawing on every side (drafting-9).
+const double _drawInset = 12.0;
+
 /// Build one page's content stream: the auto-fitted drawing + sheet border +
 /// title block + device legend. WITH a non-empty [chrome] the title block is
 /// the SAME shared `pdfTitleBlock` tabular grid the plan exporters stamp (N20 —
@@ -105,6 +121,154 @@ const double _margin = 40.0;
 /// header-style block (byte-identical). [sheetIndexOverride] /
 /// [sheetTotalOverride] force the per-page `Sheet i of t` counter (the paginated
 /// exports) — folded into the chrome the shared block reads.
+/// The reserved strip across the page bottom: the device legend takes the
+/// bottom-left, the title block (height [titleBlockHeight], null = no chrome
+/// ⇒ the legacy 96 pt strip) the bottom-right.
+double _sldTitleStripH(SldSheet sheet, double? titleBlockHeight) {
+  final legendH =
+      sheet.legend.isNotEmpty ? 18.0 + sheet.legend.length * 11.0 : 0.0;
+  return titleBlockHeight != null
+      ? math.max(titleBlockHeight, legendH) + 24.0
+      : 96.0;
+}
+
+/// Round 10 (elec-drawing-props-3) — the smallest label size [sheet] would
+/// PRINT at (page points, after [fitSldSheetForPlot]) on the one-page A3
+/// layout [_sldPageContent] uses with [chrome]. Below [kMinPlotLabelPt] the
+/// page is unreadable as a single sheet.
+double sldSinglePageMinLabelPt(SldSheet sheet,
+    {DrawingChrome? chrome,
+    String projectName = 'Untitled project',
+    String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM'}) {
+  final hasChrome = chrome != null && !chrome.isEmpty;
+  final tbH = hasChrome
+      ? pdfTitleBlock(chrome,
+              pageW: _pageW,
+              pageH: _pageH,
+              margin: _margin,
+              projectName: projectName,
+              scaleTextOverride: chrome.scaleText ?? 'NTS',
+              titleTextOverride: diagramTitle)
+          .height
+      : null;
+  const availW = _pageW - 2 * _margin - 2 * _drawInset;
+  final availH =
+      _pageH - 2 * _margin - _sldTitleStripH(sheet, tbH) - 2 * _drawInset;
+  final fit = fitSldSheetForPlot(sheet, availW: availW, availH: availH);
+  var minPt = double.infinity;
+  for (final p in fit.sheet.prims) {
+    if (p is SldLabel && p.text.trim().isNotEmpty) {
+      minPt = math.min(minPt, p.size * fit.scale);
+    }
+  }
+  return minPt;
+}
+
+/// Round 10 (elec-drawing-props-3) — the DETAIL single-line (every board's
+/// schedule) as an ISSUABLE PDF: one A3 sheet when every label still prints
+/// at [kMinPlotLabelPt] or more, else the one-board-per-page set
+/// ([electricalSldToPdfPaginated]) — a 45-way project stacked onto one page
+/// printed its schedule cells at ~3.6 pt (the cells sit between row rules, so
+/// the plot fit cannot grow them).
+Uint8List electricalSldDetailToPdf({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+  String title = 'iSystem electrical single-line',
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
+  String? projectName,
+}) {
+  // Round 14 (drafting-visual-1) — [projectName] overrides the electrical
+  // model's own name, so a submittal stamps ONE project name on every sheet.
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : _projectName(project);
+  final whole = buildElectricalSld(
+      project: project,
+      result: result,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds);
+  final minPt = sldSinglePageMinLabelPt(whole,
+      chrome: chrome, projectName: pname, diagramTitle: diagramTitle);
+  // Round 34 — one page only when it really prints at the floor: a single
+  // TALL board below it now paginates by way range (was: always one page).
+  if (minPt >= kMinPlotLabelPt - 1e-9) {
+    return electricalSldToPdf(
+        project: project,
+        sheet: whole,
+        title: title,
+        diagramTitle: diagramTitle,
+        chrome: chrome,
+        projectName: pname);
+  }
+  return electricalSldToPdfPaginated(
+      project: project,
+      result: result,
+      title: title,
+      diagramTitle: diagramTitle,
+      chrome: chrome,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds,
+      projectName: pname);
+}
+
+/// Round 34 (electrical-drawings-4-tall-board-schedule-illegible) — ONE
+/// board's schedule as issuable sheets: `[whole]` when it prints at
+/// [kMinPlotLabelPt] on one A3 page, else the fewest equal WAY RANGES whose
+/// every page prints at the floor (first page: header + incomer; later pages
+/// 'LANJUTAN W<a>-W<b>'; the last: spares + TOTAL). The schedule rows sit
+/// between rules, so the plot fit cannot grow them — splitting is the only
+/// way a 36-way board's rows stay legible. Pure.
+List<SldSheet> electricalBoardScheduleSheets({
+  required ElectricalProject project,
+  required ElectricalSystemResult result,
+  required String panelId,
+  String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
+  DrawingChrome? chrome,
+  Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
+  String projectName = 'Untitled project',
+}) {
+  SldSheet build(({int lo, int hi})? r) => buildElectricalSld(
+      project: project,
+      result: result,
+      onlyPanelId: panelId,
+      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+      breakerKaByCircuitId: breakerKaByCircuitId,
+      containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds,
+      wayRange: r);
+  bool legible(SldSheet s) =>
+      sldSinglePageMinLabelPt(s,
+          chrome: chrome,
+          projectName: projectName,
+          diagramTitle: diagramTitle) >=
+      kMinPlotLabelPt - 1e-9;
+  final whole = build(null);
+  final ways = result.panels[panelId]?.circuits.length ?? 0;
+  if (ways <= 1 || legible(whole)) return [whole];
+  var pages = [whole];
+  for (var g = 2; g <= ways; g++) {
+    final size = (ways / g).ceil();
+    pages = [
+      for (var lo = 0; lo < ways; lo += size)
+        build((lo: lo, hi: math.min(lo + size, ways) - 1)),
+    ];
+    if (pages.every(legible)) break;
+  }
+  return pages;
+}
+
 String _sldPageContent({
   required SldSheet sheet,
   required String projectName,
@@ -134,27 +298,26 @@ String _sldPageContent({
           scaleTextOverride: effChrome.scaleText ?? 'NTS',
           titleTextOverride: diagramTitle)
       : null;
-  // The device legend reserves the bottom-left; the title block the bottom-right.
-  final legendH =
-      sheet.legend.isNotEmpty ? 18.0 + sheet.legend.length * 11.0 : 0.0;
-  final titleBlockH = // reserved strip across the page bottom
-      hasChrome ? math.max(tb!.height, legendH) + 24.0 : 96.0;
+  final titleBlockH = _sldTitleStripH(sheet, tb?.height);
 
   // ── Auto-fit the drawing into the area above the title block ────────────────
-  final spanX = math.max(1e-6, sheet.maxX - sheet.minX);
-  final spanY = math.max(1e-6, sheet.maxY - sheet.minY);
-  const availW = _pageW - 2 * _margin;
-  final availH = _pageH - 2 * _margin - titleBlockH;
-  var scale = math.min(availW / spanX, availH / spanY);
-  if (!scale.isFinite || scale <= 0) scale = 1.0;
-  scale = math.min(scale, 1.0); // never blow a tiny drawing up past 1:1
-  final drawnW = spanX * scale;
-  final drawnH = spanY * scale;
-  final offX = _margin + (availW - drawnW) / 2;
-  // Top of the drawing area (PDF y-up): just under the top margin.
-  final topY = _pageH - _margin - (availH - drawnH) / 2;
-  double tx(double x) => offX + (x - sheet.minX) * scale;
-  double ty(double y) => topY - (y - sheet.minY) * scale; // flip y-down→y-up
+  // drafting-9: the drawing sits a [_drawInset] inside the frame on every side,
+  // so a height-limited sheet's top label (the source-spine head) no longer
+  // prints on the frame line. drafting-6: [fitSldSheetForPlot] keeps every
+  // label at or above the minimum plotted size (kMinPlotLabelPt) where there is
+  // clear space, and its bounds cover each label's real text extent.
+  const availW = _pageW - 2 * _margin - 2 * _drawInset;
+  final availH = _pageH - 2 * _margin - titleBlockH - 2 * _drawInset;
+  final fit = fitSldSheetForPlot(sheet, availW: availW, availH: availH);
+  final plot = fit.sheet;
+  final scale = fit.scale;
+  final drawnW = (plot.maxX - plot.minX) * scale;
+  final drawnH = (plot.maxY - plot.minY) * scale;
+  final offX = _margin + _drawInset + (availW - drawnW) / 2;
+  // Top of the drawing area (PDF y-up): just under the top margin + inset.
+  final topY = _pageH - _margin - _drawInset - (availH - drawnH) / 2;
+  double tx(double x) => offX + (x - plot.minX) * scale;
+  double ty(double y) => topY - (y - plot.minY) * scale; // flip y-down→y-up
 
   final cs = StringBuffer();
 
@@ -164,10 +327,10 @@ String _sldPageContent({
       '${_n(_pageW - 2 * _margin)} ${_n(_pageH - 2 * _margin)} re S');
 
   // ── Drawing content (panels / busbars / ways / feeders) ─────────────────────
-  for (final p in sheet.prims) {
+  for (final p in plot.prims) {
     switch (p) {
       case SldLine():
-        cs.writeln('${_strokeRgForRole(p.role)} RG '
+        cs.writeln('${_strokeRgForLine(p)} RG '
             '${_n(_weightPt(p.weight) * scale + 0.3)} w');
         // A dashed prim strokes inside a dash pattern, reset straight after so
         // the following prims stay solid. Default solid ⇒ byte-identical.
@@ -182,7 +345,11 @@ String _sldPageContent({
         cs.writeln('${_n(tx(p.x))} ${_n(ty(p.y + p.h))} '
             '${_n(p.w * scale)} ${_n(p.h * scale)} re S');
       case SldLabel():
-        final fs = math.max(5.0, p.size * scale);
+        // Round 10 (elec-drawing-props-4) — print the FITTED size exactly, as
+        // the DXF does: [fitSldSheetForPlot] already grew every label it could
+        // into clear space; a renderer-side floor re-enlarged boxed-in labels
+        // around the same anchor and overprinted their neighbours (PDF != DXF).
+        final fs = p.size * scale;
         cs.writeln('BT /F1 ${_n(fs)} Tf ${_textRgForRole(p.role)} rg '
             '${_n(tx(p.x))} ${_n(ty(p.y))} Td (${_pdfText(p.text)}) Tj ET');
       case SldCircle():
@@ -212,7 +379,7 @@ String _sldPageContent({
     // The honest supply note kept as a muted line just above the block (the
     // schematic feed context the tabular grid has no row for).
     if (sheet.supplyNote.isNotEmpty) {
-      final ny = _margin + math.max(tb.height, legendH) + 8;
+      final ny = _margin + titleBlockH - 24 + 8; // = max(tb, legend) + 8
       cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
           '${_n(_margin + 4)} ${_n(ny)} Td (${_pdfText(sheet.supplyNote)}) Tj ET');
     }
@@ -247,6 +414,24 @@ String _sldPageContent({
       cs.writeln('BT /F1 8 Tf 0.30 0.30 0.30 rg '
           '${_n(tbX + 8)} ${_n(tbY + 8)} Td (${_pdfText(counter)}) Tj ET');
     }
+  }
+
+  // Round 29 (drawings-3-1) — a sheet whose builder could only place some
+  // tags fused into others says so (top-left, inside the frame), like the
+  // plan pipeline, instead of being issued as if clean.
+  final overlapNote = planOverlapWarning(sheet.overlapCount);
+  if (overlapNote != null) {
+    cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
+        '${_n(_margin + 6)} ${_n(_pageH - _margin - 12)} Td '
+        '(${_pdfText(overlapNote)}) Tj ET');
+  }
+  // Round 43 — a page its pagination could not bring to the plotted floor.
+  final legNote = sldLegibilityWarning(sheet.belowMinLabelPt,
+      minPt: kMinPlotLabelPt);
+  if (legNote != null) {
+    cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
+        '${_n(_margin + 6)} ${_n(_pageH - _margin - (overlapNote != null ? 24 : 12))} Td '
+        '(${_pdfText(legNote)}) Tj ET');
   }
 
   // ── Device legend (KETERANGAN, bottom-left) ─────────────────────────────────
@@ -385,16 +570,25 @@ Uint8List electricalSldToPdfPaginated({
   String diagramTitle = 'ELECTRICAL SINGLE-LINE DIAGRAM',
   DrawingChrome? chrome,
   Map<String, double>? breakerIcuKaByPanelId,
+  Map<String, double>? breakerKaByCircuitId,
+  Map<String, ConduitSpec>? containmentByCircuitId,
+  Set<String>? adsFailedCircuitIds,
+  String? projectName,
 }) {
   final ids = result.order;
-  final pname = _projectName(project);
+  final pname = (projectName != null && projectName.isNotEmpty)
+      ? projectName
+      : _projectName(project);
   if (ids.isEmpty) {
     return _assemblePdf([
       _sldPageContent(
         sheet: buildElectricalSld(
             project: project,
             result: result,
-            breakerIcuKaByPanelId: breakerIcuKaByPanelId),
+            breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+            breakerKaByCircuitId: breakerKaByCircuitId,
+            containmentByCircuitId: containmentByCircuitId,
+      adsFailedCircuitIds: adsFailedCircuitIds),
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
@@ -404,20 +598,32 @@ Uint8List electricalSldToPdfPaginated({
       ),
     ]);
   }
+  // Round 34 — a board too tall for one legible page continues on way-range
+  // pages; `Sheet i of N` runs across the whole set.
+  final sheets = <SldSheet>[
+    for (final id in ids)
+      ...electricalBoardScheduleSheets(
+          project: project,
+          result: result,
+          panelId: id,
+          diagramTitle: diagramTitle,
+          chrome: chrome,
+          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+          breakerKaByCircuitId: breakerKaByCircuitId,
+          containmentByCircuitId: containmentByCircuitId,
+          adsFailedCircuitIds: adsFailedCircuitIds,
+          projectName: pname),
+  ];
   final pages = <String>[
-    for (var i = 0; i < ids.length; i++)
+    for (var i = 0; i < sheets.length; i++)
       _sldPageContent(
-        sheet: buildElectricalSld(
-            project: project,
-            result: result,
-            onlyPanelId: ids[i],
-            breakerIcuKaByPanelId: breakerIcuKaByPanelId),
+        sheet: sheets[i],
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
         chrome: chrome,
         sheetIndexOverride: i + 1,
-        sheetTotalOverride: ids.length,
+        sheetTotalOverride: sheets.length,
       ),
   ];
   return _assemblePdf(pages);

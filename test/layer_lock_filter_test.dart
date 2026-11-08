@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart' show PointerDeviceKind;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -132,11 +133,22 @@ void main() {
     ));
     await tester.pump();
     expect(find.byType(LayerSwitcher), findsOneWidget);
-    // Locking a reference layer via the store repaints the padlock in its
-    // locked state; the switcher must rebuild without error.
-    c.read(lockedDisciplinesProvider.notifier).toggle(DisciplineLayer.hvac);
-    await tester.pump();
+    // Quiet at rest: the padlock reveals only when its layer entry is hovered.
+    expect(find.bySemanticsLabel('Lock layer'), findsNothing);
+    final g = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await g.addPointer(location: Offset.zero);
+    addTearDown(g.removePointer);
+    await g.moveTo(tester.getCenter(find.text('HVAC')));
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('Lock layer'), findsOneWidget);
+    await tester.tap(find.bySemanticsLabel('Lock layer'));
+    await tester.pumpAndSettle();
     expect(c.read(lockedDisciplinesProvider), {DisciplineLayer.hvac});
+
+    // Moving away keeps the LOCKED padlock visible (non-default state).
+    await g.moveTo(const Offset(590, 390));
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('Unlock layer'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 }

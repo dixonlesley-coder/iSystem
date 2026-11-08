@@ -11,6 +11,8 @@ library;
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart' show Offset;
+import 'package:mechx_engine/electrical/advanced_study.dart'
+    show serviceSectionOfRoot;
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
 
@@ -202,6 +204,33 @@ double panelFootprintLod(ElectricalPanelResult panel, PanelLod lod) =>
 double panelFootprint(ElectricalPanelResult panel, bool detail) =>
     panelFootprintLod(panel, detail ? PanelLod.schedule : PanelLod.summary);
 
+/// Round 12 (ui-journey-add-panel-overlaps) — where '+ Panel' drops the next
+/// board: left-aligned with the existing boards and [gap] BELOW the lowest
+/// card's footprint (its tallest LOD — the schedule — so no zoom level makes
+/// the cards overlap). The old fixed 40-unit diagonal step always landed a
+/// new ~758 × 94 card on top of the previous one. An empty project keeps the
+/// historic first slot (120, 120).
+Offset nextPanelDropSlot(
+  ElectricalProject project,
+  ElectricalSystemResult result, {
+  double gap = 40,
+}) {
+  final pos = resolvePanelPositions(project, result);
+  if (pos.isEmpty) return const Offset(120, 120);
+  var left = double.infinity;
+  var bottom = double.negativeInfinity;
+  for (final e in pos.entries) {
+    final r = result.panels[e.key];
+    final h = r == null
+        ? kPanelChrome + kPanelSummaryBodyH
+        : math.max(panelFootprintLod(r, PanelLod.schedule),
+            panelFootprintLod(r, PanelLod.summary));
+    left = math.min(left, e.value.dx);
+    bottom = math.max(bottom, e.value.dy + h);
+  }
+  return Offset(left, bottom + gap);
+}
+
 /// Resolve each panel's world position: a saved `x,y` wins, else the
 /// deterministic tidy-tree [autoLayout]. The single shared resolver used by the
 /// interactive single-line canvas AND the minimap (I8) so the minimap tracks
@@ -242,6 +271,24 @@ String? serviceRootId(
       if (!fed.contains(p.id)) p,
   ];
   if (roots.isEmpty) return project.panels.first.id;
+  // Round 66 (regression-canvas-section-row-feeds-other-sections-board) — on
+  // a SECTIONED service the canvas spine's baseline row is SECTION 1
+  // (TRAFO-1 -> LVMDP-1), captioned with the boards [serviceSectionOfRoot]
+  // puts on section 1, so the board it is wired into is chosen among those:
+  // one section numbering on the canvas and the issued single-line (the
+  // demand order alone wired LVMDP-1 into section 2's board).
+  final sectionOf = serviceSectionOfRoot(project, result);
+  if (sectionOf.isNotEmpty) {
+    final first = [
+      for (final p in roots)
+        if (sectionOf[p.id] == 0) p,
+    ];
+    if (first.isNotEmpty) {
+      roots
+        ..clear()
+        ..addAll(first);
+    }
+  }
   // Prefer a root with feeder children, by descending demand.
   roots.sort((a, b) {
     final ad = result.panels[a.id]?.demandW ?? 0;

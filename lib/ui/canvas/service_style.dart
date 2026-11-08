@@ -62,3 +62,41 @@ String? edgeMaterialLabel(NetEdge edge) {
   if (edge.ductProduct != null) return ductLabelFor(edge.ductProduct!);
   return null;
 }
+
+/// A horizontal line swatch in the service colour, drawn solid or as the
+/// service's dash recipe so a dashed service (vent) reads dashed in the key too.
+/// Shared by the canvas legend chip and the tool cluster — one swatch source.
+class ServiceSwatchPainter extends CustomPainter {
+  final Color color;
+  final List<double>? dash;
+  const ServiceSwatchPainter(this.color, this.dash);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final y = size.height / 2;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2.4
+      ..strokeCap = StrokeCap.round;
+    final d = dash;
+    if (d == null || d.isEmpty) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
+      return;
+    }
+    var x = 0.0;
+    var i = 0;
+    var on = true;
+    while (x < size.width) {
+      final seg = d[i % d.length];
+      final end = (x + seg).clamp(0.0, size.width);
+      if (on && end > x) canvas.drawLine(Offset(x, y), Offset(end, y), paint);
+      x = end;
+      i++;
+      on = !on;
+    }
+  }
+
+  @override
+  bool shouldRepaint(ServiceSwatchPainter old) =>
+      old.color != color || old.dash != dash;
+}

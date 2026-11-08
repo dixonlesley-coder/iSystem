@@ -50,7 +50,20 @@ const List<_MotorRating> _motorFlc400v = [
   _MotorRating(160, 282),
   _MotorRating(200, 350),
   _MotorRating(250, 435),
+  // Round 42 (elec-props-8-motor-flc-clamps-above-250kw) — the IEC frames up
+  // to the 315 kW top of `standardMotorKw` (sizing/pump.dart). // VERIFY
+  // (secondarySource): typical 400 V nameplate composite.
+  _MotorRating(280, 490),
+  _MotorRating(315, 545),
 ];
+
+/// Round 42 — the largest motor rating (kW) the 400 V FLC table carries.
+/// Above it [motorFlc] scales the top row ∝ kW (never clamps) and
+/// [motorFlcAboveTable] is true so a caller can surface the extrapolation.
+double get kMotorFlcTableTopKw => _motorFlc400v.last.kw;
+
+/// True when [kw] lies above the 400 V FLC table (an extrapolated FLC).
+bool motorFlcAboveTable(double kw) => kw > _motorFlc400v.last.kw + 1e-9;
 
 /// One row of the 1-phase induction-motor η·cosφ table.
 class _Motor1phEffPf {
@@ -84,7 +97,10 @@ const List<_Motor1phEffPf> _motor1phEffPf = [
 /// Three-phase motor full-load current (A) for [kw], interpolating the IEC 60034-1
 /// 400 V table and scaling inversely with voltage (FLC ∝ 1/V at constant power).
 ///
-/// Below the smallest / above the largest table entry the end value is clamped.
+/// Below the smallest entry the end value is clamped. Round 42 — ABOVE the
+/// largest entry the FLC scales with power (`FLC_top × kW / kW_top`, the same
+/// η·cosφ as the top frame), never clamps: a 400 kW machine must not get the
+/// 315 kW gear (an overload set below its running current trips at load).
 Current motorFlc(double kw, [Voltage v = const Voltage(400)]) {
   const table = _motorFlc400v;
   final first = table.first;
@@ -94,7 +110,7 @@ Current motorFlc(double kw, [Voltage v = const Voltage(400)]) {
   if (kw <= first.kw) {
     flc400 = first.flcA400;
   } else if (kw >= last.kw) {
-    flc400 = last.flcA400;
+    flc400 = last.flcA400 * kw / last.kw;
   } else {
     flc400 = last.flcA400;
     for (var i = 0; i < table.length - 1; i++) {

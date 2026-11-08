@@ -387,9 +387,24 @@ void main() {
           role: NodeRole.plant);
       const m2 = NetNode(id: 'm2', sheetId: 's1', x: 0, y: 0, floorIndex: 2);
       const m0 = NetNode(id: 'm0', sheetId: 's1', x: 0, y: 0, floorIndex: 0);
+      // Audit 2026-10 water-drainage-5: the target is owed at a DELIVERY node,
+      // so a top-floor fixture f2 (7 + 1.1 = 8.1 m ⇒ 10 − 8.1 = 1.9 m of
+      // gravity head) is the critical node, not the pass-through main m2.
+      const f2 = NetNode(
+          id: 'f2',
+          sheetId: 's1',
+          x: 100,
+          y: 0,
+          floorIndex: 2,
+          role: NodeRole.fixture);
       const downNet = Network(
-        nodes: [tank, m2, m0],
+        nodes: [tank, m2, m0, f2],
         edges: [
+          NetEdge(
+              id: 'df',
+              fromId: 'm2',
+              toId: 'f2',
+              service: ServiceType.coldWater),
           NetEdge(
               id: 'dt',
               fromId: 'tank',
@@ -422,10 +437,12 @@ void main() {
           closeTo(pressureFromHead(const Head(0.3)).pascals, 1e-6));
       expect(sol.residualPressure['m0']!.pascals,
           closeTo(pressureFromHead(const Head(6.3)).pascals, 1e-6));
-      expect(sol.criticalNodeId, 'm2');
+      expect(sol.residualPressure['f2']!.pascals,
+          closeTo(pressureFromHead(const Head(1.9)).pascals, 1e-6));
+      expect(sol.criticalNodeId, 'f2');
       // Falsifiable: this design genuinely misses the target.
       expect(sol.minResidual.pascals, lessThan(targetResidual.pascals));
-      expect(sol.boosterHeadRequired.meters, closeTo(targetHead - 0.3, 1e-6));
+      expect(sol.boosterHeadRequired.meters, closeTo(targetHead - 1.9, 1e-6));
       expect(sol.gravitySufficient, isFalse);
     });
   });

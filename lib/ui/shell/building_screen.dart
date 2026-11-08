@@ -5,24 +5,32 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/standards/sni.dart' show Occupancy;
 import 'package:mechx_engine/units.dart';
+import 'package:mechx_engine/report/number_format.dart' show signedElevationText;
+import 'package:mechx_engine/report/riser_tags.dart' show fflLabel;
 
 import '../../store/app_state.dart'
     show
         CoolingLoadMethod,
         coolingLoadMethodProvider,
         drainageSlopeProvider,
+        FeedStrategy,
+        feedStrategyProvider,
         hotWaterDeltaTProvider,
         hotWaterFlowTempProvider,
         occupancyProvider,
         rainfallIntensityProvider,
         runoffCoefficientProvider,
         statusMessageProvider;
+import '../../store/floor_remap.dart'
+    show FloorPlacedWorkCount, floorPlacedWorkCount;
+import '../../store/history_store.dart';
 import '../../store/models/sheet.dart';
 import '../../store/network_store.dart';
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
 import '../sheets/pdf_page_picker.dart';
 import '../strings/app_strings.dart';
+import '../strings/occupancy_label.dart';
 import '../strings/plural.dart';
 import '../theme/design_tokens.dart';
 import '../theme/mechx_theme.dart';
@@ -33,6 +41,7 @@ import '../widgets/mechx_segment.dart';
 import '../widgets/mechx_text_field.dart';
 import '../widgets/section_label.dart';
 import '../widgets/stepped_value_field.dart';
+import 'project_io.dart' show importPlan;
 
 /// The minimum tappable square for this page's glyph-only controls (B2). The
 /// GLYPH keeps its compact size; only the hit region grows, so aiming at a
@@ -53,7 +62,7 @@ class BuildingScreen extends ConsumerWidget {
     final project = ref.watch(projectControllerProvider);
     final ctrl = ref.read(projectControllerProvider.notifier);
     final building = project.building;
-    final sheetsState = ref.watch(sheetsControllerProvider);
+    final sheetsState = ref.watch(sheetsContentProvider);
 
     // F10 — EVERY sheet (PDF page) mapped to a level, not just the first.
     // A floor may carry several plans (architectural + M&E, or a re-issue), and
@@ -71,10 +80,14 @@ class BuildingScreen extends ConsumerWidget {
           'its PDF page, or add and remove levels.',
       children: [
         HubStatRow(stats: [
-          ('Total height', '${building.totalHeight.meters.toStringAsFixed(1)} m'),
+          ('Total height', '${trimmedMetres(building.totalHeight.meters)} m'),
           ('Levels', '${building.levelCount}'),
-          ('Roof elevation',
-              '${building.roofElevation.meters.toStringAsFixed(1)} m'),
+          // Round 31 (ui-simplicity-4) — without basements the roof elevation
+          // IS the total height (ground datum 0.0), so it is shown only when
+          // basements make the two differ.
+          if (building.groundIndex > 0)
+            ('Roof elevation',
+                '${signedElevationText(building.roofElevation.meters)} m'),
         ]),
         const SizedBox(height: MechXSpacing.lg),
         // Top floor first, matching how a building reads on an elevation.
@@ -90,8 +103,17 @@ class BuildingScreen extends ConsumerWidget {
             onHeightMinus: () => ctrl.nudgeFloorHeight(i, -0.1),
             onHeightPlus: () => ctrl.nudgeFloorHeight(i, 0.1),
             onHeightSet: (m) => ctrl.setFloorHeight(i, Length(m)),
+            // With NO plan in the project there is nothing to assign — the
+            // action becomes the import entry point (the same `importPlan` the
+            // sheet rail's '+' tile and Ctrl+I use) instead of a dead,
+            // disabled 'Assign'.
+            pickLabel: sheetsState.sheets.isEmpty
+                ? context.strings(StringKey.buildingImportPlan)
+                : sheetsForFloor(i).isEmpty
+                    ? context.strings(StringKey.buildingAssignPlan)
+                    : context.strings(StringKey.buildingChangePlan),
             onPickSheet: sheetsState.sheets.isEmpty
-                ? null
+                ? () => _importPlanForFloor(context, ref, i)
                 : () => _pickSheetForFloor(context, ref, i),
             onRemove: project.floors.length > 1
                 ? () => _removeLevel(context, ref, i)
@@ -131,9 +153,14 @@ class BuildingScreen extends ConsumerWidget {
       BuildContext context, WidgetRef ref, int index) async {
     final count =
         ref.read(networkControllerProvider.notifier).elementsOnFloor(index);
-    if (count > 0) {
+    // Round 13 (ui-journey-2) — the level's rooms, tanks, measurements and
+    // electrical placements go with it too (floor_remap), so they count: a
+    // floor carrying only a room used to vanish with no dialog at all.
+    final placed = floorPlacedWorkCount(ref.read, (fi) => fi == index);
+    if (count > 0 || !placed.isEmpty) {
       final level = ref.read(projectControllerProvider).floors[index].name;
-      final ok = await showDeleteLevelDialog(context, level: level, count: count);
+      final ok = await showDeleteLevelDialog(context,
+          level: level, count: count, placed: placed);
       if (ok != true) return;
     }
     ref.read(projectControllerProvider.notifier).removeFloor(index);
@@ -158,6 +185,7 @@ Future<bool?> showDeleteLevelDialog(
   BuildContext context, {
   required String level,
   required int count,
+  FloorPlacedWorkCount placed = const FloorPlacedWorkCount(),
 }) {
   final theme = MechXTheme.of(context);
   return showGeneralDialog<bool>(
@@ -168,7 +196,9 @@ Future<bool?> showDeleteLevelDialog(
     transitionDuration: MechXMotion.appear,
     pageBuilder: (ctx, _, _) => MechXTheme(
       data: theme,
-      child: Center(child: _DeleteLevelDialog(level: level, count: count)),
+      child: Center(
+          child:
+              _DeleteLevelDialog(level: level, count: count, placed: placed)),
     ),
     transitionBuilder: (ctx, anim, _, child) {
       final curved = CurvedAnimation(
@@ -190,7 +220,9 @@ Future<bool?> showDeleteLevelDialog(
 class _DeleteLevelDialog extends StatelessWidget {
   final String level;
   final int count;
-  const _DeleteLevelDialog({required this.level, required this.count});
+  final FloorPlacedWorkCount placed;
+  const _DeleteLevelDialog(
+      {required this.level, required this.count, required this.placed});
 
   @override
   Widget build(BuildContext context) {
@@ -199,8 +231,25 @@ class _DeleteLevelDialog extends StatelessWidget {
     final strings = MechXStrings.of(context);
     // The count reads as a real phrase ("47 drawn elements" / "1 drawn
     // element"), never the dev-speak "element(s)".
-    final noun = plural(count, strings(StringKey.buildingDrawnElementOne),
-        strings(StringKey.buildingDrawnElementMany));
+    // Round 13 — every KIND that goes is named with its own count
+    // ('3 drawn elements, 1 room, 2 tanks'), never just the network.
+    String phrase(int n, StringKey one, StringKey many) =>
+        '$n ${plural(n, strings(one), strings(many))}';
+    final parts = <String>[
+      if (count > 0)
+        phrase(count, StringKey.buildingDrawnElementOne,
+            StringKey.buildingDrawnElementMany),
+      if (placed.rooms > 0)
+        phrase(placed.rooms, StringKey.buildingRoomOne,
+            StringKey.buildingRoomMany),
+      if (placed.tanks > 0)
+        phrase(placed.tanks, StringKey.buildingTankOne,
+            StringKey.buildingTankMany),
+      if (placed.measurements > 0)
+        phrase(placed.measurements, StringKey.buildingMeasurementOne,
+            StringKey.buildingMeasurementMany),
+    ];
+    final what = parts.join(', ');
     return Container(
       width: 420,
       padding: const EdgeInsets.all(MechXSpacing.lg),
@@ -219,11 +268,20 @@ class _DeleteLevelDialog extends StatelessWidget {
             style: type.title.copyWith(color: colors.textPrimary),
           ),
           const SizedBox(height: MechXSpacing.xs),
-          Text(
-            strings.format(StringKey.buildingDeleteLevelBody,
-                {'level': level, 'count': '$count $noun'}),
-            style: type.caption.copyWith(color: colors.textMuted),
-          ),
+          if (what.isNotEmpty)
+            Text(
+              strings.format(
+                  StringKey.buildingDeleteLevelBody, {'level': level, 'count': what}),
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          if (placed.electrical > 0) ...[
+            const SizedBox(height: MechXSpacing.xxs),
+            Text(
+              strings.format(StringKey.buildingDeleteLevelElectrical,
+                  {'count': '${placed.electrical}'}),
+              style: type.caption.copyWith(color: colors.textMuted),
+            ),
+          ],
           const SizedBox(height: MechXSpacing.md),
           Row(
             mainAxisAlignment: MainAxisAlignment.end,
@@ -260,6 +318,9 @@ class _LevelCard extends StatelessWidget {
   final VoidCallback onHeightPlus;
   final ValueChanged<double> onHeightSet;
   final VoidCallback? onPickSheet;
+
+  /// The plan action's label (Import plan… / Assign / Change).
+  final String pickLabel;
   final VoidCallback? onRemove;
 
   const _LevelCard({
@@ -271,6 +332,7 @@ class _LevelCard extends StatelessWidget {
     required this.onHeightPlus,
     required this.onHeightSet,
     required this.onPickSheet,
+    required this.pickLabel,
     required this.onRemove,
   });
 
@@ -304,7 +366,10 @@ class _LevelCard extends StatelessWidget {
               const SizedBox(width: MechXSpacing.sm),
               // B3: the elevation restates itself every time a height below it
               // changes — tabular figures keep the row from shuffling.
-              Text('elev ${elevation.meters.toStringAsFixed(1)} m',
+              // Round 25 — 2 dp through the SAME formatter the riser / FFL
+              // labels use; now the SAME notation too (the shared `fflLabel`),
+              // so a level reads 'FFL +7.25' here exactly as on the drawings.
+              Text(fflLabel(elevation.meters),
                   style: MechXTypography.tabular(type.caption)
                       .copyWith(color: colors.textMuted)),
               const SizedBox(width: MechXSpacing.xxs),
@@ -322,12 +387,16 @@ class _LevelCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Floor-to-floor height',
+                child: Text(
+                    context.strings(StringKey.buildingFloorToFloorHeight),
                     style: type.body.copyWith(color: colors.textSecondary)),
               ),
               SteppedValueField(
-                display: '${floor.height.meters.toStringAsFixed(1)} m',
-                editSeed: floor.height.meters.toStringAsFixed(1),
+                // Round 25 — 2 dp (trailing zero trimmed): a typed 3.25 m
+                // reads and re-seeds as 3.25, never a rounded '3.3' that a
+                // re-commit would silently store.
+                display: '${trimmedMetres(floor.height.meters)} m',
+                editSeed: trimmedMetres(floor.height.meters),
                 label: context.strings(StringKey.a11yFieldFloorToFloorHeight),
                 gap: MechXSpacing.sm,
                 valueWidth: 84,
@@ -349,7 +418,7 @@ class _LevelCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: Text('Floor plan',
+                child: Text(context.strings(StringKey.buildingFloorPlan),
                     style: type.body.copyWith(color: colors.textSecondary)),
               ),
               Flexible(
@@ -371,7 +440,7 @@ class _LevelCard extends StatelessWidget {
               ),
               const SizedBox(width: MechXSpacing.sm),
               MechXButton(
-                label: sheets.isEmpty ? 'Assign' : 'Change',
+                label: pickLabel,
                 onPressed: onPickSheet,
               ),
             ],
@@ -470,8 +539,8 @@ class _AddLevelsRowState extends State<_AddLevelsRow> {
           _StepperField(
             label: 'Height',
             child: SteppedValueField(
-              display: '${_height.toStringAsFixed(1)} m',
-              editSeed: _height.toStringAsFixed(1),
+              display: '${trimmedMetres(_height)} m',
+              editSeed: trimmedMetres(_height),
               label: context.strings(StringKey.a11yFieldFloorHeight),
               gap: MechXSpacing.xs,
               valueWidth: 56,
@@ -570,16 +639,12 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
     });
   }
 
-  static String _occupancyLabel(Occupancy o) => switch (o) {
-        Occupancy.private => 'Residential',
-        Occupancy.public => 'Office / public',
-        Occupancy.assembly => 'Assembly / mall',
-      };
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final type = context.type;
+    final feed = ref.watch(feedStrategyProvider);
     final occ = ref.watch(occupancyProvider);
     final rain = ref.watch(rainfallIntensityProvider);
     final runoff = ref.watch(runoffCoefficientProvider);
@@ -614,6 +679,33 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // 2026-10-17 — the water FEED STRATEGY is a building-wide design
+          // input: it decides the whole water solve, so it lives here (the
+          // inspectors only report it). `setFeedStrategyUndoable` records the
+          // undo step + narrates the change (D3 toast).
+          Text(context.strings(StringKey.buildingWaterSupply),
+              style: type.caption.copyWith(color: colors.textMuted)),
+          const SizedBox(height: MechXSpacing.xs),
+          Wrap(
+            spacing: MechXSpacing.xs,
+            runSpacing: MechXSpacing.xs,
+            children: [
+              MechXSegment(
+                label: context.strings(StringKey.feedUpfeedPump),
+                selected: feed == FeedStrategy.upfeed,
+                onTap: () =>
+                    setFeedStrategyUndoable(ref.read, FeedStrategy.upfeed),
+              ),
+              MechXSegment(
+                label: context.strings(StringKey.feedRoofTankDownfeed),
+                selected: feed == FeedStrategy.downfeed,
+                onTap: () =>
+                    setFeedStrategyUndoable(ref.read, FeedStrategy.downfeed),
+              ),
+            ],
+          ),
+          caption(context.strings(StringKey.buildingInputCaptionFeed)),
+          const SizedBox(height: MechXSpacing.md),
           Text('Occupancy',
               style: type.caption.copyWith(color: colors.textMuted)),
           const SizedBox(height: MechXSpacing.xs),
@@ -623,10 +715,10 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
             children: [
               for (final o in Occupancy.values)
                 MechXSegment(
-                  label: _occupancyLabel(o),
+                  label: context.strings(occupancyLabelKey(o)),
                   selected: occ == o,
                   onTap: () {
-                    ref.read(occupancyProvider.notifier).set(o);
+                    setOccupancyUndoable(ref.read, o);
                     _confirmSizingUpdated();
                   },
                 ),
@@ -726,16 +818,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 50,
                 max: 600,
                 onDecrement: () {
-                  ref.read(rainfallIntensityProvider.notifier).nudge(-25);
+                  setRainfallUndoable(ref.read, ref.read(rainfallIntensityProvider) - 25);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(rainfallIntensityProvider.notifier).nudge(25);
+                  setRainfallUndoable(ref.read, ref.read(rainfallIntensityProvider) + 25);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(rainfallIntensityProvider.notifier).set(v);
+                    setRainfallUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -758,16 +850,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 0.5,
                 max: 1.0,
                 onDecrement: () {
-                  ref.read(runoffCoefficientProvider.notifier).nudge(-0.05);
+                  setRunoffCoefficientUndoable(ref.read, ref.read(runoffCoefficientProvider) - 0.05);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(runoffCoefficientProvider.notifier).nudge(0.05);
+                  setRunoffCoefficientUndoable(ref.read, ref.read(runoffCoefficientProvider) + 0.05);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(runoffCoefficientProvider.notifier).set(v);
+                    setRunoffCoefficientUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -794,20 +886,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 max: 1000,
                 // A BIGGER N is a FLATTER fall, so "+" steepens (smaller N).
                 onDecrement: () {
-                  ref
-                      .read(drainageSlopeProvider.notifier)
-                      .set(_slopeFromN(_slopeN(slope) + 10));
+                  setDrainageSlopeUndoable(ref.read, _slopeFromN(_slopeN(slope) + 10));
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref
-                      .read(drainageSlopeProvider.notifier)
-                      .set(_slopeFromN(_slopeN(slope) - 10));
+                  setDrainageSlopeUndoable(ref.read, _slopeFromN(_slopeN(slope) - 10));
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null && v > 0) {
-                    ref.read(drainageSlopeProvider.notifier).set(_slopeFromN(v));
+                    setDrainageSlopeUndoable(ref.read, _slopeFromN(v));
                     _confirmSizingUpdated();
                   }
                 },
@@ -839,16 +927,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 40,
                 max: 90,
                 onDecrement: () {
-                  ref.read(hotWaterFlowTempProvider.notifier).nudge(-1);
+                  setHotWaterFlowTempUndoable(ref.read, ref.read(hotWaterFlowTempProvider) - 1);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(hotWaterFlowTempProvider.notifier).nudge(1);
+                  setHotWaterFlowTempUndoable(ref.read, ref.read(hotWaterFlowTempProvider) + 1);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(hotWaterFlowTempProvider.notifier).set(v);
+                    setHotWaterFlowTempUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -871,16 +959,16 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 min: 1,
                 max: 20,
                 onDecrement: () {
-                  ref.read(hotWaterDeltaTProvider.notifier).nudge(-1);
+                  setHotWaterDeltaTUndoable(ref.read, ref.read(hotWaterDeltaTProvider) - 1);
                   _confirmSizingUpdated();
                 },
                 onIncrement: () {
-                  ref.read(hotWaterDeltaTProvider.notifier).nudge(1);
+                  setHotWaterDeltaTUndoable(ref.read, ref.read(hotWaterDeltaTProvider) + 1);
                   _confirmSizingUpdated();
                 },
                 onSubmit: (v) {
                   if (v != null) {
-                    ref.read(hotWaterDeltaTProvider.notifier).set(v);
+                    setHotWaterDeltaTUndoable(ref.read, v);
                     _confirmSizingUpdated();
                   }
                 },
@@ -905,9 +993,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 label: context.strings(StringKey.designInputAcBasisArea),
                 selected: acBasis == CoolingLoadMethod.simple,
                 onTap: () {
-                  ref
-                      .read(coolingLoadMethodProvider.notifier)
-                      .set(CoolingLoadMethod.simple);
+                  setCoolingLoadMethodUndoable(ref.read, CoolingLoadMethod.simple);
                   _confirmSizingUpdated();
                 },
               ),
@@ -915,9 +1001,7 @@ class _DesignInputsCardState extends ConsumerState<_DesignInputsCard> {
                 label: context.strings(StringKey.designInputAcBasisHeatGain),
                 selected: acBasis == CoolingLoadMethod.detailed,
                 onTap: () {
-                  ref
-                      .read(coolingLoadMethodProvider.notifier)
-                      .set(CoolingLoadMethod.detailed);
+                  setCoolingLoadMethodUndoable(ref.read, CoolingLoadMethod.detailed);
                   _confirmSizingUpdated();
                 },
               ),
@@ -1020,5 +1104,29 @@ class _GlyphButtonState extends State<_GlyphButton> {
         ),
       ),
     );
+  }
+}
+
+/// Round 25 — a height in metres at 2 dp with ONE trailing zero trimmed
+/// (3.25 → '3.25', 3.50 → '3.5', 3.00 → '3.0'), so whole and half metres read
+/// as before while a centimetre value is never rounded away.
+String trimmedMetres(double m) {
+  final s = m.toStringAsFixed(2);
+  return s.endsWith('0') ? s.substring(0, s.length - 1) : s;
+}
+
+/// 'Import plan…' on a level row (an empty project): the plan lands on THAT
+/// level — a single imported sheet is mapped to [floorIndex] (review: it used
+/// to land on the positional default, so 'Import plan…' on Level 2 still
+/// needed a 'Change'). A multi-page import keeps the page-per-floor default.
+Future<void> _importPlanForFloor(
+    BuildContext context, WidgetRef ref, int floorIndex) async {
+  final imported = await importPlan(context, ref);
+  if (!imported) return;
+  final sheets = ref.read(sheetsControllerProvider).sheets;
+  if (sheets.length == 1) {
+    ref
+        .read(sheetsControllerProvider.notifier)
+        .setSheetFloor(sheets.single.id, floorIndex);
   }
 }

@@ -28,36 +28,105 @@
 /// Pure + deterministic — zero Flutter imports.
 library;
 
-import '../standards/puil.dart' show ElectricalStandardsProfile;
+import 'dart:math' as math;
+
+import '../standards/puil.dart' show BreakerClass, ElectricalStandardsProfile;
 import '../units.dart';
+import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
-import 'bom.dart' show Bom, buildBom;
-import 'containment.dart' show ContainmentResult, containmentFor;
+import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
+import 'compute.dart' show circuitIsThreePhase, kThreePhaseServiceLineVoltageV;
+import 'containment.dart'
+    show ConduitSpec, ContainmentResult, containmentFor, effectiveInstallMethod;
+import 'control/motor_flc.dart' show motorFlc, motorFlc1ph;
 import 'control/starter.dart'
-    show ControlAssembly, StarterType, applyStarterTemplate;
+    show
+        ControlAssembly,
+        StarterType,
+        applyStarterTemplate,
+        effectiveStarterType;
+import 'control/starting.dart' show startingAnalysis;
 import 'diversity_library.dart' show diversityLibraryVerifyItems;
+import 'earthing.dart'
+    show EarthingSystem, kTtTouchVoltageLimitV, ttRcdTouchVoltageOk;
 import 'electrode.dart' show ElectrodeDesign, designElectrode;
-import 'enclosure.dart' show EnclosureResult, estimateEnclosure;
+import 'enclosure.dart'
+    show
+        EnclosureResult,
+        Ventilation,
+        estimateEnclosure,
+        maxInternalTempRiseK,
+        switchgearLossW;
 import 'fault.dart'
     show
+        CircuitFaultResult,
         FaultStudyResult,
+        PanelFaultResult,
         defaultLvUtilityFaultKa,
         estimatedServiceFaultLevelA,
         faultStudy,
-        serviceFaultEstimateVerifyItems;
+        maxEstimatedServiceFaultKa,
+        onSiteSourceFaultA,
+        serviceFaultEstimateVerifyItems,
+        solvedRunLengthM;
+import 'genset_backup.dart'
+    show
+        alternatorBasis,
+        effectiveGeneratorBackupFraction,
+        serviceSystemOf,
+        gensetBackedPanelIds,
+        gensetBackupDemandVa,
+        gensetBackupDemandW,
+        gensetBackupWarnings,
+        worstPhaseDemandVa;
 import 'harmonics.dart' show HarmonicsResult, ThdBand, estimateHarmonics;
 import 'lightning.dart' show LightningRisk, assessLightning, collectionArea;
 import 'load_kind.dart' show LoadKind;
 import 'metering.dart' show MeteringSpec, meterFor;
 import 'model.dart'
-    show ElectricalCircuit, ElectricalPanel, ElectricalProject, ElectricalSystem;
-import 'panel_results.dart' show ElectricalPanelResult, ElectricalSystemResult;
-import 'power_factor.dart' show PowerFactorResult, powerFactorCorrection;
-import 'power_oneline.dart' show PowerOneLine, buildPowerOneLine;
-import 'sources.dart' show GensetMotor;
+    show
+        ElectricalCircuit,
+        ElectricalPanel,
+        ElectricalProject,
+        ElectricalSystem,
+        SupplyKind;
+import 'panel_results.dart'
+    show
+        ElectricalCircuitResult,
+        ElectricalPanelResult,
+        ElectricalSystemResult,
+        ElectricalWarning,
+        WarningSeverity;
+import 'power_factor.dart'
+    show PowerFactorResult, isDriveFedCircuit, powerFactorCorrection;
+import 'power_oneline.dart'
+    show
+        PowerOneLine,
+        buildPowerOneLine,
+        distributedSourceInverters,
+        sizeDistributedSources;
+import 'results.dart' show BusbarWithstand;
+import 'sources.dart'
+    show
+        GensetMotor,
+        gensetStartFloorKva,
+        kMaxStartVoltageDipPct,
+        sizeGenerator;
 import 'spd.dart' show SpdRecommendation, recommendSpd;
 import 'supply_design.dart'
-    show SupplyDesign, determineSupply, recommendedDayaVa;
+    show
+        SupplyDesign,
+        SupplyLevel,
+        declaredServiceTransformer,
+        determineSupply,
+        isDeclaredMvService,
+        minimalMaxSectionLoad,
+        recommendedDaya,
+        sectionAssignment,
+        serviceSections;
+import 'ups.dart' show kUpsInputFactor;
+
+export 'genset_backup.dart' show gensetBackedPanelIds;
 
 /// A representative MCB clearing (arcing) time for the arc-flash screen (s) —
 /// fast magnetic/thermal trip on a miniature device.
@@ -67,10 +136,28 @@ const double _mcbClearingTimeS = 0.05;
 /// a moulded-case device clears more slowly than an MCB.
 const double _mccbClearingTimeS = 0.2;
 
-/// A small ambient / quiescent enclosure heat allowance (W) added to the summed
-/// control-device losses when no explicit `panel.heatW` is given — wiring +
-/// breaker losses the device-loss estimate does not capture. Engineering
-/// estimate; reported via the enclosure pass's own verifyItems.
+/// A representative ACB clearing (arcing) time for the arc-flash screen (s) —
+/// an air circuit breaker on an LV main normally carries a short-time delay
+/// for selectivity, so it clears SLOWER than an MCCB (Round 23 r2: an ACB had
+/// fallen through to the 0.05 s MCB time, under-estimating the incident energy
+/// on the largest board ~4×). A safety quantity — never clamp it down.
+// VERIFY (notAnSniClause): IEEE 1584 practice ≈ 0.3–0.5 s for an LV power
+// breaker with short-time delay.
+const double _acbClearingTimeS = 0.5;
+
+/// The arc-flash clearing time for a breaker class (s) — exhaustive over
+/// [BreakerClass] so a new frame class can never silently fall to the MCB time.
+double arcFlashClearingTimeS(BreakerClass c) => switch (c) {
+      BreakerClass.mcb => _mcbClearingTimeS,
+      BreakerClass.mccb => _mccbClearingTimeS,
+      BreakerClass.acb => _acbClearingTimeS,
+    };
+
+/// A small ambient / quiescent enclosure heat allowance (W) — wiring,
+/// terminals, indicator lamps — added to the summed control-device losses AND
+/// the load-dependent switchgear I²R ([switchgearLossW]) when no explicit
+/// `panel.heatW` is given. Engineering estimate; reported via the enclosure
+/// pass's own verifyItems.
 const double _baseEnclosureHeatW = 25;
 
 /// The bundled advanced-study result. Each map is keyed by panel id (or circuit
@@ -83,8 +170,14 @@ class AdvancedStudy {
   /// Project supply arrangement (LV direct vs MV + transformer).
   final SupplyDesign supply;
 
-  /// Recommended PLN connected power "daya tersambung" (VA).
-  final double recommendedDayaVa;
+  /// Recommended PLN connected power "daya tersambung" (VA) — the smallest
+  /// standard step AT OR ABOVE the demand; null when the demand exceeds the
+  /// LV catalogue (an MV service — no LV daya exists).
+  final double? recommendedDayaVa;
+
+  /// True when [recommendedDayaVa] is a 3-phase step (a single-phase project
+  /// whose demand exceeds the 1φ ceiling is recommended a 3φ service).
+  final bool recommendedDayaThreePhase;
 
   /// Power-factor / capacitor-bank correction.
   final PowerFactorResult powerFactor;
@@ -127,10 +220,22 @@ class AdvancedStudy {
   /// de-duplicated and order-preserving.
   final List<String> verifyItems;
 
+  /// Round 13 — JUDGE-ONLY project-level warnings this layer raises (today: a
+  /// forced genset nameplate below the essential boards' demand). Fanned into
+  /// the ONE electrical warning surface by the app. Empty by default.
+  final List<ElectricalWarning> warnings;
+
+  /// Round 56 (elec-convergence-8-ads-never-judged-on-standby-genset-source)
+  /// — the genset-backed ways that pass ADS on the utility but FAIL it with
+  /// the standby genset as the origin ([gensetAdsCheck]); every printed
+  /// schedule marks them ' Zs!' like a utility failure. Empty by default.
+  final Set<String> gensetAdsFailedCircuitIds;
+
   const AdvancedStudy({
     required this.fault,
     required this.supply,
     required this.recommendedDayaVa,
+    this.recommendedDayaThreePhase = true,
     required this.powerFactor,
     required this.controlAssemblies,
     required this.harmonics,
@@ -144,7 +249,17 @@ class AdvancedStudy {
     this.powerOneLine,
     required this.bom,
     required this.verifyItems,
+    this.warnings = const [],
+    this.gensetAdsFailedCircuitIds = const {},
   });
+
+  /// Every way failing automatic disconnection on ANY supply: the utility
+  /// fault study's failures plus [gensetAdsFailedCircuitIds].
+  Set<String> get adsFailedCircuitIds => {
+        for (final e in fault.circuits.entries)
+          if (e.value.adsOk == false) e.key,
+        ...gensetAdsFailedCircuitIds,
+      };
 }
 
 /// Run the whole advanced study over an already-solved system. Pure +
@@ -156,7 +271,8 @@ class AdvancedStudy {
 ///      becomes the per-panel enclosure heat when `panel.heatW` is unset.
 ///   2. **Fault study** — Isc / breaking-capacity / Zs-ADS / selectivity.
 ///   3. **Arc-flash** — per panel, from the panel's prospective fault and a
-///      representative clearing time (MCB 0.05 s / MCCB 0.2 s by the incomer).
+///      representative clearing time (MCB 0.05 s / MCCB 0.2 s / ACB 0.5 s by
+///      the incomer class, [arcFlashClearingTimeS]).
 ///   4. **Harmonics / containment / metering / SPD** — per panel (the origin
 ///      panel gets `atOrigin:true`; sub-boards by their feeder distance).
 ///   5. **Supply** + **daya tersambung**, **power factor** (detuned when any
@@ -171,6 +287,17 @@ AdvancedStudy computeAdvancedStudy(
   Current? originFaultLevel,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
+  // Round 29 — the SOLVED phase of each way (a 1φ motor's starter / overload
+  // size on the 1φ FLC at U0, never the 3φ 400 V table).
+  final threePhaseByCircuit = <String, bool>{
+    for (final pr in sys.panels.values)
+      for (final r in pr.circuits) r.circuitId: r.threePhase,
+  };
+  final resultByCircuit = <String, ElectricalCircuitResult>{
+    for (final pr in sys.panels.values)
+      for (final r in pr.circuits) r.circuitId: r,
+  };
+  final starterWarnings = <ElectricalWarning>[];
 
   // 1 ── Control assemblies (per motor/pump circuit with an explicit starter).
   final controlAssemblies = <String, ControlAssembly>{};
@@ -183,13 +310,54 @@ AdvancedStudy computeAdvancedStudy(
       if (!_isMotorLike(c)) continue;
       final motorKw = _motorKw(c);
       if (motorKw <= 0) continue;
+      final threePhase = threePhaseByCircuit[c.id] ??
+          circuitIsThreePhase(
+            panelSystem: panel.system,
+            kind: c.loadKind,
+            loadW: c.loadW,
+            motorKw: c.motorKw,
+            phases: c.phases,
+          );
+      // U0 for a 1φ way on a 3φ board (the rounding compute.dart uses).
+      final u0 = panel.system == ElectricalSystem.threePhase
+          ? (panel.voltage.volts / math.sqrt(3)).roundToDouble()
+          : panel.voltage.volts;
+      // Round 42 (elec-props-8-star-delta-on-single-phase-way) — a
+      // single-phase motor has no six winding terminals to reconnect: a
+      // star-delta starter on a 1φ way is built as DOL on the full 1φ
+      // current (never 58 % gear carrying the whole line current) and the
+      // way is flagged (judge-only).
+      final starter = effectiveStarterType(c.starterType!, threePhase);
+      if (starter != c.starterType) {
+        starterWarnings.add(ElectricalWarning(
+          code: 'star-delta-single-phase',
+          severity: WarningSeverity.warning,
+          message: '${c.name}: a star-delta starter needs a three-phase '
+              'motor with six winding terminals — this way is single-phase, '
+              'so its control gear is sized as direct-on-line on the full '
+              'current; choose DOL / soft-starter or supply it three-phase.',
+          panelId: panel.id,
+          circuitId: c.id,
+        ));
+      }
+      // Round 42 (elec-props-8-control-gear-flc-basis-below-schedule-ib) —
+      // the gear sizes on the way's SOLVED running current (the Ib the
+      // schedule prints); the IEC table only when no solved result exists.
+      final solved = resultByCircuit[c.id];
       final assembly = applyStarterTemplate(
         circuitId: c.id,
-        starterType: c.starterType!,
+        starterType: starter,
         motorKw: motorKw,
-        voltage: panel.voltage,
+        voltage: threePhase ? panel.voltage : Voltage(u0),
+        singlePhase: !threePhase,
+        flcA: solved?.runCurrentA,
         variableTorque:
-            c.starterType == StarterType.vfd && c.loadKind == LoadKind.pump,
+            starter == StarterType.vfd && c.loadKind == LoadKind.pump,
+        // Round 41 — the SAME gate as the schedule's 'no-OL trip (fire)'
+        // token and compute.dart's `fire-pump-protection` note, so the
+        // control spec / BOM never buys a tripping overload for a fire pump.
+        fireDuty: c.lifeSafety &&
+            (c.loadKind == LoadKind.motor || c.loadKind == LoadKind.pump),
       );
       controlAssemblies[c.id] = assembly;
       for (final d in assembly.devices) {
@@ -213,7 +381,14 @@ AdvancedStudy computeAdvancedStudy(
   // estimate's provenance debt belong on the printed honesty surface below; a
   // project that declares its fault level, or one that falls through to the
   // flat default, adds nothing ⇒ byte-identical.
-  final serviceEstimate = estimatedServiceFaultLevelA(project);
+  // Round 16 — with nothing declared, a demand that needs an MV service
+  // resolves to the transformer the supply study selects (the store's Fold-1
+  // chain resolves the same way, so the device kA and the bus agree).
+  // Round 25 — the demand rides every tier (a declared capacity above the
+  // PLN TR ceiling never estimates below the study transformer's fault).
+  // Round 52 — the estimate reads the SAME supply study the advanced study
+  // prints ([studySupplyDesign]): the largest section / per-phase basis.
+  final serviceEstimate = serviceFaultEstimateFor(project, sys);
   final serviceEstimateGoverns = originFaultLevel == null &&
       project.originFaultLevelA == null &&
       serviceEstimate != null;
@@ -227,11 +402,20 @@ AdvancedStudy computeAdvancedStudy(
         const Current(defaultLvUtilityFaultKa * 1000),
   );
 
-  // Origin / service-root panel (first root-first id that is utility-fed).
-  final originPanelId = _originPanelId(sys, modelById);
-  // Feeder distance (m) from the origin SPD to each sub-board (the cumulative
-  // feeder-cable run on the path to the panel).
+  // Origin / service-root panels — EVERY utility-fed root (Round 13: one
+  // origin per service entrance, not just the first listed).
+  final originPanelIds = originPanelIdsOf(sys, project);
+  // Feeder distance (m) from the origin to each sub-board (the cumulative
+  // feeder-cable run on the path to the panel). Round 24 — the SPD rule reads
+  // the distance from the NEAREST upstream SPD instead (below).
   final feederDistanceM = _feederDistances(sys, project);
+  final parentOfPanel = <String, String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null) c.feedsPanelId!: p.id,
+  };
+  // Distance from the nearest upstream recommended SPD, root-first.
+  final spdDistanceM = <String, double>{};
 
   // 3+4 ── Per-panel passes.
   final arcFlash = <String, ArcFlashResult?>{};
@@ -249,9 +433,8 @@ AdvancedStudy computeAdvancedStudy(
 
     // Arc-flash — fault kA at the bus × a representative clearing time.
     final faultkA = fault.panels[id]?.prospectiveFaultkA ?? 0;
-    final clearingTimeS = panelResult.incomer.breaker.deviceClass.name == 'mccb'
-        ? _mccbClearingTimeS
-        : _mcbClearingTimeS;
+    final clearingTimeS =
+        arcFlashClearingTimeS(panelResult.incomer.breaker.deviceClass);
     arcFlash[id] = estimateArcFlash(
       faultkA: Current.kiloamperes(faultkA),
       clearingTimeS: clearingTimeS,
@@ -261,20 +444,31 @@ AdvancedStudy computeAdvancedStudy(
 
     // Harmonics — the VFD-driven (pump/fan) share the kind-only classifier can't
     // see is fed in from the control assemblies on this panel.
-    final nlFrac = _nonLinearFraction(panelResult, controlAssemblies);
-    final h = estimateHarmonics(panelResult, profile, nonLinearFraction: nlFrac);
+    final h = estimateHarmonics(panelResult, profile,
+        driveFedCircuitIds: _driveFedCircuitIds(panelResult, panelModel));
     harmonics[id] = h;
     if (h != null && h.thdBand == ThdBand.high) anyHarmonicRich = true;
 
     // Containment.
-    containment[id] = containmentFor(panelResult);
+    // Round 44 — each way routed on the method its conductor was sized on.
+    containment[id] = containmentFor(panelResult,
+        methodOf: panelModel == null
+            ? null
+            : (cid) {
+                for (final c in panelModel.circuits) {
+                  if (c.id == cid) return effectiveInstallMethod(c, panelModel);
+                }
+                return panelModel.installMethod;
+              });
 
-    // Enclosure — explicit panel heat wins; else summed control-device heat + a
-    // small base allowance. Floor gear when any VFD/soft-starter is present.
+    // Enclosure — explicit panel heat wins; else summed control-device heat +
+    // the load-dependent breaker/busbar I²R + a small base allowance. Floor gear when any VFD/soft-starter is present.
     final explicitHeat = panelModel?.heatW;
     final heatW = explicitHeat != null
         ? explicitHeat.watts
-        : (controlHeatByPanel[id] ?? 0) + _baseEnclosureHeatW;
+        : (controlHeatByPanel[id] ?? 0) +
+            switchgearLossW(panelResult) +
+            _baseEnclosureHeatW;
     enclosure[id] = estimateEnclosure(
       panelResult,
       heat: Power(heatW),
@@ -282,13 +476,28 @@ AdvancedStudy computeAdvancedStudy(
     );
 
     // Metering.
-    metering[id] = meterFor(panelResult.demandCurrent);
+    metering[id] = meterFor(panelResult.meteringCurrent);
 
-    // SPD — origin board at the service entrance; sub-boards by feeder distance.
-    final atOrigin = id == originPanelId;
+    // SPD — origin board at the service entrance; sub-boards by the feeder
+    // distance from the NEAREST upstream SPD (Round 24 — a board below a
+    // sub-board that itself received a recommended SPD measures from THAT
+    // device, IEC 61643-12 / IEC 60364-5-534 protective distance).
+    final atOrigin = originPanelIds.contains(id);
+    final parentId = parentOfPanel[id];
+    final double distFromSpd;
+    if (atOrigin || parentId == null) {
+      distFromSpd = 0;
+    } else {
+      final ownLeg =
+          (feederDistanceM[id] ?? 0) - (feederDistanceM[parentId] ?? 0);
+      final parentProtected = spd[parentId]?.recommended ?? false;
+      distFromSpd = (parentProtected ? 0 : (spdDistanceM[parentId] ?? 0)) +
+          (ownLeg > 0 ? ownLeg : 0);
+    }
+    spdDistanceM[id] = distFromSpd;
     spd[id] = recommendSpd(
       atOrigin: atOrigin,
-      feederDistanceM: feederDistanceM[id] ?? 0,
+      feederDistanceM: distFromSpd,
       earthingSystem: sys.earthing.system.name,
       hasExternalLps: project.externalLps,
       overheadSupply: project.overheadSupply,
@@ -296,11 +505,72 @@ AdvancedStudy computeAdvancedStudy(
   }
 
   // 5 ── Project-level passes.
-  final supply = determineSupply(
-    sys.supply.demandVa,
-    dualTransformer: project.dualTransformer,
-  );
-  final daya = recommendedDayaVa(sys.supply.demandVa, sys.supply.system);
+  // Round 16 — a declared transformer IS the arrangement (MV), so no LV daya
+  // is recommended for a service not taken at LV.
+  // Round 39 — the per-phase basis (below) is computed FIRST so the LV / MV
+  // verdict is judged on the same figure the daya recommendation uses.
+  // Round 52 — the ONE assembly of the supply study's inputs (shared with
+  // the fault estimate, so the device kA ratings derive from the transformer
+  // this study prints).
+  final studied =
+      studySupplyInputs(project, sys, originPanelIds: originPanelIds);
+  final worstPhaseVa = studied.worstPhaseVa;
+  final supply = studied.supply;
+  final largestSectionId = studied.largestSectionId;
+  // Round 35 (elec-core-2-daya-ignores-worst-phase) — a PLN 3φ limiter trips
+  // PER PHASE at daya / (√3·400), and `computeSystem` judges a declared daya
+  // against the root's diversified WORST-phase current
+  // (`service-capacity-below-demand`). The recommendation sizes on the same
+  // basis — max(total demand VA, Σ roots' worst-phase VA through the exact
+  // inverse conversion, currents rounded as the judge rounds them) — so
+  // declaring the recommended daya can never trip the engine's own judge
+  // (two 1φ 5 kW heaters: 16 500 VA, never 10 600 VA / 15.3 A).
+  // Round 58 — no PLN daya on an on-site genset / PV primary supply.
+  //
+  // Round 78 (regression-daya-3ph-supply-1ph-root-on-board-basis /
+  // regression-daya-single-phase-step-for-a-3ph-root) — ONE ladder rule: the
+  // service is 3φ whenever ANY service-entrance board is 3φ (a 3φ board can
+  // never hang off a 1φ PLN service, whichever root's incomer is larger), or
+  // the 1φ ladder overflows; and EVERY 3φ step is sized on the study's own
+  // per-line basis ([studySupplyInputs] `perPhaseBasisVa`: a 1φ root at
+  // √3·400·I on its line, several 1φ roots spread over the lines) — never on
+  // the board-basis sum, which counted a 1φ root beside a 3φ governing root
+  // at 230·I (a daya whose limiter trips on the line carrying it). With only
+  // 3φ roots the per-line basis IS the board-basis sum (byte-identical); the
+  // 1φ ladder (on [worstPhaseVa]) stays for an all-1φ service.
+  final projectPanelById = {for (final p in project.panels) p.id: p};
+  final anyThreePhaseRoot = originPanelIds.isEmpty
+      ? sys.supply.system == ElectricalSystem.threePhase
+      : originPanelIds.any((id) =>
+          (projectPanelById[id]?.system ?? sys.supply.system) ==
+          ElectricalSystem.threePhase);
+  var daya = supply.declared || project.supplyKind != SupplyKind.pln
+      ? null
+      : anyThreePhaseRoot
+          ? recommendedDaya(
+              ApparentPower(math.max(
+                  sys.supply.demandVa.voltAmperes, studied.perPhaseBasisVa)),
+              ElectricalSystem.threePhase)
+          : recommendedDaya(
+              ApparentPower(
+                  math.max(sys.supply.demandVa.voltAmperes, worstPhaseVa)),
+              ElectricalSystem.singlePhase);
+  // Round 38 (elec-sizing-supply-3) — a single-phase supply whose demand
+  // outgrows the 1φ ladder moves to a 3φ step, but its 1φ root board still
+  // loads ONE phase of that service: size the step on the same 3φ per-phase
+  // basis `computeSystem` judges it on (√3·400·I), so declaring the
+  // recommendation never trips the engine's own judge.
+  if (daya != null &&
+      daya.system == ElectricalSystem.threePhase &&
+      !anyThreePhaseRoot) {
+    // Round 77 (elec-convergence-28-several-1ph-roots-summed-on-one-line)
+    // — the SAME per-line allocation the LV / MV verdict reads
+    // ([servicePerPhaseBasisVa]): several 1φ roots sit on different lines.
+    final va3 = studied.perPhaseBasisVa;
+    daya = recommendedDaya(
+        ApparentPower(math.max(sys.supply.demandVa.voltAmperes, va3)),
+        ElectricalSystem.threePhase);
+  }
   final powerFactor = powerFactorCorrection(
     sys,
     project,
@@ -325,7 +595,8 @@ AdvancedStudy computeAdvancedStudy(
   }
   ElectrodeDesign? electrode;
   if (project.soilResistivityOhmM != null) {
-    electrode = designElectrode(soilResistivityOhmM: project.soilResistivityOhmM!);
+    electrode =
+        designElectrode(soilResistivityOhmM: project.soilResistivityOhmM!);
   }
 
   // Power one-line — only when the project carries energy sources. The motors
@@ -335,16 +606,79 @@ AdvancedStudy computeAdvancedStudy(
     powerOneLine = buildPowerOneLine(
       project.sources!,
       demand: sys.supply.demandVa,
-      voltage: sys.supply.voltage,
-      motors: _gensetMotors(project),
+      // Round 13 — the genset backs max(fraction × demand, the essential
+      // sub-tree's demand), the same basis the spine + schedule print.
+      backupDemand: gensetBackupDemandVa(project, sys),
+      // Round 16 — the genset's kW limit + the battery's real critical load.
+      backupPower: gensetBackupDemandW(project, sys),
+      demandPower: Power(sys.supply.demandW),
+      // Round 79 — the bus / utility labels print the one service system
+      // ([serviceSystemOf]): a 3φ root beside a larger 1φ root is a 3φ
+      // 400 V service, never 'Main LV bus 230 V'.
+      voltage: serviceSystemOf(project, sys).voltage,
+      motors:
+          gensetStartMotors(project, sys: sys, assemblies: controlAssemblies),
+      utilitySub: powerOneLineUtilitySub(project, sys,
+          voltage: serviceSystemOf(project, sys).voltage),
+      // Round 58 — the head follows the primary supply (PLN / genset / PV).
+      supplyKind: project.supplyKind,
+      supplyCapacity: project.supplyCapacityVa,
+      // Round 65 — the essential split follows the EFFECTIVE fraction.
+      backupFraction: effectiveGeneratorBackupFraction(project),
+      // Round 65 — a sectioned service's LV bus is split (coupler N.O.).
+      lvSections: serviceSections(project),
     );
   }
 
-  final bom = buildBom(sys);
+  // Breakers match parts whose breaking capacity covers the board's
+  // prospective fault — the same fault study the schedule's kA tokens use.
+  // Round 15 — each device matches its SPECIFIED kA (the schedule's figure).
+  // Round 72 — the issued study: genset-backed devices specified (and
+  // judged) on the larger of the utility and the on-genset fault. ONE genset
+  // study, shared with the ADS judge below.
+  final gBasis = gensetFaultBasis(project, sys);
+  final gStudy = gBasis == null
+      ? null
+      : faultStudy(sys, project, profile,
+          originFaultLevel: Current(gBasis.iscA));
+  final issued = gStudy == null
+      ? fault
+      : mergeGensetFaultStudy(
+          utility: fault,
+          genset: gStudy,
+          sys: sys,
+          backed: gBasis!.backed,
+          gensetVa: gBasis.va,
+          gensetIscA: gBasis.iscA);
+  final faultKa = faultSpecifiedKa(issued);
+  // Round 21 (bom-quote-4/-5) — each enclosure priced at its sized W x H x D,
+  // and the designed control gear / genset / SPDs / earthing taken off too.
+  final bom = buildBom(sys,
+      requiredIcuKaByPanelId: faultKa.bus,
+      incomerKaByPanelId: faultKa.incomers,
+      breakerKaByCircuitId: faultKa.breakers,
+      enclosureByPanelId: enclosure,
+      extraLines: advancedBomLines(
+        project: project,
+        sys: sys,
+        controlAssemblies: controlAssemblies,
+        spd: spd,
+        electrode: electrode,
+        powerFactor: powerFactor,
+        containment: containment,
+        metering: metering,
+        profile: profile,
+      ));
+
+  // Round 56 — ADS judged on the standby genset too (judge-only).
+  final onGenset =
+      gensetAdsCheck(profile, project, sys, fault, gensetStudy: gStudy);
 
   // Aggregate every sub-result's provenance honesty surface.
   final verify = _aggregateVerify([
-    fault.verifyItems,
+    if (onGenset.judged) [gensetSustainedFaultVerifyItem],
+    if (powerOneLine?.gensetStart != null) [gensetStartDipVerifyItem],
+    issued.verifyItems,
     supply.verifyItems,
     powerFactor.verifyItems,
     for (final a in controlAssemblies.values) a.verifyItems,
@@ -369,9 +703,12 @@ AdvancedStudy computeAdvancedStudy(
   ]);
 
   return AdvancedStudy(
-    fault: fault,
+    gensetAdsFailedCircuitIds: onGenset.failedIds,
+    fault: issued,
     supply: supply,
-    recommendedDayaVa: daya,
+    recommendedDayaVa: daya?.va,
+    recommendedDayaThreePhase: (daya?.system ?? ElectricalSystem.threePhase) ==
+        ElectricalSystem.threePhase,
     powerFactor: powerFactor,
     controlAssemblies: controlAssemblies,
     harmonics: harmonics,
@@ -385,12 +722,639 @@ AdvancedStudy computeAdvancedStudy(
     powerOneLine: powerOneLine,
     bom: bom,
     verifyItems: verify,
+    warnings: [
+      ...gensetBackupWarnings(project, sys),
+      ...onGenset.warnings,
+      ...gensetStartDipWarnings(project, powerOneLine,
+          rootPanelId: originPanelIds.isEmpty ? null : originPanelIds.first),
+      ...enclosureTempRiseWarnings(sys, enclosure),
+      ...ttRcdTouchVoltageWarnings(project, sys, electrode),
+      ...starterWarnings,
+      // Round 40 — a DECLARED transformer (or the most loaded section of a
+      // dual service) whose 80 %-loaded rating is below what it carries was
+      // only a note; it is now a judge-only warning (never resizes).
+      if (supply.declared && supply.declaredBelowDemand)
+        ElectricalWarning(
+          code: largestSectionId != null
+              ? 'section-transformer-overloaded'
+              : 'transformer-below-demand',
+          severity: WarningSeverity.warning,
+          message: supply.note,
+          panelId: largestSectionId,
+        ),
+      // Round 40 — a root incomer rated above the full-load current its
+      // transformer unit can deliver (one unit per section on a dual
+      // service) can never be loaded to its rating.
+      for (final w in _incomerAboveTransformerFlc(
+          profile, project, sys, supply, originPanelIds))
+        w,
+      // Round 17 — the service-size estimate is no longer clamped at 50 kA
+      // (a clamp LOWERED the safety quantity); above the realistic LV device
+      // ladder it is flagged so the engineer commissions a real study.
+      if (serviceEstimateGoverns &&
+          serviceEstimate != null &&
+          serviceEstimate.amperes > maxEstimatedServiceFaultKa * 1000.0 + 1e-6)
+        ElectricalWarning(
+          code: 'service-fault-estimate-high',
+          severity: WarningSeverity.warning,
+          message: 'Service fault estimate '
+              '${(serviceEstimate.amperes / 1000).toStringAsFixed(1)} kA '
+              'exceeds ${maxEstimatedServiceFaultKa.toStringAsFixed(0)} kA — '
+              'an IEC 60909 short-circuit study and 65/70 kA-class devices are '
+              'required; enter the studied origin fault level in Service & '
+              'Earthing.',
+        ),
+    ],
   );
 }
 
 // ───────────────────────────────────────────────────────────────────────────
 // Helpers.
 // ───────────────────────────────────────────────────────────────────────────
+
+/// Round 71 (elec-convergence-23) — the phase voltage an ON-SITE source of
+/// a single-phase supply is rated on (null on a 3-phase supply).
+///
+/// Round 79 (regression-genset-fault-1ph-u0-on-3ph-alternator-ads-pass) —
+/// decided on the BOARDS the source feeds ([alternatorBasis]: any 3φ root
+/// or topmost backed board ⇒ a 3φ alternator), never on `sys.supply.system`
+/// alone (the governing root's): a set sized as a 3φ machine is faulted on
+/// S/(√3·400·Xd''), not the 3x larger S/(U0·Xd''), which passed ADS on ways
+/// that fail on the real alternator. An all-1φ service is byte-identical.
+double? onSiteSinglePhaseU0(
+        ElectricalProject project, ElectricalSystemResult sys) =>
+    alternatorBasis(project, sys).threePhase ? null : sys.supply.voltage.volts;
+
+/// Round 71 (elec-convergence-23) — the INSTALLED on-site PRIMARY plant (VA)
+/// a generator / solar supply is fault-rated on: the declared capacity, else
+/// the set / inverter the power one-line prints and the BOM buys
+/// ([gensetPlantVa]; the distributed-source inverters at unity PF), else the
+/// demand. Null on a PLN supply or with nothing to rate.
+double? onSitePrimaryPlantVa(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  if (project.supplyKind == SupplyKind.pln) return null;
+  final cap = project.supplyCapacityVa?.voltAmperes;
+  if (cap != null && cap > 0) return cap;
+  if (project.supplyKind == SupplyKind.generator) {
+    final v = gensetPlantVa(project, sys);
+    if (v != null && v > 0) return v;
+  } else if (project.supplyKind == SupplyKind.solar &&
+      project.sources != null) {
+    final inv = distributedSourceInverters(sizeDistributedSources(
+        project.sources!,
+        demand: sys.supply.demandVa,
+        demandPower: Power(sys.supply.demandW)));
+    final kw =
+        inv.fold<double>(0, (a, x) => a + x.unitKw.inKiloWatts * x.units);
+    if (kw > 0) return kw * 1000;
+  }
+  final d = sys.supply.demandVa.voltAmperes;
+  return d > 0 ? d : null;
+}
+
+/// Round 71 (elec-convergence-23) — the ONE service-size fault estimate for a
+/// solved system: [estimatedServiceFaultLevelA] on the study's own supply
+/// design, the installed on-site plant ([onSitePrimaryPlantVa]) and the
+/// supply's phase basis. Every Fold-1 / ADS caller (compute's frame / growth
+/// passes, the advanced study, the app chain) reads it.
+Current? serviceFaultEstimateFor(
+        ElectricalProject project, ElectricalSystemResult sys) =>
+    estimatedServiceFaultLevelA(project,
+        demand: sys.supply.demandVa,
+        supply: studySupplyDesign(project, sys),
+        onSitePlantVa: onSitePrimaryPlantVa(project, sys),
+        singlePhaseU0: onSiteSinglePhaseU0(project, sys));
+
+/// Round 56 — the INSTALLED standby genset (VA): a forced nameplate × its
+/// units, else the set the G-01 schedule / spine / BOM size
+/// ([sizeGenerator] over [gensetBackupDemandVa] / [gensetBackupDemandW]) ×
+/// its units. Null when the project has no generator or nothing to back.
+double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
+  final gen = project.sources?.generator;
+  if (gen == null) return null;
+  if (gen.kva != null) {
+    final v = gen.kva!.voltAmperes * (gen.units < 1 ? 1 : gen.units);
+    return v > 0 ? v : null;
+  }
+  if (sys.supply.demandVa.voltAmperes <= 0) return null;
+  final r = sizeGenerator(gensetBackupDemandVa(project, sys),
+      mode: gen.mode,
+      transfer: gen.transfer,
+      backupPower: gensetBackupDemandW(project, sys),
+      minKvaForStart: gensetStartFloorFor(project, sys));
+  final v = r.ratingKva.voltAmperes * r.units;
+  return v > 0 ? v : null;
+}
+
+/// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
+/// — the ONE motor-start floor every UNFORCED genset sizing passes to
+/// [sizeGenerator] (the power one-line, G-01, the BOM / ATS line, the
+/// spines and [gensetPlantVa]): the smallest set starting the limiting
+/// motor of [gensetStartMotors] within the 25 % dip limit. The assembly
+/// fallback in [gensetStartMotors] reads the same FLC basis as the control
+/// assembly, so callers without [assemblies] agree with the study.
+ApparentPower gensetStartFloorFor(
+  ElectricalProject project,
+  ElectricalSystemResult sys, {
+  Map<String, ControlAssembly> assemblies = const {},
+}) =>
+    gensetStartFloorKva(
+        gensetStartMotors(project, sys: sys, assemblies: assemblies));
+
+/// Round 70 — the honesty item for the motor-start dip screen that now
+/// sizes / judges the genset.
+const String gensetStartDipVerifyItem =
+    'Genset motor-start dip: the 25 % momentary-dip limit and the '
+    "voltage-divider model on Xd'' = 0.15 pu (ISO 8528-5 practice) are "
+    'representative — confirm against the alternator datasheet. '
+    '// VERIFY notAnSniClause';
+
+/// Round 70 — JUDGE-ONLY: the generator node of the power one-line failed
+/// its motor-start dip screen (a forced nameplate, or a declared primary
+/// genset plant, too small for its largest motor). An unforced set is sized
+/// up to the start floor, so this fires only on a typed / declared rating.
+/// ERROR when ANY life-safety motor fails on its OWN dip (it must start on
+/// mains failure — Round 71: graded on each motor's own life-safety flag and
+/// dip, never by matching the limiting motor's NAME), else a warning. Placed
+/// on the root panel.
+List<ElectricalWarning> gensetStartDipWarnings(
+    ElectricalProject project, PowerOneLine? oneLine,
+    {String? rootPanelId}) {
+  final st = oneLine?.gensetStart;
+  if (st == null || st.acceptable) return const [];
+  final ls = st.failingLifeSafetyMotors;
+  // Round 71 r2 — the limiting motor is excluded by IDENTITY: a failing
+  // life-safety machine that merely shares the limiting motor's name is
+  // still named (an unnamed one is counted).
+  final others = [
+    for (final m in ls)
+      if (!identical(m, st.limitingMotor)) m,
+  ];
+  final lsNames = [
+    for (final m in others)
+      (m.name != null && m.name!.isNotEmpty) ? m.name! : 'unnamed motor',
+  ];
+  final lsNote = lsNames.isEmpty
+      ? ''
+      : ' Life-safety ${lsNames.length == 1 ? 'motor' : 'motors'} '
+          '${lsNames.join(', ')} also '
+          '${lsNames.length == 1 ? 'fails' : 'fail'} to start within the '
+          'limit.';
+  return [
+    ElectricalWarning(
+      code: 'genset-start-dip-exceeded',
+      severity: ls.isNotEmpty ? WarningSeverity.error : WarningSeverity.warning,
+      message: 'Genset ${_kvaText(st.gensetKva)} kVA: starting '
+          '${st.limitingMotorName ?? 'the largest motor'} '
+          '(${_kvaText(st.startingKva)} kVA) dips the voltage '
+          '${st.estimatedDipPct}% — above the '
+          '${kMaxStartVoltageDipPct.toStringAsFixed(0)}% limit.$lsNote Use at '
+          'least ${_kvaText(st.recommendedMinGensetKva)} kVA or a '
+          'reduced-inrush starter.',
+      panelId: rootPanelId,
+    ),
+  ];
+}
+
+String _kvaText(ApparentPower p) {
+  final v = p.inKilovoltAmperes;
+  return v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+}
+
+/// Round 72 (elec-convergence-24-genset-max-fault-never-judged-for-breaking-
+/// capacity) — the ONE genset fault basis every on-genset judge reads: the
+/// boards the standby set can carry ([gensetBackedPanelIds]; every board for
+/// a full-backup set or when nothing is designated essential, Round 66 / 67),
+/// the installed plant VA ([gensetPlantVa]) and its alternator sub-transient
+/// fault S/(√3·400·Xd'') ([onSiteSourceFaultA], Xd'' `// VERIFY`). Null when
+/// no standby genset is drawn, it is the prime supply (already the study
+/// origin), or no plant VA resolves. Earthing-independent (breaking capacity
+/// is judged on TT too; ADS only on TN).
+({Set<String> backed, bool undesignated, double va, double iscA})?
+    gensetFaultBasis(ElectricalProject project, ElectricalSystemResult sys) {
+  final gen = project.sources?.generator;
+  if (gen == null || project.supplyKind == SupplyKind.generator) return null;
+  var backed = gensetBackedPanelIds(project);
+  final undesignated = backed.isEmpty;
+  final fullBackup = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
+  if (undesignated || fullBackup) {
+    backed = {for (final p in project.panels) p.id};
+  }
+  if (backed.isEmpty) return null;
+  final va = gensetPlantVa(project, sys);
+  if (va == null) return null;
+  // Round 71 — a 1-phase supply's set is a single-phase alternator.
+  final iscA = onSiteSourceFaultA(SupplyKind.generator, va,
+      singlePhaseU0: onSiteSinglePhaseU0(project, sys));
+  return (backed: backed, undesignated: undesignated, va: va, iscA: iscA);
+}
+
+/// Round 72 — the fault-study warning codes that judge a DEVICE's breaking
+/// capacity (re-judged on the genset supply by [mergeGensetFaultStudy]).
+const Set<String> _deviceKaCodes = {
+  'breaking-capacity-inadequate',
+  'service-capacity-inadequate',
+  'cascade-combination-unverified',
+};
+
+/// Round 72 (elec-convergence-24-genset-max-fault-never-judged-for-breaking-
+/// capacity) — the ISSUED fault study: a standby genset is a MAXIMUM-fault
+/// source too (IEC 60947-2 — a device must break the largest fault of every
+/// supply it can see). For every genset-backed board ([gensetFaultBasis]) the
+/// bus whose on-genset prospective fault ([genset], the alternator
+/// sub-transient Xd'' study) exceeds the utility one takes the genset figure
+/// AND the device kA [faultStudy] specified for it there (incomer + every
+/// way), so the schedule tokens, the BOM kA match and the quotation all
+/// specify a device covering BOTH supplies. ADS / Zs fields stay the
+/// utility's (the minimum-fault ADS judge on genset is [gensetAdsCheck]).
+/// Device kA warnings of a genset-governed device are the genset study's,
+/// re-coded `<code>-on-genset` (a device the ladder cannot reach, or an
+/// override); every other warning is the utility's. A busbar (main bus and
+/// each section) whose Fold-1 Icw is below the on-genset fault raises the
+/// ERROR `busbar-withstand-inadequate-on-genset` (judge-only; since Round 73
+/// `computeSystem` sizes every backed bar on max(utility, on-genset fault),
+/// so this fires only when even the largest standard bar falls short — the
+/// rule of the utility `busbar-withstand-inadequate`). An unbacked board,
+/// and any board whose genset fault does not exceed the utility one, is
+/// byte-identical.
+FaultStudyResult mergeGensetFaultStudy({
+  required FaultStudyResult utility,
+  required FaultStudyResult genset,
+  required ElectricalSystemResult sys,
+  required Set<String> backed,
+  required double gensetVa,
+  required double gensetIscA,
+}) {
+  final governs = <String>{}; // backed panels where the genset fault is higher
+  final panels = <String, PanelFaultResult>{...utility.panels};
+  for (final id in backed) {
+    final u = utility.panels[id];
+    final g = genset.panels[id];
+    if (u == null || g == null) continue;
+    if (g.prospectiveFaultkA > u.prospectiveFaultkA + 1e-9) {
+      governs.add(id);
+      panels[id] = g;
+    }
+  }
+  if (governs.isEmpty) return utility;
+  final circuits = <String, CircuitFaultResult>{...utility.circuits};
+  final govCircuits = <String>{};
+  for (final e in utility.circuits.entries) {
+    final u = e.value;
+    if (!governs.contains(u.panelId)) continue;
+    final g = genset.circuits[e.key];
+    if (g == null || g.faultkA <= u.faultkA + 1e-9) continue;
+    govCircuits.add(e.key);
+    circuits[e.key] = CircuitFaultResult(
+      circuitId: u.circuitId,
+      panelId: u.panelId,
+      faultkA: g.faultkA,
+      breakerAdequate: g.breakerAdequate,
+      breakerKa: g.breakerKa,
+      zsOhm: u.zsOhm,
+      zsMaxOhm: u.zsMaxOhm,
+      adsOk: u.adsOk,
+      adsByRcd: u.adsByRcd,
+      disconnectionTimeS: u.disconnectionTimeS,
+    );
+  }
+  bool genGoverned(ElectricalWarning w) =>
+      _deviceKaCodes.contains(w.code) &&
+      w.panelId != null &&
+      (w.circuitId == null
+          ? governs.contains(w.panelId)
+          : govCircuits.contains(w.circuitId));
+  final kva = (gensetVa / 1000).toStringAsFixed(0);
+  final on = 'On the $kva kVA standby genset (alternator fault '
+      "${(gensetIscA / 1000).toStringAsFixed(1)} kA, Xd'' basis): ";
+  final warnings = <ElectricalWarning>[
+    for (final w in utility.warnings)
+      if (!genGoverned(w)) w,
+    for (final w in genset.warnings)
+      if (genGoverned(w))
+        ElectricalWarning(
+          code: '${w.code}-on-genset',
+          severity: w.severity,
+          message: '$on${w.message}',
+          panelId: w.panelId,
+          circuitId: w.circuitId,
+        ),
+  ];
+  for (final id in sys.order) {
+    if (!governs.contains(id)) continue;
+    final pr = sys.panels[id];
+    if (pr == null) continue;
+    final gKa = panels[id]!.prospectiveFaultkA;
+    final bars = <(String, BusbarWithstand?)>[
+      (pr.name, pr.busbar.withstand),
+      if (pr.busbarSections.length > 1)
+        for (final s in pr.busbarSections)
+          ('${pr.name} busbar section ${s.index}', s.busbar.withstand),
+    ];
+    for (final (where, w) in bars) {
+      if (w == null) continue;
+      // Round 73 — a bar FOLD 1 sized on this very fault carries its own
+      // unrounded verdict (`computeSystem` floors backed buses at the
+      // on-genset fault, so this fires only when no standard bar suffices).
+      final sizedOnIt = (w.faultKa - gKa).abs() < 1e-6;
+      if (sizedOnIt ? w.adequate : w.icwKa + 1e-6 >= gKa) continue;
+      warnings.add(ElectricalWarning(
+        code: 'busbar-withstand-inadequate-on-genset',
+        severity: WarningSeverity.error,
+        message: '$on$where: bar Icw ${w.icwKa.toStringAsFixed(2)} kA '
+            '(${w.durationS} s) is below the '
+            '${gKa.toStringAsFixed(2)} kA on-genset prospective fault — '
+            'size the bus for the genset fault, use parallel bars or add '
+            'current limiting.',
+        panelId: id,
+      ));
+    }
+  }
+  return FaultStudyResult(
+    originFaultkA: utility.originFaultkA,
+    panels: panels,
+    circuits: circuits,
+    selectivity: utility.selectivity,
+    warnings: warnings,
+    verifyItems: [...utility.verifyItems, gensetMaxFaultVerifyItem],
+  );
+}
+
+/// Round 72 — the `// VERIFY` basis [mergeGensetFaultStudy] specifies
+/// genset-backed devices and judges their bus withstand on.
+const String gensetMaxFaultVerifyItem =
+    "standby genset alternator sub-transient fault (Xd'' 0.12 pu) also "
+    'governs device breaking capacity (Icu / Ics) and busbar withstand (Icw) '
+    'on genset-backed boards';
+
+/// Round 56 (elec-convergence-8-ads-never-judged-on-standby-genset-source)
+/// — JUDGE-ONLY: IEC 60364-4-41 411.3.2 requires automatic disconnection
+/// under EVERY supply condition, and a life-safety board runs exactly when
+/// the standby genset carries it. On TN, every way of a genset-backed board
+/// ([gensetBackedPanelIds]; the whole installation for a full-backup set —
+/// a typed fraction of 1, or nothing marked essential, Round 67) is
+/// re-judged with the genset as the origin
+/// — the alternator sub-transient fault S/(√3·400·Xd'') of the installed set
+/// ([gensetPlantVa], [onSiteSourceFaultA], Xd'' `// VERIFY`). A way that
+/// passes on the utility but fails there raises the ERROR
+/// `ads-disconnection-on-genset` (never resizes). The sustained ~3 × FLC
+/// short-circuit current of an alternator without a PMG excitation is a
+/// harsher second basis, recorded as a `// VERIFY` item, not judged. A
+/// prime-power plant ([SupplyKind.generator]) is already the study origin.
+({bool judged, Set<String> failedIds, List<ElectricalWarning> warnings})
+    gensetAdsCheck(
+  ElectricalStandardsProfile profile,
+  ElectricalProject project,
+  ElectricalSystemResult sys,
+  FaultStudyResult utility, {
+  FaultStudyResult? gensetStudy,
+}) {
+  const none =
+      (judged: false, failedIds: <String>{}, warnings: <ElectricalWarning>[]);
+  final tn = sys.earthing.system == EarthingSystem.tnS ||
+      sys.earthing.system == EarthingSystem.tnCs;
+  if (!tn) return none;
+  final basis = gensetFaultBasis(project, sys);
+  if (basis == null) return none;
+  final gen = project.sources!.generator!;
+  final backed = basis.backed;
+  final undesignated = basis.undesignated;
+  final va = basis.va;
+  final infos = <ElectricalWarning>[
+    if (undesignated &&
+        gen.backupFractionTyped != null &&
+        gen.backupFractionTyped! < 1 - 1e-9)
+      ElectricalWarning(
+        code: 'genset-backed-boards-undesignated',
+        severity: WarningSeverity.info,
+        message: 'The genset backs '
+            '${(gen.backupFractionTyped! * 100).toStringAsFixed(0)} % of '
+            'demand but no board is marked essential, so every board is '
+            'judged on the genset fault (the set can pick up any of them): '
+            'mark the boards the set backs as essential.',
+      ),
+  ];
+  final iscA = basis.iscA;
+  final g = gensetStudy ??
+      faultStudy(sys, project, profile, originFaultLevel: Current(iscA));
+  final kva = (va / 1000).toStringAsFixed(0);
+  final failed = <String>{};
+  final warnings = <ElectricalWarning>[...infos];
+  for (final pid in sys.order) {
+    if (!backed.contains(pid)) continue;
+    final pr = sys.panels[pid];
+    if (pr == null) continue;
+    for (final w in pr.circuits) {
+      final onGen = g.circuits[w.circuitId];
+      if (onGen?.adsOk != false) continue;
+      if (utility.circuits[w.circuitId]?.adsOk == false) continue;
+      failed.add(w.circuitId);
+      final zs = onGen!.zsOhm;
+      final lim = onGen.zsMaxOhm;
+      warnings.add(ElectricalWarning(
+        code: 'ads-disconnection-on-genset',
+        severity: WarningSeverity.error,
+        message: '${w.name}: on the $kva kVA standby genset (alternator '
+            'fault ${(iscA / 1000).toStringAsFixed(1)} kA) the earth-fault '
+            'loop${zs != null && lim != null ? ' Zs ${zs.toStringAsFixed(3)} ohm exceeds the ${lim.toStringAsFixed(3)} ohm limit' : ' exceeds its limit'}'
+            ' — automatic disconnection is not met on genset supply '
+            '(IEC 60364-4-41 411.3.2): enlarge the cable, lower the device '
+            'rating, add an RCD, or size the set for the fault.',
+        panelId: pid,
+        circuitId: w.circuitId,
+      ));
+    }
+  }
+  return (judged: true, failedIds: failed, warnings: warnings);
+}
+
+/// Round 56 — the `// VERIFY` second genset fault basis [gensetAdsCheck]
+/// records but does not judge on.
+const String gensetSustainedFaultVerifyItem =
+    'standby genset ADS judged on the alternator sub-transient fault '
+    '(Xd\'\'); a set without PMG excitation sustains only ~3 x FLC — the '
+    'alternator decrement curve governs';
+
+/// Round 56 (elec-convergence-8-enclosure-thermal-fail-silent-and-priced)
+/// — JUDGE-ONLY: a board whose estimated enclosure rise ([estimateEnclosure],
+/// IEC 60890 power balance, `// VERIFY` estimate) exceeds
+/// [maxInternalTempRiseK] raises `enclosure-temp-rise-exceeded`. The
+/// envelope is never grown here (a larger cubicle would change every large
+/// board's W x H x D and price) — the engineer enlarges / ventilates it.
+List<ElectricalWarning> enclosureTempRiseWarnings(
+    ElectricalSystemResult sys, Map<String, EnclosureResult> enclosure) {
+  final out = <ElectricalWarning>[];
+  for (final id in sys.order) {
+    final e = enclosure[id];
+    if (e == null) continue;
+    if (e.withinTempLimit && e.tempRiseK.isFinite) continue;
+    final name = sys.panels[id]?.name ?? id;
+    final rise =
+        e.tempRiseK.isFinite ? '${e.tempRiseK.toStringAsFixed(0)} K' : 'n/a';
+    final vent = switch (e.ventilation) {
+      Ventilation.natural => 'natural ventilation',
+      Ventilation.fanFilter => 'a filter fan',
+      Ventilation.forced => 'forced ventilation',
+      Ventilation.heatExchanger => 'a heat exchanger / cooling unit',
+    };
+    out.add(ElectricalWarning(
+      code: 'enclosure-temp-rise-exceeded',
+      severity: WarningSeverity.warning,
+      message: '$name: estimated enclosure rise $rise > '
+          '${maxInternalTempRiseK.toStringAsFixed(0)} K in '
+          '${e.widthMm.toStringAsFixed(0)}x${e.heightMm.toStringAsFixed(0)}x'
+          '${e.depthMm.toStringAsFixed(0)} mm (IEC 60890, estimate) — '
+          'enlarge it / use a floor-standing cubicle / add $vent.',
+      panelId: id,
+    ));
+  }
+  return out;
+}
+
+/// Round 54 (regression-tt-rcd-touch-voltage-judge-dead) — JUDGE-ONLY: the TT
+/// RCD fault-protection condition Ra × IΔn <= 50 V (IEC 60364-4-41 411.5.3)
+/// against the DESIGNED electrode's achieved resistance ([electrode], from the
+/// project soil resistivity): every TT way that requires an RCD whose IΔn the
+/// electrode cannot meet raises `tt-rcd-touch-voltage` (never re-rated).
+/// Without a soil resistivity there is no site Ra: a single INFO
+/// `tt-earth-fault-unchecked` says the condition is unverified — it is never
+/// judged against the 5 ohm target, which passes every IΔn the engine mints.
+List<ElectricalWarning> ttRcdTouchVoltageWarnings(
+  ElectricalProject project,
+  ElectricalSystemResult sys,
+  ElectrodeDesign? electrode,
+) {
+  if (project.earthingSystem != EarthingSystem.tt) return const [];
+  final rcdWays = <(String, ElectricalCircuitResult)>[
+    for (final pid in sys.order)
+      if (sys.panels[pid] case final p?)
+        for (final c in p.circuits)
+          if (c.rcd.required) (pid, c),
+  ];
+  if (rcdWays.isEmpty) return const [];
+  if (electrode == null) {
+    return const [
+      ElectricalWarning(
+        code: 'tt-earth-fault-unchecked',
+        severity: WarningSeverity.info,
+        message: 'TT earth-fault protection unverified: enter the site soil '
+            'resistivity (Supply > Earthing) so the earth electrode is '
+            'designed and each RCD is judged against Ra x IΔn <= 50 V '
+            '(IEC 60364-4-41 411.5.3).',
+      ),
+    ];
+  }
+  final ra = electrode.achieved.ohms;
+  final out = <ElectricalWarning>[];
+  for (final (pid, c) in rcdWays) {
+    if (ttRcdTouchVoltageOk(ra, c.rcd.ratingMa)) continue;
+    final v = ra * c.rcd.ratingMa / 1000.0;
+    out.add(ElectricalWarning(
+      code: 'tt-rcd-touch-voltage',
+      severity: WarningSeverity.warning,
+      message: '${c.name}: RCD ${c.rcd.ratingMa} mA x earth electrode '
+          '${ra.toStringAsFixed(1)} ohm = ${v.toStringAsFixed(1)} V exceeds '
+          'the ${kTtTouchVoltageLimitV.toStringAsFixed(0)} V touch-voltage '
+          'limit (IEC 60364-4-41 411.5.3): lower the electrode resistance '
+          'or the RCD IΔn.',
+      panelId: pid,
+      circuitId: c.circuitId,
+    ));
+  }
+  return out;
+}
+
+/// Round 40 — `root-incomer-exceeds-transformer-flc`: each service-entrance
+/// board on a DECLARED transformer service whose incomer rating exceeds the
+/// LV full-load current of the unit feeding it (one unit per section on a
+/// dual service; the paralleled units otherwise). Judge-only.
+///
+/// Round 41 (regression-incomer-above-tx-flc-fires-on-engine-own-rung):
+/// breakers come in rungs, so an incomer sized to carry the transformer's
+/// full load is the first rung AT OR ABOVE the FLC (630 kVA → 909 A → the
+/// 1000 A rung the Round-29 service-capacity floor itself picks). The
+/// warning fires only ABOVE that rung — never on the engine's own pick. A
+/// dual service is judged per SECTION whatever the root count (Round 37: a
+/// single root on a dual service sits on ONE section, coupler normally
+/// open — the basis of `serviceEntranceCapacityVa` and `determineSupply(
+/// singleSectionCarriesAll:)`), so a section is `units / 2` units.
+List<ElectricalWarning> _incomerAboveTransformerFlc(
+  ElectricalStandardsProfile profile,
+  ElectricalProject project,
+  ElectricalSystemResult sys,
+  SupplyDesign supply,
+  Set<String> originPanelIds,
+) {
+  // Round 60 — undeclared study transformers are judged too (a single root
+  // board on an undeclared sectioned service once sat on a unit sized for
+  // demand / N, with nothing flagged).
+  final kva = supply.transformerKva;
+  if (supply.lvOrMv != SupplyLevel.mv || kva == null || kva <= 0) {
+    return const [];
+  }
+  final units = math.max(1, supply.units);
+  final unitsPerRoot = math.max(1, units ~/ serviceSections(project));
+  final flcA = unitsPerRoot * kva * 1000 / (math.sqrt(3) * 400);
+  final rungA = incomerRungForFlcA(profile, flcA);
+  final out = <ElectricalWarning>[];
+  final panelById = {for (final p in project.panels) p.id: p};
+  for (final id in originPanelIds.toList()..sort()) {
+    final r = sys.panels[id];
+    if (r == null) continue;
+    final inA = r.incomer.breaker.ratingA.amperes;
+    // Round 62 (elec-convergence-14-flc-judge-condemns-undeclared-study-
+    // transformer-on-diversified-board) — an UNDECLARED study transformer is
+    // the engine's own pick, sized on the board's DIVERSIFIED worst-phase
+    // demand (× its headroom multiplier), while the incomer sizes on the
+    // UNDIVERSIFIED current: a board at diversity 0.6 (12 x 25 kW: 509 A
+    // undiversified -> 630 A incomer, 306 A diversified -> 315 kVA) was told
+    // to 'raise the transformer' the engineer never chose. Undeclared, it is
+    // judged on the basis the unit was sized on (still caught when a root
+    // carries more than its section's unit — Round 60); a DECLARED
+    // transformer keeps the incomer-rung judge.
+    final judgedA = supply.declared
+        ? inA
+        : math.max(
+                rootServiceDemandVa(project, sys, id),
+                worstPhaseDemandVa(project, sys, [id],
+                    roundCurrent: true,
+                    withLargestMachine: true,
+                    upsInputCurrent: true,
+                    asSystem: sys.supply.system == ElectricalSystem.singlePhase
+                        ? ElectricalSystem.threePhase
+                        : null,
+                    asVolts: sys.supply.system == ElectricalSystem.singlePhase
+                        ? kThreePhaseServiceLineVoltageV
+                        : null)) *
+            (panelById[id]?.headroom?.demandMultiplier ?? 1.0) /
+            (math.sqrt(3) * 400);
+    if (judgedA > rungA + 1e-6) {
+      out.add(ElectricalWarning(
+        code: 'root-incomer-exceeds-transformer-flc',
+        severity: WarningSeverity.warning,
+        message: '${r.name}: the ${inA.round()} A incomer is above the '
+            '${rungA.round()} A breaker rung matching the '
+            '${flcA.round()} A full-load current of the '
+            '${unitsPerRoot > 1 ? '$unitsPerRoot x ' : ''}${kva.round()} kVA '
+            'transformer feeding it — the board can never be loaded to its '
+            'incomer rating; raise the transformer rating or move load to '
+            'the other section.',
+        panelId: id,
+      ));
+    }
+  }
+  return out;
+}
+
+/// Round 41 — the first breaker rung at or above a transformer's LV
+/// full-load current [flcA] (the profile ladder runs on to ACB frames);
+/// [flcA] itself when the ladder tops out below it.
+double incomerRungForFlcA(ElectricalStandardsProfile profile, double flcA) {
+  for (final r in profile.standardBreakerRatingsA) {
+    if (r >= flcA - 1e-6) return r;
+  }
+  return flcA;
+}
 
 /// True when a circuit is motor-like (so a starter assembly makes sense).
 bool _isMotorLike(ElectricalCircuit c) =>
@@ -400,37 +1364,372 @@ bool _isMotorLike(ElectricalCircuit c) =>
 
 /// Shaft kW for a motor circuit — the explicit [ElectricalCircuit.motorKw], else
 /// the connected load as a kW proxy (so an HVAC way with watts still sizes gear).
-double _motorKw(ElectricalCircuit c) =>
-    c.motorKw ?? (c.loadW > 0 ? c.loadW / 1000.0 : 0);
+///
+/// Round 36 (elec-props-4-stale-motorkw-after-rekind) — an HVAC way sizes on
+/// its `loadW` (compute reads `motorKw` only on motor / pump ways), so a
+/// hand-entered HVAC way's `motorKw` (left over from re-kinding a motor, and
+/// hidden by the inspector) never drives its starter or the genset dip while
+/// `loadW` is set. An MEP-derived way (`sourceEquipmentId` / `flaOverrideA`)
+/// keeps its authoritative machine `motorKw`.
+double _motorKw(ElectricalCircuit c) {
+  final loadKw = c.loadW > 0 ? c.loadW / 1000.0 : 0.0;
+  final m = c.motorKw;
+  if (m == null) return loadKw;
+  final mepDerived =
+      (c.sourceEquipmentId != null && c.sourceEquipmentId!.isNotEmpty) ||
+          c.flaOverrideA != null;
+  if (c.loadKind == LoadKind.hvac && loadKw > 0 && !mepDerived) return loadKw;
+  return m;
+}
 
-/// The origin / service-root panel id: the first root-first panel that takes its
-/// supply directly from the utility, else the first id in the solve order.
-String? _originPanelId(
-  ElectricalSystemResult sys,
-  Map<String, ElectricalPanel> modelById,
-) {
-  for (final id in sys.order) {
-    final m = modelById[id];
-    if (m != null && m.fedByCircuitId == null) return id;
+/// Round 66 (elec-convergence-18-single-phase-root-transformer-sized-on-va-
+/// not-line-current) — the per-phase basis VA of ONE service-entrance board
+/// on the 3-phase service ([worstPhaseDemandVa], rounded current, largest
+/// machine floored): a 3-phase board on its own system; a 1-phase board,
+/// whose whole current I sits on one line, at sqrt3 x 400 x I
+/// ([kThreePhaseServiceLineVoltageV]) — the apparent power a 3-phase unit
+/// must be rated for to carry I on that line. The ONE per-root figure the
+/// supply study, its section loads and [serviceSectionOfRoot] read. Pure.
+double rootServiceBasisVa(
+    ElectricalProject project, ElectricalSystemResult sys, String id) {
+  final m = project.panels.where((p) => p.id == id).firstOrNull;
+  final single = m?.system == ElectricalSystem.singlePhase;
+  return worstPhaseDemandVa(project, sys, [id],
+      roundCurrent: true,
+      withLargestMachine: true,
+      // Round 77 — a UPS-backed root draws its balanced UPS INPUT.
+      upsInputCurrent: true,
+      asSystem: single ? ElectricalSystem.threePhase : null,
+      asVolts: single ? kThreePhaseServiceLineVoltageV : null);
+}
+
+/// Round 77 (elec-convergence-28-ups-root-service-judges-on-output) — the
+/// diversified demand VA ONE service-entrance board puts on the service: its
+/// own demand VA, × [kUpsInputFactor] when it is UPS-backed (the supply
+/// carries the UPS input, as `computeSystem`'s supply demand sums it). The
+/// section loads and the undeclared-transformer FLC judge read it. Pure.
+double rootServiceDemandVa(
+    ElectricalProject project, ElectricalSystemResult sys, String id) {
+  final r = sys.panels[id];
+  if (r == null) return 0;
+  final ups =
+      project.panels.where((p) => p.id == id).firstOrNull?.upsBacked ?? false;
+  return r.demandVaOrEstimate() * (ups ? kUpsInputFactor : 1.0);
+}
+
+/// Round 77 (elec-convergence-28-several-1ph-roots-summed-on-one-line) — the
+/// per-phase basis VA of a set of service-entrance boards on ONE 3-phase
+/// service, from each root's per-root basis [rootVa] (`sqrt3 x 400 x I` for a
+/// 1-phase root, [rootServiceBasisVa]): a 3-phase root loads every line with
+/// its worst-phase share (rootVa / 3 on each), and the 1-phase roots
+/// [singlePhaseIds] are spread over the lines largest first, each on the
+/// currently lightest line (LPT, the [minimalMaxSectionLoad] idiom; ties to
+/// the lowest line, roots tie on id) — several single-phase boards on one
+/// service sit on different lines, never all on one. The basis is
+/// 3 x the heaviest line. With at most ONE 1-phase root the allocation is the
+/// plain sum (Round 66, byte-identical). Pure.
+double allocateServiceLinesVa(
+    Map<String, double> rootVa, Set<String> singlePhaseIds) {
+  final singles = [
+    for (final e in rootVa.entries)
+      if (singlePhaseIds.contains(e.key)) e,
+  ];
+  if (singles.length <= 1) {
+    return rootVa.values.fold(0.0, (a, b) => a + b);
   }
-  return sys.order.isNotEmpty ? sys.order.first : null;
+  final lines = [0.0, 0.0, 0.0];
+  for (final e in rootVa.entries) {
+    if (singlePhaseIds.contains(e.key)) continue;
+    for (var i = 0; i < 3; i++) {
+      lines[i] += e.value / 3;
+    }
+  }
+  singles.sort((a, b) {
+    final c = b.value.compareTo(a.value);
+    return c != 0 ? c : a.key.compareTo(b.key);
+  });
+  for (final e in singles) {
+    var k = 0;
+    for (var i = 1; i < 3; i++) {
+      if (lines[i] < lines[k] - 1e-9) k = i;
+    }
+    lines[k] += e.value / 3;
+  }
+  return 3 * lines.reduce(math.max);
+}
+
+/// Round 77 — [allocateServiceLinesVa] over [ids]' [rootServiceBasisVa]
+/// (each scaled by [weight] when given). Pure.
+double servicePerPhaseBasisVa(
+    ElectricalProject project, ElectricalSystemResult sys, Iterable<String> ids,
+    {double Function(String id, double basisVa)? weight}) {
+  final byId = {for (final p in project.panels) p.id: p};
+  final rootVa = <String, double>{};
+  final singles = <String>{};
+  for (final id in ids) {
+    final b = rootServiceBasisVa(project, sys, id);
+    rootVa[id] = weight == null ? b : weight(id, b);
+    if (byId[id]?.system == ElectricalSystem.singlePhase) singles.add(id);
+  }
+  return allocateServiceLinesVa(rootVa, singles);
+}
+
+/// Round 52 (elec-convergence-4-undeclared-study-transformer-fault-not-the-
+/// printed-transformer) — the supply study of [sys]: [determineSupply] on the
+/// building demand, the largest dual-service SECTION (Round 40), the per-phase
+/// basis (Round 39) and the declared rating (Round 29) — the ONE assembly
+/// [computeAdvancedStudy] prints (supply note, power one-line, overview,
+/// riser) AND the fault estimate reads ([estimatedServiceFaultLevelA]
+/// `supply:`), so the fault study, busbar withstand and every specified device
+/// kA derive from the transformer actually issued, never a smaller unit sized
+/// on the total demand split evenly. [worstPhaseVa] / [perPhaseBasisVa] are
+/// the per-phase figures the daya recommendation also uses. Pure.
+({
+  SupplyDesign supply,
+  double worstPhaseVa,
+  double perPhaseBasisVa,
+  String? largestSectionId,
+}) studySupplyInputs(ElectricalProject project, ElectricalSystemResult sys,
+    {Set<String>? originPanelIds}) {
+  originPanelIds ??= originPanelIdsOf(sys, project);
+  final worstPhaseVa = worstPhaseDemandVa(project, sys, originPanelIds,
+      roundCurrent: true, withLargestMachine: true, upsInputCurrent: true);
+  // Round 66 (elec-convergence-18-single-phase-root-transformer-sized-on-va-
+  // not-line-current) — every root is converted PER ROOT ([rootServiceBasisVa]):
+  // a 1-phase service-entrance board puts its whole current on ONE line of
+  // the 3-phase service, so its basis is sqrt3 x 400 x I (3x its own V x I)
+  // whichever root governs. The conversion used to apply only when the
+  // GOVERNING root was 1-phase, so a 1-phase board beside a 3-phase one was
+  // counted at 230 x I and the undeclared transformer under-sized.
+  //
+  // Round 77 (elec-convergence-28-several-1ph-roots-summed-on-one-line) —
+  // SEVERAL 1-phase roots sit on DIFFERENT lines: they are spread over the
+  // three lines ([servicePerPhaseBasisVa]); one 1-phase root keeps the
+  // Round-66 sum.
+  final perPhaseBasisVa = servicePerPhaseBasisVa(project, sys, originPanelIds);
+  // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
+  // service each root board sits on ONE unit (coupler normally open, as the
+  // fault study models it), so the most loaded ROOT governs a section: its
+  // diversified VA, or its worst-phase basis when that is larger.
+  var largestSectionVa = 0.0;
+  String? largestSectionId;
+  final rootSectionVa = <double>[];
+  if (serviceSections(project) > 1 && originPanelIds.length > 1) {
+    for (final id in originPanelIds) {
+      final r = sys.panels[id];
+      if (r == null) continue;
+      final va = math.max(rootServiceDemandVa(project, sys, id),
+          rootServiceBasisVa(project, sys, id));
+      rootSectionVa.add(va);
+      if (va > largestSectionVa + 1e-9 ||
+          (largestSectionId != null &&
+              (va - largestSectionVa).abs() <= 1e-9 &&
+              id.compareTo(largestSectionId) < 0)) {
+        largestSectionVa = va;
+        largestSectionId = id;
+      }
+    }
+    // Round 61 (elec-convergence-13-roots-outnumber-sections-section-
+    // overload) — more service-entrance boards than sections: at least one
+    // section carries two boards (pigeonhole), so the most loaded section is
+    // the best achievable partition of the boards over the sections, never
+    // the single largest board. (Roots ≤ sections ⇒ the largest board ⇒
+    // byte-identical.)
+    largestSectionVa =
+        minimalMaxSectionLoad(rootSectionVa, serviceSections(project));
+  }
+  final oneRoot = originPanelIds.length == 1;
+  SupplyDesign study(double basisVa, double sectionVa,
+          {String basisLabel = 'worst-phase basis'}) =>
+      determineSupply(
+        sys.supply.demandVa,
+        largestSectionDemand: sectionVa > 0 ? ApparentPower(sectionVa) : null,
+        perPhaseDemand: ApparentPower(basisVa),
+        basisLabel: basisLabel,
+        dualTransformer: project.dualTransformer,
+        // Round 29 — the ONE declared rating (a connection capacity above the
+        // LV ceiling is a TM service on its snapped transformer).
+        declaredKva: declaredServiceTransformer(project)?.kva,
+        declaredUnits: declaredServiceTransformer(project)?.units,
+        // Round 37 r2 — a single root board on a dual service is judged against
+        // ONE section, like its incomer floor and the service-capacity judge.
+        singleSectionCarriesAll: oneRoot,
+        // Round 58 — an N-section service judges each root on one unit.
+        sections: serviceSections(project),
+        // Round 58 — an on-site genset / PV primary supply has no PLN service.
+        supplyKind: project.supplyKind,
+        plantCapacity: project.supplyCapacityVa,
+      );
+  var supply = study(perPhaseBasisVa, largestSectionVa);
+  // Round 61 (regression-undeclared-study-transformer-flagged-against-
+  // headroom-incomer) — a root board reserving future-load headroom has its
+  // incomer sized on the UPLIFTED (future) current, so an UNDECLARED study
+  // transformer (the engine's own pick, which the engineer cannot 'raise')
+  // is sized on the same future basis: Σ roots max(demand VA, worst-phase
+  // VA) × that root's headroom multiplier. The pick then covers the incomer
+  // rung by construction (FLC ≥ future current / 0.8), and the Round-41 FLC
+  // judge never condemns it. Only an MV study is re-sized — headroom never
+  // turns an LV service into an MV one (the PLN limiter is set at today's
+  // daya). No headroom anywhere ⇒ byte-identical.
+  if (supply.lvOrMv == SupplyLevel.mv && !supply.declared) {
+    final futureRootVa = <double>[];
+    var uplifted = false;
+    final panelById = {for (final p in project.panels) p.id: p};
+    final futureIds = <String>[];
+    for (final id in originPanelIds) {
+      final r = sys.panels[id];
+      if (r == null) continue;
+      final mult = panelById[id]?.headroom?.demandMultiplier ?? 1.0;
+      if (mult > 1.0 + 1e-12) uplifted = true;
+      final va = math.max(rootServiceDemandVa(project, sys, id),
+          rootServiceBasisVa(project, sys, id));
+      futureRootVa.add(va * mult);
+      futureIds.add(id);
+    }
+    // Round 77 — the same per-line allocation as today's basis.
+    final futureBasisVa = servicePerPhaseBasisVa(project, sys, futureIds,
+        weight: (id, b) =>
+            math.max(rootServiceDemandVa(project, sys, id), b) *
+            (panelById[id]?.headroom?.demandMultiplier ?? 1.0));
+    if (uplifted && futureBasisVa > perPhaseBasisVa + 1e-9) {
+      supply = study(
+          futureBasisVa,
+          largestSectionVa > 0
+              ? math.max(largestSectionVa,
+                  minimalMaxSectionLoad(futureRootVa, serviceSections(project)))
+              : 0.0,
+          basisLabel: 'future-load (headroom) basis');
+    }
+  }
+  return (
+    supply: supply,
+    worstPhaseVa: worstPhaseVa,
+    perPhaseBasisVa: perPhaseBasisVa,
+    largestSectionId: largestSectionId,
+  );
+}
+
+/// Round 16 (supply-sources-dual-tx-spine-genset-ladder) / Round 60
+/// (elec-convergence-12-printed-transformer-not-the-study-transformer) — the
+/// service transformer the DRAWINGS, the equipment schedule, the BOM and the
+/// power one-line print: EXACTLY the transformer the supply study picked
+/// ([studySupplyDesign] — its largest section, per-phase basis, section count
+/// and single-root rule, the transformer the origin fault and every device kA
+/// are specified against), never a second [determineSupply] re-derivation on
+/// the total demand alone. Only on a declared MV / sectioned service
+/// ([isDeclaredMvService]) — an undeclared single service draws no customer
+/// transformer (Round 19). A null [sys] (nothing solved) prints the declared
+/// rating only. Null when nothing is to be printed.
+({double kva, int units})? serviceTransformer(
+    ElectricalProject project, ElectricalSystemResult? sys) {
+  if (!isDeclaredMvService(project)) return null;
+  if (sys == null) {
+    final d = declaredServiceTransformer(project);
+    if (d == null || d.kva.inKilovoltAmperes <= 0) return null;
+    return (kva: d.kva.inKilovoltAmperes, units: d.units);
+  }
+  final s = studySupplyDesign(project, sys);
+  final kva = s.transformerKva;
+  if (s.lvOrMv != SupplyLevel.mv || kva == null || kva <= 0 || s.units < 1) {
+    return null;
+  }
+  return (kva: kva, units: s.units);
+}
+
+/// Round 52 — [studySupplyInputs]' supply design alone.
+SupplyDesign studySupplyDesign(
+        ElectricalProject project, ElectricalSystemResult sys) =>
+    studySupplyInputs(project, sys).supply;
+
+/// The origin / service-entrance panel ids: EVERY panel that takes its supply
+/// directly from the utility — no feeder way points at it and it carries no
+/// `fedByCircuitId`. Round 13 (elec-props-2-multiroot-spd-single-origin): it
+/// used to return ONE id (the first root in the solve order), so a second
+/// service-entrance board on an external-LPS building was treated as a
+/// sub-board at 0 m and told an SPD was not recommended — and the verdict
+/// flipped with panel list order. Falls back to the first id in the solve
+/// order when no panel qualifies (a cyclic topology).
+/// Round 65 r2 (elec-convergence-17-sectioned-service-drawn-as-paralleled-
+/// transformers) — the transformer SECTION (0-based) each service-entrance
+/// board sits on, on a sectioned service ([serviceSections] > 1): the
+/// partition [sectionAssignment] realises over the SAME per-root loads the
+/// supply study judges a section on ([studySupplyInputs]: the root's
+/// diversified VA, or its worst-phase basis when larger). Sections are
+/// numbered in the order their first board appears in [ElectricalSystemResult
+/// .order], so the drawing's columns read left to right. Empty on a single
+/// section. Pure.
+Map<String, int> serviceSectionOfRoot(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final n = serviceSections(project);
+  if (n <= 1) return const {};
+  final origin = originPanelIdsOf(sys, project);
+  final ids = [
+    for (final id in sys.order)
+      if (origin.contains(id) && sys.panels[id] != null) id,
+  ];
+  final loads = [
+    for (final id in ids)
+      math.max(rootServiceDemandVa(project, sys, id),
+          rootServiceBasisVa(project, sys, id)),
+  ];
+  final bins = sectionAssignment(loads, n);
+  final relabel = <int, int>{};
+  final out = <String, int>{};
+  for (var i = 0; i < ids.length; i++) {
+    out[ids[i]] = relabel.putIfAbsent(bins[i], () => relabel.length);
+  }
+  return out;
+}
+
+Set<String> originPanelIdsOf(
+  ElectricalSystemResult sys,
+  ElectricalProject project,
+) {
+  final fed = <String>{
+    for (final p in project.panels)
+      for (final c in p.circuits)
+        if (c.feedsPanelId != null && c.feedsPanelId!.isNotEmpty)
+          c.feedsPanelId!,
+  };
+  final modelById = {for (final p in project.panels) p.id: p};
+  final out = <String>{
+    for (final id in sys.order)
+      if (!fed.contains(id) && modelById[id]?.fedByCircuitId == null) id,
+  };
+  if (out.isEmpty && sys.order.isNotEmpty) out.add(sys.order.first);
+  return out;
 }
 
 /// Cumulative feeder-cable run length (m) from the origin to each panel, walking
 /// the feeder tree (a child's distance = its parent's distance + the feeding
 /// circuit's run length). Origin panels are 0.
+///
+/// The feeder run length is the SOLVED one ([solvedRunLengthM] — geo-derived
+/// when the boards are placed, else the manual length), the same run the cable,
+/// Vd and the fault/Zs decay were computed on, so the SPD distance agrees with
+/// sizing instead of reading a stale manual default.
 Map<String, double> _feederDistances(
   ElectricalSystemResult sys,
   ElectricalProject project,
 ) {
-  // child panel id -> (parent panel id, feeding circuit length).
+  // child panel id -> (parent panel id, feeding circuit solved length).
   final parentOf = <String, String>{};
   final feederLenM = <String, double>{};
   for (final p in project.panels) {
+    final panelResult = sys.panels[p.id];
     for (final c in p.circuits) {
       if (c.feedsPanelId != null) {
+        ElectricalCircuitResult? result;
+        if (panelResult != null) {
+          for (final r in panelResult.circuits) {
+            if (r.circuitId == c.id) {
+              result = r;
+              break;
+            }
+          }
+        }
         parentOf[c.feedsPanelId!] = p.id;
-        feederLenM[c.feedsPanelId!] = c.length.meters;
+        feederLenM[c.feedsPanelId!] = solvedRunLengthM(result, c);
       }
     }
   }
@@ -447,26 +1746,26 @@ Map<String, double> _feederDistances(
   return dist;
 }
 
-/// The panel's non-linear demand fraction (0–1) for the harmonics estimate,
-/// derived from its VFD-fed motor/pump circuits (which the kind-only classifier
-/// inside `estimateHarmonics` cannot see). The share is design-current-weighted.
-/// Returns null when no VFD circuit is present (let the kind-only classifier
-/// — UPS / welding — drive it instead).
-double? _nonLinearFraction(
+/// The panel's VFD-fed circuit ids, which the kind-only classifier inside
+/// `estimateHarmonics` cannot see. They are counted ADDITIVELY with the
+/// kind-derived (UPS / welding) share — never as an override — so adding a
+/// drive can only raise the panel's non-linear fraction.
+///
+/// Round 42 — read through [isDriveFedCircuit], the predicate the PF study
+/// also uses, so both studies see ONE drive-fed set.
+Set<String> _driveFedCircuitIds(
   ElectricalPanelResult panel,
-  Map<String, ControlAssembly> controlAssemblies,
+  ElectricalPanel? panelModel,
 ) {
-  var total = 0.0;
-  var vfd = 0.0;
-  for (final c in panel.circuits) {
+  final ids = <String>{};
+  if (panelModel == null) return ids;
+  final resultIds = {for (final c in panel.circuits) c.circuitId};
+  for (final c in panelModel.circuits) {
     if (c.loadKind == LoadKind.spare) continue;
-    final w = c.designCurrent.amperes;
-    total += w;
-    final a = controlAssemblies[c.circuitId];
-    if (a != null && a.starterType == StarterType.vfd) vfd += w;
+    if (!resultIds.contains(c.id)) continue;
+    if (isDriveFedCircuit(c)) ids.add(c.id);
   }
-  if (vfd <= 0 || total <= 0) return null;
-  return vfd / total;
+  return ids;
 }
 
 /// True when the panel hosts floor-standing gear (a VFD or soft-starter on any
@@ -487,21 +1786,102 @@ bool _hasFloorGear(
   return false;
 }
 
-/// The motors (for the genset-start voltage-dip screen) — every motor/pump
-/// circuit across the project, with its starter string.
-List<GensetMotor> _gensetMotors(ElectricalProject project) {
+/// The motors (for the genset-start voltage-dip screen), with their starter
+/// strings.
+///
+/// Round 11 — only the motors the genset actually STARTS: when the set backs a
+/// fraction of the load (`backupFraction < 1`) or any board is flagged
+/// essential, just the motors on the essential sub-tree
+/// ([gensetBackedPanelIds]); a full-backup set with no essential designation
+/// still screens every motor. It used to screen every motor in the project —
+/// a 110 kW chiller on the NORMAL supply was the limiting motor of a 30 %-backup
+/// 200 kVA set and printed 'start dip 38.22% over'.
+///
+/// Round 26 (fractional-genset-screens-no-motor) — the restriction applies only
+/// when some board IS designated essential. A fractional set with NO essential
+/// designation names no sub-tree, so nothing says which motors it does not
+/// start: it screens every motor, like full backup (the safe direction — a
+/// silently skipped 110 kW DOL start on a 100 kVA set dips ~55 %).
+///
+/// Round 36 (elec-props-4-genset-dip-skips-motors-full-backup) — and only
+/// when the set does NOT back the whole load (`backupFraction < 1`). A
+/// full-backup set transfers the WHOLE bus (the power one-line draws no
+/// essential split for it — `essentialSplit` needs `backupFraction < 1`) and
+/// was sized on the whole demand, so after transfer it starts every motor:
+/// marking the fire-pump board essential (what `life-safety-not-essential`
+/// asks for) must never drop a 110 kW DOL chiller out of the dip screen.
+///
+/// Round 42 (electrical-sim-7-genset-dip-multiples-disagree-with-starter) —
+/// each motor carries its STARTING kVA on the ONE starting basis the control
+/// assembly prints (`control/starting.dart`): the way's own assembly's
+/// starting current when [assemblies] holds one, else [startingAnalysis] on
+/// the assembly's own FLC basis (max of the IEC table FLC and the way's
+/// solved running current [sys]) × √3·U (3φ) / U0 (1φ). One machine, one
+/// starting current.
+List<GensetMotor> gensetStartMotors(
+  ElectricalProject project, {
+  ElectricalSystemResult? sys,
+  Map<String, ControlAssembly> assemblies = const {},
+}) {
   final motors = <GensetMotor>[];
+  final essential = gensetBackedPanelIds(project);
+  final gen = project.sources?.generator;
+  // Round 65 — the EFFECTIVE fraction: an untyped set with essential boards
+  // marked backs (and starts) the essential sub-tree only.
+  final restrict = essential.isNotEmpty &&
+      gen != null &&
+      effectiveGeneratorBackupFraction(project) < 1.0;
+  final resultByCircuit = <String, ElectricalCircuitResult>{
+    if (sys != null)
+      for (final pr in sys.panels.values)
+        for (final r in pr.circuits) r.circuitId: r,
+  };
   for (final p in project.panels) {
+    if (restrict && !essential.contains(p.id)) continue;
     for (final c in p.circuits) {
       if (!_isMotorLike(c)) continue;
       final kw = _motorKw(c);
       if (kw <= 0) continue;
+      final solved = resultByCircuit[c.id];
+      final threePhase = solved?.threePhase ??
+          circuitIsThreePhase(
+            panelSystem: p.system,
+            kind: c.loadKind,
+            loadW: c.loadW,
+            motorKw: c.motorKw,
+            phases: c.phases,
+          );
+      final u0 = p.system == ElectricalSystem.threePhase
+          ? (p.voltage.volts / math.sqrt(3)).roundToDouble()
+          : p.voltage.volts;
+      final starter = c.starterType == null
+          ? null
+          : effectiveStarterType(c.starterType!, threePhase);
+      final assemblyStart = assemblies[c.id]?.starting;
+      final double startA;
+      if (assemblyStart != null) {
+        startA = assemblyStart.startCurrentA.amperes;
+      } else {
+        // The assembly's own basis: max(table FLC, the solved Ib).
+        final table = threePhase
+            ? motorFlc(kw, p.voltage).amperes
+            : motorFlc1ph(kw, Voltage(u0)).amperes;
+        final ib = solved?.runCurrentA.amperes ?? 0;
+        final flc =
+            Current(((ib > table ? ib : table) * 10).roundToDouble() / 10);
+        startA = startingAnalysis(flc, starter ?? StarterType.dol)
+            .startCurrentA
+            .amperes;
+      }
+      final startVa =
+          threePhase ? math.sqrt(3) * p.voltage.volts * startA : u0 * startA;
       motors.add(GensetMotor(
         name: c.name,
         shaftPower: Power.kiloWatts(kw),
-        starterType: c.starterType == null
-            ? null
-            : _starterString(c.starterType!),
+        starterType: starter == null ? null : _starterString(starter),
+        startKva: ApparentPower(startVa),
+        circuitId: c.id,
+        lifeSafety: c.lifeSafety,
       ));
     }
   }
@@ -532,4 +1912,49 @@ List<String> _aggregateVerify(List<List<String>?> lists) {
     }
   }
   return out;
+}
+
+/// Round 34 (electrical-drawings-4-app-schedule-conduit-ladder-not-study) —
+/// the containment STUDY's conduit per circuit id (`circuitId -> ConduitSpec`),
+/// the ONE containment source every board schedule (canvas, PDF, DXF,
+/// submittal, report figure) passes to `buildElectricalSld`, so the printed
+/// `PVC <n>mm` token is the study's fill-checked size, never the CSA ladder.
+Map<String, ConduitSpec> containmentByCircuitIdOf(AdvancedStudy study) => {
+      for (final c in study.containment.values)
+        for (final cc in c.conduits) cc.circuitId: cc.conduit,
+    };
+
+/// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a
+/// DECLARED MV service (an explicit transformer rating or a dual-transformer
+/// service): `MV via TX <n x kVA>` from the SAME [serviceTransformer] the
+/// riser / overview / schedule print; on an LV direct service the builder's
+/// `<V> V LV`, with the declared connection capacity appended when one is
+/// declared (Round 34), else null.
+String? powerOneLineUtilitySub(
+    ElectricalProject project, ElectricalSystemResult? sys,
+    {Voltage voltage = const Voltage(400)}) {
+  if (!isDeclaredMvService(project)) {
+    // Round 34 (electrical-drawings-4-lv-power-one-line-omits-daya) — an LV
+    // service with a declared connection capacity states it, like the
+    // overview / riser supply head ('PLN 197 kVA'); nothing declared ⇒ null
+    // (the builder's bare '<V> V LV', byte-identical).
+    final cap = project.supplyCapacityVa;
+    if (cap == null || !(cap.inKilovoltAmperes > 0)) return null;
+    String n(double v) =>
+        v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+    return '${n(voltage.volts)} V LV · ${n(cap.inKilovoltAmperes)} kVA';
+  }
+  final t = serviceTransformer(project, sys);
+  if (t == null || t.kva <= 0) return 'MV via TX';
+  String n(double v) =>
+      v == v.roundToDouble() ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+  final fig = t.units > 1 ? '${t.units} x ${n(t.kva)}' : n(t.kva);
+  // Round 65 (elec-convergence-17-sectioned-service-drawn-as-paralleled-
+  // transformers) — a SECTIONED service says so: its units are never
+  // paralleled onto one bus (the fault basis is one unit per section).
+  final sections = serviceSections(project);
+  if (sections > 1) {
+    return 'MV via TX $fig kVA · $sections sections, coupler N.O.';
+  }
+  return 'MV via TX $fig kVA';
 }

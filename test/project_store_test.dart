@@ -243,8 +243,11 @@ void main() {
 
   // ── B6: editing the floor stack under a drawn network stays safe ───────────
 
-  test('setFloors that shrinks clamps drawn nodes above the new top (no crash)',
-      () {
+  // Round 9 (mech-store-fuzz-4) — a shrinking stack DROPS its top floors like
+  // removeFloor (C2): the work drawn on a dropped floor is deleted with it
+  // (the template dialog confirms with the count first), never clamped onto
+  // the new top floor, which fused floors and collapsed risers to zero length.
+  test('setFloors that shrinks deletes the work on the dropped floors', () {
     final c = makeContainer();
     final net = c.read(networkControllerProvider.notifier);
     // 3-floor default; draw one node on each floor 0..2.
@@ -253,6 +256,7 @@ void main() {
       NetNode(id: 'n1', sheetId: 's1', x: 0, y: 0, floorIndex: 1),
       NetNode(id: 'n2', sheetId: 's1', x: 0, y: 0, floorIndex: 2),
     ]));
+    expect(net.elementsAboveFloor(1), 2);
     // Reduce to a single floor (a template with fewer floors, say).
     c
         .read(projectControllerProvider.notifier)
@@ -262,9 +266,7 @@ void main() {
       for (final n in c.read(networkControllerProvider).network.nodes)
         n.id: n.floorIndex
     };
-    expect(floors['n0'], 0);
-    expect(floors['n1'], 0); // clamped down onto the single surviving floor
-    expect(floors['n2'], 0);
+    expect(floors, {'n0': 0});
     // No node can reference a floor the solve would index out of range.
     final building = c.read(projectControllerProvider).building;
     for (final fi in floors.values) {
@@ -336,13 +338,12 @@ void main() {
     c
         .read(projectControllerProvider.notifier)
         .setFloors(const [Floor('Only', Length(3.0))]);
-    expect(
-        c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+    // Round 9 — the node on dropped floor 2 is deleted with it.
+    expect(c.read(networkControllerProvider).network.nodes, isEmpty);
     expect(c.read(projectControllerProvider).floors.length, 1);
 
-    // The floor swap + the node remap are ONE structural timeline entry: a
-    // SINGLE undo restores BOTH the stack and the node's floor together (the
-    // old torn behaviour needed two undos, leaving a stranded intermediate).
+    // The floor swap + the deletion are ONE structural timeline entry: a
+    // SINGLE undo restores BOTH the stack and the node on its floor together.
     hist.undo();
     expect(
         c.read(networkControllerProvider).network.nodes.single.floorIndex, 2);
@@ -351,8 +352,7 @@ void main() {
 
     // Redo re-applies BOTH halves in the same one step.
     hist.redo();
-    expect(
-        c.read(networkControllerProvider).network.nodes.single.floorIndex, 0);
+    expect(c.read(networkControllerProvider).network.nodes, isEmpty);
     expect(c.read(projectControllerProvider).floors.length, 1);
   });
 

@@ -4,7 +4,13 @@ import 'package:mechx_engine/geometry/dxf_drawing.dart';
 
 import '../store/models/sheet.dart';
 import 'dwg_converter.dart';
-import 'dxf_import.dart' show dxfContentSize;
+import 'dxf_import.dart'
+    show
+        dxfBinaryMessage,
+        dxfContentSize,
+        dxfIncompleteMessage,
+        dxfTruncatedMessage;
+import 'dxf_text.dart';
 
 /// Persistent directory the DWG→DXF conversions are cached in, so a converted
 /// plan survives across the session (and usually across restarts). Created on
@@ -33,6 +39,7 @@ Future<List<Sheet>> importDwg(
   String filePath, {
   required DwgConverter converter,
   required String outDir,
+  void Function(String message)? onWarning,
 }) async {
   final basename = File(filePath).uri.pathSegments.last;
   final lower = basename.toLowerCase();
@@ -48,10 +55,20 @@ Future<List<Sheet>> importDwg(
   }
 
   final dxfPath = result.dxfPath!;
-  final drawing = parseDxf(File(dxfPath).readAsStringSync());
+  final text = readDxfTextSync(dxfPath);
+  if (isBinaryDxf(text)) throw StateError(dxfBinaryMessage(basename));
+  final drawing = parseDxf(text);
   if (drawing == null || drawing.isEmpty) {
     throw StateError('DWG "$basename" converted, but the DXF had no geometry.');
   }
+  // Round 24 — a zero-size / non-finite extent is refused (a 1 x 1 px sheet),
+  // and a budget-truncated parse is reported, never silent.
+  if (!drawing.bounds.isUsable) {
+    throw StateError('DWG "$basename" converted, but the DXF has no usable '
+        'extent (zero-size or non-finite coordinates).');
+  }
+  if (drawing.truncated) onWarning?.call(dxfTruncatedMessage(basename));
+  if (drawing.incomplete) onWarning?.call(dxfIncompleteMessage(basename));
 
   return [
     Sheet(
@@ -61,6 +78,9 @@ Future<List<Sheet>> importDwg(
       dwgPath: filePath,
       pageIndex: 0,
       sizePx: dxfContentSize(drawing.bounds),
+      // Round 24 — remember the world frame the content was normalised from.
+      dxfFrame: drawing.bounds,
+      dxfInsUnits: drawing.insUnits,
     ),
   ];
 }

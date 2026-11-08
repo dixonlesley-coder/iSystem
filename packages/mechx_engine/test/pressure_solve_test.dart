@@ -247,9 +247,19 @@ void main() {
         NetNode(id: 'm2', sheetId: 's1', x: 0, y: 0, floorIndex: 2); // 9.7 m
     const lowMain =
         NetNode(id: 'm0', sheetId: 's1', x: 0, y: 0, floorIndex: 0); // 3.7 m
+    // Audit 2026-10 water-drainage-5: the target residual is owed at a
+    // DELIVERY point (a fixture), not at the ceiling-level pass-through main
+    // m2. A top-floor fixture f2 hangs off m2: elevation = elevationOf(2) +
+    // fixture height = 7 + 1.1 = 8.1 m ⇒ gravity head 10 − 8.1 = 1.9 m.
+    const topFixture = NetNode(
+        id: 'f2', sheetId: 's1', x: 100, y: 0, floorIndex: 2,
+        role: NodeRole.fixture);
     const net = Network(
-      nodes: [tank, topMain, lowMain],
+      nodes: [tank, topMain, lowMain, topFixture],
       edges: [
+        NetEdge(
+            id: 'df', fromId: 'm2', toId: 'f2',
+            service: ServiceType.coldWater),
         NetEdge(
             id: 'dt', fromId: 'tank', toId: 'm2',
             service: ServiceType.coldWater, kind: EdgeKind.riser),
@@ -276,8 +286,12 @@ void main() {
           closeTo(pressureFromHead(const Head(0.3)).pascals, 1e-3));
       expect(sol.residualPressure['m0']!.pascals,
           closeTo(pressureFromHead(const Head(6.3)).pascals, 1e-3));
-      // Worst-served is the top main (least gravity head).
-      expect(sol.criticalNodeId, 'm2');
+      // f2 at 8.1 m → head 1.9 m.
+      expect(sol.residualPressure['f2']!.pascals,
+          closeTo(pressureFromHead(const Head(1.9)).pascals, 1e-3));
+      // Worst-served DELIVERY node is the top fixture (the main m2 above it
+      // reads less, 0.3 m, but it is not where the target is owed).
+      expect(sol.criticalNodeId, 'f2');
     });
 
     test('booster head = shortfall of the critical node vs target', () {
@@ -291,10 +305,10 @@ void main() {
         building: building,
         targetResidual: targetResidual,
       );
-      // target head ≈ 4.998 m; top main only has 0.3 m by gravity →
-      // booster ≈ 4.698 m. Gravity is NOT sufficient here.
+      // target head ≈ 4.998 m; the top fixture only has 1.9 m by gravity →
+      // booster ≈ 3.098 m. Gravity is NOT sufficient here.
       final targetHead = headFromPressure(targetResidual).meters;
-      expect(sol.boosterHeadRequired.meters, closeTo(targetHead - 0.3, 1e-3));
+      expect(sol.boosterHeadRequired.meters, closeTo(targetHead - 1.9, 1e-3));
       expect(sol.gravitySufficient, isFalse);
     });
 
@@ -310,7 +324,7 @@ void main() {
         targetResidual: targetResidual,
         tankStaticHead: const Head(10), // a tall tank / booster head allowance
       );
-      // top main now has 0.3 + 10 = 10.3 m ≥ target → no booster needed.
+      // top fixture now has 1.9 + 10 = 11.9 m ≥ target → no booster needed.
       expect(sol.gravitySufficient, isTrue);
       expect(sol.boosterHeadRequired.meters, 0);
     });

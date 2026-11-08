@@ -35,7 +35,7 @@ import 'sizing_store.dart';
 ///   • air duct edges (mean velocity from the live sizing), and
 ///   • air terminals that have BOTH an airflow and a chosen face size.
 final airVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String, VelocityCheck>{};
 
@@ -112,7 +112,7 @@ final airWarningCountProvider = Provider<int>((ref) => ref
 /// size / face for the hand-routed network. An element that already carries a
 /// chosen size (edge `sizeOverride`, node face) is NOT listed.
 final airUnsizedProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
 
@@ -145,7 +145,7 @@ final airUnsizedCountProvider =
 /// velocity limit / friction target at that airflow). Empty when every air
 /// duct is in range ⇒ no issue.
 final airOverCapacityProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
@@ -167,12 +167,29 @@ final airOverCapacityProvider = Provider<Set<String>>((ref) {
 /// a clamped downpipe or an over-velocity riser is as visible as a clamped duct.
 /// Empty when every edge is in range ⇒ byte-identical.
 final overCapacityEdgesProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
     final s = sizing[e.id];
     if (s != null && s.overCapacity) out.add(e.id);
+  }
+  return out;
+});
+
+/// Round 17 (gravity-3-1) — GRAVITY edges (drain / vent / rainwater) whose
+/// HAND-PICKED size is smaller than the smallest size the code tables allow for
+/// their load ([EdgeSizing.belowCodeMinimum]). The override path used to keep
+/// the auto pick's flags, so a DN75 stack carrying 32 WCs or a DN65 downpipe
+/// at 10 L/s issued silently. Empty when nothing is under-sized by hand ⇒
+/// byte-identical.
+final belowCodeMinimumEdgesProvider = Provider<Set<String>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>{};
+  for (final e in net.edges) {
+    final s = sizing[e.id];
+    if (s != null && s.belowCodeMinimum) out.add(e.id);
   }
   return out;
 });
@@ -183,12 +200,28 @@ final overCapacityEdgesProvider = Provider<Set<String>>((ref) {
 /// engine forms the verdict on the DFU path; nothing consumed it. Empty ⇒
 /// byte-identical.
 final selfCleansingDefectsProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {
     final s = sizing[e.id];
     if (s != null && !s.selfCleansingOk) out.add(e.id);
+  }
+  return out;
+});
+
+/// WATER-SUPPLY edges whose fixture-unit load lies beyond the charted demand
+/// curve (> 3000 UBAP, [EdgeSizing.demandCurveExtrapolated]) — their design
+/// flow is a linear EXTRAPOLATION of SNI 8153 Gambar 1, not a curve read-off
+/// (audit 2026-10 water-drainage-6). Empty for every in-range project ⇒
+/// byte-identical.
+final demandCurveExtrapolatedEdgesProvider = Provider<Set<String>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final out = <String>{};
+  for (final e in net.edges) {
+    final s = sizing[e.id];
+    if (s != null && s.demandCurveExtrapolated) out.add(e.id);
   }
   return out;
 });
@@ -199,7 +232,7 @@ final selfCleansingDefectsProvider = Provider<Set<String>>((ref) {
 /// was never achieved — so the split, and every size derived from it, is
 /// PROVISIONAL. Empty for trees and settled loops ⇒ byte-identical.
 final loopUnbalancedEdgesProvider = Provider<Set<String>>((ref) {
-  final net = ref.watch(networkControllerProvider).network;
+  final net = ref.watch(sizingNetworkProvider);
   final sizing = ref.watch(sizingProvider);
   final out = <String>{};
   for (final e in net.edges) {

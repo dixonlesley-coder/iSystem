@@ -5,9 +5,11 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
-import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/calibration_store.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/project_store.dart';
+import 'package:mechx/ui/shell/nav_rail.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 
 import 'test_util.dart';
@@ -28,8 +30,9 @@ void main() {
   setUpAll(_loadFonts);
 
   testWidgets(
-      'status bar reads Uncalibrated by default and Calibrated once the '
-      'current sheet has a calibration', (tester) async {
+      'sheet calibration is stated ONCE: the Layout breadcrumb carries it '
+      '(status slot empty); the status bar carries it on Riser/Electrical',
+      (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
@@ -39,59 +42,60 @@ void main() {
       listen: false,
     );
     // Production launches with NO sheets (A1); seed the demo sheets so there is
-    // a current sheet whose (missing) calibration the status bar reports.
+    // a current sheet whose (missing) calibration is reported.
     seedDemoSheets(container);
     await tester.pump();
 
-    // The demo current sheet (s1) is uncalibrated at launch.
-    expect(find.text('Uncalibrated'), findsOneWidget);
-    expect(find.text('Calibrated'), findsNothing);
+    // Layout: the status-bar sheet slot is an empty spacer; the breadcrumb
+    // after the layer row carries the tappable 'Not calibrated' tail.
+    expect(find.byKey(const ValueKey('status-sheet-slot')), findsNothing);
+    expect(find.text('Uncalibrated'), findsNothing);
+    expect(find.byKey(const ValueKey('breadcrumb-calibrate')), findsOneWidget);
+    expect(find.bySemanticsLabel('Calibrate scale'), findsWidgets);
 
-    // Calibrate the current sheet → the status bar must flip to Calibrated.
+    // Tapping the breadcrumb tail starts calibration like the top-centre pill.
+    await tester.tap(find.byKey(const ValueKey('breadcrumb-calibrate')));
+    await tester.pump();
+    expect(container.read(calibrationControllerProvider).isActive, isTrue);
+    container.read(calibrationControllerProvider.notifier).cancel();
+    await tester.pump();
+
+    // Calibrate the current sheet → the breadcrumb reads the quiet scale.
     container
         .read(projectControllerProvider.notifier)
         .setCalibration('s1', const ScaleCalibration(0.025));
     await tester.pump();
+    expect(find.byKey(const ValueKey('breadcrumb-calibrate')), findsNothing);
+    expect(find.byKey(const ValueKey('breadcrumb-scale')), findsOneWidget);
 
+    // Riser workspace (no sheet rail): the status bar now names the sheet.
+    container.read(workspaceViewProvider.notifier).set(WorkspaceView.schematic);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('status-sheet-slot')), findsOneWidget);
     expect(find.text('Calibrated'), findsOneWidget);
     expect(find.text('Uncalibrated'), findsNothing);
+
+    // A hub section: empty again.
+    container.read(shellSectionProvider.notifier).set(ShellSection.review);
+    await tester.pump();
+    expect(find.byKey(const ValueKey('status-sheet-slot')), findsNothing);
   });
 
-  testWidgets('theme toggle labels the action, not the current mode',
+  testWidgets('the top bar no longer carries a theme toggle (work item 9)',
       (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
     await tester.pump();
 
-    final container = ProviderScope.containerOf(
-      tester.element(find.byType(MechXApp)),
-      listen: false,
-    );
-    final startedDark =
-        container.read(brightnessProvider) == Brightness.dark;
-
-    // F6: the theme toggle is a compact icon control that NAMES its action to a
-    // screen reader (a Semantics label — act toward the opposite mode) instead
-    // of a visible text label. In light mode it acts toward dark; in dark,
-    // toward light.
-    expect(
-        find.bySemanticsLabel(
-            startedDark ? 'Switch to light' : 'Switch to dark'),
-        findsOneWidget);
-
-    await tester.tap(find.bySemanticsLabel(
-        startedDark ? 'Switch to light' : 'Switch to dark'));
-    await tester.pump();
-
-    // After the flip the label names the NEW action (the opposite mode).
-    expect(
-        find.bySemanticsLabel(
-            startedDark ? 'Switch to dark' : 'Switch to light'),
-        findsOneWidget);
+    // Theme switching lives in Preferences + the palette 'theme.toggle'
+    // command; the top bar is trimmed to title / palette hint / Open / Save /
+    // Export.
+    expect(find.bySemanticsLabel(RegExp('Switch to (light|dark)')),
+        findsNothing);
   });
 
   testWidgets(
-      'standards-provenance dot is lit by default (unverified values present)',
+      'standards-provenance dot is lit once unverified values are present',
       (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(const ProviderScope(child: MechXApp()));
@@ -100,8 +104,11 @@ void main() {
       tester.element(find.byType(MechXApp)),
       listen: false,
     );
-    // The const standards profiles carry // VERIFY items, so the dot's gate is
-    // open and the caption renders.
+    // Round 31 — the PUIL // VERIFY debt surfaces once the project has an
+    // electrical panel (a fresh project carries none), so add one: the dot's
+    // gate is then open and the caption renders.
+    container.read(electricalProjectProvider.notifier).addPanel(name: 'DB');
+    await tester.pump();
     expect(
       container
           .read(designIssuesProvider)

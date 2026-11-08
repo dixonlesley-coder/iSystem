@@ -95,10 +95,10 @@ class _MechXButtonState extends State<MechXButton> {
 
     Widget visual = AnimatedScale(
       scale: _enabled ? scale : 1.0,
-      duration: MechXMotion.press,
+      duration: MechXMotion.resolve(context, MechXMotion.press),
       curve: MechXMotion.standard,
       child: AnimatedContainer(
-        duration: MechXMotion.hover,
+        duration: MechXMotion.resolve(context, MechXMotion.hover),
         curve: MechXMotion.standard,
         padding: const EdgeInsets.symmetric(
           horizontal: MechXSpacing.sm + 4,

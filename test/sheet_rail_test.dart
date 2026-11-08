@@ -1,11 +1,15 @@
 /// A5/A6 — the sheet-rail per-tile right-click context menu (Rename / Assign
-/// floor / Calibrate / Replace plan / Duplicate to / Remove) and the A6 "Add
-/// sheets…" footer gating. Verifies a secondary-tap opens the menu with the
+/// floor / Calibrate / Replace plan / Duplicate to / Remove) and the rail's ONE
+/// add affordance (the '+' tile, whose menu gates the A6 multi-file append). Verifies a secondary-tap opens the menu with the
 /// expected rows and that Remove drops the tile; the store effects
 /// (add/rename/remove) are exercised in `sheets_store_test`.
 library;
 
+import 'package:file_picker/file_picker.dart';
+// ignore: implementation_imports
+import 'package:file_picker/src/platform/file_picker_platform_interface.dart';
 import 'package:flutter/gestures.dart' show kSecondaryButton;
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -68,23 +72,70 @@ void main() {
     expect(find.text('Duplicate to…'), findsNothing);
   });
 
-  testWidgets('the "Add" footer is HIDDEN for placeholder sheets, SHOWN for a '
-      'real one (A6)', (tester) async {
+  testWidgets('ONE add affordance: the "+" tile; its menu offers the A6 '
+      'multi-file append only for a real project', (tester) async {
     setDesktopSurface(tester);
     await tester.pumpWidget(ProviderScope(child: _host(const SheetRail())));
     final c = ProviderScope.containerOf(tester.element(find.byType(SheetRail)));
+    final plus = find.byKey(const ValueKey('sheet-rail-import'));
 
-    // Demo sheets are placeholders → no footer (goldens stay byte-identical).
+    // Demo sheets are placeholders: the tile is the only add control, and its
+    // menu offers Import plan only (goldens stay byte-identical).
     seedDemoSheets(c);
     await tester.pumpAndSettle();
+    expect(plus, findsOneWidget);
     expect(_inRail(find.text('Add')), findsNothing);
+    await tester.tap(plus, buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Import plan…'), findsOneWidget);
+    expect(find.text('Add sheets from files…'), findsNothing);
+    await tester.tapAt(const Offset(600, 400));
+    await tester.pumpAndSettle();
 
-    // A real (DXF-backed) sheet flips the footer on.
+    // A real (DXF-backed) sheet: STILL one add control (no footer button), and
+    // the tile's menu now carries the multi-file append.
     c.read(sheetsControllerProvider.notifier).loadSheets(
       const [Sheet(id: 'r', name: 'RealPlan', dxfPath: '/nope.dxf')],
     );
     await tester.pumpAndSettle();
-    expect(_inRail(find.text('Add')), findsOneWidget);
+    expect(plus, findsOneWidget);
+    expect(_inRail(find.text('Add')), findsNothing);
+    expect(_inRail(find.text('+')), findsNothing);
+    await tester.tap(plus, buttons: kSecondaryButton);
+    await tester.pumpAndSettle();
+    expect(find.text('Import plan…'), findsOneWidget);
+    expect(find.text('Add sheets from files…'), findsOneWidget);
+    await tester.tapAt(const Offset(600, 400));
+    await tester.pumpAndSettle();
+    expect(find.text('Add sheets from files…'), findsNothing);
+  });
+
+  testWidgets('R4: Shift+Enter on the focused "+" tile reaches the multi-file '
+      'append (keyboard parity with the right-click row)', (tester) async {
+    setDesktopSurface(tester);
+    final previous = FilePickerPlatform.instance;
+    final spy = _SpyPicker();
+    FilePickerPlatform.instance = spy;
+    addTearDown(() => FilePickerPlatform.instance = previous);
+
+    await tester.pumpWidget(ProviderScope(child: _host(const SheetRail())));
+    final c = ProviderScope.containerOf(tester.element(find.byType(SheetRail)));
+    c.read(sheetsControllerProvider.notifier).loadSheets(
+      const [Sheet(id: 'r', name: 'RealPlan', dxfPath: '/nope.dxf')],
+    );
+    await tester.pumpAndSettle();
+    final plus = find.byKey(const ValueKey('sheet-rail-import'));
+    Focus.of(tester.element(
+            find.descendant(of: plus, matching: find.byType(CustomPaint)).last))
+        .requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pumpAndSettle();
+    // The MULTI-file picker opened (Import plan asks for a single file).
+    expect(spy.calls, [true]);
   });
 
   testWidgets('the Remove row removes the sheet from the rail (A6)',
@@ -108,4 +159,28 @@ void main() {
     expect(c.read(sheetsControllerProvider).sheets.map((s) => s.id), ['a']);
     expect(_inRail(find.text('PlanB')), findsNothing);
   });
+}
+
+/// Records each pickFiles call's allowMultiple flag and cancels the dialog.
+class _SpyPicker extends FilePickerPlatform {
+  final calls = <bool>[];
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    int compressionQuality = 0,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+    bool cancelUploadOnWindowBlur = true,
+  }) async {
+    calls.add(allowMultiple);
+    return null;
+  }
 }

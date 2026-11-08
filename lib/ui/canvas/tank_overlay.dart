@@ -264,7 +264,7 @@ class _TankOverlayState extends ConsumerState<TankOverlay> {
   @override
   Widget build(BuildContext context) {
     final transform =
-        ref.watch(sheetsControllerProvider).viewportFor(widget.sheetId) ??
+        ref.watch(sheetViewportProvider(widget.sheetId)) ??
             const ViewportTransform();
     final all = ref.watch(tankAreasProvider);
     final mine = [

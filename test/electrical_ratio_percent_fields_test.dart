@@ -81,14 +81,15 @@ void main() {
     // Rejected, not clamped to 1.0 — the model is untouched and an inline
     // error names the valid range.
     expect(circuit().cosPhi, 0.9);
-    expect(find.textContaining('between 0 and 1'), findsOneWidget);
+    // Round 11: cos phi's floor is 0.1 (cos phi 0 is an unbounded current).
+    expect(find.textContaining('between 0.1 and 1'), findsOneWidget);
 
     // A well-formed, in-range value still commits normally.
     await tester.enterText(field, '0.75');
     FocusManager.instance.primaryFocus?.unfocus();
     await tester.pump();
     expect(circuit().cosPhi, 0.75);
-    expect(find.textContaining('between 0 and 1'), findsNothing);
+    expect(find.textContaining('between 0.1 and 1'), findsNothing);
   });
 
   testWidgets(

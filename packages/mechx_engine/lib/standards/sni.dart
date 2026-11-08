@@ -206,7 +206,8 @@ class SniProfile implements StandardsProfile {
         // mandatoryPressureReliefThreshold. Kept as the zoning design maximum.
         Pressure(392266.0), // 4.0 kgf/cm² = 40 m water column
         unit: 'kPa',
-        citation: '$_doc — practical max fixture pressure (zoning design target)',
+        citation:
+            '$_doc — practical max fixture pressure (zoning design target)',
         sourceUrl: _archiveUrl,
         verified: true,
         status: VerificationStatus.sniVerbatim,
@@ -224,7 +225,8 @@ class SniProfile implements StandardsProfile {
         citation: '$_doc — mandatory pressure-relief threshold (>5 kgf/cm²)',
         sourceUrl: _archiveUrl,
         verified: true,
-        note: 'Verbatim: bila tekanan air lebih dari 5 kg/cm² atau 50 m kolom air '
+        note:
+            'Verbatim: bila tekanan air lebih dari 5 kg/cm² atau 50 m kolom air '
             'harus dilengkapi katup pelepas tekan / kran menutup sendiri / tabung '
             'udara untuk mencegah bahaya tekanan, pukulan air, dan suara pipa. '
             'Clause no. unconfirmed.',
@@ -235,10 +237,12 @@ class SniProfile implements StandardsProfile {
       const StandardValue(
         Pressure(98066.5), // 1.0 kgf/cm²
         unit: 'kPa',
-        citation: '$_doc — min pressure at direct flush valve (katup penggelontor)',
+        citation:
+            '$_doc — min pressure at direct flush valve (katup penggelontor)',
         sourceUrl: _archiveUrl,
         verified: true,
-        note: 'Verbatim: tekanan pada katup penggelontor langsung sekurang-kurangnya '
+        note:
+            'Verbatim: tekanan pada katup penggelontor langsung sekurang-kurangnya '
             '1 kg/cm² (≈98 kPa). Clause no. unconfirmed.',
       );
 
@@ -246,10 +250,12 @@ class SniProfile implements StandardsProfile {
   StandardValue<Pressure> get minResidualPressureFaucet => const StandardValue(
         Pressure(49033.25), // 0.50 kgf/cm² = 5 m water column
         unit: 'kPa',
-        citation: '$_doc — min pressure at fixture outlet (titik aliran keluar)',
+        citation:
+            '$_doc — min pressure at fixture outlet (titik aliran keluar)',
         sourceUrl: _archiveUrl,
         verified: true,
-        note: 'Verbatim: tekanan minimum pada setiap saat di titik aliran keluar '
+        note:
+            'Verbatim: tekanan minimum pada setiap saat di titik aliran keluar '
             'unit alat plambing adalah 0,50 kg/cm² atau 5 m kolom air (≈49 kPa). '
             'Clause no. unconfirmed.',
       );
@@ -293,7 +299,8 @@ class SniProfile implements StandardsProfile {
         citation: '$_doc — demand-estimation method',
         sourceUrl: _archiveUrl,
         verified: true,
-        note: 'SNI 8153:2015 prescribes the fixture-unit (UBAP) + Hunter demand '
+        note:
+            'SNI 8153:2015 prescribes the fixture-unit (UBAP) + Hunter demand '
             'curve method (Noerbambang & Morimura; UPC 2012 basis); it supersedes '
             'SNI 03-6481-2000 & 03-7065-2005. The METHOD is confirmed; the curve '
             'point VALUES and the UBAP table below are secondary / chart read-offs '
@@ -362,7 +369,23 @@ class SniProfile implements StandardsProfile {
   }) {
     final curve = system == FlushSystem.flushValve ? _demandValve : _demandTank;
     if (fixtureUnits <= curve.first.$1) return curve.first.$2;
-    if (fixtureUnits >= curve.last.$1) return curve.last.$2;
+    if (fixtureUnits >= curve.last.$1) {
+      // Audit 2026-10 water-drainage-6 — above the last tabulated point the
+      // curve used to clamp FLAT, so 4000 / 6000 UBAP read the same 27.23 L/s
+      // as 3000 and a large tower's main + pump were undersized silently. The
+      // curve is monotone increasing, so continue it LINEARLY on its last
+      // segment's slope (2000 → 3000 UBAP: (27.233 − 20.25)/1000 ≈ 6.98e-3
+      // L/s per UBAP). // VERIFY — an engineering extrapolation beyond the
+      // charted range, NOT a figure read off SNI 8153 Gambar 1 (listed in
+      // [verifyChecklist]); [demandCurveExceeded] lets callers flag it.
+      final (xLo, yLo) = curve[curve.length - 2];
+      final (xHi, yHi) = curve.last;
+      final slope =
+          (yHi.cubicMetersPerSecond - yLo.cubicMetersPerSecond) / (xHi - xLo);
+      return FlowRate(
+        yHi.cubicMetersPerSecond + slope * (fixtureUnits - xHi),
+      );
+    }
     for (var i = 1; i < curve.length; i++) {
       final (xHi, yHi) = curve[i];
       if (fixtureUnits <= xHi) {
@@ -375,6 +398,19 @@ class SniProfile implements StandardsProfile {
       }
     }
     return curve.last.$2;
+  }
+
+  /// True when [fixtureUnits] lies BEYOND the last charted point of the demand
+  /// curve (3000 UBAP on both flush branches), i.e. when
+  /// [probableFlowForFixtureUnits] is linearly EXTRAPOLATING rather than
+  /// reading the curve — the sizing layer flags such edges
+  /// (`EdgeSizing.demandCurveExtrapolated`). Audit 2026-10 water-drainage-6.
+  bool demandCurveExceeded(
+    double fixtureUnits, {
+    FlushSystem system = FlushSystem.flushTank,
+  }) {
+    final curve = system == FlushSystem.flushValve ? _demandValve : _demandTank;
+    return fixtureUnits > curve.last.$1;
   }
 
   // ── Material properties (physical engineering references, not SNI-specific) ─
@@ -401,6 +437,30 @@ class SniProfile implements StandardsProfile {
 
   // ── Verify checklist (UI surfaces these as still-unverified) ──────────────
 
+  /// mech-building-6 — the share of a fixture's TOTAL UBAP loaded onto EACH of
+  /// its cold and hot supplies when it is fed by both (a lavatory, sink,
+  /// shower…). The UBAP/Hunter load tables give the fixture's combined load;
+  /// the practice the profile cites (Noerbambang-Morimura; UPC 610.3 "for
+  /// fixtures with both hot and cold supplies the separate loads are 3/4 of
+  /// the total") assigns 0.75 to each, not 1.0 to both. `// VERIFY` against
+  /// SNI 8153 — general practice, not a confirmed SNI clause. Round 48 — the
+  /// heater's cold make-up IS modelled on a tree cold network: the heater's
+  /// cold feed carries its hot side's draw, and an edge carrying both a
+  /// fixture's cold share and its hot share via the heater combines them to
+  /// the fixture's total once (a LOOPED cold ring adds the heater draw but
+  /// does not de-duplicate the overlap — conservative).
+  StandardValue<double> get dualSupplyFixtureUnitFactor => const StandardValue(
+        0.75,
+        unit: 'x UBAP',
+        citation: 'UPC 610.3 / Noerbambang-Morimura — separate hot & cold '
+            'loads = 3/4 of the fixture total (NOT an SNI 8153 figure)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A fixture fed by BOTH cold and hot water loads 0.75 x its total '
+            'UBAP onto each supply (general practice — confirm vs SNI 8153). '
+            'A water heater\'s cold feed carries its hot draw, and the cold '
+            'main upstream carries each fixture\'s total once.',
+      );
+
   @override
   List<StandardValue<Object?>> get verifyChecklist => <StandardValue<Object?>>[
         // Ordered most-critical first (§13.4): zoning target, then demand.
@@ -423,10 +483,12 @@ class SniProfile implements StandardsProfile {
         const StandardValue<Object?>(
           0.9,
           unit: 'C',
-          citation: 'Rational method — storm runoff coefficient (impervious roof)',
+          citation:
+              'Rational method — storm runoff coefficient (impervious roof)',
           verified: true,
           status: VerificationStatus.sniVerbatim,
-          note: 'Runoff coefficient C ≈ 0.90 for an impervious (flat) roof is the '
+          note:
+              'Runoff coefficient C ≈ 0.90 for an impervious (flat) roof is the '
               'standard rational-method value (Q = C·i·A; flat roof 0.90, '
               'inclined ~1.0, asphalt/concrete ~0.95). Surface-dependent — the '
               'engineer picks C per the actual catchment surface.',
@@ -436,29 +498,235 @@ class SniProfile implements StandardsProfile {
           unit: 'm/m',
           citation: 'general self-cleansing minimum (NOT an SNI 8153 figure)',
           status: VerificationStatus.notAnSniClause,
-          note: 'The advisory threshold 0.005 (1:200) is the general '
-              'self-cleansing minimum for large horizontal drains. SNI 8153:2015 '
-              'actually prescribes STEEPER laid slopes of 1 % / 2 % / 4 % '
-              '(1:100 / 1:50 / 1:25) by pipe size — so 0.005 is a conservative '
-              'floor below SNI, not an SNI clause.',
+          note: 'Min-slope advisory, judged PER PIPE SIZE: ≤ DN65 '
+              'needs 2 % (1:50), DN75–DN150 1 % (1:100), only ≥ DN200 mains '
+              '0.5 % (1:200) — IPC 704.1 / UPC 708 practice, consistent with '
+              'the SNI 8153 1 % / 2 % laid slopes. General practice — confirm '
+              'vs SNI 8153.',
         ),
         const StandardValue<Object?>(
-          32.0,
+          4.9,
           unit: 'm',
-          citation: '$_doc — drainage developed-length / trap-arm limit',
+          citation: 'IPC Table 909.1 — trap-arm developed length '
+              '(NOT an SNI 8153 figure)',
           status: VerificationStatus.notAnSniClause,
-          note: 'Developed-length limit ≈ 32 m before self-siphonage / loss of '
-              'grade; general practice — confirm vs SNI 8153.',
+          note: 'Trap-arm advisory: the developed length from each '
+              'fixture to its first vented point (vent / stack) is judged '
+              'against DN32 1.5 m, DN40 1.8 m, DN50 2.4 m, DN75 3.7 m, '
+              'DN100+ 4.9 m (IPC 909.1). General practice — confirm vs SNI 8153.',
         ),
+        const StandardValue<Object?>(
+          8.0,
+          unit: 'DFU',
+          citation: 'UPC Table 703.2 — vent capacity (NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Vent sizing: DN32 ≤ 1 DFU, DN40 ≤ 8, DN50 ≤ 24, '
+              'DN65 ≤ 48, DN75 ≤ 84, DN100 ≤ 256, DN125 ≤ 600, DN150 ≤ 1380, '
+              'and never smaller than ½ the drain it serves (IPC 906.2) nor '
+              'DN32. Confirm vs the SNI 8153 vent table.',
+        ),
+        const StandardValue<Object?>(
+          36.6,
+          unit: 'm',
+          citation: 'UPC Table 703.2 — vent maximum developed length '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'Vent stack length: a vent stack is raised until its '
+              'developed length is within DN32 13.7 m, DN40 18.3 m, DN50 '
+              '36.6 m, DN65 54.9 m, DN75 64.6 m, DN100 91.4 m, DN125 '
+              '118.9 m, DN150 155.4 m. Confirm vs the SNI 8153 vent table.',
+        ),
+        const StandardValue<Object?>(
+          2.0,
+          unit: 'WC',
+          citation: 'IPC Table 710.1(2) footnote — water closets on a 3 in drain '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A DN75 horizontal branch carries at most 2 water closets and a '
+              'DN75 stack at most 6; beyond that the drain is floored at DN100. '
+              'Indonesian practice commonly lays DN100 anyway — '
+              'confirm vs SNI 8153.',
+        ),
+        const StandardValue<Object?>(
+          50.0,
+          unit: 'mm',
+          citation: 'IPC Table 709.1 / 1002 — floor-drain / shower / urinal trap '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A floor drain, shower or urinal has a 2 in (DN50) trap; every '
+              'drain downstream of one is floored at DN50 — a drain is never '
+              'smaller than the trap it serves. Confirm vs SNI 8153.',
+        ),
+        // Round 32 (binding-2) — `kEjectorForceMainMinBoreMm` (ejector.dart).
+        const StandardValue<Object?>(
+          50.0,
+          unit: 'mm',
+          citation: 'IPC 712.4.1 / UPC 710 — sewage-ejector force main minimum '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A sewage pump / ejector passes 2 in solids, so its discharge '
+              '(force main) is floored at DN50 whatever the DFU table gives a '
+              'small pit; a duplex set\'s standby leg is sized like its duty '
+              'leg. Confirm vs SNI 8153.',
+        ),
+        // Round 48 — the relief / yoke vent floor (network_sizing.dart
+        // `_floorReliefVents`).
+        const StandardValue<Object?>(
+          'min(soil stack, vent stack)',
+          unit: 'DN',
+          citation: 'IPC 908.2 / 914.2, UPC 908 — relief / yoke vent size '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A relief (yoke) vent tying a soil stack to its parallel vent '
+              'stack is sized no smaller than the smaller of the soil stack '
+              '(at that storey) and the vent stack, whatever its DFU share. '
+              'Confirm vs SNI 8153.',
+        ),
+        dualSupplyFixtureUnitFactor,
         const StandardValue<Object?>(
           55.0,
           unit: 'C',
-          citation: 'WHO / HSE ACoP L8 / ASHRAE 188 — anti-Legionella temperatures',
+          citation:
+              'WHO / HSE ACoP L8 / ASHRAE 188 — anti-Legionella temperatures',
           verified: true,
           status: VerificationStatus.sniVerbatim,
           note: 'Store hot water ≥ 60 °C and distribute so ≥ 55 °C reaches the '
               'outlet/return; cold < 20 °C (Legionella proliferates 20–45 °C). '
               'Confirmed against WHO / HSE ACoP L8 / ASHRAE 188 guidance.',
+        ),
+        // Audit 2026-10 water-drainage-6 — the demand curve is continued
+        // linearly past its last charted point; that continuation is an
+        // engineering extrapolation, not an SNI figure.
+        const StandardValue<Object?>(
+          3000.0,
+          unit: 'UBAP',
+          citation: 'demand curve beyond 3000 UBAP — linear extrapolation of '
+              'the last charted segment (NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'SNI 8153 Gambar 1 is charted to 3000 UBAP. Above it the '
+              'probable flow is extrapolated linearly on the 2000–3000 UBAP '
+              'slope (≈ 6.98e-3 L/s per UBAP) instead of clamping flat; every '
+              'edge carrying such a load is flagged for engineer review.',
+        ),
+        // Audit 2026-10 water-drainage-7 — size floor for any drain that
+        // carries a water closet (UPC/IPC: ≥ 3 in), regardless of its DFU.
+        const StandardValue<Object?>(
+          75.0,
+          unit: 'mm',
+          citation: 'UPC/IPC — minimum drain size carrying a water closet '
+              '(NOT an SNI 8153 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A drainage branch or stack that carries a water closet is '
+              'never sized below DN75 (UPC/IPC ≥ 3 in), whatever its DFU count. '
+              'Indonesian practice commonly lays DN100 for a closet — confirm '
+              'against SNI 8153.',
+        ),
+        // Fire-network sizing floors + fire-pump model (audit 2026-10, C1).
+        // Values mirror kMinSprinklerPipeDiameterMm / kMinHydrantBranchDiameterMm
+        // / kHoseOutletHeightM / kOverloadEfficiencyFactor (pinned equal by
+        // test/audit_2026_10_fire_test.dart).
+        // Round 48 — `kFireComponentMaxPressureKpa` (fire_pump_rating.dart).
+        const StandardValue<Object?>(
+          1210.0,
+          unit: 'kPa',
+          citation: 'NFPA 13 — standard-pressure component rating 175 psi '
+              '(NOT an SNI 03-3989 / 03-1745 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A fire pump whose churn (shut-off, 140 % of the rated head) '
+              'pressure exceeds 1210 kPa (175 psi) over-pressures standard '
+              'listed sprinkler / hydrant components: upsize the index pipe '
+              'or zone the system. Judge-only. Confirm vs SNI 03-3989 / '
+              '03-1745.',
+        ),
+        // Round 63 — `kStandpipeMaxSystemPressureKpa` (fire_pump_rating.dart).
+        const StandardValue<Object?>(
+          2413.0,
+          unit: 'kPa',
+          citation: 'NFPA 14 7.2.1.1 — maximum pressure at any point of a '
+              'standpipe system 350 psi (SNI 03-1745 follows NFPA 14; not '
+              'confirmed verbatim)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A hydrant standpipe whose pump churn (shut-off, 140 % of the '
+              'rated head) exceeds 2413 kPa (350 psi) at any point must be '
+              'split into vertical pressure zones. Judge-only. Confirm vs '
+              'SNI 03-1745.',
+        ),
+        const StandardValue<Object?>(
+          25.0,
+          unit: 'mm',
+          citation: 'NFPA 13 — minimum steel sprinkler pipe size (1 in.)',
+          status: VerificationStatus.notAnSniClause,
+          note:
+              'Every drawn sprinkler pipe is sized no smaller than 25 mm (1 in). '
+              'General practice (NFPA 13), not an SNI 03-3989-2000 clause.',
+        ),
+        const StandardValue<Object?>(
+          65.0,
+          unit: 'mm',
+          citation: 'Hydrant run minimum = Class I 65 mm landing-valve size',
+          status: VerificationStatus.notAnSniClause,
+          note:
+              'A horizontal hydrant run feeding a 65 mm (2-1/2 in) Class I hose '
+              'connection is sized no smaller than 65 mm. Follows from the '
+              'outlet size (general practice), not an SNI 03-1745-2000 clause. '
+              'The vertical standpipe takes the SNI 100 mm minimum.',
+        ),
+        // Round 49 — mirrors kClassIIStandpipeFlowLpm /
+        // kMinHoseStationBranchDiameterMm / kMinClassIIRiserDiameterMm
+        // (fire_standpipe.dart).
+        const StandardValue<Object?>(
+          6.31,
+          unit: 'L/s',
+          citation: 'NFPA 14 Class II hose-station flow 100 gpm; a hose-reel-'
+              'only system is rated as Class II (NOT an SNI 03-1745 figure)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A fire system whose only drawn outlets are hose reels is an '
+              'occupant hose-station (Class II) system: 100 gpm (6.31 L/s) '
+              'with no addition per riser, 450 kPa at the topmost outlet. Any '
+              'drawn hydrant box keeps the Class I 500 gpm / 690 kPa basis. '
+              'Confirm the hose-reel basis vs SNI 03-1745.',
+        ),
+        const StandardValue<Object?>(
+          40.0,
+          unit: 'mm',
+          citation: 'Class II hose-station run 40 mm / riser 50 mm (NFPA 14)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'A hose-reel-only (Class II) system floors its runs at the 40 mm '
+              'hose-station size and its risers at 50 mm, not the Class I '
+              '65 mm / 100 mm. General practice, not an SNI 03-1745 clause.',
+        ),
+        // Round 37 — mirrors kFdcMinBoreMm (fire_standpipe.dart).
+        const StandardValue<Object?>(
+          100.0,
+          unit: 'mm',
+          citation: 'Fire-department connection (FDC) inlet pipe minimum',
+          status: VerificationStatus.notAnSniClause,
+          note:
+              'The FDC inlet pipe is sized on the system design flow the '
+              'brigade pumps in and never below 100 mm (4 in). NFPA 14 / '
+              'general practice, not an SNI 03-1745-2000 clause.',
+        ),
+        const StandardValue<Object?>(
+          1.2,
+          unit: 'm',
+          citation: 'Hydrant-box landing valve height above finished floor',
+          status: VerificationStatus.notAnSniClause,
+          note:
+              'Standpipe static lift = top-floor elevation - pump-datum floor '
+              '+ 1.2 m outlet height (typical 0.9-1.5 m). General practice, not '
+              'an SNI clause.',
+        ),
+        const StandardValue<Object?>(
+          0.85,
+          unit: 'x eta',
+          citation: 'Fire-pump efficiency at 150 % flow relative to rated',
+          status: VerificationStatus.notAnSniClause,
+          note:
+              'A centrifugal pump at 150 % flow runs past its best-efficiency '
+              'point; the overload-point shaft power uses eta x 0.85, so the '
+              'motor is checked against the overload point (NFPA 20: no motor '
+              'overload anywhere on the curve). Representative, not a certified '
+              'pump curve.',
         ),
       ].where((v) => v.isUnverified).toList();
 }

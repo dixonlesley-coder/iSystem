@@ -18,6 +18,8 @@ library;
 import 'dart:math' as math;
 
 import '../units.dart';
+import 'control/starter.dart' show StarterType;
+import 'control/starting.dart' show startingProfiles;
 
 // ===========================================================================
 // Reference data (local `// VERIFY` constants — see the library doc).
@@ -51,6 +53,26 @@ ApparentPower selectGeneratorKva(ApparentPower required) {
   return ApparentPower.kilovoltAmperes(kGeneratorKva.last);
 }
 
+/// Genset rating + parallel-set count covering [required]: the smallest
+/// ladder rung when one set suffices, else `n = ceil(required / top)` sets of
+/// the smallest rung covering `required / n` (Round 44) — never a single set
+/// BELOW the requirement (audit r8: the
+/// ladder used to saturate silently at 2500 kVA).
+({ApparentPower unitKva, int units}) selectGeneratorUnits(
+    ApparentPower required) {
+  final reqKva = required.inKilovoltAmperes;
+  final top = kGeneratorKva.last;
+  if (reqKva <= top) return (unitKva: selectGeneratorKva(required), units: 1);
+  // Round 44 — n sets on the SMALLEST rung that n sets cover (2970 kVA ⇒
+  // 2 × 1500, never 2 × 2500): n = ceil(required / top) is the fewest sets,
+  // and the per-set share required / n ≤ top always has a covering rung.
+  final n = (reqKva / top).ceil();
+  return (
+    unitKva: selectGeneratorKva(ApparentPower.kilovoltAmperes(reqKva / n)),
+    units: n
+  );
+}
+
 /* ------------------------------ Genset dip -------------------------------- */
 
 /// Typical per-unit direct-axis sub-transient reactance Xd'' of a genset
@@ -68,18 +90,25 @@ const double kMotorKvaFromKwFactor = 0.8;
 
 /// Starting-kVA as a multiple of a motor's RUNNING (full-load) kVA, by starter
 /// method (how each starter limits inrush). // VERIFY — IEC 60947-4-1 basis.
-const Map<String, double> kStartKvaMultiple = <String, double>{
-  'DOL': 6,
-  'STAR_DELTA': 2,
-  'SOFT_STARTER': 3,
-  'VFD': 1,
-  'REVERSING': 6,
-  'PUMP': 6,
-  'ATS': 6,
+///
+/// Round 42 (electrical-sim-7-genset-dip-multiples-disagree-with-starter) —
+/// ONE starting table: every multiple is read from `control/starting.dart`
+/// [startingProfiles] (the figure the control assembly prints), never a
+/// parallel 6 / 2 / 3 / 1 set. An ATS starts no motor itself, so it keeps
+/// the worst-case DOL multiple.
+final Map<String, double> kStartKvaMultiple = <String, double>{
+  'DOL': startingProfiles[StarterType.dol]!.startMultiple,
+  'STAR_DELTA': startingProfiles[StarterType.starDelta]!.startMultiple,
+  'SOFT_STARTER': startingProfiles[StarterType.softStarter]!.startMultiple,
+  'VFD': startingProfiles[StarterType.vfd]!.startMultiple,
+  'REVERSING': startingProfiles[StarterType.reversing]!.startMultiple,
+  'PUMP': startingProfiles[StarterType.pump]!.startMultiple,
+  'ATS': startingProfiles[StarterType.dol]!.startMultiple,
 };
 
 /// Fallback multiple for unrecognised starter strings (worst case = DOL).
-const double kDefaultStartKvaMultiple = 6;
+final double kDefaultStartKvaMultiple =
+    startingProfiles[StarterType.dol]!.startMultiple;
 
 /// Starting-kVA multiple of running kVA for a starter method (case-insensitive;
 /// unknown → DOL, the worst case).
@@ -143,6 +172,23 @@ Power selectInverterKw(Power required) {
   return Power.kiloWatts(kInverterKw.last);
 }
 
+/// Inverter unit rating + count covering [required]: the smallest ladder rung
+/// when one unit suffices, else `n = ceil(required / 250 kW)` paralleled units
+/// of the largest rung — never one unit BELOW the requirement (audit r8: a
+/// 1.2 MW critical load used to get a single '250 kW' inverter).
+({Power unitKw, int units}) selectInverterUnits(Power required) {
+  final reqKw = required.inKiloWatts;
+  final top = kInverterKw.last;
+  if (reqKw <= top) return (unitKw: selectInverterKw(required), units: 1);
+  // Round 44 — the smallest rung n units cover (see selectGeneratorUnits).
+  final n = (reqKw / top).ceil();
+  return (unitKw: selectInverterKw(Power.kiloWatts(reqKw / n)), units: n);
+}
+
+/// "250 kW" for one unit, "5 x 250 kW" for paralleled units (ASCII).
+String inverterRatingLabel(Power unitKw, int units) =>
+    '${units > 1 ? '$units x ' : ''}${_fmt(unitKw.inKiloWatts)} kW';
+
 /* --------------------------------- Battery -------------------------------- */
 
 /// Battery chemistry, with its usable depth-of-discharge.
@@ -193,12 +239,33 @@ extension GeneratorModeInfo on GeneratorMode {
 
 /// Standby/prime generator request.
 class GeneratorSource {
-  /// Optional user-forced rating; when set, the ladder selection is skipped.
+  /// Optional user-forced PER-SET rating; when set, the ladder selection is
+  /// skipped.
   final ApparentPower? kva;
 
+  /// Round 44 — the number of paralleled sets of the forced [kva] (default
+  /// 1), so an engineer's `2 x 2000 kVA` plant is expressible. Ignored when
+  /// [kva] is null (the ladder picks the count).
+  final int units;
+
+  /// The forced plant's total capacity (`kva × units`), or null.
+  ApparentPower? get totalKva =>
+      kva == null ? null : ApparentPower(kva!.voltAmperes * units);
+
   /// Fraction of the building demand the genset must back up (0–1) when no
-  /// explicit essential demand is supplied.
-  final double backupFraction;
+  /// explicit essential demand is supplied — 1.0 when none was typed (the
+  /// legacy reading). Sizing reads `effectiveGeneratorBackupFraction`
+  /// (genset_backup.dart), which resolves an UNTYPED fraction against the
+  /// essential designation.
+  double get backupFraction => backupFractionTyped ?? 1.0;
+
+  /// Round 65 (elec-convergence-17-genset-backup-fraction-unreachable) — the
+  /// fraction the engineer TYPED (0 < f <= 1), or null when none was: an
+  /// untyped set with essential boards marked backs the essential sub-tree
+  /// only, never the whole building (the app's only reachable fraction used
+  /// to be the 1.0 default, so marking boards essential could never shrink
+  /// the set).
+  final double? backupFractionTyped;
 
   /// standby = intermittent (mains failure); prime = continuous (needs headroom).
   final GeneratorMode mode;
@@ -208,10 +275,11 @@ class GeneratorSource {
 
   const GeneratorSource({
     this.kva,
-    this.backupFraction = 1.0,
+    this.units = 1,
+    double? backupFraction,
     this.mode = GeneratorMode.standby,
     this.transfer = GeneratorTransfer.ats,
-  });
+  }) : backupFractionTyped = backupFraction;
 }
 
 /// Grid-tied / hybrid solar PV request.
@@ -280,7 +348,26 @@ class GensetMotor {
   /// Starter method (loose string; see [startKvaMultiple]). Null = DOL.
   final String? starterType;
 
-  const GensetMotor({this.name, required this.shaftPower, this.starterType});
+  /// Round 42 — the motor's STARTING apparent power on the control
+  /// assembly's own starting basis (`control/starting.dart`: starting
+  /// current × √3·U). When set the dip screen uses it verbatim — one
+  /// starting current per machine; null ⇒ the running-kVA × multiple
+  /// estimate (a hand-built list).
+  final ApparentPower? startKva;
+
+  /// Round 71 (regression-1) — the way this motor is fed from (null for a
+  /// hand-built list) and whether it is a LIFE-SAFETY way (it must start on
+  /// mains failure). The dip screen grades on these, never on [name].
+  final String? circuitId;
+  final bool lifeSafety;
+
+  const GensetMotor(
+      {this.name,
+      required this.shaftPower,
+      this.starterType,
+      this.startKva,
+      this.circuitId,
+      this.lifeSafety = false});
 }
 
 /// Outcome of a genset motor-starting voltage-dip screen.
@@ -290,6 +377,11 @@ class GensetStartResult {
 
   /// Name of the worst (limiting) motor, if any.
   final String? limitingMotorName;
+
+  /// Round 71 r2 — the limiting motor itself (null with no motors). Callers
+  /// tell it apart from another motor by IDENTITY, never by [limitingMotorName]
+  /// (two ways can carry the same name).
+  final GensetMotor? limitingMotor;
 
   /// Starting apparent power of the limiting motor.
   final ApparentPower startingKva;
@@ -303,16 +395,22 @@ class GensetStartResult {
   /// Smallest genset rating that holds the limiting motor's dip within limit.
   final ApparentPower recommendedMinGensetKva;
 
+  /// Round 71 (regression-1) — every LIFE-SAFETY motor whose OWN dip
+  /// exceeds [kMaxStartVoltageDipPct] (it need not be the limiting motor).
+  final List<GensetMotor> failingLifeSafetyMotors;
+
   final String note;
   final String clause;
 
   const GensetStartResult({
     required this.gensetKva,
     this.limitingMotorName,
+    this.limitingMotor,
     required this.startingKva,
     required this.estimatedDipPct,
     required this.acceptable,
     required this.recommendedMinGensetKva,
+    this.failingLifeSafetyMotors = const [],
     required this.note,
     required this.clause,
   });
@@ -338,6 +436,13 @@ class GeneratorResult {
   /// Runtime (hours) the recommended day-tank provides.
   final double runtimeHours;
 
+  /// Parallel sets of [ratingKva] (> 1 only when the requirement exceeds the
+  /// largest standard genset — then [ratingKva] is the PER-SET rating).
+  final int units;
+
+  /// True when the requirement exceeded the largest ladder rung.
+  bool get ladderExceeded => units > 1;
+
   final String note;
   final List<String> verifyItems;
 
@@ -349,6 +454,7 @@ class GeneratorResult {
     required this.fuelLph,
     required this.dayTankL,
     required this.runtimeHours,
+    this.units = 1,
     required this.note,
     required this.verifyItems,
   });
@@ -362,14 +468,31 @@ class SolarResult {
   /// Installed DC array size.
   final Power arrayKwp;
 
-  /// Selected inverter AC rating.
+  /// Selected inverter AC rating (PER UNIT when [inverterUnits] > 1).
   final Power inverterKw;
 
-  /// Panels in series per string.
+  /// Paralleled inverter units (> 1 only beyond the largest standard rung).
+  final int inverterUnits;
+
+  /// Panels in series in the LONGEST string. With an uneven split the strings
+  /// are NOT all this long — `strings × stringSize` can exceed [panelCount]
+  /// (19 modules → 10 + 9, not 2 × 10). Use [stringLengths] for the exact
+  /// layout; never multiply these two to get a module count.
   final int stringSize;
 
   /// Number of parallel strings.
   final int strings;
+
+  /// The exact string layout: one entry per string, the modules in series in
+  /// that string, longest first (lengths differ by at most one). Its sum is
+  /// always [panelCount] and its length is [strings].
+  final List<int> stringLengths;
+
+  /// Strings of the longest length ([stringSize]).
+  int get stringsLong => stringLengths.where((n) => n == stringSize).length;
+
+  /// Strings one module shorter than [stringSize] (0 for an even split).
+  int get stringsShort => strings - stringsLong;
 
   /// Estimated daily energy yield.
   final Energy dailyKwh;
@@ -382,8 +505,10 @@ class SolarResult {
     required this.panelCount,
     required this.arrayKwp,
     required this.inverterKw,
+    this.inverterUnits = 1,
     required this.stringSize,
     required this.strings,
+    required this.stringLengths,
     required this.dailyKwh,
     required this.note,
     required this.verifyItems,
@@ -406,8 +531,11 @@ class BatteryResult {
   final Energy moduleKwh;
   final int moduleCount;
 
-  /// Inverter/charger AC rating.
+  /// Inverter/charger AC rating (PER UNIT when [inverterUnits] > 1).
   final Power inverterKw;
+
+  /// Paralleled inverter/charger units (> 1 only beyond the largest rung).
+  final int inverterUnits;
 
   /// The critical load the bank was sized for.
   final Power criticalLoad;
@@ -423,6 +551,7 @@ class BatteryResult {
     required this.moduleKwh,
     required this.moduleCount,
     required this.inverterKw,
+    this.inverterUnits = 1,
     required this.criticalLoad,
     required this.note,
     required this.verifyItems,
@@ -472,8 +601,11 @@ GensetStartResult assessGensetStart(
   const clause = 'ISO 8528-5 / IEC 60034-4';
   final genKva = _round(gensetKva.inKilovoltAmperes);
 
-  final candidates =
-      motors.where((m) => m.shaftPower.inKiloWatts > 0).toList();
+  final candidates = motors.where((m) => m.shaftPower.inKiloWatts > 0).toList();
+  double startKvaOf(GensetMotor m) =>
+      m.startKva?.inKilovoltAmperes ??
+      motorRunningKva(m.shaftPower).inKilovoltAmperes *
+          startKvaMultiple(m.starterType);
 
   if (candidates.isEmpty) {
     return GensetStartResult(
@@ -489,12 +621,9 @@ GensetStartResult assessGensetStart(
 
   // Limiting motor = largest starting kVA (worst per-motor dip).
   GensetMotor limiting = candidates.first;
-  double limitingStartKva =
-      motorRunningKva(limiting.shaftPower).inKilovoltAmperes *
-          startKvaMultiple(limiting.starterType);
+  double limitingStartKva = startKvaOf(limiting);
   for (final m in candidates.skip(1)) {
-    final sk = motorRunningKva(m.shaftPower).inKilovoltAmperes *
-        startKvaMultiple(m.starterType);
+    final sk = startKvaOf(m);
     if (sk > limitingStartKva) {
       limiting = m;
       limitingStartKva = sk;
@@ -503,6 +632,14 @@ GensetStartResult assessGensetStart(
 
   final estimatedDipPct = _round(_estimateDipPct(limitingStartKva, genKva));
   final acceptable = estimatedDipPct <= kMaxStartVoltageDipPct;
+  // Round 71 — each life-safety motor judged on its OWN dip (same rounding).
+  final failingLifeSafety = [
+    for (final m in candidates)
+      if (m.lifeSafety &&
+          _round(_estimateDipPct(startKvaOf(m), genKva)) >
+              kMaxStartVoltageDipPct)
+        m,
+  ];
   final recommendedMin =
       _round(_minGensetKvaForDip(limitingStartKva, kMaxStartVoltageDipPct));
 
@@ -521,13 +658,48 @@ GensetStartResult assessGensetStart(
   return GensetStartResult(
     gensetKva: ApparentPower.kilovoltAmperes(genKva),
     limitingMotorName: limiting.name,
+    limitingMotor: limiting,
     startingKva: ApparentPower.kilovoltAmperes(_round(limitingStartKva)),
     estimatedDipPct: estimatedDipPct,
     acceptable: acceptable,
     recommendedMinGensetKva: ApparentPower.kilovoltAmperes(recommendedMin),
+    failingLifeSafetyMotors: failingLifeSafety,
     note: note,
     clause: clause,
   );
+}
+
+/// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
+/// — the smallest genset kVA that starts the limiting motor of [motors]
+/// within [kMaxStartVoltageDipPct] (the [assessGensetStart] recommendation,
+/// `z·(100 − limit)/limit`, z = start kVA × Xd''). 0 with no motor.
+ApparentPower gensetStartFloorKva(List<GensetMotor> motors) =>
+    assessGensetStart(const ApparentPower(1), motors: motors)
+        .recommendedMinGensetKva;
+
+/// Round 48 — the PRIME-duty headroom: a prime (continuous) set is sized on
+/// 1.25 × its governing backup kVA (`// VERIFY notAnSniClause`, ISO 8528-1
+/// prime vs standby practice). Standby covers the load directly (× 1.0).
+const double kGeneratorPrimeFactor = 1.25;
+
+/// The duty multiplier [requiredGeneratorKva] applies for [mode].
+double generatorDutyFactor(GeneratorMode mode) =>
+    mode == GeneratorMode.prime ? kGeneratorPrimeFactor : 1.0;
+
+/// Round 48 (regression-forced-prime-genset-judged-without-prime-uplift) —
+/// the ONE unsnapped kVA a generator must be rated for:
+/// `max(S_backup, P_backup / kGeneratorPf) × (prime ? 1.25 : 1.0)`.
+/// [sizeGenerator] selects its rung on it and [gensetBackupWarnings] judges a
+/// forced nameplate against it, so the engine never passes a forced set it
+/// would itself refuse to select. Pure.
+double requiredGeneratorKva(ApparentPower backupDemand,
+    {Power? backupPower, GeneratorMode mode = GeneratorMode.standby}) {
+  final backupKva = backupDemand.inKilovoltAmperes;
+  final backupKw = backupPower?.inKiloWatts;
+  final governingKva = backupKw != null && backupKw / kGeneratorPf > backupKva
+      ? backupKw / kGeneratorPf
+      : backupKva;
+  return governingKva * generatorDutyFactor(mode);
 }
 
 /// Size a standby/prime generator for a backup demand. Prime (continuous) duty
@@ -536,16 +708,38 @@ GensetStartResult assessGensetStart(
 ///
 /// [backupDemand] is the apparent power the genset must back (the essential bus,
 /// or `backupFraction` × the building demand — resolved by the caller).
+///
+/// Round 16 (supply-sources-genset-kw-limit-ignored) — [backupPower] is the
+/// REAL power of that backup load. A set rated S kVA delivers only
+/// [kGeneratorPf] × S kW, so the rating must cover BOTH:
+/// `required = max(S_backup, P_backup / 0.8)` (× 1.25 for prime). A load at
+/// cos φ 0.95 (90 kW, 94.7 kVA) needs 112.5 kVA (the 125 kVA rung), not the
+/// 100 kVA / 80 kW set the kVA alone selected. The fuel / day-tank figures
+/// burn at the real kW. Null ⇒ the load is taken at 0.8 (byte-identical).
 GeneratorResult sizeGenerator(
   ApparentPower backupDemand, {
   GeneratorMode mode = GeneratorMode.standby,
   GeneratorTransfer transfer = GeneratorTransfer.ats,
   ApparentPower? forcedKva,
+  int forcedUnits = 1,
+  Power? backupPower,
+  ApparentPower? minKvaForStart,
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
-  final required = mode == GeneratorMode.prime ? backupKva * 1.25 : backupKva;
-  final ratingKva =
-      forcedKva ?? selectGeneratorKva(ApparentPower.kilovoltAmperes(required));
+  final backupKw = backupPower?.inKiloWatts;
+  // Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
+  // — an UNFORCED set is also large enough to start its largest motor
+  // within the dip limit ([gensetStartFloorKva]); a forced nameplate stays
+  // verbatim (judged, never resized). Null ⇒ byte-identical.
+  final loadRequired =
+      requiredGeneratorKva(backupDemand, backupPower: backupPower, mode: mode);
+  final startRequired = minKvaForStart?.inKilovoltAmperes ?? 0;
+  final required = startRequired > loadRequired ? startRequired : loadRequired;
+  final sel = forcedKva != null
+      ? (unitKva: forcedKva, units: forcedUnits < 1 ? 1 : forcedUnits)
+      : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));
+  final ratingKva = sel.unitKva;
+  final units = sel.units;
 
   final transferText = transfer.isManual
       ? 'Manual changeover (COS) — an operator must transfer; expect an outage '
@@ -554,7 +748,7 @@ GeneratorResult sizeGenerator(
 
   // Fuel & runtime: diesel burns ~0.25 l/kWh; size a day-tank for the standard
   // runtime so the standby deliverable carries autonomy like the battery does.
-  final loadKw = backupKva * kGeneratorPf;
+  final loadKw = backupKw ?? backupKva * kGeneratorPf;
   final fuelLph = _round(loadKw * kGensetSfcLPerKwh, 1);
   const runtimeHours = kGensetDayTankHours;
   // Round the day-tank up to the next 10 L, with a 10 L floor.
@@ -573,8 +767,12 @@ GeneratorResult sizeGenerator(
     fuelLph: fuelLph,
     dayTankL: dayTankL,
     runtimeHours: runtimeHours,
-    note: '${mode.label} genset backing ${_round(backupKva, 1)} kVA → '
-        '${_fmt(ratingKva.inKilovoltAmperes)} kVA. $transferText$fuelText',
+    units: units,
+    note: '${mode.label} genset backing ${_round(backupKva, 1)} kVA'
+        '${backupKw != null ? ' / ${_round(backupKw, 1)} kW' : ''} → '
+        '${units > 1 ? '$units x ' : ''}${_fmt(ratingKva.inKilovoltAmperes)} kVA'
+        '${units > 1 ? ' (exceeds the largest standard genset — paralleled '
+            'sets with synchronising panel)' : ''}. $transferText$fuelText',
     verifyItems: const <String>[
       'Genset kVA ladder + power factor (0.8) — confirm against the genset datasheet.',
       'Diesel SFC (0.25 l/kWh) + day-tank runtime target (8 h) — confirm against the engine spec.',
@@ -594,17 +792,32 @@ SolarResult sizeSolar({
 }) {
   final panelCount = math.max(1, panels);
   final arrayKwp = _round(panelCount * panelWp / 1000, 2);
-  final inverterKw = selectInverterKw(Power.kiloWatts(arrayKwp / dcAcRatio));
+  // Round 19 — a non-positive / non-finite ratio would divide to Infinity and
+  // throw in the inverter selection; the default ratio stands in.
+  final ratio = (dcAcRatio.isFinite && dcAcRatio > 0) ? dcAcRatio : kDcAcRatio;
+  final inv = selectInverterUnits(Power.kiloWatts(arrayKwp / ratio));
+  final inverterKw = inv.unitKw;
 
   // String length: MPPT window + cold-Voc max-system-voltage limit.
   final maxByMppt = (kMpptVmax / kPvVmp).floor();
   final maxByVoltage = (kMaxSystemVoltage / (kPvVoc * kVocColdFactor)).floor();
   final minByMppt = math.max(1, (kMpptVmin / kPvVmp).ceil());
-  final stringSize = math.max(
-    minByMppt,
-    math.min(math.min(maxByMppt, maxByVoltage), panelCount),
-  );
-  final strings = (panelCount / stringSize).ceil();
+  // Fewest strings whose length stays inside the voltage limits, then split the
+  // modules as EVENLY as possible across them (lengths differ by at most one).
+  // The array is never padded up to the MPPT minimum — modules that do not
+  // exist cannot be strung; a too-short string is flagged in the note instead.
+  final maxLen = math.max(1, math.min(maxByMppt, maxByVoltage));
+  final strings = (panelCount / maxLen).ceil();
+  final stringSize = (panelCount / strings).ceil(); // the longest string
+  final shortest = panelCount ~/ strings; // the shortest string
+  final unevenSplit = shortest != stringSize;
+  // panelCount = shortest·strings + remainder ⇒ `remainder` strings carry one
+  // extra module (the longest, `stringSize`), the rest are `shortest` long.
+  final remainder = panelCount - shortest * strings;
+  final stringLengths = List<int>.unmodifiable(<int>[
+    for (var i = 0; i < strings; i++) i < remainder ? shortest + 1 : shortest,
+  ]);
+  final belowMppt = shortest < minByMppt;
 
   final dailyKwh = _round(arrayKwp * sunHours * kPvPerformanceRatio, 1);
 
@@ -613,12 +826,19 @@ SolarResult sizeSolar({
     panelCount: panelCount,
     arrayKwp: Power.kiloWatts(arrayKwp),
     inverterKw: inverterKw,
+    inverterUnits: inv.units,
     stringSize: stringSize,
     strings: strings,
+    stringLengths: stringLengths,
     dailyKwh: Energy.kilowattHours(dailyKwh),
     note: '$panelCount x $panelWp Wp ($arrayKwp kWp) as $strings string(s) of '
-        '$stringSize; ${_fmt(inverterKw.inKiloWatts)} kW inverter (DC/AC '
-        '$dcAcRatio); ~$dailyKwh kWh/day at $sunHours peak-sun-hours.',
+        '${unevenSplit ? '$shortest-$stringSize' : '$stringSize'}; '
+        '${inverterRatingLabel(inverterKw, inv.units)} inverter (DC/AC '
+        '$dcAcRatio); ~$dailyKwh kWh/day at $sunHours peak-sun-hours.'
+        '${belowMppt ? ' Array too small for the MPPT window: a $shortest-module '
+            'string gives ~${_fmt(_round(shortest * kPvVmp, 0))} V Vmp, below the '
+            '${_fmt(kMpptVmin)} V MPPT minimum - add modules or choose a '
+            'lower-voltage inverter.' : ''}',
     verifyItems: const <String>[
       'Panel Vmp/Voc + cold-Voc factor (1.15) + MPPT window — confirm against the module/inverter datasheets.',
       'Peak-sun-hours (4.8) + performance ratio (0.8) — confirm against site irradiance data.',
@@ -630,11 +850,20 @@ SolarResult sizeSolar({
 /// Energy = load × hours / (DoD × discharge-efficiency) → module count
 /// (round up). Backup autonomy only incurs the discharge path, so the round-trip
 /// charging loss is deliberately not applied.
+///
+/// Round 68 (elec-convergence-20-battery-hybrid-inverter-sized-on-kw-not-kva)
+/// — the ENERGY is the real power (kW × h), but the inverter's AC output is
+/// limited by its rated apparent power / current: it is selected on
+/// max([criticalLoad] W, [apparentLoad] VA) — the genset's max(S, P/0.8)
+/// basis — reading each ladder rung as its unity-PF kVA rating
+/// (`// VERIFY notAnSniClause`: a hybrid inverter's kVA = kW nameplate at
+/// cos phi 1). Null [apparentLoad] ⇒ the kW basis (byte-identical).
 BatteryResult sizeBattery(
   Power criticalLoad, {
   required double autonomyHours,
   BatteryChemistry chemistry = BatteryChemistry.lifepo4,
   Energy moduleKwh = kBatteryModuleLfp,
+  ApparentPower? apparentLoad,
 }) {
   final backupKw = criticalLoad.inKiloWatts;
   final dod = chemistry.depthOfDischarge;
@@ -644,7 +873,10 @@ BatteryResult sizeBattery(
   final moduleCount = math.max(1, _ceil(requiredKwh / modKwh));
   final installedKwh = _round(moduleCount * modKwh, 2);
   final usableKwh = _round(installedKwh * dod, 2);
-  final inverterKw = selectInverterKw(criticalLoad);
+  final va = apparentLoad?.voltAmperes ?? 0.0;
+  final vaGoverns = va > criticalLoad.watts + 1e-9;
+  final inv = selectInverterUnits(vaGoverns ? Power(va) : criticalLoad);
+  final inverterKw = inv.unitKw;
 
   return BatteryResult(
     chemistry: chemistry,
@@ -654,15 +886,20 @@ BatteryResult sizeBattery(
     moduleKwh: moduleKwh,
     moduleCount: moduleCount,
     inverterKw: inverterKw,
+    inverterUnits: inv.units,
     criticalLoad: Power.kiloWatts(_round(backupKw, 1)),
     note: '${_round(backupKw, 1)} kW for ${_fmt(autonomyHours)} h '
         '(${chemistry.label}, DoD ${(dod * 100).round()}%, discharge eff '
         '${(kBatteryDischargeEfficiency * 100).round()}%) → '
         '${_round(requiredKwh, 1)} kWh ⇒ $moduleCount x ${_fmt(modKwh)} kWh = '
-        '$installedKwh kWh; ${_fmt(inverterKw.inKiloWatts)} kW inverter/charger.',
+        '$installedKwh kWh; ${inverterRatingLabel(inverterKw, inv.units)} '
+        'inverter/charger${vaGoverns ? ' (on the ${_round(va / 1000, 2)} kVA '
+            'apparent load)' : ''}${inv.units > 1 ? ' (paralleled — exceeds '
+            'the largest standard unit)' : ''}.',
     verifyItems: const <String>[
       'Battery DoD (LiFePO4 0.9 / lead-acid 0.5) + module kWh — confirm against the cell datasheet.',
       'Discharge-path efficiency (0.95) — confirm against the battery-inverter datasheet.',
+      'Inverter kVA = kW nameplate at unity PF, selected on max(kW, kVA) of the load — confirm the output kVA / current rating against the inverter datasheet.',
     ],
   );
 }

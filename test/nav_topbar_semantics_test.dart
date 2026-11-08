@@ -8,9 +8,11 @@
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/app.dart';
+import 'package:mechx/ui/sheets/sheet_rail.dart';
 import 'package:mechx/ui/shell/nav_rail.dart';
 
 import 'test_util.dart';
@@ -82,13 +84,38 @@ void main() {
     // The primary file actions (labelled MechXButtons).
     expect(find.bySemanticsLabel('Open'), findsWidgets);
     expect(find.bySemanticsLabel('Save'), findsWidgets);
-    expect(find.bySemanticsLabel('Import plan'), findsWidgets);
-    // The command-palette hint + the demoted, icon-only theme toggle carry
-    // their own Semantics labels rather than a visible caption.
+    expect(find.bySemanticsLabel('Export'), findsWidgets);
+    // The command-palette hint carries its own Semantics label.
     expect(find.bySemanticsLabel('Open command palette'), findsWidgets);
+    // Work item 9: the zoom pill, the Import-plan button and the theme toggle
+    // are gone from the top bar (zoom -> ZoomControls, Import -> the sheet
+    // rail's '+' tile, theme -> Preferences / the palette).
+    expect(find.byKey(const ValueKey('zoom-pill')), findsNothing);
+    expect(find.bySemanticsLabel(RegExp('Switch to (light|dark)')),
+        findsNothing);
+    handle.dispose();
+  });
+
+  testWidgets("the sheet rail's trailing '+' tile is announced as Import plan",
+      (tester) async {
+    final handle = tester.ensureSemantics();
+    setDesktopSurface(tester);
+    await tester.pumpWidget(const ProviderScope(child: MechXApp()));
+    await tester.pump();
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(MechXApp)),
+      listen: false,
+    );
+    seedDemoSheets(container);
+    await tester.pump();
+
+    final tile = find.byKey(const ValueKey('sheet-rail-import'));
+    expect(tile, findsOneWidget);
     expect(
-      find.bySemanticsLabel(RegExp('Switch to (light|dark)')),
-      findsWidgets,
+      find.descendant(
+          of: find.byType(SheetRail),
+          matching: find.bySemanticsLabel('Import plan')),
+      findsOneWidget,
     );
     handle.dispose();
   });

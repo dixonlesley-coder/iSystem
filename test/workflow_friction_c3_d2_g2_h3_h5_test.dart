@@ -342,6 +342,10 @@ void main() {
         fromId: 'rd',
         toId: 'out',
         service: ServiceType.rainwater,
+        // A DOWNPIPE is a riser edge: since audit 2026-10 water-drainage-2
+        // only risers take the vertical downpipe table (a horizontal
+        // rainwater run is sized as a Manning gravity drain).
+        kind: EdgeKind.riser,
       );
       c.read(networkControllerProvider.notifier).loadNetwork(
           const Network(nodes: [drain, outlet], edges: [pipe]));
@@ -585,11 +589,15 @@ void main() {
       ));
       await tester.pump();
 
+      // The drawing painter is the FIRST CustomPaint (the second is the thin
+      // hover-halo layer above it, drafting-feel perf).
       CustomPainter painterNow() => (tester.widget<CustomPaint>(
-            find.descendant(
-              of: find.byType(NetworkLayer),
-              matching: find.byType(CustomPaint),
-            ),
+            find
+                .descendant(
+                  of: find.byType(NetworkLayer),
+                  matching: find.byType(CustomPaint),
+                )
+                .first,
           ).painter)!;
 
       final before = painterNow();

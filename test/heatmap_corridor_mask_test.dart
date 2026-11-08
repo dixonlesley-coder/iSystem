@@ -20,6 +20,14 @@ void main() {
     n.placeRunPoint('s1', 0, const Offset(100, 100));
     n.placeRunPoint('s1', 0, const Offset(300, 100));
     n.setTool(DrawTool.select);
+    // Round 25 follow-up — the downfeed field needs a DRAWN gravity source
+    // (no roof tank ⇒ no field): the run's start is the roof tank.
+    final start = c
+        .read(networkControllerProvider)
+        .network
+        .nodes
+        .firstWhere((x) => x.x == 100 && x.y == 100);
+    n.setNodeComponent(start.id, NodeComponent.roofTank);
   }
 
   const key = (

@@ -185,7 +185,9 @@ void main() {
     await tester.enterText(find.byType(EditableText), '5');
     await tester.testTextInput.receiveAction(TextInputAction.done);
     await tester.pump();
-    expect(find.text('Enter a value of 100 or more'), findsOneWidget);
+    // Round 17 follow-up — the SAME localized numInputMin template the
+    // electrical fields use ('at least {min}').
+    expect(find.text('Enter a value of at least 100'), findsOneWidget);
   });
 
   testWidgets('G7: the steppers keep their silent-clamp contract (the reject '

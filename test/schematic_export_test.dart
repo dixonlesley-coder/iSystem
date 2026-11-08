@@ -8,17 +8,25 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/command_store.dart';
 import 'package:mechx/store/network_store.dart';
+import 'package:mechx/store/solve_store.dart';
 import 'package:mechx/ui/schematic/schematic_export.dart';
+import 'package:mechx/ui/shell/export_sheet.dart';
+import 'package:mechx/ui/theme/mechx_theme.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
+import 'package:mechx_engine/sizing/pump.dart';
+import 'package:mechx_engine/units.dart';
 
 /// Pumps a minimal tree that hands back a real [WidgetRef] (the export entry
 /// points take one) + the scope's container.
-Future<(WidgetRef, ProviderContainer)> _pumpRef(WidgetTester tester) async {
+Future<(WidgetRef, ProviderContainer)> _pumpRef(WidgetTester tester,
+    {List<Override> overrides = const []}) async {
   late WidgetRef capturedRef;
   await tester.pumpWidget(
     ProviderScope(
+      overrides: overrides,
       child: Directionality(
         textDirection: TextDirection.ltr,
         child: Consumer(builder: (context, ref, _) {
@@ -96,6 +104,50 @@ void main() {
   });
 
   testWidgets(
+      'Work item 8: the riser exports are reached through the ONE Export '
+      "sheet's Drawings group and run the same guarded functions",
+      (tester) async {
+    await tester.pumpWidget(
+      ProviderScope(
+        child: MechXTheme(
+          data: MechXThemeData.dark,
+          child: const Directionality(
+            textDirection: TextDirection.ltr,
+            child: Stack(children: [ExportSheetOverlay()]),
+          ),
+        ),
+      ),
+    );
+    final container = ProviderScope.containerOf(
+      tester.element(find.byType(ExportSheetOverlay)),
+      listen: false,
+    );
+    container
+        .read(networkControllerProvider.notifier)
+        .loadNetwork(_zeroLengthNetwork);
+    for (final (sub, name) in const [
+      ('PDF (vector)', 'riser single-line (PDF)'),
+      ('DXF (CAD)', 'riser single-line (DXF)'),
+    ]) {
+      container.read(loadErrorProvider.notifier).clear();
+      // The Riser toolbar's opener: Drawings pre-expanded.
+      container.read(exportSheetProvider.notifier).open(ExportGroup.drawings);
+      await tester.pump();
+      final row = find.ancestor(
+        of: find.text(sub),
+        matching: find.ancestor(
+            of: find.text('Riser single-line'),
+            matching: find.byType(Row)),
+      );
+      await tester.tap(row.first);
+      await tester.pump();
+      await tester.pump();
+      expect(container.read(exportSheetProvider), isNull);
+      expect(container.read(loadErrorProvider), contains(name));
+    }
+  });
+
+  testWidgets(
       'H3: the single-sheet riser DXF export is guarded the same way',
       (tester) async {
     final (ref, container) = await _pumpRef(tester);
@@ -131,7 +183,10 @@ void main() {
         .whereType<SldLabel>()
         .map((l) => l.text)
         .toList();
-    expect(labels, contains('Feed: gravity downfeed'));
+    // Round 17 (drafting-visual-3-4) — no roof tank, no pump ⇒ the supply
+    // note AND the KETERANGAN say direct mains, never 'gravity downfeed'.
+    expect(labels, contains('Feed: direct mains'));
+    expect(labels.any((t) => t.contains('gravity downfeed')), isFalse);
     expect(labels.any((t) => t.contains('(roof tank)')), isFalse);
 
     // With a real roofTank node the honest suffix returns.
@@ -145,5 +200,35 @@ void main() {
         .map((l) => l.text)
         .toList();
     expect(labels, contains('Feed: gravity downfeed (roof tank)'));
+  });
+
+  testWidgets(
+      'Round 15 r2: the KETERANGAN peak design flow is the BUILDING trunk '
+      '(supplyPeakFlowProvider), never an inline booster duty flow',
+      (tester) async {
+    // A booster duty on 0.5 L/s (its partial flow) beside a 2.1 L/s building
+    // trunk: the notes must print the trunk, not the booster.
+    final (ref, container) = await _pumpRef(tester, overrides: [
+      pumpDutyProvider.overrideWith((ref) => const PumpDuty(
+            flow: FlowRate(0.0005),
+            head: Head(20),
+            hydraulicPower: Power(100),
+            shaftPower: Power(150),
+            motorInputPower: Power(180),
+            selectedMotor: Power(370),
+          )),
+      supplyPeakFlowProvider.overrideWith((ref) => const FlowRate(0.0021)),
+    ]);
+    container
+        .read(networkControllerProvider.notifier)
+        .loadNetwork(_riserNetwork(roofTank: true));
+    await tester.pump();
+    final labels = buildLiveRiserSheet(ref, null)
+        .prims
+        .whereType<SldLabel>()
+        .map((l) => l.text)
+        .toList();
+    expect(labels, contains('Peak design flow: 2.1 L/s'));
+    expect(labels.any((t) => t.contains('Peak design flow: 0.5')), isFalse);
   });
 }
