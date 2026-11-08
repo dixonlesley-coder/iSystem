@@ -39,7 +39,7 @@ ElectricalCircuit _way(ProviderContainer c) => c
 
 void main() {
   test('motor 30 kW -> hvac, then loadW 5000: motorKw cleared; starter, PF '
-      'and dip all on 5 kW', () {
+      'and dip all on 5 kW (PF diversified)', () {
     final c = ProviderContainer();
     addTearDown(c.dispose);
     final ctrl = c.read(electricalProjectProvider.notifier)
@@ -52,7 +52,11 @@ void main() {
     ctrl.setCircuit('mdp', 'c', loadW: 5000);
     final study = c.read(electricalAdvancedProvider);
     expect(study.controlAssemblies['c']!.motor!.kw, closeTo(5, 1e-9));
-    expect(study.powerFactor.totalKw, closeTo(5, 1e-9));
+    // The PF study runs on the DIVERSIFIED kW; since Round 74 the re-kind
+    // takes HVAC's own default demand factor (0.9): 5 × 0.9 = 4.5 kW.
+    expect(_way(c).demandFactor, loadDefaults[LoadKind.hvac]!.demandFactor);
+    expect(study.powerFactor.totalKw,
+        closeTo(5 * loadDefaults[LoadKind.hvac]!.demandFactor, 1e-9));
     expect(
         gensetStartMotors(c.read(electricalProjectProvider))
             .single

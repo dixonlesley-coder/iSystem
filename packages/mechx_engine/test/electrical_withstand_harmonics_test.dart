@@ -184,9 +184,8 @@ void main() {
 
     test('a very high fault grows the bar beyond the table to stay adequate', () {
       // 100 kA, 1 s needs CSA ≥ 100000/80 = 1250 mm² — beyond the largest
-      // tabulated bar (1000 mm²), so the density-estimate branch produces a
-      // 1250 mm² bar (widthMm/thicknessMm = 0) whose Icw = 80·1250/1000 = 100 kA
-      // exactly meets the fault. The fold grows the bar to SURVIVE rather than
+      // tabulated bar (1000 mm²), so the bar becomes parallel top bars
+      // (Round 74; it was a 1250 mm² 0×0 density estimate). The fold grows the bar to SURVIVE rather than
       // capping at the table and flagging inadequate.
       const tiny = ElectricalPanel(
         id: 'T',
@@ -210,11 +209,17 @@ void main() {
         originFaultLevel: Current.kiloamperes(100),
       );
       final b = sys.panels['T']!.busbar;
-      expect(b.csaMm2, 1250); // density estimate beyond the table
-      expect(b.widthMm, 0);
-      expect(b.thicknessMm, 0);
+      // Re-derived Round 74: past the 1000 mm² table top the bar is n
+      // parallel 100×10 bars, n = ceil(1250 / 1000) = 2 ⇒ 2000 mm²,
+      // Icw = 80·2000/1000 = 160 kA ≥ 100 kA.
+      expect(b.parallelBars, 2);
+      expect(b.csaMm2, 2000);
+      expect(b.widthMm, 100);
+      expect(b.thicknessMm, 10);
       expect(b.sizingReason, BusbarSizingReason.withstand);
-      expect(b.withstand!.icwKa, closeTo(100, 1e-9));
+      expect(b.withstand!.icwKa, closeTo(160, 1e-9));
+      expect(sys.panels['T']!.warnings
+          .where((w) => w.code == 'busbar-beyond-standard-table'), isNotEmpty);
       expect(b.withstand!.adequate, isTrue);
     });
   });

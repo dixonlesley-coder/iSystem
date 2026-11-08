@@ -45,7 +45,7 @@ import '../electrical/power_factor.dart'
         installedCapacitorBanks,
         powerFactorCorrection;
 import '../electrical/power_oneline.dart';
-import '../electrical/results.dart' show BreakerResult;
+import '../electrical/results.dart' show BreakerResult, BusbarResult;
 import '../electrical/sources.dart'
     show
         BatteryChemistryInfo,
@@ -646,7 +646,7 @@ SldSheet buildElectricalSld({
           'Incomer ${breakerLabel(p.incomer.breaker, p.incomer.poles)}$kaSuffix'
           '${incomerOverRangeSuffix(p.incomer)}  '
           '${p.system.label}  ${_num(v)}V  '
-          'Cu bus ${_num(p.busbar.csaMm2)}mm2$icw  '
+          'Cu bus ${_busSpec(p.busbar)}$icw  '
           'demand ${_boardDemandCurrent(p)}',
           size: 8));
     // The trip-curve legend is about MCB characteristics only — an MCCB carries
@@ -5111,3 +5111,10 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
     supplyNote: supplyNote,
   );
 }
+
+/// Round 74 — the schedule's bus spec: `<csa>mm2`, or past the standard table
+/// `<n>x(<w>x<t>) <csa>mm2` (n parallel top-rung bars).
+String _busSpec(BusbarResult b) => b.parallelBars > 1
+    ? '${b.parallelBars}x(${_num(b.widthMm)}x${_num(b.thicknessMm)}) '
+        '${_num(b.csaMm2)}mm2'
+    : '${_num(b.csaMm2)}mm2';

@@ -3265,6 +3265,35 @@ ElectricalPanelResult computePanel(
       ));
     }
   }
+  // Round 74 (regression-2) — a bar past the standard flat-bar table is a
+  // set of PARALLEL top-rung bars (`BusbarResult.parallelBars`); say so, so
+  // the issued schedule / BOM is never a silent non-standard section. Judge-
+  // only: the bar is already sized; the derating of parallel bars is the
+  // assembly manufacturer's to confirm (`// VERIFY notAnSniClause`).
+  void beyondTable(BusbarResult b, String where) {
+    if (b.parallelBars <= 1) return;
+    final bar = '${_num(b.widthMm)}x${_num(b.thicknessMm)}';
+    warnings.add(ElectricalWarning(
+      code: 'busbar-beyond-standard-table',
+      severity: WarningSeverity.warning,
+      message:
+          '$where: ${_num(b.totalCurrentA.amperes)} A exceeds the largest '
+          'standard bar — specified as ${b.parallelBars} x ($bar) parallel '
+          'bars (${_num(b.csaMm2)} mm2, ${_num(b.ampacityA.amperes)} A); '
+          'verify the parallel-bar derating with the assembly manufacturer, '
+          'or use a busway.',
+      panelId: panel.id,
+    ));
+  }
+
+  beyondTable(busbar, panel.name);
+  for (final section in busbarSections) {
+    beyondTable(
+        section.busbar,
+        busbarSections.length > 1
+            ? '${panel.name} busbar section ${section.index}'
+            : panel.name);
+  }
   // Surface the harmonic neutral oversize (a recommendation that never reaches
   // the schedule does not get built). INFO, not a warning: the always-on FOLD 2
   // has already oversized the neutral bar, so the condition is self-compensated

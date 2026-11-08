@@ -128,20 +128,38 @@ BusbarResult sizeBusbar(
       );
     }
   }
-  // Beyond the table — estimate a section from the current density.
-  final density = profile.copperCurrentDensityAPerMm2;
-  final csa = math
-      .max((requiredA / density).ceil(), csaFloor.ceil())
-      .toDouble();
+  // Beyond the table — Round 74 (regression-2): n PARALLEL top-rung bars
+  // (an orderable make-up), never an invented 0×0 density-estimate section
+  // (1539 mm² could not be bought and its withstand was judged on a section
+  // that does not exist). n covers the current AND the withstand floor.
+  // VERIFY — notAnSniClause: n parallel flat bars do not carry exactly n × the
+  // single-bar rating (proximity / skin effect); the assembly manufacturer
+  // confirms the derating — `computePanel` raises
+  // `busbar-beyond-standard-table` so it is never silent.
+  final n = _parallelTopBars(profile, requiredA, csaFloor);
+  final top = profile.copperBusbarTable.last;
+  final csa = n * top.csaMm2;
   return BusbarResult(
-    widthMm: 0,
-    thicknessMm: 0,
+    widthMm: top.widthMm,
+    thicknessMm: top.thicknessMm,
     csaMm2: csa,
-    ampacityA: Current(roundTo(csa * density, 0)),
+    ampacityA: Current(n * top.ampacityA.amperes),
     totalCurrentA: Current(roundTo(totalCurrent.amperes, 1)),
     sizingReason: reasonFor(csa),
     withstand: withstandFor(csa),
+    parallelBars: n,
   );
+}
+
+/// Round 74 — the number of parallel top-rung bars covering [requiredA] and
+/// the cross-section floor [csaFloor] (at least 2: called only past the
+/// table top).
+int _parallelTopBars(
+    ElectricalStandardsProfile profile, double requiredA, double csaFloor) {
+  final top = profile.copperBusbarTable.last;
+  final byCurrent = (requiredA / top.ampacityA.amperes - 1e-9).ceil();
+  final byCsa = (csaFloor / top.csaMm2 - 1e-9).ceil();
+  return math.max(2, math.max(byCurrent, byCsa));
 }
 
 /// The cross-section the continuous-current duty ALONE would select (ignoring
@@ -158,9 +176,8 @@ double _ampacityOnlyCsa(
       return b.csaMm2;
     }
   }
-  return math
-      .max((requiredA / profile.copperCurrentDensityAPerMm2).ceil(), minCsaMm2.ceil())
-      .toDouble();
+  return _parallelTopBars(profile, requiredA, minCsaMm2) *
+      profile.copperBusbarTable.last.csaMm2;
 }
 
 /// Size the neutral and PE bars from the phase bar.

@@ -42,6 +42,7 @@ ElectricalProject _dc(
     {GeneratorSource? gen =
         const GeneratorSource(kva: ApparentPower(2000e3), units: 2),
     bool allEssential = true,
+    Set<String> essentialIds = const {},
     int sections = 4,
     double upsKw = 250,
     double crahKw = 90}) {
@@ -57,7 +58,7 @@ ElectricalProject _dc(
             id: 'MDP$i',
             name: 'MDP $i',
             voltage: const Voltage(400),
-            essential: allEssential,
+            essential: allEssential || essentialIds.contains('MDP$i'),
             circuits: [
               ElectricalCircuit(
                   id: 'fu$i',
@@ -76,7 +77,7 @@ ElectricalProject _dc(
             id: 'UPS$i',
             name: 'UPS $i',
             voltage: const Voltage(400),
-            essential: allEssential,
+            essential: allEssential || essentialIds.contains('UPS$i'),
             circuits: [
               ElectricalCircuit(
                   id: 'u$i',
@@ -90,7 +91,7 @@ ElectricalProject _dc(
             id: 'CRAH$i',
             name: 'CRAH $i',
             voltage: const Voltage(400),
-            essential: allEssential,
+            essential: allEssential || essentialIds.contains('CRAH$i'),
             circuits: [
               ElectricalCircuit(
                   id: 'c$i',
@@ -105,7 +106,7 @@ ElectricalProject _dc(
           id: 'FIRE',
           name: 'FIRE',
           voltage: const Voltage(400),
-          essential: allEssential,
+          essential: allEssential || essentialIds.contains('FIRE'),
           circuits: const [
             ElectricalCircuit(
                 id: 'fp',
@@ -276,6 +277,10 @@ void main() {
       'seeded: every backed incomer and way is specified >= its on-genset '
       'prospective fault; an unbacked board keeps the utility figures', () {
     final rng = math.Random(72);
+    // Round 74 (regression-3) — the partial case designates a STRICT subset
+    // essential (UPS 0 + FIRE): with nothing essential an undesignated set
+    // backs every board and the unbacked branch never ran.
+    var unbackedChecked = 0;
     for (var trial = 0; trial < 8; trial++) {
       final sections = 2 + rng.nextInt(3);
       final setKva = [500.0, 1000.0, 1500.0, 2000.0][rng.nextInt(4)];
@@ -289,6 +294,7 @@ void main() {
               units: units,
               backupFraction: fraction),
           allEssential: allEssential,
+          essentialIds: allEssential ? const {} : const {'UPS0', 'FIRE'},
           upsKw: 100 + rng.nextInt(200).toDouble(),
           crahKw: 30 + rng.nextInt(80).toDouble());
       final sys = computeSystem(_profile, p);
@@ -309,9 +315,15 @@ void main() {
             expect(issued.incomerKa + 1e-9, greaterThanOrEqualTo(need));
           }
         } else {
+          unbackedChecked++;
           expect(issued.prospectiveFaultkA,
               utility.panels[id]!.prospectiveFaultkA);
           expect(issued.incomerKa, utility.panels[id]!.incomerKa);
+          expect(
+              st.fault.warnings.where(
+                  (w) => w.code.endsWith('-on-genset') && w.panelId == id),
+              isEmpty,
+              reason: 'trial $trial: unbacked $id never judged on the genset');
         }
       }
       expect(
@@ -320,5 +332,7 @@ void main() {
           isEmpty,
           reason: 'trial $trial: engine-picked devices cover both supplies');
     }
+    expect(unbackedChecked, greaterThan(0),
+        reason: 'the unbacked-board branch must be exercised');
   });
 }

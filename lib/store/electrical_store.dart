@@ -1674,6 +1674,18 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
               loadW == null
           ? 0.0
           : null;
+      // Round 74 (elec-convergence-25) — a real kind change re-derives the
+      // new kind's default cos φ and demand factor unless the engineer TYPED
+      // them (provenance flags): `_newCircuit` copied the OLD kind's defaults,
+      // so a socket re-kinded to heating kept 0.9 / 0.7 and every quantity
+      // above the way (board demand, feeder, supply kVA, genset) ran 30 % low.
+      final kindChanged = loadKind != null && loadKind != c.loadKind;
+      final kindDefaults = kindChanged ? loadDefaults[loadKind] : null;
+      final rekindCos =
+          kindChanged && !c.cosPhiUserSet ? kindDefaults?.cosPhi : null;
+      final rekindDf = kindChanged && !c.demandFactorUserSet
+          ? kindDefaults?.demandFactor
+          : null;
       return c.copyWith(
         name: name,
         loadKind: loadKind,
@@ -1682,8 +1694,8 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         motorKw: motorKw ?? seededMotorKw,
         clearMotorKw: clearMotorKw || rekindedOffMotor,
         clearFlaOverrideA: parkedRetype,
-        cosPhi: cosPhi,
-        demandFactor: demandFactor,
+        cosPhi: cosPhi ?? rekindCos,
+        demandFactor: demandFactor ?? rekindDf,
         // Round 23 (mep-bridge-5) — record provenance: a typed factor is the
         // engineer's and the MEP sync never re-derives it.
         demandFactorUserSet: demandFactor != null ? true : null,
