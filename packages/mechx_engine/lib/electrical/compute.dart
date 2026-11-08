@@ -4169,11 +4169,31 @@ ElectricalSystemResult computeSystem(
   // as every board's Round-30 'connected' figure, so the supply total equals
   // the roots' connected sub-trees and stays above the diversified demand
   // whenever any way carries a demand factor below 1.
+  // Round 76 (elec-convergence-27-ups-connected-below-demand) — a leaf way
+  // on a UPS-backed board (or below one) is connected THROUGH that UPS: the
+  // supply carries its UPS INPUT (× [kUpsInputFactor] per UPS on the chain,
+  // the same `upsIn` basis the demand sum uses), so the connected load can
+  // never print below the diversified demand. No UPS ⇒ multiplier 1 ⇒
+  // byte-identical.
+  final upsChainFactor = <String, double>{};
+  double upsChain(String id, [Set<String>? seen]) {
+    final cached = upsChainFactor[id];
+    if (cached != null) return cached;
+    final visited = seen ?? <String>{};
+    if (!visited.add(id)) return 1.0; // cycle guard
+    final parent = parentOf[id];
+    final f = upsIn(id) * (parent == null ? 1.0 : upsChain(parent, visited));
+    upsChainFactor[id] = f;
+    return f;
+  }
+
   var connectedLoadMicroW = 0;
   for (final p in panels) {
+    final mult = upsChain(p.id);
     for (final c in p.circuits) {
       if (c.role == CircuitRole.branch && c.feedsPanelId == null) {
-        connectedLoadMicroW += _micro(circuitUndiversifiedW(c));
+        final w = circuitUndiversifiedW(c);
+        connectedLoadMicroW += _micro(mult == 1.0 ? w : w * mult);
       }
     }
   }

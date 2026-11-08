@@ -144,6 +144,10 @@ enum RptStringKey {
   fireOverPressureValue, // {churn} {limit} {share}
   fireStandpipeOverPressureValue, // {churn} {limit} {share}
   fireOverPressureShare, // {pct}
+  fireOutletStaticKey, // {tag} {floors}
+  fireOutletStaticValue, // {max} {min} {limit}
+  fireHoseStationResidualKey, // {tag} {floors}
+  fireHoseStationResidualValue, // {max} {min} {limit}
   fireJockeyKey,
   fireJockeyValue, // {lps} {m} {standby}
   fireJockeyStandby,
@@ -208,6 +212,7 @@ enum RptStringKey {
   edbSupply,
   edbConnectedLoad,
   edbConnectedLoadValue, // {w} {dw} {kva}
+  edbConnectedInclUps, // Round 76 — suffix when a UPS-backed board exists
   edbEarthingSystem,
   edbOriginFault,
   edbOriginFaultValue, // {ka} {ct}
@@ -599,6 +604,17 @@ const Map<RptStringKey, String> kReportStringsEn = {
           'standard fire components{share} - upsize the index pipe or zone '
           'the system (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (friction {pct} % of the rated head)',
+  RptStringKey.fireOutletStaticKey: 'Hose valve static, {tag} {floors}',
+  RptStringKey.fireOutletStaticValue:
+      '{max}..{min} kPa at pump churn exceeds the {limit} kPa (175 psi) hose '
+          'connection limit (NFPA 14 7.2.3.2) - fit a PRV at each outlet or '
+          'zone the riser (VERIFY)',
+  RptStringKey.fireHoseStationResidualKey:
+      'Hose reel residual, {tag} {floors}',
+  RptStringKey.fireHoseStationResidualValue:
+      '{max}..{min} kPa at the rated flow exceeds the {limit} kPa (100 psi) '
+          'hose station limit (NFPA 14 7.2.3.1) - fit a PRV at each reel '
+          '(VERIFY)',
   RptStringKey.fireStandpipeOverPressureValue:
       '{churn} kPa at churn exceeds the {limit} kPa (350 psi) maximum '
           'standpipe system pressure{share} - split the standpipe into '
@@ -668,6 +684,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.edbConnectedLoad: 'Connected load:',
   RptStringKey.edbConnectedLoadValue:
       '**{w} W** · diversified demand **{dw} W** ({kva} kVA)',
+  RptStringKey.edbConnectedInclUps: ' (incl. UPS input losses)',
   RptStringKey.edbEarthingSystem: 'Earthing system:',
   RptStringKey.edbOriginFault: 'Origin fault level:',
   RptStringKey.edbOriginFaultValue:
@@ -1103,6 +1120,17 @@ const Map<RptStringKey, String> kReportStringsId = {
           'komponen kebakaran standar{share} - perbesar pipa indeks atau '
           'bagi sistem menjadi zona (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (gesekan {pct} % dari head rated)',
+  RptStringKey.fireOutletStaticKey: 'Statis katup selang, {tag} {floors}',
+  RptStringKey.fireOutletStaticValue:
+      '{max}..{min} kPa saat churn pompa melampaui batas {limit} kPa (175 '
+          'psi) sambungan selang (NFPA 14 7.2.3.2) - pasang PRV di setiap '
+          'outlet atau bagi pipa tegak menjadi zona (VERIFY)',
+  RptStringKey.fireHoseStationResidualKey:
+      'Residual gulungan selang, {tag} {floors}',
+  RptStringKey.fireHoseStationResidualValue:
+      '{max}..{min} kPa pada laju aliran rating melampaui batas {limit} kPa '
+          '(100 psi) stasiun selang (NFPA 14 7.2.3.1) - pasang PRV di setiap '
+          'gulungan (VERIFY)',
   RptStringKey.fireStandpipeOverPressureValue:
       '{churn} kPa saat churn melampaui tekanan maksimum sistem pipa tegak '
           '{limit} kPa (350 psi){share} - bagi pipa tegak menjadi zona '
@@ -1173,6 +1201,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.edbConnectedLoad: 'Beban terpasang:',
   RptStringKey.edbConnectedLoadValue:
       '**{w} W** · permintaan terdiversifikasi **{dw} W** ({kva} kVA)',
+  RptStringKey.edbConnectedInclUps: ' (termasuk rugi masukan UPS)',
   RptStringKey.edbEarthingSystem: 'Sistem pembumian:',
   RptStringKey.edbOriginFault: 'Tingkat gangguan sumber:',
   RptStringKey.edbOriginFaultValue:

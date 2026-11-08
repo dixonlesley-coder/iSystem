@@ -21,6 +21,7 @@ import 'package:mechx_engine/network/network.dart'
         nodeElevation;
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
+import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart';
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
 import 'network_store.dart';
@@ -239,6 +240,150 @@ final fireOverPressureProvider = Provider<
     if (c.over) {
       out.add(
           (basis: b, check: c, pumpId: b.dutyPumpId, standpipe: standpipe));
+    }
+  }
+  return out;
+});
+
+/// Round 76 (fire-convergence-27-hose-outlet-static-over-175psi-unjudged) —
+/// one CONTIGUOUS floor range of hose outlets of one pumped fire system whose
+/// pressure exceeds an NFPA 14 hose-connection limit
+/// ([standpipeOutletPressures]): [residual] false ⇒ the 175 psi STATIC at
+/// pump churn (7.2.3.2, every hose outlet), true ⇒ the 100 psi RESIDUAL at
+/// the rated flow of a 1.5 in hose station (7.2.3.1, hose reels). [maxKpa] /
+/// [minKpa] are the worst / least offending outlets; [lowestOutletId] the
+/// lowest offending outlet (the locate). An outlet fed through a drawn PRV is
+/// regulated and never listed.
+class StandpipeOutletOverPressure {
+  final FireSystemBasis basis;
+  final String? pumpId;
+  final bool residual;
+  final int lowFloor;
+  final int highFloor;
+  final double maxKpa;
+  final double minKpa;
+  final String lowestOutletId;
+  const StandpipeOutletOverPressure({
+    required this.basis,
+    required this.pumpId,
+    required this.residual,
+    required this.lowFloor,
+    required this.highFloor,
+    required this.maxKpa,
+    required this.minKpa,
+    required this.lowestOutletId,
+  });
+
+  double get limitKpa =>
+      residual ? kHoseStationMaxResidualKpa : kStandpipeOutletMaxStaticKpa;
+}
+
+/// Round 76 — every pumped standpipe's over-pressured hose-outlet floor
+/// ranges (JUDGE-ONLY, beside the [fireOverPressureProvider] system judge,
+/// which is unchanged). A series system's outlets take the churn / rated
+/// heads of the stages on their own path; a hose-reel residual is judged
+/// only when the friction to the reel is measured (calibrated).
+final standpipeOutletOverPressureProvider =
+    Provider<List<StandpipeOutletOverPressure>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final bases = ref.watch(fireSystemBasesProvider);
+  if (bases.isEmpty) return const [];
+  final project = ref.watch(projectControllerProvider);
+  final sizing = ref.watch(sizingProvider);
+  double lengthOf(NetEdge e) => edgeLength(
+        e,
+        net,
+        calibrationBySheet: project.calibrations,
+        building: project.building,
+        mounting: project.mounting,
+      ).meters;
+  final out = <StandpipeOutletOverPressure>[];
+  for (final b in bases) {
+    if (b.standsDown || b.pumpIds.isEmpty || b.flow.cubicMetersPerSecond <= 0) {
+      continue;
+    }
+    if (!b.system.hasHoseOutlet(net)) continue;
+    final churn = <String, double>{};
+    final rated = <String, double>{};
+    if (b.stages.length >= 2) {
+      for (final st in b.stages) {
+        for (final id in st.pumpIds) {
+          churn[id] = st.rating.churn.head.meters;
+          rated[id] = st.rating.ratedHead.meters;
+        }
+      }
+    } else {
+      for (final id in b.pumpIds) {
+        churn[id] = b.rating.churn.head.meters;
+        rated[id] = b.rating.ratedHead.meters;
+      }
+    }
+    String? rootPump = b.dutyPumpId;
+    for (final st in b.stages) {
+      if (st.upstream == null) {
+        rootPump = st.dutyPumpId;
+        break;
+      }
+    }
+    final friction = <String, double>{};
+    if (rootPump != null) {
+      final f = fireIndexPathFrictionM(
+        net: net,
+        system: b.system,
+        pumpId: rootPump,
+        sizing: sizing,
+        lengthOf: lengthOf,
+        terminals: FireTerminalKind.hydrant,
+        frictionByTerminalOut: friction,
+      );
+      if (f == null) friction.clear(); // unmeasured ⇒ residual not judged
+    }
+    final outlets = standpipeOutletPressures(
+      net: net,
+      system: b.system,
+      sizing: sizing,
+      building: project.building,
+      churnHeadByPump: churn,
+      ratedHeadByPump: rated,
+      frictionToOutletM: friction,
+    );
+    for (final residual in [false, true]) {
+      // Over outlets per floor, then contiguous floor runs.
+      final byFloor = <int, List<StandpipeOutletPressure>>{};
+      for (final o in outlets) {
+        if (residual ? o.overResidual : o.overStatic) {
+          (byFloor[o.floorIndex] ??= []).add(o);
+        }
+      }
+      final floors = byFloor.keys.toList()..sort();
+      var i = 0;
+      while (i < floors.length) {
+        var j = i;
+        while (j + 1 < floors.length && floors[j + 1] == floors[j] + 1) {
+          j++;
+        }
+        final run = [
+          for (var k = i; k <= j; k++) ...byFloor[floors[k]]!,
+        ];
+        double kpa(StandpipeOutletPressure o) =>
+            residual ? o.residualKpa! : o.staticKpa;
+        var mx = kpa(run.first), mn = kpa(run.first);
+        for (final o in run) {
+          if (kpa(o) > mx) mx = kpa(o);
+          if (kpa(o) < mn) mn = kpa(o);
+        }
+        out.add(StandpipeOutletOverPressure(
+          basis: b,
+          pumpId: b.dutyPumpId,
+          residual: residual,
+          lowFloor: floors[i],
+          highFloor: floors[j],
+          maxKpa: mx,
+          minKpa: mn,
+          lowestOutletId: run.first.outletId,
+        ));
+        i = j + 1;
+      }
     }
   }
   return out;

@@ -953,6 +953,35 @@ const List<StandardValue<Object?>> standpipeVerifyChecklist = [
       citation: 'SNI 03-1745-2000 — Class I topmost-outlet residual',
       note: '690 kPa (100 psi) residual at the topmost Class I hose outlet; '
           'secondary source pending the official clause.'),
+  // Round 76 — `kStandpipeOutletMaxStaticKpa`
+  // (standpipe_outlet_pressure.dart).
+  StandardValue<Object?>(
+    1207.0,
+    unit: 'kPa',
+    citation: 'NFPA 14 7.2.3.2 — static pressure at a hose connection '
+        'above 175 psi needs a pressure-regulating device (SNI 03-1745 '
+        'follows NFPA 14; not confirmed verbatim)',
+    status: VerificationStatus.notAnSniClause,
+    note: 'Every hose outlet whose static pressure at pump churn (the '
+        'churn head less the lift from the pump datum to the outlet) '
+        'exceeds 1207 kPa (175 psi) is flagged until a PRV is drawn on '
+        'its branch or the riser zone feeding it. Judge-only. Confirm vs '
+        'SNI 03-1745.',
+  ),
+  // Round 76 — `kHoseStationMaxResidualKpa`.
+  StandardValue<Object?>(
+    690.0,
+    unit: 'kPa',
+    citation: 'NFPA 14 7.2.3.1 — residual pressure at a 1.5 in hose '
+        'station above 100 psi needs a pressure-regulating device (SNI '
+        '03-1745 follows NFPA 14; not confirmed verbatim)',
+    status: VerificationStatus.notAnSniClause,
+    note: 'Every hose reel whose residual at the rated flow (rated head '
+        'less the lift and the sized friction to it) exceeds 690 kPa '
+        '(100 psi) is flagged until a PRV is drawn on its branch. '
+        'Judged only when the drawing is calibrated. Confirm vs SNI '
+        '03-1745.',
+  ),
 ];
 
 /// The fire-system basis items every drawn fire system uses (the standpipe

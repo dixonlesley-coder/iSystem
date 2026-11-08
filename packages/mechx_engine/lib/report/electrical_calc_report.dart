@@ -12,7 +12,7 @@
 /// never hides provenance gaps (§8 / golden rule 6).
 library;
 
-import '../electrical/compute.dart' show serviceEntranceCapacityVa;
+import '../electrical/compute.dart' show kUpsInputFactor, serviceEntranceCapacityVa;
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
 import '../electrical/fault.dart'
     show faultStudyU0VerifyItem, inverterFaultMultiple, kAlternatorXdPu;
@@ -203,11 +203,29 @@ double _subtreeConnectedW(ElectricalProject project, ElectricalSystemResult r,
   for (final c in p.circuits) {
     final fed = feeds[c.circuitId];
     w += fed != null && r.panels.containsKey(fed)
-        ? _subtreeConnectedW(project, r, fed, visited)
+        ? _subtreeConnectedW(project, r, fed, visited) * _upsFactor(project, fed)
         : c.connectedWOrLoad;
   }
   return w;
 }
+
+/// Round 76 (elec-convergence-27-ups-connected-below-demand) — a UPS-backed
+/// board is connected through its UPS: the board above carries its UPS INPUT
+/// (× [kUpsInputFactor]), the same basis the engine's demand + supply
+/// connected load use. No UPS ⇒ 1 (byte-identical).
+double _upsFactor(ElectricalProject project, String panelId) {
+  for (final m in project.panels) {
+    if (m.id == panelId) return m.upsBacked ? kUpsInputFactor : 1.0;
+  }
+  return 1.0;
+}
+
+/// Round 76 — the 'connected' figure explains its UPS uplift when any board
+/// is UPS-backed (else empty ⇒ byte-identical).
+String _upsConnectedNote(ElectricalProject project, ReportStrings strings) =>
+    project.panels.any((p) => p.upsBacked)
+        ? strings(RptStringKey.edbConnectedInclUps)
+        : '';
 
 /// The localized system label (`3-phase` / `3 fasa`).
 String _systemLabel(ElectricalSystem s, ReportStrings strings) =>
@@ -305,10 +323,11 @@ RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
     (
       strings(RptStringKey.edbConnectedLoad),
       strings.format(RptStringKey.edbConnectedLoadValue, {
-        'w': _n(s.connectedW),
-        'dw': _n(s.demandW),
-        'kva': _n(s.demandVa.inKilovoltAmperes),
-      })
+            'w': _n(s.connectedW),
+            'dw': _n(s.demandW),
+            'kva': _n(s.demandVa.inKilovoltAmperes),
+          }) +
+          _upsConnectedNote(data.project, strings)
     ),
     (
       strings(RptStringKey.edbEarthingSystem),
@@ -430,7 +449,10 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         strings(RptStringKey.ssSystem),
         '${_systemLabel(s.system, strings)}, ${_n(s.voltage.volts)} V'
       ),
-      (strings(RptStringKey.edbConnectedLoad), '${_n(s.connectedW)} W'),
+      (
+        strings(RptStringKey.edbConnectedLoad),
+        '${_n(s.connectedW)} W${_upsConnectedNote(data.project, strings)}'
+      ),
       (
         strings(RptStringKey.ssDiversifiedDemand),
         '${_n(s.demandW)} W (${_n(s.demandVa.inKilovoltAmperes)} kVA)'

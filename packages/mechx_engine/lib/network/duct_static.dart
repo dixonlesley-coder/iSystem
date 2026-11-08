@@ -39,7 +39,9 @@ class DuctStaticSolution {
   final String criticalNodeId;
 
   /// Round 31 (hvac-5-3) — the part of [totalStaticPressure] spent on the
-  /// unit's outdoor-air INTAKE path (0 when none is drawn). A caller that
+  /// unit's outdoor-air INTAKE path (0 when none is drawn). Round 76 — the
+  /// SERIES-side static: the intake on supply air, the DISCHARGE side
+  /// (toward the root fan / the outlet louvre) on extract air. A caller that
   /// combines this supply static with a RETURN drawn to the same unit takes
   /// the intake and the return in PARALLEL (both enter the mixing box):
   /// `(total - intake) + max(intake, return)`.
@@ -136,19 +138,35 @@ DuctStaticSolution solveDuctStatic({
   // roof-louvre intake behind a short supply index run lost its whole
   // friction from the motor selection). Walk the intake AGAINST the flow from
   // the fan, take its worst path, and cost the supply on the rest.
+  //
+  // Round 76 (plumbing-hvac-convergence-25-exhaust-branch-fan-rated-on-main-
+  // fan-path) — the mirror rule on EXTRACT air: the fan's DISCHARGE side (the
+  // ducts whose physical sized flow LEAVES the fan, and everything beyond
+  // them — toward the root fan or the outlet louvre) is in SERIES with the
+  // grille-side index run. It used to be skipped, so the fan-outward walk
+  // fell back to undirected order and charged a BRANCH exhaust fan with the
+  // whole main-fan path, while a root fan's discharge stub was max'd against
+  // the grille index instead of added. Walked here with the flow and costed
+  // as the series-side static; a fan with no outlet-side duct ⇒ 0 Pa
+  // (byte-identical).
+  final extract = service.isExtractAir;
   final intakeEdgeIds = <String>{};
   var intakePa = 0.0;
-  if (!service.isExtractAir) {
+  {
     final intakeCost = <String, double>{fanNodeId: 0.0};
     final q = [fanNodeId];
     for (var i = 0; i < q.length; i++) {
       final n = q[i];
       for (final link
           in adjacency[n] ?? const <({NetEdge edge, String other})>[]) {
-        if (sizing[link.edge.id]?.flowFromId != link.other) continue;
+        final from = sizing[link.edge.id]?.flowFromId;
+        // Supply: the intake ARRIVES at the fan (walk against the flow).
+        // Extract: the discharge LEAVES the fan (walk with the flow).
+        if (from != (extract ? n : link.other)) continue;
         if (intakeCost.containsKey(link.other)) continue;
         intakeEdgeIds.add(link.edge.id);
-        final c = intakeCost[n]! + edgePaArriving(link.edge, n);
+        final c = intakeCost[n]! +
+            edgePaArriving(link.edge, extract ? link.other : n);
         intakeCost[link.other] = c;
         if (c > intakePa) intakePa = c;
         q.add(link.other);

@@ -1938,27 +1938,57 @@ List<AirSystem> airSystemsFor(
     // lowest-id rule used to hand the PAU fan's duty (and its panel way and
     // schedule tag) to an FCU whose id happened to sort first.
     var unit = root;
-    final inlineFans = <String>[];
-    if (net.nodeById(root)?.role == NodeRole.plant) {
-      for (final n in net.nodes) {
-        if (n.id == root || roots[n.id] != root) continue;
-        if (n.role != NodeRole.plant || n.airflow != null) continue;
-        if (n.component != NodeComponent.supplyFan &&
-            n.component != NodeComponent.exhaustFan) {
-          continue;
-        }
-        if (isTerminalAirUnit(n.component)) continue;
-        // A mirrored PEER source leg (duty / standby) keeps the Round-16
-        // peer rule; an inline mover sits on the system's own path.
-        final onLeg = net.edges.any((e) =>
-            e.service == service &&
-            parallelLegs.contains(e.id) &&
-            (e.fromId == n.id || e.toId == n.id));
-        if (!onLeg) inlineFans.add(n.id);
+    // Round 76 (plumbing-hvac-convergence-25-exhaust-stub-duty-on-id-first-
+    // fan) — the inline MOVERS of the component are collected whatever
+    // rooted it: an exhaust fan with a bare discharge stub (the commonest
+    // roof-fan drawing) roots the system at the louvre leaf, and the old
+    // plant-root gate left every fan out of [inlineFans], so the WHOLE duty
+    // went to whichever fan id sorted first while the main fan fell to the
+    // component default. Renaming two fans flipped the issued duties.
+    final movers = <String>[];
+    for (final n in net.nodes) {
+      if (n.id == root || roots[n.id] != root) continue;
+      if (n.role != NodeRole.plant || n.airflow != null) continue;
+      if (n.component != NodeComponent.supplyFan &&
+          n.component != NodeComponent.exhaustFan) {
+        continue;
       }
-      inlineFans.sort();
+      if (isTerminalAirUnit(n.component)) continue;
+      // A mirrored PEER source leg (duty / standby) keeps the Round-16
+      // peer rule; an inline mover sits on the system's own path.
+      final onLeg = net.edges.any((e) =>
+          e.service == service &&
+          parallelLegs.contains(e.id) &&
+          (e.fromId == n.id || e.toId == n.id));
+      if (!onLeg) movers.add(n.id);
     }
+    // The flow through a node: the largest sized flow on its incident edges.
+    double throughFlow(String id) {
+      var q = 0.0;
+      for (final e in edges) {
+        if (e.fromId != id && e.toId != id) continue;
+        final f = flows[e.id]?.cubicMetersPerSecond ?? 0;
+        if (f > q) q = f;
+      }
+      return q;
+    }
+
+    bool carriesTrunk(String id) =>
+        throughFlow(id) >= trunk.cubicMetersPerSecond * (1 - 1e-9) - 1e-12;
     if (net.nodeById(root)?.role != NodeRole.plant) {
+      // Hops from the root over this service (the machine nearest the root
+      // along the drawn path wins a tie — never the id).
+      final hops = <String, int>{root: 0};
+      final bfs = [root];
+      for (var i = 0; i < bfs.length; i++) {
+        final n = bfs[i];
+        for (final e in edges) {
+          final o = e.fromId == n ? e.toId : (e.toId == n ? e.fromId : null);
+          if (o == null || hops.containsKey(o)) continue;
+          hops[o] = hops[n]! + 1;
+          bfs.add(o);
+        }
+      }
       int rank(NetNode n) => switch (n.component) {
             NodeComponent.supplyFan || NodeComponent.exhaustFan => 0,
             NodeComponent.ahu => 1,
@@ -1973,8 +2003,14 @@ List<AirSystem> airSystemsFor(
               (n.component?.isElectricalLoad ?? false))
             n,
       ]..sort((a, b) {
+          // Hydraulics first: the machine the whole trunk flows through.
+          final ta = carriesTrunk(a.id) ? 0 : 1;
+          final tb = carriesTrunk(b.id) ? 0 : 1;
+          if (ta != tb) return ta.compareTo(tb);
           final c = rank(a).compareTo(rank(b));
-          return c != 0 ? c : a.id.compareTo(b.id);
+          if (c != 0) return c;
+          final h = (hops[a.id] ?? 1 << 30).compareTo(hops[b.id] ?? 1 << 30);
+          return h != 0 ? h : drawOrderCompare(a, b);
         });
       if (machines.isNotEmpty) {
         unit = machines.first.id;
@@ -1994,18 +2030,15 @@ List<AirSystem> airSystemsFor(
         if (units.isNotEmpty) unit = units.first.id;
       }
     }
+    final inlineFans = [
+      for (final id in movers)
+        if (id != unit) id,
+    ]..sort();
     // Round 64 — the flow THROUGH each inline fan and, for a fan on a
     // branch (carrying less than the trunk), the static of its own sub-tree.
-    final inlineFlow = <String, FlowRate>{};
-    for (final id in inlineFans) {
-      var q = 0.0;
-      for (final e in edges) {
-        if (e.fromId != id && e.toId != id) continue;
-        final f = flows[e.id]?.cubicMetersPerSecond ?? 0;
-        if (f > q) q = f;
-      }
-      inlineFlow[id] = FlowRate(q);
-    }
+    final inlineFlow = <String, FlowRate>{
+      for (final id in inlineFans) id: FlowRate(throughFlow(id)),
+    };
     final branchStat = <String, Pressure>{};
     for (final id in inlineFans) {
       final q = inlineFlow[id]!.cubicMetersPerSecond;
