@@ -2162,34 +2162,44 @@ List<String> _gravityOutfalls({
   // root's height) until a riser RISING from the reached node. Missing it
   // made the second outfall a phantom 5 L/s INLET sending water up its own
   // downpipe and the whole roof down the other one.
+  //
+  // Round 74 (plumbing-hvac-convergence-23) — the walk is BREADTH-FIRST over
+  // RUN edges through tied, component-free, demand-free, non-plant /
+  // non-fixture nodes of ANY degree (a yard tee where two downpipe feet
+  // meet before the outfall, or a foot that also carries a collector):
+  // the single-chain rule made such an outfall a phantom 1 L/s INLET and
+  // issued its real discharge pipe DN75 for 12 L/s. It never walks into the
+  // root or another degree-1 leaf, and never along a riser (only a riser
+  // RISING from a reached node accepts).
   bool isStackFoot(String id) {
-    var cur = id;
-    String? cameBy;
     final seen = <String>{id};
-    while (true) {
-      final links = [
-        for (final l in incident(cur))
-          if (l.edgeId != cameBy) l,
-      ];
-      if (links.length != 1) return false;
-      final edge = net.edgeById(links.single.edgeId);
-      if (edge == null) return false;
-      if (edge.kind == EdgeKind.riser) return rises(edge, cur);
-      final next = links.single.other;
-      final n = net.nodeById(next);
-      if (n == null ||
-          !seen.add(next) ||
-          n.role == NodeRole.plant ||
-          n.role == NodeRole.fixture ||
-          n.component != null ||
-          demandKeys.contains(next) ||
-          degree(next) != 2 ||
-          !tiedWithRoot(n)) {
-        return false;
+    final queue = <String>[id];
+    for (var qi = 0; qi < queue.length; qi++) {
+      final cur = queue[qi];
+      for (final l in incident(cur)) {
+        final edge = net.edgeById(l.edgeId);
+        if (edge == null) continue;
+        if (edge.kind == EdgeKind.riser) {
+          if (rises(edge, cur)) return true;
+          continue;
+        }
+        final next = l.other;
+        if (next == root || seen.contains(next)) continue;
+        final n = net.nodeById(next);
+        if (n == null ||
+            n.role == NodeRole.plant ||
+            n.role == NodeRole.fixture ||
+            n.component != null ||
+            demandKeys.contains(next) ||
+            degree(next) < 2 ||
+            !tiedWithRoot(n)) {
+          continue;
+        }
+        seen.add(next);
+        queue.add(next);
       }
-      cur = next;
-      cameBy = edge.id;
     }
+    return false;
   }
 
   final out = <NetNode>[rootNode];
@@ -9668,12 +9678,20 @@ List<FireTestLine> fireTestLineChains(
       (sAdj[e.toId] ??= []).add(e);
     }
     var verified = false;
+    final ix = _TestLineMoverIndex(
+        stripped, (suctionStart: hop.suctionStart), sAdj);
     for (final MapEntry(key: moverId, value: legs)
         in hop.suctionStart.entries) {
-      final interior = <String, Set<String>>{};
-      final sides = _moverSides(stripped, moverId, sAdj, interiorOut: interior);
-      final suctionReachesTank = legs.entries
-          .any((l) => l.value && (sides[l.key]?.contains(c.tankId) ?? false));
+      final interior = ix.interiorOf[moverId]!;
+      final sides = ix.sidesOf[moverId]!;
+      // Round 74 r2 — the tank may be reached from the suction side of any
+      // mover UPSTREAM of this one (a flow-meter loop from a series room's
+      // top discharge header back to the suction TANK): `_moverSides`
+      // makes every other mover a wall, so the top stage's own suction side
+      // ends at the lower pump and never reaches the tank.
+      final suctionReachesTank = legs.entries.any(
+              (l) => l.value && (sides[l.key]?.contains(c.tankId) ?? false)) ||
+          ix.onUpstreamSuction(moverId, c.tankId);
       // The join is on a discharge side that FEEDS the fire terminals (a
       // duplex room's tank -> suction-header main, removed, turns the test
       // line into a "suction" whose "discharge" is the bare header: never).
@@ -9705,10 +9723,15 @@ List<FireTestLine> fireTestLineChains(
       (sAdj[e.toId] ??= []).add(e);
     }
     FireTestLine? found;
+    // Round 74 (regression-1) — a test loop from a series room's TOP
+    // discharge header back to the FIRST stage's suction header is judged
+    // against the whole series chain ([_TestLineMoverIndex]).
+    final ix = _TestLineMoverIndex(
+        stripped, (suctionStart: hop.suctionStart), sAdj);
     for (final MapEntry(key: moverId, value: legs)
         in hop.suctionStart.entries) {
-      final interior = <String, Set<String>>{};
-      final sides = _moverSides(stripped, moverId, sAdj, interiorOut: interior);
+      final interior = ix.interiorOf[moverId]!;
+      final sides = ix.sidesOf[moverId]!;
       // A suction side's interior holds the suction header (its `sides`
       // entry lists only the plants reached).
       bool onSuction(String id) => legs.entries.any((l) =>
@@ -9722,10 +9745,14 @@ List<FireTestLine> fireTestLineChains(
           (interior[l.key]?.contains(id) ?? false) &&
           interior[l.key]!
               .any((x) => stripped.nodeById(x)?.role == NodeRole.fixture));
+      bool onUpstreamSuction(String id) => ix.onUpstreamSuction(moverId, id);
+
       for (final (d, s) in [(c.a, c.b), (c.b, c.a)]) {
         // Both ends on discharge sides ⇒ a real parallel discharge leg
         // (kept as a Round-13 set), never a test loop.
-        if (feedsTerminals(d) && onSuction(s) && !onDischarge(s)) {
+        if (feedsTerminals(d) &&
+            !onDischarge(s) &&
+            (onSuction(s) || onUpstreamSuction(s))) {
           found = (
             edgeIds: d == c.a ? c.edgeIds : c.edgeIds.reversed.toList(),
             joinId: d,
@@ -9739,4 +9766,62 @@ List<FireTestLine> fireTestLineChains(
     if (found != null) out.add(found);
   }
   return out;
+}
+
+/// Round 74 — each fire mover's sides on a test-line candidate's stripped
+/// network, computed once, plus the series-chain view both test-line
+/// families judge against: the return end (a tank, or a suction header)
+/// may lie on the suction side of any mover UPSTREAM of the one whose
+/// discharge holds the join (`_moverSides` makes every other mover a wall,
+/// so the first stage's suction is on no side of the top stage).
+class _TestLineMoverIndex {
+  _TestLineMoverIndex(Network stripped,
+      ({Map<String, Map<String, bool>> suctionStart}) hop,
+      Map<String, List<NetEdge>> sAdj)
+      : _suctionStart = hop.suctionStart {
+    for (final moverId in _suctionStart.keys) {
+      final interior = <String, Set<String>>{};
+      sidesOf[moverId] =
+          _moverSides(stripped, moverId, sAdj, interiorOut: interior);
+      interiorOf[moverId] = interior;
+    }
+  }
+
+  final Map<String, Map<String, bool>> _suctionStart;
+  final sidesOf = <String, Map<String, Set<String>>>{};
+  final interiorOf = <String, Map<String, Set<String>>>{};
+  final _upstream = <String, Set<String>>{};
+
+  Set<String> sideNodes(String m, {required bool suction}) => {
+        for (final l in _suctionStart[m]!.entries)
+          if (l.value == suction) ...[
+            ...?interiorOf[m]![l.key],
+            if (suction) ...?sidesOf[m]![l.key],
+          ],
+      };
+
+  /// Movers whose DISCHARGE side holds part of [m]'s SUCTION side — the
+  /// stage(s) feeding it — transitively.
+  Set<String> upstreamOf(String m) => _upstream[m] ??= () {
+        final out = <String>{};
+        final queue = [m];
+        while (queue.isNotEmpty) {
+          final cur = queue.removeLast();
+          final suct = sideNodes(cur, suction: true);
+          for (final u in _suctionStart.keys) {
+            if (u == m || out.contains(u)) continue;
+            if (sideNodes(u, suction: false).any(suct.contains)) {
+              out.add(u);
+              queue.add(u);
+            }
+          }
+        }
+        return out;
+      }();
+
+  /// [id] lies on the suction side (and not the discharge side) of a mover
+  /// upstream of [m].
+  bool onUpstreamSuction(String m, String id) => upstreamOf(m).any((u) =>
+      sideNodes(u, suction: true).contains(id) &&
+      !sideNodes(u, suction: false).contains(id));
 }

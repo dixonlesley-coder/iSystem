@@ -31,7 +31,10 @@ String fmtBreaker(BreakerResult b) {
 
 String fmtBusbar(BusbarResult b) {
   if (b.widthMm > 0 && b.thicknessMm > 0) {
-    return '${fmtNum(b.widthMm)}×${fmtNum(b.thicknessMm)} mm';
+    final bar = '${fmtNum(b.widthMm)}×${fmtNum(b.thicknessMm)} mm';
+    // Round 74 r2 — a parallel-bar set names its count (one bar's geometry
+    // alone understated the bar by n).
+    return b.parallelBars > 1 ? '${b.parallelBars} × ($bar)' : bar;
   }
   return '${fmtNum(b.csaMm2)} mm2';
 }

@@ -144,6 +144,14 @@ class BusbarResult {
   /// when no fault level was supplied (the withstand fold was not applied).
   final BusbarWithstand? withstand;
 
+  /// Round 74 — how many parallel bars of [widthMm]×[thicknessMm] make up the
+  /// set (1 inside the standard table; > 1 past its top, where [csaMm2] and
+  /// [ampacityA] are the SUMMED make-up).
+  final int parallelBars;
+
+  /// One bar's cross-section (mm²).
+  double get barCsaMm2 => csaMm2 / parallelBars;
+
   const BusbarResult({
     required this.widthMm,
     required this.thicknessMm,
@@ -152,6 +160,7 @@ class BusbarResult {
     required this.totalCurrentA,
     this.sizingReason = BusbarSizingReason.ampacity,
     this.withstand,
+    this.parallelBars = 1,
   });
 }
 

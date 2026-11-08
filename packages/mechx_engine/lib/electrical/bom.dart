@@ -937,8 +937,13 @@ double? rcdFrameRatingA(double breakerA) {
 }
 
 BomLine _busbarLine(BusbarResult b, String pname, {required bool threePhase}) {
+  // Round 74 — past the table the set is n parallel top-rung bars.
+  final n = b.parallelBars;
   final spec = b.widthMm > 0 && b.thicknessMm > 0
-      ? '${_fmt(b.widthMm)}×${_fmt(b.thicknessMm)} mm (${_fmt(b.csaMm2)} mm²)'
+      ? n > 1
+          ? '$n × (${_fmt(b.widthMm)}×${_fmt(b.thicknessMm)} mm) '
+              '(${_fmt(b.csaMm2)} mm²)'
+          : '${_fmt(b.widthMm)}×${_fmt(b.thicknessMm)} mm (${_fmt(b.csaMm2)} mm²)'
       : '${_fmt(b.csaMm2)} mm²';
   final ph = threePhase ? '3φ' : '1φ';
   return BomLine(
@@ -947,7 +952,7 @@ BomLine _busbarLine(BusbarResult b, String pname, {required bool threePhase}) {
     qty: 1,
     category: PartCategory.busbar,
     priceKey: '${kElecPriceKeyPrefix}busbar:${threePhase ? 3 : 1}ph:'
-        '${_fmt(b.csaMm2)}',
+        '${n > 1 ? '${n}x${_fmt(b.barCsaMm2)}' : _fmt(b.csaMm2)}',
   );
 }
 

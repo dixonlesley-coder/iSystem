@@ -463,8 +463,13 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
         _kaToken(data.incomerKaByPanelId?[id], p.busbar.withstand?.faultKa) +
         incomerOverRangeSuffix(p.incomer));
     final bus = p.busbar;
+    // Round 74 r2 — a set of PARALLEL bars prints its count beside ONE bar's
+    // geometry (`2 × (100×10 mm) (2000 mm²)`), never one bar's W×H beside
+    // the summed section.
+    final barGeom = '${_n(bus.widthMm)}×${_n(bus.thicknessMm)} mm';
     final busGeom = bus.widthMm > 0 && bus.thicknessMm > 0
-        ? '${_n(bus.widthMm)}×${_n(bus.thicknessMm)} mm (${_n(bus.csaMm2)} mm²)'
+        ? '${bus.parallelBars > 1 ? '${bus.parallelBars} × ($barGeom)' : barGeom}'
+            ' (${_n(bus.csaMm2)} mm²)'
         : '${_n(bus.csaMm2)} mm²';
     final reason = bus.sizingReason == BusbarSizingReason.withstand
         ? strings(RptStringKey.busbarReasonWithstand)

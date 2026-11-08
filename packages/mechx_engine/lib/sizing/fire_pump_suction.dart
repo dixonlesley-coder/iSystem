@@ -296,7 +296,13 @@ Set<String> raiseFirePumpSuctionAndDischarge(
             if (x.id == e.id || !leadsToInlet(x, next)) x,
         ];
         var header = pastHeader;
-        var isHeader = false;
+        // Round 74 (fire-convergence-25) — a bare bend / inline device
+        // (degree 2) carries the header state on: a riser met past the
+        // header before the next REAL junction (header -> main -> bend ->
+        // riser foot, the commonest pump-room drawing) is the set's
+        // discharge main exactly like one leaving the header node — so a
+        // duplex room issues the same riser bore as the simplex one.
+        var isHeader = links.length <= 2 && atHeader;
         if (links.length > 2) {
           final ins = links.where((x) => inflowAt(x, next)).toList();
           if (ins.length < 2 || !ins.every((x) => leadsToMover(x, next))) {

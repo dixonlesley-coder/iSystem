@@ -221,7 +221,8 @@ void main() {
 
   test(
       'beyond the largest standard bar the genset fault grows the bar '
-      'exactly as the utility path does (density estimate, never silent)',
+      'exactly as the utility path does (parallel top bars + a warning, '
+      'never silent)',
       () {
     // 4 x 2500 kVA at 1 s: 10e6/(√3·400)/0.12 = 120.28 kA ⇒ 1503.5 mm2,
     // above the 1000 mm2 table top.
@@ -236,8 +237,17 @@ void main() {
         .prospectiveFaultkA;
     expect(gKa, closeTo(120.28, 0.01));
     final bar = r.sys.panels['MDP']!.busbar;
-    expect(bar.widthMm, 0, reason: 'beyond the standard table');
-    expect(bar.csaMm2, _csaMin(gKa * 1000, t).ceilToDouble());
+    // Round 74 — past the 1000 mm2 (100 x 10) table top the bar is n
+    // PARALLEL top bars: n = ceil(1503.5 / 1000) = 2 ⇒ 2000 mm2.
+    expect(bar.widthMm, 100, reason: 'top-rung bars');
+    expect(bar.thicknessMm, 10);
+    expect(bar.parallelBars, (_csaMin(gKa * 1000, t) / 1000).ceil());
+    expect(bar.csaMm2, bar.parallelBars * 1000);
+    expect(
+        r.sys.panels['MDP']!.warnings
+            .where((w) => w.code == 'busbar-beyond-standard-table'),
+        isNotEmpty,
+        reason: 'the parallel-bar set is surfaced');
     // Identical to a utility-only solve at that fault level.
     final asUtility = computeSystem(_profile, _project(),
             originFaultLevel: Current(gKa * 1000), busbarClearingTimeS: t)
