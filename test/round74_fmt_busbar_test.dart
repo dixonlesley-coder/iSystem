@@ -12,8 +12,9 @@ void main() {
       widthMm: 100,
       thicknessMm: 10,
       csaMm2: 2000,
-      ampacityA: Current(2860),
-      totalCurrentA: Current(2500),
+      // Round 75 — a 2-bar set is rated 1.7 x 1430 = 2431 A (derated).
+      ampacityA: Current(2431),
+      totalCurrentA: Current(2400),
       parallelBars: 2,
     );
     expect(fmtBusbar(b), '2 × (100×10 mm)');

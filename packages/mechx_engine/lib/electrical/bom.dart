@@ -22,6 +22,7 @@ import 'dart:math' as math;
 
 import '../standards/puil.dart'
     show BreakerClass, BreakerClassCode, BreakerCurve;
+import 'busbar.dart' show neutralBarSpec, peBarSpec;
 import 'catalog.dart';
 import 'earthing.dart' show RcdType, rcdTypeRank;
 import 'enclosure.dart' show EnclosureResult, maxInternalTempRiseK;
@@ -958,18 +959,23 @@ BomLine _busbarLine(BusbarResult b, String pname, {required bool threePhase}) {
 
 List<BomLine> _neutralPeLines(NeutralPeBars np, String pname) => [
       BomLine(
-        description: 'Neutral bar ${_fmt(np.neutralCsaMm2)} mm² — $pname',
+        // Round 75 — a parallel neutral set prints + keys its make-up
+        // (`2 × (100×10 mm) (2000 mm²)`, `neutral-bar:2x1000`), never one
+        // summed or invented section.
+        description: 'Neutral bar ${neutralBarSpec(np)} — $pname',
         location: pname,
         qty: 1,
         category: PartCategory.busbar,
-        priceKey: '${kElecPriceKeyPrefix}neutral-bar:${_fmt(np.neutralCsaMm2)}',
+        priceKey: '${kElecPriceKeyPrefix}neutral-bar:'
+            '${np.neutralParallelBars > 1 ? '${np.neutralParallelBars}x${_fmt(np.neutralCsaMm2 / np.neutralParallelBars)}' : _fmt(np.neutralCsaMm2)}',
       ),
       BomLine(
-        description: 'PE / earth bar ${_fmt(np.peCsaMm2)} mm² — $pname',
+        description: 'PE / earth bar ${peBarSpec(np)} — $pname',
         location: pname,
         qty: 1,
         category: PartCategory.busbar,
-        priceKey: '${kElecPriceKeyPrefix}pe-bar:${_fmt(np.peCsaMm2)}',
+        priceKey: '${kElecPriceKeyPrefix}pe-bar:'
+            '${np.peParallelBars > 1 ? '${np.peParallelBars}x${_fmt(np.peCsaMm2 / np.peParallelBars)}' : _fmt(np.peCsaMm2)}',
       ),
     ];
 

@@ -227,6 +227,19 @@ class NeutralPeBars {
   /// withstand-governed phase bar already carries `factor × I`.
   final bool oversized;
 
+  /// Round 75 — the neutral bar is `neutralParallelBars` parallel top-rung
+  /// bars (past the standard table; 1 = a single tabulated bar).
+  final int neutralParallelBars;
+
+  /// Round 75 — the PE bar is `peParallelBars` parallel top-rung bars (1 =
+  /// a single bar).
+  final int peParallelBars;
+
+  /// Round 75 — geometry (mm) of the top-rung bar a parallel neutral / PE
+  /// set is made of (0 when neither is a parallel set).
+  final double setBarWidthMm;
+  final double setBarThicknessMm;
+
   const NeutralPeBars({
     required this.neutralCsaMm2,
     required this.neutralAmpacityA,
@@ -234,5 +247,9 @@ class NeutralPeBars {
     this.neutralOversizeFactor = 1,
     this.triplenFraction = 0,
     this.oversized = false,
+    this.neutralParallelBars = 1,
+    this.peParallelBars = 1,
+    this.setBarWidthMm = 0,
+    this.setBarThicknessMm = 0,
   });
 }

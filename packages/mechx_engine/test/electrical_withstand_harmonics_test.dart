@@ -239,8 +239,10 @@ void main() {
       expect(n.neutralOversizeFactor, 1.73);
       expect(n.triplenFraction, 1.0);
       expect(n.peCsaMm2, 16); // PE unchanged (16 < 24 ≤ 35 ⇒ 16)
-      // The bar's continuous rating still tracks the phase bar.
-      expect(n.neutralAmpacityA.amperes, 110);
+      // Re-derived Round 75: the neutral reports its OWN bar's rating — the
+      // 15×3 = 45 mm² rung carries 170 A (was the 24 mm² phase bar's 110 A,
+      // a figure that does not belong to the issued neutral).
+      expect(n.neutralAmpacityA.amperes, 170);
     });
 
     test('a 500 mm² bar (> the 300 mm² cable top) still oversizes: → 1000 mm²',
@@ -256,20 +258,27 @@ void main() {
       expect(n.triplenFraction, 1.0);
     });
 
-    test('beyond the largest bar the neutral is ceil(target), never the phase',
-        () {
-      // 1000 mm² · 1.73 = 1730 → no bar ≥ it → ceil(1730) = 1730 mm².
+    test('beyond the largest bar the neutral is an n × (100×10) set, never '
+        'the phase', () {
+      // Re-derived Round 75 (was ceil(1730) = 1730 mm², an invented section
+      // no fabricator can order): 1000 mm² · 1.73 = 1730 mm² → past the
+      // table the neutral is the smallest parallel top-rung set covering it:
+      // n = max(2, ceil(1730 / 1000)) = 2 ⇒ 2 × 1000 = 2000 mm², rated
+      // 1.7 × 1430 = 2431 A.
       final n = sizeNeutralPeBars(1000, const Current(1430),
           profile: p, neutralOversizeFactor: 1.73, triplenFraction: 1.0);
-      expect(n.neutralCsaMm2, 1730);
+      expect(n.neutralCsaMm2, 2000);
+      expect(n.neutralParallelBars, 2);
+      expect(n.neutralAmpacityA.amperes, 2431);
       expect(n.neutralOversizeFactor, 1.73);
     });
 
     // Round 11 property: for EVERY bar on the ladder and every oversize factor
     // > 1, the neutral is ≥ phase·factor, strictly larger than the phase bar,
-    // and either a real bar rung or (beyond the ladder) ceil(target) — the
-    // oversize is never silently dropped.
-    test('property: factor > 1 ⇒ neutral ≥ target, > phase, a bar or ceil', () {
+    // and either a real bar rung or (beyond the ladder, Round 75) an
+    // n × 1000 mm² parallel set — the oversize is never silently dropped.
+    test('property: factor > 1 ⇒ neutral ≥ target, > phase, a bar or a set',
+        () {
       final bars = [for (final b in p.copperBusbarTable) b.csaMm2];
       for (final phase in bars) {
         for (final f in const [1.1, 1.25, 1.5, 1.73]) {
@@ -280,7 +289,9 @@ void main() {
               reason: '$phase × $f');
           expect(n.neutralCsaMm2, greaterThan(phase), reason: '$phase × $f');
           final isBar = bars.contains(n.neutralCsaMm2);
-          expect(isBar || n.neutralCsaMm2 == target.ceilToDouble(), isTrue,
+          final isSet = n.neutralParallelBars > 1 &&
+              n.neutralCsaMm2 == n.neutralParallelBars * 1000;
+          expect(isBar || isSet, isTrue,
               reason: '$phase × $f → ${n.neutralCsaMm2}');
           expect(n.neutralOversizeFactor, f);
           expect(n.triplenFraction, 0.5);

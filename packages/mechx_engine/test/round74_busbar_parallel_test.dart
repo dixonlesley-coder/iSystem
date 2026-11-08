@@ -3,9 +3,11 @@
 // with a `busbar-beyond-standard-table` warning, never an invented 0 x 0
 // density-estimate section (1539 mm2 could not be ordered).
 //
-// First principles:
-//   n = max(ceil(required / 1430 A), ceil(csa floor / 1000 mm2), 2)
-//   csa = n · 1000 mm2, ampacity = n · 1430 A
+// First principles (re-derived Round 75 — parallel-bar derating k(n) =
+// 1.7 / 2.35 / 2.8 / 0.7·n for 2 / 3 / 4 / ≥5 bars):
+//   n = the smallest count ≥ max(2, ceil(csa floor / 1000 mm2)) with
+//       1430 A · k(n) ≥ required
+//   csa = n · 1000 mm2, ampacity = 1430 A · k(n)
 library;
 
 import 'dart:math' as math;
@@ -59,13 +61,17 @@ void main() {
       final req = 1431 + rnd.nextDouble() * 6000;
       final floor = rnd.nextBool() ? 0.0 : rnd.nextDouble() * 5000;
       final b = sizeBusbar(_profile, Current(req), minCsaMm2: floor);
-      final n = math.max(
-          2, math.max((req / 1430 - 1e-9).ceil(), (floor / 1000 - 1e-9).ceil()));
+      double k(int n) =>
+          n == 2 ? 1.7 : n == 3 ? 2.35 : n == 4 ? 2.8 : 0.7 * n;
+      var n = math.max(2, (floor / 1000 - 1e-9).ceil());
+      while (1430 * k(n) < req) {
+        n++;
+      }
       expect(b.parallelBars, n, reason: 'req $req floor $floor');
       expect(b.widthMm, 100);
       expect(b.thicknessMm, 10);
       expect(b.csaMm2, n * 1000);
-      expect(b.ampacityA.amperes, n * 1430);
+      expect(b.ampacityA.amperes, (1430 * k(n)).roundToDouble());
       expect(b.ampacityA.amperes, greaterThanOrEqualTo(req));
       expect(b.csaMm2, greaterThanOrEqualTo(floor));
     }
@@ -82,15 +88,21 @@ void main() {
         originFaultLevel: const Current(16000), busbarClearingTimeS: 0.1);
     final mdp = sys.panels['MDP']!;
     final bar = mdp.busbar;
-    // The incomer is past 1430 A, so the bus needs ≥ 2 parallel 1000 mm2 bars.
-    expect(mdp.incomer.breaker.ratingA.amperes, greaterThan(1430));
-    expect(bar.parallelBars,
-        (mdp.incomer.breaker.ratingA.amperes / 1430 - 1e-9).ceil());
+    // The incomer is past 1430 A, so the bus needs ≥ 2 parallel 1000 mm2
+    // bars — Round 75: enough that the DERATED set carries the incomer
+    // (2 bars 2431 A, 3 bars 3360.5 A, 4 bars 4004 A).
+    final inA = mdp.incomer.breaker.ratingA.amperes;
+    expect(inA, greaterThan(1430));
+    final expectN = inA <= 2431 ? 2 : inA <= 3360.5 ? 3 : 4;
+    expect(bar.parallelBars, expectN);
+    expect(bar.ampacityA.amperes, greaterThanOrEqualTo(inA));
     expect(bar.widthMm, 100);
     expect(bar.csaMm2, bar.parallelBars * 1000);
     final warns = mdp.warnings.where((w) => w.code == _code).toList();
     expect(warns, isNotEmpty);
-    expect(warns.first.severity, WarningSeverity.warning);
+    // Round 75 — an acknowledgeable INFO (the set is rated on its derated
+    // figure; a warning against the engine's own pick blocked compliance).
+    expect(warns.first.severity, WarningSeverity.info);
     expect(sys.warnings.where((w) => w.code == _code), isNotEmpty);
 
     final lines = buildPanelBom(mdp);

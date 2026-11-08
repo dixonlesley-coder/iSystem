@@ -497,7 +497,11 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
           {'n': p.busbarSections.length}));
     }
     pb.writeln(strings.format(RptStringKey.panelNeutralBar, {
-      'n': _n(p.neutralPeBars.neutralCsaMm2),
+      // Round 75 — a parallel set prints its make-up (the template appends
+      // ' mm²' after {n}).
+      'n': p.neutralPeBars.neutralParallelBars > 1
+          ? '${p.neutralPeBars.neutralParallelBars} × (${_n(p.neutralPeBars.setBarWidthMm)}×${_n(p.neutralPeBars.setBarThicknessMm)} mm) = ${_n(p.neutralPeBars.neutralCsaMm2)}'
+          : _n(p.neutralPeBars.neutralCsaMm2),
       // Round 44 — '(xN triplen oversize)' only when the triplen current
       // actually grew the bar beyond the phase bar.
       'oversize': p.neutralPeBars.neutralOversizeFactor > 1 &&
@@ -505,7 +509,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
           ? strings.format(RptStringKey.panelNeutralOversize,
               {'f': _n(p.neutralPeBars.neutralOversizeFactor)})
           : '',
-      'pe': _n(p.neutralPeBars.peCsaMm2),
+      'pe': p.neutralPeBars.peParallelBars > 1
+          ? '${p.neutralPeBars.peParallelBars} × (${_n(p.neutralPeBars.setBarWidthMm)}×${_n(p.neutralPeBars.setBarThicknessMm)} mm) = ${_n(p.neutralPeBars.peCsaMm2)}'
+          : _n(p.neutralPeBars.peCsaMm2),
     }));
     // Round 19 — a diversified board's current is printed as the diversified
     // figure (pairs with the diversified W) with the undiversified worst-phase

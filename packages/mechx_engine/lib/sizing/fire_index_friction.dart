@@ -799,8 +799,19 @@ double? fireIndexPathFrictionM({
   Map<String, double>? frictionByTerminalOut,
 }) {
   if (!system.nodeIds.contains(pumpId)) return null;
+  // Round 75 (fire-convergence-26-index-friction-shortcut-through-zero-flow-
+  // test-line) — the walk runs only over pipes that CARRY water. A pipe
+  // with a solved zero flow (a recognised pump TEST line, a zero-flow
+  // pocket) or no sizing at all used to be a free zero-weight shortcut: a
+  // test loop from the top discharge header back to the first suction
+  // header let the Dijkstra skip the lower zones' risers (index friction
+  // 19.73 -> 6.71 m on a 28-storey series tower, the top booster under-
+  // rated by 4.7 m) although every pipe size was unchanged. An unmeasured
+  // FLOWING pipe still weighs 0 and marks the result unknown.
   final adj = <String, List<NetEdge>>{};
   for (final e in system.edges) {
+    final s = sizing[e.id];
+    if (s == null || !(s.flow.cubicMetersPerSecond > 0)) continue;
     (adj[e.fromId] ??= []).add(e);
     (adj[e.toId] ??= []).add(e);
   }
@@ -891,8 +902,18 @@ double? fireIndexPathFrictionM({
       : fixtures.isNotEmpty
       ? fixtures
       : {
-          for (final MapEntry(key: n, value: es) in adj.entries)
-            if (es.length == 1 && n != pumpId) n,
+          // The drawn leaves (every system pipe counted), so dropping a
+          // zero-flow pipe from the walk never makes a tank a "leaf".
+          for (final MapEntry(key: n, value: c) in () {
+            final deg = <String, int>{};
+            for (final e in system.edges) {
+              deg[e.fromId] = (deg[e.fromId] ?? 0) + 1;
+              deg[e.toId] = (deg[e.toId] ?? 0) + 1;
+            }
+            return deg;
+          }()
+              .entries)
+            if (c == 1 && n != pumpId) n,
         };
   double? worst;
   for (final t in terminals0) {
