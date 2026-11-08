@@ -16,6 +16,7 @@ import '../electrical/compute.dart' show kUpsInputFactor, serviceEntranceCapacit
 import '../electrical/earthing.dart' show EarthingResult, EarthingSystem;
 import '../electrical/fault.dart'
     show faultStudyU0VerifyItem, inverterFaultMultiple, kAlternatorXdPu;
+import '../electrical/genset_backup.dart' show serviceSystemOf;
 import '../electrical/load_kind.dart' show LoadKind;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
@@ -315,10 +316,13 @@ FaultLevelBasis serviceFaultEstimateBasis(ElectricalProject project) {
 RptKeyValue electricalDesignBasisBlock(ElectricalCalcReportData data,
     [ReportStrings strings = const ReportStrings.en()]) {
   final s = data.result.supply;
+  // Round 79 — the printed service follows [serviceSystemOf] (any 3φ root ⇒
+  // a 3φ service), never only the governing root's incomer basis.
+  final svc = serviceSystemOf(data.project, data.result);
   return RptKeyValue([
     (
       strings(RptStringKey.edbSupply),
-      '**${_systemLabel(s.system, strings)}, ${_n(s.voltage.volts)} V**'
+      '**${_systemLabel(svc.system, strings)}, ${_n(svc.voltage.volts)} V**'
     ),
     (
       strings(RptStringKey.edbConnectedLoad),
@@ -447,7 +451,9 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
     ..add(RptKeyValue([
       (
         strings(RptStringKey.ssSystem),
-        '${_systemLabel(s.system, strings)}, ${_n(s.voltage.volts)} V'
+        // Round 79 — the one printed service ([serviceSystemOf]).
+        '${_systemLabel(serviceSystemOf(data.project, r).system, strings)}, '
+            '${_n(serviceSystemOf(data.project, r).voltage.volts)} V'
       ),
       (
         strings(RptStringKey.edbConnectedLoad),

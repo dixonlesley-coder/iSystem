@@ -7,7 +7,7 @@ library;
 
 import 'dart:math' as math;
 
-import '../units.dart' show ApparentPower, Power;
+import '../units.dart' show ApparentPower, Power, Voltage;
 import 'load_kind.dart' show LoadKind;
 import 'model.dart';
 import 'panel_results.dart';
@@ -497,6 +497,15 @@ const double _kAlternatorLineVoltageV = 400;
 /// voltage (the supply's own when the supply is 3φ, else 400 V); an all-1φ
 /// service keeps the 1φ board basis. Pure.
 ({bool threePhase, double volts}) _alternatorBasis(
+        ElectricalProject project, ElectricalSystemResult sys) =>
+    alternatorBasis(project, sys);
+
+/// Round 79 (regression-genset-fault-1ph-u0-on-3ph-alternator-ads-pass) —
+/// the public form of the alternator basis: the SAME rule decides the
+/// on-site source's sizing basis (above) and its fault basis
+/// (`advanced_study.dart` `onSiteSinglePhaseU0`), so a set sized as a 3φ
+/// machine is never faulted as a 1φ one. Pure.
+({bool threePhase, double volts}) alternatorBasis(
     ElectricalProject project, ElectricalSystemResult sys) {
   if (sys.supply.system == ElectricalSystem.threePhase) {
     return (threePhase: true, volts: sys.supply.voltage.volts);
@@ -507,6 +516,30 @@ const double _kAlternatorLineVoltageV = 400;
   return any3
       ? (threePhase: true, volts: _kAlternatorLineVoltageV)
       : (threePhase: false, volts: sys.supply.voltage.volts);
+}
+
+/// Round 79 (elec-convergence-30-supply-printed-1ph-230v-on-a-3ph-service)
+/// — the ONE printed SERVICE system / voltage: three-phase (the supply's
+/// own line-to-line voltage, else 400 V) whenever ANY service-entrance
+/// board is 3φ — a 3φ board cannot hang off a 1φ PLN connection, whichever
+/// root's incomer is larger — else the governing root's 1φ basis. The daya
+/// ladder (any 3φ root ⇒ a 3φ step) and the alternator basis read the same
+/// rule; `sys.supply` stays the governing root's incomer basis (sizing is
+/// untouched). Pure.
+({ElectricalSystem system, Voltage voltage}) serviceSystemOf(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  if (sys.supply.system == ElectricalSystem.threePhase) {
+    return (system: ElectricalSystem.threePhase, voltage: sys.supply.voltage);
+  }
+  final byId = {for (final p in project.panels) p.id: p};
+  final any3 = _rootPanelIds(project)
+      .any((id) => byId[id]?.system == ElectricalSystem.threePhase);
+  return any3
+      ? (
+          system: ElectricalSystem.threePhase,
+          voltage: const Voltage(_kAlternatorLineVoltageV)
+        )
+      : (system: sys.supply.system, voltage: sys.supply.voltage);
 }
 
 /// Round 37 (regression-genset-1ph-boards-on-different-lines-summed) — the
@@ -544,7 +577,9 @@ double alternatorLineDemandVa(ElectricalProject project,
     }
   }
   var l1 = 0.0, l2 = 0.0, l3 = 0.0;
-  var unresolvedVa = 0.0;
+  // Round 79 — the 1φ boards whose line cannot be resolved (no 3φ parent
+  // way — notably 1φ SERVICE-ENTRANCE boards): id → current.
+  final unresolved = <String, double>{};
   for (final id in panelIds) {
     final r = sys.panels[id];
     final m = modelById[id];
@@ -606,8 +641,37 @@ double alternatorLineDemandVa(ElectricalProject project,
       case PhaseAssignment.l3:
         l3 += a;
       default:
-        unresolvedVa +=
-            capacityForLineCurrentVa(a, ElectricalSystem.threePhase, volts);
+        unresolved[id] = a;
+    }
+  }
+  // Round 79 (elec-convergence-30-genset-sums-1ph-roots-onto-one-alternator-
+  // line) — two or more unresolved 1φ boards are spread over the alternator
+  // lines with the SAME rule the supply study allocates 1φ roots by
+  // (`advanced_study.dart` `allocateServiceLinesVa`: largest first, each onto
+  // the currently lightest line, ties to the lowest line, then id) — never
+  // all stacked on one line (three 43.5 A shops beside a 4.3 A 3φ board need
+  // √3·400·47.8 = 33.1 kVA, not 93.4 kVA). A single unresolved board keeps
+  // the conservative per-board term √3·V_LL·I (Round 66, byte-identical).
+  var unresolvedVa = 0.0;
+  if (unresolved.length >= 2) {
+    final order = unresolved.entries.toList()
+      ..sort((a, b) {
+        final c = b.value.compareTo(a.value);
+        return c != 0 ? c : a.key.compareTo(b.key);
+      });
+    for (final e in order) {
+      if (l1 <= l2 + 1e-9 && l1 <= l3 + 1e-9) {
+        l1 += e.value;
+      } else if (l2 <= l3 + 1e-9) {
+        l2 += e.value;
+      } else {
+        l3 += e.value;
+      }
+    }
+  } else {
+    for (final a in unresolved.values) {
+      unresolvedVa +=
+          capacityForLineCurrentVa(a, ElectricalSystem.threePhase, volts);
     }
   }
   final worst = l1 > l2 ? (l1 > l3 ? l1 : l3) : (l2 > l3 ? l2 : l3);

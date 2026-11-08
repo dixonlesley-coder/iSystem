@@ -1015,6 +1015,36 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
         ));
         continue;
       }
+      // Round 79 (fire-convergence-30-meter-fed-fire-system-phantom-pump-or-
+      // false-dry) — a meter-fed FIRE network keeps the Round-50 assumed
+      // fire pump at the meter (on the schedule + the MDP way): ONE story,
+      // the pump is assumed with its duty, whether or not an FDC is drawn.
+      if (d.service == ServiceType.fireHydrant ||
+          d.service == ServiceType.fireSprinkler) {
+        final basis = ref
+            .watch(fireSystemBasesProvider)
+            .where((b) => repId != null && b.system.nodeIds.contains(repId))
+            .firstOrNull;
+        final duty = basis?.duty;
+        if (duty != null) {
+          infos.add(DesignIssue(
+            severity: IssueSeverity.info,
+            kind: 'fire-pump-assumed:$service',
+            title: str(StringKey.issueFirePumpAssumedTitle),
+            message: str.format(StringKey.issueFirePumpAssumedMessage, {
+              'service': serviceName,
+              'nodes': pluralCount(n, str(StringKey.issueNounNodeOne),
+                  str(StringKey.issueNounNodeMany)),
+              'flow': duty.flow.inLitersPerSecond.toStringAsFixed(1),
+              'head': duty.head.meters.toStringAsFixed(1),
+            }),
+            locate: repNode == null
+                ? null
+                : IssueLocation(repNode.sheetId, nodeId: repId),
+          ));
+          continue;
+        }
+      }
       infos.add(DesignIssue(
         severity: IssueSeverity.info,
         kind: 'mains-fed:$service',

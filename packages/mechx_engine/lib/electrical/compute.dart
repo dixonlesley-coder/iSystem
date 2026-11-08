@@ -27,7 +27,12 @@ import '../units.dart';
 // fault estimate here too, so the ADS / selectivity fault origin is the
 // transformer the advanced study prints (a library cycle, legal in Dart: the
 // helper is a pure function of the solved result).
-import 'advanced_study.dart' show gensetFaultBasis, serviceFaultEstimateFor;
+import 'advanced_study.dart'
+    show
+        gensetFaultBasis,
+        originPanelIdsOf,
+        rootServiceBasisVa,
+        serviceFaultEstimateFor;
 import 'busbar.dart';
 import 'cable_family.dart';
 import 'containment.dart' show effectiveInstallMethod;
@@ -5132,32 +5137,152 @@ ElectricalSystemResult computeSystem(
     return solveAll();
   }
 
-  final out = grownSolve();
-  // Round 73 (genset busbar withstand) — a standby genset is a maximum-fault
-  // source for every board it can carry ([gensetFaultBasis]: the essential
-  // sub-tree, or every board for a full-backup / undesignated set). FOLD 1
-  // sizes each such bar on max(utility fault, the on-genset fault at that
-  // bus) — the alternator sub-transient Xd'' study ([faultStudy] from the
-  // set's own fault, `// VERIFY`, the SAME study the advanced study's
-  // `mergeGensetFaultStudy` judges with) — so the engine's own pick
-  // withstands both supplies and `busbar-withstand-inadequate-on-genset`
-  // fires only when no standard bar can. The bar never changes a cable, a
-  // device, the demand or the genset size, so the on-genset fault read from
-  // the first solve is that of the re-solve (one more pass is the fixed
-  // point; the ADS growth floors are kept). No FOLD 1, no standby genset, or
-  // no backed bus whose on-genset fault exceeds its utility one ⇒ the first
-  // solve verbatim (byte-identical).
-  if (!applyWithstand) return out;
-  final gBasis = gensetFaultBasis(project, out);
-  if (gBasis == null) return out;
-  final gStudy =
-      faultStudy(out, project, profile, originFaultLevel: Current(gBasis.iscA));
-  for (final id in gBasis.backed) {
-    final gKa = gStudy.panels[id]?.prospectiveFaultkA;
-    final uKa = out.panels[id]?.busbar.withstand?.faultKa;
-    if (gKa == null || uKa == null || gKa <= uKa + 1e-9) continue;
-    gensetWithstandA[id] = gKa * 1000;
+  ElectricalSystemResult withstandSolve() {
+    final out = grownSolve();
+    // Round 73 (genset busbar withstand) — a standby genset is a maximum-fault
+    // source for every board it can carry ([gensetFaultBasis]: the essential
+    // sub-tree, or every board for a full-backup / undesignated set). FOLD 1
+    // sizes each such bar on max(utility fault, the on-genset fault at that
+    // bus) — the alternator sub-transient Xd'' study ([faultStudy] from the
+    // set's own fault, `// VERIFY`, the SAME study the advanced study's
+    // `mergeGensetFaultStudy` judges with) — so the engine's own pick
+    // withstands both supplies and `busbar-withstand-inadequate-on-genset`
+    // fires only when no standard bar can. The bar never changes a cable, a
+    // device, the demand or the genset size, so the on-genset fault read from
+    // the first solve is that of the re-solve (one more pass is the fixed
+    // point; the ADS growth floors are kept). No FOLD 1, no standby genset, or
+    // no backed bus whose on-genset fault exceeds its utility one ⇒ the first
+    // solve verbatim (byte-identical).
+    if (!applyWithstand) return out;
+    final gBasis = gensetFaultBasis(project, out);
+    if (gBasis == null) return out;
+    final gStudy = faultStudy(out, project, profile,
+        originFaultLevel: Current(gBasis.iscA));
+    for (final id in gBasis.backed) {
+      final gKa = gStudy.panels[id]?.prospectiveFaultkA;
+      final uKa = out.panels[id]?.busbar.withstand?.faultKa;
+      if (gKa == null || uKa == null || gKa <= uKa + 1e-9) continue;
+      gensetWithstandA[id] = gKa * 1000;
+    }
+    if (gensetWithstandA.isEmpty) return out;
+    return solveAll();
   }
-  if (gensetWithstandA.isEmpty) return out;
-  return solveAll();
+
+  final fin = withstandSolve();
+  // Round 79 — the declared daya judged with SEVERAL service-entrance boards.
+  if (roots.length > 1) _judgeMultiRootServiceCapacity(project, fin);
+  return fin;
+}
+
+/// Round 79 (elec-convergence-30-multi-root-declared-daya-never-judged) —
+/// JUDGE-ONLY: with SEVERAL service-entrance boards the declared PLN daya
+/// floors no incomer (the split between the boards is unknown — never
+/// fabricated), but the limiter still trips on its heaviest LINE. That line
+/// is the supply study's own per-line allocation ([rootServiceBasisVa] per
+/// root — worst phase, largest machine, UPS input — with the 1φ roots spread
+/// over the lines by [allocateServiceLinesVa]'s LPT rule): a split-free
+/// verdict. A 3φ (or above-1φ-ladder) LV daya passes `VA / (√3·400)` per
+/// phase; an all-1φ service on a 1φ daya step passes `VA / V` on its one
+/// line, which every 1φ root shares. Raises `service-capacity-below-demand`
+/// (warning) on the largest root on the heaviest line, naming the line's
+/// boards. Only an LV service (no declared transformer, one section): an MV
+/// service is judged by the transformer / section checks. Single-root
+/// services are untouched (the Round-35 floor + judge).
+void _judgeMultiRootServiceCapacity(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final cap = project.supplyCapacityVa?.voltAmperes;
+  if (cap == null || cap <= 0) return;
+  if (project.supplyKind != SupplyKind.pln) return;
+  if (declaredServiceTransformer(project) != null) return;
+  if (serviceSections(project) > 1) return;
+  final roots = originPanelIdsOf(sys, project).toList()..sort();
+  if (roots.length < 2) return;
+  final byId = {for (final p in project.panels) p.id: p};
+  final singles = {
+    for (final id in roots)
+      if (byId[id]?.system == ElectricalSystem.singlePhase) id,
+  };
+  final allSingle = singles.length == roots.length;
+  final singlePhaseService = allSingle && cap <= plnDayaVa1ph.last + 1e-9;
+  final List<double> lineA;
+  final List<List<String>> members;
+  final double limitA;
+  final double voltage;
+  if (singlePhaseService) {
+    // One line: every 1φ root shares it.
+    voltage = sys.supply.voltage.volts;
+    if (voltage <= 0) return;
+    var sum = 0.0;
+    for (final id in roots) {
+      sum += rootServiceBasisVa(project, sys, id) /
+          (math.sqrt(3) * kThreePhaseServiceLineVoltageV);
+    }
+    lineA = [sum];
+    members = [roots];
+    limitA =
+        lineCurrentForCapacityA(cap, ElectricalSystem.singlePhase, voltage);
+  } else {
+    voltage = kThreePhaseServiceLineVoltageV;
+    final perLineFactor = math.sqrt(3) * voltage;
+    lineA = [0.0, 0.0, 0.0];
+    members = [<String>[], <String>[], <String>[]];
+    final basis = {
+      for (final id in roots) id: rootServiceBasisVa(project, sys, id)
+    };
+    for (final id in roots) {
+      if (singles.contains(id)) continue;
+      for (var i = 0; i < 3; i++) {
+        lineA[i] += basis[id]! / 3 / (perLineFactor / 3);
+        members[i].add(id);
+      }
+    }
+    final ordered = singles.toList()
+      ..sort((a, b) {
+        final c = basis[b]!.compareTo(basis[a]!);
+        return c != 0 ? c : a.compareTo(b);
+      });
+    for (final id in ordered) {
+      var k = 0;
+      for (var i = 1; i < 3; i++) {
+        if (lineA[i] < lineA[k] - 1e-9) k = i;
+      }
+      lineA[k] += basis[id]! / perLineFactor;
+      members[k].add(id);
+    }
+    limitA = lineCurrentForCapacityA(
+        cap, ElectricalSystem.threePhase, kThreePhaseServiceLineVoltageV);
+  }
+  var heavy = 0;
+  for (var i = 1; i < lineA.length; i++) {
+    if (lineA[i] > lineA[heavy] + 1e-9) heavy = i;
+  }
+  final worstA = lineA[heavy];
+  if (worstA <= limitA + 1e-6) return;
+  final onLine = members[heavy];
+  String? target;
+  var best = -1.0;
+  for (final id in onLine) {
+    final v = rootServiceBasisVa(project, sys, id);
+    if (v > best + 1e-9) {
+      best = v;
+      target = id;
+    }
+  }
+  if (target == null) return;
+  final names = [for (final id in onLine) sys.panels[id]?.name ?? id];
+  final w = ElectricalWarning(
+    code: 'service-capacity-below-demand',
+    severity: WarningSeverity.warning,
+    message: '${names.join(' + ')}: the service-entrance boards put '
+        '${_num(roundTo(worstA, 1))} A on the most loaded '
+        '${singlePhaseService ? 'single-phase line' : 'phase'} of the '
+        'service, above the declared connection capacity '
+        '${_num(cap / 1000)} kVA (~${_num(roundTo(limitA, 1))} A per '
+        '${singlePhaseService ? 'line' : 'phase'}) — the utility limiter '
+        'would trip under the diversified demand; raise the subscribed daya, '
+        'move a single-phase board to a lighter phase or shed load.',
+    panelId: target,
+  );
+  sys.panels[target]?.warnings.add(w);
+  sys.warnings.add(w);
 }

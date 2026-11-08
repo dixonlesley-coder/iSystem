@@ -173,6 +173,60 @@ class SizingContext {
       );
 }
 
+/// Round 79 (fire-convergence-30-symmetric-ring-pipe-left-unsized) — every
+/// loop edge a demand-bearing balance left at EXACTLY zero flow (a symmetric
+/// centre-fed grid / ring) is a real pipe: still at zero flow (honest — the
+/// symmetric design point puts nothing through it), it is sized at least at
+/// the smallest bore of the flowing pipes of its service meeting it at either
+/// end (the size it carries the moment the demand moves off the symmetric
+/// point), the fire / service minimum already applied by [sizeNetwork] for a
+/// pipe. An air duct (left unsized by [sizeNetwork] at zero airflow) takes
+/// that neighbour's section (W x H kept). A hand-overridden edge stands. Pure
+/// over the sizing maps; an edge whose service is still flowing nowhere
+/// around it keeps its own sizing.
+void _floorZeroBalancedLoopEdges({
+  required Network net,
+  required Map<String, EdgeSizing> result,
+  required Map<String, FlowRate> allFlows,
+  required Map<String, String> edgeFlowFrom,
+  required Set<String> zeroBalanced,
+  required Map<String, Diameter> sizeOverrides,
+}) {
+  for (final id in zeroBalanced.toList()..sort()) {
+    if (sizeOverrides.containsKey(id)) continue;
+    if ((allFlows[id]?.cubicMetersPerSecond ?? 0) > 1e-15) continue;
+    final e = net.edgeById(id);
+    if (e == null) continue;
+    EdgeSizing? floor;
+    for (final end in [e.fromId, e.toId]) {
+      for (final x in net.edgesAt(end)) {
+        if (x.id == id || x.service != e.service) continue;
+        if (zeroBalanced.contains(x.id)) continue;
+        final xs = result[x.id];
+        if (xs == null || xs.flow.cubicMetersPerSecond <= 1e-15) continue;
+        if (floor == null || xs.diameter.meters < floor.diameter.meters) {
+          floor = xs;
+        }
+      }
+    }
+    if (floor == null) continue;
+    final own = result[id];
+    if (own != null && own.diameter.meters + 1e-9 >= floor.diameter.meters) {
+      continue;
+    }
+    result[id] = EdgeSizing(
+      edgeId: id,
+      service: e.service,
+      flow: const FlowRate(0),
+      diameter: floor.diameter,
+      velocity: const Velocity(0),
+      width: floor.width,
+      height: floor.height,
+      flowFromId: edgeFlowFrom[id],
+    );
+  }
+}
+
 /// Sizing outcome for one edge.
 ///
 /// [diameter] is the circular size, or the circular-equivalent for a
@@ -2868,6 +2922,9 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
         {...ctx.hoseStationEdgeIds, ...classIIHydrantEdgeIds});
   }
   final allFlows = <String, FlowRate>{};
+  // Round 79 — loop edges a DEMAND-bearing Hardy–Cross balance left at exactly
+  // zero flow by symmetry (floored at their flowing neighbours' bore below).
+  final zeroBalancedEdgeIds = <String>{};
   final sanitary = <String, EdgeSizing>{}; // DFU-sized drainage/vent edges
   final stormSizing = <String, EdgeSizing>{}; // rainwater downpipes
   // M17 — edges of any looped component whose Hardy–Cross balance did NOT
@@ -4123,12 +4180,43 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
             loopEdges = candidate;
             balanced = balance(loopEdges);
           }
+          // Round 79 — the cycle block of each loop edge: a zero edge in a
+          // block that carries flow elsewhere is zero only by symmetry; a
+          // block with no flowing edge at all is a demand-free pocket.
+          final flowingBlockEdges = <String>{};
+          for (final blk in cycleBlocks([
+            for (final e in loopEdges) (e.id, e.fromId, e.toId),
+          ])) {
+            if (blk.any((id) => (balanced.edgeFlow[id] ?? 0.0).abs() > 1e-12)) {
+              flowingBlockEdges.addAll(blk);
+            }
+          }
           for (final entry in balanced.edgeFlow.entries) {
             // mech-props-6 — a demand-free loop pocket (a bare duct ring drawn
             // before its diffusers) balances to EXACTLY zero flow; leave it
             // unsized, as the tree path leaves a no-demand edge (the duct
             // sizers require a positive airflow).
-            if (entry.value.abs() <= 1e-12) continue;
+            if (entry.value.abs() <= 1e-12) {
+              // Round 79 (fire-convergence-30-symmetric-ring-pipe-left-
+              // unsized) — but a loop that CARRIES demand balances an edge to
+              // exactly zero only by symmetry (a centre-fed sprinkler grid's
+              // middle branch pipe, a ring main's far segment between two
+              // equal draw-offs) — its cycle block carries flow elsewhere,
+              // unlike a demand-free pocket ring whose every edge is zero.
+              // It is a real pipe that carries flow as soon
+              // as the demand moves off the symmetric design point: record it
+              // at zero flow (undirected) and floor its bore at its
+              // flowing neighbours' after sizing ([zeroBalancedEdgeIds]) —
+              // never silently dropped from the result / BOM / plan labels.
+              if (flowingBlockEdges.contains(entry.key)) {
+                // Undirected (no flowFromId): at the symmetric point it
+                // carries nothing, off it either way — never the drawn
+                // direction, which flipping the pipe would change.
+                allFlows[entry.key] = const FlowRate(0);
+                zeroBalancedEdgeIds.add(entry.key);
+              }
+              continue;
+            }
             allFlows[entry.key] = FlowRate(entry.value.abs());
           }
           // mech-props-1 — a BRIDGE of a looped water component (a dead-end
@@ -5698,6 +5786,14 @@ Map<String, EdgeSizing> _autoSizeNetworkCore(
     }
   }
   final result = sizeNetwork(net, allFlows, ctx, sizeOverrides: sizeOverrides);
+  _floorZeroBalancedLoopEdges(
+    net: net,
+    result: result,
+    allFlows: allFlows,
+    edgeFlowFrom: edgeFlowFrom,
+    zeroBalanced: zeroBalancedEdgeIds,
+    sizeOverrides: sizeOverrides,
+  );
   // DFU-sized drainage/vent and capacity-table rainwater downpipes are built
   // directly (not via sizeNetwork), so apply any override to them here too.
   for (final entry in sanitary.entries) {

@@ -137,8 +137,14 @@ List<NetworkComponentDefect> networkConnectivityDefects(Network net) {
 
     // Round 25 — a degree-1 water meter on a cold/hot water service is the
     // mains connection (a direct-from-PDAM building draws no tank or pump).
+    // Round 79 (fire-convergence-30-meter-fed-fire-system-phantom-pump-or-
+    // false-dry) — on a FIRE class too: a hose-reel system teed off the
+    // mains meter is fed (the app assumes its fire pump at the meter), never
+    // `no-source`.
+    final isFire = members.any(isFireService);
     final isWater = members.contains(ServiceType.coldWater) ||
-        members.contains(ServiceType.hotWater);
+        members.contains(ServiceType.hotWater) ||
+        isFire;
     bool isMainsEntry(String id) =>
         isWater &&
         net.nodeById(id)?.component == NodeComponent.waterMeter &&
@@ -154,7 +160,20 @@ List<NetworkComponentDefect> networkConnectivityDefects(Network net) {
       ..sort((a, b) => a.index.compareTo(b.index));
     for (final component in components) {
       if (component.isEmpty) continue;
-      if (component.any(isPlant)) continue; // this component is fed
+      // Round 79 — on a fire class a supply INLET (FDC) is not a source
+      // plant: a meter-fed component with an FDC is still mains-fed (the
+      // same reading as without the FDC); an inlet-only component stays fed
+      // (the app's dry / brigade-fed basis names it).
+      if (isFire) {
+        if (component.any((id) =>
+            isPlant(id) &&
+            !isSupplyInletComponent(net.nodeById(id)?.component))) {
+          continue;
+        }
+        if (!mainsFed(component) && component.any(isPlant)) continue;
+      } else if (component.any(isPlant)) {
+        continue; // this component is fed
+      }
       final kind = mainsFed(component)
           ? NetworkDefectKind.mainsFed
           // A plant-less component: an island if the class is otherwise
