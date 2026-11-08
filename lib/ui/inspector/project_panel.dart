@@ -377,6 +377,28 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
               ),
           ]
         : const [],
+    // Round 76 — hose outlets above the NFPA 14 hose-connection limits (the
+    // very ranges the Review raises).
+    standpipeOutletOverPressure: fireDrawn
+        ? [
+            for (final o in ref.read(standpipeOutletOverPressureProvider))
+              StandpipeOutletReportLine(
+                tag: fireSystemTag(o.basis, o.pumpId),
+                floors: () {
+                  final fl = ref.read(projectControllerProvider).building.floors;
+                  String name(int f) =>
+                      f >= 0 && f < fl.length ? fl[f].name : 'F$f';
+                  return o.lowFloor == o.highFloor
+                      ? name(o.lowFloor)
+                      : '${name(o.lowFloor)}-${name(o.highFloor)}';
+                }(),
+                maxKpa: o.maxKpa,
+                minKpa: o.minKpa,
+                limitKpa: o.limitKpa,
+                residual: o.residual,
+              ),
+          ]
+        : const [],
     // Round 30 (report-parity-2-1) — each drawn fire system's own pump, under
     // the tag its schedule row / MDP way carry.
     fireSystems: fireDrawn

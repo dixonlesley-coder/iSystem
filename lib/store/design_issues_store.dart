@@ -47,7 +47,8 @@ import 'fire_store.dart'
         firePumpDutyProvider,
         fireSystemBasesProvider,
         kMinFireStageHeadM,
-        sprinklerPumpCheckProvider;
+        sprinklerPumpCheckProvider,
+        standpipeOutletOverPressureProvider;
 import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
 import 'network_store.dart';
@@ -236,6 +237,7 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   final sprinklerPump = ref.watch(sprinklerPumpCheckProvider);
   final fireBases = ref.watch(fireSystemBasesProvider);
   final fireOverPressure = ref.watch(fireOverPressureProvider);
+  final outletOverPressure = ref.watch(standpipeOutletOverPressureProvider);
   final coolingMethod = ref.watch(coolingLoadMethodProvider);
   final rooms = ref.watch(roomAreasProvider);
   final hasRooms = rooms.isNotEmpty;
@@ -1499,6 +1501,44 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       locate: pumpNode == null
           ? null
           : IssueLocation(pumpNode.sheetId, nodeId: pumpNode.id),
+    ));
+  }
+
+  // Round 76 (fire-convergence-27-hose-outlet-static-over-175psi-unjudged) —
+  // hose outlets above the NFPA 14 hose-connection limits (175 psi static at
+  // churn; 100 psi residual at a hose reel), ONE warning per contiguous floor
+  // range per system, located at the lowest offending outlet. Cleared by a
+  // drawn PRV on the outlet's branch / the riser zone feeding it.
+  String floorName(int f) {
+    final floors = project.building.floors;
+    return f >= 0 && f < floors.length ? floors[f].name : 'F$f';
+  }
+
+  for (final o in outletOverPressure) {
+    final pump = o.pumpId ??
+        (o.basis.pumpIds.isEmpty ? null : o.basis.pumpIds.first);
+    final at = net.nodeById(o.lowestOutletId);
+    final range = o.lowFloor == o.highFloor
+        ? floorName(o.lowFloor)
+        : '${floorName(o.lowFloor)}-${floorName(o.highFloor)}';
+    warnings.add(DesignIssue(
+      severity: IssueSeverity.warning,
+      kind: '${o.residual ? 'hose-station-over-residual' : 'standpipe-outlet-over-pressure'}'
+          ':${pump ?? ''}:${o.lowFloor}-${o.highFloor}',
+      title: str(o.residual
+          ? StringKey.issueHoseStationOverResidualTitle
+          : StringKey.issueStandpipeOutletOverPressureTitle),
+      message: str.format(
+          o.residual
+              ? StringKey.issueHoseStationOverResidualMessage
+              : StringKey.issueStandpipeOutletOverPressureMessage,
+          {
+            'floors': range,
+            'max': o.maxKpa.toStringAsFixed(0),
+            'min': o.minKpa.toStringAsFixed(0),
+            'limit': o.limitKpa.toStringAsFixed(0),
+          }),
+      locate: at == null ? null : IssueLocation(at.sheetId, nodeId: at.id),
     ));
   }
 

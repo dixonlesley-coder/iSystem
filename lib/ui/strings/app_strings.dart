@@ -714,6 +714,8 @@ enum StringKey {
   issueFireGravityHeadTitle,
   issueFireOverPressureTitle,
   issueStandpipeOverPressureTitle,
+  issueStandpipeOutletOverPressureTitle,
+  issueHoseStationOverResidualTitle,
   issueElectricalTitle, // {code} = electricalWarningTitle(w.code)
   issueUnverifiedTitle, // {name} = the // VERIFY value's short label
   issueUnverifiedMessage, // {citation} = the value's source citation
@@ -811,6 +813,8 @@ enum StringKey {
   issueFireOverPressureMessage, // {churn} {limit} {head} {share}
   issueFireOverPressureShare, // {pct}
   issueStandpipeOverPressureMessage, // {churn} {limit} {head} {share}
+  issueStandpipeOutletOverPressureMessage, // {floors} {max} {min} {limit}
+  issueHoseStationOverResidualMessage, // {floors} {max} {min} {limit}
 
   // H1 — Design issue pluralized nouns + batch-action labels
   // (issueBatchActionsProvider). Batch labels use plural(n, one, many) (bare
@@ -2238,6 +2242,10 @@ const Map<StringKey, String> _en = {
   StringKey.issueFireOverPressureTitle: 'Fire pump churn over-pressures components',
   StringKey.issueStandpipeOverPressureTitle:
       'Standpipe exceeds the 350 psi system maximum',
+  StringKey.issueStandpipeOutletOverPressureTitle:
+      'Hose valves above 175 psi static need a PRV',
+  StringKey.issueHoseStationOverResidualTitle:
+      'Hose reels above 100 psi residual need a PRV',
   StringKey.issueElectricalTitle: 'Electrical: {code}',
   StringKey.issueUnverifiedTitle: 'Unverified: {name}',
   StringKey.issueUnverifiedMessage:
@@ -2427,6 +2435,15 @@ const Map<StringKey, String> _en = {
       'fire components. Upsize the index pipe to cut friction or zone the '
       'system. (// VERIFY vs SNI 03-3989 / 03-1745.)',
   StringKey.issueFireOverPressureShare: ', {pct} % of it pipe friction',
+  StringKey.issueStandpipeOutletOverPressureMessage:
+      '{floors} hose valves: {max}..{min} kPa static at pump churn, above '
+      'the {limit} kPa (175 psi) limit at a hose connection (NFPA 14 '
+      '7.2.3.2). Fit a PRV at each outlet or zone the riser. (// VERIFY vs '
+      'SNI 03-1745.)',
+  StringKey.issueHoseStationOverResidualMessage:
+      '{floors} hose reels: {max}..{min} kPa residual at the rated flow, '
+      'above the {limit} kPa (100 psi) limit at a 1.5 in hose station (NFPA '
+      '14 7.2.3.1). Fit a PRV at each reel. (// VERIFY vs SNI 03-1745.)',
   StringKey.issueStandpipeOverPressureMessage:
       'The hydrant pump is rated at {head} m{share}; its churn (140 % of '
       'rated) reaches {churn} kPa, above the {limit} kPa (350 psi) maximum '
@@ -3900,6 +3917,10 @@ const Map<StringKey, String> _id = {
       'Tekanan churn pompa kebakaran melampaui rating komponen',
   StringKey.issueStandpipeOverPressureTitle:
       'Pipa tegak melampaui tekanan maksimum sistem 350 psi',
+  StringKey.issueStandpipeOutletOverPressureTitle:
+      'Katup selang di atas 175 psi statis memerlukan PRV',
+  StringKey.issueHoseStationOverResidualTitle:
+      'Gulungan selang di atas 100 psi residual memerlukan PRV',
   StringKey.issueElectricalTitle: 'Listrik: {code}',
   StringKey.issueUnverifiedTitle: 'Belum terverifikasi: {name}',
   StringKey.issueUnverifiedMessage:
@@ -4095,6 +4116,16 @@ const Map<StringKey, String> _id = {
       'gesekan atau bagi sistem menjadi zona. (// VERIFY terhadap SNI 03-3989 '
       '/ 03-1745.)',
   StringKey.issueFireOverPressureShare: ', {pct} % di antaranya gesekan pipa',
+  StringKey.issueStandpipeOutletOverPressureMessage:
+      'Katup selang {floors}: {max}..{min} kPa statis saat churn pompa, di '
+      'atas batas {limit} kPa (175 psi) pada sambungan selang (NFPA 14 '
+      '7.2.3.2). Pasang PRV di setiap outlet atau bagi pipa tegak menjadi '
+      'zona. (// VERIFY terhadap SNI 03-1745.)',
+  StringKey.issueHoseStationOverResidualMessage:
+      'Gulungan selang {floors}: {max}..{min} kPa residual pada laju aliran '
+      'rating, di atas batas {limit} kPa (100 psi) pada stasiun selang 1,5 in '
+      '(NFPA 14 7.2.3.1). Pasang PRV di setiap gulungan. (// VERIFY terhadap '
+      'SNI 03-1745.)',
   StringKey.issueStandpipeOverPressureMessage:
       'Pompa hidran diberi rating {head} m{share}; churn-nya (140 % dari '
       'rating) mencapai {churn} kPa, di atas tekanan maksimum {limit} kPa '

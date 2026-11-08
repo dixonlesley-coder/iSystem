@@ -136,8 +136,18 @@ void main() {
     expect(_churnKpa(b), greaterThan(kFireComponentMaxPressureKpa));
     expect(c.read(fireOverPressureProvider), isEmpty);
     expect(
-      c.read(designIssuesProvider).any((i) => i.kind.contains('over-pressure')),
+      c.read(designIssuesProvider).any(
+          (i) => i.kind.startsWith('standpipe-system-over-pressure') ||
+              i.kind.startsWith('fire-system-over-pressure')),
       isFalse,
+    );
+    // Round 76 — the HOSE VALVES are judged on their own (175 psi static,
+    // NFPA 14 7.2.3.2): ~1855 kPa churn less the 4.7 m lift to L1 is
+    // ~1810 kPa > 1207, so this riser still raises the outlet warning.
+    expect(
+      c.read(designIssuesProvider).any(
+          (i) => i.kind.startsWith('standpipe-outlet-over-pressure:FP:')),
+      isTrue,
     );
   });
 }

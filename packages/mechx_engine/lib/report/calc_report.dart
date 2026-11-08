@@ -125,6 +125,29 @@ class FireOverPressureReportLine {
   });
 }
 
+/// Round 76 (fire-convergence-27-hose-outlet-static-over-175psi-unjudged) —
+/// one contiguous floor range of hose outlets above an NFPA 14 hose-
+/// connection limit (the app's `standpipeOutletOverPressureProvider`, the
+/// very list the Review raises): [residual] false ⇒ 175 psi static at churn
+/// (7.2.3.2), true ⇒ 100 psi residual at a hose reel (7.2.3.1). The report
+/// only renders it; empty ⇒ no line (byte-identical).
+class StandpipeOutletReportLine {
+  final String tag;
+  final String floors;
+  final double maxKpa;
+  final double minKpa;
+  final double limitKpa;
+  final bool residual;
+  const StandpipeOutletReportLine({
+    required this.tag,
+    required this.floors,
+    required this.maxKpa,
+    required this.minKpa,
+    required this.limitKpa,
+    this.residual = false,
+  });
+}
+
 /// All inputs the calc report renders. Systems that aren't present are null /
 /// empty and their sections are skipped.
 class CalcReportData {
@@ -173,6 +196,9 @@ class CalcReportData {
   /// per system ([FireOverPressureReportLine]). Empty ⇒ no line (EN/ID
   /// byte-identical).
   final List<FireOverPressureReportLine> fireOverPressure;
+
+  /// Round 76 — hose outlets above the NFPA 14 hose-connection limits.
+  final List<StandpipeOutletReportLine> standpipeOutletOverPressure;
 
   /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
@@ -287,6 +313,7 @@ class CalcReportData {
     this.sprinklerRemoteArea,
     this.firePumpRating,
     this.fireOverPressure = const [],
+    this.standpipeOutletOverPressure = const [],
     this.fireSystems = const [],
     this.fireGravity = const [],
     this.fireDry = const [],
@@ -893,6 +920,25 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                       'pct': (o.frictionShare! * 100).toStringAsFixed(0),
                     }),
             })
+          ),
+        // Round 76 — hose outlets above the NFPA 14 hose-connection limits
+        // (printed only when present ⇒ byte-identical).
+        for (final o in d.standpipeOutletOverPressure)
+          (
+            strings.format(
+                o.residual
+                    ? RptStringKey.fireHoseStationResidualKey
+                    : RptStringKey.fireOutletStaticKey,
+                {'tag': o.tag, 'floors': o.floors}),
+            strings.format(
+                o.residual
+                    ? RptStringKey.fireHoseStationResidualValue
+                    : RptStringKey.fireOutletStaticValue,
+                {
+                  'max': o.maxKpa.toStringAsFixed(0),
+                  'min': o.minKpa.toStringAsFixed(0),
+                  'limit': o.limitKpa.toStringAsFixed(0),
+                })
           ),
         // Round 30 (report-parity-2-1) — every drawn fire system's own pump.
         // Round 52 r2 — also a LONE line when no project rating block is
