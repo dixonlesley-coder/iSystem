@@ -20,7 +20,8 @@ import 'package:mechx_engine/network/network.dart'
         isSupplyInletComponent,
         nodeElevation;
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
-import 'package:mechx_engine/sizing/network_sizing.dart' show EdgeSizing;
+import 'package:mechx_engine/sizing/network_sizing.dart'
+    show EdgeSizing, fireHopSources;
 import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart';
 import 'package:mechx_engine/units.dart' show FlowRate, Head, Length;
 
@@ -313,9 +314,23 @@ final standpipeOutletOverPressureProvider =
         }
       }
     } else {
+      // Round 80 (regression-outlet-overpressure-ignores-per-pump-stage-
+      // head) — a merged peer-room booster drawing from its OWN suction tank
+      // carries its reduced per-pump head ([FireSystemBasis.stageHeads]: the
+      // system head less the rise to its tank — the duty, motor and MDP way
+      // already use it); its churn is 140 % of THAT head, never the system
+      // churn (the outlet walk already resets the head at its tank). No
+      // per-pump entry ⇒ the system rating (byte-identical).
       for (final id in b.pumpIds) {
-        churn[id] = b.rating.churn.head.meters;
-        rated[id] = b.rating.ratedHead.meters;
+        final own = b.stageHeads[id];
+        if (own == null) {
+          churn[id] = b.rating.churn.head.meters;
+          rated[id] = b.rating.ratedHead.meters;
+        } else {
+          final r = checkFirePumpRating(ratedFlow: b.flow, ratedHead: own);
+          churn[id] = r.churn.head.meters;
+          rated[id] = r.ratedHead.meters;
+        }
       }
     }
     String? rootPump = b.dutyPumpId;
@@ -732,6 +747,16 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       (n) => nodeElevation(n, building, project.mounting).meters);
   String? destinationOf(FireSystem s) =>
       transferTankOf(s)?.id ?? fillTankOf(s)?.id;
+  // Round 80 — the hop reading's discharge-only (gravity standby) tanks,
+  // computed once on demand for the series-stage topology.
+  Set<String>? dischargeOnlyMemo;
+  Set<String> dischargeOnlyTanks() => dischargeOnlyMemo ??= fireHopSources(
+          net,
+          elevationOf: (n) =>
+              nodeElevation(n, building, project.mounting).meters)
+      .dischargeOnly
+      .keys
+      .toSet();
   final out = <FireSystemBasis>[];
   for (final sys in systems) {
     final pumps = [
@@ -1119,7 +1144,10 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       // the head above the main pump's zone (P1 93.5 m + P2 10.5 m, never
       // both at the 104 m system head). The floor grouping below stays only
       // as the fallback when the chain cannot be read.
-      final topo = fireSeriesPumpStages(net, sys, sets);
+      // Round 80 — a roof gravity-standby tank (no mover draws from it) is
+      // never a stage source.
+      final topo = fireSeriesPumpStages(net, sys, sets,
+          dischargeOnlySourceIds: dischargeOnlyTanks());
       // Round 60 (fire-convergence-12-series-lower-stage-rated-with-whole-
       // system-friction) — a LOWER stage's zone is priced on ITS OWN index
       // path: the sized friction from the root stage's duty pump to the
