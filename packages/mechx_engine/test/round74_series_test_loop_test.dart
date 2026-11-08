@@ -5,7 +5,10 @@
 // Probe: 11 storeys of 4 m, calibrated 0.01 m/px, hydrant class I.
 //   GT -g- SH -s- P1 -d- DH1 -m- X0, riser X0..X5 (boxes L1-L4),
 //   X5 -h- SH2 -s2- P2 (L5) -d2- DH2 -m2- Y5, riser Y5..Y10 (boxes L6-L10),
-//   test loop DH2 -t1- TH (gate valve) -t2- SH  (or SH2).
+//   test loop DH2 -t1- TH (gate valve) -t2- SH  (or SH2, or GT — the
+//   common NFPA 20 flow-meter loop back to the suction TANK, Round 74 r2:
+//   before it t1 / t2 carried 31.545 L/s GT -> TH -> DH2, h reversed and
+//   m2 / y6 fell from DN125 to DN100).
 //
 // First principles: standpipeFlow(1) = 500 gpm = 31.545 L/s. The loop
 // carries the pump's TEST flow, never fire-event demand: every pipe sizes,
@@ -42,7 +45,7 @@ NetNode _n(String id, double x,
         role: r,
         component: c);
 
-enum _Loop { none, toFirstSuction, toOwnSuction }
+enum _Loop { none, toFirstSuction, toOwnSuction, toTank }
 
 const _pumpRoomIds = ['g', 's', 'd', 'm', 'h', 's2', 'd2', 'm2'];
 
@@ -86,7 +89,14 @@ Network _room({required _Loop loop, Set<String> flip = const {}}) {
     for (var f = 6; f <= 10; f++) e('c$f', 'Y$f', 'C$f'),
     if (loop != _Loop.none) ...[
       e('t1', 'DH2', 'TH'),
-      e('t2', 'TH', loop == _Loop.toFirstSuction ? 'SH' : 'SH2'),
+      e(
+          't2',
+          'TH',
+          switch (loop) {
+            _Loop.toFirstSuction => 'SH',
+            _Loop.toTank => 'GT',
+            _ => 'SH2',
+          }),
     ],
   ]);
 }
@@ -129,8 +139,22 @@ void main() {
     expect(base['g']!.diameter.inMillimeters, 125);
   });
 
-  test('loop to SH / SH2, every drawn direction of t1 / t2 == no loop', () {
-    for (final loop in [_Loop.toFirstSuction, _Loop.toOwnSuction]) {
+  test('the loop back to the suction TANK is a test line (r2)', () {
+    final lines = fireTestLineChains(_room(loop: _Loop.toTank));
+    expect(lines, hasLength(1));
+    expect(lines.single.joinId, 'DH2');
+    expect(lines.single.tankId, 'GT');
+    expect(base['m2']!.diameter.inMillimeters, 125);
+    expect(base['y6']!.diameter.inMillimeters, 125);
+  });
+
+  test('loop to SH / SH2 / GT, every drawn direction of t1 / t2 == no loop',
+      () {
+    for (final loop in [
+      _Loop.toFirstSuction,
+      _Loop.toOwnSuction,
+      _Loop.toTank,
+    ]) {
       for (final flip in [
         <String>{},
         {'t1'},
@@ -142,7 +166,7 @@ void main() {
     }
   });
 
-  test('seeded: flips of the pump-room pipes with the SH loop == no loop', () {
+  test('seeded: flips of the pump-room pipes with the SH / GT loop == no loop', () {
     final rnd = math.Random(7401);
     for (var t = 0; t < 12; t++) {
       final flip = {
@@ -150,7 +174,8 @@ void main() {
           if (rnd.nextBool()) id,
       };
       final noLoop = _size(_room(loop: _Loop.none, flip: flip));
-      final r = _size(_room(loop: _Loop.toFirstSuction, flip: flip));
+      final r = _size(_room(
+          loop: t.isEven ? _Loop.toFirstSuction : _Loop.toTank, flip: flip));
       for (final id in ids) {
         expect(r[id]?.diameter.inMillimeters,
             noLoop[id]?.diameter.inMillimeters,

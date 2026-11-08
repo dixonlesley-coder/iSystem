@@ -17,6 +17,7 @@ import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
@@ -102,6 +103,44 @@ void main() {
     final labels = sheet.prims.whereType<SldLabel>().map((l) => l.text);
     expect(labels.any((t) => t.contains('Cu bus ${bar.parallelBars}x(100x10)')),
         isTrue);
+  });
+
+  test('r2: the calc report names the parallel-bar count, never one bar '
+      'beside the summed section', () {
+    final p = _board(10);
+    final sys = computeSystem(_profile, p,
+        originFaultLevel: const Current(16000), busbarClearingTimeS: 0.1);
+    final n = sys.panels['MDP']!.busbar.parallelBars;
+    expect(n, greaterThan(1));
+    final md = buildElectricalCalcReport(ElectricalCalcReportData(
+      projectName: 'R74',
+      date: '2026-11-08',
+      standardsName: _profile.name,
+      standardsRevision: _profile.revision,
+      project: p,
+      result: sys,
+    ));
+    expect(md, contains('$n × (100×10 mm) (${n * 1000} mm²)'));
+    // A 100×10 bar is 1000 mm²: the summed section never sits beside one
+    // bar's geometry alone.
+    expect(md, isNot(contains('100×10 mm (${n * 1000} mm²)')));
+  });
+
+  test('r2: a one-bar board keeps the bare geometry in the report', () {
+    final p = _board(2);
+    final sys = computeSystem(_profile, p,
+        originFaultLevel: const Current(16000), busbarClearingTimeS: 0.1);
+    final b = sys.panels['MDP']!.busbar;
+    expect(b.parallelBars, 1);
+    final md = buildElectricalCalcReport(ElectricalCalcReportData(
+      projectName: 'R74',
+      date: '2026-11-08',
+      standardsName: _profile.name,
+      standardsRevision: _profile.revision,
+      project: p,
+      result: sys,
+    ));
+    expect(md, isNot(contains(' × (')));
   });
 
   test('a board inside the table stays one bar with no warning', () {
