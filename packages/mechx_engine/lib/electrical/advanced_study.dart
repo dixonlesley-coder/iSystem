@@ -122,6 +122,7 @@ import 'supply_design.dart'
         recommendedDaya,
         sectionAssignment,
         serviceSections;
+import 'ups.dart' show kUpsInputFactor;
 
 export 'genset_backup.dart' show gensetBackedPanelIds;
 
@@ -537,11 +538,10 @@ AdvancedStudy computeAdvancedStudy(
   if (daya != null &&
       daya.system == ElectricalSystem.threePhase &&
       sys.supply.system == ElectricalSystem.singlePhase) {
-    final va3 = worstPhaseDemandVa(project, sys, originPanelIds,
-        roundCurrent: true,
-        withLargestMachine: true,
-        asSystem: ElectricalSystem.threePhase,
-        asVolts: kThreePhaseServiceLineVoltageV);
+    // Round 77 (elec-convergence-28-several-1ph-roots-summed-on-one-line)
+    // — the SAME per-line allocation the LV / MV verdict reads
+    // ([servicePerPhaseBasisVa]): several 1φ roots sit on different lines.
+    final va3 = studied.perPhaseBasisVa;
     daya = recommendedDaya(
         ApparentPower(math.max(sys.supply.demandVa.voltAmperes, va3)),
         ElectricalSystem.threePhase);
@@ -1281,10 +1281,11 @@ List<ElectricalWarning> _incomerAboveTransformerFlc(
     final judgedA = supply.declared
         ? inA
         : math.max(
-                r.demandVaOrEstimate(),
+                rootServiceDemandVa(project, sys, id),
                 worstPhaseDemandVa(project, sys, [id],
                     roundCurrent: true,
                     withLargestMachine: true,
+                    upsInputCurrent: true,
                     asSystem: sys.supply.system == ElectricalSystem.singlePhase
                         ? ElectricalSystem.threePhase
                         : null,
@@ -1362,8 +1363,81 @@ double rootServiceBasisVa(
   return worstPhaseDemandVa(project, sys, [id],
       roundCurrent: true,
       withLargestMachine: true,
+      // Round 77 — a UPS-backed root draws its balanced UPS INPUT.
+      upsInputCurrent: true,
       asSystem: single ? ElectricalSystem.threePhase : null,
       asVolts: single ? kThreePhaseServiceLineVoltageV : null);
+}
+
+/// Round 77 (elec-convergence-28-ups-root-service-judges-on-output) — the
+/// diversified demand VA ONE service-entrance board puts on the service: its
+/// own demand VA, × [kUpsInputFactor] when it is UPS-backed (the supply
+/// carries the UPS input, as `computeSystem`'s supply demand sums it). The
+/// section loads and the undeclared-transformer FLC judge read it. Pure.
+double rootServiceDemandVa(
+    ElectricalProject project, ElectricalSystemResult sys, String id) {
+  final r = sys.panels[id];
+  if (r == null) return 0;
+  final ups = project.panels.where((p) => p.id == id).firstOrNull?.upsBacked ??
+      false;
+  return r.demandVaOrEstimate() * (ups ? kUpsInputFactor : 1.0);
+}
+
+/// Round 77 (elec-convergence-28-several-1ph-roots-summed-on-one-line) — the
+/// per-phase basis VA of a set of service-entrance boards on ONE 3-phase
+/// service, from each root's per-root basis [rootVa] (`sqrt3 x 400 x I` for a
+/// 1-phase root, [rootServiceBasisVa]): a 3-phase root loads every line with
+/// its worst-phase share (rootVa / 3 on each), and the 1-phase roots
+/// [singlePhaseIds] are spread over the lines largest first, each on the
+/// currently lightest line (LPT, the [minimalMaxSectionLoad] idiom; ties to
+/// the lowest line, roots tie on id) — several single-phase boards on one
+/// service sit on different lines, never all on one. The basis is
+/// 3 x the heaviest line. With at most ONE 1-phase root the allocation is the
+/// plain sum (Round 66, byte-identical). Pure.
+double allocateServiceLinesVa(
+    Map<String, double> rootVa, Set<String> singlePhaseIds) {
+  final singles = [
+    for (final e in rootVa.entries)
+      if (singlePhaseIds.contains(e.key)) e,
+  ];
+  if (singles.length <= 1) {
+    return rootVa.values.fold(0.0, (a, b) => a + b);
+  }
+  final lines = [0.0, 0.0, 0.0];
+  for (final e in rootVa.entries) {
+    if (singlePhaseIds.contains(e.key)) continue;
+    for (var i = 0; i < 3; i++) {
+      lines[i] += e.value / 3;
+    }
+  }
+  singles.sort((a, b) {
+    final c = b.value.compareTo(a.value);
+    return c != 0 ? c : a.key.compareTo(b.key);
+  });
+  for (final e in singles) {
+    var k = 0;
+    for (var i = 1; i < 3; i++) {
+      if (lines[i] < lines[k] - 1e-9) k = i;
+    }
+    lines[k] += e.value / 3;
+  }
+  return 3 * lines.reduce(math.max);
+}
+
+/// Round 77 — [allocateServiceLinesVa] over [ids]' [rootServiceBasisVa]
+/// (each scaled by [weight] when given). Pure.
+double servicePerPhaseBasisVa(ElectricalProject project,
+    ElectricalSystemResult sys, Iterable<String> ids,
+    {double Function(String id, double basisVa)? weight}) {
+  final byId = {for (final p in project.panels) p.id: p};
+  final rootVa = <String, double>{};
+  final singles = <String>{};
+  for (final id in ids) {
+    final b = rootServiceBasisVa(project, sys, id);
+    rootVa[id] = weight == null ? b : weight(id, b);
+    if (byId[id]?.system == ElectricalSystem.singlePhase) singles.add(id);
+  }
+  return allocateServiceLinesVa(rootVa, singles);
 }
 
 /// Round 52 (elec-convergence-4-undeclared-study-transformer-fault-not-the-
@@ -1385,7 +1459,7 @@ double rootServiceBasisVa(
     {Set<String>? originPanelIds}) {
   originPanelIds ??= originPanelIdsOf(sys, project);
   final worstPhaseVa = worstPhaseDemandVa(project, sys, originPanelIds,
-      roundCurrent: true, withLargestMachine: true);
+      roundCurrent: true, withLargestMachine: true, upsInputCurrent: true);
   // Round 66 (elec-convergence-18-single-phase-root-transformer-sized-on-va-
   // not-line-current) — every root is converted PER ROOT ([rootServiceBasisVa]):
   // a 1-phase service-entrance board puts its whole current on ONE line of
@@ -1393,10 +1467,13 @@ double rootServiceBasisVa(
   // whichever root governs. The conversion used to apply only when the
   // GOVERNING root was 1-phase, so a 1-phase board beside a 3-phase one was
   // counted at 230 x I and the undeclared transformer under-sized.
-  var perPhaseBasisVa = 0.0;
-  for (final id in originPanelIds) {
-    perPhaseBasisVa += rootServiceBasisVa(project, sys, id);
-  }
+  //
+  // Round 77 (elec-convergence-28-several-1ph-roots-summed-on-one-line) —
+  // SEVERAL 1-phase roots sit on DIFFERENT lines: they are spread over the
+  // three lines ([servicePerPhaseBasisVa]); one 1-phase root keeps the
+  // Round-66 sum.
+  final perPhaseBasisVa =
+      servicePerPhaseBasisVa(project, sys, originPanelIds);
   // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
   // service each root board sits on ONE unit (coupler normally open, as the
   // fault study models it), so the most loaded ROOT governs a section: its
@@ -1408,8 +1485,8 @@ double rootServiceBasisVa(
     for (final id in originPanelIds) {
       final r = sys.panels[id];
       if (r == null) continue;
-      final va = math.max(
-          r.demandVaOrEstimate(), rootServiceBasisVa(project, sys, id));
+      final va = math.max(rootServiceDemandVa(project, sys, id),
+          rootServiceBasisVa(project, sys, id));
       rootSectionVa.add(va);
       if (va > largestSectionVa + 1e-9 ||
           (largestSectionId != null &&
@@ -1462,20 +1539,25 @@ double rootServiceBasisVa(
   // turns an LV service into an MV one (the PLN limiter is set at today's
   // daya). No headroom anywhere ⇒ byte-identical.
   if (supply.lvOrMv == SupplyLevel.mv && !supply.declared) {
-    var futureBasisVa = 0.0;
     final futureRootVa = <double>[];
     var uplifted = false;
     final panelById = {for (final p in project.panels) p.id: p};
+    final futureIds = <String>[];
     for (final id in originPanelIds) {
       final r = sys.panels[id];
       if (r == null) continue;
       final mult = panelById[id]?.headroom?.demandMultiplier ?? 1.0;
       if (mult > 1.0 + 1e-12) uplifted = true;
-      final va = math.max(
-          r.demandVaOrEstimate(), rootServiceBasisVa(project, sys, id));
-      futureBasisVa += va * mult;
+      final va = math.max(rootServiceDemandVa(project, sys, id),
+          rootServiceBasisVa(project, sys, id));
       futureRootVa.add(va * mult);
+      futureIds.add(id);
     }
+    // Round 77 — the same per-line allocation as today's basis.
+    final futureBasisVa = servicePerPhaseBasisVa(project, sys, futureIds,
+        weight: (id, b) =>
+            math.max(rootServiceDemandVa(project, sys, id), b) *
+            (panelById[id]?.headroom?.demandMultiplier ?? 1.0));
     if (uplifted && futureBasisVa > perPhaseBasisVa + 1e-9) {
       supply = study(
           futureBasisVa,
@@ -1554,7 +1636,7 @@ Map<String, int> serviceSectionOfRoot(
   ];
   final loads = [
     for (final id in ids)
-      math.max(sys.panels[id]!.demandVaOrEstimate(),
+      math.max(rootServiceDemandVa(project, sys, id),
           rootServiceBasisVa(project, sys, id)),
   ];
   final bins = sectionAssignment(loads, n);

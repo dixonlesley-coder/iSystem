@@ -25,6 +25,25 @@ import 'ups.dart' show kUpsInputFactor;
 double _upsIn(ElectricalPanel? panel) =>
     (panel?.upsBacked ?? false) ? kUpsInputFactor : 1.0;
 
+/// Round 77 (elec-convergence-28-ups-root-service-judges-on-output) — the
+/// balanced UPS INPUT line current of a UPS-backed board: its diversified
+/// demand VA x [kUpsInputFactor] (output / efficiency + battery recharge,
+/// `// VERIFY`) over sqrt3 x V (3φ) or V (1φ) — a double-conversion
+/// rectifier draws a balanced input whatever its output imbalance. Rounded to
+/// 0.1 A unless [round] is false. Null for a board without a UPS. The ONE
+/// figure the feeder sizing, the service-capacity judge and the supply study
+/// read for a UPS board. Pure.
+double? upsInputCurrentA(ElectricalPanel? panel, ElectricalPanelResult r,
+    {bool round = true}) {
+  if (panel == null || !panel.upsBacked) return null;
+  final v = panel.voltage.volts;
+  if (v <= 0) return null;
+  final va = r.demandVaOrEstimate() * kUpsInputFactor;
+  final three = panel.system == ElectricalSystem.threePhase;
+  final a = three ? va / (math.sqrt(3) * v) : va / v;
+  return round ? roundTo(a, 1) : a;
+}
+
 /// The name words that mark a board ESSENTIAL (on the genset-backed bus) in
 /// either UI language: EN EMERGENCY / ESSENTIAL, ID DARURAT / ESENSIAL (the ID
 /// UI's own word for the toggle) / EMERGENSI (the other common Indonesian
@@ -346,7 +365,8 @@ double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
     ElectricalSystem? asSystem,
     double? asVolts,
     bool withLargestMachine = false,
-    bool upsInput = false}) {
+    bool upsInput = false,
+    bool upsInputCurrent = false}) {
   final modelById = {for (final p in project.panels) p.id: p};
   var va = 0.0;
   for (final id in panelIds) {
@@ -358,15 +378,25 @@ double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
       va += _boardDemandVa(sys, r) * kUpsInputFactor;
       continue;
     }
-    var a = roundCurrent
-        ? roundTo(r.diversifiedDemandCurrent.amperes, 1)
-        : r.diversifiedDemandCurrent.amperes;
+    // Round 77 — on the SERVICE basis a UPS-backed board draws its balanced
+    // UPS input line current ([upsInputCurrentA]); its largest machine sits
+    // on the UPS output, so the input carries it × [kUpsInputFactor].
+    final ups = upsInputCurrent && m.upsBacked;
+    var a = ups
+        // A board with no usable voltage (v <= 0, a hand-edited file) yields
+        // null — tolerate it as 0 A, never throw (the engine convention).
+        ? upsInputCurrentA(m, r, round: roundCurrent) ?? 0.0
+        : roundCurrent
+            ? roundTo(r.diversifiedDemandCurrent.amperes, 1)
+            : r.diversifiedDemandCurrent.amperes;
     // Round 40 — a limiter must also pass the largest single machine on or
     // below the board at its UNDIVERSIFIED running current (one machine does
     // not diversify against itself; the same figure floors the incomer and
     // the `service-capacity-below-demand` judge).
-    if (withLargestMachine && r.largestDownstreamRunA > a) {
-      a = r.largestDownstreamRunA;
+    final machineA =
+        r.largestDownstreamRunA * (ups ? kUpsInputFactor : 1.0);
+    if (withLargestMachine && machineA > a) {
+      a = machineA;
     }
     va += capacityForLineCurrentVa(
         a, asSystem ?? m.system, asVolts ?? m.voltage.volts);
