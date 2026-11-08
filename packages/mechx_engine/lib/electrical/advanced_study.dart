@@ -524,12 +524,35 @@ AdvancedStudy computeAdvancedStudy(
   // declaring the recommended daya can never trip the engine's own judge
   // (two 1φ 5 kW heaters: 16 500 VA, never 10 600 VA / 15.3 A).
   // Round 58 — no PLN daya on an on-site genset / PV primary supply.
+  //
+  // Round 78 (regression-daya-3ph-supply-1ph-root-on-board-basis /
+  // regression-daya-single-phase-step-for-a-3ph-root) — ONE ladder rule: the
+  // service is 3φ whenever ANY service-entrance board is 3φ (a 3φ board can
+  // never hang off a 1φ PLN service, whichever root's incomer is larger), or
+  // the 1φ ladder overflows; and EVERY 3φ step is sized on the study's own
+  // per-line basis ([studySupplyInputs] `perPhaseBasisVa`: a 1φ root at
+  // √3·400·I on its line, several 1φ roots spread over the lines) — never on
+  // the board-basis sum, which counted a 1φ root beside a 3φ governing root
+  // at 230·I (a daya whose limiter trips on the line carrying it). With only
+  // 3φ roots the per-line basis IS the board-basis sum (byte-identical); the
+  // 1φ ladder (on [worstPhaseVa]) stays for an all-1φ service.
+  final projectPanelById = {for (final p in project.panels) p.id: p};
+  final anyThreePhaseRoot = originPanelIds.isEmpty
+      ? sys.supply.system == ElectricalSystem.threePhase
+      : originPanelIds.any((id) =>
+          (projectPanelById[id]?.system ?? sys.supply.system) ==
+          ElectricalSystem.threePhase);
   var daya = supply.declared || project.supplyKind != SupplyKind.pln
       ? null
-      : recommendedDaya(
-          ApparentPower(
-              math.max(sys.supply.demandVa.voltAmperes, worstPhaseVa)),
-          sys.supply.system);
+      : anyThreePhaseRoot
+          ? recommendedDaya(
+              ApparentPower(math.max(
+                  sys.supply.demandVa.voltAmperes, studied.perPhaseBasisVa)),
+              ElectricalSystem.threePhase)
+          : recommendedDaya(
+              ApparentPower(
+                  math.max(sys.supply.demandVa.voltAmperes, worstPhaseVa)),
+              ElectricalSystem.singlePhase);
   // Round 38 (elec-sizing-supply-3) — a single-phase supply whose demand
   // outgrows the 1φ ladder moves to a 3φ step, but its 1φ root board still
   // loads ONE phase of that service: size the step on the same 3φ per-phase
@@ -537,7 +560,7 @@ AdvancedStudy computeAdvancedStudy(
   // recommendation never trips the engine's own judge.
   if (daya != null &&
       daya.system == ElectricalSystem.threePhase &&
-      sys.supply.system == ElectricalSystem.singlePhase) {
+      !anyThreePhaseRoot) {
     // Round 77 (elec-convergence-28-several-1ph-roots-summed-on-one-line)
     // — the SAME per-line allocation the LV / MV verdict reads
     // ([servicePerPhaseBasisVa]): several 1φ roots sit on different lines.
@@ -1378,8 +1401,8 @@ double rootServiceDemandVa(
     ElectricalProject project, ElectricalSystemResult sys, String id) {
   final r = sys.panels[id];
   if (r == null) return 0;
-  final ups = project.panels.where((p) => p.id == id).firstOrNull?.upsBacked ??
-      false;
+  final ups =
+      project.panels.where((p) => p.id == id).firstOrNull?.upsBacked ?? false;
   return r.demandVaOrEstimate() * (ups ? kUpsInputFactor : 1.0);
 }
 
@@ -1426,8 +1449,8 @@ double allocateServiceLinesVa(
 
 /// Round 77 — [allocateServiceLinesVa] over [ids]' [rootServiceBasisVa]
 /// (each scaled by [weight] when given). Pure.
-double servicePerPhaseBasisVa(ElectricalProject project,
-    ElectricalSystemResult sys, Iterable<String> ids,
+double servicePerPhaseBasisVa(
+    ElectricalProject project, ElectricalSystemResult sys, Iterable<String> ids,
     {double Function(String id, double basisVa)? weight}) {
   final byId = {for (final p in project.panels) p.id: p};
   final rootVa = <String, double>{};
@@ -1472,8 +1495,7 @@ double servicePerPhaseBasisVa(ElectricalProject project,
   // SEVERAL 1-phase roots sit on DIFFERENT lines: they are spread over the
   // three lines ([servicePerPhaseBasisVa]); one 1-phase root keeps the
   // Round-66 sum.
-  final perPhaseBasisVa =
-      servicePerPhaseBasisVa(project, sys, originPanelIds);
+  final perPhaseBasisVa = servicePerPhaseBasisVa(project, sys, originPanelIds);
   // Round 40 (electrical-sim-5-dual-tx-section-overload-missed) — on a dual
   // service each root board sits on ONE unit (coupler normally open, as the
   // fault study models it), so the most loaded ROOT governs a section: its

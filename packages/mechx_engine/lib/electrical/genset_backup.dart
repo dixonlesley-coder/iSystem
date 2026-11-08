@@ -61,7 +61,9 @@ const List<String> kEssentialNameWords = [
 /// NON / TIDAK / BUKAN (optionally joined by a space, '-' or '_') before an
 /// essential word — the negated designation (Round 19).
 final RegExp _negatedEssentialWord = RegExp(
-    r'(?<![A-Z0-9])(NON|TIDAK|BUKAN)[\s_\-]*(' '${kEssentialNameWords.join('|')}' r')');
+    r'(?<![A-Z0-9])(NON|TIDAK|BUKAN)[\s_\-]*('
+    '${kEssentialNameWords.join('|')}'
+    r')');
 
 /// True when [name] marks a board essential ([kEssentialNameWords],
 /// case-insensitive). The ONE name heuristic shared by [gensetBackedPanelIds]
@@ -98,7 +100,10 @@ Set<String> gensetBackedPanelIds(ElectricalProject project) {
   bool own(ElectricalPanel p) => p.essential || isEssentialByName(p.name);
 
   final out = <String>{};
-  final stack = [for (final p in project.panels) if (own(p)) p.id];
+  final stack = [
+    for (final p in project.panels)
+      if (own(p)) p.id
+  ];
   while (stack.isNotEmpty) {
     final id = stack.removeLast();
     if (!out.add(id)) continue; // also guards a (sanitized-away) cycle
@@ -106,7 +111,6 @@ Set<String> gensetBackedPanelIds(ElectricalProject project) {
   }
   return out;
 }
-
 
 /// Round 65 (elec-convergence-17-genset-backup-fraction-unreachable-essential-
 /// only-set-sized-for-whole-building) — the backup fraction the genset is
@@ -135,7 +139,8 @@ double effectiveGeneratorBackupFraction(ElectricalProject project) {
 /// at cos φ 0.72 is 83.3 kVA, not 60 kW × the building's 1.130 = 67.8 kVA (an
 /// 82 kVA genset was selected against it). The averaged ratio stays only as
 /// the fallback for a board with no VA record. 0 when nothing is essential.
-double essentialDemandVa(ElectricalProject project, ElectricalSystemResult sys) {
+double essentialDemandVa(
+    ElectricalProject project, ElectricalSystemResult sys) {
   final backed = gensetBackedPanelIds(project);
   if (backed.isEmpty) return 0;
   final parentOf = <String, String>{};
@@ -186,7 +191,8 @@ ApparentPower gensetBackupDemandVa(
   final gen = project.sources?.generator;
   final demand = sys.supply.demandVa.voltAmperes;
   if (gen == null) return ApparentPower(demand);
-  final fractionVa = _fractionVaFloored(project, sys, effectiveGeneratorBackupFraction(project));
+  final fractionVa = _fractionVaFloored(
+      project, sys, effectiveGeneratorBackupFraction(project));
   final essentialVa = _essentialVaFloored(project, sys);
   final balanced = essentialVa > fractionVa ? essentialVa : fractionVa;
   final phase = gensetPhaseDemandVa(project, sys);
@@ -337,11 +343,17 @@ double _fractionWFloored(
 /// clears this by orders of magnitude. Closes the Round-35 '~35 VA' residual.
 bool _phaseBasisGoverns(ElectricalProject project, ElectricalSystemResult sys,
     double phaseVa, double balancedVa) {
-  final boards = math.max(1,
+  final boards = math.max(
+      1,
       math.max(_rootPanelIds(project).length,
           _topmostBackedPanelIds(project).length));
+  final alt = _alternatorBasis(project, sys);
   final quantumVa = capacityForLineCurrentVa(
-      0.05 * boards, sys.supply.system, sys.supply.voltage.volts);
+      0.05 * boards,
+      alt.threePhase
+          ? ElectricalSystem.threePhase
+          : ElectricalSystem.singlePhase,
+      alt.volts);
   return phaseVa > balancedVa + quantumVa;
 }
 
@@ -393,8 +405,7 @@ double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
     // below the board at its UNDIVERSIFIED running current (one machine does
     // not diversify against itself; the same figure floors the incomer and
     // the `service-capacity-below-demand` judge).
-    final machineA =
-        r.largestDownstreamRunA * (ups ? kUpsInputFactor : 1.0);
+    final machineA = r.largestDownstreamRunA * (ups ? kUpsInputFactor : 1.0);
     if (withLargestMachine && machineA > a) {
       a = machineA;
     }
@@ -448,10 +459,10 @@ double gensetPhaseDemandVa(
     ElectricalProject project, ElectricalSystemResult sys) {
   final gen = project.sources?.generator;
   if (gen == null) return 0;
-  final threePhaseSupply =
-      sys.supply.system == ElectricalSystem.threePhase;
-  if (!threePhaseSupply) {
-    // A 1φ supply: every board is 1φ, the board basis is the alternator's.
+  final alt = _alternatorBasis(project, sys);
+  if (!alt.threePhase) {
+    // Round 78 — a genuinely all-1φ service (every root and backed board
+    // 1φ): the board basis is the alternator's.
     // Round 55 — each backed board floored at its largest machine.
     final full = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
     final fraction = worstPhaseDemandVa(project, sys, _rootPanelIds(project),
@@ -464,12 +475,38 @@ double gensetPhaseDemandVa(
   }
   final full = effectiveGeneratorBackupFraction(project) >= 1 - 1e-9;
   final fraction = alternatorLineDemandVa(project, sys, _rootPanelIds(project),
-          withLargestMachine: full) *
+          withLargestMachine: full, lineVolts: alt.volts) *
       effectiveGeneratorBackupFraction(project);
   final essential = alternatorLineDemandVa(
       project, sys, _topmostBackedPanelIds(project),
-      withLargestMachine: true);
+      withLargestMachine: true, lineVolts: alt.volts);
   return essential > fraction ? essential : fraction;
+}
+
+/// Line-to-line voltage of a 3φ alternator on a service whose GOVERNING root
+/// is 1φ (`sys.supply.voltage` is then the 230 V of that board) — the
+/// nominal 3φ service voltage (mirrors `compute.dart`
+/// `kThreePhaseServiceLineVoltageV`, kept local to avoid an import cycle).
+const double _kAlternatorLineVoltageV = 400;
+
+/// Round 78 (regression-genset-1ph-governed-supply-with-3ph-root-undersized)
+/// — the alternator's basis is decided on the BOARDS it feeds, never on
+/// `sys.supply.system` alone: that is the governing root's system (largest
+/// incomer), so a 3φ root or backed board can sit beside a larger 1φ root.
+/// Any 3φ root / topmost backed board ⇒ a 3φ alternator at its line-to-line
+/// voltage (the supply's own when the supply is 3φ, else 400 V); an all-1φ
+/// service keeps the 1φ board basis. Pure.
+({bool threePhase, double volts}) _alternatorBasis(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  if (sys.supply.system == ElectricalSystem.threePhase) {
+    return (threePhase: true, volts: sys.supply.voltage.volts);
+  }
+  final byId = {for (final p in project.panels) p.id: p};
+  final ids = {..._rootPanelIds(project), ..._topmostBackedPanelIds(project)};
+  final any3 = ids.any((id) => byId[id]?.system == ElectricalSystem.threePhase);
+  return any3
+      ? (threePhase: true, volts: _kAlternatorLineVoltageV)
+      : (threePhase: false, volts: sys.supply.voltage.volts);
 }
 
 /// Round 37 (regression-genset-1ph-boards-on-different-lines-summed) — the
@@ -493,8 +530,10 @@ double gensetPhaseDemandVa(
 /// ([ElectricalPanelResult.largestDownstreamRunLinesA]).
 double alternatorLineDemandVa(ElectricalProject project,
     ElectricalSystemResult sys, Iterable<String> panelIds,
-    {bool withLargestMachine = false}) {
-  final volts = sys.supply.voltage.volts;
+    {bool withLargestMachine = false, double? lineVolts}) {
+  // Round 78 — [lineVolts] is the 3φ alternator's line-to-line voltage when
+  // the governing root (hence `sys.supply.voltage`) is 1φ.
+  final volts = lineVolts ?? sys.supply.voltage.volts;
   final modelById = {for (final p in project.panels) p.id: p};
   // child panel id → (parent id, feeding circuit id)
   final feedOf = <String, (String, String)>{};
@@ -567,8 +606,8 @@ double alternatorLineDemandVa(ElectricalProject project,
       case PhaseAssignment.l3:
         l3 += a;
       default:
-        unresolvedVa += capacityForLineCurrentVa(
-            a, ElectricalSystem.threePhase, volts);
+        unresolvedVa +=
+            capacityForLineCurrentVa(a, ElectricalSystem.threePhase, volts);
     }
   }
   final worst = l1 > l2 ? (l1 > l3 ? l1 : l3) : (l2 > l3 ? l2 : l3);
@@ -605,8 +644,10 @@ List<ElectricalWarning> gensetBackupWarnings(
   // against the essential boards alone left a 50 kVA set silently picking up
   // a 100 kVA bus at the default fraction 1.0 (the power one-line draws it
   // onto the WHOLE LV bus, the dip screen starts every motor).
-  final fractionVa = _fractionVaFloored(project, sys, effectiveGeneratorBackupFraction(project));
-  final fractionW = _fractionWFloored(project, sys, effectiveGeneratorBackupFraction(project));
+  final fractionVa = _fractionVaFloored(
+      project, sys, effectiveGeneratorBackupFraction(project));
+  final fractionW = _fractionWFloored(
+      project, sys, effectiveGeneratorBackupFraction(project));
   // Round 48 (regression-forced-prime-genset-judged-without-prime-uplift) —
   // a PRIME set is sized on 1.25 × the governing basis
   // ([requiredGeneratorKva]); judge the forced nameplate on that SAME
@@ -634,7 +675,8 @@ List<ElectricalWarning> gensetBackupWarnings(
       ElectricalWarning(
         code: 'genset-below-essential-demand',
         severity: WarningSeverity.warning,
-        message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate is '
+        message:
+            'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate is '
             'below the ${kva(balancedVa)} kVA$primeNote demand of '
             '${whose(vaByEssential)} it must carry — raise the genset rating '
             'or shed ${vaByEssential ? 'essential ' : ''}load.',
@@ -659,7 +701,7 @@ List<ElectricalWarning> gensetBackupWarnings(
         code: 'genset-phase-overload',
         severity: WarningSeverity.warning,
         message: 'Genset: the forced ${kva(forced.voltAmperes)} kVA nameplate '
-            'is rated ${(lineCurrentForCapacityA(forced.voltAmperes, sys.supply.system, sys.supply.voltage.volts)).toStringAsFixed(1)} A '
+            'is rated ${(lineCurrentForCapacityA(forced.voltAmperes, _alternatorBasis(project, sys).threePhase ? ElectricalSystem.threePhase : ElectricalSystem.singlePhase, _alternatorBasis(project, sys).volts)).toStringAsFixed(1)} A '
             'per phase, below the heaviest line of the boards it backs '
             '(needs ${kva(phaseNeedVa)} kVA$primeNote of per-phase rating) — the alternator '
             'overloads on that phase; raise the genset rating or rebalance the '
@@ -680,7 +722,8 @@ Power gensetBackupDemandW(
   final gen = project.sources?.generator;
   final demandW = sys.supply.demandW;
   if (gen == null) return Power(demandW);
-  final fractionW = _fractionWFloored(project, sys, effectiveGeneratorBackupFraction(project));
+  final fractionW = _fractionWFloored(
+      project, sys, effectiveGeneratorBackupFraction(project));
   final essentialW = _essentialWFloored(project, sys);
   return Power(essentialW > fractionW ? essentialW : fractionW);
 }
