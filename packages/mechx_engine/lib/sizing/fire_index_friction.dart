@@ -1142,6 +1142,29 @@ List<FirePumpStage>? fireSeriesPumpStages(
     stageSuction.add(key.$1);
     stageDischarge.add(key.$2);
   }
+  // Round 78 (fire-convergence-29-peer-pump-rooms-on-different-floors-rated-
+  // as-series-stages) — several ROOT stages (each drawing from its own source
+  // part: a tank of its own) discharging into the SAME part are independent
+  // PEER pump rooms feeding one network in parallel (the Round-70 reading:
+  // duty / standby at the full system head), never a chain — whatever floor
+  // each room is drawn on. They are merged into ONE root stage (pumps the
+  // union), so the caller rates the system flat (a basement room and a
+  // ground-floor room feeding one ring no longer read as a 5 m lower stage
+  // + a 50 m upper one). A part fed by a root stage AND a downstream stage,
+  // or by two downstream stages (a genuine bypass / second feed), stays
+  // ambiguous (null below).
+  bool isRoot(int k) => !stageDischarge.contains(stageSuction[k]);
+  for (var k = 0; k < stagePumps.length; k++) {
+    if (!isRoot(k)) continue;
+    for (var j = stagePumps.length - 1; j > k; j--) {
+      if (stageDischarge[j] != stageDischarge[k] || !isRoot(j)) continue;
+      if (stageSuction[j] == stageSuction[k]) continue;
+      stagePumps[k].addAll(stagePumps[j]);
+      stagePumps.removeAt(j);
+      stageSuction.removeAt(j);
+      stageDischarge.removeAt(j);
+    }
+  }
   // A part fed by two different stages: ambiguous.
   if (stageDischarge.toSet().length != stageDischarge.length) return null;
 
