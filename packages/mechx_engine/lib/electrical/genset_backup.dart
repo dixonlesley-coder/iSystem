@@ -383,7 +383,9 @@ double worstPhaseDemandVa(ElectricalProject project, ElectricalSystemResult sys,
     // on the UPS output, so the input carries it × [kUpsInputFactor].
     final ups = upsInputCurrent && m.upsBacked;
     var a = ups
-        ? upsInputCurrentA(m, r, round: roundCurrent)!
+        // A board with no usable voltage (v <= 0, a hand-edited file) yields
+        // null — tolerate it as 0 A, never throw (the engine convention).
+        ? upsInputCurrentA(m, r, round: roundCurrent) ?? 0.0
         : roundCurrent
             ? roundTo(r.diversifiedDemandCurrent.amperes, 1)
             : r.diversifiedDemandCurrent.amperes;

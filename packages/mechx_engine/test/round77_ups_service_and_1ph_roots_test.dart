@@ -69,9 +69,13 @@ ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(
       ],
     );
 
-/// The independent LPT reference: the heaviest line current when the 1ph
+/// The LPT reference: the heaviest line current when the 1ph
 /// roots' currents are placed largest first on the lightest of three lines,
-/// above a common 3-phase base current on every line.
+/// above a common 3-phase base current on every line. NOTE: this is the
+/// same largest-first / lightest-line loop as `allocateServiceLinesVa`, NOT
+/// an independent oracle — the meaningful content of the property is its
+/// three bound assertions (<= the old one-line sum, >= the balanced spread,
+/// >= base + the largest 1ph root) over engine-derived currents.
 double _lptMaxLineA(List<double> singles, double base) {
   final xs = [...singles]..sort((a, b) => b.compareTo(a));
   final lines = [base, base, base];
@@ -133,6 +137,26 @@ void main() {
               .map((w) => w.code)
               .contains('service-capacity-below-demand'),
           isFalse);
+    });
+
+    test('a UPS root at Voltage(0) (hand-edited file) solves, never throws',
+        () {
+      final pr = ElectricalProject(
+          id: 'z',
+          name: 'Corrupt voltage',
+          supplyCapacityVa: const ApparentPower(41500),
+          panels: [
+            ElectricalPanel(
+                id: 'U',
+                name: 'UPS-MDP',
+                upsBacked: true,
+                voltage: const Voltage(0),
+                circuits: [for (var i = 0; i < 6; i++) _heater('h$i', 6000)]),
+          ]);
+      late ElectricalSystemResult sys;
+      expect(() => sys = computeSystem(_profile, pr), returnsNormally);
+      expect(sys.panels['U'], isNotNull);
+      expect(() => computeAdvancedStudy(_profile, pr, sys), returnsNormally);
     });
 
     test('no UPS: the output board current is judged (unchanged)', () {
