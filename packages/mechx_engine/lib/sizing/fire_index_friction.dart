@@ -1051,8 +1051,18 @@ class FirePumpStage {
 /// set whose both labels are
 /// reached (a bypass), a set never reached, or a part fed by two different
 /// stages — the caller then keeps its legacy floor grouping.
+///
+/// Round 80 (fire-convergence-31-roof-standby-tank-collapses-series-stages)
+/// — [dischargeOnlySourceIds] are tanks no fire mover takes suction from (a
+/// roof GRAVITY STANDBY tied to the riser top — `fireHopSources`
+/// `dischargeOnly`): they are never a source label, so a two-stage series
+/// chain with a roof standby above its upper zone reads exactly as the same
+/// chain without the tank (the upper set is reached from the lower stage's
+/// discharge, never 'fed from the roof'). Should excluding them leave no
+/// source, every plant counts as before.
 List<FirePumpStage>? fireSeriesPumpStages(
-    Network net, FireSystem system, List<List<String>> sets) {
+    Network net, FireSystem system, List<List<String>> sets,
+    {Set<String> dischargeOnlySourceIds = const {}}) {
   final pumps = {for (final g in sets) ...g};
   if (pumps.isEmpty) return null;
   final parent = <String, String>{};
@@ -1103,6 +1113,21 @@ List<FirePumpStage>? fireSeriesPumpStages(
         n.role == NodeRole.plant &&
         !isSupplyInletComponent(n.component)) {
       (sourceIdsByLabel[label(n.id)] ??= []).add(n.id);
+    }
+  }
+  if (dischargeOnlySourceIds.isNotEmpty) {
+    final kept = <String, List<String>>{};
+    for (final e in sourceIdsByLabel.entries) {
+      final ids = [
+        for (final id in e.value)
+          if (!dischargeOnlySourceIds.contains(id)) id,
+      ];
+      if (ids.isNotEmpty) kept[e.key] = ids;
+    }
+    if (kept.isNotEmpty) {
+      sourceIdsByLabel
+        ..clear()
+        ..addAll(kept);
     }
   }
   final sources = sourceIdsByLabel.keys.toSet();

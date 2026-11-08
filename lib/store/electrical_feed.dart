@@ -22,6 +22,8 @@ import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show
+        FireSystem,
+        fireDrawnPumpLegEnds,
         fireParallelPumpSets,
         fireRatingSystems,
         fireTransferDestinationTank;
@@ -659,6 +661,8 @@ Map<String, String> parallelStandbyPumps(
   final noJockey = <List<String>>{};
   // Round 70 — a peer room's set: its own duty pump (already a standby).
   final peerDutyAsStandby = <List<String>, String>{};
+  // Round 80 — the rating system each set was read from (identity-keyed).
+  final systemOfSet = <List<String>, FireSystem>{};
   // Round 51 r2 — the connectivity groups above walk THROUGH a tank, but
   // [fireSystems] stops at one (a tank is a system boundary), so a group can
   // hold pumps of several systems (a sprinkler pump and a hydrant pump drawn
@@ -699,6 +703,7 @@ Map<String, String> parallelStandbyPumps(
         if (ranked.length >= 2) {
           final peer = [...ranked];
           sets.add(peer);
+          systemOfSet[peer] = systems[i];
           peerDutyAsStandby[peer] = ranked.first;
           if (transfer) noJockey.add(peer);
         }
@@ -706,6 +711,9 @@ Map<String, String> parallelStandbyPumps(
       }
       final kept = parts.where((p) => p.isNotEmpty).toList();
       sets.addAll(kept);
+      for (final p in kept) {
+        systemOfSet[p] = systems[i];
+      }
       if (transfer) {
         noJockey.addAll(kept);
       }
@@ -730,11 +738,39 @@ Map<String, String> parallelStandbyPumps(
     };
     // A peer room's pumps carried at the set flow are never an ASSUMED
     // jockey (only a drawn smaller leg makes one).
+    // Round 80 (fire-convergence-31-peer-duplex-rooms-on-one-tank-standby-
+    // made-jockey) — the >= 3-pump assumption is made per LEG-END group
+    // (pumps sharing both header ends, [fireDrawnPumpLegEnds]): ONE pump
+    // room of three identical machines on one pair of headers. Two duplex
+    // rooms off one shared tank into one ring merge into a single set of
+    // four, yet each room is a duty + standby pair — never a full-size
+    // standby read as a jockey (DN25 legs, a 0.55 kW way).
+    var candidates = rest;
+    final sysOf = systemOfSet[g];
+    if (sysOf != null) {
+      final byEnds = <(String, String), List<String>>{};
+      for (final id in ranked) {
+        (byEnds[fireDrawnPumpLegEnds(net, sysOf, id)] ??= []).add(id);
+      }
+      final big = byEnds.values.where((v) => v.length >= 3).toList();
+      final pick = big.firstWhere((v) => v.contains(duty),
+          orElse: () => big.isEmpty ? const <String>[] : big.first);
+      candidates = [
+        for (final id in rest)
+          if (pick.contains(id)) id,
+      ];
+      if (pick.isNotEmpty && !pick.contains(duty)) {
+        // The room's own lead pump (its best-ranked) stays a main pump.
+        final lead = ([...pick]..sort(rank)).first;
+        candidates.remove(lead);
+      }
+    }
     if (jockeyAllowed &&
         small.isEmpty &&
         g.length >= 3 &&
+        candidates.isNotEmpty &&
         !peerDutyAsStandby.containsKey(g)) {
-      final byBore = [...rest]..sort((a, b) {
+      final byBore = [...candidates]..sort((a, b) {
           final d = boreOf(a).compareTo(boreOf(b));
           if (d != 0) return d;
           return byDraw(b, a);

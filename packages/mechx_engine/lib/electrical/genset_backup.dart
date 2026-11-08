@@ -12,7 +12,7 @@ import 'load_kind.dart' show LoadKind;
 import 'model.dart';
 import 'panel_results.dart';
 import 'sizing.dart' show roundTo;
-import 'sources.dart' show generatorDutyFactor, kGeneratorPf;
+import 'sources.dart' show GeneratorMode, generatorDutyFactor, kGeneratorPf;
 import 'ups.dart' show kUpsInputFactor;
 
 /// Round 45 (regression-ups-input-not-carried-to-genset) — the factor from a
@@ -124,6 +124,12 @@ Set<String> gensetBackedPanelIds(ElectricalProject project) {
 double effectiveGeneratorBackupFraction(ElectricalProject project) {
   final gen = project.sources?.generator;
   if (gen == null) return 1.0;
+  // Round 80 (elec-convergence-31-primary-genset-plant-sized-as-partial-
+  // standby) — an on-site genset PRIMARY supply is the ONLY source: it
+  // carries (and starts) the whole building whatever the essential marks or
+  // a typed backup fraction say (both are meaningful only for a STANDBY set
+  // beside a utility).
+  if (project.supplyKind == SupplyKind.generator) return 1.0;
   final typed = gen.backupFractionTyped;
   if (typed != null) return typed;
   return gensetBackedPanelIds(project).isNotEmpty ? 0.0 : 1.0;
@@ -578,7 +584,9 @@ double alternatorLineDemandVa(ElectricalProject project,
   }
   var l1 = 0.0, l2 = 0.0, l3 = 0.0;
   // Round 79 — the 1φ boards whose line cannot be resolved (no 3φ parent
-  // way — notably 1φ SERVICE-ENTRANCE boards): id → current.
+  // way — notably 1φ SERVICE-ENTRANCE boards): id → current. Round 80 —
+  // keyed by the TOPMOST 1φ ancestor (siblings under one 1φ board are on
+  // its one line, so their currents add before the spread).
   final unresolved = <String, double>{};
   for (final id in panelIds) {
     final r = sys.panels[id];
@@ -621,17 +629,30 @@ double alternatorLineDemandVa(ElectricalProject project,
     if (withLargestMachine && r.largestDownstreamRunA > a) {
       a = r.largestDownstreamRunA;
     }
-    final feed = feedOf[id];
-    final parent = feed == null ? null : sys.panels[feed.$1];
+    // Round 80 (regression-genset-1ph-siblings-under-1ph-board-lpt-spread)
+    // — walk up through 1φ ancestors: every board below a 1φ board shares
+    // that board's ONE line. The line is the feeding way's phase at the
+    // first 3φ ancestor (the way into the topmost 1φ ancestor); a chain
+    // ending at a 1φ ROOT stays unresolved, grouped by that root.
+    var top = id;
     PhaseAssignment? line;
-    if (parent != null && parent.system == ElectricalSystem.threePhase) {
-      // Round 39 r3 — the labelled line the parent's schedule prints.
-      for (final cr in parent.circuits) {
-        if (cr.circuitId == feed!.$2) {
-          line = cr.phase;
-          break;
+    final seen = <String>{id};
+    while (true) {
+      final feed = feedOf[top];
+      final parent = feed == null ? null : sys.panels[feed.$1];
+      if (feed == null || parent == null) break;
+      if (parent.system == ElectricalSystem.threePhase) {
+        // Round 39 r3 — the labelled line the parent's schedule prints.
+        for (final cr in parent.circuits) {
+          if (cr.circuitId == feed.$2) {
+            line = cr.phase;
+            break;
+          }
         }
+        break;
       }
+      if (!seen.add(feed.$1)) break; // cycle guard
+      top = feed.$1;
     }
     switch (line) {
       case PhaseAssignment.l1:
@@ -641,7 +662,7 @@ double alternatorLineDemandVa(ElectricalProject project,
       case PhaseAssignment.l3:
         l3 += a;
       default:
-        unresolved[id] = a;
+        unresolved[top] = (unresolved[top] ?? 0) + a;
     }
   }
   // Round 79 (elec-convergence-30-genset-sums-1ph-roots-onto-one-alternator-
@@ -691,6 +712,37 @@ double alternatorLineDemandVa(ElectricalProject project,
 /// 100 kVA / 80 kW set passes the VA test against a 94.7 kVA / 90 kW board
 /// (cos φ 0.95) yet overloads its engine by 10 kW.
 List<ElectricalWarning> gensetBackupWarnings(
+    ElectricalProject project, ElectricalSystemResult sys) {
+  final gen = project.sources?.generator;
+  if (gen == null) return const [];
+  return [
+    ...?_primaryStandbyModeNote(project, gen.mode),
+    ..._forcedGensetWarnings(project, sys),
+  ];
+}
+
+/// Round 80 — a genset PRIMARY plant (`supplyKind == generator`) runs
+/// continuously, yet the set is left on the default STANDBY rating (no prime
+/// 1.25 headroom, [generatorDutyFactor]). Judge-only INFO
+/// `primary-genset-typed-standby`: the engineer picks the duty, the engine
+/// never re-rates it silently.
+List<ElectricalWarning>? _primaryStandbyModeNote(
+        ElectricalProject project, GeneratorMode mode) =>
+    project.supplyKind == SupplyKind.generator &&
+            generatorDutyFactor(mode) <= 1.0
+        ? const [
+            ElectricalWarning(
+              code: 'primary-genset-typed-standby',
+              severity: WarningSeverity.info,
+              message: 'Genset: the on-site genset is the PRIMARY supply '
+                  '(runs continuously) but is rated as a standby set — set '
+                  'its mode to Prime so it is sized with the prime-duty '
+                  'headroom (1.25 x).',
+            ),
+          ]
+        : null;
+
+List<ElectricalWarning> _forcedGensetWarnings(
     ElectricalProject project, ElectricalSystemResult sys) {
   final gen = project.sources?.generator;
   // Round 44 — the forced PLANT capacity (per-set kVA × paralleled sets).

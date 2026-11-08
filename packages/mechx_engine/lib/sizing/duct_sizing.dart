@@ -393,7 +393,11 @@ RectangularDuctResult sizeRectangularByVelocity({
 /// **and** — when a [maxVelocity] cap is supplied — whose mean velocity ≤ that
 /// cap is returned; both constraints relax monotonically as the section grows
 /// (H ascends and W = aspect·H rounded up is non-decreasing), so the first
-/// qualifying candidate is the smallest adequate one.
+/// qualifying candidate is the smallest adequate one ON THAT ASPECT-TIED
+/// LADDER. Round 80 — with a cap, the velocity-method section
+/// ([sizeRectangularByVelocity], sides rounded up independently) is also a
+/// candidate, so the result is never larger in area than the velocity
+/// method's whenever that section meets the friction target.
 ///
 /// M2 — see [sizeByEqualFriction]: equal friction alone does not bound
 /// velocity. [maxVelocity] defaults to null ⇒ friction-only selection, so every
@@ -418,6 +422,26 @@ RectangularDuctResult sizeRectangularByEqualFriction({
         orElse: () => standardDuctSidesMm.last,
       );
 
+  // Round 80 (plumbing-hvac-convergence-29-rect-equal-friction-not-minimal)
+  // — when the velocity CAP (not friction) governs, the aspect-tied ladder
+  // below skips the smaller sections the velocity method rounds to (W and H
+  // rounded up independently: 1000 × 700 = 0.70 m² carries 3.0 m³/s at
+  // 4.29 m/s / 0.22 Pa/m, yet the ladder jumps from 900 × 600 (5.56 m/s) to
+  // 1200 × 700). The velocity-method section is itself a candidate: when it
+  // meets BOTH the friction target and the cap and is smaller in area than
+  // the ladder pick, it is the adequate section. No cap ⇒ byte-identical.
+  final RectangularDuctResult? capped = maxVelocity == null
+      ? null
+      : sizeRectangularByVelocity(
+          airflow: airflow,
+          maxVelocity: maxVelocity,
+          aspectRatio: aspectRatio,
+        );
+  final bool cappedOk = capped != null &&
+      !capped.overCapacity &&
+      capped.frictionPerMetrePa <= targetPaPerMetre;
+  double area(RectangularDuctResult r) => r.width.meters * r.height.meters;
+
   for (final hMm in standardDuctSidesMm) {
     final h = Length(hMm / 1000.0);
     final w = Length(roundUp(aspectRatio * hMm) / 1000.0);
@@ -426,6 +450,7 @@ RectangularDuctResult sizeRectangularByEqualFriction({
     final actualArea = w.meters * h.meters;
     final v = Velocity(airflow.cubicMetersPerSecond / actualArea);
     if (friction <= targetPaPerMetre && _withinVelocity(v, maxVelocity)) {
+      if (cappedOk && area(capped) < actualArea - 1e-12) return capped;
       return RectangularDuctResult(
         width: w,
         height: h,
@@ -435,6 +460,7 @@ RectangularDuctResult sizeRectangularByEqualFriction({
       );
     }
   }
+  if (cappedOk) return capped;
 
   // No standard W×H meets the target (and/or the cap) — CLAMP to the largest.
   final h = Length(standardDuctSidesMm.last / 1000.0);
