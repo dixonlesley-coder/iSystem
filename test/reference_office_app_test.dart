@@ -41,6 +41,7 @@ import 'package:mechx_engine/electrical/panel_results.dart'
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/duct_sizing.dart'
     show ductFrictionPaPerMetre;
+import 'package:mechx_engine/sizing/air_velocity.dart' show VelocityBandVerdict;
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart'
@@ -740,5 +741,191 @@ void main() {
       // ignore: avoid_print
       print(_out.toString());
     }
+  });
+
+  // ── Hand-derived pins (reviewer pass 2, 2026-11-13) ─────────────────────
+  group('hand values (app providers)', () {
+    late ProviderContainer c;
+    setUpAll(() async {
+      c = await _loadOffice(buildOffice());
+    });
+    tearDownAll(() => c.dispose());
+
+    test('upfeed: P1 on 38.539 m; SNI floors; one zone, no PRV', () {
+      final up = c.read(upfeedDeliveredProvider)!;
+      expect(up.criticalNodeId, 'WCb3');
+      expect(up.residualPressure['WCb3']!.inKiloPascals, closeTo(225.0, 2e-3));
+      // Hydraulic 9810 x 3.91733e-3 x 38.539 = 1481.0 W; shaft / 0.70 =
+      // 2115.7 W ⇒ 2.2 kW; fed input 2200 / 0.90 = 2444.4 W.
+      final p1 = c.read(supplyMoverDutiesProvider)['P1']!;
+      expect(p1.flow.inLitersPerSecond, closeTo(3.91733, 5e-5));
+      expect(p1.head.meters, closeTo(38.539, 5e-4));
+      expect(p1.hydraulicPower.watts, closeTo(1481.0, 0.05));
+      expect(p1.shaftPower.watts, closeTo(2115.7, 0.05));
+      expect(p1.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
+      expect(c.read(nodeFedLoadsProvider)['P1']!.input, closeTo(2444.4, 0.05));
+      final floors = c.read(upfeedSniFloorsProvider);
+      for (var f = 0; f < 4; f++) {
+        for (final b in kOfficeFloorFixtures) {
+          expect(floors['$b$f']!.inKiloPascals,
+              closeTo(b.startsWith('WC') ? 98.067 : 49.033, 1e-3),
+              reason: '$b$f');
+        }
+      }
+      expect(c.read(upfeedOverPressureProvider), isEmpty);
+      // O2 — one zone hung from the solved datum, no PRV station.
+      expect([
+        for (final z in c.read(zonesProvider))
+          (z.bottomFloorIndex, z.topFloorIndex)
+      ], [
+        (0, 3)
+      ]);
+      expect(c.read(zoneStaticsProvider).single.viaPrv, isFalse);
+    });
+
+    test('fire pump: 31.545 L/s @ 98.536 m, NFPA 20 curve, 55 kW, jockey', () {
+      final b = c.read(fireSystemBasesProvider).single;
+      expect(b.sprinklerOnly, isFalse);
+      expect(b.dutyPumpId, 'FP');
+      // 13.2 + max(15, 2.872) + 690 / 9.81 = 98.536 m.
+      expect(b.staticLiftM, closeTo(13.2, 1e-9));
+      expect(b.indexFrictionM, closeTo(2.872, 5e-4));
+      expect(b.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+      expect(b.head.meters, closeTo(98.536, 5e-4));
+      // Churn 1.4 x 98.536 = 137.951 m; overload 1.5 Q = 47.3176 L/s @ 0.65 H
+      // = 64.049 m; overload shaft 1.5 x 0.65 x 30 492.8 / (0.7 x 0.85) =
+      // 29 730.5 / 0.595 = 49 967.2 W ⇒ 55 kW.
+      final r = b.rating;
+      expect(r.churn.head.meters, closeTo(137.951, 5e-4));
+      expect(r.overload.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(r.overload.head.meters, closeTo(64.049, 5e-4));
+      expect(r.overload.shaftPower.watts, closeTo(49967.2, 0.05));
+      expect(r.selectedMotor.inKiloWatts, closeTo(55, 1e-9));
+      expect(r.standbyRecommended, isTrue);
+      final d = c.read(firePumpDutyProvider)!;
+      expect(d.hydraulicPower.watts, closeTo(30492.8, 0.05));
+      expect(d.shaftPower.watts, closeTo(43561.2, 0.05));
+      expect(c.read(nodeFedLoadsProvider)['FP']!.input, closeTo(61111.1, 0.05));
+      // Jockey 1 % = 0.3155 L/s at churn + 5 = 142.951 m, 0.75 kW.
+      final j = c.read(fireJockeyDutyProvider)!;
+      expect(j.flow.inLitersPerSecond, closeTo(0.31545, 5e-5));
+      expect(j.head.meters, closeTo(142.951, 5e-4));
+      expect(j.selectedMotor.inKiloWatts, closeTo(0.75, 1e-9));
+    });
+
+    test('sprinkler point (not governing): 15.7 + 50 / 9.81 + 37.414 m', () {
+      // O3 stood down (Audit round 8 row: the judge head is a LOWER BOUND,
+      // lift + branch base, no friction); the rating basis' sprinkler
+      // point: lift to the top head ceiling 15.7 + the 50 kPa remote head
+      // 5.097 + the sized sprinkler index friction (after O1) 37.414.
+      final chk = c.read(sprinklerPumpCheckProvider)!;
+      expect(chk.headShort, isFalse);
+      expect(chk.flowShort, isFalse);
+      expect(chk.requiredHeadM, closeTo(15.7 + 96.722 / 9.81, 5e-4));
+    });
+
+    test('HVAC: fan static (supply + return + FCU internal) 121.25 Pa', () {
+      // Supply: (0.4462 + 0.4405 + 0.6651 + 1.0342) x 3 x 1.3 + 30 = 40.09;
+      // return 0.4462 x 2 x 1.3 + 30 = 31.16; + 50 internal = 121.25 Pa.
+      final fan = c.read(supplyFanDutiesByRootProvider)[kOfficeFcuId]!;
+      expect(fan.airflow.cubicMetersPerSecond, closeTo(0.925, 1e-9));
+      expect(fan.totalStaticPressure.pascals, closeTo(121.25, 0.005));
+      expect(fan.airPower.watts, closeTo(112.15, 0.005));
+      expect(fan.shaftPower.watts, closeTo(172.54, 0.005));
+      expect(fan.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+      final sz = c.read(sizingProvider);
+      for (final (id, dn) in [
+        ('e_sa_FCU1_SD1', 500), ('e_sa_SD1_SD2', 450), ('e_sa_SD2_SD3', 355),
+        ('e_sa_SD3_SD4', 250), ('e_ra_RG1_FCU1', 500), //
+      ]) {
+        expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
+      }
+      expect(c.read(airVelocityChecksProvider).values
+          .where((v) => v.verdict != VelocityBandVerdict.ok), isEmpty);
+    });
+
+    test('MEP board, MEP feeder (O4) and LVMDP', () {
+      final sys = c.read(electricalResultProvider);
+      final mep = sys.panels['mep-equipment']!;
+      Map<String, dynamic> way(String id) {
+        final r = mep.circuits.firstWhere((x) => x.circuitId == id);
+        return {
+          'ib': r.designCurrentExactA,
+          'mcb': r.breaker.ratingA.amperes,
+          'csa': r.cable.csaMm2,
+          'iz': r.cable.deratedIz.amperes,
+          'cores': r.grounding.cores,
+          'rcd': r.rcd.required,
+          'type': r.grounding.cableType,
+        };
+      }
+
+      // P1 2444.4 / (√3 x 400 x 0.85) = 4.151 A, 6 A D, 4 x 2.5.
+      expect(way('mep-node-P1')['ib'], closeTo(4.151, 5e-4));
+      expect(way('mep-node-P1')['mcb'], 6);
+      expect(way('mep-node-P1')['cores'], 4);
+      // FP 61 111 / (√3 x 400 x 0.85) = 103.77 A, MCCB 125 A, FRC 3 x 35 +
+      // 16 (Iz 144 >= 1.25 x 103.77 = 129.7), no RCD.
+      expect(way('mep-node-FP')['ib'], closeTo(103.77, 5e-3));
+      expect(way('mep-node-FP')['mcb'], 125);
+      expect(way('mep-node-FP')['csa'], 35);
+      expect(way('mep-node-FP')['iz'], 144);
+      expect(way('mep-node-FP')['type'], 'FRC');
+      expect(way('mep-node-FP')['rcd'], isFalse);
+      // FCU1 411.1 / (231 x 0.85) = 2.094 A, 6 A C, 1-phase.
+      expect(way('mep-node-FCU1')['ib'], closeTo(2.094, 5e-4));
+      expect(way('mep-node-FCU1')['mcb'], 6);
+      expect(mep.demandW, closeTo(63967, 0.5));
+      expect(mep.demandVa, closeTo(75255, 0.5));
+      expect([mep.phaseBalance.l1, mep.phaseBalance.l2, mep.phaseBalance.l3],
+          [107.9, 107.9, 110.0]);
+      expect(mep.incomer.breaker.ratingA.amperes, 125);
+      expect(mep.incomer.poles, 4);
+      // MEP feeder: Ib 110.0 A, FRC (O4) sized on the XLPE table: 1.25 x
+      // 110 = 137.5 <= 144 A at 35 mm² ⇒ the selectivity floor 1.6 x 125 is
+      // capped at the largest rung Iz 144 protects: MCCB 125 A.
+      final lv = sys.panels[kOfficeMainPanelId]!;
+      final f = lv.circuits.firstWhere((x) => x.circuitId == 'mep-equipment-feeder');
+      expect(f.designCurrent.amperes, 110.0);
+      expect(f.grounding.cableType, 'FRC');
+      expect(f.cable.csaMm2, 35);
+      expect(f.breaker.ratingA.amperes, 125);
+      // LVMDP: 4 x 16 050 + 63 967 = 128 167 W; lines 216.2 / 216.2 / 212.6;
+      // incomer on the service floor 164 000 / (√3 x 400) = 236.7 A → 250 A
+      // 4P; recommended daya 164 000 VA.
+      expect(lv.demandW, closeTo(128167, 0.5));
+      expect(lv.demandVa, closeTo(149059, 0.5));
+      expect([lv.phaseBalance.l1, lv.phaseBalance.l2, lv.phaseBalance.l3],
+          [216.2, 216.2, 212.6]);
+      expect(lv.incomer.sizingCurrent!.amperes, closeTo(236.7, 1e-9));
+      expect(lv.incomer.breaker.ratingA.amperes, 250);
+      expect(lv.incomer.poles, 4);
+      final adv = c.read(electricalAdvancedProvider);
+      expect(adv.recommendedDayaVa, 164000);
+      expect(adv.fault.originFaultkA, 10.0);
+    });
+
+    test('Review: deliberate findings present, fixed ones absent', () {
+      final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+      int count(String k) => kinds.where((x) => x == k).length;
+      expect(count('electrical:life-safety-not-essential'), 1);
+      expect(count('electrical:non-selective'), 5);
+      expect(count('fire-system-over-pressure:FP'), 1);
+      expect(count('standpipe-outlet-over-pressure:FP:0-3'), 1);
+      expect(count('electrical:fire-pump-protection'), 1);
+      // Consequence of the 164 kVA service floor (incomer 250 A): recorded.
+      expect(count('electrical:enclosure-temp-rise-exceeded'), 1);
+      expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
+      expect(kinds, isNot(contains('electrical:life-safety-feeder-cable')));
+      expect(kinds.where((k) => k.startsWith('air-terminal-unsized')), isEmpty);
+      expect(kinds.where((k) => k.startsWith('unfed-panel')), isEmpty);
+      expect(kinds.where((k) => k.startsWith('pressure-zone')), isEmpty);
+      // Churn 137.951 x 9.81 = 1353.3 kPa > 1210; every hose valve's static
+      // over 1207 kPa.
+      final over = c.read(fireOverPressureProvider).single;
+      expect(over.check.churnKpa, closeTo(1353.3, 0.05));
+      final outlets = c.read(standpipeOutletOverPressureProvider).single;
+      expect((outlets.lowFloor, outlets.highFloor), (0, 3));
+    });
   });
 }
