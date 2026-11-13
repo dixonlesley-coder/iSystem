@@ -731,3 +731,16 @@ The cause was the SLD-family legend printing each entry on one line in a fixed-w
 - Pre-check item 4 (scripted part) now FAILs any text run that starts inside a LEGEND / LEGENDA box
   and ends outside it. It caught the two pages above on the earlier export.
 - Test: `packages/mechx_engine/test/sld_legend_wrap_test.dart`.
+
+## Re-check of F8 (2026-11-13, reviewer)
+
+Re-checked at full resolution after fix round 2 and a full regeneration (scripted pre-check: zero FAIL lines on all five buildings, item 21 and the legend-in-box check active).
+
+| Sheet re-checked | Item | Result | Evidence |
+|---|---|---|---|
+| house `panel-schedules` p1 (E-601) | 21 | PASS | rows 300 + 250 + 1200 + 800 + 2000 + 750 + 750 + 1500 + 284 = 7 834 W = "TERPASANG / CONNECTED 7.834 WATT"; demand 6.5 kW / 32.5 A labelled; DF 0.7 / 0.9 shown in the rows |
+| apartment `panel-schedules` p3 (E-601, MEP board) | 21 | PASS | rows 3 333 + 411 + 83 333 + 83 333 + 1 222 + 684 + 684 = 173 000 W = connected; demand 89.7 kW; standby fire pump marked "(STANDBY)" with 0.0 A |
+| tower `panel-schedules` p2 (E-601, LVMDP) | 21 | PASS | "TOTAL (W1-W31, LEMBAR / SHEETS 1-2)" connected 865 347 W = 30 x 18 750 + 302 847; demand 865.3 kW / 1448.1 A |
+| house and tower legends (same pages) | 4 | PASS | the long TERPASANG / KEBUTUHAN entry wraps inside the LEGEND box; nothing crosses the box or the frame |
+
+Result: the checklist passes on every page of the five sets — per-page verdicts in the completion pass above, F1–F8 fixed and re-checked.
