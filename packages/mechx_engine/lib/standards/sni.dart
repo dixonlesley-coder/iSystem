@@ -125,12 +125,23 @@ enum PlumbingFixture {
   waterClosetFlushValve, // kloset, katup gelontor
   waterClosetFlushTank, // kloset, tangki gelontor
   urinalFlushTank, // peturasan, tangki gelontor
+  // Backlog D-5 (2026-11-13) — a flush-VALVE urinal (peturasan, katup
+  // gelontor): counted as a flush-valve node (the valve demand-curve branch
+  // and the 98.067 kPa SNI floor), see [isFlushValveFixture].
+  urinalFlushValve,
   lavatory, // wastafel / bak cuci tangan
   shower,
   bathtub, // bak rendam
   kitchenSink, // bak cuci dapur
   hoseBibb, // keran taman
 }
+
+/// Backlog D-5 (2026-11-13) — a FLUSH-VALVE fixture (a flush-valve WC or
+/// urinal): it selects the flush-valve branch of the demand curve for its
+/// supply system and carries the 1 kgf/cm² flush-valve minimum pressure.
+bool isFlushValveFixture(PlumbingFixture? f) =>
+    f == PlumbingFixture.waterClosetFlushValve ||
+    f == PlumbingFixture.urinalFlushValve;
 
 /// Interface every standards profile satisfies. Keeps standards swappable.
 abstract interface class StandardsProfile {
@@ -322,6 +333,13 @@ class SniProfile implements StandardsProfile {
         (PlumbingFixture.waterClosetFlushTank, _) => 2.5,
         (PlumbingFixture.urinalFlushTank, Occupancy.assembly) => 3.0,
         (PlumbingFixture.urinalFlushTank, _) => 2.0,
+        // Backlog D-5 — the urinal flush-VALVE row of the same table (UPC
+        // 2012 Table 610.3 'urinal, > 1.0 GPF': public 5, assembly 6). The
+        // table has no lower private figure the profile trusts for a valve
+        // urinal, so private takes the public 5 (never below). VERIFY
+        // (listed in [verifyChecklist]).
+        (PlumbingFixture.urinalFlushValve, Occupancy.assembly) => 6.0,
+        (PlumbingFixture.urinalFlushValve, _) => 5.0,
         (PlumbingFixture.lavatory, _) => 1.0,
         (PlumbingFixture.shower, _) => 2.0,
         (PlumbingFixture.bathtub, _) => 4.0,
@@ -435,6 +453,23 @@ class SniProfile implements StandardsProfile {
         PipeMaterial.steel => const Roughness(4.5e-5),
       };
 
+  /// Backlog D-5 (2026-11-13) — the flush-VALVE urinal's UBAP (private /
+  /// public 5, assembly 6) and DFU (4, the urinal row), with the flush-valve
+  /// 1 kgf/cm² floor. `// VERIFY` against SNI 8153 Tabel 3.
+  StandardValue<String> get urinalFlushValveLoads => const StandardValue(
+        'urinal, flush valve: UBAP 5 (private / public), 6 (assembly); '
+        'DFU 4; min 98 kPa (flush valve)',
+        unit: 'table',
+        citation: 'UPC 2012 Table 610.3 / IPC Table 709.1 — urinal, flush '
+            'valve (NOT a confirmed SNI 8153 Tabel 3 row)',
+        status: VerificationStatus.notAnSniClause,
+        note: 'A flush-valve urinal loads 5 UBAP (6 in assembly; private '
+            'takes the public figure, never below) and 4 DFU, and is a '
+            'flush-valve node: the valve branch of the demand curve and the '
+            '1 kgf/cm² (98 kPa) minimum apply. Confirm against SNI 8153 '
+            'Tabel 3.',
+      );
+
   // ── Verify checklist (UI surfaces these as still-unverified) ──────────────
 
   /// mech-building-6 — the share of a fixture's TOTAL UBAP loaded onto EACH of
@@ -478,6 +513,8 @@ class SniProfile implements StandardsProfile {
         mandatoryPressureReliefThreshold,
         minResidualPressureFlushValve,
         minResidualPressureFaucet,
+        // Backlog D-5 — the flush-valve urinal's loads.
+        urinalFlushValveLoads,
         // Plumbing-rigour advisory thresholds — all general practice, NOT yet
         // confirmed against the SNI clauses (surfaced so the report stays honest).
         const StandardValue<Object?>(

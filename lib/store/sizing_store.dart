@@ -237,7 +237,8 @@ final sizingDetailProvider = Provider<
   // flush-tank system. [flushSystem] is the whole-project summary only.
   final flushValveNodeIds = <String>{
     for (final n in net.nodes)
-      if (n.fixture == PlumbingFixture.waterClosetFlushValve ||
+      // Backlog D-5 — a flush-valve WC or URINAL.
+      if (isFlushValveFixture(n.fixture) ||
           (customFor(n)?.isFlushValve ?? false))
         n.id,
   };

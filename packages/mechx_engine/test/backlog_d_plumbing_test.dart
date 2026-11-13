@@ -3,7 +3,9 @@
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/fire_index_friction.dart';
+import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
@@ -202,5 +204,44 @@ void main() {
         );
       });
     }
+  });
+
+  group('D-5 — the flush-valve urinal', () {
+    const sni = SniProfile();
+    const ur = PlumbingFixture.urinalFlushValve;
+    test('UBAP 5 / 5 / 6, DFU 4, DN50 trap, a flush-valve fixture', () {
+      expect(sni.fixtureUnitLoad(ur), 5.0);
+      expect(sni.fixtureUnitLoad(ur, occupancy: Occupancy.public), 5.0);
+      expect(sni.fixtureUnitLoad(ur, occupancy: Occupancy.assembly), 6.0);
+      // Never below the flush-TANK urinal it replaces (2 / 2 / 3).
+      for (final o in Occupancy.values) {
+        expect(sni.fixtureUnitLoad(ur, occupancy: o),
+            greaterThan(sni.fixtureUnitLoad(
+                PlumbingFixture.urinalFlushTank,
+                occupancy: o)));
+      }
+      expect(drainageFixtureUnit(ur), 4);
+      expect(isDn50TrapFixture(ur), isTrue);
+      expect(isFlushValveFixture(ur), isTrue);
+      expect(isFlushValveFixture(PlumbingFixture.waterClosetFlushValve), isTrue);
+      expect(isFlushValveFixture(PlumbingFixture.urinalFlushTank), isFalse);
+      expect(isWaterCloset(ur), isFalse);
+    });
+
+    test('on the valve branch: 5 UBAP → 5 x 0.88333 / 10 = 0.44167 L/s', () {
+      expect(
+          sni
+              .probableFlowForFixtureUnits(5,
+                  system: FlushSystem.flushValve)
+              .inLitersPerSecond,
+          closeTo(0.441665, 1e-6));
+    });
+
+    test('listed in the verify checklist (not an SNI clause)', () {
+      final v = sni.verifyChecklist
+          .where((x) => x.citation.contains('urinal, flush valve'));
+      expect(v, hasLength(1));
+      expect(v.single.status, VerificationStatus.notAnSniClause);
+    });
   });
 }

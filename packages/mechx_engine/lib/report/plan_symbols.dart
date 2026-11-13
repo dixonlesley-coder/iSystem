@@ -477,7 +477,7 @@ String? fixturePlanCode(NetNode n,
     PlumbingFixture.waterClosetFlushValve ||
     PlumbingFixture.waterClosetFlushTank =>
       'WC',
-    PlumbingFixture.urinalFlushTank => 'UR',
+    PlumbingFixture.urinalFlushTank || PlumbingFixture.urinalFlushValve => 'UR',
     PlumbingFixture.lavatory => 'LAV',
     PlumbingFixture.shower => 'SH',
     PlumbingFixture.bathtub => 'BT',

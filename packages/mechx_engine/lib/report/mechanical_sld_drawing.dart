@@ -1828,7 +1828,9 @@ String _fixtureLabel(PlumbingFixture f) => switch (f) {
       PlumbingFixture.waterClosetFlushValve ||
       PlumbingFixture.waterClosetFlushTank =>
         'WC',
-      PlumbingFixture.urinalFlushTank => 'Urinal',
+      PlumbingFixture.urinalFlushTank ||
+      PlumbingFixture.urinalFlushValve =>
+        'Urinal',
       PlumbingFixture.lavatory => 'Lavatory',
       PlumbingFixture.shower => 'Shower',
       PlumbingFixture.bathtub => 'Bathtub',

@@ -390,6 +390,7 @@ const List<PlumbingFixture> _paletteFixtures = [
   PlumbingFixture.shower,
   PlumbingFixture.kitchenSink,
   PlumbingFixture.urinalFlushTank,
+  PlumbingFixture.urinalFlushValve,
   PlumbingFixture.bathtub,
   PlumbingFixture.hoseBibb,
 ];
@@ -402,6 +403,7 @@ String _fixtureCardLabel(PlumbingFixture f) => switch (f) {
       PlumbingFixture.waterClosetFlushValve => 'WC · valve',
       PlumbingFixture.waterClosetFlushTank => 'WC · tank',
       PlumbingFixture.urinalFlushTank => 'Urinal',
+      PlumbingFixture.urinalFlushValve => 'Urinal · valve',
       PlumbingFixture.lavatory => 'Lavatory',
       PlumbingFixture.shower => 'Shower',
       PlumbingFixture.bathtub => 'Bathtub',
