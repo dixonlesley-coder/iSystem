@@ -333,7 +333,10 @@ SldSheet buildMechanicalRiserSld({
   // extra height costs no label size, and the key rows / hugging slots get
   // free room under the stacked lanes. The fewest overprints win (ties keep
   // the standard band, so every other page is byte-identical).
-  SldSheet at(double h) => _buildMechanicalRiserSld(
+  // Drawing review S3 — then a wider fan-out / service-lane / column PITCH
+  // (x1.25 .. x3, each with the band steps): the first step that clears
+  // wins ([riserPitchEscalation]).
+  SldSheet at(double h, double p) => _buildMechanicalRiserSld(
         network: network,
         sizing: sizing,
         building: building,
@@ -350,15 +353,43 @@ SldSheet buildMechanicalRiserSld({
         floorRange: floorRange,
         extras: extras,
         bandH: h,
+        pitchScale: p,
       );
-  var best = at(_bandH);
-  if (floorRange != null &&
-      floorRange.lo == floorRange.hi &&
-      best.overlapCount > 0) {
-    for (final k in const [1.5, 2.0]) {
-      final s = at(_bandH * k);
+  final lone = floorRange != null && floorRange.lo == floorRange.hi;
+  return riserPitchEscalation(
+    build: at,
+    bandH: _bandH,
+    enabled: lone,
+  );
+}
+
+/// Drawing review S2/S3 — the band heights ([kMechRiserBandSteps], × the
+/// standard band) and fan-out / lane / column PITCH scales
+/// ([kMechRiserPitchSteps]) a lone-floor riser page whose key circles still
+/// overprint is re-drawn at. The diagram is NTS, so both are free.
+const List<double> kMechRiserBandSteps = [1.0, 1.5, 2.0];
+const List<double> kMechRiserPitchSteps = [1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
+
+/// Drawing review S2/S3 — the escalation [buildMechanicalRiserSld] runs on a
+/// lone-floor page: `build(bandH, 1.0)` as drawn when it already clears (or
+/// [enabled] is false — byte-identical), else each pitch step in order
+/// ([kMechRiserPitchSteps], the branch fan-out pitch, the service-lane pitch
+/// and the least column pitch scaled together) × each band step, keeping the
+/// FIRST sheet that reaches zero overprints, else the one with the strictly
+/// fewest (ties keep the earlier, plainer step). Pure.
+SldSheet riserPitchEscalation({
+  required SldSheet Function(double bandH, double pitchScale) build,
+  required double bandH,
+  bool enabled = true,
+}) {
+  var best = build(bandH, 1.0);
+  if (!enabled || best.overlapCount == 0) return best;
+  for (final p in kMechRiserPitchSteps) {
+    for (final k in kMechRiserBandSteps) {
+      if (p == 1.0 && k == 1.0) continue;
+      final s = build(bandH * k, p);
       if (s.overlapCount < best.overlapCount) best = s;
-      if (best.overlapCount == 0) break;
+      if (best.overlapCount == 0) return best;
     }
   }
   return best;
@@ -381,8 +412,10 @@ SldSheet _buildMechanicalRiserSld({
   ({int lo, int hi})? floorRange,
   MechRiserExtras extras = MechRiserExtras.auto,
   required double bandH,
+  double pitchScale = 1.0,
 }) {
   final prims = <SldPrim>[];
+  final lanePitch = kRiserLanePitch * pitchScale;
   // Round 16 — the solve's flow direction drives the FUNCTION suffix.
   final flowFromByEdge = flowFromBySizing(sizing);
 
@@ -482,7 +515,7 @@ SldSheet _buildMechanicalRiserSld({
       placeX(n.id),
       parksOnRoof(n)
           ? roofLineY - _symbolSize / 2
-          : bandCentreY(n.floorIndex) + (lanes[n.id] ?? 0) * kRiserLanePitch);
+          : bandCentreY(n.floorIndex) + (lanes[n.id] ?? 0) * lanePitch);
 
   final posById = <String, Offset>{
     for (final n in nodes) n.id: posOf(n),
@@ -496,7 +529,7 @@ SldSheet _buildMechanicalRiserSld({
   // lane fan out to distinct y offsets (filled below, after the B5 spread).
   final fanOff = <String, double>{};
   double runY(NetEdge e, Offset a) =>
-      a.dy + (edgeLanes[e.id] ?? 0) * kRiserLanePitch + (fanOff[e.id] ?? 0);
+      a.dy + (edgeLanes[e.id] ?? 0) * lanePitch + (fanOff[e.id] ?? 0);
 
   // ── Spread coincident node positions minimally in x (B5) ─────────────────────
   // Two fixtures at the same world x land on the same band point and stack their
@@ -519,7 +552,7 @@ SldSheet _buildMechanicalRiserSld({
       [for (final p in posById.values) p.dx],
       lo: _gutterW + _sidePad,
       hi: _gutterW + _drawW - _sidePad,
-      minPitch: kMechRiserMinColumnPitch,
+      minPitch: kMechRiserMinColumnPitch * pitchScale,
       taggedXs: [
         for (final n in nodes)
           if (posById[n.id] != null &&
@@ -549,7 +582,8 @@ SldSheet _buildMechanicalRiserSld({
   }
   final singleService =
       focus != null || network.edges.map((e) => e.service).toSet().length < 2;
-  final fanPitch = singleService ? _kFanPitchSingle : _kFanPitchCombined;
+  final fanPitch =
+      (singleService ? _kFanPitchSingle : _kFanPitchCombined) * pitchScale;
   // Each fan group is (the shared header node, its runs); the far end of a
   // run is the endpoint that is NOT the header.
   final fanGroups = <(String, List<NetEdge>)>[];

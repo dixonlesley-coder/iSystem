@@ -3,6 +3,8 @@
 // sheet, then halves along the longer side with MATCH LINES); S2 gives a
 // crowded riser floor band its own page / a second key row. Pure rules.
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/mechanical_sld_drawing.dart'
+    show riserPitchEscalation, kMechRiserPitchSteps, kMechRiserBandSteps;
 import 'package:mechx_engine/report/plan_detail.dart';
 import 'package:mechx_engine/report/plan_detail_sheet.dart';
 import 'package:mechx_engine/report/riser_pagination.dart';
@@ -126,6 +128,70 @@ void main() {
       final pages = paginate(1);
       expect(pages, hasLength(2));
       expect(pages.map((p) => p.overlapCount), [0, 2]);
+    });
+  });
+
+  group('S3 — riser pitch escalation', () {
+    SldSheet sheet(double h, int ov) => SldSheet(
+        prims: const [],
+        minX: 0,
+        minY: 0,
+        maxX: 600,
+        maxY: h,
+        legend: const [],
+        supplyNote: '',
+        overlapCount: ov);
+
+    test('a page that already clears is built once, as drawn', () {
+      final calls = <(double, double)>[];
+      final s = riserPitchEscalation(
+          build: (h, p) {
+            calls.add((h, p));
+            return sheet(h, 0);
+          },
+          bandH: 150);
+      expect(calls, [(150.0, 1.0)]);
+      expect(s.maxY, 150);
+    });
+
+    test('disabled (multi-floor page) never re-draws', () {
+      final calls = <(double, double)>[];
+      final s = riserPitchEscalation(
+          build: (h, p) {
+            calls.add((h, p));
+            return sheet(h, 4);
+          },
+          bandH: 150,
+          enabled: false);
+      expect(calls, hasLength(1));
+      expect(s.overlapCount, 4);
+    });
+
+    test('picks the FIRST step that reaches zero (pitch, then band)', () {
+      final calls = <(double, double)>[];
+      // Overprints fall with the pitch; zero first at pitch 1.5 x band 1.5.
+      final s = riserPitchEscalation(
+          build: (h, p) {
+            calls.add((h, p));
+            final ov = p >= 1.5 && h >= 225 ? 0 : (p >= 1.25 ? 2 : 4);
+            return sheet(h * 10 + p, ov);
+          },
+          bandH: 150);
+      expect(s.overlapCount, 0);
+      expect(s.maxY, 2250 + 1.5);
+      expect(calls.last, (225.0, 1.5));
+      expect(calls.first, (150.0, 1.0));
+    });
+
+    test('no step clears: the strictly fewest wins, ties keep the earlier',
+        () {
+      final s = riserPitchEscalation(
+          build: (h, p) => sheet(h * 10 + p, p >= 1.25 ? 1 : 3),
+          bandH: 150);
+      expect(s.overlapCount, 1);
+      expect(s.maxY, 1500 + 1.25); // first sheet reaching 1, band 1.0
+      expect(kMechRiserPitchSteps.first, 1.0);
+      expect(kMechRiserBandSteps.first, 1.0);
     });
   });
 }
