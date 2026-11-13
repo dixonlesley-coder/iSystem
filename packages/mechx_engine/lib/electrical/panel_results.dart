@@ -562,6 +562,15 @@ class ElectricalSystemResult {
   /// every message keeps its legacy wording ⇒ byte-identical.
   final Set<String> feederFloorsCapped;
 
+  /// Backlog B-3 (2026-11-13) — the DISCONNECTION floor (kVA per set) of an
+  /// UNFORCED standby genset: the smallest ladder rating, above the running
+  /// and motor-start floors, at which no auto-sized way or feeder of a
+  /// genset-backed board fails automatic disconnection on the alternator
+  /// fault (after the T4 cable growth). Every genset sizing reads it
+  /// (`sizeGenerator(minKvaForAds:)`). Null ⇒ the running / start floors
+  /// already hold ADS (or nothing cures it) ⇒ byte-identical.
+  final double? gensetAdsFloorKva;
+
   const ElectricalSystemResult({
     required this.projectId,
     required this.panels,
@@ -572,6 +581,7 @@ class ElectricalSystemResult {
     required this.warnings,
     this.feederFloorsApplied = const {},
     this.feederFloorsCapped = const {},
+    this.gensetAdsFloorKva,
   });
 }
 

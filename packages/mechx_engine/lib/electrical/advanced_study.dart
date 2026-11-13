@@ -627,6 +627,8 @@ AdvancedStudy computeAdvancedStudy(
       voltage: serviceSystemOf(project, sys).voltage,
       motors:
           gensetStartMotors(project, sys: sys, assemblies: controlAssemblies),
+      // Backlog B-3 — the disconnection floor.
+      minKvaForAds: gensetAdsFloorFor(sys),
       utilitySub: powerOneLineUtilitySub(project, sys,
           voltage: serviceSystemOf(project, sys).voltage),
       // Round 58 — the head follows the primary supply (PLN / genset / PV).
@@ -858,10 +860,20 @@ double? gensetPlantVa(ElectricalProject project, ElectricalSystemResult sys) {
       mode: gen.mode,
       transfer: gen.transfer,
       backupPower: gensetBackupDemandW(project, sys),
-      minKvaForStart: gensetStartFloorFor(project, sys));
+      minKvaForStart: gensetStartFloorFor(project, sys),
+      minKvaForAds: gensetAdsFloorFor(sys));
   final v = r.ratingKva.voltAmperes * r.units;
   return v > 0 ? v : null;
 }
+
+/// Backlog B-3 (2026-11-13) — the disconnection floor every UNFORCED genset
+/// sizing passes to [sizeGenerator] (`minKvaForAds`), beside
+/// [gensetStartFloorFor]: `computeSystem`'s
+/// [ElectricalSystemResult.gensetAdsFloorKva]. Null ⇒ byte-identical.
+ApparentPower? gensetAdsFloorFor(ElectricalSystemResult sys) =>
+    sys.gensetAdsFloorKva == null
+        ? null
+        : ApparentPower.kilovoltAmperes(sys.gensetAdsFloorKva!);
 
 /// Round 70 (elec-convergence-22-genset-start-dip-failure-never-a-warning)
 /// — the ONE motor-start floor every UNFORCED genset sizing passes to

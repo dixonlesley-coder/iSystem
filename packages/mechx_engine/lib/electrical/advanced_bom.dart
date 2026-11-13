@@ -17,6 +17,7 @@ import '../standards/puil.dart' show ElectricalStandardsProfile, PuilProfile;
 import '../units.dart' show Power;
 import 'advanced_study.dart'
     show
+        gensetAdsFloorFor,
         gensetStartFloorFor,
         originPanelIdsOf,
         serviceSectionOfRoot,
@@ -120,7 +121,9 @@ List<BomLine> advancedBomLines({
                     backupPower: gensetBackupDemandW(project, sys),
                     // Round 70 — the set that starts its largest motor.
                     minKvaForStart: gensetStartFloorFor(project, sys,
-                        assemblies: controlAssemblies));
+                        assemblies: controlAssemblies),
+                    // Backlog B-3 — the disconnection floor.
+                    minKvaForAds: gensetAdsFloorFor(sys));
                 return (kva: r.ratingKva.inKilovoltAmperes, units: r.units);
               })()
             : null;

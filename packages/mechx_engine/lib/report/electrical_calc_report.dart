@@ -22,6 +22,7 @@ import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BusbarSizingReason;
+import '../electrical/sources.dart' show GeneratorResult, GensetSizingReason;
 import '../standards/puil.dart' show BreakerClassCode;
 import '../standards/sni.dart'
     show Revision, StandardValue, VerificationStatus;
@@ -679,6 +680,10 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
                 '(${_oneLineKindLabel(node, strings)})'
                 '${node.sub != null ? ' — ${_oneLineSub(node.sub!, strings)}' : ''}'
           ),
+        // Backlog B-3 — the governing reason of an UNFORCED standby set.
+        if (ol.gensetSizing case final g?
+            when g.governing != null && g.floorsKva != null)
+          ('', _gensetSizingLine(g, strings)),
       ]));
     if (ol.interlocks.isNotEmpty) {
       blocks
@@ -741,6 +746,26 @@ List<RptBlock> buildElectricalCalcReportBlocks(ElectricalCalcReportData data,
   }
 
   return blocks;
+}
+
+/// Backlog B-3 — 'Genset sizing: 300 kVA, governed by motor start (running
+/// 128.46 kVA, motor start 286.83 kVA)', plus the disconnection floor when
+/// one was found.
+String _gensetSizingLine(GeneratorResult g, ReportStrings strings) {
+  final f = g.floorsKva!;
+  final reason = switch (g.governing!) {
+    GensetSizingReason.running => RptStringKey.olGenSizingRunning,
+    GensetSizingReason.motorStart => RptStringKey.olGenSizingMotorStart,
+    GensetSizingReason.disconnection => RptStringKey.olGenSizingDisconnection,
+  };
+  return strings.format(RptStringKey.olGenSizing, {
+    'kva': '${g.units > 1 ? '${g.units} x ' : ''}'
+        '${_n(g.ratingKva.inKilovoltAmperes)}',
+    'reason': strings(reason),
+    'run': _n(f.running),
+    'start': _n(f.start),
+    'ads': f.ads > 0 ? ', ADS ${_n(f.ads)} kVA' : '',
+  });
 }
 
 /// Render [data] as a Markdown electrical calculation report.

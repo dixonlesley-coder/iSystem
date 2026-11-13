@@ -388,6 +388,21 @@ class GensetMotor {
       this.lifeSafety = false});
 }
 
+/// Backlog B-3 (2026-11-13) — what governs an UNFORCED genset rating: the
+/// running load (kVA / kW at 0.8 pf, × the duty factor), the largest
+/// motor's start dip, or automatic disconnection on the alternator's own
+/// fault (`ElectricalSystemResult.gensetAdsFloorKva`).
+enum GensetSizingReason {
+  running('running'),
+  motorStart('motor start'),
+  disconnection('disconnection');
+
+  const GensetSizingReason(this.label);
+
+  /// The English report word ('running', 'motor start', 'disconnection').
+  final String label;
+}
+
 /// Outcome of a genset motor-starting voltage-dip screen.
 class GensetStartResult {
   /// Genset continuous apparent-power rating assessed.
@@ -464,6 +479,15 @@ class GeneratorResult {
   final String note;
   final List<String> verifyItems;
 
+  /// Backlog B-3 — the floor that set an UNFORCED rating (null for a forced
+  /// nameplate, which is judged, never resized).
+  final GensetSizingReason? governing;
+
+  /// Backlog B-3 — the three floors (kVA) the unforced rating was the
+  /// smallest ladder rung at or above: running, motor start, disconnection
+  /// (0 when absent).
+  final ({double running, double start, double ads})? floorsKva;
+
   const GeneratorResult({
     required this.ratingKva,
     required this.backupKva,
@@ -475,6 +499,8 @@ class GeneratorResult {
     this.units = 1,
     required this.note,
     required this.verifyItems,
+    this.governing,
+    this.floorsKva,
   });
 }
 
@@ -742,6 +768,7 @@ GeneratorResult sizeGenerator(
   int forcedUnits = 1,
   Power? backupPower,
   ApparentPower? minKvaForStart,
+  ApparentPower? minKvaForAds,
 }) {
   final backupKva = backupDemand.inKilovoltAmperes;
   final backupKw = backupPower?.inKiloWatts;
@@ -752,7 +779,20 @@ GeneratorResult sizeGenerator(
   final loadRequired =
       requiredGeneratorKva(backupDemand, backupPower: backupPower, mode: mode);
   final startRequired = minKvaForStart?.inKilovoltAmperes ?? 0;
-  final required = startRequired > loadRequired ? startRequired : loadRequired;
+  // Backlog B-3 — the disconnection floor (a ladder rung `computeSystem`
+  // found to hold ADS on the alternator fault); it governs only above the
+  // other two. Null ⇒ byte-identical.
+  final adsRequired = minKvaForAds?.inKilovoltAmperes ?? 0;
+  final runStart =
+      startRequired > loadRequired ? startRequired : loadRequired;
+  final required = adsRequired > runStart ? adsRequired : runStart;
+  final governing = forcedKva != null
+      ? null
+      : adsRequired > runStart
+          ? GensetSizingReason.disconnection
+          : startRequired > loadRequired
+              ? GensetSizingReason.motorStart
+              : GensetSizingReason.running;
   final sel = forcedKva != null
       ? (unitKva: forcedKva, units: forcedUnits < 1 ? 1 : forcedUnits)
       : selectGeneratorUnits(ApparentPower.kilovoltAmperes(required));
@@ -795,6 +835,14 @@ GeneratorResult sizeGenerator(
       'Genset kVA ladder + power factor (0.8) — confirm against the genset datasheet.',
       'Diesel SFC (0.25 l/kWh) + day-tank runtime target (8 h) — confirm against the engine spec.',
     ],
+    governing: governing,
+    floorsKva: forcedKva != null
+        ? null
+        : (
+            running: _round(loadRequired, 2),
+            start: _round(startRequired, 2),
+            ads: _round(adsRequired, 2),
+          ),
   );
 }
 

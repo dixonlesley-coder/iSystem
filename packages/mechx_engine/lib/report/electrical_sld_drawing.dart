@@ -18,6 +18,7 @@ import 'dart:math' as math;
 
 import '../electrical/advanced_study.dart'
     show
+        gensetAdsFloorFor,
         gensetStartFloorFor,
         serviceArrangementOf,
         serviceSectionOfRoot,
@@ -2006,7 +2007,7 @@ void _emitOpenCoupler(
 /// only 0.8 × its kVA in kW, so a load above cos φ 0.8 is kW-limited.
 ({double totalKva, String text}) _gensetKva(
     ApparentPower backupVa, GeneratorSource gen, Power backupW,
-    {ApparentPower? minKvaForStart}) {
+    {ApparentPower? minKvaForStart, ApparentPower? minKvaForAds}) {
   if (gen.kva != null) {
     // Round 44 — a forced plant of n sets prints `n x <kVA>`.
     final k = gen.kva!.inKilovoltAmperes;
@@ -2017,7 +2018,9 @@ void _emitOpenCoupler(
       mode: gen.mode,
       backupPower: backupW,
       // Round 70 — the set that starts its largest motor.
-      minKvaForStart: minKvaForStart);
+      minKvaForStart: minKvaForStart,
+      // Backlog B-3 — and disconnects its auto-sized ways on its own fault.
+      minKvaForAds: minKvaForAds);
   final unit = r.ratingKva.inKilovoltAmperes;
   return (
     totalKva: unit * r.units,
@@ -2303,7 +2306,8 @@ _Spine _buildSourceSpine(
       final backupVa = gensetBackupDemandVa(project, result);
       final genFig = _gensetKva(
           backupVa, gen, gensetBackupDemandW(project, result),
-          minKvaForStart: gensetStartFloorFor(project, result));
+          minKvaForStart: gensetStartFloorFor(project, result),
+          minKvaForAds: gensetAdsFloorFor(result));
       final genKva = genFig.totalKva;
       final gy = lvMidY - _ovH - 8;
       final gcy = gy + _ovH / 2;
@@ -2422,7 +2426,8 @@ _Spine _buildSourceSpine(
         final backupVa = gensetBackupDemandVa(project, result);
         final genFig = _gensetKva(
             backupVa, gen, gensetBackupDemandW(project, result),
-            minKvaForStart: gensetStartFloorFor(project, result));
+            minKvaForStart: gensetStartFloorFor(project, result),
+            minKvaForAds: gensetAdsFloorFor(result));
         final genKva = genFig.totalKva;
         connectTo(13, 13);
         _emitGenerator(prims, dropX, cy, 13, SldRole.source);
@@ -2647,7 +2652,8 @@ _Spine _buildSourceSpineH(
     final backupVa = gensetBackupDemandVa(project, result);
     final genFig = _gensetKva(
         backupVa, gen, gensetBackupDemandW(project, result),
-        minKvaForStart: gensetStartFloorFor(project, result));
+        minKvaForStart: gensetStartFloorFor(project, result),
+        minKvaForAds: gensetAdsFloorFor(result));
     final genKva = genFig.totalKva;
     final gcy = nextCy;
     prims.add(SldLine(lvX, prevBottom, lvX, gcy - 13,

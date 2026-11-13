@@ -458,6 +458,10 @@ enum RptStringKey {
   sevInfo,
   phaseCell3ph,
   olGenStandby,
+  olGenSizing,
+  olGenSizingRunning,
+  olGenSizingMotorStart,
+  olGenSizingDisconnection,
   olGenPrime,
   // Round 30 (report-parity-2-1) — one fire-pump rating line per system.
   fireSystemPumpKey,
@@ -996,6 +1000,13 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.sevInfo: 'INFO',
   RptStringKey.phaseCell3ph: '3ph',
   RptStringKey.olGenStandby: 'Standby',
+  RptStringKey.olGenSizing:
+      'Genset sizing: {kva} kVA, governed by {reason} (running {run} kVA, '
+          'motor start {start} kVA{ads})',
+  RptStringKey.olGenSizingRunning: 'the running load',
+  RptStringKey.olGenSizingMotorStart: 'motor start',
+  RptStringKey.olGenSizingDisconnection:
+      'disconnection (ADS on the alternator fault)',
   RptStringKey.olGenPrime: 'Prime (continuous)',
   RptStringKey.fireSystemPumpKey: '{tag} — {system} pump rating curve (NFPA 20):',
   RptStringKey.fireSystemSprinkler: 'sprinkler',
@@ -1535,6 +1546,13 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.sevInfo: 'INFO',
   RptStringKey.phaseCell3ph: '3 fasa',
   RptStringKey.olGenStandby: 'Siaga',
+  RptStringKey.olGenSizing:
+      'Ukuran genset: {kva} kVA, ditentukan oleh {reason} (beban jalan '
+          '{run} kVA, start motor {start} kVA{ads})',
+  RptStringKey.olGenSizingRunning: 'beban jalan',
+  RptStringKey.olGenSizingMotorStart: 'start motor',
+  RptStringKey.olGenSizingDisconnection:
+      'pemutusan otomatis (ADS pada arus gangguan alternator)',
   RptStringKey.olGenPrime: 'Utama (kontinu)',
   RptStringKey.fireSystemPumpKey: '{tag} — kurva rating pompa {system} (NFPA 20):',
   RptStringKey.fireSystemSprinkler: 'sprinkler',

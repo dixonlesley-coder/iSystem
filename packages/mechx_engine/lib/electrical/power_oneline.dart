@@ -105,11 +105,16 @@ class PowerOneLine {
   /// ' · start dip NN% over' label never stands without a warning.
   final GensetStartResult? gensetStart;
 
+  /// Backlog B-3 — the standby set's sizing (rating, the floors and the
+  /// governing reason) the generator node prints; null with no standby set.
+  final GeneratorResult? gensetSizing;
+
   const PowerOneLine({
     required this.nodes,
     required this.edges,
     required this.interlocks,
     this.gensetStart,
+    this.gensetSizing,
   });
 
   /// First node of a kind, or null.
@@ -173,6 +178,9 @@ PowerOneLine buildPowerOneLine(
   // hangs the LV-bus bank off the bus. Both null ⇒ byte-identical.
   String? transformerLabel,
   ({String head, String sub})? capacitor,
+  // Backlog B-3 — the disconnection floor of an unforced set
+  // (`gensetAdsFloorFor`). Null ⇒ byte-identical.
+  ApparentPower? minKvaForAds,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -224,7 +232,8 @@ PowerOneLine buildPowerOneLine(
   final genResult = gen == null
       ? null
       : _sizeGen(gen, demand, backupDemand, backupPower,
-          minKvaForStart: gensetStartFloorKva(motors));
+          minKvaForStart: gensetStartFloorKva(motors),
+          minKvaForAds: minKvaForAds);
   // Motor-start voltage-dip screen for the sized genset — annotated onto the
   // generator node so the one-line carries the load-acceptance verdict.
   final gensetStart = genResult == null
@@ -573,6 +582,7 @@ PowerOneLine buildPowerOneLine(
     edges: edges,
     interlocks: interlocks,
     gensetStart: genPrimary ? plantStart : gensetStart,
+    gensetSizing: genPrimary ? null : genResult,
   );
 }
 
@@ -586,7 +596,7 @@ PowerOneLine buildPowerOneLine(
 /// the 'backing N kVA' note never echo whatever nameplate was typed.
 GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     ApparentPower? backupDemand, Power? backupPower,
-    {ApparentPower? minKvaForStart}) {
+    {ApparentPower? minKvaForStart, ApparentPower? minKvaForAds}) {
   final backup =
       backupDemand ?? ApparentPower(demand.voltAmperes * gen.backupFraction);
   return sizeGenerator(
@@ -597,6 +607,7 @@ GeneratorResult _sizeGen(GeneratorSource gen, ApparentPower demand,
     forcedUnits: gen.units,
     backupPower: backupPower,
     minKvaForStart: minKvaForStart,
+    minKvaForAds: minKvaForAds,
   );
 }
 

@@ -4,7 +4,8 @@
 // motor, and a ' · start dip NN% over' one-line label never stands without a
 // `genset-start-dip-exceeded` warning.
 //
-// First principles (voltage-divider model, Xd'' = 0.15 pu):
+// First principles (voltage-divider model on the TRANSIENT reactance X'd =
+// 0.15 pu — backlog B-5 named it; the fault level uses X''d 0.12):
 //   z = S_start x 0.15, dip = 100 z / (S_gen + z) <= 25 %
 //   ⇒ S_gen >= z (100 - 25) / 25 = 3 z.
 // The probe's 75 kW DOL life-safety fire pump starts at S_start ≈ 630 kVA
@@ -19,6 +20,7 @@ import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
+import 'package:mechx_engine/electrical/genset_backup.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart'
@@ -141,16 +143,30 @@ void main() {
     final z = start.startingKva.inKilovoltAmperes * 0.15;
     expect(start.startingKva.inKilovoltAmperes, closeTo(629.8, 2.0));
     expect(gensetStartFloorFor(p, sys).inKilovoltAmperes, closeTo(3 * z, 0.1));
-    // The plant is the first ladder rung >= 3 z (300 kVA), never the
+    // The start floor is the first ladder rung >= 3 z (300 kVA), never the
     // load-only 150 kVA rung.
+    final startSet = sizeGenerator(gensetBackupDemandVa(p, sys),
+        backupPower: gensetBackupDemandW(p, sys),
+        minKvaForStart: gensetStartFloorFor(p, sys));
+    expect(startSet.ratingKva.inKilovoltAmperes, 300);
+    expect(startSet.governing, GensetSizingReason.motorStart);
+    // Backlog B-3 (2026-11-13): on 300 kVA the alternator fault is 300 000 /
+    // (√3 × 400 × 0.12) = 3608 A and the fire pump's 160 A MCCB (10 × In ⇒
+    // Zs_max 0.95 × 230 / 1600 = 0.137 Ω) sees a 0.143 Ω loop ⇒ it would
+    // not disconnect on the genset. 400 kVA (4811 A) brings it to 0.132 Ω,
+    // so the recommendation is 400 kVA, governed by disconnection.
+    expect(sys.gensetAdsFloorKva, 400);
     final plant = gensetPlantVa(p, sys)! / 1000;
-    expect(plant, 300);
+    expect(plant, 400);
+    expect(st.gensetAdsFailedCircuitIds, isEmpty);
+    expect(st.powerOneLine!.gensetSizing!.governing,
+        GensetSizingReason.disconnection);
     expect(start.acceptable, isTrue);
     expect(start.estimatedDipPct, lessThanOrEqualTo(25));
     expect(_genNode(st).sub, isNot(contains('start dip')));
     expect(_dipWarnings(st), isEmpty);
-    // The BOM buys the same 300 kVA set + its ATS.
-    expect(st.bom.lines.any((l) => l.description.startsWith('Genset 300 kVA')),
+    // The BOM buys the same 400 kVA set + its ATS.
+    expect(st.bom.lines.any((l) => l.description.startsWith('Genset 400 kVA')),
         isTrue);
   });
 
@@ -283,3 +299,4 @@ void main() {
     expect(warnings, greaterThan(0));
   });
 }
+

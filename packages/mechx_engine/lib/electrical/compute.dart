@@ -29,7 +29,9 @@ import '../units.dart';
 // helper is a pure function of the solved result).
 import 'advanced_study.dart'
     show
+        gensetAdsCheck,
         gensetFaultBasis,
+        gensetPlantVa,
         originPanelIdsOf,
         rootServiceBasisVa,
         serviceFaultEstimateFor;
@@ -74,6 +76,7 @@ import 'results.dart'
         VoltageDropResult,
         kStarDeltaInternalWiringM;
 import 'sizing.dart';
+import 'sources.dart' show kGeneratorKva;
 import 'supply_design.dart'
     show declaredServiceTransformer, plnDayaVa1ph, serviceSections;
 import 'ups.dart';
@@ -3488,6 +3491,10 @@ ElectricalSystemResult computeSystem(
   DiversityLibrary? diversityLibrary,
   Map<String, Map<String, PhaseAssignment>> priorAssignments = const {},
   double phaseReassignThresholdA = 0,
+  // Backlog B-3 — INTERNAL: the disconnection-floor candidate (kVA per set)
+  // the genset recommendation search re-solves with (see the end). Callers
+  // leave it null.
+  double? gensetAdsFloorKva,
 }) {
   final panels = project.panels;
   final byId = {for (final p in panels) p.id: p};
@@ -4963,6 +4970,7 @@ ElectricalSystemResult computeSystem(
       warnings: warnings,
       feederFloorsApplied: floorsApplied,
       feederFloorsCapped: floorsCapped,
+      gensetAdsFloorKva: gensetAdsFloorKva,
     );
   }
 
@@ -5580,6 +5588,69 @@ ElectricalSystemResult computeSystem(
   final fin = withstandSolve();
   // Round 79 — the declared daya judged with SEVERAL service-entrance boards.
   if (roots.length > 1) _judgeMultiRootServiceCapacity(project, fin);
+  if (gensetAdsFloorKva != null) return fin;
+
+  // Backlog B-3 (2026-11-13) — THE GENSET RECOMMENDATION HOLDS
+  // DISCONNECTION. An UNFORCED standby set is sized on its running load and
+  // its motor-start floor; on TN a backed board must also disconnect on the
+  // set's own (smaller) alternator fault. When an AUTO-sized way or feeder
+  // (no cable / breaker override, not spare) of a genset-backed board still
+  // fails `gensetAdsCheck` after the T4 cable growth, the ladder ratings
+  // above the recommendation are tried in ascending order, each a full
+  // re-solve (its own T4 growth on that set's fault): the first at which no
+  // such way fails becomes the disconnection floor every genset sizing
+  // reads (`ElectricalSystemResult.gensetAdsFloorKva`, governing reason
+  // `disconnection`). No ladder rating cures it ⇒ the running / start
+  // rating and the `ads-disconnection-on-genset` error stand. A forced
+  // nameplate is judged, never resized.
+  final gen = project.sources?.generator;
+  final tnFin = fin.earthing.system == EarthingSystem.tnS ||
+      fin.earthing.system == EarthingSystem.tnCs;
+  if (gen == null ||
+      gen.kva != null ||
+      project.supplyKind == SupplyKind.generator ||
+      !tnFin) {
+    return fin;
+  }
+  final modelById = <String, ElectricalCircuit>{
+    for (final p in panels)
+      for (final c in p.circuits) c.id: c,
+  };
+  Set<String> autoFailing(ElectricalSystemResult r) {
+    final utility =
+        faultStudy(r, project, profile, originFaultLevel: growOriginFor(r));
+    final check = gensetAdsCheck(profile, project, r, utility);
+    return {
+      for (final id in check.failedIds)
+        if (modelById[id] case final m?
+            when m.cableOverrideMm2 == null &&
+                m.breakerOverrideA == null &&
+                m.loadKind != LoadKind.spare)
+          id,
+    };
+  }
+
+  if (autoFailing(fin).isEmpty) return fin;
+  final plantVa = gensetPlantVa(project, fin);
+  if (plantVa == null) return fin;
+  // Paralleled sets (the ladder already exceeded) are left as sized.
+  if (plantVa / 1000 > kGeneratorKva.last + 1e-6) return fin;
+  for (final kva in kGeneratorKva) {
+    if (kva * 1000 <= plantVa + 1e-6) continue;
+    final r = computeSystem(
+      profile,
+      project,
+      calibrationBySheet: calibrationBySheet,
+      building: building,
+      originFaultLevel: originFaultLevel,
+      busbarClearingTimeS: busbarClearingTimeS,
+      diversityLibrary: diversityLibrary,
+      priorAssignments: priorAssignments,
+      phaseReassignThresholdA: phaseReassignThresholdA,
+      gensetAdsFloorKva: kva,
+    );
+    if (autoFailing(r).isEmpty) return r;
+  }
   return fin;
 }
 

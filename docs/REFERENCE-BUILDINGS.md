@@ -174,10 +174,10 @@ _(empty)_
 - **(f) No step-load rule.** There is no genset step-load check beyond the largest-motor dip. (The fire-water reserve half closed by backlog A-2: FT 60 000 L >= 31.545 L/s x 1800 s = 56 781 L, no finding.)
 - **(g) PRV on a riser.** There is no store intent that places a component on a riser (`addComponentNode` skips risers). The fixture splices a PRV node with a 0 m run.
 - **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.
-- **(i) Genset rating ignores ADS on the alternator fault.** The recommended genset rating (`sizeGenerator`: running kVA, motor-start floor) does not consider automatic disconnection on the alternator's own fault level. Before A1 the app's recommended 50 kVA set (alternator fault 0.6 kA) failed `ads-disconnection-on-genset` on three ways (lift Zs 0.573, FP and FPS 0.558 > 0.437 Ω). Only A1's 75 kW fire pump, which raised the start floor to 300 kVA, cleared it.
 
 ### Backlog closed (2026-11-13)
 
+- **(i) Genset rating ignores ADS on the alternator fault — closed by B-3.** An unforced set's recommendation is now the smallest ladder rating, above the running and motor-start floors, at which no auto-sized backed way fails `ads-disconnection-on-genset` after the T4 growth (governing reason `disconnection`). The final apartment set (typed 300 kVA) already holds, so no pin moved.
 - **(b) Two alternator reactances — closed by B-5.** They are two different reactances of one machine and are now named as a pair in `sources.dart`: the fault level reads the sub-transient X''d 0.12 pu, the motor-start dip and start floor the transient X'd 0.15 pu (no figure changed).
 - **Feeder discrimination — B-1.** Feeder PP-E grows to FRC 4 x 185 + 95 / 400 A (VD 0.48 → 0.22 %); Feeder to MEP keeps `non-selective` (genset ADS refusal, see the findings above).
 

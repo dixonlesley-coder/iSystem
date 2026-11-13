@@ -19,7 +19,7 @@
 library;
 
 import '../electrical/advanced_study.dart'
-    show gensetStartFloorFor, serviceTransformer;
+    show gensetAdsFloorFor, gensetStartFloorFor, serviceTransformer;
 import '../electrical/genset_backup.dart'
     show
         effectiveGeneratorBackupFraction,
@@ -492,6 +492,10 @@ List<EquipmentScheduleRow> buildEquipmentScheduleRows(
                       // Round 70 — the set that starts its largest motor.
                       minKvaForStart: data.electrical != null
                           ? gensetStartFloorFor(ep, data.electrical!)
+                          : null,
+                      // Backlog B-3 — the disconnection floor.
+                      minKvaForAds: data.electrical != null
+                          ? gensetAdsFloorFor(data.electrical!)
                           : null);
                   return (unitKva: r.ratingKva, units: r.units);
                 })()
