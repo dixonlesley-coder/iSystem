@@ -845,7 +845,7 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.esGroundTankService: 'Ground tank (water storage)',
   RptStringKey.esTankCapacityUnset: 'capacity not set',
   RptStringKey.esTankCapacityUnsetNote:
-      '_(*) Tank capacity not set: enter the tank volume to state its duty._',
+      '(*) Tank capacity not set: enter the tank volume to state its duty.',
   RptStringKey.earthNoteTnCs:
       'Combined PEN from the source, split into separate N and PE at the '
           'origin. Common PLN practice.',
@@ -1383,7 +1383,7 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.esGroundTankService: 'Tangki bawah (penampungan air)',
   RptStringKey.esTankCapacityUnset: 'kapasitas belum diisi',
   RptStringKey.esTankCapacityUnsetNote:
-      '_(*) Kapasitas tangki belum diisi: masukkan volume tangki untuk menyatakan kapasitasnya._',
+      '(*) Kapasitas tangki belum diisi: masukkan volume tangki untuk menyatakan kapasitasnya.',
   RptStringKey.earthNoteTnCs:
       'PEN gabungan dari sumber, dipisah menjadi N dan PE terpisah di titik '
           'asal. Praktik umum PLN.',
