@@ -144,14 +144,14 @@ _(empty)_
 - Regression tests (A1, A2): `test/reference_apartment_regression_test.dart`.
 
 **Deliberate expected findings** (final state: PLN 197 000 VA, genset 300 kVA, PRV drawn):
-- `fire-system-over-pressure:FP`: churn 1.4 x 127.054 = 177.876 m = 1745 kPa > 1210.
+- `fire-system-over-pressure:FP`: churn 1.4 x 125.036 = 175.051 m = 1717 kPa > 1210 (reference tower T2: the DN40 feed main hands the head back to the standpipe; it was 177.876 m on the sprinkler point).
 - `standpipe-outlet-over-pressure:FP:0-11`: every hose valve's static at churn is above 1207 kPa.
 - 2 x `non-selective`: Feeder PP-E (200 A vs the 200 A PP-E incomer) and Feeder to MEP (200 A vs 160 A), both capped at Iz 222 of 70 mm² FRC.
 - `enclosure-temp-rise-exceeded` on PP-E (36 K > 35 K).
-- Infos: `combined-fire-sprinkler-governs:FP` (the sprinkler sets the head, the standpipe the flow), `downfeed-below-target` (the gravity floors are under the 225 kPa target but above the SNI 49 kPa), `cable-raised-for-ads` (the lift, 10 mm²), 3 x `fire-pump-protection`, 72 x `drainage-laid-steeper`, 2 x `drainage-cleanout`, 12 x `phase-imbalance-inherent`, 5 `// VERIFY`.
+- Infos: `downfeed-below-target` (the gravity floors are under the 225 kPa target but above the SNI 49 kPa), `cable-raised-for-ads` (the lift, 10 mm²), 3 x `fire-pump-protection`, 72 x `drainage-laid-steeper`, 2 x `drainage-cleanout`, 12 x `phase-imbalance-inherent`, 5 `// VERIFY`.
 - Before the PRV is drawn: 8 x `downfeed-over-pressure` (Lantai 1, 401.229 kPa static).
 
-**Expected absent:** any critical or error, `ads-disconnection-on-genset`, `life-safety-*`, `service-capacity-below-demand`, `pressure-zone`, `downfeed-over-pressure` (after the PRV), `unfed-panel`.
+**Expected absent:** any critical or error, `combined-fire-sprinkler-governs` (since tower T2), `ads-disconnection-on-genset`, `life-safety-*`, `service-capacity-below-demand`, `pressure-zone`, `downfeed-over-pressure` (after the PRV), `unfed-panel`.
 
 **Fixed by its review (2026-11-13).**
 - **A2:** `combined-fire-sprinkler-governs` was keyed on `pumpIds.first`, the jockey FJ. It is now keyed on the duty pump FP.
@@ -168,3 +168,37 @@ _(empty)_
 - **(g) PRV on a riser.** There is no store intent that places a component on a riser (`addComponentNode` skips risers). The fixture splices a PRV node with a 0 m run.
 - **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.
 - **(i) Genset rating ignores ADS on the alternator fault.** The recommended genset rating (`sizeGenerator`: running kVA, motor-start floor) does not consider automatic disconnection on the alternator's own fault level. Before A1 the app's recommended 50 kVA set (alternator fault 0.6 kA) failed `ads-disconnection-on-genset` on three ways (lift Zs 0.573, FP and FPS 0.558 > 0.437 Ω). Only A1's 75 kW fire pump, which raised the start floor to 300 kVA, cleared it.
+
+## 5. Tower (gedung kantor 30 lantai)
+
+**What it is.**
+- **Building:** thirty storeys of 4.0 m ("Lantai 1..30", index 0..29), one sheet per floor at 0.02 m/px. The typical floor (a public toilet core: two flush-valve WCs, a urinal, two lavatories) is built once and replicated.
+- **Cold water:** water meter → 60 000 L ground tank → transfer pump TP with a mirrored parallel standby TPS (1.5 + 1.5 m legs) → fill riser → 30 000 L roof tank (roof-tank downfeed, public occupancy). The top main splits into a booster set feeding floors 29..27 and a gravity riser feeding floors 26..0, with seven PRV stations in series (above floors 19, 16, 13, 10, 7, 4, 1, as the zone table prescribes).
+- **Hot water (floors 27..29):** an untyped plant heater WH fed from BR29, a hot riser to both lavatories per floor, and the recirculation the app ASSUMES (no return drawn).
+- **Drainage / vent / rainwater:** one 30-storey stack, one stack vent, four 200 m² roof drains.
+- **Fire:** a 120 000 L fire tank → duty / standby / jockey pumps → header FH → two Class I hydrant risers (60 boxes) and a sprinkler riser with six heads on the top floor.
+- **HVAC (index 15):** an AHU office room (rectangular equal-friction ducts, eight diffusers, four return grilles) and an exhausted toilet.
+- **Electrical:** MV service on a declared 1600 kVA transformer, standby genset (app-recommended), 250 kvar capacitor bank, LVMDP, essential PP-E (three 15 kW lifts, emergency lighting, the MEP board re-fed onto it) and thirty floor boards. The "Feed solved MEP duties" opt-in is on (the undrawn HW recirc pump is a solved duty).
+
+**Files.**
+- Fixture: `packages/mechx_engine/test/reference/tower.dart` (`buildTower()`, `buildTowerNetwork(prvFloors:)`, `buildTowerElectrical(...)`, `kTowerRooms`).
+- Smoke + dump: `packages/mechx_engine/test/reference_tower_test.dart`, `test/reference_tower_app_test.dart` (BEFORE / AFTER the PRVs; `REF_DUMP=1`).
+- Regressions (T1–T4): `packages/mechx_engine/test/reference_tower_regression_test.dart`.
+
+**Fixed by its review (2026-11-13).**
+- **T1:** the NFPA 20 discharge raise ran past the header: FH→Ha0, FH→Hb0 and FH→S0 each printed the pump's 47.3176 L/s on DN150, and the sprinkler riser was DN150 for one storey. Past a header only an outflow carrying the full rated flow is discharge pipe: the standpipe trunks are DN100 at 31.5451 L/s and the sprinkler feed keeps its own size.
+- **T2:** the velocity-sized DN32 sprinkler riser (178.7 m friction) set the combined pump at 303.5 m / 250 kW. A combined system's sprinkler feed main is now enlarged step by step (cap: the standpipe riser) until the sprinkler point is no higher than the standpipe head: DN40, pump 47.3176 L/s @ 210.686 m, 200 kW. The apartment's pump goes back to 31.545 L/s @ 125.036 m (still 75 kW).
+- **T3:** auto-sized feeders were condemned by the app's own judges (`cumulative-voltage-drop-exceeded` ×78, `ads-disconnection` ×3). An auto-sized feeder cable now grows for its own ADS and for its board's cumulative drop.
+- **T4:** the ADS cable growth judged the mains only (lifts `ads-disconnection-on-genset` ×3 in pass 1, Zs 0.344 > 0.341 Ω). On a genset-backed path the growth now judges both sources.
+
+### Backlog (outside scope, not fixed)
+
+- **(a) No water-heater component.** A heater is an untyped plant node; no provider sizes its capacity (kW, storage, recovery), and it is not an electrical load.
+- **(b) Recirculation pump way only with the duty-feed opt-in.** The solved HW recirculation pump (no pump drawn) becomes an MEP way only after "Feed solved MEP duties" is switched on.
+- **(c) Heater cold feed on the valve curve.** The heater's cold make-up (4.5 UBAP) is read on its component's flush-VALVE curve (0.3975 L/s) while the hot side it feeds uses the tank curve (0.2250 L/s) for the same draw.
+- **(d) No MV-side device sizing.** The MV panel (incomer, metering, transformer feeder) is named in the note and drawn as a box, never rated.
+- **(e) No standpipe pressure zoning.** There are no standpipe zones, pressure-reducing hose valves or fire-pump head limit: the 30-storey single zone over-pressures every one of the 60 hose outlets at churn (`standpipe-outlet-over-pressure:FP:0-29`, 2882..1744 kPa > 1207).
+- **(f) Room return-bank face velocity.** The room's own return bank uses min(application 3.0, 4.0) = 3.0 m/s (five grilles), while the air-velocity checker accepts 4.0 m/s (four grilles at 3.21 m/s).
+- **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 304.10 Pa; the drawn-duct fan duty gives 326.44 Pa (office backlog a).
+- **(h) `non-selective` on auto-sized feeders.** PP-Lt1 / PP-Lt2 (50 A vs the 32 A incomers), PP-E and the MEP feeder still raise `non-selective`: their device sits at the largest rung their cable's Iz protects.
+

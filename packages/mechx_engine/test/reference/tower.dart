@@ -752,20 +752,22 @@ ElectricalPanel _mainBoard() => ElectricalPanel(
 
 /// The app-recommended supply, read from the app's own recommendation on a
 /// run with none declared (the app test's BEFORE container) and set here;
-/// pass null to any to read it again. The 1065 kVA demand is above the
-/// 197 kVA LV ceiling, so `electricalAdvancedProvider.supply` prescribes an
-/// MV (20 kV) service on the smallest ladder transformer loaded <= 80 %:
-/// 1600 kVA (66.6 %). On MV `recommendedDayaVa` is null, so no PLN daya is
+/// pass null to any to read it again. Pass 2 (after T1–T4): the 998.8 kVA
+/// demand (worst-phase basis 1003.3 kVA) is above the 197 kVA LV ceiling, so
+/// `electricalAdvancedProvider.supply` prescribes an MV (20 kV) service on
+/// the smallest ladder transformer loaded <= 80 %: 1003.3 / 0.8 = 1254 kVA ⇒
+/// 1600 kVA (62.4 %). On MV `recommendedDayaVa` is null, so no PLN daya is
 /// declared (the declared rating is the transformer). The unforced genset
 /// sizing `sizeGenerator(gensetBackupDemandVa, minKvaForStart:
-/// gensetStartFloorFor)` = 1 x 1000 kVA (backup 427.0 kVA; the 250 kW fire
-/// pump's start floor 955.88 kVA governs). The power-factor study reads PF
-/// 0.866 (above the 0.85 PLN penalty, `needed` false) and quotes a 250 kvar
-/// bank to reach 0.95: that bank is declared (`capacitorBankKvar`). The
-/// figures are unchanged when re-read after declaring.
+/// gensetStartFloorFor)` = 1 x 800 kVA (backup 360.6 kVA; the 200 kW fire
+/// pump's start floor 764.77 kVA governs; pass 1: 1000 kVA on the 250 kW
+/// pump). The power-factor study reads PF 0.867 (above the 0.85 PLN penalty,
+/// `needed` false) and quotes 213.6 kvar ⇒ a 250 kvar bank to reach 0.95:
+/// that bank is declared (`capacitorBankKvar`). The figures are unchanged
+/// when re-read after declaring.
 const double? kTowerDeclaredPlnVa = null;
 const double? kTowerTransformerKva = 1600;
-const double? kTowerGensetKva = 1000;
+const double? kTowerGensetKva = 800;
 const double? kTowerCapacitorKvar = 250;
 
 /// The tower's electrical project.
