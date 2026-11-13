@@ -33,6 +33,8 @@ import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart'
     show originPanelIdsOf, rootServiceBasisVa, servicePerPhaseBasisVa;
+import 'package:mechx_engine/electrical/load_kind.dart' show LoadKind;
+import 'package:mechx_engine/electrical/model.dart' show ElectricalSystem;
 import 'package:mechx_engine/electrical/panel_results.dart' show PhaseAssignmentInfo;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart'
@@ -744,6 +746,106 @@ void main() {
       expect(kinds.where((k) => k.startsWith('unconnected-orphan')), isEmpty);
       expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
       expect(kinds, isNot(contains('downfeed-below-target')));
+    });
+
+    test('MEP board: auto-wired from PP Ruko, 3-phase 400 V; pump and '
+        'cassette ways', () {
+      final project = c.read(electricalProjectProvider);
+      final mep = project.panels.firstWhere((p) => p.id == kMepEquipmentPanelId);
+      expect(mep.system, ElectricalSystem.threePhase);
+      expect(mep.voltage.volts, 400);
+      final feeder = project.panels
+          .firstWhere((p) => p.id == kShopMainPanelId)
+          .circuits
+          .firstWhere((w) => w.feedsPanelId == kMepEquipmentPanelId);
+      expect(mep.fedByCircuitId, feeder.id);
+      final sys = c.read(electricalResultProvider);
+      final adv = c.read(electricalAdvancedProvider);
+      final r = sys.panels[kMepEquipmentPanelId]!;
+      final lines = <String>{};
+      for (final w in r.circuits) {
+        if (w.loadKind == LoadKind.pump) {
+          // 370 W motor / 0.90 = 411.1 W; 411.1 / (√3 × 400 × 0.85) =
+          // 0.698 A, 3P, MCB 6 A D, NYY 4 × 2.5 mm² (no neutral).
+          expect(w.loadW, closeTo(411.1, 0.05), reason: w.circuitId);
+          expect(w.designCurrentExactA, closeTo(0.698, 5e-4),
+              reason: w.circuitId);
+          expect(w.threePhase, isTrue, reason: w.circuitId);
+          expect(w.breaker.ratingA.amperes, 6, reason: w.circuitId);
+          expect(w.breaker.curve.name, 'd', reason: w.circuitId);
+          expect(w.cable.csaMm2, 2.5, reason: w.circuitId);
+          expect(w.grounding.cores, 4, reason: w.circuitId);
+        } else {
+          // Cassette 2344.6 W on one line at 231 V: 2344.6 / (231 × 0.85) =
+          // 11.94 A ⇒ MCB 16 A C 1P, 3 × 2.5 mm², VD 0.78 %.
+          expect(w.loadKind, LoadKind.hvac, reason: w.circuitId);
+          expect(w.loadW, closeTo(2344.6, 0.05), reason: w.circuitId);
+          expect(w.designCurrentExactA, closeTo(11.94, 5e-3),
+              reason: w.circuitId);
+          expect(w.threePhase, isFalse, reason: w.circuitId);
+          expect(w.breaker.ratingA.amperes, 16, reason: w.circuitId);
+          expect(w.breaker.curve.name, 'c', reason: w.circuitId);
+          expect(w.cable.csaMm2, 2.5, reason: w.circuitId);
+          expect(w.grounding.cores, 3, reason: w.circuitId);
+          expect(w.voltageDrop.dropPercent, closeTo(0.78, 1e-9),
+              reason: w.circuitId);
+          lines.add(w.phase.name);
+        }
+      }
+      expect(r.circuits.where((w) => w.loadKind == LoadKind.pump).length, 6);
+      expect(lines.length, 2, reason: 'the two cassettes on different lines');
+      // 6 × 411.1 + 2 × 2344.6 = 7156 W; VA 7156 / 0.85 = 8419.
+      expect(r.demandW, closeTo(7156, 0.5));
+      expect(r.demandVa, closeTo(8419, 0.5));
+      // Lines: 6 × 0.698 = 4.19 on each, + 11.94 on two of them.
+      final pb = [r.phaseBalance.l1, r.phaseBalance.l2, r.phaseBalance.l3]
+        ..sort();
+      expect(pb, [4.2, 16.1, 16.1]);
+      expect(r.incomer.breaker.ratingA.amperes, 20);
+      expect(r.incomer.poles, 4);
+      expect(adv.fault.panels[kMepEquipmentPanelId]!.prospectiveFaultkA,
+          closeTo(4.22, 1e-9));
+    });
+
+    test('MEP feeder and PP Ruko', () {
+      final sys = c.read(electricalResultProvider);
+      final adv = c.read(electricalAdvancedProvider);
+      final pp = sys.panels[kShopMainPanelId]!;
+      final mf = pp.circuits.firstWhere((w) => w.circuitId == kMepEquipmentFeederId);
+      // The MEP feeder runs on its worst line 16.1 A: load-sized 20 A; Iz_req
+      // max(20, 1.25 × 16.1 = 20.1) ⇒ NYY 5 × 4 mm² (3-phase trunk minimum 4,
+      // Iz 28); floor 1.6 × 20 = 32 capped at Iz 28 ⇒ MCB 25 A C 3P; VD 0.33 %.
+      expect(mf.designCurrent.amperes, closeTo(16.1, 1e-9));
+      expect(mf.threePhase, isTrue);
+      expect(mf.cable.csaMm2, 4);
+      expect(mf.cable.deratedIz.amperes, 28);
+      expect(mf.grounding.cores, 5);
+      expect(mf.breaker.ratingA.amperes, 25);
+      expect(mf.breaker.curve.name, 'c');
+      expect(mf.voltageDrop.dropPercent, closeTo(0.33, 1e-9));
+      // PP Ruko: 14 040 + 7 156 = 21 196 W; 15 988 + 8 419 = 24 407 VA.
+      expect(pp.demandW, closeTo(21196, 0.5));
+      expect(pp.demandVa, closeTo(24407, 0.5));
+      // Lines 24.2 + 16.1 = 40.3, 24.2 + 16.1 = 40.3, 24.2 + 4.2 = 28.4.
+      final pb = [pp.phaseBalance.l1, pp.phaseBalance.l2, pp.phaseBalance.l3]
+        ..sort();
+      expect(pb, [28.4, 40.3, 40.3]);
+      // Incomer on the service floor 33 000 / (√3 × 400) = 47.6 A ⇒ MCB
+      // 50 A 4P, 10 kA; busbar 15 × 3 (withstand).
+      expect(pp.incomer.sizingCurrent!.amperes, closeTo(47.6, 1e-9));
+      expect(pp.incomer.breaker.ratingA.amperes, 50);
+      expect(pp.incomer.poles, 4);
+      expect(adv.fault.panels[kShopMainPanelId]!.incomerKa, 10.0);
+      expect((pp.busbar.widthMm, pp.busbar.thicknessMm), (15.0, 3.0));
+      // Per-phase basis √3 × 400 × 40.3 = 27 921 VA > 24 407 ⇒ 33 000 VA
+      // 3-phase = the declared daya: no capacity warning.
+      expect(adv.recommendedDayaVa, 33000);
+      expect(adv.recommendedDayaThreePhase, isTrue);
+      final codes = [for (final w in c.read(electricalAllWarningsProvider)) w.code];
+      // Deliberate: the three unit feeders + the MEP feeder cannot reach the
+      // 1.6× discrimination target within their cable's Iz.
+      expect(codes.where((x) => x == 'non-selective').length, 4);
+      expect(codes, isNot(contains('service-capacity-below-demand')));
     });
   });
 }

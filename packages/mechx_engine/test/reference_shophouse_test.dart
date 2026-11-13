@@ -19,6 +19,9 @@ import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/fault.dart'
     show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
+import 'package:mechx_engine/electrical/model.dart' show PhaseLine;
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalSystemResult;
 import 'package:mechx_engine/hydraulics.dart' show headLossHazenWilliams;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/network/pressure_solve.dart';
@@ -638,6 +641,127 @@ void main() {
         expect(p.demandCurrent.amperes, closeTo(24.2, 1e-9));
         expect(p.incomer.breaker.ratingA.amperes, 25);
       }
+    });
+  });
+
+  // ── Pass 3 pins: feeders, cumulative VD, sub-board faults, PP Ruko ──────
+  // Engine level: PP Ruko + the three sub-boards (the MEP board exists only in
+  // the app — see test/reference_shophouse_app_test.dart).
+  group('hand values — feeders and PP Ruko (engine, no MEP board)', () {
+    late ElectricalSystemResult sys;
+    late AdvancedStudy adv;
+    setUpAll(() {
+      final project = shop.electrical;
+      sys = computeSystem(
+        const PuilProfile(),
+        project,
+        calibrationBySheet: shop.calibrations,
+        building: shop.building,
+        originFaultLevel: estimatedServiceFaultLevelA(project)!,
+        busbarClearingTimeS: 0.1,
+        phaseReassignThresholdA: 1.0,
+      );
+      adv = computeAdvancedStudy(const PuilProfile(), project, sys);
+    });
+
+    test('feeders A / B / C', () {
+      final pp = sys.panels[kShopMainPanelId]!;
+      // Each feeder carries its sub-board's demand: W 4680, VA 5329.4, pf =
+      // 4680 / 5329.4 = 0.8782; Ib = 5329.4 / 220 = 24.225 A on ONE line
+      // (the fed board is 1-phase). Load-sized device 25 A; Iz_req =
+      // max(25, 1.25 × 24.225 = 30.28) ⇒ 6 mm² (Iz 36; 4 mm² 28 < 30.28),
+      // NYY 3 cores. Selectivity floor 1.6 × 25 (sub incomer) = 40 A,
+      // capped at the largest rung Iz 36 protects ⇒ MCB 32 A C, 1P.
+      // VD = 2 × 24.225 × L × (3.69 × 0.8782 + 0.08 × 0.4784) / 1000 =
+      // 0.15885 × L V: 15 / 20 / 25 m ⇒ 2.38 / 3.18 / 3.97 V ⇒ / 220 =
+      // 1.08 / 1.44 / 1.81 %.
+      const lines = {'A': PhaseLine.l1, 'B': PhaseLine.l2, 'C': PhaseLine.l3};
+      const vd = {'A': (2.38, 1.08), 'B': (3.18, 1.44), 'C': (3.97, 1.81)};
+      for (final u in kShopUnits) {
+        final f = pp.circuits.firstWhere((c) => c.circuitId == shopFeederId(u));
+        expect(f.loadW, closeTo(4680, 1e-6), reason: u);
+        expect(f.designCurrentExactA, closeTo(24.225, 5e-4), reason: u);
+        expect(f.threePhase, isFalse, reason: u);
+        expect(f.phase.name, lines[u]!.name, reason: u);
+        expect(f.breaker.ratingA.amperes, 32, reason: u);
+        expect(f.breaker.curve.name, 'c', reason: u);
+        expect(f.cable.csaMm2, 6, reason: u);
+        expect(f.cable.deratedIz.amperes, 36, reason: u);
+        expect(f.cable.izRequired!.amperes, closeTo(30.28, 5e-3), reason: u);
+        expect(f.grounding.cableType, 'NYY', reason: u);
+        expect(f.grounding.cores, 3, reason: u);
+        expect(f.voltageDrop.dropV, closeTo(vd[u]!.$1, 1e-9), reason: u);
+        expect(f.voltageDrop.dropPercent, closeTo(vd[u]!.$2, 1e-9), reason: u);
+      }
+    });
+
+    test('cumulative VD at the sub-board ways = feeder % + own %', () {
+      const feederPct = {'A': 1.08, 'B': 1.44, 'C': 1.81};
+      for (final u in kShopUnits) {
+        for (final r in sys.panels[shopPanelId(u)]!.circuits) {
+          // e.g. A Lampu Lt3 0.22 + 1.08 = 1.30; C Stop kontak Lt3 0.74 +
+          // 1.81 = 2.55; every one within its 3 % / 5 % limit.
+          expect(r.cumulativeDropPercent,
+              closeTo(r.voltageDrop.dropPercent + feederPct[u]!, 1e-9),
+              reason: r.circuitId);
+          expect(r.cumulativeDropPercent,
+              lessThanOrEqualTo(r.voltageDrop.limitPercent),
+              reason: r.circuitId);
+        }
+      }
+      double cum(String id, String u) => sys.panels[shopPanelId(u)]!
+          .circuits
+          .firstWhere((c) => c.circuitId == 'c_${id}_$u')
+          .cumulativeDropPercent;
+      expect(cum('lampu_lt3', 'A'), closeTo(1.30, 1e-9));
+      expect(cum('kk_lt3', 'C'), closeTo(2.55, 1e-9));
+    });
+
+    test('sub-board bus fault through the feeder; sub incomers', () {
+      // Origin 10 kA: Zs = 400 / (√3 × 10 000) = 0.023094 Ω, X/R 7. Feeder
+      // 6 mm² at 15 m, R × (234.5 + 20) / (234.5 + 70) = × 254.5 / 304.5
+      // (cold, maximum fault), L + N loop ⇒ 220 / 0.0991 = 2.22 kA; B (20 m)
+      // 1.70 kA; C (25 m) 1.38 kA.
+      const ka = {'A': 2.22, 'B': 1.70, 'C': 1.38};
+      expect(adv.fault.panels[kShopMainPanelId]!.prospectiveFaultkA,
+          closeTo(10.0, 1e-9));
+      for (final u in kShopUnits) {
+        final pf = adv.fault.panels[shopPanelId(u)]!;
+        expect(pf.prospectiveFaultkA, closeTo(ka[u]!, 1e-9), reason: u);
+        final p = sys.panels[shopPanelId(u)]!;
+        expect(p.incomer.breaker.ratingA.amperes, 25, reason: u);
+        expect(p.incomer.breaker.deviceClass.code, 'MCB', reason: u);
+        expect(p.incomer.poles, 2, reason: u);
+        expect(pf.incomerKa, 6.0, reason: u);
+        expect((p.busbar.widthMm, p.busbar.thicknessMm), (12.0, 2.0),
+            reason: u);
+      }
+    });
+
+    test('PP Ruko: lines 24.2 each, 14 040 W / 15 988 VA, incomer 50 A on '
+        'the service floor, daya 23 000 VA, non-selective ×3', () {
+      final pp = sys.panels[kShopMainPanelId]!;
+      // 3 × 4680 = 14 040 W; 3 × 5329.4 = 15 988 VA. One sub-board per line.
+      expect(pp.demandW, closeTo(14040, 1e-6));
+      expect(pp.demandVa, closeTo(15988, 0.5));
+      expect(pp.phaseBalance.l1, closeTo(24.2, 1e-9));
+      expect(pp.phaseBalance.l2, closeTo(24.2, 1e-9));
+      expect(pp.phaseBalance.l3, closeTo(24.2, 1e-9));
+      // Service floor 33 000 / (√3 × 400) = 47.6 A > 24.2 ⇒ MCB 50 A 4P at
+      // 10 kA; busbar 15 × 3 on the 10 kA / 0.1 s withstand.
+      expect(pp.incomer.sizingCurrent!.amperes, closeTo(47.6, 1e-9));
+      expect(pp.incomer.breaker.ratingA.amperes, 50);
+      expect(pp.incomer.poles, 4);
+      expect(adv.fault.panels[kShopMainPanelId]!.incomerKa, 10.0);
+      expect((pp.busbar.widthMm, pp.busbar.thicknessMm), (15.0, 3.0));
+      // Per-phase basis √3 × 400 × 24.2 = 16 766 VA ≥ 15 988 ⇒ the 3-phase
+      // step 23 000 VA (below the declared 33 000: no capacity warning).
+      expect(adv.recommendedDayaVa, 23000);
+      expect(adv.recommendedDayaThreePhase, isTrue);
+      final warnings = [...sys.warnings, ...adv.fault.warnings, ...adv.warnings];
+      expect(warnings.where((w) => w.code == 'non-selective').length, 3);
+      expect(warnings.where((w) => w.code == 'service-capacity-below-demand'),
+          isEmpty);
     });
   });
 }
