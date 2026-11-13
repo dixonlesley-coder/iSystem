@@ -72,13 +72,13 @@ _(empty)_
 - **(a) Several separately metered service entrances.** One project with several unfed service boards is not modelled consistently: the service study treats every unfed board as a root (`originPanelIdsOf`, the multi-root daya judge), while the Review flags all but the first as `unfed-panel` (`electricalConnectivityDefects`). This is why the fixture now uses one service board.
 - **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
 - **(d) Water meter at ceiling level.** A water meter node (role main) sits at its floor's ceiling, which adds a vertical leg to the meter stub.
-- **(e) Transfer pump label.** The transfer pump's electrical source reads "supply pump" (`_sourceFor` maps every pump to `supplyPump`).
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
 - **(h) Orphan exemption ignores the room.** The cassette / split-wall orphan exemption does not check room containment: the engine judge holds no rooms (F4).
 
 ### Backlog closed (2026-11-13)
 
 - **(b) Too few / too small AC units — backlog A-4.** The Review warns `room-cooling-undersized:<room>` when the AC units a room owns give less than its cooling load: here 2 x 2.5 PK = 48 000 >= 44 400 BTU/h (no finding); one cassette would warn (44 400 > 27 000, needs 2 x 3 PK).
+- **(e) Transfer pump label — closed by B-4.** TP_A/B/C are minted `MepLoadSource.transferPump` ('Transfer pump' / 'Pompa transfer'), no figure changed.
 - **(f) Feeder discrimination — closed by B-1.** An auto-sized feeder cable now grows until its device reaches 1.6 × the fed incomer: unit feeders 6 mm² / 32 A → 10 mm² (Iz 50) / 40 A (VD 0.65 / 0.86 / 1.08 %), MEP feeder 5 × 4 / 25 A → 5 × 6 / 32 A. No `non-selective` is left.
 
 

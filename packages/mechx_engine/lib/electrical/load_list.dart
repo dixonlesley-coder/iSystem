@@ -106,6 +106,26 @@ extension MepLoadSourceInfo on MepLoadSource {
         MepLoadSource.hvacUnit => 'HVAC unit',
         MepLoadSource.generic => 'Equipment',
       };
+
+  /// Backlog B-4 (2026-11-13) — the Indonesian twin of [label], for the
+  /// surfaces that print in Bahasa Indonesia ('Pompa transfer' for a transfer
+  /// pump, never the generic supply-pump wording).
+  String get labelId => switch (this) {
+        MepLoadSource.supplyPump => 'Pompa suplai',
+        MepLoadSource.boosterPump => 'Pompa booster',
+        MepLoadSource.sumpPump => 'Pompa sump',
+        MepLoadSource.transferPump => 'Pompa transfer',
+        MepLoadSource.supplyFan => 'Kipas suplai',
+        MepLoadSource.exhaustFan => 'Kipas buang',
+        MepLoadSource.returnFan => 'Kipas udara balik',
+        MepLoadSource.firePump => 'Pompa kebakaran',
+        MepLoadSource.hotWaterRecircPump => 'Pompa sirkulasi air panas',
+        MepLoadSource.hvacUnit => 'Unit HVAC',
+        MepLoadSource.generic => 'Peralatan',
+      };
+
+  /// [label] or [labelId] by language.
+  String labelFor({required bool indonesian}) => indonesian ? labelId : label;
 }
 
 // ── defaults ─────────────────────────────────────────────────────────────────

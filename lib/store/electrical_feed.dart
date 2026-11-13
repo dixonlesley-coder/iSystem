@@ -1234,6 +1234,9 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
   final fed = ref.watch(nodeFedLoadsProvider);
   // Round 33 — the stable equipment tags the mechanical sheets print.
   final tags = equipmentNodeTags(net);
+  // Backlog B-4 (2026-11-13) — the pumps the solve classifies as TRANSFER
+  // pumps (ground tank → roof tank), and the mirrored standby of one.
+  final transfers = ref.watch(transferPumpNodeIdsProvider);
 
   final loads = <MepEquipmentLoad>[];
   for (final n in net.nodes) {
@@ -1242,6 +1245,9 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
     final f = fed[n.id];
     if (f == null || f.watts <= 0) continue;
     final fire = bind.firePumpNodeIds.contains(n.id);
+    final transfer = c == NodeComponent.pump &&
+        (transfers.contains(n.id) ||
+            transfers.contains(bind.supplyStandbyPumpNodeIds[n.id]));
     final input = f.input;
     loads.add(MepEquipmentLoad(
       id: 'node-${n.id}',
@@ -1253,7 +1259,11 @@ final placedEquipmentLoadsProvider = Provider<List<MepEquipmentLoad>>((ref) {
           ? MepLoadSource.firePump
           : bind.hwRecircPumpNodeIds.contains(n.id)
               ? MepLoadSource.hotWaterRecircPump
-              : _sourceFor(c),
+              // B-4: a transfer pump is its own source ('Transfer pump'),
+              // never the generic 'Supply pump'. No figure depends on it.
+              : transfer
+                  ? MepLoadSource.transferPump
+                  : _sourceFor(c),
       mechanicalPower: Power(f.watts),
       electricalInputPower: input == null ? null : Power(input),
       // Round 21 / 23 — a STANDBY pump (fire, supply or hot-water recirc) is

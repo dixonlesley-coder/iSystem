@@ -34,6 +34,8 @@ import 'package:mechx/store/solve_store.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart'
     show originPanelIdsOf, rootServiceBasisVa, servicePerPhaseBasisVa;
 import 'package:mechx_engine/electrical/load_kind.dart' show LoadKind;
+import 'package:mechx_engine/electrical/load_list.dart'
+    show MepLoadSource, MepLoadSourceInfo;
 import 'package:mechx_engine/electrical/model.dart' show ElectricalSystem;
 import 'package:mechx_engine/electrical/panel_results.dart' show PhaseAssignmentInfo;
 import 'package:mechx_engine/network/network.dart';
@@ -815,6 +817,27 @@ void main() {
       // 5.56 kA (was 4.22 on 4 mm²).
       expect(adv.fault.panels[kMepEquipmentPanelId]!.prospectiveFaultkA,
           closeTo(5.56, 1e-9));
+    });
+
+    test('B-4: the transfer pumps are their own electrical source', () {
+      // Backlog B-4 (2026-11-13): TP_A/B/C are classified TRANSFER pumps by
+      // the solve (ground tank → roof tank), so their MEP load source is
+      // `transferPump` ('Transfer pump' / 'Pompa transfer'), never the
+      // generic supply pump; the booster sets stay `boosterPump`. No figure
+      // changes: same 370 W motor, 411.1 W input, pump load kind.
+      final loads = {
+        for (final l in c.read(placedEquipmentLoadsProvider)) l.id: l,
+      };
+      for (final u in kShopUnits) {
+        final tp = loads['node-TP_$u']!;
+        expect(tp.source, MepLoadSource.transferPump, reason: u);
+        expect(tp.source.label, 'Transfer pump');
+        expect(tp.source.labelFor(indonesian: true), 'Pompa transfer');
+        expect(tp.source.circuitLoadKind, LoadKind.pump);
+        expect(tp.inputPower.watts, closeTo(411.1, 0.05), reason: u);
+        expect(loads['node-BS_$u']!.source, MepLoadSource.boosterPump,
+            reason: u);
+      }
     });
 
     test('MEP feeder and PP Ruko', () {
