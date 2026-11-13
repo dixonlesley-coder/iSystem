@@ -12,6 +12,8 @@ import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
 import 'package:mechx_engine/report/file_names.dart' show safeFileStem;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
+import 'package:mechx_engine/report/plan_detail.dart' show PlanDetailCallout;
+import 'package:mechx_engine/report/plan_detail_sheet.dart';
 import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart'
@@ -2089,6 +2091,96 @@ Future<bool> writeSubmittalPackageToDir(
         date: today,
       ),
   ];
+  final planSheets = sheetsFm.sheets;
+  final localeStrings = MechXStringsData(ref.read(localeProvider));
+  // Round 14 (drafting-visual-7) — every plan of ONE set is issued at ONE
+  // plotted scale: the largest natural `1 : N` over the calibrated sheets
+  // floors each sheet's snap, so a sparse floor no longer plots at 1 : 50
+  // beside a dense 1 : 100 of the same building (overlaying floors, riser
+  // positions and setting-out then need no re-scaling).
+  final planUnderlays = <String, PlanUnderlay?>{};
+  int? sharedPlanScale;
+  {
+    final net0 = ref.read(networkControllerProvider).network;
+    for (final sheet in planSheets) {
+      final underlay = await buildPlanUnderlay(sheet);
+      planUnderlays[sheet.id] = underlay;
+      final natural = planSheetPlot(
+        net: net0,
+        sheetId: sheet.id,
+        floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        chrome: issuableChrome(
+          ref,
+          sheetId: sheet.id,
+          floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
+        ),
+        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+        underlay: underlay,
+        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+      )?.scaleDenominator;
+      if (natural != null && natural > 0) {
+        sharedPlanScale =
+            sharedPlanScale == null || natural > sharedPlanScale
+                ? natural
+                : sharedPlanScale;
+      }
+    }
+  }
+  // Drawing review R1 — the DETAIL callouts each plan needs so it issues
+  // without the overlap stamp, decided up front so the Daftar Gambar lists
+  // the detail sheets (M-5nn, numbered by the plan's rail position) and the
+  // plan + its detail sheet name each other. Same inputs as the plan export.
+  String detailNumberFor(int railIndex) => sheetDrawingNumber(
+      base: doc.documentNumber,
+      series: DrawingSeries.mechanicalDetail,
+      index: railIndex + 1);
+  final planDetails = <String, List<PlanDetailCallout>>{};
+  {
+    final net0 = ref.read(networkControllerProvider).network;
+    final sizing0 = ref.read(sizingProvider);
+    final lengths0 = projectEdgeLengths(net0, project);
+    final elev0 = planEdgeElevationLabels(net0, project.building,
+        mounting: ref.read(mountingProvider));
+    final tags0 = elementTags(net0, building: project.building);
+    final nodeTags0 =
+        planExportNodeTags(net0, ref.read(fixtureLibraryProvider));
+    final slope0 = ref.read(drainageSlopeProvider);
+    for (var i = 0; i < planSheets.length; i++) {
+      final sheet = planSheets[i];
+      final fIdx = sheetsFm.floorFor(sheet.id, project.building.levelCount);
+      final d = planSheetDetails(
+        net: net0,
+        sizing: sizing0,
+        edgeLengths: lengths0,
+        sheetId: sheet.id,
+        floorIndex: fIdx,
+        projectName: base,
+        sheetName: sheet.name,
+        dateString: today,
+        detailSheetRef: detailNumberFor(i),
+        chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: fIdx)
+            .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalPlan,
+                sheetName: sheet.name)),
+        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
+        underlay: planUnderlays[sheet.id],
+        minScaleDenominator: sharedPlanScale,
+        edgeElevationLabels: elev0,
+        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
+        edgeTags: tags0,
+        nodeTags: nodeTags0,
+        gravitySlope: slope0,
+      );
+      if (d.isNotEmpty) planDetails[sheet.id] = d;
+    }
+  }
+  final detailSheetIds = [
+    for (final sh in planSheets)
+      if (planDetails.containsKey(sh.id)) sh.id
+  ];
+
   for (final s in sheetsFm.sheets) {
     final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
     final planChromeFm = issuableChrome(ref, sheetId: s.id, floorIndex: fIdx);
@@ -2102,7 +2194,15 @@ Future<bool> writeSubmittalPackageToDir(
         revision: rev,
         date: today,
       ),
-    );
+    );    if (planDetails.containsKey(s.id)) {
+      drawingList.add(DrawingListEntry(
+        number: detailNumberFor(planSheets.indexOf(s)),
+        title: drawingSeriesTitle(DrawingSeries.mechanicalDetail,
+            sheetName: s.name),
+        revision: rev,
+        date: today,
+      ));
+    }
   }
   for (final id in elecPlanSheetIds) {
     drawingList.add(
@@ -2450,44 +2550,6 @@ Future<bool> writeSubmittalPackageToDir(
   // sheet keeps its own drawing number (N19, by rail position) and filename.
   // Progress rides the shared busy pill; cleared in `finally` so a thrown
   // mid-loop error (a bad underlay, a disk error) never leaves it stuck.
-  final planSheets = sheetsFm.sheets;
-  final localeStrings = MechXStringsData(ref.read(localeProvider));
-  // Round 14 (drafting-visual-7) — every plan of ONE set is issued at ONE
-  // plotted scale: the largest natural `1 : N` over the calibrated sheets
-  // floors each sheet's snap, so a sparse floor no longer plots at 1 : 50
-  // beside a dense 1 : 100 of the same building (overlaying floors, riser
-  // positions and setting-out then need no re-scaling).
-  final planUnderlays = <String, PlanUnderlay?>{};
-  int? sharedPlanScale;
-  {
-    final net0 = ref.read(networkControllerProvider).network;
-    for (final sheet in planSheets) {
-      final underlay = await buildPlanUnderlay(sheet);
-      planUnderlays[sheet.id] = underlay;
-      final natural = planSheetPlot(
-        net: net0,
-        sheetId: sheet.id,
-        floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
-        projectName: base,
-        sheetName: sheet.name,
-        dateString: today,
-        chrome: issuableChrome(
-          ref,
-          sheetId: sheet.id,
-          floorIndex: sheetsFm.floorFor(sheet.id, project.building.levelCount),
-        ),
-        metersPerPixel: project.calibrationFor(sheet.id)?.metersPerPixel,
-        underlay: underlay,
-        grid: buildReferenceGrid(ref.read(referenceLinesProvider), sheet.id),
-      )?.scaleDenominator;
-      if (natural != null && natural > 0) {
-        sharedPlanScale =
-            sharedPlanScale == null || natural > sharedPlanScale
-                ? natural
-                : sharedPlanScale;
-      }
-    }
-  }
   try {
     for (var i = 0; i < planSheets.length; i++) {
       final sheet = planSheets[i];
@@ -2562,6 +2624,7 @@ Future<bool> writeSubmittalPackageToDir(
           nodeTags: nodeTags,
           gravitySlope: gravitySlope,
           minScaleDenominator: sharedPlanScale,
+          details: planDetails[sheet.id] ?? const [],
         ),
       );
       await File(out('$suffix.dxf')).writeAsString(
@@ -2581,6 +2644,7 @@ Future<bool> writeSubmittalPackageToDir(
           gravitySlope: gravitySlope,
           // Round 14 (drafting-visual-5) — the ISO title block's PROJECT row.
           projectName: base,
+          details: planDetails[sheet.id] ?? const [],
           // R6: plotted exactly like the PDF beside it, so both carry the
           // same label splits + slots.
           sheetPlot: planSheetPlot(
@@ -2598,6 +2662,55 @@ Future<bool> writeSubmittalPackageToDir(
           ),
         ),
       );
+      // Drawing review R1 — the plan's DETAIL sheet (enlarged toilet cores /
+      // dense groups), PDF + DXF, numbered M-5nn by the plan's rail position.
+      final details = planDetails[sheet.id];
+      if (details != null && metersPerPixel != null) {
+        final dChrome = planChrome
+            .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalDetail,
+                sheetName: sheet.name))
+            .withDrawingNumber(detailNumberFor(i))
+            .withSheetCounter(detailSheetIds.indexOf(sheet.id) + 1,
+                detailSheetIds.length);
+        await File(out('$suffix-detail.pdf')).writeAsBytes(
+          planDetailSheetToPdf(
+            net: net,
+            sizing: sizing,
+            edgeLengths: edgeLengths,
+            sheetId: sheet.id,
+            floorIndex: floorIndex,
+            projectName: base,
+            sheetName: sheet.name,
+            dateString: today,
+            metersPerPixel: metersPerPixel,
+            details: details,
+            chrome: dChrome,
+            edgeElevationLabels: elevationLabels,
+            edgeTags: tags,
+            nodeTags: nodeTags,
+            gravitySlope: gravitySlope,
+          ),
+        );
+        await File(out('$suffix-detail.dxf')).writeAsString(
+          planDetailSheetToDxf(
+            net: net,
+            sizing: sizing,
+            edgeLengths: edgeLengths,
+            sheetId: sheet.id,
+            floorIndex: floorIndex,
+            projectName: base,
+            sheetName: sheet.name,
+            dateString: today,
+            metersPerPixel: metersPerPixel,
+            details: details,
+            chrome: dChrome,
+            edgeElevationLabels: elevationLabels,
+            edgeTags: tags,
+            nodeTags: nodeTags,
+            gravitySlope: gravitySlope,
+          ),
+        );
+      }
       // H1: the electrical installation layout (denah instalasi listrik) for
       // this same sheet+floor — panels/loads at their placed positions + feeder
       // routes over the same underlay — so the tender folder carries the

@@ -175,6 +175,27 @@ class DrawingChrome {
         scaleText: scaleText,
       );
 
+  /// Drawing review R1 — a copy stamping SHEET [index] of [total] (every
+  /// other field kept).
+  DrawingChrome withSheetCounter(int index, int total) => DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: index,
+        sheetTotal: total,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        legendNotes: legendNotes,
+        legendSymbols: legendSymbols,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
   /// Round 33 — a copy with [notes] appended to [legendNotes] (every other
   /// field kept); no notes ⇒ this same object (byte-identical).
   DrawingChrome withLegendNotes(List<String> notes) => notes.isEmpty
@@ -266,6 +287,10 @@ enum DrawingSeries {
   electricalRiser('E', 4),
   electricalPowerOneLine('E', 5),
 
+  /// Drawing review R1 — the enlarged DETAIL sheet of a dense plan
+  /// (`M-5nn`, numbered by its plan's rail position: M-104 → M-504).
+  mechanicalDetail('M', 5),
+
   /// Drawing-review D2 — the equipment schedule (`M-601`).
   equipmentSchedule('M', 6),
 
@@ -297,6 +322,7 @@ String drawingSeriesTitle(DrawingSeries series, {String? sheetName}) {
     // DiagramTitles), so register == title block.
     DrawingSeries.general => name.isEmpty ? 'GENERAL' : name,
     DrawingSeries.mechanicalPlan => withName('PLAN'),
+    DrawingSeries.mechanicalDetail => withName('DETAIL'),
     DrawingSeries.mechanicalRiser =>
       'DIAGRAM RISER MEKANIKAL / MECHANICAL RISER SLD',
     DrawingSeries.electricalLayout => withName('DENAH INSTALASI LISTRIK'),
@@ -1173,6 +1199,7 @@ String dxfPlanChrome(
   required int? plotDenominator,
   required String projectName,
   String paperLabel = 'A3',
+  String? scaleRowOverride,
 }) {
   if (chrome.isEmpty) return '';
   final b = StringBuffer();
@@ -1283,7 +1310,8 @@ String dxfPlanChrome(
   // The shared ISO title block, hung below the extent at the right.
   // Drawing-review D6 — the SAME scale row the plan PDF stamps
   // (`1 : N @ A3`), so the two formats of one sheet agree.
-  final scaleRow = n != null && n > 0 ? '1 : $n @ $paperLabel' : 'NTS';
+  final scaleRow = scaleRowOverride ??
+      (n != null && n > 0 ? '1 : $n @ $paperLabel' : 'NTS');
   final rows = _titleBlockRows(chrome, projectName, scaleRow);
   if (rows.isNotEmpty) {
     final unit = txt / 1.2; // dxfTitleBlock: value text = unit × 1.2

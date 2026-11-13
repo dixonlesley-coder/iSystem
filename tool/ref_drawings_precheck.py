@@ -398,6 +398,21 @@ def run_building(root, b):
         if r['number'] not in by_num:
             emit(23, 'FAIL', r['number'], f'listed ("{r["title"]}") but no '
                  'issued sheet carries it')
+    # Drawing review R1 - every DETAIL callout on a plan names an issued
+    # detail sheet (a plan never points at a drawing the set lacks).
+    for pg in pages:
+        refs = sorted(set(re.findall(r'DETAIL [A-Z]+ - LIHAT (\S+)',
+                                     pg['text'].replace('\n', ' '))))
+        if not refs:
+            continue
+        lab = f'{short(pg["stem"], project)} p{pg["page"]}'
+        missing = [r for r in refs if r not in by_num]
+        if missing:
+            emit(23, 'FAIL', lab, f'detail callout points at {missing}, '
+                 'not issued')
+        else:
+            emit(23, 'PASS', lab, f'detail callouts -> {", ".join(refs)} '
+                 'issued')
     # Order: within each series prefix + hundred, numbers ascend.
     seq = [r['number'] for r in dl]
     bad = [f'{a} before {c}' for a, c in zip(seq, seq[1:])
@@ -457,8 +472,11 @@ def run_building(root, b):
             emit(6, 'FAIL', lab, f'sheet stamps {m.group(1)} overlapping '
                  'labels')
         elif re.search(r'-(elec-)?plan-', pg['stem']):
-            emit(6, 'PASS', lab, 'no overlap warning stamped (count 0); '
-                 'visual check still due')
+            # Plans and their DETAIL sheets (`plan-N-<floor>-detail`) both
+            # keep the exporter's overlap counter.
+            kind = 'detail sheet' if pg['stem'].endswith('-detail') else 'plan'
+            emit(6, 'PASS', lab, f'{kind}: no overlap warning stamped '
+                 '(count 0); visual check still due')
         else:
             emit(6, 'N-A', lab, 'exporter keeps no overlap counter for this '
                  'sheet type; visual check')

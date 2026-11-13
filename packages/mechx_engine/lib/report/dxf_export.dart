@@ -20,6 +20,7 @@ import '../sizing/network_sizing.dart';
 import '../units.dart';
 import 'drawing_chrome.dart';
 import 'plan_annotation_layout.dart';
+import 'plan_detail.dart';
 import 'plan_symbols.dart';
 import 'sld_sheet.dart';
 
@@ -110,9 +111,17 @@ String networkToDxf({
   Map<String, Length>? edgeLengths,
   PlanSheetPlot? sheetPlot,
   String? projectName,
+  List<PlanDetailCallout> details = const [],
+  PlanMarks extraMarks = PlanMarks.empty,
+  String? scaleRowOverride,
+  Set<String> unlabelledIds = const {},
 }) {
   if (metersPerPixel != null && metersPerPixel > 0) {
     return _professionalDxf(
+      unlabelledIds: unlabelledIds,
+      details: details,
+      extraMarks: extraMarks,
+      scaleRowOverride: scaleRowOverride,
       projectName: projectName ?? '',
       net: net,
       sizing: sizing,
@@ -370,6 +379,10 @@ String _professionalDxf({
   required Map<String, Length>? edgeLengths,
   required PlanSheetPlot? sheetPlot,
   required String projectName,
+  List<PlanDetailCallout> details = const [],
+  PlanMarks extraMarks = PlanMarks.empty,
+  String? scaleRowOverride,
+  Set<String> unlabelledIds = const {},
 }) {
   final b = StringBuffer();
   void g(int code, Object value) {
@@ -434,6 +447,12 @@ String _professionalDxf({
   // extent is placed OUTSIDE the grid rather than over it. Only when there is
   // drawn content to grid (as the grid itself is only drawn then); no grid ⇒
   // byte-identical.
+  // Drawing review R1 — a detail sheet's viewport frames / captions join
+  // the extent the chrome anchors to.
+  for (final l in extraMarks.lines) {
+    include(l.x1 * mmPerPx, -l.y1 * mmPerPx);
+    include(l.x2 * mmPerPx, -l.y2 * mmPerPx);
+  }
   final hasGrid = grid != null && !grid.isEmpty && minX.isFinite;
   if (hasGrid) {
     for (final ax in grid.columns) {
@@ -554,7 +573,7 @@ String _professionalDxf({
   // single band stroke in BOTH formats, never double-lined on the u = span/80
   // heuristic alone.
   final ductHalfMm = <String, double>{};
-  if (plotN != null) {
+  if (plotN != null && scaleRowOverride == null) {
     for (final e in net.edges) {
       if (e.kind != EdgeKind.run) continue;
       final w = planDuctWidthM(sizing[e.id]);
@@ -593,6 +612,9 @@ String _professionalDxf({
           maxY: -o.minY * mmPerPx,
         ),
     ],
+    details: details,
+    extraMarks: extraMarks,
+    unlabelledIds: unlabelledIds,
   );
 
   // N4: the reference setting-out grid — chain column/row LINEs + bubble
@@ -808,6 +830,33 @@ String _professionalDxf({
     g(1, t.text);
   }
 
+  // Drawing review R1 — detail boundaries + bubbles + captions (and a detail
+  // sheet's viewport frames / captions / scale bars), the PDF's marks.
+  for (final l in ann.marks.lines) {
+    g(0, 'LINE');
+    g(8, kDxfLayerAnno);
+    if (l.dashed) g(6, 'DASHED');
+    g(10, l.x1);
+    g(20, l.y1);
+    g(11, l.x2);
+    g(21, l.y2);
+  }
+  for (final c in ann.marks.circles) {
+    g(0, 'CIRCLE');
+    g(8, kDxfLayerAnno);
+    g(10, c.cx);
+    g(20, c.cy);
+    g(40, c.r);
+  }
+  for (final t in ann.marks.texts) {
+    g(0, 'TEXT');
+    g(8, kDxfLayerAnno);
+    g(10, t.x);
+    g(20, t.y);
+    g(40, t.size);
+    g(1, t.text);
+  }
+
   // Every tag (runs, equipment G1, risers N13) as TEXT on the ANNO layer, one
   // entity per line, parallel to its run, + its leader when escaped.
   for (final l in ann.labels) {
@@ -888,7 +937,8 @@ String _professionalDxf({
         maxX: maxX,
         maxY: maxY + bubblePad,
         unitsPerPaperMm: u,
-        plotDenominator: plotN,
+        plotDenominator: scaleRowOverride != null ? null : plotN,
+        scaleRowOverride: scaleRowOverride,
         projectName: projectName));
   }
 
