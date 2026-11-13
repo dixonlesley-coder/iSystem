@@ -7,6 +7,10 @@ import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
+import 'reference/apartment.dart';
+import 'reference/office.dart';
+import 'reference/tower.dart';
+
 const _cal = ScaleCalibration(0.02);
 
 void main() {
@@ -100,5 +104,63 @@ void main() {
       );
       expect(nodeElevation(box, building).meters, closeTo(4.9, 1e-12));
     });
+  });
+
+  group('D-2 — a sprinkler head sits at its ceiling plane', () {
+    test('elevation = ceiling; a run from the ceiling main has no drop', () {
+      for (var f = 0; f < 3; f++) {
+        final main = NetNode(
+            id: 'm', sheetId: 's$f', x: 0, y: 0, floorIndex: f);
+        final head = NetNode(
+          id: 'h',
+          sheetId: 's$f',
+          x: 150,
+          y: 0,
+          floorIndex: f,
+          role: NodeRole.fixture,
+          component: NodeComponent.sprinklerHead,
+        );
+        // 4 f + 4.0 − 0.3 = 4 f + 3.7 — the bare main's datum (was 4 f + 1.1).
+        expect(nodeElevation(head, building).meters,
+            closeTo(4.0 * f + 3.7, 1e-12));
+        expect(nodeElevation(head, building).meters,
+            nodeElevation(main, building).meters);
+        final net = Network(nodes: [main, head], edges: const [
+          NetEdge(
+              id: 'e',
+              fromId: 'm',
+              toId: 'h',
+              service: ServiceType.fireSprinkler),
+        ]);
+        // 150 px x 0.02 = 3.0 m, no vertical leg.
+        expect(
+          edgeLength(net.edges.single, net,
+                  calibrationBySheet: {'s$f': _cal}, building: building)
+              .meters,
+          closeTo(3.0, 1e-9),
+        );
+      }
+    });
+
+    // The displayed head elevation in the reference buildings is the top
+    // floor's ceiling (the sprinkler lift's datum): office 3 x 4.0 + 3.7 =
+    // 15.7 m (was 13.1), apartment 11 x 3.5 + 3.2 = 41.7 m (was 39.6), tower
+    // 29 x 4.0 + 3.7 = 119.7 m (was 117.1).
+    for (final (name, build, expected) in <(String, ReferenceBuilding Function(), double)>[
+      ('office', buildOffice, 15.7),
+      ('apartment', buildApartment, 41.7),
+      ('tower', buildTower, 119.7),
+    ]) {
+      test('$name: SP1..SP6 at the top ceiling ($expected m)', () {
+        final b = build();
+        for (var i = 1; i <= 6; i++) {
+          final n = b.network.nodeById('SP$i')!;
+          expect(displayedNodeElevation(b.network, n, b.building, b.mounting)
+              .meters, closeTo(expected, 1e-9));
+          expect(nodeElevation(n, b.building, b.mounting).meters,
+              closeTo(expected, 1e-9));
+        }
+      });
+    }
   });
 }

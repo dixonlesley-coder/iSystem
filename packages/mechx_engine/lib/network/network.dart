@@ -697,7 +697,9 @@ const double kHoseOutletHeightM = 1.2;
 ///     floor surface, [NodeComponent.roofDrain] at the roof on the top storey
 ///     (its own floor surface below it); a hose outlet
 ///     ([NodeComponent.hydrantBox] / [NodeComponent.hoseReel]) at
-///     [kHoseOutletHeightM] above its floor (backlog D-1);
+///     [kHoseOutletHeightM] above its floor (backlog D-1); a
+///     [NodeComponent.sprinklerHead] AT its floor's ceiling plane, the datum
+///     a bare main takes (backlog D-2);
 ///   • [NodeRole.plant]   → depends on WHAT the plant is ([NetNode.component]):
 ///       – [NodeComponent.roofTank] → roof level on the top storey (it sits
 ///         on the roof slab); drawn BELOW the top storey, its own floor
@@ -754,6 +756,13 @@ Length nodeElevation(
     case NodeComponent.hoseReel:
       return Length(
           building.elevationOf(node.floorIndex).meters + kHoseOutletHeightM);
+    // Backlog D-2 (2026-11-13) — a pendent / upright sprinkler head hangs AT
+    // the ceiling plane of its floor (the bare main's datum, where the
+    // sprinkler lift is already taken), not at the 1.1 m tap height: its run
+    // has no drop ([runConnectionElevation]) and its displayed elevation,
+    // static and the BOM agree.
+    case NodeComponent.sprinklerHead:
+      return building.ceilingElevationOf(node.floorIndex, mounting);
     default:
       break;
   }
