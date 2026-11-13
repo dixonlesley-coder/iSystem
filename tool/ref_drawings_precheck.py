@@ -61,6 +61,11 @@ def norm_title(s):
 # ── title block ──────────────────────────────────────────────────────────────
 def title_block(text):
     lines = [l.strip() for l in text.splitlines()]
+    # A drawing label on the PROJECT row's baseline ('4.0 m PROJECT ...')
+    # is merged into that line by `pdftotext -raw`: start the row at PROJECT.
+    lines = [re.sub(r'^.*?\s(?=PROJECT(\s|$))', '', l)
+             if re.search(r'\sPROJECT(\s|$)', l) and not l.startswith('PROJECT')
+             else l for l in lines]
     starts = [i for i, l in enumerate(lines) if re.match(r'^PROJECT(\s|$)', l)]
     if not starts:
         return None

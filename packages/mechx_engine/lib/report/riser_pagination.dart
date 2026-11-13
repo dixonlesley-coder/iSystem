@@ -114,6 +114,7 @@ List<SldSheet> paginatedRiserSheets({
       1e-9;
 
   final pages = <SldSheet>[];
+  final ranges = <({int lo, int hi})>[];
   var lo = 0;
   while (lo < levelCount) {
     var hi = lo;
@@ -128,7 +129,24 @@ List<SldSheet> paginatedRiserSheets({
       target = t;
     }
     pages.add(sheet);
+    ranges.add((lo: lo, hi: hi));
     lo = hi + 1;
+  }
+  // Drawing review S2 — a page whose key circles still overprint (the
+  // placer's unresolved count) gives each of its floors a page of its own
+  // when that clears more: the re-spacing then has the sheet's full width
+  // and the band its full height. Never fewer floors than legible (a
+  // single-floor page prints at least at its own target).
+  for (var i = pages.length - 1; i >= 0; i--) {
+    final r = ranges[i];
+    if (pages[i].overlapCount == 0 || r.hi == r.lo) continue;
+    final singles = [for (var f = r.lo; f <= r.hi; f++) page((lo: f, hi: f))];
+    final left = singles.fold<int>(0, (a, p) => a + p.overlapCount);
+    if (left < pages[i].overlapCount) {
+      pages.replaceRange(i, i + 1, singles);
+      ranges.replaceRange(
+          i, i + 1, [for (var f = r.lo; f <= r.hi; f++) (lo: f, hi: f)]);
+    }
   }
   // One chunk spanning every floor IS the whole sheet.
   final out =

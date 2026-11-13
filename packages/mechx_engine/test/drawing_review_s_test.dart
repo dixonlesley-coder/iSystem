@@ -5,6 +5,8 @@
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/plan_detail.dart';
 import 'package:mechx_engine/report/plan_detail_sheet.dart';
+import 'package:mechx_engine/report/riser_pagination.dart';
+import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
@@ -87,6 +89,43 @@ void main() {
       // The run crossing the cut (n2 at x=60 is outside the box) is drawn as
       // unlabelled context: labelled on the neighbour's sheet instead.
       expect(plot.unlabelledIds, contains('n2'));
+    });
+  });
+
+  group('S2 — a crowded floor band gets its own page', () {
+    // A fake builder: floors 0..1 share a legible page whose key circles
+    // still overprint twice; floor 2 cannot join them (too tall at 7 pt).
+    SldSheet sheet(double h, int overlaps) => SldSheet(
+        prims: const [SldLabel(0, 10, 'X', size: 8)],
+        minX: 0,
+        minY: 0,
+        maxX: 600,
+        maxY: h,
+        legend: const [],
+        supplyNote: '',
+        overlapCount: overlaps);
+    List<SldSheet> paginate(int singleOverlaps) => paginatedRiserSheets(
+          build: (r) {
+            if (r == null || (r.hi == 2 && r.lo < 2)) return sheet(9000, 0);
+            if (r.lo == 0 && r.hi == 1) return sheet(300, 2);
+            return sheet(300, r.hi == r.lo && r.lo < 2 ? singleOverlaps : 0);
+          },
+          levelCount: 3,
+        );
+
+    test('the overprinting 2-floor page splits into two clear 1-floor pages',
+        () {
+      final pages = paginate(0);
+      expect(pages, hasLength(3));
+      expect(pages.every((p) => p.overlapCount == 0), isTrue);
+      // Every page still prints at the 7 pt floor (none flagged).
+      expect(pages.every((p) => p.belowMinLabelPt == null), isTrue);
+    });
+
+    test('no split when the lone floors overprint as much', () {
+      final pages = paginate(1);
+      expect(pages, hasLength(2));
+      expect(pages.map((p) => p.overlapCount), [0, 2]);
     });
   });
 }

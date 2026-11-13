@@ -328,6 +328,60 @@ SldSheet buildMechanicalRiserSld({
   ({int lo, int hi})? floorRange,
   MechRiserExtras extras = MechRiserExtras.auto,
 }) {
+  // Drawing review S2 — a LONE floor page whose key circles still overprint
+  // gets a taller band (1.5x, then 2x): the page is width-bound, so the
+  // extra height costs no label size, and the key rows / hugging slots get
+  // free room under the stacked lanes. The fewest overprints win (ties keep
+  // the standard band, so every other page is byte-identical).
+  SldSheet at(double h) => _buildMechanicalRiserSld(
+        network: network,
+        sizing: sizing,
+        building: building,
+        focus: focus,
+        downfeed: downfeed,
+        supplyNote: supplyNote,
+        equipmentDetailByNodeId: equipmentDetailByNodeId,
+        edgeLengths: edgeLengths,
+        notes: notes,
+        detailCallouts: detailCallouts,
+        hotWaterRecirc: hotWaterRecirc,
+        nodeTags: nodeTags,
+        transferPumpNodeIds: transferPumpNodeIds,
+        floorRange: floorRange,
+        extras: extras,
+        bandH: h,
+      );
+  var best = at(_bandH);
+  if (floorRange != null &&
+      floorRange.lo == floorRange.hi &&
+      best.overlapCount > 0) {
+    for (final k in const [1.5, 2.0]) {
+      final s = at(_bandH * k);
+      if (s.overlapCount < best.overlapCount) best = s;
+      if (best.overlapCount == 0) break;
+    }
+  }
+  return best;
+}
+
+SldSheet _buildMechanicalRiserSld({
+  required Network network,
+  Map<String, EdgeSizing> sizing = const {},
+  BuildingLevels? building,
+  ServiceType? focus,
+  bool downfeed = false,
+  String supplyNote = '',
+  Map<String, String> equipmentDetailByNodeId = const {},
+  Map<String, Length> edgeLengths = const {},
+  List<String> notes = const [],
+  bool detailCallouts = false,
+  bool hotWaterRecirc = false,
+  Map<String, String> nodeTags = const {},
+  Set<String> transferPumpNodeIds = const {},
+  ({int lo, int hi})? floorRange,
+  MechRiserExtras extras = MechRiserExtras.auto,
+  required double bandH,
+}) {
   final prims = <SldPrim>[];
   // Round 16 — the solve's flow direction drives the FUNCTION suffix.
   final flowFromByEdge = flowFromBySizing(sizing);
@@ -360,7 +414,7 @@ SldSheet buildMechanicalRiserSld({
       minX: 0,
       minY: 0,
       maxX: _gutterW + _drawW,
-      maxY: _topPad + _bandH,
+      maxY: _topPad + bandH,
       legend: _fittingLegend(network, focus, const []),
       supplyNote: supplyNote,
     );
@@ -402,8 +456,8 @@ SldSheet buildMechanicalRiserSld({
 
   // Band centre y for a floor index — highest floor at the TOP.
   double bandTop(int floorIndex) =>
-      _topPad + roofH + (hiFloor - floorIndex) * _bandH;
-  double bandCentreY(int floorIndex) => bandTop(floorIndex) + _bandH / 2;
+      _topPad + roofH + (hiFloor - floorIndex) * bandH;
+  double bandCentreY(int floorIndex) => bandTop(floorIndex) + bandH / 2;
   final roofLineY = _topPad + roofH - _roofLineInset;
   bool parksOnRoof(NetNode n) =>
       roofBand &&
@@ -568,14 +622,27 @@ SldSheet buildMechanicalRiserSld({
     ..bandIndexAt = (double y) {
       final rel = y - (_topPad + roofH);
       if (rel < 0) return null;
-      final i = (rel / _bandH).floor();
+      final i = (rel / bandH).floor();
       return i >= bandCount ? null : i;
+    }
+    // Drawing review S2 — the band span of a sheet y (the KEY ROWS).
+    ..bandSpanAt = (double y) {
+      final rel = y - (_topPad + roofH);
+      if (rel < 0) {
+        return roofBand && y >= _topPad
+            ? (top: _topPad, bottom: _topPad + roofH)
+            : null;
+      }
+      final i = (rel / bandH).floor();
+      if (i >= bandCount) return null;
+      final top = _topPad + roofH + i * bandH;
+      return (top: top, bottom: top + bandH);
     }
     // Drawing-review D5 — the floor name of a sheet y (key-table LEVEL).
     ..levelAt = (double y) {
       final rel = y - (_topPad + roofH);
       if (rel < 0) return roofBand ? 'ATAP' : null;
-      final i = (rel / _bandH).floor();
+      final i = (rel / bandH).floor();
       if (i >= bandCount) return null;
       final f = hiFloor - i;
       return (building != null && f < building.levelCount)
@@ -598,7 +665,7 @@ SldSheet buildMechanicalRiserSld({
   }
   for (var f = loFloor; f <= hiFloor; f++) {
     final top = bandTop(f);
-    final yBase = top + _bandH - 1;
+    final yBase = top + bandH - 1;
     prims.add(SldLine(_gutterW, yBase, _gutterW + _drawW, yBase,
         weight: SldWeight.thin));
     // X1: the floor datum is ink too — a riser tag whose mid-point lands on the
@@ -659,7 +726,7 @@ SldSheet buildMechanicalRiserSld({
   // label placer can reserve those blocks before it places any movable tag;
   // the blocks themselves are still EMITTED further down, unchanged.
   const contentMaxX = _gutterW + _drawW + _fanColW;
-  final extrasTop = _topPad + roofH + bandCount * _bandH + 12.0;
+  final extrasTop = _topPad + roofH + bandCount * bandH + 12.0;
   // Round 32 (riser-drawings-4-3) — a per-service sheet carries only the
   // reference details of the system it DRAWS: with a focus, a callout is
   // gated on the focused-service nodes ([nodeVisible]); the combined view
@@ -910,7 +977,7 @@ SldSheet buildMechanicalRiserSld({
                 lo: loFloor,
                 hi: hiFloor,
                 topY: bandTop(hiFloor) + 2,
-                bottomY: bandTop(loFloor) + _bandH - 2,
+                bottomY: bandTop(loFloor) + bandH - 2,
                 byId: {for (final n in allVisible) n.id: n},
                 placeX: pageX,
               ));
@@ -930,7 +997,7 @@ SldSheet buildMechanicalRiserSld({
   if (floorRange != null) {
     final byId = {for (final n in allVisible) n.id: n};
     final topEdgeY = bandTop(hiFloor) + 2;
-    final bottomEdgeY = bandTop(loFloor) + _bandH - 2;
+    final bottomEdgeY = bandTop(loFloor) + bandH - 2;
     String floorName(int f) => (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
@@ -1078,7 +1145,7 @@ SldSheet buildMechanicalRiserSld({
       // centres, so the old mid-point of two adjacent floors landed exactly on
       // the reserved floor datum and EVERY riser tag walked the ladder to a
       // leader.
-      final midY = math.min(a.dy, b.dy) + _bandH / 4;
+      final midY = math.min(a.dy, b.dy) + bandH / 4;
       placer.place(b.dx + 6, midY, tag,
           size: 8,
           role: role,
@@ -2228,6 +2295,10 @@ class _LabelPlacer {
   /// table; null outside the floor bands.
   String? Function(double y)? levelAt;
 
+  /// Drawing review S2 — the vertical span (top, bottom) of the floor band
+  /// holding sheet y (null outside the bands): where a KEY ROW may run.
+  ({double top, double bottom})? Function(double y)? bandSpanAt;
+
   /// Round 29 (drawings-3-1) — tags that could only be placed FUSED into
   /// another label (the least-cost fallback after every escape). Carried on
   /// the sheet ([SldSheet.overlapCount]) so the issued PDF / DXF prints the
@@ -2517,6 +2588,66 @@ class _LabelPlacer {
         bestCost = 0;
         best = (anchorX, anchorY);
         bestFar = false;
+      }
+    }
+    // Drawing review S2 — the KEY ROWS: when no hugging slot (nor the
+    // element itself) is clear, the circle may sit in one of two rows along
+    // the top or the bottom of its OWN floor band, as near the element in x
+    // as is clear, on a straight leader that crosses no other leader / label
+    // (pipes it passes are the soft preference, as for the near slots).
+    final span = bestCost > tol ? bandSpanAt?.call(anchorY) : null;
+    if (span != null) {
+      final pitch = 2 * r + 3;
+      final rows = <double>[
+        for (var j = 0; j < 2; j++) ...[
+          span.top + r + 2 + j * pitch,
+          span.bottom - r - 2 - j * pitch,
+        ],
+      ];
+      (double, double)? rb;
+      var rbSoft = 1 << 30;
+      var rbD = double.infinity;
+      for (final ry in rows) {
+        for (var k = 0; k <= 60; k++) {
+          for (final sgn in k == 0 ? const [1.0] : const [-1.0, 1.0]) {
+            final cx = anchorX + sgn * k * 4.0, cy = ry;
+            final dx = cx - anchorX, dy = cy - anchorY;
+            final d = math.sqrt(dx * dx + dy * dy);
+            if (d < r + 3) continue;
+            final q = _LabelRect(
+                cx - 0.85 * r, cy - 0.85 * r, cx + 0.85 * r, cy + 0.85 * r);
+            var c = rectCost(q);
+            if (c > tol) continue;
+            final ex = cx - dx / d * r, ey = cy - dy / d * r;
+            for (final (x1, y1, x2, y2) in _leaders) {
+              if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
+                c += size;
+              }
+            }
+            for (final p in _labels) {
+              if (_segmentHitsRect(anchorX, anchorY, ex, ey, p)) c += size;
+            }
+            if (c > tol) continue;
+            var soft = 0;
+            for (final p in _ink) {
+              final own = anchorX >= p.minX - 0.01 &&
+                  anchorX <= p.maxX + 0.01 &&
+                  anchorY >= p.minY - 0.01 &&
+                  anchorY <= p.maxY + 0.01;
+              if (!own && _segmentHitsRect(anchorX, anchorY, ex, ey, p)) soft++;
+            }
+            if (soft < rbSoft || (soft == rbSoft && d < rbD)) {
+              rb = (cx, cy);
+              rbSoft = soft;
+              rbD = d;
+            }
+          }
+        }
+      }
+      if (rb != null) {
+        best = rb;
+        bestCost = 0;
+        bestFar = true;
       }
     }
     final (cx, cy) = best!;
