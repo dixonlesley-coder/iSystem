@@ -184,6 +184,41 @@ String _watts(double w) => w >= 1000 ? '${_num(w / 1000)}kW' : '${_num(w)}W';
 /// 190 -> `190 WATT`, 52871 -> `52.871 WATT`). Rounds to the nearest watt.
 String _wattsId(double w) => '${groupThousands(w)} WATT';
 
+/// Drawing review F8 (2026-11-13) — the WATT figure a way's DAYA cell prints
+/// (rounded to the watt, as [_wattsId] prints it), or 0 when the cell prints
+/// '-' / kvar (a feeder of no load, a spare, a capacitor bank). The TOTAL
+/// line's CONNECTED figure is the sum of exactly these, so the column adds up.
+double _dayaPrintedW(ElectricalCircuitResult c) =>
+    c.loadKind == LoadKind.capacitor || c.connectedWOrLoad <= 0
+        ? 0
+        : c.connectedWOrLoad.roundToDouble();
+
+/// Drawing review F8 — the way's demand factor as the solve applied it: its
+/// diversified [ElectricalCircuitResult.loadW] over the connected input the
+/// DAYA cell prints (a ratio of two solved figures, never a re-derivation).
+/// Null where the cell carries no WATT figure.
+double? _wayDemandFactor(ElectricalCircuitResult c) {
+  if (_dayaPrintedW(c) <= 0) return null;
+  return c.loadW / c.connectedWOrLoad;
+}
+
+/// A factor with up to two decimals, trailing zeros trimmed (0.7, 0.75, 1).
+String _factor(double v) {
+  final t = v.toStringAsFixed(2);
+  return t.contains('.') ? t.replaceFirst(RegExp(r'\.?0+$'), '') : t;
+}
+
+/// The KETERANGAN marker for a way's demand factor: ' (STANDBY)' for a way
+/// the solve carries at 0 (excluded from the demand), ' DF 0.7' for any
+/// other factor that is not 1, else '' (a factor-1 way is byte-identical).
+String _dfMark(ElectricalCircuitResult c) {
+  final df = _wayDemandFactor(c);
+  if (df == null) return '';
+  if (df.abs() < 1e-9) return ' (STANDBY)';
+  if ((df - 1).abs() < 5e-3) return '';
+  return ' DF ${_factor(df)}';
+}
+
 /// The ASCII control / starter token for a way's [StarterType] (BRI `Diagram
 /// Panel` motor-control convention: DOL / VSD / star-delta). ASCII-only — never
 /// the model's own `Y-D` label (the unicode would tofu in the goldens/exports).
@@ -479,6 +514,7 @@ SldSheet buildElectricalSld({
   Map<String, ConduitSpec>? containmentByCircuitId,
   ({int lo, int hi})? wayRange,
   Set<String>? adsFailedCircuitIds,
+  ({int first, int last})? totalSheets,
 }) {
   final modelById = {for (final p in project.panels) p.id: p};
   final circuitById = <String, ElectricalCircuit>{
@@ -957,8 +993,8 @@ SldSheet buildElectricalSld({
       prims.add(
           SldLabel(blockX + _colPenghantar, rowY + 3, cable, size: rowSize));
       prims.add(SldLabel(blockX + _colDaya, rowY + 3, daya, size: rowSize));
-      prims.add(SldLabel(
-          blockX + _colKeterangan, rowY + 3, '$keterangan$fireDuty$vd$safety',
+      prims.add(SldLabel(blockX + _colKeterangan, rowY + 3,
+          '$keterangan$fireDuty${_dfMark(c)}$vd$safety',
           size: rowSize));
       // R/S/T loading band — the line current under the way's phase(s), each
       // cell carrying its phase role so the loading reads by colour at a glance.
@@ -1028,10 +1064,37 @@ SldSheet buildElectricalSld({
         ? '  ·  imbalance ${_num(p.imbalancePercent)}%'
         : '';
     final footerY = busBot + _rowH / 2 + 3;
+    // Drawing review F8 (2026-11-13, checklist item 21) — the TOTAL line is
+    // self-consistent with the rows above it: CONNECTED is the sum of the DAYA
+    // cells printed (every way of the board, on every page the total covers),
+    // DEMAND the solved diversified figure (ways x their DF x the board's
+    // diversity, standby ways out). A continuation page names the ways + the
+    // sheets its total covers.
+    var connectedRowsW = 0.0;
+    for (final c in p.circuits) {
+      connectedRowsW += _dayaPrintedW(c);
+    }
+    final covers = range == null || firstChunk
+        ? ''
+        : ' (W1-W$ways'
+            '${totalSheets != null ? ', LEMBAR / SHEETS ${totalSheets.first}-${totalSheets.last}' : ''})';
+    final boardDiv =
+        p.isDiversified ? ' (div ${_factor(p.diversityFactor)})' : '';
+    // The TOTAL line carries the diversified current only; the undiversified
+    // worst phase stays on the incomer sub-line (keeps the line inside the
+    // column grid, left of the R/S/T totals).
+    final totalCurrent = p.isDiversified
+        ? '${_amps(p.diversifiedDemandCurrent.amperes)}A div'
+        : _boardDemandCurrent(p);
     if (lastChunk)
-      prims.add(SldLabel(blockX + 8, footerY,
-          'TOTAL  ${_watts(p.demandW)} / ${_boardDemandCurrent(p)}$imbalance',
-          size: 8.5, bold: true));
+      prims.add(SldLabel(
+          blockX + 8,
+          footerY,
+          'TOTAL$covers  TERPASANG / CONNECTED ${_wattsId(connectedRowsW)}'
+          '  ·  KEBUTUHAN / DEMAND$boardDiv '
+          '${_watts(p.demandW)} / $totalCurrent$imbalance',
+          size: 8.5,
+          bold: true));
     if (p.system.isThreePhase && lastChunk) {
       final pb = p.phaseBalance;
       final l1 = _amps(pb.l1), l2 = _amps(pb.l2), l3 = _amps(pb.l3);
@@ -1161,6 +1224,20 @@ SldSheet buildElectricalSld({
   if (printedMatch(RegExp(r'\bundiv\b'))) {
     legend.add(const SldLegendEntry('div / undiv',
         'Demand current with / without the board diversity factor'));
+  }
+  // Drawing review F8 — the TOTAL line's two figures + the row markers that
+  // let a reader reproduce the demand from the rows.
+  if (printedMatch(RegExp(r'^TOTAL.* TERPASANG / CONNECTED '))) {
+    legend.add(const SldLegendEntry('TERPASANG / KEBUTUHAN',
+        'TOTAL: connected = sum of the DAYA rows; demand = DAYA x DF x board div, standby ways excluded'));
+  }
+  if (printedMatch(RegExp(r' DF \d'))) {
+    legend.add(const SldLegendEntry(
+        'DF', 'Way demand factor (rows without DF count at 1)'));
+  }
+  if (printedMatch(RegExp(r'\(STANDBY\)'))) {
+    legend.add(const SldLegendEntry(
+        'STANDBY', 'Standby way (DF 0) - excluded from the demand'));
   }
   if (printedMatch(RegExp(r'\d cap$'))) {
     legend.add(const SldLegendEntry(

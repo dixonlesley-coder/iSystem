@@ -244,6 +244,15 @@ rated transformer and capacitor bank from the same arrangement E-301 draws (F7).
 pre-check now FAILs a stamped legibility warning (item 5) and a pipe-key table touched
 by drawing text (item 6).
 
+Fix round 2 (F8, checklist item 21): the E-201 / E-601 board table's TOTAL line prints
+`TERPASANG / CONNECTED` (the sum of the DAYA rows, to the watt) beside `KEBUTUHAN /
+DEMAND` (the solved diversified figure); standby ways print `(STANDBY)` and any other
+demand factor below 1 prints `DF 0.7`, keyed in the legend, so the demand is reproducible
+from the rows; a multi-page board's total names its ways + sheets (tower LVMDP: `TOTAL
+(W1-W31, LEMBAR / SHEETS 1-2)`). Pre-check item 21 sums the rows each total covers and
+PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office PP-L1
+18 900 W, apartment MEP 173 000 W, tower LVMDP 865 347 W).
+
 ### Backlog (not cured in this pass)
 - Electrical risers (E-401) place every unplaced floor board on one level (apartment
   PP-Lt1..PP-Lt12 as one TIPIKAL box on Lantai 2) and issue label-only pages for the

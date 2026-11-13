@@ -673,3 +673,44 @@ One defect, repeated on 52 schedule pages and the 52 matching SLD pages. Every o
 7. Equipment schedules: tanks print "capacity not set" in house, shophouse and office; shophouse M-601 p3 holds
    only the end of the footnote. Tower PP-Lt10 is 6 kA where its sister boards are 10 kA (engineering content).
 8. Apartment E-301 p1 tees the genset onto the incomer without a transfer switch; E-501 draws the ATS.
+
+## Fix round 2 (2026-11-13)
+
+F8 (item 21, "totals add up to the rows shown") on the E-201 single-line and the E-601 panel
+schedules. One shared sheet builder (`buildElectricalSld`), so the PDF, the DXF twin and the
+canvas changed together. No figure was recalculated.
+
+What changed:
+
+- The TOTAL line now prints two labelled figures. `TERPASANG / CONNECTED n WATT` is the sum of
+  the DAYA cells printed above it, to the watt. `KEBUTUHAN / DEMAND n kW / A` is the existing
+  solved diversified demand. A diversified board adds `(div f)`. The undiversified worst-phase
+  current now appears only on the incomer sub-line.
+- Each row's KETERANGAN marks a way the solve carries at demand factor 0 as `(STANDBY)`. It prints
+  any other factor below 1 as `DF 0.7`. The legend keys `TERPASANG / KEBUTUHAN` as "connected = sum
+  of the DAYA rows; demand = DAYA x DF x board div, standby ways excluded". It also keys `DF` and
+  `STANDBY`, each only when printed.
+- A multi-page board prints its total on the last page, and that total says what it covers: tower
+  LVMDP p2 `TOTAL (W1-W31, LEMBAR / SHEETS 1-2)`.
+- `tool/ref_drawings_precheck.py` item 21 runs on every `electrical-sld` / `panel-schedules` page.
+  Each CONNECTED total must equal the rows since the previous total within 1 W, across pages. A
+  cover note must match those rows' ways and sheets. A TOTAL with no label FAILs. Result: PASS on
+  all five buildings.
+
+Examples (verbatim, pdftotext):
+
+- House E-601 p1: `TOTAL TERPASANG / CONNECTED 7.834 WATT · KEBUTUHAN / DEMAND 6.5kW / 32.5A`.
+  Rows carry `Stop kontak Lt1 DF 0.7` and `AC kamar 1 DF 0.9`.
+- Office E-601 p2 (PP-L1): `TOTAL TERPASANG / CONNECTED 18.900 WATT · KEBUTUHAN / DEMAND 16.1kW / 28.5A · imbalance 21.7%`.
+- Apartment E-601 p3 (MEP): `TOTAL TERPASANG / CONNECTED 173.000 WATT · KEBUTUHAN / DEMAND 89.7kW / 153.4A · imbalance 2.3%`.
+  W4 reads `Pump P-04 · no-OL trip (fire) (STANDBY)`.
+- Tower E-601 p2 (LVMDP): `TOTAL (W1-W31, LEMBAR / SHEETS 1-2) TERPASANG / CONNECTED 865.347 WATT · KEBUTUHAN / DEMAND 865.3kW / 1448.1A · imbalance 0.7%`.
+
+PNGs to re-check (the TOTAL line must stay left of the R/S/T totals, and the KETERANGAN markers
+must stay inside their column):
+
+- `house/png/Rumah Contoh-panel-schedules-p1.png`
+- `office/png/Kantor Contoh-panel-schedules-p2.png`
+- `apartment/png/Apartemen Contoh-panel-schedules-p3.png`
+- `tower/png/Menara Contoh 30-panel-schedules-p2.png`
+- The same pages of `electrical-sld`.

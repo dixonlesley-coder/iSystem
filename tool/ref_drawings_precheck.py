@@ -15,7 +15,8 @@ and ROOT/INDEX.md (sheet tables + summary counts).
 
 Items checked (docs/DRAFTING-CHECKLIST.md): 1/3 title block fields, 2/23
 numbers unique + drawing list, 5 smallest text pt, 6 stamped overlap warning,
-7 garbled glyphs, 24 cross-document figures, 25 PDF vs DXF text. Report only:
+7 garbled glyphs, 21 panel-schedule totals add up to the DAYA rows (E-201 /
+E-601), 24 cross-document figures, 25 PDF vs DXF text. Report only:
 it never edits a drawing.
 
 Needs: pdftoppm + pdftotext (poppler), ImageMagick `montage`, python3 with
@@ -604,6 +605,77 @@ def run_building(root, b):
                 f'U+{ord(c):04X} "{c}" x{n}' for c, n in odd.most_common(5)))
         emit(7, 'FAIL' if bad else 'PASS', lab,
              '; '.join(bad) if bad else 'clean')
+
+    # 21 — totals add up to the rows shown (E-201 single-line + E-601 panel
+    # schedules): every "TERPASANG / CONNECTED n WATT" total equals the sum of
+    # the DAYA rows it covers (rows since the previous total, across pages;
+    # a "(W1-Wn, LEMBAR / SHEETS a-b)" total must cover exactly ways 1..n on
+    # sheets a..b). An unlabelled TOTAL on these sheets FAILs.
+    lines += ['', '## Item 21 - panel-schedule TOTAL = sum of the DAYA rows '
+              '(E-201 / E-601)']
+    row_re = re.compile(r'^W(\d+)\s.*?\s(\d{1,3}(?:\.\d{3})*) WATT\b')
+    tot_re = re.compile(r'^TOTAL(?: \(W1-W(\d+)(?:, LEMBAR / SHEETS '
+                        r'(\d+)-(\d+))?\))?\s+(.*)$')
+    con_re = re.compile(r'TERPASANG / CONNECTED (\d{1,3}(?:\.\d{3})*) WATT')
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not (st.endswith('-electrical-sld') or
+                st.endswith('-panel-schedules')):
+            continue
+        acc = []  # (page, way, W) since the previous total
+        for pg in sorted((q for q in pages if q['pdf'] == pdf),
+                         key=lambda q: q['page']):
+            lab = f'{short(st, project)} p{pg["page"]}'
+            for raw in pg['text'].splitlines():
+                ln = raw.strip()
+                m = row_re.match(ln)
+                if m:
+                    acc.append((pg['page'], int(m.group(1)),
+                                int(m.group(2).replace('.', ''))))
+                    continue
+                t = tot_re.match(ln)
+                if not t:
+                    continue
+                c = con_re.search(t.group(4))
+                if not c:
+                    emit(21, 'FAIL', lab, f'TOTAL not labelled connected / '
+                         f'demand: "{ln[:80]}"')
+                    acc = []
+                    continue
+                printed = int(c.group(1).replace('.', ''))
+                rows = sum(w for _, _, w in acc)
+                bad = []
+                if abs(rows - printed) > 1:
+                    bad.append(f'rows sum {rows} W vs CONNECTED {printed} W')
+                if t.group(1):
+                    n = int(t.group(1))
+                    ways = sorted({w for _, w, _ in acc})
+                    if ways and ways[-1] != n:
+                        bad.append(f'covers W1-W{n} but rows reach '
+                                   f'W{ways[-1]}')
+                    if t.group(2):
+                        a, b = int(t.group(2)), int(t.group(3))
+                        pgs = sorted({q for q, _, _ in acc})
+                        if pgs and (pgs[0] != a or pgs[-1] != b or
+                                    pg['page'] != b):
+                            bad.append(f'says sheets {a}-{b}, rows on '
+                                       f'p{pgs[0]}-p{pgs[-1]}')
+                    elif len({q for q, _, _ in acc}) > 1:
+                        bad.append('multi-page total names no sheets')
+                elif len({q for q, _, _ in acc}) > 1:
+                    bad.append('total covers several pages but does not '
+                               'say which')
+                span = sorted({q for q, _, _ in acc})
+                cov = (f'p{span[0]}-p{span[-1]}' if len(span) > 1
+                       else f'p{pg["page"]}')
+                emit(21, 'FAIL' if bad else 'PASS', lab,
+                     '; '.join(bad) if bad else
+                     f'{len(acc)} rows ({cov}) sum {rows} W = CONNECTED '
+                     f'{printed} W')
+                acc = []
+        if acc:
+            emit(21, 'FAIL', short(st, project),
+                 f'{len(acc)} DAYA rows after the last TOTAL')
 
     # 25 — PDF vs DXF text.
     lines += ['', '## Item 25 - PDF vs DXF text (whitespace-insensitive '

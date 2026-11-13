@@ -248,20 +248,22 @@ List<SldSheet> electricalSldDetailSheets({
   final minPt = sldSinglePageMinLabelPt(whole,
       chrome: chrome, projectName: pname, diagramTitle: diagramTitle);
   if (minPt >= kMinPlotLabelPt - 1e-9 || result.order.isEmpty) return [whole];
-  return [
-    for (final id in result.order)
-      ...electricalBoardScheduleSheets(
-          project: project,
-          result: result,
-          panelId: id,
-          diagramTitle: diagramTitle,
-          chrome: chrome,
-          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-          breakerKaByCircuitId: breakerKaByCircuitId,
-          containmentByCircuitId: containmentByCircuitId,
-          adsFailedCircuitIds: adsFailedCircuitIds,
-          projectName: pname),
-  ];
+  final sheets = <SldSheet>[];
+  for (final id in result.order) {
+    sheets.addAll(electricalBoardScheduleSheets(
+        project: project,
+        result: result,
+        panelId: id,
+        diagramTitle: diagramTitle,
+        chrome: chrome,
+        breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+        breakerKaByCircuitId: breakerKaByCircuitId,
+        containmentByCircuitId: containmentByCircuitId,
+        adsFailedCircuitIds: adsFailedCircuitIds,
+        projectName: pname,
+        firstSheetNo: sheets.length + 1));
+  }
+  return sheets;
 }
 
 /// Round 34 (electrical-drawings-4-tall-board-schedule-illegible) — ONE
@@ -282,16 +284,19 @@ List<SldSheet> electricalBoardScheduleSheets({
   Map<String, ConduitSpec>? containmentByCircuitId,
   Set<String>? adsFailedCircuitIds,
   String projectName = 'Untitled project',
+  int? firstSheetNo,
 }) {
-  SldSheet build(({int lo, int hi})? r) => buildElectricalSld(
-      project: project,
-      result: result,
-      onlyPanelId: panelId,
-      breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-      breakerKaByCircuitId: breakerKaByCircuitId,
-      containmentByCircuitId: containmentByCircuitId,
-      adsFailedCircuitIds: adsFailedCircuitIds,
-      wayRange: r);
+  SldSheet build(({int lo, int hi})? r, {({int first, int last})? sheets}) =>
+      buildElectricalSld(
+          project: project,
+          result: result,
+          onlyPanelId: panelId,
+          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+          breakerKaByCircuitId: breakerKaByCircuitId,
+          containmentByCircuitId: containmentByCircuitId,
+          adsFailedCircuitIds: adsFailedCircuitIds,
+          wayRange: r,
+          totalSheets: sheets);
   bool legible(SldSheet s) =>
       sldSinglePageMinLabelPt(s,
           chrome: chrome,
@@ -302,13 +307,22 @@ List<SldSheet> electricalBoardScheduleSheets({
   final ways = result.panels[panelId]?.circuits.length ?? 0;
   if (ways <= 1 || legible(whole)) return [whole];
   var pages = [whole];
+  var lastLo = 0;
   for (var g = 2; g <= ways; g++) {
     final size = (ways / g).ceil();
     pages = [
       for (var lo = 0; lo < ways; lo += size)
         build((lo: lo, hi: math.min(lo + size, ways) - 1)),
     ];
+    lastLo = (pages.length - 1) * size;
     if (pages.every(legible)) break;
+  }
+  // Drawing review F8 — the last page's TOTAL covers every page of the board:
+  // name the sheets (the set's own `Sheet i of N` numbers when the caller
+  // passes where this board starts) so the reader knows which rows add up.
+  if (pages.length > 1 && firstSheetNo != null) {
+    pages[pages.length - 1] = build((lo: lastLo, hi: ways - 1),
+        sheets: (first: firstSheetNo, last: firstSheetNo + pages.length - 1));
   }
   return pages;
 }
@@ -470,8 +484,8 @@ String _sldPageContent({
         '(${_pdfText(overlapNote)}) Tj ET');
   }
   // Round 43 — a page its pagination could not bring to the plotted floor.
-  final legNote = sldLegibilityWarning(sheet.belowMinLabelPt,
-      minPt: kMinPlotLabelPt);
+  final legNote =
+      sldLegibilityWarning(sheet.belowMinLabelPt, minPt: kMinPlotLabelPt);
   if (legNote != null) {
     cs.writeln('BT /F1 8 Tf 0.75 0.10 0.10 rg '
         '${_n(_margin + 6)} ${_n(_pageH - _margin - (overlapNote != null ? 24 : 12))} Td '
@@ -632,7 +646,7 @@ Uint8List electricalSldToPdfPaginated({
             breakerIcuKaByPanelId: breakerIcuKaByPanelId,
             breakerKaByCircuitId: breakerKaByCircuitId,
             containmentByCircuitId: containmentByCircuitId,
-      adsFailedCircuitIds: adsFailedCircuitIds),
+            adsFailedCircuitIds: adsFailedCircuitIds),
         projectName: pname,
         title: title,
         diagramTitle: diagramTitle,
@@ -644,20 +658,21 @@ Uint8List electricalSldToPdfPaginated({
   }
   // Round 34 — a board too tall for one legible page continues on way-range
   // pages; `Sheet i of N` runs across the whole set.
-  final sheets = <SldSheet>[
-    for (final id in ids)
-      ...electricalBoardScheduleSheets(
-          project: project,
-          result: result,
-          panelId: id,
-          diagramTitle: diagramTitle,
-          chrome: chrome,
-          breakerIcuKaByPanelId: breakerIcuKaByPanelId,
-          breakerKaByCircuitId: breakerKaByCircuitId,
-          containmentByCircuitId: containmentByCircuitId,
-          adsFailedCircuitIds: adsFailedCircuitIds,
-          projectName: pname),
-  ];
+  final sheets = <SldSheet>[];
+  for (final id in ids) {
+    sheets.addAll(electricalBoardScheduleSheets(
+        project: project,
+        result: result,
+        panelId: id,
+        diagramTitle: diagramTitle,
+        chrome: chrome,
+        breakerIcuKaByPanelId: breakerIcuKaByPanelId,
+        breakerKaByCircuitId: breakerKaByCircuitId,
+        containmentByCircuitId: containmentByCircuitId,
+        adsFailedCircuitIds: adsFailedCircuitIds,
+        projectName: pname,
+        firstSheetNo: sheets.length + 1));
+  }
   final pages = <String>[
     for (var i = 0; i < sheets.length; i++)
       _sldPageContent(
