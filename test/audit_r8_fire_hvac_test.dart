@@ -97,12 +97,13 @@ void main() {
     // Rated flow = the remote-area demand (not the 31.5 L/s standpipe).
     expect(pump.flow.inLitersPerSecond,
         closeTo(remote.remoteAreaDemand.inLitersPerSecond, 1e-9));
-    // Head = lift to the top ceiling + branch base pressure + 15 m allowance,
-    // so the lower-bound coverage check is met by construction.
+    // Head = lift to the top ceiling + branch base pressure + 15 m allowance.
+    // Backlog A-1 — the judge requires that SAME sprinkler point (one source
+    // of truth with the rating basis), so it is met exactly.
     final chk = c.read(sprinklerPumpCheckProvider)!;
     expect(chk.flowShort, isFalse);
     expect(chk.headShort, isFalse);
-    expect(pump.head.meters, closeTo(chk.requiredHeadM + 15, 1e-9));
+    expect(pump.head.meters, closeTo(chk.requiredHeadM, 1e-9));
   });
 
   test('fire-hvac-3: OH1 sits under the pump flow ⇒ no flow warning', () {
@@ -115,7 +116,9 @@ void main() {
         isFalse);
   });
 
-  test('fire-hvac-3: head lower bound = lift to the top ceiling + branch base',
+  test(
+      'fire-hvac-3 / backlog A-1: required head = the sprinkler point (lift to '
+      'the top ceiling + branch base + the 15 m allowance, no friction known)',
       () {
     const weak = PumpDuty(
       flow: FlowRate(0.05),
@@ -139,9 +142,13 @@ void main() {
     // 0's ceiling — not the top storey of the (default multi-storey)
     // building, which no head of this system reaches.
     const top = 0;
+    // Backlog A-1 — no pump drawn ⇒ no sized index friction, so the
+    // sprinkler point is the allowance basis: + 15 m (superseding the
+    // audit-round-8 lower bound, which stopped at the branch base).
     final expected = b.ceilingElevationOf(top).meters -
         b.elevationOf(0).meters +
-        remote.branchBasePressure.pascals / (1000 * 9.81);
+        remote.branchBasePressure.pascals / (1000 * 9.81) +
+        15;
     final chk = c.read(sprinklerPumpCheckProvider)!;
     expect(chk.requiredHeadM, closeTo(expected, 1e-9));
     expect(chk.headShort, isTrue);
@@ -149,6 +156,46 @@ void main() {
         c.read(designIssuesProvider)
             .any((i) => i.kind == 'sprinkler-head-exceeds-fire-pump'),
         isTrue);
+  });
+
+  test(
+      'backlog A-1 regression: a pump head between the old lower bound and '
+      'the sprinkler point now warns; one at the point does not', () {
+    PumpDuty pumpAt(double h) => PumpDuty(
+          flow: const FlowRate(0.05),
+          head: Head(h),
+          hydraulicPower: const Power(4900),
+          shaftPower: const Power(7000),
+          motorInputPower: const Power(7800),
+          selectedMotor: const Power(7500),
+        );
+    double requiredFor(PumpDuty p, {required bool expectShort}) {
+      final c = _sprinklerNet(
+          drawnPump: false,
+          overrides: [firePumpDutyProvider.overrideWith((ref) => p)]);
+      addTearDown(c.dispose);
+      final b = c.read(projectControllerProvider).building;
+      final remote = c.read(sprinklerRemoteAreaProvider);
+      // The old (audit-round-8) lower bound: lift + branch base, no friction.
+      final lowerBound = b.ceilingElevationOf(0).meters -
+          b.elevationOf(0).meters +
+          remote.branchBasePressure.pascals / (1000 * 9.81);
+      final chk = c.read(sprinklerPumpCheckProvider)!;
+      // The sprinkler point = lower bound + the 15 m allowance.
+      expect(chk.requiredHeadM, closeTo(lowerBound + 15, 1e-9));
+      expect(p.head.meters, greaterThan(lowerBound));
+      expect(chk.headShort, expectShort);
+      expect(
+          c.read(designIssuesProvider)
+              .any((i) => i.kind == 'sprinkler-head-exceeds-fire-pump'),
+          expectShort);
+      return chk.requiredHeadM;
+    }
+
+    // 14.746 (old bound) < 20 m < 29.746 m (the point) ⇒ short now (before
+    // A-1 this pump passed the lower-bound judge silently).
+    final req = requiredFor(pumpAt(20), expectShort: true);
+    requiredFor(pumpAt(req), expectShort: false);
   });
 
   test(

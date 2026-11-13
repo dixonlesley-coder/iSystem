@@ -814,14 +814,19 @@ void main() {
     });
 
     test('sprinkler point (not governing): 15.7 + 50 / 9.81 + 37.414 m', () {
-      // O3 stood down (Audit round 8 row: the judge head is a LOWER BOUND,
-      // lift + branch base, no friction); the rating basis' sprinkler
-      // point: lift to the top head ceiling 15.7 + the 50 kPa remote head
-      // 5.097 + the sized sprinkler index friction (after O1) 37.414.
+      // Backlog A-1 (O3 / backlog f) — the judge requires the rating
+      // basis' sprinkler point (one source of truth): lift to the top head
+      // ceiling 15.7 + the 50 kPa remote head 5.097 + the sized sprinkler
+      // index friction (after O1) 37.414 = 58.211 m, against the pump's
+      // 98.536 m ⇒ not short. (Before A-1: the lower bound 15.7 +
+      // 96.722 / 9.81 = 25.560 m.)
       final chk = c.read(sprinklerPumpCheckProvider)!;
       expect(chk.headShort, isFalse);
       expect(chk.flowShort, isFalse);
-      expect(chk.requiredHeadM, closeTo(15.7 + 96.722 / 9.81, 5e-4));
+      expect(chk.requiredHeadM, closeTo(15.7 + 50 / 9.81 + 37.414, 5e-4));
+      expect(chk.pumpHeadM, closeTo(98.536, 5e-4));
+      final b = c.read(fireSystemBasesProvider).single;
+      expect(b.sprinklerPointHeadM, closeTo(chk.requiredHeadM, 1e-12));
     });
 
     test('HVAC: fan static (supply + return + FCU internal) 121.25 Pa', () {

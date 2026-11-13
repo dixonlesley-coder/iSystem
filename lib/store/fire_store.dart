@@ -571,6 +571,16 @@ class FireSystemBasis {
   /// be rated on.
   final double? dryRequiredInletHeadM;
 
+  /// Backlog A-1 (2026-11-13, office O3) — the SPRINKLER POINT head (m) of a
+  /// system that carries a sprinkler head: `sprinklerPumpRatedPoint` over
+  /// this system's sprinkler lift, the remote-area result and the sized
+  /// sprinkler index friction from the duty pump — the SAME figure the
+  /// rating basis reads. The sprinkler-vs-pump judge
+  /// ([sprinklerPumpCheckProvider]) requires exactly this head, so the judge
+  /// and the rating never give two heads for one requirement. Null when no
+  /// sprinkler head is drawn on the system.
+  final double? sprinklerPointHeadM;
+
   /// True when this system has no pump of its own to rate: gravity-fed, a
   /// transfer fill or a dry (brigade-fed) system.
   bool get standsDown => gravityFed || transfer || dry;
@@ -611,6 +621,7 @@ class FireSystemBasis {
     this.dry = false,
     this.dryInletId,
     this.dryRequiredInletHeadM,
+    this.sprinklerPointHeadM,
   });
 }
 
@@ -830,11 +841,15 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
           indexPathFriction: f == null ? null : Head(f),
         );
     final FireTerminalKind basisKind;
+    // Backlog A-1 — the system's sprinkler point head (one source of truth
+    // for the rating basis AND the sprinkler-vs-pump judge).
+    double? sprinklerPointHead;
     if (ratedOnSprinkler) {
       friction = frictionTo(FireTerminalKind.sprinkler);
       final p = sprinklerPoint(friction, liftTo(FireTerminalKind.sprinkler));
       flow = p.flow;
       head = p.head;
+      if (sys.hasSprinklerHead(net)) sprinklerPointHead = p.head.meters;
       basisKind = FireTerminalKind.sprinkler;
     } else {
       final hydrantFriction = frictionTo(FireTerminalKind.hydrant);
@@ -847,6 +862,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
         final sprinklerFriction = frictionTo(FireTerminalKind.sprinkler);
         final sp = sprinklerPoint(
             sprinklerFriction, liftTo(FireTerminalKind.sprinkler));
+        sprinklerPointHead = sp.head.meters;
         if (sp.flow.cubicMetersPerSecond >
             st.requiredFlow.cubicMetersPerSecond + 1e-12) {
           // Round 50 (regression-3) — the sprinkler remote-area flow exceeds
@@ -1381,6 +1397,7 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
       dry: dry,
       dryInletId: dry ? inlets.first.id : null,
       dryRequiredInletHeadM: dryHeadM,
+      sprinklerPointHeadM: sprinklerPointHead,
     ));
   }
   return out;
@@ -1593,10 +1610,13 @@ final fireJockeyDutyProvider = Provider<PumpDuty?>((ref) {
 /// (fireSprinkler edges):
 ///  * flow:  remote-area demand (`sprinklerRemoteAreaProvider`) vs the pump's
 ///           rated flow;
-///  * head:  a LOWER-BOUND sprinkler requirement — static lift from the pump
-///           datum (floor 0) to the top-floor ceiling + the branch-base pressure
-///           as head (P/ρg) — vs the pump head. Riser / main friction is NOT
-///           added, so a flagged shortfall is certain, never speculative.
+///  * head:  the system's SPRINKLER POINT ([FireSystemBasis.
+///           sprinklerPointHeadM], `sprinklerPumpRatedPoint`: static lift +
+///           the remote-head pressure + the sized sprinkler index friction, the
+///           15 m allowance basis as its floor) vs the pump head — the SAME head
+///           the rating basis reads. Backlog A-1 (2026-11-13, office O3)
+///           superseded the audit-round-8 LOWER BOUND (lift + branch-base, no
+///           friction): one requirement, one head.
 ///
 /// Round 29 (regression-sprinkler-check-uses-other-systems-pump) — Round 28
 /// rates every connected fire system on its OWN demand
@@ -1634,8 +1654,6 @@ final sprinklerPumpCheckProvider = Provider<
   final net = ref.watch(sizingNetworkProvider);
   if (!ref.watch(sprinklerHeadDrawnProvider)) return null;
   final remote = ref.watch(sprinklerRemoteAreaProvider);
-  final building = ref.watch(projectControllerProvider).building;
-  const rhoG = 1000 * 9.81;
   final demand = remote.remoteAreaDemand.inLitersPerSecond;
   // The pump serving each sprinkler-bearing system, judged against THAT
   // system's own lift (Round 49 — pump datum floor -> its highest head's
@@ -1656,11 +1674,10 @@ final sprinklerPumpCheckProvider = Provider<
     // only system, judged against the project fire pump (Round 29).
     final own = b.pumpIds.isNotEmpty || b.system.standpipeTermApplies(net);
     final pump = own ? b.duty : ref.watch(firePumpDutyProvider);
-    final lift =
-        b.system.staticLiftM(net, building, FireTerminalKind.sprinkler);
-    if (pump != null) {
-      pumps.add((pump, lift + remote.branchBasePressure.pascals / rhoG));
-    }
+    // Backlog A-1 — the requirement is the system's own sprinkler point
+    // (the rating basis' figure), never a parallel re-derivation.
+    final required = b.sprinklerPointHeadM;
+    if (pump != null && required != null) pumps.add((pump, required));
   }
   if (pumps.isEmpty) return null;
   ({

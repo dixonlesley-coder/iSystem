@@ -2431,9 +2431,10 @@ const Map<StringKey, String> _en = {
       'scheduled fire pump delivers ({pump} L/s) - rate the fire pump on the '
       'sprinkler demand (plus hose allowance) or add a sprinkler pump.',
   StringKey.issueSprinklerHeadMessage:
-      'The sprinkler system needs at least {need} m at the pump (static lift '
-      'to the top-floor ceiling + branch-base pressure, before riser and main '
-      'friction) but the fire pump head is {pump} m.',
+      'The sprinkler system needs {need} m at the pump (its sprinkler point: '
+      'static lift to the top head + remote-head pressure + the sized index '
+      'friction, at least the 15 m allowance basis) but the fire pump head is '
+      '{pump} m.',
   StringKey.issueFireOverPressureMessage:
       'The fire pump is rated at {head} m{share}; its churn (140 % of rated) '
       'reaches {churn} kPa, above the {limit} kPa (175 psi) rating of standard '
@@ -4115,9 +4116,10 @@ const Map<StringKey, String> _id = {
       'kebakaran pada kebutuhan sprinkler (plus tambahan selang) atau tambah '
       'pompa sprinkler.',
   StringKey.issueSprinklerHeadMessage:
-      'Sistem sprinkler membutuhkan sedikitnya {need} m di pompa (angkat statis '
-      'ke plafon lantai teratas + tekanan pangkal cabang, sebelum gesekan riser '
-      'dan pipa utama) tetapi head pompa kebakaran {pump} m.',
+      'Sistem sprinkler membutuhkan {need} m di pompa (titik sprinkler-nya: '
+      'angkat statis ke kepala teratas + tekanan kepala terjauh + gesekan '
+      'indeks terukur, minimal basis tambahan 15 m) tetapi head pompa '
+      'kebakaran {pump} m.',
   StringKey.issueFireOverPressureMessage:
       'Pompa kebakaran diberi rating {head} m{share}; churn-nya (140 % dari '
       'rating) mencapai {churn} kPa, di atas rating {limit} kPa (175 psi) '
