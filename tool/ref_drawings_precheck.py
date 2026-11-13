@@ -586,6 +586,30 @@ def run_building(root, b):
             emit(6, 'N-A', lab, 'exporter keeps no overlap counter for this '
                  'sheet type; visual check')
 
+    # 14 (scripted part, backlog C-1) - on a mechanical plan / detail sheet
+    # of a floor named "Lantai N", every run tag's level code is LN (the tag
+    # names the floor the sheet is titled for, never the index one below).
+    lines += ['', '## Item 14 - run-tag level code matches the sheet\'s '
+              '"Lantai N" (scripted part)']
+    tag_re = re.compile(r'(?<![A-Z0-9])([A-Z]{1,3})-(L\d+|GF|B\d+|RF)(?![0-9A-Za-z])')
+    for pg in pages:
+        m = re.search(r'(?<!elec)-plan-\d+-Lantai\s*(\d+)(-detail(-\d+)?)?$',
+                      pg['stem'])
+        if not m:
+            continue
+        lab = f'{short(pg["stem"], project)} p{pg["page"]}'
+        want = f'L{int(m.group(1))}'
+        tags = tag_re.findall(pg['text'])
+        if not tags:
+            emit(14, 'N-A', lab, 'no run tag printed')
+            continue
+        bad = sorted({f'{c}-{lv}' for c, lv in tags if lv != want})
+        if bad:
+            emit(14, 'FAIL', lab, f'{len(bad)} tag(s) not {want}: '
+                 + ', '.join(bad[:6]))
+        else:
+            emit(14, 'PASS', lab, f'{len(tags)} run tags all -{want}')
+
     # 4 (scripted part) — legend text stays inside its LEGEND box: on every
     # page, the smallest stroked rect around a "LEGEND" / "LEGENDA" heading is
     # the box; a text run that starts inside it must end inside it (a run =

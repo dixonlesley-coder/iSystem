@@ -262,8 +262,6 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 - Electrical risers (E-401) place every unplaced floor board on one level (apartment
   PP-Lt1..PP-Lt12 as one TIPIKAL box on Lantai 2) and issue label-only pages for the
   floors left empty.
-- Plan tags carry a level index one below the sheet's "Lantai N" name ("SP-L29" on
-  Lantai 30, "GF" on Lantai 1): consistent, but it reads as the wrong floor.
 - Tower building single-line E-301 spends ~15 near-empty pages (pages 2-16: one LVMDP
   box and two boards each); a tabulated typical would carry it on one or two.
 - Plant-level mechanical riser pages (tower `riser-sld` p13 / p1, apartment p1 / p6,
@@ -273,3 +271,9 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   issues detail sheets.
 - Standalone (non-package) riser / electrical DXF exports still write one sheet;
   only the submittal package issues the paginated DXF twins.
+
+### Backlog closed (2026-11-13)
+- C-1 Level code in tags matches the floor's own name: `floorLocatorToken` reads
+  'Lantai N' ⇒ `LN`, 'Basement N' ⇒ `BN`, 'Dasar' / 'Ground' ⇒ `GF`, 'Atap' / 'Roof'
+  ⇒ `RF` (index rule for any other name); tower Lantai 30 prints `SP-L30`, Lantai 1
+  plans `CW-L1`. Pre-check item 14 checks every `plan-N-Lantai N` sheet.
