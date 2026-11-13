@@ -141,15 +141,15 @@ _(empty)_
 - Fixture: `packages/mechx_engine/test/reference/apartment.dart` (`buildApartment()`, `buildApartmentNetwork(prvFloor:)`, `kApartmentRooms`).
 - Engine pins: `packages/mechx_engine/test/reference_apartment_test.dart`.
 - App pins: `test/reference_apartment_app_test.dart` (BEFORE / AFTER the PRV).
-- Regression test (A2): `test/reference_apartment_regression_test.dart`.
+- Regression tests (A1, A2): `test/reference_apartment_regression_test.dart`.
 
 **Fixed by its review (2026-11-13).**
 - **A2:** `combined-fire-sprinkler-governs` was keyed on `pumpIds.first`, the jockey FJ. It is now keyed on the duty pump FP.
-- **A1 (not fixed — deliberate):** the combined pump is rated on the sprinkler point, 4.714 L/s @ 127.054 m (11 kW), not on max flow at max head (31.545 L/s @ 127.054 m). `docs/ENGINE-INVARIANTS.md` Round 37 records the current behaviour as deliberate: "Fire index friction is per BASIS (`FireTerminalKind`): hose = hydrant outlets, sprinkler = heads; the combined pump takes the larger head at its own flow." Round 37 r2 adds: "A combined fire system rated on its sprinkler point raises `combined-fire-sprinkler-governs:<pumpId>` (judge-only)."
+- **A1:** the combined pump was rated on the sprinkler point, 4.714 L/s @ 127.054 m (11 kW), a pump that cannot deliver the 31.545 L/s hydrant flow its pipes are sized for. It is now rated at the larger flow and the larger head, 31.545 L/s @ 127.054 m (75 kW; jockey 0.3155 L/s). The reviewer overruled the Round 37 "larger head at its own flow" rule (marked superseded in `docs/ENGINE-INVARIANTS.md`).
 
 ### Backlog (outside scope, not fixed)
 
-- **(a) Jockey flow basis (A1 follow-on).** The jockey legs are sized on 1 % of the standpipe flow (0.3155 L/s, `_jockeyLegFlows`), while the printed jockey duty is 1 % of the rated point (0.0471 L/s).
+- **(a) Jockey flow basis:** resolved by A1 (both 0.3155 L/s).
 - **(b) Two alternator reactances.** The motor-start dip and the genset start floor use Xd'' 0.15 pu (`kGensetSubtransientReactancePu`), while the genset ADS fault uses 0.12 pu (`kAlternatorXdPu`), for the same set.
 - **(c) Hose outlet height.** A hydrant box sits at the 1.1 m fixture height (39.6 m on Lantai 12), which sets its pipe leg, while the standpipe lift uses the 1.2 m outlet height (39.7 m).
 - **(d) Sprinkler head height.** A head node sits at the 1.1 m fixture height, while its run is measured as a ceiling run (no leg) and the lift is taken at the ceiling.

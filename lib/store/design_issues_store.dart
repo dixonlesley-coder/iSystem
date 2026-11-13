@@ -48,6 +48,7 @@ import 'fire_store.dart'
         fireSystemBasesProvider,
         kMinFireStageHeadM,
         sprinklerPumpCheckProvider,
+        sprinklerRemoteAreaProvider,
         standpipeOutletOverPressureProvider;
 import 'history_store.dart' show SettingsUndoEntry, settingsHistoryProvider;
 import 'models/sheet.dart';
@@ -1430,13 +1431,12 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     ));
   }
 
-  // ── 5a-ter. Combined fire system rated on its sprinkler point (warning) ───
-  // Round 37 r2 — a combined sprinkler + hydrant system is rated on the
-  // LARGER head at that basis's own flow (never Σ of the two conditions).
-  // When the sprinkler head wins, the rated point carries the small
-  // remote-area flow, so the hose (standpipe) flow at the standpipe head is
-  // not a rated point of the pump — judge-only, never resizes; locatable to
-  // the duty pump.
+  // ── 5a-ter. Combined fire system whose sprinkler sets the head (info) ─────
+  // Reference apartment A1 (supersedes Round 37 r2) — a combined sprinkler +
+  // hydrant pump is rated at the LARGER flow and the LARGER head of the two
+  // bases. When the sprinkler head is the larger, the sprinkler system sets
+  // the pump HEAD while the standpipe sets the FLOW: an INFO naming the split
+  // (both points are covered), judge-only, locatable to the duty pump.
   for (final b in fireBases) {
     final st = b.standpipe;
     if (!b.sprinklerGovernsCombined || st == null) continue;
@@ -1446,13 +1446,17 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final pump = b.dutyPumpId ?? (b.pumpIds.isEmpty ? null : b.pumpIds.first);
     final pumpNode = pump == null ? null : net.nodeById(pump);
     warnings.add(DesignIssue(
-      severity: IssueSeverity.warning,
+      severity: IssueSeverity.info,
       kind: 'combined-fire-sprinkler-governs${pump == null ? '' : ':$pump'}',
       title: str(StringKey.issueCombinedFireSprinklerGovernsTitle),
       message: str.format(StringKey.issueCombinedFireSprinklerGovernsMessage, {
         'sprHead': b.head.meters.toStringAsFixed(1),
-        'sprFlow': b.flow.inLitersPerSecond.toStringAsFixed(1),
-        'hoseFlow': st.requiredFlow.inLitersPerSecond.toStringAsFixed(1),
+        'sprFlow': ref
+            .watch(sprinklerRemoteAreaProvider)
+            .remoteAreaDemand
+            .inLitersPerSecond
+            .toStringAsFixed(1),
+        'hoseFlow': b.flow.inLitersPerSecond.toStringAsFixed(1),
         'hoseHead': st.pumpHead.meters.toStringAsFixed(1),
       }),
       locate: pumpNode == null

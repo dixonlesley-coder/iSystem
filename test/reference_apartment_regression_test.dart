@@ -6,17 +6,23 @@
 // read from the drawing (bore rank, then the mirrored leg, then draw order),
 // so renaming the jockey to sort first or last, or shuffling the node / edge
 // lists, never moves the warning off the duty pump.
+//
+// A1: a combined sprinkler + hydrant fire pump is rated at the larger flow
+// and the larger head of its two bases (every consumer reads that one
+// point); standpipe-only and sprinkler-only systems are unchanged.
 import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_feed.dart' show nodeFedLoadsProvider;
 import 'package:mechx/store/fire_store.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
+import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 
@@ -24,13 +30,15 @@ import '../packages/mechx_engine/test/reference/apartment.dart';
 
 ProviderContainer _load(ReferenceBuilding b, Network net) {
   final c = ProviderContainer();
-  c.read(sheetsControllerProvider.notifier).loadSheets(
-    [
-      for (final s in b.sheets)
-        Sheet(id: s.id, name: s.name, sizePx: const Size(2384, 1684)),
-    ],
-    sheetFloors: {for (final s in b.sheets) s.id: s.floorIndex},
-  );
+  c
+      .read(sheetsControllerProvider.notifier)
+      .loadSheets(
+        [
+          for (final s in b.sheets)
+            Sheet(id: s.id, name: s.name, sizePx: const Size(2384, 1684)),
+        ],
+        sheetFloors: {for (final s in b.sheets) s.id: s.floorIndex},
+      );
   final project = c.read(projectControllerProvider.notifier)
     ..setFloors(b.building.floors);
   for (final MapEntry(:key, :value) in b.calibrations.entries) {
@@ -73,8 +81,10 @@ Network _renamed(Network net, Map<String, String> rename, int shift) {
         sizeOverride: e.sizeOverride,
       ),
   ];
-  List<T> rot<T>(List<T> l) =>
-      [...l.skip(shift % l.length), ...l.take(shift % l.length)];
+  List<T> rot<T>(List<T> l) => [
+    ...l.skip(shift % l.length),
+    ...l.take(shift % l.length),
+  ];
   return Network(nodes: rot(nodes), edges: rot(edges.reversed.toList()));
 }
 
@@ -101,4 +111,88 @@ void main() {
       expect(hits.single.locate?.nodeId, kAptDutyFirePump);
     });
   }
+
+  // A1: a combined sprinkler + hydrant pump is rated at the LARGER flow and
+  // the LARGER head. Standpipe: Class I, 500 gpm = 31.5451 L/s @ 39.7 + 15 +
+  // 70.336 = 125.036 m; sprinkler: 4.7140 L/s @ 41.7 + 5.097 + 80.257 =
+  // 127.054 m ⇒ rated 31.5451 L/s @ 127.054 m.
+  test('A1 — the combined pump covers both points: 31.545 L/s @ 127.054 m', () {
+    final c = _load(apt, apt.network);
+    addTearDown(c.dispose);
+    final b = c.read(fireSystemBasesProvider).single;
+    expect(b.standpipe!.requiredFlow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+    expect(b.standpipe!.pumpHead.meters, closeTo(125.036, 5e-4));
+    expect(b.sprinklerGovernsCombined, isTrue); // the sprinkler sets the HEAD
+    expect(b.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+    expect(b.head.meters, closeTo(127.054, 5e-4));
+    // Hydraulic 9810 x 0.0315451 x 127.054 = 39 317.8 W; shaft / 0.70 =
+    // 56 168.4 W.
+    final d = c.read(firePumpDutyProvider)!;
+    expect(d.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+    expect(d.hydraulicPower.watts, closeTo(39317.8, 0.5));
+    expect(d.shaftPower.watts, closeTo(56168.4, 0.5));
+    // Churn 1.4 x 127.054 = 177.876 m; overload 1.5 Q = 47.318 L/s @ 0.65 H
+    // = 82.585 m, shaft 0.975 x 39 317.8 / 0.595 = 64 428 W ⇒ 75 kW.
+    final r = b.rating;
+    expect(r.ratedFlow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+    expect(r.churn.head.meters, closeTo(177.876, 5e-4));
+    expect(r.overload.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+    expect(r.overload.head.meters, closeTo(82.585, 5e-4));
+    expect(r.overload.shaftPower.watts, closeTo(64428.4, 0.5));
+    expect(r.selectedMotor.inKiloWatts, closeTo(75, 1e-9));
+    expect(d.selectedMotor.inKiloWatts, closeTo(75, 1e-9));
+    // Jockey 1 % = 0.31545 L/s (= the flow its DN25 legs are sized on) @
+    // churn + 5 = 182.876 m.
+    final j = c.read(fireJockeyDutyProvider)!;
+    expect(j.flow.inLitersPerSecond, closeTo(0.31545, 5e-5));
+    expect(j.head.meters, closeTo(182.876, 5e-4));
+    expect(
+      c.read(sizingProvider)['e_fh_FT_FJ']!.flow.inLitersPerSecond,
+      closeTo(j.flow.inLitersPerSecond, 1e-9),
+    );
+    // The MEP load reads the same point: 75 kW / 0.9 = 83 333.3 W.
+    expect(c.read(nodeFedLoadsProvider)['FP']!.input, closeTo(83333.3, 0.05));
+    // The Review names the split as an INFO on the duty pump.
+    final i = c
+        .read(designIssuesProvider)
+        .singleWhere(
+          (x) => x.kind.startsWith('combined-fire-sprinkler-governs'),
+        );
+    expect(i.severity, IssueSeverity.info);
+    expect(i.message, contains('standpipe flow (31.5 L/s)'));
+    // The over-pressure judges read the same rated head (churn 177.876 m).
+    expect(
+      c.read(fireOverPressureProvider).single.check.churnKpa,
+      closeTo(177.876 * 9.81, 0.05),
+    );
+  });
+
+  test('A1 — a standpipe-only and a sprinkler-only system are unchanged', () {
+    bool sprinklerPart(String id) => RegExp(r'^(S\d+|SP\d)$').hasMatch(id);
+    bool hydrantPart(String id) => RegExp(r'^(H\d+|HYD\d+)$').hasMatch(id);
+    Network without(bool Function(String) drop) => Network(
+      nodes: [
+        for (final n in apt.network.nodes)
+          if (!drop(n.id)) n,
+      ],
+      edges: [
+        for (final e in apt.network.edges)
+          if (!drop(e.fromId) && !drop(e.toId)) e,
+      ],
+    );
+    // Standpipe only: rated on the standpipe point, 31.5451 L/s @ 125.036 m.
+    final hose = _load(apt, without(sprinklerPart));
+    addTearDown(hose.dispose);
+    final bh = hose.read(fireSystemBasesProvider).single;
+    expect(bh.sprinklerGovernsCombined, isFalse);
+    expect(bh.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+    expect(bh.head.meters, closeTo(125.036, 5e-4));
+    // Sprinkler only: rated on the sprinkler remote-area flow 4.7140 L/s.
+    final spr = _load(apt, without(hydrantPart));
+    addTearDown(spr.dispose);
+    final bs = spr.read(fireSystemBasesProvider).single;
+    expect(bs.sprinklerOnly, isTrue);
+    expect(bs.sprinklerGovernsCombined, isFalse);
+    expect(bs.flow.inLitersPerSecond, closeTo(4.7140, 5e-4));
+  });
 }

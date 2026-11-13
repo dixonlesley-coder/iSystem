@@ -2238,7 +2238,7 @@ const Map<StringKey, String> _en = {
   StringKey.issueSprinklerHeadTitle:
       'Sprinkler pressure exceeds the fire pump head',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
-      'Combined fire pump rated on the sprinkler point',
+      'Combined fire pump: sprinkler sets the head, standpipe the flow',
   StringKey.issueFireGravityHeadTitle:
       'Gravity fire supply head insufficient',
   StringKey.issueFireOverPressureTitle: 'Fire pump churn over-pressures components',
@@ -2456,10 +2456,10 @@ const Map<StringKey, String> _en = {
       'the standpipe into pressure zones. (// VERIFY vs SNI 03-1745.)',
   StringKey.issueCombinedFireSprinklerGovernsMessage:
       'On this combined sprinkler + hydrant system the sprinkler head '
-      '({sprHead} m) exceeds the standpipe head, so the pump is rated at the '
-      'sprinkler flow ({sprFlow} L/s). The hose flow {hoseFlow} L/s at '
-      '{hoseHead} m is not a rated point - select a pump whose curve covers '
-      'both conditions.',
+      '({sprHead} m) exceeds the standpipe head ({hoseHead} m): the pump is '
+      'rated at the standpipe flow ({hoseFlow} L/s) and the sprinkler head '
+      '({sprHead} m). The sprinkler system ({sprFlow} L/s) sets the pump HEAD, '
+      'the standpipe sets the FLOW; both points are covered.',
   StringKey.issueFireGravityHeadMessage:
       'This fire system is fed by gravity from a roof tank (no fire pump '
       'drawn). The tank leaves only {avail} m of head at the topmost terminal '
@@ -3915,7 +3915,7 @@ const Map<StringKey, String> _id = {
   StringKey.issueSprinklerHeadTitle:
       'Tekanan sprinkler melebihi head pompa kebakaran',
   StringKey.issueCombinedFireSprinklerGovernsTitle:
-      'Pompa kebakaran gabungan diberi rating pada titik sprinkler',
+      'Pompa kebakaran gabungan: sprinkler menentukan head, standpipe debit',
   StringKey.issueFireGravityHeadTitle:
       'Head suplai kebakaran gravitasi tidak cukup',
   StringKey.issueFireOverPressureTitle:
@@ -4142,9 +4142,10 @@ const Map<StringKey, String> _id = {
       'pipa tegak menjadi zona tekanan. (// VERIFY terhadap SNI 03-1745.)',
   StringKey.issueCombinedFireSprinklerGovernsMessage:
       'Pada sistem gabungan sprinkler + hidran ini head sprinkler ({sprHead} m) '
-      'melebihi head standpipe, sehingga pompa diberi rating pada debit '
-      'sprinkler ({sprFlow} L/s). Debit selang {hoseFlow} L/s pada {hoseHead} m '
-      'bukan titik rating - pilih pompa yang kurvanya mencakup kedua kondisi.',
+      'melebihi head standpipe ({hoseHead} m): pompa diberi rating pada debit '
+      'standpipe ({hoseFlow} L/s) dan head sprinkler ({sprHead} m). Sistem '
+      'sprinkler ({sprFlow} L/s) menentukan HEAD pompa, standpipe menentukan '
+      'DEBIT; kedua titik tercakup.',
   StringKey.issueFireGravityHeadMessage:
       'Sistem kebakaran ini disuplai gravitasi dari tangki atap (tanpa pompa '
       'kebakaran tergambar). Tangki hanya menyisakan head {avail} m pada '

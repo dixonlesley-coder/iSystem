@@ -479,12 +479,11 @@ class FireSystemBasis {
   final FirePumpRatingResult? stagedJockeyRating;
   FirePumpRatingResult get jockeyRating => stagedJockeyRating ?? rating;
 
-  /// Round 37 r2 — a COMBINED (sprinkler + hydrant) system whose sprinkler
-  /// HEAD exceeds the standpipe head: the pump is rated on the sprinkler point
-  /// (its small remote-area flow), so the standpipe flow ([standpipe]) at the
-  /// standpipe head is not a rated point — judge-only
-  /// `combined-fire-sprinkler-governs` (the Round-37 'larger head at its own
-  /// flow, never both' residual, surfaced rather than silent).
+  /// Round 37 r2, superseded by reference apartment A1 — a COMBINED
+  /// (sprinkler + hydrant) system whose sprinkler HEAD exceeds the standpipe
+  /// head: the sprinkler sets the pump HEAD while the standpipe ([standpipe])
+  /// sets the FLOW (rated at max flow, max head — both points covered); the
+  /// INFO `combined-fire-sprinkler-governs` names the split.
   final bool sprinklerGovernsCombined;
 
   /// Round 49 (fire-convergence-hose-reel-rated-as-class-i-standpipe) — the
@@ -870,7 +869,16 @@ final fireSystemBasesProvider = Provider<List<FireSystemBasis>>((ref) {
             basisKind = FireTerminalKind.hydrant;
           }
         } else if (sp.head.meters > st.pumpHead.meters + 1e-9) {
-          flow = sp.flow;
+          // Reference apartment A1 (supersedes the Round-37 'larger head at
+          // its own flow') — one pump serving both systems is rated at the
+          // LARGER flow (the standpipe's) and the LARGER head (the
+          // sprinkler's): a centrifugal pump rated on the small remote-area
+          // flow delivers at most 150 % of it, never the hose flow. At the
+          // smaller sprinkler flow the curve gives at least the rated head,
+          // so both points are covered (conservative by the head gap).
+          // `sprinklerGovernsCombined` now means: the sprinkler sets the
+          // HEAD, the standpipe the FLOW.
+          flow = st.requiredFlow;
           head = sp.head;
           friction = sprinklerFriction;
           sprinklerGoverns = true;
