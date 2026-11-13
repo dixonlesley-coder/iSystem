@@ -42,3 +42,38 @@ Shared value class: `packages/mechx_engine/test/reference/reference_building.dar
 ### Backlog (outside scope, not fixed)
 
 _(empty)_
+
+## 2. Shophouse row (ruko 3 lantai, 3 units)
+
+**What it is.**
+- **Building:** three storeys of 4.0 m ("Lantai 1/2/3", index 0/1/2), one sheet per floor at 0.02 m/px. Three identical units A / B / C, built once and replicated at a 6.0 m (300 px) x-offset with an `_A/_B/_C` id suffix.
+- **Cold water (per unit):** water meter → ground tank → transfer pump → riser → roof tank (the fill line); roof tank → booster set → down-riser to a WC + lavatory on every floor and a kitchen sink on Lantai 1. Roof-tank downfeed, private occupancy.
+- **Drainage / vent / rainwater (per unit):** every fixture drains to a 3-storey soil stack and an 8 m building drain; one stack vent from the top junction; one 80 m² roof drain, leader, downpipe and collector.
+- **Room:** one retail room in unit A (5 × 12 m, `RoomType.retail`, the Room tool's seeded 3.7 m ceiling) with two cassette ACs.
+- **Electrical:** one 3-phase 400 V service board `PP Ruko` on a declared 33 000 VA PLN connection, feeding the single-phase sub-boards `Panel Ruko A/B/C` (8 ways each) on L1 / L2 / L3. The pumps, booster sets and ACs are not added by hand: the app's MEP sync mints the "MEP Equipment" board and wires it to `PP Ruko`.
+
+**Files.**
+- Fixture: `packages/mechx_engine/test/reference/shophouse.dart` (`buildShophouse()`, `kShophouseRooms`; a room is an app annotation, so it is plain data drawn by the app test through `roomAreasProvider`).
+- Engine pins: `packages/mechx_engine/test/reference_shophouse_test.dart` (cold-water sizing per edge, Hazen–Williams friction, per-unit gravity field, drainage / vent / rainwater, room cooling, sub-board ways).
+- App pins: `test/reference_shophouse_app_test.dart` (delivered field, zones, transfer pump / booster duties, AC fed loads, Review findings).
+- Regression tests for its review fixes: `packages/mechx_engine/test/reference_shophouse_regression_test.dart` (F2, F3) and `test/reference_shophouse_regression_test.dart` (F1, F4).
+- Run either reference test with `REF_DUMP=1` to print every solved figure.
+
+**Deliberate expected findings:** 3 × `drainage-length` (each unit's KS0 trap arm), 12 × `drainage-laid-steeper`, 3 × `drainage-cleanout`, 5 `// VERIFY` advisories. Expected absent: `unfed-panel`, `unconnected-orphan`, `service-capacity-below-demand`, `downfeed-below-target`.
+
+**Fixed by its review (2026-11-13).**
+- **F1:** units B and C were solved as upfeed "extra supply components" from their ground tanks (no gravity field, RT at −146 kPa, booster sized 36.998 m). Every roof-tank component of a downfeed project is now its own downfeed system (`extraDownfeedTanksProvider`); B = C = A.
+- **F2:** the meter stub WM → GT sized DN15 at 0 L/s. A root tank's mains feed now carries what the tank delivers (DN20).
+- **F3:** the stack vent was sized on the top junction's 5 DFU (DN40). It now carries the stack base's 17 DFU (DN50).
+- **F4:** a cassette AC in a room was flagged `unconnected-orphan`. Cassette and split-wall units need no pipe or duct and are exempt.
+
+### Backlog (outside scope, not fixed)
+
+- **(a) Several separately metered service entrances.** One project with several unfed service boards is not modelled consistently: the service study treats every unfed board as a root (`originPanelIdsOf`, the multi-root daya judge), while the Review flags all but the first as `unfed-panel` (`electricalConnectivityDefects`). This is why the fixture now uses one service board.
+- **(b) Too few / too small AC units.** There is no Review warning when the AC units installed in a room are fewer or smaller than its cooling load (`selectAc` `exceedsRange`). One cassette in this room would need 44 400 BTU/h from a 27 000 BTU/h top unit, silently.
+- **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
+- **(d) Water meter at ceiling level.** A water meter node (role main) sits at its floor's ceiling, which adds a vertical leg to the meter stub.
+- **(e) Transfer pump label.** The transfer pump's electrical source reads "supply pump" (`_sourceFor` maps every pump to `supplyPump`).
+- **(f) Feeder discrimination.** Every feeder way on `PP Ruko` (and the auto-wired MEP feeder) raises `non-selective`: the feeder breaker is already at the largest rung its auto-sized cable protects. The fixture was not tuned to hide it.
+- **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
+- **(h) Orphan exemption ignores the room.** The cassette / split-wall orphan exemption does not check room containment: the engine judge holds no rooms (F4).
