@@ -24,9 +24,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/air_velocity.dart';
 import 'package:mechx_engine/sizing/grille_sizing.dart'
-    show standardGrilleFacesMm;
+    show GrilleApplication, standardGrilleFacesMm;
+import 'package:mechx_engine/standards/ventilation.dart'
+    show SniVentilationProfile;
 import 'package:mechx_engine/units.dart';
 
+import 'annotation_store.dart' show roomAreasProvider, roomTerminalOwnerOf;
 import 'network_store.dart';
 import 'sizing_store.dart';
 
@@ -58,6 +61,14 @@ final airVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
   // Air terminals — face velocity vs the supply/return band. Only judged once
   // the terminal carries an airflow AND has a manually chosen face size.
   //
+  // Backlog F-2 — the band's MAXIMUM is the ONE limit the room's own bank is
+  // sized on (`terminalFaceVelocityMax`): the application of the room that
+  // OWNS the terminal ([roomTerminalOwnerOf]) capped by the kind's band
+  // (supply 3.0, return / exhaust 4.0 m/s). An office return grille is judged
+  // at min(3.0, 4.0) = 3.0 m/s — the value its room's return bank is counted
+  // on — never at the looser 4.0 that let fewer grilles pass than the app
+  // recommends. A terminal in no room is judged against the kind cap.
+  //
   // M7 — a terminal sitting on the SMALLEST standard catalogue face
   // ([kSmallestGrilleFaceMm], 150×150) cannot be made smaller, so a TOO-LOW
   // verdict there is unactionable: it is the terminal analogue of the auto-duct
@@ -66,6 +77,8 @@ final airVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
   // terminal is judged against an OPEN lower bound (min 0) instead — a TOO-HIGH
   // verdict at the smallest face IS actionable (choose a bigger face, or split
   // the airflow across more terminals) and is deliberately still reported.
+  final rooms = ref.watch(roomAreasProvider);
+  const profile = SniVentilationProfile();
   for (final n in net.nodes) {
     final q = n.airflow;
     final w = n.faceWidthMm, h = n.faceHeightMm;
@@ -76,16 +89,22 @@ final airVelocityChecksProvider = Provider<Map<String, VelocityCheck>>((ref) {
         n.component == NodeComponent.exhaustGrille;
     final smallestFace =
         w == kSmallestGrilleFaceMm.$1 && h == kSmallestGrilleFaceMm.$2;
-    if (smallestFace) {
-      out[n.id] = checkVelocityBand(
-        v,
-        min: const Velocity(0),
-        max: isReturn ? kReturnFaceVelocityMax : kSupplyFaceVelocityMax,
-      );
-    } else {
-      out[n.id] =
-          isReturn ? checkReturnFaceVelocity(v) : checkSupplyFaceVelocity(v);
+    final ownerId = rooms.isEmpty ? null : roomTerminalOwnerOf(n, rooms);
+    GrilleApplication? application;
+    if (ownerId != null) {
+      for (final r in rooms) {
+        if (r.id == ownerId) {
+          application = profile.grilleApplicationFor(r.roomType);
+          break;
+        }
+      }
     }
+    out[n.id] = checkTerminalFaceVelocity(
+      v,
+      isReturn ? AirTerminalKind.returnOrExhaust : AirTerminalKind.supply,
+      application: application,
+      openMin: smallestFace,
+    );
   }
   return out;
 });

@@ -156,7 +156,7 @@ void main() {
       for (var i = 2; i <= 6; i++) 'e_sp_SP${i - 1}_SP$i': 3.0,
       'e_sa_FCU1_SD1': 3.0,
       for (var i = 2; i <= 4; i++) 'e_sa_SD${i - 1}_SD$i': 3.0,
-      'e_ra_RG1_FCU1': 2.0,
+      'e_ra_RG1_FCU1': 2.0, 'e_ra_RG2_RG1': 2.0, // backlog F-2
       for (var f = 0; f < 4; f++) ...{
         'e_cw_R${f}_T$f': 3.0,
         for (final b in kOfficeFloorFixtures) ...{
@@ -321,7 +321,7 @@ void main() {
         'motor=${_f(e.selectedMotor.inKiloWatts, 2)} kW '
         'oversized=${e.motorOversized}');
     _p('stamped: SD each=${_f(kOfficeRoomAirflow.inLitersPerSecond / 4, 4)} L/s '
-        'RG1=${_f(kOfficeRoomAirflow.inLitersPerSecond, 4)} L/s');
+        'RG1, RG2 each=${_f(kOfficeRoomAirflow.inLitersPerSecond / 2, 4)} L/s');
     expect(r.airflow.cubicMetersPerSecond, greaterThan(0));
   });
 

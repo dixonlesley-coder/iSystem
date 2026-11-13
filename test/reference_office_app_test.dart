@@ -454,7 +454,7 @@ void _dumpHvac(ProviderContainer c) {
     }
   }
   _p('fixture stamped airflow: SD each ${_f(kOfficeRoomAirflow.inLitersPerSecond / 4, 4)} L/s, '
-      'RG1 ${_f(kOfficeRoomAirflow.inLitersPerSecond, 4)} L/s');
+      'RG1, RG2 each ${_f(kOfficeRoomAirflow.inLitersPerSecond / 2, 4)} L/s');
   _p('## APP air terminals (node | comp | airflow L/s | face mm)');
   for (final n in net.nodes) {
     if (n.airflow == null && n.component != NodeComponent.fcu) continue;
@@ -848,19 +848,25 @@ void main() {
       expect(b.sprinklerPointHeadM, closeTo(chk.requiredHeadM, 1e-12));
     });
 
-    test('HVAC: fan static (supply + return + FCU internal) 121.25 Pa', () {
+    test('HVAC: fan static (supply + return + FCU internal) 122.97 Pa', () {
       // Supply: (0.4462 + 0.4405 + 0.6651 + 1.0342) x 3 x 1.3 + 30 = 40.09;
-      // return 0.4462 x 2 x 1.3 + 30 = 31.16; + 50 internal = 121.25 Pa.
+      // backlog F-2 — two return grilles (RG2 → RG1 → FCU1, 2.0 m each):
+      // return (0.6651 [DN355 at 462.5 L/s] + 0.4462) x 2 x 1.3 + 30 = 32.89
+      // (one grille read 0.4462 x 2 x 1.3 + 30 = 31.16); + 50 internal =
+      // 122.97 Pa (was 121.25). Air 0.925 x 122.97 = 113.75 W; shaft
+      // / 0.65 = 175.00 W; motor still 0.37 kW.
       final fan = c.read(supplyFanDutiesByRootProvider)[kOfficeFcuId]!;
       expect(fan.airflow.cubicMetersPerSecond, closeTo(0.925, 1e-9));
-      expect(fan.totalStaticPressure.pascals, closeTo(121.25, 0.005));
-      expect(fan.airPower.watts, closeTo(112.15, 0.005));
-      expect(fan.shaftPower.watts, closeTo(172.54, 0.005));
+      expect(c.read(airSystemsProvider(ServiceType.returnAir)).single.stat
+          .pascals, closeTo(32.89, 0.005));
+      expect(fan.totalStaticPressure.pascals, closeTo(122.97, 0.005));
+      expect(fan.airPower.watts, closeTo(113.75, 0.005));
+      expect(fan.shaftPower.watts, closeTo(175.00, 0.005));
       expect(fan.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
       final sz = c.read(sizingProvider);
       for (final (id, dn) in [
         ('e_sa_FCU1_SD1', 500), ('e_sa_SD1_SD2', 450), ('e_sa_SD2_SD3', 355),
-        ('e_sa_SD3_SD4', 250), ('e_ra_RG1_FCU1', 500), //
+        ('e_sa_SD3_SD4', 250), ('e_ra_RG1_FCU1', 500), ('e_ra_RG2_RG1', 355),
       ]) {
         expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
       }

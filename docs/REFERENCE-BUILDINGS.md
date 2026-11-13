@@ -89,7 +89,7 @@ _(empty)_
 - **Cold water:** water meter → ground tank GT → UPFEED pump P1 → riser. On every floor a public toilet core: two flush-valve WCs, a urinal (`urinalFlushTank`; no flush-valve urinal type exists) and two lavatories. Occupancy is public.
 - **Drainage / vent / rainwater:** every fixture drains to a 4-storey soil stack and a 10 m building drain; one stack vent; two 150 m² roof drains, a downpipe and a collector.
 - **Fire (separate network):** fire tank FT → fire pump FP. FP feeds a Class I hydrant riser with one `hydrantBox` per floor, and a sprinkler riser with six heads in a line on Lantai 4. Light hazard, K 80.
-- **HVAC (Lantai 2):** one 10 × 15 m office room (Room tool, seeded 3.7 m ceiling, 6 ACH). A ducted FCU feeds four supply diffusers in a line, each stamped with ¼ of the room airflow and a 450 × 300 face; a return grille (600 × 600) carries the whole airflow.
+- **HVAC (Lantai 2):** one 10 × 15 m office room (Room tool, seeded 3.7 m ceiling, 6 ACH). A ducted FCU feeds four supply diffusers in a line, each stamped with ¼ of the room airflow and a 450 × 300 face; two return grilles (600 × 600, RG2 → RG1 → FCU1) each carry half of it (backlog F-2).
 - **Electrical:** one 3-phase 400 V service board `LVMDP` on a declared 164 000 VA PLN connection, feeding four 3-phase floor sub-boards `PP-L1..L4` (lighting, sockets, three 1-phase AC ways each). P1, FP and FCU1 are not added by hand: the MEP sync mints the "MEP Equipment" board and its feeder.
 
 **Files.**
@@ -127,7 +127,8 @@ _(empty)_
 
 ### Backlog closed (2026-11-13)
 
-- **(a) Duct friction basis — backlog F-1.** The room-air equipment estimate now reads the same PU (0.03 mm) roughness the drawn supply duct reads (`defaultDuctRoughnessForService`): Ø500 at 0.925 m³/s, 0.46829 → 0.44620 Pa/m, so the FCU estimate is 50 + 0.44620 x 15 x 1.3 + 30 + 20 = 108.70 Pa (was 109.13). It remains an estimate (15 m assumed run); the drawn-duct fan duty is 121.25 Pa.
+- **Return bank — backlog F-2.** The office return limit is min(3.0, 4.0) = 3.0 m/s for both the room sizing and the checker, so the single 600 x 600 grille carrying 925 L/s (3.21 m/s) is no longer passed: ceil(0.925 / 0.864) = 2 grilles, drawn as RG2 → RG1 → FCU1 (462.5 L/s each, 1.606 m/s; RG2→RG1 DN355). Return static 31.16 → 32.89 Pa, drawn FCU duty 121.25 → 122.97 Pa (0.37 kW).
+- **(a) Duct friction basis — backlog F-1.** The room-air equipment estimate now reads the same PU (0.03 mm) roughness the drawn supply duct reads (`defaultDuctRoughnessForService`): Ø500 at 0.925 m³/s, 0.46829 → 0.44620 Pa/m, so the FCU estimate is 50 + 0.44620 x 15 x 1.3 + 30 + 20 = 108.70 Pa (was 109.13). It remains an estimate (15 m assumed run); the drawn-duct fan duty is 122.97 Pa (121.25 before backlog F-2).
 - **(g) Branch run prints the pump's flow (O1) — backlog A-5.** FP→S0 keeps DN125 but carries the sprinkler's own 4.714 L/s (v 0.384 m/s): sprinkler index friction 37.414 → 36.947 m, sprinkler point 58.211 → 57.744 m; the pump stays on the standpipe point 98.536 m.
 - **(e) Churn over-pressure — backlog A-3.** The churn 1.4 x 98.536 x 9.81 = 1353.3 kPa now sets the PN16 class of the fire pipework downstream of FP (printed on the fire results and BOM fire lines), and the four hose valves (1341.5..1223.8 kPa static) are designated pressure-regulating hose valves set to 690 kPa (info, take-off, riser tag): no warning.
 - **(b) Fire tank volume — backlog A-2.** The fire-water reserve is computed (`fireTankReservesProvider`: rated flow x duration): 31.5451 L/s x 1800 s = 56 781 L. FT has no capacity, so the Review raises the info `fire-tank-capacity-unset:FT` stating it; a capacity below it would warn `fire-tank-undersized:FT`.
@@ -182,7 +183,7 @@ _(empty)_
 - **Hot water (floors 27..29):** an untyped plant heater WH fed from BR29, a hot riser to both lavatories per floor, and the recirculation the app ASSUMES (no return drawn).
 - **Drainage / vent / rainwater:** one 30-storey stack, one stack vent, four 200 m² roof drains.
 - **Fire:** a 120 000 L fire tank → duty / standby / jockey pumps → header FH → two Class I hydrant risers (60 boxes) and a sprinkler riser with six heads on the top floor.
-- **HVAC (index 15):** an AHU office room (rectangular equal-friction ducts, eight diffusers, four return grilles) and an exhausted toilet.
+- **HVAC (index 15):** an AHU office room (rectangular equal-friction ducts, eight diffusers, five return grilles — backlog F-2) and an exhausted toilet.
 - **Electrical:** MV service on a declared 1600 kVA transformer, standby genset (app-recommended), 250 kvar capacitor bank, LVMDP, essential PP-E (three 15 kW lifts, emergency lighting, the MEP board re-fed onto it) and thirty floor boards. The "Feed solved MEP duties" opt-in is on (the undrawn HW recirc pump is a solved duty).
 
 **Files.**
@@ -213,10 +214,13 @@ _(empty)_
 - **(c) Heater cold feed on the valve curve.** The heater's cold make-up (4.5 UBAP) is read on its component's flush-VALVE curve (0.3975 L/s) while the hot side it feeds uses the tank curve (0.2250 L/s) for the same draw.
 - **(d) No MV-side device sizing.** The MV panel (incomer, metering, transformer feeder) is named in the note and drawn as a box, never rated.
 - **(e) No standpipe zoning (partly closed by backlog A-3).** The 60 hose outlets are now designated pressure-regulating hose valves and the warning says to split the single zone (2893.6 kPa > 2413), but the app still cannot model the zones themselves (a zone pump / express riser).
-- **(f) Room return-bank face velocity.** The room's own return bank uses min(application 3.0, 4.0) = 3.0 m/s (five grilles), while the air-velocity checker accepts 4.0 m/s (four grilles at 3.21 m/s).
-- **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 303.93 Pa (304.10 before backlog F-1 put it on the PU roughness); the drawn-duct fan duty gives 326.44 Pa.
+- **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 303.93 Pa (304.10 before backlog F-1 put it on the PU roughness); the drawn-duct fan duty gives 327.68 Pa (326.44 before backlog F-2).
 - **(h) `non-selective` on auto-sized feeders.** PP-Lt1 / PP-Lt2 (50 A vs the 32 A incomers), PP-E and the MEP feeder still raise `non-selective`: their device sits at the largest rung their cable's Iz protects.
 - **(i) Downstream-VD raise always enlarges the feeder.** The T3 raise for a board's cumulative drop always grows the FEEDER (PP-Lt30 ends at 95 mm² over 131 m), even where raising the short final way that owns most of the drop would cost far less. No least-cost split between feeder and final way is attempted.
+
+### Backlog closed (2026-11-13)
+
+- **(f) Room return-bank face velocity — backlog F-2.** One limit per terminal kind and application (`terminalFaceVelocityMax`) for both the room sizing and the checker: office return min(3.0, 4.0) = 3.0 m/s governs. ceil(3.7 / (0.36 x 0.8 x 3.0)) = 5 return grilles; the fixture now draws RG1..RG5 (740 L/s each, 600 x 600, 2.569 m/s), return chain 500x350 / 700x450 / 900x600 / 1000x700 / 1200x700, return static 35.06 → 36.29 Pa, AHU 326.44 → 327.68 Pa (2.2 kW). The toilet's exhaust grilles (retail, 3.5 m/s) are 300 x 150 (3.426 m/s).
 
 ## Drawing review (2026-11-13)
 

@@ -77,7 +77,7 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/air_velocity.dart'
-    show kReturnFaceVelocityMax, kSupplyFaceVelocityMax;
+    show AirTerminalKind, terminalFaceVelocityMax;
 import 'package:mechx_engine/sizing/grille_sizing.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show DuctShape, DuctSizingMethod;
@@ -249,9 +249,9 @@ final FlowRate kTowerOfficeAirflow = towerRoomAir(kTowerRooms[0]).airflow;
 final FlowRate kTowerToiletAirflow = towerRoomAir(kTowerRooms[1]).airflow;
 
 /// The smallest standard face (`standardGrilleFacesMm`) whose face velocity
-/// over the 0.8 free area stays within [maxFace] (the air-velocity checker's
-/// band, `air_velocity.dart`: supply 3.0 m/s, return / exhaust 4.0 m/s);
-/// null when no standard face can carry [q].
+/// over the 0.8 free area stays within [maxFace] (backlog F-2: the ONE limit
+/// the room sizing and the air-velocity checker share,
+/// [towerTerminalLimit]); null when no standard face can carry [q].
 (double, double)? towerTerminalFace(FlowRate q, Velocity maxFace) {
   final faces = [...standardGrilleFacesMm]
     ..sort((a, b) => (a.$1 * a.$2).compareTo(b.$1 * b.$2));
@@ -262,12 +262,23 @@ final FlowRate kTowerToiletAirflow = towerRoomAir(kTowerRooms[1]).airflow;
   return null;
 }
 
+/// Backlog F-2 — the ONE face-velocity limit of a terminal of [kind] in room
+/// [r] (`terminalFaceVelocityMax`: the room type's grille application capped
+/// by the kind's band): office supply 3.0, office return min(3.0, 4.0) =
+/// 3.0, toilet (retail) exhaust min(3.5, 4.0) = 3.5 m/s.
+Velocity towerTerminalLimit(AirTerminalKind kind, TowerRoom r) =>
+    terminalFaceVelocityMax(
+        kind, const SniVentilationProfile().grilleApplicationFor(r.roomType));
+
 /// The fewest equal return grilles whose share a standard face carries
-/// within the 4.0 m/s return band.
+/// within the office's return limit (3.0 m/s since backlog F-2; the 4.0 m/s
+/// band gave 4): ceil(3.7 / (0.36 x 0.8 x 3.0)) = ceil(4.28) = 5.
 int _returnGrilleCount() {
+  final limit =
+      towerTerminalLimit(AirTerminalKind.returnOrExhaust, kTowerRooms[0]);
   for (var n = 1; n < 100; n++) {
     final q = FlowRate(kTowerOfficeAirflow.cubicMetersPerSecond / n);
-    if (towerTerminalFace(q, kReturnFaceVelocityMax) != null) return n;
+    if (towerTerminalFace(q, limit) != null) return n;
   }
   throw StateError('no return grille count');
 }
@@ -284,12 +295,15 @@ final FlowRate kTowerReturnFlow = FlowRate(
     kTowerOfficeAirflow.cubicMetersPerSecond / kTowerReturnGrilles.length);
 final FlowRate kTowerExhaustFlow = FlowRate(
     kTowerToiletAirflow.cubicMetersPerSecond / kTowerExhaustGrilles.length);
-final (double, double) kTowerDiffuserFaceMm =
-    towerTerminalFace(kTowerDiffuserFlow, kSupplyFaceVelocityMax)!;
-final (double, double) kTowerReturnFaceMm =
-    towerTerminalFace(kTowerReturnFlow, kReturnFaceVelocityMax)!;
-final (double, double) kTowerExhaustFaceMm =
-    towerTerminalFace(kTowerExhaustFlow, kReturnFaceVelocityMax)!;
+final (double, double) kTowerDiffuserFaceMm = towerTerminalFace(
+    kTowerDiffuserFlow,
+    towerTerminalLimit(AirTerminalKind.supply, kTowerRooms[0]))!;
+final (double, double) kTowerReturnFaceMm = towerTerminalFace(
+    kTowerReturnFlow,
+    towerTerminalLimit(AirTerminalKind.returnOrExhaust, kTowerRooms[0]))!;
+final (double, double) kTowerExhaustFaceMm = towerTerminalFace(
+    kTowerExhaustFlow,
+    towerTerminalLimit(AirTerminalKind.returnOrExhaust, kTowerRooms[1]))!;
 
 /// The point at distance [ra] px from [a] AND [rb] px from [b] nearest
 /// [near] (two circles' intersection; tangent when h = 0).

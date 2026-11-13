@@ -7,7 +7,8 @@
 // network: fire tank → fire pump → a hydrant riser with one indoor hydrant
 // box per floor and a sprinkler riser with six heads on Lantai 4. HVAC on
 // Lantai 2: one office room with a ducted FCU, four supply diffusers in one
-// line and a return grille. Electrical: a 3-phase service board `LVMDP`
+// line and two return grilles (backlog F-2: the room's recommended return
+// bank). Electrical: a 3-phase service board `LVMDP`
 // (declared 164 000 VA PLN) feeding four 3-phase floor sub-boards PP-L1..L4.
 // Pure Dart (no Flutter import): the engine suite and the app suite
 // (relative import) build exactly this.
@@ -32,8 +33,8 @@
 // plain data ([kOfficeRooms]); its airflow is the SAME `sizeRoomAir` call the
 // app's `RoomArea.sizing` makes (office type, seeded ceiling 4.0 − 0.3 =
 // 3.7 m, the type's default ACH, FCU, default duct settings round /
-// velocity), and each diffuser is stamped with one quarter of it, the return
-// grille with all of it ([kOfficeRoomAirflow]).
+// velocity), and each diffuser is stamped with one quarter of it, each of
+// the two return grilles with half of it ([kOfficeRoomAirflow]).
 library;
 
 import 'dart:math' as math;
@@ -91,6 +92,13 @@ const List<String> kOfficeHydrants = ['HYD0', 'HYD1', 'HYD2', 'HYD3'];
 const String kOfficeFcuId = 'FCU1';
 const List<String> kOfficeDiffusers = ['SD1', 'SD2', 'SD3', 'SD4'];
 const String kOfficeReturnGrilleId = 'RG1';
+
+/// Backlog F-2 — the return grilles RG1, RG2 (RG2 → RG1 → FCU1): the room's
+/// own return bank, counted on the ONE office return limit min(3.0, 4.0) =
+/// 3.0 m/s: ceil(0.925 / (0.36 x 0.8 x 3.0)) = ceil(1.07) = 2. One 600 x 600
+/// grille carrying all 925 L/s read 3.21 m/s, which the 4.0 m/s band passed
+/// but the office limit does not.
+const List<String> kOfficeReturnGrilles = ['RG1', 'RG2'];
 
 /// A room annotation as plain data (as in the shophouse fixture).
 class OfficeRoom {
@@ -153,8 +161,8 @@ final FlowRate kOfficeRoomAirflow = officeRoomAir().airflow;
 
 /// Pass 2 — the stamped terminal faces (mm): each diffuser 450 x 300
 /// (231.25 L/s over 0.135 m² x 0.8 free = 2.14 m/s <= 3.0; 300 x 300 would
-/// be 3.21), the return grille 600 x 600 (925 L/s over 0.36 x 0.8 = 3.21 m/s
-/// <= 4.0).
+/// be 3.21), each return grille 600 x 600 (462.5 L/s over 0.36 x 0.8 =
+/// 1.61 m/s <= 3.0; 600 x 300 would be 3.21).
 const (double, double) kOfficeDiffuserFaceMm = (450, 300);
 const (double, double) kOfficeReturnFaceMm = (600, 600);
 
@@ -241,6 +249,8 @@ Network buildOfficeNetwork() {
       );
 
   final quarter = FlowRate(kOfficeRoomAirflow.cubicMetersPerSecond / 4);
+  final half = FlowRate(
+      kOfficeRoomAirflow.cubicMetersPerSecond / kOfficeReturnGrilles.length);
   final nodes = <NetNode>[
     // ── Cold water: meter → ground tank → upfeed pump → riser base ────────
     node('WM', (100, 1000), floor: 0, component: NodeComponent.waterMeter),
@@ -275,7 +285,7 @@ Network buildOfficeNetwork() {
     for (var i = 1; i <= 6; i++)
       node('SP$i', (1000 + 150.0 * i, 700),
           floor: 3, component: NodeComponent.sprinklerHead),
-    // ── HVAC (Lantai 2): FCU → 4 diffusers in a line; return grille ──────
+    // ── HVAC (Lantai 2): FCU → 4 diffusers in a line; 2 return grilles ───
     node(kOfficeFcuId, (1350, 250), floor: 1, component: NodeComponent.fcu),
     for (var i = 1; i <= 4; i++)
       node('SD$i', (1350, 250 + 150.0 * i),
@@ -283,11 +293,12 @@ Network buildOfficeNetwork() {
           component: NodeComponent.supplyDiffuser,
           airflow: quarter,
           faceMm: kOfficeDiffuserFaceMm),
-    node(kOfficeReturnGrilleId, (1450, 250),
-        floor: 1,
-        component: NodeComponent.returnGrille,
-        airflow: kOfficeRoomAirflow,
-        faceMm: kOfficeReturnFaceMm),
+    for (var i = 1; i <= kOfficeReturnGrilles.length; i++)
+      node(kOfficeReturnGrilles[i - 1], (1350 + 100.0 * i, 250),
+          floor: 1,
+          component: NodeComponent.returnGrille,
+          airflow: half,
+          faceMm: kOfficeReturnFaceMm),
   ];
 
   const cw = ServiceType.coldWater;
@@ -328,10 +339,11 @@ Network buildOfficeNetwork() {
     _edge(sp, 'S3', 'SP1'), // 150 px = 3.0 m
     for (var i = 2; i <= 6; i++) _edge(sp, 'SP${i - 1}', 'SP$i'), // 3.0 m
     // HVAC — supply trunk FCU1 → SD1 → … → SD4 (150 px = 3.0 m each) and the
-    // return duct RG1 → FCU1 (100 px = 2.0 m).
+    // return duct RG2 → RG1 → FCU1 (100 px = 2.0 m each).
     _edge(ServiceType.duct, kOfficeFcuId, 'SD1'),
     for (var i = 2; i <= 4; i++)
       _edge(ServiceType.duct, 'SD${i - 1}', 'SD$i'),
+    _edge(ServiceType.returnAir, 'RG2', kOfficeReturnGrilleId),
     _edge(ServiceType.returnAir, kOfficeReturnGrilleId, kOfficeFcuId),
   ];
   return Network(nodes: nodes, edges: edges);

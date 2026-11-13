@@ -1585,7 +1585,7 @@ void main() {
     });
 
     test('air: 3.7 m3/s office, rectangular ducts on the 5 m/s cap, AHU '
-        '326.44 Pa / 2.2 kW, toilet 0.24667 m3/s', () {
+        '327.68 Pa / 2.2 kW, toilet 0.24667 m3/s', () {
       final sz = c.read(sizingProvider);
       // 600 x 3.7 x 6 / 3600 = 3.7 m3/s; 462.5 L/s per diffuser.
       expect(kTowerOfficeAirflow.inLitersPerSecond, closeTo(3700, 1e-6));
@@ -1601,9 +1601,12 @@ void main() {
         ('e_sa_SD5_SD6', 700, 450, 4.405),
         ('e_sa_SD6_SD7', 600, 350, 4.405),
         ('e_sa_SD7_SD8', 400, 250, 4.625),
-        ('e_ra_RG4_RG3', 600, 350, 4.405),
-        ('e_ra_RG3_RG2', 800, 500, 4.625),
-        ('e_ra_RG2_RG1', 1000, 700, 3.964),
+        // Backlog F-2 — five return grilles (740 L/s each) on the office
+        // return limit min(3.0, 4.0) = 3.0 m/s: ceil(3.7 / 0.864) = 5.
+        ('e_ra_RG5_RG4', 500, 350, 4.229),
+        ('e_ra_RG4_RG3', 700, 450, 4.698),
+        ('e_ra_RG3_RG2', 900, 600, 4.111),
+        ('e_ra_RG2_RG1', 1000, 700, 4.229),
         ('e_ra_RG1_AHU1', 1200, 700, 4.405),
         ('e_ea_EF1_EG1', 300, 200, 4.111),
         ('e_ea_EG1_EG2', 250, 150, 3.289),
@@ -1617,13 +1620,22 @@ void main() {
         sz['e_sa_AHU1_SD1']!.diameter.inMillimeters,
         closeTo(992.95, 0.01),
       );
-      // AHU: 250 internal + 41.39 supply + 35.06 return = 326.44 Pa.
+      // Backlog F-2 — return (PU): (0.4670 + 0.4014 + 0.2267 + 0.2032) x
+      // 3.0 x 1.3 + 0.2013 x 4.7 x 1.3 + 30 = 5.063 + 1.230 + 30 = 36.29 Pa
+      // (four grilles read 35.06). AHU: 250 internal + 41.39 supply + 36.29
+      // return = 327.68 Pa (was 326.44); motor still 2.2 kW.
+      expect(kTowerReturnGrilles, hasLength(5));
+      expect(kTowerReturnFlow.inLitersPerSecond, closeTo(740, 1e-9));
+      expect(kTowerReturnFaceMm, (600.0, 600.0)); // 0.74 / 0.288 = 2.569
+      // Toilet exhaust (retail) limit min(3.5, 4.0) = 3.5 m/s: 123.33 L/s
+      // on 300 x 150 = 3.426 m/s (200 x 200 read 3.854, inside 4.0 only).
+      expect(kTowerExhaustFaceMm, (300.0, 150.0));
       final supply = c.read(airSystemsProvider(ServiceType.duct)).single;
       final ret = c.read(airSystemsProvider(ServiceType.returnAir)).single;
       expect(supply.stat.pascals, closeTo(41.39, 5e-3));
-      expect(ret.stat.pascals, closeTo(35.06, 5e-3));
+      expect(ret.stat.pascals, closeTo(36.29, 5e-3));
       final fan = c.read(supplyFanDutiesByRootProvider)[kTowerAhuId]!;
-      expect(fan.totalStaticPressure.pascals, closeTo(326.44, 5e-3));
+      expect(fan.totalStaticPressure.pascals, closeTo(327.68, 5e-3));
       expect(fan.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
       final ef = c.read(exhaustFanDutiesByRootProvider)[kTowerExhaustFanId]!;
       expect(ef.totalStaticPressure.pascals, closeTo(38.67, 5e-3));

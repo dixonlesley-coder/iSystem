@@ -17,7 +17,10 @@
 /// Pure Dart, zero Flutter imports.
 library;
 
+import 'dart:math' as math;
+
 import '../units.dart';
+import 'grille_sizing.dart' show GrilleApplication, recommendedFaceVelocity;
 
 // ── Recommended velocity bands (general practice — // VERIFY) ─────────────────
 
@@ -43,6 +46,48 @@ const Velocity kReturnFaceVelocityMax = Velocity(4.0);
 /// diffusion requirement), so the min is lower and the max a touch higher.
 const Velocity kExtractDuctVelocityMin = Velocity(2.0);
 const Velocity kExtractDuctVelocityMax = Velocity(6.0);
+
+// ── One face-velocity limit per terminal kind and application ─────────────────
+
+/// The two terminal kinds whose face velocity is judged: a supply diffuser
+/// (incl. a linear diffuser) and a return / exhaust grille.
+enum AirTerminalKind {
+  /// Supply diffuser — throw / draught / noise limited.
+  supply,
+
+  /// Return or exhaust grille — noise limited, no throw requirement.
+  returnOrExhaust,
+}
+
+/// The kind's checker cap: supply [kSupplyFaceVelocityMax] (3.0 m/s), return /
+/// exhaust [kReturnFaceVelocityMax] (4.0 m/s).
+Velocity terminalKindFaceVelocityCap(AirTerminalKind kind) =>
+    kind == AirTerminalKind.supply
+        ? kSupplyFaceVelocityMax
+        : kReturnFaceVelocityMax;
+
+/// Backlog F-2 (2026-11-13) — the ONE maximum face velocity for a terminal of
+/// [kind] serving a room of [application]: the application's noise-driven
+/// table value ([recommendedFaceVelocity]) CAPPED by the kind's checker cap
+/// ([terminalKindFaceVelocityCap]). Room auto-sizing (`sizeRoomAir`) counts
+/// and faces its banks on it AND the air-velocity checker judges a placed
+/// terminal against it ([checkTerminalFaceVelocity]), so the app never
+/// recommends a bank its own checker would pass with fewer terminals (or
+/// condemns one it recommended). A terminal in no room ([application] null)
+/// is judged against the kind cap alone.
+///
+///   office supply  min(3.0, 3.0) = 3.0   office return  min(3.0, 4.0) = 3.0
+///   retail supply  min(3.5, 3.0) = 3.0   retail return  min(3.5, 4.0) = 3.5
+///   bedroom        2.0 / 2.0             industrial     3.0 / 4.0
+Velocity terminalFaceVelocityMax(
+  AirTerminalKind kind,
+  GrilleApplication? application,
+) {
+  final cap = terminalKindFaceVelocityCap(kind);
+  if (application == null) return cap;
+  return Velocity(math.min(recommendedFaceVelocity(application).metersPerSecond,
+      cap.metersPerSecond));
+}
 
 // ── Verdict + result ──────────────────────────────────────────────────────────
 
@@ -148,4 +193,25 @@ VelocityCheck checkReturnFaceVelocity(Velocity actual) => checkVelocityBand(
       actual,
       min: kReturnFaceVelocityMin,
       max: kReturnFaceVelocityMax,
+    );
+
+/// Backlog F-2 — check a terminal's face velocity against the band of its
+/// [kind] whose maximum is the ONE limit [terminalFaceVelocityMax] for the
+/// [application] of the room it serves (the limit the room's own bank is
+/// sized on). [openMin] judges against an open lower bound (0) — the M7
+/// smallest-catalogue-face case, where a too-low verdict has no remedy.
+VelocityCheck checkTerminalFaceVelocity(
+  Velocity actual,
+  AirTerminalKind kind, {
+  GrilleApplication? application,
+  bool openMin = false,
+}) =>
+    checkVelocityBand(
+      actual,
+      min: openMin
+          ? const Velocity(0)
+          : (kind == AirTerminalKind.supply
+              ? kSupplyFaceVelocityMin
+              : kReturnFaceVelocityMin),
+      max: terminalFaceVelocityMax(kind, application),
     );
