@@ -205,6 +205,7 @@ double riserRespaceAt(List<(double, double)> bp, double x) {
   }
   return x;
 }
+
 // When the ladder finds no CLEAR slot (two short branch tags share a midpoint),
 // the placer escapes further out in these steps until it clears, then leaders
 // back — so tags never fuse into one unreadable token (N3). VERIFY: a drafting
@@ -327,6 +328,7 @@ SldSheet buildMechanicalRiserSld({
   Set<String> transferPumpNodeIds = const {},
   ({int lo, int hi})? floorRange,
   MechRiserExtras extras = MechRiserExtras.auto,
+  int? columnPart,
 }) {
   // Drawing review S2 — a LONE floor page whose key circles still overprint
   // gets a taller band (1.5x, then 2x): the page is width-bound, so the
@@ -352,6 +354,7 @@ SldSheet buildMechanicalRiserSld({
         transferPumpNodeIds: transferPumpNodeIds,
         floorRange: floorRange,
         extras: extras,
+        columnPart: columnPart,
         bandH: h,
         pitchScale: p,
       );
@@ -395,6 +398,95 @@ SldSheet riserPitchEscalation({
   return best;
 }
 
+/// Drawing review S4 — the FIXTURE COLUMNS of one floor page moved to part 2
+/// of a two-part column split, or null when the floor has fewer than two
+/// fixture groups. A group is a connected set of fixtures joined through
+/// their plain branch headers (a run neighbour with no component, no riser
+/// and no plant role — a unit tee `K`); a header rides with its group, so a
+/// fixture's cold-water and drainage runs never part. Risers, stacks, plant
+/// and the floor main stay on part 1. Groups are ordered by mean layout x
+/// ([riserLayoutPositions], then the least id) and cut where the two parts'
+/// fixture counts balance best (ties: the earlier cut); everything after the
+/// cut moves. Order-independent. Pure.
+Set<String>? riserColumnSplit(Network network, List<NetNode> pageNodes,
+    {ServiceType? focus}) {
+  final byId = {for (final n in pageNodes) n.id: n};
+  final riserEnds = <String>{
+    for (final e in network.edges)
+      if (e.kind == EdgeKind.riser) ...[e.fromId, e.toId],
+  };
+  bool header(NetNode n) =>
+      n.role == NodeRole.main &&
+      n.component == null &&
+      !riserEnds.contains(n.id);
+  final parent = <String, String>{};
+  String find(String x) {
+    var r = x;
+    while (parent[r] != r) {
+      r = parent[r]!;
+    }
+    return r;
+  }
+
+  void union(String a, String b) {
+    final ra = find(a), rb = find(b);
+    if (ra == rb) return;
+    // The lesser id roots — the grouping never reads list order.
+    if (ra.compareTo(rb) < 0) {
+      parent[rb] = ra;
+    } else {
+      parent[ra] = rb;
+    }
+  }
+
+  for (final n in pageNodes) {
+    if (n.role == NodeRole.fixture && n.component == null) parent[n.id] = n.id;
+  }
+  if (parent.length < 2) return null;
+  for (final e in network.edges) {
+    if (focus != null && e.service != focus) continue;
+    if (e.kind != EdgeKind.run) continue;
+    final a = byId[e.fromId], b = byId[e.toId];
+    if (a == null || b == null) continue;
+    for (final (f, h) in [(a, b), (b, a)]) {
+      if (parent.containsKey(f.id) && f.role == NodeRole.fixture && header(h)) {
+        parent.putIfAbsent(h.id, () => h.id);
+        union(f.id, h.id);
+      }
+    }
+  }
+  final groups = <String, List<String>>{};
+  for (final id in parent.keys) {
+    (groups[find(id)] ??= <String>[]).add(id);
+  }
+  if (groups.length < 2) return null;
+  final normX = riserLayoutPositions(network, focus: focus);
+  int fixtures(List<String> g) =>
+      g.where((id) => byId[id]!.role == NodeRole.fixture).length;
+  double meanX(List<String> g) =>
+      g.map((id) => normX[id] ?? 0.5).reduce((a, b) => a + b) / g.length;
+  final ordered = groups.entries.toList()
+    ..sort((x, y) {
+      final d = meanX(x.value).compareTo(meanX(y.value));
+      return d != 0 ? d : x.key.compareTo(y.key);
+    });
+  final total = ordered.fold<int>(0, (a, g) => a + fixtures(g.value));
+  var bestK = 1;
+  var bestD = 1 << 30;
+  var run = 0;
+  for (var k = 1; k < ordered.length; k++) {
+    run += fixtures(ordered[k - 1].value);
+    final d = (total - 2 * run).abs();
+    if (d < bestD) {
+      bestD = d;
+      bestK = k;
+    }
+  }
+  return {
+    for (final g in ordered.skip(bestK)) ...g.value,
+  };
+}
+
 SldSheet _buildMechanicalRiserSld({
   required Network network,
   Map<String, EdgeSizing> sizing = const {},
@@ -411,6 +503,7 @@ SldSheet _buildMechanicalRiserSld({
   Set<String> transferPumpNodeIds = const {},
   ({int lo, int hi})? floorRange,
   MechRiserExtras extras = MechRiserExtras.auto,
+  int? columnPart,
   required double bandH,
   double pitchScale = 1.0,
 }) {
@@ -440,7 +533,32 @@ SldSheet _buildMechanicalRiserSld({
       floorRange == null ||
       (n.floorIndex >= floorRange.lo && n.floorIndex <= floorRange.hi);
   final allVisible = network.nodes.where(nodeVisible).toList(growable: false);
-  final nodes = allVisible.where(onPage).toList(growable: false);
+  final pageNodes = allVisible.where(onPage).toList(growable: false);
+  // Drawing review S4 — a lone-floor page split by FIXTURE COLUMNS: part 2
+  // draws the moved fixture groups, part 1 everything else ([columnPart]
+  // null / no split ⇒ the whole page, byte-identical).
+  final Set<String>? split =
+      columnPart == null || floorRange == null || floorRange.lo != floorRange.hi
+          ? null
+          : riserColumnSplit(network, pageNodes, focus: focus);
+  final nodes = split == null
+      ? pageNodes
+      : [
+          for (final n in pageNodes)
+            if (split.contains(n.id) == (columnPart == 2)) n,
+        ];
+  final onPart = {for (final n in nodes) n.id};
+  // The runs crossing the cut (one end on each part).
+  final crossing = <String>{
+    if (split != null)
+      for (final e in network.edges)
+        if ((focus == null || e.service == focus) &&
+            e.kind == EdgeKind.run &&
+            pageNodes.any((n) => n.id == e.fromId) &&
+            pageNodes.any((n) => n.id == e.toId) &&
+            split.contains(e.fromId) != split.contains(e.toId))
+          e.id,
+  };
   if (allVisible.isEmpty) {
     return SldSheet(
       prims: const [],
@@ -481,11 +599,16 @@ SldSheet _buildMechanicalRiserSld({
   // carries the building's LOWEST floor (the last page of a set).
   // Drawing review R2 — [extras] `none` leaves them to a continuation sheet
   // (`only`), when the lowest-floor page cannot print at 7 pt with them.
-  final drawExtras = switch (extras) {
-    MechRiserExtras.auto => floorRange == null || loFloor == fullLo,
-    MechRiserExtras.none => false,
-    MechRiserExtras.only => true,
-  };
+  final drawExtras = split != null && columnPart == 2
+      ? false
+      : switch (extras) {
+          MechRiserExtras.auto => floorRange == null || loFloor == fullLo,
+          MechRiserExtras.none => false,
+          MechRiserExtras.only => true,
+        };
+  String floorNameOf(int f) => (building != null && f < building.levelCount)
+      ? building.floors[f].name
+      : 'Level ${f + 1}';
 
   // Band centre y for a floor index — highest floor at the TOP.
   double bandTop(int floorIndex) =>
@@ -548,8 +671,7 @@ SldSheet _buildMechanicalRiserSld({
   // Drawing review R2 — the band's node columns re-spaced over the free
   // width (NTS): a toilet group compressed into a few cm of plan no longer
   // stacks its stubs under each other's tags while the sheet stays empty.
-  final respace = riserColumnRespace(
-      [for (final p in posById.values) p.dx],
+  final respace = riserColumnRespace([for (final p in posById.values) p.dx],
       lo: _gutterW + _sidePad,
       hi: _gutterW + _drawW - _sidePad,
       minPitch: kMechRiserMinColumnPitch * pitchScale,
@@ -564,6 +686,24 @@ SldSheet _buildMechanicalRiserSld({
     posById[id] = Offset(riserRespaceAt(respace, p.dx), p.dy);
   }
   double pageX(String nodeId) => riserRespaceAt(respace, placeX(nodeId));
+  // Drawing review S4 — part 2 of a column split: each part-1 end of a run
+  // crossing the cut becomes a PHANTOM at the band's left edge (no symbol,
+  // a 'LANJUTAN DARI' mark), so the moved branches still read from it.
+  final phantoms = <String>{};
+  if (split != null && columnPart == 2) {
+    for (final e in network.edges) {
+      if (!crossing.contains(e.id)) continue;
+      final id = onPart.contains(e.fromId) ? e.toId : e.fromId;
+      if (!phantoms.add(id)) continue;
+      final n = pageNodes.firstWhere((m) => m.id == id);
+      posById[id] = Offset(_gutterW + 6, posOf(n).dy);
+    }
+  }
+  // An edge drawn on THIS sheet: both ends drawn, and a phantom only through
+  // a crossing run.
+  bool drawsEdge(NetEdge e) =>
+      !(phantoms.contains(e.fromId) || phantoms.contains(e.toId)) ||
+      crossing.contains(e.id);
 
   // ── Round 21 (riser-drafting-2-4) — branch fan-out from one header ─────────
   // Runs out of one node on the same lane were collinear (WC / lavatory /
@@ -577,6 +717,7 @@ SldSheet _buildMechanicalRiserSld({
     if (e.kind != EdgeKind.run) continue;
     if (focus != null && e.service != focus) continue;
     if (posById[e.fromId] == null || posById[e.toId] == null) continue;
+    if (!drawsEdge(e)) continue;
     final lane = edgeLanes[e.id] ?? 0;
     (siblings['${e.fromId}|${e.service.index}|$lane'] ??= <NetEdge>[]).add(e);
   }
@@ -718,6 +859,10 @@ SldSheet _buildMechanicalRiserSld({
       placer.reserve(
           SldLabel(8, top + 32, fflLabel(ffl), size: 8, role: SldRole.source));
     }
+    if (split != null) {
+      placer.reserve(
+          SldLabel(8, top + 46, 'BAGIAN $columnPart/2', size: 8, bold: true));
+    }
   }
 
   // ── Per-floor branch fan-out: the fixtures each floor distributes ───────────
@@ -725,8 +870,7 @@ SldSheet _buildMechanicalRiserSld({
   // Round 34 — counted over the FULL network: collapsed terminals still
   // appear here (the one place they are stated).
   final fanOuts = floorFanOuts(fullNetwork,
-      visibleNodeIds: fullVisible,
-      labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
+      visibleNodeIds: fullVisible, labelOf: (n) => _nodeLabel(n) ?? 'Fixture');
   const fanX = _gutterW + _drawW + 12;
   for (final fo in fanOuts) {
     if (fo.floorIndex < loFloor || fo.floorIndex > hiFloor) continue;
@@ -898,6 +1042,7 @@ SldSheet _buildMechanicalRiserSld({
     final a = posById[e.fromId];
     final b = posById[e.toId];
     if (a == null || b == null) continue;
+    if (!drawsEdge(e)) continue;
     final y = runY(e, a);
     if ((y - a.dy).abs() > 0.5) placer.reserveLine(a.dx, a.dy, a.dx, y);
     if ((b.dx - a.dx).abs() >= 0.5) placer.reserveLine(a.dx, y, b.dx, y);
@@ -928,7 +1073,7 @@ SldSheet _buildMechanicalRiserSld({
     // A vent riser reaching the TOP floor terminates through the roof: a short
     // dashed stub above the band + the 'VTR' code.
     for (final id in ventTopTerminalIds(network, topFloor: topFloor)) {
-      final p = posById[id];
+      final p = phantoms.contains(id) ? null : posById[id];
       if (p == null) continue;
       final stubTop = roofBand ? roofLineY - 10 : bandTop(hiFloor) - 10;
       prims.add(SldLine(p.dx, p.dy, p.dx, stubTop,
@@ -952,7 +1097,7 @@ SldSheet _buildMechanicalRiserSld({
       focus == ServiceType.drainage) {
     // The drawn vent-to-soil tee: a short bar across the shared junction.
     for (final id in ventSoilTeeNodeIds(network)) {
-      final p = posById[id];
+      final p = phantoms.contains(id) ? null : posById[id];
       if (p == null) continue;
       prims.add(SldLine(p.dx - 9, p.dy, p.dx + 9, p.dy,
           weight: SldWeight.medium,
@@ -964,7 +1109,7 @@ SldSheet _buildMechanicalRiserSld({
     // cleanouts the engineer actually drew (a missing one is an ADVISORY in the
     // Review panel, never fabricated here).
     for (final id in cleanoutAtStackBaseIds(network)) {
-      final p = posById[id];
+      final p = phantoms.contains(id) ? null : posById[id];
       if (p == null) continue;
       placer.reserve(SldLabel(
           p.dx - _symbolSize / 2 - 2, p.dy - _symbolSize / 2 - 4, 'CO',
@@ -983,18 +1128,20 @@ SldSheet _buildMechanicalRiserSld({
       focus == ServiceType.drainage ||
       focus == ServiceType.rainwater) {
     final exitId = _drainageExitNodeId(network);
-    final p = exitId == null ? null : posById[exitId];
+    final p =
+        exitId == null || phantoms.contains(exitId) ? null : posById[exitId];
     if (p != null) {
       final gy = p.dy + _symbolSize;
       prims.addAll(planSewerTerminusPrims(cx: p.dx, cy: gy, size: _symbolSize));
       // Round 15 — the terminus glyph is ink a node tag must not print over.
       placer.reserveBox(p.dx - _symbolSize / 2, gy - _symbolSize / 2,
           p.dx + _symbolSize / 2, gy + _symbolSize / 2);
-      placer.reserve(SldLabel(
-          p.dx + _symbolSize / 2 + 4, gy + 3, 'KE SALURAN PEMBUANGAN',
-          // Drawing-review D4 — 8 units like the tags, so it still plots at
-          // >= 7 pt on a page fitted below 1:1.
-          size: 8, bold: true));
+      placer.reserve(
+          SldLabel(p.dx + _symbolSize / 2 + 4, gy + 3, 'KE SALURAN PEMBUANGAN',
+              // Drawing-review D4 — 8 units like the tags, so it still plots at
+              // >= 7 pt on a page fitted below 1:1.
+              size: 8,
+              bold: true));
     }
   }
 
@@ -1081,6 +1228,7 @@ SldSheet _buildMechanicalRiserSld({
       final a = posById[e.fromId];
       final b = posById[e.toId];
       final layer = riserServiceCode(e.service);
+      if (!drawsEdge(e)) continue;
       if (a == null && b == null) {
         // A pass-through: both ends visible on OTHER pages, one above and one
         // below this page's floor range.
@@ -1110,6 +1258,11 @@ SldSheet _buildMechanicalRiserSld({
         final here = a ?? b!;
         final farNode = byId[a == null ? e.fromId : e.toId];
         if (farNode == null) continue;
+        // Drawing review S4 — a far end on THIS floor is on the other column
+        // part (its run is marked below), never a floor continuation.
+        if (farNode.floorIndex >= loFloor && farNode.floorIndex <= hiFloor) {
+          continue;
+        }
         final up = farNode.floorIndex > hiFloor;
         final edgeY = up ? topEdgeY : bottomEdgeY;
         prims.add(SldLine(here.dx, here.dy, here.dx, edgeY,
@@ -1130,6 +1283,73 @@ SldSheet _buildMechanicalRiserSld({
     }
   }
 
+  // ── Drawing review S4 — the column-split CUT marks ──────────────────────────
+  // Part 1: each part-1 node whose runs cross the cut gets ONE stub per
+  // service lane to the band's right edge, marked 'LANJUT KE <floor> -
+  // BAGIAN 2' (the runs' tags ride part 2, where they are drawn whole).
+  // Part 2: each phantom names the sheet it continues from.
+  if (split != null) {
+    final floor = floorNameOf(loFloor);
+    if (columnPart == 2) {
+      final ids = phantoms.toList()..sort();
+      for (final id in ids) {
+        final p = posById[id]!;
+        final text = 'LANJUTAN DARI $floor - BAGIAN 1';
+        placer.place(p.dx + 4, p.dy - 4, text,
+            size: 8,
+            bold: true,
+            anchorX: p.dx,
+            anchorY: p.dy,
+            candidates: _runLadder(text));
+      }
+    } else {
+      const xEdge = _gutterW + _drawW - 4;
+      final stubs = <String, (Offset, double, NetEdge)>{};
+      for (final e in network.edges) {
+        if (!crossing.contains(e.id)) continue;
+        final id = onPart.contains(e.fromId) ? e.fromId : e.toId;
+        final a = posById[id]!;
+        final y = a.dy + (edgeLanes[e.id] ?? 0) * lanePitch;
+        final k = '$id|${e.service.index}|${edgeLanes[e.id] ?? 0}';
+        final prev = stubs[k];
+        if (prev == null || e.id.compareTo(prev.$3.id) < 0) {
+          stubs[k] = (a, y, e);
+        }
+      }
+      final keys = stubs.keys.toList()..sort();
+      for (final k in keys) {
+        final (a, y, e) = stubs[k]!;
+        final role = _edgeRole(network, e);
+        final layer = riserServiceCode(e.service);
+        final dashed = e.service == ServiceType.vent;
+        if ((y - a.dy).abs() > 0.5) {
+          prims.add(SldLine(a.dx, a.dy, a.dx, y,
+              weight: SldWeight.medium,
+              role: role,
+              layer: layer,
+              dashed: dashed));
+          placer.reserveLine(a.dx, a.dy, a.dx, y);
+        }
+        prims.add(SldLine(a.dx, y, xEdge, y,
+            weight: SldWeight.medium,
+            role: role,
+            layer: layer,
+            dashed: dashed));
+        placer.reserveLine(a.dx, y, xEdge, y);
+      }
+      for (final k in keys) {
+        final (_, y, _) = stubs[k]!;
+        final text = 'LANJUT KE $floor - BAGIAN 2';
+        placer.place(xEdge - _labelWidth(text, 8), y - 6, text,
+            size: 8,
+            bold: true,
+            anchorX: xEdge,
+            anchorY: y,
+            candidates: _runLadder(text));
+      }
+    }
+  }
+
   // ── Edges: runs + risers with the SIZE-SERVICE-MATERIAL[-FUNCTION] tag ───────
   // B4: every pipe run/riser is MEDIUM weight (vs the thin datum), carries its
   // service code as the CAD layer, and the vent service draws DASHED.
@@ -1138,6 +1358,7 @@ SldSheet _buildMechanicalRiserSld({
     final a = posById[e.fromId];
     final b = posById[e.toId];
     if (a == null || b == null) continue;
+    if (!drawsEdge(e)) continue;
     final role = _edgeRole(network, e);
     final layer = riserServiceCode(e.service);
     final dashed = e.service == ServiceType.vent;
@@ -1834,7 +2055,10 @@ bool _emitPlantDetail(
 
   if (!hasRoof && !hasGround && !hasPump) return false;
 
-  prims.add(SldRect(left, top, _plantW,
+  prims.add(SldRect(
+      left,
+      top,
+      _plantW,
       _plantDetailH(network,
           ground: hasGround, pump: hasPump, include: moverVisible),
       weight: SldWeight.thin));
@@ -2026,9 +2250,8 @@ double _plantDetailH(Network network,
     required bool pump,
     bool Function(NetNode)? include}) {
   final groundBelowTrain = ground && pump;
-  final movers = _plantMovers(network)
-      .where((m) => include == null || include(m))
-      .length;
+  final movers =
+      _plantMovers(network).where((m) => include == null || include(m)).length;
   return _plantH +
       math.max(0, movers - 2) * 12.0 +
       (groundBelowTrain ? 36.0 : 0.0);
@@ -2434,8 +2657,8 @@ class _LabelPlacer {
     // crossings (9 either way) but a junction tag pushed into a slot that
     // trapped its neighbour, striking a tag through with a leader — so a
     // leader leaving its junction over the adjacent run may still clear.
-    final longLeader = math.sqrt((ex - anchorX) * (ex - anchorX) +
-            (ey - anchorY) * (ey - anchorY)) >
+    final longLeader = math.sqrt(
+            (ex - anchorX) * (ex - anchorX) + (ey - anchorY) * (ey - anchorY)) >
         _kLongLeader;
     var total = 0.0;
     var soft = 0.0;
@@ -2654,7 +2877,8 @@ class _LabelPlacer {
             if (c > tol) continue;
             final ex = cx - dx / d * r, ey = cy - dy / d * r;
             for (final (x1, y1, x2, y2) in _leaders) {
-              if (_segmentsCrossProper(anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
+              if (_segmentsCrossProper(
+                  anchorX, anchorY, ex, ey, x1, y1, x2, y2)) {
                 c += size;
               }
             }
@@ -2697,7 +2921,8 @@ class _LabelPlacer {
     }
     prims
       ..add(SldCircle(cx, cy, r, weight: SldWeight.thin, role: role))
-      ..add(SldLabel(cx - w / 2, cy + 0.36 * size, num, size: size, role: role));
+      ..add(
+          SldLabel(cx - w / 2, cy + 0.36 * size, num, size: size, role: role));
   }
 
   /// The key-table rows in key order (drawing-review D5).
@@ -2888,7 +3113,8 @@ class _LabelPlacer {
     // Drawing-review D5 — no legal slot: KEY the element instead of parking
     // its text far away / over another tag.
     if (!cleared) {
-      _placeKey(text, size: size, role: role, anchorX: anchorX, anchorY: anchorY);
+      _placeKey(text,
+          size: size, role: role, anchorX: anchorX, anchorY: anchorY);
       return;
     }
     final lx = defaultX + best.dx;
@@ -2916,8 +3142,8 @@ class _LabelPlacer {
 }
 
 /// Proper crossing of two segments (shared endpoints / touches do not count).
-bool _segmentsCrossProper(double ax, double ay, double bx, double by,
-    double cx, double cy, double dx, double dy) {
+bool _segmentsCrossProper(double ax, double ay, double bx, double by, double cx,
+    double cy, double dx, double dy) {
   double o(double px, double py, double qx, double qy, double rx, double ry) =>
       (qx - px) * (ry - py) - (qy - py) * (rx - px);
   final d1 = o(cx, cy, dx, dy, ax, ay), d2 = o(cx, cy, dx, dy, bx, by);
@@ -2949,10 +3175,15 @@ double emitMechRiserKeyTable(
   }
 
   final cells = [
-    for (final r in rows) ['${r.key}', ...() {
-      final (a, b) = split(r.text);
-      return [a, b];
-    }(), r.levels],
+    for (final r in rows)
+      [
+        '${r.key}',
+        ...() {
+          final (a, b) = split(r.text);
+          return [a, b];
+        }(),
+        r.levels
+      ],
   ];
   const heads = ['KEY', 'SIZE-SERVICE-MATERIAL / TAG', 'LENGTH', 'LEVEL'];
   final colW = [
@@ -2976,7 +3207,8 @@ double emitMechRiserKeyTable(
     var x = x0;
     for (var c = 0; c < 4; c++) {
       if (c > 0) prims.add(SldLine(x, y0, x, y0 + h));
-      prims.add(SldLabel(x + 4, y0 + pitch - 2, heads[c], size: size, bold: true));
+      prims.add(
+          SldLabel(x + 4, y0 + pitch - 2, heads[c], size: size, bold: true));
       for (var r = 0; r < slice.length; r++) {
         prims.add(
             SldLabel(x + 4, y0 + (r + 2) * pitch - 2, slice[r][c], size: size));

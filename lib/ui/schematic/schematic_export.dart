@@ -83,9 +83,10 @@ String _supplyNote(Network net, FeedStrategy feed) {
   // gravity downfeed), the shared engine `riserFeedNote`.
   final parts = <String>[
     riserFeedNote(
-        downfeed: feed == FeedStrategy.downfeed,
-        hasRoofTank: hasRoofTank,
-        hasPump: hasPump),
+      downfeed: feed == FeedStrategy.downfeed,
+      hasRoofTank: hasRoofTank,
+      hasPump: hasPump,
+    ),
   ];
   if (hasRoofTank) parts.add('roof tank');
   if (hasGroundTank) parts.add('ground tank');
@@ -122,11 +123,12 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
   final eq = drawnWaterFeedEquipment(net);
   final lines = <String>[
     riserFeedNote(
-        downfeed: feed == FeedStrategy.downfeed,
-        hasRoofTank: eq.hasRoofTank,
-        hasPump: eq.hasPump,
-        hasWaterMeter: eq.hasWaterMeter,
-        detailed: true),
+      downfeed: feed == FeedStrategy.downfeed,
+      hasRoofTank: eq.hasRoofTank,
+      hasPump: eq.hasPump,
+      hasWaterMeter: eq.hasWaterMeter,
+      detailed: true,
+    ),
   ];
   final roofM3 = tankM3(NodeComponent.roofTank);
   if (roofM3 != null) lines.add('Roof tank: $roofM3');
@@ -136,15 +138,20 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
   // input's own label in the active locale (was the hard-coded English enum
   // name 'Private', unlike the 'Residential' the engineer picked).
   final str = MechXStringsData(ref.read(localeProvider));
-  lines.add(str.format(StringKey.schematicNotesOccupancy,
-      {'label': str(occupancyLabelKey(occupancy))}));
+  lines.add(
+    str.format(StringKey.schematicNotesOccupancy, {
+      'label': str(occupancyLabelKey(occupancy)),
+    }),
+  );
   // Peak design flow is upfeed-only (supplyPeakFlowProvider null on
   // downfeed) and is the BUILDING trunk flow, never an inline booster's
   // partial flow (Round 15 r2). Never
   // fabricate a m3/day figure when no pump flow exists.
   if (peakFlow != null) {
-    lines.add('Peak design flow: '
-        '${peakFlow.inLitersPerSecond.toStringAsFixed(1)} L/s');
+    lines.add(
+      'Peak design flow: '
+      '${peakFlow.inLitersPerSecond.toStringAsFixed(1)} L/s',
+    );
   }
   return lines;
 }
@@ -158,9 +165,13 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
 ///
 /// Round 21 (riser-drafting-2-2) — [floorRange] builds one PAGE of a
 /// paginated riser ([buildLiveRiserPages]).
-SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
-    {({int lo, int hi})? floorRange,
-    MechRiserExtras extras = MechRiserExtras.auto}) {
+SldSheet buildLiveRiserSheet(
+  WidgetRef ref,
+  ServiceType? focus, {
+  ({int lo, int hi})? floorRange,
+  MechRiserExtras extras = MechRiserExtras.auto,
+  int? columnPart,
+}) {
   final project = ref.read(projectControllerProvider);
   final network = ref.read(networkControllerProvider).network;
   final sizing = ref.read(sizingProvider);
@@ -204,6 +215,7 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
     hotWaterRecirc: ref.read(hotWaterAssumedReturnProvider),
     floorRange: floorRange,
     extras: extras,
+    columnPart: columnPart,
   );
 }
 
@@ -217,23 +229,46 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
 /// stamps (the submittal uses the register title, which wraps to a taller
 /// title block): measured with a shorter one, a page passed the 7 pt check
 /// here and printed at 6.86 pt on the issued sheet.
-List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus,
-    {String? diagramTitle, DrawingChrome? chrome, String? projectName}) {
+List<SldSheet> buildLiveRiserPages(
+  WidgetRef ref,
+  ServiceType? focus, {
+  String? diagramTitle,
+  DrawingChrome? chrome,
+  String? projectName,
+}) {
   final project = ref.read(projectControllerProvider);
   return paginatedRiserSheets(
     build: (r) => buildLiveRiserSheet(ref, focus, floorRange: r),
     // Drawing review R2 — the exact 7 pt floor: the lowest-floor page may
     // shed its extras to a continuation sheet.
-    buildWithoutExtras: (r) => buildLiveRiserSheet(ref, focus,
-        floorRange: r, extras: MechRiserExtras.none),
-    buildExtrasOnly: () => buildLiveRiserSheet(ref, focus,
-        floorRange: (lo: 0, hi: 0), extras: MechRiserExtras.only),
+    buildWithoutExtras: (r) => buildLiveRiserSheet(
+      ref,
+      focus,
+      floorRange: r,
+      extras: MechRiserExtras.none,
+    ),
+    buildExtrasOnly: () => buildLiveRiserSheet(
+      ref,
+      focus,
+      floorRange: (lo: 0, hi: 0),
+      extras: MechRiserExtras.only,
+    ),
+    // Drawing review S4 — a width-bound lone floor splits its fixture
+    // columns over two pages.
+    buildColumnPart: (r, part, bare) => buildLiveRiserSheet(
+      ref,
+      focus,
+      floorRange: r,
+      columnPart: part,
+      extras: bare ? MechRiserExtras.none : MechRiserExtras.auto,
+    ),
     levelCount: project.building.levelCount,
     // Drawing review R2 — measured with the chrome + project name the sheet
     // is ISSUED with (a taller issued title block printed a page the
     // paginator passed at 7 pt at 6.78 pt): the 7 pt floor is exact.
     chrome: chrome ?? _riserChrome(ref, index: 1, total: 1),
-    projectName: projectName ??
+    projectName:
+        projectName ??
         (project.name.isEmpty ? 'Untitled project' : project.name),
     diagramTitle: diagramTitle ?? riserDiagramTitle(focus),
   );
@@ -248,8 +283,11 @@ List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus,
 /// every sheet; a manual `documentNumber` becomes the PREFIX
 /// (`<documentNumber>-<series><index>`, e.g. `BRI-MEP-01-M-201`) — only the
 /// cover keeps the bare base.
-DrawingChrome _riserChrome(WidgetRef ref,
-    {required int index, required int total}) {
+DrawingChrome _riserChrome(
+  WidgetRef ref, {
+  required int index,
+  required int total,
+}) {
   final doc = ref.read(documentControlProvider);
   return DrawingChrome(
     sheetIndex: index,
@@ -297,15 +335,19 @@ Future<void> exportMechanicalRiserPdf(WidgetRef ref, ServiceType? focus) =>
                   for (final _ in pages) riserDiagramTitle(focus),
                 ],
                 chrome: _riserChrome(ref, index: 1, total: pages.length),
-                projectName:
-                    project.name.isEmpty ? 'Untitled project' : project.name,
+                projectName: project.name.isEmpty
+                    ? 'Untitled project'
+                    : project.name,
               );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final full = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleSldPdf),
-            fileName: '$base-riser-sld.pdf',
-            ext: 'pdf');
+        final full = await pickExportSave(
+          ref,
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+            StringKey.exportTitleSldPdf,
+          ),
+          fileName: '$base-riser-sld.pdf',
+          ext: 'pdf',
+        );
         if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
@@ -332,11 +374,14 @@ Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
           layers: SldDxfLayers.forRiser(focus),
         );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final full = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleSldDxf),
-            fileName: '$base-riser-sld.dxf',
-            ext: 'dxf');
+        final full = await pickExportSave(
+          ref,
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+            StringKey.exportTitleSldDxf,
+          ),
+          fileName: '$base-riser-sld.dxf',
+          ext: 'dxf',
+        );
         if (full == null) return false;
         await File(full).writeAsString(dxf);
         return true;
@@ -349,16 +394,16 @@ Future<void> exportMechanicalRiserDxf(WidgetRef ref, ServiceType? focus) =>
 /// at least one drawn edge, in the canonical draw order. Public for the export
 /// wiring test.
 List<ServiceType> riserSetServices(Network net) => [
-      for (final s in kDrawServices)
-        if (net.edges.any((e) => e.service == s)) s,
-    ];
+  for (final s in kDrawServices)
+    if (net.edges.any((e) => e.service == s)) s,
+];
 
 /// The set's sheet sequence: the combined all-systems sheet first, then one
 /// focused sheet per service actually drawn.
 List<ServiceType?> _riserSetFoci(WidgetRef ref) => [
-      null,
-      ...riserSetServices(ref.read(networkControllerProvider).network),
-    ];
+  null,
+  ...riserSetServices(ref.read(networkControllerProvider).network),
+];
 
 /// Export the riser drawing SET as ONE multi-page vector PDF: the combined
 /// sheet, then one sheet per drawn system, each page stamped with its own
@@ -366,8 +411,7 @@ List<ServiceType?> _riserSetFoci(WidgetRef ref) => [
 /// the counter per page) over the shared document-control chrome. [focus] is
 /// accepted for menu-signature parity but ignored — the set always covers all
 /// systems. Routed through the shared export guard + "Exported ..." feedback.
-Future<void> exportMechanicalRiserSetPdf(
-        WidgetRef ref, ServiceType? focus) =>
+Future<void> exportMechanicalRiserSetPdf(WidgetRef ref, ServiceType? focus) =>
     runExportGuarded(
       ref,
       name: 'riser drawing set',
@@ -384,15 +428,17 @@ Future<void> exportMechanicalRiserSetPdf(
           title: 'iSystem mechanical riser drawing set',
           diagramTitles: [for (final p in paged) riserDiagramTitle(p.$1)],
           chrome: _riserChrome(ref, index: 1, total: paged.length),
-          projectName:
-              project.name.isEmpty ? 'Untitled project' : project.name,
+          projectName: project.name.isEmpty ? 'Untitled project' : project.name,
         );
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final full = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleRiserSetPdf),
-            fileName: '$base-riser-set.pdf',
-            ext: 'pdf');
+        final full = await pickExportSave(
+          ref,
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+            StringKey.exportTitleRiserSetPdf,
+          ),
+          fileName: '$base-riser-set.pdf',
+          ext: 'pdf',
+        );
         if (full == null) return false;
         await File(full).writeAsBytes(bytes);
         return true;
@@ -404,8 +450,7 @@ Future<void> exportMechanicalRiserSetPdf(
 /// `base-ALL.dxf` (combined) then `base-CW.dxf`, `base-D.dxf`, ... — each file
 /// carrying its own `Sheet i of t` document-control chrome. [focus] is accepted
 /// for menu-signature parity but ignored.
-Future<void> exportMechanicalRiserSetDxf(
-        WidgetRef ref, ServiceType? focus) =>
+Future<void> exportMechanicalRiserSetDxf(WidgetRef ref, ServiceType? focus) =>
     runExportGuarded(
       ref,
       name: 'riser drawing set',
@@ -413,16 +458,20 @@ Future<void> exportMechanicalRiserSetDxf(
         final foci = _riserSetFoci(ref);
         final project = ref.read(projectControllerProvider);
         final base = project.name.isEmpty ? 'mechanical' : project.name;
-        final path = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleRiserSetDxf),
-            fileName: '$base-riser-set.dxf',
-            ext: 'dxf');
+        final path = await pickExportSave(
+          ref,
+          dialogTitle: MechXStringsData(ref.read(localeProvider))(
+            StringKey.exportTitleRiserSetDxf,
+          ),
+          fileName: '$base-riser-set.dxf',
+          ext: 'dxf',
+        );
         if (path == null) return false;
         // The picked path is the SERIES base name; each sheet writes beside it
         // with its system suffix, so strip the normalized extension back off.
-        final stem =
-            path.endsWith('.dxf') ? path.substring(0, path.length - 4) : path;
+        final stem = path.endsWith('.dxf')
+            ? path.substring(0, path.length - 4)
+            : path;
         for (var i = 0; i < foci.length; i++) {
           final f = foci[i];
           final code = f == null ? 'ALL' : riserServiceCode(f);

@@ -50,6 +50,8 @@ List<SldSheet> paginatedRiserSheets({
   String diagramTitle = 'SINGLE-LINE DIAGRAM',
   SldSheet Function(({int lo, int hi}) range)? buildWithoutExtras,
   SldSheet Function()? buildExtrasOnly,
+  SldSheet Function(({int lo, int hi}) range, int part, bool withoutExtras)?
+      buildColumnPart,
 }) {
   double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
@@ -110,8 +112,7 @@ List<SldSheet> paginatedRiserSheets({
   // floor alone targets its own single-floor size (the 0.95 slack let a
   // multi-floor page print at 6.78 pt where the floor alone printed larger).
   double floorTarget(int f) =>
-      (singleMin[f] < kMinPlotLabelPt ? singleMin[f] : kMinPlotLabelPt) -
-      1e-9;
+      (singleMin[f] < kMinPlotLabelPt ? singleMin[f] : kMinPlotLabelPt) - 1e-9;
 
   final pages = <SldSheet>[];
   final ranges = <({int lo, int hi})>[];
@@ -148,9 +149,32 @@ List<SldSheet> paginatedRiserSheets({
           i, i + 1, [for (var f = r.lo; f <= r.hi; f++) (lo: f, hi: f)]);
     }
   }
+  // Drawing review S4 — a ONE-floor page still overprinting after the pitch
+  // escalation is width-bound: its fixture columns split over two pages
+  // ('BAGIAN 1/2', 'BAGIAN 2/2'; [buildColumnPart] part 1 keeps the risers
+  // and plant), kept only when the two parts overprint strictly less and
+  // neither prints smaller than the page it replaces.
+  if (buildColumnPart != null) {
+    for (var i = pages.length - 1; i >= 0; i--) {
+      final r = ranges[i];
+      if (pages[i].overlapCount == 0 || r.hi != r.lo) continue;
+      final bare = shed && r.lo == 0;
+      final parts = [
+        for (final k in [1, 2]) buildColumnPart(r, k, bare)
+      ];
+      final left = parts.fold<int>(0, (a, p) => a + p.overlapCount);
+      final floorPt = math.min(minPt(pages[i]), kMinPlotLabelPt) - 1e-9;
+      if (left < pages[i].overlapCount &&
+          parts.every((p) => minPt(p) >= floorPt)) {
+        // Pages run bottom-up here (reversed below): part 2 then part 1
+        // lists part 1 first on the issued set.
+        pages.replaceRange(i, i + 1, parts.reversed);
+        ranges.replaceRange(i, i + 1, [r, r]);
+      }
+    }
+  }
   // One chunk spanning every floor IS the whole sheet.
-  final out =
-      pages.length == 1 && !shed ? [whole] : pages.reversed.toList();
+  final out = pages.length == 1 && !shed ? [whole] : pages.reversed.toList();
   return [
     for (final p in out) flagged(p),
     if (shed) flagged(buildExtrasOnly!()),
