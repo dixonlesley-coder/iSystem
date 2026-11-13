@@ -126,3 +126,34 @@ _(empty)_
 - **(f) Two judge heads (O3).** The sprinkler-vs-pump judge and the rating basis give two heads for one requirement (the deliberate audit-round-8 lower bound).
 - **(g) Branch run prints the pump's flow (O1).** The branch run FP→S0 keeps the pump's rated 31.545 L/s on DN125 (the Round-62 stored-flow rule), not the sprinkler system's 4.714 L/s.
 - **(h) Auto-FRC record not saved (O4).** The "FRC set by the sync" record is not persisted: after reopening a project, an auto-FRC feeder whose fire pump is later removed stays FRC.
+
+## 4. Apartment (rumah susun 12 lantai)
+
+**What it is.**
+- **Building:** twelve storeys of 3.5 m ("Lantai 1..12", index 0..11), one sheet per floor at 0.02 m/px. The typical floor (two units, each a WC, lavatory, shower and kitchen sink) is built once and replicated.
+- **Cold water:** water meter → ground tank → transfer pump → fill riser → roof tank (roof-tank downfeed, private occupancy). The top main splits into a booster set on a SIDE branch feeding floors 11-10, and a gravity riser feeding floors 9..0. A PRV station on the gravity riser feeds Lantai 1, where the app's zone table prescribes it.
+- **Drainage / vent / rainwater:** two 12-storey soil stacks, a junction and an outfall; one stack vent per stack; two 200 m² roof drains and one downpipe.
+- **Fire:** fire tank → duty, standby and jockey pumps in parallel (the jockey on hand-picked DN25 legs) → a Class I hydrant riser with a box per floor, and a sprinkler riser with six heads on Lantai 12.
+- **HVAC:** two bedrooms on Lantai 6, one split-wall AC each.
+- **Electrical:** LVMDP (PLN, declared at the app-recommended daya, plus a standby genset at the app-recommended rating). It feeds the essential board PP-E (lift, emergency lighting, and the MEP board re-fed onto it) and twelve floor boards.
+
+**Files.**
+- Fixture: `packages/mechx_engine/test/reference/apartment.dart` (`buildApartment()`, `buildApartmentNetwork(prvFloor:)`, `kApartmentRooms`).
+- Engine pins: `packages/mechx_engine/test/reference_apartment_test.dart`.
+- App pins: `test/reference_apartment_app_test.dart` (BEFORE / AFTER the PRV).
+- Regression test (A2): `test/reference_apartment_regression_test.dart`.
+
+**Fixed by its review (2026-11-13).**
+- **A2:** `combined-fire-sprinkler-governs` was keyed on `pumpIds.first`, the jockey FJ. It is now keyed on the duty pump FP.
+- **A1 (not fixed — deliberate):** the combined pump is rated on the sprinkler point, 4.714 L/s @ 127.054 m (11 kW), not on max flow at max head (31.545 L/s @ 127.054 m). `docs/ENGINE-INVARIANTS.md` Round 37 records the current behaviour as deliberate: "Fire index friction is per BASIS (`FireTerminalKind`): hose = hydrant outlets, sprinkler = heads; the combined pump takes the larger head at its own flow." Round 37 r2 adds: "A combined fire system rated on its sprinkler point raises `combined-fire-sprinkler-governs:<pumpId>` (judge-only)."
+
+### Backlog (outside scope, not fixed)
+
+- **(a) Jockey flow basis (A1 follow-on).** The jockey legs are sized on 1 % of the standpipe flow (0.3155 L/s, `_jockeyLegFlows`), while the printed jockey duty is 1 % of the rated point (0.0471 L/s).
+- **(b) Two alternator reactances.** The motor-start dip and the genset start floor use Xd'' 0.15 pu (`kGensetSubtransientReactancePu`), while the genset ADS fault uses 0.12 pu (`kAlternatorXdPu`), for the same set.
+- **(c) Hose outlet height.** A hydrant box sits at the 1.1 m fixture height (39.6 m on Lantai 12), which sets its pipe leg, while the standpipe lift uses the 1.2 m outlet height (39.7 m).
+- **(d) Sprinkler head height.** A head node sits at the 1.1 m fixture height, while its run is measured as a ceiling run (no leg) and the lift is taken at the ceiling.
+- **(e) Two booster heads.** The gravity solve asks for a 22.230 m booster (KSb11). The Review's `downfeed-below-target` recommends a +15.3 m booster for Lantai 10 (KSb9), which the drawn side-branch booster cannot serve.
+- **(f) No step-load / fire-tank rules.** There is no genset step-load check beyond the largest-motor dip, and no fire-water reserve rule (FT 60 000 L is a brief value).
+- **(g) PRV on a riser.** There is no store intent that places a component on a riser (`addComponentNode` skips risers). The fixture splices a PRV node with a 0 m run.
+- **(h) Fill line sized on peak demand** (shophouse c) — here 180 UBAP at 4.393 L/s.

@@ -1440,12 +1440,14 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
   for (final b in fireBases) {
     final st = b.standpipe;
     if (!b.sprinklerGovernsCombined || st == null) continue;
-    final pumpNode =
-        b.pumpIds.isEmpty ? null : net.nodeById(b.pumpIds.first);
+    // Reference apartment A2 — keyed and located on the DUTY pump (the
+    // draw-order / bore rank of the basis), never the first String-sorted
+    // id (a jockey 'FJ' sorted before the duty 'FP').
+    final pump = b.dutyPumpId ?? (b.pumpIds.isEmpty ? null : b.pumpIds.first);
+    final pumpNode = pump == null ? null : net.nodeById(pump);
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
-      kind: 'combined-fire-sprinkler-governs'
-          '${b.pumpIds.isEmpty ? '' : ':${b.pumpIds.first}'}',
+      kind: 'combined-fire-sprinkler-governs${pump == null ? '' : ':$pump'}',
       title: str(StringKey.issueCombinedFireSprinklerGovernsTitle),
       message: str.format(StringKey.issueCombinedFireSprinklerGovernsMessage, {
         'sprHead': b.head.meters.toStringAsFixed(1),
