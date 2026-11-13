@@ -16,20 +16,6 @@ import 'package:mechx_engine/report/plan_detail.dart' show PlanDetailCallout;
 import 'package:mechx_engine/report/plan_detail_sheet.dart';
 import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/report/electrical_calc_report.dart';
-import 'package:mechx_engine/report/electrical_dxf_export.dart'
-    show SldDxfLayers, electricalSldToDxf, sldSheetsToDxfSet;
-import 'package:mechx_engine/report/electrical_pagination.dart'
-    show
-        electricalOverviewToPdf,
-        electricalRiserToPdf,
-        paginatedElectricalOverviewSheets,
-        paginatedElectricalRiserSheets;
-import 'package:mechx_engine/report/electrical_pdf_export.dart'
-    show
-        electricalSldDetailSheets,
-        electricalSldDetailToPdf,
-        electricalSldToPdf,
-        electricalSldToPdfPaginated;
 import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/equipment_schedule.dart';
@@ -52,8 +38,7 @@ import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/report_strings.dart';
 import 'package:mechx_engine/report/riser_tags.dart'
     show drawnWaterFeedEquipment, elementTags;
-import 'package:mechx_engine/report/sld_export.dart'
-    show sldSheetToPdf, sldSheetsToDxf, sldSheetsToPdf;
+import 'package:mechx_engine/report/sld_export.dart' show sldSheetsToPdf;
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/sizing/bom.dart';
 import 'package:mechx_engine/sizing/cooling_load.dart';
@@ -139,8 +124,8 @@ import '../electrical/electrical_export.dart'
         electricalLayoutSheetIds;
 import '../../report/reference_grid_builder.dart';
 import '../format/scale_format.dart';
-import '../schematic/schematic_export.dart'
-    show buildLiveRiserPages, buildLiveRiserSheet;
+import '../shell/issued_sld_drawings.dart';
+import '../schematic/schematic_export.dart' show buildLiveRiserSheet;
 import '../shell/nav_rail.dart';
 import '../strings/app_strings.dart';
 import '../strings/plural.dart';
@@ -2086,22 +2071,6 @@ Future<bool> writeSubmittalPackageToDir(
     return path;
   }
 
-  // N19: the riser single-line and the electrical single-line in the package
-  // are DIFFERENT drawings, so each derives its own number by [series] (the
-  // mechanical riser `M-201`, the electrical detail `E-201`) rather than sharing
-  // one `documentNumber` verbatim.
-  DrawingChrome sldChrome(DrawingSeries series) => DrawingChrome(
-    sheetIndex: 1,
-    sheetTotal: 1,
-    drawingNumber: sheetDrawingNumber(base: doc.documentNumber, series: series),
-    revisionNumber: doc.revisionTag,
-    clientName: doc.clientName,
-    drawnBy: doc.preparedBy,
-    checkedBy: doc.checkedBy,
-    approvedBy: doc.approvedBy,
-    dateString: today,
-  );
-
   // ── N21/N24: front matter — cover + Daftar Gambar + general-notes & MASTER
   // legend — written FIRST so the issued set opens with a cover, an index, and
   // the shared symbol dictionary (services / equipment / riser markers / flow
@@ -2556,20 +2525,9 @@ Future<bool> writeSubmittalPackageToDir(
   // ── Panel schedules (PDF) — drawing-review D3: its own number (E-601) and
   // title, issued in the package and listed on the register. ───────────────
   if (eResultFm.order.isNotEmpty) {
-    await File(out('panel-schedules.pdf')).writeAsBytes(
-      electricalSldToPdfPaginated(
-        project: eProjectFm,
-        result: eResultFm,
-        title: 'iSystem electrical panel schedules',
-        diagramTitle: drawingSeriesTitle(DrawingSeries.panelSchedule),
-        projectName: base,
-        chrome: sldChrome(DrawingSeries.panelSchedule),
-        breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-        breakerKaByCircuitId: breakerKaByCircuit(ref),
-        adsFailedCircuitIds: adsFailedCircuitIds(ref),
-        containmentByCircuitId: containmentByCircuit(ref),
-      ),
-    );
+    // Drawing backlog I-1 — the same builder the standalone export uses.
+    await File(out('panel-schedules.pdf'))
+        .writeAsBytes(issuedPanelSchedulesPdf(ref));
   }
 
   // ── BOM (CSV) + costed quotation (MD) — the unified M+E+P pipeline ───────────
@@ -2597,43 +2555,13 @@ Future<bool> writeSubmittalPackageToDir(
   // N2 — the title-block PROJECT row carries the LIVE name (null when the
   // project is genuinely unnamed, so nothing is fabricated), matching the
   // standalone riser exports rather than stamping 'Untitled project'.
-  final titleProjectName = project.name.trim().isEmpty
-      ? null
-      : project.name.trim();
-  // Round 21 (riser-drafting-2-2) — the issued PDF paginates a tall riser to
-  // legible pages; drawing-review D6 — the DXF carries the same pages.
-  final riserPages = buildLiveRiserPages(ref, null,
-      diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
-      chrome: sldChrome(DrawingSeries.mechanicalRiser),
-      projectName: titleProjectName);
-  await File(out('riser-sld.pdf')).writeAsBytes(
-    riserPages.length == 1
-        ? sldSheetToPdf(
-            sheet: riserPages.single,
-            title: 'iSystem mechanical single-line',
-            diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
-            chrome: sldChrome(DrawingSeries.mechanicalRiser),
-            projectName: titleProjectName,
-          )
-        : sldSheetsToPdf(
-            riserPages,
-            title: 'iSystem mechanical single-line',
-            diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
-            chrome: sldChrome(DrawingSeries.mechanicalRiser),
-            projectName: titleProjectName,
-          ),
-  );
+  // Drawing backlog I-1 — built once by the shared issued-drawing builder
+  // the standalone riser exports use too: the same pages, numbers and marks.
+  final riserSld = issuedMechanicalRiser(ref, null);
+  await File(out('riser-sld.pdf')).writeAsBytes(riserSld.toPdf());
   // Drawing-review D6 — the DXF carries the SAME pages as the PDF (one
   // model-space frame per page, `SHEET i of n`, the LANJUT KE marks).
-  await File(out('riser-sld.dxf')).writeAsString(
-    sldSheetsToDxf(
-      riserPages,
-      diagramTitle: drawingSeriesTitle(DrawingSeries.mechanicalRiser),
-      chrome: sldChrome(DrawingSeries.mechanicalRiser),
-      projectName: titleProjectName,
-      layers: SldDxfLayers.mechanical,
-    ),
-  );
+  await File(out('riser-sld.dxf')).writeAsString(riserSld.toDxf());
 
   // ── Every sheet's annotated plan (PDF + DXF) — J2: the whole rail, not just
   // whichever sheet happened to be active, so a multi-floor tender folder is
@@ -2881,136 +2809,22 @@ Future<bool> writeSubmittalPackageToDir(
   // energy sources to draw one (the same gate the standalone export enforces).
   final eResult = ref.read(electricalResultProvider);
   if (eResult.order.isNotEmpty) {
-    final eProject = ref.read(electricalProjectProvider);
-    // Round 10 (elec-drawing-props-3) — one A3 sheet only while every label
-    // still prints at the minimum plotted size; a larger project issues one
-    // board per page instead of shrinking the schedules to ~3 pt.
-    await File(out('electrical-sld.pdf')).writeAsBytes(
-      electricalSldDetailToPdf(
-        project: eProject,
-        result: eResult,
-        breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-        breakerKaByCircuitId: breakerKaByCircuit(ref),
-        adsFailedCircuitIds: adsFailedCircuitIds(ref),
-        containmentByCircuitId: containmentByCircuit(ref),
-        chrome: sldChrome(DrawingSeries.electricalDetail),
-        // Round 14 (drafting-visual-1) — ONE project name + the register
-        // title on every electrical sheet of the package.
-        projectName: base,
-        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
-      ),
-    );
-    // Round 20 (drafting-visual-4-3) — the board schedule is THE sheet a panel
-    // builder redraws / annotates in CAD, so it is issued in DXF too (like
-    // every other electrical sheet of the set), built exactly as the
-    // standalone 'Single-line DXF' export builds it (same kA maps).
-    await File(out('electrical-sld.dxf')).writeAsString(
-      sldSheetsToDxfSet(
-        electricalSldDetailSheets(
-          project: eProject,
-          result: eResult,
-          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-          breakerKaByCircuitId: breakerKaByCircuit(ref),
-          adsFailedCircuitIds: adsFailedCircuitIds(ref),
-          containmentByCircuitId: containmentByCircuit(ref),
-          chrome: sldChrome(DrawingSeries.electricalDetail),
-          projectName: base,
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
-        ),
-        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
-        chrome: sldChrome(DrawingSeries.electricalDetail),
-        projectName: base,
-      ),
-    );
-
-    // Building single-line (overview) — the whole distribution hierarchy on one
-    // sheet, with the PLN/MV/TX/LV source spine, in both formats.
-    final overviewChrome = sldChrome(DrawingSeries.electricalOverview);
-    // Round 23 (elec-drafting-2-1) — paginated by sub-tree whenever one A3
-    // sheet would print below the minimum plotted label size.
-    await File(out('electrical-overview-sld.pdf')).writeAsBytes(
-      electricalOverviewToPdf(
-        project: eProject,
-        result: eResult,
-        title: 'iSystem electrical single-line (overview)',
-        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
-        chrome: overviewChrome,
-        projectName: base,
-      ),
-    );
-    await File(out('electrical-overview-sld.dxf')).writeAsString(
-      sldSheetsToDxfSet(
-        paginatedElectricalOverviewSheets(
-          project: eProject,
-          result: eResult,
-          sourceChain: true,
-          chrome: overviewChrome,
-          projectName: base,
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
-        ),
-        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
-        chrome: overviewChrome,
-        projectName: base,
-      ),
-    );
-
-    // Floor-by-floor electrical riser — built with the LIVE mechanical
-    // [BuildingLevels] (the shared §10 geometry), like its standalone sibling.
-    final eRiserChrome = sldChrome(DrawingSeries.electricalRiser);
-    // Round 17 (drafting-visual-3-2) — the riser carries the SAME supply
-    // spine (PLN head / earthing / TX / genset) as the overview in this
-    // package, so two sheets of one submittal never disagree on the supply.
-    // Round 23 (elec-drafting-2-1) — floor-range pages (LANJUT KE match
-    // stubs) whenever one A3 sheet would print below the label floor.
-    await File(out('electrical-riser.pdf')).writeAsBytes(
-      electricalRiserToPdf(
-        project: eProject,
-        result: eResult,
-        building: project.building,
-        title: 'iSystem electrical building riser',
-        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
-        chrome: eRiserChrome,
-        projectName: base,
-      ),
-    );
-    await File(out('electrical-riser.dxf')).writeAsString(
-      sldSheetsToDxfSet(
-        paginatedElectricalRiserSheets(
-          project: eProject,
-          result: eResult,
-          building: project.building,
-          sourceChain: true,
-          chrome: eRiserChrome,
-          projectName: base,
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
-        ),
-        diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
-        chrome: eRiserChrome,
-        projectName: base,
-      ),
-    );
-
-    // Power one-line — only when energy sources exist to draw one.
-    if (hasPowerOneLine) {
-      final oneLineChrome = sldChrome(DrawingSeries.electricalPowerOneLine);
-      final oneLineSheet = buildPowerOneLineSheet(powerOneLineFm);
-      await File(out('electrical-power-one-line.pdf')).writeAsBytes(
-        electricalSldToPdf(
-          sheet: oneLineSheet,
-          title: 'iSystem power one-line',
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
-          chrome: oneLineChrome,
-          projectName: base,
-        ),
-      );
-      await File(out('electrical-power-one-line.dxf')).writeAsString(
-        electricalSldToDxf(
-          sheet: oneLineSheet,
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
-          chrome: oneLineChrome,
-          projectName: base,
-        ),
-      );
+    // Drawing backlog I-1 — every electrical drawing is built by the shared
+    // issued-drawing builder its standalone export uses (one page list per
+    // drawing: one A3 sheet while it prints at the label floor, else the
+    // board / sub-tree / floor-range pages with their LANJUT marks), and the
+    // PDF and DXF are rendered from that one list.
+    final drawings = [
+      ('electrical-sld', issuedElectricalSld(ref)),
+      ('electrical-overview-sld', issuedElectricalOverview(ref)),
+      ('electrical-riser', issuedElectricalRiser(ref)),
+      // Power one-line — only when energy sources exist to draw one.
+      if (hasPowerOneLine)
+        ('electrical-power-one-line', issuedPowerOneLine(ref)!),
+    ];
+    for (final (suffix, drawing) in drawings) {
+      await File(out('$suffix.pdf')).writeAsBytes(drawing.toPdf());
+      await File(out('$suffix.dxf')).writeAsString(drawing.toDxf());
     }
 
     // The electrical calculation report (MD) — the panel-builder's own document,

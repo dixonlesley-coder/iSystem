@@ -23,9 +23,6 @@ import 'package:mechx_engine/electrical/containment.dart' show ConduitSpec;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_calc_report.dart';
 import 'package:mechx_engine/report/electrical_dxf_export.dart';
-import 'package:mechx_engine/report/electrical_pagination.dart'
-    show electricalOverviewToPdf, electricalRiserToPdf;
-import 'package:mechx_engine/report/electrical_pdf_export.dart';
 import 'package:mechx_engine/report/electrical_plan_export.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/standards/puil.dart';
@@ -38,6 +35,7 @@ import '../inspector/project_panel.dart'
     show pickExportSave, reportStringsFor, runExportGuarded;
 import '../../store/project_store.dart';
 import '../../store/sheets_store.dart';
+import '../shell/issued_sld_drawings.dart';
 import '../strings/app_strings.dart';
 
 /// The status-pill message when a power one-line export is requested but the
@@ -205,69 +203,23 @@ Set<String> adsFailedCircuitIds(WidgetRef ref) =>
 Future<void> exportElectricalSldDxf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'electrical single-line',
-      write: () {
-        final project = ref.read(electricalProjectProvider);
-        final result = ref.read(electricalResultProvider);
-        // Build the sheet HERE (rather than inside the exporter) so the fault
-        // study's breaking-capacity ratings reach the device notation (C5).
-        final sheet = buildElectricalSld(
-          project: project,
-          result: result,
-          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-          breakerKaByCircuitId: breakerKaByCircuit(ref),
-          adsFailedCircuitIds: adsFailedCircuitIds(ref),
-          containmentByCircuitId: containmentByCircuit(ref),
-        );
-        final dxf = electricalSldToDxf(
-          sheet: sheet,
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
-          chrome: electricalExportChrome(ref),
-          projectName: electricalSheetProjectName(ref),
-        );
-        return _save(ref, dxf,
-            name: project.name,
-            suffix: 'sld',
-            ext: 'dxf',
-            title: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleSldDxf));
-      },
+      // Drawing backlog I-1 — the PDF's pages, one DXF frame each.
+      write: () => _saveDrawingDxf(ref, issuedElectricalSld(ref),
+          suffix: 'sld',
+          title: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldDxf)),
     );
 
 /// Export the sized electrical single-line as a native (vector) PDF.
 Future<void> exportElectricalSldPdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'electrical single-line',
-      write: () async {
-        final project = ref.read(electricalProjectProvider);
-        final result = ref.read(electricalResultProvider);
-        // The single-line is one drawing for the whole project; stamp it as
-        // sheet 1 of 1 over the document-control title block (D3). The sheet
-        // is built HERE so the fault study's breaking-capacity ratings reach
-        // the device notation (C5).
-        // Round 10 (elec-drawing-props-3) — auto-paginates (one board per
-        // page) when the single sheet would print below the minimum plotted
-        // label size.
-        final bytes = electricalSldDetailToPdf(
-          project: project,
-          result: result,
-          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-          breakerKaByCircuitId: breakerKaByCircuit(ref),
-          adsFailedCircuitIds: adsFailedCircuitIds(ref),
-          containmentByCircuitId: containmentByCircuit(ref),
-          chrome: electricalExportChrome(ref),
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalDetail),
-          projectName: electricalSheetProjectName(ref),
-        );
-        final base = project.name.isEmpty ? 'electrical' : project.name;
-        final full = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleSldPdf),
-            fileName: '$base-sld.pdf',
-            ext: 'pdf');
-        if (full == null) return false;
-        await File(full).writeAsBytes(bytes);
-        return true;
-      },
+      // Drawing backlog I-1 — the package's own E-201 page list (one board /
+      // way range per page when one sheet would print below the label floor).
+      write: () => _saveDrawingPdf(ref, issuedElectricalSld(ref),
+          suffix: 'sld',
+          title: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldPdf)),
     );
 
 /// Export the ZOOMED-OUT building single-line (the whole distribution
@@ -276,30 +228,10 @@ Future<void> exportElectricalSldPdf(WidgetRef ref) => runExportGuarded(
 Future<void> exportElectricalOverviewPdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'building single-line',
-      write: () async {
-        final project = ref.read(electricalProjectProvider);
-        final result = ref.read(electricalResultProvider);
-        // Round 23 (elec-drafting-2-1) — sub-tree pages when one A3 sheet
-        // would print below the minimum plotted label size.
-        final bytes = electricalOverviewToPdf(
-          project: project,
-          result: result,
-          title: 'iSystem electrical single-line (overview)',
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
-          chrome: electricalExportChrome(ref,
-              series: DrawingSeries.electricalOverview),
-          projectName: electricalSheetProjectName(ref) ?? 'Untitled project',
-        );
-        final base = project.name.isEmpty ? 'electrical' : project.name;
-        final full = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleSldPdf),
-            fileName: '$base-overview-sld.pdf',
-            ext: 'pdf');
-        if (full == null) return false;
-        await File(full).writeAsBytes(bytes);
-        return true;
-      },
+      write: () => _saveDrawingPdf(ref, issuedElectricalOverview(ref),
+          suffix: 'overview-sld',
+          title: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldPdf)),
     );
 
 /// Export the ZOOMED-OUT building single-line as a DXF drawing file (with the
@@ -307,25 +239,11 @@ Future<void> exportElectricalOverviewPdf(WidgetRef ref) => runExportGuarded(
 Future<void> exportElectricalOverviewDxf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'building single-line',
-      write: () {
-        final project = ref.read(electricalProjectProvider);
-        final result = ref.read(electricalResultProvider);
-        final dxf = electricalSldToDxf(
-            project: project,
-            result: result,
-            overview: true,
-            sourceChain: true,
-            diagramTitle: drawingSeriesTitle(DrawingSeries.electricalOverview),
-            chrome: electricalExportChrome(ref,
-                series: DrawingSeries.electricalOverview),
-            projectName: electricalSheetProjectName(ref));
-        return _save(ref, dxf,
-            name: project.name,
-            suffix: 'overview-sld',
-            ext: 'dxf',
-            title: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleSldDxf));
-      },
+      // Drawing backlog I-1 — the PDF's sub-tree pages, one frame each.
+      write: () => _saveDrawingDxf(ref, issuedElectricalOverview(ref),
+          suffix: 'overview-sld',
+          title: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldDxf)),
     );
 
 /// Export the FLOOR-BY-FLOOR building riser (panels stacked by true elevation,
@@ -336,60 +254,21 @@ Future<void> exportElectricalOverviewDxf(WidgetRef ref) => runExportGuarded(
 Future<void> exportElectricalRiserPdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'electrical building riser',
-      write: () async {
-        final project = ref.read(electricalProjectProvider);
-        final result = ref.read(electricalResultProvider);
-        final building = ref.read(projectControllerProvider).building;
-        // Round 23 (elec-drafting-2-1) — floor-range pages with LANJUT KE
-        // match stubs when one A3 sheet would print below the label floor.
-        final bytes = electricalRiserToPdf(
-          project: project,
-          result: result,
-          building: building,
-          title: 'iSystem electrical building riser',
-          diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
-          chrome:
-              electricalExportChrome(ref, series: DrawingSeries.electricalRiser),
-          projectName: electricalSheetProjectName(ref) ?? 'Untitled project',
-        );
-        final base = project.name.isEmpty ? 'electrical' : project.name;
-        final full = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleSldPdf),
-            fileName: '$base-riser.pdf',
-            ext: 'pdf');
-        if (full == null) return false;
-        await File(full).writeAsBytes(bytes);
-        return true;
-      },
+      write: () => _saveDrawingPdf(ref, issuedElectricalRiser(ref),
+          suffix: 'riser',
+          title: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldPdf)),
     );
 
 /// Export the FLOOR-BY-FLOOR building riser as a DXF drawing file.
 Future<void> exportElectricalRiserDxf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'electrical building riser',
-      write: () {
-        final project = ref.read(electricalProjectProvider);
-        final result = ref.read(electricalResultProvider);
-        final building = ref.read(projectControllerProvider).building;
-        final sheet = buildElectricalRiser(
-            project: project,
-            result: result,
-            building: building,
-            sourceChain: true);
-        final dxf = electricalSldToDxf(
-            sheet: sheet,
-            diagramTitle: drawingSeriesTitle(DrawingSeries.electricalRiser),
-            chrome: electricalExportChrome(ref,
-                series: DrawingSeries.electricalRiser),
-            projectName: electricalSheetProjectName(ref));
-        return _save(ref, dxf,
-            name: project.name,
-            suffix: 'riser',
-            ext: 'dxf',
-            title: MechXStringsData(ref.read(localeProvider))(
-                StringKey.exportTitleSldDxf));
-      },
+      // Drawing backlog I-1 — the PDF's floor-range pages (LANJUT KE marks).
+      write: () => _saveDrawingDxf(ref, issuedElectricalRiser(ref),
+          suffix: 'riser',
+          title: MechXStringsData(ref.read(localeProvider))(
+              StringKey.exportTitleSldDxf)),
     );
 
 /// C1 — export the per-panel BOARD SCHEDULES as ONE multi-page vector PDF:
@@ -402,24 +281,8 @@ Future<void> exportElectricalPanelSchedulesPdf(WidgetRef ref) =>
       name: 'panel schedules',
       write: () async {
         final project = ref.read(electricalProjectProvider);
-        final result = ref.read(electricalResultProvider);
-        final bytes = electricalSldToPdfPaginated(
-          project: project,
-          result: result,
-          title: 'iSystem electrical panel schedules',
-          // Drawing-review D3 — its own drawing: JADWAL PANEL / PANEL
-          // SCHEDULES, number E-601 (never the SLD's E-201).
-          diagramTitle: drawingSeriesTitle(DrawingSeries.panelSchedule),
-          projectName: electricalSheetProjectName(ref),
-          chrome: electricalExportChrome(ref,
-              series: DrawingSeries.panelSchedule),
-          // The C5 device-notation kA (from the fault study) rides the schedule
-          // set too, matching the single-sheet detail export.
-          breakerIcuKaByPanelId: breakerIcuKaByPanel(ref),
-          breakerKaByCircuitId: breakerKaByCircuit(ref),
-          adsFailedCircuitIds: adsFailedCircuitIds(ref),
-          containmentByCircuitId: containmentByCircuit(ref),
-        );
+        // Drawing backlog I-1 — the package's own E-601 builder.
+        final bytes = issuedPanelSchedulesPdf(ref);
         final base = project.name.isEmpty ? 'electrical' : project.name;
         final full = await pickExportSave(ref,
             dialogTitle: MechXStringsData(ref.read(localeProvider))(
@@ -443,29 +306,15 @@ Future<void> exportPowerOneLineDxf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'power one-line',
       write: () {
-        final project = ref.read(electricalProjectProvider);
-        final advanced = ref.read(electricalAdvancedProvider);
-        final oneLine = advanced.powerOneLine;
-        if (oneLine == null || oneLine.nodes.isEmpty) {
+        final drawing = issuedPowerOneLine(ref);
+        if (drawing == null) {
           ref
               .read(statusMessageProvider.notifier)
               .showStatus(kNoEnergySourcesMessage);
           return Future.value(false);
         }
-        // Round 23 (elec-drafting-2-7) — the SAME project name + register
-        // title the submittal package stamps on this sheet.
-        final dxf = electricalSldToDxf(
-          sheet: buildPowerOneLineSheet(oneLine),
-          diagramTitle:
-              drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
-          chrome: electricalExportChrome(ref,
-              series: DrawingSeries.electricalPowerOneLine),
-          projectName: electricalSheetProjectName(ref),
-        );
-        return _save(ref, dxf,
-            name: project.name,
+        return _saveDrawingDxf(ref, drawing,
             suffix: 'power-one-line',
-            ext: 'dxf',
             title: MechXStringsData(ref.read(localeProvider))(
                 StringKey.exportTitlePowerOneLineDxf));
       },
@@ -477,34 +326,18 @@ Future<void> exportPowerOneLineDxf(WidgetRef ref) => runExportGuarded(
 Future<void> exportPowerOneLinePdf(WidgetRef ref) => runExportGuarded(
       ref,
       name: 'power one-line',
-      write: () async {
-        final project = ref.read(electricalProjectProvider);
-        final advanced = ref.read(electricalAdvancedProvider);
-        final oneLine = advanced.powerOneLine;
-        if (oneLine == null || oneLine.nodes.isEmpty) {
+      write: () {
+        final drawing = issuedPowerOneLine(ref);
+        if (drawing == null) {
           ref
               .read(statusMessageProvider.notifier)
               .showStatus(kNoEnergySourcesMessage);
-          return false;
+          return Future.value(false);
         }
-        final bytes = electricalSldToPdf(
-          sheet: buildPowerOneLineSheet(oneLine),
-          title: 'iSystem power one-line',
-          diagramTitle:
-              drawingSeriesTitle(DrawingSeries.electricalPowerOneLine),
-          chrome: electricalExportChrome(ref,
-              series: DrawingSeries.electricalPowerOneLine),
-          projectName: electricalSheetProjectName(ref),
-        );
-        final base = project.name.isEmpty ? 'electrical' : project.name;
-        final full = await pickExportSave(ref,
-            dialogTitle: MechXStringsData(ref.read(localeProvider))(
-              StringKey.exportTitleSldPdf),
-            fileName: '$base-power-one-line.pdf',
-            ext: 'pdf');
-        if (full == null) return false;
-        await File(full).writeAsBytes(bytes);
-        return true;
+        return _saveDrawingPdf(ref, drawing,
+            suffix: 'power-one-line',
+            title: MechXStringsData(ref.read(localeProvider))(
+                StringKey.exportTitleSldPdf));
       },
     );
 
@@ -696,3 +529,35 @@ Future<bool> _save(
   await File(full).writeAsString(content);
   return true;
 }
+
+/// Drawing backlog I-1 — write an issued drawing's PDF (its full page list)
+/// to a user-chosen `<electrical name>-<suffix>.pdf`.
+Future<bool> _saveDrawingPdf(
+  WidgetRef ref,
+  IssuedSldDrawing drawing, {
+  required String suffix,
+  required String title,
+}) async {
+  final bytes = drawing.toPdf();
+  final name = ref.read(electricalProjectProvider).name;
+  final base = name.isEmpty ? 'electrical' : name;
+  final full = await pickExportSave(ref,
+      dialogTitle: title, fileName: '$base-$suffix.pdf', ext: 'pdf');
+  if (full == null) return false;
+  await File(full).writeAsBytes(bytes);
+  return true;
+}
+
+/// Drawing backlog I-1 — write an issued drawing's DXF twin (one frame per
+/// PDF page) to a user-chosen `<electrical name>-<suffix>.dxf`.
+Future<bool> _saveDrawingDxf(
+  WidgetRef ref,
+  IssuedSldDrawing drawing, {
+  required String suffix,
+  required String title,
+}) =>
+    _save(ref, drawing.toDxf(),
+        name: ref.read(electricalProjectProvider).name,
+        suffix: suffix,
+        ext: 'dxf',
+        title: title);

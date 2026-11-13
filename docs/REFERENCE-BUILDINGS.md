@@ -289,10 +289,14 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 - Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
   detail sheet; it keeps the honest overlap stamp. Only the submittal package
   issues detail sheets.
-- Standalone (non-package) riser / electrical DXF exports still write one sheet;
-  only the submittal package issues the paginated DXF twins.
 
 ### Backlog closed (2026-11-13)
+- I-1 Standalone DXF exports paginate like the package: every single-line-family
+  drawing (M-201, E-201, E-301, E-401, E-501, E-601) is built once by
+  `ui/shell/issued_sld_drawings.dart` into an `IssuedSldDrawing` (page list + chrome)
+  whose `toPdf()` / `toDxf()` render the same pages; the package and the standalone
+  exports call the same builder, so a standalone pair is byte-identical to the
+  package's (`test/issued_drawing_parity_test.dart`).
 - L-1 Plan PDF and DXF from one placement: tower `plan-16-Lantai 16` stamped
   '1 label bertumpuk' in the DXF only (item 25). The DXF now lays its tags out in
   the PDF's page frame and maps them to model mm (`PlanPageFrame`,
