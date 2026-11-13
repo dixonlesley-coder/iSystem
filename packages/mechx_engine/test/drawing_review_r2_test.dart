@@ -328,12 +328,19 @@ void main() {
       // page at the 7 pt floor (none flagged).
       expect(pages, hasLength(2));
       expect(pages.every((p) => p.belowMinLabelPt == null), isTrue);
-      // Without the callbacks the same page is issued flagged (honest).
+      // Without the callbacks the extras stay on the floor-0 page (never
+      // shed).
+      // Fix round F3 — that page fits to 6.9996 pt, which prints as "7.0
+      // pt": the floor itself, so it is no longer stamped "7.0 pt (< 7 pt)"
+      // (the stamp fires only below the printed floor, see
+      // `sldPrintsBelowMinPt`).
       final old = paginatedRiserSheets(
         build: (r) => sheet(r == null || r.lo == 0 ? 9000 : 300),
         levelCount: 2,
       );
-      expect(old.any((p) => p.belowMinLabelPt != null), isTrue);
+      expect(old.where((p) => p.maxY == 9000), hasLength(1));
+      expect(pages.where((p) => p.maxY == 9000), isEmpty);
+      expect(old.every((p) => p.belowMinLabelPt == null), isTrue);
     });
   });
 }
