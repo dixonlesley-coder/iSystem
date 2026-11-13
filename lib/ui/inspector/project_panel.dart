@@ -2788,11 +2788,25 @@ Future<bool> writeSubmittalPackageToDir(
         final details = dSheets[g].callouts;
         final dSuffix = g == 0 ? '$suffix-detail' : '$suffix-detail-${g + 1}';
         detailSheetNo++;
-        final dChrome = planChrome
+        // Fix round 3 (O1) — a TYPICAL detail sheet (issued for several
+        // floors) prints no single floor's level code or FFL: tags read
+        // `CW-Ln` and one note keys `n` (`planTypicalDetailNotes`).
+        final typical = (typicalFloors[sheet.id]?.length ?? 0) >= 2;
+        var dChrome = planChrome
             .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalDetail,
                 sheetName: detailSheetName(sheet.id, sheet.name)))
             .withDrawingNumber(dSheets[g].number)
             .withSheetCounter(detailSheetNo, detailCount);
+        if (typical) {
+          dChrome = dChrome.withLegendNotesReplaced(
+              planTypicalDetailNotes(dChrome.legendNotes));
+        }
+        final dTags = typical
+            ? {for (final e in tags.entries) e.key: planTypicalTag(e.value)}
+            : tags;
+        final dNodeTags = typical
+            ? {for (final e in nodeTags.entries) e.key: planTypicalTag(e.value)}
+            : nodeTags;
         await File(out('$dSuffix.pdf')).writeAsBytes(
           planDetailSheetToPdf(
             net: net,
@@ -2807,8 +2821,8 @@ Future<bool> writeSubmittalPackageToDir(
             details: details,
             chrome: dChrome,
             edgeElevationLabels: elevationLabels,
-            edgeTags: tags,
-            nodeTags: nodeTags,
+            edgeTags: dTags,
+            nodeTags: dNodeTags,
             gravitySlope: gravitySlope,
           ),
         );
@@ -2826,8 +2840,8 @@ Future<bool> writeSubmittalPackageToDir(
             details: details,
             chrome: dChrome,
             edgeElevationLabels: elevationLabels,
-            edgeTags: tags,
-            nodeTags: nodeTags,
+            edgeTags: dTags,
+            nodeTags: dNodeTags,
             gravitySlope: gravitySlope,
           ),
         );

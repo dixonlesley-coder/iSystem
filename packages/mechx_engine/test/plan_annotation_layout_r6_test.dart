@@ -319,9 +319,11 @@ void main() {
 
   group('setting-out grid lines are soft obstacles (R6)', () {
     test('a tag slides along its run off a grid line', () {
-      // Run (0,0)→(100,0); a column grid line crosses it at x = 50. The
-      // midpoint slots (u ±9.9 about x = 50) straddle the line; the quarter
-      // station x = 25 is clear ⇒ (25 − 9.9, 6.3) = (15.1, 6.3), no leader.
+      // Run (0,0)→(100,0); a column grid line crosses it at x = 50. 'DN50'
+      // measures 2 556 u × 9 / 1000 = 23.004 (Helvetica, fix round 3). The
+      // midpoint slots (u ±11.502 about x = 50) straddle the line; the
+      // quarter station x = 25 is clear ⇒ (25 − 11.502, 6.3) =
+      // (13.498, 6.3), no leader.
       final layout = PlanLabelLayout()
         ..addRun('a', 0, 0, 100, 0)
         ..addGridLine(50, -100, 50, 100);
@@ -335,7 +337,7 @@ void main() {
           layout: layout,
           ownRunId: 'a');
       expect(p.leaderAnchor, isNull);
-      expect(p.x, closeTo(15.1, 1e-9));
+      expect(p.x, closeTo(13.498, 1e-9));
       expect(p.y, closeTo(6.3, 1e-9));
     });
 
@@ -356,7 +358,8 @@ void main() {
           layout: layout,
           ownRunId: 'a');
       expect(p.leaderAnchor, isNull);
-      expect(p.x, closeTo(40.1, 1e-9));
+      // 50 − 23.004 / 2 (the measured 'DN50').
+      expect(p.x, closeTo(38.498, 1e-9));
     });
 
     test('a leader never runs coincident with a grid line', () {
@@ -431,8 +434,9 @@ void main() {
       expect(m.text, 'UP');
       // Lower-right (the long-standing slot) and upper-right both sit within
       // 0.7 × 9 of the run along y = 100, so the first well-clear quadrant is
-      // lower-LEFT: x = 100 − 8 − 2 × 9 × 0.55 = 82.1, baseline 100 − 8 = 92.
-      expect(m.x, closeTo(82.1, 1e-9));
+      // lower-LEFT: x = 100 − 8 − 'UP' (U 722 + P 667 = 1 389 u × 9 / 1000 =
+      // 12.501) = 79.499, baseline 100 − 8 = 92.
+      expect(m.x, closeTo(79.499, 1e-9));
       expect(m.y, closeTo(92, 1e-9));
     });
 

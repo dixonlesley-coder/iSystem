@@ -1649,11 +1649,28 @@ SldSheet _buildMechanicalRiserSld({
     final floor = floorNameOf(loFloor);
     if (columnPart == 2) {
       final ids = phantoms.toList()..sort();
+      // Fix round 3 (O2) — each mark names the pipe it continues (the run
+      // crossing the cut into this phantom, its size-service-material tag),
+      // so stacked marks are told apart.
+      final tagOf = <String, List<String>>{};
+      for (final e in network.edges) {
+        if (!crossing.contains(e.id)) continue;
+        final id = phantoms.contains(e.fromId) ? e.fromId : e.toId;
+        final t = _pipeTag(sizing[e.id], e,
+            function: riserFunctionFor(network, e,
+                downfeed: downfeed, flowFrom: flowFromByEdge));
+        final l = tagOf.putIfAbsent(id, () => <String>[]);
+        if (!l.contains(t)) l.add(t);
+      }
       for (final id in ids) {
         final p = posById[id]!;
+        final pipe = (tagOf[id] ?? const <String>[]).join(', ');
+        // In brackets, not after ' - ': a keyed mark keeps its pipe in the
+        // same PIPE KEY cell (the table splits a tag at its first ' - ').
+        final via = pipe.isEmpty ? '' : ' ($pipe)';
         final text = plantSplit
-            ? 'LANJUTAN DARI $floor'
-            : 'LANJUTAN DARI $floor - BAGIAN 1';
+            ? 'LANJUTAN DARI $floor$via'
+            : 'LANJUTAN DARI $floor - BAGIAN 1$via';
         placer.place(p.dx + 4, p.dy - 4, text,
             size: 8,
             bold: true,
@@ -1819,7 +1836,10 @@ SldSheet _buildMechanicalRiserSld({
           role: role,
           anchorX: midX,
           anchorY: y,
-          candidates: _runLadder(tag));
+          candidates: _runLadder(tag),
+          // Fix round 3 (O2) — a SHORT run (its tag wider than the drawn
+          // run) is leadered to its tag.
+          alwaysLead: _labelWidth(tag, 8) > (b.dx - a.dx).abs());
     }
   }
 
@@ -3113,10 +3133,16 @@ class _LabelPlacer {
     final num = '$key';
     final w = _labelWidth(num, size);
     final r = math.max(0.9 * size, w / 2 + 2);
+    // Fix round 3 (S5/S6) — against TEXT the circle tests its full drawn
+    // radius plus a clear gap (a 0.85 r box left the circle tangent to, or
+    // on, a neighbouring tag's glyphs); against ink the 0.85 r box stands.
     double rectCost(_LabelRect q) {
       var t = 0.0;
+      final cx = (q.minX + q.maxX) / 2, cy = (q.minY + q.maxY) / 2;
+      final rt = r + 0.2 * size;
+      final qt = _LabelRect(cx - rt, cy - rt, cx + rt, cy + rt);
       for (final p in _labels) {
-        t += p.overlap(q);
+        t += p.overlap(qt);
       }
       for (final p in _ink) {
         t += p.overlap(q);
@@ -3303,7 +3329,10 @@ class _LabelPlacer {
     }
     final (cx, cy) = best!;
     if (bestCost > tol) unresolvedCount++;
-    _labels.add(_LabelRect(cx - r, cy - r, cx + r, cy + r));
+    // Fix round 3 — registered with its clear gap, so a LATER tag keeps
+    // off the circle too (a fixture name sat tangent to it).
+    final rg = r + 0.2 * size;
+    _labels.add(_LabelRect(cx - rg, cy - rg, cx + rg, cy + rg));
     if (bestFar) {
       final dx = cx - anchorX, dy = cy - anchorY;
       final dl = math.sqrt(dx * dx + dy * dy);
@@ -3384,6 +3413,7 @@ class _LabelPlacer {
     required double anchorX,
     required double anchorY,
     List<Offset> candidates = const [Offset(0, 0)],
+    bool alwaysLead = false,
   }) {
     bool needsLeader(Offset c) =>
         math.sqrt(c.dx * c.dx + c.dy * c.dy) > _kLeaderThreshold;
@@ -3522,9 +3552,12 @@ class _LabelPlacer {
     _labels.add(rect);
     // A tag pulled well off its default anchor — or one that could not be fully
     // cleared — gets a leader so its element stays legible / unfused.
-    if (!cleared || needsLeader(best)) {
+    // Fix round 3 (O2) — [alwaysLead]: a tag wider than the short run it
+    // names is tied to it by a leader even in its default slot, so it never
+    // floats between two headers unattributed.
+    if (!cleared || needsLeader(best) || alwaysLead) {
       final (ex, ey) = _leaderEnd(rect, anchorX, anchorY);
-      if (ex != anchorX || ey != anchorY) {
+      if ((ex - anchorX).abs() > 0.5 || (ey - anchorY).abs() > 0.5) {
         prims.add(SldLine(anchorX, anchorY, ex, ey,
             weight: SldWeight.thin, role: role));
         _leaders.add((anchorX, anchorY, ex, ey));

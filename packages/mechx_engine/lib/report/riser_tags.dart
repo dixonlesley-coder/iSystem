@@ -18,7 +18,7 @@ import 'package:mechx_engine/geometry/building.dart' show BuildingLevels, Floor;
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/number_format.dart'
     show signedElevationText;
-import 'package:mechx_engine/units.dart' show Power;
+import 'package:mechx_engine/units.dart' show FlowRate, Head, Power;
 
 /// The Indonesian drawing-convention FUNCTION of a supply riser/run, appended to
 /// the single-line pipe tag (e.g. `100-CW-PPR-BOOSTER`).
@@ -857,7 +857,8 @@ String motorKwText(Power motor) {
 /// Pure + Flutter-free (engine types only) so it is unit-testable in isolation
 /// and shared by the schematic painter AND the riser single-line EXPORT builder
 /// (`mechanical_sld_drawing.dart` `equipmentDetailByNodeId` — B1 parity).
-String? equipmentDetail(NetNode node, {Power? motor}) {
+String? equipmentDetail(NetNode node,
+    {Power? motor, FlowRate? flow, Head? head}) {
   final c = node.component;
   if (c == null) return null;
   switch (c) {
@@ -880,6 +881,15 @@ String? equipmentDetail(NetNode node, {Power? motor}) {
     case NodeComponent.supplyFan:
     case NodeComponent.exhaustFan:
       if (motor == null || motor.watts <= 0) return null;
+      // Fix round 3 (O2, 2026-11-13) — a PUMP prints its duty point beside
+      // the motor (`Q 10.8 L/s · H 122.1 m · 18.5 kW`), the SAME solved duty
+      // (and the same 1 dp / 2 dp below 1 rounding) the equipment schedule
+      // prints under its tag. Absent flow / head ⇒ the motor alone.
+      if (flow != null && head != null && flow.cubicMetersPerSecond > 0) {
+        String f(double v) => v.toStringAsFixed(v.abs() < 1 ? 2 : 1);
+        return 'Q ${f(flow.inLitersPerSecond)} L/s · '
+            'H ${f(head.meters)} m · ${motorKwText(motor)}';
+      }
       return motorKwText(motor);
     default:
       return null;

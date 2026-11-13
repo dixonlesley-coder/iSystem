@@ -231,18 +231,28 @@ PlanDetailSheetPlot planDetailSheetPlot({
       return id;
     }
 
-    // The real nodes inside the clip, at their own ids where free.
+    // The real nodes inside the clip, at their own ids where free. Fix round
+    // 3 — a node inside ANOTHER detail's boundary belongs to that detail (it
+    // is labelled there): drawn here under its own id first, it was left
+    // unlabelled here and skipped there, so its tag printed nowhere.
     final idOf = <String, String>{};
     for (final nd in net.nodes) {
       if (!onFloor(nd) || !_inside(nd.x, nd.y, clip)) continue;
       if (used.contains(nd.id)) continue;
+      if (!d.containsPx(nd.x, nd.y) &&
+          details.any((o) => !identical(o, d) && o.containsPx(nd.x, nd.y))) {
+        continue;
+      }
       used.add(nd.id);
       idOf[nd.id] = nd.id;
       if (!d.containsPx(nd.x, nd.y)) unlabelled.add(nd.id);
       nodes.add(nd.copyWith(x: mx(nd.x), y: my(nd.y)));
     }
     String bare(String baseId, double x, double y, int fl) {
-      final id = fresh(baseId);
+      // Fix round 3 — a cut stub never takes a REAL node's id: a stub
+      // 'Da11' in detail A used to claim the drain-stack node detail B owns,
+      // so B dropped the stack and its D-R tag printed nowhere.
+      final id = fresh('$baseId~${d.letter}');
       nodes.add(NetNode(id: id, sheetId: sheetId, x: x, y: y, floorIndex: fl));
       hidden.add(id);
       return id;
@@ -666,6 +676,30 @@ String planDetailContentSignature(PlanDetailSheetPlot plot,
   ];
   return [...frames, '#N', ...nodes, '#E', ...edges].join('\n');
 }
+
+/// Fix round 3 (O1, 2026-11-13) — a TYPICAL detail sheet (issued once for
+/// several floors) prints no floor-specific level code: `CW-L7` reads
+/// `CW-Ln`, `n` keyed by [kPlanTypicalDetailNote]. Riser / plant tags (no
+/// level code) are unchanged. Pure.
+String planTypicalTag(String s) => s.replaceAll(
+    RegExp(r'(?<=[A-Z]-)(L\d+|GF|B\d+|RF)(?![0-9A-Za-z])'), 'Ln');
+
+/// Fix round 3 (O1) — the one note a typical detail sheet carries in place
+/// of the single-floor CL datum (`CL = ... (Lantai 7 FFL +24.00)`): the
+/// level code `n` is each listed floor and every CL is above THAT floor's
+/// own FFL, so no one floor's FFL figure is printed.
+const String kPlanTypicalDetailNote =
+    'TIPIKAL: n = lantai yang tercantum / typical: n = each listed floor; '
+    "CL above each floor's own FFL";
+
+/// Fix round 3 (O1) — a typical detail sheet's legend notes: the plan's
+/// notes with the single-floor CL datum note dropped and
+/// [kPlanTypicalDetailNote] added (once). Pure.
+List<String> planTypicalDetailNotes(List<String> notes) => [
+      for (final n in notes)
+        if (!n.startsWith('CL = pipe centreline above')) n,
+      kPlanTypicalDetailNote,
+    ];
 
 /// Drawing backlog I-3 (c) — the sheet name of a TYPICAL detail issued once
 /// for the floors [floorNames]: `TIPIKAL - Lantai 2..29` for a consecutive

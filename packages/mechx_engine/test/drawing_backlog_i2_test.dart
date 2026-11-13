@@ -140,7 +140,14 @@ void main() {
       final p1 = _texts(part(1)), p2 = _texts(part(2));
       expect(p1, contains('LANJUT KE Lantai 1 - PLANT'));
       expect(p1, isNot(contains('Lantai 1 - PLANT')));
-      expect(p2, containsAll(['Lantai 1 - PLANT', 'LANJUTAN DARI Lantai 1']));
+      expect(p2, contains('Lantai 1 - PLANT'));
+      // Fix round 3 (O2) — each 'LANJUTAN DARI' mark names its pipe tag.
+      final marks = p2.where((t) => t.startsWith('LANJUTAN DARI Lantai 1'));
+      expect(marks, isNotEmpty);
+      for (final m in marks) {
+        expect(m, matches(RegExp(r'^LANJUTAN DARI Lantai 1 \(.+\)$')),
+            reason: m);
+      }
       // No column-split captions on a plant split.
       expect(p1.where((t) => t.startsWith('BAGIAN')), isEmpty);
       expect(p2.where((t) => t.startsWith('BAGIAN')), isEmpty);

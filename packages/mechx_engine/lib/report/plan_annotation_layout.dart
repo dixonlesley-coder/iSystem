@@ -25,7 +25,8 @@ import '../network/network.dart';
 import '../sizing/drainage_advisory.dart' show laidGravitySlope;
 import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../units.dart' show Length;
-import 'drawing_chrome.dart' show LabelBox, kMinPlotTextMm;
+import 'drawing_chrome.dart'
+    show LabelBox, helveticaTextWidth, kMinPlotTextMm;
 import 'plan_detail.dart';
 import 'plan_symbols.dart';
 
@@ -561,18 +562,26 @@ PlanAnnotations layoutPlanAnnotations({
     // The bubble (letter) + caption at the first clear corner.
     final rb = kPlanDetailBubbleMm * u;
     final lts = kPlanDetailLetterMm * u;
-    final capW = d.caption.length * ts * 0.55;
+    final capW = helveticaTextWidth(d.caption, ts);
     LabelBox? bubbleBox, capBox;
     double bx = 0, by = 0, capX = 0;
     var placed = false;
-    for (final (cx, cy, sx, sy) in [
-      (x1, y1, 1.0, 1.0),
-      (x0, y1, -1.0, 1.0),
-      (x1, y0, 1.0, -1.0),
-      (x0, y0, -1.0, -1.0),
+    double leadX = 0, leadY = 0, bestM = 1;
+    // Fix round 3 — with the caption measured at its real width a corner can
+    // be taken by a neighbouring detail's caption: the bubble then steps
+    // further out along its corner's diagonal (tied back to the corner by a
+    // leader) before the sheet counts an overprint (the first ring is
+    // unchanged).
+    for (final (cx, cy, sx, sy, m) in [
+      for (final step in const [1.0, 2.0, 3.0, 4.5, 6.0]) ...[
+        (x1, y1, 1.0, 1.0, step),
+        (x0, y1, -1.0, 1.0, step),
+        (x1, y0, 1.0, -1.0, step),
+        (x0, y0, -1.0, -1.0, step),
+      ],
     ]) {
       for (final capSide in [sx, -sx]) {
-        final px = cx + sx * rb, py = cy + sy * rb;
+        final px = cx + sx * rb * m, py = cy + sy * rb * m;
         final bb = (minX: px - rb, minY: py - rb, maxX: px + rb, maxY: py + rb);
         final cxs = capSide > 0 ? px + rb + 1.5 * u : px - rb - 1.5 * u - capW;
         final cb = (
@@ -588,14 +597,37 @@ PlanAnnotations layoutPlanAnnotations({
           by = py;
           capX = cxs;
         }
+        // A pulled-out bubble's leader (corner -> bubble edge) must cross no
+        // run or placed label.
+        final far = m > 1;
+        // The bubble's near edge: its centre sits m·rb·√2 out along the
+        // diagonal, the edge rb short of it.
+        final k = far ? 1 - 1 / (m * math.sqrt2) : 0.0;
+        final lx = cx + (px - cx) * k, ly = cy + (py - cy) * k;
+        // Tested from a little off the corner: the leader starts ON the
+        // detail's own boundary, which is not an obstacle to it.
+        final sx0 = cx + (px - cx) * 0.15 * k, sy0 = cy + (py - cy) * 0.15 * k;
+        final lb = (
+          minX: math.min(sx0, lx),
+          minY: math.min(sy0, ly),
+          maxX: math.max(sx0, lx),
+          maxY: math.max(sy0, ly)
+        );
+        final leaderClear =
+            !far || (!layout.hitsRun(lb, clearance: 0) && !layout.hitsBox(lb));
         if (!layout.hitsBox(bb) &&
             !layout.hitsBox(cb) &&
-            !layout.hitsRun(cb, clearance: 0.1 * ts)) {
+            !layout.hitsRun(cb, clearance: 0.1 * ts) &&
+            (!far || !layout.hitsRun(bb, clearance: 0)) &&
+            leaderClear) {
           bubbleBox = bb;
           capBox = cb;
           bx = px;
           by = py;
           capX = cxs;
+          leadX = cx;
+          leadY = cy;
+          bestM = m;
           placed = true;
           break;
         }
@@ -608,9 +640,17 @@ PlanAnnotations layoutPlanAnnotations({
     }
     layout.addBox(bubbleBox!);
     layout.addBox(capBox!);
+    if (placed && bestM > 1) {
+      // The leader from the boundary corner to the bubble's near edge.
+      final k = 1 - 1 / (bestM * math.sqrt2);
+      final ex = leadX + (bx - leadX) * k;
+      final ey = leadY + (by - leadY) * k;
+      mLines.add(PlanMarkLine(leadX, leadY, ex, ey));
+      layout.addRun(null, leadX, leadY, ex, ey);
+    }
     mCircles.add(PlanMarkCircle(bx, by, rb));
     mTexts.add(PlanMarkText(
-        bx - d.letter.length * lts * 0.55 / 2, by - 0.36 * lts, lts, d.letter));
+        bx - helveticaTextWidth(d.letter, lts) / 2, by - 0.36 * lts, lts, d.letter));
     mTexts.add(PlanMarkText(capX, by - 0.36 * ts, ts, d.caption));
   }
   for (final l in extraMarks.lines) {
@@ -632,7 +672,7 @@ PlanAnnotations layoutPlanAnnotations({
     layout.addBox((
       minX: p.x,
       minY: p.y - 0.3 * h,
-      maxX: p.x + t.text.length * h * 0.55,
+      maxX: p.x + helveticaTextWidth(t.text, h),
       maxY: p.y + h
     ));
   }
@@ -645,7 +685,7 @@ PlanAnnotations layoutPlanAnnotations({
     if (inDetail(n.x, n.y) || unlabelledIds.contains(n.id)) continue;
     final p = map(n.x, n.y);
     for (final sense in entry.value) {
-      final w = sense.length * ts * 0.55;
+      final w = helveticaTextWidth(sense, ts);
       // (x, baseline) of the four quadrants: lower-right (the long-standing
       // slot), upper-right, lower-left, upper-left — each box clear of the
       // marker circle and disjoint from its vertical twin.
@@ -748,7 +788,7 @@ PlanAnnotations layoutPlanAnnotations({
       // Stagger the figure AWAY from the marker (back off along the line
       // toward the axis), then step perpendicular until the box clears
       // everything already placed (marker / UP-DN / other ties).
-      final w = label.length * fs * 0.55;
+      final w = helveticaTextWidth(label, fs);
       final h = fs;
       final along = math.min(22 * pt, len * 0.5);
       LabelBox boxAt(double bcx, double bcy) => (
@@ -874,7 +914,7 @@ PlanAnnotations layoutPlanAnnotations({
   LeaderedLabelPlacement pointTag(
       double px, double py, double gapMm, String text, List<String>? split,
       {bool keyOnly = false}) {
-    final w = text.length * ts * 0.55;
+    final w = helveticaTextWidth(text, ts);
     final x0 = px + gapMm * u;
     return placePlanLabel(
         ax: x0,

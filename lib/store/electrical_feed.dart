@@ -1018,11 +1018,22 @@ double? _acRoomWatts(
 /// booster's kW beside the fire pump or the supply AHU's kW beside an exhaust
 /// fan while the schedule prints each unit's own duty under the same tag.
 final equipmentNodeDutiesProvider =
-    Provider<Map<String, ({Power motor, Power input})>>((ref) {
+    Provider<Map<String, ({Power motor, Power input})>>((ref) => {
+          for (final e in ref.watch(equipmentNodePumpDutiesProvider).entries)
+            e.key: (motor: e.value.motor, input: e.value.input),
+        });
+
+/// Fix round 3 (O2, 2026-11-13) — [equipmentNodeDutiesProvider] with the
+/// solved [PumpDuty] (flow + head) of each PUMP node beside its motor /
+/// input: the riser PLANT page prints a pump's `Q · H · kW` from the SAME
+/// duty the equipment schedule prints under its tag (one solve, never a
+/// parallel derivation). `pump` is null for a fan / heater / air unit.
+final equipmentNodePumpDutiesProvider =
+    Provider<Map<String, ({Power motor, Power input, PumpDuty? pump})>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final bind = ref.watch(mepDutyBindingProvider);
 
-  ({Power motor, Power input})? dutyFor(NetNode n) {
+  ({Power motor, Power input, PumpDuty? pump})? dutyFor(NetNode n) {
     PumpDuty? p;
     FanDuty? f;
     // Backlog G-2 — a placed water heater carries its sized ELEMENT (the
@@ -1030,7 +1041,7 @@ final equipmentNodeDutiesProvider =
     if (n.component == NodeComponent.waterHeater) {
       final h = ref.watch(waterHeaterDesignsProvider)[n.id];
       if (h == null) return null;
-      return (motor: h.elementPower, input: h.elementPower);
+      return (motor: h.elementPower, input: h.elementPower, pump: null);
     }
     if (bind.firePumpNodeIds.contains(n.id)) {
       // Round 21 — a JOCKEY is fed its own pressure-maintenance duty.
@@ -1053,6 +1064,7 @@ final equipmentNodeDutiesProvider =
         motor: p.selectedMotor,
         input: MepEquipmentLoad.nameplateInput(
             p.motorInputPower, p.selectedMotor, defaultMotorEfficiency),
+        pump: p,
       );
     }
     // Round 16 — every drawn supply mover carries its OWN series / transfer
@@ -1088,10 +1100,11 @@ final equipmentNodeDutiesProvider =
       motor: motor,
       input: MepEquipmentLoad.nameplateInput(
           op, motor, defaultMotorEfficiency),
+      pump: f == null ? p : null,
     );
   }
 
-  final out = <String, ({Power motor, Power input})>{};
+  final out = <String, ({Power motor, Power input, PumpDuty? pump})>{};
   for (final n in net.nodes) {
     final c = n.component;
     if (c == null || !c.isElectricalLoad) continue;
@@ -1117,6 +1130,38 @@ final riserEquipmentDetailsProvider = Provider<Map<String, String>>((ref) {
       node.id: ?(prv.containsKey(node.id)
           ? 'PRV ${kStandpipePrvSetResidualKpa.toStringAsFixed(0)} kPa'
           : equipmentDetail(node, motor: duties[node.id]?.motor)),
+  };
+});
+
+/// Fix round 3 (O2, 2026-11-13) — the ISSUED riser sheet's equipment detail
+/// (M-201 PDF / DXF): [riserEquipmentDetailsProvider] with every PLANT item
+/// carrying its duty, as the equipment schedule prints it under the same tag
+/// — a pump its duty point beside the motor (`Q 10.8 L/s · H 122.1 m ·
+/// 18.5 kW`, the schedule's own [PumpDuty]), a tank with no capacity set the
+/// schedule's '-' (never a fabricated volume). The canvas and the BOM keep
+/// the motor-only map.
+final issuedRiserEquipmentDetailsProvider =
+    Provider<Map<String, String>>((ref) {
+  final net = ref.watch(sizingNetworkProvider);
+  final base = ref.watch(riserEquipmentDetailsProvider);
+  final duties = ref.watch(equipmentNodePumpDutiesProvider);
+  const tanks = {
+    NodeComponent.roofTank,
+    NodeComponent.groundTank,
+    NodeComponent.expansionTank,
+  };
+  return {
+    ...base,
+    for (final node in net.nodes)
+      if (duties[node.id]?.pump != null &&
+          (node.component == NodeComponent.pump ||
+              node.component == NodeComponent.boosterSet))
+        node.id: equipmentDetail(node,
+            motor: duties[node.id]!.motor,
+            flow: duties[node.id]!.pump!.flow,
+            head: duties[node.id]!.pump!.head)!
+      else if (tanks.contains(node.component) && base[node.id] == null)
+        node.id: '-',
   };
 });
 

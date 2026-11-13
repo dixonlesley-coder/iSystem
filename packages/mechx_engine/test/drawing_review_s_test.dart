@@ -235,8 +235,16 @@ void main() {
       expect(part(null).prims.length, whole.prims.length);
       final p1 = texts(part(1)), p2 = texts(part(2));
       expect(p1, containsAll(['BAGIAN 1/2', 'LANJUT KE Lantai 1 - BAGIAN 2']));
-      expect(
-          p2, containsAll(['BAGIAN 2/2', 'LANJUTAN DARI Lantai 1 - BAGIAN 1']));
+      expect(p2, contains('BAGIAN 2/2'));
+      // Fix round 3 (O2) — each continuation mark names the pipe it
+      // continues: 'LANJUTAN DARI Lantai 1 - BAGIAN 1 (<size-service-...>)'.
+      final marks =
+          p2.where((t) => t.startsWith('LANJUTAN DARI Lantai 1 - BAGIAN 1'));
+      expect(marks, isNotEmpty);
+      for (final m in marks) {
+        expect(m, matches(RegExp(r'BAGIAN 1 \(\S*[A-Z]{1,3}\S*.*\)$')),
+            reason: m);
+      }
       // Part 2 never continues a riser (the risers ride part 1).
       expect(p2.where((t) => t.startsWith('LANJUT KE')), isEmpty);
       expect(p1.where((t) => t.startsWith('LANJUTAN DARI')), isEmpty);

@@ -219,6 +219,27 @@ class DrawingChrome {
           scaleText: scaleText,
         );
 
+  /// Fix round 3 (O1, 2026-11-13) — a copy whose [legendNotes] are
+  /// REPLACED by [notes] (every other field kept).
+  DrawingChrome withLegendNotesReplaced(List<String> notes) => DrawingChrome(
+        drawingNumber: drawingNumber,
+        revisionNumber: revisionNumber,
+        sheetIndex: sheetIndex,
+        sheetTotal: sheetTotal,
+        northAngleRad: northAngleRad,
+        legendServices: legendServices,
+        legendNotes: notes,
+        legendSymbols: legendSymbols,
+        scaleBarLabel: scaleBarLabel,
+        clientName: clientName,
+        drawingTitle: drawingTitle,
+        drawnBy: drawnBy,
+        checkedBy: checkedBy,
+        approvedBy: approvedBy,
+        dateString: dateString,
+        scaleText: scaleText,
+      );
+
   /// Fix round F6 (2026-11-13) — a copy whose legend keeps only the
   /// [services] and [symbols] for which [keepService] / [keepSymbol] hold
   /// (order kept; notes and every other field kept). A detail sheet keys

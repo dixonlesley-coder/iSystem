@@ -32,7 +32,8 @@ import 'package:mechx_engine/units.dart' show Length;
 
 import '../../store/app_state.dart';
 import '../../store/document_control_store.dart';
-import '../../store/electrical_feed.dart' show riserEquipmentDetailsProvider;
+import '../../store/electrical_feed.dart'
+    show issuedRiserEquipmentDetailsProvider;
 import '../../store/project_store.dart';
 import '../../store/network_store.dart';
 import '../../store/sizing_store.dart';
@@ -181,7 +182,8 @@ SldSheet buildLiveRiserSheet(
   // Per-node capacity/duty suffixes — the same provider-fed resolution the
   // canvas uses (`equipmentDetail` returns null when no datum exists).
   // Round 12 — each node's OWN duty (fire pump / booster / per-root fan).
-  final detailByNode = ref.read(riserEquipmentDetailsProvider);
+  // Fix round 3 (O2) — the issued sheet's plant items carry their duty.
+  final detailByNode = ref.read(issuedRiserEquipmentDetailsProvider);
   // N6: the same §10 length-per-edge map the plan export builds — a run via the
   // sheet calibration, a riser via the true elevation delta — so every pipe
   // run/riser tag carries its take-off / prefab length on the issued sheet.

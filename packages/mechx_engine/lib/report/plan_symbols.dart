@@ -22,7 +22,7 @@ import '../sizing/network_sizing.dart' show EdgeSizing;
 import '../standards/custom_fixture.dart';
 import '../standards/sni.dart' show PlumbingFixture;
 import '../units.dart';
-import 'drawing_chrome.dart' show LabelBox;
+import 'drawing_chrome.dart' show LabelBox, helveticaTextWidth;
 import 'number_format.dart' show signedElevationText;
 import 'sld_sheet.dart';
 
@@ -887,7 +887,7 @@ PlanKeyTable? placePlanKeyTable(
 }) {
   if (keys.isEmpty) return null;
   final ts = textSize;
-  double w(String t) => t.length * ts * 0.55;
+  double w(String t) => helveticaTextWidth(t, ts);
   (String, String) split(String t) {
     for (final sep in const [' - ', ' \u00b7 ']) {
       final i = t.indexOf(sep);
@@ -1459,7 +1459,10 @@ List<String>? composePlanEdgeLabelLines({
 /// section note above): [text] is the one-line form, [splitLines] the optional
 /// two-line form ([composePlanEdgeLabelLines]); [ownRunId] names the run the
 /// label belongs to (its own linework is not an obstacle). Text width is
-/// estimated as chars × size × 0.55 (the Helvetica average). The first
+/// MEASURED in Helvetica, the font every vector sheet prints (fix round 3,
+/// S6 — the old chars × size × 0.55 average under-measured capitals: a 'WC'
+/// tag is 1.67 em, not 1.1, and a key circle placed against the short box
+/// hid its C). The first
 /// beside-the-run slot that clears wins with no leader — the midpoint upper
 /// slot is byte-identical to the original greedy placer. Never returns null:
 /// a size tag is content, never dropped. The placed rectangle is recorded in
@@ -1525,7 +1528,7 @@ LeaderedLabelPlacement placePlanLabel({
   final eps = 1e-9 * ts; // scale-free tolerance (R6)
   final lh = kPlanLabelLineFactor * ts;
   final runLen = math.sqrt(dx * dx + dy * dy);
-  double widthOf(String s) => s.length * ts * 0.55;
+  double widthOf(String s) => helveticaTextWidth(s, ts);
 
   // Line forms, in preference order. A label much longer than its run reads
   // as detached from it, so the split form goes first there.
@@ -1925,6 +1928,12 @@ class _Block {
       this.v1, this.halfW);
 }
 
+/// Fix round 3 (S5/S6) — the clear gap (in text heights) a key circle keeps
+/// from every placed label, glyph box and run besides its own: a label's
+/// footprint stops at its baseline, so a descender or a tangent circle
+/// read as an overprint on paper.
+const double kPlanKeyCircleClearFactor = 0.2;
+
 /// Drawing-review D5 — the KEY TAG of a plan element: a numbered circle
 /// hugging [anchor] (the first clear slot of 32 directions × growing rings,
 /// a leader beyond the hugging ring of at most [kPlanKeyTagLeaderMaxFactor]
@@ -1939,8 +1948,14 @@ LeaderedLabelPlacement _placeKeyTag({
   String? ownRunId,
 }) {
   final n = '${keys.keyFor(text)}';
-  final tw = n.length * ts * 0.55;
+  final tw = helveticaTextWidth(n, ts);
   final r = math.max(0.75 * ts, tw / 2 + 0.25 * ts);
+  // Fix round 3 (S5/S6, 2026-11-13) — against TEXT (placed labels, glyph /
+  // mark boxes) the collision box is the DRAWN circle plus a clear gap
+  // ([kPlanKeyCircleClearFactor] text heights), not a box 15 % inside it: a
+  // circle tested at 0.85 r sat tangent to (or on) the glyphs of a
+  // neighbouring duct tag / fixture code.
+  final rc = r + kPlanKeyCircleClearFactor * ts;
   ({double x, double y, double cost, bool lead})? best;
   for (final gap in [
     0.3,
@@ -1958,6 +1973,13 @@ LeaderedLabelPlacement _placeKeyTag({
       final ux = math.sin(k * math.pi / 16), uy = math.cos(k * math.pi / 16);
       final cx = anchor.x + ux * d, cy = anchor.y + uy * d;
       final box = (
+        minX: cx - rc,
+        minY: cy - rc,
+        maxX: cx + rc,
+        maxY: cy + rc
+      );
+      // Linework keeps the long-standing 0.85 r test (a pipe is thin ink).
+      final inkBox = (
         minX: cx - 0.85 * r,
         minY: cy - 0.85 * r,
         maxX: cx + 0.85 * r,
@@ -1967,7 +1989,7 @@ LeaderedLabelPlacement _placeKeyTag({
       if (layout.hitsBox(box)) cost += 1;
       for (final rr in layout._runs) {
         if (rr.id != null && rr.id == ownRunId) continue;
-        if (_segHitsBox(rr.seg, box, 0)) cost += 1;
+        if (_segHitsBox(rr.seg, inkBox, 0)) cost += 1;
       }
       if (lead) {
         final ex = cx - ux * r, ey = cy - uy * r;
