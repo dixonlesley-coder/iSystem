@@ -6,9 +6,9 @@
 // set → down-riser DISTRIBUTION to a WC + lavatory on every floor and a
 // kitchen sink on Lantai 1, their drainage to a soil stack + outfall with one
 // stack vent, and one roof drain + downpipe. Unit A also has one retail room
-// on Lantai 1 with a cassette AC in it. Electrical: three single-phase
-// service-entrance boards (one per unit) on one declared 23 100 VA PLN
-// connection. No hot water, fire or ducts. Pure Dart (no Flutter import): the
+// on Lantai 1 with two cassette ACs in it. Electrical: one 3-phase service
+// board `PP Ruko` (declared 33 000 VA PLN) feeding three single-phase unit
+// sub-boards on L1 / L2 / L3. No hot water, fire or ducts. Pure Dart (no Flutter import): the
 // engine suite and the app suite (relative import) build exactly this.
 //
 // GEOMETRY. Calibration is 0.02 m/px on all three sheets (50 px = 1 m). One
@@ -75,8 +75,9 @@ String shopId(String base, String u) => '${base}_$u';
 /// The service-entrance board id of unit [u].
 String shopPanelId(String u) => 'panel_ruko_$u';
 
-/// The cassette AC node in unit A's room.
+/// The two cassette AC nodes in unit A's room.
 const String kShopAcNodeId = 'AC0_A';
+const List<String> kShopAcNodeIds = ['AC0_A', 'AC1_A'];
 
 /// A room annotation as plain data: sheet + floor, two opposite corners in
 /// sheet pixels, the room type. The ceiling is left to the app's default.
@@ -221,9 +222,11 @@ final _ks = _onCircles(_b, _px(4.0), _d, _px(2.0), (130, 40)); // west
     node('RW1', (260, 150), floor: 1),
     node('RW0', (260, 150), floor: 0),
     node('RWOUT', (260, 400), floor: 0), // RW0 -> RWOUT = 250 px = 5.0 m
-    // ── Unit A only: the cassette AC inside the retail room ───────────────
-    if (u == 'A')
-      node('AC0', (125, 100), floor: 0, component: NodeComponent.acCassette),
+    // ── Unit A only: TWO cassette ACs inside the retail room ──────────────
+    if (u == 'A') ...[
+      node('AC0', (125, -50), floor: 0, component: NodeComponent.acCassette),
+      node('AC1', (125, 250), floor: 0, component: NodeComponent.acCassette),
+    ],
   ];
 
   const cw = ServiceType.coldWater;
@@ -302,7 +305,13 @@ ElectricalCircuit _way(String id, String name, LoadKind kind,
   );
 }
 
-/// Unit [u]'s service-entrance board: single-phase 220 V, eight ways.
+/// The row's ONE service board (3-phase, PLN).
+const String kShopMainPanelId = 'panel_pp_ruko';
+
+/// The feeder way on `PP Ruko` that feeds unit [u]'s sub-board.
+String shopFeederId(String u) => 'c_feeder_$u';
+
+/// Unit [u]'s sub-board: single-phase 220 V, eight ways, fed from `PP Ruko`.
 ElectricalPanel _board(String u) {
   String c(String base) => 'c_${base}_$u';
   return ElectricalPanel(
@@ -310,6 +319,8 @@ ElectricalPanel _board(String u) {
     name: 'Panel Ruko $u',
     system: ElectricalSystem.singlePhase,
     voltage: const Voltage(220),
+    sourceType: PanelSource.feeder,
+    fedByCircuitId: shopFeederId(u),
     circuits: [
       _way(c('lampu_lt1'), 'Lampu Lt1', LoadKind.lighting,
           loadW: 200, lengthM: 10),
@@ -329,17 +340,41 @@ ElectricalPanel _board(String u) {
   );
 }
 
-/// The row's electrical project: three single-phase 220 V service-entrance
-/// boards (one per unit, none feeding another), default (TN-C-S) earthing,
-/// a declared 23 100 VA (3 x 7700) PLN connection, nothing placed on the plan
-/// (manual lengths). No way for the transfer pump, booster or AC is added by
-/// hand.
+/// `PP Ruko`: the ONE service-entrance board, 3-phase 400 V, three feeder
+/// ways to the unit sub-boards on L1 / L2 / L3, manual 15 / 20 / 25 m.
+ElectricalPanel _mainBoard() {
+  const phases = [PhaseLine.l1, PhaseLine.l2, PhaseLine.l3];
+  const lengths = [15.0, 20.0, 25.0];
+  return ElectricalPanel(
+    id: kShopMainPanelId,
+    name: 'PP Ruko',
+    system: ElectricalSystem.threePhase,
+    voltage: const Voltage(400),
+    circuits: [
+      for (var i = 0; i < kShopUnits.length; i++)
+        ElectricalCircuit(
+          id: shopFeederId(kShopUnits[i]),
+          name: 'Feeder Panel Ruko ${kShopUnits[i]}',
+          loadKind: LoadKind.feeder,
+          feedsPanelId: shopPanelId(kShopUnits[i]),
+          phaseOverride: phases[i],
+          length: Length(lengths[i]),
+        ),
+    ],
+  );
+}
+
+/// The row's electrical project: `PP Ruko` (3-phase 400 V, the service
+/// entrance) feeding the three single-phase unit sub-boards, default
+/// (TN-C-S) earthing, a declared 33 000 VA PLN connection, nothing placed on
+/// the plan (manual lengths). No way for the pumps or the ACs is added by
+/// hand (the app's MEP sync mints them).
 ElectricalProject buildShophouseElectrical() => ElectricalProject(
       id: 'ref_shophouse',
       name: 'Ruko 3 lantai (3 unit)',
       supplyKind: SupplyKind.pln,
-      supplyCapacityVa: const ApparentPower(23100),
-      panels: [for (final u in kShopUnits) _board(u)],
+      supplyCapacityVa: const ApparentPower(33000),
+      panels: [_mainBoard(), for (final u in kShopUnits) _board(u)],
     );
 
 /// Reference building 2 — the shophouse row.
