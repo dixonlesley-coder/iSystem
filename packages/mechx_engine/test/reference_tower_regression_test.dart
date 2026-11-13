@@ -21,12 +21,22 @@
 // (10 mm² load-sized) raised `cumulative-voltage-drop-exceeded` ×78 and
 // `ads-disconnection` ×3 (PP-Lt28..30); now none. A user-fixed feeder cable
 // is never raised, and keeps its findings.
+//
+// T4 — on a genset-backed (essential) board an auto-sized way is grown until
+// ADS holds on BOTH sources. A 15 kW lift 60 m from an essential board on a
+// 100 kVA standby genset: utility-sized NYY 4x16 has Zs 0.358 ohm > the
+// 0.341 ohm limit of its 32 A D device on the 1.2 kA alternator fault (the
+// `ads-disconnection-on-genset` ERROR); it now grows to 25 mm² and passes. On
+// an 80 kVA set no bounded rung cures it: the way keeps its utility-pass
+// 16 mm² cable (never shrunk below what the utility needed) and the ERROR.
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/fault.dart'
     show defaultLvUtilityFaultKa, estimatedServiceFaultLevelA;
+import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
+import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart'
     show drainageFixtureUnit;
@@ -304,6 +314,87 @@ void main() {
           r.codes
               .where((c) => c.startsWith('cumulative-voltage-drop-exceeded')),
           isNotEmpty);
+    });
+  });
+
+  group('T4 — ADS holds on both sources on an essential path', () {
+    ElectricalProject essential(double kva) => ElectricalProject(
+          id: 'p',
+          name: 'p',
+          sources: ElectricalSources(
+              generator:
+                  GeneratorSource(kva: ApparentPower.kilovoltAmperes(kva))),
+          panels: [
+            const ElectricalPanel(
+              id: 'mdp',
+              name: 'MDP',
+              system: ElectricalSystem.threePhase,
+              voltage: Voltage(400),
+              circuits: [
+                ElectricalCircuit(
+                  id: 'f-e',
+                  name: 'Feeder E',
+                  loadKind: LoadKind.feeder,
+                  feedsPanelId: 'e',
+                  length: Length(10),
+                ),
+              ],
+            ),
+            ElectricalPanel(
+              id: 'e',
+              name: 'PP-E',
+              system: ElectricalSystem.threePhase,
+              voltage: const Voltage(400),
+              sourceType: PanelSource.feeder,
+              fedByCircuitId: 'f-e',
+              essential: true,
+              circuits: [
+                ElectricalCircuit(
+                  id: 'lift',
+                  name: 'Lift',
+                  loadKind: LoadKind.motor,
+                  cosPhi: loadDefaults[LoadKind.motor]!.cosPhi,
+                  demandFactor: 1,
+                  motorKw: 15,
+                  phases: 3,
+                  phasesUserSet: true,
+                  length: const Length(60),
+                ),
+              ],
+            ),
+          ],
+        );
+    ({ElectricalCircuitResult lift, Set<String> failed}) run(double kva) {
+      final p = essential(kva);
+      final sys = computeSystem(const PuilProfile(), p,
+          originFaultLevel: const Current(16000));
+      final adv = computeAdvancedStudy(const PuilProfile(), p, sys);
+      return (
+        lift: sys.panels['e']!.circuits.single,
+        failed: adv.gensetAdsFailedCircuitIds,
+      );
+    }
+
+    test('100 kVA: grown to 25 mm2, no ads-disconnection-on-genset', () {
+      final r = run(100);
+      expect(r.lift.breaker.ratingA.amperes, 32);
+      expect(r.lift.cable.csaMm2, 25);
+      expect(r.lift.cableRaisedForAds, isTrue);
+      expect(r.failed, isEmpty);
+    });
+
+    test(
+        '80 kVA: no bounded rung cures it — the utility-pass 16 mm2 cable '
+        'and the ERROR stay', () {
+      final r = run(80);
+      expect(r.lift.cable.csaMm2, 16);
+      expect(r.failed, {'lift'});
+    });
+
+    test('200 kVA: the utility-pass cable already holds on the genset', () {
+      final r = run(200);
+      expect(r.lift.cable.csaMm2, 16);
+      expect(r.failed, isEmpty);
     });
   });
 }

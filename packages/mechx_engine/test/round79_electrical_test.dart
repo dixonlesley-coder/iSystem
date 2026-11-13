@@ -48,7 +48,8 @@ import 'package:test/test.dart';
 const _profile = PuilProfile();
 final _s3 = math.sqrt(3) * 400;
 
-ElectricalCircuit _heater(String id, double w, {double len = 10}) =>
+ElectricalCircuit _heater(String id, double w,
+        {double len = 10, double? cableMinMm2}) =>
     ElectricalCircuit(
         id: id,
         name: id,
@@ -56,7 +57,8 @@ ElectricalCircuit _heater(String id, double w, {double len = 10}) =>
         loadW: w,
         cosPhi: 1,
         phases: 3,
-        length: Length(len));
+        length: Length(len),
+        cableOverrideMm2: cableMinMm2);
 
 ElectricalPanel _main(String id, List<ElectricalCircuit> c) =>
     ElectricalPanel(id: id, name: 'Main $id', circuits: c);
@@ -81,13 +83,21 @@ ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(
 
 void main() {
   group('(1) the on-site source is faulted on its alternator basis', () {
-    ElectricalProject build(double farM) => ElectricalProject(
+    // Reference tower T4 (2026-11-13): an AUTO-sized way on a genset-backed
+    // board now grows its cable until ADS holds on the alternator too, so
+    // the judge case hand-fixes the far run's cable ([fixed]: the 2.5 mm²
+    // minimum, a floor that leaves the load-sized section unchanged but
+    // marks it user-set, so it is never grown).
+    ElectricalProject build(double farM, {bool fixed = true}) =>
+        ElectricalProject(
           id: 'p',
           name: 'p',
           sources: const ElectricalSources(generator: GeneratorSource()),
           panels: [
-            _main('M',
-                [_heater('M-a', 5000), _heater('far', 30000, len: farM)]),
+            _main('M', [
+              _heater('M-a', 5000),
+              _heater('far', 30000, len: farM, cableMinMm2: fixed ? 2.5 : null),
+            ]),
             _shop('S', [for (var i = 0; i < 8; i++) 3000]),
           ],
         );
@@ -104,7 +114,8 @@ void main() {
       expect(b.va / 230 / kAlternatorXdPu / b.iscA, closeTo(_s3 / 230, 1e-9));
     });
 
-    test('a way that passes on the 1ph figure fails ADS on the 3ph '
+    test(
+        'a way that passes on the 1ph figure fails ADS on the 3ph '
         'alternator (ERROR)', () {
       var hit = 0;
       for (final len in [108.0, 116.0, 120.0, 132.0, 140.0]) {
@@ -118,8 +129,14 @@ void main() {
             w.code == 'ads-disconnection-on-genset' &&
             w.circuitId == 'far' &&
             w.severity == WarningSeverity.error);
-        // The judge agrees with the alternator-basis study, both ways.
-        expect(raised, g.circuits['far']!.adsOk == false, reason: '$len m');
+        // The judge agrees with the alternator-basis study, both ways (a
+        // run already failing on the UTILITY is reported there instead —
+        // the fixed cable is no longer grown for it).
+        expect(
+            raised,
+            g.circuits['far']!.adsOk == false &&
+                st.fault.circuits['far']!.adsOk != false,
+            reason: '$len m');
         if (raised) hit++;
       }
       expect(hit, greaterThan(0));
@@ -127,6 +144,38 @@ void main() {
       final sys = computeSystem(_profile, pr);
       final st = computeAdvancedStudy(_profile, pr, sys);
       expect(st.gensetAdsFailedCircuitIds, contains('far'));
+    });
+
+    test(
+        'reference tower T4 — AUTO-sized, the far run grows until ADS holds '
+        'on the alternator too (no ERROR)', () {
+      for (final len in [108.0, 116.0, 120.0, 132.0, 140.0]) {
+        final pr = build(len, fixed: false);
+        final sys = computeSystem(_profile, pr);
+        final st = computeAdvancedStudy(_profile, pr, sys);
+        final b = gensetFaultBasis(pr, sys)!;
+        final g =
+            faultStudy(sys, pr, _profile, originFaultLevel: Current(b.iscA));
+        final far =
+            sys.panels['M']!.circuits.firstWhere((c) => c.circuitId == 'far');
+        // Grown (or never failing) — either way the alternator judge passes
+        // unless the bounded ladder is exhausted, when it keeps the ERROR.
+        expect(st.gensetAdsFailedCircuitIds.contains('far'),
+            g.circuits['far']!.adsOk == false,
+            reason: '$len m');
+        if (g.circuits['far']!.adsOk != false && far.cableRaisedForAds) {
+          expect(st.gensetAdsFailedCircuitIds, isNot(contains('far')));
+        }
+      }
+      final pr = build(116, fixed: false);
+      final sys = computeSystem(_profile, pr);
+      final st = computeAdvancedStudy(_profile, pr, sys);
+      expect(st.gensetAdsFailedCircuitIds, isNot(contains('far')));
+      expect(
+          sys.panels['M']!.circuits
+              .firstWhere((c) => c.circuitId == 'far')
+              .cableRaisedForAds,
+          isTrue);
     });
 
     test('an all-1ph service keeps the 1ph U0 basis (byte-identical)', () {
@@ -178,7 +227,8 @@ void main() {
       }
     });
 
-    test('105 kVA (151.6 A per phase) passes; the heaviest line is the '
+    test(
+        '105 kVA (151.6 A per phase) passes; the heaviest line is the '
         'study per-line basis', () {
       expect(warns(build(105000)), isFalse);
       final pr = build(33000);
@@ -202,7 +252,8 @@ void main() {
       expect(w.single.message, contains('worst-loaded'));
     });
 
-    test('seeded property: warns iff the heaviest allocated line exceeds the '
+    test(
+        'seeded property: warns iff the heaviest allocated line exceeds the '
         'limiter', () {
       final rnd = math.Random(79);
       var fired = 0, quiet = 0;
@@ -267,8 +318,8 @@ void main() {
       final pr = build(forced: const ApparentPower(40000));
       final sys = computeSystem(_profile, pr);
       final st = computeAdvancedStudy(_profile, pr, sys);
-      expect(st.warnings.where((w) => w.code == 'genset-phase-overload'),
-          isEmpty);
+      expect(
+          st.warnings.where((w) => w.code == 'genset-phase-overload'), isEmpty);
     });
 
     test('one 1ph root keeps the conservative per-board term (Round 66)', () {
@@ -315,9 +366,12 @@ void main() {
           powerOneLine: st.powerOneLine));
       expect(md, contains('**3-phase, 400 V**'));
       expect(md, contains('- System: 3-phase, 400 V'));
-      expect(st.powerOneLine!.nodes.any((n) => n.sub?.contains('400 V') ?? false),
+      expect(
+          st.powerOneLine!.nodes.any((n) => n.sub?.contains('400 V') ?? false),
           isTrue);
-      expect(st.powerOneLine!.nodes.any((n) => n.sub?.startsWith('230 V') ?? false),
+      expect(
+          st.powerOneLine!.nodes
+              .any((n) => n.sub?.startsWith('230 V') ?? false),
           isFalse);
     });
 
