@@ -328,9 +328,17 @@ bool _isAirUnitComponent(NodeComponent? c) => switch (c) {
       _ => false,
     };
 
+/// Reference shophouse F4 (2026-11-13) — an AC indoor unit that needs no
+/// pipe or duct network to work: a cassette or a split-wall unit (it is fed
+/// refrigerant from its outdoor unit and power from its way). Never an
+/// `orphan` when nothing is joined to it. A ducted AC and an FCU are not.
+bool isSelfContainedAcUnit(NodeComponent? c) =>
+    c == NodeComponent.acCassette || c == NodeComponent.acSplitWall;
+
 /// Detect every per-ELEMENT connectivity defect in [net]:
 ///   • [NetworkElementDefectKind.orphan] — a node in [Network.nodes] with degree
-///     0 (connected to nothing);
+///     0 (connected to nothing), except a self-contained AC unit
+///     ([isSelfContainedAcUnit]);
 ///   • [NetworkElementDefectKind.looseEnd] — a degree-1 [NodeRole.main] that is
 ///     not a valid termination ([_isValidTermination]).
 ///
@@ -351,6 +359,11 @@ List<NetworkElementDefect> networkElementDefects(Network net) {
     final edges = incident[node.id];
     final degree = edges?.length ?? 0;
     if (degree == 0) {
+      // Reference shophouse F4 — a cassette / split-wall AC is a
+      // self-contained room unit (refrigerant + power only): it needs no
+      // pipe or duct, so standing alone is its normal state. A ducted AC
+      // and an FCU still need their ducts / water and stay flagged.
+      if (isSelfContainedAcUnit(node.component)) continue;
       defects.add(NetworkElementDefect(
         nodeId: node.id,
         kind: NetworkElementDefectKind.orphan,

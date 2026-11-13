@@ -85,29 +85,18 @@ HotWaterField _hotWaterField(Network net, Map<String, EdgeSizing> sizing,
 /// Round 67 r2 — one other supply component: its source + its nodes.
 typedef ExtraSupplyComponent = ({String source, Set<String> nodes});
 
-/// Round 67 (plumbing-hvac-convergence-17-second-supply-network-mover-
-/// unsized) — the SOURCE of every OTHER connected cold-water component (a
-/// podium's ground tank -> booster set beside a roof-tank tower): the
-/// component's own [_pickSource] (upfeed basis — the sizer root when it is a
-/// plant, else the best-ranked plant). [primary] is the source the main
-/// solve uses; its component is skipped. Sorted by source id.
-///
-/// Round 67 r2 — only a component with a REAL source is solved: its picked
-/// source is a plant, a water meter, or a bare degree-1 non-fixture leaf (a
-/// mains entry). A source-less fragment (fixtures on a stub, the sizer's
-/// bare junction root) is never given a fabricated zero-head field — the
-/// no-source connectivity warning covers it.
-List<ExtraSupplyComponent> _extraSupplySources(Network net,
-    BuildingLevels building, MountingHeights mounting, String? primary) {
+/// The connected cold-water components of [net] (nodes + edges), in a
+/// deterministic order (by their smallest node id).
+List<({Set<String> nodes, List<NetEdge> edges})> _supplyComponents(
+    Network net) {
   final edges = _supplyEdges(net);
-  if (edges.isEmpty) return const [];
   final adj = <String, List<NetEdge>>{};
   for (final e in edges) {
     (adj[e.fromId] ??= []).add(e);
     (adj[e.toId] ??= []).add(e);
   }
   final seen = <String>{};
-  final out = <ExtraSupplyComponent>[];
+  final out = <({Set<String> nodes, List<NetEdge> edges})>[];
   for (final start in (adj.keys.toList()..sort())) {
     if (!seen.add(start)) continue;
     final comp = <String>{start};
@@ -124,7 +113,145 @@ List<ExtraSupplyComponent> _extraSupplySources(Network net,
         }
       }
     }
+    out.add((nodes: comp, edges: compEdges.toList()));
+  }
+  return out;
+}
+
+/// Reference shophouse F1 — one OTHER downfeed component: its own roof tank
+/// and its nodes.
+typedef ExtraDownfeedTank = ({String tank, Set<String> nodes});
+
+/// Reference shophouse F1 (2026-11-13) — on a DOWNFEED project, every OTHER
+/// connected cold-water component (not the main solve's [primary] tank's)
+/// whose own downfeed source ([_pickSource] preferHighest over ITS edges) is
+/// a roof tank: a second roof-tank system (a row of shophouses, each unit
+/// with its own tank). It is solved exactly like the main tank — its gravity
+/// field from its tank, its booster sized on that gravity residual, its
+/// delivered field and its zone table — never as an upfeed 'extra supply
+/// component' from its ground tank (which charged its booster with the
+/// transfer pump's lift). Sorted by tank id. Components without a roof tank
+/// keep the Round-67 extra-component path.
+List<ExtraDownfeedTank> _extraDownfeedTanks(Network net,
+    BuildingLevels building, MountingHeights mounting, String? primary) {
+  final out = <ExtraDownfeedTank>[];
+  for (final c in _supplyComponents(net)) {
+    if (primary != null && c.nodes.contains(primary)) continue;
+    final t = _pickSource(net, c.edges, building,
+        preferHighest: true, mounting: mounting);
+    if (t == null || net.nodeById(t)?.component != NodeComponent.roofTank) {
+      continue;
+    }
+    out.add((tank: t, nodes: c.nodes));
+  }
+  out.sort((a, b) => a.tank.compareTo(b.tank));
+  return out;
+}
+
+/// Reference shophouse F1 — the other roof-tank components of a DOWNFEED
+/// project ([_extraDownfeedTanks]); empty on upfeed or with one component.
+final extraDownfeedTanksProvider = Provider<List<ExtraDownfeedTank>>((ref) {
+  if (ref.watch(feedStrategyProvider) != FeedStrategy.downfeed) {
+    return const [];
+  }
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  final edges = _supplyEdges(net);
+  if (edges.isEmpty) return const [];
+  final primary = _pickSource(net, edges, project.building,
+      preferHighest: true, mounting: project.mounting);
+  return _extraDownfeedTanks(
+      net, project.building, project.mounting, primary);
+});
+
+/// Reference shophouse F1 — the downfeed field of one roof [tank] (cold, then
+/// hot water through its heaters), with [moverHeads] developed (empty: the
+/// gravity field). The SAME call [downfeedProvider] /
+/// [downfeedDeliveredProvider] make for the main tank.
+DownfeedSolution _downfeedFrom(Network net, Map<String, EdgeSizing> sizing,
+    ProjectState project, String tank,
+    {Map<String, Head> moverHeads = const {}}) {
+  final cold = solveDownfeed(
+    net: net,
+    service: kSupplyService,
+    tankId: tank,
+    edgeFlows: _supplyFlows(_supplyEdges(net), sizing),
+    sizing: sizing,
+    calibrationBySheet: project.calibrations,
+    building: project.building,
+    targetResidual: _targetResidual,
+    mounting: project.mounting,
+    prvSetpoint: _prvSetpoint,
+    moverHeads: moverHeads,
+  );
+  return mergeHotWaterDownfeed(
+      cold,
+      _hotWaterField(net, sizing, project, cold.residualPressure,
+          cold.noFlowStaticPressure),
+      targetResidual: _targetResidual);
+}
+
+/// Reference shophouse F1 — [base] merged with the other roof-tank
+/// components' fields (disjoint keys): the critical node / minimum residual
+/// are the least over EVERY delivery node (ties keep the earlier, then the
+/// tank order), the booster head required the largest.
+DownfeedSolution _mergeDownfeedTanks(
+    DownfeedSolution base, List<DownfeedSolution> extras) {
+  if (extras.isEmpty) return base;
+  final residual = {...base.residualPressure};
+  final noFlow = {...base.noFlowStaticPressure};
+  final delivery = {...base.deliveryNodeIds};
+  var critical = base.criticalNodeId;
+  var minPa = base.minResidual.pascals;
+  var booster = base.boosterHeadRequired.meters;
+  for (final x in extras) {
+    residual.addAll(x.residualPressure);
+    noFlow.addAll(x.noFlowStaticPressure);
+    delivery.addAll(x.deliveryNodeIds);
+    if (x.minResidual.pascals < minPa - 1e-9) {
+      minPa = x.minResidual.pascals;
+      critical = x.criticalNodeId;
+    }
+    if (x.boosterHeadRequired.meters > booster) {
+      booster = x.boosterHeadRequired.meters;
+    }
+  }
+  return DownfeedSolution(
+    residualPressure: residual,
+    criticalNodeId: critical,
+    minResidual: Pressure(minPa),
+    boosterHeadRequired: Head(booster),
+    targetHeldByDesign: base.targetHeldByDesign,
+    noFlowStaticPressure: noFlow,
+    deliveryNodeIds: delivery,
+  );
+}
+
+/// Round 67 (plumbing-hvac-convergence-17-second-supply-network-mover-
+/// unsized) — the SOURCE of every OTHER connected cold-water component (a
+/// podium's ground tank -> booster set beside a roof-tank tower): the
+/// component's own [_pickSource] (upfeed basis — the sizer root when it is a
+/// plant, else the best-ranked plant). [primary] is the source the main
+/// solve uses; its component is skipped. Sorted by source id.
+///
+/// Round 67 r2 — only a component with a REAL source is solved: its picked
+/// source is a plant, a water meter, or a bare degree-1 non-fixture leaf (a
+/// mains entry). A source-less fragment (fixtures on a stub, the sizer's
+/// bare junction root) is never given a fabricated zero-head field — the
+/// no-source connectivity warning covers it.
+///
+/// Reference shophouse F1 — a component holding one of [skipTanks] (a
+/// downfeed component with its OWN roof tank, [extraDownfeedTanksProvider])
+/// is a downfeed system from that tank, never solved here.
+List<ExtraSupplyComponent> _extraSupplySources(Network net,
+    BuildingLevels building, MountingHeights mounting, String? primary,
+    {Set<String> skipTanks = const {}}) {
+  final out = <ExtraSupplyComponent>[];
+  for (final c in _supplyComponents(net)) {
+    final comp = c.nodes;
+    final compEdges = c.edges;
     if (primary != null && comp.contains(primary)) continue;
+    if (comp.any(skipTanks.contains)) continue;
     final src = _pickSource(net, compEdges.toList(), building,
         preferHighest: false, mounting: mounting);
     if (src == null) continue;
@@ -157,7 +284,10 @@ final extraSupplySourcesProvider =
   final primary = _pickSource(net, edges, project.building,
       preferHighest: !upfeed, mounting: project.mounting);
   return _extraSupplySources(
-      net, project.building, project.mounting, primary);
+      net, project.building, project.mounting, primary,
+      skipTanks: {
+        for (final t in ref.watch(extraDownfeedTanksProvider)) t.tank,
+      });
 });
 
 typedef _ExtraField = ({
@@ -487,11 +617,17 @@ final downfeedProvider = Provider<DownfeedSolution?>((ref) {
   );
   // Round 55 — the hot-water field through each heater (a roof-tank hotel's
   // top-floor hot showers are usually the index fixtures).
-  return mergeHotWaterDownfeed(
+  final base = mergeHotWaterDownfeed(
       cold,
       _hotWaterField(net, sizing, project, cold.residualPressure,
           cold.noFlowStaticPressure),
       targetResidual: _targetResidual);
+  // Reference shophouse F1 — every other roof-tank component's own gravity
+  // field (a row of units, each with its own roof tank).
+  return _mergeDownfeedTanks(base, [
+    for (final t in ref.watch(extraDownfeedTanksProvider))
+      _downfeedFrom(net, sizing, project, t.tank),
+  ]);
 });
 
 /// Round 56 — the head each sized NON-transfer supply mover develops
@@ -542,13 +678,21 @@ final downfeedDeliveredProvider = Provider<DownfeedSolution?>((ref) {
     moverHeads: heads,
   );
   // Round 55 — the delivered hot-water field through each heater.
-  return _withExtraDownfeed(
-      mergeHotWaterDownfeed(
-          cold,
-          _hotWaterField(net, sizing, project, cold.residualPressure,
-              cold.noFlowStaticPressure),
-          targetResidual: _targetResidual),
-      extra);
+  final main = mergeHotWaterDownfeed(
+      cold,
+      _hotWaterField(net, sizing, project, cold.residualPressure,
+          cold.noFlowStaticPressure),
+      targetResidual: _targetResidual);
+  // Reference shophouse F1 — every other roof-tank component delivers from
+  // its own tank with ITS own movers running.
+  final others = [
+    for (final t in ref.watch(extraDownfeedTanksProvider))
+      _downfeedFrom(net, sizing, project, t.tank, moverHeads: {
+        for (final h in heads.entries)
+          if (t.nodes.contains(h.key)) h.key: h.value,
+      }),
+  ];
+  return _withExtraDownfeed(_mergeDownfeedTanks(main, others), extra);
 });
 
 /// Round 32 (binding-1) — the SNI 8153 MINIMUM residual a solve's critical
@@ -2620,6 +2764,46 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
       ),
     ));
   }
+  // Reference shophouse F1 — every OTHER roof-tank component is zoned from
+  // its own tank (plus its own booster lift), exactly like the main tank.
+  // (Its intermediate break tanks are not split out — recorded.)
+  final extraTanks = ref.watch(extraDownfeedTanksProvider);
+  if (extraTanks.isNotEmpty) {
+    final heads = ref.watch(downfeedMoverHeadsProvider);
+    final top = project.building.levelCount - 1;
+    for (final x in extraTanks) {
+      final w = _downfeedTankWalk(net, x.tank);
+      int? lo, hi;
+      for (final id in (w.fed.intersection(w.delivery).toList()..sort())) {
+        final n = net.nodeById(id)!;
+        if (lo == null || n.floorIndex < lo) lo = n.floorIndex;
+        if (hi == null || n.floorIndex > hi) hi = n.floorIndex;
+      }
+      if (lo == null) continue;
+      final elev = nodeElevation(
+          net.nodeById(x.tank)!, project.building, project.mounting);
+      final byFloor = _downfeedDatumByFloor(net, project, x.tank, elev, {
+        for (final h in heads.entries)
+          if (x.nodes.contains(h.key)) h.key: h.value,
+      });
+      final datum = byFloor?[top] ?? elev;
+      groups.add(DownfeedZoneGroup(
+        tankId: x.tank,
+        tankElevation: datum,
+        tankElevationByFloor: byFloor,
+        zones: computeDownfeedZones(
+          building: project.building,
+          mounting: project.mounting,
+          maxStaticPressure: effective,
+          tankElevation: datum,
+          tankElevationByFloor: byFloor,
+          maxFixtureStatic: maxFix,
+          lowestServedFloor: lo,
+          highestServedFloor: hi,
+        ),
+      ));
+    }
+  }
   // Round 70 — each break tank zones the floors it feeds from its own datum.
   for (final MapEntry(key: t, value: nodes) in regions.entries) {
     int? lo, hi;
@@ -2867,6 +3051,16 @@ final downfeedDatumByFloorProvider = Provider<Map<int, Length>?>((ref) {
   final tank = _pickSource(net, edges, project.building,
       preferHighest: true, mounting: project.mounting);
   if (tank == null) return null;
+  return _downfeedDatumByFloor(net, project, tank, tankElevation, heads);
+});
+
+/// The per-floor downfeed datum of ONE roof [tank] at [tankElevation]
+/// ([downfeedDatumByFloorProvider]'s rule; Reference shophouse F1 — also
+/// each other roof-tank component's own zone datum). Null when no floor is
+/// lifted.
+Map<int, Length>? _downfeedDatumByFloor(Network net, ProjectState project,
+    String tank, Length tankElevation, Map<String, Head> heads) {
+  if (heads.isEmpty) return null;
   // Round 68 — the tank's served-floor walk ([_downfeedTankWalk]): only the
   // fixtures the zoned riser feeds (a booster ZONE hung off the tank — a
   // wall set — neither lifts nor is lifted), and only the PIPE sets lift.
@@ -2906,7 +3100,7 @@ final downfeedDatumByFloorProvider = Provider<Map<int, Length>?>((ref) {
     for (var f = 0; f < levels; f++)
       f: Length(tankElevation.meters + perFloor[f]),
   };
-});
+}
 
 /// Round 56 (plumbing-hvac-convergence-6-zone-table-ignores-drawn-downfeed-
 /// booster) — the gravity DATUM the downfeed zone table's TOP zone hangs
