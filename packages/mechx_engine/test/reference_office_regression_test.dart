@@ -74,9 +74,12 @@ void main() {
           reason: id);
     }
     // The run leaving the pump is still its NFPA 20 discharge pipe (500 gpm
-    // row: DN125), storing the rated flow (Round 62).
+    // row: DN125). Backlog A-5 (supersedes the Round-62 stored rated flow
+    // for a branch) — it stores its OWN 4.71405 L/s, v = 4 x 4.71405e-3 /
+    // (pi x 0.125^2) = 0.384 m/s.
     expect(sz['e_sp_FP_S0']!.diameter.inMillimeters, 125);
-    expect(sz['e_sp_FP_S0']!.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+    expect(sz['e_sp_FP_S0']!.flow.inLitersPerSecond, closeTo(4.71405, 5e-5));
+    expect(sz['e_sp_FP_S0']!.velocity.metersPerSecond, closeTo(0.384, 5e-4));
     // The hydrant main beside it is unchanged.
     expect(sz['e_fh_FP_H0']!.diameter.inMillimeters, 125);
     expect(sz['e_fh_H0_H1']!.diameter.inMillimeters, 100);

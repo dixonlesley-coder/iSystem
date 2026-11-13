@@ -193,6 +193,12 @@ Set<String> raiseFirePumpSuctionAndDischarge(
 
   final suction = <String>{};
   final discharge = <String>{};
+  // Backlog A-5 (2026-11-13) — discharge pipes on a BRANCH leaving a
+  // several-outlet pump (the O1 rule): sized on the rated flow, but they
+  // carry (and are solved on) their OWN flow. A pipe also reached as a
+  // main discharge pipe of some pump is not a branch.
+  final branchDischarge = <String>{};
+  final mainDischarge = <String>{};
   // The largest rated flow of the pumps whose suction / discharge walk
   // reached each edge.
   final rated = <String, FlowRate>{};
@@ -294,6 +300,7 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         if (e.kind == EdgeKind.riser) {
           if (!pastHeader || (atHeader && carriesRated(e, p))) {
             discharge.add(e.id);
+            (branch ? branchDischarge : mainDischarge).add(e.id);
             rate(e.id, p);
           }
           continue;
@@ -307,6 +314,7 @@ Set<String> raiseFirePumpSuctionAndDischarge(
         // keeps its own class size, never the pump's DN125 at 31.5 L/s.
         if (pastHeader && !carriesRated(e, p)) continue;
         discharge.add(e.id);
+        (branch ? branchDischarge : mainDischarge).add(e.id);
         rate(e.id, p);
         final next = other(e, cur);
         final n = net.nodeById(next);
@@ -350,6 +358,13 @@ Set<String> raiseFirePumpSuctionAndDischarge(
             r0.cubicMetersPerSecond > s.flow.cubicMetersPerSecond + 1e-12
         ? r0
         : s.flow;
+    // Backlog A-5 — a branch discharge pipe keeps the Table 4.28(a) size of
+    // the rated flow but stores its OWN flow (friction, velocity and the
+    // printed flow are its own: the physical truth).
+    final ownFlow = !isSuction &&
+        branchDischarge.contains(id) &&
+        !mainDischarge.contains(id);
+    final stored = ownFlow ? s.flow : flow;
     final row = firePumpPipeRow(flow);
     final tableMm = _seriesAtLeast(
         math.min(maxMm, isSuction ? row.suctionMm : row.dischargeMm));
@@ -365,10 +380,12 @@ Set<String> raiseFirePumpSuctionAndDischarge(
       floorMm = math.max(floorMm, r.diameter.inMillimeters);
       over = over || r.overVelocity;
     }
-    if (floorMm <= s.diameter.inMillimeters + 1e-9 && flow == s.flow) return;
+    if (floorMm <= s.diameter.inMillimeters + 1e-9 && stored == s.flow) {
+      return;
+    }
     final d = Diameter.mm(math.max(floorMm, s.diameter.inMillimeters));
-    sizing[id] = s.withBore(d, velocityFromFlow(flow, d),
-        flow: flow, overCapacity: over);
+    sizing[id] = s.withBore(d, velocityFromFlow(stored, d),
+        flow: stored, overCapacity: over);
     raised.add(id);
   }
 

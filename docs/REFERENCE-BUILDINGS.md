@@ -114,7 +114,7 @@ _(empty)_
 **Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `unfed-panel`, any `pressure-zone`.
 
 **Fixed by its review (2026-11-13).**
-- **O1:** the NFPA 20 discharge raise ran past FP's own junction onto the sprinkler branch: S0→S1 was DN125 at 31.545 L/s, then DN32 above it. The raise now stops at a two-outlet pump's junction: the sprinkler riser is DN32 at 4.714 L/s throughout.
+- **O1:** the NFPA 20 discharge raise ran past FP's own junction onto the sprinkler branch: S0→S1 was DN125 at 31.545 L/s, then DN32 above it. The raise now stops at a two-outlet pump's junction: the sprinkler riser is DN32 at 4.714 L/s throughout (and since backlog A-5 FP→S0 itself carries 4.714 L/s on its DN125).
 - **O2:** on upfeed the zone table used the legacy 255 kPa budget walk and prescribed two PRV zones. It now hangs from the solved upfeed field (`upfeedZoneDatumProvider`): one zone, no PRV.
 - **O4:** the auto-wired MEP feeder carrying the fire pump was NYY, and the app flagged its own feeder. The sync now specifies it FRC (and reverts only an FRC it set).
 - **O3 (closed by backlog A-1):** the sprinkler-vs-pump judge required lift + branch-base head only (25.56 m), while the rating basis' sprinkler point includes the sized index friction (58.211 m after O1). The judge now reads the rating basis' sprinkler point.
@@ -124,14 +124,14 @@ _(empty)_
 - **(a) Duct friction basis.** The room-air equipment estimate uses galvanised duct roughness (0.09 mm), while the drawn network uses the PU product (0.03 mm): 109.13 Pa vs 121.25 Pa for one FCU.
 - **(c) Urinal type.** There is no flush-valve urinal type.
 - **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
-- **(g) Branch run prints the pump's flow (O1).** The branch run FP→S0 keeps the pump's rated 31.545 L/s on DN125 (the Round-62 stored-flow rule), not the sprinkler system's 4.714 L/s.
 - **(h) Auto-FRC record not saved (O4).** The "FRC set by the sync" record is not persisted: after reopening a project, an auto-FRC feeder whose fire pump is later removed stays FRC.
 
 ### Backlog closed (2026-11-13)
 
+- **(g) Branch run prints the pump's flow (O1) — backlog A-5.** FP→S0 keeps DN125 but carries the sprinkler's own 4.714 L/s (v 0.384 m/s): sprinkler index friction 37.414 → 36.947 m, sprinkler point 58.211 → 57.744 m; the pump stays on the standpipe point 98.536 m.
 - **(e) Churn over-pressure — backlog A-3.** The churn 1.4 x 98.536 x 9.81 = 1353.3 kPa now sets the PN16 class of the fire pipework downstream of FP (printed on the fire results and BOM fire lines), and the four hose valves (1341.5..1223.8 kPa static) are designated pressure-regulating hose valves set to 690 kPa (info, take-off, riser tag): no warning.
 - **(b) Fire tank volume — backlog A-2.** The fire-water reserve is computed (`fireTankReservesProvider`: rated flow x duration): 31.5451 L/s x 1800 s = 56 781 L. FT has no capacity, so the Review raises the info `fire-tank-capacity-unset:FT` stating it; a capacity below it would warn `fire-tank-undersized:FT`.
-- **(f) Two judge heads (O3) — backlog A-1.** The sprinkler-vs-pump judge now requires the rating basis' sprinkler point (`FireSystemBasis.sprinklerPointHeadM`): 15.7 + 50/9.81 + 37.414 = 58.211 m vs the pump's 98.536 m, not short (the old lower bound read 25.560 m).
+- **(f) Two judge heads (O3) — backlog A-1.** The sprinkler-vs-pump judge now requires the rating basis' sprinkler point (`FireSystemBasis.sprinklerPointHeadM`): 15.7 + 50/9.81 + 37.414 = 58.211 m vs the pump's 98.536 m, not short (the old lower bound read 25.560 m); 57.744 m after A-5.
 
 ## 4. Apartment (rumah susun 12 lantai)
 

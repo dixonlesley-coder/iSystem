@@ -815,17 +815,29 @@ void main() {
       expect(j.selectedMotor.inKiloWatts, closeTo(0.75, 1e-9));
     });
 
-    test('sprinkler point (not governing): 15.7 + 50 / 9.81 + 37.414 m', () {
+    test('sprinkler point (not governing): 15.7 + 50 / 9.81 + 36.947 m', () {
       // Backlog A-1 (O3 / backlog f) — the judge requires the rating
       // basis' sprinkler point (one source of truth): lift to the top head
       // ceiling 15.7 + the 50 kPa remote head 5.097 + the sized sprinkler
-      // index friction (after O1) 37.414 = 58.211 m, against the pump's
-      // 98.536 m ⇒ not short. (Before A-1: the lower bound 15.7 +
-      // 96.722 / 9.81 = 25.560 m.)
+      // index friction 36.947 = 57.744 m, against the pump's 98.536 m ⇒ not
+      // short. (Before A-1: the lower bound 15.7 + 96.722 / 9.81 = 25.560 m.)
+      // Backlog A-5 — FP→S0 (DN125, 7.7 m incl. its 3.7 m leg) now carries
+      // the sprinkler's own 4.71405 L/s, not the pump's 31.5451 L/s: H-W
+      // C120 0.062544 m/m x 7.7 = 0.4816 m at 31.545 → x (4.71405 /
+      // 31.5451)^1.852 = 0.02959 ⇒ 0.0143 m; friction 37.414 - 0.4673 =
+      // 36.947 m, point 58.211 → 57.744 m. Still far below the standpipe
+      // point the pump is rated on (98.536 m).
       final chk = c.read(sprinklerPumpCheckProvider)!;
       expect(chk.headShort, isFalse);
       expect(chk.flowShort, isFalse);
-      expect(chk.requiredHeadM, closeTo(15.7 + 50 / 9.81 + 37.414, 5e-4));
+      expect(chk.requiredHeadM, closeTo(15.7 + 50 / 9.81 + 36.947, 5e-4));
+      // FP→S0 prints and solves its own flow on its NFPA 20 DN125.
+      final s0 = c.read(sizingProvider)['e_sp_FP_S0']!;
+      expect(s0.diameter.inMillimeters, 125);
+      expect(s0.flow.inLitersPerSecond, closeTo(4.71405, 5e-5));
+      // The common discharge FP→H0 keeps the rated 31.5451 L/s.
+      expect(c.read(sizingProvider)['e_fh_FP_H0']!.flow.inLitersPerSecond,
+          closeTo(31.5451, 5e-4));
       expect(chk.pumpHeadM, closeTo(98.536, 5e-4));
       final b = c.read(fireSystemBasesProvider).single;
       expect(b.sprinklerPointHeadM, closeTo(chk.requiredHeadM, 1e-12));

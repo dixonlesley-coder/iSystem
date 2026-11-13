@@ -594,8 +594,13 @@ void main() {
       // legs, the Class I riser DN100 (v 4.016), boxes 5 L/s on DN65.
       for (final id in ['e_fh_FT_FP', 'e_fh_FP_H0', 'e_sp_FP_S0']) {
         expect(sz[id]!.diameter.inMillimeters, 125, reason: id);
+      }
+      for (final id in ['e_fh_FT_FP', 'e_fh_FP_H0']) {
         expect(sz[id]!.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
       }
+      // Backlog A-5 — the BRANCH run FP→S0 keeps its DN125 discharge size
+      // but carries the sprinkler system's own 5-head 4.71405 L/s.
+      expect(sz['e_sp_FP_S0']!.flow.inLitersPerSecond, closeTo(4.71405, 5e-5));
       for (var f = 1; f < 4; f++) {
         final id = 'e_fh_H${f - 1}_H$f';
         expect(sz[id]!.diameter.inMillimeters, 100, reason: id);
