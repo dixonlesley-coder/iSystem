@@ -64,6 +64,9 @@ import 'package:mechx_engine/standards/puil.dart'
     show BreakerClass, BreakerClassCode;
 import 'package:mechx_engine/units.dart';
 
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show electricalRiserFloorOf;
+import 'reference_board_floors.dart';
 import '../packages/mechx_engine/test/reference/apartment.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -115,6 +118,8 @@ Future<ProviderContainer> _loadApartment(ReferenceBuilding b) async {
   await Future<void>.delayed(Duration.zero);
   _refeedMep(c);
   await Future<void>.delayed(Duration.zero);
+  // Drawing backlog C-2 — every board on its own floor (riser).
+  setReferenceBoardFloors(c);
   return c;
 }
 
@@ -1255,6 +1260,18 @@ void main() {
       for (final id in ['e_fh_FT_FJ', 'e_fh_FJ_FH']) {
         expect(sz[id]!.diameter.inMillimeters, 25);
         expect(sz[id]!.flow.inLitersPerSecond, closeTo(0.31545, 5e-5));
+      }
+    });
+
+    test('drawing backlog C-2: the riser stands every board on its own floor '
+        '(PP-Lt N / PP-L N on Lantai N, the rest on Lantai 1)', () {
+      final e = c.read(electricalProjectProvider);
+      final floorOf = electricalRiserFloorOf(e, c.read(electricalResultProvider),
+          c.read(projectControllerProvider).building);
+      expect(e.panels, isNotEmpty);
+      for (final p in e.panels) {
+        expect(p.floorIndex, referenceBoardFloor(p.name), reason: p.name);
+        expect(floorOf[p.id], referenceBoardFloor(p.name), reason: p.name);
       }
     });
 

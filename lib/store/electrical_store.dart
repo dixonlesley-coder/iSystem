@@ -2151,6 +2151,16 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
           ? p.copyWith(clearTag: true)
           : p.copyWith(tag: tag));
 
+  /// Drawing backlog C-2 — set (or clear, with null / a negative index) the
+  /// building floor an UNPLACED board stands on (0 = lowest): the electrical
+  /// riser draws it on that floor's band. A placed board's layout floor still
+  /// wins. Drawing-only — never read by the sizing. Undoable.
+  void setPanelFloor(String id, int? floorIndex) => _replacePanel(
+      id,
+      (p) => (floorIndex == null || floorIndex < 0)
+          ? p.copyWith(clearFloorIndex: true)
+          : p.copyWith(floorIndex: floorIndex));
+
   /// Set a panel's diversity factor (clamped 0–1).
   void setPanelDiversity(String id, double factor) => _replacePanel(
       id, (p) => p.copyWith(diversityFactor: factor.clamp(0.0, 1.0)));

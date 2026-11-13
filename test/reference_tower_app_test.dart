@@ -77,6 +77,9 @@ import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 import 'package:mechx_engine/standards/sni.dart' show SniProfile;
 import 'package:mechx_engine/units.dart';
 
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show electricalRiserFloorOf;
+import 'reference_board_floors.dart';
 import '../packages/mechx_engine/test/reference/tower.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -136,6 +139,8 @@ Future<ProviderContainer> _loadTower(ReferenceBuilding b) async {
   await Future<void>.delayed(Duration.zero);
   _refeedMep(c);
   await Future<void>.delayed(Duration.zero);
+  // Drawing backlog C-2 — every board on its own floor (riser).
+  setReferenceBoardFloors(c);
   return c;
 }
 
@@ -1620,6 +1625,18 @@ void main() {
       final ef = c.read(exhaustFanDutiesByRootProvider)[kTowerExhaustFanId]!;
       expect(ef.totalStaticPressure.pascals, closeTo(38.67, 5e-3));
       expect(ef.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+    });
+
+    test('drawing backlog C-2: the riser stands every board on its own floor '
+        '(PP-Lt N / PP-L N on Lantai N, the rest on Lantai 1)', () {
+      final e = c.read(electricalProjectProvider);
+      final floorOf = electricalRiserFloorOf(e, c.read(electricalResultProvider),
+          c.read(projectControllerProvider).building);
+      expect(e.panels, isNotEmpty);
+      for (final p in e.panels) {
+        expect(p.floorIndex, referenceBoardFloor(p.name), reason: p.name);
+        expect(floorOf[p.id], referenceBoardFloor(p.name), reason: p.name);
+      }
     });
 
     test('every floor board: 18 750 W / 21 422 VA, 30.9 A per line, MCB '

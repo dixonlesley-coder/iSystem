@@ -259,9 +259,6 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 18 900 W, apartment MEP 173 000 W, tower LVMDP 865 347 W).
 
 ### Backlog (not cured in this pass)
-- Electrical risers (E-401) place every unplaced floor board on one level (apartment
-  PP-Lt1..PP-Lt12 as one TIPIKAL box on Lantai 2) and issue label-only pages for the
-  floors left empty.
 - Tower building single-line E-301 spends ~15 near-empty pages (pages 2-16: one LVMDP
   box and two boards each); a tabulated typical would carry it on one or two.
 - Plant-level mechanical riser pages (tower `riser-sld` p13 / p1, apartment p1 / p6,
@@ -277,3 +274,8 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   'Lantai N' ⇒ `LN`, 'Basement N' ⇒ `BN`, 'Dasar' / 'Ground' ⇒ `GF`, 'Atap' / 'Roof'
   ⇒ `RF` (index rule for any other name); tower Lantai 30 prints `SP-L30`, Lantai 1
   plans `CW-L1`. Pre-check item 14 checks every `plan-N-Lantai N` sheet.
+- C-2 Electrical riser boards on their own floors: a board carries an optional
+  `floorIndex` (Panel inspector 'Riser floor'); the fixtures put PP-Lt N / PP-L N on
+  Lantai N and the main / essential / MEP boards on Lantai 1. The riser issues only the
+  storeys between its lowest and highest board, listing any storey left off in the edge
+  band's gutter ('TANPA PANEL, DI ATAS: ...') - no label-only page.

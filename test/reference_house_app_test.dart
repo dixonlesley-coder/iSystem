@@ -28,6 +28,7 @@ import 'package:mechx_engine/electrical/panel_results.dart' show PhaseAssignment
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 
+import 'reference_board_floors.dart';
 import '../packages/mechx_engine/test/reference/house.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -56,6 +57,8 @@ Future<ProviderContainer> _loadHouse(ReferenceBuilding house) async {
   c.read(electricalProjectProvider.notifier).setProject(house.electrical);
   // Let the electrical store's deferred MEP-equipment sync run.
   await Future<void>.delayed(Duration.zero);
+  // Drawing backlog C-2 — every board on its own floor (riser).
+  setReferenceBoardFloors(c);
   return c;
 }
 

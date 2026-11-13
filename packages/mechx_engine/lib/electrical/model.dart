@@ -506,6 +506,13 @@ class ElectricalPanel {
   /// panel is not placed on the layout.
   final LayoutPos? layoutPos;
 
+  /// Drawing backlog C-2 (2026-11-13) — the building floor (0 = lowest) the
+  /// board stands on when it is NOT placed on the layout ([layoutPos] wins).
+  /// Read only by the drawing layer (the electrical riser places the board
+  /// on this floor's band); never by the sizing. Null ⇒ unchanged (the riser's
+  /// feeder-depth tier). Additive + tolerant in `.mechx`.
+  final int? floorIndex;
+
   /// Spare-ways / future-load HEADROOM for this panel (a % spare on the demand +
   /// N reserved outgoing ways). When set, `computePanel` sizes the incomer +
   /// busbar against the future (spare-uplifted) demand and counts the spare ways
@@ -547,6 +554,7 @@ class ElectricalPanel {
     this.x,
     this.y,
     this.layoutPos,
+    this.floorIndex,
     this.headroom,
     this.diversityLibraryId,
     this.circuits = const [],
@@ -582,6 +590,8 @@ class ElectricalPanel {
     bool clearPosition = false,
     LayoutPos? layoutPos,
     bool clearLayoutPos = false,
+    int? floorIndex,
+    bool clearFloorIndex = false,
     HeadroomSpec? headroom,
     bool clearHeadroom = false,
     String? diversityLibraryId,
@@ -613,6 +623,8 @@ class ElectricalPanel {
         x: clearPosition ? null : (x ?? this.x),
         y: clearPosition ? null : (y ?? this.y),
         layoutPos: clearLayoutPos ? null : (layoutPos ?? this.layoutPos),
+        floorIndex:
+            clearFloorIndex ? null : (floorIndex ?? this.floorIndex),
         headroom: clearHeadroom ? null : (headroom ?? this.headroom),
         diversityLibraryId: clearDiversityLibraryId
             ? null
@@ -646,6 +658,7 @@ class ElectricalPanel {
         if (x != null) 'x': x,
         if (y != null) 'y': y,
         if (layoutPos != null) 'layoutPos': layoutPos!.toJson(),
+        if (floorIndex != null) 'floorIndex': floorIndex,
         if (headroom != null) 'headroom': headroom!.toJson(),
         if (diversityLibraryId != null)
           'diversityLibraryId': diversityLibraryId,
@@ -700,6 +713,9 @@ class ElectricalPanel {
         y: (json['y'] as num?)?.toDouble(),
         layoutPos: json['layoutPos'] is Map<String, dynamic>
             ? LayoutPos.fromJson(json['layoutPos'] as Map<String, dynamic>)
+            : null,
+        floorIndex: (json['floorIndex'] is num && (json['floorIndex'] as num) >= 0)
+            ? (json['floorIndex'] as num).toInt()
             : null,
         headroom: json['headroom'] is Map<String, dynamic>
             ? HeadroomSpec.fromJson(json['headroom'] as Map<String, dynamic>)

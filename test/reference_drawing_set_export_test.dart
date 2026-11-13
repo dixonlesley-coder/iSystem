@@ -48,6 +48,7 @@ import 'package:mechx_engine/report/file_names.dart' show safeFileStem;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/units.dart' show Length;
 
+import 'reference_board_floors.dart';
 import '../packages/mechx_engine/test/reference/apartment.dart' as apt;
 import '../packages/mechx_engine/test/reference/house.dart' as house;
 import '../packages/mechx_engine/test/reference/office.dart' as office;
@@ -244,6 +245,10 @@ Future<void> _load(ProviderContainer c, _Spec spec) async {
   c.read(electricalProjectProvider.notifier).setProject(b.electrical);
   await Future<void>.delayed(Duration.zero);
   spec.afterElectrical?.call(c);
+  await Future<void>.delayed(Duration.zero);
+  // Drawing backlog C-2 — every board on its own floor (the Panel
+  // inspector's 'Riser floor' intent).
+  setReferenceBoardFloors(c);
   await Future<void>.delayed(Duration.zero);
 
   // Project identity, as typed on the Projects page / Document control card.

@@ -56,6 +56,9 @@ import 'package:mechx_engine/standards/duct_products.dart'
 import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 import 'package:mechx_engine/units.dart' show Head;
 
+import 'package:mechx_engine/report/electrical_sld_drawing.dart'
+    show electricalRiserFloorOf;
+import 'reference_board_floors.dart';
 import '../packages/mechx_engine/test/reference/office.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -99,6 +102,8 @@ Future<ProviderContainer> _loadOffice(ReferenceBuilding b) async {
   c.read(electricalProjectProvider.notifier).setProject(b.electrical);
   // Let the electrical store's deferred MEP-equipment sync run.
   await Future<void>.delayed(Duration.zero);
+  // Drawing backlog C-2 — every board on its own floor (riser).
+  setReferenceBoardFloors(c);
   return c;
 }
 
@@ -861,6 +866,18 @@ void main() {
       }
       expect(c.read(airVelocityChecksProvider).values
           .where((v) => v.verdict != VelocityBandVerdict.ok), isEmpty);
+    });
+
+    test('drawing backlog C-2: the riser stands every board on its own floor '
+        '(PP-Lt N / PP-L N on Lantai N, the rest on Lantai 1)', () {
+      final e = c.read(electricalProjectProvider);
+      final floorOf = electricalRiserFloorOf(e, c.read(electricalResultProvider),
+          c.read(projectControllerProvider).building);
+      expect(e.panels, isNotEmpty);
+      for (final p in e.panels) {
+        expect(p.floorIndex, referenceBoardFloor(p.name), reason: p.name);
+        expect(floorOf[p.id], referenceBoardFloor(p.name), reason: p.name);
+      }
     });
 
     test('MEP board, MEP feeder (O4) and LVMDP', () {

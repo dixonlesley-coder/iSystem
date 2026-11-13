@@ -42,6 +42,7 @@ import 'package:mechx_engine/sizing/network_sizing.dart'
 import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 import 'package:mechx_engine/units.dart';
 
+import 'reference_board_floors.dart';
 import '../packages/mechx_engine/test/reference/shophouse.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -86,6 +87,8 @@ Future<ProviderContainer> _loadShophouse(ReferenceBuilding shop) async {
   c.read(electricalProjectProvider.notifier).setProject(shop.electrical);
   // Let the electrical store's deferred MEP-equipment sync run.
   await Future<void>.delayed(Duration.zero);
+  // Drawing backlog C-2 — every board on its own floor (riser).
+  setReferenceBoardFloors(c);
   return c;
 }
 

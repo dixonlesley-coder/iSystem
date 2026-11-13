@@ -1,9 +1,21 @@
 // Drawing backlog (2026-11-13) — C-1..C-5 focused tests (pure layer).
+import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/fault.dart';
+import 'package:mechx_engine/electrical/geo_length.dart' show LayoutPos;
+import 'package:mechx_engine/electrical/model.dart';
+import 'package:mechx_engine/electrical/panel_results.dart'
+    show ElectricalSystemResult;
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/electrical_pagination.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/riser_tags.dart';
+import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
+
+import 'reference/apartment.dart' as apt;
+import 'reference/reference_building.dart';
 
 BuildingLevels _levels(List<String> names, {int ground = 0}) =>
     BuildingLevels([for (final n in names) Floor(n, const Length(3.5))],
@@ -63,6 +75,89 @@ void main() {
         NetEdge(id: 'e', fromId: 'a', toId: 'b', service: ServiceType.coldWater),
       ]);
       expect(elementTags(net, building: b)['e'], 'CW-L2');
+    });
+  });
+
+  group('C-2 electrical riser: boards on their own floors', () {
+    test('floorIndex round-trips and decodes tolerantly', () {
+      const p = ElectricalPanel(id: 'a', name: 'PP-Lt3', floorIndex: 2);
+      expect(ElectricalPanel.fromJson(p.toJson()).floorIndex, 2);
+      expect(const ElectricalPanel(id: 'b', name: 'x').toJson(),
+          isNot(contains('floorIndex')));
+      expect(ElectricalPanel.fromJson({'id': 'c', 'floorIndex': -1}).floorIndex,
+          isNull);
+      expect(
+          ElectricalPanel.fromJson({'id': 'c', 'floorIndex': 'x'}).floorIndex,
+          isNull);
+      expect(p.copyWith(clearFloorIndex: true).floorIndex, isNull);
+    });
+
+    (ElectricalProject, ElectricalSystemResult) solve(
+        ReferenceBuilding b, ElectricalProject project) {
+      final fault = estimatedServiceFaultLevelA(project) ??
+          const Current(defaultLvUtilityFaultKa * 1000);
+      return (
+        project,
+        computeSystem(const PuilProfile(), project,
+            calibrationBySheet: b.calibrations,
+            building: b.building,
+            originFaultLevel: fault,
+            busbarClearingTimeS: 0.1,
+            phaseReassignThresholdA: 1.0)
+      );
+    }
+
+    int floorOfName(String n) {
+      final m = RegExp(r'^PP-Lt(\d+)$').firstMatch(n);
+      return m == null ? 0 : int.parse(m.group(1)!) - 1;
+    }
+
+    String pageText(SldSheet s) =>
+        [for (final p in s.prims) if (p is SldLabel) p.text].join(' | ');
+
+    test('a declared floorIndex places the board on that band; '
+        'a layout placement still wins', () {
+      final b = apt.buildApartment();
+      final project = b.electrical.withPanels([
+        for (final p in b.electrical.panels)
+          p.copyWith(floorIndex: floorOfName(p.name)),
+      ]);
+      final (pr, res) = solve(b, project);
+      final floorOf = electricalRiserFloorOf(pr, res, b.building);
+      for (var f = 0; f < 12; f++) {
+        expect(floorOf[apt.aptFloorPanelId(f)], f, reason: 'PP-Lt${f + 1}');
+      }
+      expect(floorOf[apt.kAptMainPanelId], 0);
+      final placed = pr.withPanels([
+        for (final p in pr.panels)
+          p.id == apt.aptFloorPanelId(5)
+              ? p.copyWith(
+                  layoutPos:
+                      const LayoutPos(sheetId: 's', floorIndex: 7, x: 0, y: 0))
+              : p,
+      ]);
+      expect(
+          electricalRiserFloorOf(placed, res, b.building)[
+              apt.aptFloorPanelId(5)],
+          7);
+    });
+
+    test('every issued riser page carries a board (no label-only page); '
+        'storeys left off are listed in the gutter', () {
+      final b = apt.buildApartment();
+      // Unplaced, no floorIndex: every floor board on one band above ground.
+      final (pr, res) = solve(b, b.electrical);
+      final pages = paginatedElectricalRiserSheets(
+          project: pr, result: res, building: b.building);
+      final names = {for (final p in pr.panels) p.name};
+      for (final s in pages) {
+        final t = pageText(s);
+        expect(names.any(t.contains) || t.contains('TIPIKAL'), isTrue,
+            reason: 'page without a board: $t');
+      }
+      final all = pages.map(pageText).join(' ');
+      expect(all, contains('TANPA PANEL, DI ATAS:'));
+      expect(all, contains('Lantai 12..Lantai 3'));
     });
   });
 }

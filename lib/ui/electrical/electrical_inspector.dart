@@ -1762,6 +1762,24 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                       onChanged: (v) =>
                           controller.setPanelSubmeter(panel.id, v),
                     ),
+                    // Drawing backlog C-2 — the floor an UNPLACED board stands
+                    // on in the electrical riser (1 = lowest level; blank =
+                    // auto). A board placed on the layout takes its sheet's
+                    // floor instead, so the field is offered only unplaced.
+                    if (panel.layoutPos == null)
+                      ElectricalField(
+                        label: 'Riser floor (1 = lowest, blank = auto)',
+                        child: ElectricalTextInput(
+                          value: panel.floorIndex == null
+                              ? ''
+                              : '${panel.floorIndex! + 1}',
+                          onChanged: (v) {
+                            final n = int.tryParse(v.trim());
+                            controller.setPanelFloor(
+                                panel.id, n == null || n < 1 ? null : n - 1);
+                          },
+                        ),
+                      ),
                     // Populating a board from a preset only makes sense while it
                     // is EMPTY — a template replays a canned way list, so on a
                     // populated board it would duplicate real design work.

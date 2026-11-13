@@ -3652,7 +3652,8 @@ List<SldLine> _mergeFeederSegments(List<_FeederSeg> segs,
 /// column carries each floor's name + FFL elevation and a hairline grid line.
 ///
 /// Floor assignment precedence: (1) `panel.layoutPos.floorIndex` when set and in
-/// range; (2) ELSE feeder-depth tier rising from the GROUND (entrance) floor —
+/// range; (1b) ELSE the board's declared `panel.floorIndex` (backlog C-2);
+/// (2) ELSE feeder-depth tier rising from the GROUND (entrance) floor —
 /// root at ground, each depth one floor up (Round 15); (3) clamp any
 /// out-of-range index. When [building] is null / has no levels it degrades to
 /// pure feeder-depth TIERS (gutter shows `Tier n`, no elevation) — never throws.
@@ -3685,6 +3686,7 @@ SldSheet buildElectricalRiser({
   Set<String> hidePanelIds = const {},
   Map<String, String> typicalNames = const {},
   Map<int, String> bandNotes = const {},
+  Map<int, String> levelNotes = const {},
   Map<String, String> typicalFeederLengths = const {},
   Map<String, String> offPageFeedNotes = const {},
 }) {
@@ -4359,8 +4361,19 @@ SldSheet buildElectricalRiser({
         if (offPageFeedNotes[id] != null && panelX.containsKey(id))
           '${offPageFeedNotes[id]} > ${typicalNames[id] ?? result.panels[id]?.name ?? id}',
     ];
+    // Drawing backlog C-2 — the storeys the riser leaves off (no board, no
+    // feeder) listed compactly under the edge band's FFL, TANPA PANEL.
+    final levelNote = levelNotes[i];
+    final lnDy = levelNote != null ? 20.0 : 0.0;
+    if (levelNote != null) {
+      final ly = y + 47 + (note != null ? 24.0 : 0.0);
+      final parts = levelNote.split('\t');
+      for (var k = 0; k < parts.length; k++) {
+        prims.add(SldLabel(6, ly + 10 * k, parts[k], size: 7));
+      }
+    }
     if (fedFrom.isNotEmpty) {
-      final dy = note != null ? 24.0 : 0.0;
+      final dy = (note != null ? 24.0 : 0.0) + lnDy;
       prims.add(SldLabel(6, y + 47 + dy, 'DARI (lembar lain):', size: 7));
       for (var k = 0; k < fedFrom.length; k++) {
         prims.add(SldLabel(6, y + 57 + dy + 10 * k, fedFrom[k], size: 7));
@@ -4697,6 +4710,10 @@ Map<String, int> electricalRiserFloorOf(ElectricalProject project,
       if (lp != null) {
         return lp.floorIndex.clamp(0, levelCount - 1);
       }
+      // Drawing backlog C-2 — an unplaced board with a declared floor
+      // ([ElectricalPanel.floorIndex]) stands on that floor's band.
+      final fi = panelModelById[id]?.floorIndex;
+      if (fi != null) return fi.clamp(0, levelCount - 1);
       // Round 15 (drafting-visual-2-4) — unplaced ⇒ a depth tier RISING from
       // the service-entrance (GROUND) floor: the PLN-fed root sits at the
       // entrance and each feeder depth climbs one floor (riser convention).

@@ -73,6 +73,14 @@ List<SldSheet> paginatedElectricalRiserSheets({
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
   bool legible(SldSheet s) =>
       minPt(s) >= kMinPlotLabelPt - kRiserLegibleTolerancePt;
+  // Drawing backlog C-2 — the riser issues only the storeys between its
+  // lowest and highest board (the feeders pass through every storey in
+  // between, so none of those is ever empty); the storeys left off above /
+  // below are named in a compact level list in the gutter of the edge band
+  // so the floor order stays readable. Never a label-only page.
+  final occSpan = electricalRiserOccupiedSpan(project, result, building);
+  final levelNotes = electricalRiserOmittedLevelNotes(
+      building, occSpan, electricalRiserBandCount(project, result, building));
   SldSheet build(({int lo, int hi})? r,
           {Set<String> hide = const {},
           Map<String, String> names = const {},
@@ -90,6 +98,7 @@ List<SldSheet> paginatedElectricalRiserSheets({
           typicalNames: names,
           typicalFeederLengths: lengths,
           bandNotes: notes,
+          levelNotes: levelNotes,
           offPageFeedNotes: fedFrom);
   final levels = electricalRiserBandCount(project, result, building);
   List<SldSheet> floorPages(int a, int b,
@@ -110,7 +119,7 @@ List<SldSheet> paginatedElectricalRiserSheets({
         diagramTitle: diagramTitle,
       );
 
-  final plain = floorPages(0, levels - 1);
+  final plain = floorPages(occSpan.lo, occSpan.hi);
   if (plain.every((p) => p.belowMinLabelPt == null)) return plain;
 
   // 1. Typical collapse on the bands that are illegible on their own page.
@@ -134,7 +143,8 @@ List<SldSheet> paginatedElectricalRiserSheets({
   }
   final collapsed = hide.isEmpty
       ? plain
-      : floorPages(0, levels - 1, hide: hide, names: names, lengths: lengths);
+      : floorPages(occSpan.lo, occSpan.hi,
+          hide: hide, names: names, lengths: lengths);
   if (collapsed.every((p) => p.belowMinLabelPt == null)) return collapsed;
 
   // 2. Column pages for each band still too wide BY ITSELF.
@@ -545,6 +555,44 @@ List<SldSheet> paginatedElectricalRiserSheets({
     f = a - 1;
   }
   return pages;
+}
+
+/// Drawing backlog C-2 — the band span [lo]..[hi] (0 = lowest) that carries
+/// a board; every band between carries the riser feeders. The whole stack
+/// when no board resolves.
+({int lo, int hi}) electricalRiserOccupiedSpan(ElectricalProject project,
+    ElectricalSystemResult result, BuildingLevels? building) {
+  final levels = electricalRiserBandCount(project, result, building);
+  final floorOf = electricalRiserFloorOf(project, result, building);
+  final occ = [
+    for (final id in result.order)
+      if (result.panels.containsKey(id)) floorOf[id] ?? 0,
+  ];
+  if (occ.isEmpty || levels <= 0) {
+    return (lo: 0, hi: levels > 0 ? levels - 1 : 0);
+  }
+  return (lo: occ.reduce(math.min), hi: occ.reduce(math.max));
+}
+
+/// Drawing backlog C-2 — the compact level list of the storeys a riser
+/// leaves off ([span] outside): on the top drawn band the storeys above it
+/// (highest first), on the bottom drawn band those below. Empty when the
+/// riser draws every storey or there is no building.
+Map<int, String> electricalRiserOmittedLevelNotes(
+    BuildingLevels? building, ({int lo, int hi}) span, int levels) {
+  if (building == null || building.levelCount == 0) return const {};
+  String name(int i) {
+    final n = building.floors[i].name;
+    return n.isEmpty ? 'L${i + 1}' : n;
+  }
+
+  String list(int a, int b) => a == b ? name(a) : '${name(a)}..${name(b)}';
+  return {
+    if (span.hi < levels - 1)
+      span.hi: 'TANPA PANEL, DI ATAS:\t${list(levels - 1, span.hi + 1)}',
+    if (span.lo > 0)
+      span.lo: 'TANPA PANEL, DI BAWAH:\t${list(span.lo - 1, 0)}',
+  };
 }
 
 /// The building single-line OVERVIEW as issuable PAGES (see the library
