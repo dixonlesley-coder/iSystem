@@ -479,6 +479,7 @@ List<PlanDetailCallout> planSheetDetails({
   required String sheetName,
   required String dateString,
   required String detailSheetRef,
+  String Function(int k)? detailSheetRefOf,
   DrawingChrome? chrome,
   double? metersPerPixel,
   PlanUnderlay? underlay,
@@ -568,19 +569,8 @@ List<PlanDetailCallout> planSheetDetails({
     return (d: details, mainOverlap: -1);
   }
 
-  // Each candidate link schedule is laid out to the end; the one whose plan
-  // AND detail sheet place the most labels clear wins (then the larger
-  // detail scale, then the earlier schedule) — deterministic.
-  ({List<PlanDetailCallout> d, int cost, int n})? best;
-  for (final factors in const [
-    [1.0, 0.5, 0.25],
-    [1.0],
-    [0.5],
-    [0.25],
-  ]) {
-    final r = run(factors);
-    if (r.d.isEmpty) return r.d;
-    var cost = r.mainOverlap < 0 ? 1 << 20 : r.mainOverlap;
+  // The overlap count of the detail sheet drawing [ds] (and its scale).
+  ({int overlap, int n}) detailEval(List<PlanDetailCallout> ds) {
     final plot = planDetailSheetPlot(
         net: net,
         sizing: sizing,
@@ -588,11 +578,11 @@ List<PlanDetailCallout> planSheetDetails({
         sheetId: sheetId,
         floorIndex: floorIndex,
         metersPerPixel: metersPerPixel,
-        details: r.d,
+        details: ds,
         areaMm: area,
         edgeTags: edgeTags,
         edgeElevationLabels: edgeElevationLabels);
-    cost += _planPdfBuild(
+    final overlap = _planPdfBuild(
       net: plot.net,
       sizing: plot.sizing,
       edgeLengths: plot.edgeLengths,
@@ -614,13 +604,96 @@ List<PlanDetailCallout> planSheetDetails({
       fixedFit: const PlanFixedFit(),
       layoutOnly: true,
     ).ann.overlapCount;
-    final n = plot.details.isEmpty ? 0 : plot.details.first.scaleDenominator;
-    if (best == null || cost < best.cost || (cost == best.cost && n < best.n)) {
-      best = (d: r.d, cost: cost, n: n);
+    return (
+      overlap: overlap,
+      n: plot.details.isEmpty ? 0 : plot.details.first.scaleDenominator
+    );
+  }
+
+  // Each candidate link schedule is laid out to the end; the one whose plan
+  // AND detail sheet place the most labels clear wins (then the larger
+  // detail scale, then the earlier schedule) — deterministic.
+  ({List<PlanDetailCallout> d, int cost, int n, int main})? best;
+  for (final factors in const [
+    [1.0, 0.5, 0.25],
+    [1.0],
+    [0.5],
+    [0.25],
+  ]) {
+    final r = run(factors);
+    if (r.d.isEmpty) return r.d;
+    final main = r.mainOverlap < 0 ? 1 << 20 : r.mainOverlap;
+    final e = detailEval(r.d);
+    final cost = main + e.overlap;
+    if (best == null || cost < best.cost || (cost == best.cost && e.n < best.n)) {
+      best = (d: r.d, cost: cost, n: e.n, main: main);
     }
     if (cost == 0) break;
   }
-  return best!.d;
+  final b = best!;
+  if (detailSheetRefOf == null || b.cost == b.main) return b.d;
+
+  // Drawing review S1 — the shared detail sheet still overprints: ONE
+  // cluster per detail sheet (each at the largest standard scale that fits
+  // it alone), and a cluster that still overprints alone is split in two
+  // along its longer side ([planDetailSplitRect], elements by anchor) until
+  // every piece clears or plots at 1:10 (depth <= 4). Pieces with no element
+  // anchor are dropped (nothing of theirs would be labelled). Each piece gets
+  // its own drawing number ([detailSheetRefOf]) and the pieces of a split
+  // name each other with a MATCH LINE.
+  final anchors = _planPdfBuild(
+    net: net,
+    sizing: sizing,
+    edgeLengths: edgeLengths,
+    sheetId: sheetId,
+    floorIndex: floorIndex,
+    projectName: projectName,
+    sheetName: sheetName,
+    dateString: dateString,
+    chrome: chrome,
+    metersPerPixel: metersPerPixel,
+    underlay: underlay,
+    paper: paper,
+    minScaleDenominator: minScaleDenominator,
+    edgeElevationLabels: edgeElevationLabels,
+    grid: grid,
+    edgeTags: edgeTags,
+    nodeTags: nodeTags,
+    gravitySlope: gravitySlope,
+    layoutOnly: true,
+  ).ann.elementAnchorsPx;
+  bool holds(LabelBox r) => anchors.any((a) =>
+      a.x >= r.minX && a.x <= r.maxX && a.y >= r.minY && a.y <= r.maxY);
+  List<LabelBox> refine(LabelBox r, int depth) {
+    final e = detailEval([
+      PlanDetailCallout(letter: 'A', rectPx: r, sheetRef: detailSheetRef)
+    ]);
+    if (e.overlap == 0 || e.n <= kDetailScaleLadder.first || depth >= 4) {
+      return [r];
+    }
+    final (p, q) = planDetailSplitRect(r, anchors);
+    return [
+      for (final h in [p, q])
+        if (holds(h)) ...refine(h, depth + 1)
+    ];
+  }
+
+  final pieces = [for (final d in b.d) ...refine(d.rectPx, 0)];
+  final cuts = planDetailSharedCuts(pieces);
+  return [
+    for (var i = 0; i < pieces.length; i++)
+      PlanDetailCallout(
+        letter: planDetailLetter(i),
+        rectPx: pieces[i],
+        sheetRef: detailSheetRefOf(i),
+        matches: [
+          for (final c in cuts[i])
+            PlanDetailMatch(c.x1, c.y1, c.x2, c.y2,
+                letter: planDetailLetter(c.other),
+                sheetRef: detailSheetRefOf(c.other)),
+        ],
+      ),
+  ];
 }
 
 /// Drawing review R1 — the cluster link distance and the boundary margin of

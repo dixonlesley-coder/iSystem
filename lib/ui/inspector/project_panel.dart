@@ -2133,11 +2133,18 @@ Future<bool> writeSubmittalPackageToDir(
   // without the overlap stamp, decided up front so the Daftar Gambar lists
   // the detail sheets (M-5nn, numbered by the plan's rail position) and the
   // plan + its detail sheet name each other. Same inputs as the plan export.
-  String detailNumberFor(int railIndex) => sheetDrawingNumber(
+  // Drawing review S1 — detail sheets are numbered M-501.. in issue order
+  // (a plan whose clusters need more than one sheet takes consecutive
+  // numbers), so a split never collides with the next plan's detail.
+  String detailNumberFor(int k) => sheetDrawingNumber(
       base: doc.documentNumber,
       series: DrawingSeries.mechanicalDetail,
-      index: railIndex + 1);
+      index: k + 1);
   final planDetails = <String, List<PlanDetailCallout>>{};
+  // Each plan's detail SHEETS in order: the drawing number + its callouts.
+  final planDetailSheets =
+      <String, List<({String number, List<PlanDetailCallout> callouts})>>{};
+  var detailCount = 0;
   {
     final net0 = ref.read(networkControllerProvider).network;
     final sizing0 = ref.read(sizingProvider);
@@ -2160,7 +2167,8 @@ Future<bool> writeSubmittalPackageToDir(
         projectName: base,
         sheetName: sheet.name,
         dateString: today,
-        detailSheetRef: detailNumberFor(i),
+        detailSheetRef: detailNumberFor(detailCount),
+        detailSheetRefOf: (k) => detailNumberFor(detailCount + k),
         chrome: issuableChrome(ref, sheetId: sheet.id, floorIndex: fIdx)
             .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalPlan,
                 sheetName: sheet.name)),
@@ -2173,13 +2181,21 @@ Future<bool> writeSubmittalPackageToDir(
         nodeTags: nodeTags0,
         gravitySlope: slope0,
       );
-      if (d.isNotEmpty) planDetails[sheet.id] = d;
+      if (d.isNotEmpty) {
+        planDetails[sheet.id] = d;
+        final refs = <String>[];
+        for (final c in d) {
+          if (!refs.contains(c.sheetRef)) refs.add(c.sheetRef);
+        }
+        planDetailSheets[sheet.id] = [
+          for (final r in refs)
+            (number: r, callouts: [for (final c in d) if (c.sheetRef == r) c]),
+        ];
+        detailCount += refs.length;
+      }
     }
   }
-  final detailSheetIds = [
-    for (final sh in planSheets)
-      if (planDetails.containsKey(sh.id)) sh.id
-  ];
+  var detailSheetNo = 0;
 
   for (final s in sheetsFm.sheets) {
     final fIdx = sheetsFm.floorFor(s.id, project.building.levelCount);
@@ -2194,9 +2210,13 @@ Future<bool> writeSubmittalPackageToDir(
         revision: rev,
         date: today,
       ),
-    );    if (planDetails.containsKey(s.id)) {
+    );
+    for (final ds in planDetailSheets[s.id] ?? const <({
+      String number,
+      List<PlanDetailCallout> callouts
+    })>[]) {
       drawingList.add(DrawingListEntry(
-        number: detailNumberFor(planSheets.indexOf(s)),
+        number: ds.number,
         title: drawingSeriesTitle(DrawingSeries.mechanicalDetail,
             sheetName: s.name),
         revision: rev,
@@ -2666,15 +2686,18 @@ Future<bool> writeSubmittalPackageToDir(
       );
       // Drawing review R1 — the plan's DETAIL sheet (enlarged toilet cores /
       // dense groups), PDF + DXF, numbered M-5nn by the plan's rail position.
-      final details = planDetails[sheet.id];
-      if (details != null && metersPerPixel != null) {
+      // S1 — one file per detail sheet: `-detail`, then `-detail-2`, ...
+      final dSheets = planDetailSheets[sheet.id] ?? const [];
+      for (var g = 0; g < dSheets.length && metersPerPixel != null; g++) {
+        final details = dSheets[g].callouts;
+        final dSuffix = g == 0 ? '$suffix-detail' : '$suffix-detail-${g + 1}';
+        detailSheetNo++;
         final dChrome = planChrome
             .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalDetail,
                 sheetName: sheet.name))
-            .withDrawingNumber(detailNumberFor(i))
-            .withSheetCounter(detailSheetIds.indexOf(sheet.id) + 1,
-                detailSheetIds.length);
-        await File(out('$suffix-detail.pdf')).writeAsBytes(
+            .withDrawingNumber(dSheets[g].number)
+            .withSheetCounter(detailSheetNo, detailCount);
+        await File(out('$dSuffix.pdf')).writeAsBytes(
           planDetailSheetToPdf(
             net: net,
             sizing: sizing,
@@ -2693,7 +2716,7 @@ Future<bool> writeSubmittalPackageToDir(
             gravitySlope: gravitySlope,
           ),
         );
-        await File(out('$suffix-detail.dxf')).writeAsString(
+        await File(out('$dSuffix.dxf')).writeAsString(
           planDetailSheetToDxf(
             net: net,
             sizing: sizing,

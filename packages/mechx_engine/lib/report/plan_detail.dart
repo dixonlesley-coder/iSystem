@@ -30,8 +30,16 @@ class PlanDetailCallout {
   final String letter;
   final LabelBox rectPx;
   final String sheetRef;
+
+  /// Drawing review S1 — the cuts this detail shares with the detail(s) it
+  /// was split from (a cluster too dense for one sheet): each is drawn on
+  /// the detail as a dashed MATCH LINE naming the neighbour.
+  final List<PlanDetailMatch> matches;
   const PlanDetailCallout(
-      {required this.letter, required this.rectPx, required this.sheetRef});
+      {required this.letter,
+      required this.rectPx,
+      required this.sheetRef,
+      this.matches = const []});
 
   bool containsPx(double x, double y) =>
       x >= rectPx.minX &&
@@ -41,6 +49,94 @@ class PlanDetailCallout {
 
   /// The bubble caption printed beside the boundary (ASCII; PDF == DXF).
   String get caption => 'DETAIL $letter - LIHAT $sheetRef';
+}
+
+/// Drawing review S1 — a shared cut between two pieces of a split detail:
+/// the segment ([x1], [y1])-([x2], [y2]) in SHEET PIXELS and the neighbour
+/// it continues on ([letter] on drawing [sheetRef]).
+class PlanDetailMatch {
+  final double x1, y1, x2, y2;
+  final String letter;
+  final String sheetRef;
+  const PlanDetailMatch(this.x1, this.y1, this.x2, this.y2,
+      {required this.letter, required this.sheetRef});
+
+  /// The match-line caption printed under the detail (ASCII; PDF == DXF).
+  String get caption => 'MATCH LINE - LIHAT DETAIL $letter ($sheetRef)';
+}
+
+/// Drawing review S1 — split a detail box that is still too dense for its own
+/// sheet in two along its LONGER side. The cut falls in the gap between the
+/// two middle [anchors] (sorted along that side) inside [r], so no anchor
+/// sits on it (each element stays labelled on exactly one piece); with fewer
+/// than two distinct anchor coordinates it falls at the middle. Pure.
+(LabelBox, LabelBox) planDetailSplitRect(
+    LabelBox r, List<({double x, double y})> anchors) {
+  final horiz = (r.maxX - r.minX) >= (r.maxY - r.minY);
+  final lo = horiz ? r.minX : r.minY, hi = horiz ? r.maxX : r.maxY;
+  final vs = <double>{
+    for (final a in anchors)
+      if (a.x >= r.minX && a.x <= r.maxX && a.y >= r.minY && a.y <= r.maxY)
+        horiz ? a.x : a.y
+  }.toList()
+    ..sort();
+  var cut = (lo + hi) / 2;
+  if (vs.length >= 2) {
+    // The gap between distinct coordinates nearest the middle.
+    var best = double.infinity;
+    for (var i = 0; i + 1 < vs.length; i++) {
+      final c = (vs[i] + vs[i + 1]) / 2;
+      final d = (c - (lo + hi) / 2).abs();
+      if (d < best) {
+        best = d;
+        cut = c;
+      }
+    }
+  }
+  return horiz
+      ? (
+          (minX: r.minX, minY: r.minY, maxX: cut, maxY: r.maxY),
+          (minX: cut, minY: r.minY, maxX: r.maxX, maxY: r.maxY),
+        )
+      : (
+          (minX: r.minX, minY: r.minY, maxX: r.maxX, maxY: cut),
+          (minX: r.minX, minY: cut, maxX: r.maxX, maxY: r.maxY),
+        );
+}
+
+/// Drawing review S1 — the shared cuts of a set of detail boxes: for each box
+/// the segments (sheet px) where it TOUCHES another along a positive length,
+/// with that neighbour's index. Boxes that overlap or only meet at a corner
+/// share no cut. Pure.
+List<List<({double x1, double y1, double x2, double y2, int other})>>
+    planDetailSharedCuts(List<LabelBox> rects) {
+  const eps = 1e-6;
+  final out = [
+    for (final _ in rects)
+      <({double x1, double y1, double x2, double y2, int other})>[]
+  ];
+  for (var i = 0; i < rects.length; i++) {
+    for (var j = 0; j < rects.length; j++) {
+      if (i == j) continue;
+      final a = rects[i], b = rects[j];
+      // Vertical shared edge (a's right / left on b's left / right).
+      for (final x in [a.maxX, a.minX]) {
+        if ((x == a.maxX && (b.minX - x).abs() < eps) ||
+            (x == a.minX && (b.maxX - x).abs() < eps)) {
+          final y0 = math.max(a.minY, b.minY), y1 = math.min(a.maxY, b.maxY);
+          if (y1 - y0 > eps) out[i].add((x1: x, y1: y0, x2: x, y2: y1, other: j));
+        }
+      }
+      for (final y in [a.maxY, a.minY]) {
+        if ((y == a.maxY && (b.minY - y).abs() < eps) ||
+            (y == a.minY && (b.maxY - y).abs() < eps)) {
+          final x0 = math.max(a.minX, b.minX), x1 = math.min(a.maxX, b.maxX);
+          if (x1 - x0 > eps) out[i].add((x1: x0, y1: y, x2: x1, y2: y, other: j));
+        }
+      }
+    }
+  }
+  return out;
 }
 
 /// A format-neutral mark list. As an INPUT to the annotation layout the

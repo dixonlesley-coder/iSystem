@@ -472,9 +472,10 @@ def run_building(root, b):
             emit(6, 'FAIL', lab, f'sheet stamps {m.group(1)} overlapping '
                  'labels')
         elif re.search(r'-(elec-)?plan-', pg['stem']):
-            # Plans and their DETAIL sheets (`plan-N-<floor>-detail`) both
-            # keep the exporter's overlap counter.
-            kind = 'detail sheet' if pg['stem'].endswith('-detail') else 'plan'
+            # Plans and their DETAIL sheets (`plan-N-<floor>-detail`, a split
+            # plan's further sheets `-detail-2`...) keep the overlap counter.
+            kind = ('detail sheet' if re.search(r'-detail(-\d+)?$', pg['stem'])
+                    else 'plan')
             emit(6, 'PASS', lab, f'{kind}: no overlap warning stamped '
                  '(count 0); visual check still due')
         else:

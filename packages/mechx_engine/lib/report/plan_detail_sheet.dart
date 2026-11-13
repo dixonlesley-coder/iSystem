@@ -132,6 +132,16 @@ List<LabelBox> planDetailOutsideFrames(List<LabelBox> frames, LabelBox area) {
   return out;
 }
 
+/// The caption strip under each frame: title + scale (16 mm), plus one line
+/// per distinct MATCH LINE neighbour of a split piece (S1).
+double _captionMm(List<PlanDetailCallout> details) {
+  var k = 0;
+  for (final d in details) {
+    k = math.max(k, {for (final m in d.matches) m.caption}.length);
+  }
+  return k == 0 ? 16 : 16 + 1.6 * kPlanLabelTextMm * k + 2;
+}
+
 /// Plot the [details] of the plan sheet ([sheetId], [floorIndex]) into the
 /// paper-mm drawing [areaMm] of a detail sheet (see the library note).
 PlanDetailSheetPlot planDetailSheetPlot({
@@ -154,7 +164,9 @@ PlanDetailSheetPlot planDetailSheetPlot({
         w: (d.rectPx.maxX - d.rectPx.minX) * metersPerPixel,
         h: (d.rectPx.maxY - d.rectPx.minY) * metersPerPixel,
       ),
-  ], area: areaMm);
+  ], area: areaMm,
+      // S1 — a split piece's MATCH LINE caption takes a third caption line.
+      captionMm: _captionMm(details));
   final plots = <PlanDetailPlot>[];
   final nodes = <NetNode>[];
   final edges = <NetEdge>[];
@@ -300,6 +312,22 @@ PlanDetailSheetPlot planDetailSheetPlot({
         n: n, x0: barX, y0: capY - 1.5, textMm: kMinPlotTextMm);
     lines.addAll(bar.lines);
     texts.addAll(bar.texts);
+    // Drawing review S1 — the cut shared with the neighbouring piece of a
+    // split detail: a dashed match line across the frame at the cut, and its
+    // caption ('MATCH LINE - LIHAT DETAIL B (M-5nn)') under the scale text.
+    var my0 = capY + 3.2 * ts;
+    final captioned = <String>{};
+    for (final m in d.matches) {
+      final seg = _clip(mx(m.x1), my(m.y1), mx(m.x2), my(m.y2), frame);
+      if (seg != null) {
+        final (x1, y1, x2, y2) = seg;
+        lines.add(PlanMarkLine(x1, y1, x2, y2, dashed: true, heavy: true));
+      }
+      if (captioned.add(m.caption)) {
+        texts.add(PlanMarkText(frame.minX, my0, ts, m.caption));
+        my0 += 1.6 * ts;
+      }
+    }
   }
   return PlanDetailSheetPlot(
     details: plots,
