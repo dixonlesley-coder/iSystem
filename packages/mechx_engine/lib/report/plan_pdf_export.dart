@@ -338,6 +338,31 @@ PlanSheetPlot? planSheetPlot({
         ),
       ...extraOccupiedPx,
     ],
+    // Drawing backlog L-1 — the PDF's own page frame, so the DXF can lay its
+    // annotations out in exactly the PDF's frame (one placement result).
+    frame: PlanPageFrame(
+      offX: f.offX,
+      offY: f.offY,
+      minX: f.minX,
+      minY: f.minY,
+      scale: f.scale,
+      pageH: f.pageH,
+      pointsPerMeter: f.pointsPerMeter,
+      extent: (minX: f.minX, minY: f.minY, maxX: f.maxX, maxY: f.maxY),
+      occupiedPt: [
+        ...f.occupied,
+        // The same mapping `_planPdfBuild` gives its extraOccupiedPx.
+        for (final o in extraOccupiedPx)
+          (
+            minX: f.offX + (o.minX - f.minX) * f.scale,
+            minY: math.min((f.pageH - f.offY) - (o.minY - f.minY) * f.scale,
+                (f.pageH - f.offY) - (o.maxY - f.minY) * f.scale),
+            maxX: f.offX + (o.maxX - f.minX) * f.scale,
+            maxY: math.max((f.pageH - f.offY) - (o.minY - f.minY) * f.scale,
+                (f.pageH - f.offY) - (o.maxY - f.minY) * f.scale),
+          ),
+      ],
+    ),
   );
 }
 

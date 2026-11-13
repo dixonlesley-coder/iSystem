@@ -294,6 +294,10 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   only the submittal package issues the paginated DXF twins.
 
 ### Backlog closed (2026-11-13)
+- L-1 Plan PDF and DXF from one placement: tower `plan-16-Lantai 16` stamped
+  '1 label bertumpuk' in the DXF only (item 25). The DXF now lays its tags out in
+  the PDF's page frame and maps them to model mm (`PlanPageFrame`,
+  `mapPlanAnnotations`): the sheet stamps on neither.
 - C-1 Level code in tags matches the floor's own name: `floorLocatorToken` reads
   'Lantai N' ⇒ `LN`, 'Basement N' ⇒ `BN`, 'Dasar' / 'Ground' ⇒ `GF`, 'Atap' / 'Roof'
   ⇒ `RF` (index rule for any other name); tower Lantai 30 prints `SP-L30`, Lantai 1

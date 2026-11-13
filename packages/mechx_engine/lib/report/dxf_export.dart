@@ -170,6 +170,7 @@ String networkToDxf({
     }
     return null;
   }
+
   void emitPrims(List<SldPrim> prims, String layer, double centerY) {
     for (final pr in prims) {
       switch (pr) {
@@ -192,6 +193,7 @@ String networkToDxf({
       }
     }
   }
+
   void flowChevron(double ux, double uy, double dxp, double dyp, double len,
       String layer, double arm) {
     final dirx = (dxp - ux) / len, diry = (dyp - uy) / len;
@@ -199,8 +201,10 @@ String networkToDxf({
     final atx = ux + dirx * (len * 2 / 3), aty = uy + diry * (len * 2 / 3);
     final tipx = atx + dirx * (arm * 0.5), tipy = aty + diry * (arm * 0.5);
     final backx = tipx - dirx * arm, backy = tipy - diry * arm;
-    final w1x = backx + perpx * (arm * 0.75), w1y = backy + perpy * (arm * 0.75);
-    final w2x = backx - perpx * (arm * 0.75), w2y = backy - perpy * (arm * 0.75);
+    final w1x = backx + perpx * (arm * 0.75),
+        w1y = backy + perpy * (arm * 0.75);
+    final w2x = backx - perpx * (arm * 0.75),
+        w2y = backy - perpy * (arm * 0.75);
     g(0, 'LINE');
     g(8, layer);
     g(10, w1x);
@@ -248,11 +252,11 @@ String networkToDxf({
         final elev = edgeElevationLabels?[e.id];
         // G5: the laid fall (`1:100`) for a gravity RUN, from the real ctx
         // gradient (never hardcoded).
-        final slope = (e.service.regime == FlowRegime.gravity &&
-                gravitySlope != null)
-            ? gravitySlopeLabel(
-                laidGravitySlope(e, gravitySlope, s.diameter.inMillimeters))
-            : null;
+        final slope =
+            (e.service.regime == FlowRegime.gravity && gravitySlope != null)
+                ? gravitySlopeLabel(
+                    laidGravitySlope(e, gravitySlope, s.diameter.inMillimeters))
+                : null;
         final size = [
           _sizeLabel(e, s),
           if (elev != null && elev.isNotEmpty) elev,
@@ -327,8 +331,8 @@ String networkToDxf({
     include(n.x, -n.y);
     final comp = n.component;
     if (comp != null) {
-      emitPrims(planComponentPrims(comp, cx: n.x, cy: -n.y, size: 16),
-          layer, -n.y);
+      emitPrims(
+          planComponentPrims(comp, cx: n.x, cy: -n.y, size: 16), layer, -n.y);
     } else if (n.role == NodeRole.fixture) {
       emitPrims(planFixturePrims(cx: n.x, cy: -n.y, size: 16), layer, -n.y);
     }
@@ -557,9 +561,9 @@ String _professionalDxf({
       final a = net.nodeById(e.fromId);
       final c = net.nodeById(e.toId);
       if (a == null || c == null) return null;
-      return Length(math.sqrt(
-              (c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y)) *
-          metersPerPixel);
+      return Length(
+          math.sqrt((c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y)) *
+              metersPerPixel);
     },
     edgeTags: edgeTags,
     edgeElevationLabels: edgeElevationLabels,
@@ -582,40 +586,91 @@ String _professionalDxf({
       if (mm / u >= kPlanDuctDoubleLineMinMm) ductHalfMm[e.id] = mm / 2;
     }
   }
-  final ann = layoutPlanAnnotations(
-    runHalfWidths: ductHalfMm,
-    net: net,
-    sheetId: sheetId,
-    floorIndex: floorIndex,
-    map: (x, y) => (x: x * mmPerPx, y: -y * mmPerPx),
-    unitsPerMm: u,
-    edgeLabels: edgeLabels,
-    nodeTags: nodeTags,
-    grid: hasGrid ? grid : null,
-    // The grid spans the drawn extent (mm, y-up) — back in sheet pixels.
-    gridExtentPx: (
-      minX: minX / mmPerPx,
-      minY: -maxY / mmPerPx,
-      maxX: maxX / mmPerPx,
-      maxY: -minY / mmPerPx,
-    ),
-    // This path is always calibrated, so the tie dimension is honest.
-    metersPerPixel: metersPerPixel,
-    // The issued sheet's limits (outside the frame, the title block), mapped
-    // from sheet pixels to model mm (Y negated), exactly as the PDF seeds them.
-    occupied: [
-      for (final o in sheetPlot?.occupiedPx ?? const <LabelBox>[])
-        (
-          minX: o.minX * mmPerPx,
-          minY: -o.maxY * mmPerPx,
-          maxX: o.maxX * mmPerPx,
-          maxY: -o.minY * mmPerPx,
-        ),
-    ],
-    details: details,
-    extraMarks: extraMarks,
-    unlabelledIds: unlabelledIds,
-  );
+  // Drawing backlog L-1 (2026-11-13) — ONE placement result with the plan
+  // PDF: when the PDF's page frame is known (a plotted sheet), lay the
+  // annotations out in the PDF's own page-point frame — its map, occupied
+  // boxes, grid extent and true-width duct rule, exactly the inputs
+  // `planToPdf` gives the layout — and map the placed geometry into model
+  // millimetres. Two independent layouts (points vs millimetres) broke a
+  // floating-point slot tie differently on tower Lantai 16: the DXF stamped
+  // "1 label bertumpuk" the PDF did not.
+  final frame = sheetPlot?.frame;
+  final PlanAnnotations ann;
+  if (frame != null && plotN != null && scaleRowOverride == null) {
+    final halfPt = <String, double>{};
+    final ppm = frame.pointsPerMeter;
+    if (ppm != null) {
+      for (final e in net.edges) {
+        if (e.kind != EdgeKind.run) continue;
+        final w = planDuctWidthM(sizing[e.id]);
+        if (w == null) continue;
+        final pt = w * ppm;
+        if (pt * kPlanPaperMmPerPt >= kPlanDuctDoubleLineMinMm) {
+          halfPt[e.id] = pt / 2;
+        }
+      }
+    }
+    final onPage = layoutPlanAnnotations(
+      runHalfWidths: halfPt,
+      net: net,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      map: (x, y) => (x: frame.tx(x), y: frame.ty(y)),
+      unitsPerMm: 1 / kPlanPaperMmPerPt,
+      edgeLabels: edgeLabels,
+      nodeTags: nodeTags,
+      grid: hasGrid ? grid : null,
+      gridExtentPx: frame.extent,
+      metersPerPixel: metersPerPixel,
+      occupied: frame.occupiedPt,
+      details: details,
+      extraMarks: extraMarks,
+      unlabelledIds: unlabelledIds,
+    );
+    // Page point → sheet px → model mm (y-up): X = (x − offX) / scale ·
+    // mmPerPx + minX · mmPerPx; Y = (y − (pageH − offY)) / scale · mmPerPx −
+    // minY · mmPerPx.
+    final k = mmPerPx / frame.scale;
+    ann = mapPlanAnnotations(onPage,
+        k: k,
+        ox: frame.minX * mmPerPx - frame.offX * k,
+        oy: -frame.minY * mmPerPx - (frame.pageH - frame.offY) * k);
+  } else {
+    ann = layoutPlanAnnotations(
+      runHalfWidths: ductHalfMm,
+      net: net,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      map: (x, y) => (x: x * mmPerPx, y: -y * mmPerPx),
+      unitsPerMm: u,
+      edgeLabels: edgeLabels,
+      nodeTags: nodeTags,
+      grid: hasGrid ? grid : null,
+      // The grid spans the drawn extent (mm, y-up) — back in sheet pixels.
+      gridExtentPx: (
+        minX: minX / mmPerPx,
+        minY: -maxY / mmPerPx,
+        maxX: maxX / mmPerPx,
+        maxY: -minY / mmPerPx,
+      ),
+      // This path is always calibrated, so the tie dimension is honest.
+      metersPerPixel: metersPerPixel,
+      // The issued sheet's limits (outside the frame, the title block), mapped
+      // from sheet pixels to model mm (Y negated), exactly as the PDF seeds them.
+      occupied: [
+        for (final o in sheetPlot?.occupiedPx ?? const <LabelBox>[])
+          (
+            minX: o.minX * mmPerPx,
+            minY: -o.maxY * mmPerPx,
+            maxX: o.maxX * mmPerPx,
+            maxY: -o.minY * mmPerPx,
+          ),
+      ],
+      details: details,
+      extraMarks: extraMarks,
+      unlabelledIds: unlabelledIds,
+    );
+  }
 
   // N4: the reference setting-out grid — chain column/row LINEs + bubble
   // CIRCLE/TEXT on the grey grid layer, spanning the drawing extent (mm).
@@ -648,6 +703,7 @@ String _professionalDxf({
     }
     return null;
   }
+
   void emitPrims(List<SldPrim> prims, String layer, double centerY) {
     for (final pr in prims) {
       switch (pr) {
@@ -670,6 +726,7 @@ String _professionalDxf({
       }
     }
   }
+
   void flowChevron(double ux, double uy, double dxp, double dyp, double len,
       String layer, double arm) {
     final dirx = (dxp - ux) / len, diry = (dyp - uy) / len;
@@ -677,8 +734,10 @@ String _professionalDxf({
     final atx = ux + dirx * (len * 2 / 3), aty = uy + diry * (len * 2 / 3);
     final tipx = atx + dirx * (arm * 0.5), tipy = aty + diry * (arm * 0.5);
     final backx = tipx - dirx * arm, backy = tipy - diry * arm;
-    final w1x = backx + perpx * (arm * 0.75), w1y = backy + perpy * (arm * 0.75);
-    final w2x = backx - perpx * (arm * 0.75), w2y = backy - perpy * (arm * 0.75);
+    final w1x = backx + perpx * (arm * 0.75),
+        w1y = backy + perpy * (arm * 0.75);
+    final w2x = backx - perpx * (arm * 0.75),
+        w2y = backy - perpy * (arm * 0.75);
     g(0, 'LINE');
     g(8, layer);
     g(10, w1x);
@@ -814,7 +873,12 @@ String _professionalDxf({
   // the offset dimension line, two 45-degree oblique ticks (R12 has no DIMSTYLE
   // table here, so the dimension is drawn as LINE entities) + the figure.
   for (final t in ann.ties) {
-    for (final l in [t.axisExtension, t.riserExtension, t.dimension, ...t.ticks]) {
+    for (final l in [
+      t.axisExtension,
+      t.riserExtension,
+      t.dimension,
+      ...t.ticks
+    ]) {
       g(0, 'LINE');
       g(8, kDxfLayerDims);
       g(10, l.x1);

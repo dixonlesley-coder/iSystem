@@ -80,8 +80,133 @@ const double kPlanTieTickMm = 2 * kPlanPaperMmPerPt;
 class PlanSheetPlot {
   final int scaleDenominator;
   final List<LabelBox> occupiedPx;
+
+  /// Drawing backlog L-1 (2026-11-13) — the plan PDF's page frame for this
+  /// sheet. When present the DXF lays its annotations out ONCE in the PDF's
+  /// page-point frame (the same `map`, occupied boxes, grid extent and duct
+  /// widths) and maps the placed geometry into model millimetres
+  /// ([mapPlanAnnotations]), so both formats draw one placement result —
+  /// the same slots, keys and overlap stamp — instead of two layouts whose
+  /// floating-point ties could break differently. Null ⇒ the DXF's own
+  /// model-mm layout (legacy callers).
+  final PlanPageFrame? frame;
   const PlanSheetPlot(
-      {required this.scaleDenominator, this.occupiedPx = const []});
+      {required this.scaleDenominator,
+      this.occupiedPx = const [],
+      this.frame});
+}
+
+/// Drawing backlog L-1 — the plan PDF's page geometry for one sheet: sheet
+/// px → page points is `x' = offX + (x − minX) · scale`, `y' = (pageH − offY)
+/// − (y − minY) · scale` (y-up); [occupiedPt] is the PDF's own occupied list
+/// (frame strips, title block, legend…, then the extra px boxes mapped the
+/// same way); [extent] the fit extent in sheet px (the grid extent);
+/// [pointsPerMeter] the true-width duct rule's basis (null: NTS).
+class PlanPageFrame {
+  final double offX, offY, minX, minY, scale, pageH;
+  final double? pointsPerMeter;
+  final List<LabelBox> occupiedPt;
+  final ({double minX, double minY, double maxX, double maxY}) extent;
+  const PlanPageFrame({
+    required this.offX,
+    required this.offY,
+    required this.minX,
+    required this.minY,
+    required this.scale,
+    required this.pageH,
+    required this.pointsPerMeter,
+    required this.occupiedPt,
+    required this.extent,
+  });
+
+  double tx(double x) => offX + (x - minX) * scale;
+  double ty(double y) => (pageH - offY) - (y - minY) * scale;
+}
+
+/// Drawing backlog L-1 — [a] placed in one frame, re-expressed in another by
+/// the uniform map `X = ox + k·x`, `Y = oy + k·y` (k > 0: both frames y-up,
+/// so angles are unchanged); every length (text size, radii) scales by k.
+/// The sheet-pixel anchors and counts are frame-free and kept as they are.
+PlanAnnotations mapPlanAnnotations(PlanAnnotations a,
+    {required double k, required double ox, required double oy}) {
+  double fx(double x) => ox + k * x;
+  double fy(double y) => oy + k * y;
+  LabelSegment seg(LabelSegment s) =>
+      (x1: fx(s.x1), y1: fy(s.y1), x2: fx(s.x2), y2: fy(s.y2));
+  PlacedLabelLine line(PlacedLabelLine l) =>
+      (text: l.text, x: fx(l.x), y: fy(l.y));
+  ({double x, double y})? pt(({double x, double y})? p) =>
+      p == null ? null : (x: fx(p.x), y: fy(p.y));
+  final kt = a.keyTable;
+  return PlanAnnotations(
+    grid: [
+      for (final g in a.grid)
+        PlanGridMark(g.label, g.isColumn, seg(g.line), fx(g.bubbleX),
+            fy(g.bubbleY), g.bubbleR * k),
+    ],
+    upDown: [
+      for (final m in a.upDown)
+        PlanUpDownMark(m.text, fx(m.x), fy(m.y), m.textSize * k),
+    ],
+    ties: [
+      for (final t in a.ties)
+        PlanTieDimension(
+          axisExtension: seg(t.axisExtension),
+          riserExtension: seg(t.riserExtension),
+          dimension: seg(t.dimension),
+          ticks: [for (final s in t.ticks) seg(s)],
+          text: t.text,
+          textX: fx(t.textX),
+          textY: fy(t.textY),
+          textSize: t.textSize * k,
+        ),
+    ],
+    labels: [
+      for (final l in a.labels)
+        PlanPlacedLabel(
+          l.kind,
+          l.id,
+          LeaderedLabelPlacement(
+            x: fx(l.placement.x),
+            y: fy(l.placement.y),
+            angleDeg: l.placement.angleDeg,
+            leaderAnchor: pt(l.placement.leaderAnchor),
+            leaderEnd: pt(l.placement.leaderEnd),
+            lines: [for (final x in l.placement.lines) line(x)],
+            keyCircle: l.placement.keyCircle == null
+                ? null
+                : (
+                    x: fx(l.placement.keyCircle!.x),
+                    y: fy(l.placement.keyCircle!.y),
+                    r: l.placement.keyCircle!.r * k,
+                  ),
+          ),
+          l.textSize * k,
+        ),
+    ],
+    keyTable: kt == null
+        ? null
+        : PlanKeyTable([for (final x in kt.texts) line(x)],
+            [for (final s in kt.rules) seg(s)], kt.textSize * k),
+    overlapCount: a.overlapCount,
+    marks: PlanMarks(
+      lines: [
+        for (final l in a.marks.lines)
+          PlanMarkLine(fx(l.x1), fy(l.y1), fx(l.x2), fy(l.y2),
+              dashed: l.dashed, heavy: l.heavy),
+      ],
+      circles: [
+        for (final c in a.marks.circles)
+          PlanMarkCircle(fx(c.cx), fy(c.cy), c.r * k, filled: c.filled),
+      ],
+      texts: [
+        for (final t in a.marks.texts)
+          PlanMarkText(fx(t.x), fy(t.y), t.size * k, t.text),
+      ],
+    ),
+    unresolvedAnchorsPx: a.unresolvedAnchorsPx,
+    elementAnchorsPx: a.elementAnchorsPx,
+  );
 }
 
 /// What a placed tag annotates.
