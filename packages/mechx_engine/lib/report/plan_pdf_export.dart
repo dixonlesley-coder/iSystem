@@ -27,7 +27,7 @@ import '../units.dart';
 import 'drawing_chrome.dart';
 import 'plan_annotation_layout.dart';
 import 'plan_detail.dart';
-import 'plan_detail_sheet.dart' show planDetailSheetPlot;
+import 'plan_detail_sheet.dart' show planDetailCaptionMm, planDetailSheetPlot;
 import 'plan_symbols.dart';
 import 'sld_sheet.dart';
 
@@ -656,7 +656,129 @@ List<PlanDetailCallout> planSheetDetails({
     if (cost == 0) break;
   }
   final b = best!;
-  if (detailSheetRefOf == null || b.cost == b.main) return b.d;
+  if (detailSheetRefOf == null) return b.d;
+
+  // Drawing backlog I-3 — the plan's details, each at the scale it was laid
+  // out and checked at: (a) a cluster whose detail would not plot at least
+  // twice as large as the plan is KEYED on the plan instead (no detail
+  // sheet) when the plan then overprints no more; (b) the rest are packed
+  // as many to a sheet as fit at their own scales (largest first), a sheet
+  // whose packed details would overprint splitting back into one per
+  // detail; letters, drawing numbers and match lines follow.
+  final base = _planPdfBuild(
+    net: net,
+    sizing: sizing,
+    edgeLengths: edgeLengths,
+    sheetId: sheetId,
+    floorIndex: floorIndex,
+    projectName: projectName,
+    sheetName: sheetName,
+    dateString: dateString,
+    chrome: chrome,
+    metersPerPixel: metersPerPixel,
+    underlay: underlay,
+    paper: paper,
+    minScaleDenominator: minScaleDenominator,
+    edgeElevationLabels: edgeElevationLabels,
+    grid: grid,
+    edgeTags: edgeTags,
+    nodeTags: nodeTags,
+    gravitySlope: gravitySlope,
+    layoutOnly: true,
+  );
+  final planN = base.scaleDenominator;
+  int mainOverlap(List<PlanDetailCallout> ds) => _planPdfBuild(
+        net: net,
+        sizing: sizing,
+        edgeLengths: edgeLengths,
+        sheetId: sheetId,
+        floorIndex: floorIndex,
+        projectName: projectName,
+        sheetName: sheetName,
+        dateString: dateString,
+        chrome: chrome,
+        metersPerPixel: metersPerPixel,
+        underlay: underlay,
+        paper: paper,
+        minScaleDenominator: minScaleDenominator,
+        edgeElevationLabels: edgeElevationLabels,
+        grid: grid,
+        edgeTags: edgeTags,
+        nodeTags: nodeTags,
+        gravitySlope: gravitySlope,
+        details: ds,
+        layoutOnly: true,
+      ).ann.overlapCount;
+  ({double w, double h}) sizeOf(PlanDetailCallout d) => (
+        w: (d.rectPx.maxX - d.rectPx.minX) * metersPerPixel,
+        h: (d.rectPx.maxY - d.rectPx.minY) * metersPerPixel,
+      );
+  List<PlanDetailCallout> finalize(List<PlanDetailCallout> ds) {
+    // (a) keyed clusters.
+    var cur = [...ds];
+    final cand = [
+      for (var i = 0; i < cur.length; i++)
+        if (planN != null && cur[i].scale! * 2 > planN) i
+    ];
+    if (cand.isNotEmpty) {
+      final baseline = mainOverlap(cur);
+      final all = [
+        for (var i = 0; i < cur.length; i++)
+          cand.contains(i) ? cur[i].asKeyed() : cur[i]
+      ];
+      if (mainOverlap(all) <= baseline) {
+        cur = all;
+      } else {
+        for (final i in cand) {
+          final trial = [...cur]..[i] = cur[i].asKeyed();
+          if (mainOverlap(trial) <= baseline) cur = trial;
+        }
+      }
+    }
+    final kept = [for (final d in cur) if (!d.keyed) d];
+    final keyed = [for (final d in cur) if (d.keyed) d];
+    if (kept.isEmpty) return keyed;
+    // (b) as many to a sheet as fit, each at its own scale.
+    var bins = planDetailBins(
+        sizesM: [for (final d in kept) sizeOf(d)],
+        scales: [for (final d in kept) d.scale!],
+        area: area,
+        captionMm: planDetailCaptionMm(kept));
+    bins = [
+      for (final bin in bins)
+        if (bin.length > 1 &&
+            detailEval([for (final i in bin) kept[i]]).overlap > 0)
+          for (final i in bin) [i]
+        else
+          bin
+    ]..sort((p, q) => p.first.compareTo(q.first));
+    final sheetOf = <int, int>{
+      for (var s = 0; s < bins.length; s++)
+        for (final i in bins[s]) i: s,
+    };
+    final split = kept.any((d) => d.matches.isNotEmpty);
+    final cuts =
+        split ? planDetailSharedCuts([for (final d in kept) d.rectPx]) : null;
+    return [
+      for (var i = 0; i < kept.length; i++)
+        kept[i].renamed(planDetailLetter(i), detailSheetRefOf(sheetOf[i]!),
+            matches: cuts == null
+                ? const []
+                : [
+                    for (final c in cuts[i])
+                      PlanDetailMatch(c.x1, c.y1, c.x2, c.y2,
+                          letter: planDetailLetter(c.other),
+                          sheetRef: detailSheetRefOf(sheetOf[c.other]!)),
+                  ]),
+      ...keyed,
+    ];
+  }
+
+  if (b.cost == b.main) {
+    // One sheet, one shared scale: every detail at that scale.
+    final n = detailEval(b.d).n;
+    return finalize([for (final d in b.d) d.atScale(n)]);
+  }
 
   // Drawing review S1 — the shared detail sheet still overprints: ONE
   // cluster per detail sheet (each at the largest standard scale that fits
@@ -705,7 +827,7 @@ List<PlanDetailCallout> planSheetDetails({
 
   final pieces = [for (final d in b.d) ...refine(d.rectPx, 0)];
   final cuts = planDetailSharedCuts(pieces);
-  return [
+  final s1 = [
     for (var i = 0; i < pieces.length; i++)
       PlanDetailCallout(
         letter: planDetailLetter(i),
@@ -719,6 +841,8 @@ List<PlanDetailCallout> planSheetDetails({
         ],
       ),
   ];
+  // Each piece at the scale it was checked at alone.
+  return finalize([for (final d in s1) d.atScale(detailEval([d]).n)]);
 }
 
 /// Drawing review R1 — the cluster link distance and the boundary margin of

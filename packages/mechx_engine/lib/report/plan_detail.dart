@@ -35,11 +35,48 @@ class PlanDetailCallout {
   /// was split from (a cluster too dense for one sheet): each is drawn on
   /// the detail as a dashed MATCH LINE naming the neighbour.
   final List<PlanDetailMatch> matches;
+
+  /// Drawing backlog I-3 (a) — a KEYED cluster: its detail would not plot at
+  /// least twice as large as the plan, so no detail sheet is issued; the
+  /// plan keys every element anchored inside [rectPx] instead (numbered key
+  /// circles + the PIPE KEY table) and draws no boundary or bubble.
+  final bool keyed;
+
+  /// Drawing backlog I-3 (b) — the scale (`1 : n`) this detail was laid out
+  /// and checked at; its sheet plots it at exactly this scale beside the
+  /// plan's other details. Null ⇒ the sheet's shared scale.
+  final int? scale;
   const PlanDetailCallout(
       {required this.letter,
       required this.rectPx,
       required this.sheetRef,
-      this.matches = const []});
+      this.matches = const [],
+      this.keyed = false,
+      this.scale});
+
+  /// This callout with a new [letter], [sheetRef] and [matches].
+  PlanDetailCallout renamed(String letter, String sheetRef,
+          {List<PlanDetailMatch>? matches}) =>
+      PlanDetailCallout(
+          letter: letter,
+          rectPx: rectPx,
+          sheetRef: sheetRef,
+          matches: matches ?? this.matches,
+          keyed: keyed,
+          scale: scale);
+
+  /// This callout fixed at the scale `1 : [n]`.
+  PlanDetailCallout atScale(int n) => PlanDetailCallout(
+      letter: letter,
+      rectPx: rectPx,
+      sheetRef: sheetRef,
+      matches: matches,
+      keyed: keyed,
+      scale: n);
+
+  /// This callout as a keyed cluster (no detail sheet).
+  PlanDetailCallout asKeyed() => PlanDetailCallout(
+      letter: letter, rectPx: rectPx, sheetRef: '', keyed: true);
 
   bool containsPx(double x, double y) =>
       x >= rectPx.minX &&
@@ -354,6 +391,118 @@ List<LabelBox> planDetailClusterRects({
   }
   final n = rungs.last;
   return (n: n, frames: pack(n) ?? [for (final _ in sizesM) area]);
+}
+
+/// Drawing backlog I-3 (b) — the scale a detail of [sizeM] (real metres)
+/// plots at ALONE on a detail sheet's [area]: the largest drawing
+/// [planDetailPack] finds for it. Pure.
+int planDetailAloneScale(({double w, double h}) sizeM, LabelBox area,
+        {double captionMm = 16}) =>
+    planDetailPack(sizesM: [sizeM], area: area, captionMm: captionMm).n;
+
+/// Drawing backlog I-3 (b) — several details on ONE sheet, each at its OWN
+/// scale ([scales], `1 : n`): frames (extent + [pad] all round, [captionMm]
+/// below) shelf-packed largest first (by frame area, then index) into
+/// [area] in rows, each row centred. Returns the frames in input order, or
+/// null when they do not all fit. Pure, deterministic.
+List<LabelBox>? planDetailMixedPack({
+  required List<({double w, double h})> sizesM,
+  required List<int> scales,
+  required LabelBox area,
+  double pad = kPlanDetailFramePadMm,
+  double gapMm = 8,
+  double captionMm = 16,
+}) {
+  final aw = area.maxX - area.minX, ah = area.maxY - area.minY;
+  final sz = [
+    for (var i = 0; i < sizesM.length; i++)
+      (
+        w: sizesM[i].w * 1000 / scales[i] + 2 * pad,
+        h: sizesM[i].h * 1000 / scales[i] + 2 * pad
+      ),
+  ];
+  final order = [for (var i = 0; i < sz.length; i++) i]..sort((a, b) {
+      final d = (sz[b].w * sz[b].h).compareTo(sz[a].w * sz[a].h);
+      return d != 0 ? d : a.compareTo(b);
+    });
+  final rows = <List<int>>[[]];
+  final pos = <int, (double, double)>{};
+  var x = 0.0, y = 0.0, rowH = 0.0;
+  for (final i in order) {
+    final s = sz[i];
+    if (s.w > aw || s.h + captionMm > ah) return null;
+    if (x > 0 && x + s.w > aw) {
+      y += rowH + captionMm + gapMm;
+      x = 0;
+      rowH = 0;
+      rows.add([]);
+    }
+    pos[i] = (x, y);
+    rows.last.add(i);
+    x += s.w + gapMm;
+    rowH = math.max(rowH, s.h);
+  }
+  if (y + rowH + captionMm > ah) return null;
+  final frames = List<LabelBox?>.filled(sz.length, null);
+  for (final row in rows) {
+    if (row.isEmpty) continue;
+    final last = row.last;
+    final rowW = pos[last]!.$1 + sz[last].w;
+    final off = (aw - rowW) / 2;
+    for (final i in row) {
+      final (px, py) = pos[i]!;
+      frames[i] = (
+        minX: area.minX + off + px,
+        minY: area.minY + py,
+        maxX: area.minX + off + px + sz[i].w,
+        maxY: area.minY + py + sz[i].h,
+      );
+    }
+  }
+  return [for (final f in frames) f!];
+}
+
+/// Drawing backlog I-3 (b) — the detail SHEETS of one plan: details (sizes
+/// [sizesM], own scales [scales]) taken largest first (frame area at their
+/// own scale, then index) into the first sheet whose [planDetailMixedPack]
+/// still fits them, else a new sheet. Sheets are returned in the order of
+/// their first (lowest-index) detail, each listing its detail indices
+/// ascending. Pure, deterministic.
+List<List<int>> planDetailBins({
+  required List<({double w, double h})> sizesM,
+  required List<int> scales,
+  required LabelBox area,
+  double captionMm = 16,
+}) {
+  double areaOf(int i) =>
+      (sizesM[i].w * 1000 / scales[i] + 2 * kPlanDetailFramePadMm) *
+      (sizesM[i].h * 1000 / scales[i] + 2 * kPlanDetailFramePadMm);
+  final order = [for (var i = 0; i < sizesM.length; i++) i]..sort((a, b) {
+      final d = areaOf(b).compareTo(areaOf(a));
+      return d != 0 ? d : a.compareTo(b);
+    });
+  final bins = <List<int>>[];
+  for (final i in order) {
+    var placed = false;
+    for (final bin in bins) {
+      final cand = [...bin, i]..sort();
+      if (planDetailMixedPack(
+              sizesM: [for (final j in cand) sizesM[j]],
+              scales: [for (final j in cand) scales[j]],
+              area: area,
+              captionMm: captionMm) !=
+          null) {
+        bin
+          ..add(i)
+          ..sort();
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) bins.add([i]);
+  }
+  bins.sort((a, b) => a.first.compareTo(b.first));
+  return bins;
 }
 
 /// The divided scale bar of a detail at `1 : [n]`: a round real length whose

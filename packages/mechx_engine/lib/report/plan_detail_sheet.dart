@@ -135,7 +135,7 @@ List<LabelBox> planDetailOutsideFrames(List<LabelBox> frames, LabelBox area) {
 
 /// The caption strip under each frame: title + scale (16 mm), plus one line
 /// per distinct MATCH LINE neighbour of a split piece (S1).
-double _captionMm(List<PlanDetailCallout> details) {
+double planDetailCaptionMm(List<PlanDetailCallout> details) {
   var k = 0;
   for (final d in details) {
     k = math.max(k, {for (final m in d.matches) m.caption}.length);
@@ -159,17 +159,34 @@ PlanDetailSheetPlot planDetailSheetPlot({
 }) {
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
   const ts = kPlanLabelTextMm;
-  final pack = planDetailPack(
-      sizesM: [
-        for (final d in details)
-          (
-            w: (d.rectPx.maxX - d.rectPx.minX) * metersPerPixel,
-            h: (d.rectPx.maxY - d.rectPx.minY) * metersPerPixel,
-          ),
-      ],
-      area: areaMm,
-      // S1 — a split piece's MATCH LINE caption takes a third caption line.
-      captionMm: _captionMm(details));
+  final sizesM = [
+    for (final d in details)
+      (
+        w: (d.rectPx.maxX - d.rectPx.minX) * metersPerPixel,
+        h: (d.rectPx.maxY - d.rectPx.minY) * metersPerPixel,
+      ),
+  ];
+  // S1 — a split piece's MATCH LINE caption takes a third caption line.
+  final capMm = planDetailCaptionMm(details);
+  // Drawing backlog I-3 (b) — several details on one sheet each at its OWN
+  // scale (the one it was laid out and checked at,
+  // [PlanDetailCallout.scale]) when every detail carries one and they all
+  // fit ([planDetailBins] fills sheets so they do); else one shared scale —
+  // a lone detail takes the largest its sheet allows, as before.
+  final own = details.length > 1 && details.every((d) => d.scale != null)
+      ? [for (final d in details) d.scale!]
+      : null;
+  final mixed = own == null
+      ? null
+      : planDetailMixedPack(
+          sizesM: sizesM, scales: own, area: areaMm, captionMm: capMm);
+  final shared = mixed != null
+      ? null
+      : planDetailPack(sizesM: sizesM, area: areaMm, captionMm: capMm);
+  final pack = (
+    ns: mixed != null ? own! : [for (final _ in details) shared!.n],
+    frames: mixed ?? shared!.frames,
+  );
   final plots = <PlanDetailPlot>[];
   final nodes = <NetNode>[];
   final edges = <NetEdge>[];
@@ -186,7 +203,7 @@ PlanDetailSheetPlot planDetailSheetPlot({
   for (var i = 0; i < details.length; i++) {
     final d = details[i];
     final r = d.rectPx;
-    final n = pack.n;
+    final n = pack.ns[i];
     final k = metersPerPixel * 1000 / n; // paper mm per sheet px
     final frame = pack.frames[i];
     final fw = frame.maxX - frame.minX, fh = frame.maxY - frame.minY;
@@ -595,4 +612,84 @@ String planDetailSheetToDxf({
       extraOccupiedPx: p.occupiedMm,
     ),
   );
+}
+
+/// Drawing backlog I-3 (c) — a level code in a tag (`CW-L12`, `D-GF`,
+/// `SP-B1`, `RW-RF`) masked, so two typical floors' tags compare equal.
+String planDetailMaskLevel(String s) => s.replaceAll(
+    RegExp(r'(?<=[A-Z]-)(L\d+|GF|B\d+|RF)(?![0-9A-Za-z])'), '#');
+
+/// Drawing backlog I-3 (c) — the CONTENT of a detail sheet's [plot] as a
+/// string: every detail's scale and frame, every drawn node (paper-mm
+/// position, role, component, fixture, tag) and every drawn edge (ends,
+/// service, kind, size, real length, tag, level label), with level codes
+/// masked ([planDetailMaskLevel]) and element ids left out. Two typical
+/// floors whose detail sheets draw the same thing get the same string.
+/// Pure, order-independent.
+String planDetailContentSignature(PlanDetailSheetPlot plot,
+    {Map<String, String>? nodeTags}) {
+  String r(double v) => v.toStringAsFixed(2);
+  final pos = {
+    for (final n in plot.net.nodes) n.id: '${r(n.x)},${r(n.y)}',
+  };
+  final nodes = [
+    for (final n in plot.net.nodes)
+      if (!plot.hiddenNodeIds.contains(n.id))
+        '${pos[n.id]}|${n.role.name}|${n.component?.name}|'
+            '${n.fixture?.name}|'
+            '${planDetailMaskLevel(nodeTags?[n.id] ?? '')}|'
+            '${plot.unlabelledIds.contains(n.id)}',
+  ]..sort();
+  final edges = <String>[];
+  for (final e in plot.net.edges) {
+    final s = plot.sizing[e.id];
+    final ends = [pos[e.fromId] ?? '?', pos[e.toId] ?? '?']..sort();
+    // A riser's storey length is not printed on a plan or detail (its tag
+    // names the stack), so floors of different heights still match.
+    final len = e.kind == EdgeKind.riser ? null : plot.edgeLengths[e.id];
+    edges.add('${ends.join('>')}|${e.service.name}|${e.kind.name}|'
+        '${s == null ? '-' : r(s.diameter.inMillimeters)}|'
+        '${s?.width == null ? '-' : r(s!.width!.inMillimeters)}x'
+        '${s?.height == null ? '-' : r(s!.height!.inMillimeters)}|'
+        '${len == null ? '-' : r(len.meters)}|'
+        '${planDetailMaskLevel(plot.edgeTags[e.id] ?? '')}|'
+        '${plot.edgeElevationLabels[e.id] ?? ''}|'
+        '${plot.unlabelledIds.contains(e.id)}');
+  }
+  edges.sort();
+  final frames = [
+    for (final d in plot.details)
+      '${d.callout.letter}@${d.scaleDenominator}:'
+          '${r(d.frameMm.minX)},${r(d.frameMm.minY)},'
+          '${r(d.frameMm.maxX)},${r(d.frameMm.maxY)}|'
+          '${[for (final m in d.callout.matches) m.letter].join(',')}',
+  ];
+  return [...frames, '#N', ...nodes, '#E', ...edges].join('\n');
+}
+
+/// Drawing backlog I-3 (c) — the sheet name of a TYPICAL detail issued once
+/// for the floors [floorNames]: `TIPIKAL - Lantai 2..29` for a consecutive
+/// run of `Lantai N`, else the runs comma-joined (`TIPIKAL - Lantai 2..5,
+/// 7..9`), or the names themselves. Pure.
+String planDetailTypicalName(List<String> floorNames) {
+  final re = RegExp(r'^Lantai (\d+)$');
+  final nums = [
+    for (final f in floorNames) int.tryParse(re.firstMatch(f)?.group(1) ?? '')
+  ];
+  if (nums.isEmpty || nums.any((n) => n == null)) {
+    return 'TIPIKAL - ${floorNames.join(', ')}';
+  }
+  final ns = [for (final n in nums) n!]..sort();
+  final runs = <String>[];
+  var a = ns.first, b = ns.first;
+  for (final n in ns.skip(1)) {
+    if (n == b + 1) {
+      b = n;
+      continue;
+    }
+    runs.add(a == b ? '$a' : '$a..$b');
+    a = b = n;
+  }
+  runs.add(a == b ? '$a' : '$a..$b');
+  return 'TIPIKAL - Lantai ${runs.join(', ')}';
 }

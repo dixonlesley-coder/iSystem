@@ -291,6 +291,13 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   issues detail sheets.
 
 ### Backlog closed (2026-11-13)
+- I-3 Detail sheets: fewer, fuller. (a) a cluster whose detail would not plot at
+  least twice as large as its plan is keyed on the plan instead (key circles + PIPE
+  KEY table, no sheet; none of the five buildings has one); (b) a plan's details are
+  packed as many to a sheet as fit at their own checked scales (`planDetailBins`);
+  (c) identical typical-floor detail content (level code masked) is issued once as
+  `DETAIL - TIPIKAL - Lantai a..b`, each plan's bubble pointing at it. Detail sheets:
+  apartment 12 -> 7, tower 38 -> 12; house 1, office 4, shophouse 0 unchanged.
 - I-2 Plant-level riser pages tag their plant directly: a lone floor page that still
   keys a plant item (tank, pump, booster, PRV, water meter) or a trunk between two of
   them draws its plant group (`riserPlantGroup`) in its own row under the fixture band

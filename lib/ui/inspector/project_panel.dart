@@ -12,7 +12,8 @@ import 'package:mechx_engine/report/csv_text.dart' show excelCsv;
 import 'package:mechx_engine/report/file_names.dart' show safeFileStem;
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/dxf_export.dart';
-import 'package:mechx_engine/report/plan_detail.dart' show PlanDetailCallout;
+import 'package:mechx_engine/report/plan_detail.dart'
+    show PlanDetailCallout, PlanDetailMatch;
 import 'package:mechx_engine/report/plan_detail_sheet.dart';
 import 'package:mechx_engine/electrical/bom.dart' show faultSpecifiedKa;
 import 'package:mechx_engine/report/electrical_calc_report.dart';
@@ -2183,6 +2184,8 @@ Future<bool> writeSubmittalPackageToDir(
   final planDetailSheets =
       <String, List<({String number, List<PlanDetailCallout> callouts})>>{};
   var detailCount = 0;
+  // Drawing backlog I-3 (c) — the floors each issued detail set serves.
+  final typicalFloors = <String, List<String>>{};
   {
     final net0 = ref.read(networkControllerProvider).network;
     final sizing0 = ref.read(sizingProvider);
@@ -2222,16 +2225,112 @@ Future<bool> writeSubmittalPackageToDir(
       if (d.isNotEmpty) {
         planDetails[sheet.id] = d;
         final refs = <String>[];
+        // Drawing backlog I-3 (a) — a keyed cluster has no detail sheet.
         for (final c in d) {
-          if (!refs.contains(c.sheetRef)) refs.add(c.sheetRef);
+          if (!c.keyed && !refs.contains(c.sheetRef)) refs.add(c.sheetRef);
         }
         planDetailSheets[sheet.id] = [
           for (final r in refs)
-            (number: r, callouts: [for (final c in d) if (c.sheetRef == r) c]),
+            (
+              number: r,
+              callouts: [
+                for (final c in d)
+                  if (!c.keyed && c.sheetRef == r) c
+              ]
+            ),
         ];
         detailCount += refs.length;
       }
     }
+    // Drawing backlog I-3 (c) — a plan whose detail sheets draw exactly
+    // what an earlier plan's do (same geometry and labels once the level
+    // code is masked, `planDetailContentSignature`) issues none of its own:
+    // its bubbles point at the earlier plan's sheets, issued once as
+    // 'DETAIL - TIPIKAL - Lantai a..b'. The sheets are then renumbered
+    // M-501.. in issue order.
+    final area0 = planDetailDrawingAreaMm(
+        projectName: base, sheetName: '', dateString: today);
+    final canonOf = <String, String>{};
+    final bySig = <String, String>{};
+    for (final sheet in planSheets) {
+      final ds = planDetailSheets[sheet.id];
+      final mpp = project.calibrationFor(sheet.id)?.metersPerPixel;
+      if (ds == null || ds.isEmpty || mpp == null) continue;
+      final fIdx = sheetsFm.floorFor(sheet.id, project.building.levelCount);
+      final sig = [
+        for (final d in ds)
+          planDetailContentSignature(
+              planDetailSheetPlot(
+                  net: net0,
+                  sizing: sizing0,
+                  edgeLengths: lengths0,
+                  sheetId: sheet.id,
+                  floorIndex: fIdx,
+                  metersPerPixel: mpp,
+                  details: d.callouts,
+                  areaMm: area0,
+                  edgeTags: tags0,
+                  edgeElevationLabels: elev0),
+              nodeTags: nodeTags0),
+      ].join('\n##\n');
+      canonOf[sheet.id] = bySig.putIfAbsent(sig, () => sheet.id);
+    }
+    final refMap = <String, Map<String, String>>{};
+    var next = 0;
+    for (final sheet in planSheets) {
+      final ds = planDetailSheets[sheet.id];
+      final canon = canonOf[sheet.id];
+      if (ds == null || canon == null) continue;
+      final m = refMap[sheet.id] = <String, String>{};
+      if (canon == sheet.id) {
+        for (final d in ds) {
+          m[d.number] = detailNumberFor(next++);
+        }
+      } else {
+        final cs = planDetailSheets[canon]!;
+        for (var k = 0; k < ds.length; k++) {
+          m[ds[k].number] = refMap[canon]![cs[k].number]!;
+        }
+      }
+    }
+    for (final sheet in planSheets) {
+      final m = refMap[sheet.id];
+      if (m == null) continue;
+      String to(String r) => m[r] ?? r;
+      PlanDetailCallout remap(PlanDetailCallout c) => c.keyed
+          ? c
+          : c.renamed(c.letter, to(c.sheetRef), matches: [
+              for (final x in c.matches)
+                PlanDetailMatch(x.x1, x.y1, x.x2, x.y2,
+                    letter: x.letter, sheetRef: to(x.sheetRef)),
+            ]);
+      planDetails[sheet.id] = [
+        for (final c in planDetails[sheet.id]!) remap(c)
+      ];
+      if (canonOf[sheet.id] == sheet.id) {
+        planDetailSheets[sheet.id] = [
+          for (final d in planDetailSheets[sheet.id]!)
+            (
+              number: to(d.number),
+              callouts: [for (final c in d.callouts) remap(c)]
+            ),
+        ];
+      } else {
+        planDetailSheets.remove(sheet.id);
+      }
+    }
+    for (final sheet in planSheets) {
+      final canon = canonOf[sheet.id];
+      if (canon != null) {
+        (typicalFloors[canon] ??= <String>[]).add(sheet.name);
+      }
+    }
+    detailCount = next;
+  }
+  // The detail sheet name: the plan's own floor, or the typical floors.
+  String detailSheetName(String sheetId, String name) {
+    final fl = typicalFloors[sheetId];
+    return fl == null || fl.length < 2 ? name : planDetailTypicalName(fl);
   }
   var detailSheetNo = 0;
 
@@ -2256,7 +2355,7 @@ Future<bool> writeSubmittalPackageToDir(
       drawingList.add(DrawingListEntry(
         number: ds.number,
         title: drawingSeriesTitle(DrawingSeries.mechanicalDetail,
-            sheetName: s.name),
+            sheetName: detailSheetName(s.id, s.name)),
         revision: rev,
         date: today,
       ));
@@ -2691,7 +2790,7 @@ Future<bool> writeSubmittalPackageToDir(
         detailSheetNo++;
         final dChrome = planChrome
             .withTitle(drawingSeriesTitle(DrawingSeries.mechanicalDetail,
-                sheetName: sheet.name))
+                sheetName: detailSheetName(sheet.id, sheet.name)))
             .withDrawingNumber(dSheets[g].number)
             .withSheetCounter(detailSheetNo, detailCount);
         await File(out('$dSuffix.pdf')).writeAsBytes(

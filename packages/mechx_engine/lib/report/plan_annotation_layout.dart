@@ -447,7 +447,12 @@ PlanAnnotations layoutPlanAnnotations({
   // Drawing review R1 — an element anchored inside a detail boundary is
   // labelled on the detail sheet only (its symbol and pipes stay here).
   bool inDetail(double xPx, double yPx) =>
-      details.any((d) => d.containsPx(xPx, yPx));
+      details.any((d) => !d.keyed && d.containsPx(xPx, yPx));
+  // Drawing backlog I-3 (a) — an element anchored inside a KEYED cluster is
+  // tagged with a key circle straight away (its full tag reads in the key
+  // table), so the cluster reads on the plan without a detail sheet.
+  bool inKeyed(double xPx, double yPx) =>
+      details.any((d) => d.keyed && d.containsPx(xPx, yPx));
   final unresolvedAt = <({double x, double y})>[];
   final anchors = <({double x, double y})>[];
   // Drawing-review D5 — tags that find no legal slot are keyed.
@@ -539,6 +544,7 @@ PlanAnnotations layoutPlanAnnotations({
   final mCircles = <PlanMarkCircle>[];
   final mTexts = <PlanMarkText>[];
   for (final d in details) {
+    if (d.keyed) continue;
     final r = d.rectPx;
     final c00 = map(r.minX, r.minY), c11 = map(r.maxX, r.maxY);
     final x0 = math.min(c00.x, c11.x), x1 = math.max(c00.x, c11.x);
@@ -858,14 +864,16 @@ PlanAnnotations layoutPlanAnnotations({
             ownRunId: e.id,
             // Round 29 (drawings-3-3) — clear the duct's own outline.
             ownHalfWidth: runHalfWidths[e.id] ?? 0,
-            keys: keys),
+            keys: keys,
+            keyOnly: inKeyed(mx, my)),
         ts));
     if (layout.unresolvedCount > before) unresolvedAt.add((x: mx, y: my));
   }
   // A point feature's tag: a short pseudo-run just right of the feature,
   // anchored on it (so an escaped tag leaders back to the feature itself).
   LeaderedLabelPlacement pointTag(
-      double px, double py, double gapMm, String text, List<String>? split) {
+      double px, double py, double gapMm, String text, List<String>? split,
+      {bool keyOnly = false}) {
     final w = text.length * ts * 0.55;
     final x0 = px + gapMm * u;
     return placePlanLabel(
@@ -878,7 +886,8 @@ PlanAnnotations layoutPlanAnnotations({
         textSize: ts,
         layout: layout,
         anchorPoint: (x: px, y: py),
-        keys: keys);
+        keys: keys,
+        keyOnly: keyOnly);
   }
 
   // Round 33 (engineer-walkthrough-plan-fixtures-anonymous) — every plumbing
@@ -902,7 +911,9 @@ PlanAnnotations layoutPlanAnnotations({
       final before = layout.unresolvedCount;
       final p = map(n.x, n.y);
       labels.add(PlanPlacedLabel(PlanLabelKind.equipment, n.id,
-          pointTag(p.x, p.y, kPlanEquipmentTagGapMm, tag, null), ts));
+          pointTag(p.x, p.y, kPlanEquipmentTagGapMm, tag, null,
+              keyOnly: inKeyed(n.x, n.y)),
+          ts));
       if (layout.unresolvedCount > before) {
         unresolvedAt.add((x: n.x, y: n.y));
       }
@@ -930,7 +941,9 @@ PlanAnnotations layoutPlanAnnotations({
     final before = layout.unresolvedCount;
     final p = map(marker.x, marker.y);
     labels.add(PlanPlacedLabel(PlanLabelKind.riser, e.id,
-        pointTag(p.x, p.y, kPlanRiserTagGapMm, l.text, l.split), ts));
+        pointTag(p.x, p.y, kPlanRiserTagGapMm, l.text, l.split,
+            keyOnly: inKeyed(marker.x, marker.y)),
+        ts));
     if (layout.unresolvedCount > before) {
       unresolvedAt.add((x: marker.x, y: marker.y));
     }

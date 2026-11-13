@@ -1501,7 +1501,19 @@ LeaderedLabelPlacement placePlanLabel({
   bool beyondEnds = true,
   double ownHalfWidth = 0,
   PlanKeyRegistry? keys,
+  bool keyOnly = false,
 }) {
+  // Drawing backlog I-3 (a) — a tag inside a keyed cluster goes straight to
+  // its key circle.
+  if (keyOnly && keys != null) {
+    return _placeKeyTag(
+        layout: layout,
+        keys: keys,
+        text: text,
+        ts: textSize,
+        anchor: anchorPoint ?? (x: (ax + bx) / 2, y: (ay + by) / 2),
+        ownRunId: ownRunId);
+  }
   final dx = bx - ax, dy = by - ay;
   var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
   if (angle > math.pi / 2 || angle <= -math.pi / 2) {
