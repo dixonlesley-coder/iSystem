@@ -1535,6 +1535,11 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     String? laying,
     bool clearLaying = false,
   }) {
+    // Reference office O4 — a cable type the engineer types by hand is theirs:
+    // the MEP sync never reverts it.
+    if (cableType != null || clearCableType) {
+      _autoFrcMepFeederIds.remove(circuitId);
+    }
     // Round 11 — the store is the last gate before the solver: a negative /
     // non-finite load, length or override (typed, pasted or scripted) is not a
     // design input. A negative W gave a NEGATIVE Ib that was subtracted from
@@ -2969,6 +2974,69 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
       syncMepEquipment(ref.read(mepAutoFeedCircuitsProvider));
 
   void syncMepEquipment(List<ElectricalCircuit> derived) {
+    _syncMepEquipmentBoard(derived);
+    _syncMepFeederCable();
+  }
+
+  /// Reference office O4 — feeders this controller itself specified as FRC
+  /// (a transient record: a feeder the engineer typed FRC by hand is never
+  /// in it, so it is never reverted).
+  final Set<String> _autoFrcMepFeederIds = <String>{};
+
+  /// Reference office O4 — the feeder way that feeds the MEP board carries
+  /// the fire-pump / life-safety supply whenever the board holds a
+  /// life-safety way: the sync specifies it fire-resistant (`FRC`, sized on
+  /// the FRC table like the fire-pump way itself) so the app never raises
+  /// `life-safety-feeder-cable` against its own feeder. Only a feeder with
+  /// NO cable type is set; when the life-safety way goes away the sync
+  /// clears only the FRC it set itself. A cable type the engineer chose is
+  /// never touched. Writes nothing when nothing changes.
+  void _syncMepFeederCable() {
+    final board =
+        state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
+    final feederId = board?.fedByCircuitId;
+    if (board == null || feederId == null) return;
+    final life = board.circuits
+        .any((c) => c.lifeSafety && c.loadKind != LoadKind.spare);
+    ElectricalCircuit? update(ElectricalCircuit c) {
+      if (c.id != feederId || c.feedsPanelId != kMepEquipmentPanelId) {
+        return null;
+      }
+      final type = c.cableType;
+      if (life && (type == null || type.isEmpty)) {
+        _autoFrcMepFeederIds.add(c.id);
+        return c.copyWith(cableType: 'FRC');
+      }
+      if (!life && type == 'FRC' && _autoFrcMepFeederIds.contains(c.id)) {
+        _autoFrcMepFeederIds.remove(c.id);
+        return c.copyWith(clearCableType: true);
+      }
+      return null;
+    }
+
+    var changed = false;
+    final panels = [
+      for (final p in state.panels)
+        () {
+          var touched = false;
+          final circuits = [
+            for (final c in p.circuits)
+              () {
+                final u = update(c);
+                if (u == null) return c;
+                touched = true;
+                return u;
+              }(),
+          ];
+          if (!touched) return p;
+          changed = true;
+          return p.copyWith(circuits: circuits);
+        }(),
+    ];
+    if (changed) state = _withProject(panels: panels);
+  }
+
+  void _syncMepEquipmentBoard(List<ElectricalCircuit> derived) {
     final existing =
         state.panels.where((p) => p.id == kMepEquipmentPanelId).firstOrNull;
     // Strict no-op when there is nothing to sync AND no MEP panel to touch — so

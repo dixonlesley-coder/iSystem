@@ -2,11 +2,16 @@
 //
 // O2 — on UPFEED the zone table hangs from the solved upfeed field, never
 //      the legacy 255 kPa budget walk.
+// O4 — the auto-wired MEP feeder carrying a fire pump is specified FRC by
+//      the sync (no `life-safety-feeder-cable` against its own feeder),
+//      reverted when the life-safety way goes, never over a hand-set type.
 import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/app_state.dart';
+import 'package:mechx/store/design_issues_store.dart';
+import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx/store/models/sheet.dart';
 import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
@@ -134,4 +139,83 @@ void main() {
       }
     });
   });
+
+  group('O4 — the MEP feeder cable follows the life-safety way', () {
+    Future<ProviderContainer> office() async {
+      final b = buildOffice();
+      final c = _load(
+          floors: b.building.floors,
+          sheets: kOfficeSheets,
+          net: b.network,
+          occupancy: b.occupancy);
+      c.read(electricalProjectProvider.notifier).setProject(b.electrical);
+      await Future<void>.delayed(Duration.zero);
+      return c;
+    }
+
+    ElectricalCircuitView feeder(ProviderContainer c) {
+      final w = c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == kOfficeMainPanelId)
+          .circuits
+          .firstWhere((x) => x.id == kMepEquipmentFeederId);
+      return (cableType: w.cableType);
+    }
+
+    test('a fire pump on the MEP board makes its auto-wired feeder FRC; no '
+        'life-safety-feeder-cable warning', () async {
+      final c = await office();
+      addTearDown(c.dispose);
+      expect(feeder(c).cableType, 'FRC');
+      final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+      expect(kinds.where((k) => k.contains('life-safety-feeder-cable')),
+          isEmpty);
+      // Sized on the FRC (XLPE 90 °C) table: 110 A x 1.25 = 137.5 <= 144 A
+      // at 35 mm² (the PVC table would need 70 mm², Iz 171).
+      final r = c
+          .read(electricalResultProvider)
+          .panels[kOfficeMainPanelId]!
+          .circuits
+          .firstWhere((x) => x.circuitId == kMepEquipmentFeederId);
+      expect(r.cable.csaMm2, 35);
+      expect(r.cable.deratedIz.amperes, 144);
+    });
+
+    test('the FRC the sync set is cleared when the fire pump goes; a '
+        'hand-set type is never touched', () async {
+      final c = await office();
+      addTearDown(c.dispose);
+      final b = buildOffice();
+      Network withoutFire() => Network(
+            nodes: [
+              for (final n in b.network.nodes)
+                if (n.id != 'FP') n,
+            ],
+            edges: [
+              for (final e in b.network.edges)
+                if (e.fromId != 'FP' && e.toId != 'FP') e,
+            ],
+          );
+      c.read(networkControllerProvider.notifier).loadNetwork(withoutFire());
+      await Future<void>.delayed(Duration.zero);
+      expect(feeder(c).cableType, isNull);
+      // Back again: FRC again.
+      c.read(networkControllerProvider.notifier).loadNetwork(b.network);
+      await Future<void>.delayed(Duration.zero);
+      expect(feeder(c).cableType, 'FRC');
+      // The engineer specifies NYY by hand: the sync leaves it (and the
+      // judge then flags it, as for any hand-specified non-FRC feeder).
+      c.read(electricalProjectProvider.notifier).setCircuit(
+          kOfficeMainPanelId, kMepEquipmentFeederId,
+          cableType: 'NYY');
+      c.read(networkControllerProvider.notifier).loadNetwork(withoutFire());
+      await Future<void>.delayed(Duration.zero);
+      c.read(networkControllerProvider.notifier).loadNetwork(b.network);
+      await Future<void>.delayed(Duration.zero);
+      expect(feeder(c).cableType, 'NYY');
+    });
+  });
 }
+
+typedef ElectricalCircuitView = ({String? cableType});
