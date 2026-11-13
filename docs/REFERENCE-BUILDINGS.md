@@ -223,9 +223,10 @@ the §15 log; this is the per-sheet-type result (all five buildings).
 | Sheet type | Before | After |
 |---|---|---|
 | Front matter (cover / Daftar Gambar / notes + legend) | FAIL 1, 23 (no DWG NO); tower list printed at 6.8 pt | PASS — G-001..G-003, listed first; a long register continues on extra G-002 pages |
-| Mechanical plan (M-1xx) | FAIL 6, 8, 11 (fan of rotated labels, long crossing leaders, "N label bertumpuk" on 51 sheets); FAIL 25 (`-` for `·`, scale row) | PASS 25; item 6 PASS on shophouse and house L2, labels legal or keyed into a PIPE KEY table; residual stamps on dense fixture groups (see backlog) |
+| Mechanical plan (M-1xx) | FAIL 6, 8, 11 (fan of rotated labels, long crossing leaders, "N label bertumpuk" on 51 sheets); FAIL 25 (`-` for `·`, scale row) | PASS 6 on every plan of the five buildings (R1): dense groups are boxed with a dashed DETAIL boundary + `DETAIL A - LIHAT M-5nn` bubble and labelled on the detail sheet; PASS 25 |
+| Mechanical detail (M-5xx, R1) | — (new) | 47 sheets (house 1, office 4, apartment 12, tower 30): 1:20 / 1:25 / 1:50, own scale text + bar per detail, AS SHOWN, listed; PASS 1/2/3/5/23/25; item 6 PASS except tower L16 (3) and L30 (6, plant room + core at 1:50) |
 | Electrical layout plan (E-1xx) | PASS visual; FAIL 25 (DXF lacked PROJECT/TITLE, LEGENDA, scale bar) | PASS |
-| Mechanical riser SLD (M-201) | FAIL 5 (5.2-6.1 pt), 6, 8 on every building; FAIL 25 | PASS 5 except tower p12 (6.92 pt); PASS 25; item 6 PASS on house and office, residual stamps elsewhere |
+| Mechanical riser SLD (M-201) | FAIL 5 (5.2-6.1 pt), 6, 8 on every building; FAIL 25 | PASS 5 everywhere (R2: exact 7 pt floor, tower plant extras on a continuation sheet); PASS 25; item 6 PASS on house, office and every typical page; stamps remain on 5 dense ground / roof pages (see backlog) |
 | Electrical SLD (E-201) | PASS visual; FAIL 25 (DXF one sheet "1 of 1") | PASS (paginated DXF twin) |
 | Building single-line (E-301) | PASS visual; FAIL 25 | PASS |
 | Electrical riser (E-401) | PASS visual; FAIL 25 (DXF whole sheet: FFL / feeder strings) | PASS |
@@ -234,16 +235,16 @@ the §15 log; this is the per-sheet-type result (all five buildings).
 | Panel schedules | FAIL 2 (reused E-201 + SLD title); apartment / tower refused (zero-length guard) | PASS — E-601 `JADWAL PANEL / PANEL SCHEDULES`, issued in the package and listed; all five export |
 
 ### Backlog (not cured in this pass)
-- Item 6 on dense fixture groups: where a whole toilet group plots inside a few
-  centimetres (office 1:100, apartment and tower 1:250 — the shared set scale) even
-  the key circles cannot all clear each other, so the sheet keeps its honest
-  "N label bertumpuk" stamp (office 2-4 per plan, apartment 8-12, tower 11-19,
-  house L1 1). Cure needs an enlarged toilet-core detail / callout sheet, or a
-  larger plot scale per sheet.
-- Riser key circles: apartment 6-10 per page, tower 3-7 on the ground / roof pages,
-  shophouse p2 4 — same density limit on the stack junctions.
-- Tower riser p12 (lowest floor + plant + key table) prints at 6.92 pt: the
-  paginator's relaxed target for a floor that cannot reach 7 pt alone. Cure: move
-  the key table / extras of that page to a continuation sheet.
+- Riser item 6 on the densest ground / roof plant floors (R2 re-spacing cured
+  the typical floors): apartment p1 1 and p5 5, shophouse p2 2, tower p1 1 and
+  p12 1 — the key circles of the drainage fan / plant junctions cannot all
+  clear the stacked sub-lanes of a combined sheet. Cure needs per-floor band
+  height (vertical lane pitch) on crowded floors, or a per-service riser page.
+- Tower detail sheets L16 (3) and L30 (6): the L30 plant room + toilet core box
+  plots at 1:50 (too large for 1:25 on one A3 detail sheet). Cure: allow a
+  second detail sheet per plan, or split a plant-room detail from a core.
+- Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
+  detail sheet; it keeps the honest overlap stamp. Only the submittal package
+  issues detail sheets.
 - Standalone (non-package) riser / electrical DXF exports still write one sheet;
   only the submittal package issues the paginated DXF twins.
