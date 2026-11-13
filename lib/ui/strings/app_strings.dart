@@ -728,6 +728,7 @@ enum StringKey {
   issueUnconnectedOrphanMessage,
   issueUnfedPanelTitle,
   issueUnfedPanelMessage, // {panel} = the unfed panel's name
+  issueUnfedPanelLegacyMessage, // {panel} = the unfed panel's name
 
   // F5 — a plumbing fixture placed with no fixture type: it silently sizes on
   // the representative placeholder load (2.0 UBAP supply / 2.0 DFU drainage).
@@ -2276,9 +2277,13 @@ const Map<StringKey, String> _en = {
   StringKey.issueUnfedPanelTitle: 'Panel not connected to a supply',
   StringKey.issueUnfedPanelMessage:
       '"{panel}" is neither a service entrance nor fed by a feeder — it is '
-      'wired to nothing, so its load is on no service (not in the supply '
-      'study). Feed it from an upstream panel, or mark it "Service entrance '
-      '(own utility meter)".',
+      'wired to nothing, and it is marked NOT a service entrance, so its load '
+      'is on no service (not in the supply study). Feed it from an upstream '
+      'panel, or mark it "Service entrance (own utility meter)".',
+  StringKey.issueUnfedPanelLegacyMessage:
+      '"{panel}" is neither the origin board nor fed by a feeder. The supply '
+      'study still counts it as its own service entrance. Feed it from an '
+      'upstream panel, or mark it "Service entrance (own utility meter)".',
   StringKey.issueFixtureUntypedTitle: 'Fixture type not set',
   StringKey.issueFixtureUntypedSupplyMessage:
       'Fixture type not set — sizing on the representative 2.0 UBAP default; '
@@ -3978,9 +3983,14 @@ const Map<StringKey, String> _id = {
   StringKey.issueUnfedPanelTitle: 'Panel tidak terhubung ke suplai',
   StringKey.issueUnfedPanelMessage:
       '"{panel}" bukan sambungan layanan maupun disuplai oleh feeder — tidak '
-      'tersambung ke apa pun, sehingga bebannya tidak masuk studi suplai. '
-      'Suplai dari panel di hulunya, atau tandai "Sambungan layanan (meter '
-      'PLN sendiri)".',
+      'tersambung ke apa pun dan ditandai BUKAN sambungan layanan, sehingga '
+      'bebannya tidak masuk studi suplai. Suplai dari panel di hulunya, atau '
+      'tandai "Sambungan layanan (meter PLN sendiri)".',
+  StringKey.issueUnfedPanelLegacyMessage:
+      '"{panel}" bukan panel asal maupun disuplai oleh feeder. Studi suplai '
+      'tetap menghitungnya sebagai sambungan layanan tersendiri. Suplai dari '
+      'panel di hulunya, atau tandai "Sambungan layanan (meter PLN '
+      'sendiri)".',
   StringKey.issueFixtureUntypedTitle: 'Jenis fikstur belum ditetapkan',
   StringKey.issueFixtureUntypedSupplyMessage:
       'Jenis fikstur belum ditetapkan — diukur memakai nilai bawaan '

@@ -37,7 +37,7 @@ import 'advanced_study.dart'
         serviceFaultEstimateFor;
 import 'busbar.dart';
 import 'cable_family.dart';
-import 'connectivity.dart' show serviceEntrancePanelIds;
+import 'connectivity.dart' show studyServiceRootIds;
 import 'containment.dart' show effectiveInstallMethod;
 import 'control/starter.dart' show StarterType, effectiveStarterType;
 import 'diversity_library.dart' show DiversityLibrary;
@@ -3592,14 +3592,14 @@ ElectricalSystemResult computeSystem(
   }
 
   final roots = panels.where((p) => !parentOf.containsKey(p.id)).toList();
-  // Backlog E-1 (2026-11-13) — the SERVICE roots: the un-fed boards that are
-  // legitimate service entrances ([serviceEntrancePanelIds], the SAME set the
-  // connectivity judge reads). Every root is still walked (order, sizing);
-  // only the service roots form the service — the capacity floor, the supply
-  // demand and connected load, the governing root and the multi-root daya
-  // judge. An un-fed board that is not a service entrance is `unfed-panel`,
-  // its load on no line.
-  final serviceIds = serviceEntrancePanelIds(project);
+  // Backlog E-1 (2026-11-13) — the SERVICE roots ([studyServiceRootIds]):
+  // every un-fed board except one the engineer flagged NOT a service
+  // entrance (`serviceEntrance: false`, `unfed-panel`, its load on no line).
+  // Unset flags keep the pre-E-1 study exactly. Every root is still walked
+  // (order, sizing); only the service roots form the service — the capacity
+  // floor, the supply demand and connected load, the governing root and the
+  // multi-root daya judge.
+  final serviceIds = studyServiceRootIds(project);
   final serviceRoots = [
     for (final r in roots)
       if (serviceIds.contains(r.id)) r,
@@ -4299,9 +4299,9 @@ ElectricalSystemResult computeSystem(
   }
 
   // Backlog E-1 — the service's connected load is its service roots'
-  // sub-trees: a board under an un-fed board that is not a service entrance
-  // (`unfed-panel`) is on no service. A board with no reachable root (a
-  // feeder cycle) is kept, as before.
+  // sub-trees: a board under an un-fed board flagged NOT a service entrance
+  // (`serviceEntrance: false`) is on no service. A board with no reachable
+  // root (a feeder cycle) is kept, as before.
   String? topOf(String id) {
     final seen = <String>{};
     var cur = id;

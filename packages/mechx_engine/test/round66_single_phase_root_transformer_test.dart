@@ -17,10 +17,6 @@
 //   loaded line at 1666 / 1443 = 115 % of the unit's FLC.
 library;
 
-// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
-// (own meter / section main), so each is flagged `serviceEntrance: true` —
-// an unflagged un-fed board after the first is `unfed-panel` and outside
-// the supply study.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -37,7 +33,7 @@ ElectricalProject _probe() => ElectricalProject(
       id: 'p',
       name: 'Mixed roots',
       panels: [
-        ElectricalPanel(serviceEntrance: true, id: 'A', name: 'MDP-A', circuits: [
+        ElectricalPanel(id: 'A', name: 'MDP-A', circuits: [
           for (var i = 0; i < 6; i++)
             ElectricalCircuit(
                 id: 'a$i',
@@ -48,7 +44,7 @@ ElectricalProject _probe() => ElectricalProject(
                 phases: 3,
                 length: const Length(10)),
         ]),
-        ElectricalPanel(serviceEntrance: true, 
+        ElectricalPanel(
             id: 'B',
             name: 'MDP-B',
             system: ElectricalSystem.singlePhase,

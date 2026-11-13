@@ -30,10 +30,6 @@
 //     'Main LV bus 400 V' whenever a 3ph root exists.
 library;
 
-// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
-// (own meter / section main), so each is flagged `serviceEntrance: true` —
-// an unflagged un-fed board after the first is `unfed-panel` and outside
-// the supply study.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -65,9 +61,9 @@ ElectricalCircuit _heater(String id, double w,
         cableOverrideMm2: cableMinMm2);
 
 ElectricalPanel _main(String id, List<ElectricalCircuit> c) =>
-    ElectricalPanel(serviceEntrance: true, id: id, name: 'Main $id', circuits: c);
+    ElectricalPanel(id: id, name: 'Main $id', circuits: c);
 
-ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(serviceEntrance: true, 
+ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(
       id: id,
       name: 'Shop $id',
       system: ElectricalSystem.singlePhase,

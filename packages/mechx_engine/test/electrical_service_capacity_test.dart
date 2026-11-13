@@ -1,8 +1,4 @@
 import 'package:mechx_engine/electrical/compute.dart';
-// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
-// (own meter / section main), so each is flagged `serviceEntrance: true` —
-// an unflagged un-fed board after the first is `unfed-panel` and outside
-// the supply study.
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
@@ -27,7 +23,7 @@ void main() {
         id: 'prj',
         supplyCapacityVa: capacity,
         panels: const [
-          ElectricalPanel(serviceEntrance: true, 
+          ElectricalPanel(
             id: 'mdp',
             name: 'MDP',
             system: ElectricalSystem.threePhase,
@@ -103,7 +99,7 @@ void main() {
         id: 'prj1',
         supplyCapacityVa: ApparentPower(5500),
         panels: const [
-          ElectricalPanel(serviceEntrance: true, 
+          ElectricalPanel(
             id: 'lp',
             name: 'LP',
             system: ElectricalSystem.singlePhase,
@@ -138,7 +134,7 @@ void main() {
         // 2200 VA @ 220 V = 10 A — well below the board's demand.
         supplyCapacityVa: ApparentPower(2200),
         panels: [
-          ElectricalPanel(serviceEntrance: true, 
+          ElectricalPanel(
             id: 'lp',
             name: 'LP',
             system: ElectricalSystem.singlePhase,
@@ -175,7 +171,7 @@ void main() {
   });
 
   test('several utility-fed roots ⇒ no floor (the split is unknown)', () {
-    ElectricalPanel root(String id) => ElectricalPanel(serviceEntrance: true, 
+    ElectricalPanel root(String id) => ElectricalPanel(
           id: id,
           name: id.toUpperCase(),
           system: ElectricalSystem.threePhase,

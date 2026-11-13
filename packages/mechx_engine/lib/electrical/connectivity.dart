@@ -160,3 +160,24 @@ Set<String> serviceEntrancePanelIds(ElectricalProject project) {
   if (legit.isEmpty) legit.add(unfed.first.id);
   return legit;
 }
+
+/// Backlog E-1 (reviewer, 2026-11-13) — the SERVICE ROOTS the supply study
+/// counts: every un-fed board NOT explicitly flagged
+/// [ElectricalPanel.serviceEntrance] `false`. An unset flag (every pre-E-1
+/// project) keeps EXACTLY the pre-E-1 study — every un-fed board is a root
+/// (demand, per-line allocation, daya, transformer unchanged), never a silent
+/// reduction — while [electricalConnectivityDefects] still flags the unset
+/// boards outside [serviceEntrancePanelIds] (`unfed-panel`, "feed it or mark
+/// it a service entrance"). `true` is a root for both; `false` for neither
+/// (its load is on no service). When every un-fed board is `false` the first
+/// stays the root. Pure; list order.
+Set<String> studyServiceRootIds(ElectricalProject project) {
+  final unfed = unfedPanelsOf(project);
+  if (unfed.isEmpty) return const {};
+  final out = <String>{
+    for (final p in unfed)
+      if (p.serviceEntrance != false) p.id,
+  };
+  if (out.isEmpty) out.add(unfed.first.id);
+  return out;
+}

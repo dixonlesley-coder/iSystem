@@ -27,10 +27,6 @@
 //     50 162 VA. The 1ph board-basis sum gave 30 023 VA.
 library;
 
-// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
-// (own meter / section main), so each is flagged `serviceEntrance: true` —
-// an unflagged un-fed board after the first is `unfed-panel` and outside
-// the supply study.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -49,7 +45,7 @@ import 'package:test/test.dart';
 const _profile = PuilProfile();
 final _s3 = math.sqrt(3) * 400;
 
-ElectricalPanel _main(String id, List<double> heatersW) => ElectricalPanel(serviceEntrance: true, 
+ElectricalPanel _main(String id, List<double> heatersW) => ElectricalPanel(
       id: id,
       name: 'Main $id',
       circuits: [
@@ -65,7 +61,7 @@ ElectricalPanel _main(String id, List<double> heatersW) => ElectricalPanel(servi
       ],
     );
 
-ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(serviceEntrance: true, 
+ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(
       id: id,
       name: 'Shop $id',
       system: ElectricalSystem.singlePhase,

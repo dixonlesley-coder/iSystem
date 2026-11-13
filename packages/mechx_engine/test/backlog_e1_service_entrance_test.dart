@@ -107,12 +107,13 @@ void main() {
     });
   });
 
-  group('three meters, only the first flagged', () {
-    final project = _threeMeters(flags: [true, null, null]);
+  group('three meters, A true + B, C false', () {
+    final project = _threeMeters(flags: [true, false, false]);
     final sys = computeSystem(profile, project);
     final adv = computeAdvancedStudy(profile, project, sys);
 
-    test('B and C are unfed-panel and outside the study', () {
+    test('B and C (explicitly false) are unfed-panel and outside the '
+        'study', () {
       expect([for (final d in electricalConnectivityDefects(project)) d.panelId],
           [ids[1], ids[2]]);
       expect(originPanelIdsOf(sys, project), {ids[0]});
@@ -135,6 +136,26 @@ void main() {
       // the board loads one line of — the existing Round-38 warning.
       final codes = {for (final w in sys.warnings) w.code};
       expect(codes, contains('service-single-phase-root-on-three-phase-daya'));
+    });
+  });
+
+  group('three meters, all unset (every pre-E-1 file): the legacy study', () {
+    final project = _threeMeters(flags: [null, null, null]);
+    final sys = computeSystem(profile, project);
+    final adv = computeAdvancedStudy(profile, project, sys);
+
+    test('the study counts all three (unchanged); B and C still warn', () {
+      expect(studyServiceRootIds(project), ids.toSet());
+      expect(originPanelIdsOf(sys, project), ids.toSet());
+      expect([for (final d in electricalConnectivityDefects(project)) d.panelId],
+          [ids[1], ids[2]]);
+      // Exactly the all-true study: 3 x 5 329.4 = 15 988 VA, one board per
+      // line, 16 766 VA basis -> 23 000 VA 3-phase.
+      expect(sys.supply.demandVa.voltAmperes, closeTo(15988, 1));
+      expect(studySupplyInputs(project, sys).perPhaseBasisVa,
+          closeTo(16766.1, 0.5));
+      expect(adv.recommendedDayaVa, 23000);
+      expect(adv.recommendedDayaThreePhase, isTrue);
     });
   });
 }

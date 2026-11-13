@@ -17,10 +17,6 @@
 ///   7. The PFC bank compensates the DIVERSIFIED demand.
 library;
 
-// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
-// (own meter / section main), so each is flagged `serviceEntrance: true` —
-// an unflagged un-fed board after the first is `unfed-panel` and outside
-// the supply study.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -45,7 +41,7 @@ ElectricalCircuitResult _way(ElectricalSystemResult r, String panel, String id) 
 
 ElectricalPanel _p3(String id, List<ElectricalCircuit> circuits,
         {String? fedBy, bool essential = false, double diversity = 1.0}) =>
-    ElectricalPanel(serviceEntrance: true, 
+    ElectricalPanel(
       id: id,
       name: id,
       system: ElectricalSystem.threePhase,
@@ -281,7 +277,7 @@ void main() {
 
   // ── 4 + 5. several utility roots ──────────────────────────────────────────
   group('4/5 — several utility roots', () {
-    const rootA = ElectricalPanel(serviceEntrance: true, 
+    const rootA = ElectricalPanel(
       id: 'A',
       name: 'A',
       system: ElectricalSystem.singlePhase,

@@ -1886,8 +1886,13 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
       // A plain kind lets it surface as its own compliance row + fail the verdict.
       kind: 'unfed-panel:${d.panelId}',
       title: str(StringKey.issueUnfedPanelTitle),
+      // Backlog E-1 — an explicit `false` is on no service; an unset flag
+      // (a legacy file) is still counted by the study as its own entrance.
       message: str.format(
-          StringKey.issueUnfedPanelMessage, {'panel': panel?.name ?? d.panelId}),
+          panel?.serviceEntrance == false
+              ? StringKey.issueUnfedPanelMessage
+              : StringKey.issueUnfedPanelLegacyMessage,
+          {'panel': panel?.name ?? d.panelId}),
       locate: IssueLocation('', panelId: d.panelId),
     ));
   }

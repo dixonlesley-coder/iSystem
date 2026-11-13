@@ -23,10 +23,6 @@
 // (Round 43): growing the leads lowers it in proportion to 1 / csa.
 library;
 
-// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
-// (own meter / section main), so each is flagged `serviceEntrance: true` —
-// an unflagged un-fed board after the first is `unfed-panel` and outside
-// the supply study.
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
@@ -52,7 +48,7 @@ ElectricalProject _plant(double lengthM,
       earthingSystem: EarthingSystem.tnS,
       transformerKva: const ApparentPower(630e3),
       panels: [
-        const ElectricalPanel(serviceEntrance: true, 
+        const ElectricalPanel(
             id: 'MDP',
             name: 'MDP',
             voltage: Voltage(400),
@@ -65,7 +61,7 @@ ElectricalProject _plant(double lengthM,
                   cableOverrideMm2: 300,
                   feedsPanelId: 'MCC'),
             ]),
-        ElectricalPanel(serviceEntrance: true, 
+        ElectricalPanel(
             id: 'MCC',
             name: 'MCC',
             voltage: const Voltage(400),
@@ -91,7 +87,7 @@ ElectricalProject _upsRoom() => ElectricalProject(
       earthingSystem: EarthingSystem.tnS,
       transformerKva: const ApparentPower(630e3),
       panels: [
-        const ElectricalPanel(serviceEntrance: true, 
+        const ElectricalPanel(
             id: 'MDP',
             name: 'MDP',
             voltage: Voltage(400),
@@ -103,7 +99,7 @@ ElectricalProject _upsRoom() => ElectricalProject(
                   length: Length(20),
                   feedsPanelId: 'UPS'),
             ]),
-        ElectricalPanel(serviceEntrance: true, 
+        ElectricalPanel(
             id: 'UPS',
             name: 'UPS',
             upsBacked: true,
@@ -134,7 +130,7 @@ ElectricalProject _island({SupplyKind kind = SupplyKind.generator}) =>
       sources: const ElectricalSources(
           generator: GeneratorSource(mode: GeneratorMode.prime)),
       panels: [
-        ElectricalPanel(serviceEntrance: true, 
+        ElectricalPanel(
             id: 'MDP',
             name: 'MDP',
             voltage: const Voltage(400),
@@ -165,7 +161,7 @@ ElectricalProject _campus(
       transformerUnits: units,
       panels: [
         for (final b in ['A', 'B', 'C'])
-          ElectricalPanel(serviceEntrance: true, 
+          ElectricalPanel(
               id: 'MDP-$b',
               name: 'MDP-$b',
               voltage: const Voltage(400),
