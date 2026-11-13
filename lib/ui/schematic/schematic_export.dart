@@ -171,6 +171,7 @@ SldSheet buildLiveRiserSheet(
   ({int lo, int hi})? floorRange,
   MechRiserExtras extras = MechRiserExtras.auto,
   int? columnPart,
+  MechRiserPlant plant = MechRiserPlant.auto,
 }) {
   final project = ref.read(projectControllerProvider);
   final network = ref.read(networkControllerProvider).network;
@@ -216,6 +217,7 @@ SldSheet buildLiveRiserSheet(
     floorRange: floorRange,
     extras: extras,
     columnPart: columnPart,
+    plant: plant,
   );
 }
 
@@ -260,6 +262,23 @@ List<SldSheet> buildLiveRiserPages(
       focus,
       floorRange: r,
       columnPart: part,
+      extras: bare ? MechRiserExtras.none : MechRiserExtras.auto,
+    ),
+    // Drawing backlog I-2 — a plant-level floor's plant group in its own
+    // row, else on its own '<floor> - PLANT' page.
+    buildPlantRow: (r, bare) => buildLiveRiserSheet(
+      ref,
+      focus,
+      floorRange: r,
+      plant: MechRiserPlant.row,
+      extras: bare ? MechRiserExtras.none : MechRiserExtras.auto,
+    ),
+    buildPlantPart: (r, part, bare) => buildLiveRiserSheet(
+      ref,
+      focus,
+      floorRange: r,
+      columnPart: part,
+      plant: MechRiserPlant.split,
       extras: bare ? MechRiserExtras.none : MechRiserExtras.auto,
     ),
     levelCount: project.building.levelCount,

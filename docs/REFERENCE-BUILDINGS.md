@@ -291,6 +291,20 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   issues detail sheets.
 
 ### Backlog closed (2026-11-13)
+- I-2 Plant-level riser pages tag their plant directly: a lone floor page that still
+  keys a plant item (tank, pump, booster, PRV, water meter) or a trunk between two of
+  them draws its plant group (`riserPlantGroup`) in its own row under the fixture band
+  (`MechRiserPlant.row`, packed by `riserPlantRows` at a pitch that fits each tag
+  centred under its symbol, tags placed before the pipe tags) when that keeps the
+  page width-bound / at its size; else the paginator issues the floor page plus a
+  `<floor> - PLANT` page (`MechRiserPlant.split`, marks `LANJUT KE <floor> - PLANT` /
+  `LANJUTAN DARI <floor>`, the pump-set detail and notes riding the PLANT page). Keys
+  on the plant-level pages before -> after (plant keys in brackets): apartment
+  Lantai 1 31 (12) -> 15 (0) + PLANT 3 (0); tower Lantai 1 18 (1) -> 15 (0) + PLANT
+  3 (0); office Lantai 1 12 (1) -> 13 (0) (row, one page); shophouse roof-tank floor
+  Lantai 3 10 (2) -> 9 (0) + PLANT 2 (0), its ground floor (shared page with Lantai 2,
+  27 keys, no plant key) unchanged. Pages with no plant key are byte-identical
+  (`drawing_backlog_i2_test.dart`).
 - I-1 Standalone DXF exports paginate like the package: every single-line-family
   drawing (M-201, E-201, E-301, E-401, E-501, E-601) is built once by
   `ui/shell/issued_sld_drawings.dart` into an `IssuedSldDrawing` (page list + chrome)

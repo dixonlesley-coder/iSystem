@@ -329,6 +329,7 @@ SldSheet buildMechanicalRiserSld({
   ({int lo, int hi})? floorRange,
   MechRiserExtras extras = MechRiserExtras.auto,
   int? columnPart,
+  MechRiserPlant plant = MechRiserPlant.auto,
 }) {
   // Drawing review S2 — a LONE floor page whose key circles still overprint
   // gets a taller band (1.5x, then 2x): the page is width-bound, so the
@@ -338,7 +339,8 @@ SldSheet buildMechanicalRiserSld({
   // Drawing review S3 — then a wider fan-out / service-lane / column PITCH
   // (x1.25 .. x3, each with the band steps): the first step that clears
   // wins ([riserPitchEscalation]).
-  SldSheet at(double h, double p) => _buildMechanicalRiserSld(
+  SldSheet at(double h, double p, {bool plantRow = false}) =>
+      _buildMechanicalRiserSld(
         network: network,
         sizing: sizing,
         building: building,
@@ -357,6 +359,8 @@ SldSheet buildMechanicalRiserSld({
         columnPart: columnPart,
         bandH: h,
         pitchScale: p,
+        plantRow: plantRow,
+        plantSplit: plant == MechRiserPlant.split,
       );
   final lone = floorRange != null && floorRange.lo == floorRange.hi;
   // Drawing backlog L-2 (2026-11-13) — a SHORT multi-floor page (at most
@@ -370,12 +374,189 @@ SldSheet buildMechanicalRiserSld({
   final floors = floorRange == null
       ? (building?.levelCount ?? 1 << 30)
       : floorRange.hi - floorRange.lo + 1;
-  return riserPitchEscalation(
+  if (plant == MechRiserPlant.row) {
+    return riserPitchEscalation(
+        build: (h, p) => at(h, p, plantRow: true), bandH: _bandH);
+  }
+  final best = riserPitchEscalation(
     build: at,
     bandH: _bandH,
     enabled: lone || floors <= kMechRiserEscalationMaxFloors,
   );
+  // Drawing backlog I-2 (2026-11-13) — a lone plant-level floor page whose
+  // PLANT items (tanks, pumps, booster, PRV, water meter) or the trunk pipes
+  // between them still print as keys re-draws its plant group in its own row
+  // under the fixture band ([riserPlantGroup], [riserPlantRows]), at a pitch
+  // that fits each plant tag beside its symbol. Kept only when it keys fewer
+  // plant items, overprints no more and stays width-bound (so it costs no
+  // label size); a page that already tags every plant item directly is
+  // returned as built (byte-identical).
+  if (!lone ||
+      columnPart != null ||
+      plant != MechRiserPlant.auto ||
+      best.plantKeyCount == 0) {
+    return best;
+  }
+  final row = riserPitchEscalation(
+    build: (h, p) => at(h, p, plantRow: true),
+    bandH: _bandH,
+  );
+  return riserPlantRowWins(best: best, row: row) ? row : best;
 }
+
+/// Drawing backlog I-2 — how a lone floor page draws its plant group:
+/// [auto] in its own row when that keys fewer plant items at no size cost
+/// ([riserPlantRowWins]); [row] always in its own row; [split] as the two
+/// parts of a plant split (with `columnPart`: 1 = the floor without its
+/// plant group, 2 = the `<floor> - PLANT` page); [none] as laid out.
+enum MechRiserPlant { auto, row, split, none }
+
+/// Drawing backlog I-2 — whether the plant-row re-draw [row] replaces the
+/// standard lone-floor page [best]: strictly fewer plant keys, no more
+/// overprints, and a drawing still width-bound on the A3 area (its height /
+/// width within [kMechRiserKeyBandMaxAspect], or no taller in proportion
+/// than [best]) so the extra row costs no label size. Pure.
+bool riserPlantRowWins({required SldSheet best, required SldSheet row}) {
+  double aspect(SldSheet s) {
+    final w = s.maxX - s.minX;
+    return w <= 0 ? double.infinity : (s.maxY - s.minY) / w;
+  }
+
+  return row.plantKeyCount < best.plantKeyCount &&
+      row.overlapCount <= best.overlapCount &&
+      aspect(row) <= math.max(aspect(best), kMechRiserKeyBandMaxAspect) + 1e-9;
+}
+
+/// Drawing backlog I-2 — the components a riser page treats as PLANT: the
+/// water / fire sources and movers and the metering / pressure-reducing
+/// sets between them.
+const Set<NodeComponent> kRiserPlantComponents = {
+  NodeComponent.pump,
+  NodeComponent.groundTank,
+  NodeComponent.roofTank,
+  NodeComponent.boosterSet,
+  NodeComponent.prv,
+  NodeComponent.waterMeter,
+};
+
+/// Drawing backlog I-2 — the PLANT GROUP of one floor page: every page node
+/// carrying a [kRiserPlantComponents] component (a roof tank parked on the
+/// roof line excepted by the caller), plus any non-fixture node that is not
+/// a riser end and sits BETWEEN two members (at least two of its run
+/// neighbours in the group — a gate valve between two pumps), to a fixed
+/// point. A run with both ends in the group is a plant TRUNK. Order-
+/// independent (set semantics; the fixed point never reads list order).
+/// Pure.
+Set<String> riserPlantGroup(Network network, List<NetNode> pageNodes,
+    {ServiceType? focus}) {
+  final byId = {for (final n in pageNodes) n.id: n};
+  final riserEnds = <String>{
+    for (final e in network.edges)
+      if (e.kind == EdgeKind.riser) ...[e.fromId, e.toId],
+  };
+  final group = <String>{
+    for (final n in pageNodes)
+      if (kRiserPlantComponents.contains(n.component)) n.id,
+  };
+  if (group.isEmpty) return group;
+  final nbrs = <String, Set<String>>{};
+  for (final e in network.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    if (focus != null && e.service != focus) continue;
+    if (!byId.containsKey(e.fromId) || !byId.containsKey(e.toId)) continue;
+    (nbrs[e.fromId] ??= <String>{}).add(e.toId);
+    (nbrs[e.toId] ??= <String>{}).add(e.fromId);
+  }
+  var grew = true;
+  while (grew) {
+    grew = false;
+    for (final n in pageNodes) {
+      if (group.contains(n.id) ||
+          n.role == NodeRole.fixture ||
+          riserEnds.contains(n.id)) {
+        continue;
+      }
+      final inGroup = (nbrs[n.id] ?? const <String>{}).where(group.contains);
+      if (inGroup.length >= 2) {
+        group.add(n.id);
+        grew = true;
+      }
+    }
+  }
+  return group;
+}
+
+/// Drawing backlog I-2 — the plant row's left-to-right order: trunk-connected
+/// members adjacent (a walk from the leftmost member of each trunk component,
+/// neighbours by layout x then id), components by their leftmost member.
+/// [normX] is the shared layout x ([riserLayoutPositions]). Order-
+/// independent. Pure.
+List<String> riserPlantOrder(
+    Network network, Set<String> group, Map<String, double> normX,
+    {ServiceType? focus}) {
+  int cmp(String a, String b) {
+    final d = (normX[a] ?? 0.5).compareTo(normX[b] ?? 0.5);
+    return d != 0 ? d : a.compareTo(b);
+  }
+
+  final nbrs = <String, Set<String>>{};
+  for (final e in network.edges) {
+    if (e.kind != EdgeKind.run) continue;
+    if (focus != null && e.service != focus) continue;
+    if (!group.contains(e.fromId) || !group.contains(e.toId)) continue;
+    (nbrs[e.fromId] ??= <String>{}).add(e.toId);
+    (nbrs[e.toId] ??= <String>{}).add(e.fromId);
+  }
+  final out = <String>[];
+  final seen = <String>{};
+  for (final start in group.toList()..sort(cmp)) {
+    if (seen.contains(start)) continue;
+    // Depth-first walk, neighbours in layout order.
+    final stack = [start];
+    while (stack.isNotEmpty) {
+      final id = stack.removeLast();
+      if (!seen.add(id)) continue;
+      out.add(id);
+      final next = (nbrs[id] ?? const <String>{})
+          .where((m) => !seen.contains(m))
+          .toList()
+        ..sort(cmp);
+      stack.addAll(next.reversed);
+    }
+  }
+  return out;
+}
+
+/// Drawing backlog I-2 — pack the plant row: [order] laid left to right from
+/// [lo], each member taking [widthOf] (its symbol + its tag beside it + a
+/// gap), wrapping to a further row below when the next would pass [hi]. Each
+/// member's x is its SYMBOL centre, in the middle of its slot (its tag is
+/// centred under it, a trunk tag over the pipe beside it). Pure.
+List<List<({String id, double x})>> riserPlantRows(
+    List<String> order, double Function(String id) widthOf,
+    {required double lo, required double hi}) {
+  final rows = <List<({String id, double x})>>[[]];
+  var x = lo;
+  for (final id in order) {
+    final w = widthOf(id);
+    if (rows.last.isNotEmpty && x + w > hi) {
+      rows.add([]);
+      x = lo;
+    }
+    rows.last.add((id: id, x: x + w / 2));
+    x += w;
+  }
+  return rows.where((r) => r.isNotEmpty).toList();
+}
+
+/// Drawing backlog I-2 — the plant row's per-row pitch and its margin above
+/// the first / below the last row (drawing units).
+const double kRiserPlantRowPitch = 44;
+
+/// Drawing backlog I-2 — the fixture band kept above the plant row on a
+/// '<floor> - PLANT' page (it holds only the continuation marks).
+const double kRiserPlantPageFixtureBandH = 60;
+const double kRiserPlantRowPad = 18;
 
 /// Drawing backlog L-2 — the most storeys a multi-floor riser page may span
 /// and still take the S2/S3 band / pitch escalation (a taller page splits).
@@ -567,6 +748,8 @@ SldSheet _buildMechanicalRiserSld({
   int? columnPart,
   required double bandH,
   double pitchScale = 1.0,
+  bool plantRow = false,
+  bool plantSplit = false,
 }) {
   final prims = <SldPrim>[];
   final lanePitch = kRiserLanePitch * pitchScale;
@@ -601,7 +784,13 @@ SldSheet _buildMechanicalRiserSld({
   final Set<String>? split =
       columnPart == null || floorRange == null || floorRange.lo != floorRange.hi
           ? null
-          : riserColumnSplit(network, pageNodes, focus: focus);
+          : plantSplit
+              // Drawing backlog I-2 — the plant group on its own page.
+              ? (() {
+                  final g = riserPlantGroup(network, pageNodes, focus: focus);
+                  return g.isEmpty || g.length == pageNodes.length ? null : g;
+                })()
+              : riserColumnSplit(network, pageNodes, focus: focus);
   final nodes = split == null
       ? pageNodes
       : [
@@ -660,7 +849,9 @@ SldSheet _buildMechanicalRiserSld({
   // carries the building's LOWEST floor (the last page of a set).
   // Drawing review R2 — [extras] `none` leaves them to a continuation sheet
   // (`only`), when the lowest-floor page cannot print at 7 pt with them.
-  final drawExtras = split != null && columnPart == 2
+  // Drawing backlog I-2 — a plant split's extras (the pump-set detail and
+  // its notes) ride the '<floor> - PLANT' page, never the floor page.
+  final drawExtras = split != null && (columnPart == 2) != plantSplit
       ? false
       : switch (extras) {
           MechRiserExtras.auto => floorRange == null || loFloor == fullLo,
@@ -671,10 +862,14 @@ SldSheet _buildMechanicalRiserSld({
       ? building.floors[f].name
       : 'Level ${f + 1}';
 
+  // Drawing backlog I-2 — the plant row's height (set below, before any
+  // node is placed; 0 ⇒ no plant row).
+  var plantRowH = 0.0;
   // Band centre y for a floor index — highest floor at the TOP.
   double bandTop(int floorIndex) =>
       _topPad + roofH + (hiFloor - floorIndex) * bandH;
-  double bandCentreY(int floorIndex) => bandTop(floorIndex) + bandH / 2;
+  double bandCentreY(int floorIndex) =>
+      bandTop(floorIndex) + (bandH - plantRowH) / 2;
   final roofLineY = _topPad + roofH - _roofLineInset;
   bool parksOnRoof(NetNode n) =>
       roofBand &&
@@ -695,6 +890,75 @@ SldSheet _buildMechanicalRiserSld({
   // floor band (the shared [riserServiceLanes], mirrored by the canvas Auto
   // painter), so CW / HW and drainage / vent branches no longer overdraw.
   final lanes = riserServiceLanes(network, focus: focus);
+
+  // Drawing backlog I-2 — the node's tag text (equipment tag + role word +
+  // duty suffix), the one string the node loop below places.
+  String? nodeLabelText(NetNode n) {
+    final tagged = nodeTags[n.id];
+    final word = _nodeLabel(n);
+    final base = (tagged != null && tagged.isNotEmpty)
+        ? (word == null ? tagged : '$tagged $word')
+        : word;
+    if (base == null) return null;
+    final detail = equipmentDetailByNodeId[n.id];
+    return detail == null ? base : '$base · $detail';
+  }
+
+  // Drawing backlog I-2 — the plant group of a lone floor page (counted on
+  // every such page; re-drawn in its own row only when [plantRow]).
+  final lonePage = floorRange != null && floorRange.lo == floorRange.hi;
+  final plantIds = !lonePage
+      ? const <String>{}
+      : split == null
+          ? riserPlantGroup(network,
+              [for (final n in nodes) if (!parksOnRoof(n)) n], focus: focus)
+          // The '<floor> - PLANT' page of a plant split counts its own.
+          : plantSplit && columnPart == 2
+              ? split
+              : const <String>{};
+  // The '<floor> - PLANT' page lays its whole group out as the plant row.
+  final plantPage = plantSplit && split != null && columnPart == 2;
+  final rowPlant =
+      (plantRow && split == null || plantPage) && plantIds.isNotEmpty;
+  final plantRows = !rowPlant
+      ? const <List<({String id, double x})>>[]
+      : riserPlantRows(
+          riserPlantOrder(network, plantIds, normX, focus: focus),
+          (id) {
+            // The member's tag, or a longer trunk tag riding beside it.
+            final n = nodes.firstWhere((m) => m.id == id);
+            final t = nodeLabelText(n);
+            var w = t == null ? 0.0 : _labelWidth(t, 8);
+            for (final e in network.edges) {
+              if (e.kind != EdgeKind.run ||
+                  (focus != null && e.service != focus) ||
+                  (e.fromId != id && e.toId != id) ||
+                  !plantIds.contains(e.fromId) ||
+                  !plantIds.contains(e.toId)) {
+                continue;
+              }
+              final tag = _pipeTag(sizing[e.id], e,
+                  function: riserFunctionFor(network, e,
+                      downfeed: downfeed, flowFrom: flowFromByEdge),
+                  length: edgeLengths[e.id]);
+              w = math.max(w, _labelWidth(tag, 8));
+            }
+            return math.max(_symbolSize, w) + 24 * pitchScale;
+          },
+          lo: _gutterW + _sidePad,
+          hi: _gutterW + _drawW - _sidePad,
+        );
+  // The row pitch grows with the escalation's band step, so a crowded row
+  // gets room above / below its pipes for the tags.
+  final plantPitch = kRiserPlantRowPitch * math.max(1.0, bandH / _bandH);
+  plantRowH = plantRows.isEmpty
+      ? 0.0
+      : plantRows.length * plantPitch + 2 * kRiserPlantRowPad;
+  // The floor band grows by the plant row; the fixture band keeps [bandH].
+  // On the '<floor> - PLANT' page only the continuation marks ride the
+  // fixture band, so it keeps a short one.
+  if (plantPage && rowPlant) bandH = kRiserPlantPageFixtureBandH;
+  bandH += plantRowH;
   Offset posOf(NetNode n) => Offset(
       placeX(n.id),
       parksOnRoof(n)
@@ -732,19 +996,32 @@ SldSheet _buildMechanicalRiserSld({
   // Drawing review R2 — the band's node columns re-spaced over the free
   // width (NTS): a toilet group compressed into a few cm of plan no longer
   // stacks its stubs under each other's tags while the sheet stays empty.
-  final respace = riserColumnRespace([for (final p in posById.values) p.dx],
+  final respace = riserColumnRespace([
+    for (final e in posById.entries)
+      if (!rowPlant || !plantIds.contains(e.key)) e.value.dx
+  ],
       lo: _gutterW + _sidePad,
       hi: _gutterW + _drawW - _sidePad,
       minPitch: kMechRiserMinColumnPitch * pitchScale,
       taggedXs: [
         for (final n in nodes)
           if (posById[n.id] != null &&
+              (!rowPlant || !plantIds.contains(n.id)) &&
               (n.component != null || n.role == NodeRole.fixture))
             posById[n.id]!.dx,
       ]);
   for (final id in posById.keys.toList()) {
     final p = posById[id]!;
     posById[id] = Offset(riserRespaceAt(respace, p.dx), p.dy);
+  }
+  // Drawing backlog I-2 — the plant row: each member at its packed x, rows
+  // stacked under the fixture band of its floor.
+  final plantRowTop = !rowPlant ? 0.0 : bandTop(loFloor) + bandH - plantRowH;
+  for (var r = 0; r < plantRows.length; r++) {
+    for (final m in plantRows[r]) {
+      posById[m.id] = Offset(m.x,
+          plantRowTop + kRiserPlantRowPad + (r + 0.5) * plantPitch);
+    }
   }
   double pageX(String nodeId) => riserRespaceAt(respace, placeX(nodeId));
   // Drawing review S4 — part 2 of a column split: each part-1 end of a run
@@ -852,6 +1129,8 @@ SldSheet _buildMechanicalRiserSld({
   // colliding tag along an offset ladder, adding a leader when pulled far off
   // its anchor (B5). Fixed labels (gutter, fan-out) are reserved FIRST so the
   // movable band tags divert around them.
+  // Drawing backlog I-2 — the tag texts of the plant items and trunks.
+  final plantTexts = <String>{};
   final placer = _LabelPlacer(prims)
     // Round 34 — a tag that lands in a different floor band than the
     // element it names is counted unresolved (the sheet's overlap warning).
@@ -914,16 +1193,27 @@ SldSheet _buildMechanicalRiserSld({
     final name = (building != null && f < building.levelCount)
         ? building.floors[f].name
         : 'Level ${f + 1}';
-    placer.reserve(SldLabel(8, top + 18, name, size: 10, bold: true));
+    // Drawing backlog I-2 — the plant split's own page is '<floor> - PLANT'.
+    placer.reserve(SldLabel(8, top + 18, plantPage ? '$name - PLANT' : name,
+        size: 10, bold: true));
     if (building != null && f < building.levelCount) {
       final ffl = building.elevationOf(f).meters;
       placer.reserve(
           SldLabel(8, top + 32, fflLabel(ffl), size: 8, role: SldRole.source));
     }
-    if (split != null) {
+    if (split != null && !plantSplit) {
       placer.reserve(
           SldLabel(8, top + 46, 'BAGIAN $columnPart/2', size: 8, bold: true));
     }
+  }
+  // Drawing backlog I-2 — the plant row's own band: a thin dashed divider
+  // under the fixture band and its 'PLANT' caption in the gutter.
+  if (rowPlant && !plantPage) {
+    prims.add(SldLine(_gutterW, plantRowTop, _gutterW + _drawW, plantRowTop,
+        weight: SldWeight.thin, dashed: true));
+    placer.reserveLine(_gutterW, plantRowTop, _gutterW + _drawW, plantRowTop);
+    placer.reserve(
+        SldLabel(8, plantRowTop + 16, 'PLANT', size: 8, bold: true));
   }
 
   // ── Per-floor branch fan-out: the fixtures each floor distributes ───────────
@@ -1361,7 +1651,9 @@ SldSheet _buildMechanicalRiserSld({
       final ids = phantoms.toList()..sort();
       for (final id in ids) {
         final p = posById[id]!;
-        final text = 'LANJUTAN DARI $floor - BAGIAN 1';
+        final text = plantSplit
+            ? 'LANJUTAN DARI $floor'
+            : 'LANJUTAN DARI $floor - BAGIAN 1';
         placer.place(p.dx + 4, p.dy - 4, text,
             size: 8,
             bold: true,
@@ -1406,7 +1698,9 @@ SldSheet _buildMechanicalRiserSld({
       }
       for (final k in keys) {
         final (_, y, _) = stubs[k]!;
-        final text = 'LANJUT KE $floor - BAGIAN 2';
+        final text = plantSplit
+            ? 'LANJUT KE $floor - PLANT'
+            : 'LANJUT KE $floor - BAGIAN 2';
         placer.place(xEdge - _labelWidth(text, 8), y - 6, text,
             size: 8,
             bold: true,
@@ -1414,6 +1708,34 @@ SldSheet _buildMechanicalRiserSld({
             anchorY: y,
             candidates: _runLadder(text));
       }
+    }
+  }
+
+  // Drawing backlog I-2 — a plant-row member's tag is placed FIRST (before
+  // any pipe tag can take its slot), centred UNDER its symbol (its slot is
+  // as wide as the tag), clear of the trunk pipes leaving it sideways.
+  if (rowPlant) {
+    final ids = plantIds.toList()..sort();
+    for (final id in ids) {
+      final n = nodes.firstWhere((m) => m.id == id);
+      final p = posById[id];
+      final label = nodeLabelText(n);
+      if (p == null || label == null) continue;
+      plantTexts.add(label);
+      final w = _labelWidth(label, 8);
+      final inset = (n.component != null ? _symbolSize : _nodeBox) / 2;
+      placer.place(p.dx - w / 2, p.dy + _symbolSize / 2 + 10, label,
+          size: 8,
+          role: _nodeRole(n),
+          anchorX: p.dx,
+          anchorY: p.dy,
+          candidates: [
+            const Offset(0, 0),
+            const Offset(0, 10),
+            const Offset(0, -(_symbolSize + 18)),
+            ..._nodeLadder(label).skip(1).map((o) => Offset(
+                o.dx + w / 2 + inset + 4, o.dy - _symbolSize / 2 - 7)),
+          ]);
     }
   }
 
@@ -1460,6 +1782,11 @@ SldSheet _buildMechanicalRiserSld({
     final fn = riserFunctionFor(network, e,
         downfeed: downfeed, flowFrom: flowFromByEdge);
     final tag = _pipeTag(sz, e, function: fn, length: edgeLengths[e.id]);
+    if (e.kind == EdgeKind.run &&
+        plantIds.contains(e.fromId) &&
+        plantIds.contains(e.toId)) {
+      plantTexts.add(tag);
+    }
     if (e.kind == EdgeKind.riser) {
       // Tag + riser id beside the vertical leg. Round 10
       // (mech-drawing-props-7) — the default slot sits INSIDE the upper
@@ -1524,16 +1851,11 @@ SldSheet _buildMechanicalRiserSld({
     // same `equipmentNodeTags` number the plan + schedule carry) ahead of its
     // descriptive word, so the riser cross-references them without losing
     // what the unit is (`TK-01 Roof tank · 5 m3`, `P-02 Pump · 2.2 kW`).
-    final tagged = nodeTags[n.id];
-    final word = _nodeLabel(n);
-    final base = (tagged != null && tagged.isNotEmpty)
-        ? (word == null ? tagged : '$tagged $word')
-        : word;
-    if (base != null) {
-      // B1 equipment-detail suffix (capacity / duty) — only when the app
-      // supplied a real datum for this node.
-      final detail = equipmentDetailByNodeId[n.id];
-      final label = detail == null ? base : '$base · $detail';
+    // B1 equipment-detail suffix (capacity / duty) — only when the app
+    // supplied a real datum for this node ([nodeLabelText]).
+    final label = nodeLabelText(n);
+    if (label != null && !(rowPlant && plantIds.contains(n.id))) {
+      if (plantIds.contains(n.id)) plantTexts.add(label);
       placer.place(p.dx + labelInset + 4, p.dy + 3, label,
           size: 8,
           role: role,
@@ -1637,6 +1959,7 @@ SldSheet _buildMechanicalRiserSld({
     supplyNote: supplyNote,
     overlapCount: placer.unresolvedCount,
     keyCount: placer.keyOf.length,
+    plantKeyCount: placer.keyOf.keys.where(plantTexts.contains).length,
   );
 }
 

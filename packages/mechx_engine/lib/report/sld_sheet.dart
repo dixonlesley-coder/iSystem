@@ -117,6 +117,12 @@ class SldSheet {
   /// 0 (the default) ⇒ byte-identical.
   final int keyCount;
 
+  /// Drawing backlog I-2 — of [keyCount], the keys that name a PLANT item
+  /// (tank, pump, booster, PRV, water meter) or a trunk pipe between two plant
+  /// items: a plant-level riser page re-draws its plant group in its own row
+  /// while this is non-zero. 0 (the default) ⇒ byte-identical.
+  final int plantKeyCount;
+
   const SldSheet({
     required this.prims,
     required this.minX,
@@ -128,6 +134,7 @@ class SldSheet {
     this.overlapCount = 0,
     this.belowMinLabelPt,
     this.keyCount = 0,
+    this.plantKeyCount = 0,
   });
 
   /// This sheet flagged as printing at [pt] (below the plotted floor).
@@ -142,6 +149,7 @@ class SldSheet {
         overlapCount: overlapCount,
         belowMinLabelPt: pt,
         keyCount: keyCount,
+        plantKeyCount: plantKeyCount,
       );
 
   bool get isEmpty => prims.isEmpty;

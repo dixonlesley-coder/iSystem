@@ -52,6 +52,10 @@ List<SldSheet> paginatedRiserSheets({
   SldSheet Function()? buildExtrasOnly,
   SldSheet Function(({int lo, int hi}) range, int part, bool withoutExtras)?
       buildColumnPart,
+  SldSheet Function(({int lo, int hi}) range, bool withoutExtras)?
+      buildPlantRow,
+  SldSheet Function(({int lo, int hi}) range, int part, bool withoutExtras)?
+      buildPlantPart,
 }) {
   double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
@@ -170,6 +174,42 @@ List<SldSheet> paginatedRiserSheets({
           parts.every((p) => minPt(p) >= floorPt)) {
         // Pages run bottom-up here (reversed below): part 2 then part 1
         // lists part 1 first on the issued set.
+        pages.replaceRange(i, i + 1, parts.reversed);
+        ranges.replaceRange(i, i + 1, [r, r]);
+      }
+    }
+  }
+  // Drawing backlog I-2 — a ONE-floor page still KEYING plant items (tanks,
+  // pumps, booster, PRV, meter) or the trunks between them draws its plant
+  // group in its own row under the fixture band when that page still prints
+  // at its size (capped at the floor); else the plant row takes a page of its
+  // own ('<floor> - PLANT', [buildPlantPart] part 2, part 1 the floor without
+  // it) when both parts print at that size. Each is kept only when it keys
+  // strictly fewer plant items and overprints no more; a page already
+  // tagging every plant item directly is untouched.
+  if (buildPlantRow != null || buildPlantPart != null) {
+    for (var i = pages.length - 1; i >= 0; i--) {
+      final r = ranges[i];
+      final p0 = pages[i];
+      if (p0.plantKeyCount == 0 || r.hi != r.lo) continue;
+      if (i + 1 < ranges.length && ranges[i + 1] == r) continue; // S4 part
+      if (i > 0 && ranges[i - 1] == r) continue;
+      final bare = shed && r.lo == 0;
+      final floorPt = math.min(minPt(p0), kMinPlotLabelPt) - 1e-9;
+      bool better(Iterable<SldSheet> ps) =>
+          ps.fold<int>(0, (a, p) => a + p.plantKeyCount) < p0.plantKeyCount &&
+          ps.fold<int>(0, (a, p) => a + p.overlapCount) <= p0.overlapCount &&
+          ps.every((p) => minPt(p) >= floorPt);
+      final row = buildPlantRow?.call(r, bare);
+      if (row != null && better([row])) {
+        pages[i] = row;
+        continue;
+      }
+      if (buildPlantPart == null) continue;
+      final parts = [for (final k in [1, 2]) buildPlantPart(r, k, bare)];
+      if (better(parts)) {
+        // Bottom-up here (reversed below): the PLANT page lists after the
+        // floor page.
         pages.replaceRange(i, i + 1, parts.reversed);
         ranges.replaceRange(i, i + 1, [r, r]);
       }
