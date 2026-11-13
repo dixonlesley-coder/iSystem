@@ -52,7 +52,7 @@ import 'package:mechx_engine/electrical/advanced_study.dart'
         servicePerPhaseBasisVa;
 import 'package:mechx_engine/electrical/genset_backup.dart';
 import 'package:mechx_engine/electrical/panel_results.dart'
-    show PhaseAssignmentInfo;
+    show ElectricalCircuitResult, PhaseAssignmentInfo;
 import 'package:mechx_engine/electrical/sources.dart';
 import 'package:mechx_engine/network/hot_water_pressure.dart'
     show hotWaterHeaters;
@@ -1392,5 +1392,385 @@ void main() {
       // ignore: avoid_print
       print(_out.toString());
     }
+  });
+
+  // ── Hand-derived pins (reviewer pass 3, 2026-11-13) ─────────────────────
+  group('hand values (app providers, pass 3)', () {
+    late ProviderContainer before;
+    late ProviderContainer c;
+    setUpAll(() async {
+      before = await _loadTower(_undeclared());
+      c = await _loadTower(buildTower());
+    });
+    tearDownAll(() {
+      before.dispose();
+      c.dispose();
+    });
+    List<double> sorted3(dynamic pb) =>
+        ([pb.l1 as double, pb.l2 as double, pb.l3 as double]..sort());
+    ElectricalCircuitResult way(ProviderContainer x, String panel, String id) =>
+        x
+            .read(electricalResultProvider)
+            .panels[panel]!
+            .circuits
+            .firstWhere((w) => w.circuitId == id);
+    int count(ProviderContainer x, String prefix) => [
+      for (final i in x.read(designIssuesProvider))
+        if (i.kind.startsWith(prefix)) i,
+    ].length;
+
+    test('PRV zoning: 100 over-pressure findings BEFORE, seven stations '
+        'AFTER, none left', () {
+      for (final x in [before, c]) {
+        expect(
+          [
+            for (final z in x.read(zonesProvider))
+              (z.bottomFloorIndex, z.topFloorIndex),
+          ],
+          [
+            (20, 29), (17, 19), (14, 16), (11, 13), (8, 10), (5, 7), //
+            (2, 4), (0, 1),
+          ],
+        );
+      }
+      // BEFORE: floors 0..19 above 392.266 (WCb19 (120.0 − 77.1) x 9.81 =
+      // 420.849, WCb0 1166.409).
+      expect(before.read(downfeedOverPressureProvider).length, 100);
+      expect(count(before, 'downfeed-over-pressure'), 100);
+      expect(
+        before
+            .read(downfeedDeliveredProvider)!
+            .noFlowStaticPressure['WCb19']!
+            .inKiloPascals,
+        closeTo(420.849, 2e-3),
+      );
+      // AFTER: none; the zone tops read 255 + 2.6 x 9.81 = 280.506.
+      expect(c.read(downfeedOverPressureProvider), isEmpty);
+      expect(count(c, 'downfeed-over-pressure'), 0);
+      expect(count(c, 'pressure-zone'), 0);
+      final del = c.read(downfeedDeliveredProvider)!;
+      expect(
+        del.noFlowStaticPressure['WCb19']!.inKiloPascals,
+        closeTo(280.506, 2e-3),
+      );
+      expect(
+        del.noFlowStaticPressure['WCb0']!.inKiloPascals,
+        closeTo(319.746, 2e-3),
+      );
+      final prv = [
+        for (final l in c.read(componentTakeoffProvider))
+          if (l.component == NodeComponent.prv) l.count,
+      ];
+      expect(prv.fold<int>(0, (a, b) => a + b), 7);
+    });
+
+    test('movers: TP 122.086 m / 18.5 kW (TPS standby DF 0), BS 21.526 m '
+        '/ 1.1 kW; WCb26 the delivered critical', () {
+      final duties = c.read(supplyMoverDutiesProvider);
+      // TP: lift 120.000 + 0.016819 x 124.0 m of DN100 = 2.086 ⇒ 122.086 m;
+      // 9810 x 0.01079267 x 122.086 = 12 925.9 W; / 0.70 = 18 465.6 W.
+      final tp = duties['TP']!;
+      expect(tp.flow.inLitersPerSecond, closeTo(10.79267, 5e-5));
+      expect(tp.head.meters, closeTo(122.086, 5e-4));
+      expect(tp.hydraulicPower.watts, closeTo(12925.9, 0.05));
+      expect(tp.shaftPower.watts, closeTo(18465.6, 0.05));
+      expect(tp.selectedMotor.inKiloWatts, closeTo(18.5, 1e-9));
+      final mep = c
+          .read(electricalProjectProvider)
+          .panels
+          .firstWhere((p) => p.id == _mepBoard)
+          .circuits;
+      expect(mep.firstWhere((w) => w.id == 'mep-node-TPS').demandFactor, 0);
+      // BS: 3.22133 L/s; (225 − 13.831) / 9.81 = 21.526 m; 9810 x
+      // 0.00322133 x 21.526 = 680.2 W ⇒ 1.1 kW.
+      final bs = duties['BS']!;
+      expect(bs.flow.inLitersPerSecond, closeTo(3.22133, 5e-5));
+      expect(bs.head.meters, closeTo(21.526, 5e-4));
+      expect(bs.hydraulicPower.watts, closeTo(680.2, 0.05));
+      expect(bs.selectedMotor.inKiloWatts, closeTo(1.1, 1e-9));
+      final del = c.read(downfeedDeliveredProvider)!;
+      expect(del.criticalNodeId, 'WCb26');
+      expect(
+        del.residualPressure['WCb26']!.inKiloPascals,
+        closeTo(134.370, 2e-3),
+      );
+      expect(count(c, 'downfeed-below-target'), 1);
+    });
+
+    test('hot water recirculation: assumed 10.3 m return, 0.02461 L/s, '
+        '0.37 kW', () {
+      final s = c.read(hotWaterRecircSystemsProvider).single;
+      expect(s.drawnReturn, isFalse);
+      expect(s.assumedReturnLengthM, closeTo(10.3, 1e-9));
+      // 25 W/m x 20.6 m = 515 W; 515 / (1000 x 4186 x 5) = 2.4606e-5 m3/s.
+      expect(s.design.recircFlow.inLitersPerSecond, closeTo(0.02461, 5e-6));
+      expect(s.design.pump.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+    });
+
+    test('fire: 750 gpm at the standpipe head 210.686 m, 200 kW; DN100 '
+        'trunks; DN40 feed main', () {
+      final sz = c.read(sizingProvider);
+      for (final id in ['e_fh_FH_Ha0', 'e_fh_FH_Hb0']) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+        expect(sz[id]!.diameter.inMillimeters, 100);
+      }
+      final feed = {
+        'e_sp_FH_S0',
+        for (var f = 1; f < kTowerFloors; f++) 'e_sp_S${f - 1}_S$f',
+      };
+      for (final id in feed) {
+        expect(sz[id]!.flow.inLitersPerSecond, closeTo(4.7140, 5e-4));
+        expect(sz[id]!.diameter.inMillimeters, 40, reason: id);
+      }
+      expect(c.read(sprinklerFeedEnlargedProvider), feed);
+      final b = c.read(fireSystemBasesProvider).single;
+      // 500 + 250 gpm = 47.3176 L/s; 117.2 + 23.150 + 690 / 9.81 = 210.686.
+      expect(
+        b.standpipe!.requiredFlow.inLitersPerSecond,
+        closeTo(47.3176, 5e-4),
+      );
+      expect(b.indexFrictionM, closeTo(23.150, 5e-4));
+      expect(b.head.meters, closeTo(210.686, 5e-4));
+      expect(b.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
+      expect(b.sprinklerGovernsCombined, isFalse);
+      // Hydraulic 9810 x 0.0473176 x 210.686 = 97 797.7 W; / 0.70 =
+      // 139 711.0 W; overload 0.975 x 97 797.7 / 0.595 = 160 256.8 W ⇒ 200 kW.
+      final d = c.read(firePumpDutyProvider)!;
+      expect(d.hydraulicPower.watts, closeTo(97797.7, 0.05));
+      expect(d.shaftPower.watts, closeTo(139711.0, 0.05));
+      expect(b.rating.overload.shaftPower.watts, closeTo(160256.8, 0.05));
+      expect(b.rating.selectedMotor.inKiloWatts, closeTo(200, 1e-9));
+      expect(
+        c.read(nodeFedLoadsProvider)['FP']!.input,
+        closeTo(222222.2, 0.05),
+      );
+      // Jockey 1 % = 0.4732 L/s @ 1.4 x 210.686 + 5 = 299.961 m, 2.2 kW.
+      final j = c.read(fireJockeyDutyProvider)!;
+      expect(j.flow.inLitersPerSecond, closeTo(0.47318, 5e-5));
+      expect(j.head.meters, closeTo(299.961, 5e-4));
+      expect(j.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
+      // Sprinkler point on the enlarged main: 202.185 m <= 210.686.
+      final net = c.read(sizingNetworkProvider);
+      final project = c.read(projectControllerProvider);
+      final fs = fireIndexPathFrictionM(
+        net: net,
+        system: b.system,
+        pumpId: 'FP',
+        sizing: sz,
+        lengthOf: (e) => _len(c, e),
+        terminals: FireTerminalKind.sprinkler,
+      )!;
+      expect(fs, closeTo(77.389, 5e-4));
+      final sp = sprinklerPumpRatedPoint(
+        remote: c.read(sprinklerRemoteAreaProvider),
+        staticLiftM: b.system.staticLiftM(
+          net,
+          project.building,
+          FireTerminalKind.sprinkler,
+        ),
+        indexPathFriction: Head(fs),
+      );
+      expect(sp.head.meters, closeTo(202.185, 5e-4));
+    });
+
+    test('air: 3.7 m3/s office, rectangular ducts on the 5 m/s cap, AHU '
+        '326.44 Pa / 2.2 kW, toilet 0.24667 m3/s', () {
+      final sz = c.read(sizingProvider);
+      // 600 x 3.7 x 6 / 3600 = 3.7 m3/s; 462.5 L/s per diffuser.
+      expect(kTowerOfficeAirflow.inLitersPerSecond, closeTo(3700, 1e-6));
+      expect(kTowerDiffuserFlow.inLitersPerSecond, closeTo(462.5, 1e-9));
+      // 24 x 3.7 x 10 / 3600 = 0.24667 m3/s.
+      expect(kTowerToiletAirflow.inLitersPerSecond, closeTo(246.667, 5e-4));
+      for (final (id, w, h, v) in [
+        ('e_sa_AHU1_SD1', 1200, 700, 4.405),
+        ('e_sa_SD1_SD2', 1000, 700, 4.625),
+        ('e_sa_SD2_SD3', 1000, 700, 3.964),
+        ('e_sa_SD3_SD4', 900, 600, 4.282),
+        ('e_sa_SD4_SD5', 800, 500, 4.625),
+        ('e_sa_SD5_SD6', 700, 450, 4.405),
+        ('e_sa_SD6_SD7', 600, 350, 4.405),
+        ('e_sa_SD7_SD8', 400, 250, 4.625),
+        ('e_ra_RG4_RG3', 600, 350, 4.405),
+        ('e_ra_RG3_RG2', 800, 500, 4.625),
+        ('e_ra_RG2_RG1', 1000, 700, 3.964),
+        ('e_ra_RG1_AHU1', 1200, 700, 4.405),
+        ('e_ea_EF1_EG1', 300, 200, 4.111),
+        ('e_ea_EG1_EG2', 250, 150, 3.289),
+      ]) {
+        expect(sz[id]!.width!.inMillimeters, w, reason: id);
+        expect(sz[id]!.height!.inMillimeters, h, reason: id);
+        expect(sz[id]!.velocity.metersPerSecond, closeTo(v, 5e-4), reason: id);
+      }
+      // De = 1.3 (1.2 x 0.7)^0.625 / (1.9)^0.25 = 0.993 m.
+      expect(
+        sz['e_sa_AHU1_SD1']!.diameter.inMillimeters,
+        closeTo(992.95, 0.01),
+      );
+      // AHU: 250 internal + 41.39 supply + 35.06 return = 326.44 Pa.
+      final supply = c.read(airSystemsProvider(ServiceType.duct)).single;
+      final ret = c.read(airSystemsProvider(ServiceType.returnAir)).single;
+      expect(supply.stat.pascals, closeTo(41.39, 5e-3));
+      expect(ret.stat.pascals, closeTo(35.06, 5e-3));
+      final fan = c.read(supplyFanDutiesByRootProvider)[kTowerAhuId]!;
+      expect(fan.totalStaticPressure.pascals, closeTo(326.44, 5e-3));
+      expect(fan.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
+      final ef = c.read(exhaustFanDutiesByRootProvider)[kTowerExhaustFanId]!;
+      expect(ef.totalStaticPressure.pascals, closeTo(38.67, 5e-3));
+      expect(ef.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+    });
+
+    test('every floor board: 18 750 W / 21 422 VA, 30.9 A per line, MCB '
+        '32 A 4P', () {
+      for (var f = 0; f < kTowerFloors; f++) {
+        final pid = towerFloorPanelId(f);
+        final p = c.read(electricalResultProvider).panels[pid]!;
+        String id(String b) => 'c_${b}_lt${f + 1}';
+        // Lighting 1500 / (230 x 0.9 x ...) = 7.215 A, MCB 10 B, 3x1.5.
+        final l = way(c, pid, id('lampu_a'));
+        expect(l.designCurrentExactA, closeTo(7.215, 5e-4));
+        expect(l.breaker.ratingA.amperes, 10);
+        expect(l.cable.csaMm2, 1.5);
+        expect(l.voltageDrop.dropPercent, closeTo(1.63, 1e-9));
+        // Socket 2500 W: run 12.025 A (undiversified), design 8.418 A (DF
+        // 0.7), MCB 16 C, 3x2.5.
+        final s = way(c, pid, id('kk_a'));
+        expect(s.designCurrentExactA, closeTo(8.418, 5e-4));
+        expect(s.runCurrentA.amperes, closeTo(12.0, 1e-9));
+        expect(s.breaker.ratingA.amperes, 16);
+        expect(s.cable.csaMm2, 2.5);
+        // AC 5000 W 3-phase: run 8.490 A, design 7.641 A (DF 0.9), 10 A 3P.
+        final a = way(c, pid, id('ac_a'));
+        expect(a.designCurrentExactA, closeTo(7.641, 5e-4));
+        expect(a.runCurrentA.amperes, closeTo(8.5, 1e-9));
+        expect(a.breaker.ratingA.amperes, 10);
+        expect(a.cable.csaMm2, 2.5);
+        // Demand 3 x 1500 + 3 x 1750 + 2 x 4500 = 18 750 W; lines 7.215 +
+        // 8.418 + 2 x 7.641 = 30.9 each.
+        expect(p.demandW, 18750);
+        expect(p.demandVa, 21422);
+        expect(sorted3(p.phaseBalance), [30.9, 30.9, 30.9]);
+        expect(p.incomer.breaker.ratingA.amperes, 32);
+        expect(p.incomer.poles, 4);
+        // Feeder Ib 18 750 / (√3 x 400 x 0.8753) = 30.92 A.
+        final fd = way(c, kTowerMainPanelId, towerFloorFeederId(f));
+        expect(fd.designCurrentExactA, closeTo(30.919, 1e-3));
+      }
+      final lt1 = way(c, kTowerMainPanelId, towerFloorFeederId(0));
+      expect(lt1.cable.csaMm2, 10);
+      expect(lt1.breaker.ratingA.amperes, 50);
+      expect(lt1.voltageDrop.dropPercent, closeTo(0.39, 1e-9));
+      expect(lt1.cableRaisedForAds, isFalse);
+      expect(lt1.cableRaisedForDownstreamVd, isFalse);
+      final lt30 = way(
+        c,
+        kTowerMainPanelId,
+        towerFloorFeederId(kTowerFloors - 1),
+      );
+      expect(lt30.cable.csaMm2, 95);
+      expect(lt30.grounding.peCsaMm2, 50);
+      expect(lt30.voltageDrop.dropPercent, closeTo(0.42, 1e-9));
+      expect(lt30.cableRaisedForAds, isTrue);
+      expect(lt30.cableRaisedForDownstreamVd, isTrue);
+    });
+
+    test('PP-E, MEP, LVMDP, transformer, genset, capacitor bank', () {
+      // Lift: 15 / 0.88 = 17 045.5 W ⇒ 28.945 A, MCCB 32 D, 4x16 for ADS.
+      final lift = way(c, kTowerEssentialPanelId, kTowerLiftWayIds.first);
+      expect(lift.loadW, closeTo(17045.45, 0.01));
+      expect(lift.designCurrentExactA, closeTo(28.945, 5e-4));
+      expect(lift.breaker.ratingA.amperes, 32);
+      expect(lift.cable.csaMm2, 16);
+      expect(lift.cableRaisedForAds, isTrue);
+      final sys = c.read(electricalResultProvider);
+      // PP-E: 249 711 + 3 x 17 045.5 + 2000 = 302 847 W, 356 160 VA.
+      final ppe = sys.panels[kTowerEssentialPanelId]!;
+      expect(ppe.demandW, 302847);
+      expect(ppe.demandVa, 356160);
+      expect(ppe.incomer.breaker.ratingA.amperes, 630);
+      // MEP: TP 20 555.6 W ⇒ 34.905 A; FP 222 222.2 W ⇒ 377.353 A, MCCB
+      // 400, FRC 3x240 + 120; Σ 249 711 W, 293 778 VA; incomer MCCB 500.
+      final tp = way(c, _mepBoard, 'mep-node-TP');
+      expect(tp.designCurrentExactA, closeTo(34.905, 5e-4));
+      final fp = way(c, _mepBoard, 'mep-node-FP');
+      expect(fp.designCurrentExactA, closeTo(377.353, 5e-4));
+      expect(fp.breaker.ratingA.amperes, 400);
+      expect(fp.cable.csaMm2, 240);
+      expect(fp.grounding.peCsaMm2, 120);
+      final mep = sys.panels[_mepBoard]!;
+      expect(mep.demandW, 249711);
+      expect(mep.demandVa, 293778);
+      expect(mep.incomer.breaker.ratingA.amperes, 500);
+      // LVMDP: 30 x 18 750 + 302 847 = 865 347 W, 998 807 VA.
+      final lv = sys.panels[kTowerMainPanelId]!;
+      expect(lv.demandW, 865347);
+      expect(lv.demandVa, 998807);
+      expect(sorted3(lv.phaseBalance), [1438.5, 1438.5, 1448.1]);
+      expect(lv.incomer.breaker.ratingA.amperes, 1600);
+      expect(lv.incomer.poles, 4);
+      // Transformer 1600 kVA: 998.8 / 1600 = 62.4 %; LV fault 1 600 000 /
+      // (√3 x 400 x 0.04) = 57 735 A.
+      final adv = c.read(electricalAdvancedProvider);
+      expect(adv.supply.transformerKva, 1600);
+      expect(adv.supply.demandKva / 1600 * 100, closeTo(62.4, 0.05));
+      final project = c.read(electricalSizingProjectProvider);
+      expect(
+        effectiveOriginFaultLevel(project, result: sys).amperes,
+        closeTo(57735.0, 0.05),
+      );
+      // Genset 800 kVA, start floor 764.77 kVA (FP 1699.49 kVA x 0.45).
+      expect(project.sources!.generator!.kva!.inKilovoltAmperes, 800);
+      expect(
+        gensetStartFloorFor(project, sys).inKilovoltAmperes,
+        closeTo(764.77, 5e-3),
+      );
+      // 250 kvar installed ⇒ PF 0.961.
+      expect(adv.powerFactor.installedKvar, 250);
+      expect(adv.powerFactor.existingPf, closeTo(0.961, 5e-4));
+    });
+
+    test('Review: deliberate findings present, the rest absent', () {
+      final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+      int n(String k) => kinds.where((x) => x == k).length;
+      expect(n('electrical:non-selective'), 4);
+      expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
+      expect(n('electrical:service-cable-ampacity-inadequate'), 1);
+      expect(n('electrical:service-fault-estimate-high'), 1);
+      expect(n('fire-system-over-pressure:FP'), 1);
+      expect(n('standpipe-outlet-over-pressure:FP:0-29'), 1);
+      expect(n('electrical:cable-raised-for-ads'), 6);
+      expect(n('electrical:fire-pump-protection'), 3);
+      expect(n('electrical:busbar-beyond-standard-table'), 1);
+      expect(n('downfeed-below-target'), 1);
+      expect(
+        c
+            .read(designIssuesProvider)
+            .where((i) => i.severity == IssueSeverity.critical),
+        isEmpty,
+      );
+      for (final prefix in [
+        'electrical:cumulative-voltage-drop-exceeded',
+        'electrical:ads-disconnection',
+        'combined-fire-sprinkler-governs',
+        'downfeed-over-pressure',
+        'pressure-zone',
+        'electrical:life-safety',
+        'unfed-panel',
+      ]) {
+        expect(
+          kinds.where((k) => k.startsWith(prefix)),
+          isEmpty,
+          reason: prefix,
+        );
+      }
+      expect(
+        c
+            .read(electricalAllWarningsProvider)
+            .where(
+              (w) =>
+                  w.severity.name == 'error' || w.severity.name == 'critical',
+            ),
+        isEmpty,
+      );
+    });
   });
 }

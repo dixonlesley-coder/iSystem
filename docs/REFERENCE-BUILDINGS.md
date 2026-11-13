@@ -184,6 +184,16 @@ _(empty)_
 - Fixture: `packages/mechx_engine/test/reference/tower.dart` (`buildTower()`, `buildTowerNetwork(prvFloors:)`, `buildTowerElectrical(...)`, `kTowerRooms`).
 - Smoke + dump: `packages/mechx_engine/test/reference_tower_test.dart`, `test/reference_tower_app_test.dart` (BEFORE / AFTER the PRVs; `REF_DUMP=1`).
 - Regressions (T1–T4): `packages/mechx_engine/test/reference_tower_regression_test.dart`.
+- Hand-value pins (pass 3): the engine groups in `reference_tower_test.dart` (flush-valve cold water, gravity field, PRVs, hot water, drainage, vent, rainwater) and the app group in `reference_tower_app_test.dart` (zones and PRVs, movers, recirculation, fire, air, floor boards, PP-E / MEP / LVMDP, transformer, genset, capacitor bank, Review findings).
+
+**Deliberate expected findings** (final state: 1600 kVA transformer, 800 kVA genset, 250 kvar bank, seven PRVs drawn):
+- 4 x `non-selective`: the PP-Lt1 / PP-Lt2 feeders (50 A vs the 32 A incomers), Feeder PP-E and Feeder to MEP, each at the largest rung its cable protects.
+- 2 x `enclosure-temp-rise-exceeded` (LVMDP, PP-E), `service-cable-ampacity-inadequate` (the 1600 A service), `service-fault-estimate-high` (57.7 kA from the 1600 kVA / 4 % transformer).
+- `fire-system-over-pressure:FP` (churn 1.4 x 210.686 = 294.961 m) and `standpipe-outlet-over-pressure:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207).
+- Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30, Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, 14 x `air-duct-unsized`, `drainage-cleanout`, 5 `// VERIFY`.
+- Before the PRVs are drawn: 100 x `downfeed-over-pressure` (floors 0..19).
+
+**Expected absent:** any critical or error, `cumulative-voltage-drop-exceeded`, `ads-disconnection*`, `combined-fire-sprinkler-governs`, `downfeed-over-pressure` (after the PRVs), `pressure-zone`, `life-safety-*`, `unfed-panel`.
 
 **Fixed by its review (2026-11-13).**
 - **T1:** the NFPA 20 discharge raise ran past the header: FH→Ha0, FH→Hb0 and FH→S0 each printed the pump's 47.3176 L/s on DN150, and the sprinkler riser was DN150 for one storey. Past a header only an outflow carrying the full rated flow is discharge pipe: the standpipe trunks are DN100 at 31.5451 L/s and the sprinkler feed keeps its own size.
@@ -201,4 +211,4 @@ _(empty)_
 - **(f) Room return-bank face velocity.** The room's own return bank uses min(application 3.0, 4.0) = 3.0 m/s (five grilles), while the air-velocity checker accepts 4.0 m/s (four grilles at 3.21 m/s).
 - **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 304.10 Pa; the drawn-duct fan duty gives 326.44 Pa (office backlog a).
 - **(h) `non-selective` on auto-sized feeders.** PP-Lt1 / PP-Lt2 (50 A vs the 32 A incomers), PP-E and the MEP feeder still raise `non-selective`: their device sits at the largest rung their cable's Iz protects.
-
+- **(i) Downstream-VD raise always enlarges the feeder.** The T3 raise for a board's cumulative drop always grows the FEEDER (PP-Lt30 ends at 95 mm² over 131 m), even where raising the short final way that owns most of the drop would cost far less. No least-cost split between feeder and final way is attempted.
