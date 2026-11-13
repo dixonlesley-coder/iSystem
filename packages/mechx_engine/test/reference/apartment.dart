@@ -573,13 +573,15 @@ ElectricalPanel _mainBoard() => ElectricalPanel(
     );
 
 /// The app-recommended declared PLN capacity (VA) and genset rating (kVA),
-/// read from the app's own recommendation on a first run with neither
-/// declared (`electricalAdvancedProvider.recommendedDayaVa` = 105 000 VA,
-/// 3-phase LV, no transformer; the unforced genset sizing
+/// read from the app's own recommendation on a run with neither declared
+/// (`electricalAdvancedProvider.recommendedDayaVa` = 197 000 VA, 3-phase LV
+/// at the 197 kVA ceiling, no transformer, after A1 made the fire pump 75 kW
+/// — 105 000 VA before; the unforced genset sizing
 /// `sizeGenerator(gensetBackupDemandVa, minKvaForStart: gensetStartFloorFor)`
-/// = 1 x 50 kVA) and set here. Pass null to either to read them again.
-const double? kAptDeclaredPlnVa = 105000;
-const double? kAptGensetKva = 50;
+/// = 1 x 300 kVA, motor-start floor 286.83 kVA; 50 kVA before A1) and set
+/// here. Pass null to either to read them again.
+const double? kAptDeclaredPlnVa = 197000;
+const double? kAptGensetKva = 300;
 
 /// The apartment's electrical project.
 ElectricalProject buildApartmentElectrical({
