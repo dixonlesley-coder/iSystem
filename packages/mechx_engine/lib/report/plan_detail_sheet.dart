@@ -158,13 +158,15 @@ PlanDetailSheetPlot planDetailSheetPlot({
 }) {
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
   const ts = kPlanLabelTextMm;
-  final pack = planDetailPack(sizesM: [
-    for (final d in details)
-      (
-        w: (d.rectPx.maxX - d.rectPx.minX) * metersPerPixel,
-        h: (d.rectPx.maxY - d.rectPx.minY) * metersPerPixel,
-      ),
-  ], area: areaMm,
+  final pack = planDetailPack(
+      sizesM: [
+        for (final d in details)
+          (
+            w: (d.rectPx.maxX - d.rectPx.minX) * metersPerPixel,
+            h: (d.rectPx.maxY - d.rectPx.minY) * metersPerPixel,
+          ),
+      ],
+      area: areaMm,
       // S1 — a split piece's MATCH LINE caption takes a third caption line.
       captionMm: _captionMm(details));
   final plots = <PlanDetailPlot>[];
@@ -236,8 +238,8 @@ PlanDetailSheetPlot planDetailSheetPlot({
       var l = edgeLengths[e.id];
       if (l == null && e.kind == EdgeKind.run) {
         final a = net.nodeById(e.fromId)!, c = net.nodeById(e.toId)!;
-        final px = math.sqrt(
-            (c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y));
+        final px =
+            math.sqrt((c.x - a.x) * (c.x - a.x) + (c.y - a.y) * (c.y - a.y));
         if (px > 0) l = Length(px * metersPerPixel);
       }
       if (l != null) lens[newId] = l;
@@ -275,7 +277,8 @@ PlanDetailSheetPlot planDetailSheetPlot({
         final here = onFloor(a) ? a : (onFloor(c) ? c : null);
         if (here == null || idOf[here.id] == null) continue;
         final other = here.id == a.id ? c : a;
-        final otherId = bare(other.id, mx(here.x), my(here.y), other.floorIndex);
+        final otherId =
+            bare(other.id, mx(here.x), my(here.y), other.floorIndex);
         final id = fresh('${e.id}#${d.letter}');
         if (!d.containsPx(here.x, here.y)) unlabelled.add(id);
         edges.add(NetEdge(
@@ -305,8 +308,8 @@ PlanDetailSheetPlot planDetailSheetPlot({
     texts.add(PlanMarkText(frame.minX, capY, 5, title));
     final scaleText = 'SKALA 1 : $n';
     texts.add(PlanMarkText(frame.minX, capY + 1.6 * ts, ts, scaleText));
-    final barX = frame.minX + math.max(title.length * 5 * 0.55,
-            scaleText.length * ts * 0.55) +
+    final barX = frame.minX +
+        math.max(title.length * 5 * 0.55, scaleText.length * ts * 0.55) +
         8;
     final bar = planDetailScaleBar(
         n: n, x0: barX, y0: capY - 1.5, textMm: kMinPlotTextMm);
@@ -339,15 +342,71 @@ PlanDetailSheetPlot planDetailSheetPlot({
     hiddenNodeIds: hidden,
     unlabelledIds: unlabelled,
     marks: PlanMarks(lines: lines, texts: texts),
-    occupiedMm: planDetailOutsideFrames(
-        [for (final p in plots) p.frameMm], areaMm),
+    occupiedMm:
+        planDetailOutsideFrames([for (final p in plots) p.frameMm], areaMm),
   );
 }
 
 /// One paper mm per synthetic pixel, in metres per pixel at "1 : 1".
 const double _kMmPerPx = 0.001;
 
-PlanDetailSheetPlot _plotFor({
+/// Fix round F6 (2026-11-13) — the detail sheet's chrome with its legend
+/// narrowed to what [plot] DRAWS inside its windows: the services of its
+/// (clipped) runs and the component glyphs of its visible nodes. The plan's
+/// legend lists the whole floor; a detail never keys a service or symbol it
+/// does not show. Null / empty chrome passes through. Pure.
+DrawingChrome? planDetailLegendChrome(
+    DrawingChrome? chrome, PlanDetailSheetPlot plot) {
+  if (chrome == null || chrome.isEmpty) return chrome;
+  final services = {for (final e in plot.net.edges) e.service};
+  final symbols = {
+    for (final n in plot.net.nodes)
+      if (n.component != null && !plot.hiddenNodeIds.contains(n.id))
+        n.component!,
+  };
+  return chrome.withLegendNarrowedTo(
+      keepService: services.contains, keepSymbol: symbols.contains);
+}
+
+/// The detail plot + the chrome it is issued with (F6: the legend narrowed
+/// to the plot's own content). Plotted twice: the first pass finds what the
+/// windows draw, the second lays the sheet out with the narrowed legend's
+/// reserve — the windows' content is the callouts' own either way, so the
+/// legend keys exactly what the issued plot draws.
+(PlanDetailSheetPlot, DrawingChrome?) _plotFor({
+  required Network net,
+  required Map<String, EdgeSizing> sizing,
+  required Map<String, Length> edgeLengths,
+  required String sheetId,
+  required int floorIndex,
+  required String projectName,
+  required String sheetName,
+  required String dateString,
+  required double metersPerPixel,
+  required List<PlanDetailCallout> details,
+  DrawingChrome? chrome,
+  Map<String, String>? edgeTags,
+  Map<String, String>? edgeElevationLabels,
+}) {
+  PlanDetailSheetPlot plot(DrawingChrome? c) => _plotOnce(
+      net: net,
+      sizing: sizing,
+      edgeLengths: edgeLengths,
+      sheetId: sheetId,
+      floorIndex: floorIndex,
+      projectName: projectName,
+      sheetName: sheetName,
+      dateString: dateString,
+      metersPerPixel: metersPerPixel,
+      details: details,
+      chrome: c,
+      edgeTags: edgeTags,
+      edgeElevationLabels: edgeElevationLabels);
+  final narrowed = planDetailLegendChrome(chrome, plot(chrome));
+  return (plot(narrowed), narrowed);
+}
+
+PlanDetailSheetPlot _plotOnce({
   required Network net,
   required Map<String, EdgeSizing> sizing,
   required Map<String, Length> edgeLengths,
@@ -399,7 +458,7 @@ Uint8List planDetailSheetToPdf({
   Map<String, String>? nodeTags,
   double? gravitySlope,
 }) {
-  final p = _plotFor(
+  final (p, detailChrome) = _plotFor(
       net: net,
       sizing: sizing,
       edgeLengths: edgeLengths,
@@ -422,7 +481,7 @@ Uint8List planDetailSheetToPdf({
     projectName: projectName,
     sheetName: sheetName,
     dateString: dateString,
-    chrome: chrome,
+    chrome: detailChrome,
     metersPerPixel: _kMmPerPx,
     edgeElevationLabels: p.edgeElevationLabels,
     edgeTags: p.edgeTags,
@@ -456,7 +515,7 @@ String planDetailSheetToDxf({
   Map<String, String>? nodeTags,
   double? gravitySlope,
 }) {
-  final p = _plotFor(
+  final (p, detailChrome) = _plotFor(
       net: net,
       sizing: sizing,
       edgeLengths: edgeLengths,
@@ -475,7 +534,7 @@ String planDetailSheetToDxf({
     sizing: p.sizing,
     sheetId: sheetId,
     floorIndex: floorIndex,
-    chrome: chrome,
+    chrome: detailChrome,
     metersPerPixel: _kMmPerPx,
     edgeElevationLabels: p.edgeElevationLabels,
     edgeTags: p.edgeTags,
@@ -493,7 +552,7 @@ String planDetailSheetToDxf({
       projectName: projectName,
       sheetName: sheetName,
       dateString: dateString,
-      chrome: chrome,
+      chrome: detailChrome,
       metersPerPixel: _kMmPerPx,
       fixedFit: const PlanFixedFit(),
       extraOccupiedPx: p.occupiedMm,

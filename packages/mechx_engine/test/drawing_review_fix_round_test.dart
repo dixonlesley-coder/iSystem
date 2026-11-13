@@ -1,8 +1,15 @@
 // Drawing review fix round (2026-11-13) — F1..F7 from
 // docs/DRAWING-REVIEW-RECORD.md, each pinned to the pure rule it broke.
+import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:mechx_engine/network/network.dart';
+import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_plan_export.dart';
+import 'package:mechx_engine/report/plan_detail.dart';
+import 'package:mechx_engine/report/plan_detail_sheet.dart';
+import 'package:mechx_engine/report/plan_pdf_export.dart';
+import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/report/sld_sheet.dart';
 import 'package:test/test.dart';
@@ -171,6 +178,104 @@ void main() {
           greaterThanOrEqualTo(kPlanKeyTableMarginFactor * ts - 1e-9));
       expect(kt.texts.first.text, 'KETERANGAN PIPA / PIPE KEY');
       expect(layout.unresolvedCount, 0);
+    });
+  });
+
+  group('F6 a detail sheet keys only what its windows draw', () {
+    // The R1 toilet-group fan (cold water) plus a rainwater run and a roof
+    // drain far outside the detail window, both on the plan's legend.
+    const s = 's1';
+    final nodes = <NetNode>[
+      const NetNode(id: 'J', sheetId: s, x: 500, y: 500, floorIndex: 0),
+      const NetNode(id: 'FAR', sheetId: s, x: 4000, y: 500, floorIndex: 0),
+      const NetNode(id: 'R1', sheetId: s, x: 4000, y: 3000, floorIndex: 0),
+      const NetNode(
+          id: 'RD',
+          sheetId: s,
+          x: 5000,
+          y: 3000,
+          floorIndex: 0,
+          role: NodeRole.fixture,
+          component: NodeComponent.roofDrain),
+    ];
+    final edges = <NetEdge>[
+      const NetEdge(
+          id: 'main', fromId: 'FAR', toId: 'J', service: ServiceType.coldWater),
+      const NetEdge(
+          id: 'rw', fromId: 'RD', toId: 'R1', service: ServiceType.rainwater),
+    ];
+    for (var i = 0; i < 16; i++) {
+      nodes.add(NetNode(
+          id: 'F$i',
+          sheetId: s,
+          x: 470 + 30.0 * (i % 4),
+          y: 505 + 30.0 * (i ~/ 4),
+          floorIndex: 0,
+          role: NodeRole.fixture));
+      edges.add(NetEdge(
+          id: 'b$i', fromId: 'J', toId: 'F$i', service: ServiceType.coldWater));
+    }
+    final net = Network(nodes: nodes, edges: edges);
+    const mpp = 0.01;
+    final lengths = <String, Length>{
+      for (final e in net.edges) e.id: const Length(0.4),
+    };
+    const legend = [ServiceType.coldWater, ServiceType.rainwater];
+    const plan = DrawingChrome(
+        drawingNumber: 'M-101',
+        drawingTitle: 'PLAN - L1',
+        legendServices: legend,
+        legendSymbols: [NodeComponent.roofDrain]);
+    const detail = DrawingChrome(
+        drawingNumber: 'M-501',
+        drawingTitle: 'DETAIL - L1',
+        legendServices: legend,
+        legendSymbols: [NodeComponent.roofDrain]);
+
+    test('the issued detail lists Cold water only', () {
+      final d = planSheetDetails(
+          net: net,
+          sizing: const {},
+          edgeLengths: lengths,
+          sheetId: s,
+          floorIndex: 0,
+          projectName: 'P',
+          sheetName: 'L1',
+          dateString: '2026-11-13',
+          detailSheetRef: 'M-501',
+          chrome: plan,
+          metersPerPixel: mpp);
+      expect(d, isNotEmpty);
+      expect(d.any((c) => c.containsPx(4000, 3000)), isFalse);
+      final pdf = latin1.decode(planDetailSheetToPdf(
+          net: net,
+          sizing: const {},
+          edgeLengths: lengths,
+          sheetId: s,
+          floorIndex: 0,
+          projectName: 'P',
+          sheetName: 'L1',
+          dateString: '2026-11-13',
+          metersPerPixel: mpp,
+          details: d,
+          chrome: detail));
+      expect(pdf, contains('(Cold water)'));
+      expect(pdf, isNot(contains('(Rainwater)')));
+      expect(pdf, isNot(contains('Roof drain')));
+      final dxf = planDetailSheetToDxf(
+          net: net,
+          sizing: const {},
+          edgeLengths: lengths,
+          sheetId: s,
+          floorIndex: 0,
+          projectName: 'P',
+          sheetName: 'L1',
+          dateString: '2026-11-13',
+          metersPerPixel: mpp,
+          details: d,
+          chrome: detail);
+      expect(dxf, contains('Cold water'));
+      expect(dxf, isNot(contains('Rainwater')));
     });
   });
 }
