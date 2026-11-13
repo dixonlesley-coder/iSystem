@@ -259,8 +259,6 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 18 900 W, apartment MEP 173 000 W, tower LVMDP 865 347 W).
 
 ### Backlog (not cured in this pass)
-- Tower building single-line E-301 spends ~15 near-empty pages (pages 2-16: one LVMDP
-  box and two boards each); a tabulated typical would carry it on one or two.
 - Plant-level mechanical riser pages (tower `riser-sld` p13 / p1, apartment p1 / p6,
   shophouse p2) are crowded and readable only via the key table.
 - Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
@@ -279,3 +277,6 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   Lantai N and the main / essential / MEP boards on Lantai 1. The riser issues only the
   storeys between its lowest and highest board, listing any storey left off in the edge
   band's gutter ('TANPA PANEL, DI ATAS: ...') - no label-only page.
+- C-3 Building single-line density: identical sibling leaf boards (same incomer and
+  ways) ride one `<first>..<last> (TIPIKAL xN)` node with a per-board feeder table; a wide
+  flat tier packs into a grid of rows. Tower E-301 now issues on one page (was 17).

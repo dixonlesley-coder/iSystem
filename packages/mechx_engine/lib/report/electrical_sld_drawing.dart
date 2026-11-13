@@ -1475,6 +1475,14 @@ const double _ovH = 46;
 const double _ovHGap = 26;
 const double _ovTierH = 120;
 
+/// Drawing backlog C-3 — the vertical pitch of the rows of a packed grid
+/// tier: the box, its bus + feeder tag above (the first row's 37-unit gap),
+/// and a clear margin over the row above.
+const double _ovGridRowPitch = _ovH + 58;
+const double _ovTableRowH = 12;
+const double _ovTableTextSize = 7;
+const int _ovTableMaxRows = 16;
+
 /// Text size of an OVERVIEW feeder annotation (the size it has always been
 /// drawn at) — shared with the collision pass so the boxes match the ink.
 const double _ovFeederLabelSize = 6.5;
@@ -2711,9 +2719,18 @@ SldSheet buildElectricalOverview({
   String? subtreeRootId,
   int? maxDepth,
   Set<String>? rootChildIds,
+  Map<String, List<String>> typicalGroups = const {},
+  int? gridColumns,
 }) {
   // children map over the feeder graph; parent + essential via shared helpers.
   final fullParentOf = _parentOf(project, result);
+  // Drawing backlog C-3 — a TYPICAL group ([electricalOverviewTypicalGroups])
+  // is drawn as ONE node (its first board, named '<first>..<last> (TIPIKAL
+  // xN)'); the other members are folded into it (never 'cut', never drawn)
+  // and their feeders print in the per-board table under the tree.
+  final typicalHidden = <String>{
+    for (final g in typicalGroups.values) ...g.skip(1),
+  };
   // Round 23 (elec-drafting-2-1) — an issuable PAGE of a wide distribution
   // tree: [subtreeRootId] draws only that board + its descendants (the board
   // becomes the page's root, with a 'DARI <parent>' match note above it), and
@@ -2774,18 +2791,40 @@ SldSheet buildElectricalOverview({
   }
   final order = [
     for (final id in result.order)
-      if (include == null || include.contains(id)) id,
+      if ((include == null || include.contains(id)) &&
+          !typicalHidden.contains(id))
+        id,
   ];
   final parentOf = <String, String>{
     for (final e in fullParentOf.entries)
-      if (include == null ||
-          (include.contains(e.key) && include.contains(e.value)))
+      if ((include == null ||
+              (include.contains(e.key) && include.contains(e.value))) &&
+          !typicalHidden.contains(e.key))
         e.key: e.value,
   };
+  // The typical groups actually drawn on this page (representative kept).
+  final typicalOnPage = <String, List<String>>{
+    for (final e in typicalGroups.entries)
+      if (order.contains(e.key)) e.key: e.value,
+  };
+  String nodeName(String id) {
+    final g = typicalOnPage[id];
+    if (g == null) return result.panels[id]?.name ?? id;
+    return electricalTypicalName(
+        [for (final m in g) result.panels[m]?.name ?? m]);
+  }
   // A sub-tree page never repeats the building's source spine.
   if (subtreeRootId != null) sourceChain = false;
-  final (feederCircuitOf, feederResultOf) =
-      _feederLabelLookups(project, result, parentOf);
+  final (feederCircuitOf, feederResultOf) = _feederLabelLookups(
+      project,
+      result,
+      typicalHidden.isEmpty
+          ? parentOf
+          : {
+              ...parentOf,
+              for (final id in typicalHidden)
+                if (fullParentOf[id] != null) id: fullParentOf[id]!,
+            });
   final children = <String, List<String>>{};
   for (final entry in parentOf.entries) {
     (children[entry.value] ??= []).add(entry.key);
@@ -2821,12 +2860,34 @@ SldSheet buildElectricalOverview({
   final cx = <String, double>{};
   var nextLeafX = 0.0;
   const pitch = _ovW + _ovHGap;
+  // Drawing backlog C-3 — a board whose sub-boards are all LEAVES and more
+  // than [gridColumns] packs them into a GRID of rows ([gridRow] ≥ 1 for the
+  // rows below the first), fed by a trunk left of the grid ([gridTrunkX])
+  // with one bus per row — so a wide flat tier fills the sheet's height
+  // instead of spreading over a page per two boards.
+  final gridRow = <String, int>{};
+  final gridTrunkX = <String, double>{}; // parent id → trunk x
+  final cols = gridColumns;
 
   void place(String id) {
     final kids = children[id] ?? const [];
     if (kids.isEmpty) {
       cx[id] = nextLeafX;
       nextLeafX += pitch;
+      return;
+    }
+    if (cols != null &&
+        cols >= 1 &&
+        kids.length > cols &&
+        kids.every((k) => (children[k] ?? const <String>[]).isEmpty)) {
+      final x0 = nextLeafX;
+      for (var i = 0; i < kids.length; i++) {
+        cx[kids[i]] = x0 + (i % cols) * pitch;
+        if (i >= cols) gridRow[kids[i]] = i ~/ cols;
+      }
+      gridTrunkX[id] = x0 - _ovHGap / 2;
+      nextLeafX = x0 + cols * pitch;
+      cx[id] = (cx[kids.first]! + cx[kids[cols - 1]]!) / 2;
       return;
     }
     for (final k in kids) {
@@ -2862,7 +2923,21 @@ SldSheet buildElectricalOverview({
     prims.addAll(spine.prims);
   }
 
-  double nodeY(String id) => (depth[id] ?? 0) * _ovTierH + sourceOffsetY;
+  double nodeY(String id) =>
+      (depth[id] ?? 0) * _ovTierH +
+      (gridRow[id] ?? 0) * _ovGridRowPitch +
+      sourceOffsetY;
+  // A child's feeder: the bus row it hangs from and the x it leaves along
+  // that row (the parent's drop on the first row, the grid trunk below).
+  double busYOf(String child, double ay) {
+    final r = gridRow[child];
+    return r == null
+        ? (ay + nodeY(child)) / 2
+        : nodeY(child) - (_ovTierH - _ovH) / 2;
+  }
+
+  double feedXOf(String child, double ax) =>
+      gridRow[child] == null ? ax : gridTrunkX[parentOf[child]]!;
 
   // Source -> each root: drop from the LV-main bus bottom into the root top.
   if (spine != null) {
@@ -2913,9 +2988,13 @@ SldSheet buildElectricalOverview({
           for (final child in entry.value)
             if (cx.containsKey(child)) ...[
               vLine(cx[entry.key]! + _ovW / 2, nodeY(entry.key) + _ovH,
-                  (nodeY(entry.key) + _ovH + nodeY(child)) / 2),
+                  busYOf(child, nodeY(entry.key) + _ovH)),
               vLine(cx[child]! + _ovW / 2,
-                  (nodeY(entry.key) + _ovH + nodeY(child)) / 2, nodeY(child)),
+                  busYOf(child, nodeY(entry.key) + _ovH), nodeY(child)),
+              if (gridRow[child] != null)
+                vLine(gridTrunkX[entry.key]!,
+                    (nodeY(entry.key) + _ovH + nodeY(entry.value.first)) / 2,
+                    busYOf(child, nodeY(entry.key) + _ovH)),
             ],
       if (spine != null)
         for (final r in roots)
@@ -2928,21 +3007,26 @@ SldSheet buildElectricalOverview({
     ]);
     final pending = <String>[];
     for (final entry in children.entries) {
-      final ax = cx[entry.key]! + _ovW / 2;
       final ay = nodeY(entry.key) + _ovH;
-      // Every sibling's drop x, so a RIGHT-hand child's tag can sit on the bus
-      // segment that is its own (Round 23).
-      final drops = [
-        for (final k in entry.value)
-          if (cx.containsKey(k)) cx[k]! + _ovW / 2,
-      ];
       for (final child in entry.value) {
         if (!cx.containsKey(child)) continue;
-        final lbl = _feederConnLabel(feederCircuitOf, feederResultOf, child,
-            parentThreePhase: _parentIsThreePhase(parentOf, result, child));
+        // Drawing backlog C-3 — a typical node's members' feeders print once
+        // each, in the table under the tree; its drop names the table.
+        final lbl = typicalOnPage.containsKey(child)
+            ? 'FEEDER: LIHAT TABEL / SEE TABLE'
+            : _feederConnLabel(feederCircuitOf, feederResultOf, child,
+                parentThreePhase: _parentIsThreePhase(parentOf, result, child));
         if (lbl == null) continue;
         final zx = cx[child]! + _ovW / 2;
-        final midY = (ay + nodeY(child)) / 2;
+        final midY = busYOf(child, ay);
+        final row = gridRow[child];
+        // Every sibling's drop on the SAME bus row, so a RIGHT-hand child's
+        // tag sits on the bus segment that is its own (Round 23).
+        final drops = [
+          for (final k in entry.value)
+            if (cx.containsKey(k) && gridRow[k] == row) cx[k]! + _ovW / 2,
+        ];
+        final ax = feedXOf(child, cx[entry.key]! + _ovW / 2);
         // Round 23 (elec-drafting-2-4) — a child LEFT of (or under) its
         // parent keeps the anchor at its own drop; a child to the RIGHT used to
         // anchor at min(ax, zx) = the PARENT's drop, so every right-hand
@@ -2997,7 +3081,20 @@ SldSheet buildElectricalOverview({
       final zy = nodeY(child);
       final role =
           essential.contains(child) ? SldRole.essential : SldRole.normal;
-      final midY = (ay + zy) / 2;
+      final midY = busYOf(child, ay);
+      if (gridRow[child] != null) {
+        // Grid row below the first: the parent's drop to the first bus row,
+        // along it to the trunk, down the trunk to this row's bus.
+        final firstBus = busYOf(entry.value.first, ay);
+        final tx = gridTrunkX[entry.key]!;
+        routes
+          ..add(_FeederSeg(ax, ay, ax, firstBus, role))
+          ..add(_FeederSeg(ax, firstBus, tx, firstBus, role))
+          ..add(_FeederSeg(tx, firstBus, tx, midY, role))
+          ..add(_FeederSeg(tx, midY, zx, midY, role))
+          ..add(_FeederSeg(zx, midY, zx, zy, role));
+        continue;
+      }
       routes
         ..add(_FeederSeg(ax, ay, ax, midY, role))
         ..add(_FeederSeg(ax, midY, zx, midY, role))
@@ -3010,10 +3107,10 @@ SldSheet buildElectricalOverview({
     for (final child in entry.value) {
       if (!cx.containsKey(child)) continue;
       final zx = cx[child]! + _ovW / 2;
-      final zy = nodeY(child);
       final role =
           essential.contains(child) ? SldRole.essential : SldRole.normal;
-      final midY = (ay + zy) / 2;
+      final midY = busYOf(child, ay);
+      final bax = feedXOf(child, ax);
       // Feeder annotation (cable + breaker) on the mid horizontal segment, just
       // above the line; omitted when the parent feeding circuit can't resolve.
       final lbl = ovLabel[child];
@@ -3031,7 +3128,8 @@ SldSheet buildElectricalOverview({
         // leader from the mid segment it annotates back to the tag.
         if (!(ovCleared[child] ?? true) ||
             math.sqrt(dx * dx + dy * dy) > _kRiserLeaderThreshold) {
-          final bx = math.min(math.max(lx, math.min(ax, zx)), math.max(ax, zx));
+          final bx =
+              math.min(math.max(lx, math.min(bax, zx)), math.max(bax, zx));
           final rx = lx + _riserLabelWidth(lbl, _ovFeederLabelSize);
           prims.add(SldLine(bx, midY, rx < bx ? rx : lx, ly,
               weight: SldWeight.thin, role: role));
@@ -3050,8 +3148,9 @@ SldSheet buildElectricalOverview({
     final role = essential.contains(id) ? SldRole.essential : SldRole.normal;
     prims.add(SldRect(x, y, _ovW, _ovH, role: role));
     final tag = (p.tag != null && p.tag!.isNotEmpty) ? '  [${p.tag}]' : '';
-    prims.add(SldLabel(x + 7, y + 17, '${p.name}$tag',
-        size: 10, bold: true, role: role));
+    final typ = typicalOnPage.containsKey(id);
+    prims.add(SldLabel(x + 7, y + 17, typ ? nodeName(id) : '${p.name}$tag',
+        size: typ ? 8 : 10, bold: true, role: role));
     prims.add(SldLabel(
         x + 7, y + 33, _compactNodeSubLine(p, model: panelModelById[id]),
         size: 7.5, role: role));
@@ -3064,7 +3163,10 @@ SldSheet buildElectricalOverview({
     // sheets instead of a cross-reference to a sheet that does not exist.
     final missing = [
       for (final k in fullChildren[id] ?? const <String>[])
-        if (result.panels.containsKey(k) && !cx.containsKey(k)) k,
+        if (result.panels.containsKey(k) &&
+            !cx.containsKey(k) &&
+            !typicalHidden.contains(k))
+          k,
     ];
     final isChunkRoot = rootChildIds != null && !parentOf.containsKey(id);
     final siblingChunk = isChunkRoot
@@ -3081,7 +3183,10 @@ SldSheet buildElectricalOverview({
           x + _ovW / 2 + 4, y + _ovH + 12, 'LANJUT KE DIAGRAM ${p.name}',
           size: _ovFeederLabelSize, role: role));
     } else if (siblingChunk.isNotEmpty) {
-      String nm(String k) => result.panels[k]?.name ?? k;
+      String nm(String k) => typicalGroups.containsKey(k)
+          ? electricalTypicalName(
+              [for (final m in typicalGroups[k]!) result.panels[m]?.name ?? m])
+          : result.panels[k]?.name ?? k;
       final range = siblingChunk.length == 1
           ? nm(siblingChunk.first)
           : '${nm(siblingChunk.first)} .. ${nm(siblingChunk.last)}';
@@ -3144,6 +3249,62 @@ SldSheet buildElectricalOverview({
     minY = 0;
     maxX = 1;
     maxY = 1;
+  }
+  // Drawing backlog C-3 — one table per typical node, RIGHT of the tree (the
+  // sheet is landscape) and top-aligned with the sheet: each member board
+  // with ITS feeder (cable · device · length), printed once. A long table
+  // wraps into side-by-side columns as tall as the sheet.
+  if (typicalOnPage.isNotEmpty) {
+    // Right of every drawn thing, label TEXT included (the spine's genset /
+    // capacitor captions reach past the boxes).
+    var right = math.max(maxX, ovLabelMaxX);
+    for (final pr in prims) {
+      if (pr is SldLabel) {
+        right = math.max(right, pr.x + _riserLabelWidth(pr.text, pr.size));
+      } else if (pr is SldLine) {
+        right = math.max(right, math.max(pr.x1, pr.x2));
+      }
+    }
+    var tx = right + 40;
+    for (final e in typicalOnPage.entries) {
+      final rows = <(String, String)>[
+        for (final m in e.value)
+          (
+            result.panels[m]?.name ?? m,
+            _feederConnLabel(feederCircuitOf, feederResultOf, m,
+                    parentThreePhase:
+                        _parentIsThreePhase(fullParentOf, result, m)) ??
+                '-',
+          ),
+      ];
+      // As many rows per column as the sheet's own height holds (never
+      // fewer than [_ovTableMaxRows]), so the table adds no height.
+      final fit = ((maxY - minY - 2 * _ovTableRowH - 2) / _ovTableRowH).floor();
+      final nCols = (rows.length / math.max(fit, _ovTableMaxRows)).ceil();
+      final per = (rows.length / nCols).ceil();
+      final role =
+          essential.contains(e.key) ? SldRole.essential : SldRole.normal;
+      // Top of the sheet (beside the source spine, where the paper is free)
+      // so the table never adds height to the page.
+      final ty = minY;
+      for (var c = 0; c < nCols; c++) {
+        final part =
+            rows.sublist(c * per, math.min(rows.length, (c + 1) * per));
+        final (tPrims, tw, th) = _typicalFeederTable(
+            tx,
+            ty,
+            c == 0
+                ? 'TABEL ${nodeName(e.key)} - FEEDER PER PANEL'
+                : '(LANJUTAN / CONTINUED)',
+            part,
+            role: role);
+        prims.addAll(tPrims);
+        tx += tw + 16;
+        maxY = math.max(maxY, ty + th);
+      }
+      maxX = math.max(maxX, tx - 16);
+      tx += 24;
+    }
   }
   // X2: a DISPLACED feeder annotation may reach past the tree — widen the sheet
   // so it can't be clipped (no displacement ⇒ -/+infinity ⇒ bounds unchanged).
@@ -4790,6 +4951,112 @@ Map<String, List<String>> electricalRiserTypicalGroups(
     for (final g in groups.values)
       if (g.length >= 2) g.first: g,
   };
+}
+
+/// Drawing backlog C-3 — a typical node's per-board feeder table at
+/// ([x], [y] = its top): a title, a PANEL | FEEDER header and one row per
+/// member, framed. Returns the prims, width and height (sheet units).
+(List<SldPrim>, double, double) _typicalFeederTable(
+    double x, double y, String title, List<(String, String)> rows,
+    {SldRole role = SldRole.normal}) {
+  const pad = 4.0;
+  // Cells are sized for the text grown to the plotted floor on a sheet fitted
+  // at down to ~0.7 scale ([fitSldSheetForPlot] grows a label only into
+  // clear paper, never across the cell rules).
+  const sz = _ovTableTextSize * 1.45;
+  final c1 = [
+        _riserLabelWidth('PANEL', sz),
+        for (final r in rows) _riserLabelWidth(r.$1, sz),
+      ].reduce(math.max) +
+      2 * pad;
+  final c2 = [
+        _riserLabelWidth('FEEDER (KABEL · PENGAMAN · PANJANG)', sz),
+        for (final r in rows) _riserLabelWidth(r.$2, sz),
+      ].reduce(math.max) +
+      2 * pad;
+  final w = math.max(c1 + c2, _riserLabelWidth(title, sz) + 2 * pad);
+  const tsz = _ovTableTextSize;
+  final top = y + _ovTableRowH + 2;
+  final h = (rows.length + 1) * _ovTableRowH;
+  final out = <SldPrim>[
+    SldLabel(x, y + tsz, title, size: tsz, bold: true, role: role),
+    SldRect(x, top, w, h, role: role),
+    SldLine(x + c1, top, x + c1, top + h, weight: SldWeight.thin, role: role),
+    SldLine(x, top + _ovTableRowH, x + w, top + _ovTableRowH,
+        weight: SldWeight.thin, role: role),
+    SldLabel(x + pad, top + _ovTableRowH - 3, 'PANEL', size: tsz, role: role),
+    SldLabel(x + c1 + pad, top + _ovTableRowH - 3,
+        'FEEDER (KABEL · PENGAMAN · PANJANG)',
+        size: tsz, role: role),
+  ];
+  for (var i = 0; i < rows.length; i++) {
+    final by = top + (i + 2) * _ovTableRowH - 3;
+    out
+      ..add(SldLabel(x + pad, by, rows[i].$1, size: tsz, role: role))
+      ..add(SldLabel(x + c1 + pad, by, rows[i].$2, size: tsz, role: role));
+  }
+  return (out, w, h + _ovTableRowH + 2);
+}
+
+/// Drawing backlog C-3 — sibling LEAF boards the building single-line may draw
+/// as ONE typical node: fed by the same board, the same essential role, and an
+/// identical incomer (rating + poles) and way make-up (each way's kind,
+/// rating, conductor, phases and load) with the same printed sub-line — their
+/// FEEDERS may differ (they are tabulated per board). Groups are runs of ≥ 3
+/// consecutive siblings (board order), keyed by their first board → members.
+Map<String, List<String>> electricalOverviewTypicalGroups(
+    ElectricalProject project, ElectricalSystemResult result) {
+  final parentOf = _parentOf(project, result);
+  final essential = essentialPanelIds(project, result);
+  final hasChildren = {...parentOf.values};
+  final panelModelById = {for (final p in project.panels) p.id: p};
+  String? keyOf(String id) {
+    final p = result.panels[id];
+    final par = parentOf[id];
+    if (p == null || par == null || hasChildren.contains(id)) return null;
+    final ways = [
+      for (final c in p.circuits)
+        '${c.loadKind.name}:${_num(c.breaker.ratingA.amperes)}:'
+            '${_num(c.cable.csaMm2)}:${c.threePhase}:'
+            '${c.connectedWOrLoad.round()}',
+    ]..sort();
+    return [
+      par,
+      essential.contains(id),
+      _num(p.incomer.breaker.ratingA.amperes),
+      p.incomer.poles,
+      p.system.name,
+      _compactNodeSubLine(p, model: panelModelById[id]),
+      ways.join(','),
+    ].join('|');
+  }
+
+  final out = <String, List<String>>{};
+  final byParent = <String, List<String>>{};
+  for (final id in result.order) {
+    final par = parentOf[id];
+    if (par != null) (byParent[par] ??= []).add(id);
+  }
+  for (final kids in byParent.values) {
+    var run = <String>[];
+    String? runKey;
+    void flush() {
+      if (run.length >= 3) out[run.first] = run;
+      run = <String>[];
+    }
+
+    for (final k in kids) {
+      final key = keyOf(k);
+      if (key == null || key != runKey) {
+        flush();
+        runKey = key;
+        if (key == null) continue;
+      }
+      run.add(k);
+    }
+    flush();
+  }
+  return out;
 }
 
 /// Round 45 — the fan-out rows a riser node prints (way name + rating

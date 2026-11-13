@@ -627,6 +627,33 @@ List<SldSheet> paginatedElectricalOverviewSheets({
   bool hasGrandchildren(String id) =>
       kidsOf(id).any((k) => kidsOf(k).isNotEmpty);
 
+  // Drawing backlog C-3 — identical sibling leaf boards ride ONE typical
+  // node (their feeders tabulated), and a wide flat tier packs into a grid:
+  // each page is built at the grid width that prints largest. Only used when
+  // the plain sheet is below the floor (a legible sheet is unchanged).
+  final typical = electricalOverviewTypicalGroups(project, result);
+  final typicalHidden = <String>{
+    for (final g in typical.values) ...g.skip(1),
+  };
+  bool legible(SldSheet s) => minPt(s) >= kMinPlotLabelPt - 1e-9;
+  SldSheet bestGrid(
+      SldSheet Function(Map<String, List<String>> typ, int? cols) build,
+      int maxKids) {
+    SldSheet? best;
+    var bestPt = -1.0;
+    for (final cols in <int?>[null, for (var k = maxKids - 1; k >= 1; k--) k]) {
+      final sh = build(typical, cols);
+      final pt = minPt(sh);
+      if (pt > bestPt + 1e-9) {
+        best = sh;
+        bestPt = pt;
+      }
+      // The widest grid that already reaches the floor wins (fewest rows).
+      if (pt >= kMinPlotLabelPt - 1e-9) return sh;
+    }
+    return best!;
+  }
+
   // One sub-tree as pages ([root] null ⇒ the whole building).
   List<SldSheet> pagesFor(String? root) {
     final whole = buildElectricalOverview(
@@ -640,47 +667,67 @@ List<SldSheet> paginatedElectricalOverviewSheets({
             for (final id in result.order)
               if (!hasParent.contains(id)) id,
           ];
-    if (minPt(whole) >= kMinPlotLabelPt - 1e-9) return [whole];
+    if (legible(whole)) return [whole];
     final splittable = roots.any(hasGrandchildren);
     final directCount = roots.fold<int>(0, (n, r) => n + kidsOf(r).length);
-    if (!splittable && directCount < 2) return [whole];
-    final top = splittable
-        ? buildElectricalOverview(
+    // The whole sub-tree on ONE page with typical nodes + a packed grid.
+    final maxKids = [
+      for (final id in result.order) kidsOf(id).length,
+    ].fold<int>(1, math.max);
+    final compact = bestGrid(
+        (typ, cols) => buildElectricalOverview(
             project: project,
             result: result,
             sourceChain: sourceChain,
             subtreeRootId: root,
-            maxDepth: 1)
-        : whole;
+            typicalGroups: typ,
+            gridColumns: cols),
+        maxKids);
+    if (legible(compact)) return [compact];
+    if (!splittable && directCount < 2) return [whole];
+    SldSheet topPage({Set<String>? chunk, bool spine = true}) => bestGrid(
+        (typ, cols) => buildElectricalOverview(
+            project: project,
+            result: result,
+            sourceChain: sourceChain && spine,
+            subtreeRootId: root,
+            maxDepth: splittable ? 1 : null,
+            rootChildIds: chunk,
+            typicalGroups: typ,
+            gridColumns: cols),
+        maxKids);
+    final top = topPage();
     // Round 34 (electrical-drawings-4-overview-pagination-leaves-top-page-
     // below-floor) — a wide FLAT tier is width-bound: cutting sub-trees left
     // the depth-1 top page itself below the floor. Re-check it, and when it
     // is still too small split the roots' direct sub-boards into the fewest
     // equal chunks whose every page prints at the floor (the source spine
     // rides the first chunk; a single-board chunk is the last resort).
+    // Drawing backlog C-3 — a typical node's members ride its first board's
+    // chunk, and each chunk page is grid-packed.
     var tops = [top];
-    if (minPt(top) < kMinPlotLabelPt - 1e-9) {
+    if (!legible(top)) {
       final direct = [
-        for (final r in roots) ...kidsOf(r),
+        for (final r in roots)
+          for (final k in kidsOf(r))
+            if (!typicalHidden.contains(k)) k,
       ];
       for (var g = 2; g <= direct.length; g++) {
         final size = (direct.length / g).ceil();
         final chunks = [
           for (var i = 0; i < direct.length; i += size)
-            direct.sublist(i, (i + size).clamp(0, direct.length)).toSet(),
+            {
+              for (final k
+                  in direct.sublist(i, (i + size).clamp(0, direct.length)))
+                ...(typical[k] ?? [k]),
+            },
         ];
         final pages = [
           for (var i = 0; i < chunks.length; i++)
-            buildElectricalOverview(
-                project: project,
-                result: result,
-                sourceChain: sourceChain && i == 0,
-                subtreeRootId: root,
-                maxDepth: splittable ? 1 : null,
-                rootChildIds: chunks[i]),
+            topPage(chunk: chunks[i], spine: i == 0),
         ];
         tops = pages;
-        if (pages.every((p) => minPt(p) >= kMinPlotLabelPt - 1e-9)) break;
+        if (pages.every(legible)) break;
       }
     }
     return [
