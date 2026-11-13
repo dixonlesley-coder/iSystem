@@ -744,3 +744,454 @@ Re-checked at full resolution after fix round 2 and a full regeneration (scripte
 | house and tower legends (same pages) | 4 | PASS | the long TERPASANG / KEBUTUHAN entry wraps inside the LEGEND box; nothing crosses the box or the frame |
 
 Result: the checklist passes on every page of the five sets — per-page verdicts in the completion pass above, F1–F8 fixed and re-checked.
+
+## Second full review after the backlog streams (2026-11-13)
+
+Reviewer pass over the REGENERATED sets (root
+`/tmp/claude-0/-home-user-iSystem/4777c01d-c7ee-56ae-bfa5-90847b3f68b2/scratchpad/drawings-i/`; PNG paths below are
+relative to it): house 13 pages, shophouse 27, office 32, apartment 71, tower 152 — 295 pages. Checklist
+`docs/DRAFTING-CHECKLIST.md`. Items 15 and 16 are N-A (no grid, no underlay). Items 1, 2, 3, 5, 7, 23, 25 rest on
+the scripted pre-check (zero FAIL) plus a sanity look; item 10 was judged with item 9 and has no failure.
+
+### What was viewed
+
+- **All 52 contact sheets**, one building at a time, with per-page notes: house 01-03, shophouse 01-05,
+  office 01-06, apartment 01-12, tower 01-26.
+- **Full-resolution pages (150 dpi A3)**:
+  - house: `00-cover-sheets` p1, p2, p3; `plan-1-Lantai 1` p1; `plan-2-Lantai 2` p1; `plan-1-Lantai 1-detail` p1;
+    `riser-sld` p1 (+ crop); `electrical-sld` p1; `electrical-overview-sld` p1; `electrical-riser` p1;
+    `equipment-schedule` p2; `panel-schedules` p1.
+  - shophouse: `00-cover-sheets` p3; `plan-1-Lantai 1` p1 (+ crop); `plan-2-Lantai 2` p1; `plan-3-Lantai 3` p1
+    (+ crop); `elec-plan-1-Lantai 1` p1; `riser-sld` p1, p2, p3 (+ crops; p2 is the PLANT page);
+    `electrical-sld` p1; `electrical-overview-sld` p1; `electrical-riser` p1; `equipment-schedule` p2;
+    `panel-schedules` p5.
+  - office: `00-cover-sheets` p3; `plan-1-Lantai 1` p1; `plan-2-Lantai 2` p1; `plan-2-Lantai 2-detail` p1;
+    `riser-sld` p3 (PLANT row, + 2 crops); `elec-plan-1-Lantai 1` p1; `electrical-sld` p1;
+    `electrical-overview-sld` p1; `electrical-riser` p1.
+  - apartment: `00-cover-sheets` p4; `plan-12-Lantai 12` p1 (+ crop); `plan-3-Lantai 3-detail` p1 (TIPIKAL);
+    `riser-sld` p6 (PLANT); `elec-plan-1-Lantai 1` p1; `electrical-sld` p1, p3; `electrical-overview-sld` p1
+    (typical-board feeder table); `electrical-riser` p1, p3, p4; `electrical-power-one-line` p1.
+  - tower: `00-cover-sheets` p2; `plan-16-Lantai 16` p1 (+ crop); `plan-7-Lantai 7-detail` p1 (TIPIKAL);
+    `riser-sld` p13 (PLANT); `elec-plan-1-Lantai 1` p1; `electrical-sld` p1, p4; `electrical-overview-sld` p1
+    (typical-board feeder table); `electrical-riser` p8; `electrical-power-one-line` p1 (+ crop);
+    `panel-schedules` p2.
+- **Text extraction** (`pdftotext -layout`) of every `electrical-sld`, `panel-schedules`, `00-cover-sheets`,
+  `electrical-overview-sld`, `electrical-riser`, plan and detail PDF for the arithmetic and cross-checks below.
+
+### Limits (read before relying on a PASS)
+
+- The brief asked for one full-resolution page of each sheet type in every building. Not reached for: office
+  `equipment-schedule` and `panel-schedules`; apartment cover, drawing list, `equipment-schedule`,
+  `panel-schedules`, and E-201 p2 (two of the three requested E-201 pages were opened); tower cover, notes page,
+  a non-typical detail sheet, `equipment-schedule`, and E-201 p2-3 / E-301 p2-7 (one page each beyond the
+  LVMDP / MEP boards). These were judged from the contact sheet (readable for tabular sheets) and from the
+  extracted text; a small-text overprint on them could be missed.
+- The crop of shophouse `plan-1-Lantai 1` was viewed but no defect note was kept; M-101 is recorded PASS on that
+  basis. Item 6 on the dense plans not opened at full size (apartment M-101..M-111, tower plans other than
+  M-116) rests on the pre-check stamp test and the thumbnail.
+
+### Arithmetic and cross-checks
+
+1. **Panel totals (item 21) — all 61 board pages, both E-601 and E-201**, DAYA rows summed by script and
+   compared with the printed TERPASANG / CONNECTED figure; every page agrees. Samples:
+   house Panel Rumah 300+250+1200+800+2000+750+750+1500+284 = 7 834 W = printed 7.834; shophouse PP Ruko
+   21 196 = 21.196 and MEP 7 156 = 7.156; office LVMDP 128 167 = 128.167 and MEP 63 966 = 63.966; apartment LVMDP
+   102 768 + 12 x 4 820 = 160 608 = 160.608 and MEP 173 000 = 173.000 (one STANDBY way at 0.0 A); tower LVMDP
+   sheet 1 586 097 + sheet 2 281 250 = 867 347 = "TOTAL (W1-W31, LEMBAR / SHEETS 1-2) 867.347", PP-E 304 846,
+   MEP 494 488 (two STANDBY ways), PP-Lt boards 22 000 each.
+2. **Incomer line E-601 vs E-201 (item 24)** — identical string on every one of the 61 board pages (e.g. house
+   "MCB C40A/2P 6kA ... demand 32.5A"; apartment LVMDP "MCCB 315A/4P 16kA ... demand 269.4A"; tower LVMDP
+   "MCCB 1600A/4P 100kA ... demand 1448.1A").
+3. **Drawing list vs INDEX.md (item 23)** — same numbers, titles and order in all five sets: 12 / 14 / 19 / 32 /
+   55 rows.
+4. **Tower E-301 typical-board feeder tables vs LVMDP ways** — all 23 table rows equal the E-201 and E-601 way
+   (cable, device, length). Samples: PP-Lt3 NYY 5x16 / MCCB 63A / 23.0 m; PP-Lt17 NYY 5x16 / MCCB 63A / 79.0 m;
+   PP-Lt27 NYY 4x25+16 / MCCB 63A / 119.0 m; single board PP-Lt30 NYY 4x35+16 / 131.0 m. Apartment table: 12 of
+   12 rows equal (PP-Lt3 NYY 5x4 / MCB 16A / 17.0 m).
+5. **Plan vs riser (items 14 / 18)** — office CW-R1 DN50 4.0 m = 50-CW-PPR-BOOSTER 4.0 m, FH-L1 DN125 6.7 m =
+   125-FH-BS 6.7 m, RW-R1 DN150 = 150-RW-PVC, D-R1 DN100 = 100-D-PVC; tower RW-L1 DN300 6.0 m = 300-RW-PVC 6.0 m,
+   CW-R1 DN100 4.0 m = 100-CW-PPR-TRANSFER, D-R1 DN150 = 150-D-PVC; apartment CW-R3 DN50 and CW-R1 DN65 on M-112
+   = riser tags, plant tags TK-01 20 m3 / P-01 3.0 kW / P-03, P-04 75.0 kW = M-601; shophouse and house riser
+   tags and sizes read against the plans on the crops, agreeing. Level codes: every plan of every building prints
+   `L<n>` equal to its floor number (script over all 51 mechanical plans).
+6. **TIPIKAL detail sheets vs the plans that point to them** — tower M-502 "Lantai 2..5": bubbles on M-102..M-105
+   all read LIHAT M-502; tower M-504 "Lantai 7..15, 17..19": M-107..M-115 and M-117..M-119 all read M-504, M-116
+   reads M-505 / M-506; tower M-508 "Lantai 21..27": M-121..M-127; apartment M-503 "Lantai 3..7": M-103..M-107;
+   apartment M-505 "Lantai 9..10": M-109, M-110. All match. Drain stack sizes on the typical sheets (tower D-R1
+   DN150 / DN125 / DN100, apartment DN100 / DN75) agree with the riser for those floor ranges.
+7. **Source arrangement (item 22)** — house E-301 prints "DEMAND 7.1 kVA > DECLARED 4.4 kVA - RAISE THE
+   SUBSCRIBED DAYA" on a PLN 1-phase supply; shophouse PLN 33 kVA to PP Ruko with three unit boards + MEP; office
+   PLN 164 kVA, no genset, MEP board carrying the fire pump; apartment PLN 197 kVA + genset 300 kVA, PP-E carrying
+   lifts + MEP, ATS on E-501; tower MV 20 kV, MV panel "MV CB + relay, CT 60/5 A", transformer 1600 kVA, genset
+   800 kVA, capacitor bank 250 kvar, PP-E — on E-301 p1, E-401 p8 and E-501. All match the inputs; the earlier
+   F7 is fixed.
+
+### Per-page verdicts (second review)
+
+Legend: P = PASS, F = FAIL, - = N-A. "other" records a failure on an item without its own column.
+
+#### house (second review)
+
+| file | page | dwg no. | 4 | 8 | 9 | 11 | 12 | 13 | 14 | 17 | 18 | 19 | 20 | 21 | 22 | other |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 00-cover-sheets.pdf | 1 | G-001 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| 00-cover-sheets.pdf | 2 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 3 | G-003 | P | - | P | - | - | - | - | - | - | - | - | - | - |  |
+| plan-1-Lantai 1.pdf | 1 | M-101 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-1-Lantai 1-detail.pdf | 1 | M-501 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-2-Lantai 2.pdf | 1 | M-102 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| riser-sld.pdf | 1 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| electrical-sld.pdf | 1 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-overview-sld.pdf | 1 | E-301 | P | - | F | P | - | - | - | - | - | P | P | - | P |  |
+| electrical-riser.pdf | 1 | E-401 | P | - | F | P | - | - | - | P | P | P | P | - | P |  |
+| equipment-schedule.pdf | 1 | M-601 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| equipment-schedule.pdf | 2 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| panel-schedules.pdf | 1 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+
+#### shophouse (second review)
+
+| file | page | dwg no. | 4 | 8 | 9 | 11 | 12 | 13 | 14 | 17 | 18 | 19 | 20 | 21 | 22 | other |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 00-cover-sheets.pdf | 1 | G-001 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| 00-cover-sheets.pdf | 2 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 3 | G-003 | P | - | P | - | - | - | - | - | - | - | - | - | - |  |
+| plan-1-Lantai 1.pdf | 1 | M-101 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-2-Lantai 2.pdf | 1 | M-102 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-3-Lantai 3.pdf | 1 | M-103 | P | P | P | P | P | P | P | - | P | - | - | - | - | item 6 F |
+| elec-plan-1-Lantai 1.pdf | 1 | E-101 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| elec-plan-3-Lantai 3.pdf | 1 | E-102 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| riser-sld.pdf | 1 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 2 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 3 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 4 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| electrical-sld.pdf | 1 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 2 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 3 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 4 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 5 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-overview-sld.pdf | 1 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | P |  |
+| electrical-riser.pdf | 1 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | P |  |
+| equipment-schedule.pdf | 1 | M-601 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| equipment-schedule.pdf | 2 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| equipment-schedule.pdf | 3 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| panel-schedules.pdf | 1 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 2 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 3 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 4 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 5 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+
+#### office (second review)
+
+| file | page | dwg no. | 4 | 8 | 9 | 11 | 12 | 13 | 14 | 17 | 18 | 19 | 20 | 21 | 22 | other |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 00-cover-sheets.pdf | 1 | G-001 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| 00-cover-sheets.pdf | 2 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 3 | G-003 | P | - | P | - | - | - | - | - | - | - | - | - | - |  |
+| plan-1-Lantai 1.pdf | 1 | M-101 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-1-Lantai 1-detail.pdf | 1 | M-501 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-2-Lantai 2.pdf | 1 | M-102 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-2-Lantai 2-detail.pdf | 1 | M-502 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-3-Lantai 3.pdf | 1 | M-103 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-3-Lantai 3-detail.pdf | 1 | M-503 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-4-Lantai 4.pdf | 1 | M-104 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-4-Lantai 4-detail.pdf | 1 | M-504 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| elec-plan-1-Lantai 1.pdf | 1 | E-101 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| elec-plan-2-Lantai 2.pdf | 1 | E-102 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| riser-sld.pdf | 1 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 2 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 3 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| electrical-sld.pdf | 1 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 2 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 3 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 4 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 5 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 6 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-overview-sld.pdf | 1 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | P |  |
+| electrical-riser.pdf | 1 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | P |  |
+| equipment-schedule.pdf | 1 | M-601 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| equipment-schedule.pdf | 2 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| panel-schedules.pdf | 1 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 2 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 3 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 4 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 5 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 6 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+
+#### apartment (second review)
+
+| file | page | dwg no. | 4 | 8 | 9 | 11 | 12 | 13 | 14 | 17 | 18 | 19 | 20 | 21 | 22 | other |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 00-cover-sheets.pdf | 1 | G-001 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| 00-cover-sheets.pdf | 2 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 3 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 4 | G-003 | P | - | P | - | - | - | - | - | - | - | - | - | - |  |
+| plan-1-Lantai 1.pdf | 1 | M-101 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-1-Lantai 1-detail.pdf | 1 | M-501 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-2-Lantai 2.pdf | 1 | M-102 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-2-Lantai 2-detail.pdf | 1 | M-502 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-3-Lantai 3.pdf | 1 | M-103 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-3-Lantai 3-detail.pdf | 1 | M-503 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-4-Lantai 4.pdf | 1 | M-104 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-5-Lantai 5.pdf | 1 | M-105 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-6-Lantai 6.pdf | 1 | M-106 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-7-Lantai 7.pdf | 1 | M-107 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-8-Lantai 8.pdf | 1 | M-108 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-8-Lantai 8-detail.pdf | 1 | M-504 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-9-Lantai 9.pdf | 1 | M-109 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-9-Lantai 9-detail.pdf | 1 | M-505 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-10-Lantai 10.pdf | 1 | M-110 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-11-Lantai 11.pdf | 1 | M-111 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-11-Lantai 11-detail.pdf | 1 | M-506 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-12-Lantai 12.pdf | 1 | M-112 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-12-Lantai 12-detail.pdf | 1 | M-507 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| elec-plan-1-Lantai 1.pdf | 1 | E-101 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| elec-plan-6-Lantai 6.pdf | 1 | E-102 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| elec-plan-12-Lantai 12.pdf | 1 | E-103 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| riser-sld.pdf | 1 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 2 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 3 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 4 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 5 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 6 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| electrical-sld.pdf | 1 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 2 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 3 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 4 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 5 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 6 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 7 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 8 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 9 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 10 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 11 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 12 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 13 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 14 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 15 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-overview-sld.pdf | 1 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | P |  |
+| electrical-riser.pdf | 1 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 2 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 3 | E-401 | P | - | P | P | - | - | - | P | P | P | F | - | - |  |
+| electrical-riser.pdf | 4 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | P |  |
+| electrical-power-one-line.pdf | 1 | E-501 | P | - | P | P | - | - | - | - | - | - | P | - | P |  |
+| equipment-schedule.pdf | 1 | M-601 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| equipment-schedule.pdf | 2 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| equipment-schedule.pdf | 3 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| panel-schedules.pdf | 1 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 2 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 3 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 4 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 5 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 6 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 7 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 8 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 9 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 10 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 11 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 12 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 13 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 14 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 15 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+
+#### tower (second review)
+
+| file | page | dwg no. | 4 | 8 | 9 | 11 | 12 | 13 | 14 | 17 | 18 | 19 | 20 | 21 | 22 | other |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 00-cover-sheets.pdf | 1 | G-001 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| 00-cover-sheets.pdf | 2 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 3 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 4 | G-002 | P | - | - | - | - | - | - | - | - | - | - | P | - |  |
+| 00-cover-sheets.pdf | 5 | G-003 | P | - | P | - | - | - | - | - | - | - | - | - | - |  |
+| plan-1-Lantai 1.pdf | 1 | M-101 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-1-Lantai 1-detail.pdf | 1 | M-501 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-2-Lantai 2.pdf | 1 | M-102 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-2-Lantai 2-detail.pdf | 1 | M-502 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-3-Lantai 3.pdf | 1 | M-103 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-4-Lantai 4.pdf | 1 | M-104 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-5-Lantai 5.pdf | 1 | M-105 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-6-Lantai 6.pdf | 1 | M-106 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-6-Lantai 6-detail.pdf | 1 | M-503 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-7-Lantai 7.pdf | 1 | M-107 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-7-Lantai 7-detail.pdf | 1 | M-504 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-8-Lantai 8.pdf | 1 | M-108 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-9-Lantai 9.pdf | 1 | M-109 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-10-Lantai 10.pdf | 1 | M-110 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-11-Lantai 11.pdf | 1 | M-111 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-12-Lantai 12.pdf | 1 | M-112 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-13-Lantai 13.pdf | 1 | M-113 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-14-Lantai 14.pdf | 1 | M-114 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-15-Lantai 15.pdf | 1 | M-115 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-16-Lantai 16.pdf | 1 | M-116 | P | P | P | P | P | P | P | - | P | - | - | - | - | item 6 F |
+| plan-16-Lantai 16-detail.pdf | 1 | M-505 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-16-Lantai 16-detail-2.pdf | 1 | M-506 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-17-Lantai 17.pdf | 1 | M-117 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-18-Lantai 18.pdf | 1 | M-118 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-19-Lantai 19.pdf | 1 | M-119 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-20-Lantai 20.pdf | 1 | M-120 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-20-Lantai 20-detail.pdf | 1 | M-507 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-21-Lantai 21.pdf | 1 | M-121 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-21-Lantai 21-detail.pdf | 1 | M-508 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-22-Lantai 22.pdf | 1 | M-122 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-23-Lantai 23.pdf | 1 | M-123 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-24-Lantai 24.pdf | 1 | M-124 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-25-Lantai 25.pdf | 1 | M-125 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-26-Lantai 26.pdf | 1 | M-126 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-27-Lantai 27.pdf | 1 | M-127 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-28-Lantai 28.pdf | 1 | M-128 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-28-Lantai 28-detail.pdf | 1 | M-509 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-29-Lantai 29.pdf | 1 | M-129 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-29-Lantai 29-detail.pdf | 1 | M-510 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-30-Lantai 30.pdf | 1 | M-130 | P | P | P | P | P | P | P | - | P | - | - | - | - |  |
+| plan-30-Lantai 30-detail.pdf | 1 | M-511 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| plan-30-Lantai 30-detail-2.pdf | 1 | M-512 | P | P | P | P | P | P | P | - | - | - | - | - | - |  |
+| elec-plan-1-Lantai 1.pdf | 1 | E-101 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| elec-plan-16-Lantai 16.pdf | 1 | E-102 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| elec-plan-30-Lantai 30.pdf | 1 | E-103 | P | - | P | - | - | P | P | - | - | - | - | - | - |  |
+| riser-sld.pdf | 1 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 2 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 3 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 4 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 5 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 6 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 7 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 8 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 9 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 10 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 11 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 12 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 13 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| riser-sld.pdf | 14 | M-201 | P | P | P | P | P | - | P | P | P | - | - | - | - |  |
+| electrical-sld.pdf | 1 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 2 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 3 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 4 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 5 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 6 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 7 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 8 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 9 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 10 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 11 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 12 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 13 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 14 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 15 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 16 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 17 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 18 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 19 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 20 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 21 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 22 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 23 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 24 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 25 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 26 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 27 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 28 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 29 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 30 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 31 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 32 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 33 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-sld.pdf | 34 | E-201 | P | - | P | P | - | - | - | - | - | P | P | P | - |  |
+| electrical-overview-sld.pdf | 1 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | P |  |
+| electrical-overview-sld.pdf | 2 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | - |  |
+| electrical-overview-sld.pdf | 3 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | - |  |
+| electrical-overview-sld.pdf | 4 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | - |  |
+| electrical-overview-sld.pdf | 5 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | - |  |
+| electrical-overview-sld.pdf | 6 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | - |  |
+| electrical-overview-sld.pdf | 7 | E-301 | P | - | P | P | - | - | - | - | - | P | P | - | - |  |
+| electrical-riser.pdf | 1 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 2 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 3 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 4 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 5 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 6 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | - |  |
+| electrical-riser.pdf | 7 | E-401 | P | - | P | P | - | - | - | P | P | P | F | - | - |  |
+| electrical-riser.pdf | 8 | E-401 | P | - | P | P | - | - | - | P | P | P | P | - | P |  |
+| electrical-power-one-line.pdf | 1 | E-501 | P | - | P | P | - | - | - | - | - | - | P | - | P | items 6, 24 F |
+| equipment-schedule.pdf | 1 | M-601 | P | - | - | - | - | - | - | - | - | - | - | - | - |  |
+| equipment-schedule.pdf | 2 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| equipment-schedule.pdf | 3 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| equipment-schedule.pdf | 4 | M-601 | P | - | - | - | - | - | P | - | P | - | - | P | - |  |
+| panel-schedules.pdf | 1 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 2 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 3 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 4 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 5 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 6 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 7 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 8 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 9 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 10 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 11 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 12 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 13 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 14 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 15 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 16 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 17 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 18 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 19 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 20 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 21 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 22 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 23 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 24 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 25 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 26 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 27 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 28 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 29 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 30 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 31 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 32 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 33 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+| panel-schedules.pdf | 34 | E-601 | P | - | P | P | - | - | - | - | - | P | - | P | - |  |
+
+### FAIL list (second review)
+
+| # | Building | File + page | Item | What is wrong | PNG |
+|---|---|---|---|---|---|
+| S1 | tower | `electrical-power-one-line.pdf` p1 (E-501) | 6 | The source caption "MV supply 20 kV + MV main (MV CB + relay, CT 60/5 A)" runs into the Generator "G" symbol; its closing bracket touches the circle. | `tower/png/Menara Contoh 30-electrical-power-one-line-p1.png` |
+| S2 | tower | `electrical-power-one-line.pdf` p1 (E-501) | 24 | Essential bus is printed 360.6 kVA; the same board PP-E is 358.2 kVA on E-301 p1 / p7 and E-401 p7 (304.8 kW). Two figures for one bus. (Apartment: 121 kVA vs 120.9 kVA, rounding only.) | same |
+| S3 | house | `electrical-overview-sld.pdf` p1 (E-301) and `electrical-riser.pdf` p1 (E-401) | 9 | Legend lists "Essential - Essential / emergency supply" but the house has no essential board or genset; nothing of that kind is drawn (the only red item is the demand-over-declared warning). | `house/png/Rumah Contoh-electrical-overview-sld-p1.png` |
+| S4 | apartment, tower | apartment `electrical-riser.pdf` p3; tower `electrical-riser.pdf` p7 (E-401) | 20 | The LVMDP to PP-E feeder is not labelled anywhere on the riser (apartment FRC 4x70+35 / MCCB 200A / 20.0 m; tower 2x(FRC 4x185+95) / MCCB 630A / 20.0 m on E-201 / E-301). The page shows only "DARI (lembar lain): LVMDP > PP-E"; every other feeder on the riser carries cable, device and length. | `apartment/png/Apartemen Contoh-electrical-riser-p3.png`, `tower/png/Menara Contoh 30-electrical-riser-p7.png` |
+| S5 | tower | `plan-16-Lantai 16.pdf` p1 (M-116) | 6 | Key bubble 4 sits on the rotated label "EA-L16 300x200 / 4.7 m - CL +3.70 drop 1.70 m" (covers "1.70"), and a key bubble 2 sits on "SA-L16 600x350 / 3.0 m - CL +3.70". The pre-check passed item 6 on this sheet. | `tower/png/Menara Contoh 30-plan-16-Lantai 16-p1.png` |
+| S6 | shophouse | `plan-3-Lantai 3.pdf` p1 (M-103) | 6 | Key bubbles 11 and 15 overprint the "WC" fixture labels of the units (the C is hidden). The pre-check passed item 6 on this sheet. | `shophouse/png/Ruko Contoh-plan-3-Lantai 3-p1.png` |
+
+Earlier failures F1-F8 were all looked for again and are fixed (office E-101 label inside the frame; tower E-101
+pump labels separated with a leader; no warning stamp on any sheet; shophouse pipe-key table clear of the third
+unit; electrical layout legends list only "Beban / titik"; detail-sheet legends list only what the window shows;
+tower E-501 carries the MV side, transformer and capacitor bank; totals labelled connected / demand).
+
+### Observations (second review, not failures)
+
+1. TIPIKAL detail sheets (apartment M-503, M-505; tower M-502, M-504, M-508) print the first floor's level code
+   and FFL on every tag ("CW-L7", "Lantai 7 FFL +24.00") although the sheet is issued for a floor range. A note
+   "tags shown for Lantai n; typical for the listed floors" would stop a reader taking L7 literally.
+2. PLANT pages / rows (shophouse p2, office p3, apartment p6, tower p13) show tag and motor kW for each pump;
+   flow and head are only on M-601. Several short-run labels float between the cold-water and hydrant headers
+   without a leader (tower "150-FH-BS - 3.0 m", "25-FH-BS - 3.0 m", "100-CW-PPR - 1.0 m"), three or four
+   "LANJUTAN DARI Lantai 1" marks are stacked without the riser tag beside each, and the "BRANCHES" fixture list
+   is repeated on the plant page where no branch is drawn. Tower `riser-sld` p14 is a sheet of detail blocks only.
+3. Tower E-301: pages 3, 4 and 6 hold LVMDP and two single boards each (PP-Lt18/19, PP-Lt20/21, PP-Lt29/30)
+   although PP-Lt18..21 share one cable size and could join a typical node; three near-empty A3 pages remain
+   (down from fifteen).
+4. Apartment E-301 p1 still tees the 300 kVA genset onto the incomer above LVMDP with no transfer switch drawn;
+   E-501 shows the ATS. Tower E-301 / E-401 likewise show the genset on the LV main panel without the ATS.
+5. Dense plans keep bubbles that touch each other or sit on their own pipe: shophouse M-102 (bubbles 10/11 and
+   15/16), apartment M-112 (bubble 3 struck through by its own cold-water run, bubbles 6/8 touching). Legible.
+6. G-003 lists only FRC under KABEL / CABLES although NYY and NYM are used throughout (each E-201 page explains
+   them in its own legend).
+7. House, shophouse and office M-601 still print "- (*) capacity not set" as the duty of every tank; honest, but
+   item 18 asks for a duty. Apartment and tower tanks carry volumes.
+8. Electrical layout plans still list every panel as "belum ditempatkan" (tower: 33 panels + 245 loads) and sit at
+   different scales within one set (apartment 1:100 / 1:20; tower 1:100 / 1:20).
+9. Shophouse boards still print 32.7 % and 98.3 % phase imbalance; tower PP-Lt1 15 kA, PP-Lt2..5 10 kA, the rest
+   6 kA. Engineering content, outside this checklist.
+10. Apartment M-503 detail B: the DN15 cold-water branch and the DN75 drain branch to the WC are drawn on the same
+    line (fixture geometry); both are labelled.
+
+Result of the second review: 295 pages recorded; 6 FAIL lines on 8 pages (S1-S6); everything else PASS or N-A.
