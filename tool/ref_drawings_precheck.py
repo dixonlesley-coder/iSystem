@@ -377,6 +377,163 @@ def figures(bdir, project, drawing_pdfs):
     return out
 
 
+
+# ── Fix round 3 (2026-11-13) helpers ────────────────────────────────────────
+def glyph_quad(ch, page_h):
+    """The printed glyph area of a pdfplumber char as a convex quad in
+    pdfplumber's top-down coordinates: the advance along the baseline, from
+    0.12 em below the baseline (descenders) to 0.72 em above it (cap height),
+    for upright and ROTATED text alike (from the text matrix)."""
+    a, b, c, d, e, f = ch['matrix']
+    u = (a * a + b * b) ** 0.5 or 1.0
+    ux, uy = a / u, b / u
+    vx, vy = -uy, ux
+    adv = (ch.get('adv') or 0.0) * u
+    fs = true_size(ch)
+    pts = []
+    for t, sv in ((0, -0.12 * fs), (adv, -0.12 * fs), (adv, 0.72 * fs),
+                  (0, 0.72 * fs)):
+        x = e + ux * t + vx * sv
+        y = f + uy * t + vy * sv
+        pts.append((x, page_h - y))
+    return pts
+
+
+def circle_quad_gap(cx, cy, r, quad):
+    """Distance from the circle (cx, cy, r) to the convex [quad]: negative
+    when they overlap (0 = tangent)."""
+    def inside(px, py):
+        sgn = 0
+        for i in range(4):
+            x1, y1 = quad[i]
+            x2, y2 = quad[(i + 1) % 4]
+            cr = (x2 - x1) * (py - y1) - (y2 - y1) * (px - x1)
+            if abs(cr) < 1e-12:
+                continue
+            s_ = 1 if cr > 0 else -1
+            if sgn and s_ != sgn:
+                return False
+            sgn = s_
+        return True
+    if inside(cx, cy):
+        return -r
+    best = float('inf')
+    for i in range(4):
+        x1, y1 = quad[i]
+        x2, y2 = quad[(i + 1) % 4]
+        dx, dy = x2 - x1, y2 - y1
+        ll = dx * dx + dy * dy
+        t = 0.0 if ll == 0 else max(0.0, min(1.0, ((cx - x1) * dx +
+                                                   (cy - y1) * dy) / ll))
+        px, py = x1 + t * dx, y1 + t * dy
+        best = min(best, ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5)
+    return best - r
+
+
+def page_circles(pgp):
+    """Distinct circles on a page (a closed curve with a square bbox)."""
+    out, seen = [], set()
+    for c in pgp.curves:
+        w, h = c['x1'] - c['x0'], c['bottom'] - c['top']
+        if not (2.5 < w < 30 and abs(w - h) < 0.8):
+            continue
+        cx, cy = (c['x0'] + c['x1']) / 2, (c['top'] + c['bottom']) / 2
+        k = (round(cx, 1), round(cy, 1))
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append((cx, cy, w / 2))
+    return out
+
+
+def key_circle_hits(pdf, clear=0.3):
+    """Fix round 3 (S5/S6) - {page: [(key, text hit)]}: every KEY circle (a
+    circle whose own text is a number) that comes within [clear] pt of the
+    printed glyph of ANY other text - a pipe tag, a duct label, a fixture
+    code (WC, LAV ...), a terminal label - on that page."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            chars = [ch for ch in pg.chars if ch['text'].strip()]
+            quads = [glyph_quad(ch, H) for ch in chars]
+            hits = []
+            for cx, cy, r in page_circles(pg):
+                # The key's own digits: glyphs wholly inside the circle.
+                own = [k for k in range(len(chars))
+                       if all((x - cx) ** 2 + (y - cy) ** 2 < r * r
+                              for x, y in quads[k])]
+                key = ''.join(chars[k]['text'] for k in
+                              sorted(own, key=lambda k: chars[k]['x0']))
+                if not re.fullmatch(r'\d{1,3}', key):
+                    continue
+                bad = [chars[k]['text'] for k in range(len(chars))
+                       if k not in own and
+                       circle_quad_gap(cx, cy, r, quads[k]) < clear]
+                if bad:
+                    hits.append((key, ''.join(bad)[:20]))
+            if hits:
+                out[i] = hits
+    return out
+
+
+def symbol_text_hits(pdf):
+    """Fix round 3 (S1) - {page: [text]}: on a power one-line, a text run
+    (consecutive glyphs on one line) that touches a symbol circle it is not
+    inside, or the run of another line."""
+    out = {}
+    with pdfplumber.open(pdf) as doc:
+        for i, pg in enumerate(doc.pages, 1):
+            H = float(pg.height)
+            ws = pg.extract_words(keep_blank_chars=True, x_tolerance=3)
+            circles = page_circles(pg)
+            bad = []
+            for w in ws:
+                q = [(w['x0'], w['top'] + 0.15 * (w['bottom'] - w['top'])),
+                     (w['x1'], w['top'] + 0.15 * (w['bottom'] - w['top'])),
+                     (w['x1'], w['bottom'] - 0.1 * (w['bottom'] - w['top'])),
+                     (w['x0'], w['bottom'] - 0.1 * (w['bottom'] - w['top']))]
+                for cx, cy, r in circles:
+                    mx, my = (w['x0'] + w['x1']) / 2, (w['top'] + w['bottom']) / 2
+                    if (mx - cx) ** 2 + (my - cy) ** 2 < r * r:
+                        continue  # the symbol's own letter (G)
+                    if circle_quad_gap(cx, cy, r, q) < 0.3:
+                        bad.append(w['text'].strip()[:40])
+                        break
+            for a in range(len(ws)):
+                for b2 in range(a + 1, len(ws)):
+                    p_, q_ = ws[a], ws[b2]
+                    ov_x = min(p_['x1'], q_['x1']) - max(p_['x0'], q_['x0'])
+                    ov_y = min(p_['bottom'], q_['bottom']) - \
+                        max(p_['top'], q_['top'])
+                    if ov_x > 0.5 and ov_y > 0.25 * (p_['bottom'] - p_['top']):
+                        bad.append(f'{p_["text"].strip()[:20]} / '
+                                   f'{q_["text"].strip()[:20]}')
+            if bad:
+                out[i] = bad
+    return out
+
+
+def red_strokes(pgp):
+    """Stroked linework in the essential (red) ink on a page."""
+    def red(col):
+        return (col is not None and isinstance(col, (list, tuple))
+                and len(col) == 3 and col[0] > 0.6 and col[1] < 0.3
+                and col[2] < 0.3)
+    return [g for g in list(pgp.lines) + list(pgp.rects) + list(pgp.curves)
+            if red(g.get('stroking_color'))]
+
+
+def red_text_lines(pgp):
+    rows = defaultdict(list)
+    for c in pgp.chars:
+        col = c.get('non_stroking_color')
+        if col and isinstance(col, (list, tuple)) and len(col) == 3 and \
+                col[0] > 0.6 and col[1] < 0.3:
+            rows[round(c['top'])].append(c)
+    return [''.join(c['text'] for c in sorted(v, key=lambda q: q['x0']))
+            for _, v in sorted(rows.items())]
+
 def run_building(root, b):
     bdir = os.path.join(root, b)
     cover = glob.glob(os.path.join(bdir, '*-00-cover-sheets.pdf'))
@@ -802,6 +959,246 @@ def run_building(root, b):
                  + '; '.join(f'"{b[:40]}"' for b in body))
         else:
             emit(23, 'PASS', lab, f'{len(body)} body lines on the last page')
+
+
+    # ── Fix round 3 (2026-11-13) ─────────────────────────────────────────
+    # S1 (item 6) - on the power one-line every caption is clear of every
+    # symbol and of every other caption.
+    lines += ['', '## Item 6 - power one-line captions clear of symbols and '
+              'of each other (scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not st.endswith('-electrical-power-one-line'):
+            continue
+        hits = symbol_text_hits(pdf)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(6, 'FAIL', lab, f'{len(h)} caption(s) touch a symbol or '
+                     'another caption: ' + '; '.join(f'"{x}"' for x in h[:4]))
+            else:
+                emit(6, 'PASS', lab, 'captions clear of symbols and each other')
+
+    # S5 / S6 (item 6) - a KEY circle never touches any text (pipe tag, duct
+    # label, fixture / terminal code) on a plan, detail or riser sheet.
+    lines += ['', '## Item 6 - key circles clear of every text (scripted part)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not re.search(r'-(plan-\d+-.+|riser-sld)$', st) or \
+                re.search(r'-elec-plan-', st):
+            continue
+        hits = key_circle_hits(pdf)
+        with pdfplumber.open(pdf) as doc:
+            n_pages = len(doc.pages)
+        for n in range(1, n_pages + 1):
+            lab = f'{short(st, project)} p{n}'
+            h = hits.get(n)
+            if h:
+                emit(6, 'FAIL', lab, f'{len(h)} key circle(s) on text: ' +
+                     ', '.join(f'key {k} on "{t}"' for k, t in h[:6]))
+            else:
+                emit(6, 'PASS', lab, 'every key circle clear of text')
+
+    # S3 (item 9) - an SLD-family legend keys 'Essential' only when the page
+    # draws essential (red) linework: a red NOTE is not an essential supply.
+    lines += ['', '## Item 9 - SLD legend "Essential" only with essential '
+              'linework drawn (E-301 / E-401 / E-501)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not re.search(r'-electrical-(overview-sld|riser|power-one-line)$',
+                         st):
+            continue
+        with pdfplumber.open(pdf) as doc:
+            for n, pgp in enumerate(doc.pages, 1):
+                lab = f'{short(st, project)} p{n}'
+                txt = pdftext(pdf, n)
+                keyed = re.search(r'^\s*Essential - ', txt, re.M) is not None
+                drawn = bool(red_strokes(pgp))
+                if keyed and not drawn:
+                    emit(9, 'FAIL', lab, 'legend keys "Essential" but no '
+                         'essential board / feeder is drawn')
+                else:
+                    emit(9, 'PASS', lab, f'Essential keyed={keyed}, essential '
+                         f'linework drawn={drawn}')
+
+    # S2 (item 24) - the essential bus on E-501 prints the SAME demand as the
+    # essential board on E-301 (the red board-rating line on page 1).
+    lines += ['', '## Item 24 - E-501 essential bus = the essential board on '
+              'E-301']
+    pol = [f for f in pdfs if stem_of(f).endswith('-electrical-power-one-line')]
+    ov = [f for f in pdfs if stem_of(f).endswith('-electrical-overview-sld')]
+    if pol and ov:
+        t5 = pdftext(pol[0]).replace('\n', ' ')
+        m = re.search(r'Essential bus\s+(?:demand\s+)?([\d.]+) kVA', t5)
+        if not m:
+            emit(24, 'N-A', 'E-501', 'no essential bus on the power one-line')
+        else:
+            with pdfplumber.open(ov[0]) as doc:
+                reds = red_text_lines(doc.pages[0])
+            kvas = [float(x) for l in reds
+                    for x in re.findall(r'kW / ([\d.]+) kVA', l)]
+            want = float(m.group(1))
+            ok = any(abs(k - want) < 1e-6 for k in kvas) or \
+                (kvas and abs(sum(kvas) - want) < 0.051)
+            basis = re.search(r'genset basis ([\d.]+) kVA', t5)
+            emit(24, 'PASS' if ok else 'FAIL', 'E-501 vs E-301',
+                 f'E-501 essential bus demand {want:g} kVA; E-301 essential '
+                 f'board(s) {kvas}'
+                 + (f'; genset basis {basis.group(1)} kVA named' if basis
+                    else ''))
+
+    # S4 (item 20) - every feeder on the electrical riser carries its tag:
+    # an off-sheet feeder ("DARI (lembar lain): A > B") prints cable · device
+    # · length under the mark, and the set prints at least one tag per fed
+    # board.
+    lines += ['', '## Item 20 - every riser feeder labelled (E-401, scripted '
+              'part)']
+    tag_re = re.compile(r'(NYY|NYM|FRC|N2XSY|NA2XY|N2XY|NYFGbY|BC)\S*.*'
+                        r'(MCB|MCCB|ACB|FUSE|Fuse)\S* .*\d+(\.\d+)? m\b')
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        if not st.endswith('-electrical-riser'):
+            continue
+        sp = sorted((q for q in pages if q['pdf'] == pdf),
+                    key=lambda q: q['page'])
+        boards = tags = 0
+        for pg in sp:
+            lab = f'{short(st, project)} p{pg["page"]}'
+            tl = [l.strip() for l in pg['text'].splitlines()]
+            boards += sum(1 for l in tl if re.match(r'^\d+A \dP · ', l))
+            # A tag wrapped at its ' · ' separators (the DARI gutter) counts
+            # once: a cable line without its length joins the next line.
+            cab = re.compile(r'^(NYY|NYM|FRC|N2XSY|NA2XY|N2XY|NYFGbY|BC|'
+                             r'\d+x\()')
+            k = 0
+            while k < len(tl):
+                if tag_re.search(tl[k]):
+                    tags += 1
+                elif cab.match(tl[k]) and k + 1 < len(tl) and \
+                        tag_re.search(tl[k] + ' · ' + tl[k + 1]):
+                    tags += 1
+                    k += 1
+                k += 1
+            bad = []
+            for i, l in enumerate(tl):
+                if not l.startswith('DARI (lembar lain)'):
+                    continue
+                for k in range(i + 1, min(i + 10, len(tl))):
+                    if ' > ' not in tl[k]:
+                        continue
+                    # The feeder tag rides the next 1-3 lines (wrapped at
+                    # its ' · ' separators).
+                    nxt = ' · '.join(tl[k + 1:k + 3])
+                    if not tag_re.search(tl[k + 1] if k + 1 < len(tl)
+                                         else '') and not tag_re.search(nxt):
+                        bad.append(tl[k])
+            if bad:
+                emit(20, 'FAIL', lab, 'off-sheet feeder(s) without cable · '
+                     'device · length: ' + ', '.join(bad))
+            elif any(l.startswith('DARI (lembar lain)') for l in tl):
+                emit(20, 'PASS', lab, 'off-sheet feeder(s) carry their tag')
+        roots = 1
+        emit(20, 'PASS' if tags >= boards - roots else 'FAIL',
+             short(st, project), f'{tags} feeder tags for {boards} boards '
+             f'drawn ({roots} root)')
+
+    # O1 (item 14) - a TIPIKAL detail sheet prints no single floor's level
+    # code or FFL: tags read -Ln and one note keys n.
+    lines += ['', '## Item 14 - TIPIKAL detail sheets: no single-floor level '
+              'code or FFL']
+    for pg in pages:
+        if not re.search(r'-plan-\d+-.+-detail(-\d+)?$', pg['stem']):
+            continue
+        flat = pg['text'].replace('\n', ' ')
+        if 'TIPIKAL' not in flat:
+            continue
+        lab = f'{short(pg["stem"], project)} p{pg["page"]}'
+        lv = sorted(set(re.findall(
+            r'(?<![A-Z0-9])[A-Z]{1,3}-(?:L\d+|GF|B\d+|RF)(?![0-9A-Za-z])',
+            flat)))
+        bad = []
+        if lv:
+            bad.append('floor-specific tags ' + ', '.join(lv[:5]))
+        if re.search(r'FFL [+-]\d', flat):
+            bad.append('prints a single floor FFL')
+        if 'TIPIKAL: n = ' not in flat:
+            bad.append('no TIPIKAL n note')
+        emit(14, 'FAIL' if bad else 'PASS', lab,
+             '; '.join(bad) if bad else 'tags -Ln + TIPIKAL note, no FFL')
+
+    # O2 (item 18) - every plant item on a riser PLANT page prints its duty:
+    # pumps Q · H · kW, tanks a capacity or '-'; each LANJUTAN DARI mark
+    # names the pipe it continues.
+    lines += ['', '## Item 18 - PLANT pages: plant duty + continuation tags']
+    for pg in pages:
+        if not pg['stem'].endswith('-riser-sld') or ' - PLANT' not in \
+                pg['text']:
+            continue
+        lab = f'{short(pg["stem"], project)} p{pg["page"]}'
+        tl = [l.strip() for l in pg['text'].splitlines()]
+        bad = []
+        for l in tl:
+            for m in re.finditer(r'\b((?:P|HWP)-\d+) Pump · ([^P]*?)'
+                                 r'(?=(?:\s(?:P|HWP|TK)-\d+ )|$)', l):
+                d = m.group(2)
+                if not re.search(r'Q [\d.]+ L/s · H [\d.]+ m · [\d.]+ kW', d):
+                    bad.append(f'{m.group(1)} "{d.strip()[:30]}"')
+            for m in re.finditer(r'\b(TK-\d+) [A-Za-z ]*tank(?: · (\S+))?', l):
+                if not m.group(2):
+                    bad.append(f'{m.group(1)} no capacity')
+            if l.startswith('LANJUTAN DARI') and \
+                    not re.search(r'\(\S*-\S+.*\)', l):
+                bad.append(f'"{l}" names no pipe')
+        emit(18, 'FAIL' if bad else 'PASS', lab,
+             ('; '.join(bad[:6])) if bad else 'pumps Q · H · kW, tanks '
+             'capacity, continuation marks name their pipe')
+
+    # O3 (item 22) - a standby genset on E-301 reaches the bus through the
+    # transfer switch E-501 draws; and (item 23) a paginated E-301 leaves no
+    # chunk page but the last with under half the boards of the fullest one.
+    lines += ['', '## Items 22 / 23 - E-301 genset transfer switch; chunk '
+              'pages filled']
+    if ov:
+        sp = sorted((q for q in pages if q['pdf'] == ov[0]),
+                    key=lambda q: q['page'])
+        t1 = sp[0]['text'] if sp else ''
+        if pol and re.search(r'\bGENSET\b', t1):
+            sw = re.search(r'\b(ATS|COS)\b', pdftext(pol[0]))
+            if sw:
+                ok = re.search(r'\b' + sw.group(1) + r'\b', t1) is not None
+                emit(22, 'PASS' if ok else 'FAIL', 'E-301 p1',
+                     f'E-501 transfers via {sw.group(1)}; E-301 '
+                     + ('draws it' if ok else 'does not draw it'))
+        chunk = [q for q in sp if re.search(r'LANJUT: .*\(lembar lain\)',
+                                            q['text'])]
+        if len(chunk) > 1:
+            # Boards drawn: one per rating line, a TIPIKAL xN node counting
+            # its N boards.
+            def nboards(t):
+                ls = [l.strip() for l in t.splitlines()]
+                return (sum(1 for l in ls if re.match(r'^\d+A \dP · ', l))
+                        + sum(int(m.group(1)) - 1 for l in ls for m in
+                              [re.match(r'^\S+\.\.\S+ \(TIPIKAL x(\d+)\)$',
+                                        l)] if m))
+            cnt = [nboards(q['text']) for q in chunk]
+            full = max(cnt)
+            # The page carrying the source spine (supply head, transformer,
+            # genset) is width-bound by the spine: it is filled first-fit and
+            # judged on the pages without it.
+            def spine(q):
+                return re.search(r'\b(PLN|GENSET|TRANSFORMER)\b',
+                                 q['text']) is not None
+            free = [c for q, c in zip(chunk, cnt) if not spine(q)]
+            full = max(free) if free else full
+            thin = [f'p{q["page"]} {c}' for q, c in zip(chunk[:-1], cnt[:-1])
+                    if 2 * c < full and not spine(q)]
+            emit(23, 'FAIL' if thin else 'PASS', 'E-301 chunk pages',
+                 f'boards per chunk page {cnt} (fullest spine-free {full}; '
+                 f'spine page filled first-fit)'
+                 + (f'; under half: {", ".join(thin)}' if thin else ''))
 
     # 7 — garbled glyphs.
     lines += ['', '## Item 7 - garbled glyphs (? tokens, U+FFFD, tofu '

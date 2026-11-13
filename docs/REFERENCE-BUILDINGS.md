@@ -353,3 +353,14 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   DAYA' beside the supply; tanks without capacity print '- (*)' with one footnote and no
   orphan footnote page; detail sheets key only their own fixture codes; electrical layout
   tags keep a clear gap from their symbol.
+- Fix round 3 (second full review, S1-S6 + observations): E-501 captions wrap inside their
+  column and the essential bus prints the essential board's demand (= E-301 / E-401) with the
+  genset sizing basis named beside it; SLD-family legends key 'Essential' only for essential
+  linework (house E-301 / E-401 no longer key it); a feeder cut to another sheet prints its
+  cable · device · length at the DARI mark (apartment / tower LVMDP > PP-E); plan tags and
+  key circles are measured in Helvetica and key circles keep a clear gap from every glyph
+  (tower M-116, shophouse M-103), detail-sheet stubs never steal a stack node (apartment D-R /
+  V-R tags back on the detail sheets); TIPIKAL detail sheets print `-Ln` tags and one TIPIKAL
+  note; PLANT items print `Q · H · kW` / tank capacity; E-301 / E-401 draw the genset's ATS
+  (the E-501 switch) and E-301 chunk pages are filled first-fit (tower 7 -> 4 pages). Every
+  class has a scripted pre-check line; see `docs/DRAWING-REVIEW-RECORD.md` "Fix round 3".
