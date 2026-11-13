@@ -478,6 +478,7 @@ enum StringKey {
   electricalToggleEssential,
   electricalToggleCritical,
   electricalToggleSubmeter,
+  electricalToggleServiceEntrance,
 
   // Electrical workspace — Service & Earthing field.
   electricalFieldEarthingSystem,
@@ -1874,6 +1875,8 @@ const Map<StringKey, String> _en = {
   StringKey.electricalToggleEssential: 'Essential (genset-backed)',
   StringKey.electricalToggleCritical: 'Critical (UPS-backed)',
   StringKey.electricalToggleSubmeter: 'Tenant submeter',
+  StringKey.electricalToggleServiceEntrance:
+      'Service entrance (own utility meter)',
 
   // Electrical workspace — Service & Earthing field.
   StringKey.electricalFieldEarthingSystem: 'Earthing system',
@@ -2272,8 +2275,10 @@ const Map<StringKey, String> _en = {
       'the network, or remove it.',
   StringKey.issueUnfedPanelTitle: 'Panel not connected to a supply',
   StringKey.issueUnfedPanelMessage:
-      '"{panel}" is neither the origin board nor fed by a feeder — it is wired '
-      'to nothing. Feed it from an upstream panel.',
+      '"{panel}" is neither a service entrance nor fed by a feeder — it is '
+      'wired to nothing, so its load is on no service (not in the supply '
+      'study). Feed it from an upstream panel, or mark it "Service entrance '
+      '(own utility meter)".',
   StringKey.issueFixtureUntypedTitle: 'Fixture type not set',
   StringKey.issueFixtureUntypedSupplyMessage:
       'Fixture type not set — sizing on the representative 2.0 UBAP default; '
@@ -3556,6 +3561,8 @@ const Map<StringKey, String> _id = {
   StringKey.electricalToggleEssential: 'Esensial (didukung genset)',
   StringKey.electricalToggleCritical: 'Kritis (didukung UPS)',
   StringKey.electricalToggleSubmeter: 'Submeter penyewa',
+  StringKey.electricalToggleServiceEntrance:
+      'Sambungan layanan (meter PLN sendiri)',
 
   // Electrical workspace — Service & Earthing field.
   StringKey.electricalFieldEarthingSystem: 'Sistem pembumian',
@@ -3970,8 +3977,10 @@ const Map<StringKey, String> _id = {
       'jaringan, atau hapus.',
   StringKey.issueUnfedPanelTitle: 'Panel tidak terhubung ke suplai',
   StringKey.issueUnfedPanelMessage:
-      '"{panel}" bukan panel asal maupun disuplai oleh feeder — tidak '
-      'tersambung ke apa pun. Suplai dari panel di hulunya.',
+      '"{panel}" bukan sambungan layanan maupun disuplai oleh feeder — tidak '
+      'tersambung ke apa pun, sehingga bebannya tidak masuk studi suplai. '
+      'Suplai dari panel di hulunya, atau tandai "Sambungan layanan (meter '
+      'PLN sendiri)".',
   StringKey.issueFixtureUntypedTitle: 'Jenis fikstur belum ditetapkan',
   StringKey.issueFixtureUntypedSupplyMessage:
       'Jenis fikstur belum ditetapkan — diukur memakai nilai bawaan '

@@ -1750,6 +1750,17 @@ class _ElectricalPanelInspectorState extends State<ElectricalPanelInspector> {
                       onChanged: (v) =>
                           controller.setPanelEssential(panel.id, v),
                     ),
+                    // Backlog E-1 — an UN-FED board may be its own service
+                    // entrance (own utility meter): a legitimate root for the
+                    // supply study and the connectivity judge alike.
+                    if (controller.isUnfedPanel(panel.id))
+                      ElectricalToggleRow(
+                        label: context.strings(
+                            StringKey.electricalToggleServiceEntrance),
+                        value: controller.isServiceEntrance(panel.id),
+                        onChanged: (v) =>
+                            controller.setPanelServiceEntrance(panel.id, v),
+                      ),
                     ElectricalToggleRow(
                       label: context.strings(StringKey.electricalToggleCritical),
                       value: panel.upsBacked,

@@ -37,6 +37,7 @@ import 'advanced_study.dart'
         serviceFaultEstimateFor;
 import 'busbar.dart';
 import 'cable_family.dart';
+import 'connectivity.dart' show serviceEntrancePanelIds;
 import 'containment.dart' show effectiveInstallMethod;
 import 'control/starter.dart' show StarterType, effectiveStarterType;
 import 'diversity_library.dart' show DiversityLibrary;
@@ -3591,6 +3592,18 @@ ElectricalSystemResult computeSystem(
   }
 
   final roots = panels.where((p) => !parentOf.containsKey(p.id)).toList();
+  // Backlog E-1 (2026-11-13) — the SERVICE roots: the un-fed boards that are
+  // legitimate service entrances ([serviceEntrancePanelIds], the SAME set the
+  // connectivity judge reads). Every root is still walked (order, sizing);
+  // only the service roots form the service — the capacity floor, the supply
+  // demand and connected load, the governing root and the multi-root daya
+  // judge. An un-fed board that is not a service entrance is `unfed-panel`,
+  // its load on no line.
+  final serviceIds = serviceEntrancePanelIds(project);
+  final serviceRoots = [
+    for (final r in roots)
+      if (serviceIds.contains(r.id)) r,
+  ];
   for (final r in roots) {
     dfs(r.id);
   }
@@ -3630,8 +3643,8 @@ ElectricalSystemResult computeSystem(
   // the 71.7 A the board's own 230 V basis gave — an 80 A incomer floor
   // under a limiter that trips at 23.8 A).
   var singlePhaseRootOnThreePhaseDaya = false;
-  if (serviceCapacityVa != null && serviceCapacityVa > 0 && roots.length == 1) {
-    final root = roots.first;
+  if (serviceCapacityVa != null && serviceCapacityVa > 0 && serviceRoots.length == 1) {
+    final root = serviceRoots.first;
     final v = root.voltage.volts;
     if (v > 0) {
       singlePhaseRootOnThreePhaseDaya =
@@ -4285,8 +4298,27 @@ ElectricalSystemResult computeSystem(
     return f;
   }
 
+  // Backlog E-1 — the service's connected load is its service roots'
+  // sub-trees: a board under an un-fed board that is not a service entrance
+  // (`unfed-panel`) is on no service. A board with no reachable root (a
+  // feeder cycle) is kept, as before.
+  String? topOf(String id) {
+    final seen = <String>{};
+    var cur = id;
+    while (true) {
+      final parent = parentOf[cur];
+      if (parent == null) return cur;
+      if (!seen.add(cur)) return null;
+      cur = parent;
+    }
+  }
+
   var connectedLoadMicroW = 0;
   for (final p in panels) {
+    final top = topOf(p.id);
+    if (top != null && byId.containsKey(top) && !serviceIds.contains(top)) {
+      continue;
+    }
     final mult = upsChain(p.id);
     for (final c in p.circuits) {
       if (c.role == CircuitRole.branch && c.feedsPanelId == null) {
@@ -4453,7 +4485,7 @@ ElectricalSystemResult computeSystem(
           feederNeutralLoad: feederNeutralByPanel,
           feederLargestRunA: largestRunByPanel,
           feederLargestRunLinesA: largestRunLinesByPanel,
-          serviceMinCurrentA: roots.length == 1 && id == roots.first.id
+          serviceMinCurrentA: serviceRoots.length == 1 && id == serviceRoots.first.id
               ? serviceMinCurrentA
               : null,
         ),
@@ -4653,7 +4685,7 @@ ElectricalSystemResult computeSystem(
     // conservative sizing is untouched. Never resizes; the honest fix is a
     // bigger subscription or shedding load.
     if (serviceMinCurrentA != null && singlePhaseRootOnThreePhaseDaya) {
-      final rootResult = results[roots.first.id];
+      final rootResult = results[serviceRoots.first.id];
       rootResult?.warnings.add(ElectricalWarning(
         code: 'service-single-phase-root-on-three-phase-daya',
         severity: WarningSeverity.warning,
@@ -4664,22 +4696,22 @@ ElectricalSystemResult computeSystem(
             '~${_num(roundTo(serviceMinCurrentA, 1))} A per phase — a '
             'single-phase root board loads only one of those phases. Make the '
             'root board 3-phase, or declare a single-phase daya step.',
-        panelId: roots.first.id,
+        panelId: serviceRoots.first.id,
       ));
     }
     if (serviceMinCurrentA != null) {
-      final rootId = roots.first.id;
+      final rootId = serviceRoots.first.id;
       final rootResult = results[rootId];
       // Round 77 (elec-convergence-28-ups-root-service-judges-on-output) —
       // a UPS-backed service-entrance board is supplied THROUGH its UPS: the
       // limiter carries the balanced UPS INPUT ([upsInputCurrentA], output /
       // efficiency + recharge), the basis the supply demand and the
       // recommended daya already use — never the output board's current.
-      final rootUps = roots.first.upsBacked;
+      final rootUps = serviceRoots.first.upsBacked;
       final rawDivA = rootResult == null
           ? 0.0
           : rootUps
-              ? (upsInputCurrentA(roots.first, rootResult) ?? 0.0)
+              ? (upsInputCurrentA(serviceRoots.first, rootResult) ?? 0.0)
               : roundTo(rootResult.diversifiedDemandCurrent.amperes, 1);
       // Round 40 — the limiter must also pass the largest single machine on
       // the service at its UNDIVERSIFIED running current (the figure that
@@ -4834,7 +4866,7 @@ ElectricalSystemResult computeSystem(
 
     // Supply summary from the diversified demand presented by the root panel(s).
     final rootDemandW =
-        roots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0) * upsIn(p.id));
+        serviceRoots.fold(0.0, (s, p) => s + (panelDemandW[p.id] ?? 0) * upsIn(p.id));
     // Round 13 (elec-props-2-multiroot-earthing-first-root) — with several
     // utility-fed roots the SERVICE (supply system / voltage, main cable,
     // main earthing + bonding conductors) is governed by the LARGEST root, not
@@ -4843,7 +4875,7 @@ ElectricalSystemResult computeSystem(
     // A 250 A 3φ root listed after a 1φ lighting board used to print a 16 mm²
     // main earthing conductor and a single-phase 230 V supply. One root ⇒ that
     // root ⇒ byte-identical.
-    final governingRoot = governingRootPanel(roots, results);
+    final governingRoot = governingRootPanel(serviceRoots, results);
     final supplySystem = governingRoot?.system ?? ElectricalSystem.threePhase;
     final supplyVoltage = governingRoot?.voltage ?? const Voltage(400);
     // Round 14 (elec-building-sim-2) — the supply kVA (genset size, the
@@ -4856,7 +4888,7 @@ ElectricalSystemResult computeSystem(
     // used to print 89.4 kVA (W / 0.85) against ~103 kVA really drawn, so a
     // 100 kVA genset was labelled 'backs 100 %'. Never below the demand W.
     var rootDemandVa = 0.0;
-    for (final r in roots) {
+    for (final r in serviceRoots) {
       final w = (panelDemandW[r.id] ?? 0) * upsIn(r.id);
       final va0 = panelDemandVa[r.id];
       final va = va0 == null ? null : va0 * upsIn(r.id);
@@ -5639,7 +5671,7 @@ ElectricalSystemResult computeSystem(
 
   final fin = withstandSolve();
   // Round 79 — the declared daya judged with SEVERAL service-entrance boards.
-  if (roots.length > 1) _judgeMultiRootServiceCapacity(project, fin);
+  if (serviceRoots.length > 1) _judgeMultiRootServiceCapacity(project, fin);
   if (gensetAdsFloorKva != null) return fin;
 
   // Backlog B-3 (2026-11-13) — THE GENSET RECOMMENDATION HOLDS

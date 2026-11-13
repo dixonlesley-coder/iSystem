@@ -88,7 +88,14 @@ void main() {
       ]));
       ctl.syncMepEquipment([_derived]);
       expect(_way(c, 'mep-n0').loadKind, LoadKind.pump);
-      expect(c.read(electricalResultProvider).supply.demandW,
+      // Backlog E-1: the MEP board here is un-fed and not a service entrance
+      // (`unfed-panel`), so its load is on no service — read the board's own
+      // demand (the pump is counted again).
+      expect(
+          c
+              .read(electricalResultProvider)
+              .panels[kMepEquipmentPanelId]!
+              .demandW,
           closeTo(_pumpW, 1));
     });
 

@@ -26,6 +26,10 @@
 // worst-phase current). One 1ph root keeps the Round-66 sqrt3 x 400 x I.
 library;
 
+// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
+// (own meter / section main), so each is flagged `serviceEntrance: true` —
+// an unflagged un-fed board after the first is `unfed-panel` and outside
+// the supply study.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -51,7 +55,7 @@ ElectricalCircuit _heater(String id, double w) => ElectricalCircuit(
     phases: 3,
     length: const Length(10));
 
-ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(
+ElectricalPanel _shop(String id, List<double> ways) => ElectricalPanel(serviceEntrance: true, 
       id: id,
       name: 'Shop $id',
       system: ElectricalSystem.singlePhase,
@@ -103,7 +107,7 @@ void main() {
           name: 'UPS service',
           supplyCapacityVa: const ApparentPower(41500),
           panels: [
-            ElectricalPanel(
+            ElectricalPanel(serviceEntrance: true, 
                 id: 'U',
                 name: 'UPS-MDP',
                 upsBacked: true,
@@ -146,7 +150,7 @@ void main() {
           name: 'Corrupt voltage',
           supplyCapacityVa: const ApparentPower(41500),
           panels: [
-            ElectricalPanel(
+            ElectricalPanel(serviceEntrance: true, 
                 id: 'U',
                 name: 'UPS-MDP',
                 upsBacked: true,
@@ -165,7 +169,7 @@ void main() {
           name: 'plain',
           supplyCapacityVa: const ApparentPower(41500),
           panels: [
-            ElectricalPanel(
+            ElectricalPanel(serviceEntrance: true, 
                 id: 'U',
                 name: 'MDP',
                 circuits: [for (var i = 0; i < 6; i++) _heater('h$i', 6000)]),
@@ -186,14 +190,14 @@ void main() {
               dualTransformer: true,
               transformerKva: const ApparentPower(1600e3),
               panels: [
-                ElectricalPanel(
+                ElectricalPanel(serviceEntrance: true, 
                     id: 'U',
                     name: 'UPS-MDP',
                     upsBacked: true,
                     circuits: [
                       for (var i = 0; i < upsWays; i++) _heater('u$i', 50000)
                     ]),
-                ElectricalPanel(
+                ElectricalPanel(serviceEntrance: true, 
                     id: 'N', name: 'MDP-N', circuits: [_heater('n0', 100000)]),
               ]);
       final pr = build(25);
@@ -255,7 +259,7 @@ void main() {
 
     test('one 1ph root beside a 3ph root keeps the Round-66 sum', () {
       final pr = ElectricalProject(id: 'm', name: 'mixed', panels: [
-        ElectricalPanel(
+        ElectricalPanel(serviceEntrance: true, 
             id: 'A',
             name: 'MDP-A',
             circuits: [for (var i = 0; i < 3; i++) _heater('a$i', 60000)]),
@@ -279,7 +283,7 @@ void main() {
                 (5 + rng.nextInt(40)) * 100.0
             ]),
           for (var k = 0; k < nThree; k++)
-            ElectricalPanel(id: 'T$k', name: 'MDP-T$k', circuits: [
+            ElectricalPanel(serviceEntrance: true, id: 'T$k', name: 'MDP-T$k', circuits: [
               for (var i = 0; i < 1 + rng.nextInt(3); i++)
                 _heater('t$k$i', (5 + rng.nextInt(40)) * 1000.0)
             ]),

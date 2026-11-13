@@ -69,7 +69,6 @@ _(empty)_
 
 ### Backlog (outside scope, not fixed)
 
-- **(a) Several separately metered service entrances.** One project with several unfed service boards is not modelled consistently: the service study treats every unfed board as a root (`originPanelIdsOf`, the multi-root daya judge), while the Review flags all but the first as `unfed-panel` (`electricalConnectivityDefects`). This is why the fixture now uses one service board.
 - **(c) Fill line sized on peak demand.** The fill line and the transfer pump are sized on the distribution's diversified peak flow, not on a tank fill rate.
 - **(d) Water meter at ceiling level.** A water meter node (role main) sits at its floor's ceiling, which adds a vertical leg to the meter stub.
 - **(g) Break tanks of extra roof tanks.** An extra roof-tank component's intermediate break tanks are not split into their own zone groups (F1 records this).
@@ -77,6 +76,7 @@ _(empty)_
 
 ### Backlog closed (2026-11-13)
 
+- **(a) Several separately metered service entrances — backlog E-1.** A board carries an explicit, persisted `serviceEntrance` flag (Panel inspector: "Service entrance (own utility meter)", offered on an un-fed board; unset = the first un-fed board, the old judge). ONE set (`serviceEntrancePanelIds`) is both the connectivity judge's legitimate roots and the supply study's service roots (`originPanelIdsOf`, `computeSystem`'s capacity floor / supply demand / connected load / multi-root daya judge). The original three-meter row (three 1-phase 220 V unit boards, declared 23 100 VA): all three flagged → no `unfed-panel`, per-line basis sqrt3 x 400 x 24.2 = 16 766 VA each (one board per line), recommended daya 23 000 VA 3-phase (first 3-phase step >= 16 766), 23 100 / (sqrt3 x 400) = 33.3 A >= 24.2 A per line → no `service-capacity-below-demand`; only A flagged → B and C `unfed-panel`, the study covers A alone: max(5 329.4 VA, 24.2 x 220 = 5 324 VA) = 5 329 VA → daya 5 500 VA 1-phase (`backlog_e1_service_entrance_test.dart`). The fixture keeps its one service board; no pin moved.
 - **(b) Too few / too small AC units — backlog A-4.** The Review warns `room-cooling-undersized:<room>` when the AC units a room owns give less than its cooling load: here 2 x 2.5 PK = 48 000 >= 44 400 BTU/h (no finding); one cassette would warn (44 400 > 27 000, needs 2 x 3 PK).
 - **(e) Transfer pump label — closed by B-4.** TP_A/B/C are minted `MepLoadSource.transferPump` ('Transfer pump' / 'Pompa transfer'), no figure changed.
 - **(f) Feeder discrimination — closed by B-1 (bounded).** An auto-sized feeder cable grows by at most two section sizes (and never past the upstream incomer) so its device reaches 1.6 × the fed incomer: unit feeders 6 mm² / 32 A → 10 mm² (Iz 50) / 40 A, one size (VD 0.65 / 0.86 / 1.08 %); MEP feeder 5 × 4 / 25 A → 5 × 6 / 32 A, one size. No `non-selective` is left.
@@ -122,10 +122,10 @@ _(empty)_
 - **(c) Urinal type.** There is no flush-valve urinal type.
 - **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
 - **(i) One return grille drawn (backlog F-2).** The room recommends two return grilles (3.0 m/s office limit) and the checker flags the drawn one. Redrawing the fixture with RG2 → RG1 → FCU1 (computed: RG2→RG1 DN355, return 31.16 → 32.89 Pa, FCU 121.25 → 122.97 Pa, 0.37 kW unchanged) makes the whole-building mechanical riser (M-201 on one sheet) stamp one unresolved key — a `WC` key on another floor loses its slot when Lantai 2 gains a column (`drawing_review_test` D4/D5 'office: every page places every tag clear'); the riser placer is outside the HVAC scope, so the fixture keeps one grille.
-- **(h) Auto-FRC record not saved (O4).** The "FRC set by the sync" record is not persisted: after reopening a project, an auto-FRC feeder whose fire pump is later removed stays FRC.
 
 ### Backlog closed (2026-11-13)
 
+- **(h) Auto-FRC record not saved (O4) — backlog E-2.** The record is now the persisted circuit field `cableTypeAuto` (written only when true): the MEP feeder the sync made FRC saves as `cableType: FRC, cableTypeAuto: true`; reopened in a fresh app and with FP removed, the sync clears it (FRC → none), while a hand-set FRC (no record) stays. No figure changed (`reference_office_regression_test.dart` O4 group).
 - **`air-duct-unsized` on auto-sized ducts — backlog F-4.** The info now means a duct with NO size (neither auto nor chosen); the five auto-sized ducts are the engine's own valid picks: 5 → 0.
 - **Equipment duty — backlog F-3.** FCU1 roots the drawn system, so the Rooms inspector's one headline is the drawn duty 121.25 Pa (the 108.70 Pa room estimate is not printed beside it); a room estimate is printed only with the label "estimate (no ducts drawn)".
 - **Return bank — backlog F-2.** The office return limit is min(3.0, 4.0) = 3.0 m/s for both the room sizing and the checker: the room's bank is ceil(0.925 / (0.36 x 0.8 x 3.0)) = ceil(1.07) = 2 grilles, and the drawn single 600 x 600 grille carrying 925 L/s (3.212 m/s, passed by the old 4.0 band) is now flagged `terminal-velocity` (kept as drawn — see backlog (i)).

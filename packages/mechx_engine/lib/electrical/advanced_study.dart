@@ -36,6 +36,7 @@ import 'advanced_bom.dart' show advancedBomLines;
 import 'arc_flash.dart' show ArcFlashResult, estimateArcFlash;
 import 'bom.dart' show Bom, buildBom, faultSpecifiedKa;
 import 'compute.dart' show circuitIsThreePhase, kThreePhaseServiceLineVoltageV;
+import 'connectivity.dart' show serviceEntrancePanelIds;
 import 'containment.dart'
     show ConduitSpec, ContainmentResult, containmentFor, effectiveInstallMethod;
 import 'control/motor_flc.dart' show motorFlc, motorFlc1ph;
@@ -1746,9 +1747,16 @@ Set<String> originPanelIdsOf(
           c.feedsPanelId!,
   };
   final modelById = {for (final p in project.panels) p.id: p};
+  // Backlog E-1 — only a legitimate SERVICE root ([serviceEntrancePanelIds],
+  // the set the connectivity judge reads): an un-fed board that is not a
+  // service entrance is `unfed-panel`, its load allocated to no line.
+  final service = serviceEntrancePanelIds(project);
   final out = <String>{
     for (final id in sys.order)
-      if (!fed.contains(id) && modelById[id]?.fedByCircuitId == null) id,
+      if (!fed.contains(id) &&
+          modelById[id]?.fedByCircuitId == null &&
+          service.contains(id))
+        id,
   };
   if (out.isEmpty && sys.order.isNotEmpty) out.add(sys.order.first);
   return out;

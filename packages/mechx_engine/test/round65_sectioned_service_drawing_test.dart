@@ -15,6 +15,10 @@
 // A single section draws none of it (byte-identical).
 library;
 
+// Backlog E-1 (2026-11-13): every board here is its own SERVICE ENTRANCE
+// (own meter / section main), so each is flagged `serviceEntrance: true` —
+// an unflagged un-fed board after the first is `unfed-panel` and outside
+// the supply study.
 import 'dart:math' as math;
 
 import 'package:mechx_engine/electrical/advanced_study.dart';
@@ -40,7 +44,7 @@ ElectricalProject _proj(
       sources: const ElectricalSources(generator: GeneratorSource()),
       panels: [
         for (final (i, kw) in (rootKw ?? const [160.0, 160.0]).indexed)
-          ElectricalPanel(
+          ElectricalPanel(serviceEntrance: true, 
             id: 'R$i',
             name: 'MDP-$i',
             system: ElectricalSystem.threePhase,

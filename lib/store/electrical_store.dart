@@ -19,6 +19,8 @@ import 'package:flutter/widgets.dart' show immutable, Offset, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/connectivity.dart'
+    show serviceEntrancePanelIds, unfedPanelsOf;
 import 'package:mechx_engine/electrical/control/starter.dart' show StarterType;
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart'
@@ -1535,11 +1537,10 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     String? laying,
     bool clearLaying = false,
   }) {
-    // Reference office O4 — a cable type the engineer types by hand is theirs:
-    // the MEP sync never reverts it.
-    if (cableType != null || clearCableType) {
-      _autoFrcMepFeederIds.remove(circuitId);
-    }
+    // Reference office O4 / backlog E-2 — a cable type the engineer types by
+    // hand is theirs: the edit clears the persisted `cableTypeAuto` record,
+    // so the MEP sync never reverts it.
+    final handCableType = cableType != null || clearCableType;
     // Round 11 — the store is the last gate before the solver: a negative /
     // non-finite load, length or override (typed, pasted or scripted) is not a
     // design input. A negative W gave a NEGATIVE Ib that was subtracted from
@@ -1725,6 +1726,7 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
                 : null),
         cableType: cableType,
         clearCableType: clearCableType,
+        cableTypeAuto: handCableType ? false : null,
         starterType: starterType,
         clearStarterType: clearStarterType || starterDropped,
         breakerOverrideA: breakerOverrideA,
@@ -2179,6 +2181,23 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
   /// Toggle the essential (genset-backed) flag.
   void setPanelEssential(String id, bool value) =>
       _replacePanel(id, (p) => p.copyWith(essential: value));
+
+  /// Backlog E-1 — mark an UN-FED board as a service entrance (its own
+  /// utility meter) or not. The explicit flag decides both the connectivity
+  /// judge (`unfed-panel`) and the supply study's service roots
+  /// (`serviceEntrancePanelIds`). Undoable; persisted additively.
+  void setPanelServiceEntrance(String id, bool value) =>
+      _replacePanel(id, (p) => p.copyWith(serviceEntrance: value));
+
+  /// Backlog E-1 — true when no way's `feedsPanelId` points at [panelId]
+  /// (the board takes no feeder: a service-entrance candidate).
+  bool isUnfedPanel(String panelId) =>
+      unfedPanelsOf(state).any((p) => p.id == panelId);
+
+  /// Backlog E-1 — true when [panelId] is a legitimate service root
+  /// ([serviceEntrancePanelIds]: the explicit flag, else the default rule).
+  bool isServiceEntrance(String panelId) =>
+      serviceEntrancePanelIds(state).contains(panelId);
 
   /// Toggle the UPS / critical-backed flag.
   void setPanelUpsBacked(String id, bool value) =>
@@ -2988,11 +3007,6 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
     _syncMepFeederCable();
   }
 
-  /// Reference office O4 — feeders this controller itself specified as FRC
-  /// (a transient record: a feeder the engineer typed FRC by hand is never
-  /// in it, so it is never reverted).
-  final Set<String> _autoFrcMepFeederIds = <String>{};
-
   /// Reference office O4 — the feeder way that feeds the MEP board carries
   /// the fire-pump / life-safety supply whenever the board holds a
   /// life-safety way: the sync specifies it fire-resistant (`FRC`, sized on
@@ -3013,13 +3027,14 @@ class ElectricalProjectController extends Notifier<ElectricalProject> {
         return null;
       }
       final type = c.cableType;
+      // Backlog E-2 — the record is the PERSISTED `cableTypeAuto` flag
+      // (it was an in-memory set, lost on reopen), so the sync reverts its
+      // own FRC after a reload too.
       if (life && (type == null || type.isEmpty)) {
-        _autoFrcMepFeederIds.add(c.id);
-        return c.copyWith(cableType: 'FRC');
+        return c.copyWith(cableType: 'FRC', cableTypeAuto: true);
       }
-      if (!life && type == 'FRC' && _autoFrcMepFeederIds.contains(c.id)) {
-        _autoFrcMepFeederIds.remove(c.id);
-        return c.copyWith(clearCableType: true);
+      if (!life && type == 'FRC' && c.cableTypeAuto) {
+        return c.copyWith(clearCableType: true, cableTypeAuto: false);
       }
       return null;
     }

@@ -5,6 +5,7 @@
 // O4 — the auto-wired MEP feeder carrying a fire pump is specified FRC by
 //      the sync (no `life-safety-feeder-cable` against its own feeder),
 //      reverted when the life-safety way goes, never over a hand-set type.
+import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,6 +18,7 @@ import 'package:mechx/store/network_store.dart';
 import 'package:mechx/store/project_store.dart';
 import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/solve_store.dart';
+import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
 import 'package:mechx_engine/network/network.dart';
@@ -218,7 +220,80 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(feeder(c).cableType, 'NYY');
     });
+
+    test('backlog E-2: the auto-FRC record is persisted — after a reload the '
+        'sync still reverts its own FRC when the fire pump goes', () async {
+      final c = await office();
+      addTearDown(c.dispose);
+      final b = buildOffice();
+      // Save: the feeder carries the sync's FRC + the persisted record.
+      final saved = ElectricalProject.fromJson(jsonDecode(
+              jsonEncode(c.read(electricalProjectProvider).toJson()))
+          as Map<String, dynamic>);
+      final w = saved.panels
+          .firstWhere((p) => p.id == kOfficeMainPanelId)
+          .circuits
+          .firstWhere((x) => x.id == kMepEquipmentFeederId);
+      expect((w.cableType, w.cableTypeAuto), ('FRC', true));
+      // Reopen in a fresh app (no in-memory record), then remove the fire
+      // pump: the FRC the sync set is cleared.
+      final r = _load(
+          floors: b.building.floors,
+          sheets: kOfficeSheets,
+          net: b.network,
+          occupancy: b.occupancy);
+      addTearDown(r.dispose);
+      r.read(electricalProjectProvider.notifier).setProject(saved);
+      await Future<void>.delayed(Duration.zero);
+      expect(feeder(r).cableType, 'FRC');
+      r.read(networkControllerProvider.notifier).loadNetwork(Network(
+            nodes: [
+              for (final n in b.network.nodes)
+                if (n.id != 'FP') n,
+            ],
+            edges: [
+              for (final e in b.network.edges)
+                if (e.fromId != 'FP' && e.toId != 'FP') e,
+            ],
+          ));
+      await Future<void>.delayed(Duration.zero);
+      expect(feeder(r).cableType, isNull);
+      // A hand-set FRC (no record) survives a reload and the removal.
+      final hand = _handFrc(saved);
+      final h = _load(
+          floors: b.building.floors,
+          sheets: kOfficeSheets,
+          net: b.network,
+          occupancy: b.occupancy);
+      addTearDown(h.dispose);
+      h.read(electricalProjectProvider.notifier).setProject(hand);
+      await Future<void>.delayed(Duration.zero);
+      h.read(networkControllerProvider.notifier).loadNetwork(Network(
+            nodes: [
+              for (final n in b.network.nodes)
+                if (n.id != 'FP') n,
+            ],
+            edges: [
+              for (final e in b.network.edges)
+                if (e.fromId != 'FP' && e.toId != 'FP') e,
+            ],
+          ));
+      await Future<void>.delayed(Duration.zero);
+      expect(feeder(h).cableType, 'FRC');
+    });
   });
+}
+
+/// The saved project with the MEP feeder's FRC re-marked as HAND-set (no
+/// `cableTypeAuto` record), through JSON as an older file would carry it.
+ElectricalProject _handFrc(ElectricalProject p) {
+  final j = jsonDecode(jsonEncode(p.toJson())) as Map<String, dynamic>;
+  for (final panel in j['panels'] as List) {
+    for (final c in (panel as Map<String, dynamic>)['circuits'] as List) {
+      (c as Map<String, dynamic>).remove('cableTypeAuto');
+    }
+  }
+  return ElectricalProject.fromJson(j);
 }
 
 typedef ElectricalCircuitView = ({String? cableType});
