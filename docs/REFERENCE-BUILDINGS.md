@@ -89,7 +89,7 @@ _(empty)_
 - **Cold water:** water meter → ground tank GT → UPFEED pump P1 → riser. On every floor a public toilet core: two flush-valve WCs, a urinal (`urinalFlushTank`; a flush-valve `urinalFlushValve` exists since backlog D-5, the fixture keeps the tank type) and two lavatories. Occupancy is public.
 - **Drainage / vent / rainwater:** every fixture drains to a 4-storey soil stack and a 10 m building drain; one stack vent; two 150 m² roof drains, a downpipe and a collector.
 - **Fire (separate network):** fire tank FT → fire pump FP. FP feeds a Class I hydrant riser with one `hydrantBox` per floor, and a sprinkler riser with six heads in a line on Lantai 4. Light hazard, K 80.
-- **HVAC (Lantai 2):** one 10 × 15 m office room (Room tool, seeded 3.7 m ceiling, 6 ACH). A ducted FCU feeds four supply diffusers in a line, each stamped with ¼ of the room airflow and a 450 × 300 face; a return grille (600 × 600) carries the whole airflow.
+- **HVAC (Lantai 2):** one 10 × 15 m office room (Room tool, seeded 3.7 m ceiling, 6 ACH). A ducted FCU feeds four supply diffusers in a line, each stamped with ¼ of the room airflow and a 450 × 300 face; two return grilles RG2 → RG1 (600 × 600, 3.0 m apart) carry half the airflow each (backlog L-2).
 - **Electrical:** one 3-phase 400 V service board `LVMDP` on a declared 164 000 VA PLN connection, feeding four 3-phase floor sub-boards `PP-L1..L4` (lighting, sockets, three 1-phase AC ways each). P1, FP and FCU1 are not added by hand: the MEP sync mints the "MEP Equipment" board and its feeder.
 
 **Files.**
@@ -106,10 +106,9 @@ _(empty)_
 - `fire-tank-capacity-unset:FT` info: the fire-water reserve 31.5451 L/s x 1800 s = 56 781 L (backlog A-2).
 - The NFPA 20 standby-pump recommendation.
 - 12 × `drainage-laid-steeper` and `drainage-cleanout` at D0.
-- `terminal-velocity` on RG1 (backlog F-2): 925 L/s on one 600 x 600 = 3.212 m/s > the office return limit 3.0 m/s; the room's own bank is 2 grilles.
 - 5 `// VERIFY` advisories.
 
-**Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `air-duct-unsized` (backlog F-4), `unfed-panel`, any `pressure-zone`, `non-selective` (B-1: floor feeders 5 × 16 / 63 A, MEP feeder FRC 70 / 200 A), `enclosure-temp-rise-exceeded` (B-1: the LVMDP estimate falls to 26.1 K).
+**Expected absent:** `service-capacity-below-demand`, `life-safety-feeder-cable`, `air-terminal-unsized`, `terminal-velocity` (backlog L-2: two return grilles drawn), `air-duct-unsized` (backlog F-4), `unfed-panel`, any `pressure-zone`, `non-selective` (B-1: floor feeders 5 × 16 / 63 A, MEP feeder FRC 70 / 200 A), `enclosure-temp-rise-exceeded` (B-1: the LVMDP estimate falls to 26.1 K).
 
 **Fixed by its review (2026-11-13).**
 - **O1:** the NFPA 20 discharge raise ran past FP's own junction onto the sprinkler branch: S0→S1 was DN125 at 31.545 L/s, then DN32 above it. The raise now stops at a two-outlet pump's junction: the sprinkler riser is DN32 at 4.714 L/s throughout (and since backlog A-5 FP→S0 itself carries 4.714 L/s on its DN125).
@@ -120,7 +119,6 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
-- **(i) One return grille drawn (backlog F-2).** The room recommends two return grilles (3.0 m/s office limit) and the checker flags the drawn one. Redrawing the fixture with RG2 → RG1 → FCU1 (computed: RG2→RG1 DN355, return 31.16 → 32.89 Pa, FCU 121.25 → 122.97 Pa, 0.37 kW unchanged) makes the whole-building mechanical riser (M-201 on one sheet) stamp one unresolved key — a `WC` key on another floor loses its slot when Lantai 2 gains a column (`drawing_review_test` D4/D5 'office: every page places every tag clear'); the riser placer is outside the HVAC scope, so the fixture keeps one grille.
 
 ### Backlog closed (2026-11-13)
 
@@ -129,6 +127,7 @@ _(empty)_
 - **Equipment duty — backlog F-3.** FCU1 roots the drawn system, so the Rooms inspector's one headline is the drawn duty 121.25 Pa (the 108.70 Pa room estimate is not printed beside it); a room estimate is printed only with the label "estimate (no ducts drawn)".
 - **Return bank — backlog F-2.** The office return limit is min(3.0, 4.0) = 3.0 m/s for both the room sizing and the checker: the room's bank is ceil(0.925 / (0.36 x 0.8 x 3.0)) = ceil(1.07) = 2 grilles, and the drawn single 600 x 600 grille carrying 925 L/s (3.212 m/s, passed by the old 4.0 band) is now flagged `terminal-velocity` (kept as drawn — see backlog (i)).
 - **(a) Duct friction basis — backlog F-1.** The room-air equipment estimate now reads the same PU (0.03 mm) roughness the drawn supply duct reads (`defaultDuctRoughnessForService`): Ø500 at 0.925 m³/s, 0.46829 → 0.44620 Pa/m, so the FCU estimate is 50 + 0.44620 x 15 x 1.3 + 30 + 20 = 108.70 Pa (was 109.13). It remains an estimate (15 m assumed run); the drawn-duct fan duty is 121.25 Pa.
+- **(i) One return grille drawn — backlog L-2.** The fixture draws the room's two-grille bank RG2 → RG1 → FCU1 (600 x 600, 462.5 L/s each = 1.606 m/s <= 3.0: no `terminal-velocity`). Return chain RG2→RG1 3.0 m DN355 (0.6651 Pa/m), RG1→FCU1 2.0 m DN500 (0.4462 Pa/m): return 31.16 → 33.75 Pa, FCU static 121.25 → 123.84 Pa (40.085 + 33.754 + 50; the 122.97 Pa noted earlier read the wrong friction on DN355), air 114.55 W, 0.37 kW and MEP way 411.1 W unchanged. The whole-building riser (M-201) that then left one `WC` key unslotted now takes the S2/S3 band / pitch escalation (pages of at most 4 storeys): it places every tag clear.
 - **(c) Urinal type — backlog D-5.** `urinalFlushValve` exists (UBAP 5 / 5 / 6, DFU 4, a flush-valve node: valve curve, 98.067 kPa floor, `// VERIFY`). The office keeps `urinalFlushTank` as specified, so no office figure moves.
 - **(g) Branch run prints the pump's flow (O1) — backlog A-5.** FP→S0 keeps DN125 but carries the sprinkler's own 4.714 L/s (v 0.384 m/s): sprinkler index friction 37.414 → 36.947 m, sprinkler point 58.211 → 57.744 m; the pump stays on the standpipe point 98.536 m.
 - **(e) Churn over-pressure — backlog A-3.** The churn 1.4 x 98.536 x 9.81 = 1353.3 kPa now sets the PN16 class of the fire pipework downstream of FP (printed on the fire results and BOM fire lines), and the four hose valves (1341.5..1223.8 kPa static) are designated pressure-regulating hose valves set to 690 kPa (info, take-off, riser tag): no warning.
@@ -298,6 +297,10 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
   '1 label bertumpuk' in the DXF only (item 25). The DXF now lays its tags out in
   the PDF's page frame and maps them to model mm (`PlanPageFrame`,
   `mapPlanAnnotations`): the sheet stamps on neither.
+- L-2 Short riser pages escalate too: a riser page of at most 4 storeys (the office's
+  whole-building M-201) whose keys still overprint takes the S2/S3 band / pitch
+  escalation lone-floor pages already had; the office then draws its two return
+  grilles with every tag clear.
 - C-1 Level code in tags matches the floor's own name: `floorLocatorToken` reads
   'Lantai N' ⇒ `LN`, 'Basement N' ⇒ `BN`, 'Dasar' / 'Ground' ⇒ `GF`, 'Atap' / 'Roof'
   ⇒ `RF` (index rule for any other name); tower Lantai 30 prints `SP-L30`, Lantai 1

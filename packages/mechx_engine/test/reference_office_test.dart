@@ -157,6 +157,7 @@ void main() {
       'e_sa_FCU1_SD1': 3.0,
       for (var i = 2; i <= 4; i++) 'e_sa_SD${i - 1}_SD$i': 3.0,
       'e_ra_RG1_FCU1': 2.0,
+      'e_ra_RG2_RG1': 3.0, // backlog L-2: the second return grille
       for (var f = 0; f < 4; f++) ...{
         'e_cw_R${f}_T$f': 3.0,
         for (final b in kOfficeFloorFixtures) ...{

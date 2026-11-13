@@ -359,12 +359,27 @@ SldSheet buildMechanicalRiserSld({
         pitchScale: p,
       );
   final lone = floorRange != null && floorRange.lo == floorRange.hi;
+  // Drawing backlog L-2 (2026-11-13) — a SHORT multi-floor page (at most
+  // [kMechRiserEscalationMaxFloors] storeys, the whole riser of a low-rise
+  // building included) whose keys still overprint gets the same S2/S3
+  // escalation: the office's whole-building riser with its two return
+  // grilles left one `WC` key whose every clear key-row slot needed a leader
+  // across another tag. A clear page is built once (byte-identical); a tall
+  // page keeps the page-split rules (`paginatedRiserSheets`) instead, where
+  // a 30-storey re-draw per step would cost more than the split.
+  final floors = floorRange == null
+      ? (building?.levelCount ?? 1 << 30)
+      : floorRange.hi - floorRange.lo + 1;
   return riserPitchEscalation(
     build: at,
     bandH: _bandH,
-    enabled: lone,
+    enabled: lone || floors <= kMechRiserEscalationMaxFloors,
   );
 }
+
+/// Drawing backlog L-2 — the most storeys a multi-floor riser page may span
+/// and still take the S2/S3 band / pitch escalation (a taller page splits).
+const int kMechRiserEscalationMaxFloors = 4;
 
 /// Drawing review S2/S3 — the band heights ([kMechRiserBandSteps], × the
 /// standard band) and fan-out / lane / column PITCH scales

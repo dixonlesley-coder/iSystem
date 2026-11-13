@@ -897,45 +897,52 @@ void main() {
       expect(b.sprinklerPointHeadM, closeTo(chk.requiredHeadM, 1e-12));
     });
 
-    test('HVAC: fan static (supply + return + FCU internal) 121.25 Pa', () {
-      // Supply: (0.4462 + 0.4405 + 0.6651 + 1.0342) x 3 x 1.3 + 30 = 40.09;
-      // return 0.4462 x 2 x 1.3 + 30 = 31.16; + 50 internal = 121.25 Pa.
+    test('HVAC: fan static (supply + return + FCU internal) 123.84 Pa', () {
+      // Supply: (0.4462 + 0.4405 + 0.6651 + 1.0342) x 3 x 1.3 + 30 = 40.085;
+      // return (backlog L-2, two grilles RG2 → RG1 → FCU1): RG2→RG1 3.0 m
+      // DN355 @ 462.5 L/s (v 4.673, PU 0.6651 Pa/m — the supply SD2→SD3
+      // twin) + RG1→FCU1 2.0 m DN500 @ 925 L/s (0.4462 Pa/m): (0.6651 x 3 +
+      // 0.4462 x 2) x 1.3 + 30 = 2.8877 x 1.3 + 30 = 33.754 (was 0.4462 x 2
+      // x 1.3 + 30 = 31.16 with one grille); + 50 internal = 123.84 Pa (was
+      // 121.25). Air 0.925 x 123.84 = 114.55 W; shaft / 0.65 = 176.23 W;
+      // motor 0.37 kW unchanged (MEP way 370 / 0.9 = 411.1 W unchanged).
       final fan = c.read(supplyFanDutiesByRootProvider)[kOfficeFcuId]!;
       expect(fan.airflow.cubicMetersPerSecond, closeTo(0.925, 1e-9));
-      expect(fan.totalStaticPressure.pascals, closeTo(121.25, 0.005));
-      expect(fan.airPower.watts, closeTo(112.15, 0.005));
-      expect(fan.shaftPower.watts, closeTo(172.54, 0.005));
+      expect(fan.totalStaticPressure.pascals, closeTo(123.84, 0.005));
+      expect(fan.airPower.watts, closeTo(114.55, 0.005));
+      expect(fan.shaftPower.watts, closeTo(176.23, 0.005));
       expect(fan.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
       final sz = c.read(sizingProvider);
       for (final (id, dn) in [
         ('e_sa_FCU1_SD1', 500), ('e_sa_SD1_SD2', 450), ('e_sa_SD2_SD3', 355),
         ('e_sa_SD3_SD4', 250), ('e_ra_RG1_FCU1', 500), //
+        ('e_ra_RG2_RG1', 355), //
       ]) {
         expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
       }
-      // Backlog F-2 — RG1 (925 L/s on 600 x 600 = 0.925 / 0.288 = 3.212
-      // m/s) is judged against the office return limit min(3.0, 4.0) = 3.0
-      // m/s, the value the room's own return bank is counted on (ceil(0.925
-      // / 0.864) = 2 grilles): too high. Every diffuser is inside 3.0.
+      // Backlog L-2 — the room's two-grille bank is drawn: each 600 x 600
+      // carries 462.5 L/s, 0.4625 / (0.36 x 0.8) = 1.606 m/s <= the office
+      // return limit min(3.0, 4.0) = 3.0 m/s (one grille at 925 L/s was
+      // 3.212 m/s, flagged). Every terminal is inside its limit.
       final checks = c.read(airVelocityChecksProvider);
-      expect(checks[kOfficeReturnGrilleId]!.verdict,
-          VelocityBandVerdict.tooHigh);
-      expect(checks[kOfficeReturnGrilleId]!.actual.metersPerSecond,
-          closeTo(3.212, 5e-4));
-      expect(checks[kOfficeReturnGrilleId]!.max.metersPerSecond, 3.0);
+      for (final id in kOfficeReturnGrilles) {
+        expect(checks[id]!.verdict, VelocityBandVerdict.ok, reason: id);
+        expect(checks[id]!.actual.metersPerSecond, closeTo(1.606, 5e-4));
+        expect(checks[id]!.max.metersPerSecond, 3.0);
+      }
       expect(
           checks.entries
               .where((e) => e.value.verdict != VelocityBandVerdict.ok)
               .map((e) => e.key),
-          [kOfficeReturnGrilleId]);
+          isEmpty);
       final room = c.read(roomAreasProvider).single;
       expect(c.read(roomSizingProvider)[room.id]!.return_.count, 2);
       // Backlog F-3 — the Rooms inspector's ONE headline is the drawn FCU
-      // duty 121.25 Pa (the room estimate 108.70 Pa is not printed beside it).
+      // duty 123.84 Pa (the room estimate 108.70 Pa is not printed beside it).
       final head = c.read(roomAirHeadlineProvider)[room.id]!;
       expect(head.drawn, isTrue);
       expect(head.unitId, kOfficeFcuId);
-      expect(head.duty.totalStaticPressure.pascals, closeTo(121.25, 0.005));
+      expect(head.duty.totalStaticPressure.pascals, closeTo(123.84, 0.005));
       expect(
           c.read(roomSizingProvider)[room.id]!.equipment.totalStaticPressure
               .pascals,
@@ -1050,9 +1057,9 @@ void main() {
       expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
       expect(kinds, isNot(contains('electrical:life-safety-feeder-cable')));
       expect(kinds.where((k) => k.startsWith('air-terminal-unsized')), isEmpty);
-      // Backlog F-2 — the one return grille is flagged against the office
-      // return limit (3.212 > 3.0 m/s; the room recommends two).
-      expect(count('terminal-velocity'), 1);
+      // Backlog L-2 — the two drawn return grilles are each 1.606 <= 3.0
+      // m/s: no `terminal-velocity` (one grille at 3.212 m/s raised it).
+      expect(count('terminal-velocity'), 0);
       // Backlog F-4 — the five ducts are auto-sized within their limits: no
       // `air-duct-unsized` (it listed all five as "no hand-chosen size").
       expect(count('air-duct-unsized'), 0);

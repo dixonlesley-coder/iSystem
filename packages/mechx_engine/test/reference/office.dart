@@ -32,8 +32,8 @@
 // plain data ([kOfficeRooms]); its airflow is the SAME `sizeRoomAir` call the
 // app's `RoomArea.sizing` makes (office type, seeded ceiling 4.0 − 0.3 =
 // 3.7 m, the type's default ACH, FCU, default duct settings round /
-// velocity), and each diffuser is stamped with one quarter of it, the return
-// grille with all of it ([kOfficeRoomAirflow]).
+// velocity), and each diffuser is stamped with one quarter of it, each of the
+// two return grilles with half of it (backlog L-2, [kOfficeRoomAirflow]).
 library;
 
 import 'dart:math' as math;
@@ -91,6 +91,15 @@ const List<String> kOfficeHydrants = ['HYD0', 'HYD1', 'HYD2', 'HYD3'];
 const String kOfficeFcuId = 'FCU1';
 const List<String> kOfficeDiffusers = ['SD1', 'SD2', 'SD3', 'SD4'];
 const String kOfficeReturnGrilleId = 'RG1';
+
+/// Drawing backlog L-2 (2026-11-13) — the room's two-grille return bank
+/// (office backlog i): RG2 → RG1 → FCU1, each 600 x 600 carrying half the
+/// room airflow.
+const String kOfficeReturnGrille2Id = 'RG2';
+const List<String> kOfficeReturnGrilles = [
+  kOfficeReturnGrilleId,
+  kOfficeReturnGrille2Id,
+];
 
 /// A room annotation as plain data (as in the shophouse fixture).
 class OfficeRoom {
@@ -153,11 +162,10 @@ final FlowRate kOfficeRoomAirflow = officeRoomAir().airflow;
 
 /// Pass 2 — the stamped terminal faces (mm): each diffuser 450 x 300
 /// (231.25 L/s over 0.135 m² x 0.8 free = 2.14 m/s <= 3.0; 300 x 300 would
-/// be 3.21), the return grille 600 x 600 (925 L/s over 0.36 x 0.8 = 3.21 m/s:
-/// inside the 4.0 m/s return band, but above the office return limit
-/// min(3.0, 4.0) = 3.0 m/s that backlog F-2 made the ONE limit for the room's
-/// bank (2 grilles) and the checker — so the app flags it; deliberately kept
-/// as drawn, see docs/REFERENCE-BUILDINGS.md).
+/// be 3.21), each of the TWO return grilles 600 x 600 (backlog L-2: 462.5
+/// L/s over 0.36 x 0.8 = 1.606 m/s <= the office return limit min(3.0, 4.0)
+/// = 3.0 m/s; the room's bank is ceil(0.925 / (0.288 x 3.0)) = 2 grilles —
+/// one grille carrying 925 L/s was 3.212 m/s and flagged).
 const (double, double) kOfficeDiffuserFaceMm = (450, 300);
 const (double, double) kOfficeReturnFaceMm = (600, 600);
 
@@ -286,11 +294,16 @@ Network buildOfficeNetwork() {
           component: NodeComponent.supplyDiffuser,
           airflow: quarter,
           faceMm: kOfficeDiffuserFaceMm),
-    node(kOfficeReturnGrilleId, (1450, 250),
-        floor: 1,
-        component: NodeComponent.returnGrille,
-        airflow: kOfficeRoomAirflow,
-        faceMm: kOfficeReturnFaceMm),
+    // Backlog L-2 — two return grilles 3.0 m apart (150 px), half each.
+    for (final (id, x) in [
+      (kOfficeReturnGrilleId, 1450.0),
+      (kOfficeReturnGrille2Id, 1600.0),
+    ])
+      node(id, (x, 250),
+          floor: 1,
+          component: NodeComponent.returnGrille,
+          airflow: FlowRate(kOfficeRoomAirflow.cubicMetersPerSecond / 2),
+          faceMm: kOfficeReturnFaceMm),
   ];
 
   const cw = ServiceType.coldWater;
@@ -331,10 +344,13 @@ Network buildOfficeNetwork() {
     _edge(sp, 'S3', 'SP1'), // 150 px = 3.0 m
     for (var i = 2; i <= 6; i++) _edge(sp, 'SP${i - 1}', 'SP$i'), // 3.0 m
     // HVAC — supply trunk FCU1 → SD1 → … → SD4 (150 px = 3.0 m each) and the
-    // return duct RG1 → FCU1 (100 px = 2.0 m).
+    // return ducts RG2 → RG1 (150 px = 3.0 m) and RG1 → FCU1 (100 px =
+    // 2.0 m).
     _edge(ServiceType.duct, kOfficeFcuId, 'SD1'),
     for (var i = 2; i <= 4; i++)
       _edge(ServiceType.duct, 'SD${i - 1}', 'SD$i'),
+    _edge(ServiceType.returnAir, kOfficeReturnGrille2Id,
+        kOfficeReturnGrilleId),
     _edge(ServiceType.returnAir, kOfficeReturnGrilleId, kOfficeFcuId),
   ];
   return Network(nodes: nodes, edges: edges);
