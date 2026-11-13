@@ -812,6 +812,15 @@ String _professionalDxf({
   // entity per line, parallel to its run, + its leader when escaped.
   for (final l in ann.labels) {
     final p = l.placement;
+    // Drawing-review D5 — a KEYED element: its numbered circle.
+    final kc = p.keyCircle;
+    if (kc != null) {
+      g(0, 'CIRCLE');
+      g(8, kDxfLayerAnno);
+      g(10, kc.x);
+      g(20, kc.y);
+      g(40, kc.r);
+    }
     for (final line in p.lines) {
       g(0, 'TEXT');
       g(8, kDxfLayerAnno);
@@ -830,6 +839,27 @@ String _professionalDxf({
       g(20, lead.y);
       g(11, end.x);
       g(21, end.y);
+    }
+  }
+
+  // Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table (same layout).
+  final kt = ann.keyTable;
+  if (kt != null) {
+    for (final r in kt.rules) {
+      g(0, 'LINE');
+      g(8, kDxfLayerFrame);
+      g(10, r.x1);
+      g(20, r.y1);
+      g(11, r.x2);
+      g(21, r.y2);
+    }
+    for (final t in kt.texts) {
+      g(0, 'TEXT');
+      g(8, kDxfLayerFrame);
+      g(10, t.x);
+      g(20, t.y);
+      g(40, kt.textSize);
+      g(1, t.text);
     }
   }
 

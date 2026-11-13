@@ -733,12 +733,30 @@ Uint8List planToPdf({
       cs.writeln('0.30 0.30 0.30 RG 0.5 w');
       cs.writeln('${_n(lead.x)} ${_n(lead.y)} m ${_n(end.x)} ${_n(end.y)} l S');
     }
+    // Drawing-review D5 — a KEYED element: its numbered circle.
+    final kc = p.keyCircle;
+    if (kc != null) {
+      cs.writeln('0.20 0.20 0.20 RG 0.6 w');
+      circle(kc.x, kc.y, kc.r);
+    }
     final rad = p.angleDeg * math.pi / 180;
     final pc = math.cos(rad), ps = math.sin(rad);
     for (final line in p.lines) {
       cs.writeln('BT /F1 ${_fs(l.textSize)} Tf 0 0 0 rg '
           '${_n(pc)} ${_n(ps)} ${_n(-ps)} ${_n(pc)} '
           '${_n(line.x)} ${_n(line.y)} Tm (${_pdfText(line.text)}) Tj ET');
+    }
+  }
+  // Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table.
+  final kt = ann.keyTable;
+  if (kt != null) {
+    cs.writeln('0.20 0.20 0.20 RG 0.5 w');
+    for (final r in kt.rules) {
+      cs.writeln('${_n(r.x1)} ${_n(r.y1)} m ${_n(r.x2)} ${_n(r.y2)} l S');
+    }
+    for (final t in kt.texts) {
+      cs.writeln('BT /F1 ${_fs(kt.textSize)} Tf 0 0 0 rg '
+          '${_n(t.x)} ${_n(t.y)} Td (${_pdfText(t.text)}) Tj ET');
     }
   }
 

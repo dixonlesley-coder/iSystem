@@ -830,6 +830,124 @@ const double kPlanLeaderMaxFactor = 8.0;
 /// this (a short leader that overprints beats a cross-sheet one).
 const double kPlanLeaderHardMaxFactor = 16.0;
 
+/// Drawing-review D5 (2026-11-13) — with a [PlanKeyRegistry] (the issued
+/// plan sheets) a tag is placed ONLY in a slot that overprints nothing, whose
+/// leader crosses nothing and is at most this many text heights long (≈ 12 mm
+/// at 9 pt on A3); otherwise the element gets a numbered KEY TAG and its text
+/// goes into the sheet's KETERANGAN PIPA / PIPE KEY table. A drafting rule.
+const double kPlanKeyedLeaderMaxFactor = 4.0;
+
+/// Drawing-review D5 — the keyed texts of one plan sheet (text → key, in key
+/// order; identical typical texts share one key).
+class PlanKeyRegistry {
+  final Map<String, int> keyOf = <String, int>{};
+  int keyFor(String text) => keyOf.putIfAbsent(text, () => keyOf.length + 1);
+  bool get isEmpty => keyOf.isEmpty;
+}
+
+/// Drawing-review D5 — a placed key table: its text runs (baseline starts,
+/// upright) and ruling, in the output space, at [textSize].
+class PlanKeyTable {
+  final List<PlacedLabelLine> texts;
+  final List<LabelSegment> rules;
+  final double textSize;
+  const PlanKeyTable(this.texts, this.rules, this.textSize);
+}
+
+/// Drawing-review D5 — lay the KETERANGAN PIPA / PIPE KEY table of [keys]
+/// into the first clear spot of [layout] (nothing overprinted, no run
+/// through it) scanning [bounds] from its top-left on a text-height grid;
+/// with no clear spot it goes below [bounds] and is counted unresolved.
+/// Columns: KEY | SIZE-SERVICE-MATERIAL / TAG | LENGTH / LEVEL (the label's
+/// first ` · ` part, then the rest). Pure; the PDF and DXF draw the result.
+PlanKeyTable? placePlanKeyTable(
+  PlanLabelLayout layout,
+  PlanKeyRegistry keys, {
+  required double textSize,
+  required LabelBox bounds,
+}) {
+  if (keys.isEmpty) return null;
+  final ts = textSize;
+  double w(String t) => t.length * ts * 0.55;
+  (String, String) split(String t) {
+    for (final sep in const [' - ', ' \u00b7 ']) {
+      final i = t.indexOf(sep);
+      if (i >= 0) return (t.substring(0, i), t.substring(i + sep.length));
+    }
+    return (t, '-');
+  }
+
+  final entries = keys.keyOf.entries.toList()
+    ..sort((a, b) => a.value.compareTo(b.value));
+  const heads = ['KEY', 'SIZE-SERVICE-MATERIAL / TAG', 'LENGTH / LEVEL'];
+  final rows = [
+    for (final e in entries)
+      ['${e.value}', split(e.key).$1, split(e.key).$2],
+  ];
+  final colW = [
+    for (var c = 0; c < 3; c++)
+      [heads[c], for (final r in rows) r[c]].map(w).fold(0.0, math.max) +
+          ts,
+  ];
+  final pitch = 1.5 * ts;
+  final tableW = colW.fold(0.0, (a, b) => a + b);
+  final tableH = (rows.length + 2) * pitch + 0.5 * ts;
+  bool clear(double x0, double yTop) {
+    final b = (minX: x0, minY: yTop - tableH, maxX: x0 + tableW, maxY: yTop);
+    return !layout.hitsBox(b) &&
+        !layout.hitsRun(b, clearance: 0.25 * ts) &&
+        !layout.hitsGrid(b);
+  }
+
+  double? fx, fy;
+  final step = ts;
+  outer:
+  for (var yTop = bounds.maxY; yTop - tableH >= bounds.minY; yTop -= step) {
+    for (var x0 = bounds.minX; x0 + tableW <= bounds.maxX; x0 += step) {
+      if (clear(x0, yTop)) {
+        fx = x0;
+        fy = yTop;
+        break outer;
+      }
+    }
+  }
+  if (fx == null || fy == null) {
+    fx = bounds.minX;
+    fy = bounds.minY - 2 * ts;
+    layout.markUnresolved();
+  }
+  final x0 = fx, yTop = fy;
+  final texts = <PlacedLabelLine>[
+    (text: 'KETERANGAN PIPA / PIPE KEY', x: x0, y: yTop - ts),
+  ];
+  final gridTop = yTop - pitch - 0.3 * ts;
+  final rules = <LabelSegment>[];
+  final gridBot = gridTop - (rows.length + 1) * pitch;
+  for (var r = 0; r <= rows.length + 1; r++) {
+    final y = gridTop - r * pitch;
+    if (r == 0 || r == 1 || r == rows.length + 1) {
+      rules.add((x1: x0, y1: y, x2: x0 + tableW, y2: y));
+    }
+  }
+  var x = x0;
+  for (var c = 0; c <= 3; c++) {
+    rules.add((x1: x, y1: gridTop, x2: x, y2: gridBot));
+    if (c == 3) break;
+    texts.add((text: heads[c], x: x + 0.5 * ts, y: gridTop - pitch + 0.4 * ts));
+    for (var r = 0; r < rows.length; r++) {
+      texts.add((
+        text: rows[r][c],
+        x: x + 0.5 * ts,
+        y: gridTop - (r + 2) * pitch + 0.4 * ts
+      ));
+    }
+    x += colW[c];
+  }
+  layout.addBox(
+      (minX: x0, minY: yTop - tableH, maxX: x0 + tableW, maxY: yTop));
+  return PlanKeyTable(texts, rules, ts);
+}
+
 /// R6: a point feature's tag (riser marker, equipment glyph) placed WITHOUT a
 /// leader keeps its near edge within this many text sizes of the feature;
 /// any slot further out is tied back by a leader from the feature, so a tag
@@ -1150,6 +1268,10 @@ class LeaderedLabelPlacement {
   final ({double x, double y})? leaderAnchor;
   final ({double x, double y})? leaderEnd;
   final List<PlacedLabelLine> lines;
+
+  /// Drawing-review D5 — non-null when the tag was KEYED: the numbered
+  /// circle (centre + radius) the renderers draw around [lines]' number.
+  final ({double x, double y, double r})? keyCircle;
   const LeaderedLabelPlacement({
     required this.x,
     required this.y,
@@ -1157,6 +1279,7 @@ class LeaderedLabelPlacement {
     this.leaderAnchor,
     this.leaderEnd,
     this.lines = const [],
+    this.keyCircle,
   });
 }
 
@@ -1291,6 +1414,7 @@ LeaderedLabelPlacement placePlanLabel({
   List<({double x, double y})> extraStations = const [],
   bool beyondEnds = true,
   double ownHalfWidth = 0,
+  PlanKeyRegistry? keys,
 }) {
   final dx = bx - ax, dy = by - ay;
   var angle = (dx == 0 && dy == 0) ? 0.0 : math.atan2(dy, dx);
@@ -1658,6 +1782,21 @@ LeaderedLabelPlacement placePlanLabel({
       }
     }
   }
+  // Drawing-review D5 — on an issued sheet ([keys]) only a CLEAR slot whose
+  // leader crosses nothing and stays within [kPlanKeyedLeaderMaxFactor] text
+  // heights is used; anything else keys the element.
+  if (keys != null &&
+      (best == null ||
+          bestScore.$1 != 0 ||
+          bestScore.$5 > kPlanKeyedLeaderMaxFactor * ts + eps)) {
+    return _placeKeyTag(
+        layout: layout,
+        keys: keys,
+        text: text,
+        ts: ts,
+        anchor: anchorPoint ?? (x: (ax + bx) / 2, y: (ay + by) / 2),
+        ownRunId: ownRunId);
+  }
   if (best == null) {
     // Degenerate (no station within the cap): first escape row at the midpoint.
     final (cx, cy) = along.first;
@@ -1686,6 +1825,82 @@ class _Block {
   final double cx, cy, v0, v1, halfW;
   const _Block(this.quad, this.padded, this.lines, this.cx, this.cy, this.v0,
       this.v1, this.halfW);
+}
+
+/// Drawing-review D5 — the KEY TAG of a plan element: a numbered circle
+/// hugging [anchor] (the first clear slot of 16 directions × growing rings,
+/// a leader beyond the hugging ring of at most [kPlanKeyedLeaderMaxFactor]
+/// text heights crossing nothing), its [text] registered in [keys]. No clear
+/// slot ⇒ the least-bad one, counted unresolved (the honest stamp).
+LeaderedLabelPlacement _placeKeyTag({
+  required PlanLabelLayout layout,
+  required PlanKeyRegistry keys,
+  required String text,
+  required double ts,
+  required ({double x, double y}) anchor,
+  String? ownRunId,
+}) {
+  final n = '${keys.keyFor(text)}';
+  final tw = n.length * ts * 0.55;
+  final r = math.max(0.75 * ts, tw / 2 + 0.25 * ts);
+  ({double x, double y, double cost, bool lead})? best;
+  for (final gap in [0.3, 0.8, 1.5, 2.3, 3.2, 4.0]) {
+    final d = r + gap * ts;
+    final lead = gap > 0.5;
+    for (var k = 0; k < 16; k++) {
+      final ux = math.sin(k * math.pi / 8), uy = math.cos(k * math.pi / 8);
+      final cx = anchor.x + ux * d, cy = anchor.y + uy * d;
+      final box = (minX: cx - 0.85 * r, minY: cy - 0.85 * r,
+          maxX: cx + 0.85 * r, maxY: cy + 0.85 * r);
+      var cost = 0.0;
+      if (layout.hitsBox(box)) cost += 1;
+      for (final rr in layout._runs) {
+        if (rr.id != null && rr.id == ownRunId) continue;
+        if (_segHitsBox(rr.seg, box, 0)) cost += 1;
+      }
+      if (lead) {
+        final ex = cx - ux * r, ey = cy - uy * r;
+        for (final rr in layout._runs) {
+          if (rr.id != null && rr.id == ownRunId) continue;
+          if (_segmentsCross(anchor.x, anchor.y, ex, ey, rr.seg.x1, rr.seg.y1,
+              rr.seg.x2, rr.seg.y2)) {
+            cost += 1;
+          }
+        }
+        final seg = [(anchor.x, anchor.y), (ex, ey)];
+        for (final l in layout._labels) {
+          if (_quadsOverlap(l, seg)) cost += 1;
+        }
+      }
+      if (best == null || cost < best.cost) {
+        best = (x: cx, y: cy, cost: cost, lead: lead);
+      }
+      if (cost == 0) break;
+    }
+    if (best != null && best.cost == 0) break;
+  }
+  final b = best!;
+  if (b.cost > 0) layout._unresolved++;
+  layout._labels.add(_boxQuad(
+      (minX: b.x - r, minY: b.y - r, maxX: b.x + r, maxY: b.y + r)));
+  ({double x, double y})? la, le;
+  if (b.lead) {
+    final dx = b.x - anchor.x, dy = b.y - anchor.y;
+    final dl = math.sqrt(dx * dx + dy * dy);
+    la = anchor;
+    le = (x: b.x - dx / dl * r, y: b.y - dy / dl * r);
+    layout.addRun(null, la.x, la.y, le.x, le.y);
+  }
+  final line = (text: n, x: b.x - tw / 2, y: b.y - 0.36 * ts);
+  return LeaderedLabelPlacement(
+    x: line.x,
+    y: line.y,
+    angleDeg: 0,
+    leaderAnchor: la,
+    leaderEnd: le,
+    lines: [line],
+    keyCircle: (x: b.x, y: b.y, r: r),
+  );
 }
 
 /// Legacy entry point (N3): place [text] for the edge (ax,ay)→(bx,by) against

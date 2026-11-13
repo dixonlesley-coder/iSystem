@@ -103,7 +103,7 @@ void main() {
                 r'(-?[\d.]+) (-?[\d.]+) Tm \((.*?)\) Tj')
             .allMatches(pdf))
           (
-            text: m.group(7)!.replaceAll('·', '-').replaceAll('Ø', '%%c'),
+            text: m.group(7)!.replaceAll('·', '%%183').replaceAll('Ø', '%%c'),
             angle: math.atan2(
                     double.parse(m.group(2)!), double.parse(m.group(1)!)) *
                 180 /

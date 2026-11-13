@@ -1,6 +1,7 @@
 // Drawing review (2026-11-13) — the reference-building drawing sets were
 // reviewed against docs/DRAFTING-CHECKLIST.md; these pin the cures (D1..D7).
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/geometry/scale_calibration.dart';
@@ -8,6 +9,7 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/cover_sheet.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
+import 'package:mechx_engine/report/plan_symbols.dart';
 import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/report_pdf.dart';
 import 'package:mechx_engine/report/sld_export.dart';
@@ -248,6 +250,57 @@ void main() {
       expect(texts, containsAll(['75-D-PVC', '1.5 m', 'CW-R1', 'Lantai 2']));
       expect(prims.whereType<SldLabel>().every((l) => l.size >= 8), isTrue);
       expect(bottom, greaterThan(0));
+    });
+  });
+
+  group('D5 — plan tags: legal slot or key tag, keyed text in a table', () {
+    test('a crowded run keys the tags that find no short clear slot', () {
+      const ts = 9.0;
+      final layout = PlanLabelLayout();
+      // A fan of short runs out of one junction (the fixture-group case).
+      for (var k = 0; k < 4; k++) {
+        layout.addRun(
+            'r$k', 100, 100, 100 + 30.0 * (k.isEven ? 1 : -1), 100 + 14.0 * k);
+      }
+      // Dense marks everywhere but a small clearing round the junction.
+      for (var x = 0.0; x <= 300; x += 14) {
+        for (var y = 0.0; y <= 300; y += 14) {
+          final dx = x - 100, dy = y - 107;
+          if (dx * dx + dy * dy < 60 * 60) continue;
+          layout.addBox((minX: x, minY: y, maxX: x + 6, maxY: y + 6));
+        }
+      }
+      final keys = PlanKeyRegistry();
+      final placed = [
+        for (var k = 0; k < 4; k++)
+          placePlanLabel(
+              ax: 100,
+              ay: 100,
+              bx: 100 + 30.0 * (k.isEven ? 1 : -1),
+              by: 100 + 14.0 * k,
+              text: 'CW-L3 \u00b7 DN15 - 4.1 m - CL +3.70',
+              textSize: ts,
+              layout: layout,
+              ownRunId: 'r$k',
+              keys: keys),
+      ];
+      final keyed = placed.where((p) => p.keyCircle != null).toList();
+      expect(keyed, isNotEmpty);
+      // Identical texts share ONE key.
+      expect(keys.keyOf.length, 1);
+      for (final p in placed) {
+        final a = p.leaderAnchor, e = p.leaderEnd;
+        if (a == null || e == null) continue;
+        final len = math.sqrt(math.pow(e.x - a.x, 2) + math.pow(e.y - a.y, 2));
+        expect(len, lessThanOrEqualTo(kPlanKeyedLeaderMaxFactor * ts + 1e-6));
+      }
+      final table = placePlanKeyTable(layout, keys,
+          textSize: ts, bounds: (minX: 0, minY: 0, maxX: 1200, maxY: 1200));
+      expect(table, isNotNull);
+      final texts = table!.texts.map((t) => t.text).toList();
+      expect(texts, contains('KETERANGAN PIPA / PIPE KEY'));
+      expect(texts, containsAll(['CW-L3 \u00b7 DN15', '4.1 m - CL +3.70']));
+      expect(layout.unresolvedCount, 0);
     });
   });
 }

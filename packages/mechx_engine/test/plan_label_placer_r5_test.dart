@@ -280,8 +280,8 @@ void main() {
       // PDF: WinAnsi 0xD8 (latin1 'Ø'), never the ASCII 'O' stand-in.
       expect(pdf(), contains('SA-F1 · Ø200'));
       expect(pdf(), isNot(contains('O200')));
-      // DXF: the AutoCAD %%c control code (via dxfText; '·' → '-').
-      expect(dxf(), contains('SA-F1 - %%c200'));
+      // DXF: the AutoCAD %%c control code (via dxfText; '·' → '%%183').
+      expect(dxf(), contains('SA-F1 %%183 %%c200'));
       expect(dxf(), isNot(contains('O200')));
     });
 
@@ -290,7 +290,7 @@ void main() {
       // takes the split form first — the same choice in points and in mm.
       expect(pdf(), contains('(CW-F1 · DN15) Tj'));
       expect(pdf(), contains('(0.8 m - CL +3.70 drop 2.60 m) Tj'));
-      expect(dxf(), contains('\n1\nCW-F1 - DN15\n'));
+      expect(dxf(), contains('\n1\nCW-F1 %%183 DN15\n'));
       expect(dxf(), contains('\n1\n0.8 m - CL +3.70 drop 2.60 m\n'));
     });
   });

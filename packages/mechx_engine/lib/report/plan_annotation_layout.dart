@@ -146,6 +146,10 @@ class PlanAnnotations {
   final List<PlanTieDimension> ties;
   final List<PlanPlacedLabel> labels;
 
+  /// Drawing-review D5 — the sheet's KETERANGAN PIPA / PIPE KEY table (null
+  /// when no tag had to be keyed).
+  final PlanKeyTable? keyTable;
+
   /// Round 24 — annotations that could only be placed OVERPRINTING something
   /// (the density limit of the sheet: no clear slot existed). The exporters
   /// print [planOverlapWarning] on the sheet when this is non-zero, so an
@@ -156,7 +160,8 @@ class PlanAnnotations {
       this.upDown = const [],
       this.ties = const [],
       this.labels = const [],
-      this.overlapCount = 0});
+      this.overlapCount = 0,
+      this.keyTable});
 }
 
 /// Round 24 — the minimum PAPER width (mm) at which a sized duct is drawn
@@ -288,7 +293,10 @@ PlanAnnotations layoutPlanAnnotations({
   double? metersPerPixel,
   List<LabelBox> occupied = const [],
   Map<String, double> runHalfWidths = const {},
+  bool keyedLabels = true,
 }) {
+  // Drawing-review D5 — tags that find no legal slot are keyed.
+  final keys = keyedLabels ? PlanKeyRegistry() : null;
   bool onFloor(NetNode n) => n.sheetId == sheetId && n.floorIndex == floorIndex;
   final u = unitsPerMm;
   final ts = kPlanLabelTextMm * u;
@@ -586,7 +594,8 @@ PlanAnnotations layoutPlanAnnotations({
             layout: layout,
             ownRunId: e.id,
             // Round 29 (drawings-3-3) — clear the duct's own outline.
-            ownHalfWidth: runHalfWidths[e.id] ?? 0),
+            ownHalfWidth: runHalfWidths[e.id] ?? 0,
+            keys: keys),
         ts));
   }
   // A point feature's tag: a short pseudo-run just right of the feature,
@@ -604,7 +613,8 @@ PlanAnnotations layoutPlanAnnotations({
         splitLines: split,
         textSize: ts,
         layout: layout,
-        anchorPoint: (x: px, y: py));
+        anchorPoint: (x: px, y: py),
+        keys: keys);
   }
 
   // Round 33 (engineer-walkthrough-plan-fixtures-anonymous) — every plumbing
@@ -648,10 +658,36 @@ PlanAnnotations layoutPlanAnnotations({
         pointTag(p.x, p.y, kPlanRiserTagGapMm, l.text, l.split), ts));
   }
 
+  // Drawing-review D5 — the key table, in the first clear spot near the
+  // drawn floor (the frame / title block / legend are occupied boxes).
+  PlanKeyTable? keyTable;
+  if (keys != null && !keys.isEmpty) {
+    var x0 = double.infinity, y0 = double.infinity;
+    var x1 = -double.infinity, y1 = -double.infinity;
+    for (final n in net.nodes) {
+      if (!onFloor(n)) continue;
+      final p = map(n.x, n.y);
+      x0 = math.min(x0, p.x);
+      y0 = math.min(y0, p.y);
+      x1 = math.max(x1, p.x);
+      y1 = math.max(y1, p.y);
+    }
+    final pad = 80 * ts;
+    keyTable = placePlanKeyTable(layout, keys,
+        textSize: ts,
+        bounds: (
+          minX: x0 - pad,
+          minY: y0 - pad,
+          maxX: x1 + pad,
+          maxY: y1 + pad
+        ));
+  }
+
   return PlanAnnotations(
       grid: gridMarks,
       upDown: upDown,
       ties: ties,
       labels: labels,
-      overlapCount: layout.unresolvedCount);
+      overlapCount: layout.unresolvedCount,
+      keyTable: keyTable);
 }

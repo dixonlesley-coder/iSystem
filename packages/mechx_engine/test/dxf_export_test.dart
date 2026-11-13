@@ -554,7 +554,7 @@ void main() {
             // A middle-dot tag (the label separator the app's tags carry).
             edgeTags: const {'e': 'CW-F1 \u00b7 L1', 'r': 'CW-R1 \u00b7 S'});
         expect(dxf.codeUnits.where((c) => c > 0x7e), isEmpty);
-        expect(dxf, contains('CW-F1 - L1'));
+        expect(dxf, contains('CW-F1 %%183 L1'));
         if (mpp != null) {
           expect(dxf, contains('9\n\$ACADVER\n1\nAC1009\n'));
         }
