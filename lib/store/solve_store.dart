@@ -2746,8 +2746,14 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
   lowest ??= lowestAny;
   final groups = <DownfeedZoneGroup>[];
   if (lowest != null || regionOf.isEmpty) {
-    final datum = ref.watch(effectiveDownfeedDatumProvider);
-    final byFloor = ref.watch(downfeedDatumByFloorProvider);
+    // Reference office O2 — on UPFEED the zone table hangs from the SOLVED
+    // field (the datum the delivered no-flow statics imply), never the
+    // legacy PRV-budget walk: one zone while every solved fixture static is
+    // within the SNI maximum, split only where it is not.
+    final upDatum = ref.watch(upfeedZoneDatumProvider);
+    final datum = upDatum ?? ref.watch(effectiveDownfeedDatumProvider);
+    final byFloor =
+        upDatum != null ? null : ref.watch(downfeedDatumByFloorProvider);
     groups.add(DownfeedZoneGroup(
       tankId: tankId,
       tankElevation: datum,
@@ -2836,6 +2842,31 @@ final downfeedZoneGroupsProvider = Provider<List<DownfeedZoneGroup>>((ref) {
     ));
   }
   return groups;
+});
+
+/// Reference office O2 — the UPFEED zone datum: the elevation of the
+/// equivalent free surface the DELIVERED upfeed field implies
+/// ([upfeedDeliveredProvider], the field [upfeedOverPressureProvider]
+/// judges): max over its delivery nodes of (no-flow static head + node
+/// elevation) — the source datum plus the pump's no-flow head. Null on
+/// downfeed or with no upfeed solve (the zone table then keeps its downfeed
+/// / legacy basis).
+final upfeedZoneDatumProvider = Provider<Length?>((ref) {
+  if (ref.watch(feedStrategyProvider) != FeedStrategy.upfeed) return null;
+  final up = ref.watch(upfeedDeliveredProvider);
+  if (up == null || up.deliveryNodeIds.isEmpty) return null;
+  final net = ref.watch(sizingNetworkProvider);
+  final project = ref.watch(projectControllerProvider);
+  double? best;
+  for (final id in up.deliveryNodeIds) {
+    final n = net.nodeById(id);
+    final st = up.noFlowStaticPressure[id];
+    if (n == null || st == null) continue;
+    final z = headFromPressure(st).meters +
+        nodeElevation(n, project.building, project.mounting).meters;
+    if (best == null || z > best) best = z;
+  }
+  return best == null ? null : Length(best);
 });
 
 /// The downfeed PRV zone table: every [downfeedZoneGroupsProvider] group's
