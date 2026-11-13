@@ -125,8 +125,11 @@ const double _drawInset = 12.0;
 /// bottom-left, the title block (height [titleBlockHeight], null = no chrome
 /// ⇒ the legacy 96 pt strip) the bottom-right.
 double _sldTitleStripH(SldSheet sheet, double? titleBlockHeight) {
-  final legendH =
-      sheet.legend.isNotEmpty ? 18.0 + sheet.legend.length * 11.0 : 0.0;
+  // F8 follow-up — a long legend entry wraps inside the box, so the strip
+  // counts printed LINES, not entries.
+  final legendH = sheet.legend.isNotEmpty
+      ? 18.0 + sldLegendLineCount(sheet.legend) * 11.0
+      : 0.0;
   return titleBlockHeight != null
       ? math.max(titleBlockHeight, legendH) + 24.0
       : 96.0;
@@ -495,7 +498,7 @@ String _sldPageContent({
   // ── Device legend (KETERANGAN, bottom-left) ─────────────────────────────────
   if (sheet.legend.isNotEmpty) {
     const rowH = 11.0;
-    final lh = 18.0 + sheet.legend.length * rowH;
+    final lh = 18.0 + sldLegendLineCount(sheet.legend) * rowH;
     const lw = 240.0;
     const lx = _margin + 4;
     const ly = _margin + 2;
@@ -504,12 +507,19 @@ String _sldPageContent({
     cs.writeln('BT /F1 9 Tf 0 0 0 rg '
         '${_n(lx + 6)} ${_n(ly + lh - 12)} Td (${_pdfText('LEGEND')}) Tj ET');
     var row = 0;
+    // F8 follow-up (2026-11-13) — an entry longer than the box wraps onto
+    // the following lines, hanging after its `CODE  -  ` lead (the same
+    // wrap the DXF legend prints).
     for (final e in sheet.legend) {
-      final ry = ly + lh - 24 - row * rowH;
-      cs.writeln('BT /F1 7.5 Tf 0.12 0.12 0.12 rg '
-          '${_n(lx + 6)} ${_n(ry)} Td '
-          '(${_pdfText('${e.code}  -  ${e.meaning}')}) Tj ET');
-      row++;
+      final w = sldLegendEntryLines(e);
+      for (var k = 0; k < w.lines.length; k++) {
+        final ry = ly + lh - 24 - row * rowH;
+        final x = lx + 6 + (k == 0 ? 0 : w.indentEm * 7.5);
+        cs.writeln('BT /F1 7.5 Tf 0.12 0.12 0.12 rg '
+            '${_n(x)} ${_n(ry)} Td '
+            '(${_pdfText(w.lines[k])}) Tj ET');
+        row++;
+      }
     }
   }
 

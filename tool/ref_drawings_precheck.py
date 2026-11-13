@@ -13,7 +13,8 @@ Writes, per building:
     precheck.md               one line per sheet per item, PASS / FAIL / N-A
 and ROOT/INDEX.md (sheet tables + summary counts).
 
-Items checked (docs/DRAFTING-CHECKLIST.md): 1/3 title block fields, 2/23
+Items checked (docs/DRAFTING-CHECKLIST.md): 1/3 title block fields, 4 legend
+text inside its LEGEND box (scripted part), 2/23
 numbers unique + drawing list, 5 smallest text pt, 6 stamped overlap warning,
 7 garbled glyphs, 21 panel-schedule totals add up to the DAYA rows (E-201 /
 E-601), 24 cross-document figures, 25 PDF vs DXF text. Report only:
@@ -584,6 +585,60 @@ def run_building(root, b):
         else:
             emit(6, 'N-A', lab, 'exporter keeps no overlap counter for this '
                  'sheet type; visual check')
+
+    # 4 (scripted part) — legend text stays inside its LEGEND box: on every
+    # page, the smallest stroked rect around a "LEGEND" / "LEGENDA" heading is
+    # the box; a text run that starts inside it must end inside it (a run =
+    # consecutive glyphs on one baseline, gaps < 6 pt). FAIL otherwise.
+    lines += ['', '## Item 4 - legend text inside its LEGEND box (scripted '
+              'part; the rest of item 4 is visual)']
+    for pdf in pdfs:
+        st = stem_of(pdf)
+        with pdfplumber.open(pdf) as doc:
+            for n, pgp in enumerate(doc.pages, 1):
+                heads = [w for w in pgp.extract_words()
+                         if w['text'] in ('LEGEND', 'LEGENDA')]
+                if not heads:
+                    continue
+                lab = f'{short(st, project)} p{n}'
+                rects = [r for r in pgp.rects
+                         if r['width'] > 20 and r['height'] > 10]
+                bad, checked = [], 0
+                for h in heads:
+                    cx = (h['x0'] + h['x1']) / 2
+                    cy = (h['top'] + h['bottom']) / 2
+                    box = [r for r in rects if r['x0'] <= cx <= r['x1']
+                           and r['top'] <= cy <= r['bottom']]
+                    if not box:
+                        continue
+                    r = min(box, key=lambda q: q['width'] * q['height'])
+                    checked += 1
+                    rows = defaultdict(list)
+                    for ch in pgp.chars:
+                        my = (ch['top'] + ch['bottom']) / 2
+                        if r['top'] <= my <= r['bottom']:
+                            rows[round(ch['top'], 0)].append(ch)
+                    for _, chs in rows.items():
+                        chs.sort(key=lambda c: c['x0'])
+                        run, inside = [], False
+                        for ch in chs:
+                            if run and ch['x0'] - run[-1]['x1'] > 6:
+                                if inside and run[-1]['x1'] > r['x1'] + 0.5:
+                                    bad.append(''.join(c['text'] for c in run))
+                                run, inside = [], False
+                            if not run:
+                                inside = r['x0'] - 0.5 <= ch['x0'] <= r['x1']
+                            run.append(ch)
+                        if run and inside and run[-1]['x1'] > r['x1'] + 0.5:
+                            bad.append(''.join(c['text'] for c in run))
+                if not checked:
+                    continue
+                if bad:
+                    emit(4, 'FAIL', lab, f'{len(bad)} legend line(s) run out '
+                         'of the LEGEND box: ' + '; '.join(
+                             f'"{b[:70]}"' for b in bad[:3]))
+                else:
+                    emit(4, 'PASS', lab, 'legend text inside its box')
 
     # 7 — garbled glyphs.
     lines += ['', '## Item 7 - garbled glyphs (? tokens, U+FFFD, tofu '

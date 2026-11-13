@@ -714,3 +714,20 @@ must stay inside their column):
 - `apartment/png/Apartemen Contoh-panel-schedules-p3.png`
 - `tower/png/Menara Contoh 30-panel-schedules-p2.png`
 - The same pages of `electrical-sld`.
+
+Follow-up after the re-check: the new `TERPASANG / KEBUTUHAN` legend row ran out through the right
+border of the LEGEND box on E-201 / E-601. This was the case on house p1 and apartment p3, for example.
+The cause was the SLD-family legend printing each entry on one line in a fixed-width box. The fix:
+
+- Every SLD-family legend now wraps a long entry, whatever the entry. That covers the E-201 / E-601
+  schedules, the overview, the riser and power one-line sheets, and the mechanical riser sets.
+  `sldLegendEntryLines` / `sldLegendLineCount` in `drawing_chrome.dart` break the entry at words to
+  30 em (`kSldLegendWrapEm`). Continuation lines hang after the `KEY  -  ` lead.
+- The PDF box (`_sldPageContent`) and the reserved bottom strip (`_sldTitleStripH`) grow one row per
+  printed line. The strip therefore keeps the legend clear of the title block and of the supply caption
+  above it, and the rows still print at 7.5 pt.
+- The DXF legend uses the same wrap. Its box is as wide as 30 em at the written cap height, and it
+  grows the same way.
+- Pre-check item 4 (scripted part) now FAILs any text run that starts inside a LEGEND / LEGENDA box
+  and ends outside it. It caught the two pages above on the earlier export.
+- Test: `packages/mechx_engine/test/sld_legend_wrap_test.dart`.

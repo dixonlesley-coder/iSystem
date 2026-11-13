@@ -2282,3 +2282,51 @@ Uint8List assemblePlanPdfDocument({
   w('startxref\n$xref\n%%EOF\n');
   return out.toBytes();
 }
+
+/// Drawing review F8 follow-up (2026-11-13) — the width (in em of the printed
+/// size) a single-line LEGEND row may run before it wraps. The PDF legend box
+/// is 240 pt wide (228 pt of text at 7.5 pt = 30.4 em); the DXF box is sized
+/// from the same figure, so both formats wrap every entry at the same words.
+const double kSldLegendWrapEm = 30.0;
+
+/// One SLD legend entry as printed lines: `CODE  -  meaning` word-wrapped to
+/// [maxEm] (Helvetica, em units), the continuation lines hanging at
+/// [indentEm] (the width of the `CODE  -  ` lead, capped at a third of the
+/// box so a long code still leaves room for the meaning). A single word
+/// wider than the box stays whole on its own line (never split). Pure.
+({List<String> lines, double indentEm}) sldLegendEntryLines(SldLegendEntry e,
+    {double maxEm = kSldLegendWrapEm}) {
+  final lead = '${e.code}  -  ';
+  final indentEm = math.min(helveticaTextWidth(lead, 1), maxEm / 3);
+  final words = e.meaning.split(' ').where((w) => w.isNotEmpty).toList();
+  final lines = <String>[];
+  var cur = lead.trimRight();
+  var curMax = maxEm;
+  var first = true;
+  for (final w in words) {
+    final cand = first ? '$lead$w' : (cur.isEmpty ? w : '$cur $w');
+    if (!first && cur.isNotEmpty && helveticaTextWidth(cand, 1) > curMax) {
+      lines.add(cur);
+      cur = w;
+      curMax = maxEm - indentEm;
+    } else if (first &&
+        helveticaTextWidth(cand, 1) > curMax &&
+        helveticaTextWidth(lead, 1) < curMax) {
+      // the first word itself does not fit beside the lead: wrap it under.
+      lines.add(lead.trimRight());
+      cur = w;
+      curMax = maxEm - indentEm;
+    } else {
+      cur = cand;
+    }
+    first = false;
+  }
+  if (cur.isNotEmpty || lines.isEmpty) lines.add(cur);
+  return (lines: lines, indentEm: indentEm);
+}
+
+/// The number of printed legend lines [legend] takes after wrapping.
+int sldLegendLineCount(List<SldLegendEntry> legend,
+        {double maxEm = kSldLegendWrapEm}) =>
+    legend.fold(
+        0, (n, e) => n + sldLegendEntryLines(e, maxEm: maxEm).lines.length);

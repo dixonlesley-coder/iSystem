@@ -34,6 +34,9 @@ import 'drawing_chrome.dart'
         dxfTablesSection,
         dxfText,
         kHelveticaCapHeightEm,
+        kSldLegendWrapEm,
+        sldLegendEntryLines,
+        sldLegendLineCount,
         serviceAciColorFor,
         wrapTitleLines;
 import 'electrical_sld_drawing.dart';
@@ -255,8 +258,7 @@ class _Dxf {
 
   /// A box (4 LINEs) with top-left at ([x],[y]) in screen space (Y negated).
   /// [color] is an optional ACI override (62) — null = inherit the layer colour.
-  void box(String layer, double x, double y, double w, double h,
-      {int? color}) {
+  void box(String layer, double x, double y, double w, double h, {int? color}) {
     void line(double x1, double y1, double x2, double y2) {
       g(0, 'LINE');
       g(8, layer);
@@ -495,8 +497,8 @@ SldSheet _emitSldPage(
   // builder could only place some tags fused into others.
   final overlapNote = planOverlapWarning(sheetResolved.overlapCount);
   if (overlapNote != null) {
-    d.text(layers.frame, sheetResolved.minX, sheetResolved.minY - 16,
-        overlapNote,
+    d.text(
+        layers.frame, sheetResolved.minX, sheetResolved.minY - 16, overlapNote,
         size: 8);
   }
   // Round 43 — the page-legibility warning (see [SldSheet.belowMinLabelPt]).
@@ -536,13 +538,12 @@ SldSheet _emitSldPage(
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 10, 'PROJECT',
       size: 5);
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 22, pname, size: 16);
-  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 32, 'TITLE',
-      size: 5);
+  d.text(layers.frame, sheetResolved.minX + 8, frameTop + 32, 'TITLE', size: 5);
   d.text(layers.frame, sheetResolved.minX + 8, frameTop + 44, diagramTitle,
       size: 12);
   for (var i = 0; i < noteLines.length; i++) {
-    d.text(layers.frame, sheetResolved.minX + 8,
-        frameTop + 66 + i * noteLineH, noteLines[i],
+    d.text(layers.frame, sheetResolved.minX + 8, frameTop + 66 + i * noteLineH,
+        noteLines[i],
         size: noteSize);
   }
   if (rows.isNotEmpty) {
@@ -565,16 +566,29 @@ SldSheet _emitSldPage(
   }
 
   if (sheetResolved.legend.isNotEmpty) {
+    // F8 follow-up (2026-11-13) — the SAME wrap as the PDF legend
+    // ([sldLegendEntryLines] at [kSldLegendWrapEm]); the box is as wide as
+    // that wrap at the written text's em (size 9 is the cap height) and grows
+    // a row per printed line, so no entry runs out through its border.
+    const em = 9 / kHelveticaCapHeightEm;
     final lx = sheetResolved.minX + 400;
-    d.box(layers.frame, lx, frameTop, 300,
-        math.max(96, 22.0 + sheetResolved.legend.length * 14));
+    final lines = sldLegendLineCount(sheetResolved.legend);
+    d.box(
+        layers.frame,
+        lx,
+        frameTop,
+        math.max(300.0, 16 + kSldLegendWrapEm * em),
+        math.max(96, 22.0 + lines * 14));
     d.text(layers.frame, lx + 8, frameTop + 16, 'LEGEND', size: 11);
     var row = 0;
     for (final e in sheetResolved.legend) {
-      d.text(layers.frame, lx + 8, frameTop + 32 + row * 14,
-          '${e.code}  -  ${e.meaning}',
-          size: 9);
-      row++;
+      final w = sldLegendEntryLines(e);
+      for (var k = 0; k < w.lines.length; k++) {
+        d.text(layers.frame, lx + 8 + (k == 0 ? 0 : w.indentEm * em),
+            frameTop + 32 + row * 14, w.lines[k],
+            size: 9);
+        row++;
+      }
     }
   }
 
@@ -681,7 +695,8 @@ String powerOneLineToDxf(PowerOneLine oneLine) {
     final z = centre(edge.to);
     d.connector('oneline', a.x, a.y, z.x, z.y);
     if (edge.label != null) {
-      d.text('oneline', (a.x + z.x) / 2, (a.y + z.y) / 2, edge.label!, size: 10);
+      d.text('oneline', (a.x + z.x) / 2, (a.y + z.y) / 2, edge.label!,
+          size: 10);
     }
   }
 
