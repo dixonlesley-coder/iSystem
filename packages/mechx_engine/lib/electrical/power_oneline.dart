@@ -27,6 +27,14 @@ enum PowerNodeKind {
   hybridInverter,
   bus,
   mainPanel,
+
+  /// Fix round F7 (2026-11-13) — the service transformer of a declared MV
+  /// service (drawn between the MV main and the LV bus, as E-301 draws it).
+  transformer,
+
+  /// Fix round F7 — the LV-bus capacitor bank (installed and/or the PF
+  /// study's recommended APFC bank), the one the source spine draws.
+  capacitor,
 }
 
 /// A node on the power one-line.
@@ -157,6 +165,13 @@ PowerOneLine buildPowerOneLine(
   // edge (+ a mechanical interlock row) — never one paralleled bus. 1 ⇒
   // byte-identical.
   int lvSections = 1,
+  // Fix round F7 (2026-11-13) — the declared SOURCE ARRANGEMENT the building
+  // single-line's source spine draws (`serviceArrangementOf`, ONE source):
+  // on a PLN, non-sectioned MV service [transformerLabel] inserts the MV main
+  // + the rated transformer between the utility and the LV bus; [capacitor]
+  // hangs the LV-bus bank off the bus. Both null ⇒ byte-identical.
+  String? transformerLabel,
+  ({String head, String sub})? capacitor,
 }) {
   final nodes = <PowerNode>[];
   final edges = <PowerEdge>[];
@@ -198,7 +213,10 @@ PowerOneLine buildPowerOneLine(
   final cap = supplyCapacity?.inKilovoltAmperes;
   final capText = (cap != null && cap > 0) ? '${_fmt(cap)} kVA' : null;
   final headId = supplyKind == SupplyKind.pln ? 'utility' : 'supply';
-  final utilityOut = headId;
+  final mvChain = supplyKind == SupplyKind.pln &&
+      transformerLabel != null &&
+      lvSections <= 1;
+  final utilityOut = mvChain ? 'tx' : headId;
 
   // Pre-size the configured sources.
   final gen = sources.generator;
@@ -236,8 +254,26 @@ PowerOneLine buildPowerOneLine(
         id: 'utility',
         kind: PowerNodeKind.utility,
         label: 'PLN utility',
-        sub: utilitySub ?? '${_fmt(voltage.volts)} V LV',
+        sub: mvChain
+            ? 'MV supply'
+            : (utilitySub ?? '${_fmt(voltage.volts)} V LV'),
       ));
+      if (mvChain) {
+        nodes.add(const PowerNode(
+          id: 'mv-main',
+          kind: PowerNodeKind.bus,
+          label: 'PANEL UTAMA TEGANGAN MENENGAH',
+          sub: 'MV main',
+        ));
+        nodes.add(PowerNode(
+          id: 'tx',
+          kind: PowerNodeKind.transformer,
+          label: transformerLabel,
+          sub: '${_fmt(voltage.volts)} V LV',
+        ));
+        edge('utility', 'mv-main');
+        edge('mv-main', 'tx');
+      }
     case SupplyKind.generator:
       final dip = (plantStart != null && !plantStart.acceptable)
           ? ' · start dip ${plantStart.estimatedDipPct}% over'
@@ -521,6 +557,17 @@ PowerOneLine buildPowerOneLine(
             'fault); close the coupler only with one incomer open.',
       ));
     }
+  }
+
+  // Fix round F7 — the LV-bus capacitor bank E-301's spine draws.
+  if (capacitor != null) {
+    nodes.add(PowerNode(
+      id: 'cap',
+      kind: PowerNodeKind.capacitor,
+      label: capacitor.head,
+      sub: capacitor.sub,
+    ));
+    edge('bus', 'cap');
   }
 
   return PowerOneLine(

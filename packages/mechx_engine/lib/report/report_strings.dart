@@ -408,6 +408,8 @@ enum RptStringKey {
   pnHybridInverter,
   pnBus,
   pnMainPanel,
+  pnTransformer,
+  pnCapacitor,
   ilMechanical,
   ilElectrical,
   hazLight,
@@ -908,6 +910,8 @@ const Map<RptStringKey, String> kReportStringsEn = {
   RptStringKey.pnHybridInverter: 'hybrid inverter',
   RptStringKey.pnBus: 'bus',
   RptStringKey.pnMainPanel: 'main panel',
+  RptStringKey.pnTransformer: 'transformer',
+  RptStringKey.pnCapacitor: 'capacitor bank',
   RptStringKey.ilMechanical: 'mechanical',
   RptStringKey.ilElectrical: 'electrical',
   RptStringKey.hazLight: 'LH light hazard',
@@ -1426,6 +1430,8 @@ const Map<RptStringKey, String> kReportStringsId = {
   RptStringKey.pnHybridInverter: 'inverter hibrida',
   RptStringKey.pnBus: 'bus',
   RptStringKey.pnMainPanel: 'panel utama',
+  RptStringKey.pnTransformer: 'transformator',
+  RptStringKey.pnCapacitor: 'bank kapasitor',
   RptStringKey.ilMechanical: 'mekanis',
   RptStringKey.ilElectrical: 'elektrik',
   RptStringKey.hazLight: 'Bahaya Kebakaran Ringan',
@@ -1561,6 +1567,8 @@ String powerNodeKindLabel(PowerNodeKind k, ReportStrings s) => s(switch (k) {
       PowerNodeKind.hybridInverter => RptStringKey.pnHybridInverter,
       PowerNodeKind.bus => RptStringKey.pnBus,
       PowerNodeKind.mainPanel => RptStringKey.pnMainPanel,
+      PowerNodeKind.transformer => RptStringKey.pnTransformer,
+      PowerNodeKind.capacitor => RptStringKey.pnCapacitor,
     });
 
 /// Localized label for a [PowerInterlockKind].

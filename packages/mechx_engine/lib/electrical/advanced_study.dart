@@ -98,7 +98,12 @@ import 'panel_results.dart'
         ElectricalWarning,
         WarningSeverity;
 import 'power_factor.dart'
-    show PowerFactorResult, isDriveFedCircuit, powerFactorCorrection;
+    show
+        PowerFactorResult,
+        capacitorBanksToProcure,
+        installedCapacitorBanks,
+        isDriveFedCircuit,
+        powerFactorCorrection;
 import 'power_oneline.dart'
     show
         PowerOneLine,
@@ -603,6 +608,7 @@ AdvancedStudy computeAdvancedStudy(
   // Power one-line — only when the project carries energy sources. The motors
   // for the genset-start dip screen come from the sized motor/pump circuits.
   PowerOneLine? powerOneLine;
+  final arrangement = serviceArrangementOf(project, sys);
   if (project.sources != null) {
     powerOneLine = buildPowerOneLine(
       project.sources!,
@@ -628,6 +634,14 @@ AdvancedStudy computeAdvancedStudy(
       backupFraction: effectiveGeneratorBackupFraction(project),
       // Round 65 — a sectioned service's LV bus is split (coupler N.O.).
       lvSections: serviceSections(project),
+      // Fix round F7 — the SAME declared arrangement E-301's spine draws.
+      transformerLabel: arrangement.transformer,
+      capacitor: arrangement.capacitor == null
+          ? null
+          : (
+              head: arrangement.capacitor!.head,
+              sub: arrangement.capacitor!.sub
+            ),
     );
   }
 
@@ -1945,6 +1959,57 @@ Map<String, ConduitSpec> containmentByCircuitIdOf(AdvancedStudy study) => {
       for (final c in study.containment.values)
         for (final cc in c.conduits) cc.circuitId: cc.conduit,
     };
+
+/// Fix round F7 (2026-11-13) — the declared SOURCE ARRANGEMENT of the
+/// service, the ONE source both the building single-line's source spine
+/// (E-301) and the power one-line (E-501) draw from (golden rule 5):
+/// [transformer] is the rated transformer label on a declared, non-sectioned
+/// MV service (`TRANSFORMER 1600 kVA`; `TRANSFORMER` with no known rating),
+/// null otherwise; [capacitor] the LV-bus bank node — the INSTALLED bank
+/// (a single bank not on a board schedule) and/or the PF study's RECOMMENDED
+/// APFC bank, from the one [capacitorBanksToProcure] list the BOM buys —
+/// null when neither exists. Pure.
+({
+  String? transformer,
+  ({String head, String sub, String compact})? capacitor,
+}) serviceArrangementOf(ElectricalProject project, ElectricalSystemResult sys) {
+  String n(double v) =>
+      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
+  String? tx;
+  if (isDeclaredMvService(project) && serviceSections(project) <= 1) {
+    final t = serviceTransformer(project, sys);
+    tx = (t != null && t.kva * t.units > 0)
+        ? 'TRANSFORMER ${t.units > 1 ? '${t.units} x ${n(t.kva)}' : n(t.kva)} kVA'
+        : 'TRANSFORMER';
+  }
+  final banks = installedCapacitorBanks(project);
+  final installed = banks.length == 1 && banks.first.panelId == null;
+  final rec = capacitorBanksToProcure(project,
+          sys.supply.demandW > 0 ? powerFactorCorrection(sys, project) : null)
+      .where((b) => b.recommended)
+      .firstOrNull;
+  ({String head, String sub, String compact})? cap;
+  if (installed || rec != null) {
+    final recText = rec == null
+        ? null
+        : '${rec.units > 1 ? '${rec.units}x' : ''}${n(rec.kvar)} kvar';
+    if (installed) {
+      final inst = '${n(project.capacitorBankKvar!)} kvar';
+      cap = (
+        head: 'CAPACITOR BANK',
+        sub: recText == null ? inst : '$inst + $recText APFC rec.',
+        compact: recText == null ? 'CAP $inst' : 'CAP $inst + $recText rec.',
+      );
+    } else {
+      cap = (
+        head: 'APFC (RECOMMENDED)',
+        sub: recText!,
+        compact: 'APFC rec. $recText',
+      );
+    }
+  }
+  return (transformer: tx, capacitor: cap);
+}
 
 /// Round 23 (elec-drafting-2-2) — the power one-line's utility sub-label on a
 /// DECLARED MV service (an explicit transformer rating or a dual-transformer

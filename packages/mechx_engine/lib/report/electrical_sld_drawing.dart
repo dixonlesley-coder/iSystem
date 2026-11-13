@@ -17,7 +17,11 @@ library;
 import 'dart:math' as math;
 
 import '../electrical/advanced_study.dart'
-    show gensetStartFloorFor, serviceSectionOfRoot, serviceTransformer;
+    show
+        gensetStartFloorFor,
+        serviceArrangementOf,
+        serviceSectionOfRoot,
+        serviceTransformer;
 import '../electrical/cable_family.dart'
     show cableFamilyDescription, defaultCableFamily;
 import '../electrical/containment.dart'
@@ -40,10 +44,7 @@ import '../electrical/metering.dart' show MeteringKind, meterFor;
 import '../electrical/model.dart';
 import '../electrical/panel_results.dart';
 import '../electrical/power_factor.dart'
-    show
-        capacitorBanksToProcure,
-        installedCapacitorBanks,
-        powerFactorCorrection;
+    show capacitorBanksToProcure, installedCapacitorBanks;
 import '../electrical/power_oneline.dart';
 import '../electrical/results.dart' show BreakerResult, BusbarResult;
 import '../electrical/sources.dart'
@@ -1299,33 +1300,9 @@ bool _hasCapacitorBank(ElectricalProject project) {
 /// never mistaken for installed gear. Null ⇒ no node (byte-identical when no
 /// bank is installed on the bus and none is recommended).
 ({String head, String sub, String compact})? _spineCapacitor(
-    ElectricalProject project, ElectricalSystemResult result) {
-  final installed = _hasCapacitorBank(project);
-  final rec = capacitorBanksToProcure(
-          project,
-          result.supply.demandW > 0
-              ? powerFactorCorrection(result, project)
-              : null)
-      .where((b) => b.recommended)
-      .firstOrNull;
-  if (!installed && rec == null) return null;
-  final recText = rec == null
-      ? null
-      : '${rec.units > 1 ? '${rec.units}x' : ''}${_num(rec.kvar)} kvar';
-  if (installed) {
-    final inst = '${_num(project.capacitorBankKvar!)} kvar';
-    return (
-      head: 'CAPACITOR BANK',
-      sub: recText == null ? inst : '$inst + $recText APFC rec.',
-      compact: recText == null ? 'CAP $inst' : 'CAP $inst + $recText rec.',
-    );
-  }
-  return (
-    head: 'APFC (RECOMMENDED)',
-    sub: recText!,
-    compact: 'APFC rec. $recText',
-  );
-}
+        ElectricalProject project, ElectricalSystemResult result) =>
+    // Fix round F7 — the ONE arrangement the power one-line also draws.
+    serviceArrangementOf(project, result).capacitor;
 
 SldSheet buildElectricalSourceSpine({
   required ElectricalProject project,
@@ -2063,9 +2040,10 @@ _Spine _buildSourceSpine(
   // study and the schedule use (declared rating, else the dual-tx study pick
   // on the transformer ladder). Blank when neither is known.
   final txFig = _transformerFig(project, result);
-  final txLabel = (txFig != null && txFig.totalKva > 0)
-      ? 'TRANSFORMER ${txFig.text} kVA'
-      : 'TRANSFORMER';
+  // Fix round F7 — the label comes from the ONE arrangement the power
+  // one-line (E-501) draws its transformer from.
+  final txLabel =
+      serviceArrangementOf(project, result).transformer ?? 'TRANSFORMER';
 
   // The vertical spine, top -> bottom. The MV station chain exists ONLY on a
   // declared MV service — an LV direct service is just its supply head.
@@ -5044,6 +5022,16 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
         final symX = at.x + _polSymR + 8;
         _emitGenerator(prims, symX, cy, _polSymR, role);
         _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+      // Fix round F7 — the MV service transformer and the LV-bus capacitor
+      // bank draw as their single-line symbols, as on E-301's spine.
+      case PowerNodeKind.transformer:
+        final symX = at.x + _polSymR + 8;
+        _emitTransformer(prims, symX, at.y, _polH, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
+      case PowerNodeKind.capacitor:
+        final symX = at.x + _polSymR + 8;
+        _emitCapacitor(prims, symX, cy, role);
+        _polSymLabel(prims, symX + _polSymR + 12, cy, n, role);
       default:
         _emitPanelBox(prims, cx, cy, _polW, _polH, n.label, role);
         if (n.sub != null && n.sub!.isNotEmpty) {
@@ -5106,6 +5094,10 @@ SldSheet buildPowerOneLineSheet(PowerOneLine oneLine) {
       const SldLegendEntry('Source', 'Supply source / equipment'),
       const SldLegendEntry('G', 'Standby generator (genset)'),
       const SldLegendEntry('Board', 'Distribution board / bus'),
+      if (oneLine.nodeOfKind(PowerNodeKind.transformer) != null)
+        const SldLegendEntry('TX', 'Service transformer (MV / LV)'),
+      if (oneLine.nodeOfKind(PowerNodeKind.capacitor) != null)
+        const SldLegendEntry('CAP', 'Capacitor bank (LV bus)'),
       if (_hasOpenCoupler(prims)) _kCouplerLegend,
     ],
     supplyNote: supplyNote,

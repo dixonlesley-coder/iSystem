@@ -3,16 +3,24 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:mechx_engine/electrical/advanced_study.dart';
+import 'package:mechx_engine/electrical/compute.dart';
+import 'package:mechx_engine/electrical/fault.dart';
+import 'package:mechx_engine/electrical/power_oneline.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/drawing_chrome.dart';
 import 'package:mechx_engine/report/electrical_plan_export.dart';
-import 'package:mechx_engine/report/plan_detail.dart';
+import 'package:mechx_engine/report/electrical_sld_drawing.dart';
 import 'package:mechx_engine/report/plan_detail_sheet.dart';
 import 'package:mechx_engine/report/plan_pdf_export.dart';
-import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/plan_symbols.dart';
-import 'package:mechx_engine/report/sld_sheet.dart';
+import 'package:mechx_engine/standards/puil.dart';
+import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
+
+import 'reference/tower.dart';
+
+typedef Bx = ({double minX, double minY, double maxX, double maxY});
 
 void main() {
   group('F3 legibility stamp fires only below the printed floor', () {
@@ -37,12 +45,12 @@ void main() {
 
   group('F1/F2 electrical layout tags stay in the frame and never stack', () {
     const area = (minX: 0.0, minY: 0.0, maxX: 400.0, maxY: 300.0);
-    bool hit(a, b) =>
+    bool hit(Bx a, Bx b) =>
         a.minX < b.maxX &&
         b.minX < a.maxX &&
         a.minY < b.maxY &&
         b.minY < a.maxY;
-    bool inside(b) =>
+    bool inside(Bx b) =>
         b.minX >= area.minX &&
         b.maxX <= area.maxX &&
         b.minY >= area.minY &&
@@ -276,6 +284,57 @@ void main() {
           chrome: detail);
       expect(dxf, contains('Cold water'));
       expect(dxf, isNot(contains('Rainwater')));
+    });
+  });
+
+  group('F7 the power one-line draws the declared source arrangement', () {
+    final tower = buildTower();
+    final project = tower.electrical;
+    final fault = estimatedServiceFaultLevelA(project) ??
+        const Current(defaultLvUtilityFaultKa * 1000);
+    final sys = computeSystem(const PuilProfile(), project,
+        calibrationBySheet: tower.calibrations,
+        building: tower.building,
+        originFaultLevel: fault,
+        busbarClearingTimeS: 0.1,
+        phaseReassignThresholdA: 1.0);
+    final adv = computeAdvancedStudy(const PuilProfile(), project, sys);
+    final arr = serviceArrangementOf(project, sys);
+
+    test('one arrangement: TX 1600 kVA + the 250 kvar bank', () {
+      expect(arr.transformer, 'TRANSFORMER 1600 kVA');
+      expect(arr.capacitor, isNotNull);
+      expect(arr.capacitor!.sub, startsWith('250 kvar'));
+    });
+
+    test('E-501 (power one-line) carries the MV main, TX, ATS and bank', () {
+      final ol = adv.powerOneLine!;
+      final tx = ol.nodeOfKind(PowerNodeKind.transformer)!;
+      expect(tx.label, arr.transformer);
+      expect(ol.nodeOfKind(PowerNodeKind.capacitor)!.sub, arr.capacitor!.sub);
+      expect(ol.nodeOfKind(PowerNodeKind.ats), isNotNull);
+      expect(ol.nodeOfKind(PowerNodeKind.generator), isNotNull);
+      // The chain utility -> MV main -> TX -> (ATS / LV bus).
+      expect(ol.edges.any((e) => e.from == 'utility' && e.to == 'mv-main'),
+          isTrue);
+      expect(ol.edges.any((e) => e.from == 'mv-main' && e.to == 'tx'), isTrue);
+      expect(ol.edges.any((e) => e.from == 'tx'), isTrue);
+      expect(ol.edges.any((e) => e.from == 'utility' && e.to != 'mv-main'),
+          isFalse);
+      expect(ol.edges.any((e) => e.from == 'bus' && e.to == 'cap'), isTrue);
+    });
+
+    test('E-501 and E-301 print the same TX and bank strings', () {
+      Set<String> texts(SldSheet s) =>
+          {for (final p in s.prims) if (p is SldLabel) p.text};
+      final e501 = texts(buildPowerOneLineSheet(adv.powerOneLine!));
+      final e301 =
+          texts(buildElectricalSourceSpine(project: project, result: sys));
+      for (final t in [arr.transformer!, arr.capacitor!.sub]) {
+        expect(e501, contains(t), reason: 'E-501 lacks "$t"');
+        expect(e301.any((x) => x.contains(t)), isTrue,
+            reason: 'E-301 spine lacks "$t"');
+      }
     });
   });
 }
