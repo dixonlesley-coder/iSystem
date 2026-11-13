@@ -1522,7 +1522,7 @@ void main() {
       expect(s.design.pump.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
     });
 
-    test('fire: 750 gpm at the standpipe head 210.686 m, 200 kW; DN100 '
+    test('fire: 750 gpm at the standpipe head 210.681 m, 200 kW; DN100 '
         'trunks; DN40 feed main', () {
       final sz = c.read(sizingProvider);
       for (final id in ['e_fh_FH_Ha0', 'e_fh_FH_Hb0']) {
@@ -1539,32 +1539,37 @@ void main() {
       }
       expect(c.read(sprinklerFeedEnlargedProvider), feed);
       final b = c.read(fireSystemBasesProvider).single;
-      // 500 + 250 gpm = 47.3176 L/s; 117.2 + 23.150 + 690 / 9.81 = 210.686.
+      // 500 + 250 gpm = 47.3176 L/s; 117.2 + 23.145 + 690 / 9.81 = 210.681.
+      // Backlog D-1: each hydrant box sits at its 1.2 m hose-outlet height,
+      // so the index box leg is 0.1 m shorter (2.6 → 2.5 m drop from the
+      // ceiling main) on its DN65 @ 5 L/s: friction 23.150 → 23.145 m. Above
+      // the 15 m allowance the friction is in the head: 210.686 → 210.681 m
+      // (the lift 117.2 m already used the 1.2 m outlet height).
       expect(
         b.standpipe!.requiredFlow.inLitersPerSecond,
         closeTo(47.3176, 5e-4),
       );
-      expect(b.indexFrictionM, closeTo(23.150, 5e-4));
-      expect(b.head.meters, closeTo(210.686, 5e-4));
+      expect(b.indexFrictionM, closeTo(23.145, 5e-4));
+      expect(b.head.meters, closeTo(210.681, 5e-4));
       expect(b.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
       expect(b.sprinklerGovernsCombined, isFalse);
-      // Hydraulic 9810 x 0.0473176 x 210.686 = 97 797.7 W; / 0.70 =
-      // 139 711.0 W; overload 0.975 x 97 797.7 / 0.595 = 160 256.8 W ⇒ 200 kW.
+      // Hydraulic 9810 x 0.0473176 x 210.681 = 97 795.4 W; / 0.70 =
+      // 139 707.7 W; overload 0.975 x 97 795.4 / 0.595 = 160 253.0 W ⇒ 200 kW.
       final d = c.read(firePumpDutyProvider)!;
-      expect(d.hydraulicPower.watts, closeTo(97797.7, 0.05));
-      expect(d.shaftPower.watts, closeTo(139711.0, 0.05));
-      expect(b.rating.overload.shaftPower.watts, closeTo(160256.8, 0.05));
+      expect(d.hydraulicPower.watts, closeTo(97795.4, 0.05));
+      expect(d.shaftPower.watts, closeTo(139707.7, 0.05));
+      expect(b.rating.overload.shaftPower.watts, closeTo(160253.0, 0.05));
       expect(b.rating.selectedMotor.inKiloWatts, closeTo(200, 1e-9));
       expect(
         c.read(nodeFedLoadsProvider)['FP']!.input,
         closeTo(222222.2, 0.05),
       );
-      // Jockey 1 % = 0.4732 L/s @ 1.4 x 210.686 + 5 = 299.961 m, 2.2 kW.
+      // Jockey 1 % = 0.4732 L/s @ 1.4 x 210.681 + 5 = 299.954 m, 2.2 kW.
       final j = c.read(fireJockeyDutyProvider)!;
       expect(j.flow.inLitersPerSecond, closeTo(0.47318, 5e-5));
-      expect(j.head.meters, closeTo(299.961, 5e-4));
+      expect(j.head.meters, closeTo(299.954, 5e-4));
       expect(j.selectedMotor.inKiloWatts, closeTo(2.2, 1e-9));
-      // Sprinkler point on the enlarged main: 202.185 m <= 210.686.
+      // Sprinkler point on the enlarged main: 202.185 m <= 210.681.
       final net = c.read(sizingNetworkProvider);
       final project = c.read(projectControllerProvider);
       final fs = fireIndexPathFrictionM(
@@ -1908,11 +1913,12 @@ void main() {
       expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
-      // Backlog A-3 — churn 1.4 x 210.686 = 294.961 m x 9.81 = 2893.6 kPa
+      // Backlog A-3 — churn 1.4 x 210.681 = 294.954 m x 9.81 = 2893.5 kPa
+      // (backlog D-1: 294.954 / 2893.6 before the 0.1 m shorter box leg)
       // > 2413: no class permits one zone, the zone-split WARNING stays.
       expect(n('fire-system-over-pressure:FP'), 1);
       final cls = c.read(firePressureClassesProvider).single;
-      expect(cls.churnKpa, closeTo(294.961 * 9.81, 0.05));
+      expect(cls.churnKpa, closeTo(294.954 * 9.81, 0.05));
       expect(cls.pressureClass, FirePressureClass.zoneRequired);
       final zw = c
           .read(designIssuesProvider)
@@ -1925,15 +1931,15 @@ void main() {
       expect(ft.requiredLitres, closeTo(47.3176 * 1800, 0.5));
       expect(ft.capacityLitres, 120000);
       expect(ft.verdict, FireTankVerdict.ok);
-      // Backlog A-3 — static 9.81 x (294.961 - (4 f + 1.2)) > 1207 for
-      // f <= 42: all 60 hose valves (2881.8 .. 1743.8 kPa) designated
+      // Backlog A-3 — static 9.81 x (294.954 - (4 f + 1.2)) > 1207 for
+      // f <= 42: all 60 hose valves (2881.7 .. 1743.8 kPa) designated
       // pressure-regulating (info) beside the zone warning.
       expect(n('standpipe-prv-hose-valves:FP:0-29'), 1);
       expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),
           isEmpty);
       final r = c.read(standpipeOutletOverPressureProvider).single;
-      expect(r.maxKpa, closeTo(9.81 * (294.961 - 1.2), 0.1));
-      expect(r.minKpa, closeTo(9.81 * (294.961 - 4 * 29 - 1.2), 0.1));
+      expect(r.maxKpa, closeTo(9.81 * (294.954 - 1.2), 0.1));
+      expect(r.minKpa, closeTo(9.81 * (294.954 - 4 * 29 - 1.2), 0.1));
       expect(c.read(prvHoseValvesProvider), hasLength(60));
       // Bounded B-1: feeders PP-Lt28..30 (their ADS growth is past the
       // two-size selectivity bound) and Lift 1..3 — unchanged from 3f4e78c.

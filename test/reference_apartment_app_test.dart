@@ -1161,8 +1161,11 @@ void main() {
       final project = c.read(projectControllerProvider);
       final sz = c.read(sizingProvider);
       double len(NetEdge e) => _len(c, e);
-      // Standpipe: lift 38.5 + 1.2 = 39.7; hydrant index friction 7.852 m <
-      // the 15 m allowance; 690 / 9.81 = 70.336 ⇒ 125.036 m.
+      // Standpipe: lift 38.5 + 1.2 = 39.7; hydrant index friction 7.847 m <
+      // the 15 m allowance; 690 / 9.81 = 70.336 ⇒ 125.036 m. Backlog D-1:
+      // the index box sits at its 1.2 m hose-outlet height (was 1.1 m), so
+      // its DN65 @ 5 L/s leg drops 3.2 − 1.2 = 2.0 m from the ceiling main
+      // (was 2.1): friction 7.852 → 7.847 m, the head stays on the allowance.
       final fh = fireIndexPathFrictionM(
         net: net,
         system: b.system,
@@ -1171,7 +1174,7 @@ void main() {
         lengthOf: len,
         terminals: FireTerminalKind.hydrant,
       )!;
-      expect(fh, closeTo(7.852, 5e-4));
+      expect(fh, closeTo(7.847, 5e-4));
       expect(
         b.system.staticLiftM(net, project.building, FireTerminalKind.hydrant),
         closeTo(39.7, 1e-9),

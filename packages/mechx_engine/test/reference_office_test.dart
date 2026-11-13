@@ -625,7 +625,10 @@ void main() {
         expect(sz[id]!.diameter.inMillimeters, dn, reason: id);
       }
       // Index friction FP → HYD3 at C = 120: FP→H0 6.7 m DN125 @ 31.545 +
-      // three 4.0 m DN100 risers @ 31.545 + H3→HYD3 4.6 m DN65 @ 5.0.
+      // three 4.0 m DN100 risers @ 31.545 + H3→HYD3 4.5 m DN65 @ 5.0
+      // (backlog D-1: 2.0 plan + (ceiling 15.7 − box 12.0 + 1.2 = 13.2) =
+      // 2.0 + 2.5; was 4.6 with the box at the 1.1 m fixture height, and
+      // 2.872 m friction: the DN65 leg loses 0.1 x 0.0495 m/m = 0.005 m).
       double hf(String id) => headLossHazenWilliams(
             flow: sz[id]!.flow,
             length: Length(lengthOf(net.edgeById(id)!)),
@@ -646,7 +649,7 @@ void main() {
         terminals: FireTerminalKind.hydrant,
       )!;
       expect(fr, closeTo(byHand, 1e-9));
-      expect(fr, closeTo(2.872, 5e-4));
+      expect(fr, closeTo(2.867, 5e-4));
       // Below the 15 m allowance ⇒ H = 13.2 + 15 + 690 / 9.81 = 98.536 m.
       expect(fr, lessThan(15));
       expect(standpipe.pumpHead.meters, closeTo(98.536, 5e-4));

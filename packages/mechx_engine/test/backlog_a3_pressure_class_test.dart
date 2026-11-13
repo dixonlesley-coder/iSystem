@@ -21,8 +21,8 @@ void main() {
     // Apartment: 175.051 x 9.81 = 1717.2 kPa.
     expect(firePressureClassFor(175.051 * 9.81), FirePressureClass.pn25);
     expect(firePressureClassFor(2413), FirePressureClass.pn25);
-    // Tower: 1.4 x 210.686 x 9.81 = 2893.6 kPa.
-    expect(firePressureClassFor(1.4 * 210.686 * 9.81),
+    // Tower: 1.4 x 210.681 x 9.81 = 2893.5 kPa (backlog D-1).
+    expect(firePressureClassFor(1.4 * 210.681 * 9.81),
         FirePressureClass.zoneRequired);
     expect(kFirePressureClassPn16Kpa, 1600);
     expect(kStandpipeMaxSystemPressureKpa, 2413);

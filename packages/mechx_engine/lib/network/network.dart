@@ -675,6 +675,19 @@ bool nodeCarriesContent(NetNode n) =>
     n.elevation != null ||
     n.mountHeight != null;
 
+/// Height of a hose-cabinet landing valve above its own finished floor (m).
+///
+/// Backlog D-1 (2026-11-13) — the ONE hose-outlet height: it sets a datum-less
+/// [NodeComponent.hydrantBox] / [NodeComponent.hoseReel] node's elevation
+/// ([nodeElevation]), so the pipe leg to the outlet, the standpipe lift
+/// (`fire_standpipe.dart`, `fire_index_friction.dart`) and the outlet
+/// pressures (`standpipe_outlet_pressure.dart`) all read the same 1.2 m.
+///
+/// // VERIFY — representative Indonesian hydrant-box mounting (≈ 0.9–1.5 m,
+/// 1.2 m typical), general practice NOT an SNI clause. Surfaced via
+/// `SniProfile.verifyChecklist` (status `notAnSniClause`).
+const double kHoseOutletHeightM = 1.2;
+
 /// True elevation of [node] (§10), used for riser/drop length and static lift:
 ///   • explicit [NetNode.elevation] if set;
 ///   • [NetNode.mountHeight] (above its floor) if set — the per-node wall height;
@@ -682,7 +695,9 @@ bool nodeCarriesContent(NetNode n) =>
 ///   • [NodeRole.fixture] → fixture height above its floor — except a GRAVITY
 ///     outlet: [NodeComponent.floorDrain] / [NodeComponent.cleanout] at its
 ///     floor surface, [NodeComponent.roofDrain] at the roof on the top storey
-///     (its own floor surface below it);
+///     (its own floor surface below it); a hose outlet
+///     ([NodeComponent.hydrantBox] / [NodeComponent.hoseReel]) at
+///     [kHoseOutletHeightM] above its floor (backlog D-1);
 ///   • [NodeRole.plant]   → depends on WHAT the plant is ([NetNode.component]):
 ///       – [NodeComponent.roofTank] → roof level on the top storey (it sits
 ///         on the roof slab); drawn BELOW the top storey, its own floor
@@ -731,6 +746,14 @@ Length nodeElevation(
         return building.elevationOf(node.floorIndex);
       }
       return building.roofElevation;
+    // Backlog D-1 (2026-11-13) — a hose outlet sits at the ONE landing-valve
+    // height the standpipe lift and the outlet pressures use (1.2 m), not at
+    // the 1.1 m plumbing fixture height: its pipe leg, its static and the lift
+    // now agree.
+    case NodeComponent.hydrantBox:
+    case NodeComponent.hoseReel:
+      return Length(
+          building.elevationOf(node.floorIndex).meters + kHoseOutletHeightM);
     default:
       break;
   }
@@ -1067,8 +1090,9 @@ double runPixelLength(NetEdge edge, Network net) {
 /// (supply diffuser / linear diffuser / return or exhaust grille) or a
 /// sprinkler head is a [NodeRole.fixture] for DEMAND, but it hangs AT the
 /// ceiling, not at the plumbing fixture height — so a run from a ceiling main
-/// to it has no vertical leg. Plumbing fixtures, water outlets, hose reels and
-/// hydrant boxes keep the fixture height. Round 34: a datum-less AHU /
+/// to it has no vertical leg. Plumbing fixtures and water outlets keep the
+/// fixture height; hose reels and hydrant boxes their [kHoseOutletHeightM]
+/// (backlog D-1, via [nodeElevation]). Round 34: a datum-less AHU /
 /// supply fan / exhaust fan connects at [MountingHeights.airUnitConnection]
 /// above its floor surface (capped at the ceiling). Pure.
 Length runConnectionElevation(

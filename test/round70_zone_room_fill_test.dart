@@ -202,11 +202,13 @@ void main() {
       // P2's own zone governs above the 60 m lift to BT2.
       // P1: 60 m static lift to BT1 + the sized train friction = 71.67 m.
       expect(base['P1']!.$2, closeTo(71.67, 0.01));
-      // P2 with hose reels: its own Class II zone governs (120.39 m) over the
+      // P2 with hose reels: its own Class II zone governs (120.33 m; 120.39
+      // before backlog D-1 put each reel at its 1.2 m hose-outlet height, a
+      // 0.1 m shorter reel leg) over the
       // fill (60 m + friction); with hydrant boxes its Class I zone governs
       // higher still — never a lift to the 180 m roof.
       expect(base['P2']!.$2, greaterThan(60.0 + 11.0));
-      if (reels) expect(base['P2']!.$2, closeTo(120.39, 0.01));
+      if (reels) expect(base['P2']!.$2, closeTo(120.33, 0.01));
       for (final p in ['P1', 'P2', 'P3']) {
         expect(base[p]!.$1, closeTo(q500, 1e-6), reason: '$p flow');
       }

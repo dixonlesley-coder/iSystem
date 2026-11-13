@@ -173,9 +173,11 @@ void main() {
       expect(runCentrelineLabels(n, one).containsKey('dfd'), isFalse);
     });
 
-    test('a hose reel still drops to its fixture height', () {
-      expect(l('dho'), closeTo(2.0 + 2.6, 1e-9));
-      expect(runCentrelineLabels(n, one)['dho'], 'CL +3.70 drop 2.60 m');
+    test('a hose reel still drops — to its hose-outlet height', () {
+      // Backlog D-1 — a hose outlet sits at kHoseOutletHeightM (1.2 m), the
+      // height the standpipe lift uses: ceiling 3.7 − 1.2 = 2.5 m drop.
+      expect(l('dho'), closeTo(2.0 + 2.5, 1e-9));
+      expect(runCentrelineLabels(n, one)['dho'], 'CL +3.70 drop 2.50 m');
     });
 
     test('an explicit mount height on a terminal still wins', () {

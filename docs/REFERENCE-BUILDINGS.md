@@ -168,7 +168,6 @@ _(empty)_
 ### Backlog (outside scope, not fixed)
 
 - **(a) Jockey flow basis:** resolved by A1 (both 0.3155 L/s).
-- **(c) Hose outlet height.** A hydrant box sits at the 1.1 m fixture height (39.6 m on Lantai 12), which sets its pipe leg, while the standpipe lift uses the 1.2 m outlet height (39.7 m).
 - **(d) Sprinkler head height.** A head node sits at the 1.1 m fixture height, while its run is measured as a ceiling run (no leg) and the lift is taken at the ceiling.
 - **(e) Two booster heads.** The gravity solve asks for a 22.230 m booster (KSb11). The Review's `downfeed-below-target` recommends a +15.3 m booster for Lantai 10 (KSb9), which the drawn side-branch booster cannot serve.
 - **(g) PRV on a riser.** There is no store intent that places a component on a riser (`addComponentNode` skips risers). The fixture splices a PRV node with a 0 m run.
@@ -180,6 +179,8 @@ _(empty)_
 - **(i) Genset rating ignores ADS on the alternator fault — closed by B-3.** An unforced set's recommendation is now the smallest ladder rating, above the running and motor-start floors, at which no auto-sized backed way fails `ads-disconnection-on-genset` after the T4 growth (governing reason `disconnection`). The final apartment set (typed 300 kVA) already holds, so no pin moved.
 - **(b) Two alternator reactances — closed by B-5.** They are two different reactances of one machine and are now named as a pair in `sources.dart`: the fault level reads the sub-transient X''d 0.12 pu, the motor-start dip and start floor the transient X'd 0.15 pu (no figure changed).
 - **Feeder discrimination — B-1 (bounded).** Nothing grows here: both feeders' floor rungs sit above their own boards' incomers, so the two `non-selective` stay (now naming a selective, time-delayed / category B device); no `outgoing-exceeds-incomer`.
+- **(c) Hose outlet height — backlog D-1.** A hydrant box now sits at its floor + 1.2 m (`kHoseOutletHeightM`, 39.7 m on Lantai 12), the height the standpipe lift and the outlet pressures use: each box leg drops 3.2 − 1.2 = 2.0 m from the ceiling main (was 2.1), hydrant index friction 7.852 → 7.847 m (below the 15 m allowance, the pump stays 31.545 L/s @ 125.036 m).
+
 
 ## 5. Tower (gedung kantor 30 lantai)
 
@@ -201,7 +202,7 @@ _(empty)_
 **Deliberate expected findings** (final state: 1600 kVA transformer, 800 kVA genset, 250 kvar bank, seven PRVs drawn):
 - 2 x `non-selective` (bounded B-1 refusals, naming a selective device): Feeder PP-E (2 x 185 mm² FRC parallel: no single-run step reaches its 1250 A floor rung) and Feeder to MEP (its 800 A rung would sit above PP-E's own 630 A incomer). B-1 cured PP-Lt1 / PP-Lt2 (5 x 10 / 50 A → 5 x 16 / 63 A, one size).
 - 2 x `enclosure-temp-rise-exceeded` (LVMDP, PP-E), `service-cable-ampacity-inadequate` (the 1600 A service), `service-fault-estimate-high` (57.7 kA from the 1600 kVA / 4 % transformer).
-- `fire-system-over-pressure:FP` (churn 1.4 x 210.686 = 294.961 m = 2893.6 kPa > 2413: since backlog A-3 worded as zone-split guidance) and the info `standpipe-prv-hose-valves:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207, designated pressure-regulating).
+- `fire-system-over-pressure:FP` (churn 1.4 x 210.681 = 294.954 m = 2893.5 kPa > 2413: since backlog A-3 worded as zone-split guidance; 210.686 m before backlog D-1 shortened each box leg by 0.1 m) and the info `standpipe-prv-hose-valves:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207, designated pressure-regulating).
 - Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30 — their 63 A loop needs 35 mm², three sizes above the load-sized 10 mm², past the selectivity bound — and Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, `drainage-cleanout`, 5 `// VERIFY`.
 - Before the PRVs are drawn: 100 x `downfeed-over-pressure` (floors 0..19).
 

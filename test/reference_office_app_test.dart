@@ -796,9 +796,11 @@ void main() {
       final b = c.read(fireSystemBasesProvider).single;
       expect(b.sprinklerOnly, isFalse);
       expect(b.dutyPumpId, 'FP');
-      // 13.2 + max(15, 2.872) + 690 / 9.81 = 98.536 m.
+      // 13.2 + max(15, 2.867) + 690 / 9.81 = 98.536 m (backlog D-1: the
+      // H3→HYD3 leg 4.6 → 4.5 m, friction 2.872 → 2.867 m, still below the
+      // 15 m allowance, so the pump point does not move).
       expect(b.staticLiftM, closeTo(13.2, 1e-9));
-      expect(b.indexFrictionM, closeTo(2.872, 5e-4));
+      expect(b.indexFrictionM, closeTo(2.867, 5e-4));
       expect(b.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
       expect(b.head.meters, closeTo(98.536, 5e-4));
       // Churn 1.4 x 98.536 = 137.951 m; overload 1.5 Q = 47.3176 L/s @ 0.65 H
@@ -820,6 +822,30 @@ void main() {
       expect(j.flow.inLitersPerSecond, closeTo(0.31545, 5e-5));
       expect(j.head.meters, closeTo(142.951, 5e-4));
       expect(j.selectedMotor.inKiloWatts, closeTo(0.75, 1e-9));
+    });
+
+    test('backlog D-1: one hose-outlet height for the box, its leg and lift',
+        () {
+      // Each hydrant box sits at its floor + kHoseOutletHeightM (1.2 m) — the
+      // height the standpipe lift reads (13.2 = 12.0 + 1.2 on Lantai 4) — not
+      // at the 1.1 m fixture height. Each box leg is its 2.0 m plan run + the
+      // drop from the ceiling main (floor + 3.7) to the box (floor + 1.2) =
+      // 2.0 + 2.5 = 4.5 m (was 4.6); the BOM's DN65 hydrant runs are the four
+      // legs: 4 x 4.5 = 18.0 m (was 18.4).
+      final net = c.read(sizingNetworkProvider);
+      final building = c.read(projectControllerProvider).building;
+      for (var f = 0; f < 4; f++) {
+        expect(nodeElevation(net.nodeById('HYD$f')!, building).meters,
+            closeTo(4.0 * f + kHoseOutletHeightM, 1e-9));
+      }
+      final dn65 = c.read(bomProvider).where((l) =>
+          l.service == ServiceType.fireHydrant &&
+          l.kind == EdgeKind.run &&
+          l.diameterMm == 65);
+      expect(
+        dn65.fold<double>(0, (a, l) => a + l.totalLength.meters),
+        closeTo(4 * 4.5, 1e-9),
+      );
     });
 
     test('sprinkler point (not governing): 15.7 + 50 / 9.81 + 36.947 m', () {

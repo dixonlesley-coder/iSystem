@@ -29,7 +29,6 @@ import '../geometry/building.dart';
 import '../hydraulics.dart' show defaultWaterDensity, standardGravity;
 import '../network/network.dart';
 import 'fire_index_friction.dart' show FireSystem;
-import 'fire_standpipe.dart' show kHoseOutletHeightM;
 import 'network_sizing.dart' show EdgeSizing;
 
 /// NFPA 14 7.2.3.2 — 175 psi static at a hose connection (1207 kPa).
