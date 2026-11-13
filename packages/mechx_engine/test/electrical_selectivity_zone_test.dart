@@ -128,13 +128,10 @@ void main() {
     // conductor is 16 mm² (Iz 80 A) and copper is never inflated to chase
     // discrimination — the largest rung it protects is 80 A. 80/63 = 1.27 < 1.6
     // ⇒ the pair stays in the NON-SELECTIVE zone and is reported as such.
-    // Backlog B-1 (2026-11-13): the feeder cable is AUTO-sized, so it now
-    // grows until its Iz carries the 125 A rung and the device reaches it:
-    // 125 / 63 = 1.98 ⇒ the PARTIAL zone (1.6..2.5).
-    expect(sel.upstreamRatingA, 125);
+    expect(sel.upstreamRatingA, 80);
     expect(sel.downstreamRatingA, 63);
-    expect(sel.zone, SelectivityZone.partial);
-    expect(sel.nonSelective, isFalse);
+    expect(sel.zone, SelectivityZone.nonSelective);
+    expect(sel.nonSelective, isTrue);
     // At 16 kA an MCCB/MCB Icu of 25 kA covers it ⇒ Icu/Ics adequate.
     expect(sel.icuAdequate, isTrue);
   });

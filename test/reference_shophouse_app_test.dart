@@ -45,6 +45,7 @@ import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 import 'package:mechx_engine/units.dart';
 
 import 'reference_board_floors.dart';
+import 'reference_copper.dart';
 import '../packages/mechx_engine/test/reference/shophouse.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -885,5 +886,15 @@ void main() {
       expect(codes.where((x) => x == 'non-selective'), isEmpty);
       expect(codes, isNot(contains('service-capacity-below-demand')));
     });
+  });
+
+  // Backlog B-1 / B-2 — the copper of the auto-sized cables, on record in
+  // docs/REFERENCE-BUILDINGS.md (REF_DUMP=1 prints it).
+  test('(REF_DUMP) auto-sized copper total', () async {
+    if (!_dump) return;
+    final c = await _loadShophouse(buildShophouse());
+    // ignore: avoid_print
+    print('COPPER shophouse ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
   });
 }

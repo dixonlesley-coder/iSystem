@@ -150,14 +150,16 @@ void main() {
         minKvaForStart: gensetStartFloorFor(p, sys));
     expect(startSet.ratingKva.inKilovoltAmperes, 300);
     expect(startSet.governing, GensetSizingReason.motorStart);
-    // Backlog B-3 (2026-11-13): on 300 kVA the alternator fault is 300 000 /
-    // (√3 × 400 × 0.12) = 3608 A and the fire pump's 160 A MCCB (10 × In ⇒
-    // Zs_max 0.95 × 230 / 1600 = 0.137 Ω) sees a 0.143 Ω loop ⇒ it would
-    // not disconnect on the genset. 400 kVA (4811 A) brings it to 0.132 Ω,
-    // so the recommendation is 400 kVA, governed by disconnection.
-    expect(sys.gensetAdsFloorKva, 400);
+    // Backlog B-3 (2026-11-13): the fire pump's 160 A MCCB (10 × In ⇒
+    // Zs_max 0.95 × 230 / 1600 = 0.137 Ω) must disconnect on the set's own
+    // fault S / (√3 × 400 × 0.12). The EMDP feeder stays 95 mm² / 250 A
+    // (bounded B-1: its 1.6 × 200 ⇒ 400 A rung needs FRC 185 mm², three
+    // sizes up). On 400 kVA (4811 A) the loop is 0.141 Ω ⇒ fails; 500 kVA
+    // (6014 A) gives 0.135 Ω ⇒ the recommendation is 500 kVA, governed by
+    // disconnection.
+    expect(sys.gensetAdsFloorKva, 500);
     final plant = gensetPlantVa(p, sys)! / 1000;
-    expect(plant, 400);
+    expect(plant, 500);
     expect(st.gensetAdsFailedCircuitIds, isEmpty);
     expect(st.powerOneLine!.gensetSizing!.governing,
         GensetSizingReason.disconnection);
@@ -165,8 +167,8 @@ void main() {
     expect(start.estimatedDipPct, lessThanOrEqualTo(25));
     expect(_genNode(st).sub, isNot(contains('start dip')));
     expect(_dipWarnings(st), isEmpty);
-    // The BOM buys the same 400 kVA set + its ATS.
-    expect(st.bom.lines.any((l) => l.description.startsWith('Genset 400 kVA')),
+    // The BOM buys the same 500 kVA set + its ATS.
+    expect(st.bom.lines.any((l) => l.description.startsWith('Genset 500 kVA')),
         isTrue);
   });
 
@@ -299,4 +301,5 @@ void main() {
     expect(warnings, greaterThan(0));
   });
 }
+
 

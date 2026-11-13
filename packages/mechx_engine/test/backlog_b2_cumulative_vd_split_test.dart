@@ -91,28 +91,30 @@ ElectricalProject _project({
 void main() {
   group('one long feeder, one failing 30 m lighting way: the way grows', () {
     // SP: one 1500 W lighting way, 1500 / (231 × 0.9) = 7.215 A, incomer
-    // 10 A. Its feeder (3φ, 130 m) floors to 1.6 × 10 ⇒ 16 A (B-1) and is
-    // held for ADS at 6 mm²: √3 × 7.215 × 130 × (3.69 × 0.9 + 0.08 ×
-    // 0.4359) / 1000 = 5.45 V = 1.36 %. The way on 1.5 mm²: 2 × 7.215 × 30 ×
-    // (14.5 × 0.9 + 0.0349) / 1000 = 5.665 V / 231 = 2.45 % (within 3 %),
-    // cumulative 3.81 % > 3 %.
+    // 10 A. Its feeder (3φ, 130 m) stays at its trunk-minimum 4 mm² (its
+    // 1.6 × 10 ⇒ 16 A selectivity floor sits above MDP's own 10 A incomer,
+    // so bounded B-1 does not grow it): √3 × 7.215 × 130 × (5.52 × 0.9 +
+    // 0.08 × 0.4359) / 1000 = 8.13 V = 2.03 %. The way on 1.5 mm²: 2 × 7.215
+    // × 30 × (14.5 × 0.9 + 0.0349) / 1000 = 5.665 V / 231 = 2.45 % (within
+    // 3 %), cumulative 4.48 % > 3 %.
     // Scores (Δ% / Δmm²·m·loaded cores): the way 1.5 → 2.5 saves 2.45 × (1 −
     // 8.018 / 13.085) = 0.949 % for 1 × 30 × 2 = 60 ⇒ 0.0158; the feeder
-    // 6 → 10 saves 1.36 × (1 − 2.006 / 3.356) = 0.547 % for 4 × 130 × 4 =
-    // 2080 ⇒ 0.00026. The way wins: 2.5 mm², 1.50 %, cumulative 2.86 %.
+    // 4 → 6 saves 2.03 × (1 − 3.356 / 5.003) = 0.668 % for 2 × 130 × 4 =
+    // 1040 ⇒ 0.00064. The way wins (1.50 %, 3.53 %), and again: 2.5 → 4
+    // saves 0.564 % for 90 ⇒ 0.0063 ⇒ 4 mm², 0.94 %, cumulative 2.97 %.
     final project = _project(feederM: 130, ways: 1, wayM: 30);
     final sys = computeSystem(_p, project);
     final f = _way(sys, 'MDP', 'f1');
     final w = _way(sys, 'SP', 'l0');
 
     test('the way is raised, the feeder is not', () {
-      expect(f.cable.csaMm2, 6);
-      expect(f.voltageDrop.dropPercent, closeTo(1.36, 1e-9));
+      expect(f.cable.csaMm2, 4);
+      expect(f.voltageDrop.dropPercent, closeTo(2.03, 1e-9));
       expect(f.cableRaisedForDownstreamVd, isFalse);
-      expect(w.cable.csaMm2, 2.5);
+      expect(w.cable.csaMm2, 4);
       expect(w.cableRaisedForCumulativeVd, isTrue);
-      expect(w.voltageDrop.dropPercent, closeTo(1.50, 1e-9));
-      expect(w.cumulativeDropPercent, closeTo(2.86, 1e-9));
+      expect(w.voltageDrop.dropPercent, closeTo(0.94, 1e-9));
+      expect(w.cumulativeDropPercent, closeTo(2.97, 1e-9));
       expect(sys.warnings.map((x) => x.code),
           isNot(contains('cumulative-voltage-drop-exceeded')));
     });
@@ -128,7 +130,7 @@ void main() {
   test('a user-fixed final way is never grown and keeps its finding', () {
     // The same way with its cable set by the engineer (1.5 mm²): it is not
     // a candidate, and (the T3 rule) only auto-sized ways drive a feeder
-    // raise, so the cumulative 3.81 % stays reported.
+    // raise, so the cumulative 4.48 % stays reported.
     final sys = computeSystem(
         _p, _project(feederM: 130, ways: 1, wayM: 30, wayCableMm2: 1.5));
     final w = _way(sys, 'SP', 'l0');

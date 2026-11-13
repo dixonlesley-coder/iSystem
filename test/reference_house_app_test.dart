@@ -29,6 +29,7 @@ import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/standards/puil.dart' show BreakerClassCode;
 
 import 'reference_board_floors.dart';
+import 'reference_copper.dart';
 import '../packages/mechx_engine/test/reference/house.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -441,5 +442,15 @@ void main() {
       expect(adv.recommendedDayaThreePhase, isFalse);
       expect(adv.supply.note, isNot(contains('worst-phase')));
     });
+  });
+
+  // Backlog B-1 / B-2 — the copper of the auto-sized cables, on record in
+  // docs/REFERENCE-BUILDINGS.md (REF_DUMP=1 prints it).
+  test('(REF_DUMP) auto-sized copper total', () async {
+    if (!_dump) return;
+    final c = await _loadHouse(buildHouse());
+    // ignore: avoid_print
+    print('COPPER house ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
   });
 }

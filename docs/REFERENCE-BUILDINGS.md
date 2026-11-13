@@ -79,7 +79,7 @@ _(empty)_
 
 - **(b) Too few / too small AC units — backlog A-4.** The Review warns `room-cooling-undersized:<room>` when the AC units a room owns give less than its cooling load: here 2 x 2.5 PK = 48 000 >= 44 400 BTU/h (no finding); one cassette would warn (44 400 > 27 000, needs 2 x 3 PK).
 - **(e) Transfer pump label — closed by B-4.** TP_A/B/C are minted `MepLoadSource.transferPump` ('Transfer pump' / 'Pompa transfer'), no figure changed.
-- **(f) Feeder discrimination — closed by B-1.** An auto-sized feeder cable now grows until its device reaches 1.6 × the fed incomer: unit feeders 6 mm² / 32 A → 10 mm² (Iz 50) / 40 A (VD 0.65 / 0.86 / 1.08 %), MEP feeder 5 × 4 / 25 A → 5 × 6 / 32 A. No `non-selective` is left.
+- **(f) Feeder discrimination — closed by B-1 (bounded).** An auto-sized feeder cable grows by at most two section sizes (and never past the upstream incomer) so its device reaches 1.6 × the fed incomer: unit feeders 6 mm² / 32 A → 10 mm² (Iz 50) / 40 A, one size (VD 0.65 / 0.86 / 1.08 %); MEP feeder 5 × 4 / 25 A → 5 × 6 / 32 A, one size. No `non-selective` is left.
 
 
 ## 3. Office (kantor 4 lantai)
@@ -134,7 +134,7 @@ _(empty)_
 - **(e) Churn over-pressure — backlog A-3.** The churn 1.4 x 98.536 x 9.81 = 1353.3 kPa now sets the PN16 class of the fire pipework downstream of FP (printed on the fire results and BOM fire lines), and the four hose valves (1341.5..1223.8 kPa static) are designated pressure-regulating hose valves set to 690 kPa (info, take-off, riser tag): no warning.
 - **(b) Fire tank volume — backlog A-2.** The fire-water reserve is computed (`fireTankReservesProvider`: rated flow x duration): 31.5451 L/s x 1800 s = 56 781 L. FT has no capacity, so the Review raises the info `fire-tank-capacity-unset:FT` stating it; a capacity below it would warn `fire-tank-undersized:FT`.
 - **(f) Two judge heads (O3) — backlog A-1.** The sprinkler-vs-pump judge now requires the rating basis' sprinkler point (`FireSystemBasis.sprinklerPointHeadM`): 15.7 + 50/9.81 + 37.414 = 58.211 m vs the pump's 98.536 m, not short (the old lower bound read 25.560 m); 57.744 m after A-5.
-- **Feeder discrimination (5 x `non-selective`) — closed by B-1.** Floor feeders 5 x 6 / 32 A → 5 x 16 (Iz 68) / 63 A (VD 0.15 / 0.21 / 0.28 / 0.34 %); MEP feeder FRC 35 / 125 A → FRC 70 (Iz 222) / 200 A.
+- **Feeder discrimination (5 x `non-selective`) — closed by B-1 (bounded).** Floor feeders 5 x 6 / 32 A → 5 x 16 (Iz 68) / 63 A, two sizes (VD 0.15 / 0.21 / 0.28 / 0.34 %), 63 A under LVMDP's 250 A incomer; MEP feeder FRC 35 / 125 A → FRC 70 (Iz 222) / 200 A, two sizes, under 250 A.
 
 ## 4. Apartment (rumah susun 12 lantai)
 
@@ -154,7 +154,7 @@ _(empty)_
 
 **Deliberate expected findings** (final state: PLN 197 000 VA, genset 300 kVA, PRV drawn):
 - `standpipe-prv-hose-valves:FP:0-11` info: every hose valve's static at churn is above 1207 kPa (1705.5..1327.8), so each is designated a pressure-regulating hose valve (backlog A-3). The churn 1.4 x 125.036 = 175.051 m = 1717.2 kPa sets PN25; no `fire-system-over-pressure` since A-3 (it was raised against 1210 kPa before).
-- 2 x `non-selective`: Feeder PP-E (200 A vs the 200 A PP-E incomer) and Feeder to MEP (200 A vs 160 A), both capped at Iz 222 of 70 mm² FRC.
+- 2 x `non-selective` (as at 3f4e78c; bounded B-1 refuses both and the message names a selective device): Feeder PP-E (200 A on FRC 4 x 70 + 35 vs the 200 A PP-E incomer — its 400 A rung would sit above LVMDP's 315 A incomer and need 185 mm², four sizes up) and Feeder to MEP (200 A vs 160 A — its 315 A rung would sit above PP-E's own 200 A incomer).
 - `enclosure-temp-rise-exceeded` on PP-E (36 K > 35 K).
 - Infos: `downfeed-below-target` (the gravity floors are under the 225 kPa target but above the SNI 49 kPa), `cable-raised-for-ads` (the lift, 10 mm²), 3 x `fire-pump-protection`, 72 x `drainage-laid-steeper`, 2 x `drainage-cleanout`, 12 x `phase-imbalance-inherent`, 5 `// VERIFY`.
 - Before the PRV is drawn: 8 x `downfeed-over-pressure` (Lantai 1, 401.229 kPa static).
@@ -179,7 +179,7 @@ _(empty)_
 
 - **(i) Genset rating ignores ADS on the alternator fault — closed by B-3.** An unforced set's recommendation is now the smallest ladder rating, above the running and motor-start floors, at which no auto-sized backed way fails `ads-disconnection-on-genset` after the T4 growth (governing reason `disconnection`). The final apartment set (typed 300 kVA) already holds, so no pin moved.
 - **(b) Two alternator reactances — closed by B-5.** They are two different reactances of one machine and are now named as a pair in `sources.dart`: the fault level reads the sub-transient X''d 0.12 pu, the motor-start dip and start floor the transient X'd 0.15 pu (no figure changed).
-- **Feeder discrimination — B-1.** Feeder PP-E grows to FRC 4 x 185 + 95 / 400 A (VD 0.48 → 0.22 %); Feeder to MEP keeps `non-selective` (genset ADS refusal, see the findings above).
+- **Feeder discrimination — B-1 (bounded).** Nothing grows here: both feeders' floor rungs sit above their own boards' incomers, so the two `non-selective` stay (now naming a selective, time-delayed / category B device); no `outgoing-exceeds-incomer`.
 
 ## 5. Tower (gedung kantor 30 lantai)
 
@@ -199,10 +199,10 @@ _(empty)_
 - Hand-value pins (pass 3): the engine groups in `reference_tower_test.dart` (flush-valve cold water, gravity field, PRVs, hot water, drainage, vent, rainwater) and the app group in `reference_tower_app_test.dart` (zones and PRVs, movers, recirculation, fire, air, floor boards, PP-E / MEP / LVMDP, transformer, genset, capacitor bank, Review findings).
 
 **Deliberate expected findings** (final state: 1600 kVA transformer, 800 kVA genset, 250 kvar bank, seven PRVs drawn):
-- 2 x `non-selective`: Feeder PP-E (2 x 185 mm² FRC parallel: no single run carries its 1250 A floor rung) and Feeder to MEP (300 mm² FRC, the ladder top, Iz 553 < its 800 A rung). B-1 cured PP-Lt1 / PP-Lt2 (5 x 10 / 50 A → 5 x 16 / 63 A).
+- 2 x `non-selective` (bounded B-1 refusals, naming a selective device): Feeder PP-E (2 x 185 mm² FRC parallel: no single-run step reaches its 1250 A floor rung) and Feeder to MEP (its 800 A rung would sit above PP-E's own 630 A incomer). B-1 cured PP-Lt1 / PP-Lt2 (5 x 10 / 50 A → 5 x 16 / 63 A, one size).
 - 2 x `enclosure-temp-rise-exceeded` (LVMDP, PP-E), `service-cable-ampacity-inadequate` (the 1600 A service), `service-fault-estimate-high` (57.7 kA from the 1600 kVA / 4 % transformer).
 - `fire-system-over-pressure:FP` (churn 1.4 x 210.686 = 294.961 m = 2893.6 kPa > 2413: since backlog A-3 worded as zone-split guidance) and the info `standpipe-prv-hose-valves:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207, designated pressure-regulating).
-- Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30, Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, `drainage-cleanout`, 5 `// VERIFY`.
+- Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30 — their 63 A loop needs 35 mm², three sizes above the load-sized 10 mm², past the selectivity bound — and Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, `drainage-cleanout`, 5 `// VERIFY`.
 - Before the PRVs are drawn: 100 x `downfeed-over-pressure` (floors 0..19).
 
 **Expected absent:** any critical or error, `air-duct-unsized` / `air-terminal-unsized` / `terminal-velocity` (backlog F-2 / F-4), `cumulative-voltage-drop-exceeded`, `ads-disconnection*`, `combined-fire-sprinkler-governs`, `downfeed-over-pressure` (after the PRVs), `pressure-zone`, `life-safety-*`, `unfed-panel`, `fire-tank-*` (FT 120 000 L >= 85 172 L).
@@ -226,8 +226,23 @@ _(empty)_
 - **`air-duct-unsized` on auto-sized ducts — backlog F-4.** The info now means a duct with NO size (neither auto nor chosen): 14 → 0 (all ducts are auto-sized within their limits).
 - **(g) AHU static, two figures — backlog F-3.** The Rooms inspector, the equipment schedule and the calc report print ONE duty per room (`roomAirHeadlineProvider`): AHU1 roots the drawn supply / return system, so the Kantor headline is the drawn-duct duty 327.68 Pa (2.2 kW); the room estimate (15 m assumed run, 303.93 Pa since F-1) is no longer printed beside it, and is labelled "estimate (no ducts drawn)" only for a room no drawn system serves. The toilet's headline is EF1's drawn 38.67 Pa.
 - **(f) Room return-bank face velocity — backlog F-2.** One limit per terminal kind and application (`terminalFaceVelocityMax`) for both the room sizing and the checker: office return min(3.0, 4.0) = 3.0 m/s governs. ceil(3.7 / (0.36 x 0.8 x 3.0)) = 5 return grilles; the fixture now draws RG1..RG5 (740 L/s each, 600 x 600, 2.569 m/s), return chain 500x350 / 700x450 / 900x600 / 1000x700 / 1200x700, return static 35.06 → 36.29 Pa, AHU 326.44 → 327.68 Pa (2.2 kW). The toilet's exhaust grilles (retail, 3.5 m/s) are 300 x 150 (3.426 m/s).
-- **(i) Downstream-VD raise always enlarged the feeder — closed by B-2.** The cure now takes the least copper on the way's chain: the lighting ways of the upper floors go 1.5 → 2.5 mm² (Lampu C 4 mm² on Lt20 / 21) and the floor feeders end at their B-1 size (16 mm² on Lt1..21, 25 on Lt22..27, 35 on Lt28..30 — the ADS hold of the 63 A floor; PP-Lt30 95 → 35 mm²). Copper Σ mm² × m × loaded cores 581 610 → 287 340; no `cumulative-voltage-drop-exceeded`.
-- **(h) `non-selective` on auto-sized feeders — closed by B-1** where the single-run ladder reaches: PP-Lt1 / PP-Lt2 grow to 5 x 16 / 63 A (VD 0.25 / 0.32 %). PP-E (parallel runs) and the MEP feeder (300 mm², ladder top) keep the warning.
+- **(i) Downstream-VD raise always enlarged the feeder — closed by B-2.** The cure now takes the least copper on the way's chain: the lighting ways of the upper floors go 1.5 → 2.5 mm² (Lampu C 4 mm² on Lt20 / 21) and the floor feeders end at the size their 63 A floor device needs (16 mm² on Lt1..21, 25 on Lt22..27, 35 on Lt28..30 — the ADS hold of the 63 A device; PP-Lt30 95 → 35 mm²). Lighting raised: Lampu A Lt18..21 and Lt28..30, B Lt12..30, C Lt6..30 (4 mm² on Lt20 / 21). Copper: see the table below; no `cumulative-voltage-drop-exceeded`.
+- **(h) `non-selective` on auto-sized feeders — closed by B-1 (bounded)** where a two-size single-run step under the upstream incomer reaches: PP-Lt1 / PP-Lt2 grow to 5 x 16 / 63 A (VD 0.25 / 0.32 %). PP-E (parallel runs) and the MEP feeder (above PP-E's own incomer) keep the warning, which now names a selective device.
+
+## Electrical backlog copper (2026-11-13)
+
+Σ mm² × m × loaded cores (phase + neutral, × parallel runs; star-delta leads
+2 × 3 cores) over every AUTO-sized cable of the final app solve
+(`test/reference_copper.dart`, printed by each reference app test under
+`REF_DUMP=1`), at 3f4e78c and after backlog B-1 (bounded) + B-2:
+
+| Building | 3f4e78c | after B-1 + B-2 | Change | Why |
+|---|---|---|---|---|
+| House | 546 | 546 | 0 | one board, no feeder, no cumulative failure |
+| Shophouse | 3 038 | 3 598 | +560 (+18 %) | unit feeders 6 → 10 mm² (×3), MEP feeder 4 → 6 mm² |
+| Office | 7 579 | 11 539 | +3 960 (+52 %) | floor feeders 6 → 16 mm² (×4), MEP feeder FRC 35 → 70 mm² |
+| Apartment | 26 011 | 26 011 | 0 | both feeder floors refused (above their own boards' incomers) |
+| Tower | 580 794 | 287 745 | −293 049 (−50 %) | B-2: cumulative drops cured on the lighting ways, not the 30 floor feeders |
 
 ## Drawing review (2026-11-13)
 

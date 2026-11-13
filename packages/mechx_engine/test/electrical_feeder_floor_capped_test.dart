@@ -28,6 +28,7 @@ library;
 import 'package:mechx_engine/electrical/compute.dart';
 import 'package:mechx_engine/electrical/earthing.dart';
 import 'package:mechx_engine/electrical/fault.dart';
+import 'package:mechx_engine/electrical/headroom.dart';
 import 'package:mechx_engine/electrical/load_kind.dart';
 import 'package:mechx_engine/electrical/model.dart';
 import 'package:mechx_engine/electrical/panel_results.dart';
@@ -58,11 +59,13 @@ ElectricalCircuitResult _way(ElectricalPanelResult r, String id) =>
 ElectricalProject _twoBoard(
         {required double loadW,
         Current? feederOverride,
-        double? cableOverrideMm2}) =>
+        double? cableOverrideMm2,
+        ApparentPower? supplyVa}) =>
     ElectricalProject(
       id: 'pr',
       name: 'Building',
       earthingSystem: EarthingSystem.tnS,
+      supplyCapacityVa: supplyVa,
       panels: [
         ElectricalPanel(
           id: 'MDP',
@@ -113,12 +116,15 @@ void main() {
   // ── (A0) Backlog B-1: an AUTO-sized feeder cable grows to the floor ──────
   group('(A0) an auto-sized feeder cable grows until the floor fits', () {
     // Same 35 kW board as (A): SP incomer 63 A, load-sized f1 16 mm² (Iz 80).
-    // FLOOR target 1.6 × 63 = 100.8 A ⇒ rung 125 A. Backlog B-1 (2026-11-13):
-    // the cable is AUTO-sized, so it steps up the ladder to the smallest
-    // section whose Iz carries 125 A on method E: 25 mm² 105 < 125, 35 mm²
-    // 130 ≥ 125 ⇒ 35 mm², device 125 A (125/63 = 1.98 ⇒ partial, the floor's
-    // own target ⇒ applied, no finding).
-    final project = _twoBoard(loadW: 35000);
+    // FLOOR target 1.6 × 63 = 100.8 A ⇒ rung 125 A. Backlog B-1 (2026-11-13,
+    // bounded): the cable is AUTO-sized, so it steps up the ladder to the
+    // smallest section whose Iz carries 125 A on method E: 25 mm² 105 < 125,
+    // 35 mm² 130 ≥ 125 ⇒ 35 mm² (two sizes up — the bound), device 125 A
+    // (125/63 = 1.98 ⇒ partial, the floor's own target ⇒ applied). MDP needs
+    // an incomer of at least 125 A for that (the upstream bound): a declared
+    // 197 kVA service floors it at 284.3 A ⇒ 315 A.
+    final project =
+        _twoBoard(loadW: 35000, supplyVa: const ApparentPower(197e3));
     final sys = computeSystem(p, project);
     final feeder = _way(sys.panels['MDP']!, 'f1');
 
@@ -138,6 +144,62 @@ void main() {
       expect(fs.warnings.map((w) => w.code),
           isNot(contains('selectivity-partial')));
     });
+  });
+
+  // ── (A1) bounded B-1: the upstream incomer refuses the growth ────────────
+  test('(A1) a 125 A floor rung above MDP\'s own 63 A incomer is refused: '
+      'the cable stays, the warning names the device remedy', () {
+    // Without a declared service MDP's incomer is its own demand rung, 63 A,
+    // so a 125 A feeder device would sit above it: no growth, the pre-B-1
+    // device-only floor (80 A on 16 mm²) and a `non-selective` naming a
+    // selective device.
+    final project = _twoBoard(loadW: 35000);
+    final sys = computeSystem(p, project);
+    final f = _way(sys.panels['MDP']!, 'f1');
+    expect(sys.panels['MDP']!.incomer.breaker.ratingA.amperes, 63);
+    expect(f.cable.csaMm2, 16);
+    expect(f.breaker.ratingA.amperes, 80);
+    expect(f.cableRaisedForSelectivity, isFalse);
+    expect(sys.feederSelectivityRefused,
+        {'f1': SelectivityRefusal.upstreamIncomer});
+    expect(
+      _nonSelectiveMessage(faultStudy(sys, project, p)),
+      'Feeder to SP (80 A) may not discriminate with Sub incomer (63 A): the '
+      '1.6x ratio cannot be reached under the upstream 63 A incomer - use a '
+      'selective (time-delayed / category B, electronic-trip) device or check '
+      "the manufacturer's discrimination tables.",
+    );
+  });
+
+  // ── (A2) bounded B-1: more than two cable sizes is refused ───────────────
+  test('(A2) a floor needing more than two cable sizes is refused', () {
+    // The (A0) board with 100 % future headroom on SP: SP's incomer sizes on
+    // 2 × 50.5 = 101 A ⇒ 125 A, so the floor is 1.6 × 125 = 200 A. The
+    // load-sized 16 mm² would have to reach Iz ≥ 200 on method E: 25 105,
+    // 35 130, 50 160, 70 200 ⇒ four sizes up, past the two-size bound ⇒
+    // refused: 16 mm², the device-only floor at Iz 80 ⇒ 80 A, `non-selective`
+    // naming the device remedy.
+    final base = _twoBoard(loadW: 35000, supplyVa: const ApparentPower(197e3));
+    final project = base.withPanels([
+      base.panels.first,
+      base.panels.last
+          .copyWith(headroom: const HeadroomSpec(sparePercentage: 100)),
+    ]);
+    final sys = computeSystem(p, project);
+    final f = _way(sys.panels['MDP']!, 'f1');
+    expect(sys.panels['SP']!.incomer.breaker.ratingA.amperes, 125);
+    expect(f.cable.csaMm2, 16);
+    expect(f.breaker.ratingA.amperes, 80);
+    expect(f.cableRaisedForSelectivity, isFalse);
+    expect(sys.feederSelectivityRefused, {'f1': SelectivityRefusal.cableSteps});
+    expect(
+      _nonSelectiveMessage(faultStudy(sys, project, p)),
+      'Feeder to SP (80 A) may not discriminate with Sub incomer (125 A): the '
+      "1.6x ratio cannot be reached within 2 cable sizes of the feeder's own "
+      '16 mm2 cable - use a selective (time-delayed / category B, '
+      "electronic-trip) device or check the manufacturer's discrimination "
+      'tables.',
+    );
   });
 
   // ── (A) the cap bites, and the 1.6× target IS on the ladder ───────────────

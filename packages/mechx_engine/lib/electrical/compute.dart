@@ -1050,6 +1050,7 @@ List<BusbarSectionResult> splitBusbarSections(
 /// cable …
 const int kAdsCsaGrowthMaxRungs = 6;
 
+
 /// … and never above this section (mm²): a final way needing more is a
 /// design to rethink (a sub-board nearer the load), so the
 /// `ads-disconnection` error stands. `// VERIFY` notAnSniClause (a bound,
@@ -2109,10 +2110,17 @@ _CircuitComputation _computeCircuit(
             isLighting: c.isLighting,
           ),
         );
+        // Bounded: at most [kSelectivityGrowthMaxRungs] rungs above the
+        // cable the other rules need (`cable` here).
+        final sections = profile.standardSectionsMm2;
+        final rungsUp = sections.indexWhere(
+                (x) => (x - candidate.csaMm2).abs() < 1e-9) -
+            sections.indexWhere((x) => (x - cable.csaMm2).abs() < 1e-9);
         if ((candidate.runsPerPhase ?? 1) <= 1 &&
             candidate.ampacityReached &&
             candidate.deratedIz.amperes + 1e-9 >= rung.amperes &&
-            candidate.csaMm2 > cable.csaMm2 + 1e-9) {
+            candidate.csaMm2 > cable.csaMm2 + 1e-9 &&
+            rungsUp <= kSelectivityGrowthMaxRungs) {
           cable = candidate;
           raisedForSelectivity = true;
         }
@@ -4329,6 +4337,11 @@ ElectricalSystemResult computeSystem(
   // the CURRENT `solveAll` (reset at its start; see the Round-40 loop).
   final selectivityCsaMin = <String, double>{};
   final selectivityRefused = <String>{};
+  // Bounded B-1 — feeders whose floor rung sits above the incomer of the
+  // board they are on (the growth is refused, never an outgoing device
+  // above its own incomer), and those the ADS step refused.
+  final selectivityRefusedIncomer = <String>{};
+  final selectivityRefusedAds = <String>{};
 
   ElectricalSystemResult sizeAll(Map<String, double> feederBreakerFloorA,
       [Map<String, double> feederBreakerCapA = const {},
@@ -4943,6 +4956,7 @@ ElectricalSystemResult computeSystem(
     // it here — rather than deep in `_computeCircuit` — keeps the per-circuit
     // sizing path untouched, and reads the SAME ladder + Iz the sizer used.
     final floorsCapped = <String>{};
+    final refusedWhy = <String, SelectivityRefusal>{};
     final ladder = profile.standardBreakerRatingsA;
     for (final entry in feederBreakerFloorA.entries) {
       final parentId = feederParentOf[entry.key];
@@ -4958,6 +4972,18 @@ ElectricalSystemResult computeSystem(
       final floorRung = ladder.firstWhere((x) => x + 1e-9 >= entry.value,
           orElse: () => ladder.last);
       if (floorRung > r.cable.deratedIz.amperes) floorsCapped.add(entry.key);
+      // Bounded B-1 — why an AUTO-sized feeder's growth did not reach it.
+      final model = byId[parentId]
+          ?.circuits
+          .where((x) => x.id == entry.key)
+          .firstOrNull;
+      if (model != null && model.cableOverrideMm2 == null) {
+        refusedWhy[entry.key] = selectivityRefusedIncomer.contains(entry.key)
+            ? SelectivityRefusal.upstreamIncomer
+            : selectivityRefusedAds.contains(entry.key)
+                ? SelectivityRefusal.disconnection
+                : SelectivityRefusal.cableSteps;
+      }
     }
 
     return ElectricalSystemResult(
@@ -4970,6 +4996,7 @@ ElectricalSystemResult computeSystem(
       warnings: warnings,
       feederFloorsApplied: floorsApplied,
       feederFloorsCapped: floorsCapped,
+      feederSelectivityRefused: refusedWhy,
       gensetAdsFloorKva: gensetAdsFloorKva,
     );
   }
@@ -4980,6 +5007,8 @@ ElectricalSystemResult computeSystem(
   ElectricalSystemResult solveAll() {
     selectivityCsaMin.clear();
     selectivityRefused.clear();
+    selectivityRefusedIncomer.clear();
+    selectivityRefusedAds.clear();
     // PASS 1 — size the system with no coordination floor (exactly the historic
     // single-pass behaviour).
     final pass1 = sizeAll(const {});
@@ -5019,6 +5048,22 @@ ElectricalSystemResult computeSystem(
         final floorA = selectivityRatio * childIncomerA;
         if (feederResult.breaker.ratingA.amperes + 1e-9 < floorA) {
           feederFloors[c.id] = floorA;
+          // Bounded B-1 — the growth never takes the feeder device above the
+          // incomer of the board it sits on.
+          final upstreamA =
+              pass1.panels[p.id]?.incomer.breaker.ratingA.amperes;
+          final ladder = profile.standardBreakerRatingsA;
+          final floorRung = ladder.firstWhere((x) => x + 1e-9 >= floorA,
+              orElse: () => ladder.last);
+          // No selectivity GROWTH may put an outgoing device above its own
+          // incomer: the auto-sized cable is not grown for such a floor
+          // (the device-only floor, capped at the cable's Iz, is unchanged).
+          if (c.cableOverrideMm2 == null &&
+              upstreamA != null &&
+              floorRung > upstreamA + 1e-9) {
+            selectivityRefused.add(c.id);
+            selectivityRefusedIncomer.add(c.id);
+          }
         }
       }
     }
@@ -5172,11 +5217,18 @@ ElectricalSystemResult computeSystem(
           final next = selSections
               .where((x) => x > rNow.cable.csaMm2 + 1e-9)
               .firstOrNull;
-          if (next != null) {
+          // Bounded B-1 — never more than [kSelectivityGrowthMaxRungs]
+          // above the cable the pass-1 (non-selectivity) rules need.
+          final base = selSections
+              .indexWhere((x) => (x - rLoad.cable.csaMm2).abs() < 1e-9);
+          if (next != null &&
+              selSections.indexOf(next) - base <=
+                  kSelectivityGrowthMaxRungs) {
             selectivityCsaMin[id] = next;
           } else {
             selectivityCsaMin.remove(id);
             selectivityRefused.add(id);
+            selectivityRefusedAds.add(id);
           }
           changed = true;
           continue;

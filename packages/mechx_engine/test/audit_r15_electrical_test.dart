@@ -63,8 +63,7 @@ ElectricalCircuit _load(String id, double w, double pf,
       length: const Length(10),
     );
 
-ElectricalCircuit _feeder(String id, String to,
-        {bool breakBefore = false, double? cableMm2}) =>
+ElectricalCircuit _feeder(String id, String to, {bool breakBefore = false}) =>
     ElectricalCircuit(
       id: id,
       name: 'Feeder $to',
@@ -72,7 +71,6 @@ ElectricalCircuit _feeder(String id, String to,
       length: const Length(10),
       feedsPanelId: to,
       busbarBreakBefore: breakBefore,
-      cableOverrideMm2: cableMm2,
     );
 
 ElectricalCircuit _bank(String id, double kvar,
@@ -268,10 +266,6 @@ void main() {
     test('a 100 % headroom board behind a load-sized 63 A feeder', () {
       // SDP: one 30 kW 3φ heater (cos φ 1) ⇒ 30 000/(√3 × 400) = 43.3 A.
       // Future at +100 % = 86.6 A; the feeder sizes on today's 43.3 A.
-      // Backlog B-1 (2026-11-13): an AUTO-sized feeder cable would grow for
-      // its selectivity floor (1.6 × the 100 A future-rated incomer = 160 A),
-      // which clears the headroom too; the judge is exercised on a USER-FIXED
-      // load-sized 16 mm² (Iz ≥ 1.25 × 43.3 = 54.1 ⇒ B1 68 A ⇒ cap 63 A).
       final sys = computeSystem(
           p,
           ElectricalProject(
@@ -279,7 +273,7 @@ void main() {
               name: 'H',
               earthingSystem: EarthingSystem.tnCs,
               panels: [
-                _p3('MDP', [_feeder('f-sdp', 'SDP', cableMm2: 16)]),
+                _p3('MDP', [_feeder('f-sdp', 'SDP')]),
                 _p3('SDP',
                     [_load('heat', 30000, 1.0, kind: LoadKind.heating)],
                     fedBy: 'f-sdp',

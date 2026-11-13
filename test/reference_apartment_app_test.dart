@@ -67,6 +67,7 @@ import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show electricalRiserFloorOf;
 import 'reference_board_floors.dart';
+import 'reference_copper.dart';
 import '../packages/mechx_engine/test/reference/apartment.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -1469,21 +1470,18 @@ void main() {
       expect(pe.incomer.breaker.ratingA.amperes, 200);
       expect(pe.incomer.breaker.deviceClass, BreakerClass.mccb);
       expect(pe.incomer.poles, 4);
-      // Its feeder on LVMDP: Ib 174.6, load-sized MCCB 200 C on FRC 4 x 70 +
-      // 35 (0.48 %). Backlog B-1 (2026-11-13): the selectivity floor 1.6 x
-      // 200 (PP-E incomer) = 320 A ⇒ rung 400 A; the auto-sized FRC grows to
-      // Iz ≥ 400: 150 mm² 358 ✗, 185 mm² 408 ✓ ⇒ MCCB 400 A on FRC 4 x 185 +
-      // 95, ADS held on the utility (Zs 0.028 / 0.055 Ω) and on the 300 kVA
-      // set. pf 102 768 / 120 864 = 0.85028 (sin 0.52634): √3 x 174.6 x 20 x
-      // (0.121 x 0.85028 + 0.08 x 0.52634) / 1000 = 0.877 V = 0.22 %.
+      // Its feeder on LVMDP: Ib 174.6, MCCB 200 C, FRC 4 x 70 + 35 (0.48 %).
+      // Bounded B-1 (2026-11-13): its 1.6 x 200 = 320 ⇒ 400 A rung would sit
+      // above LVMDP's own 315 A incomer and need FRC 185 mm² (four sizes up
+      // from 70), so the growth is refused: the cable and the device-only
+      // floor (largest rung under Iz 222 = 200 A) stay, `non-selective` kept.
       final fpe = way(kAptMainPanelId, kAptEssentialFeederId);
       expect(fpe.designCurrent.amperes, 174.6);
-      expect(fpe.breaker.ratingA.amperes, 400);
+      expect(fpe.breaker.ratingA.amperes, 200);
       expect(fpe.grounding.cableType, 'FRC');
-      expect(fpe.cable.csaMm2, 185);
-      expect(fpe.cable.deratedIz.amperes, 408);
-      expect(fpe.cableRaisedForSelectivity, isTrue);
-      expect(fpe.voltageDrop.dropPercent, closeTo(0.22, 1e-9));
+      expect(fpe.cable.csaMm2, 70);
+      expect(fpe.cableRaisedForSelectivity, isFalse);
+      expect(fpe.voltageDrop.dropPercent, closeTo(0.48, 1e-9));
 
       // MEP board. FLA = input / (√3 x 400 x 0.85).
       const mep = 'mep-equipment';
@@ -1612,16 +1610,13 @@ void main() {
       expect(r.maxKpa, closeTo(9.81 * (175.051 - 1.2), 0.05));
       expect(r.minKpa, closeTo(9.81 * (175.051 - 3.5 * 11 - 1.2), 0.05));
       expect(c.read(prvHoseValvesProvider), hasLength(12));
-      // Backlog B-1: Feeder PP-E reaches its floor (400 A on 185 mm² FRC);
-      // Feeder to MEP (200 A vs the 160 A incomer) keeps its warning — its
-      // 315 A floor rung cannot disconnect on the 300 kVA set at any single
-      // run (Zs_max 0.95 x 230 / (10 x 315) = 0.069 Ω, about the
-      // alternator's own 400 / (√3 x 3608) = 0.064 Ω), so the raise is
-      // refused and the load-sized 70 mm² stays.
-      expect(count('electrical:non-selective'), 1);
-      // The 400 A PP-E feeder sits above LVMDP's 315 A service-floor
-      // incomer: the existing INFO names the action.
-      expect(count('electrical:outgoing-exceeds-incomer'), 1);
+      // Bounded B-1: both feeders keep `non-selective` (as at 3f4e78c), now
+      // naming a selective device: Feeder PP-E's 400 A rung would sit above
+      // LVMDP's 315 A incomer, Feeder to MEP's 315 A rung (1.6 x 160 = 256)
+      // above PP-E's own 200 A incomer. No selectivity raise puts a device
+      // above its incomer.
+      expect(count('electrical:non-selective'), 2);
+      expect(count('electrical:outgoing-exceeds-incomer'), 0);
       expect(count('electrical:enclosure-temp-rise-exceeded'), 1);
       // Reference tower T2: the enlarged feed main hands the head back to
       // the standpipe, so the combined-governs info is gone.
@@ -1657,5 +1652,15 @@ void main() {
         isEmpty,
       );
     });
+  });
+
+  // Backlog B-1 / B-2 — the copper of the auto-sized cables, on record in
+  // docs/REFERENCE-BUILDINGS.md (REF_DUMP=1 prints it).
+  test('(REF_DUMP) auto-sized copper total', () async {
+    if (!_dump) return;
+    final c = await _loadApartment(buildApartment());
+    // ignore: avoid_print
+    print('COPPER apartment ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
   });
 }

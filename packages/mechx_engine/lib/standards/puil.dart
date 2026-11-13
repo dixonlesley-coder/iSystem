@@ -751,6 +751,23 @@ class PuilProfile implements ElectricalStandardsProfile {
         //  are now verified — promoted out of the checklist.)
         maxVoltageDropLighting,
         continuousLoadFactor,
+        // Backlog B-1 (bounded 2026-11-13) — `kSelectivityGrowthMaxRungs`.
+        const StandardValue<Object?>(
+          'selectivity cable growth: at most 2 section sizes above the cable '
+              'the load / voltage drop / ADS need, never a feeder device above '
+              'its own incomer',
+          unit: 'sizes',
+          citation: 'design policy — discrimination by a selective device / '
+              'manufacturer tables beyond a small copper step (not a PUIL '
+              'clause)',
+          verified: false,
+          status: VerificationStatus.notAnSniClause,
+          note: 'An auto-sized feeder cable is grown so its breaker reaches '
+              '1.6 x the fed incomer only for a small step; a larger need '
+              'keeps the cable and reports non-selective, naming a selective '
+              '(time-delayed / category B, electronic-trip) device or the '
+              "manufacturer's discrimination tables.",
+        ),
         // Round 53 (elec-convergence-5-tt-vfd-final-30ma-rcd).
         const StandardValue<Object?>(
           'TT final-circuit RCD sensitivity by load kind (VFD 300 mA Type B, '

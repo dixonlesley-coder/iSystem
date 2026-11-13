@@ -348,11 +348,6 @@ void main() {
                   loadKind: LoadKind.feeder,
                   feedsPanelId: 'e',
                   length: Length(10),
-                  // Backlog B-1 (2026-11-13): the load-sized 10 mm² feeder is
-                  // pinned (an auto-sized one now grows to 16 mm² for its
-                  // 1.6 × 32 ⇒ 63 A selectivity floor, which lowers the
-                  // lift's genset loop and moves this fixture's premise).
-                  cableOverrideMm2: 10,
                 ),
               ],
             ),

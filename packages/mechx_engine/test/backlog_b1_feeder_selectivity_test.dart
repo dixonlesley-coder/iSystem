@@ -8,7 +8,9 @@
 /// (In ≤ Iz kept, ADS still met on every source), flagged
 /// `cableRaisedForSelectivity`. A user-fixed cable never grows and keeps the
 /// warning; a case the single-run ladder cannot reach keeps the load-sized
-/// cable and the warning.
+/// cable and the warning. BOUNDED (reviewer, 2026-11-13): at most two section
+/// sizes, never a device above the feeder's own board incomer — the refusals
+/// are pinned in electrical_feeder_floor_capped_test.dart (A1) / (A2).
 ///
 /// Hand values from the `PuilProfile` tables: conduit = IEC B.52.4 B1 Cu/PVC
 /// (4→28, 6→36, 10→50, 16→68, 25→89 A); R70 Ω/km 4→5.52, 6→3.69,
@@ -88,6 +90,10 @@ ElectricalProject _project({
     id: 'pr',
     name: 'B-1',
     earthingSystem: EarthingSystem.tnS,
+    // A declared 33 kVA 3φ service floors MDP's incomer at 47.6 A ⇒ 50 A, so
+    // a 40 A feeder device stays under its own incomer (the bounded B-1
+    // upstream rule).
+    supplyCapacityVa: const ApparentPower(33000),
     panels: reversed
         ? [
             for (final p in panels.reversed)

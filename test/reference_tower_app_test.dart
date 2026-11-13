@@ -81,6 +81,7 @@ import 'package:mechx_engine/units.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show electricalRiserFloorOf;
 import 'reference_board_floors.dart';
+import 'reference_copper.dart';
 import '../packages/mechx_engine/test/reference/tower.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -1732,10 +1733,11 @@ void main() {
         String id(String b) => 'c_${b}_lt${f + 1}';
         // Lighting 1500 / (230 x 0.9 x ...) = 7.215 A, MCB 10 B, 3x1.5.
         // Backlog B-2: the least-copper cumulative-drop cure raises Lampu A
-        // itself on Lt18..21 (16 mm² feeders): 2 x 7.215 x 20 x (8.87 x 0.9
-        // + 0.08 x 0.4359) / 1000 = 2.314 V / 231 = 1.00 % on 3 x 2.5.
+        // itself on Lt18..21 (16 mm² feeders) and Lt28..30: 2 x 7.215 x 20 x
+        // (8.87 x 0.9 + 0.08 x 0.4359) / 1000 = 2.314 V / 231 = 1.00 % on
+        // 3 x 2.5.
         final l = way(c, pid, id('lampu_a'));
-        final aRaised = f >= 17 && f <= 20;
+        final aRaised = (f >= 17 && f <= 20) || f >= 27;
         expect(l.designCurrentExactA, closeTo(7.215, 5e-4));
         expect(l.breaker.ratingA.amperes, 10);
         expect(l.cable.csaMm2, aRaised ? 2.5 : 1.5, reason: 'Lt${f + 1}');
@@ -1798,18 +1800,20 @@ void main() {
         kTowerMainPanelId,
         towerFloorFeederId(kTowerFloors - 1),
       );
-      // Backlog B-1 + B-2: the 63 A device is the selectivity floor's; the
-      // selectivity growth steps the 131 m cable until it disconnects in
-      // time — 16 mm² loop (1.38 + 1.38) x 0.131 x 1.28 = 0.463 Ω, 25 mm²
-      // (0.87 + 1.38) x ... = 0.377 Ω, 35 mm² (PE 16) 0.338 Ω ≤ 0.347 ⇒
-      // 35 mm². The cumulative drop is now cured on the lighting ways (B-2:
+      // Backlog B-1 (bounded) + B-2: the 63 A device is the selectivity
+      // floor's. Its loop at 63 A: 16 mm² (1.38 + 1.38) x 0.131 x 1.28 =
+      // 0.463 Ω, 25 mm² (0.87 + 1.38) x ... = 0.377 Ω, 35 mm² (PE 16) 0.338 Ω
+      // ≤ 0.347 ⇒ 35 mm² — three sizes above the load-sized 10 mm², past the
+      // two-size selectivity bound, so the T3 ADS growth carries it (flagged
+      // raised-for-ads) and the floor then fits (raised-for-selectivity on
+      // the step it took). The cumulative drop is now cured on the lighting ways (B-2:
       // far cheaper per % than the 131 m feeder), so no VD floor is set:
       // √3 x 30.919 x 131 x (0.627 x 0.8753 + 0.08 x 0.4836) / 1000 =
       // 4.12 V = 1.03 % (was 95 mm², 0.42 %).
       expect(lt30.cable.csaMm2, 35);
       expect(lt30.grounding.peCsaMm2, 16);
       expect(lt30.voltageDrop.dropPercent, closeTo(1.03, 1e-9));
-      expect(lt30.cableRaisedForAds, isFalse);
+      expect(lt30.cableRaisedForAds, isTrue);
       expect(lt30.cableRaisedForSelectivity, isTrue);
       expect(lt30.cableRaisedForDownstreamVd, isFalse);
     });
@@ -1872,12 +1876,14 @@ void main() {
     test('Review: deliberate findings present, the rest absent', () {
       final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
       int n(String k) => kinds.where((x) => x == k).length;
-      // Backlog B-1: PP-Lt1 / PP-Lt2 now reach 63 A on 16 mm² (was 4). The
-      // two left are at the ladder top: Feeder PP-E is already 2 parallel
-      // runs of 185 mm² FRC (no single run carries the 1.6 x 630 = 1008 ⇒
-      // 1250 A rung), Feeder to MEP is 300 mm² FRC, the largest section
-      // (Iz 553 < the 1.6 x 500 = 800 A rung).
+      // Backlog B-1 (bounded): PP-Lt1 / PP-Lt2 now reach 63 A on 16 mm²
+      // (one size up; was 4). The two left are refused and name a selective
+      // device: Feeder PP-E is 2 parallel runs of 185 mm² FRC (its 1.6 x 630
+      // = 1008 ⇒ 1250 A rung is out of reach of the single-run step), Feeder
+      // to MEP's 800 A rung (1.6 x 500) would sit above PP-E's own 630 A
+      // incomer (the upstream bound).
       expect(n('electrical:non-selective'), 2);
+      expect(n('electrical:outgoing-exceeds-incomer'), 0);
       expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
@@ -1908,9 +1914,9 @@ void main() {
       expect(r.maxKpa, closeTo(9.81 * (294.961 - 1.2), 0.1));
       expect(r.minKpa, closeTo(9.81 * (294.961 - 4 * 29 - 1.2), 0.1));
       expect(c.read(prvHoseValvesProvider), hasLength(60));
-      // Backlog B-1: the three lifts (feeders PP-Lt28..30 now carry the
-      // raised-for-selectivity reason, see above; was 6).
-      expect(n('electrical:cable-raised-for-ads'), 3);
+      // Bounded B-1: feeders PP-Lt28..30 (their ADS growth is past the
+      // two-size selectivity bound) and Lift 1..3 — unchanged from 3f4e78c.
+      expect(n('electrical:cable-raised-for-ads'), 6);
       expect(n('electrical:fire-pump-protection'), 3);
       expect(n('electrical:busbar-beyond-standard-table'), 1);
       expect(n('downfeed-below-target'), 1);
@@ -1952,5 +1958,15 @@ void main() {
         isEmpty,
       );
     });
+  });
+
+  // Backlog B-1 / B-2 — the copper of the auto-sized cables, on record in
+  // docs/REFERENCE-BUILDINGS.md (REF_DUMP=1 prints it).
+  test('(REF_DUMP) auto-sized copper total', () async {
+    if (!_dump) return;
+    final c = await _loadTower(buildTower());
+    // ignore: avoid_print
+    print('COPPER tower ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
   });
 }

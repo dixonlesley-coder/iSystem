@@ -571,6 +571,15 @@ class ElectricalSystemResult {
   /// already hold ADS (or nothing cures it) ⇒ byte-identical.
   final double? gensetAdsFloorKva;
 
+  /// Bounded B-1 (2026-11-13) — the AUTO-sized feeders whose selectivity
+  /// growth was refused, and why: the floor rung needs more than
+  /// `kSelectivityGrowthMaxRungs` cable sizes (or parallel runs / the ladder
+  /// top), a device above the upstream incomer, or a cable that cannot hold
+  /// ADS within the bound. Such a feeder keeps the cable and device it has
+  /// without the selectivity step; `faultStudy` words its `non-selective`
+  /// finding on the device remedy. Empty ⇒ byte-identical.
+  final Map<String, SelectivityRefusal> feederSelectivityRefused;
+
   const ElectricalSystemResult({
     required this.projectId,
     required this.panels,
@@ -582,7 +591,31 @@ class ElectricalSystemResult {
     this.feederFloorsApplied = const {},
     this.feederFloorsCapped = const {},
     this.gensetAdsFloorKva,
+    this.feederSelectivityRefused = const {},
   });
+}
+
+/// Backlog B-1 (bounded 2026-11-13) — the most section RUNGS the selectivity
+/// growth may add to an auto-sized feeder cable above the cable its other
+/// rules need (load, own VD, ADS, cumulative VD). Buying discrimination with
+/// copper is sensible only for a small step; beyond it discrimination is a
+/// DEVICE matter (a selective time-delayed / category B, electronic-trip
+/// breaker, or the manufacturer's discrimination tables), so a larger need
+/// is refused and the `non-selective` warning says so.
+/// // VERIFY — design policy, not a PUIL / IEC clause.
+const int kSelectivityGrowthMaxRungs = 2;
+
+/// Bounded B-1 — why an auto-sized feeder's selectivity growth was refused.
+enum SelectivityRefusal {
+  /// More than `kSelectivityGrowthMaxRungs` cable sizes (or parallel runs /
+  /// the section ladder top) would be needed.
+  cableSteps,
+
+  /// The floor rung sits above the incomer of the board the feeder is on.
+  upstreamIncomer,
+
+  /// The grown cable cannot hold automatic disconnection within the bound.
+  disconnection,
 }
 
 // ── Round 35 — one service-current basis (elec-core-2) ──────────────────────

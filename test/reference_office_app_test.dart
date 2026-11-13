@@ -60,6 +60,7 @@ import 'package:mechx_engine/units.dart' show Head;
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show electricalRiserFloorOf;
 import 'reference_board_floors.dart';
+import 'reference_copper.dart';
 import '../packages/mechx_engine/test/reference/office.dart';
 
 final bool _dump = Platform.environment['REF_DUMP'] == '1';
@@ -1045,5 +1046,15 @@ void main() {
         expect(c.read(riserEquipmentDetailsProvider)[id], 'PRV 690 kPa');
       }
     });
+  });
+
+  // Backlog B-1 / B-2 — the copper of the auto-sized cables, on record in
+  // docs/REFERENCE-BUILDINGS.md (REF_DUMP=1 prints it).
+  test('(REF_DUMP) auto-sized copper total', () async {
+    if (!_dump) return;
+    final c = await _loadOffice(buildOffice());
+    // ignore: avoid_print
+    print('COPPER office ${autoSizedCopperMm2M(c).toStringAsFixed(0)} mm2.m');
+    c.dispose();
   });
 }

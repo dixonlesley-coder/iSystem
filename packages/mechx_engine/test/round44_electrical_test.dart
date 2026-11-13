@@ -514,12 +514,8 @@ void main() {
       // 90 kW / (√3 × 400 × 0.9) = 144.3 A ⇒ × 1.10 / 0.94 = 168.9 A.
       expect(ibOff, closeTo(90000 / (1.7320508 * 400 * 0.9), 0.2));
       expect(ibOn, closeTo(ibOff * 1.10 / 0.94, 0.3));
-      // The UPS-backed feeder sizes on the uplifted 168.9 A ⇒ rung 200 A (a
-      // UPS-backed board takes no selectivity floor, Round 58). Backlog B-1
-      // (2026-11-13): the plain feeder is floored to 1.6 × its fed incomer on
-      // a grown auto-sized cable, so the two devices are no longer comparable;
-      // the uplift is pinned on the UPS feeder's own rung.
-      expect(_way(on, 'f', 'LV').breaker.ratingA.amperes, 200);
+      expect(_way(on, 'f', 'LV').breaker.ratingA.amperes,
+          greaterThan(_way(off, 'f', 'LV').breaker.ratingA.amperes - 1e-9));
       expect(on.warnings.where((w) => w.code == 'ups-not-sized'),
           hasLength(1));
       expect(off.warnings.where((w) => w.code == 'ups-not-sized'), isEmpty);
