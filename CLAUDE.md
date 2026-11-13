@@ -285,6 +285,8 @@ result exists, so a blank launch is byte-identical (goldens shift only by the sm
 
 **Drawing review R1/R2 (2026-11-13)**: a plan that would still stamp "label bertumpuk" boxes its dense clusters (`report/plan_detail.dart` `planDetailClusterRects`, `planSheetDetails`) with a dashed DETAIL boundary + bubble (`DETAIL A - LIHAT M-5nn`) and the submittal package issues an enlarged DETAIL sheet per such plan (`report/plan_detail_sheet.dart`, `M-5nn`, 1:10/20/25/50 via `planDetailPack`, PDF + DXF through the plan exporters, listed on the Daftar Gambar); riser columns are re-spaced over the band (`riserColumnRespace`) and the riser paginator sheds the lowest page's extras to a continuation sheet rather than print below 7 pt.
 
+**Drawing review fix round F1-F7 (2026-11-13)**: electrical layout tags placed in-frame and stacked clear (`ElectricalPlanNodeTag`, counted in the overlap stamp), legend rows only for drawn kinds (`electricalPlanLegendRows`); legibility stamp only below the PRINTED 7 pt (`sldPrintsBelowMinPt`); pipe-key table margin (`kPlanKeyTableMarginFactor`); detail-sheet legend narrowed to its windows (`planDetailLegendChrome`); ONE source arrangement (`serviceArrangementOf`) for the E-301 spine and the E-501 power one-line (MV main + rated TX + capacitor bank); pre-check FAILs a stamped sheet / a touched key table.
+
 ## Conventions
 
 - **Riverpod**: `Notifier`/`NotifierProvider` for mutable state, `Provider` for

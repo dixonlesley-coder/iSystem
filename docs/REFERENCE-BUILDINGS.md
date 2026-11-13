@@ -233,7 +233,27 @@ the §15 log; this is the per-sheet-type result (all five buildings).
 | Equipment schedule | FAIL 1, 3, 23 (no title block, no number, not listed) | PASS — M-601, drawing title block on every page, listed |
 | Panel schedules | FAIL 2 (reused E-201 + SLD title); apartment / tower refused (zero-length guard) | PASS — E-601 `JADWAL PANEL / PANEL SCHEDULES`, issued in the package and listed; all five export |
 
+Fix round F1-F7 (reviewer's FAIL list, `docs/DRAWING-REVIEW-RECORD.md`): electrical
+layout plans (E-10n) place every load / panel tag inside the frame, clear of the title
+block and of each other (co-located loads stack, leadered; an unplaceable tag is
+counted in the stamped overlap warning) and list only the legend rows they draw
+(F1, F2, F5); the legibility stamp fires only below the printed 7 pt (F3); the pipe-key
+table keeps one text height of clear paper (F4); a detail sheet keys only its windows'
+services and symbols (F6); the power one-line draws the declared MV main, rated
+transformer and capacitor bank from the same arrangement E-301 draws (F7). The
+pre-check now FAILs a stamped legibility warning (item 5) and a pipe-key table touched
+by drawing text (item 6).
+
 ### Backlog (not cured in this pass)
+- Electrical risers (E-401) place every unplaced floor board on one level (apartment
+  PP-Lt1..PP-Lt12 as one TIPIKAL box on Lantai 2) and issue label-only pages for the
+  floors left empty.
+- Plan tags carry a level index one below the sheet's "Lantai N" name ("SP-L29" on
+  Lantai 30, "GF" on Lantai 1): consistent, but it reads as the wrong floor.
+- Tower building single-line E-301 spends ~15 near-empty pages (pages 2-16: one LVMDP
+  box and two boards each); a tabulated typical would carry it on one or two.
+- Plant-level mechanical riser pages (tower `riser-sld` p13 / p1, apartment p1 / p6,
+  shophouse p2) are crowded and readable only via the key table.
 - Standalone (single-plan) plan export (`exportAnnotatedPlanPdf`) issues no
   detail sheet; it keeps the honest overlap stamp. Only the submittal package
   issues detail sheets.

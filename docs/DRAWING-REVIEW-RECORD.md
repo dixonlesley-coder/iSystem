@@ -167,3 +167,22 @@ legend per floor would let it pass, but the checklist says "exactly").
    third of the sheet.
 8. Tower `plan-30-Lantai 30` p1: the leader of "SP-L29 · DN32 / 3.0 m - CL +3.70" passes through its own text;
    apartment M-512 detail B: the "CW-L11 · DN15 - 4.1 m" label sits on its own pipe. Both remain legible.
+
+## Fix round (2026-11-13)
+
+Every FAIL above was fixed in the engine (tests in
+`packages/mechx_engine/test/drawing_review_fix_round_test.dart`, §15 row "Drawing review fix
+round F1-F7"). PNG paths are relative to the same `drawings/` root.
+
+| # | What changed | Re-check |
+|---|---|---|
+| F1 | `layoutElectricalPlanAnnotations` places every node tag block inside the drawing frame (sheet frame above the title-block band, clear of the north arrow, legend and corner notes): a tag that would cross the right edge flips left; the BELUM DITEMPATKAN list wraps into columns above the title-block band. | `office/png/Kantor Contoh-elec-plan-1-Lantai 1-p1.png` |
+| F2 | Co-located load tags are tried right, left, then stacked a block height down / up (leadered back), clear of every symbol and earlier tag; a tag with no clear slot is counted in the sheet's stamped overlap warning, so the pre-check's item 6 now covers the electrical layout family. | `tower/png/Menara Contoh 30-elec-plan-1-Lantai 1-p1.png` |
+| F3 | `sldPrintsBelowMinPt`: the legibility stamp fires only when the size it prints (one decimal) is strictly below 7 pt; the pre-check FAILs item 5 on any sheet carrying the stamp. | `office/png/Kantor Contoh-electrical-riser-p1.png` |
+| F4 | `placePlanKeyTable` keeps one text height of clear paper from every mark, marker text, label and run; the pre-check FAILs item 6 when drawing text comes within half a text height of a pipe-key table. | `shophouse/png/Ruko Contoh-plan-2-Lantai 2-p1.png` (also plan-1, plan-3) |
+| F5 | `electricalPlanLegendRows`: the layout legend (PDF + DXF) lists only Panel / Beban / Kabel rows the sheet draws. | `tower/png/Menara Contoh 30-elec-plan-1-Lantai 1-p1.png` |
+| F6 | `planDetailLegendChrome`: a detail sheet's legend keeps only the services of its clipped runs and the symbols of its visible nodes. | `apartment/png/Apartemen Contoh-plan-12-Lantai 12-detail-p1.png` |
+| F7 | `serviceArrangementOf` is the one declared source arrangement: E-301's spine and E-501's power one-line both draw PLN -> MV main -> TRANSFORMER 1600 kVA -> LV bus and the 250 kvar capacitor bank from it. | `tower/png/Menara Contoh 30-electrical-power-one-line-p1.png` |
+
+Observations 1, 3, 4 and 2 are recorded in the Backlog of `docs/REFERENCE-BUILDINGS.md`
+("Drawing review").
