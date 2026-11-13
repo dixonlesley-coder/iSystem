@@ -588,7 +588,8 @@ void main() {
         shop.network.edges.length);
     expect(c.read(roomAreasProvider).length, 1);
     expect(c.read(electricalProjectProvider).panels.map((p) => p.id),
-        containsAll([for (final u in kShopUnits) shopPanelId(u)]));
+        containsAll(
+            [kShopMainPanelId, for (final u in kShopUnits) shopPanelId(u)]));
 
     // Every provider evaluates.
     final sizing = c.read(sizingProvider);
@@ -630,5 +631,119 @@ void main() {
       // ignore: avoid_print
       print(_out.toString());
     }
+  });
+
+  // ── Hand-derived pins (reviewer pass 2, 2026-11-13) ─────────────────────
+  group('hand values (app providers)', () {
+    late ProviderContainer c;
+    setUpAll(() async {
+      c = await _loadShophouse(buildShophouse());
+    });
+    tearDownAll(() => c.dispose());
+
+    test('delivered field = gravity + the booster\'s 22.114 m (216.936 kPa) '
+        'at every delivery node, every unit', () {
+      final down = c.read(downfeedProvider)!;
+      final del = c.read(downfeedDeliveredProvider)!;
+      // 22.114 m × 9.81 = 216.936 kPa: WC2 8.064 + 216.936 = 225.000 …
+      // WC0 72.136 + 216.936 = 289.072.
+      const delivered = {
+        'WC2': 225.000, 'LAV2': 226.256, 'WC1': 259.582, 'LAV1': 260.838,
+        'WC0': 289.072, 'LAV0': 290.328, 'KS0': 288.735, //
+      };
+      for (final u in kShopUnits) {
+        for (final MapEntry(key: f, value: kpa) in delivered.entries) {
+          final id = shopId(f, u);
+          expect(del.residualPressure[id]!.inKiloPascals, closeTo(kpa, 2e-3),
+              reason: id);
+          expect(
+              del.residualPressure[id]!.inKiloPascals -
+                  down.residualPressure[id]!.inKiloPascals,
+              closeTo(216.936, 2e-3),
+              reason: id);
+        }
+        // Ground-floor delivered static 106.929 + 216.936 = 323.865 kPa.
+        expect(del.noFlowStaticPressure[shopId('WC0', u)]!.inKiloPascals,
+            closeTo(323.865, 2e-3));
+      }
+      expect(del.criticalNodeId, shopId('WC2', 'A'));
+      expect(c.read(downfeedOverPressureProvider), isEmpty);
+    });
+
+    test('one zone per tank (0-2), bottom static 323.87 < 392.266 kPa, no '
+        'PRV', () {
+      final zones = c.read(zonesProvider);
+      expect(zones.length, 3);
+      for (final z in zones) {
+        expect((z.bottomFloorIndex, z.topFloorIndex), (0, 2));
+      }
+      for (final z in c.read(zoneStaticsProvider)) {
+        expect(z.bottomStatic.inKiloPascals, closeTo(323.865, 2e-3));
+        expect(z.withinLimit, isTrue);
+        expect(z.viaPrv, isFalse);
+      }
+    });
+
+    test('transfer pump and booster duties, every unit', () {
+      final duties = c.read(supplyMoverDutiesProvider);
+      final transfers = c.read(transferPumpNodeIdsProvider);
+      final fed = c.read(nodeFedLoadsProvider);
+      final project = c.read(projectControllerProvider);
+      final net = c.read(sizingNetworkProvider);
+      double z(String id) => nodeElevation(
+              net.nodeById(id)!, project.building, project.mounting)
+          .meters;
+      for (final u in kShopUnits) {
+        // TP: lift RT 12.0 − GT 0.0 = 12.000; friction 0.18026 × (1.0 + 4.7
+        // + 4.0 + 4.0 + 2.3 = 16.0) = 2.884; H = 14.884 m. P_h = 9810 ×
+        // 0.56389e-3 × 14.884 = 82.3 W; shaft / 0.70 = 117.6 W ⇒ 0.37 kW;
+        // fed input 370 / 0.90 = 411.1 W.
+        final tp = duties[shopId('TP', u)]!;
+        expect(transfers, contains(shopId('TP', u)));
+        expect(z(shopId('RT', u)) - z(shopId('GT', u)), closeTo(12.0, 1e-9));
+        expect(tp.flow.inLitersPerSecond, closeTo(0.5639, 5e-5));
+        expect(tp.head.meters, closeTo(14.884, 5e-4));
+        expect(tp.hydraulicPower.watts, closeTo(82.3, 0.05));
+        expect(tp.shaftPower.watts, closeTo(117.6, 0.05));
+        expect(tp.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+        expect(fed[shopId('TP', u)]!.input, closeTo(411.1, 0.05));
+        // BS: H = (225 − 8.064) / 9.81 = 22.114 m; P_h = 122.3 W, shaft
+        // 174.8 W ⇒ 0.37 kW; 411.1 W.
+        final bs = duties[shopId('BS', u)]!;
+        expect(transfers, isNot(contains(shopId('BS', u))));
+        expect(bs.flow.inLitersPerSecond, closeTo(0.5639, 5e-5));
+        expect(bs.head.meters, closeTo(22.114, 5e-4));
+        expect(bs.hydraulicPower.watts, closeTo(122.3, 0.05));
+        expect(bs.shaftPower.watts, closeTo(174.8, 0.05));
+        expect(bs.selectedMotor.inKiloWatts, closeTo(0.37, 1e-9));
+        expect(fed[shopId('BS', u)]!.input, closeTo(411.1, 0.05));
+      }
+    });
+
+    test('room: 44 400 BTU/h; two cassettes of 22 200 → 2.5 PK, 2344.6 W '
+        'each', () {
+      final room = c.read(roomAreasProvider).single;
+      expect(room.ceilingHeightM, closeTo(3.7, 1e-9));
+      final load = c.read(roomCoolingLoadProvider(room.id))!;
+      expect(load.btuPerHr, closeTo(44400, 1e-6));
+      expect(load.pk, closeTo(4.933, 5e-4));
+      final fed = c.read(nodeFedLoadsProvider);
+      for (final id in kShopAcNodeIds) {
+        expect(fed[id]!.watts, closeTo(2344.6, 0.05), reason: id);
+      }
+    });
+
+    test('Review: the deliberate findings are present, the fixed ones absent',
+        () {
+      final kinds = [for (final i in c.read(designIssuesProvider)) i.kind];
+      int count(String k) => kinds.where((x) => x == k).length;
+      expect(count('drainage-length'), 3); // KS0 trap arm, one per unit
+      expect(count('drainage-laid-steeper'), 12); // 3 LAV + KS0, per unit
+      expect(count('drainage-cleanout'), 3); // stack base D0, per unit
+      expect(kinds.where((k) => k.startsWith('unfed-panel')), isEmpty);
+      expect(kinds.where((k) => k.startsWith('unconnected-orphan')), isEmpty);
+      expect(kinds, isNot(contains('electrical:service-capacity-below-demand')));
+      expect(kinds, isNot(contains('downfeed-below-target')));
+    });
   });
 }
