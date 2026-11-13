@@ -311,7 +311,7 @@ void main() {
       // A fake builder: the lowest floor's page with the extras is too tall
       // to print at 7 pt; without them it prints at 7.
       SldSheet sheet(double h) => SldSheet(
-          prims: [SldLabel(0, 10, 'X', size: 8)],
+          prims: const [SldLabel(0, 10, 'X', size: 8)],
           minX: 0,
           minY: 0,
           maxX: 600,

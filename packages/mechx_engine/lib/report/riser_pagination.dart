@@ -93,7 +93,7 @@ List<SldSheet> paginatedRiserSheets({
 
   // Round 40 (elec-drawings-5-riser-pagination-global-cap-shrinks-all-
   // pages) — paginate GREEDILY per chunk from floor 0 upward. Each floor's
-  // own best size is `min(kMinPlotLabelPt, 0.95 × its single-floor page)`;
+  // own best size is `min(kMinPlotLabelPt, its single-floor page)`;
   // a page may hold a run of floors only while it prints at the LARGEST of
   // those targets among its floors, so a width-limited band (a ground band
   // with the source spine + several boards) shrinks ITS OWN page only —
@@ -106,11 +106,12 @@ List<SldSheet> paginatedRiserSheets({
   // itself: the plot fit caps labels at [kMinPlotLabelPt], so a legible
   // floor reads exactly 7.0 and the 0.95 relaxation (meant only for a floor
   // that cannot reach it alone) let a multi-floor page print at 6.65 pt.
-  double floorTarget(int f) {
-    if (singleMin[f] >= kMinPlotLabelPt - 1e-9) return kMinPlotLabelPt - 1e-9;
-    final cap = singleMin[f] * 0.95;
-    return (cap < kMinPlotLabelPt ? cap : kMinPlotLabelPt) - 1e-9;
-  }
+  // Drawing review R2 — EXACT, no relaxation: a floor that cannot reach the
+  // floor alone targets its own single-floor size (the 0.95 slack let a
+  // multi-floor page print at 6.78 pt where the floor alone printed larger).
+  double floorTarget(int f) =>
+      (singleMin[f] < kMinPlotLabelPt ? singleMin[f] : kMinPlotLabelPt) -
+      1e-9;
 
   final pages = <SldSheet>[];
   var lo = 0;

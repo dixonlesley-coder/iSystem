@@ -147,12 +147,12 @@ List<(double, double)> riserColumnRespace(Iterable<double> xs,
   // the full pitch beside it; a bare junction column none (half when only
   // one side is tagged). No [taggedXs] ⇒ every column is tagged.
   final tagged = taggedXs?.toList();
-  bool isTagged(double x) =>
-      tagged == null || tagged.any((t) => (t - x).abs() <= tol);
+  double share(double x) =>
+      tagged == null || tagged.any((t) => (t - x).abs() <= tol) ? 1 : 0;
   final p = <double>[
     0,
     for (var i = 0; i + 1 < v.length; i++)
-      minPitch * ((isTagged(v[i]) ? 0.5 : 0) + (isTagged(v[i + 1]) ? 0.5 : 0)),
+      minPitch * (share(v[i]) + share(v[i + 1])) / 2,
     0,
   ];
   final sumP = p.fold<double>(0, (a, b) => a + b);
@@ -843,7 +843,7 @@ SldSheet buildMechanicalRiserSld({
         ..reserveLine(p.dx, p.dy, p.dx, stubTop)
         ..reserveLine(p.dx - 4, stubTop, p.dx + 4, stubTop);
       placer
-          .reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 7, bold: true));
+          .reserve(SldLabel(p.dx + 6, stubTop + 6, 'VTR', size: 8, bold: true));
     }
   }
   if (focus == null ||

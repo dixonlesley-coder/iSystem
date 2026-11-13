@@ -218,7 +218,7 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
 /// title block): measured with a shorter one, a page passed the 7 pt check
 /// here and printed at 6.86 pt on the issued sheet.
 List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus,
-    {String? diagramTitle}) {
+    {String? diagramTitle, DrawingChrome? chrome, String? projectName}) {
   final project = ref.read(projectControllerProvider);
   return paginatedRiserSheets(
     build: (r) => buildLiveRiserSheet(ref, focus, floorRange: r),
@@ -229,8 +229,12 @@ List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus,
     buildExtrasOnly: () => buildLiveRiserSheet(ref, focus,
         floorRange: (lo: 0, hi: 0), extras: MechRiserExtras.only),
     levelCount: project.building.levelCount,
-    chrome: _riserChrome(ref, index: 1, total: 1),
-    projectName: project.name.isEmpty ? 'Untitled project' : project.name,
+    // Drawing review R2 — measured with the chrome + project name the sheet
+    // is ISSUED with (a taller issued title block printed a page the
+    // paginator passed at 7 pt at 6.78 pt): the 7 pt floor is exact.
+    chrome: chrome ?? _riserChrome(ref, index: 1, total: 1),
+    projectName: projectName ??
+        (project.name.isEmpty ? 'Untitled project' : project.name),
     diagramTitle: diagramTitle ?? riserDiagramTitle(focus),
   );
 }
