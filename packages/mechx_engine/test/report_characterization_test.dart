@@ -459,8 +459,11 @@ void main() {
       // Re-baselined 2026-10-18 (Round 37): the MDP row prints its 16 A
       // incomer (was 20 A) — the MDP's real worst line is 15.3 A once the
       // SP-1 feeder carries SP-1's own lines. Sole delta.
+      // Re-baselined 2026-11-13 (drawing backlog C-5 iii): the closing note
+      // moved under the project line (no tank without a capacity here, so
+      // no tank footnote). Sole delta: block order.
       expect(md.split('\n').length, 33);
-      expect(fnv1a32(md), 0x80d42063);
+      expect(fnv1a32(md), 0x25fddff7);
     });
   });
 }

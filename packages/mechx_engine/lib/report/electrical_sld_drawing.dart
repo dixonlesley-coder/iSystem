@@ -56,7 +56,7 @@ import '../electrical/sources.dart'
         sizeGenerator,
         sizeBattery;
 import '../electrical/supply_design.dart'
-    show isDeclaredMvService, serviceSections;
+    show isDeclaredMvService, mvVoltageV, serviceSections;
 import '../geometry/building.dart' show BuildingLevels, MountingHeights;
 import '../standards/puil.dart'
     show BreakerCurve, BreakerClass, BreakerClassCode;
@@ -1896,6 +1896,27 @@ void _emitPvArray(List<SldPrim> out, double cx, double cy, SldRole role) {
 /// connection capacity above the PLN LV ceiling is a TM (MV) service too.
 bool _isMvService(ElectricalProject project) => isDeclaredMvService(project);
 
+/// Drawing backlog C-5 (ii) — the short sheet form of the
+/// `service-capacity-below-demand` judge, printed beside the supply head on
+/// E-301 / E-401 when (and only when) that warning fired: the declared
+/// connection capacity beside the solved demand. Two lines joined by '\n';
+/// null when the judge is silent or no capacity is declared (never invented).
+String? supplyCapacityShortfallNote(
+    ElectricalProject project, ElectricalSystemResult result) {
+  final cap = project.supplyCapacityVa;
+  if (cap == null || !(cap.inKilovoltAmperes > 0)) return null;
+  const code = 'service-capacity-below-demand';
+  final fired = result.warnings.any((w) => w.code == code) ||
+      result.panels.values.any((p) => p.warnings.any((w) => w.code == code));
+  if (!fired) return null;
+  final capKva = _num(cap.inKilovoltAmperes);
+  final demKva = result.supply.demandVa.inKilovoltAmperes;
+  final head = demKva > cap.inKilovoltAmperes
+      ? 'DEMAND ${_num(demKva)} kVA > DECLARED $capKva kVA'
+      : 'WORST PHASE ABOVE DECLARED $capKva kVA';
+  return '$head\nRAISE THE SUBSCRIBED DAYA';
+}
+
 /// The SUPPLY-head node name for the project's primary supply kind, with the
 /// declared connection capacity appended when set (`PLN MV STATION 197 kVA` /
 /// compact `PLN 197 kVA`). PLN with no capacity keeps today's exact labels ⇒
@@ -1907,7 +1928,11 @@ String _supplyHeadLabel(ElectricalProject project,
       ? ''
       : ' ${_num(project.supplyCapacityVa!.inKilovoltAmperes)} kVA';
   return switch (project.supplyKind) {
-    SupplyKind.pln => compact || !mv ? 'PLN$cap' : 'PLN MV STATION$cap',
+    // Drawing backlog C-5 (i) — a DECLARED MV service names its voltage (the
+    // supply design's PLN TM figure, `mvVoltageV`, the one the report prints).
+    SupplyKind.pln => compact || !mv
+        ? 'PLN$cap'
+        : 'PLN MV STATION ${_num(mvVoltageV / 1000)} kV$cap',
     SupplyKind.generator => compact ? 'GENSET$cap' : 'GENSET SUPPLY$cap',
     SupplyKind.solar => compact ? 'PV$cap' : 'SOLAR PV SUPPLY$cap',
   };
@@ -2137,7 +2162,7 @@ _Spine _buildSourceSpine(
   final spine = <({String name, String? sub, String kind})>[
     (
       name: _supplyHeadLabel(project, compact: false, mv: isMv),
-      sub: null,
+      sub: supplyCapacityShortfallNote(project, result),
       kind: 'supply'
     ),
     if (isMv) ...[
@@ -2180,6 +2205,19 @@ _Spine _buildSourceSpine(
             weight: SldWeight.medium, role: role));
         prims.add(SldLabel(centreX + 22, isMv ? midY + 3 : midY - 14, node.name,
             size: 8.5, bold: true, role: role));
+        // Drawing backlog C-5 (ii) — the declared-capacity shortfall, in the
+        // judge's own words (short form): under the head on an MV chain,
+        // above it on an LV head (its side-source trunk leaves at mid-height).
+        if (node.sub != null) {
+          final lines = node.sub!.split('\n');
+          for (var k = 0; k < lines.length; k++) {
+            final ly = isMv
+                ? midY + 14 + 10 * k
+                : midY - 25 - 10 * (lines.length - 1 - k);
+            prims.add(SldLabel(centreX + 22, ly, lines[k],
+                size: 7.5, bold: true, role: SldRole.essential));
+          }
+        }
       case 'bus':
       default:
         // A distribution board: a labelled BOX (the DXF convention), with the

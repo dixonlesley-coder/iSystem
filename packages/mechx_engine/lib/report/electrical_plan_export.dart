@@ -499,7 +499,11 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
           b.maxX <= area.maxX &&
           b.minY >= area.minY &&
           b.maxY <= area.maxY);
-  double textW(String t, double size) => t.length * size * 0.55;
+  // Drawing backlog C-5 (v) — the tag box is the PRINTED text's width (the
+  // Helvetica metrics, + a bold allowance), never the 0.55-em estimate alone
+  // that let a capital-heavy tag on the LEFT run flush onto its own symbol.
+  double textW(String t, double size) => math.max(
+      t.length * size * 0.55, helveticaTextWidth(t, size) * 1.08);
   final symbols = <_Bx>[];
   for (final nd in data.nodes) {
     final p = map(nd.x, nd.y);
@@ -521,7 +525,12 @@ ElectricalPlanAnnotations layoutElectricalPlanAnnotations(
     final sS = panel ? z.panelSubSize : z.loadSubSize;
     final tDy = panel ? z.panelTagDy : z.loadTagDy;
     final sDy = panel ? z.panelSubDy : z.loadSubDy;
-    final gapR = panel ? z.panelW / 2 + z.panelTagGap : z.loadTagGap;
+    // Drawing backlog C-5 (v) — at least half a text height of clear paper
+    // between a tag and its own symbol, on either side.
+    final gapR = math.max(
+        panel ? z.panelW / 2 + z.panelTagGap : z.loadTagGap,
+        (panel ? z.panelW / 2 : z.loadR) +
+            0.5 * (panel ? z.panelTagSize : z.loadTagSize));
     final hw = panel ? z.panelW / 2 : z.loadR;
     final w =
         math.max(textW(nd.tag, tS), nd.sub == null ? 0.0 : textW(nd.sub!, sS));

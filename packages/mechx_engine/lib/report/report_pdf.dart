@@ -557,6 +557,10 @@ class _Typesetter {
   }
 
   void note(RptNote nb) {
+    // Drawing backlog C-5 (iii) — a note's lines stay together (a fresh page
+    // never starts with the tail of a two-line note).
+    final lines = _wrap(_ascii(_stripMd(nb.text)), 8.5, _contentW).length;
+    _ensure(math.min(_pageFlowH, lines * 11.5));
     _flowText(_ascii(_stripMd(nb.text)),
         size: 8.5, leading: 11.5, color: _inkMuted);
     _gap(4);

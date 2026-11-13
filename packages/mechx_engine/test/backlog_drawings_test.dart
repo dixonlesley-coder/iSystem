@@ -10,13 +10,18 @@ import 'package:mechx_engine/geometry/building.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/report/electrical_pagination.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart';
+import 'package:mechx_engine/report/equipment_schedule.dart';
 import 'package:mechx_engine/report/mechanical_sld_drawing.dart';
+import 'package:mechx_engine/report/plan_detail_sheet.dart'
+    show planDetailNarrowCodeNotes;
+import 'package:mechx_engine/report/report_blocks.dart';
 import 'package:mechx_engine/report/riser_tags.dart';
 import 'package:mechx_engine/standards/puil.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
 import 'reference/apartment.dart' as apt;
+import 'reference/house.dart' as house;
 import 'reference/reference_building.dart';
 import 'reference/tower.dart' as tower;
 
@@ -312,6 +317,100 @@ void main() {
     test('keyCount defaults to 0 and survives the legibility flag', () {
       expect(fake(10).keyCount, 0);
       expect(fake(10, keys: 2).withBelowMinLabelPt(6).keyCount, 2);
+    });
+  });
+
+  group('C-5 small truths on sheets', () {
+    ElectricalSystemResult solveRef(ReferenceBuilding b) {
+      final fault = estimatedServiceFaultLevelA(b.electrical) ??
+          const Current(defaultLvUtilityFaultKa * 1000);
+      return computeSystem(const PuilProfile(), b.electrical,
+          calibrationBySheet: b.calibrations,
+          building: b.building,
+          originFaultLevel: fault,
+          busbarClearingTimeS: 0.1,
+          phaseReassignThresholdA: 1.0);
+    }
+
+    List<String> labels(SldSheet s) =>
+        [for (final p in s.prims) if (p is SldLabel) p.text];
+
+    test('(i) a declared MV service names 20 kV; an LV service never does',
+        () {
+      final t = tower.buildTower();
+      final tr = solveRef(t);
+      final ov = buildElectricalOverview(
+          project: t.electrical, result: tr, sourceChain: true);
+      expect(labels(ov).any((x) => x.startsWith('PLN MV STATION 20 kV')),
+          isTrue);
+      final h = house.buildHouse();
+      final hv = buildElectricalOverview(
+          project: h.electrical, result: solveRef(h), sourceChain: true);
+      expect(labels(hv).any((x) => RegExp(r'\bkV\b').hasMatch(x)), isFalse);
+    });
+
+    test('(ii) a declared PLN capacity below the demand prints beside the '
+        'supply head on E-301 and E-401, only when the judge fires', () {
+      final h = house.buildHouse();
+      final hr = solveRef(h);
+      final note = supplyCapacityShortfallNote(h.electrical, hr);
+      expect(note, isNotNull);
+      final cap = h.electrical.supplyCapacityVa!.inKilovoltAmperes;
+      expect(note, contains('> DECLARED ${cap.toStringAsFixed(1)} kVA'));
+      final ov = buildElectricalOverview(
+          project: h.electrical, result: hr, sourceChain: true);
+      expect(labels(ov), contains('RAISE THE SUBSCRIBED DAYA'));
+      final riser = buildElectricalRiser(
+          project: h.electrical,
+          result: hr,
+          building: h.building,
+          sourceChain: true);
+      expect(labels(riser), contains('RAISE THE SUBSCRIBED DAYA'));
+      // The tower declares no shortfall: nothing printed.
+      final t = tower.buildTower();
+      expect(supplyCapacityShortfallNote(t.electrical, solveRef(t)), isNull);
+    });
+
+    test('(iii) a tank without capacity prints a dash + ONE footnote', () {
+      const data = EquipmentScheduleData(
+        projectName: 'p',
+        date: '2026-11-13',
+        tanks: [
+          TankScheduleItem(tag: 'TK-01', roof: false, capacityLitres: 60000),
+          TankScheduleItem(tag: 'TK-02', roof: true),
+          TankScheduleItem(tag: 'TK-03', roof: true),
+        ],
+      );
+      final blocks = buildEquipmentScheduleBlocks(data);
+      final cells = [
+        for (final b in blocks)
+          if (b is RptTable)
+            for (final r in b.rows) r[2],
+      ];
+      expect(cells, ['60.0 m3', '- (*)', '- (*)']);
+      final notes = [
+        for (final b in blocks)
+          if (b is RptNote) b.text,
+      ];
+      expect(notes.where((n) => n.contains('(*)')), hasLength(1));
+      // The notes ride under the project line, before every table.
+      expect(blocks.indexWhere((b) => b is RptNote),
+          lessThan(blocks.indexWhere((b) => b is RptTable)));
+      // The CSV row model keeps the words.
+      expect(buildEquipmentScheduleRows(data).map((r) => r.duty),
+          contains('capacity not set'));
+    });
+
+    test('(iv) a detail sheet keys only the fixture codes it draws', () {
+      const notes = [
+        'WC water closet - LAV lavatory - SH shower - KS kitchen sink',
+        "CL = pipe centreline above this floor's FFL (Lantai 12 FFL +38.50)",
+      ];
+      expect(planDetailNarrowCodeNotes(notes, {'WC', 'SH'}), [
+        'WC water closet - SH shower',
+        notes[1],
+      ]);
+      expect(planDetailNarrowCodeNotes(notes, {}), [notes[1]]);
     });
   });
 }

@@ -14,6 +14,7 @@ library;
 import '../units.dart';
 import 'model.dart' show SupplyKind;
 import 'sources.dart';
+import 'supply_design.dart' show mvVoltageV;
 
 /// What kind of node sits on the power one-line.
 enum PowerNodeKind {
@@ -257,7 +258,9 @@ PowerOneLine buildPowerOneLine(
         // The MV main rides on the head's sub-label (one tier, not two: the
         // sheet must still plot at the 7 pt floor on A3).
         sub: mvChain
-            ? 'MV supply + MV main'
+            // Drawing backlog C-5 (i) — the declared MV service's voltage
+            // (the supply design's PLN TM figure).
+            ? 'MV supply ${_fmt(mvVoltageV / 1000)} kV + MV main'
             : (utilitySub ?? '${_fmt(voltage.volts)} V LV'),
       ));
       if (mvChain) {

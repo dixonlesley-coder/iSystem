@@ -226,6 +226,7 @@ class DrawingChrome {
   DrawingChrome withLegendNarrowedTo({
     required bool Function(ServiceType) keepService,
     required bool Function(NodeComponent) keepSymbol,
+    List<String> Function(List<String> notes)? narrowNotes,
   }) =>
       DrawingChrome(
         drawingNumber: drawingNumber,
@@ -237,7 +238,7 @@ class DrawingChrome {
           for (final s in legendServices)
             if (keepService(s)) s,
         ],
-        legendNotes: legendNotes,
+        legendNotes: narrowNotes == null ? legendNotes : narrowNotes(legendNotes),
         legendSymbols: [
           for (final c in legendSymbols)
             if (keepSymbol(c)) c,

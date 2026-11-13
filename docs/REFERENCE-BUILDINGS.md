@@ -281,3 +281,8 @@ PASSes on every E-201 / E-601 page of the five buildings (house 7 834 W, office 
 - C-4 Plant-level riser pages: the drainage terminus note takes its own clear slot (pipes
   and tags avoid it), and a lone-floor page that still prints key circles is re-drawn at
   a taller band while it stays width-bound, keeping the fewest keys.
+- C-5 Small truths: the tower's MV supply prints '20 kV' on E-301 / E-401 / E-501; the
+  house E-301 / E-401 print 'DEMAND 7.1 kVA > DECLARED 4.4 kVA - RAISE THE SUBSCRIBED
+  DAYA' beside the supply; tanks without capacity print '- (*)' with one footnote and no
+  orphan footnote page; detail sheets key only their own fixture codes; electrical layout
+  tags keep a clear gap from their symbol.

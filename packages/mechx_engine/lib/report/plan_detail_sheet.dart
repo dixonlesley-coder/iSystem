@@ -26,6 +26,7 @@ import 'dxf_export.dart';
 import 'plan_annotation_layout.dart' show kPlanLabelTextMm;
 import 'plan_detail.dart';
 import 'plan_pdf_export.dart';
+import 'plan_symbols.dart' show fixturePlanCode, kFixturePlanCodeNames;
 
 /// One detail as plotted on its sheet.
 class PlanDetailPlot {
@@ -364,8 +365,44 @@ DrawingChrome? planDetailLegendChrome(
       if (n.component != null && !plot.hiddenNodeIds.contains(n.id))
         n.component!,
   };
+  // Drawing backlog C-5 (iv) — the fixture-code note keys only the fixture
+  // codes drawn inside the windows.
+  final codes = {
+    for (final n in plot.net.nodes)
+      if (!plot.hiddenNodeIds.contains(n.id)) fixturePlanCode(n),
+  }..remove(null);
   return chrome.withLegendNarrowedTo(
-      keepService: services.contains, keepSymbol: symbols.contains);
+      keepService: services.contains,
+      keepSymbol: symbols.contains,
+      narrowNotes: (notes) => planDetailNarrowCodeNotes(notes, codes));
+}
+
+/// Drawing backlog C-5 (iv) — [notes] with the fixture-code note
+/// (`WC water closet - LAV lavatory - ...`, [kFixturePlanCodeNames]) cut to
+/// the [codes] present; a code note left empty is dropped, every other note
+/// kept verbatim. Pure.
+List<String> planDetailNarrowCodeNotes(
+    List<String> notes, Set<String?> codes) {
+  final out = <String>[];
+  for (final note in notes) {
+    final parts = note.split(' - ');
+    final isCodeNote = parts.every((p) {
+      final sp = p.indexOf(' ');
+      if (sp <= 0) return false;
+      final c = p.substring(0, sp);
+      return kFixturePlanCodeNames[c] == p.substring(sp + 1);
+    });
+    if (!isCodeNote) {
+      out.add(note);
+      continue;
+    }
+    final kept = [
+      for (final p in parts)
+        if (codes.contains(p.substring(0, p.indexOf(' ')))) p,
+    ];
+    if (kept.isNotEmpty) out.add(kept.join(' - '));
+  }
+  return out;
 }
 
 /// The detail plot + the chrome it is issued with (F6: the legend narrowed

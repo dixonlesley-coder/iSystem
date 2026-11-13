@@ -611,6 +611,19 @@ List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
     return blocks;
   }
 
+  // Drawing backlog C-5 (iii) — a tank with no capacity prints a dash in
+  // its duty cell, keyed '(*)' to ONE footnote; the notes print under the
+  // project line, so the issued sheet never ends on a page holding only
+  // the tail of a footnote (shophouse M-601 p3). The row model (CSV) keeps
+  // the words.
+  final unset = strings(RptStringKey.esTankCapacityUnset);
+  final anyUnset = rows.any(
+      (r) => r.category == EquipmentCategory.tank && r.duty == unset);
+  blocks.add(RptNote(strings(RptStringKey.esClosingNote)));
+  if (anyUnset) {
+    blocks.add(RptNote(strings(RptStringKey.esTankCapacityUnsetNote)));
+  }
+
   // One section per non-empty category, in enum order.
   for (final cat in EquipmentCategory.values) {
     final inCat = [
@@ -631,13 +644,20 @@ List<RptBlock> buildEquipmentScheduleBlocks(EquipmentScheduleData data,
         ],
         [
           for (final r in inCat)
-            [r.tag, r.service, r.duty, r.size, r.modelSpec, '${r.qty}'],
+            [
+              r.tag,
+              r.service,
+              r.category == EquipmentCategory.tank && r.duty == unset
+                  ? '- (*)'
+                  : r.duty,
+              r.size,
+              r.modelSpec,
+              '${r.qty}',
+            ],
         ],
         mdSeparator: '| --- | --- | --- | --- | --- | --- |',
       ));
   }
-
-  blocks.add(RptNote(strings(RptStringKey.esClosingNote)));
 
   return blocks;
 }
