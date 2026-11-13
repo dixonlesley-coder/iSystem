@@ -197,6 +197,8 @@ void _dumpMechanical(ProviderContainer c) {
       if (s?.demandCurveExtrapolated ?? false) 'demandCurveExtrapolated',
       if (s?.belowCodeMinimum ?? false) 'belowCodeMinimum',
       if (e.sizeOverride != null) 'sizeOverride',
+      if (c.read(sprinklerFeedEnlargedProvider).contains(e.id))
+        'sprinklerFeedEnlarged',
     ];
     _p(
       '| ${e.id} | ${e.service.name} | ${e.kind.name} | '

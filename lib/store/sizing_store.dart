@@ -9,6 +9,7 @@ import 'package:mechx_engine/sizing/drainage_sizing.dart';
 import 'package:mechx_engine/sizing/hot_water.dart'
     show heatLossFromLength, kDefaultRecircReturnDiameter, sizeHotWaterRecirculation;
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/sprinkler_feed_main.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart';
 import 'package:mechx_engine/sizing/water_supply_sizing.dart' as water;
 import 'package:mechx_engine/standards/custom_fixture.dart';
@@ -84,6 +85,12 @@ final sizingContextProvider = Provider<SizingContext>((ref) {
 // defer the write (a mounted-guarded microtask, as AppShell's first-auto-size
 // nudge does) or Riverpod asserts 'Providers are not allowed to modify other
 // providers during their initialization' (a hash-order flake in the goldens).
+/// Reference tower T2 — the sprinkler feed-main pipes enlarged so a combined
+/// fire system's sprinkler point no longer sets the pump head
+/// ([enlargeCombinedSprinklerFeedMains]). Empty when none was.
+final sprinklerFeedEnlargedProvider = Provider<Set<String>>(
+    (ref) => ref.watch(sizingDetailProvider).sprinklerFeedEnlarged);
+
 final sizingProvider = Provider<Map<String, EdgeSizing>>(
     (ref) => ref.watch(sizingDetailProvider).sizing);
 
@@ -152,6 +159,7 @@ final sizingDetailProvider = Provider<
       Set<String> moverAgainstBalance,
       Set<String> disagreeingSetMovers,
       Set<String> assumedJockeys,
+      Set<String> sprinklerFeedEnlarged,
     })>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   if (net.edges.isEmpty) {
@@ -166,6 +174,7 @@ final sizingDetailProvider = Provider<
       moverAgainstBalance: const <String>{},
       disagreeingSetMovers: const <String>{},
       assumedJockeys: const <String>{},
+      sprinklerFeedEnlarged: const <String>{},
     );
   }
   final occupancy = ref.watch(occupancyProvider);
@@ -350,6 +359,26 @@ final sizingDetailProvider = Provider<
     flowTempC: ref.watch(hotWaterFlowTempProvider),
     deltaTK: ref.watch(hotWaterDeltaTProvider),
   );
+  // Reference tower T2 — a combined fire system's sprinkler FEED MAIN is
+  // enlarged (one ladder step at a time, capped at the standpipe riser)
+  // until the sprinkler point head no longer exceeds the standpipe head
+  // ([enlargeCombinedSprinklerFeedMains]); every consumer reads this sizing.
+  final feed = enlargeCombinedSprinklerFeedMains(
+    net: net,
+    sizing: sizing,
+    remote: sprinklerRemote,
+    building: project.building,
+    lengthOf: (e) => edgeLength(
+      e,
+      net,
+      calibrationBySheet: project.calibrations,
+      building: project.building,
+      mounting: project.mounting,
+    ).meters,
+    parallelLegEdgeIds: {...parallelLegs},
+    overridden: sizeOverrides.keys.toSet(),
+  );
+  sizing = feed.sizing;
   // Round 27 r7 — a mover-leg valve whose balance runs against its pump is
   // named on the same advisory kind with its own message.
   for (final id in checkValveAgainstPump) {
@@ -366,6 +395,7 @@ final sizingDetailProvider = Provider<
     moverAgainstBalance: moverAgainstBalance,
     disagreeingSetMovers: disagreeingSetMovers,
     assumedJockeys: jockeys.assumed,
+    sprinklerFeedEnlarged: feed.enlarged,
   );
 });
 

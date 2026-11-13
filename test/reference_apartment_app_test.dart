@@ -1124,8 +1124,9 @@ void main() {
     });
     tearDownAll(() => c.dispose());
 
-    test('fire: standpipe 125.036 m, sprinkler 127.054 m, rated 31.545 L/s '
-        '@ 127.054 m, 75 kW, jockey, standby', () {
+    test('fire: standpipe 125.036 m, sprinkler 87.347 m on the enlarged '
+        'DN40 feed main, rated 31.545 L/s @ 125.036 m, 75 kW, jockey, '
+        'standby', () {
       final b = c.read(fireSystemBasesProvider).single;
       final net = c.read(sizingNetworkProvider);
       final project = c.read(projectControllerProvider);
@@ -1152,7 +1153,11 @@ void main() {
       );
       expect(b.standpipe!.pumpHead.meters, closeTo(125.036, 5e-4));
       // Sprinkler point: lift to the top ceiling 41.7 + 50 kPa / 9.81 =
-      // 5.097 + the sized index friction 80.257 = 127.054 m.
+      // 5.097 + the sized index friction. Reference tower T2: on the
+      // velocity-sized DN32 feed main the friction was 80.257 m (127.054 m >
+      // the 125.036 m standpipe head), so the feed main FH→S0→…→S11 is
+      // enlarged one step to DN40 (cap: the DN100 standpipe riser): friction
+      // 40.550 m ⇒ 87.347 m <= 125.036.
       final fs = fireIndexPathFrictionM(
         net: net,
         system: b.system,
@@ -1161,7 +1166,7 @@ void main() {
         lengthOf: len,
         terminals: FireTerminalKind.sprinkler,
       )!;
-      expect(fs, closeTo(80.257, 5e-4));
+      expect(fs, closeTo(40.550, 5e-4));
       expect(
         b.system.staticLiftM(net, project.building, FireTerminalKind.sprinkler),
         closeTo(41.7, 1e-9),
@@ -1170,28 +1175,29 @@ void main() {
         c.read(sprinklerRemoteAreaProvider).remoteHeadPressure.inKiloPascals,
         closeTo(50.0, 1e-9),
       );
-      expect(41.7 + 50 / 9.81 + fs, closeTo(127.054, 5e-4));
-      // Rated at max flow, max head.
+      expect(41.7 + 50 / 9.81 + fs, closeTo(87.347, 5e-4));
+      // The standpipe point governs both flow and head.
+      expect(b.sprinklerGovernsCombined, isFalse);
       expect(b.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
-      expect(b.head.meters, closeTo(127.054, 5e-4));
+      expect(b.head.meters, closeTo(125.036, 5e-4));
       final d = c.read(firePumpDutyProvider)!;
-      // 9810 x 0.0315451 x 127.054 = 39 317.8 W; / 0.70 = 56 168.4 W.
-      expect(d.hydraulicPower.watts, closeTo(39317.8, 0.05));
-      expect(d.shaftPower.watts, closeTo(56168.4, 0.05));
+      // 9810 x 0.0315451 x 125.036 = 38 693.4 W; / 0.70 = 55 276.3 W.
+      expect(d.hydraulicPower.watts, closeTo(38693.4, 0.05));
+      expect(d.shaftPower.watts, closeTo(55276.3, 0.05));
       final r = b.rating;
-      // Churn 1.4 x 127.054; overload 1.5 Q @ 0.65 H, shaft 0.975 x
-      // 39 317.8 / 0.595 = 64 428.4 W ⇒ 75 kW.
-      expect(r.churn.head.meters, closeTo(177.876, 5e-4));
+      // Churn 1.4 x 125.0364 = 175.051; overload 1.5 Q @ 0.65 H = 81.274 m,
+      // shaft 0.975 x 38 693.4 / 0.595 = 63 405.2 W ⇒ still 75 kW.
+      expect(r.churn.head.meters, closeTo(175.051, 5e-4));
       expect(r.overload.flow.inLitersPerSecond, closeTo(47.3176, 5e-4));
-      expect(r.overload.head.meters, closeTo(82.585, 5e-4));
-      expect(r.overload.shaftPower.watts, closeTo(64428.4, 0.05));
+      expect(r.overload.head.meters, closeTo(81.274, 5e-4));
+      expect(r.overload.shaftPower.watts, closeTo(63405.2, 0.05));
       expect(r.selectedMotor.inKiloWatts, closeTo(75, 1e-9));
       // Fed input 75 / 0.9 = 83 333.3 W.
       expect(c.read(nodeFedLoadsProvider)['FP']!.input, closeTo(83333.3, 0.05));
-      // Jockey 1 % = 0.31545 L/s @ churn + 5 = 182.876 m, 1.1 kW.
+      // Jockey 1 % = 0.31545 L/s @ churn + 5 = 180.051 m, 1.1 kW.
       final j = c.read(fireJockeyDutyProvider)!;
       expect(j.flow.inLitersPerSecond, closeTo(0.31545, 5e-5));
-      expect(j.head.meters, closeTo(182.876, 5e-4));
+      expect(j.head.meters, closeTo(180.051, 5e-4));
       expect(j.selectedMotor.inKiloWatts, closeTo(1.1, 1e-9));
       // Standby FPS: same machine, demand factor 0.
       final bind = c.read(mepDutyBindingProvider);
@@ -1204,7 +1210,8 @@ void main() {
           .circuits;
       expect(mepWays.firstWhere((w) => w.id == 'mep-node-FPS').demandFactor, 0);
       // Pipes: pump train and header DN125 at the rated 31.545 L/s, hydrant
-      // risers DN100, boxes DN65 at 5 L/s, sprinkler riser DN32 at 4.714,
+      // risers DN100, boxes DN65 at 5 L/s, sprinkler feed main (FH→S0 and
+      // the riser) enlarged to DN40 at 4.714 (T2),
       // the heads' line DN32 / DN25, jockey legs DN25 at 0.3155.
       for (final id in [
         'e_fh_FT_FP',
@@ -1218,7 +1225,7 @@ void main() {
       }
       for (var f = 1; f < kAptFloors; f++) {
         expect(sz['e_fh_H${f - 1}_H$f']!.diameter.inMillimeters, 100);
-        expect(sz['e_sp_S${f - 1}_S$f']!.diameter.inMillimeters, 32);
+        expect(sz['e_sp_S${f - 1}_S$f']!.diameter.inMillimeters, 40);
         expect(
           sz['e_sp_S${f - 1}_S$f']!.flow.inLitersPerSecond,
           closeTo(4.71405, 5e-5),
@@ -1230,7 +1237,7 @@ void main() {
         expect(sz[id]!.flow.inLitersPerSecond, closeTo(5.0, 1e-9));
       }
       const spLine = <String, (double, int)>{
-        'e_sp_FH_S0': (4.71405, 32),
+        'e_sp_FH_S0': (4.71405, 40), // the feed main, enlarged (T2)
         'e_sp_S11_SP1': (4.71405, 32),
         'e_sp_SP1_SP2': (4.71405, 32),
         'e_sp_SP2_SP3': (3.77124, 32),
@@ -1558,7 +1565,9 @@ void main() {
       expect(count('standpipe-outlet-over-pressure:FP:0-11'), 1);
       expect(count('electrical:non-selective'), 2);
       expect(count('electrical:enclosure-temp-rise-exceeded'), 1);
-      expect(count('combined-fire-sprinkler-governs:FP'), 1);
+      // Reference tower T2: the enlarged feed main hands the head back to
+      // the standpipe, so the combined-governs info is gone.
+      expect(count('combined-fire-sprinkler-governs:FP'), 0);
       expect(count('downfeed-below-target'), 1);
       expect(count('electrical:cable-raised-for-ads'), 1);
       expect(count('electrical:fire-pump-protection'), 3);

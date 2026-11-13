@@ -10,6 +10,13 @@
 // A1: a combined sprinkler + hydrant fire pump is rated at the larger flow
 // and the larger head of its two bases (every consumer reads that one
 // point); standpipe-only and sprinkler-only systems are unchanged.
+//
+// Reference tower T2 (2026-11-13): as drawn, the apartment's velocity-sized
+// DN32 sprinkler feed main is now ENLARGED (DN40) until the sprinkler point
+// no longer exceeds the standpipe head, so the standpipe governs. The A1 /
+// A2 cases below therefore HAND-PICK the feed main at DN32 (a sizeOverride
+// is never enlarged): the sprinkler still sets the head there, exactly the
+// situation the A1 / A2 rules are about.
 import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -25,6 +32,7 @@ import 'package:mechx/store/sheets_store.dart';
 import 'package:mechx/store/sizing_store.dart';
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
+import 'package:mechx_engine/units.dart' show Diameter;
 
 import '../packages/mechx_engine/test/reference/apartment.dart';
 
@@ -88,6 +96,27 @@ Network _renamed(Network net, Map<String, String> rename, int shift) {
   return Network(nodes: rot(nodes), edges: rot(edges.reversed.toList()));
 }
 
+/// [net] with the sprinkler feed main (FH→S0 and the risers) hand-picked at
+/// DN32, the bore the velocity rule gives it (T2 never enlarges a hand pick).
+Network _feedMainPinned(Network net) => Network(
+  nodes: net.nodes,
+  edges: [
+    for (final e in net.edges)
+      if (e.service == ServiceType.fireSprinkler &&
+          (e.id == 'e_sp_FH_S0' || RegExp(r'^e_sp_S\d+_S\d+$').hasMatch(e.id)))
+        NetEdge(
+          id: e.id,
+          fromId: e.fromId,
+          toId: e.toId,
+          service: e.service,
+          kind: e.kind,
+          sizeOverride: Diameter.mm(32),
+        )
+      else
+        e,
+  ],
+);
+
 void main() {
   final apt = buildApartment();
   for (final (label, rename, shift) in [
@@ -97,7 +126,10 @@ void main() {
   ]) {
     test('A2 — combined-fire-sprinkler-governs is keyed on the duty pump: '
         '$label', () {
-      final c = _load(apt, _renamed(apt.network, rename, shift));
+      final c = _load(
+        apt,
+        _renamed(_feedMainPinned(apt.network), rename, shift),
+      );
       addTearDown(c.dispose);
       final b = c.read(fireSystemBasesProvider).single;
       expect(b.sprinklerGovernsCombined, isTrue);
@@ -116,8 +148,9 @@ void main() {
   // the LARGER head. Standpipe: Class I, 500 gpm = 31.5451 L/s @ 39.7 + 15 +
   // 70.336 = 125.036 m; sprinkler: 4.7140 L/s @ 41.7 + 5.097 + 80.257 =
   // 127.054 m ⇒ rated 31.5451 L/s @ 127.054 m.
-  test('A1 — the combined pump covers both points: 31.545 L/s @ 127.054 m', () {
-    final c = _load(apt, apt.network);
+  test('A1 — the combined pump covers both points: 31.545 L/s @ 127.054 m '
+      '(feed main hand-picked DN32)', () {
+    final c = _load(apt, _feedMainPinned(apt.network));
     addTearDown(c.dispose);
     final b = c.read(fireSystemBasesProvider).single;
     expect(b.standpipe!.requiredFlow.inLitersPerSecond, closeTo(31.5451, 5e-4));
@@ -165,6 +198,29 @@ void main() {
       c.read(fireOverPressureProvider).single.check.churnKpa,
       closeTo(177.876 * 9.81, 0.05),
     );
+  });
+
+  test('T2 — as drawn, the feed main is enlarged to DN40 and the standpipe '
+      'governs: 31.545 L/s @ 125.036 m', () {
+    final c = _load(apt, apt.network);
+    addTearDown(c.dispose);
+    final b = c.read(fireSystemBasesProvider).single;
+    expect(b.sprinklerGovernsCombined, isFalse);
+    expect(b.flow.inLitersPerSecond, closeTo(31.5451, 5e-4));
+    expect(b.head.meters, closeTo(125.036, 5e-4));
+    final sz = c.read(sizingProvider);
+    final feed = [
+      'e_sp_FH_S0',
+      for (var f = 1; f < kAptFloors; f++) 'e_sp_S${f - 1}_S$f',
+    ];
+    for (final id in feed) {
+      expect(sz[id]!.diameter.inMillimeters, 40, reason: id);
+    }
+    expect(c.read(sprinklerFeedEnlargedProvider), feed.toSet());
+    // The heads' line is never enlarged.
+    expect(sz['e_sp_S11_SP1']!.diameter.inMillimeters, 32);
+    // 75 kW either way: overload shaft 0.975 x 38 693.4 / 0.595 = 63 405.2 W.
+    expect(b.rating.selectedMotor.inKiloWatts, closeTo(75, 1e-9));
   });
 
   test('A1 — a standpipe-only and a sprinkler-only system are unchanged', () {

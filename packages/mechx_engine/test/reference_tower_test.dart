@@ -37,6 +37,7 @@ import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/sprinkler_feed_main.dart';
 import 'package:mechx_engine/sizing/storm_sizing.dart';
 import 'package:mechx_engine/sizing/supply_design.dart';
 import 'package:mechx_engine/standards/duct_products.dart';
@@ -91,12 +92,14 @@ void main() {
       .meters;
 
   Map<String, double> fuOut = {};
+  Set<String> feedEnlarged = {};
   Map<String, EdgeSizing> size(Network net) {
     fuOut = {};
     final standpipe = designStandpipe(
         risers: drawnStandpipeRiserCount(net),
         buildingHeight: standpipeStaticLift(tower.building));
-    return autoSizeNetwork(
+    final legs = <String>{};
+    final sized = autoSizeNetwork(
       net,
       _ctx,
       leafDemand: {
@@ -147,7 +150,25 @@ void main() {
       calibrationBySheet: tower.calibrations,
       mounting: tower.mounting,
       fixtureUnitsOut: fuOut,
+      parallelLegEdgeIdsOut: legs,
     );
+    // The app's post-pass (reference tower T2): a combined system's
+    // sprinkler feed main is enlarged until the sprinkler point no longer
+    // exceeds the standpipe head.
+    final feed = enlargeCombinedSprinklerFeedMains(
+      net: net,
+      sizing: sized,
+      remote: remote,
+      building: tower.building,
+      lengthOf: (e) => lengthOf(net, e),
+      parallelLegEdgeIds: legs,
+      overridden: {
+        for (final e in net.edges)
+          if (e.sizeOverride != null) e.id,
+      },
+    );
+    feedEnlarged = feed.enlarged;
+    return feed.sizing;
   }
 
   test(
@@ -245,7 +266,8 @@ void main() {
             'from=${s?.flowFromId}'
             '${(s?.overCapacity ?? false) ? ' overCapacity' : ''}'
             '${(s?.demandCurveExtrapolated ?? false) ? ' demandCurveExtrapolated' : ''}'
-            '${(s?.stackRaisedForBranch ?? false) ? ' stackRaisedForBranch' : ''}');
+            '${(s?.stackRaisedForBranch ?? false) ? ' stackRaisedForBranch' : ''}'
+            '${feedEnlarged.contains(e.id) ? ' sprinklerFeedEnlarged' : ''}');
       }
       for (final e in net.edges) {
         expect(sizing[e.id], isNotNull, reason: e.id);

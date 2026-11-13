@@ -7,23 +7,32 @@
 // sprinkler feed carries its 4.714 L/s remote-area demand: none of the three
 // header outflows is raised to the pump's DN150 / 47.3176 L/s, and the
 // sprinkler riser is one size, one flow, all the way up.
+//
+// T2 — in a COMBINED system the sprinkler feed main (FH→S0 and the 29-storey
+// riser) is enlarged one ladder step at a time until the sprinkler point no
+// longer exceeds the standpipe head: DN32 (index friction 178.7 m, 303.5 m
+// pump) → DN40, capped at the DN100 standpipe riser. The heads' line is not
+// touched; a sprinkler-only system is unchanged; shuffling the drawing never
+// changes the result.
 import 'package:mechx_engine/network/network.dart';
 import 'package:mechx_engine/sizing/drainage_sizing.dart'
     show drainageFixtureUnit;
+import 'package:mechx_engine/sizing/fire_index_friction.dart';
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
     show kJockeyFlowFraction;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart';
 import 'package:mechx_engine/sizing/fire_sprinkler_hydraulic.dart';
 import 'package:mechx_engine/sizing/fire_standpipe.dart';
 import 'package:mechx_engine/sizing/network_sizing.dart';
+import 'package:mechx_engine/sizing/sprinkler_feed_main.dart';
 import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 import 'package:test/test.dart';
 
 import 'reference/tower.dart';
 
-Map<String, EdgeSizing> _size(ReferenceBuilding b) {
-  final net = b.network;
+Map<String, EdgeSizing> _size(ReferenceBuilding b, [Network? drawn]) {
+  final net = drawn ?? b.network;
   const profile = SniProfile();
   final remote = remoteAreaHydraulics(
       design: designSprinklerSystem(hazard: FireHazardClass.lightHazard));
@@ -106,6 +115,89 @@ void main() {
       for (final id in ids) {
         expect(q(id), closeTo(4.7140, 5e-5), reason: id);
         expect(dn(id), d0, reason: id);
+      }
+    });
+  });
+
+  group('T2 — the combined system enlarges its sprinkler feed main', () {
+    final tower = buildTower();
+    final remote = remoteAreaHydraulics(
+        design: designSprinklerSystem(hazard: FireHazardClass.lightHazard));
+    SprinklerFeedEnlargement run(Network net) =>
+        enlargeCombinedSprinklerFeedMains(
+          net: net,
+          sizing: _size(tower, net),
+          remote: remote,
+          building: tower.building,
+          lengthOf: (e) => edgeLength(e, net,
+                  calibrationBySheet: tower.calibrations,
+                  building: tower.building,
+                  mounting: tower.mounting)
+              .meters,
+        );
+    final feedIds = {
+      'e_sp_FH_S0',
+      for (var f = 1; f < kTowerFloors; f++) 'e_sp_S${f - 1}_S$f',
+    };
+
+    test('DN32 → DN40 on every feed-main pipe, the heads\' line kept', () {
+      final r = run(tower.network);
+      expect(r.enlarged, feedIds);
+      for (final id in feedIds) {
+        expect(r.sizing[id]!.diameter.inMillimeters, 40, reason: id);
+        expect(r.sizing[id]!.flow.inLitersPerSecond, closeTo(4.7140, 5e-5));
+      }
+      expect(r.sizing['e_sp_S29_SP1']!.diameter.inMillimeters, 32);
+      // Index friction from FP to SP6 on the enlarged main.
+      final net = tower.network;
+      final sys = fireRatingSystems(net).single;
+      final f = fireIndexPathFrictionM(
+        net: net,
+        system: sys,
+        pumpId: kTowerDutyFirePump,
+        sizing: r.sizing,
+        lengthOf: (e) => edgeLength(e, net,
+                calibrationBySheet: tower.calibrations,
+                building: tower.building,
+                mounting: tower.mounting)
+            .meters,
+        terminals: FireTerminalKind.sprinkler,
+      )!;
+      expect(f, closeTo(77.389, 5e-4));
+    });
+
+    test('a sprinkler-only system is unchanged', () {
+      final net = tower.network;
+      bool hydrant(String id) =>
+          RegExp(r'^(H[ab]\d+|HYD[ab]\d+)$').hasMatch(id);
+      final only = Network(nodes: [
+        for (final n in net.nodes)
+          if (!hydrant(n.id)) n,
+      ], edges: [
+        for (final e in net.edges)
+          if (!hydrant(e.fromId) && !hydrant(e.toId)) e,
+      ]);
+      final r = run(only);
+      expect(r.enlarged, isEmpty);
+      final base = _size(tower, only);
+      for (final id in feedIds) {
+        expect(r.sizing[id]!.diameter.inMillimeters,
+            base[id]!.diameter.inMillimeters,
+            reason: id);
+      }
+    });
+
+    test('order-independent: shuffled lists give the same sizes', () {
+      final net = tower.network;
+      final shuffled = Network(
+        nodes: [...net.nodes.skip(41), ...net.nodes.take(41)],
+        edges: [...net.edges.reversed.skip(17), ...net.edges.reversed.take(17)],
+      );
+      final a = run(net), b = run(shuffled);
+      expect(b.enlarged, a.enlarged);
+      for (final id in feedIds) {
+        expect(b.sizing[id]!.diameter.inMillimeters,
+            a.sizing[id]!.diameter.inMillimeters);
       }
     });
   });
