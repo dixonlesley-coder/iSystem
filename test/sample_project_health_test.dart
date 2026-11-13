@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mechx/store/electrical_store.dart';
 import 'package:mechx_engine/electrical/advanced_study.dart';
 import 'package:mechx_engine/electrical/compute.dart';
-import 'package:mechx_engine/electrical/fault.dart' show SelectivityResult;
 import 'package:mechx_engine/electrical/panel_results.dart';
 import 'package:mechx_engine/report/electrical_sld_drawing.dart'
     show buildElectricalPanelDetail;
@@ -42,78 +41,38 @@ void main() {
   });
 
   test('the sample feeder is lifted as far as its conductor allows', () {
-    // Re-derived 2026-07-30 (audit E3+E4). The feeder floor is now DEVICE-ONLY
-    // and capped at the largest rung the LOAD-sized cable protects (In <= Iz) —
-    // conductor copper is never inflated to buy discrimination. The sample's one
-    // feeder carries LP-1's whole demand, so it and LP-1's incomer size from the
-    // SAME load:
-    //   Ib 23.8 A -> load rung 25 A; cable 4 mm2 (Iz 34.0 A);
-    //   floor target 1.6 x 25 = 40 A, cap = largest rung <= 34.0 = 32 A
-    //   => the device lifts one rung (25 -> 32 A) and stops at 1.28x.
-    // Reaching 1.6x here would mean fitting 6 mm2 for a 23.8 A run purely for
-    // discrimination — exactly the trade the policy refuses. So the residual is
-    // REPORTED (never suppressed: a capped floor is not in
-    // `feederFloorsApplied`), and the guard below pins that it is the AMPACITY
-    // CAP holding the device back, not an undersized pick.
-    expect(result.feederFloorsApplied, isEmpty);
-    // G3 (2026-07-31): the solve now RECORDS where the cap bit, so the residual
-    // can explain itself. Floor target 1.6 x 25 = 40 A -> rung 40 A; cap =
-    // largest rung <= Iz 34.0 = 32 A; 40 > 34.0 ⇒ mdp-f1 is capped.
-    expect(result.feederFloorsCapped, {'mdp-f1'});
-    final ladder = profile.standardBreakerRatingsA;
-    for (final pair in advanced.fault.selectivity) {
-      if (!pair.nonSelective) continue;
-      final feeder = result.panels[pair.upstreamPanelIdOrNull(result)]
-          ?.circuits
-          .where((c) => c.circuitId == pair.upstreamCircuitId)
-          .firstOrNull;
-      expect(feeder, isNotNull, reason: pair.upstreamCircuitId);
-      final izA = feeder!.cable.deratedIz.amperes;
-      expect(feeder.breaker.ratingA.amperes, ladder.where((r) => r <= izA).last,
-          reason: 'feeder ${pair.upstreamCircuitId} vs '
-              '${pair.downstreamPanelId}: ${pair.upstreamRatingA} A over '
-              '${pair.downstreamRatingA} A is NOT explained by the ampacity cap '
-              '(Iz $izA A) — the sizer picked the wrong rung');
-    }
-    // And the residual is exactly the one known pair, still surfaced.
-    expect(
-      advanced.fault.selectivity
-          .where((p) => p.nonSelective)
-          .map((p) => p.upstreamCircuitId),
-      ['mdp-f1'],
-    );
-    expect(advanced.fault.warnings.where((w) => w.code == 'non-selective'),
-        hasLength(1));
-  });
-
-  test('and the sample\'s residual pair SAYS the cable is the lever', () {
-    // G3 (2026-07-31), re-derived from the sample: 'Feeder to LP-1' is the one
-    // capped feeder, so its `non-selective` message must not send the engineer
-    // after a bigger breaker (In <= Iz forbids it). Hand-derived numbers:
-    //   feeder Ib 23.8 A -> load rung 25 A; Iz_req = max(25, 1.25 x 23.8 =
-    //   29.75) = 29.75 A. Re-derived Round 11 — conduit PVC reads IEC B.52.4
-    //   B1: 4 mm2 = 28 A is short, 6 mm2 = 36 A at derating 1.00 -> Iz 36.0 A;
-    //   the 40 A floor rung is above 36.0, so the device stops at 32 A (the
-    //   largest rung <= Iz) at 32/25 = 1.28x.
-    //   Target 1.6 x 25 = 40 A is well inside the 1600 A ladder, so the advice
-    //   is the "increase the cable" variant, not the ladder-top one.
+    // Re-derived 2026-07-30 (audit E3+E4): the feeder floor is DEVICE-ONLY and
+    // capped at the largest rung the cable protects (In <= Iz) — conductor
+    // copper is never inflated to buy discrimination.
+    // Reference tower T3 (2026-11-13): the LOAD-sized 6 mm² feeder (Iz 36 A)
+    // left LP-1's lighting ways over their 3 % limit CUMULATIVELY (own drops
+    // 2.32 / 2.47 % within it), so the auto-sized feeder is raised for that
+    // DOWNSTREAM drop: 6 ⇒ 10 ⇒ 16 ⇒ 25 mm² (0.37 %; lighting 2.69 / 2.84 %).
+    // Copper grows for voltage drop, never for discrimination; the device
+    // floor then follows the larger Iz 89 A to the 1.6 x 25 = 40 A target, so
+    // the sample's one residual `non-selective` pair is gone.
     final feeder = result.panels['mdp']!.circuits
         .firstWhere((c) => c.circuitId == 'mdp-f1');
-    expect(feeder.cable.csaMm2, 6);
-    expect(feeder.cable.deratedIz.amperes, closeTo(36.0, 1e-9));
-    expect(feeder.breaker.ratingA.amperes, 32);
+    expect(feeder.cable.csaMm2, 25);
+    expect(feeder.cableRaisedForDownstreamVd, isTrue);
+    expect(feeder.voltageDrop.dropPercent, 0.37);
+    expect(feeder.breaker.ratingA.amperes, 40);
+    for (final c in result.panels['lp1']!.circuits) {
+      expect(c.cumulativeDropPercent,
+          lessThanOrEqualTo(c.voltageDrop.limitPercent),
+          reason: c.circuitId);
+    }
+    expect(result.feederFloorsCapped, isEmpty);
+    expect(advanced.fault.selectivity.where((p) => p.nonSelective), isEmpty);
+    expect(advanced.fault.warnings.where((w) => w.code == 'non-selective'),
+        isEmpty);
+  });
 
-    final w = advanced.fault.warnings
-        .singleWhere((x) => x.code == 'non-selective');
+  test('and the sample has no cumulative voltage-drop finding (T3)', () {
     expect(
-      w.message,
-      'Feeder to LP-1 (32 A) may not discriminate with Lighting Panel incomer '
-      '(25 A): the device is already at the largest rung the 6 mm2 feeder '
-      'cable protects (Iz 36.0 A). To reach the 1.6x target, increase the '
-      'feeder cable (then the device can rise); verify against manufacturer '
-      'curves otherwise.',
-    );
-    expect(w.severity, WarningSeverity.warning);
+        result.warnings
+            .where((w) => w.code == 'cumulative-voltage-drop-exceeded'),
+        isEmpty);
   });
 
   test('the sample fire pump carries the fire-duty token on its schedule row',
@@ -138,14 +97,3 @@ void main() {
   });
 }
 
-extension on SelectivityResult {
-  /// The panel a feeder way lives on (the study keys pairs by the FED panel).
-  String? upstreamPanelIdOrNull(ElectricalSystemResult sys) {
-    for (final entry in sys.panels.entries) {
-      if (entry.value.circuits.any((c) => c.circuitId == upstreamCircuitId)) {
-        return entry.key;
-      }
-    }
-    return null;
-  }
-}
