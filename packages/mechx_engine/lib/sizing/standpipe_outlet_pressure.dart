@@ -40,6 +40,11 @@ const double kStandpipeOutletMaxStaticKpa = 1207;
 /// `// VERIFY notAnSniClause`.
 const double kHoseStationMaxResidualKpa = 690;
 
+/// Backlog A-3 (2026-11-13) — the residual a pressure-regulating hose valve
+/// is SET to (NFPA 14 Class I: 100 psi = 690 kPa at the outlet).
+/// `// VERIFY notAnSniClause` against SNI 03-1745.
+const double kStandpipePrvSetResidualKpa = 690;
+
 /// The judged pressure at one hose outlet.
 class StandpipeOutletPressure {
   final String outletId;
@@ -77,6 +82,13 @@ class StandpipeOutletPressure {
       residualKpa! > kHoseStationMaxResidualKpa + 1e-9;
 
   bool get over => overStatic || overResidual;
+
+  /// Backlog A-3 — the outlet is DESIGNATED a pressure-regulating hose
+  /// valve (set to [kStandpipePrvSetResidualKpa]): its static at churn
+  /// exceeds [kStandpipeOutletMaxStaticKpa] (NFPA 14 7.2.3.2) and no drawn
+  /// PRV upstream regulates it. The design then states the device the clause
+  /// asks for; [staticKpa] stays the solved inlet static (never clamped).
+  bool get prvHoseValve => overStatic;
 }
 
 /// The hose outlets of [system] (a hydrant box / hose reel on a hydrant
@@ -220,4 +232,43 @@ List<StandpipeOutletPressure> standpipeOutletPressures({
     return f != 0 ? f : naturalIdCompare(a.outletId, b.outletId);
   });
   return outlets;
+}
+
+/// Backlog A-3 (2026-11-13) — the fire pipes of [system] DOWNSTREAM of its
+/// pumps (the pipework and fittings the system working pressure acts on):
+/// every edge reached walking the sized flow direction (`flowFromId`) out of
+/// a pump / booster set, never past a storage tank (its free surface resets
+/// the pressure). Suction pipes (tank -> pump) are not included. Pure;
+/// sorted ids.
+List<String> firePumpDownstreamEdgeIds({
+  required Network net,
+  required FireSystem system,
+  required Map<String, EdgeSizing> sizing,
+}) {
+  bool isMover(NodeComponent? c) =>
+      c == NodeComponent.pump || c == NodeComponent.boosterSet;
+  bool isTank(NodeComponent? c) =>
+      c == NodeComponent.groundTank || c == NodeComponent.roofTank;
+  final outOf = <String, List<(String, String)>>{};
+  for (final e in system.edges) {
+    final f = sizing[e.id]?.flowFromId;
+    if (f == null || (f != e.fromId && f != e.toId)) continue;
+    final to = f == e.fromId ? e.toId : e.fromId;
+    (outOf[f] ??= []).add((e.id, to));
+  }
+  final out = <String>{};
+  final stack = [
+    for (final id in system.nodeIds)
+      if (isMover(net.nodeById(id)?.component)) id,
+  ];
+  final seen = <String>{...stack};
+  while (stack.isNotEmpty) {
+    final u = stack.removeLast();
+    for (final (eid, v) in outOf[u] ?? const <(String, String)>[]) {
+      out.add(eid);
+      if (isTank(net.nodeById(v)?.component)) continue;
+      if (seen.add(v)) stack.add(v);
+    }
+  }
+  return out.toList()..sort();
 }

@@ -162,20 +162,98 @@ final governingFireBasisProvider = Provider<FireSystemBasis?>((ref) {
   return best;
 });
 
+/// Backlog A-3 (2026-11-13) — one pumped fire system's WORKING pressure (the
+/// churn pressure at its pump discharge — at the stage discharge that sees
+/// the maximum on a series system, [fireStagedOverPressureCheck]) and the
+/// pressure class ([firePressureClassFor]) its pipework and fittings
+/// downstream of the pump must carry. [pumpId] names the pump whose discharge
+/// sees it. Never clamped: the solved churn is printed.
+class FirePressureClassLine {
+  final FireSystemBasis basis;
+  final String? pumpId;
+  final double churnKpa;
+  final double ratedKpa;
+  final double? frictionShare;
+  final FirePressureClass pressureClass;
+
+  /// A hydrant-only standpipe (no sprinkler head drawn).
+  final bool standpipe;
+
+  const FirePressureClassLine({
+    required this.basis,
+    required this.pumpId,
+    required this.churnKpa,
+    required this.ratedKpa,
+    required this.frictionShare,
+    required this.pressureClass,
+    required this.standpipe,
+  });
+}
+
+/// Backlog A-3 — the working pressure and pressure class of every pumped
+/// (not gravity / dry / transfer) fire system carrying sprinklers or
+/// hydrants, in [fireSystemBasesProvider] order.
+final firePressureClassesProvider =
+    Provider<List<FirePressureClassLine>>((ref) {
+  final out = <FirePressureClassLine>[];
+  final net = ref.watch(sizingNetworkProvider);
+  for (final b in ref.watch(fireSystemBasesProvider)) {
+    if (b.standsDown ||
+        b.flow.cubicMetersPerSecond <= 0 ||
+        (!b.system.hasSprinkler && !b.system.hasHydrant)) {
+      continue;
+    }
+    final standpipe = !b.system.hasSprinklerHead(net);
+    double churn, rated;
+    double? share;
+    String? pump;
+    if (b.stages.length >= 2) {
+      final c = fireStagedOverPressureCheck(
+        stages: [
+          for (final st in b.stages)
+            FireStageLift(st.rating, st.suctionLiftM, st.upstream),
+        ],
+        systemRatedHeadM: b.head.meters,
+        indexFrictionM: b.indexFrictionM,
+      );
+      churn = c.churnKpa;
+      rated = c.ratedKpa;
+      share = c.frictionShare;
+      pump = b.stages[c.stage].dutyPumpId;
+    } else {
+      final c = fireOverPressureCheck(
+          rating: b.rating, indexFrictionM: b.indexFrictionM);
+      churn = c.churnKpa;
+      rated = c.ratedKpa;
+      share = c.frictionShare;
+      pump = b.dutyPumpId;
+    }
+    out.add(FirePressureClassLine(
+      basis: b,
+      pumpId: pump,
+      churnKpa: churn,
+      ratedKpa: rated,
+      frictionShare: share,
+      pressureClass: firePressureClassFor(churn),
+      standpipe: standpipe,
+    ));
+  }
+  return out;
+});
+
 /// Round 48 (mech-convergence-3-fire-pressure-rating-unjudged) — every drawn
-/// fire SYSTEM carrying sprinklers whose pump CHURN pressure (NFPA 20
-/// shut-off, 140 % of its rated head) exceeds the [kFireComponentMaxPressureKpa] (175 psi) rating of
-/// standard listed components, with the friction share of its rated head.
-/// JUDGE-ONLY (`fireOverPressureCheck`): the fire sizer caps velocity at
-/// 6 m/s, so a tall system can build half its rated head out of friction and
-/// churn at ~17 bar on DN40 pipe — the review says so, it never resizes.
+/// fire SYSTEM whose pump CHURN pressure is too high for the components.
+/// JUDGE-ONLY: it never resizes.
 ///
-/// Round 52 (fire-convergence-4-staged-sprinkler-system-false-over-
-/// pressure) — a SERIES (zoned) system is judged at every stage's discharge
-/// ([fireStagedOverPressureCheck]: the chain's churn heads less the static
-/// lift up to that stage), never 1.4 x the summed system head at one point;
-/// [pumpId] names the pump whose discharge sees the reported maximum (the
-/// system's duty pump for a single stage). A TRANSFER system is not judged.
+/// Backlog A-3 (2026-11-13, superseding the Round-48 175 psi component limit
+/// for sprinkler-bearing systems) — a churn above 175 psi now sets a higher
+/// pressure CLASS for the pipework and fittings ([firePressureClassesProvider]:
+/// PN16 to 1600 kPa, PN25 to 2413 kPa), printed on the fire results and BOM.
+/// Only a churn above [kStandpipeMaxSystemPressureKpa] (350 psi, NFPA 14
+/// 7.2.1.1) is listed here: no class permits a single zone above it, the
+/// standpipe must be split into vertical zones. A series system is judged at
+/// every stage's discharge (Round 52); [pumpId] names the pump whose
+/// discharge sees the maximum. A TRANSFER system is not judged.
 final fireOverPressureProvider = Provider<
     List<
         ({
@@ -185,66 +263,21 @@ final fireOverPressureProvider = Provider<
           String? pumpId,
           bool standpipe,
         })>>((ref) {
-  final out = <({
-    FireSystemBasis basis,
-    ({double churnKpa, double ratedKpa, bool over, double? frictionShare})
-        check,
-    String? pumpId,
-    bool standpipe,
-  })>[];
-  final net = ref.watch(sizingNetworkProvider);
-  for (final b in ref.watch(fireSystemBasesProvider)) {
-    // The 175 psi limit is the SPRINKLER component listing (NFPA 13).
-    // Round 63 (fire-convergence-15-standpipe-system-pressure-unjudged) — a
-    // hydrant-only standpipe is judged against the NFPA 14 7.2.1.1 SYSTEM
-    // maximum (350 psi, [kStandpipeMaxSystemPressureKpa]) that forces
-    // vertical zoning; a combined system against the tighter sprinkler
-    // component rating (which covers the standpipe limit too).
-    if (b.standsDown ||
-        b.flow.cubicMetersPerSecond <= 0 ||
-        (!b.system.hasSprinkler && !b.system.hasHydrant)) {
-      continue;
-    }
-    // Round 64 — a sprinkler-labelled pipe with no head is no sprinkler
-    // system: only a drawn head makes it sprinkler-rated.
-    final standpipe = !b.system.hasSprinklerHead(net);
-    final limitKpa = standpipe
-        ? kStandpipeMaxSystemPressureKpa
-        : kFireComponentMaxPressureKpa;
-    if (b.stages.length >= 2) {
-      final c = fireStagedOverPressureCheck(
-        stages: [
-          for (final st in b.stages)
-            FireStageLift(st.rating, st.suctionLiftM, st.upstream),
-        ],
-        systemRatedHeadM: b.head.meters,
-        indexFrictionM: b.indexFrictionM,
-        maxComponentKpa: limitKpa,
-      );
-      if (!c.over) continue;
-      out.add((
-        basis: b,
-        check: (
-          churnKpa: c.churnKpa,
-          ratedKpa: c.ratedKpa,
-          over: c.over,
-          frictionShare: c.frictionShare,
+  return [
+    for (final l in ref.watch(firePressureClassesProvider))
+      if (l.pressureClass == FirePressureClass.zoneRequired)
+        (
+          basis: l.basis,
+          check: (
+            churnKpa: l.churnKpa,
+            ratedKpa: l.ratedKpa,
+            over: true,
+            frictionShare: l.frictionShare,
+          ),
+          pumpId: l.pumpId,
+          standpipe: l.standpipe,
         ),
-        pumpId: b.stages[c.stage].dutyPumpId,
-        standpipe: standpipe,
-      ));
-      continue;
-    }
-    final c = fireOverPressureCheck(
-        rating: b.rating,
-        indexFrictionM: b.indexFrictionM,
-        maxComponentKpa: limitKpa);
-    if (c.over) {
-      out.add(
-          (basis: b, check: c, pumpId: b.dutyPumpId, standpipe: standpipe));
-    }
-  }
-  return out;
+  ];
 });
 
 /// Round 76 (fire-convergence-27-hose-outlet-static-over-175psi-unjudged) —
@@ -285,8 +318,76 @@ class StandpipeOutletOverPressure {
 /// which is unchanged). A series system's outlets take the churn / rated
 /// heads of the stages on their own path; a hose-reel residual is judged
 /// only when the friction to the reel is measured (calibrated).
+///
+/// Backlog A-3 (2026-11-13) — a STATIC range ([residual] false) is no longer a
+/// defect to fix outside the app: every outlet in it is DESIGNATED a
+/// pressure-regulating hose valve ([StandpipeOutletPressure.prvHoseValve],
+/// [prvHoseValvesProvider]); the Review states it as the INFO
+/// `standpipe-prv-hose-valves`. The residual (hose-reel) ranges are unchanged.
 final standpipeOutletOverPressureProvider =
     Provider<List<StandpipeOutletOverPressure>>((ref) {
+  final out = <StandpipeOutletOverPressure>[];
+  for (final (basis: b, outlets: outlets)
+      in ref.watch(standpipeOutletPressuresProvider)) {
+    for (final residual in [false, true]) {
+      // Over outlets per floor, then contiguous floor runs.
+      final byFloor = <int, List<StandpipeOutletPressure>>{};
+      for (final o in outlets) {
+        if (residual ? o.overResidual : o.overStatic) {
+          (byFloor[o.floorIndex] ??= []).add(o);
+        }
+      }
+      final floors = byFloor.keys.toList()..sort();
+      var i = 0;
+      while (i < floors.length) {
+        var j = i;
+        while (j + 1 < floors.length && floors[j + 1] == floors[j] + 1) {
+          j++;
+        }
+        final run = [
+          for (var k = i; k <= j; k++) ...byFloor[floors[k]]!,
+        ];
+        double kpa(StandpipeOutletPressure o) =>
+            residual ? o.residualKpa! : o.staticKpa;
+        var mx = kpa(run.first), mn = kpa(run.first);
+        for (final o in run) {
+          if (kpa(o) > mx) mx = kpa(o);
+          if (kpa(o) < mn) mn = kpa(o);
+        }
+        out.add(StandpipeOutletOverPressure(
+          basis: b,
+          pumpId: b.dutyPumpId,
+          residual: residual,
+          lowFloor: floors[i],
+          highFloor: floors[j],
+          maxKpa: mx,
+          minKpa: mn,
+          lowestOutletId: run.first.outletId,
+        ));
+        i = j + 1;
+      }
+    }
+  }
+  return out;
+});
+
+/// Backlog A-3 — every hose outlet designated a pressure-regulating hose
+/// valve (static at churn above 175 psi, unregulated), keyed by outlet id —
+/// the per-outlet flag the fire results, the component take-off and the
+/// riser tag read.
+final prvHoseValvesProvider =
+    Provider<Map<String, StandpipeOutletPressure>>((ref) => {
+          for (final (basis: _, outlets: outlets)
+              in ref.watch(standpipeOutletPressuresProvider))
+            for (final o in outlets)
+              if (o.prvHoseValve) o.outletId: o,
+        });
+
+/// Round 76 / backlog A-3 — the pressure at EVERY hose outlet of every
+/// pumped standpipe ([standpipeOutletPressures]), per system.
+final standpipeOutletPressuresProvider = Provider<
+    List<({FireSystemBasis basis, List<StandpipeOutletPressure> outlets})>>(
+    (ref) {
   final net = ref.watch(sizingNetworkProvider);
   final bases = ref.watch(fireSystemBasesProvider);
   if (bases.isEmpty) return const [];
@@ -299,7 +400,8 @@ final standpipeOutletOverPressureProvider =
         building: project.building,
         mounting: project.mounting,
       ).meters;
-  final out = <StandpipeOutletOverPressure>[];
+  final out =
+      <({FireSystemBasis basis, List<StandpipeOutletPressure> outlets})>[];
   for (final b in bases) {
     if (b.standsDown || b.pumpIds.isEmpty || b.flow.cubicMetersPerSecond <= 0) {
       continue;
@@ -363,44 +465,7 @@ final standpipeOutletOverPressureProvider =
       ratedHeadByPump: rated,
       frictionToOutletM: friction,
     );
-    for (final residual in [false, true]) {
-      // Over outlets per floor, then contiguous floor runs.
-      final byFloor = <int, List<StandpipeOutletPressure>>{};
-      for (final o in outlets) {
-        if (residual ? o.overResidual : o.overStatic) {
-          (byFloor[o.floorIndex] ??= []).add(o);
-        }
-      }
-      final floors = byFloor.keys.toList()..sort();
-      var i = 0;
-      while (i < floors.length) {
-        var j = i;
-        while (j + 1 < floors.length && floors[j + 1] == floors[j] + 1) {
-          j++;
-        }
-        final run = [
-          for (var k = i; k <= j; k++) ...byFloor[floors[k]]!,
-        ];
-        double kpa(StandpipeOutletPressure o) =>
-            residual ? o.residualKpa! : o.staticKpa;
-        var mx = kpa(run.first), mn = kpa(run.first);
-        for (final o in run) {
-          if (kpa(o) > mx) mx = kpa(o);
-          if (kpa(o) < mn) mn = kpa(o);
-        }
-        out.add(StandpipeOutletOverPressure(
-          basis: b,
-          pumpId: b.dutyPumpId,
-          residual: residual,
-          lowFloor: floors[i],
-          highFloor: floors[j],
-          maxKpa: mx,
-          minKpa: mn,
-          lowestOutletId: run.first.outletId,
-        ));
-        i = j + 1;
-      }
-    }
+    out.add((basis: b, outlets: outlets));
   }
   return out;
 });
@@ -1791,3 +1856,41 @@ final fireTankReservesProvider = Provider<List<FireTankReserve>>((ref) {
   final ids = best.keys.toList()..sort(naturalIdCompare);
   return [for (final id in ids) best[id]!];
 });
+
+/// Backlog A-3 — the pressure-class label of every fire pipe downstream of a
+/// pump whose system working pressure is above the standard 175 psi class
+/// ([firePumpDownstreamEdgeIds]; a pipe on several systems takes the higher
+/// class). A standard-class system adds nothing (its BOM is byte-identical).
+final firePipePressureClassByEdgeProvider =
+    Provider<Map<String, String>>((ref) {
+  final lines = ref.watch(firePressureClassesProvider);
+  if (lines.isEmpty) return const {};
+  final net = ref.watch(sizingNetworkProvider);
+  final sizing = ref.watch(sizingProvider);
+  final cls = <String, FirePressureClass>{};
+  for (final l in lines) {
+    if (l.pressureClass == FirePressureClass.standard) continue;
+    for (final id in firePumpDownstreamEdgeIds(
+        net: net, system: l.basis.system, sizing: sizing)) {
+      final cur = cls[id];
+      if (cur == null || cur.index < l.pressureClass.index) {
+        cls[id] = l.pressureClass;
+      }
+    }
+  }
+  return {
+    for (final MapEntry(:key, :value) in cls.entries)
+      key: firePressureClassLabel(value),
+  };
+});
+
+/// Backlog A-3 — the take-off VARIANT of every hose valve designated
+/// pressure-regulating ([prvHoseValvesProvider]): its inlet static at churn
+/// and its set residual.
+final prvHoseValveVariantsProvider = Provider<Map<String, String>>((ref) => {
+      for (final MapEntry(:key, :value)
+          in ref.watch(prvHoseValvesProvider).entries)
+        key: 'pressure-regulating, inlet ${value.staticKpa.toStringAsFixed(0)} '
+            'kPa static, set ${kStandpipePrvSetResidualKpa.toStringAsFixed(0)} '
+            'kPa residual',
+    });

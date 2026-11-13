@@ -80,6 +80,12 @@ class BomLine {
   /// must carry it — flagged so it never reads as measured drawn work.
   final bool assumed;
 
+  /// Backlog A-3 (2026-11-13) — the pressure CLASS a FIRE pipe downstream of
+  /// a pump must carry (`firePressureClassLabel` of its system's churn
+  /// pressure, e.g. `PN16`); '' for every other line (byte-identical). Part
+  /// of the group key, printed beside the material.
+  final String pressureClass;
+
   const BomLine({
     required this.service,
     required this.kind,
@@ -94,6 +100,7 @@ class BomLine {
     this.floorIndex,
     this.unmeasuredSegments = 0,
     this.assumed = false,
+    this.pressureClass = '',
   });
 
   /// True when at least one edge of this line could not be measured.
@@ -189,6 +196,8 @@ List<BomLine> buildBom({
   // `autoSizeNetwork`, so a riser's BOM length equals its solved length
   // (audit water-drainage-8). Default = the engine default ⇒ byte-identical.
   MountingHeights mounting = const MountingHeights(),
+  // Backlog A-3 — each fire edge's pressure class (absent ⇒ '').
+  Map<String, String> pressureClassByEdgeId = const {},
 }) {
   // Per-riser stack tags (`CW-R1` …), computed once so a riser BOM line can
   // carry the SAME identifier the plan / riser single-line draw (N13).
@@ -202,7 +211,8 @@ List<BomLine> buildBom({
     String material,
     int? widthMm,
     int? heightMm,
-    int? floorIndex
+    int? floorIndex,
+    String pressureClass
   }), ({
     double meters,
     int count,
@@ -234,6 +244,7 @@ List<BomLine> buildBom({
       widthMm: widthMm,
       heightMm: heightMm,
       floorIndex: floorIndex,
+      pressureClass: pressureClassByEdgeId[edge.id] ?? '',
     );
 
     final len = edgeLength(
@@ -288,7 +299,8 @@ List<BomLine> buildBom({
         String material,
         int? widthMm,
         int? heightMm,
-        int? floorIndex
+        int? floorIndex,
+        String pressureClass
       }) key,
       Set<String> tags) {
     final code = riserServiceCode(key.service);
@@ -318,6 +330,7 @@ List<BomLine> buildBom({
         segmentCount: entry.value.count,
         floorIndex: entry.key.floorIndex,
         unmeasuredSegments: entry.value.unmeasured,
+        pressureClass: entry.key.pressureClass,
       ),
   ];
 
@@ -334,7 +347,9 @@ List<BomLine> buildBom({
     if (mat != 0) return mat;
     final w = (a.widthMm ?? -1).compareTo(b.widthMm ?? -1);
     if (w != 0) return w;
-    return (a.heightMm ?? -1).compareTo(b.heightMm ?? -1);
+    final h = (a.heightMm ?? -1).compareTo(b.heightMm ?? -1);
+    if (h != 0) return h;
+    return a.pressureClass.compareTo(b.pressureClass);
   });
 
   return lines;
@@ -682,6 +697,12 @@ class ComponentLine {
   /// rather than a pipe-sized component; [sizeLabel] is then its duty.
   final bool equipment;
 
+  /// Backlog A-3 (2026-11-13) — a designated VARIANT of the component (a
+  /// hose valve designated `pressure-regulating, inlet 1342 kPa static, set
+  /// 690 kPa residual`); '' for the plain part (byte-identical). Part of the
+  /// group key, printed after the size.
+  final String variant;
+
   const ComponentLine({
     required this.service,
     required this.component,
@@ -689,6 +710,7 @@ class ComponentLine {
     required this.count,
     this.assumed = false,
     this.equipment = false,
+    this.variant = '',
   });
 }
 
@@ -699,8 +721,10 @@ class ComponentLine {
 List<ComponentLine> buildComponentTakeoff({
   required Network net,
   required Map<String, EdgeSizing> sizing,
+  // Backlog A-3 — a per-node designated variant (absent ⇒ the plain part).
+  Map<String, String> variantByNodeId = const {},
 }) {
-  final acc = <(ServiceType, NodeComponent, String), int>{};
+  final acc = <(ServiceType, NodeComponent, String, String), int>{};
   for (final n in net.nodes) {
     final c = n.component;
     if (c == null || !kTakeoffComponents.contains(c)) continue;
@@ -731,7 +755,7 @@ List<ComponentLine> buildComponentTakeoff({
                 : 'DN${best.diameter.inMillimeters.round()}';
       }
     }
-    final key = (service, c, size);
+    final key = (service, c, size, variantByNodeId[n.id] ?? '');
     acc[key] = (acc[key] ?? 0) + 1;
   }
   final lines = [
@@ -740,13 +764,16 @@ List<ComponentLine> buildComponentTakeoff({
           service: e.key.$1,
           component: e.key.$2,
           sizeLabel: e.key.$3,
+          variant: e.key.$4,
           count: e.value),
   ]..sort((a, b) {
       final s = a.service.index.compareTo(b.service.index);
       if (s != 0) return s;
       final c = a.component.index.compareTo(b.component.index);
       if (c != 0) return c;
-      return a.sizeLabel.compareTo(b.sizeLabel);
+      final z = a.sizeLabel.compareTo(b.sizeLabel);
+      if (z != 0) return z;
+      return a.variant.compareTo(b.variant);
     });
   return lines;
 }

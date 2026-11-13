@@ -810,6 +810,8 @@ enum StringKey {
   issueCoolingInternalOnlyMessage,
   issueSprinklerFlowMessage, // {demand} {pump}
   issueSprinklerHeadMessage, // {need} {pump}
+  issueStandpipePrvHoseValvesTitle,
+  issueStandpipePrvHoseValvesMessage,
   issueRoomCoolingUndersizedTitle,
   issueRoomCoolingUndersizedMessage,
   issueFireTankUndersizedTitle,
@@ -2247,7 +2249,8 @@ const Map<StringKey, String> _en = {
       'Combined fire pump: sprinkler sets the head, standpipe the flow',
   StringKey.issueFireGravityHeadTitle:
       'Gravity fire supply head insufficient',
-  StringKey.issueFireOverPressureTitle: 'Fire pump churn over-pressures components',
+  StringKey.issueFireOverPressureTitle:
+      'Fire system above 350 psi: split into pressure zones',
   StringKey.issueStandpipeOverPressureTitle:
       'Standpipe exceeds the 350 psi system maximum',
   StringKey.issueStandpipeOutletOverPressureTitle:
@@ -2441,6 +2444,10 @@ const Map<StringKey, String> _en = {
       'static lift to the top head + remote-head pressure + the sized index '
       'friction, at least the 15 m allowance basis) but the fire pump head is '
       '{pump} m.',
+  StringKey.issueStandpipePrvHoseValvesTitle:
+      'Pressure-regulating hose valves designated',
+  StringKey.issueStandpipePrvHoseValvesMessage:
+      '{floors} hose valves: {max}..{min} kPa static at pump churn, above the {limit} kPa (175 psi) hose-connection limit (NFPA 14 7.2.3.2). Each is designated a pressure-regulating hose valve set to {set} kPa residual (fire results, BOM, riser tag). (// VERIFY vs SNI 03-1745.)',
   StringKey.issueRoomCoolingUndersizedTitle:
       'Room AC capacity below its cooling load',
   StringKey.issueRoomCoolingUndersizedMessage:
@@ -2455,9 +2462,11 @@ const Map<StringKey, String> _en = {
       'Fire tank {tank} has no capacity entered. The fire-water reserve is {need} L ({flow} L/s for {min} min).',
   StringKey.issueFireOverPressureMessage:
       'The fire pump is rated at {head} m{share}; its churn (140 % of rated) '
-      'reaches {churn} kPa, above the {limit} kPa (175 psi) rating of standard '
-      'fire components. Upsize the index pipe to cut friction or zone the '
-      'system. (// VERIFY vs SNI 03-3989 / 03-1745.)',
+      'reaches {churn} kPa, above the {limit} kPa (350 psi) maximum of a '
+      'single zone (NFPA 14 7.2.1.1): no pipe class (PN25 is the highest) '
+      'permits one zone. Split the standpipe into vertical pressure zones - a '
+      'separate zone pump or an express riser. (// VERIFY vs SNI 03-3989 / '
+      '03-1745.)',
   StringKey.issueFireOverPressureShare: ', {pct} % of it pipe friction',
   StringKey.issueStandpipeOutletOverPressureMessage:
       '{floors} hose valves: {max}..{min} kPa static at pump churn, above '
@@ -3938,7 +3947,7 @@ const Map<StringKey, String> _id = {
   StringKey.issueFireGravityHeadTitle:
       'Head suplai kebakaran gravitasi tidak cukup',
   StringKey.issueFireOverPressureTitle:
-      'Tekanan churn pompa kebakaran melampaui rating komponen',
+      'Sistem kebakaran di atas 350 psi: bagi menjadi zona tekanan',
   StringKey.issueStandpipeOverPressureTitle:
       'Pipa tegak melampaui tekanan maksimum sistem 350 psi',
   StringKey.issueStandpipeOutletOverPressureTitle:
@@ -4138,6 +4147,10 @@ const Map<StringKey, String> _id = {
       'angkat statis ke kepala teratas + tekanan kepala terjauh + gesekan '
       'indeks terukur, minimal basis tambahan 15 m) tetapi head pompa '
       'kebakaran {pump} m.',
+  StringKey.issueStandpipePrvHoseValvesTitle:
+      'Katup selang pengatur tekanan ditetapkan',
+  StringKey.issueStandpipePrvHoseValvesMessage:
+      'Katup selang {floors}: {max}..{min} kPa statis pada churn pompa, di atas batas sambungan selang {limit} kPa (175 psi) (NFPA 14 7.2.3.2). Masing-masing ditetapkan sebagai katup selang pengatur tekanan disetel ke residual {set} kPa (hasil kebakaran, BOM, tag riser). (// VERIFY terhadap SNI 03-1745.)',
   StringKey.issueRoomCoolingUndersizedTitle:
       'Kapasitas AC ruang di bawah beban pendinginannya',
   StringKey.issueRoomCoolingUndersizedMessage:
@@ -4152,10 +4165,11 @@ const Map<StringKey, String> _id = {
       'Tangki kebakaran {tank} belum diisi kapasitasnya. Cadangan air kebakaran {need} L ({flow} L/s selama {min} menit).',
   StringKey.issueFireOverPressureMessage:
       'Pompa kebakaran diberi rating {head} m{share}; churn-nya (140 % dari '
-      'rating) mencapai {churn} kPa, di atas rating {limit} kPa (175 psi) '
-      'komponen kebakaran standar. Perbesar pipa indeks untuk mengurangi '
-      'gesekan atau bagi sistem menjadi zona. (// VERIFY terhadap SNI 03-3989 '
-      '/ 03-1745.)',
+      'rating) mencapai {churn} kPa, di atas maksimum satu zona {limit} kPa '
+      '(350 psi) (NFPA 14 7.2.1.1): tidak ada kelas pipa (PN25 tertinggi) '
+      'yang mengizinkan satu zona. Bagi pipa tegak menjadi zona tekanan '
+      'vertikal - pompa zona terpisah atau riser ekspres. (// VERIFY terhadap '
+      'SNI 03-3989 / 03-1745.)',
   StringKey.issueFireOverPressureShare: ', {pct} % di antaranya gesekan pipa',
   StringKey.issueStandpipeOutletOverPressureMessage:
       'Katup selang {floors}: {max}..{min} kPa statis saat churn pompa, di '

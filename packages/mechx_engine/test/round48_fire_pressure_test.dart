@@ -44,8 +44,10 @@ void main() {
   test('the calc report prints one over-pressure line per over system', () {
     // Round 49 (regression-report-churn-not-per-system) — the report renders
     // the app's per-system judgement (each sprinkler-bearing system on its
-    // OWN pump); it never re-judges the governing rating. For a 123 m rated
-    // head: churn = 1.4 x 123 x 9.81 = 1689 kPa; friction 57.6 / 123 = 47 %.
+    // OWN pump); it never re-judges the governing rating. Backlog A-3 — the
+    // app lists only a churn above the 350 psi single-zone maximum: for a
+    // 180 m rated head churn = 1.4 x 180 x 9.81 = 2472 kPa > 2413; friction
+    // 57.6 / 180 = 32 %.
     const profile = SniProfile();
     String md(List<FireOverPressureReportLine> over) =>
         buildCalcReportMarkdown(CalcReportData(
@@ -59,20 +61,20 @@ void main() {
           targetResidual: const Pressure(225000),
           sprinkler: designSprinklerSystem(hazard: FireHazardClass.lightHazard),
           firePumpRating: checkFirePumpRating(
-              ratedFlow: FlowRate.litersPerSecond(6), ratedHead: const Head(123)),
+              ratedFlow: FlowRate.litersPerSecond(6), ratedHead: const Head(180)),
           fireOverPressure: over,
         ));
     final c = fireOverPressureCheck(
         rating: checkFirePumpRating(
-            ratedFlow: FlowRate.litersPerSecond(6), ratedHead: const Head(123)),
+            ratedFlow: FlowRate.litersPerSecond(6), ratedHead: const Head(180)),
         indexFrictionM: 57.6);
     final one = md([
       FireOverPressureReportLine(
           tag: 'FP-02', churnKpa: c.churnKpa, frictionShare: c.frictionShare),
     ]);
     expect(one, contains('Component pressure (churn)'));
-    expect(one, contains('1689 kPa at churn exceeds the 1210 kPa'));
-    expect(one, contains('friction 47 % of the rated head'));
+    expect(one, contains('2472 kPa at churn exceeds the 2413 kPa (350 psi)'));
+    expect(one, contains('friction 32 % of the rated head'));
     // No over system (e.g. only a hydrant-only system is over, which the
     // app never lists) ⇒ no line, whatever the governing rating's churn.
     expect(md(const []), isNot(contains('Component pressure (churn)')));

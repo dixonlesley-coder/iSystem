@@ -99,7 +99,9 @@ bool _churnOver(FireSystemBasis b) =>
     kFireComponentMaxPressureKpa;
 
 void main() {
-  test('20-storey sprinkler system: churn > 1210 kPa => one warning', () {
+  test(
+      '20-storey sprinkler system: churn > 1210 kPa => a pipe pressure class '
+      '(backlog A-3), a warning only above 350 psi', () {
     final c = _container(_tower(20), 20);
     final b = c.read(fireSystemBasesProvider).single;
     // The sprinkler pump's churn is 1.4 × its rated head (≥ 19 × 3 m of
@@ -107,13 +109,23 @@ void main() {
     // of friction on top — the engine's own churn point is above 175 psi.
     expect(b.sprinklerOnly, isTrue);
     expect(_churnOver(b), isTrue);
+    // Backlog A-3 (supersedes the Round-48 175 psi warning) — the churn
+    // sets the class of the pipework downstream of the pump instead.
+    final cls = c.read(firePressureClassesProvider).single;
+    expect(cls.churnKpa,
+        closeTo(9.81 * b.rating.churn.head.meters, 1e-6));
+    expect(cls.pressureClass, firePressureClassFor(cls.churnKpa));
+    expect(cls.pressureClass, isNot(FirePressureClass.standard));
+    final over = cls.churnKpa > kStandpipeMaxSystemPressureKpa;
     final issues = c.read(designIssuesProvider);
     final w = issues.where((i) => i.kind == 'fire-system-over-pressure:FP');
-    expect(w, hasLength(1));
-    expect(w.single.severity, IssueSeverity.warning);
-    expect(w.single.locate?.nodeId, 'FP');
-    expect(w.single.message, contains('175 psi'));
-    expect(w.single.message, contains('pipe friction'));
+    expect(w, hasLength(over ? 1 : 0));
+    if (over) {
+      expect(w.single.severity, IssueSeverity.warning);
+      expect(w.single.locate?.nodeId, 'FP');
+      expect(w.single.message, contains('350 psi'));
+      expect(w.single.message, contains('pipe friction'));
+    }
   });
 
   test('3-storey sprinkler system: churn under the rating => no warning', () {

@@ -20,6 +20,8 @@ import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show FirePressureClass;
 import 'package:mechx/store/air_warnings_store.dart';
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
@@ -915,12 +917,16 @@ void main() {
       int count(String k) => kinds.where((x) => x == k).length;
       expect(count('electrical:life-safety-not-essential'), 1);
       expect(count('electrical:non-selective'), 5);
-      expect(count('fire-system-over-pressure:FP'), 1);
+      // Backlog A-3 — churn 1353.3 kPa sets PN16, no zone-split warning.
+      expect(count('fire-system-over-pressure:FP'), 0);
       // Backlog A-2 — FT has no capacity: the reserve 31.5451 L/s x 1800 s
       // = 56 781 L is stated as an info, never a fabricated capacity.
       expect(count('fire-tank-capacity-unset:FT'), 1);
       expect(kinds.where((k) => k.startsWith('fire-tank-undersized')), isEmpty);
-      expect(count('standpipe-outlet-over-pressure:FP:0-3'), 1);
+      // Backlog A-3 — every hose valve DESIGNATED pressure-regulating (info).
+      expect(count('standpipe-prv-hose-valves:FP:0-3'), 1);
+      expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),
+          isEmpty);
       expect(count('electrical:fire-pump-protection'), 1);
       // Consequence of the 164 kVA service floor (incomer 250 A): recorded.
       expect(count('electrical:enclosure-temp-rise-exceeded'), 1);
@@ -929,12 +935,39 @@ void main() {
       expect(kinds.where((k) => k.startsWith('air-terminal-unsized')), isEmpty);
       expect(kinds.where((k) => k.startsWith('unfed-panel')), isEmpty);
       expect(kinds.where((k) => k.startsWith('pressure-zone')), isEmpty);
-      // Churn 137.951 x 9.81 = 1353.3 kPa > 1210; every hose valve's static
-      // over 1207 kPa.
-      final over = c.read(fireOverPressureProvider).single;
-      expect(over.check.churnKpa, closeTo(1353.3, 0.05));
+      // Backlog A-3 — churn 1.4 x 98.536 = 137.951 m; x 9.81 = 1353.3 kPa:
+      // 1210 < 1353.3 <= 1600 ⇒ PN16 on the pipework downstream of FP.
+      expect(c.read(fireOverPressureProvider), isEmpty);
+      final cls = c.read(firePressureClassesProvider).single;
+      expect(cls.churnKpa, closeTo(1353.3, 0.05));
+      expect(cls.pressureClass, FirePressureClass.pn16);
+      expect(cls.pumpId, 'FP');
+      // Every hose valve's static 9.81 x (137.951 - (4 f + 1.2)) > 1207:
+      // f = 0 1341.5 ... f = 3 1223.8 kPa ⇒ all four designated.
       final outlets = c.read(standpipeOutletOverPressureProvider).single;
       expect((outlets.lowFloor, outlets.highFloor), (0, 3));
+      final prv = c.read(prvHoseValvesProvider);
+      expect(prv, hasLength(4));
+      expect(outlets.maxKpa, closeTo(9.81 * (137.951 - 1.2), 0.05));
+      expect(outlets.minKpa, closeTo(9.81 * (137.951 - 13.2), 0.05));
+      expect(outlets.maxKpa, closeTo(1341.5, 0.05));
+      expect(outlets.minKpa, closeTo(1223.8, 0.05));
+      // Printed on the BOM fire lines downstream of FP and on the take-off.
+      final classes = c.read(firePipePressureClassByEdgeProvider);
+      expect(classes['e_fh_FP_H0'], 'PN16');
+      expect(classes['e_sp_FP_S0'], 'PN16');
+      expect(classes.containsKey('e_fh_FT_FP'), isFalse); // suction
+      expect(
+          c.read(bomProvider).where((l) => l.pressureClass == 'PN16'),
+          isNotEmpty);
+      final hv = c.read(componentTakeoffProvider).where(
+          (l) => l.variant.startsWith('pressure-regulating'));
+      expect(hv.fold<int>(0, (a, l) => a + l.count), 4);
+      expect(hv.first.variant, contains('set 690 kPa residual'));
+      // The riser tag carries the designation.
+      for (final id in prv.keys) {
+        expect(c.read(riserEquipmentDetailsProvider)[id], 'PRV 690 kPa');
+      }
     });
   });
 }

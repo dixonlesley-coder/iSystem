@@ -651,6 +651,23 @@ class SniProfile implements StandardsProfile {
               'split into vertical pressure zones. Judge-only. Confirm vs '
               'SNI 03-1745.',
         ),
+        // Backlog A-3 — `kFirePressureClassPn16Kpa` (fire_pump_rating.dart)
+        // and `kStandpipePrvSetResidualKpa` (standpipe_outlet_pressure.dart).
+        const StandardValue<Object?>(
+          1600.0,
+          unit: 'kPa',
+          citation: 'Fire pipework pressure classes: standard <= 1210 kPa '
+              '(175 psi), PN16 <= 1600 kPa, PN25 <= 2413 kPa (350 psi); '
+              'pressure-regulating hose valve set 690 kPa (NFPA 14; NOT '
+              'confirmed vs SNI 03-1745)',
+          status: VerificationStatus.notAnSniClause,
+          note: 'The churn pressure at the pump discharge sets the class of '
+              'the fire pipe, valves and fittings downstream of the pump; '
+              'above 2413 kPa the standpipe must be zoned. A hose outlet whose '
+              'static exceeds 1207 kPa is designated a pressure-regulating '
+              'hose valve set to 690 kPa residual. Confirm vs SNI 03-1745 and '
+              'the product listings.',
+        ),
         // Backlog A-2 — `kFireReserveStandpipeMin` /
         // `kFireReserveLightHazardMin` (fire_water_reserve.dart).
         const StandardValue<Object?>(

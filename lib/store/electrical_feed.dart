@@ -20,6 +20,8 @@ import 'package:mechx_engine/sizing/ejector.dart'
     show drawnEjectorPumpIds, duplexEjectorSets;
 import 'package:mechx_engine/sizing/cooling_load.dart';
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
+import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart'
+    show kStandpipePrvSetResidualKpa;
 import 'package:mechx_engine/sizing/fire_index_friction.dart'
     show
         FireSystem,
@@ -1077,9 +1079,14 @@ final equipmentNodeDutiesProvider =
 final riserEquipmentDetailsProvider = Provider<Map<String, String>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final duties = ref.watch(equipmentNodeDutiesProvider);
+  // Backlog A-3 — a hose valve designated pressure-regulating carries the
+  // designation on its riser tag.
+  final prv = ref.watch(prvHoseValvesProvider);
   return {
     for (final node in net.nodes)
-      node.id: ?equipmentDetail(node, motor: duties[node.id]?.motor),
+      node.id: ?(prv.containsKey(node.id)
+          ? 'PRV ${kStandpipePrvSetResidualKpa.toStringAsFixed(0)} kPa'
+          : equipmentDetail(node, motor: duties[node.id]?.motor)),
   };
 });
 

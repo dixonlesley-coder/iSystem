@@ -21,6 +21,8 @@ import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show FirePressureClass;
 import 'package:mechx/store/app_state.dart';
 import 'package:mechx/store/design_issues_store.dart';
 import 'package:mechx/store/electrical_feed.dart' show nodeFedLoadsProvider;
@@ -193,11 +195,13 @@ void main() {
         );
     expect(i.severity, IssueSeverity.info);
     expect(i.message, contains('standpipe flow (31.5 L/s)'));
-    // The over-pressure judges read the same rated head (churn 177.876 m).
-    expect(
-      c.read(fireOverPressureProvider).single.check.churnKpa,
-      closeTo(177.876 * 9.81, 0.05),
-    );
+    // The pressure judges read the same rated head (churn 177.876 m):
+    // backlog A-3 — 177.876 x 9.81 = 1745.0 kPa sets PN25 (> 1600, <= 2413),
+    // no zone-split warning.
+    final cls = c.read(firePressureClassesProvider).single;
+    expect(cls.churnKpa, closeTo(177.876 * 9.81, 0.05));
+    expect(cls.pressureClass, FirePressureClass.pn25);
+    expect(c.read(fireOverPressureProvider), isEmpty);
   });
 
   test('T2 — as drawn, the feed main is enlarged to DN40 and the standpipe '

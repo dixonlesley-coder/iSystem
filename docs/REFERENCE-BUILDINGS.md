@@ -102,8 +102,7 @@ _(empty)_
 **Deliberate expected findings.**
 - `life-safety-not-essential`: there is no genset in this building.
 - 5 × `non-selective`: the four floor feeders and the MEP feeder.
-- `fire-system-over-pressure:FP`: churn 1353.3 kPa > 1210.
-- `standpipe-outlet-over-pressure:FP:0-3`: every hose valve's static is above 1207 kPa.
+- `standpipe-prv-hose-valves:FP:0-3` info: every hose valve's static is above 1207 kPa (1341.5..1223.8), so each is designated a pressure-regulating hose valve set to 690 kPa (backlog A-3). The churn 1353.3 kPa sets the PN16 class of the pipework downstream of FP; no `fire-system-over-pressure` (since A-3 it warns only above 2413 kPa).
 - `fire-pump-protection` info.
 - `fire-tank-capacity-unset:FT` info: the fire-water reserve 31.5451 L/s x 1800 s = 56 781 L (backlog A-2).
 - The NFPA 20 standby-pump recommendation.
@@ -125,12 +124,12 @@ _(empty)_
 - **(a) Duct friction basis.** The room-air equipment estimate uses galvanised duct roughness (0.09 mm), while the drawn network uses the PU product (0.03 mm): 109.13 Pa vs 121.25 Pa for one FCU.
 - **(c) Urinal type.** There is no flush-valve urinal type.
 - **(d) Mains pressure.** Mains pressure at the meter is not modelled: the delivered upfeed field reads GT 0 kPa and WM negative.
-- **(e) Churn over-pressure.** The Class I 690 kPa residual drives a churn over-pressure in a 4-storey building, with no pressure-restricting device modelled.
 - **(g) Branch run prints the pump's flow (O1).** The branch run FP→S0 keeps the pump's rated 31.545 L/s on DN125 (the Round-62 stored-flow rule), not the sprinkler system's 4.714 L/s.
 - **(h) Auto-FRC record not saved (O4).** The "FRC set by the sync" record is not persisted: after reopening a project, an auto-FRC feeder whose fire pump is later removed stays FRC.
 
 ### Backlog closed (2026-11-13)
 
+- **(e) Churn over-pressure — backlog A-3.** The churn 1.4 x 98.536 x 9.81 = 1353.3 kPa now sets the PN16 class of the fire pipework downstream of FP (printed on the fire results and BOM fire lines), and the four hose valves (1341.5..1223.8 kPa static) are designated pressure-regulating hose valves set to 690 kPa (info, take-off, riser tag): no warning.
 - **(b) Fire tank volume — backlog A-2.** The fire-water reserve is computed (`fireTankReservesProvider`: rated flow x duration): 31.5451 L/s x 1800 s = 56 781 L. FT has no capacity, so the Review raises the info `fire-tank-capacity-unset:FT` stating it; a capacity below it would warn `fire-tank-undersized:FT`.
 - **(f) Two judge heads (O3) — backlog A-1.** The sprinkler-vs-pump judge now requires the rating basis' sprinkler point (`FireSystemBasis.sprinklerPointHeadM`): 15.7 + 50/9.81 + 37.414 = 58.211 m vs the pump's 98.536 m, not short (the old lower bound read 25.560 m).
 
@@ -151,8 +150,7 @@ _(empty)_
 - Regression tests (A1, A2): `test/reference_apartment_regression_test.dart`.
 
 **Deliberate expected findings** (final state: PLN 197 000 VA, genset 300 kVA, PRV drawn):
-- `fire-system-over-pressure:FP`: churn 1.4 x 125.036 = 175.051 m = 1717 kPa > 1210 (reference tower T2: the DN40 feed main hands the head back to the standpipe; it was 177.876 m on the sprinkler point).
-- `standpipe-outlet-over-pressure:FP:0-11`: every hose valve's static at churn is above 1207 kPa.
+- `standpipe-prv-hose-valves:FP:0-11` info: every hose valve's static at churn is above 1207 kPa (1705.5..1327.8), so each is designated a pressure-regulating hose valve (backlog A-3). The churn 1.4 x 125.036 = 175.051 m = 1717.2 kPa sets PN25; no `fire-system-over-pressure` since A-3 (it was raised against 1210 kPa before).
 - 2 x `non-selective`: Feeder PP-E (200 A vs the 200 A PP-E incomer) and Feeder to MEP (200 A vs 160 A), both capped at Iz 222 of 70 mm² FRC.
 - `enclosure-temp-rise-exceeded` on PP-E (36 K > 35 K).
 - Infos: `downfeed-below-target` (the gravity floors are under the 225 kPa target but above the SNI 49 kPa), `cable-raised-for-ads` (the lift, 10 mm²), 3 x `fire-pump-protection`, 72 x `drainage-laid-steeper`, 2 x `drainage-cleanout`, 12 x `phase-imbalance-inherent`, 5 `// VERIFY`.
@@ -196,7 +194,7 @@ _(empty)_
 **Deliberate expected findings** (final state: 1600 kVA transformer, 800 kVA genset, 250 kvar bank, seven PRVs drawn):
 - 4 x `non-selective`: the PP-Lt1 / PP-Lt2 feeders (50 A vs the 32 A incomers), Feeder PP-E and Feeder to MEP, each at the largest rung its cable protects.
 - 2 x `enclosure-temp-rise-exceeded` (LVMDP, PP-E), `service-cable-ampacity-inadequate` (the 1600 A service), `service-fault-estimate-high` (57.7 kA from the 1600 kVA / 4 % transformer).
-- `fire-system-over-pressure:FP` (churn 1.4 x 210.686 = 294.961 m) and `standpipe-outlet-over-pressure:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207).
+- `fire-system-over-pressure:FP` (churn 1.4 x 210.686 = 294.961 m = 2893.6 kPa > 2413: since backlog A-3 worded as zone-split guidance) and the info `standpipe-prv-hose-valves:FP:0-29` (every hose valve, 2882..1744 kPa static > 1207, designated pressure-regulating).
 - Infos: 6 x `cable-raised-for-ads` (feeders PP-Lt28..30, Lift 1..3), 3 x `fire-pump-protection`, `busbar-beyond-standard-table` (LVMDP), `downfeed-below-target` (WCb26, 134.370 kPa: above the 98.067 flush-valve floor, under the 225 target), 90 x `drainage-laid-steeper`, 14 x `air-duct-unsized`, `drainage-cleanout`, 5 `// VERIFY`.
 - Before the PRVs are drawn: 100 x `downfeed-over-pressure` (floors 0..19).
 
@@ -214,7 +212,7 @@ _(empty)_
 - **(b) Recirculation pump way only with the duty-feed opt-in.** The solved HW recirculation pump (no pump drawn) becomes an MEP way only after "Feed solved MEP duties" is switched on.
 - **(c) Heater cold feed on the valve curve.** The heater's cold make-up (4.5 UBAP) is read on its component's flush-VALVE curve (0.3975 L/s) while the hot side it feeds uses the tank curve (0.2250 L/s) for the same draw.
 - **(d) No MV-side device sizing.** The MV panel (incomer, metering, transformer feeder) is named in the note and drawn as a box, never rated.
-- **(e) No standpipe pressure zoning.** There are no standpipe zones, pressure-reducing hose valves or fire-pump head limit: the 30-storey single zone over-pressures every one of the 60 hose outlets at churn (`standpipe-outlet-over-pressure:FP:0-29`, 2882..1744 kPa > 1207).
+- **(e) No standpipe zoning (partly closed by backlog A-3).** The 60 hose outlets are now designated pressure-regulating hose valves and the warning says to split the single zone (2893.6 kPa > 2413), but the app still cannot model the zones themselves (a zone pump / express riser).
 - **(f) Room return-bank face velocity.** The room's own return bank uses min(application 3.0, 4.0) = 3.0 m/s (five grilles), while the air-velocity checker accepts 4.0 m/s (four grilles at 3.21 m/s).
 - **(g) AHU static, two figures.** The room estimate (15 m assumed run) gives 304.10 Pa; the drawn-duct fan duty gives 326.44 Pa (office backlog a).
 - **(h) `non-selective` on auto-sized feeders.** PP-Lt1 / PP-Lt2 (50 A vs the 32 A incomers), PP-E and the MEP feeder still raise `non-selective`: their device sits at the largest rung their cable's Iz protects.

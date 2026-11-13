@@ -138,8 +138,14 @@ void main() {
       // the Fire section prints 'Component pressure (churn) 1323 kPa …'.
       // Verified as the SOLE delta: dropping that line reproduces 0x0e4282b4
       // exactly. Lines 94 -> 95.
+      // Re-baselined 2026-11-13 (backlog A-3): ONE line replaced — the
+      // fixture's 1323 kPa churn is no longer a 175 psi over-pressure; the
+      // Fire section prints 'Fire pipework pressure class, FP-01 PN16:
+      // working pressure 1323 kPa ...' instead. Verified as the SOLE delta:
+      // substituting the old 'Component pressure (churn)' line back
+      // reproduces 0xd2ca2618 exactly. Line count unchanged.
       expect(md.split('\n').length, 95);
-      expect(fnv1a32(md), 0xd2ca2618);
+      expect(fnv1a32(md), 0x1ad7b2fb);
     });
   });
 
@@ -415,7 +421,13 @@ void main() {
       // Re-baselined 2026-10-18 (Round 43): the embedded electrical body's
       // 71.9 % imbalance lines (see the standalone electrical pin) — sole
       // delta.
-      expect(fnv1a32(md), 0xd0e4e060);
+      // Re-baselined 2026-11-13 (backlog A-3): ONE line replaced — the
+      // fixture's 1323 kPa churn is no longer a 175 psi over-pressure; the
+      // Fire section prints 'Fire pipework pressure class, FP-01 PN16:
+      // working pressure 1323 kPa ...' instead. Verified as the SOLE delta:
+      // substituting the old 'Component pressure (churn)' line back
+      // reproduces 0xd0e4e060 exactly. Line count unchanged.
+      expect(fnv1a32(md), 0x2d65fc09);
     });
   });
 

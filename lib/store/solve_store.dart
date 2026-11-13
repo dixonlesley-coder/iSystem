@@ -30,6 +30,8 @@ import 'package:mechx_engine/standards/sni.dart';
 import 'package:mechx_engine/units.dart';
 
 import 'app_state.dart';
+import 'fire_store.dart'
+    show firePipePressureClassByEdgeProvider, prvHoseValveVariantsProvider;
 import 'network_store.dart';
 import 'project_store.dart';
 import 'sizing_store.dart';
@@ -3183,6 +3185,9 @@ final bomProvider = Provider<List<BomLine>>((ref) {
     calibrationBySheet: project.calibrations,
     building: project.building,
     mounting: project.mounting,
+    // Backlog A-3 — a fire pipe downstream of a pump above 175 psi working
+    // pressure carries its pressure class.
+    pressureClassByEdgeId: ref.watch(firePipePressureClassByEdgeProvider),
   );
   // Round 26 (hot-water-2-mirrored-return-missing-from-bom) — the DN20
   // return the recirculation calculation ASSUMES when none is drawn (its
@@ -3967,7 +3972,11 @@ final consumablesProvider = Provider<ConsumablesEstimate>((ref) {
 final componentTakeoffProvider = Provider<List<ComponentLine>>((ref) {
   final net = ref.watch(sizingNetworkProvider);
   final drawn =
-      buildComponentTakeoff(net: net, sizing: ref.watch(sizingProvider));
+      buildComponentTakeoff(
+          net: net,
+          sizing: ref.watch(sizingProvider),
+          // Backlog A-3 — hose valves designated pressure-regulating.
+          variantByNodeId: ref.watch(prvHoseValveVariantsProvider));
   // Round 26 — the recirculation pump an ASSUMED (undrawn) return relies on,
   // when no pump / booster is drawn on that hot-water system.
   final assumed = [

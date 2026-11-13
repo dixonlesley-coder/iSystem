@@ -146,6 +146,8 @@ enum RptStringKey {
   fireOverPressureShare, // {pct}
   fireOutletStaticKey, // {tag} {floors}
   fireOutletStaticValue, // {max} {min} {limit}
+  firePressureClassKey,
+  firePressureClassValue,
   fireTankReserveKey,
   fireTankReserveValue,
   fireTankReserveUnset,
@@ -611,11 +613,16 @@ const Map<RptStringKey, String> kReportStringsEn = {
           'standard fire components{share} - upsize the index pipe or zone '
           'the system (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (friction {pct} % of the rated head)',
-  RptStringKey.fireOutletStaticKey: 'Hose valve static, {tag} {floors}',
+  RptStringKey.fireOutletStaticKey:
+      'Pressure-regulating hose valves, {tag} {floors}',
   RptStringKey.fireOutletStaticValue:
-      '{max}..{min} kPa at pump churn exceeds the {limit} kPa (175 psi) hose '
-          'connection limit (NFPA 14 7.2.3.2) - fit a PRV at each outlet or '
-          'zone the riser (VERIFY)',
+      '{max}..{min} kPa static at pump churn exceeds the {limit} kPa (175 '
+          'psi) hose connection limit (NFPA 14 7.2.3.2) - each outlet is a '
+          'pressure-regulating hose valve set to 690 kPa residual (VERIFY)',
+  RptStringKey.firePressureClassKey:
+      'Fire pipework pressure class, {tag}',
+  RptStringKey.firePressureClassValue:
+      '{cls}: working pressure {churn} kPa at pump churn (pipe, valves and fittings downstream of the pump; standard <= 1210, PN16 <= 1600, PN25 <= 2413 kPa) (VERIFY)',
   RptStringKey.fireTankReserveKey:
       'Fire-water reserve, {tank}',
   RptStringKey.fireTankReserveValue:
@@ -1139,11 +1146,16 @@ const Map<RptStringKey, String> kReportStringsId = {
           'komponen kebakaran standar{share} - perbesar pipa indeks atau '
           'bagi sistem menjadi zona (VERIFY)',
   RptStringKey.fireOverPressureShare: ' (gesekan {pct} % dari head rated)',
-  RptStringKey.fireOutletStaticKey: 'Statis katup selang, {tag} {floors}',
+  RptStringKey.fireOutletStaticKey:
+      'Katup selang pengatur tekanan, {tag} {floors}',
   RptStringKey.fireOutletStaticValue:
-      '{max}..{min} kPa saat churn pompa melampaui batas {limit} kPa (175 '
-          'psi) sambungan selang (NFPA 14 7.2.3.2) - pasang PRV di setiap '
-          'outlet atau bagi pipa tegak menjadi zona (VERIFY)',
+      '{max}..{min} kPa statis saat churn pompa melampaui batas {limit} kPa '
+          '(175 psi) sambungan selang (NFPA 14 7.2.3.2) - setiap outlet adalah '
+          'katup selang pengatur tekanan disetel ke residual 690 kPa (VERIFY)',
+  RptStringKey.firePressureClassKey:
+      'Kelas tekanan pipa kebakaran, {tag}',
+  RptStringKey.firePressureClassValue:
+      '{cls}: tekanan kerja {churn} kPa pada churn pompa (pipa, katup dan fiting di hilir pompa; standar <= 1210, PN16 <= 1600, PN25 <= 2413 kPa) (VERIFY)',
   RptStringKey.fireTankReserveKey:
       'Cadangan air kebakaran, {tank}',
   RptStringKey.fireTankReserveValue:

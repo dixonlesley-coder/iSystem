@@ -24,6 +24,8 @@ import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show FirePressureClass;
 import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
 import 'package:mechx/store/annotation_store.dart';
 import 'package:mechx/store/app_state.dart';
@@ -1562,7 +1564,12 @@ void main() {
       final issues = c.read(designIssuesProvider);
       final kinds = [for (final i in issues) i.kind];
       int count(String k) => kinds.where((x) => x == k).length;
-      expect(count('fire-system-over-pressure:FP'), 1);
+      // Backlog A-3 — churn 1.4 x 125.036 = 175.051 m x 9.81 = 1717.2 kPa:
+      // 1600 < 1717.2 <= 2413 ⇒ PN25, no zone-split warning.
+      expect(count('fire-system-over-pressure:FP'), 0);
+      final cls = c.read(firePressureClassesProvider).single;
+      expect(cls.churnKpa, closeTo(175.051 * 9.81, 0.05));
+      expect(cls.pressureClass, FirePressureClass.pn25);
       // Backlog A-2 — FT 60 000 L >= 31.545 L/s x 1800 s = 56 781 L.
       expect(kinds.where((k) => k.startsWith('fire-tank-')), isEmpty);
       final ft = c.read(fireTankReservesProvider).single;
@@ -1570,7 +1577,16 @@ void main() {
       expect(ft.requiredLitres, closeTo(31.5451 * 1800, 0.5));
       expect(ft.capacityLitres, 60000);
       expect(ft.verdict, FireTankVerdict.ok);
-      expect(count('standpipe-outlet-over-pressure:FP:0-11'), 1);
+      // Backlog A-3 — static 9.81 x (175.051 - (3.5 f + 1.2)) > 1207 for
+      // f <= 14: every floor 0..11 (1705.5 .. 1327.8 kPa) is designated
+      // pressure-regulating (info), no warning.
+      expect(count('standpipe-prv-hose-valves:FP:0-11'), 1);
+      expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),
+          isEmpty);
+      final r = c.read(standpipeOutletOverPressureProvider).single;
+      expect(r.maxKpa, closeTo(9.81 * (175.051 - 1.2), 0.05));
+      expect(r.minKpa, closeTo(9.81 * (175.051 - 3.5 * 11 - 1.2), 0.05));
+      expect(c.read(prvHoseValvesProvider), hasLength(12));
       expect(count('electrical:non-selective'), 2);
       expect(count('electrical:enclosure-temp-rise-exceeded'), 1);
       // Reference tower T2: the enlarged feed main hands the head back to

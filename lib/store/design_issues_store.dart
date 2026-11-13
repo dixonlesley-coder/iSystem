@@ -29,7 +29,9 @@ import 'package:mechx_engine/sizing/fire_index_friction.dart'
 import 'package:mechx_engine/sizing/fire_water_reserve.dart'
     show FireTankVerdict;
 import 'package:mechx_engine/sizing/fire_pump_rating.dart'
-    show kFireComponentMaxPressureKpa, kStandpipeMaxSystemPressureKpa;
+    show kStandpipeMaxSystemPressureKpa;
+import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart'
+    show kStandpipePrvSetResidualKpa;
 import 'package:mechx_engine/sizing/network_sizing.dart'
     show CheckValveAmbiguity;
 import 'package:mechx_engine/standards/puil.dart';
@@ -1571,10 +1573,9 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
               : StringKey.issueFireOverPressureMessage,
           {
         'churn': o.check.churnKpa.toStringAsFixed(0),
-        'limit': (sp
-                ? kStandpipeMaxSystemPressureKpa
-                : kFireComponentMaxPressureKpa)
-            .toStringAsFixed(0),
+        // Backlog A-3 — both kinds are judged against the 350 psi single-
+        // zone maximum (a lower churn sets a pipe pressure class instead).
+        'limit': kStandpipeMaxSystemPressureKpa.toStringAsFixed(0),
         'head': b.head.meters.toStringAsFixed(1),
         'share': share == null
             ? ''
@@ -1604,6 +1605,26 @@ final designIssuesProvider = Provider<List<DesignIssue>>((ref) {
     final range = o.lowFloor == o.highFloor
         ? floorName(o.lowFloor)
         : '${floorName(o.lowFloor)}-${floorName(o.highFloor)}';
+    // Backlog A-3 — a static range is DESIGNATED pressure-regulating hose
+    // valves (the design states the device NFPA 14 7.2.3.2 asks for): an
+    // INFO listing the floors, no longer a warning.
+    if (!o.residual) {
+      infos.add(DesignIssue(
+        severity: IssueSeverity.info,
+        kind: 'standpipe-prv-hose-valves'
+            ':${pump ?? ''}:${o.lowFloor}-${o.highFloor}',
+        title: str(StringKey.issueStandpipePrvHoseValvesTitle),
+        message: str.format(StringKey.issueStandpipePrvHoseValvesMessage, {
+          'floors': range,
+          'max': o.maxKpa.toStringAsFixed(0),
+          'min': o.minKpa.toStringAsFixed(0),
+          'limit': o.limitKpa.toStringAsFixed(0),
+          'set': kStandpipePrvSetResidualKpa.toStringAsFixed(0),
+        }),
+        locate: at == null ? null : IssueLocation(at.sheetId, nodeId: at.id),
+      ));
+      continue;
+    }
     warnings.add(DesignIssue(
       severity: IssueSeverity.warning,
       kind: '${o.residual ? 'hose-station-over-residual' : 'standpipe-outlet-over-pressure'}'

@@ -62,6 +62,10 @@ import 'package:mechx_engine/sizing/duct_sizing.dart'
 import 'package:mechx_engine/sizing/fan.dart' show FanDuty;
 import 'package:mechx_engine/sizing/fire_sprinkler.dart' show FireHazardClass;
 import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show firePressureClassLabel;
+import 'package:mechx_engine/sizing/standpipe_outlet_pressure.dart'
+    show kStandpipePrvSetResidualKpa;
 import 'package:mechx_engine/sizing/fire_standpipe.dart'
     show
         drawnStandpipeRiserCount,
@@ -407,6 +411,17 @@ CalcReportData buildMechanicalReportData(WidgetRef ref) {
                 minKpa: o.minKpa,
                 limitKpa: o.limitKpa,
                 residual: o.residual,
+              ),
+          ]
+        : const [],
+    // Backlog A-3 — each pumped fire system's pipe pressure class.
+    firePressureClasses: fireDrawn
+        ? [
+            for (final c in ref.read(firePressureClassesProvider))
+              (
+                tag: fireSystemTag(c.basis, c.pumpId),
+                label: firePressureClassLabel(c.pressureClass),
+                churnKpa: c.churnKpa,
               ),
           ]
         : const [],
@@ -5454,6 +5469,20 @@ class _FireSection extends ConsumerWidget {
             kv(
               'Standpipe flow',
               '${standpipe.requiredFlow.inLitersPerSecond.toStringAsFixed(1)} L/s',
+            ),
+          // Backlog A-3 — the pipe pressure class of each pumped system and
+          // the hose valves designated pressure-regulating.
+          for (final c in ref.watch(firePressureClassesProvider))
+            kv(
+              'Fire pipe class',
+              '${firePressureClassLabel(c.pressureClass)} · churn '
+                  '${c.churnKpa.toStringAsFixed(0)} kPa',
+            ),
+          if (ref.watch(prvHoseValvesProvider).isNotEmpty)
+            kv(
+              'PRV hose valves',
+              '${ref.watch(prvHoseValvesProvider).length} · set '
+                  '${kStandpipePrvSetResidualKpa.toStringAsFixed(0)} kPa',
             ),
           // Backlog A-2 — each drawn fire tank's fire-water reserve (rated
           // demand flow x duration) beside its entered capacity.

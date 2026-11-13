@@ -649,20 +649,28 @@ void main() {
           rhoG * (atBooster > atMain ? atBooster : atMain) / 1000;
       expect(worstKpa, lessThan(kFireComponentMaxPressureKpa));
       expect(c.read(fireOverPressureProvider), isEmpty);
+      // Backlog A-3 — the staged maximum is the working pressure: standard.
+      expect(c.read(firePressureClassesProvider).single.pressureClass,
+          FirePressureClass.standard);
       // The old single-point judge at 1.4 x the summed head would warn — the
       // pin is meaningful only if it does.
       expect(fireOverPressureCheck(rating: b.rating).over, isTrue,
           reason: 'probe must exercise the false-warning band');
     });
 
-    test('the same tower with ONE pump still warns', () {
+    test(
+        'the same tower with ONE pump is still above 175 psi: a higher pipe '
+        'class at FPS (backlog A-3), a warning only above 350 psi', () {
       final c = _container(sprTower(booster: false), 20, h: 3);
       c.read(fireHazardProvider.notifier).set(FireHazardClass.ordinaryHazard1);
       final b = c.read(fireSystemBasesProvider).single;
       expect(b.stages, isEmpty);
+      final cls = c.read(firePressureClassesProvider).single;
+      expect(cls.pumpId, 'FPS');
+      expect(cls.churnKpa, greaterThan(kFireComponentMaxPressureKpa));
+      expect(cls.pressureClass, isNot(FirePressureClass.standard));
       final o = c.read(fireOverPressureProvider);
-      expect(o, hasLength(1));
-      expect(o.single.pumpId, 'FPS');
+      expect(o, hasLength(cls.churnKpa > kStandpipeMaxSystemPressureKpa ? 1 : 0));
     });
   });
 

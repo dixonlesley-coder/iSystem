@@ -222,6 +222,10 @@ class CalcReportData {
   /// Backlog A-2 — the fire-water reserve of every fire tank.
   final List<FireTankReportLine> fireTankReserves;
 
+  /// Backlog A-3 — the pressure class of every pumped fire system.
+  final List<({String tag, String label, double churnKpa})>
+      firePressureClasses;
+
   /// Round 30 (report-parity-2-1) — one NFPA 20 rating line per drawn fire
   /// SYSTEM (a sprinkler network beside a separate hydrant stack), each under
   /// the tag its schedule row and MDP way carry. Printed only when two or
@@ -337,6 +341,7 @@ class CalcReportData {
     this.fireOverPressure = const [],
     this.standpipeOutletOverPressure = const [],
     this.fireTankReserves = const [],
+    this.firePressureClasses = const [],
     this.fireSystems = const [],
     this.fireGravity = const [],
     this.fireDry = const [],
@@ -927,16 +932,11 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                 ? strings.format(
                     RptStringKey.fireOverPressureSystemKey, {'tag': o.tag})
                 : strings(RptStringKey.fireOverPressureKey),
-            strings.format(
-                o.standpipe
-                    ? RptStringKey.fireStandpipeOverPressureValue
-                    : RptStringKey.fireOverPressureValue,
-                {
+            // Backlog A-3 — every listed system is above the 350 psi single-
+            // zone maximum (a lower churn prints its pressure class instead).
+            strings.format(RptStringKey.fireStandpipeOverPressureValue, {
               'churn': o.churnKpa.toStringAsFixed(0),
-              'limit': (o.standpipe
-                      ? kStandpipeMaxSystemPressureKpa
-                      : kFireComponentMaxPressureKpa)
-                  .toStringAsFixed(0),
+              'limit': kStandpipeMaxSystemPressureKpa.toStringAsFixed(0),
               'share': o.frictionShare == null
                   ? ''
                   : strings.format(RptStringKey.fireOverPressureShare, {
@@ -944,8 +944,19 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
                     }),
             })
           ),
+        // Backlog A-3 — each pumped fire system's pipe pressure class.
+        for (final c in d.firePressureClasses)
+          (
+            strings.format(RptStringKey.firePressureClassKey, {'tag': c.tag}),
+            strings.format(RptStringKey.firePressureClassValue, {
+              'cls': c.label,
+              'churn': c.churnKpa.toStringAsFixed(0),
+            })
+          ),
         // Round 76 — hose outlets above the NFPA 14 hose-connection limits
-        // (printed only when present ⇒ byte-identical).
+        // (printed only when present ⇒ byte-identical). Backlog A-3 — a
+        // static range is printed as its designated pressure-regulating hose
+        // valves.
         for (final o in d.standpipeOutletOverPressure)
           (
             strings.format(
@@ -1189,7 +1200,10 @@ List<RptBlock> buildCalcReportBlocks(CalcReportData d,
               // a `*` marks a size that came from a MANUAL override, resolved by
               // the footnote below.
               line.manual ? '${line.sizeLabel} *' : line.sizeLabel,
-              line.material,
+              // Backlog A-3 — a fire line's pressure class beside its material.
+              line.pressureClass.isEmpty
+                  ? line.material
+                  : '${line.material} ${line.pressureClass}',
               line.totalLength.meters.toStringAsFixed(1),
               '${line.segmentCount}',
             ],

@@ -28,6 +28,8 @@ import 'dart:ui' show Size;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mechx_engine/sizing/fire_pump_rating.dart'
+    show FirePressureClass;
 import 'package:mechx_engine/sizing/fire_water_reserve.dart' show FireTankVerdict;
 import 'package:mechx/store/air_warnings_store.dart';
 import 'package:mechx/store/annotation_store.dart';
@@ -1736,7 +1738,16 @@ void main() {
       expect(n('electrical:enclosure-temp-rise-exceeded'), 2);
       expect(n('electrical:service-cable-ampacity-inadequate'), 1);
       expect(n('electrical:service-fault-estimate-high'), 1);
+      // Backlog A-3 — churn 1.4 x 210.686 = 294.961 m x 9.81 = 2893.6 kPa
+      // > 2413: no class permits one zone, the zone-split WARNING stays.
       expect(n('fire-system-over-pressure:FP'), 1);
+      final cls = c.read(firePressureClassesProvider).single;
+      expect(cls.churnKpa, closeTo(294.961 * 9.81, 0.05));
+      expect(cls.pressureClass, FirePressureClass.zoneRequired);
+      final zw = c
+          .read(designIssuesProvider)
+          .singleWhere((i) => i.kind == 'fire-system-over-pressure:FP');
+      expect(zw.message, contains('vertical pressure zones'));
       // Backlog A-2 — FT 120 000 L >= 47.3176 L/s x 1800 s = 85 172 L.
       expect(kinds.where((k) => k.startsWith('fire-tank-')), isEmpty);
       final ft = c.read(fireTankReservesProvider).single;
@@ -1744,7 +1755,16 @@ void main() {
       expect(ft.requiredLitres, closeTo(47.3176 * 1800, 0.5));
       expect(ft.capacityLitres, 120000);
       expect(ft.verdict, FireTankVerdict.ok);
-      expect(n('standpipe-outlet-over-pressure:FP:0-29'), 1);
+      // Backlog A-3 — static 9.81 x (294.961 - (4 f + 1.2)) > 1207 for
+      // f <= 42: all 60 hose valves (2881.8 .. 1743.8 kPa) designated
+      // pressure-regulating (info) beside the zone warning.
+      expect(n('standpipe-prv-hose-valves:FP:0-29'), 1);
+      expect(kinds.where((k) => k.startsWith('standpipe-outlet-over-pressure')),
+          isEmpty);
+      final r = c.read(standpipeOutletOverPressureProvider).single;
+      expect(r.maxKpa, closeTo(9.81 * (294.961 - 1.2), 0.1));
+      expect(r.minKpa, closeTo(9.81 * (294.961 - 4 * 29 - 1.2), 0.1));
+      expect(c.read(prvHoseValvesProvider), hasLength(60));
       expect(n('electrical:cable-raised-for-ads'), 6);
       expect(n('electrical:fire-pump-protection'), 3);
       expect(n('electrical:busbar-beyond-standard-table'), 1);
