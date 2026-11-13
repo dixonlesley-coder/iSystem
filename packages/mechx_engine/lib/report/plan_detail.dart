@@ -511,20 +511,33 @@ List<List<int>> planDetailBins({
 /// (y-down) from ([x0], baseline [y0]) and whose text is [textMm] high.
 /// Fix round 3 — the paper length (mm) of [planDetailScaleBar]'s bar at
 /// 1 : [n] (its first round length of at least 30 mm).
-double planDetailScaleBarLength(int n) => _scaleBarMetres(n) * 1000 / n;
+/// [maxLenMm] caps it: a frame too narrow for the 30 mm bar beside its
+/// caption takes the longest round length that fits (never below 8 mm).
+double planDetailScaleBarLength(int n, {double? maxLenMm}) =>
+    _scaleBarMetres(n, maxLenMm) * 1000 / n;
 
-double _scaleBarMetres(int n) {
+double _scaleBarMetres(int n, [double? maxLenMm]) {
   const options = [0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0];
+  var pick = options.last;
   for (final o in options) {
-    if (o * 1000 / n >= 30) return o;
+    if (o * 1000 / n >= 30) {
+      pick = o;
+      break;
+    }
   }
-  return options.last;
+  if (maxLenMm != null && pick * 1000 / n > maxLenMm) {
+    for (final o in options.reversed) {
+      final l = o * 1000 / n;
+      if (l <= maxLenMm && l >= 8) return o;
+    }
+  }
+  return pick;
 }
 
 PlanMarks planDetailScaleBar(
     {required int n, required double x0, required double y0,
-    required double textMm}) {
-  final m = _scaleBarMetres(n);
+    required double textMm, double? maxLenMm}) {
+  final m = _scaleBarMetres(n, maxLenMm);
   final len = m * 1000 / n; // paper mm
   const h = 1.5;
   final lines = <PlanMarkLine>[
