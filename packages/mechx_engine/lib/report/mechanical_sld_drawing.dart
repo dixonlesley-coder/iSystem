@@ -101,6 +101,110 @@ const double kMechRiserMaxLeaderLabelHeights = 4.0;
 /// circle needs far less room than the text it replaces, so it is tried
 /// hugging the element first): 6 label heights, still a short local tie.
 const double kMechRiserMaxKeyLeaderLabelHeights = 6.0;
+
+/// Drawing review R2 — which of the extras (plant detail, reference
+/// callouts, system notes) a riser page draws: `auto` on the page carrying
+/// the building's lowest floor, `none`, or `only` them (a continuation sheet).
+enum MechRiserExtras { auto, none, only }
+
+/// Drawing review R2 (2026-11-13) — the least horizontal pitch between two
+/// distinct node columns of a riser band (drawing units; 60 ≈ 17 mm on an A3
+/// plot, room for a branch tag beside its stub). The diagram is NTS, so the
+/// columns are re-spaced over the band's free width ([riserColumnRespace])
+/// before any tag is placed. A drafting rule, not a standard.
+const double kMechRiserMinColumnPitch = 60;
+
+/// Drawing review R2 — a MONOTONE re-spacing of a riser band's node columns:
+/// breakpoints `(old x, new x)` over the distinct values of [xs] (within
+/// [tol]) such that every gap between two neighbouring columns is at least
+/// [minPitch] where the width [lo]..[hi] allows (else the pitches share it
+/// evenly), and otherwise keeps the columns' own proportions — the empty
+/// stretches give their width to the dense ones (one λ scales every original
+/// gap: new gap = max(minPitch, λ × old gap), the ends included with no
+/// minimum). Order is kept, coincident columns stay coincident, so a riser
+/// stack keeps ONE column on every floor. Empty input ⇒ no breakpoints. Pure.
+List<(double, double)> riserColumnRespace(Iterable<double> xs,
+    {required double lo,
+    required double hi,
+    required double minPitch,
+    Iterable<double>? taggedXs,
+    double tol = 0.5}) {
+  final sorted = xs.toList()..sort();
+  final v = <double>[];
+  for (final x in sorted) {
+    if (v.isEmpty || x - v.last > tol) v.add(x);
+  }
+  if (v.isEmpty) return const [];
+  final t = hi - lo;
+  if (v.length == 1 || !(t > 0)) return [for (final x in v) (x, x)];
+  // Gaps: lead, inner…, trail (ends may shrink to zero).
+  final g = <double>[
+    math.max(0.0, v.first - lo),
+    for (var i = 0; i + 1 < v.length; i++) v[i + 1] - v[i],
+    math.max(0.0, hi - v.last),
+  ];
+  // A column carrying a tagged element (a fixture / equipment glyph) needs
+  // the full pitch beside it; a bare junction column none (half when only
+  // one side is tagged). No [taggedXs] ⇒ every column is tagged.
+  final tagged = taggedXs?.toList();
+  bool isTagged(double x) =>
+      tagged == null || tagged.any((t) => (t - x).abs() <= tol);
+  final p = <double>[
+    0,
+    for (var i = 0; i + 1 < v.length; i++)
+      minPitch * ((isTagged(v[i]) ? 0.5 : 0) + (isTagged(v[i + 1]) ? 0.5 : 0)),
+    0,
+  ];
+  final sumP = p.fold<double>(0, (a, b) => a + b);
+  late List<double> ng;
+  if (sumP >= t) {
+    ng = [for (final q in p) q * t / sumP];
+  } else {
+    double f(double lam) {
+      var s = 0.0;
+      for (var i = 0; i < g.length; i++) {
+        s += math.max(p[i], lam * g[i]);
+      }
+      return s;
+    }
+
+    final sumG = g.fold<double>(0, (a, b) => a + b);
+    var a = 0.0, b = sumG > 0 ? t / sumG * 2 + 1 : 1.0;
+    for (var it = 0; it < 80; it++) {
+      final m = (a + b) / 2;
+      if (f(m) < t) {
+        a = m;
+      } else {
+        b = m;
+      }
+    }
+    ng = [for (var i = 0; i < g.length; i++) math.max(p[i], b * g[i])];
+  }
+  final out = <(double, double)>[];
+  var x = lo + ng.first;
+  for (var i = 0; i < v.length; i++) {
+    out.add((v[i], x));
+    x += ng[i + 1];
+  }
+  return out;
+}
+
+/// The re-spaced position of [x] under [bp] ([riserColumnRespace]):
+/// piecewise-linear between breakpoints, shifted beyond the ends. Pure.
+double riserRespaceAt(List<(double, double)> bp, double x) {
+  if (bp.isEmpty) return x;
+  if (x <= bp.first.$1) return x + (bp.first.$2 - bp.first.$1);
+  if (x >= bp.last.$1) return x + (bp.last.$2 - bp.last.$1);
+  for (var i = 0; i + 1 < bp.length; i++) {
+    final (a0, a1) = bp[i];
+    final (b0, b1) = bp[i + 1];
+    if (x <= b0) {
+      final f = b0 - a0 > 0 ? (x - a0) / (b0 - a0) : 0.0;
+      return a1 + f * (b1 - a1);
+    }
+  }
+  return x;
+}
 // When the ladder finds no CLEAR slot (two short branch tags share a midpoint),
 // the placer escapes further out in these steps until it clears, then leaders
 // back — so tags never fuse into one unreadable token (N3). VERIFY: a drafting
@@ -222,6 +326,7 @@ SldSheet buildMechanicalRiserSld({
   Map<String, String> nodeTags = const {},
   Set<String> transferPumpNodeIds = const {},
   ({int lo, int hi})? floorRange,
+  MechRiserExtras extras = MechRiserExtras.auto,
 }) {
   final prims = <SldPrim>[];
   // Round 16 — the solve's flow direction drives the FUNCTION suffix.
@@ -287,7 +392,13 @@ SldSheet buildMechanicalRiserSld({
   final roofH = roofBand ? _roofBandH : 0.0;
   // The extras (plant detail, reference callouts, notes) ride the page that
   // carries the building's LOWEST floor (the last page of a set).
-  final drawExtras = floorRange == null || loFloor == fullLo;
+  // Drawing review R2 — [extras] `none` leaves them to a continuation sheet
+  // (`only`), when the lowest-floor page cannot print at 7 pt with them.
+  final drawExtras = switch (extras) {
+    MechRiserExtras.auto => floorRange == null || loFloor == fullLo,
+    MechRiserExtras.none => false,
+    MechRiserExtras.only => true,
+  };
 
   // Band centre y for a floor index — highest floor at the TOP.
   double bandTop(int floorIndex) =>
@@ -347,6 +458,25 @@ SldSheet buildMechanicalRiserSld({
     final p = posById[e.key]!;
     posById[e.key] = Offset(p.dx + e.value, p.dy);
   }
+  // Drawing review R2 — the band's node columns re-spaced over the free
+  // width (NTS): a toilet group compressed into a few cm of plan no longer
+  // stacks its stubs under each other's tags while the sheet stays empty.
+  final respace = riserColumnRespace(
+      [for (final p in posById.values) p.dx],
+      lo: _gutterW + _sidePad,
+      hi: _gutterW + _drawW - _sidePad,
+      minPitch: kMechRiserMinColumnPitch,
+      taggedXs: [
+        for (final n in nodes)
+          if (posById[n.id] != null &&
+              (n.component != null || n.role == NodeRole.fixture))
+            posById[n.id]!.dx,
+      ]);
+  for (final id in posById.keys.toList()) {
+    final p = posById[id]!;
+    posById[id] = Offset(riserRespaceAt(respace, p.dx), p.dy);
+  }
+  double pageX(String nodeId) => riserRespaceAt(respace, placeX(nodeId));
 
   // ── Round 21 (riser-drafting-2-4) — branch fan-out from one header ─────────
   // Runs out of one node on the same lane were collinear (WC / lavatory /
@@ -782,7 +912,7 @@ SldSheet buildMechanicalRiserSld({
                 topY: bandTop(hiFloor) + 2,
                 bottomY: bandTop(loFloor) + _bandH - 2,
                 byId: {for (final n in allVisible) n.id: n},
-                placeX: placeX,
+                placeX: pageX,
               ));
   }
 
@@ -861,7 +991,7 @@ SldSheet buildMechanicalRiserSld({
         if (!(lo < loFloor && hi > hiFloor)) continue;
         final lower = na.floorIndex <= nb.floorIndex ? na : nb;
         final upper = identical(lower, na) ? nb : na;
-        final x = placeX(lower.id);
+        final x = pageX(lower.id);
         prims.add(SldLine(x, bottomEdgeY, x, topEdgeY,
             weight: SldWeight.medium,
             role: _edgeRole(network, e),
@@ -1030,6 +1160,7 @@ SldSheet buildMechanicalRiserSld({
   // them; the bounds grow to include whatever was drawn.
   const maxX = contentMaxX;
   var extrasBottom = extrasTop;
+  final extrasFrom = prims.length;
 
   if (detailCallouts && drawExtras) {
     if (waterFocus &&
@@ -1076,6 +1207,26 @@ SldSheet buildMechanicalRiserSld({
     extrasBottom = math.max(extrasBottom, notesTop + notesH);
   }
 
+  // Drawing review R2 — the extras-only continuation sheet: the plant
+  // detail, reference callouts and notes of the lowest-floor page, lifted to
+  // the top of their own sheet (the bands, tags and key table stay on the
+  // floor page).
+  if (extras == MechRiserExtras.only) {
+    final dy = _topPad - extrasTop;
+    final moved = [
+      for (final p in prims.sublist(extrasFrom)) _shiftY(p, dy),
+    ];
+    return SldSheet(
+      prims: moved,
+      minX: 0,
+      minY: 0,
+      maxX: maxX,
+      maxY: extrasBottom == extrasTop ? _topPad + 12 : extrasBottom + dy + 12,
+      legend: _fittingLegend(network, focus, moved),
+      supplyNote: supplyNote,
+    );
+  }
+
   // Drawing-review D5 — the KETERANGAN PIPA / PIPE KEY table of every keyed
   // tag, below the extras strip, on THIS sheet.
   final keyRows = placer.keyRows();
@@ -1100,6 +1251,18 @@ SldSheet buildMechanicalRiserSld({
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// [p] moved by [dy] (drawing review R2 — the extras continuation sheet).
+SldPrim _shiftY(SldPrim p, double dy) => switch (p) {
+      final SldLine l => SldLine(l.x1, l.y1 + dy, l.x2, l.y2 + dy,
+          weight: l.weight, role: l.role, layer: l.layer, dashed: l.dashed),
+      final SldRect r =>
+        SldRect(r.x, r.y + dy, r.w, r.h, weight: r.weight, role: r.role),
+      final SldLabel t => SldLabel(t.x, t.y + dy, t.text,
+          size: t.size, bold: t.bold, role: t.role),
+      final SldCircle c =>
+        SldCircle(c.cx, c.cy + dy, c.r, weight: c.weight, role: c.role),
+    };
 
 /// Node ids kept when one system is focused — endpoints of that service's edges
 /// (null ⇒ no filtering ⇒ the combined view). Mirrors the painter's filter.

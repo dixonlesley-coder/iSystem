@@ -48,6 +48,8 @@ List<SldSheet> paginatedRiserSheets({
   DrawingChrome? chrome,
   String projectName = 'Untitled project',
   String diagramTitle = 'SINGLE-LINE DIAGRAM',
+  SldSheet Function(({int lo, int hi}) range)? buildWithoutExtras,
+  SldSheet Function()? buildExtrasOnly,
 }) {
   double minPt(SldSheet s) => sldSinglePageMinLabelPt(s,
       chrome: chrome, projectName: projectName, diagramTitle: diagramTitle);
@@ -63,8 +65,32 @@ List<SldSheet> paginatedRiserSheets({
 
   final whole = build(null);
   if (levelCount <= 1 || minPt(whole) >= kMinPlotLabelPt - 1e-9) {
+    if (levelCount == 1 &&
+        buildWithoutExtras != null &&
+        buildExtrasOnly != null &&
+        minPt(whole) < kMinPlotLabelPt - 1e-9) {
+      final bare = buildWithoutExtras((lo: 0, hi: 0));
+      if (minPt(bare) > minPt(whole)) {
+        return [flagged(bare), flagged(buildExtrasOnly())];
+      }
+    }
     return [flagged(whole)];
   }
+  // Drawing review R2 — the 7 pt floor is EXACT: when the page carrying the
+  // building's lowest floor cannot reach it WITH the extras (plant detail,
+  // callouts, notes) but prints larger without them, every page holding
+  // floor 0 is built without them and the extras follow on a continuation
+  // sheet of their own. Only a page that cannot reach 7 pt even then is
+  // flagged with the size it really prints at.
+  var shed = false;
+  if (buildWithoutExtras != null && buildExtrasOnly != null) {
+    final withX = minPt(build((lo: 0, hi: 0)));
+    shed = withX < kMinPlotLabelPt - 1e-9 &&
+        minPt(buildWithoutExtras((lo: 0, hi: 0))) > withX;
+  }
+  SldSheet page(({int lo, int hi}) r) =>
+      shed && r.lo == 0 ? buildWithoutExtras!(r) : build(r);
+
   // Round 40 (elec-drawings-5-riser-pagination-global-cap-shrinks-all-
   // pages) — paginate GREEDILY per chunk from floor 0 upward. Each floor's
   // own best size is `min(kMinPlotLabelPt, 0.95 × its single-floor page)`;
@@ -74,7 +100,7 @@ List<SldSheet> paginatedRiserSheets({
   // never every page of the set (one global floors-per-page used to print
   // the upper pages at ~6 pt where 5-floor chunks print at 7 pt).
   final singleMin = [
-    for (var f = 0; f < levelCount; f++) minPt(build((lo: f, hi: f))),
+    for (var f = 0; f < levelCount; f++) minPt(page((lo: f, hi: f))),
   ];
   // Round 45 — a floor whose own page REACHES the floor targets the floor
   // itself: the plot fit caps labels at [kMinPlotLabelPt], so a legible
@@ -90,11 +116,11 @@ List<SldSheet> paginatedRiserSheets({
   var lo = 0;
   while (lo < levelCount) {
     var hi = lo;
-    var sheet = build((lo: lo, hi: lo));
+    var sheet = page((lo: lo, hi: lo));
     var target = floorTarget(lo);
     while (hi + 1 < levelCount) {
       final t = math.max(target, floorTarget(hi + 1));
-      final next = build((lo: lo, hi: hi + 1));
+      final next = page((lo: lo, hi: hi + 1));
       if (minPt(next) < t) break;
       hi++;
       sheet = next;
@@ -104,6 +130,10 @@ List<SldSheet> paginatedRiserSheets({
     lo = hi + 1;
   }
   // One chunk spanning every floor IS the whole sheet.
-  if (pages.length == 1) return [flagged(whole)];
-  return [for (final p in pages.reversed) flagged(p)];
+  final out =
+      pages.length == 1 && !shed ? [whole] : pages.reversed.toList();
+  return [
+    for (final p in out) flagged(p),
+    if (shed) flagged(buildExtrasOnly!()),
+  ];
 }

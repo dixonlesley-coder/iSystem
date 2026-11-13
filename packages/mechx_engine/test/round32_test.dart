@@ -705,7 +705,9 @@ void main() {
       // KEY circle hugging its element; where no crossing-free key slot
       // exists its short (<= 6 label heights) leader may cross a pipe — 3 on
       // this harness (43 -> 46), every far / fused text slot gone instead.
-      expect(_leaderPipeCrossings(hs, 0), lessThanOrEqualTo(46));
+      // Drawing review R2 (2026-11-13): the re-spaced riser columns give the
+      // tags room beside their stubs — 30 crossings; the bound is back at 43.
+      expect(_leaderPipeCrossings(hs, 0), lessThanOrEqualTo(43));
     });
   });
 

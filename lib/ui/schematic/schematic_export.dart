@@ -159,7 +159,8 @@ List<String> _systemNotes(WidgetRef ref, Network net) {
 /// Round 21 (riser-drafting-2-2) — [floorRange] builds one PAGE of a
 /// paginated riser ([buildLiveRiserPages]).
 SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
-    {({int lo, int hi})? floorRange}) {
+    {({int lo, int hi})? floorRange,
+    MechRiserExtras extras = MechRiserExtras.auto}) {
   final project = ref.read(projectControllerProvider);
   final network = ref.read(networkControllerProvider).network;
   final sizing = ref.read(sizingProvider);
@@ -202,6 +203,7 @@ SldSheet buildLiveRiserSheet(WidgetRef ref, ServiceType? focus,
     // canvas draws rides the issued sheet too (issued >= preview).
     hotWaterRecirc: ref.read(hotWaterAssumedReturnProvider),
     floorRange: floorRange,
+    extras: extras,
   );
 }
 
@@ -220,6 +222,12 @@ List<SldSheet> buildLiveRiserPages(WidgetRef ref, ServiceType? focus,
   final project = ref.read(projectControllerProvider);
   return paginatedRiserSheets(
     build: (r) => buildLiveRiserSheet(ref, focus, floorRange: r),
+    // Drawing review R2 — the exact 7 pt floor: the lowest-floor page may
+    // shed its extras to a continuation sheet.
+    buildWithoutExtras: (r) => buildLiveRiserSheet(ref, focus,
+        floorRange: r, extras: MechRiserExtras.none),
+    buildExtrasOnly: () => buildLiveRiserSheet(ref, focus,
+        floorRange: (lo: 0, hi: 0), extras: MechRiserExtras.only),
     levelCount: project.building.levelCount,
     chrome: _riserChrome(ref, index: 1, total: 1),
     projectName: project.name.isEmpty ? 'Untitled project' : project.name,
